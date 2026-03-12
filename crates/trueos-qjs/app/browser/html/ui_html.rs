@@ -8,8 +8,10 @@ pub const UI_HTML: &str = r##"<!DOCTYPE html>
 </head>
 <body>
 
+<p><a href="/helloworld">Open Hello World page</a></p>
+<i>kursiver (schräger)</i> 
 <h1>HTML Without CSS or JavaScript</h1>
-
+<b>and this is bold text</b>
 <ol>
   <li>Coffee</li>
   <li>Tea</li>

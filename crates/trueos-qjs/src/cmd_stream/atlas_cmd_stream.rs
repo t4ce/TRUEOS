@@ -1,6 +1,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
+use libm::tanf;
 use spin::Mutex;
 
 use crate as qjs;
@@ -16,6 +17,8 @@ struct CmdStreamTextMeshCacheEntry {
     px_h_bits: u32,
     rgb: u32,
     alpha: u8,
+    italic_tilt_bits: u32,
+    bold_mode: u32,
     text: Vec<u8>,
     verts: Arc<[u8]>,
 }
@@ -56,6 +59,98 @@ static CMD_STREAM_TEXT_MESH_CACHE: Mutex<Vec<CmdStreamTextMeshCacheEntry>> = Mut
 static CMD_STREAM_ATLAS_META_SMALL: Mutex<Option<CmdStreamAtlasGlyphMetaTable>> = Mutex::new(None);
 static CMD_STREAM_ATLAS_META_LARGE: Mutex<Option<CmdStreamAtlasGlyphMetaTable>> = Mutex::new(None);
 static CMD_STREAM_ATLAS_TEX_RECS: Mutex<Vec<CmdStreamAtlasTexRecord>> = Mutex::new(Vec::new());
+
+#[inline]
+fn cmd_stream_push_glyph_quad(
+    out: &mut Vec<u8>,
+    w: f32,
+    h: f32,
+    x0: f32,
+    y0: f32,
+    glyph_w_px: f32,
+    glyph_h_px: f32,
+    slant_px: f32,
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) {
+    let x1 = x0 + glyph_w_px;
+    let y1 = y0 + glyph_h_px;
+
+    let top_x0 = x0 + slant_px;
+    let top_x1 = x1 + slant_px;
+    let bottom_x0 = x0;
+    let bottom_x1 = x1;
+
+    let nx0_top = 2.0 * (top_x0 / w);
+    let ny0 = -(2.0 * (y0 / h));
+    let nx1_top = 2.0 * (top_x1 / w);
+    let ny1 = -(2.0 * (y1 / h));
+    let nx0_bottom = 2.0 * (bottom_x0 / w);
+    let nx1_bottom = 2.0 * (bottom_x1 / w);
+
+    super::cmd_stream_push_tex_vtx(out, nx0_bottom, ny1, u0, v1, r, g, b, a);
+    super::cmd_stream_push_tex_vtx(out, nx1_bottom, ny1, u1, v1, r, g, b, a);
+    super::cmd_stream_push_tex_vtx(out, nx1_top, ny0, u1, v0, r, g, b, a);
+    super::cmd_stream_push_tex_vtx(out, nx0_bottom, ny1, u0, v1, r, g, b, a);
+    super::cmd_stream_push_tex_vtx(out, nx1_top, ny0, u1, v0, r, g, b, a);
+    super::cmd_stream_push_tex_vtx(out, nx0_top, ny0, u0, v0, r, g, b, a);
+}
+
+#[inline]
+fn cmd_stream_emit_glyph_quads(
+    out: &mut Vec<u8>,
+    w: f32,
+    h: f32,
+    x0: f32,
+    y0: f32,
+    glyph_w_px: f32,
+    glyph_h_px: f32,
+    slant_px: f32,
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+    bold_mode: u32,
+) {
+    if bold_mode == 0 {
+        cmd_stream_push_glyph_quad(
+            out, w, h, x0, y0, glyph_w_px, glyph_h_px, slant_px, u0, v0, u1, v1, r, g, b, a,
+        );
+        return;
+    }
+
+    const BOLD_OFFSETS: [(f32, f32); 3] = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)];
+    for (dx, dy) in BOLD_OFFSETS {
+        cmd_stream_push_glyph_quad(
+            out,
+            w,
+            h,
+            x0 + dx,
+            y0 + dy,
+            glyph_w_px,
+            glyph_h_px,
+            slant_px,
+            u0,
+            v0,
+            u1,
+            v1,
+            r,
+            g,
+            b,
+            a,
+        );
+    }
+}
 
 #[inline]
 fn cmd_stream_find_atlas_tex(kind: u32) -> Option<u32> {
@@ -309,6 +404,8 @@ fn cmd_stream_draw_atlas_text_impl(
     px_h: f64,
     rgb_f: f64,
     alpha_f: f64,
+    italic_tilt_deg: f64,
+    bold_mode: u32,
 ) -> bool {
     if tex_id == 0 || text.is_empty() {
         return false;
@@ -332,10 +429,23 @@ fn cmd_stream_draw_atlas_text_impl(
     let b = (rgb & 0xFF) as u8;
     let a = ((alpha_f as i64).clamp(0, 255)) as u8;
     let px_h_bits = (px_h as f32).to_bits();
+    let italic_tilt_bits = (italic_tilt_deg as f32).to_bits();
     let origin_x_ndc = (2.0 * ((x_f as f32) / w)) - 1.0;
     let origin_y_ndc = 1.0 - (2.0 * ((y_f as f32) / h));
+    let tilt_rad = ((italic_tilt_deg as f32).clamp(-30.0, 30.0)) * (core::f32::consts::PI / 180.0);
+    let tilt_shear = tanf(tilt_rad);
 
-    let verts = cmd_stream_text_cache_get(kind, view_w, view_h, px_h_bits, rgb, a, text)
+    let verts = cmd_stream_text_cache_get(
+        kind,
+        view_w,
+        view_h,
+        px_h_bits,
+        rgb,
+        a,
+        italic_tilt_bits,
+        bold_mode,
+        text,
+    )
         .unwrap_or_else(|| {
             let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
             let mut pen_x = 0.0f32;
@@ -353,28 +463,36 @@ fn cmd_stream_draw_atlas_text_impl(
                     pen_x = 0.0;
                     continue;
                 }
-                if ch == b' ' {
-                    pen_x += (atlas.cell_w as f32) * scale * 0.6;
-                    continue;
-                }
                 if let Some(table) = meta_table
                     && let Some(gm) = cmd_stream_atlas_meta_lookup(table, ch)
                 {
+                    if ch == b' ' {
+                        pen_x += gm.advance_px * scale;
+                        continue;
+                    }
                     let x0 = pen_x;
                     let y0 = pen_y;
-                    let x1 = pen_x + gm.glyph_w_px * scale;
-                    let y1 = pen_y + (atlas_cell_h_u as f32).max(1.0) * scale;
-                    let nx0 = 2.0 * (x0 / w);
-                    let ny0 = -(2.0 * (y0 / h));
-                    let nx1 = 2.0 * (x1 / w);
-                    let ny1 = -(2.0 * (y1 / h));
-
-                    super::cmd_stream_push_tex_vtx(&mut out, nx0, ny1, gm.u0, gm.v1, r, g, b, a);
-                    super::cmd_stream_push_tex_vtx(&mut out, nx1, ny1, gm.u1, gm.v1, r, g, b, a);
-                    super::cmd_stream_push_tex_vtx(&mut out, nx1, ny0, gm.u1, gm.v0, r, g, b, a);
-                    super::cmd_stream_push_tex_vtx(&mut out, nx0, ny1, gm.u0, gm.v1, r, g, b, a);
-                    super::cmd_stream_push_tex_vtx(&mut out, nx1, ny0, gm.u1, gm.v0, r, g, b, a);
-                    super::cmd_stream_push_tex_vtx(&mut out, nx0, ny0, gm.u0, gm.v0, r, g, b, a);
+                    let glyph_h_px = (atlas_cell_h_u as f32).max(1.0) * scale;
+                    let slant_px = tilt_shear * glyph_h_px;
+                    cmd_stream_emit_glyph_quads(
+                        &mut out,
+                        w,
+                        h,
+                        x0,
+                        y0,
+                        gm.glyph_w_px * scale,
+                        glyph_h_px,
+                        slant_px,
+                        gm.u0,
+                        gm.v0,
+                        gm.u1,
+                        gm.v1,
+                        r,
+                        g,
+                        b,
+                        a,
+                        bold_mode,
+                    );
                     pen_x += gm.advance_px * scale;
                     continue;
                 }
@@ -382,6 +500,15 @@ fn cmd_stream_draw_atlas_text_impl(
                 let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
                 if slot == u16::MAX {
                     slot = fallback;
+                }
+                if ch == b' ' {
+                    let glyph_adv_u = atlas
+                        .widths
+                        .get(slot as usize)
+                        .copied()
+                        .unwrap_or(atlas.cell_w as u8) as usize;
+                    pen_x += glyph_adv_u as f32 * scale;
+                    continue;
                 }
                 let glyph_w_u = atlas
                     .widths
@@ -404,19 +531,27 @@ fn cmd_stream_draw_atlas_text_impl(
 
                 let x0 = pen_x;
                 let y0 = pen_y;
-                let x1 = pen_x + (glyph_w_u as f32) * scale;
-                let y1 = pen_y + (glyph_h_u as f32) * scale;
-                let nx0 = 2.0 * (x0 / w);
-                let ny0 = -(2.0 * (y0 / h));
-                let nx1 = 2.0 * (x1 / w);
-                let ny1 = -(2.0 * (y1 / h));
-
-                super::cmd_stream_push_tex_vtx(&mut out, nx0, ny1, u0, v1, r, g, b, a);
-                super::cmd_stream_push_tex_vtx(&mut out, nx1, ny1, u1, v1, r, g, b, a);
-                super::cmd_stream_push_tex_vtx(&mut out, nx1, ny0, u1, v0, r, g, b, a);
-                super::cmd_stream_push_tex_vtx(&mut out, nx0, ny1, u0, v1, r, g, b, a);
-                super::cmd_stream_push_tex_vtx(&mut out, nx1, ny0, u1, v0, r, g, b, a);
-                super::cmd_stream_push_tex_vtx(&mut out, nx0, ny0, u0, v0, r, g, b, a);
+                let glyph_h_px = (glyph_h_u as f32) * scale;
+                let slant_px = tilt_shear * glyph_h_px;
+                cmd_stream_emit_glyph_quads(
+                    &mut out,
+                    w,
+                    h,
+                    x0,
+                    y0,
+                    (glyph_w_u as f32) * scale,
+                    glyph_h_px,
+                    slant_px,
+                    u0,
+                    v0,
+                    u1,
+                    v1,
+                    r,
+                    g,
+                    b,
+                    a,
+                    bold_mode,
+                );
                 pen_x += glyph_w_u as f32 * scale;
             }
 
@@ -428,6 +563,8 @@ fn cmd_stream_draw_atlas_text_impl(
                 px_h_bits,
                 rgb,
                 alpha: a,
+                italic_tilt_bits,
+                bold_mode,
                 text: text.to_vec(),
                 verts: cached.clone(),
             });
@@ -449,6 +586,8 @@ fn cmd_stream_text_cache_get(
     px_h_bits: u32,
     rgb: u32,
     alpha: u8,
+    italic_tilt_bits: u32,
+    bold_mode: u32,
     text: &[u8],
 ) -> Option<Arc<[u8]>> {
     let mut cache = CMD_STREAM_TEXT_MESH_CACHE.lock();
@@ -459,6 +598,8 @@ fn cmd_stream_text_cache_get(
             && e.px_h_bits == px_h_bits
             && e.rgb == rgb
             && e.alpha == alpha
+                && e.italic_tilt_bits == italic_tilt_bits
+                && e.bold_mode == bold_mode
             && e.text.as_slice() == text
     })?;
     let entry = cache.swap_remove(pos);
@@ -568,13 +709,33 @@ pub(super) unsafe extern "C" fn qjs_cmd_stream_draw_atlas_text(
     if argc >= 8 {
         let _ = qjs::JS_ToFloat64(ctx, &mut alpha_f as *mut f64, args[7]);
     }
+    let mut italic_tilt_deg: f64 = 0.0;
+    if argc >= 9 {
+        let _ = qjs::JS_ToFloat64(ctx, &mut italic_tilt_deg as *mut f64, args[8]);
+    }
+    let mut bold_mode_f: f64 = 0.0;
+    if argc >= 10 {
+        let _ = qjs::JS_ToFloat64(ctx, &mut bold_mode_f as *mut f64, args[9]);
+    }
+    let bold_mode = if bold_mode_f != 0.0 { 1 } else { 0 };
 
     let Some(_atlas) = cmd_stream_select_atlas(kind) else {
         qjs::JS_FreeCString(ctx, text_c);
         return qjs::JSValue::undefined();
     };
     let text = core::slice::from_raw_parts(text_c as *const u8, text_len);
-    let ok = cmd_stream_draw_atlas_text_impl(tex_id, kind, x_f, y_f, text, px_h, rgb_f, alpha_f);
+    let ok = cmd_stream_draw_atlas_text_impl(
+        tex_id,
+        kind,
+        x_f,
+        y_f,
+        text,
+        px_h,
+        rgb_f,
+        alpha_f,
+        italic_tilt_deg,
+        bold_mode,
+    );
     qjs::JS_FreeCString(ctx, text_c);
     if !ok {
         return qjs::JSValue::undefined();
