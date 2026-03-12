@@ -1,7 +1,9 @@
+use core::sync::atomic::{AtomicU64, Ordering};
 use embassy_executor::{SendSpawner, Spawner};
 use spin::Mutex;
 
 static FIRST_AP_SPAWNER: Mutex<Option<SendSpawner>> = Mutex::new(None);
+static AP_ACTIVITY_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 /// Register a spawner for the first AP (CPU slot 1).
 #[inline]
@@ -25,6 +27,32 @@ fn local_cpu_ptr() -> *mut crate::percpu::PerCpu {
         return core::ptr::null_mut();
     }
     cpu_ptr
+}
+
+#[inline]
+fn ap_slot_mark(slot: u32) -> u8 {
+    if slot < 10 {
+        b'0' + slot as u8
+    } else {
+        b'A' + ((slot as u8 - 10) % 26)
+    }
+}
+
+#[inline]
+fn log_ap_activity_once() {
+    let slot = crate::percpu::this_cpu().cpu_index();
+    if slot >= 64 {
+        return;
+    }
+
+    let mask = 1u64 << slot;
+    if AP_ACTIVITY_LOGGED.fetch_or(mask, Ordering::AcqRel) & mask == 0 {
+        crate::log!(
+            "ap: juiced slot={} mark={}\n",
+            slot,
+            ap_slot_mark(slot) as char
+        );
+    }
 }
 
 /// Poll the current CPU's executor once (if initialized).
@@ -51,8 +79,11 @@ pub fn poll_local_executor() {
 pub fn run_ap_forever() -> ! {
     let mut counter: u64 = 0;
     loop {
+        crate::time::poll();
+        poll_local_executor();
+        log_ap_activity_once();
+
         if counter.is_multiple_of(100_000) {
-            crate::wait::spin_step();
             crate::smp::poll();
         }
         if counter.is_multiple_of(500_000) {
@@ -71,5 +102,6 @@ pub fn run_ap_forever() -> ! {
             );
         }
         counter = counter.wrapping_add(1);
+        crate::power::idle_hint();
     }
 }

@@ -475,13 +475,6 @@ fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
     SpawnAttempt::Skipped
 }
 
-fn spawn_video_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::video_smoke::video_smoke_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::shell::task(
         spawner,
@@ -719,13 +712,6 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &BOOT_NETBENCH_STARTED,
         spawn: spawn_boot_netbench,
-    },
-    TaskSpec {
-        name: "video-smoke",
-        disabled: true,
-        required: VIDEO_SMOKE_READY,
-        started: &VIDEO_SMOKE_STARTED,
-        spawn: spawn_video_smoke,
     },
     TaskSpec {
         name: "uart-shell",

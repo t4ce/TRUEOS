@@ -57,6 +57,6 @@ pub async fn gfx_loadscreen_task() {
             end_rc
         );
     }
-    Timer::after(EmbassyDuration::from_millis(10000)).await;
+    Timer::after(EmbassyDuration::from_millis(100)).await;
     crate::v::readiness::set(crate::v::readiness::WGPU_TEXT_DONE);
 }
