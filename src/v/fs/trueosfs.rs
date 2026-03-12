@@ -90,6 +90,18 @@ pub fn request_mount_root(disk: block::DeviceHandle) {
 }
 
 /// Background task that performs deferred TRUEOSFS probing/mounting.
+/// Eagerly build the in-memory index for `disk` right after mounting, so later
+/// callers (e.g. vhttps-cache) don't pay the log-replay cost on their first access.
+async fn warm_index_async(disk: block::DeviceHandle) {
+    let placement = match locate_async(disk).await {
+        Ok(Some(p)) => p,
+        _ => return,
+    };
+    if let Err(e) = ensure_index_async(disk, &placement).await {
+        crate::log!("trueosfs: warm_index error {:?}\n", e);
+    }
+}
+
 #[embassy_executor::task]
 pub async fn mount_service_task() {
     async move {
@@ -111,6 +123,7 @@ pub async fn mount_service_task() {
                     match mount_root_async(disk).await {
                         Ok(Some(disk_id)) => {
                             crate::log!("trueosfs: mounted root disk_id={}\n", disk_id.raw());
+                            warm_index_async(disk).await;
                         }
                         Ok(None) => {}
                         Err(e) => {
@@ -796,13 +809,10 @@ pub async fn file_exists_async(
     }
 
     // Check index (metadata lookup only)
-    if let Some(_) = lookup_via_index_async(disk, &placement, name).await? {
-        // We could cache this here, but lookup_via_index_async returns FsRecordRef,
-        // and if we cache it, we avoid re-reading the header later.
-        // But here we return bool. Since lookup_via_index_async does IO (reads header),
-        // we probably should cache it if we could?
-        // lookup_via_index_async doesn't currently cache.
-        // Let's stick to true/false.
+    if lookup_via_index_async(disk, &placement, name)
+        .await?
+        .is_some()
+    {
         return Ok(true);
     }
 

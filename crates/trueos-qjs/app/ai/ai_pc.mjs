@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { isMainThread, parentPort } from "node:worker_threads";
 import { readEnv } from "../vendor/openai/es2022/internal/utils/env.mjs";
 import { buildAiPcShellToolBundle, findAiPcShellCommandByToolName } from "./ai_pc_cmd.mjs";
+import * as driverdev from "../dd/driverdev.mjs";
 
 const DEFAULT_MAX_STEPS = 50;
 const DEFAULT_MODEL = "gpt-5.4";
@@ -9,6 +10,7 @@ const WORKER_RPC_TIMEOUT_MS = 30000;
 const AI_PC_TOOL_POLICY = [
   "Use shell1 function tools whenever the user is asking to run, open, launch, inspect, or control something that maps to a shell1 command.",
   "For mounted TRUEOS filesystem inspection or DOM insertion of file lists, prefer read_trueosfs_tree or browser.getTrueosFsTreeHtml(...) over the interactive shell1 file wizard.",
+  "For xHCI/USB driver debugging tasks, prefer driverdev_* tools over ad-hoc JavaScript snippets.",
   "Use ask_user only when the request is genuinely ambiguous or a required argument is missing.",
   "Treat cursor and pointer requests in browser/computer-use tasks as mouse-style pointer movement; prefer browser.moveCursor(...) instead of interpreting them as shell or terminal text-cursor requests unless the user explicitly says shell or terminal.",
   "Do not claim you cannot launch local apps or shell commands when a shell1 tool is available for the task.",
@@ -408,6 +410,161 @@ function createShell1Tools() {
   }
 }
 
+function bytesToHex(bytes) {
+  if (!bytes || typeof bytes.length !== "number") {
+    return "";
+  }
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 1) {
+    const value = bytes[i] & 0xFF;
+    const hex = value.toString(16).padStart(2, "0");
+    out += hex;
+  }
+  return out;
+}
+
+function createDriverDevTools() {
+  return [
+    {
+      type: "function",
+      name: "driverdev_list_devices",
+      description: "List enumerated xHCI devices as JSON summaries from /qjs/dd/driverdev.mjs.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_get_device_descriptor",
+      description: "Fetch and decode the USB device descriptor for a device handle.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+        },
+        required: ["handle"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_get_descriptor_hex",
+      description: "Read a raw descriptor and return lower-case hex bytes.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          descType: {
+            type: "integer",
+            description: "USB descriptor type (for example 1=device, 2=configuration, 3=string).",
+            minimum: 0,
+            maximum: 255,
+          },
+          descIndex: {
+            type: "integer",
+            description: "Descriptor index for this type.",
+            minimum: 0,
+          },
+          length: {
+            type: "integer",
+            description: "Requested descriptor byte length.",
+            minimum: 1,
+            maximum: 4096,
+          },
+        },
+        required: ["handle", "descType"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_get_string",
+      description: "Fetch and decode a USB string descriptor by index.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          index: {
+            type: "integer",
+            description: "USB string descriptor index.",
+            minimum: 0,
+            maximum: 255,
+          },
+          langId: {
+            type: "integer",
+            description: "USB LANGID for string decoding, default 0x0409.",
+            minimum: 0,
+            maximum: 65535,
+          },
+        },
+        required: ["handle", "index"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_port_reset",
+      description: "Reset an xHCI root hub port on a specific controller.",
+      parameters: {
+        type: "object",
+        properties: {
+          controllerId: {
+            type: "integer",
+            description: "Controller id reported by driverdev listDevices().",
+            minimum: 0,
+            maximum: 255,
+          },
+          portIdx: {
+            type: "integer",
+            description: "Zero-based port index.",
+            minimum: 0,
+          },
+        },
+        required: ["controllerId", "portIdx"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_read_transfer_event",
+      description: "Read a buffered xHCI transfer completion event for an endpoint target.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          epTarget: {
+            type: "integer",
+            description: "Endpoint target used by the transfer path.",
+            minimum: 0,
+            maximum: 255,
+          },
+        },
+        required: ["handle", "epTarget"],
+        additionalProperties: false,
+      },
+    },
+  ];
+}
+
 function buildTools(entry) {
   const tools = [];
   if (entry.webSearch) {
@@ -424,6 +581,7 @@ function buildTools(entry) {
   }
   tools.push(createReadTrueosFsTreeTool());
   tools.push(...createShell1Tools());
+  tools.push(...createDriverDevTools());
   if (entry.computerUse) {
     tools.push(createExecJsTool());
   }
@@ -575,6 +733,65 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
           type: "function_call_output",
           call_id: item.call_id,
           output: typeof html === "string" ? html : "",
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_list_devices") {
+        hadToolCall = true;
+        const devices = driverdev.listDevices();
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify(devices),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_get_device_descriptor") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const desc = driverdev.getDeviceDescriptor(parsed.handle);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify(desc),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_get_descriptor_hex") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const descIndex = Number.isInteger(parsed.descIndex) ? parsed.descIndex : 0;
+        const length = Number.isInteger(parsed.length) ? parsed.length : 255;
+        const bytes = driverdev.getDescriptor(parsed.handle, parsed.descType, descIndex, length);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({
+            hex: bytesToHex(bytes),
+            byteLength: bytes ? bytes.length : 0,
+          }),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_get_string") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const langId = Number.isInteger(parsed.langId) ? parsed.langId : 0x0409;
+        const value = driverdev.getString(parsed.handle, parsed.index, langId);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: value,
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_port_reset") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const rc = driverdev.portReset(parsed.controllerId, parsed.portIdx);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({ rc }),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_read_transfer_event") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const event = driverdev.readTransferEvent(parsed.handle, parsed.epTarget);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify(event),
         });
       } else if (item.type === "function_call" && item.name === "ask_user") {
         hadToolCall = true;

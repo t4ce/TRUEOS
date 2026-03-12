@@ -2982,7 +2982,7 @@ pub async fn post_https_sse_async(
 ///
 /// Behavior used by async net-fetch C-ABI:
 /// - if `path` already exists: success
-/// - otherwise: download body (capped), write `path.tmp`, then rename into place
+/// - otherwise: download body (capped) directly into `path` (atomic via streaming write)
 pub async fn fetch_https_to_file_async(
     url: &str,
     path: &str,
@@ -3008,7 +3008,6 @@ pub async fn fetch_https_to_file_async(
 
     const MAX_REDIRECTS: usize = 3;
 
-    let tmp = format!("{}.tmp", key);
     let dev_count = crate::net::device_count();
     if dev_count == 0 {
         return Err(fetch_error_to_code(FetchError::NoNic));
@@ -3033,11 +3032,11 @@ pub async fn fetch_https_to_file_async(
                     timeout_ms,
                     max_bytes,
                     disk,
-                    tmp.as_str(),
+                    key.as_str(),
                 )
                 .await
             } else {
-                fetch_on_device_to_file(&parsed, dev_idx, timeout_ms, max_bytes, disk, tmp.as_str())
+                fetch_on_device_to_file(&parsed, dev_idx, timeout_ms, max_bytes, disk, key.as_str())
                     .await
             };
 
@@ -3051,7 +3050,7 @@ pub async fn fetch_https_to_file_async(
                     break;
                 }
                 Err(FetchToFileError::Code(rc)) => {
-                    let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
+                    let _ = crate::v::fs::trueosfs::file_delete_async(disk, key.as_str()).await;
                     last_err = rc;
                 }
             }
@@ -3062,7 +3061,7 @@ pub async fn fetch_https_to_file_async(
         }
 
         if let Some((status, next)) = redirect {
-            let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
+            let _ = crate::v::fs::trueosfs::file_delete_async(disk, key.as_str()).await;
             if hop >= MAX_REDIRECTS {
                 return Err(fetch_error_to_code(FetchError::Http(status)));
             }
@@ -3079,34 +3078,18 @@ pub async fn fetch_https_to_file_async(
 
     let t_dl = Instant::now();
 
-    let rename_res =
-        crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), key.as_str()).await;
-    let t_ren = Instant::now();
-
-    let total_ms = t_ren.saturating_duration_since(t0).as_millis();
+    let total_ms = t_dl.saturating_duration_since(t0).as_millis();
     let exists_ms = t_exists.saturating_duration_since(t0).as_millis();
     let dl_ms = t_dl.saturating_duration_since(t_exists).as_millis();
-    let ren_ms = t_ren.saturating_duration_since(t_dl).as_millis();
     crate::log!(
-        "vhttps-cache: done key={} ms_total={} exists={} dl={} rename={}\n",
+        "vhttps-cache: done key={} ms_total={} exists={} dl={}\n",
         key,
         total_ms,
         exists_ms,
-        dl_ms,
-        ren_ms
+        dl_ms
     );
 
-    match rename_res {
-        Ok(true) => Ok(()),
-        Ok(false) => {
-            let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
-            Err(FS_ERR_IO)
-        }
-        Err(e) => {
-            let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
-            Err(block_error_to_code(e))
-        }
-    }
+    Ok(())
 }
 
 /// TRUEOS C ABI: start async HTTPS fetch to cache file.
