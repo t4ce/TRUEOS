@@ -159,11 +159,6 @@ fn cmd_stream_alloc_tex_id() -> u32 {
 }
 
 #[inline]
-pub fn alloc_managed_tex_id() -> u32 {
-    cmd_stream_alloc_tex_id()
-}
-
-#[inline]
 fn cmd_stream_is_managed_tex(id: u32) -> bool {
     if id == 0 {
         return false;
@@ -178,13 +173,6 @@ fn cmd_stream_release_tex_id(id: u32) {
         ids.swap_remove(pos);
     }
     atlas_cmd_stream::release_tex_id(id);
-}
-
-#[inline]
-pub fn release_managed_tex_id(id: u32) {
-    if cmd_stream_is_managed_tex(id) {
-        cmd_stream_release_tex_id(id);
-    }
 }
 
 #[inline]
