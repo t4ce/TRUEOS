@@ -1464,7 +1464,7 @@ DCL OUT[2], COLOR\n\
     2: MOV OUT[0], IN[0]\n\
     3: END\n";
 
-const FS_TEX: &str = "FRAG\n\
+const FS_TEX_MASK: &str = "FRAG\n\
 DCL IN[0], TEXCOORD[0], LINEAR\n\
 DCL IN[1], COLOR, LINEAR\n\
 DCL SAMP[0]\n\
@@ -1476,6 +1476,19 @@ DCL OUT[0], COLOR\n\
     2: MUL OUT[0].xyz, IN[1], TEMP[1].xxxx\n\
     3: MUL OUT[0].w, IN[1].wwww, TEMP[1].xxxx\n\
     4: END\n";
+
+const FS_TEX_RGBA: &str = "FRAG\n\
+DCL IN[0], TEXCOORD[0], LINEAR\n\
+DCL IN[1], COLOR, LINEAR\n\
+DCL SAMP[0]\n\
+DCL TEMP[0]\n\
+DCL OUT[0], COLOR\n\
+    0: TEX TEMP[0], IN[0], SAMP[0], 2D\n\
+    1: MUL OUT[0], TEMP[0], IN[1]\n\
+    2: END\n";
+
+const TEX_PIPELINE_FS_MASK_TAG_RAW: u32 = 0x4D41_534B;
+const TEX_PIPELINE_FS_RGBA_TAG_RAW: u32 = 0x5247_4241;
 
 // --- gfx-core backend (virgl) ---
 
@@ -1680,7 +1693,8 @@ pub struct VirglGfxBackend {
     vs_color_handle: u32,
     fs_color_handle: u32,
     vs_tex_handle: u32,
-    fs_tex_handle: u32,
+    fs_tex_mask_handle: u32,
+    fs_tex_rgba_handle: u32,
     sampler_state_nearest_handle: u32,
     sampler_state_linear_handle: u32,
     debug_tex_res: u32,
@@ -2053,9 +2067,10 @@ impl VirglGfxBackend {
         let vs_color_handle = 20u32;
         let fs_color_handle = 21u32;
         let vs_tex_handle = 22u32;
-        let fs_tex_handle = 23u32;
-        let sampler_state_handle = 24u32;
-        let sampler_state_linear_handle = 25u32;
+        let fs_tex_mask_handle = 23u32;
+        let fs_tex_rgba_handle = 24u32;
+        let sampler_state_handle = 25u32;
+        let sampler_state_linear_handle = 26u32;
         let debug_tex_view = alloc_obj_handle();
         // Blend object handles.
         // 30.. are reserved for our fixed state objects.
@@ -2087,10 +2102,23 @@ impl VirglGfxBackend {
 
         // Textured pipeline program.
         encode_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX, VS_TEX);
-        encode_shader(&mut init, fs_tex_handle, PIPE_SHADER_FRAGMENT, FS_TEX);
+        encode_shader(
+            &mut init,
+            fs_tex_mask_handle,
+            PIPE_SHADER_FRAGMENT,
+            FS_TEX_MASK,
+        );
+        encode_shader(
+            &mut init,
+            fs_tex_rgba_handle,
+            PIPE_SHADER_FRAGMENT,
+            FS_TEX_RGBA,
+        );
         encode_bind_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX);
-        encode_bind_shader(&mut init, fs_tex_handle, PIPE_SHADER_FRAGMENT);
-        encode_link_shader(&mut init, vs_tex_handle, fs_tex_handle);
+        encode_bind_shader(&mut init, fs_tex_mask_handle, PIPE_SHADER_FRAGMENT);
+        encode_link_shader(&mut init, vs_tex_handle, fs_tex_mask_handle);
+        encode_bind_shader(&mut init, fs_tex_rgba_handle, PIPE_SHADER_FRAGMENT);
+        encode_link_shader(&mut init, vs_tex_handle, fs_tex_rgba_handle);
 
         // Shared sampler states for 2D textures (sampler views are per-image).
         encode_create_sampler_state(
@@ -2212,7 +2240,8 @@ impl VirglGfxBackend {
             vs_color_handle,
             fs_color_handle,
             vs_tex_handle,
-            fs_tex_handle,
+            fs_tex_mask_handle,
+            fs_tex_rgba_handle,
             sampler_state_nearest_handle: sampler_state_handle,
             sampler_state_linear_handle,
             debug_tex_res,
@@ -2752,7 +2781,8 @@ impl GfxDevice for VirglGfxBackend {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         enum DrawKind {
             Color,
-            Textured,
+            TexturedMask,
+            TexturedRgba,
         }
 
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2898,12 +2928,16 @@ impl GfxDevice for VirglGfxBackend {
                         return Err(Error::NotFound);
                     };
                     let pipe_desc = pipe.desc;
-                    let draw_kind =
-                        if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
-                            DrawKind::Textured
-                        } else {
-                            DrawKind::Color
-                        };
+                    let draw_kind = if pipe_desc.vertex_layout.texcoord_format
+                        != TexCoordFormat::UvF32
+                    {
+                        DrawKind::Color
+                    } else if pipe_desc.fs.map(|id| id.raw()) == Some(TEX_PIPELINE_FS_RGBA_TAG_RAW)
+                    {
+                        DrawKind::TexturedRgba
+                    } else {
+                        DrawKind::TexturedMask
+                    };
 
                     let draw_key = DrawStateKey {
                         kind: draw_kind,
@@ -2989,9 +3023,6 @@ impl GfxDevice for VirglGfxBackend {
                         last_bound_blend = Some(blend_handle);
                         did_work = true;
                     }
-                    let is_textured_draw =
-                        pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32;
-
                     // Defensive isolation between colored and textured draw paths:
                     // if draw kind flips, invalidate converted/uploaded caches so
                     // no previously converted vertex stream can bleed across paths.
@@ -3263,10 +3294,15 @@ impl GfxDevice for VirglGfxBackend {
                             last_bound_sampler_state = Some(samp_handle);
                             did_work = true;
                         }
-                        if last_bound_shader_kind != Some(DrawKind::Textured) {
+                        if last_bound_shader_kind != Some(draw_kind) {
                             encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
-                            encode_bind_shader(&mut cmd, self.fs_tex_handle, PIPE_SHADER_FRAGMENT);
-                            last_bound_shader_kind = Some(DrawKind::Textured);
+                            let fs_handle = if draw_kind == DrawKind::TexturedRgba {
+                                self.fs_tex_rgba_handle
+                            } else {
+                                self.fs_tex_mask_handle
+                            };
+                            encode_bind_shader(&mut cmd, fs_handle, PIPE_SHADER_FRAGMENT);
+                            last_bound_shader_kind = Some(draw_kind);
                             did_work = true;
                         }
                     } else {

@@ -656,7 +656,6 @@ pub(crate) fn init_builtin_shell_commands() {
         static SURF_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Rest).mandatory()];
         static FROG_ARGS: [ArgSpec; 1] = [ArgSpec::new("api_key", ArgType::Str).mandatory()];
 
-        static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
         static AI_ARGS: [ArgSpec; 1] = [ArgSpec::new("first", ArgType::Rest)];
 
         static TURBO_ARGS: [ArgSpec; 2] = [
@@ -695,7 +694,6 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("bench.net", &NO_ARGS, cmd::cmd_netbench);
         let _ = REGSHCMD("file", &FILE_ARGS, cmd::cmd_file);
         let _ = REGSHCMD("ai", &AI_ARGS, cmd::cmd_ai);
-        let _ = REGSHCMD("qjs", &QJS_ARGS, cmd::cmd_qjs);
         let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd::cmd_acpi);
         let _ = REGSHCMD("hv", &HV_ARGS, cmd::cmd_hv);
         let _ = REGSHCMD("go", &[], cmd::cmd_go);

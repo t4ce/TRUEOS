@@ -437,6 +437,232 @@ unsafe extern "C" fn trueos_fetch_text(
         promise
 }
 
+unsafe extern "C" fn trueos_fetch_bytes(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+        let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
+        if argv.is_null() || argc <= 0 {
+                let code = js_int32(-1);
+                let _ = qjs::JS_Call(
+                        ctx,
+                        reject,
+                        qjs::JSValue::undefined(),
+                        1,
+                        &code as *const qjs::JSValue,
+                );
+                qjs::js_free_value(ctx, resolve);
+                qjs::js_free_value(ctx, reject);
+                return promise;
+        }
+
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut url_len: usize = 0;
+        let url_c = qjs::JS_ToCStringLen2(ctx, &mut url_len as *mut usize, args[0], 0);
+        if url_c.is_null() {
+                let code = js_int32(-1);
+                let _ = qjs::JS_Call(
+                        ctx,
+                        reject,
+                        qjs::JSValue::undefined(),
+                        1,
+                        &code as *const qjs::JSValue,
+                );
+                qjs::js_free_value(ctx, resolve);
+                qjs::js_free_value(ctx, reject);
+                return promise;
+        }
+        let url = core::slice::from_raw_parts(url_c as *const u8, url_len);
+
+        if url.first().copied() == Some(b'/') {
+                match qjs::async_ops::start_read_file(url) {
+                    Ok(op_id) => {
+                        qjs::async_ops::register_promise(
+                            ctx,
+                            op_id,
+                            qjs::async_ops::OpKind::ReadBytes,
+                            resolve,
+                            reject,
+                            alloc::vec::Vec::new(),
+                        );
+                    }
+                    Err(code) => {
+                        let code_js = js_int32(code);
+                        let _ = qjs::JS_Call(
+                            ctx,
+                            reject,
+                            qjs::JSValue::undefined(),
+                            1,
+                            &code_js as *const qjs::JSValue,
+                        );
+                    }
+                }
+        } else {
+                let tmp_path = next_fetch_tmp_path();
+                let tmp_path_bytes = tmp_path.as_bytes();
+                let _ = trueos_cabi_fs_remove(tmp_path_bytes.as_ptr(), tmp_path_bytes.len());
+
+                match qjs::async_ops::start_net_fetch_to_file(url, tmp_path_bytes) {
+                    Ok(op_id) => {
+                        qjs::async_ops::register_promise(
+                            ctx,
+                            op_id,
+                            qjs::async_ops::OpKind::NetFetchBytes,
+                            resolve,
+                            reject,
+                            tmp_path_bytes.to_vec(),
+                        );
+                    }
+                    Err(code) => {
+                        let code_js = js_int32(code);
+                        let _ = qjs::JS_Call(
+                            ctx,
+                            reject,
+                            qjs::JSValue::undefined(),
+                            1,
+                            &code_js as *const qjs::JSValue,
+                        );
+                    }
+                }
+        }
+
+        qjs::JS_FreeCString(ctx, url_c);
+        qjs::js_free_value(ctx, resolve);
+        qjs::js_free_value(ctx, reject);
+        promise
+}
+
+    unsafe extern "C" fn trueos_request_image_texture(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
+        if argv.is_null() || argc <= 0 {
+            let code = js_int32(-1);
+            let _ = qjs::JS_Call(
+                ctx,
+                reject,
+                qjs::JSValue::undefined(),
+                1,
+                &code as *const qjs::JSValue,
+            );
+            qjs::js_free_value(ctx, resolve);
+            qjs::js_free_value(ctx, reject);
+            return promise;
+        }
+
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut url_len: usize = 0;
+        let url_c = qjs::JS_ToCStringLen2(ctx, &mut url_len as *mut usize, args[0], 0);
+        if url_c.is_null() {
+            let code = js_int32(-1);
+            let _ = qjs::JS_Call(
+                ctx,
+                reject,
+                qjs::JSValue::undefined(),
+                1,
+                &code as *const qjs::JSValue,
+            );
+            qjs::js_free_value(ctx, resolve);
+            qjs::js_free_value(ctx, reject);
+            return promise;
+        }
+
+        let url = core::slice::from_raw_parts(url_c as *const u8, url_len);
+        let tex_id = qjs::cmd_stream::alloc_managed_tex_id();
+        if tex_id == 0 {
+            let code = js_int32(-1);
+            let _ = qjs::JS_Call(
+                ctx,
+                reject,
+                qjs::JSValue::undefined(),
+                1,
+                &code as *const qjs::JSValue,
+            );
+            qjs::JS_FreeCString(ctx, url_c);
+            qjs::js_free_value(ctx, resolve);
+            qjs::js_free_value(ctx, reject);
+            return promise;
+        }
+
+        if url.starts_with(b"data:") {
+            if let Err(code) = qjs::async_ops::start_data_url_image_promise(ctx, url, resolve, reject, tex_id) {
+                qjs::cmd_stream::release_managed_tex_id(tex_id);
+                let code_js = js_int32(code);
+                let _ = qjs::JS_Call(
+                    ctx,
+                    reject,
+                    qjs::JSValue::undefined(),
+                    1,
+                    &code_js as *const qjs::JSValue,
+                );
+            }
+        } else if url.first().copied() == Some(b'/') {
+            match qjs::async_ops::start_read_file(url) {
+                Ok(op_id) => {
+                    qjs::async_ops::register_image_fetch_promise(
+                        ctx,
+                        op_id,
+                        resolve,
+                        reject,
+                        url.to_vec(),
+                        tex_id,
+                        qjs::async_ops::ImageBytesSource::ReadFile,
+                    );
+                }
+                Err(code) => {
+                    qjs::cmd_stream::release_managed_tex_id(tex_id);
+                    let code_js = js_int32(code);
+                    let _ = qjs::JS_Call(
+                        ctx,
+                        reject,
+                        qjs::JSValue::undefined(),
+                        1,
+                        &code_js as *const qjs::JSValue,
+                    );
+                }
+            }
+        } else {
+            let tmp_path = next_fetch_tmp_path();
+            let tmp_path_bytes = tmp_path.as_bytes();
+            let _ = trueos_cabi_fs_remove(tmp_path_bytes.as_ptr(), tmp_path_bytes.len());
+
+            match qjs::async_ops::start_net_fetch_to_file(url, tmp_path_bytes) {
+                Ok(op_id) => {
+                    qjs::async_ops::register_image_fetch_promise(
+                        ctx,
+                        op_id,
+                        resolve,
+                        reject,
+                        tmp_path_bytes.to_vec(),
+                        tex_id,
+                        qjs::async_ops::ImageBytesSource::NetFile,
+                    );
+                }
+                Err(code) => {
+                    qjs::cmd_stream::release_managed_tex_id(tex_id);
+                    let code_js = js_int32(code);
+                    let _ = qjs::JS_Call(
+                        ctx,
+                        reject,
+                        qjs::JSValue::undefined(),
+                        1,
+                        &code_js as *const qjs::JSValue,
+                    );
+                }
+            }
+        }
+
+        qjs::JS_FreeCString(ctx, url_c);
+        qjs::js_free_value(ctx, resolve);
+        qjs::js_free_value(ctx, reject);
+        promise
+    }
+
 unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
         if ctx.is_null() {
                 return;
@@ -459,6 +685,36 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
                 global,
                 b"__trueosFetchText\0".as_ptr() as *const c_char,
                 helper,
+        );
+
+        let bytes_helper = qjs::JS_NewCFunction2(
+            ctx,
+            Some(trueos_fetch_bytes),
+            b"__trueosFetchBytes\0".as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            global,
+            b"__trueosFetchBytes\0".as_ptr() as *const c_char,
+            bytes_helper,
+        );
+
+        let image_helper = qjs::JS_NewCFunction2(
+            ctx,
+            Some(trueos_request_image_texture),
+            b"__trueosRequestImageTexture\0".as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            global,
+            b"__trueosRequestImageTexture\0".as_ptr() as *const c_char,
+            image_helper,
         );
 
         let shim_src = br#"
@@ -506,7 +762,20 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
         class Response {
             constructor(body, init) {
                 const opts = init || {};
-                this._body = String(body == null ? '' : body);
+                const isBinary = !!opts.__trueosBinary;
+                this._binary = null;
+                this._body = '';
+                if (isBinary) {
+                    if (body instanceof ArrayBuffer) {
+                        this._binary = body.slice(0);
+                    } else if (body && body.buffer instanceof ArrayBuffer && typeof body.byteLength === 'number') {
+                        this._binary = body.buffer.slice(body.byteOffset || 0, (body.byteOffset || 0) + body.byteLength);
+                    } else {
+                        this._binary = new Uint8Array(0).buffer;
+                    }
+                } else {
+                    this._body = String(body == null ? '' : body);
+                }
                 this.status = Number(opts.status || 200) | 0;
                 this.statusText = String(opts.statusText || 'OK');
                 this.headers = opts.headers instanceof G.Headers ? opts.headers : new G.Headers(opts.headers || null);
@@ -514,11 +783,21 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
             }
             async text() { return this._body; }
             async json() { return JSON.parse(this._body); }
+            async arrayBuffer() {
+                if (this._binary instanceof ArrayBuffer) {
+                    return this._binary.slice(0);
+                }
+                const src = String(this._body || '');
+                const out = new Uint8Array(src.length);
+                for (let i = 0; i < src.length; i += 1) out[i] = src.charCodeAt(i) & 0xFF;
+                return out.buffer;
+            }
             clone() {
-                return new Response(this._body, {
+                return new Response(this._binary instanceof ArrayBuffer ? this._binary : this._body, {
                     status: this.status,
                     statusText: this.statusText,
                     headers: this.headers,
+                    __trueosBinary: this._binary instanceof ArrayBuffer,
                 });
             }
         }
@@ -529,8 +808,12 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
         G.fetch = function fetch(input, init) {
             const req = input instanceof G.Request ? input : new G.Request(input, init);
             const method = String(req.method || 'GET').toUpperCase();
+            const wantBinary = !!(init && init.__trueosBinary);
             if (method !== 'GET' && method !== 'POST') {
                 return Promise.reject(new Error('trueos fetch shim supports GET and POST only'));
+            }
+            if (wantBinary && method !== 'GET') {
+                return Promise.reject(new Error('trueos binary fetch shim supports GET only'));
             }
             let bodyArg = '';
             let bearer = '';
@@ -544,9 +827,12 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
                     if (m && m[1]) bearer = m[1];
                 }
             }
-            return Promise.resolve(G.__trueosFetchText(req.url, method, bodyArg, bearer)).then((body) => {
+            const fetchPromise = wantBinary
+                ? Promise.resolve(G.__trueosFetchBytes(req.url))
+                : Promise.resolve(G.__trueosFetchText(req.url, method, bodyArg, bearer));
+            return fetchPromise.then((body) => {
                 const headers = new G.Headers();
-                return new G.Response(body, { status: 200, statusText: 'OK', headers });
+                return new G.Response(body, { status: 200, statusText: 'OK', headers, __trueosBinary: wantBinary });
             });
         };
     }

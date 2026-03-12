@@ -1,67 +1,6 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::fmt;
-
-/// Minimal I/O surface.
-///
-/// This started as a std::io-like layer, but the kernel currently only needs a
-/// small subset plus a console routing choke-point.
-
-pub type Result<T> = core::result::Result<T, Error>;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ErrorKind {
-    WriteZero,
-    Interrupted,
-    Other,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Error {
-    kind: ErrorKind,
-}
-
-impl Error {
-    pub const fn new(kind: ErrorKind) -> Self {
-        Self { kind }
-    }
-
-    pub const fn kind(&self) -> ErrorKind {
-        self.kind
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let msg = match self.kind {
-            ErrorKind::WriteZero => "failed to write whole buffer",
-            ErrorKind::Interrupted => "operation interrupted",
-            ErrorKind::Other => "io error",
-        };
-        f.write_str(msg)
-    }
-}
-
-/// Trait for byte sinks.
-pub trait Write {
-    fn write(&mut self, buf: &[u8]) -> Result<usize>;
-
-    fn flush(&mut self) -> Result<()>;
-
-    fn write_all(&mut self, mut buf: &[u8]) -> Result<()> {
-        while !buf.is_empty() {
-            match self.write(buf) {
-                Ok(0) => return Err(Error::new(ErrorKind::WriteZero)),
-                Ok(n) => buf = &buf[n..],
-                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
-}
-
 /// Kernel-facing helpers for basic file I/O.
 ///
 /// These expose the TRUEOSFS root filesystem operations used by the shell,
@@ -149,26 +88,6 @@ pub mod kfs {
     }
 
     #[inline]
-    pub async fn read_file_async(path: &str) -> Result<Vec<u8>> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
-        match crate::v::fs::trueosfs::file_out_async(disk, name.as_str()).await? {
-            Some(bytes) => Ok(bytes),
-            None => Err(FsError::NotFound),
-        }
-    }
-
-    #[inline]
-    pub async fn read_file_len_async(path: &str) -> Result<usize> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
-        match crate::v::fs::trueosfs::file_info_async(disk, name.as_str()).await? {
-            Some(info) => Ok(info.data_len as usize),
-            None => Err(FsError::NotFound),
-        }
-    }
-
-    #[inline]
     pub fn write_file_begin(path: &str, total_len: u64) -> Result<u32> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
@@ -183,29 +102,12 @@ pub mod kfs {
     }
 
     #[inline]
-    pub async fn write_file_begin_async(path: &str, total_len: u64) -> Result<u32> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
-        match crate::v::fs::trueosfs::file_write_begin_async(disk, name.as_str(), total_len).await?
-        {
-            Some(h) => Ok(h),
-            None => Err(FsError::NoSpace),
-        }
-    }
-
-    #[inline]
     pub fn write_file_chunk(handle: u32, data: &[u8]) -> Result<()> {
         let data = data.to_vec();
         crate::wait::spawn_and_wait_local(async move {
             crate::v::fs::trueosfs::file_write_chunk_async(handle, data.as_slice()).await?;
             Ok(())
         })
-    }
-
-    #[inline]
-    pub async fn write_file_chunk_async(handle: u32, data: &[u8]) -> Result<()> {
-        crate::v::fs::trueosfs::file_write_chunk_async(handle, data).await?;
-        Ok(())
     }
 
     #[inline]
@@ -217,94 +119,11 @@ pub mod kfs {
     }
 
     #[inline]
-    pub async fn write_file_finish_async(handle: u32) -> Result<()> {
-        crate::v::fs::trueosfs::file_write_finish_async(handle).await?;
-        Ok(())
-    }
-
-    #[inline]
     pub fn write_file_abort(handle: u32) -> Result<()> {
         crate::wait::spawn_and_wait_local(async move {
             crate::v::fs::trueosfs::file_write_abort_async(handle).await?;
             Ok(())
         })
-    }
-
-    #[inline]
-    pub async fn write_file_abort_async(handle: u32) -> Result<()> {
-        crate::v::fs::trueosfs::file_write_abort_async(handle).await?;
-        Ok(())
-    }
-
-    #[inline]
-    pub fn rename(src: &str, dst: &str) -> Result<()> {
-        let disk = root_disk()?;
-        let src = normalize_rel(src, false)?;
-        let dst = normalize_rel(dst, false)?;
-        crate::wait::spawn_and_wait_local(async move {
-            if src == dst {
-                return Ok(());
-            }
-            if crate::v::fs::trueosfs::file_exists_async(disk, dst.as_str()).await? {
-                return Err(FsError::AlreadyExists);
-            }
-            let Some(bytes) = crate::v::fs::trueosfs::file_out_async(disk, src.as_str()).await?
-            else {
-                return Err(FsError::NotFound);
-            };
-            let ok =
-                crate::v::fs::trueosfs::file_in_async(disk, dst.as_str(), bytes.as_slice()).await?;
-            if !ok {
-                return Err(FsError::NoSpace);
-            }
-            let _ = crate::v::fs::trueosfs::file_delete_async(disk, src.as_str()).await;
-            Ok(())
-        })
-    }
-
-    #[inline]
-    pub async fn rename_async(src: &str, dst: &str) -> Result<()> {
-        let disk = root_disk()?;
-        let src = normalize_rel(src, false)?;
-        let dst = normalize_rel(dst, false)?;
-        if src == dst {
-            return Ok(());
-        }
-        if crate::v::fs::trueosfs::file_exists_async(disk, dst.as_str()).await? {
-            return Err(FsError::AlreadyExists);
-        }
-        let Some(bytes) = crate::v::fs::trueosfs::file_out_async(disk, src.as_str()).await? else {
-            return Err(FsError::NotFound);
-        };
-        let ok =
-            crate::v::fs::trueosfs::file_in_async(disk, dst.as_str(), bytes.as_slice()).await?;
-        if !ok {
-            return Err(FsError::NoSpace);
-        }
-        let _ = crate::v::fs::trueosfs::file_delete_async(disk, src.as_str()).await;
-        Ok(())
-    }
-
-    #[inline]
-    pub fn list_dir(path: &str) -> Result<String> {
-        let disk = root_disk()?;
-        let dir = normalize_rel(path, true)?;
-        crate::wait::spawn_and_wait_local(async move {
-            match crate::v::fs::trueosfs::list_dir_async(disk, dir.as_str()).await? {
-                Some(v) => Ok(v),
-                None => Err(FsError::NoRoot),
-            }
-        })
-    }
-
-    #[inline]
-    pub async fn list_dir_async(path: &str) -> Result<String> {
-        let disk = root_disk()?;
-        let dir = normalize_rel(path, true)?;
-        match crate::v::fs::trueosfs::list_dir_async(disk, dir.as_str()).await? {
-            Some(v) => Ok(v),
-            None => Err(FsError::NoRoot),
-        }
     }
 
     #[inline]
@@ -329,61 +148,12 @@ pub mod kfs {
     }
 
     #[inline]
-    pub async fn remove_async(path: &str) -> Result<()> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
-        let ok = crate::v::fs::trueosfs::file_delete_async(disk, name.as_str()).await?;
-        if ok { Ok(()) } else { Err(FsError::NotFound) }
-    }
-
-    #[inline]
-    pub fn create_dir_all(path: &str) -> Result<()> {
-        // TRUEOSFS is key-based; directories are implied by path prefixes.
-        // Still require a mounted root so callers can use this as an "FS ready" probe.
-        let _disk = root_disk()?;
-        let _ = normalize_rel(path, true)?;
-        Ok(())
-    }
-
-    #[inline]
     pub fn exists(path: &str) -> Result<bool> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
         crate::wait::spawn_and_wait_local(async move {
             Ok(crate::v::fs::trueosfs::file_exists_async(disk, name.as_str()).await?)
         })
-    }
-
-    #[inline]
-    pub async fn exists_async(path: &str) -> Result<bool> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
-        Ok(crate::v::fs::trueosfs::file_exists_async(disk, name.as_str()).await?)
-    }
-
-    #[inline]
-    pub fn is_root_read_only() -> Result<bool> {
-        crate::v::fs::trueosfs::primary_root_is_read_only().ok_or(FsError::NoRoot)
-    }
-
-    /// Append `src` bytes into the file at `dst_path`, creating the file if needed.
-    pub fn append_into_file(dst_path: &str, src: &[u8]) -> Result<()> {
-        let disk = root_disk()?;
-        let name = normalize_rel(dst_path, false)?;
-        let src = src.to_vec();
-        crate::wait::spawn_and_wait_local(async move {
-            let ok = crate::v::fs::trueosfs::file_append_async(disk, name.as_str(), src.as_slice())
-                .await?;
-            if ok { Ok(()) } else { Err(FsError::NoSpace) }
-        })
-    }
-
-    /// Async variant of [`append_into_file`].
-    pub async fn append_into_file_async(dst_path: &str, src: &[u8]) -> Result<()> {
-        let disk = root_disk()?;
-        let name = normalize_rel(dst_path, false)?;
-        let ok = crate::v::fs::trueosfs::file_append_async(disk, name.as_str(), src).await?;
-        if ok { Ok(()) } else { Err(FsError::NoSpace) }
     }
 }
 
@@ -766,67 +536,6 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn trueos_cabi_fs_rename(
-        src_ptr: *const u8,
-        src_len: usize,
-        dst_ptr: *const u8,
-        dst_len: usize,
-    ) -> i32 {
-        if (src_ptr.is_null() && src_len != 0) || (dst_ptr.is_null() && dst_len != 0) {
-            return FS_ERR_BAD_PARAM;
-        }
-        if src_len > QJS_ASYNC_FS_MAX_PATH || dst_len > QJS_ASYNC_FS_MAX_PATH {
-            return FS_ERR_TOO_LARGE;
-        }
-        let src_bytes = core::slice::from_raw_parts(src_ptr, src_len);
-        let dst_bytes = core::slice::from_raw_parts(dst_ptr, dst_len);
-        let Ok(src) = core::str::from_utf8(src_bytes) else {
-            return FS_ERR_BAD_UTF8;
-        };
-        let Ok(dst) = core::str::from_utf8(dst_bytes) else {
-            return FS_ERR_BAD_UTF8;
-        };
-        match super::kfs::rename(src, dst) {
-            Ok(()) => 0,
-            Err(e) => fs_error_to_code(e),
-        }
-    }
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn trueos_cabi_fs_list_dir(
-        path_ptr: *const u8,
-        path_len: usize,
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize {
-        if path_ptr.is_null() && path_len != 0 {
-            return FS_ERR_BAD_PARAM as isize;
-        }
-        if path_len > QJS_ASYNC_FS_MAX_PATH {
-            return FS_ERR_TOO_LARGE as isize;
-        }
-        let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
-        let Ok(path) = core::str::from_utf8(path_bytes) else {
-            return FS_ERR_BAD_UTF8 as isize;
-        };
-
-        match super::kfs::list_dir(path) {
-            Ok(s) => {
-                let bytes = s.as_bytes();
-                if out_ptr.is_null() || out_cap == 0 {
-                    return bytes.len() as isize;
-                }
-                if bytes.len() > out_cap {
-                    return FS_ERR_NO_SPACE as isize;
-                }
-                core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
-                bytes.len() as isize
-            }
-            Err(e) => fs_error_to_code(e) as isize,
-        }
-    }
-
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32 {
         if path_ptr.is_null() && path_len != 0 {
             return FS_ERR_BAD_PARAM;
@@ -877,11 +586,13 @@ pub mod cabi {
     // It intentionally targets the gfx abstraction (`trueos_gfx_core`) rather than a GPU driver.
 
     use crate::usb;
+    use alloc::collections::VecDeque;
     use alloc::vec::Vec;
+    use embassy_time::Timer;
     use trueos_gfx_core::{
         BlendDesc, BlendFactor, BufferDesc, BufferId, BufferUsage, ColorFormat, Command,
         CommandBuffer, Extent2D, GfxContext, ImageDesc, ImageFormat, ImageId, MemoryType,
-        PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap, SwapchainDesc,
+        PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap, ShaderId, SwapchainDesc,
         TexCoordFormat, VertexLayout, Viewport,
     };
 
@@ -896,13 +607,140 @@ pub mod cabi {
         core::sync::atomic::AtomicU32::new(0);
     static VIRGL_FIRST_FRAME_SEEN: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
+    const TEX_PIPELINE_FS_MASK_TAG_RAW: u32 = 0x4D41_534B;
+    const TEX_PIPELINE_FS_RGBA_TAG_RAW: u32 = 0x5247_4241;
+    const ASYNC_TEX_STATUS_UNKNOWN: i32 = 0;
+    const ASYNC_TEX_STATUS_PENDING: i32 = 1;
+    const ASYNC_TEX_STATUS_READY: i32 = 2;
+    static ASYNC_TEX_STATUS: spin::Mutex<Vec<i32>> = spin::Mutex::new(Vec::new());
+    static ASYNC_PNG_REQS: spin::Mutex<VecDeque<AsyncPngUploadReq>> =
+        spin::Mutex::new(VecDeque::new());
+    static ASYNC_PNG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+    static ASYNC_PNG_WORKER_STARTED: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
+
+    struct AsyncPngUploadReq {
+        tex_id: u32,
+        bytes: Vec<u8>,
+    }
+
+    fn set_async_tex_status(tex_id: u32, status: i32) {
+        if tex_id == 0 {
+            return;
+        }
+        let idx = tex_id.saturating_sub(1) as usize;
+        let mut statuses = ASYNC_TEX_STATUS.lock();
+        if idx >= statuses.len() {
+            statuses.resize(idx + 1, ASYNC_TEX_STATUS_UNKNOWN);
+        }
+        statuses[idx] = status;
+    }
+
+    fn get_async_tex_status(tex_id: u32) -> i32 {
+        if tex_id == 0 {
+            return ASYNC_TEX_STATUS_UNKNOWN;
+        }
+        ASYNC_TEX_STATUS
+            .lock()
+            .get(tex_id.saturating_sub(1) as usize)
+            .copied()
+            .unwrap_or(ASYNC_TEX_STATUS_UNKNOWN)
+    }
+
+    fn enqueue_async_png_upload(tex_id: u32, bytes: Vec<u8>) {
+        ASYNC_PNG_REQS
+            .lock()
+            .push_back(AsyncPngUploadReq { tex_id, bytes });
+        ASYNC_PNG_WAIT.notify_one();
+    }
+
+    fn take_async_png_upload() -> Option<AsyncPngUploadReq> {
+        ASYNC_PNG_REQS.lock().pop_front()
+    }
+
+    async fn async_png_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
+        let rc = match crate::gfx::png_codec::decode_png_rgba(bytes.as_slice()) {
+            Ok(decoded) => upload_texture_rgba_inner(
+                tex_id,
+                decoded.width,
+                decoded.height,
+                decoded.rgba.as_ptr(),
+                decoded.rgba.len(),
+                TexSampleKind::Rgba,
+            ),
+            Err(err) => err.code(),
+        };
+        if rc == 0 {
+            set_async_tex_status(tex_id, ASYNC_TEX_STATUS_READY);
+        } else {
+            set_async_tex_status(tex_id, rc);
+        }
+    }
+
+    async fn async_png_upload_service_inner() {
+        loop {
+            let Some(req) = take_async_png_upload() else {
+                ASYNC_PNG_WAIT.wait_for_event().await;
+                continue;
+            };
+            async_png_decode_upload_inner(req.tex_id, req.bytes).await;
+            Timer::after_millis(1).await;
+        }
+    }
+
+    #[embassy_executor::task]
+    async fn async_png_upload_service_task() {
+        async_png_upload_service_inner().await;
+    }
+
+    fn try_start_async_png_worker() {
+        if ASYNC_PNG_WORKER_STARTED.load(core::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+
+        if let Some(worker_spawner) = trueos_qjs::workers::pick_background_spawner() {
+            if ASYNC_PNG_WORKER_STARTED
+                .compare_exchange(
+                    false,
+                    true,
+                    core::sync::atomic::Ordering::AcqRel,
+                    core::sync::atomic::Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                if worker_spawner
+                    .spawn(async_png_upload_service_task())
+                    .is_err()
+                {
+                    ASYNC_PNG_WORKER_STARTED.store(false, core::sync::atomic::Ordering::Release);
+                }
+            }
+            return;
+        }
+
+        if crate::smp::cpu_count() <= 1
+            && ASYNC_PNG_WORKER_STARTED
+                .compare_exchange(
+                    false,
+                    true,
+                    core::sync::atomic::Ordering::AcqRel,
+                    core::sync::atomic::Ordering::Acquire,
+                )
+                .is_ok()
+        {
+            crate::wait::spawn_local_detached(async move {
+                async_png_upload_service_inner().await;
+            });
+        }
+    }
 
     struct GfxCabiState {
         pipeline: PipelineId,
         ring_idx: usize,
         vbuf: [BufferId; GFX_CABI_VBUF_RING_LEN],
         capacity: [usize; GFX_CABI_VBUF_RING_LEN],
-        tex_pipeline: PipelineId,
+        tex_pipeline_mask: PipelineId,
+        tex_pipeline_rgba: PipelineId,
         tex_vbuf: [BufferId; GFX_CABI_VBUF_RING_LEN],
         tex_capacity: [usize; GFX_CABI_VBUF_RING_LEN],
         tex_images: Option<Vec<Option<TexImage>>>,
@@ -955,10 +793,17 @@ pub mod cabi {
         height: u32,
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum TexSampleKind {
+        Mask,
+        Rgba,
+    }
+
     struct TexImage {
         image: ImageId,
         width: u32,
         height: u32,
+        sample_kind: TexSampleKind,
     }
 
     #[derive(Clone, Copy)]
@@ -971,6 +816,7 @@ pub mod cabi {
         Tex {
             tex_id: u32,
             image: ImageId,
+            sample_kind: TexSampleKind,
             sampler: SamplerDesc,
             blob_offset: usize,
             blob_len: usize,
@@ -985,7 +831,8 @@ pub mod cabi {
                 ring_idx: 0,
                 vbuf: [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN],
                 capacity: [0; GFX_CABI_VBUF_RING_LEN],
-                tex_pipeline: PipelineId::invalid(),
+                tex_pipeline_mask: PipelineId::invalid(),
+                tex_pipeline_rgba: PipelineId::invalid(),
                 tex_vbuf: [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN],
                 tex_capacity: [0; GFX_CABI_VBUF_RING_LEN],
                 tex_images: None,
@@ -1462,7 +1309,8 @@ pub mod cabi {
             st.ring_idx = 0;
             st.vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
             st.capacity = [0; GFX_CABI_VBUF_RING_LEN];
-            st.tex_pipeline = PipelineId::invalid();
+            st.tex_pipeline_mask = PipelineId::invalid();
+            st.tex_pipeline_rgba = PipelineId::invalid();
             st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
             st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
             st.tex_images = None;
@@ -1549,6 +1397,7 @@ pub mod cabi {
     fn ensure_gfx_resources_tex(
         ctx: &mut dyn GfxContext,
         need_bytes: usize,
+        sample_kind: TexSampleKind,
     ) -> Option<(PipelineId, BufferId, bool)> {
         let epoch = crate::gfx::backend_epoch();
         let swap = ctx.swapchain_desc();
@@ -1566,7 +1415,8 @@ pub mod cabi {
             st.ring_idx = 0;
             st.vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
             st.capacity = [0; GFX_CABI_VBUF_RING_LEN];
-            st.tex_pipeline = PipelineId::invalid();
+            st.tex_pipeline_mask = PipelineId::invalid();
+            st.tex_pipeline_rgba = PipelineId::invalid();
             st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
             st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
             st.tex_images = None;
@@ -1605,7 +1455,12 @@ pub mod cabi {
             st.viewport_configured = false;
         }
 
-        if !st.tex_pipeline.is_valid() {
+        let mut pipeline_id = match sample_kind {
+            TexSampleKind::Mask => st.tex_pipeline_mask,
+            TexSampleKind::Rgba => st.tex_pipeline_rgba,
+        };
+
+        if !pipeline_id.is_valid() {
             let layout = VertexLayout {
                 stride: 20, // f32 x,y, f32 u,v, u8 r,g,b,a
                 pos_offset: 0,
@@ -1614,14 +1469,22 @@ pub mod cabi {
                 texcoord_offset: 8,
                 texcoord_format: TexCoordFormat::UvF32,
             };
+            let fs_tag = match sample_kind {
+                TexSampleKind::Mask => ShaderId::from_raw(TEX_PIPELINE_FS_MASK_TAG_RAW),
+                TexSampleKind::Rgba => ShaderId::from_raw(TEX_PIPELINE_FS_RGBA_TAG_RAW),
+            };
             let p = ctx
                 .create_pipeline(PipelineDesc {
                     vertex_layout: layout,
                     vs: None,
-                    fs: None,
+                    fs: Some(fs_tag),
                 })
                 .ok()?;
-            st.tex_pipeline = p;
+            pipeline_id = p;
+            match sample_kind {
+                TexSampleKind::Mask => st.tex_pipeline_mask = p,
+                TexSampleKind::Rgba => st.tex_pipeline_rgba = p,
+            }
         }
 
         let idx = st.ring_idx % GFX_CABI_VBUF_RING_LEN;
@@ -1647,7 +1510,7 @@ pub mod cabi {
 
         let need_set_viewport = !st.viewport_configured;
         st.viewport_configured = true;
-        Some((st.tex_pipeline, st.tex_vbuf[idx], need_set_viewport))
+        Some((pipeline_id, st.tex_vbuf[idx], need_set_viewport))
     }
 
     /// Draw a list of RGB triangles and present.
@@ -1750,13 +1613,13 @@ pub mod cabi {
         ret
     }
 
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_rgba(
+    fn upload_texture_rgba_inner(
         tex_id: u32,
         width: u32,
         height: u32,
         data_ptr: *const u8,
         data_len: usize,
+        sample_kind: TexSampleKind,
     ) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
@@ -1772,7 +1635,7 @@ pub mod cabi {
         if data_len < expected {
             return -3;
         }
-        let data = core::slice::from_raw_parts(data_ptr, expected);
+        let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
 
         let Some(ret) = crate::gfx::with_context(|ctx| {
             let epoch = crate::gfx::backend_epoch();
@@ -1785,7 +1648,8 @@ pub mod cabi {
                 st.ring_idx = 0;
                 st.vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
                 st.capacity = [0; GFX_CABI_VBUF_RING_LEN];
-                st.tex_pipeline = PipelineId::invalid();
+                st.tex_pipeline_mask = PipelineId::invalid();
+                st.tex_pipeline_rgba = PipelineId::invalid();
                 st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
                 st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
                 st.tex_images = None;
@@ -1844,12 +1708,13 @@ pub mod cabi {
                     return -4;
                 };
                 image_id = img;
-                images[idx] = Some(TexImage {
-                    image: image_id,
-                    width,
-                    height,
-                });
             }
+            images[idx] = Some(TexImage {
+                image: image_id,
+                width,
+                height,
+                sample_kind,
+            });
             if ctx.write_image(image_id, data).is_err() {
                 return -5;
             }
@@ -1858,6 +1723,24 @@ pub mod cabi {
             return -6;
         };
         ret
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_rgba(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32 {
+        upload_texture_rgba_inner(
+            tex_id,
+            width,
+            height,
+            data_ptr,
+            data_len,
+            TexSampleKind::Mask,
+        )
     }
 
     #[unsafe(no_mangle)]
@@ -1880,13 +1763,46 @@ pub mod cabi {
             Err(err) => return err.code(),
         };
 
-        trueos_cabi_gfx_upload_texture_rgba(
+        upload_texture_rgba_inner(
             tex_id,
             decoded.width,
             decoded.height,
             decoded.rgba.as_ptr(),
             decoded.rgba.len(),
+            TexSampleKind::Rgba,
         )
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_png_async(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        if tex_id == 0 {
+            return -1;
+        }
+        if data_ptr.is_null() {
+            return -2;
+        }
+        if data_len == 0 {
+            return -3;
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+        set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
+        enqueue_async_png_upload(tex_id, bytes);
+        try_start_async_png_worker();
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_gfx_texture_status(tex_id: u32) -> i32 {
+        if get_async_tex_status(tex_id) == ASYNC_TEX_STATUS_PENDING {
+            try_start_async_png_worker();
+        }
+        get_async_tex_status(tex_id)
     }
 
     #[unsafe(no_mangle)]
@@ -2021,13 +1937,13 @@ pub mod cabi {
         st.frame_tex_draws = st.frame_tex_draws.saturating_add(1);
         st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
         let idx = tex_id.saturating_sub(1) as usize;
-        let image = st
+        let (image, sample_kind) = st
             .tex_images
             .as_ref()
             .and_then(|images| images.get(idx))
             .and_then(|e| e.as_ref())
-            .map(|e| e.image)
-            .unwrap_or(ImageId::invalid());
+            .map(|e| (e.image, e.sample_kind))
+            .unwrap_or((ImageId::invalid(), TexSampleKind::Mask));
         let sampler = st.cur_sampler;
         let blend = st.cur_blend;
         let mut off = 0usize;
@@ -2044,6 +1960,7 @@ pub mod cabi {
             st.frame_draws.push(PendingDraw::Tex {
                 tex_id,
                 image,
+                sample_kind,
                 sampler,
                 blob_offset,
                 blob_len: chunk,
@@ -2114,6 +2031,7 @@ pub mod cabi {
                 Tex {
                     tex_id: u32,
                     image: ImageId,
+                    sample_kind: TexSampleKind,
                     sampler: SamplerDesc,
                     offset: u64,
                     vcount: u32,
@@ -2183,6 +2101,7 @@ pub mod cabi {
                         PendingDraw::Tex {
                             tex_id,
                             image,
+                            sample_kind,
                             sampler,
                             blob_offset,
                             blob_len,
@@ -2204,6 +2123,7 @@ pub mod cabi {
                             plans.push(Plan::Tex {
                                 tex_id: *tex_id,
                                 image: *image,
+                                sample_kind: *sample_kind,
                                 sampler: *sampler,
                                 offset: off,
                                 vcount,
@@ -2231,10 +2151,24 @@ pub mod cabi {
 
                 let mut tex_res: Option<(PipelineId, BufferId)> = None;
                 if !tex_blob.is_empty() {
-                    let (pipeline, vbuf, _) = match ensure_gfx_resources_tex(ctx, tex_blob.len()) {
-                        Some(v) => v,
-                        None => return -6,
+                    let tex_kind = if plans.iter().all(|plan| {
+                        matches!(
+                            plan,
+                            Plan::Tex {
+                                sample_kind: TexSampleKind::Rgba,
+                                ..
+                            }
+                        )
+                    }) {
+                        TexSampleKind::Rgba
+                    } else {
+                        TexSampleKind::Mask
                     };
+                    let (pipeline, vbuf, _) =
+                        match ensure_gfx_resources_tex(ctx, tex_blob.len(), tex_kind) {
+                            Some(v) => v,
+                            None => return -6,
+                        };
                     if ctx.write_buffer(vbuf, 0, tex_blob.as_slice()).is_err() {
                         return -7;
                     }
@@ -2279,6 +2213,7 @@ pub mod cabi {
                         Plan::Tex {
                             tex_id,
                             image,
+                            sample_kind,
                             sampler,
                             offset,
                             vcount,
@@ -2320,6 +2255,7 @@ pub mod cabi {
                                     image: img,
                                     width: 1,
                                     height: 1,
+                                    sample_kind,
                                 });
                                 (img, should_log)
                             };
@@ -2543,13 +2479,13 @@ pub mod cabi {
         st.cursor_tex_draws = st.cursor_tex_draws.saturating_add(1);
         st.cursor_draw_bytes = st.cursor_draw_bytes.saturating_add(usable);
         let idx = tex_id.saturating_sub(1) as usize;
-        let image = st
+        let (image, sample_kind) = st
             .tex_images
             .as_ref()
             .and_then(|images| images.get(idx))
             .and_then(|e| e.as_ref())
-            .map(|e| e.image)
-            .unwrap_or(ImageId::invalid());
+            .map(|e| (e.image, e.sample_kind))
+            .unwrap_or((ImageId::invalid(), TexSampleKind::Mask));
         let sampler = st.cur_sampler;
         let blend = st.cur_blend;
         let mut off = 0usize;
@@ -2566,6 +2502,7 @@ pub mod cabi {
             st.cursor_draws.push(PendingDraw::Tex {
                 tex_id,
                 image,
+                sample_kind,
                 sampler,
                 blob_offset,
                 blob_len: chunk,
@@ -2641,6 +2578,7 @@ pub mod cabi {
                 PendingDraw::Tex {
                     tex_id,
                     image,
+                    sample_kind,
                     sampler,
                     blob_offset,
                     blob_len,
@@ -2648,6 +2586,7 @@ pub mod cabi {
                 } => draws.push(PendingDraw::Tex {
                     tex_id,
                     image,
+                    sample_kind,
                     sampler,
                     blob_offset: blob_offset.saturating_add(tex_off),
                     blob_len,
@@ -2680,6 +2619,7 @@ pub mod cabi {
                 Tex {
                     tex_id: u32,
                     image: ImageId,
+                    sample_kind: TexSampleKind,
                     sampler: SamplerDesc,
                     offset: u64,
                     vcount: u32,
@@ -2748,6 +2688,7 @@ pub mod cabi {
                         PendingDraw::Tex {
                             tex_id,
                             image,
+                            sample_kind,
                             sampler,
                             blob_offset,
                             blob_len,
@@ -2769,6 +2710,7 @@ pub mod cabi {
                             plans.push(Plan::Tex {
                                 tex_id: *tex_id,
                                 image: *image,
+                                sample_kind: *sample_kind,
                                 sampler: *sampler,
                                 offset: off,
                                 vcount,
@@ -2796,10 +2738,24 @@ pub mod cabi {
 
                 let mut tex_res: Option<(PipelineId, BufferId)> = None;
                 if !tex_blob.is_empty() {
-                    let (pipeline, vbuf, _) = match ensure_gfx_resources_tex(ctx, tex_blob.len()) {
-                        Some(v) => v,
-                        None => return -6,
+                    let tex_kind = if plans.iter().all(|plan| {
+                        matches!(
+                            plan,
+                            Plan::Tex {
+                                sample_kind: TexSampleKind::Rgba,
+                                ..
+                            }
+                        )
+                    }) {
+                        TexSampleKind::Rgba
+                    } else {
+                        TexSampleKind::Mask
                     };
+                    let (pipeline, vbuf, _) =
+                        match ensure_gfx_resources_tex(ctx, tex_blob.len(), tex_kind) {
+                            Some(v) => v,
+                            None => return -6,
+                        };
                     if ctx.write_buffer(vbuf, 0, tex_blob.as_slice()).is_err() {
                         return -7;
                     }
@@ -2846,6 +2802,7 @@ pub mod cabi {
                         Plan::Tex {
                             tex_id,
                             image,
+                            sample_kind,
                             sampler,
                             offset,
                             vcount,
@@ -2881,6 +2838,7 @@ pub mod cabi {
                                     image: img,
                                     width: 1,
                                     height: 1,
+                                    sample_kind,
                                 });
                                 (img, false)
                             };
@@ -3055,41 +3013,5 @@ pub mod cabi {
         flags: u32,
     ) -> i32 {
         crate::surface::cursor::input_write_cursor_event(slot_id, x, y, buttons_down, wheel, flags)
-    }
-}
-
-/// Writer that routes bytes to the global console pipeline (stdout).
-pub struct Stdout;
-
-/// Writer that routes bytes to the global console pipeline (stderr).
-pub struct Stderr;
-
-pub const fn stdout() -> Stdout {
-    Stdout
-}
-
-pub const fn stderr() -> Stderr {
-    Stderr
-}
-
-impl Write for Stdout {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        cabi::write_bytes(cabi::CStream::Stdout, buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl Write for Stderr {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        cabi::write_bytes(cabi::CStream::Stderr, buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        Ok(())
     }
 }
