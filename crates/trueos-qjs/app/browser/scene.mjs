@@ -6,7 +6,6 @@ const LI_ICON_ID = 5;
 const SUMMARY_ICON_ID = 0;
 const RADIO_ICON_ID = LI_ICON_ID + 1;
 const CHECKBOX_ICON_ID = LI_ICON_ID + 2;
-const LINK_ICON_ID = LI_ICON_ID + 1;
 const LI_ICON_PALETTE = 0;
 const LI_ICON_X_SHIFT = 2;
 const LI_ICON_SIZE = 16;
@@ -19,10 +18,13 @@ const IMAGE_LEFT_PAD = DEFAULT_THEME.LEFT_PAD;
 const IMAGE_TOP_PAD = DEFAULT_THEME.TOP_PAD;
 const IMAGE_BOTTOM_PAD = DEFAULT_THEME.TOP_PAD;
 const BUTTON_OUTLINE_RGBA = 0x000000ff;
+const LINK_OUTLINE_RGBA = 0x000000ff;
 const HR_RGBA = 0x000000ff;
 const HR_TOP_PAD = DEFAULT_THEME.TOP_PAD;
 const HR_BOTTOM_PAD = DEFAULT_THEME.TOP_PAD;
 const ITALIC_SLANT_DEG = 12;
+const CHAMFER_PX = 5;
+const LINK_UNDERLINE_THICKNESS_PX = 1;
 
 function collapseWhitespace(s) {
   return String(s || '').replace(/\s+/g, ' ').trim();
@@ -32,7 +34,6 @@ function iconIdForRowKind(kind) {
   if (kind === 'summary-text') return SUMMARY_ICON_ID;
   if (kind === 'radio-text') return RADIO_ICON_ID;
   if (kind === 'checkbox-text') return CHECKBOX_ICON_ID;
-  if (kind === 'link-text') return LINK_ICON_ID;
   if (kind === 'li-text') return LI_ICON_ID;
   return -1;
 }
@@ -127,12 +128,14 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
   const iconRuns = [];
   const imageRuns = [];
   const buttonRuns = [];
+  const linkRuns = [];
   const hrRuns = [];
   const rows = Array.isArray(doc && doc.rows) ? doc.rows : [];
   const rowX = Array.isArray(doc && doc.rowX) ? doc.rowX : [];
   const rowY = Array.isArray(doc && doc.rowY) ? doc.rowY : [];
   const themeLayout = doc && typeof doc === 'object' ? doc.themeLayout : null;
   const buttons = Array.isArray(themeLayout && themeLayout.buttons) ? themeLayout.buttons : [];
+  const interactives = Array.isArray(themeLayout && themeLayout.interactives) ? themeLayout.interactives : [];
 
   for (let i = 0; i < buttons.length; i += 1) {
     const button = buttons[i];
@@ -143,6 +146,18 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
     if (y < -height) continue;
     if (y > Number(vh || 0) + height) continue;
     buttonRuns.push({ x, y, width, height });
+  }
+
+  for (let i = 0; i < interactives.length; i += 1) {
+    const interactive = interactives[i];
+    if (String(interactive && interactive.kind || '') !== 'link') continue;
+    const x = Math.round(Number(interactive && interactive.x || 0));
+    const y = Math.round(Number(interactive && interactive.y || 0) - Number(scrollY || 0));
+    const width = Math.max(1, Math.round(Number(interactive && interactive.width || 0)));
+    const height = Math.max(1, Math.round(Number(interactive && interactive.height || 0)));
+    if (y < -height) continue;
+    if (y > Number(vh || 0) + height) continue;
+    linkRuns.push({ x, y, width, height });
   }
 
   for (let i = 0; i < rows.length; i++) {
@@ -248,6 +263,25 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
     for (let i = 0; i < buttonRuns.length; i += 1) {
       const run = buttonRuns[i];
       cmdStream.fillRect(run.x, run.y, run.width, run.height, BUTTON_OUTLINE_RGBA, 1, 1);
+    }
+    for (let i = 0; i < linkRuns.length; i += 1) {
+      const run = linkRuns[i];
+      const left = Number(run.x || 0);
+      const top = Number(run.y || 0);
+      const width = Math.max(1, Number(run.width || 0));
+      const height = Math.max(1, Number(run.height || 0));
+      const right = left + width;
+      const bottom = top + height - 1;
+      const chamfer = Math.max(1, Math.min(CHAMFER_PX, Math.floor(width * 0.5)));
+      const leftFlat = left + chamfer;
+      const rightFlat = right - chamfer;
+      const chamferTopY = bottom - chamfer;
+
+      cmdStream.drawLine(left, chamferTopY, leftFlat, bottom, LINK_OUTLINE_RGBA, LINK_UNDERLINE_THICKNESS_PX);
+      if (rightFlat > leftFlat) {
+        cmdStream.drawLine(leftFlat, bottom, rightFlat, bottom, LINK_OUTLINE_RGBA, LINK_UNDERLINE_THICKNESS_PX);
+      }
+      cmdStream.drawLine(rightFlat, bottom, right, chamferTopY, LINK_OUTLINE_RGBA, LINK_UNDERLINE_THICKNESS_PX);
     }
     for (let i = 0; i < hrRuns.length; i += 1) {
       const run = hrRuns[i];
