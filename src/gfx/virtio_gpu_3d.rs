@@ -2775,6 +2775,7 @@ impl GfxDevice for VirglGfxBackend {
                         }));
                     }
                 }
+                Command::SetScissor(_scissor) => {}
                 Command::Present => ops.push(Op::Present),
             }
         }

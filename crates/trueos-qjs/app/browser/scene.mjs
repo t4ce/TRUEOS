@@ -52,6 +52,44 @@ function rowIsBold(row) {
   return Number.isFinite(numeric) && numeric >= 600 ? 1 : 0;
 }
 
+function pxToNdcX(x, vw) {
+  return ((Number(x || 0) / Math.max(1, Number(vw || 1))) * 2) - 1;
+}
+
+function pxToNdcY(y, vh) {
+  return 1 - ((Number(y || 0) / Math.max(1, Number(vh || 1))) * 2);
+}
+
+function writeTexturedVertex(view, vertexIndex, x, y, u, v, r, g, b, a) {
+  const base = vertexIndex * 20;
+  view.setFloat32(base, x, true);
+  view.setFloat32(base + 4, y, true);
+  view.setFloat32(base + 8, u, true);
+  view.setFloat32(base + 12, v, true);
+  view.setUint8(base + 16, r);
+  view.setUint8(base + 17, g);
+  view.setUint8(base + 18, b);
+  view.setUint8(base + 19, a);
+}
+
+function buildTexturedQuadVertices(x, y, width, height, vw, vh) {
+  const x0 = pxToNdcX(x, vw);
+  const y0 = pxToNdcY(y, vh);
+  const x1 = pxToNdcX(x + width, vw);
+  const y1 = pxToNdcY(y + height, vh);
+  const buffer = new ArrayBuffer(6 * 20);
+  const view = new DataView(buffer);
+
+  writeTexturedVertex(view, 0, x0, y1, 0, 1, 255, 255, 255, 255);
+  writeTexturedVertex(view, 1, x1, y1, 1, 1, 255, 255, 255, 255);
+  writeTexturedVertex(view, 2, x1, y0, 1, 0, 255, 255, 255, 255);
+  writeTexturedVertex(view, 3, x0, y1, 0, 1, 255, 255, 255, 255);
+  writeTexturedVertex(view, 4, x1, y0, 1, 0, 255, 255, 255, 255);
+  writeTexturedVertex(view, 5, x0, y0, 0, 0, 255, 255, 255, 255);
+
+  return new Uint8Array(buffer);
+}
+
 export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = null) {
   const texId = Number(cmdStream.createAtlasTexture(ATLAS_KIND) || 0);
   const runs = [];
@@ -102,7 +140,13 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
       const innerY = y + IMAGE_TOP_PAD;
       const innerWidth = Math.max(1, width - IMAGE_LEFT_PAD);
       const innerHeight = Math.max(1, height - IMAGE_TOP_PAD - IMAGE_BOTTOM_PAD);
-      imageRuns.push({ x: innerX, y: innerY, width: innerWidth, height: innerHeight });
+      imageRuns.push({
+        x: innerX,
+        y: innerY,
+        width: innerWidth,
+        height: innerHeight,
+        texId: Math.max(0, Number(row && row.texId || 0)),
+      });
       continue;
     }
     const text = collapseWhitespace(String(row && row.text || ''));
@@ -178,12 +222,22 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
     }
     for (let i = 0; i < imageRuns.length; i += 1) {
       const run = imageRuns[i];
-      cmdStream.fillRect(run.x, run.y, run.width, run.height, IMAGE_STROKE_RGBA, 1, 0);
+      cmdStream.fillRect(run.x, run.y, run.width, run.height, IMAGE_FILL_RGBA, 0, 0);
     }
-    // Icon quads are textured RGBA, so keep standard alpha blending enabled.
     cmdStream.setBlendEnabled(1);
     cmdStream.setBlendMode(0);
     cmdStream.setPremultipliedAlpha(0);
+    for (let i = 0; i < imageRuns.length; i += 1) {
+      const run = imageRuns[i];
+      if (run.texId > 0) {
+        cmdStream.drawTexturedTrianglesU8(
+          run.texId,
+          buildTexturedQuadVertices(run.x, run.y, run.width, run.height, vw, vh),
+        );
+      }
+      cmdStream.fillRect(run.x, run.y, run.width, run.height, IMAGE_STROKE_RGBA, 1, 0);
+    }
+    // Icon quads are textured RGBA, so keep standard alpha blending enabled.
     for (let i = 0; i + 3 < iconRuns.length; i += 4) {
       cmdStream.drawLyonIconInFrame(
         Number(iconRuns[i] || 0),

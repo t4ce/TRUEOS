@@ -223,6 +223,8 @@ pub const UI_HTML: &str = r##"<!DOCTYPE html>
 </p>
 
     <img
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAACXBIWXMAAAABAAAAAQBPJcTWAAAAF0lEQVR4nGP4y8BAEiJN9aiGUQ1DSgMAfsz9ATa/hGgAAAAASUVORK5CYII="
+        alt="Inline red PNG demo"
         width="240"
         height="240">
 
