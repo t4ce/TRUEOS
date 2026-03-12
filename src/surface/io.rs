@@ -2015,7 +2015,7 @@ pub mod cabi {
             // between end_frame and the async cursor overlay tick.
             let mut submit_draws = draws.clone();
             let mut submit_rgb_src = rgb_src.clone();
-            let mut submit_tex_src = tex_src.clone();
+            let submit_tex_src = tex_src.clone();
             append_kernel_cursor_overlay_draws(
                 &mut submit_draws,
                 &mut submit_rgb_src,

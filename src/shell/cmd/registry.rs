@@ -608,32 +608,6 @@ fn print_arg_error(io: &dyn ShellIo, cmd: &ShellCommand, err: &ArgError) {
     }
 }
 
-pub(crate) fn print_schema(io: &dyn ShellIo, cmd: &ShellCommand) {
-    io.write_fmt(format_args!(
-        "{} {}\r\n",
-        crate::ecma48::dim("cmd:"),
-        style_cmd_name(cmd.name)
-    ));
-    if cmd.args.is_empty() {
-        io.write_fmt(format_args!("  {}\r\n", crate::ecma48::dim("(no args)")));
-        return;
-    }
-
-    for a in cmd.args.iter() {
-        io.write_str("  ");
-        io.write_fmt(format_args!("{}", style_arg_name(a.name)));
-        io.write_str(": ");
-        io.write_fmt(format_args!("{}", style_arg_type(a.ty)));
-        io.write_str("  ");
-        if a.mandatory {
-            io.write_fmt(format_args!("{}", crate::ecma48::bold("mandatory")));
-        } else {
-            io.write_fmt(format_args!("{}", crate::ecma48::dim("optional")));
-        }
-        io.write_str("\r\n");
-    }
-}
-
 pub(crate) fn init_builtin_shell_commands() {
     BUILTINS_ONCE.call_once(|| {
         use crate::shell::cmd;
