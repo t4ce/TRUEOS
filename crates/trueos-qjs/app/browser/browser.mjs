@@ -25,6 +25,7 @@ const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs
 const INITIAL_NAVIGATE_TO_W3C_PNG = true;
 const INITIAL_W3C_PNG_URL = 'https://www.w3.org/Graphics/PNG/Inline-img.html';
 const ERROR_PREVIEW_MAX = 160;
+const MAX_RENDER_TEXT_CHARS = 512;
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 const SHOW_CLOSING_TAG_ROWS = false;
 const RELEASE_RECT_RGBA = 0x3f2f7fff;
@@ -321,6 +322,12 @@ function buildReleaseRect(origin, currentX, currentY) {
 
 function collapseWhitespace(s) {
   return String(s || '').replace(/\s+/g, ' ').trim();
+}
+
+function capRenderableText(value) {
+  const text = String(value || '');
+  if (text.length <= MAX_RENDER_TEXT_CHARS) return text;
+  return text.slice(0, MAX_RENDER_TEXT_CHARS);
 }
 
 function summarizeForError(value, maxLen = ERROR_PREVIEW_MAX) {
@@ -1065,7 +1072,7 @@ function readNodeText(node) {
 }
 
 function estimateTextWidthPx(text, fontSizePx = FONT_PX) {
-  const value = String(text || '');
+  const value = capRenderableText(text);
   const fontPx = Math.max(1, Number(fontSizePx || FONT_PX) || FONT_PX);
   const baseFontPx = Math.max(1, Number(runtime.host.__trueosBrowserDefaultFontPx || FONT_PX) || FONT_PX);
   const widthTable = Array.isArray(runtime.host.__trueosBrowserTextWidthByChar)
@@ -1702,8 +1709,16 @@ function getViewport() {
 function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
-  primeHtmlImageUrls(cachedHtml);
   paint();
+  const htmlSnapshot = cachedHtml;
+  if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
+    Promise.resolve().then(() => {
+      if (cachedHtml !== htmlSnapshot) return;
+      primeHtmlImageUrls(htmlSnapshot);
+    }).catch(() => {});
+  } else {
+    primeHtmlImageUrls(htmlSnapshot);
+  }
   return true;
 }
 
