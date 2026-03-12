@@ -2332,6 +2332,7 @@ pub mod cabi {
                     !VIRGL_FIRST_FRAME_SEEN.swap(true, core::sync::atomic::Ordering::AcqRel);
                 if first {
                     crate::v::readiness::set(crate::v::readiness::GFX_VIRGL_READY);
+                    crate::gfx::loadscreen::stop_loadscreen();
                     crate::globalog::log(format_args!(
                         "gfx: virgl first frame ready seq={} bytes={}\n",
                         seq, draw_bytes

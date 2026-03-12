@@ -9,7 +9,7 @@ import {
   attachThemeLayoutRuntime as attachParryThemeLayoutRuntime,
   dispatchDomClick as dispatchParryDomClick,
 } from './parry.mjs';
-import { LI_TEXT_X_OFFSET, renderScene } from './scene.mjs';
+import { renderScene } from './scene.mjs';
 import { BLOCK_TAGS, TEXT_LEVEL_SEMANTICS_TAGS } from './htmlDefaults.mjs';
 import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './theme.mjs';
 
@@ -845,11 +845,10 @@ function buildInteractiveRowRects(rows, rowX, rowY) {
     const row = list[i];
     const targetPath = typeof row.targetPath === 'string' ? row.targetPath : '';
     if (!targetPath) continue;
-    const isLink = String(row.targetTag || '').toLowerCase() === 'a' || String(row.kind || '') === 'link-text';
     const nextRect = {
       x: Math.round(Number(xs[i] ?? LEFT_PAD)),
       y: Math.round(Number(ys[i] ?? (i * LINE_H))),
-      width: Math.max(1, estimateTextWidthPx(String(row.text || ''), FONT_PX) + (isLink ? LI_TEXT_X_OFFSET : 0)),
+      width: Math.max(1, estimateTextWidthPx(String(row.text || ''), FONT_PX)),
       height: LINE_H,
     };
     const prev = out[targetPath];

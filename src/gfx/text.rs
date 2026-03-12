@@ -207,7 +207,7 @@ fn ensure_atlas_uploaded() -> bool {
     true
 }
 
-fn build_vertices(text: &[u8], x: f32, y: f32, view_w: f32, view_h: f32, out: &mut Vec<TexVertex>) {
+fn build_vertices(text: &[u8], x: f32, y: f32, view_w: f32, view_h: f32, alpha: u8, out: &mut Vec<TexVertex>) {
     if text.is_empty() {
         return;
     }
@@ -275,7 +275,7 @@ fn build_vertices(text: &[u8], x: f32, y: f32, view_w: f32, view_h: f32, out: &m
         let nx1 = (2.0 * (x1 / view_w)) - 1.0;
         let ny1 = 1.0 - (2.0 * (y1 / view_h));
 
-        let c = (16u8, 16u8, 16u8, 255u8);
+        let c = (16u8, 16u8, 16u8, alpha);
         out.push(TexVertex {
             x: nx0,
             y: ny1,
@@ -342,6 +342,17 @@ fn build_vertices(text: &[u8], x: f32, y: f32, view_w: f32, view_h: f32, out: &m
 }
 
 pub fn draw_atlas_text_in_frame(text: &[u8], x: f32, y: f32, view_w: u32, view_h: u32) -> bool {
+    draw_atlas_text_in_frame_alpha(text, x, y, view_w, view_h, 255)
+}
+
+pub fn draw_atlas_text_in_frame_alpha(
+    text: &[u8],
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+    alpha: u8,
+) -> bool {
     if text.is_empty() {
         return false;
     }
@@ -361,6 +372,7 @@ pub fn draw_atlas_text_in_frame(text: &[u8], x: f32, y: f32, view_w: u32, view_h
         y,
         view_w.max(1) as f32,
         view_h.max(1) as f32,
+        alpha,
         &mut verts,
     );
     if verts.is_empty() {

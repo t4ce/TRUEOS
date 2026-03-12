@@ -530,6 +530,39 @@ fn cmd_stream_fill_rect(
     cmd_stream_draw_rgb_triangles(&verts, a)
 }
 
+#[inline]
+fn cmd_stream_draw_line(
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    rgba: u32,
+    thickness: f32,
+) -> bool {
+    let vw = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
+    let vh = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
+    let r = ((rgba >> 24) & 0xFF) as u8;
+    let g = ((rgba >> 16) & 0xFF) as u8;
+    let b = ((rgba >> 8) & 0xFF) as u8;
+    let a = (rgba & 0xFF) as u8;
+    let mut verts = Vec::with_capacity(6 * 12);
+    cmd_stream_push_rgb_line_quad_px(
+        &mut verts,
+        x1,
+        y1,
+        x2,
+        y2,
+        thickness,
+        vw,
+        vh,
+        r,
+        g,
+        b,
+        a,
+    );
+    cmd_stream_draw_rgb_triangles(&verts, a)
+}
+
 pub fn draw_lyon_in_frame(
     icon_id: u32,
     x: f32,
@@ -916,6 +949,45 @@ pub(crate) unsafe fn try_create_native_module(
                 rgba,
                 outline,
                 chamfer,
+            );
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_draw_line(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let Some(args) = cmd_stream_args(argv, argc, 5) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(x1_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(y1_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(x2_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(y2_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(rgba_f) = cmd_stream_arg_f64(ctx, args, 4) else {
+                return qjs::JSValue::undefined();
+            };
+
+            atlas_cmd_stream::flush_text_batches();
+            let rgba = (rgba_f as i64).max(0) as u32;
+            let thickness = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(1.0).max(0.5) as f32;
+            let _ = cmd_stream_draw_line(
+                x1_f as f32,
+                y1_f as f32,
+                x2_f as f32,
+                y2_f as f32,
+                rgba,
+                thickness,
             );
             qjs::JSValue::undefined()
         }
@@ -1334,6 +1406,7 @@ pub(crate) unsafe fn try_create_native_module(
             );
             export_fn!("drawTrianglesU8", qjs_cmd_stream_draw_triangles_u8, 1);
             export_fn!("fillRect", qjs_cmd_stream_fill_rect, 5);
+            export_fn!("drawLine", qjs_cmd_stream_draw_line, 5);
             export_fn!(
                 "drawTexturedTrianglesU8",
                 qjs_cmd_stream_draw_textured_triangles_u8,
@@ -1381,6 +1454,7 @@ pub(crate) unsafe fn try_create_native_module(
         add_export!("createAtlasTexture");
         add_export!("drawTrianglesU8");
         add_export!("fillRect");
+        add_export!("drawLine");
         add_export!("drawTexturedTrianglesU8");
         add_export!("drawAtlasText");
         add_export!("drawLyonIconInFrame");
