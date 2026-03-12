@@ -15,7 +15,7 @@ const runtime = resolveRuntime();
 
 const AI_CURSOR_SLOT_BASE = 10000;
 const DEFAULT_AI_CURSOR_ID = 'ai-default';
-const WHEEL_STEP_PX = 32;
+const WHEEL_STEP_PX = 16;
 const CURSOR_EVENT_FIELDS = 6;
 const CURSOR_FLAG_BUTTONS_CHANGED = 1 << 2;
 const INDENT_PX = 12;
@@ -44,7 +44,6 @@ const aiInputWaiters = [];
 let pendingReleaseRect = null;
 let cursorMoveLogCount = 0;
 const pendingSyntheticCursorEchoes = [];
-const suppressedCursorButtonEvents = [];
 
 const fpsOverlay = createFpsOverlay();
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
@@ -390,6 +389,32 @@ function pushRow(rows, text, depth, kind = 'text', style = null, meta = null) {
   rows.push(row);
 }
 
+function pushImageRow(rows, depth, widthPx, heightPx, style = null, meta = null, text = 'img') {
+  const row = {
+    depth: Math.max(0, Number(depth || 0) | 0),
+    text: collapseWhitespace(text) || 'img',
+    kind: 'image',
+    style,
+    widthPx: Math.max(1, Math.round(Number(widthPx || 0) || 1)),
+    heightPx: Math.max(1, Math.round(Number(heightPx || 0) || 1)),
+  };
+  if (meta && typeof meta === 'object') {
+    if (typeof meta.path === 'string' && meta.path) row.path = meta.path;
+    if (typeof meta.src === 'string' && meta.src) row.src = meta.src;
+  }
+  rows.push(row);
+}
+
+function parsePositiveAttrPx(node, name, fallback = 0) {
+  const raw = String(getNodeAttr(node, name) || '').trim();
+  if (!raw) return Math.max(0, Number(fallback || 0) || 0);
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    return Math.max(0, Number(fallback || 0) || 0);
+  }
+  return value;
+}
+
 function shouldOmitElement(tagName) {
   return OMIT_TAGS.has(String(tagName || '').toLowerCase());
 }
@@ -425,6 +450,20 @@ function collectRows(node, depth, rows, cssSection, parentMeta = null, path = 'r
   if (isElement(node)) {
     const tag = String(node.tagName || '').toLowerCase();
     const style = resolveNodeStyle(node, path, cssSection, ancestors, parentMeta && parentMeta.style ? parentMeta.style : null);
+    if (tag === 'img') {
+      const widthPx = parsePositiveAttrPx(node, 'width', 160);
+      const heightPx = parsePositiveAttrPx(node, 'height', widthPx > 0 ? widthPx : 120);
+      pushImageRow(
+        rows,
+        depth,
+        widthPx,
+        heightPx,
+        style,
+        { path: String(path || 'root'), src: String(getNodeAttr(node, 'src') || '') },
+        String(getNodeAttr(node, 'alt') || 'img'),
+      );
+      return;
+    }
     const renderTagLines = !shouldOmitElement(tag) && shouldRenderTagLines(tag);
     if (renderTagLines && SHOW_CLOSING_TAG_ROWS) pushRow(rows, `<${tag}>`, depth, 'tag-open', style, { path: String(path || 'root') });
     const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
@@ -792,9 +831,17 @@ function applyYoga(rows, vw, context = 'document') {
       const r = rows[i];
       const indent = r.depth * INDENT_PX;
       const n = Yoga.Node.create();
-      n.setHeight(LINE_H);
-      n.setMinHeight(LINE_H);
-      if (r.kind === 'title-text') {
+      if (r.kind === 'image') {
+        const imageW = Math.max(1, Math.round(Number(r.widthPx || 0) || 1));
+        const imageH = Math.max(1, Math.round(Number(r.heightPx || 0) || 1));
+        const maxW = Math.max(1, vw - (LEFT_PAD * 2) - indent);
+        n.setWidth(Math.min(imageW, maxW));
+        n.setHeight(imageH);
+        n.setMinHeight(imageH);
+        n.setMargin(Yoga.EDGE_LEFT, indent);
+      } else if (r.kind === 'title-text') {
+        n.setHeight(LINE_H);
+        n.setMinHeight(LINE_H);
         // Draw path places text at node-left, so center by placing a content-width node
         // at a centered left margin within the same inner row width as normal rows.
         const textW = Math.max(1, Math.round(String(r.text || '').length * 8));
@@ -803,6 +850,8 @@ function applyYoga(rows, vw, context = 'document') {
         n.setWidth(textW);
         n.setMargin(Yoga.EDGE_LEFT, centeredLeft);
       } else {
+        n.setHeight(LINE_H);
+        n.setMinHeight(LINE_H);
         n.setWidth(Math.max(1, vw - (LEFT_PAD * 2) - indent));
         n.setMargin(Yoga.EDGE_LEFT, indent);
       }
@@ -1175,17 +1224,17 @@ function flattenSerializedSnapshot(root, out = []) {
 function appendThemeLayoutSnapshotNodes(themeLayout, out = []) {
   const interactives = Array.isArray(themeLayout && themeLayout.interactives) ? themeLayout.interactives : [];
   if (interactives.length <= 0) return out;
-  const seen = new Set();
+  const byPath = new Map();
   for (let i = 0; i < out.length; i += 1) {
     const item = out[i];
     const path = item && typeof item.path === 'string' ? item.path : '';
-    if (path) seen.add(path);
+    if (path) byPath.set(path, item);
   }
   for (let i = 0; i < interactives.length; i += 1) {
     const entry = interactives[i];
-    const path = typeof entry && entry.path === 'string' ? entry.path : '';
-    if (!path || seen.has(path)) continue;
-    out.push({
+    const path = entry && typeof entry.path === 'string' ? entry.path : '';
+    if (!path) continue;
+    const interactiveNode = {
       type: 'interactive',
       path,
       tag: typeof entry.tag === 'string' ? entry.tag : '',
@@ -1200,8 +1249,14 @@ function appendThemeLayoutSnapshotNodes(themeLayout, out = []) {
         width: Math.max(1, Math.round(Number(entry.width || 0))),
         height: Math.max(1, Math.round(Number(entry.height || 0))),
       },
-    });
-    seen.add(path);
+    };
+    const existing = byPath.get(path);
+    if (existing && typeof existing === 'object') {
+      Object.assign(existing, interactiveNode);
+      continue;
+    }
+    out.push(interactiveNode);
+    byPath.set(path, interactiveNode);
   }
   return out;
 }
@@ -1423,21 +1478,6 @@ function queueCursorButtonEvent(event) {
   }
 }
 
-function suppressCursorButtonEvent(slotId, x, y, prevButtonsDown, buttonsDown, flags) {
-  suppressedCursorButtonEvents.push(`${Number(slotId) | 0}:${Number(x || 0)}:${Number(y || 0)}:${Number(prevButtonsDown || 0) >>> 0}:${Number(buttonsDown || 0) >>> 0}:${Number(flags || 0) >>> 0}`);
-  if (suppressedCursorButtonEvents.length > 64) {
-    suppressedCursorButtonEvents.splice(0, suppressedCursorButtonEvents.length - 64);
-  }
-}
-
-function consumeSuppressedCursorButtonEvent(slotId, x, y, prevButtonsDown, buttonsDown, flags) {
-  const signature = `${Number(slotId) | 0}:${Number(x || 0)}:${Number(y || 0)}:${Number(prevButtonsDown || 0) >>> 0}:${Number(buttonsDown || 0) >>> 0}:${Number(flags || 0) >>> 0}`;
-  const index = suppressedCursorButtonEvents.indexOf(signature);
-  if (index < 0) return false;
-  suppressedCursorButtonEvents.splice(index, 1);
-  return true;
-}
-
 function rememberSyntheticCursorEcho(slotId, x, y, buttonsDown, wheel, flags) {
   pendingSyntheticCursorEchoes.push(`${Number(slotId) | 0}:${Number(x || 0)}:${Number(y || 0)}:${Number(buttonsDown || 0) >>> 0}:${Number(wheel || 0) | 0}:${Number(flags || 0) >>> 0}`);
   if (pendingSyntheticCursorEchoes.length > 64) {
@@ -1502,7 +1542,6 @@ function rememberKernelCursor(slotId, x, y, buttonsDown, flags) {
   });
 
   if (((nextFlags & CURSOR_FLAG_BUTTONS_CHANGED) !== 0) || nextButtons !== prevButtons) {
-    const suppressed = consumeSuppressedCursorButtonEvent(id, nextX, nextY, prevButtons, nextButtons, nextFlags);
     if (prevButtons === 0 && nextButtons !== 0) {
       cursorDragOrigins.set(id, {
         x: nextX,
@@ -1516,16 +1555,14 @@ function rememberKernelCursor(slotId, x, y, buttonsDown, flags) {
       cursorDragOrigins.delete(id);
     }
     logCursorDebug(`[browser.mjs] cursor buttons slot=${id} prev=${prevButtons} next=${nextButtons}`);
-    if (!suppressed) {
-      queueCursorButtonEvent({
-        slotId: id,
-        x: nextX,
-        y: nextY,
-        buttonsDown: nextButtons,
-        previousButtonsDown: prevButtons,
-        flags: nextFlags,
-      });
-    }
+    queueCursorButtonEvent({
+      slotId: id,
+      x: nextX,
+      y: nextY,
+      buttonsDown: nextButtons,
+      previousButtonsDown: prevButtons,
+      flags: nextFlags,
+    });
     return 1;
   }
 
@@ -1770,9 +1807,8 @@ function resolveInteractiveTarget(target = null) {
   return null;
 }
 
-function synthesizeClick(target = null, options = null) {
+function synthesizeClick(target = null) {
   const source = target && typeof target === 'object' && !Array.isArray(target) ? target : {};
-  const opts = options && typeof options === 'object' ? options : {};
   const slotId = Number(source.slotId || 0) | 0;
   const aiCursorId = resolveAiCursorId(source.aiCursorId);
   const resolvedSlotId = slotId > 0 ? slotId : getOrCreateAiCursorSlot(aiCursorId);
@@ -1793,10 +1829,6 @@ function synthesizeClick(target = null, options = null) {
   }
 
   const buttonMask = Math.max(1, Number(source.buttonMask || source.button || 1) | 0) >>> 0;
-  if (opts.suppressParryDispatch) {
-    suppressCursorButtonEvent(resolvedSlotId, x, y, 0, buttonMask, 1 | CURSOR_FLAG_BUTTONS_CHANGED);
-    suppressCursorButtonEvent(resolvedSlotId, x, y, buttonMask, 0, 1 | CURSOR_FLAG_BUTTONS_CHANGED);
-  }
   moveCursor({
     slotId: resolvedSlotId,
     aiCursorId,
@@ -2073,30 +2105,8 @@ runtime.host.__trueosBrowser = {
     return moveCursor(target);
   },
   click(target = null) {
-    const result = synthesizeClick(target, { suppressParryDispatch: true });
-    if (result && result.ok) {
-      if (result.path) {
-        return Promise.resolve(dispatchParryDomClick(result.path, {
-          slotId: result.slotId,
-          x: result.x,
-          y: result.y,
-          href: result.href,
-          path: result.path,
-          type: 'click',
-        }, {
-          computeViewport,
-          ensureDoc,
-          isElement,
-          raiseBrowserError,
-          describeError,
-          surfToUrl,
-        })).then((navigation) => ({
-          ...result,
-          navigation,
-        }));
-      }
-      return result;
-    }
+    const result = synthesizeClick(target);
+    if (result && result.ok) return result;
     const hook = runtime.host.__trueosBrowserClick;
     if (typeof hook === 'function') {
       const payload = target && typeof target === 'object' && !Array.isArray(target)
