@@ -344,7 +344,7 @@ pub enum Command {
     SetSampler(SamplerDesc),
     SetBlend(BlendDesc),
     SetViewport(Viewport),
-    SetScissor(ScissorRect),
+    SetScissor(Option<ScissorRect>),
     Draw {
         vertex_count: u32,
         first_vertex: u32,

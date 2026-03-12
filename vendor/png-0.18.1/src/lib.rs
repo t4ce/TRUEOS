@@ -59,6 +59,7 @@
 //! ```
 //!
 
+#![no_std]
 #![forbid(unsafe_code)]
 // Silence certain clippy warnings until our MSRV is higher.
 //
@@ -68,10 +69,79 @@
 #![allow(clippy::uninlined_format_args)]
 #![cfg_attr(feature = "unstable", feature(portable_simd))]
 
+extern crate alloc;
+extern crate self as std;
+
+pub mod borrow {
+    pub use alloc::borrow::*;
+}
+
+pub mod cell {
+    pub use core::cell::*;
+}
+
+pub mod cmp {
+    pub use core::cmp::*;
+}
+
+pub mod convert {
+    pub use core::convert::*;
+}
+
+pub mod error {
+    pub use core::error::*;
+}
+
+pub mod fmt {
+    pub use core::fmt::*;
+}
+
+pub mod io {
+    pub use core2::io::*;
+}
+
+pub mod iter {
+    pub use core::iter::*;
+}
+
+pub mod mem {
+    pub use core::mem::*;
+}
+
+pub mod ops {
+    pub use core::ops::*;
+}
+
+pub mod rc {
+    pub use alloc::rc::*;
+}
+
+pub mod result {
+    pub use core::result::*;
+}
+
+pub mod prelude {
+    pub use alloc::string::{String, ToString};
+    pub use alloc::vec::Vec;
+}
+
+pub mod string {
+    pub use alloc::string::*;
+}
+
+pub mod str {
+    pub use core::str::*;
+}
+
+pub mod vec {
+    pub use alloc::vec::*;
+}
+
 mod adam7;
 pub mod chunk;
 mod common;
 mod decoder;
+#[cfg(feature = "png-encoding")]
 mod encoder;
 mod filter;
 mod srgb;
@@ -87,6 +157,7 @@ pub use crate::common::*;
 pub use crate::decoder::stream::{DecodeOptions, Decoded, DecodingError, StreamingDecoder};
 pub use crate::decoder::{Decoder, InterlaceInfo, InterlacedRow, Limits, OutputInfo, Reader};
 pub use crate::decoder::{UnfilterBuf, UnfilterRegion};
+#[cfg(feature = "png-encoding")]
 pub use crate::encoder::{Encoder, EncodingError, StreamWriter, Writer};
 pub use crate::filter::Filter;
 

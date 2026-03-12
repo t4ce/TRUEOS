@@ -5,6 +5,8 @@ pub(crate) mod transform;
 mod unfiltering_buffer;
 mod zlib;
 
+use alloc::vec::Vec;
+
 use self::read_decoder::{ImageDataCompletionStatus, ReadDecoder};
 use self::stream::{DecodeOptions, DecodingError, FormatErrorInner};
 use self::transform::{create_transform_fn, TransformFn};

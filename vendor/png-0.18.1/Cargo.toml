@@ -39,7 +39,8 @@ repository = "https://github.com/image-rs/image-png"
 [features]
 benchmarks = []
 unstable = ["crc32fast/nightly"]
-zlib-rs = ["flate2/zlib-rs"]
+zlib-rs = ["dep:flate2", "flate2/zlib-rs"]
+png-encoding = ["dep:flate2"]
 
 [lib]
 name = "png"
@@ -92,14 +93,22 @@ version = "1.2.0"
 
 [dependencies.fdeflate]
 version = "0.3.3"
+default-features = false
 
 [dependencies.flate2]
 version = "1.0.35"
+optional = true
+default-features = false
+
+[dependencies.core2]
+version = "0.4"
+default-features = false
+features = ["alloc"]
 
 [dependencies.miniz_oxide]
 version = "0.9"
 default-features = false
-features = ["with-alloc", "simd"]
+features = ["with-alloc"]
 
 [dev-dependencies.approx]
 version = "0.5.1"

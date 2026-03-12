@@ -1,46 +1,5 @@
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-fn draw_de_flag_bottom_left_in_frame(view_w: u32, view_h: u32) -> bool {
-    let vw = view_w.max(1) as f32;
-    let vh = view_h.max(1) as f32;
-
-    let flag_w = 128.0f32.min(vw);
-    let flag_h = 128.0f32.min(vh);
-    let x = 0.0f32;
-    let y = (vh - flag_h).max(0.0);
-    let stripe_h = flag_h / 3.0;
-
-    // Germany flag: black, red, gold.
-    let top_ok = crate::gfx::lyon::draw_solid_rect_no_present(
-        x,
-        y,
-        flag_w,
-        stripe_h,
-        (0x00, 0x00, 0x00, 0xFF),
-        view_w,
-        view_h,
-    );
-    let mid_ok = crate::gfx::lyon::draw_solid_rect_no_present(
-        x,
-        y + stripe_h,
-        flag_w,
-        stripe_h,
-        (0xDD, 0x00, 0x00, 0xFF),
-        view_w,
-        view_h,
-    );
-    let bot_ok = crate::gfx::lyon::draw_solid_rect_no_present(
-        x,
-        y + (2.0 * stripe_h),
-        flag_w,
-        flag_h - (2.0 * stripe_h),
-        (0xFF, 0xCE, 0x00, 0xFF),
-        view_w,
-        view_h,
-    );
-    top_ok && mid_ok && bot_ok
-}
-
 fn centered_text_origin(msg: &[u8], fb_w: f32, fb_h: f32) -> (f32, f32) {
     let atlas = crate::gfx::text::font_atlas_large_view();
     let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
@@ -87,15 +46,13 @@ pub async fn gfx_loadscreen_task() {
     }
     Timer::after(EmbassyDuration::from_millis(16)).await;
     let lyon_ok = crate::gfx::lyon::lyon_geom_api_demo_no_present(fb_w as u32, fb_h as u32);
-    let flag_ok = draw_de_flag_bottom_left_in_frame(fb_w as u32, fb_h as u32);
     let text_ok =
         crate::gfx::text::draw_atlas_text_in_frame(MSG, text_x, text_y, fb_w as u32, fb_h as u32);
     let end_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
-    if !lyon_ok || !flag_ok || !text_ok || end_rc != 0 {
+    if !lyon_ok || !text_ok || end_rc != 0 {
         crate::log!(
-            "gfx-loadscreen: lyon_ok={} flag_ok={} text_ok={} end_rc={}\n",
+            "gfx-loadscreen: lyon_ok={} text_ok={} end_rc={}\n",
             lyon_ok,
-            flag_ok,
             text_ok,
             end_rc
         );

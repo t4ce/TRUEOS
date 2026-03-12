@@ -1,10 +1,13 @@
 //! Common types shared between the encoder and decoder
+use alloc::vec::Vec;
 use crate::text_metadata::{ITXtChunk, TEXtChunk, ZTXtChunk};
 #[allow(unused_imports)] // used by doc comments only
 use crate::Filter;
-use crate::{chunk, encoder};
-use io::Write;
 use std::{borrow::Cow, convert::TryFrom, fmt, io};
+#[cfg(feature = "png-encoding")]
+use crate::{chunk, encoder};
+#[cfg(feature = "png-encoding")]
+use io::Write;
 
 /// Describes how a pixel is encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +283,7 @@ impl FrameControl {
         self.sequence_number += i;
     }
 
+    #[cfg(feature = "png-encoding")]
     pub fn encode<W: Write>(self, w: &mut W) -> encoder::Result<()> {
         let mut data = [0u8; 26];
         data[..4].copy_from_slice(&self.sequence_number.to_be_bytes());
@@ -306,6 +310,7 @@ pub struct AnimationControl {
 }
 
 impl AnimationControl {
+    #[cfg(feature = "png-encoding")]
     pub fn encode<W: Write>(self, w: &mut W) -> encoder::Result<()> {
         let mut data = [0; 8];
         data[..4].copy_from_slice(&self.num_frames.to_be_bytes());
@@ -413,8 +418,8 @@ impl DeflateCompression {
             Compression::NoCompression => Self::NoCompression,
             Compression::Fastest => Self::FdeflateUltraFast,
             Compression::Fast => Self::FdeflateUltraFast,
-            Compression::Balanced => Self::Level(flate2::Compression::default().level() as u8),
-            Compression::High => Self::Level(flate2::Compression::best().level() as u8),
+            Compression::Balanced => Self::Level(6),
+            Compression::High => Self::Level(9),
         }
     }
 }
@@ -429,7 +434,7 @@ impl ScaledFloat {
 
     /// Gets whether the value is within the clamped range of this type.
     pub fn in_range(value: f32) -> bool {
-        value >= 0.0 && (value * Self::SCALING).floor() <= u32::MAX as f32
+        value >= 0.0 && value * Self::SCALING <= u32::MAX as f32
     }
 
     /// Gets whether the value can be exactly converted in round-trip.
@@ -441,7 +446,7 @@ impl ScaledFloat {
     }
 
     fn forward(value: f32) -> u32 {
-        (value.max(0.0) * Self::SCALING).floor() as u32
+        (value.max(0.0) * Self::SCALING) as u32
     }
 
     fn reverse(encoded: u32) -> f32 {
@@ -469,6 +474,7 @@ impl ScaledFloat {
         Self::reverse(self.0)
     }
 
+    #[cfg(feature = "png-encoding")]
     pub(crate) fn encode_gama<W: Write>(self, w: &mut W) -> encoder::Result<()> {
         encoder::write_chunk(w, chunk::gAMA, &self.into_scaled().to_be_bytes())
     }
@@ -515,6 +521,7 @@ impl SourceChromaticities {
         ]
     }
 
+    #[cfg(feature = "png-encoding")]
     pub fn encode<W: Write>(self, w: &mut W) -> encoder::Result<()> {
         encoder::write_chunk(w, chunk::cHRM, &self.to_be_bytes())
     }
@@ -551,6 +558,7 @@ impl SrgbRenderingIntent {
         }
     }
 
+    #[cfg(feature = "png-encoding")]
     pub fn encode<W: Write>(self, w: &mut W) -> encoder::Result<()> {
         encoder::write_chunk(w, chunk::sRGB, &[self.into_raw()])
     }

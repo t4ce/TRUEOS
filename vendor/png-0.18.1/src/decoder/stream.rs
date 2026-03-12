@@ -1,3 +1,5 @@
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use std::convert::TryInto;
 use std::error;
 use std::fmt;
@@ -282,11 +284,8 @@ pub(crate) enum FormatErrorInner {
 }
 
 impl error::Error for DecodingError {
-    fn cause(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            DecodingError::IoError(err) => Some(err),
-            _ => None,
-        }
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        None
     }
 }
 
@@ -448,7 +447,10 @@ impl From<DecodingError> for io::Error {
     fn from(err: DecodingError) -> io::Error {
         match err {
             DecodingError::IoError(err) => err,
-            err => io::Error::new(io::ErrorKind::Other, err.to_string()),
+            err => {
+                let _ = err;
+                io::Error::new(io::ErrorKind::Other, "png decoding error")
+            }
         }
     }
 }
