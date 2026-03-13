@@ -5,6 +5,8 @@ use core::ffi::c_int;
 
 use trueos_qjs as qjs;
 
+const LED_TOOL_MAX_PAYLOAD_BYTES: usize = 2048;
+
 unsafe extern "C" {
     fn trueos_cabi_uart1_shell_write(data_ptr: *const u8, data_len: usize) -> usize;
     fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
@@ -465,12 +467,12 @@ unsafe extern "C" fn trueos_leds_send_output_report_js(
         }
     };
 
-    let mut payload = [0u8; 256];
+    let mut payload = [0u8; LED_TOOL_MAX_PAYLOAD_BYTES];
     let payload_len = match parse_hex_payload(text, &mut payload) {
         Some(n) => n,
         None => {
             qjs::JS_FreeCString(ctx, text_ptr);
-            return js_int32(-1);
+            return js_int32(-2);
         }
     };
     qjs::JS_FreeCString(ctx, text_ptr);
@@ -519,12 +521,12 @@ unsafe extern "C" fn trueos_leds_send_preferred_output_report_js(
         }
     };
 
-    let mut payload = [0u8; 256];
+    let mut payload = [0u8; LED_TOOL_MAX_PAYLOAD_BYTES];
     let payload_len = match parse_hex_payload(text, &mut payload) {
         Some(n) => n,
         None => {
             qjs::JS_FreeCString(ctx, text_ptr);
-            return js_int32(-1);
+            return js_int32(-2);
         }
     };
     qjs::JS_FreeCString(ctx, text_ptr);
