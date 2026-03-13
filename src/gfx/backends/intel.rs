@@ -1,7 +1,6 @@
 use crate::gfx::backends::intel_cmd::{IntelCmd, RingMmio};
 use alloc::vec;
 use alloc::vec::Vec;
-use core::ptr::NonNull;
 
 use trueos_gfx_core::{
     BufferDesc, BufferId, Command, CommandBuffer, DeviceCaps, Error, Extent2D, FenceId, GfxDevice,
@@ -16,35 +15,8 @@ pub struct IntelGfxBackend {
     buffers: Vec<Option<SwBuffer>>,
     pipelines: Vec<Option<PipelineDesc>>,
     images: Vec<Option<SwImage>>,
-    cursor: Option<HwCursorState>,
     cmd: Option<IntelCmd>,
 }
-
-const CURSOR_W: usize = 64;
-const CURSOR_H: usize = 64;
-const CURSOR_BYTES: usize = CURSOR_W * CURSOR_H * 4;
-
-const CURCNTR_A: usize = 0x70080;
-const CURBASE_A: usize = 0x70084;
-const CURPOS_A: usize = 0x70088;
-
-const CURSOR_ENABLE: u32 = 1u32 << 31;
-const MCURSOR_MODE_64_ARGB_AX: u32 = 0x20 | 0x07;
-const CURSOR_POS_Y_SIGN: u32 = 1u32 << 31;
-const CURSOR_POS_X_SIGN: u32 = 1u32 << 15;
-
-struct HwCursorState {
-    mmio_base: NonNull<u8>,
-    mmio_len: usize,
-    phys: u64,
-    virt: *mut u8,
-    hot_x: u32,
-    hot_y: u32,
-    defined: bool,
-}
-
-unsafe impl Send for HwCursorState {}
-unsafe impl Sync for HwCursorState {}
 
 struct SwBuffer {
     data: Vec<u8>,
@@ -82,11 +54,6 @@ impl IntelGfxBackend {
 
         crate::log!("gfx: using intel backend (no software raster path)\n");
 
-        let cursor = Self::init_hw_cursor_state();
-        if cursor.is_none() {
-            crate::log!("gfx-intel: hw cursor init unavailable\n");
-        }
-
         let cmd = crate::gfx::intel::first_claimed_device().and_then(|info| {
             let mmio = RingMmio {
                 base: info.mmio_base,
@@ -114,73 +81,8 @@ impl IntelGfxBackend {
             buffers: Vec::new(),
             pipelines: Vec::new(),
             images: Vec::new(),
-            cursor,
             cmd,
         })
-    }
-
-    fn init_hw_cursor_state() -> Option<HwCursorState> {
-        let info = crate::gfx::intel::first_claimed_device()?;
-        if info.mmio_len <= CURPOS_A + 4 {
-            return None;
-        }
-
-        let (phys, virt) = crate::pci::dma::alloc(CURSOR_BYTES, 4096)?;
-        if virt.is_null() {
-            return None;
-        }
-        unsafe { core::ptr::write_bytes(virt, 0, CURSOR_BYTES) };
-
-        Some(HwCursorState {
-            mmio_base: info.mmio_base,
-            mmio_len: info.mmio_len,
-            phys,
-            virt,
-            hot_x: 0,
-            hot_y: 0,
-            defined: false,
-        })
-    }
-
-    #[inline]
-    fn mmio_write32(base: NonNull<u8>, off: usize, value: u32) {
-        let ptr = unsafe { base.as_ptr().add(off) as *mut u32 };
-        unsafe { core::ptr::write_volatile(ptr, value) };
-    }
-
-    #[inline]
-    fn mmio_read32(base: NonNull<u8>, off: usize) -> u32 {
-        let ptr = unsafe { base.as_ptr().add(off) as *const u32 };
-        unsafe { core::ptr::read_volatile(ptr) }
-    }
-
-    fn program_cursor(cur: &HwCursorState) {
-        let base = cur.mmio_base;
-        let ctl = CURSOR_ENABLE | MCURSOR_MODE_64_ARGB_AX;
-        Self::mmio_write32(base, CURBASE_A, (cur.phys & !0xFFF) as u32);
-        Self::mmio_write32(base, CURCNTR_A, ctl);
-        let _ = Self::mmio_read32(base, CURCNTR_A);
-    }
-
-    fn encode_cursor_pos(x: i32, y: i32) -> u32 {
-        let x_mag = x.unsigned_abs().min(0x7FFF);
-        let y_mag = y.unsigned_abs().min(0x7FFF);
-        let mut v = ((y_mag as u32) << 16) | (x_mag as u32);
-        if x < 0 {
-            v |= CURSOR_POS_X_SIGN;
-        }
-        if y < 0 {
-            v |= CURSOR_POS_Y_SIGN;
-        }
-        v
-    }
-
-    fn move_cursor(cur: &HwCursorState, x: i32, y: i32) {
-        let px = x.saturating_sub(cur.hot_x as i32);
-        let py = y.saturating_sub(cur.hot_y as i32);
-        let v = Self::encode_cursor_pos(px, py);
-        Self::mmio_write32(cur.mmio_base, CURPOS_A, v);
-        let _ = Self::mmio_read32(cur.mmio_base, CURPOS_A);
     }
 
     fn slot_to_id(slot: usize) -> u32 {
@@ -431,71 +333,6 @@ impl GfxPresent for IntelGfxBackend {
 
     fn swapchain_desc(&self) -> SwapchainDesc {
         self.swapchain
-    }
-
-    fn hw_cursor_supported(&mut self) -> bool {
-        self.cursor.is_some()
-    }
-
-    fn hw_cursor_define_bgra(
-        &mut self,
-        width: u32,
-        height: u32,
-        hot_x: u32,
-        hot_y: u32,
-        pixels_bgra: &[u8],
-    ) -> Result<()> {
-        let Some(cur) = self.cursor.as_mut() else {
-            return Err(Error::Unsupported);
-        };
-        if width == 0 || height == 0 {
-            return Err(Error::Invalid);
-        }
-        let src_needed = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4);
-        if pixels_bgra.len() < src_needed {
-            return Err(Error::Invalid);
-        }
-
-        if cur.mmio_len <= CURPOS_A + 4 {
-            return Err(Error::Unsupported);
-        }
-
-        unsafe { core::ptr::write_bytes(cur.virt, 0, CURSOR_BYTES) };
-
-        let copy_w = (width as usize).min(CURSOR_W);
-        let copy_h = (height as usize).min(CURSOR_H);
-        for row in 0..copy_h {
-            let src_off = row.saturating_mul(width as usize).saturating_mul(4);
-            let dst_off = row.saturating_mul(CURSOR_W).saturating_mul(4);
-            let bytes = copy_w.saturating_mul(4);
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    pixels_bgra.as_ptr().add(src_off),
-                    cur.virt.add(dst_off),
-                    bytes,
-                );
-            }
-        }
-
-        cur.hot_x = hot_x.min((CURSOR_W - 1) as u32);
-        cur.hot_y = hot_y.min((CURSOR_H - 1) as u32);
-        cur.defined = true;
-
-        Self::program_cursor(cur);
-        Ok(())
-    }
-
-    fn hw_cursor_move(&mut self, x: i32, y: i32) -> Result<()> {
-        let Some(cur) = self.cursor.as_ref() else {
-            return Err(Error::Unsupported);
-        };
-        if !cur.defined {
-            return Err(Error::Invalid);
-        }
-        Self::move_cursor(cur, x, y);
-        Ok(())
     }
 }
 
