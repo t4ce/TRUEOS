@@ -856,10 +856,8 @@ unsafe fn load_fs_module(
     // Otherwise an old `/qjs/*.qjsc` left on disk can override freshly embedded updates.
     if path_is_absolute(path) {
         if let Some(m) = embedded::find(path) {
-            let force_source_compile = path == b"/qjs/browser/scene.mjs";
-
             // Fast-path: if we have build-time bytecode, load it directly.
-            if !force_source_compile && !m.bytecode.is_empty() {
+            if !m.bytecode.is_empty() {
                 let v = qjs::JS_ReadObject(
                     ctx,
                     m.bytecode.as_ptr(),
@@ -876,18 +874,9 @@ unsafe fn load_fs_module(
                 }
             }
 
-            if force_source_compile {
-                log_str("qjs: loader force-source /qjs/browser/scene.mjs\n");
-                log_str("qjs: scene compile begin\n");
-            }
-
             trace_str("qjs: embedded compile start\n");
             let v = compile_module_value_from_buf(ctx, module_name, m.src.as_ptr(), m.src.len());
             trace_str("qjs: embedded compile done\n");
-
-            if force_source_compile {
-                log_str("qjs: scene compile done\n");
-            }
 
             if v.is_exception() || v.tag != qjs::JS_TAG_MODULE {
                 if !v.is_exception() {
