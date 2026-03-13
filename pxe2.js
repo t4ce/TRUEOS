@@ -146,16 +146,27 @@ function detectInterfaceIPv4(iface) {
 
 function ensureTftpFiles(tftpRoot) {
   const bootPath = path.join(tftpRoot, BOOTFILE);
-  const limineConfPath = path.join(tftpRoot, "EFI/BOOT/limine.conf");
   const kernelPath = path.join(tftpRoot, "TRUEOS.elf");
 
-  for (const p of [bootPath, limineConfPath, kernelPath]) {
+  for (const p of [bootPath, kernelPath]) {
     if (!fs.existsSync(p)) {
       die(
         `Missing required TFTP file: ${p}\n` +
           `Hint: run \`make iso\` first to stage UEFI netboot files into ${tftpRoot}.`
       );
     }
+  }
+
+  // limine.conf location differs between staging layouts; keep this informational.
+  const limineConfCandidates = [
+    path.join(tftpRoot, "EFI/BOOT/limine.conf"),
+    path.join(tftpRoot, "limine.conf"),
+    path.join(tftpRoot, "iso-bootroot/limine.conf"),
+  ];
+  if (!limineConfCandidates.some((p) => fs.existsSync(p))) {
+    process.stdout.write(
+      `Warning: limine.conf not found under ${tftpRoot}; continuing because ${BOOTFILE} and TRUEOS.elf exist.\n`
+    );
   }
 }
 
