@@ -448,13 +448,6 @@ if (typeof G.window.innerWidth !== 'number') G.window.innerWidth = 1280;
 if (typeof G.window.innerHeight !== 'number') G.window.innerHeight = 800;
 if (typeof G.addEventListener !== 'function') G.addEventListener = () => {};
 if (typeof G.removeEventListener !== 'function') G.removeEventListener = () => {};
-if (typeof G.requestAnimationFrame !== 'function') {
-    G.requestAnimationFrame = (cb) => {
-        try { if (typeof cb === 'function') cb(Date.now()); } catch (_) {}
-        return 1;
-    };
-}
-if (typeof G.cancelAnimationFrame !== 'function') G.cancelAnimationFrame = () => {};
 if (typeof G.setTimeout !== 'function') G.setTimeout = () => 1;
 if (typeof G.clearTimeout !== 'function') G.clearTimeout = () => {};
 "#,

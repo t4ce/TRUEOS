@@ -81,6 +81,7 @@ pub async fn gfx_loadscreen_task() {
     let clear_h = (bounds_h + TEXT_PAD_Y * 2.0).min(fb_h - clear_y);
     crate::log!("GFX Loadscreen\n");
 
+    /*
     // Initial full frame: lyon decorations + text at full opacity
     let begin_rc =
         unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(LOADSCREEN_BG_RGB) };
@@ -100,6 +101,7 @@ pub async fn gfx_loadscreen_task() {
             end_rc
         );
     }
+    */
     // Keep pulsing until the browser submits its first real frame.
     let mut frame: u32 = 0;
     while !crate::v::readiness::is_set(crate::v::readiness::WGPU_TEXT_DONE) {
