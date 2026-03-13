@@ -16,53 +16,32 @@ A constant influx of resources, money, and safety.
 */
 
 
-# Steps Fresh Sys, clone repo , then
-./tools/bootstrap_debian.sh
+# install
+apt install git make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential
+cargo install fmt cargo-outdated cargo-edit --locked
+snap install code-insiders --classic
 
-# (rust-toolchain.toml pins the Rust toolchain + components; system deps and
-# `cargo install` tools live in the bootstrap script.)
-sudo apt update 
-sudo apt install -y rustup
-sudo apt install autoconf automake mtools nasm xorriso
-sudo apt-get install qemu-system
-sudo apt install gdb
-cargo install fmt
-cargo install cargo-outdated 
-cargo install cargo-edit --locked
+git config --global user.email "jonasb@post.com"
+git config --global user.name "t4ce"
+
+apt install npm
+sudo npm install node
+
+# update
+sudo apt update && sudo apt upgrade
 cargo outdated -R
 cargo upgrade
 cargo update
-
 cargo clippy --fix --broken-code --bin "TRUEOS" -p TRUEOS
-
-
-sudo apt-get update
-# mkfs.vfat is provided by dosfstools (required by Makefile ISO build).
-sudo apt-get install -y \
-  rustup \
-  autoconf \
-  automake \
-  mtools \
-  dosfstools \
-  nasm \
-  xorriso \
-  gdb \
-  qemu-system-x86 \
-
 rustup component add clippy
-sudo apt-get install -y qemu-system
-
 rustup toolchain install nightly --profile minimal \
   --component rust-src,rustfmt,clippy,rust-analyzer,llvm-tools-preview
-
-
 
 # and so nomachione with pxe work add to
 sudoedit /usr/NX/etc/server.cfg
 UDPPort 50000-50999
 
 sudo systemctl restart nxserver
-
 
 PXE_IF=br0
 sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 67
@@ -80,10 +59,14 @@ ConWhite 	FF_FF_FF
 # PASS IN USB DEVICE / NVMe data partition permissions
 sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
 sudo udevadm control --reload-rules
+
+sudo usermod -aG kvm "$USER"
+newgrp kvm
+id
+
 sudo udevadm trigger --subsystem-match=block --subsystem-match=usb
 sudo udevadm trigger --name-match=nvme2n1p1
 ls -l /dev/nvme2n1p1
-
 
 # Optional: keep router/DHCP seeing the *same* MAC as the physical uplink
 # (otherwise br0 may present a different MAC than $UPLINK)
@@ -127,16 +110,11 @@ lspci -nnk -s 06:00.0
 sudo ip link add NIC type dummy
 sudo ip link set dev NIC address 5c:60:ba:b5:58:0f
 
-
-
 ## LAN bridge for QEMU (rerunnable)
 sudo nmcli con up br0-enp5s0
 sudo nmcli con up br0
 sudo ip link set tap0 master br0
 sudo ip link set tap0 up
-sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
-sudo udevadm control --reload-rules
-sudo udevadm trigger --subsystem-match=usb
 UPLINK=enp5s0
 WIRED_CON="Kabelgebundene Verbindung 1"
 BR=br0
@@ -159,7 +137,27 @@ if ! ip link show tap0 >/dev/null 2>&1; then
 fi
 sudo ip link set tap0 master br0
 sudo ip link set tap0 up
-ip -d link show tap0
-bridge link show | grep -E 'tap0|br0'
+
 
 konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'
+
+
+
+
+
+
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2109", ATTR{idProduct}=="2813", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="2109", ATTRS{idProduct}=="2813", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0951", ATTR{idProduct}=="16a4", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="0951", ATTRS{idProduct}=="16a4", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="303a", ATTR{idProduct}=="1001", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
+
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="058f", ATTR{idProduct}=="6387", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="058f", ATTRS{idProduct}=="6387", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
+
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="07cf", ATTR{idProduct}=="6803", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="07cf", ATTRS{idProduct}=="6803", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
+
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1462", ATTR{idProduct}=="7e03", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="1462", ATTRS{idProduct}=="7e03", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
