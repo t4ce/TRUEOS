@@ -72,19 +72,7 @@ pub(crate) unsafe fn drain_pending_jobs(
     }
     loop {
         let mut job_ctx: *mut qjs::JSContext = core::ptr::null_mut();
-        if label == "browser" {
-            qjs::trueos_shims::log_info("qjs-browser: pending-job begin\n");
-        }
         let rc = qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut qjs::JSContext);
-        if label == "browser" {
-            if rc > 0 {
-                qjs::trueos_shims::log_info("qjs-browser: pending-job rc=1\n");
-            } else if rc == 0 {
-                qjs::trueos_shims::log_info("qjs-browser: pending-job rc=0\n");
-            } else {
-                qjs::trueos_shims::log_info("qjs-browser: pending-job rc<0\n");
-            }
-        }
         if rc > 0 {
             // Yield to the Embassy executor between jobs so other tasks (e.g. the
             // gfx loadscreen) can paint during long synchronous bursts like module
