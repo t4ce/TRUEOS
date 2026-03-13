@@ -44,6 +44,7 @@ let browserActionSeq = 0;
 let aiStartPromise = null;
 let aiStartSpecifier = '';
 let aiWorker = null;
+let aiAutostartScheduled = false;
 const aiInputQueue = [];
 const aiInputWaiters = [];
 let pendingReleaseRect = null;
@@ -493,22 +494,10 @@ function scheduleImagePrimeFlush() {
     });
     return;
   }
-  if (typeof runtime.host.requestAnimationFrame === 'function') {
-    runtime.host.requestAnimationFrame(job);
-    return;
-  }
   job();
 }
 
 function queueImageRepaint() {
-  if (typeof runtime.host.requestAnimationFrame === 'function') {
-    runtime.host.requestAnimationFrame(() => {
-      try {
-        paint();
-      } catch (_) {}
-    });
-    return;
-  }
   try {
     paint();
   } catch (_) {}
@@ -1710,6 +1699,16 @@ function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
   paint();
+  if (!aiAutostartScheduled) {
+    aiAutostartScheduled = true;
+    if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
+      Promise.resolve().then(() => {
+        maybeAutostartAi();
+      }).catch(() => {});
+    } else {
+      maybeAutostartAi();
+    }
+  }
   const htmlSnapshot = cachedHtml;
   if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
     Promise.resolve().then(() => {
@@ -2360,12 +2359,13 @@ function startWheelPump() {
       return;
     } catch (_) {}
   }
-  if (typeof host.requestAnimationFrame === 'function') {
+  // Use timeout scheduling only for cursor polling.
+  if (typeof host.setTimeout === 'function') {
     const step = () => {
       pumpCursorEvents();
-      try { host.requestAnimationFrame(step); } catch (_) {}
+      try { host.setTimeout(step, 16); } catch (_) {}
     };
-    try { host.requestAnimationFrame(step); } catch (_) {}
+    try { host.setTimeout(step, 16); } catch (_) {}
   }
 }
 
@@ -2595,4 +2595,3 @@ if (INITIAL_NAVIGATE_TO_W3C_PNG) {
 installAiInputBridge();
 startWheelPump();
 startAutoPaint();
-maybeAutostartAi();

@@ -7,6 +7,7 @@ import * as driverdev from "../dd/driverdev.mjs";
 const DEFAULT_MAX_STEPS = 50;
 const DEFAULT_MODEL = "gpt-5.4";
 const DEFAULT_PARALLEL_TOOL_CALLS = true;
+const DEFAULT_TOOL_SEARCH = true;
 const WORKER_RPC_TIMEOUT_MS = 30000;
 const AI_PC_TOOL_POLICY = [
   "Use shell1 function tools whenever the user is asking to run, open, launch, inspect, or control something that maps to a shell1 command.",
@@ -446,6 +447,19 @@ function toJsonStringOrNull(value) {
   }
 }
 
+function ledRcHint(rc) {
+  if (rc === 0) {
+    return "ok";
+  }
+  if (rc === -2) {
+    return "invalid payloadHex (non-hex, odd length, or exceeds LED bridge limit)";
+  }
+  if (rc === -1) {
+    return "send failed (device/runtime rejected or handle not claimed by leds runtime)";
+  }
+  return "unknown return code";
+}
+
 function createDriverDevTools() {
   return [
     {
@@ -762,6 +776,9 @@ function createDriverDevTools() {
 
 function buildTools(entry) {
   const tools = [];
+  if (DEFAULT_TOOL_SEARCH) {
+    tools.push({ type: "tool_search" });
+  }
   if (entry.webSearch) {
     tools.push({ type: "web_search" });
   }
@@ -781,7 +798,22 @@ function buildTools(entry) {
     tools.push(createExecJsTool());
   }
   tools.push(createAskUserTool());
-  return tools;
+  return applyDeferredLoading(tools);
+}
+
+function applyDeferredLoading(tools) {
+  const out = [];
+  for (const tool of tools) {
+    if (tool && tool.type === "function" && tool.defer_loading !== true) {
+      out.push({
+        ...tool,
+        defer_loading: true,
+      });
+    } else {
+      out.push(tool);
+    }
+  }
+  return out;
 }
 
 async function readTrueosFsTree(maxEntries = 64) {
@@ -1066,6 +1098,7 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
             rc,
             reportId,
             payloadLenBytes: Math.floor(payloadHex.length / 2),
+            rcHint: ledRcHint(rc),
           }),
         });
       } else if (item.type === "function_call" && item.name === "driverdev_leds_send_preferred_output_report_hex") {
@@ -1079,6 +1112,7 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
           output: JSON.stringify({
             rc,
             payloadLenBytes: Math.floor(payloadHex.length / 2),
+            rcHint: ledRcHint(rc),
           }),
         });
       } else if (item.type === "function_call" && item.name === "ask_user") {
