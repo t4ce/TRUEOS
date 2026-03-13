@@ -493,33 +493,6 @@ pub trait GfxPresent {
     fn configure_swapchain(&mut self, desc: SwapchainDesc) -> Result<()>;
     fn swapchain_desc(&self) -> SwapchainDesc;
 
-    /// Returns true when the backend can drive a dedicated hardware cursor plane.
-    #[inline]
-    fn hw_cursor_supported(&mut self) -> bool {
-        false
-    }
-
-    /// Upload/define cursor image data for the hardware cursor plane.
-    ///
-    /// Pixel format is BGRA8888 (4 bytes per pixel).
-    #[inline]
-    fn hw_cursor_define_bgra(
-        &mut self,
-        _width: u32,
-        _height: u32,
-        _hot_x: u32,
-        _hot_y: u32,
-        _pixels_bgra: &[u8],
-    ) -> Result<()> {
-        Err(Error::Unsupported)
-    }
-
-    /// Move hardware cursor plane in pixel coordinates.
-    #[inline]
-    fn hw_cursor_move(&mut self, _x: i32, _y: i32) -> Result<()> {
-        Err(Error::Unsupported)
-    }
-
     /// Best-effort display refresh rate in millihertz.
     ///
     /// Backends that cannot query mode timing (or where "refresh" is not a meaningful

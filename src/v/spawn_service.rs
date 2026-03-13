@@ -43,7 +43,6 @@ static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_CURSOR_OVERLAY_STARTED: AtomicBool = AtomicBool::new(false);
-static GFX_HW_CURSOR_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_LOADSCREEN_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_BROWSER_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
@@ -221,13 +220,6 @@ async fn gfx_virgl_cursor_overlay_task() {
 
 fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(gfx_virgl_cursor_overlay_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
-fn spawn_gfx_hw_cursor_task(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::gfx::cursor::gfx_hw_cursor_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -600,13 +592,6 @@ static TASKS: &[TaskSpec] = &[
         required: crate::v::readiness::WGPU_TEXT_DONE,
         started: &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
         spawn: spawn_gfx_virgl_cursor_overlay_task,
-    },
-    TaskSpec {
-        name: "gfx-hw-cursor",
-        disabled: true,
-        required: crate::v::readiness::GFX_BACKEND_READY,
-        started: &GFX_HW_CURSOR_STARTED,
-        spawn: spawn_gfx_hw_cursor_task,
     },
     TaskSpec {
         name: "gfx_loadscreen",

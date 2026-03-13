@@ -17,25 +17,25 @@ A constant influx of resources, money, and safety.
 
 
 # install
-apt install git make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential
+sudo apt update && sudo apt upgrade
+apt install git gh make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential konsole
 cargo install fmt cargo-outdated cargo-edit --locked
 snap install code-insiders --classic
+rustup component add clippy
+rustup toolchain install nightly --profile minimal --component rust-src,rustfmt,rust-analyzer,llvm-tools-preview
 
 git config --global user.email "jonasb@post.com"
 git config --global user.name "t4ce"
+gh auth login
 
 apt install npm
 sudo npm install node
 
 # update
-sudo apt update && sudo apt upgrade
 cargo outdated -R
 cargo upgrade
 cargo update
 cargo clippy --fix --broken-code --bin "TRUEOS" -p TRUEOS
-rustup component add clippy
-rustup toolchain install nightly --profile minimal \
-  --component rust-src,rustfmt,clippy,rust-analyzer,llvm-tools-preview
 
 # and so nomachione with pxe work add to
 sudoedit /usr/NX/etc/server.cfg
@@ -130,13 +130,19 @@ sudo nmcli con down "$WIRED_CON" 2>/dev/null || true
 sudo nmcli con up "$SLAVE_CON"
 sudo nmcli con up br0
 
-# at reboot
-sudo modprobe tun
-if ! ip link show tap0 >/dev/null 2>&1; then
-  sudo ip tuntap add dev tap0 mode tap user "$USER" group "$(id -gn)"
+# persist TAP across reboot (one-time setup)
+echo tun | sudo tee /etc/modules-load.d/tun.conf
+if ! nmcli -t -f NAME con show | grep -Fxq "tap0"; then
+  sudo nmcli con add type tun ifname tap0 con-name tap0 mode tap \
+    owner "$(id -u)" group "$(id -g)" autoconnect yes \
+    controller br0 port-type bridge
 fi
-sudo ip link set tap0 master br0
-sudo ip link set tap0 up
+if ! nmcli -t -f NAME con show --active | grep -Fxq "tap0"; then
+  sudo nmcli con up tap0 || true
+fi
+nmcli -t -f NAME,TYPE,DEVICE con show | grep -E '^tap0:' || true
+nmcli -f GENERAL.STATE,GENERAL.NAME con show tap0
+bridge link show | grep -E "tap0|br0" || true
 
 
 konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'

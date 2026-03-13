@@ -47,8 +47,6 @@ const VIRTIO_GPU_CMD_SET_SCANOUT: u32 = 0x0103;
 const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
 const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
 const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
-const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
-const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
 const VIRTIO_GPU_CMD_CTX_CREATE: u32 = 0x0200;
 const VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE: u32 = 0x0202;
 const VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE: u32 = 0x0203;
@@ -171,7 +169,6 @@ impl VirglCmdBuf {
 
 // Virtio queues.
 const QUEUE_CONTROL: u16 = 0;
-const QUEUE_CURSOR: u16 = 1;
 
 const VIRTQ_DESC_F_NEXT: u16 = 1;
 const VIRTQ_DESC_F_WRITE: u16 = 2;
@@ -752,32 +749,11 @@ struct CmdSubmit3d {
     // followed by `size` bytes of virgl command stream
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct CursorPos {
-    scanout_id: u32,
-    x: u32,
-    y: u32,
-    padding: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct CmdUpdateCursor {
-    hdr: CtrlHdr,
-    pos: CursorPos,
-    resource_id: u32,
-    hot_x: u32,
-    hot_y: u32,
-    padding: u32,
-}
-
 pub struct VirtioGpu3d {
     common: core::ptr::NonNull<VirtioPciCommonCfg>,
     notify: core::ptr::NonNull<u8>,
     notify_mult: u32,
     ctrlq: VirtQueue,
-    cursorq: Option<VirtQueue>,
     req: DmaRegion,
     resp: DmaRegion,
 }
@@ -812,7 +788,6 @@ impl VirtioGpu3d {
         }
 
         let ctrlq = setup_queue_modern(common, QUEUE_CONTROL).ok()?;
-        let cursorq = setup_queue_modern(common, QUEUE_CURSOR).ok();
 
         unsafe {
             let c = common.as_ptr();
@@ -832,7 +807,6 @@ impl VirtioGpu3d {
             notify,
             notify_mult: caps.notify_mult,
             ctrlq,
-            cursorq,
             req,
             resp,
         })
@@ -1193,64 +1167,6 @@ impl VirtioGpu3d {
         self.ctrl_submit_desc_chain(total)
     }
 
-    pub fn has_cursor_queue(&self) -> bool {
-        self.cursorq.is_some()
-    }
-
-    pub fn update_cursor(
-        &mut self,
-        scanout_id: u32,
-        resource_id: u32,
-        hot_x: u32,
-        hot_y: u32,
-        x: i32,
-        y: i32,
-    ) -> bool {
-        let req = CmdUpdateCursor {
-            hdr: CtrlHdr {
-                type_: VIRTIO_GPU_CMD_UPDATE_CURSOR,
-                flags: 0,
-                fence_id: 0,
-                ctx_id: 0,
-                padding: 0,
-            },
-            pos: CursorPos {
-                scanout_id,
-                x: x.max(0) as u32,
-                y: y.max(0) as u32,
-                padding: 0,
-            },
-            resource_id,
-            hot_x,
-            hot_y,
-            padding: 0,
-        };
-        self.cursor_submit_bytes(as_bytes(&req))
-    }
-
-    pub fn move_cursor(&mut self, scanout_id: u32, x: i32, y: i32) -> bool {
-        let req = CmdUpdateCursor {
-            hdr: CtrlHdr {
-                type_: VIRTIO_GPU_CMD_MOVE_CURSOR,
-                flags: 0,
-                fence_id: 0,
-                ctx_id: 0,
-                padding: 0,
-            },
-            pos: CursorPos {
-                scanout_id,
-                x: x.max(0) as u32,
-                y: y.max(0) as u32,
-                padding: 0,
-            },
-            resource_id: 0,
-            hot_x: 0,
-            hot_y: 0,
-            padding: 0,
-        };
-        self.cursor_submit_bytes(as_bytes(&req))
-    }
-
     fn ctrl_submit_bytes(&mut self, req_bytes: &[u8]) -> bool {
         if req_bytes.is_empty() || req_bytes.len() > self.req.len() {
             return false;
@@ -1288,31 +1204,6 @@ impl VirtioGpu3d {
         }
         let resp_hdr = unsafe { &*(self.resp.virt() as *const CtrlHdr) };
         Some(resp_hdr.type_)
-    }
-
-    fn cursor_submit_bytes(&mut self, req_bytes: &[u8]) -> bool {
-        if req_bytes.is_empty() || req_bytes.len() > self.req.len() {
-            return false;
-        }
-        let Some(cursorq) = self.cursorq.as_mut() else {
-            return false;
-        };
-
-        unsafe {
-            core::ptr::copy_nonoverlapping(req_bytes.as_ptr(), self.req.virt(), req_bytes.len());
-            core::ptr::write_bytes(self.resp.virt(), 0, self.resp.len());
-        }
-
-        Self::submit_desc_chain_on(
-            self.notify,
-            self.notify_mult,
-            cursorq,
-            &self.req,
-            &self.resp,
-            req_bytes.len(),
-            "cursorq",
-            None,
-        )
     }
 
     fn ctrl_submit_desc_chain(&mut self, req_len: usize) -> bool {
@@ -1367,22 +1258,11 @@ impl VirtioGpu3d {
             return false;
         }
 
+        // Ensure host DMA writes for used/resp are visible before we read them.
+        fence(Ordering::Acquire);
+
         let used = queue.used_elem(queue.last_used_idx % queue.size);
         queue.last_used_idx = queue.last_used_idx.wrapping_add(1);
-
-        if queue_label == "cursorq" {
-            let n = CURSORQ_WIRE_LOGS.fetch_add(1, Ordering::Relaxed);
-            if n < 32 {
-                let req_type = unsafe { *(req.virt() as *const u32) };
-                let resp_type = unsafe { *(resp.virt() as *const u32) };
-                crate::log!(
-                    "virtio-gpu3d: cursorq wire req=0x{:08X} used_len={} resp=0x{:08X}\n",
-                    req_type,
-                    used.len,
-                    resp_type
-                );
-            }
-        }
 
         if used.id != 0 {
             crate::log!(
@@ -1397,15 +1277,18 @@ impl VirtioGpu3d {
             return true;
         };
 
-        let resp_hdr = unsafe { &*(resp.virt() as *const CtrlHdr) };
-        let ok = expected.contains(&resp_hdr.type_);
+        // Read response type directly from DMA memory without forming a typed reference.
+        // This avoids alignment-sensitive UB on platforms/allocators that do not guarantee
+        // `CtrlHdr` alignment for the response ring buffer mapping.
+        let resp_type = unsafe { core::ptr::read_unaligned(resp.virt() as *const u32) };
+        let ok = expected.contains(&resp_type);
         if !ok {
             let req_type = unsafe { *(req.virt() as *const u32) };
             crate::log!(
                 "virtio-gpu3d: {} bad resp req=0x{:08X} type=0x{:08X} req_len={}\n",
                 queue_label,
                 req_type,
-                resp_hdr.type_,
+                resp_type,
                 req_len
             );
         }
@@ -1507,7 +1390,6 @@ static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_BLEND_BIND_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_STATE_TRANSITION_LOGS: AtomicU32 = AtomicU32::new(0);
-static CURSORQ_WIRE_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_PRESENT_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
@@ -1629,15 +1511,6 @@ struct VirglBufferBinding {
     offset: u64,
 }
 
-struct VirglCursorPlane {
-    resource_id: u32,
-    backing: DmaRegion,
-    width: u32,
-    height: u32,
-    hot_x: u32,
-    hot_y: u32,
-}
-
 impl Default for VirglDrawState {
     fn default() -> Self {
         Self {
@@ -1709,7 +1582,6 @@ pub struct VirglGfxBackend {
     blend_handle_premult: u32,
 
     swapchain: SwapchainDesc,
-    cursor_plane: Option<VirglCursorPlane>,
 
     refresh_millihz: Option<u32>,
 
@@ -2255,7 +2127,6 @@ impl VirglGfxBackend {
             blend_handle_screen,
             blend_handle_premult,
             swapchain,
-            cursor_plane: None,
 
             refresh_millihz,
             buffers: Vec::new(),
@@ -3464,117 +3335,6 @@ impl GfxDevice for VirglGfxBackend {
     }
 }
 
-impl VirglGfxBackend {
-    fn define_hw_cursor_bgra(
-        &mut self,
-        width: u32,
-        height: u32,
-        hot_x: u32,
-        hot_y: u32,
-        pixels_bgra: &[u8],
-    ) -> GfxResult<()> {
-        if width == 0 || height == 0 {
-            return Err(Error::Invalid);
-        }
-        let need = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4);
-        if need == 0 || pixels_bgra.len() < need {
-            return Err(Error::Invalid);
-        }
-        if !self.gpu.has_cursor_queue() {
-            return Err(Error::Unsupported);
-        }
-
-        let recreate = match self.cursor_plane.as_ref() {
-            Some(existing) => existing.width != width || existing.height != height,
-            None => true,
-        };
-
-        if recreate {
-            let bytes = need;
-            let backing = DmaRegion::alloc(bytes, 4096).ok_or(Error::OutOfMemory)?;
-            let resource_id = alloc_res_id();
-            // Virtio-gpu cursor resource format is A8R8G8B8 (little-endian BGRA bytes).
-            if !self
-                .gpu
-                .resource_create_2d(resource_id, VIRGL_FORMAT_B8G8R8A8_UNORM, width, height)
-            {
-                return Err(Error::Unsupported);
-            }
-            if !self
-                .gpu
-                .resource_attach_backing(resource_id, backing.phys(), bytes as u32)
-            {
-                return Err(Error::Unsupported);
-            }
-            self.cursor_plane = Some(VirglCursorPlane {
-                resource_id,
-                backing,
-                width,
-                height,
-                hot_x,
-                hot_y,
-            });
-        } else if let Some(existing) = self.cursor_plane.as_mut() {
-            existing.hot_x = hot_x;
-            existing.hot_y = hot_y;
-        }
-
-        let resource_id = match self.cursor_plane.as_ref() {
-            Some(plane) => plane.resource_id,
-            None => return Err(Error::Unsupported),
-        };
-
-        let Some(plane) = self.cursor_plane.as_mut() else {
-            return Err(Error::Unsupported);
-        };
-
-        unsafe {
-            core::ptr::copy_nonoverlapping(pixels_bgra.as_ptr(), plane.backing.virt(), need);
-        }
-
-        // Canonical upload path for 2D cursor resource: transfer then flush.
-        if !self.gpu.transfer_to_host_2d(resource_id, width, height) {
-            return Err(Error::Unsupported);
-        }
-        if !self.gpu.resource_flush(resource_id, width, height) {
-            return Err(Error::Unsupported);
-        }
-        if !self.gpu.update_cursor(
-            self.scanout_id,
-            resource_id,
-            hot_x,
-            hot_y,
-            hot_x as i32,
-            hot_y as i32,
-        ) {
-            return Err(Error::Unsupported);
-        }
-        Ok(())
-    }
-
-    fn move_hw_cursor(&mut self, x: i32, y: i32) -> GfxResult<()> {
-        let Some(plane) = self.cursor_plane.as_ref() else {
-            return Err(Error::Invalid);
-        };
-
-        // UPDATE_CURSOR includes both image binding and position; this is more
-        // reliable than MOVE_CURSOR on some virgl hosts.
-        if !self.gpu.update_cursor(
-            self.scanout_id,
-            plane.resource_id,
-            plane.hot_x,
-            plane.hot_y,
-            x,
-            y,
-        ) {
-            return Err(Error::Unsupported);
-        }
-        Ok(())
-    }
-}
-
 impl GfxPresent for VirglGfxBackend {
     fn configure_swapchain(&mut self, desc: SwapchainDesc) -> GfxResult<()> {
         // Keep the stored swapchain; virgl swapchain is fixed at init for now.
@@ -3584,25 +3344,6 @@ impl GfxPresent for VirglGfxBackend {
 
     fn swapchain_desc(&self) -> SwapchainDesc {
         self.swapchain
-    }
-
-    fn hw_cursor_supported(&mut self) -> bool {
-        self.gpu.has_cursor_queue()
-    }
-
-    fn hw_cursor_define_bgra(
-        &mut self,
-        width: u32,
-        height: u32,
-        hot_x: u32,
-        hot_y: u32,
-        pixels_bgra: &[u8],
-    ) -> GfxResult<()> {
-        self.define_hw_cursor_bgra(width, height, hot_x, hot_y, pixels_bgra)
-    }
-
-    fn hw_cursor_move(&mut self, x: i32, y: i32) -> GfxResult<()> {
-        self.move_hw_cursor(x, y)
     }
 
     fn display_refresh_millihz(&mut self) -> Option<u32> {
