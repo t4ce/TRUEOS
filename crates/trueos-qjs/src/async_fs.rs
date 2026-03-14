@@ -13,10 +13,10 @@ use spin::Mutex;
 
 use crate::trueos_shims::{
     trueos_cabi_fs_read_file, trueos_cabi_fs_write_abort, trueos_cabi_fs_write_begin,
-    trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish, trueos_cabi_net_fetch_discard,
-    trueos_cabi_net_fetch_bytes_discard, trueos_cabi_net_fetch_bytes_read,
-    trueos_cabi_net_fetch_bytes_result_len, trueos_cabi_net_fetch_bytes_start,
-    trueos_cabi_net_fetch_bytes_wait, trueos_cabi_net_fetch_post_json_start,
+    trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish, trueos_cabi_net_fetch_bytes_discard,
+    trueos_cabi_net_fetch_bytes_read, trueos_cabi_net_fetch_bytes_result_len,
+    trueos_cabi_net_fetch_bytes_start, trueos_cabi_net_fetch_bytes_wait,
+    trueos_cabi_net_fetch_discard, trueos_cabi_net_fetch_post_json_start,
     trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait,
     trueos_cabi_poll_once,
 };
@@ -307,18 +307,24 @@ pub async fn async_fs_service_task() {
 
             match req {
                 AsyncFsRequest::ReadFile { id, path } => {
-                    async_fs_diag(alloc::format!(
-                        "qjs-async-fs: read start id={} path_len={}\n",
-                        id,
-                        path.len()
-                    ).as_str());
+                    async_fs_diag(
+                        alloc::format!(
+                            "qjs-async-fs: read start id={} path_len={}\n",
+                            id,
+                            path.len()
+                        )
+                        .as_str(),
+                    );
                     match read_file_via_cabi(path.as_str()) {
                         Ok(bytes) => {
-                            async_fs_diag(alloc::format!(
-                                "qjs-async-fs: read done id={} len={}\n",
-                                id,
-                                bytes.len()
-                            ).as_str());
+                            async_fs_diag(
+                                alloc::format!(
+                                    "qjs-async-fs: read done id={} len={}\n",
+                                    id,
+                                    bytes.len()
+                                )
+                                .as_str(),
+                            );
                             push_async_fs_completion(AsyncFsCompletion {
                                 id,
                                 rc: 0,
@@ -326,11 +332,10 @@ pub async fn async_fs_service_task() {
                             })
                         }
                         Err(rc) => {
-                            async_fs_diag(alloc::format!(
-                                "qjs-async-fs: read error id={} rc={}\n",
-                                id,
-                                rc
-                            ).as_str());
+                            async_fs_diag(
+                                alloc::format!("qjs-async-fs: read error id={} rc={}\n", id, rc)
+                                    .as_str(),
+                            );
                             push_async_fs_completion(AsyncFsCompletion {
                                 id,
                                 rc,
@@ -517,11 +522,14 @@ pub fn start_read_file(path: &[u8]) -> Result<u32, i32> {
         path: path_str.to_string(),
     };
     push_async_fs_req(req)?;
-    async_fs_diag(alloc::format!(
-        "qjs-async-fs: read queued id={} path_len={}\n",
-        id,
-        path.len()
-    ).as_str());
+    async_fs_diag(
+        alloc::format!(
+            "qjs-async-fs: read queued id={} path_len={}\n",
+            id,
+            path.len()
+        )
+        .as_str(),
+    );
     Ok(id)
 }
 

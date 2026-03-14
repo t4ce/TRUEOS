@@ -1,7 +1,7 @@
 #![cfg(feature = "trueos")]
+use crate as qjs;
 use alloc::vec::Vec;
 use core::ffi::c_char;
-use crate as qjs;
 
 unsafe extern "C" {
     fn trueos_cabi_input_cursor_pos(cursor_id: u32, out_x: *mut i32, out_y: *mut i32) -> i32;
@@ -346,12 +346,8 @@ unsafe extern "C" fn qjs_read_cursor_events_since(
         i += 1;
         let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, ev.y));
         i += 1;
-        let _ = qjs::JS_SetPropertyUint32(
-            ctx,
-            out,
-            i,
-            qjs::JS_NewFloat64(ctx, ev.buttons_down as f64),
-        );
+        let _ =
+            qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, ev.buttons_down as f64));
         i += 1;
         let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, ev.wheel as f64));
         i += 1;

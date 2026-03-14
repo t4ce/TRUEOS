@@ -257,7 +257,7 @@ fn tls_socket_tick_once() {
                 } => {
                     let seq = TLS_CONN_SEQ.fetch_add(1, Ordering::Relaxed);
                     let dev_idx =
-                        owner_device_index(owner).unwrap_or_else(crate::net::primary_device_index);
+                        owner_device_index(owner).unwrap_or_else(crate::net::default_device_index);
                     let Some(net) = VNet::open(dev_idx) else {
                         let msg = leak_str(alloc::format!(
                             "tls-socket: no vnet device={} (owner={})",

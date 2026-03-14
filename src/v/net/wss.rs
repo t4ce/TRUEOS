@@ -15,7 +15,7 @@ use trueos_v::vnet;
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::time::unix_time_seconds;
-use crate::v::net::Queue;
+use crate::v::net::{NetProfile, Queue};
 
 static WSS_SEQ: AtomicU32 = AtomicU32::new(1);
 const RX_BUF_SIZE: usize = 4096;
@@ -43,27 +43,34 @@ pub enum WssError {
 
 impl WssConnection {
     pub async fn connect(url: &str) -> Result<Self, WssError> {
-        Self::connect_inner(url, None).await
+        Self::connect_with_profile(url, NetProfile::default()).await
+    }
+
+    pub async fn connect_with_profile(url: &str, profile: NetProfile) -> Result<Self, WssError> {
+        Self::connect_inner(url, profile, None).await
     }
 
     pub async fn connect_with_headers<'a>(
         url: &str,
         additional_headers: &'a [&'a str],
     ) -> Result<Self, WssError> {
-        Self::connect_inner(url, Some(additional_headers)).await
+        Self::connect_inner(url, NetProfile::default(), Some(additional_headers)).await
     }
 
     async fn connect_inner<'a>(
         url: &str,
+        profile: NetProfile,
         additional_headers: Option<&'a [&'a str]>,
     ) -> Result<Self, WssError> {
         let (host, port, path) = parse_wss_url(url).ok_or(WssError::InvalidUrl)?;
 
-        let dev_idx = crate::net::primary_device_index();
+        let dev_idx = profile
+            .resolve_device_index()
+            .ok_or(WssError::ConnectFailed)?;
         let api_ip = match super::dns::resolve_ipv4_for_device(
             dev_idx,
             &host,
-            super::dns::DnsConfig::for_device(dev_idx),
+            super::dns::DnsConfig::for_profile(profile),
         )
         .await
         {

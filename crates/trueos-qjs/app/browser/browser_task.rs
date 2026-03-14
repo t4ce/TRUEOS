@@ -1,4 +1,5 @@
 #![cfg(feature = "trueos")]
+use crate as qjs;
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -10,7 +11,6 @@ use parry2d::math::{Isometry, Vector};
 use parry2d::query;
 use parry2d::shape::{Ball, Cuboid};
 use spin::Mutex;
-use crate as qjs;
 
 mod ai_api;
 mod helpers;
@@ -187,13 +187,21 @@ unsafe fn browser_pop_cursor_button_event(ctx: *mut qjs::JSContext) -> Option<Cu
     if global.is_exception() {
         return None;
     }
-    let browser = qjs::JS_GetPropertyStr(ctx, global, b"__trueosBrowser\0".as_ptr() as *const c_char);
+    let browser =
+        qjs::JS_GetPropertyStr(ctx, global, b"__trueosBrowser\0".as_ptr() as *const c_char);
     qjs::js_free_value(ctx, global);
-    if browser.is_exception() || browser.tag == qjs::JS_TAG_UNDEFINED || browser.tag == qjs::JS_TAG_NULL {
+    if browser.is_exception()
+        || browser.tag == qjs::JS_TAG_UNDEFINED
+        || browser.tag == qjs::JS_TAG_NULL
+    {
         qjs::js_free_value(ctx, browser);
         return None;
     }
-    let pop = qjs::JS_GetPropertyStr(ctx, browser, b"popCursorButtonEvent\0".as_ptr() as *const c_char);
+    let pop = qjs::JS_GetPropertyStr(
+        ctx,
+        browser,
+        b"popCursorButtonEvent\0".as_ptr() as *const c_char,
+    );
     if pop.is_exception() || pop.tag == qjs::JS_TAG_UNDEFINED || pop.tag == qjs::JS_TAG_NULL {
         qjs::js_free_value(ctx, pop);
         qjs::js_free_value(ctx, browser);
@@ -215,10 +223,14 @@ unsafe fn browser_pop_cursor_button_event(ctx: *mut qjs::JSContext) -> Option<Cu
     }
 
     let event = CursorButtonEvent {
-        slot_id: js_prop_f64(ctx, result, b"slotId\0").unwrap_or(0.0).max(0.0) as u32,
+        slot_id: js_prop_f64(ctx, result, b"slotId\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
         x: js_prop_f64(ctx, result, b"x\0").unwrap_or(0.0) as f32,
         y: js_prop_f64(ctx, result, b"y\0").unwrap_or(0.0) as f32,
-        buttons_down: js_prop_f64(ctx, result, b"buttonsDown\0").unwrap_or(0.0).max(0.0) as u32,
+        buttons_down: js_prop_f64(ctx, result, b"buttonsDown\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
         previous_buttons_down: js_prop_f64(ctx, result, b"previousButtonsDown\0")
             .unwrap_or(0.0)
             .max(0.0) as u32,
@@ -240,15 +252,21 @@ unsafe fn browser_collect_interactive_rects(ctx: *mut qjs::JSContext) -> Vec<Par
         b"__trueosBrowserThemeLayoutInteractives\0".as_ptr() as *const c_char,
     );
     qjs::js_free_value(ctx, global);
-    if interactives.is_exception() || interactives.tag == qjs::JS_TAG_UNDEFINED || interactives.tag == qjs::JS_TAG_NULL {
+    if interactives.is_exception()
+        || interactives.tag == qjs::JS_TAG_UNDEFINED
+        || interactives.tag == qjs::JS_TAG_NULL
+    {
         qjs::js_free_value(ctx, interactives);
         return out;
     }
 
-    let len = js_prop_f64(ctx, interactives, b"length\0").unwrap_or(0.0).max(0.0) as usize;
+    let len = js_prop_f64(ctx, interactives, b"length\0")
+        .unwrap_or(0.0)
+        .max(0.0) as usize;
     for idx in 0..len {
         let item = qjs::JS_GetPropertyUint32(ctx, interactives, idx as u32);
-        if item.is_exception() || item.tag == qjs::JS_TAG_UNDEFINED || item.tag == qjs::JS_TAG_NULL {
+        if item.is_exception() || item.tag == qjs::JS_TAG_UNDEFINED || item.tag == qjs::JS_TAG_NULL
+        {
             qjs::js_free_value(ctx, item);
             continue;
         }
@@ -286,14 +304,25 @@ unsafe fn browser_dispatch_dom_click(
     if global.is_exception() {
         return false;
     }
-    let browser = qjs::JS_GetPropertyStr(ctx, global, b"__trueosBrowser\0".as_ptr() as *const c_char);
+    let browser =
+        qjs::JS_GetPropertyStr(ctx, global, b"__trueosBrowser\0".as_ptr() as *const c_char);
     qjs::js_free_value(ctx, global);
-    if browser.is_exception() || browser.tag == qjs::JS_TAG_UNDEFINED || browser.tag == qjs::JS_TAG_NULL {
+    if browser.is_exception()
+        || browser.tag == qjs::JS_TAG_UNDEFINED
+        || browser.tag == qjs::JS_TAG_NULL
+    {
         qjs::js_free_value(ctx, browser);
         return false;
     }
-    let dispatch = qjs::JS_GetPropertyStr(ctx, browser, b"dispatchDomClick\0".as_ptr() as *const c_char);
-    if dispatch.is_exception() || dispatch.tag == qjs::JS_TAG_UNDEFINED || dispatch.tag == qjs::JS_TAG_NULL {
+    let dispatch = qjs::JS_GetPropertyStr(
+        ctx,
+        browser,
+        b"dispatchDomClick\0".as_ptr() as *const c_char,
+    );
+    if dispatch.is_exception()
+        || dispatch.tag == qjs::JS_TAG_UNDEFINED
+        || dispatch.tag == qjs::JS_TAG_NULL
+    {
         qjs::js_free_value(ctx, dispatch);
         qjs::js_free_value(ctx, browser);
         return false;
@@ -329,7 +358,10 @@ unsafe fn process_parry_clicks(ctx: *mut qjs::JSContext, cursors: &mut Vec<Parry
             continue;
         }
 
-        let circle = if let Some(existing) = cursors.iter_mut().find(|cursor| cursor.slot_id == event.slot_id) {
+        let circle = if let Some(existing) = cursors
+            .iter_mut()
+            .find(|cursor| cursor.slot_id == event.slot_id)
+        {
             existing
         } else {
             cursors.push(ParryCursorCircle {
@@ -352,9 +384,16 @@ unsafe fn process_parry_clicks(ctx: *mut qjs::JSContext, cursors: &mut Vec<Parry
         for interactive in interactives {
             let half_w = (interactive.width * 0.5).max(0.5);
             let half_h = (interactive.height * 0.5).max(0.5);
-            let interactive_iso = Isometry::translation(interactive.x + half_w, interactive.y + half_h);
+            let interactive_iso =
+                Isometry::translation(interactive.x + half_w, interactive.y + half_h);
             let interactive_shape = Cuboid::new(Vector::new(half_w, half_h));
-            let Ok(Some(contact)) = query::contact(&cursor_iso, &cursor_shape, &interactive_iso, &interactive_shape, 0.0) else {
+            let Ok(Some(contact)) = query::contact(
+                &cursor_iso,
+                &cursor_shape,
+                &interactive_iso,
+                &interactive_shape,
+                0.0,
+            ) else {
                 continue;
             };
             if contact.dist <= 0.0 {
@@ -374,9 +413,14 @@ unsafe fn apply_pending_html(ctx: *mut qjs::JSContext) {
     };
 
     let html_lit = helpers::js_single_quoted_literal(next.html.as_str());
-    let url_lit = next.url.as_ref().map(|url| helpers::js_single_quoted_literal(url.as_str()));
+    let url_lit = next
+        .url
+        .as_ref()
+        .map(|url| helpers::js_single_quoted_literal(url.as_str()));
     let mut src = String::new();
-    src.push_str("(function(){const __g=(typeof globalThis!=='undefined')?globalThis:this;const __h=");
+    src.push_str(
+        "(function(){const __g=(typeof globalThis!=='undefined')?globalThis:this;const __h=",
+    );
     src.push_str(&html_lit);
     if let Some(url_lit) = url_lit {
         src.push_str(";const __u=");
@@ -413,7 +457,11 @@ unsafe fn apply_pending_ai_input(ctx: *mut qjs::JSContext) {
     src.push_str(",fileSearch:");
     src.push_str(if next.file_search { "true" } else { "false" });
     src.push_str(",newConversation:");
-    src.push_str(if next.new_conversation { "true" } else { "false" });
+    src.push_str(if next.new_conversation {
+        "true"
+    } else {
+        "false"
+    });
     src.push_str(",computerUse:");
     src.push_str(if next.computer_use { "true" } else { "false" });
     src.push_str("});})();");
@@ -426,7 +474,6 @@ unsafe fn apply_pending_ai_input(ctx: *mut qjs::JSContext) {
         "browser ai input",
     );
 }
-
 
 unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
     let init_filename = b"<browser-globals>\0";
@@ -488,30 +535,30 @@ pub async fn boot_browser() {
         let ctx = vm.ctx_ptr();
         let rt = vm.rt_ptr();
 
-                qjs::node::install_globals(ctx);
-                qjs::layout::install_layout_api(ctx);
+        qjs::node::install_globals(ctx);
+        qjs::layout::install_layout_api(ctx);
 
-                if !install_globals(ctx) {
-                        BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
-                        return;
-                }
+        if !install_globals(ctx) {
+            BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+            return;
+        }
 
-                let import_filename = b"<browser-init>\0";
-                let import_src = br#"
+        let import_filename = b"<browser-init>\0";
+        let import_src = br#"
         import('/qjs/browser/browser_bootstrap.mjs').catch((e) => {
             try { console.log('[browser.mjs] import failed', String(e && e.stack ? e.stack : e)); } catch (_) {}
         });
         "#;
-                if !helpers::eval_or_log(
-                    ctx,
-                    import_src,
-                    import_filename.as_ptr() as *const c_char,
-                    qjs::JS_EVAL_TYPE_GLOBAL,
-                    "browser init",
-                ) {
-                    BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
-                    return;
-                }
+        if !helpers::eval_or_log(
+            ctx,
+            import_src,
+            import_filename.as_ptr() as *const c_char,
+            qjs::JS_EVAL_TYPE_GLOBAL,
+            "browser init",
+        ) {
+            BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+            return;
+        }
 
         let mut parry_cursors: Vec<ParryCursorCircle> = Vec::new();
 

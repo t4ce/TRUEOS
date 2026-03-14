@@ -8,8 +8,8 @@ use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use embassy_time::{Duration, Instant, Timer};
 use trueos_v::vnet::{self, ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
 
-use super::VNet;
 use super::dns::{self, DnsConfig};
+use super::{NetProfile, VNet};
 
 const FTP_SERVER_PORT: u16 = 2121;
 const FTP_SERVER_PASV_MIN: u16 = 40000;
@@ -55,17 +55,27 @@ pub struct FtpSocket {
 
 impl FtpSocket {
     pub async fn connect(url: &str, timeout_ms: u32) -> Result<Self, FtpError> {
+        Self::connect_with_profile(url, NetProfile::default(), timeout_ms).await
+    }
+
+    pub async fn connect_with_profile(
+        url: &str,
+        profile: NetProfile,
+        timeout_ms: u32,
+    ) -> Result<Self, FtpError> {
         let parsed = parse_ftp_url(url).ok_or(FtpError::InvalidUrl)?;
-        let dev_idx = crate::net::primary_device_index();
+        let dev_idx = profile
+            .resolve_device_index()
+            .ok_or(FtpError::ConnectFailed)?;
         let ip = dns::resolve_ipv4_for_device(
             dev_idx,
             parsed.host.as_str(),
-            DnsConfig::for_device(dev_idx),
+            DnsConfig::for_profile(profile),
         )
         .await
         .map_err(|_| FtpError::DnsFailed)?;
 
-        let net = VNet::open(dev_idx).ok_or(FtpError::ConnectFailed)?;
+        let net = VNet::open_with_profile(profile).ok_or(FtpError::ConnectFailed)?;
         net.submit(Command::OpenTcpConnect {
             remote: EndpointV4::new(ip, parsed.port),
         })
@@ -556,7 +566,7 @@ pub async fn ftp_server_task() {
     }
 
     loop {
-        let Some(mut vnet) = VNet::open_primary() else {
+        let Some(mut vnet) = VNet::open_default() else {
             Timer::after(Duration::from_millis(100)).await;
             continue;
         };
@@ -734,8 +744,9 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                     let _ = ftp_send_reply(vnet, sess, 425, "cannot open passive socket");
                 } else {
                     sess.pasv_port = Some(port);
-                    let ip = crate::net::adapter::ipv4_at(crate::net::primary_device_index())
-                        .unwrap_or([127, 0, 0, 1]);
+                    let dev_idx = crate::net::device_index_from_owner(vnet.owner())
+                        .unwrap_or_else(crate::net::default_device_index);
+                    let ip = crate::net::adapter::ipv4_at(dev_idx).unwrap_or([127, 0, 0, 1]);
                     let p1 = (port >> 8) as u8;
                     let p2 = (port & 0xFF) as u8;
                     let msg = format!(

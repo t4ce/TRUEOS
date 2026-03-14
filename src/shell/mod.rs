@@ -1,10 +1,10 @@
-use alloc::string::String as AllocString;
 use alloc::collections::VecDeque;
+use alloc::string::String as AllocString;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 use spin::Mutex;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::shell::cube::{CUBE_COLS, CUBE_ROWS, CubeState, WireShape};
 

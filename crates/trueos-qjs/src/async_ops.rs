@@ -232,9 +232,9 @@ fn find_pending_owner(op_id: u32) -> Option<*mut qjs::JSContext> {
 
 fn find_pending_image_owner(op_id: u32) -> Option<*mut qjs::JSContext> {
     PENDING_IMAGES.lock().iter().find_map(|p| match &p.stage {
-        PendingImageStage::SourceBytes { op_id: pending_id, .. } if *pending_id == op_id => {
-            Some(p.ctx_owner)
-        }
+        PendingImageStage::SourceBytes {
+            op_id: pending_id, ..
+        } if *pending_id == op_id => Some(p.ctx_owner),
         _ => None,
     })
 }
@@ -323,7 +323,8 @@ fn read_png_dimensions(bytes: &[u8]) -> Result<(u32, u32), i32> {
 
 fn queue_png_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(u32, u32), i32> {
     let (width, height) = read_png_dimensions(bytes)?;
-    let rc = unsafe { trueos_cabi_gfx_upload_texture_png_async(tex_id, bytes.as_ptr(), bytes.len()) };
+    let rc =
+        unsafe { trueos_cabi_gfx_upload_texture_png_async(tex_id, bytes.as_ptr(), bytes.len()) };
     if rc != 0 {
         return Err(rc);
     }
@@ -348,7 +349,8 @@ fn path_has_svg_suffix(path: &[u8]) -> bool {
 }
 
 fn queue_svg_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(), i32> {
-    let rc = unsafe { trueos_cabi_gfx_upload_texture_svg_async(tex_id, bytes.as_ptr(), bytes.len()) };
+    let rc =
+        unsafe { trueos_cabi_gfx_upload_texture_svg_async(tex_id, bytes.as_ptr(), bytes.len()) };
     if rc != 0 {
         return Err(rc);
     }
@@ -359,11 +361,7 @@ fn texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
     let mut width = 0u32;
     let mut height = 0u32;
     let rc = unsafe {
-        trueos_cabi_gfx_texture_dimensions(
-            tex_id,
-            &mut width as *mut u32,
-            &mut height as *mut u32,
-        )
+        trueos_cabi_gfx_texture_dimensions(tex_id, &mut width as *mut u32, &mut height as *mut u32)
     };
     if rc == 0 && width > 0 && height > 0 {
         Some((width, height))
@@ -446,10 +444,7 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                     if image_diag_allowed() {
                         image_diag_log(&format!(
                             "img-async: bytes-op-error tex_id={} source={:?} op_id={} code={}\n",
-                            op.tex_id,
-                            source,
-                            *op_id,
-                            rc_or_done
+                            op.tex_id, source, *op_id, rc_or_done
                         ));
                     }
                     let _ = async_fs::discard(*op_id);
@@ -462,9 +457,7 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                             if image_diag_allowed() {
                                 image_diag_log(&format!(
                                     "img-async: fetch-done tex_id={} op_id={} len={}\n",
-                                    op.tex_id,
-                                    *op_id,
-                                    rc_or_done
+                                    op.tex_id, *op_id, rc_or_done
                                 ));
                             }
                         }
@@ -472,16 +465,15 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                             if image_diag_allowed() {
                                 image_diag_log(&format!(
                                     "img-async: bytes-op-done tex_id={} source=LocalPath op_id={} len={}\n",
-                                    op.tex_id,
-                                    *op_id,
-                                    rc_or_done
+                                    op.tex_id, *op_id, rc_or_done
                                 ));
                             }
                         }
                     }
                     match read_completion_bytes(*op_id, rc_or_done as usize) {
                         Ok(bytes) => {
-                            let is_svg = path_has_svg_suffix(path.as_slice()) || svg_like_bytes(bytes.as_slice());
+                            let is_svg = path_has_svg_suffix(path.as_slice())
+                                || svg_like_bytes(bytes.as_slice());
                             let queued = if is_svg {
                                 queue_svg_texture_upload(op.tex_id, bytes.as_slice()).map(|_| {
                                     op.mime = String::from("image/svg+xml");
@@ -489,11 +481,13 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                                     op.height = 0;
                                 })
                             } else {
-                                queue_png_texture_upload(op.tex_id, bytes.as_slice()).map(|(width, height)| {
-                                    op.mime = String::from("image/png");
-                                    op.width = width;
-                                    op.height = height;
-                                })
+                                queue_png_texture_upload(op.tex_id, bytes.as_slice()).map(
+                                    |(width, height)| {
+                                        op.mime = String::from("image/png");
+                                        op.width = width;
+                                        op.height = height;
+                                    },
+                                )
                             };
                             match queued {
                                 Ok(()) => {
@@ -511,8 +505,7 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                                     if image_diag_allowed() {
                                         image_diag_log(&format!(
                                             "img-async: upload-queue-error tex_id={} code={}\n",
-                                            op.tex_id,
-                                            code
+                                            op.tex_id, code
                                         ));
                                     }
                                     reject_image_op(ctx, &op, code);
@@ -524,8 +517,7 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                             if image_diag_allowed() {
                                 image_diag_log(&format!(
                                     "img-async: read-bytes-error tex_id={} code={}\n",
-                                    op.tex_id,
-                                    code
+                                    op.tex_id, code
                                 ));
                             }
                             reject_image_op(ctx, &op, code);
@@ -559,8 +551,7 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                     if image_diag_allowed() {
                         image_diag_log(&format!(
                             "img-async: upload-status-error tex_id={} code={}\n",
-                            op.tex_id,
-                            status
+                            op.tex_id, status
                         ));
                     }
                     reject_image_op(ctx, &op, status);
@@ -791,6 +782,9 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                         unsafe { resolve_with_value(ctx, &op, s) };
                     }
                     Err(code) => unsafe { reject_with_code(ctx, &op, code) },
+                }
+                if !op.aux.is_empty() {
+                    let _ = unsafe { trueos_cabi_fs_remove(op.aux.as_ptr(), op.aux.len()) };
                 }
             }
             OpKind::NetFetchText => {

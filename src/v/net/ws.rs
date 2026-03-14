@@ -12,7 +12,7 @@ use rand_core::SeedableRng;
 use trueos_v::vnet::{ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
 
 use crate::time::unix_time_seconds;
-use crate::v::net::VNet;
+use crate::v::net::{NetProfile, VNet};
 
 static WS_SEQ: AtomicU32 = AtomicU32::new(1);
 const RX_BUF_SIZE: usize = 4096;
@@ -38,13 +38,19 @@ pub enum WsError {
 
 impl WsConnection {
     pub async fn connect(url: &str) -> Result<Self, WsError> {
+        Self::connect_with_profile(url, NetProfile::default()).await
+    }
+
+    pub async fn connect_with_profile(url: &str, profile: NetProfile) -> Result<Self, WsError> {
         let (host, port, path) = parse_ws_url(url).ok_or(WsError::InvalidUrl)?;
 
-        let dev_idx = crate::net::primary_device_index();
+        let dev_idx = profile
+            .resolve_device_index()
+            .ok_or(WsError::ConnectFailed)?;
         let api_ip = match super::dns::resolve_ipv4_for_device(
             dev_idx,
             &host,
-            super::dns::DnsConfig::for_device(dev_idx),
+            super::dns::DnsConfig::for_profile(profile),
         )
         .await
         {
@@ -53,7 +59,7 @@ impl WsConnection {
         };
 
         let seq = WS_SEQ.fetch_add(1, Ordering::Relaxed) as u64;
-        let net = VNet::open(dev_idx).ok_or(WsError::ConnectFailed)?;
+        let net = VNet::open_with_profile(profile).ok_or(WsError::ConnectFailed)?;
 
         let mut seed = [0u8; 32];
         let t = unix_time_seconds().unwrap_or(0);

@@ -146,7 +146,8 @@ unsafe fn load_native_module(
         return workers_mod;
     }
 
-    let lightningcss_mod = unsafe { crate::lightningcss_native::try_create_native_module(ctx, module_name) };
+    let lightningcss_mod =
+        unsafe { crate::lightningcss_native::try_create_native_module(ctx, module_name) };
     if !lightningcss_mod.is_null() {
         return lightningcss_mod;
     }

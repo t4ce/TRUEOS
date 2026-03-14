@@ -33,7 +33,8 @@ pub async fn gfx_loadscreen_task() {
     let clear_w = (text_w + (TEXT_PAD_X * 2.0)).min(fb_w - clear_x);
     let clear_h = (atlas.cell_h as f32 + (TEXT_PAD_Y * 2.0)).min(fb_h - clear_y);
 
-    let begin_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(LOADSCREEN_BG_RGB) };
+    let begin_rc =
+        unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(LOADSCREEN_BG_RGB) };
     if begin_rc == 0 {
         let _ = crate::gfx::lyon::lyon_geom_api_demo_no_present(fb_w as u32, fb_h as u32);
         crate::gfx::text::draw_atlas_text_in_frame_alpha(
@@ -51,8 +52,9 @@ pub async fn gfx_loadscreen_task() {
     while !crate::v::readiness::is_set(crate::v::readiness::LOADSCREEN_END) {
         let phase = (frame as f32) * (core::f32::consts::TAU / 120.0);
         let alpha = ((libm::sinf(phase) * 0.5 + 0.5) * 255.0) as u8;
-        let begin_rc =
-            unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame_preserve(LOADSCREEN_BG_RGB) };
+        let begin_rc = unsafe {
+            crate::surface::io::cabi::trueos_cabi_gfx_begin_frame_preserve(LOADSCREEN_BG_RGB)
+        };
         if begin_rc == 0 {
             let _ =
                 unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };

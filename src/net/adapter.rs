@@ -206,21 +206,21 @@ pub fn primary_dhcp6_dns6_snapshot() -> ([[u8; 16]; DHCP6_DNS6_MAX], u8) {
 pub fn dhcp_dns_snapshot_at(index: usize) -> Option<([[u8; 4]; DHCP_DNS_MAX], u8)> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
-    let svc = services.get(index)?;
+    let svc = services.get(index)?.lock();
     Some((svc.dhcp_dns, svc.dhcp_dns_count))
 }
 
 pub fn ra_dns6_snapshot_at(index: usize) -> Option<([[u8; 16]; RA_DNS6_MAX], u8)> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
-    let svc = services.get(index)?;
+    let svc = services.get(index)?.lock();
     Some((svc.ra_dns6, svc.ra_dns6_count))
 }
 
 pub fn dhcp6_dns6_snapshot_at(index: usize) -> Option<([[u8; 16]; DHCP6_DNS6_MAX], u8)> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
-    let svc = services.get(index)?;
+    let svc = services.get(index)?.lock();
     Some((svc.dhcp6_dns6, svc.dhcp6_dns6_count))
 }
 
@@ -238,13 +238,13 @@ pub fn ipv4_at(index: usize) -> Option<[u8; 4]> {
     let services = guard.as_ref()?;
     services
         .get(index)
-        .and_then(|s| s.local_ipv4.map(|ip| ip.octets()))
+        .and_then(|s| s.lock().local_ipv4.map(|ip| ip.octets()))
 }
 
 pub fn ipv6_link_local_at(index: usize) -> Option<[u8; 16]> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
-    services.get(index).map(|s| s.local_ipv6_ll.octets())
+    services.get(index).map(|s| s.lock().local_ipv6_ll.octets())
 }
 
 pub fn ipv6_global_at(index: usize) -> Option<[u8; 16]> {
@@ -252,13 +252,13 @@ pub fn ipv6_global_at(index: usize) -> Option<[u8; 16]> {
     let services = guard.as_ref()?;
     services
         .get(index)
-        .and_then(|s| s.local_ipv6_global.map(|ip| ip.octets()))
+        .and_then(|s| s.lock().local_ipv6_global.map(|ip| ip.octets()))
 }
 
 pub fn dhcp_has_lease_at(index: usize) -> Option<bool> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
-    let svc = services.get(index)?;
+    let svc = services.get(index)?.lock();
     Some(svc.dhcp_has_lease)
 }
 
@@ -635,9 +635,13 @@ pub fn register_app_queues(
     guard.push(AppQueues { name, cmds, events });
 }
 
-fn pop_command() -> Option<(&'static str, NetCommand)> {
+fn pop_command_for_device(device_index: usize) -> Option<(&'static str, NetCommand)> {
     let guard = APP_QUEUES.lock();
     for entry in guard.iter() {
+        let idx = owner_device_index(entry.name).unwrap_or_else(crate::net::primary_device_index);
+        if idx != device_index {
+            continue;
+        }
         if let Some(cmd) = entry.cmds.pop() {
             return Some((entry.name, cmd));
         }
@@ -4233,7 +4237,8 @@ static POLL_SCRATCH_BUF: spin::Mutex<[u8; 8192]> = spin::Mutex::new([0u8; 8192])
 
 // Shared net service state so both the async service task and synchronous `time::block_on`
 // hooks can drive the stack without diverging socket/interface state.
-static NET_SERVICES: spin::Mutex<Option<Vec<NetService>>> = spin::Mutex::new(None);
+static NET_SERVICES: spin::Mutex<Option<Vec<&'static spin::Mutex<NetService>>>> =
+    spin::Mutex::new(None);
 
 fn owner_device_index(owner: &str) -> Option<usize> {
     crate::net::device_index_from_owner(owner)
@@ -4243,43 +4248,50 @@ fn ensure_services(count: usize) {
     let mut guard = NET_SERVICES.lock();
     let needs_init = guard.as_ref().map(|v| v.len() != count).unwrap_or(true);
     if needs_init {
-        *guard = Some((0..count).map(NetService::new).collect());
+        *guard = Some(
+            (0..count)
+                .map(|index| -> &'static spin::Mutex<NetService> {
+                    Box::leak(Box::new(spin::Mutex::new(NetService::new(index))))
+                })
+                .collect(),
+        );
     }
 }
 
-fn service_tick_once() -> bool {
+fn service_for_device(device_index: usize) -> Option<&'static spin::Mutex<NetService>> {
     let count = crate::net::device_count();
     if count == 0 {
-        return false;
+        return None;
     }
 
     ensure_services(count);
 
-    let mut guard = NET_SERVICES.lock();
-    let Some(services) = guard.as_mut() else {
+    let guard = NET_SERVICES.lock();
+    let services = guard.as_ref()?;
+    services.get(device_index).copied()
+}
+
+fn service_tick_once(device_index: usize) -> bool {
+    let Some(service) = service_for_device(device_index) else {
         return false;
     };
 
+    let mut svc = service.lock();
+
     let mut busy = false;
-    for svc in services.iter_mut() {
-        if svc.tick() {
-            busy = true;
-        }
+    if svc.tick() {
+        busy = true;
     }
 
     for _ in 0..MAX_DRAIN_PER_LOOP {
-        let Some((owner, cmd)) = pop_command() else {
+        let Some((owner, cmd)) = pop_command_for_device(device_index) else {
             break;
         };
         busy = true;
-        let idx = owner_device_index(owner).unwrap_or_else(crate::net::primary_device_index);
-        let idx = idx.min(services.len().saturating_sub(1));
-        services[idx].handle_command(owner, cmd);
+        svc.handle_command(owner, cmd);
     }
 
-    for svc in services.iter_mut() {
-        svc.poll_sockets();
-    }
+    svc.poll_sockets();
 
     busy
 }
@@ -4302,19 +4314,19 @@ pub async fn net_poll_task(index: usize) {
     .await;
 }
 
-#[task]
-pub async fn net_service_task() {
+#[task(pool_size = MAX_NET_DEVICES)]
+pub async fn net_service_task(index: usize) {
     async move {
         let count = crate::net::device_count();
-        if count == 0 {
-            crate::log!("net: service disabled (no NIC)\n");
+        if count == 0 || index >= count {
+            crate::log!("net: service disabled (nic={})\n", index);
             return;
         }
 
         ensure_services(count);
 
         loop {
-            if service_tick_once() {
+            if service_tick_once(index) {
                 Timer::after(EmbassyDuration::from_micros(0)).await;
             } else {
                 Timer::after(EmbassyDuration::from_micros(NET_SERVICE_SLEEP_US)).await;

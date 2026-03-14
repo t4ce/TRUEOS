@@ -249,10 +249,12 @@ pub fn kernel_cursor_overlay_tick() -> i32 {
         return 0;
     }
 
-    let Some((vp_w, vp_h)) = crate::gfx::with_context(|ctx| {
-        let e = ctx.swapchain_desc().extent;
-        (e.width, e.height)
-    }) else {
+    let Some((vp_w, vp_h)) =
+        crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::CursorQueryViewport, |ctx| {
+            let e = ctx.swapchain_desc().extent;
+            (e.width, e.height)
+        })
+    else {
         return -12;
     };
 
@@ -334,7 +336,8 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(
             break;
         }
         let blob_offset = st.cursor_rgb_blob.len();
-        st.cursor_rgb_blob.extend_from_slice(&bytes[off..off + chunk]);
+        st.cursor_rgb_blob
+            .extend_from_slice(&bytes[off..off + chunk]);
         st.cursor_draws.push(PendingDraw::Rgb {
             blob_offset,
             blob_len: chunk,
@@ -395,7 +398,8 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_draw_tex_triangles_no_present(
             break;
         }
         let blob_offset = st.cursor_tex_blob.len();
-        st.cursor_tex_blob.extend_from_slice(&bytes[off..off + chunk]);
+        st.cursor_tex_blob
+            .extend_from_slice(&bytes[off..off + chunk]);
         st.cursor_draws.push(PendingDraw::Tex {
             tex_id,
             image,
@@ -494,376 +498,379 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
         }
     }
 
-    let Some(ret) = crate::gfx::with_context(|ctx| {
-        let (_p, _v, need_set_viewport) = match ensure_gfx_resources(ctx, 0) {
-            Some(v) => v,
-            None => return -1,
-        };
-        let swap = ctx.swapchain_desc();
-        const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
+    let Some(ret) =
+        crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::CursorEndFrame, |ctx| {
+            let (_p, _v, need_set_viewport) = match ensure_gfx_resources(ctx, 0) {
+                Some(v) => v,
+                None => return -1,
+            };
+            let swap = ctx.swapchain_desc();
+            const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
 
-        enum Plan {
-            SetRenderTarget {
-                image: Option<ImageId>,
-                vp_w: u32,
-                vp_h: u32,
-            },
-            Rgb {
-                offset: u64,
-                vcount: u32,
-                blend: BlendDesc,
-            },
-            Tex {
-                tex_id: u32,
-                image: ImageId,
-                sample_kind: TexSampleKind,
-                sampler: SamplerDesc,
-                offset: u64,
-                vcount: u32,
-                blend: BlendDesc,
-            },
-        }
+            enum Plan {
+                SetRenderTarget {
+                    image: Option<ImageId>,
+                    vp_w: u32,
+                    vp_h: u32,
+                },
+                Rgb {
+                    offset: u64,
+                    vcount: u32,
+                    blend: BlendDesc,
+                },
+                Tex {
+                    tex_id: u32,
+                    image: ImageId,
+                    sample_kind: TexSampleKind,
+                    sampler: SamplerDesc,
+                    offset: u64,
+                    vcount: u32,
+                    blend: BlendDesc,
+                },
+            }
 
-        let mut draw_idx = 0usize;
-        let mut first_pass = true;
-        let mut current_target_image: Option<ImageId> = None;
-        let mut current_vp_w = swap.extent.width;
-        let mut current_vp_h = swap.extent.height;
+            let mut draw_idx = 0usize;
+            let mut first_pass = true;
+            let mut current_target_image: Option<ImageId> = None;
+            let mut current_vp_w = swap.extent.width;
+            let mut current_vp_h = swap.extent.height;
 
-        while draw_idx < draws.len() {
-            let start = draw_idx;
-            let mut pass_bytes = 0usize;
-            let mut pass_kind: u8 = 0;
             while draw_idx < draws.len() {
-                let (kind, add) = match &draws[draw_idx] {
-                    PendingDraw::SetRenderTarget { .. } => {
-                        if pass_kind == 0 {
-                            draw_idx += 1;
-                            continue;
+                let start = draw_idx;
+                let mut pass_bytes = 0usize;
+                let mut pass_kind: u8 = 0;
+                while draw_idx < draws.len() {
+                    let (kind, add) = match &draws[draw_idx] {
+                        PendingDraw::SetRenderTarget { .. } => {
+                            if pass_kind == 0 {
+                                draw_idx += 1;
+                                continue;
+                            }
+                            break;
                         }
+                        PendingDraw::Rgb { blob_len, .. } => (1u8, blob_len - (blob_len % 12)),
+                        PendingDraw::Tex { blob_len, .. } => (2u8, blob_len - (blob_len % 20)),
+                    };
+                    if add == 0 {
+                        draw_idx += 1;
+                        continue;
+                    }
+                    if pass_kind == 0 {
+                        pass_kind = kind;
+                    } else if kind != pass_kind {
                         break;
                     }
-                    PendingDraw::Rgb { blob_len, .. } => (1u8, blob_len - (blob_len % 12)),
-                    PendingDraw::Tex { blob_len, .. } => (2u8, blob_len - (blob_len % 20)),
-                };
-                if add == 0 {
+                    if pass_bytes != 0 && pass_bytes.saturating_add(add) > MAX_PASS_VERTEX_BYTES {
+                        break;
+                    }
+                    pass_bytes = pass_bytes.saturating_add(add);
                     draw_idx += 1;
+                }
+
+                let mut plans: Vec<Plan> = Vec::new();
+                let mut rgb_blob: Vec<u8> = Vec::new();
+                let mut tex_blob: Vec<u8> = Vec::new();
+
+                for draw in draws[start..draw_idx].iter() {
+                    match draw {
+                        PendingDraw::SetRenderTarget { tex_id } => {
+                            if *tex_id == 0 {
+                                current_target_image = None;
+                                current_vp_w = swap.extent.width;
+                                current_vp_h = swap.extent.height;
+                            } else {
+                                let st = GFX_CABI_STATE.lock();
+                                let idx = tex_id.saturating_sub(1) as usize;
+                                let Some(img) = st
+                                    .tex_images
+                                    .as_ref()
+                                    .and_then(|images| images.get(idx))
+                                    .and_then(|entry| entry.as_ref())
+                                else {
+                                    return -12;
+                                };
+                                current_target_image = Some(img.image);
+                                current_vp_w = img.width.max(1);
+                                current_vp_h = img.height.max(1);
+                            }
+                            plans.push(Plan::SetRenderTarget {
+                                image: current_target_image,
+                                vp_w: current_vp_w,
+                                vp_h: current_vp_h,
+                            });
+                        }
+                        PendingDraw::Rgb {
+                            blob_offset,
+                            blob_len,
+                            blend,
+                        } => {
+                            const VTX_SIZE: usize = 12;
+                            let usable = blob_len - (blob_len % VTX_SIZE);
+                            if usable == 0 {
+                                continue;
+                            }
+                            let start = *blob_offset;
+                            let end = start.saturating_add(usable);
+                            if end > rgb_src.len() {
+                                continue;
+                            }
+                            let vcount = (usable / VTX_SIZE) as u32;
+                            let off = rgb_blob.len() as u64;
+                            rgb_blob.extend_from_slice(&rgb_src[start..end]);
+                            plans.push(Plan::Rgb {
+                                offset: off,
+                                vcount,
+                                blend: *blend,
+                            });
+                        }
+                        PendingDraw::Tex {
+                            tex_id,
+                            image,
+                            sample_kind,
+                            sampler,
+                            blob_offset,
+                            blob_len,
+                            blend,
+                        } => {
+                            const VTX_SIZE: usize = 20;
+                            let usable = blob_len - (blob_len % VTX_SIZE);
+                            if usable == 0 {
+                                continue;
+                            }
+                            let start = *blob_offset;
+                            let end = start.saturating_add(usable);
+                            if end > tex_src.len() {
+                                continue;
+                            }
+                            let vcount = (usable / VTX_SIZE) as u32;
+                            let off = tex_blob.len() as u64;
+                            tex_blob.extend_from_slice(&tex_src[start..end]);
+                            plans.push(Plan::Tex {
+                                tex_id: *tex_id,
+                                image: *image,
+                                sample_kind: *sample_kind,
+                                sampler: *sampler,
+                                offset: off,
+                                vcount,
+                                blend: *blend,
+                            });
+                        }
+                    }
+                }
+
+                if plans.is_empty() {
                     continue;
                 }
-                if pass_kind == 0 {
-                    pass_kind = kind;
-                } else if kind != pass_kind {
-                    break;
-                }
-                if pass_bytes != 0 && pass_bytes.saturating_add(add) > MAX_PASS_VERTEX_BYTES {
-                    break;
-                }
-                pass_bytes = pass_bytes.saturating_add(add);
-                draw_idx += 1;
-            }
 
-            let mut plans: Vec<Plan> = Vec::new();
-            let mut rgb_blob: Vec<u8> = Vec::new();
-            let mut tex_blob: Vec<u8> = Vec::new();
+                let mut rgb_res: Option<(PipelineId, BufferId)> = None;
+                if !rgb_blob.is_empty() {
+                    let (pipeline, vbuf, _) = match ensure_gfx_resources(ctx, rgb_blob.len()) {
+                        Some(v) => v,
+                        None => return -4,
+                    };
+                    if ctx.write_buffer(vbuf, 0, rgb_blob.as_slice()).is_err() {
+                        return -5;
+                    }
+                    rgb_res = Some((pipeline, vbuf));
+                }
 
-            for draw in draws[start..draw_idx].iter() {
-                match draw {
-                    PendingDraw::SetRenderTarget { tex_id } => {
-                        if *tex_id == 0 {
-                            current_target_image = None;
-                            current_vp_w = swap.extent.width;
-                            current_vp_h = swap.extent.height;
-                        } else {
-                            let st = GFX_CABI_STATE.lock();
-                            let idx = tex_id.saturating_sub(1) as usize;
-                            let Some(img) = st
-                                .tex_images
-                                .as_ref()
-                                .and_then(|images| images.get(idx))
-                                .and_then(|entry| entry.as_ref())
-                            else {
-                                return -12;
+                let mut tex_res: Option<(PipelineId, BufferId)> = None;
+                if !tex_blob.is_empty() {
+                    let tex_kind = if plans.iter().all(|plan| {
+                        matches!(
+                            plan,
+                            Plan::Tex {
+                                sample_kind: TexSampleKind::Rgba,
+                                ..
+                            }
+                        )
+                    }) {
+                        TexSampleKind::Rgba
+                    } else {
+                        TexSampleKind::Mask
+                    };
+                    let (pipeline, vbuf, _) =
+                        match ensure_gfx_resources_tex(ctx, tex_blob.len(), tex_kind) {
+                            Some(v) => v,
+                            None => return -6,
+                        };
+                    if ctx.write_buffer(vbuf, 0, tex_blob.as_slice()).is_err() {
+                        return -7;
+                    }
+                    tex_res = Some((pipeline, vbuf));
+                }
+
+                let is_last_pass = draw_idx >= draws.len();
+                let mut cmds: Vec<Command> = Vec::new();
+                if first_pass && need_set_viewport {
+                    cmds.push(Command::SetViewport(Viewport {
+                        x: 0,
+                        y: 0,
+                        width: current_vp_w as i32,
+                        height: current_vp_h as i32,
+                    }));
+                }
+                cmds.push(Command::SetRenderTarget(current_target_image));
+                if first_pass {
+                    cmds.push(Command::ClearColor {
+                        rgb: base_cache_clear_rgb,
+                    });
+                }
+
+                let mut last_blend: Option<BlendDesc> = None;
+
+                for plan in plans.iter() {
+                    match *plan {
+                        Plan::SetRenderTarget { image, vp_w, vp_h } => {
+                            cmds.push(Command::SetRenderTarget(image));
+                            cmds.push(Command::SetViewport(Viewport {
+                                x: 0,
+                                y: 0,
+                                width: vp_w as i32,
+                                height: vp_h as i32,
+                            }));
+                        }
+                        Plan::Rgb {
+                            offset,
+                            vcount,
+                            blend,
+                        } => {
+                            if last_blend != Some(blend) {
+                                cmds.push(Command::SetBlend(blend));
+                                last_blend = Some(blend);
+                            }
+                            let Some((pipeline, vbuf)) = rgb_res else {
+                                return -8;
                             };
-                            current_target_image = Some(img.image);
-                            current_vp_w = img.width.max(1);
-                            current_vp_h = img.height.max(1);
+                            cmds.push(Command::BindPipeline(pipeline));
+                            cmds.push(Command::BindVertexBuffer {
+                                buffer: vbuf,
+                                offset,
+                            });
+                            cmds.push(Command::Draw {
+                                vertex_count: vcount,
+                                first_vertex: 0,
+                            });
                         }
-                        plans.push(Plan::SetRenderTarget {
-                            image: current_target_image,
-                            vp_w: current_vp_w,
-                            vp_h: current_vp_h,
-                        });
-                    }
-                    PendingDraw::Rgb {
-                        blob_offset,
-                        blob_len,
-                        blend,
-                    } => {
-                        const VTX_SIZE: usize = 12;
-                        let usable = blob_len - (blob_len % VTX_SIZE);
-                        if usable == 0 {
-                            continue;
-                        }
-                        let start = *blob_offset;
-                        let end = start.saturating_add(usable);
-                        if end > rgb_src.len() {
-                            continue;
-                        }
-                        let vcount = (usable / VTX_SIZE) as u32;
-                        let off = rgb_blob.len() as u64;
-                        rgb_blob.extend_from_slice(&rgb_src[start..end]);
-                        plans.push(Plan::Rgb {
-                            offset: off,
-                            vcount,
-                            blend: *blend,
-                        });
-                    }
-                    PendingDraw::Tex {
-                        tex_id,
-                        image,
-                        sample_kind,
-                        sampler,
-                        blob_offset,
-                        blob_len,
-                        blend,
-                    } => {
-                        const VTX_SIZE: usize = 20;
-                        let usable = blob_len - (blob_len % VTX_SIZE);
-                        if usable == 0 {
-                            continue;
-                        }
-                        let start = *blob_offset;
-                        let end = start.saturating_add(usable);
-                        if end > tex_src.len() {
-                            continue;
-                        }
-                        let vcount = (usable / VTX_SIZE) as u32;
-                        let off = tex_blob.len() as u64;
-                        tex_blob.extend_from_slice(&tex_src[start..end]);
-                        plans.push(Plan::Tex {
-                            tex_id: *tex_id,
-                            image: *image,
-                            sample_kind: *sample_kind,
-                            sampler: *sampler,
-                            offset: off,
-                            vcount,
-                            blend: *blend,
-                        });
-                    }
-                }
-            }
-
-            if plans.is_empty() {
-                continue;
-            }
-
-            let mut rgb_res: Option<(PipelineId, BufferId)> = None;
-            if !rgb_blob.is_empty() {
-                let (pipeline, vbuf, _) = match ensure_gfx_resources(ctx, rgb_blob.len()) {
-                    Some(v) => v,
-                    None => return -4,
-                };
-                if ctx.write_buffer(vbuf, 0, rgb_blob.as_slice()).is_err() {
-                    return -5;
-                }
-                rgb_res = Some((pipeline, vbuf));
-            }
-
-            let mut tex_res: Option<(PipelineId, BufferId)> = None;
-            if !tex_blob.is_empty() {
-                let tex_kind = if plans.iter().all(|plan| {
-                    matches!(
-                        plan,
                         Plan::Tex {
-                            sample_kind: TexSampleKind::Rgba,
-                            ..
+                            tex_id,
+                            image,
+                            sample_kind,
+                            sampler,
+                            offset,
+                            vcount,
+                            blend,
+                        } => {
+                            if last_blend != Some(blend) {
+                                cmds.push(Command::SetBlend(blend));
+                                last_blend = Some(blend);
+                            }
+                            let Some((pipeline, vbuf)) = tex_res else {
+                                return -9;
+                            };
+                            let image_id = if image.is_valid() {
+                                image
+                            } else {
+                                let mut st = GFX_CABI_STATE.lock();
+                                let idx = tex_id.saturating_sub(1) as usize;
+                                let desc = ImageDesc {
+                                    width: 1,
+                                    height: 1,
+                                    format: ImageFormat::Rgba8888,
+                                };
+                                let Ok(img) = ctx.create_image(desc) else {
+                                    return -10;
+                                };
+                                let white = [255u8, 255u8, 255u8, 255u8];
+                                let _ = ctx.write_image(img, &white);
+                                let images = st.tex_images.get_or_insert_with(Vec::new);
+                                if idx >= images.len() {
+                                    images.resize_with(idx + 1, || None);
+                                }
+                                images[idx] = Some(TexImage {
+                                    image: img,
+                                    width: 1,
+                                    height: 1,
+                                    sample_kind,
+                                });
+                                img
+                            };
+                            cmds.push(Command::BindPipeline(pipeline));
+                            cmds.push(Command::SetSampler(sampler));
+                            cmds.push(Command::BindImage(image_id));
+                            cmds.push(Command::BindVertexBuffer {
+                                buffer: vbuf,
+                                offset,
+                            });
+                            cmds.push(Command::Draw {
+                                vertex_count: vcount,
+                                first_vertex: 0,
+                            });
                         }
-                    )
-                }) {
-                    TexSampleKind::Rgba
-                } else {
-                    TexSampleKind::Mask
-                };
-                let (pipeline, vbuf, _) = match ensure_gfx_resources_tex(ctx, tex_blob.len(), tex_kind) {
-                    Some(v) => v,
-                    None => return -6,
-                };
-                if ctx.write_buffer(vbuf, 0, tex_blob.as_slice()).is_err() {
-                    return -7;
+                    }
                 }
-                tex_res = Some((pipeline, vbuf));
+
+                if is_last_pass && current_target_image.is_none() {
+                    cmds.push(Command::Present);
+                }
+
+                if !check_submit_budget(
+                    rgb_blob.len().saturating_add(tex_blob.len()),
+                    cmds.len(),
+                    "cursor_end_frame_pass",
+                ) {
+                    return -11;
+                }
+                let submit_res = ctx.submit(CommandBuffer {
+                    commands: cmds.as_slice(),
+                });
+                if submit_res.is_ok() {
+                    let mut st = GFX_CABI_STATE.lock();
+                    st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                } else {
+                    return -11;
+                }
+                first_pass = false;
             }
 
-            let is_last_pass = draw_idx >= draws.len();
-            let mut cmds: Vec<Command> = Vec::new();
-            if first_pass && need_set_viewport {
-                cmds.push(Command::SetViewport(Viewport {
-                    x: 0,
-                    y: 0,
-                    width: current_vp_w as i32,
-                    height: current_vp_h as i32,
-                }));
-            }
-            cmds.push(Command::SetRenderTarget(current_target_image));
             if first_pass {
+                let mut cmds: Vec<Command> = Vec::new();
+                if need_set_viewport {
+                    cmds.push(Command::SetViewport(Viewport {
+                        x: 0,
+                        y: 0,
+                        width: current_vp_w as i32,
+                        height: current_vp_h as i32,
+                    }));
+                }
+                cmds.push(Command::SetRenderTarget(current_target_image));
                 cmds.push(Command::ClearColor {
                     rgb: base_cache_clear_rgb,
                 });
-            }
-
-            let mut last_blend: Option<BlendDesc> = None;
-
-            for plan in plans.iter() {
-                match *plan {
-                    Plan::SetRenderTarget { image, vp_w, vp_h } => {
-                        cmds.push(Command::SetRenderTarget(image));
-                        cmds.push(Command::SetViewport(Viewport {
-                            x: 0,
-                            y: 0,
-                            width: vp_w as i32,
-                            height: vp_h as i32,
-                        }));
-                    }
-                    Plan::Rgb {
-                        offset,
-                        vcount,
-                        blend,
-                    } => {
-                        if last_blend != Some(blend) {
-                            cmds.push(Command::SetBlend(blend));
-                            last_blend = Some(blend);
-                        }
-                        let Some((pipeline, vbuf)) = rgb_res else {
-                            return -8;
-                        };
-                        cmds.push(Command::BindPipeline(pipeline));
-                        cmds.push(Command::BindVertexBuffer {
-                            buffer: vbuf,
-                            offset,
-                        });
-                        cmds.push(Command::Draw {
-                            vertex_count: vcount,
-                            first_vertex: 0,
-                        });
-                    }
-                    Plan::Tex {
-                        tex_id,
-                        image,
-                        sample_kind,
-                        sampler,
-                        offset,
-                        vcount,
-                        blend,
-                    } => {
-                        if last_blend != Some(blend) {
-                            cmds.push(Command::SetBlend(blend));
-                            last_blend = Some(blend);
-                        }
-                        let Some((pipeline, vbuf)) = tex_res else {
-                            return -9;
-                        };
-                        let image_id = if image.is_valid() {
-                            image
-                        } else {
-                            let mut st = GFX_CABI_STATE.lock();
-                            let idx = tex_id.saturating_sub(1) as usize;
-                            let desc = ImageDesc {
-                                width: 1,
-                                height: 1,
-                                format: ImageFormat::Rgba8888,
-                            };
-                            let Ok(img) = ctx.create_image(desc) else {
-                                return -10;
-                            };
-                            let white = [255u8, 255u8, 255u8, 255u8];
-                            let _ = ctx.write_image(img, &white);
-                            let images = st.tex_images.get_or_insert_with(Vec::new);
-                            if idx >= images.len() {
-                                images.resize_with(idx + 1, || None);
-                            }
-                            images[idx] = Some(TexImage {
-                                image: img,
-                                width: 1,
-                                height: 1,
-                                sample_kind,
-                            });
-                            img
-                        };
-                        cmds.push(Command::BindPipeline(pipeline));
-                        cmds.push(Command::SetSampler(sampler));
-                        cmds.push(Command::BindImage(image_id));
-                        cmds.push(Command::BindVertexBuffer {
-                            buffer: vbuf,
-                            offset,
-                        });
-                        cmds.push(Command::Draw {
-                            vertex_count: vcount,
-                            first_vertex: 0,
-                        });
-                    }
+                if current_target_image.is_none() {
+                    cmds.push(Command::Present);
                 }
-            }
-
-            if is_last_pass && current_target_image.is_none() {
-                cmds.push(Command::Present);
-            }
-
-            if !check_submit_budget(
-                rgb_blob.len().saturating_add(tex_blob.len()),
-                cmds.len(),
-                "cursor_end_frame_pass",
-            ) {
+                if !check_submit_budget(
+                    rgb_src.len().saturating_add(tex_src.len()),
+                    cmds.len(),
+                    "cursor_end_frame_present_only",
+                ) {
+                    return -11;
+                }
+                let submit_res = ctx.submit(CommandBuffer {
+                    commands: cmds.as_slice(),
+                });
+                if submit_res.is_ok() {
+                    let mut st = GFX_CABI_STATE.lock();
+                    st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                    return 0;
+                }
                 return -11;
             }
-            let submit_res = ctx.submit(CommandBuffer {
-                commands: cmds.as_slice(),
-            });
-            if submit_res.is_ok() {
-                let mut st = GFX_CABI_STATE.lock();
-                st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
-            } else {
-                return -11;
-            }
-            first_pass = false;
-        }
 
-        if first_pass {
-            let mut cmds: Vec<Command> = Vec::new();
-            if need_set_viewport {
-                cmds.push(Command::SetViewport(Viewport {
-                    x: 0,
-                    y: 0,
-                    width: current_vp_w as i32,
-                    height: current_vp_h as i32,
-                }));
-            }
-            cmds.push(Command::SetRenderTarget(current_target_image));
-            cmds.push(Command::ClearColor {
-                rgb: base_cache_clear_rgb,
-            });
-            if current_target_image.is_none() {
-                cmds.push(Command::Present);
-            }
-            if !check_submit_budget(
-                rgb_src.len().saturating_add(tex_src.len()),
-                cmds.len(),
-                "cursor_end_frame_present_only",
-            ) {
-                return -11;
-            }
-            let submit_res = ctx.submit(CommandBuffer {
-                commands: cmds.as_slice(),
-            });
-            if submit_res.is_ok() {
-                let mut st = GFX_CABI_STATE.lock();
-                st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
-                return 0;
-            }
-            return -11;
-        }
-
-        0
-    }) else {
+            0
+        })
+    else {
         return -12;
     };
 

@@ -147,12 +147,18 @@ unsafe extern "C" fn trueos_shell1_history_text_since_js(
     } else {
         64usize
     };
-    let len = trueos_cabi_shell1_history_text_since(start_line, max_lines, core::ptr::null_mut(), 0);
+    let len =
+        trueos_cabi_shell1_history_text_since(start_line, max_lines, core::ptr::null_mut(), 0);
     if len <= 0 {
         return qjs::JS_NewStringLen(ctx, b"".as_ptr() as *const c_char, 0);
     }
     let mut bytes = alloc::vec![0u8; len as usize];
-    let got = trueos_cabi_shell1_history_text_since(start_line, max_lines, bytes.as_mut_ptr(), bytes.len());
+    let got = trueos_cabi_shell1_history_text_since(
+        start_line,
+        max_lines,
+        bytes.as_mut_ptr(),
+        bytes.len(),
+    );
     if got <= 0 {
         return qjs::JS_NewStringLen(ctx, b"".as_ptr() as *const c_char, 0);
     }

@@ -6,6 +6,7 @@ use heapless::String as HString;
 
 use trueos_v::vnet as api;
 
+use crate::v::net::NetProfile;
 use crate::v::net::VNet;
 use crate::v::net::dns::{self, DnsConfig};
 use crate::v::net::https;
@@ -237,12 +238,19 @@ async fn fetch_http_plain_body(
         // Best-effort: continue and let DNS/TCP timeouts decide final outcome.
     }
 
-    let Ok(ip) = dns::resolve_ipv4_primary(parsed.host.as_str(), DnsConfig::default()).await else {
+    let profile = NetProfile::default();
+    let Ok(ip) = dns::resolve_ipv4_with_profile(
+        parsed.host.as_str(),
+        profile,
+        DnsConfig::for_profile(profile),
+    )
+    .await
+    else {
         return Err(HttpPlainFetchError::DnsFailed);
     };
 
     let net = loop {
-        if let Some(v) = VNet::open_primary() {
+        if let Some(v) = VNet::open_with_profile(profile) {
             break v;
         }
         Timer::after(EmbassyDuration::from_millis(50)).await;
