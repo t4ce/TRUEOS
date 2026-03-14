@@ -31,7 +31,7 @@ pub const NET_V6_CONFIGURED: u32 = 1 << 14;
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
 pub const GFX_VIRGL_READY: u32 = 1 << 19;
-pub const WGPU_TEXT_DONE: u32 = 1 << 20;
+pub const LOADSCREEN_END: u32 = 1 << 20;
 pub const GFX_INTEL_CLAIMED: u32 = 1 << 21;
 pub const GFX_BACKEND_READY: u32 = 1 << 22;
 
@@ -54,8 +54,8 @@ pub fn set(flags: u32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_signal_wgpu_text_done() {
-    set(WGPU_TEXT_DONE);
+pub extern "C" fn trueos_cabi_signal_loadscreen_end() {
+    set(LOADSCREEN_END);
 }
 
 /// Wait until all required flags are set.

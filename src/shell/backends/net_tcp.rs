@@ -9,6 +9,7 @@ use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
 use crate::shell::{ShellBackend, ShellIo};
+use crate::shell2::{ShellBackend2, ShellIo2};
 
 const NET_SHELL_TCP_PORT: u16 = 4245;
 
@@ -371,5 +372,34 @@ impl ShellBackend for NetTcpShellBackend {
     #[inline]
     fn read_byte(&self) -> Option<u8> {
         net_shell_read_byte()
+    }
+}
+
+impl ShellIo2 for NetTcpShellBackend {
+    #[inline]
+    fn write_str(&self, s: &str) {
+        <Self as ShellIo>::write_str(self, s);
+    }
+
+    #[inline]
+    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
+        <Self as ShellIo>::write_fmt(self, args);
+    }
+
+    #[inline]
+    fn write_char(&self, ch: char) {
+        <Self as ShellIo>::write_char(self, ch);
+    }
+
+    #[inline]
+    fn write_byte(&self, b: u8) {
+        <Self as ShellIo>::write_byte(self, b);
+    }
+}
+
+impl ShellBackend2 for NetTcpShellBackend {
+    #[inline]
+    fn read_byte(&self) -> Option<u8> {
+        <Self as ShellBackend>::read_byte(self)
     }
 }

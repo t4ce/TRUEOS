@@ -28,6 +28,7 @@ mod power;
 mod rng;
 mod runtime;
 mod shell;
+mod shell2;
 mod smp;
 mod surface;
 mod tga;

@@ -1,16 +1,16 @@
 use crate::ecma48;
 use crate::shell::interface::ShellIo;
 
-pub const CUBE_COLS: usize = 75;
-pub const CUBE_ROWS: usize = 75;
+pub const CUBE_COLS: usize = 60;
+pub const CUBE_ROWS: usize = 30;
 const CUBE_SIZE: usize = CUBE_COLS * CUBE_ROWS;
-const CUBE_SCALE: i32 = 700;
-const CUBE_DIST: i32 = CUBE_SCALE * 1.8 as i32;
+const CUBE_SCALE: i32 = 400;
+const CUBE_DIST: i32 = CUBE_SCALE as i32;
 const CUBE_PINK: (u8, u8, u8) = (255, 55, 255);
 const BORDER_INSET: usize = 0;
-const DRAW_SIZE: usize = 65;
+const DRAW_SIZE: usize = 30;
 const DRAW_Y_SHIFT: isize = -(DRAW_SIZE as isize / 2);
-const CENTER_Y_OFFSET: i32 = 10; // because i cant math
+const CENTER_Y_OFFSET: i32 = 0; // because i cant math
 const MAX_VERTS: usize = 30;
 const MAX_EDGES: usize = 60;
 

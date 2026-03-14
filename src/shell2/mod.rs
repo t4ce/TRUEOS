@@ -1,5 +1,3 @@
-use core::fmt::Write as _;
-
 use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -9,20 +7,43 @@ mod interface;
 mod shell2_cmd;
 mod shell2_qjs;
 mod shell2_surf;
+#[allow(unused_imports)]
+pub(crate) use crate::shell::backends::{NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND};
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 
 const DEFAULT_PROMPT: &str = "§ ";
 const MAX_LINE: usize = 192;
-const LINE_WIDTH: usize = 100;
 const BANNER_ROW: usize = 1;
 const STATUS_ROW: usize = 2;
 const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
+const STATUS_SELECTED_RGB: (u8, u8, u8) = crate::shell::PROMPT_RGB;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShellMode2 {
+    Surf,
+    Ai,
+    Qjs,
+    Cmd,
+}
+
+impl ShellMode2 {
+    const fn next(self) -> Self {
+        match self {
+            Self::Surf => Self::Ai,
+            Self::Ai => Self::Qjs,
+            Self::Qjs => Self::Cmd,
+            Self::Cmd => Self::Surf,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
-enum LineSource {
-    User,
-    Shell,
+enum EscState {
+    None,
+    Esc,
+    Csi,
+    Ss3,
 }
 
 struct AlignedWriter<'a> {
@@ -57,28 +78,40 @@ impl<'a> AlignedWriter<'a> {
         self.io.write_str("\x1b[2K");
     }
 
-    fn aligned_prefix(&self, source: LineSource, text: &str) {
-        if matches!(source, LineSource::Shell) {
-            let width = text.chars().count();
-            let pad = LINE_WIDTH.saturating_sub(width);
-            for _ in 0..pad {
-                self.io.write_char(' ');
-            }
-        }
-    }
-
-    fn line_at(&self, row: usize, source: LineSource, s: &str) {
+    fn line_at(&self, row: usize, s: &str) {
         self.move_to(row, 1);
         self.clear_line();
-        self.aligned_prefix(source, s);
         self.io.write_str(s);
+    }
+
+    fn mode_status(&self, mode: ShellMode2) {
+        self.move_to(STATUS_ROW, 1);
+        self.clear_line();
+        self.write_mode_token("F1 surf", mode == ShellMode2::Surf);
+        self.io.write_str(" - ");
+        self.write_mode_token("ai", mode == ShellMode2::Ai);
+        self.io.write_str(" - ");
+        self.write_mode_token("qjs", mode == ShellMode2::Qjs);
+        self.io.write_str(" - ");
+        self.write_mode_token("cmd", mode == ShellMode2::Cmd);
+        self.io.write_str(crate::ecma48::RESET);
+    }
+
+    fn write_mode_token(&self, text: &str, selected: bool) {
+        if selected {
+            self.io.write_fmt(format_args!(
+                "{}",
+                crate::ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
+            ));
+        } else {
+            self.io.write_str(text);
+        }
     }
 
     fn prompt(&self) {
         self.move_to(PROMPT_ROW, 1);
         self.clear_line();
         self.io.write_str("\x1b[0m");
-        self.aligned_prefix(LineSource::User, DEFAULT_PROMPT);
         self.io.write_str(DEFAULT_PROMPT);
     }
 
@@ -91,28 +124,47 @@ impl<'a> AlignedWriter<'a> {
     }
 }
 
-fn clock_bucket_and_text() -> (u64, String<5>) {
-    let secs = crate::time::unix_time_seconds().unwrap_or_else(crate::time::uptime_seconds);
-    let mins_total = secs / 60;
-    let mins_day = mins_total % (24 * 60);
-    let hh = mins_day / 60;
-    let mm = mins_day % 60;
-    let mut text: String<5> = String::new();
-    let _ = write!(text, "{:02}:{:02}", hh, mm);
-    (mins_total, text)
+pub(crate) fn print_shell_line(io: &dyn ShellIo2, text: &str) {
+    io.write_str(crate::ecma48::SAVE_CURSOR);
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(999, 1)));
+    io.write_str(crate::ecma48::CLEAR_LINE);
+    io.write_str(crate::ecma48::RESET);
+    io.write_str(text);
+    io.write_str("\r\n");
+    io.write_str(crate::ecma48::RESTORE_CURSOR);
+}
+
+fn handle_submit(spawner: &Spawner, io: &'static dyn ShellBackend2, mode: ShellMode2, submitted: &str) {
+    match mode {
+        ShellMode2::Cmd => {
+            let _ = shell2_cmd::try_parse(submitted);
+        }
+        ShellMode2::Surf => {
+            if let Some(url) = shell2_surf::try_parse(submitted) {
+                if shell2_surf::prepare_call_with_url(spawner, io, url.as_str()).is_err() {
+                    print_shell_line(io, "surf: spawn failed");
+                }
+            }
+        }
+        ShellMode2::Qjs => {
+            let _ = shell2_qjs::is_likely_valid(submitted);
+        }
+        ShellMode2::Ai => {
+            // Reserved for the AI path; the mode bar and loop dispatch are in place first.
+        }
+    }
 }
 
 #[embassy_executor::task(pool_size = 2)]
-pub async fn task(_spawner: Spawner, io: &'static dyn ShellBackend2) {
+ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     io.init();
     let out = AlignedWriter::new(io);
 
     out.clear_screen_home();
     out.reset_scroll_region();
-    out.line_at(BANNER_ROW, LineSource::User, "TRUE OS §");
-
-    let (mut last_minute_bucket, now_text) = clock_bucket_and_text();
-    out.line_at(STATUS_ROW, LineSource::Shell, now_text.as_str());
+    out.line_at(BANNER_ROW, "TRUE OS §");
+    let mut mode = ShellMode2::Cmd;
+    out.mode_status(mode);
 
     out.set_scroll_region(SCROLL_TOP_ROW);
     out.prompt();
@@ -120,16 +172,68 @@ pub async fn task(_spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut line: String<MAX_LINE> = String::new();
     let mut history: Vec<alloc::string::String> = Vec::new();
     let mut saw_cr = false;
+    let mut esc = EscState::None;
+    let mut csi_param: u16 = 0;
 
     loop {
-        let (minute_bucket, minute_text) = clock_bucket_and_text();
-        if minute_bucket != last_minute_bucket {
-            last_minute_bucket = minute_bucket;
-            out.line_at(STATUS_ROW, LineSource::Shell, minute_text.as_str());
-            out.prompt();
-        }
-
         if let Some(b) = io.read_byte() {
+            match esc {
+                EscState::None => {
+                    if b == 0x1b {
+                        esc = EscState::Esc;
+                        continue;
+                    }
+                }
+                EscState::Esc => {
+                    match b {
+                        b'[' => {
+                            esc = EscState::Csi;
+                            csi_param = 0;
+                        }
+                        b'O' => {
+                            esc = EscState::Ss3;
+                        }
+                        _ => {
+                            esc = EscState::None;
+                        }
+                    }
+                    continue;
+                }
+                EscState::Csi => {
+                    match b {
+                        b'0'..=b'9' => {
+                            let digit = (b - b'0') as u16;
+                            csi_param = csi_param.saturating_mul(10).saturating_add(digit);
+                        }
+                        b'~' if csi_param == 11 => {
+                            mode = mode.next();
+                            out.mode_status(mode);
+                            out.prompt();
+                            for ch in line.chars() {
+                                out.user_char(ch);
+                            }
+                            esc = EscState::None;
+                        }
+                        _ => {
+                            esc = EscState::None;
+                        }
+                    }
+                    continue;
+                }
+                EscState::Ss3 => {
+                    if b == b'P' {
+                        mode = mode.next();
+                        out.mode_status(mode);
+                        out.prompt();
+                        for ch in line.chars() {
+                            out.user_char(ch);
+                        }
+                    }
+                    esc = EscState::None;
+                    continue;
+                }
+            }
+
             if saw_cr && b == b'\n' {
                 saw_cr = false;
                 continue;
@@ -141,15 +245,7 @@ pub async fn task(_spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let submitted = line.as_str().trim();
                     if !submitted.is_empty() {
                         history.push(alloc::string::String::from(submitted));
-
-                        let parse = shell2_cmd::try_parse(submitted);
-                        if !parse.handled() {
-                            if let Some(url) = shell2_surf::try_parse(submitted) {
-                                shell2_surf::prepare_call_with_url(url.as_str());
-                            } else {
-                                let _ = shell2_qjs::is_likely_valid(submitted);
-                            }
-                        }
+                        handle_submit(&spawner, io, mode, submitted);
                     }
                     line.clear();
                     out.prompt();

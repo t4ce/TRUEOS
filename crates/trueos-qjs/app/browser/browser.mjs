@@ -22,10 +22,9 @@ const CURSOR_EVENT_FIELDS = 6;
 const CURSOR_FLAG_BUTTONS_CHANGED = 1 << 2;
 const INDENT_PX = 12;
 const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs || 0) || 0);
-const INITIAL_NAVIGATE_TO_W3C_PNG = true;
-const INITIAL_W3C_PNG_URL = 'https://www.w3.org/Graphics/PNG/Inline-img.html';
 const ERROR_PREVIEW_MAX = 160;
 const MAX_RENDER_TEXT_CHARS = 512;
+const HTML_READY_TIMEOUT_MS = 10000;
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 const SHOW_CLOSING_TAG_ROWS = false;
 const RELEASE_RECT_RGBA = 0x3f2f7fff;
@@ -37,7 +36,6 @@ let scrollY = 0;
 let currentPageUrl = String(
   runtime.host.__trueosBrowserCurrentUrl
   || runtime.host.__trueosBrowserUrl
-  || runtime.host.__trueosBrowserBootstrapInitialUrl
   || '',
 );
 const kernelCursorState = new Map();
@@ -54,6 +52,10 @@ const aiInputWaiters = [];
 let pendingReleaseRect = null;
 let cursorMoveLogCount = 0;
 const pendingSyntheticCursorEchoes = [];
+let fpsOverlayEnabled = false;
+let browserCanRenderScene = false;
+let browserContentReadySignaled = false;
+let htmlReadyTimeoutId = null;
 
 const fpsOverlay = createFpsOverlay();
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
@@ -1374,6 +1376,16 @@ function getViewport() {
 function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
+  if (cachedHtml.trim()) {
+    browserCanRenderScene = true;
+    if (htmlReadyTimeoutId != null && typeof runtime.host.clearTimeout === 'function') {
+      try { runtime.host.clearTimeout(htmlReadyTimeoutId); } catch (_) {}
+      htmlReadyTimeoutId = null;
+    }
+  }
+  if (!browserCanRenderScene) {
+    return true;
+  }
   paint();
   const htmlSnapshot = cachedHtml;
   if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
@@ -1392,6 +1404,33 @@ function nowMs() {
     return Number(Date.now()) || 0;
   }
   return 0;
+}
+
+function docHasTextRows(doc) {
+  const rows = Array.isArray(doc && doc.rows) ? doc.rows : [];
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    const kind = String(row && row.kind || '');
+    if (kind === 'image' || kind === 'hr') continue;
+    if (String(row && row.text || '').trim()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function armHtmlReadyFallback() {
+  if (htmlReadyTimeoutId != null) return;
+  if (typeof runtime.host.setTimeout !== 'function') return;
+  try {
+    htmlReadyTimeoutId = runtime.host.setTimeout(() => {
+      htmlReadyTimeoutId = null;
+      if (browserCanRenderScene) return;
+      setHtml(runtime.host.__trueosUiHtml || '');
+    }, HTML_READY_TIMEOUT_MS);
+  } catch (_) {
+    htmlReadyTimeoutId = null;
+  }
 }
 
 function pushBrowserAction(event) {
@@ -1521,42 +1560,6 @@ async function loadUrlIntoBrowser(url, request = null) {
   }
 }
 
-function consumeBootstrapInitialNavigation() {
-  const pending = runtime.host.__trueosBrowserBootstrapInitialNav;
-  const bootstrapUrl = String(runtime.host.__trueosBrowserBootstrapInitialUrl || '');
-  if (!pending || typeof pending.then !== 'function' || !bootstrapUrl) {
-    return null;
-  }
-
-  runtime.host.__trueosBrowserBootstrapInitialNav = null;
-  setCurrentPageUrl(bootstrapUrl);
-  return Promise.resolve(pending).then((result) => {
-    const resolved = result && typeof result === 'object' ? result : null;
-    if (resolved && resolved.ok) {
-      const html = typeof resolved.html === 'string' ? resolved.html : '';
-      setHtml(html);
-      return {
-        ok: 1,
-        handled: 1,
-        loaded: 1,
-        url: bootstrapUrl,
-        request: { url: bootstrapUrl, source: 'bootstrap-preload' },
-        preloaded: 1,
-      };
-    }
-    return {
-      ok: 0,
-      handled: 0,
-      reason: 'navigate-fetch-failed',
-      url: bootstrapUrl,
-      preloaded: 1,
-      error: resolved && typeof resolved.error === 'string'
-        ? resolved.error
-        : 'bootstrap navigation failed',
-    };
-  });
-}
-
 function surfToUrl(url, event = null) {
   const href = typeof url === 'string' ? url.trim() : '';
   if (!href) {
@@ -1570,18 +1573,32 @@ function surfToUrl(url, event = null) {
 }
 
 function paint() {
+  if (!browserCanRenderScene) {
+    return false;
+  }
   const { vw, vh } = computeViewport();
   const doc = ensureDoc(vw);
   if (scrollY < 0) scrollY = 0;
   publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
 
   const overlayRuns = [];
-  fpsOverlay.appendRuns(overlayRuns, vw);
+  if (fpsOverlayEnabled) {
+    fpsOverlay.appendRuns(overlayRuns, vw);
+  }
   const releaseRect = pendingReleaseRect;
   pendingReleaseRect = null;
+  const hasRealSceneContent = Array.isArray(doc && doc.rows) && doc.rows.length > 0;
+  const hasTextContent = docHasTextRows(doc);
 
   try {
     renderScene(doc, vw, vh, scrollY, overlayRuns, releaseRect);
+    if (!fpsOverlayEnabled && hasRealSceneContent) {
+      fpsOverlayEnabled = true;
+    }
+    if (!browserContentReadySignaled && hasTextContent && typeof cmdStream.signalLoadscreenEnd === 'function') {
+      cmdStream.signalLoadscreenEnd();
+      browserContentReadySignaled = true;
+    }
   } catch (err) {
     raiseBrowserError(
       'TRUEOS_BROWSER_RENDER_FAILED',
@@ -2277,16 +2294,7 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
 }
 
 InjectOpenAi();
-
-if (INITIAL_NAVIGATE_TO_W3C_PNG) {
-  const initialNavigation = consumeBootstrapInitialNavigation() || loadUrlIntoBrowser(INITIAL_W3C_PNG_URL);
-  initialNavigation.catch((err) => {
-    try { console.log('[browser.mjs] initial navigation failed', String(err && err.stack ? err.stack : err)); } catch (_) {}
-    setHtml(runtime.host.__trueosUiHtml || '');
-  });
-} else {
-  setHtml(runtime.host.__trueosUiHtml || '');
-}
+armHtmlReadyFallback();
 installAiInputBridge();
 startWheelPump();
 startAutoPaint();
