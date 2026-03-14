@@ -39,15 +39,20 @@ export function createBrowserAssetManager(options = {}) {
   const imageTextureCache = new Map();
   const imageTextureLoads = new Map();
   const fetchedImageBinaryUrls = new Set();
+  const prewarmedUrls = new Set();
   const pendingImagePrimeUrls = new Set();
   let imagePrimeScheduled = false;
 
   function maybePrewarmUrl(url) {
     const value = String(url || '').trim();
     if (!value || value.startsWith('data:')) return;
+    if (prewarmedUrls.has(value)) return;
     if (typeof host.__trueosPrewarmUrl !== 'function') return;
     try {
-      host.__trueosPrewarmUrl(value);
+      const rc = Number(host.__trueosPrewarmUrl(value) || 0);
+      if (rc >= 0) {
+        prewarmedUrls.add(value);
+      }
     } catch (_) {}
   }
 

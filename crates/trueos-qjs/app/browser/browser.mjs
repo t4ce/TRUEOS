@@ -9,7 +9,11 @@ import {
   attachThemeLayoutRuntime as attachParryThemeLayoutRuntime,
   dispatchDomClick as dispatchParryDomClick,
 } from './parry.mjs';
-import { renderScene } from './scene.mjs';
+import {
+  renderScene,
+  renderSceneContentToCurrentTarget,
+  composeSceneTextureToCurrentTarget,
+} from './scene.mjs';
 import { BLOCK_TAGS, TEXT_LEVEL_SEMANTICS_TAGS } from './htmlDefaults.mjs';
 import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './theme.mjs';
 
@@ -56,6 +60,10 @@ let fpsOverlayEnabled = false;
 let browserCanRenderScene = false;
 let browserContentReadySignaled = false;
 let htmlReadyTimeoutId = null;
+let browserSurfaceTexId = 0;
+let browserSurfaceWidth = 0;
+let browserSurfaceHeight = 0;
+let browserSurfaceDirty = true;
 
 const fpsOverlay = createFpsOverlay();
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
@@ -96,7 +104,7 @@ const FALLBACK_BROWSER_API_CONTRACT = {
 const assetManager = createBrowserAssetManager({
   cmdStream,
   host: runtime.host,
-  paint,
+  paint: requestBrowserContentRepaint,
   resolveNavigationUrl,
   raiseBrowserError,
   describeError,
@@ -1376,6 +1384,7 @@ function getViewport() {
 function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
+  browserSurfaceDirty = true;
   if (cachedHtml.trim()) {
     browserCanRenderScene = true;
     if (htmlReadyTimeoutId != null && typeof runtime.host.clearTimeout === 'function') {
@@ -1417,6 +1426,64 @@ function docHasTextRows(doc) {
     }
   }
   return false;
+}
+
+function requestBrowserContentRepaint() {
+  browserSurfaceDirty = true;
+  paint();
+}
+
+function destroyBrowserSurface() {
+  const texId = Math.max(0, Number(browserSurfaceTexId || 0) | 0);
+  if (texId > 0 && typeof cmdStream.destroyTexture === 'function') {
+    try {
+      cmdStream.destroyTexture(texId);
+    } catch (_) {}
+  }
+  browserSurfaceTexId = 0;
+  browserSurfaceWidth = 0;
+  browserSurfaceHeight = 0;
+}
+
+function docContentHeight(doc, vh) {
+  const raw = Math.max(
+    Number(doc && doc.contentH || 0),
+    Number(doc && doc.themeLayout && doc.themeLayout.contentH || 0),
+    Number(vh || 0),
+  );
+  return Math.max(1, Math.round(Number.isFinite(raw) ? raw : Number(vh || 1)));
+}
+
+function clampScrollForDoc(doc, vh) {
+  const contentH = docContentHeight(doc, vh);
+  const maxScroll = Math.max(0, contentH - Math.max(1, Number(vh || 1)));
+  if (scrollY < 0) scrollY = 0;
+  if (scrollY > maxScroll) scrollY = maxScroll;
+  return { contentH, maxScroll };
+}
+
+function ensureBrowserSurface(doc, vw, vh) {
+  const nextW = Math.max(1, Number(vw || 1) | 0);
+  const nextH = docContentHeight(doc, vh);
+  if (browserSurfaceTexId > 0 && browserSurfaceWidth === nextW && browserSurfaceHeight === nextH) {
+    return browserSurfaceTexId;
+  }
+
+  destroyBrowserSurface();
+  const nextTexId = Math.max(0, Number(
+    typeof cmdStream.createRenderTarget === 'function'
+      ? cmdStream.createRenderTarget(nextW, nextH)
+      : 0,
+  ) | 0);
+  if (nextTexId <= 0) {
+    return 0;
+  }
+
+  browserSurfaceTexId = nextTexId;
+  browserSurfaceWidth = nextW;
+  browserSurfaceHeight = nextH;
+  browserSurfaceDirty = true;
+  return browserSurfaceTexId;
 }
 
 function armHtmlReadyFallback() {
@@ -1578,7 +1645,7 @@ function paint() {
   }
   const { vw, vh } = computeViewport();
   const doc = ensureDoc(vw);
-  if (scrollY < 0) scrollY = 0;
+  const { contentH } = clampScrollForDoc(doc, vh);
   publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
 
   const overlayRuns = [];
@@ -1591,7 +1658,36 @@ function paint() {
   const hasTextContent = docHasTextRows(doc);
 
   try {
-    renderScene(doc, vw, vh, scrollY, overlayRuns, releaseRect);
+    const surfaceTexId = ensureBrowserSurface(doc, vw, vh);
+    if (surfaceTexId > 0) {
+      cmdStream.setClearRgb(0xF4F4F4);
+      cmdStream.setViewport(Math.max(1, Number(vw || 1) | 0), Math.max(1, Number(vh || 1) | 0));
+      cmdStream.beginFrame();
+      try {
+        if (browserSurfaceDirty) {
+          cmdStream.setRenderTarget(surfaceTexId);
+          cmdStream.setViewport(browserSurfaceWidth, browserSurfaceHeight);
+          renderSceneContentToCurrentTarget(doc, browserSurfaceWidth, browserSurfaceHeight);
+          browserSurfaceDirty = false;
+        }
+        cmdStream.clearRenderTarget();
+        cmdStream.setViewport(Math.max(1, Number(vw || 1) | 0), Math.max(1, Number(vh || 1) | 0));
+        composeSceneTextureToCurrentTarget(
+          surfaceTexId,
+          browserSurfaceWidth,
+          Math.max(browserSurfaceHeight, contentH),
+          vw,
+          vh,
+          scrollY,
+          overlayRuns,
+          releaseRect,
+        );
+      } finally {
+        cmdStream.endFrame();
+      }
+    } else {
+      renderScene(doc, vw, vh, scrollY, overlayRuns, releaseRect);
+    }
     if (!fpsOverlayEnabled && hasRealSceneContent) {
       fpsOverlayEnabled = true;
     }

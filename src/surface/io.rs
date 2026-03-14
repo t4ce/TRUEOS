@@ -615,13 +615,25 @@ pub mod cabi {
     static ASYNC_TEX_STATUS: spin::Mutex<Vec<i32>> = spin::Mutex::new(Vec::new());
     static ASYNC_PNG_REQS: spin::Mutex<VecDeque<AsyncPngUploadReq>> =
         spin::Mutex::new(VecDeque::new());
+    static ASYNC_SVG_REQS: spin::Mutex<VecDeque<AsyncSvgUploadReq>> =
+        spin::Mutex::new(VecDeque::new());
     static ASYNC_PNG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+    static ASYNC_SVG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_PNG_WORKER_STARTED: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
+    static ASYNC_SVG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
     static ASYNC_PNG_DIAG_LOGS: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
+    static ASYNC_SVG_DIAG_LOGS: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
 
     struct AsyncPngUploadReq {
+        tex_id: u32,
+        bytes: Vec<u8>,
+    }
+
+    struct AsyncSvgUploadReq {
         tex_id: u32,
         bytes: Vec<u8>,
     }
@@ -672,8 +684,19 @@ pub mod cabi {
         ASYNC_PNG_WAIT.notify_one();
     }
 
+    fn enqueue_async_svg_upload(tex_id: u32, bytes: Vec<u8>) {
+        ASYNC_SVG_REQS
+            .lock()
+            .push_back(AsyncSvgUploadReq { tex_id, bytes });
+        ASYNC_SVG_WAIT.notify_one();
+    }
+
     fn take_async_png_upload() -> Option<AsyncPngUploadReq> {
         ASYNC_PNG_REQS.lock().pop_front()
+    }
+
+    fn take_async_svg_upload() -> Option<AsyncSvgUploadReq> {
+        ASYNC_SVG_REQS.lock().pop_front()
     }
 
     async fn async_png_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
@@ -738,6 +761,54 @@ pub mod cabi {
         async_png_upload_service_inner().await;
     }
 
+    async fn async_svg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
+        let start = embassy_time_driver::now();
+        let log_n = ASYNC_SVG_DIAG_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if log_n < 16 {
+            log_async_png_worker_site("svg-start");
+            crate::globalog::log(format_args!(
+                "async-svg: raster-start tex_id={} bytes={}\n",
+                tex_id,
+                bytes.len()
+            ));
+        }
+        let rc = match crate::gfx::svg::upload_svg_bytes_to_texture(tex_id, bytes.as_slice()) {
+            Ok(_) => 0,
+            Err(code) => code,
+        };
+        if rc == 0 {
+            set_async_tex_status(tex_id, ASYNC_TEX_STATUS_READY);
+        } else {
+            set_async_tex_status(tex_id, rc);
+        }
+        if log_n < 16 {
+            let elapsed_ticks = embassy_time_driver::now().saturating_sub(start);
+            crate::globalog::log(format_args!(
+                "async-svg: raster-done tex_id={} rc={} ticks={}\n",
+                tex_id,
+                rc,
+                elapsed_ticks
+            ));
+        }
+    }
+
+    async fn async_svg_upload_service_inner() {
+        loop {
+            let Some(req) = take_async_svg_upload() else {
+                ASYNC_SVG_WAIT.wait_for_event().await;
+                continue;
+            };
+            async_svg_decode_upload_inner(req.tex_id, req.bytes).await;
+            Timer::after_millis(1).await;
+        }
+    }
+
+    #[embassy_executor::task]
+    async fn async_svg_upload_service_task() {
+        log_async_png_worker_site("svg-worker-start");
+        async_svg_upload_service_inner().await;
+    }
+
     fn try_start_async_png_worker() {
         if ASYNC_PNG_WORKER_STARTED.load(core::sync::atomic::Ordering::Acquire) {
             return;
@@ -781,6 +852,53 @@ pub mod cabi {
         {
             crate::wait::spawn_local_detached(async move {
                 async_png_upload_service_inner().await;
+            });
+        }
+    }
+
+    fn try_start_async_svg_worker() {
+        if ASYNC_SVG_WORKER_STARTED.load(core::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+
+        if let Some(worker_spawner) = trueos_qjs::workers::pick_background_spawner() {
+            if ASYNC_SVG_WORKER_STARTED
+                .compare_exchange(
+                    false,
+                    true,
+                    core::sync::atomic::Ordering::AcqRel,
+                    core::sync::atomic::Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                if worker_spawner
+                    .spawn(async_svg_upload_service_task())
+                    .is_err()
+                {
+                    ASYNC_SVG_WORKER_STARTED.store(false, core::sync::atomic::Ordering::Release);
+                }
+            }
+            return;
+        }
+
+        if crate::smp::cpu_count() > 1 {
+            crate::globalog::log(format_args!(
+                "async-svg: no background spawner available on multicore system; worker not started\n"
+            ));
+        }
+
+        if crate::smp::cpu_count() <= 1
+            && ASYNC_SVG_WORKER_STARTED
+                .compare_exchange(
+                    false,
+                    true,
+                    core::sync::atomic::Ordering::AcqRel,
+                    core::sync::atomic::Ordering::Acquire,
+                )
+                .is_ok()
+        {
+            crate::wait::spawn_local_detached(async move {
+                async_svg_upload_service_inner().await;
             });
         }
     }
@@ -833,6 +951,8 @@ pub mod cabi {
         cur_blend: BlendDesc,
         // Optional scissor clip in viewport pixel coordinates.
         cur_scissor: Option<ScissorRect>,
+        // Active render target texture id for the current frame; 0 means swapchain.
+        frame_render_target_tex_id: u32,
         last_missing_tex_id: u32,
         missing_tex_logs: u32,
     }
@@ -860,6 +980,9 @@ pub mod cabi {
 
     #[derive(Clone, Copy)]
     enum PendingDraw {
+        SetRenderTarget {
+            tex_id: u32,
+        },
         Rgb {
             blob_offset: usize,
             blob_len: usize,
@@ -942,10 +1065,46 @@ pub mod cabi {
                 },
                 cur_blend: BlendDesc::disabled(),
                 cur_scissor: None,
+                frame_render_target_tex_id: 0,
                 last_missing_tex_id: 0,
                 missing_tex_logs: 0,
             }
         }
+    }
+
+    #[inline]
+    fn frame_target_extent(st: &GfxCabiState) -> (u32, u32) {
+        let tex_id = st.frame_render_target_tex_id;
+        if tex_id != 0 {
+            let idx = tex_id.saturating_sub(1) as usize;
+            if let Some((w, h)) = st
+                .tex_images
+                .as_ref()
+                .and_then(|images| images.get(idx))
+                .and_then(|entry| entry.as_ref())
+                .map(|img| (img.width, img.height))
+            {
+                return (w.max(1), h.max(1));
+            }
+        }
+        (
+            st.swapchain_desc.extent.width.max(1),
+            st.swapchain_desc.extent.height.max(1),
+        )
+    }
+
+    fn texture_dimensions_inner(tex_id: u32) -> Option<(u32, u32)> {
+        if tex_id == 0 {
+            return None;
+        }
+        let idx = tex_id.saturating_sub(1) as usize;
+        GFX_CABI_STATE
+            .lock()
+            .tex_images
+            .as_ref()
+            .and_then(|images| images.get(idx))
+            .and_then(|entry| entry.as_ref())
+            .map(|img| (img.width, img.height))
     }
 
     #[derive(Clone, Copy)]
@@ -1243,6 +1402,43 @@ pub mod cabi {
     pub unsafe extern "C" fn trueos_cabi_gfx_clear_scissor() -> i32 {
         let mut st = GFX_CABI_STATE.lock();
         st.cur_scissor = None;
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_set_render_target(tex_id: u32) -> i32 {
+        let mut st = GFX_CABI_STATE.lock();
+        if tex_id == 0 {
+            st.frame_render_target_tex_id = 0;
+            if st.frame_active {
+                st.frame_draws.push(PendingDraw::SetRenderTarget { tex_id: 0 });
+            }
+            return 0;
+        }
+        let idx = tex_id.saturating_sub(1) as usize;
+        let exists = st
+            .tex_images
+            .as_ref()
+            .and_then(|images| images.get(idx))
+            .and_then(|entry| entry.as_ref())
+            .is_some();
+        if !exists {
+            return -1;
+        }
+        st.frame_render_target_tex_id = tex_id;
+        if st.frame_active {
+            st.frame_draws.push(PendingDraw::SetRenderTarget { tex_id });
+        }
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_clear_render_target() -> i32 {
+        let mut st = GFX_CABI_STATE.lock();
+        st.frame_render_target_tex_id = 0;
+        if st.frame_active {
+            st.frame_draws.push(PendingDraw::SetRenderTarget { tex_id: 0 });
+        }
         0
     }
 
@@ -1729,6 +1925,24 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_rgba_image(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32 {
+        upload_texture_rgba_inner(
+            tex_id,
+            width,
+            height,
+            data_ptr,
+            data_len,
+            TexSampleKind::Rgba,
+        )
+    }
+
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_png(
         tex_id: u32,
         data_ptr: *const u8,
@@ -1783,11 +1997,63 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_svg_async(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        if tex_id == 0 {
+            return -1;
+        }
+        if data_ptr.is_null() {
+            return -2;
+        }
+        if data_len == 0 {
+            return -3;
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+        set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
+        enqueue_async_svg_upload(tex_id, bytes);
+        try_start_async_svg_worker();
+        0
+    }
+
+    #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_gfx_texture_status(tex_id: u32) -> i32 {
         if get_async_tex_status(tex_id) == ASYNC_TEX_STATUS_PENDING {
             try_start_async_png_worker();
+            try_start_async_svg_worker();
         }
-        get_async_tex_status(tex_id)
+        let status = get_async_tex_status(tex_id);
+        if status != ASYNC_TEX_STATUS_UNKNOWN {
+            return status;
+        }
+        if texture_dimensions_inner(tex_id).is_some() {
+            ASYNC_TEX_STATUS_READY
+        } else {
+            ASYNC_TEX_STATUS_UNKNOWN
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_texture_dimensions(
+        tex_id: u32,
+        out_width: *mut u32,
+        out_height: *mut u32,
+    ) -> i32 {
+        if out_width.is_null() || out_height.is_null() {
+            return -1;
+        }
+        let Some((width, height)) = texture_dimensions_inner(tex_id) else {
+            return -2;
+        };
+        unsafe {
+            core::ptr::write(out_width, width);
+            core::ptr::write(out_height, height);
+        }
+        0
     }
 
     #[inline]
@@ -1809,6 +2075,7 @@ pub mod cabi {
         st.frame_rgb_blob.clear();
         st.frame_tex_blob.clear();
         st.cur_scissor = None;
+        st.frame_render_target_tex_id = 0;
         let seq = st.frame_seq;
         if seq <= 10 || seq.is_multiple_of(20) {
             crate::globalog::log(format_args!(
@@ -1862,8 +2129,7 @@ pub mod cabi {
 
         let clipped_owned;
         let clipped = if let Some(scissor) = st.cur_scissor {
-            let vp_w = st.swapchain_desc.extent.width;
-            let vp_h = st.swapchain_desc.extent.height;
+            let (vp_w, vp_h) = frame_target_extent(&st);
             clipped_owned = clip_rgb_triangles_to_scissor(bytes, scissor, vp_w, vp_h);
             clipped_owned.as_slice()
         } else {
@@ -1998,6 +2264,7 @@ pub mod cabi {
             );
             st.frame_active = false;
             st.frame_preserve_contents = false;
+            st.frame_render_target_tex_id = 0;
             out
         };
         if !was_active {
@@ -2022,16 +2289,14 @@ pub mod cabi {
                 swap.extent.width,
                 swap.extent.height,
             );
-            let vp = Viewport {
-                x: 0,
-                y: 0,
-                width: swap.extent.width as i32,
-                height: swap.extent.height as i32,
-            };
-
             const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
 
             enum Plan {
+                SetRenderTarget {
+                    image: Option<ImageId>,
+                    vp_w: u32,
+                    vp_h: u32,
+                },
                 Rgb {
                     offset: u64,
                     vcount: u32,
@@ -2050,6 +2315,9 @@ pub mod cabi {
 
             let mut draw_idx = 0usize;
             let mut first_pass = true;
+            let mut current_target_image: Option<ImageId> = None;
+            let mut current_vp_w = swap.extent.width;
+            let mut current_vp_h = swap.extent.height;
 
             while draw_idx < submit_draws.len() {
                 let start = draw_idx;
@@ -2057,6 +2325,13 @@ pub mod cabi {
                 let mut pass_kind: u8 = 0; // 1=rgb, 2=tex
                 while draw_idx < submit_draws.len() {
                     let (kind, add) = match &submit_draws[draw_idx] {
+                        PendingDraw::SetRenderTarget { .. } => {
+                            if pass_kind == 0 {
+                                draw_idx += 1;
+                                continue;
+                            }
+                            break;
+                        }
                         PendingDraw::Rgb { blob_len, .. } => (1u8, blob_len - (blob_len % 12)),
                         PendingDraw::Tex { blob_len, .. } => (2u8, blob_len - (blob_len % 20)),
                     };
@@ -2083,6 +2358,32 @@ pub mod cabi {
 
                 for draw in submit_draws[start..draw_idx].iter() {
                     match draw {
+                        PendingDraw::SetRenderTarget { tex_id } => {
+                            if *tex_id == 0 {
+                                current_target_image = None;
+                                current_vp_w = swap.extent.width;
+                                current_vp_h = swap.extent.height;
+                            } else {
+                                let st = GFX_CABI_STATE.lock();
+                                let idx = tex_id.saturating_sub(1) as usize;
+                                let Some(img) = st
+                                    .tex_images
+                                    .as_ref()
+                                    .and_then(|images| images.get(idx))
+                                    .and_then(|entry| entry.as_ref())
+                                else {
+                                    return -12;
+                                };
+                                current_target_image = Some(img.image);
+                                current_vp_w = img.width.max(1);
+                                current_vp_h = img.height.max(1);
+                            }
+                            plans.push(Plan::SetRenderTarget {
+                                image: current_target_image,
+                                vp_w: current_vp_w,
+                                vp_h: current_vp_h,
+                            });
+                        }
                         PendingDraw::Rgb {
                             blob_offset,
                             blob_len,
@@ -2187,8 +2488,14 @@ pub mod cabi {
                 let is_last_pass = draw_idx >= submit_draws.len();
                 let mut cmds: Vec<Command> = Vec::new();
                 if first_pass && need_set_viewport {
-                    cmds.push(Command::SetViewport(vp));
+                    cmds.push(Command::SetViewport(Viewport {
+                        x: 0,
+                        y: 0,
+                        width: current_vp_w as i32,
+                        height: current_vp_h as i32,
+                    }));
                 }
+                cmds.push(Command::SetRenderTarget(current_target_image));
                 if first_pass && !preserve_contents {
                     cmds.push(Command::ClearColor { rgb: clear_rgb });
                 }
@@ -2197,6 +2504,15 @@ pub mod cabi {
 
                 for plan in plans.iter() {
                     match *plan {
+                        Plan::SetRenderTarget { image, vp_w, vp_h } => {
+                            cmds.push(Command::SetRenderTarget(image));
+                            cmds.push(Command::SetViewport(Viewport {
+                                x: 0,
+                                y: 0,
+                                width: vp_w as i32,
+                                height: vp_h as i32,
+                            }));
+                        }
                         Plan::Rgb {
                             offset,
                             vcount,
@@ -2289,7 +2605,7 @@ pub mod cabi {
                     }
                 }
 
-                if is_last_pass {
+                if is_last_pass && current_target_image.is_none() {
                     cmds.push(Command::Present);
                 }
 
@@ -2319,12 +2635,20 @@ pub mod cabi {
                 // No valid draw payloads in this frame; keep clear/present behavior.
                 let mut cmds: Vec<Command> = Vec::new();
                 if need_set_viewport {
-                    cmds.push(Command::SetViewport(vp));
+                    cmds.push(Command::SetViewport(Viewport {
+                        x: 0,
+                        y: 0,
+                        width: current_vp_w as i32,
+                        height: current_vp_h as i32,
+                    }));
                 }
+                cmds.push(Command::SetRenderTarget(current_target_image));
                 if !preserve_contents {
                     cmds.push(Command::ClearColor { rgb: clear_rgb });
                 }
-                cmds.push(Command::Present);
+                if current_target_image.is_none() {
+                    cmds.push(Command::Present);
+                }
                 if !check_submit_budget(0, cmds.len(), "end_frame_clear_only") {
                     return -11;
                 }
@@ -2343,7 +2667,7 @@ pub mod cabi {
             }
             0
         }) else {
-            return -12;
+            return -13;
         };
 
         if ret == 0 {
