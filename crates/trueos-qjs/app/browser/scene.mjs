@@ -2,10 +2,26 @@ import * as cmdStream from 'trueos:cmd_stream';
 import { DEFAULT_THEME } from './theme.mjs';
 
 const ATLAS_KIND = 1;
-const LI_ICON_ID = 5;
-const SUMMARY_ICON_ID = 0;
-const RADIO_ICON_ID = LI_ICON_ID + 1;
-const CHECKBOX_ICON_ID = LI_ICON_ID + 2;
+const LYON_ICON = Object.freeze({
+  ARROW_RIGHT: 0,
+  ARROW_DOWN: 1,
+  ARROW_LEFT: 2,
+  ARROW_UP: 3,
+  PLUS: 4,
+  MINUS: 5,
+  CIRCLE: 6,
+  RECT: 7,
+  TRIANGLE: 8,
+  PENTAGON: 9,
+  HEXAGON: 10,
+  OCTAGON: 11,
+});
+const ROW_KIND_ICON = Object.freeze({
+  'summary-text': LYON_ICON.ARROW_RIGHT,
+  'radio-text': LYON_ICON.CIRCLE,
+  'checkbox-text': LYON_ICON.RECT,
+  'li-text': LYON_ICON.MINUS,
+});
 const LI_ICON_PALETTE = 0;
 const LI_ICON_X_SHIFT = 2;
 const LI_ICON_SIZE = 16;
@@ -51,11 +67,8 @@ function collapseWhitespace(s) {
 }
 
 function iconIdForRowKind(kind) {
-  if (kind === 'summary-text') return SUMMARY_ICON_ID;
-  if (kind === 'radio-text') return RADIO_ICON_ID;
-  if (kind === 'checkbox-text') return CHECKBOX_ICON_ID;
-  if (kind === 'li-text') return LI_ICON_ID;
-  return -1;
+  const iconId = ROW_KIND_ICON[String(kind || '')];
+  return Number.isInteger(iconId) ? iconId : -1;
 }
 
 function rowItalicTiltDeg(row) {
@@ -224,12 +237,12 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
       const iconY = y
         + Math.round((DEFAULT_THEME.LINE_H - LI_ICON_SIZE) * 0.5)
         + LI_ICON_XY_NUDGE;
-      iconRuns.push(
+      iconRuns.push({
         iconId,
-        x + LI_ICON_X_SHIFT + LI_ICON_XY_NUDGE,
-        iconY,
-        LI_ICON_PALETTE,
-      );
+        colorId: LI_ICON_PALETTE,
+        x: x + LI_ICON_X_SHIFT + LI_ICON_XY_NUDGE,
+        y: iconY,
+      });
       runs.push({
         x: x + LI_TEXT_X_OFFSET,
         y,
@@ -340,12 +353,13 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
       cmdStream.fillRect(run.x, run.y, run.width, run.height, IMAGE_STROKE_RGBA, 1, 0);
     }
     // Icon quads are textured RGBA, so keep standard alpha blending enabled.
-    for (let i = 0; i + 3 < iconRuns.length; i += 4) {
+    for (let i = 0; i < iconRuns.length; i += 1) {
+      const run = iconRuns[i] || null;
       cmdStream.drawLyonIconInFrame(
-        Number(iconRuns[i] || 0),
-        Number(iconRuns[i + 1] || 0),
-        Number(iconRuns[i + 2] || 0),
-        Number(iconRuns[i + 3] || 0),
+        Number(run && run.iconId || 0),
+        Number(run && run.x || 0),
+        Number(run && run.y || 0),
+        Number(run && run.colorId || 0),
       );
     }
     // Text quads share the same alpha blend path.

@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::{string::String, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -175,6 +175,8 @@ const DNS_PORT: u16 = 53;
 const DNS_CACHE_CAP: usize = 8;
 // Keep this short; it's mainly to avoid repeated lookups during module loading.
 const DNS_CACHE_TTL_TICKS: u64 = 15 * embassy_time_driver::TICK_HZ;
+const DNS_FS_CACHE_PATH: &str = "net_dns_v4.cache";
+const DNS_FS_CACHE_MAX_ENTRIES: usize = 32;
 
 #[derive(Clone, Debug)]
 struct DnsCacheEntry {
@@ -202,6 +204,136 @@ fn alloc_local_port() -> u16 {
     // Range: 53000..=62999
     let s = DNS_SEQ.fetch_add(1, Ordering::Relaxed);
     53000u16.wrapping_add((s % 10000) as u16)
+}
+
+fn log_dns_ip(prefix: &str, host: &str, dev_idx: usize, ip: [u8; 4]) {
+    crate::log!(
+        "{} host={} dev={} ip={}.{}.{}.{}\n",
+        prefix,
+        host,
+        dev_idx,
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3]
+    );
+}
+
+fn dns_cache_insert(dev_idx: usize, host_trimmed: &str, ip: [u8; 4]) {
+    let Ok(hs) = heapless::String::<96>::try_from(host_trimmed) else {
+        return;
+    };
+    let mut cache = DNS_CACHE.lock();
+    cache.retain(|e| e.expires_at > embassy_time_driver::now());
+    if let Some(e) = cache
+        .iter_mut()
+        .find(|e| e.dev_idx as usize == dev_idx && e.host.as_str() == hs.as_str())
+    {
+        e.ip = ip;
+        e.expires_at = embassy_time_driver::now().saturating_add(DNS_CACHE_TTL_TICKS);
+        return;
+    }
+    let dev = dev_idx.min(255) as u8;
+    let _ = cache.push(DnsCacheEntry {
+        dev_idx: dev,
+        host: {
+            let mut s = heapless::String::<96>::new();
+            let _ = s.push_str(hs.as_str());
+            s
+        },
+        ip,
+        expires_at: embassy_time_driver::now().saturating_add(DNS_CACHE_TTL_TICKS),
+    });
+}
+
+fn parse_ipv4_text(text: &str) -> Option<[u8; 4]> {
+    let mut out = [0u8; 4];
+    let mut parts = text.split('.');
+    for octet in &mut out {
+        let value = parts.next()?.trim().parse::<u8>().ok()?;
+        *octet = value;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(out)
+}
+
+fn parse_dns_fs_cache_line(line: &str) -> Option<(usize, &str, [u8; 4])> {
+    let mut parts = line.splitn(3, '|');
+    let dev_idx = parts.next()?.trim().parse::<usize>().ok()?;
+    let host = parts.next()?.trim();
+    let ip = parse_ipv4_text(parts.next()?.trim())?;
+    if host.is_empty() {
+        return None;
+    }
+    Some((dev_idx, host, ip))
+}
+
+async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 4]> {
+    let disk = crate::v::fs::trueosfs::primary_root_handle()?;
+    let bytes = crate::v::fs::trueosfs::file_out_async(disk, DNS_FS_CACHE_PATH)
+        .await
+        .ok()
+        .flatten()?;
+    let text = core::str::from_utf8(bytes.as_slice()).ok()?;
+    let mut found: Option<[u8; 4]> = None;
+    for line in text.lines() {
+        let Some((line_dev_idx, line_host, line_ip)) = parse_dns_fs_cache_line(line) else {
+            continue;
+        };
+        if line_dev_idx == dev_idx && line_host == host_trimmed {
+            found = Some(line_ip);
+        }
+    }
+    found
+}
+
+async fn dns_fs_cache_update(dev_idx: usize, host_trimmed: &str, ip: [u8; 4]) {
+    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+        return;
+    };
+
+    let existing = crate::v::fs::trueosfs::file_out_async(disk, DNS_FS_CACHE_PATH)
+        .await
+        .ok()
+        .flatten();
+
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(bytes) = existing
+        && let Ok(text) = core::str::from_utf8(bytes.as_slice())
+    {
+        for line in text.lines() {
+            let Some((line_dev_idx, line_host, line_ip)) = parse_dns_fs_cache_line(line) else {
+                continue;
+            };
+            if line_dev_idx == dev_idx && line_host == host_trimmed {
+                continue;
+            }
+            lines.push(format!(
+                "{}|{}|{}.{}.{}.{}",
+                line_dev_idx, line_host, line_ip[0], line_ip[1], line_ip[2], line_ip[3]
+            ));
+        }
+    }
+
+    lines.push(format!(
+        "{}|{}|{}.{}.{}.{}",
+        dev_idx, host_trimmed, ip[0], ip[1], ip[2], ip[3]
+    ));
+    if lines.len() > DNS_FS_CACHE_MAX_ENTRIES {
+        let drop_n = lines.len().saturating_sub(DNS_FS_CACHE_MAX_ENTRIES);
+        lines.drain(0..drop_n);
+    }
+
+    let mut body = String::new();
+    for (idx, line) in lines.iter().enumerate() {
+        if idx > 0 {
+            body.push('\n');
+        }
+        body.push_str(line.as_str());
+    }
+    let _ = crate::v::fs::trueosfs::file_in_async(disk, DNS_FS_CACHE_PATH, body.as_bytes()).await;
 }
 
 fn dns_make_query(id: u16, host: &str, qtype: u16) -> Result<Vec<u8>, DnsError> {
@@ -547,17 +679,15 @@ pub async fn resolve_ipv4_for_device(
             .iter()
             .find(|e| e.dev_idx as usize == dev_idx && e.host.as_str() == host_trimmed)
         {
-            crate::log!(
-                "dns: cache hit host={} dev={} ip={}.{}.{}.{}\n",
-                host_trimmed,
-                dev_idx,
-                e.ip[0],
-                e.ip[1],
-                e.ip[2],
-                e.ip[3]
-            );
+            log_dns_ip("dns: cache hit", host_trimmed, dev_idx, e.ip);
             return Ok(e.ip);
         }
+    }
+
+    if let Some(ip) = dns_fs_cache_lookup(dev_idx, host_trimmed).await {
+        dns_cache_insert(dev_idx, host_trimmed, ip);
+        log_dns_ip("dns: fs-cache hit", host_trimmed, dev_idx, ip);
+        return Ok(ip);
     }
 
     let net = VNet::open(dev_idx).ok_or(DnsError::NoNic)?;
@@ -679,44 +809,10 @@ pub async fn resolve_ipv4_for_device(
 
         match answered.unwrap_or(DnsAnswer::None) {
             DnsAnswer::A(ip) => {
-                crate::log!(
-                    "dns: resolved host={} dev={} ip={}.{}.{}.{}\n",
-                    host_trimmed,
-                    dev_idx,
-                    ip[0],
-                    ip[1],
-                    ip[2],
-                    ip[3]
-                );
+                log_dns_ip("dns: resolved", host_trimmed, dev_idx, ip);
                 let _ = net.submit(vnet::Command::Close { handle: udp });
-                // Best-effort cache insert; ignore on overflow.
-                if let Ok(hs) = heapless::String::<96>::try_from(host_trimmed) {
-                    let mut cache = DNS_CACHE.lock();
-                    cache.retain(|e| e.expires_at > embassy_time_driver::now());
-                    // Replace existing entry if present.
-                    if let Some(e) = cache
-                        .iter_mut()
-                        .find(|e| e.dev_idx as usize == dev_idx && e.host.as_str() == hs.as_str())
-                    {
-                        e.ip = ip;
-                        e.expires_at =
-                            embassy_time_driver::now().saturating_add(DNS_CACHE_TTL_TICKS);
-                    } else {
-                        let dev = dev_idx.min(255) as u8;
-                        let _ = cache.push(DnsCacheEntry {
-                            dev_idx: dev,
-                            host: {
-                                // `hs` already contains the host; move it.
-                                let mut s = heapless::String::<96>::new();
-                                s.push_str(hs.as_str()).ok();
-                                s
-                            },
-                            ip,
-                            expires_at: embassy_time_driver::now()
-                                .saturating_add(DNS_CACHE_TTL_TICKS),
-                        });
-                    }
-                }
+                dns_cache_insert(dev_idx, host_trimmed, ip);
+                dns_fs_cache_update(dev_idx, host_trimmed, ip).await;
                 return Ok(ip);
             }
             DnsAnswer::Cname(next) => {

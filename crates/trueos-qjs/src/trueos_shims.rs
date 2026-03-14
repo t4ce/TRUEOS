@@ -40,6 +40,7 @@ unsafe extern "C" {
         path_ptr: *const u8,
         path_len: usize,
     ) -> u32;
+    pub fn trueos_cabi_net_prewarm_url_start(url_ptr: *const u8, url_len: usize) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_start(url_ptr: *const u8, url_len: usize) -> u32;
     pub fn trueos_cabi_net_fetch_post_json_start(
         url_ptr: *const u8,
