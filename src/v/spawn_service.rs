@@ -1,8 +1,9 @@
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use alloc::string::String;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_executor::{SpawnError, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use embassy_time_driver::{TICK_HZ, now};
+use heapless::String as HString;
 
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.
 
@@ -44,6 +45,7 @@ static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_CURSOR_OVERLAY_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_LOADSCREEN_STARTED: AtomicBool = AtomicBool::new(false);
+static BROWSER_STARTUP_HTML_LOADER_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_BROWSER_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_MATMUL_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
@@ -62,8 +64,6 @@ static VIDEO_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static QJS_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
-static GFX_BACKEND_READY_DELAY_DEADLINE_TICKS: AtomicU64 = AtomicU64::new(0);
-
 fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::vga::init_font_cache_task()) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -226,14 +226,6 @@ fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
 }
 
 #[inline]
-fn task_start_delay(spec: &TaskSpec) -> Option<(u64, &'static AtomicU64)> {
-    match spec.name {
-        "gfx-backend-ready" => Some((2500, &GFX_BACKEND_READY_DELAY_DEADLINE_TICKS)),
-        _ => None,
-    }
-}
-
-#[inline]
 fn gfx_switched() -> bool {
     #[cfg(feature = "gfx_virgl")]
     {
@@ -254,6 +246,65 @@ fn gfx_switched() -> bool {
 
 fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::gfx::loadscreen::gfx_loadscreen_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+#[embassy_executor::task]
+async fn browser_startup_html_loader_task() {
+    const STARTUP_URL: &str = "https://www.w3.org/Graphics/PNG/Inline-img.html";
+    const RETRY_MS: u64 = 2_000;
+    const HANDOFF_RETRY_MS: u64 = 100;
+
+    let source_url = String::from(STARTUP_URL);
+    let mut fetched_html: Option<String> = None;
+    let mut delivered = false;
+
+    loop {
+        if fetched_html.is_none() {
+            let mut url: HString<256> = HString::new();
+            if url.push_str(STARTUP_URL).is_err() {
+                crate::log!("browser-html-loader: startup url too long\n");
+                break;
+            }
+            match crate::tst_html::fetch_html_best_effort(url).await {
+                Ok(html) => {
+                    crate::log!(
+                        "browser-html-loader: fetched startup html bytes={}\n",
+                        html.len()
+                    );
+                    fetched_html = Some(String::from(html.as_str()));
+                }
+                Err(err) => {
+                    crate::log!("browser-html-loader: fetch failed: {}\n", err);
+                    Timer::after(EmbassyDuration::from_millis(RETRY_MS)).await;
+                    continue;
+                }
+            }
+        }
+
+        if !delivered {
+            if let Some(html) = fetched_html.as_ref() {
+                if trueos_qjs::browser_task::queue_set_html_with_url(
+                    html.clone(),
+                    Some(source_url.clone()),
+                ) {
+                    crate::log!("browser-html-loader: delivered startup html to browser\n");
+                    delivered = true;
+                } else {
+                    Timer::after(EmbassyDuration::from_millis(HANDOFF_RETRY_MS)).await;
+                    continue;
+                }
+            }
+        }
+
+        Timer::after(EmbassyDuration::from_secs(60)).await;
+    }
+}
+
+fn spawn_browser_startup_html_loader(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(browser_startup_html_loader_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -499,6 +550,10 @@ const AI_QJS_ONESHOT_READY: u32 = crate::v::readiness::NET_CONFIGURED
 const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
+const WEBGPU_BROWSER_READY: u32 = crate::v::readiness::GFX_BACKEND_READY
+    | crate::v::readiness::NET_CONFIGURED
+    | crate::v::readiness::TLS_SOCKET_SERVICE_READY
+    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
 const VIDEO_SMOKE_READY: u32 = crate::v::readiness::TLS_SOCKET_SERVICE_READY;
 
 static TASKS: &[TaskSpec] = &[
@@ -589,28 +644,35 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec {
         name: "gfx-virgl-cursor-overlay",
         disabled: false,
-        required: crate::v::readiness::WGPU_TEXT_DONE,
+        required: crate::v::readiness::LOADSCREEN_END,
         started: &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
         spawn: spawn_gfx_virgl_cursor_overlay_task,
     },
     TaskSpec {
         name: "gfx_loadscreen",
-        disabled: true,
+        disabled: false,
         required: crate::v::readiness::GFX_BACKEND_READY,
         started: &GFX_LOADSCREEN_STARTED,
         spawn: spawn_gfx_loadscreen,
     },
     TaskSpec {
+        name: "browser-startup-html-loader",
+        disabled: false,
+        required: crate::v::readiness::NET_CONFIGURED,
+        started: &BROWSER_STARTUP_HTML_LOADER_STARTED,
+        spawn: spawn_browser_startup_html_loader,
+    },
+    TaskSpec {
         name: "webgpu_browser",
         disabled: false,
-        required: crate::v::readiness::GFX_BACKEND_READY,
+        required: WEBGPU_BROWSER_READY,
         started: &WEBGPU_BROWSER_STARTED,
         spawn: spawn_webgpu_browser,
     },
     TaskSpec {
         name: "ui2",
         disabled: true,
-        required: crate::v::readiness::WGPU_TEXT_DONE,
+        required: crate::v::readiness::LOADSCREEN_END,
         started: &UI2_STARTED,
         spawn: spawn_ui2,
     },
@@ -729,29 +791,6 @@ pub async fn spawn_service_task(spawner: Spawner) {
                 if (ready & spec.required) != spec.required {
                     pending += 1;
                     continue;
-                }
-
-                if let Some((delay_ms, deadline_ticks)) = task_start_delay(spec) {
-                    let mut deadline = deadline_ticks.load(Ordering::Acquire);
-                    if deadline == 0 {
-                        let delay_ticks = if TICK_HZ == 0 {
-                            1
-                        } else {
-                            delay_ms.saturating_mul(TICK_HZ).div_ceil(1000).max(1)
-                        };
-                        let target = now().saturating_add(delay_ticks);
-                        let _ = deadline_ticks.compare_exchange(
-                            0,
-                            target,
-                            Ordering::AcqRel,
-                            Ordering::Acquire,
-                        );
-                        deadline = deadline_ticks.load(Ordering::Acquire);
-                    }
-                    if now() < deadline {
-                        pending += 1;
-                        continue;
-                    }
                 }
 
                 if spec

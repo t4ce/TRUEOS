@@ -430,8 +430,9 @@ fn cmd_stream_draw_atlas_text_impl(
     let a = ((alpha_f as i64).clamp(0, 255)) as u8;
     let px_h_bits = (px_h as f32).to_bits();
     let italic_tilt_bits = (italic_tilt_deg as f32).to_bits();
-    let origin_x_ndc = (2.0 * ((x_f as f32) / w)) - 1.0;
-    let origin_y_ndc = 1.0 - (2.0 * ((y_f as f32) / h));
+    let (origin_x_px, origin_y_px) = super::cmd_stream_origin_px();
+    let origin_x_ndc = (2.0 * (((x_f as f32) + origin_x_px) / w)) - 1.0;
+    let origin_y_ndc = 1.0 - (2.0 * (((y_f as f32) + origin_y_px) / h));
     let tilt_rad = ((italic_tilt_deg as f32).clamp(-30.0, 30.0)) * (core::f32::consts::PI / 180.0);
     let tilt_shear = tanf(tilt_rad);
 
