@@ -969,11 +969,18 @@ pub mod cabi {
         Rgba,
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum TexCoordOrigin {
+        TopLeft,
+        BottomLeft,
+    }
+
     struct TexImage {
         image: ImageId,
         width: u32,
         height: u32,
         sample_kind: TexSampleKind,
+        origin: TexCoordOrigin,
     }
 
     #[derive(Clone, Copy)]
@@ -1067,6 +1074,30 @@ pub mod cabi {
                 last_missing_tex_id: 0,
                 missing_tex_logs: 0,
             }
+        }
+    }
+
+    #[inline]
+    fn append_tex_vertices_with_origin(
+        out: &mut Vec<u8>,
+        src: &[u8],
+        origin: TexCoordOrigin,
+    ) {
+        const VTX_SIZE: usize = 20;
+        if origin == TexCoordOrigin::TopLeft {
+            out.extend_from_slice(src);
+            return;
+        }
+
+        let mut off = 0usize;
+        while off + VTX_SIZE <= src.len() {
+            out.extend_from_slice(&src[off..off + 12]);
+            let mut v_bytes = [0u8; 4];
+            v_bytes.copy_from_slice(&src[off + 12..off + 16]);
+            let v = f32::from_le_bytes(v_bytes);
+            out.extend_from_slice(&(1.0f32 - v).to_le_bytes());
+            out.extend_from_slice(&src[off + 16..off + VTX_SIZE]);
+            off += VTX_SIZE;
         }
     }
 
@@ -1415,15 +1446,15 @@ pub mod cabi {
             return 0;
         }
         let idx = tex_id.saturating_sub(1) as usize;
-        let exists = st
+        let entry = st
             .tex_images
-            .as_ref()
-            .and_then(|images| images.get(idx))
-            .and_then(|entry| entry.as_ref())
-            .is_some();
-        if !exists {
+            .as_mut()
+            .and_then(|images| images.get_mut(idx))
+            .and_then(|entry| entry.as_mut());
+        let Some(entry) = entry else {
             return -1;
-        }
+        };
+        entry.origin = TexCoordOrigin::BottomLeft;
         st.frame_render_target_tex_id = tex_id;
         if st.frame_active {
             st.frame_draws.push(PendingDraw::SetRenderTarget { tex_id });
@@ -1898,6 +1929,7 @@ pub mod cabi {
                     width,
                     height,
                     sample_kind,
+                    origin: TexCoordOrigin::TopLeft,
                 });
                 if ctx.write_image(image_id, data).is_err() {
                     return -5;
@@ -2203,13 +2235,17 @@ pub mod cabi {
         st.frame_tex_draws = st.frame_tex_draws.saturating_add(1);
         st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
         let idx = tex_id.saturating_sub(1) as usize;
-        let (image, sample_kind) = st
+        let (image, sample_kind, origin) = st
             .tex_images
             .as_ref()
             .and_then(|images| images.get(idx))
             .and_then(|e| e.as_ref())
-            .map(|e| (e.image, e.sample_kind))
-            .unwrap_or((ImageId::invalid(), TexSampleKind::Mask));
+            .map(|e| (e.image, e.sample_kind, e.origin))
+            .unwrap_or((
+                ImageId::invalid(),
+                TexSampleKind::Mask,
+                TexCoordOrigin::TopLeft,
+            ));
         let sampler = st.cur_sampler;
         let blend = st.cur_blend;
         let mut off = 0usize;
@@ -2221,8 +2257,11 @@ pub mod cabi {
                 break;
             }
             let blob_offset = st.frame_tex_blob.len();
-            st.frame_tex_blob
-                .extend_from_slice(&bytes[off..off + chunk]);
+            append_tex_vertices_with_origin(
+                &mut st.frame_tex_blob,
+                &bytes[off..off + chunk],
+                origin,
+            );
             st.frame_draws.push(PendingDraw::Tex {
                 tex_id,
                 image,
@@ -2588,6 +2627,7 @@ pub mod cabi {
                                         width: 1,
                                         height: 1,
                                         sample_kind,
+                                        origin: TexCoordOrigin::TopLeft,
                                     });
                                     (img, should_log)
                                 };

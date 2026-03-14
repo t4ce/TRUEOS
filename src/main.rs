@@ -141,6 +141,7 @@ pub extern "C" fn kmain() -> ! {
     let smp_resp = limine::smp_response().unwrap();
     let lapic_ids: alloc::vec::Vec<u32> = smp_resp.cpus().iter().map(|c| c.lapic_id).collect();
     percpu::install_cpu_slot_lapic_order_owned(lapic_ids);
+    cpu::init_profiles(percpu::total_slots());
     percpu::init_bsp();
     pci::dma::init_from_limine();
     pci::enumerate_impl();
@@ -168,12 +169,7 @@ pub extern "C" fn kmain() -> ! {
     let executor = percpu::init_executor();
     let spawner = executor.spawner();
 
-    // Register BSP spawner for affinity-first worker placement.
-    trueos_qjs::workers::register_core_spawner(
-        percpu::this_cpu().cpu_index(),
-        cpu::intel_core_kind_hint(),
-        spawner,
-    );
+    let _ = cpu::register_current_worker_spawner(spawner);
     if let Err(e) = spawner.spawn(crate::wait::job_runner_task()) {
         crate::log!("wait: job_runner_task spawn failed: {:?}\n", e);
     }
