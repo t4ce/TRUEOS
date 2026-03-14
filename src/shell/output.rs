@@ -214,6 +214,7 @@ impl<'a> ReverseOutput<'a> {
 
         // Add to history
         self.history.borrow_mut().push(String::from(s));
+        crate::shell::record_history_line(s);
 
         // If a live stream row is already inserted at row 3, only commit and repaint it.
         // Inserting again would duplicate the same line visually.
@@ -287,6 +288,7 @@ impl<'a> ReverseOutput<'a> {
         }
 
         self.history.borrow_mut().push(String::from(text));
+        crate::shell::record_history_line(text);
         let bottom = output_bottom_row(self.term_rows);
 
         self.inner
