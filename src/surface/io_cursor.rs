@@ -380,13 +380,17 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_draw_tex_triangles_no_present(
     st.cursor_tex_draws = st.cursor_tex_draws.saturating_add(1);
     st.cursor_draw_bytes = st.cursor_draw_bytes.saturating_add(usable);
     let idx = tex_id.saturating_sub(1) as usize;
-    let (image, sample_kind) = st
+    let (image, sample_kind, origin) = st
         .tex_images
         .as_ref()
         .and_then(|images| images.get(idx))
         .and_then(|e| e.as_ref())
-        .map(|e| (e.image, e.sample_kind))
-        .unwrap_or((ImageId::invalid(), TexSampleKind::Mask));
+        .map(|e| (e.image, e.sample_kind, e.origin))
+        .unwrap_or((
+            ImageId::invalid(),
+            TexSampleKind::Mask,
+            TexCoordOrigin::TopLeft,
+        ));
     let sampler = st.cur_sampler;
     let blend = st.cur_blend;
     let mut off = 0usize;
@@ -398,8 +402,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_draw_tex_triangles_no_present(
             break;
         }
         let blob_offset = st.cursor_tex_blob.len();
-        st.cursor_tex_blob
-            .extend_from_slice(&bytes[off..off + chunk]);
+        append_tex_vertices_with_origin(&mut st.cursor_tex_blob, &bytes[off..off + chunk], origin);
         st.cursor_draws.push(PendingDraw::Tex {
             tex_id,
             image,
@@ -792,6 +795,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                                     width: 1,
                                     height: 1,
                                     sample_kind,
+                                    origin: TexCoordOrigin::TopLeft,
                                 });
                                 img
                             };

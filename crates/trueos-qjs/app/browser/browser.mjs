@@ -13,8 +13,8 @@ import {
 } from './parry.mjs';
 import {
   renderScene,
-  renderSceneContentToCurrentTarget,
-  composeSceneTextureToCurrentTarget,
+  renderSceneRegionToCurrentTarget,
+  composeSceneRegionsToCurrentTarget,
 } from './scene.mjs';
 import { BLOCK_TAGS, TEXT_LEVEL_SEMANTICS_TAGS } from './htmlDefaults.mjs';
 import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './theme.mjs';
@@ -23,12 +23,18 @@ const runtime = resolveRuntime();
 
 const INDENT_PX = 12;
 const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs || 0) || 0);
+const HOSTED_BY_UI2 = !!runtime.host.__trueosBrowserHostedByUi2;
 const ERROR_PREVIEW_MAX = 160;
 const MAX_RENDER_TEXT_CHARS = 512;
 const HTML_READY_TIMEOUT_MS = 10000;
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 const SHOW_CLOSING_TAG_ROWS = false;
 const RELEASE_RECT_RGBA = 0x3f2f7fff;
+const BROWSER_REGION_CACHE_MAX = 4;
+const BROWSER_REGION_PREFETCH_SCREENS = 1;
+const BROWSER_REGION_TILE_MIN_PX = 512;
+const BROWSER_REGION_TILE_MAX_PX = 2048;
+const BROWSER_REGION_TILE_ALIGN_PX = 256;
 
 let cachedHtml = '';
 let cachedDoc = null;
@@ -49,10 +55,11 @@ let fpsOverlayEnabled = false;
 let browserCanRenderScene = false;
 let browserContentReadySignaled = false;
 let htmlReadyTimeoutId = null;
-let browserSurfaceTexId = 0;
-let browserSurfaceWidth = 0;
-let browserSurfaceHeight = 0;
-let browserSurfaceDirty = true;
+const browserRegionCache = [];
+let browserRegionCacheSeq = 0;
+let browserRegionCacheRevision = 1;
+let browserRegionCacheWidth = 0;
+let browserRegionTileHeight = 0;
 
 const fpsOverlay = createFpsOverlay();
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
@@ -1441,7 +1448,7 @@ function getViewport() {
 function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
-  browserSurfaceDirty = true;
+  invalidateBrowserRegionCache(true);
   browserPageState.beginLoad('html-set');
   if (cachedHtml.trim()) {
     browserCanRenderScene = true;
@@ -1503,20 +1510,148 @@ function finalizePaintState(doc) {
 }
 
 function requestBrowserContentRepaint() {
-  browserSurfaceDirty = true;
+  invalidateBrowserRegionCache(false);
   paint();
 }
 
-function destroyBrowserSurface() {
-  const texId = Math.max(0, Number(browserSurfaceTexId || 0) | 0);
+function destroyBrowserRegion(entry) {
+  const texId = Math.max(0, Number(entry && entry.texId || 0) | 0);
   if (texId > 0 && typeof cmdStream.destroyTexture === 'function') {
     try {
       cmdStream.destroyTexture(texId);
     } catch (_) {}
   }
-  browserSurfaceTexId = 0;
-  browserSurfaceWidth = 0;
-  browserSurfaceHeight = 0;
+}
+
+function destroyBrowserRegionCache() {
+  for (let i = 0; i < browserRegionCache.length; i += 1) {
+    destroyBrowserRegion(browserRegionCache[i]);
+  }
+  browserRegionCache.length = 0;
+  browserRegionCacheWidth = 0;
+  browserRegionTileHeight = 0;
+}
+
+function invalidateBrowserRegionCache(reset = false) {
+  browserRegionCacheRevision = (browserRegionCacheRevision + 1) >>> 0;
+  if (browserRegionCacheRevision === 0) browserRegionCacheRevision = 1;
+  if (reset) {
+    destroyBrowserRegionCache();
+    return;
+  }
+  for (let i = 0; i < browserRegionCache.length; i += 1) {
+    browserRegionCache[i].dirty = true;
+  }
+}
+
+function computeBrowserRegionTileHeight(vh) {
+  const raw = Math.max(BROWSER_REGION_TILE_MIN_PX, Math.round(Number(vh || 1) * 1.5));
+  const bounded = Math.min(BROWSER_REGION_TILE_MAX_PX, raw);
+  const aligned = Math.ceil(bounded / BROWSER_REGION_TILE_ALIGN_PX) * BROWSER_REGION_TILE_ALIGN_PX;
+  return Math.max(BROWSER_REGION_TILE_MIN_PX, Math.min(BROWSER_REGION_TILE_MAX_PX, aligned));
+}
+
+function createBrowserRegionEntry(width, height, docY) {
+  const texId = Math.max(0, Number(
+    typeof cmdStream.createRenderTarget === 'function'
+      ? cmdStream.createRenderTarget(width, height)
+      : 0,
+  ) | 0);
+  if (texId <= 0) return null;
+  return {
+    texId,
+    width,
+    height,
+    docY,
+    revision: 0,
+    dirty: true,
+    lastUsedSeq: 0,
+  };
+}
+
+function browserRegionVisibleTop(contentTopY) {
+  return Math.max(0, Math.round(Number(contentTopY || 0)) + Math.max(0, Math.round(Number(scrollY || 0))));
+}
+
+function ensureBrowserRegions(doc, vw, vh, contentH, contentTopY) {
+  const width = Math.max(1, Number(vw || 1) | 0);
+  const tileHeight = computeBrowserRegionTileHeight(vh);
+  if (browserRegionCacheWidth !== width || browserRegionTileHeight !== tileHeight) {
+    destroyBrowserRegionCache();
+    browserRegionCacheWidth = width;
+    browserRegionTileHeight = tileHeight;
+  }
+
+  const visibleTop = browserRegionVisibleTop(contentTopY);
+  const visibleBottom = Math.max(visibleTop + 1, Math.min(contentH, visibleTop + Math.max(1, Number(vh || 1) | 0)));
+  const prefetchPx = tileHeight * BROWSER_REGION_PREFETCH_SCREENS;
+  const wantedTop = Math.max(0, visibleTop - prefetchPx);
+  const wantedBottom = Math.max(visibleBottom, Math.min(contentH, visibleBottom + prefetchPx));
+  const firstDocY = Math.max(0, Math.floor(wantedTop / tileHeight) * tileHeight);
+  const wantedEntries = [];
+  const wantedDocYs = new Set();
+
+  for (let docY = firstDocY; docY < wantedBottom || wantedEntries.length <= 0; docY += tileHeight) {
+    if (docY >= contentH && wantedEntries.length > 0) break;
+    const height = Math.max(1, Math.min(tileHeight, contentH - docY));
+    const key = `${docY}:${height}`;
+    wantedDocYs.add(key);
+
+    let entry = null;
+    for (let i = 0; i < browserRegionCache.length; i += 1) {
+      const candidate = browserRegionCache[i];
+      if (candidate && candidate.docY === docY && candidate.height === height && candidate.width === width) {
+        entry = candidate;
+        break;
+      }
+    }
+    if (!entry) {
+      entry = createBrowserRegionEntry(width, height, docY);
+      if (!entry) {
+        destroyBrowserRegionCache();
+        return null;
+      }
+      browserRegionCache.push(entry);
+    }
+
+    entry.lastUsedSeq = ++browserRegionCacheSeq;
+    if (entry.dirty || entry.revision !== browserRegionCacheRevision) {
+      cmdStream.setRenderTarget(entry.texId);
+      cmdStream.setViewport(entry.width, entry.height);
+      renderSceneRegionToCurrentTarget(doc, entry.width, entry.docY, entry.height);
+      entry.revision = browserRegionCacheRevision;
+      entry.dirty = false;
+    }
+    wantedEntries.push(entry);
+  }
+
+  for (let i = browserRegionCache.length - 1; i >= 0; i -= 1) {
+    const entry = browserRegionCache[i];
+    const key = `${entry.docY}:${entry.height}`;
+    if (wantedDocYs.has(key)) continue;
+    destroyBrowserRegion(entry);
+    browserRegionCache.splice(i, 1);
+  }
+
+  while (browserRegionCache.length > BROWSER_REGION_CACHE_MAX) {
+    let dropIdx = -1;
+    let dropSeq = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < browserRegionCache.length; i += 1) {
+      const entry = browserRegionCache[i];
+      const key = `${entry.docY}:${entry.height}`;
+      if (wantedDocYs.has(key)) continue;
+      if (entry.lastUsedSeq < dropSeq) {
+        dropSeq = entry.lastUsedSeq;
+        dropIdx = i;
+      }
+    }
+    if (dropIdx < 0) break;
+    destroyBrowserRegion(browserRegionCache[dropIdx]);
+    browserRegionCache.splice(dropIdx, 1);
+  }
+
+  wantedEntries.sort((lhs, rhs) => lhs.docY - rhs.docY);
+  return wantedEntries;
 }
 
 function docContentHeight(doc, vh) {
@@ -1558,30 +1693,6 @@ function clampScrollForDoc(doc, vh) {
   return { contentH, contentTopY, maxScroll };
 }
 
-function ensureBrowserSurface(doc, vw, vh) {
-  const nextW = Math.max(1, Number(vw || 1) | 0);
-  const nextH = docContentHeight(doc, vh);
-  if (browserSurfaceTexId > 0 && browserSurfaceWidth === nextW && browserSurfaceHeight === nextH) {
-    return browserSurfaceTexId;
-  }
-
-  destroyBrowserSurface();
-  const nextTexId = Math.max(0, Number(
-    typeof cmdStream.createRenderTarget === 'function'
-      ? cmdStream.createRenderTarget(nextW, nextH)
-      : 0,
-  ) | 0);
-  if (nextTexId <= 0) {
-    return 0;
-  }
-
-  browserSurfaceTexId = nextTexId;
-  browserSurfaceWidth = nextW;
-  browserSurfaceHeight = nextH;
-  browserSurfaceDirty = true;
-  return browserSurfaceTexId;
-}
-
 function paintToCurrentTarget(options = null) {
   if (!browserCanRenderScene) {
     return false;
@@ -1603,30 +1714,14 @@ function paintToCurrentTarget(options = null) {
   const composeViewportWidth = normalizeViewportSize(opts && opts.viewportWidth, vw);
   const composeViewportHeight = normalizeViewportSize(opts && opts.viewportHeight, vh);
 
-  const surfaceTexId = ensureBrowserSurface(doc, vw, vh);
-  if (surfaceTexId <= 0) {
+  const regions = ensureBrowserRegions(doc, vw, vh, contentH, contentTopY);
+  if (!regions || regions.length <= 0) {
     return false;
   }
 
-  if (browserSurfaceDirty) {
-    cmdStream.setRenderTarget(surfaceTexId);
-    cmdStream.setViewport(browserSurfaceWidth, browserSurfaceHeight);
-    renderSceneContentToCurrentTarget(doc, browserSurfaceWidth, browserSurfaceHeight);
-    browserSurfaceDirty = false;
-  }
   cmdStream.clearRenderTarget();
   cmdStream.setViewport(composeViewportWidth, composeViewportHeight);
-  composeSceneTextureToCurrentTarget(
-    surfaceTexId,
-    browserSurfaceWidth,
-    Math.max(browserSurfaceHeight, contentH),
-    vw,
-    vh,
-    scrollY,
-    contentTopY,
-    overlayRuns,
-    releaseRect,
-  );
+  composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollY, contentTopY, overlayRuns, releaseRect);
 
   if (usePendingReleaseRect) {
     pendingReleaseRect = null;
@@ -1793,6 +1888,14 @@ function paint() {
   const { vw, vh } = computeViewport();
 
   try {
+    if (HOSTED_BY_UI2) {
+      const doc = ensureDoc(vw);
+      clampScrollForDoc(doc, vh);
+      publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
+      finalizePaintState(doc);
+      return true;
+    }
+
     if (typeof cmdStream.createRenderTarget === 'function') {
       cmdStream.setClearRgb(0xF4F4F4);
       cmdStream.setViewport(Math.max(1, Number(vw || 1) | 0), Math.max(1, Number(vh || 1) | 0));
@@ -2143,7 +2246,7 @@ runtime.host.__trueosBrowser = {
     if (!viewport || typeof viewport !== 'object') {
       delete runtime.host.__trueosBrowserViewport;
       delete runtime.host.__trueosBrowserContentRect;
-      browserSurfaceDirty = true;
+      invalidateBrowserRegionCache(true);
       paint();
       return true;
     }
@@ -2166,17 +2269,25 @@ runtime.host.__trueosBrowser = {
         height: nextViewport.height,
       };
     runtime.host.__trueosBrowserContentRect = nextContentRect;
-    browserSurfaceDirty = true;
+    invalidateBrowserRegionCache(true);
     paint();
     return true;
   },
   getSurfaceState() {
     const { vw, vh } = computeViewport();
     return {
-      texId: Math.max(0, Number(browserSurfaceTexId || 0) | 0),
-      width: Math.max(0, Number(browserSurfaceWidth || 0) | 0),
-      height: Math.max(0, Number(browserSurfaceHeight || 0) | 0),
-      dirty: !!browserSurfaceDirty,
+      cacheRevision: browserRegionCacheRevision,
+      cacheWidth: browserRegionCacheWidth,
+      tileHeight: browserRegionTileHeight,
+      regionCount: browserRegionCache.length,
+      regions: browserRegionCache.map((entry) => ({
+        texId: Math.max(0, Number(entry && entry.texId || 0) | 0),
+        docY: Math.max(0, Number(entry && entry.docY || 0) | 0),
+        width: Math.max(0, Number(entry && entry.width || 0) | 0),
+        height: Math.max(0, Number(entry && entry.height || 0) | 0),
+        revision: Math.max(0, Number(entry && entry.revision || 0) | 0),
+        dirty: !!(entry && entry.dirty),
+      })),
       viewportWidth: vw,
       viewportHeight: vh,
       scrollY,
