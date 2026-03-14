@@ -482,6 +482,7 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
         let mut progress = false;
         progress |= unsafe { pump(ctx) };
         progress |= unsafe { qjs::async_ops::pump(ctx) };
+        progress |= unsafe { qjs::timers::pump(ctx) };
 
         // Drain microtasks.
         loop {

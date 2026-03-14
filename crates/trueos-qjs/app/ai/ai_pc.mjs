@@ -1,12 +1,18 @@
-import OpenAI from "openai";
 import { isMainThread, parentPort } from "node:worker_threads";
 import { readEnv } from "../vendor/openai/es2022/internal/utils/env.mjs";
 import { buildAiPcShellToolBundle, findAiPcShellCommandByToolName } from "./ai_pc_cmd.mjs";
 import * as driverdev from "../dd/driverdev.mjs";
+import {
+  DEFAULT_PARALLEL_TOOL_CALLS,
+  DEFAULT_RESPONSE_MODEL,
+  buildResponsesRequest,
+  createOpenAiClient,
+  createResponse,
+  decorateResponseTools,
+  getResponseOutputItems,
+} from "./openai_client.mjs";
 
 const DEFAULT_MAX_STEPS = 50;
-const DEFAULT_MODEL = "gpt-5.4";
-const DEFAULT_PARALLEL_TOOL_CALLS = true;
 const DEFAULT_TOOL_SEARCH = true;
 const WORKER_RPC_TIMEOUT_MS = 30000;
 const AI_PC_TOOL_POLICY = [
@@ -35,6 +41,7 @@ const WORKER_BROWSER_METHODS = [
   "getDomSnapshot",
   "getTrueosFsTreeHtml",
   "setNodeHtml",
+  "setBodyHtml",
   "insertHtml",
   "getViewport",
   "paint",
@@ -363,7 +370,7 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
 - console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large image payloads like screenshots or buffers. If you create an image or screenshot, pass the image data directly to display().
 - display(base64_or_data_url): Use this to view either a bare base64-encoded PNG payload or a full data URL. browser.captureScreenshot() already returns a full data URL.
 - Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). getDomSnapshot() returns a rooted tree object with a stable path field on each node; for flat scans, use snap.nodes. click(...) now drives the real cursor/button path and accepts coordinates, stable paths, text=..., plain caption text, and simple selectors like a[href="..."] when the target is interactive. insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.
+- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), setBodyHtml(html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). Prefer setBodyHtml(html) when replacing the visible page content instead of guessing DOM paths. getDomSnapshot() returns a rooted tree object with a stable path field on each node; for flat scans, use snap.nodes. click(...) now drives the real cursor/button path and accepts coordinates, stable paths, text=..., plain caption text, and simple selectors like a[href="..."] when the target is interactive. insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.
 - context: same object as browser for now.
 - page: same object as browser for now.
 `,
@@ -798,22 +805,7 @@ function buildTools(entry) {
     tools.push(createExecJsTool());
   }
   tools.push(createAskUserTool());
-  return applyDeferredLoading(tools);
-}
-
-function applyDeferredLoading(tools) {
-  const out = [];
-  for (const tool of tools) {
-    if (tool && tool.type === "function" && tool.defer_loading !== true) {
-      out.push({
-        ...tool,
-        defer_loading: true,
-      });
-    } else {
-      out.push(tool);
-    }
-  }
-  return out;
+  return decorateResponseTools(tools);
 }
 
 async function readTrueosFsTree(maxEntries = 64) {
@@ -838,6 +830,86 @@ function submitShell1Input(line) {
   submitted += Number(globalThis.__trueosShell1SubmitInput(commandLine)) || 0;
   submitted += Number(globalThis.__trueosShell1SubmitInput("\r")) || 0;
   return submitted;
+}
+
+function getShell1Runtime() {
+  const runtime = globalThis.__trueosShell1Runtime;
+  return runtime && typeof runtime === "object" ? runtime : null;
+}
+
+function shell1HistoryTotalLines() {
+  try {
+    const runtime = getShell1Runtime();
+    if (!runtime || typeof runtime.historyTotalLines !== "function") {
+      return 0;
+    }
+    return Math.max(0, Number(runtime.historyTotalLines()) || 0);
+  } catch (_err) {
+    return 0;
+  }
+}
+
+function shell1HistoryTextSince(startLine, maxLines = 64) {
+  try {
+    const runtime = getShell1Runtime();
+    if (!runtime || typeof runtime.historyTextSince !== "function") {
+      return "";
+    }
+    return String(runtime.historyTextSince(startLine, maxLines) || "");
+  } catch (_err) {
+    return "";
+  }
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, Number(ms) || 0));
+  });
+}
+
+function sanitizeTransportText(text, maxChars = 6000) {
+  const value = typeof text === "string" ? text : String(text == null ? "" : text);
+  if (!value) {
+    return "";
+  }
+  let out = value
+    // Strip common ANSI/ECMA-48 CSI sequences if any sneak through.
+    .replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, "")
+    // Strip other C0 controls except tab/newline/carriage return.
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+  if (out.length > maxChars) {
+    out = `${out.slice(0, maxChars)}\n...[truncated]`;
+  }
+  return out;
+}
+
+async function captureShell1OutputSince(startLine, options = null) {
+  const cfg = options && typeof options === "object" ? options : {};
+  const maxLines = Number.isFinite(cfg.maxLines) ? Math.max(1, Math.floor(cfg.maxLines)) : 48;
+  const settleMs = Number.isFinite(cfg.settleMs) ? Math.max(0, Math.floor(cfg.settleMs)) : 140;
+  const pollMs = Number.isFinite(cfg.pollMs) ? Math.max(0, Math.floor(cfg.pollMs)) : 120;
+  const maxPolls = Number.isFinite(cfg.maxPolls) ? Math.max(1, Math.floor(cfg.maxPolls)) : 5;
+
+  try {
+    let lastCount = shell1HistoryTotalLines();
+    let stableCount = 0;
+    for (let i = 0; i < maxPolls; i += 1) {
+      await waitMs(i === 0 ? settleMs : pollMs);
+      const nextCount = shell1HistoryTotalLines();
+      if (nextCount === lastCount) {
+        stableCount += 1;
+        if (stableCount >= 2) {
+          break;
+        }
+      } else {
+        stableCount = 0;
+        lastCount = nextCount;
+      }
+    }
+    return sanitizeTransportText(shell1HistoryTextSince(startLine, maxLines).trim());
+  } catch (_err) {
+    return sanitizeTransportText(shell1HistoryTextSince(startLine, maxLines).trim());
+  }
 }
 
 function buildShell1CommandLine(command, payload) {
@@ -867,7 +939,7 @@ async function execJs(code) {
   return await factory(execConsole, displayImage, runtime.browser, runtime.context, runtime.page);
 }
 
-async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX_STEPS, model = DEFAULT_MODEL) {
+async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX_STEPS, model = DEFAULT_RESPONSE_MODEL) {
   const tools = buildTools(entry);
   let nextInput = [
     {
@@ -877,44 +949,46 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
   ];
 
   for (let i = 0; i < maxSteps; i += 1) {
-    const request = {
+    const request = buildResponsesRequest({
       model,
       instructions: AI_PC_INSTRUCTIONS,
       tools,
       input: nextInput,
-      parallel_tool_calls: DEFAULT_PARALLEL_TOOL_CALLS,
-      reasoning: {
-        effort: "low",
-      },
-    };
-    if (previousResponseId) {
-      request.previous_response_id = previousResponseId;
-    }
+      previousResponseId,
+      parallelToolCalls: DEFAULT_PARALLEL_TOOL_CALLS,
+    });
 
     logScreenshotUploadSizes(request.input);
 
-    const resp = await client.responses.create(request);
-    if (typeof resp.id !== "string" || !resp.id) {
-      throw new Error("responses.create() did not return a response id");
-    }
+    const resp = await createResponse(client, request);
     previousResponseId = resp.id;
 
     let hadToolCall = false;
     const toolOutputs = [];
 
-    for (const item of resp.output) {
+    for (const item of getResponseOutputItems(resp)) {
       const shell1Command = item.type === "function_call"
         ? findAiPcShellCommandByToolName(item.name)
         : null;
       if (shell1Command) {
         hadToolCall = true;
-        const parsed = JSON.parse(item.arguments || "{}");
-        const commandLine = buildShell1CommandLine(shell1Command, parsed);
-        const submitted = submitShell1Input(commandLine);
+        let output = "submitted shell1 command.";
+        try {
+          const parsed = JSON.parse(item.arguments || "{}");
+          const commandLine = buildShell1CommandLine(shell1Command, parsed);
+          const baselineLines = shell1HistoryTotalLines();
+          const submitted = submitShell1Input(commandLine);
+          const shellOutput = await captureShell1OutputSince(baselineLines);
+          output = shellOutput
+            ? `submitted shell1 command: ${commandLine} (${submitted} bytes)\n\nshell1 output:\n${shellOutput}`
+            : `submitted shell1 command: ${commandLine} (${submitted} bytes). No new shell1 history lines were captured yet.`;
+        } catch (err) {
+          output = `submitted shell1 command, but shell capture failed: ${String(err && err.message ? err.message : err)}`;
+        }
         toolOutputs.push({
           type: "function_call_output",
           call_id: item.call_id,
-          output: `submitted shell1 command: ${commandLine} (${submitted} bytes). Output will appear in the shell1 terminal.`,
+          output,
         });
       } else if (item.type === "function_call" && item.name === "exec_js") {
         hadToolCall = true;
@@ -1165,7 +1239,7 @@ export async function startAiPc() {
   }
   globalThis.__trueosAiPcStarted = true;
   try {
-    const client = new OpenAI();
+    const client = createOpenAiClient();
     let previousResponseId = null;
     while (true) {
       const entry = await waitForNextInput("");

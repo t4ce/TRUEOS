@@ -1,7 +1,10 @@
 use alloc::string::String as AllocString;
+use alloc::collections::VecDeque;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
+use spin::Mutex;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::shell::cube::{CUBE_COLS, CUBE_ROWS, CubeState, WireShape};
 
@@ -90,6 +93,53 @@ pub(crate) const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
 const MATRIX_RUNNING_GLYPHS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
 const DEFAULT_TERM_COLS: usize = 100;
 const DEFAULT_TERM_ROWS: usize = 30;
+const SHELL1_HISTORY_LIMIT: usize = 512;
+
+static SHELL1_HISTORY_TAIL: Mutex<VecDeque<AllocString>> = Mutex::new(VecDeque::new());
+static SHELL1_HISTORY_TOTAL_LINES: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn record_history_line(line: &str) {
+    let total = SHELL1_HISTORY_TOTAL_LINES.fetch_add(1, Ordering::Relaxed) + 1;
+    let mut tail = SHELL1_HISTORY_TAIL.lock();
+    tail.push_back(AllocString::from(line));
+    while tail.len() > SHELL1_HISTORY_LIMIT {
+        let _ = tail.pop_front();
+    }
+    if total < tail.len() {
+        SHELL1_HISTORY_TOTAL_LINES.store(tail.len(), Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn history_total_lines() -> usize {
+    SHELL1_HISTORY_TOTAL_LINES.load(Ordering::Relaxed)
+}
+
+pub(crate) fn history_text_since(start_line: usize, max_lines: usize) -> AllocString {
+    let total = history_total_lines();
+    let tail = SHELL1_HISTORY_TAIL.lock();
+    let retained = tail.len();
+    let oldest_line = total.saturating_sub(retained);
+    let start = start_line.max(oldest_line);
+    let available = total.saturating_sub(start);
+    let take = if max_lines == 0 {
+        available
+    } else {
+        core::cmp::min(available, max_lines)
+    };
+
+    let mut out = AllocString::new();
+    for idx in 0..take {
+        let absolute_line = start + idx;
+        let rel = absolute_line.saturating_sub(oldest_line);
+        if let Some(line) = tail.get(rel) {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(line.as_str());
+        }
+    }
+    out
+}
 
 pub(crate) async fn handle_command_action_for_tools(
     action: CommandAction,
@@ -125,6 +175,30 @@ pub unsafe extern "C" fn trueos_cabi_shell1_command_registry_json(
 ) -> isize {
     let json: AllocString = crate::shell::cmd::registry::command_registry_json();
     let bytes = json.as_bytes();
+
+    if out_ptr.is_null() || out_cap == 0 {
+        return bytes.len() as isize;
+    }
+
+    let copy_len = core::cmp::min(bytes.len(), out_cap);
+    core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, copy_len);
+    copy_len as isize
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_shell1_history_total_lines() -> usize {
+    history_total_lines()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_shell1_history_text_since(
+    start_line: usize,
+    max_lines: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    let text = history_text_since(start_line, max_lines);
+    let bytes = text.as_bytes();
 
     if out_ptr.is_null() || out_cap == 0 {
         return bytes.len() as isize;

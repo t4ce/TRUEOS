@@ -18,6 +18,7 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getDomSnapshot',
     'getTrueosFsTreeHtml',
     'setNodeHtml',
+    'setBodyHtml',
     'insertHtml',
     'getViewport',
     'paint',
@@ -301,6 +302,9 @@ export function installBrowserAi(browser = null, host = null) {
 
   targetBrowser.getApiContract = () => cloneApiContract(runtimeHost);
   targetBrowser.listUnavailable = () => cloneApiContract(runtimeHost).unavailable;
+  if (typeof targetBrowser.setNodeHtml === 'function') {
+    targetBrowser.setBodyHtml = (html) => targetBrowser.setNodeHtml('body', html);
+  }
   targetBrowser.getTrueosFsTreeHtml = (maxEntries = 64) => {
     if (typeof runtimeHost.__trueosReadPrimaryTrueosFsTreeHtml !== 'function') {
       return null;

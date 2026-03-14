@@ -35,6 +35,9 @@ export function createBrowserAssetManager(options = {}) {
   const describeError = typeof options.describeError === 'function'
     ? options.describeError
     : ((err) => String(err && err.message ? err.message : err || 'unknown error'));
+  const onAssetStateChanged = typeof options.onAssetStateChanged === 'function'
+    ? options.onAssetStateChanged
+    : () => {};
 
   const imageTextureCache = new Map();
   const imageTextureLoads = new Map();
@@ -270,6 +273,7 @@ export function createBrowserAssetManager(options = {}) {
         return failed;
       } finally {
         imageTextureLoads.delete(cacheKey);
+        try { onAssetStateChanged(cacheKey); } catch (_) {}
         queueRepaint();
       }
     })();
@@ -387,11 +391,42 @@ export function createBrowserAssetManager(options = {}) {
       pendingImagePrimeUrls.add(resolvedSrc);
     }
     scheduleImagePrimeFlush();
+    return urls;
+  }
+
+  function summarizeImageUrls(urls) {
+    const unique = new Set();
+    const source = Array.isArray(urls) ? urls : [];
+    for (let i = 0; i < source.length; i += 1) {
+      const value = String(source[i] || '').trim();
+      if (value) unique.add(value);
+    }
+    let pending = 0;
+    let ready = 0;
+    let error = 0;
+    for (const url of unique) {
+      const cached = imageTextureCache.get(url) || null;
+      if (!cached) continue;
+      if (cached.state === 'ready') {
+        ready += 1;
+      } else if (cached.state === 'error') {
+        error += 1;
+      } else {
+        pending += 1;
+      }
+    }
+    return {
+      total: unique.size,
+      pending,
+      ready,
+      error,
+    };
   }
 
   return {
     applyResourcesToRows,
     requestAssetsForRows,
     primeHtmlImageUrls,
+    summarizeImageUrls,
   };
 }

@@ -467,6 +467,7 @@ impl NvmeController {
             return Some(cpl);
         }
 
+        let io_inflight = &self.io_inflight;
         let (maybe_cpl, new_head, depth) = {
             let q = if qid == NVME_ADMIN_QID {
                 &mut self.admin
@@ -481,10 +482,21 @@ impl NvmeController {
             // Some physical controllers appear to present the first CQE with the
             // opposite initial phase bit compared to the conventional software
             // expectation. If we already submitted work and see a non-zero CQE at
-            // head=0, adopt the observed phase once and continue.
+            // head=0, adopt the observed phase once and continue, but only if the
+            // candidate CID still matches work we actually have outstanding.
             if phase != q.cq_phase {
-                let may_adopt_phase =
-                    q.cq_head == 0 && q.sq_tail != 0 && (cqe.dw3 != 0 || cqe.dw0 != 0);
+                let candidate_cid = (cqe.dw3 & 0xFFFF) as u16;
+                let cid_matches_live_work = if qid == NVME_IO_QID {
+                    let idx = (candidate_cid as usize) >> 6;
+                    let bit = 1u64 << ((candidate_cid as usize) & 63);
+                    candidate_cid == cid || (io_inflight[idx] & bit) != 0
+                } else {
+                    candidate_cid == cid
+                };
+                let may_adopt_phase = q.cq_head == 0
+                    && q.sq_tail != 0
+                    && (cqe.dw3 != 0 || cqe.dw0 != 0)
+                    && cid_matches_live_work;
                 if may_adopt_phase {
                     crate::log!(
                         "nvme: {} qid={} adopting cq_phase quirk exp={} got={} cqe_dw0=0x{:08X} cqe_dw3=0x{:08X}\n",

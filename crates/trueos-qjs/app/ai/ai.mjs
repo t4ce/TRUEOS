@@ -1,14 +1,21 @@
-import OpenAI from "openai";
+import {
+  buildResponsesRequest,
+  createOpenAiClient,
+  createResponse,
+  decorateResponseTools,
+  getResponseFunctionCalls,
+  getResponseOutputText,
+} from "./openai_client.mjs";
 
 
 
 try {
   console.log("ai: start");
-  const client = new OpenAI();
+  const client = createOpenAiClient();
   console.log("ai: request.begin");
 
 
-  const tools = [
+  const tools = decorateResponseTools([
     { type: "web_search" },
     {
       type: "function",
@@ -21,26 +28,24 @@ try {
         additionalProperties: false,
       },
     },
-  ];
+  ]);
 
-  const response = await client.responses.create({
-    model: "gpt-5.4",
-    tools: tools,
+  const request = buildResponsesRequest({
+    tools,
     input: `Whats the worlds most important News Today? Date: ${kernelDateDayMonthYear() } AND start Tetris please.`,
   });
+  const response = await createResponse(client, request);
   console.log("ai: request.done");
-  const outputItems = response && Array.isArray(response.output) ? response.output : [];
-  for (const item of outputItems) {
-    if (item && item.type === "function_call") {
-      try {
-        console.log(`ai: function_call ${JSON.stringify(item)}`);
-      } catch (_e) {
-        console.log("ai: function_call [unserializable]");
-      }
+  for (const item of getResponseFunctionCalls(response)) {
+    try {
+      console.log(`ai: function_call ${JSON.stringify(item)}`);
+    } catch (_e) {
+      console.log("ai: function_call [unserializable]");
     }
   }
-  if (response && typeof response.output_text === "string") {
-    console.log(response.output_text);
+  const outputText = getResponseOutputText(response);
+  if (outputText) {
+    console.log(outputText);
   } else {
     console.log(`ai: response missing output_text (${typeof response})`);
   }

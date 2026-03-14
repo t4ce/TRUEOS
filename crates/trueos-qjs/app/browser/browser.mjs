@@ -4,6 +4,8 @@ import Yoga from 'yoga-layout';
 import { Worker } from 'node:worker_threads';
 import { createFpsOverlay } from './fps.mjs';
 import { createBrowserAssetManager } from './browser_assets.mjs';
+import { createBrowserCursorController } from './browser_cursor.mjs';
+import { createBrowserPageState } from './browser_page_state.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
 import {
   attachThemeLayoutRuntime as attachParryThemeLayoutRuntime,
@@ -19,11 +21,6 @@ import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './theme.mjs';
 
 const runtime = resolveRuntime();
 
-const AI_CURSOR_SLOT_BASE = 10000;
-const DEFAULT_AI_CURSOR_ID = 'ai-default';
-const WHEEL_STEP_PX = 16;
-const CURSOR_EVENT_FIELDS = 6;
-const CURSOR_FLAG_BUTTONS_CHANGED = 1 << 2;
 const INDENT_PX = 12;
 const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs || 0) || 0);
 const ERROR_PREVIEW_MAX = 160;
@@ -35,18 +32,12 @@ const RELEASE_RECT_RGBA = 0x3f2f7fff;
 
 let cachedHtml = '';
 let cachedDoc = null;
-let cursorReadSeq = 0;
 let scrollY = 0;
 let currentPageUrl = String(
   runtime.host.__trueosBrowserCurrentUrl
   || runtime.host.__trueosBrowserUrl
   || '',
 );
-const kernelCursorState = new Map();
-const cursorButtonEvents = [];
-const cursorDragOrigins = new Map();
-const aiCursorSlots = new Map();
-let nextAiCursorSlot = AI_CURSOR_SLOT_BASE;
 let browserActionSeq = 0;
 let aiStartPromise = null;
 let aiStartSpecifier = '';
@@ -54,8 +45,6 @@ let aiWorker = null;
 const aiInputQueue = [];
 const aiInputWaiters = [];
 let pendingReleaseRect = null;
-let cursorMoveLogCount = 0;
-const pendingSyntheticCursorEchoes = [];
 let fpsOverlayEnabled = false;
 let browserCanRenderScene = false;
 let browserContentReadySignaled = false;
@@ -82,6 +71,7 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getDomSnapshot',
     'getTrueosFsTreeHtml',
     'setNodeHtml',
+    'setBodyHtml',
     'insertHtml',
     'getViewport',
     'paint',
@@ -108,6 +98,28 @@ const assetManager = createBrowserAssetManager({
   resolveNavigationUrl,
   raiseBrowserError,
   describeError,
+  onAssetStateChanged: refreshBrowserPageState,
+});
+const browserPageState = createBrowserPageState({
+  host: runtime.host,
+  nowMs,
+  getCurrentUrl: () => currentPageUrl,
+  getHtmlBytes: () => cachedHtml.length,
+  summarizeAssets: (urls) => assetManager.summarizeImageUrls(urls),
+});
+
+function refreshBrowserPageState(reason = 'state-refresh') {
+  return browserPageState.refresh(reason);
+}
+
+const browserCursor = createBrowserCursorController({
+  host: runtime.host,
+  computeViewport,
+  buildReleaseRect,
+  paint,
+  onWheelDelta,
+  onReleaseRect: (rect) => { pendingReleaseRect = rect; },
+  logDebug: logCursorDebug,
 });
 
 function resolveRuntime() {
@@ -1162,6 +1174,10 @@ function setNodeHtml(target, html) {
   return commitDomMutation(doc.dom);
 }
 
+function setBodyHtml(html) {
+  return setNodeHtml('body', html);
+}
+
 function insertHtml(target, html, position = 'beforeend') {
   const { vw } = computeViewport();
   const doc = ensureDoc(vw);
@@ -1385,6 +1401,7 @@ function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
   browserSurfaceDirty = true;
+  browserPageState.beginLoad('html-set');
   if (cachedHtml.trim()) {
     browserCanRenderScene = true;
     if (htmlReadyTimeoutId != null && typeof runtime.host.clearTimeout === 'function') {
@@ -1397,13 +1414,16 @@ function setHtml(nextHtml) {
   }
   paint();
   const htmlSnapshot = cachedHtml;
+  const pageLoadSeqSnapshot = browserPageState.getState('html-snapshot').seq;
   if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
     Promise.resolve().then(() => {
-      if (cachedHtml !== htmlSnapshot) return;
-      assetManager.primeHtmlImageUrls(htmlSnapshot);
+      if (cachedHtml !== htmlSnapshot || browserPageState.getState('html-snapshot-check').seq !== pageLoadSeqSnapshot) return;
+      const urls = assetManager.primeHtmlImageUrls(htmlSnapshot);
+      browserPageState.updateAssetUrls(urls, 'html-assets-primed');
     }).catch(() => {});
   } else {
-    assetManager.primeHtmlImageUrls(htmlSnapshot);
+    const urls = assetManager.primeHtmlImageUrls(htmlSnapshot);
+    browserPageState.updateAssetUrls(urls, 'html-assets-primed');
   }
   return true;
 }
@@ -1454,12 +1474,34 @@ function docContentHeight(doc, vh) {
   return Math.max(1, Math.round(Number.isFinite(raw) ? raw : Number(vh || 1)));
 }
 
+function docContentTopY(doc) {
+  let top = Number.POSITIVE_INFINITY;
+  const rowY = Array.isArray(doc && doc.rowY) ? doc.rowY : [];
+  for (let i = 0; i < rowY.length; i += 1) {
+    const y = Math.round(Number(rowY[i]));
+    if (Number.isFinite(y) && y >= 0) top = Math.min(top, y);
+  }
+  const themeLayout = doc && typeof doc === 'object' ? doc.themeLayout : null;
+  const interactives = Array.isArray(themeLayout && themeLayout.interactives) ? themeLayout.interactives : [];
+  for (let i = 0; i < interactives.length; i += 1) {
+    const y = Math.round(Number(interactives[i] && interactives[i].y));
+    if (Number.isFinite(y) && y >= 0) top = Math.min(top, y);
+  }
+  const buttons = Array.isArray(themeLayout && themeLayout.buttons) ? themeLayout.buttons : [];
+  for (let i = 0; i < buttons.length; i += 1) {
+    const y = Math.round(Number(buttons[i] && buttons[i].y));
+    if (Number.isFinite(y) && y >= 0) top = Math.min(top, y);
+  }
+  return Number.isFinite(top) ? Math.max(0, top) : 0;
+}
+
 function clampScrollForDoc(doc, vh) {
   const contentH = docContentHeight(doc, vh);
-  const maxScroll = Math.max(0, contentH - Math.max(1, Number(vh || 1)));
+  const contentTopY = docContentTopY(doc);
+  const maxScroll = Math.max(0, contentH - contentTopY - Math.max(1, Number(vh || 1)));
   if (scrollY < 0) scrollY = 0;
   if (scrollY > maxScroll) scrollY = maxScroll;
-  return { contentH, maxScroll };
+  return { contentH, contentTopY, maxScroll };
 }
 
 function ensureBrowserSurface(doc, vw, vh) {
@@ -1645,7 +1687,7 @@ function paint() {
   }
   const { vw, vh } = computeViewport();
   const doc = ensureDoc(vw);
-  const { contentH } = clampScrollForDoc(doc, vh);
+  const { contentH, contentTopY } = clampScrollForDoc(doc, vh);
   publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
 
   const overlayRuns = [];
@@ -1679,6 +1721,7 @@ function paint() {
           vw,
           vh,
           scrollY,
+          contentTopY,
           overlayRuns,
           releaseRect,
         );
@@ -1688,6 +1731,7 @@ function paint() {
     } else {
       renderScene(doc, vw, vh, scrollY, overlayRuns, releaseRect);
     }
+    browserPageState.markRendered('first-page-paint');
     if (!fpsOverlayEnabled && hasRealSceneContent) {
       fpsOverlayEnabled = true;
     }
@@ -1721,183 +1765,10 @@ function onWheelDelta(deltaY) {
   return true;
 }
 
-function queueCursorButtonEvent(event) {
-  cursorButtonEvents.push(event);
-  if (cursorButtonEvents.length > 128) {
-    cursorButtonEvents.splice(0, cursorButtonEvents.length - 128);
-  }
-}
-
-function rememberSyntheticCursorEcho(slotId, x, y, buttonsDown, wheel, flags) {
-  pendingSyntheticCursorEchoes.push(`${Number(slotId) | 0}:${Number(x || 0)}:${Number(y || 0)}:${Number(buttonsDown || 0) >>> 0}:${Number(wheel || 0) | 0}:${Number(flags || 0) >>> 0}`);
-  if (pendingSyntheticCursorEchoes.length > 64) {
-    pendingSyntheticCursorEchoes.splice(0, pendingSyntheticCursorEchoes.length - 64);
-  }
-}
-
-function consumeSyntheticCursorEcho(slotId, x, y, buttonsDown, wheel, flags) {
-  const signature = `${Number(slotId) | 0}:${Number(x || 0)}:${Number(y || 0)}:${Number(buttonsDown || 0) >>> 0}:${Number(wheel || 0) | 0}:${Number(flags || 0) >>> 0}`;
-  const index = pendingSyntheticCursorEchoes.indexOf(signature);
-  if (index < 0) return false;
-  pendingSyntheticCursorEchoes.splice(index, 1);
-  return true;
-}
-
 function logCursorDebug(message) {
   try {
     console.log(message);
   } catch (_) {}
-}
-
-function resolveAiCursorId(value) {
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed || DEFAULT_AI_CURSOR_ID;
-  }
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return String(value);
-  }
-  return DEFAULT_AI_CURSOR_ID;
-}
-
-function getOrCreateAiCursorSlot(cursorId) {
-  const key = String(cursorId || '').trim();
-  if (!key) return 0;
-  const existing = aiCursorSlots.get(key);
-  if (existing) return existing;
-
-  const slotId = nextAiCursorSlot;
-  nextAiCursorSlot += 1;
-  aiCursorSlots.set(key, slotId);
-  return slotId;
-}
-
-function rememberKernelCursor(slotId, x, y, buttonsDown, flags) {
-  if (!Number.isFinite(slotId) || slotId <= 0) return 0;
-
-  const id = Number(slotId) | 0;
-  const nextButtons = Number(buttonsDown || 0) >>> 0;
-  const nextX = Number(x || 0);
-  const nextY = Number(y || 0);
-  const nextFlags = Number(flags || 0) >>> 0;
-  const prev = kernelCursorState.get(id);
-  const prevButtons = prev ? (Number(prev.buttonsDown || 0) >>> 0) : 0;
-
-  kernelCursorState.set(id, {
-    slotId: id,
-    x: nextX,
-    y: nextY,
-    buttonsDown: nextButtons,
-    flags: nextFlags,
-  });
-
-  if (((nextFlags & CURSOR_FLAG_BUTTONS_CHANGED) !== 0) || nextButtons !== prevButtons) {
-    if (prevButtons === 0 && nextButtons !== 0) {
-      cursorDragOrigins.set(id, {
-        x: nextX,
-        y: nextY,
-      });
-    } else if (prevButtons !== 0 && nextButtons === 0) {
-      const origin = cursorDragOrigins.get(id);
-      if (origin) {
-        pendingReleaseRect = buildReleaseRect(origin, nextX, nextY);
-      }
-      cursorDragOrigins.delete(id);
-    }
-    logCursorDebug(`[browser.mjs] cursor buttons slot=${id} prev=${prevButtons} next=${nextButtons}`);
-    queueCursorButtonEvent({
-      slotId: id,
-      x: nextX,
-      y: nextY,
-      buttonsDown: nextButtons,
-      previousButtonsDown: prevButtons,
-      flags: nextFlags,
-    });
-    return 1;
-  }
-
-  return 0;
-}
-
-function processCursorEvent(slotId, x, y, buttonsDown, wheel, flags, source = 'kernel') {
-  const prev = kernelCursorState.get(Number(slotId || 0) | 0) || null;
-  let updated = rememberKernelCursor(slotId, x, y, buttonsDown, flags);
-
-  if (!prev || Number(prev.x || 0) !== Number(x || 0) || Number(prev.y || 0) !== Number(y || 0)) {
-    cursorMoveLogCount += 1;
-    if ((cursorMoveLogCount % 25) === 0) {
-      logCursorDebug(`[browser.mjs] cursor move chunk=25 source=${source} slot=${slotId} x=${Number(x || 0)} y=${Number(y || 0)}`);
-    }
-    updated += 1;
-  }
-
-  if (wheel !== 0) {
-    logCursorDebug(`[browser.mjs] cursor wheel source=${source} slot=${slotId} wheel=${wheel}`);
-    const dy = Number(wheel) * -WHEEL_STEP_PX;
-    if (onWheelDelta(dy)) updated += 1;
-  }
-
-  return updated;
-}
-
-function injectCursorEvent(event = null) {
-  const source = event && typeof event === 'object' ? event : {};
-  const slotId = Number(source.slotId || 0) | 0;
-  const aiCursorId = resolveAiCursorId(source.aiCursorId);
-  const resolvedSlotId = slotId > 0 ? slotId : getOrCreateAiCursorSlot(aiCursorId);
-  if (resolvedSlotId <= 0) return false;
-
-  const x = Number(source.x || 0);
-  const y = Number(source.y || 0);
-  const buttonsDown = Number(source.buttonsDown || 0) >>> 0;
-  const wheel = Number(source.wheel || 0) | 0;
-  const flags = Number(source.flags || 0) >>> 0;
-
-  const writeCursorEvent = runtime.host.__trueosWriteCursorEvent;
-  if (typeof writeCursorEvent === 'function') {
-    try {
-      if (writeCursorEvent(resolvedSlotId, x, y, buttonsDown, wheel, flags)) {
-        rememberSyntheticCursorEcho(resolvedSlotId, x, y, buttonsDown, wheel, flags);
-        const updated = processCursorEvent(resolvedSlotId, x, y, buttonsDown, wheel, flags, 'synthetic');
-        if (updated > 0 && wheel === 0) {
-          paint();
-        }
-        return true;
-      }
-    } catch (_) {}
-  }
-
-  processCursorEvent(resolvedSlotId, x, y, buttonsDown, wheel, flags, 'synthetic');
-  return true;
-}
-
-function moveCursor(target = null) {
-  const source = target && typeof target === 'object' ? target : {};
-  const slotId = Number(source.slotId || 0) | 0;
-  const aiCursorId = resolveAiCursorId(source.aiCursorId);
-  const resolvedSlotId = slotId > 0 ? slotId : getOrCreateAiCursorSlot(aiCursorId);
-  if (resolvedSlotId <= 0) return false;
-
-  const state = kernelCursorState.get(resolvedSlotId);
-  const x = Number(source.x);
-  const y = Number(source.y);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-
-  const buttonsDown = Object.prototype.hasOwnProperty.call(source, 'buttonsDown')
-    ? (Number(source.buttonsDown || 0) >>> 0)
-    : (state ? (Number(state.buttonsDown || 0) >>> 0) : 0);
-  const flags = Object.prototype.hasOwnProperty.call(source, 'flags')
-    ? (Number(source.flags || 0) >>> 0)
-    : 1;
-
-  return injectCursorEvent({
-    slotId: resolvedSlotId,
-    x,
-    y,
-    buttonsDown,
-    wheel: 0,
-    flags,
-  });
 }
 
 function getThemeInteractives(vw) {
@@ -2058,133 +1929,7 @@ function resolveInteractiveTarget(target = null) {
 }
 
 function synthesizeClick(target = null) {
-  const source = target && typeof target === 'object' && !Array.isArray(target) ? target : {};
-  const slotId = Number(source.slotId || 0) | 0;
-  const aiCursorId = resolveAiCursorId(source.aiCursorId);
-  const resolvedSlotId = slotId > 0 ? slotId : getOrCreateAiCursorSlot(aiCursorId);
-  if (resolvedSlotId <= 0) {
-    return { ok: 0, handled: 0, reason: 'invalid-slot' };
-  }
-
-  const resolved = resolveInteractiveTarget(target);
-  const state = kernelCursorState.get(resolvedSlotId) || null;
-  const x = resolved && Number.isFinite(Number(resolved.x))
-    ? Number(resolved.x)
-    : Number(state && state.x);
-  const y = resolved && Number.isFinite(Number(resolved.y))
-    ? Number(resolved.y)
-    : Number(state && state.y);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    return { ok: 0, handled: 0, reason: 'target-not-found' };
-  }
-
-  const buttonMask = Math.max(1, Number(source.buttonMask || source.button || 1) | 0) >>> 0;
-  moveCursor({
-    slotId: resolvedSlotId,
-    aiCursorId,
-    x,
-    y,
-  });
-  const downOk = injectCursorEvent({
-    slotId: resolvedSlotId,
-    x,
-    y,
-    buttonsDown: buttonMask,
-    wheel: 0,
-    flags: 1 | CURSOR_FLAG_BUTTONS_CHANGED,
-  });
-  const upOk = injectCursorEvent({
-    slotId: resolvedSlotId,
-    x,
-    y,
-    buttonsDown: 0,
-    wheel: 0,
-    flags: 1 | CURSOR_FLAG_BUTTONS_CHANGED,
-  });
-  if (!downOk || !upOk) {
-    return { ok: 0, handled: 0, reason: 'cursor-injection-failed' };
-  }
-
-  const interactive = resolved && resolved.interactive && typeof resolved.interactive === 'object'
-    ? resolved.interactive
-    : null;
-  return {
-    ok: 1,
-    handled: 1,
-    simulated: 0,
-    slotId: resolvedSlotId,
-    x,
-    y,
-    path: resolved && typeof resolved.path === 'string' ? resolved.path : '',
-    href: interactive ? String(interactive.href || '') : '',
-    caption: interactive ? String(interactive.caption || '') : '',
-    kind: interactive ? String(interactive.kind || '') : '',
-  };
-}
-
-function pumpCursorEvents() {
-  const fn = runtime.host.__trueosReadCursorEventsSince;
-  if (typeof fn !== 'function') return 0;
-
-  let updated = 0;
-  for (let batch = 0; batch < 8; batch++) {
-    let packed = null;
-    try {
-      packed = fn(Number(cursorReadSeq || 0));
-    } catch (_) {
-      break;
-    }
-    if (!Array.isArray(packed) || packed.length < 3) break;
-
-    const nextSeq = Number(packed[0] || cursorReadSeq || 0);
-    const wrote = Math.max(0, Number(packed[2] || 0) | 0);
-    let p = 3;
-    for (let i = 0; i < wrote; i++) {
-      if (p + 5 >= packed.length) break;
-      const slotId = Number(packed[p + 0] || 0) | 0;
-      const x = Number(packed[p + 1] || 0);
-      const y = Number(packed[p + 2] || 0);
-      const buttonsDown = Number(packed[p + 3] || 0) >>> 0;
-      const wheel = Number(packed[p + 4] || 0) | 0;
-      const flags = Number(packed[p + 5] || 0) >>> 0;
-      p += CURSOR_EVENT_FIELDS;
-
-      if (consumeSyntheticCursorEcho(slotId, x, y, buttonsDown, wheel, flags)) {
-        continue;
-      }
-
-      const prevState = kernelCursorState.get(slotId) || null;
-      const prevButtonsDown = prevState ? (Number(prevState.buttonsDown || 0) >>> 0) : 0;
-
-      updated += processCursorEvent(slotId, x, y, buttonsDown, wheel, flags, 'kernel');
-      if (prevButtonsDown !== 0 && buttonsDown === 0 && pendingReleaseRect) {
-        paint();
-      }
-    }
-
-    cursorReadSeq = nextSeq;
-    if (wrote < 32) break;
-  }
-
-  return updated;
-}
-
-function startWheelPump() {
-  const host = runtime.host;
-  if (typeof host.setInterval === 'function') {
-    try {
-      host.setInterval(pumpCursorEvents, 16);
-      return;
-    } catch (_) {}
-  }
-  // Use timeout scheduling only for cursor polling.
-  if (typeof host.setTimeout === 'function') {
-    const step = () => {
-      pumpCursorEvents();
-      try { host.setTimeout(step, 16); } catch (_) {}
-    };
-    try { host.setTimeout(step, 16); } catch (_) {}
-  }
+  return browserCursor.synthesizeClickAt(target, resolveInteractiveTarget);
 }
 
 function startAutoPaint() {
@@ -2203,17 +1948,6 @@ function normalizeAiSpecifier(specifier) {
     return specifier;
   }
   return '/qjs/ai/ai_pc.mjs';
-}
-
-function placeDefaultAiCursor() {
-  const { vw, vh } = computeViewport();
-  const x = Math.max(0, Math.floor(vw * 0.25));
-  const y = Math.max(0, Math.floor(vh * 0.25));
-  moveCursor({
-    aiCursorId: DEFAULT_AI_CURSOR_ID,
-    x,
-    y,
-  });
 }
 
 function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
@@ -2237,7 +1971,7 @@ function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
     .then(() => {
       const worker = attachAiWorker(new Worker(buildAiWorkerSource(resolvedSpecifier, opts)));
       aiWorker = worker;
-      placeDefaultAiCursor();
+      browserCursor.placeDefaultAiCursor();
       try {
         console.log('[browser.mjs] ai worker started', resolvedSpecifier);
       } catch (_) {}
@@ -2266,20 +2000,19 @@ runtime.host.__trueosBrowser = {
   paint,
   setHtml,
   setNodeHtml,
+  setBodyHtml,
   insertHtml,
-  injectCursorEvent,
+  injectCursorEvent(event = null) {
+    return browserCursor.injectCursorEvent(event);
+  },
   getKernelCursors() {
-    return Array.from(kernelCursorState.values()).sort((a, b) => a.slotId - b.slotId);
+    return browserCursor.getKernelCursors();
   },
   getKernelCursor(slotId) {
-    const id = Number(slotId || 0) | 0;
-    if (id <= 0) return null;
-    const state = kernelCursorState.get(id);
-    return state ? { ...state } : null;
+    return browserCursor.getKernelCursor(slotId);
   },
   popCursorButtonEvent() {
-    if (cursorButtonEvents.length <= 0) return null;
-    return cursorButtonEvents.shift() || null;
+    return browserCursor.popCursorButtonEvent();
   },
   getApiContract() {
     return cloneApiContract();
@@ -2322,6 +2055,12 @@ runtime.host.__trueosBrowser = {
   getViewport() {
     return getViewport();
   },
+  getPageLoadedState() {
+    return browserPageState.getState('api');
+  },
+  popPageLoadedEvent() {
+    return browserPageState.popEvent();
+  },
   startAi(specifier, options) {
     return startAi(specifier, options);
   },
@@ -2340,7 +2079,7 @@ runtime.host.__trueosBrowser = {
     paint();
   },
   moveCursor(target = null) {
-    return moveCursor(target);
+    return browserCursor.moveCursor(target);
   },
   click(target = null) {
     const result = synthesizeClick(target);
@@ -2392,5 +2131,5 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
 InjectOpenAi();
 armHtmlReadyFallback();
 installAiInputBridge();
-startWheelPump();
+browserCursor.startPump();
 startAutoPaint();
