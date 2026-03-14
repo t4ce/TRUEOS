@@ -504,6 +504,7 @@ if (!G.__trueosBrowserContentRect || typeof G.__trueosBrowserContentRect !== 'ob
         height: G.__trueosBrowserViewport.height,
     };
 }
+G.__trueosBrowserHostedByUi2 = true;
 if (typeof G.addEventListener !== 'function') G.addEventListener = () => {};
 if (typeof G.removeEventListener !== 'function') G.removeEventListener = () => {};
 if (typeof G.setTimeout !== 'function') G.setTimeout = () => 1;

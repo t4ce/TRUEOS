@@ -1,10 +1,37 @@
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Ordering as CmpOrdering;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::{Mutex, Once};
+
+const UI2_TITLE_H: f32 = 26.0;
+const UI2_NOTES_SURFACE_TEX_ID: u32 = 3101;
+const UI2_GLASS_SURFACE_TEX_ID: u32 = 3102;
+
+#[derive(Copy, Clone)]
+struct Ui2SurfaceSlot {
+    tex_id: u32,
+    width: u32,
+    height: u32,
+    dirty: bool,
+    label: &'static str,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct Ui2TexVertex {
+    x: f32,
+    y: f32,
+    u: f32,
+    v: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Ui2WindowKind {
@@ -65,6 +92,7 @@ struct Ui2State {
 }
 
 static UI2_STATE: Once<Mutex<Ui2State>> = Once::new();
+static UI2_SURFACES: Once<Mutex<Vec<Ui2SurfaceSlot>>> = Once::new();
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_DIRTY: AtomicBool = AtomicBool::new(false);
 static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
@@ -98,13 +126,43 @@ fn init_state() -> &'static Mutex<Ui2State> {
         let _ = alloc_window(
             &mut state,
             Ui2WindowKind::Dialog,
-            "Dialog",
-            Ui2Rect::new(140.0, 108.0, 360.0, 220.0),
+            "Notes",
+            Ui2Rect::new(120.0, 92.0, 352.0, 228.0),
             20,
             246,
         );
 
+        let _ = alloc_window(
+            &mut state,
+            Ui2WindowKind::Overlay,
+            "Glass",
+            Ui2Rect::new((view_w as f32) - 336.0, 104.0, 272.0, 188.0),
+            24,
+            224,
+        );
+
         Mutex::new(state)
+    })
+}
+
+fn surface_state() -> &'static Mutex<Vec<Ui2SurfaceSlot>> {
+    UI2_SURFACES.call_once(|| {
+        Mutex::new(vec![
+            Ui2SurfaceSlot {
+                tex_id: UI2_NOTES_SURFACE_TEX_ID,
+                width: 0,
+                height: 0,
+                dirty: true,
+                label: "notes",
+            },
+            Ui2SurfaceSlot {
+                tex_id: UI2_GLASS_SURFACE_TEX_ID,
+                width: 0,
+                height: 0,
+                dirty: true,
+                label: "glass",
+            },
+        ])
     })
 }
 
@@ -256,6 +314,253 @@ pub fn request_full_recompose(reason: &'static str) {
     UI2_DIRTY.store(true, Ordering::Release);
 }
 
+fn window_content_rect(window: &Ui2Window) -> Option<Ui2Rect> {
+    let w = (window.rect.w - 2.0).max(1.0);
+    let h = (window.rect.h - UI2_TITLE_H - 1.0).max(1.0);
+    if !(w > 0.0 && h > 0.0) {
+        return None;
+    }
+    Some(Ui2Rect::new(
+        window.rect.x + 1.0,
+        window.rect.y + UI2_TITLE_H,
+        w,
+        h,
+    ))
+}
+
+#[inline]
+fn round_to_u32(v: f32, min: u32) -> u32 {
+    let rounded = libm::roundf(v.max(min as f32));
+    if rounded.is_finite() && rounded > 0.0 {
+        rounded as u32
+    } else {
+        min
+    }
+}
+
+fn surface_tex_id_for_window(window: &Ui2Window) -> Option<u32> {
+    match window.kind {
+        Ui2WindowKind::Dialog => Some(UI2_NOTES_SURFACE_TEX_ID),
+        Ui2WindowKind::Overlay => Some(UI2_GLASS_SURFACE_TEX_ID),
+        _ => None,
+    }
+}
+
+fn surface_slot_mut(slots: &mut [Ui2SurfaceSlot], tex_id: u32) -> Option<&mut Ui2SurfaceSlot> {
+    slots.iter_mut().find(|slot| slot.tex_id == tex_id)
+}
+
+fn ensure_surface_storage(tex_id: u32, width: u32, height: u32) -> bool {
+    let need = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if need == 0 {
+        return false;
+    }
+    let zeros = vec![0u8; need];
+    unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
+            tex_id,
+            width,
+            height,
+            zeros.as_ptr(),
+            zeros.len(),
+        ) == 0
+    }
+}
+
+fn draw_texture_rect_no_present(
+    tex_id: u32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    view_w: u32,
+    view_h: u32,
+) -> bool {
+    if tex_id == 0 || !(width > 0.0 && height > 0.0) {
+        return false;
+    }
+
+    let vw = view_w.max(1) as f32;
+    let vh = view_h.max(1) as f32;
+    let left = (2.0 * (x / vw)) - 1.0;
+    let right = (2.0 * ((x + width) / vw)) - 1.0;
+    let top = 1.0 - (2.0 * (y / vh));
+    let bottom = 1.0 - (2.0 * ((y + height) / vh));
+    let verts = [
+        Ui2TexVertex {
+            x: left,
+            y: bottom,
+            u: 0.0,
+            v: 1.0,
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        },
+        Ui2TexVertex {
+            x: right,
+            y: bottom,
+            u: 1.0,
+            v: 1.0,
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        },
+        Ui2TexVertex {
+            x: right,
+            y: top,
+            u: 1.0,
+            v: 0.0,
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        },
+        Ui2TexVertex {
+            x: left,
+            y: bottom,
+            u: 0.0,
+            v: 1.0,
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        },
+        Ui2TexVertex {
+            x: right,
+            y: top,
+            u: 1.0,
+            v: 0.0,
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        },
+        Ui2TexVertex {
+            x: left,
+            y: top,
+            u: 0.0,
+            v: 0.0,
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        },
+    ];
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+    let _ = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+    };
+    let rc = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
+            tex_id,
+            verts.as_ptr() as *const u8,
+            verts.len() * core::mem::size_of::<Ui2TexVertex>(),
+        )
+    };
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    rc == 0
+}
+
+fn render_notes_surface(view_w: u32, view_h: u32) {
+    let bg = (0xFA, 0xF3, 0xE8, 0xFF);
+    let accent = (0xC8, 0x8B, 0x4A, 0xFF);
+    let line = (0xC9, 0xBA, 0xA4, 0xFF);
+    let chip = (0x24, 0x2A, 0x33, 0xFF);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(0.0, 0.0, view_w as f32, view_h as f32, bg, view_w, view_h);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(0.0, 0.0, 6.0, view_h as f32, accent, view_w, view_h);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(18.0, 18.0, (view_w as f32) - 36.0, 30.0, chip, view_w, view_h);
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"ui2 / notes surface", 28.0, 24.0, view_w, view_h, 255);
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(
+        b"separate offscreen target composed by ui2",
+        24.0,
+        62.0,
+        view_w,
+        view_h,
+        220,
+    );
+    for idx in 0..4 {
+        let y = 102.0 + (idx as f32 * 28.0);
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(24.0, y + 10.0, (view_w as f32) - 48.0, 1.0, line, view_w, view_h);
+    }
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"- browser host stays separate", 24.0, 96.0, view_w, view_h, 210);
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"- cursor plane remains external", 24.0, 124.0, view_w, view_h, 210);
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"- loadscreen handoff stays external", 24.0, 152.0, view_w, view_h, 210);
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"- this surface should survive moves", 24.0, 180.0, view_w, view_h, 210);
+}
+
+fn render_glass_surface(view_w: u32, view_h: u32) {
+    let clear = (0x00, 0x00, 0x00, 0x00);
+    let shell = (0x4D, 0x7A, 0x74, 0x92);
+    let band = (0xB8, 0xD9, 0xD3, 0x72);
+    let edge = (0xE8, 0xF4, 0xF2, 0xD6);
+    let glow = (0xF1, 0xC4, 0x7A, 0xA8);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(0.0, 0.0, view_w as f32, view_h as f32, clear, view_w, view_h);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(0.0, 0.0, view_w as f32, view_h as f32, shell, view_w, view_h);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(16.0, 16.0, (view_w as f32) - 32.0, 34.0, band, view_w, view_h);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(20.0, 64.0, (view_w as f32) - 40.0, 2.0, edge, view_w, view_h);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(20.0, (view_h as f32) - 36.0, (view_w as f32) - 40.0, 2.0, edge, view_w, view_h);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present((view_w as f32) - 64.0, 20.0, 24.0, 24.0, glow, view_w, view_h);
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"glass overlay", 24.0, 22.0, view_w, view_h, 235);
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(
+        b"alpha texture over ui2 body",
+        24.0,
+        78.0,
+        view_w,
+        view_h,
+        220,
+    );
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"blend / scissor demo", 24.0, 106.0, view_w, view_h, 210);
+}
+
+fn render_surface_content(window: &Ui2Window, view_w: u32, view_h: u32) {
+    match window.kind {
+        Ui2WindowKind::Dialog => render_notes_surface(view_w, view_h),
+        Ui2WindowKind::Overlay => render_glass_surface(view_w, view_h),
+        _ => {}
+    }
+}
+
+fn prepare_window_surface(window: &Ui2Window) -> Option<(u32, Ui2Rect)> {
+    let tex_id = surface_tex_id_for_window(window)?;
+    let content = window_content_rect(window)?;
+    let width = round_to_u32(content.w, 1);
+    let height = round_to_u32(content.h, 1);
+
+    let surface_lock = surface_state();
+    let mut surfaces = surface_lock.lock();
+    let slot = surface_slot_mut(&mut surfaces, tex_id)?;
+    let needs_alloc = slot.width != width || slot.height != height;
+    if needs_alloc {
+        if !ensure_surface_storage(tex_id, width, height) {
+            return None;
+        }
+        slot.width = width;
+        slot.height = height;
+        slot.dirty = true;
+    }
+
+    if slot.dirty {
+        crate::log!(
+            "ui2: surface-update kind={} tex={} {}x{}\n",
+            slot.label,
+            slot.tex_id,
+            width,
+            height
+        );
+        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_render_target(tex_id) };
+        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+        render_surface_content(window, width, height);
+        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_render_target() };
+        slot.dirty = false;
+    }
+
+    Some((tex_id, content))
+}
+
 fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     if !window.visible {
         return;
@@ -279,19 +584,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
         Ui2WindowKind::Menu => (0xF1, 0xE4, 0xC7, window.alpha),
         Ui2WindowKind::Overlay => (0x12, 0x12, 0x14, window.alpha),
     };
-    let shadow_rgba = (0x08, 0x0A, 0x0F, 0x60);
     let border_rgba = (0x08, 0x0A, 0x0F, 0xFF);
-    let title_h = 26.0f32;
-
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        window.rect.x + 8.0,
-        window.rect.y + 10.0,
-        window.rect.w,
-        window.rect.h,
-        shadow_rgba,
-        state.view_w,
-        state.view_h,
-    );
     let _ = crate::gfx::lyon::draw_solid_rect_no_present(
         window.rect.x,
         window.rect.y,
@@ -305,7 +598,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
         window.rect.x,
         window.rect.y,
         window.rect.w,
-        title_h,
+        UI2_TITLE_H,
         frame_rgba,
         state.view_w,
         state.view_h,
@@ -356,20 +649,38 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
         title_rgba.3,
     );
 
-    let body_msg: &[u8] = match window.kind {
-        Ui2WindowKind::Browser => &b"browser surface; content compositor slot"[..],
-        Ui2WindowKind::Dialog => &b"dialog surface; partial invalidation target"[..],
-        Ui2WindowKind::Menu => &b"menu surface; independent top-level alpha"[..],
-        Ui2WindowKind::Overlay => &b"overlay surface; translucent top-level pass"[..],
-    };
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(
-        body_msg,
-        window.rect.x + 12.0,
-        window.rect.y + title_h + 10.0,
-        state.view_w,
-        state.view_h,
-        220,
-    );
+    if let Some((tex_id, content)) = prepare_window_surface(window) {
+        let sx = round_to_u32(content.x.max(0.0), 0);
+        let sy = round_to_u32(content.y.max(0.0), 0);
+        let sw = round_to_u32(content.w, 1);
+        let sh = round_to_u32(content.h, 1);
+        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_scissor(sx, sy, sw, sh) };
+        let _ = draw_texture_rect_no_present(
+            tex_id,
+            content.x,
+            content.y,
+            content.w,
+            content.h,
+            state.view_w,
+            state.view_h,
+        );
+        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_scissor() };
+    } else {
+        let body_msg: &[u8] = match window.kind {
+            Ui2WindowKind::Browser => &b"browser surface; content compositor slot"[..],
+            Ui2WindowKind::Dialog => &b"dialog surface; partial invalidation target"[..],
+            Ui2WindowKind::Menu => &b"menu surface; independent top-level alpha"[..],
+            Ui2WindowKind::Overlay => &b"overlay surface; translucent top-level pass"[..],
+        };
+        crate::gfx::text::draw_atlas_text_in_frame_alpha(
+            body_msg,
+            window.rect.x + 12.0,
+            window.rect.y + UI2_TITLE_H + 10.0,
+            state.view_w,
+            state.view_h,
+            220,
+        );
+    }
 }
 
 fn compose_windows(state: &mut Ui2State) {
@@ -398,6 +709,10 @@ fn compose_windows(state: &mut Ui2State) {
     );
 
     unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
+    for idx in sorted_window_indices(state) {
+        let window = &state.windows[idx];
+        let _ = prepare_window_surface(window);
+    }
     for idx in sorted_window_indices(state) {
         let window = &state.windows[idx];
         draw_window_frame(state, window);

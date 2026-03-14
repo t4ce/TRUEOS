@@ -406,6 +406,16 @@ export function renderSceneContentToCurrentTarget(doc, vw, contentH) {
   return true;
 }
 
+export function renderSceneRegionToCurrentTarget(doc, vw, docTopY = 0, regionH = 1) {
+  const targetW = Math.max(1, Number(vw || 1) | 0);
+  const regionTop = Math.max(0, Math.round(Number(docTopY || 0)));
+  const targetH = Math.max(1, Number(regionH || 1) | 0);
+  const display = buildSceneDisplayLists(doc, targetW, regionTop, regionTop + targetH, null);
+  cmdStream.fillRect(0, 0, targetW, targetH, DEFAULT_CLEAR_RGBA, 0, 0);
+  drawSceneDisplayLists(display, targetW, targetH, -regionTop, false, null);
+  return true;
+}
+
 export function composeSceneTextureToCurrentTarget(contentTexId, contentW, contentH, vw, vh, scrollY, contentTopY = 0, overlayRuns, overlayRect = null) {
   const targetTexId = Math.max(0, Number(contentTexId || 0) | 0);
   const drawW = Math.max(1, Number(vw || 1) | 0);
@@ -434,10 +444,87 @@ export function composeSceneTextureToCurrentTarget(contentTexId, contentW, conte
   try {
     if (targetTexId > 0) {
       const u0 = 0;
-      const v0 = Math.max(0, 1 - (scrollTop / texH));
+      const v0 = Math.max(0, scrollTop / texH);
       const u1 = Math.min(1, drawW / texW);
-      const v1 = Math.max(0, 1 - ((scrollTop + drawH) / texH));
+      const v1 = Math.min(1, (scrollTop + drawH) / texH);
       cmdStream.drawTextureRect(targetTexId, 0, 0, drawW, drawH, u0, v0, u1, v1);
+    }
+  } finally {
+    cmdStream.popClipRect();
+  }
+
+  if (overlayTextRuns.length <= 0) return true;
+
+  cmdStream.setBlendEnabled(1);
+  cmdStream.setBlendMode(0);
+  cmdStream.setPremultipliedAlpha(0);
+  const texId = Number(cmdStream.createAtlasTexture(ATLAS_KIND) || 0);
+  for (let i = 0; i < overlayTextRuns.length; i += 1) {
+    const run = overlayTextRuns[i] || null;
+    const rgba = Number(run && run.rgba);
+    cmdStream.drawAtlasText(
+      texId,
+      ATLAS_KIND,
+      Number(run && run.x || 0),
+      Number(run && run.y || 0),
+      String(run && run.text || ''),
+      Number.isFinite(Number(run && run.fontPx)) ? Math.max(1, Math.round(Number(run.fontPx))) : DEFAULT_THEME.FONT_PX,
+      Number.isFinite(rgba) ? ((rgba >>> 8) & 0x00FFFFFF) : DEFAULT_THEME.FONT_RGB,
+      Number.isFinite(rgba) ? (rgba & 0xFF) : DEFAULT_THEME.FONT_ALPHA,
+      Number(run && run.italicTiltDeg || 0),
+      Number(run && run.boldMode || 0),
+    );
+  }
+  return true;
+}
+
+export function composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollY, contentTopY = 0, overlayRuns, overlayRect = null) {
+  const drawW = Math.max(1, Number(vw || 1) | 0);
+  const drawH = Math.max(1, Number(vh || 1) | 0);
+  const initialTop = Math.max(0, Math.round(Number(contentTopY || 0)));
+  const scrollTop = initialTop + Math.max(0, Math.round(Number(scrollY || 0)));
+  const scrollBottom = scrollTop + drawH;
+  const overlayTextRuns = buildOverlayTextRuns(overlayRuns);
+  const items = Array.isArray(regions) ? regions : [];
+
+  if (overlayRect && typeof overlayRect === 'object') {
+    cmdStream.fillRect(
+      Number(overlayRect.x || 0),
+      Number(overlayRect.y || 0),
+      Number(overlayRect.width || 0),
+      Number(overlayRect.height || 0),
+      Number(overlayRect.rgba || 0),
+    );
+  }
+
+  cmdStream.setBlendEnabled(0);
+  cmdStream.setBlendMode(0);
+  cmdStream.setPremultipliedAlpha(0);
+  cmdStream.pushClipRect(0, 0, drawW, drawH);
+  try {
+    for (let i = 0; i < items.length; i += 1) {
+      const region = items[i] || null;
+      const texId = Math.max(0, Number(region && region.texId || 0) | 0);
+      const texW = Math.max(1, Number(region && region.width || drawW) | 0);
+      const texH = Math.max(1, Number(region && region.height || drawH) | 0);
+      const docY = Math.max(0, Math.round(Number(region && region.docY || 0)));
+      const docBottom = docY + texH;
+      if (texId <= 0) continue;
+      if (docBottom <= scrollTop || docY >= scrollBottom) continue;
+
+      const srcTop = Math.max(docY, scrollTop);
+      const srcBottom = Math.min(docBottom, scrollBottom);
+      const srcHeight = Math.max(0, srcBottom - srcTop);
+      if (srcHeight <= 0) continue;
+
+      const srcOffsetY = srcTop - docY;
+      const destY = srcTop - scrollTop;
+      const drawWidth = Math.max(1, Math.min(drawW, texW));
+      const u0 = 0;
+      const u1 = Math.min(1, drawWidth / texW);
+      const v0 = Math.max(0, srcOffsetY / texH);
+      const v1 = Math.min(1, (srcOffsetY + srcHeight) / texH);
+      cmdStream.drawTextureRect(texId, 0, destY, drawWidth, srcHeight, u0, v0, u1, v1);
     }
   } finally {
     cmdStream.popClipRect();
