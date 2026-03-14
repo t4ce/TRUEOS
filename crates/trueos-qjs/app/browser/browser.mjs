@@ -1,9 +1,9 @@
 import * as parse5 from 'parse5';
 import * as cmdStream from 'trueos:cmd_stream';
 import Yoga from 'yoga-layout';
-import { Buffer } from 'node:buffer';
 import { Worker } from 'node:worker_threads';
 import { createFpsOverlay } from './fps.mjs';
+import { createBrowserAssetManager } from './browser_assets.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
 import {
   attachThemeLayoutRuntime as attachParryThemeLayoutRuntime,
@@ -34,7 +34,12 @@ let cachedHtml = '';
 let cachedDoc = null;
 let cursorReadSeq = 0;
 let scrollY = 0;
-let currentPageUrl = String(runtime.host.__trueosBrowserCurrentUrl || runtime.host.__trueosBrowserUrl || '');
+let currentPageUrl = String(
+  runtime.host.__trueosBrowserCurrentUrl
+  || runtime.host.__trueosBrowserUrl
+  || runtime.host.__trueosBrowserBootstrapInitialUrl
+  || '',
+);
 const kernelCursorState = new Map();
 const cursorButtonEvents = [];
 const cursorDragOrigins = new Map();
@@ -44,14 +49,11 @@ let browserActionSeq = 0;
 let aiStartPromise = null;
 let aiStartSpecifier = '';
 let aiWorker = null;
-let aiAutostartScheduled = false;
 const aiInputQueue = [];
 const aiInputWaiters = [];
 let pendingReleaseRect = null;
 let cursorMoveLogCount = 0;
 const pendingSyntheticCursorEchoes = [];
-const imageTextureCache = new Map();
-const imageTextureLoads = new Map();
 
 const fpsOverlay = createFpsOverlay();
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
@@ -88,6 +90,15 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     targetShape: 'Close to future computer-use style APIs while still reflecting TRUEOS capabilities today.',
   },
 };
+
+const assetManager = createBrowserAssetManager({
+  cmdStream,
+  host: runtime.host,
+  paint,
+  resolveNavigationUrl,
+  raiseBrowserError,
+  describeError,
+});
 
 function resolveRuntime() {
   const host = (typeof globalThis !== 'undefined') ? globalThis : this;
@@ -357,302 +368,6 @@ function detailSuffix(details = null) {
     parts.push(`${key}=${summarizeForError(raw)}`);
   }
   return parts.length > 0 ? ` [${parts.join(' ')}]` : '';
-}
-
-function dataUrlToBytes(url) {
-  const value = String(url || '');
-  const match = value.match(/^data:([^,]*?),(.*)$/s);
-  if (!match) {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_DATA_URL_INVALID', 'Image data URL could not be decoded', {
-      url: value,
-    });
-  }
-
-  const meta = String(match[1] || '');
-  const payload = String(match[2] || '');
-  const parts = meta.split(';').map((part) => String(part || '').trim().toLowerCase()).filter(Boolean);
-  const mime = parts.length > 0 && !parts[0].includes('=') ? parts[0] : 'text/plain';
-  const isBase64 = parts.includes('base64');
-
-  if (isBase64) {
-    const decoded = Buffer.from(payload, 'base64');
-    return {
-      mime,
-      bytes: new Uint8Array(decoded.buffer, decoded.byteOffset, decoded.byteLength).slice(),
-    };
-  }
-
-  const text = decodeURIComponent(payload);
-  const bytes = new Uint8Array(text.length);
-  for (let i = 0; i < text.length; i += 1) {
-    bytes[i] = text.charCodeAt(i) & 0xFF;
-  }
-  return { mime, bytes };
-}
-
-function readPngDimensions(bytes) {
-  const data = bytes instanceof Uint8Array ? bytes : null;
-  if (!data || data.length < 24) {
-    return { width: 0, height: 0 };
-  }
-  if (
-    data[0] !== 0x89 || data[1] !== 0x50 || data[2] !== 0x4E || data[3] !== 0x47
-    || data[4] !== 0x0D || data[5] !== 0x0A || data[6] !== 0x1A || data[7] !== 0x0A
-  ) {
-    return { width: 0, height: 0 };
-  }
-  if (String.fromCharCode(data[12], data[13], data[14], data[15]) !== 'IHDR') {
-    return { width: 0, height: 0 };
-  }
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  return {
-    width: Math.max(0, view.getUint32(16, false) | 0),
-    height: Math.max(0, view.getUint32(20, false) | 0),
-  };
-}
-
-function waitForNextImageUploadTick() {
-  return new Promise((resolve) => {
-    if (typeof setTimeout === 'function') {
-      setTimeout(() => resolve(), 1);
-      return;
-    }
-    throw new Error('image upload wait requires setTimeout');
-  });
-}
-
-async function waitForTextureReady(texId) {
-  const id = Math.max(0, Number(texId || 0) | 0);
-  if (id <= 0) {
-    throw new Error('invalid texture id');
-  }
-  while (true) {
-    const status = Math.round(Number(cmdStream.getTextureStatus(id) || 0) || 0);
-    if (status === 2) {
-      return true;
-    }
-    if (status < 0) {
-      throw new Error(`texture upload failed (${status})`);
-    }
-    await waitForNextImageUploadTick();
-  }
-}
-
-const MAX_FETCHED_IMAGE_BINARIES = 3;
-const fetchedImageBinaryUrls = new Set();
-const pendingImagePrimeUrls = new Set();
-let imagePrimeScheduled = false;
-
-function resolveFetchableImageKind(url) {
-  const normalizedUrl = String(url || '').toLowerCase();
-  if (/\.png(?:$|[?#])/.test(normalizedUrl)) return 'png';
-  if (/\.bmp(?:$|[?#])/.test(normalizedUrl)) return 'bmp';
-  if (/\.svg(?:$|[?#])/.test(normalizedUrl)) return 'svg';
-  return '';
-}
-
-function noteFetchedImageBinary(url) {
-  const key = String(url || '').trim();
-  if (!key || fetchedImageBinaryUrls.has(key)) return;
-  if (fetchedImageBinaryUrls.size >= MAX_FETCHED_IMAGE_BINARIES) {
-    raiseBrowserError(
-      'TRUEOS_BROWSER_IMAGE_FETCH_LIMIT_REACHED',
-      'Image fetch limit reached for binary image resources',
-      { url: key, limit: MAX_FETCHED_IMAGE_BINARIES },
-    );
-  }
-  fetchedImageBinaryUrls.add(key);
-}
-
-function flushQueuedImagePrimes() {
-  imagePrimeScheduled = false;
-  if (pendingImagePrimeUrls.size <= 0) return;
-  const urls = Array.from(pendingImagePrimeUrls);
-  pendingImagePrimeUrls.clear();
-  for (let i = 0; i < urls.length; i += 1) {
-    const resolvedSrc = String(urls[i] || '').trim();
-    if (!resolvedSrc) continue;
-    const cached = imageTextureCache.get(resolvedSrc) || null;
-    if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
-      continue;
-    }
-    void ensureImageTexture(resolvedSrc);
-  }
-}
-
-function scheduleImagePrimeFlush() {
-  if (imagePrimeScheduled) return;
-  imagePrimeScheduled = true;
-  const job = () => {
-    try {
-      flushQueuedImagePrimes();
-    } catch (_) {}
-  };
-  if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
-    Promise.resolve().then(job).catch(() => {
-      imagePrimeScheduled = false;
-    });
-    return;
-  }
-  job();
-}
-
-function queueImageRepaint() {
-  try {
-    paint();
-  } catch (_) {}
-}
-
-async function requestReadyImageTexture(url) {
-  const value = String(url || '').trim();
-  if (!value) {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_URL_MISSING', 'Image request failed because src was empty');
-  }
-
-  if (!value.startsWith('data:')) {
-    const requestedKind = resolveFetchableImageKind(value);
-    if (!requestedKind) {
-      raiseBrowserError(
-        'TRUEOS_BROWSER_IMAGE_FETCH_KIND_UNSUPPORTED',
-        'Image fetch is restricted to png, bmp, or svg URLs',
-        { url: value },
-      );
-    }
-    noteFetchedImageBinary(value);
-  }
-
-  if (typeof runtime.host.__trueosResolveReadyImageTexture !== 'function') {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_NATIVE_UNAVAILABLE', 'Native image request is unavailable', {
-      url: value,
-    });
-  }
-
-  const result = await runtime.host.__trueosResolveReadyImageTexture(value);
-  const texId = Math.max(0, Number(result && result.texId || 0) | 0);
-  if (texId <= 0) {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_NATIVE_FAILED', 'Native image request did not yield a texture id', {
-      url: value,
-    });
-  }
-  return {
-    texId,
-    mime: String(result && result.mime || ''),
-    pixelWidth: Math.max(0, Number(result && result.width || 0) | 0),
-    pixelHeight: Math.max(0, Number(result && result.height || 0) | 0),
-  };
-}
-
-async function ensureImageTexture(resolvedUrl) {
-  const cacheKey = String(resolvedUrl || '').trim();
-  if (!cacheKey) return null;
-
-  const cached = imageTextureCache.get(cacheKey) || null;
-  if (cached && (cached.state === 'ready' || cached.state === 'error')) {
-    return cached;
-  }
-
-  const inFlight = imageTextureLoads.get(cacheKey) || null;
-  if (inFlight) {
-    return inFlight;
-  }
-
-  imageTextureCache.set(cacheKey, {
-    state: 'loading',
-    texId: 0,
-    url: cacheKey,
-    mime: '',
-    error: '',
-  });
-
-  const task = (async () => {
-    try {
-      let ready;
-      if (cacheKey.startsWith('data:')) {
-        const { mime, bytes } = dataUrlToBytes(cacheKey);
-        const dims = readPngDimensions(bytes);
-        const texId = Number(cmdStream.createTexturePngAsync(bytes) || 0);
-        if (!Number.isFinite(texId) || texId <= 0) {
-          throw new Error('inline image texture upload failed');
-        }
-        await waitForTextureReady(texId);
-        ready = {
-          state: 'ready',
-          texId,
-          url: cacheKey,
-          mime: String(mime || 'image/png'),
-          pixelWidth: Math.max(0, Number(dims.width || 0) | 0),
-          pixelHeight: Math.max(0, Number(dims.height || 0) | 0),
-          error: '',
-        };
-      } else {
-        const loaded = await requestReadyImageTexture(cacheKey);
-        ready = {
-          state: 'ready',
-          texId: Math.max(0, Number(loaded.texId || 0) | 0),
-          url: cacheKey,
-          mime: String(loaded.mime || 'image/png'),
-          pixelWidth: Math.max(0, Number(loaded.pixelWidth || 0) | 0),
-          pixelHeight: Math.max(0, Number(loaded.pixelHeight || 0) | 0),
-          error: '',
-        };
-      }
-      imageTextureCache.set(cacheKey, ready);
-      return ready;
-    } catch (err) {
-      const failed = {
-        state: 'error',
-        texId: 0,
-        url: cacheKey,
-        mime: '',
-        error: describeError(err),
-      };
-      imageTextureCache.set(cacheKey, failed);
-      return failed;
-    } finally {
-      imageTextureLoads.delete(cacheKey);
-      queueImageRepaint();
-    }
-  })();
-
-  imageTextureLoads.set(cacheKey, task);
-  return task;
-}
-
-function applyImageResourcesToRows(rows) {
-  const list = Array.isArray(rows) ? rows : [];
-  for (let i = 0; i < list.length; i += 1) {
-    const row = list[i];
-    if (!row || String(row.kind || '') !== 'image') continue;
-    const rawSrc = String(row.src || '').trim();
-    const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
-    row.resolvedSrc = resolvedSrc;
-    row.texId = 0;
-    row.imagePixelWidth = 0;
-    row.imagePixelHeight = 0;
-    if (!resolvedSrc) continue;
-    const cached = imageTextureCache.get(resolvedSrc) || null;
-    if (cached && cached.state === 'ready') {
-      row.texId = Number(cached.texId || 0);
-      row.imagePixelWidth = Math.max(0, Number(cached.pixelWidth || 0) | 0);
-      row.imagePixelHeight = Math.max(0, Number(cached.pixelHeight || 0) | 0);
-    }
-  }
-}
-
-function primeImageRows(rows) {
-  const list = Array.isArray(rows) ? rows : [];
-  for (let i = 0; i < list.length; i += 1) {
-    const row = list[i];
-    if (!row || String(row.kind || '') !== 'image') continue;
-    const resolvedSrc = String(row.resolvedSrc || '').trim();
-    if (!resolvedSrc) continue;
-    const cached = imageTextureCache.get(resolvedSrc) || null;
-    if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
-      continue;
-    }
-    pendingImagePrimeUrls.add(resolvedSrc);
-  }
-  scheduleImagePrimeFlush();
 }
 
 function createBrowserError(code, message, details = null, cause = null) {
@@ -1010,45 +725,6 @@ function buildDocFromHtml(html, vw, context = 'document') {
   return buildDocFromParsed(parsed, vw, context);
 }
 
-function collectImagePrimeUrls(node, out = null) {
-  const urls = Array.isArray(out) ? out : [];
-  if (!node || typeof node !== 'object') return urls;
-  if (isElement(node) && String(node.tagName || '').toLowerCase() === 'img') {
-    const rawSrc = String(getNodeAttr(node, 'src') || '').trim();
-    const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
-    if (resolvedSrc) {
-      urls.push(resolvedSrc);
-    }
-  }
-  const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
-  for (let i = 0; i < kids.length; i += 1) {
-    collectImagePrimeUrls(kids[i], urls);
-  }
-  return urls;
-}
-
-function primeHtmlImageUrls(html) {
-  const source = String(html || '');
-  if (!source) return;
-  let parsed;
-  try {
-    parsed = parse5.parse(source);
-  } catch (_) {
-    return;
-  }
-  const urls = collectImagePrimeUrls(parsed, []);
-  for (let i = 0; i < urls.length; i += 1) {
-    const resolvedSrc = String(urls[i] || '').trim();
-    if (!resolvedSrc) continue;
-    const cached = imageTextureCache.get(resolvedSrc) || null;
-    if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
-      continue;
-    }
-    pendingImagePrimeUrls.add(resolvedSrc);
-  }
-  scheduleImagePrimeFlush();
-}
-
 function readNodeText(node) {
   if (!node || typeof node !== 'object') return '';
   if (isTextNode(node)) return String(node.value || '');
@@ -1298,8 +974,8 @@ function ensureDoc(vw) {
   } else if (cachedDoc.width !== vw) {
     cachedDoc = buildDocFromParsed(cachedDoc.dom, vw, 'cached html document');
   }
-  applyImageResourcesToRows(cachedDoc && cachedDoc.rows ? cachedDoc.rows : []);
-  primeImageRows(cachedDoc && cachedDoc.rows ? cachedDoc.rows : []);
+  assetManager.applyResourcesToRows(cachedDoc && cachedDoc.rows ? cachedDoc.rows : []);
+  assetManager.requestAssetsForRows(cachedDoc && cachedDoc.rows ? cachedDoc.rows : []);
   return cachedDoc;
 }
 
@@ -1699,24 +1375,14 @@ function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
   paint();
-  if (!aiAutostartScheduled) {
-    aiAutostartScheduled = true;
-    if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
-      Promise.resolve().then(() => {
-        maybeAutostartAi();
-      }).catch(() => {});
-    } else {
-      maybeAutostartAi();
-    }
-  }
   const htmlSnapshot = cachedHtml;
   if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
     Promise.resolve().then(() => {
       if (cachedHtml !== htmlSnapshot) return;
-      primeHtmlImageUrls(htmlSnapshot);
+      assetManager.primeHtmlImageUrls(htmlSnapshot);
     }).catch(() => {});
   } else {
-    primeHtmlImageUrls(htmlSnapshot);
+    assetManager.primeHtmlImageUrls(htmlSnapshot);
   }
   return true;
 }
@@ -1813,6 +1479,9 @@ async function loadUrlIntoBrowser(url, request = null) {
   if (!resolved) {
     return { ok: 0, handled: 0, reason: 'missing-url' };
   }
+  if (typeof runtime.host.__trueosPrewarmUrl === 'function') {
+    try { runtime.host.__trueosPrewarmUrl(resolved); } catch (_) {}
+  }
   setCurrentPageUrl(resolved);
   const hook = runtime.host.__trueosBrowserNavigate;
   if (typeof hook === 'function') {
@@ -1850,6 +1519,42 @@ async function loadUrlIntoBrowser(url, request = null) {
       error: describeError(err),
     };
   }
+}
+
+function consumeBootstrapInitialNavigation() {
+  const pending = runtime.host.__trueosBrowserBootstrapInitialNav;
+  const bootstrapUrl = String(runtime.host.__trueosBrowserBootstrapInitialUrl || '');
+  if (!pending || typeof pending.then !== 'function' || !bootstrapUrl) {
+    return null;
+  }
+
+  runtime.host.__trueosBrowserBootstrapInitialNav = null;
+  setCurrentPageUrl(bootstrapUrl);
+  return Promise.resolve(pending).then((result) => {
+    const resolved = result && typeof result === 'object' ? result : null;
+    if (resolved && resolved.ok) {
+      const html = typeof resolved.html === 'string' ? resolved.html : '';
+      setHtml(html);
+      return {
+        ok: 1,
+        handled: 1,
+        loaded: 1,
+        url: bootstrapUrl,
+        request: { url: bootstrapUrl, source: 'bootstrap-preload' },
+        preloaded: 1,
+      };
+    }
+    return {
+      ok: 0,
+      handled: 0,
+      reason: 'navigate-fetch-failed',
+      url: bootstrapUrl,
+      preloaded: 1,
+      error: resolved && typeof resolved.error === 'string'
+        ? resolved.error
+        : 'bootstrap navigation failed',
+    };
+  });
 }
 
 function surfToUrl(url, event = null) {
@@ -2440,21 +2145,8 @@ function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
   return aiStartPromise;
 }
 
-function maybeAutostartAi() {
-  const cfg = runtime.host.__trueosBrowserAutoStartAi;
-  if (!cfg) return;
-  if (cfg === true) {
-    void startAi('/qjs/ai/ai_pc.mjs');
-    return;
-  }
-  if (typeof cfg === 'string') {
-    void startAi(cfg);
-    return;
-  }
-  if (typeof cfg === 'object') {
-    const specifier = typeof cfg.specifier === 'string' && cfg.specifier ? cfg.specifier : '/qjs/ai/ai_pc.mjs';
-    void startAi(specifier, cfg);
-  }
+function InjectOpenAi() {
+  void startAi('/qjs/ai/ai_pc.mjs');
 }
 
 runtime.host.__trueosBrowser = {
@@ -2584,8 +2276,11 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
   (runtime.host.window || runtime.host).addEventListener('resize', paint);
 }
 
+InjectOpenAi();
+
 if (INITIAL_NAVIGATE_TO_W3C_PNG) {
-  loadUrlIntoBrowser(INITIAL_W3C_PNG_URL).catch((err) => {
+  const initialNavigation = consumeBootstrapInitialNavigation() || loadUrlIntoBrowser(INITIAL_W3C_PNG_URL);
+  initialNavigation.catch((err) => {
     try { console.log('[browser.mjs] initial navigation failed', String(err && err.stack ? err.stack : err)); } catch (_) {}
     setHtml(runtime.host.__trueosUiHtml || '');
   });
