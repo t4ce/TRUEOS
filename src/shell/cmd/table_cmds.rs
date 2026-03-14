@@ -29,6 +29,13 @@ struct PciBarRow {
     raw: String,
 }
 
+struct PciDeviceRow {
+    name: String,
+    addr: String,
+    vid: String,
+    pid: String,
+}
+
 #[inline]
 fn ensure_pci_devices_enumerated() {
     let mut len: usize = 0;
@@ -139,6 +146,41 @@ fn pci_bar_rows() -> Vec<PciBarRow> {
     rows
 }
 
+fn pci_device_rows(db: Option<&[u8]>) -> Vec<PciDeviceRow> {
+    let mut rows: Vec<PciDeviceRow> = Vec::new();
+
+    crate::pci::with_devices(|list| {
+        for dev in list.iter() {
+            let addr = alloc::format!("{:02X}:{:02X}.{}", dev.bus, dev.slot, dev.function);
+            let vid = alloc::format!("{:04X}", dev.vendor);
+            let pid = alloc::format!("{:04X}", dev.device);
+
+            let name = if let Some(db) = db {
+                if let Some((v, d)) =
+                    crate::pci::pciids::lookup_vendor_device_from_db(db, dev.vendor, dev.device)
+                {
+                    let v_s = String::from_utf8_lossy(v).trim().to_string();
+                    let d_s = String::from_utf8_lossy(d).trim().to_string();
+                    alloc::format!("{} {}", v_s, d_s)
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
+            rows.push(PciDeviceRow {
+                name,
+                addr,
+                vid,
+                pid,
+            });
+        }
+    });
+
+    rows
+}
+
 fn write_pci_bar_dump(out: &mut String) {
     writeln!(out, "=== PCI BARs ===").unwrap();
     writeln!(
@@ -195,6 +237,7 @@ pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
         t.print_header(ctx.io);
 
         t.print_row(ctx.io, ["tlb.pci", "List PCI devices"]);
+        t.print_row(ctx.io, ["tlb.pciids", "Download pci.ids once"]);
         t.print_row(ctx.io, ["tlb.pci.bar", "List PCI BAR windows"]);
         t.print_row(ctx.io, ["tlb.mem", "List memory map"]);
         t.print_row(ctx.io, ["tlb.cpu", "List CPU cores"]);
@@ -254,29 +297,35 @@ pub(crate) fn cmd_tlb_pci(
     let t = Table::new(&cols);
     t.print_header(ctx.io);
 
-    crate::pci::with_devices(|list| {
-        for dev in list.iter() {
-            let addr = alloc::format!("{:02X}:{:02X}.{}", dev.bus, dev.slot, dev.function);
-            let vid = alloc::format!("{:04X}", dev.vendor);
-            let did = alloc::format!("{:04X}", dev.device);
+    for row in pci_device_rows(db) {
+        t.print_row(ctx.io, &[row.name, row.addr, row.vid, row.pid]);
+    }
 
-            let name = if let Some(db) = db {
-                if let Some((v, d)) =
-                    crate::pci::pciids::lookup_vendor_device_from_db(db, dev.vendor, dev.device)
-                {
-                    let v_s = String::from_utf8_lossy(v).trim().to_string();
-                    let d_s = String::from_utf8_lossy(d).trim().to_string();
-                    alloc::format!("{} {}", v_s, d_s)
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            };
+    CommandAction::None
+}
 
-            t.print_row(ctx.io, &[name, addr, vid, did]);
+pub(crate) fn cmd_tlb_pciids(
+    ctx: &mut ShellCommandCtx<'_>,
+    _: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
+    ctx.io
+        .write_str("tlb.pciids: downloading pci.ids once...\r\n");
+
+    match crate::pci::pciids::download_once_blocking() {
+        Ok(bytes) => {
+            ctx.io.write_fmt(format_args!(
+                "tlb.pciids: downloaded {} bytes to {}\r\n",
+                bytes,
+                crate::pci::pciids::PCI_IDS_KEY
+            ));
+            ctx.io
+                .write_str("tlb.pciids: tlb.pci will auto-use it on the next run\r\n");
         }
-    });
+        Err(reason) => {
+            ctx.io
+                .write_fmt(format_args!("tlb.pciids: failed ({})\r\n", reason));
+        }
+    }
 
     CommandAction::None
 }
@@ -974,38 +1023,21 @@ pub(crate) fn cmd_tlb_dump(
     )
     .unwrap();
     writeln!(out, "{:-<30}  {:-<10}  {:-<6}  {:-<6}", "", "", "", "").unwrap();
-    crate::pci::with_devices(|list| {
-        for dev in list.iter() {
-            let addr = alloc::format!("{:02X}:{:02X}.{}", dev.bus, dev.slot, dev.function);
-            let vid = alloc::format!("{:04X}", dev.vendor);
-            let did = alloc::format!("{:04X}", dev.device);
+    for row in pci_device_rows(db.as_deref()) {
+        let name_disp = if row.name.len() > 30 {
+            let mut s = String::from(&row.name[..29]);
+            s.push('…');
+            s
+        } else {
+            row.name
+        };
 
-            let name = if let Some(ref db_slice) = db {
-                if let Some((v, d)) = crate::pci::pciids::lookup_vendor_device_from_db(
-                    db_slice, dev.vendor, dev.device,
-                ) {
-                    let v_s = String::from_utf8_lossy(v).trim().to_string();
-                    let d_s = String::from_utf8_lossy(d).trim().to_string();
-                    alloc::format!("{} {}", v_s, d_s)
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            };
-
-            // Truncate name
-            let name_disp = if name.len() > 30 {
-                let mut s = String::from(&name[..29]);
-                s.push('…');
-                s
-            } else {
-                name
-            };
-
-            let _ = writeln!(out, "{:30}  {:10}  {:6}  {:6}", name_disp, addr, vid, did);
-        }
-    });
+        let _ = writeln!(
+            out,
+            "{:30}  {:10}  {:6}  {:6}",
+            name_disp, row.addr, row.vid, row.pid
+        );
+    }
     writeln!(out).unwrap();
 
     // 2b. PCI BARs
