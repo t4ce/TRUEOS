@@ -157,7 +157,7 @@ pub extern "C" fn kmain() -> ! {
     pci::vrng::init_once();
     pci::vrng::smoke_test_once();
     crate::rng::init();
-    usvg_smoke::run();
+    
     disc::probe_once();
     efi::acpi::ensure_tables();
     efi::acpi::hpet::ensure();
@@ -181,7 +181,6 @@ pub extern "C" fn kmain() -> ! {
     if trueos_qjs::async_fs::ensure_service_started(&spawner) {
         crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
     }
-
     // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
     tga::init_once();
     net::init();
