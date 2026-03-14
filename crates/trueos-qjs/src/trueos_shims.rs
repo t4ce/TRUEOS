@@ -54,8 +54,7 @@ unsafe extern "C" {
     ) -> u32;
     pub fn trueos_cabi_net_fetch_result(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_result_len(op_id: u32) -> isize;
-    pub fn trueos_cabi_net_fetch_bytes_read(op_id: u32, out_ptr: *mut u8, out_cap: usize)
-        -> isize;
+    pub fn trueos_cabi_net_fetch_bytes_read(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_discard(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32;
@@ -208,11 +207,7 @@ pub fn shell_qjs_read(out: &mut [u8]) -> usize {
         return 0;
     }
     let got = unsafe { trueos_cabi_shell_qjs_read(out.as_mut_ptr(), out.len()) };
-    if got <= 0 {
-        0
-    } else {
-        got as usize
-    }
+    if got <= 0 { 0 } else { got as usize }
 }
 
 #[inline]
@@ -233,7 +228,8 @@ pub fn gfx_capture_screenshot_data_url() -> Option<alloc::string::String> {
     }
 
     let mut bytes = alloc::vec![0u8; len as usize];
-    let got = unsafe { trueos_cabi_gfx_capture_screenshot_data_url(bytes.as_mut_ptr(), bytes.len()) };
+    let got =
+        unsafe { trueos_cabi_gfx_capture_screenshot_data_url(bytes.as_mut_ptr(), bytes.len()) };
     if got <= 0 {
         return None;
     }

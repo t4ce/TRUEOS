@@ -17,7 +17,10 @@ pub(crate) fn try_parse(line: &str) -> Option<String> {
     }
 
     let lowered = candidate.to_ascii_lowercase();
-    if !ALLOWED_SUFFIXES.iter().any(|suffix| lowered.ends_with(suffix)) {
+    if !ALLOWED_SUFFIXES
+        .iter()
+        .any(|suffix| lowered.ends_with(suffix))
+    {
         return None;
     }
 

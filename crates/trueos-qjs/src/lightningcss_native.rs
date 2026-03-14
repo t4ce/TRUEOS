@@ -8,7 +8,9 @@ use core::ffi::{CStr, c_char};
 use crate as qjs;
 
 #[cfg(feature = "lightningcss-native")]
-use lightningcss::stylesheet::{MinifyOptions, ParserOptions, PrinterOptions, StyleAttribute, StyleSheet};
+use lightningcss::stylesheet::{
+    MinifyOptions, ParserOptions, PrinterOptions, StyleAttribute, StyleSheet,
+};
 
 #[inline]
 fn js_bool(v: bool) -> qjs::JSValue {
@@ -26,14 +28,23 @@ fn js_str(ctx: *mut qjs::JSContext, s: &str) -> qjs::JSValue {
 }
 
 #[inline]
-unsafe fn set_prop_str(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst, key: &str, val: qjs::JSValue) {
+unsafe fn set_prop_str(
+    ctx: *mut qjs::JSContext,
+    obj: qjs::JSValueConst,
+    key: &str,
+    val: qjs::JSValue,
+) {
     let mut keyz = String::from(key);
     keyz.push('\0');
     let _ = unsafe { qjs::JS_SetPropertyStr(ctx, obj, keyz.as_ptr() as *const c_char, val) };
 }
 
 #[inline]
-unsafe fn parse_arg0_string(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValueConst) -> String {
+unsafe fn parse_arg0_string(
+    ctx: *mut qjs::JSContext,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> String {
     if argc <= 0 || argv.is_null() {
         return String::new();
     }
@@ -55,7 +66,8 @@ unsafe fn parse_arg0_string(ctx: *mut qjs::JSContext, argc: i32, argv: *const qj
 fn minified_inline_css(input: &str) -> Result<String, &'static str> {
     #[cfg(feature = "lightningcss-native")]
     {
-        let mut style = StyleAttribute::parse(input, ParserOptions::default()).map_err(|_| "parse failed")?;
+        let mut style =
+            StyleAttribute::parse(input, ParserOptions::default()).map_err(|_| "parse failed")?;
         style.minify(MinifyOptions::default());
         let out = style
             .to_css(PrinterOptions::default())
@@ -75,7 +87,9 @@ fn minified_stylesheet_css(input: &str) -> Result<String, &'static str> {
     {
         let mut sheet =
             StyleSheet::parse(input, ParserOptions::default()).map_err(|_| "parse failed")?;
-        sheet.minify(MinifyOptions::default()).map_err(|_| "minify failed")?;
+        sheet
+            .minify(MinifyOptions::default())
+            .map_err(|_| "minify failed")?;
         let out = sheet
             .to_css(PrinterOptions::default())
             .map_err(|_| "serialize failed")?;
@@ -207,7 +221,9 @@ pub(crate) unsafe fn try_create_native_module(
                 0,
             )
         };
-        let _ = unsafe { qjs::JS_SetModuleExport(ctx, m, parse_name.as_ptr() as *const c_char, parse_fn) };
+        let _ = unsafe {
+            qjs::JS_SetModuleExport(ctx, m, parse_name.as_ptr() as *const c_char, parse_fn)
+        };
 
         let parse_sheet_name = b"parseStylesheet\0";
         let parse_sheet_fn = unsafe {
@@ -234,7 +250,8 @@ pub(crate) unsafe fn try_create_native_module(
         let avail = js_bool(true);
         #[cfg(not(feature = "lightningcss-native"))]
         let avail = js_bool(false);
-        let _ = unsafe { qjs::JS_SetModuleExport(ctx, m, avail_name.as_ptr() as *const c_char, avail) };
+        let _ =
+            unsafe { qjs::JS_SetModuleExport(ctx, m, avail_name.as_ptr() as *const c_char, avail) };
         0
     }
 
@@ -243,8 +260,10 @@ pub(crate) unsafe fn try_create_native_module(
         return core::ptr::null_mut();
     }
 
-    let _ = unsafe { qjs::JS_AddModuleExport(ctx, m, b"parseInlineStyle\0".as_ptr() as *const c_char) };
-    let _ = unsafe { qjs::JS_AddModuleExport(ctx, m, b"parseStylesheet\0".as_ptr() as *const c_char) };
+    let _ =
+        unsafe { qjs::JS_AddModuleExport(ctx, m, b"parseInlineStyle\0".as_ptr() as *const c_char) };
+    let _ =
+        unsafe { qjs::JS_AddModuleExport(ctx, m, b"parseStylesheet\0".as_ptr() as *const c_char) };
     let _ = unsafe { qjs::JS_AddModuleExport(ctx, m, b"isAvailable\0".as_ptr() as *const c_char) };
     m
 }

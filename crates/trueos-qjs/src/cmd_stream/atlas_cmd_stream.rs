@@ -369,7 +369,12 @@ pub(super) fn enqueue_text_batch(tex_id: u32, verts: &[u8], origin_x_ndc: f32, o
     if let Some(last) = runs.last_mut()
         && last.tex_id == tex_id
     {
-        cmd_stream_push_tex_vertices_with_origin(&mut last.verts, verts, origin_x_ndc, origin_y_ndc);
+        cmd_stream_push_tex_vertices_with_origin(
+            &mut last.verts,
+            verts,
+            origin_x_ndc,
+            origin_y_ndc,
+        );
         return;
     }
     let mut out = Vec::with_capacity(verts.len());
@@ -447,92 +452,33 @@ fn cmd_stream_draw_atlas_text_impl(
         bold_mode,
         text,
     )
-        .unwrap_or_else(|| {
-            let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
-            let mut pen_x = 0.0f32;
-            let pen_y = 0.0f32;
-            let mut out = Vec::with_capacity(text.len().saturating_mul(6 * 20));
-            let atlas_w_f = (atlas.width.max(1)) as f32;
-            let atlas_h_f = (atlas.height.max(1)) as f32;
-            let atlas_cell_h_u = atlas.cell_h as usize;
-            let meta_kind = cmd_stream_atlas_meta_kind(kind);
-            let meta_guard = cmd_stream_atlas_meta_get_or_build(meta_kind, atlas);
-            let meta_table = meta_guard.as_ref();
+    .unwrap_or_else(|| {
+        let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+        let mut pen_x = 0.0f32;
+        let pen_y = 0.0f32;
+        let mut out = Vec::with_capacity(text.len().saturating_mul(6 * 20));
+        let atlas_w_f = (atlas.width.max(1)) as f32;
+        let atlas_h_f = (atlas.height.max(1)) as f32;
+        let atlas_cell_h_u = atlas.cell_h as usize;
+        let meta_kind = cmd_stream_atlas_meta_kind(kind);
+        let meta_guard = cmd_stream_atlas_meta_get_or_build(meta_kind, atlas);
+        let meta_table = meta_guard.as_ref();
 
-            for &ch in text.iter() {
-                if ch == b'\n' {
-                    pen_x = 0.0;
-                    continue;
-                }
-                if let Some(table) = meta_table
-                    && let Some(gm) = cmd_stream_atlas_meta_lookup(table, ch)
-                {
-                    if ch == b' ' {
-                        pen_x += gm.advance_px * scale;
-                        continue;
-                    }
-                    let x0 = pen_x;
-                    let y0 = pen_y;
-                    let glyph_h_px = (atlas_cell_h_u as f32).max(1.0) * scale;
-                    let slant_px = tilt_shear * glyph_h_px;
-                    cmd_stream_emit_glyph_quads(
-                        &mut out,
-                        w,
-                        h,
-                        x0,
-                        y0,
-                        gm.glyph_w_px * scale,
-                        glyph_h_px,
-                        slant_px,
-                        gm.u0,
-                        gm.v0,
-                        gm.u1,
-                        gm.v1,
-                        r,
-                        g,
-                        b,
-                        a,
-                        bold_mode,
-                    );
+        for &ch in text.iter() {
+            if ch == b'\n' {
+                pen_x = 0.0;
+                continue;
+            }
+            if let Some(table) = meta_table
+                && let Some(gm) = cmd_stream_atlas_meta_lookup(table, ch)
+            {
+                if ch == b' ' {
                     pen_x += gm.advance_px * scale;
                     continue;
                 }
-
-                let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
-                if slot == u16::MAX {
-                    slot = fallback;
-                }
-                if ch == b' ' {
-                    let glyph_adv_u = atlas
-                        .widths
-                        .get(slot as usize)
-                        .copied()
-                        .unwrap_or(atlas.cell_w as u8) as usize;
-                    pen_x += glyph_adv_u as f32 * scale;
-                    continue;
-                }
-                let glyph_w_u = atlas
-                    .widths
-                    .get(slot as usize)
-                    .copied()
-                    .unwrap_or(atlas.cell_w as u8) as usize;
-                let glyph_h_u = atlas_cell_h_u.max(1);
-
-                let sx = (slot as u32) % grid_w;
-                let sy = (slot as u32) / grid_w;
-                let px0 = (sx as f32) * (atlas.cell_w as f32);
-                let py0 = (sy as f32) * (atlas.cell_h as f32);
-                let px1 = px0 + (glyph_w_u as f32);
-                let py1 = py0 + (glyph_h_u as f32);
-
-                let u0 = px0 / atlas_w_f;
-                let v0 = py0 / atlas_h_f;
-                let u1 = px1 / atlas_w_f;
-                let v1 = py1 / atlas_h_f;
-
                 let x0 = pen_x;
                 let y0 = pen_y;
-                let glyph_h_px = (glyph_h_u as f32) * scale;
+                let glyph_h_px = (atlas_cell_h_u as f32).max(1.0) * scale;
                 let slant_px = tilt_shear * glyph_h_px;
                 cmd_stream_emit_glyph_quads(
                     &mut out,
@@ -540,37 +486,96 @@ fn cmd_stream_draw_atlas_text_impl(
                     h,
                     x0,
                     y0,
-                    (glyph_w_u as f32) * scale,
+                    gm.glyph_w_px * scale,
                     glyph_h_px,
                     slant_px,
-                    u0,
-                    v0,
-                    u1,
-                    v1,
+                    gm.u0,
+                    gm.v0,
+                    gm.u1,
+                    gm.v1,
                     r,
                     g,
                     b,
                     a,
                     bold_mode,
                 );
-                pen_x += glyph_w_u as f32 * scale;
+                pen_x += gm.advance_px * scale;
+                continue;
             }
 
-            let cached: Arc<[u8]> = Arc::from(out.into_boxed_slice());
-            cmd_stream_text_cache_put(CmdStreamTextMeshCacheEntry {
-                kind,
-                view_w,
-                view_h,
-                px_h_bits,
-                rgb,
-                alpha: a,
-                italic_tilt_bits,
+            let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
+            if slot == u16::MAX {
+                slot = fallback;
+            }
+            if ch == b' ' {
+                let glyph_adv_u = atlas
+                    .widths
+                    .get(slot as usize)
+                    .copied()
+                    .unwrap_or(atlas.cell_w as u8) as usize;
+                pen_x += glyph_adv_u as f32 * scale;
+                continue;
+            }
+            let glyph_w_u = atlas
+                .widths
+                .get(slot as usize)
+                .copied()
+                .unwrap_or(atlas.cell_w as u8) as usize;
+            let glyph_h_u = atlas_cell_h_u.max(1);
+
+            let sx = (slot as u32) % grid_w;
+            let sy = (slot as u32) / grid_w;
+            let px0 = (sx as f32) * (atlas.cell_w as f32);
+            let py0 = (sy as f32) * (atlas.cell_h as f32);
+            let px1 = px0 + (glyph_w_u as f32);
+            let py1 = py0 + (glyph_h_u as f32);
+
+            let u0 = px0 / atlas_w_f;
+            let v0 = py0 / atlas_h_f;
+            let u1 = px1 / atlas_w_f;
+            let v1 = py1 / atlas_h_f;
+
+            let x0 = pen_x;
+            let y0 = pen_y;
+            let glyph_h_px = (glyph_h_u as f32) * scale;
+            let slant_px = tilt_shear * glyph_h_px;
+            cmd_stream_emit_glyph_quads(
+                &mut out,
+                w,
+                h,
+                x0,
+                y0,
+                (glyph_w_u as f32) * scale,
+                glyph_h_px,
+                slant_px,
+                u0,
+                v0,
+                u1,
+                v1,
+                r,
+                g,
+                b,
+                a,
                 bold_mode,
-                text: text.to_vec(),
-                verts: cached.clone(),
-            });
-            cached
+            );
+            pen_x += glyph_w_u as f32 * scale;
+        }
+
+        let cached: Arc<[u8]> = Arc::from(out.into_boxed_slice());
+        cmd_stream_text_cache_put(CmdStreamTextMeshCacheEntry {
+            kind,
+            view_w,
+            view_h,
+            px_h_bits,
+            rgb,
+            alpha: a,
+            italic_tilt_bits,
+            bold_mode,
+            text: text.to_vec(),
+            verts: cached.clone(),
         });
+        cached
+    });
 
     if verts.is_empty() {
         return false;
@@ -599,8 +604,8 @@ fn cmd_stream_text_cache_get(
             && e.px_h_bits == px_h_bits
             && e.rgb == rgb
             && e.alpha == alpha
-                && e.italic_tilt_bits == italic_tilt_bits
-                && e.bold_mode == bold_mode
+            && e.italic_tilt_bits == italic_tilt_bits
+            && e.bold_mode == bold_mode
             && e.text.as_slice() == text
     })?;
     let entry = cache.swap_remove(pos);

@@ -157,7 +157,7 @@ pub extern "C" fn kmain() -> ! {
     pci::vrng::init_once();
     pci::vrng::smoke_test_once();
     crate::rng::init();
-    
+
     disc::probe_once();
     efi::acpi::ensure_tables();
     efi::acpi::hpet::ensure();

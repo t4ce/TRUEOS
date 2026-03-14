@@ -165,6 +165,16 @@ export function createBrowserAssetManager(options = {}) {
     } catch (_) {}
   }
 
+  function createFailedImageTexture(url, error) {
+    return {
+      state: 'error',
+      texId: 0,
+      url: String(url || '').trim(),
+      mime: '',
+      error: String(error || 'image unavailable'),
+    };
+  }
+
   async function requestReadyImageTexture(url) {
     const value = String(url || '').trim();
     if (!value) {
@@ -248,6 +258,12 @@ export function createBrowserAssetManager(options = {}) {
             error: '',
           };
         } else {
+          const requestedKind = resolveFetchableImageKind(cacheKey);
+          if (!requestedKind) {
+            ready = createFailedImageTexture(cacheKey, 'unsupported image URL kind');
+            imageTextureCache.set(cacheKey, ready);
+            return ready;
+          }
           const loaded = await requestReadyImageTexture(cacheKey);
           ready = {
             state: 'ready',
@@ -262,13 +278,7 @@ export function createBrowserAssetManager(options = {}) {
         imageTextureCache.set(cacheKey, ready);
         return ready;
       } catch (err) {
-        const failed = {
-          state: 'error',
-          texId: 0,
-          url: cacheKey,
-          mime: '',
-          error: describeError(err),
-        };
+        const failed = createFailedImageTexture(cacheKey, describeError(err));
         imageTextureCache.set(cacheKey, failed);
         return failed;
       } finally {

@@ -9,7 +9,7 @@ use spin::Mutex;
 
 use trueos_v::vnet;
 
-use super::VNet;
+use super::{NetProfile, VNet};
 
 #[derive(Clone, Copy, Debug)]
 pub enum DnsError {
@@ -36,11 +36,19 @@ pub enum DnsServer {
 
 impl Default for DnsConfig {
     fn default() -> Self {
-        Self::for_device(crate::net::primary_device_index())
+        Self::for_profile(NetProfile::default())
     }
 }
 
 impl DnsConfig {
+    pub fn for_profile(profile: NetProfile) -> Self {
+        if let Some(dev_idx) = profile.resolve_device_index() {
+            Self::for_device(dev_idx)
+        } else {
+            Self::for_device(0)
+        }
+    }
+
     pub fn for_device(dev_idx: usize) -> Self {
         let (ra6, ra6_count) = crate::net::adapter::ra_dns6_snapshot_at(dev_idx)
             .unwrap_or_else(crate::net::adapter::primary_ra_dns6_snapshot);
@@ -988,5 +996,15 @@ pub async fn resolve_ipv6_for_device(
 
 #[inline]
 pub async fn resolve_ipv4_primary(host: &str, cfg: DnsConfig) -> Result<[u8; 4], DnsError> {
-    resolve_ipv4_for_device(0, host, cfg).await
+    resolve_ipv4_with_profile(host, NetProfile::default(), cfg).await
+}
+
+#[inline]
+pub async fn resolve_ipv4_with_profile(
+    host: &str,
+    profile: NetProfile,
+    cfg: DnsConfig,
+) -> Result<[u8; 4], DnsError> {
+    let dev_idx = profile.resolve_device_index().ok_or(DnsError::NoNic)?;
+    resolve_ipv4_for_device(dev_idx, host, cfg).await
 }

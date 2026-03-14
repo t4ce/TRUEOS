@@ -165,13 +165,7 @@ pub fn browser_window_id() -> Option<u32> {
     if id == 0 { None } else { Some(id) }
 }
 
-pub fn create_window(
-    kind: Ui2WindowKind,
-    title: &str,
-    rect: Ui2Rect,
-    z: i16,
-    alpha: u8,
-) -> u32 {
+pub fn create_window(kind: Ui2WindowKind, title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     let state_lock = init_state();
     let mut state = state_lock.lock();
     let id = alloc_window(&mut state, kind, title, rect, z, alpha);
@@ -207,7 +201,12 @@ pub fn resize_window(id: u32, w: f32, h: f32) -> bool {
 pub fn raise_window(id: u32) -> bool {
     let state_lock = init_state();
     let mut state = state_lock.lock();
-    let top_z = state.windows.iter().map(|window| window.z).max().unwrap_or(0);
+    let top_z = state
+        .windows
+        .iter()
+        .map(|window| window.z)
+        .max()
+        .unwrap_or(0);
     let Some(window) = window_mut(&mut state, id) else {
         return false;
     };

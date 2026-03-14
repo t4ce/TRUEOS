@@ -94,12 +94,30 @@ fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
-    if crate::net::device_count() == 0 {
+    let count = crate::net::device_count();
+    if count == 0 {
         return SpawnAttempt::Skipped;
     }
-    match spawner.spawn(crate::net::adapter::net_service_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
+
+    let mut spawned_any = false;
+    for idx in 0..count {
+        match spawner.spawn(crate::net::adapter::net_service_task(idx)) {
+            Ok(()) => {
+                spawned_any = true;
+            }
+            Err(e) => {
+                crate::log!("net: spawn net_service_task({}) failed: {:?}\n", idx, e);
+                if !spawned_any {
+                    return SpawnAttempt::Failed(e);
+                }
+            }
+        }
+    }
+
+    if spawned_any {
+        SpawnAttempt::Spawned
+    } else {
+        SpawnAttempt::Skipped
     }
 }
 
@@ -550,8 +568,8 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
 
 const HID_ANY_CLAIMED: u32 = crate::v::readiness::HID_KEYBOARD_CLAIMED;
 
-const NET_AND_ROOT_READY: u32 =
-    crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
+const NET_CONFIGURED_AND_ROOT_READY: u32 =
+    crate::v::readiness::NET_CONFIGURED | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
 const AI_QJS_ONESHOT_READY: u32 = crate::v::readiness::NET_CONFIGURED
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::v::readiness::QJS_ASYNC_FS_READY;
@@ -624,14 +642,14 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec {
         name: "http-trueosfs",
         disabled: false,
-        required: NET_AND_ROOT_READY,
+        required: NET_CONFIGURED_AND_ROOT_READY,
         started: &HTTP_TRUEOSFS_STARTED,
         spawn: spawn_http_trueosfs,
     },
     TaskSpec {
         name: "ftp-server",
         disabled: true,
-        required: NET_AND_ROOT_READY,
+        required: NET_CONFIGURED_AND_ROOT_READY,
         started: &FTP_SERVER_STARTED,
         spawn: spawn_ftp_server,
     },

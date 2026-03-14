@@ -2271,7 +2271,11 @@ impl VirglGfxBackend {
             .unwrap_or((self.width, self.height))
     }
 
-    fn ensure_render_target_surface(&mut self, target: ImageId, cmd: &mut VirglCmdBuf) -> GfxResult<u32> {
+    fn ensure_render_target_surface(
+        &mut self,
+        target: ImageId,
+        cmd: &mut VirglCmdBuf,
+    ) -> GfxResult<u32> {
         if !target.is_valid() {
             return Ok(self.rt_surf_handle);
         }

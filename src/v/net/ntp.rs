@@ -5,8 +5,8 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use trueos_v::vnet;
 
-use crate::v::net::VNet;
 use crate::v::net::dns::{self, DnsConfig};
+use crate::v::net::{NetProfile, VNet};
 
 const NTP_SERVER_HOSTS: [&str; 4] = [
     "time.google.com",
@@ -225,7 +225,11 @@ pub async fn ntp_sync_task() {
     crate::v::readiness::wait_for(crate::v::readiness::NET_CONFIGURED).await;
 
     loop {
-        let dev_idx = crate::net::primary_device_index();
+        let profile = NetProfile::default();
+        let Some(dev_idx) = profile.resolve_device_index() else {
+            Timer::after(EmbassyDuration::from_secs(NTP_REFRESH_SECS)).await;
+            continue;
+        };
         let host = next_ntp_host();
 
         if let Some(words) = query_ntp_words_for_device(dev_idx, host).await {
