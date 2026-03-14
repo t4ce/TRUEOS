@@ -1459,6 +1459,8 @@ struct HostImage {
     virgl_view: u32,
     virgl_uploaded_rev: u32,
     virgl_view_created: bool,
+    virgl_surface: u32,
+    virgl_surface_created: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1498,6 +1500,7 @@ struct VirglDrawState {
     pipeline: PipelineId,
     vertex: VirglBufferBinding,
     image: ImageId,
+    render_target: ImageId,
     sampler: SamplerDesc,
     blend: BlendDesc,
     viewport: Viewport,
@@ -1520,6 +1523,7 @@ impl Default for VirglDrawState {
                 offset: 0,
             },
             image: ImageId::invalid(),
+            render_target: ImageId::invalid(),
             // WebGL defaults are LINEAR/LINEAR. This also makes stretched
             // low-res textures (like the 2x1 background gradient) look correct.
             sampler: SamplerDesc {
@@ -1557,6 +1561,7 @@ pub struct VirglGfxBackend {
     // Keep backing ownership alive for the lifetime of the backend.
     scanout_backing: DmaRegion,
     rt_res: u32,
+    rt_surf_handle: u32,
 
     // VBO resource for virgl vertices.
     vbo_res: u32,
@@ -2107,6 +2112,7 @@ impl VirglGfxBackend {
             scanout_res,
             scanout_backing,
             rt_res,
+            rt_surf_handle: surf_handle,
             vbo_res,
             vbo_cap_bytes,
             vs_color_handle,
@@ -2251,6 +2257,41 @@ impl VirglGfxBackend {
         let g = ((rgb >> 8) & 0xFF) as f32 / 255.0;
         let b = (rgb & 0xFF) as f32 / 255.0;
         (r, g, b)
+    }
+
+    fn render_target_extent(&self, target: ImageId) -> (u32, u32) {
+        if !target.is_valid() {
+            return (self.width, self.height);
+        }
+        let idx = target.raw().saturating_sub(1) as usize;
+        self.images
+            .get(idx)
+            .and_then(|entry| entry.as_ref())
+            .map(|img| (img.desc.width, img.desc.height))
+            .unwrap_or((self.width, self.height))
+    }
+
+    fn ensure_render_target_surface(&mut self, target: ImageId, cmd: &mut VirglCmdBuf) -> GfxResult<u32> {
+        if !target.is_valid() {
+            return Ok(self.rt_surf_handle);
+        }
+        let idx = target.raw().saturating_sub(1) as usize;
+        let Some(img) = self.images.get_mut(idx).and_then(|entry| entry.as_mut()) else {
+            return Err(Error::NotFound);
+        };
+        if !img.virgl_surface_created {
+            if img.virgl_surface == 0 {
+                img.virgl_surface = alloc_obj_handle();
+            }
+            encode_create_surface(
+                cmd,
+                img.virgl_surface,
+                img.virgl_res,
+                VIRGL_FORMAT_R8G8B8A8_UNORM,
+            );
+            img.virgl_surface_created = true;
+        }
+        Ok(img.virgl_surface)
     }
 
     fn build_virgl_vertices(
@@ -2498,7 +2539,7 @@ impl GfxDevice for VirglGfxBackend {
             virgl_res,
             PIPE_TEXTURE_2D,
             VIRGL_FORMAT_R8G8B8A8_UNORM,
-            PIPE_BIND_SAMPLER_VIEW,
+            PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET | PIPE_BIND_BLENDABLE,
             desc.width,
             desc.height,
             1,
@@ -2522,6 +2563,8 @@ impl GfxDevice for VirglGfxBackend {
                 virgl_view,
                 virgl_uploaded_rev: 0,
                 virgl_view_created: false,
+                virgl_surface: 0,
+                virgl_surface_created: false,
             },
         );
         Ok(ImageId::from_raw(slot as u32 + 1))
@@ -2663,6 +2706,7 @@ impl GfxDevice for VirglGfxBackend {
             pipeline: u32,
             vertex_buffer: u32,
             vertex_offset: u64,
+            render_target: u32,
             blend: BlendDesc,
             sampler: SamplerDesc,
             image: u32,
@@ -2679,6 +2723,7 @@ impl GfxDevice for VirglGfxBackend {
         enum Op {
             SetViewport(Viewport),
             SetScissor(Option<ScissorRect>),
+            SetRenderTarget(ImageId),
             ClearColor(u32),
             Draw(DrawOp),
             Present,
@@ -2695,6 +2740,10 @@ impl GfxDevice for VirglGfxBackend {
                 Command::SetScissor(scissor) => {
                     self.state.scissor = scissor;
                     ops.push(Op::SetScissor(scissor));
+                }
+                Command::SetRenderTarget(target) => {
+                    self.state.render_target = target.unwrap_or(ImageId::invalid());
+                    ops.push(Op::SetRenderTarget(self.state.render_target));
                 }
                 Command::ClearColor { rgb } => {
                     self.state.clear_rgb = rgb;
@@ -2750,6 +2799,7 @@ impl GfxDevice for VirglGfxBackend {
         let mut last_bound_sampler_state: Option<u32> = None;
         let mut last_bound_shader_kind: Option<DrawKind> = None;
         let mut last_bound_vbo: Option<(u32, u32)> = None;
+        let mut last_framebuffer_surface: Option<u32> = None;
         let mut frame_vbo_write_offset: u32 = 0;
 
         for op in ops {
@@ -2782,7 +2832,23 @@ impl GfxDevice for VirglGfxBackend {
                         did_work = true;
                     }
                 }
+                Op::SetRenderTarget(target) => {
+                    self.state.render_target = target;
+                    let surf = self.ensure_render_target_surface(target, &mut cmd)?;
+                    if last_framebuffer_surface != Some(surf) {
+                        encode_set_framebuffer(&mut cmd, surf);
+                        last_framebuffer_surface = Some(surf);
+                        did_work = true;
+                    }
+                }
                 Op::ClearColor(rgb) => {
+                    let surf =
+                        self.ensure_render_target_surface(self.state.render_target, &mut cmd)?;
+                    if last_framebuffer_surface != Some(surf) {
+                        encode_set_framebuffer(&mut cmd, surf);
+                        last_framebuffer_surface = Some(surf);
+                        did_work = true;
+                    }
                     clear_ops = clear_ops.saturating_add(1);
                     let (r, g, b) = Self::rgb_to_f32(rgb);
                     encode_clear_color(&mut cmd, r, g, b, 1.0);
@@ -2816,6 +2882,7 @@ impl GfxDevice for VirglGfxBackend {
                         pipeline: pipeline_raw,
                         vertex_buffer: self.state.vertex.id.raw(),
                         vertex_offset: self.state.vertex.offset,
+                        render_target: self.state.render_target.raw(),
                         blend: self.state.blend,
                         sampler: self.state.sampler,
                         image: self.state.image.raw(),
@@ -2847,6 +2914,12 @@ impl GfxDevice for VirglGfxBackend {
                     if last_scissor != Some(scissor) {
                         encode_set_scissor(&mut cmd, scissor.0, scissor.1, scissor.2, scissor.3);
                         last_scissor = Some(scissor);
+                    }
+                    let surf =
+                        self.ensure_render_target_surface(self.state.render_target, &mut cmd)?;
+                    if last_framebuffer_surface != Some(surf) {
+                        encode_set_framebuffer(&mut cmd, surf);
+                        last_framebuffer_surface = Some(surf);
                     }
 
                     let blend_handle = if !self.state.blend.enabled {
@@ -3237,6 +3310,9 @@ impl GfxDevice for VirglGfxBackend {
                     frame_vbo_write_offset = advanced;
                 }
                 Op::Present => {
+                    if self.state.render_target.is_valid() {
+                        continue;
+                    }
                     present_ops = present_ops.saturating_add(1);
                     encode_resource_copy_region(
                         &mut cmd,

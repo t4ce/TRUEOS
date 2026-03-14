@@ -290,6 +290,13 @@ impl GfxDevice for IntelGfxBackend {
                         return Err(Error::NotFound);
                     }
                 }
+                Command::SetRenderTarget(id) => {
+                    if let Some(id) = id
+                        && self.image_ref(id).is_none()
+                    {
+                        return Err(Error::NotFound);
+                    }
+                }
                 Command::SetSampler(_s) => {}
                 Command::SetBlend(_b) => {}
                 Command::SetViewport(_vp) => {}

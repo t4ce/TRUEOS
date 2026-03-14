@@ -462,6 +462,9 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
     tex_src.extend_from_slice(cursor_tex_src.as_slice());
     for d in cursor_draws {
         match d {
+            PendingDraw::SetRenderTarget { tex_id } => {
+                draws.push(PendingDraw::SetRenderTarget { tex_id });
+            }
             PendingDraw::Rgb {
                 blob_offset,
                 blob_len,
@@ -497,16 +500,14 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
             None => return -1,
         };
         let swap = ctx.swapchain_desc();
-        let vp = Viewport {
-            x: 0,
-            y: 0,
-            width: swap.extent.width as i32,
-            height: swap.extent.height as i32,
-        };
-
         const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
 
         enum Plan {
+            SetRenderTarget {
+                image: Option<ImageId>,
+                vp_w: u32,
+                vp_h: u32,
+            },
             Rgb {
                 offset: u64,
                 vcount: u32,
@@ -525,6 +526,9 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
 
         let mut draw_idx = 0usize;
         let mut first_pass = true;
+        let mut current_target_image: Option<ImageId> = None;
+        let mut current_vp_w = swap.extent.width;
+        let mut current_vp_h = swap.extent.height;
 
         while draw_idx < draws.len() {
             let start = draw_idx;
@@ -532,6 +536,13 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
             let mut pass_kind: u8 = 0;
             while draw_idx < draws.len() {
                 let (kind, add) = match &draws[draw_idx] {
+                    PendingDraw::SetRenderTarget { .. } => {
+                        if pass_kind == 0 {
+                            draw_idx += 1;
+                            continue;
+                        }
+                        break;
+                    }
                     PendingDraw::Rgb { blob_len, .. } => (1u8, blob_len - (blob_len % 12)),
                     PendingDraw::Tex { blob_len, .. } => (2u8, blob_len - (blob_len % 20)),
                 };
@@ -557,6 +568,32 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
 
             for draw in draws[start..draw_idx].iter() {
                 match draw {
+                    PendingDraw::SetRenderTarget { tex_id } => {
+                        if *tex_id == 0 {
+                            current_target_image = None;
+                            current_vp_w = swap.extent.width;
+                            current_vp_h = swap.extent.height;
+                        } else {
+                            let st = GFX_CABI_STATE.lock();
+                            let idx = tex_id.saturating_sub(1) as usize;
+                            let Some(img) = st
+                                .tex_images
+                                .as_ref()
+                                .and_then(|images| images.get(idx))
+                                .and_then(|entry| entry.as_ref())
+                            else {
+                                return -12;
+                            };
+                            current_target_image = Some(img.image);
+                            current_vp_w = img.width.max(1);
+                            current_vp_h = img.height.max(1);
+                        }
+                        plans.push(Plan::SetRenderTarget {
+                            image: current_target_image,
+                            vp_w: current_vp_w,
+                            vp_h: current_vp_h,
+                        });
+                    }
                     PendingDraw::Rgb {
                         blob_offset,
                         blob_len,
@@ -660,8 +697,14 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
             let is_last_pass = draw_idx >= draws.len();
             let mut cmds: Vec<Command> = Vec::new();
             if first_pass && need_set_viewport {
-                cmds.push(Command::SetViewport(vp));
+                cmds.push(Command::SetViewport(Viewport {
+                    x: 0,
+                    y: 0,
+                    width: current_vp_w as i32,
+                    height: current_vp_h as i32,
+                }));
             }
+            cmds.push(Command::SetRenderTarget(current_target_image));
             if first_pass {
                 cmds.push(Command::ClearColor {
                     rgb: base_cache_clear_rgb,
@@ -672,6 +715,15 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
 
             for plan in plans.iter() {
                 match *plan {
+                    Plan::SetRenderTarget { image, vp_w, vp_h } => {
+                        cmds.push(Command::SetRenderTarget(image));
+                        cmds.push(Command::SetViewport(Viewport {
+                            x: 0,
+                            y: 0,
+                            width: vp_w as i32,
+                            height: vp_h as i32,
+                        }));
+                    }
                     Plan::Rgb {
                         offset,
                         vcount,
@@ -752,7 +804,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                 }
             }
 
-            if is_last_pass {
+            if is_last_pass && current_target_image.is_none() {
                 cmds.push(Command::Present);
             }
 
@@ -778,12 +830,20 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
         if first_pass {
             let mut cmds: Vec<Command> = Vec::new();
             if need_set_viewport {
-                cmds.push(Command::SetViewport(vp));
+                cmds.push(Command::SetViewport(Viewport {
+                    x: 0,
+                    y: 0,
+                    width: current_vp_w as i32,
+                    height: current_vp_h as i32,
+                }));
             }
+            cmds.push(Command::SetRenderTarget(current_target_image));
             cmds.push(Command::ClearColor {
                 rgb: base_cache_clear_rgb,
             });
-            cmds.push(Command::Present);
+            if current_target_image.is_none() {
+                cmds.push(Command::Present);
+            }
             if !check_submit_budget(
                 rgb_src.len().saturating_add(tex_src.len()),
                 cmds.len(),

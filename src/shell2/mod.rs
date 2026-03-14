@@ -1,15 +1,19 @@
+use alloc::string::String as AllocString;
 use alloc::vec::Vec;
+use core::fmt::Write as _;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use heapless::String;
+use heapless::String as HString;
 
 mod interface;
+mod shell2_ai;
 mod shell2_cmd;
 mod shell2_qjs;
 mod shell2_surf;
 #[allow(unused_imports)]
 pub(crate) use crate::shell::backends::{NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND};
 pub(crate) use interface::{ShellBackend2, ShellIo2};
+use shell2_ai::AiPromptMode;
 
 const DEFAULT_PROMPT: &str = "§ ";
 const MAX_LINE: usize = 192;
@@ -18,6 +22,7 @@ const STATUS_ROW: usize = 2;
 const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = crate::shell::PROMPT_RGB;
+const LINE_WIDTH: usize = 100;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ShellMode2 {
@@ -84,7 +89,14 @@ impl<'a> AlignedWriter<'a> {
         self.io.write_str(s);
     }
 
-    fn mode_status(&self, mode: ShellMode2) {
+    fn banner(&self, time_text: &str) {
+        self.move_to(BANNER_ROW, 1);
+        self.clear_line();
+        self.io.write_str("TRUE OS §");
+        self.right_text(BANNER_ROW, time_text);
+    }
+
+    fn mode_status(&self, mode: ShellMode2, ai_mode: AiPromptMode) {
         self.move_to(STATUS_ROW, 1);
         self.clear_line();
         self.write_mode_token("F1 surf", mode == ShellMode2::Surf);
@@ -94,7 +106,39 @@ impl<'a> AlignedWriter<'a> {
         self.write_mode_token("qjs", mode == ShellMode2::Qjs);
         self.io.write_str(" - ");
         self.write_mode_token("cmd", mode == ShellMode2::Cmd);
+        if mode == ShellMode2::Ai {
+            self.ai_status(ai_mode);
+        }
         self.io.write_str(crate::ecma48::RESET);
+    }
+
+    fn ai_status(&self, ai_mode: AiPromptMode) {
+        let mut text = AllocString::new();
+        let _ = write!(text, "F2 ");
+        self.push_ai_token(&mut text, "normal", ai_mode == AiPromptMode::Normal);
+        self.push_plain(&mut text, " - ");
+        self.push_ai_token(&mut text, "web", ai_mode == AiPromptMode::WebSearch);
+        self.push_plain(&mut text, " - ");
+        self.push_ai_token(&mut text, "file", ai_mode == AiPromptMode::FileSearch);
+        self.push_plain(&mut text, " - ");
+        self.push_ai_token(&mut text, "newchat", ai_mode == AiPromptMode::NewChat);
+        self.right_text(STATUS_ROW, text.as_str());
+    }
+
+    fn push_plain(&self, out: &mut AllocString, text: &str) {
+        out.push_str(text);
+    }
+
+    fn push_ai_token(&self, out: &mut AllocString, text: &str, selected: bool) {
+        if selected {
+            let styled = alloc::format!(
+                "{}",
+                crate::ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
+            );
+            out.push_str(styled.as_str());
+        } else {
+            out.push_str(text);
+        }
     }
 
     fn write_mode_token(&self, text: &str, selected: bool) {
@@ -122,6 +166,24 @@ impl<'a> AlignedWriter<'a> {
     fn user_char(&self, ch: char) {
         self.io.write_char(ch);
     }
+
+    fn right_text(&self, row: usize, text: &str) {
+        let width = crate::ecma48::visible_width(text);
+        let col = LINE_WIDTH.saturating_sub(width).saturating_add(1);
+        self.move_to(row, col);
+        self.io.write_str(text);
+    }
+}
+
+fn clock_bucket_and_text() -> (u64, HString<5>) {
+    let secs = crate::time::unix_time_seconds().unwrap_or_else(crate::time::uptime_seconds);
+    let mins_total = secs / 60;
+    let mins_day = mins_total % (24 * 60);
+    let hh = mins_day / 60;
+    let mm = mins_day % 60;
+    let mut text: HString<5> = HString::new();
+    let _ = write!(text, "{:02}:{:02}", hh, mm);
+    (mins_total, text)
 }
 
 pub(crate) fn print_shell_line(io: &dyn ShellIo2, text: &str) {
@@ -134,7 +196,13 @@ pub(crate) fn print_shell_line(io: &dyn ShellIo2, text: &str) {
     io.write_str(crate::ecma48::RESTORE_CURSOR);
 }
 
-fn handle_submit(spawner: &Spawner, io: &'static dyn ShellBackend2, mode: ShellMode2, submitted: &str) {
+fn handle_submit(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    mode: ShellMode2,
+    ai_mode: AiPromptMode,
+    submitted: &str,
+) {
     match mode {
         ShellMode2::Cmd => {
             let _ = shell2_cmd::try_parse(submitted);
@@ -150,7 +218,7 @@ fn handle_submit(spawner: &Spawner, io: &'static dyn ShellBackend2, mode: ShellM
             let _ = shell2_qjs::is_likely_valid(submitted);
         }
         ShellMode2::Ai => {
-            // Reserved for the AI path; the mode bar and loop dispatch are in place first.
+            shell2_ai::submit(io, ai_mode, submitted);
         }
     }
 }
@@ -162,20 +230,33 @@ fn handle_submit(spawner: &Spawner, io: &'static dyn ShellBackend2, mode: ShellM
 
     out.clear_screen_home();
     out.reset_scroll_region();
-    out.line_at(BANNER_ROW, "TRUE OS §");
+    let (mut last_minute_bucket, time_text) = clock_bucket_and_text();
+    out.banner(time_text.as_str());
     let mut mode = ShellMode2::Cmd;
-    out.mode_status(mode);
+    let mut ai_mode = AiPromptMode::Normal;
+    out.mode_status(mode, ai_mode);
 
     out.set_scroll_region(SCROLL_TOP_ROW);
     out.prompt();
 
-    let mut line: String<MAX_LINE> = String::new();
+    let mut line: HString<MAX_LINE> = HString::new();
     let mut history: Vec<alloc::string::String> = Vec::new();
     let mut saw_cr = false;
     let mut esc = EscState::None;
     let mut csi_param: u16 = 0;
 
     loop {
+        let (minute_bucket, minute_text) = clock_bucket_and_text();
+        if minute_bucket != last_minute_bucket {
+            last_minute_bucket = minute_bucket;
+            out.banner(minute_text.as_str());
+            out.mode_status(mode, ai_mode);
+            out.prompt();
+            for ch in line.chars() {
+                out.user_char(ch);
+            }
+        }
+
         if let Some(b) = io.read_byte() {
             match esc {
                 EscState::None => {
@@ -207,10 +288,21 @@ fn handle_submit(spawner: &Spawner, io: &'static dyn ShellBackend2, mode: ShellM
                         }
                         b'~' if csi_param == 11 => {
                             mode = mode.next();
-                            out.mode_status(mode);
+                            out.mode_status(mode, ai_mode);
                             out.prompt();
                             for ch in line.chars() {
                                 out.user_char(ch);
+                            }
+                            esc = EscState::None;
+                        }
+                        b'~' if csi_param == 12 => {
+                            if mode == ShellMode2::Ai {
+                                ai_mode = ai_mode.next();
+                                out.mode_status(mode, ai_mode);
+                                out.prompt();
+                                for ch in line.chars() {
+                                    out.user_char(ch);
+                                }
                             }
                             esc = EscState::None;
                         }
@@ -223,7 +315,14 @@ fn handle_submit(spawner: &Spawner, io: &'static dyn ShellBackend2, mode: ShellM
                 EscState::Ss3 => {
                     if b == b'P' {
                         mode = mode.next();
-                        out.mode_status(mode);
+                        out.mode_status(mode, ai_mode);
+                        out.prompt();
+                        for ch in line.chars() {
+                            out.user_char(ch);
+                        }
+                    } else if b == b'Q' && mode == ShellMode2::Ai {
+                        ai_mode = ai_mode.next();
+                        out.mode_status(mode, ai_mode);
                         out.prompt();
                         for ch in line.chars() {
                             out.user_char(ch);
@@ -245,7 +344,7 @@ fn handle_submit(spawner: &Spawner, io: &'static dyn ShellBackend2, mode: ShellM
                     let submitted = line.as_str().trim();
                     if !submitted.is_empty() {
                         history.push(alloc::string::String::from(submitted));
-                        handle_submit(&spawner, io, mode, submitted);
+                        handle_submit(&spawner, io, mode, ai_mode, submitted);
                     }
                     line.clear();
                     out.prompt();
