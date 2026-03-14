@@ -6,7 +6,6 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate as qjs;
 
-
 #[embassy_executor::task]
 pub async fn run_once() {
     unsafe {

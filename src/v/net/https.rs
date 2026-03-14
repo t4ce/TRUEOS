@@ -7,8 +7,8 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use trueos_v::vnet;
 
-use super::Queue;
 use super::dns::{self, DnsConfig};
+use super::{NetProfile, Queue};
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::surface::io::cabi::{
@@ -328,12 +328,16 @@ async fn cabi_net_prewarm_url_task_inner(url: String) {
     let Some(parsed) = parse_https_url(url.as_str()) else {
         return;
     };
-    let dev_count = crate::net::device_count();
-    if dev_count == 0 {
+    let profile = NetProfile::default();
+    let Some(dev_idx) = profile.resolve_device_index() else {
         return;
-    }
-    let dev_idx = crate::net::primary_device_index().min(dev_count.saturating_sub(1));
-    let _ = dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::for_device(dev_idx)).await;
+    };
+    let _ = dns::resolve_ipv4_for_device(
+        dev_idx,
+        parsed.host.as_str(),
+        DnsConfig::for_profile(profile),
+    )
+    .await;
 }
 
 #[embassy_executor::task]
@@ -343,7 +347,9 @@ async fn cabi_net_prewarm_url_task(url: String) {
 
 fn spawn_cabi_net_prewarm_url(url: String) {
     if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
-        && spawner.spawn(cabi_net_prewarm_url_task(url.clone())).is_ok()
+        && spawner
+            .spawn(cabi_net_prewarm_url_task(url.clone()))
+            .is_ok()
     {
         return;
     }
@@ -375,6 +381,18 @@ pub enum FetchError {
 /// `total` is the Content-Length when known.
 pub trait FetchProgress {
     fn on_progress(&mut self, received: usize, total: Option<usize>);
+}
+
+#[inline]
+fn fetch_device_index(profile: NetProfile) -> Result<usize, FetchError> {
+    profile.resolve_device_index().ok_or(FetchError::NoNic)
+}
+
+#[inline]
+fn fetch_device_index_code(profile: NetProfile) -> Result<usize, i32> {
+    profile
+        .resolve_device_index()
+        .ok_or(fetch_error_to_code(FetchError::NoNic))
 }
 
 /// Callback sink for Server-Sent Events (SSE) streaming.
@@ -1694,8 +1712,12 @@ async fn fetch_on_device_keepalive(
 
     let mut ip: Option<[u8; 4]> = None;
     if !reused {
-        match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::for_device(dev_idx))
-            .await
+        match dns::resolve_ipv4_for_device(
+            dev_idx,
+            parsed.host.as_str(),
+            DnsConfig::for_device(dev_idx),
+        )
+        .await
         {
             Ok(v) => ip = Some(v),
             Err(dns::DnsError::Timeout) => {
@@ -3290,16 +3312,22 @@ async fn fetch_on_device_to_file(
 ///
 /// Notes:
 /// - This is a minimal HTTP/1.1-over-TLS client intended for boot-time fetching.
-/// - Tries each NIC index once (useful when multiple devices exist but only one is wired).
+/// - Binds the request to one resolved NIC for its full lifetime.
 pub async fn fetch_https_body_async(
     url: &str,
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, FetchError> {
-    let dev_count = crate::net::device_count();
-    if dev_count == 0 {
-        return Err(FetchError::NoNic);
-    }
+    fetch_https_body_with_profile_async(url, NetProfile::default(), timeout_ms, max_bytes).await
+}
+
+pub async fn fetch_https_body_with_profile_async(
+    url: &str,
+    profile: NetProfile,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
+    let dev_idx = fetch_device_index(profile)?;
 
     const MAX_REDIRECTS: usize = 3;
     let mut current_url = String::from(url);
@@ -3307,34 +3335,22 @@ pub async fn fetch_https_body_async(
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
 
-        let mut last_err: Option<FetchError> = None;
-        let mut redirect: Option<(u16, String)> = None;
-
-        for dev_idx in 0..dev_count {
-            let res = if VHTTPS_KEEPALIVE_ENABLE {
-                fetch_on_device_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, None).await
-            } else {
-                fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, None).await
-            };
-            match res {
-                Ok(v) => return Ok(v),
-                Err(FetchError::Redirect { status, url }) => {
-                    redirect = Some((status, url));
-                    break;
+        let res = if VHTTPS_KEEPALIVE_ENABLE {
+            fetch_on_device_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, None).await
+        } else {
+            fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, None).await
+        };
+        match res {
+            Ok(v) => return Ok(v),
+            Err(FetchError::Redirect { status, url }) => {
+                if hop >= MAX_REDIRECTS {
+                    return Err(FetchError::Http(status));
                 }
-                Err(e) => last_err = Some(e),
+                current_url = url;
+                continue;
             }
+            Err(e) => return Err(e),
         }
-
-        if let Some((status, next_url)) = redirect {
-            if hop >= MAX_REDIRECTS {
-                return Err(FetchError::Http(status));
-            }
-            current_url = next_url;
-            continue;
-        }
-
-        return Err(last_err.unwrap_or(FetchError::DnsFailed));
     }
 
     Err(FetchError::Http(0))
@@ -3350,10 +3366,24 @@ pub async fn fetch_https_body_progress_async(
     max_bytes: usize,
     progress: &mut dyn FetchProgress,
 ) -> Result<Vec<u8>, FetchError> {
-    let dev_count = crate::net::device_count();
-    if dev_count == 0 {
-        return Err(FetchError::NoNic);
-    }
+    fetch_https_body_progress_with_profile_async(
+        url,
+        NetProfile::default(),
+        timeout_ms,
+        max_bytes,
+        progress,
+    )
+    .await
+}
+
+pub async fn fetch_https_body_progress_with_profile_async(
+    url: &str,
+    profile: NetProfile,
+    timeout_ms: u32,
+    max_bytes: usize,
+    progress: &mut dyn FetchProgress,
+) -> Result<Vec<u8>, FetchError> {
+    let dev_idx = fetch_device_index(profile)?;
 
     const MAX_REDIRECTS: usize = 3;
     let mut current_url = String::from(url);
@@ -3361,44 +3391,31 @@ pub async fn fetch_https_body_progress_async(
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
 
-        let mut last_err: Option<FetchError> = None;
-        let mut redirect: Option<(u16, String)> = None;
-
-        for dev_idx in 0..dev_count {
-            let res = if VHTTPS_KEEPALIVE_ENABLE {
-                fetch_on_device_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, Some(progress))
-                    .await
-            } else {
-                fetch_on_device(
-                    &parsed,
-                    dev_idx,
-                    timeout_ms,
-                    max_bytes,
-                    None,
-                    None,
-                    Some(progress),
-                )
-                .await
-            };
-            match res {
-                Ok(v) => return Ok(v),
-                Err(FetchError::Redirect { status, url }) => {
-                    redirect = Some((status, url));
-                    break;
+        let res = if VHTTPS_KEEPALIVE_ENABLE {
+            fetch_on_device_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, Some(progress)).await
+        } else {
+            fetch_on_device(
+                &parsed,
+                dev_idx,
+                timeout_ms,
+                max_bytes,
+                None,
+                None,
+                Some(progress),
+            )
+            .await
+        };
+        match res {
+            Ok(v) => return Ok(v),
+            Err(FetchError::Redirect { status, url }) => {
+                if hop >= MAX_REDIRECTS {
+                    return Err(FetchError::Http(status));
                 }
-                Err(e) => last_err = Some(e),
+                current_url = url;
+                continue;
             }
+            Err(e) => return Err(e),
         }
-
-        if let Some((status, next_url)) = redirect {
-            if hop >= MAX_REDIRECTS {
-                return Err(FetchError::Http(status));
-            }
-            current_url = next_url;
-            continue;
-        }
-
-        return Err(last_err.unwrap_or(FetchError::DnsFailed));
     }
 
     Err(FetchError::Http(0))
@@ -3411,10 +3428,26 @@ pub async fn post_https_json_async(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, FetchError> {
-    let dev_count = crate::net::device_count();
-    if dev_count == 0 {
-        return Err(FetchError::NoNic);
-    }
+    post_https_json_with_profile_async(
+        url,
+        NetProfile::default(),
+        body_json,
+        auth_token,
+        timeout_ms,
+        max_bytes,
+    )
+    .await
+}
+
+pub async fn post_https_json_with_profile_async(
+    url: &str,
+    profile: NetProfile,
+    body_json: String,
+    auth_token: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
+    let dev_idx = fetch_device_index(profile)?;
 
     const MAX_REDIRECTS: usize = 3;
     let mut current_url = String::from(url);
@@ -3422,39 +3455,27 @@ pub async fn post_https_json_async(
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
 
-        let mut last_err: Option<FetchError> = None;
-        let mut redirect: Option<(u16, String)> = None;
-
-        for dev_idx in 0..dev_count {
-            match fetch_on_device(
-                &parsed,
-                dev_idx,
-                timeout_ms,
-                max_bytes,
-                Some(body_json.as_str()),
-                auth_token,
-                None,
-            )
-            .await
-            {
-                Ok(v) => return Ok(v),
-                Err(FetchError::Redirect { status, url }) => {
-                    redirect = Some((status, url));
-                    break;
+        match fetch_on_device(
+            &parsed,
+            dev_idx,
+            timeout_ms,
+            max_bytes,
+            Some(body_json.as_str()),
+            auth_token,
+            None,
+        )
+        .await
+        {
+            Ok(v) => return Ok(v),
+            Err(FetchError::Redirect { status, url }) => {
+                if hop >= MAX_REDIRECTS {
+                    return Err(FetchError::Http(status));
                 }
-                Err(e) => last_err = Some(e),
+                current_url = url;
+                continue;
             }
+            Err(e) => return Err(e),
         }
-
-        if let Some((status, next_url)) = redirect {
-            if hop >= MAX_REDIRECTS {
-                return Err(FetchError::Http(status));
-            }
-            current_url = next_url;
-            continue;
-        }
-
-        return Err(last_err.unwrap_or(FetchError::DnsFailed));
     }
 
     Err(FetchError::Http(0))
@@ -3472,10 +3493,28 @@ pub async fn post_https_sse_async(
     max_bytes: usize,
     handler: &mut dyn SseHandler,
 ) -> Result<(), FetchError> {
-    let dev_count = crate::net::device_count();
-    if dev_count == 0 {
-        return Err(FetchError::NoNic);
-    }
+    post_https_sse_with_profile_async(
+        url,
+        NetProfile::default(),
+        body_json,
+        auth_token,
+        timeout_ms,
+        max_bytes,
+        handler,
+    )
+    .await
+}
+
+pub async fn post_https_sse_with_profile_async(
+    url: &str,
+    profile: NetProfile,
+    body_json: String,
+    auth_token: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+    handler: &mut dyn SseHandler,
+) -> Result<(), FetchError> {
+    let dev_idx = fetch_device_index(profile)?;
 
     const MAX_REDIRECTS: usize = 3;
     let mut current_url = String::from(url);
@@ -3483,39 +3522,27 @@ pub async fn post_https_sse_async(
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
 
-        let mut last_err: Option<FetchError> = None;
-        let mut redirect: Option<(u16, String)> = None;
-
-        for dev_idx in 0..dev_count {
-            match fetch_on_device_sse(
-                &parsed,
-                dev_idx,
-                timeout_ms,
-                max_bytes,
-                body_json.as_str(),
-                auth_token,
-                handler,
-            )
-            .await
-            {
-                Ok(()) => return Ok(()),
-                Err(FetchError::Redirect { status, url }) => {
-                    redirect = Some((status, url));
-                    break;
+        match fetch_on_device_sse(
+            &parsed,
+            dev_idx,
+            timeout_ms,
+            max_bytes,
+            body_json.as_str(),
+            auth_token,
+            handler,
+        )
+        .await
+        {
+            Ok(()) => return Ok(()),
+            Err(FetchError::Redirect { status, url }) => {
+                if hop >= MAX_REDIRECTS {
+                    return Err(FetchError::Http(status));
                 }
-                Err(e) => last_err = Some(e),
+                current_url = url;
+                continue;
             }
+            Err(e) => return Err(e),
         }
-
-        if let Some((status, next_url)) = redirect {
-            if hop >= MAX_REDIRECTS {
-                return Err(FetchError::Http(status));
-            }
-            current_url = next_url;
-            continue;
-        }
-
-        return Err(last_err.unwrap_or(FetchError::DnsFailed));
     }
 
     Err(FetchError::Http(0))
@@ -3528,6 +3555,17 @@ pub async fn post_https_sse_async(
 /// - otherwise: download body (capped) directly into `path` (atomic via streaming write)
 pub async fn fetch_https_to_file_async(
     url: &str,
+    path: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<(), i32> {
+    fetch_https_to_file_with_profile_async(url, NetProfile::default(), path, timeout_ms, max_bytes)
+        .await
+}
+
+pub async fn fetch_https_to_file_with_profile_async(
+    url: &str,
+    profile: NetProfile,
     path: &str,
     timeout_ms: u32,
     max_bytes: usize,
@@ -3550,11 +3588,7 @@ pub async fn fetch_https_to_file_async(
     let t_exists = Instant::now();
 
     const MAX_REDIRECTS: usize = 3;
-
-    let dev_count = crate::net::device_count();
-    if dev_count == 0 {
-        return Err(fetch_error_to_code(FetchError::NoNic));
-    }
+    let dev_idx = fetch_device_index_code(profile)?;
 
     let mut current_url = String::from(url);
     let mut last_err = fetch_error_to_code(FetchError::DnsFailed);
@@ -3564,52 +3598,40 @@ pub async fn fetch_https_to_file_async(
             .ok_or(FetchError::BadUrl)
             .map_err(fetch_error_to_code)?;
 
-        let mut redirect: Option<(u16, String)> = None;
         last_err = fetch_error_to_code(FetchError::DnsFailed);
 
-        for dev_idx in 0..dev_count {
-            let r = if VHTTPS_KEEPALIVE_ENABLE {
-                fetch_on_device_to_file_keepalive(
-                    &parsed,
-                    dev_idx,
-                    timeout_ms,
-                    max_bytes,
-                    disk,
-                    key.as_str(),
-                )
+        let r = if VHTTPS_KEEPALIVE_ENABLE {
+            fetch_on_device_to_file_keepalive(
+                &parsed,
+                dev_idx,
+                timeout_ms,
+                max_bytes,
+                disk,
+                key.as_str(),
+            )
+            .await
+        } else {
+            fetch_on_device_to_file(&parsed, dev_idx, timeout_ms, max_bytes, disk, key.as_str())
                 .await
-            } else {
-                fetch_on_device_to_file(&parsed, dev_idx, timeout_ms, max_bytes, disk, key.as_str())
-                    .await
-            };
+        };
 
-            match r {
-                Ok(()) => {
-                    last_err = 0;
-                    break;
-                }
-                Err(FetchToFileError::Redirect { status, url }) => {
-                    redirect = Some((status, url));
-                    break;
-                }
-                Err(FetchToFileError::Code(rc)) => {
-                    let _ = crate::v::fs::trueosfs::file_delete_async(disk, key.as_str()).await;
-                    last_err = rc;
-                }
+        match r {
+            Ok(()) => {
+                last_err = 0;
+                break;
             }
-        }
-
-        if last_err == 0 {
-            break;
-        }
-
-        if let Some((status, next)) = redirect {
-            let _ = crate::v::fs::trueosfs::file_delete_async(disk, key.as_str()).await;
-            if hop >= MAX_REDIRECTS {
-                return Err(fetch_error_to_code(FetchError::Http(status)));
+            Err(FetchToFileError::Redirect { status, url }) => {
+                let _ = crate::v::fs::trueosfs::file_delete_async(disk, key.as_str()).await;
+                if hop >= MAX_REDIRECTS {
+                    return Err(fetch_error_to_code(FetchError::Http(status)));
+                }
+                current_url = url;
+                continue;
             }
-            current_url = next;
-            continue;
+            Err(FetchToFileError::Code(rc)) => {
+                let _ = crate::v::fs::trueosfs::file_delete_async(disk, key.as_str()).await;
+                last_err = rc;
+            }
         }
 
         return Err(last_err);

@@ -24,6 +24,9 @@ static SYSTEM: Once<Mutex<System>> = Once::new();
 static CPU_BACKBUFFER: Once<Mutex<Option<CpuBackbuffer>>> = Once::new();
 static BACKEND_EPOCH: AtomicU64 = AtomicU64::new(1);
 static PRESENT_OWNER: AtomicU8 = AtomicU8::new(0);
+static SYSTEM_LOCK_OWNER: AtomicU32 = AtomicU32::new(SystemLockOwner::Unknown as u32);
+static SYSTEM_LOCK_OWNER_CPU: AtomicU32 = AtomicU32::new(u32::MAX);
+static SYSTEM_LOCK_OWNER_SINCE: AtomicU64 = AtomicU64::new(0);
 
 // Frame completion register.
 //
@@ -105,6 +108,31 @@ pub struct System {
     framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum SystemLockOwner {
+    Unknown = 0,
+    DrawRgbTriangles = 1,
+    UploadTexture = 2,
+    EndFrame = 3,
+    CursorQueryViewport = 4,
+    CursorEndFrame = 5,
+}
+
+impl SystemLockOwner {
+    #[inline]
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::DrawRgbTriangles => "draw_rgb_triangles",
+            Self::UploadTexture => "upload_texture",
+            Self::EndFrame => "end_frame",
+            Self::CursorQueryViewport => "cursor_query_viewport",
+            Self::CursorEndFrame => "cursor_end_frame",
+        }
+    }
+}
+
 struct CpuBackbuffer {
     width: usize,
     height: usize,
@@ -181,7 +209,12 @@ pub fn cpu_backbuffer_dimensions() -> Option<(usize, usize)> {
 }
 
 pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
+    with_system_tag(SystemLockOwner::Unknown, f)
+}
+
+pub fn with_system_tag<R>(owner: SystemLockOwner, f: impl FnOnce(&mut System) -> R) -> Option<R> {
     let sys = SYSTEM.get()?;
+    let waiter_cpu = crate::percpu::this_cpu().cpu_index() as u32;
 
     // `spin::Mutex::lock()` is an unbounded spin. Backend switches can be invoked from the shell;
     // if any code path accidentally re-enters gfx while holding this lock, it can look like a
@@ -189,7 +222,34 @@ pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
     let mut guard = match sys.try_lock() {
         Some(g) => g,
         None => {
-            crate::log!("gfx: waiting for SYSTEM lock...\n");
+            let holder = SYSTEM_LOCK_OWNER.load(Ordering::Acquire);
+            let holder_cpu = SYSTEM_LOCK_OWNER_CPU.load(Ordering::Acquire);
+            let holder_since = SYSTEM_LOCK_OWNER_SINCE.load(Ordering::Acquire);
+            let held_ticks = now().saturating_sub(holder_since);
+            let holder_name = match holder {
+                x if x == SystemLockOwner::DrawRgbTriangles as u32 => {
+                    SystemLockOwner::DrawRgbTriangles.as_str()
+                }
+                x if x == SystemLockOwner::UploadTexture as u32 => {
+                    SystemLockOwner::UploadTexture.as_str()
+                }
+                x if x == SystemLockOwner::EndFrame as u32 => SystemLockOwner::EndFrame.as_str(),
+                x if x == SystemLockOwner::CursorQueryViewport as u32 => {
+                    SystemLockOwner::CursorQueryViewport.as_str()
+                }
+                x if x == SystemLockOwner::CursorEndFrame as u32 => {
+                    SystemLockOwner::CursorEndFrame.as_str()
+                }
+                _ => SystemLockOwner::Unknown.as_str(),
+            };
+            crate::log!(
+                "gfx: waiting for SYSTEM lock requester={} cpu={} holder={} holder_cpu={} held_ticks={}\n",
+                owner.as_str(),
+                waiter_cpu,
+                holder_name,
+                holder_cpu,
+                held_ticks
+            );
 
             let timeout_ms: u64 = 2000;
             let hz = TICK_HZ;
@@ -205,7 +265,36 @@ pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
                     break g;
                 }
                 if ticks != 0 && now() >= deadline {
-                    crate::log!("gfx: SYSTEM lock timeout (possible re-entrancy/deadlock)\n");
+                    let holder = SYSTEM_LOCK_OWNER.load(Ordering::Acquire);
+                    let holder_cpu = SYSTEM_LOCK_OWNER_CPU.load(Ordering::Acquire);
+                    let holder_since = SYSTEM_LOCK_OWNER_SINCE.load(Ordering::Acquire);
+                    let held_ticks = now().saturating_sub(holder_since);
+                    let holder_name = match holder {
+                        x if x == SystemLockOwner::DrawRgbTriangles as u32 => {
+                            SystemLockOwner::DrawRgbTriangles.as_str()
+                        }
+                        x if x == SystemLockOwner::UploadTexture as u32 => {
+                            SystemLockOwner::UploadTexture.as_str()
+                        }
+                        x if x == SystemLockOwner::EndFrame as u32 => {
+                            SystemLockOwner::EndFrame.as_str()
+                        }
+                        x if x == SystemLockOwner::CursorQueryViewport as u32 => {
+                            SystemLockOwner::CursorQueryViewport.as_str()
+                        }
+                        x if x == SystemLockOwner::CursorEndFrame as u32 => {
+                            SystemLockOwner::CursorEndFrame.as_str()
+                        }
+                        _ => SystemLockOwner::Unknown.as_str(),
+                    };
+                    crate::log!(
+                        "gfx: SYSTEM lock timeout requester={} cpu={} holder={} holder_cpu={} held_ticks={} (possible re-entrancy/deadlock)\n",
+                        owner.as_str(),
+                        waiter_cpu,
+                        holder_name,
+                        holder_cpu,
+                        held_ticks
+                    );
                     return None;
                 }
                 crate::wait::spin_step();
@@ -213,7 +302,17 @@ pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
         }
     };
 
-    Some(f(&mut guard))
+    SYSTEM_LOCK_OWNER.store(owner as u32, Ordering::Release);
+    SYSTEM_LOCK_OWNER_CPU.store(waiter_cpu, Ordering::Release);
+    SYSTEM_LOCK_OWNER_SINCE.store(now(), Ordering::Release);
+
+    let ret = f(&mut guard);
+
+    SYSTEM_LOCK_OWNER.store(SystemLockOwner::Unknown as u32, Ordering::Release);
+    SYSTEM_LOCK_OWNER_CPU.store(u32::MAX, Ordering::Release);
+    SYSTEM_LOCK_OWNER_SINCE.store(0, Ordering::Release);
+
+    Some(ret)
 }
 
 #[inline]
@@ -222,7 +321,14 @@ pub fn cursor_overlay_tick() -> i32 {
 }
 
 pub fn with_context<R>(f: impl FnOnce(&mut dyn GfxContext) -> R) -> Option<R> {
-    with_system(|sys| f(sys.context_mut()))
+    with_context_tag(SystemLockOwner::Unknown, f)
+}
+
+pub fn with_context_tag<R>(
+    owner: SystemLockOwner,
+    f: impl FnOnce(&mut dyn GfxContext) -> R,
+) -> Option<R> {
+    with_system_tag(owner, |sys| f(sys.context_mut()))
 }
 
 pub fn with_framebuffers<R>(

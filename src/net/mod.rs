@@ -434,6 +434,10 @@ pub fn device_count() -> usize {
     DEVICES.lock().len()
 }
 
+pub fn default_device_index() -> usize {
+    if device_count() == 0 { 0 } else { 0 }
+}
+
 pub fn primary_device_index() -> usize {
     let count = device_count();
     if count == 0 {

@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::str;
 
-use crate::gfx::text::{font_atlas_large_view, FontAtlasView};
+use crate::gfx::text::{FontAtlasView, font_atlas_large_view};
 use libm::{ceilf, floorf, sqrtf};
 use lyon_geom::point;
 use lyon_tessellation::path::Path as LyonPath;
@@ -634,7 +634,11 @@ fn measure_text_block_width(text: &str, atlas: &FontAtlasView<'_>) -> f32 {
 
 fn atlas_glyph_slot_and_advance(ch: char, atlas: &FontAtlasView<'_>) -> (usize, f32) {
     let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
-    let code = if (ch as u32) <= 0xFF { ch as usize } else { b'?' as usize };
+    let code = if (ch as u32) <= 0xFF {
+        ch as usize
+    } else {
+        b'?' as usize
+    };
     let mut slot = atlas.index.get(code).copied().unwrap_or(fallback);
     if slot == u16::MAX {
         slot = fallback;
@@ -805,11 +809,7 @@ fn spread_t(spread: SpreadMethod, t: f32) -> f32 {
         SpreadMethod::Repeat => rem_euclid_f32(t, 1.0),
         SpreadMethod::Reflect => {
             let twice = rem_euclid_f32(t, 2.0);
-            if twice > 1.0 {
-                2.0 - twice
-            } else {
-                twice
-            }
+            if twice > 1.0 { 2.0 - twice } else { twice }
         }
     }
 }

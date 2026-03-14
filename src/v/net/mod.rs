@@ -24,6 +24,46 @@ static VNET_SEQ: AtomicU32 = AtomicU32::new(1);
 const VNET_CMD_QUEUE_DEPTH: usize = 256;
 const VNET_EVENT_QUEUE_DEPTH_DEFAULT: usize = 256;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NetProfile {
+    nic_index: Option<usize>,
+}
+
+impl Default for NetProfile {
+    fn default() -> Self {
+        Self { nic_index: None }
+    }
+}
+
+impl NetProfile {
+    pub const fn new() -> Self {
+        Self { nic_index: None }
+    }
+
+    pub const fn with_nic(nic_index: usize) -> Self {
+        Self {
+            nic_index: Some(nic_index),
+        }
+    }
+
+    pub const fn nic_index(self) -> Option<usize> {
+        self.nic_index
+    }
+
+    pub fn resolve_device_index(self) -> Option<usize> {
+        let count = crate::net::device_count();
+        if count == 0 {
+            return None;
+        }
+
+        match self.nic_index {
+            Some(idx) if idx < count => Some(idx),
+            Some(_) => None,
+            None => Some(crate::net::default_device_index()),
+        }
+    }
+}
+
 pub struct VNet {
     owner: &'static str,
     cmds: &'static NetQueue<NetCommand>,
@@ -97,8 +137,17 @@ impl VNet {
         Self::open_with_event_queue_depth(device_index, VNET_EVENT_QUEUE_DEPTH_DEFAULT)
     }
 
+    pub fn open_with_profile(profile: NetProfile) -> Option<Self> {
+        let device_index = profile.resolve_device_index()?;
+        Self::open(device_index)
+    }
+
+    pub fn open_default() -> Option<Self> {
+        Self::open_with_profile(NetProfile::default())
+    }
+
     pub fn open_primary() -> Option<Self> {
-        Self::open(crate::net::primary_device_index())
+        Self::open_default()
     }
 
     pub fn owner(&self) -> &'static str {

@@ -46,7 +46,8 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
-    fn trueos_cabi_gfx_upload_texture_png(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32;
+    fn trueos_cabi_gfx_upload_texture_png(tex_id: u32, data_ptr: *const u8, data_len: usize)
+    -> i32;
     fn trueos_cabi_gfx_upload_texture_png_async(
         tex_id: u32,
         data_ptr: *const u8,
@@ -111,8 +112,10 @@ struct CmdStreamClipRect {
     height: u32,
 }
 
-static CMD_STREAM_LYON_ICON_TEX_RECS: Mutex<Vec<CmdStreamLyonIconTexRecord>> = Mutex::new(Vec::new());
-static CMD_STREAM_LYON_UNIT_QUAD_RECS: Mutex<Vec<CmdStreamLyonUnitQuadRecord>> = Mutex::new(Vec::new());
+static CMD_STREAM_LYON_ICON_TEX_RECS: Mutex<Vec<CmdStreamLyonIconTexRecord>> =
+    Mutex::new(Vec::new());
+static CMD_STREAM_LYON_UNIT_QUAD_RECS: Mutex<Vec<CmdStreamLyonUnitQuadRecord>> =
+    Mutex::new(Vec::new());
 
 const CMD_STREAM_DEFAULT_BLEND_MODE: u32 = 0;
 const CMD_STREAM_DEFAULT_PMA: u32 = 0;
@@ -237,7 +240,12 @@ fn cmd_stream_intersect_clip_rects(
 }
 
 #[inline]
-fn cmd_stream_clip_rect_from_local(x: f32, y: f32, width: f32, height: f32) -> Option<CmdStreamClipRect> {
+fn cmd_stream_clip_rect_from_local(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Option<CmdStreamClipRect> {
     if !(width.is_finite() && height.is_finite() && x.is_finite() && y.is_finite()) {
         return None;
     }
@@ -269,9 +277,7 @@ fn cmd_stream_apply_clip_state(next: Option<CmdStreamClipRect>) {
     *CMD_STREAM_CUR_CLIP.lock() = next;
     match next {
         Some(rect) => {
-            let _ = unsafe {
-                trueos_cabi_gfx_set_scissor(rect.x, rect.y, rect.width, rect.height)
-            };
+            let _ = unsafe { trueos_cabi_gfx_set_scissor(rect.x, rect.y, rect.width, rect.height) };
         }
         None => {
             let _ = unsafe { trueos_cabi_gfx_clear_scissor() };
@@ -489,7 +495,9 @@ fn cmd_stream_draw_texture_rect(
     cmd_stream_push_tex_vtx(&mut verts, right, top, u1, v0, r, g, b, a);
     cmd_stream_push_tex_vtx(&mut verts, left, top, u0, v0, r, g, b, a);
 
-    let rc = unsafe { trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, verts.as_ptr(), verts.len()) };
+    let rc = unsafe {
+        trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, verts.as_ptr(), verts.len())
+    };
     rc == 0
 }
 
@@ -556,9 +564,8 @@ fn cmd_stream_push_rgb_line_quad_px(
     let ox = nx * half;
     let oy = ny * half;
 
-    let to_ndc = |px: f32, py: f32| -> (f32, f32) {
-        ((2.0 * (px / vw)) - 1.0, 1.0 - (2.0 * (py / vh)))
-    };
+    let to_ndc =
+        |px: f32, py: f32| -> (f32, f32) { ((2.0 * (px / vw)) - 1.0, 1.0 - (2.0 * (py / vh))) };
 
     let (ax, ay) = to_ndc(x1 + ox, y1 + oy);
     let (bx, by) = to_ndc(x2 + ox, y2 + oy);
@@ -693,9 +700,27 @@ fn cmd_stream_fill_rect(
 
         let mut verts = Vec::with_capacity(24 * 12);
         push_rect(&mut verts, left_px, top_px, right_px, top_px + top_h);
-        push_rect(&mut verts, left_px, bottom_px - bottom_h, right_px, bottom_px);
-        push_rect(&mut verts, left_px, inner_top, left_px + left_w, inner_bottom);
-        push_rect(&mut verts, right_px - right_w, inner_top, right_px, inner_bottom);
+        push_rect(
+            &mut verts,
+            left_px,
+            bottom_px - bottom_h,
+            right_px,
+            bottom_px,
+        );
+        push_rect(
+            &mut verts,
+            left_px,
+            inner_top,
+            left_px + left_w,
+            inner_bottom,
+        );
+        push_rect(
+            &mut verts,
+            right_px - right_w,
+            inner_top,
+            right_px,
+            inner_bottom,
+        );
         return cmd_stream_draw_rgb_triangles(&verts, a);
     }
 
@@ -707,14 +732,7 @@ fn cmd_stream_fill_rect(
 }
 
 #[inline]
-fn cmd_stream_draw_line(
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    rgba: u32,
-    thickness: f32,
-) -> bool {
+fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness: f32) -> bool {
     let (origin_x, origin_y) = cmd_stream_origin_px();
     let x1 = x1 + origin_x;
     let y1 = y1 + origin_y;
@@ -727,20 +745,7 @@ fn cmd_stream_draw_line(
     let b = ((rgba >> 8) & 0xFF) as u8;
     let a = (rgba & 0xFF) as u8;
     let mut verts = Vec::with_capacity(6 * 12);
-    cmd_stream_push_rgb_line_quad_px(
-        &mut verts,
-        x1,
-        y1,
-        x2,
-        y2,
-        thickness,
-        vw,
-        vh,
-        r,
-        g,
-        b,
-        a,
-    );
+    cmd_stream_push_rgb_line_quad_px(&mut verts, x1, y1, x2, y2, thickness, vw, vh, r, g, b, a);
     cmd_stream_draw_rgb_triangles(&verts, a)
 }
 
@@ -787,7 +792,11 @@ fn cmd_stream_lyon_palette_rgb(color_id: u32) -> (u8, u8, u8) {
 }
 
 #[inline]
-fn cmd_stream_ensure_lyon_icon_tex(icon_id: u32, color_id: u32, small_set: u32) -> Option<(u32, u32)> {
+fn cmd_stream_ensure_lyon_icon_tex(
+    icon_id: u32,
+    color_id: u32,
+    small_set: u32,
+) -> Option<(u32, u32)> {
     {
         let recs = CMD_STREAM_LYON_ICON_TEX_RECS.lock();
         if let Some(rec) = recs
@@ -816,7 +825,13 @@ fn cmd_stream_ensure_lyon_icon_tex(icon_id: u32, color_id: u32, small_set: u32) 
 
     let mut rgba = vec![0u8; need];
     let wrote = unsafe {
-        trueos_cabi_gfx_bake_lyon_icon_rgba(icon_id, color_id, small_set, rgba.as_mut_ptr(), rgba.len())
+        trueos_cabi_gfx_bake_lyon_icon_rgba(
+            icon_id,
+            color_id,
+            small_set,
+            rgba.as_mut_ptr(),
+            rgba.len(),
+        )
     };
     if wrote != need as i32 {
         return None;
@@ -837,13 +852,15 @@ fn cmd_stream_ensure_lyon_icon_tex(icon_id: u32, color_id: u32, small_set: u32) 
         return None;
     }
 
-    CMD_STREAM_LYON_ICON_TEX_RECS.lock().push(CmdStreamLyonIconTexRecord {
-        icon_id,
-        color_id,
-        small_set,
-        tex_id,
-        side_px: side as u32,
-    });
+    CMD_STREAM_LYON_ICON_TEX_RECS
+        .lock()
+        .push(CmdStreamLyonIconTexRecord {
+            icon_id,
+            color_id,
+            small_set,
+            tex_id,
+            side_px: side as u32,
+        });
     Some((tex_id, side as u32))
 }
 
@@ -1029,10 +1046,7 @@ pub(crate) unsafe fn try_create_native_module(
                 return qjs::JSValue::undefined();
             };
             cmd_stream_apply_clip_state(cmd_stream_clip_rect_from_local(
-                x_f as f32,
-                y_f as f32,
-                w_f as f32,
-                h_f as f32,
+                x_f as f32, y_f as f32, w_f as f32, h_f as f32,
             ));
             qjs::JSValue::undefined()
         }
@@ -1315,13 +1329,7 @@ pub(crate) unsafe fn try_create_native_module(
             let outline = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) != 0.0;
             let chamfer = cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) != 0.0;
             let _ = cmd_stream_fill_rect(
-                x_f as f32,
-                y_f as f32,
-                w_f as f32,
-                h_f as f32,
-                rgba,
-                outline,
-                chamfer,
+                x_f as f32, y_f as f32, w_f as f32, h_f as f32, rgba, outline, chamfer,
             );
             qjs::JSValue::undefined()
         }
@@ -1428,16 +1436,7 @@ pub(crate) unsafe fn try_create_native_module(
 
             atlas_cmd_stream::flush_text_batches();
             let _ = cmd_stream_draw_texture_rect(
-                tex_id,
-                x_f as f32,
-                y_f as f32,
-                w_f as f32,
-                h_f as f32,
-                u0,
-                v0,
-                u1,
-                v1,
-                rgba,
+                tex_id, x_f as f32, y_f as f32, w_f as f32, h_f as f32, u0, v0, u1, v1, rgba,
             );
             qjs::JSValue::undefined()
         }
@@ -1502,7 +1501,10 @@ pub(crate) unsafe fn try_create_native_module(
             }
             let tex_id = cmd_stream_alloc_tex_id();
             let zeros = vec![0u8; need];
-            if unsafe { trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, zeros.as_ptr(), zeros.len()) } != 0 {
+            if unsafe {
+                trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, zeros.as_ptr(), zeros.len())
+            } != 0
+            {
                 cmd_stream_release_tex_id(tex_id);
                 return qjs::JSValue::undefined();
             }
@@ -1680,14 +1682,7 @@ pub(crate) unsafe fn try_create_native_module(
             let view_w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1);
             let view_h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1);
 
-            let _ = draw_lyon_in_frame(
-                icon_id,
-                x_f as f32,
-                y_f as f32,
-                view_w,
-                view_h,
-                color_id,
-            );
+            let _ = draw_lyon_in_frame(icon_id, x_f as f32, y_f as f32, view_w, view_h, color_id);
             qjs::JSValue::undefined()
         }
 
@@ -1701,10 +1696,14 @@ pub(crate) unsafe fn try_create_native_module(
                 return qjs::JS_NewFloat64(ctx, 0.0);
             };
 
-            let Some((pos_ptr, pos_len, pos_ab)) = cmd_stream_read_f32_slice_from_value(ctx, args[0]) else {
+            let Some((pos_ptr, pos_len, pos_ab)) =
+                cmd_stream_read_f32_slice_from_value(ctx, args[0])
+            else {
                 return qjs::JS_NewFloat64(ctx, 0.0);
             };
-            let Some((vel_ptr, vel_len, vel_ab)) = cmd_stream_read_f32_slice_from_value(ctx, args[1]) else {
+            let Some((vel_ptr, vel_len, vel_ab)) =
+                cmd_stream_read_f32_slice_from_value(ctx, args[1])
+            else {
                 qjs::js_free_value(ctx, pos_ab);
                 return qjs::JS_NewFloat64(ctx, 0.0);
             };
@@ -1837,7 +1836,11 @@ pub(crate) unsafe fn try_create_native_module(
             }
             export_fn!("beginFrame", qjs_cmd_stream_begin_frame, 0);
             export_fn!("endFrame", qjs_cmd_stream_end_frame, 0);
-            export_fn!("signalLoadscreenEnd", qjs_cmd_stream_signal_loadscreen_end, 0);
+            export_fn!(
+                "signalLoadscreenEnd",
+                qjs_cmd_stream_signal_loadscreen_end,
+                0
+            );
             export_fn!("setClearRgb", qjs_cmd_stream_set_clear_rgb, 1);
             export_fn!("setViewport", qjs_cmd_stream_set_viewport, 2);
             export_fn!("setOrigin", qjs_cmd_stream_set_origin, 2);
@@ -1860,7 +1863,11 @@ pub(crate) unsafe fn try_create_native_module(
             export_fn!("createTextureRgba", qjs_cmd_stream_create_texture_rgba, 3);
             export_fn!("createRenderTarget", qjs_cmd_stream_create_render_target, 2);
             export_fn!("createTexturePng", qjs_cmd_stream_create_texture_png, 1);
-            export_fn!("createTexturePngAsync", qjs_cmd_stream_create_texture_png_async, 1);
+            export_fn!(
+                "createTexturePngAsync",
+                qjs_cmd_stream_create_texture_png_async,
+                1
+            );
             export_fn!("updateTextureRgba", qjs_cmd_stream_update_texture_rgba, 4);
             export_fn!("updateTexturePng", qjs_cmd_stream_update_texture_png, 2);
             export_fn!("getTextureStatus", qjs_cmd_stream_get_texture_status, 1);
@@ -1879,17 +1886,17 @@ pub(crate) unsafe fn try_create_native_module(
                 2
             );
             export_fn!("drawTextureRect", qjs_cmd_stream_draw_texture_rect, 5);
-            export_fn!("drawAtlasText", atlas_cmd_stream::qjs_cmd_stream_draw_atlas_text, 10);
+            export_fn!(
+                "drawAtlasText",
+                atlas_cmd_stream::qjs_cmd_stream_draw_atlas_text,
+                10
+            );
             export_fn!(
                 "drawLyonIconInFrame",
                 qjs_cmd_stream_draw_lyon_icon_in_frame,
                 4
             );
-            export_fn!(
-                "stepIconCollisions",
-                qjs_cmd_stream_step_icon_collisions,
-                5
-            );
+            export_fn!("stepIconCollisions", qjs_cmd_stream_step_icon_collisions, 5);
             0
         }
 
