@@ -426,16 +426,16 @@ export function composeSceneTextureToCurrentTarget(contentTexId, contentW, conte
     );
   }
 
-  cmdStream.setBlendEnabled(1);
+  cmdStream.setBlendEnabled(0);
   cmdStream.setBlendMode(0);
   cmdStream.setPremultipliedAlpha(0);
   cmdStream.pushClipRect(0, 0, drawW, drawH);
   try {
     if (targetTexId > 0) {
       const u0 = 0;
-      const v0 = scrollTop / texH;
+      const v0 = Math.max(0, 1 - (scrollTop / texH));
       const u1 = Math.min(1, drawW / texW);
-      const v1 = Math.min(1, (scrollTop + drawH) / texH);
+      const v1 = Math.max(0, 1 - ((scrollTop + drawH) / texH));
       cmdStream.drawTextureRect(targetTexId, 0, 0, drawW, drawH, u0, v0, u1, v1);
     }
   } finally {
@@ -444,6 +444,9 @@ export function composeSceneTextureToCurrentTarget(contentTexId, contentW, conte
 
   if (overlayTextRuns.length <= 0) return true;
 
+  cmdStream.setBlendEnabled(1);
+  cmdStream.setBlendMode(0);
+  cmdStream.setPremultipliedAlpha(0);
   const texId = Number(cmdStream.createAtlasTexture(ATLAS_KIND) || 0);
   for (let i = 0; i < overlayTextRuns.length; i += 1) {
     const run = overlayTextRuns[i] || null;
