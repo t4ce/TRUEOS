@@ -406,14 +406,15 @@ export function renderSceneContentToCurrentTarget(doc, vw, contentH) {
   return true;
 }
 
-export function composeSceneTextureToCurrentTarget(contentTexId, contentW, contentH, vw, vh, scrollY, overlayRuns, overlayRect = null) {
+export function composeSceneTextureToCurrentTarget(contentTexId, contentW, contentH, vw, vh, scrollY, contentTopY = 0, overlayRuns, overlayRect = null) {
   const targetTexId = Math.max(0, Number(contentTexId || 0) | 0);
   const drawW = Math.max(1, Number(vw || 1) | 0);
   const drawH = Math.max(1, Number(vh || 1) | 0);
   const texW = Math.max(1, Number(contentW || drawW) | 0);
   const texH = Math.max(1, Number(contentH || drawH) | 0);
-  const maxScroll = Math.max(0, texH - drawH);
-  const scrollTop = Math.max(0, Math.min(maxScroll, Math.round(Number(scrollY || 0))));
+  const initialTop = Math.max(0, Math.min(texH - 1, Math.round(Number(contentTopY || 0))));
+  const maxScroll = Math.max(0, texH - initialTop - drawH);
+  const scrollTop = initialTop + Math.max(0, Math.min(maxScroll, Math.round(Number(scrollY || 0))));
   const overlayTextRuns = buildOverlayTextRuns(overlayRuns);
 
   if (overlayRect && typeof overlayRect === 'object') {

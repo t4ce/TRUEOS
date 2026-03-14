@@ -77,7 +77,7 @@ unsafe fn ensure_global_env(ctx: *mut qjs::JSContext) {
         G.__env__ = Object.create(null);
     }
     if (typeof G.__env__.OPENAI_API_KEY !== 'string' || !G.__env__.OPENAI_API_KEY) {
-        G.__env__.OPENAI_API_KEY = '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';
+        G.__env__.OPENAI_API_KEY = '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';
     }
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 "#;

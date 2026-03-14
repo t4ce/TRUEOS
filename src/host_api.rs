@@ -11,6 +11,13 @@ unsafe extern "C" {
     fn trueos_cabi_uart1_shell_write(data_ptr: *const u8, data_len: usize) -> usize;
     fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
     fn trueos_cabi_shell1_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
+    fn trueos_cabi_shell1_history_total_lines() -> usize;
+    fn trueos_cabi_shell1_history_text_since(
+        start_line: usize,
+        max_lines: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
     fn trueos_cabi_gfx_capture_screenshot_data_url(out_ptr: *mut u8, out_cap: usize) -> isize;
 }
 
@@ -113,6 +120,44 @@ unsafe extern "C" fn trueos_shell1_submit_input_js(
     let wrote = trueos_cabi_shell1_submit_input(bytes.as_ptr(), bytes.len());
     qjs::JS_FreeCString(ctx, cstr);
     js_int32(wrote as i32)
+}
+
+unsafe extern "C" fn trueos_shell1_history_total_lines_js(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    js_int32(trueos_cabi_shell1_history_total_lines() as i32)
+}
+
+unsafe extern "C" fn trueos_shell1_history_text_since_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return js_null();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let start_line = js_to_i32(ctx, args[0]).unwrap_or(0).max(0) as usize;
+    let max_lines = if argc >= 2 {
+        js_to_i32(ctx, args[1]).unwrap_or(64).max(0) as usize
+    } else {
+        64usize
+    };
+    let len = trueos_cabi_shell1_history_text_since(start_line, max_lines, core::ptr::null_mut(), 0);
+    if len <= 0 {
+        return qjs::JS_NewStringLen(ctx, b"".as_ptr() as *const c_char, 0);
+    }
+    let mut bytes = alloc::vec![0u8; len as usize];
+    let got = trueos_cabi_shell1_history_text_since(start_line, max_lines, bytes.as_mut_ptr(), bytes.len());
+    if got <= 0 {
+        return qjs::JS_NewStringLen(ctx, b"".as_ptr() as *const c_char, 0);
+    }
+    bytes.truncate(got as usize);
+    qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
 }
 
 unsafe extern "C" fn trueos_capture_screenshot_js(
@@ -590,6 +635,36 @@ pub unsafe fn install(ctx: *mut qjs::JSContext) {
 
     let f = qjs::JS_NewCFunction2(
         ctx,
+        Some(trueos_shell1_history_total_lines_js),
+        b"__trueosShell1HistoryTotalLines\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShell1HistoryTotalLines\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_shell1_history_text_since_js),
+        b"__trueosShell1HistoryTextSince\0".as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShell1HistoryTextSince\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
         Some(trueos_capture_screenshot_js),
         b"__trueosCaptureScreenshot\0".as_ptr() as *const c_char,
         0,
@@ -792,6 +867,18 @@ unsafe fn install_shell1_runtime(ctx: *mut qjs::JSContext) {
     }) : [];
     G.__trueosShell1Runtime = Object.freeze({
         commands: Object.freeze(commands),
+        historyTotalLines: () => (typeof G.__trueosShell1HistoryTotalLines === 'function'
+            ? Number(G.__trueosShell1HistoryTotalLines()) || 0
+            : 0),
+        historyTextSince: (startLine, maxLines) => {
+            if (typeof G.__trueosShell1HistoryTextSince !== 'function') {
+                return '';
+            }
+            return String(G.__trueosShell1HistoryTextSince(
+                Number(startLine) || 0,
+                Number(maxLines) || 64,
+            ) || '');
+        },
     });
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 "#;
