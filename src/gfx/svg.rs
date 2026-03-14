@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::str;
 
+use crate::gfx::text::{font_atlas_large_view, FontAtlasView};
 use libm::{ceilf, floorf, sqrtf};
 use lyon_geom::point;
 use lyon_tessellation::path::Path as LyonPath;
@@ -12,7 +13,7 @@ use tiny_skia_path::{
     Path as TinyPath, PathBuilder as TinyPathBuilder, PathSegment, Point as TinyPoint,
     Transform as TinyTransform,
 };
-use usvg::{Group, Node, Options, Paint, SpreadMethod, Stroke, Tree};
+use usvg::{Group, Node, Options, Paint, SpreadMethod, Stroke, TextAnchor, TextFlow, Tree};
 
 const SVG_MAX_TEXTURE_SIDE: u32 = 2048;
 const ERR_SVG_INVALID_UTF8: i32 = -20;
@@ -137,7 +138,8 @@ impl SvgRasterizer {
                         }
                     }
                 }
-                Node::Image(_) | Node::Text(_) => {}
+                Node::Text(text) => self.render_text_node(text, group_opacity),
+                Node::Image(_) => {}
             }
         }
     }
@@ -221,6 +223,139 @@ impl SvgRasterizer {
             .is_ok()
         {
             self.rasterize_mesh(&buffers.vertices, &buffers.indices, &paint);
+        }
+    }
+
+    fn render_text_node(&mut self, text: &usvg::Text, inherited_opacity: f32) {
+        let atlas = font_atlas_large_view();
+        if atlas.alpha.is_empty() {
+            return;
+        }
+
+        let fallback_bbox = text.bounding_box();
+        for chunk in text.chunks() {
+            if !matches!(chunk.text_flow(), TextFlow::Linear) {
+                continue;
+            }
+
+            let chunk_text = chunk.text();
+            if chunk_text.is_empty() {
+                continue;
+            }
+
+            let origin = transform_point(
+                TinyPoint::from_xy(
+                    chunk.x().unwrap_or(fallback_bbox.x()),
+                    chunk.y().unwrap_or(fallback_bbox.y()),
+                ),
+                text.abs_transform(),
+                self.scale_x,
+                self.scale_y,
+            );
+
+            let anchor_shift = match chunk.anchor() {
+                TextAnchor::Start => 0.0,
+                TextAnchor::Middle => measure_text_block_width(chunk_text, &atlas) * 0.5,
+                TextAnchor::End => measure_text_block_width(chunk_text, &atlas),
+            };
+
+            let mut pen_x = origin.x - anchor_shift;
+            let mut pen_y = origin.y;
+            for span in chunk.spans() {
+                if !span.is_visible() {
+                    continue;
+                }
+                let Some(text_slice) = chunk_text.get(span.start()..span.end()) else {
+                    continue;
+                };
+                if text_slice.is_empty() {
+                    continue;
+                }
+
+                let Some(rgba) = text_span_rgba(span.fill(), inherited_opacity) else {
+                    continue;
+                };
+                (pen_x, pen_y) = self.blit_atlas_text(text_slice, pen_x, pen_y, rgba, &atlas);
+            }
+        }
+    }
+
+    fn blit_atlas_text(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        rgba: [f32; 4],
+        atlas: &FontAtlasView<'_>,
+    ) -> (f32, f32) {
+        let mut pen_x = x;
+        let mut pen_y = y;
+        let base_x = x;
+
+        for ch in text.chars() {
+            if ch == '\n' {
+                pen_x = base_x;
+                pen_y += atlas.cell_h as f32;
+                continue;
+            }
+
+            let (slot, advance) = atlas_glyph_slot_and_advance(ch, atlas);
+            if ch == ' ' {
+                pen_x += advance;
+                continue;
+            }
+
+            self.blit_atlas_glyph(slot, pen_x, pen_y, rgba, atlas);
+            pen_x += advance;
+        }
+
+        (pen_x, pen_y)
+    }
+
+    fn blit_atlas_glyph(
+        &mut self,
+        slot: usize,
+        x: f32,
+        y: f32,
+        rgba: [f32; 4],
+        atlas: &FontAtlasView<'_>,
+    ) {
+        let glyph_x = (slot as u32 % atlas.grid_w) * atlas.cell_w;
+        let glyph_y = (slot as u32 / atlas.grid_w) * atlas.cell_h;
+        let draw_x = floorf(x) as i32;
+        let draw_y = floorf(y) as i32;
+
+        for row in 0..atlas.cell_h {
+            let dst_y = draw_y + row as i32;
+            if dst_y < 0 || dst_y >= self.height as i32 {
+                continue;
+            }
+
+            for col in 0..atlas.cell_w {
+                let dst_x = draw_x + col as i32;
+                if dst_x < 0 || dst_x >= self.width as i32 {
+                    continue;
+                }
+
+                let src_x = glyph_x + col;
+                let src_y = glyph_y + row;
+                let src_idx = (src_y as usize)
+                    .saturating_mul(atlas.width as usize)
+                    .saturating_add(src_x as usize);
+                let Some(&coverage) = atlas.alpha.get(src_idx) else {
+                    continue;
+                };
+                if coverage == 0 {
+                    continue;
+                }
+
+                let mut tinted = rgba;
+                tinted[3] *= coverage as f32 / 255.0;
+                if tinted[3] <= 0.0 {
+                    continue;
+                }
+                self.blend_pixel(dst_x as u32, dst_y as u32, tinted);
+            }
         }
     }
 
@@ -456,6 +591,65 @@ fn collect_gradient_stops(stops: &[usvg::Stop], opacity: f32) -> Vec<GradientSto
             .unwrap_or(core::cmp::Ordering::Equal)
     });
     out
+}
+
+fn text_span_rgba(fill: Option<&usvg::Fill>, inherited_opacity: f32) -> Option<[f32; 4]> {
+    let opacity = fill
+        .map(|f| inherited_opacity * f.opacity().get())
+        .unwrap_or(inherited_opacity)
+        .clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+        return None;
+    }
+
+    match fill.map(|f| f.paint()) {
+        Some(Paint::Color(color)) => Some([
+            color.red as f32 / 255.0,
+            color.green as f32 / 255.0,
+            color.blue as f32 / 255.0,
+            opacity,
+        ]),
+        Some(_) => None,
+        None => Some([0.0, 0.0, 0.0, opacity]),
+    }
+}
+
+fn measure_text_block_width(text: &str, atlas: &FontAtlasView<'_>) -> f32 {
+    let mut width = 0.0;
+    let mut max_width: f32 = 0.0;
+
+    for ch in text.chars() {
+        if ch == '\n' {
+            max_width = max_width.max(width);
+            width = 0.0;
+            continue;
+        }
+
+        let (_, advance) = atlas_glyph_slot_and_advance(ch, atlas);
+        width += advance;
+    }
+
+    max_width.max(width)
+}
+
+fn atlas_glyph_slot_and_advance(ch: char, atlas: &FontAtlasView<'_>) -> (usize, f32) {
+    let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+    let code = if (ch as u32) <= 0xFF { ch as usize } else { b'?' as usize };
+    let mut slot = atlas.index.get(code).copied().unwrap_or(fallback);
+    if slot == u16::MAX {
+        slot = fallback;
+    }
+
+    let mut advance = atlas
+        .widths
+        .get(slot as usize)
+        .copied()
+        .unwrap_or(atlas.cell_w as u8) as f32;
+    if advance <= 0.0 {
+        advance = atlas.cell_w as f32;
+    }
+
+    (slot as usize, advance)
 }
 
 fn apply_transform_xy(p: [f32; 2], ts: TinyTransform, abs_bbox: tiny_skia_path::Rect) -> [f32; 2] {
