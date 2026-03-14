@@ -314,10 +314,46 @@ function attachAiWorker(worker) {
   return worker;
 }
 
+function normalizeViewportSize(value, fallback) {
+  const next = Math.round(Number(value || 0));
+  if (!Number.isFinite(next) || next <= 0) {
+    return Math.max(1, Math.round(Number(fallback || 1) || 1));
+  }
+  return next;
+}
+
+function readViewportOverride() {
+  const override = runtime.host.__trueosBrowserViewport;
+  if (!override || typeof override !== 'object') return null;
+  const width = normalizeViewportSize(
+    override.width,
+    (runtime.host.window || runtime.host).innerWidth || 1280,
+  );
+  const height = normalizeViewportSize(
+    override.height,
+    (runtime.host.window || runtime.host).innerHeight || 800,
+  );
+  return { width, height };
+}
+
+function readContentRectOverride(vw, vh) {
+  const rect = runtime.host.__trueosBrowserContentRect;
+  if (!rect || typeof rect !== 'object') {
+    return { x: 0, y: 0, width: vw, height: vh };
+  }
+  return {
+    x: Math.round(Number(rect.x || 0) || 0),
+    y: Math.round(Number(rect.y || 0) || 0),
+    width: normalizeViewportSize(rect.width, vw),
+    height: normalizeViewportSize(rect.height, vh),
+  };
+}
+
 function computeViewport() {
   const W = runtime.host.window || runtime.host;
-  const vw = Math.max(1, Number(W.innerWidth || 1280));
-  const vh = Math.max(1, Number(W.innerHeight || 800));
+  const override = readViewportOverride();
+  const vw = override ? override.width : Math.max(1, Number(W.innerWidth || 1280));
+  const vh = override ? override.height : Math.max(1, Number(W.innerHeight || 800));
   return { vw, vh };
 }
 
@@ -1390,9 +1426,14 @@ function getRows() {
 
 function getViewport() {
   const { vw, vh } = computeViewport();
+  const contentRect = readContentRectOverride(vw, vh);
   return {
     width: vw,
     height: vh,
+    x: contentRect.x,
+    y: contentRect.y,
+    contentWidth: contentRect.width,
+    contentHeight: contentRect.height,
     scrollY: scrollY,
   };
 }
@@ -1446,6 +1487,19 @@ function docHasTextRows(doc) {
     }
   }
   return false;
+}
+
+function finalizePaintState(doc) {
+  const hasRealSceneContent = Array.isArray(doc && doc.rows) && doc.rows.length > 0;
+  const hasTextContent = docHasTextRows(doc);
+  browserPageState.markRendered('first-page-paint');
+  if (!fpsOverlayEnabled && hasRealSceneContent) {
+    fpsOverlayEnabled = true;
+  }
+  if (!browserContentReadySignaled && hasTextContent && typeof cmdStream.signalLoadscreenEnd === 'function') {
+    cmdStream.signalLoadscreenEnd();
+    browserContentReadySignaled = true;
+  }
 }
 
 function requestBrowserContentRepaint() {
@@ -1526,6 +1580,60 @@ function ensureBrowserSurface(doc, vw, vh) {
   browserSurfaceHeight = nextH;
   browserSurfaceDirty = true;
   return browserSurfaceTexId;
+}
+
+function paintToCurrentTarget(options = null) {
+  if (!browserCanRenderScene) {
+    return false;
+  }
+  const opts = options && typeof options === 'object' ? options : null;
+  const { vw, vh } = computeViewport();
+  const doc = ensureDoc(vw);
+  const { contentH, contentTopY } = clampScrollForDoc(doc, vh);
+  publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
+
+  const overlayRuns = [];
+  if (!opts || opts.includeFpsOverlay !== false) {
+    if (fpsOverlayEnabled) {
+      fpsOverlay.appendRuns(overlayRuns, vw);
+    }
+  }
+  const usePendingReleaseRect = !opts || !Object.prototype.hasOwnProperty.call(opts, 'releaseRect');
+  const releaseRect = usePendingReleaseRect ? pendingReleaseRect : opts.releaseRect;
+  const composeViewportWidth = normalizeViewportSize(opts && opts.viewportWidth, vw);
+  const composeViewportHeight = normalizeViewportSize(opts && opts.viewportHeight, vh);
+
+  const surfaceTexId = ensureBrowserSurface(doc, vw, vh);
+  if (surfaceTexId <= 0) {
+    return false;
+  }
+
+  if (browserSurfaceDirty) {
+    cmdStream.setRenderTarget(surfaceTexId);
+    cmdStream.setViewport(browserSurfaceWidth, browserSurfaceHeight);
+    renderSceneContentToCurrentTarget(doc, browserSurfaceWidth, browserSurfaceHeight);
+    browserSurfaceDirty = false;
+  }
+  cmdStream.clearRenderTarget();
+  cmdStream.setViewport(composeViewportWidth, composeViewportHeight);
+  composeSceneTextureToCurrentTarget(
+    surfaceTexId,
+    browserSurfaceWidth,
+    Math.max(browserSurfaceHeight, contentH),
+    vw,
+    vh,
+    scrollY,
+    contentTopY,
+    overlayRuns,
+    releaseRect,
+  );
+
+  if (usePendingReleaseRect) {
+    pendingReleaseRect = null;
+  }
+  finalizePaintState(doc);
+
+  return true;
 }
 
 function armHtmlReadyFallback() {
@@ -1682,63 +1790,36 @@ function surfToUrl(url, event = null) {
 }
 
 function paint() {
-  if (!browserCanRenderScene) {
-    return false;
-  }
   const { vw, vh } = computeViewport();
-  const doc = ensureDoc(vw);
-  const { contentH, contentTopY } = clampScrollForDoc(doc, vh);
-  publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
-
-  const overlayRuns = [];
-  if (fpsOverlayEnabled) {
-    fpsOverlay.appendRuns(overlayRuns, vw);
-  }
-  const releaseRect = pendingReleaseRect;
-  pendingReleaseRect = null;
-  const hasRealSceneContent = Array.isArray(doc && doc.rows) && doc.rows.length > 0;
-  const hasTextContent = docHasTextRows(doc);
 
   try {
-    const surfaceTexId = ensureBrowserSurface(doc, vw, vh);
-    if (surfaceTexId > 0) {
+    if (typeof cmdStream.createRenderTarget === 'function') {
       cmdStream.setClearRgb(0xF4F4F4);
       cmdStream.setViewport(Math.max(1, Number(vw || 1) | 0), Math.max(1, Number(vh || 1) | 0));
       cmdStream.beginFrame();
       try {
-        if (browserSurfaceDirty) {
-          cmdStream.setRenderTarget(surfaceTexId);
-          cmdStream.setViewport(browserSurfaceWidth, browserSurfaceHeight);
-          renderSceneContentToCurrentTarget(doc, browserSurfaceWidth, browserSurfaceHeight);
-          browserSurfaceDirty = false;
+        if (paintToCurrentTarget({
+          viewportWidth: vw,
+          viewportHeight: vh,
+          includeFpsOverlay: true,
+        })) {
+          return true;
         }
-        cmdStream.clearRenderTarget();
-        cmdStream.setViewport(Math.max(1, Number(vw || 1) | 0), Math.max(1, Number(vh || 1) | 0));
-        composeSceneTextureToCurrentTarget(
-          surfaceTexId,
-          browserSurfaceWidth,
-          Math.max(browserSurfaceHeight, contentH),
-          vw,
-          vh,
-          scrollY,
-          contentTopY,
-          overlayRuns,
-          releaseRect,
-        );
       } finally {
         cmdStream.endFrame();
       }
-    } else {
-      renderScene(doc, vw, vh, scrollY, overlayRuns, releaseRect);
     }
-    browserPageState.markRendered('first-page-paint');
-    if (!fpsOverlayEnabled && hasRealSceneContent) {
-      fpsOverlayEnabled = true;
+
+    const doc = ensureDoc(vw);
+    const overlayRuns = [];
+    if (fpsOverlayEnabled) {
+      fpsOverlay.appendRuns(overlayRuns, vw);
     }
-    if (!browserContentReadySignaled && hasTextContent && typeof cmdStream.signalLoadscreenEnd === 'function') {
-      cmdStream.signalLoadscreenEnd();
-      browserContentReadySignaled = true;
-    }
+    const releaseRect = pendingReleaseRect;
+    pendingReleaseRect = null;
+    renderScene(doc, vw, vh, scrollY, overlayRuns, releaseRect);
+    finalizePaintState(doc);
+    return true;
   } catch (err) {
     raiseBrowserError(
       'TRUEOS_BROWSER_RENDER_FAILED',
@@ -1748,7 +1829,7 @@ function paint() {
         viewportWidth: vw,
         viewportHeight: vh,
         scrollY,
-        rowCount: Array.isArray(doc && doc.rows) ? doc.rows.length : 0,
+        rowCount: Array.isArray(cachedDoc && cachedDoc.rows) ? cachedDoc.rows.length : 0,
       },
       err,
     );
@@ -1998,6 +2079,9 @@ function InjectOpenAi() {
 
 runtime.host.__trueosBrowser = {
   paint,
+  paintToCurrentTarget(options = null) {
+    return paintToCurrentTarget(options);
+  },
   setHtml,
   setNodeHtml,
   setBodyHtml,
@@ -2054,6 +2138,49 @@ runtime.host.__trueosBrowser = {
   },
   getViewport() {
     return getViewport();
+  },
+  setViewportOverride(viewport = null, contentRect = null) {
+    if (!viewport || typeof viewport !== 'object') {
+      delete runtime.host.__trueosBrowserViewport;
+      delete runtime.host.__trueosBrowserContentRect;
+      browserSurfaceDirty = true;
+      paint();
+      return true;
+    }
+    const nextViewport = {
+      width: normalizeViewportSize(viewport.width, computeViewport().vw),
+      height: normalizeViewportSize(viewport.height, computeViewport().vh),
+    };
+    runtime.host.__trueosBrowserViewport = nextViewport;
+    const nextContentRect = contentRect && typeof contentRect === 'object'
+      ? {
+        x: Math.round(Number(contentRect.x || 0) || 0),
+        y: Math.round(Number(contentRect.y || 0) || 0),
+        width: normalizeViewportSize(contentRect.width, nextViewport.width),
+        height: normalizeViewportSize(contentRect.height, nextViewport.height),
+      }
+      : {
+        x: 0,
+        y: 0,
+        width: nextViewport.width,
+        height: nextViewport.height,
+      };
+    runtime.host.__trueosBrowserContentRect = nextContentRect;
+    browserSurfaceDirty = true;
+    paint();
+    return true;
+  },
+  getSurfaceState() {
+    const { vw, vh } = computeViewport();
+    return {
+      texId: Math.max(0, Number(browserSurfaceTexId || 0) | 0),
+      width: Math.max(0, Number(browserSurfaceWidth || 0) | 0),
+      height: Math.max(0, Number(browserSurfaceHeight || 0) | 0),
+      dirty: !!browserSurfaceDirty,
+      viewportWidth: vw,
+      viewportHeight: vh,
+      scrollY,
+    };
   },
   getPageLoadedState() {
     return browserPageState.getState('api');

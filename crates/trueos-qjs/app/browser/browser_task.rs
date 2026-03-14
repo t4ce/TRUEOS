@@ -490,6 +490,20 @@ unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
 if (!G.window) G.window = G;
 if (typeof G.window.innerWidth !== 'number') G.window.innerWidth = 1280;
 if (typeof G.window.innerHeight !== 'number') G.window.innerHeight = 800;
+if (!G.__trueosBrowserViewport || typeof G.__trueosBrowserViewport !== 'object') {
+    G.__trueosBrowserViewport = {
+        width: G.window.innerWidth,
+        height: G.window.innerHeight,
+    };
+}
+if (!G.__trueosBrowserContentRect || typeof G.__trueosBrowserContentRect !== 'object') {
+    G.__trueosBrowserContentRect = {
+        x: 0,
+        y: 0,
+        width: G.__trueosBrowserViewport.width,
+        height: G.__trueosBrowserViewport.height,
+    };
+}
 if (typeof G.addEventListener !== 'function') G.addEventListener = () => {};
 if (typeof G.removeEventListener !== 'function') G.removeEventListener = () => {};
 if (typeof G.setTimeout !== 'function') G.setTimeout = () => 1;
