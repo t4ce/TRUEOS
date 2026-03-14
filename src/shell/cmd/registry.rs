@@ -674,6 +674,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("go.two", &[], cmd::cmd_go_two);
         let _ = REGSHCMD("tlb", &NO_ARGS, cmd::cmd_tlb);
         let _ = REGSHCMD("tlb.pci", &NO_ARGS, cmd::cmd_tlb_pci);
+        let _ = REGSHCMD("tlb.pciids", &NO_ARGS, cmd::cmd_tlb_pciids);
         let _ = REGSHCMD("tlb.pci.bar", &NO_ARGS, cmd::cmd_tlb_pci_bar);
         let _ = REGSHCMD("tlb.mem", &NO_ARGS, cmd::cmd_tlb_mem);
         let _ = REGSHCMD("tlb.cpu", &NO_ARGS, cmd::cmd_tlb_cpu);
