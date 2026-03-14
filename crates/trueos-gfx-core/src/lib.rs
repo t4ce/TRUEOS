@@ -341,6 +341,7 @@ pub enum Command {
         offset: u64,
     },
     BindImage(ImageId),
+    SetRenderTarget(Option<ImageId>),
     SetSampler(SamplerDesc),
     SetBlend(BlendDesc),
     SetViewport(Viewport),

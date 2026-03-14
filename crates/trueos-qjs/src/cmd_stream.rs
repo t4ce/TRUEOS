@@ -61,6 +61,8 @@ unsafe extern "C" {
     ) -> i32;
     fn trueos_cabi_gfx_set_scissor(x: u32, y: u32, width: u32, height: u32) -> i32;
     fn trueos_cabi_gfx_clear_scissor() -> i32;
+    fn trueos_cabi_gfx_set_render_target(tex_id: u32) -> i32;
+    fn trueos_cabi_gfx_clear_render_target() -> i32;
     fn trueos_cabi_gfx_bake_lyon_icon_rgba(
         icon_id: u32,
         color_id: u32,
@@ -1095,6 +1097,35 @@ pub(crate) unsafe fn try_create_native_module(
             qjs::JSValue::undefined()
         }
 
+        unsafe extern "C" fn qjs_cmd_stream_set_render_target(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let Some(args) = cmd_stream_args(argv, argc, 1) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+                return qjs::JSValue::undefined();
+            };
+            atlas_cmd_stream::flush_text_batches();
+            let tex_id = (tex_id_f as i64).max(0) as u32;
+            let _ = trueos_cabi_gfx_set_render_target(tex_id);
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_clear_render_target(
+            _ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            _argc: i32,
+            _argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            atlas_cmd_stream::flush_text_batches();
+            let _ = trueos_cabi_gfx_clear_render_target();
+            qjs::JSValue::undefined()
+        }
+
         unsafe extern "C" fn qjs_cmd_stream_push_origin(
             ctx: *mut qjs::JSContext,
             _this_val: qjs::JSValueConst,
@@ -1448,6 +1479,36 @@ pub(crate) unsafe fn try_create_native_module(
             qjs::JS_NewFloat64(ctx, tex_id as f64)
         }
 
+        unsafe extern "C" fn qjs_cmd_stream_create_render_target(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let Some(args) = cmd_stream_args(argv, argc, 2) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(w_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(h_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+                return qjs::JSValue::undefined();
+            };
+            let w = (w_f as i64).max(1) as u32;
+            let h = (h_f as i64).max(1) as u32;
+            let need = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+            if need == 0 {
+                return qjs::JSValue::undefined();
+            }
+            let tex_id = cmd_stream_alloc_tex_id();
+            let zeros = vec![0u8; need];
+            if unsafe { trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, zeros.as_ptr(), zeros.len()) } != 0 {
+                cmd_stream_release_tex_id(tex_id);
+                return qjs::JSValue::undefined();
+            }
+            qjs::JS_NewFloat64(ctx, tex_id as f64)
+        }
+
         unsafe extern "C" fn qjs_cmd_stream_create_texture_png(
             ctx: *mut qjs::JSContext,
             _this_val: qjs::JSValueConst,
@@ -1784,6 +1845,8 @@ pub(crate) unsafe fn try_create_native_module(
             export_fn!("pushClipRect", qjs_cmd_stream_push_clip_rect, 4);
             export_fn!("popClipRect", qjs_cmd_stream_pop_clip_rect, 0);
             export_fn!("clearClipRect", qjs_cmd_stream_clear_clip_rect, 0);
+            export_fn!("setRenderTarget", qjs_cmd_stream_set_render_target, 1);
+            export_fn!("clearRenderTarget", qjs_cmd_stream_clear_render_target, 0);
             export_fn!("pushOrigin", qjs_cmd_stream_push_origin, 2);
             export_fn!("popOrigin", qjs_cmd_stream_pop_origin, 0);
             export_fn!("setBlendEnabled", qjs_cmd_stream_set_blend_enabled, 1);
@@ -1795,6 +1858,7 @@ pub(crate) unsafe fn try_create_native_module(
                 1
             );
             export_fn!("createTextureRgba", qjs_cmd_stream_create_texture_rgba, 3);
+            export_fn!("createRenderTarget", qjs_cmd_stream_create_render_target, 2);
             export_fn!("createTexturePng", qjs_cmd_stream_create_texture_png, 1);
             export_fn!("createTexturePngAsync", qjs_cmd_stream_create_texture_png_async, 1);
             export_fn!("updateTextureRgba", qjs_cmd_stream_update_texture_rgba, 4);
@@ -1849,6 +1913,8 @@ pub(crate) unsafe fn try_create_native_module(
         add_export!("pushClipRect");
         add_export!("popClipRect");
         add_export!("clearClipRect");
+        add_export!("setRenderTarget");
+        add_export!("clearRenderTarget");
         add_export!("pushOrigin");
         add_export!("popOrigin");
         add_export!("setBlendEnabled");
@@ -1856,6 +1922,7 @@ pub(crate) unsafe fn try_create_native_module(
         add_export!("setBlendMode");
         add_export!("setPremultipliedAlpha");
         add_export!("createTextureRgba");
+        add_export!("createRenderTarget");
         add_export!("createTexturePng");
         add_export!("createTexturePngAsync");
         add_export!("updateTextureRgba");

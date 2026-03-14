@@ -30,6 +30,7 @@ export const LI_TEXT_X_OFFSET = 14;
 const IMAGE_FILL_RGBA = 0xebe6d6ff;
 const IMAGE_STROKE_RGBA = 0x2f2a22ff;
 const DEFAULT_TEXT_RGBA = ((DEFAULT_THEME.FONT_RGB & 0x00FFFFFF) << 8) | (DEFAULT_THEME.FONT_ALPHA & 0xFF);
+const DEFAULT_CLEAR_RGBA = ((DEFAULT_THEME.CLEAR_RGB & 0x00FFFFFF) << 8) | 0xFF;
 const IMAGE_LEFT_PAD = DEFAULT_THEME.LEFT_PAD;
 const IMAGE_TOP_PAD = DEFAULT_THEME.TOP_PAD;
 const IMAGE_BOTTOM_PAD = DEFAULT_THEME.TOP_PAD;
@@ -86,44 +87,6 @@ function rowIsBold(row) {
   return Number.isFinite(numeric) && numeric >= 600 ? 1 : 0;
 }
 
-function pxToNdcX(x, vw) {
-  return ((Number(x || 0) / Math.max(1, Number(vw || 1))) * 2) - 1;
-}
-
-function pxToNdcY(y, vh) {
-  return 1 - ((Number(y || 0) / Math.max(1, Number(vh || 1))) * 2);
-}
-
-function writeTexturedVertex(view, vertexIndex, x, y, u, v, r, g, b, a) {
-  const base = vertexIndex * 20;
-  view.setFloat32(base, x, true);
-  view.setFloat32(base + 4, y, true);
-  view.setFloat32(base + 8, u, true);
-  view.setFloat32(base + 12, v, true);
-  view.setUint8(base + 16, r);
-  view.setUint8(base + 17, g);
-  view.setUint8(base + 18, b);
-  view.setUint8(base + 19, a);
-}
-
-function buildTexturedQuadVertices(x, y, width, height, vw, vh, u0 = 0, v0 = 0, u1 = 1, v1 = 1) {
-  const x0 = pxToNdcX(x, vw);
-  const y0 = pxToNdcY(y, vh);
-  const x1 = pxToNdcX(x + width, vw);
-  const y1 = pxToNdcY(y + height, vh);
-  const buffer = new ArrayBuffer(6 * 20);
-  const view = new DataView(buffer);
-
-  writeTexturedVertex(view, 0, x0, y1, u0, v1, 255, 255, 255, 255);
-  writeTexturedVertex(view, 1, x1, y1, u1, v1, 255, 255, 255, 255);
-  writeTexturedVertex(view, 2, x1, y0, u1, v0, 255, 255, 255, 255);
-  writeTexturedVertex(view, 3, x0, y1, u0, v1, 255, 255, 255, 255);
-  writeTexturedVertex(view, 4, x1, y0, u1, v0, 255, 255, 255, 255);
-  writeTexturedVertex(view, 5, x0, y0, u0, v0, 255, 255, 255, 255);
-
-  return new Uint8Array(buffer);
-}
-
 function buildCenteredImagePlacement(run) {
   const boxWidth = Math.max(1, Math.round(Number(run && run.width || 0) || 1));
   const boxHeight = Math.max(1, Math.round(Number(run && run.height || 0) || 1));
@@ -155,7 +118,30 @@ function buildCenteredImagePlacement(run) {
   return { drawX, drawY, drawWidth, drawHeight, u0, v0, u1, v1 };
 }
 
-export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = null) {
+function buildOverlayTextRuns(overlayRuns) {
+  const overlayTextRuns = [];
+  if (!Array.isArray(overlayRuns) || overlayRuns.length <= 0) return overlayTextRuns;
+  for (let i = 0; i < overlayRuns.length; ) {
+    const x = overlayRuns[i];
+    const y = overlayRuns[i + 1];
+    const text = overlayRuns[i + 2];
+    const rgba = overlayRuns[i + 3];
+    if (i + 2 >= overlayRuns.length) break;
+    overlayTextRuns.push({
+      x,
+      y,
+      text,
+      rgba: Number.isFinite(Number(rgba)) ? Number(rgba) : DEFAULT_TEXT_RGBA,
+      fontPx: DEFAULT_THEME.FONT_PX,
+      italicTiltDeg: 0,
+      boldMode: 0,
+    });
+    i += Number.isFinite(Number(rgba)) ? 4 : 3;
+  }
+  return overlayTextRuns;
+}
+
+function buildSceneDisplayLists(doc, vw, minY, maxY, overlayRuns) {
   const texId = Number(cmdStream.createAtlasTexture(ATLAS_KIND) || 0);
   const runs = [];
   const iconRuns = [];
@@ -169,15 +155,17 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
   const themeLayout = doc && typeof doc === 'object' ? doc.themeLayout : null;
   const buttons = Array.isArray(themeLayout && themeLayout.buttons) ? themeLayout.buttons : [];
   const interactives = Array.isArray(themeLayout && themeLayout.interactives) ? themeLayout.interactives : [];
+  const clipTop = Math.max(0, Number(minY || 0));
+  const clipBottom = Math.max(clipTop, Number(maxY || 0));
 
   for (let i = 0; i < buttons.length; i += 1) {
     const button = buttons[i];
     const x = Math.round(Number(button && button.x || 0));
-    const y = Math.round(Number(button && button.y || 0) - Number(scrollY || 0));
+    const y = Math.round(Number(button && button.y || 0));
     const width = Math.max(1, Math.round(Number(button && button.width || 0)));
     const height = Math.max(1, Math.round(Number(button && button.height || 0)));
-    if (y < -height) continue;
-    if (y > Number(vh || 0) + height) continue;
+    if (y + height < clipTop) continue;
+    if (y > clipBottom) continue;
     buttonRuns.push({ x, y, width, height });
   }
 
@@ -185,26 +173,26 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
     const interactive = interactives[i];
     if (String(interactive && interactive.kind || '') !== 'link') continue;
     const x = Math.round(Number(interactive && interactive.x || 0));
-    const y = Math.round(Number(interactive && interactive.y || 0) - Number(scrollY || 0));
+    const y = Math.round(Number(interactive && interactive.y || 0));
     const width = Math.max(1, Math.round(Number(interactive && interactive.width || 0)));
     const height = Math.max(1, Math.round(Number(interactive && interactive.height || 0)));
-    if (y < -height) continue;
-    if (y > Number(vh || 0) + height) continue;
+    if (y + height < clipTop) continue;
+    if (y > clipBottom) continue;
     linkRuns.push({ x, y, width, height });
   }
 
-  for (let i = 0; i < rows.length; i++) {
+  for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i];
     const x = Math.round(Number(rowX[i] ?? DEFAULT_THEME.LEFT_PAD));
-    const y = Math.round(Number(rowY[i] ?? (i * DEFAULT_THEME.LINE_H)) - Number(scrollY || 0));
+    const y = Math.round(Number(rowY[i] ?? (i * DEFAULT_THEME.LINE_H)));
     const kind = String(row && row.kind || '');
     const boxH = kind === 'image'
       ? Math.max(1, Math.round(Number(row && row.heightPx || 0) || DEFAULT_THEME.LINE_H))
       : (kind === 'hr'
         ? Math.max(1, Math.round(Number(row && row.heightPx || 0) || (1 + HR_TOP_PAD + HR_BOTTOM_PAD)))
         : DEFAULT_THEME.LINE_H);
-    if (y < -boxH) continue;
-    if (y > Number(vh || 0) + boxH) continue;
+    if (y + boxH < clipTop) continue;
+    if (y > clipBottom) continue;
     if (kind === 'hr') {
       const width = Math.max(1, Math.round(Number(row && row.widthPx || 0) || (Number(vw || 0) - (DEFAULT_THEME.LEFT_PAD * 2))));
       const ruleHeight = Math.max(1, Math.round(Number(row && row.ruleHeightPx || 0) || 1));
@@ -234,9 +222,7 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
     if (!text) continue;
     const iconId = iconIdForRowKind(kind);
     if (iconId >= 0) {
-      const iconY = y
-        + Math.round((DEFAULT_THEME.LINE_H - LI_ICON_SIZE) * 0.5)
-        + LI_ICON_XY_NUDGE;
+      const iconY = y + Math.round((DEFAULT_THEME.LINE_H - LI_ICON_SIZE) * 0.5) + LI_ICON_XY_NUDGE;
       iconRuns.push({
         iconId,
         colorId: LI_ICON_PALETTE,
@@ -264,38 +250,42 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
       boldMode: rowIsBold(row),
     });
   }
-  if (Array.isArray(overlayRuns) && overlayRuns.length > 0) {
-    for (let i = 0; i < overlayRuns.length; ) {
-      const x = overlayRuns[i];
-      const y = overlayRuns[i + 1];
-      const text = overlayRuns[i + 2];
-      const rgba = overlayRuns[i + 3];
-      if (i + 2 >= overlayRuns.length) break;
-      runs.push({
-        x,
-        y,
-        text,
-        rgba: Number.isFinite(Number(rgba)) ? Number(rgba) : DEFAULT_TEXT_RGBA,
-        fontPx: DEFAULT_THEME.FONT_PX,
-        italicTiltDeg: 0,
-        boldMode: 0,
-      });
-      i += Number.isFinite(Number(rgba)) ? 4 : 3;
-    }
+
+  return {
+    texId,
+    runs,
+    iconRuns,
+    imageRuns,
+    buttonRuns,
+    linkRuns,
+    hrRuns,
+    overlayTextRuns: buildOverlayTextRuns(overlayRuns),
+  };
+}
+
+function drawSceneDisplayLists(display, clipW, clipH, originY = 0, includeOverlayText = true, overlayRect = null) {
+  const texId = Number(display && display.texId || 0);
+  const runs = Array.isArray(display && display.runs) ? display.runs : [];
+  const iconRuns = Array.isArray(display && display.iconRuns) ? display.iconRuns : [];
+  const imageRuns = Array.isArray(display && display.imageRuns) ? display.imageRuns : [];
+  const buttonRuns = Array.isArray(display && display.buttonRuns) ? display.buttonRuns : [];
+  const linkRuns = Array.isArray(display && display.linkRuns) ? display.linkRuns : [];
+  const hrRuns = Array.isArray(display && display.hrRuns) ? display.hrRuns : [];
+  const overlayTextRuns = Array.isArray(display && display.overlayTextRuns) ? display.overlayTextRuns : [];
+
+  if (overlayRect && typeof overlayRect === 'object') {
+    cmdStream.fillRect(
+      Number(overlayRect.x || 0),
+      Number(overlayRect.y || 0),
+      Number(overlayRect.width || 0),
+      Number(overlayRect.height || 0),
+      Number(overlayRect.rgba || 0),
+    );
   }
-  cmdStream.setClearRgb(DEFAULT_THEME.CLEAR_RGB);
-  cmdStream.setViewport(Math.max(1, Number(vw || 1) | 0), Math.max(1, Number(vh || 1) | 0));
-  cmdStream.beginFrame();
+
+  cmdStream.pushClipRect(0, 0, clipW, clipH);
+  cmdStream.pushOrigin(0, originY);
   try {
-    if (overlayRect && typeof overlayRect === 'object') {
-      cmdStream.fillRect(
-        Number(overlayRect.x || 0),
-        Number(overlayRect.y || 0),
-        Number(overlayRect.width || 0),
-        Number(overlayRect.height || 0),
-        Number(overlayRect.rgba || 0),
-      );
-    }
     for (let i = 0; i < buttonRuns.length; i += 1) {
       const run = buttonRuns[i];
       cmdStream.fillRect(run.x, run.y, run.width, run.height, BUTTON_OUTLINE_RGBA, 1, 1);
@@ -334,25 +324,20 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
       const run = imageRuns[i];
       if (run.texId > 0) {
         const placement = buildCenteredImagePlacement(run);
-        cmdStream.drawTexturedTrianglesU8(
+        cmdStream.drawTextureRect(
           run.texId,
-          buildTexturedQuadVertices(
-            placement.drawX,
-            placement.drawY,
-            placement.drawWidth,
-            placement.drawHeight,
-            vw,
-            vh,
-            placement.u0,
-            placement.v0,
-            placement.u1,
-            placement.v1,
-          ),
+          placement.drawX,
+          placement.drawY,
+          placement.drawWidth,
+          placement.drawHeight,
+          placement.u0,
+          placement.v0,
+          placement.u1,
+          placement.v1,
         );
       }
       cmdStream.fillRect(run.x, run.y, run.width, run.height, IMAGE_STROKE_RGBA, 1, 0);
     }
-    // Icon quads are textured RGBA, so keep standard alpha blending enabled.
     for (let i = 0; i < iconRuns.length; i += 1) {
       const run = iconRuns[i] || null;
       cmdStream.drawLyonIconInFrame(
@@ -362,7 +347,6 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
         Number(run && run.colorId || 0),
       );
     }
-    // Text quads share the same alpha blend path.
     for (let i = 0; i < runs.length; i += 1) {
       const run = runs[i] || null;
       const rgba = Number(run && run.rgba);
@@ -388,6 +372,109 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
         Number(run && run.boldMode || 0),
       );
     }
+  } finally {
+    cmdStream.popOrigin();
+    cmdStream.popClipRect();
+  }
+
+  if (!includeOverlayText) return;
+
+  for (let i = 0; i < overlayTextRuns.length; i += 1) {
+    const run = overlayTextRuns[i] || null;
+    const rgba = Number(run && run.rgba);
+    cmdStream.drawAtlasText(
+      texId,
+      ATLAS_KIND,
+      Number(run && run.x || 0),
+      Number(run && run.y || 0),
+      String(run && run.text || ''),
+      Number.isFinite(Number(run && run.fontPx)) ? Math.max(1, Math.round(Number(run.fontPx))) : DEFAULT_THEME.FONT_PX,
+      Number.isFinite(rgba) ? ((rgba >>> 8) & 0x00FFFFFF) : DEFAULT_THEME.FONT_RGB,
+      Number.isFinite(rgba) ? (rgba & 0xFF) : DEFAULT_THEME.FONT_ALPHA,
+      Number(run && run.italicTiltDeg || 0),
+      Number(run && run.boldMode || 0),
+    );
+  }
+}
+
+export function renderSceneContentToCurrentTarget(doc, vw, contentH) {
+  const targetW = Math.max(1, Number(vw || 1) | 0);
+  const targetH = Math.max(1, Number(contentH || 1) | 0);
+  const display = buildSceneDisplayLists(doc, targetW, 0, targetH, null);
+  cmdStream.fillRect(0, 0, targetW, targetH, DEFAULT_CLEAR_RGBA, 0, 0);
+  drawSceneDisplayLists(display, targetW, targetH, 0, false, null);
+  return true;
+}
+
+export function composeSceneTextureToCurrentTarget(contentTexId, contentW, contentH, vw, vh, scrollY, overlayRuns, overlayRect = null) {
+  const targetTexId = Math.max(0, Number(contentTexId || 0) | 0);
+  const drawW = Math.max(1, Number(vw || 1) | 0);
+  const drawH = Math.max(1, Number(vh || 1) | 0);
+  const texW = Math.max(1, Number(contentW || drawW) | 0);
+  const texH = Math.max(1, Number(contentH || drawH) | 0);
+  const maxScroll = Math.max(0, texH - drawH);
+  const scrollTop = Math.max(0, Math.min(maxScroll, Math.round(Number(scrollY || 0))));
+  const overlayTextRuns = buildOverlayTextRuns(overlayRuns);
+
+  if (overlayRect && typeof overlayRect === 'object') {
+    cmdStream.fillRect(
+      Number(overlayRect.x || 0),
+      Number(overlayRect.y || 0),
+      Number(overlayRect.width || 0),
+      Number(overlayRect.height || 0),
+      Number(overlayRect.rgba || 0),
+    );
+  }
+
+  cmdStream.setBlendEnabled(1);
+  cmdStream.setBlendMode(0);
+  cmdStream.setPremultipliedAlpha(0);
+  cmdStream.pushClipRect(0, 0, drawW, drawH);
+  try {
+    if (targetTexId > 0) {
+      const u0 = 0;
+      const v0 = scrollTop / texH;
+      const u1 = Math.min(1, drawW / texW);
+      const v1 = Math.min(1, (scrollTop + drawH) / texH);
+      cmdStream.drawTextureRect(targetTexId, 0, 0, drawW, drawH, u0, v0, u1, v1);
+    }
+  } finally {
+    cmdStream.popClipRect();
+  }
+
+  if (overlayTextRuns.length <= 0) return true;
+
+  const texId = Number(cmdStream.createAtlasTexture(ATLAS_KIND) || 0);
+  for (let i = 0; i < overlayTextRuns.length; i += 1) {
+    const run = overlayTextRuns[i] || null;
+    const rgba = Number(run && run.rgba);
+    cmdStream.drawAtlasText(
+      texId,
+      ATLAS_KIND,
+      Number(run && run.x || 0),
+      Number(run && run.y || 0),
+      String(run && run.text || ''),
+      Number.isFinite(Number(run && run.fontPx)) ? Math.max(1, Math.round(Number(run.fontPx))) : DEFAULT_THEME.FONT_PX,
+      Number.isFinite(rgba) ? ((rgba >>> 8) & 0x00FFFFFF) : DEFAULT_THEME.FONT_RGB,
+      Number.isFinite(rgba) ? (rgba & 0xFF) : DEFAULT_THEME.FONT_ALPHA,
+      Number(run && run.italicTiltDeg || 0),
+      Number(run && run.boldMode || 0),
+    );
+  }
+  return true;
+}
+
+export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = null) {
+  const targetW = Math.max(1, Number(vw || 1) | 0);
+  const targetH = Math.max(1, Number(vh || 1) | 0);
+  const scrollTop = Math.max(0, Number(scrollY || 0));
+  const display = buildSceneDisplayLists(doc, targetW, scrollTop, scrollTop + targetH, overlayRuns);
+
+  cmdStream.setClearRgb(DEFAULT_THEME.CLEAR_RGB);
+  cmdStream.setViewport(targetW, targetH);
+  cmdStream.beginFrame();
+  try {
+    drawSceneDisplayLists(display, targetW, targetH, -scrollTop, true, overlayRect);
   } finally {
     cmdStream.endFrame();
   }

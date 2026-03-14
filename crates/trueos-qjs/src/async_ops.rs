@@ -22,7 +22,17 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
+    fn trueos_cabi_gfx_upload_texture_svg_async(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
     fn trueos_cabi_gfx_texture_status(tex_id: u32) -> i32;
+    fn trueos_cabi_gfx_texture_dimensions(
+        tex_id: u32,
+        out_width: *mut u32,
+        out_height: *mut u32,
+    ) -> i32;
 }
 
 const ASYNC_TEX_STATUS_UNKNOWN: i32 = 0;
@@ -320,6 +330,48 @@ fn queue_png_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(u32, u32), i32
     Ok((width, height))
 }
 
+fn svg_like_bytes(bytes: &[u8]) -> bool {
+    let mut start = 0usize;
+    while start < bytes.len() && matches!(bytes[start], b' ' | b'\t' | b'\r' | b'\n') {
+        start += 1;
+    }
+    let trimmed = &bytes[start..];
+    trimmed.starts_with(b"<svg")
+        || trimmed.starts_with(b"<?xml")
+        || trimmed.windows(4).any(|window| window == b"<svg")
+}
+
+fn path_has_svg_suffix(path: &[u8]) -> bool {
+    let text = core::str::from_utf8(path).unwrap_or("");
+    let lower = text.as_bytes();
+    lower.ends_with(b".svg") || lower.ends_with(b".svgz")
+}
+
+fn queue_svg_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(), i32> {
+    let rc = unsafe { trueos_cabi_gfx_upload_texture_svg_async(tex_id, bytes.as_ptr(), bytes.len()) };
+    if rc != 0 {
+        return Err(rc);
+    }
+    Ok(())
+}
+
+fn texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let rc = unsafe {
+        trueos_cabi_gfx_texture_dimensions(
+            tex_id,
+            &mut width as *mut u32,
+            &mut height as *mut u32,
+        )
+    };
+    if rc == 0 && width > 0 && height > 0 {
+        Some((width, height))
+    } else {
+        None
+    }
+}
+
 unsafe fn resolve_image_op(ctx: *mut qjs::JSContext, op: &PendingImageOp) {
     let obj = qjs::JS_NewObject(ctx);
     let _ = qjs::JS_SetPropertyStr(
@@ -383,7 +435,7 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
         match &mut op.stage {
             PendingImageStage::SourceBytes {
                 op_id,
-                path: _,
+                path,
                 source,
             } => {
                 let rc_or_done = async_fs::result_len(*op_id);
@@ -427,28 +479,51 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                             }
                         }
                     }
-                    match read_completion_bytes(*op_id, rc_or_done as usize)
-                        .and_then(|bytes| queue_png_texture_upload(op.tex_id, bytes.as_slice()))
-                    {
-                        Ok((width, height)) => {
-                            if image_diag_allowed() {
-                                image_diag_log(&format!(
-                                    "img-async: upload-queued tex_id={} {}x{} mime=image/png\n",
-                                    op.tex_id,
-                                    width,
-                                    height
-                                ));
+                    match read_completion_bytes(*op_id, rc_or_done as usize) {
+                        Ok(bytes) => {
+                            let is_svg = path_has_svg_suffix(path.as_slice()) || svg_like_bytes(bytes.as_slice());
+                            let queued = if is_svg {
+                                queue_svg_texture_upload(op.tex_id, bytes.as_slice()).map(|_| {
+                                    op.mime = String::from("image/svg+xml");
+                                    op.width = 0;
+                                    op.height = 0;
+                                })
+                            } else {
+                                queue_png_texture_upload(op.tex_id, bytes.as_slice()).map(|(width, height)| {
+                                    op.mime = String::from("image/png");
+                                    op.width = width;
+                                    op.height = height;
+                                })
+                            };
+                            match queued {
+                                Ok(()) => {
+                                    if image_diag_allowed() {
+                                        image_diag_log(&format!(
+                                            "img-async: upload-queued tex_id={} mime={}\n",
+                                            op.tex_id,
+                                            op.mime.as_str()
+                                        ));
+                                    }
+                                    op.stage = PendingImageStage::Upload;
+                                    keep = true;
+                                }
+                                Err(code) => {
+                                    if image_diag_allowed() {
+                                        image_diag_log(&format!(
+                                            "img-async: upload-queue-error tex_id={} code={}\n",
+                                            op.tex_id,
+                                            code
+                                        ));
+                                    }
+                                    reject_image_op(ctx, &op, code);
+                                    crate::cmd_stream::release_managed_tex_id(op.tex_id);
+                                }
                             }
-                            op.width = width;
-                            op.height = height;
-                            op.mime = String::from("image/png");
-                            op.stage = PendingImageStage::Upload;
-                            keep = true;
                         }
                         Err(code) => {
                             if image_diag_allowed() {
                                 image_diag_log(&format!(
-                                    "img-async: upload-queue-error tex_id={} code={}\n",
+                                    "img-async: read-bytes-error tex_id={} code={}\n",
                                     op.tex_id,
                                     code
                                 ));
@@ -463,12 +538,19 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                 let status = trueos_cabi_gfx_texture_status(op.tex_id);
                 if status == ASYNC_TEX_STATUS_READY {
                     progress = true;
+                    if (op.width == 0 || op.height == 0)
+                        && let Some((width, height)) = texture_dimensions(op.tex_id)
+                    {
+                        op.width = width;
+                        op.height = height;
+                    }
                     if image_diag_allowed() {
                         image_diag_log(&format!(
-                            "img-async: ready tex_id={} {}x{}\n",
+                            "img-async: ready tex_id={} {}x{} mime={}\n",
                             op.tex_id,
                             op.width,
-                            op.height
+                            op.height,
+                            op.mime.as_str()
                         ));
                     }
                     resolve_image_op(ctx, &op);
