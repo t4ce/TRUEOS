@@ -42,11 +42,11 @@ static CABI_NET_FETCH_WAIT: WaitQueue = WaitQueue::new();
 
 // --- keep-alive pool (per host) ---
 
-// NOTE: Keep-alive pooling is currently disabled.
-// We observed persistent `NET_ERR_TIMEOUT_BODY` failures on some CDN (esm.sh) chunked
-// responses when reusing connections; forcing fresh connections avoids the stall.
-// TODO: Re-enable after the keep-alive fetch path is proven robust.
-const VHTTPS_KEEPALIVE_ENABLE: bool = false;
+// Keep-alive pooling is enabled again so we can validate the current behavior
+// under real browser/module-loading traffic. If we still see body-timeout stalls
+// on reused connections, the next pass should focus on the keepalive/non-keepalive
+// path split rather than turning more knobs around it.
+const VHTTPS_KEEPALIVE_ENABLE: bool = true;
 const VHTTPS_KEEPALIVE_IDLE_CLOSE_MS: u64 = 10_000;
 
 static VHTTPS_KEEPALIVE_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -178,13 +178,16 @@ async fn cabi_net_fetch_task_inner(
 ) {
     let t0 = Instant::now();
     net_fetch_acquire_slot().await;
+    let t_fetch_start = Instant::now();
     let rc =
         match fetch_https_to_file_async(url.as_str(), path.as_str(), timeout_ms, max_bytes).await {
             Ok(()) => 0,
             Err(code) => code,
         };
     net_fetch_release_slot();
-    let elapsed_ms = t0.elapsed().as_millis();
+    let total_ms = t0.elapsed().as_millis();
+    let wait_ms = t_fetch_start.saturating_duration_since(t0).as_millis();
+    let fetch_ms = total_ms.saturating_sub(wait_ms);
 
     let followers = {
         let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
@@ -205,10 +208,12 @@ async fn cabi_net_fetch_task_inner(
     }
 
     crate::log!(
-        "net-fetch: done key={} rc={} ms={} followers={}\n",
+        "net-fetch: done key={} rc={} ms={} wait_ms={} fetch_ms={} followers={}\n",
         key,
         rc,
-        elapsed_ms,
+        total_ms,
+        wait_ms,
+        fetch_ms,
         followers.len()
     );
 
@@ -263,12 +268,15 @@ async fn cabi_net_fetch_bytes_task_inner(
 ) {
     let t0 = Instant::now();
     net_fetch_acquire_slot().await;
+    let t_fetch_start = Instant::now();
     let (rc, body) = match fetch_https_body_async(url.as_str(), timeout_ms, max_bytes).await {
         Ok(body) => (0, body),
         Err(code) => (fetch_error_to_code(code), Vec::new()),
     };
     net_fetch_release_slot();
-    let elapsed_ms = t0.elapsed().as_millis();
+    let total_ms = t0.elapsed().as_millis();
+    let wait_ms = t_fetch_start.saturating_duration_since(t0).as_millis();
+    let fetch_ms = total_ms.saturating_sub(wait_ms);
 
     if let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&op_id) {
         slot.rc = Some(rc);
@@ -276,10 +284,12 @@ async fn cabi_net_fetch_bytes_task_inner(
     }
 
     crate::log!(
-        "net-fetch-bytes: done op_id={} rc={} ms={} len={}\n",
+        "net-fetch-bytes: done op_id={} rc={} ms={} wait_ms={} fetch_ms={} len={}\n",
         op_id,
         rc,
-        elapsed_ms,
+        total_ms,
+        wait_ms,
+        fetch_ms,
         CABI_NET_FETCH_BYTES_RESULTS
             .lock()
             .get(&op_id)
@@ -311,6 +321,35 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
 
     crate::wait::spawn_local_detached(async move {
         cabi_net_fetch_bytes_task_inner(op_id, url, timeout_ms, max_bytes).await;
+    });
+}
+
+async fn cabi_net_prewarm_url_task_inner(url: String) {
+    let Some(parsed) = parse_https_url(url.as_str()) else {
+        return;
+    };
+    let dev_count = crate::net::device_count();
+    if dev_count == 0 {
+        return;
+    }
+    let dev_idx = crate::net::primary_device_index().min(dev_count.saturating_sub(1));
+    let _ = dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::for_device(dev_idx)).await;
+}
+
+#[embassy_executor::task]
+async fn cabi_net_prewarm_url_task(url: String) {
+    cabi_net_prewarm_url_task_inner(url).await;
+}
+
+fn spawn_cabi_net_prewarm_url(url: String) {
+    if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
+        && spawner.spawn(cabi_net_prewarm_url_task(url.clone())).is_ok()
+    {
+        return;
+    }
+
+    crate::wait::spawn_local_detached(async move {
+        cabi_net_prewarm_url_task_inner(url).await;
     });
 }
 
@@ -1623,6 +1662,419 @@ async fn fetch_on_device_sse(
     }
 }
 
+async fn fetch_on_device_keepalive(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    timeout_ms: u32,
+    max_bytes: usize,
+    mut progress: Option<&mut dyn FetchProgress>,
+) -> Result<Vec<u8>, FetchError> {
+    let want_done_log = progress.is_some();
+    let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
+    keepalive_acquire(conn).await;
+
+    // Best-effort drain to start from a clean request boundary.
+    let _ = conn.events.drain(4096);
+
+    let mut reused = false;
+    {
+        let mut st = conn.state.lock();
+        let idle_ms = Instant::now()
+            .saturating_duration_since(st.last_used)
+            .as_millis() as u64;
+        if st.handle.is_some() && idle_ms > VHTTPS_KEEPALIVE_IDLE_CLOSE_MS {
+            if let Some(h) = st.handle.take() {
+                let _ = conn.cmds.push(TlsCommand::Close { handle: h });
+            }
+            st.connected = false;
+        } else if st.handle.is_some() && st.connected {
+            reused = true;
+        }
+    }
+
+    let mut ip: Option<[u8; 4]> = None;
+    if !reused {
+        match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::for_device(dev_idx))
+            .await
+        {
+            Ok(v) => ip = Some(v),
+            Err(dns::DnsError::Timeout) => {
+                keepalive_release(conn);
+                return Err(FetchError::DnsTimeout);
+            }
+            Err(_) => {
+                keepalive_release(conn);
+                return Err(FetchError::DnsFailed);
+            }
+        }
+    }
+
+    let roots = TlsRoots::mozilla();
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let server_name = leak_str(parsed.host.clone());
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
+    let mut connect_in_flight = false;
+    let mut last_progress = Instant::now();
+    let mut last_activity = Instant::now();
+
+    loop {
+        let (handle, connected) = {
+            let st = conn.state.lock();
+            (st.handle, st.connected)
+        };
+
+        if handle.is_some() && connected {
+            break;
+        }
+
+        if handle.is_none() && !connect_in_flight {
+            let Some(ip) = ip else {
+                keepalive_release(conn);
+                return Err(FetchError::ConnectTimeout);
+            };
+            crate::log!(
+                "vhttps-ka: connect host={} dev={} fresh=1\n",
+                parsed.host,
+                dev_idx
+            );
+            let _ = conn.cmds.push(TlsCommand::OpenTcpConnect {
+                remote: vnet::EndpointV4 {
+                    addr: ip,
+                    port: parsed.port,
+                },
+                server_name,
+                cfg: cfg.clone(),
+                roots: roots.clone(),
+                timeouts: crate::net::tls_socket::TlsTimeouts {
+                    connect_ms: (timeout_ms / 4).max(5_000),
+                    tls_ms: (timeout_ms / 4).max(5_000),
+                    idle_ms: timeout_ms,
+                },
+            });
+            connect_in_flight = true;
+        }
+
+        for ev in conn.events.drain(1024) {
+            match ev {
+                TlsEvent::Opened { handle } => {
+                    let mut st = conn.state.lock();
+                    st.handle = Some(handle);
+                    last_activity = Instant::now();
+                }
+                TlsEvent::Connected { handle } => {
+                    let mut st = conn.state.lock();
+                    if st.handle == Some(handle) {
+                        st.connected = true;
+                    }
+                    last_activity = Instant::now();
+                }
+                TlsEvent::Closed { handle } => {
+                    let mut st = conn.state.lock();
+                    if st.handle == Some(handle) {
+                        st.handle = None;
+                        st.connected = false;
+                    }
+                    connect_in_flight = false;
+                }
+                TlsEvent::TlsError { .. } => {
+                    let mut st = conn.state.lock();
+                    st.handle = None;
+                    st.connected = false;
+                    connect_in_flight = false;
+                }
+                _ => {}
+            }
+        }
+
+        if Instant::now() >= deadline {
+            keepalive_release(conn);
+            return Err(FetchError::TlsTimeout);
+        }
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
+
+    crate::log!(
+        "vhttps-ka: request host={} dev={} reused={}\n",
+        parsed.host,
+        dev_idx,
+        if reused { 1 } else { 0 }
+    );
+
+    let handle = conn.state.lock().handle.expect("connected handle");
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: keep-alive\r\n\r\n",
+        parsed.path, parsed.host
+    );
+    let _ = conn.cmds.push(TlsCommand::Send {
+        handle,
+        data: req.into_bytes(),
+    });
+
+    let capture_cap = max_bytes.saturating_add(64 * 1024);
+    let mut plaintext: Vec<u8> = Vec::new();
+    let mut hdr_end_cached: Option<usize> = None;
+    let mut content_len_cached: Option<Option<usize>> = None;
+
+    loop {
+        for ev in conn.events.drain(1024) {
+            match ev {
+                TlsEvent::Data { handle: h, data } => {
+                    if h != handle || data.is_empty() {
+                        continue;
+                    }
+                    last_activity = Instant::now();
+
+                    let room = capture_cap.saturating_sub(plaintext.len());
+                    if room == 0 {
+                        let _ = conn.cmds.push(TlsCommand::Close { handle });
+                        let mut st = conn.state.lock();
+                        st.handle = None;
+                        st.connected = false;
+                        keepalive_release(conn);
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+                    let take = data.len().min(room);
+                    plaintext.extend_from_slice(&data[..take]);
+                    if take < data.len() {
+                        let _ = conn.cmds.push(TlsCommand::Close { handle });
+                        let mut st = conn.state.lock();
+                        st.handle = None;
+                        st.connected = false;
+                        keepalive_release(conn);
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+
+                    let hdr_end = match hdr_end_cached {
+                        Some(v) => v,
+                        None => {
+                            let v = find_http_header_end(&plaintext);
+                            if let Some(v) = v {
+                                hdr_end_cached = Some(v);
+                            }
+                            v.unwrap_or(0)
+                        }
+                    };
+
+                    if let Some(hdr_end) = hdr_end_cached
+                        && hdr_end != 0
+                    {
+                        if content_len_cached.is_none() {
+                            let headers = &plaintext[..hdr_end];
+                            content_len_cached = Some(header_parse_content_length(headers));
+                        }
+
+                        if let Some(ref mut p) = progress {
+                            let now = Instant::now();
+                            if now.saturating_duration_since(last_progress)
+                                >= EmbassyDuration::from_millis(100)
+                            {
+                                let body_len = plaintext.len().saturating_sub(hdr_end);
+                                p.on_progress(body_len, content_len_cached.unwrap_or(None));
+                                last_progress = now;
+                            }
+                        }
+                    }
+
+                    if hdr_end != 0 {
+                        let headers = &plaintext[..hdr_end];
+                        let body = &plaintext[hdr_end..];
+
+                        let status = parse_http_status(&plaintext).unwrap_or(0);
+                        if status != 200 {
+                            if is_redirect_status(status)
+                                && let Some(next) = redirect_url_from_location(parsed, headers)
+                            {
+                                let _ = conn.cmds.push(TlsCommand::Close { handle });
+                                let mut st = conn.state.lock();
+                                st.handle = None;
+                                st.connected = false;
+                                keepalive_release(conn);
+                                return Err(FetchError::Redirect { status, url: next });
+                            }
+
+                            let is_chunked =
+                                header_contains_token(headers, b"transfer-encoding", b"chunked");
+                            let decoded_body = if is_chunked {
+                                decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
+                            } else if let Some(len) = header_parse_content_length(headers) {
+                                body.get(..len).unwrap_or(body).to_vec()
+                            } else {
+                                body.to_vec()
+                            };
+                            crate::log!(
+                                "vhttps: http_error status={} body_len={}\n",
+                                status,
+                                decoded_body.len()
+                            );
+                            if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
+                                log_utf8_chunks("vhttps: http_error_body: ", s);
+                            } else {
+                                crate::log!("vhttps: http_error_body: [non-utf8]\n");
+                            }
+
+                            let _ = conn.cmds.push(TlsCommand::Close { handle });
+                            let mut st = conn.state.lock();
+                            st.handle = None;
+                            st.connected = false;
+                            keepalive_release(conn);
+                            return Err(FetchError::Http(status));
+                        }
+
+                        if status == 204 {
+                            let mut st = conn.state.lock();
+                            st.last_used = Instant::now();
+                            keepalive_release(conn);
+                            return Ok(Vec::new());
+                        }
+
+                        let is_chunked =
+                            header_contains_token(headers, b"transfer-encoding", b"chunked");
+                        if is_chunked {
+                            if let Some(decoded) = decode_http_chunked(body) {
+                                if decoded.len() > max_bytes {
+                                    let _ = conn.cmds.push(TlsCommand::Close { handle });
+                                    let mut st = conn.state.lock();
+                                    st.handle = None;
+                                    st.connected = false;
+                                    keepalive_release(conn);
+                                    return Err(FetchError::ResponseTooLarge);
+                                }
+                                if let Some(ref mut p) = progress {
+                                    p.on_progress(decoded.len(), Some(decoded.len()));
+                                }
+                                if want_done_log {
+                                    crate::log!(
+                                        "vhttps-ka: done host={} dev={} status={} bytes={} reused={}\n",
+                                        parsed.host,
+                                        dev_idx,
+                                        status,
+                                        decoded.len(),
+                                        if reused { 1 } else { 0 }
+                                    );
+                                }
+                                let mut st = conn.state.lock();
+                                st.last_used = Instant::now();
+                                keepalive_release(conn);
+                                return Ok(decoded);
+                            }
+                        } else if let Some(len) = header_parse_content_length(headers) {
+                            if body.len() >= len {
+                                let out = body[..len].to_vec();
+                                if out.len() > max_bytes {
+                                    let _ = conn.cmds.push(TlsCommand::Close { handle });
+                                    let mut st = conn.state.lock();
+                                    st.handle = None;
+                                    st.connected = false;
+                                    keepalive_release(conn);
+                                    return Err(FetchError::ResponseTooLarge);
+                                }
+                                if let Some(ref mut p) = progress {
+                                    p.on_progress(out.len(), Some(out.len()));
+                                }
+                                if want_done_log {
+                                    crate::log!(
+                                        "vhttps-ka: done host={} dev={} status={} bytes={} reused={}\n",
+                                        parsed.host,
+                                        dev_idx,
+                                        status,
+                                        out.len(),
+                                        if reused { 1 } else { 0 }
+                                    );
+                                }
+                                let mut st = conn.state.lock();
+                                st.last_used = Instant::now();
+                                keepalive_release(conn);
+                                return Ok(out);
+                            }
+                        }
+                    }
+                }
+                TlsEvent::Closed { handle: h } => {
+                    if h != handle {
+                        continue;
+                    }
+
+                    {
+                        let mut st = conn.state.lock();
+                        st.handle = None;
+                        st.connected = false;
+                    }
+
+                    let Some(hdr_end) = find_http_header_end(&plaintext) else {
+                        keepalive_release(conn);
+                        return Err(FetchError::Http(0));
+                    };
+                    let headers = &plaintext[..hdr_end];
+                    let body = &plaintext[hdr_end..];
+                    let status = parse_http_status(&plaintext).unwrap_or(0);
+
+                    if status != 200 {
+                        if is_redirect_status(status)
+                            && let Some(next) = redirect_url_from_location(parsed, headers)
+                        {
+                            keepalive_release(conn);
+                            return Err(FetchError::Redirect { status, url: next });
+                        }
+                        keepalive_release(conn);
+                        return Err(FetchError::Http(status));
+                    }
+
+                    let is_chunked =
+                        header_contains_token(headers, b"transfer-encoding", b"chunked");
+                    let decoded_body = if is_chunked {
+                        decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
+                    } else if let Some(len) = header_parse_content_length(headers) {
+                        body.get(..len).unwrap_or(body).to_vec()
+                    } else {
+                        body.to_vec()
+                    };
+
+                    if decoded_body.len() > max_bytes {
+                        keepalive_release(conn);
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+                    if let Some(ref mut p) = progress {
+                        p.on_progress(decoded_body.len(), Some(decoded_body.len()));
+                    }
+                    if want_done_log {
+                        crate::log!(
+                            "vhttps-ka: done host={} dev={} status={} bytes={} reused={} closed=1\n",
+                            parsed.host,
+                            dev_idx,
+                            status,
+                            decoded_body.len(),
+                            if reused { 1 } else { 0 }
+                        );
+                    }
+                    keepalive_release(conn);
+                    return Ok(decoded_body);
+                }
+                TlsEvent::TlsError { .. } => {
+                    let mut st = conn.state.lock();
+                    st.handle = None;
+                    st.connected = false;
+                    keepalive_release(conn);
+                    return Err(FetchError::Tls);
+                }
+                TlsEvent::Error { .. } => {}
+                _ => {}
+            }
+        }
+
+        let now = Instant::now();
+        let idle_deadline = last_activity + EmbassyDuration::from_millis(timeout_ms as u64);
+        if now >= idle_deadline || now >= deadline {
+            let _ = conn.cmds.push(TlsCommand::Close { handle });
+            let mut st = conn.state.lock();
+            st.handle = None;
+            st.connected = false;
+            keepalive_release(conn);
+            return Err(FetchError::BodyTimeout);
+        }
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
+}
+
 #[derive(Debug)]
 enum FetchToFileError {
     Code(i32),
@@ -1637,6 +2089,12 @@ async fn fetch_on_device_to_file_keepalive(
     disk: crate::disc::block::DeviceHandle,
     tmp_path: &str,
 ) -> Result<(), FetchToFileError> {
+    crate::log!(
+        "vhttps-ka-file: start host={} dev={} path={}\n",
+        parsed.host,
+        dev_idx,
+        parsed.path
+    );
     let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
     keepalive_acquire(conn).await;
 
@@ -1715,6 +2173,11 @@ async fn fetch_on_device_to_file_keepalive(
                     FetchError::ConnectTimeout,
                 )));
             };
+            crate::log!(
+                "vhttps-ka-file: connect host={} dev={} fresh=1\n",
+                parsed.host,
+                dev_idx
+            );
             let _ = conn.cmds.push(TlsCommand::OpenTcpConnect {
                 remote: vnet::EndpointV4 {
                     addr: ip,
@@ -1773,6 +2236,12 @@ async fn fetch_on_device_to_file_keepalive(
     }
 
     let handle = conn.state.lock().handle.expect("connected handle");
+    crate::log!(
+        "vhttps-ka-file: request host={} dev={} handle={}\n",
+        parsed.host,
+        dev_idx,
+        handle.0
+    );
 
     // Send HTTP GET request. Use keep-alive; we will stop reading once body complete.
     let req = format!(
@@ -1831,6 +2300,12 @@ async fn fetch_on_device_to_file_keepalive(
                             }
 
                             let Some(head) = parse_http_head(headers) else {
+                                crate::log!(
+                                    "vhttps-ka-file: head-parse-failed host={} dev={} hdr_bytes={}\n",
+                                    parsed.host,
+                                    dev_idx,
+                                    headers.len()
+                                );
                                 keepalive_release(conn);
                                 return Err(FetchToFileError::Code(fetch_error_to_code(
                                     FetchError::Http(0),
@@ -1844,6 +2319,17 @@ async fn fetch_on_device_to_file_keepalive(
                                     0
                                 }
                             };
+                            crate::log!(
+                                "vhttps-ka-file: headers host={} dev={} status={} chunked={} expected={} hdr_bytes={} buffered={} handle={}\n",
+                                parsed.host,
+                                dev_idx,
+                                status,
+                                if body_is_chunked { 1 } else { 0 },
+                                body_expected,
+                                headers.len(),
+                                header_buf.len().saturating_sub(hdr_end),
+                                handle.0
+                            );
 
                             if !body_is_chunked && body_expected > max_bytes {
                                 keepalive_release(conn);
@@ -1899,6 +2385,14 @@ async fn fetch_on_device_to_file_keepalive(
                             header_buf.clear();
 
                             if !body_is_chunked && body_written >= body_expected {
+                                crate::log!(
+                                    "vhttps-ka-file: body-complete host={} dev={} written={} expected={} handle={}\n",
+                                    parsed.host,
+                                    dev_idx,
+                                    body_written,
+                                    body_expected,
+                                    handle.0
+                                );
                                 if let Some(sh) = stream_handle.take() {
                                     crate::v::fs::trueosfs::file_write_finish_async(sh)
                                         .await
@@ -1922,6 +2416,14 @@ async fn fetch_on_device_to_file_keepalive(
                                     FetchError::ResponseTooLarge,
                                 )));
                             }
+                            crate::log!(
+                                "vhttps-ka-file: chunked-complete host={} dev={} decoded={} raw={} handle={}\n",
+                                parsed.host,
+                                dev_idx,
+                                decoded.len(),
+                                chunked_raw_body.len(),
+                                handle.0
+                            );
                             write_body_to_tmp_file(disk, tmp_path, decoded.as_slice())
                                 .await
                                 .map_err(FetchToFileError::Code)?;
@@ -1941,6 +2443,14 @@ async fn fetch_on_device_to_file_keepalive(
                             body_written = body_written.saturating_add(take);
                         }
                         if body_written >= body_expected {
+                            crate::log!(
+                                "vhttps-ka-file: body-complete host={} dev={} written={} expected={} handle={}\n",
+                                parsed.host,
+                                dev_idx,
+                                body_written,
+                                body_expected,
+                                handle.0
+                            );
                             crate::v::fs::trueosfs::file_write_finish_async(sh)
                                 .await
                                 .map_err(block_error_to_code)
@@ -1955,6 +2465,17 @@ async fn fetch_on_device_to_file_keepalive(
                 TlsEvent::Closed { handle: h } => {
                     if h == handle {
                         // Server closed; reset pool state and fail.
+                        crate::log!(
+                            "vhttps-ka-file: closed host={} dev={} header_done={} chunked={} written={} expected={} chunked_raw={} handle={}\n",
+                            parsed.host,
+                            dev_idx,
+                            if header_done { 1 } else { 0 },
+                            if body_is_chunked { 1 } else { 0 },
+                            body_written,
+                            body_expected,
+                            chunked_raw_body.len(),
+                            handle.0
+                        );
                         {
                             let mut st = conn.state.lock();
                             st.handle = None;
@@ -1986,6 +2507,18 @@ async fn fetch_on_device_to_file_keepalive(
         }
 
         if Instant::now() >= deadline {
+            crate::log!(
+                "vhttps-ka-file: timeout host={} dev={} header_done={} chunked={} written={} expected={} chunked_raw={} header_buf={} handle={}\n",
+                parsed.host,
+                dev_idx,
+                if header_done { 1 } else { 0 },
+                if body_is_chunked { 1 } else { 0 },
+                body_written,
+                body_expected,
+                chunked_raw_body.len(),
+                header_buf.len(),
+                handle.0
+            );
             if let Some(sh) = stream_handle.take() {
                 let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
             }
@@ -2778,7 +3311,12 @@ pub async fn fetch_https_body_async(
         let mut redirect: Option<(u16, String)> = None;
 
         for dev_idx in 0..dev_count {
-            match fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, None).await {
+            let res = if VHTTPS_KEEPALIVE_ENABLE {
+                fetch_on_device_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, None).await
+            } else {
+                fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, None).await
+            };
+            match res {
                 Ok(v) => return Ok(v),
                 Err(FetchError::Redirect { status, url }) => {
                     redirect = Some((status, url));
@@ -2827,17 +3365,22 @@ pub async fn fetch_https_body_progress_async(
         let mut redirect: Option<(u16, String)> = None;
 
         for dev_idx in 0..dev_count {
-            match fetch_on_device(
-                &parsed,
-                dev_idx,
-                timeout_ms,
-                max_bytes,
-                None,
-                None,
-                Some(progress),
-            )
-            .await
-            {
+            let res = if VHTTPS_KEEPALIVE_ENABLE {
+                fetch_on_device_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, Some(progress))
+                    .await
+            } else {
+                fetch_on_device(
+                    &parsed,
+                    dev_idx,
+                    timeout_ms,
+                    max_bytes,
+                    None,
+                    None,
+                    Some(progress),
+                )
+                .await
+            };
+            match res {
                 Ok(v) => return Ok(v),
                 Err(FetchError::Redirect { status, url }) => {
                     redirect = Some((status, url));
@@ -3175,6 +3718,27 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_bytes_start(
         .insert(op_id, CabiNetFetchBytesResult::default());
     spawn_cabi_net_fetch_bytes(op_id, String::from(url_s), TIMEOUT_MS, MAX_BYTES);
     op_id
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_net_prewarm_url_start(
+    url_ptr: *const u8,
+    url_len: usize,
+) -> i32 {
+    if url_ptr.is_null() || url_len == 0 {
+        return -1;
+    }
+
+    let url_bytes = core::slice::from_raw_parts(url_ptr, url_len);
+    let Ok(url_s) = core::str::from_utf8(url_bytes) else {
+        return -2;
+    };
+    if parse_https_url(url_s).is_none() {
+        return -3;
+    }
+
+    spawn_cabi_net_prewarm_url(String::from(url_s));
+    0
 }
 
 /// TRUEOS C ABI: start async HTTPS POST(JSON) to file.

@@ -440,9 +440,6 @@ unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
     init_src.push_str("G.__trueosBrowserDefaultFontPx = 16;\n");
     init_src.push_str(
         r#"
-if (typeof G.__trueosBrowserAutoStartAi === 'undefined') {
-    G.__trueosBrowserAutoStartAi = true;
-}
 if (!G.window) G.window = G;
 if (typeof G.window.innerWidth !== 'number') G.window.innerWidth = 1280;
 if (typeof G.window.innerHeight !== 'number') G.window.innerHeight = 800;
@@ -501,7 +498,7 @@ pub async fn boot_browser() {
 
                 let import_filename = b"<browser-init>\0";
                 let import_src = br#"
-        import('/qjs/browser/browser.mjs').catch((e) => {
+        import('/qjs/browser/browser_bootstrap.mjs').catch((e) => {
             try { console.log('[browser.mjs] import failed', String(e && e.stack ? e.stack : e)); } catch (_) {}
         });
         "#;

@@ -527,6 +527,30 @@ unsafe extern "C" fn trueos_fetch_bytes(
         promise
 }
 
+unsafe extern "C" fn trueos_prewarm_url(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+        if argv.is_null() || argc <= 0 {
+                return js_int32(-1);
+        }
+
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut url_len: usize = 0;
+        let url_c = qjs::JS_ToCStringLen2(ctx, &mut url_len as *mut usize, args[0], 0);
+        if url_c.is_null() {
+                return js_int32(-1);
+        }
+        let rc = crate::trueos_shims::trueos_cabi_net_prewarm_url_start(
+                url_c as *const u8,
+                url_len,
+        );
+        qjs::JS_FreeCString(ctx, url_c);
+        js_int32(rc)
+}
+
     unsafe extern "C" fn trueos_resolve_ready_image_texture(
         ctx: *mut qjs::JSContext,
         _this_val: qjs::JSValueConst,
@@ -687,6 +711,21 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
             global,
             b"__trueosFetchBytes\0".as_ptr() as *const c_char,
             bytes_helper,
+        );
+
+        let prewarm_helper = qjs::JS_NewCFunction2(
+            ctx,
+            Some(trueos_prewarm_url),
+            b"__trueosPrewarmUrl\0".as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            global,
+            b"__trueosPrewarmUrl\0".as_ptr() as *const c_char,
+            prewarm_helper,
         );
 
         let image_helper = qjs::JS_NewCFunction2(
