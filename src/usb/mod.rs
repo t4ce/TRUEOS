@@ -5,6 +5,7 @@ pub mod cdc_acm;
 mod control;
 mod enumeration;
 pub mod hid;
+pub mod hut;
 mod non_generic;
 pub mod syscall;
 pub use hid::descripto as hid_descripto;

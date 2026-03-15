@@ -6,19 +6,21 @@ use super::xhci::{
 };
 pub mod classreq;
 pub mod descripto;
+pub mod keyboard;
+pub mod mouse;
 
 use self::descripto as usbdesc;
+use self::keyboard::KeyboardRing;
+use self::mouse::MouseRing;
 use crate::pci::dma;
-use crate::usb::input;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::Duration as EmbassyDuration;
 use embassy_time_driver::TICK_HZ;
-use heapless::{String, Vec};
+use heapless::Vec;
 use spin::Mutex;
 
 const MAX_REPORT_DESC: usize = 512;
-const HID_MOUSE_RING_CAP: usize = 2048;
 const HID_TABLET_RING_CAP: usize = 512;
 const HID_CURSOR_EVENT_CAP: usize = 256;
 const HID_TABLET_SAMPLE_PERIOD_MS: u32 = 10;
@@ -26,18 +28,8 @@ const HID_TABLET_ABS_MAX: u32 = 0x7FFF;
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 2000.0;
 const HID_KIND_VIRTUAL: u8 = 0;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub struct TrueosHidMouseSample {
-    pub t_ms: u32,
-    pub seq: u32,
-    pub slot_id: u32,
-    pub buttons: u8,
-    pub dx: i8,
-    pub dy: i8,
-    pub wheel: i8,
-    pub flags: u8,
-}
+pub use self::keyboard::TrueosHidKeyboardSample;
+pub use self::mouse::TrueosHidMouseSample;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -87,17 +79,6 @@ const ZERO_CURSOR_EVENT: TrueosHidCursorEvent = TrueosHidCursorEvent {
     flags: 0,
 };
 
-const ZERO_MOUSE_SAMPLE: TrueosHidMouseSample = TrueosHidMouseSample {
-    t_ms: 0,
-    seq: 0,
-    slot_id: 0,
-    buttons: 0,
-    dx: 0,
-    dy: 0,
-    wheel: 0,
-    flags: 0,
-};
-
 const ZERO_TABLET_SAMPLE: TrueosHidTabletSample = TrueosHidTabletSample {
     t_ms: 0,
     seq: 0,
@@ -107,15 +88,6 @@ const ZERO_TABLET_SAMPLE: TrueosHidTabletSample = TrueosHidTabletSample {
     y: 0,
     flags: 0,
 };
-
-#[derive(Copy, Clone, Debug)]
-struct MouseRing {
-    buf: [TrueosHidMouseSample; HID_MOUSE_RING_CAP],
-    r: u32,
-    w: u32,
-    len: u32,
-    dropped: u32,
-}
 
 #[derive(Copy, Clone, Debug)]
 struct TabletRing {
@@ -169,48 +141,6 @@ impl TabletRing {
     }
 }
 
-impl MouseRing {
-    fn new() -> Self {
-        Self {
-            buf: [ZERO_MOUSE_SAMPLE; HID_MOUSE_RING_CAP],
-            r: 0,
-            w: 0,
-            len: 0,
-            dropped: 0,
-        }
-    }
-
-    #[inline]
-    fn push(&mut self, s: TrueosHidMouseSample) {
-        let cap = HID_MOUSE_RING_CAP as u32;
-        if cap == 0 {
-            return;
-        }
-
-        if self.len == cap {
-            self.r = (self.r + 1) % cap;
-            self.dropped = self.dropped.wrapping_add(1);
-        } else {
-            self.len += 1;
-        }
-
-        self.buf[self.w as usize] = s;
-        self.w = (self.w + 1) % cap;
-    }
-
-    #[inline]
-    fn pop(&mut self) -> Option<TrueosHidMouseSample> {
-        if self.len == 0 {
-            return None;
-        }
-        let cap = HID_MOUSE_RING_CAP as u32;
-        let s = self.buf[self.r as usize];
-        self.r = (self.r + 1) % cap;
-        self.len -= 1;
-        Some(s)
-    }
-}
-
 #[inline]
 fn clamp01(v: f64) -> f64 {
     if v < 0.0 {
@@ -249,12 +179,6 @@ pub fn tablet_cursor_snapshot() -> heapless::Vec<(f64, f64), MAX_HID_DEVICES> {
     out
 }
 
-impl Default for MouseRing {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[inline]
 fn hid_uptime_ms() -> u64 {
     let ticks = embassy_time_driver::now() as u128;
@@ -263,49 +187,6 @@ fn hid_uptime_ms() -> u64 {
         0
     } else {
         ((ticks * 1000u128) / hz) as u64
-    }
-}
-
-#[inline]
-fn hid_kbd_shift(modifiers: u8) -> bool {
-    (modifiers & ((1 << 1) | (1 << 5))) != 0
-}
-
-#[inline]
-fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
-    match key {
-        0x04..=0x1D => {
-            let base = (key - 0x04) + b'a';
-            let ch = base as char;
-            Some(if shift { ch.to_ascii_uppercase() } else { ch })
-        }
-
-        0x1E => Some(if shift { '!' } else { '1' }),
-        0x1F => Some(if shift { '@' } else { '2' }),
-        0x20 => Some(if shift { '#' } else { '3' }),
-        0x21 => Some(if shift { '$' } else { '4' }),
-        0x22 => Some(if shift { '%' } else { '5' }),
-        0x23 => Some(if shift { '^' } else { '6' }),
-        0x24 => Some(if shift { '&' } else { '7' }),
-        0x25 => Some(if shift { '*' } else { '8' }),
-        0x26 => Some(if shift { '(' } else { '9' }),
-        0x27 => Some(if shift { ')' } else { '0' }),
-
-        0x2C => Some(' '),
-
-        0x2D => Some(if shift { '_' } else { '-' }),
-        0x2E => Some(if shift { '+' } else { '=' }),
-        0x2F => Some(if shift { '{' } else { '[' }),
-        0x30 => Some(if shift { '}' } else { ']' }),
-        0x31 => Some(if shift { '|' } else { '\\' }),
-        0x33 => Some(if shift { ':' } else { ';' }),
-        0x34 => Some(if shift { '"' } else { '\'' }),
-        0x35 => Some(if shift { '~' } else { '`' }),
-        0x36 => Some(if shift { '<' } else { ',' }),
-        0x37 => Some(if shift { '>' } else { '.' }),
-        0x38 => Some(if shift { '?' } else { '/' }),
-
-        _ => None,
     }
 }
 
@@ -337,6 +218,11 @@ pub struct HidRuntime {
     pub ep_ring: TrbRing,
     pub seq: u64,
     pub last_nonzero_seq: u64,
+
+    keyboard_ring: KeyboardRing,
+    keyboard_modifiers: u8,
+    keyboard_keys: [u8; 6],
+    keyboard_ascii: [u8; 6],
 
     mouse_ring: MouseRing,
 
@@ -427,6 +313,17 @@ pub fn inject_virtual_cursor_event(
     let nx = clamp01(x);
     let ny = clamp01(y);
     crate::v::cursor::upsert_snapshot(0, slot_id, slot_id, HID_KIND_VIRTUAL, nx, ny, buttons_down);
+    crate::usb::hut::upsert_mouse_state(
+        0,
+        slot_id,
+        slot_id,
+        nx,
+        ny,
+        buttons_down,
+        crate::usb::hut::HidSourceKind::Ai,
+        "ai",
+        true,
+    );
     push_cursor_event(TrueosHidCursorEvent {
         t_ms: hid_uptime_ms() as u32,
         seq: 0,
@@ -533,14 +430,86 @@ pub fn register_runtime(runtime: HidRuntime) {
     }) {
         *existing = runtime;
         sync_runtime_cursor_snapshot(existing);
+        match existing.hid_kind {
+            1 => crate::usb::hut::upsert_keyboard_state(
+                existing.controller_id as u32,
+                existing.slot_id,
+                existing.ep_target,
+                0,
+                [0; 6],
+                [0; 6],
+                crate::usb::hut::HidSourceKind::Human,
+                "human",
+                false,
+            ),
+            2 => crate::usb::hut::upsert_mouse_state(
+                existing.controller_id as u32,
+                existing.slot_id,
+                existing.ep_target,
+                existing.mouse_x,
+                existing.mouse_y,
+                existing.mouse_buttons_down,
+                crate::usb::hut::HidSourceKind::Human,
+                "human",
+                false,
+            ),
+            _ => {}
+        }
+        if existing.hid_kind == 1 {
+            crate::v::keyboard::upsert_snapshot(
+                existing.controller_id as u32,
+                existing.slot_id,
+                existing.ep_target,
+                existing.keyboard_modifiers,
+                existing.keyboard_keys,
+                existing.keyboard_ascii,
+            );
+        }
         return;
     }
     sync_runtime_cursor_snapshot(&runtime);
+    match runtime.hid_kind {
+        1 => crate::usb::hut::upsert_keyboard_state(
+            runtime.controller_id as u32,
+            runtime.slot_id,
+            runtime.ep_target,
+            0,
+            [0; 6],
+            [0; 6],
+            crate::usb::hut::HidSourceKind::Human,
+            "human",
+            false,
+        ),
+        2 => crate::usb::hut::upsert_mouse_state(
+            runtime.controller_id as u32,
+            runtime.slot_id,
+            runtime.ep_target,
+            runtime.mouse_x,
+            runtime.mouse_y,
+            runtime.mouse_buttons_down,
+            crate::usb::hut::HidSourceKind::Human,
+            "human",
+            false,
+        ),
+        _ => {}
+    }
+    if runtime.hid_kind == 1 {
+        crate::v::keyboard::upsert_snapshot(
+            runtime.controller_id as u32,
+            runtime.slot_id,
+            runtime.ep_target,
+            runtime.keyboard_modifiers,
+            runtime.keyboard_keys,
+            runtime.keyboard_ascii,
+        );
+    }
     let _ = guard.push(runtime);
 }
 
 pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
     let _ = crate::v::cursor::remove_snapshots(controller_id as u32, slot_id);
+    let _ = crate::v::keyboard::remove_snapshots(controller_id as u32, slot_id);
+    let _ = crate::usb::hut::remove_slot(controller_id as u32, slot_id);
     let mut guard = HID_RUNTIMES.lock();
     let mut removed = false;
     let mut idx = 0usize;
@@ -577,88 +546,13 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
     runtime.seq = runtime.seq.wrapping_add(1);
 
     if runtime.hid_kind == 1 {
-        if data.len() >= 8 {
-            let modifiers = data[0];
-            let mut keys = [0u8; 6];
-            keys.copy_from_slice(&data[2..8]);
-
-            let shift = hid_kbd_shift(modifiers);
-            let mut ascii = [0u8; 6];
-            for (dst, &k) in ascii.iter_mut().zip(keys.iter()) {
-                if k == 0 {
-                    *dst = 0;
-                    continue;
-                }
-                *dst = hid_boot_keycode_to_ascii(k, shift)
-                    .and_then(|ch| if ch.is_ascii() { Some(ch as u8) } else { None })
-                    .unwrap_or(b'?');
-            }
-            if keys.iter().any(|&k| k != 0) || modifiers != 0 {
-                runtime.last_nonzero_seq = runtime.seq;
-            }
-            input::push_event(input::InputEvent::Keyboard(input::KeyboardEvent {
-                slot_id: runtime.slot_id,
-                modifiers,
-                keys,
-                ascii,
-            }));
-        }
+        let _ = completion;
+        let _ = residual;
+        keyboard::handle_report(runtime, data, hid_uptime_ms() as u32);
     } else if runtime.hid_kind == 2 {
         let _ = completion;
         let _ = residual;
-        if data.len() >= 4 {
-            let buttons = data[0];
-            let dx = i8::from_le_bytes([data[1]]);
-            let dy = i8::from_le_bytes([data[2]]);
-            let wheel = i8::from_le_bytes([data[3]]);
-            let prev_buttons = runtime.mouse_buttons_down;
-            runtime.mouse_buttons_down = u32::from(buttons);
-
-            if dx != 0 || dy != 0 {
-                runtime.mouse_x = clamp01(runtime.mouse_x + (dx as f64) * HID_MOUSE_NORM_PER_DELTA);
-                runtime.mouse_y = clamp01(runtime.mouse_y + (dy as f64) * HID_MOUSE_NORM_PER_DELTA);
-            }
-
-            runtime.mouse_ring.push(TrueosHidMouseSample {
-                t_ms: hid_uptime_ms() as u32,
-                seq: runtime.seq as u32,
-                slot_id: runtime.slot_id,
-                buttons,
-                dx,
-                dy,
-                wheel,
-                flags: 1 << 0,
-            });
-
-            let mut flags = 0u32;
-            if dx != 0 || dy != 0 {
-                flags |= 1 << 0;
-            }
-            if wheel != 0 {
-                flags |= 1 << 1;
-            }
-            if runtime.mouse_buttons_down != prev_buttons {
-                flags |= 1 << 2;
-            }
-
-            push_cursor_event(TrueosHidCursorEvent {
-                t_ms: hid_uptime_ms() as u32,
-                seq: runtime.seq as u32,
-                controller_id: runtime.controller_id as u32,
-                slot_id: runtime.slot_id,
-                ep_target: runtime.ep_target,
-                hid_kind: runtime.hid_kind,
-                reserved0: 0,
-                reserved1: 0,
-                buttons_down: runtime.mouse_buttons_down,
-                wheel: wheel as i16,
-                reserved2: 0,
-                x: runtime.mouse_x,
-                y: runtime.mouse_y,
-                flags,
-            });
-            sync_runtime_cursor_snapshot(runtime);
-        }
+        mouse::handle_report(runtime, data, hid_uptime_ms() as u32);
     } else if runtime.hid_kind == 3 {
         let _ = completion;
         let _ = residual;
@@ -824,6 +718,46 @@ pub unsafe extern "C" fn trueos_cabi_hid_mouse_read(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_hid_keyboard_read(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    out: *mut TrueosHidKeyboardSample,
+    out_cap: u32,
+    out_dropped: *mut u32,
+) -> u32 {
+    if out.is_null() {
+        return 0;
+    }
+
+    let mut wrote = 0u32;
+    let mut dropped = 0u32;
+
+    let controller_id = controller_id as usize;
+    if controller_id >= super::xhci::MAX_XHCI_CONTROLLERS {
+        return 0;
+    }
+
+    let _ = with_runtime_mut_by_slot_and_target(controller_id, slot_id, ep_target, |rt| {
+        dropped = rt.keyboard_ring.dropped;
+        rt.keyboard_ring.dropped = 0;
+
+        while wrote < out_cap {
+            let Some(s) = rt.keyboard_ring.pop() else {
+                break;
+            };
+            core::ptr::write(out.add(wrote as usize), s);
+            wrote += 1;
+        }
+    });
+
+    if !out_dropped.is_null() {
+        *out_dropped = dropped;
+    }
+    wrote
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_hid_mouse_pos(
     controller_id: u32,
     slot_id: u32,
@@ -915,54 +849,6 @@ pub unsafe extern "C" fn trueos_cabi_hid_tablet_pos(
     });
 
     if ok { 0 } else { -3 }
-}
-
-#[embassy_executor::task]
-pub(crate) async fn input_logger() {
-    loop {
-        while let Some(ev) = input::pop_event() {
-            if let input::InputEvent::Keyboard(k) = ev {
-                // Single-line structured event dump to avoid interleaving with other logs.
-                // Includes raw keycodes + derived ASCII bytes + a lossy printable view.
-                let mut line: String<192> = String::new();
-                let _ = core::fmt::write(
-                    &mut line,
-                    format_args!(
-                        "hid.kbd slot={} mod=0x{:02X} keys=[",
-                        k.slot_id, k.modifiers
-                    ),
-                );
-                for (i, b) in k.keys.iter().copied().enumerate() {
-                    if i != 0 {
-                        let _ = core::fmt::write(&mut line, format_args!(" "));
-                    }
-                    let _ = core::fmt::write(&mut line, format_args!("{:02X}", b));
-                }
-                let _ = core::fmt::write(&mut line, format_args!("] ascii=["));
-                for (i, b) in k.ascii.iter().copied().enumerate() {
-                    if i != 0 {
-                        let _ = core::fmt::write(&mut line, format_args!(" "));
-                    }
-                    let _ = core::fmt::write(&mut line, format_args!("{:02X}", b));
-                }
-                let _ = core::fmt::write(&mut line, format_args!("] text=\""));
-                for b in k.ascii.iter().copied() {
-                    if b == 0 {
-                        continue;
-                    }
-                    let ch = if b == b' ' || (b.is_ascii_graphic()) {
-                        b as char
-                    } else {
-                        '.'
-                    };
-                    let _ = core::fmt::write(&mut line, format_args!("{}", ch));
-                }
-                let _ = core::fmt::write(&mut line, format_args!("\"\n"));
-                crate::log!("{}", line);
-            }
-        }
-        Timer::after(EmbassyDuration::from_millis(10)).await;
-    }
 }
 
 pub fn parse_hid_interrupt_in_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_HID_INTERFACES> {
@@ -1251,6 +1137,11 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             ep_ring,
             seq: 0,
             last_nonzero_seq: 0,
+
+            keyboard_ring: KeyboardRing::new(),
+            keyboard_modifiers: 0,
+            keyboard_keys: [0; 6],
+            keyboard_ascii: [0; 6],
 
             mouse_ring: MouseRing::new(),
             mouse_x: 0.5,
