@@ -4,18 +4,50 @@ use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_char;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use parry2d::math::{Isometry, Vector};
-use parry2d::query;
-use parry2d::shape::{Ball, Cuboid};
 use spin::Mutex;
 
 mod ai_api;
 mod helpers;
 
 static BROWSER_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostedBrowserRegion {
+    pub tex_id: u32,
+    pub doc_y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub revision: u32,
+    pub dirty: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostedBrowserSurfaceState {
+    pub seq: u32,
+    pub cache_revision: u32,
+    pub cache_width: u32,
+    pub tile_height: u32,
+    pub viewport_width: u32,
+    pub viewport_height: u32,
+    pub content_height: u32,
+    pub content_top_y: u32,
+    pub scroll_y: u32,
+    pub regions: Vec<HostedBrowserRegion>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct HostedViewportRequest {
+    viewport_width: u32,
+    viewport_height: u32,
+    content_x: i32,
+    content_y: i32,
+    content_width: u32,
+    content_height: u32,
+}
+
 #[derive(Clone)]
 struct PendingHtmlEntry {
     html: String,
@@ -24,9 +56,22 @@ struct PendingHtmlEntry {
 
 static PENDING_HTML: Mutex<Option<PendingHtmlEntry>> = Mutex::new(None);
 static PENDING_AI_INPUT: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::new());
-
-const PARRY_CURSOR_RADIUS: f32 = 6.0;
-const MAX_PARRY_CURSOR_EVENTS_PER_TICK: usize = 32;
+static PENDING_HOSTED_VIEWPORT: Mutex<Option<HostedViewportRequest>> = Mutex::new(None);
+static APPLIED_HOSTED_VIEWPORT: Mutex<Option<HostedViewportRequest>> = Mutex::new(None);
+static HOSTED_SURFACE_STATE: Mutex<HostedBrowserSurfaceState> =
+    Mutex::new(HostedBrowserSurfaceState {
+        seq: 0,
+        cache_revision: 0,
+        cache_width: 0,
+        tile_height: 0,
+        viewport_width: 0,
+        viewport_height: 0,
+        content_height: 0,
+        content_top_y: 0,
+        scroll_y: 0,
+        regions: Vec::new(),
+    });
+static HOSTED_SURFACE_SEQ: AtomicU32 = AtomicU32::new(0);
 
 fn append_js_u8_array(dst: &mut String, values: &[u8]) {
     dst.push('[');
@@ -62,31 +107,6 @@ fn browser_text_widths_by_char() -> [u8; 256] {
 }
 
 #[derive(Clone)]
-struct ParryInteractiveRect {
-    path: String,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-}
-
-#[derive(Copy, Clone)]
-struct ParryCursorCircle {
-    slot_id: u32,
-    x: f32,
-    y: f32,
-}
-
-#[derive(Copy, Clone)]
-struct CursorButtonEvent {
-    slot_id: u32,
-    x: f32,
-    y: f32,
-    buttons_down: u32,
-    previous_buttons_down: u32,
-}
-
-#[derive(Clone)]
 pub struct AiInputEntry {
     pub text: String,
     pub web_search: bool,
@@ -116,6 +136,46 @@ pub fn queue_ai_input(next: AiInputEntry) -> bool {
     }
     PENDING_AI_INPUT.lock().push_back(next);
     true
+}
+
+pub fn set_hosted_viewport(
+    viewport_width: u32,
+    viewport_height: u32,
+    content_x: i32,
+    content_y: i32,
+    content_width: u32,
+    content_height: u32,
+) -> bool {
+    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+        return false;
+    }
+    let next = HostedViewportRequest {
+        viewport_width: viewport_width.max(1),
+        viewport_height: viewport_height.max(1),
+        content_x,
+        content_y,
+        content_width: content_width.max(1),
+        content_height: content_height.max(1),
+    };
+    {
+        let applied = APPLIED_HOSTED_VIEWPORT.lock();
+        if applied.as_ref() == Some(&next) {
+            let pending = PENDING_HOSTED_VIEWPORT.lock();
+            if pending.is_none() {
+                return true;
+            }
+        }
+    }
+    *PENDING_HOSTED_VIEWPORT.lock() = Some(next);
+    true
+}
+
+pub fn hosted_surface_state() -> HostedBrowserSurfaceState {
+    HOSTED_SURFACE_STATE.lock().clone()
+}
+
+pub fn hosted_surface_seq() -> u32 {
+    HOSTED_SURFACE_SEQ.load(Ordering::Acquire)
 }
 
 #[inline]
@@ -170,25 +230,12 @@ unsafe fn set_event_num_prop(
     );
 }
 
-#[inline]
-unsafe fn browser_viewport_center(ctx: *mut qjs::JSContext) -> (f32, f32) {
-    let global = qjs::JS_GetGlobalObject(ctx);
-    if global.is_exception() {
-        return (640.0, 400.0);
-    }
-    let width = js_prop_f64(ctx, global, b"innerWidth\0").unwrap_or(1280.0) as f32;
-    let height = js_prop_f64(ctx, global, b"innerHeight\0").unwrap_or(800.0) as f32;
-    qjs::js_free_value(ctx, global);
-    (width * 0.5, height * 0.5)
-}
-
-unsafe fn browser_pop_cursor_button_event(ctx: *mut qjs::JSContext) -> Option<CursorButtonEvent> {
+unsafe fn browser_api_value(ctx: *mut qjs::JSContext) -> Option<qjs::JSValue> {
     let global = qjs::JS_GetGlobalObject(ctx);
     if global.is_exception() {
         return None;
     }
-    let browser =
-        qjs::JS_GetPropertyStr(ctx, global, b"__trueosBrowser\0".as_ptr() as *const c_char);
+    let browser = qjs::JS_GetPropertyStr(ctx, global, b"__trueosBrowser\0".as_ptr() as *const c_char);
     qjs::js_free_value(ctx, global);
     if browser.is_exception()
         || browser.tag == qjs::JS_TAG_UNDEFINED
@@ -197,213 +244,126 @@ unsafe fn browser_pop_cursor_button_event(ctx: *mut qjs::JSContext) -> Option<Cu
         qjs::js_free_value(ctx, browser);
         return None;
     }
-    let pop = qjs::JS_GetPropertyStr(
-        ctx,
-        browser,
-        b"popCursorButtonEvent\0".as_ptr() as *const c_char,
-    );
-    if pop.is_exception() || pop.tag == qjs::JS_TAG_UNDEFINED || pop.tag == qjs::JS_TAG_NULL {
-        qjs::js_free_value(ctx, pop);
-        qjs::js_free_value(ctx, browser);
-        return None;
-    }
+    Some(browser)
+}
 
-    let result = qjs::JS_Call(ctx, pop, browser, 0, core::ptr::null());
-    qjs::js_free_value(ctx, pop);
-    if result.is_exception() {
-        qjs::qjs_diag::dump_last_exception(ctx, "browser popCursorButtonEvent");
-        qjs::js_free_value(ctx, result);
-        qjs::js_free_value(ctx, browser);
-        return None;
-    }
-    if result.tag == qjs::JS_TAG_UNDEFINED || result.tag == qjs::JS_TAG_NULL {
-        qjs::js_free_value(ctx, result);
-        qjs::js_free_value(ctx, browser);
-        return None;
-    }
-
-    let event = CursorButtonEvent {
-        slot_id: js_prop_f64(ctx, result, b"slotId\0")
-            .unwrap_or(0.0)
-            .max(0.0) as u32,
-        x: js_prop_f64(ctx, result, b"x\0").unwrap_or(0.0) as f32,
-        y: js_prop_f64(ctx, result, b"y\0").unwrap_or(0.0) as f32,
-        buttons_down: js_prop_f64(ctx, result, b"buttonsDown\0")
-            .unwrap_or(0.0)
-            .max(0.0) as u32,
-        previous_buttons_down: js_prop_f64(ctx, result, b"previousButtonsDown\0")
-            .unwrap_or(0.0)
-            .max(0.0) as u32,
+unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext) {
+    let Some(next) = PENDING_HOSTED_VIEWPORT.lock().take() else {
+        return;
     };
-    qjs::js_free_value(ctx, result);
-    qjs::js_free_value(ctx, browser);
-    Some(event)
-}
-
-unsafe fn browser_collect_interactive_rects(ctx: *mut qjs::JSContext) -> Vec<ParryInteractiveRect> {
-    let mut out = Vec::new();
-    let global = qjs::JS_GetGlobalObject(ctx);
-    if global.is_exception() {
-        return out;
-    }
-    let interactives = qjs::JS_GetPropertyStr(
-        ctx,
-        global,
-        b"__trueosBrowserThemeLayoutInteractives\0".as_ptr() as *const c_char,
-    );
-    qjs::js_free_value(ctx, global);
-    if interactives.is_exception()
-        || interactives.tag == qjs::JS_TAG_UNDEFINED
-        || interactives.tag == qjs::JS_TAG_NULL
-    {
-        qjs::js_free_value(ctx, interactives);
-        return out;
-    }
-
-    let len = js_prop_f64(ctx, interactives, b"length\0")
-        .unwrap_or(0.0)
-        .max(0.0) as usize;
-    for idx in 0..len {
-        let item = qjs::JS_GetPropertyUint32(ctx, interactives, idx as u32);
-        if item.is_exception() || item.tag == qjs::JS_TAG_UNDEFINED || item.tag == qjs::JS_TAG_NULL
-        {
-            qjs::js_free_value(ctx, item);
-            continue;
-        }
-
-        let Some(path) = js_prop_string(ctx, item, b"path\0") else {
-            qjs::js_free_value(ctx, item);
-            continue;
-        };
-        let rect = ParryInteractiveRect {
-            path,
-            x: js_prop_f64(ctx, item, b"x\0").unwrap_or(0.0) as f32,
-            y: js_prop_f64(ctx, item, b"y\0").unwrap_or(0.0) as f32,
-            width: js_prop_f64(ctx, item, b"width\0").unwrap_or(0.0).max(0.0) as f32,
-            height: js_prop_f64(ctx, item, b"height\0").unwrap_or(0.0).max(0.0) as f32,
-        };
-        qjs::js_free_value(ctx, item);
-        if rect.width <= 0.0 || rect.height <= 0.0 {
-            continue;
-        }
-        out.push(rect);
-    }
-
-    qjs::js_free_value(ctx, interactives);
-    out
-}
-
-unsafe fn browser_dispatch_dom_click(
-    ctx: *mut qjs::JSContext,
-    path: &str,
-    slot_id: u32,
-    x: f32,
-    y: f32,
-) -> bool {
-    let global = qjs::JS_GetGlobalObject(ctx);
-    if global.is_exception() {
-        return false;
-    }
-    let browser =
-        qjs::JS_GetPropertyStr(ctx, global, b"__trueosBrowser\0".as_ptr() as *const c_char);
-    qjs::js_free_value(ctx, global);
-    if browser.is_exception()
-        || browser.tag == qjs::JS_TAG_UNDEFINED
-        || browser.tag == qjs::JS_TAG_NULL
-    {
-        qjs::js_free_value(ctx, browser);
-        return false;
-    }
-    let dispatch = qjs::JS_GetPropertyStr(
+    let Some(browser) = browser_api_value(ctx) else {
+        *PENDING_HOSTED_VIEWPORT.lock() = Some(next);
+        return;
+    };
+    let func = qjs::JS_GetPropertyStr(
         ctx,
         browser,
-        b"dispatchDomClick\0".as_ptr() as *const c_char,
+        b"setViewportOverride\0".as_ptr() as *const c_char,
     );
-    if dispatch.is_exception()
-        || dispatch.tag == qjs::JS_TAG_UNDEFINED
-        || dispatch.tag == qjs::JS_TAG_NULL
-    {
-        qjs::js_free_value(ctx, dispatch);
+    if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, func);
         qjs::js_free_value(ctx, browser);
-        return false;
+        *PENDING_HOSTED_VIEWPORT.lock() = Some(next);
+        return;
     }
 
-    let path_js = qjs::JS_NewStringLen(ctx, path.as_ptr() as *const c_char, path.len());
-    let event_js = qjs::JS_NewObject(ctx);
-    set_event_num_prop(ctx, event_js, b"slotId\0", slot_id as f64);
-    set_event_num_prop(ctx, event_js, b"x\0", x as f64);
-    set_event_num_prop(ctx, event_js, b"y\0", y as f64);
+    let viewport = qjs::JS_NewObject(ctx);
+    set_event_num_prop(ctx, viewport, b"width\0", next.viewport_width as f64);
+    set_event_num_prop(ctx, viewport, b"height\0", next.viewport_height as f64);
 
-    let args = [path_js, event_js];
-    let result = qjs::JS_Call(ctx, dispatch, browser, args.len() as i32, args.as_ptr());
-    let ok = !result.is_exception();
+    let content_rect = qjs::JS_NewObject(ctx);
+    set_event_num_prop(ctx, content_rect, b"x\0", next.content_x as f64);
+    set_event_num_prop(ctx, content_rect, b"y\0", next.content_y as f64);
+    set_event_num_prop(ctx, content_rect, b"width\0", next.content_width as f64);
+    set_event_num_prop(ctx, content_rect, b"height\0", next.content_height as f64);
+
+    let args = [viewport, content_rect];
+    let result = qjs::JS_Call(ctx, func, browser, args.len() as i32, args.as_ptr());
     if result.is_exception() {
-        qjs::qjs_diag::dump_last_exception(ctx, "browser dispatchDomClick");
+        qjs::qjs_diag::dump_last_exception(ctx, "browser setViewportOverride");
+        *PENDING_HOSTED_VIEWPORT.lock() = Some(next);
+    } else {
+        *APPLIED_HOSTED_VIEWPORT.lock() = Some(next);
     }
     qjs::js_free_value(ctx, result);
-    qjs::js_free_value(ctx, event_js);
-    qjs::js_free_value(ctx, path_js);
-    qjs::js_free_value(ctx, dispatch);
+    qjs::js_free_value(ctx, content_rect);
+    qjs::js_free_value(ctx, viewport);
+    qjs::js_free_value(ctx, func);
     qjs::js_free_value(ctx, browser);
-    ok
 }
 
-unsafe fn process_parry_clicks(ctx: *mut qjs::JSContext, cursors: &mut Vec<ParryCursorCircle>) {
-    let (center_x, center_y) = browser_viewport_center(ctx);
-    for _ in 0..MAX_PARRY_CURSOR_EVENTS_PER_TICK {
-        let Some(event) = browser_pop_cursor_button_event(ctx) else {
-            break;
-        };
-        if event.slot_id == 0 || !(event.previous_buttons_down != 0 && event.buttons_down == 0) {
-            continue;
+unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext) {
+    let Some(browser) = browser_api_value(ctx) else {
+        return;
+    };
+    let func = qjs::JS_GetPropertyStr(
+        ctx,
+        browser,
+        b"getSurfaceState\0".as_ptr() as *const c_char,
+    );
+    if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, func);
+        qjs::js_free_value(ctx, browser);
+        return;
+    }
+    let result = qjs::JS_Call(ctx, func, browser, 0, core::ptr::null());
+    qjs::js_free_value(ctx, func);
+    qjs::js_free_value(ctx, browser);
+    if result.is_exception() || result.tag == qjs::JS_TAG_UNDEFINED || result.tag == qjs::JS_TAG_NULL {
+        if result.is_exception() {
+            qjs::qjs_diag::dump_last_exception(ctx, "browser getSurfaceState");
         }
+        qjs::js_free_value(ctx, result);
+        return;
+    }
 
-        let circle = if let Some(existing) = cursors
-            .iter_mut()
-            .find(|cursor| cursor.slot_id == event.slot_id)
-        {
-            existing
-        } else {
-            cursors.push(ParryCursorCircle {
-                slot_id: event.slot_id,
-                x: center_x,
-                y: center_y,
-            });
-            let Some(last) = cursors.last_mut() else {
-                continue;
-            };
-            last
-        };
-        circle.x = event.x;
-        circle.y = event.y;
+    let mut next = HostedBrowserSurfaceState {
+        seq: 0,
+        cache_revision: js_prop_f64(ctx, result, b"cacheRevision\0").unwrap_or(0.0).max(0.0) as u32,
+        cache_width: js_prop_f64(ctx, result, b"cacheWidth\0").unwrap_or(0.0).max(0.0) as u32,
+        tile_height: js_prop_f64(ctx, result, b"tileHeight\0").unwrap_or(0.0).max(0.0) as u32,
+        viewport_width: js_prop_f64(ctx, result, b"viewportWidth\0").unwrap_or(0.0).max(0.0) as u32,
+        viewport_height: js_prop_f64(ctx, result, b"viewportHeight\0").unwrap_or(0.0).max(0.0) as u32,
+        content_height: js_prop_f64(ctx, result, b"contentHeight\0").unwrap_or(0.0).max(0.0) as u32,
+        content_top_y: js_prop_f64(ctx, result, b"contentTopY\0").unwrap_or(0.0).max(0.0) as u32,
+        scroll_y: js_prop_f64(ctx, result, b"scrollY\0").unwrap_or(0.0).max(0.0) as u32,
+        regions: Vec::new(),
+    };
 
-        let cursor_iso = Isometry::translation(circle.x, circle.y);
-        let cursor_shape = Ball::new(PARRY_CURSOR_RADIUS);
-        let interactives = browser_collect_interactive_rects(ctx);
-        let mut hit_path: Option<String> = None;
-        for interactive in interactives {
-            let half_w = (interactive.width * 0.5).max(0.5);
-            let half_h = (interactive.height * 0.5).max(0.5);
-            let interactive_iso =
-                Isometry::translation(interactive.x + half_w, interactive.y + half_h);
-            let interactive_shape = Cuboid::new(Vector::new(half_w, half_h));
-            let Ok(Some(contact)) = query::contact(
-                &cursor_iso,
-                &cursor_shape,
-                &interactive_iso,
-                &interactive_shape,
-                0.0,
-            ) else {
+    let regions = qjs::JS_GetPropertyStr(ctx, result, b"regions\0".as_ptr() as *const c_char);
+    if !regions.is_exception() && regions.tag != qjs::JS_TAG_UNDEFINED && regions.tag != qjs::JS_TAG_NULL {
+        let len = js_prop_f64(ctx, regions, b"length\0").unwrap_or(0.0).max(0.0) as usize;
+        for idx in 0..len {
+            let item = qjs::JS_GetPropertyUint32(ctx, regions, idx as u32);
+            if item.is_exception() || item.tag == qjs::JS_TAG_UNDEFINED || item.tag == qjs::JS_TAG_NULL {
+                qjs::js_free_value(ctx, item);
                 continue;
-            };
-            if contact.dist <= 0.0 {
-                hit_path = Some(interactive.path);
             }
+            next.regions.push(HostedBrowserRegion {
+                tex_id: js_prop_f64(ctx, item, b"texId\0").unwrap_or(0.0).max(0.0) as u32,
+                doc_y: js_prop_f64(ctx, item, b"docY\0").unwrap_or(0.0).max(0.0) as u32,
+                width: js_prop_f64(ctx, item, b"width\0").unwrap_or(0.0).max(0.0) as u32,
+                height: js_prop_f64(ctx, item, b"height\0").unwrap_or(0.0).max(0.0) as u32,
+                revision: js_prop_f64(ctx, item, b"revision\0").unwrap_or(0.0).max(0.0) as u32,
+                dirty: js_prop_f64(ctx, item, b"dirty\0").unwrap_or(0.0) != 0.0,
+            });
+            qjs::js_free_value(ctx, item);
         }
+    }
+    qjs::js_free_value(ctx, regions);
+    qjs::js_free_value(ctx, result);
 
-        if let Some(path) = hit_path {
-            let _ = browser_dispatch_dom_click(ctx, path.as_str(), event.slot_id, event.x, event.y);
+    let mut shared = HOSTED_SURFACE_STATE.lock();
+    let prev = shared.clone();
+    next.seq = prev.seq;
+    if prev != next {
+        let mut seq = HOSTED_SURFACE_SEQ.load(Ordering::Acquire).wrapping_add(1);
+        if seq == 0 {
+            seq = 1;
         }
+        next.seq = seq;
+        HOSTED_SURFACE_SEQ.store(seq, Ordering::Release);
+        *shared = next;
     }
 }
 
@@ -575,15 +535,14 @@ pub async fn boot_browser() {
             return;
         }
 
-        let mut parry_cursors: Vec<ParryCursorCircle> = Vec::new();
-
         loop {
             apply_pending_html(ctx);
             apply_pending_ai_input(ctx);
-            process_parry_clicks(ctx, &mut parry_cursors);
+            apply_pending_hosted_viewport(ctx);
             if !qjs::vm::pump_runtime_once(rt, ctx, "browser") {
                 break;
             }
+            sync_hosted_surface_state(ctx);
             Timer::after(EmbassyDuration::from_millis(16)).await;
         }
         qjs::trueos_shims::log_info("qjs-browser: stopped\n");

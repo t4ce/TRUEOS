@@ -917,14 +917,9 @@ pub(crate) unsafe extern "C" fn trueos_module_loader(
     module_name: *const c_char,
     _opaque: *mut core::ffi::c_void,
 ) -> *mut qjs::JSModuleDef {
-    if !module_name.is_null() {
-        let spec = CStr::from_ptr(module_name).to_bytes();
-        log_str("qjs: loader spec=");
-        log_bytes(spec);
-        log_nl();
-    } else {
-        log_str("qjs: loader spec=<null>\n");
-    }
+    trace_str("qjs: loader spec=");
+    trace_cstr_or_null(module_name);
+    trace_nl();
 
     let m = load_native_module(ctx, module_name);
     if !m.is_null() {
@@ -938,7 +933,7 @@ pub(crate) unsafe extern "C" fn trueos_module_loader(
 
     let spec = CStr::from_ptr(module_name).to_bytes();
     if spec_is_url(spec) {
-        log_str("qjs: loader url\n");
+        trace_str("qjs: loader url\n");
         return load_url_module(ctx, module_name, spec);
     }
 

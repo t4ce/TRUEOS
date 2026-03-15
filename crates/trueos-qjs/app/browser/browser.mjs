@@ -4,13 +4,8 @@ import Yoga from 'yoga-layout';
 import { Worker } from 'node:worker_threads';
 import { createFpsOverlay } from './fps.mjs';
 import { createBrowserAssetManager } from './browser_assets.mjs';
-import { createBrowserCursorController } from './browser_cursor.mjs';
 import { createBrowserPageState } from './browser_page_state.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
-import {
-  attachThemeLayoutRuntime as attachParryThemeLayoutRuntime,
-  dispatchDomClick as dispatchParryDomClick,
-} from './parry.mjs';
 import {
   renderScene,
   renderSceneRegionToCurrentTarget,
@@ -28,8 +23,7 @@ const ERROR_PREVIEW_MAX = 160;
 const MAX_RENDER_TEXT_CHARS = 512;
 const HTML_READY_TIMEOUT_MS = 10000;
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
-const SHOW_CLOSING_TAG_ROWS = false;
-const RELEASE_RECT_RGBA = 0x3f2f7fff;
+const SHOW_CLOSING_TAG_ROWS = true;
 const BROWSER_REGION_CACHE_MAX = 4;
 const BROWSER_REGION_PREFETCH_SCREENS = 1;
 const BROWSER_REGION_TILE_MIN_PX = 512;
@@ -50,7 +44,6 @@ let aiStartSpecifier = '';
 let aiWorker = null;
 const aiInputQueue = [];
 const aiInputWaiters = [];
-let pendingReleaseRect = null;
 let fpsOverlayEnabled = false;
 let browserCanRenderScene = false;
 let browserContentReadySignaled = false;
@@ -60,6 +53,7 @@ let browserRegionCacheSeq = 0;
 let browserRegionCacheRevision = 1;
 let browserRegionCacheWidth = 0;
 let browserRegionTileHeight = 0;
+let browserRowPreviewKey = '';
 
 const fpsOverlay = createFpsOverlay();
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
@@ -115,19 +109,15 @@ const browserPageState = createBrowserPageState({
   summarizeAssets: (urls) => assetManager.summarizeImageUrls(urls),
 });
 
+const BROWSER_INTERACTION_EXTERNAL_RESULT = Object.freeze({
+  ok: 0,
+  handled: 0,
+  reason: 'ui2-owned-input',
+});
+
 function refreshBrowserPageState(reason = 'state-refresh') {
   return browserPageState.refresh(reason);
 }
-
-const browserCursor = createBrowserCursorController({
-  host: runtime.host,
-  computeViewport,
-  buildReleaseRect,
-  paint,
-  onWheelDelta,
-  onReleaseRect: (rect) => { pendingReleaseRect = rect; },
-  logDebug: logCursorDebug,
-});
 
 function resolveRuntime() {
   const host = (typeof globalThis !== 'undefined') ? globalThis : this;
@@ -362,39 +352,6 @@ function computeViewport() {
   const vw = override ? override.width : Math.max(1, Number(W.innerWidth || 1280));
   const vh = override ? override.height : Math.max(1, Number(W.innerHeight || 800));
   return { vw, vh };
-}
-
-function cursorCoordToViewportPx(value, extent) {
-  const next = Number(value);
-  const size = Math.max(1, Number(extent || 0));
-  if (!Number.isFinite(next)) return 0;
-  if (next >= 0 && next <= 1) {
-    return Math.round(next * size);
-  }
-  return Math.round(next);
-}
-
-function buildReleaseRect(origin, currentX, currentY) {
-  if (!origin || typeof origin !== 'object') return null;
-
-  const { vw, vh } = computeViewport();
-  const startX = cursorCoordToViewportPx(origin.x, vw);
-  const startY = cursorCoordToViewportPx(origin.y, vh);
-  const endX = cursorCoordToViewportPx(currentX, vw);
-  const endY = cursorCoordToViewportPx(currentY, vh);
-  const left = Math.min(startX, endX);
-  const top = Math.min(startY, endY);
-  const width = Math.abs(endX - startX);
-  const height = Math.abs(endY - startY);
-
-  if (width <= 0 || height <= 0) return null;
-  return {
-    x: left,
-    y: top,
-    width,
-    height,
-    rgba: RELEASE_RECT_RGBA,
-  };
 }
 
 function collapseWhitespace(s) {
@@ -732,6 +689,7 @@ function buildDocFromParsed(parsed, vw, context = 'document') {
     );
   }
   const layout = applyYoga(rows, vw, context);
+  maybeLogRowPreview(rows, layout.rowX, layout.rowY, context);
   const themeLayout = (() => {
     try {
       return buildThemeLayout(doc, cssSection, vw, context, rows, layout.rowX, layout.rowY);
@@ -744,10 +702,6 @@ function buildDocFromParsed(parsed, vw, context = 'document') {
       );
     }
   })();
-  attachParryThemeLayoutRuntime(doc, themeLayout, {
-    isElement,
-    dispatchBrowserAction,
-  });
   /* debug
   const cssRows = Array.isArray(cssSection && cssSection.rows) ? cssSection.rows : [];
   for (let i = 0; i < cssRows.length; i++) {
@@ -772,6 +726,33 @@ function buildDocFromParsed(parsed, vw, context = 'document') {
     contentH: layout.contentH,
     width: vw,
   };
+}
+
+function shouldLogRowPreview() {
+  const url = String(currentPageUrl || '');
+  return url.includes('w3.org/Graphics/PNG/Inline-img.html');
+}
+
+function maybeLogRowPreview(rows, rowX, rowY, context = 'document') {
+  if (!shouldLogRowPreview()) return;
+  const key = `${String(currentPageUrl || '')}::${String(context || '')}::${Math.max(0, Number(rows && rows.length || 0) | 0)}::${Math.max(0, Number(rowY && rowY[0] || 0) | 0)}`;
+  if (browserRowPreviewKey === key) return;
+  browserRowPreviewKey = key;
+
+  const list = Array.isArray(rows) ? rows : [];
+  const xs = Array.isArray(rowX) ? rowX : [];
+  const ys = Array.isArray(rowY) ? rowY : [];
+  const preview = [];
+  for (let i = 0; i < list.length && i < 12; i += 1) {
+    const row = list[i] || null;
+    preview.push(
+      `${i}:${String(row && row.kind || '')}@(${Math.round(Number(xs[i] || 0))},${Math.round(Number(ys[i] || 0))}) ` +
+      `${JSON.stringify(String(row && row.text || ''))}`,
+    );
+  }
+  try {
+    console.log(`[browser.mjs] row-preview ${String(context || '')} rows=${list.length} ${preview.join(' | ')}`);
+  } catch (_) {}
 }
 
 function buildDocFromHtml(html, vw, context = 'document') {
@@ -869,7 +850,7 @@ function applyThemeLayoutYoga(entries, vw, context = 'document') {
     root.setAlignItems(Yoga.ALIGN_FLEX_START);
     root.setWidth(vw);
     root.setPadding(Yoga.EDGE_LEFT, LEFT_PAD);
-    root.setPadding(Yoga.EDGE_TOP, TOP_PAD);
+    root.setPadding(Yoga.EDGE_TOP, 0);
 
     const nodes = [];
     for (let i = 0; i < entries.length; i++) {
@@ -965,7 +946,7 @@ function applyYoga(rows, vw, context = 'document') {
     root.setAlignItems(Yoga.ALIGN_FLEX_START);
     root.setWidth(vw);
     root.setPadding(Yoga.EDGE_LEFT, LEFT_PAD);
-    root.setPadding(Yoga.EDGE_TOP, TOP_PAD);
+    root.setPadding(Yoga.EDGE_TOP, 0);
 
     const nodes = [];
     const rowX = [];
@@ -1569,8 +1550,8 @@ function createBrowserRegionEntry(width, height, docY) {
   };
 }
 
-function browserRegionVisibleTop(contentTopY) {
-  return Math.max(0, Math.round(Number(contentTopY || 0)) + Math.max(0, Math.round(Number(scrollY || 0))));
+function browserRegionVisibleTop() {
+  return Math.max(0, Math.round(Number(scrollY || 0)));
 }
 
 function ensureBrowserRegions(doc, vw, vh, contentH, contentTopY) {
@@ -1582,7 +1563,7 @@ function ensureBrowserRegions(doc, vw, vh, contentH, contentTopY) {
     browserRegionTileHeight = tileHeight;
   }
 
-  const visibleTop = browserRegionVisibleTop(contentTopY);
+  const visibleTop = browserRegionVisibleTop();
   const visibleBottom = Math.max(visibleTop + 1, Math.min(contentH, visibleTop + Math.max(1, Number(vh || 1) | 0)));
   const prefetchPx = tileHeight * BROWSER_REGION_PREFETCH_SCREENS;
   const wantedTop = Math.max(0, visibleTop - prefetchPx);
@@ -1618,7 +1599,11 @@ function ensureBrowserRegions(doc, vw, vh, contentH, contentTopY) {
     if (entry.dirty || entry.revision !== browserRegionCacheRevision) {
       cmdStream.setRenderTarget(entry.texId);
       cmdStream.setViewport(entry.width, entry.height);
-      renderSceneRegionToCurrentTarget(doc, entry.width, entry.docY, entry.height);
+      try {
+        renderSceneRegionToCurrentTarget(doc, entry.width, entry.docY, entry.height);
+      } finally {
+        cmdStream.clearRenderTarget();
+      }
       entry.revision = browserRegionCacheRevision;
       entry.dirty = false;
     }
@@ -1664,30 +1649,13 @@ function docContentHeight(doc, vh) {
 }
 
 function docContentTopY(doc) {
-  let top = Number.POSITIVE_INFINITY;
-  const rowY = Array.isArray(doc && doc.rowY) ? doc.rowY : [];
-  for (let i = 0; i < rowY.length; i += 1) {
-    const y = Math.round(Number(rowY[i]));
-    if (Number.isFinite(y) && y >= 0) top = Math.min(top, y);
-  }
-  const themeLayout = doc && typeof doc === 'object' ? doc.themeLayout : null;
-  const interactives = Array.isArray(themeLayout && themeLayout.interactives) ? themeLayout.interactives : [];
-  for (let i = 0; i < interactives.length; i += 1) {
-    const y = Math.round(Number(interactives[i] && interactives[i].y));
-    if (Number.isFinite(y) && y >= 0) top = Math.min(top, y);
-  }
-  const buttons = Array.isArray(themeLayout && themeLayout.buttons) ? themeLayout.buttons : [];
-  for (let i = 0; i < buttons.length; i += 1) {
-    const y = Math.round(Number(buttons[i] && buttons[i].y));
-    if (Number.isFinite(y) && y >= 0) top = Math.min(top, y);
-  }
-  return Number.isFinite(top) ? Math.max(0, top) : 0;
+  return 0;
 }
 
 function clampScrollForDoc(doc, vh) {
   const contentH = docContentHeight(doc, vh);
   const contentTopY = docContentTopY(doc);
-  const maxScroll = Math.max(0, contentH - contentTopY - Math.max(1, Number(vh || 1)));
+  const maxScroll = Math.max(0, contentH - Math.max(1, Number(vh || 1)));
   if (scrollY < 0) scrollY = 0;
   if (scrollY > maxScroll) scrollY = maxScroll;
   return { contentH, contentTopY, maxScroll };
@@ -1709,8 +1677,6 @@ function paintToCurrentTarget(options = null) {
       fpsOverlay.appendRuns(overlayRuns, vw);
     }
   }
-  const usePendingReleaseRect = !opts || !Object.prototype.hasOwnProperty.call(opts, 'releaseRect');
-  const releaseRect = usePendingReleaseRect ? pendingReleaseRect : opts.releaseRect;
   const composeViewportWidth = normalizeViewportSize(opts && opts.viewportWidth, vw);
   const composeViewportHeight = normalizeViewportSize(opts && opts.viewportHeight, vh);
 
@@ -1721,11 +1687,8 @@ function paintToCurrentTarget(options = null) {
 
   cmdStream.clearRenderTarget();
   cmdStream.setViewport(composeViewportWidth, composeViewportHeight);
-  composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollY, contentTopY, overlayRuns, releaseRect);
-
-  if (usePendingReleaseRect) {
-    pendingReleaseRect = null;
-  }
+  composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollY, contentTopY, overlayRuns, null);
+  cmdStream.clearRenderTarget();
   finalizePaintState(doc);
 
   return true;
@@ -1890,8 +1853,18 @@ function paint() {
   try {
     if (HOSTED_BY_UI2) {
       const doc = ensureDoc(vw);
-      clampScrollForDoc(doc, vh);
+      const { contentH, contentTopY } = clampScrollForDoc(doc, vh);
       publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
+      if (typeof cmdStream.beginFrame === 'function' && typeof cmdStream.endFrame === 'function') {
+        cmdStream.beginFrame();
+        try {
+          ensureBrowserRegions(doc, vw, vh, contentH, contentTopY);
+        } finally {
+          cmdStream.endFrame();
+        }
+      } else {
+        ensureBrowserRegions(doc, vw, vh, contentH, contentTopY);
+      }
       finalizePaintState(doc);
       return true;
     }
@@ -1918,9 +1891,7 @@ function paint() {
     if (fpsOverlayEnabled) {
       fpsOverlay.appendRuns(overlayRuns, vw);
     }
-    const releaseRect = pendingReleaseRect;
-    pendingReleaseRect = null;
-    renderScene(doc, vw, vh, scrollY, overlayRuns, releaseRect);
+    renderScene(doc, vw, vh, scrollY, overlayRuns, null);
     finalizePaintState(doc);
     return true;
   } catch (err) {
@@ -1939,20 +1910,6 @@ function paint() {
   }
 
   return true;
-}
-
-function onWheelDelta(deltaY) {
-  const next = Math.max(0, Math.round(scrollY + Number(deltaY || 0)));
-  if (next === scrollY) return false;
-  scrollY = next;
-  paint();
-  return true;
-}
-
-function logCursorDebug(message) {
-  try {
-    console.log(message);
-  } catch (_) {}
 }
 
 function getThemeInteractives(vw) {
@@ -2112,10 +2069,6 @@ function resolveInteractiveTarget(target = null) {
   return null;
 }
 
-function synthesizeClick(target = null) {
-  return browserCursor.synthesizeClickAt(target, resolveInteractiveTarget);
-}
-
 function startAutoPaint() {
   const host = runtime.host;
   if (AUTO_PAINT_MS <= 0) return;
@@ -2155,7 +2108,6 @@ function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
     .then(() => {
       const worker = attachAiWorker(new Worker(buildAiWorkerSource(resolvedSpecifier, opts)));
       aiWorker = worker;
-      browserCursor.placeDefaultAiCursor();
       try {
         console.log('[browser.mjs] ai worker started', resolvedSpecifier);
       } catch (_) {}
@@ -2189,17 +2141,17 @@ runtime.host.__trueosBrowser = {
   setNodeHtml,
   setBodyHtml,
   insertHtml,
-  injectCursorEvent(event = null) {
-    return browserCursor.injectCursorEvent(event);
+  injectCursorEvent(_event = null) {
+    return false;
   },
   getKernelCursors() {
-    return browserCursor.getKernelCursors();
+    return [];
   },
-  getKernelCursor(slotId) {
-    return browserCursor.getKernelCursor(slotId);
+  getKernelCursor(_slotId) {
+    return null;
   },
   popCursorButtonEvent() {
-    return browserCursor.popCursorButtonEvent();
+    return null;
   },
   getApiContract() {
     return cloneApiContract();
@@ -2216,25 +2168,11 @@ runtime.host.__trueosBrowser = {
   getDomSnapshot() {
     return getDomSnapshot();
   },
-  dispatchDomClick(path, payload = null) {
-    return dispatchParryDomClick(path, payload, {
-      computeViewport,
-      ensureDoc,
-      isElement,
-      raiseBrowserError,
-      describeError,
-      surfToUrl,
-    });
+  dispatchDomClick(_path, _payload = null) {
+    return { ...BROWSER_INTERACTION_EXTERNAL_RESULT };
   },
-  dispatchButtonClick(path, payload = null) {
-    return dispatchParryDomClick(path, payload, {
-      computeViewport,
-      ensureDoc,
-      isElement,
-      raiseBrowserError,
-      describeError,
-      surfToUrl,
-    });
+  dispatchButtonClick(_path, _payload = null) {
+    return { ...BROWSER_INTERACTION_EXTERNAL_RESULT };
   },
   getTrueosFsTreeHtml(maxEntries = 64) {
     return getTrueosFsTreeHtml(maxEntries);
@@ -2275,6 +2213,10 @@ runtime.host.__trueosBrowser = {
   },
   getSurfaceState() {
     const { vw, vh } = computeViewport();
+    const doc = browserCanRenderScene ? ensureDoc(vw) : null;
+    const { contentH, contentTopY } = doc
+      ? clampScrollForDoc(doc, vh)
+      : { contentH: vh, contentTopY: 0 };
     return {
       cacheRevision: browserRegionCacheRevision,
       cacheWidth: browserRegionCacheWidth,
@@ -2290,6 +2232,8 @@ runtime.host.__trueosBrowser = {
       })),
       viewportWidth: vw,
       viewportHeight: vh,
+      contentHeight: Math.max(1, Number(contentH || vh) | 0),
+      contentTopY: Math.max(0, Number(contentTopY || 0) | 0),
       scrollY,
     };
   },
@@ -2315,21 +2259,13 @@ runtime.host.__trueosBrowser = {
   setScroll(y) {
     scrollY = Math.max(0, Math.round(Number(y || 0)));
     paint();
+    return true;
   },
-  moveCursor(target = null) {
-    return browserCursor.moveCursor(target);
+  moveCursor(_target = null) {
+    return { ...BROWSER_INTERACTION_EXTERNAL_RESULT };
   },
-  click(target = null) {
-    const result = synthesizeClick(target);
-    if (result && result.ok) return result;
-    const hook = runtime.host.__trueosBrowserClick;
-    if (typeof hook === 'function') {
-      const payload = target && typeof target === 'object' && !Array.isArray(target)
-        ? { target: { ...target } }
-        : { target: target == null ? null : { value: target } };
-      return dispatchBrowserAction('click', payload, '__trueosBrowserClick');
-    }
-    return result;
+  click(_target = null) {
+    return { ...BROWSER_INTERACTION_EXTERNAL_RESULT };
   },
   navigate(input = null) {
     const request = input && typeof input === 'object' && !Array.isArray(input)
@@ -2369,5 +2305,4 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
 InjectOpenAi();
 armHtmlReadyFallback();
 installAiInputBridge();
-browserCursor.startPump();
 startAutoPaint();

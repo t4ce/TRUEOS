@@ -58,7 +58,6 @@ static VLEDS_MUX_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
-static USVG_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_NETBENCH_STARTED: AtomicBool = AtomicBool::new(false);
 static VIDEO_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -527,13 +526,6 @@ fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_usvg_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::usvg_smoke::usvg_smoke_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
@@ -771,13 +763,6 @@ static TASKS: &[TaskSpec] = &[
         required: crate::v::readiness::PIANO_CLAIMED,
         started: &PIANO_DRAIN_STARTED,
         spawn: spawn_piano_drain,
-    },
-    TaskSpec {
-        name: "usvg-smoke",
-        disabled: false,
-        required: crate::v::readiness::LOADSCREEN_END,
-        started: &USVG_SMOKE_STARTED,
-        spawn: spawn_usvg_smoke,
     },
     TaskSpec {
         name: "boot-ws-smoke",

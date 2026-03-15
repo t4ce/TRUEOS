@@ -10,6 +10,7 @@ use spin::{Mutex, Once};
 const UI2_TITLE_H: f32 = 26.0;
 const UI2_NOTES_SURFACE_TEX_ID: u32 = 3101;
 const UI2_GLASS_SURFACE_TEX_ID: u32 = 3102;
+static UI2_BROWSER_SNAPSHOT_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Copy, Clone)]
 struct Ui2SurfaceSlot {
@@ -127,7 +128,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             &mut state,
             Ui2WindowKind::Dialog,
             "Notes",
-            Ui2Rect::new(120.0, 92.0, 352.0, 228.0),
+            Ui2Rect::new(120.0, 292.0, 352.0, 228.0),
             20,
             246,
         );
@@ -136,7 +137,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             &mut state,
             Ui2WindowKind::Overlay,
             "Glass",
-            Ui2Rect::new((view_w as f32) - 336.0, 104.0, 272.0, 188.0),
+            Ui2Rect::new((view_w as f32) - 336.0, 304.0, 272.0, 188.0),
             24,
             224,
         );
@@ -369,14 +370,19 @@ fn ensure_surface_storage(tex_id: u32, width: u32, height: u32) -> bool {
     }
 }
 
-fn draw_texture_rect_no_present(
+fn draw_texture_rect_uv_no_present(
     tex_id: u32,
     x: f32,
     y: f32,
     width: f32,
     height: f32,
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
     view_w: u32,
     view_h: u32,
+    blend_enabled: bool,
 ) -> bool {
     if tex_id == 0 || !(width > 0.0 && height > 0.0) {
         return false;
@@ -392,8 +398,8 @@ fn draw_texture_rect_no_present(
         Ui2TexVertex {
             x: left,
             y: bottom,
-            u: 0.0,
-            v: 1.0,
+            u: u0,
+            v: v1,
             r: 255,
             g: 255,
             b: 255,
@@ -402,8 +408,8 @@ fn draw_texture_rect_no_present(
         Ui2TexVertex {
             x: right,
             y: bottom,
-            u: 1.0,
-            v: 1.0,
+            u: u1,
+            v: v1,
             r: 255,
             g: 255,
             b: 255,
@@ -412,8 +418,8 @@ fn draw_texture_rect_no_present(
         Ui2TexVertex {
             x: right,
             y: top,
-            u: 1.0,
-            v: 0.0,
+            u: u1,
+            v: v0,
             r: 255,
             g: 255,
             b: 255,
@@ -422,8 +428,8 @@ fn draw_texture_rect_no_present(
         Ui2TexVertex {
             x: left,
             y: bottom,
-            u: 0.0,
-            v: 1.0,
+            u: u0,
+            v: v1,
             r: 255,
             g: 255,
             b: 255,
@@ -432,8 +438,8 @@ fn draw_texture_rect_no_present(
         Ui2TexVertex {
             x: right,
             y: top,
-            u: 1.0,
-            v: 0.0,
+            u: u1,
+            v: v0,
             r: 255,
             g: 255,
             b: 255,
@@ -442,8 +448,8 @@ fn draw_texture_rect_no_present(
         Ui2TexVertex {
             x: left,
             y: top,
-            u: 0.0,
-            v: 0.0,
+            u: u0,
+            v: v0,
             r: 255,
             g: 255,
             b: 255,
@@ -452,7 +458,15 @@ fn draw_texture_rect_no_present(
     ];
     let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
     let _ = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+        crate::surface::io::cabi::trueos_cabi_gfx_set_blend(
+            if blend_enabled { 1 } else { 0 },
+            0x0302,
+            0x0303,
+            0x0302,
+            0x0303,
+            0,
+            0,
+        )
     };
     let rc = unsafe {
         crate::surface::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
@@ -463,6 +477,32 @@ fn draw_texture_rect_no_present(
     };
     let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
     rc == 0
+}
+
+fn draw_texture_rect_no_present(
+    tex_id: u32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    view_w: u32,
+    view_h: u32,
+    blend_enabled: bool,
+) -> bool {
+    draw_texture_rect_uv_no_present(
+        tex_id,
+        x,
+        y,
+        width,
+        height,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        view_w,
+        view_h,
+        blend_enabled,
+    )
 }
 
 fn render_notes_surface(view_w: u32, view_h: u32) {
@@ -524,7 +564,30 @@ fn render_surface_content(window: &Ui2Window, view_w: u32, view_h: u32) {
     }
 }
 
-fn prepare_window_surface(window: &Ui2Window) -> Option<(u32, Ui2Rect)> {
+fn render_surface_target(
+    tex_id: u32,
+    width: u32,
+    height: u32,
+    clear_rgb: u32,
+    draw: impl FnOnce(u32, u32),
+) -> bool {
+    let begin_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(clear_rgb) };
+    if begin_rc != 0 {
+        return false;
+    }
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_render_target(tex_id) };
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_scissor() };
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    draw(width, height);
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_scissor() };
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_render_target() };
+    let end_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
+    end_rc == 0
+}
+
+fn ensure_window_surface(window: &Ui2Window) -> Option<(u32, Ui2Rect, bool)> {
     let tex_id = surface_tex_id_for_window(window)?;
     let content = window_content_rect(window)?;
     let width = round_to_u32(content.w, 1);
@@ -543,22 +606,169 @@ fn prepare_window_surface(window: &Ui2Window) -> Option<(u32, Ui2Rect)> {
         slot.dirty = true;
     }
 
-    if slot.dirty {
-        crate::log!(
-            "ui2: surface-update kind={} tex={} {}x{}\n",
-            slot.label,
-            slot.tex_id,
-            width,
-            height
-        );
-        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_render_target(tex_id) };
-        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
-        render_surface_content(window, width, height);
-        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_render_target() };
-        slot.dirty = false;
+    Some((tex_id, content, slot.dirty))
+}
+
+fn refresh_window_surface(window: &Ui2Window) -> bool {
+    let Some((tex_id, _content, dirty)) = ensure_window_surface(window) else {
+        return false;
+    };
+    if !dirty {
+        return true;
     }
 
+    let surface_lock = surface_state();
+    let mut surfaces = surface_lock.lock();
+    let Some(slot) = surface_slot_mut(&mut surfaces, tex_id) else {
+        return false;
+    };
+    let width = slot.width.max(1);
+    let height = slot.height.max(1);
+    crate::log!(
+        "ui2: surface-update kind={} tex={} {}x{}\n",
+        slot.label,
+        slot.tex_id,
+        width,
+        height
+    );
+    if !render_surface_target(tex_id, width, height, 0x000000, |surface_w, surface_h| {
+        render_surface_content(window, surface_w, surface_h);
+    }) {
+        return false;
+    }
+    slot.dirty = false;
+    true
+}
+
+fn refresh_dirty_window_surfaces(state: &Ui2State) {
+    for idx in sorted_window_indices(state) {
+        let window = &state.windows[idx];
+        let needs_refresh = match window.kind {
+            Ui2WindowKind::Dialog | Ui2WindowKind::Overlay => true,
+            _ => false,
+        };
+        if needs_refresh {
+            let surface_lock = surface_state();
+            let mut surfaces = surface_lock.lock();
+            if let Some(tex_id) = surface_tex_id_for_window(window)
+                && let Some(slot) = surface_slot_mut(&mut surfaces, tex_id)
+            {
+                slot.dirty = true;
+            }
+        }
+        let _ = refresh_window_surface(window);
+    }
+}
+
+fn window_surface_binding(window: &Ui2Window) -> Option<(u32, Ui2Rect)> {
+    let (tex_id, content, _dirty) = ensure_window_surface(window)?;
     Some((tex_id, content))
+}
+
+fn queue_browser_window_viewport(content: Ui2Rect) {
+    let viewport_w = round_to_u32(content.w, 1);
+    let viewport_h = round_to_u32(content.h, 1);
+    let content_x = libm::roundf(content.x) as i32;
+    let content_y = libm::roundf(content.y) as i32;
+    let _ = trueos_qjs::browser_task::set_hosted_viewport(
+        viewport_w,
+        viewport_h,
+        content_x,
+        content_y,
+        viewport_w,
+        viewport_h,
+    );
+}
+
+fn draw_browser_window_content(state: &Ui2State, content: Ui2Rect) -> bool {
+    let snapshot = trueos_qjs::browser_task::hosted_surface_state();
+    if snapshot.regions.is_empty() || snapshot.viewport_width == 0 || snapshot.viewport_height == 0 {
+        return false;
+    }
+
+    let last_logged_seq = UI2_BROWSER_SNAPSHOT_LOG_SEQ.load(Ordering::Acquire);
+    if last_logged_seq != snapshot.seq {
+        UI2_BROWSER_SNAPSHOT_LOG_SEQ.store(snapshot.seq, Ordering::Release);
+        crate::log!(
+            "ui2: browser-snapshot seq={} viewport={}x{} content_h={} content_top_y={} scroll_y={} regions={}\n",
+            snapshot.seq,
+            snapshot.viewport_width,
+            snapshot.viewport_height,
+            snapshot.content_height,
+            snapshot.content_top_y,
+            snapshot.scroll_y,
+            snapshot.regions.len()
+        );
+        for (idx, region) in snapshot.regions.iter().take(4).enumerate() {
+            crate::log!(
+                "ui2: browser-region idx={} tex={} doc_y={} size={}x{} rev={} dirty={}\n",
+                idx,
+                region.tex_id,
+                region.doc_y,
+                region.width,
+                region.height,
+                region.revision,
+                if region.dirty { 1 } else { 0 }
+            );
+        }
+    }
+
+    let sx = round_to_u32(content.x.max(0.0), 0);
+    let sy = round_to_u32(content.y.max(0.0), 0);
+    let sw = round_to_u32(content.w, 1);
+    let sh = round_to_u32(content.h, 1);
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_scissor(sx, sy, sw, sh) };
+
+    let draw_w = snapshot.viewport_width.max(1);
+    let draw_h = snapshot.viewport_height.max(1);
+    let scroll_top = snapshot.content_top_y.saturating_add(snapshot.scroll_y);
+    let scroll_bottom = scroll_top.saturating_add(draw_h);
+    let mut drew = false;
+
+    for region in &snapshot.regions {
+        let tex_id = region.tex_id;
+        if tex_id == 0 || region.width == 0 || region.height == 0 {
+            continue;
+        }
+        let doc_y = region.doc_y;
+        let doc_bottom = doc_y.saturating_add(region.height);
+        if doc_bottom <= scroll_top || doc_y >= scroll_bottom {
+            continue;
+        }
+
+        let src_top = core::cmp::max(doc_y, scroll_top);
+        let src_bottom = core::cmp::min(doc_bottom, scroll_bottom);
+        let src_height = src_bottom.saturating_sub(src_top);
+        if src_height == 0 {
+            continue;
+        }
+
+        let src_offset_y = src_top.saturating_sub(doc_y);
+        let dest_y = src_top.saturating_sub(scroll_top);
+        let draw_width = core::cmp::min(draw_w, region.width).max(1);
+        let u0 = 0.0;
+        let u1 = (draw_width as f32) / (region.width.max(1) as f32);
+        let v0 = (src_offset_y as f32) / (region.height.max(1) as f32);
+        let v1 = ((src_offset_y + src_height) as f32) / (region.height.max(1) as f32);
+
+        drew |= draw_texture_rect_uv_no_present(
+            tex_id,
+            content.x,
+            content.y + dest_y as f32,
+            draw_width as f32,
+            src_height as f32,
+            u0,
+            v0,
+            u1,
+            v1,
+            state.view_w,
+            state.view_h,
+            true,
+        );
+    }
+
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_scissor() };
+    drew
 }
 
 fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
@@ -649,7 +859,14 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
         title_rgba.3,
     );
 
-    if let Some((tex_id, content)) = prepare_window_surface(window) {
+    if window.kind == Ui2WindowKind::Browser {
+        if let Some(content) = window_content_rect(window) {
+            queue_browser_window_viewport(content);
+            if draw_browser_window_content(state, content) {
+                return;
+            }
+        }
+    } else if let Some((tex_id, content)) = window_surface_binding(window) {
         let sx = round_to_u32(content.x.max(0.0), 0);
         let sy = round_to_u32(content.y.max(0.0), 0);
         let sw = round_to_u32(content.w, 1);
@@ -663,6 +880,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
             content.h,
             state.view_w,
             state.view_h,
+            false,
         );
         let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_scissor() };
     } else {
@@ -711,10 +929,6 @@ fn compose_windows(state: &mut Ui2State) {
     unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
     for idx in sorted_window_indices(state) {
         let window = &state.windows[idx];
-        let _ = prepare_window_surface(window);
-    }
-    for idx in sorted_window_indices(state) {
-        let window = &state.windows[idx];
         draw_window_frame(state, window);
     }
     unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
@@ -731,11 +945,18 @@ pub async fn ui2_task() {
     init_state();
     request_full_recompose("boot");
     crate::log!("ui2: boot window manager\n");
+    let mut last_browser_surface_seq = 0u32;
 
     loop {
+        let next_browser_surface_seq = trueos_qjs::browser_task::hosted_surface_seq();
+        if next_browser_surface_seq != last_browser_surface_seq {
+            last_browser_surface_seq = next_browser_surface_seq;
+            let _ = request_browser_repaint("browser-surface");
+        }
         if UI2_DIRTY.swap(false, Ordering::AcqRel) {
             let state_lock = init_state();
             let mut state = state_lock.lock();
+            refresh_dirty_window_surfaces(&state);
             compose_windows(&mut state);
         }
         Timer::after(EmbassyDuration::from_millis(16)).await;

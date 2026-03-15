@@ -542,8 +542,9 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                 let start = draw_idx;
                 let mut pass_bytes = 0usize;
                 let mut pass_kind: u8 = 0;
+                let mut pass_tex_kind: Option<TexSampleKind> = None;
                 while draw_idx < draws.len() {
-                    let (kind, add) = match &draws[draw_idx] {
+                    let (kind, add, tex_kind) = match &draws[draw_idx] {
                         PendingDraw::SetRenderTarget { .. } => {
                             if pass_kind == 0 {
                                 draw_idx += 1;
@@ -551,8 +552,14 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                             }
                             break;
                         }
-                        PendingDraw::Rgb { blob_len, .. } => (1u8, blob_len - (blob_len % 12)),
-                        PendingDraw::Tex { blob_len, .. } => (2u8, blob_len - (blob_len % 20)),
+                        PendingDraw::Rgb { blob_len, .. } => {
+                            (1u8, blob_len - (blob_len % 12), None)
+                        }
+                        PendingDraw::Tex {
+                            blob_len,
+                            sample_kind,
+                            ..
+                        } => (2u8, blob_len - (blob_len % 20), Some(*sample_kind)),
                     };
                     if add == 0 {
                         draw_idx += 1;
@@ -560,7 +567,10 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                     }
                     if pass_kind == 0 {
                         pass_kind = kind;
+                        pass_tex_kind = tex_kind;
                     } else if kind != pass_kind {
+                        break;
+                    } else if kind == 2 && tex_kind != pass_tex_kind {
                         break;
                     }
                     if pass_bytes != 0 && pass_bytes.saturating_add(add) > MAX_PASS_VERTEX_BYTES {

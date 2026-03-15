@@ -2033,6 +2033,27 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_svg(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        if tex_id == 0 {
+            return -1;
+        }
+        if data_ptr.is_null() {
+            return -2;
+        }
+        let data = core::slice::from_raw_parts(data_ptr, data_len);
+        match crate::gfx::svg::upload_svg_bytes_to_texture(tex_id, data) {
+            Ok(_) => 0,
+            Err(code) => code,
+        }
+    }
+
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_svg_async(
         tex_id: u32,
         data_ptr: *const u8,
@@ -2368,8 +2389,9 @@ pub mod cabi {
                     let start = draw_idx;
                     let mut pass_bytes = 0usize;
                     let mut pass_kind: u8 = 0; // 1=rgb, 2=tex
+                    let mut pass_tex_kind: Option<TexSampleKind> = None;
                     while draw_idx < submit_draws.len() {
-                        let (kind, add) = match &submit_draws[draw_idx] {
+                        let (kind, add, tex_kind) = match &submit_draws[draw_idx] {
                             PendingDraw::SetRenderTarget { .. } => {
                                 if pass_kind == 0 {
                                     draw_idx += 1;
@@ -2377,8 +2399,14 @@ pub mod cabi {
                                 }
                                 break;
                             }
-                            PendingDraw::Rgb { blob_len, .. } => (1u8, blob_len - (blob_len % 12)),
-                            PendingDraw::Tex { blob_len, .. } => (2u8, blob_len - (blob_len % 20)),
+                            PendingDraw::Rgb { blob_len, .. } => {
+                                (1u8, blob_len - (blob_len % 12), None)
+                            }
+                            PendingDraw::Tex {
+                                blob_len,
+                                sample_kind,
+                                ..
+                            } => (2u8, blob_len - (blob_len % 20), Some(*sample_kind)),
                         };
                         if add == 0 {
                             draw_idx += 1;
@@ -2386,8 +2414,11 @@ pub mod cabi {
                         }
                         if pass_kind == 0 {
                             pass_kind = kind;
+                            pass_tex_kind = tex_kind;
                         } else if kind != pass_kind {
                             // Keep pass submissions homogeneous by vertex format/pipeline type.
+                            break;
+                        } else if kind == 2 && tex_kind != pass_tex_kind {
                             break;
                         }
                         if pass_bytes != 0 && pass_bytes.saturating_add(add) > MAX_PASS_VERTEX_BYTES
