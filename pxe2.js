@@ -157,15 +157,20 @@ function ensureTftpFiles(tftpRoot) {
     }
   }
 
-  // limine.conf location differs between staging layouts; keep this informational.
-  const limineConfCandidates = [
-    path.join(tftpRoot, "EFI/BOOT/limine.conf"),
-    path.join(tftpRoot, "limine.conf"),
-    path.join(tftpRoot, "iso-bootroot/limine.conf"),
-  ];
-  if (!limineConfCandidates.some((p) => fs.existsSync(p))) {
+  const pxeLimineConf = path.join(tftpRoot, "EFI/BOOT/limine.conf");
+  const isoBootLimineConf = path.join(tftpRoot, "iso-bootroot/limine.conf");
+
+  if (fs.existsSync(isoBootLimineConf) && !fs.existsSync(pxeLimineConf)) {
+    fs.mkdirSync(path.dirname(pxeLimineConf), { recursive: true });
+    fs.copyFileSync(isoBootLimineConf, pxeLimineConf);
     process.stdout.write(
-      `Warning: limine.conf not found under ${tftpRoot}; continuing because ${BOOTFILE} and TRUEOS.elf exist.\n`
+      `Staged PXE limine.conf at ${pxeLimineConf} from ${isoBootLimineConf}.\n`
+    );
+  }
+
+  if (!fs.existsSync(pxeLimineConf)) {
+    process.stdout.write(
+      `Warning: PXE limine.conf not found at ${pxeLimineConf}; continuing because ${BOOTFILE} and TRUEOS.elf exist.\n`
     );
   }
 }
