@@ -193,6 +193,7 @@ struct Ui2State {
     cursor_read_seq: u64,
     cursors: Vec<Ui2CursorState>,
     hit_scene: Ui2HitScene,
+    last_browser_interactive_seq: u32,
     move_drag: Ui2WindowMoveDrag,
     resize_drag: Ui2WindowResizeDrag,
     windows: Vec<Ui2Window>,
@@ -274,6 +275,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             cursor_read_seq: 0,
             cursors: Vec::new(),
             hit_scene: Ui2HitScene::default(),
+            last_browser_interactive_seq: 0,
             move_drag: Ui2WindowMoveDrag::default(),
             resize_drag: Ui2WindowResizeDrag::default(),
             windows: Vec::new(),
@@ -304,6 +306,8 @@ fn init_state() -> &'static Mutex<Ui2State> {
             20,
             255,
         );
+
+        refresh_all_window_hit_entries(&mut state);
 
         Mutex::new(state)
     })
@@ -561,6 +565,7 @@ impl Ui2HitScene {
 
 fn rebuild_hit_scene(state: &mut Ui2State) {
     let next_seq = state.hit_scene.seq.wrapping_add(1);
+    state.last_browser_interactive_seq = trueos_qjs::browser_task::hosted_interactive_seq();
     let ctx = Ui2HitBuildContext {
         state,
         browser_interactives: trueos_qjs::browser_task::hosted_interactive_state(),
@@ -577,6 +582,62 @@ fn rebuild_hit_scene(state: &mut Ui2State) {
         window.append_hit_entries(&ctx, &mut next_scene);
     }
     state.hit_scene = next_scene;
+}
+
+fn refresh_all_window_hit_entries(state: &mut Ui2State) {
+    rebuild_hit_scene(state);
+}
+
+fn refresh_window_hit_entries(state: &mut Ui2State, owner_window_id: u32) {
+    let Some(window) = state
+        .windows
+        .iter()
+        .find(|window| window.id == owner_window_id)
+        .cloned()
+    else {
+        state.hit_scene.remove_window(owner_window_id);
+        state.hit_scene.seq = state.hit_scene.seq.wrapping_add(1);
+        return;
+    };
+
+    let browser_interactive_seq = trueos_qjs::browser_task::hosted_interactive_seq();
+    let browser_interactives = if window.kind == Ui2WindowKind::HostedBrowser {
+        state.last_browser_interactive_seq = browser_interactive_seq;
+        trueos_qjs::browser_task::hosted_interactive_state()
+    } else {
+        trueos_qjs::browser_task::HostedBrowserInteractiveState::default()
+    };
+
+    let refreshed_entries = {
+        let ctx = Ui2HitBuildContext {
+            state,
+            browser_interactives,
+        };
+        let mut refreshed_scene = Ui2HitScene {
+            seq: 0,
+            entries: Vec::new(),
+        };
+        if window_is_renderable(&window) {
+            window.append_hit_entries(&ctx, &mut refreshed_scene);
+        }
+        refreshed_scene.entries
+    };
+
+    state.hit_scene.remove_window(owner_window_id);
+    state.hit_scene.entries.extend(refreshed_entries);
+    state.hit_scene.seq = state.hit_scene.seq.wrapping_add(1);
+}
+
+fn refresh_browser_hit_entries_if_needed(state: &mut Ui2State) {
+    let next_browser_interactive_seq = trueos_qjs::browser_task::hosted_interactive_seq();
+    if state.last_browser_interactive_seq == next_browser_interactive_seq {
+        return;
+    }
+    if let Some(window_id) = browser_window_id() {
+        refresh_window_hit_entries(state, window_id);
+    } else {
+        state.last_browser_interactive_seq = next_browser_interactive_seq;
+    }
 }
 
 fn minimized_window_strip_rect(state: &Ui2State, window_id: u32) -> Option<Ui2Rect> {
@@ -889,7 +950,7 @@ fn commit_window_geometry_change(state: &mut Ui2State, id: u32, reason: &'static
     let noted = note_window_dirty(state, id, reason);
     if noted {
         let _ = note_window_container_sync_needed(state, id);
-        rebuild_hit_scene(state);
+        refresh_window_hit_entries(state, id);
     }
     noted
 }
@@ -972,18 +1033,18 @@ fn set_window_visible_in_state(state: &mut Ui2State, id: u32, visible: bool) -> 
     state.compose_reason = reason;
     if !visible {
         state.hit_scene.remove_window(id);
+        state.hit_scene.seq = state.hit_scene.seq.wrapping_add(1);
         if state.move_drag.window_id == id {
             state.move_drag = Ui2WindowMoveDrag::default();
         }
         if state.resize_drag.window_id == id {
             state.resize_drag = Ui2WindowResizeDrag::default();
         }
-    } else {
-        rebuild_hit_scene(state);
     }
     let noted = note_window_dirty(state, id, reason);
     if noted {
         let _ = note_window_container_sync_needed(state, id);
+        refresh_window_hit_entries(state, id);
     }
     noted
 }
@@ -1093,7 +1154,7 @@ fn begin_move_drag_for_cursor(
     };
     state.resize_drag = Ui2WindowResizeDrag::default();
     state.compose_reason = "begin-window-move";
-    rebuild_hit_scene(state);
+    refresh_window_hit_entries(state, window_id);
     true
 }
 
@@ -1132,7 +1193,7 @@ fn update_move_drag_for_cursor(
         state.compose_reason = "window-drag";
         let _ = note_window_dirty(state, window_id, "window-drag");
         let _ = note_window_container_sync_needed(state, window_id);
-        rebuild_hit_scene(state);
+        refresh_window_hit_entries(state, window_id);
     }
 }
 
@@ -1189,7 +1250,7 @@ fn update_resize_drag_for_cursor(
         state.compose_reason = "window-resize-drag";
         let _ = note_window_dirty(state, drag.window_id, "window-resize-drag");
         let _ = note_window_container_sync_needed(state, drag.window_id);
-        rebuild_hit_scene(state);
+        refresh_window_hit_entries(state, drag.window_id);
     }
 }
 
@@ -1211,15 +1272,17 @@ fn note_window_container_sync_needed(state: &mut Ui2State, id: u32) -> bool {
     true
 }
 
-fn sync_window_container(window: &Ui2Window) -> bool {
-    if !window_is_renderable(window) {
+fn sync_window_container(
+    renderable: bool,
+    kind: Ui2WindowKind,
+    content: Option<Ui2Rect>,
+) -> bool {
+    if !renderable {
         return true;
     }
-    match window.kind {
+    match kind {
         Ui2WindowKind::HostedBrowser => {
-            let state_lock = init_state();
-            let state = state_lock.lock();
-            let Some(content) = window_content_rect(&state, window) else {
+            let Some(content) = content else {
                 return true;
             };
             queue_browser_window_viewport(content);
@@ -1230,14 +1293,25 @@ fn sync_window_container(window: &Ui2Window) -> bool {
 }
 
 fn sync_pending_window_containers(state: &mut Ui2State) {
-    let mut synced_ids = Vec::new();
-    for window in state
+    let pending: Vec<(u32, bool, Ui2WindowKind, Option<Ui2Rect>)> = state
         .windows
         .iter()
         .filter(|window| window.container_sync_needed)
-    {
-        if sync_window_container(window) {
-            synced_ids.push(window.id);
+        .map(|window| {
+            let renderable = window_is_renderable(window);
+            let content = if renderable {
+                window_content_rect(state, window)
+            } else {
+                None
+            };
+            (window.id, renderable, window.kind, content)
+        })
+        .collect();
+
+    let mut synced_ids = Vec::new();
+    for (id, renderable, kind, content) in pending {
+        if sync_window_container(renderable, kind, content) {
+            synced_ids.push(id);
         }
     }
     for id in synced_ids {
@@ -1267,7 +1341,7 @@ pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     let mut state = state_lock.lock();
     let id = alloc_window(&mut state, Ui2WindowKind::SvgDemo, title, rect, z, alpha);
     state.compose_reason = "create-window";
-    rebuild_hit_scene(&mut state);
+    refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
     id
 }
@@ -1295,7 +1369,7 @@ pub fn create_texture_window(
         window.content_tex_blend = blend_enabled;
     }
     state.compose_reason = "create-window";
-    rebuild_hit_scene(&mut state);
+    refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
     id
 }
@@ -1359,7 +1433,7 @@ pub fn move_window(id: u32, x: f32, y: f32) -> bool {
     let noted = note_window_dirty(&mut state, id, "move-window");
     if noted {
         let _ = note_window_container_sync_needed(&mut state, id);
-        rebuild_hit_scene(&mut state);
+        refresh_window_hit_entries(&mut state, id);
     }
     noted
 }
@@ -1382,7 +1456,7 @@ pub fn resize_window(id: u32, w: f32, h: f32) -> bool {
     let noted = note_window_dirty(&mut state, id, "resize-window");
     if noted {
         let _ = note_window_container_sync_needed(&mut state, id);
-        rebuild_hit_scene(&mut state);
+        refresh_window_hit_entries(&mut state, id);
     }
     noted
 }
@@ -1418,7 +1492,7 @@ pub fn raise_window(id: u32) -> bool {
     let noted = note_window_dirty(&mut state, id, "raise-window");
     if noted {
         let _ = note_window_container_sync_needed(&mut state, id);
-        rebuild_hit_scene(&mut state);
+        refresh_window_hit_entries(&mut state, id);
     }
     noted
 }
@@ -1451,7 +1525,7 @@ pub fn set_window_decorations(id: u32, mode: Ui2WindowDecorationMode) -> bool {
     let noted = note_window_dirty(&mut state, id, "decor-window");
     if noted {
         let _ = note_window_container_sync_needed(&mut state, id);
-        rebuild_hit_scene(&mut state);
+        refresh_window_hit_entries(&mut state, id);
     }
     noted
 }
@@ -1519,7 +1593,7 @@ pub fn begin_window_move(id: u32) -> bool {
     }
     let noted = note_window_dirty(&mut state, id, "begin-window-move");
     if noted {
-        rebuild_hit_scene(&mut state);
+        refresh_window_hit_entries(&mut state, id);
     }
     noted
 }
@@ -1584,7 +1658,7 @@ pub fn begin_window_resize(id: u32, edge_mask: u32) -> bool {
     }
     let noted = note_window_dirty(&mut state, id, "begin-window-resize");
     if noted {
-        rebuild_hit_scene(&mut state);
+        refresh_window_hit_entries(&mut state, id);
     }
     noted
 }
@@ -2587,7 +2661,7 @@ pub async fn ui2_task() {
         {
             let state_lock = init_state();
             let mut state = state_lock.lock();
-            rebuild_hit_scene(&mut state);
+            refresh_browser_hit_entries_if_needed(&mut state);
             pump_cursor_selection(&mut state);
             sync_pending_window_containers(&mut state);
         }
