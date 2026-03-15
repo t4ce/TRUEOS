@@ -260,7 +260,11 @@ pub fn upsert_combo(combo_id: u32, source_kind: HidSourceKind, source_tag: &str)
         return false;
     }
     let mut guard = HID_HUT.lock();
-    if let Some(existing) = guard.combos.iter_mut().find(|combo| combo.combo_id == combo_id) {
+    if let Some(existing) = guard
+        .combos
+        .iter_mut()
+        .find(|combo| combo.combo_id == combo_id)
+    {
         existing.source_kind = source_kind;
         existing.source_tag = normalized_tag(source_tag);
         return true;
@@ -285,7 +289,11 @@ pub fn bind_combo_mouse(combo_id: u32, controller_id: u32, slot_id: u32, ep_targ
         return false;
     }
     let mut guard = HID_HUT.lock();
-    let Some(combo) = guard.combos.iter_mut().find(|combo| combo.combo_id == combo_id) else {
+    let Some(combo) = guard
+        .combos
+        .iter_mut()
+        .find(|combo| combo.combo_id == combo_id)
+    else {
         return false;
     };
     combo.mouse_controller_id = controller_id;
@@ -304,7 +312,11 @@ pub fn bind_combo_keyboard(
         return false;
     }
     let mut guard = HID_HUT.lock();
-    let Some(combo) = guard.combos.iter_mut().find(|combo| combo.combo_id == combo_id) else {
+    let Some(combo) = guard
+        .combos
+        .iter_mut()
+        .find(|combo| combo.combo_id == combo_id)
+    else {
         return false;
     };
     combo.keyboard_controller_id = controller_id;

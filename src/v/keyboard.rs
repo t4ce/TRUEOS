@@ -4,6 +4,37 @@ use spin::Mutex;
 const MAX_KEYBOARD_SNAPSHOTS: usize = 32;
 const MAX_KEYBOARD_OUTPUT_EVENTS: usize = 256;
 const KEYBOARD_OUTPUT_FLAG_PRESS: u32 = 1 << 0;
+pub const KEYBOARD_OUTPUT_FLAG_SYNTHETIC: u32 = 1 << 1;
+pub const KEYBOARD_OUTPUT_KIND_TEXT: u8 = 1;
+pub const KEYBOARD_OUTPUT_KIND_KEY: u8 = 2;
+
+pub const KEYBOARD_KEY_BACKSPACE: u16 = 1;
+pub const KEYBOARD_KEY_TAB: u16 = 2;
+pub const KEYBOARD_KEY_ENTER: u16 = 3;
+pub const KEYBOARD_KEY_ESCAPE: u16 = 4;
+pub const KEYBOARD_KEY_SPACE: u16 = 5;
+pub const KEYBOARD_KEY_DELETE: u16 = 6;
+pub const KEYBOARD_KEY_INSERT: u16 = 7;
+pub const KEYBOARD_KEY_HOME: u16 = 8;
+pub const KEYBOARD_KEY_END: u16 = 9;
+pub const KEYBOARD_KEY_PAGE_UP: u16 = 10;
+pub const KEYBOARD_KEY_PAGE_DOWN: u16 = 11;
+pub const KEYBOARD_KEY_ARROW_UP: u16 = 12;
+pub const KEYBOARD_KEY_ARROW_DOWN: u16 = 13;
+pub const KEYBOARD_KEY_ARROW_LEFT: u16 = 14;
+pub const KEYBOARD_KEY_ARROW_RIGHT: u16 = 15;
+pub const KEYBOARD_KEY_F1: u16 = 101;
+pub const KEYBOARD_KEY_F2: u16 = 102;
+pub const KEYBOARD_KEY_F3: u16 = 103;
+pub const KEYBOARD_KEY_F4: u16 = 104;
+pub const KEYBOARD_KEY_F5: u16 = 105;
+pub const KEYBOARD_KEY_F6: u16 = 106;
+pub const KEYBOARD_KEY_F7: u16 = 107;
+pub const KEYBOARD_KEY_F8: u16 = 108;
+pub const KEYBOARD_KEY_F9: u16 = 109;
+pub const KEYBOARD_KEY_F10: u16 = 110;
+pub const KEYBOARD_KEY_F11: u16 = 111;
+pub const KEYBOARD_KEY_F12: u16 = 112;
 
 #[derive(Copy, Clone, Debug, Default)]
 struct KeyboardSnapshot {
@@ -55,8 +86,11 @@ pub struct TrueosKeyboardOutputEvent {
     pub slot_id: u32,
     pub ep_target: u32,
     pub modifiers: u8,
+    pub kind: u8,
     pub utf8_len: u8,
-    pub reserved0: u16,
+    pub reserved0: u8,
+    pub key_code: u16,
+    pub reserved1: u16,
     pub codepoint: u32,
     pub utf8: [u8; 4],
     pub flags: u32,
@@ -70,8 +104,11 @@ const ZERO_KEYBOARD_OUTPUT_EVENT: TrueosKeyboardOutputEvent = TrueosKeyboardOutp
     slot_id: 0,
     ep_target: 0,
     modifiers: 0,
+    kind: 0,
     utf8_len: 0,
     reserved0: 0,
+    key_code: 0,
+    reserved1: 0,
     codepoint: 0,
     utf8: [0; 4],
     flags: 0,
@@ -211,6 +248,29 @@ fn push_output_event(mut evt: TrueosKeyboardOutputEvent) {
     ring.buf[idx] = evt;
 }
 
+#[inline]
+fn uptime_ms_u32() -> u32 {
+    let ticks = embassy_time_driver::now() as u128;
+    let hz = embassy_time_driver::TICK_HZ as u128;
+    if hz == 0 {
+        0
+    } else {
+        ((ticks * 1000u128) / hz) as u32
+    }
+}
+
+#[inline]
+fn key_code_default_codepoint(key_code: u16) -> Option<char> {
+    match key_code {
+        KEYBOARD_KEY_BACKSPACE => Some('\u{0008}'),
+        KEYBOARD_KEY_TAB => Some('\t'),
+        KEYBOARD_KEY_ENTER => Some('\n'),
+        KEYBOARD_KEY_ESCAPE => Some('\u{001b}'),
+        KEYBOARD_KEY_SPACE => Some(' '),
+        _ => None,
+    }
+}
+
 pub fn push_output_char(
     controller_id: u32,
     slot_id: u32,
@@ -231,9 +291,48 @@ pub fn push_output_char(
         slot_id,
         ep_target,
         modifiers,
+        kind: KEYBOARD_OUTPUT_KIND_TEXT,
         utf8_len,
         reserved0: 0,
+        key_code: 0,
+        reserved1: 0,
         codepoint: ch as u32,
+        utf8,
+        flags,
+    });
+}
+
+pub fn push_output_key(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    t_ms: u32,
+    device_seq: u32,
+    modifiers: u8,
+    key_code: u16,
+    codepoint: u32,
+    flags: u32,
+) {
+    let mut utf8 = [0u8; 4];
+    let utf8_len = if let Some(ch) = char::from_u32(codepoint) {
+        ch.encode_utf8(&mut utf8).len() as u8
+    } else {
+        0
+    };
+    push_output_event(TrueosKeyboardOutputEvent {
+        t_ms,
+        seq: 0,
+        device_seq,
+        controller_id,
+        slot_id,
+        ep_target,
+        modifiers,
+        kind: KEYBOARD_OUTPUT_KIND_KEY,
+        utf8_len,
+        reserved0: 0,
+        key_code,
+        reserved1: 0,
+        codepoint,
         utf8,
         flags,
     });
@@ -341,4 +440,59 @@ pub fn pop_output_event() -> Option<TrueosKeyboardOutputEvent> {
     }
     *seq = next_seq;
     Some(one[0])
+}
+
+pub fn inject_text(slot_id: u32, text: &str, flags: u32) -> usize {
+    if slot_id == 0 || text.is_empty() {
+        return 0;
+    }
+
+    let t_ms = uptime_ms_u32();
+    let mut wrote = 0usize;
+    for ch in text.chars() {
+        push_output_char(
+            0,
+            slot_id,
+            0,
+            t_ms,
+            0,
+            0,
+            ch,
+            flags | KEYBOARD_OUTPUT_FLAG_PRESS,
+        );
+        wrote += 1;
+    }
+    wrote
+}
+
+pub fn inject_key(slot_id: u32, codepoint: u32, key_code: u16, modifiers: u8, flags: u32) -> bool {
+    if slot_id == 0 {
+        return false;
+    }
+    if codepoint == 0 && key_code == 0 {
+        return false;
+    }
+
+    let effective_codepoint = if codepoint != 0 {
+        codepoint
+    } else if modifiers == 0 {
+        key_code_default_codepoint(key_code)
+            .map(|ch| ch as u32)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    push_output_key(
+        0,
+        slot_id,
+        0,
+        uptime_ms_u32(),
+        0,
+        modifiers,
+        key_code,
+        effective_codepoint,
+        flags | KEYBOARD_OUTPUT_FLAG_PRESS,
+    );
+    true
 }

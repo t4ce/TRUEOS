@@ -213,7 +213,7 @@ pub(crate) fn cmd_ai(
         return CommandAction::None;
     }
 
-    let entry = trueos_qjs::browser_task::AiInputEntry {
+    let entry = trueos_qjs::ai_task::AiInputEntry {
         text: String::from(text),
         web_search: false,
         file_search: false,
@@ -221,8 +221,8 @@ pub(crate) fn cmd_ai(
         computer_use: true,
     };
 
-    if !trueos_qjs::browser_task::queue_ai_input(entry) {
-        ctx.io.write_str("ai: browser/ai bridge not running\r\n");
+    if !trueos_qjs::ai_task::queue_ai_input(entry) {
+        ctx.io.write_str("ai: standalone ai task not running\r\n");
         return CommandAction::None;
     }
 

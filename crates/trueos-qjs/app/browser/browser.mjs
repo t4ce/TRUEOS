@@ -7,6 +7,7 @@ import { createBrowserAssetManager } from './browser_assets.mjs';
 import { createBrowserCursorController } from './browser_cursor.mjs';
 import { createBrowserPageState } from './browser_page_state.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
+import { parseKeyboardInput } from '../input/keyboard_wire.mjs';
 import { registerSvgDemoRoute } from './svg_demo.mjs';
 import {
   renderScene,
@@ -114,145 +115,6 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     keyboardShape: 'keyboard(...) accepts Unicode text entries and strict key entries with optional modifiers; pressKey(...) and typeText(...) compile into that canonical event list.',
   },
 };
-
-const KEYBOARD_MODIFIER_ALIASES = Object.freeze({
-  alt: 'Alt',
-  cmd: 'Meta',
-  command: 'Meta',
-  control: 'Ctrl',
-  ctrl: 'Ctrl',
-  meta: 'Meta',
-  option: 'Alt',
-  shift: 'Shift',
-  super: 'Meta',
-});
-
-const KEYBOARD_KEY_ALIASES = Object.freeze({
-  backspace: 'Backspace',
-  del: 'Delete',
-  delete: 'Delete',
-  down: 'ArrowDown',
-  end: 'End',
-  enter: 'Enter',
-  esc: 'Escape',
-  escape: 'Escape',
-  home: 'Home',
-  ins: 'Insert',
-  insert: 'Insert',
-  left: 'ArrowLeft',
-  pagedown: 'PageDown',
-  pageup: 'PageUp',
-  pgdn: 'PageDown',
-  pgdown: 'PageDown',
-  pgup: 'PageUp',
-  return: 'Enter',
-  right: 'ArrowRight',
-  space: 'Space',
-  spacebar: 'Space',
-  tab: 'Tab',
-  up: 'ArrowUp',
-});
-
-function normalizeKeyboardModifier(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  const lowered = raw.toLowerCase();
-  return KEYBOARD_MODIFIER_ALIASES[lowered] || '';
-}
-
-function normalizeKeyboardModifiers(value) {
-  const items = Array.isArray(value)
-    ? value
-    : (value == null ? [] : [value]);
-  const out = [];
-  const seen = new Set();
-  for (let i = 0; i < items.length; i += 1) {
-    const normalized = normalizeKeyboardModifier(items[i]);
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
-}
-
-function normalizeKeyboardKey(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  if (raw.length === 1) return raw;
-  const lowered = raw.toLowerCase().replace(/[\s_-]+/g, '');
-  if (KEYBOARD_KEY_ALIASES[lowered]) {
-    return KEYBOARD_KEY_ALIASES[lowered];
-  }
-  if (/^f\d{1,2}$/i.test(raw)) {
-    return `F${raw.slice(1)}`;
-  }
-  return raw;
-}
-
-function clampKeyboardRepeat(value) {
-  const count = Number(value);
-  if (!Number.isFinite(count)) return 1;
-  return Math.max(1, Math.min(64, Math.floor(count)));
-}
-
-function normalizeKeyboardEntry(entry) {
-  if (typeof entry === 'string') {
-    if (!entry) {
-      raiseBrowserError('TRUEOS_BROWSER_KEYBOARD_INVALID', 'keyboard text entry is empty');
-    }
-    return { type: 'text', text: entry };
-  }
-  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-    raiseBrowserError('TRUEOS_BROWSER_KEYBOARD_INVALID', 'keyboard entry must be a string or object');
-  }
-
-  const type = typeof entry.type === 'string' ? entry.type.trim().toLowerCase() : '';
-  if (type === 'text' || (!type && typeof entry.text === 'string' && entry.key == null)) {
-    const text = typeof entry.text === 'string' ? entry.text : String(entry.text || '');
-    if (!text) {
-      raiseBrowserError('TRUEOS_BROWSER_KEYBOARD_INVALID', 'keyboard text entry is empty');
-    }
-    return { type: 'text', text };
-  }
-
-  if (type === 'key' || entry.key != null) {
-    const key = normalizeKeyboardKey(entry.key);
-    if (!key) {
-      raiseBrowserError('TRUEOS_BROWSER_KEYBOARD_INVALID', 'keyboard key entry is missing a key');
-    }
-    const modifiers = normalizeKeyboardModifiers(entry.modifiers || entry.mods);
-    const repeat = clampKeyboardRepeat(entry.repeat);
-    return { type: 'key', key, modifiers, repeat };
-  }
-
-  raiseBrowserError(
-    'TRUEOS_BROWSER_KEYBOARD_INVALID',
-    'keyboard entry must declare type=text or type=key',
-  );
-}
-
-function parseKeyboardInput(input = null, options = null) {
-  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : null;
-  const opts = options && typeof options === 'object' ? options : {};
-  const entriesRaw = Array.isArray(input)
-    ? input
-    : (source && Array.isArray(source.events)
-      ? source.events
-      : [input]);
-  const events = [];
-  for (let i = 0; i < entriesRaw.length; i += 1) {
-    const entry = normalizeKeyboardEntry(entriesRaw[i]);
-    if (entry) events.push(entry);
-  }
-  if (events.length === 0) {
-    raiseBrowserError('TRUEOS_BROWSER_KEYBOARD_INVALID', 'keyboard input did not contain any events');
-  }
-
-  const logOnly = source && Object.prototype.hasOwnProperty.call(source, 'logOnly')
-    ? source.logOnly !== false
-    : (opts.logOnly !== false);
-  return { events, logOnly };
-}
 
 function recordKeyboardLog(payload) {
   let queue = runtime.host.__trueosBrowserKeyboardLog;
@@ -2524,7 +2386,7 @@ function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
 }
 
 function InjectOpenAi() {
-  void startAi('/qjs/ai/ai_pc.mjs');
+  // AI now runs in its own standalone Embassy/QJS task.
 }
 
 runtime.host.__trueosBrowser = {
@@ -2732,7 +2594,9 @@ runtime.host.__trueosBrowser = {
     return loadUrlIntoBrowser(url, request);
   },
   keyboard(input = null, options = null) {
-    const parsed = parseKeyboardInput(input, options);
+    const parsed = parseKeyboardInput(input, options, (message) => {
+      raiseBrowserError('TRUEOS_BROWSER_KEYBOARD_INVALID', message);
+    });
     const logEntry = recordKeyboardLog(parsed);
     try {
       console.log(`[browser-keyboard] seq=${logEntry.seq} events=${JSON.stringify(logEntry.events)}`);

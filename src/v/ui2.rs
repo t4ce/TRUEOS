@@ -848,8 +848,13 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidC
                 }
                 Ui2HitKind::WindowDecoration => {
                     if press_system_button_action.is_none() {
-                        let _ =
-                            begin_move_drag_for_cursor(state, slot_id, target.owner_window_id, px, py);
+                        let _ = begin_move_drag_for_cursor(
+                            state,
+                            slot_id,
+                            target.owner_window_id,
+                            px,
+                            py,
+                        );
                     }
                 }
                 Ui2HitKind::WindowBody | Ui2HitKind::BrowserInteractive => {}
@@ -917,7 +922,9 @@ fn forward_cursor_wheel_to_selected_window(
         Ui2WindowKind::HostedBrowser => {
             let snapshot = trueos_qjs::browser_task::hosted_surface_state();
             let scroll_delta = -(wheel as i32) * UI2_WHEEL_SCROLL_STEP_PX;
-            let next_scroll = (snapshot.scroll_y as i32).saturating_add(scroll_delta).max(0) as u32;
+            let next_scroll = (snapshot.scroll_y as i32)
+                .saturating_add(scroll_delta)
+                .max(0) as u32;
             if trueos_qjs::browser_task::set_hosted_scroll_y(next_scroll) {
                 state.compose_reason = "wheel-scroll";
                 true
@@ -1284,7 +1291,12 @@ fn begin_window_resize_for_cursor(
         start_rect: window.rect,
     };
     state.compose_reason = "begin-window-resize";
-    let top_z = state.windows.iter().map(|window| window.z).max().unwrap_or(0);
+    let top_z = state
+        .windows
+        .iter()
+        .map(|window| window.z)
+        .max()
+        .unwrap_or(0);
     if let Some(window_mut) = window_mut(state, window_id) {
         window_mut.z = top_z.saturating_add(1);
     }
@@ -1307,7 +1319,10 @@ fn browser_vertical_scrollbar_metrics(
     let viewport_h = snapshot.viewport_height.max(1);
     let content_h = snapshot.content_height.max(viewport_h);
     let scroll_range = content_h.saturating_sub(viewport_h);
-    let thumb_h = libm::fmaxf(10.0, (track.h * (viewport_h as f32 / content_h as f32)).min(track.h));
+    let thumb_h = libm::fmaxf(
+        10.0,
+        (track.h * (viewport_h as f32 / content_h as f32)).min(track.h),
+    );
     let thumb_y = if scroll_range > 0 {
         let avail = (track.h - thumb_h).max(0.0);
         track.y + (avail * (snapshot.scroll_y as f32 / scroll_range as f32))
@@ -1339,7 +1354,8 @@ fn begin_vertical_scroll_drag_for_cursor(
     else {
         return false;
     };
-    let Some((track, thumb_h, thumb_y, _)) = browser_vertical_scrollbar_metrics(state, window) else {
+    let Some((track, thumb_h, thumb_y, _)) = browser_vertical_scrollbar_metrics(state, window)
+    else {
         return false;
     };
     let thumb_rect = Ui2Rect::new(track.x, thumb_y, track.w, thumb_h);
@@ -1382,7 +1398,8 @@ fn update_scroll_drag_for_cursor(
         state.scroll_drag = Ui2WindowScrollDrag::default();
         return false;
     };
-    let Some((track, _thumb_h, _thumb_y, scroll_range)) = browser_vertical_scrollbar_metrics(state, window)
+    let Some((track, _thumb_h, _thumb_y, scroll_range)) =
+        browser_vertical_scrollbar_metrics(state, window)
     else {
         state.scroll_drag = Ui2WindowScrollDrag::default();
         return false;
@@ -1520,11 +1537,7 @@ fn note_window_container_sync_needed(state: &mut Ui2State, id: u32) -> bool {
     true
 }
 
-fn sync_window_container(
-    renderable: bool,
-    kind: Ui2WindowKind,
-    content: Option<Ui2Rect>,
-) -> bool {
+fn sync_window_container(renderable: bool, kind: Ui2WindowKind, content: Option<Ui2Rect>) -> bool {
     if !renderable {
         return true;
     }
@@ -2301,7 +2314,9 @@ fn window_resize_grip_rect(state: &Ui2State, window: &Ui2Window) -> Option<Ui2Re
         return None;
     }
     let rect = effective_window_rect(state, window);
-    let size = UI2_SYSTEM_RESIZE_GRIP_PX.min(rect.w.max(1.0)).min(rect.h.max(1.0));
+    let size = UI2_SYSTEM_RESIZE_GRIP_PX
+        .min(rect.w.max(1.0))
+        .min(rect.h.max(1.0));
     if size <= 0.0 {
         return None;
     }
@@ -2697,7 +2712,8 @@ fn draw_browser_window_content(state: &Ui2State, content: Ui2Rect) -> bool {
 }
 
 fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2SystemButtonAction) {
-    if window.state == Ui2WindowStateKind::Minimized && action != Ui2SystemButtonAction::ToggleMaximize
+    if window.state == Ui2WindowStateKind::Minimized
+        && action != Ui2SystemButtonAction::ToggleMaximize
     {
         return;
     }
@@ -3057,9 +3073,7 @@ fn compose_windows(state: &mut Ui2State) {
         if window.dirty {
             window.dirty_seq = window.dirty_seq.wrapping_add(1);
             let repeated_reason = window.last_logged_reason == window.last_reason;
-            let since_last_log = window
-                .dirty_seq
-                .wrapping_sub(window.last_logged_dirty_seq);
+            let since_last_log = window.dirty_seq.wrapping_sub(window.last_logged_dirty_seq);
             if window.last_logged_dirty_seq == 0
                 || !repeated_reason
                 || since_last_log >= UI2_WINDOW_UPDATE_LOG_EVERY
@@ -3093,7 +3107,8 @@ fn compose_windows(state: &mut Ui2State) {
         || dirty_count != state.last_logged_compose_dirty_count
         || since_last_log >= UI2_COMPOSE_LOG_EVERY
     {
-        let suppressed = if repeated_reason && dirty_count == state.last_logged_compose_dirty_count {
+        let suppressed = if repeated_reason && dirty_count == state.last_logged_compose_dirty_count
+        {
             since_last_log.saturating_sub(1)
         } else {
             0

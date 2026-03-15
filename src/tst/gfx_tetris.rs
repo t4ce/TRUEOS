@@ -132,7 +132,14 @@ fn build_frame_vertices(app: &GfxTetrisApp) -> Vec<RgbVertex> {
     let board_w = FRAME_PX * 2 + (BOARD_W as u32 * CELL_PX);
     let board_h = FRAME_PX * 2 + (VIEW_H as u32 * CELL_PX);
 
-    push_rect(&mut vertices, board_x, board_y, board_w, board_h, FRAME_COLOR);
+    push_rect(
+        &mut vertices,
+        board_x,
+        board_y,
+        board_w,
+        board_h,
+        FRAME_COLOR,
+    );
     push_rect(
         &mut vertices,
         board_x + FRAME_PX,

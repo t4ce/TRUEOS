@@ -11,10 +11,20 @@ import {
   decorateResponseTools,
   getResponseOutputItems,
 } from "./openai_client.mjs";
+import {
+  keyboardKeyToKernelSpec,
+  keyboardModifiersToMask,
+  parseKeyboardInput,
+} from "../input/keyboard_wire.mjs";
 
 const DEFAULT_MAX_STEPS = 50;
 const DEFAULT_TOOL_SEARCH = true;
 const WORKER_RPC_TIMEOUT_MS = 30000;
+const HOST_BROWSER_RPC_POLL_MS = 10;
+const HOST_INPUT_POLL_MS = 50;
+const INPUT_CURSOR_FLAG_ABSOLUTE = 1;
+const INPUT_CURSOR_FLAG_BUTTONS_CHANGED = 1 << 2;
+const INPUT_KEYBOARD_FLAG_SYNTHETIC = 1 << 1;
 
 function readBooleanEnv(name, fallback = false) {
   const raw = readEnv(name);
@@ -88,7 +98,7 @@ function getExecJsBrowserApiDescription() {
   const keyboardDetails = HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS
     ? ""
     : " keyboard(...) is the canonical keyboard API: send Unicode text with { type: \"text\", text: \"...\" } and named keys with { type: \"key\", key: \"Enter\", modifiers: [\"Ctrl\"]? }; typeText(...) and pressKey(...) compile into that same path.";
-  return `TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include ${methodList} Prefer setBodyHtml(html) when replacing the visible page content instead of guessing DOM paths. getDomSnapshot() returns a rooted tree object with a stable path field on each node; for flat scans, use snap.nodes. click(...) now drives the real cursor/button path and accepts coordinates, stable paths, text=..., plain caption text, and simple selectors like a[href="..."] when the target is interactive.${keyboardDetails} insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.`;
+  return `TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include ${methodList} Prefer setBodyHtml(html) when replacing the visible page content instead of guessing DOM paths. getDomSnapshot() returns a rooted tree object with a stable path field on each node; for flat scans, use snap.nodes. click(...) now drives the real cursor/button path and accepts coordinates, stable paths, text=..., plain caption text, and simple selectors like a[href="..."] when the target is interactive.${keyboardDetails} insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. In the standalone AI runtime, moveCursor and keyboard writes go directly to kernel input while DOM and screenshot reads still come from the browser service. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.`;
 }
 
 function getFileSearchVectorStoreIds() {
@@ -105,6 +115,8 @@ function getPcRuntime() {
       context: null,
       page: null,
       jsOutput: [],
+      inputSlotSeq: 1,
+      inputSlots: Object.create(null),
       workerRpcSeq: 1,
       workerRpcPending: Object.create(null),
       workerRpcReady: false,
@@ -196,6 +208,217 @@ function workerRpc(method, args = []) {
   });
 }
 
+function sleepMs(ms) {
+  return new Promise((resolve) => {
+    if (typeof setTimeout === "function") {
+      setTimeout(resolve, ms);
+      return;
+    }
+    resolve();
+  });
+}
+
+function hasHostBrowserRpc() {
+  return typeof globalThis.__trueosBrowserRpcStart === "function"
+    && typeof globalThis.__trueosBrowserRpcPoll === "function";
+}
+
+async function hostBrowserRpc(method, args = []) {
+  if (!hasHostBrowserRpc()) {
+    throw new Error(`host browser rpc unavailable for ${method}`);
+  }
+
+  const argsJson = JSON.stringify(Array.isArray(args) ? args : []);
+  const id = Number(globalThis.__trueosBrowserRpcStart(String(method || ""), argsJson) || 0) | 0;
+  if (id <= 0) {
+    throw new Error(`host browser rpc start failed for ${method}`);
+  }
+
+  for (;;) {
+    const raw = globalThis.__trueosBrowserRpcPoll(id);
+    if (typeof raw === "string" && raw) {
+      const message = JSON.parse(raw);
+      if (message && message.ok) {
+        return message.result;
+      }
+      const error = new Error(
+        message && typeof message.error === "string"
+          ? message.error
+          : `host browser rpc failed for ${method}`,
+      );
+      if (message && message.code) {
+        error.code = message.code;
+      }
+      throw error;
+    }
+    await sleepMs(HOST_BROWSER_RPC_POLL_MS);
+  }
+}
+
+function hasDirectKernelInput() {
+  return typeof globalThis.__trueosInputWriteCursor === "function"
+    && typeof globalThis.__trueosInputWriteKeyboardText === "function"
+    && typeof globalThis.__trueosInputWriteKeyboardKey === "function";
+}
+
+function resolveInputSlotId(source = null) {
+  const runtime = getPcRuntime();
+  const explicit = Number(source && source.slotId);
+  if (Number.isFinite(explicit) && explicit >= 1) {
+    return Math.floor(explicit);
+  }
+
+  const tagRaw = source && typeof source === "object"
+    ? (source.aiKeyboardId || source.aiCursorId || source.slotTag || "")
+    : "";
+  const tag = typeof tagRaw === "string" && tagRaw.trim() ? tagRaw.trim() : "ai-default";
+  if (!runtime.inputSlots[tag]) {
+    runtime.inputSlots[tag] = runtime.inputSlotSeq;
+    runtime.inputSlotSeq += 1;
+  }
+  return runtime.inputSlots[tag];
+}
+
+function directMoveCursor(target = null) {
+  if (!hasDirectKernelInput()) {
+    throw new Error("direct kernel input unavailable for moveCursor");
+  }
+  const source = target && typeof target === "object" ? target : {};
+  const x = Number(source.x);
+  const y = Number(source.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return false;
+  }
+
+  const slotId = resolveInputSlotId(source);
+  const buttonsDown = Object.prototype.hasOwnProperty.call(source, "buttonsDown")
+    ? (Number(source.buttonsDown || 0) >>> 0)
+    : 0;
+  const flags = Object.prototype.hasOwnProperty.call(source, "flags")
+    ? (Number(source.flags || 0) >>> 0)
+    : INPUT_CURSOR_FLAG_ABSOLUTE;
+  const ok = Number(
+    globalThis.__trueosInputWriteCursor(
+      slotId,
+      Math.round(x),
+      Math.round(y),
+      buttonsDown,
+      0,
+      flags,
+    ) || 0,
+  ) > 0;
+  return ok;
+}
+
+function directClick(target = null) {
+  if (!hasDirectKernelInput()) {
+    throw new Error("direct kernel input unavailable for click");
+  }
+  const source = target && typeof target === "object" ? target : {};
+  const x = Number(source.x);
+  const y = Number(source.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+
+  const slotId = resolveInputSlotId(source);
+  const buttonMask = Math.max(1, Number(source.buttonMask || source.button || 1) | 0) >>> 0;
+  const moveOk = directMoveCursor({ ...source, slotId, x, y });
+  const downOk = Number(
+    globalThis.__trueosInputWriteCursor(
+      slotId,
+      Math.round(x),
+      Math.round(y),
+      buttonMask,
+      0,
+      INPUT_CURSOR_FLAG_ABSOLUTE | INPUT_CURSOR_FLAG_BUTTONS_CHANGED,
+    ) || 0,
+  ) > 0;
+  const upOk = Number(
+    globalThis.__trueosInputWriteCursor(
+      slotId,
+      Math.round(x),
+      Math.round(y),
+      0,
+      0,
+      INPUT_CURSOR_FLAG_ABSOLUTE | INPUT_CURSOR_FLAG_BUTTONS_CHANGED,
+    ) || 0,
+  ) > 0;
+  return {
+    ok: moveOk && downOk && upOk ? 1 : 0,
+    handled: moveOk && downOk && upOk ? 1 : 0,
+    simulated: 0,
+    slotId,
+    x: Math.round(x),
+    y: Math.round(y),
+  };
+}
+
+function directKeyboard(input = null, options = null) {
+  if (!hasDirectKernelInput()) {
+    throw new Error("direct kernel input unavailable for keyboard");
+  }
+  const parsed = parseKeyboardInput(input, options, (message) => {
+    const err = new Error(message);
+    err.code = "TRUEOS_BROWSER_KEYBOARD_INVALID";
+    throw err;
+  });
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input : null;
+  const opts = options && typeof options === "object" ? options : null;
+  const slotId = resolveInputSlotId(source || opts || null);
+
+  let dispatched = 0;
+  for (let i = 0; i < parsed.events.length; i += 1) {
+    const event = parsed.events[i];
+    if (event.type === "text") {
+      const wrote = Number(
+        globalThis.__trueosInputWriteKeyboardText(
+          slotId,
+          String(event.text || ""),
+          INPUT_KEYBOARD_FLAG_SYNTHETIC,
+        ) || 0,
+      );
+      if (wrote > 0) {
+        dispatched += 1;
+      }
+      continue;
+    }
+
+    const spec = keyboardKeyToKernelSpec(event.key);
+    if (!spec) {
+      const err = new Error(`unsupported keyboard key: ${String(event.key || "")}`);
+      err.code = "TRUEOS_BROWSER_KEYBOARD_INVALID";
+      throw err;
+    }
+    const modifiers = keyboardModifiersToMask(event.modifiers);
+    const repeat = Math.max(1, Number(event.repeat || 1) | 0);
+    for (let rep = 0; rep < repeat; rep += 1) {
+      const ok = Number(
+        globalThis.__trueosInputWriteKeyboardKey(
+          slotId,
+          spec.codepoint >>> 0,
+          spec.keyCode >>> 0,
+          modifiers >>> 0,
+          INPUT_KEYBOARD_FLAG_SYNTHETIC,
+        ) || 0,
+      ) > 0;
+      if (ok) {
+        dispatched += 1;
+      }
+    }
+  }
+
+  return {
+    ok: 1,
+    handled: dispatched > 0 ? 1 : 0,
+    simulated: 0,
+    logOnly: parsed.logOnly ? 1 : 0,
+    slotId,
+    eventCount: parsed.events.length,
+    events: parsed.events,
+  };
+}
+
 function createWorkerBrowserProxy() {
   const runtime = getPcRuntime();
   if (runtime.browser) {
@@ -205,6 +428,53 @@ function createWorkerBrowserProxy() {
   const proxy = {};
   for (const method of WORKER_BROWSER_METHODS) {
     proxy[method] = (...args) => workerRpc(`browser.${method}`, args);
+  }
+  runtime.browser = proxy;
+  runtime.context = proxy;
+  runtime.page = proxy;
+  return proxy;
+}
+
+function createHostBrowserProxy() {
+  const runtime = getPcRuntime();
+  if (runtime.browser) {
+    return runtime.browser;
+  }
+
+  const proxy = {};
+  for (const method of WORKER_BROWSER_METHODS) {
+    proxy[method] = (...args) => hostBrowserRpc(method, args);
+  }
+  if (hasDirectKernelInput()) {
+    proxy.moveCursor = (target = null) => Promise.resolve(directMoveCursor(target));
+    proxy.keyboard = (input = null, options = null) => Promise.resolve(directKeyboard(input, options));
+    proxy.typeText = (text, options = null) => Promise.resolve(directKeyboard({
+      type: "text",
+      text: String(text || ""),
+    }, options));
+    proxy.pressKey = (key, options = null) => {
+      const keySource = key && typeof key === "object" && !Array.isArray(key) ? key : null;
+      const keyName = typeof key === "string"
+        ? key
+        : String(keySource && keySource.key != null ? keySource.key : "");
+      const source = options && typeof options === "object"
+        ? options
+        : (keySource || {});
+      return Promise.resolve(directKeyboard({
+        type: "key",
+        key: keyName,
+        modifiers: source.modifiers || source.mods,
+        repeat: source.repeat,
+      }, source));
+    };
+    const rpcClick = proxy.click;
+    proxy.click = (target = null) => {
+      const local = directClick(target);
+      if (local) {
+        return Promise.resolve(local);
+      }
+      return rpcClick(target);
+    };
   }
   runtime.browser = proxy;
   runtime.context = proxy;
@@ -223,6 +493,10 @@ function bindHostRuntime() {
     runtime.browser = browser;
     runtime.context = browser;
     runtime.page = browser;
+    return runtime;
+  }
+  if (hasHostBrowserRpc()) {
+    createHostBrowserProxy();
   }
   return runtime;
 }
@@ -367,6 +641,19 @@ function shellPrint(text) {
 async function awaitHostInput(question = "") {
   if (typeof globalThis.__trueosAiAwaitInput === "function") {
     return await globalThis.__trueosAiAwaitInput(question);
+  }
+  if (typeof globalThis.__trueosAiInputPop === "function") {
+    for (;;) {
+      const raw = globalThis.__trueosAiInputPop(question);
+      if (typeof raw === "string" && raw) {
+        try {
+          return JSON.parse(raw);
+        } catch (_err) {
+          return { text: raw };
+        }
+      }
+      await sleepMs(HOST_INPUT_POLL_MS);
+    }
   }
   if (hasWorkerParentPort()) {
     return await workerRpc("host.awaitInput", [question]);

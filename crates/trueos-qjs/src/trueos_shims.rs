@@ -90,6 +90,19 @@ unsafe extern "C" {
         out_cap: u32,
         out_dropped: *mut u32,
     ) -> u32;
+    pub fn trueos_cabi_input_write_keyboard_text(
+        slot_id: u32,
+        text_ptr: *const u8,
+        text_len: usize,
+        flags: u32,
+    ) -> i32;
+    pub fn trueos_cabi_input_write_keyboard_key(
+        slot_id: u32,
+        codepoint: u32,
+        key_code: u32,
+        modifiers: u32,
+        flags: u32,
+    ) -> i32;
     pub fn trueos_cabi_uart1_shell_write(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell1_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
@@ -187,6 +200,28 @@ pub fn shell1_submit_input(bytes: &[u8]) -> usize {
         return 0;
     }
     unsafe { trueos_cabi_shell1_submit_input(bytes.as_ptr(), bytes.len()) }
+}
+
+#[inline]
+pub fn input_write_keyboard_text(slot_id: u32, bytes: &[u8], flags: u32) -> i32 {
+    if slot_id == 0 || bytes.is_empty() {
+        return -1;
+    }
+    unsafe { trueos_cabi_input_write_keyboard_text(slot_id, bytes.as_ptr(), bytes.len(), flags) }
+}
+
+#[inline]
+pub fn input_write_keyboard_key(
+    slot_id: u32,
+    codepoint: u32,
+    key_code: u32,
+    modifiers: u32,
+    flags: u32,
+) -> i32 {
+    if slot_id == 0 {
+        return -1;
+    }
+    unsafe { trueos_cabi_input_write_keyboard_key(slot_id, codepoint, key_code, modifiers, flags) }
 }
 
 #[inline]

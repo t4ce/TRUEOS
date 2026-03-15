@@ -1,4 +1,6 @@
-use super::{clamp01, push_cursor_event, sync_runtime_cursor_snapshot, HidRuntime, TrueosHidCursorEvent};
+use super::{
+    HidRuntime, TrueosHidCursorEvent, clamp01, push_cursor_event, sync_runtime_cursor_snapshot,
+};
 
 const HID_MOUSE_RING_CAP: usize = 2048;
 
