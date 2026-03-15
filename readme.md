@@ -43,6 +43,24 @@ UDPPort 50000-50999
 
 sudo systemctl restart nxserver
 
+# host firewall baseline
+# Current host layout:
+# - br0 is the LAN-facing bridge and owns the host IPs.
+# - enp5s0 is the physical uplink enslaved into br0.
+# - tap0 is the VM TAP bridged into br0 and should not be used for host allow rules.
+#
+# Current NoMachine config/listener:
+# - /usr/NX/etc/server.cfg -> Port 4000
+# - TCP listener on 0.0.0.0:4000 and [::]:4000
+#
+# This applies:
+# - allow all outgoing
+# - block all incoming by default
+# - allow inbound TCP 80, 443, and 4000 only on br0
+chmod +x scripts/configure-host-firewall.sh
+./scripts/configure-host-firewall.sh
+
+# optional: reopen PXE-related UDP only when you are actively using PXE on br0
 PXE_IF=br0
 sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 67
 sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 4011
