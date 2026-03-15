@@ -12,6 +12,10 @@ use spin::Mutex;
 mod ai_api;
 mod helpers;
 
+unsafe extern "C" {
+    fn trueos_cabi_ui2_primary_browser_window_id() -> u32;
+}
+
 static BROWSER_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -75,6 +79,7 @@ struct PendingHtmlEntry {
 #[derive(Clone)]
 struct BrowserRpcRequest {
     id: u32,
+    browser_window_id: u32,
     method: String,
     args_json: String,
 }
@@ -86,7 +91,6 @@ struct BrowserRpcResult {
 }
 
 static PENDING_HTML: Mutex<Option<PendingHtmlEntry>> = Mutex::new(None);
-static PENDING_AI_INPUT: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::new());
 static PENDING_QJS_INPUT: Mutex<VecDeque<QjsInputEntry>> = Mutex::new(VecDeque::new());
 static PENDING_BROWSER_RPC: Mutex<VecDeque<BrowserRpcRequest>> = Mutex::new(VecDeque::new());
 static ACTIVE_BROWSER_RPC_ID: Mutex<Option<u32>> = Mutex::new(None);
@@ -152,15 +156,6 @@ fn browser_text_widths_by_char() -> [u8; 256] {
 }
 
 #[derive(Clone)]
-pub struct AiInputEntry {
-    pub text: String,
-    pub web_search: bool,
-    pub file_search: bool,
-    pub new_conversation: bool,
-    pub computer_use: bool,
-}
-
-#[derive(Clone)]
 pub struct QjsInputEntry {
     pub code: String,
     pub repl: bool,
@@ -181,14 +176,6 @@ pub fn queue_set_html_with_url(next_html: String, next_url: Option<String>) -> b
     true
 }
 
-pub fn queue_ai_input(next: AiInputEntry) -> bool {
-    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
-        return false;
-    }
-    PENDING_AI_INPUT.lock().push_back(next);
-    true
-}
-
 pub fn queue_qjs_input(next: QjsInputEntry) -> bool {
     if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
         return false;
@@ -197,13 +184,14 @@ pub fn queue_qjs_input(next: QjsInputEntry) -> bool {
     true
 }
 
-pub fn queue_browser_rpc(method: String, args_json: String) -> u32 {
+pub fn queue_browser_rpc(method: String, args_json: String, browser_window_id: u32) -> u32 {
     if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
         return 0;
     }
     let id = BROWSER_RPC_SEQ.fetch_add(1, Ordering::Relaxed);
     PENDING_BROWSER_RPC.lock().push_back(BrowserRpcRequest {
         id,
+        browser_window_id,
         method,
         args_json,
     });
@@ -353,6 +341,26 @@ unsafe fn apply_pending_browser_rpc(ctx: *mut qjs::JSContext) {
     let Some(next) = PENDING_BROWSER_RPC.lock().pop_front() else {
         return;
     };
+
+    let active_window_id = trueos_cabi_ui2_primary_browser_window_id();
+    if active_window_id == 0 {
+        BROWSER_RPC_RESULTS.lock().push_back(BrowserRpcResult {
+            id: next.id,
+            payload_json: String::from("{\"ok\":false,\"error\":\"browser rpc unavailable: no active browser\"}"),
+        });
+        return;
+    }
+    if next.browser_window_id != 0 && next.browser_window_id != active_window_id {
+        BROWSER_RPC_RESULTS.lock().push_back(BrowserRpcResult {
+            id: next.id,
+            payload_json: alloc::format!(
+                "{{\"ok\":false,\"error\":\"browser rpc target unavailable: requested {}, active {}\"}}",
+                next.browser_window_id,
+                active_window_id
+            ),
+        });
+        return;
+    }
 
     let method_lit = helpers::js_single_quoted_literal(next.method.as_str());
     let args_lit = helpers::js_single_quoted_literal(next.args_json.as_str());
@@ -696,40 +704,6 @@ unsafe fn apply_pending_html(ctx: *mut qjs::JSContext) {
     );
 }
 
-unsafe fn apply_pending_ai_input(ctx: *mut qjs::JSContext) {
-    let Some(next) = PENDING_AI_INPUT.lock().pop_front() else {
-        return;
-    };
-
-    let text_lit = helpers::js_single_quoted_literal(next.text.as_str());
-    let mut src = String::new();
-    src.push_str("(function(){const __g=(typeof globalThis!=='undefined')?globalThis:this;");
-    src.push_str("if(typeof __g.__trueosAiInputPush!=='function')return;");
-    src.push_str("__g.__trueosAiInputPush({text:");
-    src.push_str(&text_lit);
-    src.push_str(",webSearch:");
-    src.push_str(if next.web_search { "true" } else { "false" });
-    src.push_str(",fileSearch:");
-    src.push_str(if next.file_search { "true" } else { "false" });
-    src.push_str(",newConversation:");
-    src.push_str(if next.new_conversation {
-        "true"
-    } else {
-        "false"
-    });
-    src.push_str(",computerUse:");
-    src.push_str(if next.computer_use { "true" } else { "false" });
-    src.push_str("});})();");
-
-    let _ = helpers::eval_or_log(
-        ctx,
-        src.as_bytes(),
-        b"<browser-ai-input>\0".as_ptr() as *const c_char,
-        qjs::JS_EVAL_TYPE_GLOBAL,
-        "browser ai input",
-    );
-}
-
 unsafe fn apply_pending_qjs_input(ctx: *mut qjs::JSContext) {
     let Some(next) = PENDING_QJS_INPUT.lock().pop_front() else {
         return;
@@ -858,7 +832,6 @@ pub async fn boot_browser() {
 
         loop {
             apply_pending_html(ctx);
-            apply_pending_ai_input(ctx);
             apply_pending_qjs_input(ctx);
             apply_pending_browser_rpc(ctx);
             apply_pending_hosted_viewport(ctx);
