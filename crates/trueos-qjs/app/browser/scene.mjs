@@ -292,7 +292,7 @@ function buildSceneDisplayLists(doc, vw, minY, maxY, overlayRuns, localOffsetY =
   };
 }
 
-function drawSceneDisplayLists(display, clipW, clipH, originY = 0, includeOverlayText = true, overlayRect = null) {
+function drawSceneDisplayLists(display, clipW, clipH, originX = 0, originY = 0, includeOverlayText = true, overlayRect = null) {
   const texId = Number(display && display.texId || 0);
   const runs = Array.isArray(display && display.runs) ? display.runs : [];
   const iconRuns = Array.isArray(display && display.iconRuns) ? display.iconRuns : [];
@@ -314,7 +314,7 @@ function drawSceneDisplayLists(display, clipW, clipH, originY = 0, includeOverla
 
   cmdStream.setOrigin(0, 0);
   cmdStream.pushClipRect(0, 0, clipW, clipH);
-  cmdStream.setOrigin(0, originY);
+  cmdStream.setOrigin(originX, originY);
   try {
     if (browserTagRowsDebugEnabled()) {
       for (let i = 0; i < buttonRuns.length; i += 1) {
@@ -465,7 +465,7 @@ export function renderSceneContentToCurrentTarget(doc, vw, contentH) {
   const display = buildSceneDisplayLists(doc, targetW, 0, targetH, null);
   cmdStream.setOrigin(0, 0);
   cmdStream.fillRect(0, 0, targetW, targetH, DEFAULT_CLEAR_RGBA, 0, 0);
-  drawSceneDisplayLists(display, targetW, targetH, 0, false, null);
+  drawSceneDisplayLists(display, targetW, targetH, 0, 0, false, null);
   return true;
 }
 
@@ -485,7 +485,7 @@ export function renderSceneRegionToCurrentTarget(doc, vw, docTopY = 0, regionH =
       cmdStream.fillRect(0, 0, targetW, Math.min(6, targetH), DEBUG_REGION_TOP_RGBA, 0, 0);
       cmdStream.fillRect(0, 0, Math.min(6, targetW), targetH, DEBUG_REGION_LEFT_RGBA, 0, 0);
     }
-    drawSceneDisplayLists(display, targetW, targetH, 0, false, null);
+    drawSceneDisplayLists(display, targetW, targetH, 0, 0, false, null);
   } finally {
     cmdStream.setBlendEnabled(0);
     cmdStream.setBlendMode(0);
@@ -494,15 +494,17 @@ export function renderSceneRegionToCurrentTarget(doc, vw, docTopY = 0, regionH =
   return true;
 }
 
-export function composeSceneTextureToCurrentTarget(contentTexId, contentW, contentH, vw, vh, scrollY, contentTopY = 0, overlayRuns, overlayRect = null) {
+export function composeSceneTextureToCurrentTarget(contentTexId, contentW, contentH, vw, vh, scrollX, scrollY, contentTopY = 0, overlayRuns, overlayRect = null) {
   const targetTexId = Math.max(0, Number(contentTexId || 0) | 0);
   const drawW = Math.max(1, Number(vw || 1) | 0);
   const drawH = Math.max(1, Number(vh || 1) | 0);
   const texW = Math.max(1, Number(contentW || drawW) | 0);
   const texH = Math.max(1, Number(contentH || drawH) | 0);
+  const maxScrollX = Math.max(0, texW - drawW);
   const initialTop = Math.max(0, Math.min(texH - 1, Math.round(Number(contentTopY || 0))));
-  const maxScroll = Math.max(0, texH - initialTop - drawH);
-  const scrollTop = initialTop + Math.max(0, Math.min(maxScroll, Math.round(Number(scrollY || 0))));
+  const maxScrollY = Math.max(0, texH - initialTop - drawH);
+  const scrollLeft = Math.max(0, Math.min(maxScrollX, Math.round(Number(scrollX || 0))));
+  const scrollTop = initialTop + Math.max(0, Math.min(maxScrollY, Math.round(Number(scrollY || 0))));
   const overlayTextRuns = buildOverlayTextRuns(overlayRuns);
 
   if (overlayRect && typeof overlayRect === 'object') {
@@ -522,9 +524,9 @@ export function composeSceneTextureToCurrentTarget(contentTexId, contentW, conte
   cmdStream.pushClipRect(0, 0, drawW, drawH);
   try {
     if (targetTexId > 0) {
-      const u0 = 0;
+      const u0 = Math.max(0, scrollLeft / texW);
       const v0 = Math.max(0, scrollTop / texH);
-      const u1 = Math.min(1, drawW / texW);
+      const u1 = Math.min(1, (scrollLeft + drawW) / texW);
       const v1 = Math.min(1, (scrollTop + drawH) / texH);
       cmdStream.drawTextureRect(targetTexId, 0, 0, drawW, drawH, u0, v0, u1, v1);
     }
@@ -557,9 +559,10 @@ export function composeSceneTextureToCurrentTarget(contentTexId, contentW, conte
   return true;
 }
 
-export function composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollY, contentTopY = 0, overlayRuns, overlayRect = null) {
+export function composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollX, scrollY, contentTopY = 0, overlayRuns, overlayRect = null) {
   const drawW = Math.max(1, Number(vw || 1) | 0);
   const drawH = Math.max(1, Number(vh || 1) | 0);
+  const scrollLeft = Math.max(0, Math.round(Number(scrollX || 0)));
   const initialTop = Math.max(0, Math.round(Number(contentTopY || 0)));
   const scrollTop = initialTop + Math.max(0, Math.round(Number(scrollY || 0)));
   const scrollBottom = scrollTop + drawH;
@@ -600,9 +603,10 @@ export function composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollY, con
 
       const srcOffsetY = srcTop - docY;
       const destY = srcTop - scrollTop;
-      const drawWidth = Math.max(1, Math.min(drawW, texW));
-      const u0 = 0;
-      const u1 = Math.min(1, drawWidth / texW);
+      if (scrollLeft >= texW) continue;
+      const drawWidth = Math.max(1, Math.min(drawW, texW - scrollLeft));
+      const u0 = Math.max(0, scrollLeft / texW);
+      const u1 = Math.min(1, (scrollLeft + drawWidth) / texW);
       const v0 = Math.max(0, srcOffsetY / texH);
       const v1 = Math.min(1, (srcOffsetY + srcHeight) / texH);
       cmdStream.drawTextureRect(texId, 0, destY, drawWidth, srcHeight, u0, v0, u1, v1);
@@ -639,9 +643,10 @@ export function composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollY, con
   return true;
 }
 
-export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = null) {
+export function renderScene(doc, vw, vh, scrollX, scrollY, overlayRuns, overlayRect = null) {
   const targetW = Math.max(1, Number(vw || 1) | 0);
   const targetH = Math.max(1, Number(vh || 1) | 0);
+  const scrollLeft = Math.max(0, Number(scrollX || 0));
   const scrollTop = Math.max(0, Number(scrollY || 0));
   const display = buildSceneDisplayLists(doc, targetW, scrollTop, scrollTop + targetH, overlayRuns);
 
@@ -649,7 +654,7 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
   cmdStream.setViewport(targetW, targetH);
   cmdStream.beginFrame();
   try {
-    drawSceneDisplayLists(display, targetW, targetH, -scrollTop, true, overlayRect);
+    drawSceneDisplayLists(display, targetW, targetH, -scrollLeft, -scrollTop, true, overlayRect);
   } finally {
     cmdStream.endFrame();
   }
