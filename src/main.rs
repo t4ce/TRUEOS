@@ -37,6 +37,8 @@ mod time;
 mod tst_html;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
+#[path = "tst/ui2_triangle_demo.rs"]
+mod tst_ui2_triangle_demo;
 mod turbo;
 mod usb;
 mod v;
