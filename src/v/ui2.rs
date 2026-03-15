@@ -1,44 +1,27 @@
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Ordering as CmpOrdering;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use parry2d::math::{Isometry, Vector};
+use parry2d::query;
+use parry2d::shape::{Ball, Cuboid};
 use spin::{Mutex, Once};
 
 const UI2_TITLE_H: f32 = 26.0;
-const UI2_NOTES_SURFACE_TEX_ID: u32 = 3101;
-const UI2_GLASS_SURFACE_TEX_ID: u32 = 3102;
-const UI2_SVG_TEX_ID_BASE: u32 = 3_200;
-const UI2_ASYNC_TEX_STATUS_UNKNOWN: i32 = 0;
-const UI2_ASYNC_TEX_STATUS_PENDING: i32 = 1;
-const UI2_ASYNC_TEX_STATUS_READY: i32 = 2;
+const UI2_PRIMARY_BUTTON_MASK: u32 = 1;
+const UI2_CLICK_SLOP_PX: f32 = 12.0;
+const UI2_CURSOR_EVENT_BATCH: usize = 32;
+const UI2_CURSOR_HIT_RADIUS_PX: f32 = 8.0;
+const UI2_WINDOW_RESIZE_LEFT: u32 = 1 << 0;
+const UI2_WINDOW_RESIZE_TOP: u32 = 1 << 1;
+const UI2_WINDOW_RESIZE_RIGHT: u32 = 1 << 2;
+const UI2_WINDOW_RESIZE_BOTTOM: u32 = 1 << 3;
+const UI2_BROWSER2_SVG_TEX_ID_BASE: u32 = 4_400;
+const UI2_BROWSER2_SVG_ICON_PX: f32 = 64.0;
 static UI2_BROWSER_SNAPSHOT_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
-static UI2_SVG_QUEUE_STARTED: AtomicBool = AtomicBool::new(false);
-static UI2_SVG_REPAINT_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-struct Ui2SvgFixture {
-    tex_id: u32,
-    svg: &'static str,
-}
-
-#[derive(Copy, Clone)]
-struct Ui2SvgAsset {
-    tex_id: u32,
-    width: u32,
-    height: u32,
-    status: i32,
-}
-
-#[derive(Copy, Clone)]
-struct Ui2SurfaceSlot {
-    tex_id: u32,
-    width: u32,
-    height: u32,
-    dirty: bool,
-    label: &'static str,
-}
+const UI2_SVG_DEMO_MJS: &str = include_str!("../../crates/trueos-qjs/app/browser/svg_demo.mjs");
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -53,27 +36,7 @@ struct Ui2TexVertex {
     a: u8,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Ui2WindowKind {
-    Browser,
-    Dialog,
-    Menu,
-    Overlay,
-}
-
-impl Ui2WindowKind {
-    #[inline]
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Browser => "browser",
-            Self::Dialog => "dialog",
-            Self::Menu => "menu",
-            Self::Overlay => "overlay",
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Ui2Rect {
     pub x: f32,
     pub y: f32,
@@ -88,15 +51,115 @@ impl Ui2Rect {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui2CursorState {
+    slot_id: u32,
+    x: f32,
+    y: f32,
+    buttons_down: u32,
+    press_x: f32,
+    press_y: f32,
+    press_window_id: u32,
+    press_armed: bool,
+    selected_window_id: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+enum Ui2HitKind {
+    WindowBody,
+    WindowDecoration,
+    BrowserInteractive,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Ui2WindowKind {
+    HostedBrowser,
+    SvgDemo,
+}
+
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Ui2WindowDecorationMode {
+    System = 0,
+    Client = 1,
+    None = 2,
+}
+
+impl Ui2WindowDecorationMode {
+    #[inline]
+    const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::System),
+            1 => Some(Self::Client),
+            2 => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Ui2WindowStateKind {
+    Normal = 0,
+    Minimized = 1,
+    Maximized = 2,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct Ui2HitEntry {
+    owner_window_id: u32,
+    item_id: u32,
+    kind: Ui2HitKind,
+    rect: Ui2Rect,
+    z: i16,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct Ui2HitTarget {
+    owner_window_id: u32,
+    item_id: u32,
+    kind: Ui2HitKind,
+}
+
+#[derive(Default)]
+struct Ui2HitScene {
+    seq: u32,
+    entries: Vec<Ui2HitEntry>,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui2WindowMoveDrag {
+    active: bool,
+    window_id: u32,
+    cursor_slot_id: u32,
+    grab_dx: f32,
+    grab_dy: f32,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui2WindowResizeDrag {
+    active: bool,
+    window_id: u32,
+    cursor_slot_id: u32,
+    edge_mask: u32,
+    start_cursor_x: f32,
+    start_cursor_y: f32,
+    start_rect: Ui2Rect,
+}
+
 #[derive(Clone)]
 struct Ui2Window {
     id: u32,
     kind: Ui2WindowKind,
     title: String,
     rect: Ui2Rect,
+    restore_rect: Ui2Rect,
     z: i16,
     visible: bool,
     alpha: u8,
+    decoration_mode: Ui2WindowDecorationMode,
+    state: Ui2WindowStateKind,
+    selected_cursor_slots: Vec<u32>,
     dirty: bool,
     dirty_seq: u32,
     last_reason: &'static str,
@@ -108,150 +171,73 @@ struct Ui2State {
     next_window_id: u32,
     compose_seq: u32,
     compose_reason: &'static str,
+    cursor_read_seq: u64,
+    cursors: Vec<Ui2CursorState>,
+    hit_scene: Ui2HitScene,
+    move_drag: Ui2WindowMoveDrag,
+    resize_drag: Ui2WindowResizeDrag,
     windows: Vec<Ui2Window>,
 }
 
+struct Ui2Browser2Svg {
+    tex_id: u32,
+    svg: String,
+    status: i32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi2WindowInfo {
+    pub id: u32,
+    pub kind: u32,
+    pub state: u32,
+    pub decoration_mode: u32,
+    pub visible: u32,
+    pub selected: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub content_x: i32,
+    pub content_y: i32,
+    pub content_width: u32,
+    pub content_height: u32,
+    pub decoration_x: i32,
+    pub decoration_y: i32,
+    pub decoration_width: u32,
+    pub decoration_height: u32,
+}
+
 static UI2_STATE: Once<Mutex<Ui2State>> = Once::new();
-static UI2_SURFACES: Once<Mutex<Vec<Ui2SurfaceSlot>>> = Once::new();
-static UI2_SVG_ASSETS: Once<Mutex<Vec<Ui2SvgAsset>>> = Once::new();
+static UI2_BROWSER2_SVGS: Once<Mutex<Vec<Ui2Browser2Svg>>> = Once::new();
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_DIRTY: AtomicBool = AtomicBool::new(false);
 static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
 
-const UI2_SVG_FIXTURES: &[Ui2SvgFixture] = &[
-    Ui2SvgFixture {
-        tex_id: UI2_SVG_TEX_ID_BASE,
-        svg: r##"
-<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#132a4f"/>
-      <stop offset="55%" stop-color="#f26b5b"/>
-      <stop offset="100%" stop-color="#ffd27a"/>
-    </linearGradient>
-    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0%" stop-color="#fff3bf"/>
-      <stop offset="100%" stop-color="#ff9f43"/>
-    </radialGradient>
-  </defs>
-  <rect width="96" height="96" fill="url(#sky)"/>
-  <circle cx="48" cy="38" r="18" fill="url(#sun)"/>
-  <path d="M0 64 C10 58 20 56 32 60 C42 63 54 66 66 62 C78 58 87 59 96 64 L96 96 L0 96 Z" fill="#553c66"/>
-  <path d="M0 74 C10 70 20 67 32 70 C42 73 56 76 70 72 C82 68 90 69 96 72 L96 96 L0 96 Z" fill="#2c2348"/>
-  <path d="M0 84 C12 80 23 78 34 81 C46 84 58 87 70 84 C81 81 90 82 96 84 L96 96 L0 96 Z" fill="#161126"/>
-</svg>"##,
-    },
-    Ui2SvgFixture {
-        tex_id: UI2_SVG_TEX_ID_BASE + 1,
-        svg: r##"
-<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="petal" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#ff8fb1"/>
-      <stop offset="100%" stop-color="#ff4d6d"/>
-    </linearGradient>
-    <radialGradient id="core" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0%" stop-color="#fff4b5"/>
-      <stop offset="100%" stop-color="#ffb703"/>
-    </radialGradient>
-  </defs>
-  <rect width="96" height="96" fill="#fff7ef"/>
-  <g fill="url(#petal)" stroke="#7a284a" stroke-width="2" stroke-linejoin="round">
-    <path d="M48 18 C60 22 66 31 66 42 C58 45 52 45 48 42 C44 45 38 45 30 42 C30 31 36 22 48 18 Z"/>
-    <path d="M78 48 C74 60 65 66 54 66 C51 58 51 52 54 48 C51 44 51 38 54 30 C65 30 74 36 78 48 Z"/>
-    <path d="M48 78 C36 74 30 65 30 54 C38 51 44 51 48 54 C52 51 58 51 66 54 C66 65 60 74 48 78 Z"/>
-    <path d="M18 48 C22 36 31 30 42 30 C45 38 45 44 42 48 C45 52 45 58 42 66 C31 66 22 60 18 48 Z"/>
-  </g>
-  <circle cx="48" cy="48" r="10" fill="url(#core)" stroke="#8c5a00" stroke-width="2"/>
-</svg>"##,
-    },
-    Ui2SvgFixture {
-        tex_id: UI2_SVG_TEX_ID_BASE + 2,
-        svg: r##"
-<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0%" stop-color="#8ff7c8" stop-opacity="0.95"/>
-      <stop offset="100%" stop-color="#0d3b2a" stop-opacity="0.15"/>
-    </radialGradient>
-  </defs>
-  <rect width="96" height="96" rx="12" fill="#091a16"/>
-  <circle cx="48" cy="48" r="28" fill="url(#glow)"/>
-  <circle cx="48" cy="48" r="12" fill="none" stroke="#7df9c1" stroke-width="2"/>
-  <circle cx="48" cy="48" r="24" fill="none" stroke="#4dd9a6" stroke-width="2" stroke-opacity="0.8"/>
-  <circle cx="48" cy="48" r="36" fill="none" stroke="#2ca67f" stroke-width="2" stroke-opacity="0.6"/>
-  <path d="M48 48 L76 34 A32 32 0 0 1 80 48 Z" fill="#8ff7c8" fill-opacity="0.35"/>
-  <path d="M48 14 L48 82 M14 48 L82 48" stroke="#74e7b7" stroke-width="1.5" stroke-linecap="round"/>
-  <circle cx="48" cy="48" r="4" fill="#d7fff0"/>
-</svg>"##,
-    },
-    Ui2SvgFixture {
-        tex_id: UI2_SVG_TEX_ID_BASE + 3,
-        svg: r##"
-<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#8ec5ff"/>
-      <stop offset="100%" stop-color="#2d7ff9"/>
-    </linearGradient>
-    <linearGradient id="spark" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
-      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-  <rect width="96" height="96" fill="#f3f8ff"/>
-  <path d="M48 14 L76 28 L76 62 C76 74 64 82 48 86 C32 82 20 74 20 62 L20 28 Z" fill="url(#shell)" stroke="#14439a" stroke-width="3" stroke-linejoin="round"/>
-  <path d="M48 26 L66 35 L66 58 C66 66 58 72 48 75 C38 72 30 66 30 58 L30 35 Z" fill="#e9f3ff" fill-opacity="0.35"/>
-  <path d="M34 28 C42 24 50 24 58 28 C50 31 42 37 36 48 C33 42 32 35 34 28 Z" fill="url(#spark)"/>
-  <path d="M34 54 C38 49 43 46 48 46 C53 46 58 49 62 54 C58 60 53 64 48 66 C43 64 38 60 34 54 Z M43 54 C45 52 46 51 48 51 C50 51 51 52 53 54 C51 56 50 57 48 59 C46 57 45 56 43 54 Z" fill="#ffffff" fill-rule="evenodd"/>
-</svg>"##,
-    },
-    Ui2SvgFixture {
-        tex_id: UI2_SVG_TEX_ID_BASE + 4,
-        svg: r##"
-<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#132238"/>
-      <stop offset="100%" stop-color="#214d6b"/>
-    </linearGradient>
-    <linearGradient id="waveA" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#6ee7f9"/>
-      <stop offset="100%" stop-color="#3b82f6"/>
-    </linearGradient>
-    <linearGradient id="waveB" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#f9a8d4"/>
-      <stop offset="100%" stop-color="#f97316"/>
-    </linearGradient>
-  </defs>
-  <rect width="96" height="96" rx="14" fill="url(#bg)"/>
-  <path d="M8 28 C20 16 34 16 46 28 C58 40 72 40 88 28" fill="none" stroke="url(#waveA)" stroke-width="8" stroke-linecap="round"/>
-  <path d="M8 48 C20 36 34 36 46 48 C58 60 72 60 88 48" fill="none" stroke="url(#waveB)" stroke-width="8" stroke-linecap="round"/>
-  <path d="M8 68 C20 56 34 56 46 68 C58 80 72 80 88 68" fill="none" stroke="url(#waveA)" stroke-width="8" stroke-linecap="round"/>
-  <circle cx="20" cy="78" r="4" fill="#f8fafc"/>
-  <circle cx="48" cy="18" r="3" fill="#f8fafc" fill-opacity="0.8"/>
-  <circle cx="76" cy="78" r="4" fill="#f8fafc"/>
-</svg>"##,
-    },
-    Ui2SvgFixture {
-        tex_id: UI2_SVG_TEX_ID_BASE + 5,
-        svg: r##"
-<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <radialGradient id="head" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0%" stop-color="#fff6d6"/>
-      <stop offset="100%" stop-color="#ffb347"/>
-    </radialGradient>
-  </defs>
-  <rect width="96" height="96" fill="#090b1a"/>
-  <path d="M20 72 C16 54 20 34 34 24 C46 16 62 16 72 24 C82 32 82 48 72 56 C62 64 46 64 34 56 C24 49 24 38 32 32 C39 27 49 27 56 32" fill="none" stroke="#7dd3fc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M18 76 C30 68 42 64 54 64 C44 70 32 78 24 88 Z" fill="#7dd3fc" fill-opacity="0.35"/>
-  <circle cx="58" cy="34" r="8" fill="url(#head)" stroke="#ffedd5" stroke-width="1.5"/>
-  <circle cx="70" cy="22" r="2" fill="#ffffff"/>
-  <circle cx="78" cy="30" r="1.5" fill="#ffffff" fill-opacity="0.8"/>
-</svg>"##,
-    },
-];
+fn browser2_svg_state() -> &'static Mutex<Vec<Ui2Browser2Svg>> {
+    UI2_BROWSER2_SVGS.call_once(|| {
+        let mut out = Vec::new();
+        let mut rest = UI2_SVG_DEMO_MJS;
+        let mut tex_id = UI2_BROWSER2_SVG_TEX_ID_BASE;
+        while let Some(start) = rest.find("svg: `") {
+            let after = &rest[start + 6..];
+            let Some(end) = after.find("`,") else {
+                break;
+            };
+            let svg = after[..end].trim();
+            if !svg.is_empty() {
+                out.push(Ui2Browser2Svg {
+                    tex_id,
+                    svg: String::from(svg),
+                    status: 0,
+                });
+                tex_id = tex_id.wrapping_add(1);
+            }
+            rest = &after[end + 2..];
+        }
+        Mutex::new(out)
+    })
+}
 
 fn init_state() -> &'static Mutex<Ui2State> {
     UI2_STATE.call_once(|| {
@@ -266,16 +252,21 @@ fn init_state() -> &'static Mutex<Ui2State> {
             next_window_id: 1,
             compose_seq: 0,
             compose_reason: "boot",
+            cursor_read_seq: 0,
+            cursors: Vec::new(),
+            hit_scene: Ui2HitScene::default(),
+            move_drag: Ui2WindowMoveDrag::default(),
+            resize_drag: Ui2WindowResizeDrag::default(),
             windows: Vec::new(),
         };
 
-        let demo_x = (view_w as f32) - 336.0;
+        let right_x = (view_w as f32) - 336.0;
 
         let browser_id = alloc_window(
             &mut state,
-            Ui2WindowKind::Browser,
-            "Browser",
-            Ui2Rect::new(72.0, 56.0, (demo_x - 96.0).max(360.0), (view_h as f32) - 112.0),
+            Ui2WindowKind::HostedBrowser,
+            "Browser 1",
+            Ui2Rect::new(72.0, 56.0, (right_x - 96.0).max(360.0), (view_h as f32) - 112.0),
             10,
             255,
         );
@@ -283,59 +274,14 @@ fn init_state() -> &'static Mutex<Ui2State> {
 
         let _ = alloc_window(
             &mut state,
-            Ui2WindowKind::Dialog,
-            "SVG List A",
-            Ui2Rect::new(demo_x, 72.0, 272.0, 236.0),
+            Ui2WindowKind::SvgDemo,
+            "Browser 2",
+            Ui2Rect::new(right_x, 72.0, 272.0, (view_h as f32) - 144.0),
             20,
-            246,
-        );
-
-        let _ = alloc_window(
-            &mut state,
-            Ui2WindowKind::Overlay,
-            "SVG List B",
-            Ui2Rect::new(demo_x, 324.0, 272.0, 236.0),
-            24,
-            224,
+            255,
         );
 
         Mutex::new(state)
-    })
-}
-
-fn surface_state() -> &'static Mutex<Vec<Ui2SurfaceSlot>> {
-    UI2_SURFACES.call_once(|| {
-        Mutex::new(vec![
-            Ui2SurfaceSlot {
-                tex_id: UI2_NOTES_SURFACE_TEX_ID,
-                width: 0,
-                height: 0,
-                dirty: true,
-                label: "notes",
-            },
-            Ui2SurfaceSlot {
-                tex_id: UI2_GLASS_SURFACE_TEX_ID,
-                width: 0,
-                height: 0,
-                dirty: true,
-                label: "glass",
-            },
-        ])
-    })
-}
-
-fn svg_asset_state() -> &'static Mutex<Vec<Ui2SvgAsset>> {
-    UI2_SVG_ASSETS.call_once(|| {
-        let mut assets = Vec::with_capacity(UI2_SVG_FIXTURES.len());
-        for fixture in UI2_SVG_FIXTURES {
-            assets.push(Ui2SvgAsset {
-                tex_id: fixture.tex_id,
-                width: 0,
-                height: 0,
-                status: UI2_ASYNC_TEX_STATUS_UNKNOWN,
-            });
-        }
-        Mutex::new(assets)
     })
 }
 
@@ -354,9 +300,13 @@ fn alloc_window(
         kind,
         title: String::from(title),
         rect,
+        restore_rect: rect,
         z,
         visible: true,
         alpha,
+        decoration_mode: Ui2WindowDecorationMode::System,
+        state: Ui2WindowStateKind::Normal,
+        selected_cursor_slots: Vec::new(),
         dirty: true,
         dirty_seq: 0,
         last_reason: "create",
@@ -381,6 +331,573 @@ fn window_mut(state: &mut Ui2State, id: u32) -> Option<&mut Ui2Window> {
     state.windows.iter_mut().find(|window| window.id == id)
 }
 
+fn rect_contains_point(rect: Ui2Rect, x: f32, y: f32) -> bool {
+    x >= rect.x && y >= rect.y && x < (rect.x + rect.w) && y < (rect.y + rect.h)
+}
+
+fn window_kind_id(kind: Ui2WindowKind) -> u32 {
+    match kind {
+        Ui2WindowKind::HostedBrowser => 1,
+        Ui2WindowKind::SvgDemo => 2,
+    }
+}
+
+fn window_is_renderable(window: &Ui2Window) -> bool {
+    window.visible && window.state != Ui2WindowStateKind::Minimized
+}
+
+fn cursor_color(slot_id: u32) -> (u8, u8, u8, u8) {
+    match slot_id % 6 {
+        0 => (0x3B, 0x82, 0xF6, 0xFF),
+        1 => (0xEF, 0x44, 0x44, 0xFF),
+        2 => (0x10, 0xB9, 0x81, 0xFF),
+        3 => (0xF5, 0x9E, 0x0B, 0xFF),
+        4 => (0x8B, 0x5C, 0xF6, 0xFF),
+        _ => (0x06, 0xB6, 0xD4, 0xFF),
+    }
+}
+
+fn cursor_index(state: &Ui2State, slot_id: u32) -> Option<usize> {
+    state.cursors.iter().position(|cursor| cursor.slot_id == slot_id)
+}
+
+fn ensure_cursor_index(state: &mut Ui2State, slot_id: u32) -> usize {
+    if let Some(idx) = cursor_index(state, slot_id) {
+        return idx;
+    }
+    state.cursors.push(Ui2CursorState {
+        slot_id,
+        ..Ui2CursorState::default()
+    });
+    state.cursors.len() - 1
+}
+
+fn note_selection_change(window: &mut Ui2Window) {
+    window.dirty = true;
+    window.last_reason = "cursor-select";
+}
+
+fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id: u32) -> bool {
+    let cursor_idx = ensure_cursor_index(state, slot_id);
+    if state.cursors[cursor_idx].selected_window_id == next_window_id {
+        return false;
+    }
+
+    let mut changed = false;
+    for window in &mut state.windows {
+        if let Some(pos) = window
+            .selected_cursor_slots
+            .iter()
+            .position(|selected_slot_id| *selected_slot_id == slot_id)
+        {
+            window.selected_cursor_slots.remove(pos);
+            note_selection_change(window);
+            changed = true;
+        }
+    }
+
+    if next_window_id != 0 {
+        if let Some(window) = window_mut(state, next_window_id) {
+            if !window
+                .selected_cursor_slots
+                .iter()
+                .any(|selected_slot_id| *selected_slot_id == slot_id)
+            {
+                window.selected_cursor_slots.push(slot_id);
+                note_selection_change(window);
+                changed = true;
+            }
+        }
+    }
+
+    state.cursors[cursor_idx].selected_window_id = next_window_id;
+    if changed {
+        state.compose_reason = "cursor-select";
+        UI2_DIRTY.store(true, Ordering::Release);
+        crate::log!(
+            "ui2: cursor-select slot={} window={}\n",
+            slot_id,
+            next_window_id
+        );
+    }
+    changed
+}
+
+fn cursor_event_px(value: f64, extent: u32) -> f32 {
+    let max_px = extent.saturating_sub(1) as f32;
+    (value.clamp(0.0, 1.0) as f32) * max_px
+}
+
+struct Ui2HitBuildContext {
+    browser_interactives: trueos_qjs::browser_task::HostedBrowserInteractiveState,
+}
+
+trait Ui2WindowHitSource {
+    fn append_hit_entries(
+        &self,
+        ctx: &Ui2HitBuildContext,
+        scene: &mut Ui2HitScene,
+    );
+}
+
+impl Ui2WindowHitSource for Ui2Window {
+    fn append_hit_entries(
+        &self,
+        ctx: &Ui2HitBuildContext,
+        scene: &mut Ui2HitScene,
+    ) {
+        if !window_is_renderable(self) {
+            return;
+        }
+
+        scene.append(Ui2HitEntry {
+            owner_window_id: self.id,
+            item_id: 0,
+            kind: Ui2HitKind::WindowBody,
+            rect: self.rect,
+            z: self.z,
+        });
+        if let Some(rect) = window_decoration_rect(self) {
+            scene.append(Ui2HitEntry {
+                owner_window_id: self.id,
+                item_id: 1,
+                kind: Ui2HitKind::WindowDecoration,
+                rect,
+                z: self.z,
+            });
+        }
+
+        match self.kind {
+            Ui2WindowKind::HostedBrowser => {
+                let Some(content) = window_content_rect(self) else {
+                    return;
+                };
+                for interactive in &ctx.browser_interactives.interactives {
+                    if interactive.width == 0 || interactive.height == 0 {
+                        continue;
+                    }
+                    let rect = Ui2Rect::new(
+                        content.x + interactive.x as f32,
+                        content.y + interactive.y as f32,
+                        interactive.width as f32,
+                        interactive.height as f32,
+                    );
+                    scene.append(Ui2HitEntry {
+                        owner_window_id: self.id,
+                        item_id: interactive.item_id,
+                        kind: Ui2HitKind::BrowserInteractive,
+                        rect,
+                        z: self.z,
+                    });
+                }
+            }
+            Ui2WindowKind::SvgDemo => {}
+        }
+    }
+}
+
+impl Ui2HitScene {
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    fn append(&mut self, entry: Ui2HitEntry) {
+        self.entries.push(entry);
+    }
+
+    fn remove_window(&mut self, owner_window_id: u32) {
+        self.entries
+            .retain(|entry| entry.owner_window_id != owner_window_id);
+    }
+
+    fn hit_at(&self, cursor_x: f32, cursor_y: f32) -> Option<Ui2HitTarget> {
+        let mut best: Option<(i16, Ui2HitKind, u32, u32)> = None;
+        for entry in &self.entries {
+            if !hit_entry_intersects_cursor(entry, cursor_x, cursor_y) {
+                continue;
+            }
+            let candidate = (entry.z, entry.kind, entry.owner_window_id, entry.item_id);
+            if best
+                .as_ref()
+                .map(|current| candidate > *current)
+                .unwrap_or(true)
+            {
+                best = Some(candidate);
+            }
+        }
+        best.map(|(_, kind, owner_window_id, item_id)| Ui2HitTarget {
+            owner_window_id,
+            item_id,
+            kind,
+        })
+    }
+}
+
+fn rebuild_hit_scene(state: &mut Ui2State) {
+    let ctx = Ui2HitBuildContext {
+        browser_interactives: trueos_qjs::browser_task::hosted_interactive_state(),
+    };
+    state.hit_scene.clear();
+    for idx in sorted_window_indices(state) {
+        let window = &state.windows[idx];
+        if !window_is_renderable(window) {
+            state.hit_scene.remove_window(window.id);
+            continue;
+        }
+        window.append_hit_entries(&ctx, &mut state.hit_scene);
+    }
+    state.hit_scene.seq = state.hit_scene.seq.wrapping_add(1);
+}
+
+fn hit_entry_intersects_cursor(entry: &Ui2HitEntry, cursor_x: f32, cursor_y: f32) -> bool {
+    if !rect_contains_point(
+        Ui2Rect::new(
+            entry.rect.x - UI2_CURSOR_HIT_RADIUS_PX,
+            entry.rect.y - UI2_CURSOR_HIT_RADIUS_PX,
+            entry.rect.w + (UI2_CURSOR_HIT_RADIUS_PX * 2.0),
+            entry.rect.h + (UI2_CURSOR_HIT_RADIUS_PX * 2.0),
+        ),
+        cursor_x,
+        cursor_y,
+    ) {
+        return false;
+    }
+
+    let cursor = Ball::new(UI2_CURSOR_HIT_RADIUS_PX.max(0.5));
+    let rect = Cuboid::new(Vector::new(
+        (entry.rect.w * 0.5).max(0.5),
+        (entry.rect.h * 0.5).max(0.5),
+    ));
+    let cursor_iso = Isometry::translation(cursor_x, cursor_y);
+    let rect_iso = Isometry::translation(
+        entry.rect.x + (entry.rect.w * 0.5),
+        entry.rect.y + (entry.rect.h * 0.5),
+    );
+    matches!(
+        query::intersection_test(&cursor_iso, &cursor, &rect_iso, &rect),
+        Ok(true)
+    )
+}
+
+fn is_simple_click(press_x: f32, press_y: f32, release_x: f32, release_y: f32) -> bool {
+    let dx = release_x - press_x;
+    let dy = release_y - press_y;
+    let slop_sq = UI2_CLICK_SLOP_PX * UI2_CLICK_SLOP_PX;
+    (dx * dx) + (dy * dy) <= slop_sq
+}
+
+fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidCursorEvent) {
+    let slot_id = event.slot_id;
+    if slot_id == 0 {
+        return;
+    }
+
+    let px = cursor_event_px(event.x, state.view_w);
+    let py = cursor_event_px(event.y, state.view_h);
+    let press_hit = state.hit_scene.hit_at(px, py);
+    let release_hit = state.hit_scene.hit_at(px, py);
+    let press_window_id = if (event.buttons_down & UI2_PRIMARY_BUTTON_MASK) != 0 {
+        press_hit.map(|target| target.owner_window_id).unwrap_or(0)
+    } else {
+        0
+    };
+    let release_window_id = release_hit.map(|target| target.owner_window_id).unwrap_or(0);
+    let cursor_idx = ensure_cursor_index(state, slot_id);
+
+    let mut select_window_id = 0u32;
+    let mut begin_move_drag = false;
+    {
+        let cursor = &mut state.cursors[cursor_idx];
+        let prev_buttons_down = cursor.buttons_down;
+        let primary_was_down = (prev_buttons_down & UI2_PRIMARY_BUTTON_MASK) != 0;
+        let primary_is_down = (event.buttons_down & UI2_PRIMARY_BUTTON_MASK) != 0;
+
+        cursor.x = px;
+        cursor.y = py;
+        cursor.buttons_down = event.buttons_down;
+
+        if !primary_was_down && primary_is_down {
+            cursor.press_x = px;
+            cursor.press_y = py;
+            cursor.press_window_id = press_window_id;
+            cursor.press_armed = press_window_id != 0;
+            begin_move_drag = true;
+        } else if primary_was_down && !primary_is_down {
+            if cursor.press_armed
+                && cursor.press_window_id != 0
+                && cursor.press_window_id == release_window_id
+                && is_simple_click(cursor.press_x, cursor.press_y, px, py)
+            {
+                select_window_id = release_window_id;
+            }
+            cursor.press_armed = false;
+            cursor.press_window_id = 0;
+        }
+    }
+
+    if begin_move_drag {
+        if let Some(target) = press_hit {
+            if target.kind == Ui2HitKind::WindowDecoration {
+                let _ = begin_move_drag_for_cursor(state, slot_id, target.owner_window_id, px, py);
+            }
+        }
+    }
+
+    update_move_drag_for_cursor(state, slot_id, px, py, event.buttons_down);
+    update_resize_drag_for_cursor(state, slot_id, px, py, event.buttons_down);
+
+    if select_window_id != 0 {
+        let _ = set_cursor_selected_window(state, slot_id, select_window_id);
+    }
+}
+
+fn pump_cursor_selection(state: &mut Ui2State) {
+    let mut events = [crate::usb::hid::TrueosHidCursorEvent::default(); UI2_CURSOR_EVENT_BATCH];
+    loop {
+        let (next_seq, dropped, wrote) =
+            crate::usb::hid::read_cursor_events_since(state.cursor_read_seq, &mut events);
+        if dropped != 0 {
+            crate::log!(
+                "ui2: cursor-event-drop read_seq={} dropped={}\n",
+                state.cursor_read_seq,
+                dropped
+            );
+        }
+        if wrote == 0 {
+            break;
+        }
+        state.cursor_read_seq = next_seq;
+        for event in events.iter().take(wrote) {
+            process_cursor_event(state, *event);
+        }
+        if wrote < events.len() {
+            break;
+        }
+    }
+}
+
+fn window_info(window: &Ui2Window) -> TrueosUi2WindowInfo {
+    let content = window_content_rect(window).unwrap_or(Ui2Rect::new(0.0, 0.0, 0.0, 0.0));
+    let decoration = window_decoration_rect(window).unwrap_or(Ui2Rect::new(0.0, 0.0, 0.0, 0.0));
+    TrueosUi2WindowInfo {
+        id: window.id,
+        kind: window_kind_id(window.kind),
+        state: window.state as u32,
+        decoration_mode: window.decoration_mode as u32,
+        visible: if window.visible { 1 } else { 0 },
+        selected: if window.selected_cursor_slots.is_empty() {
+            0
+        } else {
+            1
+        },
+        x: libm::roundf(window.rect.x) as i32,
+        y: libm::roundf(window.rect.y) as i32,
+        width: round_to_u32(window.rect.w, 0),
+        height: round_to_u32(window.rect.h, 0),
+        content_x: libm::roundf(content.x) as i32,
+        content_y: libm::roundf(content.y) as i32,
+        content_width: round_to_u32(content.w, 0),
+        content_height: round_to_u32(content.h, 0),
+        decoration_x: libm::roundf(decoration.x) as i32,
+        decoration_y: libm::roundf(decoration.y) as i32,
+        decoration_width: round_to_u32(decoration.w, 0),
+        decoration_height: round_to_u32(decoration.h, 0),
+    }
+}
+
+fn normalized_window_rect(state: &Ui2State, rect: Ui2Rect) -> Ui2Rect {
+    normalized_window_rect_for_view(state.view_w, state.view_h, rect)
+}
+
+fn normalized_window_rect_for_view(view_w: u32, view_h: u32, rect: Ui2Rect) -> Ui2Rect {
+    let max_w = (view_w as f32).max(1.0);
+    let max_h = (view_h as f32).max(1.0);
+    Ui2Rect::new(
+        rect.x,
+        rect.y,
+        rect.w.max(1.0).min(max_w),
+        rect.h.max(1.0).min(max_h),
+    )
+}
+
+fn save_window_restore_rect(state: &Ui2State, window: &mut Ui2Window) {
+    if window.state == Ui2WindowStateKind::Normal {
+        window.restore_rect = normalized_window_rect(state, window.rect);
+    }
+}
+
+fn maximize_window_rect(state: &Ui2State) -> Ui2Rect {
+    Ui2Rect::new(0.0, 0.0, (state.view_w as f32).max(1.0), (state.view_h as f32).max(1.0))
+}
+
+#[inline]
+fn is_valid_resize_edge_mask(edge_mask: u32) -> bool {
+    if edge_mask == 0 {
+        return false;
+    }
+    if (edge_mask & UI2_WINDOW_RESIZE_LEFT) != 0 && (edge_mask & UI2_WINDOW_RESIZE_RIGHT) != 0 {
+        return false;
+    }
+    if (edge_mask & UI2_WINDOW_RESIZE_TOP) != 0 && (edge_mask & UI2_WINDOW_RESIZE_BOTTOM) != 0 {
+        return false;
+    }
+    true
+}
+
+fn pick_drag_cursor_slot(state: &Ui2State, window: &Ui2Window) -> Option<u32> {
+    for slot_id in &window.selected_cursor_slots {
+        if let Some(cursor) = state.cursors.iter().find(|cursor| cursor.slot_id == *slot_id) {
+            if (cursor.buttons_down & UI2_PRIMARY_BUTTON_MASK) != 0 {
+                return Some(*slot_id);
+            }
+        }
+    }
+    for cursor in &state.cursors {
+        if cursor.selected_window_id == window.id && (cursor.buttons_down & UI2_PRIMARY_BUTTON_MASK) != 0 {
+            return Some(cursor.slot_id);
+        }
+    }
+    for cursor in &state.cursors {
+        if (cursor.buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
+            continue;
+        }
+        if rect_contains_point(window.rect, cursor.x, cursor.y) {
+            return Some(cursor.slot_id);
+        }
+    }
+    None
+}
+
+fn begin_move_drag_for_cursor(
+    state: &mut Ui2State,
+    slot_id: u32,
+    window_id: u32,
+    cursor_x: f32,
+    cursor_y: f32,
+) -> bool {
+    let Some(window) = state
+        .windows
+        .iter()
+        .find(|window| window.id == window_id && window_is_renderable(window))
+        .cloned()
+    else {
+        return false;
+    };
+    if window.state == Ui2WindowStateKind::Maximized {
+        return false;
+    }
+    let top_z = state.windows.iter().map(|window| window.z).max().unwrap_or(0);
+    if let Some(window_mut) = window_mut(state, window_id) {
+        window_mut.z = top_z.saturating_add(1);
+        let _ = note_window_dirty(state, window_id, "begin-window-move");
+    }
+    state.move_drag = Ui2WindowMoveDrag {
+        active: true,
+        window_id,
+        cursor_slot_id: slot_id,
+        grab_dx: cursor_x - window.rect.x,
+        grab_dy: cursor_y - window.rect.y,
+    };
+    state.resize_drag = Ui2WindowResizeDrag::default();
+    state.compose_reason = "begin-window-move";
+    rebuild_hit_scene(state);
+    true
+}
+
+fn update_move_drag_for_cursor(
+    state: &mut Ui2State,
+    slot_id: u32,
+    cursor_x: f32,
+    cursor_y: f32,
+    buttons_down: u32,
+) {
+    if !state.move_drag.active || state.move_drag.cursor_slot_id != slot_id {
+        return;
+    }
+    if (buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
+        state.move_drag = Ui2WindowMoveDrag::default();
+        return;
+    }
+    let next_x = cursor_x - state.move_drag.grab_dx;
+    let next_y = cursor_y - state.move_drag.grab_dy;
+    let window_id = state.move_drag.window_id;
+    let Some(window) = window_mut(state, window_id) else {
+        state.move_drag = Ui2WindowMoveDrag::default();
+        return;
+    };
+    if window.state == Ui2WindowStateKind::Maximized {
+        return;
+    }
+    let mut moved = false;
+    if window.rect.x != next_x || window.rect.y != next_y {
+        window.rect.x = next_x;
+        window.rect.y = next_y;
+        window.restore_rect = window.rect;
+        moved = true;
+    }
+    if moved {
+        state.compose_reason = "window-drag";
+        let _ = note_window_dirty(state, window_id, "window-drag");
+        rebuild_hit_scene(state);
+    }
+}
+
+fn update_resize_drag_for_cursor(
+    state: &mut Ui2State,
+    slot_id: u32,
+    cursor_x: f32,
+    cursor_y: f32,
+    buttons_down: u32,
+) {
+    if !state.resize_drag.active || state.resize_drag.cursor_slot_id != slot_id {
+        return;
+    }
+    if (buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
+        state.resize_drag = Ui2WindowResizeDrag::default();
+        return;
+    }
+
+    let drag = state.resize_drag;
+    let Some(window) = window_mut(state, drag.window_id) else {
+        state.resize_drag = Ui2WindowResizeDrag::default();
+        return;
+    };
+    if window.state == Ui2WindowStateKind::Maximized {
+        state.resize_drag = Ui2WindowResizeDrag::default();
+        return;
+    }
+
+    let mut next = drag.start_rect;
+    let dx = cursor_x - drag.start_cursor_x;
+    let dy = cursor_y - drag.start_cursor_y;
+    let right = drag.start_rect.x + drag.start_rect.w;
+    let bottom = drag.start_rect.y + drag.start_rect.h;
+
+    if (drag.edge_mask & UI2_WINDOW_RESIZE_LEFT) != 0 {
+        let max_x = right - 1.0;
+        next.x = libm::fminf(drag.start_rect.x + dx, max_x);
+        next.w = (right - next.x).max(1.0);
+    } else if (drag.edge_mask & UI2_WINDOW_RESIZE_RIGHT) != 0 {
+        next.w = (drag.start_rect.w + dx).max(1.0);
+    }
+
+    if (drag.edge_mask & UI2_WINDOW_RESIZE_TOP) != 0 {
+        let max_y = bottom - 1.0;
+        next.y = libm::fminf(drag.start_rect.y + dy, max_y);
+        next.h = (bottom - next.y).max(1.0);
+    } else if (drag.edge_mask & UI2_WINDOW_RESIZE_BOTTOM) != 0 {
+        next.h = (drag.start_rect.h + dy).max(1.0);
+    }
+
+    if window.rect != next {
+        window.rect = next;
+        window.restore_rect = next;
+        state.compose_reason = "window-resize-drag";
+        let _ = note_window_dirty(state, drag.window_id, "window-resize-drag");
+        rebuild_hit_scene(state);
+    }
+}
+
 fn note_window_dirty(state: &mut Ui2State, id: u32, reason: &'static str) -> bool {
     let Some(window) = window_mut(state, id) else {
         return false;
@@ -396,10 +913,16 @@ pub fn browser_window_id() -> Option<u32> {
     if id == 0 { None } else { Some(id) }
 }
 
-pub fn create_window(kind: Ui2WindowKind, title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
+pub fn window_info_by_id(id: u32) -> Option<TrueosUi2WindowInfo> {
+    let state_lock = init_state();
+    let state = state_lock.lock();
+    state.windows.iter().find(|window| window.id == id).map(window_info)
+}
+
+pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     let state_lock = init_state();
     let mut state = state_lock.lock();
-    let id = alloc_window(&mut state, kind, title, rect, z, alpha);
+    let id = alloc_window(&mut state, Ui2WindowKind::SvgDemo, title, rect, z, alpha);
     state.compose_reason = "create-window";
     UI2_DIRTY.store(true, Ordering::Release);
     id
@@ -411,8 +934,14 @@ pub fn move_window(id: u32, x: f32, y: f32) -> bool {
     let Some(window) = window_mut(&mut state, id) else {
         return false;
     };
+    if window.state != Ui2WindowStateKind::Normal {
+        window.state = Ui2WindowStateKind::Normal;
+    }
     window.rect.x = x;
     window.rect.y = y;
+    if window.state == Ui2WindowStateKind::Normal {
+        window.restore_rect = window.rect;
+    }
     state.compose_reason = "move-window";
     note_window_dirty(&mut state, id, "move-window")
 }
@@ -423,10 +952,30 @@ pub fn resize_window(id: u32, w: f32, h: f32) -> bool {
     let Some(window) = window_mut(&mut state, id) else {
         return false;
     };
+    if window.state != Ui2WindowStateKind::Normal {
+        window.state = Ui2WindowStateKind::Normal;
+    }
     window.rect.w = w.max(1.0);
     window.rect.h = h.max(1.0);
+    if window.state == Ui2WindowStateKind::Normal {
+        window.restore_rect = window.rect;
+    }
     state.compose_reason = "resize-window";
     note_window_dirty(&mut state, id, "resize-window")
+}
+
+pub fn set_window_title(id: u32, title: &str) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.title == title {
+        return true;
+    }
+    window.title = String::from(title);
+    state.compose_reason = "title-window";
+    note_window_dirty(&mut state, id, "title-window")
 }
 
 pub fn raise_window(id: u32) -> bool {
@@ -446,6 +995,10 @@ pub fn raise_window(id: u32) -> bool {
     note_window_dirty(&mut state, id, "raise-window")
 }
 
+pub fn focus_window(id: u32) -> bool {
+    raise_window(id)
+}
+
 pub fn set_window_visible(id: u32, visible: bool) -> bool {
     let state_lock = init_state();
     let mut state = state_lock.lock();
@@ -459,7 +1012,192 @@ pub fn set_window_visible(id: u32, visible: bool) -> bool {
         "hide-window"
     };
     state.compose_reason = reason;
+    if !visible {
+        state.hit_scene.remove_window(id);
+        if state.move_drag.window_id == id {
+            state.move_drag = Ui2WindowMoveDrag::default();
+        }
+        if state.resize_drag.window_id == id {
+            state.resize_drag = Ui2WindowResizeDrag::default();
+        }
+    }
     note_window_dirty(&mut state, id, reason)
+}
+
+pub fn close_window(id: u32) -> bool {
+    set_window_visible(id, false)
+}
+
+pub fn set_window_decorations(id: u32, mode: Ui2WindowDecorationMode) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.decoration_mode == mode {
+        return true;
+    }
+    window.decoration_mode = mode;
+    state.compose_reason = "decor-window";
+    note_window_dirty(&mut state, id, "decor-window")
+}
+
+pub fn minimize_window(id: u32) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let view_w = state.view_w;
+    let view_h = state.view_h;
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.state == Ui2WindowStateKind::Minimized {
+        return true;
+    }
+    if window.state == Ui2WindowStateKind::Normal {
+        window.restore_rect = normalized_window_rect_for_view(view_w, view_h, window.rect);
+    }
+    window.state = Ui2WindowStateKind::Minimized;
+    state.compose_reason = "minimize-window";
+    if state.move_drag.window_id == id {
+        state.move_drag = Ui2WindowMoveDrag::default();
+    }
+    if state.resize_drag.window_id == id {
+        state.resize_drag = Ui2WindowResizeDrag::default();
+    }
+    note_window_dirty(&mut state, id, "minimize-window")
+}
+
+pub fn maximize_window(id: u32) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let next_rect = maximize_window_rect(&state);
+    let view_w = state.view_w;
+    let view_h = state.view_h;
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.state == Ui2WindowStateKind::Maximized && window.rect == next_rect {
+        return true;
+    }
+    if window.state != Ui2WindowStateKind::Maximized {
+        window.restore_rect = normalized_window_rect_for_view(view_w, view_h, window.rect);
+    }
+    window.rect = next_rect;
+    window.state = Ui2WindowStateKind::Maximized;
+    state.compose_reason = "maximize-window";
+    if state.move_drag.window_id == id {
+        state.move_drag = Ui2WindowMoveDrag::default();
+    }
+    if state.resize_drag.window_id == id {
+        state.resize_drag = Ui2WindowResizeDrag::default();
+    }
+    note_window_dirty(&mut state, id, "maximize-window")
+}
+
+pub fn restore_window(id: u32) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let view_w = state.view_w;
+    let view_h = state.view_h;
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.state == Ui2WindowStateKind::Normal {
+        return true;
+    }
+    if window.restore_rect.w > 0.0 && window.restore_rect.h > 0.0 {
+        window.rect = normalized_window_rect_for_view(view_w, view_h, window.restore_rect);
+    }
+    window.state = Ui2WindowStateKind::Normal;
+    state.compose_reason = "restore-window";
+    note_window_dirty(&mut state, id, "restore-window")
+}
+
+pub fn begin_window_move(id: u32) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = state.windows.iter().find(|window| window.id == id && window_is_renderable(window)).cloned() else {
+        return false;
+    };
+    let Some(cursor_slot_id) = pick_drag_cursor_slot(&state, &window) else {
+        return false;
+    };
+    let Some(cursor) = state.cursors.iter().find(|cursor| cursor.slot_id == cursor_slot_id).copied() else {
+        return false;
+    };
+    if (cursor.buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
+        return false;
+    }
+    state.move_drag = Ui2WindowMoveDrag {
+        active: true,
+        window_id: id,
+        cursor_slot_id,
+        grab_dx: cursor.x - window.rect.x,
+        grab_dy: cursor.y - window.rect.y,
+    };
+    state.resize_drag = Ui2WindowResizeDrag::default();
+    state.compose_reason = "begin-window-move";
+    let top_z = state.windows.iter().map(|window| window.z).max().unwrap_or(0);
+    if let Some(window_mut) = window_mut(&mut state, id) {
+        window_mut.z = top_z.saturating_add(1);
+    }
+    note_window_dirty(&mut state, id, "begin-window-move")
+}
+
+pub fn begin_window_resize(id: u32, edge_mask: u32) -> bool {
+    let edge_mask = edge_mask
+        & (UI2_WINDOW_RESIZE_LEFT
+            | UI2_WINDOW_RESIZE_TOP
+            | UI2_WINDOW_RESIZE_RIGHT
+            | UI2_WINDOW_RESIZE_BOTTOM);
+    if !is_valid_resize_edge_mask(edge_mask) {
+        return false;
+    }
+
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = state
+        .windows
+        .iter()
+        .find(|window| window.id == id && window_is_renderable(window))
+        .cloned()
+    else {
+        return false;
+    };
+    if window.state != Ui2WindowStateKind::Normal {
+        return false;
+    }
+    let Some(cursor_slot_id) = pick_drag_cursor_slot(&state, &window) else {
+        return false;
+    };
+    let Some(cursor) = state
+        .cursors
+        .iter()
+        .find(|cursor| cursor.slot_id == cursor_slot_id)
+        .copied()
+    else {
+        return false;
+    };
+    if (cursor.buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
+        return false;
+    }
+
+    state.move_drag = Ui2WindowMoveDrag::default();
+    state.resize_drag = Ui2WindowResizeDrag {
+        active: true,
+        window_id: id,
+        cursor_slot_id,
+        edge_mask,
+        start_cursor_x: cursor.x,
+        start_cursor_y: cursor.y,
+        start_rect: window.rect,
+    };
+    state.compose_reason = "begin-window-resize";
+    let top_z = state.windows.iter().map(|window| window.z).max().unwrap_or(0);
+    if let Some(window_mut) = window_mut(&mut state, id) {
+        window_mut.z = top_z.saturating_add(1);
+    }
+    note_window_dirty(&mut state, id, "begin-window-resize")
 }
 
 pub fn request_window_repaint(id: u32, reason: &'static str) -> bool {
@@ -476,6 +1214,10 @@ pub fn request_browser_repaint(reason: &'static str) -> bool {
     request_window_repaint(id, reason)
 }
 
+fn is_primary_browser_window(window: &Ui2Window) -> bool {
+    matches!(window.kind, Ui2WindowKind::HostedBrowser)
+}
+
 pub fn request_full_recompose(reason: &'static str) {
     let state_lock = init_state();
     let mut state = state_lock.lock();
@@ -487,18 +1229,163 @@ pub fn request_full_recompose(reason: &'static str) {
     UI2_DIRTY.store(true, Ordering::Release);
 }
 
-fn window_content_rect(window: &Ui2Window) -> Option<Ui2Rect> {
-    let w = (window.rect.w - 2.0).max(1.0);
-    let h = (window.rect.h - UI2_TITLE_H - 1.0).max(1.0);
-    if !(w > 0.0 && h > 0.0) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_primary_browser_window_id() -> u32 {
+    browser_window_id().unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_info(
+    window_id: u32,
+    out_info: *mut TrueosUi2WindowInfo,
+) -> i32 {
+    if out_info.is_null() {
+        return -1;
+    }
+    let Some(info) = window_info_by_id(window_id) else {
+        return -1;
+    };
+    *out_info = info;
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_title(
+    window_id: u32,
+    title_ptr: *const u8,
+    title_len: usize,
+) -> i32 {
+    if title_ptr.is_null() {
+        return -1;
+    }
+    let title = core::slice::from_raw_parts(title_ptr, title_len);
+    let Ok(title) = core::str::from_utf8(title) else {
+        return -1;
+    };
+    if set_window_title(window_id, title) { 0 } else { -1 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_position(
+    window_id: u32,
+    x: i32,
+    y: i32,
+) -> i32 {
+    if move_window(window_id, x as f32, y as f32) { 0 } else { -1 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_size(
+    window_id: u32,
+    width: u32,
+    height: u32,
+) -> i32 {
+    if resize_window(window_id, width as f32, height as f32) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_decorations(
+    window_id: u32,
+    mode: u32,
+) -> i32 {
+    let Some(mode) = Ui2WindowDecorationMode::from_u32(mode) else {
+        return -1;
+    };
+    if set_window_decorations(window_id, mode) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_minimize(window_id: u32) -> i32 {
+    if minimize_window(window_id) { 0 } else { -1 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_maximize(window_id: u32) -> i32 {
+    if maximize_window(window_id) { 0 } else { -1 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_restore(window_id: u32) -> i32 {
+    if restore_window(window_id) { 0 } else { -1 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_focus(window_id: u32) -> i32 {
+    if focus_window(window_id) { 0 } else { -1 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_close(window_id: u32) -> i32 {
+    if close_window(window_id) { 0 } else { -1 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_begin_move(window_id: u32) -> i32 {
+    if begin_window_move(window_id) { 0 } else { -1 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_begin_resize(window_id: u32, edge_mask: u32) -> i32 {
+    if begin_window_resize(window_id, edge_mask) {
+        0
+    } else {
+        -1
+    }
+}
+
+fn window_decoration_rect(window: &Ui2Window) -> Option<Ui2Rect> {
+    if window.decoration_mode != Ui2WindowDecorationMode::System {
+        return None;
+    }
+    if !(window.rect.w > 0.0 && UI2_TITLE_H > 0.0) {
         return None;
     }
     Some(Ui2Rect::new(
-        window.rect.x + 1.0,
-        window.rect.y + UI2_TITLE_H,
-        w,
-        h,
+        window.rect.x,
+        window.rect.y,
+        window.rect.w,
+        UI2_TITLE_H,
     ))
+}
+
+fn window_content_rect(window: &Ui2Window) -> Option<Ui2Rect> {
+    match window.decoration_mode {
+        Ui2WindowDecorationMode::System => {
+            let w = (window.rect.w - 2.0).max(1.0);
+            let h = (window.rect.h - UI2_TITLE_H - 1.0).max(1.0);
+            if !(w > 0.0 && h > 0.0) {
+                return None;
+            }
+            Some(Ui2Rect::new(
+                window.rect.x + 1.0,
+                window.rect.y + UI2_TITLE_H,
+                w,
+                h,
+            ))
+        }
+        Ui2WindowDecorationMode::Client => {
+            let w = (window.rect.w - 2.0).max(1.0);
+            let h = (window.rect.h - 2.0).max(1.0);
+            if !(w > 0.0 && h > 0.0) {
+                return None;
+            }
+            Some(Ui2Rect::new(window.rect.x + 1.0, window.rect.y + 1.0, w, h))
+        }
+        Ui2WindowDecorationMode::None => {
+            if !(window.rect.w > 0.0 && window.rect.h > 0.0) {
+                return None;
+            }
+            Some(window.rect)
+        }
+    }
 }
 
 #[inline]
@@ -508,132 +1395,6 @@ fn round_to_u32(v: f32, min: u32) -> u32 {
         rounded as u32
     } else {
         min
-    }
-}
-
-fn mark_demo_surfaces_dirty() {
-    let surface_lock = surface_state();
-    let mut surfaces = surface_lock.lock();
-    for slot in surfaces.iter_mut() {
-        slot.dirty = true;
-    }
-}
-
-fn queue_ui2_svg_assets_once() {
-    if UI2_SVG_QUEUE_STARTED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    let asset_lock = svg_asset_state();
-    let mut assets = asset_lock.lock();
-    for (index, fixture) in UI2_SVG_FIXTURES.iter().enumerate() {
-        let rc = unsafe {
-            crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_svg_async(
-                fixture.tex_id,
-                fixture.svg.as_ptr(),
-                fixture.svg.len(),
-            )
-        };
-        let status = if rc == 0 {
-            UI2_ASYNC_TEX_STATUS_PENDING
-        } else {
-            rc
-        };
-        if let Some(asset) = assets.get_mut(index) {
-            asset.status = status;
-        }
-        crate::log!(
-            "ui2: svg-queue tex={} idx={} status={}\n",
-            fixture.tex_id,
-            index,
-            status
-        );
-    }
-}
-
-fn texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
-    let mut width = 0u32;
-    let mut height = 0u32;
-    let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_texture_dimensions(
-            tex_id,
-            &mut width as *mut u32,
-            &mut height as *mut u32,
-        )
-    };
-    if rc == 0 && width > 0 && height > 0 {
-        Some((width, height))
-    } else {
-        None
-    }
-}
-
-fn poll_ui2_svg_assets() {
-    queue_ui2_svg_assets_once();
-
-    let asset_lock = svg_asset_state();
-    let mut assets = asset_lock.lock();
-    let mut all_done = !assets.is_empty();
-
-    for asset in assets.iter_mut() {
-        if asset.status == UI2_ASYNC_TEX_STATUS_READY || asset.status < 0 {
-            continue;
-        }
-
-        let status = crate::surface::io::cabi::trueos_cabi_gfx_texture_status(asset.tex_id);
-        asset.status = status;
-        if status == UI2_ASYNC_TEX_STATUS_READY {
-            if let Some((width, height)) = texture_dimensions(asset.tex_id) {
-                asset.width = width;
-                asset.height = height;
-            }
-            crate::log!(
-                "ui2: svg-ready tex={} {}x{}\n",
-                asset.tex_id,
-                asset.width,
-                asset.height
-            );
-        } else if status == UI2_ASYNC_TEX_STATUS_PENDING || status == UI2_ASYNC_TEX_STATUS_UNKNOWN {
-            all_done = false;
-        } else {
-            crate::log!("ui2: svg-error tex={} code={}\n", asset.tex_id, status);
-        }
-    }
-
-    if all_done && !UI2_SVG_REPAINT_REQUESTED.swap(true, Ordering::AcqRel) {
-        mark_demo_surfaces_dirty();
-        request_full_recompose("ui2-svg-ready");
-    }
-}
-
-fn surface_tex_id_for_window(window: &Ui2Window) -> Option<u32> {
-    match window.kind {
-        Ui2WindowKind::Dialog => Some(UI2_NOTES_SURFACE_TEX_ID),
-        Ui2WindowKind::Overlay => Some(UI2_GLASS_SURFACE_TEX_ID),
-        _ => None,
-    }
-}
-
-fn surface_slot_mut(slots: &mut [Ui2SurfaceSlot], tex_id: u32) -> Option<&mut Ui2SurfaceSlot> {
-    slots.iter_mut().find(|slot| slot.tex_id == tex_id)
-}
-
-fn ensure_surface_storage(tex_id: u32, width: u32, height: u32) -> bool {
-    let need = (width as usize)
-        .saturating_mul(height as usize)
-        .saturating_mul(4);
-    if need == 0 {
-        return false;
-    }
-    let zeros = vec![0u8; need];
-    unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
-            tex_id,
-            width,
-            height,
-            zeros.as_ptr(),
-            zeros.len(),
-        ) == 0
     }
 }
 
@@ -772,165 +1533,75 @@ fn draw_texture_rect_no_present(
     )
 }
 
-fn render_svg_list_surface(view_w: u32, view_h: u32, start_idx: usize) {
-    let bg = (0xF7, 0xF2, 0xEA, 0xFF);
-    let strip = (0xD4, 0xC2, 0xAF, 0xFF);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        0.0,
-        0.0,
-        view_w as f32,
-        view_h as f32,
-        bg,
-        view_w,
-        view_h,
-    );
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        0.0,
-        0.0,
-        view_w as f32,
-        1.0,
-        strip,
-        view_w,
-        view_h,
-    );
-
-    let asset_lock = svg_asset_state();
-    let assets = asset_lock.lock();
-    let pad_x = 14.0;
-    let pad_y = 14.0;
-    let gap = 12.0;
-    let end_idx = core::cmp::min(start_idx + 3, assets.len());
-    let visible_count = end_idx.saturating_sub(start_idx);
-    if visible_count == 0 {
-        return;
-    }
-
-    let available_h = ((view_h as f32) - (pad_y * 2.0) - (gap * (visible_count.saturating_sub(1) as f32))).max(1.0);
-    let item_h = (available_h / visible_count as f32).max(1.0);
-    let item_w = ((view_w as f32) - (pad_x * 2.0)).max(1.0);
-
-    for idx in 0..visible_count {
-        let Some(asset) = assets.get(start_idx + idx) else {
-            continue;
-        };
-        if asset.status != UI2_ASYNC_TEX_STATUS_READY || asset.width == 0 || asset.height == 0 {
+fn ensure_browser2_svg_textures() {
+    let svg_lock = browser2_svg_state();
+    let mut svgs = svg_lock.lock();
+    for entry in svgs.iter_mut() {
+        if entry.status != 0 {
             continue;
         }
-
-        let scale = libm::fminf(item_w / asset.width as f32, item_h / asset.height as f32);
-        let draw_w = (asset.width as f32 * scale).max(1.0);
-        let draw_h = (asset.height as f32 * scale).max(1.0);
-        let cell_y = pad_y + idx as f32 * (item_h + gap);
-        let draw_x = pad_x + ((item_w - draw_w) * 0.5);
-        let draw_y = cell_y + ((item_h - draw_h) * 0.5);
-        let _ = draw_texture_rect_no_present(
-            asset.tex_id,
-            draw_x,
-            draw_y,
-            draw_w,
-            draw_h,
-            view_w,
-            view_h,
-            false,
+        let rc = unsafe {
+            crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_svg(
+                entry.tex_id,
+                entry.svg.as_ptr(),
+                entry.svg.len(),
+            )
+        };
+        entry.status = if rc == 0 { 1 } else { rc.min(-1) };
+        crate::log!(
+            "ui2: browser2-svg tex={} status={} bytes={}\n",
+            entry.tex_id,
+            entry.status,
+            entry.svg.len()
         );
     }
 }
 
-fn render_surface_content(window: &Ui2Window, view_w: u32, view_h: u32) {
-    match window.kind {
-        Ui2WindowKind::Dialog => render_svg_list_surface(view_w, view_h, 0),
-        Ui2WindowKind::Overlay => render_svg_list_surface(view_w, view_h, 3),
-        _ => {}
-    }
-}
+fn draw_browser2_svg_demo(state: &Ui2State, content: Ui2Rect) -> bool {
+    ensure_browser2_svg_textures();
 
-fn render_surface_target(
-    tex_id: u32,
-    width: u32,
-    height: u32,
-    clear_rgb: u32,
-    draw: impl FnOnce(u32, u32),
-) -> bool {
-    let begin_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(clear_rgb) };
-    if begin_rc != 0 {
-        return false;
-    }
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_render_target(tex_id) };
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_scissor() };
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
-    draw(width, height);
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_scissor() };
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_render_target() };
-    let end_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
-    end_rc == 0
-}
+    let sx = round_to_u32(content.x.max(0.0), 0);
+    let sy = round_to_u32(content.y.max(0.0), 0);
+    let sw = round_to_u32(content.w, 1);
+    let sh = round_to_u32(content.h, 1);
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_scissor(sx, sy, sw, sh) };
 
-fn ensure_window_surface(window: &Ui2Window) -> Option<(u32, Ui2Rect, bool)> {
-    let tex_id = surface_tex_id_for_window(window)?;
-    let content = window_content_rect(window)?;
-    let width = round_to_u32(content.w, 1);
-    let height = round_to_u32(content.h, 1);
+    let pad_y = 12.0;
+    let gap_y = 10.0;
+    let icon_px = UI2_BROWSER2_SVG_ICON_PX;
+    let draw_x = content.x + libm::fmaxf(0.0, (content.w - icon_px) * 0.5);
+    let max_y = content.y + content.h;
+    let mut draw_y = content.y + pad_y;
+    let mut drew = false;
 
-    let surface_lock = surface_state();
-    let mut surfaces = surface_lock.lock();
-    let slot = surface_slot_mut(&mut surfaces, tex_id)?;
-    let needs_alloc = slot.width != width || slot.height != height;
-    if needs_alloc {
-        if !ensure_surface_storage(tex_id, width, height) {
-            return None;
+    {
+        let svg_lock = browser2_svg_state();
+        let svgs = svg_lock.lock();
+        for entry in svgs.iter() {
+            if entry.status != 1 {
+                continue;
+            }
+            if draw_y + icon_px > max_y {
+                break;
+            }
+            drew |= draw_texture_rect_no_present(
+                entry.tex_id,
+                draw_x,
+                draw_y,
+                icon_px,
+                icon_px,
+                state.view_w,
+                state.view_h,
+                true,
+            );
+            draw_y += icon_px + gap_y;
         }
-        slot.width = width;
-        slot.height = height;
-        slot.dirty = true;
     }
 
-    Some((tex_id, content, slot.dirty))
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_scissor() };
+    drew
 }
 
-fn refresh_window_surface(window: &Ui2Window) -> bool {
-    let Some((tex_id, _content, dirty)) = ensure_window_surface(window) else {
-        return false;
-    };
-    if !dirty {
-        return true;
-    }
-
-    let surface_lock = surface_state();
-    let mut surfaces = surface_lock.lock();
-    let Some(slot) = surface_slot_mut(&mut surfaces, tex_id) else {
-        return false;
-    };
-    let width = slot.width.max(1);
-    let height = slot.height.max(1);
-    crate::log!(
-        "ui2: surface-update kind={} tex={} {}x{}\n",
-        slot.label,
-        slot.tex_id,
-        width,
-        height
-    );
-    if !render_surface_target(tex_id, width, height, 0x000000, |surface_w, surface_h| {
-        render_surface_content(window, surface_w, surface_h);
-    }) {
-        return false;
-    }
-    slot.dirty = false;
-    true
-}
-
-fn refresh_dirty_window_surfaces(state: &Ui2State) {
-    for idx in sorted_window_indices(state) {
-        let window = &state.windows[idx];
-        let _ = refresh_window_surface(window);
-    }
-}
-
-fn window_surface_binding(window: &Ui2Window) -> Option<(u32, Ui2Rect)> {
-    let (tex_id, content, _dirty) = ensure_window_surface(window)?;
-    Some((tex_id, content))
-}
 
 fn queue_browser_window_viewport(content: Ui2Rect) {
     let viewport_w = round_to_u32(content.w, 1);
@@ -1039,34 +1710,19 @@ fn draw_browser_window_content(state: &Ui2State, content: Ui2Rect) -> bool {
 }
 
 fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
-    if !window.visible {
+    if !window_is_renderable(window) {
         return;
     }
 
-    let frame_rgba = match window.kind {
-        Ui2WindowKind::Browser => (0xD9, 0xDE, 0xE5, 0xFF),
-        Ui2WindowKind::Dialog => (0xD7, 0xCC, 0xBF, 0xFF),
-        Ui2WindowKind::Menu => (0xDD, 0xD2, 0xBD, 0xFF),
-        Ui2WindowKind::Overlay => (0xC8, 0xD7, 0xD2, 0xD8),
-    };
-    let title_rgba = match window.kind {
-        Ui2WindowKind::Browser => (0xF3, 0xF4, 0xF6, 0xFF),
-        Ui2WindowKind::Dialog => (0xF8, 0xF1, 0xE7, 0xFF),
-        Ui2WindowKind::Menu => (0xF8, 0xE8, 0xC8, 0xFF),
-        Ui2WindowKind::Overlay => (0xFF, 0xFF, 0xFF, 0xFF),
-    };
-    let body_rgba = match window.kind {
-        Ui2WindowKind::Browser => (0xFB, 0xFB, 0xF8, window.alpha),
-        Ui2WindowKind::Dialog => (0xF2, 0xEA, 0xDE, window.alpha),
-        Ui2WindowKind::Menu => (0xF1, 0xE4, 0xC7, window.alpha),
-        Ui2WindowKind::Overlay => (0xF2, 0xEA, 0xDE, window.alpha),
-    };
-    let border_rgba = match window.kind {
-        Ui2WindowKind::Browser => (0x9A, 0xA3, 0xAF, 0xFF),
-        Ui2WindowKind::Dialog => (0xB8, 0xAA, 0x98, 0xFF),
-        Ui2WindowKind::Menu => (0xB8, 0xA6, 0x8A, 0xFF),
-        Ui2WindowKind::Overlay => (0x6D, 0x88, 0x80, 0xE0),
-    };
+    let frame_rgba = (0xD9, 0xDE, 0xE5, 0xFF);
+    let title_rgba = (0xF3, 0xF4, 0xF6, 0xFF);
+    let body_rgba = (0xFB, 0xFB, 0xF8, window.alpha);
+    let border_rgba = (0x9A, 0xA3, 0xAF, 0xFF);
+    let selection_rgba = window
+        .selected_cursor_slots
+        .first()
+        .map(|slot_id| cursor_color(*slot_id))
+        .unwrap_or((0, 0, 0, 0));
     let _ = crate::gfx::lyon::draw_solid_rect_no_present(
         window.rect.x,
         window.rect.y,
@@ -1076,101 +1732,119 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
         state.view_w,
         state.view_h,
     );
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        window.rect.x,
-        window.rect.y,
-        window.rect.w,
-        UI2_TITLE_H,
-        frame_rgba,
-        state.view_w,
-        state.view_h,
-    );
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        window.rect.x,
-        window.rect.y,
-        window.rect.w,
-        1.0,
-        border_rgba,
-        state.view_w,
-        state.view_h,
-    );
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        window.rect.x,
-        window.rect.y + window.rect.h - 1.0,
-        window.rect.w,
-        1.0,
-        border_rgba,
-        state.view_w,
-        state.view_h,
-    );
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        window.rect.x,
-        window.rect.y,
-        1.0,
-        window.rect.h,
-        border_rgba,
-        state.view_w,
-        state.view_h,
-    );
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        window.rect.x + window.rect.w - 1.0,
-        window.rect.y,
-        1.0,
-        window.rect.h,
-        border_rgba,
-        state.view_w,
-        state.view_h,
-    );
+    if window.decoration_mode == Ui2WindowDecorationMode::System {
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            window.rect.x,
+            window.rect.y,
+            window.rect.w,
+            UI2_TITLE_H,
+            frame_rgba,
+            state.view_w,
+            state.view_h,
+        );
+    }
+    if window.decoration_mode != Ui2WindowDecorationMode::None {
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            window.rect.x,
+            window.rect.y,
+            window.rect.w,
+            1.0,
+            border_rgba,
+            state.view_w,
+            state.view_h,
+        );
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            window.rect.x,
+            window.rect.y + window.rect.h - 1.0,
+            window.rect.w,
+            1.0,
+            border_rgba,
+            state.view_w,
+            state.view_h,
+        );
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            window.rect.x,
+            window.rect.y,
+            1.0,
+            window.rect.h,
+            border_rgba,
+            state.view_w,
+            state.view_h,
+        );
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            window.rect.x + window.rect.w - 1.0,
+            window.rect.y,
+            1.0,
+            window.rect.h,
+            border_rgba,
+            state.view_w,
+            state.view_h,
+        );
+    }
+    if !window.selected_cursor_slots.is_empty() {
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            window.rect.x + 1.0,
+            window.rect.y + 1.0,
+            window.rect.w - 2.0,
+            2.0,
+            selection_rgba,
+            state.view_w,
+            state.view_h,
+        );
+        let mut marker_x = window.rect.x + window.rect.w - 14.0;
+        let marker_y = window.rect.y + 8.0;
+        for slot_id in window.selected_cursor_slots.iter().take(6) {
+            let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+                marker_x,
+                marker_y,
+                6.0,
+                10.0,
+                cursor_color(*slot_id),
+                state.view_w,
+                state.view_h,
+            );
+            marker_x -= 9.0;
+        }
+    }
 
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(
-        window.title.as_bytes(),
-        window.rect.x + 10.0,
-        window.rect.y + 5.0,
-        state.view_w,
-        state.view_h,
-        title_rgba.3,
-    );
+    if window.decoration_mode == Ui2WindowDecorationMode::System {
+        crate::gfx::text::draw_atlas_text_in_frame_alpha(
+            window.title.as_bytes(),
+            window.rect.x + 10.0,
+            window.rect.y + 5.0,
+            state.view_w,
+            state.view_h,
+            title_rgba.3,
+        );
+    }
 
-    if window.kind == Ui2WindowKind::Browser {
+    if is_primary_browser_window(window) {
         if let Some(content) = window_content_rect(window) {
             queue_browser_window_viewport(content);
             if draw_browser_window_content(state, content) {
                 return;
             }
         }
-    } else if let Some((tex_id, content)) = window_surface_binding(window) {
-        let sx = round_to_u32(content.x.max(0.0), 0);
-        let sy = round_to_u32(content.y.max(0.0), 0);
-        let sw = round_to_u32(content.w, 1);
-        let sh = round_to_u32(content.h, 1);
-        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_scissor(sx, sy, sw, sh) };
-        let _ = draw_texture_rect_no_present(
-            tex_id,
-            content.x,
-            content.y,
-            content.w,
-            content.h,
-            state.view_w,
-            state.view_h,
-            false,
-        );
-        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_scissor() };
     } else {
-        let body_msg: &[u8] = match window.kind {
-            Ui2WindowKind::Browser => &b"browser surface; content compositor slot"[..],
-            Ui2WindowKind::Dialog => &b"dialog surface; partial invalidation target"[..],
-            Ui2WindowKind::Menu => &b"menu surface; independent top-level alpha"[..],
-            Ui2WindowKind::Overlay => &b"overlay surface; translucent top-level pass"[..],
-        };
-        crate::gfx::text::draw_atlas_text_in_frame_alpha(
-            body_msg,
-            window.rect.x + 12.0,
-            window.rect.y + UI2_TITLE_H + 10.0,
-            state.view_w,
-            state.view_h,
-            220,
-        );
+        if let Some(content) = window_content_rect(window) {
+            if draw_browser2_svg_demo(state, content) {
+                return;
+            }
+        }
     }
+
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(
+        b"browser window shell; independent browser instance pending",
+        window_content_rect(window)
+            .map(|content| content.x + 12.0)
+            .unwrap_or(window.rect.x + 12.0),
+        window_content_rect(window)
+            .map(|content| content.y + 10.0)
+            .unwrap_or(window.rect.y + 10.0),
+        state.view_w,
+        state.view_h,
+        220,
+    );
 }
 
 fn compose_windows(state: &mut Ui2State) {
@@ -1179,9 +1853,8 @@ fn compose_windows(state: &mut Ui2State) {
         if window.dirty {
             window.dirty_seq = window.dirty_seq.wrapping_add(1);
             crate::log!(
-                "ui2: window-update id={} kind={} seq={} reason={}\n",
+                "ui2: window-update id={} seq={} reason={}\n",
                 window.id,
-                window.kind.name(),
                 window.dirty_seq,
                 window.last_reason
             );
@@ -1215,14 +1888,17 @@ pub async fn ui2_task() {
 
     crate::gfx::init(crate::limine::framebuffer_response());
     init_state();
-    svg_asset_state();
-    queue_ui2_svg_assets_once();
     request_full_recompose("boot");
     crate::log!("ui2: boot window manager\n");
     let mut last_browser_surface_seq = 0u32;
 
     loop {
-        poll_ui2_svg_assets();
+        {
+            let state_lock = init_state();
+            let mut state = state_lock.lock();
+            rebuild_hit_scene(&mut state);
+            pump_cursor_selection(&mut state);
+        }
         let next_browser_surface_seq = trueos_qjs::browser_task::hosted_surface_seq();
         if next_browser_surface_seq != last_browser_surface_seq {
             last_browser_surface_seq = next_browser_surface_seq;
@@ -1231,7 +1907,6 @@ pub async fn ui2_task() {
         if UI2_DIRTY.swap(false, Ordering::AcqRel) {
             let state_lock = init_state();
             let mut state = state_lock.lock();
-            refresh_dirty_window_surfaces(&state);
             compose_windows(&mut state);
         }
         Timer::after(EmbassyDuration::from_millis(16)).await;

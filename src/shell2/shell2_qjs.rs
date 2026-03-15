@@ -1,3 +1,29 @@
+use alloc::string::String;
+
+use super::{ShellBackend2, print_shell_line};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QjsPromptMode {
+    Repl,
+    Eval,
+}
+
+impl QjsPromptMode {
+    pub(crate) const fn next(self) -> Self {
+        match self {
+            Self::Repl => Self::Eval,
+            Self::Eval => Self::Repl,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Repl => "repl",
+            Self::Eval => "eval",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScanMode {
     Normal,
@@ -103,4 +129,30 @@ pub(crate) fn is_likely_valid(source: &str) -> bool {
     }
 
     mode == ScanMode::Normal && stack.is_empty()
+}
+
+pub(crate) fn submit(io: &'static dyn ShellBackend2, mode: QjsPromptMode, submitted: &str) {
+    let source = submitted.trim();
+    if source.is_empty() {
+        print_shell_line(io, "qjs: empty input");
+        return;
+    }
+
+    if !is_likely_valid(source) {
+        print_shell_line(io, "qjs: input looks incomplete");
+        return;
+    }
+
+    let entry = trueos_qjs::browser_task::QjsInputEntry {
+        code: String::from(source),
+        repl: mode == QjsPromptMode::Repl,
+    };
+
+    if !trueos_qjs::browser_task::queue_qjs_input(entry) {
+        print_shell_line(io, "qjs: browser bridge not running");
+        return;
+    }
+
+    let msg = alloc::format!("qjs: queued ({})", mode.label());
+    print_shell_line(io, msg.as_str());
 }
