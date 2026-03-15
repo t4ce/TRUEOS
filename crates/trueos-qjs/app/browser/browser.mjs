@@ -47,7 +47,6 @@ const qjsInputQueue = [];
 let qjsInputDrainPromise = Promise.resolve();
 let fpsOverlayEnabled = false;
 let browserCanRenderScene = false;
-let browserContentReadySignaled = false;
 let htmlReadyTimeoutId = null;
 const browserRegionCache = [];
 let browserRegionCacheSeq = 0;
@@ -1573,14 +1572,9 @@ function docHasTextRows(doc) {
 
 function finalizePaintState(doc) {
   const hasRealSceneContent = Array.isArray(doc && doc.rows) && doc.rows.length > 0;
-  const hasTextContent = docHasTextRows(doc);
   browserPageState.markRendered('first-page-paint');
   if (!fpsOverlayEnabled && hasRealSceneContent) {
     fpsOverlayEnabled = true;
-  }
-  if (!browserContentReadySignaled && hasTextContent && typeof cmdStream.signalLoadscreenEnd === 'function') {
-    cmdStream.signalLoadscreenEnd();
-    browserContentReadySignaled = true;
   }
 }
 
@@ -1790,6 +1784,7 @@ function paintToCurrentTarget(options = null) {
 
 function armHtmlReadyFallback() {
   if (htmlReadyTimeoutId != null) return;
+  if (runtime.host.__trueosBrowserAllowHtmlFallback !== true) return;
   if (typeof runtime.host.setTimeout !== 'function') return;
   try {
     htmlReadyTimeoutId = runtime.host.setTimeout(() => {
