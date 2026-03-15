@@ -26,6 +26,46 @@ unsafe extern "C" {
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
+    fn trueos_cabi_ui2_primary_browser_window_id() -> u32;
+    fn trueos_cabi_ui2_window_info(window_id: u32, out_info: *mut TrueosUi2WindowInfo) -> i32;
+    fn trueos_cabi_ui2_window_set_title(
+        window_id: u32,
+        title_ptr: *const u8,
+        title_len: usize,
+    ) -> i32;
+    fn trueos_cabi_ui2_window_set_position(window_id: u32, x: i32, y: i32) -> i32;
+    fn trueos_cabi_ui2_window_set_size(window_id: u32, width: u32, height: u32) -> i32;
+    fn trueos_cabi_ui2_window_set_decorations(window_id: u32, mode: u32) -> i32;
+    fn trueos_cabi_ui2_window_minimize(window_id: u32) -> i32;
+    fn trueos_cabi_ui2_window_maximize(window_id: u32) -> i32;
+    fn trueos_cabi_ui2_window_restore(window_id: u32) -> i32;
+    fn trueos_cabi_ui2_window_focus(window_id: u32) -> i32;
+    fn trueos_cabi_ui2_window_close(window_id: u32) -> i32;
+    fn trueos_cabi_ui2_window_begin_move(window_id: u32) -> i32;
+    fn trueos_cabi_ui2_window_begin_resize(window_id: u32, edge_mask: u32) -> i32;
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+struct TrueosUi2WindowInfo {
+    id: u32,
+    kind: u32,
+    state: u32,
+    decoration_mode: u32,
+    visible: u32,
+    selected: u32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    content_x: i32,
+    content_y: i32,
+    content_width: u32,
+    content_height: u32,
+    decoration_x: i32,
+    decoration_y: i32,
+    decoration_width: u32,
+    decoration_height: u32,
 }
 
 #[inline]
@@ -452,6 +492,327 @@ unsafe extern "C" fn qjs_read_primary_trueosfs_tree_html(
     qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
 }
 
+#[inline]
+fn round_to_u32(v: f64) -> Option<u32> {
+    if !v.is_finite() || v < 0.0 {
+        return None;
+    }
+    Some(if v >= 0.0 { (v + 0.5) as u32 } else { 0 })
+}
+
+unsafe fn js_window_info_object(ctx: *mut qjs::JSContext, info: &TrueosUi2WindowInfo) -> qjs::JSValue {
+    static K_ID: &[u8] = b"id\0";
+    static K_KIND: &[u8] = b"kind\0";
+    static K_STATE: &[u8] = b"state\0";
+    static K_DECORATION_MODE: &[u8] = b"decorationMode\0";
+    static K_VISIBLE: &[u8] = b"visible\0";
+    static K_SELECTED: &[u8] = b"selected\0";
+    static K_X: &[u8] = b"x\0";
+    static K_Y: &[u8] = b"y\0";
+    static K_WIDTH: &[u8] = b"width\0";
+    static K_HEIGHT: &[u8] = b"height\0";
+    static K_CONTENT_RECT: &[u8] = b"contentRect\0";
+    static K_DECORATION_RECT: &[u8] = b"decorationRect\0";
+
+    let rect = qjs::JS_NewObject(ctx);
+    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_ID.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.id as f64));
+    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_KIND.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.kind as f64));
+    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_STATE.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.state as f64));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_DECORATION_MODE.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.decoration_mode as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_VISIBLE.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.visible as f64));
+    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_SELECTED.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.selected as f64));
+    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_X.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.x as f64));
+    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_Y.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.y as f64));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_WIDTH.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.width as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_HEIGHT.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.height as f64),
+    );
+
+    let content = qjs::JS_NewObject(ctx);
+    let _ = qjs::JS_SetPropertyStr(ctx, content, K_X.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.content_x as f64));
+    let _ = qjs::JS_SetPropertyStr(ctx, content, K_Y.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.content_y as f64));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        content,
+        K_WIDTH.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.content_width as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        content,
+        K_HEIGHT.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.content_height as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_CONTENT_RECT.as_ptr() as *const c_char, content);
+
+    let decoration = qjs::JS_NewObject(ctx);
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        decoration,
+        K_X.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.decoration_x as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        decoration,
+        K_Y.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.decoration_y as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        decoration,
+        K_WIDTH.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.decoration_width as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        decoration,
+        K_HEIGHT.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.decoration_height as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_DECORATION_RECT.as_ptr() as *const c_char, decoration);
+
+    rect
+}
+
+unsafe extern "C" fn qjs_primary_window_id(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: i32,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    qjs::JS_NewFloat64(ctx, trueos_cabi_ui2_primary_browser_window_id() as f64)
+}
+
+unsafe extern "C" fn qjs_window_get_info(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 1 || argv.is_null() {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0 || !id_f.is_finite() || id_f < 1.0 {
+        return qjs::JSValue::undefined();
+    }
+    let mut info = TrueosUi2WindowInfo::default();
+    if trueos_cabi_ui2_window_info(id_f as u32, &mut info as *mut TrueosUi2WindowInfo) != 0 {
+        return qjs::JSValue::undefined();
+    }
+    js_window_info_object(ctx, &info)
+}
+
+unsafe extern "C" fn qjs_window_set_title(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 2 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0 || !id_f.is_finite() || id_f < 1.0 {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let mut len: usize = 0;
+    let title_c = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, args[1], 0);
+    if title_c.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let rc = trueos_cabi_ui2_window_set_title(id_f as u32, title_c as *const u8, len);
+    qjs::JS_FreeCString(ctx, title_c);
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
+unsafe extern "C" fn qjs_window_set_position(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 3 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    let mut x_f = 0.0f64;
+    let mut y_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut x_f as *mut f64, args[1]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut y_f as *mut f64, args[2]) != 0
+    {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let rc = trueos_cabi_ui2_window_set_position(id_f as u32, round_to_i32(x_f), round_to_i32(y_f));
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
+unsafe extern "C" fn qjs_window_set_size(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 3 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    let mut w_f = 0.0f64;
+    let mut h_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut w_f as *mut f64, args[1]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut h_f as *mut f64, args[2]) != 0
+    {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let Some(width) = round_to_u32(w_f) else {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    };
+    let Some(height) = round_to_u32(h_f) else {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    };
+    let rc = trueos_cabi_ui2_window_set_size(id_f as u32, width, height);
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
+unsafe extern "C" fn qjs_window_set_decorations(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 2 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    let mut mode_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut mode_f as *mut f64, args[1]) != 0
+    {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let rc = trueos_cabi_ui2_window_set_decorations(id_f as u32, mode_f.max(0.0) as u32);
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
+unsafe extern "C" fn qjs_window_simple_action(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+    action: unsafe extern "C" fn(u32) -> i32,
+) -> qjs::JSValue {
+    if argc < 1 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0 || !id_f.is_finite() || id_f < 1.0 {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let rc = action(id_f as u32);
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
+unsafe extern "C" fn qjs_window_minimize(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    qjs_window_simple_action(ctx, this_val, argc, argv, trueos_cabi_ui2_window_minimize)
+}
+
+unsafe extern "C" fn qjs_window_maximize(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    qjs_window_simple_action(ctx, this_val, argc, argv, trueos_cabi_ui2_window_maximize)
+}
+
+unsafe extern "C" fn qjs_window_restore(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    qjs_window_simple_action(ctx, this_val, argc, argv, trueos_cabi_ui2_window_restore)
+}
+
+unsafe extern "C" fn qjs_window_focus(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    qjs_window_simple_action(ctx, this_val, argc, argv, trueos_cabi_ui2_window_focus)
+}
+
+unsafe extern "C" fn qjs_window_close(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    qjs_window_simple_action(ctx, this_val, argc, argv, trueos_cabi_ui2_window_close)
+}
+
+unsafe extern "C" fn qjs_window_begin_move(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    qjs_window_simple_action(ctx, this_val, argc, argv, trueos_cabi_ui2_window_begin_move)
+}
+
+unsafe extern "C" fn qjs_window_begin_resize(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 2 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    let mut edge_mask_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut edge_mask_f as *mut f64, args[1]) != 0
+        || !id_f.is_finite()
+        || id_f < 1.0
+        || !edge_mask_f.is_finite()
+        || edge_mask_f < 0.0
+    {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let rc = trueos_cabi_ui2_window_begin_resize(id_f as u32, edge_mask_f as u32);
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
 pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     if ctx.is_null() {
         return;
@@ -465,12 +826,32 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     static CURSOR_WRITE_FN_NAME: &[u8] = b"__trueosWriteCursorEvent\0";
     static TRUEOSFS_TREE_NAME: &[u8] = b"__trueosReadPrimaryTrueosFsTreeHtml\0";
     static TRUEOSFS_TREE_FN_NAME: &[u8] = b"__trueosReadPrimaryTrueosFsTreeHtml\0";
-    static ICON_CMDS_NAME: &[u8] = b"__trueosReadWindowSvgCmds\0";
-    static ICON_CMDS_FN_NAME: &[u8] = b"__trueosReadWindowSvgCmds\0";
-    static SVG_IMPORT_NAME: &[u8] = b"__trueosImportSvgAsset\0";
-    static SVG_IMPORT_FN_NAME: &[u8] = b"__trueosImportSvgAsset\0";
-    static SVG_PIXELS_NAME: &[u8] = b"__trueosReadSvgPixels\0";
-    static SVG_PIXELS_FN_NAME: &[u8] = b"__trueosReadSvgPixels\0";
+    static WINDOW_ID_NAME: &[u8] = b"__trueosPrimaryWindowId\0";
+    static WINDOW_ID_FN_NAME: &[u8] = b"__trueosPrimaryWindowId\0";
+    static WINDOW_INFO_NAME: &[u8] = b"__trueosWindowGetInfo\0";
+    static WINDOW_INFO_FN_NAME: &[u8] = b"__trueosWindowGetInfo\0";
+    static WINDOW_SET_TITLE_NAME: &[u8] = b"__trueosWindowSetTitle\0";
+    static WINDOW_SET_TITLE_FN_NAME: &[u8] = b"__trueosWindowSetTitle\0";
+    static WINDOW_SET_POSITION_NAME: &[u8] = b"__trueosWindowSetPosition\0";
+    static WINDOW_SET_POSITION_FN_NAME: &[u8] = b"__trueosWindowSetPosition\0";
+    static WINDOW_SET_SIZE_NAME: &[u8] = b"__trueosWindowSetSize\0";
+    static WINDOW_SET_SIZE_FN_NAME: &[u8] = b"__trueosWindowSetSize\0";
+    static WINDOW_SET_DECORATIONS_NAME: &[u8] = b"__trueosWindowSetDecorations\0";
+    static WINDOW_SET_DECORATIONS_FN_NAME: &[u8] = b"__trueosWindowSetDecorations\0";
+    static WINDOW_MINIMIZE_NAME: &[u8] = b"__trueosWindowMinimize\0";
+    static WINDOW_MINIMIZE_FN_NAME: &[u8] = b"__trueosWindowMinimize\0";
+    static WINDOW_MAXIMIZE_NAME: &[u8] = b"__trueosWindowMaximize\0";
+    static WINDOW_MAXIMIZE_FN_NAME: &[u8] = b"__trueosWindowMaximize\0";
+    static WINDOW_RESTORE_NAME: &[u8] = b"__trueosWindowRestore\0";
+    static WINDOW_RESTORE_FN_NAME: &[u8] = b"__trueosWindowRestore\0";
+    static WINDOW_FOCUS_NAME: &[u8] = b"__trueosWindowFocus\0";
+    static WINDOW_FOCUS_FN_NAME: &[u8] = b"__trueosWindowFocus\0";
+    static WINDOW_CLOSE_NAME: &[u8] = b"__trueosWindowClose\0";
+    static WINDOW_CLOSE_FN_NAME: &[u8] = b"__trueosWindowClose\0";
+    static WINDOW_BEGIN_MOVE_NAME: &[u8] = b"__trueosWindowBeginMove\0";
+    static WINDOW_BEGIN_MOVE_FN_NAME: &[u8] = b"__trueosWindowBeginMove\0";
+    static WINDOW_BEGIN_RESIZE_NAME: &[u8] = b"__trueosWindowBeginResize\0";
+    static WINDOW_BEGIN_RESIZE_FN_NAME: &[u8] = b"__trueosWindowBeginResize\0";
 
     let global = qjs::JS_GetGlobalObject(ctx);
 
@@ -532,6 +913,201 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
         global,
         TRUEOSFS_TREE_NAME.as_ptr() as *const c_char,
         trueosfs_tree_func,
+    );
+
+    let window_id_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_primary_window_id),
+        WINDOW_ID_FN_NAME.as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_ID_NAME.as_ptr() as *const c_char,
+        window_id_func,
+    );
+
+    let window_info_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_get_info),
+        WINDOW_INFO_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_INFO_NAME.as_ptr() as *const c_char,
+        window_info_func,
+    );
+
+    let window_set_title_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_set_title),
+        WINDOW_SET_TITLE_FN_NAME.as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_SET_TITLE_NAME.as_ptr() as *const c_char,
+        window_set_title_func,
+    );
+
+    let window_set_position_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_set_position),
+        WINDOW_SET_POSITION_FN_NAME.as_ptr() as *const c_char,
+        3,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_SET_POSITION_NAME.as_ptr() as *const c_char,
+        window_set_position_func,
+    );
+
+    let window_set_size_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_set_size),
+        WINDOW_SET_SIZE_FN_NAME.as_ptr() as *const c_char,
+        3,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_SET_SIZE_NAME.as_ptr() as *const c_char,
+        window_set_size_func,
+    );
+
+    let window_set_decorations_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_set_decorations),
+        WINDOW_SET_DECORATIONS_FN_NAME.as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_SET_DECORATIONS_NAME.as_ptr() as *const c_char,
+        window_set_decorations_func,
+    );
+
+    let window_minimize_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_minimize),
+        WINDOW_MINIMIZE_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_MINIMIZE_NAME.as_ptr() as *const c_char,
+        window_minimize_func,
+    );
+
+    let window_maximize_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_maximize),
+        WINDOW_MAXIMIZE_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_MAXIMIZE_NAME.as_ptr() as *const c_char,
+        window_maximize_func,
+    );
+
+    let window_restore_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_restore),
+        WINDOW_RESTORE_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_RESTORE_NAME.as_ptr() as *const c_char,
+        window_restore_func,
+    );
+
+    let window_focus_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_focus),
+        WINDOW_FOCUS_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_FOCUS_NAME.as_ptr() as *const c_char,
+        window_focus_func,
+    );
+
+    let window_close_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_close),
+        WINDOW_CLOSE_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_CLOSE_NAME.as_ptr() as *const c_char,
+        window_close_func,
+    );
+
+    let window_begin_move_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_begin_move),
+        WINDOW_BEGIN_MOVE_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_BEGIN_MOVE_NAME.as_ptr() as *const c_char,
+        window_begin_move_func,
+    );
+
+    let window_begin_resize_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_begin_resize),
+        WINDOW_BEGIN_RESIZE_FN_NAME.as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_BEGIN_RESIZE_NAME.as_ptr() as *const c_char,
+        window_begin_resize_func,
     );
     qjs::js_free_value(ctx, global);
 }

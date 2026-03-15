@@ -101,6 +101,33 @@ unsafe extern "C" fn trueos_uart1_shell_write_js(
     js_int32(wrote as i32)
 }
 
+unsafe extern "C" fn trueos_shell2_print_line_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return js_int32(0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut len: usize = 0;
+    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, args[0], 0);
+    if cstr.is_null() {
+        return js_int32(0);
+    }
+    let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
+    let wrote = match core::str::from_utf8(bytes) {
+        Ok(text) => {
+            crate::shell2::print_broadcast_line(text);
+            len
+        }
+        Err(_) => 0,
+    };
+    qjs::JS_FreeCString(ctx, cstr);
+    js_int32(wrote as i32)
+}
+
 unsafe extern "C" fn trueos_shell1_submit_input_js(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -621,6 +648,21 @@ pub unsafe fn install(ctx: *mut qjs::JSContext) {
         ctx,
         global,
         b"__trueosUart1ShellWrite\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_shell2_print_line_js),
+        b"__trueosShell2PrintLine\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShell2PrintLine\0".as_ptr() as *const c_char,
         f,
     );
 

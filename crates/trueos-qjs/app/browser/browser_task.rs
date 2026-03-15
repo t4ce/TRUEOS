@@ -38,6 +38,24 @@ pub struct HostedBrowserSurfaceState {
     pub regions: Vec<HostedBrowserRegion>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostedBrowserInteractive {
+    pub item_id: u32,
+    pub kind_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostedBrowserInteractiveState {
+    pub seq: u32,
+    pub viewport_width: u32,
+    pub viewport_height: u32,
+    pub interactives: Vec<HostedBrowserInteractive>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct HostedViewportRequest {
     viewport_width: u32,
@@ -56,6 +74,7 @@ struct PendingHtmlEntry {
 
 static PENDING_HTML: Mutex<Option<PendingHtmlEntry>> = Mutex::new(None);
 static PENDING_AI_INPUT: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::new());
+static PENDING_QJS_INPUT: Mutex<VecDeque<QjsInputEntry>> = Mutex::new(VecDeque::new());
 static PENDING_HOSTED_VIEWPORT: Mutex<Option<HostedViewportRequest>> = Mutex::new(None);
 static APPLIED_HOSTED_VIEWPORT: Mutex<Option<HostedViewportRequest>> = Mutex::new(None);
 static HOSTED_SURFACE_STATE: Mutex<HostedBrowserSurfaceState> =
@@ -72,6 +91,14 @@ static HOSTED_SURFACE_STATE: Mutex<HostedBrowserSurfaceState> =
         regions: Vec::new(),
     });
 static HOSTED_SURFACE_SEQ: AtomicU32 = AtomicU32::new(0);
+static HOSTED_INTERACTIVE_STATE: Mutex<HostedBrowserInteractiveState> =
+    Mutex::new(HostedBrowserInteractiveState {
+        seq: 0,
+        viewport_width: 0,
+        viewport_height: 0,
+        interactives: Vec::new(),
+    });
+static HOSTED_INTERACTIVE_SEQ: AtomicU32 = AtomicU32::new(0);
 
 fn append_js_u8_array(dst: &mut String, values: &[u8]) {
     dst.push('[');
@@ -115,6 +142,12 @@ pub struct AiInputEntry {
     pub computer_use: bool,
 }
 
+#[derive(Clone)]
+pub struct QjsInputEntry {
+    pub code: String,
+    pub repl: bool,
+}
+
 pub fn queue_set_html(next_html: String) -> bool {
     queue_set_html_with_url(next_html, None)
 }
@@ -135,6 +168,14 @@ pub fn queue_ai_input(next: AiInputEntry) -> bool {
         return false;
     }
     PENDING_AI_INPUT.lock().push_back(next);
+    true
+}
+
+pub fn queue_qjs_input(next: QjsInputEntry) -> bool {
+    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+        return false;
+    }
+    PENDING_QJS_INPUT.lock().push_back(next);
     true
 }
 
@@ -176,6 +217,14 @@ pub fn hosted_surface_state() -> HostedBrowserSurfaceState {
 
 pub fn hosted_surface_seq() -> u32 {
     HOSTED_SURFACE_SEQ.load(Ordering::Acquire)
+}
+
+pub fn hosted_interactive_state() -> HostedBrowserInteractiveState {
+    HOSTED_INTERACTIVE_STATE.lock().clone()
+}
+
+pub fn hosted_interactive_seq() -> u32 {
+    HOSTED_INTERACTIVE_SEQ.load(Ordering::Acquire)
 }
 
 #[inline]
@@ -367,6 +416,89 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext) {
     }
 }
 
+unsafe fn sync_hosted_interactive_state(ctx: *mut qjs::JSContext) {
+    let Some(browser) = browser_api_value(ctx) else {
+        return;
+    };
+    let func = qjs::JS_GetPropertyStr(
+        ctx,
+        browser,
+        b"getInteractiveState\0".as_ptr() as *const c_char,
+    );
+    if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, func);
+        qjs::js_free_value(ctx, browser);
+        return;
+    }
+    let result = qjs::JS_Call(ctx, func, browser, 0, core::ptr::null());
+    qjs::js_free_value(ctx, func);
+    qjs::js_free_value(ctx, browser);
+    if result.is_exception() || result.tag == qjs::JS_TAG_UNDEFINED || result.tag == qjs::JS_TAG_NULL
+    {
+        if result.is_exception() {
+            qjs::qjs_diag::dump_last_exception(ctx, "browser getInteractiveState");
+        }
+        qjs::js_free_value(ctx, result);
+        return;
+    }
+
+    let mut next = HostedBrowserInteractiveState {
+        seq: 0,
+        viewport_width: js_prop_f64(ctx, result, b"viewportWidth\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        viewport_height: js_prop_f64(ctx, result, b"viewportHeight\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        interactives: Vec::new(),
+    };
+
+    let interactives =
+        qjs::JS_GetPropertyStr(ctx, result, b"interactives\0".as_ptr() as *const c_char);
+    if !interactives.is_exception()
+        && interactives.tag != qjs::JS_TAG_UNDEFINED
+        && interactives.tag != qjs::JS_TAG_NULL
+    {
+        let len = js_prop_f64(ctx, interactives, b"length\0")
+            .unwrap_or(0.0)
+            .max(0.0) as usize;
+        for idx in 0..len {
+            let item = qjs::JS_GetPropertyUint32(ctx, interactives, idx as u32);
+            if item.is_exception()
+                || item.tag == qjs::JS_TAG_UNDEFINED
+                || item.tag == qjs::JS_TAG_NULL
+            {
+                qjs::js_free_value(ctx, item);
+                continue;
+            }
+            next.interactives.push(HostedBrowserInteractive {
+                item_id: js_prop_f64(ctx, item, b"itemId\0").unwrap_or(0.0).max(0.0) as u32,
+                kind_id: js_prop_f64(ctx, item, b"kindId\0").unwrap_or(0.0).max(0.0) as u32,
+                x: js_prop_f64(ctx, item, b"x\0").unwrap_or(0.0).max(0.0) as u32,
+                y: js_prop_f64(ctx, item, b"y\0").unwrap_or(0.0).max(0.0) as u32,
+                width: js_prop_f64(ctx, item, b"width\0").unwrap_or(0.0).max(0.0) as u32,
+                height: js_prop_f64(ctx, item, b"height\0").unwrap_or(0.0).max(0.0) as u32,
+            });
+            qjs::js_free_value(ctx, item);
+        }
+    }
+    qjs::js_free_value(ctx, interactives);
+    qjs::js_free_value(ctx, result);
+
+    let mut shared = HOSTED_INTERACTIVE_STATE.lock();
+    let prev = shared.clone();
+    next.seq = prev.seq;
+    if prev != next {
+        let mut seq = HOSTED_INTERACTIVE_SEQ.load(Ordering::Acquire).wrapping_add(1);
+        if seq == 0 {
+            seq = 1;
+        }
+        next.seq = seq;
+        HOSTED_INTERACTIVE_SEQ.store(seq, Ordering::Release);
+        *shared = next;
+    }
+}
+
 unsafe fn apply_pending_html(ctx: *mut qjs::JSContext) {
     let Some(next) = PENDING_HTML.lock().take() else {
         return;
@@ -432,6 +564,30 @@ unsafe fn apply_pending_ai_input(ctx: *mut qjs::JSContext) {
         b"<browser-ai-input>\0".as_ptr() as *const c_char,
         qjs::JS_EVAL_TYPE_GLOBAL,
         "browser ai input",
+    );
+}
+
+unsafe fn apply_pending_qjs_input(ctx: *mut qjs::JSContext) {
+    let Some(next) = PENDING_QJS_INPUT.lock().pop_front() else {
+        return;
+    };
+
+    let code_lit = helpers::js_single_quoted_literal(next.code.as_str());
+    let mut src = String::new();
+    src.push_str("(function(){const __g=(typeof globalThis!=='undefined')?globalThis:this;");
+    src.push_str("if(typeof __g.__trueosQjsInputPush!=='function')return;");
+    src.push_str("__g.__trueosQjsInputPush({code:");
+    src.push_str(&code_lit);
+    src.push_str(",repl:");
+    src.push_str(if next.repl { "true" } else { "false" });
+    src.push_str("});})();");
+
+    let _ = helpers::eval_or_log(
+        ctx,
+        src.as_bytes(),
+        b"<browser-qjs-input>\0".as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+        "browser qjs input",
     );
 }
 
@@ -538,11 +694,13 @@ pub async fn boot_browser() {
         loop {
             apply_pending_html(ctx);
             apply_pending_ai_input(ctx);
+            apply_pending_qjs_input(ctx);
             apply_pending_hosted_viewport(ctx);
             if !qjs::vm::pump_runtime_once(rt, ctx, "browser") {
                 break;
             }
             sync_hosted_surface_state(ctx);
+            sync_hosted_interactive_state(ctx);
             Timer::after(EmbassyDuration::from_millis(16)).await;
         }
         qjs::trueos_shims::log_info("qjs-browser: stopped\n");
