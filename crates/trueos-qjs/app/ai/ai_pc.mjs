@@ -72,6 +72,7 @@ const AI_PC_INSTRUCTIONS = [
 const WORKER_BROWSER_METHODS = [
   "getApiContract",
   "listUnavailable",
+  "getWindowId",
   "getHtml",
   "getTextRows",
   "getDomSnapshot",
@@ -111,7 +112,9 @@ function getFileSearchVectorStoreIds() {
 function getPcRuntime() {
   if (!globalThis.__trueosAiPcRuntime) {
     globalThis.__trueosAiPcRuntime = {
+      aiTarget: { id: "openai-embassy-primary", role: "primary" },
       browser: null,
+      browserTarget: { windowId: 0, role: "primary" },
       context: null,
       page: null,
       jsOutput: [],
@@ -123,6 +126,97 @@ function getPcRuntime() {
     };
   }
   return globalThis.__trueosAiPcRuntime;
+}
+
+function cloneAiTarget(target) {
+  if (typeof target === "string" && target) {
+    return { id: target, role: "named" };
+  }
+  if (!target || typeof target !== "object") {
+    return { id: "openai-embassy-primary", role: "primary" };
+  }
+  return {
+    id: typeof target.id === "string" && target.id ? target.id : "openai-embassy-primary",
+    role: typeof target.role === "string" && target.role ? target.role : "primary",
+  };
+}
+
+function cloneBrowserTarget(target) {
+  if (!target || typeof target !== "object") {
+    return { windowId: 0, role: "primary" };
+  }
+  return {
+    windowId: Math.max(0, Number(target.windowId || 0) | 0),
+    role: typeof target.role === "string" && target.role ? target.role : "primary",
+  };
+}
+
+export function getConnectedAi() {
+  return cloneAiTarget(getPcRuntime().aiTarget);
+}
+
+export function connect(ai = null, browser = null) {
+  const runtime = getPcRuntime();
+  const currentAi = cloneAiTarget(runtime.aiTarget);
+  if (ai != null) {
+    const requestedAi = cloneAiTarget(ai);
+    if (requestedAi.id !== currentAi.id) {
+      const err = new Error(
+        `unsupported ai target: requested ${requestedAi.id}, active ${currentAi.id}`,
+      );
+      err.code = "TRUEOS_AI_TARGET_UNAVAILABLE";
+      throw err;
+    }
+  }
+  const nextBrowser = browser === null ? getConnectedBrowser() : connectBrowser(browser);
+  return {
+    ai: currentAi,
+    browser: nextBrowser,
+  };
+}
+
+export function connectBrowser(target = null) {
+  const runtime = getPcRuntime();
+  if (target == null) {
+    runtime.browserTarget = { windowId: 0, role: "primary" };
+    return cloneBrowserTarget(runtime.browserTarget);
+  }
+  if (typeof target === "number") {
+    runtime.browserTarget = {
+      windowId: Math.max(0, Number(target) | 0),
+      role: "window",
+    };
+    return cloneBrowserTarget(runtime.browserTarget);
+  }
+  runtime.browserTarget = cloneBrowserTarget(target);
+  return cloneBrowserTarget(runtime.browserTarget);
+}
+
+export function getConnectedBrowser() {
+  return cloneBrowserTarget(getPcRuntime().browserTarget);
+}
+
+async function ensureDefaultBrowserConnection() {
+  const current = getConnectedBrowser();
+  if (current.windowId > 0 || current.role !== "primary") {
+    return current;
+  }
+
+  const runtime = bindHostRuntime();
+  const browser = runtime && runtime.browser && typeof runtime.browser === "object"
+    ? runtime.browser
+    : null;
+  if (!browser || typeof browser.getWindowId !== "function") {
+    return current;
+  }
+
+  try {
+    const windowId = Number(await browser.getWindowId()) | 0;
+    if (windowId > 0) {
+      return connectBrowser(windowId);
+    }
+  } catch (_err) {}
+  return current;
 }
 
 function hasWorkerParentPort() {
@@ -228,8 +322,12 @@ async function hostBrowserRpc(method, args = []) {
     throw new Error(`host browser rpc unavailable for ${method}`);
   }
 
+  const browserTarget = await ensureDefaultBrowserConnection();
   const argsJson = JSON.stringify(Array.isArray(args) ? args : []);
-  const id = Number(globalThis.__trueosBrowserRpcStart(String(method || ""), argsJson) || 0) | 0;
+  const targetWindowId = Math.max(0, Number(browserTarget && browserTarget.windowId) | 0);
+  const id = Number(
+    globalThis.__trueosBrowserRpcStart(String(method || ""), argsJson, targetWindowId) || 0,
+  ) | 0;
   if (id <= 0) {
     throw new Error(`host browser rpc start failed for ${method}`);
   }
@@ -1563,6 +1661,7 @@ export async function startAiPc() {
   }
   globalThis.__trueosAiPcStarted = true;
   try {
+    await ensureDefaultBrowserConnection();
     const client = createOpenAiClient();
     let previousResponseId = null;
     while (true) {

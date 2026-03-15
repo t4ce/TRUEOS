@@ -100,7 +100,17 @@ unsafe extern "C" fn qjs_browser_rpc_start(
     let Some(args_json) = read_js_string_arg(ctx, args[1]) else {
         return qjs::JS_NewFloat64(ctx, 0.0);
     };
-    let id = qjs::browser_task::queue_browser_rpc(method, args_json);
+    let mut browser_window_id = 0u32;
+    if argc >= 3 {
+        let mut window_id_f = 0.0f64;
+        if qjs::JS_ToFloat64(ctx, &mut window_id_f as *mut f64, args[2]) == 0
+            && window_id_f.is_finite()
+            && window_id_f >= 0.0
+        {
+            browser_window_id = window_id_f as u32;
+        }
+    }
+    let id = qjs::browser_task::queue_browser_rpc(method, args_json, browser_window_id);
     qjs::JS_NewFloat64(ctx, id as f64)
 }
 
@@ -353,7 +363,7 @@ unsafe fn install_ai_globals(ctx: *mut qjs::JSContext) {
         ctx,
         Some(qjs_browser_rpc_start),
         b"__trueosBrowserRpcStart\0".as_ptr() as *const c_char,
-        2,
+        3,
         qjs::JS_CFUNC_GENERIC,
         0,
     );
