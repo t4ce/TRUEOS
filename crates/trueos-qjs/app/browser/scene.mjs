@@ -43,6 +43,16 @@ const ITALIC_SLANT_DEG = 12;
 const CHAMFER_PX = 5;
 const LINK_UNDERLINE_THICKNESS_PX = 1;
 const MAX_RENDER_TEXT_CHARS = 512;
+const DEBUG_ELEMENT_BACKDROPS = true;
+const DEBUG_TEXT_BG_RGBA = 0xffef9cff;
+const DEBUG_ICON_BG_RGBA = 0xffcc80ff;
+const DEBUG_IMAGE_BG_RGBA = 0xc5e1a5ff;
+const DEBUG_BUTTON_BG_RGBA = 0x90caf9ff;
+const DEBUG_LINK_BG_RGBA = 0xa5d6a7ff;
+const DEBUG_HR_BG_RGBA = 0xf48fb1ff;
+const DEBUG_REGION_TOP_MARKER = true;
+const DEBUG_REGION_TOP_RGBA = 0xff3b30ff;
+const DEBUG_REGION_LEFT_RGBA = 0x00c7beff;
 
 function styleColorToTextRgba(style) {
   if (!style || typeof style !== 'object') return DEFAULT_TEXT_RGBA;
@@ -85,6 +95,22 @@ function rowIsBold(row) {
   if (fontWeight === 'bold' || fontWeight === 'bolder') return 1;
   const numeric = Number(fontWeight);
   return Number.isFinite(numeric) && numeric >= 600 ? 1 : 0;
+}
+
+function estimateRunTextWidthPx(run) {
+  const text = collapseWhitespace(String(run && run.text || ''));
+  const fontPx = Number.isFinite(Number(run && run.fontPx))
+    ? Math.max(1, Math.round(Number(run.fontPx)))
+    : DEFAULT_THEME.FONT_PX;
+  if (!text) return Math.max(4, Math.round(fontPx * 0.5));
+  return Math.max(4, Math.round(text.length * fontPx * 0.56));
+}
+
+function estimateRunTextHeightPx(run) {
+  const fontPx = Number.isFinite(Number(run && run.fontPx))
+    ? Math.max(1, Math.round(Number(run.fontPx)))
+    : DEFAULT_THEME.FONT_PX;
+  return Math.max(DEFAULT_THEME.LINE_H, Math.ceil(fontPx * 1.35));
 }
 
 function buildCenteredImagePlacement(run) {
@@ -141,7 +167,7 @@ function buildOverlayTextRuns(overlayRuns) {
   return overlayTextRuns;
 }
 
-function buildSceneDisplayLists(doc, vw, minY, maxY, overlayRuns) {
+function buildSceneDisplayLists(doc, vw, minY, maxY, overlayRuns, localOffsetY = 0) {
   const texId = Number(cmdStream.createAtlasTexture(ATLAS_KIND) || 0);
   const runs = [];
   const iconRuns = [];
@@ -184,7 +210,7 @@ function buildSceneDisplayLists(doc, vw, minY, maxY, overlayRuns) {
   for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i];
     const x = Math.round(Number(rowX[i] ?? DEFAULT_THEME.LEFT_PAD));
-    const y = Math.round(Number(rowY[i] ?? (i * DEFAULT_THEME.LINE_H)));
+    const y = Math.round(Number(rowY[i] ?? (i * DEFAULT_THEME.LINE_H)) + Number(localOffsetY || 0));
     const kind = String(row && row.kind || '');
     const boxH = kind === 'image'
       ? Math.max(1, Math.round(Number(row && row.heightPx || 0) || DEFAULT_THEME.LINE_H))
@@ -283,9 +309,42 @@ function drawSceneDisplayLists(display, clipW, clipH, originY = 0, includeOverla
     );
   }
 
+  cmdStream.setOrigin(0, 0);
   cmdStream.pushClipRect(0, 0, clipW, clipH);
-  cmdStream.pushOrigin(0, originY);
+  cmdStream.setOrigin(0, originY);
   try {
+    if (DEBUG_ELEMENT_BACKDROPS) {
+      for (let i = 0; i < buttonRuns.length; i += 1) {
+        const run = buttonRuns[i];
+        cmdStream.fillRect(run.x, run.y, run.width, run.height, DEBUG_BUTTON_BG_RGBA, 0, 0);
+      }
+      for (let i = 0; i < linkRuns.length; i += 1) {
+        const run = linkRuns[i];
+        cmdStream.fillRect(run.x, run.y, run.width, run.height, DEBUG_LINK_BG_RGBA, 0, 0);
+      }
+      for (let i = 0; i < hrRuns.length; i += 1) {
+        const run = hrRuns[i];
+        cmdStream.fillRect(run.x, run.y, run.width, run.height, DEBUG_HR_BG_RGBA, 0, 0);
+      }
+      for (let i = 0; i < imageRuns.length; i += 1) {
+        const run = imageRuns[i];
+        cmdStream.fillRect(run.x, run.y, run.width, run.height, DEBUG_IMAGE_BG_RGBA, 0, 0);
+      }
+      for (let i = 0; i < iconRuns.length; i += 1) {
+        const run = iconRuns[i] || null;
+        const x = Number(run && run.x || 0);
+        const y = Number(run && run.y || 0);
+        cmdStream.fillRect(x, y, LI_ICON_SIZE, LI_ICON_SIZE, DEBUG_ICON_BG_RGBA, 0, 0);
+      }
+      for (let i = 0; i < runs.length; i += 1) {
+        const run = runs[i] || null;
+        const x = Number(run && run.x || 0);
+        const y = Number(run && run.y || 0);
+        const width = estimateRunTextWidthPx(run);
+        const height = estimateRunTextHeightPx(run);
+        cmdStream.fillRect(x, y, width, height, DEBUG_TEXT_BG_RGBA, 0, 0);
+      }
+    }
     for (let i = 0; i < buttonRuns.length; i += 1) {
       const run = buttonRuns[i];
       cmdStream.fillRect(run.x, run.y, run.width, run.height, BUTTON_OUTLINE_RGBA, 1, 1);
@@ -373,7 +432,7 @@ function drawSceneDisplayLists(display, clipW, clipH, originY = 0, includeOverla
       );
     }
   } finally {
-    cmdStream.popOrigin();
+    cmdStream.setOrigin(0, 0);
     cmdStream.popClipRect();
   }
 
@@ -401,6 +460,7 @@ export function renderSceneContentToCurrentTarget(doc, vw, contentH) {
   const targetW = Math.max(1, Number(vw || 1) | 0);
   const targetH = Math.max(1, Number(contentH || 1) | 0);
   const display = buildSceneDisplayLists(doc, targetW, 0, targetH, null);
+  cmdStream.setOrigin(0, 0);
   cmdStream.fillRect(0, 0, targetW, targetH, DEFAULT_CLEAR_RGBA, 0, 0);
   drawSceneDisplayLists(display, targetW, targetH, 0, false, null);
   return true;
@@ -410,9 +470,24 @@ export function renderSceneRegionToCurrentTarget(doc, vw, docTopY = 0, regionH =
   const targetW = Math.max(1, Number(vw || 1) | 0);
   const regionTop = Math.max(0, Math.round(Number(docTopY || 0)));
   const targetH = Math.max(1, Number(regionH || 1) | 0);
-  const display = buildSceneDisplayLists(doc, targetW, regionTop, regionTop + targetH, null);
-  cmdStream.fillRect(0, 0, targetW, targetH, DEFAULT_CLEAR_RGBA, 0, 0);
-  drawSceneDisplayLists(display, targetW, targetH, -regionTop, false, null);
+  const display = buildSceneDisplayLists(doc, targetW, regionTop, regionTop + targetH, null, -regionTop);
+  cmdStream.setViewport(targetW, targetH);
+  cmdStream.setOrigin(0, 0);
+  cmdStream.setBlendEnabled(0);
+  cmdStream.setBlendMode(0);
+  cmdStream.setPremultipliedAlpha(0);
+  try {
+    cmdStream.fillRect(0, 0, targetW, targetH, DEFAULT_CLEAR_RGBA, 0, 0);
+    if (DEBUG_REGION_TOP_MARKER) {
+      cmdStream.fillRect(0, 0, targetW, Math.min(6, targetH), DEBUG_REGION_TOP_RGBA, 0, 0);
+      cmdStream.fillRect(0, 0, Math.min(6, targetW), targetH, DEBUG_REGION_LEFT_RGBA, 0, 0);
+    }
+    drawSceneDisplayLists(display, targetW, targetH, 0, false, null);
+  } finally {
+    cmdStream.setBlendEnabled(0);
+    cmdStream.setBlendMode(0);
+    cmdStream.setPremultipliedAlpha(0);
+  }
   return true;
 }
 
@@ -437,6 +512,7 @@ export function composeSceneTextureToCurrentTarget(contentTexId, contentW, conte
     );
   }
 
+  cmdStream.setOrigin(0, 0);
   cmdStream.setBlendEnabled(0);
   cmdStream.setBlendMode(0);
   cmdStream.setPremultipliedAlpha(0);
@@ -487,6 +563,8 @@ export function composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollY, con
   const overlayTextRuns = buildOverlayTextRuns(overlayRuns);
   const items = Array.isArray(regions) ? regions : [];
 
+  cmdStream.setViewport(drawW, drawH);
+  cmdStream.setOrigin(0, 0);
   if (overlayRect && typeof overlayRect === 'object') {
     cmdStream.fillRect(
       Number(overlayRect.x || 0),
@@ -552,6 +630,9 @@ export function composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollY, con
       Number(run && run.boldMode || 0),
     );
   }
+  cmdStream.setBlendEnabled(0);
+  cmdStream.setBlendMode(0);
+  cmdStream.setPremultipliedAlpha(0);
   return true;
 }
 
