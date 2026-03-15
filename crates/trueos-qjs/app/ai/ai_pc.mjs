@@ -59,7 +59,7 @@ const AI_PC_TOOL_POLICY = [
   "If asked to control HID/LED devices, use driverdev_set_hid_output_report_hex with explicit payload bytes and report IDs instead of claiming write access is unavailable.",
   "For devices classified as kind=leds, prefer the LED runtime interrupt-OUT tools before falling back to HID SET_REPORT control writes.",
   "Use ask_user only when the request is genuinely ambiguous or a required argument is missing.",
-  "Treat cursor and pointer requests in browser/computer-use tasks as mouse-style pointer movement; prefer browser.moveCursor(...) instead of interpreting them as shell or terminal text-cursor requests unless the user explicitly says shell or terminal.",
+  "Treat cursor and pointer requests in browser/computer-use tasks as mouse-style pointer movement; prefer computer.moveCursor(...) instead of interpreting them as shell or terminal text-cursor requests unless the user explicitly says shell or terminal.",
   "Do not claim you cannot launch local apps or shell commands when a shell1 tool is available for the task.",
 ].join(" ");
 const AI_PC_INSTRUCTIONS = [
@@ -93,13 +93,17 @@ const WORKER_BROWSER_METHODS = [
 ];
 
 function getExecJsBrowserApiDescription() {
+  return "getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), setBodyHtml(html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), navigate(...), getApiContract(), and listUnavailable().";
+}
+
+function getExecJsComputerApiDescription() {
   const methodList = HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS
-    ? "getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), setBodyHtml(html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), captureScreenshot(), and listUnavailable()."
-    : "getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), setBodyHtml(html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), keyboard(...), typeText(...), pressKey(...), captureScreenshot(), and listUnavailable().";
+    ? "moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), captureScreenshot(), getApiContract(), and listUnavailable()."
+    : "moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), keyboard(...), typeText(...), pressKey(...), captureScreenshot(), getApiContract(), and listUnavailable().";
   const keyboardDetails = HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS
     ? ""
-    : " keyboard(...) is the canonical keyboard API: send Unicode text with { type: \"text\", text: \"...\" } and named keys with { type: \"key\", key: \"Enter\", modifiers: [\"Ctrl\"]? }; typeText(...) and pressKey(...) compile into that same path.";
-  return `TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include ${methodList} Prefer setBodyHtml(html) when replacing the visible page content instead of guessing DOM paths. getDomSnapshot() returns a rooted tree object with a stable path field on each node; for flat scans, use snap.nodes. click(...) now drives the real cursor/button path and accepts coordinates, stable paths, text=..., plain caption text, and simple selectors like a[href="..."] when the target is interactive.${keyboardDetails} insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. In the standalone AI runtime, moveCursor and keyboard writes go directly to kernel input while DOM and screenshot reads still come from the browser service. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.`;
+    : " keyboard(...) is the canonical input API: send Unicode text with { type: \"text\", text: \"...\" } and named keys with { type: \"key\", key: \"Enter\", modifiers: [\"Ctrl\"]? }; typeText(...) and pressKey(...) compile into that same path.";
+  return `TRUEOS computer facade. Call computer.getApiContract() first for the supported contract. Current live methods include ${methodList} These actions drive kernel/ui2 input and the full composed UI screenshot path, not browser-local input.${keyboardDetails} Use computer.moveCursor for visible pointer movement rather than asking about a terminal text cursor.`;
 }
 
 function getFileSearchVectorStoreIds() {
@@ -517,21 +521,102 @@ function directKeyboard(input = null, options = null) {
   };
 }
 
-function augmentBrowserContractForHostInput(contract = null) {
-  const base = contract && typeof contract === "object" ? contract : {};
-  const available = Array.isArray(base.available) ? [...base.available] : [];
-  const unavailable = Array.isArray(base.unavailable) ? [...base.unavailable] : [];
-  for (const name of ["moveCursor", "click"]) {
-    if (!available.includes(name)) {
-      available.push(name);
+function createComputerContract(hasDirectInput, hasScreenshot) {
+  const available = ["getApiContract", "listUnavailable"];
+  const unavailable = [];
+  if (hasDirectInput) {
+    available.push("moveCursor", "click");
+    if (!HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS) {
+      available.push("keyboard", "typeText", "pressKey");
     }
+  } else {
+    unavailable.push("moveCursor", "click", "keyboard", "typeText", "pressKey");
   }
-  const filteredUnavailable = unavailable.filter((name) => name !== "moveCursor" && name !== "click");
+  if (hasScreenshot) {
+    available.push("captureScreenshot");
+  } else {
+    unavailable.push("captureScreenshot");
+  }
   return {
-    ...base,
+    version: 1,
     available,
-    unavailable: filteredUnavailable,
+    unavailable,
+    notes: {
+      intent: "Worker-facing computer-use facade backed by kernel/ui2 input and full composed screenshots.",
+      targetShape: "Close to computer-use action harnesses: pointer, keyboard, screenshot.",
+      screenshotShape: "captureScreenshot() returns the full composed UI, not just browser content.",
+    },
   };
+}
+
+function createComputerProxy() {
+  const runtime = getPcRuntime();
+  if (runtime.computer && typeof runtime.computer === "object") {
+    return runtime.computer;
+  }
+
+  const browser = runtime.browser && typeof runtime.browser === "object" ? runtime.browser : null;
+  const hasDirectInput = hasDirectKernelInput();
+  const hasScreenshot = !!(browser && typeof browser.captureScreenshot === "function");
+  const contract = createComputerContract(hasDirectInput, hasScreenshot);
+
+  const proxy = {
+    getApiContract() {
+      return {
+        version: contract.version,
+        available: [...contract.available],
+        unavailable: [...contract.unavailable],
+        notes: { ...contract.notes },
+      };
+    },
+    listUnavailable() {
+      return [...contract.unavailable];
+    },
+    moveCursor(target = null) {
+      if (!hasDirectInput) throw new Error("computer input unavailable: moveCursor");
+      return Promise.resolve(directMoveCursor(target));
+    },
+    click(target = null) {
+      if (!hasDirectInput) throw new Error("computer input unavailable: click");
+      return Promise.resolve(directClick(target));
+    },
+    keyboard(input = null, options = null) {
+      if (!hasDirectInput) throw new Error("computer input unavailable: keyboard");
+      return Promise.resolve(directKeyboard(input, options));
+    },
+    typeText(text, options = null) {
+      if (!hasDirectInput) throw new Error("computer input unavailable: typeText");
+      return Promise.resolve(directKeyboard({
+        type: "text",
+        text: String(text || ""),
+      }, options));
+    },
+    pressKey(key, options = null) {
+      if (!hasDirectInput) throw new Error("computer input unavailable: pressKey");
+      const keySource = key && typeof key === "object" && !Array.isArray(key) ? key : null;
+      const keyName = typeof key === "string"
+        ? key
+        : String(keySource && keySource.key != null ? keySource.key : "");
+      const source = options && typeof options === "object"
+        ? options
+        : (keySource || {});
+      return Promise.resolve(directKeyboard({
+        type: "key",
+        key: keyName,
+        modifiers: source.modifiers || source.mods,
+        repeat: source.repeat,
+      }, source));
+    },
+    captureScreenshot() {
+      if (!browser || typeof browser.captureScreenshot !== "function") {
+        throw new Error("computer screenshot unavailable");
+      }
+      return browser.captureScreenshot();
+    },
+  };
+
+  runtime.computer = proxy;
+  return proxy;
 }
 
 function createWorkerBrowserProxy() {
@@ -560,42 +645,6 @@ function createHostBrowserProxy() {
   for (const method of WORKER_BROWSER_METHODS) {
     proxy[method] = (...args) => hostBrowserRpc(method, args);
   }
-  if (hasDirectKernelInput()) {
-    const rpcGetApiContract = proxy.getApiContract;
-    const rpcListUnavailable = proxy.listUnavailable;
-    proxy.getApiContract = async (...args) => {
-      const contract = await rpcGetApiContract(...args);
-      return augmentBrowserContractForHostInput(contract);
-    };
-    proxy.listUnavailable = async (...args) => {
-      const unavailable = await rpcListUnavailable(...args);
-      return Array.isArray(unavailable)
-        ? unavailable.filter((name) => name !== "moveCursor" && name !== "click")
-        : [];
-    };
-    proxy.moveCursor = (target = null) => Promise.resolve(directMoveCursor(target));
-    proxy.keyboard = (input = null, options = null) => Promise.resolve(directKeyboard(input, options));
-    proxy.typeText = (text, options = null) => Promise.resolve(directKeyboard({
-      type: "text",
-      text: String(text || ""),
-    }, options));
-    proxy.pressKey = (key, options = null) => {
-      const keySource = key && typeof key === "object" && !Array.isArray(key) ? key : null;
-      const keyName = typeof key === "string"
-        ? key
-        : String(keySource && keySource.key != null ? keySource.key : "");
-      const source = options && typeof options === "object"
-        ? options
-        : (keySource || {});
-      return Promise.resolve(directKeyboard({
-        type: "key",
-        key: keyName,
-        modifiers: source.modifiers || source.mods,
-        repeat: source.repeat,
-      }, source));
-    };
-    proxy.click = (target = null) => Promise.resolve(directClick(target));
-  }
   runtime.browser = proxy;
   runtime.context = proxy;
   runtime.page = proxy;
@@ -606,6 +655,7 @@ function bindHostRuntime() {
   const runtime = getPcRuntime();
   if (hasWorkerParentPort()) {
     createWorkerBrowserProxy();
+    createComputerProxy();
     return runtime;
   }
   const browser = globalThis.__trueosBrowser;
@@ -613,10 +663,12 @@ function bindHostRuntime() {
     runtime.browser = browser;
     runtime.context = browser;
     runtime.page = browser;
+    createComputerProxy();
     return runtime;
   }
   if (hasHostBrowserRpc()) {
     createHostBrowserProxy();
+    createComputerProxy();
   }
   return runtime;
 }
@@ -815,6 +867,7 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
 - display(base64_or_data_url): Use this to view either a bare base64-encoded PNG payload or a full data URL. browser.captureScreenshot() already returns a full data URL.
 - Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
 - browser: ${getExecJsBrowserApiDescription()}
+- computer: ${getExecJsComputerApiDescription()}
 - context: same object as browser for now.
 - page: same object as browser for now.
 `,
@@ -1375,12 +1428,19 @@ async function execJs(code) {
   const runtime = bindHostRuntime();
   const execConsole = makeExecConsole(runtime.jsOutput);
   const wrappedCode = `
-    (async (console, display, browser, context, page) => {
+    (async (console, display, browser, computer, context, page) => {
       ${code}
     })
   `;
   const factory = (0, eval)(wrappedCode);
-  return await factory(execConsole, displayImage, runtime.browser, runtime.context, runtime.page);
+  return await factory(
+    execConsole,
+    displayImage,
+    runtime.browser,
+    runtime.computer,
+    runtime.context,
+    runtime.page,
+  );
 }
 
 async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX_STEPS, model = DEFAULT_RESPONSE_MODEL) {
