@@ -49,6 +49,7 @@ const WORKER_BROWSER_METHODS = [
   "moveCursor",
   "click",
   "navigate",
+  "keyboard",
   "typeText",
   "pressKey",
   "captureScreenshot",
@@ -370,7 +371,7 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
 - console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large image payloads like screenshots or buffers. If you create an image or screenshot, pass the image data directly to display().
 - display(base64_or_data_url): Use this to view either a bare base64-encoded PNG payload or a full data URL. browser.captureScreenshot() already returns a full data URL.
 - Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), setBodyHtml(html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). Prefer setBodyHtml(html) when replacing the visible page content instead of guessing DOM paths. getDomSnapshot() returns a rooted tree object with a stable path field on each node; for flat scans, use snap.nodes. click(...) now drives the real cursor/button path and accepts coordinates, stable paths, text=..., plain caption text, and simple selectors like a[href="..."] when the target is interactive. insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.
+- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), setBodyHtml(html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), keyboard(...), typeText(...), pressKey(...), captureScreenshot(), and listUnavailable(). Prefer setBodyHtml(html) when replacing the visible page content instead of guessing DOM paths. getDomSnapshot() returns a rooted tree object with a stable path field on each node; for flat scans, use snap.nodes. click(...) now drives the real cursor/button path and accepts coordinates, stable paths, text=..., plain caption text, and simple selectors like a[href="..."] when the target is interactive. keyboard(...) is the canonical keyboard API: send Unicode text with { type: "text", text: "..." } and named keys with { type: "key", key: "Enter", modifiers: ["Ctrl"]? }; typeText(...) and pressKey(...) compile into that same path. insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.
 - context: same object as browser for now.
 - page: same object as browser for now.
 `,

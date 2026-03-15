@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use trueos_tetris::{Game, Lcg32, NoopEvents};
 
@@ -27,6 +28,18 @@ const FRAME_COLOR: [u8; 4] = [0x3A, 0x4C, 0x5F, 0xFF];
 const GRID_COLOR: [u8; 4] = [0x0D, 0x13, 0x1B, 0xFF];
 const GAME_OVER_TINT: [u8; 4] = [0x2A, 0x08, 0x08, 0xFF];
 const GAME_OVER_RESET_MS: u32 = 1_500;
+const BG_CLEAR_RGB: u32 = 0x091016;
+
+#[repr(C, packed)]
+#[derive(Copy, Clone)]
+struct RgbVertex {
+    x: f32,
+    y: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    pad: u8,
+}
 
 struct GfxTetrisApp {
     game: Game<BOARD_W, BOARD_H, BOARD_HIDDEN>,
@@ -84,18 +97,44 @@ impl GfxTetrisApp {
     }
 }
 
-fn render_frame(app: &GfxTetrisApp, pixels: &mut [u8]) {
-    clear_pixels(pixels, BG_COLOR);
-    fill_rect(pixels, 0, 0, UI2_TETRIS_RT_W, HEADER_H, HEADER_COLOR);
+fn push_rect(vertices: &mut Vec<RgbVertex>, x: u32, y: u32, w: u32, h: u32, color: [u8; 4]) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let x0 = (x as f32 / UI2_TETRIS_RT_W as f32) * 2.0 - 1.0;
+    let y0 = (y as f32 / UI2_TETRIS_RT_H as f32) * 2.0 - 1.0;
+    let x1 = ((x + w) as f32 / UI2_TETRIS_RT_W as f32) * 2.0 - 1.0;
+    let y1 = ((y + h) as f32 / UI2_TETRIS_RT_H as f32) * 2.0 - 1.0;
+    let mk = |x: f32, y: f32| RgbVertex {
+        x,
+        y,
+        r: color[0],
+        g: color[1],
+        b: color[2],
+        pad: color[3],
+    };
+    vertices.extend_from_slice(&[
+        mk(x0, y0),
+        mk(x1, y0),
+        mk(x1, y1),
+        mk(x0, y0),
+        mk(x1, y1),
+        mk(x0, y1),
+    ]);
+}
+
+fn build_frame_vertices(app: &GfxTetrisApp) -> Vec<RgbVertex> {
+    let mut vertices = Vec::with_capacity(6 * (3 + VIEW_H + BOARD_W + (BOARD_W * VIEW_H)));
+    push_rect(&mut vertices, 0, 0, UI2_TETRIS_RT_W, HEADER_H, HEADER_COLOR);
 
     let board_x = PAD_X;
     let board_y = HEADER_H + PAD_Y;
     let board_w = FRAME_PX * 2 + (BOARD_W as u32 * CELL_PX);
     let board_h = FRAME_PX * 2 + (VIEW_H as u32 * CELL_PX);
 
-    fill_rect(pixels, board_x, board_y, board_w, board_h, FRAME_COLOR);
-    fill_rect(
-        pixels,
+    push_rect(&mut vertices, board_x, board_y, board_w, board_h, FRAME_COLOR);
+    push_rect(
+        &mut vertices,
         board_x + FRAME_PX,
         board_y + FRAME_PX,
         board_w - FRAME_PX * 2,
@@ -109,8 +148,8 @@ fn render_frame(app: &GfxTetrisApp, pixels: &mut [u8]) {
 
     for y in 0..VIEW_H {
         let py = board_y + FRAME_PX + (y as u32 * CELL_PX);
-        fill_rect(
-            pixels,
+        push_rect(
+            &mut vertices,
             board_x + FRAME_PX,
             py,
             BOARD_W as u32 * CELL_PX,
@@ -120,8 +159,8 @@ fn render_frame(app: &GfxTetrisApp, pixels: &mut [u8]) {
     }
     for x in 0..BOARD_W {
         let px = board_x + FRAME_PX + (x as u32 * CELL_PX);
-        fill_rect(
-            pixels,
+        push_rect(
+            &mut vertices,
             px,
             board_y + FRAME_PX,
             1,
@@ -159,9 +198,11 @@ fn render_frame(app: &GfxTetrisApp, pixels: &mut [u8]) {
                 1
             };
             let side = CELL_PX.saturating_sub(inset * 2).max(1);
-            fill_rect(pixels, px + inset, py + inset, side, side, rgba);
+            push_rect(&mut vertices, px + inset, py + inset, side, side, rgba);
         }
     }
+
+    vertices
 }
 
 fn brighten(channel: u8, amount: u8) -> u8 {
@@ -173,50 +214,6 @@ fn dim(channel: u8, percent: u8) -> u8 {
     ((channel as u16 * keep) / 100) as u8
 }
 
-fn clear_pixels(pixels: &mut [u8], color: [u8; 4]) {
-    for px in pixels.chunks_exact_mut(4) {
-        px.copy_from_slice(&color);
-    }
-}
-
-fn fill_rect(pixels: &mut [u8], x: u32, y: u32, w: u32, h: u32, color: [u8; 4]) {
-    if w == 0 || h == 0 {
-        return;
-    }
-
-    let stride = UI2_TETRIS_RT_W as usize * 4;
-    let row_len = w as usize * 4;
-    for row in y as usize..(y + h) as usize {
-        let start = row * stride + x as usize * 4;
-        let end = start + row_len;
-        let dst = &mut pixels[start..end];
-        for px in dst.chunks_exact_mut(4) {
-            px.copy_from_slice(&color);
-        }
-    }
-}
-
-fn upload_frame(pixels: &[u8]) -> bool {
-    let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
-            UI2_TETRIS_TEX_ID,
-            UI2_TETRIS_RT_W,
-            UI2_TETRIS_RT_H,
-            pixels.as_ptr(),
-            pixels.len(),
-        )
-    };
-    if rc != 0 {
-        crate::log!(
-            "gfx-tetris: upload failed tex={} rc={}\n",
-            UI2_TETRIS_TEX_ID,
-            rc
-        );
-        return false;
-    }
-    true
-}
-
 #[embassy_executor::task]
 pub async fn ui2_gfx_tetris_task() {
     let seed = crate::time::unix_time_seconds()
@@ -224,14 +221,7 @@ pub async fn ui2_gfx_tetris_task() {
         .unwrap_or(0x5445_5452)
         ^ 0xA11C_E123;
     let mut app = GfxTetrisApp::new(seed);
-    let mut pixels = alloc::vec![0_u8; (UI2_TETRIS_RT_W as usize) * (UI2_TETRIS_RT_H as usize) * 4];
-
-    render_frame(&app, &mut pixels);
-    if !upload_frame(&pixels) {
-        return;
-    }
-
-    let window_id = crate::v::ui2::create_texture_content_window(
+    let Some(surface) = crate::v::ui2::Ui2SurfaceWindow::new(
         "Gfx Tetris",
         crate::v::ui2::Ui2Rect {
             x: UI2_TETRIS_WINDOW_X,
@@ -243,15 +233,27 @@ pub async fn ui2_gfx_tetris_task() {
         255,
         UI2_TETRIS_TEX_ID,
         false,
-    );
+        BG_COLOR,
+    ) else {
+        return;
+    };
+    let window_id = surface.window_id();
+    let (surface_w, surface_h) = surface.size();
     crate::log!(
         "gfx-tetris: window={} tex={} size={}x{}\n",
         window_id,
-        UI2_TETRIS_TEX_ID,
-        UI2_TETRIS_RT_W,
-        UI2_TETRIS_RT_H
+        surface.tex_id(),
+        surface_w,
+        surface_h
     );
-    let _ = crate::v::ui2::request_window_repaint(window_id, "gfx-tetris-init");
+    let init_vertices = build_frame_vertices(&app);
+    let init_bytes = unsafe {
+        core::slice::from_raw_parts(
+            init_vertices.as_ptr() as *const u8,
+            init_vertices.len() * core::mem::size_of::<RgbVertex>(),
+        )
+    };
+    let _ = surface.render_rgb_triangles(BG_CLEAR_RGB, init_bytes, "gfx-tetris-init");
 
     let mut last_tick = Instant::now();
     loop {
@@ -262,10 +264,14 @@ pub async fn ui2_gfx_tetris_task() {
         let elapsed_ms = elapsed.as_millis() as u32;
         let changed = app.tick(elapsed_ms) || app.game.consume_changed();
         if changed {
-            render_frame(&app, &mut pixels);
-            if upload_frame(&pixels) {
-                let _ = crate::v::ui2::request_window_repaint(window_id, "gfx-tetris");
-            }
+            let vertices = build_frame_vertices(&app);
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    vertices.as_ptr() as *const u8,
+                    vertices.len() * core::mem::size_of::<RgbVertex>(),
+                )
+            };
+            let _ = surface.render_rgb_triangles(BG_CLEAR_RGB, bytes, "gfx-tetris");
         }
 
         Timer::after(EmbassyDuration::from_millis(16)).await;
