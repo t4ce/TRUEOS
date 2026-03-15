@@ -627,12 +627,6 @@ pub mod cabi {
         core::sync::atomic::AtomicBool::new(false);
     static ASYNC_SVG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
-    static TEXTURE_UPLOAD_WORKER_LOGS: core::sync::atomic::AtomicU32 =
-        core::sync::atomic::AtomicU32::new(0);
-    static ASYNC_PNG_DIAG_LOGS: core::sync::atomic::AtomicU32 =
-        core::sync::atomic::AtomicU32::new(0);
-    static ASYNC_SVG_DIAG_LOGS: core::sync::atomic::AtomicU32 =
-        core::sync::atomic::AtomicU32::new(0);
 
     struct AsyncPngUploadReq {
         tex_id: u32,
@@ -653,22 +647,6 @@ pub mod cabi {
         repaint_window_id: u32,
         repaint_reason: &'static str,
         update_async_status: bool,
-    }
-
-    fn log_async_png_worker_site(tag: &str) {
-        let cpu = crate::percpu::this_cpu();
-        let slot = cpu.cpu_index();
-        let lapic = cpu.lapic_id();
-        let total = crate::smp::cpu_count().max(1);
-        crate::globalog::log(format_args!(
-            "async-png: {} slot={} lapic={} total_cpus={}\n",
-            tag, slot, lapic, total
-        ));
-        if total > 1 && slot == 0 {
-            crate::globalog::log(format_args!(
-                "async-png: WARNING running on BSP despite multicore availability\n"
-            ));
-        }
     }
 
     fn set_async_tex_status(tex_id: u32, status: i32) {
@@ -815,24 +793,10 @@ pub mod cabi {
 
     #[embassy_executor::task]
     pub async fn texture_upload_service_task() {
-        let log_n = TEXTURE_UPLOAD_WORKER_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        if log_n < 4 {
-            log_async_png_worker_site("texture-upload-worker-start");
-        }
         texture_upload_service_inner().await;
     }
 
     async fn async_png_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
-        let start = embassy_time_driver::now();
-        let log_n = ASYNC_PNG_DIAG_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        if log_n < 16 {
-            log_async_png_worker_site("decode-start");
-            crate::globalog::log(format_args!(
-                "async-png: decode-start tex_id={} bytes={}\n",
-                tex_id,
-                bytes.len()
-            ));
-        }
         let rc = match crate::gfx::png_codec::decode_png_rgba(bytes.as_slice()) {
             Ok(decoded) => {
                 if queue_texture_rgba_upload_owned(
@@ -855,22 +819,6 @@ pub mod cabi {
         if rc != 0 {
             set_async_tex_status(tex_id, rc);
         }
-        if log_n < 16 {
-            let elapsed_ticks = embassy_time_driver::now().saturating_sub(start);
-            crate::globalog::log(format_args!(
-                "async-png: decode-done tex_id={} rc={} ticks={} host_ready={}\n",
-                tex_id,
-                rc,
-                elapsed_ticks,
-                (rc == 0) as u8
-            ));
-            if rc == 0 {
-                crate::globalog::log(format_args!(
-                    "async-png: tex_id={} decode-ready; queued for serialized upload\n",
-                    tex_id
-                ));
-            }
-        }
     }
 
     async fn async_png_upload_service_inner() {
@@ -886,21 +834,10 @@ pub mod cabi {
 
     #[embassy_executor::task]
     async fn async_png_upload_service_task() {
-        log_async_png_worker_site("worker-start");
         async_png_upload_service_inner().await;
     }
 
     async fn async_svg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
-        let start = embassy_time_driver::now();
-        let log_n = ASYNC_SVG_DIAG_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        if log_n < 16 {
-            log_async_png_worker_site("svg-start");
-            crate::globalog::log(format_args!(
-                "async-svg: raster-start tex_id={} bytes={}\n",
-                tex_id,
-                bytes.len()
-            ));
-        }
         let rc = match crate::gfx::svg::upload_svg_bytes_to_texture(tex_id, bytes.as_slice()) {
             Ok(_) => 0,
             Err(code) => code,
@@ -909,13 +846,6 @@ pub mod cabi {
             set_async_tex_status(tex_id, ASYNC_TEX_STATUS_READY);
         } else {
             set_async_tex_status(tex_id, rc);
-        }
-        if log_n < 16 {
-            let elapsed_ticks = embassy_time_driver::now().saturating_sub(start);
-            crate::globalog::log(format_args!(
-                "async-svg: raster-done tex_id={} rc={} ticks={}\n",
-                tex_id, rc, elapsed_ticks
-            ));
         }
     }
 
@@ -932,7 +862,6 @@ pub mod cabi {
 
     #[embassy_executor::task]
     async fn async_svg_upload_service_task() {
-        log_async_png_worker_site("svg-worker-start");
         async_svg_upload_service_inner().await;
     }
 

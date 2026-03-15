@@ -275,7 +275,7 @@ fn register_device_inner(
     }
     // Signal that at least one device is enumerated so poll_task can start.
     ENUM_READY[controller_id].store(true, Ordering::Release);
-    if kind != DeviceKind::Unknown {
+    if USB_LOG_VERBOSE && kind != DeviceKind::Unknown {
         crate::log!(
             "usb: device claimed slot={} port={} kind={}\n",
             slot_id,
