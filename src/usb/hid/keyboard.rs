@@ -1,4 +1,4 @@
-use super::HidRuntime;
+use super::{HID_DEBUG_REPORT_LOGS, HidRuntime};
 
 const HID_KEYBOARD_RING_CAP: usize = 512;
 
@@ -179,6 +179,29 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         ascii,
         flags,
     });
+    if HID_DEBUG_REPORT_LOGS && flags != 0 {
+        crate::log!(
+            "kbd-report: ctrl={} slot={} ep={} seq={} flags=0x{:02X} mods=0x{:02X} keys=[{},{},{},{},{},{}] ascii=[{},{},{},{},{},{}]\n",
+            runtime.controller_id as u32,
+            runtime.slot_id,
+            runtime.ep_target,
+            runtime.seq as u32,
+            flags,
+            modifiers,
+            keys[0],
+            keys[1],
+            keys[2],
+            keys[3],
+            keys[4],
+            keys[5],
+            ascii[0],
+            ascii[1],
+            ascii[2],
+            ascii[3],
+            ascii[4],
+            ascii[5],
+        );
+    }
     crate::usb::input::push_event(crate::usb::input::InputEvent::Keyboard(
         crate::usb::input::KeyboardEvent {
             slot_id: runtime.slot_id,

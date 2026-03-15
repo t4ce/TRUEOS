@@ -4,7 +4,7 @@ use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_char;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
@@ -16,7 +16,6 @@ unsafe extern "C" {
     fn trueos_cabi_ui2_primary_browser_window_id() -> u32;
 }
 
-static BROWSER_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 pub const PRIMARY_BROWSER_INSTANCE_ID: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -78,14 +77,14 @@ struct HostedViewportRequest {
     content_height: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct PendingHtmlEntry {
     browser_instance_id: u32,
     html: String,
     url: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct BrowserRpcRequest {
     id: u32,
     browser_instance_id: u32,
@@ -100,36 +99,47 @@ struct BrowserRpcResult {
     payload_json: String,
 }
 
-static PENDING_HTML: Mutex<Option<PendingHtmlEntry>> = Mutex::new(None);
-static PENDING_QJS_INPUT: Mutex<VecDeque<QjsInputEntry>> = Mutex::new(VecDeque::new());
-static PENDING_BROWSER_RPC: Mutex<VecDeque<BrowserRpcRequest>> = Mutex::new(VecDeque::new());
-static ACTIVE_BROWSER_RPC_ID: Mutex<Option<u32>> = Mutex::new(None);
+#[derive(Clone, Debug)]
+struct BrowserHostState {
+    instance_id: u32,
+    started: bool,
+    window_id: u32,
+    pending_html: Option<PendingHtmlEntry>,
+    pending_qjs_input: VecDeque<QjsInputEntry>,
+    pending_browser_rpc: VecDeque<BrowserRpcRequest>,
+    active_browser_rpc_id: Option<u32>,
+    pending_hosted_viewport: Option<HostedViewportRequest>,
+    pending_hosted_scroll_y: Option<u32>,
+    applied_hosted_viewport: Option<HostedViewportRequest>,
+    hosted_surface_state: HostedBrowserSurfaceState,
+    hosted_surface_seq: u32,
+    hosted_interactive_state: HostedBrowserInteractiveState,
+    hosted_interactive_seq: u32,
+}
+
+impl BrowserHostState {
+    fn new(instance_id: u32) -> Self {
+        Self {
+            instance_id,
+            started: false,
+            window_id: 0,
+            pending_html: None,
+            pending_qjs_input: VecDeque::new(),
+            pending_browser_rpc: VecDeque::new(),
+            active_browser_rpc_id: None,
+            pending_hosted_viewport: None,
+            pending_hosted_scroll_y: None,
+            applied_hosted_viewport: None,
+            hosted_surface_state: HostedBrowserSurfaceState::default(),
+            hosted_surface_seq: 0,
+            hosted_interactive_state: HostedBrowserInteractiveState::default(),
+            hosted_interactive_seq: 0,
+        }
+    }
+}
+
+static BROWSER_HOST_STATES: Mutex<Vec<BrowserHostState>> = Mutex::new(Vec::new());
 static BROWSER_RPC_RESULTS: Mutex<VecDeque<BrowserRpcResult>> = Mutex::new(VecDeque::new());
-static PENDING_HOSTED_VIEWPORT: Mutex<Option<HostedViewportRequest>> = Mutex::new(None);
-static PENDING_HOSTED_SCROLL_Y: Mutex<Option<u32>> = Mutex::new(None);
-static APPLIED_HOSTED_VIEWPORT: Mutex<Option<HostedViewportRequest>> = Mutex::new(None);
-static HOSTED_SURFACE_STATE: Mutex<HostedBrowserSurfaceState> =
-    Mutex::new(HostedBrowserSurfaceState {
-        seq: 0,
-        cache_revision: 0,
-        cache_width: 0,
-        tile_height: 0,
-        viewport_width: 0,
-        viewport_height: 0,
-        content_height: 0,
-        content_top_y: 0,
-        scroll_y: 0,
-        regions: Vec::new(),
-    });
-static HOSTED_SURFACE_SEQ: AtomicU32 = AtomicU32::new(0);
-static HOSTED_INTERACTIVE_STATE: Mutex<HostedBrowserInteractiveState> =
-    Mutex::new(HostedBrowserInteractiveState {
-        seq: 0,
-        viewport_width: 0,
-        viewport_height: 0,
-        interactives: Vec::new(),
-    });
-static HOSTED_INTERACTIVE_SEQ: AtomicU32 = AtomicU32::new(0);
 static BROWSER_RPC_SEQ: AtomicU32 = AtomicU32::new(1);
 
 pub const HOSTED_KEYBOARD_MOD_SHIFT: u8 = 1 << 0;
@@ -191,7 +201,8 @@ pub fn queue_hosted_keyboard_events(
     if events.is_empty() {
         return true;
     }
-    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+    let browser_instance_id = browser_instance_id_for_window(browser_window_id);
+    if browser_instance_id == 0 || !browser_started(browser_instance_id) {
         return false;
     }
 
@@ -216,7 +227,12 @@ pub fn queue_hosted_keyboard_events(
         }
     }
     args_json.push_str("],{\"logOnly\":false}]");
-    queue_browser_rpc(String::from("keyboard"), args_json, browser_window_id) != 0
+    queue_browser_rpc_for_browser(
+        browser_instance_id,
+        String::from("keyboard"),
+        args_json,
+        browser_window_id,
+    ) != 0
 }
 
 fn append_js_u8_array(dst: &mut String, values: &[u8]) {
@@ -239,14 +255,71 @@ fn normalize_browser_instance_id(instance_id: u32) -> u32 {
     }
 }
 
-#[inline]
-pub fn primary_browser_instance_id() -> u32 {
-    PRIMARY_BROWSER_INSTANCE_ID
+fn ensure_browser_host_state(
+    states: &mut Vec<BrowserHostState>,
+    instance_id: u32,
+) -> &mut BrowserHostState {
+    let instance_id = normalize_browser_instance_id(instance_id);
+    if let Some(index) = states.iter().position(|state| state.instance_id == instance_id) {
+        return &mut states[index];
+    }
+    states.push(BrowserHostState::new(instance_id));
+    states
+        .last_mut()
+        .expect("browser host state list must contain the newly inserted state")
 }
 
-#[inline]
-pub fn active_browser_instance_id() -> u32 {
-    if BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+fn with_browser_host_state_mut<R>(
+    instance_id: u32,
+    f: impl FnOnce(&mut BrowserHostState) -> R,
+) -> R {
+    let mut states = BROWSER_HOST_STATES.lock();
+    let state = ensure_browser_host_state(&mut states, instance_id);
+    f(state)
+}
+
+fn with_browser_host_state<R>(instance_id: u32, f: impl FnOnce(&BrowserHostState) -> R) -> R {
+    let mut states = BROWSER_HOST_STATES.lock();
+    let state = ensure_browser_host_state(&mut states, instance_id);
+    f(state)
+}
+
+fn browser_started(instance_id: u32) -> bool {
+    with_browser_host_state(instance_id, |state| state.started)
+}
+
+pub fn bind_browser_window_to_instance(browser_instance_id: u32, browser_window_id: u32) -> bool {
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        state.window_id = browser_window_id;
+    });
+    true
+}
+
+pub fn browser_window_id_for_instance(browser_instance_id: u32) -> u32 {
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    with_browser_host_state(browser_instance_id, |state| {
+        if state.window_id != 0 {
+            return state.window_id;
+        }
+        if browser_instance_id == PRIMARY_BROWSER_INSTANCE_ID {
+            unsafe { trueos_cabi_ui2_primary_browser_window_id() }
+        } else {
+            0
+        }
+    })
+}
+
+pub fn browser_instance_id_for_window(browser_window_id: u32) -> u32 {
+    if browser_window_id == 0 {
+        return PRIMARY_BROWSER_INSTANCE_ID;
+    }
+    let states = BROWSER_HOST_STATES.lock();
+    if let Some(state) = states.iter().find(|state| state.window_id == browser_window_id) {
+        return state.instance_id;
+    }
+    let primary_window_id = unsafe { trueos_cabi_ui2_primary_browser_window_id() };
+    if browser_window_id == primary_window_id {
         PRIMARY_BROWSER_INSTANCE_ID
     } else {
         0
@@ -254,10 +327,29 @@ pub fn active_browser_instance_id() -> u32 {
 }
 
 #[inline]
+pub fn primary_browser_instance_id() -> u32 {
+    PRIMARY_BROWSER_INSTANCE_ID
+}
+
+#[inline]
+pub fn active_browser_instance_id() -> u32 {
+    if browser_started(PRIMARY_BROWSER_INSTANCE_ID) {
+        return PRIMARY_BROWSER_INSTANCE_ID;
+    }
+    let states = BROWSER_HOST_STATES.lock();
+    states
+        .iter()
+        .find(|state| state.started)
+        .map(|state| state.instance_id)
+        .unwrap_or(0)
+}
+
+#[inline]
 pub fn active_browser_target() -> BrowserHostTarget {
+    let instance_id = active_browser_instance_id();
     BrowserHostTarget {
-        instance_id: active_browser_instance_id(),
-        window_id: unsafe { trueos_cabi_ui2_primary_browser_window_id() },
+        instance_id,
+        window_id: browser_window_id_for_instance(instance_id),
     }
 }
 
@@ -283,7 +375,7 @@ fn browser_text_widths_by_char() -> [u8; 256] {
     out
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct QjsInputEntry {
     pub code: String,
     pub repl: bool,
@@ -302,22 +394,32 @@ pub fn queue_set_html_with_url_for_browser(
     next_html: String,
     next_url: Option<String>,
 ) -> bool {
-    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    if !browser_started(browser_instance_id) {
         return false;
     }
-    *PENDING_HTML.lock() = Some(PendingHtmlEntry {
-        browser_instance_id: normalize_browser_instance_id(browser_instance_id),
-        html: next_html,
-        url: next_url,
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_html = Some(PendingHtmlEntry {
+            browser_instance_id,
+            html: next_html,
+            url: next_url,
+        });
     });
     true
 }
 
 pub fn queue_qjs_input(next: QjsInputEntry) -> bool {
-    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+    queue_qjs_input_for_browser(PRIMARY_BROWSER_INSTANCE_ID, next)
+}
+
+pub fn queue_qjs_input_for_browser(browser_instance_id: u32, next: QjsInputEntry) -> bool {
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    if !browser_started(browser_instance_id) {
         return false;
     }
-    PENDING_QJS_INPUT.lock().push_back(next);
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_qjs_input.push_back(next);
+    });
     true
 }
 
@@ -336,16 +438,19 @@ pub fn queue_browser_rpc_for_browser(
     args_json: String,
     browser_window_id: u32,
 ) -> u32 {
-    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    if !browser_started(browser_instance_id) {
         return 0;
     }
     let id = BROWSER_RPC_SEQ.fetch_add(1, Ordering::Relaxed);
-    PENDING_BROWSER_RPC.lock().push_back(BrowserRpcRequest {
-        id,
-        browser_instance_id: normalize_browser_instance_id(browser_instance_id),
-        browser_window_id,
-        method,
-        args_json,
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_browser_rpc.push_back(BrowserRpcRequest {
+            id,
+            browser_instance_id,
+            browser_window_id,
+            method,
+            args_json,
+        });
     });
     id
 }
@@ -388,11 +493,12 @@ pub fn set_hosted_viewport_for_browser(
     content_width: u32,
     content_height: u32,
 ) -> bool {
-    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    if !browser_started(browser_instance_id) {
         return false;
     }
     let next = HostedViewportRequest {
-        browser_instance_id: normalize_browser_instance_id(browser_instance_id),
+        browser_instance_id,
         viewport_width: viewport_width.max(1),
         viewport_height: viewport_height.max(1),
         content_x,
@@ -400,16 +506,15 @@ pub fn set_hosted_viewport_for_browser(
         content_width: content_width.max(1),
         content_height: content_height.max(1),
     };
-    {
-        let applied = APPLIED_HOSTED_VIEWPORT.lock();
-        if applied.as_ref() == Some(&next) {
-            let pending = PENDING_HOSTED_VIEWPORT.lock();
-            if pending.is_none() {
-                return true;
-            }
-        }
+    let should_skip = with_browser_host_state(browser_instance_id, |state| {
+        state.applied_hosted_viewport.as_ref() == Some(&next) && state.pending_hosted_viewport.is_none()
+    });
+    if should_skip {
+        return true;
     }
-    *PENDING_HOSTED_VIEWPORT.lock() = Some(next);
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_hosted_viewport = Some(next);
+    });
     true
 }
 
@@ -418,13 +523,13 @@ pub fn set_hosted_scroll_y(scroll_y: u32) -> bool {
 }
 
 pub fn set_hosted_scroll_y_for_browser(browser_instance_id: u32, scroll_y: u32) -> bool {
-    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    if !browser_started(browser_instance_id) {
         return false;
     }
-    if normalize_browser_instance_id(browser_instance_id) != PRIMARY_BROWSER_INSTANCE_ID {
-        return false;
-    }
-    *PENDING_HOSTED_SCROLL_Y.lock() = Some(scroll_y);
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_hosted_scroll_y = Some(scroll_y);
+    });
     true
 }
 
@@ -433,10 +538,7 @@ pub fn hosted_surface_state() -> HostedBrowserSurfaceState {
 }
 
 pub fn hosted_surface_state_for_browser(browser_instance_id: u32) -> HostedBrowserSurfaceState {
-    if normalize_browser_instance_id(browser_instance_id) != PRIMARY_BROWSER_INSTANCE_ID {
-        return HostedBrowserSurfaceState::default();
-    }
-    HOSTED_SURFACE_STATE.lock().clone()
+    with_browser_host_state(browser_instance_id, |state| state.hosted_surface_state.clone())
 }
 
 pub fn hosted_surface_seq() -> u32 {
@@ -444,10 +546,7 @@ pub fn hosted_surface_seq() -> u32 {
 }
 
 pub fn hosted_surface_seq_for_browser(browser_instance_id: u32) -> u32 {
-    if normalize_browser_instance_id(browser_instance_id) != PRIMARY_BROWSER_INSTANCE_ID {
-        return 0;
-    }
-    HOSTED_SURFACE_SEQ.load(Ordering::Acquire)
+    with_browser_host_state(browser_instance_id, |state| state.hosted_surface_seq)
 }
 
 pub fn hosted_interactive_state() -> HostedBrowserInteractiveState {
@@ -455,10 +554,9 @@ pub fn hosted_interactive_state() -> HostedBrowserInteractiveState {
 }
 
 pub fn hosted_interactive_state_for_browser(browser_instance_id: u32) -> HostedBrowserInteractiveState {
-    if normalize_browser_instance_id(browser_instance_id) != PRIMARY_BROWSER_INSTANCE_ID {
-        return HostedBrowserInteractiveState::default();
-    }
-    HOSTED_INTERACTIVE_STATE.lock().clone()
+    with_browser_host_state(browser_instance_id, |state| {
+        state.hosted_interactive_state.clone()
+    })
 }
 
 pub fn hosted_interactive_seq() -> u32 {
@@ -466,10 +564,7 @@ pub fn hosted_interactive_seq() -> u32 {
 }
 
 pub fn hosted_interactive_seq_for_browser(browser_instance_id: u32) -> u32 {
-    if normalize_browser_instance_id(browser_instance_id) != PRIMARY_BROWSER_INSTANCE_ID {
-        return 0;
-    }
-    HOSTED_INTERACTIVE_SEQ.load(Ordering::Acquire)
+    with_browser_host_state(browser_instance_id, |state| state.hosted_interactive_seq)
 }
 
 #[inline]
@@ -541,28 +636,29 @@ unsafe fn browser_api_value(ctx: *mut qjs::JSContext) -> Option<qjs::JSValue> {
     Some(browser)
 }
 
-unsafe fn apply_pending_browser_rpc(ctx: *mut qjs::JSContext) {
-    if ACTIVE_BROWSER_RPC_ID.lock().is_some() {
+unsafe fn apply_pending_browser_rpc(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    if with_browser_host_state(browser_instance_id, |state| state.active_browser_rpc_id.is_some()) {
         return;
     }
 
-    let Some(next) = PENDING_BROWSER_RPC.lock().pop_front() else {
+    let Some(next) = with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_browser_rpc.pop_front()
+    }) else {
         return;
     };
 
-    let active_target = active_browser_target();
-    if next.browser_instance_id != active_target.instance_id {
+    if next.browser_instance_id != browser_instance_id {
         BROWSER_RPC_RESULTS.lock().push_back(BrowserRpcResult {
             id: next.id,
             payload_json: alloc::format!(
                 "{{\"ok\":false,\"error\":\"browser rpc target unavailable: requested instance {}, active {}\"}}",
                 next.browser_instance_id,
-                active_target.instance_id
+                browser_instance_id
             ),
         });
         return;
     }
-    let active_window_id = active_target.window_id;
+    let active_window_id = browser_window_id_for_instance(browser_instance_id);
     if active_window_id == 0 {
         BROWSER_RPC_RESULTS.lock().push_back(BrowserRpcResult {
             id: next.id,
@@ -613,11 +709,15 @@ unsafe fn apply_pending_browser_rpc(ctx: *mut qjs::JSContext) {
         return;
     }
 
-    *ACTIVE_BROWSER_RPC_ID.lock() = Some(next.id);
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        state.active_browser_rpc_id = Some(next.id);
+    });
 }
 
-unsafe fn collect_browser_rpc_result(ctx: *mut qjs::JSContext) {
-    let Some(active_id) = *ACTIVE_BROWSER_RPC_ID.lock() else {
+unsafe fn collect_browser_rpc_result(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    let Some(active_id) = with_browser_host_state(browser_instance_id, |state| {
+        state.active_browser_rpc_id
+    }) else {
         return;
     };
 
@@ -652,22 +752,28 @@ unsafe fn collect_browser_rpc_result(ctx: *mut qjs::JSContext) {
     );
     qjs::js_free_value(ctx, global);
 
-    *ACTIVE_BROWSER_RPC_ID.lock() = None;
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        state.active_browser_rpc_id = None;
+    });
     BROWSER_RPC_RESULTS.lock().push_back(BrowserRpcResult {
         id: active_id,
         payload_json: payload,
     });
 }
 
-unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext) {
-    let Some(next) = PENDING_HOSTED_VIEWPORT.lock().take() else {
+unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    let Some(next) = with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_hosted_viewport.take()
+    }) else {
         return;
     };
-    if next.browser_instance_id != PRIMARY_BROWSER_INSTANCE_ID {
+    if next.browser_instance_id != browser_instance_id {
         return;
     }
     let Some(browser) = browser_api_value(ctx) else {
-        *PENDING_HOSTED_VIEWPORT.lock() = Some(next);
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.pending_hosted_viewport = Some(next);
+        });
         return;
     };
     let func = qjs::JS_GetPropertyStr(
@@ -678,7 +784,9 @@ unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext) {
     if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
         qjs::js_free_value(ctx, func);
         qjs::js_free_value(ctx, browser);
-        *PENDING_HOSTED_VIEWPORT.lock() = Some(next);
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.pending_hosted_viewport = Some(next);
+        });
         return;
     }
 
@@ -696,9 +804,13 @@ unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext) {
     let result = qjs::JS_Call(ctx, func, browser, args.len() as i32, args.as_ptr());
     if result.is_exception() {
         qjs::qjs_diag::dump_last_exception(ctx, "browser setViewportOverride");
-        *PENDING_HOSTED_VIEWPORT.lock() = Some(next);
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.pending_hosted_viewport = Some(next);
+        });
     } else {
-        *APPLIED_HOSTED_VIEWPORT.lock() = Some(next);
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.applied_hosted_viewport = Some(next);
+        });
     }
     qjs::js_free_value(ctx, result);
     qjs::js_free_value(ctx, content_rect);
@@ -707,19 +819,25 @@ unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext) {
     qjs::js_free_value(ctx, browser);
 }
 
-unsafe fn apply_pending_hosted_scroll_y(ctx: *mut qjs::JSContext) {
-    let Some(next_scroll_y) = PENDING_HOSTED_SCROLL_Y.lock().take() else {
+unsafe fn apply_pending_hosted_scroll_y(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    let Some(next_scroll_y) = with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_hosted_scroll_y.take()
+    }) else {
         return;
     };
     let Some(browser) = browser_api_value(ctx) else {
-        *PENDING_HOSTED_SCROLL_Y.lock() = Some(next_scroll_y);
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.pending_hosted_scroll_y = Some(next_scroll_y);
+        });
         return;
     };
     let func = qjs::JS_GetPropertyStr(ctx, browser, b"setScroll\0".as_ptr() as *const c_char);
     if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
         qjs::js_free_value(ctx, func);
         qjs::js_free_value(ctx, browser);
-        *PENDING_HOSTED_SCROLL_Y.lock() = Some(next_scroll_y);
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.pending_hosted_scroll_y = Some(next_scroll_y);
+        });
         return;
     }
 
@@ -727,7 +845,9 @@ unsafe fn apply_pending_hosted_scroll_y(ctx: *mut qjs::JSContext) {
     let result = qjs::JS_Call(ctx, func, browser, args.len() as i32, args.as_ptr());
     if result.is_exception() {
         qjs::qjs_diag::dump_last_exception(ctx, "browser setScroll");
-        *PENDING_HOSTED_SCROLL_Y.lock() = Some(next_scroll_y);
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.pending_hosted_scroll_y = Some(next_scroll_y);
+        });
     }
     qjs::js_free_value(ctx, result);
     qjs::js_free_value(ctx, args[0]);
@@ -735,7 +855,7 @@ unsafe fn apply_pending_hosted_scroll_y(ctx: *mut qjs::JSContext) {
     qjs::js_free_value(ctx, browser);
 }
 
-unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext) {
+unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
     let Some(browser) = browser_api_value(ctx) else {
         return;
     };
@@ -796,21 +916,22 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext) {
     qjs::js_free_value(ctx, regions);
     qjs::js_free_value(ctx, result);
 
-    let mut shared = HOSTED_SURFACE_STATE.lock();
-    let prev = shared.clone();
-    next.seq = prev.seq;
-    if prev != next {
-        let mut seq = HOSTED_SURFACE_SEQ.load(Ordering::Acquire).wrapping_add(1);
-        if seq == 0 {
-            seq = 1;
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        let prev = state.hosted_surface_state.clone();
+        next.seq = prev.seq;
+        if prev != next {
+            let mut seq = state.hosted_surface_seq.wrapping_add(1);
+            if seq == 0 {
+                seq = 1;
+            }
+            next.seq = seq;
+            state.hosted_surface_seq = seq;
+            state.hosted_surface_state = next;
         }
-        next.seq = seq;
-        HOSTED_SURFACE_SEQ.store(seq, Ordering::Release);
-        *shared = next;
-    }
+    });
 }
 
-unsafe fn sync_hosted_interactive_state(ctx: *mut qjs::JSContext) {
+unsafe fn sync_hosted_interactive_state(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
     let Some(browser) = browser_api_value(ctx) else {
         return;
     };
@@ -879,25 +1000,28 @@ unsafe fn sync_hosted_interactive_state(ctx: *mut qjs::JSContext) {
     qjs::js_free_value(ctx, interactives);
     qjs::js_free_value(ctx, result);
 
-    let mut shared = HOSTED_INTERACTIVE_STATE.lock();
-    let prev = shared.clone();
-    next.seq = prev.seq;
-    if prev != next {
-        let mut seq = HOSTED_INTERACTIVE_SEQ.load(Ordering::Acquire).wrapping_add(1);
-        if seq == 0 {
-            seq = 1;
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        let prev = state.hosted_interactive_state.clone();
+        next.seq = prev.seq;
+        if prev != next {
+            let mut seq = state.hosted_interactive_seq.wrapping_add(1);
+            if seq == 0 {
+                seq = 1;
+            }
+            next.seq = seq;
+            state.hosted_interactive_seq = seq;
+            state.hosted_interactive_state = next;
         }
-        next.seq = seq;
-        HOSTED_INTERACTIVE_SEQ.store(seq, Ordering::Release);
-        *shared = next;
-    }
+    });
 }
 
-unsafe fn apply_pending_html(ctx: *mut qjs::JSContext) {
-    let Some(next) = PENDING_HTML.lock().take() else {
+unsafe fn apply_pending_html(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    let Some(next) = with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_html.take()
+    }) else {
         return;
     };
-    if next.browser_instance_id != PRIMARY_BROWSER_INSTANCE_ID {
+    if next.browser_instance_id != browser_instance_id {
         return;
     }
 
@@ -930,8 +1054,10 @@ unsafe fn apply_pending_html(ctx: *mut qjs::JSContext) {
     );
 }
 
-unsafe fn apply_pending_qjs_input(ctx: *mut qjs::JSContext) {
-    let Some(next) = PENDING_QJS_INPUT.lock().pop_front() else {
+unsafe fn apply_pending_qjs_input(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    let Some(next) = with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_qjs_input.pop_front()
+    }) else {
         return;
     };
 
@@ -954,7 +1080,7 @@ unsafe fn apply_pending_qjs_input(ctx: *mut qjs::JSContext) {
     );
 }
 
-unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
+unsafe fn install_globals(ctx: *mut qjs::JSContext, browser_instance_id: u32) -> bool {
     let init_filename = b"<browser-globals>\0";
     let mut init_src = String::new();
     let text_widths = browser_text_widths_by_char();
@@ -964,6 +1090,9 @@ unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
     append_js_u8_array(&mut init_src, &text_widths);
     init_src.push_str(";\n");
     init_src.push_str("G.__trueosBrowserDefaultFontPx = 16;\n");
+    init_src.push_str("G.__trueosBrowserInstanceId = ");
+    init_src.push_str(alloc::format!("{}", browser_instance_id).as_str());
+    init_src.push_str(";\n");
     init_src.push_str(
         r#"
 if (!G.window) G.window = G;
@@ -1006,25 +1135,51 @@ G.__trueosBrowserRpcDonePayload = '';
     ai_api::install_globals(ctx)
 }
 
-#[embassy_executor::task]
-pub async fn boot_browser() {
-    if BROWSER_TASK_STARTED.swap(true, Ordering::SeqCst) {
-        qjs::trueos_shims::log_info("qjs-browser: already running\n");
+#[embassy_executor::task(pool_size = 5)]
+pub async fn boot_browser(browser_instance_id: u32) {
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    let already_running = with_browser_host_state_mut(browser_instance_id, |state| {
+        let was_running = state.started;
+        if !was_running {
+            state.started = true;
+        }
+        was_running
+    });
+    if already_running {
+        qjs::trueos_shims::log_info(
+            alloc::format!("qjs-browser[{}]: already running\n", browser_instance_id).as_str(),
+        );
         return;
     }
-    qjs::trueos_shims::log_info("qjs-browser: starting browser2 bootstrap\n");
+    qjs::trueos_shims::log_info(
+        alloc::format!("qjs-browser[{}]: starting browser bootstrap\n", browser_instance_id)
+            .as_str(),
+    );
     let spawner = unsafe { Spawner::for_current_executor().await };
     if !qjs::async_fs::ensure_service_started(&spawner) {
-        qjs::trueos_shims::log_error("qjs-browser: async-fs service start failed\n");
-        BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+        qjs::trueos_shims::log_error(
+            alloc::format!(
+                "qjs-browser[{}]: async-fs service start failed\n",
+                browser_instance_id
+            )
+            .as_str(),
+        );
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.started = false;
+        });
         return;
     }
     unsafe {
         let vm = match qjs::vm::QjsVm::new_node() {
             Some(vm) => vm,
             None => {
-                qjs::trueos_shims::log_info("qjs-browser: JS runtime init failed\n");
-                BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+                qjs::trueos_shims::log_info(
+                    alloc::format!("qjs-browser[{}]: JS runtime init failed\n", browser_instance_id)
+                        .as_str(),
+                );
+                with_browser_host_state_mut(browser_instance_id, |state| {
+                    state.started = false;
+                });
                 return;
             }
         };
@@ -1034,8 +1189,10 @@ pub async fn boot_browser() {
         qjs::node::install_globals(ctx);
         qjs::layout::install_layout_api(ctx);
 
-        if !install_globals(ctx) {
-            BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+        if !install_globals(ctx, browser_instance_id) {
+            with_browser_host_state_mut(browser_instance_id, |state| {
+                state.started = false;
+            });
             return;
         }
 
@@ -1052,25 +1209,36 @@ pub async fn boot_browser() {
             qjs::JS_EVAL_TYPE_GLOBAL,
             "browser init",
         ) {
-            BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+            with_browser_host_state_mut(browser_instance_id, |state| {
+                state.started = false;
+            });
             return;
         }
 
         loop {
-            apply_pending_html(ctx);
-            apply_pending_qjs_input(ctx);
-            apply_pending_browser_rpc(ctx);
-            apply_pending_hosted_viewport(ctx);
-            apply_pending_hosted_scroll_y(ctx);
-            if !qjs::vm::pump_runtime_once(rt, ctx, "browser") {
+            apply_pending_html(ctx, browser_instance_id);
+            apply_pending_qjs_input(ctx, browser_instance_id);
+            apply_pending_browser_rpc(ctx, browser_instance_id);
+            apply_pending_hosted_viewport(ctx, browser_instance_id);
+            apply_pending_hosted_scroll_y(ctx, browser_instance_id);
+            if !qjs::vm::pump_runtime_once(
+                rt,
+                ctx,
+                alloc::format!("browser-{}", browser_instance_id).as_str(),
+            ) {
                 break;
             }
-            collect_browser_rpc_result(ctx);
-            sync_hosted_surface_state(ctx);
-            sync_hosted_interactive_state(ctx);
+            collect_browser_rpc_result(ctx, browser_instance_id);
+            sync_hosted_surface_state(ctx, browser_instance_id);
+            sync_hosted_interactive_state(ctx, browser_instance_id);
             Timer::after(EmbassyDuration::from_millis(16)).await;
         }
-        qjs::trueos_shims::log_info("qjs-browser: stopped\n");
-        BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+        qjs::trueos_shims::log_info(
+            alloc::format!("qjs-browser[{}]: stopped\n", browser_instance_id).as_str(),
+        );
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.started = false;
+            state.active_browser_rpc_id = None;
+        });
     }
 }

@@ -279,16 +279,42 @@ fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
 }
 
 #[embassy_executor::task]
-async fn browser_startup_html_loader_task() {
+async fn browser_startup_html_loader_task(browser_instance_id: u32) {
     const STARTUP_URL: &str = "https://www.w3.org/Graphics/PNG/Inline-img.html";
     const RETRY_MS: u64 = 2_000;
     const HANDOFF_RETRY_MS: u64 = 100;
+    const SVG_BROWSER_INSTANCE_ID: u32 = trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1;
 
     let source_url = String::from(STARTUP_URL);
+    let svg_source_url = String::from(trueos_qjs::html::SVG_EMBEDDED_URL);
     let mut fetched_html: Option<String> = None;
-    let mut delivered = false;
+    let mut delivered_primary = false;
+    let mut delivered_svg = false;
 
     loop {
+        if !delivered_svg {
+            let svg_window_id = trueos_qjs::browser_task::browser_window_id_for_instance(
+                SVG_BROWSER_INSTANCE_ID,
+            );
+            if svg_window_id == 0 {
+                Timer::after(EmbassyDuration::from_millis(HANDOFF_RETRY_MS)).await;
+                continue;
+            }
+            let rpc_id = trueos_qjs::browser_task::queue_browser_rpc_for_browser(
+                SVG_BROWSER_INSTANCE_ID,
+                String::from("navigate"),
+                String::from("[{\"url\":\"trueos://ui/svg-demo\"}]"),
+                svg_window_id,
+            );
+            if rpc_id != 0 {
+                crate::log!("browser-html-loader: queued svg demo route for browser 2\n");
+                delivered_svg = true;
+            } else {
+                Timer::after(EmbassyDuration::from_millis(HANDOFF_RETRY_MS)).await;
+                continue;
+            }
+        }
+
         if fetched_html.is_none() {
             let mut url: HString<256> = HString::new();
             if url.push_str(STARTUP_URL).is_err() {
@@ -311,14 +337,15 @@ async fn browser_startup_html_loader_task() {
             }
         }
 
-        if !delivered {
+        if !delivered_primary {
             if let Some(html) = fetched_html.as_ref() {
-                if trueos_qjs::browser_task::queue_set_html_with_url(
+                if trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
+                    browser_instance_id,
                     html.clone(),
                     Some(source_url.clone()),
                 ) {
                     crate::log!("browser-html-loader: delivered startup html to browser\n");
-                    delivered = true;
+                    delivered_primary = true;
                 } else {
                     Timer::after(EmbassyDuration::from_millis(HANDOFF_RETRY_MS)).await;
                     continue;
@@ -331,15 +358,24 @@ async fn browser_startup_html_loader_task() {
 }
 
 fn spawn_browser_startup_html_loader(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(browser_startup_html_loader_task()) {
+    match spawner.spawn(browser_startup_html_loader_task(
+        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
+    )) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
 
 fn spawn_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(trueos_qjs::browser_task::boot_browser()) {
-        Ok(()) => SpawnAttempt::Spawned,
+    match spawner.spawn(trueos_qjs::browser_task::boot_browser(
+        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
+    )) {
+        Ok(()) => match spawner.spawn(trueos_qjs::browser_task::boot_browser(
+            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1,
+        )) {
+            Ok(()) => SpawnAttempt::Spawned,
+            Err(e) => SpawnAttempt::Failed(e),
+        },
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
@@ -717,14 +753,14 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "ui2-gfx-tetris",
-        disabled: false,
+        disabled: true,
         required: crate::v::readiness::LOADSCREEN_END,
         started: &UI2_GFX_TETRIS_STARTED,
         spawn: spawn_ui2_gfx_tetris,
     },
     TaskSpec {
         name: "ui2-triangle-demo",
-        disabled: false,
+        disabled: true,
         required: crate::v::readiness::LOADSCREEN_END,
         started: &UI2_TRIANGLE_DEMO_STARTED,
         spawn: spawn_ui2_triangle_demo,

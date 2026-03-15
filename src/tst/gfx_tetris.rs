@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use trueos_tetris::{Game, Lcg32, NoopEvents};
+use spin::Mutex;
+use trueos_tetris::{Game, Lcg32, NoopEvents, Rotation};
 
 const UI2_TETRIS_TEX_ID: u32 = 4_701;
 const UI2_TETRIS_WINDOW_X: f32 = 640.0;
@@ -30,6 +32,19 @@ const GAME_OVER_TINT: [u8; 4] = [0x2A, 0x08, 0x08, 0xFF];
 const GAME_OVER_RESET_MS: u32 = 1_500;
 const BG_CLEAR_RGB: u32 = 0x091016;
 
+const UI2_TETRIS_ACTION_MOVE_LEFT: u32 = 1 << 0;
+const UI2_TETRIS_ACTION_MOVE_RIGHT: u32 = 1 << 1;
+const UI2_TETRIS_ACTION_SOFT_DROP: u32 = 1 << 2;
+const UI2_TETRIS_ACTION_ROTATE_CW: u32 = 1 << 3;
+const UI2_TETRIS_ACTION_ROTATE_CCW: u32 = 1 << 4;
+const UI2_TETRIS_ACTION_HARD_DROP: u32 = 1 << 5;
+const UI2_TETRIS_ACTION_RESET: u32 = 1 << 6;
+const UI2_TETRIS_ACTION_TOGGLE_PAUSE: u32 = 1 << 7;
+
+static UI2_TETRIS_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
+static UI2_TETRIS_PENDING_ACTIONS: AtomicU32 = AtomicU32::new(0);
+static UI2_TETRIS_TEXT_SCRATCH: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 struct RgbVertex {
@@ -47,6 +62,7 @@ struct GfxTetrisApp {
     events: NoopEvents,
     drop_accum_ms: u32,
     game_over_accum_ms: u32,
+    paused: bool,
 }
 
 impl GfxTetrisApp {
@@ -60,6 +76,7 @@ impl GfxTetrisApp {
             events,
             drop_accum_ms: 0,
             game_over_accum_ms: 0,
+            paused: false,
         }
     }
 
@@ -67,9 +84,63 @@ impl GfxTetrisApp {
         self.game = Game::new(&mut self.rng, &mut self.events);
         self.drop_accum_ms = 0;
         self.game_over_accum_ms = 0;
+        self.paused = false;
+    }
+
+    fn apply_action(&mut self, action: u32) -> bool {
+        match action {
+            UI2_TETRIS_ACTION_MOVE_LEFT => self.game.move_left(),
+            UI2_TETRIS_ACTION_MOVE_RIGHT => self.game.move_right(),
+            UI2_TETRIS_ACTION_SOFT_DROP => {
+                let _ = self.game.soft_drop(&mut self.rng, &mut self.events);
+                true
+            }
+            UI2_TETRIS_ACTION_ROTATE_CW => self.game.rotate(Rotation::Cw),
+            UI2_TETRIS_ACTION_ROTATE_CCW => self.game.rotate(Rotation::Ccw),
+            UI2_TETRIS_ACTION_HARD_DROP => {
+                let _ = self.game.hard_drop(&mut self.rng, &mut self.events);
+                true
+            }
+            UI2_TETRIS_ACTION_RESET => {
+                self.reset();
+                true
+            }
+            UI2_TETRIS_ACTION_TOGGLE_PAUSE => {
+                self.paused = !self.paused;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn apply_pending_actions(&mut self) -> bool {
+        let actions = UI2_TETRIS_PENDING_ACTIONS.swap(0, Ordering::AcqRel);
+        if actions == 0 {
+            return false;
+        }
+        let mut changed = false;
+        for action in [
+            UI2_TETRIS_ACTION_TOGGLE_PAUSE,
+            UI2_TETRIS_ACTION_RESET,
+            UI2_TETRIS_ACTION_MOVE_LEFT,
+            UI2_TETRIS_ACTION_MOVE_RIGHT,
+            UI2_TETRIS_ACTION_SOFT_DROP,
+            UI2_TETRIS_ACTION_ROTATE_CW,
+            UI2_TETRIS_ACTION_ROTATE_CCW,
+            UI2_TETRIS_ACTION_HARD_DROP,
+        ] {
+            if (actions & action) == 0 {
+                continue;
+            }
+            changed |= self.apply_action(action);
+        }
+        changed
     }
 
     fn tick(&mut self, elapsed_ms: u32) -> bool {
+        if self.paused {
+            return false;
+        }
         if self.game.is_game_over() {
             self.game_over_accum_ms = self.game_over_accum_ms.saturating_add(elapsed_ms);
             if self.game_over_accum_ms >= GAME_OVER_RESET_MS {
@@ -221,6 +292,108 @@ fn dim(channel: u8, percent: u8) -> u8 {
     ((channel as u16 * keep) / 100) as u8
 }
 
+fn queue_tetris_action(action: u32) {
+    UI2_TETRIS_PENDING_ACTIONS.fetch_or(action, Ordering::AcqRel);
+}
+
+fn queue_tetris_text(text: &str) -> bool {
+    let mut queued = false;
+    for ch in text.chars() {
+        match ch {
+            'a' | 'A' | 'h' | 'H' => {
+                queue_tetris_action(UI2_TETRIS_ACTION_MOVE_LEFT);
+                queued = true;
+            }
+            'd' | 'D' | 'l' | 'L' => {
+                queue_tetris_action(UI2_TETRIS_ACTION_MOVE_RIGHT);
+                queued = true;
+            }
+            's' | 'S' | 'j' | 'J' => {
+                queue_tetris_action(UI2_TETRIS_ACTION_SOFT_DROP);
+                queued = true;
+            }
+            'w' | 'W' | 'k' | 'K' => {
+                queue_tetris_action(UI2_TETRIS_ACTION_ROTATE_CW);
+                queued = true;
+            }
+            'z' | 'Z' => {
+                queue_tetris_action(UI2_TETRIS_ACTION_ROTATE_CCW);
+                queued = true;
+            }
+            'p' | 'P' => {
+                queue_tetris_action(UI2_TETRIS_ACTION_TOGGLE_PAUSE);
+                queued = true;
+            }
+            'r' | 'R' => {
+                queue_tetris_action(UI2_TETRIS_ACTION_RESET);
+                queued = true;
+            }
+            ' ' => {
+                queue_tetris_action(UI2_TETRIS_ACTION_HARD_DROP);
+                queued = true;
+            }
+            _ => {}
+        }
+    }
+    queued
+}
+
+pub fn queue_ui2_keyboard_event(
+    window_id: u32,
+    event: crate::v::keyboard::TrueosKeyboardOutputEvent,
+) -> bool {
+    let active_window_id = UI2_TETRIS_WINDOW_ID.load(Ordering::Acquire);
+    if window_id == 0 || active_window_id == 0 || active_window_id != window_id {
+        return false;
+    }
+    match event.kind {
+        crate::v::keyboard::KEYBOARD_OUTPUT_KIND_TEXT => {
+            let utf8_len = (event.utf8_len as usize).min(event.utf8.len());
+            if utf8_len != 0 {
+                if let Ok(text) = core::str::from_utf8(&event.utf8[..utf8_len]) {
+                    return queue_tetris_text(text);
+                }
+            }
+            if let Some(ch) = char::from_u32(event.codepoint) {
+                let mut scratch = UI2_TETRIS_TEXT_SCRATCH.lock();
+                scratch.clear();
+                let mut utf8 = [0u8; 4];
+                let encoded = ch.encode_utf8(&mut utf8);
+                scratch.extend_from_slice(encoded.as_bytes());
+                if let Ok(text) = core::str::from_utf8(scratch.as_slice()) {
+                    return queue_tetris_text(text);
+                }
+            }
+            false
+        }
+        crate::v::keyboard::KEYBOARD_OUTPUT_KIND_KEY => {
+            match event.key_code {
+                crate::v::keyboard::KEYBOARD_KEY_ARROW_LEFT => {
+                    queue_tetris_action(UI2_TETRIS_ACTION_MOVE_LEFT)
+                }
+                crate::v::keyboard::KEYBOARD_KEY_ARROW_RIGHT => {
+                    queue_tetris_action(UI2_TETRIS_ACTION_MOVE_RIGHT)
+                }
+                crate::v::keyboard::KEYBOARD_KEY_ARROW_DOWN => {
+                    queue_tetris_action(UI2_TETRIS_ACTION_SOFT_DROP)
+                }
+                crate::v::keyboard::KEYBOARD_KEY_ARROW_UP => {
+                    queue_tetris_action(UI2_TETRIS_ACTION_ROTATE_CW)
+                }
+                crate::v::keyboard::KEYBOARD_KEY_SPACE => {
+                    queue_tetris_action(UI2_TETRIS_ACTION_HARD_DROP)
+                }
+                crate::v::keyboard::KEYBOARD_KEY_ENTER => {
+                    queue_tetris_action(UI2_TETRIS_ACTION_HARD_DROP)
+                }
+                _ => return false,
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 #[embassy_executor::task]
 pub async fn ui2_gfx_tetris_task() {
     let seed = crate::time::unix_time_seconds()
@@ -253,6 +426,7 @@ pub async fn ui2_gfx_tetris_task() {
         surface_w,
         surface_h
     );
+    UI2_TETRIS_WINDOW_ID.store(window_id, Ordering::Release);
     let init_vertices = build_frame_vertices(&app);
     let init_bytes = unsafe {
         core::slice::from_raw_parts(
@@ -269,7 +443,7 @@ pub async fn ui2_gfx_tetris_task() {
         last_tick = now;
 
         let elapsed_ms = elapsed.as_millis() as u32;
-        let changed = app.tick(elapsed_ms) || app.game.consume_changed();
+        let changed = app.apply_pending_actions() || app.tick(elapsed_ms) || app.game.consume_changed();
         if changed {
             let vertices = build_frame_vertices(&app);
             let bytes = unsafe {
