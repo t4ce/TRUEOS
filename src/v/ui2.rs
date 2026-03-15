@@ -438,7 +438,9 @@ fn browser_surface_state_for_window(
 fn browser_interactive_state_for_window(
     window: &Ui2Window,
 ) -> trueos_qjs::browser_task::HostedBrowserInteractiveState {
-    trueos_qjs::browser_task::hosted_interactive_state_for_browser(window_browser_instance_id(window))
+    trueos_qjs::browser_task::hosted_interactive_state_for_browser(window_browser_instance_id(
+        window,
+    ))
 }
 
 fn hosted_browser_interactive_seq(state: &Ui2State) -> u32 {
@@ -449,11 +451,11 @@ fn hosted_browser_interactive_seq(state: &Ui2State) -> u32 {
         .map(|window| {
             let instance_id = window_browser_instance_id(window);
             let seq = trueos_qjs::browser_task::hosted_interactive_seq_for_browser(instance_id);
-            instance_id
-                .wrapping_mul(1315423911)
-                .wrapping_add(seq)
+            instance_id.wrapping_mul(1315423911).wrapping_add(seq)
         })
-        .fold(0u32, |acc, value| acc.wrapping_mul(16777619).wrapping_add(value))
+        .fold(0u32, |acc, value| {
+            acc.wrapping_mul(16777619).wrapping_add(value)
+        })
 }
 
 fn hosted_browser_surface_seq(state: &Ui2State) -> u32 {
@@ -464,11 +466,11 @@ fn hosted_browser_surface_seq(state: &Ui2State) -> u32 {
         .map(|window| {
             let instance_id = window_browser_instance_id(window);
             let seq = trueos_qjs::browser_task::hosted_surface_seq_for_browser(instance_id);
-            instance_id
-                .wrapping_mul(1315423911)
-                .wrapping_add(seq)
+            instance_id.wrapping_mul(1315423911).wrapping_add(seq)
         })
-        .fold(0u32, |acc, value| acc.wrapping_mul(16777619).wrapping_add(value))
+        .fold(0u32, |acc, value| {
+            acc.wrapping_mul(16777619).wrapping_add(value)
+        })
 }
 
 fn window_is_renderable(window: &Ui2Window) -> bool {
@@ -713,9 +715,10 @@ fn refresh_window_hit_entries(state: &mut Ui2State, owner_window_id: u32) {
     };
 
     if window.kind == Ui2WindowKind::HostedBrowser {
-        state.last_browser_interactive_seq = trueos_qjs::browser_task::hosted_interactive_seq_for_browser(
-            window_browser_instance_id(&window),
-        );
+        state.last_browser_interactive_seq =
+            trueos_qjs::browser_task::hosted_interactive_seq_for_browser(
+                window_browser_instance_id(&window),
+            );
     }
 
     let refreshed_entries = {
@@ -910,7 +913,10 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidC
         if !middle_was_down
             && middle_is_down
             && let Some(target) = press_hit
-            && matches!(target.kind, Ui2HitKind::WindowBody | Ui2HitKind::BrowserInteractive)
+            && matches!(
+                target.kind,
+                Ui2HitKind::WindowBody | Ui2HitKind::BrowserInteractive
+            )
         {
             begin_scroll_pan_window_id = target.owner_window_id;
         }
@@ -950,7 +956,8 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidC
         let _ = begin_vertical_scroll_drag_for_cursor(state, slot_id, px, py);
     }
     if begin_scroll_pan_window_id != 0 {
-        let _ = begin_window_scroll_pan_for_cursor(state, slot_id, begin_scroll_pan_window_id, px, py);
+        let _ =
+            begin_window_scroll_pan_for_cursor(state, slot_id, begin_scroll_pan_window_id, px, py);
         let _ = set_cursor_selected_window(state, slot_id, begin_scroll_pan_window_id);
     }
 
@@ -1860,7 +1867,11 @@ fn update_resize_drag_for_cursor(
     }
 
     let drag = state.resize_drag;
-    let Some(window) = state.windows.iter().find(|window| window.id == drag.window_id) else {
+    let Some(window) = state
+        .windows
+        .iter()
+        .find(|window| window.id == drag.window_id)
+    else {
         state.resize_drag = Ui2WindowResizeDrag::default();
         return;
     };
@@ -2106,7 +2117,14 @@ pub fn window_info_by_id(id: u32) -> Option<TrueosUi2WindowInfo> {
 pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     let state_lock = init_state();
     let mut state = state_lock.lock();
-    let id = alloc_window(&mut state, Ui2WindowKind::HostedSurface, title, rect, z, alpha);
+    let id = alloc_window(
+        &mut state,
+        Ui2WindowKind::HostedSurface,
+        title,
+        rect,
+        z,
+        alpha,
+    );
     state.compose_reason = "create-window";
     refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
@@ -2127,7 +2145,14 @@ pub fn create_hosted_browser_window(
     };
     let state_lock = init_state();
     let mut state = state_lock.lock();
-    let id = alloc_window(&mut state, Ui2WindowKind::HostedBrowser, title, rect, z, alpha);
+    let id = alloc_window(
+        &mut state,
+        Ui2WindowKind::HostedBrowser,
+        title,
+        rect,
+        z,
+        alpha,
+    );
     if let Some(window) = window_mut(&mut state, id) {
         window.browser_instance_id = browser_instance_id;
     }

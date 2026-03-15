@@ -167,14 +167,16 @@ pub(crate) async fn try_attach_device(
             hid_count
         );
 
-        non_generic::log_hid_non_generic_descriptor_tables(
-            ctx,
-            ep0_ring,
-            slot_id,
-            target_port,
-            cfg_slice,
-        )
-        .await;
+        if super::USB_LOG_VERBOSE {
+            non_generic::log_hid_non_generic_descriptor_tables(
+                ctx,
+                ep0_ring,
+                slot_id,
+                target_port,
+                cfg_slice,
+            )
+            .await;
+        }
 
         super::register_device(
             state.info.controller_id,
@@ -185,7 +187,9 @@ pub(crate) async fn try_attach_device(
         return Some(DeviceKind::Hid);
     }
 
-    non_generic::log_mass_non_generic_descriptor_table(target_port, slot_id, cfg_slice);
+    if super::USB_LOG_VERBOSE {
+        non_generic::log_mass_non_generic_descriptor_table(target_port, slot_id, cfg_slice);
+    }
     if mass::attach_mass_device(mass::AttachParams {
         ctx,
         cmd_ring: &mut state.cmd_ring,

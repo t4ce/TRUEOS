@@ -53,7 +53,6 @@ let browserRegionCacheSeq = 0;
 let browserRegionCacheRevision = 1;
 let browserRegionCacheWidth = 0;
 let browserRegionTileHeight = 0;
-let browserRowPreviewKey = '';
 
 const fpsOverlay = createFpsOverlay();
 runtime.host.__trueosBrowserShowClosingTagRows = SHOW_CLOSING_TAG_ROWS;
@@ -782,7 +781,6 @@ function buildDocFromParsed(parsed, vw, context = 'document') {
     );
   }
   const layout = applyYoga(rows, vw, context);
-  maybeLogRowPreview(rows, layout.rowX, layout.rowY, context);
   const themeLayout = (() => {
     try {
       return buildThemeLayout(doc, cssSection, vw, context, rows, layout.rowX, layout.rowY);
@@ -819,33 +817,6 @@ function buildDocFromParsed(parsed, vw, context = 'document') {
     contentH: layout.contentH,
     width: vw,
   };
-}
-
-function shouldLogRowPreview() {
-  const url = String(currentPageUrl || '');
-  return url.includes('w3.org/Graphics/PNG/Inline-img.html');
-}
-
-function maybeLogRowPreview(rows, rowX, rowY, context = 'document') {
-  if (!shouldLogRowPreview()) return;
-  const key = `${String(currentPageUrl || '')}::${String(context || '')}::${Math.max(0, Number(rows && rows.length || 0) | 0)}::${Math.max(0, Number(rowY && rowY[0] || 0) | 0)}`;
-  if (browserRowPreviewKey === key) return;
-  browserRowPreviewKey = key;
-
-  const list = Array.isArray(rows) ? rows : [];
-  const xs = Array.isArray(rowX) ? rowX : [];
-  const ys = Array.isArray(rowY) ? rowY : [];
-  const preview = [];
-  for (let i = 0; i < list.length && i < 12; i += 1) {
-    const row = list[i] || null;
-    preview.push(
-      `${i}:${String(row && row.kind || '')}@(${Math.round(Number(xs[i] || 0))},${Math.round(Number(ys[i] || 0))}) ` +
-      `${JSON.stringify(String(row && row.text || ''))}`,
-    );
-  }
-  try {
-    console.log(`[browser.mjs] row-preview ${String(context || '')} rows=${list.length} ${preview.join(' | ')}`);
-  } catch (_) {}
 }
 
 function buildDocFromHtml(html, vw, context = 'document') {

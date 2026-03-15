@@ -240,7 +240,11 @@ fn ascii_was_emitted(emitted: &[u8; 6], ascii: u8) -> bool {
 
 #[inline]
 fn key_code_was_emitted(emitted: &[u16; 6], key_code: u16) -> bool {
-    key_code != 0 && emitted.iter().copied().any(|candidate| candidate == key_code)
+    key_code != 0
+        && emitted
+            .iter()
+            .copied()
+            .any(|candidate| candidate == key_code)
 }
 
 #[inline]
@@ -410,7 +414,9 @@ pub fn apply_report(
         if key != 0 && !key_is_down(&prev_keys, key) {
             if let Some(key_code) = hid_boot_keycode_to_named_key(key) {
                 if !key_code_was_emitted(&emitted_key_codes, key_code) {
-                    let codepoint = key_code_default_codepoint(key_code).map(|ch| ch as u32).unwrap_or(0);
+                    let codepoint = key_code_default_codepoint(key_code)
+                        .map(|ch| ch as u32)
+                        .unwrap_or(0);
                     push_output_key(
                         controller_id,
                         slot_id,

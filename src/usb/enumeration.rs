@@ -716,31 +716,35 @@ pub(crate) async fn enumerate_with_params(
     let cfg_slice_len = cfg_total_len.min(256) as usize;
     let cfg_slice = unsafe { core::slice::from_raw_parts(cfg_virt, cfg_slice_len) };
 
-    usbdesc::log_all_descriptor_types(cfg_slice, target_port, slot_id);
-
     let speed_str = speed_code_to_str(speed_code);
     let has_uac_out = uac::has_as_out_endpoint(cfg_slice);
-    crate::log!(
-        "usb: enum port {} device vid=0x{:04X} pid=0x{:04X} slot={} speed={} cfg_len={} uac_out={}\n",
-        target_port,
-        dev_vid,
-        dev_pid,
-        slot_id,
-        speed_str,
-        cfg_slice_len,
-        has_uac_out
-    );
+
+    if super::USB_LOG_VERBOSE {
+        usbdesc::log_all_descriptor_types(cfg_slice, target_port, slot_id);
+        crate::log!(
+            "usb: enum port {} device vid=0x{:04X} pid=0x{:04X} slot={} speed={} cfg_len={} uac_out={}\n",
+            target_port,
+            dev_vid,
+            dev_pid,
+            slot_id,
+            speed_str,
+            cfg_slice_len,
+            has_uac_out
+        );
+    }
 
     let controller_id = state.info.controller_id;
 
     // xHCI PORTSC doesn't include VID:PID; cache it for xHCI-side debug once we've read it.
     xhci::set_port_vidpid(ctx.controller_id, target_port, dev_vid, dev_pid);
-    crate::log!(
-        "xhci: port {} id={:04X}:{:04X}\n",
-        target_port,
-        dev_vid,
-        dev_pid
-    );
+    if super::USB_LOG_VERBOSE {
+        crate::log!(
+            "xhci: port {} id={:04X}:{:04X}\n",
+            target_port,
+            dev_vid,
+            dev_pid
+        );
+    }
 
     super::record_slot_identity(
         controller_id,
