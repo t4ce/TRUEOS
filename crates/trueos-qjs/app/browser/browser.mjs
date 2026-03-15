@@ -2364,6 +2364,10 @@ runtime.host.__trueosBrowser = {
   },
   setScroll(y) {
     scrollY = Math.max(0, Math.round(Number(y || 0)));
+    if (browserCanRenderScene) {
+      const { vw, vh } = computeViewport();
+      clampScrollForDoc(ensureDoc(vw), vh);
+    }
     paint();
     return true;
   },
