@@ -1661,47 +1661,45 @@ impl VirglGfxBackend {
             || frame_no.is_multiple_of(VIRGL_SCANOUT_REASSERT_PERIOD_FRAMES)
     }
 
-    fn resolved_viewport_extent(&self, vp: Viewport) -> (u32, u32) {
+    fn resolved_viewport_extent(&self, target: ImageId, vp: Viewport) -> (u32, u32) {
+        let (target_w, target_h) = self.render_target_extent(target);
         let mut vp_w = vp.width.max(0) as u32;
         let mut vp_h = vp.height.max(0) as u32;
         if vp_w == 0 {
-            vp_w = self.width;
+            vp_w = target_w;
         } else {
-            vp_w = vp_w.min(self.width);
+            vp_w = vp_w.min(target_w);
         }
         if vp_h == 0 {
-            vp_h = self.height;
+            vp_h = target_h;
         } else {
-            vp_h = vp_h.min(self.height);
+            vp_h = vp_h.min(target_h);
         }
         (vp_w, vp_h)
     }
 
     fn resolved_scissor_rect(
         &self,
+        target: ImageId,
         vp: Viewport,
         scissor: Option<ScissorRect>,
     ) -> (u32, u32, u32, u32) {
+        let (target_w, target_h) = self.render_target_extent(target);
         let vp_x = vp.x.max(0) as u32;
         let vp_y = vp.y.max(0) as u32;
-        let (vp_w, vp_h) = self.resolved_viewport_extent(vp);
-        let vp_max_x = vp_x.saturating_add(vp_w).min(self.width);
-        let vp_max_y = vp_y.saturating_add(vp_h).min(self.height);
+        let (vp_w, vp_h) = self.resolved_viewport_extent(target, vp);
+        let vp_max_x = vp_x.saturating_add(vp_w).min(target_w);
+        let vp_max_y = vp_y.saturating_add(vp_h).min(target_h);
 
         match scissor {
             Some(rect) => {
-                let min_x = rect.x.min(self.width);
-                let min_y = rect.y.min(self.height);
-                let max_x = rect.x.saturating_add(rect.width).min(self.width);
-                let max_y = rect.y.saturating_add(rect.height).min(self.height);
+                let min_x = rect.x.min(target_w);
+                let min_y = rect.y.min(target_h);
+                let max_x = rect.x.saturating_add(rect.width).min(target_w);
+                let max_y = rect.y.saturating_add(rect.height).min(target_h);
                 (min_x, min_y, max_x, max_y)
             }
-            None => (
-                vp_x.min(self.width),
-                vp_y.min(self.height),
-                vp_max_x,
-                vp_max_y,
-            ),
+            None => (vp_x.min(target_w), vp_y.min(target_h), vp_max_x, vp_max_y),
         }
     }
 
@@ -2810,14 +2808,15 @@ impl GfxDevice for VirglGfxBackend {
             match op {
                 Op::SetViewport(vp) => {
                     self.state.viewport = vp;
-                    let (vp_w, vp_h) = self.resolved_viewport_extent(vp);
+                    let (vp_w, vp_h) = self.resolved_viewport_extent(self.state.render_target, vp);
                     if last_viewport != Some((vp_w, vp_h)) {
                         encode_set_viewport(&mut cmd, vp_w, vp_h);
                         last_viewport = Some((vp_w, vp_h));
                         did_work = true;
                     }
                     if self.state.scissor.is_none() {
-                        let scissor = self.resolved_scissor_rect(vp, None);
+                        let scissor =
+                            self.resolved_scissor_rect(self.state.render_target, vp, None);
                         if last_scissor != Some(scissor) {
                             encode_set_scissor(
                                 &mut cmd, scissor.0, scissor.1, scissor.2, scissor.3,
@@ -2829,7 +2828,11 @@ impl GfxDevice for VirglGfxBackend {
                 }
                 Op::SetScissor(scissor) => {
                     self.state.scissor = scissor;
-                    let scissor = self.resolved_scissor_rect(self.state.viewport, scissor);
+                    let scissor = self.resolved_scissor_rect(
+                        self.state.render_target,
+                        self.state.viewport,
+                        scissor,
+                    );
                     if last_scissor != Some(scissor) {
                         encode_set_scissor(&mut cmd, scissor.0, scissor.1, scissor.2, scissor.3);
                         last_scissor = Some(scissor);
@@ -2842,6 +2845,8 @@ impl GfxDevice for VirglGfxBackend {
                     if last_framebuffer_surface != Some(surf) {
                         encode_set_framebuffer(&mut cmd, surf);
                         last_framebuffer_surface = Some(surf);
+                        last_viewport = None;
+                        last_scissor = None;
                         did_work = true;
                     }
                 }
@@ -2908,13 +2913,17 @@ impl GfxDevice for VirglGfxBackend {
                     last_draw_key = Some(draw_key);
 
                     // Ensure current viewport is encoded before drawing.
-                    let (vp_w, vp_h) = self.resolved_viewport_extent(self.state.viewport);
+                    let (vp_w, vp_h) = self
+                        .resolved_viewport_extent(self.state.render_target, self.state.viewport);
                     if last_viewport != Some((vp_w, vp_h)) {
                         encode_set_viewport(&mut cmd, vp_w, vp_h);
                         last_viewport = Some((vp_w, vp_h));
                     }
-                    let scissor =
-                        self.resolved_scissor_rect(self.state.viewport, self.state.scissor);
+                    let scissor = self.resolved_scissor_rect(
+                        self.state.render_target,
+                        self.state.viewport,
+                        self.state.scissor,
+                    );
                     if last_scissor != Some(scissor) {
                         encode_set_scissor(&mut cmd, scissor.0, scissor.1, scissor.2, scissor.3);
                         last_scissor = Some(scissor);

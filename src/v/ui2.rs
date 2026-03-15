@@ -10,7 +10,26 @@ use spin::{Mutex, Once};
 const UI2_TITLE_H: f32 = 26.0;
 const UI2_NOTES_SURFACE_TEX_ID: u32 = 3101;
 const UI2_GLASS_SURFACE_TEX_ID: u32 = 3102;
+const UI2_SVG_TEX_ID_BASE: u32 = 3_200;
+const UI2_ASYNC_TEX_STATUS_UNKNOWN: i32 = 0;
+const UI2_ASYNC_TEX_STATUS_PENDING: i32 = 1;
+const UI2_ASYNC_TEX_STATUS_READY: i32 = 2;
 static UI2_BROWSER_SNAPSHOT_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
+static UI2_SVG_QUEUE_STARTED: AtomicBool = AtomicBool::new(false);
+static UI2_SVG_REPAINT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+struct Ui2SvgFixture {
+    tex_id: u32,
+    svg: &'static str,
+}
+
+#[derive(Copy, Clone)]
+struct Ui2SvgAsset {
+    tex_id: u32,
+    width: u32,
+    height: u32,
+    status: i32,
+}
 
 #[derive(Copy, Clone)]
 struct Ui2SurfaceSlot {
@@ -94,9 +113,145 @@ struct Ui2State {
 
 static UI2_STATE: Once<Mutex<Ui2State>> = Once::new();
 static UI2_SURFACES: Once<Mutex<Vec<Ui2SurfaceSlot>>> = Once::new();
+static UI2_SVG_ASSETS: Once<Mutex<Vec<Ui2SvgAsset>>> = Once::new();
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_DIRTY: AtomicBool = AtomicBool::new(false);
 static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
+
+const UI2_SVG_FIXTURES: &[Ui2SvgFixture] = &[
+    Ui2SvgFixture {
+        tex_id: UI2_SVG_TEX_ID_BASE,
+        svg: r##"
+<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#132a4f"/>
+      <stop offset="55%" stop-color="#f26b5b"/>
+      <stop offset="100%" stop-color="#ffd27a"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#fff3bf"/>
+      <stop offset="100%" stop-color="#ff9f43"/>
+    </radialGradient>
+  </defs>
+  <rect width="96" height="96" fill="url(#sky)"/>
+  <circle cx="48" cy="38" r="18" fill="url(#sun)"/>
+  <path d="M0 64 C10 58 20 56 32 60 C42 63 54 66 66 62 C78 58 87 59 96 64 L96 96 L0 96 Z" fill="#553c66"/>
+  <path d="M0 74 C10 70 20 67 32 70 C42 73 56 76 70 72 C82 68 90 69 96 72 L96 96 L0 96 Z" fill="#2c2348"/>
+  <path d="M0 84 C12 80 23 78 34 81 C46 84 58 87 70 84 C81 81 90 82 96 84 L96 96 L0 96 Z" fill="#161126"/>
+</svg>"##,
+    },
+    Ui2SvgFixture {
+        tex_id: UI2_SVG_TEX_ID_BASE + 1,
+        svg: r##"
+<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="petal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ff8fb1"/>
+      <stop offset="100%" stop-color="#ff4d6d"/>
+    </linearGradient>
+    <radialGradient id="core" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#fff4b5"/>
+      <stop offset="100%" stop-color="#ffb703"/>
+    </radialGradient>
+  </defs>
+  <rect width="96" height="96" fill="#fff7ef"/>
+  <g fill="url(#petal)" stroke="#7a284a" stroke-width="2" stroke-linejoin="round">
+    <path d="M48 18 C60 22 66 31 66 42 C58 45 52 45 48 42 C44 45 38 45 30 42 C30 31 36 22 48 18 Z"/>
+    <path d="M78 48 C74 60 65 66 54 66 C51 58 51 52 54 48 C51 44 51 38 54 30 C65 30 74 36 78 48 Z"/>
+    <path d="M48 78 C36 74 30 65 30 54 C38 51 44 51 48 54 C52 51 58 51 66 54 C66 65 60 74 48 78 Z"/>
+    <path d="M18 48 C22 36 31 30 42 30 C45 38 45 44 42 48 C45 52 45 58 42 66 C31 66 22 60 18 48 Z"/>
+  </g>
+  <circle cx="48" cy="48" r="10" fill="url(#core)" stroke="#8c5a00" stroke-width="2"/>
+</svg>"##,
+    },
+    Ui2SvgFixture {
+        tex_id: UI2_SVG_TEX_ID_BASE + 2,
+        svg: r##"
+<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#8ff7c8" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#0d3b2a" stop-opacity="0.15"/>
+    </radialGradient>
+  </defs>
+  <rect width="96" height="96" rx="12" fill="#091a16"/>
+  <circle cx="48" cy="48" r="28" fill="url(#glow)"/>
+  <circle cx="48" cy="48" r="12" fill="none" stroke="#7df9c1" stroke-width="2"/>
+  <circle cx="48" cy="48" r="24" fill="none" stroke="#4dd9a6" stroke-width="2" stroke-opacity="0.8"/>
+  <circle cx="48" cy="48" r="36" fill="none" stroke="#2ca67f" stroke-width="2" stroke-opacity="0.6"/>
+  <path d="M48 48 L76 34 A32 32 0 0 1 80 48 Z" fill="#8ff7c8" fill-opacity="0.35"/>
+  <path d="M48 14 L48 82 M14 48 L82 48" stroke="#74e7b7" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="48" cy="48" r="4" fill="#d7fff0"/>
+</svg>"##,
+    },
+    Ui2SvgFixture {
+        tex_id: UI2_SVG_TEX_ID_BASE + 3,
+        svg: r##"
+<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8ec5ff"/>
+      <stop offset="100%" stop-color="#2d7ff9"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" fill="#f3f8ff"/>
+  <path d="M48 14 L76 28 L76 62 C76 74 64 82 48 86 C32 82 20 74 20 62 L20 28 Z" fill="url(#shell)" stroke="#14439a" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M48 26 L66 35 L66 58 C66 66 58 72 48 75 C38 72 30 66 30 58 L30 35 Z" fill="#e9f3ff" fill-opacity="0.35"/>
+  <path d="M34 28 C42 24 50 24 58 28 C50 31 42 37 36 48 C33 42 32 35 34 28 Z" fill="url(#spark)"/>
+  <path d="M34 54 C38 49 43 46 48 46 C53 46 58 49 62 54 C58 60 53 64 48 66 C43 64 38 60 34 54 Z M43 54 C45 52 46 51 48 51 C50 51 51 52 53 54 C51 56 50 57 48 59 C46 57 45 56 43 54 Z" fill="#ffffff" fill-rule="evenodd"/>
+</svg>"##,
+    },
+    Ui2SvgFixture {
+        tex_id: UI2_SVG_TEX_ID_BASE + 4,
+        svg: r##"
+<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#132238"/>
+      <stop offset="100%" stop-color="#214d6b"/>
+    </linearGradient>
+    <linearGradient id="waveA" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6ee7f9"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="waveB" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f9a8d4"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="14" fill="url(#bg)"/>
+  <path d="M8 28 C20 16 34 16 46 28 C58 40 72 40 88 28" fill="none" stroke="url(#waveA)" stroke-width="8" stroke-linecap="round"/>
+  <path d="M8 48 C20 36 34 36 46 48 C58 60 72 60 88 48" fill="none" stroke="url(#waveB)" stroke-width="8" stroke-linecap="round"/>
+  <path d="M8 68 C20 56 34 56 46 68 C58 80 72 80 88 68" fill="none" stroke="url(#waveA)" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="20" cy="78" r="4" fill="#f8fafc"/>
+  <circle cx="48" cy="18" r="3" fill="#f8fafc" fill-opacity="0.8"/>
+  <circle cx="76" cy="78" r="4" fill="#f8fafc"/>
+</svg>"##,
+    },
+    Ui2SvgFixture {
+        tex_id: UI2_SVG_TEX_ID_BASE + 5,
+        svg: r##"
+<svg width="96" height="96" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="head" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#fff6d6"/>
+      <stop offset="100%" stop-color="#ffb347"/>
+    </radialGradient>
+  </defs>
+  <rect width="96" height="96" fill="#090b1a"/>
+  <path d="M20 72 C16 54 20 34 34 24 C46 16 62 16 72 24 C82 32 82 48 72 56 C62 64 46 64 34 56 C24 49 24 38 32 32 C39 27 49 27 56 32" fill="none" stroke="#7dd3fc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M18 76 C30 68 42 64 54 64 C44 70 32 78 24 88 Z" fill="#7dd3fc" fill-opacity="0.35"/>
+  <circle cx="58" cy="34" r="8" fill="url(#head)" stroke="#ffedd5" stroke-width="1.5"/>
+  <circle cx="70" cy="22" r="2" fill="#ffffff"/>
+  <circle cx="78" cy="30" r="1.5" fill="#ffffff" fill-opacity="0.8"/>
+</svg>"##,
+    },
+];
 
 fn init_state() -> &'static Mutex<Ui2State> {
     UI2_STATE.call_once(|| {
@@ -114,11 +269,13 @@ fn init_state() -> &'static Mutex<Ui2State> {
             windows: Vec::new(),
         };
 
+        let demo_x = (view_w as f32) - 336.0;
+
         let browser_id = alloc_window(
             &mut state,
             Ui2WindowKind::Browser,
             "Browser",
-            Ui2Rect::new(72.0, 56.0, (view_w as f32) - 144.0, (view_h as f32) - 112.0),
+            Ui2Rect::new(72.0, 56.0, (demo_x - 96.0).max(360.0), (view_h as f32) - 112.0),
             10,
             255,
         );
@@ -127,8 +284,8 @@ fn init_state() -> &'static Mutex<Ui2State> {
         let _ = alloc_window(
             &mut state,
             Ui2WindowKind::Dialog,
-            "Notes",
-            Ui2Rect::new(120.0, 292.0, 352.0, 228.0),
+            "SVG List A",
+            Ui2Rect::new(demo_x, 72.0, 272.0, 236.0),
             20,
             246,
         );
@@ -136,8 +293,8 @@ fn init_state() -> &'static Mutex<Ui2State> {
         let _ = alloc_window(
             &mut state,
             Ui2WindowKind::Overlay,
-            "Glass",
-            Ui2Rect::new((view_w as f32) - 336.0, 304.0, 272.0, 188.0),
+            "SVG List B",
+            Ui2Rect::new(demo_x, 324.0, 272.0, 236.0),
             24,
             224,
         );
@@ -164,6 +321,21 @@ fn surface_state() -> &'static Mutex<Vec<Ui2SurfaceSlot>> {
                 label: "glass",
             },
         ])
+    })
+}
+
+fn svg_asset_state() -> &'static Mutex<Vec<Ui2SvgAsset>> {
+    UI2_SVG_ASSETS.call_once(|| {
+        let mut assets = Vec::with_capacity(UI2_SVG_FIXTURES.len());
+        for fixture in UI2_SVG_FIXTURES {
+            assets.push(Ui2SvgAsset {
+                tex_id: fixture.tex_id,
+                width: 0,
+                height: 0,
+                status: UI2_ASYNC_TEX_STATUS_UNKNOWN,
+            });
+        }
+        Mutex::new(assets)
     })
 }
 
@@ -339,6 +511,101 @@ fn round_to_u32(v: f32, min: u32) -> u32 {
     }
 }
 
+fn mark_demo_surfaces_dirty() {
+    let surface_lock = surface_state();
+    let mut surfaces = surface_lock.lock();
+    for slot in surfaces.iter_mut() {
+        slot.dirty = true;
+    }
+}
+
+fn queue_ui2_svg_assets_once() {
+    if UI2_SVG_QUEUE_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let asset_lock = svg_asset_state();
+    let mut assets = asset_lock.lock();
+    for (index, fixture) in UI2_SVG_FIXTURES.iter().enumerate() {
+        let rc = unsafe {
+            crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_svg_async(
+                fixture.tex_id,
+                fixture.svg.as_ptr(),
+                fixture.svg.len(),
+            )
+        };
+        let status = if rc == 0 {
+            UI2_ASYNC_TEX_STATUS_PENDING
+        } else {
+            rc
+        };
+        if let Some(asset) = assets.get_mut(index) {
+            asset.status = status;
+        }
+        crate::log!(
+            "ui2: svg-queue tex={} idx={} status={}\n",
+            fixture.tex_id,
+            index,
+            status
+        );
+    }
+}
+
+fn texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let rc = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_texture_dimensions(
+            tex_id,
+            &mut width as *mut u32,
+            &mut height as *mut u32,
+        )
+    };
+    if rc == 0 && width > 0 && height > 0 {
+        Some((width, height))
+    } else {
+        None
+    }
+}
+
+fn poll_ui2_svg_assets() {
+    queue_ui2_svg_assets_once();
+
+    let asset_lock = svg_asset_state();
+    let mut assets = asset_lock.lock();
+    let mut all_done = !assets.is_empty();
+
+    for asset in assets.iter_mut() {
+        if asset.status == UI2_ASYNC_TEX_STATUS_READY || asset.status < 0 {
+            continue;
+        }
+
+        let status = crate::surface::io::cabi::trueos_cabi_gfx_texture_status(asset.tex_id);
+        asset.status = status;
+        if status == UI2_ASYNC_TEX_STATUS_READY {
+            if let Some((width, height)) = texture_dimensions(asset.tex_id) {
+                asset.width = width;
+                asset.height = height;
+            }
+            crate::log!(
+                "ui2: svg-ready tex={} {}x{}\n",
+                asset.tex_id,
+                asset.width,
+                asset.height
+            );
+        } else if status == UI2_ASYNC_TEX_STATUS_PENDING || status == UI2_ASYNC_TEX_STATUS_UNKNOWN {
+            all_done = false;
+        } else {
+            crate::log!("ui2: svg-error tex={} code={}\n", asset.tex_id, status);
+        }
+    }
+
+    if all_done && !UI2_SVG_REPAINT_REQUESTED.swap(true, Ordering::AcqRel) {
+        mark_demo_surfaces_dirty();
+        request_full_recompose("ui2-svg-ready");
+    }
+}
+
 fn surface_tex_id_for_window(window: &Ui2Window) -> Option<u32> {
     match window.kind {
         Ui2WindowKind::Dialog => Some(UI2_NOTES_SURFACE_TEX_ID),
@@ -505,61 +772,74 @@ fn draw_texture_rect_no_present(
     )
 }
 
-fn render_notes_surface(view_w: u32, view_h: u32) {
-    let bg = (0xFA, 0xF3, 0xE8, 0xFF);
-    let accent = (0xC8, 0x8B, 0x4A, 0xFF);
-    let line = (0xC9, 0xBA, 0xA4, 0xFF);
-    let chip = (0x24, 0x2A, 0x33, 0xFF);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(0.0, 0.0, view_w as f32, view_h as f32, bg, view_w, view_h);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(0.0, 0.0, 6.0, view_h as f32, accent, view_w, view_h);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(18.0, 18.0, (view_w as f32) - 36.0, 30.0, chip, view_w, view_h);
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"ui2 / notes surface", 28.0, 24.0, view_w, view_h, 255);
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(
-        b"separate offscreen target composed by ui2",
-        24.0,
-        62.0,
+fn render_svg_list_surface(view_w: u32, view_h: u32, start_idx: usize) {
+    let bg = (0xF7, 0xF2, 0xEA, 0xFF);
+    let strip = (0xD4, 0xC2, 0xAF, 0xFF);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        0.0,
+        0.0,
+        view_w as f32,
+        view_h as f32,
+        bg,
         view_w,
         view_h,
-        220,
     );
-    for idx in 0..4 {
-        let y = 102.0 + (idx as f32 * 28.0);
-        let _ = crate::gfx::lyon::draw_solid_rect_no_present(24.0, y + 10.0, (view_w as f32) - 48.0, 1.0, line, view_w, view_h);
-    }
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"- browser host stays separate", 24.0, 96.0, view_w, view_h, 210);
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"- cursor plane remains external", 24.0, 124.0, view_w, view_h, 210);
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"- loadscreen handoff stays external", 24.0, 152.0, view_w, view_h, 210);
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"- this surface should survive moves", 24.0, 180.0, view_w, view_h, 210);
-}
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        0.0,
+        0.0,
+        view_w as f32,
+        1.0,
+        strip,
+        view_w,
+        view_h,
+    );
 
-fn render_glass_surface(view_w: u32, view_h: u32) {
-    let clear = (0x00, 0x00, 0x00, 0x00);
-    let shell = (0x4D, 0x7A, 0x74, 0x92);
-    let band = (0xB8, 0xD9, 0xD3, 0x72);
-    let edge = (0xE8, 0xF4, 0xF2, 0xD6);
-    let glow = (0xF1, 0xC4, 0x7A, 0xA8);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(0.0, 0.0, view_w as f32, view_h as f32, clear, view_w, view_h);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(0.0, 0.0, view_w as f32, view_h as f32, shell, view_w, view_h);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(16.0, 16.0, (view_w as f32) - 32.0, 34.0, band, view_w, view_h);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(20.0, 64.0, (view_w as f32) - 40.0, 2.0, edge, view_w, view_h);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(20.0, (view_h as f32) - 36.0, (view_w as f32) - 40.0, 2.0, edge, view_w, view_h);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present((view_w as f32) - 64.0, 20.0, 24.0, 24.0, glow, view_w, view_h);
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"glass overlay", 24.0, 22.0, view_w, view_h, 235);
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(
-        b"alpha texture over ui2 body",
-        24.0,
-        78.0,
-        view_w,
-        view_h,
-        220,
-    );
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(b"blend / scissor demo", 24.0, 106.0, view_w, view_h, 210);
+    let asset_lock = svg_asset_state();
+    let assets = asset_lock.lock();
+    let pad_x = 14.0;
+    let pad_y = 14.0;
+    let gap = 12.0;
+    let end_idx = core::cmp::min(start_idx + 3, assets.len());
+    let visible_count = end_idx.saturating_sub(start_idx);
+    if visible_count == 0 {
+        return;
+    }
+
+    let available_h = ((view_h as f32) - (pad_y * 2.0) - (gap * (visible_count.saturating_sub(1) as f32))).max(1.0);
+    let item_h = (available_h / visible_count as f32).max(1.0);
+    let item_w = ((view_w as f32) - (pad_x * 2.0)).max(1.0);
+
+    for idx in 0..visible_count {
+        let Some(asset) = assets.get(start_idx + idx) else {
+            continue;
+        };
+        if asset.status != UI2_ASYNC_TEX_STATUS_READY || asset.width == 0 || asset.height == 0 {
+            continue;
+        }
+
+        let scale = libm::fminf(item_w / asset.width as f32, item_h / asset.height as f32);
+        let draw_w = (asset.width as f32 * scale).max(1.0);
+        let draw_h = (asset.height as f32 * scale).max(1.0);
+        let cell_y = pad_y + idx as f32 * (item_h + gap);
+        let draw_x = pad_x + ((item_w - draw_w) * 0.5);
+        let draw_y = cell_y + ((item_h - draw_h) * 0.5);
+        let _ = draw_texture_rect_no_present(
+            asset.tex_id,
+            draw_x,
+            draw_y,
+            draw_w,
+            draw_h,
+            view_w,
+            view_h,
+            false,
+        );
+    }
 }
 
 fn render_surface_content(window: &Ui2Window, view_w: u32, view_h: u32) {
     match window.kind {
-        Ui2WindowKind::Dialog => render_notes_surface(view_w, view_h),
-        Ui2WindowKind::Overlay => render_glass_surface(view_w, view_h),
+        Ui2WindowKind::Dialog => render_svg_list_surface(view_w, view_h, 0),
+        Ui2WindowKind::Overlay => render_svg_list_surface(view_w, view_h, 3),
         _ => {}
     }
 }
@@ -643,19 +923,6 @@ fn refresh_window_surface(window: &Ui2Window) -> bool {
 fn refresh_dirty_window_surfaces(state: &Ui2State) {
     for idx in sorted_window_indices(state) {
         let window = &state.windows[idx];
-        let needs_refresh = match window.kind {
-            Ui2WindowKind::Dialog | Ui2WindowKind::Overlay => true,
-            _ => false,
-        };
-        if needs_refresh {
-            let surface_lock = surface_state();
-            let mut surfaces = surface_lock.lock();
-            if let Some(tex_id) = surface_tex_id_for_window(window)
-                && let Some(slot) = surface_slot_mut(&mut surfaces, tex_id)
-            {
-                slot.dirty = true;
-            }
-        }
         let _ = refresh_window_surface(window);
     }
 }
@@ -777,10 +1044,10 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     }
 
     let frame_rgba = match window.kind {
-        Ui2WindowKind::Browser => (0x18, 0x1B, 0x20, 0xFF),
-        Ui2WindowKind::Dialog => (0x2B, 0x2B, 0x2B, 0xFF),
-        Ui2WindowKind::Menu => (0x1F, 0x1A, 0x12, 0xFF),
-        Ui2WindowKind::Overlay => (0x08, 0x08, 0x08, 0xC0),
+        Ui2WindowKind::Browser => (0xD9, 0xDE, 0xE5, 0xFF),
+        Ui2WindowKind::Dialog => (0xD7, 0xCC, 0xBF, 0xFF),
+        Ui2WindowKind::Menu => (0xDD, 0xD2, 0xBD, 0xFF),
+        Ui2WindowKind::Overlay => (0xC8, 0xD7, 0xD2, 0xD8),
     };
     let title_rgba = match window.kind {
         Ui2WindowKind::Browser => (0xF3, 0xF4, 0xF6, 0xFF),
@@ -792,9 +1059,14 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
         Ui2WindowKind::Browser => (0xFB, 0xFB, 0xF8, window.alpha),
         Ui2WindowKind::Dialog => (0xF2, 0xEA, 0xDE, window.alpha),
         Ui2WindowKind::Menu => (0xF1, 0xE4, 0xC7, window.alpha),
-        Ui2WindowKind::Overlay => (0x12, 0x12, 0x14, window.alpha),
+        Ui2WindowKind::Overlay => (0xF2, 0xEA, 0xDE, window.alpha),
     };
-    let border_rgba = (0x08, 0x0A, 0x0F, 0xFF);
+    let border_rgba = match window.kind {
+        Ui2WindowKind::Browser => (0x9A, 0xA3, 0xAF, 0xFF),
+        Ui2WindowKind::Dialog => (0xB8, 0xAA, 0x98, 0xFF),
+        Ui2WindowKind::Menu => (0xB8, 0xA6, 0x8A, 0xFF),
+        Ui2WindowKind::Overlay => (0x6D, 0x88, 0x80, 0xE0),
+    };
     let _ = crate::gfx::lyon::draw_solid_rect_no_present(
         window.rect.x,
         window.rect.y,
@@ -943,11 +1215,14 @@ pub async fn ui2_task() {
 
     crate::gfx::init(crate::limine::framebuffer_response());
     init_state();
+    svg_asset_state();
+    queue_ui2_svg_assets_once();
     request_full_recompose("boot");
     crate::log!("ui2: boot window manager\n");
     let mut last_browser_surface_seq = 0u32;
 
     loop {
+        poll_ui2_svg_assets();
         let next_browser_surface_seq = trueos_qjs::browser_task::hosted_surface_seq();
         if next_browser_surface_seq != last_browser_surface_seq {
             last_browser_surface_seq = next_browser_surface_seq;

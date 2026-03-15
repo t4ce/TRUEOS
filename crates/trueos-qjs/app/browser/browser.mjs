@@ -23,7 +23,7 @@ const ERROR_PREVIEW_MAX = 160;
 const MAX_RENDER_TEXT_CHARS = 512;
 const HTML_READY_TIMEOUT_MS = 10000;
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
-const SHOW_CLOSING_TAG_ROWS = true;
+const SHOW_CLOSING_TAG_ROWS = false;
 const BROWSER_REGION_CACHE_MAX = 4;
 const BROWSER_REGION_PREFETCH_SCREENS = 1;
 const BROWSER_REGION_TILE_MIN_PX = 512;
@@ -56,6 +56,7 @@ let browserRegionTileHeight = 0;
 let browserRowPreviewKey = '';
 
 const fpsOverlay = createFpsOverlay();
+runtime.host.__trueosBrowserShowClosingTagRows = SHOW_CLOSING_TAG_ROWS;
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
   webSearch: false,
   fileSearch: false,

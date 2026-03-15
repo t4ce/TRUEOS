@@ -472,6 +472,9 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
             PendingDraw::SetRenderTarget { tex_id } => {
                 draws.push(PendingDraw::SetRenderTarget { tex_id });
             }
+            PendingDraw::SetScissor { rect } => {
+                draws.push(PendingDraw::SetScissor { rect });
+            }
             PendingDraw::Rgb {
                 blob_offset,
                 blob_len,
@@ -516,6 +519,9 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                     vp_w: u32,
                     vp_h: u32,
                 },
+                SetScissor {
+                    rect: Option<ScissorRect>,
+                },
                 Rgb {
                     offset: u64,
                     vcount: u32,
@@ -546,6 +552,13 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                 while draw_idx < draws.len() {
                     let (kind, add, tex_kind) = match &draws[draw_idx] {
                         PendingDraw::SetRenderTarget { .. } => {
+                            if pass_kind == 0 {
+                                draw_idx += 1;
+                                continue;
+                            }
+                            break;
+                        }
+                        PendingDraw::SetScissor { .. } => {
                             if pass_kind == 0 {
                                 draw_idx += 1;
                                 continue;
@@ -611,6 +624,9 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                                 vp_w: current_vp_w,
                                 vp_h: current_vp_h,
                             });
+                        }
+                        PendingDraw::SetScissor { rect } => {
+                            plans.push(Plan::SetScissor { rect: *rect });
                         }
                         PendingDraw::Rgb {
                             blob_offset,
@@ -689,15 +705,10 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
 
                 let mut tex_res: Option<(PipelineId, BufferId)> = None;
                 if !tex_blob.is_empty() {
-                    let tex_kind = if plans.iter().all(|plan| {
-                        matches!(
-                            plan,
-                            Plan::Tex {
-                                sample_kind: TexSampleKind::Rgba,
-                                ..
-                            }
-                        )
-                    }) {
+                    let tex_kind = if plans.iter().filter_map(|plan| match plan {
+                        Plan::Tex { sample_kind, .. } => Some(*sample_kind),
+                        _ => None,
+                    }).all(|sample_kind| sample_kind == TexSampleKind::Rgba) {
                         TexSampleKind::Rgba
                     } else {
                         TexSampleKind::Mask
@@ -739,9 +750,17 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                             cmds.push(Command::SetViewport(Viewport {
                                 x: 0,
                                 y: 0,
-                                width: vp_w as i32,
-                                height: vp_h as i32,
-                            }));
+                                    width: vp_w as i32,
+                                    height: vp_h as i32,
+                                }));
+                        }
+                        Plan::SetScissor { rect } => {
+                            cmds.push(Command::SetScissor(rect.map(|scissor| GfxScissorRect {
+                                x: scissor.x,
+                                y: scissor.y,
+                                width: scissor.width,
+                                height: scissor.height,
+                            })));
                         }
                         Plan::Rgb {
                             offset,
