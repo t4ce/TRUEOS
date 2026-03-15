@@ -286,7 +286,7 @@ fn handle_submit(
             shell2_qjs::submit(io, qjs_mode, submitted);
         }
         ShellMode2::Ai => {
-            shell2_ai::submit(io, ai_mode, submitted);
+            shell2_ai::submit(spawner, io, ai_mode, submitted);
         }
     }
 }

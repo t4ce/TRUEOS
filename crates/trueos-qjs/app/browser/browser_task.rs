@@ -340,6 +340,11 @@ pub fn primary_browser_instance_id() -> u32 {
 }
 
 #[inline]
+pub fn primary_browser_started() -> bool {
+    browser_started(PRIMARY_BROWSER_INSTANCE_ID)
+}
+
+#[inline]
 pub fn active_browser_instance_id() -> u32 {
     if browser_started(PRIMARY_BROWSER_INSTANCE_ID) {
         return PRIMARY_BROWSER_INSTANCE_ID;
