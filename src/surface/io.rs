@@ -3090,4 +3090,85 @@ pub mod cabi {
         *out_wheel = m.wheel;
         1
     }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_input_keyboard_count() -> u32 {
+        crate::v::keyboard::keyboard_count()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_keyboard_modifiers(
+        keyboard_id: u32,
+        out_modifiers: *mut u8,
+    ) -> i32 {
+        if out_modifiers.is_null() {
+            return -1;
+        }
+        let Some(modifiers) = crate::v::keyboard::keyboard_modifiers(keyboard_id) else {
+            return 1;
+        };
+        *out_modifiers = modifiers;
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_keyboard_keys(
+        keyboard_id: u32,
+        out_keys: *mut u8,
+        out_ascii: *mut u8,
+    ) -> i32 {
+        if out_keys.is_null() || out_ascii.is_null() {
+            return -1;
+        }
+        let Some(state) = crate::v::keyboard::keyboard_state(keyboard_id) else {
+            return 1;
+        };
+        core::ptr::copy_nonoverlapping(state.keys.as_ptr(), out_keys, state.keys.len());
+        core::ptr::copy_nonoverlapping(state.ascii.as_ptr(), out_ascii, state.ascii.len());
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_pop_keyboard_output(
+        out: *mut crate::v::keyboard::TrueosKeyboardOutputEvent,
+    ) -> i32 {
+        if out.is_null() {
+            return -1;
+        }
+        let Some(evt) = crate::v::keyboard::pop_output_event() else {
+            return 0;
+        };
+        *out = evt;
+        1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_read_keyboard_output_since(
+        read_seq: u64,
+        out: *mut crate::v::keyboard::TrueosKeyboardOutputEvent,
+        out_cap: u32,
+        out_next_seq: *mut u64,
+        out_dropped: *mut u32,
+    ) -> u32 {
+        let mut next_seq = read_seq;
+        let mut dropped = 0u32;
+        let wrote = if out.is_null() || out_cap == 0 {
+            0usize
+        } else {
+            let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
+            let (next, lost, written) =
+                crate::v::keyboard::read_output_events_since(read_seq, out_slice);
+            next_seq = next;
+            dropped = lost;
+            written
+        };
+
+        if !out_next_seq.is_null() {
+            *out_next_seq = next_seq;
+        }
+        if !out_dropped.is_null() {
+            *out_dropped = dropped;
+        }
+        wrote as u32
+    }
 }

@@ -54,7 +54,6 @@ static UI2_TRIANGLE_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_MATMUL_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_INTEL_TRIANGLE_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
-static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
 static UAC_EVENT_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static UAC_SONG_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_MUX_STARTED: AtomicBool = AtomicBool::new(false);
@@ -491,13 +490,6 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     SpawnAttempt::Spawned
 }
 
-fn spawn_hid_input_logger(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::usb::hid::input_logger()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_uac_song(spawner: Spawner) -> SpawnAttempt {
     let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
         // Wait until AP1 executor is online so this task runs there.
@@ -581,8 +573,6 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
 }
 
 // --- registry ---
-
-const HID_ANY_CLAIMED: u32 = crate::v::readiness::HID_KEYBOARD_CLAIMED;
 
 const NET_CONFIGURED_AND_ROOT_READY: u32 =
     crate::v::readiness::NET_CONFIGURED | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
@@ -759,13 +749,6 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &USB_CONTROLLER_TASKS_STARTED,
         spawn: spawn_usb_controller_tasks,
-    },
-    TaskSpec {
-        name: "hid-input-logger",
-        disabled: false,
-        required: HID_ANY_CLAIMED,
-        started: &HID_INPUT_LOGGER_STARTED,
-        spawn: spawn_hid_input_logger,
     },
     TaskSpec {
         name: "uac-event-drain",

@@ -1,6 +1,7 @@
 pub mod cursor;
 pub mod disc;
 pub mod fs;
+pub mod keyboard;
 pub mod leds;
 pub mod net;
 pub mod readiness;
