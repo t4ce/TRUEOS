@@ -9,6 +9,14 @@ use parry2d::query;
 use parry2d::shape::{Ball, Cuboid};
 use spin::{Mutex, Once};
 
+#[path = "ui2_win_deco.rs"]
+mod win_deco;
+
+mod win;
+
+pub use self::win::*;
+pub use self::win_deco::*;
+
 const UI2_TITLE_H: f32 = 26.0;
 const UI2_BOTTOM_BAR_H: f32 = 18.0;
 const UI2_SYSTEM_SCROLLBAR_PX: f32 = 4.0;
@@ -95,6 +103,7 @@ enum Ui2HitKind {
     WindowDecoration,
     WindowResizeButton,
     WindowVerticalScrollbar,
+    WindowHorizontalScrollbar,
     BrowserInteractive,
 }
 
@@ -109,70 +118,6 @@ enum Ui2SystemButtonAction {
 enum Ui2WindowKind {
     HostedBrowser,
     HostedSurface,
-}
-
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Ui2WindowDecorationMode {
-    System = 0,
-    Client = 1,
-    None = 2,
-}
-
-impl Ui2WindowDecorationMode {
-    #[inline]
-    const fn from_u32(value: u32) -> Option<Self> {
-        match value {
-            0 => Some(Self::System),
-            1 => Some(Self::Client),
-            2 => Some(Self::None),
-            _ => None,
-        }
-    }
-}
-
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Ui2WindowVerticalScrollbarSide {
-    Left = 0,
-    Right = 1,
-}
-
-impl Ui2WindowVerticalScrollbarSide {
-    #[inline]
-    const fn from_u32(value: u32) -> Option<Self> {
-        match value {
-            0 => Some(Self::Left),
-            1 => Some(Self::Right),
-            _ => None,
-        }
-    }
-}
-
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Ui2WindowHorizontalScrollbarSide {
-    Top = 0,
-    Bottom = 1,
-}
-
-impl Ui2WindowHorizontalScrollbarSide {
-    #[inline]
-    const fn from_u32(value: u32) -> Option<Self> {
-        match value {
-            0 => Some(Self::Top),
-            1 => Some(Self::Bottom),
-            _ => None,
-        }
-    }
-}
-
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Ui2WindowStateKind {
-    Normal = 0,
-    Minimized = 1,
-    Maximized = 2,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -297,29 +242,6 @@ struct Ui2State {
     scroll_pan_drag: Ui2WindowScrollPanDrag,
     windows: Vec<Ui2Window>,
     loadscreen_end_signaled: bool,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub struct TrueosUi2WindowInfo {
-    pub id: u32,
-    pub kind: u32,
-    pub state: u32,
-    pub decoration_mode: u32,
-    pub visible: u32,
-    pub selected: u32,
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
-    pub content_x: i32,
-    pub content_y: i32,
-    pub content_width: u32,
-    pub content_height: u32,
-    pub decoration_x: i32,
-    pub decoration_y: i32,
-    pub decoration_width: u32,
-    pub decoration_height: u32,
 }
 
 static UI2_STATE: Once<Mutex<Ui2State>> = Once::new();
@@ -505,6 +427,14 @@ fn hosted_browser_scroll_max(
     content_h.saturating_sub(viewport_h)
 }
 
+fn hosted_browser_scroll_x_max(
+    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
+) -> u32 {
+    let viewport_w = snapshot.viewport_width.max(1);
+    let content_w = snapshot.content_width.max(viewport_w);
+    content_w.saturating_sub(viewport_w)
+}
+
 fn clamp_hosted_browser_scroll(
     snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
     requested_scroll: i64,
@@ -513,10 +443,24 @@ fn clamp_hosted_browser_scroll(
     requested_scroll.clamp(0, max_scroll) as u32
 }
 
+fn clamp_hosted_browser_scroll_x(
+    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
+    requested_scroll: i64,
+) -> u32 {
+    let max_scroll = hosted_browser_scroll_x_max(snapshot) as i64;
+    requested_scroll.clamp(0, max_scroll) as u32
+}
+
 fn normalized_hosted_browser_scroll(
     snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
 ) -> u32 {
     clamp_hosted_browser_scroll(snapshot, snapshot.scroll_y as i64)
+}
+
+fn normalized_hosted_browser_scroll_x(
+    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
+) -> u32 {
+    clamp_hosted_browser_scroll_x(snapshot, snapshot.scroll_x as i64)
 }
 
 fn browser_interactive_state_for_window(
@@ -692,6 +636,15 @@ impl Ui2WindowHitSource for Ui2Window {
                 owner_window_id: self.id,
                 item_id: 3,
                 kind: Ui2HitKind::WindowVerticalScrollbar,
+                rect,
+                z: self.z,
+            });
+        }
+        if let Some(rect) = window_horizontal_scrollbar_rect(ctx.state, self) {
+            scene.append(Ui2HitEntry {
+                owner_window_id: self.id,
+                item_id: 4,
+                kind: Ui2HitKind::WindowHorizontalScrollbar,
                 rect,
                 z: self.z,
             });
@@ -1023,6 +976,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidC
                 Ui2HitKind::WindowVerticalScrollbar => {
                     begin_scroll_drag = true;
                 }
+                Ui2HitKind::WindowHorizontalScrollbar => {}
                 Ui2HitKind::WindowDecoration => {
                     if press_system_button_action.is_none() {
                         let _ = begin_move_drag_for_cursor(
@@ -1391,7 +1345,12 @@ fn right_half_window_rect(state: &Ui2State) -> Ui2Rect {
     Ui2Rect::new(view_w - half_w, 0.0, half_w, view_h)
 }
 
-fn set_window_rect_in_state(state: &mut Ui2State, id: u32, rect: Ui2Rect, reason: &'static str) -> bool {
+fn set_window_rect_in_state(
+    state: &mut Ui2State,
+    id: u32,
+    rect: Ui2Rect,
+    reason: &'static str,
+) -> bool {
     let view_w = state.view_w;
     let view_h = state.view_h;
     let Some(window) = window_mut(state, id) else {
@@ -1423,14 +1382,24 @@ fn set_window_rect_in_state(state: &mut Ui2State, id: u32, rect: Ui2Rect, reason
     commit_window_geometry_change(state, id, reason)
 }
 
-fn window_edge_drop_action(state: &Ui2State, cursor_x: f32, cursor_y: f32) -> Option<Ui2WindowEdgeDropAction> {
+fn window_edge_drop_action(
+    state: &Ui2State,
+    cursor_x: f32,
+    cursor_y: f32,
+) -> Option<Ui2WindowEdgeDropAction> {
     let right_edge = (state.view_w.saturating_sub(1)) as f32;
     let bottom_edge = (state.view_h.saturating_sub(1)) as f32;
     let candidates = [
         (cursor_x.abs(), Ui2WindowEdgeDropAction::SnapLeft),
-        ((right_edge - cursor_x).abs(), Ui2WindowEdgeDropAction::SnapRight),
+        (
+            (right_edge - cursor_x).abs(),
+            Ui2WindowEdgeDropAction::SnapRight,
+        ),
         (cursor_y.abs(), Ui2WindowEdgeDropAction::Maximize),
-        ((bottom_edge - cursor_y).abs(), Ui2WindowEdgeDropAction::Minimize),
+        (
+            (bottom_edge - cursor_y).abs(),
+            Ui2WindowEdgeDropAction::Minimize,
+        ),
     ];
     let mut best: Option<(f32, Ui2WindowEdgeDropAction)> = None;
     for candidate in candidates {
@@ -1457,9 +1426,12 @@ fn apply_window_edge_drop_action(
         Ui2WindowEdgeDropAction::SnapLeft => {
             set_window_rect_in_state(state, id, left_half_window_rect(state), "window-snap-left")
         }
-        Ui2WindowEdgeDropAction::SnapRight => {
-            set_window_rect_in_state(state, id, right_half_window_rect(state), "window-snap-right")
-        }
+        Ui2WindowEdgeDropAction::SnapRight => set_window_rect_in_state(
+            state,
+            id,
+            right_half_window_rect(state),
+            "window-snap-right",
+        ),
         Ui2WindowEdgeDropAction::Maximize => maximize_window_in_state(state, id),
         Ui2WindowEdgeDropAction::Minimize => minimize_window_in_state(state, id),
     }
@@ -1963,21 +1935,26 @@ fn update_scroll_pan_for_cursor(
     state.scroll_pan_drag.last_cursor_x = cursor_x;
     state.scroll_pan_drag.last_cursor_y = cursor_y;
 
+    let dx_px = libm::roundf(dx) as i32;
     let dy_px = libm::roundf(dy) as i32;
-    if dy_px == 0 {
+    if dx_px == 0 && dy_px == 0 {
         return false;
     }
 
     let snapshot = browser_surface_state_for_window(window);
-    let next_scroll = clamp_hosted_browser_scroll(
+    let next_scroll_x = clamp_hosted_browser_scroll_x(
+        &snapshot,
+        i64::from(normalized_hosted_browser_scroll_x(&snapshot)).saturating_sub(i64::from(dx_px)),
+    );
+    let next_scroll_y = clamp_hosted_browser_scroll(
         &snapshot,
         i64::from(normalized_hosted_browser_scroll(&snapshot)).saturating_sub(i64::from(dy_px)),
     );
-    if trueos_qjs::browser_task::set_hosted_scroll_y_for_browser(
+    if trueos_qjs::browser_task::set_hosted_scroll_for_browser(
         window_browser_instance_id(window),
-        next_scroll,
+        next_scroll_x,
+        next_scroll_y,
     ) {
-        let _ = dx;
         state.compose_reason = "scroll-pan";
         true
     } else {
@@ -2270,738 +2247,6 @@ fn sync_pending_window_containers(state: &mut Ui2State) {
     }
 }
 
-pub fn browser_window_id() -> Option<u32> {
-    let id = UI2_BROWSER_WINDOW_ID.load(Ordering::Acquire);
-    if id == 0 { None } else { Some(id) }
-}
-
-pub fn browser_window_id_for_instance(browser_instance_id: u32) -> Option<u32> {
-    let browser_instance_id = if browser_instance_id == 0 {
-        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
-    } else {
-        browser_instance_id
-    };
-    let state_lock = init_state();
-    let state = state_lock.lock();
-    state
-        .windows
-        .iter()
-        .find(|window| {
-            window.kind == Ui2WindowKind::HostedBrowser
-                && window_browser_instance_id(window) == browser_instance_id
-        })
-        .map(|window| window.id)
-}
-
-pub fn window_info_by_id(id: u32) -> Option<TrueosUi2WindowInfo> {
-    let state_lock = init_state();
-    let state = state_lock.lock();
-    state
-        .windows
-        .iter()
-        .find(|window| window.id == id)
-        .map(|window| window_info(&state, window))
-}
-
-pub fn is_window_minimized(id: u32) -> bool {
-    let state_lock = init_state();
-    let state = state_lock.lock();
-    state
-        .windows
-        .iter()
-        .find(|window| window.id == id)
-        .map(|window| window.state == Ui2WindowStateKind::Minimized)
-        .unwrap_or(false)
-}
-
-pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let id = alloc_window(
-        &mut state,
-        Ui2WindowKind::HostedSurface,
-        title,
-        rect,
-        z,
-        alpha,
-    );
-    state.compose_reason = "create-window";
-    refresh_window_hit_entries(&mut state, id);
-    UI2_DIRTY.store(true, Ordering::Release);
-    id
-}
-
-pub fn create_hosted_browser_window(
-    title: &str,
-    rect: Ui2Rect,
-    z: i16,
-    alpha: u8,
-    browser_instance_id: u32,
-) -> u32 {
-    let browser_instance_id = if browser_instance_id == 0 {
-        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
-    } else {
-        browser_instance_id
-    };
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let id = alloc_window(
-        &mut state,
-        Ui2WindowKind::HostedBrowser,
-        title,
-        rect,
-        z,
-        alpha,
-    );
-    if let Some(window) = window_mut(&mut state, id) {
-        window.browser_instance_id = browser_instance_id;
-    }
-    if browser_instance_id == trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID {
-        UI2_BROWSER_WINDOW_ID.store(id, Ordering::Release);
-    }
-    let _ = trueos_qjs::browser_task::bind_browser_window_to_instance(browser_instance_id, id);
-    state.compose_reason = "create-browser-window";
-    refresh_window_hit_entries(&mut state, id);
-    UI2_DIRTY.store(true, Ordering::Release);
-    id
-}
-
-pub fn create_hosted_surface_window(
-    title: &str,
-    rect: Ui2Rect,
-    z: i16,
-    alpha: u8,
-    tex_id: u32,
-    blend_enabled: bool,
-) -> u32 {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let id = alloc_window(
-        &mut state,
-        Ui2WindowKind::HostedSurface,
-        title,
-        rect,
-        z,
-        alpha,
-    );
-    if let Some(window) = window_mut(&mut state, id) {
-        window.content_tex_id = tex_id;
-        window.content_tex_blend = blend_enabled;
-    }
-    state.compose_reason = "create-window";
-    refresh_window_hit_entries(&mut state, id);
-    UI2_DIRTY.store(true, Ordering::Release);
-    id
-}
-
-pub fn create_hosted_surface_content_window(
-    title: &str,
-    content_rect: Ui2Rect,
-    z: i16,
-    alpha: u8,
-    tex_id: u32,
-    blend_enabled: bool,
-) -> u32 {
-    let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
-    create_hosted_surface_window(title, rect, z, alpha, tex_id, blend_enabled)
-}
-
-pub fn set_window_hosted_surface_content(id: u32, tex_id: u32, blend_enabled: bool) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.content_tex_id == tex_id && window.content_tex_blend == blend_enabled {
-        return true;
-    }
-    window.content_tex_id = tex_id;
-    window.content_tex_blend = blend_enabled;
-    state.compose_reason = "texture-window";
-    let noted = note_window_dirty(&mut state, id, "texture-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-    }
-    noted
-}
-
-#[allow(dead_code)]
-pub fn create_texture_window(
-    title: &str,
-    rect: Ui2Rect,
-    z: i16,
-    alpha: u8,
-    tex_id: u32,
-    blend_enabled: bool,
-) -> u32 {
-    create_hosted_surface_window(title, rect, z, alpha, tex_id, blend_enabled)
-}
-
-#[allow(dead_code)]
-pub fn create_texture_content_window(
-    title: &str,
-    content_rect: Ui2Rect,
-    z: i16,
-    alpha: u8,
-    tex_id: u32,
-    blend_enabled: bool,
-) -> u32 {
-    create_hosted_surface_content_window(title, content_rect, z, alpha, tex_id, blend_enabled)
-}
-
-#[allow(dead_code)]
-pub fn set_window_texture_content(id: u32, tex_id: u32, blend_enabled: bool) -> bool {
-    set_window_hosted_surface_content(id, tex_id, blend_enabled)
-}
-
-pub struct Ui2SurfaceWindow {
-    window_id: u32,
-    tex_id: u32,
-    width: u32,
-    height: u32,
-}
-
-impl Ui2SurfaceWindow {
-    pub fn new(
-        title: &str,
-        content_rect: Ui2Rect,
-        z: i16,
-        alpha: u8,
-        tex_id: u32,
-        blend_enabled: bool,
-        clear_rgba: [u8; 4],
-    ) -> Option<Self> {
-        let width = (content_rect.w.max(1.0) + 0.5) as u32;
-        let height = (content_rect.h.max(1.0) + 0.5) as u32;
-        let pixels = alloc::vec![clear_rgba; (width as usize) * (height as usize)]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<u8>>();
-        let rc = unsafe {
-            crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
-                tex_id,
-                width,
-                height,
-                pixels.as_ptr(),
-                pixels.len(),
-            )
-        };
-        if rc != 0 {
-            crate::log!(
-                "ui2-surface-window: init upload failed tex={} rc={} size={}x{}\n",
-                tex_id,
-                rc,
-                width,
-                height
-            );
-            return None;
-        }
-
-        let window_id = create_hosted_surface_content_window(
-            title,
-            Ui2Rect {
-                x: content_rect.x,
-                y: content_rect.y,
-                w: width as f32,
-                h: height as f32,
-            },
-            z,
-            alpha,
-            tex_id,
-            blend_enabled,
-        );
-        Some(Self {
-            window_id,
-            tex_id,
-            width,
-            height,
-        })
-    }
-
-    #[inline]
-    pub fn window_id(&self) -> u32 {
-        self.window_id
-    }
-
-    #[inline]
-    pub fn tex_id(&self) -> u32 {
-        self.tex_id
-    }
-
-    #[inline]
-    pub fn size(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-
-    pub fn render_rgb_triangles(
-        &self,
-        clear_rgb: u32,
-        verts: &[u8],
-        repaint_reason: &'static str,
-    ) -> bool {
-        let rc = crate::surface::io::cabi::render_rgb_triangles_to_texture(
-            self.tex_id,
-            clear_rgb,
-            verts,
-        );
-        if rc != 0 {
-            crate::log!(
-                "ui2-surface-window: rgb render failed window={} tex={} rc={}\n",
-                self.window_id,
-                self.tex_id,
-                rc
-            );
-            return false;
-        }
-        if is_window_minimized(self.window_id) {
-            return true;
-        }
-        request_window_content_present(self.window_id, repaint_reason)
-    }
-
-    #[allow(dead_code)]
-    pub fn upload_rgba(&self, pixels: &[u8], repaint_reason: &'static str) -> bool {
-        let expected = self.width as usize * self.height as usize * 4;
-        if pixels.len() != expected {
-            crate::log!(
-                "ui2-surface-window: upload size mismatch tex={} got={} expected={}\n",
-                self.tex_id,
-                pixels.len(),
-                expected
-            );
-            return false;
-        }
-        let rc = unsafe {
-            crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
-                self.tex_id,
-                self.width,
-                self.height,
-                pixels.as_ptr(),
-                pixels.len(),
-            )
-        };
-        if rc != 0 {
-            crate::log!(
-                "ui2-surface-window: rgba upload failed window={} tex={} rc={}\n",
-                self.window_id,
-                self.tex_id,
-                rc
-            );
-            return false;
-        }
-        if is_window_minimized(self.window_id) {
-            return true;
-        }
-        request_window_content_present(self.window_id, repaint_reason)
-    }
-}
-
-pub fn window_content_rect_by_id(id: u32) -> Option<Ui2Rect> {
-    let state_lock = init_state();
-    let state = state_lock.lock();
-    state
-        .windows
-        .iter()
-        .find(|window| window.id == id)
-        .and_then(|window| window_content_rect(&state, window))
-}
-
-pub fn move_window(id: u32, x: f32, y: f32) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.state != Ui2WindowStateKind::Normal {
-        window.state = Ui2WindowStateKind::Normal;
-    }
-    window.rect.x = x;
-    window.rect.y = y;
-    if window.state == Ui2WindowStateKind::Normal {
-        window.restore_rect = window.rect;
-    }
-    state.compose_reason = "move-window";
-    let noted = note_window_dirty(&mut state, id, "move-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-        refresh_window_hit_entries(&mut state, id);
-    }
-    noted
-}
-
-pub fn resize_window(id: u32, w: f32, h: f32) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.state != Ui2WindowStateKind::Normal {
-        window.state = Ui2WindowStateKind::Normal;
-    }
-    window.rect.w = w.max(1.0);
-    window.rect.h = h.max(1.0);
-    if window.state == Ui2WindowStateKind::Normal {
-        window.restore_rect = window.rect;
-    }
-    state.compose_reason = "resize-window";
-    let noted = note_window_dirty(&mut state, id, "resize-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-        refresh_window_hit_entries(&mut state, id);
-    }
-    noted
-}
-
-pub fn set_window_title(id: u32, title: &str) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.title == title {
-        return true;
-    }
-    window.title = String::from(title);
-    state.compose_reason = "title-window";
-    note_window_dirty(&mut state, id, "title-window")
-}
-
-pub fn raise_window(id: u32) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let top_z = state
-        .windows
-        .iter()
-        .map(|window| window.z)
-        .max()
-        .unwrap_or(0);
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    window.z = top_z.saturating_add(1);
-    state.compose_reason = "raise-window";
-    let noted = note_window_dirty(&mut state, id, "raise-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-        refresh_window_hit_entries(&mut state, id);
-    }
-    noted
-}
-
-pub fn focus_window(id: u32) -> bool {
-    raise_window(id)
-}
-
-pub fn set_window_visible(id: u32, visible: bool) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    set_window_visible_in_state(&mut state, id, visible)
-}
-
-pub fn close_window(id: u32) -> bool {
-    set_window_visible(id, false)
-}
-
-pub fn set_window_decorations(id: u32, mode: Ui2WindowDecorationMode) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.decoration_mode == mode {
-        return true;
-    }
-    window.decoration_mode = mode;
-    state.compose_reason = "decor-window";
-    let noted = note_window_dirty(&mut state, id, "decor-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-        refresh_window_hit_entries(&mut state, id);
-    }
-    noted
-}
-
-pub fn set_window_titlebar_visible(id: u32, visible: bool) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.titlebar_visible == visible {
-        return true;
-    }
-    window.titlebar_visible = visible;
-    state.compose_reason = "decor-titlebar-window";
-    let noted = note_window_dirty(&mut state, id, "decor-titlebar-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-        refresh_window_hit_entries(&mut state, id);
-        if !visible && state.move_drag.window_id == id {
-            state.move_drag = Ui2WindowMoveDrag::default();
-        }
-    }
-    noted
-}
-
-pub fn set_window_bottom_bar_visible(id: u32, visible: bool) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.bottom_bar_visible == visible {
-        return true;
-    }
-    window.bottom_bar_visible = visible;
-    state.compose_reason = "decor-bottombar-window";
-    let noted = note_window_dirty(&mut state, id, "decor-bottombar-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-        refresh_window_hit_entries(&mut state, id);
-        if !visible && state.resize_drag.window_id == id {
-            state.resize_drag = Ui2WindowResizeDrag::default();
-        }
-    }
-    noted
-}
-
-pub fn set_window_left_scrollbar_visible(id: u32, visible: bool) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.left_scrollbar_visible == visible {
-        return true;
-    }
-    window.left_scrollbar_visible = visible;
-    state.compose_reason = "decor-left-scrollbar-window";
-    let noted = note_window_dirty(&mut state, id, "decor-left-scrollbar-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-        refresh_window_hit_entries(&mut state, id);
-        if !visible && state.scroll_drag.window_id == id {
-            state.scroll_drag = Ui2WindowScrollDrag::default();
-        }
-    }
-    noted
-}
-
-pub fn set_window_bottom_scrollbar_visible(id: u32, visible: bool) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.bottom_scrollbar_visible == visible {
-        return true;
-    }
-    window.bottom_scrollbar_visible = visible;
-    state.compose_reason = "decor-bottom-scrollbar-window";
-    let noted = note_window_dirty(&mut state, id, "decor-bottom-scrollbar-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-        refresh_window_hit_entries(&mut state, id);
-        if !visible && state.scroll_drag.window_id == id {
-            state.scroll_drag = Ui2WindowScrollDrag::default();
-        }
-    }
-    noted
-}
-
-pub fn set_window_vertical_scrollbar_side(
-    id: u32,
-    side: Ui2WindowVerticalScrollbarSide,
-) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.vertical_scrollbar_side == side {
-        return true;
-    }
-    window.vertical_scrollbar_side = side;
-    state.compose_reason = "decor-vertical-scrollbar-side-window";
-    let noted = note_window_dirty(&mut state, id, "decor-vertical-scrollbar-side-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-        refresh_window_hit_entries(&mut state, id);
-        if state.scroll_drag.window_id == id {
-            state.scroll_drag = Ui2WindowScrollDrag::default();
-        }
-    }
-    noted
-}
-
-pub fn set_window_horizontal_scrollbar_side(
-    id: u32,
-    side: Ui2WindowHorizontalScrollbarSide,
-) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = window_mut(&mut state, id) else {
-        return false;
-    };
-    if window.horizontal_scrollbar_side == side {
-        return true;
-    }
-    window.horizontal_scrollbar_side = side;
-    state.compose_reason = "decor-horizontal-scrollbar-side-window";
-    let noted = note_window_dirty(&mut state, id, "decor-horizontal-scrollbar-side-window");
-    if noted {
-        let _ = note_window_viewport_sync_needed(&mut state, id);
-        refresh_window_hit_entries(&mut state, id);
-    }
-    noted
-}
-
-pub fn minimize_window(id: u32) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    minimize_window_in_state(&mut state, id)
-}
-
-pub fn maximize_window(id: u32) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    maximize_window_in_state(&mut state, id)
-}
-
-pub fn restore_window(id: u32) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    restore_window_in_state(&mut state, id)
-}
-
-pub fn begin_window_move(id: u32) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = state
-        .windows
-        .iter()
-        .find(|window| window.id == id && window_is_renderable(window))
-        .cloned()
-    else {
-        return false;
-    };
-    let Some(cursor_slot_id) = pick_drag_cursor_slot(&state, &window) else {
-        return false;
-    };
-    let Some(cursor) = state
-        .cursors
-        .iter()
-        .find(|cursor| cursor.slot_id == cursor_slot_id)
-        .copied()
-    else {
-        return false;
-    };
-    if (cursor.buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
-        return false;
-    }
-    state.move_drag = Ui2WindowMoveDrag {
-        active: true,
-        window_id: id,
-        cursor_slot_id,
-        grab_dx: cursor.x - window.rect.x,
-        grab_dy: cursor.y - window.rect.y,
-    };
-    state.resize_drag = Ui2WindowResizeDrag::default();
-    state.compose_reason = "begin-window-move";
-    let top_z = state
-        .windows
-        .iter()
-        .map(|window| window.z)
-        .max()
-        .unwrap_or(0);
-    if let Some(window_mut) = window_mut(&mut state, id) {
-        window_mut.z = top_z.saturating_add(1);
-    }
-    let noted = note_window_dirty(&mut state, id, "begin-window-move");
-    if noted {
-        refresh_window_hit_entries(&mut state, id);
-    }
-    noted
-}
-
-pub fn begin_window_resize(id: u32, edge_mask: u32) -> bool {
-    let edge_mask = edge_mask
-        & (UI2_WINDOW_RESIZE_LEFT
-            | UI2_WINDOW_RESIZE_TOP
-            | UI2_WINDOW_RESIZE_RIGHT
-            | UI2_WINDOW_RESIZE_BOTTOM);
-    if !is_valid_resize_edge_mask(edge_mask) {
-        return false;
-    }
-
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let Some(window) = state
-        .windows
-        .iter()
-        .find(|window| window.id == id && window_is_renderable(window))
-        .cloned()
-    else {
-        return false;
-    };
-    if window.state != Ui2WindowStateKind::Normal {
-        return false;
-    }
-    let Some(cursor_slot_id) = pick_drag_cursor_slot(&state, &window) else {
-        return false;
-    };
-    let Some(cursor) = state
-        .cursors
-        .iter()
-        .find(|cursor| cursor.slot_id == cursor_slot_id)
-        .copied()
-    else {
-        return false;
-    };
-    if (cursor.buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
-        return false;
-    }
-
-    begin_window_resize_for_cursor(&mut state, cursor_slot_id, id, edge_mask)
-}
-
-fn request_window_composite(id: u32, reason: &'static str) -> bool {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    state.compose_reason = reason;
-    note_window_dirty(&mut state, id, reason)
-}
-
-pub fn request_window_content_present(id: u32, reason: &'static str) -> bool {
-    request_window_composite(id, reason)
-}
-
-pub fn request_window_repaint(id: u32, reason: &'static str) -> bool {
-    request_window_content_present(id, reason)
-}
-
-pub fn request_browser_repaint(reason: &'static str) -> bool {
-    let Some(id) = browser_window_id() else {
-        return false;
-    };
-    request_window_content_present(id, reason)
-}
-
-fn is_primary_browser_window(window: &Ui2Window) -> bool {
-    matches!(window.kind, Ui2WindowKind::HostedBrowser)
-}
-
-pub fn request_full_recompose(reason: &'static str) {
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    state.compose_reason = reason;
-    for window in &mut state.windows {
-        window.dirty = true;
-        window.last_reason = reason;
-    }
-    UI2_DIRTY.store(true, Ordering::Release);
-}
-
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_primary_browser_window_id() -> u32 {
     browser_window_id().unwrap_or(0)
@@ -3149,289 +2394,6 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_begin_resize(
         0
     } else {
         -1
-    }
-}
-
-fn window_decoration_rect(state: &Ui2State, window: &Ui2Window) -> Option<Ui2Rect> {
-    if window.decoration_mode != Ui2WindowDecorationMode::System || !window.titlebar_visible {
-        return None;
-    }
-    let rect = effective_window_rect(state, window);
-    let h = if window.state == Ui2WindowStateKind::Minimized {
-        rect.h
-    } else {
-        UI2_TITLE_H
-    };
-    if !(rect.w > 0.0 && h > 0.0) {
-        return None;
-    }
-    Some(Ui2Rect::new(rect.x, rect.y, rect.w, h))
-}
-
-#[inline]
-fn window_titlebar_height(window: &Ui2Window) -> f32 {
-    if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
-        UI2_TITLE_H
-    } else {
-        0.0
-    }
-}
-
-#[inline]
-fn window_bottom_bar_height(window: &Ui2Window) -> f32 {
-    if window.decoration_mode == Ui2WindowDecorationMode::System && window.bottom_bar_visible {
-        UI2_BOTTOM_BAR_H
-    } else {
-        0.0
-    }
-}
-
-#[inline]
-fn window_vertical_scrollbar_width(window: &Ui2Window) -> f32 {
-    if window.decoration_mode == Ui2WindowDecorationMode::System && window.left_scrollbar_visible {
-        UI2_SYSTEM_SCROLLBAR_PX
-    } else {
-        0.0
-    }
-}
-
-#[inline]
-fn window_horizontal_scrollbar_height(window: &Ui2Window) -> f32 {
-    if window.decoration_mode == Ui2WindowDecorationMode::System && window.bottom_scrollbar_visible
-    {
-        UI2_SYSTEM_SCROLLBAR_PX
-    } else {
-        0.0
-    }
-}
-
-#[inline]
-fn window_left_inset(window: &Ui2Window) -> f32 {
-    if window.vertical_scrollbar_side == Ui2WindowVerticalScrollbarSide::Left {
-        window_vertical_scrollbar_width(window)
-    } else {
-        0.0
-    }
-}
-
-#[inline]
-fn window_right_inset(window: &Ui2Window) -> f32 {
-    if window.vertical_scrollbar_side == Ui2WindowVerticalScrollbarSide::Right {
-        window_vertical_scrollbar_width(window)
-    } else {
-        0.0
-    }
-}
-
-#[inline]
-fn window_top_inset(window: &Ui2Window) -> f32 {
-    let mut inset = window_titlebar_height(window);
-    if window.horizontal_scrollbar_side == Ui2WindowHorizontalScrollbarSide::Top {
-        inset += window_horizontal_scrollbar_height(window);
-    }
-    inset
-}
-
-#[inline]
-fn window_bottom_inset(window: &Ui2Window) -> f32 {
-    let mut inset = window_bottom_bar_height(window);
-    if window.horizontal_scrollbar_side == Ui2WindowHorizontalScrollbarSide::Bottom {
-        inset += window_horizontal_scrollbar_height(window);
-    }
-    inset
-}
-
-fn window_bottom_bar_rect(state: &Ui2State, window: &Ui2Window) -> Option<Ui2Rect> {
-    if window.decoration_mode != Ui2WindowDecorationMode::System || !window.bottom_bar_visible {
-        return None;
-    }
-    if window.state == Ui2WindowStateKind::Minimized {
-        return None;
-    }
-    let rect = effective_window_rect(state, window);
-    let bar_h = window_bottom_bar_height(window);
-    if !(rect.w > 0.0 && rect.h > bar_h) {
-        return None;
-    }
-    Some(Ui2Rect::new(
-        rect.x,
-        rect.y + rect.h - bar_h,
-        rect.w,
-        bar_h,
-    ))
-}
-
-fn window_bottom_scrollbar_rect(state: &Ui2State, window: &Ui2Window) -> Option<Ui2Rect> {
-    if window.decoration_mode != Ui2WindowDecorationMode::System || !window.bottom_scrollbar_visible {
-        return None;
-    }
-    if window.state == Ui2WindowStateKind::Minimized {
-        return None;
-    }
-    let rect = effective_window_rect(state, window);
-    let title_h = window_titlebar_height(window);
-    let bottom_bar_h = window_bottom_bar_height(window);
-    let scrollbar_h = window_horizontal_scrollbar_height(window);
-    if !(rect.w > 0.0 && rect.h > (title_h + bottom_bar_h + scrollbar_h)) {
-        return None;
-    }
-    let y = if window.horizontal_scrollbar_side == Ui2WindowHorizontalScrollbarSide::Top {
-        rect.y + title_h
-    } else {
-        rect.y + rect.h - bottom_bar_h - scrollbar_h
-    };
-    Some(Ui2Rect::new(
-        rect.x,
-        y,
-        rect.w.max(1.0),
-        scrollbar_h,
-    ))
-}
-
-fn window_content_rect(state: &Ui2State, window: &Ui2Window) -> Option<Ui2Rect> {
-    if window.state == Ui2WindowStateKind::Minimized {
-        return None;
-    }
-    let rect = effective_window_rect(state, window);
-    match window.decoration_mode {
-        Ui2WindowDecorationMode::System => {
-            let left_inset = window_left_inset(window);
-            let right_inset = window_right_inset(window);
-            let top_inset = window_top_inset(window);
-            let bottom_inset = window_bottom_inset(window);
-            let w = (rect.w - left_inset - right_inset).max(1.0);
-            let h = (rect.h - top_inset - bottom_inset).max(1.0);
-            if !(w > 0.0 && h > 0.0) {
-                return None;
-            }
-            Some(Ui2Rect::new(rect.x + left_inset, rect.y + top_inset, w, h))
-        }
-        Ui2WindowDecorationMode::Client => {
-            let w = rect.w.max(1.0);
-            let h = rect.h.max(1.0);
-            if !(w > 0.0 && h > 0.0) {
-                return None;
-            }
-            Some(Ui2Rect::new(rect.x, rect.y, w, h))
-        }
-        Ui2WindowDecorationMode::None => {
-            if !(rect.w > 0.0 && rect.h > 0.0) {
-                return None;
-            }
-            Some(rect)
-        }
-    }
-}
-
-fn window_vertical_scrollbar_rect(state: &Ui2State, window: &Ui2Window) -> Option<Ui2Rect> {
-    if window.decoration_mode != Ui2WindowDecorationMode::System || !window.left_scrollbar_visible {
-        return None;
-    }
-    if window.state == Ui2WindowStateKind::Minimized {
-        return None;
-    }
-    let rect = effective_window_rect(state, window);
-    let top_inset = window_top_inset(window);
-    let bottom_inset = window_bottom_inset(window);
-    let w = window_vertical_scrollbar_width(window);
-    let h = (rect.h - top_inset - bottom_inset).max(1.0);
-    if h <= 0.0 {
-        return None;
-    }
-    let x = if window.vertical_scrollbar_side == Ui2WindowVerticalScrollbarSide::Left {
-        rect.x
-    } else {
-        rect.x + rect.w - w
-    };
-    Some(Ui2Rect::new(
-        x,
-        rect.y + top_inset,
-        w,
-        h,
-    ))
-}
-
-fn window_horizontal_scrollbar_rect(state: &Ui2State, window: &Ui2Window) -> Option<Ui2Rect> {
-    window_bottom_scrollbar_rect(state, window)
-}
-
-fn window_bottom_resize_button_rect(state: &Ui2State, window: &Ui2Window) -> Option<Ui2Rect> {
-    if window.decoration_mode != Ui2WindowDecorationMode::System || !window.bottom_bar_visible {
-        return None;
-    }
-    if window.state != Ui2WindowStateKind::Normal {
-        return None;
-    }
-    let bar = window_bottom_bar_rect(state, window)?;
-    let button_w = UI2_BOTTOM_RESIZE_BUTTON_W.min(bar.w.max(1.0));
-    let button_h = UI2_BOTTOM_RESIZE_BUTTON_H.min(bar.h.max(1.0));
-    Some(Ui2Rect::new(
-        bar.x + bar.w - 1.0 - UI2_BOTTOM_RESIZE_BUTTON_PAD - button_w,
-        bar.y + ((bar.h - button_h) * 0.5),
-        button_w,
-        button_h,
-    ))
-}
-
-fn window_system_button_rect(
-    state: &Ui2State,
-    window: &Ui2Window,
-    action: Ui2SystemButtonAction,
-) -> Option<Ui2Rect> {
-    if window.decoration_mode != Ui2WindowDecorationMode::System || !window.titlebar_visible {
-        return None;
-    }
-    let rect = effective_window_rect(state, window);
-    let button_y = rect.y + ((window_titlebar_height(window) - UI2_SYSTEM_BUTTON_H) * 0.5);
-    let mut right_x = rect.x + rect.w - 6.0 - UI2_SYSTEM_BUTTON_W;
-    let close_x = right_x;
-    right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
-    let maximize_x = right_x;
-    right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
-    let minimize_x = right_x;
-    let x = match action {
-        Ui2SystemButtonAction::Minimize => minimize_x,
-        Ui2SystemButtonAction::ToggleMaximize => maximize_x,
-        Ui2SystemButtonAction::Close => close_x,
-    };
-    Some(Ui2Rect::new(
-        x,
-        button_y,
-        UI2_SYSTEM_BUTTON_W,
-        UI2_SYSTEM_BUTTON_H,
-    ))
-}
-
-fn system_button_action_at(
-    state: &Ui2State,
-    window_id: u32,
-    x: f32,
-    y: f32,
-) -> Option<Ui2SystemButtonAction> {
-    let window = state.windows.iter().find(|window| window.id == window_id)?;
-    for action in [
-        Ui2SystemButtonAction::Minimize,
-        Ui2SystemButtonAction::ToggleMaximize,
-        Ui2SystemButtonAction::Close,
-    ] {
-        let rect = window_system_button_rect(state, window, action)?;
-        if rect_contains_point(rect, x, y) {
-            return Some(action);
-        }
-    }
-    None
-}
-
-fn window_rect_for_content(mode: Ui2WindowDecorationMode, content_rect: Ui2Rect) -> Ui2Rect {
-    match mode {
-        Ui2WindowDecorationMode::System => Ui2Rect::new(
-            content_rect.x - UI2_SYSTEM_SCROLLBAR_PX,
-            content_rect.y - UI2_TITLE_H,
-            content_rect.w + UI2_SYSTEM_SCROLLBAR_PX,
-            content_rect.h + UI2_TITLE_H + UI2_SYSTEM_SCROLLBAR_PX + UI2_BOTTOM_BAR_H,
-        ),
-        Ui2WindowDecorationMode::Client => content_rect,
-        Ui2WindowDecorationMode::None => content_rect,
     }
 }
 
@@ -3611,6 +2573,7 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
 
     let draw_w = snapshot.viewport_width.max(1);
     let draw_h = snapshot.viewport_height.max(1);
+    let scroll_left = normalized_hosted_browser_scroll_x(&snapshot);
     let scroll_top = snapshot
         .content_top_y
         .saturating_add(normalized_hosted_browser_scroll(&snapshot));
@@ -3637,9 +2600,12 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
 
         let src_offset_y = src_top.saturating_sub(doc_y);
         let dest_y = src_top.saturating_sub(scroll_top);
-        let draw_width = core::cmp::min(draw_w, region.width).max(1);
-        let u0 = 0.0;
-        let u1 = (draw_width as f32) / (region.width.max(1) as f32);
+        if scroll_left >= region.width {
+            continue;
+        }
+        let draw_width = core::cmp::min(draw_w, region.width.saturating_sub(scroll_left)).max(1);
+        let u0 = (scroll_left as f32) / (region.width.max(1) as f32);
+        let u1 = ((scroll_left + draw_width) as f32) / (region.width.max(1) as f32);
         let v0 = (src_offset_y as f32) / (region.height.max(1) as f32);
         let v1 = ((src_offset_y + src_height) as f32) / (region.height.max(1) as f32);
 
@@ -3690,14 +2656,16 @@ fn log_browser_surface_updates(state: &mut Ui2State) {
         window.last_logged_browser_surface_seq = snapshot.seq;
         let browser_instance_id = window_browser_instance_id(window);
         crate::log!(
-            "ui2: browser-snapshot browser_instance={} window_id={} seq={} viewport={}x{} content_h={} content_top_y={} scroll_y={} regions={}\n",
+            "ui2: browser-snapshot browser_instance={} window_id={} seq={} viewport={}x{} content={}x{} content_top_y={} scroll={}x{} regions={}\n",
             browser_instance_id,
             window.id,
             snapshot.seq,
             snapshot.viewport_width,
             snapshot.viewport_height,
+            snapshot.content_width,
             snapshot.content_height,
             snapshot.content_top_y,
+            snapshot.scroll_x,
             snapshot.scroll_y,
             snapshot.regions.len()
         );
@@ -3828,8 +2796,28 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
             state.view_w,
             state.view_h,
         );
-        let thumb_w = libm::fminf((hbar.w - 2.0).max(8.0), 18.0);
-        let thumb_x = hbar.x + ((hbar.w - thumb_w) * 0.5);
+        let thumb_w = if window.kind == Ui2WindowKind::HostedBrowser {
+            let snapshot = browser_surface_state_for_window(window);
+            let viewport_w = snapshot.viewport_width.max(1) as f32;
+            let content_w = snapshot.content_width.max(snapshot.viewport_width.max(1)) as f32;
+            libm::fmaxf(10.0, (hbar.w * (viewport_w / content_w)).min(hbar.w))
+        } else {
+            libm::fminf((hbar.w - 2.0).max(8.0), 18.0)
+        };
+        let thumb_x = if window.kind == Ui2WindowKind::HostedBrowser {
+            let snapshot = browser_surface_state_for_window(window);
+            let scroll_range = hosted_browser_scroll_x_max(&snapshot) as f32;
+            let avail = (hbar.w - thumb_w).max(0.0);
+            if scroll_range > 0.0 {
+                hbar.x
+                    + (avail
+                        * ((normalized_hosted_browser_scroll_x(&snapshot) as f32) / scroll_range))
+            } else {
+                hbar.x
+            }
+        } else {
+            hbar.x + ((hbar.w - thumb_w) * 0.5)
+        };
         let thumb_y = hbar.y + 1.0;
         let thumb_h = (hbar.h - 2.0).max(1.0);
         let _ = crate::gfx::lyon::draw_solid_rect_no_present(
