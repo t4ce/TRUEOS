@@ -1691,15 +1691,25 @@ impl VirglGfxBackend {
         let vp_max_x = vp_x.saturating_add(vp_w).min(target_w);
         let vp_max_y = vp_y.saturating_add(vp_h).min(target_h);
 
+        let top_left_to_bottom_left = |min_y_top: u32, max_y_top: u32| {
+            let min_y = target_h.saturating_sub(max_y_top.min(target_h));
+            let max_y = target_h.saturating_sub(min_y_top.min(target_h));
+            (min_y, max_y)
+        };
+
         match scissor {
             Some(rect) => {
                 let min_x = rect.x.min(target_w);
-                let min_y = rect.y.min(target_h);
                 let max_x = rect.x.saturating_add(rect.width).min(target_w);
-                let max_y = rect.y.saturating_add(rect.height).min(target_h);
+                let min_y_top = rect.y.min(target_h);
+                let max_y_top = rect.y.saturating_add(rect.height).min(target_h);
+                let (min_y, max_y) = top_left_to_bottom_left(min_y_top, max_y_top);
                 (min_x, min_y, max_x, max_y)
             }
-            None => (vp_x.min(target_w), vp_y.min(target_h), vp_max_x, vp_max_y),
+            None => {
+                let (min_y, max_y) = top_left_to_bottom_left(vp_y.min(target_h), vp_max_y);
+                (vp_x.min(target_w), min_y, vp_max_x, max_y)
+            }
         }
     }
 

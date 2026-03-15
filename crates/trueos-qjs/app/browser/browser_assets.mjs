@@ -111,6 +111,11 @@ export function createBrowserAssetManager(options = {}) {
     };
   }
 
+  function isSvgMime(mime) {
+    const value = String(mime || '').trim().toLowerCase();
+    return value === 'image/svg+xml' || value.endsWith('+svg') || value.includes('svg+xml');
+  }
+
   function waitForNextImageUploadTick() {
     return new Promise((resolve) => {
       if (typeof setTimeout === 'function') {
@@ -242,8 +247,12 @@ export function createBrowserAssetManager(options = {}) {
         let ready;
         if (cacheKey.startsWith('data:')) {
           const { mime, bytes } = dataUrlToBytes(cacheKey);
-          const dims = readPngDimensions(bytes);
-          const texId = Number(cmdStream.createTexturePngAsync(bytes) || 0);
+          const dims = isSvgMime(mime) ? { width: 0, height: 0 } : readPngDimensions(bytes);
+          const texId = Number(
+            (isSvgMime(mime)
+              ? cmdStream.createTextureSvgAsync(bytes)
+              : cmdStream.createTexturePngAsync(bytes)) || 0,
+          );
           if (!Number.isFinite(texId) || texId <= 0) {
             throw new Error('inline image texture upload failed');
           }

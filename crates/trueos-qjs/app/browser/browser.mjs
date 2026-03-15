@@ -6,6 +6,7 @@ import { createFpsOverlay } from './fps.mjs';
 import { createBrowserAssetManager } from './browser_assets.mjs';
 import { createBrowserPageState } from './browser_page_state.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
+import { registerSvgDemoRoute } from './svg_demo.mjs';
 import {
   renderScene,
   renderSceneRegionToCurrentTarget,
@@ -15,6 +16,7 @@ import { BLOCK_TAGS, TEXT_LEVEL_SEMANTICS_TAGS } from './htmlDefaults.mjs';
 import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './theme.mjs';
 
 const runtime = resolveRuntime();
+registerSvgDemoRoute(runtime.host, { iconSize: 64 });
 
 const INDENT_PX = 12;
 const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs || 0) || 0);
@@ -44,6 +46,8 @@ let aiStartSpecifier = '';
 let aiWorker = null;
 const aiInputQueue = [];
 const aiInputWaiters = [];
+const qjsInputQueue = [];
+let qjsInputDrainPromise = Promise.resolve();
 let fpsOverlayEnabled = false;
 let browserCanRenderScene = false;
 let browserContentReadySignaled = false;
@@ -78,6 +82,19 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getViewport',
     'paint',
     'setScroll',
+    'getWindowId',
+    'getWindowInfo',
+    'setWindowTitle',
+    'setWindowPosition',
+    'setWindowSize',
+    'setWindowDecorations',
+    'minimizeWindow',
+    'maximizeWindow',
+    'restoreWindow',
+    'focusWindow',
+    'closeWindow',
+    'beginWindowMove',
+    'beginWindowResize',
     'moveCursor',
     'click',
     'navigate',
@@ -135,6 +152,86 @@ function cloneApiContract() {
     ? contract
     : FALLBACK_BROWSER_API_CONTRACT;
   return JSON.parse(JSON.stringify(source));
+}
+
+function decodeWindowState(stateId) {
+  if ((Number(stateId) | 0) === 1) return 'minimized';
+  if ((Number(stateId) | 0) === 2) return 'maximized';
+  return 'normal';
+}
+
+function decodeWindowDecorations(modeId) {
+  if ((Number(modeId) | 0) === 1) return 'client';
+  if ((Number(modeId) | 0) === 2) return 'none';
+  return 'system';
+}
+
+function encodeWindowDecorations(mode) {
+  const value = String(mode || '').trim().toLowerCase();
+  if (value === 'client') return 1;
+  if (value === 'none') return 2;
+  return 0;
+}
+
+function encodeWindowResizeEdges(edges) {
+  if (Number.isFinite(edges)) return Math.max(0, Number(edges) | 0) >>> 0;
+  if (Array.isArray(edges)) {
+    let mask = 0;
+    for (const entry of edges) mask |= encodeWindowResizeEdges(entry);
+    return mask >>> 0;
+  }
+  if (edges && typeof edges === 'object') {
+    let mask = 0;
+    if (edges.left) mask |= 1;
+    if (edges.top) mask |= 2;
+    if (edges.right) mask |= 4;
+    if (edges.bottom) mask |= 8;
+    return mask >>> 0;
+  }
+  const value = String(edges || '').trim().toLowerCase();
+  if (!value) return 0;
+  let mask = 0;
+  for (const token of value.split(/[\s,_-]+/)) {
+    if (token === 'left' || token === 'l' || token === 'west' || token === 'w') mask |= 1;
+    if (token === 'top' || token === 't' || token === 'north' || token === 'n') mask |= 2;
+    if (token === 'right' || token === 'r' || token === 'east' || token === 'e') mask |= 4;
+    if (token === 'bottom' || token === 'b' || token === 'south' || token === 's') mask |= 8;
+  }
+  return mask >>> 0;
+}
+
+function currentWindowId() {
+  if (typeof runtime.host.__trueosPrimaryWindowId !== 'function') return 0;
+  const value = Number(runtime.host.__trueosPrimaryWindowId() || 0) | 0;
+  return value > 0 ? value : 0;
+}
+
+function resolveWindowId(windowId = null) {
+  if (windowId == null) return currentWindowId();
+  const value = Number(windowId || 0) | 0;
+  return value > 0 ? value : 0;
+}
+
+function getWindowInfo(windowId = null) {
+  const id = resolveWindowId(windowId);
+  if (id <= 0 || typeof runtime.host.__trueosWindowGetInfo !== 'function') {
+    return null;
+  }
+  const info = runtime.host.__trueosWindowGetInfo(id);
+  if (!info || typeof info !== 'object') return null;
+  return {
+    ...info,
+    id,
+    stateName: decodeWindowState(info.state),
+    decorationName: decodeWindowDecorations(info.decorationMode),
+  };
+}
+
+function runWindowAction(windowId, fnName, ...args) {
+  const id = resolveWindowId(windowId);
+  const fn = runtime.host[fnName];
+  if (id <= 0 || typeof fn !== 'function') return false;
+  return !!fn(id, ...args);
 }
 
 function getTrueosFsTreeHtml(maxEntries = 64) {
@@ -218,6 +315,93 @@ function awaitAiInput(question = '') {
 function installAiInputBridge() {
   runtime.host.__trueosAiInputPush = pushAiInput;
   runtime.host.__trueosAiAwaitInput = awaitAiInput;
+}
+
+function normalizeQjsInput(entry) {
+  const source = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : null;
+  const code = source && typeof source.code === 'string'
+    ? source.code.trim()
+    : (typeof entry === 'string' ? entry.trim() : '');
+  if (!code) return null;
+  return {
+    code,
+    repl: !(source && source.repl === false),
+  };
+}
+
+function qjsShellWrite(text) {
+  const line = typeof text === 'string' ? text : String(text == null ? '' : text);
+  if (!line) return;
+  try { console.log(`[browser.qjs] ${line}`); } catch (_) {}
+  if (typeof runtime.host.__trueosShell2PrintLine === 'function') {
+    try {
+      runtime.host.__trueosShell2PrintLine(line);
+      return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
+function summarizeQjsValue(value) {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+async function runReplQjs(code) {
+  let result = (0, eval)(code);
+  if (result && typeof result.then === 'function') {
+    result = await result;
+  }
+  return result;
+}
+
+async function runOneShotQjs(code) {
+  const factory = (0, eval)(`(async () => {\n${code}\n})`);
+  return await factory();
+}
+
+async function drainQjsInputQueue() {
+  while (qjsInputQueue.length > 0) {
+    const entry = qjsInputQueue.shift();
+    if (!entry) continue;
+    try {
+      const result = entry.repl
+        ? await runReplQjs(entry.code)
+        : await runOneShotQjs(entry.code);
+      if (result !== undefined) {
+        qjsShellWrite(`qjs ${entry.repl ? 'repl' : 'eval'} => ${summarizeQjsValue(result)}`);
+      } else {
+        qjsShellWrite(`qjs ${entry.repl ? 'repl' : 'eval'} ok`);
+      }
+    } catch (err) {
+      qjsShellWrite(`qjs ${entry.repl ? 'repl' : 'eval'} error: ${String(err && err.stack ? err.stack : err)}`);
+    }
+  }
+}
+
+function pushQjsInput(entry) {
+  const value = normalizeQjsInput(entry);
+  if (!value) return false;
+  qjsInputQueue.push(value);
+  qjsInputDrainPromise = qjsInputDrainPromise
+    .then(() => drainQjsInputQueue())
+    .catch((err) => {
+      qjsShellWrite(`qjs drain error: ${String(err && err.stack ? err.stack : err)}`);
+    });
+  return true;
+}
+
+function installQjsInputBridge() {
+  runtime.host.__trueosQjsInputPush = pushQjsInput;
 }
 
 async function dispatchAiWorkerRpc(method, args) {
@@ -1919,6 +2103,25 @@ function getThemeInteractives(vw) {
   return Array.isArray(interactives) ? interactives : [];
 }
 
+function getInteractiveState() {
+  const { vw, vh } = computeViewport();
+  const interactives = getThemeInteractives(vw);
+  return {
+    viewportWidth: Math.max(1, Number(vw || 1) | 0),
+    viewportHeight: Math.max(1, Number(vh || 1) | 0),
+    interactives: interactives.map((entry, index) => ({
+      itemId: Math.max(1, index + 1),
+      kindId: String(entry && entry.kind || '') === 'link'
+        ? 2
+        : (String(entry && entry.kind || '') === 'button' ? 1 : 0),
+      x: Math.max(0, Number(entry && entry.x || 0) | 0),
+      y: Math.max(0, Number(entry && entry.y || 0) | 0),
+      width: Math.max(1, Number(entry && entry.width || 0) | 0),
+      height: Math.max(1, Number(entry && entry.height || 0) | 0),
+    })),
+  };
+}
+
 function normalizeInteractiveText(value) {
   return collapseWhitespace(String(value || ''));
 }
@@ -2181,6 +2384,9 @@ runtime.host.__trueosBrowser = {
   getViewport() {
     return getViewport();
   },
+  getInteractiveState() {
+    return getInteractiveState();
+  },
   setViewportOverride(viewport = null, contentRect = null) {
     if (!viewport || typeof viewport !== 'object') {
       delete runtime.host.__trueosBrowserViewport;
@@ -2193,7 +2399,8 @@ runtime.host.__trueosBrowser = {
       width: normalizeViewportSize(viewport.width, computeViewport().vw),
       height: normalizeViewportSize(viewport.height, computeViewport().vh),
     };
-    runtime.host.__trueosBrowserViewport = nextViewport;
+    const prevViewport = runtime.host.__trueosBrowserViewport;
+    const prevContentRect = runtime.host.__trueosBrowserContentRect;
     const nextContentRect = contentRect && typeof contentRect === 'object'
       ? {
         x: Math.round(Number(contentRect.x || 0) || 0),
@@ -2207,6 +2414,20 @@ runtime.host.__trueosBrowser = {
         width: nextViewport.width,
         height: nextViewport.height,
       };
+    const viewportUnchanged = !!prevViewport
+      && Number(prevViewport.width || 0) === nextViewport.width
+      && Number(prevViewport.height || 0) === nextViewport.height;
+    const contentSizeUnchanged = !!prevContentRect
+      && Number(prevContentRect.width || 0) === nextContentRect.width
+      && Number(prevContentRect.height || 0) === nextContentRect.height;
+    const contentOnlyMoved = viewportUnchanged
+      && contentSizeUnchanged
+      && (Number(prevContentRect.x || 0) !== nextContentRect.x
+        || Number(prevContentRect.y || 0) !== nextContentRect.y);
+    if (contentOnlyMoved) {
+      return true;
+    }
+    runtime.host.__trueosBrowserViewport = nextViewport;
     runtime.host.__trueosBrowserContentRect = nextContentRect;
     invalidateBrowserRegionCache(true);
     paint();
@@ -2253,6 +2474,50 @@ runtime.host.__trueosBrowser = {
   },
   submitAiInput(input, options = null) {
     return pushAiInput(input, options);
+  },
+  getWindowId() {
+    return currentWindowId();
+  },
+  getWindowInfo(windowId = null) {
+    return getWindowInfo(windowId);
+  },
+  setWindowTitle(title, windowId = null) {
+    const id = resolveWindowId(windowId);
+    const fn = runtime.host.__trueosWindowSetTitle;
+    if (id <= 0 || typeof fn !== 'function') return false;
+    return !!fn(id, String(title || ''));
+  },
+  setWindowPosition(x, y, windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowSetPosition', Number(x || 0), Number(y || 0));
+  },
+  setWindowSize(width, height, windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowSetSize', Number(width || 0), Number(height || 0));
+  },
+  setWindowDecorations(mode = 'system', windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowSetDecorations', encodeWindowDecorations(mode));
+  },
+  minimizeWindow(windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowMinimize');
+  },
+  maximizeWindow(windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowMaximize');
+  },
+  restoreWindow(windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowRestore');
+  },
+  focusWindow(windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowFocus');
+  },
+  closeWindow(windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowClose');
+  },
+  beginWindowMove(windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowBeginMove');
+  },
+  beginWindowResize(edges, windowId = null) {
+    const edgeMask = encodeWindowResizeEdges(edges);
+    if (edgeMask === 0) return false;
+    return runWindowAction(windowId, '__trueosWindowBeginResize', edgeMask);
   },
   setCurrentPageUrl(url = '') {
     return setCurrentPageUrl(url);
@@ -2306,4 +2571,5 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
 InjectOpenAi();
 armHtmlReadyFallback();
 installAiInputBridge();
+installQjsInputBridge();
 startAutoPaint();
