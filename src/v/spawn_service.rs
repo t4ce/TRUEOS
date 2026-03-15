@@ -338,7 +338,8 @@ async fn browser_svg_startup_route_task(browser_instance_id: u32) {
     const HANDOFF_RETRY_MS: u64 = 100;
 
     loop {
-        let window_id = trueos_qjs::browser_task::browser_window_id_for_instance(browser_instance_id);
+        let window_id =
+            trueos_qjs::browser_task::browser_window_id_for_instance(browser_instance_id);
         if window_id != 0 {
             let rpc_id = trueos_qjs::browser_task::queue_browser_rpc_for_browser(
                 browser_instance_id,
@@ -762,14 +763,14 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "ui2-gfx-tetris",
-        disabled: true,
+        disabled: false,
         required: crate::v::readiness::LOADSCREEN_END,
         started: &UI2_GFX_TETRIS_STARTED,
         spawn: spawn_ui2_gfx_tetris,
     },
     TaskSpec {
         name: "ui2-triangle-demo",
-        disabled: true,
+        disabled: false,
         required: crate::v::readiness::LOADSCREEN_END,
         started: &UI2_TRIANGLE_DEMO_STARTED,
         spawn: spawn_ui2_triangle_demo,

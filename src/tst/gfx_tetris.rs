@@ -443,7 +443,8 @@ pub async fn ui2_gfx_tetris_task() {
         last_tick = now;
 
         let elapsed_ms = elapsed.as_millis() as u32;
-        let changed = app.apply_pending_actions() || app.tick(elapsed_ms) || app.game.consume_changed();
+        let changed =
+            app.apply_pending_actions() || app.tick(elapsed_ms) || app.game.consume_changed();
         if changed {
             let vertices = build_frame_vertices(&app);
             let bytes = unsafe {
