@@ -39,8 +39,6 @@ mod tst_html;
 mod tst_http_trueosfs;
 mod turbo;
 mod usb;
-#[path = "tst/usvg_smoke.rs"]
-mod usvg_smoke;
 mod v;
 mod vga;
 mod wait;
