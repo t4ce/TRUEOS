@@ -1,7 +1,6 @@
 import * as parse5 from 'parse5';
 import * as cmdStream from 'trueos:cmd_stream';
 import Yoga from 'yoga-layout';
-import { Worker } from 'node:worker_threads';
 import { createFpsOverlay } from './fps.mjs';
 import { createBrowserAssetManager } from './browser_assets.mjs';
 import { createBrowserCursorController } from './browser_cursor.mjs';
@@ -44,11 +43,6 @@ let currentPageUrl = String(
   || '',
 );
 let browserActionSeq = 0;
-let aiStartPromise = null;
-let aiStartSpecifier = '';
-let aiWorker = null;
-const aiInputQueue = [];
-const aiInputWaiters = [];
 const qjsInputQueue = [];
 let qjsInputDrainPromise = Promise.resolve();
 let fpsOverlayEnabled = false;
@@ -64,13 +58,6 @@ let browserRowPreviewKey = '';
 
 const fpsOverlay = createFpsOverlay();
 runtime.host.__trueosBrowserShowClosingTagRows = SHOW_CLOSING_TAG_ROWS;
-const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
-  webSearch: false,
-  fileSearch: false,
-  newConversation: false,
-  computerUse: true,
-});
-
 const FALLBACK_BROWSER_API_CONTRACT = {
   version: 1,
   available: [
@@ -289,71 +276,6 @@ function notYetAvailable(name) {
   throw err;
 }
 
-function parseWorkerJson(raw) {
-  if (typeof raw !== 'string' || !raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch (_err) {
-    return null;
-  }
-}
-
-function postWorkerJson(worker, payload) {
-  if (!worker || typeof worker.postMessage !== 'function') return;
-  worker.postMessage(JSON.stringify(payload));
-}
-
-function normalizeAiInput(entry, options = null) {
-  const source = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : null;
-  const opts = options && typeof options === 'object' ? options : null;
-  const text = typeof entry === 'string'
-    ? entry
-    : (source && typeof source.text === 'string' ? source.text : '');
-  const value = text.trim();
-  if (!value) return null;
-
-  const cfg = source || opts || DEFAULT_AI_INPUT_OPTIONS;
-  return {
-    text: value,
-    webSearch: !!cfg.webSearch,
-    fileSearch: !!cfg.fileSearch,
-    newConversation: !!cfg.newConversation,
-    computerUse: cfg.computerUse !== false,
-  };
-}
-
-function pushAiInput(entry, options = null) {
-  const value = normalizeAiInput(entry, options);
-  if (!value) return false;
-
-  const waiter = aiInputWaiters.shift();
-  if (waiter) {
-    waiter(value);
-    return true;
-  }
-
-  aiInputQueue.push(value);
-  return true;
-}
-
-function awaitAiInput(question = '') {
-  const prompt = typeof question === 'string' ? question.trim() : '';
-  if (prompt) {
-    try { console.log(`[browser.mjs] ai input requested: ${prompt}`); } catch (_) {}
-  }
-  if (aiInputQueue.length > 0) {
-    return Promise.resolve(aiInputQueue.shift());
-  }
-  return new Promise((resolve) => {
-    aiInputWaiters.push(resolve);
-  });
-}
-
-function installAiInputBridge() {
-  runtime.host.__trueosAiInputPush = pushAiInput;
-  runtime.host.__trueosAiAwaitInput = awaitAiInput;
-}
-
 function normalizeQjsInput(entry) {
   const source = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : null;
   const code = source && typeof source.code === 'string'
@@ -439,98 +361,6 @@ function pushQjsInput(entry) {
 
 function installQjsInputBridge() {
   runtime.host.__trueosQjsInputPush = pushQjsInput;
-}
-
-async function dispatchAiWorkerRpc(method, args) {
-  const api = runtime.host.__trueosBrowser;
-  if (typeof method !== 'string' || !method.startsWith('browser.')) {
-    throw new Error(`unsupported worker rpc method: ${method}`);
-  }
-
-  const name = method.slice('browser.'.length);
-  if (name === 'getApiContract') return cloneApiContract();
-  if (name === 'listUnavailable') return cloneApiContract().unavailable;
-
-  if (!api || typeof api[name] !== 'function') {
-    throw new Error(`browser rpc missing method: ${name}`);
-  }
-
-  return await api[name](...(Array.isArray(args) ? args : []));
-}
-
-async function handleAiWorkerMessage(worker, raw) {
-  const message = parseWorkerJson(raw);
-  if (!message) {
-    return;
-  }
-
-  if (typeof message.dbg === 'string') {
-    try { console.log('[browser.mjs] ai worker', message.dbg); } catch (_) {}
-    return;
-  }
-
-  if (message.kind !== 'rpc_request') {
-    return;
-  }
-
-  try {
-    let result;
-    if (message.method === 'host.awaitInput') {
-      result = await awaitAiInput(String((message.args && message.args[0]) || ''));
-    } else if (message.method === 'host.shellPrint') {
-      const text = String((message.args && message.args[0]) || '');
-      if (typeof runtime.host.__trueosUart1ShellWrite === 'function' && text) {
-        runtime.host.__trueosUart1ShellWrite(text);
-      }
-      result = true;
-    } else {
-      result = await dispatchAiWorkerRpc(message.method, message.args);
-    }
-    postWorkerJson(worker, {
-      kind: 'rpc_result',
-      id: message.id,
-      ok: true,
-      result,
-    });
-  } catch (err) {
-    postWorkerJson(worker, {
-      kind: 'rpc_result',
-      id: message.id,
-      ok: false,
-      error: String(err && err.message ? err.message : err),
-      code: err && err.code ? String(err.code) : undefined,
-    });
-  }
-}
-
-function buildAiWorkerSource(specifier, options) {
-  const resolvedSpecifier = typeof specifier === 'string' && specifier ? specifier : '/qjs/ai/ai_pc.mjs';
-  const specLiteral = JSON.stringify(resolvedSpecifier);
-  return `
-const __spec = ${specLiteral};
-import(__spec)
-  .then((mod) => {
-    if (mod && typeof mod.startAiPcWorker === 'function') {
-      return mod.startAiPcWorker();
-    }
-    if (mod && typeof mod.startAiPc === 'function') {
-      return mod.startAiPc();
-    }
-    throw new Error('AI module missing startAiPcWorker/startAiPc export');
-  })
-  .catch((err) => {
-    try {
-      console.log('[ai-worker] start failed', String(err && err.stack ? err.stack : err));
-    } catch (_) {}
-  });
-`;
-}
-
-function attachAiWorker(worker) {
-  worker.onMessage((raw) => {
-    void handleAiWorkerMessage(worker, raw);
-  });
-  return worker;
 }
 
 function normalizeViewportSize(value, fallback) {
@@ -2337,58 +2167,6 @@ function startAutoPaint() {
   } catch (_) {}
 }
 
-function normalizeAiSpecifier(specifier) {
-  if (typeof specifier === 'string' && specifier) {
-    return specifier;
-  }
-  return '/qjs/ai/ai_pc.mjs';
-}
-
-function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
-  const resolvedSpecifier = normalizeAiSpecifier(specifier);
-  const opts = options && typeof options === 'object' ? options : null;
-  const initialInput = opts && Object.prototype.hasOwnProperty.call(opts, 'input')
-    ? normalizeAiInput(opts.input, opts)
-    : null;
-  if (aiStartPromise && aiStartSpecifier === resolvedSpecifier) {
-    if (initialInput) {
-      pushAiInput(initialInput);
-    }
-    return aiStartPromise;
-  }
-  if (aiWorker) {
-    try { aiWorker.terminate(); } catch (_) {}
-    aiWorker = null;
-  }
-  aiStartSpecifier = resolvedSpecifier;
-  aiStartPromise = Promise.resolve()
-    .then(() => {
-      const worker = attachAiWorker(new Worker(buildAiWorkerSource(resolvedSpecifier, opts)));
-      aiWorker = worker;
-      try {
-        console.log('[browser.mjs] ai worker started', resolvedSpecifier);
-      } catch (_) {}
-      if (initialInput) {
-        pushAiInput(initialInput);
-      }
-      return worker;
-    })
-    .catch((err) => {
-      aiStartPromise = null;
-      aiStartSpecifier = '';
-      aiWorker = null;
-      try {
-        console.log('[browser.mjs] ai worker start failed', String(err && err.stack ? err.stack : err));
-      } catch (_) {}
-      throw err;
-    });
-  return aiStartPromise;
-}
-
-function InjectOpenAi() {
-  // AI now runs in its own standalone Embassy/QJS task.
-}
-
 runtime.host.__trueosBrowser = {
   paint,
   paintToCurrentTarget(options = null) {
@@ -2517,16 +2295,6 @@ runtime.host.__trueosBrowser = {
   },
   popPageLoadedEvent() {
     return browserPageState.popEvent();
-  },
-  startAi(specifier, options) {
-    return startAi(specifier, options);
-  },
-  startAiPc(input, options = null) {
-    const opts = options && typeof options === 'object' ? { ...options, input } : { input };
-    return startAi('/qjs/ai/ai_pc.mjs', opts);
-  },
-  submitAiInput(input, options = null) {
-    return pushAiInput(input, options);
   },
   getWindowId() {
     return currentWindowId();
@@ -2661,8 +2429,6 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
   (runtime.host.window || runtime.host).addEventListener('resize', paint);
 }
 
-InjectOpenAi();
 armHtmlReadyFallback();
-installAiInputBridge();
 installQjsInputBridge();
 startAutoPaint();
