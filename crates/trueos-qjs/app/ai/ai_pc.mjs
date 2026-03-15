@@ -517,6 +517,23 @@ function directKeyboard(input = null, options = null) {
   };
 }
 
+function augmentBrowserContractForHostInput(contract = null) {
+  const base = contract && typeof contract === "object" ? contract : {};
+  const available = Array.isArray(base.available) ? [...base.available] : [];
+  const unavailable = Array.isArray(base.unavailable) ? [...base.unavailable] : [];
+  for (const name of ["moveCursor", "click"]) {
+    if (!available.includes(name)) {
+      available.push(name);
+    }
+  }
+  const filteredUnavailable = unavailable.filter((name) => name !== "moveCursor" && name !== "click");
+  return {
+    ...base,
+    available,
+    unavailable: filteredUnavailable,
+  };
+}
+
 function createWorkerBrowserProxy() {
   const runtime = getPcRuntime();
   if (runtime.browser) {
@@ -544,6 +561,18 @@ function createHostBrowserProxy() {
     proxy[method] = (...args) => hostBrowserRpc(method, args);
   }
   if (hasDirectKernelInput()) {
+    const rpcGetApiContract = proxy.getApiContract;
+    const rpcListUnavailable = proxy.listUnavailable;
+    proxy.getApiContract = async (...args) => {
+      const contract = await rpcGetApiContract(...args);
+      return augmentBrowserContractForHostInput(contract);
+    };
+    proxy.listUnavailable = async (...args) => {
+      const unavailable = await rpcListUnavailable(...args);
+      return Array.isArray(unavailable)
+        ? unavailable.filter((name) => name !== "moveCursor" && name !== "click")
+        : [];
+    };
     proxy.moveCursor = (target = null) => Promise.resolve(directMoveCursor(target));
     proxy.keyboard = (input = null, options = null) => Promise.resolve(directKeyboard(input, options));
     proxy.typeText = (text, options = null) => Promise.resolve(directKeyboard({
