@@ -52,11 +52,8 @@ if (!G.__trueosBrowserEmbeddedRoutes || typeof G.__trueosBrowserEmbeddedRoutes !
 G.__trueosBrowserEmbeddedRoutes['trueos://ui/html'] = G.__trueosUiHtml;
 G.__trueosBrowserEmbeddedRoutes['trueos://ui/helloworld'] = G.__trueosUiHelloWorldHtml;
 G.__trueosBrowserEmbeddedRoutes['trueos://ui/svg-demo'] = G.__trueosUiSvgHtml;
-if (typeof G.__trueosBrowserUrl !== 'string' || !G.__trueosBrowserUrl) {
-    G.__trueosBrowserUrl = 'trueos://ui/html';
-}
-if (typeof G.__trueosBrowserCurrentUrl !== 'string' || !G.__trueosBrowserCurrentUrl) {
-    G.__trueosBrowserCurrentUrl = G.__trueosBrowserUrl;
+if (typeof G.__trueosBrowserAllowHtmlFallback !== 'boolean') {
+    G.__trueosBrowserAllowHtmlFallback = false;
 }
 if (typeof G.__trueosBrowserNavigate !== 'function') {
     G.__trueosBrowserNavigate = (event) => {
