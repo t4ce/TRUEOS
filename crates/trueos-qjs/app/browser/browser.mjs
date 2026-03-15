@@ -35,6 +35,7 @@ const BROWSER_KEYBOARD_LOG_MAX = 128;
 
 let cachedHtml = '';
 let cachedDoc = null;
+let scrollX = 0;
 let scrollY = 0;
 let currentPageUrl = String(
   runtime.host.__trueosBrowserCurrentUrl
@@ -740,12 +741,12 @@ function viewportThemeLayout(themeLayout) {
   const nextByPath = Object.create(null);
   for (let i = 0; i < interactives.length; i += 1) {
     const entry = interactives[i];
-    const next = {
-      ...entry,
-      x: Math.round(Number(entry && entry.x || 0)),
-      y: Math.round(Number(entry && entry.y || 0) - Number(scrollY || 0)),
-      width: Math.max(1, Math.round(Number(entry && entry.width || 0))),
-      height: Math.max(1, Math.round(Number(entry && entry.height || 0))),
+      const next = {
+        ...entry,
+        x: Math.round(Number(entry && entry.x || 0) - Number(scrollX || 0)),
+        y: Math.round(Number(entry && entry.y || 0) - Number(scrollY || 0)),
+        width: Math.max(1, Math.round(Number(entry && entry.width || 0))),
+        height: Math.max(1, Math.round(Number(entry && entry.height || 0))),
     };
     nextInteractives.push(next);
     if (next.kind === 'button') nextButtons.push(next);
@@ -827,6 +828,7 @@ function buildDocFromParsed(parsed, vw, context = 'document') {
     rows,
     rowX: layout.rowX,
     rowY: layout.rowY,
+    contentW: layout.contentW,
     contentH: layout.contentH,
     width: vw,
   };
@@ -987,6 +989,7 @@ function applyThemeLayoutYoga(entries, vw, context = 'document') {
       interactives,
       buttons,
       byPath,
+      contentW: Math.max(1, Math.round(Number(root.getComputedWidth() || vw || 1))),
       contentH: Math.max(1, Math.round(Number(root.getComputedHeight() || 0))),
       viewportWidth: vw,
       context,
@@ -1007,6 +1010,7 @@ function buildThemeLayout(doc, cssSection, vw, context = 'document', rows = [], 
       interactives: [],
       buttons: [],
       byPath: Object.create(null),
+      contentW: vw,
       contentH: 0,
       viewportWidth: vw,
       context,
@@ -1074,7 +1078,12 @@ function applyYoga(rows, vw, context = 'document') {
     }
 
     const contentH = Math.max(1, Math.round(Number(root.getComputedHeight() || 0)));
-    return { rowX, rowY, contentH };
+    let contentW = Math.max(1, Math.round(Number(vw || 1)));
+    for (let i = 0; i < nodes.length; i += 1) {
+      const right = Math.round(Number(nodes[i].getComputedLeft() || 0) + Number(nodes[i].getComputedWidth() || 0));
+      if (right > contentW) contentW = right;
+    }
+    return { rowX, rowY, contentW, contentH };
   } catch (err) {
     raiseBrowserError(
       'TRUEOS_BROWSER_LAYOUT_FAILED',
@@ -1499,6 +1508,7 @@ function getViewport() {
     y: contentRect.y,
     contentWidth: contentRect.width,
     contentHeight: contentRect.height,
+    scrollX: scrollX,
     scrollY: scrollY,
   };
 }
@@ -1626,8 +1636,17 @@ function browserRegionVisibleTop() {
   return Math.max(0, Math.round(Number(scrollY || 0)));
 }
 
+function docContentWidth(doc, vw) {
+  const raw = Math.max(
+    Number(doc && doc.contentW || 0),
+    Number(doc && doc.themeLayout && doc.themeLayout.contentW || 0),
+    Number(vw || 0),
+  );
+  return Math.max(1, Math.round(Number.isFinite(raw) ? raw : Number(vw || 1)));
+}
+
 function ensureBrowserRegions(doc, vw, vh, contentH, contentTopY) {
-  const width = Math.max(1, Number(vw || 1) | 0);
+  const width = docContentWidth(doc, vw);
   const tileHeight = computeBrowserRegionTileHeight(vh);
   if (browserRegionCacheWidth !== width || browserRegionTileHeight !== tileHeight) {
     destroyBrowserRegionCache();
@@ -1724,13 +1743,17 @@ function docContentTopY(doc) {
   return 0;
 }
 
-function clampScrollForDoc(doc, vh) {
+function clampScrollForDoc(doc, vw, vh) {
+  const contentW = docContentWidth(doc, vw);
   const contentH = docContentHeight(doc, vh);
   const contentTopY = docContentTopY(doc);
-  const maxScroll = Math.max(0, contentH - Math.max(1, Number(vh || 1)));
+  const maxScrollX = Math.max(0, contentW - Math.max(1, Number(vw || 1)));
+  const maxScrollY = Math.max(0, contentH - Math.max(1, Number(vh || 1)));
+  if (scrollX < 0) scrollX = 0;
+  if (scrollX > maxScrollX) scrollX = maxScrollX;
   if (scrollY < 0) scrollY = 0;
-  if (scrollY > maxScroll) scrollY = maxScroll;
-  return { contentH, contentTopY, maxScroll };
+  if (scrollY > maxScrollY) scrollY = maxScrollY;
+  return { contentW, contentH, contentTopY, maxScrollX, maxScrollY };
 }
 
 function paintToCurrentTarget(options = null) {
@@ -1740,7 +1763,7 @@ function paintToCurrentTarget(options = null) {
   const opts = options && typeof options === 'object' ? options : null;
   const { vw, vh } = computeViewport();
   const doc = ensureDoc(vw);
-  const { contentH, contentTopY } = clampScrollForDoc(doc, vh);
+  const { contentH, contentTopY } = clampScrollForDoc(doc, vw, vh);
   publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
 
   const overlayRuns = [];
@@ -1759,7 +1782,7 @@ function paintToCurrentTarget(options = null) {
 
   cmdStream.clearRenderTarget();
   cmdStream.setViewport(composeViewportWidth, composeViewportHeight);
-  composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollY, contentTopY, overlayRuns, null);
+  composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollX, scrollY, contentTopY, overlayRuns, null);
   cmdStream.clearRenderTarget();
   finalizePaintState(doc);
 
@@ -1926,7 +1949,7 @@ function paint() {
   try {
     if (HOSTED_BY_UI2) {
       const doc = ensureDoc(vw);
-      const { contentH, contentTopY } = clampScrollForDoc(doc, vh);
+      const { contentH, contentTopY } = clampScrollForDoc(doc, vw, vh);
       publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
       if (typeof cmdStream.beginFrame === 'function' && typeof cmdStream.endFrame === 'function') {
         cmdStream.beginFrame();
@@ -1964,7 +1987,7 @@ function paint() {
     if (fpsOverlayEnabled) {
       fpsOverlay.appendRuns(overlayRuns, vw);
     }
-    renderScene(doc, vw, vh, scrollY, overlayRuns, null);
+    renderScene(doc, vw, vh, scrollX, scrollY, overlayRuns, null);
     finalizePaintState(doc);
     return true;
   } catch (err) {
@@ -1975,6 +1998,7 @@ function paint() {
         reason: describeError(err),
         viewportWidth: vw,
         viewportHeight: vh,
+        scrollX,
         scrollY,
         rowCount: Array.isArray(cachedDoc && cachedDoc.rows) ? cachedDoc.rows.length : 0,
       },
@@ -2272,9 +2296,9 @@ runtime.host.__trueosBrowser = {
   getSurfaceState() {
     const { vw, vh } = computeViewport();
     const doc = browserCanRenderScene ? ensureDoc(vw) : null;
-    const { contentH, contentTopY } = doc
-      ? clampScrollForDoc(doc, vh)
-      : { contentH: vh, contentTopY: 0 };
+    const { contentW, contentH, contentTopY } = doc
+      ? clampScrollForDoc(doc, vw, vh)
+      : { contentW: vw, contentH: vh, contentTopY: 0 };
     return {
       cacheRevision: browserRegionCacheRevision,
       cacheWidth: browserRegionCacheWidth,
@@ -2290,8 +2314,10 @@ runtime.host.__trueosBrowser = {
       })),
       viewportWidth: vw,
       viewportHeight: vh,
+      contentWidth: Math.max(1, Number(contentW || vw) | 0),
       contentHeight: Math.max(1, Number(contentH || vh) | 0),
       contentTopY: Math.max(0, Number(contentTopY || 0) | 0),
+      scrollX,
       scrollY,
     };
   },
@@ -2362,11 +2388,16 @@ runtime.host.__trueosBrowser = {
   setCurrentPageUrl(url = '') {
     return setCurrentPageUrl(url);
   },
-  setScroll(y) {
-    scrollY = Math.max(0, Math.round(Number(y || 0)));
+  setScroll(xOrY, maybeY) {
+    if (arguments.length >= 2) {
+      scrollX = Math.max(0, Math.round(Number(xOrY || 0)));
+      scrollY = Math.max(0, Math.round(Number(maybeY || 0)));
+    } else {
+      scrollY = Math.max(0, Math.round(Number(xOrY || 0)));
+    }
     if (browserCanRenderScene) {
       const { vw, vh } = computeViewport();
-      clampScrollForDoc(ensureDoc(vw), vh);
+      clampScrollForDoc(ensureDoc(vw), vw, vh);
     }
     paint();
     return true;

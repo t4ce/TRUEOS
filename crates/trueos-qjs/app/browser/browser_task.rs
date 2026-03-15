@@ -42,10 +42,18 @@ pub struct HostedBrowserSurfaceState {
     pub tile_height: u32,
     pub viewport_width: u32,
     pub viewport_height: u32,
+    pub content_width: u32,
     pub content_height: u32,
     pub content_top_y: u32,
+    pub scroll_x: u32,
     pub scroll_y: u32,
     pub regions: Vec<HostedBrowserRegion>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct HostedScrollRequest {
+    scroll_x: u32,
+    scroll_y: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -109,7 +117,7 @@ struct BrowserHostState {
     pending_browser_rpc: VecDeque<BrowserRpcRequest>,
     active_browser_rpc_id: Option<u32>,
     pending_hosted_viewport: Option<HostedViewportRequest>,
-    pending_hosted_scroll_y: Option<u32>,
+    pending_hosted_scroll: Option<HostedScrollRequest>,
     applied_hosted_viewport: Option<HostedViewportRequest>,
     hosted_surface_state: HostedBrowserSurfaceState,
     hosted_surface_seq: u32,
@@ -128,7 +136,7 @@ impl BrowserHostState {
             pending_browser_rpc: VecDeque::new(),
             active_browser_rpc_id: None,
             pending_hosted_viewport: None,
-            pending_hosted_scroll_y: None,
+            pending_hosted_scroll: None,
             applied_hosted_viewport: None,
             hosted_surface_state: HostedBrowserSurfaceState::default(),
             hosted_surface_seq: 0,
@@ -523,12 +531,22 @@ pub fn set_hosted_scroll_y(scroll_y: u32) -> bool {
 }
 
 pub fn set_hosted_scroll_y_for_browser(browser_instance_id: u32, scroll_y: u32) -> bool {
+    let current_scroll_x = with_browser_host_state(browser_instance_id, |state| {
+        state
+            .pending_hosted_scroll
+            .map(|pending| pending.scroll_x)
+            .unwrap_or(state.hosted_surface_state.scroll_x)
+    });
+    set_hosted_scroll_for_browser(browser_instance_id, current_scroll_x, scroll_y)
+}
+
+pub fn set_hosted_scroll_for_browser(browser_instance_id: u32, scroll_x: u32, scroll_y: u32) -> bool {
     let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
     if !browser_started(browser_instance_id) {
         return false;
     }
     with_browser_host_state_mut(browser_instance_id, |state| {
-        state.pending_hosted_scroll_y = Some(scroll_y);
+        state.pending_hosted_scroll = Some(HostedScrollRequest { scroll_x, scroll_y });
     });
     true
 }
@@ -819,15 +837,15 @@ unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext, browser_instan
     qjs::js_free_value(ctx, browser);
 }
 
-unsafe fn apply_pending_hosted_scroll_y(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
-    let Some(next_scroll_y) = with_browser_host_state_mut(browser_instance_id, |state| {
-        state.pending_hosted_scroll_y.take()
+unsafe fn apply_pending_hosted_scroll(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    let Some(next_scroll) = with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_hosted_scroll.take()
     }) else {
         return;
     };
     let Some(browser) = browser_api_value(ctx) else {
         with_browser_host_state_mut(browser_instance_id, |state| {
-            state.pending_hosted_scroll_y = Some(next_scroll_y);
+            state.pending_hosted_scroll = Some(next_scroll);
         });
         return;
     };
@@ -836,21 +854,25 @@ unsafe fn apply_pending_hosted_scroll_y(ctx: *mut qjs::JSContext, browser_instan
         qjs::js_free_value(ctx, func);
         qjs::js_free_value(ctx, browser);
         with_browser_host_state_mut(browser_instance_id, |state| {
-            state.pending_hosted_scroll_y = Some(next_scroll_y);
+            state.pending_hosted_scroll = Some(next_scroll);
         });
         return;
     }
 
-    let args = [qjs::JS_NewFloat64(ctx, next_scroll_y as f64)];
+    let args = [
+        qjs::JS_NewFloat64(ctx, next_scroll.scroll_x as f64),
+        qjs::JS_NewFloat64(ctx, next_scroll.scroll_y as f64),
+    ];
     let result = qjs::JS_Call(ctx, func, browser, args.len() as i32, args.as_ptr());
     if result.is_exception() {
         qjs::qjs_diag::dump_last_exception(ctx, "browser setScroll");
         with_browser_host_state_mut(browser_instance_id, |state| {
-            state.pending_hosted_scroll_y = Some(next_scroll_y);
+            state.pending_hosted_scroll = Some(next_scroll);
         });
     }
     qjs::js_free_value(ctx, result);
     qjs::js_free_value(ctx, args[0]);
+    qjs::js_free_value(ctx, args[1]);
     qjs::js_free_value(ctx, func);
     qjs::js_free_value(ctx, browser);
 }
@@ -887,8 +909,10 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
         tile_height: js_prop_f64(ctx, result, b"tileHeight\0").unwrap_or(0.0).max(0.0) as u32,
         viewport_width: js_prop_f64(ctx, result, b"viewportWidth\0").unwrap_or(0.0).max(0.0) as u32,
         viewport_height: js_prop_f64(ctx, result, b"viewportHeight\0").unwrap_or(0.0).max(0.0) as u32,
+        content_width: js_prop_f64(ctx, result, b"contentWidth\0").unwrap_or(0.0).max(0.0) as u32,
         content_height: js_prop_f64(ctx, result, b"contentHeight\0").unwrap_or(0.0).max(0.0) as u32,
         content_top_y: js_prop_f64(ctx, result, b"contentTopY\0").unwrap_or(0.0).max(0.0) as u32,
+        scroll_x: js_prop_f64(ctx, result, b"scrollX\0").unwrap_or(0.0).max(0.0) as u32,
         scroll_y: js_prop_f64(ctx, result, b"scrollY\0").unwrap_or(0.0).max(0.0) as u32,
         regions: Vec::new(),
     };
@@ -1220,7 +1244,7 @@ pub async fn boot_browser(browser_instance_id: u32) {
             apply_pending_qjs_input(ctx, browser_instance_id);
             apply_pending_browser_rpc(ctx, browser_instance_id);
             apply_pending_hosted_viewport(ctx, browser_instance_id);
-            apply_pending_hosted_scroll_y(ctx, browser_instance_id);
+            apply_pending_hosted_scroll(ctx, browser_instance_id);
             if !qjs::vm::pump_runtime_once(
                 rt,
                 ctx,
