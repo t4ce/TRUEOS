@@ -72,9 +72,25 @@ struct PendingHtmlEntry {
     url: Option<String>,
 }
 
+#[derive(Clone)]
+struct BrowserRpcRequest {
+    id: u32,
+    method: String,
+    args_json: String,
+}
+
+#[derive(Clone)]
+struct BrowserRpcResult {
+    id: u32,
+    payload_json: String,
+}
+
 static PENDING_HTML: Mutex<Option<PendingHtmlEntry>> = Mutex::new(None);
 static PENDING_AI_INPUT: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::new());
 static PENDING_QJS_INPUT: Mutex<VecDeque<QjsInputEntry>> = Mutex::new(VecDeque::new());
+static PENDING_BROWSER_RPC: Mutex<VecDeque<BrowserRpcRequest>> = Mutex::new(VecDeque::new());
+static ACTIVE_BROWSER_RPC_ID: Mutex<Option<u32>> = Mutex::new(None);
+static BROWSER_RPC_RESULTS: Mutex<VecDeque<BrowserRpcResult>> = Mutex::new(VecDeque::new());
 static PENDING_HOSTED_VIEWPORT: Mutex<Option<HostedViewportRequest>> = Mutex::new(None);
 static PENDING_HOSTED_SCROLL_Y: Mutex<Option<u32>> = Mutex::new(None);
 static APPLIED_HOSTED_VIEWPORT: Mutex<Option<HostedViewportRequest>> = Mutex::new(None);
@@ -100,6 +116,7 @@ static HOSTED_INTERACTIVE_STATE: Mutex<HostedBrowserInteractiveState> =
         interactives: Vec::new(),
     });
 static HOSTED_INTERACTIVE_SEQ: AtomicU32 = AtomicU32::new(0);
+static BROWSER_RPC_SEQ: AtomicU32 = AtomicU32::new(1);
 
 fn append_js_u8_array(dst: &mut String, values: &[u8]) {
     dst.push('[');
@@ -178,6 +195,29 @@ pub fn queue_qjs_input(next: QjsInputEntry) -> bool {
     }
     PENDING_QJS_INPUT.lock().push_back(next);
     true
+}
+
+pub fn queue_browser_rpc(method: String, args_json: String) -> u32 {
+    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+        return 0;
+    }
+    let id = BROWSER_RPC_SEQ.fetch_add(1, Ordering::Relaxed);
+    PENDING_BROWSER_RPC.lock().push_back(BrowserRpcRequest {
+        id,
+        method,
+        args_json,
+    });
+    id
+}
+
+pub fn take_browser_rpc_result(id: u32) -> Option<String> {
+    if id == 0 {
+        return None;
+    }
+    let mut guard = BROWSER_RPC_RESULTS.lock();
+    let pos = guard.iter().position(|entry| entry.id == id)?;
+    let entry = guard.remove(pos)?;
+    Some(entry.payload_json)
 }
 
 pub fn set_hosted_viewport(
@@ -303,6 +343,92 @@ unsafe fn browser_api_value(ctx: *mut qjs::JSContext) -> Option<qjs::JSValue> {
         return None;
     }
     Some(browser)
+}
+
+unsafe fn apply_pending_browser_rpc(ctx: *mut qjs::JSContext) {
+    if ACTIVE_BROWSER_RPC_ID.lock().is_some() {
+        return;
+    }
+
+    let Some(next) = PENDING_BROWSER_RPC.lock().pop_front() else {
+        return;
+    };
+
+    let method_lit = helpers::js_single_quoted_literal(next.method.as_str());
+    let args_lit = helpers::js_single_quoted_literal(next.args_json.as_str());
+    let mut src = String::new();
+    src.push_str("(function(){const __g=(typeof globalThis!=='undefined')?globalThis:this;");
+    src.push_str("__g.__trueosBrowserRpcDoneId=0;__g.__trueosBrowserRpcDonePayload='';");
+    src.push_str("const __id=");
+    src.push_str(alloc::format!("{}", next.id).as_str());
+    src.push_str(";const __method=");
+    src.push_str(method_lit.as_str());
+    src.push_str(";const __argsJson=");
+    src.push_str(args_lit.as_str());
+    src.push_str(";Promise.resolve().then(()=>{const __browser=__g.__trueosBrowser;");
+    src.push_str("if(!__browser||typeof __browser[__method]!=='function'){throw new Error('browser rpc unavailable: '+__method);} ");
+    src.push_str("const __args=JSON.parse(__argsJson);return __browser[__method](...__args);})");
+    src.push_str(".then((__result)=>{let __payload='';try{__payload=JSON.stringify({ok:true,result:(__result===undefined?null:__result)});}catch(__err){__payload=JSON.stringify({ok:false,error:String(__err&&__err.message?__err.message:__err)});}__g.__trueosBrowserRpcDonePayload=__payload;__g.__trueosBrowserRpcDoneId=__id;})");
+    src.push_str(".catch((__err)=>{__g.__trueosBrowserRpcDonePayload=JSON.stringify({ok:false,error:String(__err&&__err.stack?__err.stack:__err)});__g.__trueosBrowserRpcDoneId=__id;});})();");
+
+    if !helpers::eval_or_log(
+        ctx,
+        src.as_bytes(),
+        b"<browser-rpc>\0".as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+        "browser rpc",
+    ) {
+        BROWSER_RPC_RESULTS.lock().push_back(BrowserRpcResult {
+            id: next.id,
+            payload_json: String::from("{\"ok\":false,\"error\":\"browser rpc eval failed\"}"),
+        });
+        return;
+    }
+
+    *ACTIVE_BROWSER_RPC_ID.lock() = Some(next.id);
+}
+
+unsafe fn collect_browser_rpc_result(ctx: *mut qjs::JSContext) {
+    let Some(active_id) = *ACTIVE_BROWSER_RPC_ID.lock() else {
+        return;
+    };
+
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        qjs::js_free_value(ctx, global);
+        return;
+    }
+
+    let done_id = js_prop_f64(ctx, global, b"__trueosBrowserRpcDoneId\0")
+        .map(|value| if value.is_finite() && value >= 0.0 { value as u32 } else { 0 })
+        .unwrap_or(0);
+    if done_id != active_id {
+        qjs::js_free_value(ctx, global);
+        return;
+    }
+
+    let payload = js_prop_string(ctx, global, b"__trueosBrowserRpcDonePayload\0").unwrap_or_else(|| {
+        String::from("{\"ok\":false,\"error\":\"browser rpc missing payload\"}")
+    });
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosBrowserRpcDoneId\0".as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, 0.0),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosBrowserRpcDonePayload\0".as_ptr() as *const c_char,
+        qjs::JS_NewStringLen(ctx, b"".as_ptr() as *const c_char, 0),
+    );
+    qjs::js_free_value(ctx, global);
+
+    *ACTIVE_BROWSER_RPC_ID.lock() = None;
+    BROWSER_RPC_RESULTS.lock().push_back(BrowserRpcResult {
+        id: active_id,
+        payload_json: payload,
+    });
 }
 
 unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext) {
@@ -662,6 +788,8 @@ if (typeof G.addEventListener !== 'function') G.addEventListener = () => {};
 if (typeof G.removeEventListener !== 'function') G.removeEventListener = () => {};
 if (typeof G.setTimeout !== 'function') G.setTimeout = () => 1;
 if (typeof G.clearTimeout !== 'function') G.clearTimeout = () => {};
+G.__trueosBrowserRpcDoneId = 0;
+G.__trueosBrowserRpcDonePayload = '';
 "#,
     );
 
@@ -732,11 +860,13 @@ pub async fn boot_browser() {
             apply_pending_html(ctx);
             apply_pending_ai_input(ctx);
             apply_pending_qjs_input(ctx);
+            apply_pending_browser_rpc(ctx);
             apply_pending_hosted_viewport(ctx);
             apply_pending_hosted_scroll_y(ctx);
             if !qjs::vm::pump_runtime_once(rt, ctx, "browser") {
                 break;
             }
+            collect_browser_rpc_result(ctx);
             sync_hosted_surface_state(ctx);
             sync_hosted_interactive_state(ctx);
             Timer::after(EmbassyDuration::from_millis(16)).await;

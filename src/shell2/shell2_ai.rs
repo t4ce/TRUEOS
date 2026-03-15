@@ -31,7 +31,7 @@ impl AiPromptMode {
 }
 
 pub(crate) fn submit(io: &'static dyn ShellBackend2, mode: AiPromptMode, submitted: &str) {
-    let entry = trueos_qjs::browser_task::AiInputEntry {
+    let entry = trueos_qjs::ai_task::AiInputEntry {
         text: String::from(submitted.trim()),
         web_search: mode == AiPromptMode::WebSearch,
         file_search: mode == AiPromptMode::FileSearch,
@@ -39,8 +39,8 @@ pub(crate) fn submit(io: &'static dyn ShellBackend2, mode: AiPromptMode, submitt
         computer_use: true,
     };
 
-    if !trueos_qjs::browser_task::queue_ai_input(entry) {
-        print_shell_line(io, "ai: browser/ai bridge not running");
+    if !trueos_qjs::ai_task::queue_ai_input(entry) {
+        print_shell_line(io, "ai: standalone ai task not running");
         return;
     }
 

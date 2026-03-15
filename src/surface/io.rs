@@ -804,7 +804,10 @@ pub mod cabi {
                 }
             }
             if rc == 0 && req.repaint_window_id != 0 {
-                let _ = crate::v::ui2::request_window_repaint(req.repaint_window_id, req.repaint_reason);
+                let _ = crate::v::ui2::request_window_repaint(
+                    req.repaint_window_id,
+                    req.repaint_reason,
+                );
             }
             Timer::after_millis(1).await;
         }
@@ -3170,5 +3173,43 @@ pub mod cabi {
             *out_dropped = dropped;
         }
         wrote as u32
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_write_keyboard_text(
+        slot_id: u32,
+        text_ptr: *const u8,
+        text_len: usize,
+        flags: u32,
+    ) -> i32 {
+        if slot_id == 0 || text_ptr.is_null() || text_len == 0 {
+            return -1;
+        }
+        let bytes = core::slice::from_raw_parts(text_ptr, text_len);
+        let Ok(text) = core::str::from_utf8(bytes) else {
+            return -2;
+        };
+        crate::v::keyboard::inject_text(slot_id, text, flags) as i32
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_input_write_keyboard_key(
+        slot_id: u32,
+        codepoint: u32,
+        key_code: u32,
+        modifiers: u32,
+        flags: u32,
+    ) -> i32 {
+        let key_code = if key_code > u16::MAX as u32 {
+            return -2;
+        } else {
+            key_code as u16
+        };
+        let modifiers = (modifiers & 0xff) as u8;
+        if crate::v::keyboard::inject_key(slot_id, codepoint, key_code, modifiers, flags) {
+            1
+        } else {
+            0
+        }
     }
 }
