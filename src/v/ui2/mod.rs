@@ -9,13 +9,12 @@ use parry2d::query;
 use parry2d::shape::{Ball, Cuboid};
 use spin::{Mutex, Once};
 
-#[path = "ui2_win_deco.rs"]
-mod win_deco;
+mod ui2_win_deco;
 
-mod win;
+mod ui2_win;
 
-pub use self::win::*;
-pub use self::win_deco::*;
+pub use self::ui2_win::*;
+pub use self::ui2_win_deco::*;
 
 const UI2_TITLE_H: f32 = 26.0;
 const UI2_BOTTOM_BAR_H: f32 = 18.0;
