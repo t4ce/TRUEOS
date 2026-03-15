@@ -21,6 +21,7 @@ const UI2_MINIMIZED_STRIP_PAD: f32 = 8.0;
 const UI2_PRIMARY_BUTTON_MASK: u32 = 1;
 const UI2_CLICK_SLOP_PX: f32 = 12.0;
 const UI2_CURSOR_EVENT_BATCH: usize = 32;
+const UI2_KEYBOARD_EVENT_BATCH: usize = 32;
 const UI2_CURSOR_HIT_RADIUS_PX: f32 = 8.0;
 const UI2_WHEEL_SCROLL_STEP_PX: i32 = 16;
 const UI2_WINDOW_UPDATE_LOG_EVERY: u32 = 32;
@@ -29,10 +30,7 @@ const UI2_WINDOW_RESIZE_LEFT: u32 = 1 << 0;
 const UI2_WINDOW_RESIZE_TOP: u32 = 1 << 1;
 const UI2_WINDOW_RESIZE_RIGHT: u32 = 1 << 2;
 const UI2_WINDOW_RESIZE_BOTTOM: u32 = 1 << 3;
-const UI2_BROWSER2_SVG_TEX_ID_BASE: u32 = 4_400;
-const UI2_BROWSER2_SVG_ICON_PX: f32 = 64.0;
 static UI2_BROWSER_SNAPSHOT_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
-const UI2_SVG_DEMO_MJS: &str = include_str!("../../crates/trueos-qjs/app/browser/svg_demo.mjs");
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -94,7 +92,6 @@ enum Ui2SystemButtonAction {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui2WindowKind {
     HostedBrowser,
-    SvgDemo,
     HostedSurface,
 }
 
@@ -162,10 +159,12 @@ struct Ui2WindowResizeDrag {
     active: bool,
     window_id: u32,
     cursor_slot_id: u32,
+    live_apply: bool,
     edge_mask: u32,
     start_cursor_x: f32,
     start_cursor_y: f32,
     start_rect: Ui2Rect,
+    preview_rect: Ui2Rect,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -211,6 +210,7 @@ struct Ui2State {
     last_logged_compose_reason: &'static str,
     last_logged_compose_dirty_count: usize,
     cursor_read_seq: u64,
+    keyboard_read_seq: u64,
     cursors: Vec<Ui2CursorState>,
     hit_scene: Ui2HitScene,
     last_browser_interactive_seq: u32,
@@ -218,12 +218,6 @@ struct Ui2State {
     resize_drag: Ui2WindowResizeDrag,
     scroll_drag: Ui2WindowScrollDrag,
     windows: Vec<Ui2Window>,
-}
-
-struct Ui2Browser2Svg {
-    tex_id: u32,
-    svg: String,
-    status: i32,
 }
 
 #[repr(C)]
@@ -250,35 +244,9 @@ pub struct TrueosUi2WindowInfo {
 }
 
 static UI2_STATE: Once<Mutex<Ui2State>> = Once::new();
-static UI2_BROWSER2_SVGS: Once<Mutex<Vec<Ui2Browser2Svg>>> = Once::new();
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_DIRTY: AtomicBool = AtomicBool::new(false);
 static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
-
-fn browser2_svg_state() -> &'static Mutex<Vec<Ui2Browser2Svg>> {
-    UI2_BROWSER2_SVGS.call_once(|| {
-        let mut out = Vec::new();
-        let mut rest = UI2_SVG_DEMO_MJS;
-        let mut tex_id = UI2_BROWSER2_SVG_TEX_ID_BASE;
-        while let Some(start) = rest.find("svg: `") {
-            let after = &rest[start + 6..];
-            let Some(end) = after.find("`,") else {
-                break;
-            };
-            let svg = after[..end].trim();
-            if !svg.is_empty() {
-                out.push(Ui2Browser2Svg {
-                    tex_id,
-                    svg: String::from(svg),
-                    status: 0,
-                });
-                tex_id = tex_id.wrapping_add(1);
-            }
-            rest = &after[end + 2..];
-        }
-        Mutex::new(out)
-    })
-}
 
 fn init_state() -> &'static Mutex<Ui2State> {
     UI2_STATE.call_once(|| {
@@ -297,6 +265,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             last_logged_compose_reason: "",
             last_logged_compose_dirty_count: 0,
             cursor_read_seq: 0,
+            keyboard_read_seq: 0,
             cursors: Vec::new(),
             hit_scene: Ui2HitScene::default(),
             last_browser_interactive_seq: 0,
@@ -306,8 +275,6 @@ fn init_state() -> &'static Mutex<Ui2State> {
             windows: Vec::new(),
         };
 
-        let right_x = (view_w as f32) - 336.0;
-
         let browser_id = alloc_window(
             &mut state,
             Ui2WindowKind::HostedBrowser,
@@ -315,22 +282,13 @@ fn init_state() -> &'static Mutex<Ui2State> {
             Ui2Rect::new(
                 72.0,
                 56.0,
-                (right_x - 96.0).max(360.0),
+                ((view_w as f32) - 144.0).max(360.0),
                 (view_h as f32) - 112.0,
             ),
             10,
             255,
         );
         UI2_BROWSER_WINDOW_ID.store(browser_id, Ordering::Release);
-
-        let _ = alloc_window(
-            &mut state,
-            Ui2WindowKind::SvgDemo,
-            "Browser 2",
-            Ui2Rect::new(right_x, 72.0, 272.0, (view_h as f32) - 144.0),
-            20,
-            255,
-        );
 
         refresh_all_window_hit_entries(&mut state);
 
@@ -396,7 +354,6 @@ fn rect_contains_point(rect: Ui2Rect, x: f32, y: f32) -> bool {
 fn window_kind_id(kind: Ui2WindowKind) -> u32 {
     match kind {
         Ui2WindowKind::HostedBrowser => 1,
-        Ui2WindowKind::SvgDemo => 2,
         Ui2WindowKind::HostedSurface => 3,
     }
 }
@@ -566,7 +523,7 @@ impl Ui2WindowHitSource for Ui2Window {
                     });
                 }
             }
-            Ui2WindowKind::SvgDemo | Ui2WindowKind::HostedSurface => {}
+            Ui2WindowKind::HostedSurface => {}
         }
     }
 }
@@ -932,7 +889,7 @@ fn forward_cursor_wheel_to_selected_window(
                 false
             }
         }
-        Ui2WindowKind::SvgDemo | Ui2WindowKind::HostedSurface => false,
+        Ui2WindowKind::HostedSurface => false,
     }
 }
 
@@ -956,6 +913,159 @@ fn pump_cursor_selection(state: &mut Ui2State) {
             process_cursor_event(state, *event);
         }
         if wrote < events.len() {
+            break;
+        }
+    }
+}
+
+fn selected_browser_window_id_for_keyboard(state: &Ui2State) -> Option<u32> {
+    for idx in sorted_window_indices(state).into_iter().rev() {
+        let window = &state.windows[idx];
+        if window.kind != Ui2WindowKind::HostedBrowser
+            || !window.visible
+            || window.state == Ui2WindowStateKind::Minimized
+            || window.selected_cursor_slots.is_empty()
+        {
+            continue;
+        }
+        return Some(window.id);
+    }
+    None
+}
+
+fn keyboard_output_modifiers_to_browser_mask(modifiers: u8) -> u8 {
+    let mut out = 0u8;
+    if (modifiers & ((1 << 1) | (1 << 5))) != 0 {
+        out |= trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_SHIFT;
+    }
+    if (modifiers & ((1 << 0) | (1 << 4))) != 0 {
+        out |= trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_CTRL;
+    }
+    if (modifiers & ((1 << 2) | (1 << 6))) != 0 {
+        out |= trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_ALT;
+    }
+    if (modifiers & ((1 << 3) | (1 << 7))) != 0 {
+        out |= trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_META;
+    }
+    out
+}
+
+fn keyboard_output_key_name(
+    event: &crate::v::keyboard::TrueosKeyboardOutputEvent,
+) -> Option<String> {
+    let named = match event.key_code {
+        crate::v::keyboard::KEYBOARD_KEY_BACKSPACE => Some("Backspace"),
+        crate::v::keyboard::KEYBOARD_KEY_TAB => Some("Tab"),
+        crate::v::keyboard::KEYBOARD_KEY_ENTER => Some("Enter"),
+        crate::v::keyboard::KEYBOARD_KEY_ESCAPE => Some("Escape"),
+        crate::v::keyboard::KEYBOARD_KEY_SPACE => Some("Space"),
+        crate::v::keyboard::KEYBOARD_KEY_DELETE => Some("Delete"),
+        crate::v::keyboard::KEYBOARD_KEY_INSERT => Some("Insert"),
+        crate::v::keyboard::KEYBOARD_KEY_HOME => Some("Home"),
+        crate::v::keyboard::KEYBOARD_KEY_END => Some("End"),
+        crate::v::keyboard::KEYBOARD_KEY_PAGE_UP => Some("PageUp"),
+        crate::v::keyboard::KEYBOARD_KEY_PAGE_DOWN => Some("PageDown"),
+        crate::v::keyboard::KEYBOARD_KEY_ARROW_UP => Some("ArrowUp"),
+        crate::v::keyboard::KEYBOARD_KEY_ARROW_DOWN => Some("ArrowDown"),
+        crate::v::keyboard::KEYBOARD_KEY_ARROW_LEFT => Some("ArrowLeft"),
+        crate::v::keyboard::KEYBOARD_KEY_ARROW_RIGHT => Some("ArrowRight"),
+        crate::v::keyboard::KEYBOARD_KEY_F1 => Some("F1"),
+        crate::v::keyboard::KEYBOARD_KEY_F2 => Some("F2"),
+        crate::v::keyboard::KEYBOARD_KEY_F3 => Some("F3"),
+        crate::v::keyboard::KEYBOARD_KEY_F4 => Some("F4"),
+        crate::v::keyboard::KEYBOARD_KEY_F5 => Some("F5"),
+        crate::v::keyboard::KEYBOARD_KEY_F6 => Some("F6"),
+        crate::v::keyboard::KEYBOARD_KEY_F7 => Some("F7"),
+        crate::v::keyboard::KEYBOARD_KEY_F8 => Some("F8"),
+        crate::v::keyboard::KEYBOARD_KEY_F9 => Some("F9"),
+        crate::v::keyboard::KEYBOARD_KEY_F10 => Some("F10"),
+        crate::v::keyboard::KEYBOARD_KEY_F11 => Some("F11"),
+        crate::v::keyboard::KEYBOARD_KEY_F12 => Some("F12"),
+        _ => None,
+    };
+    if let Some(name) = named {
+        return Some(String::from(name));
+    }
+    char::from_u32(event.codepoint).map(|ch| {
+        let mut value = String::new();
+        value.push(ch);
+        value
+    })
+}
+
+fn browser_keyboard_event_from_output(
+    event: crate::v::keyboard::TrueosKeyboardOutputEvent,
+) -> Option<trueos_qjs::browser_task::HostedKeyboardEvent> {
+    match event.kind {
+        crate::v::keyboard::KEYBOARD_OUTPUT_KIND_TEXT => {
+            let utf8_len = (event.utf8_len as usize).min(event.utf8.len());
+            if utf8_len == 0 {
+                return char::from_u32(event.codepoint).map(|ch| {
+                    let mut text = String::new();
+                    text.push(ch);
+                    trueos_qjs::browser_task::HostedKeyboardEvent::Text { text }
+                });
+            }
+            let text = core::str::from_utf8(&event.utf8[..utf8_len]).ok()?;
+            if text.is_empty() {
+                return None;
+            }
+            Some(trueos_qjs::browser_task::HostedKeyboardEvent::Text {
+                text: String::from(text),
+            })
+        }
+        crate::v::keyboard::KEYBOARD_OUTPUT_KIND_KEY => {
+            let key = keyboard_output_key_name(&event)?;
+            Some(trueos_qjs::browser_task::HostedKeyboardEvent::Key {
+                key,
+                modifiers: keyboard_output_modifiers_to_browser_mask(event.modifiers),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn pump_keyboard_input(state: &mut Ui2State) {
+    let selected_browser_window_id = selected_browser_window_id_for_keyboard(state);
+    let mut raw_events =
+        [crate::v::keyboard::TrueosKeyboardOutputEvent::default(); UI2_KEYBOARD_EVENT_BATCH];
+    loop {
+        let (next_seq, dropped, wrote) =
+            crate::v::keyboard::read_output_events_since(state.keyboard_read_seq, &mut raw_events);
+        if dropped != 0 {
+            crate::log!(
+                "ui2: keyboard-event-drop read_seq={} dropped={}\n",
+                state.keyboard_read_seq,
+                dropped
+            );
+        }
+        if wrote == 0 {
+            break;
+        }
+        state.keyboard_read_seq = next_seq;
+
+        if let Some(browser_window_id) = selected_browser_window_id {
+            let mut events = Vec::new();
+            for event in raw_events.iter().take(wrote).copied() {
+                if let Some(next) = browser_keyboard_event_from_output(event) {
+                    events.push(next);
+                }
+            }
+            if !events.is_empty()
+                && !trueos_qjs::browser_task::queue_hosted_keyboard_events(
+                    browser_window_id,
+                    events.as_slice(),
+                )
+            {
+                crate::log!(
+                    "ui2: keyboard-forward-drop window={} count={}\n",
+                    browser_window_id,
+                    events.len()
+                );
+            }
+        }
+
+        if wrote < raw_events.len() {
             break;
         }
     }
@@ -1172,6 +1282,11 @@ fn is_valid_resize_edge_mask(edge_mask: u32) -> bool {
     true
 }
 
+#[inline]
+fn window_uses_live_resize(kind: Ui2WindowKind) -> bool {
+    !matches!(kind, Ui2WindowKind::HostedBrowser)
+}
+
 fn pick_drag_cursor_slot(state: &Ui2State, window: &Ui2Window) -> Option<u32> {
     for slot_id in &window.selected_cursor_slots {
         if let Some(cursor) = state
@@ -1285,10 +1400,12 @@ fn begin_window_resize_for_cursor(
         active: true,
         window_id,
         cursor_slot_id: slot_id,
+        live_apply: window_uses_live_resize(window.kind),
         edge_mask,
         start_cursor_x: cursor.x,
         start_cursor_y: cursor.y,
         start_rect: window.rect,
+        preview_rect: window.rect,
     };
     state.compose_reason = "begin-window-resize";
     let top_z = state
@@ -1473,12 +1590,24 @@ fn update_resize_drag_for_cursor(
         return;
     }
     if (buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
+        let drag = state.resize_drag;
+        if drag.active && !drag.live_apply && drag.preview_rect != drag.start_rect {
+            if let Some(window) = window_mut(state, drag.window_id) {
+                window.rect = drag.preview_rect;
+                window.restore_rect = drag.preview_rect;
+            }
+            state.compose_reason = "window-resize-commit";
+            let _ = commit_window_geometry_change(state, drag.window_id, "window-resize-commit");
+        } else if drag.active && !drag.live_apply {
+            state.compose_reason = "window-resize-cancel";
+            let _ = note_window_dirty(state, drag.window_id, "window-resize-cancel");
+        }
         state.resize_drag = Ui2WindowResizeDrag::default();
         return;
     }
 
     let drag = state.resize_drag;
-    let Some(window) = window_mut(state, drag.window_id) else {
+    let Some(window) = state.windows.iter().find(|window| window.id == drag.window_id) else {
         state.resize_drag = Ui2WindowResizeDrag::default();
         return;
     };
@@ -1509,13 +1638,108 @@ fn update_resize_drag_for_cursor(
         next.h = (drag.start_rect.h + dy).max(1.0);
     }
 
-    if window.rect != next {
-        window.rect = next;
-        window.restore_rect = next;
-        state.compose_reason = "window-resize-drag";
-        let _ = note_window_dirty(state, drag.window_id, "window-resize-drag");
-        let _ = note_window_container_sync_needed(state, drag.window_id);
-        refresh_window_hit_entries(state, drag.window_id);
+    if drag.live_apply {
+        if window.rect != next {
+            if let Some(window) = window_mut(state, drag.window_id) {
+                window.rect = next;
+                window.restore_rect = next;
+            }
+            state.compose_reason = "window-resize-drag";
+            let _ = note_window_dirty(state, drag.window_id, "window-resize-drag");
+            let _ = note_window_container_sync_needed(state, drag.window_id);
+            refresh_window_hit_entries(state, drag.window_id);
+        }
+    } else if drag.preview_rect != next {
+        state.resize_drag.preview_rect = next;
+        state.compose_reason = "window-resize-preview";
+        let _ = note_window_dirty(state, drag.window_id, "window-resize-preview");
+    }
+}
+
+fn draw_resize_preview_outline(state: &Ui2State) {
+    let drag = state.resize_drag;
+    if !drag.active || drag.live_apply {
+        return;
+    }
+    let rect = drag.preview_rect;
+    if !(rect.w > 0.0 && rect.h > 0.0) {
+        return;
+    }
+    let outer = (0x2B, 0x6C, 0xD6, 0xFF);
+    let inner = (0xD9, 0xE7, 0xFF, 0xFF);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        rect.x,
+        rect.y,
+        rect.w,
+        1.0,
+        outer,
+        state.view_w,
+        state.view_h,
+    );
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        rect.x,
+        rect.y + rect.h - 1.0,
+        rect.w,
+        1.0,
+        outer,
+        state.view_w,
+        state.view_h,
+    );
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        rect.x,
+        rect.y,
+        1.0,
+        rect.h,
+        outer,
+        state.view_w,
+        state.view_h,
+    );
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        rect.x + rect.w - 1.0,
+        rect.y,
+        1.0,
+        rect.h,
+        outer,
+        state.view_w,
+        state.view_h,
+    );
+    if rect.w > 4.0 && rect.h > 4.0 {
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            rect.x + 1.0,
+            rect.y + 1.0,
+            rect.w - 2.0,
+            1.0,
+            inner,
+            state.view_w,
+            state.view_h,
+        );
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            rect.x + 1.0,
+            rect.y + rect.h - 2.0,
+            rect.w - 2.0,
+            1.0,
+            inner,
+            state.view_w,
+            state.view_h,
+        );
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            rect.x + 1.0,
+            rect.y + 1.0,
+            1.0,
+            rect.h - 2.0,
+            inner,
+            state.view_w,
+            state.view_h,
+        );
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            rect.x + rect.w - 2.0,
+            rect.y + 1.0,
+            1.0,
+            rect.h - 2.0,
+            inner,
+            state.view_w,
+            state.view_h,
+        );
     }
 }
 
@@ -1549,7 +1773,7 @@ fn sync_window_container(renderable: bool, kind: Ui2WindowKind, content: Option<
             queue_browser_window_viewport(content);
             true
         }
-        Ui2WindowKind::SvgDemo | Ui2WindowKind::HostedSurface => true,
+        Ui2WindowKind::HostedSurface => true,
     }
 }
 
@@ -1600,7 +1824,7 @@ pub fn window_info_by_id(id: u32) -> Option<TrueosUi2WindowInfo> {
 pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     let state_lock = init_state();
     let mut state = state_lock.lock();
-    let id = alloc_window(&mut state, Ui2WindowKind::SvgDemo, title, rect, z, alpha);
+    let id = alloc_window(&mut state, Ui2WindowKind::HostedSurface, title, rect, z, alpha);
     state.compose_reason = "create-window";
     refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
@@ -2540,75 +2764,6 @@ fn draw_texture_rect_no_present(
     )
 }
 
-fn ensure_browser2_svg_textures() {
-    let svg_lock = browser2_svg_state();
-    let mut svgs = svg_lock.lock();
-    for entry in svgs.iter_mut() {
-        if entry.status != 0 {
-            continue;
-        }
-        let rc = unsafe {
-            crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_svg(
-                entry.tex_id,
-                entry.svg.as_ptr(),
-                entry.svg.len(),
-            )
-        };
-        entry.status = if rc == 0 { 1 } else { rc.min(-1) };
-        crate::log!(
-            "ui2: browser2-svg tex={} status={} bytes={}\n",
-            entry.tex_id,
-            entry.status,
-            entry.svg.len()
-        );
-    }
-}
-
-fn draw_browser2_svg_demo(state: &Ui2State, content: Ui2Rect) -> bool {
-    ensure_browser2_svg_textures();
-
-    let sx = round_to_u32(content.x.max(0.0), 0);
-    let sy = round_to_u32(content.y.max(0.0), 0);
-    let sw = round_to_u32(content.w, 1);
-    let sh = round_to_u32(content.h, 1);
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_scissor(sx, sy, sw, sh) };
-
-    let pad_y = 12.0;
-    let gap_y = 10.0;
-    let icon_px = UI2_BROWSER2_SVG_ICON_PX;
-    let draw_x = content.x + libm::fmaxf(0.0, (content.w - icon_px) * 0.5);
-    let max_y = content.y + content.h;
-    let mut draw_y = content.y + pad_y;
-    let mut drew = false;
-
-    {
-        let svg_lock = browser2_svg_state();
-        let svgs = svg_lock.lock();
-        for entry in svgs.iter() {
-            if entry.status != 1 {
-                continue;
-            }
-            if draw_y + icon_px > max_y {
-                break;
-            }
-            drew |= draw_texture_rect_no_present(
-                entry.tex_id,
-                draw_x,
-                draw_y,
-                icon_px,
-                icon_px,
-                state.view_w,
-                state.view_h,
-                true,
-            );
-            draw_y += icon_px + gap_y;
-        }
-    }
-
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_clear_scissor() };
-    drew
-}
-
 fn queue_browser_window_viewport(content: Ui2Rect) {
     let viewport_w = round_to_u32(content.w, 1);
     let viewport_h = round_to_u32(content.h, 1);
@@ -3028,13 +3183,6 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                 }
             }
         }
-        Ui2WindowKind::SvgDemo => {
-            if let Some(content) = content_rect
-                && draw_browser2_svg_demo(state, content)
-            {
-                return;
-            }
-        }
         Ui2WindowKind::HostedSurface => {
             if let Some(content) = content_rect
                 && draw_texture_rect_no_present(
@@ -3132,6 +3280,7 @@ fn compose_windows(state: &mut Ui2State) {
             let window = &state.windows[idx];
             draw_window_frame(state, window);
         }
+        draw_resize_preview_outline(state);
         unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
     });
 }
@@ -3155,6 +3304,7 @@ pub async fn ui2_task() {
             let mut state = state_lock.lock();
             refresh_browser_hit_entries_if_needed(&mut state);
             pump_cursor_selection(&mut state);
+            pump_keyboard_input(&mut state);
             sync_pending_window_containers(&mut state);
         }
         let next_browser_surface_seq = trueos_qjs::browser_task::hosted_surface_seq();

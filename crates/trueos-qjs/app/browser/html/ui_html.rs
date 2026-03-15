@@ -9,6 +9,7 @@ pub const UI_HTML: &str = r##"<!DOCTYPE html>
 <body>
 
 <p><a href="/helloworld">Open Hello World page</a></p>
+<p><a href="/svg-demo">Open SVG demo page</a></p>
 <i>kursiver (schräger)</i> 
 <h1>HTML Without CSS or JavaScript</h1>
 <b>and this is bold text</b>
