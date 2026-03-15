@@ -6,8 +6,10 @@ use alloc::string::String;
 
 pub mod ui_helloworld;
 pub mod ui_html;
+pub mod svg_html;
 
 pub const DEFAULT_EMBEDDED_URL: &str = "trueos://ui/html";
+pub const SVG_EMBEDDED_URL: &str = "trueos://ui/svg-demo";
 
 fn js_single_quoted_literal(src: &str) -> String {
     let mut out = String::with_capacity(src.len() + 32);
@@ -28,6 +30,7 @@ fn js_single_quoted_literal(src: &str) -> String {
 pub fn append_embedded_browser_globals_js(dst: &mut String) {
     let html_lit = js_single_quoted_literal(ui_html::UI_HTML);
     let hello_lit = js_single_quoted_literal(ui_helloworld::UI_HELLOWORLD_HTML);
+    let svg_lit = js_single_quoted_literal(svg_html::SVG_HTML);
 
     dst.push_str("G.__trueosUiHtml = ");
     dst.push_str(&html_lit);
@@ -37,6 +40,10 @@ pub fn append_embedded_browser_globals_js(dst: &mut String) {
     dst.push_str(&hello_lit);
     dst.push_str(";\n");
 
+    dst.push_str("G.__trueosUiSvgHtml = ");
+    dst.push_str(&svg_lit);
+    dst.push_str(";\n");
+
     dst.push_str(
         r#"
 if (!G.__trueosBrowserEmbeddedRoutes || typeof G.__trueosBrowserEmbeddedRoutes !== 'object') {
@@ -44,6 +51,7 @@ if (!G.__trueosBrowserEmbeddedRoutes || typeof G.__trueosBrowserEmbeddedRoutes !
 }
 G.__trueosBrowserEmbeddedRoutes['trueos://ui/html'] = G.__trueosUiHtml;
 G.__trueosBrowserEmbeddedRoutes['trueos://ui/helloworld'] = G.__trueosUiHelloWorldHtml;
+G.__trueosBrowserEmbeddedRoutes['trueos://ui/svg-demo'] = G.__trueosUiSvgHtml;
 if (typeof G.__trueosBrowserUrl !== 'string' || !G.__trueosBrowserUrl) {
     G.__trueosBrowserUrl = 'trueos://ui/html';
 }

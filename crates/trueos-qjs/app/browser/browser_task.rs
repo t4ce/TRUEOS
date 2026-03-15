@@ -17,6 +17,13 @@ unsafe extern "C" {
 }
 
 static BROWSER_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+pub const PRIMARY_BROWSER_INSTANCE_ID: u32 = 1;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BrowserHostTarget {
+    pub instance_id: u32,
+    pub window_id: u32,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HostedBrowserRegion {
@@ -62,6 +69,7 @@ pub struct HostedBrowserInteractiveState {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct HostedViewportRequest {
+    browser_instance_id: u32,
     viewport_width: u32,
     viewport_height: u32,
     content_x: i32,
@@ -72,6 +80,7 @@ struct HostedViewportRequest {
 
 #[derive(Clone)]
 struct PendingHtmlEntry {
+    browser_instance_id: u32,
     html: String,
     url: Option<String>,
 }
@@ -79,6 +88,7 @@ struct PendingHtmlEntry {
 #[derive(Clone)]
 struct BrowserRpcRequest {
     id: u32,
+    browser_instance_id: u32,
     browser_window_id: u32,
     method: String,
     args_json: String,
@@ -122,6 +132,93 @@ static HOSTED_INTERACTIVE_STATE: Mutex<HostedBrowserInteractiveState> =
 static HOSTED_INTERACTIVE_SEQ: AtomicU32 = AtomicU32::new(0);
 static BROWSER_RPC_SEQ: AtomicU32 = AtomicU32::new(1);
 
+pub const HOSTED_KEYBOARD_MOD_SHIFT: u8 = 1 << 0;
+pub const HOSTED_KEYBOARD_MOD_CTRL: u8 = 1 << 1;
+pub const HOSTED_KEYBOARD_MOD_ALT: u8 = 1 << 2;
+pub const HOSTED_KEYBOARD_MOD_META: u8 = 1 << 3;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostedKeyboardEvent {
+    Text { text: String },
+    Key { key: String, modifiers: u8 },
+}
+
+fn append_json_string(dst: &mut String, value: &str) {
+    dst.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => dst.push_str("\\\""),
+            '\\' => dst.push_str("\\\\"),
+            '\u{0008}' => dst.push_str("\\b"),
+            '\u{000C}' => dst.push_str("\\f"),
+            '\n' => dst.push_str("\\n"),
+            '\r' => dst.push_str("\\r"),
+            '\t' => dst.push_str("\\t"),
+            ch if ch <= '\u{001F}' => {
+                dst.push_str(alloc::format!("\\u{:04X}", ch as u32).as_str());
+            }
+            _ => dst.push(ch),
+        }
+    }
+    dst.push('"');
+}
+
+fn append_keyboard_modifiers_json(dst: &mut String, modifiers: u8) {
+    dst.push('[');
+    let mut first = true;
+    for (bit, name) in [
+        (HOSTED_KEYBOARD_MOD_SHIFT, "Shift"),
+        (HOSTED_KEYBOARD_MOD_CTRL, "Ctrl"),
+        (HOSTED_KEYBOARD_MOD_ALT, "Alt"),
+        (HOSTED_KEYBOARD_MOD_META, "Meta"),
+    ] {
+        if (modifiers & bit) == 0 {
+            continue;
+        }
+        if !first {
+            dst.push(',');
+        }
+        first = false;
+        append_json_string(dst, name);
+    }
+    dst.push(']');
+}
+
+pub fn queue_hosted_keyboard_events(
+    browser_window_id: u32,
+    events: &[HostedKeyboardEvent],
+) -> bool {
+    if events.is_empty() {
+        return true;
+    }
+    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+        return false;
+    }
+
+    let mut args_json = String::from("[[");
+    for (idx, event) in events.iter().enumerate() {
+        if idx != 0 {
+            args_json.push(',');
+        }
+        match event {
+            HostedKeyboardEvent::Text { text } => {
+                args_json.push_str("{\"type\":\"text\",\"text\":");
+                append_json_string(&mut args_json, text.as_str());
+                args_json.push('}');
+            }
+            HostedKeyboardEvent::Key { key, modifiers } => {
+                args_json.push_str("{\"type\":\"key\",\"key\":");
+                append_json_string(&mut args_json, key.as_str());
+                args_json.push_str(",\"modifiers\":");
+                append_keyboard_modifiers_json(&mut args_json, *modifiers);
+                args_json.push('}');
+            }
+        }
+    }
+    args_json.push_str("],{\"logOnly\":false}]");
+    queue_browser_rpc(String::from("keyboard"), args_json, browser_window_id) != 0
+}
+
 fn append_js_u8_array(dst: &mut String, values: &[u8]) {
     dst.push('[');
     for (idx, value) in values.iter().enumerate() {
@@ -131,6 +228,37 @@ fn append_js_u8_array(dst: &mut String, values: &[u8]) {
         dst.push_str(alloc::format!("{}", value).as_str());
     }
     dst.push(']');
+}
+
+#[inline]
+fn normalize_browser_instance_id(instance_id: u32) -> u32 {
+    if instance_id == 0 {
+        PRIMARY_BROWSER_INSTANCE_ID
+    } else {
+        instance_id
+    }
+}
+
+#[inline]
+pub fn primary_browser_instance_id() -> u32 {
+    PRIMARY_BROWSER_INSTANCE_ID
+}
+
+#[inline]
+pub fn active_browser_instance_id() -> u32 {
+    if BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+        PRIMARY_BROWSER_INSTANCE_ID
+    } else {
+        0
+    }
+}
+
+#[inline]
+pub fn active_browser_target() -> BrowserHostTarget {
+    BrowserHostTarget {
+        instance_id: active_browser_instance_id(),
+        window_id: unsafe { trueos_cabi_ui2_primary_browser_window_id() },
+    }
 }
 
 fn browser_text_widths_by_char() -> [u8; 256] {
@@ -166,10 +294,19 @@ pub fn queue_set_html(next_html: String) -> bool {
 }
 
 pub fn queue_set_html_with_url(next_html: String, next_url: Option<String>) -> bool {
+    queue_set_html_with_url_for_browser(PRIMARY_BROWSER_INSTANCE_ID, next_html, next_url)
+}
+
+pub fn queue_set_html_with_url_for_browser(
+    browser_instance_id: u32,
+    next_html: String,
+    next_url: Option<String>,
+) -> bool {
     if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
         return false;
     }
     *PENDING_HTML.lock() = Some(PendingHtmlEntry {
+        browser_instance_id: normalize_browser_instance_id(browser_instance_id),
         html: next_html,
         url: next_url,
     });
@@ -185,12 +322,27 @@ pub fn queue_qjs_input(next: QjsInputEntry) -> bool {
 }
 
 pub fn queue_browser_rpc(method: String, args_json: String, browser_window_id: u32) -> u32 {
+    queue_browser_rpc_for_browser(
+        PRIMARY_BROWSER_INSTANCE_ID,
+        method,
+        args_json,
+        browser_window_id,
+    )
+}
+
+pub fn queue_browser_rpc_for_browser(
+    browser_instance_id: u32,
+    method: String,
+    args_json: String,
+    browser_window_id: u32,
+) -> u32 {
     if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
         return 0;
     }
     let id = BROWSER_RPC_SEQ.fetch_add(1, Ordering::Relaxed);
     PENDING_BROWSER_RPC.lock().push_back(BrowserRpcRequest {
         id,
+        browser_instance_id: normalize_browser_instance_id(browser_instance_id),
         browser_window_id,
         method,
         args_json,
@@ -216,10 +368,31 @@ pub fn set_hosted_viewport(
     content_width: u32,
     content_height: u32,
 ) -> bool {
+    set_hosted_viewport_for_browser(
+        PRIMARY_BROWSER_INSTANCE_ID,
+        viewport_width,
+        viewport_height,
+        content_x,
+        content_y,
+        content_width,
+        content_height,
+    )
+}
+
+pub fn set_hosted_viewport_for_browser(
+    browser_instance_id: u32,
+    viewport_width: u32,
+    viewport_height: u32,
+    content_x: i32,
+    content_y: i32,
+    content_width: u32,
+    content_height: u32,
+) -> bool {
     if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
         return false;
     }
     let next = HostedViewportRequest {
+        browser_instance_id: normalize_browser_instance_id(browser_instance_id),
         viewport_width: viewport_width.max(1),
         viewport_height: viewport_height.max(1),
         content_x,
@@ -241,7 +414,14 @@ pub fn set_hosted_viewport(
 }
 
 pub fn set_hosted_scroll_y(scroll_y: u32) -> bool {
+    set_hosted_scroll_y_for_browser(PRIMARY_BROWSER_INSTANCE_ID, scroll_y)
+}
+
+pub fn set_hosted_scroll_y_for_browser(browser_instance_id: u32, scroll_y: u32) -> bool {
     if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+        return false;
+    }
+    if normalize_browser_instance_id(browser_instance_id) != PRIMARY_BROWSER_INSTANCE_ID {
         return false;
     }
     *PENDING_HOSTED_SCROLL_Y.lock() = Some(scroll_y);
@@ -249,18 +429,46 @@ pub fn set_hosted_scroll_y(scroll_y: u32) -> bool {
 }
 
 pub fn hosted_surface_state() -> HostedBrowserSurfaceState {
+    hosted_surface_state_for_browser(PRIMARY_BROWSER_INSTANCE_ID)
+}
+
+pub fn hosted_surface_state_for_browser(browser_instance_id: u32) -> HostedBrowserSurfaceState {
+    if normalize_browser_instance_id(browser_instance_id) != PRIMARY_BROWSER_INSTANCE_ID {
+        return HostedBrowserSurfaceState::default();
+    }
     HOSTED_SURFACE_STATE.lock().clone()
 }
 
 pub fn hosted_surface_seq() -> u32 {
+    hosted_surface_seq_for_browser(PRIMARY_BROWSER_INSTANCE_ID)
+}
+
+pub fn hosted_surface_seq_for_browser(browser_instance_id: u32) -> u32 {
+    if normalize_browser_instance_id(browser_instance_id) != PRIMARY_BROWSER_INSTANCE_ID {
+        return 0;
+    }
     HOSTED_SURFACE_SEQ.load(Ordering::Acquire)
 }
 
 pub fn hosted_interactive_state() -> HostedBrowserInteractiveState {
+    hosted_interactive_state_for_browser(PRIMARY_BROWSER_INSTANCE_ID)
+}
+
+pub fn hosted_interactive_state_for_browser(browser_instance_id: u32) -> HostedBrowserInteractiveState {
+    if normalize_browser_instance_id(browser_instance_id) != PRIMARY_BROWSER_INSTANCE_ID {
+        return HostedBrowserInteractiveState::default();
+    }
     HOSTED_INTERACTIVE_STATE.lock().clone()
 }
 
 pub fn hosted_interactive_seq() -> u32 {
+    hosted_interactive_seq_for_browser(PRIMARY_BROWSER_INSTANCE_ID)
+}
+
+pub fn hosted_interactive_seq_for_browser(browser_instance_id: u32) -> u32 {
+    if normalize_browser_instance_id(browser_instance_id) != PRIMARY_BROWSER_INSTANCE_ID {
+        return 0;
+    }
     HOSTED_INTERACTIVE_SEQ.load(Ordering::Acquire)
 }
 
@@ -342,7 +550,19 @@ unsafe fn apply_pending_browser_rpc(ctx: *mut qjs::JSContext) {
         return;
     };
 
-    let active_window_id = trueos_cabi_ui2_primary_browser_window_id();
+    let active_target = active_browser_target();
+    if next.browser_instance_id != active_target.instance_id {
+        BROWSER_RPC_RESULTS.lock().push_back(BrowserRpcResult {
+            id: next.id,
+            payload_json: alloc::format!(
+                "{{\"ok\":false,\"error\":\"browser rpc target unavailable: requested instance {}, active {}\"}}",
+                next.browser_instance_id,
+                active_target.instance_id
+            ),
+        });
+        return;
+    }
+    let active_window_id = active_target.window_id;
     if active_window_id == 0 {
         BROWSER_RPC_RESULTS.lock().push_back(BrowserRpcResult {
             id: next.id,
@@ -443,6 +663,9 @@ unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext) {
     let Some(next) = PENDING_HOSTED_VIEWPORT.lock().take() else {
         return;
     };
+    if next.browser_instance_id != PRIMARY_BROWSER_INSTANCE_ID {
+        return;
+    }
     let Some(browser) = browser_api_value(ctx) else {
         *PENDING_HOSTED_VIEWPORT.lock() = Some(next);
         return;
@@ -674,6 +897,9 @@ unsafe fn apply_pending_html(ctx: *mut qjs::JSContext) {
     let Some(next) = PENDING_HTML.lock().take() else {
         return;
     };
+    if next.browser_instance_id != PRIMARY_BROWSER_INSTANCE_ID {
+        return;
+    }
 
     let html_lit = helpers::js_single_quoted_literal(next.html.as_str());
     let url_lit = next
