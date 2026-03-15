@@ -23,6 +23,8 @@ const UI2_CLICK_SLOP_PX: f32 = 12.0;
 const UI2_CURSOR_EVENT_BATCH: usize = 32;
 const UI2_CURSOR_HIT_RADIUS_PX: f32 = 8.0;
 const UI2_WHEEL_SCROLL_STEP_PX: i32 = 16;
+const UI2_WINDOW_UPDATE_LOG_EVERY: u32 = 32;
+const UI2_COMPOSE_LOG_EVERY: u32 = 32;
 const UI2_WINDOW_RESIZE_LEFT: u32 = 1 << 0;
 const UI2_WINDOW_RESIZE_TOP: u32 = 1 << 1;
 const UI2_WINDOW_RESIZE_RIGHT: u32 = 1 << 2;
@@ -195,6 +197,8 @@ struct Ui2Window {
     dirty: bool,
     dirty_seq: u32,
     last_reason: &'static str,
+    last_logged_dirty_seq: u32,
+    last_logged_reason: &'static str,
 }
 
 struct Ui2State {
@@ -203,6 +207,9 @@ struct Ui2State {
     next_window_id: u32,
     compose_seq: u32,
     compose_reason: &'static str,
+    last_logged_compose_seq: u32,
+    last_logged_compose_reason: &'static str,
+    last_logged_compose_dirty_count: usize,
     cursor_read_seq: u64,
     cursors: Vec<Ui2CursorState>,
     hit_scene: Ui2HitScene,
@@ -286,6 +293,9 @@ fn init_state() -> &'static Mutex<Ui2State> {
             next_window_id: 1,
             compose_seq: 0,
             compose_reason: "boot",
+            last_logged_compose_seq: 0,
+            last_logged_compose_reason: "",
+            last_logged_compose_dirty_count: 0,
             cursor_read_seq: 0,
             cursors: Vec::new(),
             hit_scene: Ui2HitScene::default(),
@@ -356,6 +366,8 @@ fn alloc_window(
         dirty: true,
         dirty_seq: 0,
         last_reason: "create",
+        last_logged_dirty_seq: 0,
+        last_logged_reason: "",
     });
     id
 }
@@ -3044,24 +3056,60 @@ fn compose_windows(state: &mut Ui2State) {
     for window in &mut state.windows {
         if window.dirty {
             window.dirty_seq = window.dirty_seq.wrapping_add(1);
-            crate::log!(
-                "ui2: window-update id={} seq={} reason={}\n",
-                window.id,
-                window.dirty_seq,
-                window.last_reason
-            );
+            let repeated_reason = window.last_logged_reason == window.last_reason;
+            let since_last_log = window
+                .dirty_seq
+                .wrapping_sub(window.last_logged_dirty_seq);
+            if window.last_logged_dirty_seq == 0
+                || !repeated_reason
+                || since_last_log >= UI2_WINDOW_UPDATE_LOG_EVERY
+            {
+                let suppressed = if repeated_reason {
+                    since_last_log.saturating_sub(1)
+                } else {
+                    0
+                };
+                crate::log!(
+                    "ui2: window-update id={} seq={} reason={} suppressed={}\n",
+                    window.id,
+                    window.dirty_seq,
+                    window.last_reason,
+                    suppressed
+                );
+                window.last_logged_dirty_seq = window.dirty_seq;
+                window.last_logged_reason = window.last_reason;
+            }
             window.dirty = false;
         }
     }
 
     state.compose_seq = state.compose_seq.wrapping_add(1);
-    crate::log!(
-        "ui2: compose seq={} windows={} dirty={} reason={}\n",
-        state.compose_seq,
-        state.windows.len(),
-        dirty_count,
-        state.compose_reason
-    );
+    let repeated_reason = state.last_logged_compose_reason == state.compose_reason;
+    let since_last_log = state
+        .compose_seq
+        .wrapping_sub(state.last_logged_compose_seq);
+    if state.last_logged_compose_seq == 0
+        || !repeated_reason
+        || dirty_count != state.last_logged_compose_dirty_count
+        || since_last_log >= UI2_COMPOSE_LOG_EVERY
+    {
+        let suppressed = if repeated_reason && dirty_count == state.last_logged_compose_dirty_count {
+            since_last_log.saturating_sub(1)
+        } else {
+            0
+        };
+        crate::log!(
+            "ui2: compose seq={} windows={} dirty={} reason={} suppressed={}\n",
+            state.compose_seq,
+            state.windows.len(),
+            dirty_count,
+            state.compose_reason,
+            suppressed
+        );
+        state.last_logged_compose_seq = state.compose_seq;
+        state.last_logged_compose_reason = state.compose_reason;
+        state.last_logged_compose_dirty_count = dirty_count;
+    }
 
     crate::gfx::with_cabi_frame_lock(|| {
         unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };

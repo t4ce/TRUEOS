@@ -15,6 +15,32 @@ import {
 const DEFAULT_MAX_STEPS = 50;
 const DEFAULT_TOOL_SEARCH = true;
 const WORKER_RPC_TIMEOUT_MS = 30000;
+
+function readBooleanEnv(name, fallback = false) {
+  const raw = readEnv(name);
+  if (typeof raw !== "string") {
+    return fallback;
+  }
+  switch (raw.trim().toLowerCase()) {
+    case "1":
+    case "true":
+    case "yes":
+    case "on":
+      return true;
+    case "0":
+    case "false":
+    case "no":
+    case "off":
+      return false;
+    default:
+      return fallback;
+  }
+}
+
+const HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS = readBooleanEnv(
+  "TRUEOS_AI_PC_DEBUG_HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS",
+  false,
+);
 const AI_PC_TOOL_POLICY = [
   "Use shell1 function tools whenever the user is asking to run, open, launch, inspect, or control something that maps to a shell1 command.",
   "For mounted TRUEOS filesystem inspection or DOM insertion of file lists, prefer read_trueosfs_tree or browser.getTrueosFsTreeHtml(...) over the interactive shell1 file wizard.",
@@ -54,6 +80,16 @@ const WORKER_BROWSER_METHODS = [
   "pressKey",
   "captureScreenshot",
 ];
+
+function getExecJsBrowserApiDescription() {
+  const methodList = HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS
+    ? "getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), setBodyHtml(html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), captureScreenshot(), and listUnavailable()."
+    : "getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), setBodyHtml(html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), keyboard(...), typeText(...), pressKey(...), captureScreenshot(), and listUnavailable().";
+  const keyboardDetails = HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS
+    ? ""
+    : " keyboard(...) is the canonical keyboard API: send Unicode text with { type: \"text\", text: \"...\" } and named keys with { type: \"key\", key: \"Enter\", modifiers: [\"Ctrl\"]? }; typeText(...) and pressKey(...) compile into that same path.";
+  return `TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include ${methodList} Prefer setBodyHtml(html) when replacing the visible page content instead of guessing DOM paths. getDomSnapshot() returns a rooted tree object with a stable path field on each node; for flat scans, use snap.nodes. click(...) now drives the real cursor/button path and accepts coordinates, stable paths, text=..., plain caption text, and simple selectors like a[href="..."] when the target is interactive.${keyboardDetails} insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.`;
+}
 
 function getFileSearchVectorStoreIds() {
   const vectorStoreId = readEnv("OPENAI_FILE_SEARCH_VECTOR_STORE_ID");
@@ -371,7 +407,7 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
 - console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large image payloads like screenshots or buffers. If you create an image or screenshot, pass the image data directly to display().
 - display(base64_or_data_url): Use this to view either a bare base64-encoded PNG payload or a full data URL. browser.captureScreenshot() already returns a full data URL.
 - Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), setBodyHtml(html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), keyboard(...), typeText(...), pressKey(...), captureScreenshot(), and listUnavailable(). Prefer setBodyHtml(html) when replacing the visible page content instead of guessing DOM paths. getDomSnapshot() returns a rooted tree object with a stable path field on each node; for flat scans, use snap.nodes. click(...) now drives the real cursor/button path and accepts coordinates, stable paths, text=..., plain caption text, and simple selectors like a[href="..."] when the target is interactive. keyboard(...) is the canonical keyboard API: send Unicode text with { type: "text", text: "..." } and named keys with { type: "key", key: "Enter", modifiers: ["Ctrl"]? }; typeText(...) and pressKey(...) compile into that same path. insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.
+- browser: ${getExecJsBrowserApiDescription()}
 - context: same object as browser for now.
 - page: same object as browser for now.
 `,
