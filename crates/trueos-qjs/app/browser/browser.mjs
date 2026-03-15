@@ -31,6 +31,7 @@ const BROWSER_REGION_PREFETCH_SCREENS = 1;
 const BROWSER_REGION_TILE_MIN_PX = 512;
 const BROWSER_REGION_TILE_MAX_PX = 2048;
 const BROWSER_REGION_TILE_ALIGN_PX = 256;
+const BROWSER_REGION_MAX_WIDTH = 2048;
 const BROWSER_KEYBOARD_LOG_MAX = 128;
 
 let cachedHtml = '';
@@ -1642,7 +1643,11 @@ function docContentWidth(doc, vw) {
     Number(doc && doc.themeLayout && doc.themeLayout.contentW || 0),
     Number(vw || 0),
   );
-  return Math.max(1, Math.round(Number.isFinite(raw) ? raw : Number(vw || 1)));
+  const contentW = Math.max(1, Math.round(Number.isFinite(raw) ? raw : Number(vw || 1)));
+  return Math.max(
+    Math.max(1, Number(vw || 1) | 0),
+    Math.min(BROWSER_REGION_MAX_WIDTH, contentW),
+  );
 }
 
 function ensureBrowserRegions(doc, vw, vh, contentH, contentTopY) {

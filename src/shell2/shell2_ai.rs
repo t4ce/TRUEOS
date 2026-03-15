@@ -1,5 +1,7 @@
 use alloc::string::String;
 
+use embassy_executor::Spawner;
+
 use super::{ShellBackend2, print_shell_line};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -30,7 +32,12 @@ impl AiPromptMode {
     }
 }
 
-pub(crate) fn submit(io: &'static dyn ShellBackend2, mode: AiPromptMode, submitted: &str) {
+pub(crate) fn submit(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    mode: AiPromptMode,
+    submitted: &str,
+) {
     let entry = trueos_qjs::ai_task::AiInputEntry {
         text: String::from(submitted.trim()),
         web_search: mode == AiPromptMode::WebSearch,
@@ -39,8 +46,20 @@ pub(crate) fn submit(io: &'static dyn ShellBackend2, mode: AiPromptMode, submitt
         computer_use: true,
     };
 
+    match trueos_qjs::ai_task::ensure_started(spawner) {
+        trueos_qjs::ai_task::EnsureStartedResult::Ready => {}
+        trueos_qjs::ai_task::EnsureStartedResult::BrowserNotReady => {
+            print_shell_line(io, "ai: browser not ready yet");
+            return;
+        }
+        trueos_qjs::ai_task::EnsureStartedResult::SpawnFailed => {
+            print_shell_line(io, "ai: ai-task start failed");
+            return;
+        }
+    }
+
     if !trueos_qjs::ai_task::queue_ai_input(entry) {
-        print_shell_line(io, "ai: standalone ai task not running");
+        print_shell_line(io, "ai: ai-task not running");
         return;
     }
 

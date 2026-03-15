@@ -221,8 +221,20 @@ pub(crate) fn cmd_ai(
         computer_use: true,
     };
 
+    match trueos_qjs::ai_task::ensure_started(ctx.spawner) {
+        trueos_qjs::ai_task::EnsureStartedResult::Ready => {}
+        trueos_qjs::ai_task::EnsureStartedResult::BrowserNotReady => {
+            ctx.io.write_str("ai: browser not ready yet\r\n");
+            return CommandAction::None;
+        }
+        trueos_qjs::ai_task::EnsureStartedResult::SpawnFailed => {
+            ctx.io.write_str("ai: ai-task start failed\r\n");
+            return CommandAction::None;
+        }
+    }
+
     if !trueos_qjs::ai_task::queue_ai_input(entry) {
-        ctx.io.write_str("ai: standalone ai task not running\r\n");
+        ctx.io.write_str("ai: ai-task not running\r\n");
         return CommandAction::None;
     }
 

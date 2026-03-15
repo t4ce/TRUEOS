@@ -401,8 +401,9 @@ pub fn resize_window(id: u32, w: f32, h: f32) -> bool {
     if window.state != Ui2WindowStateKind::Normal {
         window.state = Ui2WindowStateKind::Normal;
     }
-    window.rect.w = w.max(1.0);
-    window.rect.h = h.max(1.0);
+    let min_extent = ui2_window_min_extent();
+    window.rect.w = w.max(min_extent);
+    window.rect.h = h.max(min_extent);
     if window.state == Ui2WindowStateKind::Normal {
         window.restore_rect = window.rect;
     }
@@ -494,7 +495,7 @@ pub fn begin_window_move(id: u32) -> bool {
     else {
         return false;
     };
-    let Some(cursor_slot_id) = pick_drag_cursor_slot(&state, &window) else {
+    let Some(cursor_slot_id) = super::ui2_hid::pick_drag_cursor_slot(&state, &window) else {
         return false;
     };
     let Some(cursor) = state
@@ -514,6 +515,7 @@ pub fn begin_window_move(id: u32) -> bool {
         cursor_slot_id,
         grab_dx: cursor.x - window.rect.x,
         grab_dy: cursor.y - window.rect.y,
+        edge_actions_armed: window_edge_drop_action(&state, cursor.x, cursor.y).is_none(),
     };
     state.resize_drag = Ui2WindowResizeDrag::default();
     state.compose_reason = "begin-window-move";
@@ -556,7 +558,7 @@ pub fn begin_window_resize(id: u32, edge_mask: u32) -> bool {
     if window.state != Ui2WindowStateKind::Normal {
         return false;
     }
-    let Some(cursor_slot_id) = pick_drag_cursor_slot(&state, &window) else {
+    let Some(cursor_slot_id) = super::ui2_hid::pick_drag_cursor_slot(&state, &window) else {
         return false;
     };
     let Some(cursor) = state
@@ -571,7 +573,7 @@ pub fn begin_window_resize(id: u32, edge_mask: u32) -> bool {
         return false;
     }
 
-    begin_window_resize_for_cursor(&mut state, cursor_slot_id, id, edge_mask)
+    super::ui2_hid::begin_window_resize_for_cursor(&mut state, cursor_slot_id, id, edge_mask)
 }
 
 fn request_window_composite(id: u32, reason: &'static str) -> bool {

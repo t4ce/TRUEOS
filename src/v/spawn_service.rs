@@ -685,7 +685,7 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_net_shell,
     },
     TaskSpec {
-        name: "ai-qjs-oneshot",
+        name: "ai-task",
         disabled: true,
         required: AI_QJS_ONESHOT_READY,
         started: &AI_QJS_ONESHOT_STARTED,

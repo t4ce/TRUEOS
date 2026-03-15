@@ -5,12 +5,14 @@ use alloc::string::String;
 use core::ffi::c_char;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use crate as qjs;
 
 static AI_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+static AI_TASK_ACCEPTING_INPUT: AtomicBool = AtomicBool::new(false);
 static PENDING_AI_INPUT: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::new());
 
 #[derive(Clone)]
@@ -23,11 +25,37 @@ pub struct AiInputEntry {
 }
 
 pub fn queue_ai_input(next: AiInputEntry) -> bool {
-    if !AI_TASK_STARTED.load(Ordering::SeqCst) {
+    if !AI_TASK_ACCEPTING_INPUT.load(Ordering::SeqCst) {
         return false;
     }
     PENDING_AI_INPUT.lock().push_back(next);
     true
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnsureStartedResult {
+    Ready,
+    BrowserNotReady,
+    SpawnFailed,
+}
+
+pub fn ensure_started(spawner: &Spawner) -> EnsureStartedResult {
+    if !qjs::browser_task::primary_browser_started() {
+        return EnsureStartedResult::BrowserNotReady;
+    }
+
+    if AI_TASK_ACCEPTING_INPUT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return EnsureStartedResult::Ready;
+    }
+
+    if spawner.spawn(run_once()).is_err() {
+        AI_TASK_ACCEPTING_INPUT.store(false, Ordering::Release);
+        return EnsureStartedResult::SpawnFailed;
+    }
+    EnsureStartedResult::Ready
 }
 
 #[inline]
@@ -440,7 +468,7 @@ unsafe fn install_ai_globals(ctx: *mut qjs::JSContext) {
 #[embassy_executor::task]
 pub async fn run_once() {
     if AI_TASK_STARTED.swap(true, Ordering::SeqCst) {
-        qjs::trueos_shims::log_info("qjs-ai: already running\n");
+        qjs::trueos_shims::log_info("ai-task: already running\n");
         return;
     }
 
@@ -448,8 +476,9 @@ pub async fn run_once() {
         let vm = match qjs::vm::QjsVm::new_node() {
             Some(vm) => vm,
             None => {
-                qjs::trueos_shims::log_error("qjs-ai: JS runtime init failed\n");
+                qjs::trueos_shims::log_error("ai-task: JS runtime init failed\n");
                 AI_TASK_STARTED.store(false, Ordering::SeqCst);
+                AI_TASK_ACCEPTING_INPUT.store(false, Ordering::SeqCst);
                 return;
             }
         };
@@ -494,9 +523,10 @@ pub async fn run_once() {
             qjs::JS_EVAL_TYPE_GLOBAL,
         );
         if shim.is_exception() {
-            qjs::qjs_diag::dump_last_exception(ctx, "qjs-ai shims");
+            qjs::qjs_diag::dump_last_exception(ctx, "ai-task shims");
             qjs::js_free_value(ctx, shim);
             AI_TASK_STARTED.store(false, Ordering::SeqCst);
+            AI_TASK_ACCEPTING_INPUT.store(false, Ordering::SeqCst);
             return;
         }
         qjs::js_free_value(ctx, shim);
@@ -510,9 +540,10 @@ pub async fn run_once() {
             qjs::JS_EVAL_TYPE_MODULE,
         );
         if boot.is_exception() {
-            qjs::qjs_diag::dump_last_exception(ctx, "qjs-ai init");
+            qjs::qjs_diag::dump_last_exception(ctx, "ai-task init");
             qjs::js_free_value(ctx, boot);
             AI_TASK_STARTED.store(false, Ordering::SeqCst);
+            AI_TASK_ACCEPTING_INPUT.store(false, Ordering::SeqCst);
             return;
         }
         qjs::js_free_value(ctx, boot);
@@ -528,4 +559,5 @@ pub async fn run_once() {
     }
 
     AI_TASK_STARTED.store(false, Ordering::SeqCst);
+    AI_TASK_ACCEPTING_INPUT.store(false, Ordering::SeqCst);
 }
