@@ -1,8 +1,0 @@
-[package]
-name = "tmp_png_check"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-core2 = { version = "0.4.0", default-features = false }
-png = { path = "../vendor/png-0.18.1" }

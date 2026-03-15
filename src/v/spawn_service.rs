@@ -44,6 +44,7 @@ static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_CURSOR_OVERLAY_STARTED: AtomicBool = AtomicBool::new(false);
+static GFX_TEXTURE_UPLOAD_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_LOADSCREEN_STARTED: AtomicBool = AtomicBool::new(false);
 static BROWSER_STARTUP_HTML_LOADER_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_BROWSER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -240,6 +241,13 @@ async fn gfx_virgl_cursor_overlay_task() {
 
 fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(gfx_virgl_cursor_overlay_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::surface::io::cabi::texture_upload_service_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -688,6 +696,13 @@ static TASKS: &[TaskSpec] = &[
         required: crate::v::readiness::GFX_BACKEND_READY,
         started: &GFX_LOADSCREEN_STARTED,
         spawn: spawn_gfx_loadscreen,
+    },
+    TaskSpec {
+        name: "gfx-texture-upload-service",
+        disabled: false,
+        required: crate::v::readiness::GFX_BACKEND_READY,
+        started: &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
+        spawn: spawn_gfx_texture_upload_service,
     },
     TaskSpec {
         name: "browser-startup-html-loader",

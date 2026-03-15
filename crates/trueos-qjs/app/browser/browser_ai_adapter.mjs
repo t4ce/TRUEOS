@@ -26,17 +26,18 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'moveCursor',
     'click',
     'navigate',
+    'keyboard',
+    'typeText',
     'pressKey',
     'captureScreenshot',
   ],
-  unavailable: [
-    'typeText',
-  ],
+  unavailable: [],
   notes: {
     intent: 'Worker-facing browser contract for the AI task. Keep this surface explicit so agent logic remains isolated from the browser VM.',
     targetShape: 'Close to future computer-use style APIs while still reflecting TRUEOS capabilities today.',
     domSnapshotShape: 'Returns a rooted tree object; use snap.nodes for a flat compatibility index.',
     clickShape: 'click() uses the real cursor/button path and can resolve coordinates, stable paths, text=..., plain captions, and simple href/path/text selectors for interactive targets.',
+    keyboardShape: 'keyboard(...) accepts Unicode text entries and strict key entries with optional modifiers; pressKey(...) and typeText(...) compile into that canonical event list.',
   },
 };
 
@@ -320,7 +321,13 @@ export function installBrowserAi(browser = null, host = null) {
     return startAi(state, '/qjs/ai/ai_pc.mjs', opts);
   };
   targetBrowser.submitAiInput = (input, options = null) => pushAiInput(state, input, options);
-  targetBrowser.typeText = () => notYetAvailable(runtimeHost, 'typeText');
+  if (typeof targetBrowser.keyboard !== 'function') {
+    targetBrowser.keyboard = () => notYetAvailable(runtimeHost, 'keyboard');
+  }
+  targetBrowser.typeText = (text, options = null) => targetBrowser.keyboard({
+    type: 'text',
+    text: String(text || ''),
+  }, options);
   targetBrowser.captureScreenshot = () => {
     if (typeof runtimeHost.__trueosCaptureScreenshot !== 'function') {
       return notYetAvailable(runtimeHost, 'captureScreenshot');

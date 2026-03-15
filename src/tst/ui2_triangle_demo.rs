@@ -54,48 +54,17 @@ fn triangle_vertices(phase: f32) -> [RgbVertex; 3] {
     ]
 }
 
-fn upload_triangle_render_target() -> bool {
-    let clear = [0x10u8, 0x14u8, 0x1Au8, 0xFFu8];
-    let pixels = alloc::vec![clear; (UI2_TRIANGLE_RT_W as usize) * (UI2_TRIANGLE_RT_H as usize)]
-        .into_iter()
-        .flatten()
-        .collect::<alloc::vec::Vec<u8>>();
-    let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
-            UI2_TRIANGLE_TEX_ID,
-            UI2_TRIANGLE_RT_W,
-            UI2_TRIANGLE_RT_H,
-            pixels.as_ptr(),
-            pixels.len(),
-        )
-    };
-    if rc != 0 {
-        crate::log!(
-            "ui2-triangle-demo: upload render target failed tex={} rc={}\n",
-            UI2_TRIANGLE_TEX_ID,
-            rc
-        );
-        return false;
-    }
-    true
-}
-
-fn render_triangle_frame(phase: f32) -> bool {
+fn render_triangle_frame(surface: &crate::v::ui2::Ui2SurfaceWindow, phase: f32) -> bool {
     let verts = triangle_vertices(phase);
     let bytes = unsafe {
         core::slice::from_raw_parts(verts.as_ptr() as *const u8, core::mem::size_of_val(&verts))
     };
-    crate::surface::io::cabi::render_rgb_triangles_to_texture(UI2_TRIANGLE_TEX_ID, 0x10141A, bytes)
-        == 0
+    surface.render_rgb_triangles(0x10141A, bytes, "triangle-demo")
 }
 
 #[embassy_executor::task]
 pub async fn ui2_triangle_demo_task() {
-    if !upload_triangle_render_target() {
-        return;
-    }
-
-    let window_id = crate::v::ui2::create_texture_content_window(
+    let Some(surface) = crate::v::ui2::Ui2SurfaceWindow::new(
         "Demo Triangle",
         crate::v::ui2::Ui2Rect {
             x: UI2_TRIANGLE_WINDOW_X,
@@ -107,20 +76,23 @@ pub async fn ui2_triangle_demo_task() {
         255,
         UI2_TRIANGLE_TEX_ID,
         false,
-    );
+        [0x10, 0x14, 0x1A, 0xFF],
+    ) else {
+        return;
+    };
+    let window_id = surface.window_id();
+    let (surface_w, surface_h) = surface.size();
     crate::log!(
         "ui2-triangle-demo: window={} tex={} size={}x{}\n",
         window_id,
-        UI2_TRIANGLE_TEX_ID,
-        UI2_TRIANGLE_RT_W,
-        UI2_TRIANGLE_RT_H
+        surface.tex_id(),
+        surface_w,
+        surface_h
     );
 
     let mut phase = 0.0f32;
     loop {
-        if render_triangle_frame(phase) {
-            let _ = crate::v::ui2::request_window_repaint(window_id, "triangle-demo");
-        }
+        let _ = render_triangle_frame(&surface, phase);
         phase += 0.04;
         if phase > core::f32::consts::TAU {
             phase -= core::f32::consts::TAU;

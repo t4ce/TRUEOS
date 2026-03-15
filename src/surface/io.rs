@@ -618,12 +618,17 @@ pub mod cabi {
         spin::Mutex::new(VecDeque::new());
     static ASYNC_SVG_REQS: spin::Mutex<VecDeque<AsyncSvgUploadReq>> =
         spin::Mutex::new(VecDeque::new());
+    static TEXTURE_UPLOAD_REQS: spin::Mutex<VecDeque<TextureUploadReq>> =
+        spin::Mutex::new(VecDeque::new());
     static ASYNC_PNG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_SVG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+    static TEXTURE_UPLOAD_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_PNG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
     static ASYNC_SVG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
+    static TEXTURE_UPLOAD_WORKER_LOGS: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
     static ASYNC_PNG_DIAG_LOGS: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
     static ASYNC_SVG_DIAG_LOGS: core::sync::atomic::AtomicU32 =
@@ -637,6 +642,17 @@ pub mod cabi {
     struct AsyncSvgUploadReq {
         tex_id: u32,
         bytes: Vec<u8>,
+    }
+
+    struct TextureUploadReq {
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        sample_kind: TexSampleKind,
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+        update_async_status: bool,
     }
 
     fn log_async_png_worker_site(tag: &str) {
@@ -700,6 +716,109 @@ pub mod cabi {
         ASYNC_SVG_REQS.lock().pop_front()
     }
 
+    fn enqueue_texture_upload(req: TextureUploadReq) {
+        let mut queue = TEXTURE_UPLOAD_REQS.lock();
+        if let Some(existing) = queue.iter_mut().find(|entry| entry.tex_id == req.tex_id) {
+            *existing = req;
+        } else {
+            queue.push_back(req);
+        }
+        TEXTURE_UPLOAD_WAIT.notify_one();
+    }
+
+    fn take_texture_upload() -> Option<TextureUploadReq> {
+        TEXTURE_UPLOAD_REQS.lock().pop_front()
+    }
+
+    fn queue_texture_rgba_upload_owned(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        sample_kind: TexSampleKind,
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+        update_async_status: bool,
+    ) -> bool {
+        if tex_id == 0 || width == 0 || height == 0 {
+            return false;
+        }
+        let expected = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
+        if rgba.len() < expected {
+            return false;
+        }
+        enqueue_texture_upload(TextureUploadReq {
+            tex_id,
+            width,
+            height,
+            rgba,
+            sample_kind,
+            repaint_window_id,
+            repaint_reason,
+            update_async_status,
+        });
+        true
+    }
+
+    pub fn queue_texture_rgba_image_upload_copy(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    ) -> bool {
+        queue_texture_rgba_upload_owned(
+            tex_id,
+            width,
+            height,
+            rgba.to_vec(),
+            TexSampleKind::Rgba,
+            repaint_window_id,
+            repaint_reason,
+            false,
+        )
+    }
+
+    async fn texture_upload_service_inner() {
+        loop {
+            let Some(req) = take_texture_upload() else {
+                TEXTURE_UPLOAD_WAIT.wait_for_event().await;
+                continue;
+            };
+            let rc = upload_texture_rgba_inner(
+                req.tex_id,
+                req.width,
+                req.height,
+                req.rgba.as_ptr(),
+                req.rgba.len(),
+                req.sample_kind,
+            );
+            if req.update_async_status {
+                if rc == 0 {
+                    set_async_tex_status(req.tex_id, ASYNC_TEX_STATUS_READY);
+                } else {
+                    set_async_tex_status(req.tex_id, rc);
+                }
+            }
+            if rc == 0 && req.repaint_window_id != 0 {
+                let _ = crate::v::ui2::request_window_repaint(req.repaint_window_id, req.repaint_reason);
+            }
+            Timer::after_millis(1).await;
+        }
+    }
+
+    #[embassy_executor::task]
+    pub async fn texture_upload_service_task() {
+        let log_n = TEXTURE_UPLOAD_WORKER_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if log_n < 4 {
+            log_async_png_worker_site("texture-upload-worker-start");
+        }
+        texture_upload_service_inner().await;
+    }
+
     async fn async_png_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
         let start = embassy_time_driver::now();
         let log_n = ASYNC_PNG_DIAG_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -712,19 +831,25 @@ pub mod cabi {
             ));
         }
         let rc = match crate::gfx::png_codec::decode_png_rgba(bytes.as_slice()) {
-            Ok(decoded) => upload_texture_rgba_inner(
-                tex_id,
-                decoded.width,
-                decoded.height,
-                decoded.rgba.as_ptr(),
-                decoded.rgba.len(),
-                TexSampleKind::Rgba,
-            ),
+            Ok(decoded) => {
+                if queue_texture_rgba_upload_owned(
+                    tex_id,
+                    decoded.width,
+                    decoded.height,
+                    decoded.rgba,
+                    TexSampleKind::Rgba,
+                    0,
+                    "",
+                    true,
+                ) {
+                    0
+                } else {
+                    -5
+                }
+            }
             Err(err) => err.code(),
         };
-        if rc == 0 {
-            set_async_tex_status(tex_id, ASYNC_TEX_STATUS_READY);
-        } else {
+        if rc != 0 {
             set_async_tex_status(tex_id, rc);
         }
         if log_n < 16 {
@@ -738,7 +863,7 @@ pub mod cabi {
             ));
             if rc == 0 {
                 crate::globalog::log(format_args!(
-                    "async-png: tex_id={} host-ready only; virgl upload still occurs lazily on first textured submit\n",
+                    "async-png: tex_id={} decode-ready; queued for serialized upload\n",
                     tex_id
                 ));
             }
