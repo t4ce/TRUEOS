@@ -27,6 +27,7 @@ const HID_TABLET_SAMPLE_PERIOD_MS: u32 = 10;
 const HID_TABLET_ABS_MAX: u32 = 0x7FFF;
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 2000.0;
 const HID_KIND_VIRTUAL: u8 = 0;
+pub(crate) const HID_DEBUG_REPORT_LOGS: bool = true;
 
 pub use self::keyboard::TrueosHidKeyboardSample;
 pub use self::mouse::TrueosHidMouseSample;

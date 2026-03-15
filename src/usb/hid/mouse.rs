@@ -1,5 +1,6 @@
 use super::{
-    HidRuntime, TrueosHidCursorEvent, clamp01, push_cursor_event, sync_runtime_cursor_snapshot,
+    HID_DEBUG_REPORT_LOGS, HidRuntime, TrueosHidCursorEvent, clamp01, push_cursor_event,
+    sync_runtime_cursor_snapshot,
 };
 
 const HID_MOUSE_RING_CAP: usize = 2048;
@@ -122,6 +123,19 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
     }
     if runtime.mouse_buttons_down != prev_buttons {
         flags |= 1 << 2;
+    }
+
+    if HID_DEBUG_REPORT_LOGS && runtime.mouse_buttons_down != prev_buttons {
+        crate::log!(
+            "mouse-report: ctrl={} slot={} ep={} seq={} flags=0x{:02X} buttons=0x{:02X} prev=0x{:02X}\n",
+            runtime.controller_id as u32,
+            runtime.slot_id,
+            runtime.ep_target,
+            runtime.seq as u32,
+            flags,
+            buttons,
+            prev_buttons as u8,
+        );
     }
 
     push_cursor_event(TrueosHidCursorEvent {

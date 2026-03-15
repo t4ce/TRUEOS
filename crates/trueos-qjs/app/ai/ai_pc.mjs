@@ -565,14 +565,7 @@ function createHostBrowserProxy() {
         repeat: source.repeat,
       }, source));
     };
-    const rpcClick = proxy.click;
-    proxy.click = (target = null) => {
-      const local = directClick(target);
-      if (local) {
-        return Promise.resolve(local);
-      }
-      return rpcClick(target);
-    };
+    proxy.click = (target = null) => Promise.resolve(directClick(target));
   }
   runtime.browser = proxy;
   runtime.context = proxy;

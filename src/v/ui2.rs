@@ -19,6 +19,7 @@ const UI2_MINIMIZED_STRIP_W: f32 = 168.0;
 const UI2_MINIMIZED_STRIP_GAP: f32 = 6.0;
 const UI2_MINIMIZED_STRIP_PAD: f32 = 8.0;
 const UI2_PRIMARY_BUTTON_MASK: u32 = 1;
+const UI2_MIDDLE_BUTTON_MASK: u32 = 1 << 2;
 const UI2_CLICK_SLOP_PX: f32 = 12.0;
 const UI2_CURSOR_EVENT_BATCH: usize = 32;
 const UI2_KEYBOARD_EVENT_BATCH: usize = 32;
@@ -26,6 +27,7 @@ const UI2_CURSOR_HIT_RADIUS_PX: f32 = 8.0;
 const UI2_WHEEL_SCROLL_STEP_PX: i32 = 16;
 const UI2_WINDOW_UPDATE_LOG_EVERY: u32 = 32;
 const UI2_COMPOSE_LOG_EVERY: u32 = 32;
+const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
 const UI2_WINDOW_RESIZE_LEFT: u32 = 1 << 0;
 const UI2_WINDOW_RESIZE_TOP: u32 = 1 << 1;
 const UI2_WINDOW_RESIZE_RIGHT: u32 = 1 << 2;
@@ -177,10 +179,20 @@ struct Ui2WindowScrollDrag {
     grab_offset: f32,
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui2WindowScrollPanDrag {
+    active: bool,
+    window_id: u32,
+    cursor_slot_id: u32,
+    last_cursor_x: f32,
+    last_cursor_y: f32,
+}
+
 #[derive(Clone)]
 struct Ui2Window {
     id: u32,
     kind: Ui2WindowKind,
+    browser_instance_id: u32,
     title: String,
     rect: Ui2Rect,
     restore_rect: Ui2Rect,
@@ -217,6 +229,7 @@ struct Ui2State {
     move_drag: Ui2WindowMoveDrag,
     resize_drag: Ui2WindowResizeDrag,
     scroll_drag: Ui2WindowScrollDrag,
+    scroll_pan_drag: Ui2WindowScrollPanDrag,
     windows: Vec<Ui2Window>,
 }
 
@@ -272,6 +285,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             move_drag: Ui2WindowMoveDrag::default(),
             resize_drag: Ui2WindowResizeDrag::default(),
             scroll_drag: Ui2WindowScrollDrag::default(),
+            scroll_pan_drag: Ui2WindowScrollPanDrag::default(),
             windows: Vec::new(),
         };
 
@@ -289,6 +303,31 @@ fn init_state() -> &'static Mutex<Ui2State> {
             255,
         );
         UI2_BROWSER_WINDOW_ID.store(browser_id, Ordering::Release);
+        let _ = trueos_qjs::browser_task::bind_browser_window_to_instance(
+            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
+            browser_id,
+        );
+
+        let browser2_id = alloc_window(
+            &mut state,
+            Ui2WindowKind::HostedBrowser,
+            "Browser 2",
+            Ui2Rect::new(
+                (view_w as f32 * 0.58).max(420.0),
+                92.0,
+                ((view_w as f32) * 0.32).max(300.0),
+                ((view_h as f32) * 0.56).max(260.0),
+            ),
+            12,
+            255,
+        );
+        if let Some(window) = window_mut(&mut state, browser2_id) {
+            window.browser_instance_id = trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1;
+        }
+        let _ = trueos_qjs::browser_task::bind_browser_window_to_instance(
+            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1,
+            browser2_id,
+        );
 
         refresh_all_window_hit_entries(&mut state);
 
@@ -309,6 +348,11 @@ fn alloc_window(
     state.windows.push(Ui2Window {
         id,
         kind,
+        browser_instance_id: if kind == Ui2WindowKind::HostedBrowser {
+            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
+        } else {
+            0
+        },
         title: String::from(title),
         rect,
         restore_rect: rect,
@@ -356,6 +400,43 @@ fn window_kind_id(kind: Ui2WindowKind) -> u32 {
         Ui2WindowKind::HostedBrowser => 1,
         Ui2WindowKind::HostedSurface => 3,
     }
+}
+
+fn window_browser_instance_id(window: &Ui2Window) -> u32 {
+    if window.kind != Ui2WindowKind::HostedBrowser {
+        return 0;
+    }
+    if window.browser_instance_id == 0 {
+        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
+    } else {
+        window.browser_instance_id
+    }
+}
+
+fn browser_surface_state_for_window(
+    window: &Ui2Window,
+) -> trueos_qjs::browser_task::HostedBrowserSurfaceState {
+    trueos_qjs::browser_task::hosted_surface_state_for_browser(window_browser_instance_id(window))
+}
+
+fn browser_interactive_state_for_window(
+    window: &Ui2Window,
+) -> trueos_qjs::browser_task::HostedBrowserInteractiveState {
+    trueos_qjs::browser_task::hosted_interactive_state_for_browser(window_browser_instance_id(window))
+}
+
+fn hosted_browser_interactive_seq(state: &Ui2State) -> u32 {
+    state
+        .windows
+        .iter()
+        .filter(|window| window.kind == Ui2WindowKind::HostedBrowser)
+        .map(|window| {
+            trueos_qjs::browser_task::hosted_interactive_seq_for_browser(
+                window_browser_instance_id(window),
+            )
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn window_is_renderable(window: &Ui2Window) -> bool {
@@ -449,7 +530,6 @@ fn cursor_event_px(value: f64, extent: u32) -> f32 {
 
 struct Ui2HitBuildContext<'a> {
     state: &'a Ui2State,
-    browser_interactives: trueos_qjs::browser_task::HostedBrowserInteractiveState,
 }
 
 trait Ui2WindowHitSource {
@@ -504,7 +584,8 @@ impl Ui2WindowHitSource for Ui2Window {
                 let Some(content) = window_content_rect(ctx.state, self) else {
                     return;
                 };
-                for interactive in &ctx.browser_interactives.interactives {
+                let browser_interactives = browser_interactive_state_for_window(self);
+                for interactive in &browser_interactives.interactives {
                     if interactive.width == 0 || interactive.height == 0 {
                         continue;
                     }
@@ -567,11 +648,8 @@ impl Ui2HitScene {
 
 fn rebuild_hit_scene(state: &mut Ui2State) {
     let next_seq = state.hit_scene.seq.wrapping_add(1);
-    state.last_browser_interactive_seq = trueos_qjs::browser_task::hosted_interactive_seq();
-    let ctx = Ui2HitBuildContext {
-        state,
-        browser_interactives: trueos_qjs::browser_task::hosted_interactive_state(),
-    };
+    state.last_browser_interactive_seq = hosted_browser_interactive_seq(state);
+    let ctx = Ui2HitBuildContext { state };
     let mut next_scene = Ui2HitScene {
         seq: next_seq,
         entries: Vec::new(),
@@ -602,19 +680,14 @@ fn refresh_window_hit_entries(state: &mut Ui2State, owner_window_id: u32) {
         return;
     };
 
-    let browser_interactive_seq = trueos_qjs::browser_task::hosted_interactive_seq();
-    let browser_interactives = if window.kind == Ui2WindowKind::HostedBrowser {
-        state.last_browser_interactive_seq = browser_interactive_seq;
-        trueos_qjs::browser_task::hosted_interactive_state()
-    } else {
-        trueos_qjs::browser_task::HostedBrowserInteractiveState::default()
-    };
+    if window.kind == Ui2WindowKind::HostedBrowser {
+        state.last_browser_interactive_seq = trueos_qjs::browser_task::hosted_interactive_seq_for_browser(
+            window_browser_instance_id(&window),
+        );
+    }
 
     let refreshed_entries = {
-        let ctx = Ui2HitBuildContext {
-            state,
-            browser_interactives,
-        };
+        let ctx = Ui2HitBuildContext { state };
         let mut refreshed_scene = Ui2HitScene {
             seq: 0,
             entries: Vec::new(),
@@ -757,6 +830,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidC
     let mut begin_move_drag = false;
     let mut begin_resize_drag: Option<(u32, u32)> = None;
     let mut begin_scroll_drag = false;
+    let mut begin_scroll_pan_window_id = 0u32;
     let mut click_candidate_window_id = 0u32;
     let mut click_press_x = 0.0f32;
     let mut click_press_y = 0.0f32;
@@ -765,6 +839,8 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidC
         let prev_buttons_down = cursor.buttons_down;
         let primary_was_down = (prev_buttons_down & UI2_PRIMARY_BUTTON_MASK) != 0;
         let primary_is_down = (event.buttons_down & UI2_PRIMARY_BUTTON_MASK) != 0;
+        let middle_was_down = (prev_buttons_down & UI2_MIDDLE_BUTTON_MASK) != 0;
+        let middle_is_down = (event.buttons_down & UI2_MIDDLE_BUTTON_MASK) != 0;
 
         cursor.x = px;
         cursor.y = py;
@@ -788,6 +864,14 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidC
             }
             cursor.press_armed = false;
             cursor.press_window_id = 0;
+        }
+
+        if !middle_was_down
+            && middle_is_down
+            && let Some(target) = press_hit
+            && matches!(target.kind, Ui2HitKind::WindowBody | Ui2HitKind::BrowserInteractive)
+        {
+            begin_scroll_pan_window_id = target.owner_window_id;
         }
     }
 
@@ -824,10 +908,15 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidC
     if begin_scroll_drag {
         let _ = begin_vertical_scroll_drag_for_cursor(state, slot_id, px, py);
     }
+    if begin_scroll_pan_window_id != 0 {
+        let _ = begin_window_scroll_pan_for_cursor(state, slot_id, begin_scroll_pan_window_id, px, py);
+        let _ = set_cursor_selected_window(state, slot_id, begin_scroll_pan_window_id);
+    }
 
     update_move_drag_for_cursor(state, slot_id, px, py, event.buttons_down);
     update_resize_drag_for_cursor(state, slot_id, px, py, event.buttons_down);
     let _ = update_scroll_drag_for_cursor(state, slot_id, py, event.buttons_down);
+    let _ = update_scroll_pan_for_cursor(state, slot_id, px, py, event.buttons_down);
 
     if click_candidate_window_id != 0 {
         let press_action = system_button_action_at(
@@ -877,12 +966,16 @@ fn forward_cursor_wheel_to_selected_window(
     }
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
-            let snapshot = trueos_qjs::browser_task::hosted_surface_state();
+            let browser_instance_id = window_browser_instance_id(window);
+            let snapshot = browser_surface_state_for_window(window);
             let scroll_delta = -(wheel as i32) * UI2_WHEEL_SCROLL_STEP_PX;
             let next_scroll = (snapshot.scroll_y as i32)
                 .saturating_add(scroll_delta)
                 .max(0) as u32;
-            if trueos_qjs::browser_task::set_hosted_scroll_y(next_scroll) {
+            if trueos_qjs::browser_task::set_hosted_scroll_y_for_browser(
+                browser_instance_id,
+                next_scroll,
+            ) {
                 state.compose_reason = "wheel-scroll";
                 true
             } else {
@@ -918,11 +1011,10 @@ fn pump_cursor_selection(state: &mut Ui2State) {
     }
 }
 
-fn selected_browser_window_id_for_keyboard(state: &Ui2State) -> Option<u32> {
+fn selected_window_id_for_keyboard(state: &Ui2State) -> Option<u32> {
     for idx in sorted_window_indices(state).into_iter().rev() {
         let window = &state.windows[idx];
-        if window.kind != Ui2WindowKind::HostedBrowser
-            || !window.visible
+        if !window.visible
             || window.state == Ui2WindowStateKind::Minimized
             || window.selected_cursor_slots.is_empty()
         {
@@ -1026,7 +1118,7 @@ fn browser_keyboard_event_from_output(
 }
 
 fn pump_keyboard_input(state: &mut Ui2State) {
-    let selected_browser_window_id = selected_browser_window_id_for_keyboard(state);
+    let selected_window_id = selected_window_id_for_keyboard(state);
     let mut raw_events =
         [crate::v::keyboard::TrueosKeyboardOutputEvent::default(); UI2_KEYBOARD_EVENT_BATCH];
     loop {
@@ -1044,24 +1136,39 @@ fn pump_keyboard_input(state: &mut Ui2State) {
         }
         state.keyboard_read_seq = next_seq;
 
-        if let Some(browser_window_id) = selected_browser_window_id {
-            let mut events = Vec::new();
-            for event in raw_events.iter().take(wrote).copied() {
-                if let Some(next) = browser_keyboard_event_from_output(event) {
-                    events.push(next);
+        if let Some(window_id) = selected_window_id {
+            let window_kind = state
+                .windows
+                .iter()
+                .find(|window| window.id == window_id)
+                .map(|window| window.kind);
+            match window_kind {
+                Some(Ui2WindowKind::HostedBrowser) => {
+                    let mut events = Vec::new();
+                    for event in raw_events.iter().take(wrote).copied() {
+                        if let Some(next) = browser_keyboard_event_from_output(event) {
+                            events.push(next);
+                        }
+                    }
+                    if !events.is_empty()
+                        && !trueos_qjs::browser_task::queue_hosted_keyboard_events(
+                            window_id,
+                            events.as_slice(),
+                        )
+                    {
+                        crate::log!(
+                            "ui2: keyboard-forward-drop window={} count={}\n",
+                            window_id,
+                            events.len()
+                        );
+                    }
                 }
-            }
-            if !events.is_empty()
-                && !trueos_qjs::browser_task::queue_hosted_keyboard_events(
-                    browser_window_id,
-                    events.as_slice(),
-                )
-            {
-                crate::log!(
-                    "ui2: keyboard-forward-drop window={} count={}\n",
-                    browser_window_id,
-                    events.len()
-                );
+                Some(Ui2WindowKind::HostedSurface) => {
+                    for event in raw_events.iter().take(wrote).copied() {
+                        let _ = crate::tst_gfx_tetris::queue_ui2_keyboard_event(window_id, event);
+                    }
+                }
+                None => {}
             }
         }
 
@@ -1164,6 +1271,9 @@ fn minimize_window_in_state(state: &mut Ui2State, id: u32) -> bool {
     if state.scroll_drag.window_id == id {
         state.scroll_drag = Ui2WindowScrollDrag::default();
     }
+    if state.scroll_pan_drag.window_id == id {
+        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
+    }
     commit_window_geometry_change(state, id, "minimize-window")
 }
 
@@ -1191,6 +1301,9 @@ fn maximize_window_in_state(state: &mut Ui2State, id: u32) -> bool {
     }
     if state.scroll_drag.window_id == id {
         state.scroll_drag = Ui2WindowScrollDrag::default();
+    }
+    if state.scroll_pan_drag.window_id == id {
+        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
     }
     commit_window_geometry_change(state, id, "maximize-window")
 }
@@ -1234,6 +1347,9 @@ fn set_window_visible_in_state(state: &mut Ui2State, id: u32, visible: bool) -> 
         }
         if state.scroll_drag.window_id == id {
             state.scroll_drag = Ui2WindowScrollDrag::default();
+        }
+        if state.scroll_pan_drag.window_id == id {
+            state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
         }
     }
     let noted = note_window_dirty(state, id, reason);
@@ -1353,6 +1469,7 @@ fn begin_move_drag_for_cursor(
         grab_dy: cursor_y - window.rect.y,
     };
     state.resize_drag = Ui2WindowResizeDrag::default();
+    state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
     state.compose_reason = "begin-window-move";
     refresh_window_hit_entries(state, window_id);
     true
@@ -1396,6 +1513,7 @@ fn begin_window_resize_for_cursor(
     }
 
     state.move_drag = Ui2WindowMoveDrag::default();
+    state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
     state.resize_drag = Ui2WindowResizeDrag {
         active: true,
         window_id,
@@ -1432,7 +1550,7 @@ fn browser_vertical_scrollbar_metrics(
         return None;
     }
     let track = window_vertical_scrollbar_rect(state, window)?;
-    let snapshot = trueos_qjs::browser_task::hosted_surface_state();
+    let snapshot = browser_surface_state_for_window(window);
     let viewport_h = snapshot.viewport_height.max(1);
     let content_h = snapshot.content_height.max(viewport_h);
     let scroll_range = content_h.saturating_sub(viewport_h);
@@ -1483,6 +1601,7 @@ fn begin_vertical_scroll_drag_for_cursor(
     };
     state.move_drag = Ui2WindowMoveDrag::default();
     state.resize_drag = Ui2WindowResizeDrag::default();
+    state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
     state.scroll_drag = Ui2WindowScrollDrag {
         active: true,
         window_id,
@@ -1492,6 +1611,37 @@ fn begin_vertical_scroll_drag_for_cursor(
         grab_offset,
     };
     update_scroll_drag_for_cursor(state, slot_id, cursor_y, UI2_PRIMARY_BUTTON_MASK)
+}
+
+fn begin_window_scroll_pan_for_cursor(
+    state: &mut Ui2State,
+    slot_id: u32,
+    window_id: u32,
+    cursor_x: f32,
+    cursor_y: f32,
+) -> bool {
+    let Some(window) = state
+        .windows
+        .iter()
+        .find(|window| window.id == window_id && window_is_renderable(window))
+    else {
+        return false;
+    };
+    if window.kind != Ui2WindowKind::HostedBrowser {
+        return false;
+    }
+    state.move_drag = Ui2WindowMoveDrag::default();
+    state.resize_drag = Ui2WindowResizeDrag::default();
+    state.scroll_drag = Ui2WindowScrollDrag::default();
+    state.scroll_pan_drag = Ui2WindowScrollPanDrag {
+        active: true,
+        window_id,
+        cursor_slot_id: slot_id,
+        last_cursor_x: cursor_x,
+        last_cursor_y: cursor_y,
+    };
+    state.compose_reason = "begin-scroll-pan";
+    true
 }
 
 fn update_scroll_drag_for_cursor(
@@ -1532,8 +1682,70 @@ fn update_scroll_drag_for_cursor(
     let thumb_y = (cursor_y - state.scroll_drag.grab_offset).clamp(track.y, track.y + avail);
     let ratio = ((thumb_y - track.y) / avail).clamp(0.0, 1.0);
     let next_scroll = libm::roundf(ratio * scroll_range as f32) as u32;
-    if trueos_qjs::browser_task::set_hosted_scroll_y(next_scroll) {
+    let Some(window) = state
+        .windows
+        .iter()
+        .find(|window| window.id == state.scroll_drag.window_id)
+    else {
+        return false;
+    };
+    if trueos_qjs::browser_task::set_hosted_scroll_y_for_browser(
+        window_browser_instance_id(window),
+        next_scroll,
+    ) {
         state.compose_reason = "scrollbar-drag";
+        true
+    } else {
+        false
+    }
+}
+
+fn update_scroll_pan_for_cursor(
+    state: &mut Ui2State,
+    slot_id: u32,
+    cursor_x: f32,
+    cursor_y: f32,
+    buttons_down: u32,
+) -> bool {
+    if !state.scroll_pan_drag.active || state.scroll_pan_drag.cursor_slot_id != slot_id {
+        return false;
+    }
+    if (buttons_down & UI2_MIDDLE_BUTTON_MASK) == 0 {
+        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
+        return false;
+    }
+    let drag = state.scroll_pan_drag;
+    let Some(window) = state
+        .windows
+        .iter()
+        .find(|window| window.id == drag.window_id && window_is_renderable(window))
+    else {
+        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
+        return false;
+    };
+    if window.kind != Ui2WindowKind::HostedBrowser {
+        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
+        return false;
+    }
+
+    let dx = cursor_x - drag.last_cursor_x;
+    let dy = cursor_y - drag.last_cursor_y;
+    state.scroll_pan_drag.last_cursor_x = cursor_x;
+    state.scroll_pan_drag.last_cursor_y = cursor_y;
+
+    let dy_px = libm::roundf(dy) as i32;
+    if dy_px == 0 {
+        return false;
+    }
+
+    let snapshot = browser_surface_state_for_window(window);
+    let next_scroll = (snapshot.scroll_y as i32).saturating_sub(dy_px).max(0) as u32;
+    if trueos_qjs::browser_task::set_hosted_scroll_y_for_browser(
+        window_browser_instance_id(window),
+        next_scroll,
+    ) {
+        let _ = dx;
+        state.compose_reason = "scroll-pan";
         true
     } else {
         false
@@ -1761,7 +1973,12 @@ fn note_window_container_sync_needed(state: &mut Ui2State, id: u32) -> bool {
     true
 }
 
-fn sync_window_container(renderable: bool, kind: Ui2WindowKind, content: Option<Ui2Rect>) -> bool {
+fn sync_window_container(
+    renderable: bool,
+    kind: Ui2WindowKind,
+    browser_instance_id: u32,
+    content: Option<Ui2Rect>,
+) -> bool {
     if !renderable {
         return true;
     }
@@ -1770,7 +1987,7 @@ fn sync_window_container(renderable: bool, kind: Ui2WindowKind, content: Option<
             let Some(content) = content else {
                 return true;
             };
-            queue_browser_window_viewport(content);
+            queue_browser_window_viewport(browser_instance_id, content);
             true
         }
         Ui2WindowKind::HostedSurface => true,
@@ -1778,7 +1995,7 @@ fn sync_window_container(renderable: bool, kind: Ui2WindowKind, content: Option<
 }
 
 fn sync_pending_window_containers(state: &mut Ui2State) {
-    let pending: Vec<(u32, bool, Ui2WindowKind, Option<Ui2Rect>)> = state
+    let pending: Vec<(u32, bool, Ui2WindowKind, u32, Option<Ui2Rect>)> = state
         .windows
         .iter()
         .filter(|window| window.container_sync_needed)
@@ -1789,13 +2006,19 @@ fn sync_pending_window_containers(state: &mut Ui2State) {
             } else {
                 None
             };
-            (window.id, renderable, window.kind, content)
+            (
+                window.id,
+                renderable,
+                window.kind,
+                window_browser_instance_id(window),
+                content,
+            )
         })
         .collect();
 
     let mut synced_ids = Vec::new();
-    for (id, renderable, kind, content) in pending {
-        if sync_window_container(renderable, kind, content) {
+    for (id, renderable, kind, browser_instance_id, content) in pending {
+        if sync_window_container(renderable, kind, browser_instance_id, content) {
             synced_ids.push(id);
         }
     }
@@ -1809,6 +2032,24 @@ fn sync_pending_window_containers(state: &mut Ui2State) {
 pub fn browser_window_id() -> Option<u32> {
     let id = UI2_BROWSER_WINDOW_ID.load(Ordering::Acquire);
     if id == 0 { None } else { Some(id) }
+}
+
+pub fn browser_window_id_for_instance(browser_instance_id: u32) -> Option<u32> {
+    let browser_instance_id = if browser_instance_id == 0 {
+        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
+    } else {
+        browser_instance_id
+    };
+    let state_lock = init_state();
+    let state = state_lock.lock();
+    state
+        .windows
+        .iter()
+        .find(|window| {
+            window.kind == Ui2WindowKind::HostedBrowser
+                && window_browser_instance_id(window) == browser_instance_id
+        })
+        .map(|window| window.id)
 }
 
 pub fn window_info_by_id(id: u32) -> Option<TrueosUi2WindowInfo> {
@@ -1826,6 +2067,34 @@ pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     let mut state = state_lock.lock();
     let id = alloc_window(&mut state, Ui2WindowKind::HostedSurface, title, rect, z, alpha);
     state.compose_reason = "create-window";
+    refresh_window_hit_entries(&mut state, id);
+    UI2_DIRTY.store(true, Ordering::Release);
+    id
+}
+
+pub fn create_hosted_browser_window(
+    title: &str,
+    rect: Ui2Rect,
+    z: i16,
+    alpha: u8,
+    browser_instance_id: u32,
+) -> u32 {
+    let browser_instance_id = if browser_instance_id == 0 {
+        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
+    } else {
+        browser_instance_id
+    };
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let id = alloc_window(&mut state, Ui2WindowKind::HostedBrowser, title, rect, z, alpha);
+    if let Some(window) = window_mut(&mut state, id) {
+        window.browser_instance_id = browser_instance_id;
+    }
+    if browser_instance_id == trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID {
+        UI2_BROWSER_WINDOW_ID.store(id, Ordering::Release);
+    }
+    let _ = trueos_qjs::browser_task::bind_browser_window_to_instance(browser_instance_id, id);
+    state.compose_reason = "create-browser-window";
     refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
     id
@@ -2764,18 +3033,24 @@ fn draw_texture_rect_no_present(
     )
 }
 
-fn queue_browser_window_viewport(content: Ui2Rect) {
+fn queue_browser_window_viewport(browser_instance_id: u32, content: Ui2Rect) {
     let viewport_w = round_to_u32(content.w, 1);
     let viewport_h = round_to_u32(content.h, 1);
     let content_x = libm::roundf(content.x) as i32;
     let content_y = libm::roundf(content.y) as i32;
-    let _ = trueos_qjs::browser_task::set_hosted_viewport(
-        viewport_w, viewport_h, content_x, content_y, viewport_w, viewport_h,
+    let _ = trueos_qjs::browser_task::set_hosted_viewport_for_browser(
+        browser_instance_id,
+        viewport_w,
+        viewport_h,
+        content_x,
+        content_y,
+        viewport_w,
+        viewport_h,
     );
 }
 
-fn draw_browser_window_content(state: &Ui2State, content: Ui2Rect) -> bool {
-    let snapshot = trueos_qjs::browser_task::hosted_surface_state();
+fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui2Rect) -> bool {
+    let snapshot = browser_surface_state_for_window(window);
     if snapshot.regions.is_empty() || snapshot.viewport_width == 0 || snapshot.viewport_height == 0
     {
         return false;
@@ -2963,7 +3238,7 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
             state.view_h,
         );
         let thumb_h = if window.kind == Ui2WindowKind::HostedBrowser {
-            let snapshot = trueos_qjs::browser_task::hosted_surface_state();
+            let snapshot = browser_surface_state_for_window(window);
             let viewport_h = snapshot.viewport_height.max(1) as f32;
             let content_h = snapshot.content_height.max(snapshot.viewport_height.max(1)) as f32;
             libm::fmaxf(10.0, (vbar.h * (viewport_h / content_h)).min(vbar.h))
@@ -2971,7 +3246,7 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
             libm::fminf(vbar.h, 18.0)
         };
         let thumb_y = if window.kind == Ui2WindowKind::HostedBrowser {
-            let snapshot = trueos_qjs::browser_task::hosted_surface_state();
+            let snapshot = browser_surface_state_for_window(window);
             let scroll_range = snapshot
                 .content_height
                 .saturating_sub(snapshot.viewport_height.max(1))
@@ -3178,7 +3453,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
             if let Some(content) = content_rect {
-                if draw_browser_window_content(state, content) {
+                if draw_browser_window_content(state, window, content) {
                     return;
                 }
             }
@@ -3231,13 +3506,15 @@ fn compose_windows(state: &mut Ui2State) {
                 } else {
                     0
                 };
-                crate::log!(
-                    "ui2: window-update id={} seq={} reason={} suppressed={}\n",
-                    window.id,
-                    window.dirty_seq,
-                    window.last_reason,
-                    suppressed
-                );
+                if UI2_ENABLE_VERBOSE_COMPOSE_LOGS {
+                    crate::log!(
+                        "ui2: window-update id={} seq={} reason={} suppressed={}\n",
+                        window.id,
+                        window.dirty_seq,
+                        window.last_reason,
+                        suppressed
+                    );
+                }
                 window.last_logged_dirty_seq = window.dirty_seq;
                 window.last_logged_reason = window.last_reason;
             }
@@ -3261,14 +3538,16 @@ fn compose_windows(state: &mut Ui2State) {
         } else {
             0
         };
-        crate::log!(
-            "ui2: compose seq={} windows={} dirty={} reason={} suppressed={}\n",
-            state.compose_seq,
-            state.windows.len(),
-            dirty_count,
-            state.compose_reason,
-            suppressed
-        );
+        if UI2_ENABLE_VERBOSE_COMPOSE_LOGS {
+            crate::log!(
+                "ui2: compose seq={} windows={} dirty={} reason={} suppressed={}\n",
+                state.compose_seq,
+                state.windows.len(),
+                dirty_count,
+                state.compose_reason,
+                suppressed
+            );
+        }
         state.last_logged_compose_seq = state.compose_seq;
         state.last_logged_compose_reason = state.compose_reason;
         state.last_logged_compose_dirty_count = dirty_count;
