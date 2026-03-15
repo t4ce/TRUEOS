@@ -36,6 +36,8 @@ unsafe extern "C" {
     fn trueos_cabi_ui2_window_set_position(window_id: u32, x: i32, y: i32) -> i32;
     fn trueos_cabi_ui2_window_set_size(window_id: u32, width: u32, height: u32) -> i32;
     fn trueos_cabi_ui2_window_set_decorations(window_id: u32, mode: u32) -> i32;
+    fn trueos_cabi_ui2_window_set_vertical_scrollbar_side(window_id: u32, side: u32) -> i32;
+    fn trueos_cabi_ui2_window_set_horizontal_scrollbar_side(window_id: u32, side: u32) -> i32;
     fn trueos_cabi_ui2_window_minimize(window_id: u32) -> i32;
     fn trueos_cabi_ui2_window_maximize(window_id: u32) -> i32;
     fn trueos_cabi_ui2_window_restore(window_id: u32) -> i32;
@@ -715,6 +717,49 @@ unsafe extern "C" fn qjs_window_set_decorations(
     qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
 }
 
+unsafe extern "C" fn qjs_window_set_vertical_scrollbar_side(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 2 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    let mut side_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut side_f as *mut f64, args[1]) != 0
+    {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let rc = trueos_cabi_ui2_window_set_vertical_scrollbar_side(id_f as u32, side_f.max(0.0) as u32);
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
+unsafe extern "C" fn qjs_window_set_horizontal_scrollbar_side(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 2 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    let mut side_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut side_f as *mut f64, args[1]) != 0
+    {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let rc =
+        trueos_cabi_ui2_window_set_horizontal_scrollbar_side(id_f as u32, side_f.max(0.0) as u32);
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
 unsafe extern "C" fn qjs_window_simple_action(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -838,6 +883,13 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     static WINDOW_SET_SIZE_FN_NAME: &[u8] = b"__trueosWindowSetSize\0";
     static WINDOW_SET_DECORATIONS_NAME: &[u8] = b"__trueosWindowSetDecorations\0";
     static WINDOW_SET_DECORATIONS_FN_NAME: &[u8] = b"__trueosWindowSetDecorations\0";
+    static WINDOW_SET_VERTICAL_SCROLLBAR_SIDE_NAME: &[u8] = b"__trueosWindowSetVerticalScrollbarSide\0";
+    static WINDOW_SET_VERTICAL_SCROLLBAR_SIDE_FN_NAME: &[u8] =
+        b"__trueosWindowSetVerticalScrollbarSide\0";
+    static WINDOW_SET_HORIZONTAL_SCROLLBAR_SIDE_NAME: &[u8] =
+        b"__trueosWindowSetHorizontalScrollbarSide\0";
+    static WINDOW_SET_HORIZONTAL_SCROLLBAR_SIDE_FN_NAME: &[u8] =
+        b"__trueosWindowSetHorizontalScrollbarSide\0";
     static WINDOW_MINIMIZE_NAME: &[u8] = b"__trueosWindowMinimize\0";
     static WINDOW_MINIMIZE_FN_NAME: &[u8] = b"__trueosWindowMinimize\0";
     static WINDOW_MAXIMIZE_NAME: &[u8] = b"__trueosWindowMaximize\0";
@@ -1003,6 +1055,36 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
         global,
         WINDOW_SET_DECORATIONS_NAME.as_ptr() as *const c_char,
         window_set_decorations_func,
+    );
+
+    let window_set_vertical_scrollbar_side_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_set_vertical_scrollbar_side),
+        WINDOW_SET_VERTICAL_SCROLLBAR_SIDE_FN_NAME.as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_SET_VERTICAL_SCROLLBAR_SIDE_NAME.as_ptr() as *const c_char,
+        window_set_vertical_scrollbar_side_func,
+    );
+
+    let window_set_horizontal_scrollbar_side_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_set_horizontal_scrollbar_side),
+        WINDOW_SET_HORIZONTAL_SCROLLBAR_SIDE_FN_NAME.as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_SET_HORIZONTAL_SCROLLBAR_SIDE_NAME.as_ptr() as *const c_char,
+        window_set_horizontal_scrollbar_side_func,
     );
 
     let window_minimize_func = qjs::JS_NewCFunction2(
