@@ -1082,11 +1082,7 @@ pub mod cabi {
     }
 
     #[inline]
-    fn append_tex_vertices_with_origin(
-        out: &mut Vec<u8>,
-        src: &[u8],
-        origin: TexCoordOrigin,
-    ) {
+    fn append_tex_vertices_with_origin(out: &mut Vec<u8>, src: &[u8], origin: TexCoordOrigin) {
         const VTX_SIZE: usize = 20;
         if origin == TexCoordOrigin::TopLeft {
             out.extend_from_slice(src);
@@ -2664,16 +2660,20 @@ pub mod cabi {
                         rgb_res = Some((pipeline, vbuf));
                     }
 
-                let mut tex_res: Option<(PipelineId, BufferId)> = None;
-                if !tex_blob.is_empty() {
-                    let tex_kind = if plans.iter().filter_map(|plan| match plan {
-                        Plan::Tex { sample_kind, .. } => Some(*sample_kind),
-                        _ => None,
-                    }).all(|sample_kind| sample_kind == TexSampleKind::Rgba) {
-                        TexSampleKind::Rgba
-                    } else {
-                        TexSampleKind::Mask
-                    };
+                    let mut tex_res: Option<(PipelineId, BufferId)> = None;
+                    if !tex_blob.is_empty() {
+                        let tex_kind = if plans
+                            .iter()
+                            .filter_map(|plan| match plan {
+                                Plan::Tex { sample_kind, .. } => Some(*sample_kind),
+                                _ => None,
+                            })
+                            .all(|sample_kind| sample_kind == TexSampleKind::Rgba)
+                        {
+                            TexSampleKind::Rgba
+                        } else {
+                            TexSampleKind::Mask
+                        };
                         let (pipeline, vbuf, _) =
                             match ensure_gfx_resources_tex(ctx, tex_blob.len(), tex_kind) {
                                 Some(v) => v,
@@ -2724,11 +2724,13 @@ pub mod cabi {
                                 }));
                             }
                             Plan::SetScissor { rect } => {
-                                cmds.push(Command::SetScissor(rect.map(|scissor| GfxScissorRect {
-                                    x: scissor.x,
-                                    y: scissor.y,
-                                    width: scissor.width,
-                                    height: scissor.height,
+                                cmds.push(Command::SetScissor(rect.map(|scissor| {
+                                    GfxScissorRect {
+                                        x: scissor.x,
+                                        y: scissor.y,
+                                        width: scissor.width,
+                                        height: scissor.height,
+                                    }
                                 })));
                             }
                             Plan::Rgb {

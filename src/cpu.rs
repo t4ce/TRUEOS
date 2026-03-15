@@ -1,11 +1,11 @@
 use crate::{exceptions, globalog, percpu, runtime};
-use alloc::vec::Vec;
 use ::limine::mp::Cpu as LimineCpu;
+use alloc::vec::Vec;
 use core::arch::x86_64::__cpuid;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use embassy_executor::Spawner;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 const AP_HEARTBEAT_TASK_POOL: usize = 256;
@@ -55,8 +55,13 @@ impl CpuProfile {
         }
 
         let cpu = unsafe { &*cpu_ptr };
-        Self::for_slot(cpu.cpu_index())
-            .or_else(|| Some(Self::new(cpu.cpu_index(), cpu.lapic_id(), intel_core_kind_hint())))
+        Self::for_slot(cpu.cpu_index()).or_else(|| {
+            Some(Self::new(
+                cpu.cpu_index(),
+                cpu.lapic_id(),
+                intel_core_kind_hint(),
+            ))
+        })
     }
 
     pub fn for_slot(slot: u32) -> Option<Self> {
