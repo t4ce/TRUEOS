@@ -76,6 +76,7 @@ static PENDING_HTML: Mutex<Option<PendingHtmlEntry>> = Mutex::new(None);
 static PENDING_AI_INPUT: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::new());
 static PENDING_QJS_INPUT: Mutex<VecDeque<QjsInputEntry>> = Mutex::new(VecDeque::new());
 static PENDING_HOSTED_VIEWPORT: Mutex<Option<HostedViewportRequest>> = Mutex::new(None);
+static PENDING_HOSTED_SCROLL_Y: Mutex<Option<u32>> = Mutex::new(None);
 static APPLIED_HOSTED_VIEWPORT: Mutex<Option<HostedViewportRequest>> = Mutex::new(None);
 static HOSTED_SURFACE_STATE: Mutex<HostedBrowserSurfaceState> =
     Mutex::new(HostedBrowserSurfaceState {
@@ -211,6 +212,14 @@ pub fn set_hosted_viewport(
     true
 }
 
+pub fn set_hosted_scroll_y(scroll_y: u32) -> bool {
+    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+        return false;
+    }
+    *PENDING_HOSTED_SCROLL_Y.lock() = Some(scroll_y);
+    true
+}
+
 pub fn hosted_surface_state() -> HostedBrowserSurfaceState {
     HOSTED_SURFACE_STATE.lock().clone()
 }
@@ -337,6 +346,34 @@ unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext) {
     qjs::js_free_value(ctx, result);
     qjs::js_free_value(ctx, content_rect);
     qjs::js_free_value(ctx, viewport);
+    qjs::js_free_value(ctx, func);
+    qjs::js_free_value(ctx, browser);
+}
+
+unsafe fn apply_pending_hosted_scroll_y(ctx: *mut qjs::JSContext) {
+    let Some(next_scroll_y) = PENDING_HOSTED_SCROLL_Y.lock().take() else {
+        return;
+    };
+    let Some(browser) = browser_api_value(ctx) else {
+        *PENDING_HOSTED_SCROLL_Y.lock() = Some(next_scroll_y);
+        return;
+    };
+    let func = qjs::JS_GetPropertyStr(ctx, browser, b"setScroll\0".as_ptr() as *const c_char);
+    if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, func);
+        qjs::js_free_value(ctx, browser);
+        *PENDING_HOSTED_SCROLL_Y.lock() = Some(next_scroll_y);
+        return;
+    }
+
+    let args = [qjs::JS_NewFloat64(ctx, next_scroll_y as f64)];
+    let result = qjs::JS_Call(ctx, func, browser, args.len() as i32, args.as_ptr());
+    if result.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "browser setScroll");
+        *PENDING_HOSTED_SCROLL_Y.lock() = Some(next_scroll_y);
+    }
+    qjs::js_free_value(ctx, result);
+    qjs::js_free_value(ctx, args[0]);
     qjs::js_free_value(ctx, func);
     qjs::js_free_value(ctx, browser);
 }
@@ -696,6 +733,7 @@ pub async fn boot_browser() {
             apply_pending_ai_input(ctx);
             apply_pending_qjs_input(ctx);
             apply_pending_hosted_viewport(ctx);
+            apply_pending_hosted_scroll_y(ctx);
             if !qjs::vm::pump_runtime_once(rt, ctx, "browser") {
                 break;
             }

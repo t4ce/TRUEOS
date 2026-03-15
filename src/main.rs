@@ -33,6 +33,8 @@ mod smp;
 mod surface;
 mod tga;
 mod time;
+#[path = "tst/gfx_tetris.rs"]
+mod tst_gfx_tetris;
 #[path = "tst/html.rs"]
 mod tst_html;
 #[path = "tst/http_trueosfs.rs"]

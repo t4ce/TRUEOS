@@ -48,6 +48,7 @@ static GFX_LOADSCREEN_STARTED: AtomicBool = AtomicBool::new(false);
 static BROWSER_STARTUP_HTML_LOADER_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_BROWSER_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
+static UI2_GFX_TETRIS_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_TRIANGLE_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_MATMUL_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_INTEL_TRIANGLE_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
@@ -338,6 +339,13 @@ fn spawn_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::v::ui2::ui2_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::tst_gfx_tetris::ui2_gfx_tetris_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -701,6 +709,13 @@ static TASKS: &[TaskSpec] = &[
         required: crate::v::readiness::LOADSCREEN_END,
         started: &UI2_STARTED,
         spawn: spawn_ui2,
+    },
+    TaskSpec {
+        name: "ui2-gfx-tetris",
+        disabled: true,
+        required: crate::v::readiness::LOADSCREEN_END,
+        started: &UI2_GFX_TETRIS_STARTED,
+        spawn: spawn_ui2_gfx_tetris,
     },
     TaskSpec {
         name: "ui2-triangle-demo",

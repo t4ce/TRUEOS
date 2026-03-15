@@ -4,6 +4,7 @@ import Yoga from 'yoga-layout';
 import { Worker } from 'node:worker_threads';
 import { createFpsOverlay } from './fps.mjs';
 import { createBrowserAssetManager } from './browser_assets.mjs';
+import { createBrowserCursorController } from './browser_cursor.mjs';
 import { createBrowserPageState } from './browser_page_state.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
 import { registerSvgDemoRoute } from './svg_demo.mjs';
@@ -2273,6 +2274,22 @@ function resolveInteractiveTarget(target = null) {
   return null;
 }
 
+const browserCursor = createBrowserCursorController({
+  host: runtime.host,
+  computeViewport,
+  paint,
+  onWheelDelta(dy) {
+    const nextScroll = Math.max(0, Math.round(Number(scrollY || 0) + Number(dy || 0)));
+    if (nextScroll === scrollY) return false;
+    scrollY = nextScroll;
+    paint();
+    return true;
+  },
+  onReleaseRect() {},
+});
+
+browserCursor.startPump();
+
 function startAutoPaint() {
   const host = runtime.host;
   if (AUTO_PAINT_MS <= 0) return;
@@ -2345,17 +2362,17 @@ runtime.host.__trueosBrowser = {
   setNodeHtml,
   setBodyHtml,
   insertHtml,
-  injectCursorEvent(_event = null) {
-    return false;
+  injectCursorEvent(event = null) {
+    return browserCursor.injectCursorEvent(event);
   },
   getKernelCursors() {
-    return [];
+    return browserCursor.getKernelCursors();
   },
-  getKernelCursor(_slotId) {
-    return null;
+  getKernelCursor(slotId) {
+    return browserCursor.getKernelCursor(slotId);
   },
   popCursorButtonEvent() {
-    return null;
+    return browserCursor.popCursorButtonEvent();
   },
   getApiContract() {
     return cloneApiContract();
@@ -2527,11 +2544,11 @@ runtime.host.__trueosBrowser = {
     paint();
     return true;
   },
-  moveCursor(_target = null) {
-    return { ...BROWSER_INTERACTION_EXTERNAL_RESULT };
+  moveCursor(target = null) {
+    return browserCursor.moveCursor(target);
   },
-  click(_target = null) {
-    return { ...BROWSER_INTERACTION_EXTERNAL_RESULT };
+  click(target = null) {
+    return browserCursor.synthesizeClickAt(target, resolveInteractiveTarget);
   },
   navigate(input = null) {
     const request = input && typeof input === 'object' && !Array.isArray(input)

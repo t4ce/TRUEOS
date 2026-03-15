@@ -21,7 +21,8 @@ struct RgbVertex {
 fn triangle_vertices(phase: f32) -> [RgbVertex; 3] {
     let cos_p = libm::cosf(phase);
     let sin_p = libm::sinf(phase);
-    let rotate = |x: f32, y: f32| -> (f32, f32) { ((x * cos_p) - (y * sin_p), (x * sin_p) + (y * cos_p)) };
+    let rotate =
+        |x: f32, y: f32| -> (f32, f32) { ((x * cos_p) - (y * sin_p), (x * sin_p) + (y * cos_p)) };
     let (x0, y0) = rotate(0.0, -0.65);
     let (x1, y1) = rotate(-0.7, 0.55);
     let (x2, y2) = rotate(0.7, 0.55);
@@ -82,10 +83,7 @@ fn upload_triangle_render_target() -> bool {
 fn render_triangle_frame(phase: f32) -> bool {
     let verts = triangle_vertices(phase);
     let bytes = unsafe {
-        core::slice::from_raw_parts(
-            verts.as_ptr() as *const u8,
-            core::mem::size_of_val(&verts),
-        )
+        core::slice::from_raw_parts(verts.as_ptr() as *const u8, core::mem::size_of_val(&verts))
     };
     crate::surface::io::cabi::render_rgb_triangles_to_texture(UI2_TRIANGLE_TEX_ID, 0x10141A, bytes)
         == 0
