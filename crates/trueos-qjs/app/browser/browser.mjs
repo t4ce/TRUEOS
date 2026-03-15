@@ -3,7 +3,6 @@ import * as cmdStream from 'trueos:cmd_stream';
 import Yoga from 'yoga-layout';
 import { createFpsOverlay } from './fps.mjs';
 import { createBrowserAssetManager } from './browser_assets.mjs';
-import { createBrowserCursorController } from './browser_cursor.mjs';
 import { createBrowserPageState } from './browser_page_state.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
 import { parseKeyboardInput } from '../input/keyboard_wire.mjs';
@@ -77,6 +76,8 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'setWindowPosition',
     'setWindowSize',
     'setWindowDecorations',
+    'setWindowVerticalScrollbarSide',
+    'setWindowHorizontalScrollbarSide',
     'minimizeWindow',
     'maximizeWindow',
     'restoreWindow',
@@ -84,8 +85,6 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'closeWindow',
     'beginWindowMove',
     'beginWindowResize',
-    'moveCursor',
-    'click',
     'navigate',
     'keyboard',
     'typeText',
@@ -93,6 +92,8 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'captureScreenshot',
   ],
   unavailable: [
+    'moveCursor',
+    'click',
   ],
   notes: {
     intent: 'Worker-facing browser contract for the AI task. Keep this surface explicit so agent logic remains isolated from the browser VM.',
@@ -192,6 +193,18 @@ function encodeWindowDecorations(mode) {
   const value = String(mode || '').trim().toLowerCase();
   if (value === 'client') return 1;
   if (value === 'none') return 2;
+  return 0;
+}
+
+function encodeVerticalScrollbarSide(side) {
+  const value = String(side || '').trim().toLowerCase();
+  if (value === 'right' || value === 'r' || value === 'east' || value === 'e') return 1;
+  return 0;
+}
+
+function encodeHorizontalScrollbarSide(side) {
+  const value = String(side || '').trim().toLowerCase();
+  if (value === 'bottom' || value === 'b' || value === 'south' || value === 's') return 1;
   return 0;
 }
 
@@ -2148,22 +2161,6 @@ function resolveInteractiveTarget(target = null) {
   return null;
 }
 
-const browserCursor = createBrowserCursorController({
-  host: runtime.host,
-  computeViewport,
-  paint,
-  onWheelDelta(dy) {
-    const nextScroll = Math.max(0, Math.round(Number(scrollY || 0) + Number(dy || 0)));
-    if (nextScroll === scrollY) return false;
-    scrollY = nextScroll;
-    paint();
-    return true;
-  },
-  onReleaseRect() {},
-});
-
-browserCursor.startPump();
-
 function startAutoPaint() {
   const host = runtime.host;
   if (AUTO_PAINT_MS <= 0) return;
@@ -2185,16 +2182,16 @@ runtime.host.__trueosBrowser = {
   setBodyHtml,
   insertHtml,
   injectCursorEvent(event = null) {
-    return browserCursor.injectCursorEvent(event);
+    return false;
   },
   getKernelCursors() {
-    return browserCursor.getKernelCursors();
+    return [];
   },
   getKernelCursor(slotId) {
-    return browserCursor.getKernelCursor(slotId);
+    return null;
   },
   popCursorButtonEvent() {
-    return browserCursor.popCursorButtonEvent();
+    return null;
   },
   getApiContract() {
     return cloneApiContract();
@@ -2325,6 +2322,20 @@ runtime.host.__trueosBrowser = {
   setWindowDecorations(mode = 'system', windowId = null) {
     return runWindowAction(windowId, '__trueosWindowSetDecorations', encodeWindowDecorations(mode));
   },
+  setWindowVerticalScrollbarSide(side = 'left', windowId = null) {
+    return runWindowAction(
+      windowId,
+      '__trueosWindowSetVerticalScrollbarSide',
+      encodeVerticalScrollbarSide(side),
+    );
+  },
+  setWindowHorizontalScrollbarSide(side = 'bottom', windowId = null) {
+    return runWindowAction(
+      windowId,
+      '__trueosWindowSetHorizontalScrollbarSide',
+      encodeHorizontalScrollbarSide(side),
+    );
+  },
   minimizeWindow(windowId = null) {
     return runWindowAction(windowId, '__trueosWindowMinimize');
   },
@@ -2357,10 +2368,10 @@ runtime.host.__trueosBrowser = {
     return true;
   },
   moveCursor(target = null) {
-    return browserCursor.moveCursor(target);
+    return notYetAvailable('moveCursor');
   },
   click(target = null) {
-    return browserCursor.synthesizeClickAt(target, resolveInteractiveTarget);
+    return notYetAvailable('click');
   },
   navigate(input = null) {
     const request = input && typeof input === 'object' && !Array.isArray(input)

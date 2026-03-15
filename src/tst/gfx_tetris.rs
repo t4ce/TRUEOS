@@ -418,6 +418,8 @@ pub async fn ui2_gfx_tetris_task() {
         return;
     };
     let window_id = surface.window_id();
+    let _ = crate::v::ui2::set_window_left_scrollbar_visible(window_id, false);
+    let _ = crate::v::ui2::set_window_bottom_scrollbar_visible(window_id, false);
     let (surface_w, surface_h) = surface.size();
     crate::log!(
         "gfx-tetris: window={} tex={} size={}x{}\n",

@@ -782,7 +782,7 @@ pub mod cabi {
                 }
             }
             if rc == 0 && req.repaint_window_id != 0 {
-                let _ = crate::v::ui2::request_window_repaint(
+                let _ = crate::v::ui2::request_window_content_present(
                     req.repaint_window_id,
                     req.repaint_reason,
                 );
