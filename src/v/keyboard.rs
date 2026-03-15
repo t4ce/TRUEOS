@@ -239,6 +239,45 @@ fn ascii_was_emitted(emitted: &[u8; 6], ascii: u8) -> bool {
 }
 
 #[inline]
+fn key_code_was_emitted(emitted: &[u16; 6], key_code: u16) -> bool {
+    key_code != 0 && emitted.iter().copied().any(|candidate| candidate == key_code)
+}
+
+#[inline]
+fn hid_boot_keycode_to_named_key(key: u8) -> Option<u16> {
+    match key {
+        0x28 => Some(KEYBOARD_KEY_ENTER),
+        0x29 => Some(KEYBOARD_KEY_ESCAPE),
+        0x2A => Some(KEYBOARD_KEY_BACKSPACE),
+        0x2B => Some(KEYBOARD_KEY_TAB),
+        0x2C => Some(KEYBOARD_KEY_SPACE),
+        0x3A => Some(KEYBOARD_KEY_F1),
+        0x3B => Some(KEYBOARD_KEY_F2),
+        0x3C => Some(KEYBOARD_KEY_F3),
+        0x3D => Some(KEYBOARD_KEY_F4),
+        0x3E => Some(KEYBOARD_KEY_F5),
+        0x3F => Some(KEYBOARD_KEY_F6),
+        0x40 => Some(KEYBOARD_KEY_F7),
+        0x41 => Some(KEYBOARD_KEY_F8),
+        0x42 => Some(KEYBOARD_KEY_F9),
+        0x43 => Some(KEYBOARD_KEY_F10),
+        0x44 => Some(KEYBOARD_KEY_F11),
+        0x45 => Some(KEYBOARD_KEY_F12),
+        0x49 => Some(KEYBOARD_KEY_INSERT),
+        0x4A => Some(KEYBOARD_KEY_HOME),
+        0x4B => Some(KEYBOARD_KEY_PAGE_UP),
+        0x4C => Some(KEYBOARD_KEY_DELETE),
+        0x4D => Some(KEYBOARD_KEY_END),
+        0x4E => Some(KEYBOARD_KEY_PAGE_DOWN),
+        0x4F => Some(KEYBOARD_KEY_ARROW_RIGHT),
+        0x50 => Some(KEYBOARD_KEY_ARROW_LEFT),
+        0x51 => Some(KEYBOARD_KEY_ARROW_DOWN),
+        0x52 => Some(KEYBOARD_KEY_ARROW_UP),
+        _ => None,
+    }
+}
+
+#[inline]
 fn push_output_event(mut evt: TrueosKeyboardOutputEvent) {
     let mut ring = KEYBOARD_OUTPUT_RING.lock();
     ring.write_seq = ring.write_seq.wrapping_add(1);
@@ -364,9 +403,29 @@ pub fn apply_report(
     upsert_snapshot(controller_id, slot_id, ep_target, modifiers, keys, ascii);
 
     let mut emitted_ascii = [0u8; 6];
+    let mut emitted_key_codes = [0u16; 6];
     for idx in 0..keys.len() {
         let key = keys[idx];
         let ch = ascii[idx];
+        if key != 0 && !key_is_down(&prev_keys, key) {
+            if let Some(key_code) = hid_boot_keycode_to_named_key(key) {
+                if !key_code_was_emitted(&emitted_key_codes, key_code) {
+                    let codepoint = key_code_default_codepoint(key_code).map(|ch| ch as u32).unwrap_or(0);
+                    push_output_key(
+                        controller_id,
+                        slot_id,
+                        ep_target,
+                        t_ms,
+                        device_seq,
+                        modifiers,
+                        key_code,
+                        codepoint,
+                        KEYBOARD_OUTPUT_FLAG_PRESS,
+                    );
+                    emitted_key_codes[idx] = key_code;
+                }
+            }
+        }
         if key == 0
             || ch == 0
             || key_is_down(&prev_keys, key)

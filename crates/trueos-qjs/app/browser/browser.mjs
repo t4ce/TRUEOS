@@ -528,6 +528,33 @@ function parsePositiveAttrPx(node, name, fallback = 0) {
   return value;
 }
 
+function parseSvgViewBoxDimensions(node) {
+  const raw = String(getNodeAttr(node, 'viewBox') || '').trim();
+  if (!raw) return { width: 0, height: 0 };
+  const parts = raw.split(/[\s,]+/).map((part) => Number(part));
+  if (parts.length < 4 || !parts.every((value) => Number.isFinite(value))) {
+    return { width: 0, height: 0 };
+  }
+  return {
+    width: Math.max(0, Math.round(parts[2] || 0)),
+    height: Math.max(0, Math.round(parts[3] || 0)),
+  };
+}
+
+function inlineSvgNodeToDataUrl(node) {
+  if (!node || typeof node !== 'object') return '';
+  try {
+    const svg = typeof parse5.serializeOuter === 'function'
+      ? String(parse5.serializeOuter(node) || '')
+      : String(parse5.serialize(node) || '');
+    const trimmed = svg.trim();
+    if (!trimmed) return '';
+    return `data:image/svg+xml;utf8,${encodeURIComponent(trimmed)}`;
+  } catch (_) {
+    return '';
+  }
+}
+
 function shouldOmitElement(tagName) {
   return OMIT_TAGS.has(String(tagName || '').toLowerCase());
 }
@@ -594,6 +621,21 @@ function collectRows(node, depth, rows, cssSection, parentMeta = null, path = 'r
         style,
         { path: String(path || 'root'), src: String(getNodeAttr(node, 'src') || '') },
         String(getNodeAttr(node, 'alt') || 'img'),
+      );
+      return;
+    }
+    if (tag === 'svg') {
+      const viewBox = parseSvgViewBoxDimensions(node);
+      const widthPx = parsePositiveAttrPx(node, 'width', viewBox.width > 0 ? viewBox.width : 160);
+      const heightPx = parsePositiveAttrPx(node, 'height', viewBox.height > 0 ? viewBox.height : (widthPx > 0 ? widthPx : 120));
+      pushImageRow(
+        rows,
+        depth,
+        widthPx,
+        heightPx,
+        style,
+        { path: String(path || 'root'), src: inlineSvgNodeToDataUrl(node) },
+        String(getNodeAttr(node, 'aria-label') || getNodeAttr(node, 'title') || 'svg'),
       );
       return;
     }

@@ -18,6 +18,24 @@ function isImageNode(node) {
   return !!node && typeof node === 'object' && String(node.tagName || '').toLowerCase() === 'img';
 }
 
+function isInlineSvgNode(node) {
+  return !!node && typeof node === 'object' && String(node.tagName || '').toLowerCase() === 'svg';
+}
+
+function inlineSvgNodeToDataUrl(node) {
+  if (!node || typeof node !== 'object') return '';
+  try {
+    const svg = typeof parse5.serializeOuter === 'function'
+      ? String(parse5.serializeOuter(node) || '')
+      : String(parse5.serialize(node) || '');
+    const trimmed = svg.trim();
+    if (!trimmed) return '';
+    return `data:image/svg+xml;utf8,${encodeURIComponent(trimmed)}`;
+  } catch (_) {
+    return '';
+  }
+}
+
 export function createBrowserAssetManager(options = {}) {
   const cmdStream = options.cmdStream;
   const host = options.host;
@@ -378,6 +396,11 @@ export function createBrowserAssetManager(options = {}) {
     if (isImageNode(node)) {
       const rawSrc = String(getNodeAttr(node, 'src') || '').trim();
       const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
+      if (resolvedSrc) {
+        urls.push(resolvedSrc);
+      }
+    } else if (isInlineSvgNode(node)) {
+      const resolvedSrc = inlineSvgNodeToDataUrl(node);
       if (resolvedSrc) {
         urls.push(resolvedSrc);
       }
