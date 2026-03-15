@@ -27,6 +27,7 @@ const UI2_CLICK_SLOP_PX: f32 = 12.0;
 const UI2_CURSOR_EVENT_BATCH: usize = 32;
 const UI2_KEYBOARD_EVENT_BATCH: usize = 32;
 const UI2_CURSOR_HIT_RADIUS_PX: f32 = 8.0;
+const UI2_WINDOW_EDGE_DROP_PX: f32 = 8.0;
 const UI2_WHEEL_SCROLL_STEP_PX: i32 = 16;
 const UI2_WINDOW_UPDATE_LOG_EVERY: u32 = 32;
 const UI2_COMPOSE_LOG_EVERY: u32 = 32;
@@ -203,6 +204,14 @@ struct Ui2WindowMoveDrag {
     cursor_slot_id: u32,
     grab_dx: f32,
     grab_dy: f32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Ui2WindowEdgeDropAction {
+    SnapLeft,
+    SnapRight,
+    Maximize,
+    Minimize,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -486,6 +495,28 @@ fn browser_surface_state_for_window(
     window: &Ui2Window,
 ) -> trueos_qjs::browser_task::HostedBrowserSurfaceState {
     trueos_qjs::browser_task::hosted_surface_state_for_browser(window_browser_instance_id(window))
+}
+
+fn hosted_browser_scroll_max(
+    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
+) -> u32 {
+    let viewport_h = snapshot.viewport_height.max(1);
+    let content_h = snapshot.content_height.max(viewport_h);
+    content_h.saturating_sub(viewport_h)
+}
+
+fn clamp_hosted_browser_scroll(
+    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
+    requested_scroll: i64,
+) -> u32 {
+    let max_scroll = hosted_browser_scroll_max(snapshot) as i64;
+    requested_scroll.clamp(0, max_scroll) as u32
+}
+
+fn normalized_hosted_browser_scroll(
+    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
+) -> u32 {
+    clamp_hosted_browser_scroll(snapshot, snapshot.scroll_y as i64)
 }
 
 fn browser_interactive_state_for_window(
@@ -1075,9 +1106,11 @@ fn forward_cursor_wheel_to_selected_window(
             let browser_instance_id = window_browser_instance_id(window);
             let snapshot = browser_surface_state_for_window(window);
             let scroll_delta = -(wheel as i32) * UI2_WHEEL_SCROLL_STEP_PX;
-            let next_scroll = (snapshot.scroll_y as i32)
-                .saturating_add(scroll_delta)
-                .max(0) as u32;
+            let next_scroll = clamp_hosted_browser_scroll(
+                &snapshot,
+                i64::from(normalized_hosted_browser_scroll(&snapshot))
+                    .saturating_add(i64::from(scroll_delta)),
+            );
             if trueos_qjs::browser_task::set_hosted_scroll_y_for_browser(
                 browser_instance_id,
                 next_scroll,
@@ -1343,6 +1376,93 @@ fn maximize_window_rect(state: &Ui2State) -> Ui2Rect {
         (state.view_w as f32).max(1.0),
         (state.view_h as f32).max(1.0),
     )
+}
+
+fn left_half_window_rect(state: &Ui2State) -> Ui2Rect {
+    let view_w = (state.view_w as f32).max(1.0);
+    let view_h = (state.view_h as f32).max(1.0);
+    Ui2Rect::new(0.0, 0.0, (view_w * 0.5).max(1.0), view_h)
+}
+
+fn right_half_window_rect(state: &Ui2State) -> Ui2Rect {
+    let view_w = (state.view_w as f32).max(1.0);
+    let view_h = (state.view_h as f32).max(1.0);
+    let half_w = (view_w * 0.5).max(1.0);
+    Ui2Rect::new(view_w - half_w, 0.0, half_w, view_h)
+}
+
+fn set_window_rect_in_state(state: &mut Ui2State, id: u32, rect: Ui2Rect, reason: &'static str) -> bool {
+    let view_w = state.view_w;
+    let view_h = state.view_h;
+    let Some(window) = window_mut(state, id) else {
+        return false;
+    };
+    let next_rect = normalized_window_rect_for_view(view_w, view_h, rect);
+    if window.state == Ui2WindowStateKind::Normal && window.rect == next_rect {
+        return true;
+    }
+    if window.state != Ui2WindowStateKind::Normal {
+        window.restore_rect = normalized_window_rect_for_view(view_w, view_h, window.rect);
+    }
+    window.rect = next_rect;
+    window.restore_rect = next_rect;
+    window.state = Ui2WindowStateKind::Normal;
+    state.compose_reason = reason;
+    if state.move_drag.window_id == id {
+        state.move_drag = Ui2WindowMoveDrag::default();
+    }
+    if state.resize_drag.window_id == id {
+        state.resize_drag = Ui2WindowResizeDrag::default();
+    }
+    if state.scroll_drag.window_id == id {
+        state.scroll_drag = Ui2WindowScrollDrag::default();
+    }
+    if state.scroll_pan_drag.window_id == id {
+        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
+    }
+    commit_window_geometry_change(state, id, reason)
+}
+
+fn window_edge_drop_action(state: &Ui2State, cursor_x: f32, cursor_y: f32) -> Option<Ui2WindowEdgeDropAction> {
+    let right_edge = (state.view_w.saturating_sub(1)) as f32;
+    let bottom_edge = (state.view_h.saturating_sub(1)) as f32;
+    let candidates = [
+        (cursor_x.abs(), Ui2WindowEdgeDropAction::SnapLeft),
+        ((right_edge - cursor_x).abs(), Ui2WindowEdgeDropAction::SnapRight),
+        (cursor_y.abs(), Ui2WindowEdgeDropAction::Maximize),
+        ((bottom_edge - cursor_y).abs(), Ui2WindowEdgeDropAction::Minimize),
+    ];
+    let mut best: Option<(f32, Ui2WindowEdgeDropAction)> = None;
+    for candidate in candidates {
+        if candidate.0 > UI2_WINDOW_EDGE_DROP_PX {
+            continue;
+        }
+        if best
+            .as_ref()
+            .map(|current| candidate.0 < current.0)
+            .unwrap_or(true)
+        {
+            best = Some(candidate);
+        }
+    }
+    best.map(|(_, action)| action)
+}
+
+fn apply_window_edge_drop_action(
+    state: &mut Ui2State,
+    id: u32,
+    action: Ui2WindowEdgeDropAction,
+) -> bool {
+    match action {
+        Ui2WindowEdgeDropAction::SnapLeft => {
+            set_window_rect_in_state(state, id, left_half_window_rect(state), "window-snap-left")
+        }
+        Ui2WindowEdgeDropAction::SnapRight => {
+            set_window_rect_in_state(state, id, right_half_window_rect(state), "window-snap-right")
+        }
+        Ui2WindowEdgeDropAction::Maximize => maximize_window_in_state(state, id),
+        Ui2WindowEdgeDropAction::Minimize => minimize_window_in_state(state, id),
+    }
 }
 
 fn commit_window_geometry_change(state: &mut Ui2State, id: u32, reason: &'static str) -> bool {
@@ -1659,14 +1779,15 @@ fn browser_vertical_scrollbar_metrics(
     let snapshot = browser_surface_state_for_window(window);
     let viewport_h = snapshot.viewport_height.max(1);
     let content_h = snapshot.content_height.max(viewport_h);
-    let scroll_range = content_h.saturating_sub(viewport_h);
+    let scroll_range = hosted_browser_scroll_max(&snapshot);
     let thumb_h = libm::fmaxf(
         10.0,
         (track.h * (viewport_h as f32 / content_h as f32)).min(track.h),
     );
     let thumb_y = if scroll_range > 0 {
         let avail = (track.h - thumb_h).max(0.0);
-        track.y + (avail * (snapshot.scroll_y as f32 / scroll_range as f32))
+        track.y
+            + (avail * (normalized_hosted_browser_scroll(&snapshot) as f32 / scroll_range as f32))
     } else {
         track.y
     };
@@ -1787,7 +1908,10 @@ fn update_scroll_drag_for_cursor(
     }
     let thumb_y = (cursor_y - state.scroll_drag.grab_offset).clamp(track.y, track.y + avail);
     let ratio = ((thumb_y - track.y) / avail).clamp(0.0, 1.0);
-    let next_scroll = libm::roundf(ratio * scroll_range as f32) as u32;
+    let next_scroll = clamp_hosted_browser_scroll(
+        &browser_surface_state_for_window(window),
+        libm::roundf(ratio * scroll_range as f32) as i64,
+    );
     let Some(window) = state
         .windows
         .iter()
@@ -1845,7 +1969,10 @@ fn update_scroll_pan_for_cursor(
     }
 
     let snapshot = browser_surface_state_for_window(window);
-    let next_scroll = (snapshot.scroll_y as i32).saturating_sub(dy_px).max(0) as u32;
+    let next_scroll = clamp_hosted_browser_scroll(
+        &snapshot,
+        i64::from(normalized_hosted_browser_scroll(&snapshot)).saturating_sub(i64::from(dy_px)),
+    );
     if trueos_qjs::browser_task::set_hosted_scroll_y_for_browser(
         window_browser_instance_id(window),
         next_scroll,
@@ -1869,7 +1996,11 @@ fn update_move_drag_for_cursor(
         return;
     }
     if (buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
+        let window_id = state.move_drag.window_id;
         state.move_drag = Ui2WindowMoveDrag::default();
+        if let Some(action) = window_edge_drop_action(state, cursor_x, cursor_y) {
+            let _ = apply_window_edge_drop_action(state, window_id, action);
+        }
         return;
     }
     let next_x = cursor_x - state.move_drag.grab_dx;
@@ -3480,7 +3611,9 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
 
     let draw_w = snapshot.viewport_width.max(1);
     let draw_h = snapshot.viewport_height.max(1);
-    let scroll_top = snapshot.content_top_y.saturating_add(snapshot.scroll_y);
+    let scroll_top = snapshot
+        .content_top_y
+        .saturating_add(normalized_hosted_browser_scroll(&snapshot));
     let scroll_bottom = scroll_top.saturating_add(draw_h);
     let mut drew = false;
 
@@ -3660,13 +3793,12 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
         };
         let thumb_y = if window.kind == Ui2WindowKind::HostedBrowser {
             let snapshot = browser_surface_state_for_window(window);
-            let scroll_range = snapshot
-                .content_height
-                .saturating_sub(snapshot.viewport_height.max(1))
-                as f32;
+            let scroll_range = hosted_browser_scroll_max(&snapshot) as f32;
             let avail = (vbar.h - thumb_h).max(0.0);
             if scroll_range > 0.0 {
-                vbar.y + (avail * ((snapshot.scroll_y as f32) / scroll_range))
+                vbar.y
+                    + (avail
+                        * ((normalized_hosted_browser_scroll(&snapshot) as f32) / scroll_range))
             } else {
                 vbar.y
             }
