@@ -110,6 +110,294 @@ pub fn draw_solid_rect_no_present(
     rc == 0
 }
 
+pub fn draw_vertical_gradient_rect_no_present(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    top_rgba: (u8, u8, u8, u8),
+    bottom_rgba: (u8, u8, u8, u8),
+    view_w: u32,
+    view_h: u32,
+) -> bool {
+    if w <= 0.0 || h <= 0.0 {
+        return true;
+    }
+
+    let x0 = x;
+    let y0 = y;
+    let x1 = x + w;
+    let y1 = y + h;
+    let top = [
+        top_rgba.0 as f32 / 255.0,
+        top_rgba.1 as f32 / 255.0,
+        top_rgba.2 as f32 / 255.0,
+        top_rgba.3 as f32 / 255.0,
+    ];
+    let bottom = [
+        bottom_rgba.0 as f32 / 255.0,
+        bottom_rgba.1 as f32 / 255.0,
+        bottom_rgba.2 as f32 / 255.0,
+        bottom_rgba.3 as f32 / 255.0,
+    ];
+
+    let tris = [
+        MyVertex {
+            position: [x0, y1],
+            color: bottom,
+        },
+        MyVertex {
+            position: [x1, y1],
+            color: bottom,
+        },
+        MyVertex {
+            position: [x1, y0],
+            color: top,
+        },
+        MyVertex {
+            position: [x0, y1],
+            color: bottom,
+        },
+        MyVertex {
+            position: [x1, y0],
+            color: top,
+        },
+        MyVertex {
+            position: [x0, y0],
+            color: top,
+        },
+    ];
+
+    let mut blob: Vec<u8> = Vec::with_capacity(6 * 12);
+    let fb_w = view_w.max(1) as f32;
+    let fb_h = view_h.max(1) as f32;
+    for v in &tris {
+        push_rgb_vtx(&mut blob, v, fb_w, fb_h);
+    }
+
+    let rc = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+            blob.as_ptr(),
+            blob.len(),
+        )
+    };
+    rc == 0
+}
+
+pub fn draw_vertical_three_stop_rect_no_present(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    top_rgba: (u8, u8, u8, u8),
+    mid_rgba: (u8, u8, u8, u8),
+    bottom_rgba: (u8, u8, u8, u8),
+    mid_offset: f32,
+    view_w: u32,
+    view_h: u32,
+) -> bool {
+    if w <= 0.0 || h <= 0.0 {
+        return true;
+    }
+
+    let x0 = x;
+    let x1 = x + w;
+    let y0 = y;
+    let ym = y + h * mid_offset.clamp(0.0, 1.0);
+    let y1 = y + h;
+    let top = [
+        top_rgba.0 as f32 / 255.0,
+        top_rgba.1 as f32 / 255.0,
+        top_rgba.2 as f32 / 255.0,
+        top_rgba.3 as f32 / 255.0,
+    ];
+    let mid = [
+        mid_rgba.0 as f32 / 255.0,
+        mid_rgba.1 as f32 / 255.0,
+        mid_rgba.2 as f32 / 255.0,
+        mid_rgba.3 as f32 / 255.0,
+    ];
+    let bottom = [
+        bottom_rgba.0 as f32 / 255.0,
+        bottom_rgba.1 as f32 / 255.0,
+        bottom_rgba.2 as f32 / 255.0,
+        bottom_rgba.3 as f32 / 255.0,
+    ];
+
+    let tris = [
+        MyVertex {
+            position: [x0, ym],
+            color: mid,
+        },
+        MyVertex {
+            position: [x1, ym],
+            color: mid,
+        },
+        MyVertex {
+            position: [x1, y0],
+            color: top,
+        },
+        MyVertex {
+            position: [x0, ym],
+            color: mid,
+        },
+        MyVertex {
+            position: [x1, y0],
+            color: top,
+        },
+        MyVertex {
+            position: [x0, y0],
+            color: top,
+        },
+        MyVertex {
+            position: [x0, y1],
+            color: bottom,
+        },
+        MyVertex {
+            position: [x1, y1],
+            color: bottom,
+        },
+        MyVertex {
+            position: [x1, ym],
+            color: mid,
+        },
+        MyVertex {
+            position: [x0, y1],
+            color: bottom,
+        },
+        MyVertex {
+            position: [x1, ym],
+            color: mid,
+        },
+        MyVertex {
+            position: [x0, ym],
+            color: mid,
+        },
+    ];
+
+    let mut blob: Vec<u8> = Vec::with_capacity(tris.len() * 12);
+    let fb_w = view_w.max(1) as f32;
+    let fb_h = view_h.max(1) as f32;
+    for v in &tris {
+        push_rgb_vtx(&mut blob, v, fb_w, fb_h);
+    }
+
+    let rc = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+            blob.as_ptr(),
+            blob.len(),
+        )
+    };
+    rc == 0
+}
+
+pub fn draw_horizontal_three_stop_rect_no_present(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    left_rgba: (u8, u8, u8, u8),
+    mid_rgba: (u8, u8, u8, u8),
+    right_rgba: (u8, u8, u8, u8),
+    mid_offset: f32,
+    view_w: u32,
+    view_h: u32,
+) -> bool {
+    if w <= 0.0 || h <= 0.0 {
+        return true;
+    }
+
+    let x0 = x;
+    let xm = x + w * mid_offset.clamp(0.0, 1.0);
+    let x1 = x + w;
+    let y0 = y;
+    let y1 = y + h;
+    let left = [
+        left_rgba.0 as f32 / 255.0,
+        left_rgba.1 as f32 / 255.0,
+        left_rgba.2 as f32 / 255.0,
+        left_rgba.3 as f32 / 255.0,
+    ];
+    let mid = [
+        mid_rgba.0 as f32 / 255.0,
+        mid_rgba.1 as f32 / 255.0,
+        mid_rgba.2 as f32 / 255.0,
+        mid_rgba.3 as f32 / 255.0,
+    ];
+    let right = [
+        right_rgba.0 as f32 / 255.0,
+        right_rgba.1 as f32 / 255.0,
+        right_rgba.2 as f32 / 255.0,
+        right_rgba.3 as f32 / 255.0,
+    ];
+
+    let tris = [
+        MyVertex {
+            position: [x0, y1],
+            color: left,
+        },
+        MyVertex {
+            position: [xm, y1],
+            color: mid,
+        },
+        MyVertex {
+            position: [xm, y0],
+            color: mid,
+        },
+        MyVertex {
+            position: [x0, y1],
+            color: left,
+        },
+        MyVertex {
+            position: [xm, y0],
+            color: mid,
+        },
+        MyVertex {
+            position: [x0, y0],
+            color: left,
+        },
+        MyVertex {
+            position: [xm, y1],
+            color: mid,
+        },
+        MyVertex {
+            position: [x1, y1],
+            color: right,
+        },
+        MyVertex {
+            position: [x1, y0],
+            color: right,
+        },
+        MyVertex {
+            position: [xm, y1],
+            color: mid,
+        },
+        MyVertex {
+            position: [x1, y0],
+            color: right,
+        },
+        MyVertex {
+            position: [xm, y0],
+            color: mid,
+        },
+    ];
+
+    let mut blob: Vec<u8> = Vec::with_capacity(tris.len() * 12);
+    let fb_w = view_w.max(1) as f32;
+    let fb_h = view_h.max(1) as f32;
+    for v in &tris {
+        push_rgb_vtx(&mut blob, v, fb_w, fb_h);
+    }
+
+    let rc = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+            blob.as_ptr(),
+            blob.len(),
+        )
+    };
+    rc == 0
+}
+
 #[inline]
 fn rotate_quadrant(p: (f32, f32), q: u32) -> (f32, f32) {
     let x = p.0 - 16.0;
