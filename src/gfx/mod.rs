@@ -22,6 +22,7 @@ pub(crate) use screenshot::publish_virgl_image_buffer;
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
 static CPU_BACKBUFFER: Once<Mutex<Option<CpuBackbuffer>>> = Once::new();
+static CABI_FRAME_LOCK: Mutex<()> = Mutex::new(());
 static BACKEND_EPOCH: AtomicU64 = AtomicU64::new(1);
 static PRESENT_OWNER: AtomicU8 = AtomicU8::new(0);
 static SYSTEM_LOCK_OWNER: AtomicU32 = AtomicU32::new(SystemLockOwner::Unknown as u32);
@@ -199,6 +200,11 @@ pub fn with_cpu_backbuffer_mut<R>(f: impl FnOnce(&mut [u32], usize, usize) -> R)
     let mut guard = bb.lock();
     let buf = guard.as_mut()?;
     Some(f(buf.pixels.as_mut_slice(), buf.width, buf.height))
+}
+
+pub fn with_cabi_frame_lock<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = CABI_FRAME_LOCK.lock();
+    f()
 }
 
 pub fn cpu_backbuffer_dimensions() -> Option<(usize, usize)> {

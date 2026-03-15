@@ -1841,6 +1841,96 @@ pub mod cabi {
         ret
     }
 
+    pub fn render_rgb_triangles_to_texture(tex_id: u32, clear_rgb: u32, vtx: &[u8]) -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        if tex_id == 0 {
+            return -1;
+        }
+        if vtx.is_empty() {
+            return 0;
+        }
+        const VTX_SIZE: usize = 12;
+        let usable = vtx.len() - (vtx.len() % VTX_SIZE);
+        if usable == 0 {
+            return -2;
+        }
+        let vcount = (usable / VTX_SIZE) as u32;
+        if vcount == 0 {
+            return 0;
+        }
+
+        crate::gfx::with_cabi_frame_lock(|| {
+            let Some(ret) = crate::gfx::with_context_tag(
+                crate::gfx::SystemLockOwner::DrawRgbTriangles,
+                |ctx| {
+                    let (pipeline, vbuf, _) = match ensure_gfx_resources(ctx, usable) {
+                        Some(v) => v,
+                        None => return -3,
+                    };
+
+                    if ctx.write_buffer(vbuf, 0, &vtx[..usable]).is_err() {
+                        return -4;
+                    }
+
+                    let (image, width, height) = {
+                        let st = GFX_CABI_STATE.lock();
+                        let idx = tex_id.saturating_sub(1) as usize;
+                        let Some(entry) = st
+                            .tex_images
+                            .as_ref()
+                            .and_then(|images| images.get(idx))
+                            .and_then(|entry| entry.as_ref())
+                        else {
+                            return -5;
+                        };
+                        (entry.image, entry.width.max(1), entry.height.max(1))
+                    };
+
+                    if !image.is_valid() {
+                        return -6;
+                    }
+
+                    let cmds = [
+                        Command::SetRenderTarget(Some(image)),
+                        Command::SetViewport(Viewport {
+                            x: 0,
+                            y: 0,
+                            width: width as i32,
+                            height: height as i32,
+                        }),
+                        Command::SetScissor(None),
+                        Command::SetBlend(trueos_gfx_core::BlendDesc::disabled()),
+                        Command::ClearColor { rgb: clear_rgb },
+                        Command::BindPipeline(pipeline),
+                        Command::BindVertexBuffer {
+                            buffer: vbuf,
+                            offset: 0,
+                        },
+                        Command::Draw {
+                            vertex_count: vcount,
+                            first_vertex: 0,
+                        },
+                    ];
+                    if !check_submit_budget(usable, cmds.len(), "draw_rgb_triangles_to_texture") {
+                        return -7;
+                    }
+                    if ctx.submit(CommandBuffer { commands: &cmds }).is_err() {
+                        return -8;
+                    }
+
+                    let mut st = GFX_CABI_STATE.lock();
+                    st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                    st.viewport_configured = false;
+                    0
+                },
+            ) else {
+                return -9;
+            };
+            ret
+        })
+    }
+
     fn upload_texture_rgba_inner(
         tex_id: u32,
         width: u32,
@@ -2351,6 +2441,14 @@ pub mod cabi {
             return -3;
         }
 
+        let mut final_render_target_tex_id = 0u32;
+        for draw in &draws {
+            if let PendingDraw::SetRenderTarget { tex_id } = draw {
+                final_render_target_tex_id = *tex_id;
+            }
+        }
+        let is_screen_present_frame = final_render_target_tex_id == 0;
+
         let Some(ret) = crate::gfx::with_context_tag(
             crate::gfx::SystemLockOwner::EndFrame,
             |ctx| {
@@ -2364,12 +2462,14 @@ pub mod cabi {
                 let mut submit_draws = draws.clone();
                 let mut submit_rgb_src = rgb_src.clone();
                 let submit_tex_src = tex_src.clone();
-                append_kernel_cursor_overlay_draws(
-                    &mut submit_draws,
-                    &mut submit_rgb_src,
-                    swap.extent.width,
-                    swap.extent.height,
-                );
+                if is_screen_present_frame {
+                    append_kernel_cursor_overlay_draws(
+                        &mut submit_draws,
+                        &mut submit_rgb_src,
+                        swap.extent.width,
+                        swap.extent.height,
+                    );
+                }
                 const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
 
                 enum Plan {
@@ -2587,24 +2687,34 @@ pub mod cabi {
 
                     let is_last_pass = draw_idx >= submit_draws.len();
                     let mut cmds: Vec<Command> = Vec::new();
+                    let mut pass_target_image = current_target_image;
+                    let mut pass_vp_w = current_vp_w;
+                    let mut pass_vp_h = current_vp_h;
+                    if let Some(Plan::SetRenderTarget { image, vp_w, vp_h }) = plans.first() {
+                        pass_target_image = *image;
+                        pass_vp_w = *vp_w;
+                        pass_vp_h = *vp_h;
+                    }
                     if first_pass && need_set_viewport {
                         cmds.push(Command::SetViewport(Viewport {
                             x: 0,
                             y: 0,
-                            width: current_vp_w as i32,
-                            height: current_vp_h as i32,
+                            width: pass_vp_w as i32,
+                            height: pass_vp_h as i32,
                         }));
                     }
-                    cmds.push(Command::SetRenderTarget(current_target_image));
+                    cmds.push(Command::SetRenderTarget(pass_target_image));
                     if first_pass && !preserve_contents {
                         cmds.push(Command::ClearColor { rgb: clear_rgb });
                     }
 
                     let mut last_blend: Option<BlendDesc> = None;
+                    let mut pass_final_target_image = pass_target_image;
 
                     for plan in plans.iter() {
                         match *plan {
                             Plan::SetRenderTarget { image, vp_w, vp_h } => {
+                                pass_final_target_image = image;
                                 cmds.push(Command::SetRenderTarget(image));
                                 cmds.push(Command::SetViewport(Viewport {
                                     x: 0,
@@ -2714,7 +2824,7 @@ pub mod cabi {
                         }
                     }
 
-                    if is_last_pass && current_target_image.is_none() {
+                    if is_last_pass && pass_final_target_image.is_none() {
                         cmds.push(Command::Present);
                     }
 
@@ -2785,12 +2895,14 @@ pub mod cabi {
 
         if ret == 0 {
             let mut st = GFX_CABI_STATE.lock();
-            st.base_cache_valid = true;
-            st.base_cache_updated_at_ticks = embassy_time_driver::now();
-            st.base_cache_clear_rgb = clear_rgb;
-            st.base_cache_draws = draws.clone();
-            st.base_cache_rgb_blob = rgb_src.clone();
-            st.base_cache_tex_blob = tex_src.clone();
+            if is_screen_present_frame {
+                st.base_cache_valid = true;
+                st.base_cache_updated_at_ticks = embassy_time_driver::now();
+                st.base_cache_clear_rgb = clear_rgb;
+                st.base_cache_draws = draws.clone();
+                st.base_cache_rgb_blob = rgb_src.clone();
+                st.base_cache_tex_blob = tex_src.clone();
+            }
 
             if crate::gfx::is_virgl_active() {
                 let first =

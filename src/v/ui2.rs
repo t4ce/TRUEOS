@@ -75,6 +75,7 @@ enum Ui2HitKind {
 enum Ui2WindowKind {
     HostedBrowser,
     SvgDemo,
+    TextureDemo,
 }
 
 #[repr(u32)]
@@ -159,6 +160,8 @@ struct Ui2Window {
     alpha: u8,
     decoration_mode: Ui2WindowDecorationMode,
     state: Ui2WindowStateKind,
+    content_tex_id: u32,
+    content_tex_blend: bool,
     selected_cursor_slots: Vec<u32>,
     dirty: bool,
     dirty_seq: u32,
@@ -306,6 +309,8 @@ fn alloc_window(
         alpha,
         decoration_mode: Ui2WindowDecorationMode::System,
         state: Ui2WindowStateKind::Normal,
+        content_tex_id: 0,
+        content_tex_blend: false,
         selected_cursor_slots: Vec::new(),
         dirty: true,
         dirty_seq: 0,
@@ -339,6 +344,7 @@ fn window_kind_id(kind: Ui2WindowKind) -> u32 {
     match kind {
         Ui2WindowKind::HostedBrowser => 1,
         Ui2WindowKind::SvgDemo => 2,
+        Ui2WindowKind::TextureDemo => 3,
     }
 }
 
@@ -491,7 +497,7 @@ impl Ui2WindowHitSource for Ui2Window {
                     });
                 }
             }
-            Ui2WindowKind::SvgDemo => {}
+            Ui2WindowKind::SvgDemo | Ui2WindowKind::TextureDemo => {}
         }
     }
 }
@@ -924,8 +930,74 @@ pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     let mut state = state_lock.lock();
     let id = alloc_window(&mut state, Ui2WindowKind::SvgDemo, title, rect, z, alpha);
     state.compose_reason = "create-window";
+    rebuild_hit_scene(&mut state);
     UI2_DIRTY.store(true, Ordering::Release);
     id
+}
+
+pub fn create_texture_window(
+    title: &str,
+    rect: Ui2Rect,
+    z: i16,
+    alpha: u8,
+    tex_id: u32,
+    blend_enabled: bool,
+) -> u32 {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let id = alloc_window(
+        &mut state,
+        Ui2WindowKind::TextureDemo,
+        title,
+        rect,
+        z,
+        alpha,
+    );
+    if let Some(window) = window_mut(&mut state, id) {
+        window.content_tex_id = tex_id;
+        window.content_tex_blend = blend_enabled;
+    }
+    state.compose_reason = "create-window";
+    rebuild_hit_scene(&mut state);
+    UI2_DIRTY.store(true, Ordering::Release);
+    id
+}
+
+pub fn create_texture_content_window(
+    title: &str,
+    content_rect: Ui2Rect,
+    z: i16,
+    alpha: u8,
+    tex_id: u32,
+    blend_enabled: bool,
+) -> u32 {
+    let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
+    create_texture_window(title, rect, z, alpha, tex_id, blend_enabled)
+}
+
+pub fn set_window_texture_content(id: u32, tex_id: u32, blend_enabled: bool) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.content_tex_id == tex_id && window.content_tex_blend == blend_enabled {
+        return true;
+    }
+    window.content_tex_id = tex_id;
+    window.content_tex_blend = blend_enabled;
+    state.compose_reason = "texture-window";
+    note_window_dirty(&mut state, id, "texture-window")
+}
+
+pub fn window_content_rect_by_id(id: u32) -> Option<Ui2Rect> {
+    let state_lock = init_state();
+    let state = state_lock.lock();
+    state
+        .windows
+        .iter()
+        .find(|window| window.id == id)
+        .and_then(window_content_rect)
 }
 
 pub fn move_window(id: u32, x: f32, y: f32) -> bool {
@@ -943,7 +1015,11 @@ pub fn move_window(id: u32, x: f32, y: f32) -> bool {
         window.restore_rect = window.rect;
     }
     state.compose_reason = "move-window";
-    note_window_dirty(&mut state, id, "move-window")
+    let noted = note_window_dirty(&mut state, id, "move-window");
+    if noted {
+        rebuild_hit_scene(&mut state);
+    }
+    noted
 }
 
 pub fn resize_window(id: u32, w: f32, h: f32) -> bool {
@@ -961,7 +1037,11 @@ pub fn resize_window(id: u32, w: f32, h: f32) -> bool {
         window.restore_rect = window.rect;
     }
     state.compose_reason = "resize-window";
-    note_window_dirty(&mut state, id, "resize-window")
+    let noted = note_window_dirty(&mut state, id, "resize-window");
+    if noted {
+        rebuild_hit_scene(&mut state);
+    }
+    noted
 }
 
 pub fn set_window_title(id: u32, title: &str) -> bool {
@@ -992,7 +1072,11 @@ pub fn raise_window(id: u32) -> bool {
     };
     window.z = top_z.saturating_add(1);
     state.compose_reason = "raise-window";
-    note_window_dirty(&mut state, id, "raise-window")
+    let noted = note_window_dirty(&mut state, id, "raise-window");
+    if noted {
+        rebuild_hit_scene(&mut state);
+    }
+    noted
 }
 
 pub fn focus_window(id: u32) -> bool {
@@ -1020,6 +1104,8 @@ pub fn set_window_visible(id: u32, visible: bool) -> bool {
         if state.resize_drag.window_id == id {
             state.resize_drag = Ui2WindowResizeDrag::default();
         }
+    } else {
+        rebuild_hit_scene(&mut state);
     }
     note_window_dirty(&mut state, id, reason)
 }
@@ -1039,7 +1125,11 @@ pub fn set_window_decorations(id: u32, mode: Ui2WindowDecorationMode) -> bool {
     }
     window.decoration_mode = mode;
     state.compose_reason = "decor-window";
-    note_window_dirty(&mut state, id, "decor-window")
+    let noted = note_window_dirty(&mut state, id, "decor-window");
+    if noted {
+        rebuild_hit_scene(&mut state);
+    }
+    noted
 }
 
 pub fn minimize_window(id: u32) -> bool {
@@ -1064,7 +1154,11 @@ pub fn minimize_window(id: u32) -> bool {
     if state.resize_drag.window_id == id {
         state.resize_drag = Ui2WindowResizeDrag::default();
     }
-    note_window_dirty(&mut state, id, "minimize-window")
+    let noted = note_window_dirty(&mut state, id, "minimize-window");
+    if noted {
+        rebuild_hit_scene(&mut state);
+    }
+    noted
 }
 
 pub fn maximize_window(id: u32) -> bool {
@@ -1091,7 +1185,11 @@ pub fn maximize_window(id: u32) -> bool {
     if state.resize_drag.window_id == id {
         state.resize_drag = Ui2WindowResizeDrag::default();
     }
-    note_window_dirty(&mut state, id, "maximize-window")
+    let noted = note_window_dirty(&mut state, id, "maximize-window");
+    if noted {
+        rebuild_hit_scene(&mut state);
+    }
+    noted
 }
 
 pub fn restore_window(id: u32) -> bool {
@@ -1110,7 +1208,11 @@ pub fn restore_window(id: u32) -> bool {
     }
     window.state = Ui2WindowStateKind::Normal;
     state.compose_reason = "restore-window";
-    note_window_dirty(&mut state, id, "restore-window")
+    let noted = note_window_dirty(&mut state, id, "restore-window");
+    if noted {
+        rebuild_hit_scene(&mut state);
+    }
+    noted
 }
 
 pub fn begin_window_move(id: u32) -> bool {
@@ -1385,6 +1487,24 @@ fn window_content_rect(window: &Ui2Window) -> Option<Ui2Rect> {
             }
             Some(window.rect)
         }
+    }
+}
+
+fn window_rect_for_content(mode: Ui2WindowDecorationMode, content_rect: Ui2Rect) -> Ui2Rect {
+    match mode {
+        Ui2WindowDecorationMode::System => Ui2Rect::new(
+            content_rect.x - 1.0,
+            content_rect.y - UI2_TITLE_H,
+            content_rect.w + 2.0,
+            content_rect.h + UI2_TITLE_H + 1.0,
+        ),
+        Ui2WindowDecorationMode::Client => Ui2Rect::new(
+            content_rect.x - 1.0,
+            content_rect.y - 1.0,
+            content_rect.w + 2.0,
+            content_rect.h + 2.0,
+        ),
+        Ui2WindowDecorationMode::None => content_rect,
     }
 }
 
@@ -1818,16 +1938,35 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
         );
     }
 
-    if is_primary_browser_window(window) {
-        if let Some(content) = window_content_rect(window) {
-            queue_browser_window_viewport(content);
-            if draw_browser_window_content(state, content) {
+    match window.kind {
+        Ui2WindowKind::HostedBrowser => {
+            if let Some(content) = window_content_rect(window) {
+                queue_browser_window_viewport(content);
+                if draw_browser_window_content(state, content) {
+                    return;
+                }
+            }
+        }
+        Ui2WindowKind::SvgDemo => {
+            if let Some(content) = window_content_rect(window)
+                && draw_browser2_svg_demo(state, content)
+            {
                 return;
             }
         }
-    } else {
-        if let Some(content) = window_content_rect(window) {
-            if draw_browser2_svg_demo(state, content) {
+        Ui2WindowKind::TextureDemo => {
+            if let Some(content) = window_content_rect(window)
+                && draw_texture_rect_no_present(
+                    window.content_tex_id,
+                    content.x,
+                    content.y,
+                    content.w,
+                    content.h,
+                    state.view_w,
+                    state.view_h,
+                    window.content_tex_blend,
+                )
+            {
                 return;
             }
         }
@@ -1871,12 +2010,14 @@ fn compose_windows(state: &mut Ui2State) {
         state.compose_reason
     );
 
-    unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
-    for idx in sorted_window_indices(state) {
-        let window = &state.windows[idx];
-        draw_window_frame(state, window);
-    }
-    unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
+    crate::gfx::with_cabi_frame_lock(|| {
+        unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
+        for idx in sorted_window_indices(state) {
+            let window = &state.windows[idx];
+            draw_window_frame(state, window);
+        }
+        unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
+    });
 }
 
 #[embassy_executor::task]
