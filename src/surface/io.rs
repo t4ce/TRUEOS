@@ -592,8 +592,9 @@ pub mod cabi {
     use trueos_gfx_core::{
         BlendDesc, BlendFactor, BufferDesc, BufferId, BufferUsage, ColorFormat, Command,
         CommandBuffer, Extent2D, GfxContext, ImageDesc, ImageFormat, ImageId, MemoryType,
-        PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap, ShaderId, SwapchainDesc,
-        TexCoordFormat, VertexLayout, Viewport,
+        PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap,
+        ScissorRect as GfxScissorRect, ShaderId, SwapchainDesc, TexCoordFormat, VertexLayout,
+        Viewport,
     };
 
     const GFX_CABI_VBUF_RING_LEN: usize = 3;
@@ -987,6 +988,9 @@ pub mod cabi {
     enum PendingDraw {
         SetRenderTarget {
             tex_id: u32,
+        },
+        SetScissor {
+            rect: Option<ScissorRect>,
         },
         Rgb {
             blob_offset: usize,
@@ -1424,6 +1428,10 @@ pub mod cabi {
                 height,
             })
         };
+        if st.frame_active {
+            let rect = st.cur_scissor;
+            st.frame_draws.push(PendingDraw::SetScissor { rect });
+        }
         0
     }
 
@@ -1431,6 +1439,9 @@ pub mod cabi {
     pub unsafe extern "C" fn trueos_cabi_gfx_clear_scissor() -> i32 {
         let mut st = GFX_CABI_STATE.lock();
         st.cur_scissor = None;
+        if st.frame_active {
+            st.frame_draws.push(PendingDraw::SetScissor { rect: None });
+        }
         0
     }
 
@@ -1439,6 +1450,7 @@ pub mod cabi {
         let mut st = GFX_CABI_STATE.lock();
         if tex_id == 0 {
             st.frame_render_target_tex_id = 0;
+            st.viewport_configured = false;
             if st.frame_active {
                 st.frame_draws
                     .push(PendingDraw::SetRenderTarget { tex_id: 0 });
@@ -1456,6 +1468,7 @@ pub mod cabi {
         };
         entry.origin = TexCoordOrigin::BottomLeft;
         st.frame_render_target_tex_id = tex_id;
+        st.viewport_configured = false;
         if st.frame_active {
             st.frame_draws.push(PendingDraw::SetRenderTarget { tex_id });
         }
@@ -1466,6 +1479,7 @@ pub mod cabi {
     pub unsafe extern "C" fn trueos_cabi_gfx_clear_render_target() -> i32 {
         let mut st = GFX_CABI_STATE.lock();
         st.frame_render_target_tex_id = 0;
+        st.viewport_configured = false;
         if st.frame_active {
             st.frame_draws
                 .push(PendingDraw::SetRenderTarget { tex_id: 0 });
@@ -2133,6 +2147,7 @@ pub mod cabi {
         st.frame_tex_blob.clear();
         st.cur_scissor = None;
         st.frame_render_target_tex_id = 0;
+        st.viewport_configured = false;
         let seq = st.frame_seq;
         if seq <= 10 || seq.is_multiple_of(20) {
             crate::globalog::log(format_args!(
@@ -2363,6 +2378,9 @@ pub mod cabi {
                         vp_w: u32,
                         vp_h: u32,
                     },
+                    SetScissor {
+                        rect: Option<ScissorRect>,
+                    },
                     Rgb {
                         offset: u64,
                         vcount: u32,
@@ -2393,6 +2411,13 @@ pub mod cabi {
                     while draw_idx < submit_draws.len() {
                         let (kind, add, tex_kind) = match &submit_draws[draw_idx] {
                             PendingDraw::SetRenderTarget { .. } => {
+                                if pass_kind == 0 {
+                                    draw_idx += 1;
+                                    continue;
+                                }
+                                break;
+                            }
+                            PendingDraw::SetScissor { .. } => {
                                 if pass_kind == 0 {
                                     draw_idx += 1;
                                     continue;
@@ -2460,6 +2485,9 @@ pub mod cabi {
                                     vp_w: current_vp_w,
                                     vp_h: current_vp_h,
                                 });
+                            }
+                            PendingDraw::SetScissor { rect } => {
+                                plans.push(Plan::SetScissor { rect: *rect });
                             }
                             PendingDraw::Rgb {
                                 blob_offset,
@@ -2536,21 +2564,16 @@ pub mod cabi {
                         rgb_res = Some((pipeline, vbuf));
                     }
 
-                    let mut tex_res: Option<(PipelineId, BufferId)> = None;
-                    if !tex_blob.is_empty() {
-                        let tex_kind = if plans.iter().all(|plan| {
-                            matches!(
-                                plan,
-                                Plan::Tex {
-                                    sample_kind: TexSampleKind::Rgba,
-                                    ..
-                                }
-                            )
-                        }) {
-                            TexSampleKind::Rgba
-                        } else {
-                            TexSampleKind::Mask
-                        };
+                let mut tex_res: Option<(PipelineId, BufferId)> = None;
+                if !tex_blob.is_empty() {
+                    let tex_kind = if plans.iter().filter_map(|plan| match plan {
+                        Plan::Tex { sample_kind, .. } => Some(*sample_kind),
+                        _ => None,
+                    }).all(|sample_kind| sample_kind == TexSampleKind::Rgba) {
+                        TexSampleKind::Rgba
+                    } else {
+                        TexSampleKind::Mask
+                    };
                         let (pipeline, vbuf, _) =
                             match ensure_gfx_resources_tex(ctx, tex_blob.len(), tex_kind) {
                                 Some(v) => v,
@@ -2589,6 +2612,14 @@ pub mod cabi {
                                     width: vp_w as i32,
                                     height: vp_h as i32,
                                 }));
+                            }
+                            Plan::SetScissor { rect } => {
+                                cmds.push(Command::SetScissor(rect.map(|scissor| GfxScissorRect {
+                                    x: scissor.x,
+                                    y: scissor.y,
+                                    width: scissor.width,
+                                    height: scissor.height,
+                                })));
                             }
                             Plan::Rgb {
                                 offset,

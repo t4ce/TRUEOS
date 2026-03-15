@@ -43,16 +43,19 @@ const ITALIC_SLANT_DEG = 12;
 const CHAMFER_PX = 5;
 const LINK_UNDERLINE_THICKNESS_PX = 1;
 const MAX_RENDER_TEXT_CHARS = 512;
-const DEBUG_ELEMENT_BACKDROPS = true;
 const DEBUG_TEXT_BG_RGBA = 0xffef9cff;
 const DEBUG_ICON_BG_RGBA = 0xffcc80ff;
 const DEBUG_IMAGE_BG_RGBA = 0xc5e1a5ff;
 const DEBUG_BUTTON_BG_RGBA = 0x90caf9ff;
 const DEBUG_LINK_BG_RGBA = 0xa5d6a7ff;
 const DEBUG_HR_BG_RGBA = 0xf48fb1ff;
-const DEBUG_REGION_TOP_MARKER = true;
 const DEBUG_REGION_TOP_RGBA = 0xff3b30ff;
 const DEBUG_REGION_LEFT_RGBA = 0x00c7beff;
+
+function browserTagRowsDebugEnabled() {
+  const host = (typeof globalThis !== 'undefined') ? globalThis : this;
+  return !!(host && host.__trueosBrowserShowClosingTagRows);
+}
 
 function styleColorToTextRgba(style) {
   if (!style || typeof style !== 'object') return DEFAULT_TEXT_RGBA;
@@ -313,7 +316,7 @@ function drawSceneDisplayLists(display, clipW, clipH, originY = 0, includeOverla
   cmdStream.pushClipRect(0, 0, clipW, clipH);
   cmdStream.setOrigin(0, originY);
   try {
-    if (DEBUG_ELEMENT_BACKDROPS) {
+    if (browserTagRowsDebugEnabled()) {
       for (let i = 0; i < buttonRuns.length; i += 1) {
         const run = buttonRuns[i];
         cmdStream.fillRect(run.x, run.y, run.width, run.height, DEBUG_BUTTON_BG_RGBA, 0, 0);
@@ -478,7 +481,7 @@ export function renderSceneRegionToCurrentTarget(doc, vw, docTopY = 0, regionH =
   cmdStream.setPremultipliedAlpha(0);
   try {
     cmdStream.fillRect(0, 0, targetW, targetH, DEFAULT_CLEAR_RGBA, 0, 0);
-    if (DEBUG_REGION_TOP_MARKER) {
+    if (browserTagRowsDebugEnabled()) {
       cmdStream.fillRect(0, 0, targetW, Math.min(6, targetH), DEBUG_REGION_TOP_RGBA, 0, 0);
       cmdStream.fillRect(0, 0, Math.min(6, targetW), targetH, DEBUG_REGION_LEFT_RGBA, 0, 0);
     }
