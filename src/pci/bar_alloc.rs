@@ -79,12 +79,3 @@ pub fn alloc_mmio32(size: u64, align: u64) -> Option<u32> {
     lock.next = end;
     Some(base as u32)
 }
-
-/// Reserve a stable BAR0 base for the TGA endpoint.
-///
-/// This is intentionally simple: TRUEOS currently models a single TGA.
-pub fn alloc_tga_bar0_base(size: u64) -> Option<u32> {
-    // Our FPGA BAR0 is currently small (1KiB), but align to the reported BAR size.
-    let align = size.max(0x1000);
-    alloc_mmio32(size, align)
-}

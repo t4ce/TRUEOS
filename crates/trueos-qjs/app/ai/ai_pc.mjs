@@ -1551,6 +1551,163 @@ function createDriverDevTools() {
     },
     {
       type: "function",
+      name: "driverdev_get_hid_protocol",
+      description: "Read the current HID protocol for an interface (typically 0=boot, 1=report).",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          interfaceNumber: {
+            type: "integer",
+            description: "USB interface number for the HID function.",
+            minimum: 0,
+            maximum: 255,
+          },
+        },
+        required: ["handle"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_set_hid_protocol",
+      description: "Send HID SET_PROTOCOL to switch an interface between boot/report protocol.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          interfaceNumber: {
+            type: "integer",
+            description: "USB interface number for the HID function.",
+            minimum: 0,
+            maximum: 255,
+          },
+          protocol: {
+            type: "integer",
+            description: "Protocol value to request. Common values are 0=boot and 1=report.",
+            minimum: 0,
+            maximum: 255,
+          },
+        },
+        required: ["handle", "protocol"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_get_hid_idle",
+      description: "Read HID idle duration (in 4ms units) for a report ID.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          interfaceNumber: {
+            type: "integer",
+            description: "USB interface number for the HID function.",
+            minimum: 0,
+            maximum: 255,
+          },
+          reportId: {
+            type: "integer",
+            description: "HID report ID (0 when reports are unnumbered).",
+            minimum: 0,
+            maximum: 255,
+          },
+        },
+        required: ["handle"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_set_hid_idle",
+      description: "Send HID SET_IDLE with duration expressed in 4ms units.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          interfaceNumber: {
+            type: "integer",
+            description: "USB interface number for the HID function.",
+            minimum: 0,
+            maximum: 255,
+          },
+          reportId: {
+            type: "integer",
+            description: "HID report ID (0 when reports are unnumbered).",
+            minimum: 0,
+            maximum: 255,
+          },
+          duration4ms: {
+            type: "integer",
+            description: "Idle duration in 4ms units. 0 commonly means send only on change.",
+            minimum: 0,
+            maximum: 255,
+          },
+        },
+        required: ["handle", "duration4ms"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_get_hid_report_hex",
+      description: "Send a HID class GET_REPORT request and return lower-case hex bytes.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          interfaceNumber: {
+            type: "integer",
+            description: "USB interface number for the HID function.",
+            minimum: 0,
+            maximum: 255,
+          },
+          reportType: {
+            type: "integer",
+            description: "HID report type: 1=input, 2=output, 3=feature.",
+            minimum: 1,
+            maximum: 3,
+          },
+          reportId: {
+            type: "integer",
+            description: "HID report ID (0 when reports are unnumbered).",
+            minimum: 0,
+            maximum: 255,
+          },
+          length: {
+            type: "integer",
+            description: "Maximum report bytes to request.",
+            minimum: 1,
+            maximum: 256,
+          },
+        },
+        required: ["handle"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
       name: "driverdev_set_hid_report_hex",
       description: "Send a HID class SET_REPORT control transfer using hex payload bytes.",
       parameters: {
@@ -2716,6 +2873,74 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
           type: "function_call_output",
           call_id: item.call_id,
           output: toJsonStringOrNull(result),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_get_hid_protocol") {
+        hadToolCall = true;
+        normalToolCallCount += 1;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const interfaceNumber = Number.isInteger(parsed.interfaceNumber) ? parsed.interfaceNumber : 0;
+        const protocol = driverdev.getHidProtocol(parsed.handle, interfaceNumber);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({ protocol, interfaceNumber }),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_set_hid_protocol") {
+        hadToolCall = true;
+        normalToolCallCount += 1;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const interfaceNumber = Number.isInteger(parsed.interfaceNumber) ? parsed.interfaceNumber : 0;
+        const protocol = Number.isInteger(parsed.protocol) ? parsed.protocol : 0;
+        const rc = driverdev.setHidProtocol(parsed.handle, interfaceNumber, protocol);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({ rc, interfaceNumber, protocol }),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_get_hid_idle") {
+        hadToolCall = true;
+        normalToolCallCount += 1;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const interfaceNumber = Number.isInteger(parsed.interfaceNumber) ? parsed.interfaceNumber : 0;
+        const reportId = Number.isInteger(parsed.reportId) ? parsed.reportId : 0;
+        const duration4ms = driverdev.getHidIdle(parsed.handle, interfaceNumber, reportId);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({ duration4ms, interfaceNumber, reportId }),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_set_hid_idle") {
+        hadToolCall = true;
+        normalToolCallCount += 1;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const interfaceNumber = Number.isInteger(parsed.interfaceNumber) ? parsed.interfaceNumber : 0;
+        const reportId = Number.isInteger(parsed.reportId) ? parsed.reportId : 0;
+        const duration4ms = Number.isInteger(parsed.duration4ms) ? parsed.duration4ms : 0;
+        const rc = driverdev.setHidIdle(parsed.handle, interfaceNumber, reportId, duration4ms);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({ rc, interfaceNumber, reportId, duration4ms }),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_get_hid_report_hex") {
+        hadToolCall = true;
+        normalToolCallCount += 1;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const interfaceNumber = Number.isInteger(parsed.interfaceNumber) ? parsed.interfaceNumber : 0;
+        const reportType = Number.isInteger(parsed.reportType) ? parsed.reportType : 1;
+        const reportId = Number.isInteger(parsed.reportId) ? parsed.reportId : 0;
+        const length = Number.isInteger(parsed.length) ? parsed.length : 64;
+        const bytes = driverdev.getHidReport(parsed.handle, interfaceNumber, reportType, reportId, length);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({
+            hex: bytesToHex(bytes),
+            byteLength: bytes ? bytes.length : 0,
+            interfaceNumber,
+            reportType,
+            reportId,
+          }),
         });
       } else if (item.type === "function_call" && item.name === "driverdev_set_hid_report_hex") {
         hadToolCall = true;
