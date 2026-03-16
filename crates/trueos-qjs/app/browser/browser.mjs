@@ -1261,6 +1261,7 @@ function commitDomMutation(doc) {
   syncCachedHtmlFromDoc(sourceDoc);
   const { vw } = computeViewport();
   cachedDoc = buildDocFromParsed(sourceDoc, vw, 'mutated html document');
+  invalidateBrowserRegionCache(false);
   paint();
   return true;
 }
