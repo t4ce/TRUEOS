@@ -31,6 +31,12 @@ const OUTPUT_NET_TCP: u8 = 1 << 1;
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 
+#[derive(Clone, Copy)]
+enum LineSource {
+    User,
+    System,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ShellMode2 {
     Surf,
@@ -93,6 +99,28 @@ impl<'a> AlignedWriter<'a> {
         self.move_to(row, 1);
         self.clear_line();
         self.io.write_str(s);
+    }
+
+    fn transcript_line(&self, source: LineSource, s: &str) {
+        self.io.write_str(crate::ecma48::SAVE_CURSOR);
+        self.move_to(SCROLL_TOP_ROW, 1);
+        self.io.write_str("\x1b[L");
+        self.clear_line();
+        self.io.write_str(crate::ecma48::RESET);
+
+        match source {
+            LineSource::User => {
+                self.io.write_str(s);
+            }
+            LineSource::System => {
+                let width = crate::ecma48::visible_width(s);
+                let col = LINE_WIDTH.saturating_sub(width).saturating_add(1);
+                self.move_to(SCROLL_TOP_ROW, col);
+                self.io.write_str(s);
+            }
+        }
+
+        self.io.write_str(crate::ecma48::RESTORE_CURSOR);
     }
 
     fn banner(&self, mode: ShellMode2, time_text: &str) {
@@ -242,13 +270,11 @@ fn clock_bucket_and_text() -> (u64, HString<5>) {
 }
 
 pub(crate) fn print_shell_line(io: &dyn ShellIo2, text: &str) {
-    io.write_str(crate::ecma48::SAVE_CURSOR);
-    io.write_fmt(format_args!("{}", crate::ecma48::pos(SCROLL_TOP_ROW, 1)));
-    io.write_str("\x1b[L");
-    io.write_str(crate::ecma48::CLEAR_LINE);
-    io.write_str(crate::ecma48::RESET);
-    io.write_str(text);
-    io.write_str(crate::ecma48::RESTORE_CURSOR);
+    AlignedWriter::new(io).transcript_line(LineSource::System, text);
+}
+
+pub(crate) fn print_user_line(io: &dyn ShellIo2, text: &str) {
+    AlignedWriter::new(io).transcript_line(LineSource::User, text);
 }
 
 fn register_output(io: &'static dyn ShellIo2) {
@@ -442,6 +468,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let submitted = line.as_str().trim();
                     if !submitted.is_empty() {
                         history.push(alloc::string::String::from(submitted));
+                        print_user_line(io, submitted);
                         handle_submit(&spawner, io, mode, ai_mode, qjs_mode, submitted);
                     }
                     line.clear();
