@@ -454,26 +454,36 @@ pub fn upload_svg_bytes_to_texture(tex_id: u32, bytes: &[u8]) -> Result<SvgTextu
     upload_svg_text_to_texture(tex_id, svg_text)
 }
 
-pub fn upload_svg_text_to_texture(tex_id: u32, svg_text: &str) -> Result<SvgTextureInfo, i32> {
+pub fn rasterize_svg_bytes_rgba(bytes: &[u8]) -> Result<(SvgTextureInfo, Vec<u8>), i32> {
+    let svg_text = str::from_utf8(bytes).map_err(|_| ERR_SVG_INVALID_UTF8)?;
+    rasterize_svg_text_rgba(svg_text)
+}
+
+pub fn rasterize_svg_text_rgba(svg_text: &str) -> Result<(SvgTextureInfo, Vec<u8>), i32> {
     let tree = Tree::from_str(svg_text, &Options::default()).map_err(|_| ERR_SVG_PARSE)?;
     let (width, height, svg_w, svg_h) = choose_output_size(&tree)?;
     let mut raster = SvgRasterizer::new(width, height, svg_w, svg_h);
     raster.render_group(tree.root(), 1.0);
+    Ok((SvgTextureInfo { width, height }, raster.pixels))
+}
+
+pub fn upload_svg_text_to_texture(tex_id: u32, svg_text: &str) -> Result<SvgTextureInfo, i32> {
+    let (info, rgba) = rasterize_svg_text_rgba(svg_text)?;
 
     let rc = unsafe {
         crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
             tex_id,
-            width,
-            height,
-            raster.pixels.as_ptr(),
-            raster.pixels.len(),
+            info.width,
+            info.height,
+            rgba.as_ptr(),
+            rgba.len(),
         )
     };
     if rc != 0 {
         return Err(if rc == 0 { ERR_SVG_UPLOAD } else { rc });
     }
 
-    Ok(SvgTextureInfo { width, height })
+    Ok(info)
 }
 
 fn choose_output_size(tree: &Tree) -> Result<(u32, u32, f32, f32), i32> {
