@@ -79,6 +79,13 @@ export async function createResponse(client, request) {
   return response;
 }
 
+export function createResponseStream(client, request) {
+  if (!client || !client.responses || typeof client.responses.stream !== "function") {
+    return null;
+  }
+  return client.responses.stream(request);
+}
+
 export function getResponseOutputItems(response) {
   return Array.isArray(response && response.output) ? response.output : [];
 }

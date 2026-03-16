@@ -831,7 +831,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "ui2-gfx-tetris",
-        disabled: true, // Temporarily disable the auto-start demo.
+        disabled: false,
         required: crate::v::readiness::LOADSCREEN_END,
         started: &UI2_GFX_TETRIS_STARTED,
         spawn: spawn_ui2_gfx_tetris,

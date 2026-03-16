@@ -119,7 +119,8 @@ unsafe extern "C" fn trueos_shell2_print_line_js(
     let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
     let wrote = match core::str::from_utf8(bytes) {
         Ok(text) => {
-            crate::shell2::print_broadcast_line(text);
+            crate::shell2::print_shell_line(&crate::shell2::UART1_COM1_BACKEND, text);
+            crate::shell2::print_shell_line(&crate::shell2::NET_TCP_SHELL_BACKEND, text);
             len
         }
         Err(_) => 0,

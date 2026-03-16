@@ -4,6 +4,14 @@ use heapless::String as HString;
 
 use super::{ShellBackend2, print_shell_line};
 
+pub(crate) fn try_inline_html(line: &str) -> Option<String> {
+    let candidate = strip_wrapping_quotes(line.trim());
+    if !looks_like_inline_html(candidate) {
+        return None;
+    }
+    Some(String::from(candidate))
+}
+
 pub(crate) fn try_parse(line: &str) -> Option<String> {
     let candidate = strip_wrapping_quotes(line.trim());
     if candidate.is_empty() || candidate.split_whitespace().nth(1).is_some() {
@@ -15,6 +23,18 @@ pub(crate) fn try_parse(line: &str) -> Option<String> {
     }
 
     Some(prepare_url(candidate))
+}
+
+pub(crate) fn load_inline_html(io: &'static dyn ShellBackend2, html: String) {
+    if !trueos_qjs::browser_task::queue_set_html_with_url(
+        html,
+        Some(String::from("trueos://surf/inline")),
+    ) {
+        print_shell_line(io, "surf: browser not running");
+        return;
+    }
+
+    print_shell_line(io, "surf: inline html loaded");
 }
 
 pub(crate) fn prepare_call_with_url(
@@ -74,6 +94,17 @@ fn has_http_scheme(s: &str) -> bool {
 
 fn is_url_token(s: &str) -> bool {
     !s.is_empty() && !s.chars().any(char::is_whitespace)
+}
+
+fn looks_like_inline_html(s: &str) -> bool {
+    let lower = s.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+
+    (lower.starts_with("<html") && lower.ends_with("</html>"))
+        || lower.starts_with("<!doctype html")
+        || (lower.starts_with('<') && lower.ends_with('>') && lower.contains("</"))
 }
 
 #[embassy_executor::task]

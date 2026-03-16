@@ -113,6 +113,23 @@ unsafe extern "C" fn qjs_uart1_shell_write(
     qjs::JS_NewFloat64(ctx, wrote as f64)
 }
 
+unsafe extern "C" fn qjs_shell2_print_line(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 1 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(text) = read_js_string_arg(ctx, args[0]) else {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    };
+    let wrote = qjs::trueos_shims::shell2_print_line(text.as_bytes());
+    qjs::JS_NewFloat64(ctx, wrote as f64)
+}
+
 unsafe extern "C" fn qjs_browser_rpc_start(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -389,6 +406,21 @@ unsafe fn install_ai_globals(ctx: *mut qjs::JSContext) {
         global,
         b"__trueosUart1ShellWrite\0".as_ptr() as *const c_char,
         shell_write_fn,
+    );
+
+    let shell2_print_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_shell2_print_line),
+        b"__trueosShell2PrintLine\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShell2PrintLine\0".as_ptr() as *const c_char,
+        shell2_print_fn,
     );
 
     let browser_rpc_start_fn = qjs::JS_NewCFunction2(

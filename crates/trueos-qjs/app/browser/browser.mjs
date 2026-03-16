@@ -93,7 +93,6 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'keyboard',
     'typeText',
     'pressKey',
-    'captureScreenshot',
   ],
   unavailable: [
     'moveCursor',
