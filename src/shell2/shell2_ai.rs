@@ -44,6 +44,7 @@ pub(crate) fn submit(
         file_search: mode == AiPromptMode::FileSearch,
         new_conversation: mode == AiPromptMode::NewChat,
         computer_use: true,
+        shell_target_mask: super::output_target_for_backend(io),
     };
 
     match trueos_qjs::ai_task::ensure_started(spawner) {

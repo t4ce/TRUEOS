@@ -193,7 +193,10 @@ fn input_write_cursor_event(
         return -1;
     }
 
-    let (w, h) = crate::gfx::cpu_backbuffer_dimensions().unwrap_or((320, 200));
+    let (w, h) = crate::limine::framebuffer_response()
+        .and_then(|resp| resp.framebuffers().next())
+        .map(|fb| (fb.width() as usize, fb.height() as usize))
+        .unwrap_or((320, 200));
     let max_x = w.saturating_sub(1) as i32;
     let max_y = h.saturating_sub(1) as i32;
     let clamped_x = x_px.clamp(0, max_x.max(0));
@@ -935,7 +938,10 @@ pub unsafe extern "C" fn trueos_cabi_input_cursor_pos(
         return 1;
     };
 
-    let (w, h) = crate::gfx::cpu_backbuffer_dimensions().unwrap_or((320, 200));
+    let (w, h) = crate::limine::framebuffer_response()
+        .and_then(|resp| resp.framebuffers().next())
+        .map(|fb| (fb.width() as usize, fb.height() as usize))
+        .unwrap_or((320, 200));
     let w1 = w.saturating_sub(1) as f64;
     let h1 = h.saturating_sub(1) as f64;
 

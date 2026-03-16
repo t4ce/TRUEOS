@@ -105,6 +105,11 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_uart1_shell_write(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell2_print_line(data_ptr: *const u8, data_len: usize) -> usize;
+    pub fn trueos_cabi_shell2_print_targeted_line(
+        target_mask: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> usize;
     pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell1_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_shell_qjs_init();
@@ -201,6 +206,14 @@ pub fn shell2_print_line(bytes: &[u8]) -> usize {
         return 0;
     }
     unsafe { trueos_cabi_shell2_print_line(bytes.as_ptr(), bytes.len()) }
+}
+
+#[inline]
+pub fn shell2_print_targeted_line(target_mask: u32, bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    unsafe { trueos_cabi_shell2_print_targeted_line(target_mask, bytes.as_ptr(), bytes.len()) }
 }
 
 #[inline]

@@ -22,6 +22,7 @@ pub struct AiInputEntry {
     pub file_search: bool,
     pub new_conversation: bool,
     pub computer_use: bool,
+    pub shell_target_mask: u8,
 }
 
 pub fn queue_ai_input(next: AiInputEntry) -> bool {
@@ -82,7 +83,7 @@ unsafe extern "C" fn qjs_ai_input_pop(
     };
 
     let payload = alloc::format!(
-        "{{\"text\":{},\"webSearch\":{},\"fileSearch\":{},\"newConversation\":{},\"computerUse\":{}}}",
+        "{{\"text\":{},\"webSearch\":{},\"fileSearch\":{},\"newConversation\":{},\"computerUse\":{},\"shellTargetMask\":{}}}",
         json_string(next.text.as_str()),
         if next.web_search { "true" } else { "false" },
         if next.file_search { "true" } else { "false" },
@@ -92,6 +93,7 @@ unsafe extern "C" fn qjs_ai_input_pop(
             "false"
         },
         if next.computer_use { "true" } else { "false" },
+        next.shell_target_mask,
     );
     qjs::JS_NewStringLen(ctx, payload.as_ptr() as *const c_char, payload.len())
 }
@@ -126,7 +128,20 @@ unsafe extern "C" fn qjs_shell2_print_line(
     let Some(text) = read_js_string_arg(ctx, args[0]) else {
         return qjs::JS_NewFloat64(ctx, 0.0);
     };
-    let wrote = qjs::trueos_shims::shell2_print_line(text.as_bytes());
+    let target_mask = if argc >= 2 {
+        let mut target_mask_f = 0.0f64;
+        if qjs::JS_ToFloat64(ctx, &mut target_mask_f as *mut f64, args[1]) == 0
+            && target_mask_f.is_finite()
+            && target_mask_f >= 0.0
+        {
+            target_mask_f as u32
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    let wrote = qjs::trueos_shims::shell2_print_targeted_line(target_mask, text.as_bytes());
     qjs::JS_NewFloat64(ctx, wrote as f64)
 }
 
