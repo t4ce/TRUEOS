@@ -21,7 +21,7 @@ fn should_log_input_diag(count: u32) -> bool {
 
 #[inline]
 fn cursor_event_is_physical(event: &crate::usb::hid::TrueosHidCursorEvent) -> bool {
-    event.controller_id != 0 && matches!(event.hid_kind, 2 | 3)
+    matches!(event.hid_kind, 2 | 3)
 }
 
 fn note_cursor_event_source(state: &mut Ui2State, event: &crate::usb::hid::TrueosHidCursorEvent) {
@@ -90,7 +90,7 @@ fn ensure_cursor_index(state: &mut Ui2State, slot_id: u32) -> usize {
     state.cursors.len() - 1
 }
 
-fn note_selection_change(window: &mut Ui2Window) {
+pub(super) fn note_selection_change(window: &mut Ui2Window) {
     window.dirty = true;
     window.last_reason = "cursor-select";
 }

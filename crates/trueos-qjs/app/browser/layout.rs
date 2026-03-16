@@ -33,9 +33,11 @@ unsafe extern "C" {
         title_ptr: *const u8,
         title_len: usize,
     ) -> i32;
+    fn trueos_cabi_ui2_window_set_icon(window_id: u32, icon_id: u32) -> i32;
     fn trueos_cabi_ui2_window_set_position(window_id: u32, x: i32, y: i32) -> i32;
     fn trueos_cabi_ui2_window_set_size(window_id: u32, width: u32, height: u32) -> i32;
     fn trueos_cabi_ui2_window_set_decorations(window_id: u32, mode: u32) -> i32;
+    fn trueos_cabi_ui2_window_set_hit_test_visible(window_id: u32, visible: u32) -> i32;
     fn trueos_cabi_ui2_window_set_vertical_scrollbar_side(window_id: u32, side: u32) -> i32;
     fn trueos_cabi_ui2_window_set_horizontal_scrollbar_side(window_id: u32, side: u32) -> i32;
     fn trueos_cabi_ui2_window_minimize(window_id: u32) -> i32;
@@ -54,7 +56,9 @@ struct TrueosUi2WindowInfo {
     kind: u32,
     state: u32,
     decoration_mode: u32,
+    icon_id: u32,
     visible: u32,
+    hit_test_visible: u32,
     selected: u32,
     x: i32,
     y: i32,
@@ -510,6 +514,7 @@ unsafe fn js_window_info_object(
     static K_KIND: &[u8] = b"kind\0";
     static K_STATE: &[u8] = b"state\0";
     static K_DECORATION_MODE: &[u8] = b"decorationMode\0";
+    static K_ICON_ID: &[u8] = b"iconId\0";
     static K_VISIBLE: &[u8] = b"visible\0";
     static K_SELECTED: &[u8] = b"selected\0";
     static K_X: &[u8] = b"x\0";
@@ -543,6 +548,12 @@ unsafe fn js_window_info_object(
         rect,
         K_DECORATION_MODE.as_ptr() as *const c_char,
         qjs::JS_NewFloat64(ctx, info.decoration_mode as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_ICON_ID.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.icon_id as f64),
     );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
@@ -703,6 +714,31 @@ unsafe extern "C" fn qjs_window_set_title(
     qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
 }
 
+unsafe extern "C" fn qjs_window_set_icon(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 2 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    let mut icon_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut icon_f as *mut f64, args[1]) != 0
+        || !id_f.is_finite()
+        || id_f < 1.0
+        || !icon_f.is_finite()
+        || icon_f < 0.0
+    {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let rc = trueos_cabi_ui2_window_set_icon(id_f as u32, icon_f as u32);
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
 unsafe extern "C" fn qjs_window_set_position(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -773,6 +809,30 @@ unsafe extern "C" fn qjs_window_set_decorations(
         return qjs::JS_NewFloat64(ctx, 0.0);
     }
     let rc = trueos_cabi_ui2_window_set_decorations(id_f as u32, mode_f.max(0.0) as u32);
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
+unsafe extern "C" fn qjs_window_set_hit_test_visible(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 2 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut id_f = 0.0f64;
+    let mut visible_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut visible_f as *mut f64, args[1]) != 0
+    {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+    let rc = trueos_cabi_ui2_window_set_hit_test_visible(
+        id_f as u32,
+        if visible_f != 0.0 { 1 } else { 0 },
+    );
     qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
 }
 
@@ -940,12 +1000,16 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     static WINDOW_INFO_FN_NAME: &[u8] = b"__trueosWindowGetInfo\0";
     static WINDOW_SET_TITLE_NAME: &[u8] = b"__trueosWindowSetTitle\0";
     static WINDOW_SET_TITLE_FN_NAME: &[u8] = b"__trueosWindowSetTitle\0";
+    static WINDOW_SET_ICON_NAME: &[u8] = b"__trueosWindowSetIcon\0";
+    static WINDOW_SET_ICON_FN_NAME: &[u8] = b"__trueosWindowSetIcon\0";
     static WINDOW_SET_POSITION_NAME: &[u8] = b"__trueosWindowSetPosition\0";
     static WINDOW_SET_POSITION_FN_NAME: &[u8] = b"__trueosWindowSetPosition\0";
     static WINDOW_SET_SIZE_NAME: &[u8] = b"__trueosWindowSetSize\0";
     static WINDOW_SET_SIZE_FN_NAME: &[u8] = b"__trueosWindowSetSize\0";
     static WINDOW_SET_DECORATIONS_NAME: &[u8] = b"__trueosWindowSetDecorations\0";
     static WINDOW_SET_DECORATIONS_FN_NAME: &[u8] = b"__trueosWindowSetDecorations\0";
+    static WINDOW_SET_HIT_TEST_VISIBLE_NAME: &[u8] = b"__trueosWindowSetHitTestVisible\0";
+    static WINDOW_SET_HIT_TEST_VISIBLE_FN_NAME: &[u8] = b"__trueosWindowSetHitTestVisible\0";
     static WINDOW_SET_VERTICAL_SCROLLBAR_SIDE_NAME: &[u8] =
         b"__trueosWindowSetVerticalScrollbarSide\0";
     static WINDOW_SET_VERTICAL_SCROLLBAR_SIDE_FN_NAME: &[u8] =
@@ -1076,6 +1140,21 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
         window_set_title_func,
     );
 
+    let window_set_icon_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_set_icon),
+        WINDOW_SET_ICON_FN_NAME.as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_SET_ICON_NAME.as_ptr() as *const c_char,
+        window_set_icon_func,
+    );
+
     let window_set_position_func = qjs::JS_NewCFunction2(
         ctx,
         Some(qjs_window_set_position),
@@ -1119,6 +1198,21 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
         global,
         WINDOW_SET_DECORATIONS_NAME.as_ptr() as *const c_char,
         window_set_decorations_func,
+    );
+
+    let window_set_hit_test_visible_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_window_set_hit_test_visible),
+        WINDOW_SET_HIT_TEST_VISIBLE_FN_NAME.as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        WINDOW_SET_HIT_TEST_VISIBLE_NAME.as_ptr() as *const c_char,
+        window_set_hit_test_visible_func,
     );
 
     let window_set_vertical_scrollbar_side_func = qjs::JS_NewCFunction2(

@@ -53,9 +53,30 @@ function readBooleanEnv(name, fallback = false) {
   }
 }
 
+function readStringEnv(name, fallback = "") {
+  const raw = readEnv(name);
+  if (typeof raw !== "string") {
+    return fallback;
+  }
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : fallback;
+}
+
 const HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS = readBooleanEnv(
   "TRUEOS_AI_PC_DEBUG_HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS",
   false,
+);
+const OPENAI_COMPUTER_TOOL_TYPE = readStringEnv(
+  "TRUEOS_OPENAI_COMPUTER_TOOL_TYPE",
+  "computer_use_preview",
+);
+const OPENAI_COMPUTER_ENVIRONMENT = readStringEnv(
+  "TRUEOS_OPENAI_COMPUTER_ENVIRONMENT",
+  "browser",
+);
+const OPENAI_COMPUTER_MODEL = readStringEnv(
+  "TRUEOS_OPENAI_COMPUTER_MODEL",
+  "computer-use-preview",
 );
 const AI_PC_TOOL_POLICY = [
   "Use shell1 function tools whenever the user is asking to run, open, launch, inspect, or control something that maps to a shell1 command.",
@@ -66,6 +87,7 @@ const AI_PC_TOOL_POLICY = [
   "For devices classified as kind=leds, prefer the LED runtime interrupt-OUT tools before falling back to HID SET_REPORT control writes.",
   "Use ask_user only when the request is genuinely ambiguous or a required argument is missing.",
   "Treat cursor and pointer requests in browser/computer-use tasks as mouse-style pointer movement; prefer computer.moveCursor(...) instead of interpreting them as shell or terminal text-cursor requests unless the user explicitly says shell or terminal.",
+  "For visible UI interaction, use the built-in OpenAI computer tool path backed by the local TRUEOS computer/browser runtime.",
   "Do not claim you cannot launch local apps or shell commands when a shell1 tool is available for the task.",
 ].join(" ");
 const AI_PC_INSTRUCTIONS = [
@@ -79,6 +101,7 @@ const WORKER_BROWSER_METHODS = [
   "getApiContract",
   "listUnavailable",
   "getWindowId",
+  "getWindowInfo",
   "getHtml",
   "getTextRows",
   "getDomSnapshot",
@@ -89,6 +112,20 @@ const WORKER_BROWSER_METHODS = [
   "getViewport",
   "paint",
   "setScroll",
+  "setWindowTitle",
+  "setWindowIcon",
+  "setWindowPosition",
+  "setWindowSize",
+  "setWindowDecorations",
+  "setWindowVerticalScrollbarSide",
+  "setWindowHorizontalScrollbarSide",
+  "minimizeWindow",
+  "maximizeWindow",
+  "restoreWindow",
+  "focusWindow",
+  "closeWindow",
+  "beginWindowMove",
+  "beginWindowResize",
   "moveCursor",
   "click",
   "navigate",
@@ -97,20 +134,6 @@ const WORKER_BROWSER_METHODS = [
   "pressKey",
   "captureScreenshot",
 ];
-
-function getExecJsBrowserApiDescription() {
-  return "getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), setBodyHtml(html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), navigate(...), getApiContract(), and listUnavailable().";
-}
-
-function getExecJsComputerApiDescription() {
-  const methodList = HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS
-    ? "moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), captureScreenshot(), getApiContract(), and listUnavailable()."
-    : "moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), keyboard(...), typeText(...), pressKey(...), captureScreenshot(), getApiContract(), and listUnavailable().";
-  const keyboardDetails = HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS
-    ? ""
-    : " keyboard(...) is the canonical input API: send Unicode text with { type: \"text\", text: \"...\" } and named keys with { type: \"key\", key: \"Enter\", modifiers: [\"Ctrl\"]? }; typeText(...) and pressKey(...) compile into that same path.";
-  return `TRUEOS computer facade. Call computer.getApiContract() first for the supported contract. Current live methods include ${methodList} These actions drive kernel/ui2 input and the full composed UI screenshot path, not browser-local input.${keyboardDetails} Use computer.moveCursor for visible pointer movement rather than asking about a terminal text cursor.`;
-}
 
 function getFileSearchVectorStoreIds() {
   const vectorStoreId = readEnv("OPENAI_FILE_SEARCH_VECTOR_STORE_ID");
@@ -127,7 +150,6 @@ function getPcRuntime() {
       browserTarget: { windowId: 0, role: "primary" },
       context: null,
       page: null,
-      jsOutput: [],
       inputSlotSeq: 1,
       inputSlots: Object.create(null),
       workerRpcSeq: 1,
@@ -740,37 +762,6 @@ function formatValue(value, depth) {
   return String(value);
 }
 
-function formatArgs(args) {
-  const out = [];
-  for (let i = 0; i < args.length; i += 1) {
-    out.push(formatValue(args[i], 0));
-  }
-  return out.join(" ");
-}
-
-function makeExecConsole(jsOutput) {
-  return {
-    log(...args) {
-      jsOutput.push({
-        type: "input_text",
-        text: formatArgs(args),
-      });
-    },
-  };
-}
-
-function displayImage(imageInput) {
-  const runtime = getPcRuntime();
-  const imageUrl = typeof imageInput === "string" && imageInput.startsWith("data:image/")
-    ? imageInput
-    : `data:image/png;base64,${imageInput}`;
-  runtime.jsOutput.push({
-    type: "input_image",
-    image_url: imageUrl,
-    detail: "original",
-  });
-}
-
 function base64DecodedByteLength(value) {
   const text = typeof value === "string" ? value.trim() : "";
   if (!text) {
@@ -870,34 +861,6 @@ function normalizeAiInputEntry(entry) {
   };
 }
 
-function createExecJsTool() {
-  return {
-    type: "function",
-    name: "exec_js",
-    description: "Execute provided interactive JavaScript in a persistent REPL context.",
-    parameters: {
-      type: "object",
-      properties: {
-        code: {
-          type: "string",
-          description: `
-JavaScript to execute. Write small snippets of interactive code. To persist variables or functions across tool calls, you must save them to globalThis. Code is executed in an async persistent eval context, so you can use await. You have access to ONLY the following:
-- console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large image payloads like screenshots or buffers. If you create an image or screenshot, pass the image data directly to display().
-- display(base64_or_data_url): Use this to view either a bare base64-encoded PNG payload or a full data URL. browser.captureScreenshot() already returns a full data URL.
-- Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: ${getExecJsBrowserApiDescription()}
-- computer: ${getExecJsComputerApiDescription()}
-- context: same object as browser for now.
-- page: same object as browser for now.
-`,
-        },
-      },
-      required: ["code"],
-      additionalProperties: false,
-    },
-  };
-}
-
 function createAskUserTool() {
   return {
     type: "function",
@@ -943,6 +906,47 @@ function createShell1Tools() {
   } catch (_err) {
     return [];
   }
+}
+
+function getHostedComputerViewport() {
+  const browser = globalThis.__trueosBrowser;
+  if (browser && typeof browser.getViewport === "function") {
+    try {
+      const viewport = browser.getViewport();
+      if (viewport && typeof viewport === "object") {
+        const width = Math.max(
+          1,
+          Number(
+            viewport.viewportWidth
+            || viewport.width
+            || viewport.contentWidth
+            || 1024,
+          ) | 0,
+        );
+        const height = Math.max(
+          1,
+          Number(
+            viewport.viewportHeight
+            || viewport.height
+            || viewport.contentHeight
+            || 768,
+          ) | 0,
+        );
+        return { width, height };
+      }
+    } catch (_err) {}
+  }
+  return { width: 1024, height: 768 };
+}
+
+function createHostedComputerTool() {
+  const viewport = getHostedComputerViewport();
+  return {
+    type: OPENAI_COMPUTER_TOOL_TYPE,
+    display_width: viewport.width,
+    display_height: viewport.height,
+    environment: OPENAI_COMPUTER_ENVIRONMENT,
+  };
 }
 
 function bytesToHex(bytes) {
@@ -1318,7 +1322,7 @@ function buildTools(entry) {
   tools.push(...createShell1Tools());
   tools.push(...createDriverDevTools());
   if (entry.computerUse) {
-    tools.push(createExecJsTool());
+    tools.push(createHostedComputerTool());
   }
   tools.push(createAskUserTool());
   return decorateResponseTools(tools);
@@ -1443,27 +1447,351 @@ function buildShell1CommandLine(command, payload) {
   return parts.join(" ");
 }
 
-async function execJs(code) {
-  const runtime = bindHostRuntime();
-  const execConsole = makeExecConsole(runtime.jsOutput);
-  const wrappedCode = `
-    (async (console, display, browser, computer, context, page) => {
-      ${code}
-    })
-  `;
-  const factory = (0, eval)(wrappedCode);
-  return await factory(
-    execConsole,
-    displayImage,
-    runtime.browser,
-    runtime.computer,
-    runtime.context,
-    runtime.page,
+function isHostedComputerTool(tool) {
+  if (!tool || typeof tool !== "object") {
+    return false;
+  }
+  return tool.type === "computer" || tool.type === "computer_use_preview";
+}
+
+function normalizeComputerActionType(action) {
+  return String(
+    action && (
+      action.type
+      || action.action
+      || action.kind
+      || action.name
+      || ""
+    ),
+  ).trim().toLowerCase();
+}
+
+function normalizePoint(value) {
+  const source = value && typeof value === "object" ? value : null;
+  if (!source) {
+    return null;
+  }
+  const x = Number(source.x);
+  const y = Number(source.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+  };
+}
+
+function extractComputerActionPoint(action) {
+  return normalizePoint(action)
+    || normalizePoint(action && action.position)
+    || normalizePoint(action && action.target)
+    || normalizePoint(action && action.to)
+    || normalizePoint(action && action.end);
+}
+
+function extractComputerActionPath(action) {
+  const path = [];
+  const start = normalizePoint(action && action.start);
+  if (start) {
+    path.push(start);
+  }
+  const entries = Array.isArray(action && action.path) ? action.path : [];
+  for (const entry of entries) {
+    const point = normalizePoint(entry);
+    if (point) {
+      path.push(point);
+    }
+  }
+  const end = normalizePoint(action && (action.end || action.to || action.target));
+  if (end) {
+    const last = path.length > 0 ? path[path.length - 1] : null;
+    if (!last || last.x !== end.x || last.y !== end.y) {
+      path.push(end);
+    }
+  }
+  return path;
+}
+
+function normalizeComputerButtonMask(action) {
+  const raw = action && (
+    action.buttonMask
+    || action.button
+    || action.mouse_button
+    || action.mouseButton
+    || 1
   );
+  if (typeof raw === "string") {
+    const value = raw.trim().toLowerCase();
+    if (value === "right") return 2;
+    if (value === "middle") return 4;
+    return 1;
+  }
+  return Math.max(1, Number(raw || 1) | 0) >>> 0;
+}
+
+function normalizeComputerKeyName(value) {
+  const raw = String(value == null ? "" : value).trim();
+  if (!raw) {
+    return "";
+  }
+  const lower = raw.toLowerCase();
+  if (lower === "cmd") return "Meta";
+  if (lower === "command") return "Meta";
+  if (lower === "ctrl") return "Ctrl";
+  if (lower === "control") return "Ctrl";
+  if (lower === "alt") return "Alt";
+  if (lower === "option") return "Alt";
+  if (lower === "shift") return "Shift";
+  if (lower === "meta") return "Meta";
+  if (lower === "enter" || lower === "return") return "Enter";
+  if (lower === "esc" || lower === "escape") return "Escape";
+  if (lower === "space" || lower === "spacebar") return "Space";
+  if (lower === "pgup" || lower === "pageup") return "PageUp";
+  if (lower === "pgdn" || lower === "pagedown") return "PageDown";
+  if (lower === "del") return "Delete";
+  if (raw.length === 1) {
+    return raw;
+  }
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+function isModifierKeyName(value) {
+  return value === "Ctrl" || value === "Alt" || value === "Shift" || value === "Meta";
+}
+
+async function performComputerScroll(runtime, action) {
+  const browser = runtime && runtime.browser && typeof runtime.browser === "object"
+    ? runtime.browser
+    : null;
+  if (!browser || typeof browser.getViewport !== "function" || typeof browser.setScroll !== "function") {
+    throw new Error("browser scroll bridge unavailable for hosted computer action");
+  }
+  const viewport = await browser.getViewport();
+  const currentX = Math.max(0, Number(viewport && viewport.scrollX || 0) | 0);
+  const currentY = Math.max(0, Number(viewport && viewport.scrollY || 0) | 0);
+  const dx = Math.round(Number(
+    action && (
+      action.deltaX
+      || action.dx
+      || action.scrollX
+      || action.x
+      || 0
+    ),
+  ) || 0);
+  const dy = Math.round(Number(
+    action && (
+      action.deltaY
+      || action.dy
+      || action.scrollY
+      || action.y
+      || action.amount
+      || 0
+    ),
+  ) || 0);
+  return await browser.setScroll(
+    Math.max(0, currentX + dx),
+    Math.max(0, currentY + dy),
+  );
+}
+
+async function performComputerKeypress(runtime, action) {
+  const computer = runtime && runtime.computer && typeof runtime.computer === "object"
+    ? runtime.computer
+    : null;
+  if (!computer || typeof computer.pressKey !== "function") {
+    throw new Error("computer keyboard bridge unavailable");
+  }
+  const keys = [];
+  if (Array.isArray(action && action.keys)) {
+    for (const entry of action.keys) {
+      const key = normalizeComputerKeyName(entry);
+      if (key) {
+        keys.push(key);
+      }
+    }
+  } else {
+    const key = normalizeComputerKeyName(action && (action.key || action.text));
+    if (key) {
+      keys.push(key);
+    }
+  }
+  if (keys.length === 0) {
+    return false;
+  }
+  const explicitModifiers = Array.isArray(action && action.modifiers)
+    ? action.modifiers.map(normalizeComputerKeyName).filter(Boolean)
+    : [];
+  const trailingKey = keys[keys.length - 1];
+  const implicitModifiers = keys.slice(0, -1).filter(isModifierKeyName);
+  const modifiers = [...explicitModifiers, ...implicitModifiers];
+  return await computer.pressKey(trailingKey, { modifiers });
+}
+
+async function performComputerDrag(runtime, action) {
+  const computer = runtime && runtime.computer && typeof runtime.computer === "object"
+    ? runtime.computer
+    : null;
+  if (!computer || typeof computer.moveCursor !== "function") {
+    throw new Error("computer pointer bridge unavailable for drag");
+  }
+  const path = extractComputerActionPath(action);
+  if (path.length === 0) {
+    const point = extractComputerActionPoint(action);
+    if (!point) {
+      return false;
+    }
+    path.push(point);
+  }
+  const buttonMask = normalizeComputerButtonMask(action);
+  const first = path[0];
+  await computer.moveCursor({
+    x: first.x,
+    y: first.y,
+  });
+  await waitMs(20);
+  await computer.moveCursor({
+    x: first.x,
+    y: first.y,
+    buttonsDown: buttonMask,
+    flags: INPUT_CURSOR_FLAG_ABSOLUTE | INPUT_CURSOR_FLAG_BUTTONS_CHANGED,
+  });
+  for (let i = 1; i < path.length; i += 1) {
+    const point = path[i];
+    await computer.moveCursor({
+      x: point.x,
+      y: point.y,
+      buttonsDown: buttonMask,
+    });
+    await waitMs(16);
+  }
+  const last = path[path.length - 1];
+  return await computer.moveCursor({
+    x: last.x,
+    y: last.y,
+    buttonsDown: 0,
+    flags: INPUT_CURSOR_FLAG_ABSOLUTE | INPUT_CURSOR_FLAG_BUTTONS_CHANGED,
+  });
+}
+
+async function executeHostedComputerAction(runtime, action) {
+  const type = normalizeComputerActionType(action);
+  const point = extractComputerActionPoint(action);
+  const computer = runtime && runtime.computer && typeof runtime.computer === "object"
+    ? runtime.computer
+    : null;
+  switch (type) {
+    case "":
+    case "wait":
+    case "pause": {
+      const durationMs = Math.max(
+        0,
+        Number(action && (action.ms || action.durationMs || action.duration || 1000)) | 0,
+      );
+      await waitMs(durationMs);
+      return true;
+    }
+    case "move":
+    case "mousemove":
+    case "mouse_move":
+    case "move_cursor": {
+      if (!point || !computer || typeof computer.moveCursor !== "function") {
+        return false;
+      }
+      return await computer.moveCursor(point);
+    }
+    case "click":
+    case "left_click":
+    case "single_click": {
+      if (!point || !computer || typeof computer.click !== "function") {
+        return false;
+      }
+      return await computer.click({
+        ...point,
+        buttonMask: normalizeComputerButtonMask(action),
+      });
+    }
+    case "double_click":
+    case "doubleclick": {
+      if (!point || !computer || typeof computer.click !== "function") {
+        return false;
+      }
+      await computer.click({
+        ...point,
+        buttonMask: normalizeComputerButtonMask(action),
+      });
+      await waitMs(60);
+      return await computer.click({
+        ...point,
+        buttonMask: normalizeComputerButtonMask(action),
+      });
+    }
+    case "drag":
+    case "drag_to":
+    case "dragto":
+      return await performComputerDrag(runtime, action);
+    case "scroll":
+      return await performComputerScroll(runtime, action);
+    case "type":
+    case "text":
+    case "input_text": {
+      if (!computer || typeof computer.typeText !== "function") {
+        return false;
+      }
+      const text = String(action && (action.text || action.value || "") || "");
+      return await computer.typeText(text);
+    }
+    case "keypress":
+    case "key_press":
+    case "press_key":
+    case "hotkey":
+    case "shortcut":
+      return await performComputerKeypress(runtime, action);
+    default:
+      return false;
+  }
+}
+
+async function createHostedComputerCallOutput(item) {
+  const runtime = bindHostRuntime();
+  const actions = Array.isArray(item && item.actions)
+    ? item.actions.filter((entry) => entry && typeof entry === "object")
+    : (item && typeof item.action === "object" ? [item.action] : []);
+  for (const action of actions) {
+    try {
+      const handled = await executeHostedComputerAction(runtime, action);
+      aiDiag(`computer_call action=${normalizeComputerActionType(action) || "wait"} handled=${handled ? 1 : 0}`);
+    } catch (err) {
+      aiDiag(`computer_call action failed: ${String(err && err.message ? err.message : err)}`);
+    }
+  }
+  const screenshot = runtime.computer && typeof runtime.computer.captureScreenshot === "function"
+    ? await runtime.computer.captureScreenshot()
+    : (runtime.browser && typeof runtime.browser.captureScreenshot === "function"
+      ? await runtime.browser.captureScreenshot()
+      : "");
+  const output = {
+    type: "computer_screenshot",
+    image_url: typeof screenshot === "string" ? screenshot : "",
+  };
+  const result = {
+    type: "computer_call_output",
+    call_id: item.call_id,
+    output,
+  };
+  const pendingSafetyChecks = Array.isArray(item && item.pending_safety_checks)
+    ? item.pending_safety_checks.filter((entry) => entry && typeof entry === "object")
+    : [];
+  if (pendingSafetyChecks.length > 0) {
+    result.acknowledged_safety_checks = pendingSafetyChecks;
+  }
+  return result;
 }
 
 async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX_STEPS, model = DEFAULT_RESPONSE_MODEL) {
   const tools = buildTools(entry);
+  const turnModel = entry.computerUse ? OPENAI_COMPUTER_MODEL : model;
+  const needsComputerTruncation = tools.some(isHostedComputerTool);
   let nextInput = [
     {
       role: "user",
@@ -1473,12 +1801,13 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
 
   for (let i = 0; i < maxSteps; i += 1) {
     const request = buildResponsesRequest({
-      model,
+      model: turnModel,
       instructions: AI_PC_INSTRUCTIONS,
       tools,
       input: nextInput,
       previousResponseId,
       parallelToolCalls: DEFAULT_PARALLEL_TOOL_CALLS,
+      truncation: needsComputerTruncation ? "auto" : "",
     });
 
     logScreenshotUploadSizes(request.input);
@@ -1490,6 +1819,12 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
     const toolOutputs = [];
 
     for (const item of getResponseOutputItems(resp)) {
+      if (item && item.type === "computer_call") {
+        hadToolCall = true;
+        toolOutputs.push(await createHostedComputerCallOutput(item));
+        continue;
+      }
+
       const shell1Command = item.type === "function_call"
         ? findAiPcShellCommandByToolName(item.name)
         : null;
@@ -1513,40 +1848,6 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
           call_id: item.call_id,
           output,
         });
-      } else if (item.type === "function_call" && item.name === "exec_js") {
-        hadToolCall = true;
-        const parsed = JSON.parse(item.arguments || "{}");
-        const code = parsed.code || "";
-        const runtime = bindHostRuntime();
-
-        console.log(code);
-        console.log("----");
-
-        try {
-          await execJs(code);
-        } catch (e) {
-          runtime.jsOutput.push({
-            type: "input_text",
-            text: formatArgs([e, e && e.message, e && e.stack]),
-          });
-        }
-
-        toolOutputs.push({
-          type: "function_call_output",
-          call_id: item.call_id,
-          output: runtime.jsOutput.slice(),
-        });
-
-        for (const out of runtime.jsOutput) {
-          if (out.type === "input_text") {
-            console.log("JS LOG:", out.text);
-          } else if (out.type === "input_image") {
-            console.log("JS IMAGE: [image payload omitted]");
-          }
-        }
-        console.log("=====");
-
-        runtime.jsOutput.length = 0;
       } else if (item.type === "function_call" && item.name === "read_trueosfs_tree") {
         hadToolCall = true;
         const parsed = JSON.parse(item.arguments || "{}");

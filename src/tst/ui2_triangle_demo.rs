@@ -73,7 +73,7 @@ pub async fn ui2_triangle_demo_task() {
             h: UI2_TRIANGLE_RT_H as f32,
         },
         UI2_TRIANGLE_WINDOW_Z,
-        255,
+        128,
         UI2_TRIANGLE_TEX_ID,
         false,
         [0x10, 0x14, 0x1A, 0xFF],

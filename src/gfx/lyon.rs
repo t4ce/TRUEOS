@@ -43,6 +43,21 @@ fn push_rgb_vtx(out: &mut Vec<u8>, v: &MyVertex, view_w: f32, view_h: f32) {
     out.push(to_u8(v.color[3]));
 }
 
+#[inline]
+fn submit_rgb_blob_no_present(blob: &[u8]) -> bool {
+    let _ = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+    };
+    let rc = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+            blob.as_ptr(),
+            blob.len(),
+        )
+    };
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    rc == 0
+}
+
 pub fn draw_solid_rect_no_present(
     x: f32,
     y: f32,
@@ -101,13 +116,7 @@ pub fn draw_solid_rect_no_present(
         push_rgb_vtx(&mut blob, v, fb_w, fb_h);
     }
 
-    let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
-            blob.as_ptr(),
-            blob.len(),
-        )
-    };
-    rc == 0
+    submit_rgb_blob_no_present(blob.as_slice())
 }
 
 pub fn draw_vertical_gradient_rect_no_present(
@@ -175,13 +184,7 @@ pub fn draw_vertical_gradient_rect_no_present(
         push_rgb_vtx(&mut blob, v, fb_w, fb_h);
     }
 
-    let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
-            blob.as_ptr(),
-            blob.len(),
-        )
-    };
-    rc == 0
+    submit_rgb_blob_no_present(blob.as_slice())
 }
 
 pub fn draw_vertical_three_stop_rect_no_present(
@@ -282,13 +285,7 @@ pub fn draw_vertical_three_stop_rect_no_present(
         push_rgb_vtx(&mut blob, v, fb_w, fb_h);
     }
 
-    let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
-            blob.as_ptr(),
-            blob.len(),
-        )
-    };
-    rc == 0
+    submit_rgb_blob_no_present(blob.as_slice())
 }
 
 pub fn draw_horizontal_three_stop_rect_no_present(
@@ -389,13 +386,7 @@ pub fn draw_horizontal_three_stop_rect_no_present(
         push_rgb_vtx(&mut blob, v, fb_w, fb_h);
     }
 
-    let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
-            blob.as_ptr(),
-            blob.len(),
-        )
-    };
-    rc == 0
+    submit_rgb_blob_no_present(blob.as_slice())
 }
 
 #[inline]
@@ -863,6 +854,19 @@ pub unsafe extern "C" fn trueos_cabi_gfx_draw_lyon_icon_no_present(
     view_w: u32,
     view_h: u32,
 ) -> i32 {
+    draw_lyon_icon_alpha_no_present(icon_id, color_id, small_set, x, y, view_w, view_h, 255)
+}
+
+pub fn draw_lyon_icon_alpha_no_present(
+    icon_id: u32,
+    color_id: u32,
+    small_set: u32,
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+    alpha: u8,
+) -> i32 {
     let fb_w = view_w.max(1) as f32;
     let fb_h = view_h.max(1) as f32;
     let Some(icon) = cached_icon_by_id(icon_id, color_id, small_set != 0) else {
@@ -876,7 +880,12 @@ pub unsafe extern "C" fn trueos_cabi_gfx_draw_lyon_icon_no_present(
         };
         let vv = MyVertex {
             position: [v.position[0] + x, v.position[1] + y],
-            color: v.color,
+            color: [
+                v.color[0],
+                v.color[1],
+                v.color[2],
+                v.color[3] * (alpha as f32 / 255.0),
+            ],
         };
         push_rgb_vtx(&mut icon_blob, &vv, fb_w, fb_h);
     }
@@ -885,10 +894,17 @@ pub unsafe extern "C" fn trueos_cabi_gfx_draw_lyon_icon_no_present(
         return -2;
     }
 
-    crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
-        icon_blob.as_ptr(),
-        icon_blob.len(),
-    )
+    let _ = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+    };
+    let rc = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+            icon_blob.as_ptr(),
+            icon_blob.len(),
+        )
+    };
+    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    rc
 }
 
 pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {

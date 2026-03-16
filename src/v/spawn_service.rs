@@ -808,7 +808,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "ui2-triangle-demo",
-        disabled: true, // Temporarily disable the auto-start demo.
+        disabled: false,
         required: crate::v::readiness::LOADSCREEN_END,
         started: &UI2_TRIANGLE_DEMO_STARTED,
         spawn: spawn_ui2_triangle_demo,
