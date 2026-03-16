@@ -1,4 +1,5 @@
 use crate::gfx::backends::intel_cmd::{IntelCmd, RingMmio};
+use crate::gfx::backends::intel_execlists::IntelExeclistsProbe;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -35,6 +36,51 @@ struct FramebufferTarget {
     height: usize,
 }
 
+const INTEL_FALLBACK_SWAPCHAIN_WIDTH: u32 = 1280;
+const INTEL_FALLBACK_SWAPCHAIN_HEIGHT: u32 = 720;
+
+fn init_command_engine(info: crate::gfx::intel::IntelGfxInfo) -> Option<IntelCmd> {
+    if !info.supports_legacy_ring_submission() {
+        if let Some(probe) = IntelExeclistsProbe::new(info) {
+            probe.log_registers(info);
+        } else {
+            crate::log!(
+                "gfx-intel: execlists probe unavailable for {:02X}:{:02X}.{} device=0x{:04X} mmio_len=0x{:X}\n",
+                info.bus,
+                info.slot,
+                info.function,
+                info.device_id,
+                info.mmio_len,
+            );
+        }
+        crate::log!(
+            "gfx-intel: command streamer init skipped for {:02X}:{:02X}.{} device=0x{:04X} platform={} submit={} (modern path not implemented yet)\n",
+            info.bus,
+            info.slot,
+            info.function,
+            info.device_id,
+            info.platform_name(),
+            info.submission_name(),
+        );
+        return None;
+    }
+
+    let mmio = RingMmio {
+        base: info.mmio_base,
+        len: info.mmio_len,
+    };
+    let mut eng = IntelCmd::new(
+        mmio,
+        info.cmd_scratch_phys,
+        info.cmd_scratch_virt,
+        info.cmd_scratch_len,
+    )?;
+    if eng.init_ring().is_err() {
+        return None;
+    }
+    Some(eng)
+}
+
 impl IntelGfxBackend {
     pub fn init(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
@@ -43,7 +89,17 @@ impl IntelGfxBackend {
             return None;
         }
 
-        let (w, h) = first_fb_dimensions(framebuffers)?;
+        let (w, h) = first_fb_dimensions(framebuffers).unwrap_or_else(|| {
+            crate::log!(
+                "gfx-intel: no firmware framebuffer; using fallback swapchain {}x{}\n",
+                INTEL_FALLBACK_SWAPCHAIN_WIDTH,
+                INTEL_FALLBACK_SWAPCHAIN_HEIGHT
+            );
+            (
+                INTEL_FALLBACK_SWAPCHAIN_WIDTH,
+                INTEL_FALLBACK_SWAPCHAIN_HEIGHT,
+            )
+        });
         let swapchain = SwapchainDesc {
             format: ImageFormat::Rgbx8888,
             extent: Extent2D {
@@ -54,25 +110,11 @@ impl IntelGfxBackend {
 
         crate::log!("gfx: using intel backend (no software raster path)\n");
 
-        let cmd = crate::gfx::intel::first_claimed_device().and_then(|info| {
-            let mmio = RingMmio {
-                base: info.mmio_base,
-                len: info.mmio_len,
-            };
-            let mut eng = IntelCmd::new(
-                mmio,
-                info.cmd_scratch_phys,
-                info.cmd_scratch_virt,
-                info.cmd_scratch_len,
-            )?;
-            if eng.init_ring().is_err() {
-                return None;
-            }
-            Some(eng)
-        });
-        if cmd.is_none() {
-            crate::log!("gfx-intel: command streamer init unavailable\n");
-        }
+        let cmd = crate::gfx::intel::first_claimed_device().and_then(init_command_engine);
+        let Some(cmd) = cmd else {
+            crate::log!("gfx-intel: command streamer init unavailable; backend disabled\n");
+            return None;
+        };
 
         Some(Self {
             framebuffers,
@@ -81,7 +123,7 @@ impl IntelGfxBackend {
             buffers: Vec::new(),
             pipelines: Vec::new(),
             images: Vec::new(),
-            cmd,
+            cmd: Some(cmd),
         })
     }
 
@@ -126,18 +168,24 @@ impl IntelGfxBackend {
         self.images.get(slot)?.as_ref()
     }
 
-    fn current_fb(&self) -> Option<FramebufferTarget> {
-        let fb = self
+    fn current_target(&self) -> FramebufferTarget {
+        if let Some(fb) = self
             .framebuffers
             .and_then(|r| r.framebuffers().next())
             .or_else(|| {
                 crate::limine::framebuffer_response().and_then(|r| r.framebuffers().next())
-            })?;
+            })
+        {
+            return FramebufferTarget {
+                width: fb.width() as usize,
+                height: fb.height() as usize,
+            };
+        }
 
-        Some(FramebufferTarget {
-            width: fb.width() as usize,
-            height: fb.height() as usize,
-        })
+        FramebufferTarget {
+            width: self.swapchain.extent.width as usize,
+            height: self.swapchain.extent.height as usize,
+        }
     }
 }
 
@@ -257,14 +305,15 @@ impl GfxDevice for IntelGfxBackend {
     }
 
     fn submit(&mut self, cmds: CommandBuffer<'_>) -> Result<FenceId> {
-        let Some(fb) = self.current_fb() else {
-            return Err(Error::Unsupported);
-        };
+        let fb = self.current_target();
         if fb.width == 0 || fb.height == 0 {
             return Err(Error::Unsupported);
         }
 
+        let mut command_count = 0usize;
+        let mut has_present = false;
         for cmd in cmds.commands {
+            command_count += 1;
             match *cmd {
                 Command::ClearColor { rgb: _ } => {}
                 Command::ClearRect {
@@ -305,8 +354,23 @@ impl GfxDevice for IntelGfxBackend {
                     vertex_count: _,
                     first_vertex: _,
                 } => {}
-                Command::Present => {}
+                Command::Present => {
+                    has_present = true;
+                }
             }
+        }
+
+        let submit_log_seq =
+            crate::logflag::INTEL_SUBMIT_LOGS.load(core::sync::atomic::Ordering::Relaxed) + 1;
+        if submit_log_seq <= 8 || has_present {
+            crate::log!(
+                "gfx-intel: submit commands={} present={} swap={}x{} cmd_ready={}\n",
+                command_count,
+                has_present as u8,
+                self.swapchain.extent.width,
+                self.swapchain.extent.height,
+                self.cmd.is_some() as u8
+            );
         }
 
         let Some(engine) = self.cmd.as_mut() else {
@@ -319,6 +383,18 @@ impl GfxDevice for IntelGfxBackend {
         engine.emit_cache_flush()?;
         engine.emit_batch_end()?;
         engine.submit_batch()?;
+
+        if has_present {
+            let n = crate::logflag::INTEL_PRESENT_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            if n < 8 || (n % 32) == 0 {
+                crate::log!(
+                    "gfx-intel: present submit seq={} swap={}x{}\n",
+                    n + 1,
+                    self.swapchain.extent.width,
+                    self.swapchain.extent.height
+                );
+            }
+        }
 
         let id = FenceId::from_raw(self.fence_seq);
         self.fence_seq = self.fence_seq.wrapping_add(1).max(1);

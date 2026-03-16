@@ -9,24 +9,24 @@ use ::limine::memory_map::EntryType;
 // - So we only allocate from a configured, assumed-safe physical window.
 // - This is currently intended for our own endpoint(s), not arbitrary devices.
 
-// Default window used for TGA BAR0 assignment.
-// This matches the prior known-good fixed base used during bring-up.
-const TGA_MMIO32_BASE: u64 = 0x5340_0000;
-const TGA_MMIO32_LIMIT: u64 = 0x5350_0000; // 16MiB
+// Conservative 32-bit PCI MMIO hole below ECAM (0xE000_0000) and above normal RAM growth
+// seen in our guest setups. We allocate downward to preserve large aligned holes.
+const MMIO32_BASE: u64 = 0xC000_0000;
+const MMIO32_LIMIT: u64 = 0xE000_0000; // 512MiB
 
 struct MmioAlloc32 {
-    next: u64,
+    next_top: u64,
 }
 
 static MMIO32: Mutex<MmioAlloc32> = Mutex::new(MmioAlloc32 {
-    next: TGA_MMIO32_BASE,
+    next_top: MMIO32_LIMIT,
 });
 
-fn align_up(val: u64, align: u64) -> u64 {
-    if align == 0 {
+fn align_down(val: u64, align: u64) -> u64 {
+    if align <= 1 {
         return val;
     }
-    (val + (align - 1)) & !(align - 1)
+    (val / align) * align
 }
 
 fn overlaps(a_base: u64, a_len: u64, b_base: u64, b_len: u64) -> bool {
@@ -63,10 +63,11 @@ pub fn alloc_mmio32(size: u64, align: u64) -> Option<u32> {
     let align = align.max(0x1000);
 
     let mut lock = MMIO32.lock();
-    let base = align_up(lock.next, align);
+    let raw_base = lock.next_top.checked_sub(size)?;
+    let base = align_down(raw_base, align);
     let end = base.checked_add(size)?;
 
-    if base < TGA_MMIO32_BASE || end > TGA_MMIO32_LIMIT {
+    if base < MMIO32_BASE || end > MMIO32_LIMIT {
         return None;
     }
 
@@ -76,6 +77,6 @@ pub fn alloc_mmio32(size: u64, align: u64) -> Option<u32> {
         return None;
     }
 
-    lock.next = end;
+    lock.next_top = base;
     Some(base as u32)
 }

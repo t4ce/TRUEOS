@@ -28,7 +28,9 @@ QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/O
 
 GFX_MODE ?= intel
 INTEL_GPU_PCI ?= 0000:00:02.0
-INTEL_GPU_VFIO_PROPS ?= ,x-igd-opregion=on
+# `x-no-mmap=on` avoids QEMU trying to mmap the passed-through IGD BAR into the
+# guest address space directly, which currently trips VFIO DMA-map warnings in our setup.
+INTEL_GPU_VFIO_PROPS ?= ,x-igd-opregion=on,x-no-mmap=on
 
 # Enabling vhost-net can significantly improve virtio-net throughput.
 # Use `make run QEMU_VHOST=on` if your host supports it (permissions on /dev/vhost-net).
