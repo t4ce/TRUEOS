@@ -576,7 +576,8 @@ pub async fn http_trueosfs_task() {
                             }
                         } else {
                             // Build HTML trees (best-effort), one per mounted TRUEOSFS root.
-                            let js =    r#"<style>li{cursor:pointer}</style><script>(function(){function labelOf(li){var n=li.firstChild;return n&&n.nodeType===3?n.textContent:"";}function pathFor(li){var parts=[];var cur=li;while(cur){var t=labelOf(cur).trim();if(t==="/"){t="";}if(t.endsWith("/")){t=t.slice(0,-1);}if(t){parts.push(t);}var p=cur.parentElement;cur=p&&p.closest("li");}parts.reverse();return parts.join("/");}document.addEventListener("click",function(e){var li=e.target.closest("li");if(!li){return;}var tree=li.closest(".tree");if(!tree){return;}var root=tree.getAttribute("data-root")||"";var path=pathFor(li);if(!root||!path){return;}var segs=path.split("/").map(function(s){return encodeURIComponent(s);}).join("/");window.location.href="/dl/"+root+"/"+segs;});})();</script>"#;
+                            let js = r#"<style>body{font-family:sans-serif;padding:16px;line-height:1.35}li{cursor:pointer}.muted{color:#666}.timebox{margin:12px 0 18px;padding:12px 14px;border:1px solid #d8d8d8;border-radius:10px;background:#f8f8f8}.timebox strong{display:block;font-size:1.1rem;margin-bottom:4px}.timebox .meta{font-size:.9rem;color:#666}section{margin:18px 0}</style><script>(function(){function labelOf(li){var n=li.firstChild;return n&&n.nodeType===3?n.textContent:"";}function pathFor(li){var parts=[];var cur=li;while(cur){var t=labelOf(cur).trim();if(t==="/"){t="";}if(t.endsWith("/")){t=t.slice(0,-1);}if(t){parts.push(t);}var p=cur.parentElement;cur=p&&p.closest("li");}parts.reverse();return parts.join("/");}document.addEventListener("click",function(e){var li=e.target.closest("li");if(!li){return;}var tree=li.closest(".tree");if(!tree){return;}var root=tree.getAttribute("data-root")||"";var path=pathFor(li);if(!root||!path){return;}var segs=path.split("/").map(function(s){return encodeURIComponent(s);}).join("/");window.location.href="/dl/"+root+"/"+segs;});function bootClock(){var status=document.getElementById("ws-time-status");var value=document.getElementById("ws-time-value");var meta=document.getElementById("ws-time-meta");if(!status||!value||!meta||!window.WebSocket){return;}var host=window.location.hostname||"localhost";var url="ws://"+host+":56765/time";var sock=null;var retryTimer=0;function setStatus(text){status.textContent=text;}function scheduleRetry(){if(retryTimer){return;}retryTimer=window.setTimeout(function(){retryTimer=0;openSocket();},3000);}function openSocket(){setStatus("connecting to "+url);try{sock=new WebSocket(url);}catch(_err){setStatus("websocket unavailable");scheduleRetry();return;}sock.onopen=function(){setStatus("live");};sock.onmessage=function(ev){try{var msg=JSON.parse(ev.data);if(msg&&msg.unix){value.textContent=new Date(msg.unix*1000).toLocaleString();meta.textContent=(msg.utc||"")+" | source: "+(msg.source||"unknown")+" | unix: "+msg.unix;}}catch(_err){setStatus("bad payload");}};sock.onclose=function(){setStatus("disconnected, retrying");scheduleRetry();};sock.onerror=function(){setStatus("socket error");};}openSocket();window.addEventListener("beforeunload",function(){if(sock){sock.close();}});}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",bootClock);}else{bootClock();}})();</script>"#;
+                            let clock_html = "<section class=\"timebox\"><strong id=\"ws-time-value\">waiting for live time...</strong><div id=\"ws-time-status\" class=\"meta\">starting websocket clock</div><div id=\"ws-time-meta\" class=\"meta\">guest ws endpoint: :56765/time</div></section>";
 
                             let mut trees_html = String::new();
                             for r in roots.iter() {
@@ -612,19 +613,18 @@ pub async fn http_trueosfs_task() {
 
                             let body = if roots.is_empty() {
                                 format!(
-                                    "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p class=\"muted\">(no TRUEOSFS mounted)</p></body></html>",
-                                    js
+                                    "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1>{}<p class=\"muted\">(no TRUEOSFS mounted)</p></body></html>",
+                                    js, clock_html
                                 )
                             } else if roots.len() == 1 {
                                 format!(
-                                    "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p>Click a file to download.</p>{}</body></html>",
-                                    js, trees_html
+                                    "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1>{}<p>Click a file to download.</p>{}</body></html>",
+                                    js, clock_html, trees_html
                                 )
                             } else {
                                 format!(
-                                    "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p>Click a file to download.</p>{}</body></html>",
-                                    js,
-                                    trees_html
+                                    "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1>{}<p>Click a file to download.</p>{}</body></html>",
+                                    js, clock_html, trees_html
                                 )
                             };
 
