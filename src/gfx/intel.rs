@@ -42,7 +42,7 @@ struct RgbVertex {
     pad: u8,
 }
 
-fn register_intel(mut info: IntelGfxInfo) {
+fn register_intel(info: IntelGfxInfo) {
     let mut list = DEVICES.lock();
     let id = list.len();
     if id >= MAX_INTEL_DEVICES {
