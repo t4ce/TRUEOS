@@ -45,7 +45,6 @@ const UI2_INPUT_DIAG_LOG_FIRST: u32 = 8;
 const UI2_INPUT_DIAG_LOG_EVERY: u32 = 32;
 const UI2_WINDOW_UPDATE_LOG_EVERY: u32 = 32;
 const UI2_COMPOSE_LOG_EVERY: u32 = 32;
-const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
 const UI2_WINDOW_RESIZE_LEFT: u32 = 1 << 0;
 const UI2_WINDOW_RESIZE_TOP: u32 = 1 << 1;
 const UI2_WINDOW_RESIZE_RIGHT: u32 = 1 << 2;
@@ -1604,11 +1603,18 @@ fn draw_texture_rect_no_present(
     )
 }
 
+#[inline]
+fn snap_browser_content_rect(content: Ui2Rect) -> (i32, i32, u32, u32) {
+    (
+        libm::roundf(content.x) as i32,
+        libm::roundf(content.y) as i32,
+        round_to_u32(content.w, 1),
+        round_to_u32(content.h, 1),
+    )
+}
+
 fn queue_browser_window_viewport(content_id: HostedContentId, content: Ui2Rect) -> bool {
-    let viewport_w = round_to_u32(content.w, 1);
-    let viewport_h = round_to_u32(content.h, 1);
-    let content_x = libm::roundf(content.x) as i32;
-    let content_y = libm::roundf(content.y) as i32;
+    let (content_x, content_y, viewport_w, viewport_h) = snap_browser_content_rect(content);
     hosted_set_viewport(
         content_id,
         viewport_w,
@@ -1627,19 +1633,22 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
         return false;
     }
 
-    let sx = round_to_u32(content.x.max(0.0), 0);
-    let sy = round_to_u32(content.y.max(0.0), 0);
-    let sw = round_to_u32(content.w, 1);
-    let sh = round_to_u32(content.h, 1);
+    let (draw_x_i, draw_y_i, snapped_w, snapped_h) = snap_browser_content_rect(content);
+    let sx = draw_x_i.max(0) as u32;
+    let sy = draw_y_i.max(0) as u32;
+    let sw = snapped_w;
+    let sh = snapped_h;
+    let draw_x_f = draw_x_i as f32;
+    let draw_y_f = draw_y_i as f32;
     let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_scissor(sx, sy, sw, sh) };
 
-    let draw_w = snapshot.viewport_width.max(1);
-    let draw_h = snapshot.viewport_height.max(1);
+    let viewport_w = snapshot.viewport_width.max(1);
+    let viewport_h = snapshot.viewport_height.max(1);
     let scroll_left = normalized_hosted_browser_scroll_x(&snapshot);
     let scroll_top = snapshot
         .content_top_y
         .saturating_add(normalized_hosted_browser_scroll(&snapshot));
-    let scroll_bottom = scroll_top.saturating_add(draw_h);
+    let scroll_bottom = scroll_top.saturating_add(viewport_h);
     let mut drew = false;
 
     for region in &snapshot.regions {
@@ -1665,7 +1674,8 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
         if scroll_left >= region.width {
             continue;
         }
-        let draw_width = core::cmp::min(draw_w, region.width.saturating_sub(scroll_left)).max(1);
+        let draw_width =
+            core::cmp::min(viewport_w, region.width.saturating_sub(scroll_left)).max(1);
         let u0 = (scroll_left as f32) / (region.width.max(1) as f32);
         let u1 = ((scroll_left + draw_width) as f32) / (region.width.max(1) as f32);
         let v0 = (src_offset_y as f32) / (region.height.max(1) as f32);
@@ -1673,8 +1683,8 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
 
         drew |= draw_texture_rect_uv_no_present(
             tex_id,
-            content.x,
-            content.y + dest_y as f32,
+            draw_x_f,
+            draw_y_f + dest_y as f32,
             draw_width as f32,
             src_height as f32,
             u0,
@@ -2020,7 +2030,7 @@ fn compose_windows(state: &mut Ui2State) {
                 } else {
                     0
                 };
-                if UI2_ENABLE_VERBOSE_COMPOSE_LOGS {
+                if crate::logflag::UI2_ENABLE_VERBOSE_COMPOSE_LOGS {
                     crate::log!(
                         "ui2: window-update id={} seq={} reason={} suppressed={}\n",
                         window.id,
@@ -2052,7 +2062,7 @@ fn compose_windows(state: &mut Ui2State) {
         } else {
             0
         };
-        if UI2_ENABLE_VERBOSE_COMPOSE_LOGS {
+        if crate::logflag::UI2_ENABLE_VERBOSE_COMPOSE_LOGS {
             crate::log!(
                 "ui2: compose seq={} windows={} dirty={} reason={} suppressed={}\n",
                 state.compose_seq,

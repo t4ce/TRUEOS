@@ -1,11 +1,8 @@
 use core::sync::atomic::{AtomicU64, Ordering};
-use spin::Once;
 
 use crate::{limine, pci::mmio, vga};
 
 use super::ensure_tables;
-
-static LOG_ONCE: Once<()> = Once::new();
 
 // Packed (valid|x|y|w|h) so BSP code can place other overlays relative to it.
 // Bits: [63]=valid, [0..15]=x, [16..31]=y, [32..47]=w, [48..62]=h
@@ -21,7 +18,7 @@ static mut BGRT_PIXELS: [u32; MAX_PIXELS] = [0; MAX_PIXELS];
 static mut PALETTE: [u32; MAX_PALETTE] = [0; MAX_PALETTE];
 
 pub fn log_once() {
-    LOG_ONCE.call_once(|| {
+    crate::logflag::BGRT_LOG_ONCE.call_once(|| {
         LAST_LOGO_RECT.store(0, Ordering::Relaxed);
 
         let Some(tables) = ensure_tables() else {

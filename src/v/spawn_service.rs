@@ -592,8 +592,7 @@ const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
 const WEBGPU_BROWSER_READY: u32 = crate::v::readiness::GFX_BACKEND_READY
     | crate::v::readiness::NET_CONFIGURED
-    | crate::v::readiness::TLS_SOCKET_SERVICE_READY
-    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
+    | crate::v::readiness::TLS_SOCKET_SERVICE_READY;
 
 static TASKS: &[TaskSpec] = &[
     TaskSpec::enabled(

@@ -150,16 +150,9 @@ const ICMP_VNET_MAX_INFLIGHT: usize = 32;
 const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
 const NET_POLL_SLEEP_US: u64 = 100;
 const NET_SERVICE_SLEEP_US: u64 = 100;
-const NET_LOG_RX_TAP: bool = false;
-const NET_LOG_TX_TAP: bool = false;
-const NET_LOG_TCP_FLOW: bool = true;
-const NET_LOG_ARP_RX: bool = false;
-const NET_LOG_DHCP_VERBOSE: bool = false;
-const NET_LOG_IPV6_RA: bool = false;
 // DHCPv6 bring-up is easy to misdiagnose because failures often look like
 // "nothing happens". Keep a tiny amount of always-on logging on state changes
 // and a small RX sample to make it obvious whether we transmit/receive.
-const NET_LOG_DHCP6_SAMPLES: usize = 8;
 // Some networks provide DHCPv6 DNS without setting RA O=1, and some RAs omit
 // RDNSS. When enabled, we will send an Information-Request if we don't have
 // any IPv6 DNS yet (from either RA or DHCPv6).
@@ -734,7 +727,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                     let opcode =
                         u16::from_be_bytes([packet[l2_off + 6], packet[l2_off + 7]]);
                     // Always log replies; sample requests.
-                    if NET_LOG_ARP_RX && (opcode == 2 || arp_count <= 32) {
+                    if crate::logflag::NET_LOG_ARP_RX && (opcode == 2 || arp_count <= 32) {
                         let sha = &packet[l2_off + 8..l2_off + 14];
                         let spa = [
                             packet[l2_off + 14],
@@ -907,7 +900,9 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                                             opt_i += olen;
                                         }
                                     }
-                                    if NET_LOG_DHCP_VERBOSE && (chaddr_match != 0 || offer_count == 1) {
+                                    if crate::logflag::NET_LOG_DHCP_VERBOSE
+                                        && (chaddr_match != 0 || offer_count == 1)
+                                    {
                                         crate::log!(
                                             "net: dhcp-offer-rx dev={} count={} ip_src={}.{}.{}.{} ip_dst={}.{}.{}.{} len={} op={} xid=0x{:08x} yiaddr={}.{}.{}.{} chaddr={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} chaddr_match={} cookie_ok={} msg_type={}\n",
                                             self.index,
@@ -946,7 +941,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
             }
 
             // Cheap RX tap for bring-up: log the first few frames per NIC.
-            if NET_LOG_RX_TAP && new_dev_total <= 8 {
+            if crate::logflag::NET_LOG_RX_TAP && new_dev_total <= 8 {
                 if packet.len() >= 14 {
                     let dst = &packet[0..6];
                     let src = &packet[6..12];
@@ -1060,7 +1055,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
 
         // TX tap: only log IPv4/TCP frames for bring-up. This avoids drowning in
         // NDP/ARP chatter while still letting us confirm SYN emission.
-        if NET_LOG_TX_TAP && new_dev_total <= 8192 {
+        if crate::logflag::NET_LOG_TX_TAP && new_dev_total <= 8192 {
             if buf.len() >= 14 {
                 let mut et = u16::from_be_bytes([buf[12], buf[13]]);
                 let mut l2_off = 14usize;
@@ -1221,7 +1216,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                             let udp_off = l2_off + ihl;
                             let sport = u16::from_be_bytes([buf[udp_off], buf[udp_off + 1]]);
                             let dport = u16::from_be_bytes([buf[udp_off + 2], buf[udp_off + 3]]);
-                            if NET_LOG_DHCP_VERBOSE && sport == 68 && dport == 67 {
+                            if crate::logflag::NET_LOG_DHCP_VERBOSE && sport == 68 && dport == 67 {
                                 crate::log!(
                                     "net: tx-tap dev={} saw dhcp client (udp 68->67)\n",
                                     self.index
@@ -1621,7 +1616,7 @@ impl NetService {
             dhcp6_iaid,
             dhcp6_dns6: [[0u8; 16]; DHCP6_DNS6_MAX],
             dhcp6_dns6_count: 0,
-            dhcp6_rx_samples_left: NET_LOG_DHCP6_SAMPLES as u8,
+            dhcp6_rx_samples_left: crate::logflag::NET_LOG_DHCP6_SAMPLES as u8,
 
             ra_seen: false,
             ra_managed: false,
@@ -2446,7 +2441,7 @@ impl NetService {
             );
         }
 
-        if NET_LOG_IPV6_RA {
+        if crate::logflag::NET_LOG_IPV6_RA {
             crate::log!(
                 "net: ipv6 rs dev={} src_ll={:02x}{:02x}:{:02x}{:02x}:... -> ff02::2\n",
                 self.device_index,
@@ -2529,7 +2524,7 @@ impl NetService {
             // Prefer global-unicast for Internet connectivity.
             let raw_slaac_prefix = Self::pick_slaac_prefix_from_ra_icmpv6(ipv6.payload());
 
-            if NET_LOG_IPV6_RA {
+            if crate::logflag::NET_LOG_IPV6_RA {
                 crate::log!(
                     "net: ipv6 ra dev={} from={:02x}{:02x}:{:02x}{:02x}:... lifetime_ms={} prefix_present={}\n",
                     self.device_index,
@@ -2792,7 +2787,7 @@ impl NetService {
         if found {
             self.ra_dns6 = out;
             self.ra_dns6_count = count;
-            if NET_LOG_IPV6_RA {
+            if crate::logflag::NET_LOG_IPV6_RA {
                 crate::log!(
                     "net: ipv6 rdnss dev={} count={}\n",
                     self.device_index,
@@ -3458,7 +3453,7 @@ impl NetService {
                     } else {
                         rx_event_drops_this_poll = rx_event_drops_this_poll.saturating_add(1);
                     }
-                    if NET_LOG_TCP_FLOW {
+                    if crate::logflag::NET_LOG_TCP_FLOW {
                         crate::log!(
                             "net: tcp rx owner={} handle={} len={} queued={}\n",
                             owner,
@@ -3478,7 +3473,7 @@ impl NetService {
             // Convert CLOSE-WAIT into an orderly local close so we eventually emit
             // `NetEvent::Closed`.
             if socket.state() == tcp::State::CloseWait {
-                if NET_LOG_TCP_FLOW {
+                if crate::logflag::NET_LOG_TCP_FLOW {
                     crate::log!(
                         "net: tcp closewait owner={} handle={} rx_bytes_this_poll={} rx_events={} rx_drops={}\n",
                         owner,
@@ -3670,7 +3665,7 @@ impl NetService {
                     let _ = addrs.push(IpCidr::Ipv4(config.address));
                 });
 
-                if NET_LOG_DHCP_VERBOSE {
+                if crate::logflag::NET_LOG_DHCP_VERBOSE {
                     crate::log!(
                         "net: dhcp apply dev={} ipv4_cidr={}.{}.{}.{} /{} iface_addrs={}\n",
                         self.device_index,

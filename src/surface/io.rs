@@ -638,13 +638,6 @@ pub mod cabi {
     const MAX_EST_SUBMIT_BYTES: usize = 512 * 1024;
     // Verbose per-frame begin/end tracing is useful when debugging gfx-cabi pacing,
     // but too noisy for normal runs.
-    const GFX_CABI_FRAME_DEBUG_LOGS: bool = false;
-    static SUBMIT_BUDGET_LOGS: core::sync::atomic::AtomicU32 =
-        core::sync::atomic::AtomicU32::new(0);
-    static VIRGL_END_FRAME_DIAG_LOGS: core::sync::atomic::AtomicU32 =
-        core::sync::atomic::AtomicU32::new(0);
-    static VIRGL_FIRST_FRAME_SEEN: core::sync::atomic::AtomicBool =
-        core::sync::atomic::AtomicBool::new(false);
     const TEX_PIPELINE_FS_MASK_TAG_RAW: u32 = 0x4D41_534B;
     const TEX_PIPELINE_FS_RGBA_TAG_RAW: u32 = 0x5247_4241;
     const ASYNC_TEX_STATUS_UNKNOWN: i32 = 0;
@@ -2412,7 +2405,8 @@ pub mod cabi {
         if est <= MAX_EST_SUBMIT_BYTES {
             return true;
         }
-        let n = SUBMIT_BUDGET_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let n = crate::logflag::GFX_CABI_SUBMIT_BUDGET_LOGS
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         if n < 16 {
             crate::globalog::log(format_args!(
                 "gfx-cabi: submit budget exceeded site={} est={} draw={} cmds={} limit={}\n",
@@ -3341,7 +3335,7 @@ pub mod cabi {
         st.frame_render_target_tex_id = 0;
         st.viewport_configured = false;
         let seq = st.frame_seq;
-        if GFX_CABI_FRAME_DEBUG_LOGS && (seq <= 10 || seq.is_multiple_of(20)) {
+        if crate::logflag::GFX_CABI_FRAME_DEBUG_LOGS && (seq <= 10 || seq.is_multiple_of(20)) {
             crate::globalog::log(format_args!(
                 "gfx-cabi: begin seq={} clear=0x{:06X}\n",
                 seq,
@@ -4022,7 +4016,8 @@ pub mod cabi {
 
             if crate::gfx::is_virgl_active() {
                 let first =
-                    !VIRGL_FIRST_FRAME_SEEN.swap(true, core::sync::atomic::Ordering::AcqRel);
+                    !crate::logflag::GFX_CABI_VIRGL_FIRST_FRAME_SEEN
+                        .swap(true, core::sync::atomic::Ordering::AcqRel);
                 if first {
                     crate::v::readiness::set(crate::v::readiness::GFX_VIRGL_READY);
                     crate::globalog::log(format_args!(
@@ -4031,7 +4026,8 @@ pub mod cabi {
                     ));
                 }
                 let n =
-                    VIRGL_END_FRAME_DIAG_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    crate::logflag::GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS
+                        .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 if first || n < 12 {
                     crate::globalog::log(format_args!(
                         "gfx-cabi: virgl end_frame ok seq={} rgb={} tex={} bytes={} first={}\n",
@@ -4067,7 +4063,8 @@ pub mod cabi {
                 );
             }
         } else if crate::gfx::is_virgl_active() {
-            let n = VIRGL_END_FRAME_DIAG_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            let n = crate::logflag::GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             if n < 12 {
                 crate::globalog::log(format_args!(
                     "gfx-cabi: virgl end_frame failed seq={} rgb={} tex={} bytes={} rc={}\n",
@@ -4076,7 +4073,7 @@ pub mod cabi {
             }
         }
 
-        if GFX_CABI_FRAME_DEBUG_LOGS && (seq <= 10 || (seq % 20) == 0) {
+        if crate::logflag::GFX_CABI_FRAME_DEBUG_LOGS && (seq <= 10 || (seq % 20) == 0) {
             crate::globalog::log(format_args!(
                 "gfx-cabi: end seq={} rgb={} tex={} bytes={} rc={}\n",
                 seq, rgb_draws, tex_draws, draw_bytes, ret

@@ -2,7 +2,7 @@ use crate::pci::mmio;
 use crate::wait;
 use core::mem::size_of;
 use core::ptr::{NonNull, null_mut, read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering, fence};
+use core::sync::atomic::{AtomicU32, Ordering, fence};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
@@ -81,7 +81,6 @@ pub const MAX_XHCI_CONTROLLERS: usize = 8;
 
 static FIRST_CONTROLLER: Mutex<Option<XhcInfo>> = Mutex::new(None);
 static CONTROLLERS: Mutex<Vec<XhcInfo, MAX_XHCI_CONTROLLERS>> = Mutex::new(Vec::new());
-static LOG_PORTS_ON_INIT: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 fn spin_until<F>(max_spins: u32, mut done: F) -> bool
@@ -325,7 +324,7 @@ pub fn init_once() {
 
                 crate::log!("xhci: reset ok sts=0x{:X}\n", sts);
 
-                if LOG_PORTS_ON_INIT.load(Ordering::Acquire) {
+                if crate::logflag::XHCI_LOG_PORTS_ON_INIT.load(Ordering::Acquire) {
                     let ctx = XhciContext::new(info);
                     log_ports_table(&ctx);
                 }
@@ -839,8 +838,7 @@ impl EventRing {
 
         // Lowest-level trace can overwhelm the system (especially on real hardware
         // when Port Status Change Events storm). Keep it off by default.
-        const TRACE_EVENT_TRBS: bool = false;
-        if TRACE_EVENT_TRBS {
+        if crate::logflag::XHCI_TRACE_EVENT_TRBS {
             crate::log!(
                 "xhci: evt dequeue={} cycle={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
                 self.dequeue,
