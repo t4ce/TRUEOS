@@ -168,7 +168,7 @@ unsafe extern "C" fn trueos_kernel_date_day_month_year_js(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    let mut bytes: Vec<u8> = trueos_v::vclock::kernel_date_day_month_year()
+    let bytes: Vec<u8> = trueos_v::vclock::kernel_date_day_month_year()
         .map(|value| value.into_bytes())
         .unwrap_or_default();
     qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())

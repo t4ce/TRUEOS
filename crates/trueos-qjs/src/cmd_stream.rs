@@ -637,11 +637,11 @@ fn cmd_stream_fill_rect(
     let b = ((rgba >> 8) & 0xFF) as u8;
     let a = (rgba & 0xFF) as u8;
 
-    let mut push_rect = |verts: &mut Vec<u8>,
-                         rect_left_px: f32,
-                         rect_top_px: f32,
-                         rect_right_px: f32,
-                         rect_bottom_px: f32| {
+    let push_rect = |verts: &mut Vec<u8>,
+                     rect_left_px: f32,
+                     rect_top_px: f32,
+                     rect_right_px: f32,
+                     rect_bottom_px: f32| {
         if !(rect_left_px < rect_right_px && rect_top_px < rect_bottom_px) {
             return;
         }
@@ -660,7 +660,7 @@ fn cmd_stream_fill_rect(
     let use_chamfer = chamfer && rect_w >= 10.0 && rect_h >= 10.0;
     let chamfer_px = if use_chamfer { 5.0f32 } else { 0.0f32 };
 
-    let mut push_chamfer_fill = |verts: &mut Vec<u8>| {
+    let push_chamfer_fill = |verts: &mut Vec<u8>| {
         let pts = [
             (left_px + chamfer_px, top_px),
             (right_px - chamfer_px, top_px),
@@ -685,7 +685,7 @@ fn cmd_stream_fill_rect(
         }
     };
 
-    let mut push_chamfer_outline = |verts: &mut Vec<u8>| {
+    let push_chamfer_outline = |verts: &mut Vec<u8>| {
         let pts = [
             (left_px + chamfer_px, top_px),
             (right_px - chamfer_px, top_px),
