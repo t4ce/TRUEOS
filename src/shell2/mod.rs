@@ -439,7 +439,7 @@ fn handle_submit(
 ) {
     match mode {
         ShellMode2::Cmd => {
-            let _ = shell2_cmd::try_parse(submitted);
+            let _ = shell2_cmd::try_parse(spawner, io, submitted);
         }
         ShellMode2::Surf => {
             if let Some(html) = shell2_surf::try_inline_html(submitted) {

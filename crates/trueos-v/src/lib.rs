@@ -1,5 +1,7 @@
 #![no_std]
 
+extern crate alloc;
+
 pub mod vled {
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     pub struct Rgb8 {
@@ -23,6 +25,10 @@ pub mod vled {
     }
 }
 
+pub mod vcabi;
+pub mod vclock;
+pub mod vfetch;
+pub mod vfs;
 pub mod vgeom {
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     pub struct Point2i {
@@ -37,4 +43,8 @@ pub mod vgeom {
     }
 }
 
+pub mod vgfx;
+pub mod vinput;
 pub mod vnet;
+pub mod vshell;
+pub mod vsys;

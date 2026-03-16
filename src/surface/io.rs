@@ -706,6 +706,8 @@ pub mod cabi {
 
     struct TextureDrawMandelbrotReq {
         tex_id: u32,
+        ticks: u64,
+        tick_hz: u64,
         repaint_window_id: u32,
         repaint_reason: &'static str,
     }
@@ -901,6 +903,8 @@ pub mod cabi {
 
     pub fn queue_render_mandelbrot_to_texture(
         tex_id: u32,
+        ticks: u64,
+        tick_hz: u64,
         repaint_window_id: u32,
         repaint_reason: &'static str,
     ) -> bool {
@@ -909,6 +913,8 @@ pub mod cabi {
         }
         enqueue_texture_draw_mandelbrot(TextureDrawMandelbrotReq {
             tex_id,
+            ticks,
+            tick_hz,
             repaint_window_id,
             repaint_reason,
         });
@@ -959,7 +965,7 @@ pub mod cabi {
                     }
                 }
                 TextureWorkReq::DrawMandelbrot(req) => {
-                    let rc = render_mandelbrot_to_texture_now(req.tex_id);
+                    let rc = render_mandelbrot_to_texture_now(req.tex_id, req.ticks, req.tick_hz);
                     if rc == 0 && req.repaint_window_id != 0 {
                         let _ = crate::v::ui2::request_window_content_present(
                             req.repaint_window_id,
@@ -2881,7 +2887,7 @@ pub mod cabi {
         render_rgb_triangles_to_texture_now(tex_id, clear_rgb, vtx)
     }
 
-    fn render_mandelbrot_to_texture_now(tex_id: u32) -> i32 {
+    fn render_mandelbrot_to_texture_now(tex_id: u32, ticks: u64, tick_hz: u64) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
         if tex_id == 0 {
@@ -2891,7 +2897,7 @@ pub mod cabi {
             return -2;
         }
 
-        let verts = crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes();
+        let verts = crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes_for_view(ticks, tick_hz);
         let usable = verts.len();
         if usable == 0 {
             return -3;

@@ -3440,13 +3440,14 @@ fn encode_draw_vbo_count(buf: &mut VirglCmdBuf, count: u32) {
 }
 
 fn encode_shader(buf: &mut VirglCmdBuf, handle: u32, shader_type: u32, text: &str) {
-    // Matches virgl_encode_shader_state() with a provided shad_str: num_tokens is a dummy.
+    // For TGSI text shaders virgl still expects a sensible token count in the header.
+    // Small fixed shaders tolerated an arbitrary constant, but larger generated shaders do not.
     let mut bytes = Vec::new();
     bytes.extend_from_slice(text.as_bytes());
     bytes.push(0);
 
     let shader_len = bytes.len() as u32;
-    let num_tokens = 300u32;
+    let num_tokens = ((bytes.len() as u32).div_ceil(4)).max(1);
     let offlen = shader_len & 0x7fff_ffff;
 
     // Base header size=5 dwords: handle, type, offlen, num_tokens, num_outputs.

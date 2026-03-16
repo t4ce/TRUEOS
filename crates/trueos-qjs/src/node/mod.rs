@@ -8,13 +8,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate as qjs;
 
-unsafe extern "C" {
-    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
-    fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
-    fn trueos_cabi_ntp_current_unix_seconds() -> u64;
-    fn trueos_cabi_ntp_kernel_date_day_month_year(out_ptr: *mut u8, out_len: usize) -> usize;
-}
-
 static FETCH_TMP_SEQ: AtomicU32 = AtomicU32::new(1);
 
 unsafe extern "C" fn trueos_node_module_normalize(
@@ -165,7 +158,7 @@ unsafe extern "C" fn trueos_ntp_unix_seconds_js(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    let secs = trueos_cabi_ntp_current_unix_seconds();
+    let secs = trueos_v::vclock::ntp_current_unix_seconds();
     qjs::JS_NewFloat64(ctx, secs as f64)
 }
 
@@ -175,14 +168,9 @@ unsafe extern "C" fn trueos_kernel_date_day_month_year_js(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    let len = trueos_cabi_ntp_kernel_date_day_month_year(core::ptr::null_mut(), 0);
-    let mut bytes: Vec<u8> = vec![0; len];
-    if len != 0 {
-        let got = trueos_cabi_ntp_kernel_date_day_month_year(bytes.as_mut_ptr(), bytes.len());
-        if got < bytes.len() {
-            bytes.truncate(got);
-        }
-    }
+    let mut bytes: Vec<u8> = trueos_v::vclock::kernel_date_day_month_year()
+        .map(|value| value.into_bytes())
+        .unwrap_or_default();
     qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
 }
 
@@ -390,7 +378,7 @@ unsafe extern "C" fn trueos_fetch_text(
     } else {
         let tmp_path = next_fetch_tmp_path();
         let tmp_path_bytes = tmp_path.as_bytes();
-        let _ = trueos_cabi_fs_remove(tmp_path_bytes.as_ptr(), tmp_path_bytes.len());
+        let _ = trueos_v::vfs::remove(tmp_path_bytes);
 
         let start_res = if is_post {
             qjs::async_ops::start_net_post_json_to_file(url, tmp_path_bytes, body, bearer)
@@ -896,7 +884,7 @@ fn log_bytes(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    unsafe { trueos_cabi_write(1, bytes.as_ptr(), bytes.len()) };
+    trueos_v::vsys::write_stream(1, bytes);
 }
 
 #[inline]

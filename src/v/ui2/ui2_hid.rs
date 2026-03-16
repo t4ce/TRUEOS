@@ -334,7 +334,7 @@ fn forward_cursor_wheel_to_selected_window(
     }
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
-            let browser_instance_id = window_browser_instance_id(window);
+            let content_id = window_browser_instance_id(window);
             let snapshot = browser_surface_state_for_window(window);
             let scroll_delta = -(wheel as i32) * UI2_WHEEL_SCROLL_STEP_PX;
             let next_scroll = clamp_hosted_browser_scroll(
@@ -342,10 +342,7 @@ fn forward_cursor_wheel_to_selected_window(
                 i64::from(normalized_hosted_browser_scroll(&snapshot))
                     .saturating_add(i64::from(scroll_delta)),
             );
-            if trueos_qjs::browser_task::set_hosted_scroll_y_for_browser(
-                browser_instance_id,
-                next_scroll,
-            ) {
+            if hosted_set_scroll_y(content_id, next_scroll) {
                 state.compose_reason = "wheel-scroll";
                 true
             } else {
@@ -399,16 +396,16 @@ fn selected_window_id_for_keyboard(state: &Ui2State) -> Option<u32> {
 fn keyboard_output_modifiers_to_browser_mask(modifiers: u8) -> u8 {
     let mut out = 0u8;
     if (modifiers & ((1 << 1) | (1 << 5))) != 0 {
-        out |= trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_SHIFT;
+        out |= HOSTED_KEYBOARD_MOD_SHIFT;
     }
     if (modifiers & ((1 << 0) | (1 << 4))) != 0 {
-        out |= trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_CTRL;
+        out |= HOSTED_KEYBOARD_MOD_CTRL;
     }
     if (modifiers & ((1 << 2) | (1 << 6))) != 0 {
-        out |= trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_ALT;
+        out |= HOSTED_KEYBOARD_MOD_ALT;
     }
     if (modifiers & ((1 << 3) | (1 << 7))) != 0 {
-        out |= trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_META;
+        out |= HOSTED_KEYBOARD_MOD_META;
     }
     out
 }
@@ -458,7 +455,7 @@ fn keyboard_output_key_name(
 
 fn browser_keyboard_event_from_output(
     event: crate::v::keyboard::TrueosKeyboardOutputEvent,
-) -> Option<trueos_qjs::browser_task::HostedKeyboardEvent> {
+) -> Option<UiHostedKeyboardEvent> {
     match event.kind {
         crate::v::keyboard::KEYBOARD_OUTPUT_KIND_TEXT => {
             let utf8_len = (event.utf8_len as usize).min(event.utf8.len());
@@ -466,20 +463,20 @@ fn browser_keyboard_event_from_output(
                 return char::from_u32(event.codepoint).map(|ch| {
                     let mut text = String::new();
                     text.push(ch);
-                    trueos_qjs::browser_task::HostedKeyboardEvent::Text { text }
+                    UiHostedKeyboardEvent::Text { text }
                 });
             }
             let text = core::str::from_utf8(&event.utf8[..utf8_len]).ok()?;
             if text.is_empty() {
                 return None;
             }
-            Some(trueos_qjs::browser_task::HostedKeyboardEvent::Text {
+            Some(UiHostedKeyboardEvent::Text {
                 text: String::from(text),
             })
         }
         crate::v::keyboard::KEYBOARD_OUTPUT_KIND_KEY => {
             let key = keyboard_output_key_name(&event)?;
-            Some(trueos_qjs::browser_task::HostedKeyboardEvent::Key {
+            Some(UiHostedKeyboardEvent::Key {
                 key,
                 modifiers: keyboard_output_modifiers_to_browser_mask(event.modifiers),
             })
@@ -522,12 +519,13 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
                             events.push(next);
                         }
                     }
-                    if !events.is_empty()
-                        && !trueos_qjs::browser_task::queue_hosted_keyboard_events(
-                            window_id,
-                            events.as_slice(),
-                        )
-                    {
+                    let content_id = state
+                        .windows
+                        .iter()
+                        .find(|window| window.id == window_id)
+                        .map(window_browser_instance_id)
+                        .unwrap_or(0);
+                    if !events.is_empty() && !hosted_queue_keyboard_events(content_id, events.as_slice()) {
                         crate::log!(
                             "ui2: keyboard-forward-drop window={} count={}\n",
                             window_id,
@@ -873,10 +871,7 @@ fn update_scroll_drag_for_cursor(
     else {
         return false;
     };
-    if trueos_qjs::browser_task::set_hosted_scroll_y_for_browser(
-        window_browser_instance_id(window),
-        next_scroll,
-    ) {
+    if hosted_set_scroll_y(window_browser_instance_id(window), next_scroll) {
         state.compose_reason = "scrollbar-drag";
         true
     } else {
@@ -932,11 +927,7 @@ fn update_scroll_pan_for_cursor(
         &snapshot,
         i64::from(normalized_hosted_browser_scroll(&snapshot)).saturating_sub(i64::from(dy_px)),
     );
-    if trueos_qjs::browser_task::set_hosted_scroll_for_browser(
-        window_browser_instance_id(window),
-        next_scroll_x,
-        next_scroll_y,
-    ) {
+    if hosted_set_scroll(window_browser_instance_id(window), next_scroll_x, next_scroll_y) {
         state.compose_reason = "scroll-pan";
         true
     } else {

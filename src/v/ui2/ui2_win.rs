@@ -38,25 +38,25 @@ pub struct TrueosUi2WindowInfo {
 
 pub fn browser_window_id() -> Option<u32> {
     let id = UI2_BROWSER_WINDOW_ID.load(Ordering::Acquire);
-    if id == 0 { None } else { Some(id) }
+    if id != 0 {
+        return Some(id);
+    }
+    let hosted_id = hosted_primary_window_id();
+    if hosted_id == 0 {
+        None
+    } else {
+        Some(hosted_id)
+    }
 }
 
 pub fn browser_window_id_for_instance(browser_instance_id: u32) -> Option<u32> {
     let browser_instance_id = if browser_instance_id == 0 {
-        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
+        PRIMARY_HOSTED_CONTENT_ID
     } else {
         browser_instance_id
     };
-    let state_lock = init_state();
-    let state = state_lock.lock();
-    state
-        .windows
-        .iter()
-        .find(|window| {
-            window.kind == Ui2WindowKind::HostedBrowser
-                && window_browser_instance_id(window) == browser_instance_id
-        })
-        .map(|window| window.id)
+    let window_id = hosted_window_id_for_content(browser_instance_id);
+    if window_id == 0 { None } else { Some(window_id) }
 }
 
 pub fn window_info_by_id(id: u32) -> Option<TrueosUi2WindowInfo> {
@@ -105,7 +105,7 @@ pub fn create_hosted_browser_window(
     browser_instance_id: u32,
 ) -> u32 {
     let browser_instance_id = if browser_instance_id == 0 {
-        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
+        PRIMARY_HOSTED_CONTENT_ID
     } else {
         browser_instance_id
     };
@@ -122,10 +122,10 @@ pub fn create_hosted_browser_window(
     if let Some(window) = window_mut(&mut state, id) {
         window.browser_instance_id = browser_instance_id;
     }
-    if browser_instance_id == trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID {
+    if browser_instance_id == PRIMARY_HOSTED_CONTENT_ID {
         UI2_BROWSER_WINDOW_ID.store(id, Ordering::Release);
     }
-    let _ = trueos_qjs::browser_task::bind_browser_window_to_instance(browser_instance_id, id);
+    let _ = hosted_bind_window(browser_instance_id, id);
     state.compose_reason = "create-browser-window";
     refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
@@ -324,7 +324,12 @@ impl Ui2SurfaceWindow {
         true
     }
 
-    pub fn render_mandelbrot(&self, repaint_reason: &'static str) -> bool {
+    pub fn render_mandelbrot(
+        &self,
+        ticks: u64,
+        tick_hz: u64,
+        repaint_reason: &'static str,
+    ) -> bool {
         let repaint_window_id = if is_window_minimized(self.window_id) {
             0
         } else {
@@ -332,6 +337,8 @@ impl Ui2SurfaceWindow {
         };
         if !crate::surface::io::cabi::queue_render_mandelbrot_to_texture(
             self.tex_id,
+            ticks,
+            tick_hz,
             repaint_window_id,
             repaint_reason,
         ) {

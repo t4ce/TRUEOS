@@ -10,6 +10,7 @@ ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
 ISO_EFI_IMG := efi.img
+UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
 
 # Size of the EFI System Partition image that gets embedded into the ISO.
 # Keep this small: the kernel and Limine config live on the ISO9660 filesystem,
@@ -129,7 +130,7 @@ iso-release: BUILD_MODE := release
 iso-release: CARGO_BUILD_FLAGS += --release
 iso-release: iso
 	rm -f $(ISO_DIR)/TrueOS.7z
-	cd $(ISO_DIR) && 7z a -t7z -mx=0 -m0=Copy -ms=off TrueOS.7z $(notdir $(ISO_PATH))
+	cd $(ISO_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) TrueOS.7z $(notdir $(ISO_PATH))
 	env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true
 	env -u GIO_MODULE_DIR gio copy $(ISO_DIR)/TrueOS.7z smb://t4ce@pdjb/home-share/TRUEOS_SITE/
 	@count=$$(cat cnt 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee cnt
