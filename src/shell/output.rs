@@ -161,7 +161,6 @@ impl<'a> ReverseOutput<'a> {
             if ch == '\n' {
                 if !seg.is_empty() {
                     self.write_live_fragment(seg.as_str());
-                    col = col.saturating_add(seg_w);
                     seg.clear();
                     seg_w = 0;
                 }

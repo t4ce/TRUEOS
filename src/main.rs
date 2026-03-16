@@ -4,6 +4,8 @@
 // Rust 2024: `unsafe fn` bodies are safe-by-default; allow legacy style for now.
 #![allow(unsafe_op_in_unsafe_fn)]
 
+const _: f16 = 0.0_f16;
+
 #[macro_use]
 pub extern crate alloc;
 
