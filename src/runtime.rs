@@ -1,10 +1,8 @@
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::Ordering;
 use embassy_executor::{SendSpawner, Spawner};
 use spin::Mutex;
 
 static FIRST_AP_SPAWNER: Mutex<Option<SendSpawner>> = Mutex::new(None);
-static AP_ACTIVITY_LOGGED: AtomicU64 = AtomicU64::new(0);
-
 /// Register a spawner for the first AP (CPU slot 1).
 #[inline]
 pub fn register_first_ap_spawner(spawner: Spawner) {
@@ -46,7 +44,7 @@ fn log_ap_activity_once() {
     }
 
     let mask = 1u64 << slot;
-    if AP_ACTIVITY_LOGGED.fetch_or(mask, Ordering::AcqRel) & mask == 0 {
+    if crate::logflag::AP_ACTIVITY_LOGGED.fetch_or(mask, Ordering::AcqRel) & mask == 0 {
         crate::log!(
             "ap: juiced slot={} mark={}\n",
             slot,

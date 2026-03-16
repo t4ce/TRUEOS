@@ -1,7 +1,7 @@
 use core::ptr::{NonNull, write_volatile};
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use spin::{Mutex, Once};
+use spin::Mutex;
 
 use crate::pci::PciDevice;
 
@@ -53,9 +53,6 @@ impl Tga {
 static TGA: Mutex<Option<Tga>> = Mutex::new(None);
 static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
 static TGA_LAST_DISCONNECT: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
-
-static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
-static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
 
 // Heartbeat policy: write a visible changing pattern as a "driver alive" indicator.
 // We send 0..31 (wrap) so the FPGA can display the low 5 bits.
@@ -278,7 +275,7 @@ pub fn try_init() -> bool {
         found = devices.iter().copied().find(is_tga);
     });
     let Some(dev) = found else {
-        TGA_MISSING_LOG_ONCE.call_once(|| {
+        crate::logflag::TGA_MISSING_LOG_ONCE.call_once(|| {
             crate::log!(
                 "tga: device not found (vid=0x{:04X} did=0x{:04X}, scanned {} devices)\n",
                 TGA_VENDOR_ID,
@@ -494,7 +491,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
 #[embassy_executor::task]
 pub(crate) async fn tga_task() {
-    TGA_TASK_STARTED_LOG_ONCE.call_once(|| {
+    crate::logflag::TGA_TASK_STARTED_LOG_ONCE.call_once(|| {
         crate::log!("tga: task started\n");
     });
     let mut presence_miss_streak: u8 = 0;

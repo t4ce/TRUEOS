@@ -21,6 +21,7 @@ mod host_api;
 mod hv;
 mod iso9660;
 mod limine;
+mod logflag;
 mod net;
 mod pci;
 mod percpu;

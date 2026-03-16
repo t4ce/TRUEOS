@@ -807,8 +807,6 @@ static VHTTPS_SEQ: AtomicU32 = AtomicU32::new(1);
 
 // Keep vhttps logging minimal by default; verbose prints are useful for debugging
 // but can flood globalog during downloads.
-const VHTTPS_VERBOSE: bool = false;
-
 async fn fetch_on_device(
     parsed: &ParsedHttpsUrl,
     dev_idx: usize,
@@ -3080,7 +3078,7 @@ async fn fetch_on_device_to_file(
     ) {
         // Successful fetches are already summarized by the higher-level cache log.
         // Keep detailed timing only for failures (or when explicitly enabled).
-        if rc == 0 && !VHTTPS_VERBOSE {
+        if rc == 0 && !crate::logflag::VHTTPS_VERBOSE {
             return;
         }
         let t_end = Instant::now();
@@ -3251,7 +3249,7 @@ async fn fetch_on_device_to_file(
                                 );
                                 return Err(FetchToFileError::Code(rc));
                             };
-                            if VHTTPS_VERBOSE {
+                            if crate::logflag::VHTTPS_VERBOSE {
                                 log_http_head("vhttps-file: head", parsed.host.as_str(), head);
                             }
 

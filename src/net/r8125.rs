@@ -25,7 +25,6 @@ const POLL_STATE_LOG_EVERY: u64 = 10_000;
 const TX_SUBMIT_DEBUG_FIRST: u64 = 4;
 // Logging knobs: keep bring-up diagnostics available, but don't drown the
 // console during normal operation.
-const EXP_R8125_VERBOSE_LOGS: bool = false;
 const EXP_R8125_SKIP_DESC0: bool = false;
 const EXP_R8125_TXPOLL_90_ENABLE: bool = true;
 const EXP_R8125_TXPOLL_90_VALUE: u16 = 0x0001;
@@ -280,7 +279,7 @@ impl R8125Adapter {
             let imr_rb = self.mmio.read_u32(REG_INTR_MASK_8125);
 
             self.dbg_doorbells = self.dbg_doorbells.saturating_add(1);
-            if EXP_R8125_VERBOSE_LOGS
+            if crate::logflag::R8125_VERBOSE_LOGS
                 && (self.dbg_doorbells <= TX_DOORBELL_DEBUG_FIRST
                     || (self.dbg_doorbells & 0x3FF) == 0)
             {
@@ -895,7 +894,9 @@ impl R8125Adapter {
     fn poll_rx_ring(&mut self) {
         self.dbg_poll_ticks = self.dbg_poll_ticks.saturating_add(1);
 
-        if EXP_R8125_VERBOSE_LOGS && self.dbg_poll_ticks.is_multiple_of(POLL_STATE_LOG_EVERY) {
+        if crate::logflag::R8125_VERBOSE_LOGS
+            && self.dbg_poll_ticks.is_multiple_of(POLL_STATE_LOG_EVERY)
+        {
             self.log_hw_state("periodic");
         }
 
@@ -919,7 +920,7 @@ impl R8125Adapter {
             self.dbg_last_tnpds_lo = tnp_lo_now;
             self.dbg_last_tnpds_hi = tnp_hi_now;
 
-            if EXP_R8125_VERBOSE_LOGS {
+            if crate::logflag::R8125_VERBOSE_LOGS {
                 crate::log!(
                     "net/r8125: reg change cmd 0x{:02x}->0x{:02x} imr 0x{:08x}->0x{:08x} tnpds 0x{:08x}{:08x}->0x{:08x}{:08x}\n",
                     old_cmd,
@@ -939,7 +940,7 @@ impl R8125Adapter {
         let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
         if phy != self.dbg_last_phystat {
             self.dbg_last_phystat = phy;
-            if EXP_R8125_VERBOSE_LOGS {
+            if crate::logflag::R8125_VERBOSE_LOGS {
                 crate::log!(
                     "net/r8125: phystat=0x{:02x} (changed) link_bit0={}\n",
                     phy,
@@ -954,7 +955,7 @@ impl R8125Adapter {
             self.dbg_isr_nonzero = self.dbg_isr_nonzero.saturating_add(1);
             // ISR can be chatty (e.g. link-related or RX OK); keep a small sample
             // and then only very occasionally.
-            if EXP_R8125_VERBOSE_LOGS
+            if crate::logflag::R8125_VERBOSE_LOGS
                 && (self.dbg_isr_nonzero <= 2 || (self.dbg_isr_nonzero & 0xFFF) == 0)
             {
                 crate::log!(
