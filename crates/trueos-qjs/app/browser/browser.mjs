@@ -75,9 +75,11 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getWindowId',
     'getWindowInfo',
     'setWindowTitle',
+    'setWindowIcon',
     'setWindowPosition',
     'setWindowSize',
     'setWindowDecorations',
+    'setWindowHitTestVisible',
     'setWindowVerticalScrollbarSide',
     'setWindowHorizontalScrollbarSide',
     'minimizeWindow',
@@ -101,6 +103,7 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     intent: 'Worker-facing browser contract for the AI task. Keep this surface explicit so agent logic remains isolated from the browser VM.',
     targetShape: 'Close to future computer-use style APIs while still reflecting TRUEOS capabilities today.',
     keyboardShape: 'keyboard(...) accepts Unicode text entries and strict key entries with optional modifiers; pressKey(...) and typeText(...) compile into that canonical event list.',
+    windowShape: 'Window management methods target ui2-hosted browser windows by window id; omit the id to use the current browser window.',
   },
 };
 
@@ -2347,6 +2350,9 @@ runtime.host.__trueosBrowser = {
     if (id <= 0 || typeof fn !== 'function') return false;
     return !!fn(id, String(title || ''));
   },
+  setWindowIcon(iconId = 0, windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowSetIcon', Math.max(0, Number(iconId || 0) | 0));
+  },
   setWindowPosition(x, y, windowId = null) {
     return runWindowAction(windowId, '__trueosWindowSetPosition', Number(x || 0), Number(y || 0));
   },
@@ -2355,6 +2361,9 @@ runtime.host.__trueosBrowser = {
   },
   setWindowDecorations(mode = 'system', windowId = null) {
     return runWindowAction(windowId, '__trueosWindowSetDecorations', encodeWindowDecorations(mode));
+  },
+  setWindowHitTestVisible(visible = true, windowId = null) {
+    return runWindowAction(windowId, '__trueosWindowSetHitTestVisible', visible ? 1 : 0);
   },
   setWindowVerticalScrollbarSide(side = 'left', windowId = null) {
     return runWindowAction(

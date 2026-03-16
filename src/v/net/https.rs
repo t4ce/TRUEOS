@@ -1780,7 +1780,9 @@ async fn fetch_on_device_keepalive(
             match ev {
                 TlsEvent::Opened { handle } => {
                     let mut st = conn.state.lock();
-                    st.handle = Some(handle);
+                    if st.handle.is_none() {
+                        st.handle = Some(handle);
+                    }
                     last_activity = Instant::now();
                 }
                 TlsEvent::Connected { handle } => {
@@ -1795,8 +1797,8 @@ async fn fetch_on_device_keepalive(
                     if st.handle == Some(handle) {
                         st.handle = None;
                         st.connected = false;
+                        connect_in_flight = false;
                     }
-                    connect_in_flight = false;
                 }
                 TlsEvent::TlsError { .. } => {
                     let mut st = conn.state.lock();
@@ -2222,7 +2224,9 @@ async fn fetch_on_device_to_file_keepalive(
             match ev {
                 TlsEvent::Opened { handle } => {
                     let mut st = conn.state.lock();
-                    st.handle = Some(handle);
+                    if st.handle.is_none() {
+                        st.handle = Some(handle);
+                    }
                 }
                 TlsEvent::Connected { handle } => {
                     let mut st = conn.state.lock();
