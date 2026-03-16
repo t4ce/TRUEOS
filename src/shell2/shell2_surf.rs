@@ -25,6 +25,15 @@ pub(crate) fn try_parse(line: &str) -> Option<String> {
     Some(prepare_url(candidate))
 }
 
+pub(crate) fn try_file_reference(line: &str) -> Option<String> {
+    let candidate = strip_wrapping_quotes(line.trim());
+    let path = candidate.strip_prefix("file://")?;
+    if path.trim().is_empty() {
+        return None;
+    }
+    Some(String::from(path))
+}
+
 pub(crate) fn load_inline_html(io: &'static dyn ShellBackend2, html: String) {
     if !trueos_qjs::browser_task::queue_set_html_with_url(
         html,
@@ -35,6 +44,39 @@ pub(crate) fn load_inline_html(io: &'static dyn ShellBackend2, html: String) {
     }
 
     print_shell_line(io, "surf: inline html loaded");
+}
+
+pub(crate) fn load_file_reference(
+    io: &'static dyn ShellBackend2,
+    file_ref: &str,
+) {
+    let path = normalize_file_reference(file_ref);
+    let bytes = match crate::surface::io::kfs::read_file(path.as_str()) {
+        Ok(bytes) => bytes,
+        Err(crate::surface::io::kfs::FsError::NoRoot) => {
+            print_shell_line(io, "surf: no TRUEOSFS root mounted");
+            return;
+        }
+        Err(crate::surface::io::kfs::FsError::NotFound) => {
+            print_shell_line(io, "surf: file not found");
+            return;
+        }
+        Err(_) => {
+            print_shell_line(io, "surf: file read failed");
+            return;
+        }
+    };
+
+    let html = String::from_utf8_lossy(bytes.as_slice()).into_owned();
+    if !trueos_qjs::browser_task::queue_set_html_with_url(
+        html,
+        Some(alloc::format!("file://{}", file_ref)),
+    ) {
+        print_shell_line(io, "surf: browser not running");
+        return;
+    }
+
+    print_shell_line(io, "surf: file html loaded");
 }
 
 pub(crate) fn prepare_call_with_url(
@@ -94,6 +136,14 @@ fn has_http_scheme(s: &str) -> bool {
 
 fn is_url_token(s: &str) -> bool {
     !s.is_empty() && !s.chars().any(char::is_whitespace)
+}
+
+fn normalize_file_reference(path: &str) -> String {
+    let trimmed = path.trim();
+    if let Some(rest) = trimmed.strip_prefix('/') {
+        return String::from(rest);
+    }
+    String::from(trimmed)
 }
 
 fn looks_like_inline_html(s: &str) -> bool {

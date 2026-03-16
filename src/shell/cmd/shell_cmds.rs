@@ -306,6 +306,47 @@ pub(crate) fn cmd_surf(
         return CommandAction::None;
     }
 
+    if looks_like_inline_html(trimmed) {
+        if !trueos_qjs::browser_task::queue_set_html_with_url(
+            String::from(trimmed),
+            Some(String::from("trueos://surf/inline")),
+        ) {
+            ctx.io.write_str("surf: browser not running\r\n");
+            return CommandAction::None;
+        }
+        ctx.io.write_str("surf: inline html loaded\r\n");
+        return CommandAction::None;
+    }
+
+    if let Some(file_ref) = trimmed.strip_prefix("file://") {
+        let path = normalize_surf_file_reference(file_ref);
+        let bytes = match crate::surface::io::kfs::read_file(path.as_str()) {
+            Ok(bytes) => bytes,
+            Err(crate::surface::io::kfs::FsError::NoRoot) => {
+                ctx.io.write_str("surf: no TRUEOSFS root mounted\r\n");
+                return CommandAction::None;
+            }
+            Err(crate::surface::io::kfs::FsError::NotFound) => {
+                ctx.io.write_str("surf: file not found\r\n");
+                return CommandAction::None;
+            }
+            Err(_) => {
+                ctx.io.write_str("surf: file read failed\r\n");
+                return CommandAction::None;
+            }
+        };
+        let html = String::from_utf8_lossy(bytes.as_slice()).into_owned();
+        if !trueos_qjs::browser_task::queue_set_html_with_url(
+            html,
+            Some(alloc::format!("file://{}", file_ref)),
+        ) {
+            ctx.io.write_str("surf: browser not running\r\n");
+            return CommandAction::None;
+        }
+        ctx.io.write_str("surf: file html loaded\r\n");
+        return CommandAction::None;
+    }
+
     let mut url: HString<256> = HString::new();
     for ch in trimmed.chars() {
         if url.push(ch).is_err() {
@@ -321,6 +362,25 @@ pub(crate) fn cmd_surf(
 
     ctx.io.write_str("surf: started\r\n");
     CommandAction::None
+}
+
+fn looks_like_inline_html(s: &str) -> bool {
+    let lower = s.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+
+    (lower.starts_with("<html") && lower.ends_with("</html>"))
+        || lower.starts_with("<!doctype html")
+        || (lower.starts_with('<') && lower.ends_with('>') && lower.contains("</"))
+}
+
+fn normalize_surf_file_reference(path: &str) -> String {
+    let trimmed = path.trim();
+    if let Some(rest) = trimmed.strip_prefix('/') {
+        return String::from(rest);
+    }
+    String::from(trimmed)
 }
 
 #[task]
