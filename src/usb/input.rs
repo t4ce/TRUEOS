@@ -163,15 +163,6 @@ pub fn push_event(evt: InputEvent) {
     }
 }
 
-pub fn pop_event() -> Option<InputEvent> {
-    let mut q = INPUT_QUEUE.lock();
-    if q.is_empty() {
-        None
-    } else {
-        Some(q.remove(0))
-    }
-}
-
 pub fn pop_mouse_event() -> Option<MouseEvent> {
     let mut q = INPUT_QUEUE.lock();
     let mut idx = 0usize;

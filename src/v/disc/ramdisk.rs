@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+// Is okay but currently not wired, was wired and tested as virtual blockdevice
+// and proven trueosfs host mount.
+
 use alloc::{boxed::Box, string::String, vec, vec::Vec};
 
 use crate::disc::block;

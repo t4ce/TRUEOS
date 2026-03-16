@@ -498,14 +498,6 @@ pub fn looks_like_7z(b: &[u8]) -> bool {
     b.get(0..6) == Some(b"7z\xBC\xAF'\x1C")
 }
 
-pub fn packed_streams_slice(payload: &[u8]) -> Result<&[u8], SevenZError> {
-    let archive = parse_single_file_archive(payload)?;
-    match archive.method {
-        Method::Copy => Ok(archive.packed_stream),
-        Method::Lzma2 { .. } => Err(SevenZError::Unsupported),
-    }
-}
-
 pub fn lzma2_decompress_to_vec(data: &[u8], dict_size: u32) -> Result<Vec<u8>, SevenZError> {
     let mut reader = lzma_rust2::Lzma2Reader::new(data, dict_size, None);
     let mut out = Vec::new();

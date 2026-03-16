@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use alloc::{boxed::Box, collections::VecDeque, format, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 

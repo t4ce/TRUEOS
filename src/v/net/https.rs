@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 extern crate alloc;
 
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};

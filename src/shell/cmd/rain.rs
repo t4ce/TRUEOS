@@ -167,14 +167,11 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
         while i < drops.len() {
             let mut remove_drop = false;
             let mut hit_detected = false;
-            let mut should_update = false;
-
-            // Block 1: Check update necessity
-            {
+            let should_update = {
                 let drop = &mut drops[i];
                 drop.ticks_since_update += 1;
-                should_update = drop.ticks_since_update >= 4 || rng.gen_range(0, 3) == 0;
-            }
+                drop.ticks_since_update >= 4 || rng.gen_range(0, 3) == 0
+            };
 
             if !should_update {
                 i += 1;

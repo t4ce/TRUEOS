@@ -278,10 +278,6 @@ fn animated_view_uvs(ticks: u64, tick_hz: u64) -> (f32, f32, f32, f32) {
     (u0, v0, u1, v1)
 }
 
-pub fn fullscreen_quad_rgba_bytes() -> Vec<u8> {
-    fullscreen_quad_rgba_bytes_for_view(0, 1)
-}
-
 pub fn fullscreen_quad_rgba_bytes_for_view(ticks: u64, tick_hz: u64) -> Vec<u8> {
     let (u0, v0, u1, v1) = animated_view_uvs(ticks, tick_hz);
     let verts: [(f32, f32, f32, f32); 6] = [
