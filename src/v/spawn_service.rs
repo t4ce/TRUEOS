@@ -498,9 +498,7 @@ fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
 
     #[cfg(feature = "gfx_intel")]
     {
-        spawn_local(spawner, |spawner| {
-            spawner.spawn(crate::gfx::intel::centered_triangle_demo_task())
-        })
+        spawn_local(spawner, |spawner| spawner.spawn(crate::gfx::intel::scanout_smoke_task()))
     }
 }
 
@@ -737,8 +735,8 @@ static TASKS: &[TaskSpec] = &[
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
-    TaskSpec::disabled(
-        "gfx-intel-triangle-demo",
+    TaskSpec::enabled(
+        "gfx-intel-scanout-demo",
         crate::v::readiness::GFX_INTEL_CLAIMED,
         &GFX_INTEL_TRIANGLE_DEMO_STARTED,
         spawn_gfx_intel_triangle_demo,

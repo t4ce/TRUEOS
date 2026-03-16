@@ -19,7 +19,9 @@ use core::ptr::{write_bytes, write_volatile};
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::Waker;
 
-const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
+// const DEMO_WAV_EMBEDDED: &[u8] =
+//     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
+const DEMO_WAV_EMBEDDED: &[u8] = &[];
 
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_AUDIOCONTROL: u8 = 0x01;
