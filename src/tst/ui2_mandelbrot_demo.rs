@@ -1,7 +1,7 @@
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 const UI2_MANDELBROT_TEX_ID: u32 = 4_702;
-const UI2_MANDELBROT_RT_W: u32 = 512;
+const UI2_MANDELBROT_RT_W: u32 = 768;
 const UI2_MANDELBROT_RT_H: u32 = 512;
 const UI2_MANDELBROT_WINDOW_Z: i16 = 31;
 
@@ -43,20 +43,21 @@ pub async fn ui2_mandelbrot_demo_task() {
         surface_h
     );
 
-    let _ = crate::v::ui2::set_window_title(window_id, "Mandelbrot Shader");
+    let _ = crate::v::ui2::set_window_title(window_id, "Seahorse Valley");
 
     // Let the blank window present first so the window frame lands before shader work is queued.
     Timer::after(EmbassyDuration::from_millis(1)).await;
+    let start_ticks = embassy_time_driver::now();
+    let tick_hz = embassy_time_driver::TICK_HZ;
 
-    if surface.render_mandelbrot("ui2-mandelbrot-demo") {
-        crate::log!(
-            "ui2-mandelbrot-demo: window={} queued shader {}x{}\n",
-            window_id,
-            surface_w,
-            surface_h,
-        );
-    } else {
-        let _ = crate::v::ui2::set_window_title(window_id, "Mandelbrot Shader (unavailable)");
-        crate::log!("ui2-mandelbrot-demo: window={} queue failed\n", window_id);
+    loop {
+        let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_ticks);
+        if !surface.render_mandelbrot(elapsed_ticks, tick_hz, "ui2-mandelbrot-demo") {
+            let _ = crate::v::ui2::set_window_title(window_id, "Seahorse Valley (unavailable)");
+            crate::log!("ui2-mandelbrot-demo: window={} queue failed\n", window_id);
+            break;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(33)).await;
     }
 }

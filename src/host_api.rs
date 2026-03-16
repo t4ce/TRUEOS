@@ -4,22 +4,9 @@ use core::ffi::c_char;
 use core::ffi::c_int;
 
 use trueos_qjs as qjs;
+use trueos_v::{vgfx, vshell};
 
 const LED_TOOL_MAX_PAYLOAD_BYTES: usize = 2048;
-
-unsafe extern "C" {
-    fn trueos_cabi_uart1_shell_write(data_ptr: *const u8, data_len: usize) -> usize;
-    fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
-    fn trueos_cabi_shell1_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
-    fn trueos_cabi_shell1_history_total_lines() -> usize;
-    fn trueos_cabi_shell1_history_text_since(
-        start_line: usize,
-        max_lines: usize,
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize;
-    fn trueos_cabi_gfx_capture_screenshot_data_url(out_ptr: *mut u8, out_cap: usize) -> isize;
-}
 
 #[inline]
 fn js_int32(v: i32) -> qjs::JSValue {
@@ -96,7 +83,7 @@ unsafe extern "C" fn trueos_uart1_shell_write_js(
         return js_int32(0);
     }
     let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
-    let wrote = trueos_cabi_uart1_shell_write(bytes.as_ptr(), bytes.len());
+    let wrote = vshell::uart1_shell_write(bytes);
     qjs::JS_FreeCString(ctx, cstr);
     js_int32(wrote as i32)
 }
@@ -145,7 +132,7 @@ unsafe extern "C" fn trueos_shell1_submit_input_js(
         return js_int32(0);
     }
     let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
-    let wrote = trueos_cabi_shell1_submit_input(bytes.as_ptr(), bytes.len());
+    let wrote = vshell::shell1_submit_input(bytes);
     qjs::JS_FreeCString(ctx, cstr);
     js_int32(wrote as i32)
 }
@@ -156,7 +143,7 @@ unsafe extern "C" fn trueos_shell1_history_total_lines_js(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    js_int32(trueos_cabi_shell1_history_total_lines() as i32)
+    js_int32(vshell::shell1_history_total_lines() as i32)
 }
 
 unsafe extern "C" fn trueos_shell1_history_text_since_js(
@@ -175,22 +162,9 @@ unsafe extern "C" fn trueos_shell1_history_text_since_js(
     } else {
         64usize
     };
-    let len =
-        trueos_cabi_shell1_history_text_since(start_line, max_lines, core::ptr::null_mut(), 0);
-    if len <= 0 {
-        return qjs::JS_NewStringLen(ctx, b"".as_ptr() as *const c_char, 0);
-    }
-    let mut bytes = alloc::vec![0u8; len as usize];
-    let got = trueos_cabi_shell1_history_text_since(
-        start_line,
-        max_lines,
-        bytes.as_mut_ptr(),
-        bytes.len(),
-    );
-    if got <= 0 {
-        return qjs::JS_NewStringLen(ctx, b"".as_ptr() as *const c_char, 0);
-    }
-    bytes.truncate(got as usize);
+    let bytes = vshell::shell1_history_text_since(start_line, max_lines)
+        .map(|text| text.into_bytes())
+        .unwrap_or_default();
     qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
 }
 
@@ -200,16 +174,10 @@ unsafe extern "C" fn trueos_capture_screenshot_js(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    let len = trueos_cabi_gfx_capture_screenshot_data_url(core::ptr::null_mut(), 0);
-    if len <= 0 {
+    let Some(data_url) = vgfx::capture_screenshot_data_url() else {
         return js_null();
-    }
-    let mut bytes = alloc::vec![0u8; len as usize];
-    let got = trueos_cabi_gfx_capture_screenshot_data_url(bytes.as_mut_ptr(), bytes.len());
-    if got <= 0 {
-        return js_null();
-    }
-    bytes.truncate(got as usize);
+    };
+    let bytes = data_url.into_bytes();
     qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
 }
 
@@ -868,19 +836,8 @@ pub unsafe fn install(ctx: *mut qjs::JSContext) {
 }
 
 unsafe fn install_shell1_runtime(ctx: *mut qjs::JSContext) {
-    let len = trueos_cabi_shell1_command_registry_json(core::ptr::null_mut(), 0);
-    if len <= 0 {
+    let Some(json) = vshell::shell1_command_registry_json() else {
         return;
-    }
-    let mut bytes = alloc::vec![0u8; len as usize];
-    let got = trueos_cabi_shell1_command_registry_json(bytes.as_mut_ptr(), bytes.len());
-    if got <= 0 {
-        return;
-    }
-    bytes.truncate(got as usize);
-    let json = match alloc::string::String::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => return,
     };
 
     let global = qjs::JS_GetGlobalObject(ctx);

@@ -5,6 +5,45 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 
 pub const MANDELBROT_PIPELINE_FS_TAG_RAW: u32 = 0x4D44_4C42;
+const FULL_CENTER_X: f32 = -0.5;
+const FULL_CENTER_Y: f32 = 0.0;
+const FULL_X_SPAN: f32 = 1.5;
+const FULL_Y_SPAN: f32 = 1.0;
+const SEA_HORSE_CENTER_X: f32 = -0.743_643_9;
+const SEA_HORSE_CENTER_Y: f32 = 0.131_825_91;
+const SEA_HORSE_X_SPAN_X8: f32 = 0.00075;
+const SEA_HORSE_Y_SPAN_X8: f32 = SEA_HORSE_X_SPAN_X8 * (2.0 / 3.0);
+const ZOOM_DURATION_SECS: u64 = 36;
+const MANDELBROT_PALETTE: [([u8; 3], f32); 15] = [
+    ([0xFF, 0xF0, 0xFF], 4.0),  // pink-ice
+    ([0xFF, 0xD6, 0xFF], 8.0),  // pink-cloud
+    ([0xFF, 0xB8, 0xFF], 12.0), // pink-cotton
+    ([0xFF, 0x8C, 0xFF], 16.0), // bubblegum
+    ([0xFF, 0x63, 0xFF], 20.0), // candy-pink
+    ([0xFF, 0x37, 0xFF], 24.0), // neon-pink
+    ([0xFF, 0x00, 0xF7], 28.0), // laser-magenta
+    ([0xF0, 0x00, 0xE6], 32.0), // hot-fuchsia
+    ([0xD6, 0x00, 0xD6], 36.0), // vivid-fuchsia
+    ([0xBF, 0x00, 0xBF], 40.0), // orchid
+    ([0xA0, 0x00, 0xC8], 44.0), // electric-purple
+    ([0x8A, 0x00, 0xB8], 48.0), // violet-magenta
+    ([0x70, 0x00, 0x8F], 52.0), // deep-violet
+    ([0x52, 0x00, 0x66], 58.0), // dark-plum
+    ([0x33, 0x00, 0x33], 64.0), // midnight-plum
+];
+
+fn emit_palette_immediates(shader: &mut String) {
+    for (idx, (rgb, threshold)) in MANDELBROT_PALETTE.iter().enumerate() {
+        let r = rgb[0] as f32 / 255.0;
+        let g = rgb[1] as f32 / 255.0;
+        let b = rgb[2] as f32 / 255.0;
+        let _ = writeln!(
+            shader,
+            "IMM[{}] FLT32 {{ {:.6}, {:.6}, {:.6}, {:.6} }}",
+            idx, r, g, b, threshold
+        );
+    }
+}
 
 pub fn build_fragment_shader_tgsi_unrolled(iterations: u32) -> String {
     let mut shader = String::new();
@@ -18,6 +57,7 @@ pub fn build_fragment_shader_tgsi_unrolled(iterations: u32) -> String {
     shader.push_str("DCL TEMP[3]\n");
     shader.push_str("DCL TEMP[4]\n");
     shader.push_str("DCL TEMP[5]\n");
+    emit_palette_immediates(&mut shader);
 
     let mut line = 0u32;
     let push = |text: &str, out: &mut String, line_no: &mut u32| {
@@ -48,7 +88,7 @@ pub fn build_fragment_shader_tgsi_unrolled(iterations: u32) -> String {
         &mut line,
     ); // 0
 
-    // Map uv -> complex plane: x=-2..1, y=1..-1
+    // Map uv -> complex plane: x=-2..1, y=1..-1.
     push(
         "MUL TEMP[1].x, IN[0].xxxx, TEMP[0].zzzz",
         &mut shader,
@@ -169,26 +209,88 @@ pub fn build_fragment_shader_tgsi_unrolled(iterations: u32) -> String {
         push("MOV TEMP[2].z, TEMP[4].xxxx", &mut shader, &mut line);
     }
 
-    // White outside the set, black inside.
+    // Map the escape count into the pink -> plum palette.
     push(
-        "SUB TEMP[3].x, TEMP[0].xxxx, TEMP[2].zzzz",
+        "MOV TEMP[3].xyz, IMM[14].xyzx",
         &mut shader,
         &mut line,
     );
-    push("MOV OUT[0].xyz, TEMP[3].xxxx", &mut shader, &mut line);
+    for idx in (0..14).rev() {
+        let line_a = format!("SLT TEMP[4].x, TEMP[2].wwww, IMM[{}].wwww", idx);
+        push(&line_a, &mut shader, &mut line);
+        push(
+            "SUB TEMP[4].y, TEMP[0].xxxx, TEMP[4].xxxx",
+            &mut shader,
+            &mut line,
+        );
+        push(
+            "MUL TEMP[5].xyz, TEMP[3].xyzx, TEMP[4].yyyy",
+            &mut shader,
+            &mut line,
+        );
+        let line_b = format!("MUL TEMP[3].xyz, IMM[{}].xyzx, TEMP[4].xxxx", idx);
+        push(&line_b, &mut shader, &mut line);
+        push(
+            "ADD TEMP[3].xyz, TEMP[5].xyzx, TEMP[3].xyzx",
+            &mut shader,
+            &mut line,
+        );
+    }
+    push("MOV OUT[0].xyz, TEMP[3].xyzx", &mut shader, &mut line);
     push("MOV OUT[0].w, TEMP[0].xxxx", &mut shader, &mut line);
     push("END", &mut shader, &mut line);
     shader
 }
 
+fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+fn zoom_progress(ticks: u64, tick_hz: u64) -> f32 {
+    let leg_ticks = tick_hz.saturating_mul(ZOOM_DURATION_SECS).max(1);
+    let cycle_ticks = leg_ticks.saturating_mul(2).max(1);
+    let phase = (ticks % cycle_ticks) as f32 / cycle_ticks as f32;
+    let t = if phase <= 0.5 {
+        phase * 2.0
+    } else {
+        (1.0 - phase) * 2.0
+    };
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn animated_view_uvs(ticks: u64, tick_hz: u64) -> (f32, f32, f32, f32) {
+    let t = zoom_progress(ticks, tick_hz);
+    let center_x = lerp_f32(FULL_CENTER_X, SEA_HORSE_CENTER_X, t);
+    let center_y = lerp_f32(FULL_CENTER_Y, SEA_HORSE_CENTER_Y, t);
+    let x_span = lerp_f32(FULL_X_SPAN, SEA_HORSE_X_SPAN_X8, t);
+    let y_span = lerp_f32(FULL_Y_SPAN, SEA_HORSE_Y_SPAN_X8, t);
+
+    let x0 = center_x - x_span;
+    let x1 = center_x + x_span;
+    let y0 = center_y - y_span;
+    let y1 = center_y + y_span;
+
+    let u0 = (x0 + 2.0) / 3.0;
+    let u1 = (x1 + 2.0) / 3.0;
+    let v0 = (1.0 - y1) / 2.0;
+    let v1 = (1.0 - y0) / 2.0;
+
+    (u0, v0, u1, v1)
+}
+
 pub fn fullscreen_quad_rgba_bytes() -> Vec<u8> {
+    fullscreen_quad_rgba_bytes_for_view(0, 1)
+}
+
+pub fn fullscreen_quad_rgba_bytes_for_view(ticks: u64, tick_hz: u64) -> Vec<u8> {
+    let (u0, v0, u1, v1) = animated_view_uvs(ticks, tick_hz);
     let verts: [(f32, f32, f32, f32); 6] = [
-        (-1.0, 1.0, 0.0, 0.0),
-        (1.0, 1.0, 1.0, 0.0),
-        (1.0, -1.0, 1.0, 1.0),
-        (-1.0, 1.0, 0.0, 0.0),
-        (1.0, -1.0, 1.0, 1.0),
-        (-1.0, -1.0, 0.0, 1.0),
+        (-1.0, 1.0, u0, v0),
+        (1.0, 1.0, u1, v0),
+        (1.0, -1.0, u1, v1),
+        (-1.0, 1.0, u0, v0),
+        (1.0, -1.0, u1, v1),
+        (-1.0, -1.0, u0, v1),
     ];
 
     let mut out = Vec::with_capacity(verts.len().saturating_mul(20));
