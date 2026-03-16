@@ -4,9 +4,9 @@ extern crate alloc;
 
 use alloc::string::String;
 
+pub mod svg_html;
 pub mod ui_helloworld;
 pub mod ui_html;
-pub mod svg_html;
 
 pub const DEFAULT_EMBEDDED_URL: &str = "trueos://ui/html";
 pub const SVG_EMBEDDED_URL: &str = "trueos://ui/svg-demo";

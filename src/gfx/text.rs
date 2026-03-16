@@ -353,6 +353,38 @@ pub fn draw_atlas_text_in_frame(text: &[u8], x: f32, y: f32, view_w: u32, view_h
     draw_atlas_text_in_frame_alpha(text, x, y, view_w, view_h, 255)
 }
 
+pub fn atlas_text_width_px(text: &[u8]) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+
+    let atlas = font_atlas_large_view();
+    let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+    let glyph_advance_px = |ch: u8| {
+        let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
+        if slot == u16::MAX {
+            slot = fallback;
+        }
+        atlas
+            .widths
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(atlas.cell_w as u8) as f32
+    };
+
+    let mut line_w = 0.0f32;
+    let mut max_w = 0.0f32;
+    for &ch in text {
+        if ch == b'\n' {
+            max_w = max_w.max(line_w);
+            line_w = 0.0;
+            continue;
+        }
+        line_w += glyph_advance_px(ch);
+    }
+    max_w.max(line_w)
+}
+
 pub fn draw_atlas_text_in_frame_alpha(
     text: &[u8],
     x: f32,
