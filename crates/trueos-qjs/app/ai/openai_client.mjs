@@ -57,6 +57,9 @@ export function buildResponsesRequest(options) {
   if (typeof cfg.previousResponseId === "string" && cfg.previousResponseId) {
     request.previous_response_id = cfg.previousResponseId;
   }
+  if (typeof cfg.truncation === "string" && cfg.truncation) {
+    request.truncation = cfg.truncation;
+  }
 
   const effort = typeof cfg.reasoningEffort === "string" && cfg.reasoningEffort
     ? cfg.reasoningEffort

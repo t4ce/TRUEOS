@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use super::*;
+use super::ui2_hid::note_selection_change;
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -17,7 +18,9 @@ pub struct TrueosUi2WindowInfo {
     pub kind: u32,
     pub state: u32,
     pub decoration_mode: u32,
+    pub icon_id: u32,
     pub visible: u32,
+    pub hit_test_visible: u32,
     pub selected: u32,
     pub x: i32,
     pub y: i32,
@@ -430,6 +433,20 @@ pub fn set_window_title(id: u32, title: &str) -> bool {
     note_window_dirty(&mut state, id, "title-window")
 }
 
+pub fn set_window_icon(id: u32, icon_id: u32) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.icon_id == icon_id {
+        return true;
+    }
+    window.icon_id = icon_id;
+    state.compose_reason = "icon-window";
+    note_window_dirty(&mut state, id, "icon-window")
+}
+
 pub fn raise_window(id: u32) -> bool {
     let state_lock = init_state();
     let mut state = state_lock.lock();
@@ -460,6 +477,69 @@ pub fn set_window_visible(id: u32, visible: bool) -> bool {
     let state_lock = init_state();
     let mut state = state_lock.lock();
     set_window_visible_in_state(&mut state, id, visible)
+}
+
+pub fn set_window_hit_test_visible(id: u32, visible: bool) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.hit_test_visible == visible {
+        return true;
+    }
+    window.hit_test_visible = visible;
+    state.compose_reason = "hit-test-window";
+    if !visible {
+        if state.move_drag.window_id == id {
+            state.move_drag = Ui2WindowMoveDrag::default();
+        }
+        if state.resize_drag.window_id == id {
+            state.resize_drag = Ui2WindowResizeDrag::default();
+        }
+        if state.scroll_drag.window_id == id {
+            state.scroll_drag = Ui2WindowScrollDrag::default();
+        }
+        if state.scroll_pan_drag.window_id == id {
+            state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
+        }
+        for cursor in &mut state.cursors {
+            if cursor.selected_window_id == id {
+                cursor.selected_window_id = 0;
+            }
+            if cursor.press_window_id == id {
+                cursor.press_window_id = 0;
+                cursor.press_armed = false;
+            }
+        }
+        let active_selected: Vec<(u32, u32)> = state
+            .cursors
+            .iter()
+            .map(|cursor| (cursor.slot_id, cursor.selected_window_id))
+            .collect();
+        for window in &mut state.windows {
+            let before_len = window.selected_cursor_slots.len();
+            if before_len == 0 {
+                continue;
+            }
+            window.selected_cursor_slots.retain(|slot_id| {
+                active_selected
+                    .iter()
+                    .any(|(selected_slot_id, selected_window_id)| {
+                        *selected_slot_id == *slot_id && *selected_window_id == window.id
+                    })
+            });
+            if window.selected_cursor_slots.len() != before_len {
+                note_selection_change(window);
+            }
+        }
+    }
+    let noted = note_window_dirty(&mut state, id, "hit-test-window");
+    if noted {
+        let _ = note_window_viewport_sync_needed(&mut state, id);
+        refresh_window_hit_entries(&mut state, id);
+    }
+    noted
 }
 
 pub fn close_window(id: u32) -> bool {

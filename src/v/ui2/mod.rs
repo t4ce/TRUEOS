@@ -91,6 +91,16 @@ fn blend_rgba_over(src: (u8, u8, u8, u8), dst: (u8, u8, u8, u8)) -> (u8, u8, u8,
     (r as u8, g as u8, b as u8, a.min(255) as u8)
 }
 
+#[inline]
+fn modulate_alpha(alpha: u8, factor: u8) -> u8 {
+    (((alpha as u32) * (factor as u32) + 127) / 255).min(255) as u8
+}
+
+#[inline]
+fn modulate_rgba_alpha(rgba: (u8, u8, u8, u8), factor: u8) -> (u8, u8, u8, u8) {
+    (rgba.0, rgba.1, rgba.2, modulate_alpha(rgba.3, factor))
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui2CursorState {
     slot_id: u32,
@@ -205,10 +215,12 @@ struct Ui2Window {
     kind: Ui2WindowKind,
     browser_instance_id: u32,
     title: String,
+    icon_id: u32,
     rect: Ui2Rect,
     restore_rect: Ui2Rect,
     z: i16,
     visible: bool,
+    hit_test_visible: bool,
     alpha: u8,
     decoration_mode: Ui2WindowDecorationMode,
     titlebar_visible: bool,
@@ -362,10 +374,12 @@ fn alloc_window(
             0
         },
         title: String::from(title),
+        icon_id: 0,
         rect,
         restore_rect: rect,
         z,
         visible: true,
+        hit_test_visible: true,
         alpha,
         decoration_mode: Ui2WindowDecorationMode::System,
         titlebar_visible: true,
@@ -530,7 +544,7 @@ trait Ui2WindowHitSource {
 
 impl Ui2WindowHitSource for Ui2Window {
     fn append_hit_entries(&self, ctx: &Ui2HitBuildContext<'_>, scene: &mut Ui2HitScene) {
-        if !window_is_renderable(self) {
+        if !window_is_renderable(self) || !self.hit_test_visible {
             return;
         }
 
@@ -819,7 +833,9 @@ fn window_info(state: &Ui2State, window: &Ui2Window) -> TrueosUi2WindowInfo {
         kind: window_kind_id(window.kind),
         state: window.state as u32,
         decoration_mode: window.decoration_mode as u32,
+        icon_id: window.icon_id,
         visible: if window.visible { 1 } else { 0 },
+        hit_test_visible: if window.hit_test_visible { 1 } else { 0 },
         selected: if window.selected_cursor_slots.is_empty() {
             0
         } else {
@@ -1254,8 +1270,7 @@ fn sync_window_container(
             let Some(content) = content else {
                 return true;
             };
-            queue_browser_window_viewport(browser_instance_id, content);
-            true
+            queue_browser_window_viewport(browser_instance_id, content)
         }
         Ui2WindowKind::HostedSurface => true,
     }
@@ -1337,6 +1352,15 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_title(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_icon(window_id: u32, icon_id: u32) -> i32 {
+    if set_window_icon(window_id, icon_id) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_set_position(
     window_id: u32,
     x: i32,
@@ -1368,6 +1392,18 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_decorations(window_id: u32, 
         return -1;
     };
     if set_window_decorations(window_id, mode) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_hit_test_visible(
+    window_id: u32,
+    visible: u32,
+) -> i32 {
+    if set_window_hit_test_visible(window_id, visible != 0) {
         0
     } else {
         -1
@@ -1469,6 +1505,7 @@ fn draw_texture_rect_uv_no_present(
     view_w: u32,
     view_h: u32,
     blend_enabled: bool,
+    alpha: u8,
 ) -> bool {
     if tex_id == 0 || !(width > 0.0 && height > 0.0) {
         return false;
@@ -1489,7 +1526,7 @@ fn draw_texture_rect_uv_no_present(
             r: 255,
             g: 255,
             b: 255,
-            a: 255,
+            a: alpha,
         },
         Ui2TexVertex {
             x: right,
@@ -1499,7 +1536,7 @@ fn draw_texture_rect_uv_no_present(
             r: 255,
             g: 255,
             b: 255,
-            a: 255,
+            a: alpha,
         },
         Ui2TexVertex {
             x: right,
@@ -1509,7 +1546,7 @@ fn draw_texture_rect_uv_no_present(
             r: 255,
             g: 255,
             b: 255,
-            a: 255,
+            a: alpha,
         },
         Ui2TexVertex {
             x: left,
@@ -1519,7 +1556,7 @@ fn draw_texture_rect_uv_no_present(
             r: 255,
             g: 255,
             b: 255,
-            a: 255,
+            a: alpha,
         },
         Ui2TexVertex {
             x: right,
@@ -1529,7 +1566,7 @@ fn draw_texture_rect_uv_no_present(
             r: 255,
             g: 255,
             b: 255,
-            a: 255,
+            a: alpha,
         },
         Ui2TexVertex {
             x: left,
@@ -1539,13 +1576,13 @@ fn draw_texture_rect_uv_no_present(
             r: 255,
             g: 255,
             b: 255,
-            a: 255,
+            a: alpha,
         },
     ];
     let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
     let _ = unsafe {
         crate::surface::io::cabi::trueos_cabi_gfx_set_blend(
-            if blend_enabled { 1 } else { 0 },
+            if blend_enabled || alpha < 255 { 1 } else { 0 },
             0x0302,
             0x0303,
             0x0302,
@@ -1574,6 +1611,7 @@ fn draw_texture_rect_no_present(
     view_w: u32,
     view_h: u32,
     blend_enabled: bool,
+    alpha: u8,
 ) -> bool {
     draw_texture_rect_uv_no_present(
         tex_id,
@@ -1588,15 +1626,16 @@ fn draw_texture_rect_no_present(
         view_w,
         view_h,
         blend_enabled,
+        alpha,
     )
 }
 
-fn queue_browser_window_viewport(browser_instance_id: u32, content: Ui2Rect) {
+fn queue_browser_window_viewport(browser_instance_id: u32, content: Ui2Rect) -> bool {
     let viewport_w = round_to_u32(content.w, 1);
     let viewport_h = round_to_u32(content.h, 1);
     let content_x = libm::roundf(content.x) as i32;
     let content_y = libm::roundf(content.y) as i32;
-    let _ = trueos_qjs::browser_task::set_hosted_viewport_for_browser(
+    trueos_qjs::browser_task::set_hosted_viewport_for_browser(
         browser_instance_id,
         viewport_w,
         viewport_h,
@@ -1604,7 +1643,7 @@ fn queue_browser_window_viewport(browser_instance_id: u32, content: Ui2Rect) {
         content_y,
         viewport_w,
         viewport_h,
-    );
+    )
 }
 
 fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui2Rect) -> bool {
@@ -1671,6 +1710,7 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
             state.view_w,
             state.view_h,
             true,
+            window.alpha,
         );
     }
 
@@ -1679,7 +1719,28 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
 }
 
 fn log_browser_surface_updates(state: &mut Ui2State) {
-    let _ = state;
+    let windows = state.windows.clone();
+    for window in &windows {
+        if window.kind != Ui2WindowKind::HostedBrowser || !window.visible {
+            continue;
+        }
+        let snapshot = browser_surface_state_for_window(window);
+        if let Some(content) = window_content_rect(state, window) {
+            let want_w = round_to_u32(content.w, 1);
+            let want_h = round_to_u32(content.h, 1);
+            if snapshot.viewport_width != want_w || snapshot.viewport_height != want_h {
+                let _ = note_window_viewport_sync_needed(state, window.id);
+                crate::log!(
+                    "ui2: browser-viewport-mismatch window={} have={}x{} want={}x{}\n",
+                    window.id,
+                    snapshot.viewport_width,
+                    snapshot.viewport_height,
+                    want_w,
+                    want_h
+                );
+            }
+        }
+    }
 }
 
 fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2SystemButtonAction) {
@@ -1699,17 +1760,16 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
     };
     let icon_x = rect.x + ((rect.w - 16.0) * 0.5);
     let icon_y = rect.y + ((rect.h - 16.0) * 0.5);
-    let _ = unsafe {
-        crate::gfx::lyon::trueos_cabi_gfx_draw_lyon_icon_no_present(
-            icon_id,
-            0,
-            1,
-            icon_x,
-            icon_y,
-            state.view_w,
-            state.view_h,
-        )
-    };
+    let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
+        icon_id,
+        0,
+        1,
+        icon_x,
+        icon_y,
+        state.view_w,
+        state.view_h,
+        window.alpha,
+    );
 }
 
 fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
@@ -1719,17 +1779,16 @@ fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
     let icon_side = 16.0f32;
     let icon_x = rect.x + ((rect.w - icon_side) * 0.5);
     let icon_y = rect.y + ((rect.h - icon_side) * 0.5);
-    let _ = unsafe {
-        crate::gfx::lyon::trueos_cabi_gfx_draw_lyon_icon_no_present(
-            1,
-            0,
-            1,
-            icon_x,
-            icon_y,
-            state.view_w,
-            state.view_h,
-        )
-    };
+    let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
+        1,
+        0,
+        1,
+        icon_x,
+        icon_y,
+        state.view_w,
+        state.view_h,
+        window.alpha,
+    );
 }
 
 fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
@@ -1839,12 +1898,16 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     let frame_left_rgba = blend_rgba_over((0x00, 0x00, 0x00, 0x52), frame_base_rgba);
     let frame_mid_rgba = frame_base_rgba;
     let frame_right_rgba = blend_rgba_over((0xFF, 0xFF, 0xFF, 0x52), frame_base_rgba);
-    let title_rgba = (0xF3, 0xF4, 0xF6, 0xFF);
+    let frame_left_rgba = modulate_rgba_alpha(frame_left_rgba, window.alpha);
+    let frame_mid_rgba = modulate_rgba_alpha(frame_mid_rgba, window.alpha);
+    let frame_right_rgba = modulate_rgba_alpha(frame_right_rgba, window.alpha);
+    let title_rgba = modulate_rgba_alpha((0xF3, 0xF4, 0xF6, 0xFF), window.alpha);
     let body_rgba = (0xFB, 0xFB, 0xF8, window.alpha);
     let selection_rgba = window
         .selected_cursor_slots
         .first()
         .map(|slot_id| ui2_hid::cursor_color(*slot_id))
+        .map(|rgba| modulate_rgba_alpha(rgba, window.alpha))
         .unwrap_or((0, 0, 0, 0));
     let _ = crate::gfx::lyon::draw_solid_rect_no_present(
         rect.x,
@@ -1900,8 +1963,28 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     }
 
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
+        if window.icon_id != 0 {
+            let icon_side = 16.0f32;
+            let icon_x = rect.x + 8.0;
+            let icon_y = rect.y + ((UI2_TITLE_H - icon_side) * 0.5);
+            let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
+                window.icon_id,
+                0,
+                1,
+                icon_x,
+                icon_y,
+                state.view_w,
+                state.view_h,
+                window.alpha,
+            );
+        }
         let title_w = crate::gfx::text::atlas_text_width_px(window.title.as_bytes());
-        let title_x = rect.x + ((rect.w - title_w) * 0.5).max(0.0);
+        let title_left = if window.icon_id != 0 {
+            rect.x + 28.0
+        } else {
+            rect.x + 8.0
+        };
+        let title_x = (rect.x + ((rect.w - title_w) * 0.5)).max(title_left);
         crate::gfx::text::draw_atlas_text_in_frame_alpha(
             window.title.as_bytes(),
             title_x,
@@ -1938,6 +2021,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                     state.view_w,
                     state.view_h,
                     window.content_tex_blend,
+                    window.alpha,
                 )
             {
                 return;
