@@ -10,10 +10,12 @@ use parry2d::shape::{Ball, Cuboid};
 use spin::{Mutex, Once};
 
 mod ui2_hid;
+mod ui2_hosted;
 mod ui2_win_deco;
 
 mod ui2_win;
 
+use self::ui2_hosted::*;
 pub use self::ui2_win::*;
 pub use self::ui2_win_deco::*;
 
@@ -319,10 +321,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
         if let Some(window) = window_mut(&mut state, browser_id) {
             window.horizontal_scrollbar_side = Ui2WindowHorizontalScrollbarSide::Top;
         }
-        let _ = trueos_qjs::browser_task::bind_browser_window_to_instance(
-            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
-            browser_id,
-        );
+        let _ = hosted_bind_window(PRIMARY_HOSTED_CONTENT_ID, browser_id);
 
         if crate::v::spawn_service::secondary_browser_enabled() {
             let browser2_id = alloc_window(
@@ -339,14 +338,10 @@ fn init_state() -> &'static Mutex<Ui2State> {
                 255,
             );
             if let Some(window) = window_mut(&mut state, browser2_id) {
-                window.browser_instance_id =
-                    trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1;
+                window.browser_instance_id = PRIMARY_HOSTED_CONTENT_ID + 1;
                 window.bottom_scrollbar_visible = false;
             }
-            let _ = trueos_qjs::browser_task::bind_browser_window_to_instance(
-                trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1,
-                browser2_id,
-            );
+            let _ = hosted_bind_window(PRIMARY_HOSTED_CONTENT_ID + 1, browser2_id);
         }
 
         refresh_all_window_hit_entries(&mut state);
@@ -369,7 +364,7 @@ fn alloc_window(
         id,
         kind,
         browser_instance_id: if kind == Ui2WindowKind::HostedBrowser {
-            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
+            PRIMARY_HOSTED_CONTENT_ID
         } else {
             0
         },
@@ -436,68 +431,48 @@ fn window_browser_instance_id(window: &Ui2Window) -> u32 {
         return 0;
     }
     if window.browser_instance_id == 0 {
-        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
+        PRIMARY_HOSTED_CONTENT_ID
     } else {
         window.browser_instance_id
     }
 }
 
-fn browser_surface_state_for_window(
-    window: &Ui2Window,
-) -> trueos_qjs::browser_task::HostedBrowserSurfaceState {
-    trueos_qjs::browser_task::hosted_surface_state_for_browser(window_browser_instance_id(window))
+fn browser_surface_state_for_window(window: &Ui2Window) -> UiHostedSurfaceState {
+    hosted_surface_state(window_browser_instance_id(window))
 }
 
-fn hosted_browser_scroll_max(
-    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
-) -> u32 {
+fn hosted_browser_scroll_max(snapshot: &UiHostedSurfaceState) -> u32 {
     let viewport_h = snapshot.viewport_height.max(1);
     let content_h = snapshot.content_height.max(viewport_h);
     content_h.saturating_sub(viewport_h)
 }
 
-fn hosted_browser_scroll_x_max(
-    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
-) -> u32 {
+fn hosted_browser_scroll_x_max(snapshot: &UiHostedSurfaceState) -> u32 {
     let viewport_w = snapshot.viewport_width.max(1);
     let content_w = snapshot.content_width.max(viewport_w);
     content_w.saturating_sub(viewport_w)
 }
 
-fn clamp_hosted_browser_scroll(
-    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
-    requested_scroll: i64,
-) -> u32 {
+fn clamp_hosted_browser_scroll(snapshot: &UiHostedSurfaceState, requested_scroll: i64) -> u32 {
     let max_scroll = hosted_browser_scroll_max(snapshot) as i64;
     requested_scroll.clamp(0, max_scroll) as u32
 }
 
-fn clamp_hosted_browser_scroll_x(
-    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
-    requested_scroll: i64,
-) -> u32 {
+fn clamp_hosted_browser_scroll_x(snapshot: &UiHostedSurfaceState, requested_scroll: i64) -> u32 {
     let max_scroll = hosted_browser_scroll_x_max(snapshot) as i64;
     requested_scroll.clamp(0, max_scroll) as u32
 }
 
-fn normalized_hosted_browser_scroll(
-    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
-) -> u32 {
+fn normalized_hosted_browser_scroll(snapshot: &UiHostedSurfaceState) -> u32 {
     clamp_hosted_browser_scroll(snapshot, snapshot.scroll_y as i64)
 }
 
-fn normalized_hosted_browser_scroll_x(
-    snapshot: &trueos_qjs::browser_task::HostedBrowserSurfaceState,
-) -> u32 {
+fn normalized_hosted_browser_scroll_x(snapshot: &UiHostedSurfaceState) -> u32 {
     clamp_hosted_browser_scroll_x(snapshot, snapshot.scroll_x as i64)
 }
 
-fn browser_interactive_state_for_window(
-    window: &Ui2Window,
-) -> trueos_qjs::browser_task::HostedBrowserInteractiveState {
-    trueos_qjs::browser_task::hosted_interactive_state_for_browser(window_browser_instance_id(
-        window,
-    ))
+fn browser_interactive_state_for_window(window: &Ui2Window) -> UiHostedInteractiveState {
+    hosted_interactive_state(window_browser_instance_id(window))
 }
 
 fn hosted_browser_interactive_seq(state: &Ui2State) -> u32 {
@@ -507,7 +482,7 @@ fn hosted_browser_interactive_seq(state: &Ui2State) -> u32 {
         .filter(|window| window.kind == Ui2WindowKind::HostedBrowser)
         .map(|window| {
             let instance_id = window_browser_instance_id(window);
-            let seq = trueos_qjs::browser_task::hosted_interactive_seq_for_browser(instance_id);
+            let seq = hosted_interactive_seq(instance_id);
             instance_id.wrapping_mul(1315423911).wrapping_add(seq)
         })
         .fold(0u32, |acc, value| {
@@ -522,7 +497,7 @@ fn hosted_browser_surface_seq(state: &Ui2State) -> u32 {
         .filter(|window| window.kind == Ui2WindowKind::HostedBrowser)
         .map(|window| {
             let instance_id = window_browser_instance_id(window);
-            let seq = trueos_qjs::browser_task::hosted_surface_seq_for_browser(instance_id);
+            let seq = hosted_surface_seq(instance_id);
             instance_id.wrapping_mul(1315423911).wrapping_add(seq)
         })
         .fold(0u32, |acc, value| {
@@ -696,10 +671,7 @@ fn refresh_window_hit_entries(state: &mut Ui2State, owner_window_id: u32) {
     };
 
     if window.kind == Ui2WindowKind::HostedBrowser {
-        state.last_browser_interactive_seq =
-            trueos_qjs::browser_task::hosted_interactive_seq_for_browser(
-                window_browser_instance_id(&window),
-            );
+        state.last_browser_interactive_seq = hosted_interactive_seq(window_browser_instance_id(&window));
     }
 
     let refreshed_entries = {
@@ -1259,7 +1231,7 @@ fn note_window_viewport_sync_needed(state: &mut Ui2State, id: u32) -> bool {
 fn sync_window_container(
     renderable: bool,
     kind: Ui2WindowKind,
-    browser_instance_id: u32,
+    content_id: HostedContentId,
     content: Option<Ui2Rect>,
 ) -> bool {
     if !renderable {
@@ -1270,14 +1242,14 @@ fn sync_window_container(
             let Some(content) = content else {
                 return true;
             };
-            queue_browser_window_viewport(browser_instance_id, content)
+            queue_browser_window_viewport(content_id, content)
         }
         Ui2WindowKind::HostedSurface => true,
     }
 }
 
 fn sync_pending_window_containers(state: &mut Ui2State) {
-    let pending: Vec<(u32, bool, Ui2WindowKind, u32, Option<Ui2Rect>)> = state
+    let pending: Vec<(u32, bool, Ui2WindowKind, HostedContentId, Option<Ui2Rect>)> = state
         .windows
         .iter()
         .filter(|window| window.container_sync_needed)
@@ -1299,8 +1271,8 @@ fn sync_pending_window_containers(state: &mut Ui2State) {
         .collect();
 
     let mut synced_ids = Vec::new();
-    for (id, renderable, kind, browser_instance_id, content) in pending {
-        if sync_window_container(renderable, kind, browser_instance_id, content) {
+    for (id, renderable, kind, content_id, content) in pending {
+        if sync_window_container(renderable, kind, content_id, content) {
             synced_ids.push(id);
         }
     }
@@ -1630,13 +1602,13 @@ fn draw_texture_rect_no_present(
     )
 }
 
-fn queue_browser_window_viewport(browser_instance_id: u32, content: Ui2Rect) -> bool {
+fn queue_browser_window_viewport(content_id: HostedContentId, content: Ui2Rect) -> bool {
     let viewport_w = round_to_u32(content.w, 1);
     let viewport_h = round_to_u32(content.h, 1);
     let content_x = libm::roundf(content.x) as i32;
     let content_y = libm::roundf(content.y) as i32;
-    trueos_qjs::browser_task::set_hosted_viewport_for_browser(
-        browser_instance_id,
+    hosted_set_viewport(
+        content_id,
         viewport_w,
         viewport_h,
         content_x,

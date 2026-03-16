@@ -4,24 +4,6 @@ use alloc::vec::Vec;
 
 use crate as qjs;
 
-unsafe extern "C" {
-    fn trueos_cabi_fs_read_file(
-        path_ptr: *const u8,
-        path_len: usize,
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize;
-    fn trueos_cabi_fs_write_begin(
-        path_ptr: *const u8,
-        path_len: usize,
-        total_len: u64,
-        out_handle: *mut u32,
-    ) -> i32;
-    fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
-    fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
-    fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
-}
-
 #[inline]
 fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
     if v == 0 {
@@ -64,44 +46,17 @@ fn trace_usize_dec(v: usize) {
 }
 
 fn read_file_sync(path: &[u8]) -> Result<Vec<u8>, i32> {
-    let len =
-        unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0) };
-    if len < 0 {
-        return Err(len as i32);
-    }
-    let len = len as usize;
-    let mut out = Vec::new();
-    out.resize(len, 0);
-    let got =
-        unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), out.as_mut_ptr(), out.len()) };
-    if got < 0 {
-        return Err(got as i32);
-    }
-    out.truncate(got as usize);
-    Ok(out)
+    trueos_v::vfs::read_file(path)
 }
 
 fn write_file_sync(path: &[u8], data: &[u8]) -> Result<(), i32> {
-    let mut handle: u32 = 0;
-    let rc = unsafe {
-        trueos_cabi_fs_write_begin(
-            path.as_ptr(),
-            path.len(),
-            data.len() as u64,
-            &mut handle as *mut u32,
-        )
-    };
-    if rc != 0 {
+    let handle = trueos_v::vfs::write_begin(path, data.len() as u64)?;
+    if let Err(rc) = trueos_v::vfs::write_chunk(handle, data) {
+        let _ = trueos_v::vfs::write_abort(handle);
         return Err(rc);
     }
-    let rc = unsafe { trueos_cabi_fs_write_chunk(handle, data.as_ptr(), data.len()) };
-    if rc != 0 {
-        let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
-        return Err(rc);
-    }
-    let rc = unsafe { trueos_cabi_fs_write_finish(handle) };
-    if rc != 0 {
-        let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
+    if let Err(rc) = trueos_v::vfs::write_finish(handle) {
+        let _ = trueos_v::vfs::write_abort(handle);
         return Err(rc);
     }
     Ok(())

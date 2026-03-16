@@ -971,12 +971,13 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
         }
     };
 
-    // Stage 2: unzip
-    // We publish exactly one payload shape:
+    // Stage 2: extract the single ISO payload from a non-solid 7z archive.
+    // Supported updater archive shape:
     // - https://trueos.eu/TrueOS.7z
-    // - 7z store-mode (Copy, non-solid)
-    // - contains exactly one file: trueos.iso
-    let _ = crate::shell::statusbar::set_center(slot_id, "unzip");
+    // - plain 7z header (not encoded header)
+    // - exactly one file: trueos.iso
+    // - COPY or LZMA2 compression
+    let _ = crate::shell::statusbar::set_center(slot_id, "extract");
     log_line(
         slot_id,
         &mut blob,
@@ -995,34 +996,40 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
         return;
     }
 
-    let iso_view: &[u8] = match crate::z7::packed_streams_slice(payload.as_slice()) {
+    let iso = match crate::z7::extract_single_file_to_vec(payload.as_slice()) {
         Ok(v) => v,
         Err(e) => {
             log_line(
                 slot_id,
                 &mut blob,
-                alloc::format!("update: unzip failed ({:?})", e).as_str(),
+                alloc::format!("update: extract failed ({:?})", e).as_str(),
             );
-            log_line(slot_id, &mut blob, "update: ensure TrueOS.7z is store-mode (7z a -t7z -mx=0 -m0=Copy -ms=off TrueOS.7z trueos.iso)");
+            log_line(
+                slot_id,
+                &mut blob,
+                "update: ensure TrueOS.7z is non-solid and contains one trueos.iso payload",
+            );
             set_state(slot_id, SlotState::Failed);
             let _ = set_blob_owned_with_preview(slot_id, blob);
             return;
         }
     };
+    drop(payload);
+    let iso_view = iso.as_slice();
 
     log_line(
         slot_id,
         &mut blob,
         alloc::format!(
-            "update: unzipped trueos.iso bytes={} (iso9660_magic={})",
+            "update: extracted trueos.iso bytes={} (iso9660_magic={})",
             iso_view.len(),
             crate::iso9660::looks_like_iso9660(iso_view)
         )
         .as_str(),
     );
     if !crate::iso9660::looks_like_iso9660(iso_view) {
-        log_line(slot_id, &mut blob, "update: refused (unzipped data is not an ISO9660 image)");
-        log_line(slot_id, &mut blob, "update: ensure TrueOS.7z contains trueos.iso (store-mode, non-solid)");
+        log_line(slot_id, &mut blob, "update: refused (extracted data is not an ISO9660 image)");
+        log_line(slot_id, &mut blob, "update: ensure TrueOS.7z contains trueos.iso");
         set_state(slot_id, SlotState::Failed);
         let _ = set_blob_owned_with_preview(slot_id, blob);
         return;
