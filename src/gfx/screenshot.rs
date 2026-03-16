@@ -69,6 +69,41 @@ struct LastScreenshotBuffer {
     slot: Mutex<ImageBufferSlot>,
 }
 
+struct EncodedScreenshotBuffer {
+    bytes: Mutex<Vec<u8>>,
+}
+
+impl EncodedScreenshotBuffer {
+    const fn new() -> Self {
+        Self {
+            bytes: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn replace(&self, data: &[u8]) {
+        let mut guard = self.bytes.lock();
+        guard.clear();
+        guard.extend_from_slice(data);
+    }
+
+    fn copy_out(&self, out_ptr: *mut u8, out_cap: usize) -> isize {
+        let guard = self.bytes.lock();
+        if guard.is_empty() {
+            return -1;
+        }
+        if out_ptr.is_null() || out_cap == 0 {
+            return guard.len() as isize;
+        }
+        if out_cap < guard.len() {
+            return guard.len() as isize;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(guard.as_ptr(), out_ptr, guard.len());
+        }
+        guard.len() as isize
+    }
+}
+
 impl LastScreenshotBuffer {
     const fn new() -> Self {
         Self {
@@ -244,23 +279,22 @@ pub unsafe extern "C" fn trueos_cabi_gfx_capture_screenshot_data_url(
     out_ptr: *mut u8,
     out_cap: usize,
 ) -> isize {
-    let Some(image) = next_frame_blocking(2000) else {
-        return -1;
-    };
-    let Some(data_url) = encode_png_data_url(&image) else {
-        return -1;
-    };
-
     if out_ptr.is_null() || out_cap == 0 {
+        let Some(image) = next_frame_blocking(2000) else {
+            return -1;
+        };
+        let Some(data_url) = encode_png_data_url(&image) else {
+            return -1;
+        };
+        ENCODED_SCREENSHOT_BUFFER.replace(data_url.as_slice());
         return data_url.len() as isize;
     }
 
-    let copy_len = data_url.len().min(out_cap);
-    core::ptr::copy_nonoverlapping(data_url.as_ptr(), out_ptr, copy_len);
-    copy_len as isize
+    ENCODED_SCREENSHOT_BUFFER.copy_out(out_ptr, out_cap)
 }
 
 static LAST_SCREENSHOT_BUFFER: LastScreenshotBuffer = LastScreenshotBuffer::new();
+static ENCODED_SCREENSHOT_BUFFER: EncodedScreenshotBuffer = EncodedScreenshotBuffer::new();
 static VIRGL_SCREENSHOT_AWAIT: ScreenshotAwait =
     ScreenshotAwait::new(&LAST_SCREENSHOT_BUFFER);
 

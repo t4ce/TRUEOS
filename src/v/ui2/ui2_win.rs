@@ -324,6 +324,27 @@ impl Ui2SurfaceWindow {
         true
     }
 
+    pub fn render_mandelbrot(&self, repaint_reason: &'static str) -> bool {
+        let repaint_window_id = if is_window_minimized(self.window_id) {
+            0
+        } else {
+            self.window_id
+        };
+        if !crate::surface::io::cabi::queue_render_mandelbrot_to_texture(
+            self.tex_id,
+            repaint_window_id,
+            repaint_reason,
+        ) {
+            crate::log!(
+                "ui2-surface-window: mandelbrot render queue failed window={} tex={}\n",
+                self.window_id,
+                self.tex_id
+            );
+            return false;
+        }
+        true
+    }
+
     #[allow(dead_code)]
     pub fn upload_rgba(&self, pixels: &[u8], repaint_reason: &'static str) -> bool {
         let expected = self.width as usize * self.height as usize * 4;
