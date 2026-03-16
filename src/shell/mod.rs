@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+// Shell1 remains intentionally present while commands and flows are migrated to shell2.
+
 use alloc::collections::VecDeque;
 use alloc::string::String as AllocString;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -27,7 +30,6 @@ mod crlf;
 mod interface;
 pub(crate) use interface::{ShellBackend, ShellIo};
 pub(crate) mod backends;
-pub(crate) use backends::{NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND};
 pub(crate) mod uart1_com1;
 
 pub(crate) struct Utf8Decoder {

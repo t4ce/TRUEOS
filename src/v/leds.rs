@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};

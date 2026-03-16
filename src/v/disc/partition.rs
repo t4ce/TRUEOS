@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{char::decode_utf16, cmp, convert::TryInto};
 

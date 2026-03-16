@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
 use crate::disc::block;
