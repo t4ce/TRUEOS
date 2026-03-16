@@ -41,8 +41,15 @@ static CORE_SPAWNERS: Mutex<BTreeMap<u32, embassy_executor::SendSpawner>> =
     Mutex::new(BTreeMap::new());
 static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
-static WARNED_SINGLE_CORE_FALLBACK: AtomicBool = AtomicBool::new(false);
 static LOGGED_WORKER_API_USE: AtomicBool = AtomicBool::new(false);
+
+// Slot 1 is reserved by the kernel as the critical AP for UI2/cursor/HID work.
+const RESERVED_CRITICAL_SLOT: u32 = 1;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum SpawnPolicy {
+    AnyNonCritical,
+}
 
 static WORKERS: Mutex<BTreeMap<u32, WorkerState>> = Mutex::new(BTreeMap::new());
 
@@ -111,8 +118,22 @@ fn core_kind_name(kind: u8) -> &'static str {
     }
 }
 
-fn pick_spawner_affinity_first() -> Option<(u32, u8, embassy_executor::SendSpawner)> {
-    // Prefer performance cores if any are registered; otherwise fall back to all cores.
+#[inline]
+fn pick_from_pool(
+    pool: &[(u32, u8, embassy_executor::SendSpawner)],
+) -> Option<(u32, u8, embassy_executor::SendSpawner)> {
+    if pool.is_empty() {
+        return None;
+    }
+    let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize;
+    Some(pool[idx % pool.len()].clone())
+}
+
+fn pick_spawner_with_policy(
+    policy: SpawnPolicy,
+) -> Option<(u32, u8, embassy_executor::SendSpawner)> {
+    // Slot 1 remains reserved for the latency-critical UI2/cursor/HID lane and
+    // is excluded from QJS scheduling. All other registered cores are eligible.
     let map = CORE_SPAWNERS.lock();
     if map.is_empty() {
         return None;
@@ -120,41 +141,21 @@ fn pick_spawner_affinity_first() -> Option<(u32, u8, embassy_executor::SendSpawn
 
     let kinds = CORE_KINDS.lock();
 
-    let mut bsp: Option<(u32, u8, embassy_executor::SendSpawner)> = None;
-    let mut perf: Vec<(u32, u8, embassy_executor::SendSpawner)> = Vec::new();
-    let mut any: Vec<(u32, u8, embassy_executor::SendSpawner)> = Vec::new();
+    let mut eligible: Vec<(u32, u8, embassy_executor::SendSpawner)> = Vec::new();
     for (slot, sp) in map.iter() {
         let kind = kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN);
-        // Policy: never schedule QJS workers on the BSP (slot 0).
-        if *slot == 0 {
-            bsp = Some((*slot, kind, sp.clone()));
-            continue;
-        }
-        any.push((*slot, kind, sp.clone()));
-        if kind == CORE_KIND_PERF {
-            perf.push((*slot, kind, sp.clone()));
+        if *slot != RESERVED_CRITICAL_SLOT {
+            eligible.push((*slot, kind, sp.clone()));
         }
     }
 
-    if any.is_empty() {
-        // Single-core / BSP-only system: allow a soft fallback so Worker works at all.
-        // This is intentionally one-time logged so it doesn't spam the console.
-        if let Some(bsp) = bsp {
-            if !WARNED_SINGLE_CORE_FALLBACK.swap(true, Ordering::AcqRel) {
-                log_str("qjs-worker: only BSP core available; allowing worker fallback to slot0\n");
-            }
-            return Some(bsp);
-        }
-        return None;
+    match policy {
+        SpawnPolicy::AnyNonCritical => pick_from_pool(&eligible),
     }
-
-    let pool = if !perf.is_empty() { perf } else { any };
-    let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize;
-    Some(pool[idx % pool.len()].clone())
 }
 
 pub fn pick_background_spawner() -> Option<embassy_executor::SendSpawner> {
-    pick_spawner_affinity_first().map(|(_, _, spawner)| spawner)
+    pick_spawner_with_policy(SpawnPolicy::AnyNonCritical).map(|(_, _, spawner)| spawner)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -197,7 +198,7 @@ pub fn spawn_eval(code_utf8: &[u8]) -> Result<u32, i32> {
         log_str("qjs-worker: Worker API path used; worker spawn requested\n");
     }
 
-    let (slot, kind, spawner) = pick_spawner_affinity_first().ok_or(-2)?;
+    let (slot, kind, spawner) = pick_spawner_with_policy(SpawnPolicy::AnyNonCritical).ok_or(-2)?;
     log_str(&format!(
         "qjs-worker: worker#{} created; scheduled slot={} kind={}\n",
         worker_id,
@@ -247,14 +248,6 @@ pub fn has_pending_for_ctx(ctx: *mut qjs::JSContext) -> bool {
     match ctx_role(ctx) {
         CtxRole::Main => {
             let map = WORKERS.lock();
-            // From the main context, treat both:
-            // - pending worker -> parent messages (to_parent)
-            // - pending parent -> worker messages (to_worker)
-            // as work that should keep the pump/drain loop running.
-            //
-            // Without including `to_worker`, the REPL can return to the prompt
-            // immediately after `w.postMessage(...)` before the worker has a chance
-            // to run and respond.
             map.values().any(|st| {
                 let exited = st.exited.load(Ordering::Acquire);
                 !st.to_parent.is_empty() || (!exited && !st.to_worker.is_empty())

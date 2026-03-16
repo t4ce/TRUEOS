@@ -620,7 +620,7 @@ pub mod cabi {
         spin::Mutex::new(VecDeque::new());
     static ASYNC_SVG_REQS: spin::Mutex<VecDeque<AsyncSvgUploadReq>> =
         spin::Mutex::new(VecDeque::new());
-    static TEXTURE_UPLOAD_REQS: spin::Mutex<VecDeque<TextureUploadReq>> =
+    static TEXTURE_UPLOAD_REQS: spin::Mutex<VecDeque<TextureWorkReq>> =
         spin::Mutex::new(VecDeque::new());
     static ASYNC_PNG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_JPEG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
@@ -657,6 +657,19 @@ pub mod cabi {
         repaint_window_id: u32,
         repaint_reason: &'static str,
         update_async_status: bool,
+    }
+
+    struct TextureDrawRgbReq {
+        tex_id: u32,
+        clear_rgb: u32,
+        verts: Vec<u8>,
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    }
+
+    enum TextureWorkReq {
+        Upload(TextureUploadReq),
+        DrawRgb(TextureDrawRgbReq),
     }
 
     fn set_async_tex_status(tex_id: u32, status: i32) {
@@ -717,15 +730,31 @@ pub mod cabi {
 
     fn enqueue_texture_upload(req: TextureUploadReq) {
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        if let Some(existing) = queue.iter_mut().find(|entry| entry.tex_id == req.tex_id) {
-            *existing = req;
+        if let Some(existing) = queue.iter_mut().find(|entry| match entry {
+            TextureWorkReq::Upload(existing) => existing.tex_id == req.tex_id,
+            TextureWorkReq::DrawRgb(_) => false,
+        }) {
+            *existing = TextureWorkReq::Upload(req);
         } else {
-            queue.push_back(req);
+            queue.push_back(TextureWorkReq::Upload(req));
         }
         TEXTURE_UPLOAD_WAIT.notify_one();
     }
 
-    fn take_texture_upload() -> Option<TextureUploadReq> {
+    fn enqueue_texture_draw_rgb(req: TextureDrawRgbReq) {
+        let mut queue = TEXTURE_UPLOAD_REQS.lock();
+        if let Some(existing) = queue.iter_mut().find(|entry| match entry {
+            TextureWorkReq::Upload(_) => false,
+            TextureWorkReq::DrawRgb(existing) => existing.tex_id == req.tex_id,
+        }) {
+            *existing = TextureWorkReq::DrawRgb(req);
+        } else {
+            queue.push_back(TextureWorkReq::DrawRgb(req));
+        }
+        TEXTURE_UPLOAD_WAIT.notify_one();
+    }
+
+    fn take_texture_upload() -> Option<TextureWorkReq> {
         TEXTURE_UPLOAD_REQS.lock().pop_front()
     }
 
@@ -781,32 +810,75 @@ pub mod cabi {
         )
     }
 
+    pub fn queue_render_rgb_triangles_to_texture_copy(
+        tex_id: u32,
+        clear_rgb: u32,
+        vtx: &[u8],
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    ) -> bool {
+        if tex_id == 0 {
+            return false;
+        }
+        if vtx.is_empty() {
+            return true;
+        }
+        const VTX_SIZE: usize = 12;
+        let usable = vtx.len() - (vtx.len() % VTX_SIZE);
+        if usable == 0 {
+            return false;
+        }
+
+        enqueue_texture_draw_rgb(TextureDrawRgbReq {
+            tex_id,
+            clear_rgb,
+            verts: vtx[..usable].to_vec(),
+            repaint_window_id,
+            repaint_reason,
+        });
+        true
+    }
+
     async fn texture_upload_service_inner() {
         loop {
             let Some(req) = take_texture_upload() else {
                 TEXTURE_UPLOAD_WAIT.wait_for_event().await;
                 continue;
             };
-            let rc = upload_texture_rgba_inner(
-                req.tex_id,
-                req.width,
-                req.height,
-                req.rgba.as_ptr(),
-                req.rgba.len(),
-                req.sample_kind,
-            );
-            if req.update_async_status {
-                if rc == 0 {
-                    set_async_tex_status(req.tex_id, ASYNC_TEX_STATUS_READY);
-                } else {
-                    set_async_tex_status(req.tex_id, rc);
+            match req {
+                TextureWorkReq::Upload(req) => {
+                    let rc = upload_texture_rgba_inner(
+                        req.tex_id,
+                        req.width,
+                        req.height,
+                        req.rgba.as_ptr(),
+                        req.rgba.len(),
+                        req.sample_kind,
+                    );
+                    if req.update_async_status {
+                        if rc == 0 {
+                            set_async_tex_status(req.tex_id, ASYNC_TEX_STATUS_READY);
+                        } else {
+                            set_async_tex_status(req.tex_id, rc);
+                        }
+                    }
+                    if rc == 0 && req.repaint_window_id != 0 {
+                        let _ = crate::v::ui2::request_window_content_present(
+                            req.repaint_window_id,
+                            req.repaint_reason,
+                        );
+                    }
                 }
-            }
-            if rc == 0 && req.repaint_window_id != 0 {
-                let _ = crate::v::ui2::request_window_content_present(
-                    req.repaint_window_id,
-                    req.repaint_reason,
-                );
+                TextureWorkReq::DrawRgb(req) => {
+                    let rc =
+                        render_rgb_triangles_to_texture_now(req.tex_id, req.clear_rgb, req.verts.as_slice());
+                    if rc == 0 && req.repaint_window_id != 0 {
+                        let _ = crate::v::ui2::request_window_content_present(
+                            req.repaint_window_id,
+                            req.repaint_reason,
+                        );
+                    }
+                }
             }
             Timer::after_millis(1).await;
         }
@@ -900,13 +972,26 @@ pub mod cabi {
     }
 
     async fn async_svg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
-        let rc = match crate::gfx::svg::upload_svg_bytes_to_texture(tex_id, bytes.as_slice()) {
-            Ok(_) => 0,
+        let rc = match crate::gfx::svg::rasterize_svg_bytes_rgba(bytes.as_slice()) {
+            Ok((info, rgba)) => {
+                if queue_texture_rgba_upload_owned(
+                    tex_id,
+                    info.width,
+                    info.height,
+                    rgba,
+                    TexSampleKind::Rgba,
+                    0,
+                    "",
+                    true,
+                ) {
+                    0
+                } else {
+                    -5
+                }
+            }
             Err(code) => code,
         };
-        if rc == 0 {
-            set_async_tex_status(tex_id, ASYNC_TEX_STATUS_READY);
-        } else {
+        if rc != 0 {
             set_async_tex_status(tex_id, rc);
         }
     }
@@ -2003,7 +2088,7 @@ pub mod cabi {
         ret
     }
 
-    pub fn render_rgb_triangles_to_texture(tex_id: u32, clear_rgb: u32, vtx: &[u8]) -> i32 {
+    fn render_rgb_triangles_to_texture_now(tex_id: u32, clear_rgb: u32, vtx: &[u8]) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
         if tex_id == 0 {
@@ -2091,6 +2176,10 @@ pub mod cabi {
             };
             ret
         })
+    }
+
+    pub fn render_rgb_triangles_to_texture(tex_id: u32, clear_rgb: u32, vtx: &[u8]) -> i32 {
+        render_rgb_triangles_to_texture_now(tex_id, clear_rgb, vtx)
     }
 
     fn upload_texture_rgba_inner(

@@ -4,6 +4,7 @@ import { buildAiPcShellToolBundle, findAiPcShellCommandByToolName } from "./ai_p
 import * as driverdev from "../dd/driverdev.mjs";
 import {
   DEFAULT_PARALLEL_TOOL_CALLS,
+  DEFAULT_REASONING_EFFORT,
   DEFAULT_RESPONSE_MODEL,
   buildResponsesRequest,
   createOpenAiClient,
@@ -68,7 +69,7 @@ const HIDE_BROWSER_KEYBOARD_IN_RESPONSE_TOOLS = readBooleanEnv(
 );
 const OPENAI_COMPUTER_TOOL_TYPE = readStringEnv(
   "TRUEOS_OPENAI_COMPUTER_TOOL_TYPE",
-  "computer_use_preview",
+  "computer",
 );
 const OPENAI_COMPUTER_ENVIRONMENT = readStringEnv(
   "TRUEOS_OPENAI_COMPUTER_ENVIRONMENT",
@@ -76,7 +77,11 @@ const OPENAI_COMPUTER_ENVIRONMENT = readStringEnv(
 );
 const OPENAI_COMPUTER_MODEL = readStringEnv(
   "TRUEOS_OPENAI_COMPUTER_MODEL",
-  "computer-use-preview",
+  "gpt-5.4",
+);
+const OPENAI_COMPUTER_REASONING_EFFORT = readStringEnv(
+  "TRUEOS_OPENAI_COMPUTER_REASONING_EFFORT",
+  "medium",
 );
 const AI_PC_TOOL_POLICY = [
   "Use shell1 function tools whenever the user is asking to run, open, launch, inspect, or control something that maps to a shell1 command.",
@@ -939,7 +944,16 @@ function getHostedComputerViewport() {
   return { width: 1024, height: 768 };
 }
 
+function isPreviewComputerToolType(toolType) {
+  return String(toolType || "").trim().toLowerCase() === "computer_use_preview";
+}
+
 function createHostedComputerTool() {
+  if (!isPreviewComputerToolType(OPENAI_COMPUTER_TOOL_TYPE)) {
+    return {
+      type: OPENAI_COMPUTER_TOOL_TYPE,
+    };
+  }
   const viewport = getHostedComputerViewport();
   return {
     type: OPENAI_COMPUTER_TOOL_TYPE,
@@ -947,6 +961,10 @@ function createHostedComputerTool() {
     display_height: viewport.height,
     environment: OPENAI_COMPUTER_ENVIRONMENT,
   };
+}
+
+function buildComputerOnlyTools() {
+  return [createHostedComputerTool()];
 }
 
 function bytesToHex(bytes) {
@@ -1302,6 +1320,10 @@ function createDriverDevTools() {
 }
 
 function buildTools(entry) {
+  if (entry.computerUse) {
+    return buildComputerOnlyTools();
+  }
+
   const tools = [];
   if (DEFAULT_TOOL_SEARCH) {
     tools.push({ type: "tool_search" });
@@ -1321,9 +1343,6 @@ function buildTools(entry) {
   tools.push(createReadTrueosFsTreeTool());
   tools.push(...createShell1Tools());
   tools.push(...createDriverDevTools());
-  if (entry.computerUse) {
-    tools.push(createHostedComputerTool());
-  }
   tools.push(createAskUserTool());
   return decorateResponseTools(tools);
 }
@@ -1791,7 +1810,10 @@ async function createHostedComputerCallOutput(item) {
 async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX_STEPS, model = DEFAULT_RESPONSE_MODEL) {
   const tools = buildTools(entry);
   const turnModel = entry.computerUse ? OPENAI_COMPUTER_MODEL : model;
-  const needsComputerTruncation = tools.some(isHostedComputerTool);
+  const hasHostedComputerTool = tools.some(isHostedComputerTool);
+  const needsPreviewComputerConfig = entry.computerUse
+    && hasHostedComputerTool
+    && isPreviewComputerToolType(OPENAI_COMPUTER_TOOL_TYPE);
   let nextInput = [
     {
       role: "user",
@@ -1807,7 +1829,10 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
       input: nextInput,
       previousResponseId,
       parallelToolCalls: DEFAULT_PARALLEL_TOOL_CALLS,
-      truncation: needsComputerTruncation ? "auto" : "",
+      truncation: needsPreviewComputerConfig ? "auto" : "",
+      reasoningEffort: needsPreviewComputerConfig
+        ? OPENAI_COMPUTER_REASONING_EFFORT
+        : DEFAULT_REASONING_EFFORT,
     });
 
     logScreenshotUploadSizes(request.input);

@@ -4,23 +4,13 @@ use heapless::String as HString;
 
 use super::{ShellBackend2, print_shell_line};
 
-const ALLOWED_SUFFIXES: [&str; 8] = [".de", ".eu", ".com", ".fr", ".co.uk", ".io", ".net", ".it"];
-
 pub(crate) fn try_parse(line: &str) -> Option<String> {
-    let candidate = line.trim();
+    let candidate = strip_wrapping_quotes(line.trim());
     if candidate.is_empty() || candidate.split_whitespace().nth(1).is_some() {
         return None;
     }
 
-    if !is_domain_chars_only(candidate) {
-        return None;
-    }
-
-    let lowered = candidate.to_ascii_lowercase();
-    if !ALLOWED_SUFFIXES
-        .iter()
-        .any(|suffix| lowered.ends_with(suffix))
-    {
+    if !is_url_token(candidate) {
         return None;
     }
 
@@ -52,33 +42,38 @@ pub(crate) fn prepare_call_with_url(
 }
 
 fn prepare_url(host: &str) -> String {
-    let mut url = String::from("https://");
+    if has_http_scheme(host) {
+        return String::from(host);
+    }
+
+    let mut url = String::from("http://");
     url.push_str(host);
     url
 }
 
-fn is_domain_chars_only(s: &str) -> bool {
-    let mut saw_dot = false;
-    let mut prev_dot = false;
-
-    for ch in s.chars() {
-        let ok = ch.is_ascii_alphanumeric() || ch == '-' || ch == '.';
-        if !ok {
-            return false;
-        }
-
-        if ch == '.' {
-            if prev_dot {
-                return false;
-            }
-            saw_dot = true;
-            prev_dot = true;
-        } else {
-            prev_dot = false;
+fn strip_wrapping_quotes(s: &str) -> &str {
+    if s.len() >= 2 {
+        let b = s.as_bytes();
+        let first = b[0];
+        let last = b[b.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return s[1..s.len() - 1].trim();
         }
     }
+    s
+}
 
-    saw_dot && !s.starts_with('.') && !s.ends_with('.')
+fn has_http_scheme(s: &str) -> bool {
+    s.get(..7)
+        .map(|p| p.eq_ignore_ascii_case("http://"))
+        .unwrap_or(false)
+        || s.get(..8)
+            .map(|p| p.eq_ignore_ascii_case("https://"))
+            .unwrap_or(false)
+}
+
+fn is_url_token(s: &str) -> bool {
+    !s.is_empty() && !s.chars().any(char::is_whitespace)
 }
 
 #[embassy_executor::task]

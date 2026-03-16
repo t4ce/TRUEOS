@@ -243,20 +243,12 @@ impl Ui2SurfaceWindow {
             .into_iter()
             .flatten()
             .collect::<Vec<u8>>();
-        let rc = unsafe {
-            crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
-                tex_id,
-                width,
-                height,
-                pixels.as_ptr(),
-                pixels.len(),
-            )
-        };
-        if rc != 0 {
+        if !crate::surface::io::cabi::queue_texture_rgba_image_upload_copy(
+            tex_id, width, height, &pixels, 0, "ui2-surface-init",
+        ) {
             crate::log!(
-                "ui2-surface-window: init upload failed tex={} rc={} size={}x{}\n",
+                "ui2-surface-window: init upload queue failed tex={} size={}x{}\n",
                 tex_id,
-                rc,
                 width,
                 height
             );
@@ -305,24 +297,26 @@ impl Ui2SurfaceWindow {
         verts: &[u8],
         repaint_reason: &'static str,
     ) -> bool {
-        let rc = crate::surface::io::cabi::render_rgb_triangles_to_texture(
+        let repaint_window_id = if is_window_minimized(self.window_id) {
+            0
+        } else {
+            self.window_id
+        };
+        if !crate::surface::io::cabi::queue_render_rgb_triangles_to_texture_copy(
             self.tex_id,
             clear_rgb,
             verts,
-        );
-        if rc != 0 {
+            repaint_window_id,
+            repaint_reason,
+        ) {
             crate::log!(
-                "ui2-surface-window: rgb render failed window={} tex={} rc={}\n",
+                "ui2-surface-window: rgb render queue failed window={} tex={}\n",
                 self.window_id,
-                self.tex_id,
-                rc
+                self.tex_id
             );
             return false;
         }
-        if is_window_minimized(self.window_id) {
-            return true;
-        }
-        request_window_content_present(self.window_id, repaint_reason)
+        true
     }
 
     #[allow(dead_code)]
@@ -337,28 +331,27 @@ impl Ui2SurfaceWindow {
             );
             return false;
         }
-        let rc = unsafe {
-            crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
-                self.tex_id,
-                self.width,
-                self.height,
-                pixels.as_ptr(),
-                pixels.len(),
-            )
+        let repaint_window_id = if is_window_minimized(self.window_id) {
+            0
+        } else {
+            self.window_id
         };
-        if rc != 0 {
+        if !crate::surface::io::cabi::queue_texture_rgba_image_upload_copy(
+            self.tex_id,
+            self.width,
+            self.height,
+            pixels,
+            repaint_window_id,
+            repaint_reason,
+        ) {
             crate::log!(
-                "ui2-surface-window: rgba upload failed window={} tex={} rc={}\n",
+                "ui2-surface-window: rgba upload queue failed window={} tex={}\n",
                 self.window_id,
-                self.tex_id,
-                rc
+                self.tex_id
             );
             return false;
         }
-        if is_window_minimized(self.window_id) {
-            return true;
-        }
-        request_window_content_present(self.window_id, repaint_reason)
+        true
     }
 }
 

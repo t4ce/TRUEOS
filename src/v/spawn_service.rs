@@ -236,7 +236,7 @@ async fn gfx_virgl_cursor_overlay_task() {
     #[cfg(feature = "gfx_virgl")]
     {
         loop {
-            if !crate::gfx::is_virgl_active() {
+            if !crate::v::readiness::is_set(crate::v::readiness::GFX_BACKEND_READY) {
                 Timer::after(EmbassyDuration::from_millis(16)).await;
                 continue;
             }
@@ -249,14 +249,24 @@ async fn gfx_virgl_cursor_overlay_task() {
 }
 
 fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(gfx_virgl_cursor_overlay_task()) {
+    let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
+        // Wait until AP1 executor is online so this critical cursor path runs there.
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner; // keep signature stable; cursor overlay intentionally targets AP1.
+    match ap1_spawner.spawn(gfx_virgl_cursor_overlay_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
 
 fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::surface::io::cabi::texture_upload_service_task()) {
+    let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
+        // Wait until AP1 executor is online so texture uploads are applied on the critical gfx lane.
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner; // keep signature stable; upload service intentionally targets AP1.
+    match ap1_spawner.spawn(crate::surface::io::cabi::texture_upload_service_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -394,7 +404,12 @@ fn spawn_secondary_browser_startup_route(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_primary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(trueos_qjs::browser_task::boot_browser(
+    let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
+        // Wait until AP1 executor is online so the browser runtime shares the UI2 lane.
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner; // keep signature stable; browser runtime intentionally targets AP1.
+    match ap1_spawner.spawn(trueos_qjs::browser_task::boot_browser(
         trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
     )) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -406,7 +421,12 @@ fn spawn_secondary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
     if !secondary_browser_enabled() {
         return SpawnAttempt::Skipped;
     }
-    match spawner.spawn(trueos_qjs::browser_task::boot_browser(
+    let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
+        // Wait until AP1 executor is online so the browser runtime shares the UI2 lane.
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner; // keep signature stable; browser runtime intentionally targets AP1.
+    match ap1_spawner.spawn(trueos_qjs::browser_task::boot_browser(
         trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1,
     )) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -415,7 +435,12 @@ fn spawn_secondary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::v::ui2::ui2_task()) {
+    let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
+        // Wait until AP1 executor is online so UI2 stays on the critical lane.
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner; // keep signature stable; UI2 intentionally targets AP1.
+    match ap1_spawner.spawn(crate::v::ui2::ui2_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -549,13 +574,18 @@ fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
+    let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
+        // Wait until AP1 executor is online so critical HID/xHCI work runs there.
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner; // keep signature stable; USB controller tasks intentionally target AP1.
     for info in crate::usb::xhci::xhc_list().iter().copied() {
         // reads from hardware into dma buffs
-        let _ = spawner.spawn(crate::usb::xhci::poll_task(info));
+        let _ = ap1_spawner.spawn(crate::usb::xhci::poll_task(info));
         // reads from our dma buffs into usb rings
-        let _ = spawner.spawn(crate::usb::poll_task(info));
+        let _ = ap1_spawner.spawn(crate::usb::poll_task(info));
         // Single long-lived scout per controller. Rescans are triggered via a flag.
-        let _ = spawner.spawn(crate::usb::usb_scout_service(info));
+        let _ = ap1_spawner.spawn(crate::usb::usb_scout_service(info));
     }
     SpawnAttempt::Spawned
 }

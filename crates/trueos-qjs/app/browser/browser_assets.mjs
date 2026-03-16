@@ -1,7 +1,7 @@
 import * as parse5 from 'parse5';
 import { Buffer } from 'node:buffer';
 
-const MAX_FETCHED_IMAGE_BINARIES = 3;
+const MAX_FETCHED_IMAGE_BINARIES = 64;
 
 function getNodeAttr(node, name) {
   const wanted = String(name || '').toLowerCase();
@@ -236,15 +236,12 @@ export function createBrowserAssetManager(options = {}) {
 
   function noteFetchedImageBinary(url) {
     const key = String(url || '').trim();
-    if (!key || fetchedImageBinaryUrls.has(key)) return;
+    if (!key || fetchedImageBinaryUrls.has(key)) return true;
     if (fetchedImageBinaryUrls.size >= MAX_FETCHED_IMAGE_BINARIES) {
-      raiseBrowserError(
-        'TRUEOS_BROWSER_IMAGE_FETCH_LIMIT_REACHED',
-        'Image fetch limit reached for binary image resources',
-        { url: key, limit: MAX_FETCHED_IMAGE_BINARIES },
-      );
+      return false;
     }
     fetchedImageBinaryUrls.add(key);
+    return true;
   }
 
   function queueRepaint() {
@@ -279,7 +276,9 @@ export function createBrowserAssetManager(options = {}) {
           { url: value },
         );
       }
-      noteFetchedImageBinary(value);
+      if (!noteFetchedImageBinary(value)) {
+        throw new Error(`image fetch limit reached (${MAX_FETCHED_IMAGE_BINARIES})`);
+      }
     }
 
     if (typeof host.__trueosResolveReadyImageTexture !== 'function') {
@@ -400,7 +399,7 @@ export function createBrowserAssetManager(options = {}) {
       if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
         continue;
       }
-      void ensureImageTexture(resolvedSrc);
+      void ensureImageTexture(resolvedSrc).catch(() => {});
     }
   }
 
