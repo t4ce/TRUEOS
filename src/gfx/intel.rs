@@ -10,6 +10,36 @@ const MAX_INTEL_DEVICES: usize = 4;
 const CMD_SCRATCH_BYTES: usize = 8192;
 const INTEL_RPL_S_GT1_DEVICE_ID: u16 = 0xA780;
 const INTEL_BAR_SANITY_LIMIT: u64 = 0x40_0000_0000;
+const INTEL_PLANE_ENABLE: u32 = 1 << 31;
+const INTEL_PIPE_A_SRC: usize = 0x6001C;
+const INTEL_PIPE_B_SRC: usize = 0x6101C;
+const INTEL_PIPE_C_SRC: usize = 0x6201C;
+const INTEL_PIPE_D_SRC: usize = 0x6301C;
+const INTEL_TRANS_A_DDI_FUNC_CTL: usize = 0x60400;
+const INTEL_TRANS_B_DDI_FUNC_CTL: usize = 0x61400;
+const INTEL_TRANS_C_DDI_FUNC_CTL: usize = 0x62400;
+const INTEL_TRANS_D_DDI_FUNC_CTL: usize = 0x63400;
+const INTEL_UNI_PLANE_BASE: usize = 0x70180;
+const INTEL_UNI_PLANE_PIPE_STRIDE: usize = 0x1000;
+const INTEL_UNI_PLANE_SLOT_STRIDE: usize = 0x100;
+const INTEL_UNI_PLANE_STRIDE_OFF: usize = 0x08;
+const INTEL_UNI_PLANE_SURF_OFF: usize = 0x1C;
+const INTEL_UNI_PLANE_SURFLIVE_OFF: usize = 0x2C;
+const INTEL_SCANOUT_RETRIES: u32 = 40;
+const INTEL_SCANOUT_RETRY_MS: u64 = 100;
+const INTEL_SCANOUT_DRAW_W: usize = 512;
+const INTEL_SCANOUT_DRAW_H: usize = 192;
+const INTEL_DISPLAY_SWEEP_START: usize = 0x60000;
+const INTEL_DISPLAY_SWEEP_END: usize = 0x74000;
+const INTEL_DISPLAY_PAGE_STRIDE: usize = 0x1000;
+const INTEL_DISPLAY_SWEEP_LOG_LIMIT: usize = 16;
+const INTEL_DISPLAY_WINDOW_DWORDS: usize = 8;
+const INTEL_PLANE_WRITE_SMOKE_STRIDE_BASE: u32 = 0x200;
+const INTEL_PLANE_WRITE_SMOKE_SURF_BASE: u32 = 0x0100_0000;
+const INTEL_PCI_BDSM: u16 = 0x5C;
+const INTEL_PCI_BGSM: u16 = 0x70;
+const INTEL_PCI_ASLS: u16 = 0xFC;
+const INTEL_OPREGION_PROBE_BYTES: usize = 0x40;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum IntelPlatform {
@@ -185,6 +215,81 @@ fn log_intel_bar_inventory(bus: u8, slot: u8, function: u8) {
     }
 }
 
+fn log_intel_config_windows(bus: u8, slot: u8, function: u8) {
+    let bdsm = crate::pci::config_read_u32(bus, slot, function, INTEL_PCI_BDSM);
+    let bgsm = crate::pci::config_read_u32(bus, slot, function, INTEL_PCI_BGSM);
+    let asls = crate::pci::config_read_u32(bus, slot, function, INTEL_PCI_ASLS);
+    crate::log!(
+        "gfx-intel: config {:02X}:{:02X}.{} bdsm=0x{:08X} bgsm=0x{:08X} asls=0x{:08X}\n",
+        bus,
+        slot,
+        function,
+        bdsm,
+        bgsm,
+        asls
+    );
+}
+
+fn log_intel_opregion_probe(bus: u8, slot: u8, function: u8) {
+    let asls = crate::pci::config_read_u32(bus, slot, function, INTEL_PCI_ASLS);
+    if asls == 0 || asls == 0xFFFF_FFFF {
+        crate::log!(
+            "gfx-intel: opregion probe {:02X}:{:02X}.{} skipped asls=0x{:08X}\n",
+            bus,
+            slot,
+            function,
+            asls
+        );
+        return;
+    }
+
+    let phys = (asls as u64) & !0xFFFu64;
+    let page_off = (asls as usize) & 0xFFFusize;
+    let map_len = page_off.saturating_add(INTEL_OPREGION_PROBE_BYTES);
+    let Ok(mapped) = crate::pci::mmio::map_mmio_region_exact(phys, map_len) else {
+        crate::log!(
+            "gfx-intel: opregion probe {:02X}:{:02X}.{} map failed asls=0x{:08X} phys=0x{:X} len=0x{:X}\n",
+            bus,
+            slot,
+            function,
+            asls,
+            phys,
+            map_len
+        );
+        return;
+    };
+
+    let base = unsafe { mapped.as_ptr().add(page_off) };
+    let bytes = unsafe { core::slice::from_raw_parts(base as *const u8, INTEL_OPREGION_PROBE_BYTES) };
+
+    let mut sig = [b'.'; 16];
+    let mut idx = 0usize;
+    while idx < sig.len() {
+        let byte = bytes[idx];
+        sig[idx] = if (0x20..=0x7E).contains(&byte) {
+            byte
+        } else {
+            b'.'
+        };
+        idx += 1;
+    }
+
+    crate::log!(
+        "gfx-intel: opregion probe {:02X}:{:02X}.{} asls=0x{:08X} phys=0x{:X} off=0x{:03X} d0=0x{:08X} d1=0x{:08X} d2=0x{:08X} d3=0x{:08X} sig='{}'\n",
+        bus,
+        slot,
+        function,
+        asls,
+        phys,
+        page_off,
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+        u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+        u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+        core::str::from_utf8(&sig).unwrap_or("................")
+    );
+}
+
 fn decode_mmio_bar(bus: u8, slot: u8, function: u8, index: u8) -> Option<(u64, u64)> {
     let (bar_lo, bar_hi) = crate::pci::read_bar_raw(bus, slot, function, index);
     if bar_lo == 0 || bar_lo == 0xFFFF_FFFF {
@@ -214,14 +319,37 @@ fn maybe_reassign_intel_bar0(
     base: u64,
     size: u64,
 ) -> Option<(u64, u64)> {
+    maybe_reassign_intel_mmio_bar(bus, slot, function, 0, "BAR0", base, size)
+}
+
+fn maybe_reassign_intel_bar2(
+    bus: u8,
+    slot: u8,
+    function: u8,
+    base: u64,
+    size: u64,
+) -> Option<(u64, u64)> {
+    maybe_reassign_intel_mmio_bar(bus, slot, function, 2, "BAR2", base, size)
+}
+
+fn maybe_reassign_intel_mmio_bar(
+    bus: u8,
+    slot: u8,
+    function: u8,
+    index: u8,
+    label: &str,
+    base: u64,
+    size: u64,
+) -> Option<(u64, u64)> {
     if base != 0 && base < INTEL_BAR_SANITY_LIMIT {
         return Some((base, size));
     }
 
-    let (bar_lo, bar_hi) = crate::pci::read_bar_raw(bus, slot, function, 0);
+    let (bar_lo, bar_hi) = crate::pci::read_bar_raw(bus, slot, function, index);
     if (bar_lo & 0x1) != 0 {
         crate::log!(
-            "gfx-intel: BAR0 reassign skipped {:02X}:{:02X}.{} raw=0x{:08X} (io BAR)\n",
+            "gfx-intel: {} reassign skipped {:02X}:{:02X}.{} raw=0x{:08X} (io BAR)\n",
+            label,
             bus,
             slot,
             function,
@@ -234,7 +362,8 @@ fn maybe_reassign_intel_bar0(
     let align = size.max(0x1000);
     let Some(new_base) = crate::pci::alloc_hotplug_mmio_base(bus, size, align) else {
         crate::log!(
-            "gfx-intel: BAR0 reassign alloc failed {:02X}:{:02X}.{} old=0x{:X} size=0x{:X} align=0x{:X}\n",
+            "gfx-intel: {} reassign alloc failed {:02X}:{:02X}.{} old=0x{:X} size=0x{:X} align=0x{:X}\n",
+            label,
             bus,
             slot,
             function,
@@ -245,7 +374,8 @@ fn maybe_reassign_intel_bar0(
         return None;
     };
     crate::log!(
-        "gfx-intel: BAR0 reassign {:02X}:{:02X}.{} old=0x{:X} new=0x{:X} size=0x{:X} align=0x{:X}\n",
+        "gfx-intel: {} reassign {:02X}:{:02X}.{} old=0x{:X} new=0x{:X} size=0x{:X} align=0x{:X}\n",
+        label,
         bus,
         slot,
         function,
@@ -256,13 +386,15 @@ fn maybe_reassign_intel_bar0(
     );
 
     let new_lo = ((new_base as u32) & !0xFu32) | (bar_lo & 0xFu32);
-    crate::pci::config_write_u32(bus, slot, function, 0x10, new_lo);
-    crate::pci::config_write_u32(bus, slot, function, 0x14, (new_base >> 32) as u32);
+    let bar_off = 0x10u16 + (index as u16) * 4;
+    crate::pci::config_write_u32(bus, slot, function, bar_off, new_lo);
+    crate::pci::config_write_u32(bus, slot, function, bar_off + 4, (new_base >> 32) as u32);
 
-    let (new_bar_lo, new_bar_hi) = crate::pci::read_bar_raw(bus, slot, function, 0);
+    let (new_bar_lo, new_bar_hi) = crate::pci::read_bar_raw(bus, slot, function, index);
     if new_bar_lo == 0 || new_bar_lo == 0xFFFF_FFFF {
         crate::log!(
-            "gfx-intel: BAR0 reassign failed {:02X}:{:02X}.{} reread_lo=0x{:08X}\n",
+            "gfx-intel: {} reassign failed {:02X}:{:02X}.{} reread_lo=0x{:08X}\n",
+            label,
             bus,
             slot,
             function,
@@ -275,7 +407,8 @@ fn maybe_reassign_intel_bar0(
     let decoded = ((new_bar_lo as u64) & !0xFu64) | (new_hi << 32);
     if decoded == 0 {
         crate::log!(
-            "gfx-intel: BAR0 reassign produced zero base {:02X}:{:02X}.{}\n",
+            "gfx-intel: {} reassign produced zero base {:02X}:{:02X}.{}\n",
+            label,
             bus,
             slot,
             function
@@ -330,6 +463,8 @@ pub fn init_once() {
         did_match = true;
 
         log_intel_bar_inventory(dev.bus, dev.slot, dev.function);
+        log_intel_config_windows(dev.bus, dev.slot, dev.function);
+        log_intel_opregion_probe(dev.bus, dev.slot, dev.function);
 
         let Some((bar0_base, bar_size)) =
             decode_mmio_bar(dev.bus, dev.slot, dev.function, 0)
@@ -357,10 +492,22 @@ pub fn init_once() {
             continue;
         };
 
-        crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
-
         let (aperture_bar_phys, aperture_bar_size) =
             decode_mmio_bar(dev.bus, dev.slot, dev.function, 2).unwrap_or((0, 0));
+        let (aperture_bar_phys, aperture_bar_size) = if aperture_bar_phys != 0 {
+            maybe_reassign_intel_bar2(
+                dev.bus,
+                dev.slot,
+                dev.function,
+                aperture_bar_phys,
+                aperture_bar_size,
+            )
+            .unwrap_or((aperture_bar_phys, aperture_bar_size))
+        } else {
+            (0, 0)
+        };
+
+        crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
 
         let mut mmio_len = if bar_size == 0 {
             0x20_000usize
@@ -469,6 +616,359 @@ pub fn has_claimed_device() -> bool {
 #[inline]
 pub fn first_claimed_device() -> Option<IntelGfxInfo> {
     *FIRST_DEVICE.lock()
+}
+
+#[derive(Copy, Clone)]
+struct IntelScanoutPlane {
+    pipe_name: char,
+    plane_slot: usize,
+    ctl_off: usize,
+    stride_off: usize,
+    surf_off: usize,
+    surf_live_off: usize,
+    pipe_src_off: usize,
+    trans_ddi_func_ctl_off: usize,
+}
+
+#[derive(Copy, Clone)]
+struct IntelScanoutSurface {
+    plane: IntelScanoutPlane,
+    ctl: u32,
+    stride: usize,
+    surf: u32,
+    surf_live: u32,
+    width: usize,
+    height: usize,
+}
+
+const INTEL_SCANOUT_PIPES: [(char, usize, usize); 4] = [
+    ('A', INTEL_PIPE_A_SRC, INTEL_TRANS_A_DDI_FUNC_CTL),
+    ('B', INTEL_PIPE_B_SRC, INTEL_TRANS_B_DDI_FUNC_CTL),
+    ('C', INTEL_PIPE_C_SRC, INTEL_TRANS_C_DDI_FUNC_CTL),
+    ('D', INTEL_PIPE_D_SRC, INTEL_TRANS_D_DDI_FUNC_CTL),
+];
+
+fn intel_mmio_read32(info: IntelGfxInfo, off: usize) -> u32 {
+    if off + 4 > info.mmio_len {
+        return 0;
+    }
+    let ptr = unsafe { info.mmio_base.as_ptr().add(off) as *const u32 };
+    unsafe { core::ptr::read_volatile(ptr) }
+}
+
+fn intel_mmio_write32(info: IntelGfxInfo, off: usize, value: u32) -> bool {
+    if off + 4 > info.mmio_len {
+        return false;
+    }
+    let ptr = unsafe { info.mmio_base.as_ptr().add(off) as *mut u32 };
+    unsafe { core::ptr::write_volatile(ptr, value) };
+    let _ = intel_mmio_read32(info, off);
+    true
+}
+
+fn decode_pipe_src(pipe_src: u32) -> (usize, usize) {
+    let width = ((pipe_src & 0xFFFF) as usize).saturating_add(1);
+    let height = (((pipe_src >> 16) & 0xFFFF) as usize).saturating_add(1);
+    (width, height)
+}
+
+fn scanout_plane(pipe: usize, plane_slot: usize) -> IntelScanoutPlane {
+    let plane_base = INTEL_UNI_PLANE_BASE
+        + pipe.saturating_mul(INTEL_UNI_PLANE_PIPE_STRIDE)
+        + plane_slot.saturating_mul(INTEL_UNI_PLANE_SLOT_STRIDE);
+    let (pipe_name, pipe_src_off, trans_ddi_func_ctl_off) = INTEL_SCANOUT_PIPES[pipe];
+    IntelScanoutPlane {
+        pipe_name,
+        plane_slot: plane_slot + 1,
+        ctl_off: plane_base,
+        stride_off: plane_base + INTEL_UNI_PLANE_STRIDE_OFF,
+        surf_off: plane_base + INTEL_UNI_PLANE_SURF_OFF,
+        surf_live_off: plane_base + INTEL_UNI_PLANE_SURFLIVE_OFF,
+        pipe_src_off,
+        trans_ddi_func_ctl_off,
+    }
+}
+
+fn log_display_region_sweep(info: IntelGfxInfo) {
+    let mut logged = 0usize;
+    let mut page = INTEL_DISPLAY_SWEEP_START;
+    while page < INTEL_DISPLAY_SWEEP_END {
+        let mut found = None;
+        let mut off = 0usize;
+        while off < INTEL_DISPLAY_PAGE_STRIDE {
+            let value = intel_mmio_read32(info, page + off);
+            if value != 0 {
+                found = Some((off, value));
+                break;
+            }
+            off += 4;
+        }
+        if let Some((first_off, value)) = found {
+            crate::log!(
+                "gfx-intel-scanout: display-page page=0x{:05X} first=0x{:03X} value=0x{:08X}\n",
+                page,
+                first_off,
+                value
+            );
+            if logged < 4 {
+                log_display_window(info, page + first_off);
+            }
+            logged += 1;
+            if logged >= INTEL_DISPLAY_SWEEP_LOG_LIMIT {
+                break;
+            }
+        }
+        page += INTEL_DISPLAY_PAGE_STRIDE;
+    }
+    if logged == 0 {
+        crate::log!(
+            "gfx-intel-scanout: display-page sweep 0x{:05X}..0x{:05X} found no nonzero registers\n",
+            INTEL_DISPLAY_SWEEP_START,
+            INTEL_DISPLAY_SWEEP_END
+        );
+    }
+}
+
+fn log_display_window(info: IntelGfxInfo, center_off: usize) {
+    let aligned = center_off & !0x1Fusize;
+    let mut idx = 0usize;
+    while idx < INTEL_DISPLAY_WINDOW_DWORDS {
+        let off = aligned + idx.saturating_mul(4);
+        let value = intel_mmio_read32(info, off);
+        crate::log!(
+            "gfx-intel-scanout: display-mmio off=0x{:05X} value=0x{:08X}\n",
+            off,
+            value
+        );
+        idx += 1;
+    }
+}
+
+fn probe_scanout_surface(info: IntelGfxInfo) -> Option<IntelScanoutSurface> {
+    let mut found = None;
+    for pipe in 0..INTEL_SCANOUT_PIPES.len() {
+        let plane0 = scanout_plane(pipe, 0);
+        let pipe_src = intel_mmio_read32(info, plane0.pipe_src_off);
+        let trans_ddi = intel_mmio_read32(info, plane0.trans_ddi_func_ctl_off);
+        let (pipe_w, pipe_h) = decode_pipe_src(pipe_src);
+        crate::log!(
+            "gfx-intel-scanout: pipe={} pipe_src=0x{:08X} size={}x{} ddi=0x{:08X}\n",
+            plane0.pipe_name,
+            pipe_src,
+            pipe_w,
+            pipe_h,
+            trans_ddi
+        );
+        for plane_slot in 0..4 {
+            let plane = scanout_plane(pipe, plane_slot);
+            let ctl = intel_mmio_read32(info, plane.ctl_off);
+            let stride = intel_mmio_read32(info, plane.stride_off) as usize;
+            let surf = intel_mmio_read32(info, plane.surf_off);
+            let surf_live = intel_mmio_read32(info, plane.surf_live_off);
+            let enabled = (ctl & INTEL_PLANE_ENABLE) != 0;
+            crate::log!(
+                "gfx-intel-scanout: plane={}{} ctl=0x{:08X} stride=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} enabled={}\n",
+                plane.pipe_name,
+                plane.plane_slot,
+                ctl,
+                stride as u32,
+                surf,
+                surf_live,
+                enabled as u8
+            );
+            if !enabled || surf == 0 || stride < 64 || pipe_w == 0 || pipe_h == 0 {
+                continue;
+            }
+            found = Some(IntelScanoutSurface {
+                plane,
+                ctl,
+                stride,
+                surf,
+                surf_live,
+                width: pipe_w,
+                height: pipe_h,
+            });
+            break;
+        }
+        if found.is_some() {
+            break;
+        }
+    }
+    found
+}
+
+fn write_scanout_test_pattern(
+    base: *mut u8,
+    stride: usize,
+    width: usize,
+    height: usize,
+) {
+    for y in 0..height {
+        let row_ptr = unsafe { base.add(y.saturating_mul(stride)) as *mut u32 };
+        let row = unsafe { core::slice::from_raw_parts_mut(row_ptr, width) };
+        for (x, px) in row.iter_mut().enumerate() {
+            let band = (x.saturating_mul(6)) / width.max(1);
+            let mut color = match band {
+                0 => 0x00002020,
+                1 => 0x00FF3030,
+                2 => 0x0030FF30,
+                3 => 0x003080FF,
+                4 => 0x00F0E040,
+                _ => 0x00F8F8F8,
+            };
+            if x < 4 || y < 4 || x + 4 >= width || y + 4 >= height {
+                color = 0x00FFFFFF;
+            }
+            let diag0 = x.saturating_mul(height.max(1)) / width.max(1);
+            let diag1 = (width.saturating_sub(1).saturating_sub(x))
+                .saturating_mul(height.max(1))
+                / width.max(1);
+            if y.abs_diff(diag0) <= 2 || y.abs_diff(diag1) <= 2 {
+                color = 0x00000000;
+            }
+            if y > height / 3 && y < (height / 3).saturating_mul(2) && x > width / 3 && x < (width / 3).saturating_mul(2) {
+                color = 0x00000000;
+            }
+            *px = color;
+        }
+    }
+}
+
+fn try_scanout_surface_demo(info: IntelGfxInfo) -> bool {
+    let Some(surface) = probe_scanout_surface(info) else {
+        crate::log!("gfx-intel-scanout: no enabled primary plane found\n");
+        return false;
+    };
+
+    if info.aperture_bar_phys == 0 || info.aperture_bar_size == 0 {
+        crate::log!(
+            "gfx-intel-scanout: aperture unavailable bar2=0x{:X} size=0x{:X}\n",
+            info.aperture_bar_phys,
+            info.aperture_bar_size
+        );
+        return false;
+    }
+
+    let surf_offset = (surface.surf as usize) & !0xFFFusize;
+    let surf_page_off = (surface.surf as usize) & 0xFFFusize;
+    let draw_w = surface.width.min(INTEL_SCANOUT_DRAW_W);
+    let draw_h = surface.height.min(INTEL_SCANOUT_DRAW_H);
+    let stride = surface.stride.max(draw_w.saturating_mul(4));
+    let max_width = (stride / 4).max(1);
+    let draw_w = draw_w.min(max_width);
+    let bytes = surf_page_off.saturating_add(draw_h.saturating_mul(stride));
+
+    if draw_w == 0 || draw_h == 0 {
+        crate::log!(
+            "gfx-intel-scanout: plane={}{} unusable draw size={}x{} stride=0x{:X}\n",
+            surface.plane.pipe_name,
+            surface.plane.plane_slot,
+            draw_w,
+            draw_h,
+            stride
+        );
+        return false;
+    }
+
+    if surf_offset.saturating_add(bytes) > info.aperture_bar_size as usize {
+        crate::log!(
+            "gfx-intel-scanout: plane={}{} surf=0x{:08X} exceeds aperture size=0x{:X} bytes=0x{:X}\n",
+            surface.plane.pipe_name,
+            surface.plane.plane_slot,
+            surface.surf,
+            info.aperture_bar_size,
+            bytes
+        );
+        return false;
+    }
+
+    let phys = info.aperture_bar_phys.saturating_add(surf_offset as u64);
+    let Ok(mapped) = crate::pci::mmio::map_mmio_region_exact(phys, bytes) else {
+        crate::log!(
+            "gfx-intel-scanout: plane={}{} aperture map failed phys=0x{:X} bytes=0x{:X}\n",
+            surface.plane.pipe_name,
+            surface.plane.plane_slot,
+            phys,
+            bytes
+        );
+        return false;
+    };
+
+    let ptr = unsafe { mapped.as_ptr().add(surf_page_off) };
+    write_scanout_test_pattern(ptr, stride, draw_w, draw_h);
+    crate::log!(
+        "gfx-intel-scanout: wrote test card plane={}{} surf=0x{:08X} surf_live=0x{:08X} ctl=0x{:08X} stride=0x{:X} visible={}x{} draw={}x{} aperture=0x{:X}/0x{:X}\n",
+        surface.plane.pipe_name,
+        surface.plane.plane_slot,
+        surface.surf,
+        surface.surf_live,
+        surface.ctl,
+        stride,
+        surface.width,
+        surface.height,
+        draw_w,
+        draw_h,
+        info.aperture_bar_phys,
+        info.aperture_bar_size
+    );
+    true
+}
+
+fn plane_write_smoke_test(info: IntelGfxInfo) {
+    let mut writable = 0usize;
+    for pipe in 0..INTEL_SCANOUT_PIPES.len() {
+        for plane_slot in 0..4 {
+            let plane = scanout_plane(pipe, plane_slot);
+            let ctl = intel_mmio_read32(info, plane.ctl_off);
+            if (ctl & INTEL_PLANE_ENABLE) != 0 {
+                continue;
+            }
+
+            let orig_stride = intel_mmio_read32(info, plane.stride_off);
+            let orig_surf = intel_mmio_read32(info, plane.surf_off);
+            let test_stride =
+                INTEL_PLANE_WRITE_SMOKE_STRIDE_BASE + (pipe as u32 * 0x40) + (plane_slot as u32 * 0x10);
+            let test_surf =
+                INTEL_PLANE_WRITE_SMOKE_SURF_BASE + (pipe as u32 * 0x0020_0000) + (plane_slot as u32 * 0x0002_0000);
+
+            let wrote_stride = intel_mmio_write32(info, plane.stride_off, test_stride);
+            let wrote_surf = intel_mmio_write32(info, plane.surf_off, test_surf);
+            let rb_stride = intel_mmio_read32(info, plane.stride_off);
+            let rb_surf = intel_mmio_read32(info, plane.surf_off);
+
+            let _ = intel_mmio_write32(info, plane.stride_off, orig_stride);
+            let _ = intel_mmio_write32(info, plane.surf_off, orig_surf);
+            let restored_stride = intel_mmio_read32(info, plane.stride_off);
+            let restored_surf = intel_mmio_read32(info, plane.surf_off);
+            let stride_stuck = wrote_stride && rb_stride == test_stride;
+            let surf_stuck = wrote_surf && rb_surf == test_surf;
+            if stride_stuck || surf_stuck {
+                writable += 1;
+            }
+
+            crate::log!(
+                "gfx-intel-scanout: plane-write-smoke {}{} ctl=0x{:08X} stride orig=0x{:08X} test=0x{:08X} rb=0x{:08X} restore=0x{:08X} surf orig=0x{:08X} test=0x{:08X} rb=0x{:08X} restore=0x{:08X} stuck_stride={} stuck_surf={}\n",
+                plane.pipe_name,
+                plane.plane_slot,
+                ctl,
+                orig_stride,
+                test_stride,
+                rb_stride,
+                restored_stride,
+                orig_surf,
+                test_surf,
+                rb_surf,
+                restored_surf,
+                stride_stuck as u8,
+                surf_stuck as u8
+            );
+        }
+    }
+
+    crate::log!(
+        "gfx-intel-scanout: plane-write-smoke writable_planes={}\n",
+        writable
+    );
 }
 
 fn centered_triangle() -> [RgbVertex; 3] {
@@ -649,5 +1149,40 @@ pub async fn centered_triangle_demo_task() {
         }
 
         Timer::after(EmbassyDuration::from_millis(25)).await;
+    }
+}
+
+#[embassy_executor::task]
+pub async fn scanout_smoke_task() {
+    let Some(info) = first_claimed_device() else {
+        crate::log!("gfx-intel-scanout: skipped (no claimed Intel gfx device)\n");
+        return;
+    };
+
+    Timer::after(EmbassyDuration::from_millis(1200)).await;
+    log_display_region_sweep(info);
+    plane_write_smoke_test(info);
+
+    let mut tries = 0u32;
+    loop {
+        if try_scanout_surface_demo(info) {
+            return;
+        }
+
+        tries = tries.saturating_add(1);
+        if tries == 1 || tries.is_multiple_of(8) {
+            crate::log!(
+                "gfx-intel-scanout: retrying plane/aperture probe tries={}\n",
+                tries
+            );
+        }
+        if tries >= INTEL_SCANOUT_RETRIES {
+            crate::log!(
+                "gfx-intel-scanout: giving up after {} retries\n",
+                tries
+            );
+            return;
+        }
+        Timer::after(EmbassyDuration::from_millis(INTEL_SCANOUT_RETRY_MS)).await;
     }
 }
