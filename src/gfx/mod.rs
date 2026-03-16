@@ -2,6 +2,7 @@ pub mod backends;
 pub mod cursor;
 #[cfg(feature = "gfx_intel")]
 pub mod intel;
+pub mod jpeg_codec;
 pub mod loadscreen;
 pub mod lyon;
 pub mod png_codec;

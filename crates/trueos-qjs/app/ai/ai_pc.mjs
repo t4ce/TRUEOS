@@ -26,6 +26,12 @@ const INPUT_CURSOR_FLAG_ABSOLUTE = 1;
 const INPUT_CURSOR_FLAG_BUTTONS_CHANGED = 1 << 2;
 const INPUT_KEYBOARD_FLAG_SYNTHETIC = 1 << 1;
 
+function aiDiag(message) {
+  try {
+    console.log(`[ai_pc.mjs] ${message}`);
+  } catch (_err) {}
+}
+
 function readBooleanEnv(name, fallback = false) {
   const raw = readEnv(name);
   if (typeof raw !== "string") {
@@ -203,6 +209,7 @@ export function getConnectedBrowser() {
 async function ensureDefaultBrowserConnection() {
   const current = getConnectedBrowser();
   if (current.windowId > 0 || current.role !== "primary") {
+    aiDiag(`browser connection already set windowId=${current.windowId} role=${current.role}`);
     return current;
   }
 
@@ -211,15 +218,19 @@ async function ensureDefaultBrowserConnection() {
     ? runtime.browser
     : null;
   if (!browser || typeof browser.getWindowId !== "function") {
+    aiDiag("browser connection unresolved: getWindowId unavailable");
     return current;
   }
 
   try {
     const windowId = Number(await browser.getWindowId()) | 0;
+    aiDiag(`browser getWindowId -> ${windowId}`);
     if (windowId > 0) {
       return connectBrowser(windowId);
     }
-  } catch (_err) {}
+  } catch (err) {
+    aiDiag(`browser getWindowId threw: ${String(err && err.message ? err.message : err)}`);
+  }
   return current;
 }
 
@@ -326,9 +337,12 @@ async function hostBrowserRpc(method, args = []) {
     throw new Error(`host browser rpc unavailable for ${method}`);
   }
 
-  const browserTarget = await ensureDefaultBrowserConnection();
   const argsJson = JSON.stringify(Array.isArray(args) ? args : []);
-  const targetWindowId = Math.max(0, Number(browserTarget && browserTarget.windowId) | 0);
+  let targetWindowId = 0;
+  if (method !== "getWindowId") {
+    const browserTarget = await ensureDefaultBrowserConnection();
+    targetWindowId = Math.max(0, Number(browserTarget && browserTarget.windowId) | 0);
+  }
   const id = Number(
     globalThis.__trueosBrowserRpcStart(String(method || ""), argsJson, targetWindowId) || 0,
   ) | 0;
@@ -654,12 +668,14 @@ function createHostBrowserProxy() {
 function bindHostRuntime() {
   const runtime = getPcRuntime();
   if (hasWorkerParentPort()) {
+    aiDiag("bindHostRuntime: worker parent port mode");
     createWorkerBrowserProxy();
     createComputerProxy();
     return runtime;
   }
   const browser = globalThis.__trueosBrowser;
   if (browser && typeof browser === "object") {
+    aiDiag("bindHostRuntime: using direct __trueosBrowser");
     runtime.browser = browser;
     runtime.context = browser;
     runtime.page = browser;
@@ -667,8 +683,11 @@ function bindHostRuntime() {
     return runtime;
   }
   if (hasHostBrowserRpc()) {
+    aiDiag("bindHostRuntime: using host browser RPC");
     createHostBrowserProxy();
     createComputerProxy();
+  } else {
+    aiDiag("bindHostRuntime: no browser binding available");
   }
   return runtime;
 }
@@ -1735,22 +1754,29 @@ async function waitForNextInput(question = "") {
 }
 
 export async function startAiPc() {
+  aiDiag("startAiPc: begin");
   if (hasWorkerParentPort()) {
+    aiDiag("startAiPc: enabling worker RPC");
     ensureWorkerRpcReady();
   }
   if (globalThis.__trueosAiPcStarted) {
+    aiDiag("startAiPc: already started");
     return false;
   }
   globalThis.__trueosAiPcStarted = true;
   try {
+    aiDiag("startAiPc: ensuring default browser connection");
     await ensureDefaultBrowserConnection();
+    aiDiag("startAiPc: creating OpenAI client");
     const client = createOpenAiClient();
     let previousResponseId = null;
+    aiDiag("startAiPc: entering input loop");
     while (true) {
       const entry = await waitForNextInput("");
       if (!entry) {
         continue;
       }
+      aiDiag(`startAiPc: received input newConversation=${entry.newConversation ? 1 : 0} text_len=${entry.text ? entry.text.length : 0}`);
       if (entry.newConversation) {
         previousResponseId = null;
       }
@@ -1758,6 +1784,7 @@ export async function startAiPc() {
     }
   } finally {
     globalThis.__trueosAiPcStarted = false;
+    aiDiag("startAiPc: end");
   }
 }
 

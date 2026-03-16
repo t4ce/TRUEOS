@@ -20,7 +20,7 @@ LIMINE_CFG := limine.conf
 LIMINE_PREFIX := bld/limine-prefix
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 
-QEMU_BIN = qemu-system-x86_64 
+QEMU_BIN = qemu-system-x86_64 -no-shutdown
 # QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 

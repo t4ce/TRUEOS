@@ -1517,6 +1517,9 @@ function getViewport() {
 function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
+  if (assetManager && typeof assetManager.beginPageLoad === 'function') {
+    assetManager.beginPageLoad();
+  }
   invalidateBrowserRegionCache(true);
   browserPageState.beginLoad('html-set');
   if (cachedHtml.trim()) {
