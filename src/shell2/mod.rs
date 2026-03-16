@@ -137,8 +137,7 @@ impl<'a> AlignedWriter<'a> {
         self.move_to(SCROLL_TOP_ROW, 1);
         self.io.write_str("\x1b[J");
 
-        let start = transcript.len().saturating_sub(MAX_RENDERED_TRANSCRIPT_LINES);
-        for (idx, entry) in transcript.iter().skip(start).enumerate() {
+        for (idx, entry) in transcript.iter().rev().take(MAX_RENDERED_TRANSCRIPT_LINES).enumerate() {
             let row = SCROLL_TOP_ROW + idx;
             self.transcript_line_at(row, entry.source, entry.text.as_str());
         }
@@ -404,6 +403,8 @@ fn handle_submit(
         ShellMode2::Surf => {
             if let Some(html) = shell2_surf::try_inline_html(submitted) {
                 shell2_surf::load_inline_html(io, html);
+            } else if let Some(file_ref) = shell2_surf::try_file_reference(submitted) {
+                shell2_surf::load_file_reference(io, file_ref.as_str());
             } else if let Some(url) = shell2_surf::try_parse(submitted) {
                 if shell2_surf::prepare_call_with_url(spawner, io, url.as_str()).is_err() {
                     print_shell_line(io, "surf: spawn failed");
