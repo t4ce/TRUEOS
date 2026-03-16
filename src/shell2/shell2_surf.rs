@@ -46,10 +46,7 @@ pub(crate) fn load_inline_html(io: &'static dyn ShellBackend2, html: String) {
     print_shell_line(io, "surf: inline html loaded");
 }
 
-pub(crate) fn load_file_reference(
-    io: &'static dyn ShellBackend2,
-    file_ref: &str,
-) {
+pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str) {
     let path = normalize_file_reference(file_ref);
     let bytes = match crate::surface::io::kfs::read_file(path.as_str()) {
         Ok(bytes) => bytes,

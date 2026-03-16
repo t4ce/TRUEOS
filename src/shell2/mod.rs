@@ -128,7 +128,10 @@ impl<'a> AlignedWriter<'a> {
                 let width = crate::ecma48::visible_width(s);
                 let col = LINE_WIDTH.saturating_sub(width).saturating_add(1);
                 self.move_to(row, col);
-                self.io.write_fmt(format_args!("{}", crate::ecma48::style(s).fg(SYSTEM_TEXT_RGB)));
+                self.io.write_fmt(format_args!(
+                    "{}",
+                    crate::ecma48::style(s).fg(SYSTEM_TEXT_RGB)
+                ));
             }
         }
     }
@@ -138,7 +141,12 @@ impl<'a> AlignedWriter<'a> {
         self.move_to(SCROLL_TOP_ROW, 1);
         self.io.write_str("\x1b[J");
 
-        for (idx, entry) in transcript.iter().rev().take(MAX_RENDERED_TRANSCRIPT_LINES).enumerate() {
+        for (idx, entry) in transcript
+            .iter()
+            .rev()
+            .take(MAX_RENDERED_TRANSCRIPT_LINES)
+            .enumerate()
+        {
             let row = SCROLL_TOP_ROW + idx;
             self.transcript_line_at(row, entry.source, entry.text.as_str());
         }
@@ -189,6 +197,8 @@ impl<'a> AlignedWriter<'a> {
         self.push_ai_token(&mut text, "file", ai_mode == AiPromptMode::FileSearch);
         self.push_plain(&mut text, " - ");
         self.push_ai_token(&mut text, "newchat", ai_mode == AiPromptMode::NewChat);
+        self.push_plain(&mut text, " - ");
+        self.push_ai_token(&mut text, "ai-pc", ai_mode == AiPromptMode::AiPc);
         self.right_text(STATUS_ROW, text.as_str());
     }
 
@@ -355,7 +365,11 @@ pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
     0
 }
 
-fn push_transcript_line(transcript: &mut VecDeque<TranscriptEntry>, source: LineSource, text: &str) {
+fn push_transcript_line(
+    transcript: &mut VecDeque<TranscriptEntry>,
+    source: LineSource,
+    text: &str,
+) {
     if transcript.len() >= MAX_TRANSCRIPT_HISTORY {
         let _ = transcript.pop_front();
     }

@@ -907,8 +907,11 @@ pub mod cabi {
                     }
                 }
                 TextureWorkReq::DrawRgb(req) => {
-                    let rc =
-                        render_rgb_triangles_to_texture_now(req.tex_id, req.clear_rgb, req.verts.as_slice());
+                    let rc = render_rgb_triangles_to_texture_now(
+                        req.tex_id,
+                        req.clear_rgb,
+                        req.verts.as_slice(),
+                    );
                     if rc == 0 && req.repaint_window_id != 0 {
                         let _ = crate::v::ui2::request_window_content_present(
                             req.repaint_window_id,

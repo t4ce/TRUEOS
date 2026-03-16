@@ -10,6 +10,7 @@ pub(crate) enum AiPromptMode {
     WebSearch,
     FileSearch,
     NewChat,
+    AiPc,
 }
 
 impl AiPromptMode {
@@ -18,7 +19,8 @@ impl AiPromptMode {
             Self::Normal => Self::WebSearch,
             Self::WebSearch => Self::FileSearch,
             Self::FileSearch => Self::NewChat,
-            Self::NewChat => Self::Normal,
+            Self::NewChat => Self::AiPc,
+            Self::AiPc => Self::Normal,
         }
     }
 
@@ -28,6 +30,7 @@ impl AiPromptMode {
             Self::WebSearch => "web",
             Self::FileSearch => "file",
             Self::NewChat => "newchat",
+            Self::AiPc => "ai-pc",
         }
     }
 }
@@ -43,7 +46,7 @@ pub(crate) fn submit(
         web_search: mode == AiPromptMode::WebSearch,
         file_search: mode == AiPromptMode::FileSearch,
         new_conversation: mode == AiPromptMode::NewChat,
-        computer_use: true,
+        computer_use: mode == AiPromptMode::AiPc,
         shell_target_mask: super::output_target_for_backend(io),
     };
 

@@ -135,6 +135,38 @@ fn keepalive_release(conn: &'static KeepAliveConn) {
     conn.in_use.store(false, Ordering::Release);
 }
 
+fn keepalive_sync_state(conn: &'static KeepAliveConn) {
+    for ev in conn.events.drain(4096) {
+        match ev {
+            TlsEvent::Opened { handle } => {
+                let mut st = conn.state.lock();
+                if st.handle.is_none() {
+                    st.handle = Some(handle);
+                }
+            }
+            TlsEvent::Connected { handle } => {
+                let mut st = conn.state.lock();
+                if st.handle == Some(handle) {
+                    st.connected = true;
+                }
+            }
+            TlsEvent::Closed { handle } => {
+                let mut st = conn.state.lock();
+                if st.handle == Some(handle) {
+                    st.handle = None;
+                    st.connected = false;
+                }
+            }
+            TlsEvent::TlsError { .. } => {
+                let mut st = conn.state.lock();
+                st.handle = None;
+                st.connected = false;
+            }
+            _ => {}
+        }
+    }
+}
+
 // Net-fetch scheduler (used by QJS URL module cache):
 // - coalesces concurrent requests for the same cache key
 // - caps concurrency to avoid TLS-handshake storms starving the executor
@@ -1691,8 +1723,9 @@ async fn fetch_on_device_keepalive(
     let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
     keepalive_acquire(conn).await;
 
-    // Best-effort drain to start from a clean request boundary.
-    let _ = conn.events.drain(4096);
+    // Best-effort drain to start from a clean request boundary while still
+    // honoring any pending close/TLS-error notifications from the pooled socket.
+    keepalive_sync_state(conn);
 
     let mut reused = false;
     {
@@ -2099,6 +2132,396 @@ async fn fetch_on_device_keepalive(
     }
 }
 
+async fn fetch_on_device_keepalive_post_json(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    timeout_ms: u32,
+    max_bytes: usize,
+    body_json: &str,
+    auth_token: Option<&str>,
+) -> Result<Vec<u8>, FetchError> {
+    let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
+    keepalive_acquire(conn).await;
+
+    keepalive_sync_state(conn);
+
+    let mut reused = false;
+    {
+        let mut st = conn.state.lock();
+        let idle_ms = Instant::now()
+            .saturating_duration_since(st.last_used)
+            .as_millis() as u64;
+        if st.handle.is_some() && idle_ms > VHTTPS_KEEPALIVE_IDLE_CLOSE_MS {
+            if let Some(h) = st.handle.take() {
+                let _ = conn.cmds.push(TlsCommand::Close { handle: h });
+            }
+            st.connected = false;
+        } else if st.handle.is_some() && st.connected {
+            reused = true;
+        }
+    }
+
+    let mut ip: Option<[u8; 4]> = None;
+    if !reused {
+        match dns::resolve_ipv4_for_device(
+            dev_idx,
+            parsed.host.as_str(),
+            DnsConfig::for_device(dev_idx),
+        )
+        .await
+        {
+            Ok(v) => ip = Some(v),
+            Err(dns::DnsError::Timeout) => {
+                keepalive_release(conn);
+                return Err(FetchError::DnsTimeout);
+            }
+            Err(_) => {
+                keepalive_release(conn);
+                return Err(FetchError::DnsFailed);
+            }
+        }
+    }
+
+    let roots = TlsRoots::mozilla();
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let server_name = leak_str(parsed.host.clone());
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
+    let mut connect_in_flight = false;
+    let mut last_activity = Instant::now();
+
+    loop {
+        let (handle, connected) = {
+            let st = conn.state.lock();
+            (st.handle, st.connected)
+        };
+
+        if handle.is_some() && connected {
+            break;
+        }
+
+        if handle.is_none() && !connect_in_flight {
+            let Some(ip) = ip else {
+                keepalive_release(conn);
+                return Err(FetchError::ConnectTimeout);
+            };
+            crate::log!(
+                "vhttps-ka-post: connect host={} dev={} fresh=1\n",
+                parsed.host,
+                dev_idx
+            );
+            let _ = conn.cmds.push(TlsCommand::OpenTcpConnect {
+                remote: vnet::EndpointV4 {
+                    addr: ip,
+                    port: parsed.port,
+                },
+                server_name,
+                cfg: cfg.clone(),
+                roots: roots.clone(),
+                timeouts: crate::net::tls_socket::TlsTimeouts {
+                    connect_ms: (timeout_ms / 4).max(5_000),
+                    tls_ms: (timeout_ms / 4).max(5_000),
+                    idle_ms: timeout_ms,
+                },
+            });
+            connect_in_flight = true;
+        }
+
+        for ev in conn.events.drain(1024) {
+            match ev {
+                TlsEvent::Opened { handle } => {
+                    let mut st = conn.state.lock();
+                    if st.handle.is_none() {
+                        st.handle = Some(handle);
+                    }
+                    last_activity = Instant::now();
+                }
+                TlsEvent::Connected { handle } => {
+                    let mut st = conn.state.lock();
+                    if st.handle == Some(handle) {
+                        st.connected = true;
+                    }
+                    last_activity = Instant::now();
+                }
+                TlsEvent::Closed { handle } => {
+                    let mut st = conn.state.lock();
+                    if st.handle == Some(handle) {
+                        st.handle = None;
+                        st.connected = false;
+                        connect_in_flight = false;
+                    }
+                }
+                TlsEvent::TlsError { .. } => {
+                    let mut st = conn.state.lock();
+                    st.handle = None;
+                    st.connected = false;
+                    connect_in_flight = false;
+                }
+                _ => {}
+            }
+        }
+
+        if Instant::now() >= deadline {
+            keepalive_release(conn);
+            return Err(FetchError::TlsTimeout);
+        }
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
+
+    crate::log!(
+        "vhttps-ka-post: request host={} dev={} reused={}\n",
+        parsed.host,
+        dev_idx,
+        if reused { 1 } else { 0 }
+    );
+
+    let handle = conn.state.lock().handle.expect("connected handle");
+    let auth = if let Some(token) = auth_token {
+        format!("Authorization: Bearer {}\r\n", token)
+    } else {
+        String::new()
+    };
+    let req = format!(
+        "POST {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nConnection: keep-alive\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nAccept: */*\r\n\r\n{}",
+        parsed.path,
+        parsed.host,
+        auth,
+        body_json.len(),
+        body_json
+    );
+    let _ = conn.cmds.push(TlsCommand::Send {
+        handle,
+        data: req.into_bytes(),
+    });
+
+    let capture_cap = max_bytes.saturating_add(64 * 1024);
+    let mut plaintext: Vec<u8> = Vec::new();
+    let mut hdr_end_cached: Option<usize> = None;
+
+    loop {
+        for ev in conn.events.drain(1024) {
+            match ev {
+                TlsEvent::Data { handle: h, data } => {
+                    if h != handle || data.is_empty() {
+                        continue;
+                    }
+                    last_activity = Instant::now();
+
+                    let room = capture_cap.saturating_sub(plaintext.len());
+                    if room == 0 {
+                        let _ = conn.cmds.push(TlsCommand::Close { handle });
+                        let mut st = conn.state.lock();
+                        st.handle = None;
+                        st.connected = false;
+                        keepalive_release(conn);
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+                    let take = data.len().min(room);
+                    plaintext.extend_from_slice(&data[..take]);
+                    if take < data.len() {
+                        let _ = conn.cmds.push(TlsCommand::Close { handle });
+                        let mut st = conn.state.lock();
+                        st.handle = None;
+                        st.connected = false;
+                        keepalive_release(conn);
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+
+                    let hdr_end = match hdr_end_cached {
+                        Some(v) => v,
+                        None => {
+                            let v = find_http_header_end(&plaintext);
+                            if let Some(v) = v {
+                                hdr_end_cached = Some(v);
+                            }
+                            v.unwrap_or(0)
+                        }
+                    };
+
+                    if hdr_end != 0 {
+                        let headers = &plaintext[..hdr_end];
+                        let body = &plaintext[hdr_end..];
+
+                        let status = parse_http_status(&plaintext).unwrap_or(0);
+                        if status != 200 {
+                            if is_redirect_status(status)
+                                && let Some(next) = redirect_url_from_location(parsed, headers)
+                            {
+                                let _ = conn.cmds.push(TlsCommand::Close { handle });
+                                let mut st = conn.state.lock();
+                                st.handle = None;
+                                st.connected = false;
+                                keepalive_release(conn);
+                                return Err(FetchError::Redirect { status, url: next });
+                            }
+
+                            let is_chunked =
+                                header_contains_token(headers, b"transfer-encoding", b"chunked");
+                            let decoded_body = if is_chunked {
+                                decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
+                            } else if let Some(len) = header_parse_content_length(headers) {
+                                body.get(..len).unwrap_or(body).to_vec()
+                            } else {
+                                body.to_vec()
+                            };
+                            crate::log!(
+                                "vhttps: http_error status={} body_len={}\n",
+                                status,
+                                decoded_body.len()
+                            );
+                            if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
+                                log_utf8_chunks("vhttps: http_error_body: ", s);
+                            } else {
+                                crate::log!("vhttps: http_error_body: [non-utf8]\n");
+                            }
+
+                            let _ = conn.cmds.push(TlsCommand::Close { handle });
+                            let mut st = conn.state.lock();
+                            st.handle = None;
+                            st.connected = false;
+                            keepalive_release(conn);
+                            return Err(FetchError::Http(status));
+                        }
+
+                        if status == 204 {
+                            let mut st = conn.state.lock();
+                            st.last_used = Instant::now();
+                            keepalive_release(conn);
+                            return Ok(Vec::new());
+                        }
+
+                        let is_chunked =
+                            header_contains_token(headers, b"transfer-encoding", b"chunked");
+                        if is_chunked {
+                            if let Some(decoded) = decode_http_chunked(body) {
+                                if decoded.len() > max_bytes {
+                                    let _ = conn.cmds.push(TlsCommand::Close { handle });
+                                    let mut st = conn.state.lock();
+                                    st.handle = None;
+                                    st.connected = false;
+                                    keepalive_release(conn);
+                                    return Err(FetchError::ResponseTooLarge);
+                                }
+                                crate::log!(
+                                    "vhttps-ka-post: done host={} dev={} status={} bytes={} reused={}\n",
+                                    parsed.host,
+                                    dev_idx,
+                                    status,
+                                    decoded.len(),
+                                    if reused { 1 } else { 0 }
+                                );
+                                let mut st = conn.state.lock();
+                                st.last_used = Instant::now();
+                                keepalive_release(conn);
+                                return Ok(decoded);
+                            }
+                        } else if let Some(len) = header_parse_content_length(headers)
+                            && body.len() >= len
+                        {
+                            let out = body[..len].to_vec();
+                            if out.len() > max_bytes {
+                                let _ = conn.cmds.push(TlsCommand::Close { handle });
+                                let mut st = conn.state.lock();
+                                st.handle = None;
+                                st.connected = false;
+                                keepalive_release(conn);
+                                return Err(FetchError::ResponseTooLarge);
+                            }
+                            crate::log!(
+                                "vhttps-ka-post: done host={} dev={} status={} bytes={} reused={}\n",
+                                parsed.host,
+                                dev_idx,
+                                status,
+                                out.len(),
+                                if reused { 1 } else { 0 }
+                            );
+                            let mut st = conn.state.lock();
+                            st.last_used = Instant::now();
+                            keepalive_release(conn);
+                            return Ok(out);
+                        }
+                    }
+                }
+                TlsEvent::Closed { handle: h } => {
+                    if h != handle {
+                        continue;
+                    }
+
+                    {
+                        let mut st = conn.state.lock();
+                        st.handle = None;
+                        st.connected = false;
+                    }
+
+                    let Some(hdr_end) = find_http_header_end(&plaintext) else {
+                        keepalive_release(conn);
+                        return Err(FetchError::Http(0));
+                    };
+                    let headers = &plaintext[..hdr_end];
+                    let body = &plaintext[hdr_end..];
+                    let status = parse_http_status(&plaintext).unwrap_or(0);
+
+                    if status != 200 {
+                        if is_redirect_status(status)
+                            && let Some(next) = redirect_url_from_location(parsed, headers)
+                        {
+                            keepalive_release(conn);
+                            return Err(FetchError::Redirect { status, url: next });
+                        }
+                        keepalive_release(conn);
+                        return Err(FetchError::Http(status));
+                    }
+
+                    let is_chunked =
+                        header_contains_token(headers, b"transfer-encoding", b"chunked");
+                    let decoded_body = if is_chunked {
+                        decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
+                    } else if let Some(len) = header_parse_content_length(headers) {
+                        body.get(..len).unwrap_or(body).to_vec()
+                    } else {
+                        body.to_vec()
+                    };
+
+                    if decoded_body.len() > max_bytes {
+                        keepalive_release(conn);
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+                    crate::log!(
+                        "vhttps-ka-post: done host={} dev={} status={} bytes={} reused={} closed=1\n",
+                        parsed.host,
+                        dev_idx,
+                        status,
+                        decoded_body.len(),
+                        if reused { 1 } else { 0 }
+                    );
+                    keepalive_release(conn);
+                    return Ok(decoded_body);
+                }
+                TlsEvent::TlsError { .. } => {
+                    let mut st = conn.state.lock();
+                    st.handle = None;
+                    st.connected = false;
+                    keepalive_release(conn);
+                    return Err(FetchError::Tls);
+                }
+                TlsEvent::Error { .. } => {}
+                _ => {}
+            }
+        }
+
+        let now = Instant::now();
+        let idle_deadline = last_activity + EmbassyDuration::from_millis(timeout_ms as u64);
+        if now >= idle_deadline || now >= deadline {
+            let _ = conn.cmds.push(TlsCommand::Close { handle });
+            let mut st = conn.state.lock();
+            st.handle = None;
+            st.connected = false;
+            keepalive_release(conn);
+            return Err(FetchError::BodyTimeout);
+        }
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
+}
+
 #[derive(Debug)]
 enum FetchToFileError {
     Code(i32),
@@ -2122,8 +2545,9 @@ async fn fetch_on_device_to_file_keepalive(
     let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
     keepalive_acquire(conn).await;
 
-    // Drain any stale events (best-effort) before starting a new request.
-    let _ = conn.events.drain(4096);
+    // Drain any stale events (best-effort) before starting a new request while
+    // keeping pooled connection state in sync.
+    keepalive_sync_state(conn);
 
     // Close idle keep-alive connections (server may have timed out anyway).
     {
@@ -3459,17 +3883,30 @@ pub async fn post_https_json_with_profile_async(
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
 
-        match fetch_on_device(
-            &parsed,
-            dev_idx,
-            timeout_ms,
-            max_bytes,
-            Some(body_json.as_str()),
-            auth_token,
-            None,
-        )
-        .await
-        {
+        let res = if VHTTPS_KEEPALIVE_ENABLE {
+            fetch_on_device_keepalive_post_json(
+                &parsed,
+                dev_idx,
+                timeout_ms,
+                max_bytes,
+                body_json.as_str(),
+                auth_token,
+            )
+            .await
+        } else {
+            fetch_on_device(
+                &parsed,
+                dev_idx,
+                timeout_ms,
+                max_bytes,
+                Some(body_json.as_str()),
+                auth_token,
+                None,
+            )
+            .await
+        };
+
+        match res {
             Ok(v) => return Ok(v),
             Err(FetchError::Redirect { status, url }) => {
                 if hop >= MAX_REDIRECTS {
