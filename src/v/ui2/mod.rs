@@ -37,6 +37,8 @@ const UI2_KEYBOARD_EVENT_BATCH: usize = 32;
 const UI2_CURSOR_HIT_RADIUS_PX: f32 = 8.0;
 const UI2_WINDOW_EDGE_TOUCH_PX: f32 = 1.0;
 const UI2_WHEEL_SCROLL_STEP_PX: i32 = 16;
+const UI2_INPUT_DIAG_LOG_FIRST: u32 = 8;
+const UI2_INPUT_DIAG_LOG_EVERY: u32 = 32;
 const UI2_WINDOW_UPDATE_LOG_EVERY: u32 = 32;
 const UI2_COMPOSE_LOG_EVERY: u32 = 32;
 const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
@@ -239,6 +241,8 @@ struct Ui2State {
     last_logged_compose_dirty_count: usize,
     cursor_read_seq: u64,
     keyboard_read_seq: u64,
+    non_physical_cursor_event_count: u32,
+    synthetic_keyboard_event_count: u32,
     cursors: Vec<Ui2CursorState>,
     hit_scene: Ui2HitScene,
     last_browser_interactive_seq: u32,
@@ -273,6 +277,8 @@ fn init_state() -> &'static Mutex<Ui2State> {
             last_logged_compose_dirty_count: 0,
             cursor_read_seq: 0,
             keyboard_read_seq: 0,
+            non_physical_cursor_event_count: 0,
+            synthetic_keyboard_event_count: 0,
             cursors: Vec::new(),
             hit_scene: Ui2HitScene::default(),
             last_browser_interactive_seq: 0,
@@ -287,7 +293,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
         let browser_id = alloc_window(
             &mut state,
             Ui2WindowKind::HostedBrowser,
-            "Browser 1",
+            "True Surfer",
             Ui2Rect::new(
                 72.0,
                 56.0,
@@ -306,27 +312,30 @@ fn init_state() -> &'static Mutex<Ui2State> {
             browser_id,
         );
 
-        let browser2_id = alloc_window(
-            &mut state,
-            Ui2WindowKind::HostedBrowser,
-            "Browser 2",
-            Ui2Rect::new(
-                (view_w as f32 * 0.58).max(420.0),
-                92.0,
-                ((view_w as f32) * 0.32).max(300.0),
-                ((view_h as f32) * 0.56).max(260.0),
-            ),
-            12,
-            255,
-        );
-        if let Some(window) = window_mut(&mut state, browser2_id) {
-            window.browser_instance_id = trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1;
-            window.bottom_scrollbar_visible = false;
+        if crate::v::spawn_service::secondary_browser_enabled() {
+            let browser2_id = alloc_window(
+                &mut state,
+                Ui2WindowKind::HostedBrowser,
+                "Browser 2",
+                Ui2Rect::new(
+                    (view_w as f32 * 0.58).max(420.0),
+                    92.0,
+                    ((view_w as f32) * 0.32).max(300.0),
+                    ((view_h as f32) * 0.56).max(260.0),
+                ),
+                12,
+                255,
+            );
+            if let Some(window) = window_mut(&mut state, browser2_id) {
+                window.browser_instance_id =
+                    trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1;
+                window.bottom_scrollbar_visible = false;
+            }
+            let _ = trueos_qjs::browser_task::bind_browser_window_to_instance(
+                trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1,
+                browser2_id,
+            );
         }
-        let _ = trueos_qjs::browser_task::bind_browser_window_to_instance(
-            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1,
-            browser2_id,
-        );
 
         refresh_all_window_hit_entries(&mut state);
 
@@ -1891,9 +1900,11 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     }
 
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
+        let title_w = crate::gfx::text::atlas_text_width_px(window.title.as_bytes());
+        let title_x = rect.x + ((rect.w - title_w) * 0.5).max(0.0);
         crate::gfx::text::draw_atlas_text_in_frame_alpha(
             window.title.as_bytes(),
-            rect.x + 10.0,
+            title_x,
             rect.y + 5.0,
             state.view_w,
             state.view_h,

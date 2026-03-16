@@ -502,7 +502,10 @@ fn round_to_u32(v: f64) -> Option<u32> {
     Some(if v >= 0.0 { (v + 0.5) as u32 } else { 0 })
 }
 
-unsafe fn js_window_info_object(ctx: *mut qjs::JSContext, info: &TrueosUi2WindowInfo) -> qjs::JSValue {
+unsafe fn js_window_info_object(
+    ctx: *mut qjs::JSContext,
+    info: &TrueosUi2WindowInfo,
+) -> qjs::JSValue {
     static K_ID: &[u8] = b"id\0";
     static K_KIND: &[u8] = b"kind\0";
     static K_STATE: &[u8] = b"state\0";
@@ -517,19 +520,54 @@ unsafe fn js_window_info_object(ctx: *mut qjs::JSContext, info: &TrueosUi2Window
     static K_DECORATION_RECT: &[u8] = b"decorationRect\0";
 
     let rect = qjs::JS_NewObject(ctx);
-    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_ID.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.id as f64));
-    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_KIND.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.kind as f64));
-    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_STATE.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.state as f64));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_ID.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.id as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_KIND.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.kind as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_STATE.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.state as f64),
+    );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         rect,
         K_DECORATION_MODE.as_ptr() as *const c_char,
         qjs::JS_NewFloat64(ctx, info.decoration_mode as f64),
     );
-    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_VISIBLE.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.visible as f64));
-    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_SELECTED.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.selected as f64));
-    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_X.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.x as f64));
-    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_Y.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.y as f64));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_VISIBLE.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.visible as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_SELECTED.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.selected as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_X.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.x as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_Y.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.y as f64),
+    );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         rect,
@@ -544,8 +582,18 @@ unsafe fn js_window_info_object(ctx: *mut qjs::JSContext, info: &TrueosUi2Window
     );
 
     let content = qjs::JS_NewObject(ctx);
-    let _ = qjs::JS_SetPropertyStr(ctx, content, K_X.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.content_x as f64));
-    let _ = qjs::JS_SetPropertyStr(ctx, content, K_Y.as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, info.content_y as f64));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        content,
+        K_X.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.content_x as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        content,
+        K_Y.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, info.content_y as f64),
+    );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         content,
@@ -585,7 +633,12 @@ unsafe fn js_window_info_object(ctx: *mut qjs::JSContext, info: &TrueosUi2Window
         K_HEIGHT.as_ptr() as *const c_char,
         qjs::JS_NewFloat64(ctx, info.decoration_height as f64),
     );
-    let _ = qjs::JS_SetPropertyStr(ctx, rect, K_DECORATION_RECT.as_ptr() as *const c_char, decoration);
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        rect,
+        K_DECORATION_RECT.as_ptr() as *const c_char,
+        decoration,
+    );
 
     rect
 }
@@ -610,7 +663,10 @@ unsafe extern "C" fn qjs_window_get_info(
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let mut id_f = 0.0f64;
-    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0 || !id_f.is_finite() || id_f < 1.0 {
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || !id_f.is_finite()
+        || id_f < 1.0
+    {
         return qjs::JSValue::undefined();
     }
     let mut info = TrueosUi2WindowInfo::default();
@@ -631,7 +687,10 @@ unsafe extern "C" fn qjs_window_set_title(
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let mut id_f = 0.0f64;
-    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0 || !id_f.is_finite() || id_f < 1.0 {
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || !id_f.is_finite()
+        || id_f < 1.0
+    {
         return qjs::JS_NewFloat64(ctx, 0.0);
     }
     let mut len: usize = 0;
@@ -734,7 +793,8 @@ unsafe extern "C" fn qjs_window_set_vertical_scrollbar_side(
     {
         return qjs::JS_NewFloat64(ctx, 0.0);
     }
-    let rc = trueos_cabi_ui2_window_set_vertical_scrollbar_side(id_f as u32, side_f.max(0.0) as u32);
+    let rc =
+        trueos_cabi_ui2_window_set_vertical_scrollbar_side(id_f as u32, side_f.max(0.0) as u32);
     qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
 }
 
@@ -772,7 +832,10 @@ unsafe extern "C" fn qjs_window_simple_action(
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let mut id_f = 0.0f64;
-    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0 || !id_f.is_finite() || id_f < 1.0 {
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || !id_f.is_finite()
+        || id_f < 1.0
+    {
         return qjs::JS_NewFloat64(ctx, 0.0);
     }
     let rc = action(id_f as u32);
@@ -883,7 +946,8 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     static WINDOW_SET_SIZE_FN_NAME: &[u8] = b"__trueosWindowSetSize\0";
     static WINDOW_SET_DECORATIONS_NAME: &[u8] = b"__trueosWindowSetDecorations\0";
     static WINDOW_SET_DECORATIONS_FN_NAME: &[u8] = b"__trueosWindowSetDecorations\0";
-    static WINDOW_SET_VERTICAL_SCROLLBAR_SIDE_NAME: &[u8] = b"__trueosWindowSetVerticalScrollbarSide\0";
+    static WINDOW_SET_VERTICAL_SCROLLBAR_SIDE_NAME: &[u8] =
+        b"__trueosWindowSetVerticalScrollbarSide\0";
     static WINDOW_SET_VERTICAL_SCROLLBAR_SIDE_FN_NAME: &[u8] =
         b"__trueosWindowSetVerticalScrollbarSide\0";
     static WINDOW_SET_HORIZONTAL_SCROLLBAR_SIDE_NAME: &[u8] =

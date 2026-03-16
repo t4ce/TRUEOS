@@ -129,9 +129,69 @@ export function createBrowserAssetManager(options = {}) {
     };
   }
 
+  function readJpegDimensions(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : null;
+    if (!data || data.length < 4 || data[0] !== 0xFF || data[1] !== 0xD8) {
+      return { width: 0, height: 0 };
+    }
+
+    let offset = 2;
+    while (offset + 1 < data.length) {
+      while (offset < data.length && data[offset] !== 0xFF) {
+        offset += 1;
+      }
+      while (offset < data.length && data[offset] === 0xFF) {
+        offset += 1;
+      }
+      if (offset >= data.length) break;
+
+      const marker = data[offset];
+      offset += 1;
+
+      if (marker === 0xD8 || marker === 0xD9) {
+        continue;
+      }
+      if (marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7)) {
+        continue;
+      }
+      if (offset + 1 >= data.length) break;
+
+      const segmentLen = (data[offset] << 8) | data[offset + 1];
+      if (segmentLen < 2 || offset + segmentLen > data.length) {
+        break;
+      }
+
+      if (
+        (marker >= 0xC0 && marker <= 0xC3)
+        || (marker >= 0xC5 && marker <= 0xC7)
+        || (marker >= 0xC9 && marker <= 0xCB)
+        || (marker >= 0xCD && marker <= 0xCF)
+      ) {
+        if (segmentLen >= 7) {
+          const height = (data[offset + 3] << 8) | data[offset + 4];
+          const width = (data[offset + 5] << 8) | data[offset + 6];
+          return {
+            width: Math.max(0, width | 0),
+            height: Math.max(0, height | 0),
+          };
+        }
+        break;
+      }
+
+      offset += segmentLen;
+    }
+
+    return { width: 0, height: 0 };
+  }
+
   function isSvgMime(mime) {
     const value = String(mime || '').trim().toLowerCase();
     return value === 'image/svg+xml' || value.endsWith('+svg') || value.includes('svg+xml');
+  }
+
+  function isJpegMime(mime) {
+    const value = String(mime || '').trim().toLowerCase();
+    return value === 'image/jpeg' || value === 'image/jpg';
   }
 
   function waitForNextImageUploadTick() {
@@ -164,9 +224,14 @@ export function createBrowserAssetManager(options = {}) {
   function resolveFetchableImageKind(url) {
     const normalizedUrl = String(url || '').toLowerCase();
     if (/\.png(?:$|[?#])/.test(normalizedUrl)) return 'png';
+    if (/\.jpe?g(?:$|[?#])/.test(normalizedUrl)) return 'jpeg';
     if (/\.bmp(?:$|[?#])/.test(normalizedUrl)) return 'bmp';
     if (/\.svg(?:$|[?#])/.test(normalizedUrl)) return 'svg';
     return '';
+  }
+
+  function beginPageLoad() {
+    fetchedImageBinaryUrls.clear();
   }
 
   function noteFetchedImageBinary(url) {
@@ -210,7 +275,7 @@ export function createBrowserAssetManager(options = {}) {
       if (!requestedKind) {
         raiseBrowserError(
           'TRUEOS_BROWSER_IMAGE_FETCH_KIND_UNSUPPORTED',
-          'Image fetch is restricted to png, bmp, or svg URLs',
+          'Image fetch is restricted to png, jpeg, bmp, or svg URLs',
           { url: value },
         );
       }
@@ -265,11 +330,15 @@ export function createBrowserAssetManager(options = {}) {
         let ready;
         if (cacheKey.startsWith('data:')) {
           const { mime, bytes } = dataUrlToBytes(cacheKey);
-          const dims = isSvgMime(mime) ? { width: 0, height: 0 } : readPngDimensions(bytes);
+          const dims = isSvgMime(mime)
+            ? { width: 0, height: 0 }
+            : (isJpegMime(mime) ? readJpegDimensions(bytes) : readPngDimensions(bytes));
           const texId = Number(
             (isSvgMime(mime)
               ? cmdStream.createTextureSvgAsync(bytes)
-              : cmdStream.createTexturePngAsync(bytes)) || 0,
+              : (isJpegMime(mime)
+                ? cmdStream.createTextureJpegAsync(bytes)
+                : cmdStream.createTexturePngAsync(bytes))) || 0,
           );
           if (!Number.isFinite(texId) || texId <= 0) {
             throw new Error('inline image texture upload failed');
@@ -279,7 +348,7 @@ export function createBrowserAssetManager(options = {}) {
             state: 'ready',
             texId,
             url: cacheKey,
-            mime: String(mime || 'image/png'),
+            mime: String(mime || (isJpegMime(mime) ? 'image/jpeg' : 'image/png')),
             pixelWidth: Math.max(0, Number(dims.width || 0) | 0),
             pixelHeight: Math.max(0, Number(dims.height || 0) | 0),
             error: '',
@@ -466,6 +535,7 @@ export function createBrowserAssetManager(options = {}) {
   }
 
   return {
+    beginPageLoad,
     applyResourcesToRows,
     requestAssetsForRows,
     primeHtmlImageUrls,

@@ -22,6 +22,11 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
+    fn trueos_cabi_gfx_upload_texture_jpeg_async(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
     fn trueos_cabi_gfx_upload_texture_svg_async(
         tex_id: u32,
         data_ptr: *const u8,
@@ -331,6 +336,25 @@ fn queue_png_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(u32, u32), i32
     Ok((width, height))
 }
 
+fn jpeg_like_bytes(bytes: &[u8]) -> bool {
+    bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
+}
+
+fn path_has_jpeg_suffix(path: &[u8]) -> bool {
+    let text = core::str::from_utf8(path).unwrap_or("");
+    let lower = text.as_bytes();
+    lower.ends_with(b".jpg") || lower.ends_with(b".jpeg")
+}
+
+fn queue_jpeg_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(), i32> {
+    let rc =
+        unsafe { trueos_cabi_gfx_upload_texture_jpeg_async(tex_id, bytes.as_ptr(), bytes.len()) };
+    if rc != 0 {
+        return Err(rc);
+    }
+    Ok(())
+}
+
 fn svg_like_bytes(bytes: &[u8]) -> bool {
     let mut start = 0usize;
     while start < bytes.len() && matches!(bytes[start], b' ' | b'\t' | b'\r' | b'\n') {
@@ -474,9 +498,18 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                         Ok(bytes) => {
                             let is_svg = path_has_svg_suffix(path.as_slice())
                                 || svg_like_bytes(bytes.as_slice());
+                            let is_jpeg = !is_svg
+                                && (path_has_jpeg_suffix(path.as_slice())
+                                    || jpeg_like_bytes(bytes.as_slice()));
                             let queued = if is_svg {
                                 queue_svg_texture_upload(op.tex_id, bytes.as_slice()).map(|_| {
                                     op.mime = String::from("image/svg+xml");
+                                    op.width = 0;
+                                    op.height = 0;
+                                })
+                            } else if is_jpeg {
+                                queue_jpeg_texture_upload(op.tex_id, bytes.as_slice()).map(|_| {
+                                    op.mime = String::from("image/jpeg");
                                     op.width = 0;
                                     op.height = 0;
                                 })

@@ -59,10 +59,7 @@ pub fn ensure_started(spawner: &Spawner) -> EnsureStartedResult {
 }
 
 #[inline]
-unsafe fn read_js_string_arg(
-    ctx: *mut qjs::JSContext,
-    value: qjs::JSValueConst,
-) -> Option<String> {
+unsafe fn read_js_string_arg(ctx: *mut qjs::JSContext, value: qjs::JSValueConst) -> Option<String> {
     let mut len = 0usize;
     let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, value, 0);
     if cstr.is_null() {
@@ -89,7 +86,11 @@ unsafe extern "C" fn qjs_ai_input_pop(
         json_string(next.text.as_str()),
         if next.web_search { "true" } else { "false" },
         if next.file_search { "true" } else { "false" },
-        if next.new_conversation { "true" } else { "false" },
+        if next.new_conversation {
+            "true"
+        } else {
+            "false"
+        },
         if next.computer_use { "true" } else { "false" },
     );
     qjs::JS_NewStringLen(ctx, payload.as_ptr() as *const c_char, payload.len())
@@ -153,7 +154,10 @@ unsafe extern "C" fn qjs_browser_rpc_poll(
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let mut id_f = 0.0f64;
-    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0 || !id_f.is_finite() || id_f <= 0.0 {
+    if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0
+        || !id_f.is_finite()
+        || id_f <= 0.0
+    {
         return qjs::JSValue::undefined();
     }
     let id = id_f as u32;
@@ -472,7 +476,9 @@ pub async fn run_once() {
         return;
     }
 
+    qjs::trueos_shims::log_info("ai-task: run_once begin\n");
     unsafe {
+        qjs::trueos_shims::log_info("ai-task: creating JS runtime\n");
         let vm = match qjs::vm::QjsVm::new_node() {
             Some(vm) => vm,
             None => {
@@ -485,7 +491,9 @@ pub async fn run_once() {
         let ctx = vm.ctx_ptr();
         let rt = vm.rt_ptr();
 
+        qjs::trueos_shims::log_info("ai-task: installing node globals\n");
         qjs::node::install_globals(ctx);
+        qjs::trueos_shims::log_info("ai-task: installing ai globals\n");
         install_ai_globals(ctx);
 
         let shim_filename = b"<ai-shims>\0";
@@ -530,9 +538,11 @@ pub async fn run_once() {
             return;
         }
         qjs::js_free_value(ctx, shim);
+        qjs::trueos_shims::log_info("ai-task: shim bootstrap ok\n");
 
         let filename = b"<ai-init-module>\0";
         let src = b"import '/qjs/ai/ai_pc.mjs';";
+        qjs::trueos_shims::log_info("ai-task: importing /qjs/ai/ai_pc.mjs\n");
         let boot = qjs::js_eval_bytes(
             ctx,
             src,
@@ -547,6 +557,7 @@ pub async fn run_once() {
             return;
         }
         qjs::js_free_value(ctx, boot);
+        qjs::trueos_shims::log_info("ai-task: ai_pc import submitted\n");
 
         loop {
             if !qjs::vm::pump_runtime_once(rt, ctx, "ai") {
@@ -555,9 +566,11 @@ pub async fn run_once() {
             Timer::after(EmbassyDuration::from_millis(16)).await;
         }
 
+        qjs::trueos_shims::log_info("ai-task: runtime loop ended\n");
         let _ = qjs::vm::teardown_main_context(rt, ctx, 2_000).await;
     }
 
     AI_TASK_STARTED.store(false, Ordering::SeqCst);
     AI_TASK_ACCEPTING_INPUT.store(false, Ordering::SeqCst);
+    qjs::trueos_shims::log_info("ai-task: run_once end\n");
 }

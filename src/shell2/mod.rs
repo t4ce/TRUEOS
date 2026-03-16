@@ -24,6 +24,7 @@ const STATUS_ROW: usize = 2;
 const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = crate::shell::PROMPT_RGB;
+const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
 const LINE_WIDTH: usize = 100;
 const OUTPUT_UART1: u8 = 1 << 0;
 const OUTPUT_NET_TCP: u8 = 1 << 1;
@@ -115,7 +116,9 @@ impl<'a> AlignedWriter<'a> {
 
     fn main_mode_text(&self, mode: ShellMode2) -> AllocString {
         let mut text = AllocString::new();
-        self.push_mode_token(&mut text, "F1 surf", mode == ShellMode2::Surf);
+        self.push_function_key_label(&mut text, "[F1]");
+        self.push_plain(&mut text, " ");
+        self.push_mode_token(&mut text, "surf", mode == ShellMode2::Surf);
         self.push_plain(&mut text, " - ");
         self.push_mode_token(&mut text, "ai", mode == ShellMode2::Ai);
         self.push_plain(&mut text, " - ");
@@ -127,7 +130,8 @@ impl<'a> AlignedWriter<'a> {
 
     fn ai_status(&self, ai_mode: AiPromptMode) {
         let mut text = AllocString::new();
-        let _ = write!(text, "F2 ");
+        self.push_function_key_label(&mut text, "[F2]");
+        self.push_plain(&mut text, " ");
         self.push_ai_token(&mut text, "normal", ai_mode == AiPromptMode::Normal);
         self.push_plain(&mut text, " - ");
         self.push_ai_token(&mut text, "web", ai_mode == AiPromptMode::WebSearch);
@@ -140,7 +144,8 @@ impl<'a> AlignedWriter<'a> {
 
     fn qjs_status(&self, qjs_mode: QjsPromptMode) {
         let mut text = AllocString::new();
-        let _ = write!(text, "F2 ");
+        self.push_function_key_label(&mut text, "[F2]");
+        self.push_plain(&mut text, " ");
         self.push_ai_token(&mut text, "repl", qjs_mode == QjsPromptMode::Repl);
         self.push_plain(&mut text, " - ");
         self.push_ai_token(&mut text, "eval", qjs_mode == QjsPromptMode::Eval);
@@ -149,6 +154,11 @@ impl<'a> AlignedWriter<'a> {
 
     fn push_plain(&self, out: &mut AllocString, text: &str) {
         out.push_str(text);
+    }
+
+    fn push_function_key_label(&self, out: &mut AllocString, text: &str) {
+        let styled = alloc::format!("{}", crate::ecma48::style(text).bold().fg(FUNCTION_KEY_RGB));
+        out.push_str(styled.as_str());
     }
 
     fn push_ai_token(&self, out: &mut AllocString, text: &str, selected: bool) {
@@ -233,11 +243,11 @@ fn clock_bucket_and_text() -> (u64, HString<5>) {
 
 pub(crate) fn print_shell_line(io: &dyn ShellIo2, text: &str) {
     io.write_str(crate::ecma48::SAVE_CURSOR);
-    io.write_fmt(format_args!("{}", crate::ecma48::pos(999, 1)));
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(SCROLL_TOP_ROW, 1)));
+    io.write_str("\x1b[L");
     io.write_str(crate::ecma48::CLEAR_LINE);
     io.write_str(crate::ecma48::RESET);
     io.write_str(text);
-    io.write_str("\r\n");
     io.write_str(crate::ecma48::RESTORE_CURSOR);
 }
 

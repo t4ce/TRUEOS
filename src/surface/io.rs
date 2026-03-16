@@ -616,19 +616,29 @@ pub mod cabi {
     static ASYNC_TEX_STATUS: spin::Mutex<Vec<i32>> = spin::Mutex::new(Vec::new());
     static ASYNC_PNG_REQS: spin::Mutex<VecDeque<AsyncPngUploadReq>> =
         spin::Mutex::new(VecDeque::new());
+    static ASYNC_JPEG_REQS: spin::Mutex<VecDeque<AsyncJpegUploadReq>> =
+        spin::Mutex::new(VecDeque::new());
     static ASYNC_SVG_REQS: spin::Mutex<VecDeque<AsyncSvgUploadReq>> =
         spin::Mutex::new(VecDeque::new());
     static TEXTURE_UPLOAD_REQS: spin::Mutex<VecDeque<TextureUploadReq>> =
         spin::Mutex::new(VecDeque::new());
     static ASYNC_PNG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+    static ASYNC_JPEG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_SVG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static TEXTURE_UPLOAD_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_PNG_WORKER_STARTED: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
+    static ASYNC_JPEG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
     static ASYNC_SVG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
 
     struct AsyncPngUploadReq {
+        tex_id: u32,
+        bytes: Vec<u8>,
+    }
+
+    struct AsyncJpegUploadReq {
         tex_id: u32,
         bytes: Vec<u8>,
     }
@@ -679,6 +689,13 @@ pub mod cabi {
         ASYNC_PNG_WAIT.notify_one();
     }
 
+    fn enqueue_async_jpeg_upload(tex_id: u32, bytes: Vec<u8>) {
+        ASYNC_JPEG_REQS
+            .lock()
+            .push_back(AsyncJpegUploadReq { tex_id, bytes });
+        ASYNC_JPEG_WAIT.notify_one();
+    }
+
     fn enqueue_async_svg_upload(tex_id: u32, bytes: Vec<u8>) {
         ASYNC_SVG_REQS
             .lock()
@@ -688,6 +705,10 @@ pub mod cabi {
 
     fn take_async_png_upload() -> Option<AsyncPngUploadReq> {
         ASYNC_PNG_REQS.lock().pop_front()
+    }
+
+    fn take_async_jpeg_upload() -> Option<AsyncJpegUploadReq> {
+        ASYNC_JPEG_REQS.lock().pop_front()
     }
 
     fn take_async_svg_upload() -> Option<AsyncSvgUploadReq> {
@@ -837,6 +858,47 @@ pub mod cabi {
         async_png_upload_service_inner().await;
     }
 
+    async fn async_jpeg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
+        let rc = match crate::gfx::jpeg_codec::decode_jpeg_rgba(bytes.as_slice()) {
+            Ok(decoded) => {
+                if queue_texture_rgba_upload_owned(
+                    tex_id,
+                    decoded.width,
+                    decoded.height,
+                    decoded.rgba,
+                    TexSampleKind::Rgba,
+                    0,
+                    "",
+                    true,
+                ) {
+                    0
+                } else {
+                    -5
+                }
+            }
+            Err(err) => err.code(),
+        };
+        if rc != 0 {
+            set_async_tex_status(tex_id, rc);
+        }
+    }
+
+    async fn async_jpeg_upload_service_inner() {
+        loop {
+            let Some(req) = take_async_jpeg_upload() else {
+                ASYNC_JPEG_WAIT.wait_for_event().await;
+                continue;
+            };
+            async_jpeg_decode_upload_inner(req.tex_id, req.bytes).await;
+            Timer::after_millis(1).await;
+        }
+    }
+
+    #[embassy_executor::task]
+    async fn async_jpeg_upload_service_task() {
+        async_jpeg_upload_service_inner().await;
+    }
+
     async fn async_svg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
         let rc = match crate::gfx::svg::upload_svg_bytes_to_texture(tex_id, bytes.as_slice()) {
             Ok(_) => 0,
@@ -908,6 +970,53 @@ pub mod cabi {
         {
             crate::wait::spawn_local_detached(async move {
                 async_png_upload_service_inner().await;
+            });
+        }
+    }
+
+    fn try_start_async_jpeg_worker() {
+        if ASYNC_JPEG_WORKER_STARTED.load(core::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+
+        if let Some(worker_spawner) = trueos_qjs::workers::pick_background_spawner() {
+            if ASYNC_JPEG_WORKER_STARTED
+                .compare_exchange(
+                    false,
+                    true,
+                    core::sync::atomic::Ordering::AcqRel,
+                    core::sync::atomic::Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                if worker_spawner
+                    .spawn(async_jpeg_upload_service_task())
+                    .is_err()
+                {
+                    ASYNC_JPEG_WORKER_STARTED.store(false, core::sync::atomic::Ordering::Release);
+                }
+            }
+            return;
+        }
+
+        if crate::smp::cpu_count() > 1 {
+            crate::globalog::log(format_args!(
+                "async-jpeg: no background spawner available on multicore system; worker not started\n"
+            ));
+        }
+
+        if crate::smp::cpu_count() <= 1
+            && ASYNC_JPEG_WORKER_STARTED
+                .compare_exchange(
+                    false,
+                    true,
+                    core::sync::atomic::Ordering::AcqRel,
+                    core::sync::atomic::Ordering::Acquire,
+                )
+                .is_ok()
+        {
+            crate::wait::spawn_local_detached(async move {
+                async_jpeg_upload_service_inner().await;
             });
         }
     }
@@ -2186,6 +2295,60 @@ pub mod cabi {
         set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
         enqueue_async_png_upload(tex_id, bytes);
         try_start_async_png_worker();
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_jpeg(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        if tex_id == 0 {
+            return -1;
+        }
+        if data_ptr.is_null() {
+            return -2;
+        }
+        let data = core::slice::from_raw_parts(data_ptr, data_len);
+        let decoded = match crate::gfx::jpeg_codec::decode_jpeg_rgba(data) {
+            Ok(decoded) => decoded,
+            Err(err) => return err.code(),
+        };
+
+        upload_texture_rgba_inner(
+            tex_id,
+            decoded.width,
+            decoded.height,
+            decoded.rgba.as_ptr(),
+            decoded.rgba.len(),
+            TexSampleKind::Rgba,
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_jpeg_async(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        if tex_id == 0 {
+            return -1;
+        }
+        if data_ptr.is_null() {
+            return -2;
+        }
+        if data_len == 0 {
+            return -3;
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+        set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
+        enqueue_async_jpeg_upload(tex_id, bytes);
+        try_start_async_jpeg_worker();
         0
     }
 

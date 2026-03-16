@@ -13,6 +13,65 @@ pub(super) fn cursor_color(slot_id: u32) -> (u8, u8, u8, u8) {
     }
 }
 
+#[inline]
+fn should_log_input_diag(count: u32) -> bool {
+    count <= UI2_INPUT_DIAG_LOG_FIRST
+        || (count > UI2_INPUT_DIAG_LOG_FIRST && count.is_multiple_of(UI2_INPUT_DIAG_LOG_EVERY))
+}
+
+#[inline]
+fn cursor_event_is_physical(event: &crate::usb::hid::TrueosHidCursorEvent) -> bool {
+    event.controller_id != 0 && matches!(event.hid_kind, 2 | 3)
+}
+
+fn note_cursor_event_source(state: &mut Ui2State, event: &crate::usb::hid::TrueosHidCursorEvent) {
+    if cursor_event_is_physical(event) {
+        return;
+    }
+    state.non_physical_cursor_event_count = state.non_physical_cursor_event_count.wrapping_add(1);
+    let count = state.non_physical_cursor_event_count;
+    if should_log_input_diag(count) {
+        crate::log!(
+            "ui2: cursor-input-source non-physical count={} seq={} kind={} ctrl={} slot={} ep={} buttons=0x{:X} wheel={} flags=0x{:X}\n",
+            count,
+            event.seq,
+            event.hid_kind,
+            event.controller_id,
+            event.slot_id,
+            event.ep_target,
+            event.buttons_down,
+            event.wheel,
+            event.flags
+        );
+    }
+}
+
+fn note_keyboard_event_source(
+    state: &mut Ui2State,
+    event: &crate::v::keyboard::TrueosKeyboardOutputEvent,
+) {
+    if (event.flags & crate::v::keyboard::KEYBOARD_OUTPUT_FLAG_SYNTHETIC) == 0 {
+        return;
+    }
+    state.synthetic_keyboard_event_count = state.synthetic_keyboard_event_count.wrapping_add(1);
+    let count = state.synthetic_keyboard_event_count;
+    if should_log_input_diag(count) {
+        crate::log!(
+            "ui2: keyboard-input-source synthetic count={} seq={} dev_seq={} ctrl={} slot={} ep={} kind={} key_code={} codepoint={} flags=0x{:X}\n",
+            count,
+            event.seq,
+            event.device_seq,
+            event.controller_id,
+            event.slot_id,
+            event.ep_target,
+            event.kind,
+            event.key_code,
+            event.codepoint,
+            event.flags
+        );
+    }
+}
+
 fn cursor_index(state: &Ui2State, slot_id: u32) -> Option<usize> {
     state
         .cursors
@@ -203,13 +262,8 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidC
             Ui2HitKind::WindowHorizontalScrollbar => {}
             Ui2HitKind::WindowDecoration => {
                 if press_system_button_action.is_none() {
-                    let _ = begin_move_drag_for_cursor(
-                        state,
-                        slot_id,
-                        target.owner_window_id,
-                        px,
-                        py,
-                    );
+                    let _ =
+                        begin_move_drag_for_cursor(state, slot_id, target.owner_window_id, px, py);
                 }
             }
             Ui2HitKind::WindowBody | Ui2HitKind::BrowserInteractive => {}
@@ -222,7 +276,8 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidC
         let _ = begin_vertical_scroll_drag_for_cursor(state, slot_id, px, py);
     }
     if begin_scroll_pan_window_id != 0 {
-        let _ = begin_window_scroll_pan_for_cursor(state, slot_id, begin_scroll_pan_window_id, px, py);
+        let _ =
+            begin_window_scroll_pan_for_cursor(state, slot_id, begin_scroll_pan_window_id, px, py);
         let _ = set_cursor_selected_window(state, slot_id, begin_scroll_pan_window_id);
     }
 
@@ -318,6 +373,7 @@ pub(super) fn pump_cursor_selection(state: &mut Ui2State) {
         }
         state.cursor_read_seq = next_seq;
         for event in events.iter().take(wrote) {
+            note_cursor_event_source(state, event);
             process_cursor_event(state, *event);
         }
         if wrote < events.len() {
@@ -461,6 +517,7 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
                 Some(Ui2WindowKind::HostedBrowser) => {
                     let mut events = Vec::new();
                     for event in raw_events.iter().take(wrote).copied() {
+                        note_keyboard_event_source(state, &event);
                         if let Some(next) = browser_keyboard_event_from_output(event) {
                             events.push(next);
                         }
@@ -480,10 +537,15 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
                 }
                 Some(Ui2WindowKind::HostedSurface) => {
                     for event in raw_events.iter().take(wrote).copied() {
+                        note_keyboard_event_source(state, &event);
                         let _ = crate::tst_gfx_tetris::queue_ui2_keyboard_event(window_id, event);
                     }
                 }
                 None => {}
+            }
+        } else {
+            for event in raw_events.iter().take(wrote) {
+                note_keyboard_event_source(state, event);
             }
         }
 
@@ -555,19 +617,11 @@ fn begin_move_drag_for_cursor(
         let restored = if window.restore_rect.w > 0.0 && window.restore_rect.h > 0.0 {
             normalized_window_rect_for_view(state.view_w, state.view_h, window.restore_rect)
         } else {
-            Ui2Rect::new(
-                0.0,
-                0.0,
-                (view_w * 0.75).max(1.0),
-                (view_h * 0.75).max(1.0),
-            )
+            Ui2Rect::new(0.0, 0.0, (view_w * 0.75).max(1.0), (view_h * 0.75).max(1.0))
         };
-        let cursor_ratio_x =
-            ((cursor_x - window.rect.x) / window.rect.w.max(1.0)).clamp(0.0, 1.0);
-        let grab_dy = (cursor_y - window.rect.y).clamp(
-            0.0,
-            UI2_TITLE_H.min(restored.h).max(1.0) - 1.0,
-        );
+        let cursor_ratio_x = ((cursor_x - window.rect.x) / window.rect.w.max(1.0)).clamp(0.0, 1.0);
+        let grab_dy =
+            (cursor_y - window.rect.y).clamp(0.0, UI2_TITLE_H.min(restored.h).max(1.0) - 1.0);
         next_rect = restored;
         next_rect.x =
             (cursor_x - (next_rect.w * cursor_ratio_x)).clamp(0.0, (view_w - next_rect.w).max(0.0));

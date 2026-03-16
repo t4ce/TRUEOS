@@ -60,6 +60,13 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
+    fn trueos_cabi_gfx_upload_texture_jpeg(tex_id: u32, data_ptr: *const u8, data_len: usize)
+    -> i32;
+    fn trueos_cabi_gfx_upload_texture_jpeg_async(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
     fn trueos_cabi_gfx_upload_texture_svg(tex_id: u32, data_ptr: *const u8, data_len: usize)
     -> i32;
     fn trueos_cabi_gfx_upload_texture_svg_async(
@@ -1516,13 +1523,7 @@ pub(crate) unsafe fn try_create_native_module(
             let tex_id = cmd_stream_alloc_tex_id();
             let zeros = vec![0u8; need];
             if unsafe {
-                trueos_cabi_gfx_upload_texture_rgba_image(
-                    tex_id,
-                    w,
-                    h,
-                    zeros.as_ptr(),
-                    zeros.len(),
-                )
+                trueos_cabi_gfx_upload_texture_rgba_image(tex_id, w, h, zeros.as_ptr(), zeros.len())
             } != 0
             {
                 cmd_stream_release_tex_id(tex_id);
@@ -1569,6 +1570,54 @@ pub(crate) unsafe fn try_create_native_module(
             let mut queued = false;
             let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
                 if len > 0 && trueos_cabi_gfx_upload_texture_png_async(tex_id, ptr, len) == 0 {
+                    queued = true;
+                }
+            });
+            if !queued {
+                cmd_stream_release_tex_id(tex_id);
+                return qjs::JSValue::undefined();
+            }
+            qjs::JS_NewFloat64(ctx, tex_id as f64)
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let Some(args) = cmd_stream_args(argv, argc, 1) else {
+                return qjs::JSValue::undefined();
+            };
+            let tex_id = cmd_stream_alloc_tex_id();
+
+            let mut uploaded = false;
+            let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
+                if len > 0 && trueos_cabi_gfx_upload_texture_jpeg(tex_id, ptr, len) == 0 {
+                    uploaded = true;
+                }
+            });
+            if !uploaded {
+                cmd_stream_release_tex_id(tex_id);
+                return qjs::JSValue::undefined();
+            }
+            qjs::JS_NewFloat64(ctx, tex_id as f64)
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg_async(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let Some(args) = cmd_stream_args(argv, argc, 1) else {
+                return qjs::JSValue::undefined();
+            };
+            let tex_id = cmd_stream_alloc_tex_id();
+
+            let mut queued = false;
+            let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
+                if len > 0 && trueos_cabi_gfx_upload_texture_jpeg_async(tex_id, ptr, len) == 0 {
                     queued = true;
                 }
             });
@@ -1681,6 +1730,31 @@ pub(crate) unsafe fn try_create_native_module(
             let _ = cmd_stream_with_u8_buffer(ctx, args[1], |ptr, len| {
                 if len > 0 {
                     let _ = trueos_cabi_gfx_upload_texture_png(tex_id, ptr, len);
+                }
+            });
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_update_texture_jpeg(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let Some(args) = cmd_stream_args(argv, argc, 2) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+                return qjs::JSValue::undefined();
+            };
+            let tex_id = (tex_id_f as i64).max(0) as u32;
+            if !cmd_stream_is_managed_tex(tex_id) {
+                return qjs::JSValue::undefined();
+            }
+
+            let _ = cmd_stream_with_u8_buffer(ctx, args[1], |ptr, len| {
+                if len > 0 {
+                    let _ = trueos_cabi_gfx_upload_texture_jpeg(tex_id, ptr, len);
                 }
             });
             qjs::JSValue::undefined()
@@ -1956,10 +2030,16 @@ pub(crate) unsafe fn try_create_native_module(
             export_fn!("createTextureRgba", qjs_cmd_stream_create_texture_rgba, 3);
             export_fn!("createRenderTarget", qjs_cmd_stream_create_render_target, 2);
             export_fn!("createTexturePng", qjs_cmd_stream_create_texture_png, 1);
+            export_fn!("createTextureJpeg", qjs_cmd_stream_create_texture_jpeg, 1);
             export_fn!("createTextureSvg", qjs_cmd_stream_create_texture_svg, 1);
             export_fn!(
                 "createTexturePngAsync",
                 qjs_cmd_stream_create_texture_png_async,
+                1
+            );
+            export_fn!(
+                "createTextureJpegAsync",
+                qjs_cmd_stream_create_texture_jpeg_async,
                 1
             );
             export_fn!(
@@ -1969,6 +2049,7 @@ pub(crate) unsafe fn try_create_native_module(
             );
             export_fn!("updateTextureRgba", qjs_cmd_stream_update_texture_rgba, 4);
             export_fn!("updateTexturePng", qjs_cmd_stream_update_texture_png, 2);
+            export_fn!("updateTextureJpeg", qjs_cmd_stream_update_texture_jpeg, 2);
             export_fn!("updateTextureSvg", qjs_cmd_stream_update_texture_svg, 2);
             export_fn!("getTextureStatus", qjs_cmd_stream_get_texture_status, 1);
             export_fn!("destroyTexture", qjs_cmd_stream_destroy_texture, 1);
@@ -2031,11 +2112,14 @@ pub(crate) unsafe fn try_create_native_module(
         add_export!("createTextureRgba");
         add_export!("createRenderTarget");
         add_export!("createTexturePng");
+        add_export!("createTextureJpeg");
         add_export!("createTextureSvg");
         add_export!("createTexturePngAsync");
+        add_export!("createTextureJpegAsync");
         add_export!("createTextureSvgAsync");
         add_export!("updateTextureRgba");
         add_export!("updateTexturePng");
+        add_export!("updateTextureJpeg");
         add_export!("updateTextureSvg");
         add_export!("getTextureStatus");
         add_export!("destroyTexture");

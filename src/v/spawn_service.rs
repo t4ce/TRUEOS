@@ -46,8 +46,10 @@ static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_CURSOR_OVERLAY_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_TEXTURE_UPLOAD_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_LOADSCREEN_STARTED: AtomicBool = AtomicBool::new(false);
-static BROWSER_STARTUP_HTML_LOADER_STARTED: AtomicBool = AtomicBool::new(false);
-static WEBGPU_BROWSER_STARTED: AtomicBool = AtomicBool::new(false);
+static BROWSER_PRIMARY_STARTUP_HTML_LOADER_STARTED: AtomicBool = AtomicBool::new(false);
+static BROWSER_SECONDARY_STARTUP_ROUTE_STARTED: AtomicBool = AtomicBool::new(false);
+static WEBGPU_BROWSER_PRIMARY_STARTED: AtomicBool = AtomicBool::new(false);
+static WEBGPU_BROWSER_SECONDARY_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_GFX_TETRIS_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_TRIANGLE_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
@@ -66,6 +68,14 @@ static VIDEO_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static QJS_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
+
+const ENABLE_BROWSER_2: bool = false;
+
+#[inline]
+pub const fn secondary_browser_enabled() -> bool {
+    ENABLE_BROWSER_2
+}
+
 fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::vga::init_font_cache_task()) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -280,7 +290,7 @@ fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
 
 #[embassy_executor::task]
 async fn browser_startup_html_loader_task(browser_instance_id: u32) {
-    const STARTUP_URL: &str = "https://www.w3.org/Graphics/PNG/Inline-img.html";
+    const STARTUP_URL: &str = "https://www.google.de";
     const RETRY_MS: u64 = 2_000;
     const HANDOFF_RETRY_MS: u64 = 100;
 
@@ -362,30 +372,44 @@ async fn browser_svg_startup_route_task(browser_instance_id: u32) {
     }
 }
 
-fn spawn_browser_startup_html_loader(spawner: Spawner) -> SpawnAttempt {
+fn spawn_primary_browser_startup_html_loader(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(browser_startup_html_loader_task(
         trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
     )) {
-        Ok(()) => match spawner.spawn(browser_svg_startup_route_task(
-            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1,
-        )) {
-            Ok(()) => SpawnAttempt::Spawned,
-            Err(e) => SpawnAttempt::Failed(e),
-        },
+        Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
 
-fn spawn_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
+fn spawn_secondary_browser_startup_route(spawner: Spawner) -> SpawnAttempt {
+    if !secondary_browser_enabled() {
+        return SpawnAttempt::Skipped;
+    }
+    match spawner.spawn(browser_svg_startup_route_task(
+        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1,
+    )) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_primary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(trueos_qjs::browser_task::boot_browser(
         trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
     )) {
-        Ok(()) => match spawner.spawn(trueos_qjs::browser_task::boot_browser(
-            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1,
-        )) {
-            Ok(()) => SpawnAttempt::Spawned,
-            Err(e) => SpawnAttempt::Failed(e),
-        },
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_secondary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
+    if !secondary_browser_enabled() {
+        return SpawnAttempt::Skipped;
+    }
+    match spawner.spawn(trueos_qjs::browser_task::boot_browser(
+        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID + 1,
+    )) {
+        Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
@@ -599,9 +623,9 @@ fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::shell::task(
+    match spawner.spawn(crate::shell2::task(
         spawner,
-        &crate::shell::UART1_COM1_BACKEND,
+        &crate::shell2::UART1_COM1_BACKEND,
     )) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
@@ -609,9 +633,9 @@ fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::shell::task(
+    match spawner.spawn(crate::shell2::task(
         spawner,
-        &crate::shell::NET_TCP_SHELL_BACKEND,
+        &crate::shell2::NET_TCP_SHELL_BACKEND,
     )) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
@@ -741,18 +765,32 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_gfx_texture_upload_service,
     },
     TaskSpec {
-        name: "browser-startup-html-loader",
+        name: "browser-startup-html-loader-primary",
         disabled: false,
         required: crate::v::readiness::NET_CONFIGURED,
-        started: &BROWSER_STARTUP_HTML_LOADER_STARTED,
-        spawn: spawn_browser_startup_html_loader,
+        started: &BROWSER_PRIMARY_STARTUP_HTML_LOADER_STARTED,
+        spawn: spawn_primary_browser_startup_html_loader,
     },
     TaskSpec {
-        name: "webgpu_browser",
+        name: "browser-startup-route-secondary",
+        disabled: !ENABLE_BROWSER_2,
+        required: crate::v::readiness::NET_CONFIGURED,
+        started: &BROWSER_SECONDARY_STARTUP_ROUTE_STARTED,
+        spawn: spawn_secondary_browser_startup_route,
+    },
+    TaskSpec {
+        name: "webgpu-browser-primary",
         disabled: false,
         required: WEBGPU_BROWSER_READY,
-        started: &WEBGPU_BROWSER_STARTED,
-        spawn: spawn_webgpu_browser,
+        started: &WEBGPU_BROWSER_PRIMARY_STARTED,
+        spawn: spawn_primary_webgpu_browser,
+    },
+    TaskSpec {
+        name: "webgpu-browser-secondary",
+        disabled: !ENABLE_BROWSER_2,
+        required: WEBGPU_BROWSER_READY,
+        started: &WEBGPU_BROWSER_SECONDARY_STARTED,
+        spawn: spawn_secondary_webgpu_browser,
     },
     TaskSpec {
         name: "ui2",
@@ -763,14 +801,14 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "ui2-gfx-tetris",
-        disabled: false,
+        disabled: true, // Temporarily disable the auto-start demo.
         required: crate::v::readiness::LOADSCREEN_END,
         started: &UI2_GFX_TETRIS_STARTED,
         spawn: spawn_ui2_gfx_tetris,
     },
     TaskSpec {
         name: "ui2-triangle-demo",
-        disabled: false,
+        disabled: true, // Temporarily disable the auto-start demo.
         required: crate::v::readiness::LOADSCREEN_END,
         started: &UI2_TRIANGLE_DEMO_STARTED,
         spawn: spawn_ui2_triangle_demo,

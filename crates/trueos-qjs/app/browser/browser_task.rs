@@ -268,7 +268,10 @@ fn ensure_browser_host_state(
     instance_id: u32,
 ) -> &mut BrowserHostState {
     let instance_id = normalize_browser_instance_id(instance_id);
-    if let Some(index) = states.iter().position(|state| state.instance_id == instance_id) {
+    if let Some(index) = states
+        .iter()
+        .position(|state| state.instance_id == instance_id)
+    {
         return &mut states[index];
     }
     states.push(BrowserHostState::new(instance_id));
@@ -323,7 +326,10 @@ pub fn browser_instance_id_for_window(browser_window_id: u32) -> u32 {
         return PRIMARY_BROWSER_INSTANCE_ID;
     }
     let states = BROWSER_HOST_STATES.lock();
-    if let Some(state) = states.iter().find(|state| state.window_id == browser_window_id) {
+    if let Some(state) = states
+        .iter()
+        .find(|state| state.window_id == browser_window_id)
+    {
         return state.instance_id;
     }
     let primary_window_id = unsafe { trueos_cabi_ui2_primary_browser_window_id() };
@@ -520,7 +526,8 @@ pub fn set_hosted_viewport_for_browser(
         content_height: content_height.max(1),
     };
     let should_skip = with_browser_host_state(browser_instance_id, |state| {
-        state.applied_hosted_viewport.as_ref() == Some(&next) && state.pending_hosted_viewport.is_none()
+        state.applied_hosted_viewport.as_ref() == Some(&next)
+            && state.pending_hosted_viewport.is_none()
     });
     if should_skip {
         return true;
@@ -545,7 +552,11 @@ pub fn set_hosted_scroll_y_for_browser(browser_instance_id: u32, scroll_y: u32) 
     set_hosted_scroll_for_browser(browser_instance_id, current_scroll_x, scroll_y)
 }
 
-pub fn set_hosted_scroll_for_browser(browser_instance_id: u32, scroll_x: u32, scroll_y: u32) -> bool {
+pub fn set_hosted_scroll_for_browser(
+    browser_instance_id: u32,
+    scroll_x: u32,
+    scroll_y: u32,
+) -> bool {
     let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
     if !browser_started(browser_instance_id) {
         return false;
@@ -561,7 +572,9 @@ pub fn hosted_surface_state() -> HostedBrowserSurfaceState {
 }
 
 pub fn hosted_surface_state_for_browser(browser_instance_id: u32) -> HostedBrowserSurfaceState {
-    with_browser_host_state(browser_instance_id, |state| state.hosted_surface_state.clone())
+    with_browser_host_state(browser_instance_id, |state| {
+        state.hosted_surface_state.clone()
+    })
 }
 
 pub fn hosted_surface_seq() -> u32 {
@@ -576,7 +589,9 @@ pub fn hosted_interactive_state() -> HostedBrowserInteractiveState {
     hosted_interactive_state_for_browser(PRIMARY_BROWSER_INSTANCE_ID)
 }
 
-pub fn hosted_interactive_state_for_browser(browser_instance_id: u32) -> HostedBrowserInteractiveState {
+pub fn hosted_interactive_state_for_browser(
+    browser_instance_id: u32,
+) -> HostedBrowserInteractiveState {
     with_browser_host_state(browser_instance_id, |state| {
         state.hosted_interactive_state.clone()
     })
@@ -647,7 +662,8 @@ unsafe fn browser_api_value(ctx: *mut qjs::JSContext) -> Option<qjs::JSValue> {
     if global.is_exception() {
         return None;
     }
-    let browser = qjs::JS_GetPropertyStr(ctx, global, b"__trueosBrowser\0".as_ptr() as *const c_char);
+    let browser =
+        qjs::JS_GetPropertyStr(ctx, global, b"__trueosBrowser\0".as_ptr() as *const c_char);
     qjs::js_free_value(ctx, global);
     if browser.is_exception()
         || browser.tag == qjs::JS_TAG_UNDEFINED
@@ -660,7 +676,9 @@ unsafe fn browser_api_value(ctx: *mut qjs::JSContext) -> Option<qjs::JSValue> {
 }
 
 unsafe fn apply_pending_browser_rpc(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
-    if with_browser_host_state(browser_instance_id, |state| state.active_browser_rpc_id.is_some()) {
+    if with_browser_host_state(browser_instance_id, |state| {
+        state.active_browser_rpc_id.is_some()
+    }) {
         return;
     }
 
@@ -685,7 +703,9 @@ unsafe fn apply_pending_browser_rpc(ctx: *mut qjs::JSContext, browser_instance_i
     if active_window_id == 0 {
         BROWSER_RPC_RESULTS.lock().push_back(BrowserRpcResult {
             id: next.id,
-            payload_json: String::from("{\"ok\":false,\"error\":\"browser rpc unavailable: no active browser\"}"),
+            payload_json: String::from(
+                "{\"ok\":false,\"error\":\"browser rpc unavailable: no active browser\"}",
+            ),
         });
         return;
     }
@@ -738,9 +758,9 @@ unsafe fn apply_pending_browser_rpc(ctx: *mut qjs::JSContext, browser_instance_i
 }
 
 unsafe fn collect_browser_rpc_result(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
-    let Some(active_id) = with_browser_host_state(browser_instance_id, |state| {
-        state.active_browser_rpc_id
-    }) else {
+    let Some(active_id) =
+        with_browser_host_state(browser_instance_id, |state| state.active_browser_rpc_id)
+    else {
         return;
     };
 
@@ -751,16 +771,23 @@ unsafe fn collect_browser_rpc_result(ctx: *mut qjs::JSContext, browser_instance_
     }
 
     let done_id = js_prop_f64(ctx, global, b"__trueosBrowserRpcDoneId\0")
-        .map(|value| if value.is_finite() && value >= 0.0 { value as u32 } else { 0 })
+        .map(|value| {
+            if value.is_finite() && value >= 0.0 {
+                value as u32
+            } else {
+                0
+            }
+        })
         .unwrap_or(0);
     if done_id != active_id {
         qjs::js_free_value(ctx, global);
         return;
     }
 
-    let payload = js_prop_string(ctx, global, b"__trueosBrowserRpcDonePayload\0").unwrap_or_else(|| {
-        String::from("{\"ok\":false,\"error\":\"browser rpc missing payload\"}")
-    });
+    let payload =
+        js_prop_string(ctx, global, b"__trueosBrowserRpcDonePayload\0").unwrap_or_else(|| {
+            String::from("{\"ok\":false,\"error\":\"browser rpc missing payload\"}")
+        });
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         global,
@@ -886,11 +913,7 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
     let Some(browser) = browser_api_value(ctx) else {
         return;
     };
-    let func = qjs::JS_GetPropertyStr(
-        ctx,
-        browser,
-        b"getSurfaceState\0".as_ptr() as *const c_char,
-    );
+    let func = qjs::JS_GetPropertyStr(ctx, browser, b"getSurfaceState\0".as_ptr() as *const c_char);
     if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
         qjs::js_free_value(ctx, func);
         qjs::js_free_value(ctx, browser);
@@ -899,7 +922,10 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
     let result = qjs::JS_Call(ctx, func, browser, 0, core::ptr::null());
     qjs::js_free_value(ctx, func);
     qjs::js_free_value(ctx, browser);
-    if result.is_exception() || result.tag == qjs::JS_TAG_UNDEFINED || result.tag == qjs::JS_TAG_NULL {
+    if result.is_exception()
+        || result.tag == qjs::JS_TAG_UNDEFINED
+        || result.tag == qjs::JS_TAG_NULL
+    {
         if result.is_exception() {
             qjs::qjs_diag::dump_last_exception(ctx, "browser getSurfaceState");
         }
@@ -909,25 +935,53 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
 
     let mut next = HostedBrowserSurfaceState {
         seq: 0,
-        cache_revision: js_prop_f64(ctx, result, b"cacheRevision\0").unwrap_or(0.0).max(0.0) as u32,
-        cache_width: js_prop_f64(ctx, result, b"cacheWidth\0").unwrap_or(0.0).max(0.0) as u32,
-        tile_height: js_prop_f64(ctx, result, b"tileHeight\0").unwrap_or(0.0).max(0.0) as u32,
-        viewport_width: js_prop_f64(ctx, result, b"viewportWidth\0").unwrap_or(0.0).max(0.0) as u32,
-        viewport_height: js_prop_f64(ctx, result, b"viewportHeight\0").unwrap_or(0.0).max(0.0) as u32,
-        content_width: js_prop_f64(ctx, result, b"contentWidth\0").unwrap_or(0.0).max(0.0) as u32,
-        content_height: js_prop_f64(ctx, result, b"contentHeight\0").unwrap_or(0.0).max(0.0) as u32,
-        content_top_y: js_prop_f64(ctx, result, b"contentTopY\0").unwrap_or(0.0).max(0.0) as u32,
-        scroll_x: js_prop_f64(ctx, result, b"scrollX\0").unwrap_or(0.0).max(0.0) as u32,
-        scroll_y: js_prop_f64(ctx, result, b"scrollY\0").unwrap_or(0.0).max(0.0) as u32,
+        cache_revision: js_prop_f64(ctx, result, b"cacheRevision\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        cache_width: js_prop_f64(ctx, result, b"cacheWidth\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        tile_height: js_prop_f64(ctx, result, b"tileHeight\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        viewport_width: js_prop_f64(ctx, result, b"viewportWidth\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        viewport_height: js_prop_f64(ctx, result, b"viewportHeight\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        content_width: js_prop_f64(ctx, result, b"contentWidth\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        content_height: js_prop_f64(ctx, result, b"contentHeight\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        content_top_y: js_prop_f64(ctx, result, b"contentTopY\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        scroll_x: js_prop_f64(ctx, result, b"scrollX\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
+        scroll_y: js_prop_f64(ctx, result, b"scrollY\0")
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
         regions: Vec::new(),
     };
 
     let regions = qjs::JS_GetPropertyStr(ctx, result, b"regions\0".as_ptr() as *const c_char);
-    if !regions.is_exception() && regions.tag != qjs::JS_TAG_UNDEFINED && regions.tag != qjs::JS_TAG_NULL {
-        let len = js_prop_f64(ctx, regions, b"length\0").unwrap_or(0.0).max(0.0) as usize;
+    if !regions.is_exception()
+        && regions.tag != qjs::JS_TAG_UNDEFINED
+        && regions.tag != qjs::JS_TAG_NULL
+    {
+        let len = js_prop_f64(ctx, regions, b"length\0")
+            .unwrap_or(0.0)
+            .max(0.0) as usize;
         for idx in 0..len {
             let item = qjs::JS_GetPropertyUint32(ctx, regions, idx as u32);
-            if item.is_exception() || item.tag == qjs::JS_TAG_UNDEFINED || item.tag == qjs::JS_TAG_NULL {
+            if item.is_exception()
+                || item.tag == qjs::JS_TAG_UNDEFINED
+                || item.tag == qjs::JS_TAG_NULL
+            {
                 qjs::js_free_value(ctx, item);
                 continue;
             }
@@ -936,7 +990,9 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
                 doc_y: js_prop_f64(ctx, item, b"docY\0").unwrap_or(0.0).max(0.0) as u32,
                 width: js_prop_f64(ctx, item, b"width\0").unwrap_or(0.0).max(0.0) as u32,
                 height: js_prop_f64(ctx, item, b"height\0").unwrap_or(0.0).max(0.0) as u32,
-                revision: js_prop_f64(ctx, item, b"revision\0").unwrap_or(0.0).max(0.0) as u32,
+                revision: js_prop_f64(ctx, item, b"revision\0")
+                    .unwrap_or(0.0)
+                    .max(0.0) as u32,
                 dirty: js_prop_f64(ctx, item, b"dirty\0").unwrap_or(0.0) != 0.0,
             });
             qjs::js_free_value(ctx, item);
@@ -977,7 +1033,9 @@ unsafe fn sync_hosted_interactive_state(ctx: *mut qjs::JSContext, browser_instan
     let result = qjs::JS_Call(ctx, func, browser, 0, core::ptr::null());
     qjs::js_free_value(ctx, func);
     qjs::js_free_value(ctx, browser);
-    if result.is_exception() || result.tag == qjs::JS_TAG_UNDEFINED || result.tag == qjs::JS_TAG_NULL
+    if result.is_exception()
+        || result.tag == qjs::JS_TAG_UNDEFINED
+        || result.tag == qjs::JS_TAG_NULL
     {
         if result.is_exception() {
             qjs::qjs_diag::dump_last_exception(ctx, "browser getInteractiveState");
@@ -1045,9 +1103,9 @@ unsafe fn sync_hosted_interactive_state(ctx: *mut qjs::JSContext, browser_instan
 }
 
 unsafe fn apply_pending_html(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
-    let Some(next) = with_browser_host_state_mut(browser_instance_id, |state| {
-        state.pending_html.take()
-    }) else {
+    let Some(next) =
+        with_browser_host_state_mut(browser_instance_id, |state| state.pending_html.take())
+    else {
         return;
     };
     if next.browser_instance_id != browser_instance_id {
@@ -1181,8 +1239,11 @@ pub async fn boot_browser(browser_instance_id: u32) {
         return;
     }
     qjs::trueos_shims::log_info(
-        alloc::format!("qjs-browser[{}]: starting browser bootstrap\n", browser_instance_id)
-            .as_str(),
+        alloc::format!(
+            "qjs-browser[{}]: starting browser bootstrap\n",
+            browser_instance_id
+        )
+        .as_str(),
     );
     let spawner = unsafe { Spawner::for_current_executor().await };
     if !qjs::async_fs::ensure_service_started(&spawner) {
@@ -1203,8 +1264,11 @@ pub async fn boot_browser(browser_instance_id: u32) {
             Some(vm) => vm,
             None => {
                 qjs::trueos_shims::log_info(
-                    alloc::format!("qjs-browser[{}]: JS runtime init failed\n", browser_instance_id)
-                        .as_str(),
+                    alloc::format!(
+                        "qjs-browser[{}]: JS runtime init failed\n",
+                        browser_instance_id
+                    )
+                    .as_str(),
                 );
                 with_browser_host_state_mut(browser_instance_id, |state| {
                     state.started = false;
