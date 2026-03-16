@@ -716,11 +716,17 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                     } else {
                         TexSampleKind::Mask
                     };
-                    let (pipeline, vbuf, _) =
-                        match ensure_gfx_resources_tex(ctx, tex_blob.len(), tex_kind) {
-                            Some(v) => v,
-                            None => return -6,
-                        };
+                    let (pipeline, vbuf, _) = match ensure_gfx_resources_tex(
+                        ctx,
+                        tex_blob.len(),
+                        match tex_kind {
+                            TexSampleKind::Mask => TexPipelineKind::Mask,
+                            TexSampleKind::Rgba => TexPipelineKind::Rgba,
+                        },
+                    ) {
+                        Some(v) => v,
+                        None => return -6,
+                    };
                     if ctx.write_buffer(vbuf, 0, tex_blob.as_slice()).is_err() {
                         return -7;
                     }

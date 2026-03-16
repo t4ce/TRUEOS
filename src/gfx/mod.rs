@@ -5,6 +5,7 @@ pub mod intel;
 pub mod jpeg_codec;
 pub mod loadscreen;
 pub mod lyon;
+pub mod mandelbrot;
 pub mod png_codec;
 pub mod screenshot;
 pub mod svg;
@@ -117,6 +118,7 @@ pub enum SystemLockOwner {
     EndFrame = 3,
     CursorQueryViewport = 4,
     CursorEndFrame = 5,
+    DrawMandelbrot = 6,
 }
 
 impl SystemLockOwner {
@@ -129,6 +131,7 @@ impl SystemLockOwner {
             Self::EndFrame => "end_frame",
             Self::CursorQueryViewport => "cursor_query_viewport",
             Self::CursorEndFrame => "cursor_end_frame",
+            Self::DrawMandelbrot => "draw_mandelbrot",
         }
     }
 }
@@ -206,6 +209,9 @@ pub fn with_system_tag<R>(owner: SystemLockOwner, f: impl FnOnce(&mut System) ->
                 }
                 x if x == SystemLockOwner::CursorEndFrame as u32 => {
                     SystemLockOwner::CursorEndFrame.as_str()
+                }
+                x if x == SystemLockOwner::DrawMandelbrot as u32 => {
+                    SystemLockOwner::DrawMandelbrot.as_str()
                 }
                 _ => SystemLockOwner::Unknown.as_str(),
             };
