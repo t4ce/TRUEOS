@@ -54,7 +54,6 @@ QEMU_UPDATE_TARGET_FLAGS = \
 
 QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8 \
-	$(QEMU_UPDATE_TARGET_FLAGS) \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=2,id=usbleds \
 	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd 
@@ -69,6 +68,7 @@ QEMU_USB_FLAGS = \
 # -device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
+QEMU_ISO_WITH_NVME = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS) $(QEMU_UPDATE_TARGET_FLAGS)
 QEMU_ISO_DBG = $(QEMU_BIN) $(QEMU_ISO_FLAGS_DBG) $(QEMU_USB_FLAGS)
 
 IMG_SIZE ?= 1G
@@ -162,6 +162,9 @@ dbg-vscode: snipe iso-debug
 # Default quick boot (used by CI-style smoke checks and repo instructions).
 run: snipe iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
+
+run-with-nvme: snipe iso-debug
+	@($(QEMU_ISO_WITH_NVME) & $(SERIAL_CONSOLE_CMD))
 
 # Useful for validating GPT+ESP+Limine stage installation.
 QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait

@@ -79,6 +79,7 @@ define_started_flags!(
     NET_SHELL_STARTED,
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
+    WS_TIME_STARTED,
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
     GFX_VIRGL_READY_TASK_STARTED,
@@ -225,6 +226,10 @@ fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         spawner.spawn(crate::tst_http_trueosfs::http_trueosfs_task())
     })
+}
+
+fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_ws_time::ws_time_task()))
 }
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
@@ -629,6 +634,12 @@ static TASKS: &[TaskSpec] = &[
         NET_CONFIGURED_AND_ROOT_READY,
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
+    ),
+    TaskSpec::enabled(
+        "ws-time",
+        crate::v::readiness::NET_CONFIGURED,
+        &WS_TIME_STARTED,
+        spawn_ws_time,
     ),
     TaskSpec::disabled(
         "ftp-server",
