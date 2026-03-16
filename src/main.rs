@@ -41,6 +41,8 @@ mod tst_gfx_tetris;
 mod tst_html;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
+#[path = "tst/ws_time.rs"]
+mod tst_ws_time;
 #[path = "tst/ui2_triangle_demo.rs"]
 mod tst_ui2_triangle_demo;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
