@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-#![feature(abi_x86_interrupt, alloc_error_handler, f16, f128)]
+#![feature(abi_x86_interrupt, alloc_error_handler, f16)]
 // Rust 2024: `unsafe fn` bodies are safe-by-default; allow legacy style for now.
 #![allow(unsafe_op_in_unsafe_fn)]
 
@@ -41,6 +41,8 @@ mod tst_html;
 mod tst_http_trueosfs;
 #[path = "tst/ui2_triangle_demo.rs"]
 mod tst_ui2_triangle_demo;
+#[path = "tst/ui2_mandelbrot_demo.rs"]
+mod tst_ui2_mandelbrot_demo;
 mod turbo;
 mod usb;
 mod v;
