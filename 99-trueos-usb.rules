@@ -1,3 +1,7 @@
 # Allow user-level QEMU access to the dedicated TRUEOS data NVMe partition.
 # Match by PARTUUID so this keeps working even if the filesystem is reformatted.
 SUBSYSTEM=="block", ENV{ID_PART_ENTRY_UUID}=="2e4e446c-bc9b-4e6c-a657-9ff9a0edccca", MODE:="0660", GROUP:="kvm"
+
+# Allow user-level QEMU access to VFIO group devices used for PCI passthrough.
+# The host user is expected to be in the `kvm` group.
+SUBSYSTEM=="vfio", GROUP:="kvm", MODE:="0660"
