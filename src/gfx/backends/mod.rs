@@ -6,6 +6,8 @@ use trueos_gfx_core::{
 
 #[cfg(feature = "gfx_intel")]
 mod intel;
+#[cfg(feature = "gfx_intel")]
+mod intel_execlists;
 #[cfg(feature = "gfx_virgl")]
 use crate::gfx::virtio_gpu_3d;
 #[cfg(feature = "gfx_intel")]
