@@ -26,9 +26,10 @@ const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = crate::shell::PROMPT_RGB;
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
+const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const LINE_WIDTH: usize = 100;
-const OUTPUT_UART1: u8 = 1 << 0;
-const OUTPUT_NET_TCP: u8 = 1 << 1;
+pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
+pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
 const MAX_TRANSCRIPT_HISTORY: usize = 256;
 const MAX_RENDERED_TRANSCRIPT_LINES: usize = 20;
 
@@ -127,7 +128,7 @@ impl<'a> AlignedWriter<'a> {
                 let width = crate::ecma48::visible_width(s);
                 let col = LINE_WIDTH.saturating_sub(width).saturating_add(1);
                 self.move_to(row, col);
-                self.io.write_str(s);
+                self.io.write_fmt(format_args!("{}", crate::ecma48::style(s).fg(SYSTEM_TEXT_RGB)));
             }
         }
     }
@@ -309,23 +310,49 @@ fn same_backend_task(io: &'static dyn ShellBackend2, target: &'static dyn ShellI
 fn register_output(io: &'static dyn ShellIo2) {
     let uart_io: &'static dyn ShellIo2 = &UART1_COM1_BACKEND;
     if same_backend_io(io, uart_io) {
-        REGISTERED_OUTPUTS.fetch_or(OUTPUT_UART1, Ordering::Relaxed);
+        REGISTERED_OUTPUTS.fetch_or(OUTPUT_UART1_MASK, Ordering::Relaxed);
         return;
     }
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_io(io, net_io) {
-        REGISTERED_OUTPUTS.fetch_or(OUTPUT_NET_TCP, Ordering::Relaxed);
+        REGISTERED_OUTPUTS.fetch_or(OUTPUT_NET_TCP_MASK, Ordering::Relaxed);
     }
 }
 
 pub(crate) fn print_broadcast_line(text: &str) {
     let outputs = REGISTERED_OUTPUTS.load(Ordering::Relaxed);
-    if (outputs & OUTPUT_UART1) != 0 {
+    if (outputs & OUTPUT_UART1_MASK) != 0 {
         print_shell_line(&UART1_COM1_BACKEND, text);
     }
-    if (outputs & OUTPUT_NET_TCP) != 0 {
+    if (outputs & OUTPUT_NET_TCP_MASK) != 0 {
         print_shell_line(&NET_TCP_SHELL_BACKEND, text);
     }
+}
+
+pub(crate) fn print_targeted_line(target_mask: u8, text: &str) {
+    if (target_mask & OUTPUT_UART1_MASK) != 0 {
+        print_shell_line(&UART1_COM1_BACKEND, text);
+    }
+    if (target_mask & OUTPUT_NET_TCP_MASK) != 0 {
+        print_shell_line(&NET_TCP_SHELL_BACKEND, text);
+    }
+    if target_mask == 0 {
+        print_broadcast_line(text);
+    }
+}
+
+pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
+    let uart_io: &'static dyn ShellIo2 = &UART1_COM1_BACKEND;
+    if same_backend_task(io, uart_io) {
+        return OUTPUT_UART1_MASK;
+    }
+
+    let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
+    if same_backend_task(io, net_io) {
+        return OUTPUT_NET_TCP_MASK;
+    }
+
+    0
 }
 
 fn push_transcript_line(transcript: &mut VecDeque<TranscriptEntry>, source: LineSource, text: &str) {

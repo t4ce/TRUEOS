@@ -270,6 +270,23 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_shell2_print_targeted_line(
+        target_mask: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> usize {
+        if data_ptr.is_null() || data_len == 0 {
+            return 0;
+        }
+        let data = core::slice::from_raw_parts(data_ptr, data_len);
+        let Ok(text) = core::str::from_utf8(data) else {
+            return 0;
+        };
+        crate::shell2::print_targeted_line(target_mask as u8, text);
+        data_len
+    }
+
+    #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_poll_once() {
         crate::wait::spin_step();
     }

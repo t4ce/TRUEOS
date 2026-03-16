@@ -82,6 +82,10 @@ impl CanonicalImageBuffer {
         self.capture_armed.store(true, Ordering::Release);
     }
 
+    fn is_capture_armed(&self) -> bool {
+        self.capture_armed.load(Ordering::Acquire)
+    }
+
     fn published_seq(&self) -> u64 {
         self.seq.load(Ordering::Acquire)
     }
@@ -261,6 +265,10 @@ static VIRGL_SCREENSHOT_AWAIT: ScreenshotAwait =
 
 pub fn virgl_screenshot_await() -> &'static ScreenshotAwait {
     &VIRGL_SCREENSHOT_AWAIT
+}
+
+pub(crate) fn virgl_screenshot_capture_armed() -> bool {
+    VIRGL_CANONICAL_IMAGE_BUFFER.is_capture_armed()
 }
 
 pub(crate) fn publish_virgl_image_buffer(width: u32, height: u32, pixels: &[u32]) -> u64 {

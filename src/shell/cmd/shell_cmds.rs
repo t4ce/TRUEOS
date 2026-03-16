@@ -219,6 +219,7 @@ pub(crate) fn cmd_ai(
         file_search: false,
         new_conversation: false,
         computer_use: true,
+        shell_target_mask: 0,
     };
 
     match trueos_qjs::ai_task::ensure_started(ctx.spawner) {
