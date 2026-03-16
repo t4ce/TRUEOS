@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use super::*;
 use super::ui2_hid::note_selection_change;
+use super::*;
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -244,7 +244,12 @@ impl Ui2SurfaceWindow {
             .flatten()
             .collect::<Vec<u8>>();
         if !crate::surface::io::cabi::queue_texture_rgba_image_upload_copy(
-            tex_id, width, height, &pixels, 0, "ui2-surface-init",
+            tex_id,
+            width,
+            height,
+            &pixels,
+            0,
+            "ui2-surface-init",
         ) {
             crate::log!(
                 "ui2-surface-window: init upload queue failed tex={} size={}x{}\n",
