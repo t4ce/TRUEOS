@@ -1713,22 +1713,6 @@ impl VirglGfxBackend {
         }
     }
 
-    fn publish_scanout_image_buffers(&self) {
-        if !crate::gfx::virgl_screenshot_capture_armed() {
-            return;
-        }
-
-        let len_pixels = (self.width as usize).saturating_mul(self.height as usize);
-        if len_pixels == 0 {
-            return;
-        }
-
-        let pixels = unsafe {
-            core::slice::from_raw_parts(self.scanout_backing.virt() as *const u32, len_pixels)
-        };
-        let _ = crate::gfx::publish_virgl_image_buffer(self.width, self.height, pixels);
-    }
-
     pub fn init(
         _framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
@@ -3339,7 +3323,6 @@ impl GfxDevice for VirglGfxBackend {
             // Present copies the rendered host resource into the host-side scanout resource.
             // Do not upload guest backing here: scanout_backing is only zeroed/attached during
             // bringup and uploading it would overwrite the freshly copied frame with stale pixels.
-            self.publish_scanout_image_buffers();
             let n = VIRGL_PRESENT_DIAG_LOGS.fetch_add(1, Ordering::Relaxed);
             if n < 12 {
                 crate::log!(

@@ -94,12 +94,16 @@ const ENABLE_SHELL1_COMMAND_REGISTRY_TOOLS = readBooleanEnv(
   "TRUEOS_AI_ENABLE_SHELL1_COMMAND_REGISTRY_TOOLS",
   false,
 );
+const AI_PC_HARD_MODE_RETRY_PROMPT = [
+  "This turn is running in ai-pc hard mode.",
+  "Do not answer conversationally before using the computer tool.",
+  "Use the computer tool now and perform a real computer action or screenshot-driven computer step for the user's request.",
+].join(" ");
 const AI_PC_TOOL_POLICY = [
   "The old shell1 command registry tools are disabled by default because AI work should stay anchored to the shell session it was launched from instead of detouring through shell1.",
   "Hosted tool_search is disabled by default. Use the explicit web mode/search tools only when the user requested web-backed lookup.",
   "For mounted TRUEOS filesystem inspection or DOM insertion of file lists, prefer read_trueosfs_tree or browser.getTrueosFsTreeHtml(...) over old shell-driven file wizards.",
   "When you need current page or browser context, use read_browser_context before asking the user for page details that can be inspected directly.",
-  "When the user asks to see, view, watch, visually verify, use a screenshot, inspect the screen, or check what is visibly on top, switch into computer mode promptly instead of staying in browser-context-only inspection.",
   "When the task is to update the live browser page content, prefer the browser_set_body_html, browser_set_node_html, and browser_insert_html tools over opening a new surf data URL.",
   "For DOM replacement or page-update requests, do not detour through surf, cmd, tlb.*, generated files, or old shell registry commands unless the user explicitly asked for shell output instead of a browser DOM change.",
   "Never say that the DOM, page, UI, or browser content was changed unless you actually called a browser_set_* tool in this turn and received a successful tool result.",
@@ -110,7 +114,7 @@ const AI_PC_TOOL_POLICY = [
   "Use ask_user only when the request is genuinely ambiguous or a required argument is missing.",
   "Treat cursor and pointer requests in browser/computer-use tasks as mouse-style pointer movement; prefer computer.moveCursor(...) instead of interpreting them as shell or terminal text-cursor requests unless the user explicitly says shell or terminal.",
   "For visible UI interaction, use the built-in OpenAI computer tool path backed by the local TRUEOS computer/browser runtime.",
-  "When a task starts as shell/search/tool work but later needs visible UI control, call enter_computer_mode. When UI control is no longer needed and you want shell/search/function tools again, call exit_computer_mode.",
+  "In ai-pc mode, start with the computer tool immediately instead of chatting first. Only leave computer mode after at least one real computer action if structured tools are needed afterward.",
   "If old shell1 registry tools are explicitly enabled, treat them as a compatibility path only, not the default execution lane.",
 ].join(" ");
 const AI_PC_INSTRUCTIONS = [
@@ -136,48 +140,6 @@ function isDomMutationRequestText(text) {
     || value.includes("change dom")
     || value.includes("modify dom")
   );
-}
-
-function isVisualInspectionRequestText(text) {
-  const value = typeof text === "string" ? text.toLowerCase() : "";
-  if (!value) {
-    return false;
-  }
-  if (
-    value.includes("screenshot")
-    || value.includes("screen shot")
-    || value.includes("screen")
-    || value.includes("visible")
-    || value.includes("visually")
-    || value.includes("desktop")
-    || value.includes("window on top")
-    || value.includes("windows on top")
-    || value.includes("what website")
-  ) {
-    return true;
-  }
-  const visualVerb = (
-    value.includes(" see ")
-    || value.startsWith("see ")
-    || value.includes("can you see")
-    || value.includes("could you see")
-    || value.includes("view")
-    || value.includes("watch")
-    || value.includes("look at")
-    || value.includes("look on")
-  );
-  const visualTarget = (
-    value.includes("website")
-    || value.includes("page")
-    || value.includes("browser")
-    || value.includes("window")
-    || value.includes("title")
-    || value.includes("ui")
-    || value.includes("screen")
-    || value.includes("desktop")
-    || value.includes("top")
-  );
-  return visualVerb && visualTarget;
 }
 
 function summarizeResponseItems(items) {
@@ -243,6 +205,28 @@ function extractReasoningText(item) {
   }
 
   return texts.join(" ").trim();
+}
+
+function extractMessageText(item) {
+  if (!item || item.type !== "message") {
+    return "";
+  }
+  const parts = [];
+  const content = Array.isArray(item.content) ? item.content : [];
+  for (const part of content) {
+    if (part && part.type === "output_text" && typeof part.text === "string" && part.text) {
+      parts.push(part.text);
+      continue;
+    }
+    if (typeof part === "string" && part) {
+      parts.push(part);
+      continue;
+    }
+    if (part && typeof part.text === "string" && part.text) {
+      parts.push(part.text);
+    }
+  }
+  return parts.join("");
 }
 
 function formatReasoningProgress(item) {
@@ -1083,7 +1067,7 @@ function normalizeAiInputEntry(entry) {
     webSearch: !!(source && source.webSearch),
     fileSearch: !!(source && source.fileSearch),
     newConversation: !!(source && source.newConversation),
-    computerUse: !source || source.computerUse !== false,
+    computerUse: !!(source && source.computerUse),
     shellTargetMask: source ? (Number(source.shellTargetMask) || 0) : 0,
   };
 }
@@ -1692,18 +1676,19 @@ function buildTools(entry, options = null) {
   const cfg = options && typeof options === "object" ? options : {};
   const computerModeEligible = cfg.computerModeEligible === true;
   const computerModeActive = cfg.computerModeActive === true;
+  const allowExitComputerMode = cfg.allowExitComputerMode !== false;
   const domMutationRequest = isDomMutationRequestText(entry && entry.text);
-  const visualInspectionRequest = isVisualInspectionRequestText(entry && entry.text);
   const normalToolCallCount = Number.isFinite(cfg.normalToolCallCount)
     ? Math.max(0, Math.floor(cfg.normalToolCallCount))
     : 0;
 
   if (computerModeActive) {
+    const tools = [...buildComputerOnlyTools()];
+    if (allowExitComputerMode) {
+      tools.push(createExitComputerModeTool());
+    }
     return decorateResponseTools(
-      [
-        ...buildComputerOnlyTools(),
-        createExitComputerModeTool(),
-      ],
+      tools,
       { deferLoading: false },
     );
   }
@@ -1735,7 +1720,7 @@ function buildTools(entry, options = null) {
   tools.push(...createDriverDevTools());
   if (
     computerModeEligible
-    && (visualInspectionRequest || normalToolCallCount >= DEFAULT_COMPUTER_HANDOFF_AFTER_TOOL_CALLS)
+    && normalToolCallCount >= DEFAULT_COMPUTER_HANDOFF_AFTER_TOOL_CALLS
   ) {
     tools.push(createEnterComputerModeTool());
   }
@@ -2371,8 +2356,13 @@ async function createHostedComputerCallOutput(item) {
     : (item && typeof item.action === "object" ? [item.action] : []);
   for (const action of actions) {
     try {
+      const actionType = normalizeComputerActionType(action) || "wait";
+      if (actionType === "screenshot") {
+        aiDiag("computer_call action=screenshot returning screenshot output");
+        continue;
+      }
       const handled = await executeHostedComputerAction(runtime, action);
-      aiDiag(`computer_call action=${normalizeComputerActionType(action) || "wait"} handled=${handled ? 1 : 0}`);
+      aiDiag(`computer_call action=${actionType} handled=${handled ? 1 : 0}`);
     } catch (err) {
       aiDiag(`computer_call action failed: ${String(err && err.message ? err.message : err)}`);
     }
@@ -2406,9 +2396,12 @@ async function createHostedComputerCallOutput(item) {
 }
 
 async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX_STEPS, model = DEFAULT_RESPONSE_MODEL) {
-  const computerModeEligible = entry.computerUse === true;
+  const hardComputerMode = entry.computerUse === true;
+  const computerModeEligible = hardComputerMode;
   const expectsDomMutation = isDomMutationRequestText(entry && entry.text);
-  let computerModeActive = false;
+  let computerModeActive = hardComputerMode;
+  let computerActionStarted = false;
+  let hardModeRetryUsed = false;
   let normalToolCallCount = 0;
   let browserMutationExecuted = false;
   let nextInput = [
@@ -2419,23 +2412,29 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
   ];
 
   for (let i = 0; i < maxSteps; i += 1) {
+    const requireComputerToolNow = hardComputerMode && !computerActionStarted;
     const tools = buildTools(entry, {
       computerModeEligible,
       computerModeActive,
       normalToolCallCount,
+      allowExitComputerMode: !hardComputerMode || computerActionStarted,
     });
     const turnModel = computerModeActive ? OPENAI_COMPUTER_MODEL : model;
     const hasHostedComputerTool = tools.some(isHostedComputerTool);
     const needsPreviewComputerConfig = computerModeActive
       && hasHostedComputerTool
       && isPreviewComputerToolType(OPENAI_COMPUTER_TOOL_TYPE);
+    const turnInstructions = requireComputerToolNow
+      ? `${AI_PC_INSTRUCTIONS} ${AI_PC_HARD_MODE_RETRY_PROMPT}`
+      : AI_PC_INSTRUCTIONS;
     const request = buildResponsesRequest({
       model: turnModel,
-      instructions: AI_PC_INSTRUCTIONS,
+      instructions: turnInstructions,
       tools,
       input: nextInput,
       previousResponseId,
       parallelToolCalls: DEFAULT_PARALLEL_TOOL_CALLS,
+      toolChoice: requireComputerToolNow ? "required" : undefined,
       truncation: needsPreviewComputerConfig ? "auto" : "",
       reasoningEffort: needsPreviewComputerConfig
         ? OPENAI_COMPUTER_REASONING_EFFORT
@@ -2446,7 +2445,7 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
 
     let resp = null;
     let streamedAssistantText = false;
-    const responseStream = createResponseStream(client, request);
+    const responseStream = requireComputerToolNow ? null : createResponseStream(client, request);
     if (responseStream) {
       try {
         for await (const event of responseStream) {
@@ -2486,6 +2485,7 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
     for (const item of responseItems) {
       if (item && item.type === "computer_call") {
         hadToolCall = true;
+        computerActionStarted = true;
         toolOutputs.push(await createHostedComputerCallOutput(item));
         continue;
       }
@@ -2803,11 +2803,13 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
           output: answer,
         });
       } else if (item.type === "message") {
+        if (requireComputerToolNow) {
+          continue;
+        }
         if (streamedAssistantText) {
           continue;
         }
-        const content = Array.isArray(item.content) ? item.content[0] : item.content;
-        const text = content && content.text ? content.text : content;
+        const text = extractMessageText(item);
         if (typeof text === "string" && text) {
           if (expectsDomMutation && !browserMutationExecuted) {
             shellEmitLine("ai: no DOM mutation tool was executed in this turn, so the page was not actually changed.");
@@ -2829,7 +2831,7 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
       emittedAssistantText = true;
     }
 
-    if (!hadToolCall && !emittedAssistantText) {
+    if (!hadToolCall && !emittedAssistantText && !requireComputerToolNow) {
       const fallbackText = getResponseOutputText(resp);
       if (typeof fallbackText === "string" && fallbackText) {
         if (expectsDomMutation && !browserMutationExecuted) {
@@ -2840,6 +2842,24 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
         }
         emittedAssistantText = true;
       }
+    }
+
+    if (!hadToolCall && requireComputerToolNow) {
+      if (!hardModeRetryUsed) {
+        hardModeRetryUsed = true;
+        aiDiag("ai-pc hard mode received no computer action; retrying with stricter prompt");
+        nextInput = [
+          {
+            role: "user",
+            content: AI_PC_HARD_MODE_RETRY_PROMPT,
+          },
+        ];
+        continue;
+      }
+      shellEmitLine("ai-pc: model returned no computer action.");
+      shellFlush();
+      aiDiag("ai-pc hard mode failed to obtain a computer action after retry");
+      return previousResponseId;
     }
 
     if (!hadToolCall && !emittedAssistantText) {
