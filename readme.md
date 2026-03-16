@@ -74,7 +74,7 @@ ConBlue 	08_18_30
 ConWhite 	FF_FF_FF
 */
 
-# PASS IN USB DEVICE / NVMe data partition permissions
+# PASS IN USB DEVICE / NVMe data partition / VFIO permissions
 sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
 sudo udevadm control --reload-rules
 
@@ -82,9 +82,10 @@ sudo usermod -aG kvm "$USER"
 newgrp kvm
 id
 
-sudo udevadm trigger --subsystem-match=block --subsystem-match=usb
+sudo udevadm trigger --subsystem-match=block --subsystem-match=usb --subsystem-match=vfio
 sudo udevadm trigger --name-match=nvme2n1p1
 ls -l /dev/nvme2n1p1
+ls -l /dev/vfio || true
 
 # Optional: keep router/DHCP seeing the *same* MAC as the physical uplink
 # (otherwise br0 may present a different MAC than $UPLINK)

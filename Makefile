@@ -26,6 +26,9 @@ QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 # QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
+GFX_MODE ?= intel
+INTEL_GPU_PCI ?= 0000:00:02.0
+
 # Enabling vhost-net can significantly improve virtio-net throughput.
 # Use `make run QEMU_VHOST=on` if your host supports it (permissions on /dev/vhost-net).
 QEMU_VHOST ?= off
@@ -40,12 +43,22 @@ QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 
 CARGO_BUILD_FLAGS ?=
 
-# Default display path: virgl-capable virtio GPU (no legacy VGA).
-# Override with `QEMU_ISO_FLAGS=...` if you need a different display device.
-QEMU_ISO_FLAGS = -display sdl,gl=on -vga none -device virtio-vga-gl,disable-modern=off -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+ifeq ($(GFX_MODE),virgl)
+CARGO_GFX_FLAGS = --no-default-features --features gfx_virgl
+QEMU_GFX_FLAGS = -display sdl,gl=on -vga none -device virtio-gpu-gl-pci,disable-modern=off,xres=1280,yres=800
+else ifeq ($(GFX_MODE),intel)
+CARGO_GFX_FLAGS = --no-default-features --features gfx_intel
+QEMU_GFX_FLAGS = -display none -vga none -device vfio-pci,host=$(INTEL_GPU_PCI),display=on,x-igd-opregion=on
+else ifeq ($(GFX_MODE),none)
+CARGO_GFX_FLAGS = --no-default-features
+QEMU_GFX_FLAGS = -display sdl,gl=off -vga std
+else
+$(error Unsupported GFX_MODE '$(GFX_MODE)' (expected virgl, intel, or none))
+endif
 
-# für den debugger brauchen wir separate flags was natürlich komletter scheiß ist
-QEMU_ISO_FLAGS_DBG = -display sdl,gl=on -vga none -device virtio-vga-gl,disable-modern=off -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+QEMU_ISO_FLAGS = $(QEMU_GFX_FLAGS) -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+
+QEMU_ISO_FLAGS_DBG = $(QEMU_GFX_FLAGS) -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_UPDATE_TARGET_PATH ?= /dev/disk/by-partuuid/2e4e446c-bc9b-4e6c-a657-9ff9a0edccca
 QEMU_UPDATE_TARGET_FLAGS = \
@@ -82,7 +95,7 @@ nvme.img:
 	truncate -s $(IMG_SIZE) $@
 
 kernel:
-	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc -Z json-target-spec --target 86_64.json
+	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc -Z json-target-spec --target 86_64.json
 
 artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)
@@ -171,4 +184,4 @@ QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-
 QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
 
 run-installed: snipe iso-debug
-	@($(QEMU_BIN) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_UPDATE_TARGET_FLAGS) & $(SERIAL_CONSOLE_CMD))
+	@($(QEMU_BIN) $(QEMU_GFX_FLAGS) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_UPDATE_TARGET_FLAGS) & $(SERIAL_CONSOLE_CMD))

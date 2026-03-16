@@ -315,6 +315,11 @@ pub fn is_virgl_active() -> bool {
     with_system(|sys| matches!(sys.backend, backends::Backend::Virgl(_))).unwrap_or(false)
 }
 
+#[cfg(not(feature = "gfx_virgl"))]
+pub fn is_virgl_active() -> bool {
+    false
+}
+
 /// Returns whether a virgl-capable virtio-gpu device is currently visible.
 ///
 /// This keeps virgl probing behind the `gfx` API so non-gfx modules do not
