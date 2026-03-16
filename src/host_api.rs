@@ -67,6 +67,25 @@ fn parse_hex_payload(s: &str, out: &mut [u8]) -> Option<usize> {
     Some(n)
 }
 
+fn lower_hex_string(bytes: &[u8]) -> alloc::string::String {
+    let mut hex = alloc::string::String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        let hi = b >> 4;
+        let lo = b & 0xF;
+        hex.push(if hi < 10 {
+            (b'0' + hi) as char
+        } else {
+            (b'a' + hi - 10) as char
+        });
+        hex.push(if lo < 10 {
+            (b'0' + lo) as char
+        } else {
+            (b'a' + lo - 10) as char
+        });
+    }
+    hex
+}
+
 unsafe extern "C" fn trueos_uart1_shell_write_js(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -351,21 +370,7 @@ unsafe extern "C" fn trueos_xhci_get_hid_descriptor_js(
         Some(b) => b,
         None => return js_null(),
     };
-    let mut hex = alloc::string::String::with_capacity(bytes.len() * 2);
-    for &b in bytes.iter() {
-        let hi = b >> 4;
-        let lo = b & 0xF;
-        hex.push(if hi < 10 {
-            (b'0' + hi) as char
-        } else {
-            (b'a' + hi - 10) as char
-        });
-        hex.push(if lo < 10 {
-            (b'0' + lo) as char
-        } else {
-            (b'a' + lo - 10) as char
-        });
-    }
+    let hex = lower_hex_string(bytes.as_slice());
     qjs::JS_NewStringLen(ctx, hex.as_ptr() as *const c_char, hex.len())
 }
 
@@ -398,21 +403,181 @@ unsafe extern "C" fn trueos_xhci_get_hid_report_descriptor_js(
         Some(b) => b,
         None => return js_null(),
     };
-    let mut hex = alloc::string::String::with_capacity(bytes.len() * 2);
-    for &b in bytes.iter() {
-        let hi = b >> 4;
-        let lo = b & 0xF;
-        hex.push(if hi < 10 {
-            (b'0' + hi) as char
-        } else {
-            (b'a' + hi - 10) as char
-        });
-        hex.push(if lo < 10 {
-            (b'0' + lo) as char
-        } else {
-            (b'a' + lo - 10) as char
-        });
+    let hex = lower_hex_string(bytes.as_slice());
+    qjs::JS_NewStringLen(ctx, hex.as_ptr() as *const c_char, hex.len())
+}
+
+unsafe extern "C" fn trueos_xhci_hid_get_protocol_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return js_int32(-1);
     }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(handle) = js_to_i32(ctx, args[0]) else {
+        return js_int32(-1);
+    };
+    let Some(interface_number) = js_to_i32(ctx, args[1]) else {
+        return js_int32(-1);
+    };
+    let cid = ((handle as u32) >> 24) as usize;
+    let slot = (handle as u32) & 0xFF_FFFF;
+    match crate::usb::hid::classreq::get_protocol_slot_sync(cid, slot, interface_number as u8, 500) {
+        Some(protocol) => js_int32(protocol as i32),
+        None => js_int32(-1),
+    }
+}
+
+unsafe extern "C" fn trueos_xhci_hid_set_protocol_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 3 {
+        return js_int32(-1);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(handle) = js_to_i32(ctx, args[0]) else {
+        return js_int32(-1);
+    };
+    let Some(interface_number) = js_to_i32(ctx, args[1]) else {
+        return js_int32(-1);
+    };
+    let Some(protocol) = js_to_i32(ctx, args[2]) else {
+        return js_int32(-1);
+    };
+    let cid = ((handle as u32) >> 24) as usize;
+    let slot = (handle as u32) & 0xFF_FFFF;
+    match crate::usb::hid::classreq::set_protocol_slot_sync(
+        cid,
+        slot,
+        interface_number as u8,
+        protocol as u8,
+        500,
+    ) {
+        Some(cc) => js_int32(cc as i32),
+        None => js_int32(-1),
+    }
+}
+
+unsafe extern "C" fn trueos_xhci_hid_get_idle_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 3 {
+        return js_int32(-1);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(handle) = js_to_i32(ctx, args[0]) else {
+        return js_int32(-1);
+    };
+    let Some(interface_number) = js_to_i32(ctx, args[1]) else {
+        return js_int32(-1);
+    };
+    let Some(report_id) = js_to_i32(ctx, args[2]) else {
+        return js_int32(-1);
+    };
+    let cid = ((handle as u32) >> 24) as usize;
+    let slot = (handle as u32) & 0xFF_FFFF;
+    match crate::usb::hid::classreq::get_idle_slot_sync(
+        cid,
+        slot,
+        interface_number as u8,
+        report_id as u8,
+        500,
+    ) {
+        Some(duration) => js_int32(duration as i32),
+        None => js_int32(-1),
+    }
+}
+
+unsafe extern "C" fn trueos_xhci_hid_set_idle_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 4 {
+        return js_int32(-1);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(handle) = js_to_i32(ctx, args[0]) else {
+        return js_int32(-1);
+    };
+    let Some(interface_number) = js_to_i32(ctx, args[1]) else {
+        return js_int32(-1);
+    };
+    let Some(report_id) = js_to_i32(ctx, args[2]) else {
+        return js_int32(-1);
+    };
+    let Some(duration_4ms) = js_to_i32(ctx, args[3]) else {
+        return js_int32(-1);
+    };
+    let cid = ((handle as u32) >> 24) as usize;
+    let slot = (handle as u32) & 0xFF_FFFF;
+    match crate::usb::hid::classreq::set_idle_slot_sync(
+        cid,
+        slot,
+        interface_number as u8,
+        report_id as u8,
+        duration_4ms as u8,
+        500,
+    ) {
+        Some(cc) => js_int32(cc as i32),
+        None => js_int32(-1),
+    }
+}
+
+unsafe extern "C" fn trueos_xhci_hid_get_report_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 5 {
+        return js_null();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(handle) = js_to_i32(ctx, args[0]) else {
+        return js_null();
+    };
+    let Some(interface_number) = js_to_i32(ctx, args[1]) else {
+        return js_null();
+    };
+    let Some(report_type) = js_to_i32(ctx, args[2]) else {
+        return js_null();
+    };
+    let Some(report_id) = js_to_i32(ctx, args[3]) else {
+        return js_null();
+    };
+    let length = js_to_i32(ctx, args[4]).unwrap_or(64).clamp(1, 256) as usize;
+    let report_type = match report_type {
+        1 => crate::usb::hid::classreq::HidReportType::Input,
+        2 => crate::usb::hid::classreq::HidReportType::Output,
+        3 => crate::usb::hid::classreq::HidReportType::Feature,
+        _ => return js_null(),
+    };
+    let cid = ((handle as u32) >> 24) as usize;
+    let slot = (handle as u32) & 0xFF_FFFF;
+    let bytes = match crate::usb::hid::classreq::get_report_slot_sync(
+        cid,
+        slot,
+        interface_number as u8,
+        report_type,
+        report_id as u8,
+        length,
+        800,
+    ) {
+        Some(bytes) => bytes,
+        None => return js_null(),
+    };
+    let hex = lower_hex_string(bytes.as_slice());
     qjs::JS_NewStringLen(ctx, hex.as_ptr() as *const c_char, hex.len())
 }
 
@@ -466,11 +631,17 @@ unsafe extern "C" fn trueos_xhci_hid_set_report_js(
 
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    let rc = crate::usb::syscall::control_set_hid_report(
+    let report_type = match report_type {
+        1 => crate::usb::hid::classreq::HidReportType::Input,
+        2 => crate::usb::hid::classreq::HidReportType::Output,
+        3 => crate::usb::hid::classreq::HidReportType::Feature,
+        _ => return js_int32(-1),
+    };
+    let rc = crate::usb::hid::classreq::set_report_slot_sync(
         cid,
         slot,
-        interface_number as u16,
-        report_type as u8,
+        interface_number as u8,
+        report_type,
         report_id as u8,
         &payload[..payload_len],
         500,
@@ -782,6 +953,81 @@ pub unsafe fn install(ctx: *mut qjs::JSContext) {
         ctx,
         global,
         b"__trueosXhciGetHidReportDescriptor\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_hid_get_protocol_js),
+        b"__trueosXhciHidGetProtocol\0".as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciHidGetProtocol\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_hid_set_protocol_js),
+        b"__trueosXhciHidSetProtocol\0".as_ptr() as *const c_char,
+        3,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciHidSetProtocol\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_hid_get_idle_js),
+        b"__trueosXhciHidGetIdle\0".as_ptr() as *const c_char,
+        3,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciHidGetIdle\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_hid_set_idle_js),
+        b"__trueosXhciHidSetIdle\0".as_ptr() as *const c_char,
+        4,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciHidSetIdle\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_hid_get_report_js),
+        b"__trueosXhciHidGetReport\0".as_ptr() as *const c_char,
+        5,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciHidGetReport\0".as_ptr() as *const c_char,
         f,
     );
 

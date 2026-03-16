@@ -1,4 +1,4 @@
-use super::control::{setup_get_descriptor, setup_get_descriptor_interface, setup_hid_set_report};
+use super::control::{setup_get_descriptor, setup_get_descriptor_interface};
 use super::xhci::{self, Trb, TrbRing, XhciContext, hi, lo, trb_type};
 use crate::pci::dma;
 use core::ptr::{write_bytes, write_volatile};
@@ -176,57 +176,6 @@ pub fn control_get_hid_report_descriptor(
     )
 }
 
-/// Synchronous HID class SET_REPORT control transfer on EP0.
-/// `report_type` typically uses 1=input, 2=output, 3=feature.
-/// Returns xHCI completion code on success path, or `None` on transfer failure.
-pub fn control_set_hid_report(
-    controller_id: usize,
-    slot_id: u32,
-    interface_number: u16,
-    report_type: u8,
-    report_id: u8,
-    payload: &[u8],
-    timeout_ms: u64,
-) -> Option<u32> {
-    let ring_state = super::ep0_ring_state_for_slot(controller_id, slot_id)?;
-
-    let controllers = xhci::xhc_list();
-    let info = controllers
-        .iter()
-        .find(|c| c.controller_id == controller_id)
-        .copied()?;
-    let ctx = unsafe { XhciContext::new(info) };
-
-    let clamped = payload.len().min(DESC_MAX);
-    let (buf_phys, buf_virt) = dma::alloc(clamped.max(1), 64)?;
-    unsafe {
-        write_bytes(buf_virt, 0, clamped.max(1));
-        if clamped > 0 {
-            core::ptr::copy_nonoverlapping(payload.as_ptr(), buf_virt, clamped);
-        }
-    }
-
-    let mut state = ring_state;
-    state.pending = 0;
-    let mut ep0_ring = unsafe { TrbRing::from_state(state) };
-
-    let setup = setup_hid_set_report(report_type, report_id, interface_number, clamped as u16);
-    let result = control_out_sync(
-        &ctx,
-        &mut ep0_ring,
-        slot_id,
-        setup,
-        buf_phys,
-        clamped as u16,
-        timeout_ms,
-    );
-
-    super::update_ep0_ring_state(controller_id, slot_id, ep0_ring.snapshot());
-    dma::dealloc(buf_virt, clamped.max(1));
-
-    result.ok()
-}
-
 /// Scan the software-side transfer-event buffer for an event matching
 /// `slot_id` + `ep_target`. Returns `(completion_code, residual_bytes)` or `None`.
 pub fn read_transfer_event(
@@ -245,7 +194,7 @@ pub fn read_transfer_event(
     Some((cc, residual))
 }
 
-fn control_in_sync(
+pub(crate) fn control_in_sync(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
     slot_id: u32,
@@ -304,21 +253,15 @@ fn control_in_sync(
     }
 }
 
-fn control_out_sync(
+pub(crate) fn control_out_sync(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
     slot_id: u32,
     setup: Trb,
-    buf_phys: u64,
+    buf_phys: Option<u64>,
     length: u16,
     timeout_ms: u64,
 ) -> Result<u32, ()> {
-    let data = Trb {
-        d0: lo(buf_phys),
-        d1: hi(buf_phys),
-        d2: length as u32,
-        d3: trb_type(3), // Data Stage, DIR=OUT
-    };
     let status = Trb {
         d0: 0,
         d1: 0,
@@ -327,7 +270,17 @@ fn control_out_sync(
     };
 
     let setup_phys = ep0_ring.push_with_phys(setup).ok_or(())?;
-    let data_phys = ep0_ring.push_with_phys(data).ok_or(())?;
+    let data_phys = if let Some(buf_phys) = buf_phys {
+        let data = Trb {
+            d0: lo(buf_phys),
+            d1: hi(buf_phys),
+            d2: length as u32,
+            d3: trb_type(3), // Data Stage, DIR=OUT
+        };
+        Some(ep0_ring.push_with_phys(data).ok_or(())?)
+    } else {
+        None
+    };
     let status_phys = ep0_ring.push_with_phys(status).ok_or(())?;
 
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -343,14 +296,14 @@ fn control_out_sync(
             }
             let evt_ptr = ((evt.d0 as u64) | ((evt.d1 as u64) << 32)) & !0xF;
             evt_ptr == (setup_phys & !0xF)
-                || evt_ptr == (data_phys & !0xF)
+                || data_phys.map(|phys| evt_ptr == (phys & !0xF)).unwrap_or(false)
                 || evt_ptr == (status_phys & !0xF)
         },
         timeout_ms,
     )
     .ok_or(())?;
 
-    ep0_ring.release_completed(3);
+    ep0_ring.release_completed(2 + data_phys.is_some() as usize);
 
     let cc = (evt.d2 >> 24) & 0xFF;
     if cc == 1 || cc == 13 { Ok(cc) } else { Err(()) }

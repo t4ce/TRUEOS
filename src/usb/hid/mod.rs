@@ -1017,6 +1017,22 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
 
         if ep.subclass == 0x01 && (ep.protocol == 0x01 || ep.protocol == 0x02) {
             let _ = classreq::set_protocol(ctx, &mut *ep0_ring, slot_id, ep.interface, 0).await;
+            if crate::usb::USB_LOG_VERBOSE {
+                let _ = classreq::get_protocol(ctx, &mut *ep0_ring, slot_id, ep.interface).await;
+                let _ = classreq::set_idle(ctx, &mut *ep0_ring, slot_id, ep.interface, 0, 0).await;
+                let _ = classreq::get_idle(ctx, &mut *ep0_ring, slot_id, ep.interface, 0).await;
+                let mut probe = [0u8; 8];
+                let _ = classreq::get_report_into(
+                    ctx,
+                    &mut *ep0_ring,
+                    slot_id,
+                    ep.interface,
+                    classreq::HidReportType::Input,
+                    0,
+                    &mut probe,
+                )
+                .await;
+            }
         }
 
         let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {

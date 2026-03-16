@@ -1,7 +1,11 @@
 use super::super::control;
+use super::super::syscall::{control_in_sync, control_out_sync};
 use super::super::xhci::{Trb, TrbRing, XhciContext, trb_type, xhc_list};
 use crate::pci::dma;
 use core::ptr::write_bytes;
+use heapless::Vec;
+
+const SYNC_REPORT_MAX: usize = 256;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -228,104 +232,175 @@ fn ctx_for_controller(controller_id: usize) -> Result<XhciContext, ()> {
     Err(())
 }
 
-pub async fn get_protocol_slot(controller_id: usize, slot_id: u32, iface: u8) -> Result<u8, ()> {
-    let ctx = ctx_for_controller(controller_id)?;
-    let st = super::ep0_state_for_slot(controller_id, slot_id).ok_or(())?;
+pub fn get_protocol_slot_sync(
+    controller_id: usize,
+    slot_id: u32,
+    iface: u8,
+    timeout_ms: u64,
+) -> Option<u8> {
+    let ctx = ctx_for_controller(controller_id).ok()?;
+    let st = super::ep0_state_for_slot(controller_id, slot_id)?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
-    let res = get_protocol(&ctx, &mut ep0_ring, slot_id, iface).await;
+    let (phys, virt) = dma::alloc(1, 64)?;
+    unsafe { write_bytes(virt, 0, 1) };
+
+    let setup = setup_class_in(0x03, 0, iface as u16, 1);
+    let out = match control_in_sync(&ctx, &mut ep0_ring, slot_id, setup, phys, 1, timeout_ms) {
+        Ok((_, transferred)) if transferred >= 1 => unsafe { core::slice::from_raw_parts(virt, 1)[0] },
+        _ => {
+            dma::dealloc(virt, 1);
+            super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
+            return None;
+        }
+    };
+
+    dma::dealloc(virt, 1);
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
-    res
+    Some(out)
 }
 
-pub async fn set_protocol_slot(
+pub fn set_protocol_slot_sync(
     controller_id: usize,
     slot_id: u32,
     iface: u8,
     protocol: u8,
-) -> Result<(), ()> {
-    let ctx = ctx_for_controller(controller_id)?;
-    let st = super::ep0_state_for_slot(controller_id, slot_id).ok_or(())?;
+    timeout_ms: u64,
+) -> Option<u32> {
+    let ctx = ctx_for_controller(controller_id).ok()?;
+    let st = super::ep0_state_for_slot(controller_id, slot_id)?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
-    let res = set_protocol(&ctx, &mut ep0_ring, slot_id, iface, protocol).await;
+    let value = (protocol as u16) & 0xFF;
+    let setup = setup_class_out_nodata(0x0B, value, iface as u16);
+    let res = control_out_sync(&ctx, &mut ep0_ring, slot_id, setup, None, 0, timeout_ms).ok();
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
     res
 }
 
-pub async fn get_idle_slot(
+pub fn get_idle_slot_sync(
     controller_id: usize,
     slot_id: u32,
     iface: u8,
     report_id: u8,
-) -> Result<u8, ()> {
-    let ctx = ctx_for_controller(controller_id)?;
-    let st = super::ep0_state_for_slot(controller_id, slot_id).ok_or(())?;
+    timeout_ms: u64,
+) -> Option<u8> {
+    let ctx = ctx_for_controller(controller_id).ok()?;
+    let st = super::ep0_state_for_slot(controller_id, slot_id)?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
-    let res = get_idle(&ctx, &mut ep0_ring, slot_id, iface, report_id).await;
+    let (phys, virt) = dma::alloc(1, 64)?;
+    unsafe { write_bytes(virt, 0, 1) };
+
+    let value = (report_id as u16) << 8;
+    let setup = setup_class_in(0x02, value, iface as u16, 1);
+    let out = match control_in_sync(&ctx, &mut ep0_ring, slot_id, setup, phys, 1, timeout_ms) {
+        Ok((_, transferred)) if transferred >= 1 => unsafe { core::slice::from_raw_parts(virt, 1)[0] },
+        _ => {
+            dma::dealloc(virt, 1);
+            super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
+            return None;
+        }
+    };
+
+    dma::dealloc(virt, 1);
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
-    res
+    Some(out)
 }
 
-pub async fn set_idle_slot(
+pub fn set_idle_slot_sync(
     controller_id: usize,
     slot_id: u32,
     iface: u8,
     report_id: u8,
     duration_4ms: u8,
-) -> Result<(), ()> {
-    let ctx = ctx_for_controller(controller_id)?;
-    let st = super::ep0_state_for_slot(controller_id, slot_id).ok_or(())?;
+    timeout_ms: u64,
+) -> Option<u32> {
+    let ctx = ctx_for_controller(controller_id).ok()?;
+    let st = super::ep0_state_for_slot(controller_id, slot_id)?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
-    let res = set_idle(&ctx, &mut ep0_ring, slot_id, iface, report_id, duration_4ms).await;
+    let value = ((duration_4ms as u16) << 8) | (report_id as u16);
+    let setup = setup_class_out_nodata(0x0A, value, iface as u16);
+    let res = control_out_sync(&ctx, &mut ep0_ring, slot_id, setup, None, 0, timeout_ms).ok();
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
     res
 }
 
-pub async fn get_report_into_slot(
+pub fn get_report_slot_sync(
     controller_id: usize,
     slot_id: u32,
     iface: u8,
     report_type: HidReportType,
     report_id: u8,
-    out: &mut [u8],
-) -> Result<usize, ()> {
-    let ctx = ctx_for_controller(controller_id)?;
-    let st = super::ep0_state_for_slot(controller_id, slot_id).ok_or(())?;
+    length: usize,
+    timeout_ms: u64,
+) -> Option<Vec<u8, SYNC_REPORT_MAX>> {
+    let ctx = ctx_for_controller(controller_id).ok()?;
+    let st = super::ep0_state_for_slot(controller_id, slot_id)?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
-    let res = get_report_into(
-        &ctx,
-        &mut ep0_ring,
-        slot_id,
-        iface,
-        report_type,
-        report_id,
-        out,
-    )
-    .await;
+    let want_len = length.clamp(1, SYNC_REPORT_MAX);
+    let (phys, virt) = dma::alloc(want_len, 64)?;
+    unsafe { write_bytes(virt, 0, want_len) };
+
+    let value = ((report_type as u16) << 8) | (report_id as u16);
+    let setup = setup_class_in(0x01, value, iface as u16, want_len as u16);
+    let transferred =
+        match control_in_sync(&ctx, &mut ep0_ring, slot_id, setup, phys, want_len as u16, timeout_ms) {
+            Ok((_, transferred)) => transferred as usize,
+            Err(()) => {
+                dma::dealloc(virt, want_len);
+                super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
+                return None;
+            }
+        };
+
+    let mut out = Vec::new();
+    unsafe {
+        let src = core::slice::from_raw_parts(virt, want_len);
+        let _ = out.extend_from_slice(&src[..core::cmp::min(transferred, want_len)]);
+    }
+
+    dma::dealloc(virt, want_len);
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
-    res
+    Some(out)
 }
 
-pub async fn set_report_slot(
+pub fn set_report_slot_sync(
     controller_id: usize,
     slot_id: u32,
     iface: u8,
     report_type: HidReportType,
     report_id: u8,
     data: &[u8],
-) -> Result<(), ()> {
-    let ctx = ctx_for_controller(controller_id)?;
-    let st = super::ep0_state_for_slot(controller_id, slot_id).ok_or(())?;
+    timeout_ms: u64,
+) -> Option<u32> {
+    let ctx = ctx_for_controller(controller_id).ok()?;
+    let st = super::ep0_state_for_slot(controller_id, slot_id)?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
-    let res = set_report(
-        &ctx,
-        &mut ep0_ring,
-        slot_id,
-        iface,
-        report_type,
-        report_id,
-        data,
-    )
-    .await;
+    let value = ((report_type as u16) << 8) | (report_id as u16);
+
+    let res = if data.is_empty() {
+        let setup = setup_class_out_data(0x09, value, iface as u16, 0);
+        control_out_sync(&ctx, &mut ep0_ring, slot_id, setup, None, 0, timeout_ms).ok()
+    } else {
+        let want_len = data.len().min(SYNC_REPORT_MAX);
+        let (phys, virt) = dma::alloc(want_len, 64)?;
+        unsafe {
+            write_bytes(virt, 0, want_len);
+            core::ptr::copy_nonoverlapping(data.as_ptr(), virt, want_len);
+        }
+        let setup = setup_class_out_data(0x09, value, iface as u16, want_len as u16);
+        let out = control_out_sync(
+            &ctx,
+            &mut ep0_ring,
+            slot_id,
+            setup,
+            Some(phys),
+            want_len as u16,
+            timeout_ms,
+        )
+        .ok();
+        dma::dealloc(virt, want_len);
+        out
+    };
+
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
     res
 }

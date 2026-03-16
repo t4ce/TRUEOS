@@ -75,6 +75,12 @@ export const CC = Object.freeze({
   SPLIT_TRANSACTION:   36,
 });
 
+export const HID_REPORT_TYPE = Object.freeze({
+  INPUT:   1,
+  OUTPUT:  2,
+  FEATURE: 3,
+});
+
 // ---------------------------------------------------------------------------
 // handle encoding helpers
 // ---------------------------------------------------------------------------
@@ -151,6 +157,38 @@ export function getHidReportDescriptor(handle, interfaceNumber = 0, length = 512
   const hex = __trueosXhciGetHidReportDescriptor(
     handle | 0,
     interfaceNumber | 0,
+    length | 0,
+  );
+  return hexToBytes(hex);
+}
+
+export function getHidProtocol(handle, interfaceNumber = 0) {
+  if (typeof __trueosXhciHidGetProtocol !== "function") return -1;
+  return __trueosXhciHidGetProtocol(handle | 0, interfaceNumber | 0);
+}
+
+export function setHidProtocol(handle, interfaceNumber = 0, protocol = 0) {
+  if (typeof __trueosXhciHidSetProtocol !== "function") return -1;
+  return __trueosXhciHidSetProtocol(handle | 0, interfaceNumber | 0, protocol | 0);
+}
+
+export function getHidIdle(handle, interfaceNumber = 0, reportId = 0) {
+  if (typeof __trueosXhciHidGetIdle !== "function") return -1;
+  return __trueosXhciHidGetIdle(handle | 0, interfaceNumber | 0, reportId | 0);
+}
+
+export function setHidIdle(handle, interfaceNumber = 0, reportId = 0, duration4ms = 0) {
+  if (typeof __trueosXhciHidSetIdle !== "function") return -1;
+  return __trueosXhciHidSetIdle(handle | 0, interfaceNumber | 0, reportId | 0, duration4ms | 0);
+}
+
+export function getHidReport(handle, interfaceNumber = 0, reportType = HID_REPORT_TYPE.INPUT, reportId = 0, length = 64) {
+  if (typeof __trueosXhciHidGetReport !== "function") return null;
+  const hex = __trueosXhciHidGetReport(
+    handle | 0,
+    interfaceNumber | 0,
+    reportType | 0,
+    reportId | 0,
     length | 0,
   );
   return hexToBytes(hex);
@@ -353,6 +391,11 @@ export default {
   readTransferEvent,
   getHidDescriptor,
   getHidReportDescriptor,
+  getHidProtocol,
+  setHidProtocol,
+  getHidIdle,
+  setHidIdle,
+  getHidReport,
   setHidReport,
   sendLedOutputReport,
   sendLedPreferredOutputReport,
