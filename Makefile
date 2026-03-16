@@ -130,8 +130,8 @@ iso-release: CARGO_BUILD_FLAGS += --release
 iso-release: iso
 	rm -f $(ISO_DIR)/TrueOS.7z
 	cd $(ISO_DIR) && 7z a -t7z -mx=0 -m0=Copy -ms=off TrueOS.7z $(notdir $(ISO_PATH))
-	gio mount smb://t4ce@pdjb/home-share || true
-	gio copy $(ISO_DIR)/TrueOS.7z smb://t4ce@pdjb/home-share/TRUEOS_SITE/
+	env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true
+	env -u GIO_MODULE_DIR gio copy $(ISO_DIR)/TrueOS.7z smb://t4ce@pdjb/home-share/TRUEOS_SITE/
 	@count=$$(cat cnt 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee cnt
 
 iso-debug: BUILD_MODE := debug

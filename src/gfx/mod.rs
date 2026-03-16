@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use embassy_time_driver::{TICK_HZ, now};
 use trueos_gfx_core::GfxContext;
 
-pub(crate) use screenshot::{publish_virgl_image_buffer, virgl_screenshot_capture_armed};
+pub(crate) use screenshot::{publish_screenshot_rgba_buffer, screenshot_capture_armed};
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
 static CABI_FRAME_LOCK: Mutex<()> = Mutex::new(());

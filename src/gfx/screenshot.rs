@@ -13,7 +13,7 @@ pub struct ImageBuffer {
 }
 
 pub struct ScreenshotAwait {
-    core: &'static CanonicalImageBuffer,
+    core: &'static LastScreenshotBuffer,
 }
 
 #[derive(Debug, Default)]
@@ -63,13 +63,13 @@ impl ImageBufferSlot {
     }
 }
 
-struct CanonicalImageBuffer {
+struct LastScreenshotBuffer {
     capture_armed: AtomicBool,
     seq: AtomicU64,
     slot: Mutex<ImageBufferSlot>,
 }
 
-impl CanonicalImageBuffer {
+impl LastScreenshotBuffer {
     const fn new() -> Self {
         Self {
             capture_armed: AtomicBool::new(false),
@@ -117,7 +117,7 @@ impl CanonicalImageBuffer {
 }
 
 impl ScreenshotAwait {
-    const fn new(core: &'static CanonicalImageBuffer) -> Self {
+    const fn new(core: &'static LastScreenshotBuffer) -> Self {
         Self { core }
     }
 
@@ -260,18 +260,42 @@ pub unsafe extern "C" fn trueos_cabi_gfx_capture_screenshot_data_url(
     copy_len as isize
 }
 
-static VIRGL_CANONICAL_IMAGE_BUFFER: CanonicalImageBuffer = CanonicalImageBuffer::new();
+static LAST_SCREENSHOT_BUFFER: LastScreenshotBuffer = LastScreenshotBuffer::new();
 static VIRGL_SCREENSHOT_AWAIT: ScreenshotAwait =
-    ScreenshotAwait::new(&VIRGL_CANONICAL_IMAGE_BUFFER);
+    ScreenshotAwait::new(&LAST_SCREENSHOT_BUFFER);
 
 pub fn virgl_screenshot_await() -> &'static ScreenshotAwait {
     &VIRGL_SCREENSHOT_AWAIT
 }
 
+pub(crate) fn screenshot_capture_armed() -> bool {
+    LAST_SCREENSHOT_BUFFER.is_capture_armed()
+}
+
+pub(crate) fn publish_screenshot_image_buffer(width: u32, height: u32, pixels: &[u32]) -> u64 {
+    LAST_SCREENSHOT_BUFFER.publish_copy(width, height, pixels)
+}
+
+pub(crate) fn publish_screenshot_rgba_buffer(width: u32, height: u32, rgba: &[u8]) -> u64 {
+    let need_pixels = (width as usize).saturating_mul(height as usize);
+    if need_pixels == 0 {
+        return LAST_SCREENSHOT_BUFFER.publish_copy(width, height, &[]);
+    }
+
+    let mut pixels = Vec::with_capacity(need_pixels);
+    for chunk in rgba.chunks_exact(4).take(need_pixels) {
+        pixels.push(((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32));
+    }
+    if pixels.len() < need_pixels {
+        pixels.resize(need_pixels, 0);
+    }
+    LAST_SCREENSHOT_BUFFER.publish_copy(width, height, pixels.as_slice())
+}
+
 pub(crate) fn virgl_screenshot_capture_armed() -> bool {
-    VIRGL_CANONICAL_IMAGE_BUFFER.is_capture_armed()
+    screenshot_capture_armed()
 }
 
 pub(crate) fn publish_virgl_image_buffer(width: u32, height: u32, pixels: &[u32]) -> u64 {
-    VIRGL_CANONICAL_IMAGE_BUFFER.publish_copy(width, height, pixels)
+    publish_screenshot_image_buffer(width, height, pixels)
 }
