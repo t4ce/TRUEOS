@@ -828,6 +828,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                                     height: 1,
                                     sample_kind,
                                     origin: TexCoordOrigin::TopLeft,
+                                    rgba: white.to_vec(),
                                 });
                                 img
                             };

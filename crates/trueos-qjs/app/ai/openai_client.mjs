@@ -54,6 +54,12 @@ export function buildResponsesRequest(options) {
   if (Array.isArray(cfg.tools) && cfg.tools.length > 0) {
     request.tools = cfg.tools;
   }
+  if (
+    typeof cfg.toolChoice === "string"
+    || (cfg.toolChoice && typeof cfg.toolChoice === "object")
+  ) {
+    request.tool_choice = cfg.toolChoice;
+  }
   if (typeof cfg.previousResponseId === "string" && cfg.previousResponseId) {
     request.previous_response_id = cfg.previousResponseId;
   }

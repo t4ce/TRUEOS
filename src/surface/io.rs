@@ -1267,12 +1267,14 @@ pub mod cabi {
         BottomLeft,
     }
 
+    #[derive(Clone)]
     struct TexImage {
         image: ImageId,
         width: u32,
         height: u32,
         sample_kind: TexSampleKind,
         origin: TexCoordOrigin,
+        rgba: Vec<u8>,
     }
 
     #[derive(Clone, Copy)]
@@ -1625,6 +1627,562 @@ pub mod cabi {
         }
 
         out
+    }
+
+    #[derive(Clone, Copy)]
+    struct TexVtx {
+        x: f32,
+        y: f32,
+        u: f32,
+        v: f32,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    }
+
+    #[inline]
+    fn read_tex_vtx(bytes: &[u8], off: usize) -> Option<TexVtx> {
+        if off + 20 > bytes.len() {
+            return None;
+        }
+        let x = f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+        let y = f32::from_le_bytes([
+            bytes[off + 4],
+            bytes[off + 5],
+            bytes[off + 6],
+            bytes[off + 7],
+        ]);
+        let u = f32::from_le_bytes([
+            bytes[off + 8],
+            bytes[off + 9],
+            bytes[off + 10],
+            bytes[off + 11],
+        ]);
+        let v = f32::from_le_bytes([
+            bytes[off + 12],
+            bytes[off + 13],
+            bytes[off + 14],
+            bytes[off + 15],
+        ]);
+        Some(TexVtx {
+            x,
+            y,
+            u,
+            v,
+            r: (bytes[off + 16] as f32) / 255.0,
+            g: (bytes[off + 17] as f32) / 255.0,
+            b: (bytes[off + 18] as f32) / 255.0,
+            a: (bytes[off + 19] as f32) / 255.0,
+        })
+    }
+
+    #[inline]
+    fn clear_rgba_buffer(rgba: &mut [u8], rgb: u32) {
+        let r = ((rgb >> 16) & 0xFF) as u8;
+        let g = ((rgb >> 8) & 0xFF) as u8;
+        let b = (rgb & 0xFF) as u8;
+        for px in rgba.chunks_exact_mut(4) {
+            px[0] = r;
+            px[1] = g;
+            px[2] = b;
+            px[3] = 255;
+        }
+    }
+
+    #[inline]
+    fn pixel_to_rgba(px: &[u8]) -> [f32; 4] {
+        [
+            (px[0] as f32) / 255.0,
+            (px[1] as f32) / 255.0,
+            (px[2] as f32) / 255.0,
+            (px[3] as f32) / 255.0,
+        ]
+    }
+
+    #[inline]
+    fn write_rgba_pixel(dst: &mut [u8], rgba: [f32; 4]) {
+        dst[0] = (clamp01(rgba[0]) * 255.0 + 0.5) as u8;
+        dst[1] = (clamp01(rgba[1]) * 255.0 + 0.5) as u8;
+        dst[2] = (clamp01(rgba[2]) * 255.0 + 0.5) as u8;
+        dst[3] = (clamp01(rgba[3]) * 255.0 + 0.5) as u8;
+    }
+
+    #[inline]
+    fn ndc_to_target_x(x: f32, width: u32) -> f32 {
+        ((x + 1.0) * 0.5) * width as f32
+    }
+
+    #[inline]
+    fn ndc_to_target_y(y: f32, height: u32) -> f32 {
+        ((1.0 - y) * 0.5) * height as f32
+    }
+
+    #[inline]
+    fn edge_fn(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
+        (px - ax) * (by - ay) - (py - ay) * (bx - ax)
+    }
+
+    #[inline]
+    fn blend_factor_rgba(factor: BlendFactor, src: [f32; 4], dst: [f32; 4]) -> [f32; 4] {
+        match factor {
+            BlendFactor::Zero => [0.0, 0.0, 0.0, 0.0],
+            BlendFactor::One => [1.0, 1.0, 1.0, 1.0],
+            BlendFactor::SrcAlpha => [src[3], src[3], src[3], src[3]],
+            BlendFactor::OneMinusSrcAlpha => {
+                let v = 1.0 - src[3];
+                [v, v, v, v]
+            }
+            BlendFactor::DstColor => dst,
+            BlendFactor::OneMinusSrcColor => [1.0 - src[0], 1.0 - src[1], 1.0 - src[2], 1.0 - src[3]],
+        }
+    }
+
+    #[inline]
+    fn blend_pixel(dst: &mut [u8], src: [f32; 4], blend: BlendDesc) {
+        if !blend.enabled {
+            write_rgba_pixel(dst, src);
+            return;
+        }
+
+        let dst_rgba = pixel_to_rgba(dst);
+        let src_factor = blend_factor_rgba(blend.src, src, dst_rgba);
+        let dst_factor = blend_factor_rgba(blend.dst, src, dst_rgba);
+        let out = [
+            src[0] * src_factor[0] + dst_rgba[0] * dst_factor[0],
+            src[1] * src_factor[1] + dst_rgba[1] * dst_factor[1],
+            src[2] * src_factor[2] + dst_rgba[2] * dst_factor[2],
+            src[3] * src_factor[3] + dst_rgba[3] * dst_factor[3],
+        ];
+        write_rgba_pixel(dst, out);
+    }
+
+    #[inline]
+    fn wrap_tex_coord(coord: f32, wrap: SamplerWrap) -> f32 {
+        match wrap {
+            SamplerWrap::ClampToEdge => clamp01(coord),
+            SamplerWrap::Repeat => {
+                let wrapped = coord - libm::floorf(coord);
+                if wrapped < 0.0 { wrapped + 1.0 } else { wrapped }
+            }
+        }
+    }
+
+    #[inline]
+    fn sample_texel_clamped(rgba: &[u8], width: u32, height: u32, x: i32, y: i32) -> [f32; 4] {
+        if width == 0 || height == 0 {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+        let xi = x.clamp(0, width.saturating_sub(1) as i32) as usize;
+        let yi = y.clamp(0, height.saturating_sub(1) as i32) as usize;
+        let idx = yi
+            .saturating_mul(width as usize)
+            .saturating_add(xi)
+            .saturating_mul(4);
+        if idx + 4 > rgba.len() {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+        pixel_to_rgba(&rgba[idx..idx + 4])
+    }
+
+    fn sample_texture_rgba(tex: &TexImage, sampler: SamplerDesc, u: f32, v: f32) -> [f32; 4] {
+        if tex.width == 0 || tex.height == 0 || tex.rgba.len() < 4 {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+
+        let u = wrap_tex_coord(u, sampler.wrap_s);
+        let v = wrap_tex_coord(v, sampler.wrap_t);
+        let max_x = tex.width.saturating_sub(1) as f32;
+        let max_y = tex.height.saturating_sub(1) as f32;
+
+        if sampler.min_filter == SamplerFilter::Nearest && sampler.mag_filter == SamplerFilter::Nearest {
+            let x = libm::floorf(u * max_x + 0.5) as i32;
+            let y = libm::floorf(v * max_y + 0.5) as i32;
+            return sample_texel_clamped(&tex.rgba, tex.width, tex.height, x, y);
+        }
+
+        let fx = u * max_x;
+        let fy = v * max_y;
+        let x0 = libm::floorf(fx) as i32;
+        let y0 = libm::floorf(fy) as i32;
+        let x1 = x0 + 1;
+        let y1 = y0 + 1;
+        let tx = fx - x0 as f32;
+        let ty = fy - y0 as f32;
+        let c00 = sample_texel_clamped(&tex.rgba, tex.width, tex.height, x0, y0);
+        let c10 = sample_texel_clamped(&tex.rgba, tex.width, tex.height, x1, y0);
+        let c01 = sample_texel_clamped(&tex.rgba, tex.width, tex.height, x0, y1);
+        let c11 = sample_texel_clamped(&tex.rgba, tex.width, tex.height, x1, y1);
+
+        let mut out = [0.0; 4];
+        for i in 0..4 {
+            let top = lerp(c00[i], c10[i], tx);
+            let bot = lerp(c01[i], c11[i], tx);
+            out[i] = lerp(top, bot, ty);
+        }
+        out
+    }
+
+    fn draw_rgb_triangle_rgba(
+        target: &mut [u8],
+        width: u32,
+        height: u32,
+        scissor: Option<ScissorRect>,
+        blend: BlendDesc,
+        v0: RgbVtx,
+        v1: RgbVtx,
+        v2: RgbVtx,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let p0 = (ndc_to_target_x(v0.x, width), ndc_to_target_y(v0.y, height));
+        let p1 = (ndc_to_target_x(v1.x, width), ndc_to_target_y(v1.y, height));
+        let p2 = (ndc_to_target_x(v2.x, width), ndc_to_target_y(v2.y, height));
+        let area = edge_fn(p0.0, p0.1, p1.0, p1.1, p2.0, p2.1);
+        if area.abs() <= 1e-6 {
+            return;
+        }
+
+        let mut min_x = libm::floorf(p0.0.min(p1.0).min(p2.0)).max(0.0) as i32;
+        let mut max_x = libm::ceilf(p0.0.max(p1.0).max(p2.0)).min(width as f32) as i32;
+        let mut min_y = libm::floorf(p0.1.min(p1.1).min(p2.1)).max(0.0) as i32;
+        let mut max_y = libm::ceilf(p0.1.max(p1.1).max(p2.1)).min(height as f32) as i32;
+        if let Some(scissor) = scissor {
+            min_x = min_x.max(scissor.x.min(width) as i32);
+            max_x = max_x.min(scissor.x.saturating_add(scissor.width).min(width) as i32);
+            min_y = min_y.max(scissor.y.min(height) as i32);
+            max_y = max_y.min(scissor.y.saturating_add(scissor.height).min(height) as i32);
+        }
+        if min_x >= max_x || min_y >= max_y {
+            return;
+        }
+
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let w0 = edge_fn(p1.0, p1.1, p2.0, p2.1, px, py);
+                let w1 = edge_fn(p2.0, p2.1, p0.0, p0.1, px, py);
+                let w2 = edge_fn(p0.0, p0.1, p1.0, p1.1, px, py);
+                if (area > 0.0 && (w0 < 0.0 || w1 < 0.0 || w2 < 0.0))
+                    || (area < 0.0 && (w0 > 0.0 || w1 > 0.0 || w2 > 0.0))
+                {
+                    continue;
+                }
+
+                let inv_area = 1.0 / area;
+                let b0 = w0 * inv_area;
+                let b1 = w1 * inv_area;
+                let b2 = w2 * inv_area;
+                let src = [
+                    v0.r * b0 + v1.r * b1 + v2.r * b2,
+                    v0.g * b0 + v1.g * b1 + v2.g * b2,
+                    v0.b * b0 + v1.b * b1 + v2.b * b2,
+                    v0.a * b0 + v1.a * b1 + v2.a * b2,
+                ];
+
+                let idx = (y as usize)
+                    .saturating_mul(width as usize)
+                    .saturating_add(x as usize)
+                    .saturating_mul(4);
+                if idx + 4 <= target.len() {
+                    blend_pixel(&mut target[idx..idx + 4], src, blend);
+                }
+            }
+        }
+    }
+
+    fn draw_tex_triangle_rgba(
+        target: &mut [u8],
+        width: u32,
+        height: u32,
+        scissor: Option<ScissorRect>,
+        blend: BlendDesc,
+        sampler: SamplerDesc,
+        sample_kind: TexSampleKind,
+        texture: &TexImage,
+        v0: TexVtx,
+        v1: TexVtx,
+        v2: TexVtx,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let p0 = (ndc_to_target_x(v0.x, width), ndc_to_target_y(v0.y, height));
+        let p1 = (ndc_to_target_x(v1.x, width), ndc_to_target_y(v1.y, height));
+        let p2 = (ndc_to_target_x(v2.x, width), ndc_to_target_y(v2.y, height));
+        let area = edge_fn(p0.0, p0.1, p1.0, p1.1, p2.0, p2.1);
+        if area.abs() <= 1e-6 {
+            return;
+        }
+
+        let mut min_x = libm::floorf(p0.0.min(p1.0).min(p2.0)).max(0.0) as i32;
+        let mut max_x = libm::ceilf(p0.0.max(p1.0).max(p2.0)).min(width as f32) as i32;
+        let mut min_y = libm::floorf(p0.1.min(p1.1).min(p2.1)).max(0.0) as i32;
+        let mut max_y = libm::ceilf(p0.1.max(p1.1).max(p2.1)).min(height as f32) as i32;
+        if let Some(scissor) = scissor {
+            min_x = min_x.max(scissor.x.min(width) as i32);
+            max_x = max_x.min(scissor.x.saturating_add(scissor.width).min(width) as i32);
+            min_y = min_y.max(scissor.y.min(height) as i32);
+            max_y = max_y.min(scissor.y.saturating_add(scissor.height).min(height) as i32);
+        }
+        if min_x >= max_x || min_y >= max_y {
+            return;
+        }
+
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let w0 = edge_fn(p1.0, p1.1, p2.0, p2.1, px, py);
+                let w1 = edge_fn(p2.0, p2.1, p0.0, p0.1, px, py);
+                let w2 = edge_fn(p0.0, p0.1, p1.0, p1.1, px, py);
+                if (area > 0.0 && (w0 < 0.0 || w1 < 0.0 || w2 < 0.0))
+                    || (area < 0.0 && (w0 > 0.0 || w1 > 0.0 || w2 > 0.0))
+                {
+                    continue;
+                }
+
+                let inv_area = 1.0 / area;
+                let b0 = w0 * inv_area;
+                let b1 = w1 * inv_area;
+                let b2 = w2 * inv_area;
+                let u = v0.u * b0 + v1.u * b1 + v2.u * b2;
+                let v = v0.v * b0 + v1.v * b1 + v2.v * b2;
+                let vert = [
+                    v0.r * b0 + v1.r * b1 + v2.r * b2,
+                    v0.g * b0 + v1.g * b1 + v2.g * b2,
+                    v0.b * b0 + v1.b * b1 + v2.b * b2,
+                    v0.a * b0 + v1.a * b1 + v2.a * b2,
+                ];
+                let tex = sample_texture_rgba(texture, sampler, u, v);
+                let mask = if tex[3] > 0.0 { tex[3] } else { tex[0] };
+                let src = match sample_kind {
+                    TexSampleKind::Mask => [
+                        vert[0] * mask,
+                        vert[1] * mask,
+                        vert[2] * mask,
+                        vert[3] * mask,
+                    ],
+                    TexSampleKind::Rgba => [
+                        tex[0] * vert[0],
+                        tex[1] * vert[1],
+                        tex[2] * vert[2],
+                        tex[3] * vert[3],
+                    ],
+                };
+
+                let idx = (y as usize)
+                    .saturating_mul(width as usize)
+                    .saturating_add(x as usize)
+                    .saturating_mul(4);
+                if idx + 4 <= target.len() {
+                    blend_pixel(&mut target[idx..idx + 4], src, blend);
+                }
+            }
+        }
+    }
+
+    fn maybe_publish_composed_screenshot(
+        preserve_contents: bool,
+        clear_rgb: u32,
+        draws: &[PendingDraw],
+        rgb_src: &[u8],
+        tex_src: &[u8],
+    ) {
+        if !crate::gfx::screenshot_capture_armed() {
+            return;
+        }
+
+        let (screen_w, screen_h, mut textures) = {
+            let st = GFX_CABI_STATE.lock();
+            (
+                st.swapchain_desc.extent.width,
+                st.swapchain_desc.extent.height,
+                st.tex_images.clone().unwrap_or_default(),
+            )
+        };
+        if screen_w == 0 || screen_h == 0 {
+            return;
+        }
+
+        let mut screen = vec![
+            0u8;
+            (screen_w as usize)
+                .saturating_mul(screen_h as usize)
+                .saturating_mul(4)
+        ];
+        if !preserve_contents {
+            clear_rgba_buffer(screen.as_mut_slice(), clear_rgb);
+        }
+
+        let mut current_target_tex_id = 0u32;
+        let mut current_scissor: Option<ScissorRect> = None;
+        let mut saw_draw = false;
+        let mut cleared_first_target = preserve_contents;
+
+        for draw in draws {
+            match *draw {
+                PendingDraw::SetRenderTarget { tex_id } => {
+                    current_target_tex_id = tex_id;
+                }
+                PendingDraw::SetScissor { rect } => {
+                    current_scissor = rect;
+                }
+                PendingDraw::Rgb {
+                    blob_offset,
+                    blob_len,
+                    blend,
+                } => {
+                    if blob_offset.saturating_add(blob_len) > rgb_src.len() {
+                        continue;
+                    }
+                    if !cleared_first_target {
+                        if current_target_tex_id == 0 {
+                            clear_rgba_buffer(screen.as_mut_slice(), clear_rgb);
+                        } else if let Some(Some(target)) =
+                            textures.get_mut(current_target_tex_id.saturating_sub(1) as usize)
+                        {
+                            clear_rgba_buffer(target.rgba.as_mut_slice(), clear_rgb);
+                        }
+                        cleared_first_target = true;
+                    }
+                    let verts = &rgb_src[blob_offset..blob_offset + blob_len];
+                    if current_target_tex_id == 0 {
+                        let mut off = 0usize;
+                        while off + 36 <= verts.len() {
+                            let Some(v0) = read_rgb_vtx(verts, off) else { break };
+                            let Some(v1) = read_rgb_vtx(verts, off + 12) else { break };
+                            let Some(v2) = read_rgb_vtx(verts, off + 24) else { break };
+                            draw_rgb_triangle_rgba(
+                                screen.as_mut_slice(),
+                                screen_w,
+                                screen_h,
+                                current_scissor,
+                                blend,
+                                v0,
+                                v1,
+                                v2,
+                            );
+                            off += 36;
+                        }
+                    } else if let Some(Some(target)) =
+                        textures.get_mut(current_target_tex_id.saturating_sub(1) as usize)
+                    {
+                        let mut off = 0usize;
+                        while off + 36 <= verts.len() {
+                            let Some(v0) = read_rgb_vtx(verts, off) else { break };
+                            let Some(v1) = read_rgb_vtx(verts, off + 12) else { break };
+                            let Some(v2) = read_rgb_vtx(verts, off + 24) else { break };
+                            draw_rgb_triangle_rgba(
+                                target.rgba.as_mut_slice(),
+                                target.width,
+                                target.height,
+                                current_scissor,
+                                blend,
+                                v0,
+                                v1,
+                                v2,
+                            );
+                            off += 36;
+                        }
+                    }
+                    saw_draw = true;
+                }
+                PendingDraw::Tex {
+                    tex_id,
+                    sample_kind,
+                    sampler,
+                    blob_offset,
+                    blob_len,
+                    blend,
+                    ..
+                } => {
+                    if blob_offset.saturating_add(blob_len) > tex_src.len() {
+                        continue;
+                    }
+                    let Some(source_tex) = textures
+                        .get(tex_id.saturating_sub(1) as usize)
+                        .and_then(|entry| entry.as_ref())
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    if !cleared_first_target {
+                        if current_target_tex_id == 0 {
+                            clear_rgba_buffer(screen.as_mut_slice(), clear_rgb);
+                        } else if let Some(Some(target)) =
+                            textures.get_mut(current_target_tex_id.saturating_sub(1) as usize)
+                        {
+                            clear_rgba_buffer(target.rgba.as_mut_slice(), clear_rgb);
+                        }
+                        cleared_first_target = true;
+                    }
+                    let verts = &tex_src[blob_offset..blob_offset + blob_len];
+                    if current_target_tex_id == 0 {
+                        let mut off = 0usize;
+                        while off + 60 <= verts.len() {
+                            let Some(v0) = read_tex_vtx(verts, off) else { break };
+                            let Some(v1) = read_tex_vtx(verts, off + 20) else { break };
+                            let Some(v2) = read_tex_vtx(verts, off + 40) else { break };
+                            draw_tex_triangle_rgba(
+                                screen.as_mut_slice(),
+                                screen_w,
+                                screen_h,
+                                current_scissor,
+                                blend,
+                                sampler,
+                                sample_kind,
+                                &source_tex,
+                                v0,
+                                v1,
+                                v2,
+                            );
+                            off += 60;
+                        }
+                    } else if let Some(Some(target)) =
+                        textures.get_mut(current_target_tex_id.saturating_sub(1) as usize)
+                    {
+                        let mut off = 0usize;
+                        while off + 60 <= verts.len() {
+                            let Some(v0) = read_tex_vtx(verts, off) else { break };
+                            let Some(v1) = read_tex_vtx(verts, off + 20) else { break };
+                            let Some(v2) = read_tex_vtx(verts, off + 40) else { break };
+                            draw_tex_triangle_rgba(
+                                target.rgba.as_mut_slice(),
+                                target.width,
+                                target.height,
+                                current_scissor,
+                                blend,
+                                sampler,
+                                sample_kind,
+                                &source_tex,
+                                v0,
+                                v1,
+                                v2,
+                            );
+                            off += 60;
+                        }
+                    }
+                    saw_draw = true;
+                }
+            }
+        }
+
+        if !saw_draw && !preserve_contents {
+            if current_target_tex_id == 0 {
+                clear_rgba_buffer(screen.as_mut_slice(), clear_rgb);
+            } else if let Some(Some(target)) =
+                textures.get_mut(current_target_tex_id.saturating_sub(1) as usize)
+            {
+                clear_rgba_buffer(target.rgba.as_mut_slice(), clear_rgb);
+            }
+        }
+
+        let _ = crate::gfx::publish_screenshot_rgba_buffer(screen_w, screen_h, screen.as_slice());
     }
 
     #[inline]
@@ -2207,6 +2765,43 @@ pub mod cabi {
                     }
 
                     let mut st = GFX_CABI_STATE.lock();
+                    if let Some(entry) = st
+                        .tex_images
+                        .as_mut()
+                        .and_then(|images| images.get_mut(tex_id.saturating_sub(1) as usize))
+                        .and_then(|entry| entry.as_mut())
+                    {
+                        let need = (entry.width as usize)
+                            .saturating_mul(entry.height as usize)
+                            .saturating_mul(4);
+                        if entry.rgba.len() != need {
+                            entry.rgba.resize(need, 0);
+                        }
+                        clear_rgba_buffer(entry.rgba.as_mut_slice(), clear_rgb);
+                        let mut off = 0usize;
+                        while off + 36 <= usable {
+                            let Some(v0) = read_rgb_vtx(&vtx[..usable], off) else {
+                                break;
+                            };
+                            let Some(v1) = read_rgb_vtx(&vtx[..usable], off + 12) else {
+                                break;
+                            };
+                            let Some(v2) = read_rgb_vtx(&vtx[..usable], off + 24) else {
+                                break;
+                            };
+                            draw_rgb_triangle_rgba(
+                                entry.rgba.as_mut_slice(),
+                                entry.width,
+                                entry.height,
+                                None,
+                                trueos_gfx_core::BlendDesc::disabled(),
+                                v0,
+                                v1,
+                                v2,
+                            );
+                            off += 36;
+                        }
+                    }
                     st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
                     st.viewport_configured = false;
                     0
@@ -2325,6 +2920,7 @@ pub mod cabi {
                     height,
                     sample_kind,
                     origin: TexCoordOrigin::TopLeft,
+                    rgba: data[..expected].to_vec(),
                 });
                 if ctx.write_image(image_id, data).is_err() {
                     return -5;
@@ -3151,6 +3747,7 @@ pub mod cabi {
                                         height: 1,
                                         sample_kind,
                                         origin: TexCoordOrigin::TopLeft,
+                                        rgba: white.to_vec(),
                                     });
                                     (img, should_log)
                                 };
@@ -3273,6 +3870,33 @@ pub mod cabi {
                         seq, rgb_draws, tex_draws, draw_bytes, first as u8
                     ));
                 }
+            }
+            drop(st);
+
+            if is_screen_present_frame {
+                let mut screenshot_draws = draws.clone();
+                let mut screenshot_rgb = rgb_src.clone();
+                if let Some((vp_w, vp_h)) = crate::gfx::with_context_tag(
+                    crate::gfx::SystemLockOwner::CursorQueryViewport,
+                    |ctx| {
+                        let extent = ctx.swapchain_desc().extent;
+                        (extent.width, extent.height)
+                    },
+                ) {
+                    append_kernel_cursor_overlay_draws(
+                        &mut screenshot_draws,
+                        &mut screenshot_rgb,
+                        vp_w,
+                        vp_h,
+                    );
+                }
+                maybe_publish_composed_screenshot(
+                    preserve_contents,
+                    clear_rgb,
+                    screenshot_draws.as_slice(),
+                    screenshot_rgb.as_slice(),
+                    tex_src.as_slice(),
+                );
             }
         } else if crate::gfx::is_virgl_active() {
             let n = VIRGL_END_FRAME_DIAG_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
