@@ -229,7 +229,7 @@ pub(crate) struct UsbControllerState {
 unsafe impl Send for UsbControllerState {}
 unsafe impl Sync for UsbControllerState {}
 
-pub(crate) const USB_LOG_VERBOSE: bool = false;
+pub(crate) use crate::logflag::USB_VERBOSE as USB_LOG_VERBOSE;
 
 macro_rules! usbv {
     ($($tt:tt)*) => {{

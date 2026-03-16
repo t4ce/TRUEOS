@@ -1321,7 +1321,6 @@ DCL OUT[0], COLOR\n\
     1: END\n";
 
 // Bring-up toggles for deterministic texture diagnostics.
-const VIRGL_DRAW_DIAGNOSTICS_LOGS: bool = false;
 const VIRGL_DEBUG_TEXTURE_ID_RAW: u32 = 0x00D3_B600;
 const VIRGL_FORCE_DEBUG_TEXTURE: bool = false;
 // Correctness-first switch: force per-draw vertex conversion/upload and bypass
@@ -1385,12 +1384,6 @@ use trueos_gfx_core::{
 // NOTE: Do not import `trueos_gfx_core::Result` as `Result` at module scope.
 // This file already uses `Result<T, ()>` in virtio setup code.
 use trueos_gfx_core::Result as GfxResult;
-
-static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
-static VIRGL_BLEND_BIND_LOGS: AtomicU32 = AtomicU32::new(0);
-static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
-static VIRGL_STATE_TRANSITION_LOGS: AtomicU32 = AtomicU32::new(0);
-static VIRGL_PRESENT_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn vertex_blob_bounds(blob: &[u8]) -> Option<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)> {
@@ -2849,7 +2842,8 @@ impl GfxDevice for VirglGfxBackend {
                     if let Some(prev) = last_draw_key
                         && prev.kind != draw_key.kind
                     {
-                        let n = VIRGL_STATE_TRANSITION_LOGS.fetch_add(1, Ordering::Relaxed);
+                        let n = crate::logflag::VIRGL_STATE_TRANSITION_LOGS
+                            .fetch_add(1, Ordering::Relaxed);
                         if n < 8 {
                             crate::log!(
                                 "virgl-backend: draw-kind transition {:?} -> {:?} frame={}\n",
@@ -2904,7 +2898,8 @@ impl GfxDevice for VirglGfxBackend {
                             (BlendFactor::One, BlendFactor::Zero) => self.blend_handle_disabled,
                             other => {
                                 let n =
-                                    VIRGL_BLEND_UNSUPPORTED_LOGS.fetch_add(1, Ordering::Relaxed);
+                                    crate::logflag::VIRGL_BLEND_UNSUPPORTED_LOGS
+                                        .fetch_add(1, Ordering::Relaxed);
                                 if n < 8 {
                                     crate::log!(
                                         "virgl-backend: unsupported blend {:?}; failing draw\n",
@@ -2916,7 +2911,8 @@ impl GfxDevice for VirglGfxBackend {
                         }
                     };
                     if last_bound_blend != Some(blend_handle) {
-                        let n = VIRGL_BLEND_BIND_LOGS.fetch_add(1, Ordering::Relaxed);
+                        let n =
+                            crate::logflag::VIRGL_BLEND_BIND_LOGS.fetch_add(1, Ordering::Relaxed);
                         if n < 8 {
                             crate::log!(
                                 "virgl-backend: bind blend {:?} -> handle={}\n",
@@ -3130,7 +3126,8 @@ impl GfxDevice for VirglGfxBackend {
                             }
 
                             if img.virgl_uploaded_rev != img.revision {
-                                let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
+                                let n = crate::logflag::VIRGL_TEX_DEBUG_LOGS
+                                    .fetch_add(1, Ordering::Relaxed);
                                 if n < 8 {
                                     crate::log!(
                                         "virgl-backend: tex upload img={} {}x{} rev {}->{} res={} view={}\n",
@@ -3154,7 +3151,8 @@ impl GfxDevice for VirglGfxBackend {
                             }
 
                             if !img.virgl_view_created {
-                                let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
+                                let n = crate::logflag::VIRGL_TEX_DEBUG_LOGS
+                                    .fetch_add(1, Ordering::Relaxed);
                                 if n < 8 {
                                     crate::log!(
                                         "virgl-backend: tex create_view img={} res={} view={} fmt={}\n",
@@ -3185,7 +3183,7 @@ impl GfxDevice for VirglGfxBackend {
                             (img_raw, img.virgl_res, img.virgl_view, samp_handle)
                         };
 
-                        if VIRGL_DRAW_DIAGNOSTICS_LOGS && frame_no % 100 == 0 {
+                        if crate::logflag::VIRGL_DRAW_DIAGNOSTICS_LOGS && frame_no % 100 == 0 {
                             crate::log!(
                                 "virgl-diag: frame={} img={} res={} view={} samp_state={} sampler=({:?},{:?},{:?},{:?})\n",
                                 frame_no,
@@ -3251,7 +3249,9 @@ impl GfxDevice for VirglGfxBackend {
                         }
                     }
 
-                    if VIRGL_DRAW_DIAGNOSTICS_LOGS && (frame_no <= 5 || (frame_no % 100) == 0) {
+                    if crate::logflag::VIRGL_DRAW_DIAGNOSTICS_LOGS
+                        && (frame_no <= 5 || (frame_no % 100) == 0)
+                    {
                         if let Some((
                             min_x,
                             max_x,
@@ -3364,7 +3364,7 @@ impl GfxDevice for VirglGfxBackend {
             // Present copies the rendered host resource into the host-side scanout resource.
             // Do not upload guest backing here: scanout_backing is only zeroed/attached during
             // bringup and uploading it would overwrite the freshly copied frame with stale pixels.
-            let n = VIRGL_PRESENT_DIAG_LOGS.fetch_add(1, Ordering::Relaxed);
+            let n = crate::logflag::VIRGL_PRESENT_DIAG_LOGS.fetch_add(1, Ordering::Relaxed);
             if n < 12 {
                 crate::log!(
                     "virgl-present: frame={} clears={} draws={} presents={} reassert_ok={} flush_ok={} size={}x{} fence={}\n",

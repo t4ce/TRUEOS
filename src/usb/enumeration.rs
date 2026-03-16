@@ -11,7 +11,7 @@ use super::{
 use crate::pci::dma;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 use heapless::String;
 macro_rules! usbv {
     ($($tt:tt)*) => {{
@@ -21,9 +21,6 @@ macro_rules! usbv {
     }};
 }
 use embassy_time::{Duration as EmbassyDuration, Timer};
-
-static LOG_ROOT_SLOT_CTX_ONCE: AtomicBool = AtomicBool::new(false);
-static LOG_ROOT_ADDRDEV_FAIL_ONCE: AtomicBool = AtomicBool::new(false);
 
 // Enumeration can be triggered repeatedly by the scout loop when a port reports CCS but the
 // device cannot complete the early Address Device step (common with flaky internal headers).
@@ -482,7 +479,7 @@ pub(crate) async fn enumerate_with_params(
                 count
             );
         }
-        if !LOG_ROOT_ADDRDEV_FAIL_ONCE.swap(true, Ordering::AcqRel) {
+        if !crate::logflag::USB_ENUM_ROOT_ADDRDEV_FAIL_ONCE.swap(true, Ordering::AcqRel) {
             crate::log!(
                 "usb: root addrdev fail evt=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}] slot_dw0=0x{:08X} slot_dw1=0x{:08X} slot_dw2=0x{:08X} ep0_dw0=0x{:08X} ep0_dw1=0x{:08X}\n",
                 addr_evt.d0,
@@ -517,7 +514,7 @@ pub(crate) async fn enumerate_with_params(
         ADDRDEV_FAIL_COUNT[controller_id][port_log_idx].store(0, Ordering::Relaxed);
     }
 
-    if !LOG_ROOT_SLOT_CTX_ONCE.swap(true, Ordering::AcqRel) {
+    if !crate::logflag::USB_ENUM_ROOT_SLOT_CTX_ONCE.swap(true, Ordering::AcqRel) {
         crate::log!(
             "usb: root address-ok slot={} slotctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} ep0 dw0=0x{:08X} dw1=0x{:08X}\n",
             slot_id,
