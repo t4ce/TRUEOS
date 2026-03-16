@@ -28,18 +28,19 @@ QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/O
 
 GFX_MODE ?= intel
 INTEL_GPU_PCI ?= 0000:00:02.0
+INTEL_GPU_VFIO_PROPS ?= ,x-igd-opregion=on
 
 # Enabling vhost-net can significantly improve virtio-net throughput.
 # Use `make run QEMU_VHOST=on` if your host supports it (permissions on /dev/vhost-net).
 QEMU_VHOST ?= off
 
-QEMU_NET_FLAGS = -netdev tap,id=net1,ifname=tap0,script=no,downscript=no,vhost=$(QEMU_VHOST) -device virtio-net-pci,netdev=net1,disable-modern=off \
+QEMU_NET_FLAGS = -netdev tap,id=net1,ifname=tap0,script=no,downscript=no,vhost=$(QEMU_VHOST) -device virtio-net-pci,netdev=net1,disable-modern=off,bus=pcie.0,addr=0x3 \
 	#-netdev user,id=net1,net=10.0.2.0/24,dhcpstart=10.0.2.15,hostfwd=tcp::4245-:4245,hostfwd=tcp::8080-:80 -device e1000,netdev=net1 \
 	#-netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
 	#-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=off
 
 QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
-	-device virtio-rng-pci,rng=rng0,disable-modern=off
+	-device virtio-rng-pci,rng=rng0,disable-modern=off,bus=pcie.0,addr=0x4
 
 CARGO_BUILD_FLAGS ?=
 
@@ -48,7 +49,7 @@ CARGO_GFX_FLAGS = --no-default-features --features gfx_virgl
 QEMU_GFX_FLAGS = -display sdl,gl=on -vga none -device virtio-gpu-gl-pci,disable-modern=off,xres=1280,yres=800
 else ifeq ($(GFX_MODE),intel)
 CARGO_GFX_FLAGS = --no-default-features --features gfx_intel
-QEMU_GFX_FLAGS = -display none -vga none -device vfio-pci,host=$(INTEL_GPU_PCI),display=on,x-igd-opregion=on
+QEMU_GFX_FLAGS = -display none -vga none -device vfio-pci,host=$(INTEL_GPU_PCI),bus=pcie.0,addr=0x2$(INTEL_GPU_VFIO_PROPS)
 else ifeq ($(GFX_MODE),none)
 CARGO_GFX_FLAGS = --no-default-features
 QEMU_GFX_FLAGS = -display sdl,gl=off -vga std
@@ -63,10 +64,10 @@ QEMU_ISO_FLAGS_DBG = $(QEMU_GFX_FLAGS) -machine q35 -bios $(QEMU_UEFI_FIRMWARE) 
 QEMU_UPDATE_TARGET_PATH ?= /dev/disk/by-partuuid/2e4e446c-bc9b-4e6c-a657-9ff9a0edccca
 QEMU_UPDATE_TARGET_FLAGS = \
 	-drive file=$(QEMU_UPDATE_TARGET_PATH),if=none,format=raw,id=nvme0 \
-	-device nvme,drive=nvme0,serial=t4ce
+	-device nvme,drive=nvme0,serial=t4ce,bus=pcie.0,addr=0x6
 
 QEMU_USB_FLAGS = \
-	-device qemu-xhci,id=xhci,p2=8,p3=8 \
+	-device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5 \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=2,id=usbleds \
 	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd 
