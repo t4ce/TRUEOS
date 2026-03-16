@@ -21,7 +21,8 @@ LIMINE_CFG := limine.conf
 LIMINE_PREFIX := bld/limine-prefix
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 
-QEMU_BIN = qemu-system-x86_64 -no-shutdown
+QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
+QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 # QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
@@ -46,10 +47,14 @@ QEMU_ISO_FLAGS = -display sdl,gl=on -vga none -device virtio-vga-gl,disable-mode
 # für den debugger brauchen wir separate flags was natürlich komletter scheiß ist
 QEMU_ISO_FLAGS_DBG = -display sdl,gl=on -vga none -device virtio-vga-gl,disable-modern=off -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
+QEMU_UPDATE_TARGET_PATH ?= /dev/disk/by-partuuid/2e4e446c-bc9b-4e6c-a657-9ff9a0edccca
+QEMU_UPDATE_TARGET_FLAGS = \
+	-drive file=$(QEMU_UPDATE_TARGET_PATH),if=none,format=raw,id=nvme0 \
+	-device nvme,drive=nvme0,serial=t4ce
+
 QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8 \
-	-drive file=/dev/disk/by-partuuid/2e4e446c-bc9b-4e6c-a657-9ff9a0edccca,if=none,format=raw,id=nvme0 \
-	-device nvme,drive=nvme0,serial=t4ce \
+	$(QEMU_UPDATE_TARGET_FLAGS) \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=2,id=usbleds \
 	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd 
@@ -163,4 +168,4 @@ QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-
 QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
 
 run-installed: snipe iso-debug
-	@($(QEMU_BIN) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
+	@($(QEMU_BIN) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_UPDATE_TARGET_FLAGS) & $(SERIAL_CONSOLE_CMD))
