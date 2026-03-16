@@ -186,3 +186,88 @@ SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="07cf", ATTRS{
 
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1462", ATTR{idProduct}=="7e03", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="1462", ATTRS{idProduct}=="7e03", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+sudo modprobe vfio
+sudo modprobe vfio-pci
+sudo modprobe vfio_iommu_type1
+
+ls /sys/bus/pci/drivers | grep vfio
+
+
+echo 0000:00:02.0 | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver/unbind
+echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
+echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
+
+ls -l /dev/vfio
+lspci -nnk -s 00:02.0
+
+
+
+t4ce@PCJB:~/REPOS/TRUEOS$ echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+ls -l /dev/vfio
+lspci -nnk -s 00:02.0
+tee: /sys/bus/pci/drivers/vfio-pci/bind: No such file or directory (os error 2)
+0000:00:02.0
+total 0
+crw-rw-rw- 1 root root 10, 196 Mar 16 21:47 vfio
+00:02.0 Display controller [0380]: Intel Corporation Raptor Lake-S GT1 [UHD Graphics 770] [8086:a780] (rev 04)
+        DeviceName: Onboard - Video
+        Subsystem: Micro-Star International Co., Ltd. [MSI] Device [1462:7e03]
+        Kernel modules: i915, xe
+t4ce@PCJB:~/REPOS/TRUEOS$ 
+
+
+## rebnoot
+sudo modprobe vfio-pci
+sudo modprobe vfio_iommu_type1
+
+echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
+echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
+
+ls -l /dev/vfio
+lspci -nnk -s 00:02.0
+
+echo 0000:00:02.0 | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver/unbind
+echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
+echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
+
+ls -l /dev/vfio
+lspci -nnk -s 00:02.0
+
+
+
+...
+
+
+
+echo 0000:00:02.0 | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver/unbind
+echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
+echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
+
+ls -l /dev/vfio
+lspci -nnk -s 00:02.0
