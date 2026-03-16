@@ -37,6 +37,7 @@ struct LedIfaceInfo {
 pub struct LedRuntime {
     pub controller_id: usize,
     pub slot_id: u32,
+    pub interface: u8,
     pub out_report_id: u8,
     pub out_report_total_len: u16,
     pub ep_out_target: u32,
@@ -158,7 +159,7 @@ async fn send_output_report(
     let ctx = unsafe { XhciContext::new(info) };
 
     // Take a snapshot of the OUT ring state and endpoint target/address.
-    let (ep_out_target, mut ring_state, pad_total_len) = {
+    let (interface, ep_out_target, mut ring_state, pad_total_len) = {
         let mut guard = LED_RUNTIMES.lock();
         let Some(rt) = guard
             .iter_mut()
@@ -167,6 +168,7 @@ async fn send_output_report(
             return Err(());
         };
         (
+            rt.interface,
             rt.ep_out_target,
             rt.ep_out_ring.snapshot(),
             rt.out_report_total_len,
@@ -215,9 +217,28 @@ async fn send_output_report(
         d2: report.len() as u32,
         d3: trb_type(1) | (1 << 5), // Normal TRB, IOC
     };
+    let control_payload = if report_id != 0 {
+        report.get(1..).unwrap_or(&[])
+    } else {
+        report.as_slice()
+    };
+
     let Some(trb_phys) = ring.push_with_phys(trb) else {
         dma::dealloc(buf_virt, report.len().max(1));
-        return Err(());
+        let ring_state = crate::usb::ep0_ring_state_for_slot(controller_id, slot_id).ok_or(())?;
+        let mut ep0_ring = unsafe { TrbRing::from_state(ring_state) };
+        let res = crate::usb::hid::classreq::set_report(
+            &ctx,
+            &mut ep0_ring,
+            slot_id,
+            interface,
+            crate::usb::hid::classreq::HidReportType::Output,
+            report_id,
+            control_payload,
+        )
+        .await;
+        crate::usb::update_ep0_ring_state(controller_id, slot_id, ep0_ring.snapshot());
+        return res;
     };
 
     // Persist updated ring state.
@@ -276,7 +297,24 @@ async fn send_output_report(
 
     let cc = (evt.d2 >> 24) & 0xFF;
     dma::dealloc(buf_virt, report.len().max(1));
-    if cc == 1 { Ok(()) } else { Err(()) }
+    if cc == 1 {
+        Ok(())
+    } else {
+        let ring_state = crate::usb::ep0_ring_state_for_slot(controller_id, slot_id).ok_or(())?;
+        let mut ep0_ring = unsafe { TrbRing::from_state(ring_state) };
+        let res = crate::usb::hid::classreq::set_report(
+            &ctx,
+            &mut ep0_ring,
+            slot_id,
+            interface,
+            crate::usb::hid::classreq::HidReportType::Output,
+            report_id,
+            control_payload,
+        )
+        .await;
+        crate::usb::update_ep0_ring_state(controller_id, slot_id, ep0_ring.snapshot());
+        res
+    }
 }
 
 fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
@@ -713,6 +751,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         let _ = guard.push(LedRuntime {
             controller_id: ctx.controller_id,
             slot_id,
+            interface: info.interface,
             out_report_id: preferred_out_report_id,
             out_report_total_len: preferred_out_total_len,
             ep_out_target,

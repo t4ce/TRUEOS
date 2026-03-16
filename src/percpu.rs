@@ -78,11 +78,6 @@ pub fn init_executor() -> &'static mut RawExecutor {
 }
 
 #[inline]
-pub fn set_total_slots(total: usize) {
-    TOTAL_SLOTS.store(total, Ordering::Release);
-}
-
-#[inline]
 pub fn total_slots() -> usize {
     TOTAL_SLOTS.load(Ordering::Acquire)
 }
