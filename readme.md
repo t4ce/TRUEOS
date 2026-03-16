@@ -271,3 +271,38 @@ echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
 
 ls -l /dev/vfio
 lspci -nnk -s 00:02.0
+
+
+
+
+
+
+
+
+
+
+Use this on your Ubuntu 25.10 + GRUB host:
+
+sudo tee /etc/modprobe.d/trueos-vfio-intel.conf >/dev/null <<'EOF'
+options vfio-pci ids=8086:a780
+softdep i915 pre: vfio-pci
+softdep xe pre: vfio-pci
+EOF
+
+sudo tee -a /etc/initramfs-tools/modules >/dev/null <<'EOF'
+vfio
+vfio_pci
+vfio_iommu_type1
+EOF
+Then edit /etc/default/grub and change:
+
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash intel_iommu=on iommu=pt vfio-pci.ids=8086:a780"
+Then apply it:
+
+sudo update-initramfs -u
+sudo update-grub
+sudo reboot
+After reboot, verify:
+
+lspci -nnk -s 00:02.0
+ls -l /dev/vfio

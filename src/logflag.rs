@@ -23,6 +23,9 @@ pub(crate) static VIRGL_BLEND_BIND_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static VIRGL_STATE_TRANSITION_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static VIRGL_PRESENT_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
+pub(crate) static INTEL_RING_INIT_LOGS: AtomicU32 = AtomicU32::new(0);
+pub(crate) static INTEL_SUBMIT_LOGS: AtomicU32 = AtomicU32::new(0);
+pub(crate) static INTEL_PRESENT_LOGS: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) const GFX_CABI_FRAME_DEBUG_LOGS: bool = false;
 pub(crate) static GFX_CABI_SUBMIT_BUDGET_LOGS: AtomicU32 = AtomicU32::new(0);
