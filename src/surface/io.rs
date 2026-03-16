@@ -253,6 +253,23 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_shell2_print_line(
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> usize {
+        if data_ptr.is_null() || data_len == 0 {
+            return 0;
+        }
+        let data = core::slice::from_raw_parts(data_ptr, data_len);
+        let Ok(text) = core::str::from_utf8(data) else {
+            return 0;
+        };
+        crate::shell2::print_shell_line(&crate::shell2::UART1_COM1_BACKEND, text);
+        crate::shell2::print_shell_line(&crate::shell2::NET_TCP_SHELL_BACKEND, text);
+        data_len
+    }
+
+    #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_poll_once() {
         crate::wait::spin_step();
     }
@@ -602,6 +619,9 @@ pub mod cabi {
     const MAX_CMDSTREAM_DRAW_BYTES: usize = 64 * 1024;
     // Conservative pre-submit guard to avoid submit_3d request overflow.
     const MAX_EST_SUBMIT_BYTES: usize = 512 * 1024;
+    // Verbose per-frame begin/end tracing is useful when debugging gfx-cabi pacing,
+    // but too noisy for normal runs.
+    const GFX_CABI_FRAME_DEBUG_LOGS: bool = false;
     static SUBMIT_BUDGET_LOGS: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
     static VIRGL_END_FRAME_DIAG_LOGS: core::sync::atomic::AtomicU32 =
@@ -2544,7 +2564,7 @@ pub mod cabi {
         st.frame_render_target_tex_id = 0;
         st.viewport_configured = false;
         let seq = st.frame_seq;
-        if seq <= 10 || seq.is_multiple_of(20) {
+        if GFX_CABI_FRAME_DEBUG_LOGS && (seq <= 10 || seq.is_multiple_of(20)) {
             crate::globalog::log(format_args!(
                 "gfx-cabi: begin seq={} clear=0x{:06X}\n",
                 seq,
@@ -3244,7 +3264,7 @@ pub mod cabi {
             }
         }
 
-        if seq <= 10 || (seq % 20) == 0 {
+        if GFX_CABI_FRAME_DEBUG_LOGS && (seq <= 10 || (seq % 20) == 0) {
             crate::globalog::log(format_args!(
                 "gfx-cabi: end seq={} rgb={} tex={} bytes={} rc={}\n",
                 seq, rgb_draws, tex_draws, draw_bytes, ret
