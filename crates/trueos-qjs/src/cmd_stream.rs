@@ -60,8 +60,11 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
-    fn trueos_cabi_gfx_upload_texture_jpeg(tex_id: u32, data_ptr: *const u8, data_len: usize)
-    -> i32;
+    fn trueos_cabi_gfx_upload_texture_jpeg(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
     fn trueos_cabi_gfx_upload_texture_jpeg_async(
         tex_id: u32,
         data_ptr: *const u8,
