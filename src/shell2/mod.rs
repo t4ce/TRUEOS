@@ -6,17 +6,19 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
-
+mod backends;
+mod ecma48;
 mod interface;
 mod shell2_ai;
 mod shell2_cmd;
 mod shell2_qjs;
 mod shell2_surf;
 #[allow(unused_imports)]
-pub(crate) use crate::shell::backends::{NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND};
+pub(crate) use crate::shell2::backends::{NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND};
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_ai::AiPromptMode;
 use shell2_qjs::QjsPromptMode;
+pub(crate) mod uart1_com1;
 
 const DEFAULT_PROMPT: &str = "§ ";
 const MAX_LINE: usize = 192;
@@ -24,7 +26,7 @@ const BANNER_ROW: usize = 1;
 const STATUS_ROW: usize = 2;
 const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
-const STATUS_SELECTED_RGB: (u8, u8, u8) = crate::shell::PROMPT_RGB;
+const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const LINE_WIDTH: usize = 100;
@@ -38,6 +40,11 @@ static UART1_PENDING_TRANSCRIPT: spin::Mutex<VecDeque<TranscriptEntry>> =
     spin::Mutex::new(VecDeque::new());
 static NET_TCP_PENDING_TRANSCRIPT: spin::Mutex<VecDeque<TranscriptEntry>> =
     spin::Mutex::new(VecDeque::new());
+
+pub trait ShellIo {
+    fn write_str(&self, s: &str);
+    fn write_fmt(&self, args: core::fmt::Arguments<'_>);
+}
 
 #[derive(Clone, Copy)]
 enum LineSource {

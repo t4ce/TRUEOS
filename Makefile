@@ -26,7 +26,7 @@ QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 # QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
-GFX_MODE ?= intel
+GFX_MODE ?= virgl
 INTEL_GPU_PCI ?= 0000:00:02.0
 # `x-no-mmap=on` avoids QEMU trying to mmap the passed-through IGD BAR into the
 # guest address space directly, which currently trips VFIO DMA-map warnings in our setup.
