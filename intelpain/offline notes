@@ -1,0 +1,100 @@
+
+Will it for sure show us the grub menu at boot now?
+because reboot into text mode, ... again lowest tier instruction,
+no steps to it , no that or this should happen, just sad:
+    Reboot once into text mode only
+    Reboot normally, but at the GRUB menu:
+    press e
+
+Amazing 50 loc i have to type in offline session, what the fuck:
++%Y%m%d-%H%M%S, do you know how long a homan needs to type this shit?
+
+sudo -i
+BDF=0000:00:02.0
+DIR=/root/igd-capture-$(date +%Y%m%d-%H%M%S)
+mkdir -p "$DIR"
+
+journalctl -kf > "$DIR/journal-follow.log" &
+JPID=$!
+
+{
+  echo "=== before ==="
+  date
+  lspci -k -s $BDF
+  echo "--- driver ---"
+  readlink -f /sys/bus/pci/devices/$BDF/driver 2>/dev/null || echo unbound
+  echo "--- override ---"
+  cat /sys/bus/pci/devices/$BDF/driver_override 2>/dev/null || true
+  echo "--- drm ---"
+  ls -la /sys/class/drm
+} | tee "$DIR/before.txt"
+
+echo i915 > /sys/bus/pci/devices/$BDF/driver_override
+modprobe i915
+echo $BDF > /sys/bus/pci/drivers_probe
+sleep 3
+
+{
+  echo "=== after ==="
+  date
+  lspci -k -s $BDF
+  echo "--- driver ---"
+  readlink -f /sys/bus/pci/devices/$BDF/driver 2>/dev/null || echo unbound
+  echo "--- override ---"
+  cat /sys/bus/pci/devices/$BDF/driver_override 2>/dev/null || true
+  echo "--- drm ---"
+  ls -la /sys/class/drm
+  echo "--- connectors ---"
+  for c in /sys/class/drm/card*-*; do
+    [ -e "$c" ] || continue
+    echo "== $c =="
+    cat "$c/status" 2>/dev/null || true
+    cat "$c/enabled" 2>/dev/null || true
+  done
+} | tee "$DIR/after.txt"
+
+dmesg > "$DIR/dmesg.txt" 2>/dev/null || true
+kill $JPID
+echo "$DIR"
+
+
+
+
+4. Bring back only these files
+From that directory, bring back:
+
+before.txt
+after.txt
+journal-follow.log
+
+DUDE BRING BACK WHAT THE FUCK DOES THAT MEAN, YOU CANT ASSUME I CAN JUST 
+KNOW WHAT IT MEANS IF YOU GIVE THE FREAKIN ABSTRACTEST VERSION OF IT
+
+
+
+
+
+
+
+
+
+
+
+
+
+Boot once into text mode append:
+    systemd.unit=multi-user.target
+
+After boot, capture baseline first
+    sudo journalctl -b > /tmp/boot-before.txt
+    lspci -k -s 00:02.0 > /tmp/pci-before.txt
+    ls -la /sys/class/drm > /tmp/drm-before.txt
+
+Then do the bind only after the baseline snapshot
+
+Immediately capture
+    sudo journalctl -b > /tmp/boot-after.txt
+    lspci -k -s 00:02.0 > /tmp/pci-after.txt
+    ls -la /sys/class/drm > /tmp/drm-after.txt
+    find /sys/class/drm -maxdepth 2 -type f \( -name status -o -name enabled \) -print -exec cat {} \; > /tmp/drm-connectors.txt
+  
