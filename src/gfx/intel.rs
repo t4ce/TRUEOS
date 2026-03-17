@@ -14,6 +14,7 @@ use spin::Mutex;
 // 7. The tight power seam is now 0x45500/0x45504/0x45510/0x45520; 0x45520 only latches once the first three are held.
 // 8. Even with the expanded 0x455xx seam plus the live GT triplet (0x13807C/0x138088/0x13810C), the display route stays dark.
 // 9. Host i915 brings display up as a ladder: PW_1 -> always-on -> DC_off -> PW_2..PW_5 -> connector objects -> AUX/DDI_IO -> route.
+// 10. On ADLP/RPL a sinkless non-legacy TC port tends to default toward TBT-alt; DP-alt admission may never surface without live HPD.
 
 const INTEL_VENDOR_ID: u16 = 0x8086;
 const PCI_CLASS_DISPLAY: u8 = 0x03;
@@ -64,6 +65,8 @@ const INTEL_OPREGION_PROBE_BYTES: usize = 0x40;
 const INTEL_OPREGION_SCAN_BYTES: usize = 0x1000;
 const INTEL_PORT_HOTPLUG_EN: usize = 0x61110;
 const INTEL_PORT_HOTPLUG_STAT: usize = 0x61114;
+const INTEL_GEN11_DE_HPD_ISR: usize = 0x44470;
+const INTEL_SDEISR: usize = 0xC4000;
 const INTEL_BXT_DE_PLL_CTL: usize = 0x6D000;
 const INTEL_BXT_DE_PLL_ENABLE: usize = 0x46070;
 const INTEL_DC_STATE_EN: usize = 0x45504;
@@ -79,10 +82,16 @@ const INTEL_GT_DISP_PWRON: usize = 0x138090;
 const INTEL_DDI_BUF_CTL_0: usize = 0x64000;
 const INTEL_DDI_BUF_CTL_1: usize = 0x64100;
 const INTEL_DDI_BUF_CTL_2: usize = 0x64200;
+const INTEL_TC_DDI_BUF_CTL_CANDIDATES: [usize; 4] = [0x64300, 0x64400, 0x64500, 0x64600];
+const INTEL_TC_DP_AUX_CH_CTL_CANDIDATES: [usize; 4] = [0x64310, 0x64410, 0x64510, 0x64610];
 const INTEL_TC3_DDI_BUF_CTL: usize = 0x64500;
 const INTEL_TC3_DP_AUX_CH_CTL: usize = 0x64510;
+// TC3 is tc_port=2 (TC_PORT_3) on ADLP/RPL. For modular FIA this maps to
+// phy_fia=1 and phy_fia_idx=0, while TCSS_DDI_STATUS uses PICK_EVEN(tc_port).
 const INTEL_TC3_PORT_INDEX: u32 = 2;
-const INTEL_TCSS_DDI_STATUS_TC3: usize = 0x161500 + (INTEL_TC3_PORT_INDEX as usize * 4);
+const INTEL_TC3_PHY_FIA: usize = 1;
+const INTEL_TC3_PHY_FIA_IDX: u32 = 0;
+const INTEL_TCSS_DDI_STATUS_TC3: usize = 0x161500;
 const INTEL_TCSS_DDI_STATUS_TC3_CANDIDATES: [usize; 4] = [0x161500, 0x161504, 0x161508, 0x16150C];
 const INTEL_TC3_DKL_CMN_UC_DW_27_MMIO: usize = 0x16A36C;
 const INTEL_HIP_INDEX_REG0: usize = 0x1010A0;
@@ -90,10 +99,16 @@ const INTEL_TC3_DKL_BANK_SHIFT: u32 = 8 * INTEL_TC3_PORT_INDEX;
 const INTEL_TC3_DKL_BANK_MASK: u32 = 0xFF << INTEL_TC3_DKL_BANK_SHIFT;
 const INTEL_TC3_DKL_BANK_IDX_UC_DW27: u32 = 2;
 const INTEL_TC3_DKL_BANK_SHIFT_CANDIDATES: [u32; 4] = [0, 8, 16, 24];
+const INTEL_FIA2_DFLEXPA1: usize = 0x16E880;
+const INTEL_FIA2_DFLEXDPPMS: usize = 0x16E890;
+const INTEL_FIA2_DFLEXDPCSSS: usize = 0x16E894;
+const INTEL_FIA2_DFLEXDPSP: usize = 0x16E8A0;
+const INTEL_FIA2_DFLEXDPMLE1: usize = 0x16E8C0;
 const INTEL_FIA1_DFLEXPA1: usize = 0x163880;
 const INTEL_FIA1_DFLEXDPPMS: usize = 0x163890;
 const INTEL_FIA1_DFLEXDPCSSS: usize = 0x163894;
 const INTEL_FIA1_DFLEXDPSP: usize = 0x1638A0;
+const INTEL_FIA1_DFLEXDPMLE1: usize = 0x1638C0;
 const INTEL_PIPECONF_A: usize = 0x70008;
 const INTEL_PIPECONF_B: usize = 0x71008;
 const INTEL_PIPECONF_C: usize = 0x72008;
@@ -132,14 +147,15 @@ const INTEL_TCSS_DDI_STATUS_HPD_ALT: u32 = 1 << 0;
 const INTEL_TCSS_DDI_STATUS_HPD_TBT: u32 = 1 << 1;
 const INTEL_DP_AUX_CH_CTL_TBT_IO: u32 = 1 << 11;
 const INTEL_DKL_CMN_UC_DW27_UC_HEALTH: u32 = 1 << 15;
-const INTEL_FIA_TC3_READY: u32 = 1 << 0;
-const INTEL_FIA_TC3_OWNED: u32 = 1 << 0;
-const INTEL_FIA_TC3_LIVE_TC: u32 = 1 << 5;
-const INTEL_FIA_TC3_LIVE_TBT: u32 = 1 << 6;
+const INTEL_FIA_TC3_READY: u32 = 1 << INTEL_TC3_PHY_FIA_IDX;
+const INTEL_FIA_TC3_OWNED: u32 = 1 << INTEL_TC3_PHY_FIA_IDX;
+const INTEL_FIA_TC3_LIVE_TC: u32 = 1 << (INTEL_TC3_PHY_FIA_IDX * 8 + 5);
+const INTEL_FIA_TC3_LIVE_TBT: u32 = 1 << (INTEL_TC3_PHY_FIA_IDX * 8 + 6);
 const INTEL_GEN6_PCODE_READY: u32 = 1 << 31;
 const INTEL_TGL_PCODE_TCCOLD: u32 = 0x26;
 const INTEL_TGL_PCODE_TCCOLD_BLOCK_REQ: u32 = 0;
 const INTEL_TGL_PCODE_TCCOLD_EXIT_FAILED: u32 = 1 << 0;
+const INTEL_DISPLAY_CORE_SWEEP_MAX_IDX: u32 = 5;
 
 const INTEL_WRITE_SWEEP_WINDOWS: &[(usize, usize, &str)] = &[
     (0x45000, 0x45080, "dc-pll-45000"),
@@ -2002,6 +2018,18 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         let mut seam_test = [0u32; 3];
         let mut tc3_power_orig = [0u32; 4];
         let mut tc3_power_test = [0u32; 4];
+        let mut owner_preaux_before = 0u32;
+        let mut owner_preaux_after = 0u32;
+        let mut tcss_preaux_before = 0u32;
+        let mut tcss_preaux_after = 0u32;
+        let mut owner_candidate_idx = 0xFFFF_FFFFu32;
+        let mut owner_candidate_before = 0u32;
+        let mut owner_candidate_after = 0u32;
+        let mut owner_candidate_tcss = 0u32;
+        let mut hpd_cpu_preaux_before = 0u32;
+        let mut hpd_cpu_preaux_after = 0u32;
+        let mut sde_preaux_before = 0u32;
+        let mut sde_preaux_after = 0u32;
         let tc3_aux_ctl_orig = intel_mmio_read32(info, INTEL_TC3_DP_AUX_CH_CTL);
         let tc3_aux_ctl_test = tc3_aux_ctl_orig & !INTEL_DP_AUX_CH_CTL_TBT_IO;
         let mut watch_before = [0u32; 11];
@@ -2052,6 +2080,20 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             }
         }
         let _ = intel_mmio_write32(info, INTEL_DC_STATE_EN, tc3_power_test[1]);
+        owner_preaux_before = intel_mmio_read32(info, INTEL_TC3_DDI_BUF_CTL);
+        tcss_preaux_before = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
+        hpd_cpu_preaux_before = intel_mmio_read32(info, INTEL_GEN11_DE_HPD_ISR);
+        sde_preaux_before = intel_mmio_read32(info, INTEL_SDEISR);
+        let _ = intel_mmio_write32(
+            info,
+            INTEL_TC3_DDI_BUF_CTL,
+            owner_preaux_before | INTEL_DDI_BUF_CTL_TC_PHY_OWNERSHIP,
+        );
+        owner_preaux_after = intel_mmio_read32(info, INTEL_TC3_DDI_BUF_CTL);
+        tcss_preaux_after = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
+        hpd_cpu_preaux_after = intel_mmio_read32(info, INTEL_GEN11_DE_HPD_ISR);
+        sde_preaux_after = intel_mmio_read32(info, INTEL_SDEISR);
+        let _ = intel_mmio_write32(info, INTEL_TC3_DDI_BUF_CTL, owner_preaux_before);
         let _ = intel_mmio_write32(info, INTEL_ICL_PWR_WELL_CTL_AUX2, tc3_power_test[2]);
         let _ = intel_mmio_write32(info, INTEL_ICL_PWR_WELL_CTL_DDI2, tc3_power_test[3]);
 
@@ -2114,6 +2156,47 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             return;
         }
 
+        for idx in 0..INTEL_TC_DDI_BUF_CTL_CANDIDATES.len() {
+            let ddi_off = INTEL_TC_DDI_BUF_CTL_CANDIDATES[idx];
+            let aux_off = INTEL_TC_DP_AUX_CH_CTL_CANDIDATES[idx];
+            let tcss_off = INTEL_TCSS_DDI_STATUS_TC3_CANDIDATES[idx];
+            let before = intel_mmio_read32(info, ddi_off);
+            let aux_before = intel_mmio_read32(info, aux_off);
+            let tcss_before_cand = intel_mmio_read32(info, tcss_off);
+            let aux_test = aux_before & !INTEL_DP_AUX_CH_CTL_TBT_IO;
+            let _ = intel_mmio_write32(info, aux_off, aux_test);
+            let test = before | INTEL_DDI_BUF_CTL_TC_PHY_OWNERSHIP;
+            let _ = intel_mmio_write32(info, ddi_off, test);
+            let after = intel_mmio_read32(info, ddi_off);
+            let aux_after = intel_mmio_read32(info, aux_off);
+            let tcss_after_cand = intel_mmio_read32(info, tcss_off);
+            let _ = intel_mmio_write32(info, ddi_off, before);
+            let _ = intel_mmio_write32(info, aux_off, aux_before);
+            if after != before
+                || aux_after != aux_before
+                || tcss_after_cand != tcss_before_cand
+            {
+                owner_candidate_idx = idx as u32;
+                owner_candidate_before = before;
+                owner_candidate_after = after;
+                owner_candidate_tcss = tcss_after_cand;
+                crate::log!(
+                    "gfx-intel-scanout: compact-hit tc-own-cand idx={} ddi=0x{:08X}->0x{:08X} aux=0x{:08X}->0x{:08X} tcss=0x{:08X}->0x{:08X}\n",
+                    owner_candidate_idx,
+                    before,
+                    after,
+                    aux_before,
+                    aux_after,
+                    tcss_before_cand,
+                    tcss_after_cand
+                );
+                let _ = intel_mmio_write32(info, INTEL_TC3_DP_AUX_CH_CTL, tc3_aux_ctl_orig);
+                restore_bits(&tc3_power_offsets, &tc3_power_orig);
+                restore_bits(&seam_offsets, &seam_orig);
+                return;
+            }
+        }
+
         let mut hits = 0usize;
         let mut first = "";
         let mut line = [("", 0u32, 0u32); 4];
@@ -2136,6 +2219,66 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             poll_hit;
 
         if hits > tc3_power_offsets.len() || state_hit {
+            let core_before = intel_mmio_read32(info, INTEL_HSW_PWR_WELL_CTL5);
+            let mut core_after = core_before;
+            let mut core_hit_idx = 0xFFFF_FFFFu32;
+            let mut core_state = 0u32;
+            let mut core_tcss = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
+            let mut core_pa1 = intel_mmio_read32(info, INTEL_FIA2_DFLEXPA1);
+            for idx in 0..=INTEL_DISPLAY_CORE_SWEEP_MAX_IDX {
+                let req = pw_req_mask(idx);
+                let state = pw_state_mask(idx);
+                let test = core_before | req;
+                let _ = intel_mmio_write32(info, INTEL_HSW_PWR_WELL_CTL5, test);
+                for _ in 0..1024 {
+                    core_after = intel_mmio_read32(info, INTEL_HSW_PWR_WELL_CTL5);
+                    core_tcss = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
+                    core_pa1 = intel_mmio_read32(info, INTEL_FIA2_DFLEXPA1);
+                    if (core_after & state) != 0
+                        || core_tcss != 0xFFFF_FFFF
+                        || core_pa1 != 0xFFFF_FFFF
+                    {
+                        core_hit_idx = idx;
+                        core_state = core_after & state;
+                        break;
+                    }
+                }
+                let _ = intel_mmio_write32(info, INTEL_HSW_PWR_WELL_CTL5, core_before);
+                if core_hit_idx != 0xFFFF_FFFF {
+                    break;
+                }
+            }
+
+            if core_hit_idx != 0xFFFF_FFFF {
+                crate::log!(
+                    "gfx-intel-scanout: compact-hit display-core idx={} ctl5=0x{:08X}->0x{:08X} state=0x{:08X} tcss=0x{:08X} pa1=0x{:08X}\n",
+                    core_hit_idx,
+                    core_before,
+                    core_after,
+                    core_state,
+                    core_tcss,
+                    core_pa1
+                );
+                let _ = intel_mmio_write32(info, INTEL_TC3_DP_AUX_CH_CTL, tc3_aux_ctl_orig);
+                restore_bits(&tc3_power_offsets, &tc3_power_orig);
+                restore_bits(&seam_offsets, &seam_orig);
+                return;
+            }
+
+            let gt_disp_pwron_before = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
+            let _ = intel_mmio_write32(
+                info,
+                INTEL_GT_DISP_PWRON,
+                gt_disp_pwron_before | INTEL_GT_DISP_PWRON_REQ,
+            );
+            let mut gt_disp_pwron_after = gt_disp_pwron_before;
+            for _ in 0..4096 {
+                gt_disp_pwron_after = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
+                if gt_disp_pwron_after != gt_disp_pwron_before {
+                    break;
+                }
+            }
+
             let (tc_cold_ok, tc_cold_status, tc_cold_low, tc_cold_high) =
                 intel_tgl_tc_cold_block_compact(info);
             let dkl_before = intel_dkl_tc3_read32(
@@ -2144,14 +2287,21 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                 INTEL_TC3_DKL_BANK_IDX_UC_DW27,
             );
             let tcss_before = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
-            let dppms_before = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPPMS);
-            let dpcsss_before = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPCSSS);
+            let dflexpa1_before = intel_mmio_read32(info, INTEL_FIA2_DFLEXPA1);
+            let dppms_before = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPPMS);
+            let dpcsss_before = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPCSSS);
+            let dpsp_before = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPSP);
+            let dpmle1_before = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPMLE1);
             let owner_before = intel_mmio_read32(info, INTEL_TC3_DDI_BUF_CTL);
+            let fia_owner_before = dpcsss_before;
 
             let mut dkl_after = dkl_before;
             let mut tcss_after = tcss_before;
+            let mut dflexpa1_after = dflexpa1_before;
             let mut dppms_after = dppms_before;
             let mut dpcsss_after = dpcsss_before;
+            let mut dpsp_after = dpsp_before;
+            let mut dpmle1_after = dpmle1_before;
             let mut dkl_health = false;
             let mut dkl_revealed = false;
             for _ in 0..4096 {
@@ -2161,41 +2311,69 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                     INTEL_TC3_DKL_BANK_IDX_UC_DW27,
                 );
                 tcss_after = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
-                dppms_after = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPPMS);
-                dpcsss_after = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPCSSS);
+                dflexpa1_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXPA1);
+                dppms_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPPMS);
+                dpcsss_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPCSSS);
+                dpsp_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPSP);
+                dpmle1_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPMLE1);
                 dkl_revealed = dkl_before == 0xFFFF_FFFF && dkl_after != 0xFFFF_FFFF;
                 dkl_health = dkl_after != 0xFFFF_FFFF
                     && (dkl_after & INTEL_DKL_CMN_UC_DW27_UC_HEALTH) != 0;
                 if dkl_revealed
                     || dkl_health
                     || tcss_after != tcss_before
+                    || dflexpa1_after != dflexpa1_before
                     || dppms_after != dppms_before
                     || dpcsss_after != dpcsss_before
+                    || dpsp_after != dpsp_before
+                    || dpmle1_after != dpmle1_before
                 {
                     break;
                 }
             }
 
-            if dkl_revealed || dkl_health {
+            let fia_visible =
+                dflexpa1_after != 0xFFFF_FFFF
+                || dppms_after != 0xFFFF_FFFF
+                || dpcsss_after != 0xFFFF_FFFF
+                || dpsp_after != 0xFFFF_FFFF
+                || dpmle1_after != 0xFFFF_FFFF;
+            let tcss_visible = tcss_after != 0xFFFF_FFFF;
+
+            if dkl_revealed || dkl_health || fia_visible || tcss_visible {
+                let fia_owner_test = fia_owner_before | INTEL_FIA_TC3_OWNED;
+                let _ = intel_mmio_write32(info, INTEL_FIA2_DFLEXDPCSSS, fia_owner_test);
+                let fia_owner_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPCSSS);
                 let owner_test = owner_before | INTEL_DDI_BUF_CTL_TC_PHY_OWNERSHIP;
                 let _ = intel_mmio_write32(info, INTEL_TC3_DDI_BUF_CTL, owner_test);
                 let owner_after = intel_mmio_read32(info, INTEL_TC3_DDI_BUF_CTL);
                 tcss_after = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
-                dppms_after = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPPMS);
-                dpcsss_after = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPCSSS);
+                dflexpa1_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXPA1);
+                dppms_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPPMS);
+                dpcsss_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPCSSS);
+                dpsp_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPSP);
+                dpmle1_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPMLE1);
 
                 crate::log!(
-                    "gfx-intel-scanout: compact-hit tc3-connect pcode=0x{:08X} low=0x{:08X} dkl=0x{:08X}->0x{:08X} owner=0x{:08X}->0x{:08X} tcss=0x{:08X} dppms=0x{:08X} dpcsss=0x{:08X}\n",
+                    "gfx-intel-scanout: compact-hit tc3-connect pcode=0x{:08X} low=0x{:08X} gtpwr=0x{:08X}->0x{:08X} dkl=0x{:08X}->0x{:08X} fiaown=0x{:08X}->0x{:08X} owner=0x{:08X}->0x{:08X} tcss=0x{:08X} pa1=0x{:08X} dppms=0x{:08X} dpcsss=0x{:08X} dpsp=0x{:08X} dpmle1=0x{:08X}\n",
                     tc_cold_status,
                     tc_cold_low,
+                    gt_disp_pwron_before,
+                    gt_disp_pwron_after,
                     dkl_before,
                     dkl_after,
+                    fia_owner_before,
+                    fia_owner_after,
                     owner_before,
                     owner_after,
                     tcss_after,
+                    dflexpa1_after,
                     dppms_after,
-                    dpcsss_after
+                    dpcsss_after,
+                    dpsp_after,
+                    dpmle1_after
                 );
+                let _ = intel_mmio_write32(info, INTEL_FIA2_DFLEXDPCSSS, fia_owner_before);
                 let _ = intel_mmio_write32(info, INTEL_TC3_DDI_BUF_CTL, owner_before);
             } else {
                 let mut tcss_candidates = [0u32; 4];
@@ -2212,12 +2390,106 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                         INTEL_TC3_DKL_BANK_SHIFT_CANDIDATES[idx],
                     );
                 }
+                let sideband_baseline = intel_mmio_read32(info, INTEL_HIP_INDEX_REG0);
+                let mut sideband_hit = false;
+                let mut sideband_first_shift = 0u32;
+                let mut sideband_first_bank = 0u32;
+                let mut sideband_first_dkl = 0u32;
+                let mut sideband_first_fia = 0u32;
+                for shift in INTEL_TC3_DKL_BANK_SHIFT_CANDIDATES {
+                    for bank_idx in 0..=3u32 {
+                        let bank_mask = 0xFFu32 << shift;
+                        let hip_test = (sideband_baseline & !bank_mask) | (bank_idx << shift);
+                        let _ = intel_mmio_write32(info, INTEL_HIP_INDEX_REG0, hip_test);
+                        let dkl_probe =
+                            intel_mmio_read32(info, INTEL_TC3_DKL_CMN_UC_DW_27_MMIO);
+                        let fia_probe = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPPMS);
+                        if dkl_probe != 0xFFFF_FFFF || fia_probe != 0xFFFF_FFFF {
+                            sideband_hit = true;
+                            sideband_first_shift = shift;
+                            sideband_first_bank = bank_idx;
+                            sideband_first_dkl = dkl_probe;
+                            sideband_first_fia = fia_probe;
+                            break;
+                        }
+                    }
+                    if sideband_hit {
+                        break;
+                    }
+                }
+                let _ = intel_mmio_write32(info, INTEL_HIP_INDEX_REG0, sideband_baseline);
+
+                let topo_tcss = [
+                    intel_mmio_read32(info, 0x161500),
+                    intel_mmio_read32(info, 0x161504),
+                ];
+                let topo_fia1 = [
+                    intel_mmio_read32(info, INTEL_FIA1_DFLEXPA1),
+                    intel_mmio_read32(info, INTEL_FIA1_DFLEXDPPMS),
+                    intel_mmio_read32(info, INTEL_FIA1_DFLEXDPCSSS),
+                    intel_mmio_read32(info, INTEL_FIA1_DFLEXDPSP),
+                    intel_mmio_read32(info, INTEL_FIA1_DFLEXDPMLE1),
+                ];
+                let topo_fia2 = [
+                    intel_mmio_read32(info, INTEL_FIA2_DFLEXPA1),
+                    intel_mmio_read32(info, INTEL_FIA2_DFLEXDPPMS),
+                    intel_mmio_read32(info, INTEL_FIA2_DFLEXDPCSSS),
+                    intel_mmio_read32(info, INTEL_FIA2_DFLEXDPSP),
+                    intel_mmio_read32(info, INTEL_FIA2_DFLEXDPMLE1),
+                ];
+                let topo_hit = topo_tcss.iter().any(|&v| v != 0xFFFF_FFFF)
+                    || topo_fia1.iter().any(|&v| v != 0xFFFF_FFFF)
+                    || topo_fia2.iter().any(|&v| v != 0xFFFF_FFFF);
+                let topo_kind = if topo_fia2.iter().any(|&v| v != 0xFFFF_FFFF) {
+                    "fia2"
+                } else if topo_fia1.iter().any(|&v| v != 0xFFFF_FFFF) {
+                    "fia1"
+                } else if topo_tcss.iter().any(|&v| v != 0xFFFF_FFFF) {
+                    "tcss"
+                } else {
+                    "none"
+                };
                 crate::log!(
-                    "gfx-intel-scanout: compact-nope tc3-dkl sealed pcode={} status=0x{:08X} low=0x{:08X} high=0x{:08X} main=0x{:03X} aux=0x{:08X} ddi=0x{:08X} dkl=0x{:08X} tcss=0x{:08X} tcsswin=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dklshift=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dppms=0x{:08X} dpcsss=0x{:08X}\n",
+                    "gfx-intel-scanout: compact-branch sideband={} shift={} bank={} dkl=0x{:08X} fia=0x{:08X} topo={} kind={} tcss=[0x{:08X},0x{:08X}] fia1=[0x{:08X},0x{:08X}] fia2=[0x{:08X},0x{:08X}]\n",
+                    if sideband_hit { "hit" } else { "nope" },
+                    sideband_first_shift,
+                    sideband_first_bank,
+                    sideband_first_dkl,
+                    sideband_first_fia,
+                    if topo_hit { "hit" } else { "nope" },
+                    topo_kind,
+                    topo_tcss[0],
+                    topo_tcss[1],
+                    topo_fia1[0],
+                    topo_fia1[1],
+                    topo_fia2[0],
+                    topo_fia2[1]
+                );
+                let sinkless_tc_hint = hpd_cpu_preaux_after == 0
+                    && sde_preaux_after == 0
+                    && tcss_after == 0xFFFF_FFFF
+                    && dpsp_after == 0xFFFF_FFFF;
+                crate::log!(
+                    "gfx-intel-scanout: compact-nope tc3-dkl sealed modehint={} pcode={} status=0x{:08X} low=0x{:08X} high=0x{:08X} preown=0x{:08X}->0x{:08X} pretcss=0x{:08X}->0x{:08X} owncand={} cand=0x{:08X}->0x{:08X} candtcss=0x{:08X} prehpd=0x{:08X}->0x{:08X} presde=0x{:08X}->0x{:08X} gtpwr=0x{:08X}->0x{:08X} main=0x{:03X} aux=0x{:08X} ddi=0x{:08X} dkl=0x{:08X} tcss=0x{:08X} tcsswin=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dklshift=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pa1=0x{:08X} dppms=0x{:08X} dpcsss=0x{:08X} dpsp=0x{:08X} dpmle1=0x{:08X}\n",
+                    if sinkless_tc_hint { "sinkless-tbt-default" } else { "dp-alt-unknown" },
                     if tc_cold_ok { "ok" } else { "fail" },
                     tc_cold_status,
                     tc_cold_low,
                     tc_cold_high,
+                    owner_preaux_before,
+                    owner_preaux_after,
+                    tcss_preaux_before,
+                    tcss_preaux_after,
+                    if owner_candidate_idx == 0xFFFF_FFFF { -1i32 } else { owner_candidate_idx as i32 },
+                    owner_candidate_before,
+                    owner_candidate_after,
+                    owner_candidate_tcss,
+                    hpd_cpu_preaux_before,
+                    hpd_cpu_preaux_after,
+                    sde_preaux_before,
+                    sde_preaux_after,
+                    gt_disp_pwron_before,
+                    gt_disp_pwron_after,
                     main_pw_stage_mask,
                     watch_after[2] & tc3_aux_state,
                     watch_after[3] & tc3_ddi_state,
@@ -2231,10 +2503,15 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                     dkl_shift_candidates[1],
                     dkl_shift_candidates[2],
                     dkl_shift_candidates[3],
+                    dflexpa1_after,
                     dppms_after,
-                    dpcsss_after
+                    dpcsss_after,
+                    dpsp_after,
+                    dpmle1_after
                 );
             }
+
+            let _ = intel_mmio_write32(info, INTEL_GT_DISP_PWRON, gt_disp_pwron_before);
         } else {
             crate::log!(
                 "gfx-intel-scanout: compact-nope tc3 ladder stayed sealed main=0x{:03X} pwctl=0x{:08X} dc=0x{:08X} aux=0x{:08X} ddi=0x{:08X} tcss=0x{:08X} auxctl=0x{:08X} buf=0x{:08X}\n",

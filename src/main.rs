@@ -30,7 +30,6 @@ mod portio;
 mod power;
 mod rng;
 mod runtime;
-mod shell;
 mod shell2;
 mod smp;
 mod surface;
@@ -58,8 +57,6 @@ mod z7;
 
 use embassy_executor::{Spawner, raw::Executor};
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
-pub(crate) use shell::ecma48;
-pub(crate) use shell::matrix;
 pub use surface::pat as pattern;
 pub use surface::{io, path};
 
@@ -131,6 +128,7 @@ pub extern "C" fn kmain() -> ! {
         cpu::enable_sse();
     }
     exceptions::init();
+    vga::init(limine::framebuffer_response());
     crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
@@ -156,7 +154,7 @@ pub extern "C" fn kmain() -> ! {
     pci::enumerate_impl();
     #[cfg(feature = "gfx_intel")]
     gfx::intel::init_once();
-    vga::init(limine::framebuffer_response());
+    
     vga::cube::tick();
     trueos_qjs::set_font_atlas_small_provider(qjs_font_atlas_small_provider);
     trueos_qjs::set_font_atlas_large_provider(qjs_font_atlas_large_provider);
