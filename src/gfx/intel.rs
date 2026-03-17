@@ -4,6 +4,17 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
 
+// Bring-up trail markers:
+// 1. BAR0 and BAR2 must be reassigned into guest-safe MMIO/aperture space before Intel probing is trustworthy.
+// 2. GT/MMIO is alive on UHD 770: forcewake works and modern render-side probes return stable nonzero state.
+// 3. The direct demo surface in BAR2/aperture is valid and can hold a known test pattern.
+// 4. Final scanout endpoint registers remain inert: hotplug/DDI/pipeconf/transcoder/pipe/plane state stays zero.
+// 5. The 0x6C0xx island is real and writable, but only as a local tuple; it never propagates to scanout.
+// 6. The 0x45000/0x46000 DC/PLL island is real and writable, but bundle and bridge sequences still do not wake routing.
+// 7. The tight power seam is now 0x45500/0x45504/0x45510/0x45520; 0x45520 only latches once the first three are held.
+// 8. Even with the expanded 0x455xx seam plus the live GT triplet (0x13807C/0x138088/0x13810C), the display route stays dark.
+// 9. Host i915 brings display up as a ladder: PW_1 -> always-on -> DC_off -> PW_2..PW_5 -> connector objects -> AUX/DDI_IO -> route.
+
 const INTEL_VENDOR_ID: u16 = 0x8086;
 const PCI_CLASS_DISPLAY: u8 = 0x03;
 const MAX_INTEL_DEVICES: usize = 4;
@@ -52,11 +63,41 @@ const INTEL_PCI_ASLS: u16 = 0xFC;
 const INTEL_OPREGION_PROBE_BYTES: usize = 0x40;
 const INTEL_OPREGION_SCAN_BYTES: usize = 0x1000;
 const INTEL_PORT_HOTPLUG_EN: usize = 0x61110;
+const INTEL_PORT_HOTPLUG_STAT: usize = 0x61114;
 const INTEL_BXT_DE_PLL_CTL: usize = 0x6D000;
 const INTEL_BXT_DE_PLL_ENABLE: usize = 0x46070;
 const INTEL_DC_STATE_EN: usize = 0x45504;
 const INTEL_DC_STATE_DEBUG: usize = 0x45520;
+const INTEL_HSW_PWR_WELL_CTL2: usize = 0x45404;
+const INTEL_HSW_PWR_WELL_CTL5: usize = 0x45410;
+const INTEL_ICL_PWR_WELL_CTL_AUX2: usize = 0x45444;
+const INTEL_ICL_PWR_WELL_CTL_DDI2: usize = 0x45454;
+const INTEL_GEN6_PCODE_MAILBOX: usize = 0x138124;
+const INTEL_GEN6_PCODE_DATA: usize = 0x138128;
+const INTEL_GEN6_PCODE_DATA1: usize = 0x13812C;
 const INTEL_GT_DISP_PWRON: usize = 0x138090;
+const INTEL_DDI_BUF_CTL_0: usize = 0x64000;
+const INTEL_DDI_BUF_CTL_1: usize = 0x64100;
+const INTEL_DDI_BUF_CTL_2: usize = 0x64200;
+const INTEL_TC3_DDI_BUF_CTL: usize = 0x64500;
+const INTEL_TC3_DP_AUX_CH_CTL: usize = 0x64510;
+const INTEL_TC3_PORT_INDEX: u32 = 2;
+const INTEL_TCSS_DDI_STATUS_TC3: usize = 0x161500 + (INTEL_TC3_PORT_INDEX as usize * 4);
+const INTEL_TCSS_DDI_STATUS_TC3_CANDIDATES: [usize; 4] = [0x161500, 0x161504, 0x161508, 0x16150C];
+const INTEL_TC3_DKL_CMN_UC_DW_27_MMIO: usize = 0x16A36C;
+const INTEL_HIP_INDEX_REG0: usize = 0x1010A0;
+const INTEL_TC3_DKL_BANK_SHIFT: u32 = 8 * INTEL_TC3_PORT_INDEX;
+const INTEL_TC3_DKL_BANK_MASK: u32 = 0xFF << INTEL_TC3_DKL_BANK_SHIFT;
+const INTEL_TC3_DKL_BANK_IDX_UC_DW27: u32 = 2;
+const INTEL_TC3_DKL_BANK_SHIFT_CANDIDATES: [u32; 4] = [0, 8, 16, 24];
+const INTEL_FIA1_DFLEXPA1: usize = 0x163880;
+const INTEL_FIA1_DFLEXDPPMS: usize = 0x163890;
+const INTEL_FIA1_DFLEXDPCSSS: usize = 0x163894;
+const INTEL_FIA1_DFLEXDPSP: usize = 0x1638A0;
+const INTEL_PIPECONF_A: usize = 0x70008;
+const INTEL_PIPECONF_B: usize = 0x71008;
+const INTEL_PIPECONF_C: usize = 0x72008;
+const INTEL_PIPECONF_D: usize = 0x73008;
 const INTEL_ICL_PHY_MISC_A: usize = 0x64C00;
 const INTEL_ICL_PHY_MISC_B: usize = 0x64C04;
 const INTEL_DISPIO_CR_TX_BMU_CR0: usize = 0x6C00C;
@@ -74,6 +115,31 @@ const INTEL_PATTERN_WALK_LOG_LIMIT: usize = 8;
 const INTEL_TUPLE_PROBE_START: usize = 0x6C07C;
 const INTEL_TUPLE_PROBE_END: usize = 0x6C120;
 const INTEL_WRITE_SWEEP_HIT_LOG_LIMIT: usize = 1;
+const INTEL_POWER_FIRST_START: usize = 0x454E0;
+const INTEL_POWER_FIRST_END: usize = 0x45540;
+const INTEL_POWER_FIRST_HIT_LOG_LIMIT: usize = 8;
+const INTEL_COMPACT_CROSS_ISLAND_ONLY: bool = true;
+const INTEL_PW_REQ_IDX_PW1: u32 = 0;
+const INTEL_PW_REQ_IDX_PW2: u32 = 1;
+const INTEL_PW_REQ_IDX_PW3: u32 = 2;
+const INTEL_PW_REQ_IDX_PW4: u32 = 3;
+const INTEL_PW_REQ_IDX_PW5: u32 = 4;
+const INTEL_PW_REQ_IDX_TC3: u32 = 5;
+const INTEL_DC_STATE_MASK_COMPACT: u32 = (1 << 0) | (1 << 1) | (1 << 3) | (1 << 30);
+const INTEL_DDI_BUF_CTL_TC_PHY_OWNERSHIP: u32 = 1 << 6;
+const INTEL_TCSS_DDI_STATUS_READY: u32 = 1 << 2;
+const INTEL_TCSS_DDI_STATUS_HPD_ALT: u32 = 1 << 0;
+const INTEL_TCSS_DDI_STATUS_HPD_TBT: u32 = 1 << 1;
+const INTEL_DP_AUX_CH_CTL_TBT_IO: u32 = 1 << 11;
+const INTEL_DKL_CMN_UC_DW27_UC_HEALTH: u32 = 1 << 15;
+const INTEL_FIA_TC3_READY: u32 = 1 << 0;
+const INTEL_FIA_TC3_OWNED: u32 = 1 << 0;
+const INTEL_FIA_TC3_LIVE_TC: u32 = 1 << 5;
+const INTEL_FIA_TC3_LIVE_TBT: u32 = 1 << 6;
+const INTEL_GEN6_PCODE_READY: u32 = 1 << 31;
+const INTEL_TGL_PCODE_TCCOLD: u32 = 0x26;
+const INTEL_TGL_PCODE_TCCOLD_BLOCK_REQ: u32 = 0;
+const INTEL_TGL_PCODE_TCCOLD_EXIT_FAILED: u32 = 1 << 0;
 
 const INTEL_WRITE_SWEEP_WINDOWS: &[(usize, usize, &str)] = &[
     (0x45000, 0x45080, "dc-pll-45000"),
@@ -833,6 +899,57 @@ fn intel_mmio_write32(info: IntelGfxInfo, off: usize, value: u32) -> bool {
     true
 }
 
+fn intel_pcode_read32_compact(info: IntelGfxInfo, mailbox: u32, low: &mut u32, high: &mut u32) -> Option<u32> {
+    if (intel_mmio_read32(info, INTEL_GEN6_PCODE_MAILBOX) & INTEL_GEN6_PCODE_READY) != 0 {
+        return None;
+    }
+    let _ = intel_mmio_write32(info, INTEL_GEN6_PCODE_DATA, *low);
+    let _ = intel_mmio_write32(info, INTEL_GEN6_PCODE_DATA1, *high);
+    let _ = intel_mmio_write32(
+        info,
+        INTEL_GEN6_PCODE_MAILBOX,
+        INTEL_GEN6_PCODE_READY | mailbox,
+    );
+    for _ in 0..4096 {
+        let status = intel_mmio_read32(info, INTEL_GEN6_PCODE_MAILBOX);
+        if (status & INTEL_GEN6_PCODE_READY) == 0 {
+            *low = intel_mmio_read32(info, INTEL_GEN6_PCODE_DATA);
+            *high = intel_mmio_read32(info, INTEL_GEN6_PCODE_DATA1);
+            return Some(status);
+        }
+    }
+    None
+}
+
+fn intel_tgl_tc_cold_block_compact(info: IntelGfxInfo) -> (bool, u32, u32, u32) {
+    let mut low = INTEL_TGL_PCODE_TCCOLD_BLOCK_REQ;
+    let mut high = 0u32;
+    let status = intel_pcode_read32_compact(info, INTEL_TGL_PCODE_TCCOLD, &mut low, &mut high)
+        .unwrap_or(0xFFFF_FFFF);
+    let ok = status != 0xFFFF_FFFF && (low & INTEL_TGL_PCODE_TCCOLD_EXIT_FAILED) == 0;
+    (ok, status, low, high)
+}
+
+fn intel_dkl_tc3_read32(info: IntelGfxInfo, mmio_off: usize, bank_idx: u32) -> u32 {
+    let hip_orig = intel_mmio_read32(info, INTEL_HIP_INDEX_REG0);
+    let hip_test =
+        (hip_orig & !INTEL_TC3_DKL_BANK_MASK) | (bank_idx << INTEL_TC3_DKL_BANK_SHIFT);
+    let _ = intel_mmio_write32(info, INTEL_HIP_INDEX_REG0, hip_test);
+    let value = intel_mmio_read32(info, mmio_off);
+    let _ = intel_mmio_write32(info, INTEL_HIP_INDEX_REG0, hip_orig);
+    value
+}
+
+fn intel_dkl_read32_shifted(info: IntelGfxInfo, mmio_off: usize, bank_idx: u32, bank_shift: u32) -> u32 {
+    let bank_mask = 0xFFu32 << bank_shift;
+    let hip_orig = intel_mmio_read32(info, INTEL_HIP_INDEX_REG0);
+    let hip_test = (hip_orig & !bank_mask) | (bank_idx << bank_shift);
+    let _ = intel_mmio_write32(info, INTEL_HIP_INDEX_REG0, hip_test);
+    let value = intel_mmio_read32(info, mmio_off);
+    let _ = intel_mmio_write32(info, INTEL_HIP_INDEX_REG0, hip_orig);
+    value
+}
+
 fn decode_pipe_src(pipe_src: u32) -> (usize, usize) {
     let width = ((pipe_src & 0xFFFF) as usize).saturating_add(1);
     let height = (((pipe_src >> 16) & 0xFFFF) as usize).saturating_add(1);
@@ -866,806 +983,7 @@ fn plausible_scanout_surface(value: u32, aperture_bar_size: u64) -> bool {
     offset < aperture_bar_size && (offset & 0xFFF) == 0
 }
 
-fn insert_signature_candidate(
-    top: &mut [IntelDisplaySignatureCandidate; INTEL_DISPLAY_SIGNATURE_TOP_PAGES],
-    cand: IntelDisplaySignatureCandidate,
-) {
-    if cand.score == 0 {
-        return;
-    }
-    let mut slot = None;
-    let mut idx = 0usize;
-    while idx < top.len() {
-        if cand.score > top[idx].score {
-            slot = Some(idx);
-            break;
-        }
-        idx += 1;
-    }
-    let Some(slot_idx) = slot else {
-        return;
-    };
-    let mut move_idx = top.len() - 1;
-    while move_idx > slot_idx {
-        top[move_idx] = top[move_idx - 1];
-        move_idx -= 1;
-    }
-    top[slot_idx] = cand;
-}
-
-fn log_signature_window(info: IntelGfxInfo, page: usize, label: &str) {
-    crate::log!(
-        "gfx-intel-scanout: signature-window label={} base=0x{:05X} dwords={}\n",
-        label,
-        page,
-        INTEL_DISPLAY_SIGNATURE_WINDOW_DWORDS
-    );
-    let mut idx = 0usize;
-    while idx < INTEL_DISPLAY_SIGNATURE_WINDOW_DWORDS {
-        let off = page + idx.saturating_mul(4);
-        let value = intel_mmio_read32(info, off);
-        crate::log!(
-            "gfx-intel-scanout: signature-mmio label={} off=0x{:05X} value=0x{:08X}\n",
-            label,
-            off,
-            value
-        );
-        idx += 1;
-    }
-}
-
-fn log_display_signature_sweep(info: IntelGfxInfo) {
-    let mut top = [IntelDisplaySignatureCandidate::empty(); INTEL_DISPLAY_SIGNATURE_TOP_PAGES];
-    let mut page = 0usize;
-    while page + INTEL_DISPLAY_PAGE_STRIDE <= info.mmio_len {
-        let mut cand = IntelDisplaySignatureCandidate {
-            page,
-            ..IntelDisplaySignatureCandidate::empty()
-        };
-        let mut off = 0usize;
-        while off < INTEL_DISPLAY_PAGE_STRIDE {
-            let mmio_off = page + off;
-            let value = intel_mmio_read32(info, mmio_off);
-            if value != 0 {
-                cand.nonzero_dwords = cand.nonzero_dwords.saturating_add(1);
-            }
-            if cand.pipe_src_off == usize::MAX && plausible_pipe_src(value).is_some() {
-                cand.pipe_src_off = mmio_off;
-                cand.pipe_src_value = value;
-                cand.score = cand.score.saturating_add(7);
-            }
-            if cand.stride_off == usize::MAX && plausible_scanout_stride(value) {
-                cand.stride_off = mmio_off;
-                cand.stride_value = value;
-                cand.score = cand.score.saturating_add(5);
-            }
-            if cand.surf_off == usize::MAX
-                && plausible_scanout_surface(value, info.aperture_bar_size)
-            {
-                cand.surf_off = mmio_off;
-                cand.surf_value = value;
-                cand.score = cand.score.saturating_add(6);
-            }
-            if cand.ctl_off == usize::MAX && (value & INTEL_PLANE_ENABLE) != 0 && value != u32::MAX
-            {
-                cand.ctl_off = mmio_off;
-                cand.ctl_value = value;
-                cand.score = cand.score.saturating_add(3);
-            }
-            off += 4;
-        }
-        if cand.pipe_src_off != usize::MAX && cand.stride_off != usize::MAX {
-            cand.score = cand.score.saturating_add(4);
-        }
-        if cand.surf_off != usize::MAX && cand.stride_off != usize::MAX {
-            cand.score = cand.score.saturating_add(3);
-        }
-        if cand.surf_off != usize::MAX && cand.ctl_off != usize::MAX {
-            cand.score = cand.score.saturating_add(2);
-        }
-        insert_signature_candidate(&mut top, cand);
-        page += INTEL_DISPLAY_PAGE_STRIDE;
-    }
-
-    crate::log!(
-        "gfx-intel-scanout: signature-sweep begin mmio_len=0x{:X} aperture=0x{:X}\n",
-        info.mmio_len,
-        info.aperture_bar_size
-    );
-    let mut rank = 0usize;
-    while rank < top.len() && top[rank].score != 0 {
-        let cand = top[rank];
-        let (pipe_w, pipe_h) = plausible_pipe_src(cand.pipe_src_value).unwrap_or((0, 0));
-        crate::log!(
-            "gfx-intel-scanout: signature-candidate rank={} page=0x{:05X} score={} nonzero={} pipe_src_off={} pipe_src=0x{:08X} size={}x{} stride_off={} stride=0x{:08X} surf_off={} surf=0x{:08X} ctl_off={} ctl=0x{:08X}\n",
-            rank + 1,
-            cand.page,
-            cand.score,
-            cand.nonzero_dwords,
-            if cand.pipe_src_off == usize::MAX {
-                -1isize
-            } else {
-                cand.pipe_src_off as isize
-            },
-            cand.pipe_src_value,
-            pipe_w,
-            pipe_h,
-            if cand.stride_off == usize::MAX {
-                -1isize
-            } else {
-                cand.stride_off as isize
-            },
-            cand.stride_value,
-            if cand.surf_off == usize::MAX {
-                -1isize
-            } else {
-                cand.surf_off as isize
-            },
-            cand.surf_value,
-            if cand.ctl_off == usize::MAX {
-                -1isize
-            } else {
-                cand.ctl_off as isize
-            },
-            cand.ctl_value
-        );
-        if rank < 3 {
-            log_signature_window(info, cand.page, "signature-top");
-        }
-        rank += 1;
-    }
-    if rank == 0 {
-        crate::log!("gfx-intel-scanout: signature-sweep found no plausible scanout pages\n");
-    }
-}
-
-fn scanout_plane(pipe: usize, plane_slot: usize) -> IntelScanoutPlane {
-    let plane_base = INTEL_UNI_PLANE_BASE
-        + pipe.saturating_mul(INTEL_UNI_PLANE_PIPE_STRIDE)
-        + plane_slot.saturating_mul(INTEL_UNI_PLANE_SLOT_STRIDE);
-    let (pipe_name, pipe_src_off, trans_ddi_func_ctl_off) = INTEL_SCANOUT_PIPES[pipe];
-    IntelScanoutPlane {
-        pipe_name,
-        plane_slot: plane_slot + 1,
-        ctl_off: plane_base,
-        stride_off: plane_base + INTEL_UNI_PLANE_STRIDE_OFF,
-        surf_off: plane_base + INTEL_UNI_PLANE_SURF_OFF,
-        surf_live_off: plane_base + INTEL_UNI_PLANE_SURFLIVE_OFF,
-        pipe_src_off,
-        trans_ddi_func_ctl_off,
-    }
-}
-
-fn log_display_region_sweep(info: IntelGfxInfo) {
-    let mut logged = 0usize;
-    let mut page = INTEL_DISPLAY_SWEEP_START;
-    while page < INTEL_DISPLAY_SWEEP_END {
-        let mut found = None;
-        let mut off = 0usize;
-        while off < INTEL_DISPLAY_PAGE_STRIDE {
-            let value = intel_mmio_read32(info, page + off);
-            if value != 0 {
-                found = Some((off, value));
-                break;
-            }
-            off += 4;
-        }
-        if let Some((first_off, value)) = found {
-            crate::log!(
-                "gfx-intel-scanout: display-page page=0x{:05X} first=0x{:03X} value=0x{:08X}\n",
-                page,
-                first_off,
-                value
-            );
-            if logged < 4 {
-                log_display_window(info, page + first_off);
-            }
-            logged += 1;
-            if logged >= INTEL_DISPLAY_SWEEP_LOG_LIMIT {
-                break;
-            }
-        }
-        page += INTEL_DISPLAY_PAGE_STRIDE;
-    }
-    if logged == 0 {
-        crate::log!(
-            "gfx-intel-scanout: display-page sweep 0x{:05X}..0x{:05X} found no nonzero registers\n",
-            INTEL_DISPLAY_SWEEP_START,
-            INTEL_DISPLAY_SWEEP_END
-        );
-    }
-}
-
-fn log_display_range_census(info: IntelGfxInfo) {
-    for &(start, end, name) in INTEL_DISPLAY_CENSUS_RANGES {
-        let mut page = start;
-        let mut logged = 0usize;
-        let mut run_logged = 0usize;
-        let mut nonzero_pages = 0usize;
-        let mut ffff_pages = 0usize;
-        let mut zero_pages = 0usize;
-        let mut run_class = "";
-        let mut run_start = start;
-        let mut run_pages = 0usize;
-        crate::log!(
-            "gfx-intel-scanout: census begin name={} start=0x{:05X} end=0x{:05X}\n",
-            name,
-            start,
-            end
-        );
-        while page < end {
-            let mut sample_or = 0u32;
-            let mut sample_and = u32::MAX;
-            let mut first_nonzero = None;
-            let mut first_nonffff = None;
-            let mut off = 0usize;
-            while off < INTEL_DISPLAY_PAGE_STRIDE {
-                let value = intel_mmio_read32(info, page + off);
-                sample_or |= value;
-                sample_and &= value;
-                if first_nonzero.is_none() && value != 0 {
-                    first_nonzero = Some((off, value));
-                }
-                if first_nonffff.is_none() && value != u32::MAX {
-                    first_nonffff = Some((off, value));
-                }
-                off += 4;
-            }
-
-            let class = if sample_or == 0 {
-                zero_pages += 1;
-                "zero"
-            } else if sample_and == u32::MAX {
-                ffff_pages += 1;
-                if logged < INTEL_DISPLAY_CENSUS_GROUP_LIMIT {
-                    crate::log!(
-                        "gfx-intel-scanout: census page=0x{:05X} class=ffff name={}\n",
-                        page,
-                        name
-                    );
-                    logged += 1;
-                }
-                "ffff"
-            } else {
-                nonzero_pages += 1;
-                if logged < INTEL_DISPLAY_CENSUS_GROUP_LIMIT {
-                    let (nz_off, nz_val) = first_nonzero.unwrap_or((0, 0));
-                    let (nf_off, nf_val) = first_nonffff.unwrap_or((0, u32::MAX));
-                    crate::log!(
-                        "gfx-intel-scanout: census page=0x{:05X} class=mixed name={} or=0x{:08X} and=0x{:08X} first_nz=0x{:03X}/0x{:08X} first_nonffff=0x{:03X}/0x{:08X}\n",
-                        page,
-                        name,
-                        sample_or,
-                        sample_and,
-                        nz_off,
-                        nz_val,
-                        nf_off,
-                        nf_val
-                    );
-                    logged += 1;
-                }
-                "mixed"
-            };
-
-            if run_pages == 0 {
-                run_class = class;
-                run_start = page;
-                run_pages = 1;
-            } else if run_class == class {
-                run_pages += 1;
-            } else {
-                if run_logged < INTEL_DISPLAY_CENSUS_RUN_LIMIT {
-                    crate::log!(
-                        "gfx-intel-scanout: census run name={} class={} start=0x{:05X} end=0x{:05X} pages={}\n",
-                        name,
-                        run_class,
-                        run_start,
-                        page,
-                        run_pages
-                    );
-                    run_logged += 1;
-                }
-                run_class = class;
-                run_start = page;
-                run_pages = 1;
-            }
-
-            page += INTEL_DISPLAY_PAGE_STRIDE;
-        }
-        if run_pages != 0 && run_logged < INTEL_DISPLAY_CENSUS_RUN_LIMIT {
-            crate::log!(
-                "gfx-intel-scanout: census run name={} class={} start=0x{:05X} end=0x{:05X} pages={}\n",
-                name,
-                run_class,
-                run_start,
-                end,
-                run_pages
-            );
-        }
-        crate::log!(
-            "gfx-intel-scanout: census end name={} mixed={} ffff={} zero={}\n",
-            name,
-            nonzero_pages,
-            ffff_pages,
-            zero_pages
-        );
-    }
-}
-
-fn log_display_window(info: IntelGfxInfo, center_off: usize) {
-    let aligned = center_off & !0x1Fusize;
-    let mut idx = 0usize;
-    while idx < INTEL_DISPLAY_WINDOW_DWORDS {
-        let off = aligned + idx.saturating_mul(4);
-        let value = intel_mmio_read32(info, off);
-        crate::log!(
-            "gfx-intel-scanout: display-mmio off=0x{:05X} value=0x{:08X}\n",
-            off,
-            value
-        );
-        idx += 1;
-    }
-}
-
-fn log_display_dense_window(info: IntelGfxInfo, center_off: usize, label: &str) {
-    let aligned = center_off & !(INTEL_DISPLAY_PAGE_STRIDE - 1);
-    crate::log!(
-        "gfx-intel-scanout: dense-window label={} base=0x{:05X} dwords={}\n",
-        label,
-        aligned,
-        INTEL_DISPLAY_DENSE_WINDOW_DWORDS
-    );
-    let mut idx = 0usize;
-    while idx < INTEL_DISPLAY_DENSE_WINDOW_DWORDS {
-        let off = aligned + idx.saturating_mul(4);
-        let value = intel_mmio_read32(info, off);
-        crate::log!(
-            "gfx-intel-scanout: dense-mmio label={} off=0x{:05X} value=0x{:08X}\n",
-            label,
-            off,
-            value
-        );
-        idx += 1;
-    }
-}
-
-fn log_display_dense_windows(info: IntelGfxInfo) {
-    for &(center, label) in INTEL_DISPLAY_DENSE_CENTERS {
-        log_display_dense_window(info, center, label);
-    }
-}
-
-fn log_display_extra_dense_window(info: IntelGfxInfo, start_off: usize, label: &str) {
-    let aligned = start_off & !(INTEL_DISPLAY_PAGE_STRIDE - 1);
-    crate::log!(
-        "gfx-intel-scanout: extra-dense-window label={} start=0x{:05X} dwords={}\n",
-        label,
-        start_off,
-        INTEL_DISPLAY_EXTRA_DENSE_WINDOW_DWORDS
-    );
-    let mut idx = 0usize;
-    while idx < INTEL_DISPLAY_EXTRA_DENSE_WINDOW_DWORDS {
-        let off = aligned + idx.saturating_mul(4);
-        let value = intel_mmio_read32(info, off);
-        crate::log!(
-            "gfx-intel-scanout: extra-dense-mmio label={} off=0x{:05X} value=0x{:08X}\n",
-            label,
-            off,
-            value
-        );
-        idx += 1;
-    }
-}
-
-fn log_display_extra_dense_windows(info: IntelGfxInfo) {
-    for &(start, label) in INTEL_DISPLAY_EXTRA_DENSE_WINDOWS {
-        log_display_extra_dense_window(info, start, label);
-    }
-}
-
-fn log_display_power_probe(info: IntelGfxInfo) {
-    let phy_misc_a = intel_mmio_read32(info, INTEL_ICL_PHY_MISC_A);
-    let phy_misc_b = intel_mmio_read32(info, INTEL_ICL_PHY_MISC_B);
-    let tx_bmu = intel_mmio_read32(info, INTEL_DISPIO_CR_TX_BMU_CR0);
-    let de_pll_ctl = intel_mmio_read32(info, INTEL_BXT_DE_PLL_CTL);
-    let de_pll_enable = intel_mmio_read32(info, INTEL_BXT_DE_PLL_ENABLE);
-    let dc_state_en = intel_mmio_read32(info, INTEL_DC_STATE_EN);
-    let dc_state_debug = intel_mmio_read32(info, INTEL_DC_STATE_DEBUG);
-    let hotplug = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
-    let gt_disp_pwron = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
-
-    crate::log!(
-        "gfx-intel-scanout: power-probe phy_misc_a=0x{:08X} phy_misc_b=0x{:08X} tx_bmu=0x{:08X} de_pll_ctl=0x{:08X} de_pll_enable=0x{:08X} dc_state_en=0x{:08X} dc_state_debug=0x{:08X} hotplug=0x{:08X} gt_disp_pwron=0x{:08X}\n",
-        phy_misc_a,
-        phy_misc_b,
-        tx_bmu,
-        de_pll_ctl,
-        de_pll_enable,
-        dc_state_en,
-        dc_state_debug,
-        hotplug,
-        gt_disp_pwron
-    );
-}
-
-fn log_hdmi_port_probe(info: IntelGfxInfo) {
-    let hotplug_en = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
-    let trans_a = intel_mmio_read32(info, INTEL_TRANS_A_DDI_FUNC_CTL);
-    let trans_b = intel_mmio_read32(info, INTEL_TRANS_B_DDI_FUNC_CTL);
-    let trans_c = intel_mmio_read32(info, INTEL_TRANS_C_DDI_FUNC_CTL);
-    let trans_d = intel_mmio_read32(info, INTEL_TRANS_D_DDI_FUNC_CTL);
-    let pipe_a = intel_mmio_read32(info, INTEL_PIPE_A_SRC);
-    let pipe_b = intel_mmio_read32(info, INTEL_PIPE_B_SRC);
-    let pipe_c = intel_mmio_read32(info, INTEL_PIPE_C_SRC);
-    let pipe_d = intel_mmio_read32(info, INTEL_PIPE_D_SRC);
-    crate::log!(
-        "gfx-intel-scanout: hdmi-probe hotplug_en=0x{:08X} trans_a=0x{:08X} trans_b=0x{:08X} trans_c=0x{:08X} trans_d=0x{:08X} pipe_a=0x{:08X} pipe_b=0x{:08X} pipe_c=0x{:08X} pipe_d=0x{:08X}\n",
-        hotplug_en,
-        trans_a,
-        trans_b,
-        trans_c,
-        trans_d,
-        pipe_a,
-        pipe_b,
-        pipe_c,
-        pipe_d
-    );
-}
-
-fn log_display_focus_windows(info: IntelGfxInfo) {
-    for &center in &[
-        INTEL_BXT_DE_PLL_ENABLE,
-        INTEL_PORT_HOTPLUG_EN,
-        INTEL_TRANS_A_DDI_FUNC_CTL,
-        INTEL_TRANS_B_DDI_FUNC_CTL,
-        INTEL_TRANS_C_DDI_FUNC_CTL,
-        INTEL_TRANS_D_DDI_FUNC_CTL,
-        INTEL_GT_DISP_PWRON,
-    ] {
-        crate::log!("gfx-intel-scanout: focus-window center=0x{:05X}\n", center);
-        log_display_window(info, center);
-    }
-}
-
-fn arm_display_power_smoke(info: IntelGfxInfo) -> bool {
-    let orig_pwron = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
-    let req_pwron = orig_pwron | INTEL_GT_DISP_PWRON_REQ;
-    let wrote = intel_mmio_write32(info, INTEL_GT_DISP_PWRON, req_pwron);
-    let rb_pwron = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
-    let hotplug = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
-    let de_pll_enable = intel_mmio_read32(info, INTEL_BXT_DE_PLL_ENABLE);
-    let phy_misc_a = intel_mmio_read32(info, INTEL_ICL_PHY_MISC_A);
-    let latched = wrote && (rb_pwron & INTEL_GT_DISP_PWRON_REQ) != 0;
-    crate::log!(
-        "gfx-intel-scanout: disp-pwron-smoke orig=0x{:08X} req=0x{:08X} rb=0x{:08X} hotplug=0x{:08X} de_pll_enable=0x{:08X} phy_misc_a=0x{:08X} latched={}\n",
-        orig_pwron,
-        req_pwron,
-        rb_pwron,
-        hotplug,
-        de_pll_enable,
-        phy_misc_a,
-        latched as u8
-    );
-    crate::log!(
-        "gfx-intel-scanout: post-pwron-window center=0x{:05X}\n",
-        INTEL_GT_DISP_PWRON
-    );
-    log_display_window(info, INTEL_GT_DISP_PWRON);
-    latched
-}
-
-fn hotplug_write_smoke(info: IntelGfxInfo) -> bool {
-    let orig = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
-    let test = orig | INTEL_PORT_HOTPLUG_TEST_BIT;
-    let wrote = intel_mmio_write32(info, INTEL_PORT_HOTPLUG_EN, test);
-    let rb = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
-    let _ = intel_mmio_write32(info, INTEL_PORT_HOTPLUG_EN, orig);
-    let restored = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
-    let latched = wrote && (rb & INTEL_PORT_HOTPLUG_TEST_BIT) != 0;
-    crate::log!(
-        "gfx-intel-scanout: hotplug-smoke orig=0x{:08X} test=0x{:08X} rb=0x{:08X} restore=0x{:08X} latched={}\n",
-        orig,
-        test,
-        rb,
-        restored,
-        latched as u8
-    );
-    crate::log!(
-        "gfx-intel-scanout: post-hotplug-window center=0x{:05X}\n",
-        INTEL_PORT_HOTPLUG_EN
-    );
-    log_display_window(info, INTEL_PORT_HOTPLUG_EN);
-    latched
-}
-
-fn signature_candidate_surface_smoke(info: IntelGfxInfo) {
-    let ctl = intel_mmio_read32(info, INTEL_SIGNATURE_SMOKE_CTL_OFF);
-    let surf = intel_mmio_read32(info, INTEL_SIGNATURE_SMOKE_SURF_OFF);
-    let pipe_src = intel_mmio_read32(info, INTEL_SIGNATURE_SMOKE_PIPE_SRC_OFF);
-    let stride = intel_mmio_read32(info, INTEL_SIGNATURE_SMOKE_STRIDE_OFF);
-    let (width, height) = plausible_pipe_src(pipe_src).unwrap_or((0, 0));
-    let surf_ok = plausible_scanout_surface(surf, info.aperture_bar_size);
-    let stride_ok = plausible_scanout_stride(stride);
-    let ctl_ok = ctl == INTEL_PLANE_ENABLE;
-    if !ctl_ok || !surf_ok || !stride_ok || width == 0 || height == 0 {
-        crate::log!(
-            "gfx-intel-scanout: signature-smoke skip ctl=0x{:08X} surf=0x{:08X} pipe_src=0x{:08X} size={}x{} stride=0x{:08X} ctl_ok={} surf_ok={} stride_ok={}\n",
-            ctl,
-            surf,
-            pipe_src,
-            width,
-            height,
-            stride,
-            ctl_ok as u8,
-            surf_ok as u8,
-            stride_ok as u8
-        );
-        return;
-    }
-
-    let test_surf = if (surf as u64).saturating_add(0x1000) < info.aperture_bar_size {
-        surf.saturating_add(0x1000)
-    } else if surf >= 0x1000 {
-        surf.saturating_sub(0x1000)
-    } else {
-        surf
-    };
-    if test_surf == surf || !plausible_scanout_surface(test_surf, info.aperture_bar_size) {
-        crate::log!(
-            "gfx-intel-scanout: signature-smoke skip surf=0x{:08X} no alternate in aperture=0x{:X}\n",
-            surf,
-            info.aperture_bar_size
-        );
-        return;
-    }
-
-    let wrote = intel_mmio_write32(info, INTEL_SIGNATURE_SMOKE_SURF_OFF, test_surf);
-    let rb = intel_mmio_read32(info, INTEL_SIGNATURE_SMOKE_SURF_OFF);
-    let _ = intel_mmio_write32(info, INTEL_SIGNATURE_SMOKE_SURF_OFF, surf);
-    let restored = intel_mmio_read32(info, INTEL_SIGNATURE_SMOKE_SURF_OFF);
-    let latched = wrote && rb == test_surf && restored == surf;
-    crate::log!(
-        "gfx-intel-scanout: signature-smoke page=0x82000 ctl=0x{:08X} pipe_src=0x{:08X} size={}x{} stride=0x{:08X} surf orig=0x{:08X} test=0x{:08X} rb=0x{:08X} restore=0x{:08X} latched={}\n",
-        ctl,
-        pipe_src,
-        width,
-        height,
-        stride,
-        surf,
-        test_surf,
-        rb,
-        restored,
-        latched as u8
-    );
-}
-
-fn probe_scanout_surface(info: IntelGfxInfo) -> Option<IntelScanoutSurface> {
-    let mut found = None;
-    let mut nonzero_pipes = 0usize;
-    let mut nonzero_planes = 0usize;
-    let mut enabled_planes = 0usize;
-    for pipe in 0..INTEL_SCANOUT_PIPES.len() {
-        let plane0 = scanout_plane(pipe, 0);
-        let pipe_src = intel_mmio_read32(info, plane0.pipe_src_off);
-        let trans_ddi = intel_mmio_read32(info, plane0.trans_ddi_func_ctl_off);
-        let (pipe_w, pipe_h) = decode_pipe_src(pipe_src);
-        if pipe_src != 0 || trans_ddi != 0 {
-            nonzero_pipes += 1;
-        }
-        for plane_slot in 0..4 {
-            let plane = scanout_plane(pipe, plane_slot);
-            let ctl = intel_mmio_read32(info, plane.ctl_off);
-            let stride = intel_mmio_read32(info, plane.stride_off) as usize;
-            let surf = intel_mmio_read32(info, plane.surf_off);
-            let surf_live = intel_mmio_read32(info, plane.surf_live_off);
-            let enabled = (ctl & INTEL_PLANE_ENABLE) != 0;
-            if enabled {
-                enabled_planes += 1;
-            }
-            if ctl != 0 || stride != 0 || surf != 0 || surf_live != 0 {
-                nonzero_planes += 1;
-                crate::log!(
-                    "gfx-intel-scanout: plane-live {}{} ctl=0x{:08X} stride=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} enabled={}\n",
-                    plane.pipe_name,
-                    plane.plane_slot,
-                    ctl,
-                    stride as u32,
-                    surf,
-                    surf_live,
-                    enabled as u8
-                );
-            }
-            if !enabled || surf == 0 || stride < 64 || pipe_w == 0 || pipe_h == 0 {
-                continue;
-            }
-            found = Some(IntelScanoutSurface {
-                plane,
-                ctl,
-                stride,
-                surf,
-                surf_live,
-                width: pipe_w,
-                height: pipe_h,
-            });
-            break;
-        }
-        if found.is_some() {
-            break;
-        }
-    }
-    if found.is_none() && (nonzero_pipes != 0 || nonzero_planes != 0 || enabled_planes != 0) {
-        crate::log!(
-            "gfx-intel-scanout: plane-scan summary nonzero_pipes={} nonzero_planes={} enabled_planes={}\n",
-            nonzero_pipes,
-            nonzero_planes,
-            enabled_planes
-        );
-    }
-    found
-}
-
-fn write_scanout_test_pattern(base: *mut u8, stride: usize, width: usize, height: usize) {
-    for y in 0..height {
-        let row_ptr = unsafe { base.add(y.saturating_mul(stride)) as *mut u32 };
-        let row = unsafe { core::slice::from_raw_parts_mut(row_ptr, width) };
-        for (x, px) in row.iter_mut().enumerate() {
-            let band = (x.saturating_mul(6)) / width.max(1);
-            let mut color = match band {
-                0 => 0x00002020,
-                1 => 0x00FF3030,
-                2 => 0x0030FF30,
-                3 => 0x003080FF,
-                4 => 0x00F0E040,
-                _ => 0x00F8F8F8,
-            };
-            if x < 4 || y < 4 || x + 4 >= width || y + 4 >= height {
-                color = 0x00FFFFFF;
-            }
-            let diag0 = x.saturating_mul(height.max(1)) / width.max(1);
-            let diag1 = (width.saturating_sub(1).saturating_sub(x)).saturating_mul(height.max(1))
-                / width.max(1);
-            if y.abs_diff(diag0) <= 2 || y.abs_diff(diag1) <= 2 {
-                color = 0x00000000;
-            }
-            if y > height / 3
-                && y < (height / 3).saturating_mul(2)
-                && x > width / 3
-                && x < (width / 3).saturating_mul(2)
-            {
-                color = 0x00000000;
-            }
-            *px = color;
-        }
-    }
-}
-
-fn prepare_direct_demo_surface(info: IntelGfxInfo) -> Option<(u32, usize, usize, usize)> {
-    if info.aperture_bar_phys == 0 || info.aperture_bar_size == 0 {
-        crate::log!(
-            "gfx-intel-scanout: direct-demo aperture unavailable bar2=0x{:X} size=0x{:X}\n",
-            info.aperture_bar_phys,
-            info.aperture_bar_size
-        );
-        return None;
-    }
-
-    let surf = INTEL_DIRECT_DEMO_SURF_OFF;
-    let stride = INTEL_DIRECT_DEMO_STRIDE as usize;
-    let width = INTEL_DIRECT_DEMO_WIDTH.min((stride / 4).max(1));
-    let height = INTEL_DIRECT_DEMO_HEIGHT;
-    let bytes = height.saturating_mul(stride);
-    if (surf as u64).saturating_add(bytes as u64) > info.aperture_bar_size {
-        crate::log!(
-            "gfx-intel-scanout: direct-demo surf=0x{:08X} stride=0x{:X} bytes=0x{:X} exceeds aperture=0x{:X}\n",
-            surf,
-            stride,
-            bytes,
-            info.aperture_bar_size
-        );
-        return None;
-    }
-
-    let phys = info.aperture_bar_phys.saturating_add(surf as u64);
-    let Ok(mapped) = crate::pci::mmio::map_mmio_region_exact(phys, bytes) else {
-        crate::log!(
-            "gfx-intel-scanout: direct-demo aperture map failed phys=0x{:X} bytes=0x{:X}\n",
-            phys,
-            bytes
-        );
-        return None;
-    };
-
-    write_scanout_test_pattern(mapped.as_ptr(), stride, width, height);
-    let sample0 = unsafe { core::ptr::read_volatile(mapped.as_ptr() as *const u32) };
-    let sample1 = unsafe { core::ptr::read_volatile(mapped.as_ptr().add(4) as *const u32) };
-    crate::log!(
-        "gfx-intel-scanout: direct-demo surface ready surf=0x{:08X} stride=0x{:X} size={}x{} phys=0x{:X} sample0=0x{:08X} sample1=0x{:08X}\n",
-        surf,
-        stride,
-        width,
-        height,
-        phys,
-        sample0,
-        sample1
-    );
-    Some((surf, stride, width, height))
-}
-
-fn try_direct_plane_demo(info: IntelGfxInfo) -> bool {
-    let Some((surf, stride, width, height)) = prepare_direct_demo_surface(info) else {
-        return false;
-    };
-    let pipe_src = (((height.saturating_sub(1)) as u32) << 16) | ((width.saturating_sub(1)) as u32);
-    let mut armed = false;
-
-    for pipe in 0..INTEL_SCANOUT_PIPES.len() {
-        let plane = scanout_plane(pipe, 0);
-        let orig_ctl = intel_mmio_read32(info, plane.ctl_off);
-        let orig_stride = intel_mmio_read32(info, plane.stride_off);
-        let orig_surf = intel_mmio_read32(info, plane.surf_off);
-        let orig_pipe_src = intel_mmio_read32(info, plane.pipe_src_off);
-        let orig_ddi = intel_mmio_read32(info, plane.trans_ddi_func_ctl_off);
-
-        let _ = intel_mmio_write32(info, plane.pipe_src_off, pipe_src);
-        let rb_pipe_src = intel_mmio_read32(info, plane.pipe_src_off);
-        let _ = intel_mmio_write32(info, plane.stride_off, stride as u32);
-        let rb_stride = intel_mmio_read32(info, plane.stride_off);
-        let _ = intel_mmio_write32(info, plane.surf_off, surf);
-        let rb_surf = intel_mmio_read32(info, plane.surf_off);
-        let _ = intel_mmio_write32(info, plane.ctl_off, INTEL_PLANE_ENABLE);
-        let rb_ctl = intel_mmio_read32(info, plane.ctl_off);
-
-        let pipe_stuck = rb_pipe_src == pipe_src;
-        let stride_stuck = rb_stride == stride as u32;
-        let surf_stuck = rb_surf == surf;
-        let ctl_stuck = rb_ctl == INTEL_PLANE_ENABLE;
-
-        crate::log!(
-            "gfx-intel-scanout: direct-demo attempt pipe={} plane={} pipe_src orig=0x{:08X} rb=0x{:08X} stride orig=0x{:08X} rb=0x{:08X} surf orig=0x{:08X} rb=0x{:08X} ctl orig=0x{:08X} rb=0x{:08X} ddi=0x{:08X} stuck pipe={} stride={} surf={} ctl={}\n",
-            plane.pipe_name,
-            plane.plane_slot,
-            orig_pipe_src,
-            rb_pipe_src,
-            orig_stride,
-            rb_stride,
-            orig_surf,
-            rb_surf,
-            orig_ctl,
-            rb_ctl,
-            orig_ddi,
-            pipe_stuck as u8,
-            stride_stuck as u8,
-            surf_stuck as u8,
-            ctl_stuck as u8
-        );
-
-        if pipe_stuck && stride_stuck && surf_stuck {
-            crate::log!(
-                "gfx-intel-scanout: direct-demo armed pipe={} plane={} surf=0x{:08X} stride=0x{:X} size={}x{}\n",
-                plane.pipe_name,
-                plane.plane_slot,
-                surf,
-                stride,
-                width,
-                height
-            );
-            armed = true;
-            break;
-        }
-
-        let _ = intel_mmio_write32(info, plane.ctl_off, orig_ctl);
-        let _ = intel_mmio_write32(info, plane.surf_off, orig_surf);
-        let _ = intel_mmio_write32(info, plane.stride_off, orig_stride);
-        let _ = intel_mmio_write32(info, plane.pipe_src_off, orig_pipe_src);
-    }
-
-    if !armed {
-        crate::log!(
-            "gfx-intel-scanout: direct-demo no candidate plane latched raw scanout state\n"
-        );
-    }
-    armed
-}
+include!("intel_disp.rs");
 
 fn narrow_display_writeability_sweep(info: IntelGfxInfo) {
     let mut successes = 0usize;
@@ -2469,38 +1787,1308 @@ pub async fn centered_triangle_demo_task() {
     }
 }
 
+fn power_first_gate_hunt(info: IntelGfxInfo) {
+    let hold_offsets = [0x45500usize, INTEL_DC_STATE_EN, 0x45510usize];
+    let mut hold_orig = [0u32; 3];
+    let mut hold_rb = [0u32; 3];
+    for idx in 0..hold_offsets.len() {
+        hold_orig[idx] = intel_mmio_read32(info, hold_offsets[idx]);
+        let _ = intel_mmio_write32(info, hold_offsets[idx], hold_orig[idx] | 0x00000001);
+        hold_rb[idx] = intel_mmio_read32(info, hold_offsets[idx]);
+    }
+
+    let de_pll_enable = intel_mmio_read32(info, INTEL_BXT_DE_PLL_ENABLE);
+    let dc_state_debug = intel_mmio_read32(info, INTEL_DC_STATE_DEBUG);
+    let gt_disp_pwron = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
+    let hotplug_en = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
+    let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+    crate::log!(
+        "gfx-intel-scanout: power-first hold rb=[0x{:08X},0x{:08X},0x{:08X}] de=0x{:08X} dbg=0x{:08X} gt_pw=0x{:08X} hp=[0x{:08X},0x{:08X}]\n",
+        hold_rb[0],
+        hold_rb[1],
+        hold_rb[2],
+        de_pll_enable,
+        dc_state_debug,
+        gt_disp_pwron,
+        hotplug_en,
+        hotplug_stat
+    );
+
+    let mut attempts = 0usize;
+    let mut hits = 0usize;
+    let mut first_hit = 0usize;
+    for off in (INTEL_POWER_FIRST_START..INTEL_POWER_FIRST_END).step_by(4) {
+        if hold_offsets.contains(&off) {
+            continue;
+        }
+        attempts = attempts.saturating_add(1);
+        let orig = intel_mmio_read32(info, off);
+        let Some(test) = walker_test_value(orig) else {
+            continue;
+        };
+        let _ = intel_mmio_write32(info, off, test);
+        let rb = intel_mmio_read32(info, off);
+        let latched = rb == test;
+        let _ = intel_mmio_write32(info, off, orig);
+        if !latched {
+            continue;
+        }
+        hits = hits.saturating_add(1);
+        if first_hit == 0 {
+            first_hit = off;
+        }
+        if hits <= INTEL_POWER_FIRST_HIT_LOG_LIMIT {
+            let dc_state_en = intel_mmio_read32(info, INTEL_DC_STATE_EN);
+            let dc_state_debug = intel_mmio_read32(info, INTEL_DC_STATE_DEBUG);
+            let gt_disp_pwron = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
+            let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+            let ddi0 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_0);
+            let ddi1 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_1);
+            let ddi2 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_2);
+            let pc_a = intel_mmio_read32(info, INTEL_PIPECONF_A);
+            let pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
+            let pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
+            let pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
+            crate::log!(
+                "gfx-intel-scanout: power-first hit off=0x{:05X} orig=0x{:08X} rb=0x{:08X} dc=[0x{:08X},0x{:08X}] gt_pw=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+                off,
+                orig,
+                rb,
+                dc_state_en,
+                dc_state_debug,
+                gt_disp_pwron,
+                hotplug_stat,
+                ddi0,
+                ddi1,
+                ddi2,
+                pc_a,
+                pc_b,
+                pc_c,
+                pc_d
+            );
+        }
+    }
+
+    crate::log!(
+        "gfx-intel-scanout: power-first summary start=0x{:05X} end=0x{:05X} attempts={} hits={} first_hit=0x{:05X}\n",
+        INTEL_POWER_FIRST_START,
+        INTEL_POWER_FIRST_END,
+        attempts,
+        hits,
+        first_hit
+    );
+
+    for idx in (0..hold_offsets.len()).rev() {
+        let _ = intel_mmio_write32(info, hold_offsets[idx], hold_orig[idx]);
+    }
+}
+
 fn minimal_pattern_register_poke(info: IntelGfxInfo) {
-    // Prepare demo surface with test pattern
-    let Some((surf, stride, width, height)) = prepare_direct_demo_surface(info) else {
+    let pw_req_mask = |idx: u32| -> u32 { 0x2u32 << (idx * 2) };
+    let pw_state_mask = |idx: u32| -> u32 { 0x1u32 << (idx * 2) };
+    let mut read_route_sig = || -> [u32; 12] {
+        [
+            intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT),
+            intel_mmio_read32(info, INTEL_DDI_BUF_CTL_0),
+            intel_mmio_read32(info, INTEL_DDI_BUF_CTL_1),
+            intel_mmio_read32(info, INTEL_DDI_BUF_CTL_2),
+            intel_mmio_read32(info, INTEL_PIPECONF_A),
+            intel_mmio_read32(info, INTEL_PIPECONF_B),
+            intel_mmio_read32(info, INTEL_PIPECONF_C),
+            intel_mmio_read32(info, INTEL_PIPECONF_D),
+            intel_mmio_read32(info, INTEL_TRANS_A_DDI_FUNC_CTL),
+            intel_mmio_read32(info, INTEL_TRANS_B_DDI_FUNC_CTL),
+            intel_mmio_read32(info, INTEL_TRANS_C_DDI_FUNC_CTL),
+            intel_mmio_read32(info, INTEL_TRANS_D_DDI_FUNC_CTL),
+        ]
+    };
+    let route_changed = |before: &[u32; 12], after: &[u32; 12]| before != after;
+    let log_route_hit = |label: &str, before: &[u32; 12], after: &[u32; 12]| {
+        crate::log!(
+            "gfx-intel-scanout: compact-hit label={} hp=0x{:08X}->0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}]->[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]->[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]->[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+            label,
+            before[0],
+            after[0],
+            before[1],
+            before[2],
+            before[3],
+            after[1],
+            after[2],
+            after[3],
+            before[4],
+            before[5],
+            before[6],
+            before[7],
+            after[4],
+            after[5],
+            after[6],
+            after[7],
+            before[8],
+            before[9],
+            before[10],
+            before[11],
+            after[8],
+            after[9],
+            after[10],
+            after[11]
+        );
+    };
+    let read_dp_route_sig = || -> [u32; 5] {
+        [
+            intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT),
+            intel_mmio_read32(info, INTEL_DDI_BUF_CTL_0),
+            intel_mmio_read32(info, INTEL_PIPECONF_A),
+            intel_mmio_read32(info, INTEL_TRANS_A_DDI_FUNC_CTL),
+            intel_mmio_read32(info, INTEL_PIPE_A_SRC),
+        ]
+    };
+    let dp_route_changed = |before: &[u32; 5], after: &[u32; 5]| before != after;
+    let apply_bits = |offsets: &[usize], tests: &[u32]| {
+        for idx in 0..offsets.len() {
+            let _ = intel_mmio_write32(info, offsets[idx], tests[idx]);
+        }
+    };
+    let restore_bits = |offsets: &[usize], orig: &[u32]| {
+        for idx in (0..offsets.len()).rev() {
+            let _ = intel_mmio_write32(info, offsets[idx], orig[idx]);
+        }
+    };
+
+    if INTEL_COMPACT_CROSS_ISLAND_ONLY {
+        let seam_offsets = [0x45500usize, 0x45510usize, INTEL_DC_STATE_DEBUG];
+        let tc3_power_offsets = [
+            INTEL_HSW_PWR_WELL_CTL2,
+            INTEL_DC_STATE_EN,
+            INTEL_ICL_PWR_WELL_CTL_AUX2,
+            INTEL_ICL_PWR_WELL_CTL_DDI2,
+        ];
+        let main_pw_state =
+            pw_state_mask(INTEL_PW_REQ_IDX_PW1) |
+            pw_state_mask(INTEL_PW_REQ_IDX_PW2) |
+            pw_state_mask(INTEL_PW_REQ_IDX_PW3) |
+            pw_state_mask(INTEL_PW_REQ_IDX_PW4) |
+            pw_state_mask(INTEL_PW_REQ_IDX_PW5);
+        let tc3_aux_req = pw_req_mask(INTEL_PW_REQ_IDX_TC3);
+        let tc3_aux_state = pw_state_mask(INTEL_PW_REQ_IDX_TC3);
+        let tc3_ddi_req = pw_req_mask(INTEL_PW_REQ_IDX_TC3);
+        let tc3_ddi_state = pw_state_mask(INTEL_PW_REQ_IDX_TC3);
+        let tc3_watch_offsets = [
+            INTEL_HSW_PWR_WELL_CTL2,
+            INTEL_DC_STATE_EN,
+            INTEL_ICL_PWR_WELL_CTL_AUX2,
+            INTEL_ICL_PWR_WELL_CTL_DDI2,
+            INTEL_TCSS_DDI_STATUS_TC3,
+            INTEL_TC3_DP_AUX_CH_CTL,
+            INTEL_TC3_DDI_BUF_CTL,
+            INTEL_PORT_HOTPLUG_STAT,
+            INTEL_PIPECONF_A,
+            INTEL_TRANS_A_DDI_FUNC_CTL,
+            INTEL_PIPE_A_SRC,
+        ];
+        let tc3_watch_names = [
+            "PW_CTL2",
+            "DC_STATE_EN",
+            "AUX2",
+            "DDI2",
+            "TCSS_TC3",
+            "AUX_CTL_TC3",
+            "DDI_BUF_TC3",
+            "HP_STAT",
+            "PIPECONF_A",
+            "TRANS_A",
+            "PIPE_A",
+        ];
+        let mut seam_orig = [0u32; 3];
+        let mut seam_test = [0u32; 3];
+        let mut tc3_power_orig = [0u32; 4];
+        let mut tc3_power_test = [0u32; 4];
+        let tc3_aux_ctl_orig = intel_mmio_read32(info, INTEL_TC3_DP_AUX_CH_CTL);
+        let tc3_aux_ctl_test = tc3_aux_ctl_orig & !INTEL_DP_AUX_CH_CTL_TBT_IO;
+        let mut watch_before = [0u32; 11];
+        let mut watch_after = [0u32; 11];
+        for idx in 0..seam_offsets.len() {
+            seam_orig[idx] = intel_mmio_read32(info, seam_offsets[idx]);
+            seam_test[idx] = seam_orig[idx] | 0x00000001;
+        }
+        tc3_power_orig[0] = intel_mmio_read32(info, tc3_power_offsets[0]);
+        tc3_power_test[0] = tc3_power_orig[0];
+        tc3_power_orig[1] = intel_mmio_read32(info, tc3_power_offsets[1]);
+        tc3_power_test[1] = tc3_power_orig[1] & !INTEL_DC_STATE_MASK_COMPACT;
+        tc3_power_orig[2] = intel_mmio_read32(info, tc3_power_offsets[2]);
+        tc3_power_test[2] = tc3_power_orig[2] | tc3_aux_req;
+        tc3_power_orig[3] = intel_mmio_read32(info, tc3_power_offsets[3]);
+        tc3_power_test[3] = tc3_power_orig[3] | tc3_ddi_req;
+        for idx in 0..tc3_watch_offsets.len() {
+            watch_before[idx] = intel_mmio_read32(info, tc3_watch_offsets[idx]);
+        }
+
+        for idx in 0..seam_offsets.len() {
+            let _ = intel_mmio_write32(info, seam_offsets[idx], seam_orig[idx] & !0x00000001);
+        }
+        apply_bits(&seam_offsets, &seam_test);
+        let _ = intel_mmio_write32(info, INTEL_TC3_DP_AUX_CH_CTL, tc3_aux_ctl_test);
+        let mut main_pw_stage_mask = 0u32;
+        for pw_idx in [
+            INTEL_PW_REQ_IDX_PW1,
+            INTEL_PW_REQ_IDX_PW2,
+            INTEL_PW_REQ_IDX_PW3,
+            INTEL_PW_REQ_IDX_PW4,
+            INTEL_PW_REQ_IDX_PW5,
+        ] {
+            tc3_power_test[0] |= pw_req_mask(pw_idx);
+            let _ = intel_mmio_write32(info, INTEL_HSW_PWR_WELL_CTL2, tc3_power_test[0]);
+            let state_bit = pw_state_mask(pw_idx);
+            let mut stage_set = false;
+            for _ in 0..4096 {
+                let v = intel_mmio_read32(info, INTEL_HSW_PWR_WELL_CTL2);
+                if (v & state_bit) != 0 {
+                    main_pw_stage_mask |= state_bit;
+                    stage_set = true;
+                    break;
+                }
+            }
+            if !stage_set {
+                break;
+            }
+        }
+        let _ = intel_mmio_write32(info, INTEL_DC_STATE_EN, tc3_power_test[1]);
+        let _ = intel_mmio_write32(info, INTEL_ICL_PWR_WELL_CTL_AUX2, tc3_power_test[2]);
+        let _ = intel_mmio_write32(info, INTEL_ICL_PWR_WELL_CTL_DDI2, tc3_power_test[3]);
+
+        let mut tc3_poll = [0u32; 11];
+        let mut poll_hit = false;
+        for _ in 0..4096 {
+            tc3_poll[0] = intel_mmio_read32(info, INTEL_HSW_PWR_WELL_CTL2);
+            tc3_poll[1] = intel_mmio_read32(info, INTEL_DC_STATE_EN);
+            tc3_poll[2] = intel_mmio_read32(info, INTEL_ICL_PWR_WELL_CTL_AUX2);
+            tc3_poll[3] = intel_mmio_read32(info, INTEL_ICL_PWR_WELL_CTL_DDI2);
+            tc3_poll[4] = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
+            tc3_poll[5] = intel_mmio_read32(info, INTEL_TC3_DP_AUX_CH_CTL);
+            tc3_poll[6] = intel_mmio_read32(info, INTEL_TC3_DDI_BUF_CTL);
+            tc3_poll[7] = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+            tc3_poll[8] = intel_mmio_read32(info, INTEL_PIPECONF_A);
+            tc3_poll[9] = intel_mmio_read32(info, INTEL_TRANS_A_DDI_FUNC_CTL);
+            tc3_poll[10] = intel_mmio_read32(info, INTEL_PIPE_A_SRC);
+            if (tc3_poll[0] & main_pw_state) != 0
+                || (tc3_poll[2] & tc3_aux_state) != 0
+                || (tc3_poll[3] & tc3_ddi_state) != 0
+                || tc3_poll[4] != watch_before[4]
+                || tc3_poll[5] != watch_before[5]
+                || tc3_poll[6] != watch_before[6]
+                || tc3_poll[7] != watch_before[7]
+                || tc3_poll[8] != watch_before[8]
+                || tc3_poll[9] != watch_before[9]
+                || tc3_poll[10] != watch_before[10]
+            {
+                poll_hit = true;
+                break;
+            }
+        }
+
+        let dp_route_before = read_dp_route_sig();
+        let tc3_route_before = intel_mmio_read32(info, INTEL_TC3_DDI_BUF_CTL);
+        for idx in 0..tc3_watch_offsets.len() {
+            watch_after[idx] = intel_mmio_read32(info, tc3_watch_offsets[idx]);
+        }
+        let dp_route_after = read_dp_route_sig();
+        let tc3_route_after = intel_mmio_read32(info, INTEL_TC3_DDI_BUF_CTL);
+
+        if dp_route_changed(&dp_route_before, &dp_route_after) || tc3_route_before != tc3_route_after {
+            let mut first = "route";
+            let mut before = tc3_route_before;
+            let mut after = tc3_route_after;
+            if dp_route_changed(&dp_route_before, &dp_route_after) {
+                first = "dp-route";
+                before = dp_route_before[1];
+                after = dp_route_after[1];
+            }
+            crate::log!(
+                "gfx-intel-scanout: compact-hit tc3-ladder first={} 0x{:08X}->0x{:08X}\n",
+                first,
+                before,
+                after
+            );
+            restore_bits(&tc3_power_offsets, &tc3_power_orig);
+            let _ = intel_mmio_write32(info, INTEL_TC3_DP_AUX_CH_CTL, tc3_aux_ctl_orig);
+            restore_bits(&seam_offsets, &seam_orig);
+            return;
+        }
+
+        let mut hits = 0usize;
+        let mut first = "";
+        let mut line = [("", 0u32, 0u32); 4];
+        for idx in 0..tc3_watch_offsets.len() {
+            if watch_before[idx] != watch_after[idx] {
+                if hits == 0 {
+                    first = tc3_watch_names[idx];
+                }
+                if hits < line.len() {
+                    line[hits] = (tc3_watch_names[idx], watch_before[idx], watch_after[idx]);
+                }
+                hits += 1;
+            }
+        }
+
+        let state_hit =
+            (watch_after[0] & main_pw_state) != (watch_before[0] & main_pw_state) ||
+            (watch_after[2] & tc3_aux_state) != (watch_before[2] & tc3_aux_state) ||
+            (watch_after[3] & tc3_ddi_state) != (watch_before[3] & tc3_ddi_state) ||
+            poll_hit;
+
+        if hits > tc3_power_offsets.len() || state_hit {
+            let (tc_cold_ok, tc_cold_status, tc_cold_low, tc_cold_high) =
+                intel_tgl_tc_cold_block_compact(info);
+            let dkl_before = intel_dkl_tc3_read32(
+                info,
+                INTEL_TC3_DKL_CMN_UC_DW_27_MMIO,
+                INTEL_TC3_DKL_BANK_IDX_UC_DW27,
+            );
+            let tcss_before = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
+            let dppms_before = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPPMS);
+            let dpcsss_before = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPCSSS);
+            let owner_before = intel_mmio_read32(info, INTEL_TC3_DDI_BUF_CTL);
+
+            let mut dkl_after = dkl_before;
+            let mut tcss_after = tcss_before;
+            let mut dppms_after = dppms_before;
+            let mut dpcsss_after = dpcsss_before;
+            let mut dkl_health = false;
+            let mut dkl_revealed = false;
+            for _ in 0..4096 {
+                dkl_after = intel_dkl_tc3_read32(
+                    info,
+                    INTEL_TC3_DKL_CMN_UC_DW_27_MMIO,
+                    INTEL_TC3_DKL_BANK_IDX_UC_DW27,
+                );
+                tcss_after = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
+                dppms_after = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPPMS);
+                dpcsss_after = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPCSSS);
+                dkl_revealed = dkl_before == 0xFFFF_FFFF && dkl_after != 0xFFFF_FFFF;
+                dkl_health = dkl_after != 0xFFFF_FFFF
+                    && (dkl_after & INTEL_DKL_CMN_UC_DW27_UC_HEALTH) != 0;
+                if dkl_revealed
+                    || dkl_health
+                    || tcss_after != tcss_before
+                    || dppms_after != dppms_before
+                    || dpcsss_after != dpcsss_before
+                {
+                    break;
+                }
+            }
+
+            if dkl_revealed || dkl_health {
+                let owner_test = owner_before | INTEL_DDI_BUF_CTL_TC_PHY_OWNERSHIP;
+                let _ = intel_mmio_write32(info, INTEL_TC3_DDI_BUF_CTL, owner_test);
+                let owner_after = intel_mmio_read32(info, INTEL_TC3_DDI_BUF_CTL);
+                tcss_after = intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3);
+                dppms_after = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPPMS);
+                dpcsss_after = intel_mmio_read32(info, INTEL_FIA1_DFLEXDPCSSS);
+
+                crate::log!(
+                    "gfx-intel-scanout: compact-hit tc3-connect pcode=0x{:08X} low=0x{:08X} dkl=0x{:08X}->0x{:08X} owner=0x{:08X}->0x{:08X} tcss=0x{:08X} dppms=0x{:08X} dpcsss=0x{:08X}\n",
+                    tc_cold_status,
+                    tc_cold_low,
+                    dkl_before,
+                    dkl_after,
+                    owner_before,
+                    owner_after,
+                    tcss_after,
+                    dppms_after,
+                    dpcsss_after
+                );
+                let _ = intel_mmio_write32(info, INTEL_TC3_DDI_BUF_CTL, owner_before);
+            } else {
+                let mut tcss_candidates = [0u32; 4];
+                for idx in 0..INTEL_TCSS_DDI_STATUS_TC3_CANDIDATES.len() {
+                    tcss_candidates[idx] =
+                        intel_mmio_read32(info, INTEL_TCSS_DDI_STATUS_TC3_CANDIDATES[idx]);
+                }
+                let mut dkl_shift_candidates = [0u32; 4];
+                for idx in 0..INTEL_TC3_DKL_BANK_SHIFT_CANDIDATES.len() {
+                    dkl_shift_candidates[idx] = intel_dkl_read32_shifted(
+                        info,
+                        INTEL_TC3_DKL_CMN_UC_DW_27_MMIO,
+                        INTEL_TC3_DKL_BANK_IDX_UC_DW27,
+                        INTEL_TC3_DKL_BANK_SHIFT_CANDIDATES[idx],
+                    );
+                }
+                crate::log!(
+                    "gfx-intel-scanout: compact-nope tc3-dkl sealed pcode={} status=0x{:08X} low=0x{:08X} high=0x{:08X} main=0x{:03X} aux=0x{:08X} ddi=0x{:08X} dkl=0x{:08X} tcss=0x{:08X} tcsswin=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dklshift=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dppms=0x{:08X} dpcsss=0x{:08X}\n",
+                    if tc_cold_ok { "ok" } else { "fail" },
+                    tc_cold_status,
+                    tc_cold_low,
+                    tc_cold_high,
+                    main_pw_stage_mask,
+                    watch_after[2] & tc3_aux_state,
+                    watch_after[3] & tc3_ddi_state,
+                    dkl_after,
+                    tcss_after,
+                    tcss_candidates[0],
+                    tcss_candidates[1],
+                    tcss_candidates[2],
+                    tcss_candidates[3],
+                    dkl_shift_candidates[0],
+                    dkl_shift_candidates[1],
+                    dkl_shift_candidates[2],
+                    dkl_shift_candidates[3],
+                    dppms_after,
+                    dpcsss_after
+                );
+            }
+        } else {
+            crate::log!(
+                "gfx-intel-scanout: compact-nope tc3 ladder stayed sealed main=0x{:03X} pwctl=0x{:08X} dc=0x{:08X} aux=0x{:08X} ddi=0x{:08X} tcss=0x{:08X} auxctl=0x{:08X} buf=0x{:08X}\n",
+                main_pw_stage_mask,
+                tc3_poll[0],
+                tc3_poll[1],
+                tc3_poll[2] & tc3_aux_state,
+                tc3_poll[3] & tc3_ddi_state,
+                tc3_poll[4],
+                tc3_poll[5],
+                tc3_poll[6]
+            );
+        }
+        restore_bits(&tc3_power_offsets, &tc3_power_orig);
+        let _ = intel_mmio_write32(info, INTEL_TC3_DP_AUX_CH_CTL, tc3_aux_ctl_orig);
+        restore_bits(&seam_offsets, &seam_orig);
+        return;
+    }
+
+    let ownership_watch_offsets = [
+        0x454D0usize,
+        0x454D4usize,
+        0x454D8usize,
+        0x454DCusize,
+        0x45500usize,
+        INTEL_DC_STATE_EN,
+        0x45510usize,
+        INTEL_DC_STATE_DEBUG,
+        0x45524usize,
+        0x45528usize,
+        0x4552Cusize,
+        0x45530usize,
+        0x45534usize,
+        0x45538usize,
+        0x4553Cusize,
+        0x13807Cusize,
+        0x138088usize,
+        0x13808Cusize,
+        0x138090usize,
+        0x138094usize,
+        INTEL_PORT_HOTPLUG_EN,
+        INTEL_PORT_HOTPLUG_STAT,
+        INTEL_DDI_BUF_CTL_0,
+        INTEL_DDI_BUF_CTL_1,
+        INTEL_DDI_BUF_CTL_2,
+        INTEL_PIPECONF_A,
+        INTEL_PIPECONF_B,
+        INTEL_PIPECONF_C,
+        INTEL_PIPECONF_D,
+        INTEL_TRANS_A_DDI_FUNC_CTL,
+        INTEL_TRANS_B_DDI_FUNC_CTL,
+        INTEL_TRANS_C_DDI_FUNC_CTL,
+        INTEL_TRANS_D_DDI_FUNC_CTL,
+    ];
+    let ownership_watch_names = [
+        "454D0", "454D4", "454D8", "454DC", "45500", "45504", "45510", "45520", "45524",
+        "45528", "4552C", "45530", "45534", "45538", "4553C", "13807C", "138088", "13808C",
+        "138090", "138094", "HP_EN", "HP_STAT", "DDI0", "DDI1", "DDI2", "PC_A", "PC_B",
+        "PC_C", "PC_D", "TRANS_A", "TRANS_B", "TRANS_C", "TRANS_D",
+    ];
+    let read_watch =
+        |values: &mut [u32; 33]| for (idx, slot) in values.iter_mut().enumerate() {
+            *slot = intel_mmio_read32(info, ownership_watch_offsets[idx]);
+        };
+    let log_watch_delta = |label: &str, before: &[u32; 33], after: &[u32; 33]| {
+        let mut hits = 0usize;
+        let mut first = "";
+        let mut line = [("", 0u32, 0u32); 4];
+        for idx in 0..ownership_watch_offsets.len() {
+            if before[idx] != after[idx] {
+                if hits == 0 {
+                    first = ownership_watch_names[idx];
+                }
+                if hits < line.len() {
+                    line[hits] = (ownership_watch_names[idx], before[idx], after[idx]);
+                }
+                hits += 1;
+            }
+        }
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern ownership-delta label={} hits={} first={} hit0={} 0x{:08X}->0x{:08X} hit1={} 0x{:08X}->0x{:08X} hit2={} 0x{:08X}->0x{:08X} hit3={} 0x{:08X}->0x{:08X}\n",
+            label,
+            hits,
+            first,
+            line[0].0,
+            line[0].1,
+            line[0].2,
+            line[1].0,
+            line[1].1,
+            line[1].2,
+            line[2].0,
+            line[2].1,
+            line[2].2,
+            line[3].0,
+            line[3].1,
+            line[3].2
+        );
+    };
+    let poll_watch_change =
+        |label: &str, baseline: &[u32; 33], spins: usize| {
+            let mut current = [0u32; 33];
+            let mut changed = false;
+            let mut spin_hit = 0usize;
+            for spin in 0..spins {
+                read_watch(&mut current);
+                if current != *baseline {
+                    changed = true;
+                    spin_hit = spin + 1;
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+            crate::log!(
+                "gfx-intel-scanout: minimal-pattern ownership-poll label={} changed={} spin_hit={}\n",
+                label,
+                changed as u32,
+                spin_hit
+            );
+            if changed {
+                log_watch_delta(label, baseline, &current);
+            }
+            current
+        };
+
+    let preflight_offsets = [0x45500usize, INTEL_DC_STATE_EN, 0x45510usize, INTEL_DC_STATE_DEBUG];
+    let preflight_names = ["45500", "45504", "45510", "45520"];
+    let mut preflight_orig = [0u32; 4];
+    let mut preflight_test = [0u32; 4];
+    for idx in 0..preflight_offsets.len() {
+        preflight_orig[idx] = intel_mmio_read32(info, preflight_offsets[idx]);
+        preflight_test[idx] = preflight_orig[idx] | 0x00000001;
+    }
+    for idx in 0..preflight_offsets.len() {
+        let _ = intel_mmio_write32(info, preflight_offsets[idx], preflight_orig[idx] & !0x00000001);
+    }
+    let mut ownership_before = [0u32; 33];
+    read_watch(&mut ownership_before);
+    let preflight_low = [
+        intel_mmio_read32(info, preflight_offsets[0]),
+        intel_mmio_read32(info, preflight_offsets[1]),
+        intel_mmio_read32(info, preflight_offsets[2]),
+        intel_mmio_read32(info, preflight_offsets[3]),
+    ];
+    crate::log!(
+        "gfx-intel-scanout: minimal-pattern ownership-preflight low rb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+        preflight_low[0],
+        preflight_low[1],
+        preflight_low[2],
+        preflight_low[3]
+    );
+    let mut ownership_after = [0u32; 33];
+    read_watch(&mut ownership_after);
+    log_watch_delta("preflight-low", &ownership_before, &ownership_after);
+    ownership_before = ownership_after;
+    for idx in 0..preflight_offsets.len() {
+        let _ = intel_mmio_write32(info, preflight_offsets[idx], preflight_test[idx]);
+        let rb = intel_mmio_read32(info, preflight_offsets[idx]);
+        let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+        let ddi0 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_0);
+        let ddi1 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_1);
+        let ddi2 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_2);
+        let pc_a = intel_mmio_read32(info, INTEL_PIPECONF_A);
+        let pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
+        let pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
+        let pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern ownership-preflight step={} rb=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+            preflight_names[idx],
+            rb,
+            hotplug_stat,
+            ddi0,
+            ddi1,
+            ddi2,
+            pc_a,
+            pc_b,
+            pc_c,
+            pc_d
+        );
+        read_watch(&mut ownership_after);
+        log_watch_delta(preflight_names[idx], &ownership_before, &ownership_after);
+        ownership_before = ownership_after;
+    }
+    crate::log!("gfx-intel-scanout: minimal-pattern ownership-preflight complete\n");
+    let ownership_polled = poll_watch_change("preflight-post", &ownership_before, 2048);
+    ownership_before = ownership_polled;
+    for idx in (0..preflight_offsets.len()).rev() {
+        let _ = intel_mmio_write32(info, preflight_offsets[idx], preflight_orig[idx]);
+    }
+
+    // Prepare demo surface with test pattern only after the ownership preflight.
+    let Some((_surf, stride, width, height)) = prepare_direct_demo_surface(info) else {
         return;
     };
 
     crate::log!(
-        "gfx-intel-scanout: minimal-pattern poke starting surf=0x{:08X} stride=0x{:X} {}x{}\n",
-        surf,
+        "gfx-intel-scanout: minimal-pattern dc-pll probe starting stride=0x{:X} {}x{}\n",
         stride,
         width,
         height
     );
 
-    // Helper macro to log current state of key registers
-    macro_rules! log_state {
+    macro_rules! log_control_state {
         ($label:expr) => {{
-            let de_pll_enable = intel_mmio_read32(info, 0x46070);
-            let phy_misc_a = intel_mmio_read32(info, 0x64C00);
-            let trans_a = intel_mmio_read32(info, 0x60400);
-            let trans_b = intel_mmio_read32(info, 0x61400);
-            let trans_c = intel_mmio_read32(info, 0x62400);
-            let trans_d = intel_mmio_read32(info, 0x63400);
-            let pipe_a = intel_mmio_read32(info, 0x6001C);
-            let pipe_b = intel_mmio_read32(info, 0x6101C);
-            let pipe_c = intel_mmio_read32(info, 0x6201C);
-            let pipe_d = intel_mmio_read32(info, 0x6301C);
+            let de_pll_enable = intel_mmio_read32(info, INTEL_BXT_DE_PLL_ENABLE);
+            let phy_misc_a = intel_mmio_read32(info, INTEL_ICL_PHY_MISC_A);
+            let hotplug = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
+            let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+            let trans_a = intel_mmio_read32(info, INTEL_TRANS_A_DDI_FUNC_CTL);
+            let trans_b = intel_mmio_read32(info, INTEL_TRANS_B_DDI_FUNC_CTL);
+            let trans_c = intel_mmio_read32(info, INTEL_TRANS_C_DDI_FUNC_CTL);
+            let trans_d = intel_mmio_read32(info, INTEL_TRANS_D_DDI_FUNC_CTL);
+            let pipe_a = intel_mmio_read32(info, INTEL_PIPE_A_SRC);
+            let pipe_b = intel_mmio_read32(info, INTEL_PIPE_B_SRC);
+            let pipe_c = intel_mmio_read32(info, INTEL_PIPE_C_SRC);
+            let pipe_d = intel_mmio_read32(info, INTEL_PIPE_D_SRC);
+            let plane_a = scanout_plane(0, 0);
+            let plane_b = scanout_plane(1, 0);
+            let plane_c = scanout_plane(2, 0);
+            let plane_d = scanout_plane(3, 0);
+            let ctl_a = intel_mmio_read32(info, plane_a.ctl_off);
+            let ctl_b = intel_mmio_read32(info, plane_b.ctl_off);
+            let ctl_c = intel_mmio_read32(info, plane_c.ctl_off);
+            let ctl_d = intel_mmio_read32(info, plane_d.ctl_off);
+            let surf_a = intel_mmio_read32(info, plane_a.surf_off);
+            let surf_b = intel_mmio_read32(info, plane_b.surf_off);
+            let surf_c = intel_mmio_read32(info, plane_c.surf_off);
+            let surf_d = intel_mmio_read32(info, plane_d.surf_off);
             crate::log!(
-                "gfx-intel-scanout: minimal-pattern {} de_pll_en=0x{:08X} phy_misc_a=0x{:08X} trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pipe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+                "gfx-intel-scanout: minimal-pattern {} de_pll_enable=0x{:08X} phy_misc_a=0x{:08X} hotplug=0x{:08X} hotplug_stat=0x{:08X} trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pipe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] ctl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] surf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
                 $label,
                 de_pll_enable,
                 phy_misc_a,
+                hotplug,
+                hotplug_stat,
+                trans_a,
+                trans_b,
+                trans_c,
+                trans_d,
+                pipe_a,
+                pipe_b,
+                pipe_c,
+                pipe_d,
+                ctl_a,
+                ctl_b,
+                ctl_c,
+                ctl_d,
+                surf_a,
+                surf_b,
+                surf_c,
+                surf_d
+            );
+        }};
+    }
+
+    macro_rules! log_route_state {
+        ($label:expr) => {{
+            let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+            let ddi0 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_0);
+            let ddi1 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_1);
+            let ddi2 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_2);
+            let pc_a = intel_mmio_read32(info, INTEL_PIPECONF_A);
+            let pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
+            let pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
+            let pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
+            crate::log!(
+                "gfx-intel-scanout: minimal-pattern route {} hp_stat=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+                $label,
+                hotplug_stat,
+                ddi0,
+                ddi1,
+                ddi2,
+                pc_a,
+                pc_b,
+                pc_c,
+                pc_d
+            );
+        }};
+    }
+
+    macro_rules! log_power_gate_state {
+        ($label:expr) => {{
+            let dc_state_en = intel_mmio_read32(info, INTEL_DC_STATE_EN);
+            let dc_state_debug = intel_mmio_read32(info, INTEL_DC_STATE_DEBUG);
+            let gt_disp_pwron = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
+            let hotplug = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
+            let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+            crate::log!(
+                "gfx-intel-scanout: minimal-pattern gate {} dc_state_en=0x{:08X} dc_state_debug=0x{:08X} gt_disp_pwron=0x{:08X} hotplug=0x{:08X} hotplug_stat=0x{:08X}\n",
+                $label,
+                dc_state_en,
+                dc_state_debug,
+                gt_disp_pwron,
+                hotplug,
+                hotplug_stat
+            );
+        }};
+    }
+
+    log_control_state!("init");
+
+    for &off in &[
+        0x45014usize,
+        0x45010usize,
+        0x45020usize,
+        0x46000usize,
+        0x46070usize,
+    ] {
+        let orig = intel_mmio_read32(info, off);
+        let test = if off == 0x46070 {
+            orig | 0x00000001
+        } else {
+            0x00000001
+        };
+        let _ = intel_mmio_write32(info, off, test);
+        let rb = intel_mmio_read32(info, off);
+        let _ = intel_mmio_write32(info, off, orig);
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern dc-pll off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
+            off,
+            orig,
+            test,
+            rb
+        );
+    }
+
+    crate::log!("gfx-intel-scanout: minimal-pattern dc-pll probe complete\n");
+
+    let held_off = INTEL_BXT_DE_PLL_ENABLE;
+    let held_orig = intel_mmio_read32(info, held_off);
+    let held_test = held_orig | 0x00000001;
+    let _ = intel_mmio_write32(info, held_off, held_test);
+    let held_rb = intel_mmio_read32(info, held_off);
+    crate::log!(
+        "gfx-intel-scanout: minimal-pattern dc-pll held orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
+        held_orig,
+        held_test,
+        held_rb
+    );
+    log_control_state!("held-init");
+
+    for &off in &[
+        0x45010usize,
+        0x45014usize,
+        0x45018usize,
+        0x4501Cusize,
+        0x45020usize,
+        0x45024usize,
+        0x46060usize,
+        0x46064usize,
+        0x46068usize,
+        0x4606Cusize,
+        0x46074usize,
+        0x46078usize,
+        0x4607Cusize,
+    ] {
+        let orig = intel_mmio_read32(info, off);
+        let Some(test) = walker_test_value(orig) else {
+            crate::log!(
+                "gfx-intel-scanout: minimal-pattern held-probe off=0x{:05X} orig=0x{:08X} skipped\n",
+                off,
+                orig
+            );
+            continue;
+        };
+        let _ = intel_mmio_write32(info, off, test);
+        let rb = intel_mmio_read32(info, off);
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern held-probe off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
+            off,
+            orig,
+            test,
+            rb
+        );
+        let _ = intel_mmio_write32(info, off, orig);
+    }
+
+    let bundle_offsets = [
+        0x45014usize,
+        0x45020usize,
+        0x45024usize,
+        0x46000usize,
+        INTEL_BXT_DE_PLL_ENABLE,
+    ];
+    let mut bundle_orig = [0u32; 5];
+    for (idx, &off) in bundle_offsets.iter().enumerate() {
+        bundle_orig[idx] = intel_mmio_read32(info, off);
+    }
+
+    let apply_bundle = |label: &str, reverse: bool| {
+        let order: [usize; 5] = if reverse {
+            [4, 3, 2, 1, 0]
+        } else {
+            [0, 1, 2, 3, 4]
+        };
+        let mut bundle_rb = [0u32; 5];
+        for &idx in &order {
+            let off = bundle_offsets[idx];
+            let orig = bundle_orig[idx];
+            let test = if off == INTEL_BXT_DE_PLL_ENABLE {
+                orig | 0x00000001
+            } else {
+                orig | 0x00000001
+            };
+            let _ = intel_mmio_write32(info, off, test);
+            bundle_rb[idx] = intel_mmio_read32(info, off);
+        }
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern bundle label={} rb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+            label,
+            bundle_rb[0],
+            bundle_rb[1],
+            bundle_rb[2],
+            bundle_rb[3],
+            bundle_rb[4]
+        );
+        log_control_state!(label);
+        for &idx in order.iter().rev() {
+            let _ = intel_mmio_write32(info, bundle_offsets[idx], bundle_orig[idx]);
+        }
+    };
+
+    apply_bundle("bundle-fwd", false);
+    apply_bundle("bundle-rev", true);
+
+    for (idx, &off) in bundle_offsets.iter().enumerate() {
+        let test = bundle_orig[idx] | 0x00000001;
+        let _ = intel_mmio_write32(info, off, test);
+    }
+    crate::log!("gfx-intel-scanout: minimal-pattern bridge bundle asserted\n");
+    log_control_state!("bridge-base");
+    log_route_state!("bridge-base");
+
+    let bridge_probes = [
+        ("6c104", 0x6C104usize, None),
+        ("6c108", 0x6C108usize, Some(0x00200000u32)),
+        ("6c114", 0x6C114usize, None),
+        ("6c120", 0x6C120usize, None),
+        ("138088", 0x138088usize, None),
+        ("hotplug", INTEL_PORT_HOTPLUG_EN, None),
+    ];
+    for &(label, off, forced_test) in &bridge_probes {
+        let orig = intel_mmio_read32(info, off);
+        let test = if let Some(test) = forced_test {
+            test
+        } else if let Some(test) = walker_test_value(orig) {
+            test
+        } else {
+            crate::log!(
+                "gfx-intel-scanout: minimal-pattern bridge-probe label={} off=0x{:05X} orig=0x{:08X} skipped\n",
+                label,
+                off,
+                orig
+            );
+            continue;
+        };
+        let _ = intel_mmio_write32(info, off, test);
+        let rb = intel_mmio_read32(info, off);
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern bridge-probe label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
+            label,
+            off,
+            orig,
+            test,
+            rb
+        );
+        let _ = intel_mmio_write32(info, off, orig);
+    }
+    crate::log!("gfx-intel-scanout: minimal-pattern bridge probe complete\n");
+
+    for &(label, off) in &[
+        ("ddi0", INTEL_DDI_BUF_CTL_0),
+        ("ddi1", INTEL_DDI_BUF_CTL_1),
+        ("ddi2", INTEL_DDI_BUF_CTL_2),
+        ("pipeconf-a", INTEL_PIPECONF_A),
+        ("pipeconf-b", INTEL_PIPECONF_B),
+        ("pipeconf-c", INTEL_PIPECONF_C),
+        ("pipeconf-d", INTEL_PIPECONF_D),
+    ] {
+        let orig = intel_mmio_read32(info, off);
+        let Some(test) = walker_test_value(orig) else {
+            crate::log!(
+                "gfx-intel-scanout: minimal-pattern route-probe label={} off=0x{:05X} orig=0x{:08X} skipped\n",
+                label,
+                off,
+                orig
+            );
+            continue;
+        };
+        let _ = intel_mmio_write32(info, off, test);
+        let rb = intel_mmio_read32(info, off);
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern route-probe label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
+            label,
+            off,
+            orig,
+            test,
+            rb
+        );
+        let _ = intel_mmio_write32(info, off, orig);
+    }
+    crate::log!("gfx-intel-scanout: minimal-pattern route probe complete\n");
+
+    let power_hold_offsets = [
+        0x45500usize,
+        INTEL_DC_STATE_EN,
+        0x45510usize,
+        INTEL_DC_STATE_DEBUG,
+        0x138088usize,
+        INTEL_GT_DISP_PWRON,
+    ];
+    let power_hold_tests = [
+        0x00000001u32,
+        0x00000001u32,
+        0x00000001u32,
+        0x00000001u32,
+        0x00000001u32,
+        INTEL_GT_DISP_PWRON_REQ,
+    ];
+    let mut power_hold_orig = [0u32; 6];
+    let mut power_hold_rb = [0u32; 6];
+    for idx in 0..power_hold_offsets.len() {
+        power_hold_orig[idx] = intel_mmio_read32(info, power_hold_offsets[idx]);
+        let _ = intel_mmio_write32(info, power_hold_offsets[idx], power_hold_tests[idx]);
+        power_hold_rb[idx] = intel_mmio_read32(info, power_hold_offsets[idx]);
+    }
+    crate::log!(
+        "gfx-intel-scanout: minimal-pattern power-hold rb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+        power_hold_rb[0],
+        power_hold_rb[1],
+        power_hold_rb[2],
+        power_hold_rb[3],
+        power_hold_rb[4],
+        power_hold_rb[5]
+    );
+    log_power_gate_state!("power-base");
+    log_route_state!("power-base");
+    log_control_state!("power-base");
+
+    for &(label, off, forced_test) in &[
+        ("dc-seam-454F0", 0x454F0usize, Some(0x00000001u32)),
+        ("dc-seam-454F4", 0x454F4usize, Some(0x00000001u32)),
+        ("dc-seam-454F8", 0x454F8usize, Some(0x00000001u32)),
+        ("dc-seam-454FC", 0x454FCusize, Some(0x00000001u32)),
+        ("dc-seam-45508", 0x45508usize, Some(0x00000001u32)),
+        ("dc-seam-4550C", 0x4550Cusize, Some(0x00000001u32)),
+        ("dc-seam-45510", 0x45510usize, Some(0x00000001u32)),
+        ("dc-seam-45514", 0x45514usize, Some(0x00000001u32)),
+        ("dc-seam-45518", 0x45518usize, Some(0x00000001u32)),
+        ("dc-seam-4551C", 0x4551Cusize, Some(0x00000001u32)),
+        ("gt-disp-near-13808C", 0x13808Cusize, Some(0x00000001u32)),
+        ("gt-disp-near-138094", 0x138094usize, Some(0x00000001u32)),
+        ("hotplug-en", INTEL_PORT_HOTPLUG_EN, Some(INTEL_PORT_HOTPLUG_TEST_BIT)),
+    ] {
+        let orig = intel_mmio_read32(info, off);
+        let test = if let Some(test) = forced_test {
+            test
+        } else if let Some(test) = walker_test_value(orig) {
+            test
+        } else {
+            crate::log!(
+                "gfx-intel-scanout: minimal-pattern power-probe label={} off=0x{:05X} orig=0x{:08X} skipped\n",
+                label,
+                off,
+                orig
+            );
+            continue;
+        };
+        let _ = intel_mmio_write32(info, off, test);
+        let rb = intel_mmio_read32(info, off);
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern power-probe label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
+            label,
+            off,
+            orig,
+            test,
+            rb
+        );
+        let _ = intel_mmio_write32(info, off, orig);
+    }
+    crate::log!("gfx-intel-scanout: minimal-pattern power probe complete\n");
+
+    let dc_tuple_offsets = [0x45500usize, INTEL_DC_STATE_EN, 0x45510usize, INTEL_DC_STATE_DEBUG];
+    let dc_tuple_names = ["45500", "45504", "45510", "45520"];
+    let dc_tuple_orders = [
+        [0usize, 1usize, 2usize, 3usize],
+        [0usize, 1usize, 3usize, 2usize],
+        [1usize, 0usize, 2usize, 3usize],
+        [1usize, 0usize, 3usize, 2usize],
+        [2usize, 0usize, 1usize, 3usize],
+        [3usize, 0usize, 1usize, 2usize],
+    ];
+    let mut dc_tuple_orig = [0u32; 4];
+    let mut dc_tuple_test = [0u32; 4];
+    for idx in 0..dc_tuple_offsets.len() {
+        dc_tuple_orig[idx] = intel_mmio_read32(info, dc_tuple_offsets[idx]);
+        dc_tuple_test[idx] = dc_tuple_orig[idx] | 0x00000001;
+    }
+
+    for order in dc_tuple_orders {
+        let label = [
+            dc_tuple_names[order[0]],
+            dc_tuple_names[order[1]],
+            dc_tuple_names[order[2]],
+            dc_tuple_names[order[3]],
+        ];
+
+        let mut hold_rb = [0u32; 4];
+        for &idx in &order {
+            let _ = intel_mmio_write32(info, dc_tuple_offsets[idx], dc_tuple_test[idx]);
+            hold_rb[idx] = intel_mmio_read32(info, dc_tuple_offsets[idx]);
+        }
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern dc-tuple hold order={}>{}>{}>{} rb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+            label[0],
+            label[1],
+            label[2],
+            label[3],
+            hold_rb[0],
+            hold_rb[1],
+            hold_rb[2],
+            hold_rb[3]
+        );
+
+        let commit_idx = order[3];
+        let _ = intel_mmio_write32(info, dc_tuple_offsets[commit_idx], dc_tuple_orig[commit_idx]);
+        let pulse_low = intel_mmio_read32(info, dc_tuple_offsets[commit_idx]);
+        let _ = intel_mmio_write32(info, dc_tuple_offsets[commit_idx], dc_tuple_test[commit_idx]);
+        let pulse_high = intel_mmio_read32(info, dc_tuple_offsets[commit_idx]);
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern dc-tuple pulse order={}>{}>{}>{} commit={} low=0x{:08X} high=0x{:08X}\n",
+            label[0],
+            label[1],
+            label[2],
+            label[3],
+            dc_tuple_names[commit_idx],
+            pulse_low,
+            pulse_high
+        );
+
+        for &idx in order.iter().rev() {
+            let _ = intel_mmio_write32(info, dc_tuple_offsets[idx], dc_tuple_orig[idx]);
+        }
+    }
+    crate::log!("gfx-intel-scanout: minimal-pattern dc tuple permutations complete\n");
+
+    let dc_rearm_offsets = [0x45500usize, INTEL_DC_STATE_EN, 0x45510usize, INTEL_DC_STATE_DEBUG];
+    let dc_rearm_names = ["45500", "45504", "45510", "45520"];
+    let mut dc_rearm_orig = [0u32; 4];
+    let mut dc_rearm_test = [0u32; 4];
+    for idx in 0..dc_rearm_offsets.len() {
+        dc_rearm_orig[idx] = intel_mmio_read32(info, dc_rearm_offsets[idx]);
+        dc_rearm_test[idx] = dc_rearm_orig[idx] | 0x00000001;
+    }
+
+    for idx in 0..dc_rearm_offsets.len() {
+        let _ = intel_mmio_write32(info, dc_rearm_offsets[idx], dc_rearm_orig[idx] & !0x00000001);
+    }
+    let dc_rearm_low = [
+        intel_mmio_read32(info, dc_rearm_offsets[0]),
+        intel_mmio_read32(info, dc_rearm_offsets[1]),
+        intel_mmio_read32(info, dc_rearm_offsets[2]),
+        intel_mmio_read32(info, dc_rearm_offsets[3]),
+    ];
+    crate::log!(
+        "gfx-intel-scanout: minimal-pattern dc-rearm low rb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+        dc_rearm_low[0],
+        dc_rearm_low[1],
+        dc_rearm_low[2],
+        dc_rearm_low[3]
+    );
+
+    for idx in 0..dc_rearm_offsets.len() {
+        let _ = intel_mmio_write32(info, dc_rearm_offsets[idx], dc_rearm_test[idx]);
+        let rb = intel_mmio_read32(info, dc_rearm_offsets[idx]);
+        let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+        let ddi0 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_0);
+        let ddi1 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_1);
+        let ddi2 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_2);
+        let pc_a = intel_mmio_read32(info, INTEL_PIPECONF_A);
+        let pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
+        let pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
+        let pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
+        let trans_a = intel_mmio_read32(info, INTEL_TRANS_A_DDI_FUNC_CTL);
+        let trans_b = intel_mmio_read32(info, INTEL_TRANS_B_DDI_FUNC_CTL);
+        let trans_c = intel_mmio_read32(info, INTEL_TRANS_C_DDI_FUNC_CTL);
+        let trans_d = intel_mmio_read32(info, INTEL_TRANS_D_DDI_FUNC_CTL);
+        let pipe_a = intel_mmio_read32(info, INTEL_PIPE_A_SRC);
+        let pipe_b = intel_mmio_read32(info, INTEL_PIPE_B_SRC);
+        let pipe_c = intel_mmio_read32(info, INTEL_PIPE_C_SRC);
+        let pipe_d = intel_mmio_read32(info, INTEL_PIPE_D_SRC);
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern dc-rearm step={} rb=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pipe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+            dc_rearm_names[idx],
+            rb,
+            hotplug_stat,
+            ddi0,
+            ddi1,
+            ddi2,
+            pc_a,
+            pc_b,
+            pc_c,
+            pc_d,
+            trans_a,
+            trans_b,
+            trans_c,
+            trans_d,
+            pipe_a,
+            pipe_b,
+            pipe_c,
+            pipe_d
+        );
+    }
+    crate::log!("gfx-intel-scanout: minimal-pattern dc rearm complete\n");
+
+    let mut dc_adj_attempts = 0usize;
+    let mut dc_adj_hits = 0usize;
+    let mut dc_adj_first_hit = 0usize;
+    for &off in &[
+        0x454D0usize,
+        0x454D4usize,
+        0x454D8usize,
+        0x454DCusize,
+        0x45524usize,
+        0x45528usize,
+        0x4552Cusize,
+        0x45530usize,
+        0x45534usize,
+        0x45538usize,
+        0x4553Cusize,
+    ] {
+        let orig = intel_mmio_read32(info, off);
+        let test = orig | 0x00000001;
+        dc_adj_attempts += 1;
+        let _ = intel_mmio_write32(info, off, test);
+        let rb = intel_mmio_read32(info, off);
+        if rb == test {
+            dc_adj_hits += 1;
+            if dc_adj_first_hit == 0 {
+                dc_adj_first_hit = off;
+            }
+            let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+            let ddi0 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_0);
+            let ddi1 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_1);
+            let ddi2 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_2);
+            let pc_a = intel_mmio_read32(info, INTEL_PIPECONF_A);
+            let pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
+            let pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
+            let pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
+            crate::log!(
+                "gfx-intel-scanout: minimal-pattern dc-adj hit off=0x{:05X} orig=0x{:08X} rb=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+                off,
+                orig,
+                rb,
+                hotplug_stat,
+                ddi0,
+                ddi1,
+                ddi2,
+                pc_a,
+                pc_b,
+                pc_c,
+                pc_d
+            );
+        }
+        let _ = intel_mmio_write32(info, off, orig);
+    }
+    crate::log!(
+        "gfx-intel-scanout: minimal-pattern dc-adj summary attempts={} hits={} first_hit=0x{:05X}\n",
+        dc_adj_attempts,
+        dc_adj_hits,
+        dc_adj_first_hit
+    );
+    for idx in (0..dc_rearm_offsets.len()).rev() {
+        let _ = intel_mmio_write32(info, dc_rearm_offsets[idx], dc_rearm_orig[idx]);
+    }
+
+    for &(
+        trigger_mode,
+        dc_trigger_hold,
+        trigger_off,
+    ) in &[
+        ("trig-45510", [0x45500usize, INTEL_DC_STATE_EN, INTEL_DC_STATE_DEBUG], 0x45510usize),
+        ("trig-45520", [0x45500usize, INTEL_DC_STATE_EN, 0x45510usize], INTEL_DC_STATE_DEBUG),
+    ] {
+        let dc_trigger_test = [0x00000001u32, 0x00000001u32, 0x00000001u32];
+        let mut dc_trigger_orig = [0u32; 3];
+        for idx in 0..dc_trigger_hold.len() {
+            dc_trigger_orig[idx] = intel_mmio_read32(info, dc_trigger_hold[idx]);
+            let _ = intel_mmio_write32(info, dc_trigger_hold[idx], dc_trigger_test[idx]);
+        }
+
+        let trigger_orig = intel_mmio_read32(info, trigger_off);
+        let trigger_test = trigger_orig | 0x00000001;
+
+        for &(label, gate_off, gate_test) in &[
+            ("none", 0usize, 0u32),
+            ("13807c", 0x13807Cusize, 0x06000001u32),
+            ("138088", 0x138088usize, 0x00000001u32),
+            ("13810c", 0x13810Cusize, 0x00000001u32),
+            ("6c104", 0x6C104usize, 0x81000401u32),
+            ("6c108", 0x6C108usize, 0x00200000u32),
+            ("6c114", 0x6C114usize, 0x51000001u32),
+            ("6c120", 0x6C120usize, 0x000D0281u32),
+        ] {
+            let gate_orig = if gate_off != 0 {
+                Some(intel_mmio_read32(info, gate_off))
+            } else {
+                None
+            };
+            if gate_off != 0 {
+                let _ = intel_mmio_write32(info, gate_off, gate_test);
+            }
+            let gate_rb = if gate_off != 0 {
+                intel_mmio_read32(info, gate_off)
+            } else {
+                0
+            };
+
+            let _ = intel_mmio_write32(info, trigger_off, trigger_orig);
+            let trigger_low = intel_mmio_read32(info, trigger_off);
+            let _ = intel_mmio_write32(info, trigger_off, trigger_test);
+            let trigger_high = intel_mmio_read32(info, trigger_off);
+
+            let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+            let ddi0 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_0);
+            let ddi1 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_1);
+            let ddi2 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_2);
+            let pc_a = intel_mmio_read32(info, INTEL_PIPECONF_A);
+            let pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
+            let pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
+            let pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
+            let trans_a = intel_mmio_read32(info, INTEL_TRANS_A_DDI_FUNC_CTL);
+            let trans_b = intel_mmio_read32(info, INTEL_TRANS_B_DDI_FUNC_CTL);
+            let trans_c = intel_mmio_read32(info, INTEL_TRANS_C_DDI_FUNC_CTL);
+            let trans_d = intel_mmio_read32(info, INTEL_TRANS_D_DDI_FUNC_CTL);
+            let pipe_a = intel_mmio_read32(info, INTEL_PIPE_A_SRC);
+            let pipe_b = intel_mmio_read32(info, INTEL_PIPE_B_SRC);
+            let pipe_c = intel_mmio_read32(info, INTEL_PIPE_C_SRC);
+            let pipe_d = intel_mmio_read32(info, INTEL_PIPE_D_SRC);
+
+            crate::log!(
+                "gfx-intel-scanout: minimal-pattern dc-trigger mode={} pair={} gate_rb=0x{:08X} trig_low=0x{:08X} trig_high=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pipe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+                trigger_mode,
+                label,
+                gate_rb,
+                trigger_low,
+                trigger_high,
+                hotplug_stat,
+                ddi0,
+                ddi1,
+                ddi2,
+                pc_a,
+                pc_b,
+                pc_c,
+                pc_d,
                 trans_a,
                 trans_b,
                 trans_c,
@@ -2510,80 +3098,88 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                 pipe_c,
                 pipe_d
             );
-        }};
+
+            let _ = intel_mmio_write32(info, trigger_off, trigger_orig);
+            if let Some(orig) = gate_orig {
+                let _ = intel_mmio_write32(info, gate_off, orig);
+            }
+        }
+
+        let gt_triplet_offsets = [0x13807Cusize, 0x138088usize, 0x13810Cusize];
+        let gt_triplet_tests = [0x06000001u32, 0x00000001u32, 0x00000001u32];
+        let mut gt_triplet_orig = [0u32; 3];
+        let mut gt_triplet_rb = [0u32; 3];
+        for idx in 0..gt_triplet_offsets.len() {
+            gt_triplet_orig[idx] = intel_mmio_read32(info, gt_triplet_offsets[idx]);
+            let _ = intel_mmio_write32(info, gt_triplet_offsets[idx], gt_triplet_tests[idx]);
+            gt_triplet_rb[idx] = intel_mmio_read32(info, gt_triplet_offsets[idx]);
+        }
+        let _ = intel_mmio_write32(info, trigger_off, trigger_orig);
+        let gt_trigger_low = intel_mmio_read32(info, trigger_off);
+        let _ = intel_mmio_write32(info, trigger_off, trigger_test);
+        let gt_trigger_high = intel_mmio_read32(info, trigger_off);
+        let gt_hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
+        let gt_ddi0 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_0);
+        let gt_ddi1 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_1);
+        let gt_ddi2 = intel_mmio_read32(info, INTEL_DDI_BUF_CTL_2);
+        let gt_pc_a = intel_mmio_read32(info, INTEL_PIPECONF_A);
+        let gt_pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
+        let gt_pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
+        let gt_pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
+        let gt_trans_a = intel_mmio_read32(info, INTEL_TRANS_A_DDI_FUNC_CTL);
+        let gt_trans_b = intel_mmio_read32(info, INTEL_TRANS_B_DDI_FUNC_CTL);
+        let gt_trans_c = intel_mmio_read32(info, INTEL_TRANS_C_DDI_FUNC_CTL);
+        let gt_trans_d = intel_mmio_read32(info, INTEL_TRANS_D_DDI_FUNC_CTL);
+        let gt_pipe_a = intel_mmio_read32(info, INTEL_PIPE_A_SRC);
+        let gt_pipe_b = intel_mmio_read32(info, INTEL_PIPE_B_SRC);
+        let gt_pipe_c = intel_mmio_read32(info, INTEL_PIPE_C_SRC);
+        let gt_pipe_d = intel_mmio_read32(info, INTEL_PIPE_D_SRC);
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern dc-trigger mode={} gt-triplet rb=[0x{:08X},0x{:08X},0x{:08X}] trig_low=0x{:08X} trig_high=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pipe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+            trigger_mode,
+            gt_triplet_rb[0],
+            gt_triplet_rb[1],
+            gt_triplet_rb[2],
+            gt_trigger_low,
+            gt_trigger_high,
+            gt_hotplug_stat,
+            gt_ddi0,
+            gt_ddi1,
+            gt_ddi2,
+            gt_pc_a,
+            gt_pc_b,
+            gt_pc_c,
+            gt_pc_d,
+            gt_trans_a,
+            gt_trans_b,
+            gt_trans_c,
+            gt_trans_d,
+            gt_pipe_a,
+            gt_pipe_b,
+            gt_pipe_c,
+            gt_pipe_d
+        );
+        let _ = intel_mmio_write32(info, trigger_off, trigger_orig);
+        for idx in (0..gt_triplet_offsets.len()).rev() {
+            let _ = intel_mmio_write32(info, gt_triplet_offsets[idx], gt_triplet_orig[idx]);
+        }
+
+        for idx in (0..dc_trigger_hold.len()).rev() {
+            let _ = intel_mmio_write32(info, dc_trigger_hold[idx], dc_trigger_orig[idx]);
+        }
+    }
+    crate::log!("gfx-intel-scanout: minimal-pattern dc trigger bridge complete\n");
+
+    for idx in (0..power_hold_offsets.len()).rev() {
+        let _ = intel_mmio_write32(info, power_hold_offsets[idx], power_hold_orig[idx]);
     }
 
-    // Log initial state
-    log_state!("init");
+    for &idx in [4usize, 3, 2, 1, 0].iter() {
+        let _ = intel_mmio_write32(info, bundle_offsets[idx], bundle_orig[idx]);
+    }
 
-    // Poke 0x45014 (dc-pll hit)
-    crate::log!("gfx-intel-scanout: minimal-pattern probing 0x45014\n");
-    let orig_45014 = intel_mmio_read32(info, 0x45014);
-    let _ = intel_mmio_write32(info, 0x45014, 0x00000001);
-    let rb_45014 = intel_mmio_read32(info, 0x45014);
-    log_state!("after-0x45014-write");
-    let _ = intel_mmio_write32(info, 0x45014, orig_45014);
-    crate::log!(
-        "gfx-intel-scanout: minimal-pattern 0x45014 orig=0x{:08X} test=0x00000001 rb=0x{:08X}\n",
-        orig_45014,
-        rb_45014
-    );
-
-    // Poke 0x45010 (nearby)
-    crate::log!("gfx-intel-scanout: minimal-pattern probing 0x45010\n");
-    let orig_45010 = intel_mmio_read32(info, 0x45010);
-    let _ = intel_mmio_write32(info, 0x45010, 0x00000001);
-    let rb_45010 = intel_mmio_read32(info, 0x45010);
-    log_state!("after-0x45010-write");
-    let _ = intel_mmio_write32(info, 0x45010, orig_45010);
-    crate::log!(
-        "gfx-intel-scanout: minimal-pattern 0x45010 orig=0x{:08X} test=0x00000001 rb=0x{:08X}\n",
-        orig_45010,
-        rb_45010
-    );
-
-    // Poke 0x45020 (nearby)
-    crate::log!("gfx-intel-scanout: minimal-pattern probing 0x45020\n");
-    let orig_45020 = intel_mmio_read32(info, 0x45020);
-    let _ = intel_mmio_write32(info, 0x45020, 0x00000001);
-    let rb_45020 = intel_mmio_read32(info, 0x45020);
-    log_state!("after-0x45020-write");
-    let _ = intel_mmio_write32(info, 0x45020, orig_45020);
-    crate::log!(
-        "gfx-intel-scanout: minimal-pattern 0x45020 orig=0x{:08X} test=0x00000001 rb=0x{:08X}\n",
-        orig_45020,
-        rb_45020
-    );
-
-    // Poke 0x46000 (dc-pll hit)
-    crate::log!("gfx-intel-scanout: minimal-pattern probing 0x46000\n");
-    let orig_46000 = intel_mmio_read32(info, 0x46000);
-    let _ = intel_mmio_write32(info, 0x46000, 0x00000001);
-    let rb_46000 = intel_mmio_read32(info, 0x46000);
-    log_state!("after-0x46000-write");
-    let _ = intel_mmio_write32(info, 0x46000, orig_46000);
-    crate::log!(
-        "gfx-intel-scanout: minimal-pattern 0x46000 orig=0x{:08X} test=0x00000001 rb=0x{:08X}\n",
-        orig_46000,
-        rb_46000
-    );
-
-    // Poke 0x46070 (de_pll_enable)
-    crate::log!("gfx-intel-scanout: minimal-pattern probing 0x46070\n");
-    let orig_46070 = intel_mmio_read32(info, 0x46070);
-    let test_46070 = orig_46070 | 0x00000001;
-    let _ = intel_mmio_write32(info, 0x46070, test_46070);
-    let rb_46070 = intel_mmio_read32(info, 0x46070);
-    log_state!("after-0x46070-write");
-    let _ = intel_mmio_write32(info, 0x46070, orig_46070);
-    crate::log!(
-        "gfx-intel-scanout: minimal-pattern 0x46070 orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
-        orig_46070,
-        test_46070,
-        rb_46070
-    );
-
-    crate::log!("gfx-intel-scanout: minimal-pattern poke complete\n");
+    let _ = intel_mmio_write32(info, held_off, held_orig);
+    crate::log!("gfx-intel-scanout: minimal-pattern dc-pll held probe complete\n");
 }
 
 #[embassy_executor::task]
@@ -2594,8 +3190,14 @@ pub async fn scanout_smoke_task() {
     };
 
     Timer::after(EmbassyDuration::from_millis(1200)).await;
+    if INTEL_COMPACT_CROSS_ISLAND_ONLY {
+        minimal_pattern_register_poke(info);
+        return;
+    }
+
     log_display_power_probe(info);
     log_hdmi_port_probe(info);
+    power_first_gate_hunt(info);
     if !INTEL_PASSIVE_ONLY_DEFAULT {
         let disp_pwron_latched = arm_display_power_smoke(info);
         let hotplug_latched = hotplug_write_smoke(info);

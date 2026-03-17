@@ -1,0 +1,5 @@
+00:02.0 Display controller: Intel Corporation Raptor Lake-S GT1 [UHD Graphics 770] (rev 04)
+	DeviceName: Onboard - Video
+	Subsystem: Micro-Star International Co., Ltd. [MSI] Device 7e03
+	Kernel driver in use: i915
+	Kernel modules: i915, xe
