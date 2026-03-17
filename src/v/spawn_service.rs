@@ -71,6 +71,7 @@ macro_rules! define_started_flags {
 
 define_started_flags!(
     VGA_FONT_CACHE_STARTED,
+    GLOBALOG_PERSIST_ONCE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
     NET_POLL_STARTED,
     NET_SERVICE_STARTED,
@@ -150,6 +151,12 @@ fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_globalog_persist_once(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::globalog::persist_once_task())
+    })
+}
+
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         spawner.spawn(crate::v::fs::trueosfs::mount_service_task())
@@ -212,7 +219,7 @@ fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::shell::backends::net_tcp::net_shell_task())
+        spawner.spawn(crate::shell2::backends::net_tcp::net_shell_task())
     })
 }
 
@@ -604,6 +611,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_vga_font_cache,
     ),
     TaskSpec::enabled(
+        "globalog-persist-once",
+        0,
+        &GLOBALOG_PERSIST_ONCE_STARTED,
+        spawn_globalog_persist_once,
+    ),
+    TaskSpec::enabled(
         "trueosfs-mount-service",
         0,
         &TRUEOSFS_MOUNT_SERVICE_STARTED,
@@ -751,13 +764,13 @@ static TASKS: &[TaskSpec] = &[
         &USB_CONTROLLER_TASKS_STARTED,
         spawn_usb_controller_tasks,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "uac-event-drain",
         crate::v::readiness::UAC_ATTACHED,
         &UAC_EVENT_DRAIN_STARTED,
         spawn_uac_event_drain,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "uac-song",
         crate::v::readiness::UAC_ATTACHED,
         &UAC_SONG_STARTED,

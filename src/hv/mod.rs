@@ -12,7 +12,7 @@ use x86_64::registers::model_specific::Msr;
 use x86_64::registers::rflags;
 use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
-use crate::shell::{ShellBackend, ShellIo};
+use crate::shell2::{ShellBackend2, ShellIo2};
 
 const IA32_FEATURE_CONTROL: u32 = 0x3A;
 const IA32_VMX_BASIC: u32 = 0x480;
@@ -234,7 +234,7 @@ pub fn status() -> HvStatus {
     }
 }
 
-pub fn start(spawner: &Spawner, io: &'static dyn ShellBackend) -> Result<(), StartError> {
+pub fn start(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Result<(), StartError> {
     if VM1_RUNNING.load(Ordering::Acquire) || VM1_STARTING.load(Ordering::Acquire) {
         return Err(StartError::AlreadyRunning);
     }
@@ -306,7 +306,7 @@ pub fn stop() -> bool {
     }
 }
 
-pub fn write_logs(io: &dyn ShellIo) {
+pub fn write_logs(io: &dyn ShellIo2) {
     let mut lines: [Option<HvLogEntry>; HV_LOG_CAP] = core::array::from_fn(|_| None);
     let mut n = 0usize;
     {
@@ -333,7 +333,7 @@ pub fn write_logs(io: &dyn ShellIo) {
 }
 
 #[task(pool_size = 1)]
-async fn vm1_task(_io: &'static dyn ShellBackend) {
+async fn vm1_task(_io: &'static dyn ShellBackend2) {
     VM1_STARTING.store(false, Ordering::Release);
     VM1_RUNNING.store(true, Ordering::Release);
     hvlogf(format_args!("hv: vm1 lifecycle: starting"));

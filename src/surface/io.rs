@@ -236,7 +236,7 @@ pub mod cabi {
             return 0;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
-        crate::shell::uart1_com1::write_bytes(data);
+        crate::shell2::uart1_com1::write_bytes(data);
         data_len
     }
 
@@ -249,7 +249,7 @@ pub mod cabi {
             return 0;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
-        crate::shell::uart1_com1::inject_bytes(data)
+        crate::shell2::uart1_com1::inject_bytes(data)
     }
 
     #[unsafe(no_mangle)]

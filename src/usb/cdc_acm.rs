@@ -403,17 +403,18 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         ..
     } = params;
 
-    let Some(interface) = cdc::parse_cdc_interface(cfg) else {
+    let Some(interface) = cdc::parse_cdc_interface(cfg, dev_vid, dev_pid) else {
         return Err(());
     };
 
     crate::log!(
-        "usb: cdc-acm vid=0x{:04X} pid=0x{:04X} cfg={} ctrl_if={} data_if={}\n",
+        "usb: cdc-acm vid=0x{:04X} pid=0x{:04X} cfg={} ctrl_if={:?} data_if={} transport={:?}\n",
         dev_vid,
         dev_pid,
         interface.configuration,
         interface.control_interface,
-        interface.data_interface
+        interface.data_interface,
+        interface.transport
     );
 
     // Set configuration similar to the mass driver path.
@@ -576,29 +577,31 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         tx_waker: None,
     };
 
-    if program_line_coding(
-        ctx,
-        &mut *ep0_ring,
-        slot_id,
-        interface.control_interface,
-        desired_baud,
-    )
-    .await
-    .is_err()
-    {
-        crate::log!("usb: cdc set_line_coding failed\n");
-    }
-    if set_control_line_state(
-        ctx,
-        &mut *ep0_ring,
-        slot_id,
-        interface.control_interface,
-        0x0003,
-    )
-    .await
-    .is_err()
-    {
-        crate::log!("usb: cdc set_control_line_state failed\n");
+    if let Some(control_interface) = interface.control_interface {
+        if program_line_coding(
+            ctx,
+            &mut *ep0_ring,
+            slot_id,
+            control_interface,
+            desired_baud,
+        )
+        .await
+        .is_err()
+        {
+            crate::log!("usb: cdc set_line_coding failed\n");
+        }
+        if set_control_line_state(
+            ctx,
+            &mut *ep0_ring,
+            slot_id,
+            control_interface,
+            0x0003,
+        )
+        .await
+        .is_err()
+        {
+            crate::log!("usb: cdc set_control_line_state failed\n");
+        }
     }
 
     // Important ordering: don't start bulk RX/TX while we're still using EP0 control
