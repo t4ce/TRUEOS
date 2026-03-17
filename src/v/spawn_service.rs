@@ -229,7 +229,9 @@ fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_ws_time::ws_time_task()))
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::tst_ws_time::ws_time_task())
+    })
 }
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
@@ -498,7 +500,9 @@ fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
 
     #[cfg(feature = "gfx_intel")]
     {
-        spawn_local(spawner, |spawner| spawner.spawn(crate::gfx::intel::scanout_smoke_task()))
+        spawn_local(spawner, |spawner| {
+            spawner.spawn(crate::gfx::intel::scanout_smoke_task())
+        })
     }
 }
 

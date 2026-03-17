@@ -41,7 +41,10 @@ fn find_http_header_end(buf: &[u8]) -> Option<usize> {
 }
 
 fn http_request_path(req: &str) -> Option<&str> {
-    let line_end = req.find("\r\n").or_else(|| req.find('\n')).unwrap_or(req.len());
+    let line_end = req
+        .find("\r\n")
+        .or_else(|| req.find('\n'))
+        .unwrap_or(req.len());
     let line = req.get(..line_end)?;
     let mut it = line.split_whitespace();
     let method = it.next()?;
@@ -304,7 +307,11 @@ pub async fn ws_time_task() {
             continue;
         }
 
-        crate::log!("ws-time: listening on tcp {} path={}\n", WS_TIME_TCP_PORT, WS_TIME_PATH);
+        crate::log!(
+            "ws-time: listening on tcp {} path={}\n",
+            WS_TIME_TCP_PORT,
+            WS_TIME_PATH
+        );
 
         loop {
             while let Some(ev) = vnet.pop_event() {

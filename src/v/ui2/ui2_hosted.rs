@@ -1,12 +1,12 @@
 pub(super) type HostedContentId = u32;
 pub(super) type UiHostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurfaceState;
-pub(super) type UiHostedInteractiveState =
-    trueos_qjs::browser_task::HostedBrowserInteractiveState;
+pub(super) type UiHostedInteractiveState = trueos_qjs::browser_task::HostedBrowserInteractiveState;
 pub(super) type UiHostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 
 pub(super) const PRIMARY_HOSTED_CONTENT_ID: HostedContentId =
     trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID;
-pub(super) const HOSTED_KEYBOARD_MOD_SHIFT: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_SHIFT;
+pub(super) const HOSTED_KEYBOARD_MOD_SHIFT: u8 =
+    trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_SHIFT;
 pub(super) const HOSTED_KEYBOARD_MOD_CTRL: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_CTRL;
 pub(super) const HOSTED_KEYBOARD_MOD_ALT: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_ALT;
 pub(super) const HOSTED_KEYBOARD_MOD_META: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_META;
@@ -94,13 +94,12 @@ impl UiHostedInputSink for BrowserUiHostedAdapter {
         match input {
             UiHostedInput::Scroll { scroll_x, scroll_y } => {
                 trueos_qjs::browser_task::set_hosted_scroll_for_browser(
-                    content_id,
-                    scroll_x,
-                    scroll_y,
+                    content_id, scroll_x, scroll_y,
                 )
             }
             UiHostedInput::Keyboard { events } => {
-                let window_id = trueos_qjs::browser_task::browser_window_id_for_instance(content_id);
+                let window_id =
+                    trueos_qjs::browser_task::browser_window_id_for_instance(content_id);
                 if window_id == 0 {
                     return false;
                 }

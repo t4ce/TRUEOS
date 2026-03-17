@@ -672,7 +672,8 @@ fn refresh_window_hit_entries(state: &mut Ui2State, owner_window_id: u32) {
     };
 
     if window.kind == Ui2WindowKind::HostedBrowser {
-        state.last_browser_interactive_seq = hosted_interactive_seq(window_browser_instance_id(&window));
+        state.last_browser_interactive_seq =
+            hosted_interactive_seq(window_browser_instance_id(&window));
     }
 
     let refreshed_entries = {
@@ -1616,13 +1617,7 @@ fn snap_browser_content_rect(content: Ui2Rect) -> (i32, i32, u32, u32) {
 fn queue_browser_window_viewport(content_id: HostedContentId, content: Ui2Rect) -> bool {
     let (content_x, content_y, viewport_w, viewport_h) = snap_browser_content_rect(content);
     hosted_set_viewport(
-        content_id,
-        viewport_w,
-        viewport_h,
-        content_x,
-        content_y,
-        viewport_w,
-        viewport_h,
+        content_id, viewport_w, viewport_h, content_x, content_y, viewport_w, viewport_h,
     )
 }
 

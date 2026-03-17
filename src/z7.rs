@@ -201,10 +201,10 @@ fn read_next_header(payload: &[u8]) -> Result<&[u8], SevenZError> {
         return Err(SevenZError::BadCrc);
     }
 
-    let next_header_offset = usize::try_from(le_u64_at(payload, 12)?)
-        .map_err(|_| SevenZError::BadOffset)?;
-    let next_header_size = usize::try_from(le_u64_at(payload, 20)?)
-        .map_err(|_| SevenZError::BadOffset)?;
+    let next_header_offset =
+        usize::try_from(le_u64_at(payload, 12)?).map_err(|_| SevenZError::BadOffset)?;
+    let next_header_size =
+        usize::try_from(le_u64_at(payload, 20)?).map_err(|_| SevenZError::BadOffset)?;
     let next_header_crc = le_u32_at(payload, 28)?;
 
     let start = SIG_LEN
@@ -504,8 +504,8 @@ pub fn lzma2_decompress_to_vec(data: &[u8], dict_size: u32) -> Result<Vec<u8>, S
     let mut buf = [0u8; 8192];
 
     loop {
-        let got = lzma_rust2::Read::read(&mut reader, &mut buf)
-            .map_err(|_| SevenZError::DecodeFailed)?;
+        let got =
+            lzma_rust2::Read::read(&mut reader, &mut buf).map_err(|_| SevenZError::DecodeFailed)?;
         if got == 0 {
             break;
         }
