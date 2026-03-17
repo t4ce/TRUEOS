@@ -525,7 +525,9 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
                         .find(|window| window.id == window_id)
                         .map(window_browser_instance_id)
                         .unwrap_or(0);
-                    if !events.is_empty() && !hosted_queue_keyboard_events(content_id, events.as_slice()) {
+                    if !events.is_empty()
+                        && !hosted_queue_keyboard_events(content_id, events.as_slice())
+                    {
                         crate::log!(
                             "ui2: keyboard-forward-drop window={} count={}\n",
                             window_id,
@@ -927,7 +929,11 @@ fn update_scroll_pan_for_cursor(
         &snapshot,
         i64::from(normalized_hosted_browser_scroll(&snapshot)).saturating_sub(i64::from(dy_px)),
     );
-    if hosted_set_scroll(window_browser_instance_id(window), next_scroll_x, next_scroll_y) {
+    if hosted_set_scroll(
+        window_browser_instance_id(window),
+        next_scroll_x,
+        next_scroll_y,
+    ) {
         state.compose_reason = "scroll-pan";
         true
     } else {

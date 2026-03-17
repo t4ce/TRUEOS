@@ -49,7 +49,10 @@ fn submit_update(spawner: &Spawner, io: &'static dyn ShellBackend2) {
         .as_str(),
     );
 
-    if spawner.spawn(update_command_task(target_mask, disk)).is_err() {
+    if spawner
+        .spawn(update_command_task(target_mask, disk))
+        .is_err()
+    {
         print_shell_line(io, "update: spawn failed");
     }
 }
@@ -69,41 +72,35 @@ async fn update_command_task(target_mask: u8, disk: crate::disc::block::DeviceHa
         log("update: waiting for net");
         crate::v::readiness::wait_for(crate::v::readiness::NET_CONFIGURED).await;
 
-        log(
-            alloc::format!(
-                "update: target id={} ({}) blocks={} bs={} writable={} label={:?}",
-                info.id.raw(),
-                info.id,
-                info.block_count,
-                info.block_size,
-                info.writable,
-                info.label,
-            )
-            .as_str(),
-        );
+        log(alloc::format!(
+            "update: target id={} ({}) blocks={} bs={} writable={} label={:?}",
+            info.id.raw(),
+            info.id,
+            info.block_count,
+            info.block_size,
+            info.writable,
+            info.label,
+        )
+        .as_str());
 
         let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(disk).await;
-        log(
-            alloc::format!(
-                "update: target status={}{}",
-                status.short(),
-                match (&status, err) {
-                    (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => {
-                        alloc::format!(" (err={:?})", e)
-                    }
-                    _ => alloc::string::String::new(),
+        log(alloc::format!(
+            "update: target status={}{}",
+            status.short(),
+            match (&status, err) {
+                (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                    alloc::format!(" (err={:?})", e)
                 }
-            )
-            .as_str(),
-        );
+                _ => alloc::string::String::new(),
+            }
+        )
+        .as_str());
         if !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
             log("update: install before update");
             return;
         }
 
-        log(
-            alloc::format!("update: download {}", ISO_URL).as_str(),
-        );
+        log(alloc::format!("update: download {}", ISO_URL).as_str());
 
         let payload = match crate::v::net::https::fetch_https_body_progress_async(
             ISO_URL,
@@ -120,14 +117,12 @@ async fn update_command_task(target_mask: u8, disk: crate::disc::block::DeviceHa
             }
         };
 
-        log(
-            alloc::format!(
-                "update: downloaded payload={} bytes (7z_magic={})",
-                payload.len(),
-                crate::z7::looks_like_7z(payload.as_slice())
-            )
-            .as_str(),
-        );
+        log(alloc::format!(
+            "update: downloaded payload={} bytes (7z_magic={})",
+            payload.len(),
+            crate::z7::looks_like_7z(payload.as_slice())
+        )
+        .as_str());
 
         if !crate::z7::looks_like_7z(payload.as_slice()) {
             log("update: refused (payload is not a 7z archive)");
@@ -144,14 +139,12 @@ async fn update_command_task(target_mask: u8, disk: crate::disc::block::DeviceHa
         drop(payload);
         let iso_view = iso.as_slice();
 
-        log(
-            alloc::format!(
-                "update: extracted trueos.iso bytes={} (iso9660_magic={})",
-                iso_view.len(),
-                crate::iso9660::looks_like_iso9660(iso_view)
-            )
-            .as_str(),
-        );
+        log(alloc::format!(
+            "update: extracted trueos.iso bytes={} (iso9660_magic={})",
+            iso_view.len(),
+            crate::iso9660::looks_like_iso9660(iso_view)
+        )
+        .as_str());
 
         if !crate::iso9660::looks_like_iso9660(iso_view) {
             log("update: refused (extracted data is not an ISO9660 image)");
@@ -176,16 +169,14 @@ async fn update_command_task(target_mask: u8, disk: crate::disc::block::DeviceHa
 
         let bootx64_ok = bootx64.get(0..2) == Some(b"MZ");
         let kernel_ok = kernel.get(0..4) == Some(b"\x7FELF");
-        log(
-            alloc::format!(
-                "update: BOOTX64.EFI={} bytes (mz={}), TRUEOS.elf={} bytes (elf={})",
-                bootx64.len(),
-                bootx64_ok,
-                kernel.len(),
-                kernel_ok
-            )
-            .as_str(),
-        );
+        log(alloc::format!(
+            "update: BOOTX64.EFI={} bytes (mz={}), TRUEOS.elf={} bytes (elf={})",
+            bootx64.len(),
+            bootx64_ok,
+            kernel.len(),
+            kernel_ok
+        )
+        .as_str());
         if !bootx64_ok || !kernel_ok {
             log("update: refusing to install (payload format looks wrong)");
             return;

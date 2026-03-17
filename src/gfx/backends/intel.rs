@@ -172,9 +172,7 @@ impl IntelGfxBackend {
         if let Some(fb) = self
             .framebuffers
             .and_then(|r| r.framebuffers().next())
-            .or_else(|| {
-                crate::limine::framebuffer_response().and_then(|r| r.framebuffers().next())
-            })
+            .or_else(|| crate::limine::framebuffer_response().and_then(|r| r.framebuffers().next()))
         {
             return FramebufferTarget {
                 width: fb.width() as usize,
@@ -385,7 +383,8 @@ impl GfxDevice for IntelGfxBackend {
         engine.submit_batch()?;
 
         if has_present {
-            let n = crate::logflag::INTEL_PRESENT_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            let n = crate::logflag::INTEL_PRESENT_LOGS
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             if n < 8 || (n % 32) == 0 {
                 crate::log!(
                     "gfx-intel: present submit seq={} swap={}x{}\n",

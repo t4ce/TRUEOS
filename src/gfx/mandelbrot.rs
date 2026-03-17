@@ -210,11 +210,7 @@ pub fn build_fragment_shader_tgsi_unrolled(iterations: u32) -> String {
     }
 
     // Map the escape count into the pink -> plum palette.
-    push(
-        "MOV TEMP[3].xyz, IMM[14].xyzx",
-        &mut shader,
-        &mut line,
-    );
+    push("MOV TEMP[3].xyz, IMM[14].xyzx", &mut shader, &mut line);
     for idx in (0..14).rev() {
         let line_a = format!("SLT TEMP[4].x, TEMP[2].wwww, IMM[{}].wwww", idx);
         push(&line_a, &mut shader, &mut line);

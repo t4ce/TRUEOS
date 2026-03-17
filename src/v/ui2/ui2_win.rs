@@ -56,7 +56,11 @@ pub fn browser_window_id_for_instance(browser_instance_id: u32) -> Option<u32> {
         browser_instance_id
     };
     let window_id = hosted_window_id_for_content(browser_instance_id);
-    if window_id == 0 { None } else { Some(window_id) }
+    if window_id == 0 {
+        None
+    } else {
+        Some(window_id)
+    }
 }
 
 pub fn window_info_by_id(id: u32) -> Option<TrueosUi2WindowInfo> {

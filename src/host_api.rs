@@ -425,7 +425,8 @@ unsafe extern "C" fn trueos_xhci_hid_get_protocol_js(
     };
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    match crate::usb::hid::classreq::get_protocol_slot_sync(cid, slot, interface_number as u8, 500) {
+    match crate::usb::hid::classreq::get_protocol_slot_sync(cid, slot, interface_number as u8, 500)
+    {
         Some(protocol) => js_int32(protocol as i32),
         None => js_int32(-1),
     }

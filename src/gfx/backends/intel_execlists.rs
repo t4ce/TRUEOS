@@ -132,10 +132,7 @@ impl IntelExeclistsProbe {
                 FORCEWAKE_GEN11_RENDER,
                 Self::masked_bit_enable(FORCEWAKE_KERNEL_FALLBACK),
             );
-            let _ = self.wait_ack(
-                FORCEWAKE_KERNEL_FALLBACK,
-                FORCEWAKE_KERNEL_FALLBACK,
-            );
+            let _ = self.wait_ack(FORCEWAKE_KERNEL_FALLBACK, FORCEWAKE_KERNEL_FALLBACK);
             let (retry_ok, retry_ack, _) = self.wait_ack(FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
             set_ok = retry_ok;
             ack_after_set = retry_ack;

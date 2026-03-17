@@ -295,8 +295,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_capture_screenshot_data_url(
 
 static LAST_SCREENSHOT_BUFFER: LastScreenshotBuffer = LastScreenshotBuffer::new();
 static ENCODED_SCREENSHOT_BUFFER: EncodedScreenshotBuffer = EncodedScreenshotBuffer::new();
-static VIRGL_SCREENSHOT_AWAIT: ScreenshotAwait =
-    ScreenshotAwait::new(&LAST_SCREENSHOT_BUFFER);
+static VIRGL_SCREENSHOT_AWAIT: ScreenshotAwait = ScreenshotAwait::new(&LAST_SCREENSHOT_BUFFER);
 
 pub fn virgl_screenshot_await() -> &'static ScreenshotAwait {
     &VIRGL_SCREENSHOT_AWAIT

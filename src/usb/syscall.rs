@@ -296,7 +296,9 @@ pub(crate) fn control_out_sync(
             }
             let evt_ptr = ((evt.d0 as u64) | ((evt.d1 as u64) << 32)) & !0xF;
             evt_ptr == (setup_phys & !0xF)
-                || data_phys.map(|phys| evt_ptr == (phys & !0xF)).unwrap_or(false)
+                || data_phys
+                    .map(|phys| evt_ptr == (phys & !0xF))
+                    .unwrap_or(false)
                 || evt_ptr == (status_phys & !0xF)
         },
         timeout_ms,
