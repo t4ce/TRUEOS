@@ -2897,9 +2897,8 @@ impl GfxDevice for VirglGfxBackend {
                             }
                             (BlendFactor::One, BlendFactor::Zero) => self.blend_handle_disabled,
                             other => {
-                                let n =
-                                    crate::logflag::VIRGL_BLEND_UNSUPPORTED_LOGS
-                                        .fetch_add(1, Ordering::Relaxed);
+                                let n = crate::logflag::VIRGL_BLEND_UNSUPPORTED_LOGS
+                                    .fetch_add(1, Ordering::Relaxed);
                                 if n < 8 {
                                     crate::log!(
                                         "virgl-backend: unsupported blend {:?}; failing draw\n",
@@ -2957,8 +2956,7 @@ impl GfxDevice for VirglGfxBackend {
                         layout_texcoord_format: pipe_desc.vertex_layout.texcoord_format,
                         image_id: if draw_kind == DrawKind::Mandelbrot {
                             0
-                        } else if pipe_desc.vertex_layout.texcoord_format
-                            == TexCoordFormat::UvF32
+                        } else if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
                             && (VIRGL_FORCE_DEBUG_TEXTURE
                                 || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW)
                         {
@@ -2968,8 +2966,7 @@ impl GfxDevice for VirglGfxBackend {
                         },
                         image_rev: if draw_kind == DrawKind::Mandelbrot {
                             0
-                        } else if pipe_desc.vertex_layout.texcoord_format
-                            == TexCoordFormat::UvF32
+                        } else if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
                             && (VIRGL_FORCE_DEBUG_TEXTURE
                                 || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW)
                         {
@@ -2994,21 +2991,21 @@ impl GfxDevice for VirglGfxBackend {
                         let bound_image = if draw_kind == DrawKind::Mandelbrot {
                             None
                         } else if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
-                                let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE
-                                    || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW;
-                                if !use_debug_texture && !self.state.image.is_valid() {
-                                    return Err(Error::Invalid);
-                                }
-                                if use_debug_texture {
-                                    None
-                                } else {
-                                    self.images
-                                        .get(self.state.image.raw().saturating_sub(1) as usize)
-                                        .and_then(|i| i.as_ref())
-                                }
-                            } else {
+                            let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE
+                                || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW;
+                            if !use_debug_texture && !self.state.image.is_valid() {
+                                return Err(Error::Invalid);
+                            }
+                            if use_debug_texture {
                                 None
-                            };
+                            } else {
+                                self.images
+                                    .get(self.state.image.raw().saturating_sub(1) as usize)
+                                    .and_then(|i| i.as_ref())
+                            }
+                        } else {
+                            None
+                        };
                         let verts = self
                             .build_virgl_vertices(
                                 &vb.bytes,

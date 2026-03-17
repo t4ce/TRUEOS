@@ -246,7 +246,9 @@ pub fn get_protocol_slot_sync(
 
     let setup = setup_class_in(0x03, 0, iface as u16, 1);
     let out = match control_in_sync(&ctx, &mut ep0_ring, slot_id, setup, phys, 1, timeout_ms) {
-        Ok((_, transferred)) if transferred >= 1 => unsafe { core::slice::from_raw_parts(virt, 1)[0] },
+        Ok((_, transferred)) if transferred >= 1 => unsafe {
+            core::slice::from_raw_parts(virt, 1)[0]
+        },
         _ => {
             dma::dealloc(virt, 1);
             super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
@@ -292,7 +294,9 @@ pub fn get_idle_slot_sync(
     let value = (report_id as u16) << 8;
     let setup = setup_class_in(0x02, value, iface as u16, 1);
     let out = match control_in_sync(&ctx, &mut ep0_ring, slot_id, setup, phys, 1, timeout_ms) {
-        Ok((_, transferred)) if transferred >= 1 => unsafe { core::slice::from_raw_parts(virt, 1)[0] },
+        Ok((_, transferred)) if transferred >= 1 => unsafe {
+            core::slice::from_raw_parts(virt, 1)[0]
+        },
         _ => {
             dma::dealloc(virt, 1);
             super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
@@ -341,15 +345,22 @@ pub fn get_report_slot_sync(
 
     let value = ((report_type as u16) << 8) | (report_id as u16);
     let setup = setup_class_in(0x01, value, iface as u16, want_len as u16);
-    let transferred =
-        match control_in_sync(&ctx, &mut ep0_ring, slot_id, setup, phys, want_len as u16, timeout_ms) {
-            Ok((_, transferred)) => transferred as usize,
-            Err(()) => {
-                dma::dealloc(virt, want_len);
-                super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
-                return None;
-            }
-        };
+    let transferred = match control_in_sync(
+        &ctx,
+        &mut ep0_ring,
+        slot_id,
+        setup,
+        phys,
+        want_len as u16,
+        timeout_ms,
+    ) {
+        Ok((_, transferred)) => transferred as usize,
+        Err(()) => {
+            dma::dealloc(virt, want_len);
+            super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
+            return None;
+        }
+    };
 
     let mut out = Vec::new();
     unsafe {

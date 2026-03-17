@@ -43,12 +43,7 @@ unsafe impl Send for IntelCmd {}
 unsafe impl Sync for IntelCmd {}
 
 impl IntelCmd {
-    pub fn new(
-        mmio: RingMmio,
-        cmd_phys: u64,
-        cmd_virt: *mut u8,
-        cmd_len: usize,
-    ) -> Option<Self> {
+    pub fn new(mmio: RingMmio, cmd_phys: u64, cmd_virt: *mut u8, cmd_len: usize) -> Option<Self> {
         if cmd_virt.is_null() || cmd_phys == 0 || cmd_len < (PAGE_SIZE * 2) {
             return None;
         }
@@ -89,8 +84,8 @@ impl IntelCmd {
 
     pub fn init_ring(&mut self) -> Result<()> {
         let ring_start = (self.ring_phys & !0xFFF) as u32;
-        let ring_ctl = (((self.ring_len as u32).saturating_sub(PAGE_SIZE as u32)) & !0xFFF)
-            | RING_CTL_VALID;
+        let ring_ctl =
+            (((self.ring_len as u32).saturating_sub(PAGE_SIZE as u32)) & !0xFFF) | RING_CTL_VALID;
 
         unsafe {
             core::ptr::write_bytes(self.ring_virt, 0, self.ring_len);
@@ -102,7 +97,8 @@ impl IntelCmd {
 
         let head = self.mmio_read32(Self::ring_off(RING_HEAD));
         self.ring_tail = self.mmio_read32(Self::ring_off(RING_TAIL));
-        let n = crate::logflag::INTEL_RING_INIT_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let n = crate::logflag::INTEL_RING_INIT_LOGS
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         if n < 4 {
             crate::log!(
                 "gfx-intel: ring init start=0x{:08X} ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} ring_phys=0x{:X} ring_len=0x{:X} batch_phys=0x{:X} batch_len=0x{:X}\n",
@@ -169,7 +165,8 @@ impl IntelCmd {
 
         self.mmio_write32(Self::ring_off(RING_TAIL), 16);
         self.ring_tail = 16;
-        let n = crate::logflag::INTEL_SUBMIT_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let n =
+            crate::logflag::INTEL_SUBMIT_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         if n < 8 || (n % 64) == 0 {
             let head = self.mmio_read32(Self::ring_off(RING_HEAD));
             let tail_after = self.mmio_read32(Self::ring_off(RING_TAIL));

@@ -1790,7 +1790,9 @@ pub mod cabi {
                 [v, v, v, v]
             }
             BlendFactor::DstColor => dst,
-            BlendFactor::OneMinusSrcColor => [1.0 - src[0], 1.0 - src[1], 1.0 - src[2], 1.0 - src[3]],
+            BlendFactor::OneMinusSrcColor => {
+                [1.0 - src[0], 1.0 - src[1], 1.0 - src[2], 1.0 - src[3]]
+            }
         }
     }
 
@@ -1819,7 +1821,11 @@ pub mod cabi {
             SamplerWrap::ClampToEdge => clamp01(coord),
             SamplerWrap::Repeat => {
                 let wrapped = coord - libm::floorf(coord);
-                if wrapped < 0.0 { wrapped + 1.0 } else { wrapped }
+                if wrapped < 0.0 {
+                    wrapped + 1.0
+                } else {
+                    wrapped
+                }
             }
         }
     }
@@ -1851,7 +1857,9 @@ pub mod cabi {
         let max_x = tex.width.saturating_sub(1) as f32;
         let max_y = tex.height.saturating_sub(1) as f32;
 
-        if sampler.min_filter == SamplerFilter::Nearest && sampler.mag_filter == SamplerFilter::Nearest {
+        if sampler.min_filter == SamplerFilter::Nearest
+            && sampler.mag_filter == SamplerFilter::Nearest
+        {
             let x = libm::floorf(u * max_x + 0.5) as i32;
             let y = libm::floorf(v * max_y + 0.5) as i32;
             return sample_texel_clamped(&tex.rgba, tex.width, tex.height, x, y);
@@ -2110,9 +2118,15 @@ pub mod cabi {
                     if current_target_tex_id == 0 {
                         let mut off = 0usize;
                         while off + 36 <= verts.len() {
-                            let Some(v0) = read_rgb_vtx(verts, off) else { break };
-                            let Some(v1) = read_rgb_vtx(verts, off + 12) else { break };
-                            let Some(v2) = read_rgb_vtx(verts, off + 24) else { break };
+                            let Some(v0) = read_rgb_vtx(verts, off) else {
+                                break;
+                            };
+                            let Some(v1) = read_rgb_vtx(verts, off + 12) else {
+                                break;
+                            };
+                            let Some(v2) = read_rgb_vtx(verts, off + 24) else {
+                                break;
+                            };
                             draw_rgb_triangle_rgba(
                                 screen.as_mut_slice(),
                                 screen_w,
@@ -2130,9 +2144,15 @@ pub mod cabi {
                     {
                         let mut off = 0usize;
                         while off + 36 <= verts.len() {
-                            let Some(v0) = read_rgb_vtx(verts, off) else { break };
-                            let Some(v1) = read_rgb_vtx(verts, off + 12) else { break };
-                            let Some(v2) = read_rgb_vtx(verts, off + 24) else { break };
+                            let Some(v0) = read_rgb_vtx(verts, off) else {
+                                break;
+                            };
+                            let Some(v1) = read_rgb_vtx(verts, off + 12) else {
+                                break;
+                            };
+                            let Some(v2) = read_rgb_vtx(verts, off + 24) else {
+                                break;
+                            };
                             draw_rgb_triangle_rgba(
                                 target.rgba.as_mut_slice(),
                                 target.width,
@@ -2181,9 +2201,15 @@ pub mod cabi {
                     if current_target_tex_id == 0 {
                         let mut off = 0usize;
                         while off + 60 <= verts.len() {
-                            let Some(v0) = read_tex_vtx(verts, off) else { break };
-                            let Some(v1) = read_tex_vtx(verts, off + 20) else { break };
-                            let Some(v2) = read_tex_vtx(verts, off + 40) else { break };
+                            let Some(v0) = read_tex_vtx(verts, off) else {
+                                break;
+                            };
+                            let Some(v1) = read_tex_vtx(verts, off + 20) else {
+                                break;
+                            };
+                            let Some(v2) = read_tex_vtx(verts, off + 40) else {
+                                break;
+                            };
                             draw_tex_triangle_rgba(
                                 screen.as_mut_slice(),
                                 screen_w,
@@ -2204,9 +2230,15 @@ pub mod cabi {
                     {
                         let mut off = 0usize;
                         while off + 60 <= verts.len() {
-                            let Some(v0) = read_tex_vtx(verts, off) else { break };
-                            let Some(v1) = read_tex_vtx(verts, off + 20) else { break };
-                            let Some(v2) = read_tex_vtx(verts, off + 40) else { break };
+                            let Some(v0) = read_tex_vtx(verts, off) else {
+                                break;
+                            };
+                            let Some(v1) = read_tex_vtx(verts, off + 20) else {
+                                break;
+                            };
+                            let Some(v2) = read_tex_vtx(verts, off + 40) else {
+                                break;
+                            };
                             draw_tex_triangle_rgba(
                                 target.rgba.as_mut_slice(),
                                 target.width,
@@ -2898,17 +2930,13 @@ pub mod cabi {
         }
 
         crate::gfx::with_cabi_frame_lock(|| {
-            let Some(ret) = crate::gfx::with_context_tag(
-                crate::gfx::SystemLockOwner::DrawMandelbrot,
-                |ctx| {
-                    let (pipeline, vbuf, _) = match ensure_gfx_resources_tex(
-                        ctx,
-                        usable,
-                        TexPipelineKind::Mandelbrot,
-                    ) {
-                        Some(v) => v,
-                        None => return -4,
-                    };
+            let Some(ret) =
+                crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::DrawMandelbrot, |ctx| {
+                    let (pipeline, vbuf, _) =
+                        match ensure_gfx_resources_tex(ctx, usable, TexPipelineKind::Mandelbrot) {
+                            Some(v) => v,
+                            None => return -4,
+                        };
 
                     if ctx.write_buffer(vbuf, 0, verts.as_slice()).is_err() {
                         return -5;
@@ -2963,8 +2991,8 @@ pub mod cabi {
                     st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
                     st.viewport_configured = false;
                     0
-                },
-            ) else {
+                })
+            else {
                 return -10;
             };
             ret
@@ -3774,18 +3802,17 @@ pub mod cabi {
                         } else {
                             TexSampleKind::Mask
                         };
-                        let (pipeline, vbuf, _) =
-                            match ensure_gfx_resources_tex(
-                                ctx,
-                                tex_blob.len(),
-                                match tex_kind {
-                                    TexSampleKind::Mask => TexPipelineKind::Mask,
-                                    TexSampleKind::Rgba => TexPipelineKind::Rgba,
-                                },
-                            ) {
-                                Some(v) => v,
-                                None => return -6,
-                            };
+                        let (pipeline, vbuf, _) = match ensure_gfx_resources_tex(
+                            ctx,
+                            tex_blob.len(),
+                            match tex_kind {
+                                TexSampleKind::Mask => TexPipelineKind::Mask,
+                                TexSampleKind::Rgba => TexPipelineKind::Rgba,
+                            },
+                        ) {
+                            Some(v) => v,
+                            None => return -6,
+                        };
                         if ctx.write_buffer(vbuf, 0, tex_blob.as_slice()).is_err() {
                             return -7;
                         }
@@ -4015,9 +4042,8 @@ pub mod cabi {
             }
 
             if crate::gfx::is_virgl_active() {
-                let first =
-                    !crate::logflag::GFX_CABI_VIRGL_FIRST_FRAME_SEEN
-                        .swap(true, core::sync::atomic::Ordering::AcqRel);
+                let first = !crate::logflag::GFX_CABI_VIRGL_FIRST_FRAME_SEEN
+                    .swap(true, core::sync::atomic::Ordering::AcqRel);
                 if first {
                     crate::v::readiness::set(crate::v::readiness::GFX_VIRGL_READY);
                     crate::globalog::log(format_args!(
@@ -4025,9 +4051,8 @@ pub mod cabi {
                         seq, draw_bytes
                     ));
                 }
-                let n =
-                    crate::logflag::GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS
-                        .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                let n = crate::logflag::GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS
+                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 if first || n < 12 {
                     crate::globalog::log(format_args!(
                         "gfx-cabi: virgl end_frame ok seq={} rgb={} tex={} bytes={} first={}\n",
