@@ -31,6 +31,7 @@ const STATUS_ROW: usize = 2;
 const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
+const STATUS_SESSION_RGB: (u8, u8, u8) = (0, 255, 192);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const DEFAULT_LINE_WIDTH: usize = 100;
@@ -61,6 +62,18 @@ pub(crate) struct TranscriptEntry {
 struct QueuedTranscriptEntry {
     slot_id: matrix::MatrixSlotId,
     entry: TranscriptEntry,
+}
+
+#[derive(Clone)]
+struct CommandSession {
+    slot_id: matrix::MatrixSlotId,
+    kind: shell2_cmd::CommandSessionKind,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CommandSessionInputResult {
+    CompleteIdle,
+    CompleteRunning,
 }
 
 #[derive(Clone)]
@@ -361,7 +374,13 @@ impl<'a> AlignedWriter<'a> {
                 label.push('*');
             }
 
-            if slot.selected {
+            if slot.activity == matrix::MatrixSlotActivity::Session {
+                let styled = alloc::format!(
+                    "{}",
+                    ecma48::style(label.as_str()).bold().fg(STATUS_SESSION_RGB)
+                );
+                out.push_str(styled.as_str());
+            } else if slot.selected {
                 let styled = alloc::format!(
                     "{}",
                     ecma48::style(label.as_str()).bold().fg(STATUS_SELECTED_RGB)
@@ -494,6 +513,13 @@ pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> Matri
     MatrixTarget {
         output_mask,
         slot_id: matrix::active_slot_id(output_mask),
+    }
+}
+
+fn matrix_target_for_slot(output_mask: u8, slot_id: &matrix::MatrixSlotId) -> MatrixTarget {
+    MatrixTarget {
+        output_mask,
+        slot_id: slot_id.clone(),
     }
 }
 
@@ -648,12 +674,17 @@ fn handle_submit(
     qjs_mode: QjsPromptMode,
     surf_prefix: SurfPromptPrefix,
     submitted: &str,
-) -> Option<usize> {
+) -> HandleSubmitResult {
     match mode {
         ShellMode2::Cmd => {
             match shell2_cmd::try_parse(spawner, io, submitted) {
-                shell2_cmd::ParseOutcome::SetLineWidth(width) => Some(width),
-                _ => None,
+                shell2_cmd::ParseOutcome::SetLineWidth(width) => {
+                    HandleSubmitResult::SetLineWidth(width)
+                }
+                shell2_cmd::ParseOutcome::StartSession(kind) => {
+                    HandleSubmitResult::StartSession(kind)
+                }
+                _ => HandleSubmitResult::None,
             }
         }
         ShellMode2::Surf => {
@@ -672,15 +703,43 @@ fn handle_submit(
                     }
                 }
             }
-            None
+            HandleSubmitResult::None
         }
         ShellMode2::Qjs => {
             shell2_qjs::submit(io, qjs_mode, submitted);
-            None
+            HandleSubmitResult::None
         }
         ShellMode2::Ai => {
             shell2_ai::submit(spawner, io, ai_mode, submitted);
-            None
+            HandleSubmitResult::None
+        }
+    }
+}
+
+enum HandleSubmitResult {
+    None,
+    SetLineWidth(usize),
+    StartSession(shell2_cmd::CommandSessionKind),
+}
+
+fn find_command_session_index(
+    sessions: &[CommandSession],
+    slot_id: &matrix::MatrixSlotId,
+) -> Option<usize> {
+    sessions.iter().position(|session| session.slot_id == *slot_id)
+}
+
+fn handle_command_session_input(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    session: &CommandSession,
+    submitted: &str,
+    output_mask: u8,
+) -> CommandSessionInputResult {
+    let target = matrix_target_for_slot(output_mask, &session.slot_id);
+    match session.kind {
+        shell2_cmd::CommandSessionKind::FormatSure => {
+            crate::shell2::cmds::format::handle_session_input(spawner, io, &target, submitted)
         }
     }
 }
@@ -743,6 +802,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut ai_mode = AiPromptMode::Normal;
     let mut qjs_mode = QjsPromptMode::Repl;
     let mut cmd_status_text: Option<AllocString> = None;
+    let mut command_sessions: alloc::vec::Vec<CommandSession> = alloc::vec::Vec::new();
     out.mode_status(
         output_mask,
         mode,
@@ -966,7 +1026,51 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let submitted_raw = line.as_str();
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
-                    if !submitted.is_empty() {
+                    let active_slot = matrix::active_slot_id(output_mask);
+                    let session_idx =
+                        find_command_session_index(command_sessions.as_slice(), &active_slot);
+                    if submitted_raw.starts_with('§') && !submitted.is_empty() {
+                        handle_matrix_operator(io, submitted);
+                        mode = ShellMode2::Cmd;
+                        out.banner(output_mask, mode, minute_text.as_str());
+                        out.mode_status(
+                            output_mask,
+                            mode,
+                            ai_mode,
+                            qjs_mode,
+                            surf_prefix,
+                            cmd_status_text.as_deref(),
+                        );
+                        transcript = current_transcript_for_task(io);
+                        out.render_transcript(&transcript);
+                    } else if let Some(session_idx) = session_idx {
+                        if !submitted.is_empty() {
+                            record_user_line_for_active_slot(io, submitted);
+                            transcript = current_transcript_for_task(io);
+                            out.render_transcript(&transcript);
+                        }
+                        match handle_command_session_input(
+                            &spawner,
+                            io,
+                            &command_sessions[session_idx],
+                            submitted,
+                            output_mask,
+                        ) {
+                            CommandSessionInputResult::CompleteIdle => {
+                                matrix::set_slot_activity(
+                                    &command_sessions[session_idx].slot_id,
+                                    matrix::MatrixSlotActivity::Idle,
+                                );
+                                let _ = command_sessions.remove(session_idx);
+                            }
+                            CommandSessionInputResult::CompleteRunning => {
+                                let _ = command_sessions.remove(session_idx);
+                            }
+                        }
+                        if drain_pending_transcript(io, &mut transcript) {
+                            out.render_transcript(&transcript);
+                        }
+                    } else if !submitted.is_empty() {
                         if submitted_raw.starts_with('§') {
                             handle_matrix_operator(io, submitted);
                             mode = ShellMode2::Cmd;
@@ -985,29 +1089,38 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             record_user_line_for_active_slot(io, submitted);
                             transcript = current_transcript_for_task(io);
                             out.render_transcript(&transcript);
-                            if let Some(width) =
-                                handle_submit(
-                                    &spawner,
-                                    io,
-                                    mode,
-                                    ai_mode,
-                                    qjs_mode,
-                                    surf_prefix,
-                                    submitted,
-                                )
-                            {
-                                out.set_line_width(width);
-                                out.banner(output_mask, mode, minute_text.as_str());
-                                out.mode_status(
-                                    output_mask,
-                                    mode,
-                                    ai_mode,
-                                    qjs_mode,
-                                    surf_prefix,
-                                    cmd_status_text.as_deref(),
-                                );
-                                transcript = current_transcript_for_task(io);
-                                out.render_transcript(&transcript);
+                            match handle_submit(
+                                &spawner,
+                                io,
+                                mode,
+                                ai_mode,
+                                qjs_mode,
+                                surf_prefix,
+                                submitted,
+                            ) {
+                                HandleSubmitResult::SetLineWidth(width) => {
+                                    out.set_line_width(width);
+                                    out.banner(output_mask, mode, minute_text.as_str());
+                                    out.mode_status(
+                                        output_mask,
+                                        mode,
+                                        ai_mode,
+                                        qjs_mode,
+                                        surf_prefix,
+                                        cmd_status_text.as_deref(),
+                                    );
+                                    transcript = current_transcript_for_task(io);
+                                    out.render_transcript(&transcript);
+                                }
+                                HandleSubmitResult::StartSession(kind) => {
+                                    let slot_id = matrix::active_slot_id(output_mask);
+                                    matrix::set_slot_activity(
+                                        &slot_id,
+                                        matrix::MatrixSlotActivity::Session,
+                                    );
+                                    command_sessions.push(CommandSession { slot_id, kind });
+                                }
+                                HandleSubmitResult::None => {}
                             }
                             if drain_pending_transcript(io, &mut transcript) {
                                 out.render_transcript(&transcript);

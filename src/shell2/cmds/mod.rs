@@ -1,6 +1,7 @@
 use alloc::string::String as AllocString;
 
 pub(crate) mod acpi;
+pub(crate) mod format;
 pub(crate) mod install;
 pub(crate) mod set;
 pub(crate) mod update;
