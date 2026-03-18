@@ -15,6 +15,7 @@ pub(crate) type MatrixSlotId = HString<MATRIX_SLOT_ID_MAX>;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MatrixSlotActivity {
     Idle,
+    Session,
     Running,
 }
 
