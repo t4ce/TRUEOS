@@ -16,7 +16,7 @@ pub use trueos_v::vcabi::{
     trueos_cabi_net_fetch_discard, trueos_cabi_net_fetch_post_json_start,
     trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait,
     trueos_cabi_net_prewarm_url_start, trueos_cabi_poll_once, trueos_cabi_qjs_mouse_pop,
-    trueos_cabi_shell1_command_registry_json, trueos_cabi_shell1_submit_input,
+    trueos_cabi_shell_command_registry_json, trueos_cabi_shell1_submit_input,
     trueos_cabi_shell_qjs_init, trueos_cabi_shell_qjs_read, trueos_cabi_shell_qjs_read_byte,
     trueos_cabi_shell_qjs_write, trueos_cabi_shell_qjs_write_byte,
     trueos_cabi_shell2_print_line, trueos_cabi_shell2_print_targeted_line,

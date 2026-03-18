@@ -105,9 +105,9 @@ unsafe extern "C" {
         data_len: usize,
     ) -> usize;
     pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
-    pub fn trueos_cabi_shell1_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
-    pub fn trueos_cabi_shell1_history_total_lines() -> usize;
-    pub fn trueos_cabi_shell1_history_text_since(
+    pub fn trueos_cabi_shell_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_shell_history_lines_all() -> usize;
+    pub fn trueos_cabi_shell_history_lines(
         start_line: usize,
         max_lines: usize,
         out_ptr: *mut u8,

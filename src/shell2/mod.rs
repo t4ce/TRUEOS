@@ -1,24 +1,26 @@
 use alloc::collections::VecDeque;
 use alloc::string::String as AllocString;
-use alloc::vec::Vec;
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU8, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
-mod backends;
+pub(crate) mod backends;
+mod cmds;
 mod ecma48;
 mod interface;
+mod matrix;
 mod shell2_ai;
 mod shell2_cmd;
 mod shell2_qjs;
 mod shell2_surf;
 #[allow(unused_imports)]
-pub(crate) use crate::shell2::backends::{NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND};
+pub(crate) use crate::shell2::backends::{
+    crlf, uart1_com1, NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND,
+};
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_ai::AiPromptMode;
 use shell2_qjs::QjsPromptMode;
-pub(crate) mod uart1_com1;
 
 const DEFAULT_PROMPT: &str = "§ ";
 const MAX_LINE: usize = 192;
@@ -36,26 +38,27 @@ const MAX_TRANSCRIPT_HISTORY: usize = 256;
 const MAX_RENDERED_TRANSCRIPT_LINES: usize = 20;
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
-static UART1_PENDING_TRANSCRIPT: spin::Mutex<VecDeque<TranscriptEntry>> =
+static UART1_PENDING_TRANSCRIPT: spin::Mutex<VecDeque<QueuedTranscriptEntry>> =
     spin::Mutex::new(VecDeque::new());
-static NET_TCP_PENDING_TRANSCRIPT: spin::Mutex<VecDeque<TranscriptEntry>> =
+static NET_TCP_PENDING_TRANSCRIPT: spin::Mutex<VecDeque<QueuedTranscriptEntry>> =
     spin::Mutex::new(VecDeque::new());
-
-pub trait ShellIo {
-    fn write_str(&self, s: &str);
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>);
-}
 
 #[derive(Clone, Copy)]
-enum LineSource {
+pub(crate) enum LineSource {
     User,
     System,
 }
 
 #[derive(Clone)]
-struct TranscriptEntry {
-    source: LineSource,
-    text: AllocString,
+pub(crate) struct TranscriptEntry {
+    pub(crate) source: LineSource,
+    pub(crate) text: AllocString,
+}
+
+#[derive(Clone)]
+struct QueuedTranscriptEntry {
+    slot_id: matrix::MatrixSlotId,
+    entry: TranscriptEntry,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -116,35 +119,29 @@ impl<'a> AlignedWriter<'a> {
         self.io.write_str("\x1b[2K");
     }
 
-    fn line_at(&self, row: usize, s: &str) {
-        self.move_to(row, 1);
-        self.clear_line();
-        self.io.write_str(s);
-    }
-
     fn transcript_line_at(&self, row: usize, source: LineSource, s: &str) {
         self.move_to(row, 1);
         self.clear_line();
-        self.io.write_str(crate::ecma48::RESET);
+        self.io.write_str(ecma48::RESET);
 
         match source {
             LineSource::User => {
                 self.io.write_str(s);
             }
             LineSource::System => {
-                let width = crate::ecma48::visible_width(s);
+                let width = ecma48::visible_width(s);
                 let col = LINE_WIDTH.saturating_sub(width).saturating_add(1);
                 self.move_to(row, col);
                 self.io.write_fmt(format_args!(
                     "{}",
-                    crate::ecma48::style(s).fg(SYSTEM_TEXT_RGB)
+                    ecma48::style(s).fg(SYSTEM_TEXT_RGB)
                 ));
             }
         }
     }
 
     fn render_transcript(&self, transcript: &VecDeque<TranscriptEntry>) {
-        self.io.write_str(crate::ecma48::SAVE_CURSOR);
+        self.io.write_str(ecma48::SAVE_CURSOR);
         self.move_to(SCROLL_TOP_ROW, 1);
         self.io.write_str("\x1b[J");
 
@@ -157,7 +154,7 @@ impl<'a> AlignedWriter<'a> {
             let row = SCROLL_TOP_ROW + idx;
             self.transcript_line_at(row, entry.source, entry.text.as_str());
         }
-        self.io.write_str(crate::ecma48::RESTORE_CURSOR);
+        self.io.write_str(ecma48::RESTORE_CURSOR);
     }
 
     fn banner(&self, mode: ShellMode2, time_text: &str) {
@@ -176,7 +173,7 @@ impl<'a> AlignedWriter<'a> {
         } else if mode == ShellMode2::Qjs {
             self.qjs_status(qjs_mode);
         }
-        self.io.write_str(crate::ecma48::RESET);
+        self.io.write_str(ecma48::RESET);
     }
 
     fn main_mode_text(&self, mode: ShellMode2) -> AllocString {
@@ -224,7 +221,7 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn push_function_key_label(&self, out: &mut AllocString, text: &str) {
-        let styled = alloc::format!("{}", crate::ecma48::style(text).bold().fg(FUNCTION_KEY_RGB));
+        let styled = alloc::format!("{}", ecma48::style(text).bold().fg(FUNCTION_KEY_RGB));
         out.push_str(styled.as_str());
     }
 
@@ -232,7 +229,7 @@ impl<'a> AlignedWriter<'a> {
         if selected {
             let styled = alloc::format!(
                 "{}",
-                crate::ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
+                ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
             );
             out.push_str(styled.as_str());
         } else {
@@ -244,7 +241,7 @@ impl<'a> AlignedWriter<'a> {
         if selected {
             let styled = alloc::format!(
                 "{}",
-                crate::ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
+                ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
             );
             out.push_str(styled.as_str());
         } else {
@@ -256,7 +253,7 @@ impl<'a> AlignedWriter<'a> {
         if selected {
             self.io.write_fmt(format_args!(
                 "{}",
-                crate::ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
+                ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
             ));
         } else {
             self.io.write_str(text);
@@ -279,14 +276,14 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn right_text(&self, row: usize, text: &str) {
-        let width = crate::ecma48::visible_width(text);
+        let width = ecma48::visible_width(text);
         let col = LINE_WIDTH.saturating_sub(width).saturating_add(1);
         self.move_to(row, col);
         self.io.write_str(text);
     }
 
     fn center_text(&self, row: usize, text: &str) {
-        let width = crate::ecma48::visible_width(text);
+        let width = ecma48::visible_width(text);
         let col = LINE_WIDTH
             .saturating_sub(width)
             .checked_div(2)
@@ -310,10 +307,6 @@ fn clock_bucket_and_text() -> (u64, HString<5>) {
 
 pub(crate) fn print_shell_line(io: &dyn ShellIo2, text: &str) {
     enqueue_transcript_line(io, LineSource::System, text);
-}
-
-pub(crate) fn print_user_line(io: &dyn ShellIo2, text: &str) {
-    enqueue_transcript_line(io, LineSource::User, text);
 }
 
 fn same_backend_io(io: &dyn ShellIo2, target: &'static dyn ShellIo2) -> bool {
@@ -372,32 +365,67 @@ pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
     0
 }
 
-fn push_transcript_line(
-    transcript: &mut VecDeque<TranscriptEntry>,
-    source: LineSource,
-    text: &str,
-) {
+pub(crate) fn history_total_lines() -> usize {
+    matrix::history_total_lines()
+}
+
+pub(crate) fn history_lines_text(start_line: usize, max_lines: usize) -> AllocString {
+    matrix::history_lines_text(start_line, max_lines)
+}
+
+pub(crate) fn command_registry_json() -> AllocString {
+    cmds::command_registry_json()
+}
+
+fn append_transcript_entry(transcript: &mut VecDeque<TranscriptEntry>, entry: TranscriptEntry) {
     if transcript.len() >= MAX_TRANSCRIPT_HISTORY {
         let _ = transcript.pop_front();
     }
-    transcript.push_back(TranscriptEntry {
-        source,
-        text: AllocString::from(text),
-    });
+    transcript.push_back(entry);
 }
 
-fn enqueue_transcript_line(io: &dyn ShellIo2, source: LineSource, text: &str) {
+fn output_mask_for_io(io: &dyn ShellIo2) -> u8 {
     let uart_io: &'static dyn ShellIo2 = &UART1_COM1_BACKEND;
     if same_backend_io(io, uart_io) {
-        let mut queue = UART1_PENDING_TRANSCRIPT.lock();
-        push_transcript_line(&mut queue, source, text);
-        return;
+        return OUTPUT_UART1_MASK;
     }
 
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_io(io, net_io) {
-        let mut queue = NET_TCP_PENDING_TRANSCRIPT.lock();
-        push_transcript_line(&mut queue, source, text);
+        return OUTPUT_NET_TCP_MASK;
+    }
+
+    0
+}
+
+fn queue_transcript_line(
+    queue: &spin::Mutex<VecDeque<QueuedTranscriptEntry>>,
+    slot_id: matrix::MatrixSlotId,
+    source: LineSource,
+    text: &str,
+) {
+    let mut pending = queue.lock();
+    pending.push_back(QueuedTranscriptEntry {
+        slot_id,
+        entry: TranscriptEntry {
+            source,
+            text: AllocString::from(text),
+        },
+    });
+}
+
+fn enqueue_transcript_line(io: &dyn ShellIo2, source: LineSource, text: &str) {
+    let output_mask = output_mask_for_io(io);
+    if output_mask == 0 {
+        return;
+    }
+
+    let slot_id = matrix::record_line_for_output(output_mask, source, text);
+    if (output_mask & OUTPUT_UART1_MASK) != 0 {
+        queue_transcript_line(&UART1_PENDING_TRANSCRIPT, slot_id.clone(), source, text);
+    }
+    if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
+        queue_transcript_line(&NET_TCP_PENDING_TRANSCRIPT, slot_id, source, text);
     }
 }
 
@@ -405,21 +433,37 @@ fn drain_pending_transcript(
     io: &'static dyn ShellBackend2,
     transcript: &mut VecDeque<TranscriptEntry>,
 ) -> bool {
+    let active_slot = matrix::active_slot_id(output_target_for_backend(io));
     let uart_io: &'static dyn ShellIo2 = &UART1_COM1_BACKEND;
     if same_backend_task(io, uart_io) {
-        return drain_pending_transcript_queue(&UART1_PENDING_TRANSCRIPT, transcript);
+        return drain_pending_transcript_queue(&UART1_PENDING_TRANSCRIPT, &active_slot, transcript);
     }
 
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_task(io, net_io) {
-        return drain_pending_transcript_queue(&NET_TCP_PENDING_TRANSCRIPT, transcript);
+        return drain_pending_transcript_queue(&NET_TCP_PENDING_TRANSCRIPT, &active_slot, transcript);
     }
 
     false
 }
 
+fn current_transcript_for_task(io: &'static dyn ShellBackend2) -> VecDeque<TranscriptEntry> {
+    matrix::active_lines(output_target_for_backend(io))
+}
+
+fn record_user_line_for_active_slot(io: &'static dyn ShellBackend2, submitted: &str) {
+    let _ = matrix::record_line_for_output(output_target_for_backend(io), LineSource::User, submitted);
+}
+
+fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
+    matrix::record_line_in_default(LineSource::User, submitted);
+    let requested = submitted.strip_prefix('§').unwrap_or("");
+    let _ = matrix::switch_active_slot(output_target_for_backend(io), requested);
+}
+
 fn drain_pending_transcript_queue(
-    queue: &spin::Mutex<VecDeque<TranscriptEntry>>,
+    queue: &spin::Mutex<VecDeque<QueuedTranscriptEntry>>,
+    active_slot: &matrix::MatrixSlotId,
     transcript: &mut VecDeque<TranscriptEntry>,
 ) -> bool {
     let mut pending = queue.lock();
@@ -427,13 +471,14 @@ fn drain_pending_transcript_queue(
         return false;
     }
 
-    while let Some(entry) = pending.pop_front() {
-        if transcript.len() >= MAX_TRANSCRIPT_HISTORY {
-            let _ = transcript.pop_front();
+    let mut changed = false;
+    while let Some(queued) = pending.pop_front() {
+        if queued.slot_id == *active_slot {
+            append_transcript_entry(transcript, queued.entry);
+            changed = true;
         }
-        transcript.push_back(entry);
     }
-    true
+    changed
 }
 
 fn handle_submit(
@@ -487,8 +532,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     out.prompt();
 
     let mut line: HString<MAX_LINE> = HString::new();
-    let mut transcript: VecDeque<TranscriptEntry> = VecDeque::new();
-    let mut history: Vec<alloc::string::String> = Vec::new();
+    let mut transcript: VecDeque<TranscriptEntry> = current_transcript_for_task(io);
     let mut saw_cr = false;
     let mut esc = EscState::None;
     let mut csi_param: u16 = 0;
@@ -605,14 +649,24 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     }
                 }
                 b'\r' | b'\n' => {
-                    let submitted = line.as_str().trim();
+                    let submitted_raw = line.as_str();
+                    let submitted = submitted_raw.trim();
                     if !submitted.is_empty() {
-                        history.push(alloc::string::String::from(submitted));
-                        push_transcript_line(&mut transcript, LineSource::User, submitted);
-                        out.render_transcript(&transcript);
-                        handle_submit(&spawner, io, mode, ai_mode, qjs_mode, submitted);
-                        if drain_pending_transcript(io, &mut transcript) {
+                        if submitted_raw.starts_with('§') {
+                            handle_matrix_operator(io, submitted);
+                            mode = ShellMode2::Cmd;
+                            out.banner(mode, minute_text.as_str());
+                            out.mode_status(mode, ai_mode, qjs_mode);
+                            transcript = current_transcript_for_task(io);
                             out.render_transcript(&transcript);
+                        } else {
+                            record_user_line_for_active_slot(io, submitted);
+                            transcript = current_transcript_for_task(io);
+                            out.render_transcript(&transcript);
+                            handle_submit(&spawner, io, mode, ai_mode, qjs_mode, submitted);
+                            if drain_pending_transcript(io, &mut transcript) {
+                                out.render_transcript(&transcript);
+                            }
                         }
                     }
                     line.clear();
