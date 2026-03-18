@@ -1,5 +1,6 @@
 use alloc::collections::VecDeque;
 use alloc::string::String as AllocString;
+use core::cell::Cell;
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU8, Ordering};
 use embassy_executor::Spawner;
@@ -21,8 +22,8 @@ pub(crate) use crate::shell2::backends::{
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_ai::AiPromptMode;
 use shell2_qjs::QjsPromptMode;
+use shell2_surf::SurfPromptPrefix;
 
-const DEFAULT_PROMPT: &str = "§ ";
 const MAX_LINE: usize = 192;
 const BANNER_ROW: usize = 1;
 const STATUS_ROW: usize = 2;
@@ -31,7 +32,7 @@ const SCROLL_TOP_ROW: usize = 4;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
-const LINE_WIDTH: usize = 100;
+const DEFAULT_LINE_WIDTH: usize = 100;
 pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
 const MAX_TRANSCRIPT_HISTORY: usize = 256;
@@ -61,6 +62,12 @@ struct QueuedTranscriptEntry {
     entry: TranscriptEntry,
 }
 
+#[derive(Clone)]
+pub(crate) struct MatrixTarget {
+    output_mask: u8,
+    slot_id: matrix::MatrixSlotId,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ShellMode2 {
     Surf,
@@ -70,12 +77,12 @@ enum ShellMode2 {
 }
 
 impl ShellMode2 {
-    const fn next(self) -> Self {
+    const fn function_key(self) -> &'static str {
         match self {
-            Self::Surf => Self::Ai,
-            Self::Ai => Self::Qjs,
-            Self::Qjs => Self::Cmd,
-            Self::Cmd => Self::Surf,
+            Self::Surf => "F1",
+            Self::Ai => "F2",
+            Self::Qjs => "F3",
+            Self::Cmd => "F4",
         }
     }
 }
@@ -90,11 +97,23 @@ enum EscState {
 
 struct AlignedWriter<'a> {
     io: &'a dyn ShellIo2,
+    line_width: Cell<usize>,
 }
 
 impl<'a> AlignedWriter<'a> {
     fn new(io: &'a dyn ShellIo2) -> Self {
-        Self { io }
+        Self {
+            io,
+            line_width: Cell::new(DEFAULT_LINE_WIDTH),
+        }
+    }
+
+    fn line_width(&self) -> usize {
+        self.line_width.get()
+    }
+
+    fn set_line_width(&self, width: usize) {
+        self.line_width.set(width);
     }
 
     fn clear_screen_home(&self) {
@@ -130,7 +149,7 @@ impl<'a> AlignedWriter<'a> {
             }
             LineSource::System => {
                 let width = ecma48::visible_width(s);
-                let col = LINE_WIDTH.saturating_sub(width).saturating_add(1);
+                let col = self.line_width().saturating_sub(width).saturating_add(1);
                 self.move_to(row, col);
                 self.io.write_fmt(format_args!(
                     "{}",
@@ -157,18 +176,38 @@ impl<'a> AlignedWriter<'a> {
         self.io.write_str(ecma48::RESTORE_CURSOR);
     }
 
-    fn banner(&self, mode: ShellMode2, time_text: &str) {
+    fn banner(&self, output_mask: u8, mode: ShellMode2, time_text: &str) {
         self.move_to(BANNER_ROW, 1);
         self.clear_line();
-        self.io.write_str("TRUE OS §");
+        self.io.write_str("TRUE OS ");
+        let active_slot = matrix::active_slot_id(output_mask);
+        if active_slot.is_empty() {
+            let styled = alloc::format!("{}", ecma48::style("§").bold().fg(STATUS_SELECTED_RGB));
+            self.io.write_str(styled.as_str());
+        } else {
+            self.io.write_str("§");
+        }
         self.center_text(BANNER_ROW, self.main_mode_text(mode).as_str());
         self.right_text(BANNER_ROW, time_text);
     }
 
-    fn mode_status(&self, mode: ShellMode2, ai_mode: AiPromptMode, qjs_mode: QjsPromptMode) {
+    fn mode_status(
+        &self,
+        output_mask: u8,
+        mode: ShellMode2,
+        ai_mode: AiPromptMode,
+        qjs_mode: QjsPromptMode,
+        surf_prefix: SurfPromptPrefix,
+    ) {
         self.move_to(STATUS_ROW, 1);
         self.clear_line();
-        if mode == ShellMode2::Ai {
+        let slot_text = self.slot_status_text(output_mask);
+        if !slot_text.is_empty() {
+            self.left_text(STATUS_ROW, slot_text.as_str());
+        }
+        if mode == ShellMode2::Surf {
+            self.surf_status(surf_prefix);
+        } else if mode == ShellMode2::Ai {
             self.ai_status(ai_mode);
         } else if mode == ShellMode2::Qjs {
             self.qjs_status(qjs_mode);
@@ -178,21 +217,64 @@ impl<'a> AlignedWriter<'a> {
 
     fn main_mode_text(&self, mode: ShellMode2) -> AllocString {
         let mut text = AllocString::new();
+        self.push_mode_choice(&mut text, ShellMode2::Surf, mode == ShellMode2::Surf);
+        self.push_plain(&mut text, " - ");
+        self.push_mode_choice(&mut text, ShellMode2::Ai, mode == ShellMode2::Ai);
+        self.push_plain(&mut text, " - ");
+        self.push_mode_choice(&mut text, ShellMode2::Qjs, mode == ShellMode2::Qjs);
+        self.push_plain(&mut text, " - ");
+        self.push_mode_choice(&mut text, ShellMode2::Cmd, mode == ShellMode2::Cmd);
+        text
+    }
+
+    fn push_mode_choice(&self, out: &mut AllocString, mode: ShellMode2, selected: bool) {
+        self.push_function_key_label(out, alloc::format!("[{}]", mode.function_key()).as_str());
+        self.push_plain(out, " ");
+        self.push_mode_token(
+            out,
+            match mode {
+                ShellMode2::Surf => "surf",
+                ShellMode2::Ai => "ai",
+                ShellMode2::Qjs => "qjs",
+                ShellMode2::Cmd => "cmd",
+            },
+            selected,
+        );
+    }
+
+    fn surf_status(&self, surf_prefix: SurfPromptPrefix) {
+        let mut text = AllocString::new();
         self.push_function_key_label(&mut text, "[TAB]");
         self.push_plain(&mut text, " ");
-        self.push_mode_token(&mut text, "surf", mode == ShellMode2::Surf);
+        self.push_ai_token(
+            &mut text,
+            SurfPromptPrefix::Http.label(),
+            surf_prefix == SurfPromptPrefix::Http,
+        );
         self.push_plain(&mut text, " - ");
-        self.push_mode_token(&mut text, "ai", mode == ShellMode2::Ai);
+        self.push_ai_token(
+            &mut text,
+            SurfPromptPrefix::Https.label(),
+            surf_prefix == SurfPromptPrefix::Https,
+        );
         self.push_plain(&mut text, " - ");
-        self.push_mode_token(&mut text, "qjs", mode == ShellMode2::Qjs);
+        self.push_ai_token(
+            &mut text,
+            SurfPromptPrefix::File.label(),
+            surf_prefix == SurfPromptPrefix::File,
+        );
         self.push_plain(&mut text, " - ");
-        self.push_mode_token(&mut text, "cmd", mode == ShellMode2::Cmd);
-        text
+        self.push_ai_token(
+            &mut text,
+            SurfPromptPrefix::Html.label(),
+            surf_prefix == SurfPromptPrefix::Html,
+        );
+        self.right_text(STATUS_ROW, text.as_str());
     }
 
     fn ai_status(&self, ai_mode: AiPromptMode) {
         let mut text = AllocString::new();
-        self.push_function_key_label(&mut text, "[F1]");
+        self.push_function_key_label(&mut text, "[TAB]");
         self.push_plain(&mut text, " ");
         self.push_ai_token(&mut text, "normal", ai_mode == AiPromptMode::Normal);
         self.push_plain(&mut text, " - ");
@@ -208,7 +290,7 @@ impl<'a> AlignedWriter<'a> {
 
     fn qjs_status(&self, qjs_mode: QjsPromptMode) {
         let mut text = AllocString::new();
-        self.push_function_key_label(&mut text, "[F1]");
+        self.push_function_key_label(&mut text, "[TAB]");
         self.push_plain(&mut text, " ");
         self.push_ai_token(&mut text, "repl", qjs_mode == QjsPromptMode::Repl);
         self.push_plain(&mut text, " - ");
@@ -249,22 +331,51 @@ impl<'a> AlignedWriter<'a> {
         }
     }
 
-    fn write_mode_token(&self, text: &str, selected: bool) {
-        if selected {
-            self.io.write_fmt(format_args!(
-                "{}",
-                ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
-            ));
-        } else {
-            self.io.write_str(text);
+    fn slot_status_text(&self, output_mask: u8) -> AllocString {
+        let slots = matrix::slot_views(output_mask);
+        let mut out = AllocString::new();
+        for (idx, slot) in slots.iter().enumerate() {
+            if idx != 0 {
+                out.push(' ');
+            }
+
+            let mut label = AllocString::from("§");
+            label.push_str(slot.id.as_str());
+            if slot.activity == matrix::MatrixSlotActivity::Running {
+                label.push('*');
+            }
+
+            if slot.selected {
+                let styled = alloc::format!(
+                    "{}",
+                    ecma48::style(label.as_str()).bold().fg(STATUS_SELECTED_RGB)
+                );
+                out.push_str(styled.as_str());
+            } else if slot.activity == matrix::MatrixSlotActivity::Running {
+                let styled = alloc::format!(
+                    "{}",
+                    ecma48::style(label.as_str()).bold().fg(SYSTEM_TEXT_RGB)
+                );
+                out.push_str(styled.as_str());
+            } else {
+                out.push_str(label.as_str());
+            }
         }
+        out
     }
 
-    fn prompt(&self) {
+    fn prompt(&self, output_mask: u8) {
         self.move_to(PROMPT_ROW, 1);
         self.clear_line();
         self.io.write_str("\x1b[0m");
-        self.io.write_str(DEFAULT_PROMPT);
+        self.io.write_str("[");
+        let styled = alloc::format!("{}", ecma48::style("§").bold().fg(STATUS_SELECTED_RGB));
+        self.io.write_str(styled.as_str());
+        let active_slot = matrix::active_slot_id(output_mask);
+        if !active_slot.is_empty() {
+            self.io.write_str(active_slot.as_str());
+        }
+        self.io.write_str("] ");
     }
 
     fn user_backspace(&self) {
@@ -275,16 +386,21 @@ impl<'a> AlignedWriter<'a> {
         self.io.write_char(ch);
     }
 
+    fn left_text(&self, row: usize, text: &str) {
+        self.move_to(row, 1);
+        self.io.write_str(text);
+    }
+
     fn right_text(&self, row: usize, text: &str) {
         let width = ecma48::visible_width(text);
-        let col = LINE_WIDTH.saturating_sub(width).saturating_add(1);
+        let col = self.line_width().saturating_sub(width).saturating_add(1);
         self.move_to(row, col);
         self.io.write_str(text);
     }
 
     fn center_text(&self, row: usize, text: &str) {
         let width = ecma48::visible_width(text);
-        let col = LINE_WIDTH
+        let col = self.line_width()
             .saturating_sub(width)
             .checked_div(2)
             .unwrap_or(0)
@@ -365,6 +481,23 @@ pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
     0
 }
 
+pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> MatrixTarget {
+    let output_mask = output_target_for_backend(io);
+    MatrixTarget {
+        output_mask,
+        slot_id: matrix::active_slot_id(output_mask),
+    }
+}
+
+pub(crate) fn set_matrix_target_active(target: &MatrixTarget, active: bool) {
+    let activity = if active {
+        matrix::MatrixSlotActivity::Running
+    } else {
+        matrix::MatrixSlotActivity::Idle
+    };
+    matrix::set_slot_activity(&target.slot_id, activity);
+}
+
 pub(crate) fn history_total_lines() -> usize {
     matrix::history_total_lines()
 }
@@ -414,6 +547,20 @@ fn queue_transcript_line(
     });
 }
 
+fn queue_transcript_line_for_output(
+    output_mask: u8,
+    slot_id: &matrix::MatrixSlotId,
+    source: LineSource,
+    text: &str,
+) {
+    if (output_mask & OUTPUT_UART1_MASK) != 0 {
+        queue_transcript_line(&UART1_PENDING_TRANSCRIPT, slot_id.clone(), source, text);
+    }
+    if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
+        queue_transcript_line(&NET_TCP_PENDING_TRANSCRIPT, slot_id.clone(), source, text);
+    }
+}
+
 fn enqueue_transcript_line(io: &dyn ShellIo2, source: LineSource, text: &str) {
     let output_mask = output_mask_for_io(io);
     if output_mask == 0 {
@@ -421,12 +568,12 @@ fn enqueue_transcript_line(io: &dyn ShellIo2, source: LineSource, text: &str) {
     }
 
     let slot_id = matrix::record_line_for_output(output_mask, source, text);
-    if (output_mask & OUTPUT_UART1_MASK) != 0 {
-        queue_transcript_line(&UART1_PENDING_TRANSCRIPT, slot_id.clone(), source, text);
-    }
-    if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
-        queue_transcript_line(&NET_TCP_PENDING_TRANSCRIPT, slot_id, source, text);
-    }
+    queue_transcript_line_for_output(output_mask, &slot_id, source, text);
+}
+
+pub(crate) fn print_matrix_target_line(target: &MatrixTarget, text: &str) {
+    matrix::record_line_in_slot(&target.slot_id, LineSource::System, text);
+    queue_transcript_line_for_output(target.output_mask, &target.slot_id, LineSource::System, text);
 }
 
 fn drain_pending_transcript(
@@ -487,29 +634,76 @@ fn handle_submit(
     mode: ShellMode2,
     ai_mode: AiPromptMode,
     qjs_mode: QjsPromptMode,
+    surf_prefix: SurfPromptPrefix,
     submitted: &str,
-) {
+) -> Option<usize> {
     match mode {
         ShellMode2::Cmd => {
-            let _ = shell2_cmd::try_parse(spawner, io, submitted);
+            match shell2_cmd::try_parse(spawner, io, submitted) {
+                shell2_cmd::ParseOutcome::SetLineWidth(width) => Some(width),
+                _ => None,
+            }
         }
         ShellMode2::Surf => {
-            if let Some(html) = shell2_surf::try_inline_html(submitted) {
-                shell2_surf::load_inline_html(io, html);
-            } else if let Some(file_ref) = shell2_surf::try_file_reference(submitted) {
-                shell2_surf::load_file_reference(io, file_ref.as_str());
-            } else if let Some(url) = shell2_surf::try_parse(submitted) {
-                if shell2_surf::prepare_call_with_url(spawner, io, url.as_str()).is_err() {
-                    print_shell_line(io, "surf: spawn failed");
+            if let Some(parsed) = shell2_surf::try_parse_with_prefix(submitted, surf_prefix) {
+                match parsed {
+                    shell2_surf::SurfSubmit::Html(html) => {
+                        shell2_surf::load_inline_html(io, html);
+                    }
+                    shell2_surf::SurfSubmit::File(file_ref) => {
+                        shell2_surf::load_file_reference(io, file_ref.as_str());
+                    }
+                    shell2_surf::SurfSubmit::Url(url) => {
+                        if shell2_surf::prepare_call_with_url(spawner, io, url.as_str()).is_err() {
+                            print_shell_line(io, "surf: spawn failed");
+                        }
+                    }
                 }
             }
+            None
         }
         ShellMode2::Qjs => {
             shell2_qjs::submit(io, qjs_mode, submitted);
+            None
         }
         ShellMode2::Ai => {
             shell2_ai::submit(spawner, io, ai_mode, submitted);
+            None
         }
+    }
+}
+
+fn mode_from_function_key(index: u16) -> Option<ShellMode2> {
+    match index {
+        1 => Some(ShellMode2::Surf),
+        2 => Some(ShellMode2::Ai),
+        3 => Some(ShellMode2::Qjs),
+        4 => Some(ShellMode2::Cmd),
+        _ => None,
+    }
+}
+
+fn apply_mode_toggle(
+    out: &AlignedWriter<'_>,
+    output_mask: u8,
+    mode: ShellMode2,
+    ai_mode: AiPromptMode,
+    qjs_mode: QjsPromptMode,
+    surf_prefix: SurfPromptPrefix,
+    line: &HString<MAX_LINE>,
+    minute_text: &str,
+) {
+    out.banner(output_mask, mode, minute_text);
+    out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+    out.prompt(output_mask);
+    for ch in line.chars() {
+        out.user_char(ch);
+    }
+}
+
+fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: char) {
+    if line.push(ch).is_ok() {
+        out.user_char(ch);
     }
 }
 
@@ -518,26 +712,40 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     io.init();
     register_output(io);
     let out = AlignedWriter::new(io);
+    let output_mask = output_target_for_backend(io);
 
     out.clear_screen_home();
     out.reset_scroll_region();
     let (mut last_minute_bucket, time_text) = clock_bucket_and_text();
     let mut mode = ShellMode2::Cmd;
-    out.banner(mode, time_text.as_str());
+    let mut surf_prefix = SurfPromptPrefix::Http;
+    out.banner(output_mask, mode, time_text.as_str());
     let mut ai_mode = AiPromptMode::Normal;
     let mut qjs_mode = QjsPromptMode::Repl;
-    out.mode_status(mode, ai_mode, qjs_mode);
+    out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
 
     out.set_scroll_region(SCROLL_TOP_ROW);
-    out.prompt();
+    out.prompt(output_mask);
 
     let mut line: HString<MAX_LINE> = HString::new();
     let mut transcript: VecDeque<TranscriptEntry> = current_transcript_for_task(io);
+    let mut last_matrix_revision = matrix::revision();
     let mut saw_cr = false;
     let mut esc = EscState::None;
     let mut csi_param: u16 = 0;
+    let mut text_decode = ecma48::InputDecodeState::None;
 
     loop {
+        let matrix_revision = matrix::revision();
+        if matrix_revision != last_matrix_revision {
+            last_matrix_revision = matrix_revision;
+            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+            out.prompt(output_mask);
+            for ch in line.chars() {
+                out.user_char(ch);
+            }
+        }
+
         if drain_pending_transcript(io, &mut transcript) {
             out.render_transcript(&transcript);
         }
@@ -545,10 +753,10 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         let (minute_bucket, minute_text) = clock_bucket_and_text();
         if minute_bucket != last_minute_bucket {
             last_minute_bucket = minute_bucket;
-            out.banner(mode, minute_text.as_str());
-            out.mode_status(mode, ai_mode, qjs_mode);
+            out.banner(output_mask, mode, minute_text.as_str());
+            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
             out.render_transcript(&transcript);
-            out.prompt();
+            out.prompt(output_mask);
             for ch in line.chars() {
                 out.user_char(ch);
             }
@@ -583,21 +791,21 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             let digit = (b - b'0') as u16;
                             csi_param = csi_param.saturating_mul(10).saturating_add(digit);
                         }
-                        b'~' if csi_param == 11 => {
-                            if mode == ShellMode2::Ai {
-                                ai_mode = ai_mode.next();
-                                out.mode_status(mode, ai_mode, qjs_mode);
-                                out.prompt();
-                                for ch in line.chars() {
-                                    out.user_char(ch);
-                                }
-                            } else if mode == ShellMode2::Qjs {
-                                qjs_mode = qjs_mode.next();
-                                out.mode_status(mode, ai_mode, qjs_mode);
-                                out.prompt();
-                                for ch in line.chars() {
-                                    out.user_char(ch);
-                                }
+                        b'~' => {
+                            if let Some(next_mode) =
+                                csi_param.checked_sub(10).and_then(mode_from_function_key)
+                            {
+                                mode = next_mode;
+                                apply_mode_toggle(
+                                    &out,
+                                    output_mask,
+                                    mode,
+                                    ai_mode,
+                                    qjs_mode,
+                                    surf_prefix,
+                                    &line,
+                                    minute_text.as_str(),
+                                );
                             }
                             esc = EscState::None;
                         }
@@ -608,24 +816,25 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     continue;
                 }
                 EscState::Ss3 => {
-                    if b == b'P' {
-                        if mode == ShellMode2::Ai {
-                            ai_mode = ai_mode.next();
-                            out.mode_status(mode, ai_mode, qjs_mode);
-                            out.prompt();
-                            for ch in line.chars() {
-                                out.user_char(ch);
-                            }
-                        } else if mode == ShellMode2::Qjs {
-                            qjs_mode = qjs_mode.next();
-                            out.mode_status(mode, ai_mode, qjs_mode);
-                            out.prompt();
-                            for ch in line.chars() {
-                                out.user_char(ch);
-                            }
-                        }
-                    } else if b == b'Q' {
-                        // Keep SS3-Q mapped to the old secondary toggle sequence if a terminal sends it.
+                    let next_mode = match b {
+                        b'P' => Some(ShellMode2::Surf),
+                        b'Q' => Some(ShellMode2::Ai),
+                        b'R' => Some(ShellMode2::Qjs),
+                        b'S' => Some(ShellMode2::Cmd),
+                        _ => None,
+                    };
+                    if let Some(next_mode) = next_mode {
+                        mode = next_mode;
+                        apply_mode_toggle(
+                            &out,
+                            output_mask,
+                            mode,
+                            ai_mode,
+                            qjs_mode,
+                            surf_prefix,
+                            &line,
+                            minute_text.as_str(),
+                        );
                     }
                     esc = EscState::None;
                     continue;
@@ -640,50 +849,93 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
 
             match b {
                 b'\t' => {
-                    mode = mode.next();
-                    out.banner(mode, minute_text.as_str());
-                    out.mode_status(mode, ai_mode, qjs_mode);
-                    out.prompt();
-                    for ch in line.chars() {
-                        out.user_char(ch);
+                    match mode {
+                        ShellMode2::Surf => {
+                            surf_prefix = surf_prefix.next();
+                            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+                            out.prompt(output_mask);
+                            for ch in line.chars() {
+                                out.user_char(ch);
+                            }
+                        }
+                        ShellMode2::Ai => {
+                            ai_mode = ai_mode.next();
+                            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+                            out.prompt(output_mask);
+                            for ch in line.chars() {
+                                out.user_char(ch);
+                            }
+                        }
+                        ShellMode2::Qjs => {
+                            qjs_mode = qjs_mode.next();
+                            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+                            out.prompt(output_mask);
+                            for ch in line.chars() {
+                                out.user_char(ch);
+                            }
+                        }
+                        ShellMode2::Cmd => {}
                     }
                 }
                 b'\r' | b'\n' => {
+                    if matches!(text_decode, ecma48::InputDecodeState::Utf8Seq { .. }) {
+                        push_input_char(&out, &mut line, 'Ü');
+                        text_decode = ecma48::InputDecodeState::None;
+                    }
                     let submitted_raw = line.as_str();
                     let submitted = submitted_raw.trim();
                     if !submitted.is_empty() {
                         if submitted_raw.starts_with('§') {
                             handle_matrix_operator(io, submitted);
                             mode = ShellMode2::Cmd;
-                            out.banner(mode, minute_text.as_str());
-                            out.mode_status(mode, ai_mode, qjs_mode);
+                            out.banner(output_mask, mode, minute_text.as_str());
+                            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
                             transcript = current_transcript_for_task(io);
                             out.render_transcript(&transcript);
                         } else {
                             record_user_line_for_active_slot(io, submitted);
                             transcript = current_transcript_for_task(io);
                             out.render_transcript(&transcript);
-                            handle_submit(&spawner, io, mode, ai_mode, qjs_mode, submitted);
+                            if let Some(width) =
+                                handle_submit(
+                                    &spawner,
+                                    io,
+                                    mode,
+                                    ai_mode,
+                                    qjs_mode,
+                                    surf_prefix,
+                                    submitted,
+                                )
+                            {
+                                out.set_line_width(width);
+                                out.banner(output_mask, mode, minute_text.as_str());
+                                out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+                                transcript = current_transcript_for_task(io);
+                                out.render_transcript(&transcript);
+                            }
                             if drain_pending_transcript(io, &mut transcript) {
                                 out.render_transcript(&transcript);
                             }
                         }
                     }
                     line.clear();
-                    out.prompt();
+                    out.prompt(output_mask);
                 }
                 0x08 | 0x7F => {
+                    text_decode = ecma48::InputDecodeState::None;
                     if line.pop().is_some() {
                         out.user_backspace();
                     }
                 }
                 0x20..=0x7E => {
-                    let ch = b as char;
-                    if line.push(ch).is_ok() {
-                        out.user_char(ch);
+                    text_decode = ecma48::InputDecodeState::None;
+                    push_input_char(&out, &mut line, b as char);
+                }
+                _ => {
+                    if let Some(ch) = ecma48::decode_input_byte_lossy(&mut text_decode, b) {
+                        push_input_char(&out, &mut line, ch);
                     }
                 }
-                _ => {}
             }
         } else {
             Timer::after(EmbassyDuration::from_millis(5)).await;
