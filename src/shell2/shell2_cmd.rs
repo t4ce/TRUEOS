@@ -33,6 +33,10 @@ pub(crate) fn try_parse(
         let mut args = rest.split_whitespace();
         return super::cmds::acpi::try_parse(io, &mut args);
     }
+    if let Some(rest) = submitted.strip_prefix("etc") {
+        let mut args = rest.split_whitespace();
+        return super::cmds::etc::try_parse(io, &mut args);
+    }
     if let Some(rest) = submitted.strip_prefix("format") {
         let mut args = rest.split_whitespace();
         return super::cmds::format::try_parse(io, &mut args);

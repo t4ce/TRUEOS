@@ -1,32 +1,40 @@
-pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, rest: &str, cols: usize) {
+use core::str::SplitWhitespace;
 
+use embassy_time::{Duration as EmbassyDuration, Timer};
 
+use super::super::{ShellBackend2, print_shell_line};
+use crate::shell2::shell2_cmd::ParseOutcome;
 
-fn cmd_go(io: &'static dyn ShellBackend) {
-    const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+const GO_TWO_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
+const INSANE_MAX_CP: u32 = 0x87FFF;
+const DEFAULT_ECMA_COLS: usize = 100;
+
+fn start_looping_chars(io: &'static dyn ShellBackend2, label: &str, chars: &'static [char]) {
+    let started = alloc::format!("etc: {} started (50ms loop)", label);
+    print_shell_line(io, started.as_str());
+
+    crate::wait::spawn_local_detached(async move {
+        let mut idx = 0usize;
+        loop {
+            io.write_char(chars[idx]);
+            idx = (idx + 1) % chars.len();
+            Timer::after(EmbassyDuration::from_millis(50)).await;
+        }
+    });
 }
 
-fn cmd_go_two(io: &'static dyn ShellBackend) {
-    const GO_TWO_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
-}
+fn cmd_insane(io: &'static dyn ShellBackend2) {
+    io.write_str("insane: iterating U+0000..=U+087FFF (Ctrl-C to abort)\r\n");
 
-// rework so its from 0 to 3949(whatever) better readable
-pub(crate) fn cmd_insane(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    let cols = (*ctx.term_cols).max(1);
-    ctx.io
-        .write_str("insane: iterating U+0000..=U+10FFFF (Ctrl-C to abort)\r\n");
-
-    let mut col: usize = 0;
-    for cp in 0u32..=0x10FFFF {
+    let mut col = 0usize;
+    for cp in 0u32..=INSANE_MAX_CP {
         if (cp & 0x3FF) == 0
-            && let Some(b) = ctx.io.read_byte()
+            && let Some(b) = io.read_byte()
             && b == 0x03
         {
-            ctx.io.write_str("\r\ninsane: aborted\r\n");
-            return CommandAction::None;
+            io.write_str("\r\ninsane: aborted\r\n");
+            return;
         }
 
         let ch = match core::char::from_u32(cp) {
@@ -35,18 +43,46 @@ pub(crate) fn cmd_insane(
             None => '\u{FFFD}',
         };
 
-        ctx.io.write_char(ch);
-
+        io.write_char(ch);
         col += 1;
-        if col >= cols {
-            ctx.io.write_str("\r\n");
+        if col >= DEFAULT_ECMA_COLS {
+            io.write_str("\r\n");
             col = 0;
         }
     }
 
     if col != 0 {
-        ctx.io.write_str("\r\n");
+        io.write_str("\r\n");
     }
-    ctx.io.write_str("insane: done\r\n");
-    CommandAction::None
+    io.write_str("insane: done\r\n");
+}
+
+fn print_usage(io: &'static dyn ShellBackend2) {
+    print_shell_line(
+        io,
+        "etc: usage `etc go|go2|insane|ecma [demo|sanitize <text>|clear|help]`",
+    );
+}
+
+pub(crate) fn try_parse(
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+) -> ParseOutcome {
+    let Some(cmd) = args.next() else {
+        print_usage(io);
+        return ParseOutcome::Handled;
+    };
+
+    match cmd {
+        "go" => start_looping_chars(io, "go", &GO_CHARS),
+        "go2" => start_looping_chars(io, "go2", &GO_TWO_CHARS),
+        "insane" => cmd_insane(io),
+        "ecma" => {
+            let rest = args.collect::<alloc::vec::Vec<_>>().join(" ");
+            super::super::ecma48::demo_ecma48(io, rest.as_str(), DEFAULT_ECMA_COLS);
+        }
+        _ => print_usage(io),
+    }
+
+    ParseOutcome::Handled
 }
