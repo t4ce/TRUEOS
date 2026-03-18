@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use super::super::{NET_TCP_SHELL_BACKEND, ShellBackend2, UART1_COM1_BACKEND, print_shell_line};
+use super::tlb_helper::print_table;
 use crate::shell2::ecma48::{HIDE_CURSOR, SHOW_CURSOR};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -13,6 +14,13 @@ const INSANE_MAX_CP: u32 = 0x27FFF;
 const DEFAULT_ECMA_COLS: usize = 100;
 const BACKEND_UART_MASK: u8 = 1 << 0;
 const BACKEND_NET_MASK: u8 = 1 << 1;
+const ETC_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
+const ETC_MENU_ROWS: [[&str; 2]; 4] = [
+    ["go", "Loop spinner glyphs until interrupted"],
+    ["go2", "Loop alternate spinner glyphs until interrupted"],
+    ["insane", "Print a wide Unicode sweep"],
+    ["ecma", "Run the ECMA-48 terminal demo"],
+];
 
 static GO_ACTIVE_MASK: AtomicU8 = AtomicU8::new(0);
 
@@ -110,7 +118,7 @@ fn cmd_insane(io: &'static dyn ShellBackend2) {
 }
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "etc: usage `etc go|go2|insane|ecma`");
+    print_table(io, &ETC_MENU_HEADERS, &ETC_MENU_ROWS);
 }
 
 pub(crate) fn try_parse(

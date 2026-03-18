@@ -21,6 +21,11 @@ const FILEBENCH_PATH: &str = "bench-lorem-100mb.txt";
 const FILEBENCH_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
 const FILEBENCH_PATTERN: &[u8] = b"10101010";
 const PROGRESS_LOG_MS: u64 = 3000;
+const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
+const BENCH_MENU_ROWS: [[&str; 2]; 2] = [
+    ["net", "Run network throughput benchmark"],
+    ["file", "Run TRUEOSFS streaming write benchmark"],
+];
 
 #[derive(Clone)]
 struct BenchSessionState {
@@ -90,7 +95,7 @@ fn bps_from_progress(bytes: u64, elapsed_ms: u64) -> u64 {
 }
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "bench: usage `bench net|file`");
+    super::tlb_helper::print_table(io, &BENCH_MENU_HEADERS, &BENCH_MENU_ROWS);
 }
 
 pub(crate) fn try_parse(
