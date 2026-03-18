@@ -252,6 +252,44 @@ pub mod cabi {
         crate::shell2::uart1_com1::inject_bytes(data)
     }
 
+    fn copy_cabi_text(bytes: &[u8], out_ptr: *mut u8, out_cap: usize) -> isize {
+        if out_ptr.is_null() || out_cap == 0 {
+            return bytes.len() as isize;
+        }
+        if out_cap < bytes.len() {
+            return bytes.len() as isize;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
+        }
+        bytes.len() as isize
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_shell_command_registry_json(
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize {
+        let json = crate::shell2::command_registry_json();
+        copy_cabi_text(json.as_bytes(), out_ptr, out_cap)
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_shell_history_lines_all() -> usize {
+        crate::shell2::history_total_lines()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_shell_history_lines(
+        start_line: usize,
+        max_lines: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize {
+        let text = crate::shell2::history_lines_text(start_line, max_lines);
+        copy_cabi_text(text.as_bytes(), out_ptr, out_cap)
+    }
+
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_shell2_print_line(
         data_ptr: *const u8,
