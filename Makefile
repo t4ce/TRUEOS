@@ -6,6 +6,7 @@ ARTIFACT_FULL_ELF := $(ARTIFACT_DIR)/TRUEOS.full.elf
 ARTIFACT_RUNTIME_ELF := $(ARTIFACT_DIR)/TRUEOS.elf
 ARTIFACT_BUILD_INFO := $(ARTIFACT_DIR)/BUILD_INFO
 
+
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
@@ -26,7 +27,7 @@ QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 # QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
-GFX_MODE ?= virgl
+GFX_MODE ?= none
 INTEL_GPU_PCI ?= 0000:00:02.0
 # `x-no-mmap=on` avoids QEMU trying to mmap the passed-through IGD BAR into the
 # guest address space directly, which currently trips VFIO DMA-map warnings in our setup.
@@ -63,29 +64,24 @@ QEMU_ISO_FLAGS = $(QEMU_GFX_FLAGS) -enable-kvm -machine q35 -bios $(QEMU_UEFI_FI
 
 QEMU_ISO_FLAGS_DBG = $(QEMU_GFX_FLAGS) -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
-# Pass the physical NVMe controller through directly instead of wrapping a host
-# block node as an emulated QEMU NVMe device.
 QEMU_UPDATE_TARGET_PCI ?= 0000:08:00.0
-QEMU_UPDATE_TARGET_FLAGS = \
-	-device vfio-pci,host=$(QEMU_UPDATE_TARGET_PCI),bus=pcie.0,addr=0x6
+QEMU_UPDATE_TARGET_FLAGS = -device vfio-pci,host=$(QEMU_UPDATE_TARGET_PCI),bus=pcie.0,addr=0x6
 
 QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5 \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=2,id=usbleds \
-	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd 
+	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd \
+	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
+	-device usb-storage,drive=usbdisk,bus=xhci.0,port=4,id=usbms 
 
-#	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
-#	-device usb-storage,drive=usbdisk,bus=xhci.0,port=3,id=usbms \
-#	
-#	
-#  	-device usb-tablet,bus=xhci.0,port=4,id=usbtablet
+#  -device usb-tablet,bus=xhci.0,port=4,id=usbtablet
 # -device usb-host,vendorid=0x07cf,productid=0x6803,bus=xhci.0,port=0,id=usbpiano
 # -device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx
 # -device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
-QEMU_ISO_WITH_NVME = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS) $(QEMU_UPDATE_TARGET_FLAGS)
+QEMU_ISO_WITH_NVME = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS) 
 QEMU_ISO_DBG = $(QEMU_BIN) $(QEMU_ISO_FLAGS_DBG) $(QEMU_USB_FLAGS)
 
 IMG_SIZE ?= 1G
@@ -189,4 +185,4 @@ QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-
 QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
 
 run-installed: snipe iso-debug
-	@($(QEMU_BIN) $(QEMU_GFX_FLAGS) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_UPDATE_TARGET_FLAGS) & $(SERIAL_CONSOLE_CMD))
+	@($(QEMU_BIN) $(QEMU_GFX_FLAGS) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) & $(SERIAL_CONSOLE_CMD))

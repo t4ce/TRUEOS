@@ -7,8 +7,8 @@ use crate::shell2::{
 };
 
 pub(crate) fn submit_install(spawner: &Spawner, io: &'static dyn ShellBackend2) {
-    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
-        print_shell_line(io, "install: no TRUEOSFS root mounted");
+    let Some(disk) = super::select_default_disk_target() else {
+        print_shell_line(io, "install: no writable disk device found");
         return;
     };
     let Some(bootx64) = crate::limine::install_bootx64_bytes() else {
@@ -28,7 +28,7 @@ pub(crate) fn submit_install(spawner: &Spawner, io: &'static dyn ShellBackend2) 
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "install: starting on mounted root disk id={} ({})",
+            "install: starting on disk id={} ({})",
             info.id.raw(),
             info.id
         )
@@ -100,7 +100,7 @@ async fn install_command_task(
             return;
         }
 
-        log("install: installing current local payload onto mounted TRUEOSFS root disk");
+        log("install: installing current local payload onto selected disk");
         match crate::disc::install::install_bootable_uefi_gpt_with_log(
             disk,
             bootx64,

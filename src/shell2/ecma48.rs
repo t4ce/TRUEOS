@@ -713,6 +713,7 @@ pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, rest: &str, cols: usize
         io.write_str("  ecma48 demo\r\n");
         io.write_str("  ecma48 sanitize <text>\r\n");
         io.write_str("  ecma48 clear\r\n");
+        io.write_str("  ecma48 cursor\r\n");
         return;
     }
 
@@ -725,6 +726,7 @@ pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, rest: &str, cols: usize
     }
 
     if arg.eq_ignore_ascii_case("clear") {
+        io.write_str(CLEAR_SCREEN);
         io.write_str(CLEAR_TO_BOL);
         io.write_str(CLEAR_TO_EOL);
         io.write_str(CLEAR_DOWN);
@@ -736,8 +738,49 @@ pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, rest: &str, cols: usize
         return;
     }
 
+    if arg.eq_ignore_ascii_case("cursor") {
+        let _cursor = hide_cursor_guard(io);
+        io.write_fmt(format_args!(
+            "{}\r\n",
+            align_right("ecma48: cursor style sequences", cols)
+        ));
+        io.write_str(CURSOR_BLINKING_BLOCK);
+        io.write_fmt(format_args!(
+            "{}\r\n",
+            align_right("cursor: blinking block (DECSCUSR 1)", cols)
+        ));
+        io.write_str(CURSOR_STEADY_BLOCK);
+        io.write_fmt(format_args!(
+            "{}\r\n",
+            align_right("cursor: steady block (DECSCUSR 2)", cols)
+        ));
+        io.write_str(CURSOR_BLINKING_UNDERLINE);
+        io.write_fmt(format_args!(
+            "{}\r\n",
+            align_right("cursor: blinking underline (DECSCUSR 3)", cols)
+        ));
+        io.write_str(CURSOR_STEADY_UNDERLINE);
+        io.write_fmt(format_args!(
+            "{}\r\n",
+            align_right("cursor: steady underline (DECSCUSR 4)", cols)
+        ));
+        io.write_str(CURSOR_BLINKING_BAR);
+        io.write_fmt(format_args!(
+            "{}\r\n",
+            align_right("cursor: blinking bar (DECSCUSR 5)", cols)
+        ));
+        io.write_str(CURSOR_STEADY_BAR);
+        io.write_fmt(format_args!(
+            "{}\r\n",
+            align_right("cursor: steady bar (DECSCUSR 6)", cols)
+        ));
+        return;
+    }
+
     if !arg.is_empty() && !arg.eq_ignore_ascii_case("demo") {
-        io.write_str("ecma48: usage ecma48 demo | ecma48 sanitize <text> | ecma48 clear\r\n");
+        io.write_str(
+            "ecma48: usage ecma48 demo | ecma48 sanitize <text> | ecma48 clear | ecma48 cursor\r\n",
+        );
         return;
     }
 
