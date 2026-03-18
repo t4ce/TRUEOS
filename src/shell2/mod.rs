@@ -37,7 +37,10 @@ const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const DEFAULT_LINE_WIDTH: usize = 100;
 pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
-const MAX_RENDERED_TRANSCRIPT_LINES: usize = 20;
+const SECTION_STATUS_TEXT: &str = "t4ce is with you";
+const SECTION_STATUS_HOLD_MS: u64 = 1000;
+const SECTION_RAINBOW_FRAME_MS: u64 = 120;
+const SECTION_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 const RUNNING_GO2_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
 const RUNNING_ANIMATION_TICK_MS: u64 = 100;
 
@@ -168,12 +171,7 @@ impl<'a> AlignedWriter<'a> {
         self.move_to(SCROLL_TOP_ROW, 1);
         self.io.write_str("\x1b[J");
 
-        for (idx, entry) in transcript
-            .iter()
-            .rev()
-            .take(MAX_RENDERED_TRANSCRIPT_LINES)
-            .enumerate()
-        {
+        for (idx, entry) in transcript.iter().rev().enumerate() {
             let row = SCROLL_TOP_ROW + idx;
             self.transcript_line_at(row, entry.source, entry.text.as_str());
         }
@@ -592,6 +590,83 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
         let requested = submitted.strip_prefix('§').unwrap_or("");
         let _ = matrix::switch_active_slot(output_target_for_backend(io), requested);
     }
+}
+
+fn rainbow_status_text(phase: usize) -> AllocString {
+    let mut out = AllocString::new();
+    for (idx, ch) in SECTION_STATUS_TEXT.chars().enumerate() {
+        if ch == ' ' {
+            out.push(' ');
+            continue;
+        }
+
+        let glyph = alloc::format!("{}", ch);
+        let color = SECTION_RAINBOW_COLORS[(idx + phase) % SECTION_RAINBOW_COLORS.len()];
+        let styled = if ((idx + phase) & 1) == 0 {
+            alloc::format!(
+                "{}",
+                ecma48::style(glyph.as_str())
+                    .bold()
+                    .italic()
+                    .underline()
+                    .fg8(color)
+            )
+        } else {
+            alloc::format!(
+                "{}",
+                ecma48::style(glyph.as_str())
+                    .bold()
+                    .italic()
+                    .blink()
+                    .fg8(color)
+            )
+        };
+        out.push_str(styled.as_str());
+    }
+    out
+}
+
+fn show_status_row_message(out: &AlignedWriter<'_>, text: &str) {
+    out.move_to(STATUS_ROW, 1);
+    out.clear_line();
+    out.center_text(STATUS_ROW, text);
+    out.io.write_str(ecma48::RESET);
+}
+
+async fn run_plain_section_status(
+    out: &AlignedWriter<'_>,
+    output_mask: u8,
+    mode: ShellMode2,
+    ai_mode: AiPromptMode,
+    qjs_mode: QjsPromptMode,
+    surf_prefix: SurfPromptPrefix,
+    cmd_status_text: Option<&str>,
+    running_go2_phase: usize,
+) {
+    let white = alloc::format!(
+        "{}",
+        ecma48::style(SECTION_STATUS_TEXT)
+            .bold()
+            .fg((255, 255, 255))
+    );
+    show_status_row_message(out, white.as_str());
+    Timer::after(EmbassyDuration::from_millis(SECTION_STATUS_HOLD_MS)).await;
+
+    for phase in 0..SECTION_RAINBOW_COLORS.len() {
+        let rainbow = rainbow_status_text(phase);
+        show_status_row_message(out, rainbow.as_str());
+        Timer::after(EmbassyDuration::from_millis(SECTION_RAINBOW_FRAME_MS)).await;
+    }
+
+    out.mode_status(
+        output_mask,
+        mode,
+        ai_mode,
+        qjs_mode,
+        surf_prefix,
+        cmd_status_text,
+        running_go2_phase,
+    );
 }
 
 fn handle_submit(
@@ -1033,7 +1108,21 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let has_broadcast_sessions = session_indexes.iter().any(|idx| {
                         command_sessions[*idx].kind.accepts_broadcast_input()
                     });
-                    if submitted_raw.starts_with('§') && !submitted.is_empty() {
+                    if submitted == "§" {
+                        line.clear();
+                        out.prompt(output_mask);
+                        run_plain_section_status(
+                            &out,
+                            output_mask,
+                            mode,
+                            ai_mode,
+                            qjs_mode,
+                            surf_prefix,
+                            cmd_status_text.as_deref(),
+                            running_go2_phase,
+                        )
+                        .await;
+                    } else if submitted_raw.starts_with('§') && !submitted.is_empty() {
                         handle_matrix_operator(io, submitted);
                         mode = ShellMode2::Cmd;
                         out.banner(output_mask, mode, minute_text.as_str());
