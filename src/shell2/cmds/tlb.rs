@@ -1,3 +1,4 @@
+use super::tlb_helper::TlbTable;
 use crate::shell::CommandAction;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 use crate::shell::table::{Table, TableColumn};
@@ -217,39 +218,20 @@ fn write_pci_bar_dump(out: &mut String) {
 }
 
 pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
-    let term_width = (*ctx.term_cols).saturating_sub(2);
-    let cmd_width = 16;
-    let desc_width = term_width.saturating_sub(cmd_width).max(20);
-
-    let cols = [
-        TableColumn {
-            header: "Subcommand",
-            width: cmd_width,
-        },
-        TableColumn {
-            header: "Description",
-            width: desc_width,
-        },
-    ];
-
-    {
-        let t = Table::new(&cols);
-        t.print_header(ctx.io);
-
-        t.print_row(ctx.io, ["tlb.pci", "List PCI devices"]);
-        t.print_row(ctx.io, ["tlb.pciids", "Download pci.ids once"]);
-        t.print_row(ctx.io, ["tlb.pci.bar", "List PCI BAR windows"]);
-        t.print_row(ctx.io, ["tlb.mem", "List memory map"]);
-        t.print_row(ctx.io, ["tlb.cpu", "List CPU cores"]);
-        t.print_row(ctx.io, ["tlb.acpi", "List ACPI tables"]);
-        t.print_row(ctx.io, ["tlb.uefi", "List UEFI tables"]);
-        t.print_row(ctx.io, ["tlb.x2apic", "List x2APIC topology"]);
-        t.print_row(ctx.io, ["tlb.usb", "List USB controllers and ports"]);
-        t.print_row(
-            ctx.io,
-            ["tlb.dump", "Write all tables to trueos/pci/tlb.txt"],
-        );
-    }
+    let headers = ["Subcommand", "Description"];
+    let table = TlbTable::with_width(headers.as_slice(), (*ctx.term_cols).saturating_sub(2));
+    table.print_header(ctx.io);
+    table.print_row(ctx.io, &["tlb.pci", "List PCI devices"]);
+    table.print_row(ctx.io, &["tlb.pciids", "Download pci.ids once"]);
+    table.print_row(ctx.io, &["tlb.pci.bar", "List PCI BAR windows"]);
+    table.print_row(ctx.io, &["tlb.mem", "List memory map"]);
+    table.print_row(ctx.io, &["tlb.cpu", "List CPU cores"]);
+    table.print_row(ctx.io, &["tlb.acpi", "List ACPI tables"]);
+    table.print_row(ctx.io, &["tlb.uefi", "List UEFI tables"]);
+    table.print_row(ctx.io, &["tlb.x2apic", "List x2APIC topology"]);
+    table.print_row(ctx.io, &["tlb.usb", "List USB controllers and ports"]);
+    table.print_row(ctx.io, &["tlb.dump", "Write all tables to trueos/pci/tlb.txt"]);
+    table.print_footer(ctx.io);
 
     ctx.io.write_str("tlb: available subcommands\r\n");
     CommandAction::None

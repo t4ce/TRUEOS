@@ -19,11 +19,11 @@ pub(crate) fn try_parse(
         return ParseOutcome::Handled;
     }
 
-    let Some(root) = crate::v::fs::trueosfs::primary_root_handle() else {
-        print_shell_line(io, "format: no TRUEOSFS root mounted");
+    let Some(target) = super::select_default_disk_target() else {
+        print_shell_line(io, "format: no writable disk device found");
         return ParseOutcome::Handled;
     };
-    let info = root.info();
+    let info = target.info();
     let msg = alloc::format!(
         "format: target id={} ({}) label={:?}",
         info.id.raw(),
@@ -52,16 +52,16 @@ pub(crate) fn handle_session_input(
 }
 
 fn submit_format(spawner: &Spawner, io: &'static dyn ShellBackend2, target: &MatrixTarget) {
-    let Some(root) = crate::v::fs::trueosfs::primary_root_handle() else {
-        print_shell_line(io, "format: no TRUEOSFS root mounted");
+    let Some(disk) = super::select_default_disk_target() else {
+        print_shell_line(io, "format: no writable disk device found");
         return;
     };
 
-    let info = root.info();
+    let info = disk.info();
     print_matrix_target_line(
         target,
         alloc::format!(
-            "format: starting on mounted root id={} ({})",
+            "format: starting on disk id={} ({})",
             info.id.raw(),
             info.id
         )
@@ -70,7 +70,7 @@ fn submit_format(spawner: &Spawner, io: &'static dyn ShellBackend2, target: &Mat
 
     set_matrix_target_active(target, true);
     if spawner
-        .spawn(format_command_task(target.clone(), root))
+        .spawn(format_command_task(target.clone(), disk))
         .is_err()
     {
         set_matrix_target_active(target, false);
@@ -79,7 +79,7 @@ fn submit_format(spawner: &Spawner, io: &'static dyn ShellBackend2, target: &Mat
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn format_command_task(target: MatrixTarget, root: crate::disc::block::DeviceHandle) {
+async fn format_command_task(target: MatrixTarget, disk: crate::disc::block::DeviceHandle) {
     let task_target = target.clone();
     async move {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -88,7 +88,7 @@ async fn format_command_task(target: MatrixTarget, root: crate::disc::block::Dev
             print_matrix_target_line(&task_target, line);
         };
 
-        let info = root.info();
+        let info = disk.info();
         log(alloc::format!(
             "format: target id={} ({}) blocks={} bs={} writable={} label={:?}",
             info.id.raw(),
@@ -101,7 +101,7 @@ async fn format_command_task(target: MatrixTarget, root: crate::disc::block::Dev
         .as_str());
 
         log("format: mode=disk");
-        match crate::v::fs::trueosfs::format_blank_force_async(root).await {
+        match crate::v::fs::trueosfs::format_blank_force_async(disk).await {
             Ok(()) => log("format: ok"),
             Err(e) => log(alloc::format!("format: failed ({:?})", e).as_str()),
         }

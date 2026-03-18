@@ -28,31 +28,5 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     line: &str,
 ) -> ParseOutcome {
-    let submitted = line.trim();
-    if let Some(rest) = submitted.strip_prefix("acpi") {
-        let mut args = rest.split_whitespace();
-        return super::cmds::acpi::try_parse(io, &mut args);
-    }
-    if let Some(rest) = submitted.strip_prefix("etc") {
-        let mut args = rest.split_whitespace();
-        return super::cmds::etc::try_parse(io, &mut args);
-    }
-    if let Some(rest) = submitted.strip_prefix("format") {
-        let mut args = rest.split_whitespace();
-        return super::cmds::format::try_parse(io, &mut args);
-    }
-    if submitted.eq_ignore_ascii_case("install") {
-        super::cmds::install::submit_install(spawner, io);
-        return ParseOutcome::Handled;
-    }
-    if submitted.eq_ignore_ascii_case("update") {
-        super::cmds::update::submit_update(spawner, io);
-        return ParseOutcome::Handled;
-    }
-    if let Some(rest) = submitted.strip_prefix("set") {
-        let mut args = rest.split_whitespace();
-        return super::cmds::set::try_parse(io, &mut args);
-    }
-
-    ParseOutcome::NotCommand
+    super::shell2_cmd_registry::try_dispatch(spawner, io, line.trim())
 }

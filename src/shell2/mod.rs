@@ -536,6 +536,15 @@ pub(crate) fn command_registry_json() -> AllocString {
     cmds::command_registry_json()
 }
 
+pub fn register_command(
+    name: &str,
+    mode: &str,
+    color: Option<(u8, u8, u8)>,
+    handler: shell2_cmd_registry::Shell2CmdHandler,
+) -> Result<(), shell2_cmd_registry::RegisterCommandError> {
+    shell2_cmd_registry::register_command(name, mode, color, handler)
+}
+
 fn command_names_status_text() -> AllocString {
     shell2_cmd_registry::command_names_status_text()
 }
