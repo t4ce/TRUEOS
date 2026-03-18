@@ -43,8 +43,8 @@ static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
 static LOGGED_WORKER_API_USE: AtomicBool = AtomicBool::new(false);
 
-// Slot 1 is reserved by the kernel as the critical AP for UI2/cursor/HID work.
-const RESERVED_CRITICAL_SLOT: u32 = 1;
+// Slots 0 and 1 are reserved by the kernel as critical lanes (BSP + UI2/cursor/HID AP).
+const FIRST_DISPOSABLE_SLOT: u32 = 2;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum SpawnPolicy {
@@ -132,8 +132,8 @@ fn pick_from_pool(
 fn pick_spawner_with_policy(
     policy: SpawnPolicy,
 ) -> Option<(u32, u8, embassy_executor::SendSpawner)> {
-    // Slot 1 remains reserved for the latency-critical UI2/cursor/HID lane and
-    // is excluded from QJS scheduling. All other registered cores are eligible.
+    // Slots 0 and 1 remain reserved for critical kernel work and are excluded
+    // from QJS scheduling. Only disposable worker lanes are eligible.
     let map = CORE_SPAWNERS.lock();
     if map.is_empty() {
         return None;
@@ -144,7 +144,7 @@ fn pick_spawner_with_policy(
     let mut eligible: Vec<(u32, u8, embassy_executor::SendSpawner)> = Vec::new();
     for (slot, sp) in map.iter() {
         let kind = kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN);
-        if *slot != RESERVED_CRITICAL_SLOT {
+        if *slot >= FIRST_DISPOSABLE_SLOT {
             eligible.push((*slot, kind, sp.clone()));
         }
     }
