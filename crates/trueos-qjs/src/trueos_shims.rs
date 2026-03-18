@@ -25,7 +25,7 @@ pub use trueos_v::vcabi::{
 };
 pub use trueos_v::vgfx::capture_screenshot_data_url as gfx_capture_screenshot_data_url;
 pub use trueos_v::vshell::{
-    shell1_command_registry_json, shell1_submit_input, shell2_print_line,
+    shell_command_registry_json, shell1_submit_input, shell2_print_line,
     shell2_print_targeted_line, shell_qjs_init, shell_qjs_read, shell_qjs_read_byte,
     shell_qjs_write, shell_qjs_write_byte, uart1_shell_write,
 };
