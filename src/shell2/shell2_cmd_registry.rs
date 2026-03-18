@@ -8,6 +8,11 @@ struct Shell2CmdEntry {
 
 const SHELL2_CMD_REGISTRY: &[Shell2CmdEntry] = &[
     Shell2CmdEntry {
+        name: "acpi",
+        mode: "cmd",
+        color: None,
+    },
+    Shell2CmdEntry {
         name: "bench",
         mode: "cmd",
         color: None,
