@@ -46,6 +46,11 @@ fn dispatch_format(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> P
     super::cmds::format::try_parse(io, &mut args)
 }
 
+fn dispatch_hv(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    super::cmds::hv::try_parse(spawner, io, &mut args)
+}
+
 fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     if rest.split_whitespace().next().is_some() {
         print_shell_line(io, "install: usage `install`");
@@ -59,6 +64,11 @@ fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &st
 fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::set::try_parse(io, &mut args)
+}
+
+fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    super::cmds::smp::try_parse(io, &mut args)
 }
 
 fn dispatch_update(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -83,7 +93,13 @@ fn dispatch_not_wired(
 }
 
 fn dispatch_bench(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    dispatch_not_wired("bench", spawner, io, rest)
+    let mut args = rest.split_whitespace();
+    super::cmds::bench::try_parse(spawner, io, &mut args)
+}
+
+fn dispatch_file(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    super::cmds::file::try_parse(io, &mut args)
 }
 
 fn dispatch_files(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -97,7 +113,47 @@ fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
 fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let _ = spawner;
     let mut args = rest.split_whitespace();
-    super::cmds::tlb_shell2::try_parse(io, &mut args)
+    super::cmds::tlb::try_parse(io, &mut args)
+}
+
+fn dispatch_tlb_pci(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::tlb::try_parse_alias(io, "pci", rest)
+}
+
+fn dispatch_tlb_pciids(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::tlb::try_parse_alias(io, "pciids", rest)
+}
+
+fn dispatch_tlb_pci_bar(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::tlb::try_parse_alias(io, "pci.bar", rest)
+}
+
+fn dispatch_tlb_mem(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::tlb::try_parse_alias(io, "mem", rest)
+}
+
+fn dispatch_tlb_cpu(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::tlb::try_parse_alias(io, "cpu", rest)
+}
+
+fn dispatch_tlb_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::tlb::try_parse_alias(io, "acpi", rest)
+}
+
+fn dispatch_tlb_uefi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::tlb::try_parse_alias(io, "uefi", rest)
+}
+
+fn dispatch_tlb_x2apic(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::tlb::try_parse_alias(io, "x2apic", rest)
+}
+
+fn dispatch_tlb_usb(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::tlb::try_parse_alias(io, "usb", rest)
+}
+
+fn dispatch_tlb_dump(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::tlb::try_parse_alias(io, "dump", rest)
 }
 
 fn dispatch_txt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -124,6 +180,12 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_etc,
     },
     BuiltinShell2CmdEntry {
+        name: "file",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_file,
+    },
+    BuiltinShell2CmdEntry {
         name: "files",
         mode: "cmd",
         color: None,
@@ -134,6 +196,12 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         mode: "cmd",
         color: None,
         handler: dispatch_format,
+    },
+    BuiltinShell2CmdEntry {
+        name: "hv",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_hv,
     },
     BuiltinShell2CmdEntry {
         name: "install",
@@ -154,6 +222,66 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_tlb,
     },
     BuiltinShell2CmdEntry {
+        name: "tlb.pci",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tlb_pci,
+    },
+    BuiltinShell2CmdEntry {
+        name: "tlb.pciids",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tlb_pciids,
+    },
+    BuiltinShell2CmdEntry {
+        name: "tlb.pci.bar",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tlb_pci_bar,
+    },
+    BuiltinShell2CmdEntry {
+        name: "tlb.mem",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tlb_mem,
+    },
+    BuiltinShell2CmdEntry {
+        name: "tlb.cpu",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tlb_cpu,
+    },
+    BuiltinShell2CmdEntry {
+        name: "tlb.acpi",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tlb_acpi,
+    },
+    BuiltinShell2CmdEntry {
+        name: "tlb.uefi",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tlb_uefi,
+    },
+    BuiltinShell2CmdEntry {
+        name: "tlb.x2apic",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tlb_x2apic,
+    },
+    BuiltinShell2CmdEntry {
+        name: "tlb.usb",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tlb_usb,
+    },
+    BuiltinShell2CmdEntry {
+        name: "tlb.dump",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tlb_dump,
+    },
+    BuiltinShell2CmdEntry {
         name: "txt",
         mode: "cmd",
         color: None,
@@ -170,6 +298,12 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         mode: "cmd",
         color: None,
         handler: dispatch_set,
+    },
+    BuiltinShell2CmdEntry {
+        name: "smp",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_smp,
     },
 ];
 

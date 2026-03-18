@@ -76,6 +76,7 @@ struct CommandSession {
 pub(crate) enum CommandSessionInputResult {
     CompleteIdle,
     CompleteRunning,
+    KeepRunning,
 }
 
 #[derive(Clone)]
@@ -516,12 +517,11 @@ fn matrix_target_for_slot(output_mask: u8, slot_id: &matrix::MatrixSlotId) -> Ma
 }
 
 pub(crate) fn set_matrix_target_active(target: &MatrixTarget, active: bool) {
-    let activity = if active {
-        matrix::MatrixSlotActivity::Running
+    if active {
+        matrix::begin_slot_running(&target.slot_id);
     } else {
-        matrix::MatrixSlotActivity::Idle
-    };
-    matrix::set_slot_activity(&target.slot_id, activity);
+        matrix::end_slot_running(&target.slot_id);
+    }
 }
 
 pub(crate) fn history_total_lines() -> usize {
@@ -738,6 +738,17 @@ fn find_command_session_index(
         .position(|session| session.slot_id == *slot_id)
 }
 
+fn find_command_session_indexes(
+    sessions: &[CommandSession],
+    slot_id: &matrix::MatrixSlotId,
+) -> alloc::vec::Vec<usize> {
+    sessions
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, session)| (session.slot_id == *slot_id).then_some(idx))
+        .collect()
+}
+
 fn handle_command_session_input(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -747,6 +758,9 @@ fn handle_command_session_input(
 ) -> CommandSessionInputResult {
     let target = matrix_target_for_slot(output_mask, &session.slot_id);
     match session.kind {
+        shell2_cmd::CommandSessionKind::BenchRunning(session_id) => {
+            crate::shell2::cmds::bench::handle_session_input(session_id, &target, submitted)
+        }
         shell2_cmd::CommandSessionKind::FormatSure => {
             crate::shell2::cmds::format::handle_session_input(spawner, io, &target, submitted)
         }
@@ -861,6 +875,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut text_decode = ecma48::InputDecodeState::None;
 
     loop {
+        command_sessions.retain(|session| match session.kind {
+            shell2_cmd::CommandSessionKind::BenchRunning(session_id) => {
+                crate::shell2::cmds::bench::session_alive(session_id)
+            }
+            _ => true,
+        });
+
         let matrix_revision = matrix::revision();
         if matrix_revision != last_matrix_revision {
             last_matrix_revision = matrix_revision;
@@ -1091,8 +1112,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
                     let active_slot = matrix::active_slot_id(output_mask);
-                    let session_idx =
-                        find_command_session_index(command_sessions.as_slice(), &active_slot);
+                    let session_indexes =
+                        find_command_session_indexes(command_sessions.as_slice(), &active_slot);
+                    let has_broadcast_sessions = session_indexes.iter().any(|idx| {
+                        command_sessions[*idx].kind.accepts_broadcast_input()
+                    });
                     if submitted_raw.starts_with('§') && !submitted.is_empty() {
                         handle_matrix_operator(io, submitted);
                         mode = ShellMode2::Cmd;
@@ -1108,7 +1132,50 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         );
                         transcript = current_transcript_for_task(io);
                         out.render_transcript(&transcript);
-                    } else if let Some(session_idx) = session_idx {
+                    } else if has_broadcast_sessions {
+                        if !submitted.is_empty() {
+                            record_user_line_for_active_slot(io, submitted);
+                            transcript = current_transcript_for_task(io);
+                            out.render_transcript(&transcript);
+                        }
+                        let mut remove_indexes: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+                        for session_idx in session_indexes {
+                            if !command_sessions[session_idx].kind.accepts_broadcast_input() {
+                                continue;
+                            }
+                            match handle_command_session_input(
+                                &spawner,
+                                io,
+                                &command_sessions[session_idx],
+                                submitted,
+                                output_mask,
+                            ) {
+                                CommandSessionInputResult::CompleteIdle => {
+                                    if command_sessions[session_idx].kind.shows_session_activity() {
+                                        matrix::set_slot_activity(
+                                            &command_sessions[session_idx].slot_id,
+                                            matrix::MatrixSlotActivity::Idle,
+                                        );
+                                    }
+                                    remove_indexes.push(session_idx);
+                                }
+                                CommandSessionInputResult::CompleteRunning => {
+                                    remove_indexes.push(session_idx);
+                                }
+                                CommandSessionInputResult::KeepRunning => {}
+                            }
+                        }
+                        remove_indexes.sort_unstable();
+                        remove_indexes.dedup();
+                        for session_idx in remove_indexes.into_iter().rev() {
+                            let _ = command_sessions.remove(session_idx);
+                        }
+                        if drain_pending_transcript(io, &mut transcript) {
+                            out.render_transcript(&transcript);
+                        }
+                    } else if let Some(session_idx) =
+                        find_command_session_index(command_sessions.as_slice(), &active_slot)
+                    {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
                             transcript = current_transcript_for_task(io);
@@ -1131,6 +1198,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             CommandSessionInputResult::CompleteRunning => {
                                 let _ = command_sessions.remove(session_idx);
                             }
+                            CommandSessionInputResult::KeepRunning => {}
                         }
                         if drain_pending_transcript(io, &mut transcript) {
                             out.render_transcript(&transcript);
@@ -1181,10 +1249,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 }
                                 HandleSubmitResult::StartSession(kind) => {
                                     let slot_id = matrix::active_slot_id(output_mask);
-                                    matrix::set_slot_activity(
-                                        &slot_id,
-                                        matrix::MatrixSlotActivity::Session,
-                                    );
+                                    if kind.shows_session_activity() {
+                                        matrix::set_slot_activity(
+                                            &slot_id,
+                                            matrix::MatrixSlotActivity::Session,
+                                        );
+                                    }
                                     command_sessions.push(CommandSession { slot_id, kind });
                                 }
                                 HandleSubmitResult::None => {}

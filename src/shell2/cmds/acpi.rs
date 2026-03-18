@@ -29,7 +29,6 @@ fn parse_acpi_state(raw: &str) -> Option<AcpiAction> {
 
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "acpi: usage `acpi reboot|S1|S2|S3|S4|S5`");
-    print_shell_line(io, "acpi: reboot=S0 reset, S5=shutdown");
 }
 
 pub(crate) fn try_parse(
