@@ -107,7 +107,9 @@ fn dispatch_files(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str)
 }
 
 fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    dispatch_not_wired("net", spawner, io, rest)
+    let _ = spawner;
+    let mut args = rest.split_whitespace();
+    super::cmds::net::try_parse(io, &mut args)
 }
 
 fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
