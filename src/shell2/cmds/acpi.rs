@@ -1,3 +1,7 @@
+use core::str::SplitWhitespace;
+
+use super::super::{ShellBackend2, print_shell_line};
+use crate::shell2::shell2_cmd::ParseOutcome;
 
 enum AcpiAction {
     Reset,
@@ -23,50 +27,51 @@ fn parse_acpi_state(raw: &str) -> Option<AcpiAction> {
     None
 }
 
-pub(crate) fn cmd_acpi(
-    ctx: &mut ShellCommandCtx<'_>,
-    args: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    let print_usage = |io: &dyn ShellIo| {
-        let cols = [
-            TableColumn {
-                header: "State",
-                width: 8,
-            },
-            TableColumn {
-                header: "Description",
-                width: 32,
-            },
-        ];
-        let t = Table::new(&cols);
-        t.print_header(io);
-        t.print_row(io, ["reboot", "ACPI reset"]);
-        t.print_row(io, ["S0", "Running"]);
-        t.print_row(io, ["S1", "Light sleep"]);
-        t.print_row(io, ["S2", "Deeper sleep (rare)"]);
-        t.print_row(io, ["S3", "Suspend to RAM"]);
-        t.print_row(io, ["S4", "Hibernate (suspend to disk)"]);
-        t.print_row(io, ["S5", "Soft off (shutdown)"]);
-    };
+fn print_usage(io: &'static dyn ShellBackend2) {
+    print_shell_line(io, "acpi: usage `acpi reboot|S1|S2|S3|S4|S5`");
+    print_shell_line(io, "acpi: reboot=S0 reset, S5=shutdown");
+}
 
-    let Some(state) = args.and_then(|a| a.get_str(0)) else {
-        print_usage(ctx.io);
-        return CommandAction::None;
+pub(crate) fn try_parse(
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+) -> ParseOutcome {
+    let Some(state) = args.next() else {
+        print_usage(io);
+        return ParseOutcome::Handled;
     };
+    if args.next().is_some() {
+        print_usage(io);
+        return ParseOutcome::Handled;
+    }
 
     let Some(action) = parse_acpi_state(state) else {
-        print_usage(ctx.io);
-        return CommandAction::None;
+        print_usage(io);
+        return ParseOutcome::Handled;
     };
 
     match action {
-        AcpiAction::Reset => CommandAction::Pending(crate::shell::PendingAction::AcpiReset),
+        AcpiAction::Reset => match crate::efi::acpi::facp::reset_system() {
+            Ok(()) => {}
+            Err(err) => {
+                let msg = alloc::format!("acpi: reset failed ({:?})", err);
+                print_shell_line(io, msg.as_str());
+            }
+        },
         AcpiAction::State(level) => {
             if level == 0 {
-                ctx.io.write_str("acpi: already in S0 (running)\r\n");
-                return CommandAction::None;
+                print_shell_line(io, "acpi: already in S0 (running)");
+                return ParseOutcome::Handled;
             }
-            CommandAction::Pending(crate::shell::PendingAction::AcpiState(level))
+            match crate::efi::acpi::facp::enter_named_sleep_state(level) {
+                Ok(()) => {}
+                Err(err) => {
+                    let msg = alloc::format!("acpi: S{} failed ({:?})", level, err);
+                    print_shell_line(io, msg.as_str());
+                }
+            }
         }
     }
+
+    ParseOutcome::Handled
 }

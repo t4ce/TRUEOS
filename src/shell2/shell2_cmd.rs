@@ -23,6 +23,14 @@ pub(crate) fn try_parse(
     line: &str,
 ) -> ParseOutcome {
     let submitted = line.trim();
+    if let Some(rest) = submitted.strip_prefix("acpi") {
+        let mut args = rest.split_whitespace();
+        return super::cmds::acpi::try_parse(io, &mut args);
+    }
+    if submitted.eq_ignore_ascii_case("install") {
+        super::cmds::install::submit_install(spawner, io);
+        return ParseOutcome::Handled;
+    }
     if submitted.eq_ignore_ascii_case("update") {
         super::cmds::update::submit_update(spawner, io);
         return ParseOutcome::Handled;
