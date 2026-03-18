@@ -59,14 +59,15 @@ else
 $(error Unsupported GFX_MODE '$(GFX_MODE)' (expected virgl, intel, or none))
 endif
 
-QEMU_ISO_FLAGS = $(QEMU_GFX_FLAGS) -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+QEMU_ISO_FLAGS = $(QEMU_GFX_FLAGS) -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -boot order=d -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_ISO_FLAGS_DBG = $(QEMU_GFX_FLAGS) -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
-QEMU_UPDATE_TARGET_PATH ?= /dev/disk/by-partuuid/2e4e446c-bc9b-4e6c-a657-9ff9a0edccca
+# Pass the physical NVMe controller through directly instead of wrapping a host
+# block node as an emulated QEMU NVMe device.
+QEMU_UPDATE_TARGET_PCI ?= 0000:08:00.0
 QEMU_UPDATE_TARGET_FLAGS = \
-	-drive file=$(QEMU_UPDATE_TARGET_PATH),if=none,format=raw,id=nvme0 \
-	-device nvme,drive=nvme0,serial=t4ce,bus=pcie.0,addr=0x6
+	-device vfio-pci,host=$(QEMU_UPDATE_TARGET_PCI),bus=pcie.0,addr=0x6
 
 QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5 \
@@ -175,9 +176,10 @@ dbg-vscode: snipe iso-debug
 		echo "GDB stub ready on 127.0.0.1:1234"; \
 		wait $$qemu_pid
 
-# Default quick boot (used by CI-style smoke checks and repo instructions).
+# Default quick boot: boot the fresh ISO first while the handed-in NVMe is
+# attached for the kernel to probe and mount.
 run: snipe iso-debug
-	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
+	@($(QEMU_ISO_WITH_NVME) & $(SERIAL_CONSOLE_CMD))
 
 run-with-nvme: snipe iso-debug
 	@($(QEMU_ISO_WITH_NVME) & $(SERIAL_CONSOLE_CMD))

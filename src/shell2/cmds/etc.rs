@@ -1,23 +1,75 @@
 use core::str::SplitWhitespace;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use super::super::{ShellBackend2, print_shell_line};
+use super::super::{NET_TCP_SHELL_BACKEND, ShellBackend2, UART1_COM1_BACKEND, print_shell_line};
+use crate::shell2::ecma48::{HIDE_CURSOR, SHOW_CURSOR};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 const GO_TWO_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
-const INSANE_MAX_CP: u32 = 0x87FFF;
+const INSANE_MAX_CP: u32 = 0x27FFF;
 const DEFAULT_ECMA_COLS: usize = 100;
+const BACKEND_UART_MASK: u8 = 1 << 0;
+const BACKEND_NET_MASK: u8 = 1 << 1;
 
-fn start_looping_chars(io: &'static dyn ShellBackend2, label: &str, chars: &'static [char]) {
+static GO_ACTIVE_MASK: AtomicU8 = AtomicU8::new(0);
+
+fn same_backend(io: &'static dyn ShellBackend2, target: &'static dyn ShellBackend2) -> bool {
+    (io as *const dyn ShellBackend2 as *const ())
+        == (target as *const dyn ShellBackend2 as *const ())
+}
+
+fn backend_mask(io: &'static dyn ShellBackend2) -> u8 {
+    let uart_backend: &'static dyn ShellBackend2 = &UART1_COM1_BACKEND;
+    if same_backend(io, uart_backend) {
+        return BACKEND_UART_MASK;
+    }
+
+    let net_backend: &'static dyn ShellBackend2 = &NET_TCP_SHELL_BACKEND;
+    if same_backend(io, net_backend) {
+        return BACKEND_NET_MASK;
+    }
+
+    0
+}
+
+pub(crate) fn handle_input_byte(io: &'static dyn ShellBackend2) -> bool {
+    let mask = backend_mask(io);
+    if mask == 0 {
+        return false;
+    }
+    if GO_ACTIVE_MASK.fetch_and(!mask, Ordering::AcqRel) & mask == 0 {
+        return false;
+    }
+    true
+}
+
+fn start_looping_chars(
+    io: &'static dyn ShellBackend2,
+    label: &'static str,
+    chars: &'static [char],
+) {
+    let mask = backend_mask(io);
     let started = alloc::format!("etc: {} started (50ms loop)", label);
     print_shell_line(io, started.as_str());
+    io.write_str(HIDE_CURSOR);
+    if mask != 0 {
+        GO_ACTIVE_MASK.fetch_or(mask, Ordering::Release);
+    }
 
     crate::wait::spawn_local_detached(async move {
         let mut idx = 0usize;
         loop {
+            if mask != 0 && (GO_ACTIVE_MASK.load(Ordering::Acquire) & mask) == 0 {
+                io.write_str(SHOW_CURSOR);
+                let stopped = alloc::format!("etc: {} stopped", label);
+                print_shell_line(io, stopped.as_str());
+                break;
+            }
             io.write_char(chars[idx]);
+            io.write_str("\x08");
             idx = (idx + 1) % chars.len();
             Timer::after(EmbassyDuration::from_millis(50)).await;
         }

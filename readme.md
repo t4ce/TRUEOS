@@ -306,3 +306,68 @@ After reboot, verify:
 
 lspci -nnk -s 00:02.0
 ls -l /dev/vfio
+
+
+
+
+# whipe nvme
+
+
+Do this in this order:
+
+Give the SSD back to the host NVMe driver
+echo 0000:08:00.0 | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver/unbind
+echo nvme | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver_override
+echo 0000:08:00.0 | sudo tee /sys/bus/pci/drivers_probe
+Confirm the block device is back
+lspci -nnk -s 08:00.0
+ls -l /dev/nvme*
+Wipe it
+Use this:
+
+sudo wipefs -a /dev/nvme2n1
+sudo sgdisk --zap-all /dev/nvme2n1
+sudo dd if=/dev/zero of=/dev/nvme2n1 bs=1M count=64 status=progress
+sudo dd if=/dev/zero of=/dev/nvme2n1 bs=1M seek=$(( $(sudo blockdev --getsz /dev/nvme2n1) / 2048 - 64 )) count=64 status=progress
+sudo partprobe /dev/nvme2n1 || true
+sudo wipefs /dev/nvme2n1
+sudo sgdisk -p /dev/nvme2n1
+What you want after that:
+
+wipefs
+shows no signatures
+
+sgdisk -p
+shows no valid GPT / empty disk
+
+Then bind it back to VFIO:
+
+echo 0000:08:00.0 | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver/unbind
+echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver_override
+echo 0000:08:00.0 | sudo tee /sys/bus/pci/drivers_probe
+That is the first time in this thread we are actually operating on the real intended disk.
+Do this exact reset:
+
+echo 0000:08:00.0 | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver/unbind
+echo nvme | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver_override
+echo 0000:08:00.0 | sudo tee /sys/bus/pci/drivers_probe
+sudo udevadm trigger --subsystem-match=block --action=add
+sudo udevadm settle
+ls -l /dev/nvme2*
+If /dev/nvme2n1 is still missing, force a clean re-enumeration:
+
+echo 0000:08:00.0 | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver/unbind
+echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver_override
+echo 0000:08:00.0 | sudo tee /sys/bus/pci/drivers_probe
+echo 0000:08:00.0 | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver/unbind
+echo nvme | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver_override
+echo 0000:08:00.0 | sudo tee /sys/bus/pci/drivers_probe
+sudo udevadm trigger --subsystem-match=block --action=add
+sudo udevadm settle
+ls -l /dev/nvme2*
+Only when /dev/nvme2n1 actually exists, wipe it:
+
+sudo wipefs -a /dev/nvme2n1
+sudo sgdisk --zap-all /dev/nvme2n1
+sudo blkdiscard -f /dev/nvme2n1
+If you want, paste just the output of ls -l /dev/nvme2* after that reset.

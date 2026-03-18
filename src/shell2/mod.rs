@@ -4,7 +4,7 @@ use core::cell::Cell;
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU8, Ordering};
 use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
 pub(crate) mod backends;
 mod cmds;
@@ -39,6 +39,8 @@ pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
 const MAX_TRANSCRIPT_HISTORY: usize = 256;
 const MAX_RENDERED_TRANSCRIPT_LINES: usize = 20;
+const RUNNING_GO2_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
+const RUNNING_ANIMATION_TICK_MS: u64 = 100;
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 static UART1_PENDING_TRANSCRIPT: spin::Mutex<VecDeque<QueuedTranscriptEntry>> =
@@ -216,10 +218,11 @@ impl<'a> AlignedWriter<'a> {
         qjs_mode: QjsPromptMode,
         surf_prefix: SurfPromptPrefix,
         cmd_status_text: Option<&str>,
+        running_go2_phase: usize,
     ) {
         self.move_to(STATUS_ROW, 1);
         self.clear_line();
-        let slot_text = self.slot_status_text(output_mask);
+        let slot_text = self.slot_status_text(output_mask, running_go2_phase);
         if !slot_text.is_empty() {
             self.left_text(STATUS_ROW, slot_text.as_str());
         }
@@ -354,7 +357,7 @@ impl<'a> AlignedWriter<'a> {
         }
     }
 
-    fn slot_status_text(&self, output_mask: u8) -> AllocString {
+    fn slot_status_text(&self, output_mask: u8, running_go2_phase: usize) -> AllocString {
         let slots = matrix::slot_views(output_mask);
         let mut out = AllocString::new();
         for (idx, slot) in slots.iter().enumerate() {
@@ -365,7 +368,7 @@ impl<'a> AlignedWriter<'a> {
             let mut label = AllocString::from("§");
             label.push_str(slot.id.as_str());
             if slot.activity == matrix::MatrixSlotActivity::Running {
-                label.push('*');
+                label.push(RUNNING_GO2_CHARS[running_go2_phase % RUNNING_GO2_CHARS.len()]);
             }
 
             if slot.activity == matrix::MatrixSlotActivity::Session {
@@ -378,12 +381,6 @@ impl<'a> AlignedWriter<'a> {
                 let styled = alloc::format!(
                     "{}",
                     ecma48::style(label.as_str()).bold().fg(STATUS_SELECTED_RGB)
-                );
-                out.push_str(styled.as_str());
-            } else if slot.activity == matrix::MatrixSlotActivity::Running {
-                let styled = alloc::format!(
-                    "{}",
-                    ecma48::style(label.as_str()).bold().fg(SYSTEM_TEXT_RGB)
                 );
                 out.push_str(styled.as_str());
             } else {
@@ -765,6 +762,7 @@ fn apply_mode_toggle(
     qjs_mode: QjsPromptMode,
     surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
+    running_go2_phase: usize,
     line: &HString<MAX_LINE>,
     minute_text: &str,
 ) {
@@ -776,11 +774,35 @@ fn apply_mode_toggle(
         qjs_mode,
         surf_prefix,
         cmd_status_text,
+        running_go2_phase,
     );
     out.prompt(output_mask);
     for ch in line.chars() {
         out.user_char(ch);
     }
+}
+
+fn redraw_status_preserving_cursor(
+    out: &AlignedWriter<'_>,
+    output_mask: u8,
+    mode: ShellMode2,
+    ai_mode: AiPromptMode,
+    qjs_mode: QjsPromptMode,
+    surf_prefix: SurfPromptPrefix,
+    cmd_status_text: Option<&str>,
+    running_go2_phase: usize,
+) {
+    out.io.write_str(ecma48::SAVE_CURSOR);
+    out.mode_status(
+        output_mask,
+        mode,
+        ai_mode,
+        qjs_mode,
+        surf_prefix,
+        cmd_status_text,
+        running_go2_phase,
+    );
+    out.io.write_str(ecma48::RESTORE_CURSOR);
 }
 
 fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: char) {
@@ -806,6 +828,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut qjs_mode = QjsPromptMode::Repl;
     let mut cmd_status_text: Option<AllocString> = None;
     let mut command_sessions: alloc::vec::Vec<CommandSession> = alloc::vec::Vec::new();
+    let mut running_go2_phase = 0usize;
+    let mut last_running_animation_tick = Instant::now();
     out.mode_status(
         output_mask,
         mode,
@@ -813,6 +837,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         qjs_mode,
         surf_prefix,
         cmd_status_text.as_deref(),
+        running_go2_phase,
     );
 
     out.set_scroll_region(SCROLL_TOP_ROW);
@@ -830,22 +855,44 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         let matrix_revision = matrix::revision();
         if matrix_revision != last_matrix_revision {
             last_matrix_revision = matrix_revision;
-            out.mode_status(
+            redraw_status_preserving_cursor(
+                &out,
                 output_mask,
                 mode,
                 ai_mode,
                 qjs_mode,
                 surf_prefix,
                 cmd_status_text.as_deref(),
+                running_go2_phase,
             );
-            out.prompt(output_mask);
-            for ch in line.chars() {
-                out.user_char(ch);
-            }
         }
 
         if drain_pending_transcript(io, &mut transcript) {
             out.render_transcript(&transcript);
+        }
+
+        if matrix::has_running_slots() {
+            let now = Instant::now();
+            if now
+                .checked_duration_since(last_running_animation_tick)
+                .map(|d| d >= EmbassyDuration::from_millis(RUNNING_ANIMATION_TICK_MS))
+                .unwrap_or(false)
+            {
+                last_running_animation_tick = now;
+                running_go2_phase = (running_go2_phase + 1) % RUNNING_GO2_CHARS.len();
+                redraw_status_preserving_cursor(
+                    &out,
+                    output_mask,
+                    mode,
+                    ai_mode,
+                    qjs_mode,
+                    surf_prefix,
+                    cmd_status_text.as_deref(),
+                    running_go2_phase,
+                );
+            }
+        } else {
+            last_running_animation_tick = Instant::now();
         }
 
         let (minute_bucket, minute_text) = clock_bucket_and_text();
@@ -859,6 +906,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 qjs_mode,
                 surf_prefix,
                 cmd_status_text.as_deref(),
+                running_go2_phase,
             );
             out.render_transcript(&transcript);
             out.prompt(output_mask);
@@ -909,6 +957,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     qjs_mode,
                                     surf_prefix,
                                     cmd_status_text.as_deref(),
+                                    running_go2_phase,
                                     &line,
                                     minute_text.as_str(),
                                 );
@@ -939,6 +988,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             qjs_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
+                            running_go2_phase,
                             &line,
                             minute_text.as_str(),
                         );
@@ -966,6 +1016,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             qjs_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
+                            running_go2_phase,
                         );
                         out.prompt(output_mask);
                         for ch in line.chars() {
@@ -982,6 +1033,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             qjs_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
+                            running_go2_phase,
                         );
                         out.prompt(output_mask);
                         for ch in line.chars() {
@@ -998,6 +1050,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             qjs_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
+                            running_go2_phase,
                         );
                         out.prompt(output_mask);
                         for ch in line.chars() {
@@ -1014,6 +1067,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 qjs_mode,
                                 surf_prefix,
                                 cmd_status_text.as_deref(),
+                                running_go2_phase,
                             );
                             out.prompt(output_mask);
                         }
@@ -1041,6 +1095,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             qjs_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
+                            running_go2_phase,
                         );
                         transcript = current_transcript_for_task(io);
                         out.render_transcript(&transcript);
@@ -1083,6 +1138,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 qjs_mode,
                                 surf_prefix,
                                 cmd_status_text.as_deref(),
+                                running_go2_phase,
                             );
                             transcript = current_transcript_for_task(io);
                             out.render_transcript(&transcript);
@@ -1109,6 +1165,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                         qjs_mode,
                                         surf_prefix,
                                         cmd_status_text.as_deref(),
+                                        running_go2_phase,
                                     );
                                     transcript = current_transcript_for_task(io);
                                     out.render_transcript(&transcript);
