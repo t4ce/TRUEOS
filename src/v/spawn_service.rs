@@ -879,7 +879,7 @@ static TASKS: &[TaskSpec] = &[
         &NET_TCP_SHELL_STARTED,
         spawn_net_tcp_shell,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "atomic_bomb",
         0,
         &ATOMIC_BOMB_STARTED,
