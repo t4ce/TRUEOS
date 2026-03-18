@@ -1,10 +1,13 @@
-use crate::{Game, Lcg32, NoopEvents, RandomSource, Rotation};
+use trueos_v::vled::Rgb8;
+
+use crate::{Game, Lcg32, RandomSource, Rotation, TetrisEvents};
 
 const BOARD_W: usize = 12;
 const BOARD_H: usize = 28;
 const BOARD_HIDDEN: usize = 4;
 const VIEW_H: usize = BOARD_H - BOARD_HIDDEN;
 const STATS_WIDTH: usize = 20;
+const MAX_CLEARED_ROW_OVERLAYS: usize = 4;
 
 pub trait ShellIo {
     fn write_str(&self, s: &str);
@@ -17,10 +20,68 @@ pub enum ShellControl {
     Exit,
 }
 
+#[derive(Clone, Copy)]
+struct ClearedRowOverlay {
+    visible_row: usize,
+    colors: [Option<Rgb8>; BOARD_W],
+}
+
+struct ShellEvents {
+    cleared_rows: [Option<ClearedRowOverlay>; MAX_CLEARED_ROW_OVERLAYS],
+}
+
+impl ShellEvents {
+    const fn new() -> Self {
+        Self {
+            cleared_rows: [None; MAX_CLEARED_ROW_OVERLAYS],
+        }
+    }
+
+    fn clear_overlays(&mut self) {
+        self.cleared_rows = [None; MAX_CLEARED_ROW_OVERLAYS];
+    }
+
+    fn overlay_color_at(&self, visible_row: usize, x: usize) -> Option<Rgb8> {
+        self.cleared_rows
+            .iter()
+            .flatten()
+            .find(|overlay| overlay.visible_row == visible_row)
+            .and_then(|overlay| overlay.colors.get(x).copied().flatten())
+    }
+}
+
+impl TetrisEvents for ShellEvents {
+    fn on_block_placed(&mut self, _color: Rgb8, _x: usize, _y: usize) {
+        self.clear_overlays();
+    }
+
+    fn on_row_deleted(&mut self, row: usize, colors: &[Option<Rgb8>]) {
+        if row < BOARD_HIDDEN {
+            return;
+        }
+
+        let mut snapshot = [None; BOARD_W];
+        for (idx, color) in colors.iter().copied().take(BOARD_W).enumerate() {
+            snapshot[idx] = color;
+        }
+
+        let overlay = ClearedRowOverlay {
+            visible_row: row - BOARD_HIDDEN,
+            colors: snapshot,
+        };
+
+        if let Some(slot) = self.cleared_rows.iter_mut().find(|entry| entry.is_none()) {
+            *slot = Some(overlay);
+        } else {
+            self.cleared_rows[MAX_CLEARED_ROW_OVERLAYS - 1] = Some(overlay);
+        }
+    }
+}
+
 pub struct ShellApp {
     game: Game<BOARD_W, BOARD_H, BOARD_HIDDEN>,
     rng: Lcg32,
-    events: NoopEvents,
+    events: ShellEvents,
     cols: usize,
     rows: usize,
     viewport_top_row: usize,
@@ -41,7 +102,7 @@ pub struct ShellApp {
 impl ShellApp {
     pub fn new(seed: u32, cols: usize, rows: usize) -> Self {
         let mut rng = Lcg32::new(seed.max(1));
-        let mut events = NoopEvents;
+        let mut events = ShellEvents::new();
         let game = Game::new(&mut rng, &mut events);
 
         Self {
@@ -226,6 +287,20 @@ impl ShellApp {
             let row = start_row + 1 + view_y;
             let board_y = BOARD_HIDDEN + view_y;
             for x in 0..BOARD_W {
+                if let Some(color) = self.events.overlay_color_at(view_y, x) {
+                    let col = start_col + 1 + x * 2;
+                    self.write_at_fmt(
+                        io,
+                        row,
+                        col,
+                        format_args!(
+                            "\x1b[5;1;38;2;{};{};{}m██\x1b[0m",
+                            color.r, color.g, color.b
+                        ),
+                    );
+                    continue;
+                }
+
                 let current = self.game.cell_view_at(x, board_y, true);
                 let prev = self.prev_cells[x][view_y];
                 if !self.prev_valid || current != prev {
@@ -342,6 +417,7 @@ impl ShellApp {
     fn reset_game(&mut self) {
         let seed = self.rng.next_u32().max(1);
         self.rng = Lcg32::new(seed);
+        self.events.clear_overlays();
         self.game = Game::new(&mut self.rng, &mut self.events);
         self.paused = false;
         self.drop_accum_ms = 0;

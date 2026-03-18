@@ -192,7 +192,7 @@ impl Default for LevelState {
 pub trait TetrisEvents {
     fn on_block_placed(&mut self, _color: Rgb8, _x: usize, _y: usize) {}
     fn on_music(&mut self, _track_id: u8) {}
-    fn on_row_deleted(&mut self, _row: usize) {}
+    fn on_row_deleted(&mut self, _row: usize, _colors: &[Option<Rgb8>]) {}
     fn on_game_over(&mut self) {}
 }
 
@@ -609,7 +609,11 @@ where
 
             if full {
                 deleted += 1;
-                events.on_row_deleted(y);
+                let mut colors = [None; W];
+                for x in 0..W {
+                    colors[x] = self.board[x][y].map(|block| block.color);
+                }
+                events.on_row_deleted(y, &colors);
 
                 for src_y in (1..=y).rev() {
                     for x in 0..W {
