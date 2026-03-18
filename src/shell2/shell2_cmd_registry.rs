@@ -18,6 +18,11 @@ const SHELL2_CMD_REGISTRY: &[Shell2CmdEntry] = &[
         color: None,
     },
     Shell2CmdEntry {
+        name: "etc",
+        mode: "cmd",
+        color: None,
+    },
+    Shell2CmdEntry {
         name: "files",
         mode: "cmd",
         color: None,
@@ -66,10 +71,7 @@ pub(crate) fn command_names_status_text() -> AllocString {
             out.push(' ');
         }
         if let Some(color) = entry.color {
-            let styled = alloc::format!(
-                "{}",
-                super::ecma48::style(entry.name).bold().fg(color)
-            );
+            let styled = alloc::format!("{}", super::ecma48::style(entry.name).bold().fg(color));
             out.push_str(styled.as_str());
         } else {
             out.push_str(entry.name);
