@@ -179,13 +179,6 @@ pub extern "C" fn kmain() -> ! {
     let spawner = executor.spawner();
 
     let _ = cpu::register_current_worker_spawner(spawner);
-    if let Err(e) = spawner.spawn(crate::wait::job_runner_task()) {
-        crate::log!("wait: job_runner_task spawn failed: {:?}\n", e);
-    }
-
-    if trueos_qjs::async_fs::ensure_service_started(&spawner) {
-        crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
-    }
     // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
     tga::init_once();
     net::init();
