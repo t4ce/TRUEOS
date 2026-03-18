@@ -1,6 +1,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
+
 const CELL_SEPARATOR: &str = " | ";
 const FRAME_SIDE_WIDTH: usize = 4;
 const MIN_COL_WIDTH: usize = 3;
@@ -112,6 +114,19 @@ impl<'a> TlbTable<'a> {
         line.push('│');
         line
     }
+}
+
+pub(crate) fn print_table<const N: usize>(
+    io: &'static dyn ShellBackend2,
+    headers: &[&str; N],
+    rows: &[[&str; N]],
+) {
+    let table = TlbTable::with_width(headers, line_width_for_backend(io).saturating_sub(2));
+    table.emit_header(|text| print_shell_line(io, text));
+    for row in rows {
+        table.emit_row(row, |text| print_shell_line(io, text));
+    }
+    table.emit_footer(|text| print_shell_line(io, text));
 }
 
 fn push_cell(out: &mut String, text: &str, width: usize) {

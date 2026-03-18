@@ -37,16 +37,11 @@ const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const DEFAULT_LINE_WIDTH: usize = 100;
 pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
-const MAX_TRANSCRIPT_HISTORY: usize = 256;
 const MAX_RENDERED_TRANSCRIPT_LINES: usize = 20;
 const RUNNING_GO2_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
 const RUNNING_ANIMATION_TICK_MS: u64 = 100;
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
-static UART1_PENDING_TRANSCRIPT: spin::Mutex<VecDeque<QueuedTranscriptEntry>> =
-    spin::Mutex::new(VecDeque::new());
-static NET_TCP_PENDING_TRANSCRIPT: spin::Mutex<VecDeque<QueuedTranscriptEntry>> =
-    spin::Mutex::new(VecDeque::new());
 
 #[derive(Clone, Copy)]
 pub(crate) enum LineSource {
@@ -58,12 +53,6 @@ pub(crate) enum LineSource {
 pub(crate) struct TranscriptEntry {
     pub(crate) source: LineSource,
     pub(crate) text: AllocString,
-}
-
-#[derive(Clone)]
-struct QueuedTranscriptEntry {
-    slot_id: matrix::MatrixSlotId,
-    entry: TranscriptEntry,
 }
 
 #[derive(Clone)]
@@ -395,6 +384,8 @@ impl<'a> AlignedWriter<'a> {
         self.move_to(PROMPT_ROW, 1);
         self.clear_line();
         self.io.write_str("\x1b[0m");
+        self.io.write_str(ecma48::SHOW_CURSOR);
+        self.io.write_str(ecma48::CURSOR_BLINKING_BLOCK);
     }
 
     fn user_backspace(&self) {
@@ -553,13 +544,6 @@ fn command_names_status_text() -> AllocString {
     shell2_cmd_registry::command_names_status_text()
 }
 
-fn append_transcript_entry(transcript: &mut VecDeque<TranscriptEntry>, entry: TranscriptEntry) {
-    if transcript.len() >= MAX_TRANSCRIPT_HISTORY {
-        let _ = transcript.pop_front();
-    }
-    transcript.push_back(entry);
-}
-
 fn output_mask_for_io(io: &dyn ShellIo2) -> u8 {
     let uart_io: &'static dyn ShellIo2 = &UART1_COM1_BACKEND;
     if same_backend_io(io, uart_io) {
@@ -574,76 +558,17 @@ fn output_mask_for_io(io: &dyn ShellIo2) -> u8 {
     0
 }
 
-fn queue_transcript_line(
-    queue: &spin::Mutex<VecDeque<QueuedTranscriptEntry>>,
-    slot_id: matrix::MatrixSlotId,
-    source: LineSource,
-    text: &str,
-) {
-    let mut pending = queue.lock();
-    pending.push_back(QueuedTranscriptEntry {
-        slot_id,
-        entry: TranscriptEntry {
-            source,
-            text: AllocString::from(text),
-        },
-    });
-}
-
-fn queue_transcript_line_for_output(
-    output_mask: u8,
-    slot_id: &matrix::MatrixSlotId,
-    source: LineSource,
-    text: &str,
-) {
-    if (output_mask & OUTPUT_UART1_MASK) != 0 {
-        queue_transcript_line(&UART1_PENDING_TRANSCRIPT, slot_id.clone(), source, text);
-    }
-    if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
-        queue_transcript_line(&NET_TCP_PENDING_TRANSCRIPT, slot_id.clone(), source, text);
-    }
-}
-
 fn enqueue_transcript_line(io: &dyn ShellIo2, source: LineSource, text: &str) {
     let output_mask = output_mask_for_io(io);
     if output_mask == 0 {
         return;
     }
 
-    let slot_id = matrix::record_line_for_output(output_mask, source, text);
-    queue_transcript_line_for_output(output_mask, &slot_id, source, text);
+    let _ = matrix::record_line_for_output(output_mask, source, text);
 }
 
 pub(crate) fn print_matrix_target_line(target: &MatrixTarget, text: &str) {
     matrix::record_line_in_slot(&target.slot_id, LineSource::System, text);
-    queue_transcript_line_for_output(
-        target.output_mask,
-        &target.slot_id,
-        LineSource::System,
-        text,
-    );
-}
-
-fn drain_pending_transcript(
-    io: &'static dyn ShellBackend2,
-    transcript: &mut VecDeque<TranscriptEntry>,
-) -> bool {
-    let active_slot = matrix::active_slot_id(output_target_for_backend(io));
-    let uart_io: &'static dyn ShellIo2 = &UART1_COM1_BACKEND;
-    if same_backend_task(io, uart_io) {
-        return drain_pending_transcript_queue(&UART1_PENDING_TRANSCRIPT, &active_slot, transcript);
-    }
-
-    let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
-    if same_backend_task(io, net_io) {
-        return drain_pending_transcript_queue(
-            &NET_TCP_PENDING_TRANSCRIPT,
-            &active_slot,
-            transcript,
-        );
-    }
-
-    false
 }
 
 fn current_transcript_for_task(io: &'static dyn ShellBackend2) -> VecDeque<TranscriptEntry> {
@@ -657,28 +582,16 @@ fn record_user_line_for_active_slot(io: &'static dyn ShellBackend2, submitted: &
 
 fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
     matrix::record_line_in_default(LineSource::User, submitted);
-    let requested = submitted.strip_prefix('§').unwrap_or("");
-    let _ = matrix::switch_active_slot(output_target_for_backend(io), requested);
-}
-
-fn drain_pending_transcript_queue(
-    queue: &spin::Mutex<VecDeque<QueuedTranscriptEntry>>,
-    active_slot: &matrix::MatrixSlotId,
-    transcript: &mut VecDeque<TranscriptEntry>,
-) -> bool {
-    let mut pending = queue.lock();
-    if pending.is_empty() {
-        return false;
+    if submitted
+        .strip_prefix('§')
+        .and_then(|rest| rest.strip_suffix('§'))
+        .is_some()
+    {
+        let _ = matrix::free_slot(submitted);
+    } else {
+        let requested = submitted.strip_prefix('§').unwrap_or("");
+        let _ = matrix::switch_active_slot(output_target_for_backend(io), requested);
     }
-
-    let mut changed = false;
-    while let Some(queued) = pending.pop_front() {
-        if queued.slot_id == *active_slot {
-            append_transcript_entry(transcript, queued.entry);
-            changed = true;
-        }
-    }
-    changed
 }
 
 fn handle_submit(
@@ -890,6 +803,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         let matrix_revision = matrix::revision();
         if matrix_revision != last_matrix_revision {
             last_matrix_revision = matrix_revision;
+            transcript = current_transcript_for_task(io);
             redraw_status_preserving_cursor(
                 &out,
                 output_mask,
@@ -900,9 +814,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 cmd_status_text.as_deref(),
                 running_go2_phase,
             );
-        }
-
-        if drain_pending_transcript(io, &mut transcript) {
             out.render_transcript(&transcript);
         }
 
@@ -1175,9 +1086,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         for session_idx in remove_indexes.into_iter().rev() {
                             let _ = command_sessions.remove(session_idx);
                         }
-                        if drain_pending_transcript(io, &mut transcript) {
-                            out.render_transcript(&transcript);
-                        }
                     } else if let Some(session_idx) =
                         find_command_session_index(command_sessions.as_slice(), &active_slot)
                     {
@@ -1204,9 +1112,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 let _ = command_sessions.remove(session_idx);
                             }
                             CommandSessionInputResult::KeepRunning => {}
-                        }
-                        if drain_pending_transcript(io, &mut transcript) {
-                            out.render_transcript(&transcript);
                         }
                     } else if !submitted.is_empty() {
                         if submitted_raw.starts_with('§') {
@@ -1265,9 +1170,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     command_sessions.push(CommandSession { slot_id, kind });
                                 }
                                 HandleSubmitResult::None => {}
-                            }
-                            if drain_pending_transcript(io, &mut transcript) {
-                                out.render_transcript(&transcript);
                             }
                         }
                     }

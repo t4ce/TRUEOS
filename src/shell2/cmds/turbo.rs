@@ -1,74 +1,124 @@
-pub(crate) fn cmd_turbo(
-    ctx: &mut ShellCommandCtx<'_>,
-    args: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    let op = args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
+use core::str::SplitWhitespace;
+
+use super::super::{ShellBackend2, print_shell_line};
+use super::tlb_helper::print_table;
+use crate::shell2::shell2_cmd::ParseOutcome;
+
+const TURBO_MENU_HEADERS: [&str; 2] = ["Subcommand", "Arguments"];
+const TURBO_MENU_ROWS: [[&str; 2]; 6] = [
+    ["status", ""],
+    ["arm", ""],
+    ["disarm", ""],
+    ["on", ""],
+    ["off", ""],
+    ["verify", "[spins]"],
+];
+
+fn line(io: &'static dyn ShellBackend2, text: &str) {
+    print_shell_line(io, text);
+}
+
+fn print_usage(io: &'static dyn ShellBackend2) {
+    print_table(io, &TURBO_MENU_HEADERS, &TURBO_MENU_ROWS);
+}
+
+pub(crate) fn try_parse(
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+) -> ParseOutcome {
+    let op = args.next().unwrap_or("status").trim();
 
     if op.is_empty() || op.eq_ignore_ascii_case("status") {
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
+
         let armed = crate::turbo::armed();
         match crate::turbo::local_state() {
-            Ok(st) => {
-                ctx.io
-                    .write_fmt(format_args!("turbo: armed={} state={:?}\r\n", armed, st));
+            Ok(state) => {
+                let msg = alloc::format!("turbo: armed={} state={:?}", armed, state);
+                line(io, msg.as_str());
             }
             Err(crate::turbo::TurboSetError::Unsupported) => {
-                ctx.io
-                    .write_fmt(format_args!("turbo: unsupported (intel-only)\r\n"));
+                line(io, "turbo: unsupported (intel-only)");
             }
             Err(crate::turbo::TurboSetError::Disarmed) => {
-                // Reads should never require arming; keep for forward-compat.
-                ctx.io.write_fmt(format_args!("turbo: disarmed\r\n"));
+                line(io, "turbo: disarmed");
             }
         }
         if !armed {
-            ctx.io
-                .write_str("turbo: writes are disarmed (run 'turbo arm')\r\n");
+            line(io, "turbo: writes are disarmed (run `turbo arm`)");
         }
-        return CommandAction::None;
+        return ParseOutcome::Handled;
     }
 
     if op.eq_ignore_ascii_case("arm") {
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
+
         crate::turbo::set_armed(true);
-        ctx.io.write_str("turbo: armed\r\n");
-        return CommandAction::None;
+        line(io, "turbo: armed");
+        return ParseOutcome::Handled;
     }
+
     if op.eq_ignore_ascii_case("disarm") {
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
+
         crate::turbo::set_armed(false);
-        ctx.io.write_str("turbo: disarmed\r\n");
-        return CommandAction::None;
+        line(io, "turbo: disarmed");
+        return ParseOutcome::Handled;
     }
 
     if op.eq_ignore_ascii_case("verify") {
-        let spins = args.and_then(|a| a.get_usize(1)).unwrap_or(200_000);
+        let spins = match args.next() {
+            Some(raw) => match raw.parse::<usize>() {
+                Ok(value) => value,
+                Err(_) => {
+                    print_usage(io);
+                    return ParseOutcome::Handled;
+                }
+            },
+            None => 200_000,
+        };
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
 
         match crate::turbo::verify_all(spins) {
-            Ok(r) => {
-                ctx.io.write_fmt(format_args!(
-                    "turbo: verify spins={} turbo={} noturbo={} unknown={} completed_aps={}/{} online_aps={} busy={} total_cpus={} seq={}{}\r\n",
+            Ok(report) => {
+                let suffix = if report.timed_out { " TIMEOUT" } else { "" };
+                let msg = alloc::format!(
+                    "turbo: verify spins={} turbo={} noturbo={} unknown={} completed_aps={}/{} online_aps={} busy={} total_cpus={} seq={}{}",
                     spins,
-                    r.turbo_cpus,
-                    r.noturbo_cpus,
-                    r.unknown_cpus,
-                    r.completed_aps,
-                    r.submitted_aps,
-                    r.online_aps,
-                    r.busy_aps,
-                    r.total_cpus,
-                    r.seq,
-                    if r.timed_out { " TIMEOUT" } else { "" }
-                ));
+                    report.turbo_cpus,
+                    report.noturbo_cpus,
+                    report.unknown_cpus,
+                    report.completed_aps,
+                    report.submitted_aps,
+                    report.online_aps,
+                    report.busy_aps,
+                    report.total_cpus,
+                    report.seq,
+                    suffix
+                );
+                line(io, msg.as_str());
             }
             Err(crate::turbo::TurboSetError::Disarmed) => {
-                // verify is read-only; keep for forward-compat and clarity.
-                ctx.io
-                    .write_str("turbo: msr disarmed (verify should not require arm)\r\n");
+                line(io, "turbo: msr disarmed (verify should not require arm)");
             }
             Err(crate::turbo::TurboSetError::Unsupported) => {
-                ctx.io.write_str("turbo: unsupported (intel-only)\r\n");
+                line(io, "turbo: unsupported (intel-only)");
             }
         }
 
-        return CommandAction::None;
+        return ParseOutcome::Handled;
     }
 
     let enable = if op.eq_ignore_ascii_case("on") {
@@ -80,31 +130,34 @@ pub(crate) fn cmd_turbo(
     };
 
     let Some(enable) = enable else {
-        ctx.io
-            .write_str("turbo: usage turbo [status|arm|disarm|on|off|verify [spins]]\r\n");
-        return CommandAction::None;
+        print_usage(io);
+        return ParseOutcome::Handled;
     };
+    if args.next().is_some() {
+        print_usage(io);
+        return ParseOutcome::Handled;
+    }
 
     match crate::turbo::set_enabled_all(enable) {
-        Ok(r) => {
-            ctx.io.write_fmt(format_args!(
-                "turbo: requested={} ap_submitted={}/{} busy={} total_cpus={} seq={}\r\n",
-                if r.requested_enable { "on" } else { "off" },
-                r.submitted_aps,
-                r.targeted_aps,
-                r.busy_aps,
-                r.total_cpus,
-                r.seq
-            ));
+        Ok(report) => {
+            let msg = alloc::format!(
+                "turbo: requested={} ap_submitted={}/{} busy={} total_cpus={} seq={}",
+                if report.requested_enable { "on" } else { "off" },
+                report.submitted_aps,
+                report.targeted_aps,
+                report.busy_aps,
+                report.total_cpus,
+                report.seq
+            );
+            line(io, msg.as_str());
         }
         Err(crate::turbo::TurboSetError::Disarmed) => {
-            ctx.io
-                .write_str("turbo: msr disarmed (run 'turbo arm')\r\n");
+            line(io, "turbo: msr disarmed (run `turbo arm`)");
         }
         Err(crate::turbo::TurboSetError::Unsupported) => {
-            ctx.io.write_str("turbo: unsupported (intel-only)\r\n");
+            line(io, "turbo: unsupported (intel-only)");
         }
     }
 
-    CommandAction::None
+    ParseOutcome::Handled
 }

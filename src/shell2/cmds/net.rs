@@ -4,16 +4,15 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use trueos_v::vnet as api;
 
 use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
-use super::tlb_helper::TlbTable;
+use super::tlb_helper::{TlbTable, print_table};
 use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::v::net::VNet;
 
-const NET_USAGE: &str = "net: usage `net [icmp|nic|hostname]`";
 const NET_MENU_HEADERS: [&str; 2] = ["Subcommand", "Arguments"];
-const NET_MENU_ROWS: [(&str, &str); 3] = [
-    ("icmp", "<target> [index|vid:pid|bb:dd.f]"),
-    ("nic", "[index|vid:pid|bb:dd.f]"),
-    ("hostname", "[name]"),
+const NET_MENU_ROWS: [[&str; 2]; 3] = [
+    ["icmp", "<target> [index|vid:pid|bb:dd.f]"],
+    ["nic", "[index|vid:pid|bb:dd.f]"],
+    ["hostname", "[name]"],
 ];
 
 fn line(io: &'static dyn ShellBackend2, text: &str) {
@@ -21,20 +20,11 @@ fn line(io: &'static dyn ShellBackend2, text: &str) {
 }
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    line(io, NET_USAGE);
+    print_table(io, &NET_MENU_HEADERS, &NET_MENU_ROWS);
 }
 
 fn print_menu(io: &'static dyn ShellBackend2) {
-    let table = TlbTable::with_width(
-        &NET_MENU_HEADERS,
-        line_width_for_backend(io).saturating_sub(2),
-    );
-
-    table.emit_header(|text| line(io, text));
-    for (cmd, args) in NET_MENU_ROWS {
-        table.emit_row(&[cmd, args], |text| line(io, text));
-    }
-    table.emit_footer(|text| line(io, text));
+    print_table(io, &NET_MENU_HEADERS, &NET_MENU_ROWS);
 }
 
 fn parse_device_selector(raw: &str) -> Option<usize> {

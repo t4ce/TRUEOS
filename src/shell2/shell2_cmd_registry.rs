@@ -102,10 +102,6 @@ fn dispatch_file(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
     super::cmds::file::try_parse(io, &mut args)
 }
 
-fn dispatch_files(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    dispatch_not_wired("files", spawner, io, rest)
-}
-
 fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let _ = spawner;
     let mut args = rest.split_whitespace();
@@ -116,6 +112,11 @@ fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     let _ = spawner;
     let mut args = rest.split_whitespace();
     super::cmds::tlb::try_parse(io, &mut args)
+}
+
+fn dispatch_turbo(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    super::cmds::turbo::try_parse(io, &mut args)
 }
 
 fn dispatch_txt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -148,12 +149,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_file,
     },
     BuiltinShell2CmdEntry {
-        name: "files",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_files,
-    },
-    BuiltinShell2CmdEntry {
         name: "format",
         mode: "cmd",
         color: None,
@@ -182,6 +177,12 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         mode: "cmd",
         color: None,
         handler: dispatch_tlb,
+    },
+    BuiltinShell2CmdEntry {
+        name: "turbo",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_turbo,
     },
     BuiltinShell2CmdEntry {
         name: "txt",

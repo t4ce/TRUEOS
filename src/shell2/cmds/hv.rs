@@ -3,12 +3,20 @@ use core::str::SplitWhitespace;
 use embassy_executor::Spawner;
 
 use super::super::ShellBackend2;
+use super::tlb_helper::print_table;
 use crate::shell2::shell2_cmd::ParseOutcome;
+
+const HV_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
+const HV_MENU_ROWS: [[&str; 2]; 4] = [
+    ["status", "Show VMX and vm1 status"],
+    ["start", "Start vm1"],
+    ["stop", "Request vm1 stop"],
+    ["log", "Print hv log output"],
+];
 
 #[inline]
 fn print_usage(io: &'static dyn ShellBackend2) {
-    io.write_str("hv: usage hv [status|start|stop|log]\r\n");
-    io.write_str("hv: single-VM milestone target is vm1\r\n");
+    print_table(io, &HV_MENU_HEADERS, &HV_MENU_ROWS);
 }
 
 pub(crate) fn try_parse(
