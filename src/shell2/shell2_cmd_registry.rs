@@ -23,6 +23,11 @@ const SHELL2_CMD_REGISTRY: &[Shell2CmdEntry] = &[
         color: None,
     },
     Shell2CmdEntry {
+        name: "format",
+        mode: "cmd",
+        color: None,
+    },
+    Shell2CmdEntry {
         name: "install",
         mode: "cmd",
         color: Some((255, 55, 255)),
