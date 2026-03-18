@@ -12,6 +12,14 @@ const MAX_PCI_DEVICES: usize = 256;
 const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
+const PCI_STATUS_CAP_LIST: u16 = 1 << 4;
+
+const PCI_CAP_PTR: u16 = 0x34;
+const PCI_CAP_ID_PCI_EXPRESS: u8 = 0x10;
+const PCI_EXP_DEVCAP: u16 = 0x04;
+const PCI_EXP_DEVCTL: u16 = 0x08;
+const PCI_EXP_DEVCAP_FLR: u32 = 1 << 28;
+const PCI_EXP_DEVCTL_BCR_FLR: u16 = 1 << 15;
 
 // PCI-to-PCI Bridge class/subclass
 const PCI_CLASS_BRIDGE: u8 = 0x06;
@@ -334,6 +342,44 @@ pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
     let mut cmd = config_read_u16(bus, slot, function, 0x04);
     cmd |= PCI_COMMAND_MEM_SPACE | PCI_COMMAND_BUS_MASTER;
     config_write_u16(bus, slot, function, 0x04, cmd);
+}
+
+pub fn try_function_level_reset(bus: u8, slot: u8, function: u8) -> bool {
+    let status = config_read_u16(bus, slot, function, 0x06);
+    if (status & PCI_STATUS_CAP_LIST) == 0 {
+        return false;
+    }
+
+    let Some(pcie_cap) = find_capability(bus, slot, function, PCI_CAP_ID_PCI_EXPRESS) else {
+        return false;
+    };
+
+    let devcap = config_read_u32(bus, slot, function, pcie_cap + PCI_EXP_DEVCAP);
+    if (devcap & PCI_EXP_DEVCAP_FLR) == 0 {
+        return false;
+    }
+
+    let mut devctl = config_read_u16(bus, slot, function, pcie_cap + PCI_EXP_DEVCTL);
+    devctl |= PCI_EXP_DEVCTL_BCR_FLR;
+    config_write_u16(bus, slot, function, pcie_cap + PCI_EXP_DEVCTL, devctl);
+
+    // PCIe FLR requires software to wait 100ms before touching config space again.
+    let _ = crate::wait::spin_until_timeout(100, || false);
+    true
+}
+
+fn find_capability(bus: u8, slot: u8, function: u8, cap_id: u8) -> Option<u16> {
+    let mut ptr = (config_read_u8(bus, slot, function, PCI_CAP_PTR) & !0x3) as u16;
+    let mut guard = 0usize;
+    while ptr >= 0x40 && ptr < 0x100 && guard < 48 {
+        let id = config_read_u8(bus, slot, function, ptr);
+        if id == cap_id {
+            return Some(ptr);
+        }
+        ptr = (config_read_u8(bus, slot, function, ptr + 1) & !0x3) as u16;
+        guard += 1;
+    }
+    None
 }
 
 fn normalize_offset(offset: u16) -> u8 {

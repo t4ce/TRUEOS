@@ -32,6 +32,8 @@ const NVME_FEAT_NUMBER_OF_QUEUES: u32 = 0x07;
 const NVME_NVM_FLUSH: u8 = 0x00;
 const NVME_NVM_WRITE: u8 = 0x01;
 const NVME_NVM_READ: u8 = 0x02;
+const NVME_QUEUE_PHYS_CONTIG: u16 = 1 << 0;
+const NVME_CQ_IRQ_ENABLED: u16 = 1 << 1;
 const NVME_ADMIN_QID: u16 = 0;
 const NVME_IO_QID: u16 = 1;
 
@@ -118,6 +120,14 @@ impl NvmeQueue {
     }
 
     fn new(depth: u16, page_size_bytes: usize) -> core::result::Result<Self, block::Error> {
+        Self::new_with_alignment(depth, page_size_bytes, page_size_bytes)
+    }
+
+    fn new_with_alignment(
+        depth: u16,
+        page_size_bytes: usize,
+        align_hint: usize,
+    ) -> core::result::Result<Self, block::Error> {
         if depth == 0 {
             return Err(block::Error::InvalidParam);
         }
@@ -130,7 +140,7 @@ impl NvmeQueue {
             .checked_mul(Self::cq_entry_size())
             .ok_or(block::Error::InvalidParam)?;
 
-        let align = core::cmp::max(PAGE_SIZE, page_size_bytes);
+        let align = core::cmp::max(PAGE_SIZE, core::cmp::max(page_size_bytes, align_hint));
         // Be conservative: allocate whole pages for queues. Some controllers/emulators
         // assume queue memory is backed by full pages even when the effective queue
         // size is smaller (e.g. CQ at 64*16=1024 bytes).
@@ -148,8 +158,9 @@ impl NvmeQueue {
         let (cq_phys, cq_virt_u8) =
             dma::alloc(cq_alloc_bytes, align).ok_or(block::Error::DmaUnavailable)?;
         crate::log!(
-            "nvme: queue alloc depth={} sq_phys=0x{:X} cq_phys=0x{:X}\n",
+            "nvme: queue alloc depth={} align=0x{:X} sq_phys=0x{:X} cq_phys=0x{:X}\n",
             depth,
+            align,
             sq_phys,
             cq_phys
         );
@@ -304,6 +315,10 @@ impl NvmeController {
         let cc = self.reg32(NVME_REG_CC);
         let csts = self.reg32(NVME_REG_CSTS);
         let aqa = self.reg32(NVME_REG_AQA);
+        let admin_sq_db = self.db_read_sq_tail(NVME_ADMIN_QID);
+        let admin_cq_db = self.db_read_cq_head(NVME_ADMIN_QID);
+        let io_sq_db = self.db_read_sq_tail(NVME_IO_QID);
+        let io_cq_db = self.db_read_cq_head(NVME_IO_QID);
         let admin_cqe = self.admin.cq_peek();
         let io_cqe = self.io.cq_peek();
         let admin_status = (admin_cqe.dw3 >> 16) as u16;
@@ -311,7 +326,7 @@ impl NvmeController {
         let admin_phase = (admin_status & 0x1) != 0;
         let io_phase = (io_status & 0x1) != 0;
         crate::log!(
-            "nvme: {} {} regs cap=0x{:016X} vs=0x{:08X} cc=0x{:08X} csts=0x{:08X} aqa=0x{:08X} dstrd={} mps={} admin[sq={} cq={} phase={}] io[sq={} cq={} phase={}] admin_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}] io_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}]\n",
+            "nvme: {} {} regs cap=0x{:016X} vs=0x{:08X} cc=0x{:08X} csts=0x{:08X} aqa=0x{:08X} dstrd={} mps={} admin[sq={} cq={} phase={} db_sq={} db_cq={}] io[sq={} cq={} phase={} db_sq={} db_cq={}] admin_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}] io_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}]\n",
             self.pci,
             reason,
             cap,
@@ -324,9 +339,13 @@ impl NvmeController {
             self.admin.sq_tail,
             self.admin.cq_head,
             self.admin.cq_phase,
+            admin_sq_db,
+            admin_cq_db,
             self.io.sq_tail,
             self.io.cq_head,
             self.io.cq_phase,
+            io_sq_db,
+            io_cq_db,
             admin_cqe.dw0,
             admin_cqe.dw3,
             admin_status,
@@ -355,6 +374,8 @@ impl NvmeController {
         let idx = (2usize * (qid as usize)) * stride;
         fence(Ordering::SeqCst);
         self.write32(NVME_REG_DBS + idx, tail as u32);
+        // Force posted MMIO writes to drain before we start polling for a CQE.
+        let _ = self.reg32(NVME_REG_DBS + idx);
     }
 
     fn db_write_cq_head(&self, qid: u16, head: u16) {
@@ -362,6 +383,28 @@ impl NvmeController {
         let idx = (2usize * (qid as usize) + 1) * stride;
         fence(Ordering::SeqCst);
         self.write32(NVME_REG_DBS + idx, head as u32);
+        let _ = self.reg32(NVME_REG_DBS + idx);
+    }
+
+    fn db_read_sq_tail(&self, qid: u16) -> u32 {
+        let stride = self.doorbell_stride_bytes as usize;
+        let idx = (2usize * (qid as usize)) * stride;
+        self.reg32(NVME_REG_DBS + idx)
+    }
+
+    fn db_read_cq_head(&self, qid: u16) -> u32 {
+        let stride = self.doorbell_stride_bytes as usize;
+        let idx = (2usize * (qid as usize) + 1) * stride;
+        self.reg32(NVME_REG_DBS + idx)
+    }
+
+    fn rering_sq_tail(&self, qid: u16) {
+        let q = if qid == NVME_ADMIN_QID {
+            &self.admin
+        } else {
+            &self.io
+        };
+        self.db_write_sq_tail(qid, q.sq_tail % q.depth);
     }
 
     fn spin_wait_ready(
@@ -572,13 +615,28 @@ impl NvmeController {
             timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
         };
         let deadline = start.saturating_add(ticks);
+        let rekick_ticks = if qid == NVME_IO_QID && hz != 0 {
+            (hz / 1000).max(1)
+        } else {
+            0
+        };
+        let mut next_rekick = start.saturating_add(rekick_ticks);
 
         loop {
             if let Some(cpl) = self.poll_queue_cq_for_cid_step(qid, cid) {
                 return Ok(cpl);
             }
 
-            if embassy_time_driver::now() >= deadline {
+            let now = embassy_time_driver::now();
+            if rekick_ticks != 0 && now >= next_rekick {
+                // Some passthrough setups appear to occasionally strand the initial
+                // IO SQ doorbell write. Re-ringing the same tail value is harmless
+                // and helps QEMU/VFIO behave closer to bare metal in practice.
+                self.rering_sq_tail(qid);
+                next_rekick = now.saturating_add(rekick_ticks);
+            }
+
+            if now >= deadline {
                 if qid == NVME_IO_QID {
                     let csts = self.reg32(NVME_REG_CSTS);
                     crate::log!(
@@ -610,13 +668,25 @@ impl NvmeController {
             timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
         };
         let deadline = start.saturating_add(ticks);
+        let rekick_ticks = if qid == NVME_IO_QID && hz != 0 {
+            (hz / 1000).max(1)
+        } else {
+            0
+        };
+        let mut next_rekick = start.saturating_add(rekick_ticks);
 
         loop {
             if let Some(cpl) = self.poll_queue_cq_for_cid_step(qid, cid) {
                 return Ok(cpl);
             }
 
-            if embassy_time_driver::now() >= deadline {
+            let now = embassy_time_driver::now();
+            if rekick_ticks != 0 && now >= next_rekick {
+                self.rering_sq_tail(qid);
+                next_rekick = now.saturating_add(rekick_ticks);
+            }
+
+            if now >= deadline {
                 if qid == NVME_IO_QID {
                     let csts = self.reg32(NVME_REG_CSTS);
                     crate::log!(
@@ -651,6 +721,15 @@ impl NvmeController {
         pci: block::PciAddress,
         io_depth: u16,
     ) -> core::result::Result<Self, block::Error> {
+        Self::init_with_io_profile(mmio, pci, io_depth, false)
+    }
+
+    fn init_with_io_profile(
+        mmio: NonNull<u8>,
+        pci: block::PciAddress,
+        io_depth: u16,
+        io_cq_irq_enabled: bool,
+    ) -> core::result::Result<Self, block::Error> {
         unsafe {
             let regs = mmio.as_ptr();
             let cap = read_volatile(regs.add(NVME_REG_CAP) as *const u64);
@@ -668,13 +747,18 @@ impl NvmeController {
         let mps = core::cmp::min(mpsmin, mpsmax) as u32;
         let page_size_bytes = PAGE_SIZE.checked_shl(mps).unwrap_or(PAGE_SIZE);
 
+        let io_queue_align = if io_cq_irq_enabled {
+            0x1_0000
+        } else {
+            page_size_bytes
+        };
         let mut ctrl = Self {
             mmio,
             doorbell_stride_bytes,
             page_size_bytes,
             max_transfer_bytes: Self::default_max_transfer_bytes(),
             admin: NvmeQueue::new(Self::ADMIN_Q_DEPTH, page_size_bytes)?,
-            io: NvmeQueue::new(io_depth.max(1), page_size_bytes)?,
+            io: NvmeQueue::new_with_alignment(io_depth.max(1), page_size_bytes, io_queue_align)?,
             next_cid: 1,
             io_inflight: [0u64; CID_BITMAP_WORDS],
             io_pending: [None; IO_PENDING_SLOTS],
@@ -720,12 +804,24 @@ impl NvmeController {
         }
 
         // Create IO completion queue (qid=1) and submission queue (qid=1).
-        ctrl.admin_create_io_cq(NVME_IO_QID, ctrl.io.depth, ctrl.io.cq_phys)?;
+        ctrl.admin_create_io_cq(
+            NVME_IO_QID,
+            ctrl.io.depth,
+            ctrl.io.cq_phys,
+            io_cq_irq_enabled,
+            0,
+        )?;
         ctrl.admin_create_io_sq(NVME_IO_QID, ctrl.io.depth, ctrl.io.sq_phys, NVME_IO_QID)?;
 
         // Initialize doorbells for IO queue pair (some emulators are picky about initial values).
         ctrl.db_write_cq_head(NVME_IO_QID, 0);
         ctrl.db_write_sq_tail(NVME_IO_QID, 0);
+
+        if io_cq_irq_enabled {
+            // Some physical controllers seem to need a moment after a fresh IO queue
+            // pair is created with IRQ delivery armed, even when we poll for completions.
+            let _ = crate::wait::spin_until_timeout(20, || false);
+        }
 
         // Identify controller once to grab a serial string (optional).
         if let Ok(ctrl_info) = ctrl.identify_controller_info() {
@@ -748,13 +844,17 @@ impl NvmeController {
         qid: u16,
         depth: u16,
         cq_phys: u64,
+        irq_enabled: bool,
+        irq_vector: u16,
     ) -> core::result::Result<(), block::Error> {
         crate::log!(
-            "nvme: {} create_io_cq qid={} depth={} phys=0x{:X}\n",
+            "nvme: {} create_io_cq qid={} depth={} phys=0x{:X} ien={} iv={}\n",
             self.pci,
             qid,
             depth,
-            cq_phys
+            cq_phys,
+            irq_enabled as u8,
+            irq_vector,
         );
         let cid = self.alloc_cid();
         let mut sqe = NvmeSqe { d: [0; 16] };
@@ -763,8 +863,8 @@ impl NvmeController {
         sqe.d[6] = (cq_phys & 0xFFFF_FFFF) as u32;
         sqe.d[7] = (cq_phys >> 32) as u32;
         sqe.d[10] = (qid as u32) | (((depth as u32) - 1) << 16);
-        // PC=1 (physically contiguous), IEN=0 (polling).
-        sqe.d[11] = 1;
+        let cq_flags = NVME_QUEUE_PHYS_CONTIG | if irq_enabled { NVME_CQ_IRQ_ENABLED } else { 0 };
+        sqe.d[11] = (cq_flags as u32) | ((irq_vector as u32) << 16);
         let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
         if !cpl.is_success() {
             crate::log!(
@@ -1163,6 +1263,18 @@ impl NvmeController {
             return Err(block::Error::Io);
         }
         Ok(())
+    }
+
+    fn io_flush_sync(
+        &mut self,
+        nsid: u32,
+        timeout_ms: u64,
+    ) -> core::result::Result<Completion, block::Error> {
+        let cid = self.alloc_cid();
+        let mut sqe = NvmeSqe { d: [0; 16] };
+        sqe.d[0] = (NVME_NVM_FLUSH as u32) | ((cid as u32) << 16);
+        sqe.d[1] = nsid;
+        self.io_submit_and_wait_sync(sqe, cid, timeout_ms)
     }
 
     fn io_rw_sync(
@@ -1612,38 +1724,19 @@ impl block::BlockDevice for NvmeBlockDevice {
 }
 
 fn admin_selftest_read(
-    ctrl: &mut NvmeController,
+    _ctrl: &mut NvmeController,
     pci_addr: block::PciAddress,
-    nsid: u32,
-    block_size: u32,
+    _nsid: u32,
+    _block_size: u32,
 ) -> bool {
-    let bs = block_size as usize;
-    let bytes = bs.max(512);
-    let Some((dma_phys, dma_virt)) = dma::alloc(bytes, ctrl.page_size_bytes()) else {
-        crate::log!("nvme: {} admin-selftest: DMA alloc failed\n", pci_addr);
-        return false;
-    };
-
-    unsafe { write_bytes(dma_virt, 0, bytes) };
-    let ok = match ctrl.admin_rw_sync(NVME_NVM_READ, nsid, 0, 1, dma_phys, bs, 2000) {
-        Ok(cpl) if cpl.is_success() => true,
-        Ok(cpl) => {
-            crate::log!(
-                "nvme: {} admin-selftest read failed status=0x{:04X} (sct={} sc={})\n",
-                pci_addr,
-                cpl.status,
-                cpl.status_type(),
-                cpl.status_code(),
-            );
-            false
-        }
-        Err(e) => {
-            crate::log!("nvme: {} admin-selftest read failed: {:?}\n", pci_addr, e);
-            false
-        }
-    };
-    dma::dealloc(dma_virt, bytes);
-    ok
+    // NVM READ/WRITE/FLUSH are I/O queue commands, not admin queue commands.
+    // Treating the admin queue as a data path makes probe decisions misleading
+    // on compliant controllers, so keep this probe conservative.
+    crate::log!(
+        "nvme: {} admin-selftest skipped: NVM I/O opcodes are not valid on the admin queue\n",
+        pci_addr
+    );
+    false
 }
 
 fn is_nvme(dev: &crate::pci::PciDevice) -> bool {
@@ -1687,29 +1780,35 @@ fn io_selftest_read(
         }
         Err(e) => {
             crate::log!("nvme: {} io-selftest read failed: {:?}\n", pci_addr, e);
-
-            // Diagnostic fallback: try the same NVM READ on the admin queue.
-            // If this completes, it suggests IO queue bring-up is the issue.
-            match ctrl.admin_rw_sync(NVME_NVM_READ, nsid, 0, 1, dma_phys, bs, 2000) {
-                Ok(cpl) => {
-                    crate::log!(
-                        "nvme: {} admin-read selftest status=0x{:04X} (sct={} sc={})\n",
-                        pci_addr,
-                        cpl.status,
-                        cpl.status_type(),
-                        cpl.status_code(),
-                    );
-                }
-                Err(e2) => {
-                    crate::log!("nvme: {} admin-read selftest failed: {:?}\n", pci_addr, e2);
-                }
-            }
             false
         }
     };
 
     dma::dealloc(dma_virt, bytes);
     ok
+}
+
+fn io_selftest_flush(ctrl: &mut NvmeController, pci_addr: block::PciAddress, nsid: u32) -> bool {
+    match ctrl.io_flush_sync(nsid, 2000) {
+        Ok(cpl) => {
+            if !cpl.is_success() {
+                crate::log!(
+                    "nvme: {} io-selftest flush completed with status=0x{:04X} (sct={} sc={})\n",
+                    pci_addr,
+                    cpl.status,
+                    cpl.status_type(),
+                    cpl.status_code(),
+                );
+            } else {
+                crate::log!("nvme: {} io-selftest flush ok\n", pci_addr);
+            }
+            true
+        }
+        Err(e) => {
+            crate::log!("nvme: {} io-selftest flush failed: {:?}\n", pci_addr, e);
+            false
+        }
+    }
 }
 
 pub fn probe_once() {
@@ -1727,6 +1826,14 @@ pub fn probe_once() {
                 continue;
             }
             did_any = true;
+            if crate::pci::try_function_level_reset(dev.bus, dev.slot, dev.function) {
+                crate::log!(
+                    "nvme: {:02X}:{:02X}.{} function-level reset issued\n",
+                    dev.bus,
+                    dev.slot,
+                    dev.function
+                );
+            }
             crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
 
             let (bar_lo, bar_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
@@ -1809,8 +1916,10 @@ pub fn probe_once() {
                 continue;
             }
 
-            // Strict gate: IO queue must complete at least one NVM READ before registration.
-            let mut io_ready = io_selftest_read(&mut ctrl, pci_addr, nsid, block_size);
+            // Strict gate: the IO queue must first complete a no-data command, then
+            // complete a data-bearing READ before we register the controller.
+            let mut io_ready = io_selftest_flush(&mut ctrl, pci_addr, nsid)
+                && io_selftest_read(&mut ctrl, pci_addr, nsid, block_size);
             let mut admin_fallback_mode = false;
             if !io_ready {
                 crate::log!(
@@ -1818,14 +1927,14 @@ pub fn probe_once() {
                     pci_addr
                 );
 
-                let mut retry_ctrl = match NvmeController::init_with_io_depth(mmio_ptr, pci_addr, 2)
-                {
-                    Ok(c) => c,
-                    Err(e) => {
-                        crate::log!("nvme: {} reinit failed: {:?}\n", pci_addr, e);
-                        continue;
-                    }
-                };
+                let mut retry_ctrl =
+                    match NvmeController::init_with_io_profile(mmio_ptr, pci_addr, 2, true) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            crate::log!("nvme: {} reinit failed: {:?}\n", pci_addr, e);
+                            continue;
+                        }
+                    };
 
                 let retry_ctrl_info = match retry_ctrl.identify_controller_info() {
                     Ok(info) => info,
@@ -1875,8 +1984,8 @@ pub fn probe_once() {
                     continue;
                 }
 
-                io_ready =
-                    io_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size);
+                io_ready = io_selftest_flush(&mut retry_ctrl, pci_addr, retry_nsid)
+                    && io_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size);
                 if !io_ready {
                     if admin_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size)
                     {
@@ -1898,7 +2007,9 @@ pub fn probe_once() {
                     }
                 }
 
-                crate::log!("nvme: {} IO queue recovered after reinit\n", pci_addr);
+                if io_ready {
+                    crate::log!("nvme: {} IO queue recovered after reinit\n", pci_addr);
+                }
                 ctrl = retry_ctrl;
                 nsid = retry_nsid;
                 blocks = retry_blocks;
