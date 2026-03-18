@@ -4,6 +4,40 @@ use heapless::String as HString;
 
 use super::{ShellBackend2, print_shell_line};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SurfPromptPrefix {
+    Http,
+    Https,
+    File,
+    Html,
+}
+
+impl SurfPromptPrefix {
+    pub(crate) const fn next(self) -> Self {
+        match self {
+            Self::Http => Self::Https,
+            Self::Https => Self::File,
+            Self::File => Self::Html,
+            Self::Html => Self::Http,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Http => "http://",
+            Self::Https => "https://",
+            Self::File => "file://",
+            Self::Html => "html://",
+        }
+    }
+}
+
+pub(crate) enum SurfSubmit {
+    Url(String),
+    File(String),
+    Html(String),
+}
+
 pub(crate) fn try_inline_html(line: &str) -> Option<String> {
     let candidate = strip_wrapping_quotes(line.trim());
     if !looks_like_inline_html(candidate) {
@@ -12,17 +46,29 @@ pub(crate) fn try_inline_html(line: &str) -> Option<String> {
     Some(String::from(candidate))
 }
 
-pub(crate) fn try_parse(line: &str) -> Option<String> {
+pub(crate) fn try_parse_with_prefix(line: &str, prefix: SurfPromptPrefix) -> Option<SurfSubmit> {
+    if let Some(html) = try_inline_html(line) {
+        return Some(SurfSubmit::Html(html));
+    }
+    if let Some(file_ref) = try_file_reference(line) {
+        return Some(SurfSubmit::File(file_ref));
+    }
+
     let candidate = strip_wrapping_quotes(line.trim());
-    if candidate.is_empty() || candidate.split_whitespace().nth(1).is_some() {
+    if candidate.is_empty() {
         return None;
     }
 
-    if !is_url_token(candidate) {
-        return None;
+    match prefix {
+        SurfPromptPrefix::Html => Some(SurfSubmit::Html(String::from(candidate))),
+        SurfPromptPrefix::File => Some(SurfSubmit::File(String::from(candidate))),
+        SurfPromptPrefix::Http | SurfPromptPrefix::Https => {
+            if candidate.split_whitespace().nth(1).is_some() || !is_url_token(candidate) {
+                return None;
+            }
+            Some(SurfSubmit::Url(prepare_url_with_prefix(candidate, prefix)))
+        }
     }
-
-    Some(prepare_url(candidate))
 }
 
 pub(crate) fn try_file_reference(line: &str) -> Option<String> {
@@ -100,12 +146,17 @@ pub(crate) fn prepare_call_with_url(
     rc
 }
 
-fn prepare_url(host: &str) -> String {
-    if has_http_scheme(host) {
+fn prepare_url_with_prefix(host: &str, prefix: SurfPromptPrefix) -> String {
+    if has_known_scheme(host) {
         return String::from(host);
     }
 
-    let mut url = String::from("http://");
+    let mut url = String::from(match prefix {
+        SurfPromptPrefix::Http => "http://",
+        SurfPromptPrefix::Https => "https://",
+        SurfPromptPrefix::File => "file://",
+        SurfPromptPrefix::Html => "html://",
+    });
     url.push_str(host);
     url
 }
@@ -128,6 +179,16 @@ fn has_http_scheme(s: &str) -> bool {
         .unwrap_or(false)
         || s.get(..8)
             .map(|p| p.eq_ignore_ascii_case("https://"))
+            .unwrap_or(false)
+}
+
+fn has_known_scheme(s: &str) -> bool {
+    has_http_scheme(s)
+        || s.get(..7)
+            .map(|p| p.eq_ignore_ascii_case("file://"))
+            .unwrap_or(false)
+        || s.get(..7)
+            .map(|p| p.eq_ignore_ascii_case("html://"))
             .unwrap_or(false)
 }
 

@@ -412,6 +412,68 @@ pub fn sanitize(text: &str) -> impl fmt::Display + '_ {
     Sanitized { text }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum InputDecodeState {
+    None,
+    Utf8Seq {
+        first: u8,
+        remaining_continuations: u8,
+    },
+}
+
+fn utf8_continuation_count(first: u8) -> Option<u8> {
+    match first {
+        0xC2..=0xDF => Some(1),
+        0xE0..=0xEF => Some(2),
+        0xF0..=0xF4 => Some(3),
+        _ => None,
+    }
+}
+
+pub(crate) fn decode_input_byte_lossy(state: &mut InputDecodeState, b: u8) -> Option<char> {
+    match *state {
+        InputDecodeState::None => {
+            if let Some(remaining_continuations) = utf8_continuation_count(b) {
+                *state = InputDecodeState::Utf8Seq {
+                    first: b,
+                    remaining_continuations,
+                };
+                return None;
+            }
+
+            if b >= 0x80 {
+                return Some('Ü');
+            }
+
+            None
+        }
+        InputDecodeState::Utf8Seq {
+            first,
+            remaining_continuations,
+        } => {
+            if (b & 0xC0) != 0x80 {
+                *state = InputDecodeState::None;
+                return Some('Ü');
+            }
+
+            if remaining_continuations > 1 {
+                *state = InputDecodeState::Utf8Seq {
+                    first,
+                    remaining_continuations: remaining_continuations - 1,
+                };
+                return None;
+            }
+
+            *state = InputDecodeState::None;
+            if first == 0xC2 && b == 0xA7 {
+                Some('§')
+            } else {
+                Some('Ü')
+            }
+        }
+    }
+}
+
 /// Returns the visible terminal column width of `text`.
 ///
 /// This is intended for aligning output that contains ECMA-48/ANSI escape
