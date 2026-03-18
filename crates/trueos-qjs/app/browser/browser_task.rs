@@ -5,7 +5,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_char;
 use core::sync::atomic::{AtomicU32, Ordering};
-use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
@@ -1245,20 +1244,6 @@ pub async fn boot_browser(browser_instance_id: u32) {
         )
         .as_str(),
     );
-    let spawner = unsafe { Spawner::for_current_executor().await };
-    if !qjs::async_fs::ensure_service_started(&spawner) {
-        qjs::trueos_shims::log_error(
-            alloc::format!(
-                "qjs-browser[{}]: async-fs service start failed\n",
-                browser_instance_id
-            )
-            .as_str(),
-        );
-        with_browser_host_state_mut(browser_instance_id, |state| {
-            state.started = false;
-        });
-        return;
-    }
     unsafe {
         let vm = match qjs::vm::QjsVm::new_node() {
             Some(vm) => vm,
