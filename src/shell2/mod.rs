@@ -13,6 +13,7 @@ mod interface;
 mod matrix;
 mod shell2_ai;
 mod shell2_cmd;
+mod shell2_cmd_registry;
 mod shell2_qjs;
 mod shell2_surf;
 #[allow(unused_imports)]
@@ -198,6 +199,7 @@ impl<'a> AlignedWriter<'a> {
         ai_mode: AiPromptMode,
         qjs_mode: QjsPromptMode,
         surf_prefix: SurfPromptPrefix,
+        cmd_status_text: Option<&str>,
     ) {
         self.move_to(STATUS_ROW, 1);
         self.clear_line();
@@ -211,6 +213,8 @@ impl<'a> AlignedWriter<'a> {
             self.ai_status(ai_mode);
         } else if mode == ShellMode2::Qjs {
             self.qjs_status(qjs_mode);
+        } else if mode == ShellMode2::Cmd {
+            self.cmd_status(cmd_status_text);
         }
         self.io.write_str(ecma48::RESET);
     }
@@ -296,6 +300,15 @@ impl<'a> AlignedWriter<'a> {
         self.push_plain(&mut text, " - ");
         self.push_ai_token(&mut text, "eval", qjs_mode == QjsPromptMode::Eval);
         self.right_text(STATUS_ROW, text.as_str());
+    }
+
+    fn cmd_status(&self, cmd_status_text: Option<&str>) {
+        let Some(cmd_status_text) = cmd_status_text else {
+            return;
+        };
+        if !cmd_status_text.is_empty() {
+            self.right_text(STATUS_ROW, cmd_status_text);
+        }
     }
 
     fn push_plain(&self, out: &mut AllocString, text: &str) {
@@ -510,6 +523,10 @@ pub(crate) fn command_registry_json() -> AllocString {
     cmds::command_registry_json()
 }
 
+fn command_names_status_text() -> AllocString {
+    shell2_cmd_registry::command_names_status_text()
+}
+
 fn append_transcript_entry(transcript: &mut VecDeque<TranscriptEntry>, entry: TranscriptEntry) {
     if transcript.len() >= MAX_TRANSCRIPT_HISTORY {
         let _ = transcript.pop_front();
@@ -690,11 +707,19 @@ fn apply_mode_toggle(
     ai_mode: AiPromptMode,
     qjs_mode: QjsPromptMode,
     surf_prefix: SurfPromptPrefix,
+    cmd_status_text: Option<&str>,
     line: &HString<MAX_LINE>,
     minute_text: &str,
 ) {
     out.banner(output_mask, mode, minute_text);
-    out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+    out.mode_status(
+        output_mask,
+        mode,
+        ai_mode,
+        qjs_mode,
+        surf_prefix,
+        cmd_status_text,
+    );
     out.prompt(output_mask);
     for ch in line.chars() {
         out.user_char(ch);
@@ -722,7 +747,15 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     out.banner(output_mask, mode, time_text.as_str());
     let mut ai_mode = AiPromptMode::Normal;
     let mut qjs_mode = QjsPromptMode::Repl;
-    out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+    let mut cmd_status_text: Option<AllocString> = None;
+    out.mode_status(
+        output_mask,
+        mode,
+        ai_mode,
+        qjs_mode,
+        surf_prefix,
+        cmd_status_text.as_deref(),
+    );
 
     out.set_scroll_region(SCROLL_TOP_ROW);
     out.prompt(output_mask);
@@ -739,7 +772,14 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         let matrix_revision = matrix::revision();
         if matrix_revision != last_matrix_revision {
             last_matrix_revision = matrix_revision;
-            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+            out.mode_status(
+                output_mask,
+                mode,
+                ai_mode,
+                qjs_mode,
+                surf_prefix,
+                cmd_status_text.as_deref(),
+            );
             out.prompt(output_mask);
             for ch in line.chars() {
                 out.user_char(ch);
@@ -754,7 +794,14 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         if minute_bucket != last_minute_bucket {
             last_minute_bucket = minute_bucket;
             out.banner(output_mask, mode, minute_text.as_str());
-            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+            out.mode_status(
+                output_mask,
+                mode,
+                ai_mode,
+                qjs_mode,
+                surf_prefix,
+                cmd_status_text.as_deref(),
+            );
             out.render_transcript(&transcript);
             out.prompt(output_mask);
             for ch in line.chars() {
@@ -803,6 +850,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     ai_mode,
                                     qjs_mode,
                                     surf_prefix,
+                                    cmd_status_text.as_deref(),
                                     &line,
                                     minute_text.as_str(),
                                 );
@@ -832,6 +880,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             ai_mode,
                             qjs_mode,
                             surf_prefix,
+                            cmd_status_text.as_deref(),
                             &line,
                             minute_text.as_str(),
                         );
@@ -851,30 +900,67 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 b'\t' => {
                     match mode {
                         ShellMode2::Surf => {
+                            cmd_status_text = None;
                             surf_prefix = surf_prefix.next();
-                            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+                            out.mode_status(
+                                output_mask,
+                                mode,
+                                ai_mode,
+                                qjs_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                            );
                             out.prompt(output_mask);
                             for ch in line.chars() {
                                 out.user_char(ch);
                             }
                         }
                         ShellMode2::Ai => {
+                            cmd_status_text = None;
                             ai_mode = ai_mode.next();
-                            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+                            out.mode_status(
+                                output_mask,
+                                mode,
+                                ai_mode,
+                                qjs_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                            );
                             out.prompt(output_mask);
                             for ch in line.chars() {
                                 out.user_char(ch);
                             }
                         }
                         ShellMode2::Qjs => {
+                            cmd_status_text = None;
                             qjs_mode = qjs_mode.next();
-                            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+                            out.mode_status(
+                                output_mask,
+                                mode,
+                                ai_mode,
+                                qjs_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                            );
                             out.prompt(output_mask);
                             for ch in line.chars() {
                                 out.user_char(ch);
                             }
                         }
-                        ShellMode2::Cmd => {}
+                        ShellMode2::Cmd => {
+                            if line.is_empty() {
+                                cmd_status_text = Some(command_names_status_text());
+                                out.mode_status(
+                                    output_mask,
+                                    mode,
+                                    ai_mode,
+                                    qjs_mode,
+                                    surf_prefix,
+                                    cmd_status_text.as_deref(),
+                                );
+                                out.prompt(output_mask);
+                            }
+                        }
                     }
                 }
                 b'\r' | b'\n' => {
@@ -884,12 +970,20 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     }
                     let submitted_raw = line.as_str();
                     let submitted = submitted_raw.trim();
+                    cmd_status_text = None;
                     if !submitted.is_empty() {
                         if submitted_raw.starts_with('§') {
                             handle_matrix_operator(io, submitted);
                             mode = ShellMode2::Cmd;
                             out.banner(output_mask, mode, minute_text.as_str());
-                            out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+                            out.mode_status(
+                                output_mask,
+                                mode,
+                                ai_mode,
+                                qjs_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                            );
                             transcript = current_transcript_for_task(io);
                             out.render_transcript(&transcript);
                         } else {
@@ -909,7 +1003,14 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             {
                                 out.set_line_width(width);
                                 out.banner(output_mask, mode, minute_text.as_str());
-                                out.mode_status(output_mask, mode, ai_mode, qjs_mode, surf_prefix);
+                                out.mode_status(
+                                    output_mask,
+                                    mode,
+                                    ai_mode,
+                                    qjs_mode,
+                                    surf_prefix,
+                                    cmd_status_text.as_deref(),
+                                );
                                 transcript = current_transcript_for_task(io);
                                 out.render_transcript(&transcript);
                             }
@@ -923,15 +1024,18 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 }
                 0x08 | 0x7F => {
                     text_decode = ecma48::InputDecodeState::None;
+                    cmd_status_text = None;
                     if line.pop().is_some() {
                         out.user_backspace();
                     }
                 }
                 0x20..=0x7E => {
                     text_decode = ecma48::InputDecodeState::None;
+                    cmd_status_text = None;
                     push_input_char(&out, &mut line, b as char);
                 }
                 _ => {
+                    cmd_status_text = None;
                     if let Some(ch) = ecma48::decode_input_byte_lossy(&mut text_decode, b) {
                         push_input_char(&out, &mut line, ch);
                     }
