@@ -465,6 +465,10 @@ fn register_output(io: &'static dyn ShellIo2) {
     }
 }
 
+pub(crate) fn line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
+    matrix::active_line_width(output_target_for_backend(io))
+}
+
 pub(crate) fn print_broadcast_line(text: &str) {
     let outputs = REGISTERED_OUTPUTS.load(Ordering::Relaxed);
     if (outputs & OUTPUT_UART1_MASK) != 0 {
@@ -840,6 +844,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     register_output(io);
     let out = AlignedWriter::new(io);
     let output_mask = output_target_for_backend(io);
+    out.set_line_width(matrix::active_line_width(output_mask));
 
     out.clear_screen_home();
     out.reset_scroll_region();
@@ -1207,6 +1212,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         if submitted_raw.starts_with('§') {
                             handle_matrix_operator(io, submitted);
                             mode = ShellMode2::Cmd;
+                            out.set_line_width(matrix::active_line_width(output_mask));
                             out.banner(output_mask, mode, minute_text.as_str());
                             out.mode_status(
                                 output_mask,
@@ -1234,6 +1240,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             ) {
                                 HandleSubmitResult::SetLineWidth(width) => {
                                     out.set_line_width(width);
+                                    matrix::set_active_line_width(output_mask, width);
                                     out.banner(output_mask, mode, minute_text.as_str());
                                     out.mode_status(
                                         output_mask,
