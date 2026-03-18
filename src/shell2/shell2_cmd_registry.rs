@@ -114,6 +114,11 @@ fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::tlb::try_parse(io, &mut args)
 }
 
+fn dispatch_tetris(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    super::cmds::tetris::try_parse(io, &mut args)
+}
+
 fn dispatch_turbo(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::turbo::try_parse(io, &mut args)
@@ -177,6 +182,12 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         mode: "cmd",
         color: None,
         handler: dispatch_tlb,
+    },
+    BuiltinShell2CmdEntry {
+        name: "tetris",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_tetris,
     },
     BuiltinShell2CmdEntry {
         name: "turbo",
