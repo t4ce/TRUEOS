@@ -1,8 +1,6 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::shell2::ShellIo2;
-
 const CELL_SEPARATOR: &str = " | ";
 const FRAME_SIDE_WIDTH: usize = 4;
 const MIN_COL_WIDTH: usize = 3;
@@ -62,32 +60,40 @@ impl<'a> TlbTable<'a> {
         Self::with_width(headers, wanted_width.min(max_width))
     }
 
-    pub(crate) fn print_header(&self, io: &dyn ShellIo2) {
-        self.print_rule(io, '┌', '┐');
-        self.print_cells(io, self.headers.iter().copied());
-        self.print_rule(io, '├', '┤');
+    pub(crate) fn emit_header<F>(&self, mut emit_line: F)
+    where
+        F: FnMut(&str),
+    {
+        emit_line(self.rule_line('└', '┘').as_str());
+        emit_line(self.cells_line(self.headers.iter().copied()).as_str());
+        emit_line(self.rule_line('├', '┤').as_str());
     }
 
-    pub(crate) fn print_row<S: AsRef<str>>(&self, io: &dyn ShellIo2, cells: &[S]) {
-        self.print_cells(io, cells.iter().map(AsRef::as_ref));
+    pub(crate) fn emit_row<S: AsRef<str>, F>(&self, cells: &[S], mut emit_line: F)
+    where
+        F: FnMut(&str),
+    {
+        emit_line(self.cells_line(cells.iter().map(AsRef::as_ref)).as_str());
     }
 
-    pub(crate) fn print_footer(&self, io: &dyn ShellIo2) {
-        self.print_rule(io, '└', '┘');
+    pub(crate) fn emit_footer<F>(&self, mut emit_line: F)
+    where
+        F: FnMut(&str),
+    {
+        emit_line(self.rule_line('┌', '┐').as_str());
     }
 
-    fn print_rule(&self, io: &dyn ShellIo2, left: char, right: char) {
+    fn rule_line(&self, left: char, right: char) -> String {
         let mut line = String::with_capacity(self.width + 2);
         line.push(left);
         for _ in 0..self.width.saturating_sub(2) {
             line.push('─');
         }
         line.push(right);
-        line.push_str("\r\n");
-        io.write_str(line.as_str());
+        line
     }
 
-    fn print_cells<'b>(&self, io: &dyn ShellIo2, cells: impl Iterator<Item = &'b str>) {
+    fn cells_line<'b>(&self, cells: impl Iterator<Item = &'b str>) -> String {
         let mut line = String::with_capacity(self.width + 2);
         line.push('│');
         line.push(' ');
@@ -104,8 +110,7 @@ impl<'a> TlbTable<'a> {
 
         line.push(' ');
         line.push('│');
-        line.push_str("\r\n");
-        io.write_str(line.as_str());
+        line
     }
 }
 

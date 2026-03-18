@@ -9,6 +9,7 @@ use super::{LineSource, TranscriptEntry};
 
 pub(crate) const MATRIX_SLOT_ID_MAX: usize = 3;
 const DEFAULT_MATRIX_SLOT_LINE_CAP: usize = 512;
+const DEFAULT_MATRIX_SLOT_LINE_WIDTH: usize = 100;
 
 pub(crate) type MatrixSlotId = HString<MATRIX_SLOT_ID_MAX>;
 
@@ -32,6 +33,7 @@ struct MatrixSlot {
     lines: VecDeque<TranscriptEntry>,
     activity: MatrixSlotActivity,
     running_count: usize,
+    line_width: usize,
 }
 
 struct MatrixState {
@@ -86,6 +88,7 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
         lines: VecDeque::new(),
         activity: MatrixSlotActivity::Idle,
         running_count: 0,
+        line_width: DEFAULT_MATRIX_SLOT_LINE_WIDTH,
     });
     slots.len() - 1
 }
@@ -147,6 +150,23 @@ pub(crate) fn active_lines(output_mask: u8) -> VecDeque<TranscriptEntry> {
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     guard.slots[idx].lines.clone()
+}
+
+pub(crate) fn active_line_width(output_mask: u8) -> usize {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    guard.slots[idx].line_width
+}
+
+pub(crate) fn set_active_line_width(output_mask: u8, width: usize) {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    if guard.slots[idx].line_width != width {
+        guard.slots[idx].line_width = width;
+        bump_revision(&mut guard);
+    }
 }
 
 pub(crate) fn record_line_for_output(

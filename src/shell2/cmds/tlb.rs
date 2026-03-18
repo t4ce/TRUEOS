@@ -6,11 +6,30 @@ use acpi::sdt::madt::Madt;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use super::super::{ShellBackend2, print_shell_line};
+use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
+use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const TLB_USAGE: &str =
-    "tlb: usage `tlb [pci|pciids|pci.bar|mem|cpu|acpi|uefi|x2apic|usb|dump]`";
+    "tlb: usage `tlb [pci|pciids|pcibar|mem|cpu|acpi|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb|dump]`";
+const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
+const TLB_MENU_ROWS: [(&str, &str); 15] = [
+    ("pci", "List PCI devices"),
+    ("pciids", "Download pci.ids once"),
+    ("pcibar", "List PCI BAR windows"),
+    ("mem", "List memory map"),
+    ("cpu", "List CPU cores"),
+    ("acpi", "List ACPI tables"),
+    ("facp", "Show FACP/FADT details"),
+    ("madt", "Show MADT details"),
+    ("hpet", "Show HPET details"),
+    ("mcfg", "Show MCFG details"),
+    ("ssdt", "Show SSDT details"),
+    ("uefi", "List UEFI tables"),
+    ("x2apic", "List x2APIC topology"),
+    ("usb", "List USB controllers and ports"),
+    ("dump", "Write all tables to trueos/pci/tlb.txt"),
+];
 
 #[derive(Clone, Copy)]
 struct Column {
@@ -289,27 +308,13 @@ fn write_pci_bar_dump(out: &mut String) {
 }
 
 fn print_menu(io: &'static dyn ShellBackend2) {
-    let cols = [
-        Column {
-            header: "Subcommand",
-            width: 16,
-        },
-        Column {
-            header: "Description",
-            width: 44,
-        },
-    ];
-    emit_table_header(io, &cols);
-    emit_table_row(io, &cols, &["pci", "List PCI devices"]);
-    emit_table_row(io, &cols, &["pciids", "Download pci.ids once"]);
-    emit_table_row(io, &cols, &["pci.bar", "List PCI BAR windows"]);
-    emit_table_row(io, &cols, &["mem", "List memory map"]);
-    emit_table_row(io, &cols, &["cpu", "List CPU cores"]);
-    emit_table_row(io, &cols, &["acpi", "List ACPI tables"]);
-    emit_table_row(io, &cols, &["uefi", "List UEFI tables"]);
-    emit_table_row(io, &cols, &["x2apic", "List x2APIC topology"]);
-    emit_table_row(io, &cols, &["usb", "List USB controllers and ports"]);
-    emit_table_row(io, &cols, &["dump", "Write all tables to trueos/pci/tlb.txt"]);
+    let table = TlbTable::with_width(&TLB_MENU_HEADERS, line_width_for_backend(io).saturating_sub(2));
+
+    table.emit_header(|text| line(io, text));
+    for (cmd, desc) in TLB_MENU_ROWS {
+        table.emit_row(&[cmd, desc], |text| line(io, text));
+    }
+    table.emit_footer(|text| line(io, text));
 }
 
 fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
@@ -320,7 +325,7 @@ fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
             .ok()
             .flatten()
     } else {
-        line(io, "tlb.pci: no filesystem readiness");
+        line(io, "tlb pci: no filesystem readiness");
         None
     };
 
@@ -350,25 +355,25 @@ fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
 }
 
 fn cmd_tlb_pciids(io: &'static dyn ShellBackend2) {
-    line(io, "tlb.pciids: downloading pci.ids once...");
+    line(io, "tlb pciids: downloading pci.ids once...");
 
     match crate::pci::pciids::download_once_blocking() {
         Ok(bytes) => {
             line(
                 io,
                 alloc::format!(
-                    "tlb.pciids: downloaded {} bytes to {}",
+                    "tlb pciids: downloaded {} bytes to {}",
                     bytes,
                     crate::pci::pciids::PCI_IDS_KEY
                 )
                 .as_str(),
             );
-            line(io, "tlb.pciids: tlb.pci will auto-use it on the next run");
+            line(io, "tlb pciids: tlb pci will auto-use it on the next run");
         }
         Err(reason) => {
             line(
                 io,
-                alloc::format!("tlb.pciids: failed ({})", reason).as_str(),
+                alloc::format!("tlb pciids: failed ({})", reason).as_str(),
             );
         }
     }
@@ -444,7 +449,7 @@ fn cmd_tlb_pci_bar(io: &'static dyn ShellBackend2) {
 fn cmd_tlb_mem(io: &'static dyn ShellBackend2) {
     let memmap = crate::limine::memmap_entries().unwrap_or(&[]);
     if memmap.is_empty() {
-        line(io, "tlb.mem: no memory map available");
+        line(io, "tlb mem: no memory map available");
         return;
     }
 
@@ -474,7 +479,7 @@ fn cmd_tlb_mem(io: &'static dyn ShellBackend2) {
 
 fn cmd_tlb_cpu(io: &'static dyn ShellBackend2) {
     if !crate::smp::is_init() {
-        line(io, "tlb.cpu: smp not initialized");
+        line(io, "tlb cpu: smp not initialized");
         return;
     }
 
@@ -530,7 +535,7 @@ fn cmd_tlb_cpu(io: &'static dyn ShellBackend2) {
 
 fn cmd_tlb_acpi(io: &'static dyn ShellBackend2) {
     let Some(tables) = crate::efi::acpi::ensure_tables() else {
-        line(io, "tlb.acpi: no tables found");
+        line(io, "tlb acpi: no tables found");
         return;
     };
 
@@ -574,9 +579,9 @@ fn cmd_tlb_acpi(io: &'static dyn ShellBackend2) {
     }
 }
 
-fn cmd_tlb_acpi_facp(io: &'static dyn ShellBackend2) {
+fn cmd_tlb_facp(io: &'static dyn ShellBackend2) {
     let Some(tables) = crate::efi::acpi::ensure_tables() else {
-        line(io, "tlb.acpi: no tables found");
+        line(io, "tlb facp: no tables found");
         return;
     };
 
@@ -591,9 +596,9 @@ fn cmd_tlb_acpi_facp(io: &'static dyn ShellBackend2) {
     }
 }
 
-fn cmd_tlb_acpi_madt(io: &'static dyn ShellBackend2) {
+fn cmd_tlb_madt(io: &'static dyn ShellBackend2) {
     let Some(tables) = crate::efi::acpi::ensure_tables() else {
-        line(io, "tlb.acpi: no tables found");
+        line(io, "tlb madt: no tables found");
         return;
     };
 
@@ -608,7 +613,7 @@ fn cmd_tlb_acpi_madt(io: &'static dyn ShellBackend2) {
     }
 }
 
-fn cmd_tlb_acpi_hpet(io: &'static dyn ShellBackend2) {
+fn cmd_tlb_hpet(io: &'static dyn ShellBackend2) {
     if let Some(hpet) = crate::efi::acpi::hpet::ensure() {
         multiline(io, alloc::format!("{:#?}", hpet).as_str());
     } else {
@@ -616,13 +621,13 @@ fn cmd_tlb_acpi_hpet(io: &'static dyn ShellBackend2) {
     }
 }
 
-fn cmd_tlb_acpi_mcfg(io: &'static dyn ShellBackend2) {
+fn cmd_tlb_mcfg(io: &'static dyn ShellBackend2) {
     line(io, "MCFG: Command disabled due to compilation error");
 }
 
-fn cmd_tlb_acpi_ssdt(io: &'static dyn ShellBackend2) {
+fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
     let Some(tables) = crate::efi::acpi::ensure_tables() else {
-        line(io, "tlb.acpi: no tables found");
+        line(io, "tlb ssdt: no tables found");
         return;
     };
 
@@ -671,7 +676,7 @@ fn cmd_tlb_acpi_ssdt(io: &'static dyn ShellBackend2) {
 
 fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
     let Some(st) = crate::efi::system_table() else {
-        line(io, "tlb.uefi: system table not found (not booted via UEFI?)");
+        line(io, "tlb uefi: system table not found (not booted via UEFI?)");
         return;
     };
 
@@ -828,41 +833,13 @@ fn cmd_tlb_x2apic(io: &'static dyn ShellBackend2) {
 fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
     let ctrls = crate::usb::xhci::xhc_list();
     if ctrls.is_empty() {
-        line(io, "tlb.usb: no xhci controllers found");
+        line(io, "tlb usb: no xhci controllers found");
         return;
     }
 
-    let cols = [
-        Column {
-            header: "Ctrl",
-            width: 4,
-        },
-        Column {
-            header: "Port",
-            width: 4,
-        },
-        Column {
-            header: "State",
-            width: 10,
-        },
-        Column {
-            header: "Speed",
-            width: 8,
-        },
-        Column {
-            header: "Device",
-            width: 18,
-        },
-        Column {
-            header: "VID:PID",
-            width: 11,
-        },
-        Column {
-            header: "Raw",
-            width: 10,
-        },
-    ];
-    emit_table_header(io, &cols);
+    let headers = ["Ctrl", "Port", "State", "Speed", "Device", "VID:PID", "Raw"];
+    let table = TlbTable::with_width(&headers, line_width_for_backend(io).saturating_sub(2));
+    table.emit_header(|text| line(io, text));
 
     for info in ctrls.iter() {
         let ports = crate::usb::port_snapshot(info.controller_id);
@@ -885,9 +862,12 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
             };
             let raw = alloc::format!("0x{:08X}", port.status);
 
-            emit_table_row(io, &cols, &[&ctrl, &port_id, state, speed, device, &vidpid, &raw]);
+            table.emit_row(&[&ctrl, &port_id, state, speed, device, &vidpid, &raw], |text| {
+                line(io, text)
+            });
         }
     }
+    table.emit_footer(|text| line(io, text));
 }
 
 fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
@@ -1220,116 +1200,16 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
     }
 }
 
-fn dispatch_subcommand(io: &'static dyn ShellBackend2, cmd: &str, args: &mut SplitWhitespace<'_>) {
-    match cmd {
-        "help" => print_menu(io),
-        "pci" => match args.next() {
-            Some("bar") => {
-                if args.next().is_some() {
-                    line(io, TLB_USAGE);
-                } else {
-                    cmd_tlb_pci_bar(io);
-                }
-            }
-            Some(_) => line(io, TLB_USAGE),
-            None => cmd_tlb_pci(io),
-        },
-        "pciids" => {
-            if args.next().is_some() {
-                line(io, TLB_USAGE);
-            } else {
-                cmd_tlb_pciids(io);
-            }
-        }
-        "pci.bar" => {
-            if args.next().is_some() {
-                line(io, TLB_USAGE);
-            } else {
-                cmd_tlb_pci_bar(io);
-            }
-        }
-        "mem" => {
-            if args.next().is_some() {
-                line(io, TLB_USAGE);
-            } else {
-                cmd_tlb_mem(io);
-            }
-        }
-        "cpu" => {
-            if args.next().is_some() {
-                line(io, TLB_USAGE);
-            } else {
-                cmd_tlb_cpu(io);
-            }
-        }
-        "acpi" => match args.next() {
-            None => cmd_tlb_acpi(io),
-            Some("facp") => {
-                if args.next().is_some() {
-                    line(io, TLB_USAGE);
-                } else {
-                    cmd_tlb_acpi_facp(io);
-                }
-            }
-            Some("madt") => {
-                if args.next().is_some() {
-                    line(io, TLB_USAGE);
-                } else {
-                    cmd_tlb_acpi_madt(io);
-                }
-            }
-            Some("hpet") => {
-                if args.next().is_some() {
-                    line(io, TLB_USAGE);
-                } else {
-                    cmd_tlb_acpi_hpet(io);
-                }
-            }
-            Some("mcfg") => {
-                if args.next().is_some() {
-                    line(io, TLB_USAGE);
-                } else {
-                    cmd_tlb_acpi_mcfg(io);
-                }
-            }
-            Some("ssdt") => {
-                if args.next().is_some() {
-                    line(io, TLB_USAGE);
-                } else {
-                    cmd_tlb_acpi_ssdt(io);
-                }
-            }
-            Some(_) => line(io, TLB_USAGE),
-        },
-        "uefi" => {
-            if args.next().is_some() {
-                line(io, TLB_USAGE);
-            } else {
-                cmd_tlb_uefi(io);
-            }
-        }
-        "x2apic" => {
-            if args.next().is_some() {
-                line(io, TLB_USAGE);
-            } else {
-                cmd_tlb_x2apic(io);
-            }
-        }
-        "usb" => {
-            if args.next().is_some() {
-                line(io, TLB_USAGE);
-            } else {
-                cmd_tlb_usb(io);
-            }
-        }
-        "dump" => {
-            if args.next().is_some() {
-                line(io, TLB_USAGE);
-            } else {
-                cmd_tlb_dump(io);
-            }
-        }
-        _ => line(io, TLB_USAGE),
+fn ensure_no_args(
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+    usage: &str,
+) -> bool {
+    if args.next().is_some() {
+        line(io, usage);
+        false
+    } else {
+        true
     }
 }
 
@@ -1337,21 +1217,30 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
-    let Some(cmd) = args.next() else {
-        print_menu(io);
-        return ParseOutcome::Handled;
-    };
-
-    dispatch_subcommand(io, cmd, args);
-    ParseOutcome::Handled
-}
-
-pub(crate) fn try_parse_alias(
-    io: &'static dyn ShellBackend2,
-    alias: &str,
-    rest: &str,
-) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    dispatch_subcommand(io, alias, &mut args);
+    match args.next() {
+        None => print_menu(io),
+        Some("pci") if ensure_no_args(io, args, "tlb: usage `tlb pci`") => cmd_tlb_pci(io),
+        Some("pciids") if ensure_no_args(io, args, "tlb: usage `tlb pciids`") => {
+            cmd_tlb_pciids(io)
+        }
+        Some("pcibar") if ensure_no_args(io, args, "tlb: usage `tlb pcibar`") => {
+            cmd_tlb_pci_bar(io)
+        }
+        Some("mem") if ensure_no_args(io, args, "tlb: usage `tlb mem`") => cmd_tlb_mem(io),
+        Some("cpu") if ensure_no_args(io, args, "tlb: usage `tlb cpu`") => cmd_tlb_cpu(io),
+        Some("acpi") if ensure_no_args(io, args, "tlb: usage `tlb acpi`") => cmd_tlb_acpi(io),
+        Some("facp") if ensure_no_args(io, args, "tlb: usage `tlb facp`") => cmd_tlb_facp(io),
+        Some("madt") if ensure_no_args(io, args, "tlb: usage `tlb madt`") => cmd_tlb_madt(io),
+        Some("hpet") if ensure_no_args(io, args, "tlb: usage `tlb hpet`") => cmd_tlb_hpet(io),
+        Some("mcfg") if ensure_no_args(io, args, "tlb: usage `tlb mcfg`") => cmd_tlb_mcfg(io),
+        Some("ssdt") if ensure_no_args(io, args, "tlb: usage `tlb ssdt`") => cmd_tlb_ssdt(io),
+        Some("uefi") if ensure_no_args(io, args, "tlb: usage `tlb uefi`") => cmd_tlb_uefi(io),
+        Some("x2apic") if ensure_no_args(io, args, "tlb: usage `tlb x2apic`") => {
+            cmd_tlb_x2apic(io)
+        }
+        Some("usb") if ensure_no_args(io, args, "tlb: usage `tlb usb`") => cmd_tlb_usb(io),
+        Some("dump") if ensure_no_args(io, args, "tlb: usage `tlb dump`") => cmd_tlb_dump(io),
+        Some(_) => line(io, TLB_USAGE),
+    }
     ParseOutcome::Handled
 }

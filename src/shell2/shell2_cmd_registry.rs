@@ -116,46 +116,6 @@ fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::tlb::try_parse(io, &mut args)
 }
 
-fn dispatch_tlb_pci(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tlb::try_parse_alias(io, "pci", rest)
-}
-
-fn dispatch_tlb_pciids(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tlb::try_parse_alias(io, "pciids", rest)
-}
-
-fn dispatch_tlb_pci_bar(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tlb::try_parse_alias(io, "pci.bar", rest)
-}
-
-fn dispatch_tlb_mem(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tlb::try_parse_alias(io, "mem", rest)
-}
-
-fn dispatch_tlb_cpu(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tlb::try_parse_alias(io, "cpu", rest)
-}
-
-fn dispatch_tlb_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tlb::try_parse_alias(io, "acpi", rest)
-}
-
-fn dispatch_tlb_uefi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tlb::try_parse_alias(io, "uefi", rest)
-}
-
-fn dispatch_tlb_x2apic(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tlb::try_parse_alias(io, "x2apic", rest)
-}
-
-fn dispatch_tlb_usb(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tlb::try_parse_alias(io, "usb", rest)
-}
-
-fn dispatch_tlb_dump(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tlb::try_parse_alias(io, "dump", rest)
-}
-
 fn dispatch_txt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     dispatch_not_wired("txt", spawner, io, rest)
 }
@@ -220,66 +180,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         mode: "cmd",
         color: None,
         handler: dispatch_tlb,
-    },
-    BuiltinShell2CmdEntry {
-        name: "tlb.pci",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tlb_pci,
-    },
-    BuiltinShell2CmdEntry {
-        name: "tlb.pciids",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tlb_pciids,
-    },
-    BuiltinShell2CmdEntry {
-        name: "tlb.pci.bar",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tlb_pci_bar,
-    },
-    BuiltinShell2CmdEntry {
-        name: "tlb.mem",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tlb_mem,
-    },
-    BuiltinShell2CmdEntry {
-        name: "tlb.cpu",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tlb_cpu,
-    },
-    BuiltinShell2CmdEntry {
-        name: "tlb.acpi",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tlb_acpi,
-    },
-    BuiltinShell2CmdEntry {
-        name: "tlb.uefi",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tlb_uefi,
-    },
-    BuiltinShell2CmdEntry {
-        name: "tlb.x2apic",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tlb_x2apic,
-    },
-    BuiltinShell2CmdEntry {
-        name: "tlb.usb",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tlb_usb,
-    },
-    BuiltinShell2CmdEntry {
-        name: "tlb.dump",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tlb_dump,
     },
     BuiltinShell2CmdEntry {
         name: "txt",
