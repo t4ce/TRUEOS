@@ -9,6 +9,7 @@ pub(crate) mod file;
 pub(crate) mod format;
 pub(crate) mod hv;
 pub(crate) mod install;
+pub(crate) mod net;
 pub(crate) mod set;
 pub(crate) mod smp;
 pub(crate) mod tlb;
