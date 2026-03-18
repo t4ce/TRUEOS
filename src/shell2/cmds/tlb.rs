@@ -1,12 +1,22 @@
-use super::tlb_helper::TlbTable;
-use crate::shell::CommandAction;
-use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
-use crate::shell::table::{Table, TableColumn};
+use core::fmt::Write;
+use core::str::SplitWhitespace;
+
 use acpi::sdt::fadt::Fadt;
 use acpi::sdt::madt::Madt;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::fmt::Write;
+
+use super::super::{ShellBackend2, print_shell_line};
+use crate::shell2::shell2_cmd::ParseOutcome;
+
+const TLB_USAGE: &str =
+    "tlb: usage `tlb [pci|pciids|pci.bar|mem|cpu|acpi|uefi|x2apic|usb|dump]`";
+
+#[derive(Clone, Copy)]
+struct Column {
+    header: &'static str,
+    width: usize,
+}
 
 #[derive(Clone, Copy)]
 struct PciBarDecoded {
@@ -37,6 +47,67 @@ struct PciDeviceRow {
     pid: String,
 }
 
+fn line(io: &'static dyn ShellBackend2, text: &str) {
+    print_shell_line(io, text);
+}
+
+fn blank(io: &'static dyn ShellBackend2) {
+    print_shell_line(io, "");
+}
+
+fn multiline(io: &'static dyn ShellBackend2, text: &str) {
+    for line_text in text.lines() {
+        line(io, line_text.trim_end_matches('\r'));
+    }
+}
+
+fn truncate_cell(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+
+    let chars = text.chars().count();
+    if chars <= width {
+        let mut out = String::from(text);
+        for _ in 0..(width - chars) {
+            out.push(' ');
+        }
+        return out;
+    }
+
+    if width <= 3 {
+        return text.chars().take(width).collect();
+    }
+
+    let mut out = String::new();
+    for ch in text.chars().take(width - 3) {
+        out.push(ch);
+    }
+    out.push_str("...");
+    out
+}
+
+fn emit_table_header(io: &'static dyn ShellBackend2, cols: &[Column]) {
+    emit_table_row(io, cols, &cols.iter().map(|col| col.header).collect::<Vec<_>>());
+    let sep = cols
+        .iter()
+        .map(|col| "-".repeat(col.width))
+        .collect::<Vec<_>>();
+    let sep_refs = sep.iter().map(String::as_str).collect::<Vec<_>>();
+    emit_table_row(io, cols, &sep_refs);
+}
+
+fn emit_table_row(io: &'static dyn ShellBackend2, cols: &[Column], cells: &[&str]) {
+    let mut out = String::new();
+    for (index, col) in cols.iter().enumerate() {
+        if index > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(truncate_cell(cells.get(index).copied().unwrap_or(""), col.width).as_str());
+    }
+    line(io, out.as_str());
+}
+
 #[inline]
 fn ensure_pci_devices_enumerated() {
     let mut len: usize = 0;
@@ -61,12 +132,11 @@ fn decode_pci_bar(bar_lo: u32, bar_hi: Option<u32>) -> PciBarDecoded {
     }
 
     if (bar_lo & 0x1) != 0 {
-        let base = (bar_lo & !0x3) as u64;
         return PciBarDecoded {
             kind: "IO",
             width: "-",
             prefetch: "-",
-            base,
+            base: (bar_lo & !0x3) as u64,
             is_64: false,
         };
     }
@@ -98,7 +168,7 @@ fn format_bar_raw(bar_lo: u32, bar_hi: Option<u32>) -> String {
 }
 
 fn pci_bar_rows() -> Vec<PciBarRow> {
-    let mut rows: Vec<PciBarRow> = Vec::new();
+    let mut rows = Vec::new();
 
     crate::pci::with_devices(|list| {
         for dev in list.iter() {
@@ -148,7 +218,7 @@ fn pci_bar_rows() -> Vec<PciBarRow> {
 }
 
 fn pci_device_rows(db: Option<&[u8]>) -> Vec<PciDeviceRow> {
-    let mut rows: Vec<PciDeviceRow> = Vec::new();
+    let mut rows = Vec::new();
 
     crate::pci::with_devices(|list| {
         for dev in list.iter() {
@@ -157,12 +227,12 @@ fn pci_device_rows(db: Option<&[u8]>) -> Vec<PciDeviceRow> {
             let pid = alloc::format!("{:04X}", dev.device);
 
             let name = if let Some(db) = db {
-                if let Some((v, d)) =
+                if let Some((vendor, device)) =
                     crate::pci::pciids::lookup_vendor_device_from_db(db, dev.vendor, dev.device)
                 {
-                    let v_s = String::from_utf8_lossy(v).trim().to_string();
-                    let d_s = String::from_utf8_lossy(d).trim().to_string();
-                    alloc::format!("{} {}", v_s, d_s)
+                    let vendor_s = String::from_utf8_lossy(vendor).trim().to_string();
+                    let device_s = String::from_utf8_lossy(device).trim().to_string();
+                    alloc::format!("{} {}", vendor_s, device_s)
                 } else {
                     String::new()
                 }
@@ -198,7 +268,7 @@ fn write_pci_bar_dump(out: &mut String) {
     .unwrap();
 
     for row in pci_bar_rows() {
-        let _ = writeln!(
+        writeln!(
             out,
             "{:10}  {:6}  {:6}  {:4}  {:5}  {:2}  {:1}  {:18}  {:12}  {:19}",
             row.addr,
@@ -211,36 +281,38 @@ fn write_pci_bar_dump(out: &mut String) {
             row.base,
             row.size,
             row.raw
-        );
+        )
+        .unwrap();
     }
 
     writeln!(out).unwrap();
 }
 
-pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
-    let headers = ["Subcommand", "Description"];
-    let table = TlbTable::with_width(headers.as_slice(), (*ctx.term_cols).saturating_sub(2));
-    table.print_header(ctx.io);
-    table.print_row(ctx.io, &["tlb.pci", "List PCI devices"]);
-    table.print_row(ctx.io, &["tlb.pciids", "Download pci.ids once"]);
-    table.print_row(ctx.io, &["tlb.pci.bar", "List PCI BAR windows"]);
-    table.print_row(ctx.io, &["tlb.mem", "List memory map"]);
-    table.print_row(ctx.io, &["tlb.cpu", "List CPU cores"]);
-    table.print_row(ctx.io, &["tlb.acpi", "List ACPI tables"]);
-    table.print_row(ctx.io, &["tlb.uefi", "List UEFI tables"]);
-    table.print_row(ctx.io, &["tlb.x2apic", "List x2APIC topology"]);
-    table.print_row(ctx.io, &["tlb.usb", "List USB controllers and ports"]);
-    table.print_row(ctx.io, &["tlb.dump", "Write all tables to trueos/pci/tlb.txt"]);
-    table.print_footer(ctx.io);
-
-    ctx.io.write_str("tlb: available subcommands\r\n");
-    CommandAction::None
+fn print_menu(io: &'static dyn ShellBackend2) {
+    let cols = [
+        Column {
+            header: "Subcommand",
+            width: 16,
+        },
+        Column {
+            header: "Description",
+            width: 44,
+        },
+    ];
+    emit_table_header(io, &cols);
+    emit_table_row(io, &cols, &["pci", "List PCI devices"]);
+    emit_table_row(io, &cols, &["pciids", "Download pci.ids once"]);
+    emit_table_row(io, &cols, &["pci.bar", "List PCI BAR windows"]);
+    emit_table_row(io, &cols, &["mem", "List memory map"]);
+    emit_table_row(io, &cols, &["cpu", "List CPU cores"]);
+    emit_table_row(io, &cols, &["acpi", "List ACPI tables"]);
+    emit_table_row(io, &cols, &["uefi", "List UEFI tables"]);
+    emit_table_row(io, &cols, &["x2apic", "List x2APIC topology"]);
+    emit_table_row(io, &cols, &["usb", "List USB controllers and ports"]);
+    emit_table_row(io, &cols, &["dump", "Write all tables to trueos/pci/tlb.txt"]);
 }
 
-pub(crate) fn cmd_tlb_pci(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
     ensure_pci_devices_enumerated();
 
     let db = if crate::v::readiness::is_set(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED) {
@@ -248,221 +320,187 @@ pub(crate) fn cmd_tlb_pci(
             .ok()
             .flatten()
     } else {
-        ctx.io.write_str("tlb.pci: no filesystem readiness\r\n");
+        line(io, "tlb.pci: no filesystem readiness");
         None
     };
-    let db = db.as_deref();
-
-    let term_width = (*ctx.term_cols).saturating_sub(2);
-    // Overhead = Address(10) + VID(6) + PID(6) + 4 * 2 (padding) = 30
-    let overhead = 10 + 6 + 6 + 8;
-    let name_width = term_width.saturating_sub(overhead).max(20);
 
     let cols = [
-        TableColumn {
+        Column {
             header: "Name",
-            width: name_width,
+            width: 40,
         },
-        TableColumn {
+        Column {
             header: "Address",
             width: 10,
         },
-        TableColumn {
+        Column {
             header: "VID",
             width: 6,
         },
-        TableColumn {
+        Column {
             header: "PID",
             width: 6,
         },
     ];
-    let t = Table::new(&cols);
-    t.print_header(ctx.io);
+    emit_table_header(io, &cols);
 
-    for row in pci_device_rows(db) {
-        t.print_row(ctx.io, &[row.name, row.addr, row.vid, row.pid]);
+    for row in pci_device_rows(db.as_deref()) {
+        emit_table_row(io, &cols, &[&row.name, &row.addr, &row.vid, &row.pid]);
     }
-
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_pciids(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    ctx.io
-        .write_str("tlb.pciids: downloading pci.ids once...\r\n");
+fn cmd_tlb_pciids(io: &'static dyn ShellBackend2) {
+    line(io, "tlb.pciids: downloading pci.ids once...");
 
     match crate::pci::pciids::download_once_blocking() {
         Ok(bytes) => {
-            ctx.io.write_fmt(format_args!(
-                "tlb.pciids: downloaded {} bytes to {}\r\n",
-                bytes,
-                crate::pci::pciids::PCI_IDS_KEY
-            ));
-            ctx.io
-                .write_str("tlb.pciids: tlb.pci will auto-use it on the next run\r\n");
+            line(
+                io,
+                alloc::format!(
+                    "tlb.pciids: downloaded {} bytes to {}",
+                    bytes,
+                    crate::pci::pciids::PCI_IDS_KEY
+                )
+                .as_str(),
+            );
+            line(io, "tlb.pciids: tlb.pci will auto-use it on the next run");
         }
         Err(reason) => {
-            ctx.io
-                .write_fmt(format_args!("tlb.pciids: failed ({})\r\n", reason));
+            line(
+                io,
+                alloc::format!("tlb.pciids: failed ({})", reason).as_str(),
+            );
         }
     }
-
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_pci_bar(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_pci_bar(io: &'static dyn ShellBackend2) {
     ensure_pci_devices_enumerated();
 
-    let term_width = (*ctx.term_cols).saturating_sub(2);
-    // Overhead (all columns except raw): 10+6+6+4+5+2+1+18+12 + 10*2 spacing = 84.
-    let raw_width = term_width.saturating_sub(84).max(19);
-
     let cols = [
-        TableColumn {
+        Column {
             header: "Address",
             width: 10,
         },
-        TableColumn {
+        Column {
             header: "VID",
             width: 6,
         },
-        TableColumn {
+        Column {
             header: "PID",
             width: 6,
         },
-        TableColumn {
+        Column {
             header: "BAR",
             width: 4,
         },
-        TableColumn {
+        Column {
             header: "Kind",
             width: 5,
         },
-        TableColumn {
+        Column {
             header: "W",
             width: 2,
         },
-        TableColumn {
+        Column {
             header: "P",
             width: 1,
         },
-        TableColumn {
+        Column {
             header: "Base",
             width: 18,
         },
-        TableColumn {
+        Column {
             header: "Size",
             width: 12,
         },
-        TableColumn {
+        Column {
             header: "Raw",
-            width: raw_width,
+            width: 19,
         },
     ];
-    let t = Table::new(&cols);
-    t.print_header(ctx.io);
+    emit_table_header(io, &cols);
 
     for row in pci_bar_rows() {
-        t.print_row(
-            ctx.io,
+        emit_table_row(
+            io,
+            &cols,
             &[
-                row.addr,
-                row.vid,
-                row.pid,
-                row.bar,
-                row.kind.to_string(),
-                row.width.to_string(),
-                row.prefetch.to_string(),
-                row.base,
-                row.size,
-                row.raw,
+                &row.addr,
+                &row.vid,
+                &row.pid,
+                &row.bar,
+                row.kind,
+                row.width,
+                row.prefetch,
+                &row.base,
+                &row.size,
+                &row.raw,
             ],
         );
     }
-
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_mem(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_mem(io: &'static dyn ShellBackend2) {
     let memmap = crate::limine::memmap_entries().unwrap_or(&[]);
     if memmap.is_empty() {
-        ctx.io.write_str("tlb.mem: no memory map available\r\n");
-        return CommandAction::None;
+        line(io, "tlb.mem: no memory map available");
+        return;
     }
 
-    let term_width = (*ctx.term_cols).saturating_sub(2);
-    // Overhead = Base(18) + Length(18) + 3*2 padding = 36 + 6 = 42
-    let overhead = 18 + 18 + 6;
-    let type_width = term_width.saturating_sub(overhead).max(24);
-
     let cols = [
-        TableColumn {
+        Column {
             header: "Base",
             width: 18,
         },
-        TableColumn {
+        Column {
             header: "Length",
             width: 18,
         },
-        TableColumn {
+        Column {
             header: "Type",
-            width: type_width,
+            width: 24,
         },
     ];
-    let t = Table::new(&cols);
-    t.print_header(ctx.io);
+    emit_table_header(io, &cols);
 
     for entry in memmap {
         let base = alloc::format!("0x{:016X}", entry.base);
         let len = alloc::format!("0x{:016X}", entry.length);
-        let ty = crate::limine::memmap_type_name(entry.entry_type).to_string();
-        t.print_row(ctx.io, &[base, len, ty]);
+        let ty = crate::limine::memmap_type_name(entry.entry_type);
+        emit_table_row(io, &cols, &[&base, &len, ty]);
     }
-
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_cpu(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_cpu(io: &'static dyn ShellBackend2) {
     if !crate::smp::is_init() {
-        ctx.io.write_str("tlb.cpu: smp not initialized\r\n");
-        return CommandAction::None;
+        line(io, "tlb.cpu: smp not initialized");
+        return;
     }
 
     let cols = [
-        TableColumn {
+        Column {
             header: "Slot",
             width: 6,
         },
-        TableColumn {
+        Column {
             header: "APIC",
-            width: 6,
+            width: 10,
         },
-        TableColumn {
+        Column {
             header: "Role",
             width: 8,
         },
-        TableColumn {
+        Column {
             header: "State",
             width: 10,
         },
-        TableColumn {
+        Column {
             header: "Seq",
             width: 6,
         },
     ];
-    let t = Table::new(&cols);
-    t.print_header(ctx.io);
+    emit_table_header(io, &cols);
 
     let count = crate::smp::cpu_count();
     let slots = crate::percpu::cpu_slots();
@@ -470,14 +508,12 @@ pub(crate) fn cmd_tlb_cpu(
     for slot in 0..count {
         if let Some(info) = crate::smp::read(slot) {
             let slot_s = alloc::format!("{}", slot);
-
             let lapic_id = slots
                 .iter()
                 .find(|s| s.slot == slot as u32)
                 .map(|s| s.lapic_id)
-                .unwrap_or(0xFFFFFFFF);
+                .unwrap_or(0xFFFF_FFFF);
             let apic = alloc::format!("{}", lapic_id);
-
             let role = if slot == 0 { "BSP" } else { "AP" };
             let state = match info.state {
                 crate::smp::STATE_IDLE => "Idle",
@@ -487,290 +523,224 @@ pub(crate) fn cmd_tlb_cpu(
                 _ => "Unknown",
             };
             let seq = alloc::format!("{}", info.seq);
-            t.print_row(ctx.io, &[slot_s, apic, role.into(), state.into(), seq]);
+            emit_table_row(io, &cols, &[&slot_s, &apic, role, state, &seq]);
         }
     }
-
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_acpi(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    let tables = crate::efi::acpi::ensure_tables();
-    if tables.is_none() {
-        ctx.io.write_str("tlb.acpi: no tables found\r\n");
-        return CommandAction::None;
-    }
-    let tables = tables.unwrap();
+fn cmd_tlb_acpi(io: &'static dyn ShellBackend2) {
+    let Some(tables) = crate::efi::acpi::ensure_tables() else {
+        line(io, "tlb.acpi: no tables found");
+        return;
+    };
 
     let cols = [
-        TableColumn {
+        Column {
             header: "Signature",
             width: 10,
         },
-        TableColumn {
+        Column {
             header: "Address",
             width: 18,
         },
-        TableColumn {
+        Column {
             header: "Length",
             width: 10,
         },
-        TableColumn {
+        Column {
             header: "Rev",
             width: 4,
         },
-        TableColumn {
+        Column {
             header: "OEM",
             width: 8,
         },
-        TableColumn {
+        Column {
             header: "Table ID",
             width: 10,
         },
     ];
-    let t = Table::new(&cols);
-    t.print_header(ctx.io);
+    emit_table_header(io, &cols);
 
     for (phys, hdr) in tables.table_headers() {
-        let sig = hdr.signature.as_str();
         let addr = alloc::format!("0x{:08X}", phys);
         let length = hdr.length;
         let revision = hdr.revision;
         let len = alloc::format!("0x{:X}", length);
         let rev = alloc::format!("{}", revision);
         let oem = core::str::from_utf8(&hdr.oem_id).unwrap_or("      ");
-        let tbl_id = core::str::from_utf8(&hdr.oem_table_id).unwrap_or("        ");
-
-        t.print_row(
-            ctx.io,
-            &[sig.into(), addr, len, rev, oem.into(), tbl_id.into()],
-        );
+        let table_id = core::str::from_utf8(&hdr.oem_table_id).unwrap_or("        ");
+        emit_table_row(io, &cols, &[hdr.signature.as_str(), &addr, &len, &rev, oem, table_id]);
     }
-
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_acpi_facp(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_acpi_facp(io: &'static dyn ShellBackend2) {
     let Some(tables) = crate::efi::acpi::ensure_tables() else {
-        ctx.io.write_str("tlb.acpi: no tables found\r\n");
-        return CommandAction::None;
+        line(io, "tlb.acpi: no tables found");
+        return;
     };
 
     if let Some(fadt) = tables.find_table::<Fadt>() {
-        let fadt_ref = unsafe { fadt.virtual_start.as_ref() };
-        ctx.io.write_fmt(format_args!(
-            "FACP/FADT Found @ 0x{:X}\r\n",
-            fadt.physical_start
-        ));
-        ctx.io.write_fmt(format_args!("{:#?}\r\n", fadt_ref));
+        line(
+            io,
+            alloc::format!("FACP/FADT Found @ 0x{:X}", fadt.physical_start).as_str(),
+        );
+        multiline(io, alloc::format!("{:#?}", unsafe { fadt.virtual_start.as_ref() }).as_str());
     } else {
-        ctx.io.write_str("FACP: Not found\r\n");
+        line(io, "FACP: Not found");
     }
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_acpi_madt(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_acpi_madt(io: &'static dyn ShellBackend2) {
     let Some(tables) = crate::efi::acpi::ensure_tables() else {
-        ctx.io.write_str("tlb.acpi: no tables found\r\n");
-        return CommandAction::None;
+        line(io, "tlb.acpi: no tables found");
+        return;
     };
 
     if let Some(madt) = tables.find_table::<Madt>() {
-        let madt_ref = unsafe { madt.virtual_start.as_ref() };
-        ctx.io
-            .write_fmt(format_args!("MADT Found @ 0x{:X}\r\n", madt.physical_start));
-        ctx.io.write_fmt(format_args!("{:#?}\r\n", madt_ref));
+        line(
+            io,
+            alloc::format!("MADT Found @ 0x{:X}", madt.physical_start).as_str(),
+        );
+        multiline(io, alloc::format!("{:#?}", unsafe { madt.virtual_start.as_ref() }).as_str());
     } else {
-        ctx.io.write_str("MADT: Not found\r\n");
+        line(io, "MADT: Not found");
     }
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_acpi_hpet(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_acpi_hpet(io: &'static dyn ShellBackend2) {
     if let Some(hpet) = crate::efi::acpi::hpet::ensure() {
-        ctx.io.write_fmt(format_args!("{:#?}\r\n", hpet));
+        multiline(io, alloc::format!("{:#?}", hpet).as_str());
     } else {
-        ctx.io
-            .write_str("HPET: Not found or initialization failed\r\n");
+        line(io, "HPET: Not found or initialization failed");
     }
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_acpi_mcfg(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    // Disabled compilation until acpi crate structure is verified
-    ctx.io
-        .write_str("MCFG: Command disabled due to compilation error\r\n");
-    /*
-    let Some(tables) = crate::efi::acpi::ensure_tables() else {
-        ctx.io.write_str("tlb.acpi: no tables found\r\n");
-        return CommandAction::None;
-    };
-
-    if let Ok(mcfg) = tables.get_sdt::<acpi::mcfg::Mcfg>(acpi::sdt::Signature::MCFG) {
-         if let Some(mcfg) = mcfg {
-            let mcfg_ref = unsafe { mcfg.virtual_start.as_ref() };
-            ctx.io.write_fmt(format_args!("MCFG Found @ 0x{:X}\r\n", mcfg.physical_start));
-            ctx.io.write_fmt(format_args!("{:#?}\r\n", mcfg_ref));
-
-            for entry in mcfg_ref.entries() {
-                 ctx.io.write_fmt(format_args!("  Base=0x{:X} Seg={} Buses={}-{}\r\n",
-                     entry.base_address, entry.pci_segment_group, entry.bus_number_start, entry.bus_number_end));
-            }
-         } else {
-             ctx.io.write_str("MCFG: Not found (None)\r\n");
-         }
-    } else {
-        ctx.io.write_str("MCFG: Not found or parse error\r\n");
-    }
-    */
-    CommandAction::None
+fn cmd_tlb_acpi_mcfg(io: &'static dyn ShellBackend2) {
+    line(io, "MCFG: Command disabled due to compilation error");
 }
 
-pub(crate) fn cmd_tlb_acpi_ssdt(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_acpi_ssdt(io: &'static dyn ShellBackend2) {
     let Some(tables) = crate::efi::acpi::ensure_tables() else {
-        ctx.io.write_str("tlb.acpi: no tables found\r\n");
-        return CommandAction::None;
+        line(io, "tlb.acpi: no tables found");
+        return;
     };
 
-    ctx.io
-        .write_str("Scanning for SSDT tables (Secondary System Description Table)...\r\n\r\n");
+    line(
+        io,
+        "Scanning for SSDT tables (Secondary System Description Table)...",
+    );
+    blank(io);
 
     let mut count = 0;
     for (phys, hdr) in tables.table_headers() {
         if hdr.signature.as_str() == "SSDT" {
             count += 1;
-            ctx.io
-                .write_fmt(format_args!("SSDT #{} @ 0x{:08X}\r\n", count, phys));
-
-            let len = hdr.length;
-            let rev = hdr.revision;
-            let oem = core::str::from_utf8(&hdr.oem_id).unwrap_or("      ");
-            let tbl_id = core::str::from_utf8(&hdr.oem_table_id).unwrap_or("        ");
-
-            ctx.io
-                .write_fmt(format_args!("  Length: {} bytes\r\n", len));
-            ctx.io.write_fmt(format_args!("  Revision: {}\r\n", rev));
-            ctx.io.write_fmt(format_args!("  OEM ID: {}\r\n", oem));
-            ctx.io.write_fmt(format_args!("  Table ID: {}\r\n", tbl_id));
-            ctx.io
-                .write_str("  (Raw AML content not dumped/parsed in 'best effort' mode)\r\n\r\n");
+            let length = hdr.length;
+            let revision = hdr.revision;
+            line(io, alloc::format!("SSDT #{} @ 0x{:08X}", count, phys).as_str());
+            line(io, alloc::format!("  Length: {} bytes", length).as_str());
+            line(io, alloc::format!("  Revision: {}", revision).as_str());
+            line(
+                io,
+                alloc::format!(
+                    "  OEM ID: {}",
+                    core::str::from_utf8(&hdr.oem_id).unwrap_or("      ")
+                )
+                .as_str(),
+            );
+            line(
+                io,
+                alloc::format!(
+                    "  Table ID: {}",
+                    core::str::from_utf8(&hdr.oem_table_id).unwrap_or("        ")
+                )
+                .as_str(),
+            );
+            line(io, "  (Raw AML content not dumped/parsed in 'best effort' mode)");
+            blank(io);
         }
     }
 
     if count == 0 {
-        ctx.io.write_str("No SSDT tables found.\r\n");
+        line(io, "No SSDT tables found.");
     } else {
-        ctx.io
-            .write_fmt(format_args!("Found {} SSDT tables.\r\n", count));
+        line(io, alloc::format!("Found {} SSDT tables.", count).as_str());
     }
-
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_uefi(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    let st = crate::efi::system_table();
-    if st.is_none() {
-        ctx.io
-            .write_str("tlb.uefi: system table not found (not booted via UEFI?)\r\n");
-        return CommandAction::None;
-    }
-    let st = st.unwrap();
+fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
+    let Some(st) = crate::efi::system_table() else {
+        line(io, "tlb.uefi: system table not found (not booted via UEFI?)");
+        return;
+    };
 
-    let term_width = (*ctx.term_cols).saturating_sub(2);
-    // Table 1: Field(20) + Value(dynamic) + 4 padding
-    let val_width = term_width.saturating_sub(24).max(40);
-
-    let cols = [
-        TableColumn {
+    let summary_cols = [
+        Column {
             header: "Field",
             width: 20,
         },
-        TableColumn {
+        Column {
             header: "Value",
-            width: val_width,
+            width: 44,
         },
     ];
-    let t = Table::new(&cols);
-    t.print_header(ctx.io);
-
-    t.print_row(ctx.io, ["Signature", "EFI SYSTEM TABLE"]);
-    t.print_row(
-        ctx.io,
-        ["Revision", &alloc::format!("0x{:08X}", st.hdr.revision)],
+    emit_table_header(io, &summary_cols);
+    let st_revision = st.hdr.revision;
+    let st_header_size = st.hdr.header_size;
+    emit_table_row(io, &summary_cols, &["Signature", "EFI SYSTEM TABLE"]);
+    emit_table_row(
+        io,
+        &summary_cols,
+        &["Revision", &alloc::format!("0x{:08X}", st_revision)],
     );
-    t.print_row(
-        ctx.io,
-        ["Header Size", &alloc::format!("0x{:X}", st.hdr.header_size)],
+    emit_table_row(
+        io,
+        &summary_cols,
+        &["Header Size", &alloc::format!("0x{:X}", st_header_size)],
     );
-    t.print_row(
-        ctx.io,
-        [
+    emit_table_row(
+        io,
+        &summary_cols,
+        &[
             "Runtime Services",
             &alloc::format!("0x{:016X}", st.runtime_services as u64),
         ],
     );
-    t.print_row(
-        ctx.io,
-        [
+    emit_table_row(
+        io,
+        &summary_cols,
+        &[
             "Boot Services",
             &alloc::format!("0x{:016X}", st.boot_services as u64),
         ],
     );
-    t.print_row(
-        ctx.io,
-        [
-            "Config Tables",
-            &alloc::format!("{}", st.number_of_table_entries),
-        ],
+    emit_table_row(
+        io,
+        &summary_cols,
+        &["Config Tables", &alloc::format!("{}", st.number_of_table_entries)],
     );
+    blank(io);
 
-    ctx.io.write_str("\r\n");
-
-    // Table 2: Index(6) + GUID(40) + Name(dynamic) + Ptr(18) + 8 padding
-    // Overhead = 6 + 40 + 18 + 8 = 72
-    let name_width = term_width.saturating_sub(72).max(24);
-
-    let cols_cfg = [
-        TableColumn {
+    let cfg_cols = [
+        Column {
             header: "Index",
             width: 6,
         },
-        TableColumn {
+        Column {
             header: "GUID",
-            width: 40,
+            width: 36,
         },
-        TableColumn {
+        Column {
             header: "Name",
-            width: name_width,
+            width: 24,
         },
-        TableColumn {
+        Column {
             header: "Table Ptr",
             width: 18,
         },
     ];
-    let t_cfg = Table::new(&cols_cfg);
-    t_cfg.print_header(ctx.io);
+    emit_table_header(io, &cfg_cols);
 
     let entries = st.number_of_table_entries;
     let cfg_addr = st.configuration_table as u64;
@@ -780,196 +750,149 @@ pub(crate) fn cmd_tlb_uefi(
             crate::pci::mmio::map_limine_slice::<crate::efi::EfiConfigurationTable>(phys, entries)
     {
         let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
-        for (i, entry) in slice.iter().enumerate() {
-            let idx = alloc::format!("{}", i);
-            let guid = entry.vendor_guid;
-            let name = crate::efi::cfg_guid_name(&guid).unwrap_or("Unknown");
-            let fmt_guid = guid.fmt_canonical();
+        for (index, entry) in slice.iter().enumerate() {
+            let idx = alloc::format!("{}", index);
+            let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
+            let guid = entry.vendor_guid.fmt_canonical();
             let ptr = alloc::format!("0x{:016X}", entry.vendor_table as u64);
-
-            t_cfg.print_row(ctx.io, &[idx, fmt_guid, name.to_string(), ptr]);
+            emit_table_row(io, &cfg_cols, &[&idx, &guid, name, &ptr]);
         }
     }
-
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_x2apic(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_x2apic(io: &'static dyn ShellBackend2) {
     let topo = crate::x2apic::detect_x2apic_topology();
-
-    ctx.io.write_fmt(format_args!(
-        "x2APIC Topology Detection: Leaf=0x{:X} SMT_Bits={} Core_Bits={}\r\n\r\n",
-        topo.leaf, topo.smt_bits, topo.core_bits
-    ));
+    line(
+        io,
+        alloc::format!(
+            "x2APIC Topology Detection: Leaf=0x{:X} SMT_Bits={} Core_Bits={}",
+            topo.leaf, topo.smt_bits, topo.core_bits
+        )
+        .as_str(),
+    );
+    blank(io);
 
     let cols = [
-        TableColumn {
+        Column {
             header: "Slot",
             width: 6,
         },
-        TableColumn {
+        Column {
             header: "APIC ID",
             width: 10,
         },
-        TableColumn {
+        Column {
             header: "Pkg",
             width: 6,
         },
-        TableColumn {
+        Column {
             header: "Core",
             width: 6,
         },
-        TableColumn {
+        Column {
             header: "SMT",
             width: 6,
         },
     ];
-
-    let t = Table::new(&cols);
-    t.print_header(ctx.io);
+    emit_table_header(io, &cols);
 
     if !crate::smp::is_init() {
-        ctx.io
-            .write_str("(SMP not initialized, showing BSP only if possible)\r\n");
+        line(io, "(SMP not initialized, showing BSP only if possible)");
     }
 
     let count = crate::smp::cpu_count();
     let slots = crate::percpu::cpu_slots();
-
     for slot in 0..count {
         let lapic_id = slots
             .iter()
             .find(|s| s.slot == slot as u32)
             .map(|s| s.lapic_id)
-            .unwrap_or(0xFFFFFFFF);
+            .unwrap_or(0xFFFF_FFFF);
 
-        if lapic_id == 0xFFFFFFFF {
-            let s_slot = alloc::format!("{}", slot);
-            t.print_row(
-                ctx.io,
-                &[s_slot, "?".into(), "?".into(), "?".into(), "?".into()],
-            );
+        if lapic_id == 0xFFFF_FFFF {
+            let slot_s = alloc::format!("{}", slot);
+            emit_table_row(io, &cols, &[&slot_s, "?", "?", "?", "?"]);
             continue;
         }
 
-        let (pkg, core, smt) = topo.decode(lapic_id);
-
-        let s_slot = alloc::format!("{}", slot);
-        let s_apic = alloc::format!("0x{:X}", lapic_id);
-        let s_pkg = alloc::format!("{}", pkg);
-        let s_core = alloc::format!("{}", core);
-        let s_smt = alloc::format!("{}", smt);
-
-        t.print_row(ctx.io, &[s_slot, s_apic, s_pkg, s_core, s_smt]);
+        let (pkg, core_id, smt) = topo.decode(lapic_id);
+        let slot_s = alloc::format!("{}", slot);
+        let apic = alloc::format!("0x{:X}", lapic_id);
+        let pkg_s = alloc::format!("{}", pkg);
+        let core_s = alloc::format!("{}", core_id);
+        let smt_s = alloc::format!("{}", smt);
+        emit_table_row(io, &cols, &[&slot_s, &apic, &pkg_s, &core_s, &smt_s]);
     }
-
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_usb(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
     let ctrls = crate::usb::xhci::xhc_list();
     if ctrls.is_empty() {
-        ctx.io.write_str("tlb.usb: no xhci controllers found\r\n");
-        return CommandAction::None;
+        line(io, "tlb.usb: no xhci controllers found");
+        return;
     }
 
-    let term_width = (*ctx.term_cols).saturating_sub(2);
-    let raw_width = 10;
-    let fixed_width = 4 + 4 + 10 + 8 + 11 + raw_width;
-    let padding = 7 * 2;
-    let device_width = term_width.saturating_sub(fixed_width + padding).max(12);
-
     let cols = [
-        TableColumn {
+        Column {
             header: "Ctrl",
             width: 4,
         },
-        TableColumn {
+        Column {
             header: "Port",
             width: 4,
         },
-        TableColumn {
+        Column {
             header: "State",
             width: 10,
         },
-        TableColumn {
+        Column {
             header: "Speed",
             width: 8,
         },
-        TableColumn {
+        Column {
             header: "Device",
-            width: device_width,
+            width: 18,
         },
-        TableColumn {
+        Column {
             header: "VID:PID",
             width: 11,
         },
-        TableColumn {
+        Column {
             header: "Raw",
-            width: raw_width,
+            width: 10,
         },
     ];
-    let t = Table::new(&cols);
-    t.print_header(ctx.io);
+    emit_table_header(io, &cols);
 
     for info in ctrls.iter() {
         let ports = crate::usb::port_snapshot(info.controller_id);
-
-        for p in ports.iter() {
+        for port in ports.iter() {
             let ctrl = alloc::format!("{}", info.controller_id);
-            let port = alloc::format!("{}", p.port_id);
-
-            let state_str = if p.connected {
-                if p.enabled { "Active" } else { "Connected" }
+            let port_id = alloc::format!("{}", port.port_id);
+            let state = if port.connected {
+                if port.enabled { "Active" } else { "Connected" }
             } else {
                 "Empty"
             };
-
-            let speed = if p.connected { p.speed } else { "-" };
-
-            let device = p
+            let speed = if port.connected { port.speed } else { "-" };
+            let device = port
                 .device_kind
-                .unwrap_or(if p.connected { "Unknown" } else { "-" });
-
-            let vidpid = if let (Some(v), Some(pid)) = (p.vid, p.pid) {
-                alloc::format!("{:04X}:{:04X}", v, pid)
+                .unwrap_or(if port.connected { "Unknown" } else { "-" });
+            let vidpid = if let (Some(vendor), Some(product)) = (port.vid, port.pid) {
+                alloc::format!("{:04X}:{:04X}", vendor, product)
             } else {
-                "-".into()
+                String::from("-")
             };
+            let raw = alloc::format!("0x{:08X}", port.status);
 
-            let details = alloc::format!("0x{:08X}", p.status);
-
-            t.print_row(
-                ctx.io,
-                &[
-                    ctrl,
-                    port,
-                    state_str.into(),
-                    speed.into(),
-                    device.into(),
-                    vidpid,
-                    details,
-                ],
-            );
+            emit_table_row(io, &cols, &[&ctrl, &port_id, state, speed, device, &vidpid, &raw]);
         }
     }
-
-    CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_dump(
-    ctx: &mut ShellCommandCtx<'_>,
-    _: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
+fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
     let mut out = String::new();
 
-    // 1. Memory
     writeln!(out, "=== Memory Map ===").unwrap();
     let memmap = crate::limine::memmap_entries().unwrap_or(&[]);
     if memmap.is_empty() {
@@ -990,14 +913,11 @@ pub(crate) fn cmd_tlb_dump(
     }
     writeln!(out).unwrap();
 
-    // 2. PCI
     writeln!(out, "=== PCI Devices ===").unwrap();
     ensure_pci_devices_enumerated();
-
     let db = crate::pci::pciids::load_sanitized_from_root_blocking()
         .ok()
         .flatten();
-
     writeln!(
         out,
         "{:30}  {:10}  {:6}  {:6}",
@@ -1006,26 +926,24 @@ pub(crate) fn cmd_tlb_dump(
     .unwrap();
     writeln!(out, "{:-<30}  {:-<10}  {:-<6}  {:-<6}", "", "", "", "").unwrap();
     for row in pci_device_rows(db.as_deref()) {
-        let name_disp = if row.name.len() > 30 {
-            let mut s = String::from(&row.name[..29]);
+        let name_disp = if row.name.chars().count() > 30 {
+            let mut s: String = row.name.chars().take(29).collect();
             s.push('…');
             s
         } else {
             row.name
         };
-
-        let _ = writeln!(
+        writeln!(
             out,
             "{:30}  {:10}  {:6}  {:6}",
             name_disp, row.addr, row.vid, row.pid
-        );
+        )
+        .unwrap();
     }
     writeln!(out).unwrap();
 
-    // 2b. PCI BARs
     write_pci_bar_dump(&mut out);
 
-    // 3. CPU
     writeln!(out, "=== CPU Cores ===").unwrap();
     if !crate::smp::is_init() {
         writeln!(out, "SMP not initialized").unwrap();
@@ -1039,15 +957,13 @@ pub(crate) fn cmd_tlb_dump(
         writeln!(out, "{:-<6}  {:-<6}  {:-<8}  {:-<10}", "", "", "", "").unwrap();
         let count = crate::smp::cpu_count();
         let slots = crate::percpu::cpu_slots();
-
         for slot in 0..count {
             if let Some(info) = crate::smp::read(slot) {
                 let lapic_id = slots
                     .iter()
                     .find(|s| s.slot == slot as u32)
                     .map(|s| s.lapic_id)
-                    .unwrap_or(0xFFFFFFFF);
-
+                    .unwrap_or(0xFFFF_FFFF);
                 let role = if slot == 0 { "BSP" } else { "AP" };
                 let state = match info.state {
                     crate::smp::STATE_IDLE => "Idle",
@@ -1056,113 +972,44 @@ pub(crate) fn cmd_tlb_dump(
                     crate::smp::STATE_DONE => "Done",
                     _ => "Unknown",
                 };
-                let _ = writeln!(
-                    out,
-                    "{:6}  {:<6}  {:<8}  {:<10}",
-                    slot, lapic_id, role, state
-                );
+                writeln!(out, "{:6}  {:<6}  {:<8}  {:<10}", slot, lapic_id, role, state).unwrap();
             }
         }
     }
     writeln!(out).unwrap();
 
-    // 4. ACPI
     writeln!(out, "=== ACPI Tables ===").unwrap();
     if let Some(tables) = crate::efi::acpi::ensure_tables() {
         writeln!(out, "{:10}  {:18}  {:10}", "Signature", "Address", "Length").unwrap();
         writeln!(out, "{:-<10}  {:-<18}  {:-<10}", "", "", "").unwrap();
         for (phys, hdr) in tables.table_headers() {
-            let sig = hdr.signature;
-            let len = hdr.length;
-            let _ = writeln!(out, "{:10}  0x{:016X}  0x{:X}", sig.as_str(), phys, len);
-        }
-        writeln!(out).unwrap();
-
-        writeln!(out, "=== ACPI Detail ===").unwrap();
-
-        // FADT/FACP
-        if let Some(fadt) = tables.find_table::<Fadt>() {
-            let fadt_ref = unsafe { fadt.virtual_start.as_ref() };
-            writeln!(out, "--- FACP (FADT) ---").unwrap();
-            writeln!(out, "Physical Address: 0x{:X}", fadt.physical_start).unwrap();
-            writeln!(out, "{:#?}", fadt_ref).unwrap();
-            writeln!(out).unwrap();
-        }
-
-        // MADT/APIC
-        if let Some(madt) = tables.find_table::<Madt>() {
-            writeln!(out, "--- APIC (MADT) ---").unwrap();
-            writeln!(out, "Physical Address: 0x{:X}", madt.physical_start).unwrap();
-            let madt_ref = unsafe { madt.virtual_start.as_ref() };
-            writeln!(out, "{:#?}", madt_ref).unwrap();
-            writeln!(out, "Subtables:").unwrap();
-            crate::efi::acpi::madt::walk_subtables(|entry| {
-                let _ = writeln!(out, "  {:?}", entry);
-            });
-            writeln!(out).unwrap();
-        }
-
-        // HPET
-        if let Some(hpet) = crate::efi::acpi::hpet::ensure() {
-            writeln!(out, "--- HPET ---").unwrap();
-            writeln!(out, "{:#?}", hpet).unwrap();
-            writeln!(out).unwrap();
-        }
-
-        // BGRT
-        if let Some(rect) = crate::efi::acpi::bgrt::last_logo_rect() {
-            writeln!(out, "--- BGRT ---").unwrap();
+            let length = hdr.length;
             writeln!(
                 out,
-                "Logo Rect: x={} y={} w={} h={}",
-                rect.0, rect.1, rect.2, rect.3
+                "{:10}  0x{:016X}  0x{:X}",
+                hdr.signature.as_str(),
+                phys,
+                length
             )
             .unwrap();
-            writeln!(out).unwrap();
         }
-
-        // SSDT
-        let mut ssdt_count = 0;
-        for (phys, hdr) in tables.table_headers() {
-            if hdr.signature.as_str() == "SSDT" {
-                ssdt_count += 1;
-                writeln!(out, "--- SSDT #{} ---", ssdt_count).unwrap();
-                writeln!(out, "Address: 0x{:08X}", phys).unwrap();
-
-                let len = hdr.length;
-                let rev = hdr.revision;
-
-                writeln!(out, "Length: {} bytes", len).unwrap();
-                writeln!(out, "Revision: {}", rev).unwrap();
-                let oem = core::str::from_utf8(&hdr.oem_id).unwrap_or("      ");
-                let tbl_id = core::str::from_utf8(&hdr.oem_table_id).unwrap_or("        ");
-                writeln!(out, "OEM ID: {}", oem).unwrap();
-                writeln!(out, "Table ID: {}", tbl_id).unwrap();
-                writeln!(out).unwrap();
-            }
-        }
+        writeln!(out).unwrap();
     } else {
         writeln!(out, "No tables found").unwrap();
     }
     writeln!(out).unwrap();
 
-    // 5. UEFI
     writeln!(out, "=== UEFI Tables ===").unwrap();
     if let Some(st) = crate::efi::system_table() {
+        let st_revision = st.hdr.revision;
         writeln!(out, "Signature: EFI SYSTEM TABLE").unwrap();
-        writeln!(out, "Revision: 0x{:08X}", st.hdr.revision).unwrap();
-        writeln!(
-            out,
-            "Runtime Services: 0x{:016X}",
-            st.runtime_services as u64
-        )
-        .unwrap();
+        writeln!(out, "Revision: 0x{:08X}", st_revision).unwrap();
+        writeln!(out, "Runtime Services: 0x{:016X}", st.runtime_services as u64).unwrap();
         writeln!(out, "Boot Services: 0x{:016X}", st.boot_services as u64).unwrap();
         writeln!(out).unwrap();
 
         let entries = st.number_of_table_entries;
         let cfg_addr = st.configuration_table as u64;
-
         writeln!(
             out,
             "{:6}  {:40}  {:24}  {:18}",
@@ -1172,21 +1019,23 @@ pub(crate) fn cmd_tlb_dump(
         writeln!(out, "{:-<6}  {:-<40}  {:-<24}  {:-<18}", "", "", "", "").unwrap();
 
         if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr)
-            && let Ok((cfg_ptr, _)) = crate::pci::mmio::map_limine_slice::<
-                crate::efi::EfiConfigurationTable,
-            >(phys, entries)
+            && let Ok((cfg_ptr, _)) =
+                crate::pci::mmio::map_limine_slice::<crate::efi::EfiConfigurationTable>(
+                    phys, entries,
+                )
         {
             let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
-            for (i, entry) in slice.iter().enumerate() {
+            for (index, entry) in slice.iter().enumerate() {
                 let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
-                let _ = writeln!(
+                writeln!(
                     out,
                     "{:6}  {}  {:24}  0x{:016X}",
-                    i,
+                    index,
                     entry.vendor_guid.fmt_canonical(),
                     name,
                     entry.vendor_table as u64
-                );
+                )
+                .unwrap();
             }
         }
     } else {
@@ -1194,7 +1043,6 @@ pub(crate) fn cmd_tlb_dump(
     }
     writeln!(out).unwrap();
 
-    // 6. x2APIC
     writeln!(out, "=== x2APIC Topology ===").unwrap();
     let topo = crate::x2apic::detect_x2apic_topology();
     writeln!(
@@ -1209,13 +1057,7 @@ pub(crate) fn cmd_tlb_dump(
         "Slot", "APIC ID", "Pkg", "Core", "SMT"
     )
     .unwrap();
-    writeln!(
-        out,
-        "{:-<6}  {:-<10}  {:-<6}  {:-<6}  {:-<6}",
-        "", "", "", "", ""
-    )
-    .unwrap();
-
+    writeln!(out, "{:-<6}  {:-<10}  {:-<6}  {:-<6}  {:-<6}", "", "", "", "", "").unwrap();
     let count = crate::smp::cpu_count();
     let slots = crate::percpu::cpu_slots();
     for slot in 0..count {
@@ -1223,26 +1065,21 @@ pub(crate) fn cmd_tlb_dump(
             .iter()
             .find(|s| s.slot == slot as u32)
             .map(|s| s.lapic_id)
-            .unwrap_or(0xFFFFFFFF);
-
-        if lapic_id == 0xFFFFFFFF {
-            let _ = writeln!(
-                out,
-                "{:6}  {:10}  {:6}  {:6}  {:6}",
-                slot, "?", "?", "?", "?"
-            );
+            .unwrap_or(0xFFFF_FFFF);
+        if lapic_id == 0xFFFF_FFFF {
+            writeln!(out, "{:6}  {:10}  {:6}  {:6}  {:6}", slot, "?", "?", "?", "?").unwrap();
             continue;
         }
-        let (pkg, core, smt) = topo.decode(lapic_id);
-        let _ = writeln!(
+        let (pkg, core_id, smt) = topo.decode(lapic_id);
+        writeln!(
             out,
             "{:6}  0x{:<8X}  {:<6}  {:<6}  {:<6}",
-            slot, lapic_id, pkg, core, smt
-        );
+            slot, lapic_id, pkg, core_id, smt
+        )
+        .unwrap();
     }
     writeln!(out).unwrap();
 
-    // 7. USB
     writeln!(out, "=== USB Devices ===").unwrap();
     let ctrls = crate::usb::xhci::xhc_list();
     if ctrls.is_empty() {
@@ -1260,36 +1097,34 @@ pub(crate) fn cmd_tlb_dump(
             "", "", "", "", "", "", ""
         )
         .unwrap();
-
         for info in ctrls.iter() {
             let ports = crate::usb::port_snapshot(info.controller_id);
-            for p in ports.iter() {
-                let state_str = if p.connected {
-                    if p.enabled { "Active" } else { "Connected" }
+            for port in ports.iter() {
+                let state = if port.connected {
+                    if port.enabled { "Active" } else { "Connected" }
                 } else {
                     "Empty"
                 };
-                let speed = if p.connected { p.speed } else { "-" };
-                let device = p
+                let speed = if port.connected { port.speed } else { "-" };
+                let device = port
                     .device_kind
-                    .unwrap_or(if p.connected { "Unknown" } else { "-" });
-                let vidpid = if let (Some(v), Some(pid)) = (p.vid, p.pid) {
-                    alloc::format!("{:04X}:{:04X}", v, pid)
+                    .unwrap_or(if port.connected { "Unknown" } else { "-" });
+                let vidpid = if let (Some(vendor), Some(product)) = (port.vid, port.pid) {
+                    alloc::format!("{:04X}:{:04X}", vendor, product)
                 } else {
-                    "-".into()
+                    String::from("-")
                 };
-
-                let _ = writeln!(
+                writeln!(
                     out,
                     "{:<4}  {:<4}  {:<10}  {:<8}  {:<12}  {:<11}  0x{:08X}",
-                    info.controller_id, p.port_id, state_str, speed, device, vidpid, p.status
-                );
+                    info.controller_id, port.port_id, state, speed, device, vidpid, port.status
+                )
+                .unwrap();
             }
         }
     }
     writeln!(out).unwrap();
 
-    // 8. Network
     writeln!(out, "=== Network Interfaces ===").unwrap();
     let net_count = crate::net::device_count();
     if net_count == 0 {
@@ -1302,30 +1137,24 @@ pub(crate) fn cmd_tlb_dump(
         )
         .unwrap();
         writeln!(out, "{:-<4}  {:-<20}  {:-<17}  {:-<10}", "", "", "", "").unwrap();
-
         let primary = crate::net::primary_device_index();
-        for i in 0..net_count {
-            let name = crate::net::device_name_at(i).unwrap_or("Unknown");
-            let mac = if let Some(m) = crate::net::mac_address_at(i) {
+        for index in 0..net_count {
+            let name = crate::net::device_name_at(index).unwrap_or("Unknown");
+            let mac = if let Some(addr) = crate::net::mac_address_at(index) {
                 alloc::format!(
                     "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                    m[0],
-                    m[1],
-                    m[2],
-                    m[3],
-                    m[4],
-                    m[5]
+                    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
                 )
             } else {
-                "??:??:??:??:??:??".into()
+                String::from("??:??:??:??:??:??")
             };
-            let is_prim = if i == primary { "*" } else { "" };
-            let _ = writeln!(out, "{:<4}  {:<20}  {:<17}  {:<10}", i, name, mac, is_prim);
+            let primary_mark = if index == primary { "*" } else { "" };
+            writeln!(out, "{:<4}  {:<20}  {:<17}  {:<10}", index, name, mac, primary_mark)
+                .unwrap();
         }
     }
     writeln!(out).unwrap();
 
-    // 9. Block Devices
     writeln!(out, "=== Block Devices ===").unwrap();
     let devices = crate::disc::block::devices();
     if devices.is_empty() {
@@ -1343,119 +1172,186 @@ pub(crate) fn cmd_tlb_dump(
             "", "", "", "", "", "", ""
         )
         .unwrap();
-
         for dev in devices {
-            let id_s = alloc::format!("{}", dev.id);
-            let kind_s = alloc::format!("{:?}", dev.kind);
+            let id = alloc::format!("{}", dev.id);
+            let kind = alloc::format!("{:?}", dev.kind);
             let size_mb = dev.capacity_bytes / (1024 * 1024);
             let blocks = dev.block_count;
             let label = dev.label.as_deref().unwrap_or("-");
             let rw = if dev.writable { "RW" } else { "RO" };
             let parent = dev
                 .parent
-                .map(|p| alloc::format!("{}", p))
-                .unwrap_or("-".into());
-
-            let _ = writeln!(
+                .map(|value| alloc::format!("{}", value))
+                .unwrap_or_else(|| String::from("-"));
+            writeln!(
                 out,
                 "{:<8}  {:<10}  {:<12}  {:<10}  {:<20}  {:<6}  {:<8}",
-                id_s, kind_s, size_mb, blocks, label, rw, parent
-            );
+                id, kind, size_mb, blocks, label, rw, parent
+            )
+            .unwrap();
         }
     }
     writeln!(out).unwrap();
 
-    // Write file
     let file_path = "trueos/pci/tlb.txt";
-    ctx.io.write_fmt(format_args!(
-        "Writing {} bytes to {}...\r\n",
-        out.len(),
-        file_path
-    ));
+    line(
+        io,
+        alloc::format!("Writing {} bytes to {}...", out.len(), file_path).as_str(),
+    );
 
     let out_bytes = out.into_bytes();
-    let res: Result<(), crate::disc::block::Error> =
-        crate::wait::spawn_and_wait_local(async move {
+    let result: Result<(), crate::disc::block::Error> = crate::wait::spawn_and_wait_local(
+        async move {
             let Some(handle) = crate::v::fs::trueosfs::primary_root_handle() else {
                 return Err(crate::disc::block::Error::NotReady);
             };
 
-            // This fails if the directory 'trueos/pci' does not exist?
-            // trueosfs has no directory creation API, it just creates keys in the BTree.
-            // So paths are just Strings using the '/' separator.
-            // As long as we use valid path string, it should work.
-
             match crate::v::fs::trueosfs::file_in_async(handle, file_path, &out_bytes).await {
                 Ok(true) => Ok(()),
                 Ok(false) => Err(crate::disc::block::Error::Io),
-                Err(e) => Err(e),
+                Err(err) => Err(err),
             }
-        });
+        },
+    );
 
-    match res {
-        Ok(_) => ctx.io.write_str("Success.\r\n"),
-        Err(e) => ctx
-            .io
-            .write_fmt(format_args!("Error writing file: {:?}\r\n", e)),
+    match result {
+        Ok(()) => line(io, "Success."),
+        Err(err) => line(io, alloc::format!("Error writing file: {:?}", err).as_str()),
     }
-
-    CommandAction::None
 }
 
-
-pub(crate) fn cmd_pci_usb(
-    ctx: &mut ShellCommandCtx<'_>,
-    _args: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    let sub = _args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
-
-    if sub == "dump" {
-        ctx.io.write_str(
-            "pci.usb: targeted descriptor dump is printed automatically when an unclaimed device matches known LED IDs (0416:A125 or 1462:7E03).\r\n",
-        );
-        ctx.io
-            .write_str("pci.usb: replug the device (or reboot) to re-trigger enumeration.\r\n");
-        return CommandAction::None;
-    }
-
-    let ctrls = crate::usb::xhci::xhc_list();
-    if ctrls.is_empty() {
-        ctx.io.write_str("pci.usb: no xhci controllers\r\n");
-        return CommandAction::None;
-    }
-
-    for info in ctrls.iter() {
-        ctx.io.write_fmt(format_args!(
-            "pci.usb: xHCI {} {:02X}:{:02X}.{} bar0=0x{:X} size=0x{:X} ac64={}\r\n",
-            info.controller_id,
-            info.bus,
-            info.slot,
-            info.function,
-            info.bar_phys,
-            info.bar_size,
-            info.supports_64bit
-        ));
-
-        let devs = crate::usb::list_device_summaries(info.controller_id);
-        if devs.is_empty() {
-            ctx.io.write_str("  (no devices)\r\n");
-            continue;
+fn dispatch_subcommand(io: &'static dyn ShellBackend2, cmd: &str, args: &mut SplitWhitespace<'_>) {
+    match cmd {
+        "help" => print_menu(io),
+        "pci" => match args.next() {
+            Some("bar") => {
+                if args.next().is_some() {
+                    line(io, TLB_USAGE);
+                } else {
+                    cmd_tlb_pci_bar(io);
+                }
+            }
+            Some(_) => line(io, TLB_USAGE),
+            None => cmd_tlb_pci(io),
+        },
+        "pciids" => {
+            if args.next().is_some() {
+                line(io, TLB_USAGE);
+            } else {
+                cmd_tlb_pciids(io);
+            }
         }
-
-        for d in devs.iter() {
-            ctx.io.write_fmt(format_args!(
-                "  port={} slot={} kind={} vid=0x{:04X} pid=0x{:04X} cls={:02X}/{:02X}/{:02X}\r\n",
-                d.port,
-                d.slot_id,
-                d.kind,
-                d.vid.unwrap_or(0),
-                d.pid.unwrap_or(0),
-                d.class.unwrap_or(0),
-                d.subclass.unwrap_or(0),
-                d.protocol.unwrap_or(0)
-            ));
+        "pci.bar" => {
+            if args.next().is_some() {
+                line(io, TLB_USAGE);
+            } else {
+                cmd_tlb_pci_bar(io);
+            }
         }
+        "mem" => {
+            if args.next().is_some() {
+                line(io, TLB_USAGE);
+            } else {
+                cmd_tlb_mem(io);
+            }
+        }
+        "cpu" => {
+            if args.next().is_some() {
+                line(io, TLB_USAGE);
+            } else {
+                cmd_tlb_cpu(io);
+            }
+        }
+        "acpi" => match args.next() {
+            None => cmd_tlb_acpi(io),
+            Some("facp") => {
+                if args.next().is_some() {
+                    line(io, TLB_USAGE);
+                } else {
+                    cmd_tlb_acpi_facp(io);
+                }
+            }
+            Some("madt") => {
+                if args.next().is_some() {
+                    line(io, TLB_USAGE);
+                } else {
+                    cmd_tlb_acpi_madt(io);
+                }
+            }
+            Some("hpet") => {
+                if args.next().is_some() {
+                    line(io, TLB_USAGE);
+                } else {
+                    cmd_tlb_acpi_hpet(io);
+                }
+            }
+            Some("mcfg") => {
+                if args.next().is_some() {
+                    line(io, TLB_USAGE);
+                } else {
+                    cmd_tlb_acpi_mcfg(io);
+                }
+            }
+            Some("ssdt") => {
+                if args.next().is_some() {
+                    line(io, TLB_USAGE);
+                } else {
+                    cmd_tlb_acpi_ssdt(io);
+                }
+            }
+            Some(_) => line(io, TLB_USAGE),
+        },
+        "uefi" => {
+            if args.next().is_some() {
+                line(io, TLB_USAGE);
+            } else {
+                cmd_tlb_uefi(io);
+            }
+        }
+        "x2apic" => {
+            if args.next().is_some() {
+                line(io, TLB_USAGE);
+            } else {
+                cmd_tlb_x2apic(io);
+            }
+        }
+        "usb" => {
+            if args.next().is_some() {
+                line(io, TLB_USAGE);
+            } else {
+                cmd_tlb_usb(io);
+            }
+        }
+        "dump" => {
+            if args.next().is_some() {
+                line(io, TLB_USAGE);
+            } else {
+                cmd_tlb_dump(io);
+            }
+        }
+        _ => line(io, TLB_USAGE),
     }
+}
 
-    CommandAction::None
+pub(crate) fn try_parse(
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+) -> ParseOutcome {
+    let Some(cmd) = args.next() else {
+        print_menu(io);
+        return ParseOutcome::Handled;
+    };
+
+    dispatch_subcommand(io, cmd, args);
+    ParseOutcome::Handled
+}
+
+pub(crate) fn try_parse_alias(
+    io: &'static dyn ShellBackend2,
+    alias: &str,
+    rest: &str,
+) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    dispatch_subcommand(io, alias, &mut args);
+    ParseOutcome::Handled
 }

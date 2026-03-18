@@ -3453,15 +3453,6 @@ impl NetService {
                     } else {
                         rx_event_drops_this_poll = rx_event_drops_this_poll.saturating_add(1);
                     }
-                    if crate::logflag::NET_LOG_TCP_FLOW {
-                        crate::log!(
-                            "net: tcp rx owner={} handle={} len={} queued={}\n",
-                            owner,
-                            handle.0,
-                            len,
-                            queued
-                        );
-                    }
                 }
             }
 

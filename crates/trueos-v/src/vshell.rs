@@ -37,7 +37,7 @@ pub fn shell1_submit_input(bytes: &[u8]) -> usize {
 }
 
 #[inline]
-pub fn shell1_command_registry_json() -> Option<String> {
+pub fn shell_command_registry_json() -> Option<String> {
     let len = unsafe { vcabi::trueos_cabi_shell_command_registry_json(core::ptr::null_mut(), 0) };
     if len <= 0 {
         return None;

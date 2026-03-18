@@ -1083,7 +1083,7 @@ pub unsafe fn install(ctx: *mut qjs::JSContext) {
 }
 
 unsafe fn install_shell1_runtime(ctx: *mut qjs::JSContext) {
-    let Some(json) = vshell::shell1_command_registry_json() else {
+    let Some(json) = vshell::shell_command_registry_json() else {
         return;
     };
 

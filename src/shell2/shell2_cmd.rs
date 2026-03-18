@@ -4,7 +4,24 @@ use super::ShellBackend2;
 
 #[derive(Clone, Copy)]
 pub(crate) enum CommandSessionKind {
+    BenchRunning(u64),
     FormatSure,
+}
+
+impl CommandSessionKind {
+    pub(crate) const fn shows_session_activity(self) -> bool {
+        match self {
+            Self::BenchRunning(_) => false,
+            Self::FormatSure => true,
+        }
+    }
+
+    pub(crate) const fn accepts_broadcast_input(self) -> bool {
+        match self {
+            Self::BenchRunning(_) => true,
+            Self::FormatSure => false,
+        }
+    }
 }
 
 pub(crate) enum ParseOutcome {

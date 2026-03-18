@@ -110,10 +110,7 @@ fn cmd_insane(io: &'static dyn ShellBackend2) {
 }
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(
-        io,
-        "etc: usage `etc go|go2|insane|ecma [demo|sanitize <text>|clear|help]`",
-    );
+    print_shell_line(io, "etc: usage `etc go|go2|insane|ecma`");
 }
 
 pub(crate) fn try_parse(
@@ -130,8 +127,11 @@ pub(crate) fn try_parse(
         "go2" => start_looping_chars(io, "go2", &GO_TWO_CHARS),
         "insane" => cmd_insane(io),
         "ecma" => {
-            let rest = args.collect::<alloc::vec::Vec<_>>().join(" ");
-            super::super::ecma48::demo_ecma48(io, rest.as_str(), DEFAULT_ECMA_COLS);
+            if args.next().is_some() {
+                print_usage(io);
+                return ParseOutcome::Handled;
+            }
+            super::super::ecma48::demo_ecma48(io, DEFAULT_ECMA_COLS);
         }
         _ => print_usage(io),
     }

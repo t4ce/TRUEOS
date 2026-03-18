@@ -31,6 +31,7 @@ struct MatrixSlot {
     id: MatrixSlotId,
     lines: VecDeque<TranscriptEntry>,
     activity: MatrixSlotActivity,
+    running_count: usize,
 }
 
 struct MatrixState {
@@ -84,6 +85,7 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
         id: id.clone(),
         lines: VecDeque::new(),
         activity: MatrixSlotActivity::Idle,
+        running_count: 0,
     });
     slots.len() - 1
 }
@@ -116,6 +118,14 @@ fn push_line(slot: &mut MatrixSlot, source: LineSource, text: &str) {
         source,
         text: AllocString::from(text),
     });
+}
+
+fn visible_activity(slot: &MatrixSlot) -> MatrixSlotActivity {
+    if slot.running_count > 0 {
+        MatrixSlotActivity::Running
+    } else {
+        slot.activity
+    }
 }
 
 pub(crate) fn active_slot_id(output_mask: u8) -> MatrixSlotId {
@@ -170,8 +180,34 @@ pub(crate) fn record_line_in_slot(slot_id: &MatrixSlotId, source: LineSource, te
 pub(crate) fn set_slot_activity(slot_id: &MatrixSlotId, activity: MatrixSlotActivity) {
     let mut guard = state().lock();
     let idx = ensure_slot_index(&mut guard.slots, slot_id);
-    if guard.slots[idx].activity != activity {
-        guard.slots[idx].activity = activity;
+    let next = match activity {
+        MatrixSlotActivity::Running => MatrixSlotActivity::Idle,
+        other => other,
+    };
+    if guard.slots[idx].activity != next {
+        guard.slots[idx].activity = next;
+        bump_revision(&mut guard);
+    }
+}
+
+pub(crate) fn begin_slot_running(slot_id: &MatrixSlotId) {
+    let mut guard = state().lock();
+    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    let was_running = visible_activity(&guard.slots[idx]) == MatrixSlotActivity::Running;
+    guard.slots[idx].running_count = guard.slots[idx].running_count.saturating_add(1);
+    let is_running = visible_activity(&guard.slots[idx]) == MatrixSlotActivity::Running;
+    if was_running != is_running {
+        bump_revision(&mut guard);
+    }
+}
+
+pub(crate) fn end_slot_running(slot_id: &MatrixSlotId) {
+    let mut guard = state().lock();
+    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    let was_running = visible_activity(&guard.slots[idx]) == MatrixSlotActivity::Running;
+    guard.slots[idx].running_count = guard.slots[idx].running_count.saturating_sub(1);
+    let is_running = visible_activity(&guard.slots[idx]) == MatrixSlotActivity::Running;
+    if was_running != is_running {
         bump_revision(&mut guard);
     }
 }
@@ -186,18 +222,14 @@ pub(crate) fn slot_views(output_mask: u8) -> Vec<MatrixSlotView> {
         out.push(MatrixSlotView {
             id: slot.id.clone(),
             selected: slot.id == selected,
-            activity: slot.activity,
+            activity: visible_activity(slot),
         });
     }
     out
 }
 
 pub(crate) fn has_running_slots() -> bool {
-    state()
-        .lock()
-        .slots
-        .iter()
-        .any(|slot| matches!(slot.activity, MatrixSlotActivity::Running))
+    state().lock().slots.iter().any(|slot| slot.running_count > 0)
 }
 
 pub(crate) fn revision() -> u64 {
