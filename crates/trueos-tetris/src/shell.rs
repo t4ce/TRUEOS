@@ -1,9 +1,10 @@
 use crate::{Game, Lcg32, NoopEvents, RandomSource, Rotation};
 
-const BOARD_W: usize = 20;
-const BOARD_H: usize = 48;
-const BOARD_HIDDEN: usize = 8;
+const BOARD_W: usize = 12;
+const BOARD_H: usize = 28;
+const BOARD_HIDDEN: usize = 4;
 const VIEW_H: usize = BOARD_H - BOARD_HIDDEN;
+const STATS_WIDTH: usize = 20;
 
 pub trait ShellIo {
     fn write_str(&self, s: &str);
@@ -22,6 +23,7 @@ pub struct ShellApp {
     events: NoopEvents,
     cols: usize,
     rows: usize,
+    viewport_top_row: usize,
     esc_state: u8,
     saw_cr: bool,
     paused: bool,
@@ -48,6 +50,7 @@ impl ShellApp {
             events,
             cols: cols.max(24),
             rows: rows.max(14),
+            viewport_top_row: 1,
             esc_state: 0,
             saw_cr: false,
             paused: false,
@@ -66,6 +69,12 @@ impl ShellApp {
     pub fn set_terminal_size(&mut self, cols: usize, rows: usize) {
         self.cols = cols.max(24);
         self.rows = rows.max(14);
+        self.redraw = true;
+        self.prev_valid = false;
+    }
+
+    pub fn set_viewport_top_row(&mut self, top_row: usize) {
+        self.viewport_top_row = top_row.max(1);
         self.redraw = true;
         self.prev_valid = false;
     }
@@ -180,45 +189,41 @@ impl ShellApp {
     }
 
     pub fn draw(&self, io: &dyn ShellIo) {
-        let board_cols = BOARD_W * 2 + 2;
+        let board_inner_cols = BOARD_W * 2;
         let board_rows = self.game.visible_height() + 2;
+        let panel_cols = 1 + board_inner_cols + 1 + STATS_WIDTH + 1;
 
-        let start_col = (self.cols.saturating_sub(board_cols + 2) / 2).max(1);
-        let start_row = (self.rows.saturating_sub(board_rows + 4) / 2).max(1);
+        let start_col = (self.cols.saturating_sub(panel_cols) / 2).max(1);
+        let start_row = (self.rows.saturating_sub(board_rows) / 2).max(1);
+        let divider_col = start_col + 1 + board_inner_cols;
+        let stats_col = divider_col + 2;
+        let right_col = start_col + panel_cols - 1;
 
         io.write_str("\x1b[?25l");
 
         if !self.prev_valid {
-            io.write_str("\x1b[2J\x1b[H");
-            self.write_at(
-                io,
-                start_row,
-                1,
-                "TETRIS  |  A/D move  W rotate  Space drop  P pause  R restart  Q exit",
-            );
-            self.write_at(
-                io,
-                start_row + 1,
-                start_col,
-                "┌────────────────────────────────────────┐",
-            );
+            io.write_fmt(format_args!("\x1b[{};1H\x1b[J", self.viewport_top_row));
+            self.draw_top_border(io, start_row, start_col, board_inner_cols, STATS_WIDTH);
 
             for view_y in 0..self.game.visible_height() {
-                let row = start_row + 2 + view_y;
+                let row = start_row + 1 + view_y;
                 self.write_at(io, row, start_col, "│");
-                self.write_at(io, row, start_col + 1 + BOARD_W * 2, "│");
+                self.write_at(io, row, divider_col, "│");
+                self.write_at(io, row, right_col, "│");
+                self.write_at(io, row, divider_col + 1, "                    ");
             }
 
-            self.write_at(
+            self.draw_bottom_border(
                 io,
-                start_row + 2 + self.game.visible_height(),
+                start_row + 1 + self.game.visible_height(),
                 start_col,
-                "└────────────────────────────────────────┘",
+                board_inner_cols,
+                STATS_WIDTH,
             );
         }
 
         for view_y in 0..self.game.visible_height() {
-            let row = start_row + 2 + view_y;
+            let row = start_row + 1 + view_y;
             let board_y = BOARD_HIDDEN + view_y;
             for x in 0..BOARD_W {
                 let current = self.game.cell_view_at(x, board_y, true);
@@ -255,8 +260,7 @@ impl ShellApp {
             }
         }
 
-        let stats_row = start_row + 2;
-        let stats_col = start_col + board_cols + 3;
+        let stats_row = start_row + 1;
         if !self.prev_valid || self.prev_level != self.game.level.current_level {
             self.write_status_line(
                 io,
@@ -297,6 +301,44 @@ impl ShellApp {
         }
     }
 
+    fn draw_top_border(
+        &self,
+        io: &dyn ShellIo,
+        row: usize,
+        start_col: usize,
+        board_inner_cols: usize,
+        stats_width: usize,
+    ) {
+        self.write_at(io, row, start_col, "┌");
+        for idx in 0..board_inner_cols {
+            self.write_at(io, row, start_col + 1 + idx, "─");
+        }
+        self.write_at(io, row, start_col + 1 + board_inner_cols, "┬");
+        for idx in 0..stats_width {
+            self.write_at(io, row, start_col + 2 + board_inner_cols + idx, "─");
+        }
+        self.write_at(io, row, start_col + 2 + board_inner_cols + stats_width, "┐");
+    }
+
+    fn draw_bottom_border(
+        &self,
+        io: &dyn ShellIo,
+        row: usize,
+        start_col: usize,
+        board_inner_cols: usize,
+        stats_width: usize,
+    ) {
+        self.write_at(io, row, start_col, "└");
+        for idx in 0..board_inner_cols {
+            self.write_at(io, row, start_col + 1 + idx, "─");
+        }
+        self.write_at(io, row, start_col + 1 + board_inner_cols, "┴");
+        for idx in 0..stats_width {
+            self.write_at(io, row, start_col + 2 + board_inner_cols + idx, "─");
+        }
+        self.write_at(io, row, start_col + 2 + board_inner_cols + stats_width, "┘");
+    }
+
     fn reset_game(&mut self) {
         let seed = self.rng.next_u32().max(1);
         self.rng = Lcg32::new(seed);
@@ -323,7 +365,8 @@ impl ShellApp {
 
     #[inline]
     fn write_at(&self, io: &dyn ShellIo, row: usize, col: usize, text: &str) {
-        io.write_fmt(format_args!("\x1b[{};{}H", row.max(1), col.max(1)));
+        let abs_row = self.viewport_top_row.saturating_add(row.max(1)).saturating_sub(1);
+        io.write_fmt(format_args!("\x1b[{};{}H", abs_row, col.max(1)));
         io.write_str(text);
     }
 
@@ -335,13 +378,14 @@ impl ShellApp {
         col: usize,
         args: core::fmt::Arguments<'_>,
     ) {
-        io.write_fmt(format_args!("\x1b[{};{}H", row.max(1), col.max(1)));
+        let abs_row = self.viewport_top_row.saturating_add(row.max(1)).saturating_sub(1);
+        io.write_fmt(format_args!("\x1b[{};{}H", abs_row, col.max(1)));
         io.write_fmt(args);
     }
 
     #[inline]
     fn clear_status_line(&self, io: &dyn ShellIo, row: usize, col: usize) {
-        self.write_at(io, row, col, "                      ");
+        self.write_at(io, row, col, "                   ");
     }
 
     #[inline]
