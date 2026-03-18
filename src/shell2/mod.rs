@@ -18,7 +18,7 @@ mod shell2_qjs;
 mod shell2_surf;
 #[allow(unused_imports)]
 pub(crate) use crate::shell2::backends::{
-    crlf, uart1_com1, NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND,
+    NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND, crlf, uart1_com1,
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_ai::AiPromptMode;
@@ -165,10 +165,8 @@ impl<'a> AlignedWriter<'a> {
                 let width = ecma48::visible_width(s);
                 let col = self.line_width().saturating_sub(width).saturating_add(1);
                 self.move_to(row, col);
-                self.io.write_fmt(format_args!(
-                    "{}",
-                    ecma48::style(s).fg(SYSTEM_TEXT_RGB)
-                ));
+                self.io
+                    .write_fmt(format_args!("{}", ecma48::style(s).fg(SYSTEM_TEXT_RGB)));
             }
         }
     }
@@ -201,7 +199,9 @@ impl<'a> AlignedWriter<'a> {
         }
         let styled = alloc::format!(
             "{}",
-            ecma48::style(slot_label.as_str()).bold().fg(STATUS_SELECTED_RGB)
+            ecma48::style(slot_label.as_str())
+                .bold()
+                .fg(STATUS_SELECTED_RGB)
         );
         self.io.write_str(styled.as_str());
         self.center_text(BANNER_ROW, self.main_mode_text(mode).as_str());
@@ -338,10 +338,7 @@ impl<'a> AlignedWriter<'a> {
 
     fn push_ai_token(&self, out: &mut AllocString, text: &str, selected: bool) {
         if selected {
-            let styled = alloc::format!(
-                "{}",
-                ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
-            );
+            let styled = alloc::format!("{}", ecma48::style(text).bold().fg(STATUS_SELECTED_RGB));
             out.push_str(styled.as_str());
         } else {
             out.push_str(text);
@@ -350,10 +347,7 @@ impl<'a> AlignedWriter<'a> {
 
     fn push_mode_token(&self, out: &mut AllocString, text: &str, selected: bool) {
         if selected {
-            let styled = alloc::format!(
-                "{}",
-                ecma48::style(text).bold().fg(STATUS_SELECTED_RGB)
-            );
+            let styled = alloc::format!("{}", ecma48::style(text).bold().fg(STATUS_SELECTED_RGB));
             out.push_str(styled.as_str());
         } else {
             out.push_str(text);
@@ -427,7 +421,8 @@ impl<'a> AlignedWriter<'a> {
 
     fn center_text(&self, row: usize, text: &str) {
         let width = ecma48::visible_width(text);
-        let col = self.line_width()
+        let col = self
+            .line_width()
             .saturating_sub(width)
             .checked_div(2)
             .unwrap_or(0)
@@ -611,7 +606,12 @@ fn enqueue_transcript_line(io: &dyn ShellIo2, source: LineSource, text: &str) {
 
 pub(crate) fn print_matrix_target_line(target: &MatrixTarget, text: &str) {
     matrix::record_line_in_slot(&target.slot_id, LineSource::System, text);
-    queue_transcript_line_for_output(target.output_mask, &target.slot_id, LineSource::System, text);
+    queue_transcript_line_for_output(
+        target.output_mask,
+        &target.slot_id,
+        LineSource::System,
+        text,
+    );
 }
 
 fn drain_pending_transcript(
@@ -626,7 +626,11 @@ fn drain_pending_transcript(
 
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_task(io, net_io) {
-        return drain_pending_transcript_queue(&NET_TCP_PENDING_TRANSCRIPT, &active_slot, transcript);
+        return drain_pending_transcript_queue(
+            &NET_TCP_PENDING_TRANSCRIPT,
+            &active_slot,
+            transcript,
+        );
     }
 
     false
@@ -637,7 +641,8 @@ fn current_transcript_for_task(io: &'static dyn ShellBackend2) -> VecDeque<Trans
 }
 
 fn record_user_line_for_active_slot(io: &'static dyn ShellBackend2, submitted: &str) {
-    let _ = matrix::record_line_for_output(output_target_for_backend(io), LineSource::User, submitted);
+    let _ =
+        matrix::record_line_for_output(output_target_for_backend(io), LineSource::User, submitted);
 }
 
 fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
@@ -676,17 +681,13 @@ fn handle_submit(
     submitted: &str,
 ) -> HandleSubmitResult {
     match mode {
-        ShellMode2::Cmd => {
-            match shell2_cmd::try_parse(spawner, io, submitted) {
-                shell2_cmd::ParseOutcome::SetLineWidth(width) => {
-                    HandleSubmitResult::SetLineWidth(width)
-                }
-                shell2_cmd::ParseOutcome::StartSession(kind) => {
-                    HandleSubmitResult::StartSession(kind)
-                }
-                _ => HandleSubmitResult::None,
+        ShellMode2::Cmd => match shell2_cmd::try_parse(spawner, io, submitted) {
+            shell2_cmd::ParseOutcome::SetLineWidth(width) => {
+                HandleSubmitResult::SetLineWidth(width)
             }
-        }
+            shell2_cmd::ParseOutcome::StartSession(kind) => HandleSubmitResult::StartSession(kind),
+            _ => HandleSubmitResult::None,
+        },
         ShellMode2::Surf => {
             if let Some(parsed) = shell2_surf::try_parse_with_prefix(submitted, surf_prefix) {
                 match parsed {
@@ -726,7 +727,9 @@ fn find_command_session_index(
     sessions: &[CommandSession],
     slot_id: &matrix::MatrixSlotId,
 ) -> Option<usize> {
-    sessions.iter().position(|session| session.slot_id == *slot_id)
+    sessions
+        .iter()
+        .position(|session| session.slot_id == *slot_id)
 }
 
 fn handle_command_session_input(
@@ -952,72 +955,70 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             saw_cr = b == b'\r';
 
             match b {
-                b'\t' => {
-                    match mode {
-                        ShellMode2::Surf => {
-                            cmd_status_text = None;
-                            surf_prefix = surf_prefix.next();
-                            out.mode_status(
-                                output_mask,
-                                mode,
-                                ai_mode,
-                                qjs_mode,
-                                surf_prefix,
-                                cmd_status_text.as_deref(),
-                            );
-                            out.prompt(output_mask);
-                            for ch in line.chars() {
-                                out.user_char(ch);
-                            }
-                        }
-                        ShellMode2::Ai => {
-                            cmd_status_text = None;
-                            ai_mode = ai_mode.next();
-                            out.mode_status(
-                                output_mask,
-                                mode,
-                                ai_mode,
-                                qjs_mode,
-                                surf_prefix,
-                                cmd_status_text.as_deref(),
-                            );
-                            out.prompt(output_mask);
-                            for ch in line.chars() {
-                                out.user_char(ch);
-                            }
-                        }
-                        ShellMode2::Qjs => {
-                            cmd_status_text = None;
-                            qjs_mode = qjs_mode.next();
-                            out.mode_status(
-                                output_mask,
-                                mode,
-                                ai_mode,
-                                qjs_mode,
-                                surf_prefix,
-                                cmd_status_text.as_deref(),
-                            );
-                            out.prompt(output_mask);
-                            for ch in line.chars() {
-                                out.user_char(ch);
-                            }
-                        }
-                        ShellMode2::Cmd => {
-                            if line.is_empty() {
-                                cmd_status_text = Some(command_names_status_text());
-                                out.mode_status(
-                                    output_mask,
-                                    mode,
-                                    ai_mode,
-                                    qjs_mode,
-                                    surf_prefix,
-                                    cmd_status_text.as_deref(),
-                                );
-                                out.prompt(output_mask);
-                            }
+                b'\t' => match mode {
+                    ShellMode2::Surf => {
+                        cmd_status_text = None;
+                        surf_prefix = surf_prefix.next();
+                        out.mode_status(
+                            output_mask,
+                            mode,
+                            ai_mode,
+                            qjs_mode,
+                            surf_prefix,
+                            cmd_status_text.as_deref(),
+                        );
+                        out.prompt(output_mask);
+                        for ch in line.chars() {
+                            out.user_char(ch);
                         }
                     }
-                }
+                    ShellMode2::Ai => {
+                        cmd_status_text = None;
+                        ai_mode = ai_mode.next();
+                        out.mode_status(
+                            output_mask,
+                            mode,
+                            ai_mode,
+                            qjs_mode,
+                            surf_prefix,
+                            cmd_status_text.as_deref(),
+                        );
+                        out.prompt(output_mask);
+                        for ch in line.chars() {
+                            out.user_char(ch);
+                        }
+                    }
+                    ShellMode2::Qjs => {
+                        cmd_status_text = None;
+                        qjs_mode = qjs_mode.next();
+                        out.mode_status(
+                            output_mask,
+                            mode,
+                            ai_mode,
+                            qjs_mode,
+                            surf_prefix,
+                            cmd_status_text.as_deref(),
+                        );
+                        out.prompt(output_mask);
+                        for ch in line.chars() {
+                            out.user_char(ch);
+                        }
+                    }
+                    ShellMode2::Cmd => {
+                        if line.is_empty() {
+                            cmd_status_text = Some(command_names_status_text());
+                            out.mode_status(
+                                output_mask,
+                                mode,
+                                ai_mode,
+                                qjs_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                            );
+                            out.prompt(output_mask);
+                        }
+                    }
+                },
                 b'\r' | b'\n' => {
                     if matches!(text_decode, ecma48::InputDecodeState::Utf8Seq { .. }) {
                         push_input_char(&out, &mut line, 'Ü');

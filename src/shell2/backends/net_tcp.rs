@@ -60,9 +60,13 @@ impl ShellIo2 for NetTcpShellBackend {
 
         impl Write for Writer {
             fn write_str(&mut self, s: &str) -> core::fmt::Result {
-                crate::shell2::crlf::write_bytes_crlf(s.as_bytes(), &NET_TCP_LAST_WAS_CR, |chunk| {
-                    net_shell_write_bytes(chunk);
-                });
+                crate::shell2::crlf::write_bytes_crlf(
+                    s.as_bytes(),
+                    &NET_TCP_LAST_WAS_CR,
+                    |chunk| {
+                        net_shell_write_bytes(chunk);
+                    },
+                );
                 Ok(())
             }
         }

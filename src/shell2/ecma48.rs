@@ -1,5 +1,5 @@
-use core::fmt;
 use alloc::string::String;
+use core::fmt;
 
 pub const RESET: &str = "\x1b[0m";
 pub const SAVE_CURSOR: &str = "\x1b[s";
@@ -706,7 +706,7 @@ pub fn json_upgrade(input: &str) -> String {
     out
 }
 
-pub(crate) fn handle_ecma48(io: &dyn super::ShellBackend2, rest: &str, cols: usize) {
+pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, rest: &str, cols: usize) {
     let arg = rest.trim();
     if arg.eq_ignore_ascii_case("help") {
         io.write_str("ecma48: usage\r\n");

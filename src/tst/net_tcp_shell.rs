@@ -7,9 +7,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
-use crate::shell2::backends::net_tcp::{
-    NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT,
-};
+use crate::shell2::backends::net_tcp::{NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT};
 
 /// TCP-backed shell I/O bridge.
 ///

@@ -217,7 +217,13 @@ pub(crate) fn history_lines_text(start_line: usize, max_lines: usize) -> AllocSt
     }
 
     let mut out = AllocString::new();
-    for (idx, line) in slot.lines.iter().skip(start_line).take(max_lines).enumerate() {
+    for (idx, line) in slot
+        .lines
+        .iter()
+        .skip(start_line)
+        .take(max_lines)
+        .enumerate()
+    {
         if idx != 0 {
             out.push('\n');
         }

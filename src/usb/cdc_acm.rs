@@ -590,15 +590,9 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         {
             crate::log!("usb: cdc set_line_coding failed\n");
         }
-        if set_control_line_state(
-            ctx,
-            &mut *ep0_ring,
-            slot_id,
-            control_interface,
-            0x0003,
-        )
-        .await
-        .is_err()
+        if set_control_line_state(ctx, &mut *ep0_ring, slot_id, control_interface, 0x0003)
+            .await
+            .is_err()
         {
             crate::log!("usb: cdc set_control_line_state failed\n");
         }

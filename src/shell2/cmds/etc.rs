@@ -1,22 +1,13 @@
+pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, rest: &str, cols: usize) {
 
-pub(crate) fn cmd_ecma48(
-    ctx: &mut ShellCommandCtx<'_>,
-    args: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    // Escaped IO not needed, forward not possible with new lifetimes easily for spawned tasks
-    ctx.io
-        .write_str("ecma48: local echo only in prepend mode\r\n");
-    let arg = args.and_then(|a| a.get_str(0)).unwrap_or("");
-    crate::shell::ecma48::handle_ecma48(ctx.io, arg, *ctx.term_cols);
-    CommandAction::None
+
+
+fn cmd_go(io: &'static dyn ShellBackend) {
+    const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 }
 
-pub(crate) fn cmd_go(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
-    CommandAction::EnterGo
-}
-
-pub(crate) fn cmd_go_two(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
-    CommandAction::EnterGoTwo
+fn cmd_go_two(io: &'static dyn ShellBackend) {
+    const GO_TWO_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
 }
 
 // rework so its from 0 to 3949(whatever) better readable

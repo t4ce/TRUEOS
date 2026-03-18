@@ -12,7 +12,10 @@ pub(crate) fn submit_install(spawner: &Spawner, io: &'static dyn ShellBackend2) 
         return;
     };
     let Some(bootx64) = crate::limine::install_bootx64_bytes() else {
-        print_shell_line(io, "install: missing boot payload module `trueos.install.bootx64`");
+        print_shell_line(
+            io,
+            "install: missing boot payload module `trueos.install.bootx64`",
+        );
         return;
     };
     let Some(kernel) = crate::limine::install_kernel_bytes() else {
