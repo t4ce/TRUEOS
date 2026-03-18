@@ -3,7 +3,10 @@ use core::str::SplitWhitespace;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use super::super::{MatrixTarget, ShellBackend2, print_matrix_target_line, print_shell_line, set_matrix_target_active};
+use super::super::{
+    MatrixTarget, ShellBackend2, print_matrix_target_line, print_shell_line,
+    set_matrix_target_active,
+};
 use crate::shell2::CommandSessionInputResult;
 use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
 
@@ -66,7 +69,10 @@ fn submit_format(spawner: &Spawner, io: &'static dyn ShellBackend2, target: &Mat
     );
 
     set_matrix_target_active(target, true);
-    if spawner.spawn(format_command_task(target.clone(), root)).is_err() {
+    if spawner
+        .spawn(format_command_task(target.clone(), root))
+        .is_err()
+    {
         set_matrix_target_active(target, false);
         print_shell_line(io, "format: spawn failed");
     }
@@ -83,18 +89,16 @@ async fn format_command_task(target: MatrixTarget, root: crate::disc::block::Dev
         };
 
         let info = root.info();
-        log(
-            alloc::format!(
-                "format: target id={} ({}) blocks={} bs={} writable={} label={:?}",
-                info.id.raw(),
-                info.id,
-                info.block_count,
-                info.block_size,
-                info.writable,
-                info.label,
-            )
-            .as_str(),
-        );
+        log(alloc::format!(
+            "format: target id={} ({}) blocks={} bs={} writable={} label={:?}",
+            info.id.raw(),
+            info.id,
+            info.block_count,
+            info.block_size,
+            info.writable,
+            info.label,
+        )
+        .as_str());
 
         log("format: mode=disk");
         match crate::v::fs::trueosfs::format_blank_force_async(root).await {

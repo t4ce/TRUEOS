@@ -915,7 +915,12 @@ fn intel_mmio_write32(info: IntelGfxInfo, off: usize, value: u32) -> bool {
     true
 }
 
-fn intel_pcode_read32_compact(info: IntelGfxInfo, mailbox: u32, low: &mut u32, high: &mut u32) -> Option<u32> {
+fn intel_pcode_read32_compact(
+    info: IntelGfxInfo,
+    mailbox: u32,
+    low: &mut u32,
+    high: &mut u32,
+) -> Option<u32> {
     if (intel_mmio_read32(info, INTEL_GEN6_PCODE_MAILBOX) & INTEL_GEN6_PCODE_READY) != 0 {
         return None;
     }
@@ -948,15 +953,19 @@ fn intel_tgl_tc_cold_block_compact(info: IntelGfxInfo) -> (bool, u32, u32, u32) 
 
 fn intel_dkl_tc3_read32(info: IntelGfxInfo, mmio_off: usize, bank_idx: u32) -> u32 {
     let hip_orig = intel_mmio_read32(info, INTEL_HIP_INDEX_REG0);
-    let hip_test =
-        (hip_orig & !INTEL_TC3_DKL_BANK_MASK) | (bank_idx << INTEL_TC3_DKL_BANK_SHIFT);
+    let hip_test = (hip_orig & !INTEL_TC3_DKL_BANK_MASK) | (bank_idx << INTEL_TC3_DKL_BANK_SHIFT);
     let _ = intel_mmio_write32(info, INTEL_HIP_INDEX_REG0, hip_test);
     let value = intel_mmio_read32(info, mmio_off);
     let _ = intel_mmio_write32(info, INTEL_HIP_INDEX_REG0, hip_orig);
     value
 }
 
-fn intel_dkl_read32_shifted(info: IntelGfxInfo, mmio_off: usize, bank_idx: u32, bank_shift: u32) -> u32 {
+fn intel_dkl_read32_shifted(
+    info: IntelGfxInfo,
+    mmio_off: usize,
+    bank_idx: u32,
+    bank_shift: u32,
+) -> u32 {
     let bank_mask = 0xFFu32 << bank_shift;
     let hip_orig = intel_mmio_read32(info, INTEL_HIP_INDEX_REG0);
     let hip_test = (hip_orig & !bank_mask) | (bank_idx << bank_shift);
@@ -1978,12 +1987,11 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             INTEL_ICL_PWR_WELL_CTL_AUX2,
             INTEL_ICL_PWR_WELL_CTL_DDI2,
         ];
-        let main_pw_state =
-            pw_state_mask(INTEL_PW_REQ_IDX_PW1) |
-            pw_state_mask(INTEL_PW_REQ_IDX_PW2) |
-            pw_state_mask(INTEL_PW_REQ_IDX_PW3) |
-            pw_state_mask(INTEL_PW_REQ_IDX_PW4) |
-            pw_state_mask(INTEL_PW_REQ_IDX_PW5);
+        let main_pw_state = pw_state_mask(INTEL_PW_REQ_IDX_PW1)
+            | pw_state_mask(INTEL_PW_REQ_IDX_PW2)
+            | pw_state_mask(INTEL_PW_REQ_IDX_PW3)
+            | pw_state_mask(INTEL_PW_REQ_IDX_PW4)
+            | pw_state_mask(INTEL_PW_REQ_IDX_PW5);
         let tc3_aux_req = pw_req_mask(INTEL_PW_REQ_IDX_TC3);
         let tc3_aux_state = pw_state_mask(INTEL_PW_REQ_IDX_TC3);
         let tc3_ddi_req = pw_req_mask(INTEL_PW_REQ_IDX_TC3);
@@ -2135,7 +2143,9 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         let dp_route_after = read_dp_route_sig();
         let tc3_route_after = intel_mmio_read32(info, INTEL_TC3_DDI_BUF_CTL);
 
-        if dp_route_changed(&dp_route_before, &dp_route_after) || tc3_route_before != tc3_route_after {
+        if dp_route_changed(&dp_route_before, &dp_route_after)
+            || tc3_route_before != tc3_route_after
+        {
             let mut first = "route";
             let mut before = tc3_route_before;
             let mut after = tc3_route_after;
@@ -2172,10 +2182,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             let tcss_after_cand = intel_mmio_read32(info, tcss_off);
             let _ = intel_mmio_write32(info, ddi_off, before);
             let _ = intel_mmio_write32(info, aux_off, aux_before);
-            if after != before
-                || aux_after != aux_before
-                || tcss_after_cand != tcss_before_cand
-            {
+            if after != before || aux_after != aux_before || tcss_after_cand != tcss_before_cand {
                 owner_candidate_idx = idx as u32;
                 owner_candidate_before = before;
                 owner_candidate_after = after;
@@ -2212,11 +2219,10 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             }
         }
 
-        let state_hit =
-            (watch_after[0] & main_pw_state) != (watch_before[0] & main_pw_state) ||
-            (watch_after[2] & tc3_aux_state) != (watch_before[2] & tc3_aux_state) ||
-            (watch_after[3] & tc3_ddi_state) != (watch_before[3] & tc3_ddi_state) ||
-            poll_hit;
+        let state_hit = (watch_after[0] & main_pw_state) != (watch_before[0] & main_pw_state)
+            || (watch_after[2] & tc3_aux_state) != (watch_before[2] & tc3_aux_state)
+            || (watch_after[3] & tc3_ddi_state) != (watch_before[3] & tc3_ddi_state)
+            || poll_hit;
 
         if hits > tc3_power_offsets.len() || state_hit {
             let core_before = intel_mmio_read32(info, INTEL_HSW_PWR_WELL_CTL5);
@@ -2317,8 +2323,8 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                 dpsp_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPSP);
                 dpmle1_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPMLE1);
                 dkl_revealed = dkl_before == 0xFFFF_FFFF && dkl_after != 0xFFFF_FFFF;
-                dkl_health = dkl_after != 0xFFFF_FFFF
-                    && (dkl_after & INTEL_DKL_CMN_UC_DW27_UC_HEALTH) != 0;
+                dkl_health =
+                    dkl_after != 0xFFFF_FFFF && (dkl_after & INTEL_DKL_CMN_UC_DW27_UC_HEALTH) != 0;
                 if dkl_revealed
                     || dkl_health
                     || tcss_after != tcss_before
@@ -2332,8 +2338,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                 }
             }
 
-            let fia_visible =
-                dflexpa1_after != 0xFFFF_FFFF
+            let fia_visible = dflexpa1_after != 0xFFFF_FFFF
                 || dppms_after != 0xFFFF_FFFF
                 || dpcsss_after != 0xFFFF_FFFF
                 || dpsp_after != 0xFFFF_FFFF
@@ -2401,8 +2406,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                         let bank_mask = 0xFFu32 << shift;
                         let hip_test = (sideband_baseline & !bank_mask) | (bank_idx << shift);
                         let _ = intel_mmio_write32(info, INTEL_HIP_INDEX_REG0, hip_test);
-                        let dkl_probe =
-                            intel_mmio_read32(info, INTEL_TC3_DKL_CMN_UC_DW_27_MMIO);
+                        let dkl_probe = intel_mmio_read32(info, INTEL_TC3_DKL_CMN_UC_DW_27_MMIO);
                         let fia_probe = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPPMS);
                         if dkl_probe != 0xFFFF_FFFF || fia_probe != 0xFFFF_FFFF {
                             sideband_hit = true;
@@ -2471,7 +2475,11 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                     && dpsp_after == 0xFFFF_FFFF;
                 crate::log!(
                     "gfx-intel-scanout: compact-nope tc3-dkl sealed modehint={} pcode={} status=0x{:08X} low=0x{:08X} high=0x{:08X} preown=0x{:08X}->0x{:08X} pretcss=0x{:08X}->0x{:08X} owncand={} cand=0x{:08X}->0x{:08X} candtcss=0x{:08X} prehpd=0x{:08X}->0x{:08X} presde=0x{:08X}->0x{:08X} gtpwr=0x{:08X}->0x{:08X} main=0x{:03X} aux=0x{:08X} ddi=0x{:08X} dkl=0x{:08X} tcss=0x{:08X} tcsswin=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dklshift=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pa1=0x{:08X} dppms=0x{:08X} dpcsss=0x{:08X} dpsp=0x{:08X} dpmle1=0x{:08X}\n",
-                    if sinkless_tc_hint { "sinkless-tbt-default" } else { "dp-alt-unknown" },
+                    if sinkless_tc_hint {
+                        "sinkless-tbt-default"
+                    } else {
+                        "dp-alt-unknown"
+                    },
                     if tc_cold_ok { "ok" } else { "fail" },
                     tc_cold_status,
                     tc_cold_low,
@@ -2480,7 +2488,11 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                     owner_preaux_after,
                     tcss_preaux_before,
                     tcss_preaux_after,
-                    if owner_candidate_idx == 0xFFFF_FFFF { -1i32 } else { owner_candidate_idx as i32 },
+                    if owner_candidate_idx == 0xFFFF_FFFF {
+                        -1i32
+                    } else {
+                        owner_candidate_idx as i32
+                    },
                     owner_candidate_before,
                     owner_candidate_after,
                     owner_candidate_tcss,
@@ -2567,15 +2579,16 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         INTEL_TRANS_D_DDI_FUNC_CTL,
     ];
     let ownership_watch_names = [
-        "454D0", "454D4", "454D8", "454DC", "45500", "45504", "45510", "45520", "45524",
-        "45528", "4552C", "45530", "45534", "45538", "4553C", "13807C", "138088", "13808C",
-        "138090", "138094", "HP_EN", "HP_STAT", "DDI0", "DDI1", "DDI2", "PC_A", "PC_B",
-        "PC_C", "PC_D", "TRANS_A", "TRANS_B", "TRANS_C", "TRANS_D",
+        "454D0", "454D4", "454D8", "454DC", "45500", "45504", "45510", "45520", "45524", "45528",
+        "4552C", "45530", "45534", "45538", "4553C", "13807C", "138088", "13808C", "138090",
+        "138094", "HP_EN", "HP_STAT", "DDI0", "DDI1", "DDI2", "PC_A", "PC_B", "PC_C", "PC_D",
+        "TRANS_A", "TRANS_B", "TRANS_C", "TRANS_D",
     ];
-    let read_watch =
-        |values: &mut [u32; 33]| for (idx, slot) in values.iter_mut().enumerate() {
+    let read_watch = |values: &mut [u32; 33]| {
+        for (idx, slot) in values.iter_mut().enumerate() {
             *slot = intel_mmio_read32(info, ownership_watch_offsets[idx]);
-        };
+        }
+    };
     let log_watch_delta = |label: &str, before: &[u32; 33], after: &[u32; 33]| {
         let mut hits = 0usize;
         let mut first = "";
@@ -2610,33 +2623,37 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             line[3].2
         );
     };
-    let poll_watch_change =
-        |label: &str, baseline: &[u32; 33], spins: usize| {
-            let mut current = [0u32; 33];
-            let mut changed = false;
-            let mut spin_hit = 0usize;
-            for spin in 0..spins {
-                read_watch(&mut current);
-                if current != *baseline {
-                    changed = true;
-                    spin_hit = spin + 1;
-                    break;
-                }
-                core::hint::spin_loop();
+    let poll_watch_change = |label: &str, baseline: &[u32; 33], spins: usize| {
+        let mut current = [0u32; 33];
+        let mut changed = false;
+        let mut spin_hit = 0usize;
+        for spin in 0..spins {
+            read_watch(&mut current);
+            if current != *baseline {
+                changed = true;
+                spin_hit = spin + 1;
+                break;
             }
-            crate::log!(
-                "gfx-intel-scanout: minimal-pattern ownership-poll label={} changed={} spin_hit={}\n",
-                label,
-                changed as u32,
-                spin_hit
-            );
-            if changed {
-                log_watch_delta(label, baseline, &current);
-            }
-            current
-        };
+            core::hint::spin_loop();
+        }
+        crate::log!(
+            "gfx-intel-scanout: minimal-pattern ownership-poll label={} changed={} spin_hit={}\n",
+            label,
+            changed as u32,
+            spin_hit
+        );
+        if changed {
+            log_watch_delta(label, baseline, &current);
+        }
+        current
+    };
 
-    let preflight_offsets = [0x45500usize, INTEL_DC_STATE_EN, 0x45510usize, INTEL_DC_STATE_DEBUG];
+    let preflight_offsets = [
+        0x45500usize,
+        INTEL_DC_STATE_EN,
+        0x45510usize,
+        INTEL_DC_STATE_DEBUG,
+    ];
     let preflight_names = ["45500", "45504", "45510", "45520"];
     let mut preflight_orig = [0u32; 4];
     let mut preflight_test = [0u32; 4];
@@ -2645,7 +2662,11 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         preflight_test[idx] = preflight_orig[idx] | 0x00000001;
     }
     for idx in 0..preflight_offsets.len() {
-        let _ = intel_mmio_write32(info, preflight_offsets[idx], preflight_orig[idx] & !0x00000001);
+        let _ = intel_mmio_write32(
+            info,
+            preflight_offsets[idx],
+            preflight_orig[idx] & !0x00000001,
+        );
     }
     let mut ownership_before = [0u32; 33];
     read_watch(&mut ownership_before);
@@ -3063,7 +3084,11 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         ("dc-seam-4551C", 0x4551Cusize, Some(0x00000001u32)),
         ("gt-disp-near-13808C", 0x13808Cusize, Some(0x00000001u32)),
         ("gt-disp-near-138094", 0x138094usize, Some(0x00000001u32)),
-        ("hotplug-en", INTEL_PORT_HOTPLUG_EN, Some(INTEL_PORT_HOTPLUG_TEST_BIT)),
+        (
+            "hotplug-en",
+            INTEL_PORT_HOTPLUG_EN,
+            Some(INTEL_PORT_HOTPLUG_TEST_BIT),
+        ),
     ] {
         let orig = intel_mmio_read32(info, off);
         let test = if let Some(test) = forced_test {
@@ -3093,7 +3118,12 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
     }
     crate::log!("gfx-intel-scanout: minimal-pattern power probe complete\n");
 
-    let dc_tuple_offsets = [0x45500usize, INTEL_DC_STATE_EN, 0x45510usize, INTEL_DC_STATE_DEBUG];
+    let dc_tuple_offsets = [
+        0x45500usize,
+        INTEL_DC_STATE_EN,
+        0x45510usize,
+        INTEL_DC_STATE_DEBUG,
+    ];
     let dc_tuple_names = ["45500", "45504", "45510", "45520"];
     let dc_tuple_orders = [
         [0usize, 1usize, 2usize, 3usize],
@@ -3136,9 +3166,17 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         );
 
         let commit_idx = order[3];
-        let _ = intel_mmio_write32(info, dc_tuple_offsets[commit_idx], dc_tuple_orig[commit_idx]);
+        let _ = intel_mmio_write32(
+            info,
+            dc_tuple_offsets[commit_idx],
+            dc_tuple_orig[commit_idx],
+        );
         let pulse_low = intel_mmio_read32(info, dc_tuple_offsets[commit_idx]);
-        let _ = intel_mmio_write32(info, dc_tuple_offsets[commit_idx], dc_tuple_test[commit_idx]);
+        let _ = intel_mmio_write32(
+            info,
+            dc_tuple_offsets[commit_idx],
+            dc_tuple_test[commit_idx],
+        );
         let pulse_high = intel_mmio_read32(info, dc_tuple_offsets[commit_idx]);
         crate::log!(
             "gfx-intel-scanout: minimal-pattern dc-tuple pulse order={}>{}>{}>{} commit={} low=0x{:08X} high=0x{:08X}\n",
@@ -3157,7 +3195,12 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
     }
     crate::log!("gfx-intel-scanout: minimal-pattern dc tuple permutations complete\n");
 
-    let dc_rearm_offsets = [0x45500usize, INTEL_DC_STATE_EN, 0x45510usize, INTEL_DC_STATE_DEBUG];
+    let dc_rearm_offsets = [
+        0x45500usize,
+        INTEL_DC_STATE_EN,
+        0x45510usize,
+        INTEL_DC_STATE_DEBUG,
+    ];
     let dc_rearm_names = ["45500", "45504", "45510", "45520"];
     let mut dc_rearm_orig = [0u32; 4];
     let mut dc_rearm_test = [0u32; 4];
@@ -3167,7 +3210,11 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
     }
 
     for idx in 0..dc_rearm_offsets.len() {
-        let _ = intel_mmio_write32(info, dc_rearm_offsets[idx], dc_rearm_orig[idx] & !0x00000001);
+        let _ = intel_mmio_write32(
+            info,
+            dc_rearm_offsets[idx],
+            dc_rearm_orig[idx] & !0x00000001,
+        );
     }
     let dc_rearm_low = [
         intel_mmio_read32(info, dc_rearm_offsets[0]),
@@ -3287,13 +3334,17 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         let _ = intel_mmio_write32(info, dc_rearm_offsets[idx], dc_rearm_orig[idx]);
     }
 
-    for &(
-        trigger_mode,
-        dc_trigger_hold,
-        trigger_off,
-    ) in &[
-        ("trig-45510", [0x45500usize, INTEL_DC_STATE_EN, INTEL_DC_STATE_DEBUG], 0x45510usize),
-        ("trig-45520", [0x45500usize, INTEL_DC_STATE_EN, 0x45510usize], INTEL_DC_STATE_DEBUG),
+    for &(trigger_mode, dc_trigger_hold, trigger_off) in &[
+        (
+            "trig-45510",
+            [0x45500usize, INTEL_DC_STATE_EN, INTEL_DC_STATE_DEBUG],
+            0x45510usize,
+        ),
+        (
+            "trig-45520",
+            [0x45500usize, INTEL_DC_STATE_EN, 0x45510usize],
+            INTEL_DC_STATE_DEBUG,
+        ),
     ] {
         let dc_trigger_test = [0x00000001u32, 0x00000001u32, 0x00000001u32];
         let mut dc_trigger_orig = [0u32; 3];

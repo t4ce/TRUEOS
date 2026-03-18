@@ -156,7 +156,7 @@ pub extern "C" fn kmain() -> ! {
     pci::enumerate_impl();
     #[cfg(feature = "gfx_intel")]
     gfx::intel::init_once();
-    
+
     vga::cube::tick();
     trueos_qjs::set_font_atlas_small_provider(qjs_font_atlas_small_provider);
     trueos_qjs::set_font_atlas_large_provider(qjs_font_atlas_large_provider);
