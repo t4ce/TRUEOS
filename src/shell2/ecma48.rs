@@ -706,84 +706,7 @@ pub fn json_upgrade(input: &str) -> String {
     out
 }
 
-pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, rest: &str, cols: usize) {
-    let arg = rest.trim();
-    if arg.eq_ignore_ascii_case("help") {
-        io.write_str("ecma48: usage\r\n");
-        io.write_str("  ecma48 demo\r\n");
-        io.write_str("  ecma48 sanitize <text>\r\n");
-        io.write_str("  ecma48 clear\r\n");
-        io.write_str("  ecma48 cursor\r\n");
-        return;
-    }
-
-    if let Some(text) = arg.strip_prefix("sanitize ") {
-        io.write_fmt(format_args!(
-            "{}\r\n",
-            align_right(&alloc::format!("sanitize: {}", sanitize(text)), cols)
-        ));
-        return;
-    }
-
-    if arg.eq_ignore_ascii_case("clear") {
-        io.write_str(CLEAR_SCREEN);
-        io.write_str(CLEAR_TO_BOL);
-        io.write_str(CLEAR_TO_EOL);
-        io.write_str(CLEAR_DOWN);
-        io.write_str(CLEAR_LINE);
-        io.write_fmt(format_args!(
-            "{}\r\n",
-            align_right("ecma48: clear sequences emitted", cols)
-        ));
-        return;
-    }
-
-    if arg.eq_ignore_ascii_case("cursor") {
-        let _cursor = hide_cursor_guard(io);
-        io.write_fmt(format_args!(
-            "{}\r\n",
-            align_right("ecma48: cursor style sequences", cols)
-        ));
-        io.write_str(CURSOR_BLINKING_BLOCK);
-        io.write_fmt(format_args!(
-            "{}\r\n",
-            align_right("cursor: blinking block (DECSCUSR 1)", cols)
-        ));
-        io.write_str(CURSOR_STEADY_BLOCK);
-        io.write_fmt(format_args!(
-            "{}\r\n",
-            align_right("cursor: steady block (DECSCUSR 2)", cols)
-        ));
-        io.write_str(CURSOR_BLINKING_UNDERLINE);
-        io.write_fmt(format_args!(
-            "{}\r\n",
-            align_right("cursor: blinking underline (DECSCUSR 3)", cols)
-        ));
-        io.write_str(CURSOR_STEADY_UNDERLINE);
-        io.write_fmt(format_args!(
-            "{}\r\n",
-            align_right("cursor: steady underline (DECSCUSR 4)", cols)
-        ));
-        io.write_str(CURSOR_BLINKING_BAR);
-        io.write_fmt(format_args!(
-            "{}\r\n",
-            align_right("cursor: blinking bar (DECSCUSR 5)", cols)
-        ));
-        io.write_str(CURSOR_STEADY_BAR);
-        io.write_fmt(format_args!(
-            "{}\r\n",
-            align_right("cursor: steady bar (DECSCUSR 6)", cols)
-        ));
-        return;
-    }
-
-    if !arg.is_empty() && !arg.eq_ignore_ascii_case("demo") {
-        io.write_str(
-            "ecma48: usage ecma48 demo | ecma48 sanitize <text> | ecma48 clear | ecma48 cursor\r\n",
-        );
-        return;
-    }
-
+pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, cols: usize) {
     io.write_fmt(format_args!(
         "{}\r\n",
         align_right("ecma48: demo (ANSI sequences)", cols)
@@ -886,6 +809,10 @@ pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, rest: &str, cols: usize
     ));
     io.write_fmt(format_args!(
         "{}\r\n",
+        align_right("clear: BOL / EOL / DOWN / LINE / SCREEN", cols)
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
         align_right("cursor edits: [ABCDE]", cols)
     ));
 
@@ -900,6 +827,20 @@ pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, rest: &str, cols: usize
         io.write_fmt(format_args!("{}", right(1)));
         io.write_fmt(format_args!("{}", down(1)));
         io.write_str(RESTORE_CURSOR);
+    }
+
+    {
+        let _cursor = hide_cursor_guard(io);
+        io.write_str(CURSOR_BLINKING_BLOCK);
+        io.write_fmt(format_args!(
+            "{}\r\n",
+            align_right("cursor: block / underline / bar styles", cols)
+        ));
+        io.write_str(CURSOR_STEADY_BLOCK);
+        io.write_str(CURSOR_BLINKING_UNDERLINE);
+        io.write_str(CURSOR_STEADY_UNDERLINE);
+        io.write_str(CURSOR_BLINKING_BAR);
+        io.write_str(CURSOR_STEADY_BAR);
     }
 
     io.write_fmt(format_args!("{}\r\n", align_right("ecma48: done", cols)));

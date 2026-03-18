@@ -3,12 +3,15 @@ use alloc::string::String as AllocString;
 use crate::disc::block::{DeviceHandle, DeviceInfo, DeviceKind};
 
 pub(crate) mod acpi;
+pub(crate) mod bench;
 pub(crate) mod etc;
+pub(crate) mod file;
 pub(crate) mod format;
+pub(crate) mod hv;
 pub(crate) mod install;
 pub(crate) mod set;
-pub(crate) mod tlb_helper;
-pub(crate) mod tlb_shell2;
+pub(crate) mod smp;
+pub(crate) mod tlb;
 pub(crate) mod update;
 
 fn is_default_disk_candidate(info: &DeviceInfo) -> bool {
