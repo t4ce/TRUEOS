@@ -7,41 +7,22 @@ pub struct EndpointInfo {
     pub max_packet: u16,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SerialTransportKind {
-    CdcAcm,
-    VendorBulk,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct CdcInterface {
     pub configuration: u8,
-    pub control_interface: Option<u8>,
+    pub control_interface: u8,
     pub data_interface: u8,
     pub ep_in: EndpointInfo,
     pub ep_out: EndpointInfo,
-    pub transport: SerialTransportKind,
 }
 
 pub const USB_CLASS_COMM: u8 = 0x02;
 pub const USB_SUBCLASS_ACM: u8 = 0x02;
 pub const USB_CLASS_DATA: u8 = 0x0A;
-pub const ESPRESSIF_VID: u16 = 0x303A;
-pub const ESPRESSIF_USB_JTAG_PID: u16 = 0x1001;
 
 /// Parse a CDC-ACM interface (control + data) from a configuration descriptor.
 /// Returns endpoint and interface metadata for bulk IN/OUT data pipes.
-pub fn parse_cdc_interface(cfg: &[u8], vid: u16, pid: u16) -> Option<CdcInterface> {
-    parse_standard_cdc_acm_interface(cfg).or_else(|| {
-        if vid == ESPRESSIF_VID && pid == ESPRESSIF_USB_JTAG_PID {
-            parse_vendor_bulk_interface(cfg)
-        } else {
-            None
-        }
-    })
-}
-
-fn parse_standard_cdc_acm_interface(cfg: &[u8]) -> Option<CdcInterface> {
+pub fn parse_cdc_interface(cfg: &[u8]) -> Option<CdcInterface> {
     let mut idx = 0usize;
     let mut config_value: u8 = 1;
     let mut current_iface: Option<u8> = None;
@@ -115,82 +96,10 @@ fn parse_standard_cdc_acm_interface(cfg: &[u8]) -> Option<CdcInterface> {
                         {
                             return Some(CdcInterface {
                                 configuration: config_value,
-                                control_interface: Some(ctrl),
+                                control_interface: ctrl,
                                 data_interface: data_if,
                                 ep_in: in_ep,
                                 ep_out: out_ep,
-                                transport: SerialTransportKind::CdcAcm,
-                            });
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        idx += len;
-    }
-
-    None
-}
-
-fn parse_vendor_bulk_interface(cfg: &[u8]) -> Option<CdcInterface> {
-    let mut idx = 0usize;
-    let mut config_value: u8 = 1;
-    let mut current_iface: Option<u8> = None;
-    let mut current_alt: u8 = 0;
-    let mut ep_in: Option<EndpointInfo> = None;
-    let mut ep_out: Option<EndpointInfo> = None;
-
-    while idx + 2 <= cfg.len() {
-        let len = cfg[idx] as usize;
-        if len == 0 || idx + len > cfg.len() {
-            break;
-        }
-        let ty = cfg[idx + 1];
-        match ty {
-            2 => {
-                if len >= 6 {
-                    config_value = cfg[idx + 5];
-                }
-            }
-            4 => {
-                if len >= 9 {
-                    current_iface = Some(cfg[idx + 2]);
-                    current_alt = cfg[idx + 3];
-                    ep_in = None;
-                    ep_out = None;
-                } else {
-                    current_iface = None;
-                }
-            }
-            5 => {
-                if let Some(iface) = current_iface
-                    && current_alt == 0
-                    && len >= 7
-                {
-                    let attrs = cfg[idx + 3];
-                    if (attrs & 0x3) == 0x2 {
-                        let ep_addr = cfg[idx + 2];
-                        let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
-                        if (ep_addr & 0x80) != 0 {
-                            ep_in.get_or_insert(EndpointInfo {
-                                address: ep_addr,
-                                max_packet,
-                            });
-                        } else {
-                            ep_out.get_or_insert(EndpointInfo {
-                                address: ep_addr,
-                                max_packet,
-                            });
-                        }
-                        if let (Some(in_ep), Some(out_ep)) = (ep_in, ep_out) {
-                            return Some(CdcInterface {
-                                configuration: config_value,
-                                control_interface: None,
-                                data_interface: iface,
-                                ep_in: in_ep,
-                                ep_out: out_ep,
-                                transport: SerialTransportKind::VendorBulk,
                             });
                         }
                     }
