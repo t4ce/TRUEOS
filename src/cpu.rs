@@ -163,15 +163,9 @@ pub fn register_current_worker_spawner(spawner: Spawner) -> Option<CpuProfile> {
     Some(profile)
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
-    enable_sse();
-    let slot = percpu::slot_for_lapic_id(cpu.lapic_id);
-    percpu::init_ap(cpu.lapic_id, slot as u32);
-    let ex = percpu::init_executor();
-    let spawner = ex.spawner();
+fn enter_ap_runtime(spawner: Spawner) -> ! {
     let profile = register_current_worker_spawner(spawner)
-        .unwrap_or_else(|| CpuProfile::new(slot as u32, cpu.lapic_id, intel_core_kind_hint()));
+        .unwrap_or_else(|| CpuProfile::current().unwrap_or(CpuProfile::new(0, 0, 0)));
 
     if profile.slot() == 1 {
         runtime::register_first_ap_spawner(spawner);
@@ -182,6 +176,41 @@ pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     crate::smp::mark_online();
     exceptions::load_this_cpu();
     runtime::run_ap_forever()
+}
+
+pub fn can_restart_current_worker_ap_from_panic() -> bool {
+    CpuProfile::current()
+        .map(|profile| profile.slot() >= 2)
+        .unwrap_or(false)
+}
+
+pub fn restart_current_worker_ap_from_panic() -> ! {
+    unsafe { enable_sse() };
+
+    let cpu = percpu::this_cpu();
+    let slot = cpu.cpu_index();
+    let lapic_id = cpu.lapic_id();
+
+    crate::log!(
+        "PANIC PANIC PANIC: restarting worker ap slot={} lapic={}\n",
+        slot,
+        lapic_id
+    );
+
+    percpu::init_ap(lapic_id, slot);
+    let ex = percpu::init_executor();
+    let spawner = ex.spawner();
+    enter_ap_runtime(spawner)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
+    enable_sse();
+    let slot = percpu::slot_for_lapic_id(cpu.lapic_id);
+    percpu::init_ap(cpu.lapic_id, slot as u32);
+    let ex = percpu::init_executor();
+    let spawner = ex.spawner();
+    enter_ap_runtime(spawner)
 }
 
 pub(crate) fn intel_core_kind_hint() -> u8 {

@@ -200,6 +200,81 @@ unsafe extern "C" fn trueos_capture_screenshot_js(
     qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
 }
 
+unsafe extern "C" fn trueos_cpu_profile_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(profile) = crate::cpu::CpuProfile::current() else {
+        return js_null();
+    };
+
+    let obj = qjs::JS_NewObject(ctx);
+    if obj.is_exception() {
+        return js_null();
+    }
+
+    let slot_val = js_int32(profile.slot() as i32);
+    let lapic_val = js_int32(profile.lapic_id() as i32);
+    let kind_val = js_int32(profile.core_kind() as i32);
+    let restart_val = js_int32(if crate::cpu::can_restart_current_worker_ap_from_panic() {
+        1
+    } else {
+        0
+    });
+    let kind_name = profile.core_kind_name().as_bytes();
+    let kind_name_val = qjs::JS_NewStringLen(
+        ctx,
+        kind_name.as_ptr() as *const c_char,
+        kind_name.len(),
+    );
+
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"slot\0".as_ptr() as *const c_char, slot_val);
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"lapic_id\0".as_ptr() as *const c_char, lapic_val);
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"core_kind\0".as_ptr() as *const c_char, kind_val);
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"core_kind_name\0".as_ptr() as *const c_char,
+        kind_name_val,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"panic_restartable\0".as_ptr() as *const c_char,
+        restart_val,
+    );
+
+    obj
+}
+
+unsafe extern "C" fn trueos_panic_test_js(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(profile) = crate::cpu::CpuProfile::current() else {
+        return js_int32(-1);
+    };
+
+    if !crate::cpu::can_restart_current_worker_ap_from_panic() {
+        crate::log!(
+            "PANIC PANIC PANIC: qjs panic test refused on slot={} lapic={}\n",
+            profile.slot(),
+            profile.lapic_id()
+        );
+        return js_int32(-1);
+    }
+
+    panic!(
+        "PANIC PANIC PANIC: qjs requested worker panic test on slot={} lapic={}",
+        profile.slot(),
+        profile.lapic_id()
+    );
+}
+
 unsafe extern "C" fn trueos_xhci_list_devices_js(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -864,6 +939,36 @@ pub unsafe fn install(ctx: *mut qjs::JSContext) {
         ctx,
         global,
         b"__trueosCaptureScreenshot\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_cpu_profile_js),
+        b"__trueosCpuProfile\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosCpuProfile\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_panic_test_js),
+        b"__trueosPanicTest\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosPanicTest\0".as_ptr() as *const c_char,
         f,
     );
 

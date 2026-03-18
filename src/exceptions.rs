@@ -288,6 +288,11 @@ fn panic(info: &PanicInfo) -> ! {
 
     print_backtrace(64);
 
+    if crate::cpu::can_restart_current_worker_ap_from_panic() {
+        dprintln!("PANIC PANIC PANIC: restarting disposable worker AP");
+        crate::cpu::restart_current_worker_ap_from_panic();
+    }
+
     loop {
         hlt();
     }
