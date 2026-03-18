@@ -65,6 +65,8 @@ fn default_slot_id() -> MatrixSlotId {
 
 fn normalize_slot_id(requested: &str) -> MatrixSlotId {
     let trimmed = requested.trim();
+    let trimmed = trimmed.strip_prefix('§').unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix('§').unwrap_or(trimmed);
     if trimmed.is_empty() {
         return default_slot_id();
     }
@@ -143,6 +145,44 @@ pub(crate) fn switch_active_slot(output_mask: u8, requested: &str) -> MatrixSlot
     let _ = idx;
     bump_revision(&mut guard);
     next_id
+}
+
+pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
+    let freed_id = normalize_slot_id(requested);
+    let default_id = default_slot_id();
+    let mut guard = state().lock();
+    let mut changed = false;
+
+    if freed_id == default_id {
+        let idx = ensure_slot_index(&mut guard.slots, &default_id);
+        let slot = &mut guard.slots[idx];
+        if !slot.lines.is_empty()
+            || slot.activity != MatrixSlotActivity::Idle
+            || slot.running_count != 0
+            || slot.line_width != DEFAULT_MATRIX_SLOT_LINE_WIDTH
+        {
+            slot.lines.clear();
+            slot.activity = MatrixSlotActivity::Idle;
+            slot.running_count = 0;
+            slot.line_width = DEFAULT_MATRIX_SLOT_LINE_WIDTH;
+            changed = true;
+        }
+    } else if let Some(idx) = guard.slots.iter().position(|slot| slot.id == freed_id) {
+        let _ = guard.slots.remove(idx);
+        if guard.uart_active == freed_id {
+            guard.uart_active = default_id.clone();
+        }
+        if guard.net_active == freed_id {
+            guard.net_active = default_id.clone();
+        }
+        changed = true;
+    }
+
+    let _ = ensure_slot_index(&mut guard.slots, &default_id);
+    if changed {
+        bump_revision(&mut guard);
+    }
+    freed_id
 }
 
 pub(crate) fn active_lines(output_mask: u8) -> VecDeque<TranscriptEntry> {

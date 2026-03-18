@@ -1,12 +1,23 @@
 use core::str::SplitWhitespace;
 
 use super::super::{ShellBackend2, print_shell_line};
+use super::tlb_helper::print_table;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 enum AcpiAction {
     Reset,
     State(u8),
 }
+
+const ACPI_MENU_HEADERS: [&str; 2] = ["Action", "Description"];
+const ACPI_MENU_ROWS: [[&str; 2]; 6] = [
+    ["reboot", "Reset the system immediately"],
+    ["S1", "Enter ACPI sleep state S1"],
+    ["S2", "Enter ACPI sleep state S2"],
+    ["S3", "Enter ACPI sleep state S3"],
+    ["S4", "Enter ACPI sleep state S4"],
+    ["S5", "Enter ACPI soft-off state S5"],
+];
 
 fn parse_acpi_state(raw: &str) -> Option<AcpiAction> {
     let s = raw.trim();
@@ -28,7 +39,7 @@ fn parse_acpi_state(raw: &str) -> Option<AcpiAction> {
 }
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "acpi: usage `acpi reboot|S1|S2|S3|S4|S5`");
+    print_table(io, &ACPI_MENU_HEADERS, &ACPI_MENU_ROWS);
 }
 
 pub(crate) fn try_parse(
