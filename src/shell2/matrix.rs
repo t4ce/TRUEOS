@@ -91,10 +91,6 @@ fn bump_revision(state: &mut MatrixState) {
     state.revision = state.revision.wrapping_add(1);
 }
 
-fn is_default_slot_id(id: &MatrixSlotId) -> bool {
-    id.is_empty()
-}
-
 fn active_slot_id_ref(state: &MatrixState, output_mask: u8) -> &MatrixSlotId {
     if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
         &state.net_active
@@ -186,9 +182,6 @@ pub(crate) fn slot_views(output_mask: u8) -> Vec<MatrixSlotView> {
 
     let mut out = Vec::new();
     for slot in &guard.slots {
-        if is_default_slot_id(&slot.id) {
-            continue;
-        }
         out.push(MatrixSlotView {
             id: slot.id.clone(),
             selected: slot.id == selected,

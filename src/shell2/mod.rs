@@ -182,12 +182,15 @@ impl<'a> AlignedWriter<'a> {
         self.clear_line();
         self.io.write_str("TRUE OS ");
         let active_slot = matrix::active_slot_id(output_mask);
-        if active_slot.is_empty() {
-            let styled = alloc::format!("{}", ecma48::style("§").bold().fg(STATUS_SELECTED_RGB));
-            self.io.write_str(styled.as_str());
-        } else {
-            self.io.write_str("§");
+        let mut slot_label = AllocString::from("§");
+        if !active_slot.is_empty() {
+            slot_label.push_str(active_slot.as_str());
         }
+        let styled = alloc::format!(
+            "{}",
+            ecma48::style(slot_label.as_str()).bold().fg(STATUS_SELECTED_RGB)
+        );
+        self.io.write_str(styled.as_str());
         self.center_text(BANNER_ROW, self.main_mode_text(mode).as_str());
         self.right_text(BANNER_ROW, time_text);
     }
@@ -377,18 +380,10 @@ impl<'a> AlignedWriter<'a> {
         out
     }
 
-    fn prompt(&self, output_mask: u8) {
+    fn prompt(&self, _output_mask: u8) {
         self.move_to(PROMPT_ROW, 1);
         self.clear_line();
         self.io.write_str("\x1b[0m");
-        self.io.write_str("[");
-        let styled = alloc::format!("{}", ecma48::style("§").bold().fg(STATUS_SELECTED_RGB));
-        self.io.write_str(styled.as_str());
-        let active_slot = matrix::active_slot_id(output_mask);
-        if !active_slot.is_empty() {
-            self.io.write_str(active_slot.as_str());
-        }
-        self.io.write_str("] ");
     }
 
     fn user_backspace(&self) {
