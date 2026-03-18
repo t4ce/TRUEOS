@@ -7,7 +7,6 @@ use alloc::string::ToString;
 use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
@@ -278,19 +277,6 @@ fn start_net_post_json_to_file_via_cabi(
         return Err(FS_ERR_BAD_PARAM);
     }
     Ok(id)
-}
-
-pub fn ensure_service_started(spawner: &Spawner) -> bool {
-    if !claim_service_start() {
-        return true;
-    }
-
-    if spawner.spawn(async_fs_service_task()).is_err() {
-        clear_service_start_claim();
-        return false;
-    }
-    async_fs_diag("qjs-async-fs: service started\n");
-    true
 }
 
 pub fn claim_service_start() -> bool {
