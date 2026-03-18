@@ -70,8 +70,10 @@ macro_rules! define_started_flags {
 }
 
 define_started_flags!(
+    JOB_RUNNER_STARTED,
     VGA_FONT_CACHE_STARTED,
     GLOBALOG_PERSIST_ONCE_STARTED,
+    QJS_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
     NET_POLL_STARTED,
     NET_SERVICE_STARTED,
@@ -107,6 +109,7 @@ define_started_flags!(
     BOOT_NETBENCH_STARTED,
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
+    ATOMIC_BOMB_STARTED,
 );
 
 const ENABLE_BROWSER_2: bool = false;
@@ -145,16 +148,54 @@ fn spawn_on_ap1(
     }
 }
 
+#[inline]
+fn spawn_on_worker(
+    spawner: Spawner,
+    task: impl FnOnce(SendSpawner) -> Result<(), SpawnError>,
+) -> SpawnAttempt {
+    let Some(worker_spawner) = trueos_qjs::workers::pick_background_spawner() else {
+        let _ = spawner;
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner;
+    match task(worker_spawner) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
 fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         spawner.spawn(crate::vga::init_font_cache_task())
     })
 }
 
+fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(crate::wait::job_runner_task()))
+}
+
 fn spawn_globalog_persist_once(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         spawner.spawn(crate::globalog::persist_once_task())
     })
+}
+
+fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
+    if !trueos_qjs::async_fs::claim_service_start() {
+        crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
+        return SpawnAttempt::Spawned;
+    }
+
+    match spawner.spawn(trueos_qjs::async_fs::async_fs_service_task()) {
+        Ok(()) => {
+            crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
+            SpawnAttempt::Spawned
+        }
+        Err(e) => {
+            trueos_qjs::async_fs::clear_service_start_claim();
+            SpawnAttempt::Failed(e)
+        }
+    }
 }
 
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
@@ -589,6 +630,28 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+#[embassy_executor::task]
+async fn atomic_bomb_task() {
+    Timer::after(EmbassyDuration::from_secs(5)).await;
+
+    if let Some(profile) = crate::cpu::CpuProfile::current() {
+        crate::log!(
+            "PANIC PANIC PANIC: atomic_bomb firing slot={} lapic={} kind={}\n",
+            profile.slot(),
+            profile.lapic_id(),
+            profile.core_kind_name()
+        );
+    } else {
+        crate::log!("PANIC PANIC PANIC: atomic_bomb firing on unknown cpu\n");
+    }
+
+    panic!("PANIC PANIC PANIC: delayed atomic_bomb");
+}
+
+fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |worker_spawner| worker_spawner.spawn(atomic_bomb_task()))
+}
+
 // --- registry ---
 
 const NET_CONFIGURED_AND_ROOT_READY: u32 =
@@ -604,6 +667,7 @@ const WEBGPU_BROWSER_READY: u32 = crate::v::readiness::GFX_BACKEND_READY
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY;
 
 static TASKS: &[TaskSpec] = &[
+    TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "vga-font-cache",
         0,
@@ -615,6 +679,12 @@ static TASKS: &[TaskSpec] = &[
         0,
         &GLOBALOG_PERSIST_ONCE_STARTED,
         spawn_globalog_persist_once,
+    ),
+    TaskSpec::enabled(
+        "qjs-async-fs-service",
+        0,
+        &QJS_ASYNC_FS_SERVICE_STARTED,
+        spawn_qjs_async_fs_service,
     ),
     TaskSpec::enabled(
         "trueosfs-mount-service",
@@ -808,6 +878,12 @@ static TASKS: &[TaskSpec] = &[
         0,
         &NET_TCP_SHELL_STARTED,
         spawn_net_tcp_shell,
+    ),
+    TaskSpec::enabled(
+        "atomic_bomb",
+        0,
+        &ATOMIC_BOMB_STARTED,
+        spawn_atomic_bomb,
     ),
 ];
 

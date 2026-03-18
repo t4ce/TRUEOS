@@ -281,19 +281,26 @@ fn start_net_post_json_to_file_via_cabi(
 }
 
 pub fn ensure_service_started(spawner: &Spawner) -> bool {
-    if SERVICE_STARTED
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
+    if !claim_service_start() {
         return true;
     }
 
     if spawner.spawn(async_fs_service_task()).is_err() {
-        SERVICE_STARTED.store(false, Ordering::Release);
+        clear_service_start_claim();
         return false;
     }
     async_fs_diag("qjs-async-fs: service started\n");
     true
+}
+
+pub fn claim_service_start() -> bool {
+    SERVICE_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
+pub fn clear_service_start_claim() {
+    SERVICE_STARTED.store(false, Ordering::Release);
 }
 
 #[embassy_executor::task]
