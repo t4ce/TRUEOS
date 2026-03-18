@@ -1,3 +1,4 @@
+use super::uart1_com1;
 use crate::shell2::{ShellBackend2, ShellIo2};
 use core::sync::atomic::AtomicBool;
 
@@ -61,4 +62,3 @@ impl ShellBackend2 for Uart1Com1Backend {
         uart1_com1::read_byte()
     }
 }
-

@@ -219,7 +219,7 @@ fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::shell2::backends::net_tcp::net_shell_task())
+        spawner.spawn(crate::tst_net_tcp_shell::net_shell_task())
     })
 }
 
