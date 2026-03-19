@@ -1,6 +1,11 @@
 unsafe extern "C" {
     pub fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     pub fn trueos_cabi_poll_once();
+    pub fn trueos_cabi_alloc(size: usize) -> *mut u8;
+    pub fn trueos_cabi_calloc(nmemb: usize, size: usize) -> *mut u8;
+    pub fn trueos_cabi_free(ptr: *mut u8);
+    pub fn trueos_cabi_realloc(ptr: *mut u8, size: usize) -> *mut u8;
+    pub fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize;
 
     pub fn trueos_cabi_fs_read_file(
         path_ptr: *const u8,
