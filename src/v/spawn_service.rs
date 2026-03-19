@@ -552,19 +552,19 @@ fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_audio_task()))
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_audio_task()))
 }
 
 fn spawn_crabusb_bsp_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_bsp_service()))
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_bsp_service()))
 }
 
 fn spawn_crabusb_event_pump(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_event_pump_task()))
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_event_pump_task()))
 }
 
 fn spawn_crabusb_truekey(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_truekey_task()))
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_truekey_task()))
 }
 
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {

@@ -17,9 +17,9 @@ use spin::Mutex;
 use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
 
-struct TrueosCrabUsbKernel;
+pub(super) struct TrueosCrabUsbKernel;
 
-static CRABUSB_KERNEL: TrueosCrabUsbKernel = TrueosCrabUsbKernel;
+pub(super) static CRABUSB_KERNEL: TrueosCrabUsbKernel = TrueosCrabUsbKernel;
 static INITIAL_SNAPSHOT_LOGGED: AtomicBool = AtomicBool::new(false);
 static EVENT_HANDLER_READY: AtomicBool = AtomicBool::new(false);
 static EVENT_HANDLER: Mutex<Option<EventHandler>> = Mutex::new(None);
@@ -980,7 +980,7 @@ async fn probe_and_log(host: &mut USBHost) {
     }
 }
 
-async fn crab_scout_once(host: &mut USBHost, info: super::super::xhci::XhcInfo) {
+async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController) {
     if INITIAL_SNAPSHOT_LOGGED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -990,7 +990,7 @@ async fn crab_scout_once(host: &mut USBHost, info: super::super::xhci::XhcInfo) 
 
     crate::log!(
         "crabusb: one-time snapshot controller={} bdf={:02X}:{:02X}.{}\n",
-        info.controller_id,
+        info.index,
         info.bus,
         info.slot,
         info.function
@@ -1041,12 +1041,6 @@ async fn crab_scout_once(host: &mut USBHost, info: super::super::xhci::XhcInfo) 
         Err(err) => crate::log!("crabusb: scout probe failed: {:?}\n", err),
     }
     crate::log!("crabusb: scout end\n");
-}
-
-fn discover_first_controller() -> Option<super::super::xhci::XhcInfo> {
-    crate::pci::enumerate_impl();
-    super::super::xhci::init_once();
-    super::super::xhci::xhc_list().iter().copied().next()
 }
 
 fn install_event_handler(handler: EventHandler) {
@@ -1101,7 +1095,7 @@ pub async fn bsp_service() {
     TRUEKEY_STREAM_REQUESTED.store(true, Ordering::Release);
 
     loop {
-        let Some(info) = discover_first_controller() else {
+        let Some(info) = super::discover_first_controller() else {
             crate::log!("crabusb: no xhci controller available yet; retrying on BSP\n");
             Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
             continue;
@@ -1109,18 +1103,29 @@ pub async fn bsp_service() {
 
         crate::log!(
             "crabusb: BSP service binding controller {} at {:02X}:{:02X}.{}\n",
-            info.controller_id,
+            info.index,
             info.bus,
             info.slot,
             info.function
         );
 
-        let mut host = match USBHost::new_xhci(info.mmio_base, &CRABUSB_KERNEL) {
+        crate::pci::enable_mem_and_bus_master(info.bus, info.slot, info.function);
+
+        let Some(mmio) = NonNull::new(info.mmio_base as *mut u8) else {
+            crate::log!(
+                "crabusb: controller {} has null mmio base; retrying\n",
+                info.index
+            );
+            Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
+            continue;
+        };
+
+        let mut host = match USBHost::new_xhci(mmio, &CRABUSB_KERNEL) {
             Ok(host) => host,
             Err(err) => {
                 crate::log!(
                     "crabusb: failed to create host for controller {}: {:?}\n",
-                    info.controller_id,
+                    info.index,
                     err
                 );
                 Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
@@ -1133,7 +1138,7 @@ pub async fn bsp_service() {
         if let Err(err) = host.init().await {
             crate::log!(
                 "crabusb: host init failed for controller {}: {:?}\n",
-                info.controller_id,
+                info.index,
                 err
             );
             uninstall_event_handler();
@@ -1143,7 +1148,7 @@ pub async fn bsp_service() {
 
         crate::log!(
             "crabusb: host init complete for controller {}\n",
-            info.controller_id
+            info.index
         );
         PROBE_REQUESTED.store(true, Ordering::Release);
         crab_scout_once(&mut host, info).await;
@@ -1159,7 +1164,7 @@ pub async fn bsp_service() {
             if PROBE_REQUESTED.swap(false, Ordering::AcqRel) {
                 crate::log!(
                     "crabusb: servicing pending probe on controller {}\n",
-                    info.controller_id
+                    info.index
                 );
                 idle_ticks = 0;
                 probe_and_log(&mut host).await;
