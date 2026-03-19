@@ -12,6 +12,7 @@ pub mod vfs;
 pub mod vgfx;
 pub mod vinput;
 pub mod vnet;
+pub mod runtime;
 pub mod vshell;
 pub mod vsys;
 pub mod ui2;
@@ -48,4 +49,49 @@ pub mod prelude {
     pub use crate::vnet;
     pub use crate::vshell;
     pub use crate::vsys;
+}
+
+#[macro_export]
+macro_rules! app_entry {
+    ($main:path) => {
+        #[global_allocator]
+        static TRUEOS_GLOBAL_ALLOCATOR: $crate::runtime::TrueosAllocator =
+            $crate::runtime::TrueosAllocator;
+
+        #[panic_handler]
+        fn trueos_panic_handler(info: &core::panic::PanicInfo<'_>) -> ! {
+            $crate::runtime::panic_handler(info)
+        }
+
+        mod __trueos_app_entry {
+            #[unsafe(no_mangle)]
+            pub extern "C" fn main(
+                argc: usize,
+                argv: *const *const core::ffi::c_char,
+            ) {
+                let args = unsafe { $crate::runtime::args_from_abi(argc, argv) };
+                super::$main(args)
+            }
+        }
+    };
+    ($body:block) => {
+        #[global_allocator]
+        static TRUEOS_GLOBAL_ALLOCATOR: $crate::runtime::TrueosAllocator =
+            $crate::runtime::TrueosAllocator;
+
+        #[panic_handler]
+        fn trueos_panic_handler(info: &core::panic::PanicInfo<'_>) -> ! {
+            $crate::runtime::panic_handler(info)
+        }
+
+        mod __trueos_app_entry {
+            #[unsafe(no_mangle)]
+            pub extern "C" fn main(
+                _argc: usize,
+                _argv: *const *const core::ffi::c_char,
+            ) {
+                $body
+            }
+        }
+    };
 }
