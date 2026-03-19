@@ -657,7 +657,6 @@ pub mod cabi {
     // This is the stable bridge between the in-kernel JS "WebGL" shim and the renderer.
     // It intentionally targets the gfx abstraction (`trueos_gfx_core`) rather than a GPU driver.
 
-    use crate::usb;
     use alloc::collections::VecDeque;
     use alloc::vec::Vec;
     use embassy_time::Timer;
@@ -4160,7 +4159,7 @@ pub mod cabi {
         if out_buttons.is_null() || out_dx.is_null() || out_dy.is_null() || out_wheel.is_null() {
             return -1;
         }
-        let Some(m) = usb::input::pop_mouse_event() else {
+        let Some(m) = crate::usb2::input::pop_mouse_event() else {
             return 0;
         };
         *out_buttons = m.buttons;

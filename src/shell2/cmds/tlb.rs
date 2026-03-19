@@ -861,41 +861,59 @@ fn cmd_tlb_x2apic(io: &'static dyn ShellBackend2) {
 }
 
 fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
-    let ctrls = crate::usb::xhci::xhc_list();
-    if ctrls.is_empty() {
+    let snapshot = crate::usb2::tlb_snapshot();
+    if snapshot.controllers.is_empty() {
         line(io, "tlb usb: no xhci controllers found");
         return;
     }
 
-    let headers = ["Ctrl", "Port", "State", "Speed", "Device", "VID:PID", "Raw"];
+    let headers = ["Ctrl", "BDF", "Probe", "Device", "VID:PID", "Class", "Cfg/If"];
     let table = TlbTable::with_width(&headers, line_width_for_backend(io).saturating_sub(2));
     table.emit_header(|text| line(io, text));
 
-    for info in ctrls.iter() {
-        let ports = crate::usb::port_snapshot(info.controller_id);
-        for port in ports.iter() {
-            let ctrl = alloc::format!("{}", info.controller_id);
-            let port_id = alloc::format!("{}", port.port_id);
-            let state = if port.connected {
-                if port.enabled { "Active" } else { "Connected" }
-            } else {
-                "Empty"
-            };
-            let speed = if port.connected { port.speed } else { "-" };
-            let device = port
-                .device_kind
-                .unwrap_or(if port.connected { "Unknown" } else { "-" });
-            let vidpid = if let (Some(vendor), Some(product)) = (port.vid, port.pid) {
-                alloc::format!("{:04X}:{:04X}", vendor, product)
-            } else {
-                String::from("-")
-            };
-            let raw = alloc::format!("0x{:08X}", port.status);
+    for ctrl_info in snapshot.controllers.iter() {
+        let ctrl = alloc::format!("{}", ctrl_info.index);
+        let bdf = alloc::format!(
+            "{:02X}:{:02X}.{}",
+            ctrl_info.bus,
+            ctrl_info.slot,
+            ctrl_info.function
+        );
+        let probe = if let Some(err) = snapshot.probe_error {
+            err
+        } else if snapshot.devices.is_empty() {
+            "empty"
+        } else {
+            "ok"
+        };
 
+        let mut emitted = false;
+        for dev in snapshot
+            .devices
+            .iter()
+            .filter(|dev| dev.controller_index == ctrl_info.index)
+        {
+            let vidpid = alloc::format!("{:04X}:{:04X}", dev.vendor_id, dev.product_id);
+            let class = alloc::format!(
+                "{:02X}/{:02X}/{:02X}",
+                dev.class,
+                dev.subclass,
+                dev.protocol
+            );
+            let cfg_if = alloc::format!("{}/{}", dev.config_count, dev.interface_count);
             table.emit_row(
-                &[&ctrl, &port_id, state, speed, device, &vidpid, &raw],
+                &[&ctrl, &bdf, probe, "descriptor", &vidpid, &class, &cfg_if],
                 |text| line(io, text),
             );
+            emitted = true;
+        }
+
+        if !emitted {
+            let vidpid = alloc::format!("{:04X}:{:04X}", ctrl_info.vendor_id, ctrl_info.device_id);
+            let mmio = alloc::format!("mmio=0x{:X}", ctrl_info.mmio_base);
+            table.emit_row(&[&ctrl, &bdf, probe, "-", &vidpid, "xhci", &mmio], |text| {
+                line(io, text)
+            });
         }
     }
     table.emit_footer(|text| line(io, text));
@@ -1111,43 +1129,71 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
     writeln!(out).unwrap();
 
     writeln!(out, "=== USB Devices ===").unwrap();
-    let ctrls = crate::usb::xhci::xhc_list();
-    if ctrls.is_empty() {
+    let snapshot = crate::usb2::tlb_snapshot();
+    if snapshot.controllers.is_empty() {
         writeln!(out, "No XHCI controllers found").unwrap();
     } else {
         writeln!(
             out,
-            "{:4}  {:4}  {:10}  {:8}  {:12}  {:11}  {:16}",
-            "Ctrl", "Port", "State", "Speed", "Device", "VID:PID", "Raw Status"
+            "{:4}  {:10}  {:8}  {:12}  {:11}  {:10}  {:12}",
+            "Ctrl", "BDF", "Probe", "Device", "VID:PID", "Class", "Cfg/If"
         )
         .unwrap();
         writeln!(
             out,
-            "{:-<4}  {:-<4}  {:-<10}  {:-<8}  {:-<12}  {:-<11}  {:-<16}",
+            "{:-<4}  {:-<10}  {:-<8}  {:-<12}  {:-<11}  {:-<10}  {:-<12}",
             "", "", "", "", "", "", ""
         )
         .unwrap();
-        for info in ctrls.iter() {
-            let ports = crate::usb::port_snapshot(info.controller_id);
-            for port in ports.iter() {
-                let state = if port.connected {
-                    if port.enabled { "Active" } else { "Connected" }
-                } else {
-                    "Empty"
-                };
-                let speed = if port.connected { port.speed } else { "-" };
-                let device =
-                    port.device_kind
-                        .unwrap_or(if port.connected { "Unknown" } else { "-" });
-                let vidpid = if let (Some(vendor), Some(product)) = (port.vid, port.pid) {
-                    alloc::format!("{:04X}:{:04X}", vendor, product)
-                } else {
-                    String::from("-")
-                };
+        for ctrl_info in snapshot.controllers.iter() {
+            let probe = if let Some(err) = snapshot.probe_error {
+                err
+            } else if snapshot.devices.is_empty() {
+                "empty"
+            } else {
+                "ok"
+            };
+            let mut emitted = false;
+            for dev in snapshot
+                .devices
+                .iter()
+                .filter(|dev| dev.controller_index == ctrl_info.index)
+            {
+                let vidpid = alloc::format!("{:04X}:{:04X}", dev.vendor_id, dev.product_id);
+                let class = alloc::format!("{:02X}/{:02X}/{:02X}", dev.class, dev.subclass, dev.protocol);
+                let cfg_if = alloc::format!("{}/{}", dev.config_count, dev.interface_count);
                 writeln!(
                     out,
-                    "{:<4}  {:<4}  {:<10}  {:<8}  {:<12}  {:<11}  0x{:08X}",
-                    info.controller_id, port.port_id, state, speed, device, vidpid, port.status
+                    "{:<4}  {:02X}:{:02X}.{}  {:<8}  {:<12}  {:<11}  {:<10}  {:<12}",
+                    ctrl_info.index,
+                    ctrl_info.bus,
+                    ctrl_info.slot,
+                    ctrl_info.function,
+                    probe,
+                    "descriptor",
+                    vidpid,
+                    class,
+                    cfg_if
+                )
+                .unwrap();
+                emitted = true;
+            }
+
+            if !emitted {
+                let vidpid = alloc::format!("{:04X}:{:04X}", ctrl_info.vendor_id, ctrl_info.device_id);
+                let mmio = alloc::format!("mmio=0x{:X}", ctrl_info.mmio_base);
+                writeln!(
+                    out,
+                    "{:<4}  {:02X}:{:02X}.{}  {:<8}  {:<12}  {:<11}  {:<10}  {:<12}",
+                    ctrl_info.index,
+                    ctrl_info.bus,
+                    ctrl_info.slot,
+                    ctrl_info.function,
+                    probe,
+                    "-",
+                    vidpid,
+                    "xhci",
+                    mmio
                 )
                 .unwrap();
             }
