@@ -23,6 +23,7 @@ static CRABUSB_KERNEL: TrueosCrabUsbKernel = TrueosCrabUsbKernel;
 static INITIAL_SNAPSHOT_LOGGED: AtomicBool = AtomicBool::new(false);
 static EVENT_HANDLER_READY: AtomicBool = AtomicBool::new(false);
 static EVENT_HANDLER: Mutex<Option<EventHandler>> = Mutex::new(None);
+static PROBE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static AUDIO_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -551,6 +552,12 @@ async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::Dev
         return;
     }
 
+    crate::log!(
+        "crabusb: truekey {:04X}:{:04X} candidate found\n",
+        vendor_id,
+        product_id
+    );
+
     let mut device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
@@ -565,6 +572,12 @@ async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::Dev
     };
 
     let configs = device.configurations().to_vec();
+    crate::log!(
+        "crabusb: truekey {:04X}:{:04X} inspecting {} config(s)\n",
+        vendor_id,
+        product_id,
+        configs.len()
+    );
     let Some(target) = pick_serial_target(&configs) else {
         crate::log!(
             "crabusb: truekey {:04X}:{:04X} no serial target found\n",
@@ -587,36 +600,20 @@ async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::Dev
         target.protocol
     );
 
-    if let Some(control_interface) = target.control_interface {
-        match device.claim_interface(control_interface, 0).await {
-            Ok(()) => {
-                if let Err(err) = configure_cdc_acm_bridge(&mut device, control_interface).await {
-                    crate::log!(
-                        "crabusb: truekey {:04X}:{:04X} cdc setup failed if#{}: {:?}\n",
-                        vendor_id,
-                        product_id,
-                        control_interface,
-                        err
-                    );
-                } else {
-                    crate::log!(
-                        "crabusb: truekey {:04X}:{:04X} cdc setup ok if#{}\n",
-                        vendor_id,
-                        product_id,
-                        control_interface
-                    );
-                }
-            }
-            Err(err) => crate::log!(
-                "crabusb: truekey {:04X}:{:04X} control if#{} claim failed: {:?}\n",
-                vendor_id,
-                product_id,
-                control_interface,
-                err
-            ),
-        }
-    }
+    crate::log!(
+        "crabusb: truekey {:04X}:{:04X} data-only probe ctrl_if={:?}\n",
+        vendor_id,
+        product_id,
+        target.control_interface
+    );
 
+    crate::log!(
+        "crabusb: truekey {:04X}:{:04X} data claim begin if#{} alt={}\n",
+        vendor_id,
+        product_id,
+        target.data_interface,
+        target.alternate_setting
+    );
     match device
         .claim_interface(target.data_interface, target.alternate_setting)
         .await
@@ -829,6 +826,7 @@ async fn log_opened_device_graph(
     );
 
     let configs = device.configurations().to_vec();
+    let descriptor_only = vendor_id == TRUEKEY_VENDOR_ID && product_id == TRUEKEY_PRODUCT_ID;
     if vendor_id == HYPERX_VENDOR_ID
         && product_id == HYPERX_PRODUCT_ID
         && let Some(preferred) = pick_preferred_alt(&configs)
@@ -870,6 +868,32 @@ async fn log_opened_device_graph(
     for config in configs.iter() {
         for interface in config.interfaces.iter() {
             for alt in interface.alt_settings.iter() {
+                if descriptor_only {
+                    crate::log!(
+                        "crabusb: open dev#{} if#{} alt={} desc-only class={:02X} subclass={:02X} proto={:02X}\n",
+                        dev_idx,
+                        alt.interface_number,
+                        alt.alternate_setting,
+                        alt.class,
+                        alt.subclass,
+                        alt.protocol
+                    );
+                    for ep in alt.endpoints.iter() {
+                        let ep_num = ep.address & 0x0F;
+                        crate::log!(
+                            "crabusb: open dev#{} if#{} alt={} ep=0x{:02X} num={} desc-only mps={} interval={}\n",
+                            dev_idx,
+                            alt.interface_number,
+                            alt.alternate_setting,
+                            ep.address,
+                            ep_num,
+                            ep.max_packet_size,
+                            ep.interval
+                        );
+                    }
+                    continue;
+                }
+
                 match device
                     .claim_interface(interface.interface_number, alt.alternate_setting)
                     .await
@@ -1002,11 +1026,16 @@ async fn crab_scout_once(host: &mut USBHost, info: super::super::xhci::XhcInfo) 
                 }
             }
             for (dev_idx, dev) in devices.iter().enumerate() {
+                let desc = dev.descriptor();
+                if desc.vendor_id == TRUEKEY_VENDOR_ID && desc.product_id == TRUEKEY_PRODUCT_ID {
+                    maybe_start_truekey_bridge(host, dev).await;
+                    continue;
+                }
+                if desc.vendor_id == HYPERX_VENDOR_ID && desc.product_id == HYPERX_PRODUCT_ID {
+                    maybe_start_target_audio(host, dev).await;
+                    continue;
+                }
                 log_opened_device_graph(host, dev_idx, dev).await;
-            }
-            for dev in devices.iter() {
-                maybe_start_truekey_bridge(host, dev).await;
-                maybe_start_target_audio(host, dev).await;
             }
         }
         Err(err) => crate::log!("crabusb: scout probe failed: {:?}\n", err),
@@ -1049,6 +1078,7 @@ pub async fn event_pump_task() {
             }
             Some(Event::PortChange { port }) => {
                 crate::log!("crabusb: pump port change on root port {}\n", port);
+                PROBE_REQUESTED.store(true, Ordering::Release);
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
             Some(Event::Stopped) => {
@@ -1063,6 +1093,12 @@ pub async fn event_pump_task() {
 #[embassy_executor::task]
 pub async fn bsp_service() {
     const OFFLINE_RETRY_MS: u64 = 1000;
+
+    // The BSP host owner performs the one-time initial scout immediately after
+    // init. Mark services as requested here so boot-present devices are
+    // eligible for handoff even if the separate "armed" tasks have not run yet.
+    AUDIO_STREAM_REQUESTED.store(true, Ordering::Release);
+    TRUEKEY_STREAM_REQUESTED.store(true, Ordering::Release);
 
     loop {
         let Some(info) = discover_first_controller() else {
@@ -1109,6 +1145,7 @@ pub async fn bsp_service() {
             "crabusb: host init complete for controller {}\n",
             info.controller_id
         );
+        PROBE_REQUESTED.store(true, Ordering::Release);
         crab_scout_once(&mut host, info).await;
         probe_and_log(&mut host).await;
 
@@ -1117,6 +1154,16 @@ pub async fn bsp_service() {
             if !EVENT_HANDLER_READY.load(Ordering::Acquire) {
                 crate::log!("crabusb: event handler stopped; rediscovering controller\n");
                 break;
+            }
+
+            if PROBE_REQUESTED.swap(false, Ordering::AcqRel) {
+                crate::log!(
+                    "crabusb: servicing pending probe on controller {}\n",
+                    info.controller_id
+                );
+                idle_ticks = 0;
+                probe_and_log(&mut host).await;
+                continue;
             }
 
             idle_ticks = idle_ticks.wrapping_add(1);

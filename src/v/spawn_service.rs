@@ -132,52 +132,6 @@ pub const fn secondary_browser_enabled() -> bool {
     ENABLE_BROWSER_2
 }
 
-fn ensure_browser_window(browser_instance_id: u32) {
-    if crate::v::ui2::browser_window_id_for_instance(browser_instance_id).is_some() {
-        return;
-    }
-
-    let (view_w, view_h) = crate::limine::framebuffer_response()
-        .and_then(|resp| resp.framebuffers().next())
-        .map(|fb| (fb.width() as u32, fb.height() as u32))
-        .unwrap_or((1280, 800));
-
-    let (title, rect, z) = if browser_instance_id == PRIMARY_BROWSER_INSTANCE_ID {
-        (
-            "True Surfer",
-            crate::v::ui2::Ui2Rect {
-                x: 72.0,
-                y: 56.0,
-                w: ((view_w as f32) - 144.0).max(360.0),
-                h: (view_h as f32) - 112.0,
-            },
-            10,
-        )
-    } else {
-        (
-            "Browser 2",
-            crate::v::ui2::Ui2Rect {
-                x: (view_w as f32 * 0.58).max(420.0),
-                y: 92.0,
-                w: ((view_w as f32) * 0.32).max(300.0),
-                h: ((view_h as f32) * 0.56).max(260.0),
-            },
-            12,
-        )
-    };
-
-    let window_id =
-        crate::v::ui2::create_hosted_browser_window(title, rect, z, 255, browser_instance_id);
-    if browser_instance_id == PRIMARY_BROWSER_INSTANCE_ID {
-        let _ = crate::v::ui2::set_window_horizontal_scrollbar_side(
-            window_id,
-            crate::v::ui2::Ui2WindowHorizontalScrollbarSide::Top,
-        );
-    } else {
-        let _ = crate::v::ui2::set_window_bottom_scrollbar_visible(window_id, false);
-    }
-}
-
 #[inline]
 fn spawn_local(
     spawner: Spawner,
@@ -597,18 +551,8 @@ fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        for info in crate::usb::xhci::xhc_list().iter().copied() {
-            // reads from hardware into dma buffs
-            let _ = ap1_spawner.spawn(crate::usb::xhci::poll_task(info));
-            // reads from our dma buffs into usb rings
-            let _ = ap1_spawner.spawn(crate::usb::poll_task(info));
-            // Single long-lived scout per controller. Rescans are triggered via a flag.
-            let _ = ap1_spawner.spawn(crate::usb::usb_scout_service(info));
-        }
-        Ok(())
-    })
+fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_audio_task()))
 }
 
 fn spawn_crabusb_bsp_service(spawner: Spawner) -> SpawnAttempt {
@@ -619,46 +563,8 @@ fn spawn_crabusb_event_pump(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_event_pump_task()))
 }
 
-fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_audio_task()))
-}
-
 fn spawn_crabusb_truekey(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_truekey_task()))
-}
-
-fn spawn_uac_song(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::usb::uac::song_task())
-    })
-}
-
-fn spawn_uac_event_drain(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::usb::uac::event_drain_task())
-    })
-}
-
-fn spawn_vleds_mux(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::v::leds::task()))
-}
-
-fn spawn_vleds_cycle(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::v::leds::color_cycle_task())
-    })
-}
-
-fn spawn_truekey_drain(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::usb::truekey::drain_loop())
-    })
-}
-
-fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::usb::midi::piano_drain_loop())
-    })
 }
 
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
@@ -893,12 +799,6 @@ static TASKS: &[TaskSpec] = &[
         &GFX_INTEL_TRIANGLE_DEMO_STARTED,
         spawn_gfx_intel_triangle_demo,
     ),
-    TaskSpec::disabled(
-        "usb-controller-tasks",
-        0,
-        &USB_CONTROLLER_TASKS_STARTED,
-        spawn_usb_controller_tasks,
-    ),
     TaskSpec::enabled(
         "crabusb-bsp-service",
         0,
@@ -922,32 +822,6 @@ static TASKS: &[TaskSpec] = &[
         0,
         &CRABUSB_TRUEKEY_STARTED,
         spawn_crabusb_truekey,
-    ),
-    TaskSpec::disabled(
-        "uac-event-drain",
-        crate::v::readiness::UAC_ATTACHED,
-        &UAC_EVENT_DRAIN_STARTED,
-        spawn_uac_event_drain,
-    ),
-    TaskSpec::disabled(
-        "uac-song",
-        crate::v::readiness::UAC_ATTACHED,
-        &UAC_SONG_STARTED,
-        spawn_uac_song,
-    ),
-    TaskSpec::disabled("vleds-mux", 0, &VLEDS_MUX_STARTED, spawn_vleds_mux),
-    TaskSpec::disabled("vleds-cycle", 0, &VLEDS_CYCLE_STARTED, spawn_vleds_cycle),
-    TaskSpec::disabled(
-        "truekey-drain",
-        0,
-        &TRUEKEY_DRAIN_STARTED,
-        spawn_truekey_drain,
-    ),
-    TaskSpec::disabled(
-        "piano-drain",
-        crate::v::readiness::PIANO_CLAIMED,
-        &PIANO_DRAIN_STARTED,
-        spawn_piano_drain,
     ),
     TaskSpec::disabled(
         "boot-ws-smoke",

@@ -125,6 +125,34 @@ ls -l /dev/vfio || true
 lspci -nnk -s 06:00.0
 '
 
+# Whole dock / hub root to guest (preferred over usb-host hub passthrough)
+# QEMU's usb-host docs explicitly warn that passing a hub itself does not work reliably.
+# The robust path is to hand the guest the owning host controller so the guest becomes
+# the real USB root for that downstream tree.
+#
+# In this setup the rear dock sits under:
+#   0000:06:00.0 ASMedia ASM3241 USB 3.2 Gen 2 Host Controller
+#   /sys/bus/usb/devices/4-1   -> SuperSpeed hub side
+#   /sys/bus/usb/devices/3-1   -> USB2 hub side
+#
+# Verify the mapping on the host:
+readlink -f /sys/bus/usb/devices/4-1
+readlink -f /sys/bus/usb/devices/3-1
+lspci -nn -s 06:00.0
+lsusb -t
+#
+# Then bind that controller to VFIO and boot with controller-root USB handoff:
+sudo modprobe vfio vfio-pci vfio_iommu_type1
+echo 0000:06:00.0 | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver/unbind
+echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver_override
+echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers_probe
+lspci -nnk -s 06:00.0
+ls -l /dev/vfio
+make run QEMU_USB_MODE=controller QEMU_USB_CONTROLLER_PCI=0000:06:00.0
+#
+# This makes the VM own the physical USB root for the dock on that controller,
+# which is much less fail-prone than trying to pass the dock hub via -device usb-host.
+
 # dummy (no persist across reboot)
 sudo ip link add NIC type dummy
 sudo ip link set dev NIC address 5c:60:ba:b5:58:0f
