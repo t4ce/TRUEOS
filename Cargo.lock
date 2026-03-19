@@ -45,6 +45,7 @@ dependencies = [
  "trueos-qjs",
  "trueos-tetris",
  "trueos-v",
+ "trueos-vm",
  "trueos-weather",
  "twoway",
  "unicode-normalization",
@@ -1948,6 +1949,13 @@ name = "trueos-v"
 version = "0.1.0"
 dependencies = [
  "trueos-sys",
+]
+
+[[package]]
+name = "trueos-vm"
+version = "0.1.0"
+dependencies = [
+ "trueos-v",
 ]
 
 [[package]]

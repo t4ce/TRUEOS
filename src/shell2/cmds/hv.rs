@@ -7,11 +7,13 @@ use super::tlb_helper::print_table;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const HV_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const HV_MENU_ROWS: [[&str; 2]; 4] = [
+const HV_MENU_ROWS: [[&str; 2]; 6] = [
     ["status", "Show VMX and vm1 status"],
     ["start", "Start vm1"],
     ["stop", "Request vm1 stop"],
     ["log", "Print hv log output"],
+    ["save", "Write vm1 snapshot to the HV ramdisk TRUEOSFS"],
+    ["restore", "Load vm1 snapshot from the HV ramdisk and relaunch it"],
 ];
 
 #[inline]
@@ -70,6 +72,34 @@ pub(crate) fn try_parse(
 
     if op.eq_ignore_ascii_case("log") {
         crate::hv::write_logs(io);
+        return ParseOutcome::Handled;
+    }
+
+    if op.eq_ignore_ascii_case("save") {
+        match crate::hv::save_snapshot() {
+            Ok(bytes) => io.write_fmt(format_args!(
+                "hv: snapshot saved store=hv-ramdisk path=vm/vm1.snapshot bytes={}\r\n",
+                bytes
+            )),
+            Err(e) => io.write_fmt(format_args!("hv: snapshot save failed: {:?}\r\n", e)),
+        }
+        return ParseOutcome::Handled;
+    }
+
+    if op.eq_ignore_ascii_case("restore") {
+        match crate::hv::restore_snapshot() {
+            Ok(bytes) => match crate::hv::start(spawner, io) {
+                Ok(()) => io.write_fmt(format_args!(
+                    "hv: snapshot restored store=hv-ramdisk path=vm/vm1.snapshot bytes={} and vm1 started\r\n",
+                    bytes
+                )),
+                Err(e) => io.write_fmt(format_args!(
+                    "hv: snapshot restored bytes={} but start failed: {:?}\r\n",
+                    bytes, e
+                )),
+            },
+            Err(e) => io.write_fmt(format_args!("hv: snapshot restore failed: {:?}\r\n", e)),
+        }
         return ParseOutcome::Handled;
     }
 
