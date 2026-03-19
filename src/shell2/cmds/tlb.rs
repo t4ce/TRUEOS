@@ -10,8 +10,7 @@ use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
 use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
-const TLB_USAGE: &str =
-    "tlb: usage `tlb [pci|pciids|pcibar|mem|cpu|acpi|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pciids|pcibar|mem|cpu|acpi|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb|dump]`";
 const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const TLB_MENU_ROWS: [(&str, &str); 15] = [
     ("pci", "List PCI devices"),
@@ -107,7 +106,11 @@ fn truncate_cell(text: &str, width: usize) -> String {
 }
 
 fn emit_table_header(io: &'static dyn ShellBackend2, cols: &[Column]) {
-    emit_table_row(io, cols, &cols.iter().map(|col| col.header).collect::<Vec<_>>());
+    emit_table_row(
+        io,
+        cols,
+        &cols.iter().map(|col| col.header).collect::<Vec<_>>(),
+    );
     let sep = cols
         .iter()
         .map(|col| "-".repeat(col.width))
@@ -308,7 +311,10 @@ fn write_pci_bar_dump(out: &mut String) {
 }
 
 fn print_menu(io: &'static dyn ShellBackend2) {
-    let table = TlbTable::with_width(&TLB_MENU_HEADERS, line_width_for_backend(io).saturating_sub(2));
+    let table = TlbTable::with_width(
+        &TLB_MENU_HEADERS,
+        line_width_for_backend(io).saturating_sub(2),
+    );
 
     table.emit_header(|text| line(io, text));
     for (cmd, desc) in TLB_MENU_ROWS {
@@ -575,7 +581,11 @@ fn cmd_tlb_acpi(io: &'static dyn ShellBackend2) {
         let rev = alloc::format!("{}", revision);
         let oem = core::str::from_utf8(&hdr.oem_id).unwrap_or("      ");
         let table_id = core::str::from_utf8(&hdr.oem_table_id).unwrap_or("        ");
-        emit_table_row(io, &cols, &[hdr.signature.as_str(), &addr, &len, &rev, oem, table_id]);
+        emit_table_row(
+            io,
+            &cols,
+            &[hdr.signature.as_str(), &addr, &len, &rev, oem, table_id],
+        );
     }
 }
 
@@ -590,7 +600,10 @@ fn cmd_tlb_facp(io: &'static dyn ShellBackend2) {
             io,
             alloc::format!("FACP/FADT Found @ 0x{:X}", fadt.physical_start).as_str(),
         );
-        multiline(io, alloc::format!("{:#?}", unsafe { fadt.virtual_start.as_ref() }).as_str());
+        multiline(
+            io,
+            alloc::format!("{:#?}", unsafe { fadt.virtual_start.as_ref() }).as_str(),
+        );
     } else {
         line(io, "FACP: Not found");
     }
@@ -607,7 +620,10 @@ fn cmd_tlb_madt(io: &'static dyn ShellBackend2) {
             io,
             alloc::format!("MADT Found @ 0x{:X}", madt.physical_start).as_str(),
         );
-        multiline(io, alloc::format!("{:#?}", unsafe { madt.virtual_start.as_ref() }).as_str());
+        multiline(
+            io,
+            alloc::format!("{:#?}", unsafe { madt.virtual_start.as_ref() }).as_str(),
+        );
     } else {
         line(io, "MADT: Not found");
     }
@@ -643,7 +659,10 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
             count += 1;
             let length = hdr.length;
             let revision = hdr.revision;
-            line(io, alloc::format!("SSDT #{} @ 0x{:08X}", count, phys).as_str());
+            line(
+                io,
+                alloc::format!("SSDT #{} @ 0x{:08X}", count, phys).as_str(),
+            );
             line(io, alloc::format!("  Length: {} bytes", length).as_str());
             line(io, alloc::format!("  Revision: {}", revision).as_str());
             line(
@@ -662,7 +681,10 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
                 )
                 .as_str(),
             );
-            line(io, "  (Raw AML content not dumped/parsed in 'best effort' mode)");
+            line(
+                io,
+                "  (Raw AML content not dumped/parsed in 'best effort' mode)",
+            );
             blank(io);
         }
     }
@@ -676,7 +698,10 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
 
 fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
     let Some(st) = crate::efi::system_table() else {
-        line(io, "tlb uefi: system table not found (not booted via UEFI?)");
+        line(
+            io,
+            "tlb uefi: system table not found (not booted via UEFI?)",
+        );
         return;
     };
 
@@ -723,7 +748,10 @@ fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
     emit_table_row(
         io,
         &summary_cols,
-        &["Config Tables", &alloc::format!("{}", st.number_of_table_entries)],
+        &[
+            "Config Tables",
+            &alloc::format!("{}", st.number_of_table_entries),
+        ],
     );
     blank(io);
 
@@ -771,7 +799,9 @@ fn cmd_tlb_x2apic(io: &'static dyn ShellBackend2) {
         io,
         alloc::format!(
             "x2APIC Topology Detection: Leaf=0x{:X} SMT_Bits={} Core_Bits={}",
-            topo.leaf, topo.smt_bits, topo.core_bits
+            topo.leaf,
+            topo.smt_bits,
+            topo.core_bits
         )
         .as_str(),
     );
@@ -862,9 +892,10 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
             };
             let raw = alloc::format!("0x{:08X}", port.status);
 
-            table.emit_row(&[&ctrl, &port_id, state, speed, device, &vidpid, &raw], |text| {
-                line(io, text)
-            });
+            table.emit_row(
+                &[&ctrl, &port_id, state, speed, device, &vidpid, &raw],
+                |text| line(io, text),
+            );
         }
     }
     table.emit_footer(|text| line(io, text));
@@ -952,7 +983,12 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
                     crate::smp::STATE_DONE => "Done",
                     _ => "Unknown",
                 };
-                writeln!(out, "{:6}  {:<6}  {:<8}  {:<10}", slot, lapic_id, role, state).unwrap();
+                writeln!(
+                    out,
+                    "{:6}  {:<6}  {:<8}  {:<10}",
+                    slot, lapic_id, role, state
+                )
+                .unwrap();
             }
         }
     }
@@ -984,7 +1020,12 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
         let st_revision = st.hdr.revision;
         writeln!(out, "Signature: EFI SYSTEM TABLE").unwrap();
         writeln!(out, "Revision: 0x{:08X}", st_revision).unwrap();
-        writeln!(out, "Runtime Services: 0x{:016X}", st.runtime_services as u64).unwrap();
+        writeln!(
+            out,
+            "Runtime Services: 0x{:016X}",
+            st.runtime_services as u64
+        )
+        .unwrap();
         writeln!(out, "Boot Services: 0x{:016X}", st.boot_services as u64).unwrap();
         writeln!(out).unwrap();
 
@@ -999,10 +1040,9 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
         writeln!(out, "{:-<6}  {:-<40}  {:-<24}  {:-<18}", "", "", "", "").unwrap();
 
         if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr)
-            && let Ok((cfg_ptr, _)) =
-                crate::pci::mmio::map_limine_slice::<crate::efi::EfiConfigurationTable>(
-                    phys, entries,
-                )
+            && let Ok((cfg_ptr, _)) = crate::pci::mmio::map_limine_slice::<
+                crate::efi::EfiConfigurationTable,
+            >(phys, entries)
         {
             let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
             for (index, entry) in slice.iter().enumerate() {
@@ -1037,7 +1077,12 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
         "Slot", "APIC ID", "Pkg", "Core", "SMT"
     )
     .unwrap();
-    writeln!(out, "{:-<6}  {:-<10}  {:-<6}  {:-<6}  {:-<6}", "", "", "", "", "").unwrap();
+    writeln!(
+        out,
+        "{:-<6}  {:-<10}  {:-<6}  {:-<6}  {:-<6}",
+        "", "", "", "", ""
+    )
+    .unwrap();
     let count = crate::smp::cpu_count();
     let slots = crate::percpu::cpu_slots();
     for slot in 0..count {
@@ -1047,7 +1092,12 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
             .map(|s| s.lapic_id)
             .unwrap_or(0xFFFF_FFFF);
         if lapic_id == 0xFFFF_FFFF {
-            writeln!(out, "{:6}  {:10}  {:6}  {:6}  {:6}", slot, "?", "?", "?", "?").unwrap();
+            writeln!(
+                out,
+                "{:6}  {:10}  {:6}  {:6}  {:6}",
+                slot, "?", "?", "?", "?"
+            )
+            .unwrap();
             continue;
         }
         let (pkg, core_id, smt) = topo.decode(lapic_id);
@@ -1086,9 +1136,9 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
                     "Empty"
                 };
                 let speed = if port.connected { port.speed } else { "-" };
-                let device = port
-                    .device_kind
-                    .unwrap_or(if port.connected { "Unknown" } else { "-" });
+                let device =
+                    port.device_kind
+                        .unwrap_or(if port.connected { "Unknown" } else { "-" });
                 let vidpid = if let (Some(vendor), Some(product)) = (port.vid, port.pid) {
                     alloc::format!("{:04X}:{:04X}", vendor, product)
                 } else {
@@ -1123,14 +1173,23 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
             let mac = if let Some(addr) = crate::net::mac_address_at(index) {
                 alloc::format!(
                     "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
+                    addr[0],
+                    addr[1],
+                    addr[2],
+                    addr[3],
+                    addr[4],
+                    addr[5]
                 )
             } else {
                 String::from("??:??:??:??:??:??")
             };
             let primary_mark = if index == primary { "*" } else { "" };
-            writeln!(out, "{:<4}  {:<20}  {:<17}  {:<10}", index, name, mac, primary_mark)
-                .unwrap();
+            writeln!(
+                out,
+                "{:<4}  {:<20}  {:<17}  {:<10}",
+                index, name, mac, primary_mark
+            )
+            .unwrap();
         }
     }
     writeln!(out).unwrap();
@@ -1180,8 +1239,8 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
     );
 
     let out_bytes = out.into_bytes();
-    let result: Result<(), crate::disc::block::Error> = crate::wait::spawn_and_wait_local(
-        async move {
+    let result: Result<(), crate::disc::block::Error> =
+        crate::wait::spawn_and_wait_local(async move {
             let Some(handle) = crate::v::fs::trueosfs::primary_root_handle() else {
                 return Err(crate::disc::block::Error::NotReady);
             };
@@ -1191,8 +1250,7 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
                 Ok(false) => Err(crate::disc::block::Error::Io),
                 Err(err) => Err(err),
             }
-        },
-    );
+        });
 
     match result {
         Ok(()) => line(io, "Success."),
@@ -1220,9 +1278,7 @@ pub(crate) fn try_parse(
     match args.next() {
         None => print_menu(io),
         Some("pci") if ensure_no_args(io, args, "tlb: usage `tlb pci`") => cmd_tlb_pci(io),
-        Some("pciids") if ensure_no_args(io, args, "tlb: usage `tlb pciids`") => {
-            cmd_tlb_pciids(io)
-        }
+        Some("pciids") if ensure_no_args(io, args, "tlb: usage `tlb pciids`") => cmd_tlb_pciids(io),
         Some("pcibar") if ensure_no_args(io, args, "tlb: usage `tlb pcibar`") => {
             cmd_tlb_pci_bar(io)
         }
@@ -1235,9 +1291,7 @@ pub(crate) fn try_parse(
         Some("mcfg") if ensure_no_args(io, args, "tlb: usage `tlb mcfg`") => cmd_tlb_mcfg(io),
         Some("ssdt") if ensure_no_args(io, args, "tlb: usage `tlb ssdt`") => cmd_tlb_ssdt(io),
         Some("uefi") if ensure_no_args(io, args, "tlb: usage `tlb uefi`") => cmd_tlb_uefi(io),
-        Some("x2apic") if ensure_no_args(io, args, "tlb: usage `tlb x2apic`") => {
-            cmd_tlb_x2apic(io)
-        }
+        Some("x2apic") if ensure_no_args(io, args, "tlb: usage `tlb x2apic`") => cmd_tlb_x2apic(io),
         Some("usb") if ensure_no_args(io, args, "tlb: usage `tlb usb`") => cmd_tlb_usb(io),
         Some("dump") if ensure_no_args(io, args, "tlb: usage `tlb dump`") => cmd_tlb_dump(io),
         Some(_) => line(io, TLB_USAGE),

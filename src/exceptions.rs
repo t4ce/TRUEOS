@@ -3,8 +3,8 @@ use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use heapless::Vec;
-use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::control::Cr2;
+use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::{instructions::hlt, instructions::interrupts};
 

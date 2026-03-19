@@ -71,7 +71,11 @@ fn format_root_header(root: crate::v::fs::trueosfs::RootInfo) -> String {
     let mode = if info.writable { "rw" } else { "ro" };
     alloc::format!(
         "root {} seq={} kind={:?} label={} {}",
-        root.disk_id, root.seq, info.kind, label, mode
+        root.disk_id,
+        root.seq,
+        info.kind,
+        label,
+        mode
     )
 }
 
@@ -116,7 +120,13 @@ fn push_tree_lines(
             out.push(alloc::format!("{}{}{}/", indent, branch, name));
             push_tree_lines(out, disk_id, full_path.as_str(), depth + 1);
         } else if let Some(size) = file_size_bytes(disk_id, full_path.as_str()) {
-            out.push(alloc::format!("{}{}{} ({} bytes)", indent, branch, name, size));
+            out.push(alloc::format!(
+                "{}{}{} ({} bytes)",
+                indent,
+                branch,
+                name,
+                size
+            ));
         } else {
             out.push(alloc::format!("{}{}{}", indent, branch, name));
         }

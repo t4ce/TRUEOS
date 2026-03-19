@@ -1147,9 +1147,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let active_slot = matrix::active_slot_id(output_mask);
                     let session_indexes =
                         find_command_session_indexes(command_sessions.as_slice(), &active_slot);
-                    let has_broadcast_sessions = session_indexes.iter().any(|idx| {
-                        command_sessions[*idx].kind.accepts_broadcast_input()
-                    });
+                    let has_broadcast_sessions = session_indexes
+                        .iter()
+                        .any(|idx| command_sessions[*idx].kind.accepts_broadcast_input());
                     if submitted == "§" {
                         transcript = apply_matrix_operator_and_refresh(
                             &out,

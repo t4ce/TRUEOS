@@ -48,8 +48,8 @@ impl DmaOp for TrueosCrabUsbKernel {
         _direction: DmaDirection,
     ) -> Result<DmaMapHandle, DmaError> {
         let required_align = align.max(1);
-        let layout = Layout::from_size_align(size.get(), required_align)
-            .map_err(DmaError::LayoutError)?;
+        let layout =
+            Layout::from_size_align(size.get(), required_align).map_err(DmaError::LayoutError)?;
         let phys = crate::phys::virt_to_phys_checked(addr.as_ptr()).ok_or(DmaError::NoMemory)?;
 
         let aligned = phys.is_multiple_of(required_align as u64);
@@ -216,7 +216,9 @@ fn parse_wav_pcm_s16_stereo_48k(bytes: &[u8]) -> Option<(usize, usize)> {
     data
 }
 
-fn pick_preferred_alt(configs: &[usb_if::descriptor::ConfigurationDescriptor]) -> Option<PreferredAlt> {
+fn pick_preferred_alt(
+    configs: &[usb_if::descriptor::ConfigurationDescriptor],
+) -> Option<PreferredAlt> {
     let mut best: Option<PreferredAlt> = None;
 
     for config in configs.iter() {
@@ -413,10 +415,7 @@ async fn configure_cdc_acm_bridge(
     control_interface: u8,
 ) -> crab_usb::err::Result {
     let line_coding = [
-        0x00,
-        0x10,
-        0x0E,
-        0x00, // 921600 baud, LE
+        0x00, 0x10, 0x0E, 0x00, // 921600 baud, LE
         0x00, // 1 stop bit
         0x00, // no parity
         0x08, // 8 data bits
@@ -443,7 +442,7 @@ async fn configure_cdc_acm_bridge(
                 request_type: RequestType::Class,
                 recipient: Recipient::Interface,
                 request: Request::Other(0x22), // SET_CONTROL_LINE_STATE
-                value: 0x0003,                // DTR | RTS
+                value: 0x0003,                 // DTR | RTS
                 index: control_interface as u16,
             },
             &[],
@@ -721,7 +720,8 @@ async fn stream_target_audio(
 }
 
 async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::DeviceInfo) {
-    if !AUDIO_STREAM_REQUESTED.load(Ordering::Acquire) || AUDIO_STREAM_ACTIVE.load(Ordering::Acquire)
+    if !AUDIO_STREAM_REQUESTED.load(Ordering::Acquire)
+        || AUDIO_STREAM_ACTIVE.load(Ordering::Acquire)
     {
         return;
     }
@@ -796,7 +796,11 @@ async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::Devic
     }
 }
 
-async fn log_opened_device_graph(host: &mut USBHost, dev_idx: usize, dev_info: &crab_usb::DeviceInfo) {
+async fn log_opened_device_graph(
+    host: &mut USBHost,
+    dev_idx: usize,
+    dev_info: &crab_usb::DeviceInfo,
+) {
     let mut device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
@@ -935,18 +939,18 @@ async fn probe_and_log(host: &mut USBHost) {
                 crate::log!("crabusb: discovered {} new device(s)\n", devices.len());
                 for dev in devices.iter() {
                     let desc = dev.descriptor();
-                crate::log!(
-                    "crabusb: dev {:04X}:{:04X} class={:02X} subclass={:02X} proto={:02X}\n",
-                    desc.vendor_id,
-                    desc.product_id,
-                    desc.class,
-                    desc.subclass,
-                    desc.protocol
-                );
-                maybe_start_truekey_bridge(host, dev).await;
-                maybe_start_target_audio(host, dev).await;
+                    crate::log!(
+                        "crabusb: dev {:04X}:{:04X} class={:02X} subclass={:02X} proto={:02X}\n",
+                        desc.vendor_id,
+                        desc.product_id,
+                        desc.class,
+                        desc.subclass,
+                        desc.protocol
+                    );
+                    maybe_start_truekey_bridge(host, dev).await;
+                    maybe_start_target_audio(host, dev).await;
+                }
             }
-        }
         }
         Err(err) => crate::log!("crabusb: probe failed: {:?}\n", err),
     }

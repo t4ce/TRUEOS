@@ -24,11 +24,11 @@ mod usb2;
 pub mod usb_descripto;
 pub mod xhci;
 
+pub(crate) use self::control::control_out;
+pub(crate) use self::enumeration::{disable_slot, enumerate_port};
 pub(crate) use self::usb2::{
     crabusb_audio_task, crabusb_bsp_service, crabusb_event_pump_task, crabusb_truekey_task,
 };
-pub(crate) use self::control::control_out;
-pub(crate) use self::enumeration::{disable_slot, enumerate_port};
 #[allow(unused_imports)]
 pub use scout::{ScoutedPort, port_snapshot, usb_scout_service};
 
