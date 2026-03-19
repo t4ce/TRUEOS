@@ -860,52 +860,30 @@ pub async fn list_dir_async(
         return Err(block::Error::Corrupted);
     };
 
-    // Normalize dir path
-    let prefix = if dir.is_empty() || dir == "/" {
-        String::new()
-    } else {
-        let mut s = String::from(dir);
-        if s.starts_with('/') {
-            s.remove(0);
-        }
-        if s.ends_with('/') {
-            s.pop();
-        }
-        if !s.is_empty() {
-            s.push('/');
-        }
-        s
-    };
+    let prefix = normalized_dir_prefix(dir);
     let prefix_bytes = prefix.as_bytes();
 
     let mut children: alloc::collections::BTreeSet<String> = alloc::collections::BTreeSet::new();
 
-    // Iterate BTreeMap
-    // BTreeMap supports range, but keys are Vec<u8> paths.
-    // Iterating everything is still faster than disk I/O, but we can optimize with range().
-
-    // Range start: prefix (e.g. "foo/")
-    // Range end: prefix + next char
-    // Simple iteration for now is robust.
-    for (key, _) in index.iter() {
-        if !prefix.is_empty() {
-            if !key.starts_with(prefix_bytes) {
-                continue;
-            }
-            if key.len() <= prefix_bytes.len() {
-                continue;
-            }
-            let rest = &key[prefix_bytes.len()..];
-            // The key is a Vec<u8>, assuming utf-8 valid paths
-            if let Ok(rest_str) = core::str::from_utf8(rest) {
-                let seg = rest_str.split('/').next().unwrap_or("");
+    if prefix.is_empty() {
+        for key in index.keys() {
+            if let Ok(name) = core::str::from_utf8(key) {
+                let seg = name.split('/').next().unwrap_or("");
                 if !seg.is_empty() {
                     children.insert(String::from(seg));
                 }
             }
-        } else {
-            if let Ok(name) = core::str::from_utf8(key) {
-                let seg = name.split('/').next().unwrap_or("");
+        }
+    } else {
+        for (key, _) in index.range(prefix_bytes.to_vec()..) {
+            if !key.starts_with(prefix_bytes) {
+                break;
+            }
+            if key.len() <= prefix_bytes.len() {
+                continue;
+            }
+            if let Ok(rest_str) = core::str::from_utf8(&key[prefix_bytes.len()..]) {
+                let seg = rest_str.split('/').next().unwrap_or("");
                 if !seg.is_empty() {
                     children.insert(String::from(seg));
                 }
@@ -926,6 +904,23 @@ pub async fn list_dir_async(
     }
 
     Ok(Some(out))
+}
+
+fn normalized_dir_prefix(dir: &str) -> String {
+    if dir.is_empty() || dir == "/" {
+        return String::new();
+    }
+    let mut s = String::from(dir);
+    if s.starts_with('/') {
+        s.remove(0);
+    }
+    if s.ends_with('/') {
+        s.pop();
+    }
+    if !s.is_empty() {
+        s.push('/');
+    }
+    s
 }
 
 async fn ensure_index_async(
@@ -1051,7 +1046,7 @@ pub async fn html_tree_async(
     max_entries: usize,
 ) -> Result<Option<String>, block::Error> {
     use alloc::string::String as AString;
-    use alloc::vec::Vec;
+    use alloc::{collections::BTreeMap, vec::Vec};
     use trueos_math::{NodeId, Tree};
 
     if max_entries == 0 {
@@ -1065,12 +1060,8 @@ pub async fn html_tree_async(
         return Ok(None);
     };
 
-    let _params = trueos_fs::FsParams {
-        super_lba: placement.super_lba,
-        data_lba: placement.data_lba,
-        data_end_lba_exclusive: placement.data_end_lba_exclusive,
-    };
-    let _io = KernelBlockIo::new(disk);
+    ensure_index_async(disk, &placement).await?;
+    let disk_id = disk.id();
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     enum FsKind {
@@ -1098,53 +1089,74 @@ pub async fn html_tree_async(
         return Ok(Some(String::from("<ul><li>alloc failed</li></ul>")));
     };
 
-    // BFS-ish: keeps early siblings visible when we hit the cap.
-    let mut queue: Vec<(NodeId, AString)> = Vec::new();
-    queue.push((root, AString::new()));
+    let mut dir_nodes: BTreeMap<Vec<u8>, NodeId> = BTreeMap::new();
+    dir_nodes.insert(Vec::new(), root);
 
-    while let Some((parent, path)) = queue.pop() {
-        if tree.len() >= cap_limit {
-            break;
-        }
+    {
+        let roots = ROOTS.lock();
+        let Some(mount) = roots.iter().find(|m| m.disk_id == disk_id) else {
+            return Err(block::Error::NotReady);
+        };
+        let Some(index) = &mount.index else {
+            return Err(block::Error::Corrupted);
+        };
 
-        let listing = list_dir_async(disk, path.as_str())
-            .await?
-            .unwrap_or_default();
-
-        for name in listing.lines() {
-            if tree.len() >= cap_limit {
-                break;
-            }
-
-            let name = name.trim();
-            if name.is_empty() {
+        'files: for key in index.keys() {
+            let Ok(path) = core::str::from_utf8(key.as_slice()) else {
+                continue;
+            };
+            if path.is_empty() {
                 continue;
             }
 
-            let child_path = if path.is_empty() {
-                AString::from(name)
-            } else {
-                let mut p = path.clone();
-                p.push('/');
-                p.push_str(name);
-                p
-            };
+            let mut parent_node = root;
+            let mut dir_path: Vec<u8> = Vec::new();
+            let mut parts = path.split('/').filter(|seg| !seg.is_empty()).peekable();
+            while let Some(seg) = parts.next() {
+                let is_last = parts.peek().is_none();
+                if is_last {
+                    if tree.len() >= cap_limit {
+                        break 'files;
+                    }
+                    if tree
+                        .add_child(
+                            parent_node,
+                            FsEntry {
+                                kind: FsKind::File,
+                                name: AString::from(seg),
+                            },
+                        )
+                        .is_none()
+                    {
+                        break 'files;
+                    }
+                    continue;
+                }
 
-            let is_file = file_exists_async(disk, child_path.as_str()).await?;
-            let kind = if is_file { FsKind::File } else { FsKind::Dir };
+                if !dir_path.is_empty() {
+                    dir_path.push(b'/');
+                }
+                dir_path.extend_from_slice(seg.as_bytes());
 
-            let Some(node) = tree.add_child(
-                parent,
-                FsEntry {
-                    kind: kind.clone(),
-                    name: AString::from(name),
-                },
-            ) else {
-                break;
-            };
+                if let Some(existing) = dir_nodes.get(&dir_path).copied() {
+                    parent_node = existing;
+                    continue;
+                }
 
-            if matches!(kind, FsKind::Dir) {
-                queue.insert(0, (node, child_path));
+                if tree.len() >= cap_limit {
+                    break 'files;
+                }
+                let Some(node) = tree.add_child(
+                    parent_node,
+                    FsEntry {
+                        kind: FsKind::Dir,
+                        name: AString::from(seg),
+                    },
+                ) else {
+                    break 'files;
+                };
+                dir_nodes.insert(dir_path.clone(), node);
+                parent_node = node;
             }
         }
     }

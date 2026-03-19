@@ -2,6 +2,7 @@ mod attach;
 pub mod bot;
 pub mod cdc;
 pub mod cdc_acm;
+mod crabusb_service;
 mod control;
 mod enumeration;
 pub mod hid;
@@ -23,6 +24,7 @@ pub mod uac;
 pub mod usb_descripto;
 pub mod xhci;
 
+pub(crate) use crabusb_service::bsp_service as crabusb_bsp_service;
 pub(crate) use self::control::control_out;
 pub(crate) use self::enumeration::{disable_slot, enumerate_port};
 #[allow(unused_imports)]

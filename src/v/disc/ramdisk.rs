@@ -2,12 +2,14 @@
 // Is okay but currently not wired, was wired and tested as virtual blockdevice
 // and proven trueosfs host mount.
 
-use alloc::{boxed::Box, string::String, vec, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
+use core::ptr;
 
 use crate::disc::block;
+use crate::v::disc::pmm::BigMem;
 
 pub struct RamdiskDevice {
-    data: Vec<u8>,
+    backing: BigMem,
     block_size: u32,
     block_count: u64,
 }
@@ -28,13 +30,39 @@ impl RamdiskDevice {
         let bytes = block_count
             .checked_mul(bs)
             .ok_or(block::Error::InvalidParam)?;
-        let alloc_len = usize::try_from(bytes).map_err(|_| block::Error::InvalidParam)?;
-        let data = vec![0u8; alloc_len];
+        let len_bytes = usize::try_from(bytes).map_err(|_| block::Error::InvalidParam)?;
+        let backing = BigMem::new_zeroed(len_bytes)?;
         Ok(Self {
-            data,
+            backing,
             block_size,
             block_count,
         })
+    }
+
+    fn read_range(&self, start: usize, dst: &mut [u8]) -> Result<(), block::Error> {
+        let stop = start
+            .checked_add(dst.len())
+            .ok_or(block::Error::InvalidParam)?;
+        if stop > self.backing.len() {
+            return Err(block::Error::OutOfBounds);
+        }
+        unsafe {
+            ptr::copy_nonoverlapping(self.backing.as_ptr().add(start), dst.as_mut_ptr(), dst.len())
+        };
+        Ok(())
+    }
+
+    fn write_range(&mut self, start: usize, src: &[u8]) -> Result<(), block::Error> {
+        let stop = start
+            .checked_add(src.len())
+            .ok_or(block::Error::InvalidParam)?;
+        if stop > self.backing.len() {
+            return Err(block::Error::OutOfBounds);
+        }
+        unsafe {
+            ptr::copy_nonoverlapping(src.as_ptr(), self.backing.as_mut_ptr().add(start), src.len())
+        };
+        Ok(())
     }
 }
 
@@ -70,12 +98,9 @@ impl block::BlockDevice for RamdiskDevice {
                 .and_then(|v| v.checked_mul(bs))
                 .ok_or(block::Error::InvalidParam)?;
             let len = blocks.checked_mul(bs).ok_or(block::Error::InvalidParam)?;
-            let stop = start.checked_add(len).ok_or(block::Error::InvalidParam)?;
-            if stop > self.data.len() {
-                return Err(block::Error::OutOfBounds);
-            }
-
-            Ok(self.data[start..stop].to_vec())
+            let mut out = vec![0u8; len];
+            self.read_range(start, &mut out)?;
+            Ok(out)
         })
     }
 
@@ -103,15 +128,7 @@ impl block::BlockDevice for RamdiskDevice {
                 .ok()
                 .and_then(|v| v.checked_mul(bs))
                 .ok_or(block::Error::InvalidParam)?;
-            let stop = start
-                .checked_add(buf.len())
-                .ok_or(block::Error::InvalidParam)?;
-            if stop > self.data.len() {
-                return Err(block::Error::OutOfBounds);
-            }
-
-            self.data[start..stop].copy_from_slice(buf);
-            Ok(())
+            self.write_range(start, buf)
         })
     }
 

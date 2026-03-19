@@ -100,6 +100,7 @@ define_started_flags!(
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     GFX_INTEL_TRIANGLE_DEMO_STARTED,
+    CRABUSB_BSP_SERVICE_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     UAC_EVENT_DRAIN_STARTED,
     UAC_SONG_STARTED,
@@ -119,8 +120,60 @@ const PRIMARY_BROWSER_INSTANCE_ID: u32 = trueos_qjs::browser_task::PRIMARY_BROWS
 const SECONDARY_BROWSER_INSTANCE_ID: u32 = PRIMARY_BROWSER_INSTANCE_ID + 1;
 
 #[inline]
+fn boot_probe_ms() -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    embassy_time_driver::now().saturating_mul(1000) / hz
+}
+
+#[inline]
 pub const fn secondary_browser_enabled() -> bool {
     ENABLE_BROWSER_2
+}
+
+fn ensure_browser_window(browser_instance_id: u32) {
+    if crate::v::ui2::browser_window_id_for_instance(browser_instance_id).is_some() {
+        return;
+    }
+
+    let (view_w, view_h) = crate::limine::framebuffer_response()
+        .and_then(|resp| resp.framebuffers().next())
+        .map(|fb| (fb.width() as u32, fb.height() as u32))
+        .unwrap_or((1280, 800));
+
+    let (title, rect, z) = if browser_instance_id == PRIMARY_BROWSER_INSTANCE_ID {
+        (
+            "True Surfer",
+            crate::v::ui2::Ui2Rect {
+                x: 72.0,
+                y: 56.0,
+                w: ((view_w as f32) - 144.0).max(360.0),
+                h: (view_h as f32) - 112.0,
+            },
+            10,
+        )
+    } else {
+        (
+            "Browser 2",
+            crate::v::ui2::Ui2Rect {
+                x: (view_w as f32 * 0.58).max(420.0),
+                y: 92.0,
+                w: ((view_w as f32) * 0.32).max(300.0),
+                h: ((view_h as f32) * 0.56).max(260.0),
+            },
+            12,
+        )
+    };
+
+    let window_id =
+        crate::v::ui2::create_hosted_browser_window(title, rect, z, 255, browser_instance_id);
+    if browser_instance_id == PRIMARY_BROWSER_INSTANCE_ID {
+        let _ = crate::v::ui2::set_window_horizontal_scrollbar_side(
+            window_id,
+            crate::v::ui2::Ui2WindowHorizontalScrollbarSide::Top,
+        );
+    } else {
+        let _ = crate::v::ui2::set_window_bottom_scrollbar_visible(window_id, false);
+    }
 }
 
 #[inline]
@@ -329,10 +382,12 @@ async fn gfx_virgl_ready_task() {
             }
             if crate::v::readiness::is_set(crate::v::readiness::GFX_VIRGL_READY) {
                 crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
+                crate::log!("boot-probe: gfx-backend-ready ms={}\n", boot_probe_ms());
                 return;
             }
             if gfx_switched() {
                 crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
+                crate::log!("boot-probe: gfx-backend-ready(switched) ms={}\n", boot_probe_ms());
                 return;
             }
             Timer::after(EmbassyDuration::from_millis(25)).await;
@@ -352,6 +407,7 @@ fn spawn_gfx_virgl_ready_task(spawner: Spawner) -> SpawnAttempt {
 
 #[embassy_executor::task]
 async fn gfx_virgl_cursor_overlay_task() {
+    crate::log!("boot-probe: gfx-cursor-overlay task start ms={}\n", boot_probe_ms());
     #[cfg(not(feature = "gfx_virgl"))]
     {
         return;
@@ -513,6 +569,7 @@ fn spawn_secondary_browser_startup_route(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_primary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
+    ensure_browser_window(PRIMARY_BROWSER_INSTANCE_ID);
     spawn_on_ap1(spawner, |ap1_spawner| {
         ap1_spawner.spawn(trueos_qjs::browser_task::boot_browser(
             PRIMARY_BROWSER_INSTANCE_ID,
@@ -524,6 +581,7 @@ fn spawn_secondary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
     if !secondary_browser_enabled() {
         return SpawnAttempt::Skipped;
     }
+    ensure_browser_window(SECONDARY_BROWSER_INSTANCE_ID);
     spawn_on_ap1(spawner, |ap1_spawner| {
         ap1_spawner.spawn(trueos_qjs::browser_task::boot_browser(
             SECONDARY_BROWSER_INSTANCE_ID,
@@ -538,20 +596,20 @@ fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::tst_gfx_tetris::ui2_gfx_tetris_task())
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_gfx_tetris::ui2_gfx_tetris_task())
     })
 }
 
 fn spawn_ui2_triangle_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::tst_ui2_triangle_demo::ui2_triangle_demo_task())
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_triangle_demo::ui2_triangle_demo_task())
     })
 }
 
 fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::tst_ui2_mandelbrot_demo::ui2_mandelbrot_demo_task())
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_mandelbrot_demo::ui2_mandelbrot_demo_task())
     })
 }
 
@@ -582,6 +640,10 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
         }
         Ok(())
     })
+}
+
+fn spawn_crabusb_bsp_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_bsp_service()))
 }
 
 fn spawn_uac_song(spawner: Spawner) -> SpawnAttempt {
@@ -678,9 +740,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::v::readiness::NET_CONFIGURED
 const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
-const WEBGPU_BROWSER_READY: u32 = crate::v::readiness::GFX_BACKEND_READY
-    | crate::v::readiness::NET_CONFIGURED
-    | crate::v::readiness::TLS_SOCKET_SERVICE_READY;
+const WEBGPU_BROWSER_READY: u32 = crate::v::readiness::GFX_BACKEND_READY;
 
 static TASKS: &[TaskSpec] = &[
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
@@ -779,14 +839,14 @@ static TASKS: &[TaskSpec] = &[
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "browser-startup-html-loader-primary",
         crate::v::readiness::NET_CONFIGURED,
         &BROWSER_PRIMARY_STARTUP_HTML_LOADER_STARTED,
         spawn_primary_browser_startup_html_loader,
     ),
     if ENABLE_BROWSER_2 {
-        TaskSpec::enabled(
+        TaskSpec::disabled(
             "browser-startup-route-secondary",
             crate::v::readiness::NET_CONFIGURED,
             &BROWSER_SECONDARY_STARTUP_ROUTE_STARTED,
@@ -798,27 +858,6 @@ static TASKS: &[TaskSpec] = &[
             crate::v::readiness::NET_CONFIGURED,
             &BROWSER_SECONDARY_STARTUP_ROUTE_STARTED,
             spawn_secondary_browser_startup_route,
-        )
-    },
-    TaskSpec::enabled(
-        "webgpu-browser-primary",
-        WEBGPU_BROWSER_READY,
-        &WEBGPU_BROWSER_PRIMARY_STARTED,
-        spawn_primary_webgpu_browser,
-    ),
-    if ENABLE_BROWSER_2 {
-        TaskSpec::enabled(
-            "webgpu-browser-secondary",
-            WEBGPU_BROWSER_READY,
-            &WEBGPU_BROWSER_SECONDARY_STARTED,
-            spawn_secondary_webgpu_browser,
-        )
-    } else {
-        TaskSpec::disabled(
-            "webgpu-browser-secondary",
-            WEBGPU_BROWSER_READY,
-            &WEBGPU_BROWSER_SECONDARY_STARTED,
-            spawn_secondary_webgpu_browser,
         )
     },
     TaskSpec::enabled(
@@ -829,33 +868,60 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled(
         "ui2-gfx-tetris",
-        crate::v::readiness::LOADSCREEN_END,
+        crate::v::readiness::UI2_READY,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
     ),
     TaskSpec::enabled(
         "ui2-triangle-demo",
-        crate::v::readiness::LOADSCREEN_END,
+        crate::v::readiness::UI2_READY,
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
     TaskSpec::enabled(
         "ui2-mandelbrot-demo",
-        crate::v::readiness::LOADSCREEN_END,
+        crate::v::readiness::UI2_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
+    TaskSpec::disabled(
+        "webgpu-browser-primary",
+        WEBGPU_BROWSER_READY,
+        &WEBGPU_BROWSER_PRIMARY_STARTED,
+        spawn_primary_webgpu_browser,
+    ),
+    if ENABLE_BROWSER_2 {
+        TaskSpec::disabled(
+            "webgpu-browser-secondary",
+            WEBGPU_BROWSER_READY,
+            &WEBGPU_BROWSER_SECONDARY_STARTED,
+            spawn_secondary_webgpu_browser,
+        )
+    } else {
+        TaskSpec::disabled(
+            "webgpu-browser-secondary",
+            WEBGPU_BROWSER_READY,
+            &WEBGPU_BROWSER_SECONDARY_STARTED,
+            spawn_secondary_webgpu_browser,
+        )
+    },
     TaskSpec::enabled(
         "gfx-intel-scanout-demo",
         crate::v::readiness::GFX_INTEL_CLAIMED,
         &GFX_INTEL_TRIANGLE_DEMO_STARTED,
         spawn_gfx_intel_triangle_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "usb-controller-tasks",
         0,
         &USB_CONTROLLER_TASKS_STARTED,
         spawn_usb_controller_tasks,
+    ),
+    TaskSpec::enabled(
+        "crabusb-bsp-service",
+        0,
+        &CRABUSB_BSP_SERVICE_STARTED,
+        spawn_crabusb_bsp_service,
     ),
     TaskSpec::disabled(
         "uac-event-drain",
@@ -871,13 +937,13 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::disabled("vleds-mux", 0, &VLEDS_MUX_STARTED, spawn_vleds_mux),
     TaskSpec::disabled("vleds-cycle", 0, &VLEDS_CYCLE_STARTED, spawn_vleds_cycle),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "truekey-drain",
         0,
         &TRUEKEY_DRAIN_STARTED,
         spawn_truekey_drain,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "piano-drain",
         crate::v::readiness::PIANO_CLAIMED,
         &PIANO_DRAIN_STARTED,
@@ -943,6 +1009,20 @@ pub async fn spawn_service_task(spawner: Spawner) {
                             spec.name,
                             spec.required
                         );
+                        if matches!(
+                            spec.name,
+                            "gfx_loadscreen"
+                                | "ui2"
+                                | "ui2-gfx-tetris"
+                                | "ui2-triangle-demo"
+                                | "ui2-mandelbrot-demo"
+                        ) {
+                            crate::log!(
+                                "boot-probe: spawn {} ms={}\n",
+                                spec.name,
+                                boot_probe_ms()
+                            );
+                        }
                     }
                     SpawnAttempt::Skipped => {
                         spec.started.store(false, Ordering::Release);
