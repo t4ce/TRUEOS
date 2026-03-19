@@ -5,8 +5,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use super::super::{NET_TCP_SHELL_BACKEND, ShellBackend2, UART1_COM1_BACKEND, print_shell_line};
 use super::tlb_helper::print_table;
-use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::ecma48;
+use crate::shell2::shell2_cmd::ParseOutcome;
 
 const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 const GO_TWO_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];

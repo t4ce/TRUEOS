@@ -186,7 +186,12 @@ fn cmd_net_icmp(
                 {
                     let msg = alloc::format!(
                         "64 bytes from {}.{}.{}.{}: icmp_seq={} time={}ms",
-                        from[0], from[1], from[2], from[3], seq, rtt_ms
+                        from[0],
+                        from[1],
+                        from[2],
+                        from[3],
+                        seq,
+                        rtt_ms
                     );
                     line(io, msg.as_str());
                     got = true;
@@ -206,11 +211,7 @@ fn cmd_net_icmp(
     });
 }
 
-fn cmd_net_nic(
-    io: &'static dyn ShellBackend2,
-    selector: Option<&str>,
-    extra: Option<&str>,
-) {
+fn cmd_net_nic(io: &'static dyn ShellBackend2, selector: Option<&str>, extra: Option<&str>) {
     if extra.is_some() {
         line(io, "net: usage `net nic [index|vid:pid|bb:dd.f]`");
         return;
@@ -233,7 +234,16 @@ fn cmd_net_nic(
         return;
     }
 
-    let headers = ["Idx", "BDF", "VID:PID", "Interface", "MAC", "IPv4", "Mode", "IPv6"];
+    let headers = [
+        "Idx",
+        "BDF",
+        "VID:PID",
+        "Interface",
+        "MAC",
+        "IPv4",
+        "Mode",
+        "IPv6",
+    ];
     let table = TlbTable::with_width(&headers, line_width_for_backend(io).saturating_sub(2));
     table.emit_header(|text| line(io, text));
 
@@ -287,11 +297,7 @@ fn cmd_net_nic(
     table.emit_footer(|text| line(io, text));
 }
 
-fn cmd_net_hostname(
-    io: &'static dyn ShellBackend2,
-    name: Option<&str>,
-    extra: Option<&str>,
-) {
+fn cmd_net_hostname(io: &'static dyn ShellBackend2, name: Option<&str>, extra: Option<&str>) {
     if extra.is_some() {
         line(io, "net: usage `net hostname [name]`");
         return;

@@ -243,12 +243,11 @@ async fn read_committed_bytes(disk: block::DeviceHandle) -> Result<Option<Vec<u8
     read_private_file(disk, path.as_str()).await
 }
 
-async fn write_committed_manifest(
-    disk: block::DeviceHandle,
-    seq: u64,
-) -> Result<(), block::Error> {
+async fn write_committed_manifest(disk: block::DeviceHandle, seq: u64) -> Result<(), block::Error> {
     let manifest = format!("{}\n", seq);
-    let ok = crate::v::fs::trueosfs::file_in_async(disk, VM_STORE_MANIFEST_PATH, manifest.as_bytes()).await?;
+    let ok =
+        crate::v::fs::trueosfs::file_in_async(disk, VM_STORE_MANIFEST_PATH, manifest.as_bytes())
+            .await?;
     if ok { Ok(()) } else { Err(block::Error::Io) }
 }
 
@@ -505,7 +504,13 @@ pub async fn vm_store_replication_task() {
                                         let seq = current_committed_seq();
                                         push_line(
                                             &mut tx_buf,
-                                            format!("VM {} {} {}", VM_STORE_VM_ID, seq, bytes.len()).as_str(),
+                                            format!(
+                                                "VM {} {} {}",
+                                                VM_STORE_VM_ID,
+                                                seq,
+                                                bytes.len()
+                                            )
+                                            .as_str(),
                                         );
                                         tx_buf.extend_from_slice(bytes.as_slice());
                                         crate::log!(
@@ -518,7 +523,10 @@ pub async fn vm_store_replication_task() {
                                     }
                                     Ok(None) => push_line(&mut tx_buf, "NO"),
                                     Err(e) => {
-                                        crate::log!("hv-store-net: read current failed err={:?}\n", e);
+                                        crate::log!(
+                                            "hv-store-net: read current failed err={:?}\n",
+                                            e
+                                        );
                                         push_line(&mut tx_buf, "NO");
                                     }
                                 }
@@ -564,21 +572,24 @@ pub async fn vm_store_replication_task() {
             && !inflight
         {
             if tx_offset < tx_buf.len() {
-                    let end = core::cmp::min(tx_offset + VM_STORE_REPL_CHUNK, tx_buf.len());
-                    let chunk = tx_buf[tx_offset..end].to_vec();
-                    pending_len = chunk.len();
-                    if cmds
-                        .push(NetCommand::SendTcp { handle, data: chunk })
-                        .is_ok()
-                    {
-                        inflight = true;
-                    } else {
-                        pending_len = 0;
-                    }
-            } else if !tx_buf.is_empty() {
-                    tx_buf.clear();
-                    tx_offset = 0;
+                let end = core::cmp::min(tx_offset + VM_STORE_REPL_CHUNK, tx_buf.len());
+                let chunk = tx_buf[tx_offset..end].to_vec();
+                pending_len = chunk.len();
+                if cmds
+                    .push(NetCommand::SendTcp {
+                        handle,
+                        data: chunk,
+                    })
+                    .is_ok()
+                {
+                    inflight = true;
+                } else {
                     pending_len = 0;
+                }
+            } else if !tx_buf.is_empty() {
+                tx_buf.clear();
+                tx_offset = 0;
+                pending_len = 0;
             }
         }
 
@@ -618,9 +629,10 @@ async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
         t2.saturating_sub(t0),
         t2.saturating_sub(t1)
     );
-    let wrote = crate::v::fs::trueosfs::file_in_async(disk, VM_STORE_PROBE_PATH, VM_STORE_PROBE_BYTES)
-        .await
-        .map_err(VmStoreError::Format)?;
+    let wrote =
+        crate::v::fs::trueosfs::file_in_async(disk, VM_STORE_PROBE_PATH, VM_STORE_PROBE_BYTES)
+            .await
+            .map_err(VmStoreError::Format)?;
     if !wrote {
         return Err(VmStoreError::Format(block::Error::Io));
     }
@@ -657,10 +669,7 @@ async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
     Ok(disk)
 }
 
-async fn handle_request(
-    id: u64,
-    kind: RequestKind,
-) -> Result<VmStoreResponse, VmStoreError> {
+async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, VmStoreError> {
     let Some(disk) = *VM_STORE_DISK.lock() else {
         return Err(VmStoreError::ServiceOffline);
     };
@@ -677,10 +686,13 @@ async fn handle_request(
                 pending_path.as_str(),
                 committed_path.as_str()
             );
-            let Some(handle) =
-                crate::v::fs::trueosfs::file_write_begin_async(disk, pending_path.as_str(), bytes.len() as u64)
-                    .await
-                    .map_err(VmStoreError::BeginWrite)?
+            let Some(handle) = crate::v::fs::trueosfs::file_write_begin_async(
+                disk,
+                pending_path.as_str(),
+                bytes.len() as u64,
+            )
+            .await
+            .map_err(VmStoreError::BeginWrite)?
             else {
                 return Err(VmStoreError::BeginWrite(block::Error::Io));
             };

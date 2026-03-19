@@ -27,7 +27,9 @@ fn js_null() -> qjs::JSValue {
 #[inline]
 fn js_bool(v: bool) -> qjs::JSValue {
     qjs::JSValue {
-        u: qjs::JSValueUnion { int32: if v { 1 } else { 0 } },
+        u: qjs::JSValueUnion {
+            int32: if v { 1 } else { 0 },
+        },
         tag: qjs::JS_TAG_BOOL,
     }
 }
@@ -103,7 +105,12 @@ unsafe extern "C" fn trueos_browser_navigate_status_js(
         return js_null();
     }
     let state = status.state.as_str();
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"opId\0".as_ptr() as *const c_char, js_int32(status.op_id as i32));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"opId\0".as_ptr() as *const c_char,
+        js_int32(status.op_id as i32),
+    );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,
@@ -147,7 +154,10 @@ unsafe extern "C" fn trueos_browser_navigate_status_js(
         ctx,
         obj,
         b"failed\0".as_ptr() as *const c_char,
-        js_bool(matches!(status.state, crate::v::browser_net::BrowserNetState::Failed)),
+        js_bool(matches!(
+            status.state,
+            crate::v::browser_net::BrowserNetState::Failed
+        )),
     );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
@@ -354,11 +364,8 @@ unsafe extern "C" fn trueos_cpu_profile_js(
         0
     });
     let kind_name = profile.core_kind_name().as_bytes();
-    let kind_name_val = qjs::JS_NewStringLen(
-        ctx,
-        kind_name.as_ptr() as *const c_char,
-        kind_name.len(),
-    );
+    let kind_name_val =
+        qjs::JS_NewStringLen(ctx, kind_name.as_ptr() as *const c_char, kind_name.len());
 
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"slot\0".as_ptr() as *const c_char, slot_val);
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"lapic_id\0".as_ptr() as *const c_char, lapic_val);

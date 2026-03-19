@@ -303,9 +303,7 @@ pub unsafe fn enable_sse() {
     let mut cr0 = Cr0::read();
     cr0.remove(Cr0Flags::EMULATE_COPROCESSOR);
     cr0.remove(Cr0Flags::TASK_SWITCHED);
-    cr0.insert(
-        Cr0Flags::MONITOR_COPROCESSOR | Cr0Flags::NUMERIC_ERROR,
-    );
+    cr0.insert(Cr0Flags::MONITOR_COPROCESSOR | Cr0Flags::NUMERIC_ERROR);
     Cr0::write(cr0);
 
     let mut cr4 = Cr4::read();

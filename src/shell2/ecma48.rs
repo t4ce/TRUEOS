@@ -711,7 +711,10 @@ pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, _cols: usize) {
     super::print_shell_line(io, "ecma48: demo (ANSI sequences)");
     super::print_shell_line(io, &alloc::format!("{}", dim("dim text (SGR 2)")));
     super::print_shell_line(io, &alloc::format!("{}", italic("italic text (SGR 3)")));
-    super::print_shell_line(io, &alloc::format!("{}", underline("underline text (SGR 4)")));
+    super::print_shell_line(
+        io,
+        &alloc::format!("{}", underline("underline text (SGR 4)")),
+    );
     super::print_shell_line(io, &alloc::format!("{}", blink("blink text (SGR 5)")));
     super::print_shell_line(io, &alloc::format!("{}", invert("invert text (SGR 7)")));
     super::print_shell_line(io, &alloc::format!("{}", strike("strike text (SGR 9)")));
@@ -722,8 +725,14 @@ pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, _cols: usize) {
             bg_color("background RGB (48;2;0;128;255)", (0, 128, 255))
         ),
     );
-    super::print_shell_line(io, &alloc::format!("{}", fg_ansi("foreground ANSI idx 196", 196)));
-    super::print_shell_line(io, &alloc::format!("{}", bg_ansi("background ANSI idx 24", 24)));
+    super::print_shell_line(
+        io,
+        &alloc::format!("{}", fg_ansi("foreground ANSI idx 196", 196)),
+    );
+    super::print_shell_line(
+        io,
+        &alloc::format!("{}", bg_ansi("background ANSI idx 24", 24)),
+    );
     super::print_shell_line(
         io,
         &alloc::format!(
@@ -753,6 +762,9 @@ pub(crate) fn demo_ecma48(io: &dyn super::ShellBackend2, _cols: usize) {
                 .bg((32, 64, 96))
         ),
     );
-    super::print_shell_line(io, &alloc::format!("sanitize: {}", sanitize("\x1b[31mraw\x07")));
+    super::print_shell_line(
+        io,
+        &alloc::format!("sanitize: {}", sanitize("\x1b[31mraw\x07")),
+    );
     super::print_shell_line(io, "ecma48: done");
 }

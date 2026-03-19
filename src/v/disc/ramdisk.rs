@@ -47,7 +47,11 @@ impl RamdiskDevice {
             return Err(block::Error::OutOfBounds);
         }
         unsafe {
-            ptr::copy_nonoverlapping(self.backing.as_ptr().add(start), dst.as_mut_ptr(), dst.len())
+            ptr::copy_nonoverlapping(
+                self.backing.as_ptr().add(start),
+                dst.as_mut_ptr(),
+                dst.len(),
+            )
         };
         Ok(())
     }
@@ -60,7 +64,11 @@ impl RamdiskDevice {
             return Err(block::Error::OutOfBounds);
         }
         unsafe {
-            ptr::copy_nonoverlapping(src.as_ptr(), self.backing.as_mut_ptr().add(start), src.len())
+            ptr::copy_nonoverlapping(
+                src.as_ptr(),
+                self.backing.as_mut_ptr().add(start),
+                src.len(),
+            )
         };
         Ok(())
     }

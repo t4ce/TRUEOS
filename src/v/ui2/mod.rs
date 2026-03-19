@@ -1297,7 +1297,12 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_create(
         w: width.max(1) as f32,
         h: height.max(1) as f32,
     };
-    create_window(title, rect, z.clamp(i16::MIN as i32, i16::MAX as i32) as i16, alpha.min(255) as u8)
+    create_window(
+        title,
+        rect,
+        z.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        alpha.min(255) as u8,
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -1635,7 +1640,8 @@ fn queue_browser_window_viewport(content_id: HostedContentId, content: Ui2Rect) 
 fn texture_is_drawable(tex_id: u32) -> bool {
     const ASYNC_TEX_STATUS_READY: i32 = 2;
     tex_id != 0
-        && crate::surface::io::cabi::trueos_cabi_gfx_texture_status(tex_id) == ASYNC_TEX_STATUS_READY
+        && crate::surface::io::cabi::trueos_cabi_gfx_texture_status(tex_id)
+            == ASYNC_TEX_STATUS_READY
 }
 
 fn hosted_browser_has_drawable_content(snapshot: &UiHostedSurfaceState) -> bool {
@@ -1736,11 +1742,7 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
 
     for region in &snapshot.regions {
         let tex_id = region.tex_id;
-        if tex_id == 0
-            || region.width == 0
-            || region.height == 0
-            || !texture_is_drawable(tex_id)
-        {
+        if tex_id == 0 || region.width == 0 || region.height == 0 || !texture_is_drawable(tex_id) {
             continue;
         }
         let doc_y = region.doc_y;
@@ -2091,8 +2093,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
             }
         }
         Ui2WindowKind::HostedSurface => {
-            if let Some(content) = content_rect
-            {
+            if let Some(content) = content_rect {
                 if texture_is_drawable(window.content_tex_id)
                     && draw_texture_rect_no_present(
                         window.content_tex_id,
@@ -2231,7 +2232,10 @@ pub async fn ui2_task() {
         if !state.loadscreen_end_signaled {
             crate::v::readiness::set(crate::v::readiness::LOADSCREEN_END);
             state.loadscreen_end_signaled = true;
-            crate::log!("boot-probe: ui2 signaled loadscreen_end ms={}\n", boot_probe_ms());
+            crate::log!(
+                "boot-probe: ui2 signaled loadscreen_end ms={}\n",
+                boot_probe_ms()
+            );
         }
     }
     crate::log!("ui2: boot window manager\n");
@@ -2280,7 +2284,10 @@ pub async fn ui2_task() {
                 crate::log!("ui2: compose seq={} start\n", loop_seq);
             }
             if state.compose_seq == 0 {
-                crate::log!("boot-probe: ui2 first compose begin ms={}\n", boot_probe_ms());
+                crate::log!(
+                    "boot-probe: ui2 first compose begin ms={}\n",
+                    boot_probe_ms()
+                );
             }
             compose_windows(&mut state);
             if state.first_compose_signaled && state.compose_seq == 1 {
