@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::alloc::Layout;
+use core::cmp::min;
 use core::f32::consts::TAU;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
@@ -13,6 +14,8 @@ use crab_usb::{
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use libm::sinf;
 use spin::Mutex;
+use usb_if::host::ControlSetup;
+use usb_if::transfer::{Recipient, Request, RequestType};
 
 struct TrueosCrabUsbKernel;
 
@@ -22,9 +25,14 @@ static EVENT_HANDLER_READY: AtomicBool = AtomicBool::new(false);
 static EVENT_HANDLER: Mutex<Option<EventHandler>> = Mutex::new(None);
 static AUDIO_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
+static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
+static TRUEKEY_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
 const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
+const TRUEKEY_VENDOR_ID: u16 = 0x303A;
+const TRUEKEY_PRODUCT_ID: u16 = 0x1001;
+const TRUEKEY_STREAM_CHUNK: usize = 512;
 
 impl DmaOp for TrueosCrabUsbKernel {
     fn page_size(&self) -> usize {
@@ -133,6 +141,18 @@ struct PreferredAlt {
 struct IsoOutEndpoint {
     address: u8,
     max_packet_size: u16,
+}
+
+#[derive(Copy, Clone)]
+struct SerialTarget {
+    control_interface: Option<u8>,
+    data_interface: u8,
+    alternate_setting: u8,
+    out_endpoint: u8,
+    out_max_packet_size: u16,
+    class: u8,
+    subclass: u8,
+    protocol: u8,
 }
 
 fn parse_wav_pcm_s16_stereo_48k(bytes: &[u8]) -> Option<(usize, usize)> {
@@ -321,6 +341,306 @@ fn fill_audio_packet(
         if *sine_phase >= TAU {
             *sine_phase -= TAU;
         }
+    }
+}
+
+fn pick_serial_target(
+    configs: &[usb_if::descriptor::ConfigurationDescriptor],
+) -> Option<SerialTarget> {
+    let mut best: Option<(u32, SerialTarget)> = None;
+
+    for config in configs.iter() {
+        let mut control_interface = None;
+        for interface in config.interfaces.iter() {
+            for alt in interface.alt_settings.iter() {
+                if alt.class == 0x02 {
+                    control_interface = Some(alt.interface_number);
+                    break;
+                }
+            }
+            if control_interface.is_some() {
+                break;
+            }
+        }
+
+        for interface in config.interfaces.iter() {
+            for alt in interface.alt_settings.iter() {
+                let Some(out_ep) = alt.endpoints.iter().find(|ep| {
+                    ep.direction == usb_if::transfer::Direction::Out
+                        && ep.transfer_type == usb_if::descriptor::EndpointType::Bulk
+                }) else {
+                    continue;
+                };
+
+                let mut score = 10u32;
+                if alt.class == 0x0A {
+                    score += 100;
+                } else if alt.class == 0x02 {
+                    score += 70;
+                } else if alt.class == 0xFF {
+                    score += 40;
+                }
+                if control_interface.is_some() {
+                    score += 10;
+                }
+                score += alt.endpoints.len() as u32;
+                score += u32::from(alt.alternate_setting);
+
+                let target = SerialTarget {
+                    control_interface,
+                    data_interface: alt.interface_number,
+                    alternate_setting: alt.alternate_setting,
+                    out_endpoint: out_ep.address,
+                    out_max_packet_size: out_ep.max_packet_size,
+                    class: alt.class,
+                    subclass: alt.subclass,
+                    protocol: alt.protocol,
+                };
+
+                match best {
+                    Some((best_score, _)) if best_score >= score => {}
+                    _ => best = Some((score, target)),
+                }
+            }
+        }
+    }
+
+    best.map(|(_, target)| target)
+}
+
+async fn configure_cdc_acm_bridge(
+    device: &mut crab_usb::Device,
+    control_interface: u8,
+) -> crab_usb::err::Result {
+    let line_coding = [
+        0x00,
+        0x10,
+        0x0E,
+        0x00, // 921600 baud, LE
+        0x00, // 1 stop bit
+        0x00, // no parity
+        0x08, // 8 data bits
+    ];
+
+    device
+        .ep_ctrl()
+        .control_out(
+            ControlSetup {
+                request_type: RequestType::Class,
+                recipient: Recipient::Interface,
+                request: Request::Other(0x20), // SET_LINE_CODING
+                value: 0,
+                index: control_interface as u16,
+            },
+            &line_coding,
+        )
+        .await?;
+
+    device
+        .ep_ctrl()
+        .control_out(
+            ControlSetup {
+                request_type: RequestType::Class,
+                recipient: Recipient::Interface,
+                request: Request::Other(0x22), // SET_CONTROL_LINE_STATE
+                value: 0x0003,                // DTR | RTS
+                index: control_interface as u16,
+            },
+            &[],
+        )
+        .await?;
+
+    Ok(())
+}
+
+async fn stream_truekey_logs(
+    device: &mut crab_usb::Device,
+    vendor_id: u16,
+    product_id: u16,
+    target: SerialTarget,
+) {
+    let endpoint_kind = match device.get_endpoint(target.out_endpoint).await {
+        Ok(kind) => kind,
+        Err(err) => {
+            crate::log!(
+                "crabusb: truekey {:04X}:{:04X} ep=0x{:02X} open failed: {:?}\n",
+                vendor_id,
+                product_id,
+                target.out_endpoint,
+                err
+            );
+            return;
+        }
+    };
+
+    let crab_usb::EndpointKind::BulkOut(mut bulk_out) = endpoint_kind else {
+        crate::log!(
+            "crabusb: truekey {:04X}:{:04X} ep=0x{:02X} is not bulk-out\n",
+            vendor_id,
+            product_id,
+            target.out_endpoint
+        );
+        return;
+    };
+
+    TRUEKEY_STREAM_ACTIVE.store(true, Ordering::Release);
+    crate::log!(
+        "crabusb: truekey streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} mps={} class={:02X} subclass={:02X} proto={:02X}\n",
+        vendor_id,
+        product_id,
+        target.data_interface,
+        target.alternate_setting,
+        target.out_endpoint,
+        target.out_max_packet_size,
+        target.class,
+        target.subclass,
+        target.protocol
+    );
+
+    let chunk_limit = min(
+        TRUEKEY_STREAM_CHUNK,
+        usize::from(target.out_max_packet_size.max(1)),
+    );
+    let mut cursor = 0usize;
+
+    loop {
+        let snapshot = crate::globalog::snapshot();
+        if cursor > snapshot.len() {
+            cursor = snapshot.len();
+        }
+
+        if cursor == snapshot.len() {
+            Timer::after(EmbassyDuration::from_millis(50)).await;
+            continue;
+        }
+
+        let end = min(snapshot.len(), cursor + chunk_limit);
+        match bulk_out.submit_and_wait(&snapshot[cursor..end]).await {
+            Ok(sent) if sent > 0 => {
+                cursor += sent;
+            }
+            Ok(_) => {
+                Timer::after(EmbassyDuration::from_millis(1)).await;
+            }
+            Err(err) => {
+                crate::log!(
+                    "crabusb: truekey streaming stopped {:04X}:{:04X} ep=0x{:02X} err={:?}\n",
+                    vendor_id,
+                    product_id,
+                    target.out_endpoint,
+                    err
+                );
+                break;
+            }
+        }
+    }
+
+    TRUEKEY_STREAM_ACTIVE.store(false, Ordering::Release);
+}
+
+async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::DeviceInfo) {
+    if !TRUEKEY_STREAM_REQUESTED.load(Ordering::Acquire)
+        || TRUEKEY_STREAM_ACTIVE.load(Ordering::Acquire)
+    {
+        return;
+    }
+
+    let desc = dev_info.descriptor();
+    let vendor_id = desc.vendor_id;
+    let product_id = desc.product_id;
+    if vendor_id != TRUEKEY_VENDOR_ID || product_id != TRUEKEY_PRODUCT_ID {
+        return;
+    }
+
+    let mut device = match host.open_device(dev_info).await {
+        Ok(device) => device,
+        Err(err) => {
+            crate::log!(
+                "crabusb: truekey {:04X}:{:04X} open failed: {:?}\n",
+                vendor_id,
+                product_id,
+                err
+            );
+            return;
+        }
+    };
+
+    let configs = device.configurations().to_vec();
+    let Some(target) = pick_serial_target(&configs) else {
+        crate::log!(
+            "crabusb: truekey {:04X}:{:04X} no serial target found\n",
+            vendor_id,
+            product_id
+        );
+        return;
+    };
+
+    crate::log!(
+        "crabusb: truekey {:04X}:{:04X} selected if#{} alt={} ep=0x{:02X} ctrl_if={:?} class={:02X} subclass={:02X} proto={:02X}\n",
+        vendor_id,
+        product_id,
+        target.data_interface,
+        target.alternate_setting,
+        target.out_endpoint,
+        target.control_interface,
+        target.class,
+        target.subclass,
+        target.protocol
+    );
+
+    if let Some(control_interface) = target.control_interface {
+        match device.claim_interface(control_interface, 0).await {
+            Ok(()) => {
+                if let Err(err) = configure_cdc_acm_bridge(&mut device, control_interface).await {
+                    crate::log!(
+                        "crabusb: truekey {:04X}:{:04X} cdc setup failed if#{}: {:?}\n",
+                        vendor_id,
+                        product_id,
+                        control_interface,
+                        err
+                    );
+                } else {
+                    crate::log!(
+                        "crabusb: truekey {:04X}:{:04X} cdc setup ok if#{}\n",
+                        vendor_id,
+                        product_id,
+                        control_interface
+                    );
+                }
+            }
+            Err(err) => crate::log!(
+                "crabusb: truekey {:04X}:{:04X} control if#{} claim failed: {:?}\n",
+                vendor_id,
+                product_id,
+                control_interface,
+                err
+            ),
+        }
+    }
+
+    match device
+        .claim_interface(target.data_interface, target.alternate_setting)
+        .await
+    {
+        Ok(()) => {
+            crate::log!(
+                "crabusb: truekey {:04X}:{:04X} ownership if#{} alt={} ep=0x{:02X}\n",
+                vendor_id,
+                product_id,
+                target.data_interface,
+                target.alternate_setting,
+                target.out_endpoint
+            );
+            stream_truekey_logs(&mut device, vendor_id, product_id, target).await;
+        }
+        Err(err) => crate::log!(
+            "crabusb: truekey {:04X}:{:04X} data if#{} alt={} claim failed: {:?}\n",
+            vendor_id,
+            product_id,
+            target.data_interface,
+            target.alternate_setting,
+            err
+        ),
     }
 }
 
@@ -615,16 +935,18 @@ async fn probe_and_log(host: &mut USBHost) {
                 crate::log!("crabusb: discovered {} new device(s)\n", devices.len());
                 for dev in devices.iter() {
                     let desc = dev.descriptor();
-                    crate::log!(
-                        "crabusb: dev {:04X}:{:04X} class={:02X} subclass={:02X} proto={:02X}\n",
-                        desc.vendor_id,
-                        desc.product_id,
-                        desc.class,
-                        desc.subclass,
-                        desc.protocol
-                    );
-                }
+                crate::log!(
+                    "crabusb: dev {:04X}:{:04X} class={:02X} subclass={:02X} proto={:02X}\n",
+                    desc.vendor_id,
+                    desc.product_id,
+                    desc.class,
+                    desc.subclass,
+                    desc.protocol
+                );
+                maybe_start_truekey_bridge(host, dev).await;
+                maybe_start_target_audio(host, dev).await;
             }
+        }
         }
         Err(err) => crate::log!("crabusb: probe failed: {:?}\n", err),
     }
@@ -679,6 +1001,7 @@ async fn crab_scout_once(host: &mut USBHost, info: super::super::xhci::XhcInfo) 
                 log_opened_device_graph(host, dev_idx, dev).await;
             }
             for dev in devices.iter() {
+                maybe_start_truekey_bridge(host, dev).await;
                 maybe_start_target_audio(host, dev).await;
             }
         }
@@ -814,6 +1137,20 @@ pub async fn audio_task() {
             crate::log!("crabusb: audio service streaming\n");
         } else {
             crate::log!("crabusb: audio service waiting for target audio device\n");
+        }
+    }
+}
+
+#[embassy_executor::task]
+pub async fn truekey_task() {
+    TRUEKEY_STREAM_REQUESTED.store(true, Ordering::Release);
+    crate::log!("crabusb: truekey service armed\n");
+    loop {
+        Timer::after(EmbassyDuration::from_secs(5)).await;
+        if TRUEKEY_STREAM_ACTIVE.load(Ordering::Acquire) {
+            crate::log!("crabusb: truekey service streaming\n");
+        } else {
+            crate::log!("crabusb: truekey service waiting for target serial device\n");
         }
     }
 }

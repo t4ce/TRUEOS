@@ -5,3 +5,7 @@ SUBSYSTEM=="block", ENV{ID_PART_ENTRY_UUID}=="2e4e446c-bc9b-4e6c-a657-9ff9a0edcc
 # Allow user-level QEMU access to VFIO group devices used for PCI passthrough.
 # The host user is expected to be in the `kvm` group.
 SUBSYSTEM=="vfio", GROUP:="kvm", MODE:="0660"
+
+# TRUE KEY
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="303a", ATTR{idProduct}=="1001", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"

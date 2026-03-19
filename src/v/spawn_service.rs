@@ -102,6 +102,7 @@ define_started_flags!(
     CRABUSB_BSP_SERVICE_STARTED,
     CRABUSB_EVENT_PUMP_STARTED,
     CRABUSB_AUDIO_STARTED,
+    CRABUSB_TRUEKEY_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     UAC_EVENT_DRAIN_STARTED,
     UAC_SONG_STARTED,
@@ -622,6 +623,10 @@ fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_audio_task()))
 }
 
+fn spawn_crabusb_truekey(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_truekey_task()))
+}
+
 fn spawn_uac_song(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
         ap1_spawner.spawn(crate::usb::uac::song_task())
@@ -911,6 +916,12 @@ static TASKS: &[TaskSpec] = &[
         0,
         &CRABUSB_AUDIO_STARTED,
         spawn_crabusb_audio,
+    ),
+    TaskSpec::enabled(
+        "crabusb-truekey",
+        0,
+        &CRABUSB_TRUEKEY_STARTED,
+        spawn_crabusb_truekey,
     ),
     TaskSpec::disabled(
         "uac-event-drain",

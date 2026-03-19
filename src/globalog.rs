@@ -16,6 +16,10 @@ pub fn log(args: fmt::Arguments<'_>) {
     placeholder::log(args);
 }
 
+pub fn snapshot() -> alloc::vec::Vec<u8> {
+    placeholder::snapshot()
+}
+
 #[inline(always)]
 pub(crate) fn debugcon_write_byte_raw(b: u8) {
     debugcon::write_byte_raw(b)
