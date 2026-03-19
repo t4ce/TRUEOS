@@ -116,7 +116,10 @@ fn align_up(value: usize, align: usize) -> Result<usize, &'static str> {
         return Ok(value);
     }
     let mask = align - 1;
-    value.checked_add(mask).map(|v| v & !mask).ok_or("alignment overflow")
+    value
+        .checked_add(mask)
+        .map(|v| v & !mask)
+        .ok_or("alignment overflow")
 }
 
 fn parse_sections(bytes: &[u8]) -> Result<Vec<ElfSection>, &'static str> {
@@ -203,7 +206,9 @@ fn rel_symbol_value(
     symtab_index: usize,
     sym_index: usize,
 ) -> Result<usize, &'static str> {
-    let symtab_section = sections.get(symtab_index).ok_or("ELF symbol table missing")?;
+    let symtab_section = sections
+        .get(symtab_index)
+        .ok_or("ELF symbol table missing")?;
     let symtab = bytes
         .get(symtab_section.file_offset..symtab_section.file_offset + symtab_section.size)
         .ok_or("ELF symbol table truncated")?;
@@ -246,15 +251,15 @@ fn find_main_addr(
     if hinted_section > 0 {
         if let Some(&base) = loaded.get(hinted_section) {
             if base != 0 {
-                return base
-                    .checked_add(hinted_offset)
-                    .ok_or("entry hint overflow");
+                return base.checked_add(hinted_offset).ok_or("entry hint overflow");
             }
         }
     }
 
     let symtab_index = find_symtab(sections)?;
-    let symtab_section = sections.get(symtab_index).ok_or("ELF symbol table missing")?;
+    let symtab_section = sections
+        .get(symtab_index)
+        .ok_or("ELF symbol table missing")?;
     let symtab = bytes
         .get(symtab_section.file_offset..symtab_section.file_offset + symtab_section.size)
         .ok_or("ELF symbol table truncated")?;
@@ -320,9 +325,7 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, &'static str> {
     let layout = Layout::from_size_align(total_size, max_align).map_err(|_| "bad ELF layout")?;
     let arena_align = 4096usize;
     let slop = layout.align().saturating_sub(arena_align);
-    let needed = total_size
-        .checked_add(slop)
-        .ok_or("ELF image too large")?;
+    let needed = total_size.checked_add(slop).ok_or("ELF image too large")?;
     if needed > PORTAL_IMAGE_ARENA_BYTES {
         return Err("ELF image exceeds portal arena");
     }
@@ -394,7 +397,13 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, &'static str> {
             let place = target_base
                 .checked_add(r_offset)
                 .ok_or("ELF relocation place overflow")?;
-            let sym = rel_symbol_value(bytes, sections.as_slice(), section_bases.as_slice(), symtab_index, r_sym)? as i64;
+            let sym = rel_symbol_value(
+                bytes,
+                sections.as_slice(),
+                section_bases.as_slice(),
+                symtab_index,
+                r_sym,
+            )? as i64;
             let place_i64 = place as i64;
             unsafe {
                 match r_type {
@@ -404,7 +413,8 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, &'static str> {
                     }
                     R_X86_64_32S => {
                         let value = sym.checked_add(r_addend).ok_or("R_X86_64_32S overflow")?;
-                        let value_i32 = i32::try_from(value).map_err(|_| "R_X86_64_32S out of range")?;
+                        let value_i32 =
+                            i32::try_from(value).map_err(|_| "R_X86_64_32S out of range")?;
                         (place as *mut i32).write_unaligned(value_i32);
                     }
                     R_X86_64_PC32 | R_X86_64_PLT32 => {
@@ -412,7 +422,8 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, &'static str> {
                             .checked_add(r_addend)
                             .and_then(|v| v.checked_sub(place_i64))
                             .ok_or("R_X86_64_PC32 overflow")?;
-                        let value_i32 = i32::try_from(value).map_err(|_| "R_X86_64_PC32 out of range")?;
+                        let value_i32 =
+                            i32::try_from(value).map_err(|_| "R_X86_64_PC32 out of range")?;
                         (place as *mut i32).write_unaligned(value_i32);
                     }
                     _ => return Err("unsupported ELF relocation type"),
@@ -502,7 +513,10 @@ fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'static str> 
         }
 
         let str_shdr_off = shoff
-            .checked_add(link.checked_mul(shentsize).ok_or("ELF string table overflow")?)
+            .checked_add(
+                link.checked_mul(shentsize)
+                    .ok_or("ELF string table overflow")?,
+            )
             .ok_or("ELF string table overflow")?;
         let str_shdr = bytes
             .get(str_shdr_off..str_shdr_off + ELF64_SECTION_HEADER_LEN)
@@ -526,9 +540,7 @@ fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'static str> 
                 continue;
             }
 
-            let name_bytes = strtab
-                .get(name_off..)
-                .ok_or("ELF symbol name truncated")?;
+            let name_bytes = strtab.get(name_off..).ok_or("ELF symbol name truncated")?;
             let name_len = name_bytes
                 .iter()
                 .position(|&b| b == 0)
@@ -662,11 +674,7 @@ fn print_archive_table(io: &'static dyn ShellBackend2, archives: &[String]) {
     table.emit_footer(|text| print_shell_line(io, text));
 }
 
-pub(crate) fn submit_run(
-    io: &'static dyn ShellBackend2,
-    archive: String,
-    app_args: Vec<String>,
-) {
+pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_args: Vec<String>) {
     let Some(worker_spawner) = trueos_qjs::workers::pick_background_spawner() else {
         print_shell_line(io, "run: no background worker spawner available");
         return;
@@ -724,26 +732,22 @@ async fn run_command_task(target: MatrixTarget, archive: String, app_args: Vec<S
             }
         };
 
-        log(
-            alloc::format!(
-                "run: module={} version={} flags={} entry_hint=sec:{}+0x{:x}",
-                archive,
-                module.version,
-                module.flags,
-                entry_hint_section(module.entry),
-                entry_hint_offset(module.entry)
-            )
-            .as_str(),
-        );
-        log(
-            alloc::format!(
-                "run: payload compressed={} unpacked={} header_raw={}",
-                module.payload.len(),
-                unpacked.len(),
-                module.raw_payload_len
-            )
-            .as_str(),
-        );
+        log(alloc::format!(
+            "run: module={} version={} flags={} entry_hint=sec:{}+0x{:x}",
+            archive,
+            module.version,
+            module.flags,
+            entry_hint_section(module.entry),
+            entry_hint_offset(module.entry)
+        )
+        .as_str());
+        log(alloc::format!(
+            "run: payload compressed={} unpacked={} header_raw={}",
+            module.payload.len(),
+            unpacked.len(),
+            module.raw_payload_len
+        )
+        .as_str());
         if unpacked.len() != module.raw_payload_len {
             log("run: warning: unpacked payload size does not match header_raw");
         }
@@ -766,30 +770,24 @@ async fn run_command_task(target: MatrixTarget, archive: String, app_args: Vec<S
                             .iter()
                             .filter(|import| import.resolved_addr.is_some())
                             .count();
-                        log(
-                            alloc::format!(
-                                "run: ELF imports={} resolved={}",
-                                imports.len(),
-                                resolved
-                            )
-                            .as_str(),
-                        );
+                        log(alloc::format!(
+                            "run: ELF imports={} resolved={}",
+                            imports.len(),
+                            resolved
+                        )
+                        .as_str());
                         for import in imports.iter() {
                             match import.resolved_addr {
-                                Some(addr) => log(
-                                    alloc::format!(
-                                        "run: import {} -> 0x{:x}",
-                                        import.name, addr
-                                    )
-                                    .as_str(),
-                                ),
-                                None => log(
-                                    alloc::format!(
-                                        "run: import {} -> unresolved",
-                                        import.name
-                                    )
-                                    .as_str(),
-                                ),
+                                Some(addr) => log(alloc::format!(
+                                    "run: import {} -> 0x{:x}",
+                                    import.name,
+                                    addr
+                                )
+                                .as_str()),
+                                None => {
+                                    log(alloc::format!("run: import {} -> unresolved", import.name)
+                                        .as_str())
+                                }
                             }
                         }
                     }
@@ -799,20 +797,26 @@ async fn run_command_task(target: MatrixTarget, archive: String, app_args: Vec<S
                 }
             }
         }
-        if unpacked.starts_with(b"\x7fELF") && matches!(elf_type_name(unpacked.as_slice()), Some("REL")) {
+        if unpacked.starts_with(b"\x7fELF")
+            && matches!(elf_type_name(unpacked.as_slice()), Some("REL"))
+        {
             match load_rel_image(unpacked.as_slice()) {
-                Ok(image) => match parse_sections(unpacked.as_slice())
-                    .and_then(|sections| find_main_addr(unpacked.as_slice(), sections.as_slice(), image.section_bases.as_slice(), module.entry)) {
+                Ok(image) => match parse_sections(unpacked.as_slice()).and_then(|sections| {
+                    find_main_addr(
+                        unpacked.as_slice(),
+                        sections.as_slice(),
+                        image.section_bases.as_slice(),
+                        module.entry,
+                    )
+                }) {
                     Ok(main_addr) => {
                         let (_arg_storage, argv) = build_argv(app_args.as_slice());
-                        log(
-                            alloc::format!(
-                                "run: portal jump main=0x{:x} argc={}",
-                                main_addr,
-                                argv.len()
-                            )
-                            .as_str(),
-                        );
+                        log(alloc::format!(
+                            "run: portal jump main=0x{:x} argc={}",
+                            main_addr,
+                            argv.len()
+                        )
+                        .as_str());
                         let main_fn: extern "C" fn(usize, *const *const c_char) =
                             unsafe { core::mem::transmute(main_addr) };
                         main_fn(

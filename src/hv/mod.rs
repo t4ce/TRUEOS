@@ -432,8 +432,12 @@ pub fn restore_snapshot() -> Result<usize, RestoreError> {
 
 fn map_store_save_error(err: crate::hv::store::VmStoreError) -> SaveError {
     match err {
-        crate::hv::store::VmStoreError::ServiceOffline => SaveError::Io(crate::disc::block::Error::NotReady),
-        crate::hv::store::VmStoreError::QueueFull => SaveError::Io(crate::disc::block::Error::NotReady),
+        crate::hv::store::VmStoreError::ServiceOffline => {
+            SaveError::Io(crate::disc::block::Error::NotReady)
+        }
+        crate::hv::store::VmStoreError::QueueFull => {
+            SaveError::Io(crate::disc::block::Error::NotReady)
+        }
         crate::hv::store::VmStoreError::Create(e)
         | crate::hv::store::VmStoreError::Format(e)
         | crate::hv::store::VmStoreError::BeginWrite(e)
@@ -911,8 +915,12 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
             vmwrite(VMCS_HOST_IA32_PERF_GLOBAL_CTRL, perf_global)?;
 
             let restored = active_restore_meta();
-            let guest_rip = restored.map(|m| m.guest_rip).unwrap_or_else(guest_launch_rip);
-            let guest_rsp = restored.map(|m| m.guest_rsp).unwrap_or_else(guest_stack_top);
+            let guest_rip = restored
+                .map(|m| m.guest_rip)
+                .unwrap_or_else(guest_launch_rip);
+            let guest_rsp = restored
+                .map(|m| m.guest_rsp)
+                .unwrap_or_else(guest_stack_top);
             let guest_cr3 = if restored.is_some() {
                 current_guest_cr3_pa()?
             } else {
@@ -921,7 +929,10 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
             vmwrite(VMCS_GUEST_CR0, host_cr0)?;
             vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
             vmwrite(VMCS_GUEST_CR4, host_cr4)?;
-            vmwrite(VMCS_GUEST_RFLAGS, (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
+            vmwrite(
+                VMCS_GUEST_RFLAGS,
+                (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF,
+            )?;
             vmwrite(VMCS_GUEST_RIP, guest_rip)?;
             vmwrite(VMCS_GUEST_RSP, guest_rsp)?;
             vmwrite(VMCS_GUEST_DR7, 0x400)?;
@@ -1079,8 +1090,12 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     vmwrite(VMCS_HOST_IA32_PERF_GLOBAL_CTRL, perf_global)?;
 
     let restored = active_restore_meta();
-    let guest_rip = restored.map(|m| m.guest_rip).unwrap_or_else(guest_launch_rip);
-    let guest_rsp = restored.map(|m| m.guest_rsp).unwrap_or_else(guest_stack_top);
+    let guest_rip = restored
+        .map(|m| m.guest_rip)
+        .unwrap_or_else(guest_launch_rip);
+    let guest_rsp = restored
+        .map(|m| m.guest_rsp)
+        .unwrap_or_else(guest_stack_top);
     let guest_cr3 = if restored.is_some() {
         current_guest_cr3_pa()?
     } else {
@@ -1089,7 +1104,10 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     vmwrite(VMCS_GUEST_CR0, host_cr0)?;
     vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
     vmwrite(VMCS_GUEST_CR4, host_cr4)?;
-    vmwrite(VMCS_GUEST_RFLAGS, (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
+    vmwrite(
+        VMCS_GUEST_RFLAGS,
+        (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF,
+    )?;
     vmwrite(VMCS_GUEST_RIP, guest_rip)?;
     vmwrite(VMCS_GUEST_RSP, guest_rsp)?;
     vmwrite(VMCS_GUEST_DR7, 0x400)?;
@@ -1237,35 +1255,61 @@ fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> 
         zero_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0));
         zero_guest_page(core::ptr::addr_of_mut!(GUEST_CODE_PT.0));
 
-        let pml4_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_PML4.0) as u64).ok_or("guest pml4 pa")?;
-        let low_pdpt_pa =
-            kernel_va_to_pa(core::ptr::addr_of!(GUEST_LOW_PDPT.0) as u64).ok_or("guest low pdpt pa")?;
+        let pml4_pa =
+            kernel_va_to_pa(core::ptr::addr_of!(GUEST_PML4.0) as u64).ok_or("guest pml4 pa")?;
+        let low_pdpt_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_LOW_PDPT.0) as u64)
+            .ok_or("guest low pdpt pa")?;
         let low_pd_pa =
             kernel_va_to_pa(core::ptr::addr_of!(GUEST_LOW_PD.0) as u64).ok_or("guest low pd pa")?;
-        let stack_pt_pa =
-            kernel_va_to_pa(core::ptr::addr_of!(GUEST_STACK_PT.0) as u64).ok_or("guest stack pt pa")?;
-        let high_pdpt_pa =
-            kernel_va_to_pa(core::ptr::addr_of!(GUEST_HIGH_PDPT.0) as u64).ok_or("guest high pdpt pa")?;
-        let high_pd_pa =
-            kernel_va_to_pa(core::ptr::addr_of!(GUEST_HIGH_PD.0) as u64).ok_or("guest high pd pa")?;
-        let code_pt_pa =
-            kernel_va_to_pa(core::ptr::addr_of!(GUEST_CODE_PT.0) as u64).ok_or("guest code pt pa")?;
+        let stack_pt_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_STACK_PT.0) as u64)
+            .ok_or("guest stack pt pa")?;
+        let high_pdpt_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_HIGH_PDPT.0) as u64)
+            .ok_or("guest high pdpt pa")?;
+        let high_pd_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_HIGH_PD.0) as u64)
+            .ok_or("guest high pd pa")?;
+        let code_pt_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_CODE_PT.0) as u64)
+            .ok_or("guest code pt pa")?;
 
-        map_table_entry(core::ptr::addr_of_mut!(GUEST_PML4.0), pml4_index(GUEST_STACK_VA_BASE), low_pdpt_pa);
-        map_table_entry(core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0), pdpt_index(GUEST_STACK_VA_BASE), low_pd_pa);
-        map_table_entry(core::ptr::addr_of_mut!(GUEST_LOW_PD.0), pd_index(GUEST_STACK_VA_BASE), stack_pt_pa);
+        map_table_entry(
+            core::ptr::addr_of_mut!(GUEST_PML4.0),
+            pml4_index(GUEST_STACK_VA_BASE),
+            low_pdpt_pa,
+        );
+        map_table_entry(
+            core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0),
+            pdpt_index(GUEST_STACK_VA_BASE),
+            low_pd_pa,
+        );
+        map_table_entry(
+            core::ptr::addr_of_mut!(GUEST_LOW_PD.0),
+            pd_index(GUEST_STACK_VA_BASE),
+            stack_pt_pa,
+        );
         map_region_4k(
             core::ptr::addr_of_mut!(GUEST_STACK_PT.0),
             page_align_down(GUEST_STACK_VA_BASE),
-            kernel_va_to_pa(core::ptr::addr_of!(VM1_GUEST_STACK.0) as u64).ok_or("guest stack pa")?,
+            kernel_va_to_pa(core::ptr::addr_of!(VM1_GUEST_STACK.0) as u64)
+                .ok_or("guest stack pa")?,
             GUEST_STACK_BYTES,
             PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
         )?;
 
         let code_base = page_align_down(guest_rip);
-        map_table_entry(core::ptr::addr_of_mut!(GUEST_PML4.0), pml4_index(code_base), high_pdpt_pa);
-        map_table_entry(core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0), pdpt_index(code_base), high_pd_pa);
-        map_table_entry(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), pd_index(code_base), code_pt_pa);
+        map_table_entry(
+            core::ptr::addr_of_mut!(GUEST_PML4.0),
+            pml4_index(code_base),
+            high_pdpt_pa,
+        );
+        map_table_entry(
+            core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0),
+            pdpt_index(code_base),
+            high_pd_pa,
+        );
+        map_table_entry(
+            core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
+            pd_index(code_base),
+            code_pt_pa,
+        );
         map_region_4k(
             core::ptr::addr_of_mut!(GUEST_CODE_PT.0),
             code_base,
@@ -1370,26 +1414,53 @@ fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
     }
 
     let header = parse_snapshot_header(&bytes[..header_len])?;
-    let expected = header_len + (7 * PAGE_SIZE_4K) + (header.guest_stack_bytes as usize) + (header.code_len as usize);
-    if bytes.len() < expected || header.guest_stack_bytes as usize != GUEST_STACK_BYTES || header.guest_page_bytes as usize != PAGE_SIZE_4K {
+    let expected = header_len
+        + (7 * PAGE_SIZE_4K)
+        + (header.guest_stack_bytes as usize)
+        + (header.code_len as usize);
+    if bytes.len() < expected
+        || header.guest_stack_bytes as usize != GUEST_STACK_BYTES
+        || header.guest_page_bytes as usize != PAGE_SIZE_4K
+    {
         return Err(RestoreError::BadSnapshot);
     }
 
     let mut off = header_len;
     unsafe {
-        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_PML4.0), &bytes[off..off + PAGE_SIZE_4K]);
+        copy_into_guest_page(
+            core::ptr::addr_of_mut!(GUEST_PML4.0),
+            &bytes[off..off + PAGE_SIZE_4K],
+        );
         off += PAGE_SIZE_4K;
-        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0), &bytes[off..off + PAGE_SIZE_4K]);
+        copy_into_guest_page(
+            core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0),
+            &bytes[off..off + PAGE_SIZE_4K],
+        );
         off += PAGE_SIZE_4K;
-        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_LOW_PD.0), &bytes[off..off + PAGE_SIZE_4K]);
+        copy_into_guest_page(
+            core::ptr::addr_of_mut!(GUEST_LOW_PD.0),
+            &bytes[off..off + PAGE_SIZE_4K],
+        );
         off += PAGE_SIZE_4K;
-        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_STACK_PT.0), &bytes[off..off + PAGE_SIZE_4K]);
+        copy_into_guest_page(
+            core::ptr::addr_of_mut!(GUEST_STACK_PT.0),
+            &bytes[off..off + PAGE_SIZE_4K],
+        );
         off += PAGE_SIZE_4K;
-        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0), &bytes[off..off + PAGE_SIZE_4K]);
+        copy_into_guest_page(
+            core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0),
+            &bytes[off..off + PAGE_SIZE_4K],
+        );
         off += PAGE_SIZE_4K;
-        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), &bytes[off..off + PAGE_SIZE_4K]);
+        copy_into_guest_page(
+            core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
+            &bytes[off..off + PAGE_SIZE_4K],
+        );
         off += PAGE_SIZE_4K;
-        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_CODE_PT.0), &bytes[off..off + PAGE_SIZE_4K]);
+        copy_into_guest_page(
+            core::ptr::addr_of_mut!(GUEST_CODE_PT.0),
+            &bytes[off..off + PAGE_SIZE_4K],
+        );
         off += PAGE_SIZE_4K;
 
         core::ptr::copy_nonoverlapping(
@@ -1401,7 +1472,9 @@ fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
     }
 
     let code_end = off + header.code_len as usize;
-    let live_code = unsafe { core::slice::from_raw_parts(header.code_base as *const u8, header.code_len as usize) };
+    let live_code = unsafe {
+        core::slice::from_raw_parts(header.code_base as *const u8, header.code_len as usize)
+    };
     if live_code != &bytes[off..code_end] {
         return Err(RestoreError::CodeMismatch);
     }
@@ -1461,14 +1534,22 @@ fn parse_snapshot_header(bytes: &[u8]) -> Result<Vm1SnapshotHeader, RestoreError
 
 fn take_u32(bytes: &[u8], off: &mut usize) -> Result<u32, RestoreError> {
     let end = off.checked_add(4).ok_or(RestoreError::BadSnapshot)?;
-    let raw: [u8; 4] = bytes.get(*off..end).ok_or(RestoreError::BadSnapshot)?.try_into().map_err(|_| RestoreError::BadSnapshot)?;
+    let raw: [u8; 4] = bytes
+        .get(*off..end)
+        .ok_or(RestoreError::BadSnapshot)?
+        .try_into()
+        .map_err(|_| RestoreError::BadSnapshot)?;
     *off = end;
     Ok(u32::from_le_bytes(raw))
 }
 
 fn take_u64(bytes: &[u8], off: &mut usize) -> Result<u64, RestoreError> {
     let end = off.checked_add(8).ok_or(RestoreError::BadSnapshot)?;
-    let raw: [u8; 8] = bytes.get(*off..end).ok_or(RestoreError::BadSnapshot)?.try_into().map_err(|_| RestoreError::BadSnapshot)?;
+    let raw: [u8; 8] = bytes
+        .get(*off..end)
+        .ok_or(RestoreError::BadSnapshot)?
+        .try_into()
+        .map_err(|_| RestoreError::BadSnapshot)?;
     *off = end;
     Ok(u64::from_le_bytes(raw))
 }
@@ -1502,15 +1583,12 @@ fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
         + GUEST_STACK_BYTES
         + GUEST_CODE_WINDOW_BYTES;
     let mut out = Vec::with_capacity(total);
-    push_bytes(
-        &mut out,
-        unsafe {
-            core::slice::from_raw_parts(
-                (&header as *const Vm1SnapshotHeader).cast::<u8>(),
-                core::mem::size_of::<Vm1SnapshotHeader>(),
-            )
-        },
-    );
+    push_bytes(&mut out, unsafe {
+        core::slice::from_raw_parts(
+            (&header as *const Vm1SnapshotHeader).cast::<u8>(),
+            core::mem::size_of::<Vm1SnapshotHeader>(),
+        )
+    });
     unsafe {
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_PML4.0));
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_LOW_PDPT.0));
@@ -1539,7 +1617,10 @@ fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 unsafe fn push_guest_page(out: &mut Vec<u8>, page: *const [u64; 512]) {
-    push_bytes(out, core::slice::from_raw_parts(page.cast::<u8>(), PAGE_SIZE_4K));
+    push_bytes(
+        out,
+        core::slice::from_raw_parts(page.cast::<u8>(), PAGE_SIZE_4K),
+    );
 }
 
 fn vmwrite(field: u64, val: u64) -> Result<(), &'static str> {

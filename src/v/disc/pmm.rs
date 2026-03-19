@@ -18,8 +18,8 @@ impl BigMem {
         if len == 0 {
             return Err(block::Error::InvalidParam);
         }
-        let phys = phys::alloc_phys_range(len, PMM_ALIGN_BYTES, 0, None)
-            .ok_or(block::Error::NotReady)?;
+        let phys =
+            phys::alloc_phys_range(len, PMM_ALIGN_BYTES, 0, None).ok_or(block::Error::NotReady)?;
         let virt = phys::phys_to_virt(phys as usize) as *mut u8;
         let ptr = NonNull::new(virt).ok_or(block::Error::NotReady)?;
         unsafe { ptr::write_bytes(ptr.as_ptr(), 0, len) };

@@ -80,7 +80,10 @@ fn normalize_browser_instance_id(instance_id: u32) -> u32 {
 
 fn upsert_latest_op(browser_instance_id: u32, op_id: u32) {
     let mut latest = BROWSER_NET_LATEST.lock();
-    if let Some(entry) = latest.iter_mut().find(|entry| entry.0 == browser_instance_id) {
+    if let Some(entry) = latest
+        .iter_mut()
+        .find(|entry| entry.0 == browser_instance_id)
+    {
         entry.1 = op_id;
         return;
     }
@@ -98,7 +101,10 @@ fn latest_op_for_browser(browser_instance_id: u32) -> u32 {
 
 fn push_status(status: BrowserNetStatus) {
     let mut statuses = BROWSER_NET_STATUS.lock();
-    if let Some(existing) = statuses.iter_mut().find(|entry| entry.op_id == status.op_id) {
+    if let Some(existing) = statuses
+        .iter_mut()
+        .find(|entry| entry.op_id == status.op_id)
+    {
         *existing = status;
         return;
     }

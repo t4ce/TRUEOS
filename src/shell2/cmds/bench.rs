@@ -13,8 +13,8 @@ use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
     print_shell_line, set_matrix_target_active,
 };
-use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::CommandSessionInputResult;
+use crate::shell2::shell2_cmd::ParseOutcome;
 
 const NETBENCH_URL: &str = "http://ipv4.download.thinkbroadband.com/5GB.zip";
 const FILEBENCH_PATH: &str = "bench-lorem-100mb.txt";
@@ -316,7 +316,11 @@ fn cpubench_slot_health_line(slots: &[u32]) -> AllocString {
     parts.join(" | ")
 }
 
-fn drain_cpubench_worker_messages(target: &MatrixTarget, phase: CpuBenchPhase, workers: &mut [CpuBenchWorker]) {
+fn drain_cpubench_worker_messages(
+    target: &MatrixTarget,
+    phase: CpuBenchPhase,
+    workers: &mut [CpuBenchWorker],
+) {
     for worker in workers.iter_mut() {
         while let Some(msg) = trueos_qjs::workers::take_parent_message(worker.worker_id) {
             let Ok(text) = core::str::from_utf8(msg.as_slice()) else {
@@ -381,7 +385,11 @@ async fn stop_cpubench_workers(
     if killed != 0 {
         print_matrix_target_line(
             target,
-            format!("bench cpu [{}]: terminate fallback workers={}", phase.name, killed).as_str(),
+            format!(
+                "bench cpu [{}]: terminate fallback workers={}",
+                phase.name, killed
+            )
+            .as_str(),
         );
     }
     Timer::after(EmbassyDuration::from_millis(50)).await;
@@ -521,7 +529,9 @@ pub(crate) fn handle_session_input(
 }
 
 fn submit_filebench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
-    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle().or_else(super::select_default_disk_target) else {
+    let Some(disk) =
+        crate::v::fs::trueosfs::primary_root_handle().or_else(super::select_default_disk_target)
+    else {
         print_shell_line(io, "bench file: no disk device found");
         return None;
     };
@@ -616,28 +626,21 @@ async fn filebench_task(
         }
 
         let info = disk.info();
-        log(
-            format!(
-                "bench file: target id={} ({}) blocks={} bs={} writable={} label={:?}",
-                info.id.raw(),
-                info.id,
-                info.block_count,
-                info.block_size,
-                info.writable,
-                info.label
-            )
-            .as_str(),
-        );
-        log(
-            format!(
-                "bench file: super_lba={} data_lba={} file=/{} bytes={}",
-                placement.super_lba,
-                placement.data_lba,
-                FILEBENCH_PATH,
-                FILEBENCH_TOTAL_BYTES
-            )
-            .as_str(),
-        );
+        log(format!(
+            "bench file: target id={} ({}) blocks={} bs={} writable={} label={:?}",
+            info.id.raw(),
+            info.id,
+            info.block_count,
+            info.block_size,
+            info.writable,
+            info.label
+        )
+        .as_str());
+        log(format!(
+            "bench file: super_lba={} data_lba={} file=/{} bytes={}",
+            placement.super_lba, placement.data_lba, FILEBENCH_PATH, FILEBENCH_TOTAL_BYTES
+        )
+        .as_str());
 
         let bench_chunk_bytes = if info.max_transfer_bytes > 0 {
             let max_transfer = info.max_transfer_bytes as usize;
@@ -701,16 +704,14 @@ async fn filebench_task(
             if Instant::now() >= next_progress || written >= FILEBENCH_TOTAL_BYTES {
                 let elapsed_ms = elapsed_ms_since(start_tick);
                 let bps = bps_from_progress(written, elapsed_ms);
-                log(
-                    format!(
-                        "bench file: progress {}/{} speed={}/s elapsed={}ms",
-                        format_bytes(written),
-                        format_bytes(FILEBENCH_TOTAL_BYTES),
-                        format_speed(bps),
-                        elapsed_ms
-                    )
-                    .as_str(),
-                );
+                log(format!(
+                    "bench file: progress {}/{} speed={}/s elapsed={}ms",
+                    format_bytes(written),
+                    format_bytes(FILEBENCH_TOTAL_BYTES),
+                    format_speed(bps),
+                    elapsed_ms
+                )
+                .as_str());
                 next_progress = Instant::now() + EmbassyDuration::from_millis(PROGRESS_LOG_MS);
             }
         }
@@ -734,27 +735,23 @@ async fn filebench_task(
         let elapsed_ms = elapsed_ms_since(start_tick);
         let bps = bps_from_progress(written, elapsed_ms);
         if cancelled {
-            log(
-                format!(
-                    "bench file: cancelled wrote={} speed={}/s elapsed={}ms",
-                    format_bytes(written),
-                    format_speed(bps),
-                    elapsed_ms
-                )
-                .as_str(),
-            );
+            log(format!(
+                "bench file: cancelled wrote={} speed={}/s elapsed={}ms",
+                format_bytes(written),
+                format_speed(bps),
+                elapsed_ms
+            )
+            .as_str());
         } else if let Some(e) = write_err {
             log(format!("bench file: write failed ({:?})", e).as_str());
         } else if finished_ok {
-            log(
-                format!(
-                    "bench file: done wrote={} speed={}/s elapsed={}ms",
-                    format_bytes(written),
-                    format_speed(bps),
-                    elapsed_ms
-                )
-                .as_str(),
-            );
+            log(format!(
+                "bench file: done wrote={} speed={}/s elapsed={}ms",
+                format_bytes(written),
+                format_speed(bps),
+                elapsed_ms
+            )
+            .as_str());
         }
     }
     .await;

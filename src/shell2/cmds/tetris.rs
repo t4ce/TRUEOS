@@ -70,19 +70,18 @@ fn tetris_status_text() -> alloc::string::String {
 fn draw_status_controls(io: &'static dyn ShellBackend2, cols: usize) {
     let text = tetris_status_text();
     let width = crate::shell2::ecma48::visible_width(text.as_str());
-    let col = cols.saturating_sub(width).checked_div(2).unwrap_or(0).saturating_add(1);
+    let col = cols
+        .saturating_sub(width)
+        .checked_div(2)
+        .unwrap_or(0)
+        .saturating_add(1);
     io.write_fmt(format_args!("\x1b[{};1H\x1b[2K", STATUS_ROW));
     io.write_fmt(format_args!("\x1b[{};{}H", STATUS_ROW, col.max(1)));
     io.write_str(text.as_str());
     io.write_str(super::super::ecma48::RESET);
 }
 
-pub(crate) async fn run(
-    io: &'static dyn ShellBackend2,
-    cols: usize,
-    rows: usize,
-    top_row: usize,
-) {
+pub(crate) async fn run(io: &'static dyn ShellBackend2, cols: usize, rows: usize, top_row: usize) {
     let seed = crate::time::unix_time_seconds()
         .map(|t| t as u32)
         .unwrap_or(0x5445_5452)
