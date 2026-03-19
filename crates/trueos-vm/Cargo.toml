@@ -1,0 +1,11 @@
+[package]
+name = "trueos-vm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+trueos-v = { path = "../trueos-v" }
+
+[features]
+default = []

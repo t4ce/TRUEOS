@@ -35,6 +35,7 @@ struct FileRecordCacheEntry {
 const GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES: [u8; 16] = [
     0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
 ];
+const TRUEOSFS_MIN_TOTAL_BLOCKS: u64 = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TrueosFsPlacement {
@@ -1480,6 +1481,59 @@ pub async fn format_blank_force_async(handle: block::DeviceHandle) -> Result<(),
     format_blank_at_async(handle, 0).await
 }
 
+fn validate_blank_format_args(
+    handle: block::DeviceHandle,
+    super_lba: u64,
+) -> Result<(block::DeviceInfo, usize, usize, usize), block::Error> {
+    if handle.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    if !handle.supports_write() {
+        return Err(block::Error::NotSupported);
+    }
+
+    let info = handle.info();
+    let bs = info.block_size as usize;
+    if bs == 0 {
+        return Err(block::Error::InvalidParam);
+    }
+    if info.block_count < TRUEOSFS_MIN_TOTAL_BLOCKS {
+        return Err(block::Error::InvalidParam);
+    }
+    if super_lba >= info.block_count {
+        return Err(block::Error::OutOfBounds);
+    }
+
+    let data_lba = trueos_fs::data_lba_from_super(super_lba);
+    if data_lba >= info.block_count {
+        return Err(block::Error::OutOfBounds);
+    }
+
+    let max_blocks = if info.max_transfer_bytes > 0 {
+        (info.max_transfer_bytes as usize / bs).max(1)
+    } else {
+        1
+    };
+    let align = info.dma_alignment.max(1) as usize;
+    Ok((info, bs, max_blocks, align))
+}
+
+pub async fn validate_private_medium_async(
+    handle: block::DeviceHandle,
+    expect_super_lba: u64,
+) -> Result<TrueosFsPlacement, block::Error> {
+    let Some(placement) = locate_async(handle).await? else {
+        return Err(block::Error::Corrupted);
+    };
+    if placement.super_lba != expect_super_lba {
+        return Err(block::Error::Corrupted);
+    }
+    if placement.data_lba != trueos_fs::data_lba_from_super(expect_super_lba) {
+        return Err(block::Error::Corrupted);
+    }
+    Ok(placement)
+}
+
 /// Format TRUEOSFS at the start of an already-created partition.
 ///
 /// This is intended for installer code that first creates a GPT layout and then
@@ -1504,21 +1558,10 @@ pub(crate) async fn format_blank_at_async(
     handle: block::DeviceHandle,
     super_lba: u64,
 ) -> Result<(), block::Error> {
-    let info = handle.info();
-    let bs = info.block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-
-    let max_blocks = if info.max_transfer_bytes > 0 {
-        (info.max_transfer_bytes as usize / bs).max(1)
-    } else {
-        1
-    };
+    let (info, bs, max_blocks, align) = validate_blank_format_args(handle, super_lba)?;
     let blocks = core::cmp::min(8usize, max_blocks);
     let bytes = bs.saturating_mul(blocks);
 
-    let align = info.dma_alignment.max(1) as usize;
     let mut tmp = AlignedBuf::new(bytes, align).ok_or(block::Error::DmaUnavailable)?;
     let buf = tmp.as_mut_slice();
     buf.fill(0);
@@ -1533,10 +1576,13 @@ pub(crate) async fn format_blank_at_async(
     if !looks_like_trueos_superblock(&verify0) {
         return Err(block::Error::Corrupted);
     }
+    let placement = validate_private_medium_async(handle, super_lba).await?;
+    if placement.super_lba != super_lba {
+        return Err(block::Error::Corrupted);
+    }
 
     // Best-effort end-to-end NVMe sanity check: write a tiny payload into the data region
     // and read it back.
-    let info = handle.info();
     if info.kind == block::DeviceKind::Nvme {
         let data_lba = trueos_fs::data_lba_from_super(super_lba);
         if data_lba.saturating_add(2) <= info.block_count {

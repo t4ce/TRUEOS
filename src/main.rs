@@ -117,12 +117,21 @@ pub unsafe extern "C" fn _start() -> ! {
         // Use `call` (not `jmp`) so the callee sees the expected stack
         // alignment (RSP % 16 == 8 at function entry). Some Rust/C code
         // assumes this and will fault on unaligned `movaps` spills.
-        "call {kmain}",
+        "call {dispatch}",
         "ud2",
         stack = sym BSP_BOOT_STACK,
         stack_size = const BSP_BOOT_STACK_BYTES,
-        kmain = sym kmain,
+        dispatch = sym start_dispatch,
     );
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn start_dispatch() -> ! {
+    if crate::hv::guest_boot_take() {
+        unsafe { crate::hv::guest::entry() }
+    } else {
+        kmain()
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -199,16 +208,6 @@ pub extern "C" fn kmain() -> ! {
         }
     }
     _loop(executor, spawner, smp_resp)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_vmx_guest_entry() -> ! {
-    crate::log!("vmx-guest: entered TRUEOS guest entry\n");
-    loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
-        }
-    }
 }
 
 fn _loop(

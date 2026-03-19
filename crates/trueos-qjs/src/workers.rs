@@ -160,6 +160,10 @@ pub fn pick_background_spawner() -> Option<embassy_executor::SendSpawner> {
     pick_spawner_with_policy(SpawnPolicy::AnyNonCritical).map(|(_, _, spawner)| spawner)
 }
 
+pub fn spawner_for_slot(cpu_slot: u32) -> Option<embassy_executor::SendSpawner> {
+    CORE_SPAWNERS.lock().get(&cpu_slot).cloned()
+}
+
 pub fn background_worker_slots() -> Vec<u32> {
     let map = CORE_SPAWNERS.lock();
     let mut out: Vec<u32> = map
