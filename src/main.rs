@@ -51,7 +51,7 @@ mod tst_ui2_triangle_demo;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
-mod usb;
+mod usb2;
 mod v;
 mod vga;
 mod wait;
@@ -172,8 +172,8 @@ pub extern "C" fn kmain() -> ! {
     trueos_qjs::set_font_atlas_large_provider(qjs_font_atlas_large_provider);
     trueos_qjs::host_api_hook::set_context_init_hook(host_api::install);
 
-    usb::xhci::init_once();
-    usb::truekey::init();
+   // usb::xhci::init_once();
+   // usb::truekey::init();
     pci::vrng::init_once();
     pci::vrng::smoke_test_once();
     crate::rng::init();
