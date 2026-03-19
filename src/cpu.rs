@@ -168,9 +168,6 @@ fn enter_ap_runtime(spawner: Spawner) -> ! {
     let profile = register_current_worker_spawner(spawner)
         .unwrap_or_else(|| CpuProfile::current().unwrap_or(CpuProfile::new(0, 0, 0)));
 
-    if profile.slot() == 1 {
-        runtime::register_first_ap_spawner(spawner);
-    }
     if let Err(e) = spawner.spawn(ap_heartbeat_task()) {
         crate::log!("ap: heartbeat task spawn failed: {:?}\n", e);
     }

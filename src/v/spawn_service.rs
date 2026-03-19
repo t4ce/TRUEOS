@@ -75,6 +75,8 @@ define_started_flags!(
     GLOBALOG_PERSIST_ONCE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
+    HV_VM_STORE_STARTED,
+    HV_VM_STORE_NET_STARTED,
     NET_POLL_STARTED,
     NET_SERVICE_STARTED,
     TLS_SOCKET_SERVICE_STARTED,
@@ -137,11 +139,13 @@ fn spawn_on_ap1(
     spawner: Spawner,
     task: impl FnOnce(SendSpawner) -> Result<(), SpawnError>,
 ) -> SpawnAttempt {
-    let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
-        let _ = spawner; // keep signature stable; this task intentionally targets AP1.
+    let _ = spawner; // keep signature stable; this task intentionally targets AP1.
+    let Some(profile) = crate::cpu::CpuProfile::for_slot(1) else {
         return SpawnAttempt::Skipped;
     };
-    let _ = spawner; // keep signature stable; this task intentionally targets AP1.
+    let Some(ap1_spawner) = trueos_qjs::workers::spawner_for_slot(profile.slot()) else {
+        return SpawnAttempt::Skipped;
+    };
     match task(ap1_spawner) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
@@ -201,6 +205,18 @@ fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         spawner.spawn(crate::v::fs::trueosfs::mount_service_task())
+    })
+}
+
+fn spawn_hv_vm_store(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1(spawner, |ap1_spawner| {
+        ap1_spawner.spawn(crate::hv::store::vm_store_task())
+    })
+}
+
+fn spawn_hv_vm_store_net(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1(spawner, |ap1_spawner| {
+        ap1_spawner.spawn(crate::hv::store::vm_store_replication_task())
     })
 }
 
@@ -691,6 +707,13 @@ static TASKS: &[TaskSpec] = &[
         0,
         &TRUEOSFS_MOUNT_SERVICE_STARTED,
         spawn_trueosfs_mount_service,
+    ),
+    TaskSpec::enabled("hv-vm-store", 0, &HV_VM_STORE_STARTED, spawn_hv_vm_store),
+    TaskSpec::enabled(
+        "hv-vm-store-net",
+        0,
+        &HV_VM_STORE_NET_STARTED,
+        spawn_hv_vm_store_net,
     ),
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),

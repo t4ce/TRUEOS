@@ -1,3 +1,8 @@
+pub mod store;
+pub use trueos_vm::guest;
+pub use trueos_vm::stream;
+
+use alloc::vec::Vec;
 use core::arch::x86_64::__cpuid;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,8 +42,13 @@ const IA32_FEATURE_CONTROL_LOCK: u64 = 1 << 0;
 const IA32_FEATURE_CONTROL_VMX_OUTSIDE_SMX: u64 = 1 << 2;
 const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
+const PAGE_SIZE_4K: usize = 4096;
 const EPT_PDPT_ENTRIES: usize = 4;
 const EPT_PD_ENTRIES: usize = 512;
+const GUEST_STACK_VA_BASE: u64 = 0x0000_0000_0040_0000;
+const GUEST_CODE_WINDOW_BYTES: usize = 64 * 1024;
+const PT_ENTRY_PRESENT: u64 = 1 << 0;
+const PT_ENTRY_WRITABLE: u64 = 1 << 1;
 
 const VMCS_CTRL_PIN_BASED: u64 = 0x4000;
 const VMCS_CTRL_CPU_BASED: u64 = 0x4002;
@@ -141,17 +151,23 @@ const PROC_BASED_ACTIVATE_SECONDARY: u64 = 1 << 31;
 const PROC2_BASED_ENABLE_EPT: u64 = 1 << 1;
 const EXIT_CTL_HOST_ADDR_SPACE_SIZE: u64 = 1 << 9;
 const ENTRY_CTL_IA32E_MODE_GUEST: u64 = 1 << 9;
+const RFLAGS_RESERVED_BIT1: u64 = 1 << 1;
+const RFLAGS_IF: u64 = 1 << 9;
+const EXCEPTION_BITMAP_ALL: u64 = 0xFFFF_FFFF;
+const VMEXIT_REASON_VMCALL: u64 = 0x12;
 const HV_GDT_SEL_CODE: u16 = 0x08;
 const HV_GDT_SEL_DATA: u16 = 0x10;
 const HV_GDT_SEL_TSS: u16 = 0x18;
 const HV_GDT_DESC_CODE64: u64 = 0x00AF_9B00_0000_FFFF;
 const HV_GDT_DESC_DATA64: u64 = 0x00AF_9300_0000_FFFF;
 const ELF64_HEADER_LEN: usize = 64;
+const GUEST_STACK_BYTES: usize = 64 * 1024;
 
 static VM1_RUNNING: AtomicBool = AtomicBool::new(false);
 static VM1_STARTING: AtomicBool = AtomicBool::new(false);
 static VM1_STOP_REQ: AtomicBool = AtomicBool::new(false);
 static VM1_MARKER_SEEN: AtomicBool = AtomicBool::new(false);
+static VM1_GUEST_BOOT_ARMED: AtomicBool = AtomicBool::new(false);
 static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 
 const HV_LOG_CAP: usize = 64;
@@ -171,22 +187,45 @@ struct VmxPage([u8; VMX_PAGE_SIZE]);
 static mut VMXON_REGION: VmxPage = VmxPage([0u8; VMX_PAGE_SIZE]);
 static mut VMCS_REGION: VmxPage = VmxPage([0u8; VMX_PAGE_SIZE]);
 
+#[repr(align(16))]
+struct GuestStack([u8; GUEST_STACK_BYTES]);
+
 #[repr(C, align(4096))]
 #[derive(Copy, Clone)]
 struct EptPage([u64; 512]);
 
+#[repr(C, align(4096))]
+#[derive(Copy, Clone)]
+struct GuestPage([u64; 512]);
+
 static mut EPT_PML4: EptPage = EptPage([0u64; 512]);
 static mut EPT_PDPT: EptPage = EptPage([0u64; 512]);
 static mut EPT_PD: [EptPage; EPT_PDPT_ENTRIES] = [EptPage([0u64; 512]); EPT_PDPT_ENTRIES];
+static mut GUEST_PML4: GuestPage = GuestPage([0u64; 512]);
+static mut GUEST_LOW_PDPT: GuestPage = GuestPage([0u64; 512]);
+static mut GUEST_LOW_PD: GuestPage = GuestPage([0u64; 512]);
+static mut GUEST_STACK_PT: GuestPage = GuestPage([0u64; 512]);
+static mut GUEST_HIGH_PDPT: GuestPage = GuestPage([0u64; 512]);
+static mut GUEST_HIGH_PD: GuestPage = GuestPage([0u64; 512]);
+static mut GUEST_CODE_PT: GuestPage = GuestPage([0u64; 512]);
 static mut HV_HOST_GDT: [u64; 8] = [0u64; 8];
 static mut HV_HOST_TSS: [u8; 104] = [0u8; 104];
+static mut VM1_GUEST_STACK: GuestStack = GuestStack([0u8; GUEST_STACK_BYTES]);
+static mut VMX_WRAPPER_RESULT: LaunchResult = LaunchResult {
+    entered: 0,
+    launch_failed: 0,
+    _pad: [0; 6],
+    exit_reason: 0,
+    exit_qualification: 0,
+    guest_rip: 0,
+    instr_err: 0,
+};
+static VM1_SNAPSHOT_META: Mutex<Option<Vm1SnapshotMeta>> = Mutex::new(None);
+static VM1_RESTORE_META: Mutex<Option<Vm1SnapshotMeta>> = Mutex::new(None);
 
-#[repr(align(16))]
-struct GuestCode([u8; 16]);
-static GUEST_CODE: GuestCode = GuestCode([
-    0xF4, // hlt -> should VM-exit when HLT exiting is enabled.
-    0xF4, 0xF4, 0xF4, 0xF4, 0xF4, 0xF4, 0xF4, 0xF4, 0xF4, 0xF4, 0xF4, 0xF4, 0xF4, 0xF4, 0xF4,
-]);
+const VM1_SNAPSHOT_MAGIC: u32 = 0x3153_4D56; // "VMS1"
+const VM1_SNAPSHOT_VERSION: u32 = 1;
+const VM1_SNAPSHOT_PATH: &str = "vm/vm1.snapshot";
 
 #[derive(Copy, Clone, Default)]
 struct LaunchResult {
@@ -197,6 +236,52 @@ struct LaunchResult {
     exit_qualification: u64,
     guest_rip: u64,
     instr_err: u64,
+}
+
+#[derive(Copy, Clone)]
+struct Vm1SnapshotMeta {
+    guest_cr3: u64,
+    guest_rip: u64,
+    guest_rsp: u64,
+    code_base: u64,
+    code_len: u64,
+    exit_reason: u64,
+    exit_qualification: u64,
+    exit_guest_rip: u64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct Vm1SnapshotHeader {
+    magic: u32,
+    version: u32,
+    guest_cr3: u64,
+    guest_rip: u64,
+    guest_rsp: u64,
+    code_base: u64,
+    code_len: u64,
+    exit_reason: u64,
+    exit_qualification: u64,
+    exit_guest_rip: u64,
+    guest_stack_bytes: u64,
+    guest_page_bytes: u64,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum SaveError {
+    NoRoot,
+    NoSnapshot,
+    BeginWrite,
+    Io(crate::disc::block::Error),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum RestoreError {
+    NoRoot,
+    MissingFile,
+    Read(crate::disc::block::Error),
+    BadSnapshot,
+    CodeMismatch,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -333,6 +418,75 @@ pub fn write_logs(io: &dyn ShellIo2) {
     }
 }
 
+pub fn save_snapshot() -> Result<usize, SaveError> {
+    let bytes = snapshot_bytes()?;
+    crate::hv::store::save_bytes(bytes).map_err(map_store_save_error)
+}
+
+pub fn restore_snapshot() -> Result<usize, RestoreError> {
+    let bytes = crate::hv::store::load_bytes().map_err(map_store_restore_error)?;
+
+    restore_snapshot_bytes(bytes.as_slice())?;
+    Ok(bytes.len())
+}
+
+fn map_store_save_error(err: crate::hv::store::VmStoreError) -> SaveError {
+    match err {
+        crate::hv::store::VmStoreError::ServiceOffline => SaveError::Io(crate::disc::block::Error::NotReady),
+        crate::hv::store::VmStoreError::QueueFull => SaveError::Io(crate::disc::block::Error::NotReady),
+        crate::hv::store::VmStoreError::Create(e)
+        | crate::hv::store::VmStoreError::Format(e)
+        | crate::hv::store::VmStoreError::BeginWrite(e)
+        | crate::hv::store::VmStoreError::Write(e)
+        | crate::hv::store::VmStoreError::Read(e) => SaveError::Io(e),
+        crate::hv::store::VmStoreError::MissingSnapshot => SaveError::BeginWrite,
+    }
+}
+
+fn map_store_restore_error(err: crate::hv::store::VmStoreError) -> RestoreError {
+    match err {
+        crate::hv::store::VmStoreError::MissingSnapshot => RestoreError::MissingFile,
+        crate::hv::store::VmStoreError::ServiceOffline => {
+            RestoreError::Read(crate::disc::block::Error::NotReady)
+        }
+        crate::hv::store::VmStoreError::QueueFull => {
+            RestoreError::Read(crate::disc::block::Error::NotReady)
+        }
+        crate::hv::store::VmStoreError::Create(e)
+        | crate::hv::store::VmStoreError::Format(e)
+        | crate::hv::store::VmStoreError::BeginWrite(e)
+        | crate::hv::store::VmStoreError::Read(e)
+        | crate::hv::store::VmStoreError::Write(e) => RestoreError::Read(e),
+    }
+}
+
+fn vmexit_is_preserve(lr: LaunchResult) -> bool {
+    lr.entered != 0 && lr.launch_failed == 0 && (lr.exit_reason & 0xFFFF) == VMEXIT_REASON_VMCALL
+}
+
+fn snapshot_on_preserve_exit() {
+    match snapshot_bytes() {
+        Ok(bytes) => match crate::hv::store::save_bytes(bytes) {
+            Ok(saved) => hvlogf(format_args!(
+                "hv: vm1 reporting: preserve snapshot saved store=hv-ramdisk path=vm/vm1.snapshot bytes={}",
+                saved
+            )),
+            Err(e) => hvlogf(format_args!(
+                "hv: vm1 reporting: preserve snapshot save failed ({:?})",
+                e
+            )),
+        },
+        Err(e) => hvlogf(format_args!(
+            "hv: vm1 reporting: preserve snapshot bytes failed ({:?})",
+            e
+        )),
+    }
+}
+
+pub fn guest_boot_take() -> bool {
+    VM1_GUEST_BOOT_ARMED.swap(false, Ordering::AcqRel)
+}
+
 #[task(pool_size = 1)]
 async fn vm1_task(_io: &'static dyn ShellBackend2) {
     VM1_STARTING.store(false, Ordering::Release);
@@ -370,6 +524,10 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
     }
     match vmx_launch_once_with_ept() {
         Ok(lr) => {
+            capture_snapshot_meta(lr);
+            if vmexit_is_preserve(lr) {
+                snapshot_on_preserve_exit();
+            }
             hvlogf(format_args!(
                 "hv: vm1 reporting: vmlaunch entered={} launch_failed={} exit_reason=0x{:X} exit_qual=0x{:X} guest_rip=0x{:016X}",
                 lr.entered, lr.launch_failed, lr.exit_reason, lr.exit_qualification, lr.guest_rip
@@ -518,7 +676,9 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
     }
 
     let mut lr = LaunchResult::default();
+    VM1_GUEST_BOOT_ARMED.store(true, Ordering::Release);
     vmlaunch_once_wrapper(&mut lr);
+    VM1_GUEST_BOOT_ARMED.store(false, Ordering::Release);
     if lr.launch_failed != 0 {
         hvlogf(format_args!(
             "hv: vm1 reporting: vmlaunch failed instr_err={} rip=0x{:016X}",
@@ -617,7 +777,8 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     vmwrite(VMCS_CTRL_PIN_BASED, pin)?;
     vmwrite(VMCS_CTRL_CPU_BASED, proc)?;
     vmwrite(VMCS_CTRL_SECONDARY, proc2)?;
-    vmwrite(VMCS_CTRL_EXCEPTION_BITMAP, 0)?;
+    // Trap guest exceptions to the host until the guest has its own coherent IDT/ISR world.
+    vmwrite(VMCS_CTRL_EXCEPTION_BITMAP, EXCEPTION_BITMAP_ALL)?;
     vmwrite(VMCS_CTRL_EXIT, exit)?;
     vmwrite(VMCS_CTRL_ENTRY, entry)?;
     vmwrite(VMCS_CTRL_EPT_POINTER, eptp)?;
@@ -749,12 +910,18 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
             vmwrite(VMCS_HOST_IA32_EFER, efer)?;
             vmwrite(VMCS_HOST_IA32_PERF_GLOBAL_CTRL, perf_global)?;
 
-            let guest_rip = guest_launch_rip();
-            let guest_rsp = read_rsp();
+            let restored = active_restore_meta();
+            let guest_rip = restored.map(|m| m.guest_rip).unwrap_or_else(guest_launch_rip);
+            let guest_rsp = restored.map(|m| m.guest_rsp).unwrap_or_else(guest_stack_top);
+            let guest_cr3 = if restored.is_some() {
+                current_guest_cr3_pa()?
+            } else {
+                build_guest_cr3(guest_rip, guest_rsp)?
+            };
             vmwrite(VMCS_GUEST_CR0, host_cr0)?;
-            vmwrite(VMCS_GUEST_CR3, host_cr3.start_address().as_u64())?;
+            vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
             vmwrite(VMCS_GUEST_CR4, host_cr4)?;
-            vmwrite(VMCS_GUEST_RFLAGS, guest_rflags | 0x2)?;
+            vmwrite(VMCS_GUEST_RFLAGS, (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
             vmwrite(VMCS_GUEST_RIP, guest_rip)?;
             vmwrite(VMCS_GUEST_RSP, guest_rsp)?;
             vmwrite(VMCS_GUEST_DR7, 0x400)?;
@@ -888,6 +1055,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
         host_cs as u16, host_ss as u16, host_tr as u16, tr_base
     ));
 
+    let (host_cr3, _) = Cr3::read();
     vmwrite(VMCS_HOST_CR0, host_cr0)?;
     vmwrite(VMCS_HOST_CR3, host_cr3.start_address().as_u64())?;
     vmwrite(VMCS_HOST_CR4, host_cr4)?;
@@ -910,12 +1078,18 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     vmwrite(VMCS_HOST_IA32_EFER, efer)?;
     vmwrite(VMCS_HOST_IA32_PERF_GLOBAL_CTRL, perf_global)?;
 
-    let guest_rip = guest_launch_rip();
-    let guest_rsp = read_rsp();
+    let restored = active_restore_meta();
+    let guest_rip = restored.map(|m| m.guest_rip).unwrap_or_else(guest_launch_rip);
+    let guest_rsp = restored.map(|m| m.guest_rsp).unwrap_or_else(guest_stack_top);
+    let guest_cr3 = if restored.is_some() {
+        current_guest_cr3_pa()?
+    } else {
+        build_guest_cr3(guest_rip, guest_rsp)?
+    };
     vmwrite(VMCS_GUEST_CR0, host_cr0)?;
-    vmwrite(VMCS_GUEST_CR3, host_cr3.start_address().as_u64())?;
+    vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
     vmwrite(VMCS_GUEST_CR4, host_cr4)?;
-    vmwrite(VMCS_GUEST_RFLAGS, guest_rflags | 0x2)?;
+    vmwrite(VMCS_GUEST_RFLAGS, (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
     vmwrite(VMCS_GUEST_RIP, guest_rip)?;
     vmwrite(VMCS_GUEST_RSP, guest_rsp)?;
     vmwrite(VMCS_GUEST_DR7, 0x400)?;
@@ -1024,7 +1198,11 @@ fn build_ept_identity_4g() -> Result<u64, &'static str> {
 }
 
 fn guest_launch_rip() -> u64 {
-    crate::trueos_vmx_guest_entry as usize as u64
+    guest::entry as *const () as usize as u64
+}
+
+fn guest_stack_top() -> u64 {
+    (GUEST_STACK_VA_BASE + GUEST_STACK_BYTES as u64) & !0xF
 }
 
 fn guest_kernel_elf_entry(bytes: &[u8]) -> Option<u64> {
@@ -1047,6 +1225,321 @@ fn adjust_vmx_ctrl(msr: u32, desired: u64) -> u64 {
     let may_be_1 = (caps >> 32) & 0xFFFF_FFFF;
     // Intel SDM (VMX control MSRs): ctl = (desired | must_be_1) & may_be_1.
     ((desired & 0xFFFF_FFFF) | must_be_1) & may_be_1
+}
+
+fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> {
+    unsafe {
+        zero_guest_page(core::ptr::addr_of_mut!(GUEST_PML4.0));
+        zero_guest_page(core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0));
+        zero_guest_page(core::ptr::addr_of_mut!(GUEST_LOW_PD.0));
+        zero_guest_page(core::ptr::addr_of_mut!(GUEST_STACK_PT.0));
+        zero_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0));
+        zero_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0));
+        zero_guest_page(core::ptr::addr_of_mut!(GUEST_CODE_PT.0));
+
+        let pml4_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_PML4.0) as u64).ok_or("guest pml4 pa")?;
+        let low_pdpt_pa =
+            kernel_va_to_pa(core::ptr::addr_of!(GUEST_LOW_PDPT.0) as u64).ok_or("guest low pdpt pa")?;
+        let low_pd_pa =
+            kernel_va_to_pa(core::ptr::addr_of!(GUEST_LOW_PD.0) as u64).ok_or("guest low pd pa")?;
+        let stack_pt_pa =
+            kernel_va_to_pa(core::ptr::addr_of!(GUEST_STACK_PT.0) as u64).ok_or("guest stack pt pa")?;
+        let high_pdpt_pa =
+            kernel_va_to_pa(core::ptr::addr_of!(GUEST_HIGH_PDPT.0) as u64).ok_or("guest high pdpt pa")?;
+        let high_pd_pa =
+            kernel_va_to_pa(core::ptr::addr_of!(GUEST_HIGH_PD.0) as u64).ok_or("guest high pd pa")?;
+        let code_pt_pa =
+            kernel_va_to_pa(core::ptr::addr_of!(GUEST_CODE_PT.0) as u64).ok_or("guest code pt pa")?;
+
+        map_table_entry(core::ptr::addr_of_mut!(GUEST_PML4.0), pml4_index(GUEST_STACK_VA_BASE), low_pdpt_pa);
+        map_table_entry(core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0), pdpt_index(GUEST_STACK_VA_BASE), low_pd_pa);
+        map_table_entry(core::ptr::addr_of_mut!(GUEST_LOW_PD.0), pd_index(GUEST_STACK_VA_BASE), stack_pt_pa);
+        map_region_4k(
+            core::ptr::addr_of_mut!(GUEST_STACK_PT.0),
+            page_align_down(GUEST_STACK_VA_BASE),
+            kernel_va_to_pa(core::ptr::addr_of!(VM1_GUEST_STACK.0) as u64).ok_or("guest stack pa")?,
+            GUEST_STACK_BYTES,
+            PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
+        )?;
+
+        let code_base = page_align_down(guest_rip);
+        map_table_entry(core::ptr::addr_of_mut!(GUEST_PML4.0), pml4_index(code_base), high_pdpt_pa);
+        map_table_entry(core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0), pdpt_index(code_base), high_pd_pa);
+        map_table_entry(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), pd_index(code_base), code_pt_pa);
+        map_region_4k(
+            core::ptr::addr_of_mut!(GUEST_CODE_PT.0),
+            code_base,
+            kernel_va_to_pa(code_base).ok_or("guest code pa")?,
+            GUEST_CODE_WINDOW_BYTES,
+            PT_ENTRY_PRESENT,
+        )?;
+
+        hvlogf(format_args!(
+            "hv: vm1 reporting: guest-cr3=0x{:016X} code=0x{:016X} stack=0x{:016X}",
+            pml4_pa, guest_rip, guest_rsp
+        ));
+        *VM1_SNAPSHOT_META.lock() = Some(Vm1SnapshotMeta {
+            guest_cr3: pml4_pa,
+            guest_rip,
+            guest_rsp,
+            code_base,
+            code_len: GUEST_CODE_WINDOW_BYTES as u64,
+            exit_reason: 0,
+            exit_qualification: 0,
+            exit_guest_rip: guest_rip,
+        });
+        Ok(pml4_pa)
+    }
+}
+
+fn active_restore_meta() -> Option<Vm1SnapshotMeta> {
+    *VM1_RESTORE_META.lock()
+}
+
+fn current_guest_cr3_pa() -> Result<u64, &'static str> {
+    kernel_va_to_pa(unsafe { core::ptr::addr_of!(GUEST_PML4.0) as u64 }).ok_or("guest pml4 pa")
+}
+
+unsafe fn zero_guest_page(page: *mut [u64; 512]) {
+    core::ptr::write_bytes(page as *mut u8, 0, PAGE_SIZE_4K);
+}
+
+fn map_table_entry(table: *mut [u64; 512], index: usize, next_pa: u64) {
+    unsafe {
+        (*table)[index] = (next_pa & 0x000F_FFFF_FFFF_F000) | PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE;
+    }
+}
+
+fn map_region_4k(
+    pt: *mut [u64; 512],
+    virt_base: u64,
+    phys_base: u64,
+    bytes: usize,
+    flags: u64,
+) -> Result<(), &'static str> {
+    let pages = bytes.div_ceil(PAGE_SIZE_4K);
+    let first_pt = pt_index(virt_base);
+    if first_pt + pages > 512 {
+        return Err("guest pt range");
+    }
+    for page in 0..pages {
+        let phys = phys_base
+            .checked_add((page * PAGE_SIZE_4K) as u64)
+            .ok_or("guest phys overflow")?;
+        unsafe {
+            (*pt)[first_pt + page] = (phys & 0x000F_FFFF_FFFF_F000) | flags;
+        }
+    }
+    Ok(())
+}
+
+fn page_align_down(addr: u64) -> u64 {
+    addr & !((PAGE_SIZE_4K as u64) - 1)
+}
+
+fn pml4_index(addr: u64) -> usize {
+    ((addr >> 39) & 0x1FF) as usize
+}
+
+fn pdpt_index(addr: u64) -> usize {
+    ((addr >> 30) & 0x1FF) as usize
+}
+
+fn pd_index(addr: u64) -> usize {
+    ((addr >> 21) & 0x1FF) as usize
+}
+
+fn pt_index(addr: u64) -> usize {
+    ((addr >> 12) & 0x1FF) as usize
+}
+
+fn capture_snapshot_meta(lr: LaunchResult) {
+    let mut meta = VM1_SNAPSHOT_META.lock();
+    if let Some(mut m) = *meta {
+        m.exit_reason = lr.exit_reason;
+        m.exit_qualification = lr.exit_qualification;
+        m.exit_guest_rip = lr.guest_rip;
+        *meta = Some(m);
+    }
+}
+
+fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
+    let header_len = core::mem::size_of::<Vm1SnapshotHeader>();
+    if bytes.len() < header_len {
+        return Err(RestoreError::BadSnapshot);
+    }
+
+    let header = parse_snapshot_header(&bytes[..header_len])?;
+    let expected = header_len + (7 * PAGE_SIZE_4K) + (header.guest_stack_bytes as usize) + (header.code_len as usize);
+    if bytes.len() < expected || header.guest_stack_bytes as usize != GUEST_STACK_BYTES || header.guest_page_bytes as usize != PAGE_SIZE_4K {
+        return Err(RestoreError::BadSnapshot);
+    }
+
+    let mut off = header_len;
+    unsafe {
+        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_PML4.0), &bytes[off..off + PAGE_SIZE_4K]);
+        off += PAGE_SIZE_4K;
+        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0), &bytes[off..off + PAGE_SIZE_4K]);
+        off += PAGE_SIZE_4K;
+        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_LOW_PD.0), &bytes[off..off + PAGE_SIZE_4K]);
+        off += PAGE_SIZE_4K;
+        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_STACK_PT.0), &bytes[off..off + PAGE_SIZE_4K]);
+        off += PAGE_SIZE_4K;
+        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0), &bytes[off..off + PAGE_SIZE_4K]);
+        off += PAGE_SIZE_4K;
+        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), &bytes[off..off + PAGE_SIZE_4K]);
+        off += PAGE_SIZE_4K;
+        copy_into_guest_page(core::ptr::addr_of_mut!(GUEST_CODE_PT.0), &bytes[off..off + PAGE_SIZE_4K]);
+        off += PAGE_SIZE_4K;
+
+        core::ptr::copy_nonoverlapping(
+            bytes[off..off + GUEST_STACK_BYTES].as_ptr(),
+            core::ptr::addr_of_mut!(VM1_GUEST_STACK.0).cast::<u8>(),
+            GUEST_STACK_BYTES,
+        );
+        off += GUEST_STACK_BYTES;
+    }
+
+    let code_end = off + header.code_len as usize;
+    let live_code = unsafe { core::slice::from_raw_parts(header.code_base as *const u8, header.code_len as usize) };
+    if live_code != &bytes[off..code_end] {
+        return Err(RestoreError::CodeMismatch);
+    }
+
+    let guest_cr3 = current_guest_cr3_pa().map_err(|_| RestoreError::BadSnapshot)?;
+    let restored = Vm1SnapshotMeta {
+        guest_cr3,
+        guest_rip: header.guest_rip,
+        guest_rsp: header.guest_rsp,
+        code_base: header.code_base,
+        code_len: header.code_len,
+        exit_reason: header.exit_reason,
+        exit_qualification: header.exit_qualification,
+        exit_guest_rip: header.exit_guest_rip,
+    };
+    *VM1_SNAPSHOT_META.lock() = Some(restored);
+    *VM1_RESTORE_META.lock() = Some(restored);
+    hvlogf(format_args!(
+        "hv: vm1 reporting: restore armed guest_cr3=0x{:016X} guest_rip=0x{:016X} guest_rsp=0x{:016X}",
+        restored.guest_cr3, restored.guest_rip, restored.guest_rsp
+    ));
+    Ok(())
+}
+
+fn parse_snapshot_header(bytes: &[u8]) -> Result<Vm1SnapshotHeader, RestoreError> {
+    let mut off = 0usize;
+    let magic = take_u32(bytes, &mut off)?;
+    let version = take_u32(bytes, &mut off)?;
+    let guest_cr3 = take_u64(bytes, &mut off)?;
+    let guest_rip = take_u64(bytes, &mut off)?;
+    let guest_rsp = take_u64(bytes, &mut off)?;
+    let code_base = take_u64(bytes, &mut off)?;
+    let code_len = take_u64(bytes, &mut off)?;
+    let exit_reason = take_u64(bytes, &mut off)?;
+    let exit_qualification = take_u64(bytes, &mut off)?;
+    let exit_guest_rip = take_u64(bytes, &mut off)?;
+    let guest_stack_bytes = take_u64(bytes, &mut off)?;
+    let guest_page_bytes = take_u64(bytes, &mut off)?;
+    if magic != VM1_SNAPSHOT_MAGIC || version != VM1_SNAPSHOT_VERSION {
+        return Err(RestoreError::BadSnapshot);
+    }
+    Ok(Vm1SnapshotHeader {
+        magic,
+        version,
+        guest_cr3,
+        guest_rip,
+        guest_rsp,
+        code_base,
+        code_len,
+        exit_reason,
+        exit_qualification,
+        exit_guest_rip,
+        guest_stack_bytes,
+        guest_page_bytes,
+    })
+}
+
+fn take_u32(bytes: &[u8], off: &mut usize) -> Result<u32, RestoreError> {
+    let end = off.checked_add(4).ok_or(RestoreError::BadSnapshot)?;
+    let raw: [u8; 4] = bytes.get(*off..end).ok_or(RestoreError::BadSnapshot)?.try_into().map_err(|_| RestoreError::BadSnapshot)?;
+    *off = end;
+    Ok(u32::from_le_bytes(raw))
+}
+
+fn take_u64(bytes: &[u8], off: &mut usize) -> Result<u64, RestoreError> {
+    let end = off.checked_add(8).ok_or(RestoreError::BadSnapshot)?;
+    let raw: [u8; 8] = bytes.get(*off..end).ok_or(RestoreError::BadSnapshot)?.try_into().map_err(|_| RestoreError::BadSnapshot)?;
+    *off = end;
+    Ok(u64::from_le_bytes(raw))
+}
+
+unsafe fn copy_into_guest_page(dst: *mut [u64; 512], src: &[u8]) {
+    core::ptr::copy_nonoverlapping(src.as_ptr(), dst.cast::<u8>(), PAGE_SIZE_4K);
+}
+
+fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
+    let Some(meta) = *VM1_SNAPSHOT_META.lock() else {
+        return Err(SaveError::NoSnapshot);
+    };
+
+    let header = Vm1SnapshotHeader {
+        magic: VM1_SNAPSHOT_MAGIC,
+        version: VM1_SNAPSHOT_VERSION,
+        guest_cr3: meta.guest_cr3,
+        guest_rip: meta.guest_rip,
+        guest_rsp: meta.guest_rsp,
+        code_base: meta.code_base,
+        code_len: meta.code_len,
+        exit_reason: meta.exit_reason,
+        exit_qualification: meta.exit_qualification,
+        exit_guest_rip: meta.exit_guest_rip,
+        guest_stack_bytes: GUEST_STACK_BYTES as u64,
+        guest_page_bytes: PAGE_SIZE_4K as u64,
+    };
+
+    let total = core::mem::size_of::<Vm1SnapshotHeader>()
+        + (7 * PAGE_SIZE_4K)
+        + GUEST_STACK_BYTES
+        + GUEST_CODE_WINDOW_BYTES;
+    let mut out = Vec::with_capacity(total);
+    push_bytes(
+        &mut out,
+        unsafe {
+            core::slice::from_raw_parts(
+                (&header as *const Vm1SnapshotHeader).cast::<u8>(),
+                core::mem::size_of::<Vm1SnapshotHeader>(),
+            )
+        },
+    );
+    unsafe {
+        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_PML4.0));
+        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_LOW_PDPT.0));
+        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_LOW_PD.0));
+        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_STACK_PT.0));
+        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_HIGH_PDPT.0));
+        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_HIGH_PD.0));
+        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_CODE_PT.0));
+        push_bytes(
+            &mut out,
+            core::slice::from_raw_parts(
+                core::ptr::addr_of!(VM1_GUEST_STACK.0).cast::<u8>(),
+                GUEST_STACK_BYTES,
+            ),
+        );
+        push_bytes(
+            &mut out,
+            core::slice::from_raw_parts(meta.code_base as *const u8, GUEST_CODE_WINDOW_BYTES),
+        );
+    }
+    Ok(out)
+}
+
+fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(bytes);
+}
+
+unsafe fn push_guest_page(out: &mut Vec<u8>, page: *const [u64; 512]) {
+    push_bytes(out, core::slice::from_raw_parts(page.cast::<u8>(), PAGE_SIZE_4K));
 }
 
 fn vmwrite(field: u64, val: u64) -> Result<(), &'static str> {
@@ -1206,13 +1699,15 @@ fn tss_base_from_gdt(gdt_base: u64, tr_sel: u16) -> Option<u64> {
 
 fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
     unsafe {
-        let entered_ptr = core::ptr::addr_of_mut!(out.entered);
-        let fail_ptr = core::ptr::addr_of_mut!(out.launch_failed);
-        let reason_ptr = core::ptr::addr_of_mut!(out.exit_reason);
-        let qual_ptr = core::ptr::addr_of_mut!(out.exit_qualification);
-        let guest_rip_ptr = core::ptr::addr_of_mut!(out.guest_rip);
-        let instr_ptr = core::ptr::addr_of_mut!(out.instr_err);
+        VMX_WRAPPER_RESULT = LaunchResult::default();
         core::arch::asm!(
+            // Preserve the host callee-saved GPR set across guest execution.
+            "push rbx",
+            "push rbp",
+            "push r12",
+            "push r13",
+            "push r14",
+            "push r15",
             // Program host return state late so HOST_RIP can use a local label.
             "mov rax, rsp",
             "mov rcx, {host_rsp_field}",
@@ -1223,13 +1718,14 @@ fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
 
             "vmlaunch",
             "setna al",
-            "mov byte ptr [{fail_ptr}], al",
+            "lea r11, [rip + {result_base}]",
+            "mov byte ptr [r11 + {launch_failed_off}], al",
             "cmp al, 0",
             "je 4f",
             // VM-instruction failure path.
             "mov rcx, {vm_instr_err_field}",
             "vmread rax, rcx",
-            "mov [{instr_ptr}], rax",
+            "mov [r11 + {instr_err_off}], rax",
             "jmp 3f",
 
             "4:",
@@ -1237,45 +1733,57 @@ fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
 
             // VM-exit landing path.
             "2:",
-            "mov byte ptr [{entered_ptr}], 1",
+            "lea r11, [rip + {result_base}]",
+            "mov byte ptr [r11 + {entered_off}], 1",
             "mov rcx, {exit_reason_field}",
             "vmread rax, rcx",
-            "mov [{reason_ptr}], rax",
+            "mov [r11 + {exit_reason_off}], rax",
             "mov rcx, {exit_qual_field}",
             "vmread rax, rcx",
-            "mov [{qual_ptr}], rax",
+            "mov [r11 + {exit_qual_off}], rax",
             "mov rcx, {guest_rip_field}",
             "vmread rax, rcx",
-            "mov [{guest_rip_ptr}], rax",
+            "mov [r11 + {guest_rip_off}], rax",
             "3:",
+            "cld",
+            "pop r15",
+            "pop r14",
+            "pop r13",
+            "pop r12",
+            "pop rbp",
+            "pop rbx",
             host_rsp_field = const VMCS_HOST_RSP,
             host_rip_field = const VMCS_HOST_RIP,
             vm_instr_err_field = const VMCS_VM_INSTRUCTION_ERROR,
             exit_reason_field = const VMCS_EXIT_REASON,
             exit_qual_field = const VMCS_EXIT_QUALIFICATION,
             guest_rip_field = const VMCS_VMEXIT_GUEST_RIP,
-            entered_ptr = in(reg) entered_ptr,
-            fail_ptr = in(reg) fail_ptr,
-            reason_ptr = in(reg) reason_ptr,
-            qual_ptr = in(reg) qual_ptr,
-            guest_rip_ptr = in(reg) guest_rip_ptr,
-            instr_ptr = in(reg) instr_ptr,
+            result_base = sym VMX_WRAPPER_RESULT,
+            entered_off = const core::mem::offset_of!(LaunchResult, entered),
+            launch_failed_off = const core::mem::offset_of!(LaunchResult, launch_failed),
+            exit_reason_off = const core::mem::offset_of!(LaunchResult, exit_reason),
+            exit_qual_off = const core::mem::offset_of!(LaunchResult, exit_qualification),
+            guest_rip_off = const core::mem::offset_of!(LaunchResult, guest_rip),
+            instr_err_off = const core::mem::offset_of!(LaunchResult, instr_err),
             out("rax") _,
             out("rcx") _,
-            options(preserves_flags),
+            out("r11") _,
+            clobber_abi("sysv64"),
         );
+        *out = VMX_WRAPPER_RESULT;
     }
 }
 
 fn vmresume_once_wrapper(out: &mut LaunchResult) {
     unsafe {
-        let entered_ptr = core::ptr::addr_of_mut!(out.entered);
-        let fail_ptr = core::ptr::addr_of_mut!(out.launch_failed);
-        let reason_ptr = core::ptr::addr_of_mut!(out.exit_reason);
-        let qual_ptr = core::ptr::addr_of_mut!(out.exit_qualification);
-        let guest_rip_ptr = core::ptr::addr_of_mut!(out.guest_rip);
-        let instr_ptr = core::ptr::addr_of_mut!(out.instr_err);
+        VMX_WRAPPER_RESULT = LaunchResult::default();
         core::arch::asm!(
+            "push rbx",
+            "push rbp",
+            "push r12",
+            "push r13",
+            "push r14",
+            "push r15",
             // Refresh host return state so VM-exit lands in this wrapper.
             "mov rax, rsp",
             "mov rcx, {host_rsp_field}",
@@ -1286,45 +1794,57 @@ fn vmresume_once_wrapper(out: &mut LaunchResult) {
 
             "vmresume",
             "setna al",
-            "mov byte ptr [{fail_ptr}], al",
+            "lea r11, [rip + {result_base}]",
+            "mov byte ptr [r11 + {launch_failed_off}], al",
             "cmp al, 0",
             "je 4f",
             "mov rcx, {vm_instr_err_field}",
             "vmread rax, rcx",
-            "mov [{instr_ptr}], rax",
+            "mov [r11 + {instr_err_off}], rax",
             "jmp 3f",
 
             "4:",
             "jmp 3f",
 
             "2:",
-            "mov byte ptr [{entered_ptr}], 1",
+            "lea r11, [rip + {result_base}]",
+            "mov byte ptr [r11 + {entered_off}], 1",
             "mov rcx, {exit_reason_field}",
             "vmread rax, rcx",
-            "mov [{reason_ptr}], rax",
+            "mov [r11 + {exit_reason_off}], rax",
             "mov rcx, {exit_qual_field}",
             "vmread rax, rcx",
-            "mov [{qual_ptr}], rax",
+            "mov [r11 + {exit_qual_off}], rax",
             "mov rcx, {guest_rip_field}",
             "vmread rax, rcx",
-            "mov [{guest_rip_ptr}], rax",
+            "mov [r11 + {guest_rip_off}], rax",
             "3:",
+            "cld",
+            "pop r15",
+            "pop r14",
+            "pop r13",
+            "pop r12",
+            "pop rbp",
+            "pop rbx",
             host_rsp_field = const VMCS_HOST_RSP,
             host_rip_field = const VMCS_HOST_RIP,
             vm_instr_err_field = const VMCS_VM_INSTRUCTION_ERROR,
             exit_reason_field = const VMCS_EXIT_REASON,
             exit_qual_field = const VMCS_EXIT_QUALIFICATION,
             guest_rip_field = const VMCS_VMEXIT_GUEST_RIP,
-            entered_ptr = in(reg) entered_ptr,
-            fail_ptr = in(reg) fail_ptr,
-            reason_ptr = in(reg) reason_ptr,
-            qual_ptr = in(reg) qual_ptr,
-            guest_rip_ptr = in(reg) guest_rip_ptr,
-            instr_ptr = in(reg) instr_ptr,
+            result_base = sym VMX_WRAPPER_RESULT,
+            entered_off = const core::mem::offset_of!(LaunchResult, entered),
+            launch_failed_off = const core::mem::offset_of!(LaunchResult, launch_failed),
+            exit_reason_off = const core::mem::offset_of!(LaunchResult, exit_reason),
+            exit_qual_off = const core::mem::offset_of!(LaunchResult, exit_qualification),
+            guest_rip_off = const core::mem::offset_of!(LaunchResult, guest_rip),
+            instr_err_off = const core::mem::offset_of!(LaunchResult, instr_err),
             out("rax") _,
             out("rcx") _,
-            options(preserves_flags),
+            out("r11") _,
+            clobber_abi("sysv64"),
         );
+        *out = VMX_WRAPPER_RESULT;
     }
 }
 
