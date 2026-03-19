@@ -29,22 +29,9 @@ pub mod vcabi;
 pub mod vclock;
 pub mod vfetch;
 pub mod vfs;
-pub mod vgeom {
-    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    pub struct Point2i {
-        pub x: i16,
-        pub y: i16,
-    }
-
-    impl Point2i {
-        pub const fn new(x: i16, y: i16) -> Self {
-            Self { x, y }
-        }
-    }
-}
-
 pub mod vgfx;
 pub mod vinput;
 pub mod vnet;
+pub mod vui2;
 pub mod vshell;
 pub mod vsys;

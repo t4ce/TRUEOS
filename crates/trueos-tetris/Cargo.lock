@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "trueos-sys"
+version = "0.1.0"
+
+[[package]]
 name = "trueos-tetris"
 version = "0.1.0"
 dependencies = [
@@ -12,3 +16,6 @@ dependencies = [
 [[package]]
 name = "trueos-v"
 version = "0.1.0"
+dependencies = [
+ "trueos-sys",
+]
