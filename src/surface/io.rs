@@ -1011,6 +1011,9 @@ pub mod cabi {
 
     #[embassy_executor::task]
     pub async fn texture_upload_service_task() {
+        let hz = embassy_time_driver::TICK_HZ.max(1);
+        let ms = embassy_time_driver::now().saturating_mul(1000) / hz;
+        crate::log!("boot-probe: texture-upload task start ms={}\n", ms);
         texture_upload_service_inner().await;
     }
 

@@ -46,7 +46,7 @@ const RUNNING_ANIMATION_TICK_MS: u64 = 100;
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LineSource {
     User,
     System,
@@ -175,6 +175,14 @@ impl<'a> AlignedWriter<'a> {
             let row = SCROLL_TOP_ROW + idx;
             self.transcript_line_at(row, entry.source, entry.text.as_str());
         }
+        self.io.write_str(ecma48::RESTORE_CURSOR);
+    }
+
+    fn push_transcript_line(&self, entry: &TranscriptEntry) {
+        self.io.write_str(ecma48::SAVE_CURSOR);
+        self.move_to(SCROLL_TOP_ROW, 1);
+        self.io.write_str("\x1b[L");
+        self.transcript_line_at(SCROLL_TOP_ROW, entry.source, entry.text.as_str());
         self.io.write_str(ecma48::RESTORE_CURSOR);
     }
 
@@ -573,6 +581,23 @@ fn current_transcript_for_task(io: &'static dyn ShellBackend2) -> VecDeque<Trans
     matrix::active_lines(output_target_for_backend(io))
 }
 
+fn appended_transcript_line<'a>(
+    prev: &VecDeque<TranscriptEntry>,
+    next: &'a VecDeque<TranscriptEntry>,
+) -> Option<&'a TranscriptEntry> {
+    if next.len() != prev.len().saturating_add(1) {
+        return None;
+    }
+
+    for (prev_entry, next_entry) in prev.iter().zip(next.iter()) {
+        if prev_entry.source != next_entry.source || prev_entry.text != next_entry.text {
+            return None;
+        }
+    }
+
+    next.back()
+}
+
 fn record_user_line_for_active_slot(io: &'static dyn ShellBackend2, submitted: &str) {
     let _ =
         matrix::record_line_for_output(output_target_for_backend(io), LineSource::User, submitted);
@@ -911,7 +936,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         let matrix_revision = matrix::revision();
         if matrix_revision != last_matrix_revision {
             last_matrix_revision = matrix_revision;
-            transcript = current_transcript_for_task(io);
+            let next_transcript = current_transcript_for_task(io);
             redraw_status_preserving_cursor(
                 &out,
                 output_mask,
@@ -922,7 +947,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 cmd_status_text.as_deref(),
                 running_go2_phase,
             );
-            out.render_transcript(&transcript);
+            if let Some(entry) = appended_transcript_line(&transcript, &next_transcript) {
+                out.push_transcript_line(entry);
+            } else {
+                out.render_transcript(&next_transcript);
+            }
+            transcript = next_transcript;
         }
 
         if matrix::has_running_slots() {

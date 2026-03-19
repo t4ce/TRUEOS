@@ -267,12 +267,19 @@ struct Ui2State {
     scroll_pan_drag: Ui2WindowScrollPanDrag,
     windows: Vec<Ui2Window>,
     loadscreen_end_signaled: bool,
+    first_compose_signaled: bool,
 }
 
 static UI2_STATE: Once<Mutex<Ui2State>> = Once::new();
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_DIRTY: AtomicBool = AtomicBool::new(false);
 static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+fn boot_probe_ms() -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    embassy_time_driver::now().saturating_mul(1000) / hz
+}
 
 fn init_state() -> &'static Mutex<Ui2State> {
     UI2_STATE.call_once(|| {
@@ -303,47 +310,8 @@ fn init_state() -> &'static Mutex<Ui2State> {
             scroll_pan_drag: Ui2WindowScrollPanDrag::default(),
             windows: Vec::new(),
             loadscreen_end_signaled: false,
+            first_compose_signaled: false,
         };
-
-        let browser_id = alloc_window(
-            &mut state,
-            Ui2WindowKind::HostedBrowser,
-            "True Surfer",
-            Ui2Rect::new(
-                72.0,
-                56.0,
-                ((view_w as f32) - 144.0).max(360.0),
-                (view_h as f32) - 112.0,
-            ),
-            10,
-            255,
-        );
-        UI2_BROWSER_WINDOW_ID.store(browser_id, Ordering::Release);
-        if let Some(window) = window_mut(&mut state, browser_id) {
-            window.horizontal_scrollbar_side = Ui2WindowHorizontalScrollbarSide::Top;
-        }
-        let _ = hosted_bind_window(PRIMARY_HOSTED_CONTENT_ID, browser_id);
-
-        if crate::v::spawn_service::secondary_browser_enabled() {
-            let browser2_id = alloc_window(
-                &mut state,
-                Ui2WindowKind::HostedBrowser,
-                "Browser 2",
-                Ui2Rect::new(
-                    (view_w as f32 * 0.58).max(420.0),
-                    92.0,
-                    ((view_w as f32) * 0.32).max(300.0),
-                    ((view_h as f32) * 0.56).max(260.0),
-                ),
-                12,
-                255,
-            );
-            if let Some(window) = window_mut(&mut state, browser2_id) {
-                window.browser_instance_id = PRIMARY_HOSTED_CONTENT_ID + 1;
-                window.bottom_scrollbar_visible = false;
-            }
-            let _ = hosted_bind_window(PRIMARY_HOSTED_CONTENT_ID + 1, browser2_id);
-        }
 
         refresh_all_window_hit_entries(&mut state);
 
@@ -1648,10 +1616,88 @@ fn queue_browser_window_viewport(content_id: HostedContentId, content: Ui2Rect) 
     )
 }
 
-fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui2Rect) -> bool {
-    let snapshot = browser_surface_state_for_window(window);
+#[inline]
+fn texture_is_drawable(tex_id: u32) -> bool {
+    const ASYNC_TEX_STATUS_READY: i32 = 2;
+    tex_id != 0
+        && crate::surface::io::cabi::trueos_cabi_gfx_texture_status(tex_id) == ASYNC_TEX_STATUS_READY
+}
+
+fn hosted_browser_has_drawable_content(snapshot: &UiHostedSurfaceState) -> bool {
     if snapshot.regions.is_empty() || snapshot.viewport_width == 0 || snapshot.viewport_height == 0
     {
+        return false;
+    }
+    snapshot.regions.iter().any(|region| {
+        region.tex_id != 0
+            && region.width != 0
+            && region.height != 0
+            && texture_is_drawable(region.tex_id)
+    })
+}
+
+fn draw_window_content_placeholder(
+    state: &Ui2State,
+    window: &Ui2Window,
+    content: Ui2Rect,
+    headline: &[u8],
+    subline: &[u8],
+) {
+    let panel_rgba = modulate_rgba_alpha((0xF1, 0xF4, 0xF7, 0xFF), window.alpha);
+    let stripe_rgba = modulate_rgba_alpha((0xC6, 0xD1, 0xDB, 0xFF), window.alpha);
+    let headline_alpha = modulate_alpha(0xD8, window.alpha);
+    let subline_alpha = modulate_alpha(0x9A, window.alpha);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        content.x,
+        content.y,
+        content.w,
+        content.h,
+        panel_rgba,
+        state.view_w,
+        state.view_h,
+    );
+    let stripe_w = libm::fminf(content.w, 96.0);
+    let stripe_h = libm::fminf(content.h, 3.0);
+    let stripe_x = content.x + ((content.w - stripe_w) * 0.5);
+    let stripe_y = content.y + 28.0;
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        stripe_x,
+        stripe_y,
+        stripe_w,
+        stripe_h,
+        stripe_rgba,
+        state.view_w,
+        state.view_h,
+    );
+
+    let headline_w = crate::gfx::text::atlas_text_width_px(headline);
+    let headline_x = content.x + ((content.w - headline_w) * 0.5).max(10.0);
+    let headline_y = content.y + 40.0;
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(
+        headline,
+        headline_x,
+        headline_y,
+        state.view_w,
+        state.view_h,
+        headline_alpha,
+    );
+
+    let subline_w = crate::gfx::text::atlas_text_width_px(subline);
+    let subline_x = content.x + ((content.w - subline_w) * 0.5).max(10.0);
+    let subline_y = headline_y + 20.0;
+    crate::gfx::text::draw_atlas_text_in_frame_alpha(
+        subline,
+        subline_x,
+        subline_y,
+        state.view_w,
+        state.view_h,
+        subline_alpha,
+    );
+}
+
+fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui2Rect) -> bool {
+    let snapshot = browser_surface_state_for_window(window);
+    if !hosted_browser_has_drawable_content(&snapshot) {
         return false;
     }
 
@@ -1675,7 +1721,11 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
 
     for region in &snapshot.regions {
         let tex_id = region.tex_id;
-        if tex_id == 0 || region.width == 0 || region.height == 0 {
+        if tex_id == 0
+            || region.width == 0
+            || region.height == 0
+            || !texture_is_drawable(tex_id)
+        {
             continue;
         }
         let doc_y = region.doc_y;
@@ -2014,22 +2064,41 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                 if draw_browser_window_content(state, window, content) {
                     return;
                 }
+                draw_window_content_placeholder(
+                    state,
+                    window,
+                    content,
+                    b"Starting Browser",
+                    b"Waiting for first frame",
+                );
+                return;
             }
         }
         Ui2WindowKind::HostedSurface => {
             if let Some(content) = content_rect
-                && draw_texture_rect_no_present(
-                    window.content_tex_id,
-                    content.x,
-                    content.y,
-                    content.w,
-                    content.h,
-                    state.view_w,
-                    state.view_h,
-                    window.content_tex_blend,
-                    window.alpha,
-                )
             {
+                if texture_is_drawable(window.content_tex_id)
+                    && draw_texture_rect_no_present(
+                        window.content_tex_id,
+                        content.x,
+                        content.y,
+                        content.w,
+                        content.h,
+                        state.view_w,
+                        state.view_h,
+                        window.content_tex_blend,
+                        window.alpha,
+                    )
+                {
+                    return;
+                }
+                draw_window_content_placeholder(
+                    state,
+                    window,
+                    content,
+                    b"Preparing Window",
+                    b"Waiting for texture upload",
+                );
                 return;
             }
         }
@@ -2124,6 +2193,10 @@ fn compose_windows(state: &mut Ui2State) {
         crate::v::readiness::set(crate::v::readiness::LOADSCREEN_END);
         state.loadscreen_end_signaled = true;
     }
+    if !state.first_compose_signaled {
+        crate::v::readiness::set(crate::v::readiness::UI2_READY);
+        state.first_compose_signaled = true;
+    }
 }
 
 #[embassy_executor::task]
@@ -2133,9 +2206,18 @@ pub async fn ui2_task() {
         return;
     }
 
+    crate::log!("boot-probe: ui2 task start ms={}\n", boot_probe_ms());
     crate::gfx::init(crate::limine::framebuffer_response());
     init_state();
     request_full_recompose("boot");
+    if let Some(state_lock) = UI2_STATE.get() {
+        let mut state = state_lock.lock();
+        if !state.loadscreen_end_signaled {
+            crate::v::readiness::set(crate::v::readiness::LOADSCREEN_END);
+            state.loadscreen_end_signaled = true;
+            crate::log!("boot-probe: ui2 signaled loadscreen_end ms={}\n", boot_probe_ms());
+        }
+    }
     crate::log!("ui2: boot window manager\n");
     let mut last_browser_surface_seq = 0u32;
     let mut loop_seq = 0u32;
@@ -2181,7 +2263,13 @@ pub async fn ui2_task() {
             if loop_seq <= 4 {
                 crate::log!("ui2: compose seq={} start\n", loop_seq);
             }
+            if state.compose_seq == 0 {
+                crate::log!("boot-probe: ui2 first compose begin ms={}\n", boot_probe_ms());
+            }
             compose_windows(&mut state);
+            if state.first_compose_signaled && state.compose_seq == 1 {
+                crate::log!("boot-probe: ui2 ready ms={}\n", boot_probe_ms());
+            }
             if loop_seq <= 4 {
                 crate::log!("ui2: compose seq={} done\n", loop_seq);
             }
