@@ -49,6 +49,8 @@ const UI2_WINDOW_RESIZE_LEFT: u32 = 1 << 0;
 const UI2_WINDOW_RESIZE_TOP: u32 = 1 << 1;
 const UI2_WINDOW_RESIZE_RIGHT: u32 = 1 << 2;
 const UI2_WINDOW_RESIZE_BOTTOM: u32 = 1 << 3;
+const UI2_STATIC_BROWSER_VIEWPORT_W: u32 = 512;
+const UI2_STATIC_BROWSER_VIEWPORT_H: u32 = 512;
 
 #[inline]
 const fn ui2_window_min_extent() -> f32 {
@@ -407,7 +409,20 @@ fn window_browser_instance_id(window: &Ui2Window) -> u32 {
 }
 
 fn browser_surface_state_for_window(window: &Ui2Window) -> UiHostedSurfaceState {
-    hosted_surface_state(window_browser_instance_id(window))
+    let mut snapshot = hosted_surface_state(window_browser_instance_id(window));
+    if snapshot.viewport_width == 0 {
+        snapshot.viewport_width = UI2_STATIC_BROWSER_VIEWPORT_W;
+    }
+    if snapshot.viewport_height == 0 {
+        snapshot.viewport_height = UI2_STATIC_BROWSER_VIEWPORT_H;
+    }
+    if snapshot.content_width == 0 {
+        snapshot.content_width = snapshot.viewport_width;
+    }
+    if snapshot.content_height == 0 {
+        snapshot.content_height = snapshot.viewport_height;
+    }
+    snapshot
 }
 
 fn hosted_browser_scroll_max(snapshot: &UiHostedSurfaceState) -> u32 {
@@ -1782,8 +1797,9 @@ fn log_browser_surface_updates(state: &mut Ui2State) {
         }
         let snapshot = browser_surface_state_for_window(window);
         if let Some(content) = window_content_rect(state, window) {
-            let want_w = round_to_u32(content.w, 1);
-            let want_h = round_to_u32(content.h, 1);
+            let _ = content;
+            let want_w = UI2_STATIC_BROWSER_VIEWPORT_W;
+            let want_h = UI2_STATIC_BROWSER_VIEWPORT_H;
             if snapshot.viewport_width != want_w || snapshot.viewport_height != want_h {
                 let _ = note_window_viewport_sync_needed(state, window.id);
                 crate::log!(
