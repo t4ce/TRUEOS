@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
@@ -41,6 +41,32 @@ impl Default for CabiNetFetchBytesResult {
 static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult>> =
     Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_WAIT: WaitQueue = WaitQueue::new();
+static CABI_NET_FETCH_WAIT_MODE_LOGGED: AtomicU8 = AtomicU8::new(0);
+
+#[inline]
+fn wait_on_net_fetch_queue_blocking(timeout_ms: u64) -> bool {
+    let ready = crate::v::readiness::is_set(
+        crate::v::readiness::NET_CONFIGURED | crate::v::readiness::TLS_SOCKET_SERVICE_READY,
+    );
+    if ready {
+        if CABI_NET_FETCH_WAIT_MODE_LOGGED
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            crate::log!("net-fetch-wait: mode=parked\n");
+        }
+        return CABI_NET_FETCH_WAIT.wait_for_event_blocking_parked(timeout_ms);
+    }
+
+    // Early boot and degraded bring-up still fall back to the conservative polling wait.
+    if CABI_NET_FETCH_WAIT_MODE_LOGGED
+        .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        crate::log!("net-fetch-wait: mode=spin\n");
+    }
+    CABI_NET_FETCH_WAIT.wait_for_event_blocking(timeout_ms)
+}
 
 // --- keep-alive pool (per host) ---
 
@@ -4430,7 +4456,7 @@ pub extern "C" fn trueos_cabi_net_fetch_bytes_wait(op_id: u32, timeout_ms: u64) 
         }
         let remain = timeout - elapsed;
         let step = core::cmp::min(remain, EmbassyDuration::from_millis(100));
-        let _ = CABI_NET_FETCH_WAIT.wait_for_event_blocking(step.as_millis() as u64);
+        let _ = wait_on_net_fetch_queue_blocking(step.as_millis() as u64);
     }
 }
 
@@ -4465,6 +4491,6 @@ pub extern "C" fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32
         }
         let remain = timeout - elapsed;
         let step = core::cmp::min(remain, EmbassyDuration::from_millis(100));
-        let _ = CABI_NET_FETCH_WAIT.wait_for_event_blocking(step.as_millis() as u64);
+        let _ = wait_on_net_fetch_queue_blocking(step.as_millis() as u64);
     }
 }

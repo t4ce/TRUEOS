@@ -305,12 +305,25 @@ async fn ap_heartbeat_task() {
 pub unsafe fn enable_sse() {
     let mut cr0 = Cr0::read();
     cr0.remove(Cr0Flags::EMULATE_COPROCESSOR);
-    cr0.insert(Cr0Flags::MONITOR_COPROCESSOR);
+    cr0.remove(Cr0Flags::TASK_SWITCHED);
+    cr0.insert(
+        Cr0Flags::MONITOR_COPROCESSOR | Cr0Flags::NUMERIC_ERROR,
+    );
     Cr0::write(cr0);
 
     let mut cr4 = Cr4::read();
     cr4.insert(Cr4Flags::OSFXSR | Cr4Flags::OSXMMEXCPT_ENABLE);
     Cr4::write(cr4);
+
+    // Reset the x87 and SSE control state so newly started cores begin from a
+    // known-good environment before any C/Rust/QuickJS float code runs.
+    core::arch::asm!("fninit", options(nostack, preserves_flags));
+    let mxcsr: u32 = 0x1F80;
+    core::arch::asm!(
+        "ldmxcsr [{mxcsr_ptr}]",
+        mxcsr_ptr = in(reg) &mxcsr,
+        options(nostack, preserves_flags, readonly),
+    );
 }
 
 #[inline(always)]

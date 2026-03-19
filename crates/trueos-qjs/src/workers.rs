@@ -45,6 +45,8 @@ static LOGGED_WORKER_API_USE: AtomicBool = AtomicBool::new(false);
 
 // Slots 0 and 1 are reserved by the kernel as critical lanes (BSP + UI2/cursor/HID AP).
 const FIRST_DISPOSABLE_SLOT: u32 = 2;
+const WORKER_TASK_POOL: usize = 32;
+const WORKER_TEARDOWN_WAIT_MS: u64 = 50;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum SpawnPolicy {
@@ -158,6 +160,17 @@ pub fn pick_background_spawner() -> Option<embassy_executor::SendSpawner> {
     pick_spawner_with_policy(SpawnPolicy::AnyNonCritical).map(|(_, _, spawner)| spawner)
 }
 
+pub fn background_worker_slots() -> Vec<u32> {
+    let map = CORE_SPAWNERS.lock();
+    let mut out: Vec<u32> = map
+        .keys()
+        .copied()
+        .filter(|slot| *slot >= FIRST_DISPOSABLE_SLOT)
+        .collect();
+    out.sort_unstable();
+    out
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CtxRole {
     Main,
@@ -185,6 +198,14 @@ where
 }
 
 pub fn spawn_eval(code_utf8: &[u8]) -> Result<u32, i32> {
+    spawn_eval_on_slot_inner(None, code_utf8)
+}
+
+pub fn spawn_eval_on_slot(cpu_slot: u32, code_utf8: &[u8]) -> Result<u32, i32> {
+    spawn_eval_on_slot_inner(Some(cpu_slot), code_utf8)
+}
+
+fn spawn_eval_on_slot_inner(cpu_slot: Option<u32>, code_utf8: &[u8]) -> Result<u32, i32> {
     if code_utf8.is_empty() {
         return Err(-2);
     }
@@ -198,7 +219,20 @@ pub fn spawn_eval(code_utf8: &[u8]) -> Result<u32, i32> {
         log_str("qjs-worker: Worker API path used; worker spawn requested\n");
     }
 
-    let (slot, kind, spawner) = pick_spawner_with_policy(SpawnPolicy::AnyNonCritical).ok_or(-2)?;
+    let (slot, kind, spawner) = if let Some(slot) = cpu_slot {
+        if slot < FIRST_DISPOSABLE_SLOT {
+            return Err(-2);
+        }
+        let spawner = CORE_SPAWNERS.lock().get(&slot).cloned().ok_or(-2)?;
+        let kind = CORE_KINDS
+            .lock()
+            .get(&slot)
+            .copied()
+            .unwrap_or(CORE_KIND_UNKNOWN);
+        (slot, kind, spawner)
+    } else {
+        pick_spawner_with_policy(SpawnPolicy::AnyNonCritical).ok_or(-2)?
+    };
     log_str(&format!(
         "qjs-worker: worker#{} created; scheduled slot={} kind={}\n",
         worker_id,
@@ -242,6 +276,16 @@ pub fn post_to_parent(worker_id: u32, msg: &[u8]) -> Result<(), i32> {
     })
     .ok_or(-2)?;
     Ok(())
+}
+
+pub fn take_parent_message(worker_id: u32) -> Option<Vec<u8>> {
+    worker_state_mut(worker_id, |st| st.to_parent.pop_front()).flatten()
+}
+
+pub fn worker_exited(worker_id: u32) -> bool {
+    let map = WORKERS.lock();
+    map.get(&worker_id)
+        .is_some_and(|st| st.exited.load(Ordering::Acquire))
 }
 
 pub fn has_pending_for_ctx(ctx: *mut qjs::JSContext) -> bool {
@@ -417,7 +461,7 @@ fn mark_exited(worker_id: u32) {
     });
 }
 
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = WORKER_TASK_POOL)]
 async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
     log_str(&format!(
         "qjs-worker: worker#{} executor start slot={} kind={}\n",
@@ -425,6 +469,7 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
         scheduled_slot,
         core_kind_name(scheduled_kind)
     ));
+    let _ = post_to_parent(worker_id, b"{\"ok\":1,\"dbg\":\"worker-rust-task-start\"}");
 
     // Each worker owns its own QuickJS VM.
     let Some(vm) = (unsafe { qjs::vm::QjsVm::new_node() }) else {
@@ -433,6 +478,10 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
         mark_exited(worker_id);
         return;
     };
+    log_str(&format!(
+        "qjs-worker: worker#{} vm-created slot={}\n",
+        worker_id, scheduled_slot
+    ));
     let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
@@ -440,11 +489,27 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
 
     // Install per-context Node-ish globals.
     unsafe { qjs::node::install_globals(ctx) };
+    log_str(&format!(
+        "qjs-worker: worker#{} globals-installed slot={}\n",
+        worker_id, scheduled_slot
+    ));
+    let _ = post_to_parent(worker_id, b"{\"ok\":1,\"dbg\":\"worker-globals-installed\"}");
 
     // Evaluate the startup code as a module (MVP: eval string only).
     let startup = take_startup(worker_id).unwrap_or_else(|| b"".to_vec());
+    log_str(&format!(
+        "qjs-worker: worker#{} startup-bytes={} slot={}\n",
+        worker_id,
+        startup.len(),
+        scheduled_slot
+    ));
+    let _ = post_to_parent(worker_id, b"{\"ok\":1,\"dbg\":\"worker-startup-begin\"}");
     if !startup.is_empty() {
         let filename = b"<worker>\0";
+        log_str(&format!(
+            "qjs-worker: worker#{} startup-eval-begin slot={}\n",
+            worker_id, scheduled_slot
+        ));
         let v = unsafe {
             qjs::js_eval_bytes(
                 ctx,
@@ -460,7 +525,21 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
                 worker_id,
                 b"{\"ok\":0,\"dbg\":\"worker-startup-eval-exception\"}",
             );
+            unsafe { qjs::js_free_value(ctx, v) };
+            let drained =
+                unsafe { qjs::vm::teardown_worker_context(rt, ctx, WORKER_TEARDOWN_WAIT_MS).await };
+            if !drained {
+                log_str("qjs-worker: teardown drain incomplete\n");
+            }
+            CTX_WORKER_ID.lock().remove(&(ctx as usize));
+            drop(vm);
+            mark_exited(worker_id);
+            return;
         } else {
+            log_str(&format!(
+                "qjs-worker: worker#{} startup-eval-ok slot={}\n",
+                worker_id, scheduled_slot
+            ));
             let _ = post_to_parent(worker_id, b"{\"ok\":1,\"dbg\":\"worker-startup-eval-ok\"}");
         }
         unsafe { qjs::js_free_value(ctx, v) };
@@ -494,12 +573,23 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
             break;
         }
 
+        let pending = unsafe { qjs::JS_IsJobPending(rt) > 0 }
+            || unsafe { qjs::async_ops::has_pending(ctx) }
+            || qjs::timers::has_pending(ctx)
+            || qjs::workers::has_pending_for_ctx(ctx);
+        if !progress && !pending {
+            break;
+        }
+
         if !progress {
             Timer::after(EmbassyDuration::from_millis(1)).await;
         }
     }
 
-    unsafe { drain_all_for_context(ctx) };
+    let drained = unsafe { qjs::vm::teardown_worker_context(rt, ctx, WORKER_TEARDOWN_WAIT_MS).await };
+    if !drained {
+        log_str("qjs-worker: teardown drain incomplete\n");
+    }
     CTX_WORKER_ID.lock().remove(&(ctx as usize));
     drop(vm);
     mark_exited(worker_id);

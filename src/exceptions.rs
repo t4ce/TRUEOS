@@ -3,6 +3,7 @@ use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use heapless::Vec;
+use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::control::Cr2;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::{instructions::hlt, instructions::interrupts};
@@ -15,9 +16,15 @@ fn idt() -> &'static InterruptDescriptorTable {
     IDT.call_once(|| {
         let mut idt = InterruptDescriptorTable::new();
         idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
+        idt.device_not_available
+            .set_handler_fn(device_not_available_handler);
         idt.general_protection_fault
             .set_handler_fn(general_protection_fault_handler);
         idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.x87_floating_point
+            .set_handler_fn(x87_floating_point_handler);
+        idt.simd_floating_point
+            .set_handler_fn(simd_floating_point_handler);
         idt.double_fault.set_handler_fn(double_fault_handler);
         idt
     })
@@ -70,6 +77,26 @@ fn halt_loop() -> ! {
     loop {
         hlt();
     }
+}
+
+fn log_fault_frame(label: &str, stack_frame: &InterruptStackFrame) {
+    dprintln!("\n=== {} ===", label);
+    dprintln!(
+        "RIP={:#x} CS={:#x}",
+        stack_frame.instruction_pointer.as_u64(),
+        stack_frame.code_segment.0
+    );
+    dprintln!(
+        "RSP={:#x} SS={:#x}",
+        stack_frame.stack_pointer.as_u64(),
+        stack_frame.stack_segment.0
+    );
+    dprintln!("RFLAGS={:#x}", stack_frame.cpu_flags.bits());
+    dprintln!(
+        "CPU: lapic={} cpu={}",
+        crate::percpu::this_cpu().lapic_id(),
+        crate::percpu::this_cpu().cpu_index()
+    );
 }
 
 #[inline]
@@ -171,19 +198,33 @@ extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFram
     enter_handler_or_halt();
     interrupts::disable();
 
-    dprintln!("\n=== #UD Invalid Opcode ===");
-    dprintln!(
-        "RIP={:#x} CS={:#x}",
-        stack_frame.instruction_pointer.as_u64(),
-        stack_frame.code_segment.0
-    );
-    dprintln!(
-        "RSP={:#x} SS={:#x}",
-        stack_frame.stack_pointer.as_u64(),
-        stack_frame.stack_segment.0
-    );
-    dprintln!("RFLAGS={:#x}", stack_frame.cpu_flags.bits());
+    log_fault_frame("#UD Invalid Opcode", &stack_frame);
 
+    halt_loop();
+}
+
+extern "x86-interrupt" fn device_not_available_handler(stack_frame: InterruptStackFrame) {
+    let mut cr0 = Cr0::read();
+    if cr0.contains(Cr0Flags::TASK_SWITCHED) {
+        cr0.remove(Cr0Flags::TASK_SWITCHED);
+        unsafe { Cr0::write(cr0) };
+
+        // Re-establish the default FP/SSE control state and continue.
+        unsafe {
+            core::arch::asm!("fninit", options(nostack, preserves_flags));
+            let mxcsr: u32 = 0x1F80;
+            core::arch::asm!(
+                "ldmxcsr [{mxcsr_ptr}]",
+                mxcsr_ptr = in(reg) &mxcsr,
+                options(nostack, preserves_flags, readonly),
+            );
+        }
+        return;
+    }
+
+    enter_handler_or_halt();
+    interrupts::disable();
+    log_fault_frame("#NM Device Not Available", &stack_frame);
     halt_loop();
 }
 
@@ -196,17 +237,7 @@ extern "x86-interrupt" fn general_protection_fault_handler(
 
     dprintln!("\n=== #GP General Protection Fault ===");
     dprintln!("error_code={:#x}", error_code);
-    dprintln!(
-        "RIP={:#x} CS={:#x}",
-        stack_frame.instruction_pointer.as_u64(),
-        stack_frame.code_segment.0
-    );
-    dprintln!(
-        "RSP={:#x} SS={:#x}",
-        stack_frame.stack_pointer.as_u64(),
-        stack_frame.stack_segment.0
-    );
-    dprintln!("RFLAGS={:#x}", stack_frame.cpu_flags.bits());
+    log_fault_frame("#GP General Protection Fault", &stack_frame);
 
     halt_loop();
 }
@@ -242,6 +273,20 @@ extern "x86-interrupt" fn page_fault_handler(
     }
     dump_stack_words(stack_frame.stack_pointer.as_u64() as usize, 16);
 
+    halt_loop();
+}
+
+extern "x86-interrupt" fn x87_floating_point_handler(stack_frame: InterruptStackFrame) {
+    enter_handler_or_halt();
+    interrupts::disable();
+    log_fault_frame("#MF x87 Floating-Point", &stack_frame);
+    halt_loop();
+}
+
+extern "x86-interrupt" fn simd_floating_point_handler(stack_frame: InterruptStackFrame) {
+    enter_handler_or_halt();
+    interrupts::disable();
+    log_fault_frame("#XM SIMD Floating-Point", &stack_frame);
     halt_loop();
 }
 

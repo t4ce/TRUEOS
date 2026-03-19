@@ -1,12 +1,23 @@
 #![no_std]
 
 use core::cmp::{max, min};
-use trueos_v::vgeom::Point2i as Point;
 use trueos_v::vled::Rgb8;
 
 pub mod shell;
 
 pub const MAX_PIECE_CELLS: usize = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Point {
+    x: i16,
+    y: i16,
+}
+
+impl Point {
+    const fn new(x: i16, y: i16) -> Self {
+        Self { x, y }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Block {
@@ -249,7 +260,7 @@ impl Piece {
         };
     }
 
-    pub fn cells(&self) -> [Point; MAX_PIECE_CELLS] {
+    pub(crate) fn cells(&self) -> [Point; MAX_PIECE_CELLS] {
         rotated_cells(self.kind, self.rotation)
     }
 

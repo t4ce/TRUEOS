@@ -301,3 +301,10 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
         }
     }
 }
+
+pub fn has_pending(ctx: *mut qjs::JSContext) -> bool {
+    if ctx.is_null() {
+        return false;
+    }
+    TIMERS.lock().iter().any(|t| t.ctx_owner == ctx)
+}
