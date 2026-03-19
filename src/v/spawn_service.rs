@@ -101,6 +101,7 @@ define_started_flags!(
     GFX_INTEL_TRIANGLE_DEMO_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
     CRABUSB_EVENT_PUMP_STARTED,
+    CRABUSB_AUDIO_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     UAC_EVENT_DRAIN_STARTED,
     UAC_SONG_STARTED,
@@ -617,6 +618,10 @@ fn spawn_crabusb_event_pump(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_event_pump_task()))
 }
 
+fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_audio_task()))
+}
+
 fn spawn_uac_song(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
         ap1_spawner.spawn(crate::usb::uac::song_task())
@@ -900,6 +905,12 @@ static TASKS: &[TaskSpec] = &[
         0,
         &CRABUSB_EVENT_PUMP_STARTED,
         spawn_crabusb_event_pump,
+    ),
+    TaskSpec::enabled(
+        "crabusb-audio",
+        0,
+        &CRABUSB_AUDIO_STARTED,
+        spawn_crabusb_audio,
     ),
     TaskSpec::disabled(
         "uac-event-drain",
