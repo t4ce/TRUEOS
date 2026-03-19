@@ -146,6 +146,7 @@ const HV_GDT_SEL_DATA: u16 = 0x10;
 const HV_GDT_SEL_TSS: u16 = 0x18;
 const HV_GDT_DESC_CODE64: u64 = 0x00AF_9B00_0000_FFFF;
 const HV_GDT_DESC_DATA64: u64 = 0x00AF_9300_0000_FFFF;
+const ELF64_HEADER_LEN: usize = 64;
 
 static VM1_RUNNING: AtomicBool = AtomicBool::new(false);
 static VM1_STARTING: AtomicBool = AtomicBool::new(false);
@@ -341,6 +342,20 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
     let guest = crate::limine::guest_kernel_bytes();
     let guest_len = guest.map(|b| b.len()).unwrap_or(0);
     hvlogf(format_args!("hv: vm1 lifecycle: guest bytes={}", guest_len));
+    if let Some(bytes) = guest {
+        if let Some(entry) = guest_kernel_elf_entry(bytes) {
+            hvlogf(format_args!(
+                "hv: vm1 reporting: guest elf entry=0x{:016X} vmx_guest_entry=0x{:016X}",
+                entry,
+                guest_launch_rip()
+            ));
+        } else {
+            hvlogf(format_args!(
+                "hv: vm1 reporting: guest bytes present but ELF entry parse failed; vmx_guest_entry=0x{:016X}",
+                guest_launch_rip()
+            ));
+        }
+    }
     hvlogf(format_args!(
         "hv: vm1 reporting: vmx preflight ok, stage=m1"
     ));
@@ -734,7 +749,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
             vmwrite(VMCS_HOST_IA32_EFER, efer)?;
             vmwrite(VMCS_HOST_IA32_PERF_GLOBAL_CTRL, perf_global)?;
 
-            let guest_rip = core::ptr::addr_of!(GUEST_CODE.0) as u64;
+            let guest_rip = guest_launch_rip();
             let guest_rsp = read_rsp();
             vmwrite(VMCS_GUEST_CR0, host_cr0)?;
             vmwrite(VMCS_GUEST_CR3, host_cr3.start_address().as_u64())?;
@@ -895,7 +910,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     vmwrite(VMCS_HOST_IA32_EFER, efer)?;
     vmwrite(VMCS_HOST_IA32_PERF_GLOBAL_CTRL, perf_global)?;
 
-    let guest_rip = core::ptr::addr_of!(GUEST_CODE.0) as u64;
+    let guest_rip = guest_launch_rip();
     let guest_rsp = read_rsp();
     vmwrite(VMCS_GUEST_CR0, host_cr0)?;
     vmwrite(VMCS_GUEST_CR3, host_cr3.start_address().as_u64())?;
@@ -1006,6 +1021,24 @@ fn build_ept_identity_4g() -> Result<u64, &'static str> {
         eptp
     ));
     Ok(eptp)
+}
+
+fn guest_launch_rip() -> u64 {
+    crate::trueos_vmx_guest_entry as usize as u64
+}
+
+fn guest_kernel_elf_entry(bytes: &[u8]) -> Option<u64> {
+    if bytes.len() < ELF64_HEADER_LEN {
+        return None;
+    }
+    if bytes.get(0..4) != Some(b"\x7fELF") {
+        return None;
+    }
+    if bytes.get(4).copied()? != 2 || bytes.get(5).copied()? != 1 {
+        return None;
+    }
+    let raw: [u8; 8] = bytes.get(24..32)?.try_into().ok()?;
+    Some(u64::from_le_bytes(raw))
 }
 
 fn adjust_vmx_ctrl(msr: u32, desired: u64) -> u64 {
