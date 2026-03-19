@@ -3,8 +3,6 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_executor::{SendSpawner, SpawnError, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use heapless::String as HString;
-
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.
 
 /// Central task orchestrator ("FSM spawn service").
@@ -91,6 +89,7 @@ define_started_flags!(
     GFX_VIRGL_CURSOR_OVERLAY_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     GFX_LOADSCREEN_STARTED,
+    BROWSER_NET_STARTED,
     BROWSER_PRIMARY_STARTUP_HTML_LOADER_STARTED,
     BROWSER_SECONDARY_STARTUP_ROUTE_STARTED,
     WEBGPU_BROWSER_PRIMARY_STARTED,
@@ -101,6 +100,7 @@ define_started_flags!(
     UI2_MANDELBROT_DEMO_STARTED,
     GFX_INTEL_TRIANGLE_DEMO_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
+    CRABUSB_EVENT_PUMP_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     UAC_EVENT_DRAIN_STARTED,
     UAC_SONG_STARTED,
@@ -468,56 +468,25 @@ fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
 #[embassy_executor::task]
 async fn browser_startup_html_loader_task(browser_instance_id: u32) {
     const STARTUP_URL: &str = "https://www.google.de";
-    const RETRY_MS: u64 = 2_000;
-    const HANDOFF_RETRY_MS: u64 = 100;
-
-    let source_url = String::from(STARTUP_URL);
-    let mut fetched_html: Option<String> = None;
-    let mut delivered = false;
-
-    loop {
-        if fetched_html.is_none() {
-            let mut url: HString<256> = HString::new();
-            if url.push_str(STARTUP_URL).is_err() {
-                crate::log!("browser-html-loader: startup url too long\n");
-                break;
-            }
-            match crate::tst_html::fetch_html_best_effort(url).await {
-                Ok(html) => {
-                    crate::log!(
-                        "browser-html-loader: fetched startup html browser_instance={} bytes={}\n",
-                        browser_instance_id,
-                        html.len()
-                    );
-                    fetched_html = Some(String::from(html.as_str()));
-                }
-                Err(err) => {
-                    crate::log!("browser-html-loader: fetch failed: {}\n", err);
-                    Timer::after(EmbassyDuration::from_millis(RETRY_MS)).await;
-                    continue;
-                }
-            }
-        }
-
-        if !delivered && let Some(html) = fetched_html.as_ref() {
-            if trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
-                browser_instance_id,
-                html.clone(),
-                Some(source_url.clone()),
-            ) {
-                crate::log!(
-                    "browser-html-loader: delivered startup html to browser_instance={}\n",
-                    browser_instance_id
-                );
-                delivered = true;
-            } else {
-                Timer::after(EmbassyDuration::from_millis(HANDOFF_RETRY_MS)).await;
-                continue;
-            }
-        }
-
-        Timer::after(EmbassyDuration::from_secs(60)).await;
+    let op_id = crate::v::browser_net::submit_navigation(browser_instance_id, STARTUP_URL);
+    if op_id == 0 {
+        crate::log!(
+            "browser-html-loader: failed to queue startup html browser_instance={}\n",
+            browser_instance_id
+        );
+        return;
     }
+    crate::log!(
+        "browser-html-loader: queued startup html browser_instance={} op={}\n",
+        browser_instance_id,
+        op_id
+    );
+}
+
+fn spawn_browser_net(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::v::browser_net::browser_net_task())
+    })
 }
 
 #[embassy_executor::task]
@@ -569,9 +538,8 @@ fn spawn_secondary_browser_startup_route(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_primary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
-    ensure_browser_window(PRIMARY_BROWSER_INSTANCE_ID);
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(trueos_qjs::browser_task::boot_browser(
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(trueos_qjs::browser_task::boot_browser(
             PRIMARY_BROWSER_INSTANCE_ID,
         ))
     })
@@ -581,9 +549,8 @@ fn spawn_secondary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
     if !secondary_browser_enabled() {
         return SpawnAttempt::Skipped;
     }
-    ensure_browser_window(SECONDARY_BROWSER_INSTANCE_ID);
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(trueos_qjs::browser_task::boot_browser(
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(trueos_qjs::browser_task::boot_browser(
             SECONDARY_BROWSER_INSTANCE_ID,
         ))
     })
@@ -644,6 +611,10 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_crabusb_bsp_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_bsp_service()))
+}
+
+fn spawn_crabusb_event_pump(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb::crabusb_event_pump_task()))
 }
 
 fn spawn_uac_song(spawner: Spawner) -> SpawnAttempt {
@@ -740,7 +711,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::v::readiness::NET_CONFIGURED
 const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
-const WEBGPU_BROWSER_READY: u32 = crate::v::readiness::GFX_BACKEND_READY;
+const WEBGPU_BROWSER_READY: u32 = crate::v::readiness::UI2_READY;
 
 static TASKS: &[TaskSpec] = &[
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
@@ -833,13 +804,14 @@ static TASKS: &[TaskSpec] = &[
         &GFX_LOADSCREEN_STARTED,
         spawn_gfx_loadscreen,
     ),
+    TaskSpec::enabled("browser-net", 0, &BROWSER_NET_STARTED, spawn_browser_net),
     TaskSpec::enabled(
         "gfx-texture-upload-service",
         crate::v::readiness::GFX_BACKEND_READY,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "browser-startup-html-loader-primary",
         crate::v::readiness::NET_CONFIGURED,
         &BROWSER_PRIMARY_STARTUP_HTML_LOADER_STARTED,
@@ -884,12 +856,12 @@ static TASKS: &[TaskSpec] = &[
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
-    TaskSpec::disabled(
-        "webgpu-browser-primary",
-        WEBGPU_BROWSER_READY,
-        &WEBGPU_BROWSER_PRIMARY_STARTED,
-        spawn_primary_webgpu_browser,
-    ),
+        TaskSpec::disabled(
+            "webgpu-browser-primary",
+            WEBGPU_BROWSER_READY,
+            &WEBGPU_BROWSER_PRIMARY_STARTED,
+            spawn_primary_webgpu_browser,
+        ),
     if ENABLE_BROWSER_2 {
         TaskSpec::disabled(
             "webgpu-browser-secondary",
@@ -922,6 +894,12 @@ static TASKS: &[TaskSpec] = &[
         0,
         &CRABUSB_BSP_SERVICE_STARTED,
         spawn_crabusb_bsp_service,
+    ),
+    TaskSpec::enabled(
+        "crabusb-event-pump",
+        0,
+        &CRABUSB_EVENT_PUMP_STARTED,
+        spawn_crabusb_event_pump,
     ),
     TaskSpec::disabled(
         "uac-event-drain",

@@ -16,6 +16,8 @@ unsafe extern "C" {
 }
 
 pub const PRIMARY_BROWSER_INSTANCE_ID: u32 = 1;
+const STATIC_BROWSER_VIEWPORT_W: u32 = 512;
+const STATIC_BROWSER_VIEWPORT_H: u32 = 512;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BrowserHostTarget {
@@ -1182,8 +1184,16 @@ unsafe fn install_globals(ctx: *mut qjs::JSContext, browser_instance_id: u32) ->
     init_src.push_str(
         r#"
 if (!G.window) G.window = G;
-if (typeof G.window.innerWidth !== 'number') G.window.innerWidth = 1280;
-if (typeof G.window.innerHeight !== 'number') G.window.innerHeight = 800;
+if (typeof G.window.innerWidth !== 'number') G.window.innerWidth = "#,
+    );
+    init_src.push_str(alloc::format!("{}", STATIC_BROWSER_VIEWPORT_W).as_str());
+    init_src.push_str(
+        r#";
+if (typeof G.window.innerHeight !== 'number') G.window.innerHeight = "#,
+    );
+    init_src.push_str(alloc::format!("{}", STATIC_BROWSER_VIEWPORT_H).as_str());
+    init_src.push_str(
+        r#";
 if (!G.__trueosBrowserViewport || typeof G.__trueosBrowserViewport !== 'object') {
     G.__trueosBrowserViewport = {
         width: G.window.innerWidth,

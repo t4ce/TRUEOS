@@ -20,7 +20,7 @@ const VM_STORE_REPL_PORT: u16 = 32123;
 const VM_STORE_REPL_CHUNK: usize = 1200;
 const VM_STORE_VM_ID: u8 = 0;
 const VM_STORE_BLOCK_SIZE: u32 = 512;
-const VM_STORE_RAMDISK_BYTES: u64 = 16 * 1024 * 1024;
+const VM_STORE_RAMDISK_BYTES: u64 = 64 * 1024 * 1024;
 const VM_STORE_QUEUE_CAP: usize = 8;
 const VM_STORE_PROBE_BYTES: &[u8] = b"trueos-hv-store-probe";
 

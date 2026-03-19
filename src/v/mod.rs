@@ -1,3 +1,4 @@
+pub mod browser_net;
 pub mod cursor;
 pub mod disc;
 pub mod fs;

@@ -25,6 +25,14 @@ fn js_null() -> qjs::JSValue {
 }
 
 #[inline]
+fn js_bool(v: bool) -> qjs::JSValue {
+    qjs::JSValue {
+        u: qjs::JSValueUnion { int32: if v { 1 } else { 0 } },
+        tag: qjs::JS_TAG_BOOL,
+    }
+}
+
+#[inline]
 unsafe fn js_to_i32(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option<i32> {
     if v.tag == qjs::JS_TAG_INT || v.tag == qjs::JS_TAG_BOOL {
         return Some(v.u.int32);
@@ -34,6 +42,128 @@ unsafe fn js_to_i32(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option<i3
         return None;
     }
     Some(out as i32)
+}
+
+#[inline]
+unsafe fn js_set_string_prop(ctx: *mut qjs::JSContext, obj: qjs::JSValue, key: &[u8], value: &str) {
+    let js = qjs::JS_NewStringLen(ctx, value.as_ptr() as *const c_char, value.len());
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, key.as_ptr() as *const c_char, js);
+}
+
+unsafe extern "C" fn trueos_browser_navigate_submit_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return js_int32(0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut url_len: usize = 0;
+    let url_c = qjs::JS_ToCStringLen2(ctx, &mut url_len as *mut usize, args[0], 0);
+    if url_c.is_null() {
+        return js_int32(0);
+    }
+    let url_bytes = core::slice::from_raw_parts(url_c as *const u8, url_len);
+    let url = match core::str::from_utf8(url_bytes) {
+        Ok(text) => text,
+        Err(_) => {
+            qjs::JS_FreeCString(ctx, url_c);
+            return js_int32(0);
+        }
+    };
+    let browser_instance_id = if argc >= 2 {
+        js_to_i32(ctx, args[1]).unwrap_or(1).max(0) as u32
+    } else {
+        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
+    };
+    let op_id = crate::v::browser_net::submit_navigation(browser_instance_id, url);
+    qjs::JS_FreeCString(ctx, url_c);
+    js_int32(op_id as i32)
+}
+
+unsafe extern "C" fn trueos_browser_navigate_status_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return js_null();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let op_id = js_to_i32(ctx, args[0]).unwrap_or(0).max(0) as u32;
+    let Some(status) = crate::v::browser_net::status(op_id) else {
+        return js_null();
+    };
+
+    let obj = qjs::JS_NewObject(ctx);
+    if obj.is_exception() {
+        return js_null();
+    }
+    let state = status.state.as_str();
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"opId\0".as_ptr() as *const c_char, js_int32(status.op_id as i32));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"browserInstanceId\0".as_ptr() as *const c_char,
+        js_int32(status.browser_instance_id as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"bytes\0".as_ptr() as *const c_char,
+        js_int32(status.bytes.min(i32::MAX as usize) as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"delivered\0".as_ptr() as *const c_char,
+        js_bool(status.delivered),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"done\0".as_ptr() as *const c_char,
+        js_bool(matches!(
+            status.state,
+            crate::v::browser_net::BrowserNetState::Succeeded
+                | crate::v::browser_net::BrowserNetState::Failed
+                | crate::v::browser_net::BrowserNetState::Superseded
+        )),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"loading\0".as_ptr() as *const c_char,
+        js_bool(matches!(
+            status.state,
+            crate::v::browser_net::BrowserNetState::Queued
+                | crate::v::browser_net::BrowserNetState::Loading
+        )),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"failed\0".as_ptr() as *const c_char,
+        js_bool(matches!(status.state, crate::v::browser_net::BrowserNetState::Failed)),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"superseded\0".as_ptr() as *const c_char,
+        js_bool(matches!(
+            status.state,
+            crate::v::browser_net::BrowserNetState::Superseded
+        )),
+    );
+    js_set_string_prop(ctx, obj, b"state\0", state);
+    js_set_string_prop(ctx, obj, b"url\0", status.url.as_str());
+    if let Some(error) = status.error.as_ref() {
+        js_set_string_prop(ctx, obj, b"error\0", error.as_str());
+    }
+    obj
 }
 
 fn parse_hex_payload(s: &str, out: &mut [u8]) -> Option<usize> {
@@ -954,6 +1084,36 @@ pub unsafe fn install(ctx: *mut qjs::JSContext) {
         ctx,
         global,
         b"__trueosCpuProfile\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_browser_navigate_submit_js),
+        b"__trueosBrowserNavigateSubmit\0".as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosBrowserNavigateSubmit\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_browser_navigate_status_js),
+        b"__trueosBrowserNavigateStatus\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosBrowserNavigateStatus\0".as_ptr() as *const c_char,
         f,
     );
 
