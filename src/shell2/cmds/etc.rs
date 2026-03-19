@@ -5,8 +5,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use super::super::{NET_TCP_SHELL_BACKEND, ShellBackend2, UART1_COM1_BACKEND, print_shell_line};
 use super::tlb_helper::print_table;
-use crate::shell2::ecma48::{HIDE_CURSOR, SHOW_CURSOR};
 use crate::shell2::shell2_cmd::ParseOutcome;
+use crate::shell2::ecma48;
 
 const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 const GO_TWO_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
@@ -62,7 +62,6 @@ fn start_looping_chars(
     let mask = backend_mask(io);
     let started = alloc::format!("etc: {} started (50ms loop)", label);
     print_shell_line(io, started.as_str());
-    io.write_str(HIDE_CURSOR);
     if mask != 0 {
         GO_ACTIVE_MASK.fetch_or(mask, Ordering::Release);
     }
@@ -71,7 +70,10 @@ fn start_looping_chars(
         let mut idx = 0usize;
         loop {
             if mask != 0 && (GO_ACTIVE_MASK.load(Ordering::Acquire) & mask) == 0 {
-                io.write_str(SHOW_CURSOR);
+                io.write_str("\x08 \x08");
+                io.write_str(ecma48::RESET);
+                io.write_str(ecma48::SHOW_CURSOR);
+                io.write_str(ecma48::CURSOR_STEADY_BLOCK);
                 let stopped = alloc::format!("etc: {} stopped", label);
                 print_shell_line(io, stopped.as_str());
                 break;

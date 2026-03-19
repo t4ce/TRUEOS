@@ -1,4 +1,6 @@
+use alloc::vec::Vec;
 use core::alloc::Layout;
+use core::f32::consts::TAU;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -9,6 +11,7 @@ use crab_usb::{
     EventHandler, KernelOp, USBHost, usb_if,
 };
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use libm::sinf;
 use spin::Mutex;
 
 struct TrueosCrabUsbKernel;
@@ -17,6 +20,11 @@ static CRABUSB_KERNEL: TrueosCrabUsbKernel = TrueosCrabUsbKernel;
 static INITIAL_SNAPSHOT_LOGGED: AtomicBool = AtomicBool::new(false);
 static EVENT_HANDLER_READY: AtomicBool = AtomicBool::new(false);
 static EVENT_HANDLER: Mutex<Option<EventHandler>> = Mutex::new(None);
+static AUDIO_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
+static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
+const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
 
 impl DmaOp for TrueosCrabUsbKernel {
     fn page_size(&self) -> usize {
@@ -121,6 +129,73 @@ struct PreferredAlt {
     endpoint_count: usize,
 }
 
+#[derive(Copy, Clone)]
+struct IsoOutEndpoint {
+    address: u8,
+    max_packet_size: u16,
+}
+
+fn parse_wav_pcm_s16_stereo_48k(bytes: &[u8]) -> Option<(usize, usize)> {
+    fn le_u16(s: &[u8]) -> Option<u16> {
+        if s.len() < 2 {
+            return None;
+        }
+        Some(u16::from_le_bytes([s[0], s[1]]))
+    }
+
+    fn le_u32(s: &[u8]) -> Option<u32> {
+        if s.len() < 4 {
+            return None;
+        }
+        Some(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+    }
+
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+
+    let mut off = 12usize;
+    let mut fmt_ok = false;
+    let mut data: Option<(usize, usize)> = None;
+    while off + 8 <= bytes.len() {
+        let id = &bytes[off..off + 4];
+        let sz = le_u32(&bytes[off + 4..off + 8])? as usize;
+        let payload = off + 8;
+        let end = payload.saturating_add(sz);
+        if end > bytes.len() {
+            return None;
+        }
+
+        if id == b"fmt " {
+            if sz < 16 {
+                return None;
+            }
+            let fmt = &bytes[payload..payload + sz];
+            let audio_fmt = le_u16(&fmt[0..2])?;
+            let channels = le_u16(&fmt[2..4])?;
+            let rate = le_u32(&fmt[4..8])?;
+            let bits = le_u16(&fmt[14..16])?;
+            if audio_fmt == 1 && channels == 2 && rate == 48_000 && bits == 16 {
+                fmt_ok = true;
+            } else {
+                return None;
+            }
+        } else if id == b"data" {
+            data = Some((payload, sz));
+            if fmt_ok {
+                break;
+            }
+        }
+
+        off = end + (sz & 1);
+    }
+
+    if !fmt_ok {
+        return None;
+    }
+    data
+}
+
 fn pick_preferred_alt(configs: &[usb_if::descriptor::ConfigurationDescriptor]) -> Option<PreferredAlt> {
     let mut best: Option<PreferredAlt> = None;
 
@@ -182,6 +257,223 @@ fn pick_preferred_alt(configs: &[usb_if::descriptor::ConfigurationDescriptor]) -
     }
 
     best
+}
+
+fn find_iso_out_endpoint(
+    configs: &[usb_if::descriptor::ConfigurationDescriptor],
+    interface_number: u8,
+    alternate_setting: u8,
+) -> Option<IsoOutEndpoint> {
+    for config in configs.iter() {
+        for interface in config.interfaces.iter() {
+            if interface.interface_number != interface_number {
+                continue;
+            }
+            for alt in interface.alt_settings.iter() {
+                if alt.alternate_setting != alternate_setting {
+                    continue;
+                }
+                for ep in alt.endpoints.iter() {
+                    if ep.transfer_type == usb_if::descriptor::EndpointType::Isochronous
+                        && ep.direction == usb_if::transfer::Direction::Out
+                    {
+                        return Some(IsoOutEndpoint {
+                            address: ep.address,
+                            max_packet_size: ep.max_packet_size,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn fill_audio_packet(
+    out: &mut [u8],
+    wav: Option<&[u8]>,
+    wav_cursor: &mut usize,
+    sine_phase: &mut f32,
+) {
+    if let Some(wav_bytes) = wav {
+        let mut copied = 0usize;
+        while copied + AUDIO_FRAME_BYTES <= out.len() {
+            if *wav_cursor + AUDIO_FRAME_BYTES > wav_bytes.len() {
+                *wav_cursor = 0;
+            }
+            out[copied..copied + AUDIO_FRAME_BYTES]
+                .copy_from_slice(&wav_bytes[*wav_cursor..*wav_cursor + AUDIO_FRAME_BYTES]);
+            *wav_cursor += AUDIO_FRAME_BYTES;
+            copied += AUDIO_FRAME_BYTES;
+        }
+        out[copied..].fill(0);
+        return;
+    }
+
+    for frame in out.chunks_exact_mut(AUDIO_FRAME_BYTES) {
+        let sample = (sinf(*sine_phase) * 0.18 * i16::MAX as f32) as i16;
+        let bytes = sample.to_le_bytes();
+        frame[0] = bytes[0];
+        frame[1] = bytes[1];
+        frame[2] = bytes[0];
+        frame[3] = bytes[1];
+        *sine_phase += TAU * 440.0 / 48_000.0;
+        if *sine_phase >= TAU {
+            *sine_phase -= TAU;
+        }
+    }
+}
+
+async fn stream_target_audio(
+    device: &mut crab_usb::Device,
+    vendor_id: u16,
+    product_id: u16,
+    preferred: PreferredAlt,
+    endpoint: IsoOutEndpoint,
+) {
+    let packet_bytes = usize::from(endpoint.max_packet_size.max(AUDIO_FRAME_BYTES as u16));
+    let mut packet = Vec::from_iter(core::iter::repeat_n(0u8, packet_bytes));
+    let wav = parse_wav_pcm_s16_stereo_48k(DEMO_WAV_EMBEDDED)
+        .map(|(data_off, data_len)| &DEMO_WAV_EMBEDDED[data_off..data_off + data_len]);
+    let mut wav_cursor = 0usize;
+    let mut sine_phase = 0.0f32;
+
+    let endpoint_kind = match device.get_endpoint(endpoint.address).await {
+        Ok(kind) => kind,
+        Err(err) => {
+            crate::log!(
+                "crabusb: target {:04X}:{:04X} ep=0x{:02X} open failed: {:?}\n",
+                vendor_id,
+                product_id,
+                endpoint.address,
+                err
+            );
+            return;
+        }
+    };
+
+    let EndpointKind::IsochronousOut(mut iso_out) = endpoint_kind else {
+        crate::log!(
+            "crabusb: target {:04X}:{:04X} if#{} alt={} ep=0x{:02X} is not iso-out\n",
+            vendor_id,
+            product_id,
+            preferred.interface_number,
+            preferred.alternate_setting,
+            endpoint.address
+        );
+        return;
+    };
+
+    AUDIO_STREAM_ACTIVE.store(true, Ordering::Release);
+    crate::log!(
+        "crabusb: audio streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} packet={} source={}\n",
+        vendor_id,
+        product_id,
+        preferred.interface_number,
+        preferred.alternate_setting,
+        endpoint.address,
+        packet_bytes,
+        if wav.is_some() { "demo.wav" } else { "sine" }
+    );
+
+    loop {
+        fill_audio_packet(packet.as_mut_slice(), wav, &mut wav_cursor, &mut sine_phase);
+        match iso_out.submit_and_wait(packet.as_slice(), 1).await {
+            Ok(sent) => {
+                if sent == 0 {
+                    Timer::after(EmbassyDuration::from_millis(1)).await;
+                }
+            }
+            Err(err) => {
+                crate::log!(
+                    "crabusb: audio streaming stopped {:04X}:{:04X} ep=0x{:02X} err={:?}\n",
+                    vendor_id,
+                    product_id,
+                    endpoint.address,
+                    err
+                );
+                break;
+            }
+        }
+    }
+
+    AUDIO_STREAM_ACTIVE.store(false, Ordering::Release);
+}
+
+async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::DeviceInfo) {
+    if !AUDIO_STREAM_REQUESTED.load(Ordering::Acquire) || AUDIO_STREAM_ACTIVE.load(Ordering::Acquire)
+    {
+        return;
+    }
+
+    let desc = dev_info.descriptor();
+    let vendor_id = desc.vendor_id;
+    let product_id = desc.product_id;
+    if vendor_id != HYPERX_VENDOR_ID || product_id != HYPERX_PRODUCT_ID {
+        return;
+    }
+
+    let mut device = match host.open_device(dev_info).await {
+        Ok(device) => device,
+        Err(err) => {
+            crate::log!(
+                "crabusb: target {:04X}:{:04X} audio open failed: {:?}\n",
+                vendor_id,
+                product_id,
+                err
+            );
+            return;
+        }
+    };
+
+    let configs = device.configurations().to_vec();
+    let Some(preferred) = pick_preferred_alt(&configs) else {
+        crate::log!(
+            "crabusb: target {:04X}:{:04X} no preferred interface found\n",
+            vendor_id,
+            product_id
+        );
+        return;
+    };
+    let Some(endpoint) = find_iso_out_endpoint(
+        &configs,
+        preferred.interface_number,
+        preferred.alternate_setting,
+    ) else {
+        crate::log!(
+            "crabusb: target {:04X}:{:04X} preferred if#{} alt={} has no iso-out endpoint\n",
+            vendor_id,
+            product_id,
+            preferred.interface_number,
+            preferred.alternate_setting
+        );
+        return;
+    };
+
+    match device
+        .claim_interface(preferred.interface_number, preferred.alternate_setting)
+        .await
+    {
+        Ok(()) => {
+            crate::log!(
+                "crabusb: target {:04X}:{:04X} audio ownership if#{} alt={} ep=0x{:02X}\n",
+                vendor_id,
+                product_id,
+                preferred.interface_number,
+                preferred.alternate_setting,
+                endpoint.address
+            );
+            stream_target_audio(&mut device, vendor_id, product_id, preferred, endpoint).await;
+        }
+        Err(err) => crate::log!(
+            "crabusb: target {:04X}:{:04X} audio claim failed if#{} alt={}: {:?}\n",
+            vendor_id,
+            product_id,
+            preferred.interface_number,
+            preferred.alternate_setting,
+            err
+        ),
+    }
 }
 
 async fn log_opened_device_graph(host: &mut USBHost, dev_idx: usize, dev_info: &crab_usb::DeviceInfo) {
@@ -315,7 +607,6 @@ async fn log_opened_device_graph(host: &mut USBHost, dev_idx: usize, dev_info: &
 }
 
 async fn probe_and_log(host: &mut USBHost) {
-    crate::log!("crabusb: periodic probe begin\n");
     match host.probe_devices().await {
         Ok(devices) => {
             if devices.is_empty() {
@@ -337,7 +628,6 @@ async fn probe_and_log(host: &mut USBHost) {
         }
         Err(err) => crate::log!("crabusb: probe failed: {:?}\n", err),
     }
-    crate::log!("crabusb: periodic probe end\n");
 }
 
 async fn crab_scout_once(host: &mut USBHost, info: super::super::xhci::XhcInfo) {
@@ -387,6 +677,9 @@ async fn crab_scout_once(host: &mut USBHost, info: super::super::xhci::XhcInfo) 
             }
             for (dev_idx, dev) in devices.iter().enumerate() {
                 log_opened_device_graph(host, dev_idx, dev).await;
+            }
+            for dev in devices.iter() {
+                maybe_start_target_audio(host, dev).await;
             }
         }
         Err(err) => crate::log!("crabusb: scout probe failed: {:?}\n", err),
@@ -500,7 +793,7 @@ pub async fn bsp_service() {
             }
 
             idle_ticks = idle_ticks.wrapping_add(1);
-            if idle_ticks >= 200 {
+            if idle_ticks >= 300 {
                 idle_ticks = 0;
                 probe_and_log(&mut host).await;
             }
@@ -508,5 +801,19 @@ pub async fn bsp_service() {
         }
         uninstall_event_handler();
         Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
+    }
+}
+
+#[embassy_executor::task]
+pub async fn audio_task() {
+    AUDIO_STREAM_REQUESTED.store(true, Ordering::Release);
+    crate::log!("crabusb: audio service armed\n");
+    loop {
+        Timer::after(EmbassyDuration::from_secs(5)).await;
+        if AUDIO_STREAM_ACTIVE.load(Ordering::Acquire) {
+            crate::log!("crabusb: audio service streaming\n");
+        } else {
+            crate::log!("crabusb: audio service waiting for target audio device\n");
+        }
     }
 }

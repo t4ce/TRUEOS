@@ -391,6 +391,7 @@ impl<'a> AlignedWriter<'a> {
         self.clear_line();
         self.io.write_str("\x1b[0m");
         self.io.write_str(ecma48::SHOW_CURSOR);
+        self.io.write_str(ecma48::CURSOR_COLOR_GRAY);
         self.io.write_str(ecma48::CURSOR_BLINKING_BLOCK);
     }
 
@@ -975,6 +976,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         }
 
         if let Some(b) = io.read_byte() {
+            if cmds::etc::handle_input_byte(io) {
+                continue;
+            }
             match esc {
                 EscState::None => {
                     if b == 0x1b {
