@@ -1,5 +1,6 @@
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::{format, string::String, string::ToString, vec::Vec};
 
@@ -84,6 +85,7 @@ fn http_stream_chunk_bytes(disk: DeviceHandle) -> usize {
 struct HttpRequestLine<'a> {
     method: &'a str,
     target: &'a str,
+    version: &'a str,
 }
 
 fn http_parse_request_line(req: &[u8]) -> Option<HttpRequestLine<'_>> {
@@ -93,7 +95,12 @@ fn http_parse_request_line(req: &[u8]) -> Option<HttpRequestLine<'_>> {
     let mut it = line.split_whitespace();
     let method = it.next()?;
     let target = it.next()?;
-    Some(HttpRequestLine { method, target })
+    let version = it.next()?;
+    Some(HttpRequestLine {
+        method,
+        target,
+        version,
+    })
 }
 
 fn http_query_param<'a>(target: &'a str, key: &str) -> Option<&'a str> {
@@ -110,6 +117,28 @@ fn http_query_param<'a>(target: &'a str, key: &str) -> Option<&'a str> {
 
 fn http_path_only(target: &str) -> &str {
     target.split_once('?').map(|(p, _)| p).unwrap_or(target)
+}
+
+fn http_log_target_preview(prefix: &str, target: &str) {
+    let path = http_path_only(target);
+    crate::log!("http-trueosfs: {} target={}\n", prefix, path);
+}
+
+fn http_header_has_token(req: &[u8], key: &str, token: &str) -> bool {
+    let Some(value) = http_find_header(req, key) else {
+        return false;
+    };
+    value
+        .split(',')
+        .any(|part| part.trim().eq_ignore_ascii_case(token))
+}
+
+fn http_keep_alive(req: &[u8], version: &str) -> bool {
+    match version {
+        "HTTP/1.1" => !http_header_has_token(req, "Connection", "close"),
+        "HTTP/1.0" => http_header_has_token(req, "Connection", "keep-alive"),
+        _ => false,
+    }
 }
 
 fn http_header_end(req: &[u8]) -> Option<usize> {
@@ -214,6 +243,50 @@ fn http_plain_response(status: &'static str, msg: &'static str) -> HttpResponseP
         extra_headers: String::new(),
         body_len: body.len() as u64,
         body: HttpBodyPlan::Bytes(body),
+    }
+}
+
+fn http_send_response_head(
+    vnet: &VNet,
+    handle: api::NetHandle,
+    status: &str,
+    content_type: &str,
+    extra_headers: &str,
+    body_len: u64,
+    keep_alive: bool,
+) -> usize {
+    let mut header = String::new();
+    header.push_str(status);
+    header.push_str("Content-Type: ");
+    header.push_str(content_type);
+    header.push_str("\r\n");
+    if !extra_headers.is_empty() {
+        header.push_str(extra_headers);
+    }
+    header.push_str("Content-Length: ");
+    header.push_str(format!("{}", body_len).as_str());
+    header.push_str(if keep_alive {
+        "\r\nConnection: keep-alive\r\n\r\n"
+    } else {
+        "\r\nConnection: close\r\n\r\n"
+    });
+    let body_len_usize = body_len.min(usize::MAX as u64) as usize;
+    let pending = header.len().saturating_add(body_len_usize);
+    for chunk in header.as_bytes().chunks(api::MAX_MSG) {
+        let _ = vnet.submit(api::Command::SendTcp {
+            handle,
+            data: api::ByteBuf::from_slice_trunc(chunk),
+        });
+    }
+    pending
+}
+
+fn http_send_bytes(vnet: &VNet, handle: api::NetHandle, bytes: &[u8]) {
+    for chunk in bytes.chunks(api::MAX_MSG) {
+        let _ = vnet.submit(api::Command::SendTcp {
+            handle,
+            data: api::ByteBuf::from_slice_trunc(chunk),
+        });
     }
 }
 
@@ -505,11 +578,13 @@ function trimmedPathPart(text){if(text==="/"){return "";}if(text.endsWith("/")){
 function pathFor(li){var parts=[];var cur=li;while(cur){var label=trimmedPathPart(cleanLabel(cur));if(label){parts.push(label);}var parent=cur.parentElement;cur=parent&&parent.closest("li");}parts.reverse();return parts.join("/");}
 function encodePath(path){if(!path){return "";}return path.split("/").filter(Boolean).map(function(seg){return encodeURIComponent(seg);}).join("/");}
 function dlHref(root,path){var enc=encodePath(path);return enc?"/dl/"+root+"/"+enc:"#";}
+function rmHref(root,path){var enc=encodePath(path);return enc?"/rm/"+root+"/"+enc:"#";}
 function upHref(root,dir,name){var base="/up/"+root;var enc=encodePath(dir);if(enc){base+="/"+enc;}return base+"?name="+encodeURIComponent(name);}
 function mkdirHref(root,dir,name){var base="/mkdir/"+root;var enc=encodePath(dir);if(enc){base+="/"+enc;}return base+"?name="+encodeURIComponent(name);}
 function setStatus(target,msg){if(target){target.textContent=msg;}}
 function uploadFile(root,dir,file,status){if(!file){return;}var started=Date.now();var xhr=new XMLHttpRequest();xhr.open("POST",upHref(root,dir,file.name));xhr.setRequestHeader("Content-Type","application/octet-stream");xhr.upload.onprogress=function(ev){if(!ev.lengthComputable){setStatus(status,"uploading "+file.name+" ...");return;}var elapsed=Math.max((Date.now()-started)/1000,0.001);var rate=ev.loaded/elapsed;setStatus(status,"uploading "+file.name+" "+ev.loaded+"/"+ev.total+" bytes @ "+Math.round(rate/1024)+" KiB/s");};xhr.onload=function(){if(xhr.status>=200&&xhr.status<300){setStatus(status,"uploaded "+file.name);window.setTimeout(function(){window.location.reload();},250);}else{setStatus(status,"upload failed: HTTP "+xhr.status);}};xhr.onerror=function(){setStatus(status,"upload failed");};xhr.send(file);}
-function wireFile(root,li,path,label){if(label===".keep"){li.hidden=true;return;}var text=firstTextNode(li);if(text){text.textContent="";}var a=document.createElement("a");a.href=dlHref(root,path);a.textContent=label;a.setAttribute("download","");li.insertBefore(a,li.firstChild);}
+function deleteFile(root,path,label,status){if(!window.confirm("Delete "+label+"?")){return;}setStatus(status,"deleting "+label+" ...");fetch(rmHref(root,path),{method:"POST"}).then(function(resp){if(!resp.ok){throw new Error(String(resp.status));}setStatus(status,"deleted "+label);window.setTimeout(function(){window.location.reload();},250);}).catch(function(err){setStatus(status,"delete failed: "+err.message);});}
+function wireFile(root,li,path,label){if(label===".keep"){li.hidden=true;return;}var text=firstTextNode(li);if(text){text.textContent="";}var del=document.createElement("button");del.type="button";del.textContent="x";var a=document.createElement("a");a.href=dlHref(root,path);a.textContent=label;a.setAttribute("download","");var status=document.createElement("small");li.insertBefore(del,li.firstChild);li.insertBefore(document.createTextNode(" "),del.nextSibling);li.insertBefore(a,del.nextSibling.nextSibling);li.appendChild(document.createTextNode(" "));li.appendChild(status);del.addEventListener("click",function(){deleteFile(root,path,label,status);});}
 function wireFolder(root,li,path){if(li.getAttribute("data-trueosfs-folder")==="1"){return;}li.setAttribute("data-trueosfs-folder","1");var text=firstTextNode(li);if(text){text.textContent=trimmedPathPart(text.textContent||"");}var host=document.createElement("span");var uploadBtn=document.createElement("button");uploadBtn.type="button";uploadBtn.textContent="upload";var createBtn=document.createElement("button");createBtn.type="button";createBtn.textContent="+";var picker=document.createElement("input");picker.type="file";picker.hidden=true;var status=document.createElement("small");host.appendChild(document.createTextNode(" "));host.appendChild(uploadBtn);host.appendChild(document.createTextNode(" "));host.appendChild(createBtn);host.appendChild(document.createTextNode(" "));host.appendChild(status);li.insertBefore(host,childList(li));li.appendChild(picker);uploadBtn.addEventListener("click",function(){picker.click();});picker.addEventListener("change",function(){if(picker.files&&picker.files[0]){uploadFile(root,path,picker.files[0],status);}picker.value="";});createBtn.addEventListener("click",function(){var name=window.prompt("Folder name");if(!name){return;}setStatus(status,"creating "+name+" ...");fetch(mkdirHref(root,path,name),{method:"POST"}).then(function(resp){if(!resp.ok){throw new Error(String(resp.status));}setStatus(status,"created "+name);window.setTimeout(function(){window.location.reload();},250);}).catch(function(err){setStatus(status,"create failed: "+err.message);});});}
 function wireTree(root,tree){var nodes=tree.querySelectorAll("li");for(var i=0;i<nodes.length;i++){var li=nodes[i];var label=cleanLabel(li);if(!label){continue;}var path=pathFor(li);if(isFolder(li)){wireFolder(root,li,path);}else if(path){wireFile(root,li,path,label);}}}
 function bootClock(){var status=document.getElementById("ws-time-status");var value=document.getElementById("ws-time-value");var meta=document.getElementById("ws-time-meta");if(!status||!value||!meta||!window.WebSocket){return;}var host=window.location.hostname||"localhost";var url="ws://"+host+":56765/time";var sock=null;var retry=0;function set(text){status.textContent=text;}function later(){if(retry){return;}retry=window.setTimeout(function(){retry=0;open();},3000);}function open(){set("connecting to "+url);try{sock=new WebSocket(url);}catch(_err){set("websocket unavailable");later();return;}sock.onopen=function(){set("live");};sock.onmessage=function(ev){try{var msg=JSON.parse(ev.data);if(msg&&msg.unix){value.textContent=new Date(msg.unix*1000).toLocaleString();meta.textContent=(msg.utc||"")+" | source: "+(msg.source||"unknown")+" | unix: "+msg.unix;}}catch(_err){set("bad payload");}};sock.onclose=function(){set("disconnected, retrying");later();};sock.onerror=function(){set("socket error");};}open();window.addEventListener("beforeunload",function(){if(sock){sock.close();}});}
@@ -547,6 +622,14 @@ fn http_mount_page(roots_html: &str, has_roots: bool) -> HttpResponsePlan {
     }
 }
 
+#[derive(Default)]
+struct HttpSession {
+    req: Vec<u8>,
+    pending_close: bool,
+    pending_bytes: usize,
+    sent_bytes: usize,
+}
+
 #[embassy_executor::task]
 pub async fn http_trueosfs_task() {
     async move {
@@ -574,12 +657,7 @@ pub async fn http_trueosfs_task() {
         );
 
         let mut listener_handle: Option<api::NetHandle> = None;
-        let mut active_handle: Option<api::NetHandle> = None;
-        let mut sent_for_active: bool = false;
-        let mut active_pending: usize = 0;
-        let mut active_sent: usize = 0;
-        let mut active_close: bool = false;
-        let mut active_req: Vec<u8> = Vec::new();
+        let mut sessions: BTreeMap<u32, HttpSession> = BTreeMap::new();
 
         loop {
             while let Some(ev) = vnet.pop_event() {
@@ -590,144 +668,87 @@ pub async fn http_trueosfs_task() {
                         }
                     }
                     api::Event::TcpEstablished { handle } => {
-                        active_handle = Some(handle);
-                        sent_for_active = false;
-                        active_pending = 0;
-                        active_sent = 0;
-                        active_close = false;
-                        active_req.clear();
+                        sessions.entry(handle.0).or_default();
                     }
                     api::Event::TcpData { handle, data } => {
-                        if active_handle.is_none() {
-                            active_handle = Some(handle);
-                            sent_for_active = false;
-                        }
-                        if active_handle != Some(handle) {
-                            continue;
-                        }
-                        if sent_for_active {
-                            continue;
-                        }
-                        active_req.extend_from_slice(data.as_slice());
-                        if active_req.len() > HTTP_TRUEOSFS_MAX_REQUEST_BYTES {
-                            sent_for_active = true;
-                            active_close = true;
-                            active_sent = 0;
-                            let response = http_plain_response(
-                                "HTTP/1.1 413 Payload Too Large\r\n",
-                                "request too large\n",
-                            );
-                            let HttpResponsePlan {
-                                status,
-                                content_type,
-                                extra_headers,
-                                body_len,
-                                body,
-                            } = response;
-                            let mut header = String::new();
-                            header.push_str(status);
-                            header.push_str("Content-Type: ");
-                            header.push_str(content_type);
-                            header.push_str("\r\n");
-                            if !extra_headers.is_empty() {
-                                header.push_str(extra_headers.as_str());
-                            }
-                            header.push_str("Content-Length: ");
-                            header.push_str(format!("{}", body_len).as_str());
-                            header.push_str("\r\nConnection: close\r\n\r\n");
-                            let body_len_usize = body_len.min(usize::MAX as u64) as usize;
-                            active_pending = header.len().saturating_add(body_len_usize);
-                            for chunk in header.as_bytes().chunks(api::MAX_MSG) {
-                                let _ = vnet.submit(api::Command::SendTcp {
-                                    handle,
-                                    data: api::ByteBuf::from_slice_trunc(chunk),
-                                });
-                            }
-                            if let HttpBodyPlan::Bytes(bytes) = body {
-                                for chunk in bytes.as_slice().chunks(api::MAX_MSG) {
-                                    let _ = vnet.submit(api::Command::SendTcp {
-                                        handle,
-                                        data: api::ByteBuf::from_slice_trunc(chunk),
-                                    });
-                                }
-                            }
+                        let session = sessions.entry(handle.0).or_default();
+                        session.req.extend_from_slice(data.as_slice());
+
+                        if session.pending_bytes != 0 {
                             continue;
                         }
 
-                        let Some(header_end) = http_header_end(active_req.as_slice()) else {
+                        if session.req.len() > HTTP_TRUEOSFS_MAX_REQUEST_BYTES {
+                            let body = b"request too large\n";
+                            session.pending_close = true;
+                            session.sent_bytes = 0;
+                            session.pending_bytes = http_send_response_head(
+                                &vnet,
+                                handle,
+                                "HTTP/1.1 413 Payload Too Large\r\n",
+                                "text/plain; charset=utf-8",
+                                "",
+                                body.len() as u64,
+                                false,
+                            );
+                            http_send_bytes(&vnet, handle, body);
+                            continue;
+                        }
+
+                        let Some(header_end) = http_header_end(session.req.as_slice()) else {
                             continue;
                         };
-                        let req_line = match http_parse_request_line(active_req.as_slice()) {
+                        let header_bytes = &session.req[..header_end];
+                        let req_line = match http_parse_request_line(header_bytes) {
                             Some(v) => v,
                             None => {
-                                sent_for_active = true;
-                                active_close = true;
-                                active_sent = 0;
-                                let response = http_plain_response(
+                                crate::log!("http-trueosfs: 400 bad request line/header parse\n");
+                                let body = b"bad request\n";
+                                session.pending_close = true;
+                                session.sent_bytes = 0;
+                                session.pending_bytes = http_send_response_head(
+                                    &vnet,
+                                    handle,
                                     "HTTP/1.1 400 Bad Request\r\n",
-                                    "bad request\n",
+                                    "text/plain; charset=utf-8",
+                                    "",
+                                    body.len() as u64,
+                                    false,
                                 );
-                                let HttpResponsePlan {
-                                    status,
-                                    content_type,
-                                    extra_headers,
-                                    body_len,
-                                    body,
-                                } = response;
-                                let mut header = String::new();
-                                header.push_str(status);
-                                header.push_str("Content-Type: ");
-                                header.push_str(content_type);
-                                header.push_str("\r\n");
-                                if !extra_headers.is_empty() {
-                                    header.push_str(extra_headers.as_str());
-                                }
-                                header.push_str("Content-Length: ");
-                                header.push_str(format!("{}", body_len).as_str());
-                                header.push_str("\r\nConnection: close\r\n\r\n");
-                                let body_len_usize = body_len.min(usize::MAX as u64) as usize;
-                                active_pending = header.len().saturating_add(body_len_usize);
-                                for chunk in header.as_bytes().chunks(api::MAX_MSG) {
-                                    let _ = vnet.submit(api::Command::SendTcp {
-                                        handle,
-                                        data: api::ByteBuf::from_slice_trunc(chunk),
-                                    });
-                                }
-                                if let HttpBodyPlan::Bytes(bytes) = body {
-                                    for chunk in bytes.as_slice().chunks(api::MAX_MSG) {
-                                        let _ = vnet.submit(api::Command::SendTcp {
-                                            handle,
-                                            data: api::ByteBuf::from_slice_trunc(chunk),
-                                        });
-                                    }
-                                }
+                                http_send_bytes(&vnet, handle, body);
                                 continue;
                             }
                         };
-                        let content_len = http_content_length(active_req.as_slice()).unwrap_or(0);
+                        let content_len = http_content_length(header_bytes).unwrap_or(0);
                         let total_needed = header_end.saturating_add(content_len);
                         if total_needed > HTTP_TRUEOSFS_MAX_REQUEST_BYTES {
                             continue;
                         }
-                        if active_req.len() < total_needed {
+                        if session.req.len() < total_needed {
                             continue;
                         }
-                        sent_for_active = true;
 
-                        let req = &active_req[..total_needed];
-                        let target = req_line.target;
-                        let method = req_line.method;
+                        let keep_alive = http_keep_alive(header_bytes, req_line.version);
+                        let target = req_line.target.to_string();
+                        let method = req_line.method.to_string();
+                        let req = session.req[..total_needed].to_vec();
+                        if keep_alive {
+                            session.req.drain(..total_needed);
+                        } else {
+                            session.req.clear();
+                        }
+
                         let body_bytes = &req[header_end..total_needed];
 
                         let roots = crate::v::fs::trueosfs::list_roots();
 
                         let response: HttpResponsePlan = if method == "GET"
-                            && http_path_only(target).starts_with("/dl/")
+                            && http_path_only(target.as_str()).starts_with("/dl/")
                         {
                             // Download endpoint: /dl/<root_raw>/<path>
                             // (where <root_raw> is the DiscId raw value as decimal)
                             'resp: {
-                                let path_only = http_path_only(target);
+                                let path_only = http_path_only(target.as_str());
                                 let rest = path_only.strip_prefix("/dl/").unwrap_or("");
 
                                 let (root_raw_s, enc_path) = match rest.split_once('/') {
@@ -787,7 +808,7 @@ pub async fn http_trueosfs_task() {
                                     );
                                 }
 
-                                http_prepare_file_response(disk, path, req).await
+                                http_prepare_file_response(disk, path, &req).await
                             }
                         } else if method == "GET" && target.starts_with("/dl") {
                             // Back-compat download endpoint: /dl?path=<urlencoded path> (uses primary root)
@@ -797,7 +818,7 @@ pub async fn http_trueosfs_task() {
                                     "HTTP/1.1 503 Service Unavailable\r\n",
                                     "no TRUEOSFS mounted\n",
                                 ),
-                                Some(disk) => match http_query_param(target, "path") {
+                                Some(disk) => match http_query_param(target.as_str(), "path") {
                                     None => http_plain_response(
                                         "HTTP/1.1 400 Bad Request\r\n",
                                         "missing path\n",
@@ -815,28 +836,30 @@ pub async fn http_trueosfs_task() {
                                                     "bad path\n",
                                                 )
                                             } else {
-                                                http_prepare_file_response(disk, path, req).await
+                                                http_prepare_file_response(disk, path, &req).await
                                             }
                                         }
                                     },
                                 },
                             }
-                        } else if method == "POST" && http_path_only(target).starts_with("/up/") {
+                        } else if method == "POST" && http_path_only(target.as_str()).starts_with("/up/") {
                             'resp: {
-                                let (root_raw, dir) = match http_parse_root_and_dir(target, "/up/") {
+                                let (root_raw, dir) = match http_parse_root_and_dir(target.as_str(), "/up/") {
                                     Some(v) => v,
                                     None => {
+                                        http_log_target_preview("400 bad upload path", target.as_str());
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 400 Bad Request\r\n",
                                             "bad upload path\n",
                                         )
                                     }
                                 };
-                                let name = match http_query_param(target, "name")
+                                let name = match http_query_param(target.as_str(), "name")
                                     .and_then(|v| http_normalize_name(v, 120))
                                 {
                                     Some(v) => v,
                                     None => {
+                                        http_log_target_preview("400 missing file name", target.as_str());
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 400 Bad Request\r\n",
                                             "missing file name\n",
@@ -883,9 +906,9 @@ pub async fn http_trueosfs_task() {
                                     ),
                                 }
                             }
-                        } else if method == "POST" && http_path_only(target).starts_with("/mkdir/") {
+                        } else if method == "POST" && http_path_only(target.as_str()).starts_with("/mkdir/") {
                             'resp: {
-                                let (root_raw, dir) = match http_parse_root_and_dir(target, "/mkdir/") {
+                                let (root_raw, dir) = match http_parse_root_and_dir(target.as_str(), "/mkdir/") {
                                     Some(v) => v,
                                     None => {
                                         break 'resp http_plain_response(
@@ -894,7 +917,7 @@ pub async fn http_trueosfs_task() {
                                         )
                                     }
                                 };
-                                let name = match http_query_param(target, "name")
+                                let name = match http_query_param(target.as_str(), "name")
                                     .and_then(|v| http_normalize_name(v, 120))
                                 {
                                     Some(v) => v,
@@ -942,6 +965,70 @@ pub async fn http_trueosfs_task() {
                                     ),
                                 }
                             }
+                        } else if method == "POST" && http_path_only(target.as_str()).starts_with("/rm/") {
+                            'resp: {
+                                let path_only = http_path_only(target.as_str());
+                                let rest = path_only.strip_prefix("/rm/").unwrap_or("");
+                                let (root_raw_s, enc_path) = match rest.split_once('/') {
+                                    Some(v) => v,
+                                    None => {
+                                        break 'resp http_plain_response(
+                                            "HTTP/1.1 400 Bad Request\r\n",
+                                            "missing root/path\n",
+                                        )
+                                    }
+                                };
+                                let root_raw = match root_raw_s.parse::<u32>() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        break 'resp http_plain_response(
+                                            "HTTP/1.1 400 Bad Request\r\n",
+                                            "bad root\n",
+                                        )
+                                    }
+                                };
+                                let path = match http_normalize_rel_path_decoded(enc_path, 240) {
+                                    Some(v) if !v.is_empty() => v,
+                                    _ => {
+                                        break 'resp http_plain_response(
+                                            "HTTP/1.1 400 Bad Request\r\n",
+                                            "bad path\n",
+                                        )
+                                    }
+                                };
+                                let root = match roots.iter().find(|r| r.disk_id.raw() == root_raw) {
+                                    Some(v) => v,
+                                    None => {
+                                        break 'resp http_plain_response(
+                                            "HTTP/1.1 404 Not Found\r\n",
+                                            "unknown root\n",
+                                        )
+                                    }
+                                };
+                                let disk = match crate::disc::block::device_handle(root.disk_id) {
+                                    Some(v) => v,
+                                    None => {
+                                        break 'resp http_plain_response(
+                                            "HTTP/1.1 503 Service Unavailable\r\n",
+                                            "root unavailable\n",
+                                        )
+                                    }
+                                };
+                                match crate::v::fs::trueosfs::file_delete_async(disk, path.as_str()).await {
+                                    Ok(true) => http_plain_response(
+                                        "HTTP/1.1 200 OK\r\n",
+                                        "delete ok\n",
+                                    ),
+                                    Ok(false) => http_plain_response(
+                                        "HTTP/1.1 404 Not Found\r\n",
+                                        "not found\n",
+                                    ),
+                                    Err(_) => http_plain_response(
+                                        "HTTP/1.1 500 Internal Server Error\r\n",
+                                        "delete error\n",
+                                    ),
+                                }
+                            }
                         } else {
                             // Build HTML trees (best-effort), one per mounted TRUEOSFS root.
                             let mut trees_html = String::new();
@@ -985,42 +1072,23 @@ pub async fn http_trueosfs_task() {
                         body_len,
                         body,
                     } = response;
-
-                    let mut header = String::new();
-                    header.push_str(status);
-                    header.push_str("Content-Type: ");
-                    header.push_str(content_type);
-                    header.push_str("\r\n");
-                    if !extra_headers.is_empty() {
-                        header.push_str(extra_headers.as_str());
-                    }
-                    header.push_str("Content-Length: ");
-                    header.push_str(format!("{}", body_len).as_str());
-                    header.push_str("\r\nConnection: close\r\n\r\n");
-
-                    let body_len_usize = body_len.min(usize::MAX as u64) as usize;
-                    active_pending = header.len().saturating_add(body_len_usize);
-                    active_sent = 0;
-                    active_close = true;
-
-                    // Send headers + body in MAX_MSG chunks.
-                    for chunk in header.as_bytes().chunks(api::MAX_MSG) {
-                        let _ = vnet.submit(api::Command::SendTcp {
-                            handle,
-                            data: api::ByteBuf::from_slice_trunc(chunk),
-                        });
-                    }
+                    session.pending_bytes = http_send_response_head(
+                        &vnet,
+                        handle,
+                        status,
+                        content_type,
+                        extra_headers.as_str(),
+                        body_len,
+                        keep_alive,
+                    );
+                    session.sent_bytes = 0;
+                    session.pending_close = !keep_alive;
 
                     let mut perf = HttpPerf::default();
 
                     match body {
                         HttpBodyPlan::Bytes(bytes) => {
-                            for chunk in bytes.as_slice().chunks(api::MAX_MSG) {
-                                let _ = vnet.submit(api::Command::SendTcp {
-                                    handle,
-                                    data: api::ByteBuf::from_slice_trunc(chunk),
-                                });
-                            }
+                            http_send_bytes(&vnet, handle, bytes.as_slice());
                         }
                         HttpBodyPlan::File {
                             disk,
@@ -1051,12 +1119,7 @@ pub async fn http_trueosfs_task() {
                                     break;
                                 }
                                 let t2 = tsc_now();
-                                for chunk in buf[..read].chunks(api::MAX_MSG) {
-                                    let _ = vnet.submit(api::Command::SendTcp {
-                                        handle,
-                                        data: api::ByteBuf::from_slice_trunc(chunk),
-                                    });
-                                }
+                                http_send_bytes(&vnet, handle, &buf[..read]);
                                 let t3 = tsc_now();
                                 perf.record_submit(t3.wrapping_sub(t2), read);
                                 off = off.saturating_add(read as u64);
@@ -1071,12 +1134,7 @@ pub async fn http_trueosfs_task() {
                         } => {
                             let mut buf = vec![0u8; http_stream_chunk_bytes(disk)];
                             for part in parts {
-                                for chunk in part.header.as_bytes().chunks(api::MAX_MSG) {
-                                    let _ = vnet.submit(api::Command::SendTcp {
-                                        handle,
-                                        data: api::ByteBuf::from_slice_trunc(chunk),
-                                    });
-                                }
+                                http_send_bytes(&vnet, handle, part.header.as_bytes());
                                 let mut remaining = part.end.saturating_sub(part.start).saturating_add(1);
                                 let mut off = part.start;
                                 while remaining > 0 {
@@ -1099,31 +1157,16 @@ pub async fn http_trueosfs_task() {
                                         break;
                                     }
                                     let t2 = tsc_now();
-                                    for chunk in buf[..read].chunks(api::MAX_MSG) {
-                                        let _ = vnet.submit(api::Command::SendTcp {
-                                            handle,
-                                            data: api::ByteBuf::from_slice_trunc(chunk),
-                                        });
-                                    }
+                                    http_send_bytes(&vnet, handle, &buf[..read]);
                                     let t3 = tsc_now();
                                     perf.record_submit(t3.wrapping_sub(t2), read);
                                     off = off.saturating_add(read as u64);
                                     remaining = remaining.saturating_sub(read as u64);
                                 }
-                                for chunk in b"\r\n".chunks(api::MAX_MSG) {
-                                    let _ = vnet.submit(api::Command::SendTcp {
-                                        handle,
-                                        data: api::ByteBuf::from_slice_trunc(chunk),
-                                    });
-                                }
+                                http_send_bytes(&vnet, handle, b"\r\n");
                             }
                             let closing = format!("--{}--\r\n", boundary);
-                            for chunk in closing.as_bytes().chunks(api::MAX_MSG) {
-                                let _ = vnet.submit(api::Command::SendTcp {
-                                    handle,
-                                    data: api::ByteBuf::from_slice_trunc(chunk),
-                                });
-                            }
+                            http_send_bytes(&vnet, handle, closing.as_bytes());
                         }
                         HttpBodyPlan::None => {}
                     }
@@ -1132,14 +1175,7 @@ pub async fn http_trueosfs_task() {
 
                 }
                 api::Event::Closed { handle } => {
-                    if active_handle == Some(handle) {
-                        active_handle = None;
-                        sent_for_active = false;
-                        active_pending = 0;
-                        active_sent = 0;
-                        active_close = false;
-                        active_req.clear();
-                    }
+                    sessions.remove(&handle.0);
 
                     // If the listener handle closes (or smoltcp collapses listen/conn handles), relisten.
                     if listener_handle == Some(handle) {
@@ -1155,13 +1191,22 @@ pub async fn http_trueosfs_task() {
                     }
                 }
                 api::Event::TcpSent { handle, len } => {
-                    if active_close && active_handle == Some(handle) && active_pending != 0 {
-                        active_sent = active_sent.saturating_add(len as usize);
-                        if active_sent >= active_pending {
-                            active_close = false;
-                            active_pending = 0;
-                            active_sent = 0;
-                            let _ = vnet.submit(api::Command::Close { handle });
+                    if let Some(session) = sessions.get_mut(&handle.0)
+                        && session.pending_bytes != 0
+                    {
+                        session.sent_bytes = session.sent_bytes.saturating_add(len as usize);
+                        if session.sent_bytes >= session.pending_bytes {
+                            let should_close = session.pending_close;
+                            session.pending_close = false;
+                            session.pending_bytes = 0;
+                            session.sent_bytes = 0;
+                            if should_close {
+                                let _ = vnet.submit(api::Command::Close { handle });
+                            }
+                            if !should_close && session.req.len() > HTTP_TRUEOSFS_MAX_REQUEST_BYTES {
+                                session.req.clear();
+                                let _ = vnet.submit(api::Command::Close { handle });
+                            }
                         }
                     }
                 }

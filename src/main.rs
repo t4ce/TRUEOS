@@ -26,6 +26,7 @@ mod net;
 mod pci;
 mod percpu;
 mod phys;
+mod portal;
 mod portio;
 mod power;
 mod rng;
