@@ -142,11 +142,11 @@ unsafe fn input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i3
     0
 }
 
-unsafe fn input_pop_cursor_event(out: *mut crate::usb::hid::TrueosHidCursorEvent) -> i32 {
+unsafe fn input_pop_cursor_event(out: *mut crate::usb2::hid::TrueosHidCursorEvent) -> i32 {
     if out.is_null() {
         return -1;
     }
-    let Some(ev) = crate::usb::hid::pop_cursor_event() else {
+    let Some(ev) = crate::usb2::hid::pop_cursor_event() else {
         return 0;
     };
     *out = ev;
@@ -155,7 +155,7 @@ unsafe fn input_pop_cursor_event(out: *mut crate::usb::hid::TrueosHidCursorEvent
 
 unsafe fn input_read_cursor_events_since(
     read_seq: u64,
-    out: *mut crate::usb::hid::TrueosHidCursorEvent,
+    out: *mut crate::usb2::hid::TrueosHidCursorEvent,
     out_cap: u32,
     out_next_seq: *mut u64,
     out_dropped: *mut u32,
@@ -166,16 +166,17 @@ unsafe fn input_read_cursor_events_since(
 
     let cap = out_cap as usize;
     if cap == 0 || out.is_null() {
-        let mut none: [crate::usb::hid::TrueosHidCursorEvent; 0] = [];
+        let mut none: [crate::usb2::hid::TrueosHidCursorEvent; 0] = [];
         let (next_seq, dropped, _wrote) =
-            crate::usb::hid::read_cursor_events_since(read_seq, &mut none);
+            crate::usb2::hid::read_cursor_events_since(read_seq, &mut none);
         *out_next_seq = next_seq;
         *out_dropped = dropped;
         return 0;
     }
 
     let out_slice = core::slice::from_raw_parts_mut(out, cap);
-    let (next_seq, dropped, wrote) = crate::usb::hid::read_cursor_events_since(read_seq, out_slice);
+    let (next_seq, dropped, wrote) =
+        crate::usb2::hid::read_cursor_events_since(read_seq, out_slice);
     *out_next_seq = next_seq;
     *out_dropped = dropped;
     wrote as u32
@@ -207,7 +208,7 @@ fn input_write_cursor_event(
     let ny = (clamped_y as f64) / h1;
     let wheel_i16 = wheel.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
 
-    crate::usb::hid::inject_virtual_cursor_event(slot_id, nx, ny, buttons_down, wheel_i16, flags);
+    crate::usb2::hid::inject_virtual_cursor_event(slot_id, nx, ny, buttons_down, wheel_i16, flags);
     0
 }
 
@@ -967,7 +968,7 @@ pub unsafe extern "C" fn trueos_cabi_input_cursor_buttons(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_input_pop_cursor_event(
-    out: *mut crate::usb::hid::TrueosHidCursorEvent,
+    out: *mut crate::usb2::hid::TrueosHidCursorEvent,
 ) -> i32 {
     input_pop_cursor_event(out)
 }
@@ -975,7 +976,7 @@ pub unsafe extern "C" fn trueos_cabi_input_pop_cursor_event(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_input_read_cursor_events_since(
     read_seq: u64,
-    out: *mut crate::usb::hid::TrueosHidCursorEvent,
+    out: *mut crate::usb2::hid::TrueosHidCursorEvent,
     out_cap: u32,
     out_next_seq: *mut u64,
     out_dropped: *mut u32,
