@@ -201,6 +201,16 @@ pub extern "C" fn kmain() -> ! {
     _loop(executor, spawner, smp_resp)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_vmx_guest_entry() -> ! {
+    crate::log!("vmx-guest: entered TRUEOS guest entry\n");
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
+    }
+}
+
 fn _loop(
     executor: &'static Executor,
     _spawner: Spawner,
