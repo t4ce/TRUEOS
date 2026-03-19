@@ -20,11 +20,11 @@ fn should_log_input_diag(count: u32) -> bool {
 }
 
 #[inline]
-fn cursor_event_is_physical(event: &crate::usb::hid::TrueosHidCursorEvent) -> bool {
+fn cursor_event_is_physical(event: &crate::usb2::hid::TrueosHidCursorEvent) -> bool {
     matches!(event.hid_kind, 2 | 3)
 }
 
-fn note_cursor_event_source(state: &mut Ui2State, event: &crate::usb::hid::TrueosHidCursorEvent) {
+fn note_cursor_event_source(state: &mut Ui2State, event: &crate::usb2::hid::TrueosHidCursorEvent) {
     if cursor_event_is_physical(event) {
         return;
     }
@@ -163,7 +163,7 @@ fn cursor_event_px(value: f64, extent: u32) -> f32 {
     (value.clamp(0.0, 1.0) as f32) * max_px
 }
 
-fn process_cursor_event(state: &mut Ui2State, event: crate::usb::hid::TrueosHidCursorEvent) {
+fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHidCursorEvent) {
     let slot_id = event.slot_id;
     if slot_id == 0 {
         return;
@@ -354,10 +354,10 @@ fn forward_cursor_wheel_to_selected_window(
 }
 
 pub(super) fn pump_cursor_selection(state: &mut Ui2State) {
-    let mut events = [crate::usb::hid::TrueosHidCursorEvent::default(); UI2_CURSOR_EVENT_BATCH];
+    let mut events = [crate::usb2::hid::TrueosHidCursorEvent::default(); UI2_CURSOR_EVENT_BATCH];
     loop {
         let (next_seq, dropped, wrote) =
-            crate::usb::hid::read_cursor_events_since(state.cursor_read_seq, &mut events);
+            crate::usb2::hid::read_cursor_events_since(state.cursor_read_seq, &mut events);
         if dropped != 0 {
             crate::log!(
                 "ui2: cursor-event-drop read_seq={} dropped={}\n",
