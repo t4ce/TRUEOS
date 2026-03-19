@@ -1291,6 +1291,33 @@ pub unsafe extern "C" fn trueos_cabi_ui2_primary_browser_window_id() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_create(
+    title_ptr: *const u8,
+    title_len: usize,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    z: i32,
+    alpha: u32,
+) -> u32 {
+    if title_ptr.is_null() {
+        return 0;
+    }
+    let title = core::slice::from_raw_parts(title_ptr, title_len);
+    let Ok(title) = core::str::from_utf8(title) else {
+        return 0;
+    };
+    let rect = Ui2Rect {
+        x: x as f32,
+        y: y as f32,
+        w: width.max(1) as f32,
+        h: height.max(1) as f32,
+    };
+    create_window(title, rect, z.clamp(i16::MIN as i32, i16::MAX as i32) as i16, alpha.min(255) as u8)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_info(
     window_id: u32,
     out_info: *mut TrueosUi2WindowInfo,

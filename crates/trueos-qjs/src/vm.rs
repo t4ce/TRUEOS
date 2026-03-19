@@ -131,6 +131,7 @@ async unsafe fn drain_runtime_until_idle(
 
         let pending = qjs::JS_IsJobPending(rt) > 0
             || qjs::async_ops::has_pending(ctx)
+            || qjs::timers::has_pending(ctx)
             || qjs::workers::has_pending_for_ctx(ctx);
         if !pending {
             return true;
@@ -156,6 +157,22 @@ pub async unsafe fn teardown_main_context(
     }
 
     qjs::workers::terminate_all_for_context(ctx);
+    let drained = drain_runtime_until_idle(rt, ctx, max_wait_ms).await;
+    qjs::async_ops::drain_all_for_context(ctx);
+    qjs::workers::drain_all_for_context(ctx);
+    qjs::timers::drain_all_for_context(ctx);
+    drained
+}
+
+pub async unsafe fn teardown_worker_context(
+    rt: *mut qjs::JSRuntime,
+    ctx: *mut qjs::JSContext,
+    max_wait_ms: u64,
+) -> bool {
+    if rt.is_null() || ctx.is_null() {
+        return true;
+    }
+
     let drained = drain_runtime_until_idle(rt, ctx, max_wait_ms).await;
     qjs::async_ops::drain_all_for_context(ctx);
     qjs::workers::drain_all_for_context(ctx);

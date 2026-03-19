@@ -245,6 +245,39 @@ impl WaitQueue {
             spin_step();
         }
     }
+
+    #[inline]
+    pub fn wait_for_event_blocking_parked(&self, timeout_ms: u64) -> bool {
+        let hz = TICK_HZ;
+        let ticks = if hz == 0 || timeout_ms == 0 {
+            0
+        } else {
+            timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
+        };
+        let deadline = if ticks == 0 {
+            0
+        } else {
+            now().saturating_add(ticks)
+        };
+        let observed = self.seq.load(Ordering::Acquire);
+
+        loop {
+            if ticks != 0 && now() >= deadline {
+                return false;
+            }
+
+            let current = self.seq.load(Ordering::Acquire);
+            if current != observed {
+                return true;
+            }
+
+            // Parked blocking waits are only safe for call sites whose progress is
+            // driven by other tasks/cores/interrupts and which will notify this queue
+            // on completion. Keep the default blocking wait conservative for the
+            // polling-driven paths that still rely on active spinning.
+            park_step();
+        }
+    }
 }
 
 type JobFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;

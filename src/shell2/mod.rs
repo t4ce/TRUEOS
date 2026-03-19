@@ -822,6 +822,37 @@ fn redraw_status_preserving_cursor(
     out.io.write_str(ecma48::RESTORE_CURSOR);
 }
 
+fn apply_matrix_operator_and_refresh(
+    out: &AlignedWriter<'_>,
+    io: &'static dyn ShellBackend2,
+    output_mask: u8,
+    mode: &mut ShellMode2,
+    ai_mode: AiPromptMode,
+    qjs_mode: QjsPromptMode,
+    surf_prefix: SurfPromptPrefix,
+    cmd_status_text: Option<&str>,
+    running_go2_phase: usize,
+    minute_text: &str,
+    submitted: &str,
+) -> VecDeque<TranscriptEntry> {
+    handle_matrix_operator(io, submitted);
+    *mode = ShellMode2::Cmd;
+    out.set_line_width(matrix::active_line_width(output_mask));
+    out.banner(output_mask, *mode, minute_text);
+    out.mode_status(
+        output_mask,
+        *mode,
+        ai_mode,
+        qjs_mode,
+        surf_prefix,
+        cmd_status_text,
+        running_go2_phase,
+    );
+    let transcript = current_transcript_for_task(io);
+    out.render_transcript(&transcript);
+    transcript
+}
+
 fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: char) {
     if line.push(ch).is_ok() {
         out.user_char(ch);
@@ -1111,6 +1142,19 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         command_sessions[*idx].kind.accepts_broadcast_input()
                     });
                     if submitted == "§" {
+                        transcript = apply_matrix_operator_and_refresh(
+                            &out,
+                            io,
+                            output_mask,
+                            &mut mode,
+                            ai_mode,
+                            qjs_mode,
+                            surf_prefix,
+                            cmd_status_text.as_deref(),
+                            running_go2_phase,
+                            minute_text.as_str(),
+                            submitted,
+                        );
                         line.clear();
                         out.prompt(output_mask);
                         run_plain_section_status(
@@ -1125,20 +1169,19 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         )
                         .await;
                     } else if submitted_raw.starts_with('§') && !submitted.is_empty() {
-                        handle_matrix_operator(io, submitted);
-                        mode = ShellMode2::Cmd;
-                        out.banner(output_mask, mode, minute_text.as_str());
-                        out.mode_status(
+                        transcript = apply_matrix_operator_and_refresh(
+                            &out,
+                            io,
                             output_mask,
-                            mode,
+                            &mut mode,
                             ai_mode,
                             qjs_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
                             running_go2_phase,
+                            minute_text.as_str(),
+                            submitted,
                         );
-                        transcript = current_transcript_for_task(io);
-                        out.render_transcript(&transcript);
                     } else if has_broadcast_sessions {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
