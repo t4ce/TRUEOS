@@ -75,6 +75,19 @@ pub struct HostedBrowserInteractiveState {
     pub interactives: Vec<HostedBrowserInteractive>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostedBrowserTextRow {
+    pub depth: u32,
+    pub kind: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostedBrowserTextState {
+    pub seq: u32,
+    pub rows: Vec<HostedBrowserTextRow>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct HostedViewportRequest {
     browser_instance_id: u32,
@@ -124,6 +137,8 @@ struct BrowserHostState {
     hosted_surface_seq: u32,
     hosted_interactive_state: HostedBrowserInteractiveState,
     hosted_interactive_seq: u32,
+    hosted_text_state: HostedBrowserTextState,
+    hosted_text_seq: u32,
 }
 
 impl BrowserHostState {
@@ -143,6 +158,8 @@ impl BrowserHostState {
             hosted_surface_seq: 0,
             hosted_interactive_state: HostedBrowserInteractiveState::default(),
             hosted_interactive_seq: 0,
+            hosted_text_state: HostedBrowserTextState::default(),
+            hosted_text_seq: 0,
         }
     }
 }
@@ -604,6 +621,14 @@ pub fn hosted_interactive_seq() -> u32 {
 
 pub fn hosted_interactive_seq_for_browser(browser_instance_id: u32) -> u32 {
     with_browser_host_state(browser_instance_id, |state| state.hosted_interactive_seq)
+}
+
+pub fn hosted_text_state_for_browser(browser_instance_id: u32) -> HostedBrowserTextState {
+    with_browser_host_state(browser_instance_id, |state| state.hosted_text_state.clone())
+}
+
+pub fn hosted_text_seq_for_browser(browser_instance_id: u32) -> u32 {
+    with_browser_host_state(browser_instance_id, |state| state.hosted_text_seq)
 }
 
 #[inline]
@@ -1103,6 +1128,68 @@ unsafe fn sync_hosted_interactive_state(ctx: *mut qjs::JSContext, browser_instan
     });
 }
 
+unsafe fn sync_hosted_text_state(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    let Some(browser) = browser_api_value(ctx) else {
+        return;
+    };
+    let func = qjs::JS_GetPropertyStr(ctx, browser, b"getTextRows\0".as_ptr() as *const c_char);
+    if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, func);
+        qjs::js_free_value(ctx, browser);
+        return;
+    }
+    let result = qjs::JS_Call(ctx, func, browser, 0, core::ptr::null());
+    qjs::js_free_value(ctx, func);
+    qjs::js_free_value(ctx, browser);
+    if result.is_exception()
+        || result.tag == qjs::JS_TAG_UNDEFINED
+        || result.tag == qjs::JS_TAG_NULL
+    {
+        if result.is_exception() {
+            qjs::qjs_diag::dump_last_exception(ctx, "browser getTextRows");
+        }
+        qjs::js_free_value(ctx, result);
+        return;
+    }
+
+    let mut next = HostedBrowserTextState {
+        seq: 0,
+        rows: Vec::new(),
+    };
+    let len = js_prop_f64(ctx, result, b"length\0").unwrap_or(0.0).max(0.0) as usize;
+    let max_rows = core::cmp::min(len, 256);
+    for idx in 0..max_rows {
+        let item = qjs::JS_GetPropertyUint32(ctx, result, idx as u32);
+        if item.is_exception()
+            || item.tag == qjs::JS_TAG_UNDEFINED
+            || item.tag == qjs::JS_TAG_NULL
+        {
+            qjs::js_free_value(ctx, item);
+            continue;
+        }
+        let text = js_prop_string(ctx, item, b"text\0").unwrap_or_default();
+        let kind = js_prop_string(ctx, item, b"kind\0").unwrap_or_else(|| String::from("text"));
+        let depth = js_prop_f64(ctx, item, b"depth\0").unwrap_or(0.0).max(0.0) as u32;
+        next.rows.push(HostedBrowserTextRow { depth, kind, text });
+        qjs::js_free_value(ctx, item);
+    }
+    qjs::js_free_value(ctx, result);
+
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        let prev = state.hosted_text_state.clone();
+        next.seq = prev.seq;
+        if prev != next {
+            let mut seq = state.hosted_text_seq.wrapping_add(1);
+            if seq == 0 {
+                seq = 1;
+            }
+            next.seq = seq;
+            state.hosted_text_seq = seq;
+            state.hosted_text_state = next;
+        }
+    });
+}
+
 unsafe fn apply_pending_html(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
     let Some(next) =
         with_browser_host_state_mut(browser_instance_id, |state| state.pending_html.take())
@@ -1319,6 +1406,7 @@ pub async fn boot_browser(browser_instance_id: u32) {
             collect_browser_rpc_result(ctx, browser_instance_id);
             sync_hosted_surface_state(ctx, browser_instance_id);
             sync_hosted_interactive_state(ctx, browser_instance_id);
+            sync_hosted_text_state(ctx, browser_instance_id);
             Timer::after(EmbassyDuration::from_millis(16)).await;
         }
         qjs::trueos_shims::log_info(
