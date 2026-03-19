@@ -41,8 +41,7 @@ const SECTION_STATUS_TEXT: &str = "t4ce is with you";
 const SECTION_STATUS_HOLD_MS: u64 = 1000;
 const SECTION_RAINBOW_FRAME_MS: u64 = 120;
 const SECTION_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
-const RUNNING_GO2_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
-const RUNNING_ANIMATION_TICK_MS: u64 = 100;
+const STATUS_NORMAL_RGB: (u8, u8, u8) = (255, 255, 255);
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 
@@ -353,7 +352,7 @@ impl<'a> AlignedWriter<'a> {
         }
     }
 
-    fn slot_status_text(&self, output_mask: u8, running_go2_phase: usize) -> AllocString {
+    fn slot_status_text(&self, output_mask: u8, _running_go2_phase: usize) -> AllocString {
         let slots = matrix::slot_views(output_mask);
         let mut out = AllocString::new();
         for (idx, slot) in slots.iter().enumerate() {
@@ -363,24 +362,25 @@ impl<'a> AlignedWriter<'a> {
 
             let mut label = AllocString::from("§");
             label.push_str(slot.id.as_str());
-            if slot.activity == matrix::MatrixSlotActivity::Running {
-                label.push(RUNNING_GO2_CHARS[running_go2_phase % RUNNING_GO2_CHARS.len()]);
-            }
 
-            if slot.activity == matrix::MatrixSlotActivity::Session {
-                let styled = alloc::format!(
-                    "{}",
-                    ecma48::style(label.as_str()).bold().fg(STATUS_SESSION_RGB)
-                );
-                out.push_str(styled.as_str());
-            } else if slot.selected {
+            if slot.selected {
                 let styled = alloc::format!(
                     "{}",
                     ecma48::style(label.as_str()).bold().fg(STATUS_SELECTED_RGB)
                 );
                 out.push_str(styled.as_str());
+            } else if slot.activity == matrix::MatrixSlotActivity::Running {
+                let styled = alloc::format!(
+                    "{}",
+                    ecma48::style(label.as_str()).bold().fg(SYSTEM_TEXT_RGB)
+                );
+                out.push_str(styled.as_str());
             } else {
-                out.push_str(label.as_str());
+                let styled = alloc::format!(
+                    "{}",
+                    ecma48::style(label.as_str()).bold().fg(STATUS_NORMAL_RGB)
+                );
+                out.push_str(styled.as_str());
             }
         }
         out
@@ -903,7 +903,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut cmd_status_text: Option<AllocString> = None;
     let mut command_sessions: alloc::vec::Vec<CommandSession> = alloc::vec::Vec::new();
     let mut running_go2_phase = 0usize;
-    let mut last_running_animation_tick = Instant::now();
     out.mode_status(
         output_mask,
         mode,
@@ -953,30 +952,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 out.render_transcript(&next_transcript);
             }
             transcript = next_transcript;
-        }
-
-        if matrix::has_running_slots() {
-            let now = Instant::now();
-            if now
-                .checked_duration_since(last_running_animation_tick)
-                .map(|d| d >= EmbassyDuration::from_millis(RUNNING_ANIMATION_TICK_MS))
-                .unwrap_or(false)
-            {
-                last_running_animation_tick = now;
-                running_go2_phase = (running_go2_phase + 1) % RUNNING_GO2_CHARS.len();
-                redraw_status_preserving_cursor(
-                    &out,
-                    output_mask,
-                    mode,
-                    ai_mode,
-                    qjs_mode,
-                    surf_prefix,
-                    cmd_status_text.as_deref(),
-                    running_go2_phase,
-                );
-            }
-        } else {
-            last_running_animation_tick = Instant::now();
         }
 
         let (minute_bucket, minute_text) = clock_bucket_and_text();

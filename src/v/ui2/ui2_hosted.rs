@@ -11,6 +11,8 @@ pub(super) const HOSTED_KEYBOARD_MOD_CTRL: u8 = trueos_qjs::browser_task::HOSTED
 pub(super) const HOSTED_KEYBOARD_MOD_ALT: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_ALT;
 pub(super) const HOSTED_KEYBOARD_MOD_META: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_META;
 
+const UI2_BROWSER_ADAPTER_ENABLED: bool = false;
+
 pub(super) trait UiHostedSurfaceProvider {
     fn surface_seq(&self, content_id: HostedContentId) -> u32;
     fn interactive_seq(&self, content_id: HostedContentId) -> u32;
@@ -130,6 +132,9 @@ fn hosted_adapter() -> BrowserUiHostedAdapter {
 
 #[inline]
 pub(super) fn hosted_bind_window(content_id: HostedContentId, window_id: u32) -> bool {
+    if !UI2_BROWSER_ADAPTER_ENABLED {
+        return false;
+    }
     hosted_adapter().bind_window(content_id, window_id)
 }
 
@@ -173,6 +178,18 @@ pub(super) fn hosted_set_viewport(
     content_width: u32,
     content_height: u32,
 ) -> bool {
+    if !UI2_BROWSER_ADAPTER_ENABLED {
+        let _ = (
+            content_id,
+            viewport_width,
+            viewport_height,
+            content_x,
+            content_y,
+            content_width,
+            content_height,
+        );
+        return false;
+    }
     hosted_adapter().set_viewport(
         content_id,
         viewport_width,
@@ -186,6 +203,10 @@ pub(super) fn hosted_set_viewport(
 
 #[inline]
 pub(super) fn hosted_set_scroll(content_id: HostedContentId, scroll_x: u32, scroll_y: u32) -> bool {
+    if !UI2_BROWSER_ADAPTER_ENABLED {
+        let _ = (content_id, scroll_x, scroll_y);
+        return false;
+    }
     hosted_adapter().send_input(content_id, UiHostedInput::Scroll { scroll_x, scroll_y })
 }
 
@@ -200,5 +221,9 @@ pub(super) fn hosted_queue_keyboard_events(
     content_id: HostedContentId,
     events: &[UiHostedKeyboardEvent],
 ) -> bool {
+    if !UI2_BROWSER_ADAPTER_ENABLED {
+        let _ = (content_id, events);
+        return false;
+    }
     hosted_adapter().send_input(content_id, UiHostedInput::Keyboard { events })
 }

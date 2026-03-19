@@ -24,6 +24,7 @@ const HOSTED_BY_UI2 = !!runtime.host.__trueosBrowserHostedByUi2;
 const ERROR_PREVIEW_MAX = 160;
 const MAX_RENDER_TEXT_CHARS = 512;
 const HTML_READY_TIMEOUT_MS = 10000;
+const EMPTY_BROWSER_HTML = '<!DOCTYPE html><html><head></head><body></body></html>';
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 const SHOW_CLOSING_TAG_ROWS = false;
 const BROWSER_REGION_CACHE_MAX = 4;
@@ -853,6 +854,10 @@ function buildDocFromHtml(html, vw, context = 'document') {
   return buildDocFromParsed(parsed, vw, context);
 }
 
+function effectiveBrowserHtmlSource() {
+  return cachedHtml.trim() ? cachedHtml : EMPTY_BROWSER_HTML;
+}
+
 function readNodeText(node) {
   if (!node || typeof node !== 'object') return '';
   if (isTextNode(node)) return String(node.value || '');
@@ -1105,7 +1110,7 @@ function applyYoga(rows, vw, context = 'document') {
 
 function ensureDoc(vw) {
   if (!cachedDoc) {
-    cachedDoc = buildDocFromHtml(cachedHtml, vw, 'cached html document');
+    cachedDoc = buildDocFromHtml(effectiveBrowserHtmlSource(), vw, 'cached html document');
   } else if (cachedDoc.width !== vw) {
     cachedDoc = buildDocFromParsed(cachedDoc.dom, vw, 'cached html document');
   }
@@ -1525,17 +1530,16 @@ function setHtml(nextHtml) {
   }
   invalidateBrowserRegionCache(true);
   browserPageState.beginLoad('html-set');
-  if (cachedHtml.trim()) {
-    browserCanRenderScene = true;
-    if (htmlReadyTimeoutId != null && typeof runtime.host.clearTimeout === 'function') {
-      try { runtime.host.clearTimeout(htmlReadyTimeoutId); } catch (_) {}
-      htmlReadyTimeoutId = null;
-    }
-  }
-  if (!browserCanRenderScene) {
-    return true;
+  browserCanRenderScene = true;
+  if (htmlReadyTimeoutId != null && typeof runtime.host.clearTimeout === 'function') {
+    try { runtime.host.clearTimeout(htmlReadyTimeoutId); } catch (_) {}
+    htmlReadyTimeoutId = null;
   }
   paint();
+  if (!cachedHtml.trim()) {
+    browserPageState.updateAssetUrls([], 'blank-html');
+    return true;
+  }
   const htmlSnapshot = cachedHtml;
   const pageLoadSeqSnapshot = browserPageState.getState('html-snapshot').seq;
   if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
@@ -1914,32 +1918,13 @@ async function loadUrlIntoBrowser(url, request = null) {
       return hookResult;
     }
   }
-  if (typeof fetch !== 'function') {
-    return dispatchBrowserAction('navigate', {
-      url: currentPageUrl,
-      request,
-    }, '__trueosBrowserNavigate');
-  }
-  try {
-    const response = await fetch(currentPageUrl, { method: 'GET' });
-    const html = await response.text();
-    setHtml(html);
-    return {
-      ok: 1,
-      handled: 1,
-      loaded: 1,
-      url: currentPageUrl,
-      request,
-    };
-  } catch (err) {
-    return {
-      ok: 0,
-      handled: 0,
-      reason: 'navigate-fetch-failed',
-      url: currentPageUrl,
-      error: describeError(err),
-    };
-  }
+  return {
+    ok: 0,
+    handled: 0,
+    reason: 'navigate-unhandled',
+    url: currentPageUrl,
+    request,
+  };
 }
 
 function surfToUrl(url, event = null) {
@@ -2503,3 +2488,8 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
 armHtmlReadyFallback();
 installQjsInputBridge();
 startAutoPaint();
+if (!currentPageUrl) {
+  setCurrentPageUrl('about:blank');
+}
+browserCanRenderScene = true;
+paint();
