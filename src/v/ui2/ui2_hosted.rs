@@ -1,6 +1,7 @@
 pub(super) type HostedContentId = u32;
 pub(super) type UiHostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurfaceState;
 pub(super) type UiHostedInteractiveState = trueos_qjs::browser_task::HostedBrowserInteractiveState;
+pub(super) type UiHostedTextState = trueos_qjs::browser_task::HostedBrowserTextState;
 pub(super) type UiHostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 
 pub(super) const PRIMARY_HOSTED_CONTENT_ID: HostedContentId =
@@ -16,8 +17,10 @@ const UI2_BROWSER_ADAPTER_ENABLED: bool = false;
 pub(super) trait UiHostedSurfaceProvider {
     fn surface_seq(&self, content_id: HostedContentId) -> u32;
     fn interactive_seq(&self, content_id: HostedContentId) -> u32;
+    fn text_seq(&self, content_id: HostedContentId) -> u32;
     fn surface_state(&self, content_id: HostedContentId) -> UiHostedSurfaceState;
     fn interactive_state(&self, content_id: HostedContentId) -> UiHostedInteractiveState;
+    fn text_state(&self, content_id: HostedContentId) -> UiHostedTextState;
 }
 
 pub(super) trait UiHostedViewportSink {
@@ -59,12 +62,20 @@ impl UiHostedSurfaceProvider for BrowserUiHostedAdapter {
         trueos_qjs::browser_task::hosted_interactive_seq_for_browser(content_id)
     }
 
+    fn text_seq(&self, content_id: HostedContentId) -> u32 {
+        trueos_qjs::browser_task::hosted_text_seq_for_browser(content_id)
+    }
+
     fn surface_state(&self, content_id: HostedContentId) -> UiHostedSurfaceState {
         trueos_qjs::browser_task::hosted_surface_state_for_browser(content_id)
     }
 
     fn interactive_state(&self, content_id: HostedContentId) -> UiHostedInteractiveState {
         trueos_qjs::browser_task::hosted_interactive_state_for_browser(content_id)
+    }
+
+    fn text_state(&self, content_id: HostedContentId) -> UiHostedTextState {
+        trueos_qjs::browser_task::hosted_text_state_for_browser(content_id)
     }
 }
 
@@ -166,6 +177,16 @@ pub(super) fn hosted_interactive_state(content_id: HostedContentId) -> UiHostedI
 #[inline]
 pub(super) fn hosted_interactive_seq(content_id: HostedContentId) -> u32 {
     hosted_adapter().interactive_seq(content_id)
+}
+
+#[inline]
+pub(super) fn hosted_text_state(content_id: HostedContentId) -> UiHostedTextState {
+    hosted_adapter().text_state(content_id)
+}
+
+#[inline]
+pub(super) fn hosted_text_seq(content_id: HostedContentId) -> u32 {
+    hosted_adapter().text_seq(content_id)
 }
 
 #[inline]
