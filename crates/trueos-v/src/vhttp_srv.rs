@@ -137,6 +137,9 @@ impl HttpServer {
                     return HttpServerEvent::None;
                 }
 
+                let method = req_line.method.to_string();
+                let target = req_line.target.to_string();
+                let version = req_line.version.to_string();
                 let keep_alive = keep_alive(header_bytes, req_line.version);
                 let req = session.req[..total_needed].to_vec();
                 if keep_alive {
@@ -148,9 +151,9 @@ impl HttpServer {
                 HttpServerEvent::RequestReady {
                     handle,
                     request: HttpRequest {
-                        method: req_line.method.to_string(),
-                        target: req_line.target.to_string(),
-                        version: req_line.version.to_string(),
+                        method,
+                        target,
+                        version,
                         raw: req,
                         header_end,
                         keep_alive,

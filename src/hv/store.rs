@@ -24,6 +24,12 @@ const VM_STORE_RAMDISK_BYTES: u64 = 16 * 1024 * 1024;
 const VM_STORE_QUEUE_CAP: usize = 8;
 const VM_STORE_PROBE_BYTES: &[u8] = b"trueos-hv-store-probe";
 
+#[inline]
+fn boot_probe_ms() -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    embassy_time_driver::now().saturating_mul(1000) / hz
+}
+
 static VM_STORE_ONLINE: AtomicBool = AtomicBool::new(false);
 static VM_STORE_DISK: Mutex<Option<block::DeviceHandle>> = Mutex::new(None);
 static VM_STORE_QUEUE: Mutex<Deque<Request, VM_STORE_QUEUE_CAP>> = Mutex::new(Deque::new());
@@ -346,6 +352,7 @@ fn parse_vm_store_cmd(line: &[u8]) -> Option<VmStoreNetCmd> {
 
 #[task(pool_size = 1)]
 pub async fn vm_store_task() {
+    crate::log!("boot-probe: hv-store task start ms={}\n", boot_probe_ms());
     if let Some(profile) = crate::cpu::CpuProfile::current() {
         crate::log!(
             "hv-store: start slot={} lapic={} kind={}\n",
@@ -583,20 +590,47 @@ pub async fn vm_store_replication_task() {
 }
 
 async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
+    let t0 = boot_probe_ms();
+    crate::log!("boot-probe: hv-store ensure begin ms={}\n", t0);
     let disk = crate::v::disc::ramdisk::create(VM_STORE_RAMDISK_BYTES, VM_STORE_BLOCK_SIZE)
         .map_err(VmStoreError::Create)?;
+    crate::log!(
+        "boot-probe: hv-store ramdisk create done ms={} dt={}\n",
+        boot_probe_ms(),
+        boot_probe_ms().saturating_sub(t0)
+    );
     crate::v::fs::trueosfs::format_blank_force_async(disk)
         .await
         .map_err(VmStoreError::Format)?;
+    let t1 = boot_probe_ms();
+    crate::log!(
+        "boot-probe: hv-store format done ms={} dt={}\n",
+        t1,
+        t1.saturating_sub(t0)
+    );
     crate::v::fs::trueosfs::validate_private_medium_async(disk, 0)
         .await
         .map_err(VmStoreError::Format)?;
+    let t2 = boot_probe_ms();
+    crate::log!(
+        "boot-probe: hv-store validate done ms={} dt={} step={}\n",
+        t2,
+        t2.saturating_sub(t0),
+        t2.saturating_sub(t1)
+    );
     let wrote = crate::v::fs::trueosfs::file_in_async(disk, VM_STORE_PROBE_PATH, VM_STORE_PROBE_BYTES)
         .await
         .map_err(VmStoreError::Format)?;
     if !wrote {
         return Err(VmStoreError::Format(block::Error::Io));
     }
+    let t3 = boot_probe_ms();
+    crate::log!(
+        "boot-probe: hv-store probe write done ms={} dt={} step={}\n",
+        t3,
+        t3.saturating_sub(t0),
+        t3.saturating_sub(t2)
+    );
     let Some(probe) = read_private_file(disk, VM_STORE_PROBE_PATH)
         .await
         .map_err(VmStoreError::Format)?
@@ -606,7 +640,20 @@ async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
     if probe.as_slice() != VM_STORE_PROBE_BYTES {
         return Err(VmStoreError::Format(block::Error::Corrupted));
     }
-    Timer::after(EmbassyDuration::from_millis(10)).await;
+    let t4 = boot_probe_ms();
+    crate::log!(
+        "boot-probe: hv-store probe read done ms={} dt={} step={}\n",
+        t4,
+        t4.saturating_sub(t0),
+        t4.saturating_sub(t3)
+    );
+    let t5 = boot_probe_ms();
+    crate::log!(
+        "boot-probe: hv-store ensure done ms={} dt={} tail={}\n",
+        t5,
+        t5.saturating_sub(t0),
+        t5.saturating_sub(t4)
+    );
     Ok(disk)
 }
 

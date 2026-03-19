@@ -30,6 +30,12 @@ const LOGO_PAD_Y: f32 = 24.0;
 static LOADSCREEN_LOGO: Once<LogoTexture> = Once::new();
 static LOADSCREEN_LOGO_UPLOADED: AtomicBool = AtomicBool::new(false);
 
+#[inline]
+fn boot_probe_ms() -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    embassy_time_driver::now().saturating_mul(1000) / hz
+}
+
 fn loadscreen_logo() -> &'static LogoTexture {
     LOADSCREEN_LOGO.call_once(|| {
         let (pixels, width, height) = crate::vga::get_logo_buffer();
@@ -201,6 +207,9 @@ pub async fn gfx_loadscreen_task() {
     let clear_w = (text_w + (TEXT_PAD_X * 2.0)).min(fb_w - clear_x);
     let clear_h = (atlas.cell_h as f32 + (TEXT_PAD_Y * 2.0)).min(fb_h - clear_y);
 
+    let start_ms = boot_probe_ms();
+    crate::log!("boot-probe: loadscreen start ms={}\n", start_ms);
+
     crate::gfx::with_cabi_frame_lock(|| {
         let begin_rc =
             unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(LOADSCREEN_BG_RGB) };
@@ -255,4 +264,10 @@ pub async fn gfx_loadscreen_task() {
         frame = frame.wrapping_add(1);
         Timer::after(EmbassyDuration::from_millis(16)).await;
     }
+    crate::log!(
+        "boot-probe: loadscreen end ms={} frames={} lived_ms={}\n",
+        boot_probe_ms(),
+        frame,
+        boot_probe_ms().saturating_sub(start_ms)
+    );
 }
