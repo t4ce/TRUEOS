@@ -138,7 +138,7 @@ pub(crate) struct TlbUsbController {
     pub function: u8,
     pub vendor_id: u16,
     pub device_id: u16,
-    pub mmio_base: u64,
+    pub mmio_base: NonNull<u8>,
 }
 
 #[derive(Clone, Copy)]
@@ -173,6 +173,23 @@ fn decode_mmio_bar(bar_lo: u32, bar_hi: Option<u32>) -> Option<u64> {
     (base != 0).then_some(base)
 }
 
+fn controller_mmio_map(bus: u8, slot: u8, function: u8) -> Option<NonNull<u8>> {
+    let (bar0_lo, bar0_hi) = crate::pci::read_bar0_raw(bus, slot, function);
+    let phys_base = decode_mmio_bar(bar0_lo, bar0_hi)?;
+
+    let mut map_len = crate::pci::bar_size_bytes(bus, slot, function, 0)
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(0x10_000);
+    if map_len < 0x10_000 {
+        map_len = 0x10_000;
+    }
+    if map_len > 0x10_0000 {
+        map_len = 0x10_0000;
+    }
+
+    crate::pci::mmio::map_mmio_region(phys_base, map_len).ok()
+}
+
 pub(crate) fn pci_usb_controllers() -> Vec<TlbUsbController> {
     const PCI_CLASS_SERIAL_BUS: u8 = 0x0C;
     const PCI_SUBCLASS_USB: u8 = 0x03;
@@ -190,8 +207,7 @@ pub(crate) fn pci_usb_controllers() -> Vec<TlbUsbController> {
                 continue;
             }
 
-            let (bar0_lo, bar0_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
-            let Some(mmio_base) = decode_mmio_bar(bar0_lo, bar0_hi) else {
+            let Some(mmio_base) = controller_mmio_map(dev.bus, dev.slot, dev.function) else {
                 continue;
             };
 
@@ -239,12 +255,9 @@ pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummar
 
     crate::wait::spawn_and_wait_local(async move {
         crate::pci::enable_mem_and_bus_master(info.bus, info.slot, info.function);
-        let Some(mmio) = NonNull::new(info.mmio_base as *mut u8) else {
-            return Vec::new();
-        };
 
         let mut host =
-            match crab_usb::USBHost::new_xhci(mmio, &self::crabusb_service::CRABUSB_KERNEL) {
+            match crab_usb::USBHost::new_xhci(info.mmio_base, &self::crabusb_service::CRABUSB_KERNEL) {
                 Ok(host) => host,
                 Err(_) => return Vec::new(),
             };
@@ -299,9 +312,8 @@ pub(crate) mod syscall {
         let info = super::controller_by_index(controller_id)?;
         crate::wait::spawn_and_wait_local(async move {
             crate::pci::enable_mem_and_bus_master(info.bus, info.slot, info.function);
-            let mmio = NonNull::new(info.mmio_base as *mut u8)?;
             let mut host =
-                crab_usb::USBHost::new_xhci(mmio, &super::crabusb_service::CRABUSB_KERNEL).ok()?;
+                crab_usb::USBHost::new_xhci(info.mmio_base, &super::crabusb_service::CRABUSB_KERNEL).ok()?;
             host.init().await.ok()?;
             let found = host.probe_devices().await.ok()?;
 
@@ -412,12 +424,8 @@ pub(crate) fn tlb_snapshot() -> TlbUsbSnapshot {
 
         crate::pci::enable_mem_and_bus_master(probe_ctrl.bus, probe_ctrl.slot, probe_ctrl.function);
 
-        let Some(mmio) = NonNull::new(probe_ctrl.mmio_base as *mut u8) else {
-            return Err("mmio");
-        };
-
         let mut host =
-            match crab_usb::USBHost::new_xhci(mmio, &self::crabusb_service::CRABUSB_KERNEL) {
+            match crab_usb::USBHost::new_xhci(probe_ctrl.mmio_base, &self::crabusb_service::CRABUSB_KERNEL) {
             Ok(host) => host,
             Err(_) => return Err("host-new"),
         };

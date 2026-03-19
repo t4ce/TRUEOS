@@ -910,7 +910,7 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
 
         if !emitted {
             let vidpid = alloc::format!("{:04X}:{:04X}", ctrl_info.vendor_id, ctrl_info.device_id);
-            let mmio = alloc::format!("mmio=0x{:X}", ctrl_info.mmio_base);
+            let mmio = alloc::format!("mmio=0x{:X}", ctrl_info.mmio_base.as_ptr() as usize);
             table.emit_row(&[&ctrl, &bdf, probe, "-", &vidpid, "xhci", &mmio], |text| {
                 line(io, text)
             });
@@ -1181,7 +1181,7 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
 
             if !emitted {
                 let vidpid = alloc::format!("{:04X}:{:04X}", ctrl_info.vendor_id, ctrl_info.device_id);
-                let mmio = alloc::format!("mmio=0x{:X}", ctrl_info.mmio_base);
+                let mmio = alloc::format!("mmio=0x{:X}", ctrl_info.mmio_base.as_ptr() as usize);
                 writeln!(
                     out,
                     "{:<4}  {:02X}:{:02X}.{}  {:<8}  {:<12}  {:<11}  {:<10}  {:<12}",
