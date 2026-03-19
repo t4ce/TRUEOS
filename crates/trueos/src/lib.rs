@@ -51,8 +51,9 @@ pub mod prelude {
     pub use crate::vsys;
 }
 
+#[cfg(not(feature = "linked-portal"))]
 #[macro_export]
-macro_rules! app_entry {
+macro_rules! portal {
     ($main:path) => {
         #[global_allocator]
         static TRUEOS_GLOBAL_ALLOCATOR: $crate::runtime::TrueosAllocator =
@@ -64,13 +65,15 @@ macro_rules! app_entry {
         }
 
         mod __trueos_app_entry {
-            #[unsafe(no_mangle)]
-            pub extern "C" fn main(
+            use super::*;
+
+            #[unsafe(export_name = "main")]
+            pub extern "C" fn __trueos_abi_main(
                 argc: usize,
                 argv: *const *const core::ffi::c_char,
             ) {
                 let args = unsafe { $crate::runtime::args_from_abi(argc, argv) };
-                super::$main(args)
+                $main(args)
             }
         }
     };
@@ -85,13 +88,53 @@ macro_rules! app_entry {
         }
 
         mod __trueos_app_entry {
-            #[unsafe(no_mangle)]
-            pub extern "C" fn main(
+            #[unsafe(export_name = "main")]
+            pub extern "C" fn __trueos_abi_main(
                 _argc: usize,
                 _argv: *const *const core::ffi::c_char,
             ) {
                 $body
             }
         }
+    };
+}
+
+#[cfg(feature = "linked-portal")]
+#[macro_export]
+macro_rules! portal {
+    ($main:path) => {
+        mod __trueos_app_entry {
+            use super::*;
+
+            #[unsafe(export_name = "main")]
+            pub extern "C" fn __trueos_abi_main(
+                argc: usize,
+                argv: *const *const core::ffi::c_char,
+            ) {
+                let args = unsafe { $crate::runtime::args_from_abi(argc, argv) };
+                $main(args)
+            }
+        }
+    };
+    ($body:block) => {
+        mod __trueos_app_entry {
+            #[unsafe(export_name = "main")]
+            pub extern "C" fn __trueos_abi_main(
+                _argc: usize,
+                _argv: *const *const core::ffi::c_char,
+            ) {
+                $body
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! app_entry {
+    ($main:path) => {
+        $crate::portal!($main);
+    };
+    ($body:block) => {
+        $crate::portal!($body);
     };
 }
