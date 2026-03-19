@@ -13,3 +13,4 @@ trueos-sys = { path = "../trueos-sys" }
 
 [features]
 default = []
+linked-portal = []
