@@ -421,8 +421,8 @@ unsafe extern "C" fn trueos_xhci_list_devices_js(
     use alloc::string::String;
     let mut json = String::from("[");
     let mut first = true;
-    for cid in 0..crate::usb::xhci::MAX_XHCI_CONTROLLERS {
-        for dev in crate::usb::list_device_summaries(cid) {
+    for cid in 0..crate::usb2::xhci::MAX_XHCI_CONTROLLERS {
+        for dev in crate::usb2::list_device_summaries(cid) {
             let handle = ((cid as u32) << 24) | dev.slot_id;
             if !first {
                 json.push(',');
@@ -460,7 +460,7 @@ unsafe extern "C" fn trueos_xhci_port_reset_js(
     let Some(port) = js_to_i32(ctx, args[1]) else {
         return js_int32(-1);
     };
-    js_int32(crate::usb::syscall::port_reset(cid as usize, port as usize))
+    js_int32(crate::usb2::syscall::port_reset(cid as usize, port as usize))
 }
 
 unsafe extern "C" fn trueos_xhci_get_descriptor_js(
@@ -485,7 +485,7 @@ unsafe extern "C" fn trueos_xhci_get_descriptor_js(
     let length = js_to_i32(ctx, args[3]).unwrap_or(64);
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    let bytes = match crate::usb::syscall::control_get_descriptor(
+    let bytes = match crate::usb2::syscall::control_get_descriptor(
         cid,
         slot,
         desc_type as u8,
@@ -532,7 +532,7 @@ unsafe extern "C" fn trueos_xhci_read_transfer_event_js(
     };
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    let (cc, residual) = match crate::usb::syscall::read_transfer_event(cid, slot, ep_target as u32)
+    let (cc, residual) = match crate::usb2::syscall::read_transfer_event(cid, slot, ep_target as u32)
     {
         Some(r) => r,
         None => return js_null(),
@@ -572,7 +572,7 @@ unsafe extern "C" fn trueos_xhci_get_hid_descriptor_js(
     let length = js_to_i32(ctx, args[2]).unwrap_or(64);
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    let bytes = match crate::usb::syscall::control_get_hid_descriptor(
+    let bytes = match crate::usb2::syscall::control_get_hid_descriptor(
         cid,
         slot,
         interface_number as u16,
@@ -605,7 +605,7 @@ unsafe extern "C" fn trueos_xhci_get_hid_report_descriptor_js(
     let length = js_to_i32(ctx, args[2]).unwrap_or(256);
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    let bytes = match crate::usb::syscall::control_get_hid_report_descriptor(
+    let bytes = match crate::usb2::syscall::control_get_hid_report_descriptor(
         cid,
         slot,
         interface_number as u16,
@@ -637,7 +637,7 @@ unsafe extern "C" fn trueos_xhci_hid_get_protocol_js(
     };
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    match crate::usb::hid::classreq::get_protocol_slot_sync(cid, slot, interface_number as u8, 500)
+    match crate::usb2::hid::classreq::get_protocol_slot_sync(cid, slot, interface_number as u8, 500)
     {
         Some(protocol) => js_int32(protocol as i32),
         None => js_int32(-1),
@@ -665,7 +665,7 @@ unsafe extern "C" fn trueos_xhci_hid_set_protocol_js(
     };
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    match crate::usb::hid::classreq::set_protocol_slot_sync(
+    match crate::usb2::hid::classreq::set_protocol_slot_sync(
         cid,
         slot,
         interface_number as u8,
@@ -698,7 +698,7 @@ unsafe extern "C" fn trueos_xhci_hid_get_idle_js(
     };
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    match crate::usb::hid::classreq::get_idle_slot_sync(
+    match crate::usb2::hid::classreq::get_idle_slot_sync(
         cid,
         slot,
         interface_number as u8,
@@ -734,7 +734,7 @@ unsafe extern "C" fn trueos_xhci_hid_set_idle_js(
     };
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    match crate::usb::hid::classreq::set_idle_slot_sync(
+    match crate::usb2::hid::classreq::set_idle_slot_sync(
         cid,
         slot,
         interface_number as u8,
@@ -771,14 +771,14 @@ unsafe extern "C" fn trueos_xhci_hid_get_report_js(
     };
     let length = js_to_i32(ctx, args[4]).unwrap_or(64).clamp(1, 256) as usize;
     let report_type = match report_type {
-        1 => crate::usb::hid::classreq::HidReportType::Input,
-        2 => crate::usb::hid::classreq::HidReportType::Output,
-        3 => crate::usb::hid::classreq::HidReportType::Feature,
+        1 => crate::usb2::hid::classreq::HidReportType::Input,
+        2 => crate::usb2::hid::classreq::HidReportType::Output,
+        3 => crate::usb2::hid::classreq::HidReportType::Feature,
         _ => return js_null(),
     };
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    let bytes = match crate::usb::hid::classreq::get_report_slot_sync(
+    let bytes = match crate::usb2::hid::classreq::get_report_slot_sync(
         cid,
         slot,
         interface_number as u8,
@@ -845,12 +845,12 @@ unsafe extern "C" fn trueos_xhci_hid_set_report_js(
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
     let report_type = match report_type {
-        1 => crate::usb::hid::classreq::HidReportType::Input,
-        2 => crate::usb::hid::classreq::HidReportType::Output,
-        3 => crate::usb::hid::classreq::HidReportType::Feature,
+        1 => crate::usb2::hid::classreq::HidReportType::Input,
+        2 => crate::usb2::hid::classreq::HidReportType::Output,
+        3 => crate::usb2::hid::classreq::HidReportType::Feature,
         _ => return js_int32(-1),
     };
-    let rc = crate::usb::hid::classreq::set_report_slot_sync(
+    let rc = crate::usb2::hid::classreq::set_report_slot_sync(
         cid,
         slot,
         interface_number as u8,
@@ -864,116 +864,6 @@ unsafe extern "C" fn trueos_xhci_hid_set_report_js(
         Some(cc) => js_int32(cc as i32),
         None => js_int32(-1),
     }
-}
-
-unsafe extern "C" fn trueos_leds_send_output_report_js(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: c_int,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    if argv.is_null() || argc < 3 {
-        return js_int32(-1);
-    }
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-
-    let Some(handle) = js_to_i32(ctx, args[0]) else {
-        return js_int32(-1);
-    };
-    let Some(report_id) = js_to_i32(ctx, args[1]) else {
-        return js_int32(-1);
-    };
-
-    let mut text_len: usize = 0;
-    let text_ptr = qjs::JS_ToCStringLen2(ctx, &mut text_len as *mut usize, args[2], 0);
-    if text_ptr.is_null() {
-        return js_int32(-1);
-    }
-    let text_bytes = core::slice::from_raw_parts(text_ptr as *const u8, text_len);
-    let text = match core::str::from_utf8(text_bytes) {
-        Ok(v) => v,
-        Err(_) => {
-            qjs::JS_FreeCString(ctx, text_ptr);
-            return js_int32(-1);
-        }
-    };
-
-    let mut payload = [0u8; LED_TOOL_MAX_PAYLOAD_BYTES];
-    let payload_len = match parse_hex_payload(text, &mut payload) {
-        Some(n) => n,
-        None => {
-            qjs::JS_FreeCString(ctx, text_ptr);
-            return js_int32(-2);
-        }
-    };
-    qjs::JS_FreeCString(ctx, text_ptr);
-
-    let cid = ((handle as u32) >> 24) as usize;
-    let slot = (handle as u32) & 0xFF_FFFF;
-    let ok = crate::wait::spawn_and_wait_local(async move {
-        crate::usb::leds::send_output_report_for_handle(
-            cid,
-            slot,
-            report_id as u8,
-            &payload[..payload_len],
-        )
-        .await
-        .is_ok()
-    });
-    js_int32(if ok { 0 } else { -1 })
-}
-
-unsafe extern "C" fn trueos_leds_send_preferred_output_report_js(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: c_int,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    if argv.is_null() || argc < 2 {
-        return js_int32(-1);
-    }
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-
-    let Some(handle) = js_to_i32(ctx, args[0]) else {
-        return js_int32(-1);
-    };
-
-    let mut text_len: usize = 0;
-    let text_ptr = qjs::JS_ToCStringLen2(ctx, &mut text_len as *mut usize, args[1], 0);
-    if text_ptr.is_null() {
-        return js_int32(-1);
-    }
-    let text_bytes = core::slice::from_raw_parts(text_ptr as *const u8, text_len);
-    let text = match core::str::from_utf8(text_bytes) {
-        Ok(v) => v,
-        Err(_) => {
-            qjs::JS_FreeCString(ctx, text_ptr);
-            return js_int32(-1);
-        }
-    };
-
-    let mut payload = [0u8; LED_TOOL_MAX_PAYLOAD_BYTES];
-    let payload_len = match parse_hex_payload(text, &mut payload) {
-        Some(n) => n,
-        None => {
-            qjs::JS_FreeCString(ctx, text_ptr);
-            return js_int32(-2);
-        }
-    };
-    qjs::JS_FreeCString(ctx, text_ptr);
-
-    let cid = ((handle as u32) >> 24) as usize;
-    let slot = (handle as u32) & 0xFF_FFFF;
-    let ok = crate::wait::spawn_and_wait_local(async move {
-        crate::usb::leds::send_preferred_output_report_for_handle(
-            cid,
-            slot,
-            &payload[..payload_len],
-        )
-        .await
-        .is_ok()
-    });
-    js_int32(if ok { 0 } else { -1 })
 }
 
 /// Called once per new JS context to install kernel-service bindings.
@@ -1316,36 +1206,6 @@ pub unsafe fn install(ctx: *mut qjs::JSContext) {
         ctx,
         global,
         b"__trueosXhciHidSetReport\0".as_ptr() as *const c_char,
-        f,
-    );
-
-    let f = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_leds_send_output_report_js),
-        b"__trueosLedsSendOutputReport\0".as_ptr() as *const c_char,
-        3,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosLedsSendOutputReport\0".as_ptr() as *const c_char,
-        f,
-    );
-
-    let f = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_leds_send_preferred_output_report_js),
-        b"__trueosLedsSendPreferredOutputReport\0".as_ptr() as *const c_char,
-        2,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosLedsSendPreferredOutputReport\0".as_ptr() as *const c_char,
         f,
     );
 
