@@ -15,7 +15,7 @@ use spin::Mutex;
 use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
 
-use super::mass::pick_mass_target;
+use super::mass::{pick_mass_target, probe_mass_bot, register_mass_geometry_placeholder};
 
 pub(super) struct TrueosCrabUsbKernel;
 
@@ -30,6 +30,7 @@ static AUDIO_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
+static USB_MASS_REGISTERED_SLOTS: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
 const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
@@ -800,6 +801,190 @@ async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::Devic
     }
 }
 
+async fn maybe_start_mass_storage(host: &mut USBHost, dev_info: &crab_usb::DeviceInfo) -> bool {
+    let desc = dev_info.descriptor();
+    let vendor_id = desc.vendor_id;
+    let product_id = desc.product_id;
+
+    let mut device = match host.open_device(dev_info).await {
+        Ok(device) => device,
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} open failed: {:?}\n",
+                vendor_id,
+                product_id,
+                err
+            );
+            return false;
+        }
+    };
+
+    let configs = device.configurations().to_vec();
+    let Some(target) = pick_mass_target(&configs) else {
+        return false;
+    };
+
+    if let Err(err) = device
+        .ep_ctrl()
+        .set_configuration(target.configuration_value)
+        .await
+    {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} set cfg={} failed: {:?}\n",
+            vendor_id,
+            product_id,
+            target.configuration_value,
+            err
+        );
+    }
+
+    match device
+        .claim_interface(target.interface_number, target.alternate_setting)
+        .await
+    {
+        Ok(()) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} ownership if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={}\n",
+                vendor_id,
+                product_id,
+                target.interface_number,
+                target.alternate_setting,
+                target.configuration_value,
+                target.bulk_in,
+                target.bulk_out,
+                target.bulk_in_max_packet_size,
+                target.bulk_out_max_packet_size
+            );
+
+            let mut bulk_out = match device.get_endpoint(target.bulk_out).await {
+                Ok(EndpointKind::BulkOut(ep)) => ep,
+                Ok(_) => {
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} bulk_out endpoint kind mismatch ep=0x{:02X}\n",
+                        vendor_id,
+                        product_id,
+                        target.bulk_out
+                    );
+                    return false;
+                }
+                Err(err) => {
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} bulk_out endpoint open failed ep=0x{:02X}: {:?}\n",
+                        vendor_id,
+                        product_id,
+                        target.bulk_out,
+                        err
+                    );
+                    return false;
+                }
+            };
+            let mut bulk_in = match device.get_endpoint(target.bulk_in).await {
+                Ok(EndpointKind::BulkIn(ep)) => ep,
+                Ok(_) => {
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} bulk_in endpoint kind mismatch ep=0x{:02X}\n",
+                        vendor_id,
+                        product_id,
+                        target.bulk_in
+                    );
+                    return false;
+                }
+                Err(err) => {
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} bulk_in endpoint open failed ep=0x{:02X}: {:?}\n",
+                        vendor_id,
+                        product_id,
+                        target.bulk_in,
+                        err
+                    );
+                    return false;
+                }
+            };
+
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} endpoint wiring bulk_out={} bulk_in={}\n",
+                vendor_id,
+                product_id,
+                true,
+                true
+            );
+
+            let probe = match probe_mass_bot(
+                &mut device,
+                &mut bulk_out,
+                &mut bulk_in,
+                target.interface_number,
+            )
+            .await
+            {
+                Ok(info) => info,
+                Err(err) => {
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} BOT probe failed: {:?}\n",
+                        vendor_id,
+                        product_id,
+                        err
+                    );
+                    return true;
+                }
+            };
+
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} probe max_lun={} bs={} blocks={} vendor='{}' product='{}'\n",
+                vendor_id,
+                product_id,
+                probe.max_lun,
+                probe.block_size,
+                probe.block_count,
+                probe.vendor,
+                probe.product
+            );
+
+            let slot = device.slot_id();
+            let is_new_slot = {
+                let mut slots = USB_MASS_REGISTERED_SLOTS.lock();
+                if slots.iter().any(|known| *known == slot) {
+                    false
+                } else {
+                    slots.push(slot);
+                    true
+                }
+            };
+
+            if is_new_slot {
+                let handle = register_mass_geometry_placeholder(
+                    vendor_id,
+                    product_id,
+                    probe.block_size,
+                    probe.block_count,
+                );
+                crate::log!(
+                    "crabusb: mass {:04X}:{:04X} registered disk {} label={:?} bs={} blocks={}\n",
+                    vendor_id,
+                    product_id,
+                    handle.id(),
+                    handle.info().label,
+                    probe.block_size,
+                    probe.block_count
+                );
+            }
+
+            true
+        }
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
+                vendor_id,
+                product_id,
+                target.interface_number,
+                target.alternate_setting,
+                err
+            );
+            false
+        }
+    }
+}
+
 async fn log_opened_device_graph(
     host: &mut USBHost,
     dev_idx: usize,
@@ -925,6 +1110,7 @@ async fn probe_and_log(host: &mut USBHost) -> bool {
                     );
                     maybe_start_truekey_bridge(host, dev).await;
                     maybe_start_target_audio(host, dev).await;
+                    let _ = maybe_start_mass_storage(host, dev).await;
                 }
                 true
             }
@@ -989,6 +1175,9 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController) {
                 }
                 if desc.vendor_id == HYPERX_VENDOR_ID && desc.product_id == HYPERX_PRODUCT_ID {
                     maybe_start_target_audio(host, dev).await;
+                    continue;
+                }
+                if maybe_start_mass_storage(host, dev).await {
                     continue;
                 }
                 log_opened_device_graph(host, dev_idx, dev).await;

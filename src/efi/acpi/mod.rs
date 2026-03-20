@@ -12,15 +12,14 @@ use crate::{
 
 pub mod bgrt;
 pub mod dbg;
-// pub mod dmar;
 pub mod facp;
-// pub mod fpdt;
 pub mod hpet;
 pub mod madt;
 pub mod sleep;
+// pub mod fpdt;
 // pub mod ssdt;
 // pub mod tpm2;
-
+// pub mod dmar;
 static ACPI_TABLES: Once<Option<AcpiTables<AcpiIdentityHandler>>> = Once::new();
 
 pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>> {

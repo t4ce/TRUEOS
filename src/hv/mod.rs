@@ -226,6 +226,7 @@ static VM1_RESTORE_META: Mutex<Option<Vm1SnapshotMeta>> = Mutex::new(None);
 const VM1_SNAPSHOT_MAGIC: u32 = 0x3153_4D56; // "VMS1"
 const VM1_SNAPSHOT_VERSION: u32 = 1;
 const VM1_SNAPSHOT_PATH: &str = "vm/vm1.snapshot";
+const VM1_ID: u8 = 0;
 
 #[derive(Copy, Clone, Default)]
 struct LaunchResult {
@@ -269,6 +270,7 @@ struct Vm1SnapshotHeader {
 
 #[derive(Copy, Clone, Debug)]
 pub enum SaveError {
+    UnsupportedVmId,
     NoRoot,
     NoSnapshot,
     BeginWrite,
@@ -277,6 +279,7 @@ pub enum SaveError {
 
 #[derive(Copy, Clone, Debug)]
 pub enum RestoreError {
+    UnsupportedVmId,
     NoRoot,
     MissingFile,
     Read(crate::disc::block::Error),
@@ -286,10 +289,16 @@ pub enum RestoreError {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StartError {
+    UnsupportedVmId,
     AlreadyRunning,
     VmxUnsupported,
     MissingGuestModule,
     SpawnFailed,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum StopError {
+    UnsupportedVmId,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -320,7 +329,15 @@ pub fn status() -> HvStatus {
     }
 }
 
-pub fn start(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Result<(), StartError> {
+pub fn start(
+    vm_id: u8,
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+) -> Result<(), StartError> {
+    if vm_id != VM1_ID {
+        return Err(StartError::UnsupportedVmId);
+    }
+
     if VM1_RUNNING.load(Ordering::Acquire) || VM1_STARTING.load(Ordering::Acquire) {
         return Err(StartError::AlreadyRunning);
     }
@@ -379,16 +396,20 @@ pub fn start(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Result<(), St
     Ok(())
 }
 
-pub fn stop() -> bool {
+pub fn stop(vm_id: u8) -> Result<bool, StopError> {
+    if vm_id != VM1_ID {
+        return Err(StopError::UnsupportedVmId);
+    }
+
     if VM1_RUNNING.load(Ordering::Acquire) || VM1_STARTING.load(Ordering::Acquire) {
         VM1_STOP_REQ.store(true, Ordering::Release);
         hvlogf(format_args!("hv: vm1 lifecycle: stop requested"));
-        true
+        Ok(true)
     } else {
         hvlogf(format_args!(
             "hv: vm1 lifecycle: stop ignored (not running)"
         ));
-        false
+        Ok(false)
     }
 }
 
@@ -418,13 +439,21 @@ pub fn write_logs(io: &dyn ShellIo2) {
     }
 }
 
-pub fn save_snapshot() -> Result<usize, SaveError> {
+pub fn save_snapshot(vm_id: u8) -> Result<usize, SaveError> {
+    if vm_id != VM1_ID {
+        return Err(SaveError::UnsupportedVmId);
+    }
+
     let bytes = snapshot_bytes()?;
-    crate::hv::store::save_bytes(bytes).map_err(map_store_save_error)
+    crate::hv::store::save_bytes(vm_id, bytes).map_err(map_store_save_error)
 }
 
-pub fn restore_snapshot() -> Result<usize, RestoreError> {
-    let bytes = crate::hv::store::load_bytes().map_err(map_store_restore_error)?;
+pub fn restore_snapshot(vm_id: u8) -> Result<usize, RestoreError> {
+    if vm_id != VM1_ID {
+        return Err(RestoreError::UnsupportedVmId);
+    }
+
+    let bytes = crate::hv::store::load_bytes(vm_id).map_err(map_store_restore_error)?;
 
     restore_snapshot_bytes(bytes.as_slice())?;
     Ok(bytes.len())
@@ -470,7 +499,7 @@ fn vmexit_is_preserve(lr: LaunchResult) -> bool {
 
 fn snapshot_on_preserve_exit() {
     match snapshot_bytes() {
-        Ok(bytes) => match crate::hv::store::save_bytes(bytes) {
+        Ok(bytes) => match crate::hv::store::save_bytes(VM1_ID, bytes) {
             Ok(saved) => hvlogf(format_args!(
                 "hv: vm1 reporting: preserve snapshot saved store=hv-ramdisk path=vm/vm1.snapshot bytes={}",
                 saved
