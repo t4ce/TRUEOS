@@ -1,0 +1,124 @@
+# ========================================
+# Woodland: Parish Landing
+# ========================================
+
+room parish-landing {
+    name "Parish Landing"
+    desc """A small plateau carved into the slope, marked by an old [[b]]wooden sign[[/b]] which reads:\n[[box:Candidates Welcome]][[b]]Pancakes Served Daily (Terms and Conditions Apply)[[/b]][[/box]]\nA faded poster nailed beside it shows a smiling Saint Alfonzo wielding a spatula like a holy relic. From here, the steps curve gently upward, disappearing into the woodland growth again. A modest, rutted trail leads west toward a nearby parish."""
+
+    scenery "Saint Alfonzo" desc "The depiction looks suspiciously like Super Mario dressed in religious garb."
+    scenery "Sculpted Pillar" desc "Ornate and hand-carved in rare marble that doesn't seem native to the area. The meticulous scrollwork and attention to detail expose the sculptor's deep reverence for the [[i]]wisdom imparted to those who read the plaque[[/i]]."
+    scenery "Trail" desc "Most of the gravel has washed away long ago, leaving a rough dirt trail toward the parish."
+    scenery "Wooden Sign"
+    scenery "Forest Grime"
+    scenery "Spatula"
+    scenery "Stone Steps"
+    scenery "Metallic Ring"
+    scenery "Faded Poster" desc "You see nothing odd about the poster — apart from the subject matter."
+    scenery "Strange Symbols" desc "You can't make much out of them. They're strange. [[i]]It's right in the name.[[/i]]"
+
+    # Stargate Open/Closed
+    overlay if flag woodland-gate-open {
+        set "The open Stargate shimmers just behind the Saint Alfonzo's sign."
+        unset "A shed-sized metallic ring sits upright behind the St. Alfonzo's sign. [[i]]Strange symbols[[/i]] are forged around its circumference."
+    }
+
+    # Plaque Grimy/Clean
+    overlay if flag cleaned-plaque-1 {
+        set "You're occasionally distracted by a glint of sunlight reflected from the freshly cleaned [[item]]plaque[[/item]] on the pillar just inside the treeline."
+        unset "Just beyond the treeline stands an impressive, intricately sculpted pillar bearing a [[item]]plaque[[/item]] tarnished with age and forest grime."
+    }
+
+    # Flavor item for Followers of the Gourd only.
+    overlay if flag set sect-gourd, item present gourd_meeting_note {
+        text "A [[item]]handwritten note[[/item]] is tacked near the end of St. Alfonzo's spatula."
+    }
+
+    exit "down the steps" -> high-ridge
+    exit "rutted trail" -> st-alfonzo-parish
+    exit "up the steps" -> two-sheds-landing
+}
+
+item scenery_woodland_stargate {
+    name "Woodlands Stargate"
+    desc "A garage-sized metallic ring with a shimmering portal in the center hidden behind the St. Alfonzo's sign. Symbols around its edge seem to indicate destinations. On chevron is locked to a tree icon, and the other is locked to a microscope."
+    location room parish-landing
+    movability fixed "It weighs enough to have its own gravity."
+    visibility scenery
+    visible when has flag woodland-gate-open
+    aliases "gate", "ring"
+}
+
+# ========================================
+# Items
+# ========================================
+
+item plaque_1 {
+    name "Weathered Plaque"
+    desc "A plaque worn nearly smooth by decade upon decade of weather and grime. [[b]][[i]]The intricate masonry of its pillar suggests the utmost importance and profundity of its message.[[/i]][[/b]]"
+    movability fixed "It's firmly affixed to the intricate pillar."
+    location room parish-landing
+    text """A common mistake that people make when trying to design something completely foolproof is to underestimate the [[u]]ingenuity of complete fools[[/u]].
+    [[center]][[i]]-- D.A., Head of Architectural Illogistics, Area 42[[/i]][[/center]]"""
+    ability Read
+    requires clean to clean
+}
+
+
+# ========================================
+# Triggers
+# ========================================
+
+trigger "[Parish-Landing] Plaque 1 Too Grimy to Read"
+when use item plaque_1 ability read {
+    if missing flag cleaned-plaque-1 {
+        do deny read "The plaque is too grimy and worn to make out the words. You'll need to find a way to clean it off."
+        do add flag tried-read-plaque-1
+    }
+}
+
+trigger "[Parish-Landing] Plaque 1 Cleaned" only once
+when act clean on item plaque_1 {
+    do add flag cleaned-plaque-1
+    do award points 3 reason "Cleaned the grime off plaque 1"
+    do show "With some saliva and a little effort, you're able to remove the grime and bring the plaque to a dull shine."
+}
+
+trigger "[Parish-Landing] Read Cleaned Plaque 1" only once
+when use item plaque_1 ability read {
+    if has flag cleaned-plaque-1 {
+        do add flag read-plaque-1
+        do award points 10 reason "Read the grimy plaque"
+    }
+    if all( has visited room stargate-room, has flag cleaned-plaque-1 ) {
+        do show "(A new Stargate destination has been enabled.)"
+        # open woodland gate
+        do add flag woodland-gate-open
+        do modify room parish-landing {
+            add exit "through the stargate" -> stargate-room
+        }
+        # close snowfield gate
+        do remove flag snowfield-gate-open
+        do modify room ice-pit {
+            remove exit stargate-room
+        }
+        # close patio gate
+        do remove flag patio-gate-open
+        do modify room patio {
+            remove exit stargate-room
+        }
+    }
+}
+
+
+# ========================================
+# Goals
+# ========================================
+
+goal read-plaque-1 {
+    name "Read the Plaque"
+    desc "Find a way to clean off the [[item]]plaque[[/item]] by the [[room]]Parish Landing[[/room]], so you can read it."
+    group optional
+    start when has flag tried-read-plaque-1
+    done when has flag read-plaque-1
+}

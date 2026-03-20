@@ -1,0 +1,28 @@
+# ========================================
+# Woodland Event: Gnat Cloud Fly-By
+# ========================================
+let set woods = (
+    high-ridge,
+    parish-landing,
+    two-sheds-landing,
+    two-sheds,
+    guard-post,
+)
+
+trigger "[Woodland] Gnat Punctuation" only once
+when leave room high-ridge
+{
+    do schedule in 2 if in rooms woods onFalse retryNextTurn
+    note "gnats: first fly-by, nudges player to read scrawled_note" {
+        if missing flag read-scrawled-note {
+            do priority -50 show """A cloud of gnats drifts by, forming the shapes of the words "rEAd tHe HiGh RidGe NotE"."""
+        }
+        if has flag read-scrawled-note {
+            do priority -50 show """A cloud of gnats drifts by, lazily holding the shape of "..?.."."""
+        }
+    }
+    do schedule in 6 if in rooms woods onFalse retryNextTurn
+    note "gnats: alarmed" {
+        do priority -40 show """The gnat cloud [[u]]bolts[[/u]] past the other way in a panic, this time shaped like "!!!"."""
+    }
+}

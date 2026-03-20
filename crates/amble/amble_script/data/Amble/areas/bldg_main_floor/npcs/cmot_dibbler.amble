@@ -1,0 +1,76 @@
+npc cmot_dibbler {
+    name "C-M-O-T Dibbler"
+    desc """An enterprising merchant-venturer.
+
+Cut-Me-Own-Throat Dibbler is a persistently struggling entrepreneur with a tray of questionable meat products, an optimistic attitude about food safety, and a contagious grin. He wears a grease-stained apron and carries himself with the confidence of someone who's never met a customer he couldn't eventually convince."""
+
+    location room main-lobby
+    max_hp 50
+    state normal
+    movement random rooms (
+        main-lobby,
+        loading-dock,
+        restaurant,
+        lounge,
+        front-entrance,
+        lift-bank-main,
+    ) timing every_5_turns active true
+    dialogue bored {
+        "Not much foot traffic here. Maybe I should try the loading dock."
+        "A vendor's work is never done. Time to find some new customers."
+        "Standing still is bad for business. Got to keep moving, got to keep selling!"
+    }
+    dialogue happy {
+        "Ah, nothing like a good trade between honest businesspeople!"
+        "You've made an old vendor very happy today. Here'a a tip: make sure you have a visitor pass to get to the toilet."
+        "Business is looking up! Maybe I should expand the menu."
+    }
+    dialogue normal {
+        "Sausages! Get your fresh sausages here! Well, relatively fresh."
+        "You look like someone with discerning taste! How about a nice sausage-inna-bun?"
+        "Business is booming! Well, it will be once people realize quality when they see it."
+        "I've got the finest meat products this side of... well, anywhere really."
+        "You know what you need? A good meal. And I know what I need - a good customer!"
+        "These sausages are made from only the finest... ingredients. Trust me on this."
+        "I lost my favorite mug somewhere around here. Haven't been the same without my morning coffee."
+    }
+}
+
+# ========================================
+# Items
+# ========================================
+
+item sausage-inna-bun {
+    name "Sausage-Inna-Bun"
+    desc r#""Once tasted, never forgotten." An odd-smelling sausage in a long bun, smothered with mustard and fried onions."#
+    movability restricted "You have to give Dibbler something in exchange for it."
+    location npc cmot_dibbler
+    ability Eat
+    consumable {
+        uses_left 1
+        consume_on ability Eat
+        when_consumed despawn
+    }
+}
+
+# ========================================
+# Triggers
+# ========================================
+
+trigger "[CMOT] Buy a Sausage-inna-Bun" only once
+when give item am_dollar to npc cmot_dibbler {
+    do set item movability am_dollar restricted "Dibbler holds his money VERY tightly."
+    do npc says cmot_dibbler "An Ankh-Morpork dollar! Not sure where you found that around here. Sorry, er, I seem to have no change to give ya. Here's my finest, world-famous (and patented) Sausage-Inna-Bun."
+    do set npc state cmot_dibbler happy
+    do give item sausage-inna-bun to player from npc cmot_dibbler
+    do award points 5 reason "Bought a Sausage-Inna-Bun from C.M.O.T. Dibbler"
+}
+
+trigger "[CMOT] Trade Mug For Gizmo" only once
+when give item initech_mug to npc cmot_dibbler {
+    do set item movability initech_mug restricted "You can't take it back -- Dibbler won't lose sight of his favorite mug again."
+    do npc says cmot_dibbler "Whoa! Me favorite mug from the lads down at Initech?! Where did it turn up? Ah -- no matter, really. I still haven't figured out how to open the bloody thing, making it somewhat useless. Here -- seems fitting I give you this useless gizmo as a more-than-fair trade."
+    do give item hal_module_3 to player from npc cmot_dibbler
+    do add flag module-3-found
+    do award points 5 reason "Traded the Initech mug for HAL's third module"
+}

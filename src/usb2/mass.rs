@@ -236,6 +236,78 @@ async fn bot_command_in(
     Ok(got)
 }
 
+async fn bot_recovery_before_inquiry(
+    device: &mut crab_usb::Device,
+    interface_number: u8,
+    bulk_out_ep: u8,
+    bulk_in_ep: u8,
+) -> Result<(), MassProbeError> {
+    crate::log!(
+        "crabusb: mass recovery if#{} bulk_out=0x{:02X} bulk_in=0x{:02X} step=reset\n",
+        interface_number,
+        bulk_out_ep,
+        bulk_in_ep
+    );
+    device
+        .control_out(
+            ControlSetup {
+                request_type: RequestType::Class,
+                recipient: Recipient::Interface,
+                request: Request::Other(0xFF),
+                value: 0,
+                index: interface_number as u16,
+            },
+            &[],
+        )
+        .await
+        .map_err(|_| MassProbeError::Transport("bot-reset"))?;
+
+    crate::log!(
+        "crabusb: mass recovery if#{} step=clear-halt-out ep=0x{:02X}\n",
+        interface_number,
+        bulk_out_ep
+    );
+    device
+        .control_out(
+            ControlSetup {
+                request_type: RequestType::Standard,
+                recipient: Recipient::Endpoint,
+                request: Request::ClearFeature,
+                value: 0,
+                index: bulk_out_ep as u16,
+            },
+            &[],
+        )
+        .await
+        .map_err(|_| MassProbeError::Transport("clear-halt-out"))?;
+
+    crate::log!(
+        "crabusb: mass recovery if#{} step=clear-halt-in ep=0x{:02X}\n",
+        interface_number,
+        bulk_in_ep
+    );
+    device
+        .control_out(
+            ControlSetup {
+                request_type: RequestType::Standard,
+                recipient: Recipient::Endpoint,
+                request: Request::ClearFeature,
+                value: 0,
+                index: bulk_in_ep as u16,
+            },
+            &[],
+        )
+        .await
+        .map_err(|_| MassProbeError::Transport("clear-halt-in"))?;
+
+    crate::log!(
+        "crabusb: mass recovery if#{} step=done\n",
+        interface_number
+    );
+
+    Ok(())
+}
+
 fn decode_ascii_field(field: &[u8]) -> String {
     let mut out = String::new();
     for &b in field {
@@ -253,6 +325,8 @@ pub(crate) async fn probe_mass_bot(
     bulk_out: &mut EndpointBulkOut,
     bulk_in: &mut EndpointBulkIn,
     interface_number: u8,
+    bulk_out_ep: u8,
+    bulk_in_ep: u8,
 ) -> Result<MassProbeInfo, MassProbeError> {
     let mut max_lun_buf = [0u8; 1];
     let max_lun = match device
@@ -273,6 +347,8 @@ pub(crate) async fn probe_mass_bot(
         Err(TransferError::Stall) => 0,
         Err(_) => return Err(MassProbeError::Transport("get-max-lun")),
     };
+
+    bot_recovery_before_inquiry(device, interface_number, bulk_out_ep, bulk_in_ep).await?;
 
     let lun = 0u8;
     let mut inquiry = [0u8; 36];
