@@ -115,8 +115,9 @@ pub(crate) mod hid {
     }
 }
 
-pub(crate) mod input;
 mod crabusb_service;
+pub(crate) mod input;
+mod mass;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct UsbDeviceSummary {
@@ -256,11 +257,13 @@ pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummar
     crate::wait::spawn_and_wait_local(async move {
         crate::pci::enable_mem_and_bus_master(info.bus, info.slot, info.function);
 
-        let mut host =
-            match crab_usb::USBHost::new_xhci(info.mmio_base, &self::crabusb_service::CRABUSB_KERNEL) {
-                Ok(host) => host,
-                Err(_) => return Vec::new(),
-            };
+        let mut host = match crab_usb::USBHost::new_xhci(
+            info.mmio_base,
+            &self::crabusb_service::CRABUSB_KERNEL,
+        ) {
+            Ok(host) => host,
+            Err(_) => return Vec::new(),
+        };
         if host.init().await.is_err() {
             return Vec::new();
         }
@@ -312,8 +315,11 @@ pub(crate) mod syscall {
         let info = super::controller_by_index(controller_id)?;
         crate::wait::spawn_and_wait_local(async move {
             crate::pci::enable_mem_and_bus_master(info.bus, info.slot, info.function);
-            let mut host =
-                crab_usb::USBHost::new_xhci(info.mmio_base, &super::crabusb_service::CRABUSB_KERNEL).ok()?;
+            let mut host = crab_usb::USBHost::new_xhci(
+                info.mmio_base,
+                &super::crabusb_service::CRABUSB_KERNEL,
+            )
+            .ok()?;
             host.init().await.ok()?;
             let found = host.probe_devices().await.ok()?;
 
@@ -424,8 +430,10 @@ pub(crate) fn tlb_snapshot() -> TlbUsbSnapshot {
 
         crate::pci::enable_mem_and_bus_master(probe_ctrl.bus, probe_ctrl.slot, probe_ctrl.function);
 
-        let mut host =
-            match crab_usb::USBHost::new_xhci(probe_ctrl.mmio_base, &self::crabusb_service::CRABUSB_KERNEL) {
+        let mut host = match crab_usb::USBHost::new_xhci(
+            probe_ctrl.mmio_base,
+            &self::crabusb_service::CRABUSB_KERNEL,
+        ) {
             Ok(host) => host,
             Err(_) => return Err("host-new"),
         };

@@ -17,6 +17,8 @@ use spin::Mutex;
 use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
 
+use super::mass::pick_mass_target;
+
 pub(super) struct TrueosCrabUsbKernel;
 
 pub(super) static CRABUSB_KERNEL: TrueosCrabUsbKernel = TrueosCrabUsbKernel;
@@ -111,18 +113,6 @@ impl KernelOp for TrueosCrabUsbKernel {
         }
         let timeout_ms = millis.min(u128::from(u64::MAX)) as u64;
         let _ = crate::wait::spin_until_timeout(timeout_ms, || false);
-    }
-}
-
-fn endpoint_kind_name(kind: &EndpointKind) -> &'static str {
-    match kind {
-        EndpointKind::Control(_) => "control",
-        EndpointKind::IsochronousIn(_) => "iso-in",
-        EndpointKind::IsochronousOut(_) => "iso-out",
-        EndpointKind::BulkIn(_) => "bulk-in",
-        EndpointKind::BulkOut(_) => "bulk-out",
-        EndpointKind::InterruptIn(_) => "intr-in",
-        EndpointKind::InterruptOut(_) => "intr-out",
     }
 }
 
@@ -540,6 +530,23 @@ async fn stream_truekey_logs(
     TRUEKEY_STREAM_ACTIVE.store(false, Ordering::Release);
 }
 
+async fn truekey_logdrain_task(
+    device: &mut crab_usb::Device,
+    vendor_id: u16,
+    product_id: u16,
+    target: SerialTarget,
+) {
+    crate::log!(
+        "crabusb: truekey {:04X}:{:04X} handoff -> logdrain if#{} alt={} ep=0x{:02X}\n",
+        vendor_id,
+        product_id,
+        target.data_interface,
+        target.alternate_setting,
+        target.out_endpoint
+    );
+    stream_truekey_logs(device, vendor_id, product_id, target).await;
+}
+
 async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::DeviceInfo) {
     if !TRUEKEY_STREAM_REQUESTED.load(Ordering::Acquire)
         || TRUEKEY_STREAM_ACTIVE.load(Ordering::Acquire)
@@ -629,7 +636,7 @@ async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::Dev
                 target.alternate_setting,
                 target.out_endpoint
             );
-            stream_truekey_logs(&mut device, vendor_id, product_id, target).await;
+            truekey_logdrain_task(&mut device, vendor_id, product_id, target).await;
         }
         Err(err) => crate::log!(
             "crabusb: truekey {:04X}:{:04X} data if#{} alt={} claim failed: {:?}\n",
@@ -828,7 +835,21 @@ async fn log_opened_device_graph(
     );
 
     let configs = device.configurations().to_vec();
-    let descriptor_only = vendor_id == TRUEKEY_VENDOR_ID && product_id == TRUEKEY_PRODUCT_ID;
+    if let Some(target) = pick_mass_target(&configs) {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} cfg={} if#{} alt={} bulk_in=0x{:02X} bulk_out=0x{:02X} class={:02X} subclass={:02X} proto={:02X}\n",
+            vendor_id,
+            product_id,
+            target.configuration_value,
+            target.interface_number,
+            target.alternate_setting,
+            target.bulk_in,
+            target.bulk_out,
+            target.class,
+            target.subclass,
+            target.protocol
+        );
+    }
     if vendor_id == HYPERX_VENDOR_ID
         && product_id == HYPERX_PRODUCT_ID
         && let Some(preferred) = pick_preferred_alt(&configs)
@@ -844,112 +865,32 @@ async fn log_opened_device_graph(
             preferred.protocol,
             preferred.has_iso_out
         );
-
-        match device
-            .claim_interface(preferred.interface_number, preferred.alternate_setting)
-            .await
-        {
-            Ok(()) => crate::log!(
-                "crabusb: target {:04X}:{:04X} selected if#{} alt={}\n",
-                vendor_id,
-                product_id,
-                preferred.interface_number,
-                preferred.alternate_setting
-            ),
-            Err(err) => crate::log!(
-                "crabusb: target {:04X}:{:04X} preferred if#{} alt={} claim failed: {:?}\n",
-                vendor_id,
-                product_id,
-                preferred.interface_number,
-                preferred.alternate_setting,
-                err
-            ),
-        }
     }
 
     for config in configs.iter() {
         for interface in config.interfaces.iter() {
             for alt in interface.alt_settings.iter() {
-                if descriptor_only {
+                crate::log!(
+                    "crabusb: open dev#{} if#{} alt={} desc-only class={:02X} subclass={:02X} proto={:02X}\n",
+                    dev_idx,
+                    alt.interface_number,
+                    alt.alternate_setting,
+                    alt.class,
+                    alt.subclass,
+                    alt.protocol
+                );
+                for ep in alt.endpoints.iter() {
+                    let ep_num = ep.address & 0x0F;
                     crate::log!(
-                        "crabusb: open dev#{} if#{} alt={} desc-only class={:02X} subclass={:02X} proto={:02X}\n",
+                        "crabusb: open dev#{} if#{} alt={} ep=0x{:02X} num={} desc-only mps={} interval={}\n",
                         dev_idx,
                         alt.interface_number,
                         alt.alternate_setting,
-                        alt.class,
-                        alt.subclass,
-                        alt.protocol
+                        ep.address,
+                        ep_num,
+                        ep.max_packet_size,
+                        ep.interval
                     );
-                    for ep in alt.endpoints.iter() {
-                        let ep_num = ep.address & 0x0F;
-                        crate::log!(
-                            "crabusb: open dev#{} if#{} alt={} ep=0x{:02X} num={} desc-only mps={} interval={}\n",
-                            dev_idx,
-                            alt.interface_number,
-                            alt.alternate_setting,
-                            ep.address,
-                            ep_num,
-                            ep.max_packet_size,
-                            ep.interval
-                        );
-                    }
-                    continue;
-                }
-
-                match device
-                    .claim_interface(interface.interface_number, alt.alternate_setting)
-                    .await
-                {
-                    Ok(()) => {
-                        crate::log!(
-                            "crabusb: open dev#{} if#{} alt={} claim ok class={:02X} subclass={:02X} proto={:02X}\n",
-                            dev_idx,
-                            alt.interface_number,
-                            alt.alternate_setting,
-                            alt.class,
-                            alt.subclass,
-                            alt.protocol
-                        );
-                    }
-                    Err(err) => {
-                        crate::log!(
-                            "crabusb: open dev#{} if#{} alt={} claim failed: {:?}\n",
-                            dev_idx,
-                            alt.interface_number,
-                            alt.alternate_setting,
-                            err
-                        );
-                        continue;
-                    }
-                }
-
-                for ep in alt.endpoints.iter() {
-                    let ep_num = ep.address & 0x0F;
-                    match device.get_endpoint(ep.address).await {
-                        Ok(kind) => {
-                            crate::log!(
-                                "crabusb: open dev#{} if#{} alt={} ep=0x{:02X} num={} kind={} mps={} interval={}\n",
-                                dev_idx,
-                                alt.interface_number,
-                                alt.alternate_setting,
-                                ep.address,
-                                ep_num,
-                                endpoint_kind_name(&kind),
-                                ep.max_packet_size,
-                                ep.interval
-                            );
-                        }
-                        Err(err) => {
-                            crate::log!(
-                                "crabusb: open dev#{} if#{} alt={} ep=0x{:02X} get failed: {:?}\n",
-                                dev_idx,
-                                alt.interface_number,
-                                alt.alternate_setting,
-                                ep.address,
-                                err
-                            );
-                        }
-                    }
                 }
             }
         }
@@ -1223,7 +1164,7 @@ pub async fn truekey_task() {
         if TRUEKEY_STREAM_ACTIVE.load(Ordering::Acquire) {
             crate::log!("crabusb: truekey service streaming\n");
         } else {
-            crate::log!("crabusb: truekey service waiting for target serial device\n");
+            crate::log!("crabusb: truekey service waiting for scout handoff\n");
         }
     }
 }

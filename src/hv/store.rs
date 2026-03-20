@@ -603,25 +603,28 @@ pub async fn vm_store_replication_task() {
 async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
     let t0 = boot_probe_ms();
     crate::log!("boot-probe: hv-store ensure begin ms={}\n", t0);
-    let disk = crate::v::disc::ramdisk::create(VM_STORE_RAMDISK_BYTES, VM_STORE_BLOCK_SIZE)
-        .map_err(VmStoreError::Create)?;
+    let disk = crate::v::disc::ramdisk::create_trueos_private(
+        VM_STORE_RAMDISK_BYTES,
+        VM_STORE_BLOCK_SIZE,
+        "trueos-hv-store",
+    )
+    .await
+    .map_err(|e| match e {
+        crate::v::disc::ramdisk::TrueosPrivateError::Create(err) => VmStoreError::Create(err),
+        crate::v::disc::ramdisk::TrueosPrivateError::Format(err)
+        | crate::v::disc::ramdisk::TrueosPrivateError::Validate(err) => VmStoreError::Format(err),
+    })?;
     crate::log!(
         "boot-probe: hv-store ramdisk create done ms={} dt={}\n",
         boot_probe_ms(),
         boot_probe_ms().saturating_sub(t0)
     );
-    crate::v::fs::trueosfs::format_blank_force_async(disk)
-        .await
-        .map_err(VmStoreError::Format)?;
     let t1 = boot_probe_ms();
     crate::log!(
         "boot-probe: hv-store format done ms={} dt={}\n",
         t1,
         t1.saturating_sub(t0)
     );
-    crate::v::fs::trueosfs::validate_private_medium_async(disk, 0)
-        .await
-        .map_err(VmStoreError::Format)?;
     let t2 = boot_probe_ms();
     crate::log!(
         "boot-probe: hv-store validate done ms={} dt={} step={}\n",

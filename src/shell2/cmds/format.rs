@@ -1,5 +1,6 @@
 use core::str::SplitWhitespace;
 
+use alloc::string::String;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
@@ -7,8 +8,48 @@ use super::super::{
     MatrixTarget, ShellBackend2, print_matrix_target_line, print_shell_line,
     set_matrix_target_active,
 };
+use crate::disc::block::{self, DeviceHandle};
 use crate::shell2::CommandSessionInputResult;
 use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
+
+pub(crate) fn print_format_disk_table(io: &'static dyn ShellBackend2) {
+    let choices = super::tlb_helper::collect_top_level_disk_choices();
+    super::tlb_helper::print_disk_choice_table(io, "format", "disk selection", choices.as_slice());
+}
+
+fn print_target_summary(io: &'static dyn ShellBackend2, disk: DeviceHandle, prefix: &str) {
+    let info = disk.info();
+    let status = crate::wait::spawn_and_wait_local(async move {
+        crate::v::disc::detect::detect_physical_disk(disk).await
+    })
+    .unwrap_or(crate::v::disc::detect::DiscStatus::Unknown);
+
+    let msg = alloc::format!(
+        "{prefix}: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}",
+        info.id.raw(),
+        info.id,
+        info.block_count,
+        info.block_size,
+        info.writable,
+        info.label,
+        status.short(),
+    );
+    print_shell_line(io, msg.as_str());
+}
+
+pub(crate) fn start_format_session_for_disk(
+    io: &'static dyn ShellBackend2,
+    disk: DeviceHandle,
+    prefix: &str,
+) -> ParseOutcome {
+    print_target_summary(io, disk, prefix);
+    print_shell_line(
+        io,
+        &alloc::format!("{prefix}: DANGER: this destroys all data on the disk"),
+    );
+    print_shell_line(io, &alloc::format!("{prefix}: type `sure`"));
+    ParseOutcome::StartSession(CommandSessionKind::FormatSure(disk.id().raw()))
+}
 
 pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
@@ -23,17 +64,8 @@ pub(crate) fn try_parse(
         print_shell_line(io, "format: no writable disk device found");
         return ParseOutcome::Handled;
     };
-    let info = target.info();
-    let msg = alloc::format!(
-        "format: target id={} ({}) label={:?}",
-        info.id.raw(),
-        info.id,
-        info.label,
-    );
-    print_shell_line(io, msg.as_str());
-    print_shell_line(io, "format: destructive action");
-    print_shell_line(io, "format: type `sure`");
-    ParseOutcome::StartSession(CommandSessionKind::FormatSure)
+
+    start_format_session_for_disk(io, target, "format")
 }
 
 pub(crate) fn handle_session_input(
@@ -41,22 +73,28 @@ pub(crate) fn handle_session_input(
     io: &'static dyn ShellBackend2,
     target: &MatrixTarget,
     submitted: &str,
+    disc_id: u32,
 ) -> CommandSessionInputResult {
     if !submitted.eq_ignore_ascii_case("sure") {
         print_matrix_target_line(target, "format: cancelled");
         return CommandSessionInputResult::CompleteIdle;
     }
 
-    submit_format(spawner, io, target);
+    let Some(disk) = super::tlb_helper::select_top_level_disk(disc_id) else {
+        print_shell_line(io, "format: selected disk disappeared");
+        return CommandSessionInputResult::CompleteIdle;
+    };
+
+    submit_format(spawner, io, target, disk);
     CommandSessionInputResult::CompleteRunning
 }
 
-fn submit_format(spawner: &Spawner, io: &'static dyn ShellBackend2, target: &MatrixTarget) {
-    let Some(disk) = super::select_default_disk_target() else {
-        print_shell_line(io, "format: no writable disk device found");
-        return;
-    };
-
+fn submit_format(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    target: &MatrixTarget,
+    disk: DeviceHandle,
+) {
     let info = disk.info();
     print_matrix_target_line(
         target,
@@ -79,7 +117,7 @@ fn submit_format(spawner: &Spawner, io: &'static dyn ShellBackend2, target: &Mat
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn format_command_task(target: MatrixTarget, disk: crate::disc::block::DeviceHandle) {
+async fn format_command_task(target: MatrixTarget, disk: DeviceHandle) {
     let task_target = target.clone();
     async move {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -100,10 +138,64 @@ async fn format_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         )
         .as_str());
 
-        log("format: mode=disk");
-        match crate::v::fs::trueosfs::format_blank_force_async(disk).await {
-            Ok(()) => log("format: ok"),
-            Err(e) => log(alloc::format!("format: failed ({:?})", e).as_str()),
+        log("format: creating 1 partition + TRUEOSFS...");
+        let parts = [crate::disc::install::gpt::GptPartitionSpec {
+            type_guid: crate::v::disc::partition::GPT_TYPE_LINUX_FILESYSTEM_BYTES,
+            name: "TRUEOS",
+            size: crate::disc::install::gpt::PartitionSize::Remaining,
+            attributes: 0,
+        }];
+
+        let mut step_log = |msg: &str| log(msg);
+        match crate::disc::install::gpt::write_gpt_layout_with_log(disk, &parts, &mut step_log)
+            .await
+        {
+            Ok(()) => match crate::v::disc::partition::register_gpt_partitions(disk).await {
+                Ok(reg) => {
+                    if let Some(first) = reg.first() {
+                        match block::device_handle(first.id) {
+                            Some(part_handle) => {
+                                match crate::v::fs::trueosfs::format_blank_partition_async(
+                                    part_handle,
+                                )
+                                .await
+                                {
+                                    Ok(()) => {
+                                        let (status, err) =
+                                            crate::v::disc::detect::detect_physical_disk_detail(
+                                                disk,
+                                            )
+                                            .await;
+                                        log(alloc::format!(
+                                            "format: ok (status now: {}{})",
+                                            status.short(),
+                                            match (&status, err) {
+                                                (
+                                                    crate::v::disc::detect::DiscStatus::Unknown,
+                                                    Some(err),
+                                                ) => alloc::format!("; err={:?}", err),
+                                                _ => String::new(),
+                                            }
+                                        )
+                                        .as_str());
+                                    }
+                                    Err(err) => {
+                                        log(alloc::format!("format: TRUEOSFS failed ({:?})", err)
+                                            .as_str());
+                                    }
+                                }
+                            }
+                            None => log("format: partition disappeared after registration"),
+                        }
+                    } else {
+                        log("format: no partition registered");
+                    }
+                }
+                Err(err) => {
+                    log(alloc::format!("format: partition register failed ({:?})", err).as_str());
+                }
+            },
+            Err(err) => log(alloc::format!("format: GPT write failed ({:?})", err).as_str()),
         }
     }
     .await;
