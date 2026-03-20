@@ -1546,6 +1546,22 @@ pub async fn validate_private_medium_async(
     Ok(placement)
 }
 
+pub async fn validate_public_medium_async(
+    handle: block::DeviceHandle,
+    expect_super_lba: u64,
+) -> Result<TrueosFsPlacement, block::Error> {
+    let Some(placement) = locate_async(handle).await? else {
+        return Err(block::Error::Corrupted);
+    };
+    if placement.super_lba != expect_super_lba {
+        return Err(block::Error::Corrupted);
+    }
+    if placement.data_lba != trueos_fs::data_lba_from_super(expect_super_lba) {
+        return Err(block::Error::Corrupted);
+    }
+    Ok(placement)
+}
+
 /// Format TRUEOSFS at the start of an already-created partition.
 ///
 /// This is intended for installer code that first creates a GPT layout and then

@@ -7,7 +7,8 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
 
-use crab_usb::{EndpointKind, Event, EventHandler, USBHost, usb_if};
+use crab_usb::{EndpointKind, Event, EventHandler, KernelOp, USBHost, usb_if};
+use dma_api::{DmaAddr, DmaDirection, DmaError, DmaHandle, DmaMapHandle, DmaOp};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use libm::sinf;
 use spin::Mutex;
