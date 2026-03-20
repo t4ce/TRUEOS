@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, format, string::String, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, format, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use embassy_executor::task;
@@ -13,12 +13,12 @@ use crate::net::adapter::{
 use crate::wait::WaitQueue;
 
 const VM_STORE_PROBE_PATH: &str = "vm/.probe";
-const VM_STORE_MANIFEST_PATH: &str = "vm/committed";
+const VM_STORE_MANIFEST_PREFIX: &str = "vm/committed-";
 const VM_STORE_PENDING_PREFIX: &str = "vm/pending-";
 const VM_STORE_OBJECT_PREFIX: &str = "vm/object-";
 const VM_STORE_REPL_PORT: u16 = 32123;
 const VM_STORE_REPL_CHUNK: usize = 1200;
-const VM_STORE_VM_ID: u8 = 0;
+const VM_STORE_MAX_VM_ID: u8 = 10;
 const VM_STORE_BLOCK_SIZE: u32 = 512;
 const VM_STORE_RAMDISK_BYTES: u64 = 64 * 1024 * 1024;
 const VM_STORE_QUEUE_CAP: usize = 8;
@@ -36,7 +36,7 @@ static VM_STORE_QUEUE: Mutex<Deque<Request, VM_STORE_QUEUE_CAP>> = Mutex::new(De
 static VM_STORE_QUEUE_WAIT: WaitQueue = WaitQueue::new();
 static VM_STORE_REQ_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_STORE_OBJECT_SEQ: AtomicU64 = AtomicU64::new(1);
-static VM_STORE_COMMITTED_SEQ: AtomicU64 = AtomicU64::new(0);
+static VM_STORE_COMMITTED_SEQS: Mutex<BTreeMap<u8, u64>> = Mutex::new(BTreeMap::new());
 static VM_STORE_COMMIT_WAIT: WaitQueue = WaitQueue::new();
 
 #[derive(Clone, Debug)]
@@ -58,8 +58,8 @@ pub enum VmStoreResponse {
 }
 
 enum RequestKind {
-    Save(Vec<u8>),
-    Load,
+    Save(u8, Vec<u8>),
+    Load(u8),
 }
 
 struct Request {
@@ -232,8 +232,16 @@ fn parse_manifest_seq(bytes: &[u8]) -> Option<u64> {
     s.parse::<u64>().ok()
 }
 
-async fn read_committed_bytes(disk: block::DeviceHandle) -> Result<Option<Vec<u8>>, block::Error> {
-    let Some(manifest) = read_private_file(disk, VM_STORE_MANIFEST_PATH).await? else {
+fn vm_manifest_path(vm_id: u8) -> String {
+    format!("{}{}", VM_STORE_MANIFEST_PREFIX, vm_id)
+}
+
+async fn read_committed_bytes(
+    disk: block::DeviceHandle,
+    vm_id: u8,
+) -> Result<Option<Vec<u8>>, block::Error> {
+    let manifest_path = vm_manifest_path(vm_id);
+    let Some(manifest) = read_private_file(disk, manifest_path.as_str()).await? else {
         return Ok(None);
     };
     let Some(seq) = parse_manifest_seq(manifest.as_slice()) else {
@@ -243,10 +251,15 @@ async fn read_committed_bytes(disk: block::DeviceHandle) -> Result<Option<Vec<u8
     read_private_file(disk, path.as_str()).await
 }
 
-async fn write_committed_manifest(disk: block::DeviceHandle, seq: u64) -> Result<(), block::Error> {
+async fn write_committed_manifest(
+    disk: block::DeviceHandle,
+    vm_id: u8,
+    seq: u64,
+) -> Result<(), block::Error> {
+    let manifest_path = vm_manifest_path(vm_id);
     let manifest = format!("{}\n", seq);
     let ok =
-        crate::v::fs::trueosfs::file_in_async(disk, VM_STORE_MANIFEST_PATH, manifest.as_bytes())
+        crate::v::fs::trueosfs::file_in_async(disk, manifest_path.as_str(), manifest.as_bytes())
             .await?;
     if ok { Ok(()) } else { Err(block::Error::Io) }
 }
@@ -256,15 +269,21 @@ pub fn online() -> bool {
     VM_STORE_ONLINE.load(Ordering::Acquire)
 }
 
-pub fn save_bytes(bytes: Vec<u8>) -> Result<usize, VmStoreError> {
-    match enqueue(RequestKind::Save(bytes))?.wait_blocking()? {
+pub fn save_bytes(vm_id: u8, bytes: Vec<u8>) -> Result<usize, VmStoreError> {
+    if vm_id > VM_STORE_MAX_VM_ID {
+        return Err(VmStoreError::ServiceOffline);
+    }
+    match enqueue(RequestKind::Save(vm_id, bytes))?.wait_blocking()? {
         VmStoreResponse::Saved(len) => Ok(len),
         VmStoreResponse::Loaded(_) => Err(VmStoreError::Write(block::Error::Io)),
     }
 }
 
-pub fn load_bytes() -> Result<Vec<u8>, VmStoreError> {
-    match enqueue(RequestKind::Load)?.wait_blocking()? {
+pub fn load_bytes(vm_id: u8) -> Result<Vec<u8>, VmStoreError> {
+    if vm_id > VM_STORE_MAX_VM_ID {
+        return Err(VmStoreError::ServiceOffline);
+    }
+    match enqueue(RequestKind::Load(vm_id))?.wait_blocking()? {
         VmStoreResponse::Loaded(bytes) => Ok(bytes),
         VmStoreResponse::Saved(_) => Err(VmStoreError::Read(block::Error::Io)),
     }
@@ -300,8 +319,12 @@ fn wait_until_online(timeout_ms: u64) -> bool {
     crate::wait::spin_until_timeout(timeout_ms, online)
 }
 
-fn current_committed_seq() -> u64 {
-    VM_STORE_COMMITTED_SEQ.load(Ordering::Acquire)
+fn current_committed_seq(vm_id: u8) -> u64 {
+    VM_STORE_COMMITTED_SEQS
+        .lock()
+        .get(&vm_id)
+        .copied()
+        .unwrap_or(0)
 }
 
 fn push_line(out: &mut Vec<u8>, line: &str) {
@@ -310,9 +333,15 @@ fn push_line(out: &mut Vec<u8>, line: &str) {
 }
 
 fn queue_vm_listing(out: &mut Vec<u8>) {
-    if current_committed_seq() != 0 {
-        push_line(out, "VMS 0");
-    } else {
+    let seqs = VM_STORE_COMMITTED_SEQS.lock();
+    let mut has_any = false;
+    for vm_id in 0..=VM_STORE_MAX_VM_ID {
+        if seqs.contains_key(&vm_id) {
+            push_line(out, format!("VMS {}", vm_id).as_str());
+            has_any = true;
+        }
+    }
+    if !has_any {
         push_line(out, "VMS");
     }
 }
@@ -491,7 +520,7 @@ pub async fn vm_store_replication_task() {
                                 queue_vm_listing(&mut tx_buf);
                             }
                             Some(VmStoreNetCmd::Pull(id)) => {
-                                if id != VM_STORE_VM_ID {
+                                if id > VM_STORE_MAX_VM_ID {
                                     push_line(&mut tx_buf, "NO");
                                     continue;
                                 }
@@ -499,23 +528,17 @@ pub async fn vm_store_replication_task() {
                                     push_line(&mut tx_buf, "NO");
                                     continue;
                                 };
-                                match read_committed_bytes(disk).await {
+                                match read_committed_bytes(disk, id).await {
                                     Ok(Some(bytes)) => {
-                                        let seq = current_committed_seq();
+                                        let seq = current_committed_seq(id);
                                         push_line(
                                             &mut tx_buf,
-                                            format!(
-                                                "VM {} {} {}",
-                                                VM_STORE_VM_ID,
-                                                seq,
-                                                bytes.len()
-                                            )
-                                            .as_str(),
+                                            format!("VM {} {} {}", id, seq, bytes.len()).as_str(),
                                         );
                                         tx_buf.extend_from_slice(bytes.as_slice());
                                         crate::log!(
                                             "hv-store-net: queued vm id={} seq={} bytes={} handle={}\n",
-                                            VM_STORE_VM_ID,
+                                            id,
                                             seq,
                                             bytes.len(),
                                             handle.0
@@ -678,13 +701,14 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
     };
 
     match kind {
-        RequestKind::Save(bytes) => {
+        RequestKind::Save(vm_id, bytes) => {
             let seq = VM_STORE_OBJECT_SEQ.fetch_add(1, Ordering::Relaxed).max(1);
             let pending_path = object_path(VM_STORE_PENDING_PREFIX, seq);
             let committed_path = object_path(VM_STORE_OBJECT_PREFIX, seq);
             crate::log!(
-                "hv-store: save queued id={} bytes={} pending={} committed={}\n",
+                "hv-store: save queued id={} vm_id={} bytes={} pending={} committed={}\n",
                 id,
+                vm_id,
                 bytes.len(),
                 pending_path.as_str(),
                 committed_path.as_str()
@@ -721,33 +745,41 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
                 return Err(VmStoreError::Write(block::Error::Io));
             }
 
-            write_committed_manifest(disk, seq)
+            write_committed_manifest(disk, vm_id, seq)
                 .await
                 .map_err(VmStoreError::Write)?;
-            VM_STORE_COMMITTED_SEQ.store(seq, Ordering::Release);
+            VM_STORE_COMMITTED_SEQS.lock().insert(vm_id, seq);
             VM_STORE_COMMIT_WAIT.notify_all();
             crate::log!(
-                "hv-store: save complete id={} seq={} bytes={} committed={}\n",
+                "hv-store: save complete id={} vm_id={} seq={} bytes={} committed={}\n",
                 id,
+                vm_id,
                 seq,
                 bytes.len(),
                 committed_path.as_str()
             );
             Ok(VmStoreResponse::Saved(bytes.len()))
         }
-        RequestKind::Load => {
+        RequestKind::Load(vm_id) => {
+            let manifest_path = vm_manifest_path(vm_id);
             crate::log!(
-                "hv-store: load queued id={} manifest={}\n",
+                "hv-store: load queued id={} vm_id={} manifest={}\n",
                 id,
-                VM_STORE_MANIFEST_PATH
+                vm_id,
+                manifest_path.as_str()
             );
-            let Some(bytes) = read_committed_bytes(disk)
+            let Some(bytes) = read_committed_bytes(disk, vm_id)
                 .await
                 .map_err(VmStoreError::Read)?
             else {
                 return Err(VmStoreError::MissingSnapshot);
             };
-            crate::log!("hv-store: load complete id={} bytes={}\n", id, bytes.len());
+            crate::log!(
+                "hv-store: load complete id={} vm_id={} bytes={}\n",
+                id,
+                vm_id,
+                bytes.len()
+            );
             Ok(VmStoreResponse::Loaded(bytes))
         }
     }

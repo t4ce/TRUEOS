@@ -314,6 +314,7 @@ extern "x86-interrupt" fn double_fault_handler(
     halt_loop();
 }
 
+#[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     interrupts::disable();
 

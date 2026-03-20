@@ -2,7 +2,6 @@ pub mod adapter;
 pub mod core;
 pub mod device;
 pub mod dhcpv6;
-pub mod e1000;
 pub mod r8125;
 pub mod ring;
 pub mod tls;
@@ -14,7 +13,6 @@ use spin::Mutex;
 
 use crate::net::core::NetCore;
 use crate::net::device::NetDevice;
-use crate::net::e1000::E1000Adapter;
 use crate::net::r8125::R8125Adapter;
 use crate::net::ring::NetRing;
 use crate::net::vio::VirtioNetAdapter;
@@ -30,7 +28,7 @@ const ENABLE_R8125: bool = true;
 
 enum ActiveDevice {
     Virtio(NetCore<VirtioNetAdapter>),
-    E1000(NetCore<E1000Adapter>),
+    //E1000(NetCore<E1000Adapter>),
     R8125(NetCore<R8125Adapter>),
 }
 
@@ -38,7 +36,7 @@ impl NetDevice for ActiveDevice {
     fn mac(&self) -> [u8; 6] {
         match self {
             ActiveDevice::Virtio(dev) => dev.mac(),
-            ActiveDevice::E1000(dev) => dev.mac(),
+            //ActiveDevice::E1000(dev) => dev.mac(),
             ActiveDevice::R8125(dev) => dev.mac(),
         }
     }
@@ -46,7 +44,7 @@ impl NetDevice for ActiveDevice {
     fn poll_rx(&mut self) -> bool {
         match self {
             ActiveDevice::Virtio(dev) => dev.poll_rx(),
-            ActiveDevice::E1000(dev) => dev.poll_rx(),
+            //ActiveDevice::E1000(dev) => dev.poll_rx(),
             ActiveDevice::R8125(dev) => dev.poll_rx(),
         }
     }
@@ -54,7 +52,7 @@ impl NetDevice for ActiveDevice {
     fn pop_rx(&mut self) -> Option<alloc::vec::Vec<u8>> {
         match self {
             ActiveDevice::Virtio(dev) => dev.pop_rx(),
-            ActiveDevice::E1000(dev) => dev.pop_rx(),
+           // ActiveDevice::E1000(dev) => dev.pop_rx(),
             ActiveDevice::R8125(dev) => dev.pop_rx(),
         }
     }
@@ -62,7 +60,7 @@ impl NetDevice for ActiveDevice {
     fn rx_queue_len(&self) -> usize {
         match self {
             ActiveDevice::Virtio(dev) => dev.rx_queue_len(),
-            ActiveDevice::E1000(dev) => dev.rx_queue_len(),
+        //   ActiveDevice::E1000(dev) => dev.rx_queue_len(),
             ActiveDevice::R8125(dev) => dev.rx_queue_len(),
         }
     }
@@ -70,7 +68,7 @@ impl NetDevice for ActiveDevice {
     fn drain_rx(&mut self, limit: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
         match self {
             ActiveDevice::Virtio(dev) => dev.drain_rx(limit),
-            ActiveDevice::E1000(dev) => dev.drain_rx(limit),
+          //  ActiveDevice::E1000(dev) => dev.drain_rx(limit),
             ActiveDevice::R8125(dev) => dev.drain_rx(limit),
         }
     }
@@ -78,7 +76,7 @@ impl NetDevice for ActiveDevice {
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         match self {
             ActiveDevice::Virtio(dev) => dev.transmit(frame),
-            ActiveDevice::E1000(dev) => dev.transmit(frame),
+          //  ActiveDevice::E1000(dev) => dev.transmit(frame),
             ActiveDevice::R8125(dev) => dev.transmit(frame),
         }
     }
@@ -86,7 +84,7 @@ impl NetDevice for ActiveDevice {
     fn link_state(&self) -> crate::net::device::LinkState {
         match self {
             ActiveDevice::Virtio(dev) => dev.link_state(),
-            ActiveDevice::E1000(dev) => dev.link_state(),
+          //  ActiveDevice::E1000(dev) => dev.link_state(),
             ActiveDevice::R8125(dev) => dev.link_state(),
         }
     }
@@ -98,7 +96,7 @@ pub fn device_name_at(index: usize) -> Option<&'static str> {
     let dev = guard.get(index)?;
     Some(match dev {
         ActiveDevice::Virtio(_) => "Virtio Net",
-        ActiveDevice::E1000(_) => "Intel E1000",
+       // ActiveDevice::E1000(_) => "Intel E1000",
         ActiveDevice::R8125(_) => "Realtek RTL8125",
     })
 }
@@ -108,7 +106,7 @@ pub fn pci_device_at(index: usize) -> Option<PciDevice> {
     let dev = guard.get(index)?;
     match dev {
         ActiveDevice::Virtio(n) => n.pci_device(),
-        ActiveDevice::E1000(n) => n.pci_device(),
+      //  ActiveDevice::E1000(n) => n.pci_device(),
         ActiveDevice::R8125(n) => n.pci_device(),
     }
 }
@@ -299,14 +297,14 @@ pub fn init() {
         guard.push(ActiveDevice::Virtio(NetCore::new(adapter, ring)));
         added += 1;
     }
-
+    /*
     for adapter in E1000Adapter::init_all() {
         let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
         let mut guard = DEVICES.lock();
         guard.push(ActiveDevice::E1000(NetCore::new(adapter, ring)));
         added += 1;
     }
-
+    */
     if ENABLE_R8125 {
         for adapter in R8125Adapter::init_all() {
             let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
