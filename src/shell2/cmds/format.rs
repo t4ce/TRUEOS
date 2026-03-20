@@ -149,7 +149,7 @@ async fn format_command_task(target: MatrixTarget, disk: DeviceHandle) {
         match crate::disc::install::gpt::write_gpt_layout_with_log(disk, &parts, &mut step_log)
             .await
         {
-            Ok(()) => match crate::v::disc::partition::register_gpt_partitions(disk).await {
+            Ok(_) => match crate::v::disc::partition::register_gpt_partitions(disk).await {
                 Ok(reg) => {
                     if let Some(first) = reg.first() {
                         match block::device_handle(first.id) {
