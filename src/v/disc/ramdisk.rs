@@ -21,6 +21,13 @@ pub enum TrueosPrivateError {
     Validate(block::Error),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrueosPublicError {
+    Create(block::Error),
+    Format(block::Error),
+    Validate(block::Error),
+}
+
 impl RamdiskDevice {
     fn new(size_bytes: u64, block_size: u32) -> Result<Self, block::Error> {
         if block_size == 0 {
@@ -160,7 +167,7 @@ impl block::BlockDevice for RamdiskDevice {
     }
 }
 
-pub fn create_labeled(
+fn create_labeled(
     size_bytes: u64,
     block_size: u32,
     label: impl Into<String>,
@@ -168,10 +175,6 @@ pub fn create_labeled(
     let dev = RamdiskDevice::new(size_bytes, block_size)?;
     let desc = block::DeviceDescriptor::new(block::DeviceKind::Ramdisk).with_label(label);
     Ok(block::register_device(desc, dev))
-}
-
-pub fn create(size_bytes: u64, block_size: u32) -> Result<block::DeviceHandle, block::Error> {
-    create_labeled(size_bytes, block_size, "ramdisk")
 }
 
 pub async fn create_trueos_private(
@@ -186,5 +189,20 @@ pub async fn create_trueos_private(
     crate::v::fs::trueosfs::validate_private_medium_async(disk, 0)
         .await
         .map_err(TrueosPrivateError::Validate)?;
+    Ok(disk)
+}
+
+pub async fn create_trueos_public(
+    size_bytes: u64,
+    block_size: u32,
+    label: impl Into<String>,
+) -> Result<block::DeviceHandle, TrueosPublicError> {
+    let disk = create_labeled(size_bytes, block_size, label).map_err(TrueosPublicError::Create)?;
+    crate::v::fs::trueosfs::format_blank_force_async(disk)
+        .await
+        .map_err(TrueosPublicError::Format)?;
+    crate::v::fs::trueosfs::validate_public_medium_async(disk, 0)
+        .await
+        .map_err(TrueosPublicError::Validate)?;
     Ok(disk)
 }

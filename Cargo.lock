@@ -11,6 +11,7 @@ dependencies = [
  "core2",
  "crab-usb",
  "crc32fast",
+ "dma-api",
  "embassy-executor",
  "embassy-time",
  "embassy-time-driver",
