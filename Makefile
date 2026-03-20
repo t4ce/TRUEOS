@@ -67,29 +67,20 @@ QEMU_ISO_FLAGS_DBG = $(QEMU_GFX_FLAGS) -machine q35 -bios $(QEMU_UEFI_FIRMWARE) 
 QEMU_UPDATE_TARGET_PCI ?= 0000:08:00.0
 QEMU_UPDATE_TARGET_FLAGS = -device vfio-pci,host=$(QEMU_UPDATE_TARGET_PCI),bus=pcie.0,addr=0x6
 
-QEMU_USB_MODE ?= controller
-QEMU_USB_CONTROLLER_PCI ?= 0000:06:00.0
+QEMU_USB_HOST_FLAGS = -device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5  \
+	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=2,id=usbpendrive \
 
-QEMU_USB_HOST_FLAGS = -device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5 
-#	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
-#	-device usb-storage,drive=usbdisk,bus=xhci.0,port=4,id=usbms  \
-
-#	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
-#	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=2,id=usbleds \
-#	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd \
-#	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=6,id=usbtruekey
+#	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=3,id=usbhypx \
+#	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=1,id=usbtruekey \
+#	-drive file=disk.img,if=none,format=raw,id=usbdisk  
+#	-device usb-storage,drive=usbdisk,bus=xhci.0,port=4,id=usbms  
+#	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse 
+#	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=2,id=usbleds 
+#	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd 
 #   -device usb-tablet,bus=xhci.0,port=4,id=usbtablet
 #   -device usb-host,vendorid=0x07cf,productid=0x6803,bus=xhci.0,port=0,id=usbpiano
-#   -device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive
-QEMU_USB_CONTROLLER_FLAGS = -device vfio-pci,host=$(QEMU_USB_CONTROLLER_PCI),bus=pcie.0,addr=0x5
 
-ifeq ($(QEMU_USB_MODE),host)
 QEMU_USB_FLAGS = $(QEMU_USB_HOST_FLAGS)
-else ifeq ($(QEMU_USB_MODE),controller)
-QEMU_USB_FLAGS = $(QEMU_USB_CONTROLLER_FLAGS)
-else
-$(error Unsupported QEMU_USB_MODE '$(QEMU_USB_MODE)' (expected host or controller))
-endif
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
 QEMU_ISO_WITH_NVME = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS) 

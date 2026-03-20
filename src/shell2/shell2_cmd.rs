@@ -5,21 +5,21 @@ use super::ShellBackend2;
 #[derive(Clone, Copy)]
 pub(crate) enum CommandSessionKind {
     BenchRunning(u64),
-    FormatSure,
+    FormatSure(u32),
 }
 
 impl CommandSessionKind {
     pub(crate) const fn shows_session_activity(self) -> bool {
         match self {
             Self::BenchRunning(_) => false,
-            Self::FormatSure => true,
+            Self::FormatSure(_) => true,
         }
     }
 
     pub(crate) const fn accepts_broadcast_input(self) -> bool {
         match self {
             Self::BenchRunning(_) => true,
-            Self::FormatSure => false,
+            Self::FormatSure(_) => false,
         }
     }
 }

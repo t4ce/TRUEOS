@@ -867,7 +867,9 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         return;
     }
 
-    let headers = ["Ctrl", "BDF", "Probe", "Device", "VID:PID", "Class", "Cfg/If"];
+    let headers = [
+        "Ctrl", "BDF", "Probe", "Device", "VID:PID", "Class", "Cfg/If",
+    ];
     let table = TlbTable::with_width(&headers, line_width_for_backend(io).saturating_sub(2));
     table.emit_header(|text| line(io, text));
 
@@ -1160,7 +1162,12 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
                 .filter(|dev| dev.controller_index == ctrl_info.index)
             {
                 let vidpid = alloc::format!("{:04X}:{:04X}", dev.vendor_id, dev.product_id);
-                let class = alloc::format!("{:02X}/{:02X}/{:02X}", dev.class, dev.subclass, dev.protocol);
+                let class = alloc::format!(
+                    "{:02X}/{:02X}/{:02X}",
+                    dev.class,
+                    dev.subclass,
+                    dev.protocol
+                );
                 let cfg_if = alloc::format!("{}/{}", dev.config_count, dev.interface_count);
                 writeln!(
                     out,
@@ -1180,7 +1187,8 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
             }
 
             if !emitted {
-                let vidpid = alloc::format!("{:04X}:{:04X}", ctrl_info.vendor_id, ctrl_info.device_id);
+                let vidpid =
+                    alloc::format!("{:04X}:{:04X}", ctrl_info.vendor_id, ctrl_info.device_id);
                 let mmio = alloc::format!("mmio=0x{:X}", ctrl_info.mmio_base.as_ptr() as usize);
                 writeln!(
                     out,

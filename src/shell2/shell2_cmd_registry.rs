@@ -52,13 +52,8 @@ fn dispatch_hv(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) ->
 }
 
 fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    if rest.split_whitespace().next().is_some() {
-        print_shell_line(io, "install: usage `install`");
-        return ParseOutcome::Handled;
-    }
-
-    super::cmds::install::submit_install(spawner, io);
-    ParseOutcome::Handled
+    let mut args = rest.split_whitespace();
+    super::cmds::install::try_parse(spawner, io, &mut args)
 }
 
 fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -72,13 +67,8 @@ fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
 }
 
 fn dispatch_update(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    if rest.split_whitespace().next().is_some() {
-        print_shell_line(io, "update: usage `update`");
-        return ParseOutcome::Handled;
-    }
-
-    super::cmds::update::submit_update(spawner, io);
-    ParseOutcome::Handled
+    let mut args = rest.split_whitespace();
+    super::cmds::update::try_parse(spawner, io, &mut args)
 }
 
 fn dispatch_not_wired(

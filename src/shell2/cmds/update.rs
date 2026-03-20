@@ -1,23 +1,60 @@
+use core::str::SplitWhitespace;
+
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
+use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
     print_shell_line, set_matrix_target_active,
 };
 
-pub(crate) fn submit_update(spawner: &Spawner, io: &'static dyn ShellBackend2) {
-    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
-        print_shell_line(io, "update: no TRUEOSFS root mounted");
-        return;
+pub(crate) fn print_update_disk_table(io: &'static dyn ShellBackend2) {
+    let choices = super::tlb_helper::collect_top_level_disk_choices();
+    super::tlb_helper::print_disk_choice_table(io, "update", "disk selection", choices.as_slice());
+}
+
+pub(crate) fn try_parse(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+) -> ParseOutcome {
+    let Some(arg) = args.next() else {
+        print_update_disk_table(io);
+        print_shell_line(io, "update: choose a disk id and run `update <disk-id>`");
+        return ParseOutcome::Handled;
+    };
+    if args.next().is_some() {
+        print_shell_line(io, "update: usage `update <disk-id>`");
+        return ParseOutcome::Handled;
+    }
+
+    let Some(raw_id) = super::tlb_helper::parse_disc_id_raw(arg) else {
+        print_shell_line(io, "update: invalid disk id");
+        print_update_disk_table(io);
+        return ParseOutcome::Handled;
+    };
+    let Some(disk) = super::tlb_helper::select_top_level_disk(raw_id) else {
+        print_shell_line(io, "update: no such top-level disk");
+        print_update_disk_table(io);
+        return ParseOutcome::Handled;
     };
 
+    submit_update(spawner, io, disk);
+    ParseOutcome::Handled
+}
+
+pub(crate) fn submit_update(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    disk: crate::disc::block::DeviceHandle,
+) {
     let target = matrix_target_for_backend(io);
     let info = disk.info();
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "update: starting on mounted root disk id={} ({})",
+            "update: starting on disk id={} ({})",
             info.id.raw(),
             info.id
         )
@@ -160,7 +197,7 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
             return;
         }
 
-        log("update: installing onto mounted TRUEOSFS root disk");
+        log("update: installing onto selected TRUEOS disk");
         match crate::disc::install::install_bootable_uefi_gpt_with_log(
             disk,
             bootx64,

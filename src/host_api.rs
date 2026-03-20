@@ -460,7 +460,10 @@ unsafe extern "C" fn trueos_xhci_port_reset_js(
     let Some(port) = js_to_i32(ctx, args[1]) else {
         return js_int32(-1);
     };
-    js_int32(crate::usb2::syscall::port_reset(cid as usize, port as usize))
+    js_int32(crate::usb2::syscall::port_reset(
+        cid as usize,
+        port as usize,
+    ))
 }
 
 unsafe extern "C" fn trueos_xhci_get_descriptor_js(
@@ -532,11 +535,11 @@ unsafe extern "C" fn trueos_xhci_read_transfer_event_js(
     };
     let cid = ((handle as u32) >> 24) as usize;
     let slot = (handle as u32) & 0xFF_FFFF;
-    let (cc, residual) = match crate::usb2::syscall::read_transfer_event(cid, slot, ep_target as u32)
-    {
-        Some(r) => r,
-        None => return js_null(),
-    };
+    let (cc, residual) =
+        match crate::usb2::syscall::read_transfer_event(cid, slot, ep_target as u32) {
+            Some(r) => r,
+            None => return js_null(),
+        };
     let obj = qjs::JS_NewObject(ctx);
     if obj.is_exception() {
         return js_null();

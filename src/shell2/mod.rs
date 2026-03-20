@@ -781,8 +781,10 @@ fn handle_command_session_input(
         shell2_cmd::CommandSessionKind::BenchRunning(session_id) => {
             crate::shell2::cmds::bench::handle_session_input(session_id, &target, submitted)
         }
-        shell2_cmd::CommandSessionKind::FormatSure => {
-            crate::shell2::cmds::format::handle_session_input(spawner, io, &target, submitted)
+        shell2_cmd::CommandSessionKind::FormatSure(disc_id) => {
+            crate::shell2::cmds::format::handle_session_input(
+                spawner, io, &target, submitted, disc_id,
+            )
         }
     }
 }

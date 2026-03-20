@@ -11,7 +11,7 @@ const MAX_CHILDREN_PER_DIR: usize = 24;
 const MAX_LINES_PER_ROOT: usize = 160;
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "file: usage `file`");
+    print_shell_line(io, "file: usage `file` | `file format <disk-id>`");
 }
 
 fn tree_child_names(
@@ -155,23 +155,53 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
-    if args.next().is_some() {
-        print_usage(io);
-        return ParseOutcome::Handled;
-    }
+    match args.next() {
+        Some("format") => {
+            let Some(arg) = args.next() else {
+                super::format::print_format_disk_table(io);
+                print_shell_line(
+                    io,
+                    "file format: choose a disk id and run `file format <disk-id>`",
+                );
+                return ParseOutcome::Handled;
+            };
+            if args.next().is_some() {
+                print_usage(io);
+                return ParseOutcome::Handled;
+            }
 
-    let roots = crate::v::fs::trueosfs::list_roots();
-    if roots.is_empty() {
-        print_shell_line(io, "file: no TRUEOSFS roots mounted");
-        return ParseOutcome::Handled;
-    }
+            let Some(raw_id) = super::tlb_helper::parse_disc_id_raw(arg) else {
+                print_shell_line(io, "file format: invalid disk id");
+                super::format::print_format_disk_table(io);
+                return ParseOutcome::Handled;
+            };
+            let Some(disk) = super::tlb_helper::select_top_level_disk(raw_id) else {
+                print_shell_line(io, "file format: no such top-level disk");
+                super::format::print_format_disk_table(io);
+                return ParseOutcome::Handled;
+            };
 
-    for (index, root) in roots.into_iter().enumerate() {
-        if index > 0 {
-            print_shell_line(io, "");
+            super::format::start_format_session_for_disk(io, disk, "file format")
         }
-        print_root_tree(io, root);
-    }
+        Some(_) => {
+            print_usage(io);
+            ParseOutcome::Handled
+        }
+        None => {
+            let roots = crate::v::fs::trueosfs::list_roots();
+            if roots.is_empty() {
+                print_shell_line(io, "file: no TRUEOSFS roots mounted");
+                return ParseOutcome::Handled;
+            }
 
-    ParseOutcome::Handled
+            for (index, root) in roots.into_iter().enumerate() {
+                if index > 0 {
+                    print_shell_line(io, "");
+                }
+                print_root_tree(io, root);
+            }
+
+            ParseOutcome::Handled
+        }
+    }
 }

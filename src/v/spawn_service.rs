@@ -184,7 +184,9 @@ fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::wait::job_runner_task()))
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::wait::job_runner_task())
+    })
 }
 
 fn spawn_globalog_persist_once(spawner: Spawner) -> SpawnAttempt {
@@ -343,7 +345,10 @@ async fn gfx_virgl_ready_task() {
             }
             if gfx_switched() {
                 crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
-                crate::log!("boot-probe: gfx-backend-ready(switched) ms={}\n", boot_probe_ms());
+                crate::log!(
+                    "boot-probe: gfx-backend-ready(switched) ms={}\n",
+                    boot_probe_ms()
+                );
                 return;
             }
             Timer::after(EmbassyDuration::from_millis(25)).await;
@@ -363,7 +368,10 @@ fn spawn_gfx_virgl_ready_task(spawner: Spawner) -> SpawnAttempt {
 
 #[embassy_executor::task]
 async fn gfx_virgl_cursor_overlay_task() {
-    crate::log!("boot-probe: gfx-cursor-overlay task start ms={}\n", boot_probe_ms());
+    crate::log!(
+        "boot-probe: gfx-cursor-overlay task start ms={}\n",
+        boot_probe_ms()
+    );
     #[cfg(not(feature = "gfx_virgl"))]
     {
         return;
@@ -552,19 +560,27 @@ fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_audio_task()))
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::usb2::crabusb_audio_task())
+    })
 }
 
 fn spawn_crabusb_bsp_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_bsp_service()))
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::usb2::crabusb_bsp_service())
+    })
 }
 
 fn spawn_crabusb_event_pump(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_event_pump_task()))
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::usb2::crabusb_event_pump_task())
+    })
 }
 
 fn spawn_crabusb_truekey(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_truekey_task()))
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::usb2::crabusb_truekey_task())
+    })
 }
 
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
@@ -614,7 +630,9 @@ async fn atomic_bomb_task() {
 }
 
 fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |worker_spawner| worker_spawner.spawn(atomic_bomb_task()))
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(atomic_bomb_task())
+    })
 }
 
 // --- registry ---
@@ -772,12 +790,12 @@ static TASKS: &[TaskSpec] = &[
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
-        TaskSpec::disabled(
-            "webgpu-browser-primary",
-            WEBGPU_BROWSER_READY,
-            &WEBGPU_BROWSER_PRIMARY_STARTED,
-            spawn_primary_webgpu_browser,
-        ),
+    TaskSpec::disabled(
+        "webgpu-browser-primary",
+        WEBGPU_BROWSER_READY,
+        &WEBGPU_BROWSER_PRIMARY_STARTED,
+        spawn_primary_webgpu_browser,
+    ),
     if ENABLE_BROWSER_2 {
         TaskSpec::disabled(
             "webgpu-browser-secondary",
@@ -842,12 +860,7 @@ static TASKS: &[TaskSpec] = &[
         &NET_TCP_SHELL_STARTED,
         spawn_net_tcp_shell,
     ),
-    TaskSpec::disabled(
-        "atomic_bomb",
-        0,
-        &ATOMIC_BOMB_STARTED,
-        spawn_atomic_bomb,
-    ),
+    TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
 ];
 
 #[embassy_executor::task]
@@ -891,11 +904,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
                                 | "ui2-triangle-demo"
                                 | "ui2-mandelbrot-demo"
                         ) {
-                            crate::log!(
-                                "boot-probe: spawn {} ms={}\n",
-                                spec.name,
-                                boot_probe_ms()
-                            );
+                            crate::log!("boot-probe: spawn {} ms={}\n", spec.name, boot_probe_ms());
                         }
                     }
                     SpawnAttempt::Skipped => {
