@@ -91,13 +91,7 @@ pub(crate) fn try_parse(
     }
 
     if op.eq_ignore_ascii_case("start") {
-        if vm_id != 0 {
-            io.write_fmt(format_args!(
-                "hv: vm{} control path not wired yet (using vm1 backend only)\r\n",
-                vm_id
-            ));
-        }
-        match crate::hv::start(spawner, io) {
+        match crate::hv::start(vm_id, spawner, io) {
             Ok(()) => io.write_fmt(format_args!("hv: vm{} started\r\n", vm_id)),
             Err(e) => io.write_fmt(format_args!("hv: start failed: {:?}\r\n", e)),
         }
@@ -105,16 +99,10 @@ pub(crate) fn try_parse(
     }
 
     if op.eq_ignore_ascii_case("stop") {
-        if vm_id != 0 {
-            io.write_fmt(format_args!(
-                "hv: vm{} control path not wired yet (using vm1 backend only)\r\n",
-                vm_id
-            ));
-        }
-        if crate::hv::stop() {
-            io.write_fmt(format_args!("hv: vm{} stop requested\r\n", vm_id));
-        } else {
-            io.write_fmt(format_args!("hv: vm{} not running\r\n", vm_id));
+        match crate::hv::stop(vm_id) {
+            Ok(true) => io.write_fmt(format_args!("hv: vm{} stop requested\r\n", vm_id)),
+            Ok(false) => io.write_fmt(format_args!("hv: vm{} not running\r\n", vm_id)),
+            Err(e) => io.write_fmt(format_args!("hv: stop failed: {:?}\r\n", e)),
         }
         return ParseOutcome::Handled;
     }
@@ -125,16 +113,10 @@ pub(crate) fn try_parse(
     }
 
     if op.eq_ignore_ascii_case("save") {
-        if vm_id != 0 {
-            io.write_fmt(format_args!(
-                "hv: vm{} control path not wired yet (using vm1 backend only)\r\n",
-                vm_id
-            ));
-        }
-        match crate::hv::save_snapshot() {
+        match crate::hv::save_snapshot(vm_id) {
             Ok(bytes) => io.write_fmt(format_args!(
-                "hv: vm{} snapshot saved store=hv-ramdisk path=vm/vm1.snapshot bytes={}\r\n",
-                vm_id, bytes
+                "hv: vm{} snapshot saved store=hv-ramdisk path=vm/vm{}.snapshot bytes={}\r\n",
+                vm_id, vm_id, bytes
             )),
             Err(e) => io.write_fmt(format_args!("hv: snapshot save failed: {:?}\r\n", e)),
         }
@@ -142,17 +124,11 @@ pub(crate) fn try_parse(
     }
 
     if op.eq_ignore_ascii_case("restore") {
-        if vm_id != 0 {
-            io.write_fmt(format_args!(
-                "hv: vm{} control path not wired yet (using vm1 backend only)\r\n",
-                vm_id
-            ));
-        }
-        match crate::hv::restore_snapshot() {
-            Ok(bytes) => match crate::hv::start(spawner, io) {
+        match crate::hv::restore_snapshot(vm_id) {
+            Ok(bytes) => match crate::hv::start(vm_id, spawner, io) {
                 Ok(()) => io.write_fmt(format_args!(
-                    "hv: vm{} snapshot restored store=hv-ramdisk path=vm/vm1.snapshot bytes={} and vm{} started\r\n",
-                    vm_id, bytes, vm_id
+                    "hv: vm{} snapshot restored store=hv-ramdisk path=vm/vm{}.snapshot bytes={} and vm{} started\r\n",
+                    vm_id, vm_id, bytes, vm_id
                 )),
                 Err(e) => io.write_fmt(format_args!(
                     "hv: vm{} snapshot restored bytes={} but start failed: {:?}\r\n",
