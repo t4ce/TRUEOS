@@ -1,0 +1,21 @@
+# ========================================
+# Room AA-3B
+# ========================================
+
+room room-aa-3b {
+    name "Room AA-3B"
+    desc "OK, so I was fairly sure that nobody but me would ever come this far. Massive congratulations are in order. [[b]][[i]]Good hustle.[[/i]][[/b]] But I, uh, never created an ending or an extension to a new content area. Perhaps this will be a jumping off point after it's opened up to public access..."
+    exit "sublevel entrance" -> sublevel-entrance
+}
+
+# ========================================
+# Goals
+# ========================================
+
+goal reach-aa3b {
+    name "Investigate Room AA-3B"
+    desc "Figure out what's behind the mysterious sealed door."
+    group required
+    start when has flag entered-sublevel-1
+    done when reached room room-aa-3b
+}

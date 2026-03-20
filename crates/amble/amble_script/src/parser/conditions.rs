@@ -1,0 +1,392 @@
+use std::collections::HashMap;
+
+use pest::Parser;
+
+use crate::{ConditionAliasSpec, ConditionAst, NpcStateValue};
+
+use super::helpers::parse_string_at;
+use super::{AstError, DslParser, Rule};
+
+pub(super) fn parse_condition_text(
+    text: &str,
+    sets: &HashMap<String, Vec<String>>,
+    aliases: &HashMap<String, ConditionAst>,
+) -> Result<ConditionAst, AstError> {
+    let mut lookup = |name: &str| Ok(aliases.get(name).cloned());
+    parse_condition_text_inner(text, sets, &mut lookup)
+}
+
+pub(super) fn resolve_condition_aliases(
+    specs: &[ConditionAliasSpec],
+) -> Result<HashMap<String, ConditionAst>, AstError> {
+    resolve_condition_aliases_with_base(specs, &HashMap::new())
+}
+
+pub(super) fn resolve_condition_aliases_with_base(
+    specs: &[ConditionAliasSpec],
+    base_aliases: &HashMap<String, ConditionAst>,
+) -> Result<HashMap<String, ConditionAst>, AstError> {
+    let mut by_name: HashMap<&str, &ConditionAliasSpec> = HashMap::new();
+    for spec in specs {
+        if by_name.insert(spec.name.as_str(), spec).is_some() {
+            return Err(AstError::ShapeAt {
+                msg: "duplicate condition alias",
+                context: spec.name.clone(),
+            });
+        }
+    }
+
+    let mut resolver = AliasResolver {
+        specs: by_name,
+        base_aliases,
+        resolved: HashMap::new(),
+        visiting: Vec::new(),
+    };
+    let names = resolver.specs.keys().copied().collect::<Vec<_>>();
+    for name in names {
+        resolver.resolve_alias(name)?;
+    }
+    Ok(resolver.resolved)
+}
+
+fn parse_condition_text_inner<F>(
+    text: &str,
+    sets: &HashMap<String, Vec<String>>,
+    resolve_alias: &mut F,
+) -> Result<ConditionAst, AstError>
+where
+    F: FnMut(&str) -> Result<Option<ConditionAst>, AstError>,
+{
+    let cleaned = strip_comments(text);
+    let t = cleaned.trim();
+    if let Some(inner) = t.strip_prefix("all(") {
+        let inner = inner.strip_suffix(')').ok_or(AstError::Shape("all() close"))?;
+        return Ok(ConditionAst::All(parse_condition_list(inner, sets, resolve_alias)?));
+    }
+    if let Some(inner) = t.strip_prefix("any(") {
+        let inner = inner.strip_suffix(')').ok_or(AstError::Shape("any() close"))?;
+        return Ok(ConditionAst::Any(parse_condition_list(inner, sets, resolve_alias)?));
+    }
+    if let Some(rest) = t.strip_prefix("has flag ") {
+        return Ok(ConditionAst::HasFlag(rest.trim().to_string()));
+    }
+    if let Some(rest) = t.strip_prefix("missing flag ") {
+        return Ok(ConditionAst::MissingFlag(rest.trim().to_string()));
+    }
+    if let Some(rest) = t.strip_prefix("has item ") {
+        return Ok(ConditionAst::HasItem(rest.trim().to_string()));
+    }
+    if let Some(rest) = t.strip_prefix("has visited room ") {
+        return Ok(ConditionAst::HasVisited(rest.trim().to_string()));
+    }
+    if let Some(rest) = t.strip_prefix("missing item ") {
+        return Ok(ConditionAst::MissingItem(rest.trim().to_string()));
+    }
+    if let Some(rest) = t.strip_prefix("flag in progress ") {
+        return Ok(ConditionAst::FlagInProgress(rest.trim().to_string()));
+    }
+    if let Some(rest) = t.strip_prefix("flag complete ") {
+        return Ok(ConditionAst::FlagComplete(rest.trim().to_string()));
+    }
+    if let Some(rest) = t.strip_prefix("with npc ") {
+        return Ok(ConditionAst::WithNpc(rest.trim().to_string()));
+    }
+    if let Some(rest) = t.strip_prefix("npc has item ") {
+        let rest = rest.trim();
+        if let Some(space) = rest.find(' ') {
+            let npc = &rest[..space];
+            let item = rest[space + 1..].trim();
+            return Ok(ConditionAst::NpcHasItem {
+                npc: npc.to_string(),
+                item: item.to_string(),
+            });
+        }
+        return Err(AstError::Shape("npc has item syntax"));
+    }
+    if let Some(rest) = t.strip_prefix("npc in state ") {
+        let rest = rest.trim();
+        if let Some(space) = rest.find(' ') {
+            let npc = &rest[..space];
+            let state = rest[space + 1..].trim();
+            let parsed_state = parse_condition_npc_state(state)?;
+            return Ok(ConditionAst::NpcInState {
+                npc: npc.to_string(),
+                state: parsed_state,
+            });
+        }
+        return Err(AstError::Shape("npc in state syntax"));
+    }
+    // Preferred: container <container> has item <item>
+    if let Some(rest) = t.strip_prefix("container ") {
+        let rest = rest.trim();
+        if let Some(idx) = rest.find(" has item ") {
+            let container = &rest[..idx];
+            let item = &rest[idx + " has item ".len()..];
+            return Ok(ConditionAst::ContainerHasItem {
+                container: container.trim().to_string(),
+                item: item.trim().to_string(),
+            });
+        }
+    }
+    if let Some(rest) = t.strip_prefix("container has item ") {
+        let rest = rest.trim();
+        if let Some(space) = rest.find(' ') {
+            let container = &rest[..space];
+            let item = rest[space + 1..].trim();
+            return Ok(ConditionAst::ContainerHasItem {
+                container: container.to_string(),
+                item: item.to_string(),
+            });
+        }
+        return Err(AstError::Shape("container has item syntax"));
+    }
+    if let Some(rest) = t.strip_prefix("ambient ") {
+        let rest = rest.trim();
+        if let Some(idx) = rest.find(" in rooms ") {
+            let spinner = rest[..idx].trim().to_string();
+            let list = rest[idx + 10..].trim();
+            let mut rooms: Vec<String> = Vec::new();
+            for tok in list.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                if let Some(v) = sets.get(tok) {
+                    rooms.extend(v.clone());
+                } else {
+                    rooms.push(tok.to_string());
+                }
+            }
+            return Ok(ConditionAst::Ambient {
+                spinner,
+                rooms: Some(rooms),
+            });
+        } else {
+            return Ok(ConditionAst::Ambient {
+                spinner: rest.to_string(),
+                rooms: None,
+            });
+        }
+    }
+    // Preferred shorthand: "in rooms <r1,r2,...>" expands to any(player in room r1, player in room r2, ...)
+    if let Some(rest) = t.strip_prefix("in rooms ") {
+        let list = rest.trim();
+        let mut rooms: Vec<String> = Vec::new();
+        for tok in list.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Some(v) = sets.get(tok) {
+                rooms.extend(v.clone());
+            } else {
+                rooms.push(tok.to_string());
+            }
+        }
+        // If only one room, return simple PlayerInRoom; else return Any of PlayerInRoom
+        if rooms.len() == 1 {
+            return Ok(ConditionAst::PlayerInRoom(rooms.remove(0)));
+        } else if !rooms.is_empty() {
+            let kids = rooms.into_iter().map(ConditionAst::PlayerInRoom).collect();
+            return Ok(ConditionAst::Any(kids));
+        } else {
+            return Err(AstError::Shape("in rooms requires at least one room"));
+        }
+    }
+    if let Some(rest) = t.strip_prefix("player in room ") {
+        return Ok(ConditionAst::PlayerInRoom(rest.trim().to_string()));
+    }
+    if let Some(rest) = t.strip_prefix("chance ") {
+        let rest = rest.trim();
+        let num = rest.strip_suffix('%').ok_or(AstError::Shape("chance percent %"))?;
+        let pct: f64 = num
+            .trim()
+            .parse()
+            .map_err(|_| AstError::Shape("invalid chance percent"))?;
+        if pct <= 0.0 {
+            return Err(AstError::Shape("chance percent must be greater than 0"));
+        }
+        return Ok(ConditionAst::ChancePercent(pct));
+    }
+    if let Some(alias) = resolve_alias(t)? {
+        return Ok(alias);
+    }
+    Err(AstError::Shape("unknown condition"))
+}
+
+fn parse_condition_list<F>(
+    text: &str,
+    sets: &HashMap<String, Vec<String>>,
+    resolve_alias: &mut F,
+) -> Result<Vec<ConditionAst>, AstError>
+where
+    F: FnMut(&str) -> Result<Option<ConditionAst>, AstError>,
+{
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut pairs = DslParser::parse(Rule::cond_list, text).map_err(|e| AstError::Pest(e.to_string()))?;
+    let pair = pairs.next().ok_or(AstError::Shape("condition list"))?;
+    let mut kids = Vec::new();
+    for cond in pair.into_inner() {
+        if cond.as_rule() == Rule::cond {
+            kids.push(parse_condition_text_inner(cond.as_str(), sets, resolve_alias)?);
+        }
+    }
+    Ok(kids)
+}
+
+struct AliasResolver<'a> {
+    specs: HashMap<&'a str, &'a ConditionAliasSpec>,
+    base_aliases: &'a HashMap<String, ConditionAst>,
+    resolved: HashMap<String, ConditionAst>,
+    visiting: Vec<String>,
+}
+
+impl AliasResolver<'_> {
+    fn resolve_alias(&mut self, name: &str) -> Result<Option<ConditionAst>, AstError> {
+        if let Some(ast) = self.resolved.get(name) {
+            return Ok(Some(ast.clone()));
+        }
+        let Some(spec) = self.specs.get(name).copied() else {
+            return Ok(self.base_aliases.get(name).cloned());
+        };
+        if let Some(idx) = self.visiting.iter().position(|n| n == name) {
+            let mut cycle = self.visiting[idx..].to_vec();
+            cycle.push(name.to_string());
+            return Err(AstError::ShapeAt {
+                msg: "recursive condition alias",
+                context: cycle.join(" -> "),
+            });
+        }
+
+        self.visiting.push(name.to_string());
+        let parsed = {
+            let mut lookup = |candidate: &str| self.resolve_alias(candidate);
+            parse_condition_text_inner(&spec.text, &spec.sets, &mut lookup)
+        };
+        self.visiting.pop();
+
+        let ast = match parsed {
+            Ok(ast) => ast,
+            Err(AstError::Shape(msg)) => {
+                return Err(AstError::ShapeAt {
+                    msg,
+                    context: format!("condition alias '{}'", spec.name),
+                });
+            },
+            Err(err) => return Err(err),
+        };
+
+        self.resolved.insert(name.to_string(), ast.clone());
+        Ok(Some(ast))
+    }
+}
+
+fn strip_comments(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_comment = false;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+    let mut at_line_start = true;
+    let mut prev_was_whitespace = true;
+    let mut i = 0usize;
+    while i < input.len() {
+        let ch = input[i..].chars().next().unwrap();
+        i += ch.len_utf8();
+
+        if in_comment {
+            if ch == '\n' {
+                in_comment = false;
+                at_line_start = true;
+                prev_was_whitespace = true;
+                out.push(ch);
+            }
+            continue;
+        }
+
+        if in_single {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_single = false;
+            }
+            out.push(ch);
+            continue;
+        }
+
+        if in_double {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            out.push(ch);
+            continue;
+        }
+
+        match ch {
+            '#' if at_line_start || prev_was_whitespace => {
+                in_comment = true;
+            },
+            '\'' => {
+                in_single = true;
+                out.push(ch);
+                at_line_start = false;
+                prev_was_whitespace = false;
+            },
+            '"' => {
+                in_double = true;
+                out.push(ch);
+                at_line_start = false;
+                prev_was_whitespace = false;
+            },
+            _ => {
+                out.push(ch);
+                if ch == '\n' {
+                    at_line_start = true;
+                    prev_was_whitespace = true;
+                } else {
+                    at_line_start = false;
+                    prev_was_whitespace = ch.is_whitespace();
+                }
+            },
+        }
+    }
+    out
+}
+
+fn parse_condition_npc_state(token: &str) -> Result<NpcStateValue, AstError> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return Err(AstError::Shape("npc in state missing state value"));
+    }
+    if trimmed.len() >= 6 && trimmed[..6].eq_ignore_ascii_case("custom") {
+        let mut rest = &trimmed[6..];
+        rest = rest.trim_start();
+        if rest.starts_with(':') {
+            rest = rest[1..].trim_start();
+        } else if rest.starts_with('(') {
+            rest = rest[1..].trim_start();
+            if let Some(idx) = rest.rfind(')') {
+                rest = rest[..idx].trim_end();
+            }
+        }
+        rest = rest.trim();
+        rest = rest.trim_end_matches(')');
+        rest = rest.trim();
+        if rest.starts_with('"') {
+            let (value, _) =
+                parse_string_at(rest).map_err(|_| AstError::Shape("custom npc state invalid quoted string"))?;
+            return Ok(NpcStateValue::Custom(value));
+        }
+        if rest.is_empty() {
+            return Err(AstError::Shape("custom npc state missing identifier"));
+        }
+        return Ok(NpcStateValue::Custom(rest.to_string()));
+    }
+    if trimmed.starts_with('"') {
+        let (value, _) = parse_string_at(trimmed).map_err(|_| AstError::Shape("npc state invalid quoted string"))?;
+        return Ok(NpcStateValue::Custom(value));
+    }
+    Ok(NpcStateValue::Named(trimmed.to_string()))
+}

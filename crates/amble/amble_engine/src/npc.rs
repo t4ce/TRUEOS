@@ -1,0 +1,1015 @@
+//! Non-player character definitions and behavior helpers.
+//!
+//! Contains the runtime NPC data model alongside dialogue, movement,
+//! and interaction utilities.
+
+use anyhow::{Context, Result, bail};
+use log::{info, warn};
+use serde::de::{self, Deserializer, EnumAccess, VariantAccess, Visitor};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+};
+
+use colored::Colorize;
+use gametools::Spinner;
+use rand::{prelude::IndexedRandom, seq::IteratorRandom};
+
+use crate::{Id, ItemId, NpcId, RoomId};
+
+use crate::{
+    ItemHolder, Location, View, ViewItem, WorldObject,
+    health::{HealthEffect, HealthState, LivingEntity},
+    item::Movability,
+    spinners::CoreSpinnerType,
+    view::ContentLine,
+    world::AmbleWorld,
+};
+
+/// A non-playable character.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Npc {
+    pub id: NpcId,
+    pub symbol: String,
+    pub name: String,
+    pub description: String,
+    pub location: Location,
+    pub inventory: HashSet<ItemId>,
+    pub dialogue: HashMap<NpcState, Vec<String>>,
+    pub state: NpcState,
+    pub movement: Option<NpcMovement>,
+    pub health: HealthState,
+}
+impl Npc {
+    /// Pause scripted movement for the given number of turns.
+    pub fn pause_movement(&mut self, current_turn: usize, duration: usize) {
+        if let Some(ref mut mvmt_config) = self.movement {
+            mvmt_config.paused_until = Some(current_turn + duration);
+        }
+    }
+
+    /// Pick a random line of dialogue respecting the NPC's current state / mood.
+    pub fn random_dialogue(&self, ignore_spinner: &Spinner<String>) -> String {
+        if let Some(lines) = self.dialogue.get(&self.state) {
+            let mut rng = rand::rng();
+            lines
+                .choose(&mut rng)
+                .unwrap_or(&"Stands mute.".italic().dimmed().to_string())
+                .clone()
+        } else {
+            warn!(
+                "Npc {}({}): failed dialogue lookup for mood: {:?}",
+                self.name(),
+                self.id(),
+                self.state
+            );
+            ignore_spinner.spin().unwrap_or("Ignores you.".to_string())
+        }
+    }
+    /// Display the NPC description and visible inventory.
+    pub fn show(&self, world: &AmbleWorld, view: &mut View) {
+        view.push(ViewItem::NpcDescription {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            health: self.health.clone(),
+            state: self.state.clone(),
+        });
+        view.push(ViewItem::NpcInventory(
+            self.inventory
+                .iter()
+                .filter_map(|id| world.items.get(id))
+                .map(|item| ContentLine {
+                    item_name: item.name.clone(),
+                    restricted: matches!(item.movability, Movability::Restricted { .. }),
+                })
+                .collect(),
+        ));
+    }
+    /// Obtain one-line description for NPC (by convention, the first line of the `description` field).
+    pub fn short_description(&self) -> String {
+        if let Some((short, _rest)) = self.description.split_once('\n') {
+            short.to_string()
+        } else {
+            // return the whole description if there is only one line
+            self.description.clone()
+        }
+    }
+}
+impl WorldObject for Npc {
+    fn id(&self) -> Id {
+        self.id.to_string()
+    }
+    fn symbol(&self) -> &str {
+        &self.symbol
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn location(&self) -> &Location {
+        &self.location
+    }
+}
+impl ItemHolder for Npc {
+    fn add_item(&mut self, item_id: ItemId) {
+        self.inventory.insert(item_id);
+    }
+
+    fn remove_item(&mut self, item_id: ItemId) {
+        self.inventory.remove(&item_id);
+    }
+
+    fn contains_item(&self, item_id: ItemId) -> bool {
+        self.inventory.contains(&item_id)
+    }
+}
+impl LivingEntity for Npc {
+    fn max_hp(&self) -> u32 {
+        self.health.max_hp()
+    }
+
+    fn current_hp(&self) -> u32 {
+        self.health.current_hp()
+    }
+
+    fn life_state(&self) -> crate::health::LifeState {
+        self.health.life_state()
+    }
+
+    fn damage(&mut self, amount: u32) {
+        self.health.damage(amount);
+    }
+
+    fn heal(&mut self, amount: u32) {
+        self.health.heal(amount);
+    }
+
+    fn remove_health_effect(&mut self, cause: &str) -> Option<HealthEffect> {
+        self.health.remove_effect(cause)
+    }
+
+    fn tick_health_effects(&mut self) -> crate::health::HealthTickResult {
+        self.health.apply_effects(self.name.as_str())
+    }
+
+    fn add_health_effect(&mut self, effect: HealthEffect) {
+        self.health.add_effect(effect);
+    }
+}
+
+/// Paramaters that define when and where mobile NPCs should move.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NpcMovement {
+    pub movement_type: MovementType,
+    pub timing: MovementTiming,
+    pub active: bool,
+    pub last_moved_turn: usize,
+    pub paused_until: Option<usize>,
+}
+
+/// Type and route of NPC movement
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum MovementType {
+    Route {
+        rooms: Vec<RoomId>,
+        current_idx: usize,
+        loop_route: bool,
+    },
+    RandomSet {
+        rooms: HashSet<RoomId>,
+    },
+}
+
+/// Defines schedule for NPC movements
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum MovementTiming {
+    EveryNTurns { turns: usize },
+    OnTurn { turn: usize },
+}
+
+#[derive(Debug, Copy, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum MovementTypeKind {
+    Route,
+    RandomSet,
+}
+
+impl MovementTypeKind {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            v if v.eq_ignore_ascii_case("route") => Some(Self::Route),
+            v if v.eq_ignore_ascii_case("randomSet") => Some(Self::RandomSet),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MovementTypeKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct KindVisitor;
+
+        impl<'de> Visitor<'de> for KindVisitor {
+            type Value = MovementTypeKind;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("movement type identifier 'route' or 'randomSet'")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                MovementTypeKind::from_str(value)
+                    .ok_or_else(|| de::Error::unknown_variant(value, &["route", "randomSet"]))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_str(value)
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_str(&value)
+            }
+
+            fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
+            where
+                A: EnumAccess<'de>,
+            {
+                let (variant, access) = data.variant::<String>()?;
+                access.unit_variant()?;
+                self.visit_str(&variant)
+            }
+        }
+
+        deserializer.deserialize_any(KindVisitor)
+    }
+}
+
+#[derive(Deserialize)]
+struct MovementTypeRepr {
+    #[serde(rename = "type")]
+    kind: MovementTypeKind,
+    #[serde(default)]
+    rooms: Vec<RoomId>,
+    #[serde(default)]
+    current_idx: usize,
+    #[serde(default)]
+    loop_route: bool,
+}
+
+impl<'de> Deserialize<'de> for MovementType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let repr = MovementTypeRepr::deserialize(deserializer)?;
+        match repr.kind {
+            MovementTypeKind::Route => Ok(MovementType::Route {
+                rooms: repr.rooms,
+                current_idx: repr.current_idx,
+                loop_route: repr.loop_route,
+            }),
+            MovementTypeKind::RandomSet => Ok(MovementType::RandomSet {
+                rooms: repr.rooms.into_iter().collect(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum MovementTimingKind {
+    EveryNTurns,
+    OnTurn,
+}
+
+impl MovementTimingKind {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            v if v.eq_ignore_ascii_case("everyNTurns") => Some(Self::EveryNTurns),
+            v if v.eq_ignore_ascii_case("onTurn") => Some(Self::OnTurn),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MovementTimingKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct KindVisitor;
+
+        impl<'de> Visitor<'de> for KindVisitor {
+            type Value = MovementTimingKind;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("movement timing identifier 'everyNTurns' or 'onTurn'")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                MovementTimingKind::from_str(value)
+                    .ok_or_else(|| de::Error::unknown_variant(value, &["everyNTurns", "onTurn"]))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_str(value)
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_str(&value)
+            }
+
+            fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
+            where
+                A: EnumAccess<'de>,
+            {
+                let (variant, access) = data.variant::<String>()?;
+                access.unit_variant()?;
+                self.visit_str(&variant)
+            }
+        }
+
+        deserializer.deserialize_any(KindVisitor)
+    }
+}
+
+#[derive(Deserialize)]
+struct MovementTimingRepr {
+    #[serde(rename = "type")]
+    kind: MovementTimingKind,
+    #[serde(default)]
+    turns: usize,
+    #[serde(default)]
+    turn: usize,
+}
+
+impl<'de> Deserialize<'de> for MovementTiming {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let repr = MovementTimingRepr::deserialize(deserializer)?;
+        match repr.kind {
+            MovementTimingKind::EveryNTurns => Ok(MovementTiming::EveryNTurns { turns: repr.turns }),
+            MovementTimingKind::OnTurn => Ok(MovementTiming::OnTurn { turn: repr.turn }),
+        }
+    }
+}
+
+/// Determine whether an NPC should move this turn.
+pub fn move_scheduled(movement: &NpcMovement, current_turn: usize) -> bool {
+    // return false if paused - pauses are cleared to None by the check_npc_movement function
+    // in the REPL when they expire, so we just need to check for Some()
+    if movement.paused_until.is_some() {
+        return false;
+    }
+    // return true or false depending on movement schedule otherwise
+    match &movement.timing {
+        MovementTiming::EveryNTurns { turns } => current_turn.is_multiple_of(*turns),
+        MovementTiming::OnTurn { turn } => current_turn == *turn,
+    }
+}
+
+/// Calculate the next destination for a moving NPC.
+pub fn calculate_next_location(movement: &mut NpcMovement) -> Option<Location> {
+    use crate::npc::MovementType::{RandomSet, Route};
+    match &mut movement.movement_type {
+        Route {
+            rooms,
+            current_idx,
+            loop_route,
+        } => {
+            let next_idx = if *loop_route {
+                (*current_idx + 1) % rooms.len()
+            } else {
+                *current_idx + 1
+            };
+            if let Some(room_id) = rooms.get(next_idx) {
+                *current_idx = next_idx;
+                Some(Location::Room(room_id.clone()))
+            } else {
+                None
+            }
+        },
+        RandomSet { rooms } => rooms
+            .iter()
+            .choose(&mut rand::rng())
+            .map(|room_id| Location::Room(room_id.clone())),
+    }
+}
+
+/// Moves an NPC to a new `Location`.
+/// # Errors
+/// - if '`move_to`' is a location other than a 'Room' or 'Nowhere'
+pub fn move_npc(world: &mut AmbleWorld, view: &mut View, npc_id: &NpcId, move_to: Location) -> Result<()> {
+    // update location in NPC instance
+    let npc = world
+        .npcs
+        .get(npc_id)
+        .with_context(|| format!("looking up npc_id {npc_id} for move"))?;
+
+    // only valid locations to move to are "nowhere" (a despawn) or a room (spawn/move)
+    if move_to.is_not_room() && move_to.is_not_nowhere() {
+        bail!("tried to move NPC to invalid location {move_to:?}")
+    }
+    info!(
+        "moving NPC '{}' from [{}] to [{}]",
+        npc.symbol,
+        match &npc.location {
+            Location::Room(room_id) => room_id.to_string(),
+            _ => "<nowhere>".to_string(),
+        },
+        match &move_to {
+            Location::Room(room_id) => room_id.to_string(),
+            _ => "<nowhere>".to_string(),
+        }
+    );
+
+    // get source and destination ids, or None where not a room
+    let from_room_id = match &npc.location {
+        Location::Room(room_id) => Some(room_id.clone()),
+        _ => None,
+    };
+    let to_room_id = match &move_to {
+        Location::Room(room_id) => Some(room_id.clone()),
+        _ => None,
+    };
+
+    // return early / no-op if source room is destination
+    if from_room_id == to_room_id {
+        info!(
+            "skipping move for npc '{}': already at intended destination",
+            npc.symbol()
+        );
+        return Ok(());
+    }
+
+    // needed for message to player if NPC entering / leaving their current location
+    let player_room_id = world.player_room_ref()?.id();
+
+    // update npc list in from/to rooms as appropriate
+    if let Some(uuid) = from_room_id {
+        if uuid == player_room_id {
+            view.push(ViewItem::NpcLeft {
+                npc_name: npc.name().to_string(),
+                spin_msg: world.spin_core(CoreSpinnerType::NpcLeft, "left."),
+            });
+            info!(
+                "{} ({}) left {}'s location.",
+                npc.name(),
+                npc.symbol(),
+                world.player.name()
+            );
+        }
+        world.rooms.get_mut(&uuid).map(|room| room.npcs.remove(npc_id));
+    }
+    if let Some(uuid) = to_room_id {
+        if uuid == player_room_id {
+            view.push(ViewItem::NpcEntered {
+                npc_name: npc.name().to_string(),
+                spin_msg: world.spin_core(CoreSpinnerType::NpcEntered, "entered."),
+            });
+            info!(
+                "{} ({}) arrived at {}'s location.",
+                npc.name(),
+                npc.symbol(),
+                world.player.name()
+            );
+        }
+        world.rooms.get_mut(&uuid).map(|room| room.npcs.insert(npc_id.clone()));
+    }
+
+    // finally update NPC instance's location field
+    if let Some(npc) = world.npcs.get_mut(npc_id) {
+        npc.location = move_to;
+    }
+
+    Ok(())
+}
+
+/// Represents the demeanor of an 'Npc', which may affect default dialogue and behavior.
+///
+/// NPC states affect which dialogue lines are given in response to a `TalkTo` command. They
+/// can also be used as trigger conditions, and state can be changed by triggers. Room
+/// overlays can also change according to NPC presence / state. Custom states allow for
+/// other "moods" and can be used to pin selections of dialogue to particular game states.
+/// Ex: player does something -> puzzle advanced to puzzle#2 -> trigger sets custom NPC state
+/// "`player_at_puzzle_step_2`" which has specific dialogue.
+#[derive(Clone, Debug, variantly::Variantly, PartialEq, Hash, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NpcState {
+    Bored,
+    Happy,
+    Mad,
+    Normal,
+    Sad,
+    Tired,
+    Custom(String),
+}
+impl Display for NpcState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Happy => write!(f, "Happy"),
+            Self::Bored => write!(f, "Bored"),
+            Self::Mad => write!(f, "Mad"),
+            Self::Normal => write!(f, "Normal"),
+            Self::Sad => write!(f, "Sad"),
+            Self::Tired => write!(f, "Tired"),
+            Self::Custom(_) => write!(f, "Custom"),
+        }
+    }
+}
+impl NpcState {
+    /// Parse a dialogue map key into an [`NpcState`].
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "sad" => NpcState::Sad,
+            "bored" => NpcState::Bored,
+            "normal" => NpcState::Normal,
+            "happy" => NpcState::Happy,
+            "mad" => NpcState::Mad,
+            "tired" => NpcState::Tired,
+            other if other.starts_with("custom:") => NpcState::Custom(other.trim_start_matches("custom:").to_string()),
+            _ => {
+                warn!("Unknown NpcState key in dialogue map: {key}");
+                NpcState::Normal
+            },
+        }
+    }
+
+    /// Serialize the state into a dialogue map key.
+    pub fn as_key(&self) -> String {
+        match self {
+            NpcState::Sad => "sad".into(),
+            NpcState::Bored => "bored".into(),
+            NpcState::Normal => "normal".into(),
+            NpcState::Happy => "happy".into(),
+            NpcState::Mad => "mad".into(),
+            NpcState::Tired => "tired".into(),
+            NpcState::Custom(s) => format!("custom:{s}"),
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        item::Item,
+        view::{View, ViewItem},
+        world::{AmbleWorld, Location},
+    };
+    use std::collections::{HashMap, HashSet};
+
+    fn create_test_npc() -> Npc {
+        let mut dialogue = HashMap::new();
+        dialogue.insert(NpcState::Normal, vec!["Hello there!".into(), "Nice weather!".into()]);
+        dialogue.insert(NpcState::Happy, vec!["What a wonderful day!".into()]);
+        dialogue.insert(NpcState::Mad, vec!["Go away!".into(), "I'm not talking to you!".into()]);
+
+        Npc {
+            id: crate::idgen::new_id().into(),
+            symbol: "test_npc".into(),
+            name: "Test NPC".into(),
+            description: "A test NPC".into(),
+            location: Location::Nowhere,
+            inventory: HashSet::new(),
+            dialogue,
+            state: NpcState::Normal,
+            movement: None,
+            health: HealthState::new_at_max(10),
+        }
+    }
+
+    fn create_test_world() -> AmbleWorld {
+        let mut world = AmbleWorld::new_empty();
+
+        let item_id: ItemId = crate::idgen::new_id().into();
+        let item = Item {
+            id: item_id.clone(),
+            symbol: "test_item".into(),
+            name: "Test Item".into(),
+            description: "A test item".into(),
+            movability: Movability::Free,
+            location: Location::Nowhere,
+            visibility: crate::item::ItemVisibility::Listed,
+            visible_when: None,
+            aliases: Vec::new(),
+            container_state: None,
+            contents: HashSet::new(),
+            abilities: HashSet::new(),
+            interaction_requires: HashMap::new(),
+            text: None,
+            consumable: None,
+        };
+        world.items.insert(item_id.clone(), item);
+
+        world
+    }
+
+    #[test]
+    fn npc_state_from_key_parses_standard_states() {
+        assert_eq!(NpcState::from_key("sad"), NpcState::Sad);
+        assert_eq!(NpcState::from_key("bored"), NpcState::Bored);
+        assert_eq!(NpcState::from_key("normal"), NpcState::Normal);
+        assert_eq!(NpcState::from_key("happy"), NpcState::Happy);
+        assert_eq!(NpcState::from_key("mad"), NpcState::Mad);
+        assert_eq!(NpcState::from_key("tired"), NpcState::Tired);
+    }
+
+    #[test]
+    fn npc_state_from_key_parses_custom_states() {
+        let custom = NpcState::from_key("custom:excited");
+        assert_eq!(custom, NpcState::Custom("excited".into()));
+
+        let custom2 = NpcState::from_key("custom:some_state");
+        assert_eq!(custom2, NpcState::Custom("some_state".into()));
+    }
+
+    #[test]
+    fn npc_state_from_key_defaults_to_normal_for_unknown() {
+        assert_eq!(NpcState::from_key("unknown_state"), NpcState::Normal);
+        assert_eq!(NpcState::from_key("invalid"), NpcState::Normal);
+        assert_eq!(NpcState::from_key(""), NpcState::Normal);
+    }
+
+    #[test]
+    fn npc_state_as_key_converts_correctly() {
+        assert_eq!(NpcState::Sad.as_key(), "sad");
+        assert_eq!(NpcState::Bored.as_key(), "bored");
+        assert_eq!(NpcState::Normal.as_key(), "normal");
+        assert_eq!(NpcState::Happy.as_key(), "happy");
+        assert_eq!(NpcState::Mad.as_key(), "mad");
+        assert_eq!(NpcState::Tired.as_key(), "tired");
+        assert_eq!(NpcState::Custom("excited".into()).as_key(), "custom:excited");
+    }
+
+    #[test]
+    fn npc_state_display_works() {
+        assert_eq!(format!("{}", NpcState::Happy), "Happy");
+        assert_eq!(format!("{}", NpcState::Bored), "Bored");
+        assert_eq!(format!("{}", NpcState::Mad), "Mad");
+        assert_eq!(format!("{}", NpcState::Normal), "Normal");
+        assert_eq!(format!("{}", NpcState::Sad), "Sad");
+        assert_eq!(format!("{}", NpcState::Tired), "Tired");
+        assert_eq!(format!("{}", NpcState::Custom("test".into())), "Custom");
+    }
+
+    #[test]
+    fn npc_random_dialogue_returns_appropriate_line() {
+        use gametools::{Spinner, Wedge};
+
+        let npc = create_test_npc();
+        let ignore_spinner = Spinner::new(vec![Wedge::new("Ignores you.".into())]);
+
+        // Test normal state dialogue
+        let dialogue = npc.random_dialogue(&ignore_spinner);
+        let normal_lines = &npc.dialogue[&NpcState::Normal];
+        assert!(normal_lines.contains(&dialogue) || dialogue == "Ignores you.");
+    }
+
+    #[test]
+    fn npc_random_dialogue_returns_fallback_for_missing_state() {
+        use gametools::{Spinner, Wedge};
+
+        let mut npc = create_test_npc();
+        npc.state = NpcState::Tired; // State not in dialogue map
+        let ignore_spinner = Spinner::new(vec![Wedge::new("Ignores you.".into())]);
+
+        let dialogue = npc.random_dialogue(&ignore_spinner);
+        assert_eq!(dialogue, "Ignores you.");
+    }
+
+    #[test]
+    fn npc_show_displays_description_and_inventory() {
+        let world = create_test_world();
+        let mut view = View::new();
+        let item_id = world.items.keys().next().unwrap().clone();
+
+        let mut npc = create_test_npc();
+        npc.inventory.insert(item_id);
+
+        npc.show(&world, &mut view);
+
+        // Check that the view contains the expected items
+        let items = &view.items;
+        assert!(
+            items
+                .iter()
+                .any(|entry| matches!(&entry.view_item, ViewItem::NpcDescription { .. }))
+        );
+        assert!(
+            items
+                .iter()
+                .any(|entry| matches!(&entry.view_item, ViewItem::NpcInventory(_)))
+        );
+
+        if let Some((name, description, health, state)) = items.iter().find_map(|entry| {
+            if let ViewItem::NpcDescription {
+                name,
+                description,
+                health,
+                state,
+            } = &entry.view_item
+            {
+                Some((name, description, health, state))
+            } else {
+                None
+            }
+        }) {
+            assert_eq!(name, "Test NPC");
+            assert_eq!(description, "A test NPC");
+            assert_eq!(*health, HealthState::new_at_max(10));
+            assert_eq!(*state, NpcState::Normal);
+        }
+
+        if let Some(inventory) = items.iter().find_map(|entry| {
+            if let ViewItem::NpcInventory(inventory) = &entry.view_item {
+                Some(inventory)
+            } else {
+                None
+            }
+        }) {
+            assert_eq!(inventory.len(), 1);
+            assert_eq!(inventory[0].item_name, "Test Item");
+        }
+    }
+
+    #[test]
+    fn npc_show_handles_empty_inventory() {
+        let world = create_test_world();
+        let mut view = View::new();
+        let npc = create_test_npc();
+
+        npc.show(&world, &mut view);
+
+        if let Some(inventory) = view.items.iter().find_map(|entry| {
+            if let ViewItem::NpcInventory(inventory) = &entry.view_item {
+                Some(inventory)
+            } else {
+                None
+            }
+        }) {
+            assert!(inventory.is_empty());
+        }
+    }
+
+    #[test]
+    fn world_object_trait_works() {
+        let npc = create_test_npc();
+        assert_eq!(npc.symbol(), "test_npc");
+        assert_eq!(npc.name(), "Test NPC");
+        assert_eq!(npc.description(), "A test NPC");
+        assert_eq!(npc.location(), &Location::Nowhere);
+    }
+
+    #[test]
+    fn item_holder_add_item_works() {
+        let mut npc = create_test_npc();
+        let item_id: ItemId = crate::idgen::new_id().into();
+
+        npc.add_item(item_id.clone());
+        assert!(npc.inventory.contains(&item_id));
+    }
+
+    #[test]
+    fn item_holder_remove_item_works() {
+        let mut npc = create_test_npc();
+        let item_id: ItemId = crate::idgen::new_id().into();
+        npc.inventory.insert(item_id.clone());
+
+        npc.remove_item(item_id.clone());
+        assert!(!npc.inventory.contains(&item_id));
+    }
+
+    #[test]
+    fn item_holder_contains_item_works() {
+        let mut npc = create_test_npc();
+        let item_id: ItemId = crate::idgen::new_id().into();
+        npc.inventory.insert(item_id.clone());
+
+        assert!(npc.contains_item(item_id));
+        assert!(!npc.contains_item(crate::idgen::new_id().into()));
+    }
+
+    #[test]
+    fn npc_state_equality_and_hash_work() {
+        let state1 = NpcState::Happy;
+        let state2 = NpcState::Happy;
+        let state3 = NpcState::Mad;
+
+        assert_eq!(state1, state2);
+        assert_ne!(state1, state3);
+
+        let mut state_map = HashMap::new();
+        state_map.insert(state1, "happy dialogue");
+        assert_eq!(state_map.get(&state2), Some(&"happy dialogue"));
+    }
+
+    #[test]
+    fn npc_state_custom_equality_works() {
+        let custom1 = NpcState::Custom("excited".into());
+        let custom2 = NpcState::Custom("excited".into());
+        let custom3 = NpcState::Custom("angry".into());
+
+        assert_eq!(custom1, custom2);
+        assert_ne!(custom1, custom3);
+        assert_ne!(custom1, NpcState::Happy);
+    }
+
+    #[test]
+    fn npc_movement_creates_correct_view_items() {
+        use crate::room::Room;
+
+        let mut world = AmbleWorld::new_empty();
+        let mut view = View::new();
+
+        // Create two rooms
+        let player_room_id = crate::idgen::new_room_id();
+        let other_room_id = crate::idgen::new_room_id();
+
+        let player_room = Room {
+            id: player_room_id.clone(),
+            symbol: "player_room".into(),
+            name: "Player Room".into(),
+            base_description: "The player's room".into(),
+            overlays: vec![],
+            scenery: Vec::new(),
+            scenery_default: None,
+            location: Location::Nowhere,
+            visited: false,
+            exits: HashMap::new(),
+            contents: HashSet::new(),
+            npcs: HashSet::new(),
+        };
+
+        let other_room = Room {
+            id: other_room_id.clone(),
+            symbol: "other_room".into(),
+            name: "Other Room".into(),
+            base_description: "Another room".into(),
+            overlays: vec![],
+            scenery: Vec::new(),
+            scenery_default: None,
+            location: Location::Nowhere,
+            visited: false,
+            exits: HashMap::new(),
+            contents: HashSet::new(),
+            npcs: HashSet::new(),
+        };
+
+        world.rooms.insert(player_room_id.clone(), player_room);
+        world.rooms.insert(other_room_id.clone(), other_room);
+
+        // Create NPC and set player location
+        let npc_id: NpcId = crate::idgen::new_id().into();
+        let npc = create_test_npc();
+        world.npcs.insert(npc_id.clone(), npc);
+        world.player.location = Location::Room(player_room_id.clone());
+
+        // Move NPC from player's room to another room (should create NpcLeft)
+        world.npcs.get_mut(&npc_id).unwrap().location = Location::Room(player_room_id.clone());
+        let _ = move_npc(&mut world, &mut view, &npc_id, Location::Room(other_room_id.clone()));
+
+        // Check that NpcLeft ViewItem was created
+        let left_items: Vec<_> = view
+            .items
+            .iter()
+            .filter(|entry| entry.view_item.is_npc_left())
+            .collect();
+        assert_eq!(left_items.len(), 1);
+        if let ViewItem::NpcLeft { npc_name, .. } = &left_items[0].view_item {
+            assert_eq!(npc_name, "Test NPC");
+        } else {
+            panic!("Expected NpcLeft ViewItem");
+        }
+
+        view.items.clear();
+
+        // Move NPC from another room to player's room (should create NpcEntered)
+        let _ = move_npc(&mut world, &mut view, &npc_id, Location::Room(player_room_id.clone()));
+
+        // Check that NpcEntered ViewItem was created
+        let entered_items: Vec<_> = view
+            .items
+            .iter()
+            .filter(|entry| entry.view_item.is_npc_entered())
+            .collect();
+        assert_eq!(entered_items.len(), 1);
+        if let ViewItem::NpcEntered { npc_name, .. } = &entered_items[0].view_item {
+            assert_eq!(npc_name, "Test NPC");
+        } else {
+            panic!("Expected NpcEntered ViewItem");
+        }
+    }
+
+    #[test]
+    fn npc_events_are_ordered_correctly_in_view() {
+        use crate::room::Room;
+
+        let mut world = AmbleWorld::new_empty();
+        let mut view = View::new();
+
+        // Create rooms and NPC
+        let player_room_id = crate::idgen::new_room_id();
+        let other_room_id = crate::idgen::new_room_id();
+
+        let player_room = Room {
+            id: player_room_id.clone(),
+            symbol: "player_room".into(),
+            name: "Player Room".into(),
+            base_description: "The player's room".into(),
+            overlays: vec![],
+            scenery: Vec::new(),
+            scenery_default: None,
+            location: Location::Nowhere,
+            visited: false,
+            exits: HashMap::new(),
+            contents: HashSet::new(),
+            npcs: HashSet::new(),
+        };
+
+        let other_room = Room {
+            id: other_room_id.clone(),
+            symbol: "other_room".into(),
+            name: "Other Room".into(),
+            base_description: "Another room".into(),
+            overlays: vec![],
+            scenery: Vec::new(),
+            scenery_default: None,
+            location: Location::Nowhere,
+            visited: false,
+            exits: HashMap::new(),
+            contents: HashSet::new(),
+            npcs: HashSet::new(),
+        };
+
+        world.rooms.insert(player_room_id.clone(), player_room);
+        world.rooms.insert(other_room_id.clone(), other_room);
+
+        let npc_id: NpcId = crate::idgen::new_id().into();
+        let npc = create_test_npc();
+        world.npcs.insert(npc_id.clone(), npc);
+        world.player.location = Location::Room(player_room_id.clone());
+
+        // Simulate NPC entering, speaking, then leaving
+        // First: NPC enters player's room
+        world.npcs.get_mut(&npc_id).unwrap().location = Location::Room(other_room_id.clone());
+        let _ = move_npc(&mut world, &mut view, &npc_id, Location::Room(player_room_id.clone()));
+
+        // Add some speech
+        view.push(ViewItem::NpcSpeech {
+            speaker: "Test NPC".into(),
+            quote: "Hello there!".into(),
+        });
+
+        // Then: NPC leaves player's room
+        let _ = move_npc(&mut world, &mut view, &npc_id, Location::Room(other_room_id.clone()));
+
+        // Verify we have all three event types
+        assert_eq!(
+            view.items
+                .iter()
+                .filter(|entry| entry.view_item.is_npc_entered())
+                .count(),
+            1
+        );
+        assert_eq!(
+            view.items
+                .iter()
+                .filter(|entry| entry.view_item.is_npc_speech())
+                .count(),
+            1
+        );
+        assert_eq!(
+            view.items.iter().filter(|entry| entry.view_item.is_npc_left()).count(),
+            1
+        );
+
+        // The ordering should be: enter → speech → leave
+        // This is now handled by the npc_events_sorted() method in the view
+    }
+}

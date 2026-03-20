@@ -1,0 +1,94 @@
+# ========================================
+# Sublevel Security Station
+# ========================================
+
+room security-station {
+    name "Level AA-3 Security"
+    desc "A compact but well-equipped station with reinforced blast doors, a wall of cracked CRT monitors, and a swivel chair. The space above the monitors is emblazoned with: [[hl]][[b]]IN CASE OF EMERGENCY, RUN FASTER.[[/b]][[/hl]] Paperwork is scattered across the floor, including an ominous memo titled 'AA-3B: Risk Ignorance Recommendations.'"
+
+    scenery "Blast Doors"
+    scenery "Cracked CRT Monitors"
+    scenery "Swivel Chair"
+
+    overlay if item evidence_locker_closed {
+        present "A heavy steel evidence locker is embedded in the wall. It's covered in dents, scratches, and scorch marks -- evidence of previous failed attempts to open it."
+        absent "The heavy door of the evidence locker, having surrendered at last, hangs loosely from one of its hinges."
+    }
+    exit out -> sublevel-entrance
+}
+
+# ========================================
+# Items
+# ========================================
+
+item evidence_locker_closed {
+    visibility scenery
+    name "Evidence Locker"
+    desc "A heavy-duty, astrogation-grade steel locker marked 'EVIDENCE'. It is scorched and slightly dented, as if there have been a few attempts to break into it."
+    movability fixed "It's like a safe, rooted firmly into the wall."
+    location room security-station
+    container state locked
+    requires pry to open
+}
+
+item evidence_locker_open {
+    visibility scenery
+    name "Evidence Locker"
+    desc "A heavy-duty, astrogation-grade steel locker marked 'EVIDENCE'. The door is severely bent in one corner and hangs loosely from the bottom hinge."
+    movability fixed "It's still rooted firmly in the wall, despite the sagging door."
+    location nowhere "spawns@security-station when locker pried open"
+    container state open
+}
+
+item evidence_log {
+    name "Evidence Log"
+    aliases "log book"
+    desc "A book logging the items taken from perpetrators and placed into the evidence locker. It's smeared with mustard, fingerprints, and something you hope is hair gel."
+    movability free
+    location room security-station
+    text """Date:   Boxing Day
+Item:   Tool (Weapon?)
+Place:  Monolith Room
+
+Event:  White male in his 30's found in the monolith room pointing this whirring item at the HAL terminal. Perpetrator states he was trying to fix it. Luckily, he failed. Confiscated the tool from him (he calls it a sonic screwdriver -- whatever that means) to prevent any future attempts."""
+    ability Read
+}
+
+item risk_management_memo {
+    name "Risk Management Memo"
+    aliases "ominous memo"
+    desc "A stern memo to all Amble Adventures staff working in the sublevel / AA-3B area."
+    movability free
+    location room security-station
+    text r#"From: Amble Adventures, Risk Ignorance Division
+
+    Attn: All Sublevel Staff
+
+    The recent wonderful, yet tragic events that unfolded in room AA-3B should not be recalled by any of you, assuming the memory wiping vapor from the biochemistry division has been effective. If you are bewildered by this statement, read no further and burn this memo immediately.
+
+    Now take few deep breaths and pause for 10 seconds. If you're now unsure why you're reading this (or what reading is), burn this memo immediately.
+
+    If you still recall the critical events in AA-3B and cannot reconcile paradoxical quantum cake states, DO NOT attempt to re-enter the containment area, and trust nothing that you see or hear. Or read. Trust us, when we say you should trust no one.
+
+    We never wrote this and do not, in fact, exist.
+    "#
+    ability Read
+    requires ignite to burn
+}
+
+# ========================================
+# Triggers
+# ========================================
+
+trigger "[Security-Station] Pry Evidence Locker Open" only once
+when act open on item evidence_locker_closed {
+    do replace item evidence_locker_closed with evidence_locker_open
+    do show "Using all your weight, all your might, and most of your reserved F-bomb arsenal you pry the locker open, leaving the door barely attached."
+    do award points 2 reason "Pried open the evidence locker"
+}
+
+trigger "[Security-Station] Take Sonic Screwdriver" only once
+when take sonic_screwdriver {
+    do add flag got-sonic
+    do award points 3 reason "Retrieved the sonic screwdriver from evidence"
+}

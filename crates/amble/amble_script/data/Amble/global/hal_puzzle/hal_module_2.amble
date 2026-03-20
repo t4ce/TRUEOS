@@ -1,0 +1,167 @@
+# ========================================
+# HAL Module #2 - Vending Machine
+# ========================================
+# This module will start with a generic description, so if first discovered in the vending machine (or even taken) before meeting HAL, it won't
+# give the HAL puzzle away. The hal_module_2 item is modified to its true identity only after the HAL reboot sequence is initiated
+
+item hal_module_2 {
+    name "Electronic Module"
+    desc "A palm-sized electronic module of some kind with some connectors on one end. It looks like it plugs in to something."
+    movability free
+    location chest vending_machine
+}
+
+trigger "Reveal HAL Module #2" only once
+note "reveal the nature of HAL module #2"
+when talk to npc hal_9000 {
+    do modify item hal_module_2 {
+        name "HAL Memory Module #2"
+        desc "Second in the trio of HAL's memory modules, found in a vending machine (oddly) between some dehydrated water and a sandwich that both did and did not exist until eaten."
+    }
+    do modify item hal_module_2_crevice {
+        name "HAL Memory Module #2 (in crevice)"
+        desc "Second in the trio of HAL's memory modules. The module has fallen deep into a narrow crevice between the vending machine and the floor. Its red LED pulses from the darkness about a foot down, resting on what looks like decades of accumulated dust, lost coins, and possibly sentient dust bunnies. The gap is too narrow for your hand - you'll need some kind of tool to fish it out."
+    }
+}
+
+item hal_module_2_crevice {
+    name "Electronic Module (in crevice)"
+    desc "A palm-sized electronic module of some kind with some connectors on one end. It looks like it plugs in to something, but it has fallen deep into a narrow crevice between the vending machine and the floor. It looks to be a foot down into the crack, resting on decades of accumulated grit, a few lost coins, and some (possibly sentient) dust bunnies. The gap is too narrow for your hand; you'll need some kind of tool to fish it out."
+    movability free
+    location nowhere "spawns in main-lobby when vending machine pried"
+    requires pluck to handle
+}
+
+item zircon_tweezers_crevice {
+    name "Zircon Encrusted Tweezers (in crevice)"
+    desc "A heavy-duty pair of tweezers, encrusted in zircon for extra dazzle and especially good for plucking -- but not for reaching, as you found out when they fell into the crevice of the main lobby floor."
+    movability free
+    location nowhere "spawns@main-lobby if tweezers tried to reach HAL module in crevice"
+    requires pluck to handle
+}
+
+item vending_machine {
+    name "Vending Machine"
+    desc "A battered vending machine that looks like it's been through several wars and at least one peace treaty negotiation. The glass front is surprisingly intact, though spider-webbed with cracks. Through the transparent but locked panel, you can see various items that definitely weren't approved by any health department. A handwritten sign taped to the front reads: 'OUT OF ORDER - Management suggests violence.'"
+    movability fixed "It's far too heavy to carry."
+    location room main-lobby
+    container state transparentLocked
+    requires pry to open
+}
+
+# ========================================
+# Triggers
+# ========================================
+
+# note: rather than just updating item description when it goes into the crevice, we use a separate
+# HAL module Item (hal_module_2_crevice) which requires the "pluck" ability to handle. We don't want it
+# to still require that ability once the player has retrieved it... so the "crevice"/"pluck" version
+# is despawned when the player gets it from the crevice and it's replaced with the original (hal_module_2),
+# which doesn't require "pluck" for handling. The plain hal_module_2 must have its description updated
+# so it doesn't still say it's in the vending machine after retrieval.
+
+trigger "[Main-Lobby] Spot HAL Module #2 / Start Puzzle" only once
+when look at item vending_machine
+{
+    if flag in progress hal-reboot {
+        do add flag found-module-2
+        do add seq flag module-2-puzzle limit 2
+        # module-2-puzzle#0 -- module 2 found, still trapped in vending machine
+        # module-2-puzzle#1 -- machine pried open, module in crevice
+        # module-2-puzzle#2 -- module retrieved from crevice
+    }
+}
+
+#
+#
+# HINT RADIO: MODULE STUCK IN CREVICE
+#
+#
+
+let cond fishing_hint_maybe_needed = all( hint_radio_ready, has flag hal-module-in-crevice )
+
+trigger "[HINT Available] Make A Fishing Line" only once
+note "makes hint available when HAL module trapped in crevice"
+when use item crowbar on item vending_machine interaction open
+{
+    do schedule in 2 if any( fishing_hint_maybe_needed, has flag module-2-retrieved ) onFalse retryNextTurn
+    note "fishing line hint available" {
+        if fishing_hint_maybe_needed {
+            do npc says hint_radio_npc "Whoops. That electronic bit fell way down in that crevice. Looks like you'll need something like a fishing line to pull it out. There must be **something** you can use around here."
+        }
+    }
+}
+
+
+trigger "[Main-Lobby] Pry Vending Machine Open with Crowbar" only once
+when use item crowbar on item vending_machine interaction open
+{
+    do show "With a mighty heave and several creative applications of leverage that would make Archimedes proud, you pry open the vending machine. There's a satisfying CRACK as the lock mechanism gives way. Unfortunately, your vigorous prying causes the machine to tilt forward slightly, and you watch in horror as the HAL module slides off its shelf and disappears into a narrow crevice between the machine and the floor. The other items tumble onto the floor around you.\n\nThe machine's internal speaker crackles to life one last time: 'Thank you for choosing violence. Have a mediocre day.'"
+    do advance flag module-2-puzzle
+    do replace drop item hal_module_2 with hal_module_2_crevice
+    do replace drop item dehydrated_water with dehydrated_water
+    do replace drop item schrodingers_sandwich with schrodingers_sandwich
+    do replace drop item fortune_cookies_of_doom with fortune_cookies_of_doom
+    do add flag vending-machine-pried
+    do add flag hal-module-in-crevice
+    do set item description vending_machine "A battered and broken vending machine -- even more so since you took a crowbar to it. Miraculously, the glass still remains intact on the front panel which has been pried open and hangs on a slant. Empty now, the machine's contents have all spilled out on the floor."
+    do award points 5 reason "Pried the vending machine open to expose HAL's module"
+}
+
+trigger "[Main-Lobby] Fish HAL Module Out of Crevice" only once
+when use item fishing_line on item hal_module_2_crevice interaction handle
+{
+    if has flag module-2-puzzle#1 {
+        do show "You carefully lower your makeshift fishing line into the crevice where the HAL module fell. After several attempts and some creative swearing, you manage to hook the module with the paper clip. You slowly, carefully pull it up, holding your breath the entire time. Success! The module is yours, though it's now covered in dust and what might be ancient gum."
+        do despawn item hal_module_2_crevice
+        do set item description hal_module_2 "Second in the trio of HAL's missing memory modules. Its red LED pulses gently, like a heartbeat—or a warning. Its case was cracked during retrieval from the vending machine and floor crevice, but it still seems serviceable."
+        do spawn item hal_module_2 in inventory
+        do award points 10 reason "Fished HAL module #2 out of the floor crevice"
+        do add flag module-2-retrieved
+        do advance flag module-2-puzzle
+    }
+}
+
+trigger "[Main-Lobby] Can't Reach HAL Module in Crevice"
+when take hal_module_2_crevice
+{
+    if has flag module-2-puzzle#1 {
+        do show "The HAL module has fallen deep into a narrow crevice between the vending machine and the floor. You try to reach it with your hand, but the gap is too narrow. Your fingers can just barely brush against the module, pushing it slightly further away. You're going to need some kind of fishing tool to retrieve it."
+    }
+}
+
+trigger "[HAL] HAL/Module #2 Inserted" only once
+when insert item hal_module_2 into item hal_memory_bank {
+    do advance flag hal-reboot
+    do add flag module-2-inserted
+    do set item movability hal_module_2 restricted "It's magnetically locked in place."
+    do show "Memory module #2 magnetically locks into place and lights up."
+}
+
+# ========================================
+# Goals
+# ========================================
+
+goal find-hal-module-2 {
+    name "Find HAL Module #2"
+    desc "Look around the building and talk to other characters to get a lead on the location of HAL Module #2."
+    group required
+    start when flag in progress hal-reboot
+    done when has flag found-module-2
+}
+
+goal get-hal-module-2 {
+    name "Get HAL Module #2"
+    desc "You found the module in the vending machine. Now you need to find a way to get it out."
+    group required
+    start when goal complete find-hal-module-2
+    done when has flag module-2-retrieved
+}
+
+goal insert-hal-module-2 {
+    name "Insert HAL Module #2"
+    desc "You were able to fish module #2 out of the crevice. Insert it into HAL's memory bank to continue rebooting -- if you're sure."
+    group required
+    start when goal complete get-hal-module-2
+    done when has flag module-2-inserted
+}

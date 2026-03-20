@@ -1,0 +1,618 @@
+//! Player movement and navigation command handlers for the Amble game engine.
+//!
+//! This module handles all commands that change the player's location within
+//! the game world. Movement is a core mechanic that enables exploration,
+//! progression, and access to different areas of the game.
+//!
+//! # Movement System
+//!
+//! Player movement operates through a sophisticated exit system where:
+//! - Rooms define exits in specific directions (north, south, up, down, etc.)
+//! - Exits can have requirements (items, flags, keys)
+//! - Exits can be locked, hidden, or conditional
+//! - Movement attempts trigger validation and game events
+//!
+//! # Exit Requirements
+//!
+//! Exits may require players to have:
+//! - **Required Items** - Specific tools, keys, or objects
+//! - **Required Flags** - Story progression markers or achievements
+//! - **Unlocked State** - Some exits start locked and must be opened
+//!
+//! # Trigger System Integration
+//!
+//! Movement triggers various game events:
+//! - `TriggerCondition::Leave` - Fired when leaving a room
+//! - `TriggerCondition::Enter` - Fired when entering a new room
+//!
+//! These triggers enable:
+//! - Story events when entering/leaving specific areas
+//! - Environmental changes based on player movement
+//! - Character interactions triggered by location changes
+//! - Dynamic world updates as player explores
+//!
+//! # Scoring and Discovery
+//!
+//! - Players gain points for visiting new rooms (first time only)
+//! - Room visit status is tracked for scoring and trigger logic
+//! - New rooms display verbose descriptions automatically
+//! - Previously visited rooms show brief descriptions unless requested otherwise
+
+use std::collections::HashSet;
+
+use crate::Player;
+use crate::{
+    AmbleWorld, ItemId, View, ViewItem, WorldObject,
+    player::Flag,
+    room::Exit,
+    spinners::CoreSpinnerType,
+    style::GameStyle,
+    trigger::{TriggerCondition, check_triggers},
+    view::ViewMode,
+};
+
+use anyhow::{Context, Result, anyhow};
+use log::info;
+
+/// Handles the "back" command to return to a previous room.
+///
+/// This function attempts to move the player back to their most recently visited room
+/// using the location history maintained in the player's state. If no history exists,
+/// the player receives an appropriate error message.
+///
+/// # Parameters
+///
+/// * `world` - Mutable reference to the game world containing rooms and player state
+/// * `view` - Mutable reference to the player's view for feedback messages and room display
+///
+/// # Returns
+///
+/// Returns `Ok(())` on successful attempt (regardless of whether movement occurred),
+/// or an error if world state is corrupted.
+///
+/// # Behavior
+///
+/// - If location history exists, moves player to most recent room
+/// - Removes the returned-to room from history (prevents ping-ponging)
+/// - Shows room description appropriate to visit status
+/// - Triggers Leave/Enter events for the room transition
+/// - If no history exists, shows appropriate error message
+///
+/// # No Scoring
+///
+/// Moving back to previously visited rooms does not award points, as this is
+/// considered backtracking rather than exploration of new areas.
+///
+/// # Errors
+/// Returns an error when the player is not currently in a room or when the
+/// stored previous room identifier cannot be resolved.
+pub fn go_back_handler(world: &mut AmbleWorld, view: &mut View) -> Result<bool> {
+    let leaving_id = world.player.location.room_id().inspect_err(|_| {
+        view.push(ViewItem::ActionFailure("You're not in a room.".to_string()));
+    })?;
+
+    if let Some(previous_room_id) = world.player.go_back() {
+        world.player_path.push(previous_room_id.clone());
+
+        let travel_message = world.spin_core(CoreSpinnerType::Movement, "You retrace your steps...");
+
+        let previous_room = world
+            .rooms
+            .get(&previous_room_id)
+            .ok_or_else(|| anyhow!("invalid previous room in history ({previous_room_id})"))?;
+
+        info!(
+            "{} went back to {} ({})",
+            world.player.name(),
+            previous_room.name(),
+            previous_room.symbol()
+        );
+
+        view.push(ViewItem::TransitionMessage(travel_message));
+        previous_room.show(world, view, None)?;
+
+        check_triggers(
+            world,
+            view,
+            &[
+                TriggerCondition::Leave(leaving_id),
+                TriggerCondition::Enter(previous_room_id),
+            ],
+        )?;
+        return Ok(true);
+    } else {
+        view.push(ViewItem::ActionFailure(
+            "You haven't been anywhere else yet.".to_string(),
+        ));
+    }
+
+    Ok(false)
+}
+
+/// Attempts to move the player in the specified direction.
+///
+/// This is the main movement handler that validates and executes player movement
+/// between rooms. It checks exit conditions and requirements before allowing movement,
+/// and handles all the associated game state updates and trigger effects.
+///
+/// # Parameters
+///
+/// * `world` - Mutable reference to the game world
+/// * `view` - Mutable reference to the display module
+/// * `input_dir` - Direction string from player input (e.g., "north", "up the ladder")
+///
+/// # Returns
+///
+/// Returns `Ok(())` on successful movement attempt, or an error if world state
+/// is corrupted (invalid room references).
+///
+/// # Movement Process
+///
+/// 1. **Direction Matching** - Finds exits matching the input direction
+/// 2. **Lock Validation** - Ensures the exit is not locked
+/// 3. **Requirement Checking** - Validates required items and flags
+/// 4. **Movement Execution** - Updates player location and triggers events
+/// 5. **Room Display** - Shows new location with appropriate detail level
+///
+/// # Exit Requirements
+///
+/// Movement may be blocked if the player lacks:
+/// - Required flags (story progression markers)
+/// - Required items (keys, tools, passes)
+/// - Proper exit state (unlocked, revealed)
+///
+/// # Scoring System
+///
+/// - First visit to any room awards 1 point
+/// - Subsequent visits to the same room award no points
+/// - Room visit status is permanently tracked
+///
+/// # Display Behavior
+///
+/// - **First visit**: Full verbose description shown automatically
+/// - **Return visit**: Brief description shown (unless in verbose mode)
+/// - **Travel message**: Randomized flavor text for immersion
+///
+/// # Errors
+/// Returns an error when the player is not currently in a room, when exit
+/// definitions reference unknown rooms, or when required items/flags cannot be
+/// resolved.
+///
+/// # Error Conditions
+///
+/// - **Invalid direction**: No exit matches the input direction
+/// - **Locked exit**: Exit exists but is currently locked
+/// - **Missing requirements**: Player lacks required items or flags
+/// - **Invalid destination**: Exit points to non-existent room (returns error)
+pub fn move_to_handler(world: &mut AmbleWorld, view: &mut View, input_dir: &str) -> Result<bool> {
+    let player_name = world.player.name.clone();
+    let travel_message = world.spin_core(CoreSpinnerType::Movement, "You head that way...");
+    let leaving_id = world.player.location.room_id().inspect_err(|_| {
+        view.push(ViewItem::ActionFailure("You're not in a room.".to_string()));
+    })?;
+
+    // match "input_dir" to an Exit
+    let input_dir_normalized = input_dir.to_lowercase();
+    let destination_exit = {
+        let current_room = world.player_room_ref()?;
+        let direction = current_room
+            .exits
+            .iter()
+            .find(|(dir, exit)| !exit.hidden && dir.to_lowercase().contains(&input_dir_normalized));
+        if let Some((_, exit)) = direction {
+            Some(exit)
+        } else {
+            view.push(ViewItem::Error(format!(
+                "{}? {}",
+                input_dir.error_style(),
+                world.spin_core(CoreSpinnerType::DestinationUnknown, "Which direction is that?")
+            )));
+            return Ok(false);
+        }
+    };
+
+    if let Some(destination_exit) = destination_exit {
+        if let Some(denial_reason) = exit_access_restriction(destination_exit, &world.player) {
+            handle_barred_exit(world, view, &denial_reason, destination_exit)?;
+            return Ok(true);
+        }
+
+        let destination_id = destination_exit.to.clone();
+        world.player.move_to_room(destination_id.clone());
+        world.player_path.push(destination_id.clone());
+
+        let new_room = world
+            .rooms
+            .get(&destination_id)
+            .ok_or_else(|| anyhow!("invalid move destination ({destination_id})"))?;
+
+        info!("{} moving to {} ({})", player_name, new_room.name(), new_room.symbol());
+        view.push(ViewItem::TransitionMessage(travel_message));
+
+        if new_room.visited {
+            new_room.show(world, view, None)?;
+        } else {
+            world.player.score = world.player.score.saturating_add(1);
+            new_room.show(
+                world,
+                view,
+                // set temporary verbose mode if output is in brief mode but never visited
+                if matches!(view.mode, ViewMode::Brief) {
+                    Some(ViewMode::Verbose)
+                } else {
+                    None
+                },
+            )?;
+        }
+        if let Some(new_room) = world.rooms.get_mut(&destination_id) {
+            new_room.visited = true;
+        }
+        check_triggers(
+            world,
+            view,
+            &[
+                TriggerCondition::Leave(leaving_id),
+                TriggerCondition::Enter(destination_id),
+            ],
+        )?;
+
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Reasons a player may be denied access to an exit.
+#[derive(Debug, Clone, Default)]
+struct AccessDenial<'a> {
+    unmet_flags: HashSet<&'a Flag>,
+    unmet_items: HashSet<&'a ItemId>,
+    locked: bool,
+}
+impl AccessDenial<'_> {
+    /// Summarizes the denial reason(s) for logging
+    fn log_format(&self) -> String {
+        let unmet_item_list = self
+            .unmet_items
+            .iter()
+            .map(|&item| item.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let unmet_flag_list = self
+            .unmet_flags
+            .iter()
+            .map(|&flag| flag.name())
+            .collect::<Vec<&str>>()
+            .join(", ");
+        format!(
+            "items ( {unmet_item_list} ), flags( {unmet_flag_list} ), locked( {} )",
+            self.locked
+        )
+    }
+}
+
+/// Determines whether player's access to an exit is prevented
+fn exit_access_restriction<'a>(exit: &'a Exit, player: &'a Player) -> Option<AccessDenial<'a>> {
+    let unmet_flags: HashSet<_> = exit.required_flags.difference(&player.flags).collect();
+    let unmet_items: HashSet<_> = exit.required_items.difference(&player.inventory).collect();
+    if unmet_flags.is_empty() && unmet_items.is_empty() && !exit.locked {
+        None
+    } else {
+        Some(AccessDenial {
+            unmet_flags,
+            unmet_items,
+            locked: exit.locked,
+        })
+    }
+}
+
+/// Report the reason for a barred exit to the player, and log the reason the attempt failed.
+/// # Errors
+/// - on failed destination room lookup
+fn handle_barred_exit(
+    world: &AmbleWorld,
+    view: &mut View,
+    denial: &AccessDenial,
+    destination_exit: &crate::room::Exit,
+) -> Result<()> {
+    let msg = match (&destination_exit.barred_message, &denial.locked) {
+        (Some(msg), _) => msg,
+        (None, true) => "You can't go that way: it's locked.",
+        (None, false) => "You can't go that way: something is missing or undone.",
+    };
+    view.push(ViewItem::ActionFailure(msg.denied_style().to_string()));
+
+    let (dest_name, dest_sym) = world
+        .rooms
+        .get(&destination_exit.to)
+        .map(|rm| (rm.name(), rm.symbol()))
+        .with_context(|| format!("accessing room {}", destination_exit.to))?;
+
+    info!(
+        "player denied access to {dest_name} ({dest_sym}) !>> {}",
+        denial.log_format(),
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RoomId;
+    use crate::player::Flag;
+    use crate::room::{Exit, Room};
+    use crate::world::{AmbleWorld, Location};
+    use std::collections::{HashMap, HashSet};
+
+    fn build_test_world() -> (AmbleWorld, RoomId, RoomId, View) {
+        let view = View::new();
+        let mut world = AmbleWorld::new_empty();
+        let start = crate::idgen::new_room_id();
+        let dest = crate::idgen::new_room_id();
+        let mut start_room = Room {
+            id: start.clone(),
+            symbol: "start".into(),
+            name: "Start".into(),
+            base_description: String::new(),
+            overlays: vec![],
+            scenery: Vec::new(),
+            scenery_default: None,
+            location: Location::Nowhere,
+            visited: true,
+            exits: HashMap::new(),
+            contents: HashSet::new(),
+            npcs: HashSet::new(),
+        };
+        start_room.exits.insert("north".into(), Exit::new(dest.clone()));
+        let dest_room = Room {
+            id: dest.clone(),
+            symbol: "dest".into(),
+            name: "Dest".into(),
+            base_description: String::new(),
+            overlays: vec![],
+            scenery: Vec::new(),
+            scenery_default: None,
+            location: Location::Nowhere,
+            visited: false,
+            exits: HashMap::new(),
+            contents: HashSet::new(),
+            npcs: HashSet::new(),
+        };
+        world.rooms.insert(start.clone(), start_room);
+        world.rooms.insert(dest.clone(), dest_room);
+        world.player.location = Location::Room(start.clone());
+        (world, start, dest, view)
+    }
+
+    #[test]
+    fn move_to_hidden_exit_blocked() {
+        let (mut world, start, dest, mut view) = build_test_world();
+        {
+            world
+                .rooms
+                .get_mut(&start)
+                .unwrap()
+                .exits
+                .get_mut("north")
+                .unwrap()
+                .hidden = true;
+        }
+        let initial = world.player.score;
+        assert!(move_to_handler(&mut world, &mut view, "north").is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &start));
+        assert_eq!(world.player.score, initial);
+        assert!(!world.rooms.get(&dest).unwrap().visited);
+    }
+
+    #[test]
+    fn move_to_locked_exit_blocked() {
+        let (mut world, start, dest, mut view) = build_test_world();
+        world
+            .rooms
+            .get_mut(&start)
+            .unwrap()
+            .exits
+            .get_mut("north")
+            .unwrap()
+            .locked = true;
+        let initial = world.player.score;
+        assert!(move_to_handler(&mut world, &mut view, "north").is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &start));
+        assert_eq!(world.player.score, initial);
+        assert!(!world.rooms.get(&dest).unwrap().visited);
+    }
+
+    #[test]
+    fn move_requires_item() {
+        let (mut world, start, dest, mut view) = build_test_world();
+        let item_id: ItemId = crate::idgen::new_id().into();
+        world
+            .rooms
+            .get_mut(&start)
+            .unwrap()
+            .exits
+            .get_mut("north")
+            .unwrap()
+            .required_items
+            .insert(item_id.clone());
+
+        let initial = world.player.score;
+        assert!(move_to_handler(&mut world, &mut view, "north").is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &start));
+        assert_eq!(world.player.score, initial);
+        assert!(!world.rooms.get(&dest).unwrap().visited);
+
+        world.player.inventory.insert(item_id.clone());
+        let initial = world.player.score;
+        assert!(move_to_handler(&mut world, &mut view, "north").is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &dest));
+        assert_eq!(world.player.score, initial + 1);
+        assert!(world.rooms.get(&dest).unwrap().visited);
+    }
+
+    #[test]
+    fn move_requires_flag() {
+        let (mut world, start, dest, mut view) = build_test_world();
+        let flag = Flag::simple("alpha", world.turn_count);
+        world
+            .rooms
+            .get_mut(&start)
+            .unwrap()
+            .exits
+            .get_mut("north")
+            .unwrap()
+            .required_flags
+            .insert(flag.clone());
+
+        let initial = world.player.score;
+        assert!(move_to_handler(&mut world, &mut view, "north").is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &start));
+        assert_eq!(world.player.score, initial);
+        assert!(!world.rooms.get(&dest).unwrap().visited);
+
+        world.player.flags.insert(flag);
+        let initial = world.player.score;
+        assert!(move_to_handler(&mut world, &mut view, "north").is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &dest));
+        assert_eq!(world.player.score, initial + 1);
+        assert!(world.rooms.get(&dest).unwrap().visited);
+    }
+
+    #[test]
+    fn go_back_with_no_history_fails() {
+        let (mut world, start, _dest, mut view) = build_test_world();
+
+        assert!(go_back_handler(&mut world, &mut view).is_ok());
+        // Should still be in start room since no history
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &start));
+    }
+
+    #[test]
+    fn go_back_with_history_works() {
+        let (mut world, start, dest, mut view) = build_test_world();
+
+        // Move to destination first to create history
+        assert!(move_to_handler(&mut world, &mut view, "north").is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &dest));
+        assert_eq!(world.player.location_history.len(), 1);
+        assert_eq!(world.player.location_history[0], start);
+
+        // Now go back
+        assert!(go_back_handler(&mut world, &mut view).is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &start));
+        assert_eq!(world.player.location_history.len(), 0);
+    }
+
+    #[test]
+    fn move_to_handler_errors_when_not_in_room() {
+        let (mut world, _start, _dest, mut view) = build_test_world();
+        world.player.location = Location::Inventory;
+        let result = move_to_handler(&mut world, &mut view, "north");
+        assert!(result.is_err());
+        assert_eq!(view.items.len(), 1);
+        assert!(matches!(view.items[0].view_item, ViewItem::ActionFailure(ref msg) if msg == "You're not in a room."));
+    }
+
+    #[test]
+    fn go_back_handler_errors_when_not_in_room() {
+        let (mut world, _start, _dest, mut view) = build_test_world();
+        world.player.location = Location::Inventory;
+        let result = go_back_handler(&mut world, &mut view);
+        assert!(result.is_err());
+        assert_eq!(view.items.len(), 1);
+        assert!(matches!(view.items[0].view_item, ViewItem::ActionFailure(ref msg) if msg == "You're not in a room."));
+    }
+
+    #[test]
+    fn location_history_maintains_max_size() {
+        let (mut world, start, dest, _view) = build_test_world();
+
+        // Create additional rooms for testing history limit
+        let room3 = crate::idgen::new_room_id();
+        let room4 = crate::idgen::new_room_id();
+        let room5 = crate::idgen::new_room_id();
+        let room6 = crate::idgen::new_room_id();
+        let room7 = crate::idgen::new_room_id();
+
+        for room_id in [&room3, &room4, &room5, &room6, &room7] {
+            let room_id = room_id.clone();
+            let short_id = room_id.as_str().get(0..8).unwrap_or(room_id.as_str());
+            let room = Room {
+                id: room_id.clone(),
+                symbol: format!("room_{short_id}"),
+                name: format!("Room {short_id}"),
+                base_description: String::new(),
+                overlays: vec![],
+                scenery: Vec::new(),
+                scenery_default: None,
+                location: Location::Nowhere,
+                visited: false,
+                exits: HashMap::new(),
+                contents: HashSet::new(),
+                npcs: HashSet::new(),
+            };
+            world.rooms.insert(room_id, room);
+        }
+
+        // Simulate moving through 6 rooms (should only keep last 5 in history)
+        world.player.move_to_room(dest.clone());
+        world.player.move_to_room(room3.clone());
+        world.player.move_to_room(room4.clone());
+        world.player.move_to_room(room5.clone());
+        world.player.move_to_room(room6.clone());
+        world.player.move_to_room(room7.clone());
+
+        // History should be limited to 5 items
+        assert_eq!(world.player.location_history.len(), 5);
+        assert!(!world.player.location_history.contains(&start)); // start should be dropped
+        assert!(world.player.location_history.contains(&dest));
+    }
+
+    #[test]
+    fn go_back_multiple_times() {
+        let (mut world, start, dest, mut view) = build_test_world();
+
+        // Add a third room for more complex history
+        let room3 = crate::idgen::new_room_id();
+        let room3_obj = Room {
+            id: room3.clone(),
+            symbol: "room3".into(),
+            name: "Room3".into(),
+            base_description: String::new(),
+            overlays: vec![],
+            scenery: Vec::new(),
+            scenery_default: None,
+            location: Location::Nowhere,
+            visited: false,
+            exits: HashMap::new(),
+            contents: HashSet::new(),
+            npcs: HashSet::new(),
+        };
+        world
+            .rooms
+            .get_mut(&dest)
+            .unwrap()
+            .exits
+            .insert("east".into(), Exit::new(room3.clone()));
+        world.rooms.insert(room3.clone(), room3_obj);
+
+        // Move start -> dest -> room3
+        assert!(move_to_handler(&mut world, &mut view, "north").is_ok());
+        assert!(move_to_handler(&mut world, &mut view, "east").is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &room3));
+        assert_eq!(world.player.location_history, vec![start.clone(), dest.clone()]);
+
+        // Go back to dest
+        assert!(go_back_handler(&mut world, &mut view).is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &dest));
+        assert_eq!(world.player.location_history, vec![start.clone()]);
+
+        // Go back to start
+        assert!(go_back_handler(&mut world, &mut view).is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &start));
+        assert_eq!(world.player.location_history.len(), 0);
+
+        // Try to go back again - should fail gracefully
+        assert!(go_back_handler(&mut world, &mut view).is_ok());
+        assert!(matches!(&world.player.location, Location::Room(id) if id == &start));
+    }
+}

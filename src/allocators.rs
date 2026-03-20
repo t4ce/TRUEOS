@@ -256,6 +256,14 @@ unsafe impl GlobalAlloc for Allocator {
 #[global_allocator]
 static GLOBAL_ALLOCATOR: Allocator = Allocator;
 
+pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
+    ALLOCATOR.lock().alloc(layout)
+}
+
+pub unsafe fn dealloc_raw(ptr: *mut u8) {
+    ALLOCATOR.lock().dealloc(ptr)
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct HeapStats {
     pub heap_start: usize,

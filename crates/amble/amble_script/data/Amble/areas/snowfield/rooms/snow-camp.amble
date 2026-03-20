@@ -1,0 +1,77 @@
+room snow-camp {
+    name "Abandoned Campsite"
+    desc "The remains of a temporary shelter are dug into a snowbank here. A nearby tent has collapsed, half-fused to a scorched sled. The river — or some frozen remnant of it — glistens beyond. The only sign of civilization (and central heating) appears to be the building on the far east side of the snowfield."
+    exit "back to the snowfield" -> snowfield
+    scenery "Shelter" desc "A small concavity in the snowbank likely offered little protection from… anything, really. It looks to have been scooped out by hand."
+    scenery "Snowbank" desc "An otherwise pristine drift of snow, marred by the [[b]]shelter[[/b]] and a patch of [[hl]]yellow snow[[/hl]] surrounded by disturbingly large paw prints."
+    scenery "Tent-Sled" desc "The remains of a 2-man tent fused to the remains of a dogsled, first by melting with extreme heat, and then freezing into an icy heap."
+    scenery "Frozen River" desc "A steep, boulder-laden icy drop of certain death stands between you and the frozen river below — but it's pretty."
+}
+
+# ========================================
+# Items
+# ========================================
+# whetstone item is in black knight puzzle
+
+item charred_journal {
+    name "Research Journal"
+    desc "A partly burned and soggy research journal marked \"Antarctic Outpost 31\" and \"MacReady\". Only the end of the final entry remains legible."
+    movability free
+    location room snow-camp
+    text "...got to the dogs first, then the others. Burn it all. Can't let it reach the building..."
+    ability Read
+}
+
+# BOX CHARS ━┃┏ ┓┗ ┛
+item spent_flamethrower {
+    name "Spent Flamethrower"
+    desc """A scorched and half-fused flamethrower, empty and broken beyond repair. The igniter’s casing is still warm. A faded label reads:
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Weyland-Yutani: Thermal Unit / Antarctica Series
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+    movability free
+    location room snow-camp
+}
+
+item firewood {
+    name "Firewood"
+    desc "Some split wood and kindling laid for a fire at the center of the camp -- ironically one of the only things in the area that hasn't been burned."
+    movability free
+    location room snow-camp
+    requires ignite to burn
+}
+
+#
+#
+# HINT RADIO: FIREWOOD USAGE
+#
+#
+
+let cond firewood_hint_needed = all(
+    hint_radio_ready,
+    has flag tried-read-plaque-2,
+    missing flag campfire-lit,
+    missing item firewood,
+    in rooms snow-camp,
+)
+
+let cond firewood_hint_not_needed = any(
+    has flag read-plaque-2,
+    has flag campfire-lit,
+    has item firewood,
+)
+
+let cond firewood_hint_maybe_needed = any( firewood_hint_needed, firewood_hint_not_needed )
+
+trigger "Firewood HINT" only once
+note "HINT radio: add firewood hint to scheduler"
+when enter room snow-camp {
+    do schedule in 4 if firewood_hint_maybe_needed onFalse retryNextTurn
+    note "HINT radio: deliver firewood hint"
+    {
+        if firewood_hint_needed {
+            do npc says hint_radio_npc "Looks like the researchers didn't get their fire lit before the dog-Thing got to them. Bad day for them, but maybe good for you. Could you move the firewood down into the ice pit to melt the ice around the frozen pillar?"
+        }
+    }
+}

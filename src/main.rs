@@ -13,6 +13,7 @@ mod allocators;
 mod audio;
 mod cpu;
 mod disc;
+pub mod dma;
 mod efi;
 mod exceptions;
 mod gfx;
@@ -36,8 +37,6 @@ mod smp;
 mod surface;
 mod tga;
 mod time;
-#[path = "tst/dma_api_demo.rs"]
-mod tst_dma_api_demo;
 #[path = "tst/gfx_tetris.rs"]
 mod tst_gfx_tetris;
 #[path = "tst/html.rs"]
@@ -164,11 +163,8 @@ pub extern "C" fn kmain() -> ! {
     percpu::install_cpu_slot_lapic_order_owned(lapic_ids);
     cpu::init_profiles(percpu::total_slots());
     percpu::init_bsp();
-    pci::dma::init_from_limine();
+    dma::init_from_limine();
     pci::enumerate_impl();
-
-    // DMA API demo
-    crate::tst_dma_api_demo::demo_dma_api();
 
     #[cfg(feature = "gfx_intel")]
     gfx::intel::init_once();

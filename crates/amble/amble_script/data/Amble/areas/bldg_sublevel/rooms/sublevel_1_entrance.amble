@@ -1,0 +1,53 @@
+# ========================================
+# Entrance to Sublevel AA-3
+# ========================================
+
+room sublevel-entrance {
+    name "Sublevel AA-3 Entrance"
+    desc "A small landing area covered in dust. Buckets, tools, and debris are strewn about the floor. An industrial corridor extends farther south from the entrance. On your left, there is a heavy blast door marked \"Sublevel Security\". An even heavier door on the right is labeled with a sign:[[box]]        🚧 ROOM AA-3B 🚧\nFICTIONAL UNIVERSE CONTAINMENT[[/box]]"
+
+    overlay if ( npc in state black_knight normal ) {
+        text "The [[npc]]Black Knight[[/npc]] stands in your path, staring you down, leaning on his battered longsword."
+    }
+    overlay if ( npc in state black_knight mad ) {
+        text "Agitated, the [[npc]]Black Knight[[/npc]] sidesteps around the room, occasionally lunging at you to grab at his sword or kick you in the shin."
+    }
+    overlay if ( npc in state black_knight happy ) {
+        text "The [[npc]]Black Knight[[/npc]] stands in a corner, helmet off, gleefully plucking hairs from his beard and splitting them with his sword."
+    }
+
+    exit "into the elevator" -> lift-sublevel-1
+    exit "containment area" -> room-aa-3b {
+        required_flags( appeased-black-knight, touched-monolith ),
+        barred "The Black Knight stands in your way."
+    }
+    exit "blast door" -> security-station {
+        required_flags( appeased-black-knight ),
+        barred "The Black Knight stands in your way."
+    }
+    exit "down the corridor" -> corridor-north {
+        required_flags( appeased-black-knight ),
+        barred "The Black Knight stands in your way."
+    }
+}
+
+# ========================================
+# Triggers
+# ========================================
+
+trigger "[Sublevel-1-Entrance] Arrived" only once
+when enter room sublevel-entrance {
+    do add flag entered-sublevel-1
+}
+
+# ========================================
+# Goals
+# ========================================
+
+goal go-to-sublevel {
+    name "Go Down to AA-3"
+    desc "The elevator should now allow you down to sublevel AA-3, and the receptionist said you're expected in Room AA-3B for... orientation? Initiation? Obfuscation?"
+    group required
+    start when goal complete activate-elevator
+    done when reached room sublevel-entrance
+}

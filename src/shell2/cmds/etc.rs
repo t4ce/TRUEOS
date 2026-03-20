@@ -15,7 +15,8 @@ const DEFAULT_ECMA_COLS: usize = 100;
 const BACKEND_UART_MASK: u8 = 1 << 0;
 const BACKEND_NET_MASK: u8 = 1 << 1;
 const ETC_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const ETC_MENU_ROWS: [[&str; 2]; 4] = [
+const ETC_MENU_ROWS: [[&str; 2]; 5] = [
+    ["ample", "Launch the text-mode Ample shell app"],
     ["go", "Loop spinner glyphs until interrupted"],
     ["go2", "Loop alternate spinner glyphs until interrupted"],
     ["insane", "Print a wide Unicode sweep"],
@@ -133,6 +134,7 @@ pub(crate) fn try_parse(
     };
 
     match cmd {
+        "ample" => return super::ample::try_parse(io, args),
         "go" => start_looping_chars(io, "go", &GO_CHARS),
         "go2" => start_looping_chars(io, "go2", &GO_TWO_CHARS),
         "insane" => cmd_insane(io),
