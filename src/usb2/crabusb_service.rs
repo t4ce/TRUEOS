@@ -24,6 +24,8 @@ static INITIAL_SNAPSHOT_LOGGED: AtomicBool = AtomicBool::new(false);
 static EVENT_HANDLER_READY: AtomicBool = AtomicBool::new(false);
 static EVENT_HANDLER: Mutex<Option<EventHandler>> = Mutex::new(None);
 static PROBE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static ROOT_PORT_CHANGE_SEEN: AtomicBool = AtomicBool::new(false);
+static NO_PORT_CHANGE_HINT_LOGGED: AtomicBool = AtomicBool::new(false);
 static AUDIO_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -954,12 +956,23 @@ async fn log_opened_device_graph(
     }
 }
 
-async fn probe_and_log(host: &mut USBHost) {
+async fn probe_and_log(host: &mut USBHost) -> bool {
     match host.probe_devices().await {
         Ok(devices) => {
             if devices.is_empty() {
                 crate::log!("crabusb: no newly discovered devices\n");
+                if !ROOT_PORT_CHANGE_SEEN.load(Ordering::Acquire)
+                    && NO_PORT_CHANGE_HINT_LOGGED
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                {
+                    crate::log!(
+                        "crabusb: no root-port change events observed; controller may be empty or downstream devices are not handed to the guest\n"
+                    );
+                }
+                false
             } else {
+                NO_PORT_CHANGE_HINT_LOGGED.store(false, Ordering::Release);
                 crate::log!("crabusb: discovered {} new device(s)\n", devices.len());
                 for dev in devices.iter() {
                     let desc = dev.descriptor();
@@ -974,9 +987,13 @@ async fn probe_and_log(host: &mut USBHost) {
                     maybe_start_truekey_bridge(host, dev).await;
                     maybe_start_target_audio(host, dev).await;
                 }
+                true
             }
         }
-        Err(err) => crate::log!("crabusb: probe failed: {:?}\n", err),
+        Err(err) => {
+            crate::log!("crabusb: probe failed: {:?}\n", err);
+            false
+        }
     }
 }
 
@@ -1072,6 +1089,8 @@ pub async fn event_pump_task() {
             }
             Some(Event::PortChange { port }) => {
                 crate::log!("crabusb: pump port change on root port {}\n", port);
+                ROOT_PORT_CHANGE_SEEN.store(true, Ordering::Release);
+                NO_PORT_CHANGE_HINT_LOGGED.store(false, Ordering::Release);
                 PROBE_REQUESTED.store(true, Ordering::Release);
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
@@ -1102,23 +1121,19 @@ pub async fn bsp_service() {
         };
 
         crate::log!(
-            "crabusb: BSP service binding controller {} at {:02X}:{:02X}.{}\n",
+            "crabusb: BSP service binding controller {} at {:02X}:{:02X}.{} vid={:04X} pid={:04X} mmio={:p}\n",
             info.index,
             info.bus,
             info.slot,
-            info.function
+            info.function,
+            info.vendor_id,
+            info.device_id,
+            info.mmio_base
         );
 
         crate::pci::enable_mem_and_bus_master(info.bus, info.slot, info.function);
 
-        let Some(mmio) = NonNull::new(info.mmio_base as *mut u8) else {
-            crate::log!(
-                "crabusb: controller {} has null mmio base; retrying\n",
-                info.index
-            );
-            Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
-            continue;
-        };
+        let mmio = info.mmio_base;
 
         let mut host = match USBHost::new_xhci(mmio, &CRABUSB_KERNEL) {
             Ok(host) => host,
@@ -1150,9 +1165,11 @@ pub async fn bsp_service() {
             "crabusb: host init complete for controller {}\n",
             info.index
         );
+        ROOT_PORT_CHANGE_SEEN.store(false, Ordering::Release);
+        NO_PORT_CHANGE_HINT_LOGGED.store(false, Ordering::Release);
         PROBE_REQUESTED.store(true, Ordering::Release);
         crab_scout_once(&mut host, info).await;
-        probe_and_log(&mut host).await;
+        let _ = probe_and_log(&mut host).await;
 
         let mut idle_ticks = 0u32;
         loop {
@@ -1167,14 +1184,14 @@ pub async fn bsp_service() {
                     info.index
                 );
                 idle_ticks = 0;
-                probe_and_log(&mut host).await;
+                let _ = probe_and_log(&mut host).await;
                 continue;
             }
 
             idle_ticks = idle_ticks.wrapping_add(1);
             if idle_ticks >= 300 {
                 idle_ticks = 0;
-                probe_and_log(&mut host).await;
+                let _ = probe_and_log(&mut host).await;
             }
             Timer::after(EmbassyDuration::from_millis(10)).await;
         }
