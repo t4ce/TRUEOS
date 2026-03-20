@@ -1,0 +1,281 @@
+# ========================================
+# Stargate Room
+# ========================================
+# This serves as a fast-travel / teleportation hub and should only be discovered
+# after a fair bit of exploring. The plaque mini-puzzles will serve as receiver
+# locations.
+
+room stargate-room {
+    name "Stargate Room"
+    desc """A hangar-size concrete room, connected to the Aperture lab through a huge, round vault door. Little light reaches the darkened corners of the room, but at its center stands a round control console in a crossfire of floodligts and ringed with [[b]]strange symbols[[/b]]. A giant metallic ring festooned with similar symbols stands on end at the end of the room.\n\nThere are three large buttons in the center of the console:"""
+
+    scenery "Strange Symbols" desc "Some of the symbols look like map markers or landmarks, others look like hieroglyphs or bits of IKEA assembly manuals."
+
+    scenery "Control Console" desc "Made of some dark metal, waist high and seemingly of alien design similar to that of the giant ring, it seems logical to assume that it is paired to the giant ring across the room."
+
+    overlay if flag read-plaque-1 {
+        set   "On the left, shaped like a tree:        [[green]]RAISED[[/green]]"
+        unset "On the left, shaped like a tree:        [[red]][[dimmed]]sunken[[/dimmed]][[/red]]"
+    }
+    overlay if flag read-plaque-2 {
+        set   "In the middle, shaped like a snowflake: [[green]]RAISED[[/green]]"
+        unset "In the middle, shaped like a snowflake: [[red]][[dimmed]]sunken[[/dimmed]][[/red]]"
+    }
+    overlay if flag read-plaque-3 {
+        set   "On the right, shaped like a fork:       [[green]]RAISED[[/green]]"
+        unset "On the right, shaped like a fork:       [[red]][[dimmed]]sunken[[/dimmed]][[/red]]"
+    }
+    exit "vault door" -> aperture-lab
+}
+
+# ========================================
+# Activate Woodland Gate
+# ========================================
+
+item woodland_button {
+    name "[ Tree ]"
+    desc "A tree shaped button on the left of the Stargate control console."
+    movability fixed "It's part of the control console."
+    location room stargate-room
+}
+
+# Here, we use the scheduler to get around a tricky bit. We want to award the player the first time they
+# *successfully* open the gate. Using 'only once when touch...' and then 'if has flag' directly means this
+# trigger could fire when the player first tries to activate this gate but hasn't yet cleared the plaque.
+# The "if" clause would deny the reward and the "only once" would make sure this was never checked again,
+# so the player would never get the reward unless they'd already read the plaque before the first attempt!
+#
+# By using the scheduler this way, we can repeat the "if" check every turn until the plaque has been read,
+# and then give the award.
+trigger "[Stargate] Woodland Gate: Activate" only once
+note "schedule/give point award for first time opening gate"
+when touch item woodland_button {
+    do schedule in 1 if has flag read-plaque-1 onFalse retryNextTurn {
+        do award points 5 reason "Activated the Woodland Gate"
+        do add flag woodland-gate-enabled
+    }
+}
+
+trigger "[Stargate] Press Woodland Button"
+note "open/move the Stargate connection to Parish Landing (only if plaque-1 read)"
+when touch item woodland_button {
+    if all( has flag read-plaque-1, missing flag woodland-gate-open ) {
+        do show "With a great whooshing like the flush of a titan's toilet, the Stargate opens a new connection. You hear singing birds and the occasional screech coming through the opening."
+        # modify stargate room
+        do modify room stargate-room {
+            desc "A hangar-size concrete room, connected to the Aperture lab through a huge, round vault door. The Stargate is filled with a shimmering energy, from which you hear whispering sound and birdsong. Occasionally, a bird flies out of the gate and circles it, but -- finding nowhere to land -- flies back in."
+            # add exit to parish-landing and remove either of the others if previously opened
+            add exit "through the stargate" -> parish-landing
+            remove exit ice-pit
+            remove exit patio
+        }
+        # modify receiving rooms
+        # open woodland gate
+        do add flag woodland-gate-open
+        do modify room parish-landing {
+            add exit "through the stargate" -> stargate-room
+        }
+        # close snowfield gate
+        do remove flag snowfield-gate-open
+        do modify room ice-pit {
+            remove exit stargate-room
+        }
+        # close patio gate
+        do remove flag patio-gate-open
+        do modify room patio {
+            remove exit stargate-room
+        }
+    }
+    if all( has flag read-plaque-1, has flag woodland-gate-open ) {
+        do show "The gate to the woodlands is already open."
+    }
+    if missing flag read-plaque-1 {
+        do show "The tree button is already pressed down as far as it can go; you can't activate it."
+    }
+}
+
+# ========================================
+# Activate Snowfield Gate
+# ========================================
+
+item snowfield_button {
+    name "[ Snowflake ]"
+    desc "A snowflake-shaped button ing the middle of the Stargate control console."
+    movability fixed "It's part of the control console."
+    location room stargate-room
+}
+
+trigger "[Stargate] Snowfield Gate: Activate" only once
+note "schedule/give point award for first time opening gate"
+when touch item snowfield_button {
+    do schedule in 1 if has flag read-plaque-2 onFalse retryNextTurn {
+        do award points 5 reason "Activated the Snowfield Gate"
+        do add flag snowfield-gate-enabled
+    }
+}
+
+trigger "[Stargate] Press Snowfield Button"
+note "open/move the Stargate connection to Ice Pit (only if plaque 2 read)"
+when touch item snowfield_button {
+    if all( has flag read-plaque-2, missing flag snowfield-gate-open ) {
+        do show "With a great whooshing like the flush of a titan's toilet, the Stargate opens a new connection. Suddenly, you can see your breath -- condensed by the frigid air pouring through the opening."
+        # modify stargate room
+        do modify room stargate-room {
+            desc "A chilly, hangar-size concrete room, connected to the Aperture lab through a huge, round vault door. The Stargate is filled with a shimmering energy, from which you hear howling wind. Occasionally, another unearthly howl (Zomby Woof?) joins in."
+            # add exit to parish-landing and remove either of the others if previously opened
+            add exit "through the stargate" -> ice-pit
+            remove exit parish-landing
+            remove exit patio
+        }
+
+        # modify receiving rooms
+
+        # close woodland gate
+        do remove flag woodland-gate-open
+        do modify room parish-landing {
+            remove exit stargate-room
+        }
+        # open snowfield gate
+        do add flag snowfield-gate-open
+        do modify room ice-pit {
+            add exit "through the stargate" -> stargate-room
+        }
+        # close patio gate
+        do remove flag patio-gate-open
+        do modify room patio {
+            remove exit stargate-room
+        }
+    }
+    if all( has flag read-plaque-2, has flag snowfield-gate-open ) {
+        do show "The gate to the snowfield is already open."
+    }
+    if missing flag read-plaque-2 {
+        do show "The snowflake button is sunken; you can't push it down any farther."
+    }
+}
+
+# ========================================
+# Activate Patio Gate
+# ========================================
+
+item patio_button {
+    name "[ Fork ]"
+    desc "A fork-shaped button on the right of the Stargate control console."
+    movability fixed "It's part of the control console."
+    location room stargate-room
+}
+
+trigger "[Stargate] Patio Gate: Activate" only once
+note "schedule/give point award for first time opening gate"
+when touch item patio_button {
+    do schedule in 1 if has flag read-plaque-3 onFalse retryNextTurn {
+        do award points 5 reason "Enabled the Patio Gate"
+        do add flag patio-gate-enabled
+    }
+}
+
+trigger "[Stargate] Press Patio Button"
+note "open/move the Stargate connection to the Patio (only if plaque-3 read)"
+when touch item patio_button {
+    if all( has flag read-plaque-3, missing flag patio-gate-open ) {
+        do show "With a great whooshing like the flush of a titan's toilet, the Stargate opens a new connection. The smells of fresh baked bread and searing beef waft  through the opening."
+        # modify stargate room
+        do modify room stargate-room {
+            desc "A hangar-size concrete room, connected to the Aperture lab through a round vault door. The Stargate in the center is filled with a shimmering energy, from which you hear the sounds of clinking glasses punctuated by explosions. Occasionally, you catch a whiff of fresh baked bread in the air."
+            # add exit to parish-landing and remove either of the others if previously opened
+            add exit "through the stargate" -> patio
+            remove exit ice-pit
+            remove exit parish-landing
+        }
+        # modify receiving rooms
+
+        # close woodland gate
+        do remove flag woodland-gate-open
+        do modify room parish-landing {
+            remove exit stargate-room
+        }
+        # close snowfield gate
+        do remove flag snowfield-gate-open
+        do modify room ice-pit {
+            remove exit stargate-room
+        }
+        # open patio gate
+        do add flag patio-gate-open
+        do modify room patio {
+            add exit "through the stargate" -> stargate-room
+        }
+    }
+    if all( has flag read-plaque-3, has flag patio-gate-open ) {
+        do show "The gate to the restaurant patio is already open."
+    }
+    if missing flag read-plaque-3 {
+        do show "The fork-shaped button is already pressed down as far as it can go."
+    }
+}
+
+# ========================================
+# HINT Radio Trigger
+# ========================================
+let set stargate_hint_rooms = (
+    stargate-room,
+    patio,
+    parish-landing,
+    ice-pit,
+)
+trigger "[HINT] Activating the Stargate" only once
+when enter room stargate-room {
+    do schedule in 2
+    if any(
+        all(
+            has item hint_radio,
+            has flag hint-radio-on,
+            all(
+                missing flag woodland-gate-open,
+                missing flag snowfield-gate-open,
+                missing flag patio-gate-open,
+            ),
+            in rooms stargate_hint_rooms,
+        ),
+        has flag portal-gun-powered,
+    ) onFalse retryNextTurn note "stargate hint"{
+        if all(
+            has item hint_radio,
+            has flag hint-radio-on,
+            all(
+                missing flag woodland-gate-open,
+                missing flag snowfield-gate-open,
+                missing flag patio-gate-open,
+            ),
+            in rooms stargate_hint_rooms,
+        ) {
+            do npc says hint_radio_npc "The stargate seems to be tied to certain sites around the premises. It looks like there's something that you need to do at the receiving sites to be able to open those portals, though. Come to think of it, there was one of those ornate pillars at each of the other gate sites..."
+        }
+    }
+}
+
+# ========================================================================
+# Stargate GOALS
+# ========================================================================
+goal activate_woodland_gate {
+    name "Enable the Woodland Gate"
+    desc "Find a way to enable the Stargate link back to the woodlands."
+    group optional
+    done when has flag woodland-gate-enabled
+    start when reached room stargate-room
+}
+
+goal activate_snowfield_gate {
+    name "Enable the Snowfield Gate"
+    desc "Find a way to enable the Stargate link back to the snowfield."
+    group optional
+    start when reached room stargate-room
+    done when has flag snowfield-gate-enabled
+}
+
+goal activate_patio_gate {
+    name "Enable the Patio Gate"
+    desc "Find a way to enable the Stargate link back to the restaurant patio."
+    group optional
+    done when has flag patio-gate-enabled
+    start when reached room stargate-room
+}

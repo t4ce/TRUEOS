@@ -1,0 +1,29 @@
+# ========================================
+# Observation Room
+# ========================================
+
+room observation-room {
+    name "Field Observation Room"
+    desc "Thick observation windows, long since spiderwebbed with cracks, overlook what should be Room AA-3B—but only darkness and occasional flashes of unreality appear beyond. Opposite those, another set of windows provide a view to a cavernous chamber with a large, obsidian obelisk standing ominously near its center. Abandoned swivel chairs and battered clipboards litter the room. A faint smell of burnt ozone hangs in the air.\n\nA console flickers near one of the broad windows."
+
+    scenery "Swivel Chair"
+    scenery "Clipboard"
+    scenery "Flickering Console" desc "The display center console under the window to [[i]]what was once Room AA-3B[[/i]] flickers, tears, and rolls erratically with a message: [[box]][[red]]FICTION CONTAINMENT BREACH: UNRESOLVED[[/red]][[/box]]"
+    scenery "Obsidian Obelisk" desc "You can't see any features on it from here. It seems rectangular, but its perfect black surface absorbs all light that strikes it, making it difficult to discern its shape in three dimensions."
+
+    exit "corridor" -> corridor-north
+    exit "monolith room" -> monolith-room
+    exit "room AA-3B" -> room-aa-3b { locked }
+}
+
+# ========================================
+# Items
+# ========================================
+
+item hal_memory_bank {
+    name "H.A.L. Memory Bank"
+    desc "A sleek, matte-black monolith of its own, this memory bank houses the core logic center of the HAL-9000 system. Three memory modules must be located and reinserted to complete the reboot sequence. The recessed slots flicker faintly, as if HAL is dreaming electric dreams."
+    movability fixed "It's too heavy to move."
+    location room observation-room
+    container state open
+}
