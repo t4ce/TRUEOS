@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-#![feature(abi_x86_interrupt, alloc_error_handler, f16)]
+#![feature(abi_x86_interrupt, f16)]
 // Rust 2024: `unsafe fn` bodies are safe-by-default; allow legacy style for now.
 #![allow(unsafe_op_in_unsafe_fn)]
 

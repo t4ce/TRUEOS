@@ -12,7 +12,10 @@ const HV_MENU_ROWS: [[&str; 2]; 6] = [
     ["start", "Start vm1"],
     ["stop", "Request vm1 stop"],
     ["log", "Print hv log output"],
-    ["save", "Write vm1 snapshot to the HV ramdisk TRUEOSFS"],
+    [
+        "save",
+        "Write vm1 snapshot to HV ramdisk TRUEOSFS (preserve path: exit and guest halt then save)",
+    ],
     [
         "restore",
         "Load vm1 snapshot from the HV ramdisk and relaunch it",
