@@ -360,7 +360,6 @@ fn aligned_payload(block_start: usize, layout: Layout) -> Option<usize> {
     }
 }
 
-#[alloc_error_handler]
 fn alloc_error(layout: Layout) -> ! {
     let stats = heap_stats();
     crate::log!(

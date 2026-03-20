@@ -199,11 +199,7 @@ pub(crate) fn collect_top_level_disk_choices() -> Vec<DiskChoice> {
         }
         let (status, err) = crate::wait::spawn_and_wait_local(async move {
             crate::v::disc::detect::detect_physical_disk_detail(handle).await
-        })
-        .unwrap_or((
-            crate::v::disc::detect::DiscStatus::Unknown,
-            Some(block::Error::Io),
-        ));
+        });
         out.push(DiskChoice {
             handle,
             status,

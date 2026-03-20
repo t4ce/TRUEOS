@@ -21,8 +21,7 @@ fn print_target_summary(io: &'static dyn ShellBackend2, disk: DeviceHandle, pref
     let info = disk.info();
     let status = crate::wait::spawn_and_wait_local(async move {
         crate::v::disc::detect::detect_physical_disk(disk).await
-    })
-    .unwrap_or(crate::v::disc::detect::DiscStatus::Unknown);
+    });
 
     let msg = alloc::format!(
         "{prefix}: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}",
