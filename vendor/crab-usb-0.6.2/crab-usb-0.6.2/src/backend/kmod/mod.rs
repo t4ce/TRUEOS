@@ -43,6 +43,7 @@ impl USBHost {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct DeviceAddressInfo {
     pub root_port_id: u8,
     pub parent_hub: Option<Id<Hub>>,

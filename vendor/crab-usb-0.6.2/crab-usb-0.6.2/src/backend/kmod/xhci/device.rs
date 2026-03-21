@@ -409,8 +409,8 @@ impl Device {
 
     async fn setup_all_endpoints(&mut self, interface: u8, alternate: u8) -> Result {
         let mut max_dci = 1;
-        self.ctx.perper_change();
         self.eps.clear();
+        let mut configured_eps = Vec::new();
 
         for desc in self
             .find_interface_endpoints(interface, alternate)?
@@ -426,54 +426,59 @@ impl Device {
 
             let xhci_interval =
                 self.calculate_xhci_interval(desc.interval, desc.transfer_type, desc.interval);
+            configured_eps.push((desc, dci, ring_addr.raw(), xhci_interval));
+        }
 
-            self.ctx.with_input(|input| {
-                let control_context = input.control_mut();
+        self.ctx.with_empty_input(|input| {
+            input.control_mut().set_add_context_flag(0);
 
-                control_context.set_add_context_flag(dci as _);
+            input
+                .device_mut()
+                .slot_mut()
+                .set_context_entries(max_dci + 1);
+
+            for (desc, dci, ring_addr, xhci_interval) in &configured_eps {
+                input.control_mut().set_add_context_flag(*dci as _);
 
                 debug!(
-                    "init ep addr {:#x}  dci {dci} {:?}",
-                    desc.address, desc.transfer_type
+                    "init ep addr {:#x}  dci {} {:?}",
+                    desc.address, dci, desc.transfer_type
                 );
 
-                let ep_mut = input.device_mut().endpoint_mut(dci as _);
+                let ep_mut = input.device_mut().endpoint_mut(*dci as _);
 
                 debug!(
                     "Set XHCI interval: {} (original bInterval: {})",
                     xhci_interval, desc.interval
                 );
-                ep_mut.set_interval(xhci_interval);
+                ep_mut.set_interval(*xhci_interval);
                 ep_mut.set_endpoint_type(desc.endpoint_type());
-                ep_mut.set_tr_dequeue_pointer(ring_addr.raw());
+                ep_mut.set_tr_dequeue_pointer(*ring_addr);
                 ep_mut.set_max_packet_size(desc.max_packet_size);
                 ep_mut.set_error_count(3);
                 ep_mut.set_dequeue_cycle_state();
+                ep_mut.set_max_primary_streams(0);
+                ep_mut.set_mult(0);
 
                 match desc.transfer_type {
                     EndpointType::Isochronous | EndpointType::Interrupt => {
-                        //init for isoch/interrupt
+                        // init for isoch/interrupt
                         ep_mut.set_max_packet_size(desc.max_packet_size & 0x7ff); //refer xhci page 162
                         ep_mut.set_max_burst_size(
                             ((desc.max_packet_size & 0x1800) >> 11).try_into().unwrap(),
                         );
-                        ep_mut.set_mult(0); //always 0 for interrupt
                         ep_mut.set_max_endpoint_service_time_interval_payload_low(4);
                     }
-                    _ => {}
+                    EndpointType::Bulk | EndpointType::Control => {
+                        ep_mut.set_max_burst_size(0);
+                        ep_mut.set_average_trb_length((desc.max_packet_size & 0x7ff) as _);
+                    }
                 }
 
                 if let EndpointType::Isochronous = desc.transfer_type {
                     ep_mut.set_error_count(0);
                 }
-            });
-        }
-
-        self.ctx.with_input(|input| {
-            input
-                .device_mut()
-                .slot_mut()
-                .set_context_entries(max_dci + 1);
+            }
         });
         mb();
 
@@ -636,6 +641,67 @@ impl Device {
         self.evaluate().await?;
         Ok(())
     }
+
+    async fn debug_reset_endpoint_inner(
+        &mut self,
+        endpoint_address: u8,
+        preserve_transfer_state: bool,
+    ) -> Result<()> {
+        let endpoint_id = usb_if::descriptor::EndpointDescriptor {
+            address: endpoint_address,
+            max_packet_size: 0,
+            transfer_type: EndpointType::Bulk,
+            direction: if (endpoint_address & 0x80) != 0 {
+                usb_if::transfer::Direction::In
+            } else {
+                usb_if::transfer::Direction::Out
+            },
+            packets_per_microframe: 0,
+            interval: 0,
+        }
+        .dci();
+
+        let mut cmd = command::ResetEndpoint::default();
+        if preserve_transfer_state {
+            cmd.set_transfer_state_preserve();
+        } else {
+            cmd.clear_transfer_state_preserve();
+        }
+        cmd.set_endpoint_id(endpoint_id).set_slot_id(self.id.into());
+
+        self.cmd
+            .cmd_request(command::Allowed::ResetEndpoint(cmd))
+            .await?;
+
+        if let Some(ep) = self.eps.get_mut(&endpoint_id.into()) {
+            let ring_addr = ep.as_raw_mut::<Endpoint>().bus_addr().raw();
+            let mut set_deq = command::SetTrDequeuePointer::default();
+            set_deq
+                .set_dequeue_cycle_state()
+                .set_new_tr_dequeue_pointer(ring_addr)
+                .set_endpoint_id(endpoint_id)
+                .set_slot_id(self.id.into());
+
+            self.cmd
+                .cmd_request(command::Allowed::SetTrDequeuePointer(set_deq))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn debug_close_slot_inner(&mut self) -> Result<()> {
+        self.transfer_result_handler
+            .unregister_slot(self.id.as_u8());
+        self.eps.clear();
+        self.ctrl_ep = None;
+
+        let mut cmd = command::DisableSlot::default();
+        cmd.set_slot_id(self.id.into());
+        self.cmd
+            .cmd_request(command::Allowed::DisableSlot(cmd))
+            .await?;
+        Ok(())
+    }
 }
 
 impl DeviceOp for Device {
@@ -675,6 +741,19 @@ impl DeviceOp for Device {
     ) -> Result<EndpointBase> {
         let ep = self.eps.remove(&desc.dci().into());
         ep.ok_or(USBError::NotFound)
+    }
+
+    fn debug_reset_endpoint<'a>(
+        &'a mut self,
+        endpoint_address: u8,
+        preserve_transfer_state: bool,
+    ) -> BoxFuture<'a, Result<()>> {
+        self.debug_reset_endpoint_inner(endpoint_address, preserve_transfer_state)
+            .boxed()
+    }
+
+    fn debug_close_slot<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+        self.debug_close_slot_inner().boxed()
     }
 
     fn update_hub(&mut self, params: HubParams) -> BoxFuture<'_, Result<()>> {
