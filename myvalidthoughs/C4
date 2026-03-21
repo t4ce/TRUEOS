@@ -1,0 +1,49 @@
+Currently first use of it somehwat for QJS cause we need shell synthax highlight
+C4 Java remains the source-of-truth design lane.
+
+Add token-kind + node-kind enums to the same contract files and make adapter emit a compact token list under that schema (still minimal scope, still architecture-first).
+
+Searched codebase for "i know but isnt the c4 conceptually split half and for a specific reason not further ported, because we wanted to wait for that and give it software architekt thinking",
+
+C4 was intentionally left split 
+(Java reference side + eventual Rust/runtime side),
+
+That split is a valid staging strategy:
+
+Keep C4 as the semantic reference/spec lane.
+Keep shell UX parser as a minimal, bounded adapter lane.
+
+Delay full convergence until you define the stable cross-language architecture boundary.
+That boundary is the key. The clean way is to formalize a tiny “C4 Core Contract” first:
+
+-Token kinds and spans.
+-Minimal expression node kinds.
+-Diagnostic shape.
+-Versioned output schema.
+Then both sides can implement that contract independently without forcing a rushed full port.
+
+So your current direction can still be correct if we rename intent clearly:
+
+shell2_qjs_c4.rs is a “C4-aligned shell adapter”, not “the C4 compiler port”.
+
+C4 Java remains the source-of-truth design lane.
+
+Future Rust C4 can replace the adapter incrementally behind the same contract.
+
+That avoids architecture debt while still giving immediate UX wins.
+
+
+
+What I just put in place:
+
+Added a versioned Rust-side C4 contract module at shell2_qjs_c4_contract.rs
+
+Added a Java-side reference contract artifact at C4CoreContract.java
+Wired shell2 to include the contract module in mod.rs
+Switched shell2_qjs_c4.rs to use the contract-owned public types (Analysis/Diagnostic/ResultHint/SymbolRef/SymbolRole) via re-export instead of owning its own shape
+
+
+Why this matters:
+We now have an explicit boundary contract in both lanes.
+qjs adapter shape is no longer “self-defined”; it is contract-aligned.
+This is exactly the architecture-first prep step you asked for before a fuller qjs↔C4 attempt.

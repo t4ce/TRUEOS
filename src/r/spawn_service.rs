@@ -94,6 +94,7 @@ define_started_flags!(
     WEBGPU_BROWSER_PRIMARY_STARTED,
     WEBGPU_BROWSER_SECONDARY_STARTED,
     UI2_STARTED,
+    UI2_PRIMARY_BROWSER_WINDOW_STARTED,
     UI2_GFX_TETRIS_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
@@ -499,6 +500,44 @@ fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_primary_browser_window(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
+
+    let (fb_w, fb_h) = crate::vga::framebuffer_dimensions().unwrap_or((1280, 800));
+    let margin_x = 44.0f32;
+    let margin_y = 96.0f32;
+    let width = ((fb_w as f32) - margin_x * 2.0).clamp(640.0, 1080.0);
+    let height = ((fb_h as f32) - margin_y * 2.0).clamp(420.0, 720.0);
+    let rect = crate::r::ui2::Ui2Rect {
+        x: (((fb_w as f32) - width) * 0.5).max(24.0),
+        y: (((fb_h as f32) - height) * 0.5).max(64.0),
+        w: width,
+        h: height,
+    };
+
+    let window_id = crate::r::ui2::create_hosted_browser_window(
+        "Browser",
+        rect,
+        40,
+        255,
+        PRIMARY_BROWSER_INSTANCE_ID,
+    );
+    if window_id == 0 {
+        crate::log!("ui2-browser: failed to create primary browser window\n");
+        return SpawnAttempt::Skipped;
+    }
+
+    crate::log!(
+        "ui2-browser: created primary browser window={} rect={}x{}@{},{}\n",
+        window_id,
+        rect.w as u32,
+        rect.h as u32,
+        rect.x as i32,
+        rect.y as i32
+    );
+    SpawnAttempt::Spawned
+}
+
 fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_gfx_tetris::ui2_gfx_tetris_task())
@@ -760,6 +799,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2,
     ),
     TaskSpec::enabled(
+        "ui2-browser-primary-window",
+        crate::r::readiness::UI2_READY,
+        &UI2_PRIMARY_BROWSER_WINDOW_STARTED,
+        spawn_ui2_primary_browser_window,
+    ),
+    TaskSpec::enabled(
         "ui2-gfx-tetris",
         crate::r::readiness::UI2_READY,
         &UI2_GFX_TETRIS_STARTED,
@@ -777,7 +822,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "webgpu-browser-primary",
         WEBGPU_BROWSER_READY,
         &WEBGPU_BROWSER_PRIMARY_STARTED,

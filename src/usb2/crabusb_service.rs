@@ -932,6 +932,17 @@ fn parse_uac_audio_controls(raw_cfg: &[u8]) -> Option<UacAudioControlTarget> {
     let mut playback_source_id: Option<u8> = None;
     let mut first_fu: Option<UacFeatureUnitTarget> = None;
     let mut clock_source_id: Option<u8> = None;
+    let mut discovered: Option<UacAudioControlTarget> = None;
+
+    let snapshot_current =
+        |ac_if: Option<u8>, is_uac2: bool, clock: Option<u8>, fu: Option<UacFeatureUnitTarget>| {
+            ac_if.map(|ac_interface| UacAudioControlTarget {
+                ac_interface,
+                uac2: is_uac2,
+                clock_source_id: clock,
+                feature_unit: fu,
+            })
+        };
 
     while idx + 2 <= raw_cfg.len() {
         let len = usize::from(raw_cfg[idx]);
@@ -941,6 +952,12 @@ fn parse_uac_audio_controls(raw_cfg: &[u8]) -> Option<UacAudioControlTarget> {
 
         match raw_cfg[idx + 1] {
             0x04 if len >= 9 => {
+                if let Some(s) =
+                    snapshot_current(current_ac_if, current_ac_is_uac2, clock_source_id, first_fu)
+                {
+                    discovered = Some(s);
+                }
+
                 let interface_number = raw_cfg[idx + 2];
                 let alternate_setting = raw_cfg[idx + 3];
                 let class = raw_cfg[idx + 5];
@@ -1029,12 +1046,12 @@ fn parse_uac_audio_controls(raw_cfg: &[u8]) -> Option<UacAudioControlTarget> {
         idx += len;
     }
 
-    current_ac_if.map(|ac_interface| UacAudioControlTarget {
-        ac_interface,
-        uac2: current_ac_is_uac2,
-        clock_source_id,
-        feature_unit: first_fu,
-    })
+    if let Some(s) = snapshot_current(current_ac_if, current_ac_is_uac2, clock_source_id, first_fu)
+    {
+        discovered = Some(s);
+    }
+
+    discovered
 }
 
 async fn configure_uac_playback_controls(
@@ -1244,6 +1261,26 @@ fn fill_audio_packet(
             *sine_phase -= TAU;
         }
     }
+}
+
+fn choose_audio_packet_bytes(frame_bytes: usize, endpoint_payload_limit: usize) -> usize {
+    let frame_bytes = frame_bytes.max(1);
+    let payload_limit = endpoint_payload_limit.max(frame_bytes);
+
+    // For 48 kHz PCM, nominal payload is either per 1ms frame (FS) or per 125us microframe (HS/SS).
+    let nominal_1ms = (48_000usize * frame_bytes) / 1_000;
+    let nominal_125us = (48_000usize * frame_bytes) / 8_000;
+
+    let candidate = if payload_limit >= nominal_1ms {
+        nominal_1ms
+    } else if payload_limit >= nominal_125us {
+        nominal_125us
+    } else {
+        payload_limit
+    };
+
+    let aligned = (candidate / frame_bytes) * frame_bytes;
+    aligned.max(frame_bytes).min(payload_limit)
 }
 
 fn pick_truekey_target(
@@ -1495,18 +1532,16 @@ async fn stream_target_audio(
         .unwrap_or_else(|| {
             usize::from((endpoint.max_packet_size & 0x07FF).max(AUDIO_FRAME_BYTES as u16))
         });
-    // `submit_and_wait(..., num_packets)` treats the buffer as `num_packets` isoch packets.
-    // Keep each packet at the nominal 125us PCM payload and rely on a deeper request batch
-    // to keep the high-level crabusb path fed even when completions are awaited serially.
-    let packet_bytes = ((48_000usize * AUDIO_FRAME_BYTES) / 8_000)
-        .max(AUDIO_FRAME_BYTES)
-        .min(endpoint_payload_limit);
+    // Select packet cadence from endpoint capacity: FS endpoints need ~1ms payloads,
+    // while HS/SS endpoints typically use 125us payloads.
+    let packet_bytes = choose_audio_packet_bytes(AUDIO_FRAME_BYTES, endpoint_payload_limit);
     let urb_bytes = packet_bytes.saturating_mul(PACKETS_PER_REQUEST);
     let mut packet_batch = Vec::from_iter(core::iter::repeat_n(0u8, urb_bytes));
     // Diagnostic mode: force synthesized tone to rule out source-file silence.
     let wav = None;
     let mut wav_cursor = 0usize;
     let mut sine_phase = 0.0f32;
+    let mut logged_probe = false;
 
     let endpoint_kind = match device.get_endpoint(endpoint.address).await {
         Ok(kind) => kind,
@@ -1536,7 +1571,7 @@ async fn stream_target_audio(
 
     AUDIO_STREAM_ACTIVE.store(true, Ordering::Release);
     crate::log!(
-        "crabusb: audio streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} packet={} batch={} sync={} feedback={} source={}\n",
+        "crabusb: audio streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} packet={} batch={} sync={} feedback={} source={} payload_limit={}\n",
         vendor_id,
         product_id,
         preferred.interface_number,
@@ -1548,12 +1583,26 @@ async fn stream_target_audio(
         stream_target
             .map(|target| target.has_feedback_ep)
             .unwrap_or(false),
-        if wav.is_some() { "demo.wav" } else { "sine" }
+        if wav.is_some() { "demo.wav" } else { "sine" },
+        endpoint_payload_limit
     );
 
     loop {
         for packet in packet_batch.chunks_exact_mut(packet_bytes) {
             fill_audio_packet(packet, wav, &mut wav_cursor, &mut sine_phase);
+        }
+
+        if !logged_probe {
+            let probe_len = min(packet_bytes, 16);
+            let probe = &packet_batch[..probe_len];
+            let non_zero = probe.iter().filter(|b| **b != 0).count();
+            crate::log!(
+                "crabusb: audio probe first_packet bytes={} non_zero={} head={:02X?}\n",
+                probe_len,
+                non_zero,
+                probe
+            );
+            logged_probe = true;
         }
 
         match iso_out
