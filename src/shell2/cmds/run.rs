@@ -565,18 +565,12 @@ fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'static str> 
 
 fn resolve_import(name: &str) -> Option<usize> {
     match name {
-        "trueos_cabi_alloc" => {
-            Some(crate::r::io::cabi::trueos_cabi_alloc as *const () as usize)
-        }
-        "trueos_cabi_free" => {
-            Some(crate::r::io::cabi::trueos_cabi_free as *const () as usize)
-        }
+        "trueos_cabi_alloc" => Some(crate::r::io::cabi::trueos_cabi_alloc as *const () as usize),
+        "trueos_cabi_free" => Some(crate::r::io::cabi::trueos_cabi_free as *const () as usize),
         "trueos_cabi_realloc" => {
             Some(crate::r::io::cabi::trueos_cabi_realloc as *const () as usize)
         }
-        "trueos_cabi_write" => {
-            Some(crate::r::io::cabi::trueos_cabi_write as *const () as usize)
-        }
+        "trueos_cabi_write" => Some(crate::r::io::cabi::trueos_cabi_write as *const () as usize),
         "_RNvCs75cmLyI1ip2_7___rustc26___rust_alloc_error_handler" => {
             Some(portal_alloc_error_handler as *const () as usize)
         }
@@ -825,7 +819,8 @@ async fn run_command_task(target: MatrixTarget, archive: String, app_args: Vec<S
                     )
                 }) {
                     Ok(main_addr) => {
-                        let process_args = build_process_args(archive.as_str(), app_args.as_slice());
+                        let process_args =
+                            build_process_args(archive.as_str(), app_args.as_slice());
                         let process_env = build_process_env(archive.as_str());
                         let (_arg_storage, argv) = build_argv(process_args.as_slice());
                         log(alloc::format!(

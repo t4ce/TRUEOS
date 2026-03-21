@@ -88,7 +88,9 @@ fn register_runtime(rt: UsbMassRuntime) {
 
 fn take_runtime(runtime_key: u64) -> Option<UsbMassRuntime> {
     let mut runtimes = MASS_RUNTIMES.lock();
-    let idx = runtimes.iter().position(|rt| rt.runtime_key == runtime_key)?;
+    let idx = runtimes
+        .iter()
+        .position(|rt| rt.runtime_key == runtime_key)?;
     Some(runtimes.remove(idx))
 }
 
@@ -159,11 +161,10 @@ fn sanitize_usb_identity_string(raw: &str) -> Option<String> {
         break;
     }
 
-    let out: String = String::from(
-        out.trim_matches(|ch: char| {
+    let out: String =
+        String::from(out.trim_matches(|ch: char| {
             ch.is_ascii_whitespace() || matches!(ch, '-' | '_' | '.' | ':')
-        }),
-    );
+        }));
     if out.len() < 3 || out.len() > 64 || !out.chars().any(|ch| ch.is_ascii_alphanumeric()) {
         None
     } else {
@@ -171,7 +172,10 @@ fn sanitize_usb_identity_string(raw: &str) -> Option<String> {
     }
 }
 
-async fn read_optional_string_descriptor(device: &mut Device, index: Option<core::num::NonZero<u8>>) -> Option<String> {
+async fn read_optional_string_descriptor(
+    device: &mut Device,
+    index: Option<core::num::NonZero<u8>>,
+) -> Option<String> {
     let idx = index?;
     let text = device.string_descriptor(idx.get()).await.ok()?;
     sanitize_usb_identity_string(text.as_str())

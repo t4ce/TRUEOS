@@ -53,7 +53,9 @@ struct ShellQjsState {
 
 impl ShellQjsState {
     const fn new() -> Self {
-        Self { repl_slots: Vec::new() }
+        Self {
+            repl_slots: Vec::new(),
+        }
     }
 }
 
@@ -306,7 +308,11 @@ fn ensure_repl_vm<'a>(
     state: &'a mut ShellQjsState,
     slot_id: &matrix::MatrixSlotId,
 ) -> Result<&'a mut ShellQjsVmSlot, &'static str> {
-    if let Some(idx) = state.repl_slots.iter().position(|slot| slot.slot_id == *slot_id) {
+    if let Some(idx) = state
+        .repl_slots
+        .iter()
+        .position(|slot| slot.slot_id == *slot_id)
+    {
         return Ok(state.repl_slots[idx].as_mut());
     }
 
@@ -455,7 +461,11 @@ fn submit_eval(target: &MatrixTarget, source: &str) {
 pub(crate) fn free_slot(requested: &str) {
     let slot_id = normalize_slot_id(requested);
     let mut state = SHELL_QJS_STATE.lock();
-    if let Some(idx) = state.repl_slots.iter().position(|slot| slot.slot_id == slot_id) {
+    if let Some(idx) = state
+        .repl_slots
+        .iter()
+        .position(|slot| slot.slot_id == slot_id)
+    {
         let _ = state.repl_slots.swap_remove(idx);
     }
 }

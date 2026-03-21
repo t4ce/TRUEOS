@@ -49,10 +49,7 @@ fn submit_rgb_blob_no_present(blob: &[u8]) -> bool {
         crate::r::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
     };
     let rc = unsafe {
-        crate::r::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
-            blob.as_ptr(),
-            blob.len(),
-        )
+        crate::r::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(blob.as_ptr(), blob.len())
     };
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
     rc == 0

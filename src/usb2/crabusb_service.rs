@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::cmp::min;
-use core::future::Future;
 use core::f32::consts::TAU;
+use core::future::Future;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -119,6 +119,7 @@ impl KernelOp for TrueosCrabUsbKernel {
 
 #[derive(Copy, Clone)]
 struct PreferredAlt {
+    configuration_value: u8,
     interface_number: u8,
     alternate_setting: u8,
     class: u8,
@@ -234,9 +235,7 @@ fn pick_hid_boot_targets(
                 let report_len = match kind {
                     HidBootKind::Keyboard => 8,
                     HidBootKind::Mouse => 4,
-                    HidBootKind::Tablet => {
-                        super::hid::tablet::report_len(endpoint.max_packet_size)
-                    }
+                    HidBootKind::Tablet => super::hid::tablet::report_len(endpoint.max_packet_size),
                 };
                 out.push(HidBootTarget {
                     configuration_value: config.configuration_value,
@@ -521,46 +520,49 @@ async fn hid_boot_stream_task(
                 continue;
             }
             Some(result) => match result {
-            Ok(read) => {
-                timeout_logs = 0;
-                if read == 0 {
-                    Timer::after(EmbassyDuration::from_millis(1)).await;
-                    continue;
-                }
+                Ok(read) => {
+                    timeout_logs = 0;
+                    if read == 0 {
+                        Timer::after(EmbassyDuration::from_millis(1)).await;
+                        continue;
+                    }
 
-                let sample = &report[..read.min(report.len())];
-                match target.kind {
-                    HidBootKind::Keyboard => super::handle_keyboard_boot_report(
-                        controller_id,
-                        slot_id,
-                        ep_target,
-                        sample,
-                    ),
-                    HidBootKind::Mouse => {
-                        super::handle_mouse_boot_report(controller_id, slot_id, ep_target, sample)
-                    }
-                    HidBootKind::Tablet => {
-                        super::hid::tablet::handle_packet(
-                            vendor_id,
-                            product_id,
-                            target.in_endpoint,
+                    let sample = &report[..read.min(report.len())];
+                    match target.kind {
+                        HidBootKind::Keyboard => super::handle_keyboard_boot_report(
+                            controller_id,
+                            slot_id,
+                            ep_target,
                             sample,
-                        );
+                        ),
+                        HidBootKind::Mouse => super::handle_mouse_boot_report(
+                            controller_id,
+                            slot_id,
+                            ep_target,
+                            sample,
+                        ),
+                        HidBootKind::Tablet => {
+                            super::hid::tablet::handle_packet(
+                                vendor_id,
+                                product_id,
+                                target.in_endpoint,
+                                sample,
+                            );
+                        }
                     }
                 }
-            }
-            Err(err) => {
-                crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    target.in_endpoint,
-                    err
-                );
-                break;
-            }
-        },
+                Err(err) => {
+                    crate::log!(
+                        "crabusb: hid {} {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
+                        target.kind.as_str(),
+                        vendor_id,
+                        product_id,
+                        target.in_endpoint,
+                        err
+                    );
+                    break;
+                }
+            },
         }
     }
 
@@ -732,6 +734,7 @@ fn pick_preferred_alt(
                 };
 
                 let candidate = PreferredAlt {
+                    configuration_value: config.configuration_value,
                     interface_number: alt.interface_number,
                     alternate_setting: alt.alternate_setting,
                     class: alt.class,
@@ -1080,14 +1083,9 @@ async fn stream_target_audio(
     preferred: PreferredAlt,
     endpoint: IsoOutEndpoint,
 ) {
-    // Compute how many audio bytes belong in one isochronous period.
-    // For s16le stereo 48kHz: the period is typically 1ms (bInterval->1ms for FS, or
-    // bInterval=4->1ms for HS). We assume HS encoding: period_µs = 125 * 2^(interval-1).
-    // Clamp the result to [AUDIO_FRAME_BYTES, max_packet_size] so we never exceed MPS.
-    let period_us = 125u64.saturating_mul(1u64 << endpoint.interval.saturating_sub(1).min(7));
-    let bytes_from_rate =
-        (48_000u64 * AUDIO_FRAME_BYTES as u64).saturating_mul(period_us) / 1_000_000;
-    let packet_bytes = (bytes_from_rate as usize)
+    // This device is driven as s16le stereo 48kHz, which is 192 bytes per 1ms USB frame.
+    // Keep the payload explicit instead of inferring it from bInterval alone.
+    let packet_bytes = ((48_000usize * AUDIO_FRAME_BYTES) / 1_000)
         .max(AUDIO_FRAME_BYTES)
         .min(usize::from(endpoint.max_packet_size));
     let mut packet = Vec::from_iter(core::iter::repeat_n(0u8, packet_bytes));
@@ -1202,16 +1200,31 @@ async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::Devic
         return;
     };
 
+    if let Err(err) = device
+        .ep_ctrl()
+        .set_configuration(preferred.configuration_value)
+        .await
+    {
+        crate::log!(
+            "crabusb: target {:04X}:{:04X} set cfg={} failed before audio claim: {:?}\n",
+            vendor_id,
+            product_id,
+            preferred.configuration_value,
+            err
+        );
+        return;
+    }
+
     match device
         .claim_interface(preferred.interface_number, preferred.alternate_setting)
         .await
     {
         Ok(()) => {
             crate::log!(
-                "crabusb: target {:04X}:{:04X} audio ownership if#{} alt={} ep=0x{:02X} interval={}
-",
+                "crabusb: target {:04X}:{:04X} audio ownership cfg={} if#{} alt={} ep=0x{:02X} interval={}\n",
                 vendor_id,
                 product_id,
+                preferred.configuration_value,
                 preferred.interface_number,
                 preferred.alternate_setting,
                 endpoint.address,
@@ -1376,9 +1389,13 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: u32
                     if descriptor_has_audio_candidate(dev) {
                         maybe_start_target_audio(host, dev).await;
                     }
-                    let _ =
-                        super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id)
-                            .await;
+                    let _ = super::hid::leds::maybe_start_led_controller(
+                        host,
+                        dev,
+                        spawner,
+                        controller_id,
+                    )
+                    .await;
                     let _ = maybe_start_hid_boot_streams(host, dev, spawner, controller_id).await;
                     let _ = super::midi::maybe_start_midi(host, dev, spawner, controller_id).await;
                     let _ = super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id)

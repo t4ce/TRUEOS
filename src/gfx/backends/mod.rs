@@ -19,9 +19,8 @@ pub enum Backend {
     #[cfg(feature = "gfx_virgl")]
     Virgl(virtio_gpu_3d::VirglGfxBackend),
 
-   // #[cfg(feature = "gfx_intel")]
-   // Intel(IntelGfxBackend),
-
+    // #[cfg(feature = "gfx_intel")]
+    // Intel(IntelGfxBackend),
     None(NullBackend),
 }
 
@@ -155,9 +154,8 @@ impl Backend {
             #[cfg(feature = "gfx_virgl")]
             Backend::Virgl(b) => b,
 
-         //   #[cfg(feature = "gfx_intel")]
-         //   Backend::Intel(b) => b,
-
+            //   #[cfg(feature = "gfx_intel")]
+            //   Backend::Intel(b) => b,
             Backend::None(b) => b,
         }
     }

@@ -76,9 +76,13 @@ pub fn dealloc(ptr: *mut u8, size: usize) {
     }
 
     let Some(alloc) = unregister_alloc(ptr) else {
-            crate::log!("dma: unknown dealloc ptr=0x{:X} size=0x{:X}\n", ptr as usize, size);
-            return;
-        };
+        crate::log!(
+            "dma: unknown dealloc ptr=0x{:X} size=0x{:X}\n",
+            ptr as usize,
+            size
+        );
+        return;
+    };
 
     match alloc.origin {
         DmaAllocOrigin::Heap => unsafe {
