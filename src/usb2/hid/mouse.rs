@@ -87,14 +87,15 @@ impl Default for MouseRing {
 }
 
 pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) {
-    if data.len() < 4 {
+    if data.len() < 3 {
         return;
     }
 
     let buttons = data[0];
     let dx = i8::from_le_bytes([data[1]]);
     let dy = i8::from_le_bytes([data[2]]);
-    let wheel = i8::from_le_bytes([data[3]]);
+    let wheel = data.get(3).copied().map(|value| value as i8).unwrap_or(0);
+    let has_wheel = data.len() >= 4;
     let prev_buttons = runtime.mouse_buttons_down;
     runtime.mouse_buttons_down = u32::from(buttons);
 
@@ -154,15 +155,33 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         y: runtime.mouse_y,
         flags,
     });
+    crate::usb2::input::push_event(crate::usb2::input::InputEvent::Mouse(
+        crate::usb2::input::MouseEvent {
+            slot_id: runtime.slot_id,
+            buttons,
+            dx,
+            dy,
+            wheel,
+            has_wheel,
+        },
+    ));
+    crate::usb2::input::qjs_mouse_offer(crate::usb2::input::MouseEvent {
+        slot_id: runtime.slot_id,
+        buttons,
+        dx,
+        dy,
+        wheel,
+        has_wheel,
+    });
     sync_runtime_cursor_snapshot(runtime);
-    crate::usb::hut::upsert_mouse_state(
+    crate::usb2::hut::upsert_mouse_state(
         runtime.controller_id as u32,
         runtime.slot_id,
         runtime.ep_target,
         runtime.mouse_x,
         runtime.mouse_y,
         runtime.mouse_buttons_down,
-        crate::usb::hut::HidSourceKind::Human,
+        crate::usb2::hut::HidSourceKind::Human,
         "human",
         false,
     );
