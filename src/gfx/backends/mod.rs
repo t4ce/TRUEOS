@@ -4,23 +4,23 @@ use trueos_gfx_core::{
     ShaderDesc, ShaderId, SwapchainDesc,
 };
 
-#[cfg(feature = "gfx_intel")]
-mod intel;
-#[cfg(feature = "gfx_intel")]
-mod intel_execlists;
+//#[cfg(feature = "gfx_intel")]
+//mod intel;
+//#[cfg(feature = "gfx_intel")]
+//mod intel_execlists;
 #[cfg(feature = "gfx_virgl")]
 use crate::gfx::virtio_gpu_3d;
-#[cfg(feature = "gfx_intel")]
-use intel::IntelGfxBackend;
-#[cfg(feature = "gfx_intel")]
-mod intel_cmd;
+//#[cfg(feature = "gfx_intel")]
+//use intel::IntelGfxBackend;
+//#[cfg(feature = "gfx_intel")]
+//mod intel_cmd;
 
 pub enum Backend {
     #[cfg(feature = "gfx_virgl")]
     Virgl(virtio_gpu_3d::VirglGfxBackend),
 
-    #[cfg(feature = "gfx_intel")]
-    Intel(IntelGfxBackend),
+   // #[cfg(feature = "gfx_intel")]
+   // Intel(IntelGfxBackend),
 
     None(NullBackend),
 }
@@ -138,7 +138,7 @@ impl Backend {
         ensure_pci_enumerated_if_empty();
         virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(Backend::Virgl)
     }
-
+    /*
     #[cfg(feature = "gfx_intel")]
     pub fn init_intel(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
@@ -149,14 +149,14 @@ impl Backend {
         }
         IntelGfxBackend::init(framebuffers).map(Backend::Intel)
     }
-
+    */
     pub fn context_mut(&mut self) -> &mut dyn GfxContext {
         match self {
             #[cfg(feature = "gfx_virgl")]
             Backend::Virgl(b) => b,
 
-            #[cfg(feature = "gfx_intel")]
-            Backend::Intel(b) => b,
+         //   #[cfg(feature = "gfx_intel")]
+         //   Backend::Intel(b) => b,
 
             Backend::None(b) => b,
         }

@@ -4,3 +4,5 @@ pub use core::ffi::{
 };
 
 pub use alloc::ffi::CString;
+pub use alloc::string::String as OsString;
+pub type OsStr = str;
