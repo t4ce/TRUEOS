@@ -17,7 +17,9 @@ use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
 
 use super::api::{ClaimedInterface, InterfaceEndpointError, claim_interface};
-use super::mass::{pick_mass_target, probe_mass_bot, register_mass_geometry_placeholder};
+use super::mass::{
+    keepalive_mass_bot, pick_mass_target, probe_mass_bot, register_mass_geometry_placeholder,
+};
 
 pub(super) struct TrueosCrabUsbKernel;
 
@@ -33,6 +35,7 @@ static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static HID_STREAMS_ACTIVE: Mutex<Vec<ActiveHidStream>> = Mutex::new(Vec::new());
+static MASS_STREAMS_ACTIVE: Mutex<Vec<ActiveMassStream>> = Mutex::new(Vec::new());
 static USB_MASS_REGISTERED_SLOTS: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
@@ -194,6 +197,12 @@ struct ActiveHidStream {
     kind: HidBootKind,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct ActiveMassStream {
+    controller_id: u32,
+    slot_id: u32,
+}
+
 #[inline]
 fn endpoint_target_from_address(address: u8) -> u32 {
     let ep_num = u32::from(address & 0x0F);
@@ -265,6 +274,22 @@ fn unregister_active_hid_stream(stream: ActiveHidStream) -> bool {
     !streams.iter().any(|active| {
         active.controller_id == stream.controller_id && active.slot_id == stream.slot_id
     })
+}
+
+fn register_active_mass_stream(stream: ActiveMassStream) -> bool {
+    let mut streams = MASS_STREAMS_ACTIVE.lock();
+    if streams.iter().any(|active| *active == stream) {
+        return false;
+    }
+    streams.push(stream);
+    true
+}
+
+fn unregister_active_mass_stream(stream: ActiveMassStream) {
+    let mut streams = MASS_STREAMS_ACTIVE.lock();
+    if let Some(idx) = streams.iter().position(|active| *active == stream) {
+        streams.remove(idx);
+    }
 }
 
 #[embassy_executor::task(pool_size = 8)]
@@ -400,9 +425,12 @@ async fn hid_boot_stream_task(
                     );
                 }
                 match target.kind {
-                    HidBootKind::Keyboard => {
-                        super::handle_keyboard_boot_report(controller_id, slot_id, ep_target, sample)
-                    }
+                    HidBootKind::Keyboard => super::handle_keyboard_boot_report(
+                        controller_id,
+                        slot_id,
+                        ep_target,
+                        sample,
+                    ),
                     HidBootKind::Mouse => {
                         super::handle_mouse_boot_report(controller_id, slot_id, ep_target, sample)
                     }
@@ -500,6 +528,175 @@ async fn maybe_start_hid_boot_streams(
     }
 
     started_any
+}
+
+#[embassy_executor::task(pool_size = 8)]
+async fn mass_storage_task(
+    mut device: crab_usb::Device,
+    controller_id: u32,
+    target: super::mass::MassTarget,
+) {
+    const MASS_KEEPALIVE_MS: u64 = 2_000;
+
+    let desc = device.descriptor();
+    let vendor_id = desc.vendor_id;
+    let product_id = desc.product_id;
+    let slot = device.slot_id();
+    let active_stream = ActiveMassStream {
+        controller_id,
+        slot_id: u32::from(slot),
+    };
+
+    if let Err(err) = device
+        .ep_ctrl()
+        .set_configuration(target.configuration_value)
+        .await
+    {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} set cfg={} failed: {:?}\n",
+            vendor_id,
+            product_id,
+            target.configuration_value,
+            err
+        );
+    }
+
+    let probe = match claim_interface(
+        &mut device,
+        target.interface_number,
+        target.alternate_setting,
+    )
+    .await
+    {
+        Ok(mut interface) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} ownership if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={}\n",
+                vendor_id,
+                product_id,
+                interface.interface_number(),
+                interface.alternate_setting(),
+                target.configuration_value,
+                target.bulk_in,
+                target.bulk_out,
+                target.bulk_in_max_packet_size,
+                target.bulk_out_max_packet_size
+            );
+
+            let Some((mut bulk_out, mut bulk_in)) = open_mass_bulk_endpoints(
+                &mut interface,
+                vendor_id,
+                product_id,
+                target.bulk_out,
+                target.bulk_in,
+            )
+            .await
+            else {
+                unregister_active_mass_stream(active_stream);
+                return;
+            };
+
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} endpoint wiring bulk_out={} bulk_in={}\n",
+                vendor_id,
+                product_id,
+                true,
+                true
+            );
+
+            let probe = match probe_mass_bot(
+                interface.device(),
+                &mut bulk_out,
+                &mut bulk_in,
+                target.interface_number,
+                target.bulk_out,
+                target.bulk_in,
+            )
+            .await
+            {
+                Ok(info) => info,
+                Err(err) => {
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} probe failed: {:?}\n",
+                        vendor_id,
+                        product_id,
+                        err
+                    );
+                    unregister_active_mass_stream(active_stream);
+                    return;
+                }
+            };
+
+            let is_new_slot = {
+                let mut slots = USB_MASS_REGISTERED_SLOTS.lock();
+                if slots.iter().any(|known| *known == slot) {
+                    false
+                } else {
+                    slots.push(slot);
+                    true
+                }
+            };
+
+            if is_new_slot {
+                let handle = register_mass_geometry_placeholder(
+                    vendor_id,
+                    product_id,
+                    probe.block_size,
+                    probe.block_count,
+                );
+                crate::log!(
+                    "crabusb: mass {:04X}:{:04X} registered disk {} label={:?} bs={} blocks={}\n",
+                    vendor_id,
+                    product_id,
+                    handle.id(),
+                    handle.info().label,
+                    probe.block_size,
+                    probe.block_count
+                );
+            }
+
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} probe max_lun={} bs={} blocks={} vendor='{}' product='{}'\n",
+                vendor_id,
+                product_id,
+                probe.max_lun,
+                probe.block_size,
+                probe.block_count,
+                probe.vendor,
+                probe.product
+            );
+
+            loop {
+                Timer::after(EmbassyDuration::from_millis(MASS_KEEPALIVE_MS)).await;
+                if let Err(err) = keepalive_mass_bot(&mut bulk_out, &mut bulk_in, 0).await {
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} lifecycle stop slot={} err={:?}\n",
+                        vendor_id,
+                        product_id,
+                        slot,
+                        err
+                    );
+                    break;
+                }
+            }
+
+            probe
+        }
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
+                vendor_id,
+                product_id,
+                target.interface_number,
+                target.alternate_setting,
+                err
+            );
+            unregister_active_mass_stream(active_stream);
+            return;
+        }
+    };
+
+    let _ = probe;
+    unregister_active_mass_stream(active_stream);
 }
 
 fn parse_wav_pcm_s16_stereo_48k(bytes: &[u8]) -> Option<(usize, usize)> {
@@ -1212,7 +1409,12 @@ async fn open_mass_bulk_endpoints(
     Some((bulk_out, bulk_in))
 }
 
-async fn maybe_start_mass_storage(host: &mut USBHost, dev_info: &crab_usb::DeviceInfo) -> bool {
+async fn maybe_start_mass_storage(
+    host: &mut USBHost,
+    dev_info: &crab_usb::DeviceInfo,
+    spawner: &Spawner,
+    controller_id: u32,
+) -> bool {
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
@@ -1221,7 +1423,7 @@ async fn maybe_start_mass_storage(host: &mut USBHost, dev_info: &crab_usb::Devic
         return false;
     };
 
-    let mut device = match host.open_device(dev_info).await {
+    let device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
             crate::log!(
@@ -1234,135 +1436,37 @@ async fn maybe_start_mass_storage(host: &mut USBHost, dev_info: &crab_usb::Devic
         }
     };
 
-    let slot = device.slot_id();
-
-    if let Err(err) = device
-        .ep_ctrl()
-        .set_configuration(target.configuration_value)
-        .await
-    {
-        crate::log!(
-            "crabusb: mass {:04X}:{:04X} set cfg={} failed: {:?}\n",
-            vendor_id,
-            product_id,
-            target.configuration_value,
-            err
-        );
+    let active_stream = ActiveMassStream {
+        controller_id,
+        slot_id: u32::from(device.slot_id()),
+    };
+    if !register_active_mass_stream(active_stream) {
+        return true;
     }
 
-    let probe = match claim_interface(
-        &mut device,
-        target.interface_number,
-        target.alternate_setting,
-    )
-    .await
-    {
-        Ok(mut interface) => {
+    match spawner.spawn(mass_storage_task(device, controller_id, target)) {
+        Ok(()) => {
             crate::log!(
-                "crabusb: mass {:04X}:{:04X} ownership if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={}\n",
+                "crabusb: mass {:04X}:{:04X} handoff if#{} alt={} bulk_in=0x{:02X} bulk_out=0x{:02X}\n",
                 vendor_id,
                 product_id,
-                interface.interface_number(),
-                interface.alternate_setting(),
-                target.configuration_value,
-                target.bulk_in,
-                target.bulk_out,
-                target.bulk_in_max_packet_size,
-                target.bulk_out_max_packet_size
-            );
-
-            let Some((mut bulk_out, mut bulk_in)) = open_mass_bulk_endpoints(
-                &mut interface,
-                vendor_id,
-                product_id,
-                target.bulk_out,
-                target.bulk_in,
-            )
-            .await
-            else {
-                return true;
-            };
-
-            crate::log!(
-                "crabusb: mass {:04X}:{:04X} endpoint wiring bulk_out={} bulk_in={}\n",
-                vendor_id,
-                product_id,
-                true,
-                true
-            );
-
-            match probe_mass_bot(
-                interface.device(),
-                &mut bulk_out,
-                &mut bulk_in,
                 target.interface_number,
-                target.bulk_out,
+                target.alternate_setting,
                 target.bulk_in,
-            )
-            .await
-            {
-                Ok(info) => info,
-                Err(err) => {
-                    crate::log!(
-                        "crabusb: mass {:04X}:{:04X} probe failed: {:?}\n",
-                        vendor_id,
-                        product_id,
-                        err
-                    );
-                    return true;
-                }
-            }
+                target.bulk_out
+            );
         }
         Err(err) => {
+            unregister_active_mass_stream(active_stream);
             crate::log!(
-                "crabusb: mass {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
+                "crabusb: mass {:04X}:{:04X} spawn failed if#{} alt={}: {:?}\n",
                 vendor_id,
                 product_id,
                 target.interface_number,
                 target.alternate_setting,
                 err
             );
-            return true;
         }
-    };
-
-    crate::log!(
-        "crabusb: mass {:04X}:{:04X} probe max_lun={} bs={} blocks={} vendor='{}' product='{}'\n",
-        vendor_id,
-        product_id,
-        probe.max_lun,
-        probe.block_size,
-        probe.block_count,
-        probe.vendor,
-        probe.product
-    );
-
-    let is_new_slot = {
-        let mut slots = USB_MASS_REGISTERED_SLOTS.lock();
-        if slots.iter().any(|known| *known == slot) {
-            false
-        } else {
-            slots.push(slot);
-            true
-        }
-    };
-
-    if is_new_slot {
-        let handle = register_mass_geometry_placeholder(
-            vendor_id,
-            product_id,
-            probe.block_size,
-            probe.block_count,
-        );
-        crate::log!(
-            "crabusb: mass {:04X}:{:04X} registered disk {} label={:?} bs={} blocks={}\n",
-            vendor_id,
-            product_id,
-            handle.id(),
-            handle.info().label,
-            probe.block_size,
-            probe.block_count
-        );
     }
 
     true
@@ -1494,7 +1598,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: u32
                     maybe_start_truekey_bridge(host, dev).await;
                     maybe_start_target_audio(host, dev).await;
                     let _ = maybe_start_hid_boot_streams(host, dev, spawner, controller_id).await;
-                    let _ = maybe_start_mass_storage(host, dev).await;
+                    let _ = maybe_start_mass_storage(host, dev, spawner, controller_id).await;
                 }
                 true
             }
@@ -1564,7 +1668,7 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                 if maybe_start_hid_boot_streams(host, dev, spawner, info.index as u32).await {
                     continue;
                 }
-                if maybe_start_mass_storage(host, dev).await {
+                if maybe_start_mass_storage(host, dev, spawner, info.index as u32).await {
                     continue;
                 }
                 log_opened_device_graph(host, dev_idx, dev).await;
