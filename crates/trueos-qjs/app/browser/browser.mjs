@@ -58,6 +58,7 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'insertHtml',
     'getViewport',
     'paint',
+    'setScroll',
     'getWindowId',
     'getWindowInfo',
     'setWindowTitle',
@@ -1591,9 +1592,30 @@ function clampScrollForDoc(doc, vw, vh) {
   const contentTopY = docContentTopY(doc);
   const maxScrollX = Math.max(0, contentW - Math.max(1, Number(vw || 1)));
   const maxScrollY = Math.max(0, contentH - Math.max(1, Number(vh || 1)));
-  scrollX = 0;
-  scrollY = 0;
+  scrollX = Math.max(0, Math.min(maxScrollX, Math.round(Number(scrollX || 0) || 0)));
+  scrollY = Math.max(0, Math.min(maxScrollY, Math.round(Number(scrollY || 0) || 0)));
   return { contentW, contentH, contentTopY, maxScrollX, maxScrollY };
+}
+
+function setScroll(nextScrollX = 0, nextScrollY = 0) {
+  const { vw, vh } = computeViewport();
+  const doc = ensureDoc(vw);
+  const { maxScrollX, maxScrollY } = clampScrollForDoc(doc, vw, vh);
+  const clampedScrollX = Math.max(
+    0,
+    Math.min(maxScrollX, Math.round(Number(nextScrollX || 0) || 0)),
+  );
+  const clampedScrollY = Math.max(
+    0,
+    Math.min(maxScrollY, Math.round(Number(nextScrollY || 0) || 0)),
+  );
+  if (scrollX === clampedScrollX && scrollY === clampedScrollY) {
+    return true;
+  }
+  scrollX = clampedScrollX;
+  scrollY = clampedScrollY;
+  paint();
+  return true;
 }
 
 function paintToCurrentTarget(options = null) {
@@ -2031,6 +2053,9 @@ runtime.host.__trueosBrowser = {
   getViewport() {
     return getViewport();
   },
+  setScroll(x = 0, y = 0) {
+    return setScroll(x, y);
+  },
   getInteractiveState() {
     return getInteractiveState();
   },
@@ -2067,6 +2092,12 @@ runtime.host.__trueosBrowser = {
     const contentSizeUnchanged = !!prevContentRect
       && Number(prevContentRect.width || 0) === nextContentRect.width
       && Number(prevContentRect.height || 0) === nextContentRect.height;
+    const contentPositionUnchanged = !!prevContentRect
+      && Number(prevContentRect.x || 0) === nextContentRect.x
+      && Number(prevContentRect.y || 0) === nextContentRect.y;
+    if (viewportUnchanged && contentSizeUnchanged && contentPositionUnchanged) {
+      return true;
+    }
     const contentOnlyMoved = viewportUnchanged
       && contentSizeUnchanged
       && (Number(prevContentRect.x || 0) !== nextContentRect.x

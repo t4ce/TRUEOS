@@ -21,12 +21,21 @@ use super::api::{InterfaceEndpointError, claim_interface};
 pub(super) struct TrueosCrabUsbKernel;
 
 pub(super) static CRABUSB_KERNEL: TrueosCrabUsbKernel = TrueosCrabUsbKernel;
-static INITIAL_SNAPSHOT_LOGGED: AtomicBool = AtomicBool::new(false);
-static EVENT_HANDLER_READY: AtomicBool = AtomicBool::new(false);
-static EVENT_HANDLER: Mutex<Option<EventHandler>> = Mutex::new(None);
-static PROBE_REQUESTED: AtomicBool = AtomicBool::new(false);
-static ROOT_PORT_CHANGE_SEEN: AtomicBool = AtomicBool::new(false);
-static NO_PORT_CHANGE_HINT_LOGGED: AtomicBool = AtomicBool::new(false);
+
+use super::xhci::MAX_XHCI_CONTROLLERS;
+
+static INITIAL_SNAPSHOT_LOGGED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static EVENT_HANDLER_READY: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static EVENT_HANDLER: [Mutex<Option<EventHandler>>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
+static PROBE_REQUESTED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static ROOT_PORT_CHANGE_SEEN: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static NO_PORT_CHANGE_HINT_LOGGED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static AUDIO_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -1828,12 +1837,12 @@ async fn log_opened_device_graph(
     }
 }
 
-async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: u32) -> bool {
+async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usize) -> bool {
     match host.probe_devices().await {
         Ok(devices) => {
             if devices.is_empty() {
-                if !ROOT_PORT_CHANGE_SEEN.load(Ordering::Acquire)
-                    && NO_PORT_CHANGE_HINT_LOGGED
+                if !ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire)
+                    && NO_PORT_CHANGE_HINT_LOGGED[controller_id]
                         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                         .is_ok()
                 {
@@ -1843,7 +1852,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: u32
                 }
                 false
             } else {
-                NO_PORT_CHANGE_HINT_LOGGED.store(false, Ordering::Release);
+                NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
                 crate::log!("crabusb: discovered {} new device(s)\n", devices.len());
                 for dev in devices.iter() {
                     let desc = dev.descriptor();
@@ -1863,13 +1872,20 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: u32
                         host,
                         dev,
                         spawner,
-                        controller_id,
+                        controller_id as u32,
                     )
                     .await;
-                    let _ = maybe_start_hid_boot_streams(host, dev, spawner, controller_id).await;
-                    let _ = super::midi::maybe_start_midi(host, dev, spawner, controller_id).await;
-                    let _ = super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id)
+                    let _ = maybe_start_hid_boot_streams(host, dev, spawner, controller_id as u32)
                         .await;
+                    let _ = super::midi::maybe_start_midi(host, dev, spawner, controller_id as u32)
+                        .await;
+                    let _ = super::pen::maybe_start_mass_storage(
+                        host,
+                        dev,
+                        spawner,
+                        controller_id as u32,
+                    )
+                    .await;
                 }
                 true
             }
@@ -1882,7 +1898,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: u32
 }
 
 async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spawner: &Spawner) {
-    if INITIAL_SNAPSHOT_LOGGED
+    if INITIAL_SNAPSHOT_LOGGED[info.index]
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
@@ -1955,26 +1971,26 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
     crate::log!("crabusb: scout end\n");
 }
 
-fn install_event_handler(handler: EventHandler) {
-    *EVENT_HANDLER.lock() = Some(handler);
-    EVENT_HANDLER_READY.store(true, Ordering::Release);
+fn install_event_handler(controller_id: usize, handler: EventHandler) {
+    *EVENT_HANDLER[controller_id].lock() = Some(handler);
+    EVENT_HANDLER_READY[controller_id].store(true, Ordering::Release);
 }
 
-fn uninstall_event_handler() {
-    EVENT_HANDLER_READY.store(false, Ordering::Release);
-    *EVENT_HANDLER.lock() = None;
+fn uninstall_event_handler(controller_id: usize) {
+    EVENT_HANDLER_READY[controller_id].store(false, Ordering::Release);
+    *EVENT_HANDLER[controller_id].lock() = None;
 }
 
-#[embassy_executor::task]
-pub async fn event_pump_task() {
+#[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
+pub async fn event_pump_task(controller_id: usize) {
     loop {
-        if !EVENT_HANDLER_READY.load(Ordering::Acquire) {
+        if !EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire) {
             Timer::after(EmbassyDuration::from_millis(10)).await;
             continue;
         }
 
         let event = {
-            let guard = EVENT_HANDLER.lock();
+            let guard = EVENT_HANDLER[controller_id].lock();
             guard.as_ref().map(|handler| handler.handle_event())
         };
 
@@ -1984,33 +2000,33 @@ pub async fn event_pump_task() {
             }
             Some(Event::PortChange { port }) => {
                 crate::log!("crabusb: pump port change on root port {}\n", port);
-                ROOT_PORT_CHANGE_SEEN.store(true, Ordering::Release);
-                NO_PORT_CHANGE_HINT_LOGGED.store(false, Ordering::Release);
-                PROBE_REQUESTED.store(true, Ordering::Release);
+                ROOT_PORT_CHANGE_SEEN[controller_id].store(true, Ordering::Release);
+                NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
+                PROBE_REQUESTED[controller_id].store(true, Ordering::Release);
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
             Some(Event::Stopped) => {
                 crate::log!("crabusb: pump observed stopped event\n");
-                uninstall_event_handler();
+                uninstall_event_handler(controller_id);
                 Timer::after(EmbassyDuration::from_millis(10)).await;
             }
         }
     }
 }
 
-#[embassy_executor::task]
-pub async fn bsp_service(spawner: Spawner) {
+#[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
+pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
     const OFFLINE_RETRY_MS: u64 = 1000;
 
-    // The BSP host owner performs the one-time initial scout immediately after
-    // init. Mark services as requested here so boot-present devices are
-    // eligible for handoff even if the separate "armed" tasks have not run yet.
     AUDIO_STREAM_REQUESTED.store(true, Ordering::Release);
     TRUEKEY_STREAM_REQUESTED.store(true, Ordering::Release);
 
     loop {
-        let Some(info) = super::discover_first_controller() else {
-            crate::log!("crabusb: no xhci controller available yet; retrying on BSP\n");
+        let Some(info) = super::controller_by_index(controller_index) else {
+            crate::log!(
+                "crabusb: controller {} not available yet; retrying\n",
+                controller_index
+            );
             Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
             continue;
         };
@@ -2043,7 +2059,7 @@ pub async fn bsp_service(spawner: Spawner) {
             }
         };
 
-        install_event_handler(host.create_event_handler());
+        install_event_handler(info.index, host.create_event_handler());
 
         if let Err(err) = host.init().await {
             crate::log!(
@@ -2051,40 +2067,40 @@ pub async fn bsp_service(spawner: Spawner) {
                 info.index,
                 err
             );
-            uninstall_event_handler();
+            uninstall_event_handler(info.index);
             Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
             continue;
         }
 
-        ROOT_PORT_CHANGE_SEEN.store(false, Ordering::Release);
-        NO_PORT_CHANGE_HINT_LOGGED.store(false, Ordering::Release);
+        ROOT_PORT_CHANGE_SEEN[info.index].store(false, Ordering::Release);
+        NO_PORT_CHANGE_HINT_LOGGED[info.index].store(false, Ordering::Release);
         crab_scout_once(&mut host, info, &spawner).await;
 
         let mut idle_ticks = 0u32;
         loop {
-            if !EVENT_HANDLER_READY.load(Ordering::Acquire) {
+            if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
                 crate::log!("crabusb: event handler stopped; rediscovering controller\n");
                 break;
             }
 
-            if PROBE_REQUESTED.swap(false, Ordering::AcqRel) {
+            if PROBE_REQUESTED[info.index].swap(false, Ordering::AcqRel) {
                 crate::log!(
                     "crabusb: servicing pending probe on controller {}\n",
                     info.index
                 );
                 idle_ticks = 0;
-                let _ = probe_and_log(&mut host, &spawner, info.index as u32).await;
+                let _ = probe_and_log(&mut host, &spawner, info.index).await;
                 continue;
             }
 
             idle_ticks = idle_ticks.wrapping_add(1);
             if idle_ticks >= 300 {
                 idle_ticks = 0;
-                let _ = probe_and_log(&mut host, &spawner, info.index as u32).await;
+                let _ = probe_and_log(&mut host, &spawner, info.index).await;
             }
             Timer::after(EmbassyDuration::from_millis(10)).await;
         }
-        uninstall_event_handler();
+        uninstall_event_handler(info.index);
         Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
     }
 }

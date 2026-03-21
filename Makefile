@@ -67,6 +67,8 @@ QEMU_ISO_FLAGS_DBG = $(QEMU_GFX_FLAGS) -machine q35 -bios $(QEMU_UEFI_FIRMWARE) 
 QEMU_UPDATE_TARGET_PCI ?= 0000:08:00.0
 QEMU_UPDATE_TARGET_FLAGS = -device vfio-pci,host=$(QEMU_UPDATE_TARGET_PCI),bus=pcie.0,addr=0x6
 
+# USB headset passthrough target (HyperX/etc). This is unrelated to src/hv hypervisor code.
+# Override on demand, for example: make run QEMU_USB_AUDIO_VENDOR_ID=0x0951 QEMU_USB_AUDIO_PRODUCT_ID=0x16a4
 QEMU_USB_AUDIO_VENDOR_ID ?= 0x0db0
 QEMU_USB_AUDIO_PRODUCT_ID ?= 0x62a4
 
