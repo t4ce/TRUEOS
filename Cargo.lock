@@ -379,8 +379,6 @@ dependencies = [
 [[package]]
 name = "crab-usb"
 version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed3f883591ebd782e5dc06b0ca467fdcd139d789bd613848385b8e3eed597db"
 dependencies = [
  "anyhow",
  "bitflags 2.11.0",

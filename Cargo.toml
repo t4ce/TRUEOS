@@ -91,3 +91,4 @@ xmlwriter = { path = "vendor/xmlwriter-0.1.0" }
 crc32fast = { path = "vendor/crc32fast-1.5.0" }
 vp9-parser = { path = "vendor/vp9-parser-0.3.2" }
 embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
+crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
