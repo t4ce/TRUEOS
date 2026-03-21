@@ -1,5 +1,7 @@
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec::Vec;
 /// Kernel-facing helpers for basic file I/O.
 ///
@@ -157,6 +159,81 @@ pub mod kfs {
     }
 }
 
+pub mod env {
+    use super::{BTreeMap, String, Vec};
+
+    #[derive(Clone)]
+    struct LaunchContext {
+        args: Vec<String>,
+        vars: BTreeMap<String, String>,
+    }
+
+    static CONTEXTS: spin::Mutex<BTreeMap<u32, Vec<LaunchContext>>> =
+        spin::Mutex::new(BTreeMap::new());
+
+    #[inline]
+    fn cpu_key() -> u32 {
+        crate::percpu::this_cpu().cpu_index()
+    }
+
+    pub fn with_launch_context<R>(
+        args: Vec<String>,
+        vars: BTreeMap<String, String>,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        let key = cpu_key();
+        {
+            let mut contexts = CONTEXTS.lock();
+            contexts
+                .entry(key)
+                .or_default()
+                .push(LaunchContext { args, vars });
+        }
+
+        let out = f();
+
+        let mut contexts = CONTEXTS.lock();
+        if let Some(stack) = contexts.get_mut(&key) {
+            let _ = stack.pop();
+            if stack.is_empty() {
+                contexts.remove(&key);
+            }
+        }
+
+        out
+    }
+
+    pub fn arg_count() -> usize {
+        let key = cpu_key();
+        let contexts = CONTEXTS.lock();
+        contexts
+            .get(&key)
+            .and_then(|stack| stack.last())
+            .map(|ctx| ctx.args.len())
+            .unwrap_or(0)
+    }
+
+    pub fn arg(index: usize) -> Option<String> {
+        let key = cpu_key();
+        let contexts = CONTEXTS.lock();
+        contexts
+            .get(&key)
+            .and_then(|stack| stack.last())
+            .and_then(|ctx| ctx.args.get(index))
+            .cloned()
+    }
+
+    pub fn var(key: &str) -> Option<String> {
+        let cpu = cpu_key();
+        let contexts = CONTEXTS.lock();
+        contexts
+            .get(&cpu)
+            .and_then(|stack| stack.last())
+            .and_then(|ctx| ctx.vars.get(key))
+            .cloned()
+    }
+}
+
 /// Console routing + C ABI entrypoints used by embedded C code (QuickJS etc).
 pub mod cabi {
     include!("cabi_codes.rs");
@@ -263,6 +340,43 @@ pub mod cabi {
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
         }
         bytes.len() as isize
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_env_args_count() -> usize {
+        crate::r::io::env::arg_count()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_env_arg(
+        index: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize {
+        let Some(arg) = crate::r::io::env::arg(index) else {
+            return -1;
+        };
+        copy_cabi_text(arg.as_bytes(), out_ptr, out_cap)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_env_var(
+        key_ptr: *const u8,
+        key_len: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize {
+        if key_ptr.is_null() {
+            return -1;
+        }
+        let key_bytes = core::slice::from_raw_parts(key_ptr, key_len);
+        let Ok(key) = core::str::from_utf8(key_bytes) else {
+            return -1;
+        };
+        let Some(value) = crate::r::io::env::var(key) else {
+            return -1;
+        };
+        copy_cabi_text(value.as_bytes(), out_ptr, out_cap)
     }
 
     #[unsafe(no_mangle)]
