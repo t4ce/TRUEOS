@@ -47,8 +47,11 @@ const EPT_PDPT_ENTRIES: usize = 4;
 const EPT_PD_ENTRIES: usize = 512;
 const GUEST_STACK_VA_BASE: u64 = 0x0000_0000_0040_0000;
 const GUEST_CODE_WINDOW_BYTES: usize = 64 * 1024;
+const GUEST_EXEC_TARGET_SPAN_BYTES: u64 = 2 * 1024 * 1024;
+const PAGE_SIZE_2M: u64 = 2 * 1024 * 1024;
 const PT_ENTRY_PRESENT: u64 = 1 << 0;
 const PT_ENTRY_WRITABLE: u64 = 1 << 1;
+const PT_ENTRY_LARGE_PAGE: u64 = 1 << 7;
 
 const VMCS_CTRL_PIN_BASED: u64 = 0x4000;
 const VMCS_CTRL_CPU_BASED: u64 = 0x4002;
@@ -141,6 +144,8 @@ const VMCS_HOST_IA32_EFER: u64 = 0x2C02;
 const VMCS_HOST_IA32_PERF_GLOBAL_CTRL: u64 = 0x2C04;
 
 const VMCS_EXIT_REASON: u64 = 0x4402;
+const VMCS_VMEXIT_INTERRUPTION_INFO: u64 = 0x4404;
+const VMCS_VMEXIT_INTERRUPTION_ERROR_CODE: u64 = 0x4406;
 const VMCS_VMEXIT_INSTRUCTION_LEN: u64 = 0x440C;
 const VMCS_EXIT_QUALIFICATION: u64 = 0x6400;
 const VMCS_VM_INSTRUCTION_ERROR: u64 = 0x4400;
@@ -723,6 +728,7 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
             "hv: vm1 reporting: first vmexit reason=0x{:X} qual=0x{:X} guest_rip=0x{:016X}",
             lr.exit_reason, lr.exit_qualification, lr.guest_rip
         ));
+        log_vmexit_interrupt_info("first");
         if (lr.exit_reason & 0xFFFF) == 0xC {
             match handle_hlt_exit_resume_once() {
                 Ok((lr2, rip_before, exit_len, rip_after)) => {
@@ -741,6 +747,7 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
                             "hv: vm1 reporting: second vmexit reason=0x{:X} qual=0x{:X} guest_rip=0x{:016X}",
                             lr2.exit_reason, lr2.exit_qualification, lr2.guest_rip
                         ));
+                        log_vmexit_interrupt_info("second");
                     }
                     lr = lr2;
                 }
@@ -1346,6 +1353,18 @@ fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> 
             GUEST_CODE_WINDOW_BYTES,
             PT_ENTRY_PRESENT,
         )?;
+        map_exec_huge_span_around(
+            core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
+            code_base,
+            code_base,
+            GUEST_EXEC_TARGET_SPAN_BYTES,
+        )?;
+        map_exec_huge_span_around(
+            core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
+            code_base,
+            guest::trueos_vm_guest_run as *const () as u64,
+            GUEST_EXEC_TARGET_SPAN_BYTES,
+        )?;
 
         hvlogf(format_args!(
             "hv: vm1 reporting: guest-cr3=0x{:016X} code=0x{:016X} stack=0x{:016X}",
@@ -1408,6 +1427,46 @@ fn map_region_4k(
 
 fn page_align_down(addr: u64) -> u64 {
     addr & !((PAGE_SIZE_4K as u64) - 1)
+}
+
+fn page_align_down_2m(addr: u64) -> u64 {
+    addr & !(PAGE_SIZE_2M - 1)
+}
+
+fn map_exec_huge_span_around(
+    pd: *mut [u64; 512],
+    anchor_va: u64,
+    target_va: u64,
+    span_bytes: u64,
+) -> Result<(), &'static str> {
+    if pml4_index(target_va) != pml4_index(anchor_va)
+        || pdpt_index(target_va) != pdpt_index(anchor_va)
+    {
+        return Err("guest exec range");
+    }
+
+    let start = page_align_down_2m(target_va.saturating_sub(span_bytes));
+    let end = page_align_down_2m(target_va.saturating_add(span_bytes));
+    let mut va = start;
+    while va <= end {
+        let pml4_ok = pml4_index(va) == pml4_index(anchor_va);
+        let pdpt_ok = pdpt_index(va) == pdpt_index(anchor_va);
+        if pml4_ok && pdpt_ok {
+            if let Some(phys) = kernel_va_to_pa(va) {
+                let idx = pd_index(va);
+                unsafe {
+                    if (*pd)[idx] == 0 {
+                        (*pd)[idx] =
+                            (phys & 0x000F_FFFF_FFE0_0000) | PT_ENTRY_PRESENT | PT_ENTRY_LARGE_PAGE;
+                    }
+                }
+            }
+        }
+        va = va
+            .checked_add(PAGE_SIZE_2M)
+            .ok_or("guest exec span overflow")?;
+    }
+    Ok(())
 }
 
 fn pml4_index(addr: u64) -> usize {
@@ -1693,6 +1752,52 @@ fn vmread(field: u64) -> Option<u64> {
         );
         if fail == 0 { Some(out) } else { None }
     }
+}
+
+fn decode_vmexit_int_type(kind: u64) -> &'static str {
+    match kind {
+        0 => "ext-int",
+        2 => "nmi",
+        3 => "hw-exc",
+        4 => "sw-int",
+        5 => "priv-sw-exc",
+        6 => "sw-exc",
+        7 => "other",
+        _ => "unknown",
+    }
+}
+
+fn log_vmexit_interrupt_info(label: &str) {
+    let Some(info) = vmread(VMCS_VMEXIT_INTERRUPTION_INFO) else {
+        return;
+    };
+
+    // Intel SDM VM-exit interruption-information field layout:
+    // bits 7:0 vector, bits 10:8 type, bit 11 error-code valid, bit 31 valid.
+    let valid = ((info >> 31) & 1) != 0;
+    if !valid {
+        return;
+    }
+
+    let vector = (info & 0xFF) as u8;
+    let kind = (info >> 8) & 0x7;
+    let err_valid = ((info >> 11) & 1) != 0;
+    let err = if err_valid {
+        vmread(VMCS_VMEXIT_INTERRUPTION_ERROR_CODE).unwrap_or(0)
+    } else {
+        0
+    };
+
+    hvlogf(format_args!(
+        "hv: vm1 reporting: {} vmexit intr vector={} type={}({}) err_valid={} err=0x{:X} intr_info=0x{:08X}",
+        label,
+        vector,
+        kind,
+        decode_vmexit_int_type(kind),
+        err_valid as u8,
+        err,
+        info as u32
+    ));
 }
 
 struct HvSyntheticHostState {

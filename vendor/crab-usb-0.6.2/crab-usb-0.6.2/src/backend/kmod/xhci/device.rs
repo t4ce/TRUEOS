@@ -467,7 +467,11 @@ impl Device {
                         ep_mut.set_max_burst_size(
                             ((desc.max_packet_size & 0x1800) >> 11).try_into().unwrap(),
                         );
-                        ep_mut.set_max_endpoint_service_time_interval_payload_low(4);
+                            // MaxESITPayload = (MaxBurst+1) * MaxPacketSize  (xHCI §6.2.3.8)
+                            let mps = desc.max_packet_size & 0x7FF;
+                            let burst = (desc.max_packet_size >> 11) & 0x3;
+                            let esit = ((burst + 1) as u16).saturating_mul(mps);
+                            ep_mut.set_max_endpoint_service_time_interval_payload_low(esit);
                     }
                     EndpointType::Bulk | EndpointType::Control => {
                         ep_mut.set_max_burst_size(0);

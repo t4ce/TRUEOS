@@ -15,6 +15,7 @@ mod shell2_ai;
 mod shell2_cmd;
 mod shell2_cmd_registry;
 mod shell2_qjs;
+mod shell2_qjs_c4;
 mod shell2_surf;
 #[allow(unused_imports)]
 pub(crate) use crate::shell2::backends::{

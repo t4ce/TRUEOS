@@ -49,6 +49,83 @@ pub struct HostedBrowserSurfaceState {
     pub scroll_x: u32,
     pub scroll_y: u32,
     pub regions: Vec<HostedBrowserRegion>,
+    pub scene_cmds: Vec<u8>,
+}
+
+const HOSTED_SCENE_CMD_DRAW_TEX_RECT_UV: u8 = 1;
+
+#[inline]
+fn hosted_scene_cmd_push_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+#[inline]
+fn hosted_scene_cmd_push_f32(out: &mut Vec<u8>, value: f32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn build_surface_scene_cmds(surface: &HostedBrowserSurfaceState) -> Vec<u8> {
+    let viewport_w = surface.viewport_width.max(1);
+    let viewport_h = surface.viewport_height.max(1);
+    let content_w = surface.content_width.max(viewport_w);
+    let content_h = surface.content_height.max(viewport_h);
+    let max_scroll_x = content_w.saturating_sub(viewport_w);
+    let max_scroll_y = content_h.saturating_sub(viewport_h);
+    let scroll_left = surface.scroll_x.min(max_scroll_x);
+    let scroll_top = surface
+        .content_top_y
+        .saturating_add(surface.scroll_y.min(max_scroll_y));
+    let scroll_bottom = scroll_top.saturating_add(viewport_h);
+
+    let mut out = Vec::new();
+    for region in &surface.regions {
+        let tex_id = region.tex_id;
+        if tex_id == 0 || region.width == 0 || region.height == 0 {
+            continue;
+        }
+
+        let doc_y = region.doc_y;
+        let doc_bottom = doc_y.saturating_add(region.height);
+        if doc_bottom <= scroll_top || doc_y >= scroll_bottom {
+            continue;
+        }
+
+        let src_top = core::cmp::max(doc_y, scroll_top);
+        let src_bottom = core::cmp::min(doc_bottom, scroll_bottom);
+        let src_height = src_bottom.saturating_sub(src_top);
+        if src_height == 0 || scroll_left >= region.width {
+            continue;
+        }
+
+        let src_offset_y = src_top.saturating_sub(doc_y);
+        let dest_y = src_top.saturating_sub(scroll_top);
+        let draw_width = core::cmp::min(viewport_w, region.width.saturating_sub(scroll_left));
+        if draw_width == 0 {
+            continue;
+        }
+
+        let width_f = region.width.max(1) as f32;
+        let height_f = region.height.max(1) as f32;
+        let u0 = (scroll_left as f32) / width_f;
+        let u1 = ((scroll_left + draw_width) as f32) / width_f;
+        let v0 = (src_offset_y as f32) / height_f;
+        let v1 = ((src_offset_y + src_height) as f32) / height_f;
+
+        out.push(HOSTED_SCENE_CMD_DRAW_TEX_RECT_UV);
+        hosted_scene_cmd_push_u32(&mut out, tex_id);
+        hosted_scene_cmd_push_f32(&mut out, 0.0);
+        hosted_scene_cmd_push_f32(&mut out, dest_y as f32);
+        hosted_scene_cmd_push_f32(&mut out, draw_width as f32);
+        hosted_scene_cmd_push_f32(&mut out, src_height as f32);
+        hosted_scene_cmd_push_f32(&mut out, u0);
+        hosted_scene_cmd_push_f32(&mut out, v0);
+        hosted_scene_cmd_push_f32(&mut out, u1);
+        hosted_scene_cmd_push_f32(&mut out, v1);
+        out.push(1);
+        out.push(255);
+    }
+
+    out
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -953,6 +1030,7 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
             .unwrap_or(0.0)
             .max(0.0) as u32,
         regions: Vec::new(),
+        scene_cmds: Vec::new(),
     };
 
     let regions = qjs::JS_GetPropertyStr(ctx, result, b"regions\0".as_ptr() as *const c_char);
@@ -987,6 +1065,8 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
     }
     qjs::js_free_value(ctx, regions);
     qjs::js_free_value(ctx, result);
+
+    next.scene_cmds = build_surface_scene_cmds(&next);
 
     with_browser_host_state_mut(browser_instance_id, |state| {
         let prev = state.hosted_surface_state.clone();
