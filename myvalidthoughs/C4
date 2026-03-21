@@ -47,3 +47,12 @@ Why this matters:
 We now have an explicit boundary contract in both lanes.
 qjs adapter shape is no longer “self-defined”; it is contract-aligned.
 This is exactly the architecture-first prep step you asked for before a fuller qjs↔C4 attempt.
+
+Yes. For backcolor mapping, the function/object path is now contract-driven.
+
+The contract is bumped to v4 in shell2_qjs_c4_contract.rs:4 and mirrored on the Java side in C4CoreContract.java:12. I added the richer token kinds the renderer actually needs for output coloring: braces, brackets, colon, arrow, plus function and async keywords.
+
+The qjs adapter now emits those richer contract tokens in shell2_qjs_c4.rs:797, and the backcolor renderer consumes contract token spans directly in shell2_qjs_c4.rs:1098. The old local structured-text scanner is gone. The live output path still enters through shell2_qjs.rs:412 and shell2_qjs.rs:459, but those now call the contract-token renderer, not a separate ad-hoc parse formatter.
+
+One precise caveat: primitive outputs like strings, numbers, booleans, null, and undefined are still styled directly in shell2_qjs_c4.rs:1133. That is intentional and not an old non-contract path. The richer v4 token results are now what drive the structured backcolor mapping.
+

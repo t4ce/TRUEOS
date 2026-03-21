@@ -608,9 +608,6 @@ pub fn set_hosted_viewport_for_browser(
     content_height: u32,
 ) -> bool {
     let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
-    if !browser_started(browser_instance_id) {
-        return false;
-    }
     let next = HostedViewportRequest {
         browser_instance_id,
         viewport_width: viewport_width.max(1),
@@ -629,6 +626,19 @@ pub fn set_hosted_viewport_for_browser(
     }
     with_browser_host_state_mut(browser_instance_id, |state| {
         state.pending_hosted_viewport = Some(next);
+        if state.hosted_surface_state.viewport_width == 0 {
+            state.hosted_surface_state.viewport_width = next.viewport_width;
+        }
+        if state.hosted_surface_state.viewport_height == 0 {
+            state.hosted_surface_state.viewport_height = next.viewport_height;
+        }
+        if state.hosted_surface_state.content_width == 0 {
+            state.hosted_surface_state.content_width = next.content_width.max(next.viewport_width);
+        }
+        if state.hosted_surface_state.content_height == 0 {
+            state.hosted_surface_state.content_height =
+                next.content_height.max(next.viewport_height);
+        }
     });
     true
 }
@@ -1112,6 +1122,50 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
     }
     qjs::js_free_value(ctx, regions);
     qjs::js_free_value(ctx, result);
+
+    let fallback_view = with_browser_host_state(browser_instance_id, |state| {
+        state
+            .pending_hosted_viewport
+            .or(state.applied_hosted_viewport)
+    });
+    if let Some(view) = fallback_view {
+        let fallback_viewport_w = view.viewport_width.max(1);
+        let fallback_viewport_h = view.viewport_height.max(1);
+        let fallback_content_w = view.content_width.max(fallback_viewport_w);
+        let fallback_content_h = view.content_height.max(fallback_viewport_h);
+        let boot_default_viewport = next.viewport_width == STATIC_BROWSER_VIEWPORT_W
+            && next.viewport_height == STATIC_BROWSER_VIEWPORT_H;
+
+        if boot_default_viewport
+            && (fallback_viewport_w != next.viewport_width
+                || fallback_viewport_h != next.viewport_height)
+        {
+            next.viewport_width = fallback_viewport_w;
+            next.viewport_height = fallback_viewport_h;
+            next.content_width = fallback_content_w;
+            next.content_height = fallback_content_h;
+        }
+
+        if next.viewport_width == 0 {
+            next.viewport_width = fallback_viewport_w;
+        }
+        if next.viewport_height == 0 {
+            next.viewport_height = fallback_viewport_h;
+        }
+        if next.content_width == 0 {
+            next.content_width = fallback_content_w.max(next.viewport_width.max(1));
+        }
+        if next.content_height == 0 {
+            next.content_height = fallback_content_h.max(next.viewport_height.max(1));
+        }
+    }
+
+    if next.content_width < next.viewport_width {
+        next.content_width = next.viewport_width;
+    }
+    if next.content_height < next.viewport_height {
+        next.content_height = next.viewport_height;
+    }
 
     next.scene_cmds = build_surface_scene_cmds(&next);
 

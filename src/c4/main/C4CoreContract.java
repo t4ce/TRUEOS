@@ -12,7 +12,7 @@ import java.util.List;
  * Keep this intentionally small and stable.
  */
 public final class C4CoreContract {
-    public static final int VERSION = 1;
+    public static final int VERSION = 4;
 
     public enum TokenKind {
         IDENT,
@@ -22,17 +22,25 @@ public final class C4CoreContract {
         FALSE,
         NULL,
         UNDEFINED,
+        FUNCTION,
+        ASYNC,
         LET,
         CONST,
         VAR,
         LPAR,
         RPAR,
+        LBRACE,
+        RBRACE,
+        LBRACKET,
+        RBRACKET,
         DOT,
         COMMA,
+        COLON,
         SEMI,
         ASSIGN,
         EQ,
         STRICT_EQ,
+        ARROW,
         PLUS,
         MINUS,
         STAR,
@@ -107,13 +115,13 @@ public final class C4CoreContract {
         }
     }
 
-    public static final class AnalysisSchemaV1 {
+    public static final class AnalysisSchemaV4 {
         public final int version;
         public final List<TokenRef> tokens;
         public final List<NodeRef> nodes;
         public final List<Diagnostic> diagnostics;
 
-        public AnalysisSchemaV1(
+        public AnalysisSchemaV4(
             int version,
             List<TokenRef> tokens,
             List<NodeRef> nodes,
@@ -125,8 +133,8 @@ public final class C4CoreContract {
             this.diagnostics = Collections.unmodifiableList(new ArrayList<Diagnostic>(diagnostics));
         }
 
-        public static AnalysisSchemaV1 empty() {
-            return new AnalysisSchemaV1(
+        public static AnalysisSchemaV4 empty() {
+            return new AnalysisSchemaV4(
                 VERSION,
                 Collections.<TokenRef>emptyList(),
                 Collections.<NodeRef>emptyList(),
