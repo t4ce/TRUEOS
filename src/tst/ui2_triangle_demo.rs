@@ -54,7 +54,7 @@ fn triangle_vertices(phase: f32) -> [RgbVertex; 3] {
     ]
 }
 
-fn render_triangle_frame(surface: &crate::v::ui2::Ui2SurfaceWindow, phase: f32) -> bool {
+fn render_triangle_frame(surface: &crate::r::ui2::Ui2SurfaceWindow, phase: f32) -> bool {
     let verts = triangle_vertices(phase);
     let bytes = unsafe {
         core::slice::from_raw_parts(verts.as_ptr() as *const u8, core::mem::size_of_val(&verts))
@@ -64,9 +64,9 @@ fn render_triangle_frame(surface: &crate::v::ui2::Ui2SurfaceWindow, phase: f32) 
 
 #[embassy_executor::task]
 pub async fn ui2_triangle_demo_task() {
-    let Some(surface) = crate::v::ui2::Ui2SurfaceWindow::new(
+    let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
         "Demo Triangle",
-        crate::v::ui2::Ui2Rect {
+        crate::r::ui2::Ui2Rect {
             x: UI2_TRIANGLE_WINDOW_X,
             y: UI2_TRIANGLE_WINDOW_Y,
             w: UI2_TRIANGLE_RT_W as f32,

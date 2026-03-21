@@ -46,17 +46,17 @@ fn trace_usize_dec(v: usize) {
 }
 
 fn read_file_sync(path: &[u8]) -> Result<Vec<u8>, i32> {
-    trueos_v::vfs::read_file(path)
+    v::vfs::read_file(path)
 }
 
 fn write_file_sync(path: &[u8], data: &[u8]) -> Result<(), i32> {
-    let handle = trueos_v::vfs::write_begin(path, data.len() as u64)?;
-    if let Err(rc) = trueos_v::vfs::write_chunk(handle, data) {
-        let _ = trueos_v::vfs::write_abort(handle);
+    let handle = v::vfs::write_begin(path, data.len() as u64)?;
+    if let Err(rc) = v::vfs::write_chunk(handle, data) {
+        let _ = v::vfs::write_abort(handle);
         return Err(rc);
     }
-    if let Err(rc) = trueos_v::vfs::write_finish(handle) {
-        let _ = trueos_v::vfs::write_abort(handle);
+    if let Err(rc) = v::vfs::write_finish(handle) {
+        let _ = v::vfs::write_abort(handle);
         return Err(rc);
     }
     Ok(())

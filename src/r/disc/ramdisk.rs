@@ -2,7 +2,7 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 use core::ptr;
 
 use crate::disc::block;
-use crate::v::disc::pmm::BigMem;
+use crate::r::disc::pmm::BigMem;
 
 pub struct RamdiskDevice {
     backing: BigMem,
@@ -179,10 +179,10 @@ pub async fn create_trueos_private(
     label: impl Into<String>,
 ) -> Result<block::DeviceHandle, TrueosPrivateError> {
     let disk = create_labeled(size_bytes, block_size, label).map_err(TrueosPrivateError::Create)?;
-    crate::v::fs::trueosfs::format_blank_force_async(disk)
+    crate::r::fs::trueosfs::format_blank_force_async(disk)
         .await
         .map_err(TrueosPrivateError::Format)?;
-    crate::v::fs::trueosfs::validate_private_medium_async(disk, 0)
+    crate::r::fs::trueosfs::validate_private_medium_async(disk, 0)
         .await
         .map_err(TrueosPrivateError::Validate)?;
     Ok(disk)
@@ -194,10 +194,10 @@ pub async fn create_trueos_public(
     label: impl Into<String>,
 ) -> Result<block::DeviceHandle, TrueosPublicError> {
     let disk = create_labeled(size_bytes, block_size, label).map_err(TrueosPublicError::Create)?;
-    crate::v::fs::trueosfs::format_blank_force_async(disk)
+    crate::r::fs::trueosfs::format_blank_force_async(disk)
         .await
         .map_err(TrueosPublicError::Format)?;
-    crate::v::fs::trueosfs::validate_public_medium_async(disk, 0)
+    crate::r::fs::trueosfs::validate_public_medium_async(disk, 0)
         .await
         .map_err(TrueosPublicError::Validate)?;
     Ok(disk)

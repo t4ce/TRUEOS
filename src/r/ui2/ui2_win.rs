@@ -247,7 +247,7 @@ impl Ui2SurfaceWindow {
             .into_iter()
             .flatten()
             .collect::<Vec<u8>>();
-        if !crate::v::io::cabi::queue_texture_rgba_image_upload_copy(
+        if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
             tex_id,
             width,
             height,
@@ -311,7 +311,7 @@ impl Ui2SurfaceWindow {
         } else {
             self.window_id
         };
-        if !crate::v::io::cabi::queue_render_rgb_triangles_to_texture_copy(
+        if !crate::r::io::cabi::queue_render_rgb_triangles_to_texture_copy(
             self.tex_id,
             clear_rgb,
             verts,
@@ -339,7 +339,7 @@ impl Ui2SurfaceWindow {
         } else {
             self.window_id
         };
-        if !crate::v::io::cabi::queue_render_mandelbrot_to_texture(
+        if !crate::r::io::cabi::queue_render_mandelbrot_to_texture(
             self.tex_id,
             ticks,
             tick_hz,
@@ -373,7 +373,7 @@ impl Ui2SurfaceWindow {
         } else {
             self.window_id
         };
-        if !crate::v::io::cabi::queue_texture_rgba_image_upload_copy(
+        if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
             self.tex_id,
             self.width,
             self.height,

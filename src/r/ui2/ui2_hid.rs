@@ -48,9 +48,9 @@ fn note_cursor_event_source(state: &mut Ui2State, event: &crate::usb2::hid::True
 
 fn note_keyboard_event_source(
     state: &mut Ui2State,
-    event: &crate::v::keyboard::TrueosKeyboardOutputEvent,
+    event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) {
-    if (event.flags & crate::v::keyboard::KEYBOARD_OUTPUT_FLAG_SYNTHETIC) == 0 {
+    if (event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_SYNTHETIC) == 0 {
         return;
     }
     state.synthetic_keyboard_event_count = state.synthetic_keyboard_event_count.wrapping_add(1);
@@ -411,36 +411,36 @@ fn keyboard_output_modifiers_to_browser_mask(modifiers: u8) -> u8 {
 }
 
 fn keyboard_output_key_name(
-    event: &crate::v::keyboard::TrueosKeyboardOutputEvent,
+    event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) -> Option<String> {
     let named = match event.key_code {
-        crate::v::keyboard::KEYBOARD_KEY_BACKSPACE => Some("Backspace"),
-        crate::v::keyboard::KEYBOARD_KEY_TAB => Some("Tab"),
-        crate::v::keyboard::KEYBOARD_KEY_ENTER => Some("Enter"),
-        crate::v::keyboard::KEYBOARD_KEY_ESCAPE => Some("Escape"),
-        crate::v::keyboard::KEYBOARD_KEY_SPACE => Some("Space"),
-        crate::v::keyboard::KEYBOARD_KEY_DELETE => Some("Delete"),
-        crate::v::keyboard::KEYBOARD_KEY_INSERT => Some("Insert"),
-        crate::v::keyboard::KEYBOARD_KEY_HOME => Some("Home"),
-        crate::v::keyboard::KEYBOARD_KEY_END => Some("End"),
-        crate::v::keyboard::KEYBOARD_KEY_PAGE_UP => Some("PageUp"),
-        crate::v::keyboard::KEYBOARD_KEY_PAGE_DOWN => Some("PageDown"),
-        crate::v::keyboard::KEYBOARD_KEY_ARROW_UP => Some("ArrowUp"),
-        crate::v::keyboard::KEYBOARD_KEY_ARROW_DOWN => Some("ArrowDown"),
-        crate::v::keyboard::KEYBOARD_KEY_ARROW_LEFT => Some("ArrowLeft"),
-        crate::v::keyboard::KEYBOARD_KEY_ARROW_RIGHT => Some("ArrowRight"),
-        crate::v::keyboard::KEYBOARD_KEY_F1 => Some("F1"),
-        crate::v::keyboard::KEYBOARD_KEY_F2 => Some("F2"),
-        crate::v::keyboard::KEYBOARD_KEY_F3 => Some("F3"),
-        crate::v::keyboard::KEYBOARD_KEY_F4 => Some("F4"),
-        crate::v::keyboard::KEYBOARD_KEY_F5 => Some("F5"),
-        crate::v::keyboard::KEYBOARD_KEY_F6 => Some("F6"),
-        crate::v::keyboard::KEYBOARD_KEY_F7 => Some("F7"),
-        crate::v::keyboard::KEYBOARD_KEY_F8 => Some("F8"),
-        crate::v::keyboard::KEYBOARD_KEY_F9 => Some("F9"),
-        crate::v::keyboard::KEYBOARD_KEY_F10 => Some("F10"),
-        crate::v::keyboard::KEYBOARD_KEY_F11 => Some("F11"),
-        crate::v::keyboard::KEYBOARD_KEY_F12 => Some("F12"),
+        crate::r::keyboard::KEYBOARD_KEY_BACKSPACE => Some("Backspace"),
+        crate::r::keyboard::KEYBOARD_KEY_TAB => Some("Tab"),
+        crate::r::keyboard::KEYBOARD_KEY_ENTER => Some("Enter"),
+        crate::r::keyboard::KEYBOARD_KEY_ESCAPE => Some("Escape"),
+        crate::r::keyboard::KEYBOARD_KEY_SPACE => Some("Space"),
+        crate::r::keyboard::KEYBOARD_KEY_DELETE => Some("Delete"),
+        crate::r::keyboard::KEYBOARD_KEY_INSERT => Some("Insert"),
+        crate::r::keyboard::KEYBOARD_KEY_HOME => Some("Home"),
+        crate::r::keyboard::KEYBOARD_KEY_END => Some("End"),
+        crate::r::keyboard::KEYBOARD_KEY_PAGE_UP => Some("PageUp"),
+        crate::r::keyboard::KEYBOARD_KEY_PAGE_DOWN => Some("PageDown"),
+        crate::r::keyboard::KEYBOARD_KEY_ARROW_UP => Some("ArrowUp"),
+        crate::r::keyboard::KEYBOARD_KEY_ARROW_DOWN => Some("ArrowDown"),
+        crate::r::keyboard::KEYBOARD_KEY_ARROW_LEFT => Some("ArrowLeft"),
+        crate::r::keyboard::KEYBOARD_KEY_ARROW_RIGHT => Some("ArrowRight"),
+        crate::r::keyboard::KEYBOARD_KEY_F1 => Some("F1"),
+        crate::r::keyboard::KEYBOARD_KEY_F2 => Some("F2"),
+        crate::r::keyboard::KEYBOARD_KEY_F3 => Some("F3"),
+        crate::r::keyboard::KEYBOARD_KEY_F4 => Some("F4"),
+        crate::r::keyboard::KEYBOARD_KEY_F5 => Some("F5"),
+        crate::r::keyboard::KEYBOARD_KEY_F6 => Some("F6"),
+        crate::r::keyboard::KEYBOARD_KEY_F7 => Some("F7"),
+        crate::r::keyboard::KEYBOARD_KEY_F8 => Some("F8"),
+        crate::r::keyboard::KEYBOARD_KEY_F9 => Some("F9"),
+        crate::r::keyboard::KEYBOARD_KEY_F10 => Some("F10"),
+        crate::r::keyboard::KEYBOARD_KEY_F11 => Some("F11"),
+        crate::r::keyboard::KEYBOARD_KEY_F12 => Some("F12"),
         _ => None,
     };
     if let Some(name) = named {
@@ -454,10 +454,10 @@ fn keyboard_output_key_name(
 }
 
 fn browser_keyboard_event_from_output(
-    event: crate::v::keyboard::TrueosKeyboardOutputEvent,
+    event: crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) -> Option<UiHostedKeyboardEvent> {
     match event.kind {
-        crate::v::keyboard::KEYBOARD_OUTPUT_KIND_TEXT => {
+        crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT => {
             let utf8_len = (event.utf8_len as usize).min(event.utf8.len());
             if utf8_len == 0 {
                 return char::from_u32(event.codepoint).map(|ch| {
@@ -474,7 +474,7 @@ fn browser_keyboard_event_from_output(
                 text: String::from(text),
             })
         }
-        crate::v::keyboard::KEYBOARD_OUTPUT_KIND_KEY => {
+        crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY => {
             let key = keyboard_output_key_name(&event)?;
             Some(UiHostedKeyboardEvent::Key {
                 key,
@@ -488,10 +488,10 @@ fn browser_keyboard_event_from_output(
 pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
     let selected_window_id = selected_window_id_for_keyboard(state);
     let mut raw_events =
-        [crate::v::keyboard::TrueosKeyboardOutputEvent::default(); UI2_KEYBOARD_EVENT_BATCH];
+        [crate::r::keyboard::TrueosKeyboardOutputEvent::default(); UI2_KEYBOARD_EVENT_BATCH];
     loop {
         let (next_seq, dropped, wrote) =
-            crate::v::keyboard::read_output_events_since(state.keyboard_read_seq, &mut raw_events);
+            crate::r::keyboard::read_output_events_since(state.keyboard_read_seq, &mut raw_events);
         if dropped != 0 {
             crate::log!(
                 "ui2: keyboard-event-drop read_seq={} dropped={}\n",

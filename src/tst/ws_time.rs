@@ -6,9 +6,9 @@ use embassy_time::{Duration, Timer};
 use embedded_websocket::{
     WebSocketKey, WebSocketReceiveMessageType, WebSocketSendMessageType, WebSocketServer,
 };
-use trueos_v::vnet as api;
+use v::vnet as api;
 
-use crate::v::net::VNet;
+use crate::r::net::VNet;
 
 const WS_TIME_TCP_PORT: u16 = 56_765;
 const WS_TIME_PATH: &str = "/time";
@@ -85,7 +85,7 @@ fn is_valid_ws_upgrade(req: &str) -> bool {
 }
 
 fn current_unix_seconds_and_source() -> (u64, &'static str) {
-    if let Some(ts) = crate::v::net::ntp::current_unix_seconds() {
+    if let Some(ts) = crate::r::net::ntp::current_unix_seconds() {
         return (ts, "ntp");
     }
     if let Some(ts) = crate::time::unix_time_seconds() {

@@ -85,7 +85,7 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
 
         let info = disk.info();
         log("update: waiting for net");
-        crate::v::readiness::wait_for(crate::v::readiness::NET_CONFIGURED).await;
+        crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
 
         log(alloc::format!(
             "update: target id={} ({}) blocks={} bs={} writable={} label={:?}",
@@ -98,26 +98,26 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         )
         .as_str());
 
-        let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(disk).await;
+        let (status, err) = crate::r::disc::detect::detect_physical_disk_detail(disk).await;
         log(alloc::format!(
             "update: target status={}{}",
             status.short(),
             match (&status, err) {
-                (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                (crate::r::disc::detect::DiscStatus::Unknown, Some(e)) => {
                     alloc::format!(" (err={:?})", e)
                 }
                 _ => alloc::string::String::new(),
             }
         )
         .as_str());
-        if !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
+        if !matches!(status, crate::r::disc::detect::DiscStatus::Trueos { .. }) {
             log("update: install before update");
             return;
         }
 
         log(alloc::format!("update: download {}", ISO_URL).as_str());
 
-        let payload = match crate::v::net::https::fetch_https_body_progress_async(
+        let payload = match crate::r::net::https::fetch_https_body_progress_async(
             ISO_URL,
             120_000,
             128 * 1024 * 1024,
@@ -216,6 +216,6 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
 
 struct NoopProgress;
 
-impl crate::v::net::https::FetchProgress for NoopProgress {
+impl crate::r::net::https::FetchProgress for NoopProgress {
     fn on_progress(&mut self, _received: usize, _total: Option<usize>) {}
 }

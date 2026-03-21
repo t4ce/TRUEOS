@@ -51,7 +51,7 @@ mod tst_ui2_triangle_demo;
 mod tst_ws_time;
 mod turbo;
 mod usb2;
-mod v;
+mod r;
 mod vga;
 mod wait;
 mod x2apic;
@@ -59,8 +59,8 @@ mod z7;
 
 use embassy_executor::{Spawner, raw::Executor};
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
-pub use v::pat as pattern;
-pub use v::{io, path};
+pub use r::pat as pattern;
+pub use r::{io, path};
 
 fn qjs_font_atlas_small_provider() -> trueos_qjs::FontAtlasView<'static> {
     let atlas = crate::gfx::text::font_atlas_small_view();
@@ -220,7 +220,7 @@ fn _loop(
         .filter(|c| c.lapic_id != percpu::this_cpu().lapic_id())
         .for_each(|c| c.goto_address.write(cpu::ap_start));
 
-    if let Err(e) = _spawner.spawn(crate::v::spawn_service::spawn_service_task(_spawner)) {
+    if let Err(e) = _spawner.spawn(crate::r::spawn_service::spawn_service_task(_spawner)) {
         crate::log!("spawn-svc: spawn failed: {:?}\n", e);
     }
 

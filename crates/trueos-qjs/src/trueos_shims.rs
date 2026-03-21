@@ -4,7 +4,7 @@ use core::ffi::CStr;
 use core::ffi::{c_char, c_int, c_long, c_void};
 use core::ptr;
 
-pub use trueos_v::vcabi::{
+pub use v::vcabi::{
     trueos_cabi_fs_read_file, trueos_cabi_fs_remove, trueos_cabi_fs_write_abort,
     trueos_cabi_fs_write_begin, trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish,
     trueos_cabi_gfx_capture_screenshot_data_url, trueos_cabi_hid_keyboard_read,
@@ -23,13 +23,13 @@ pub use trueos_v::vcabi::{
     trueos_cabi_trueosfs_primary_html_tree, trueos_cabi_uart1_shell_write, trueos_cabi_write,
     TrueosHidCursorEvent, TrueosHidKeyboardSample, TrueosMouseState,
 };
-pub use trueos_v::vgfx::capture_screenshot_data_url as gfx_capture_screenshot_data_url;
-pub use trueos_v::vshell::{
+pub use v::vgfx::capture_screenshot_data_url as gfx_capture_screenshot_data_url;
+pub use v::vshell::{
     shell_command_registry_json, shell1_submit_input, shell2_print_line,
     shell2_print_targeted_line, shell_qjs_init, shell_qjs_read, shell_qjs_read_byte,
     shell_qjs_write, shell_qjs_write_byte, uart1_shell_write,
 };
-pub use trueos_v::vsys::{log_error, log_info, write_log_stream};
+pub use v::vsys::{log_error, log_info, write_log_stream};
 
 unsafe extern "C" {
     fn trueos_cabi_boot_timestamp_secs() -> u64;
@@ -47,7 +47,7 @@ fn log_bytes(bytes: &[u8]) {
 
 #[inline]
 pub fn input_write_keyboard_text(slot_id: u32, bytes: &[u8], flags: u32) -> i32 {
-    match trueos_v::vinput::write_keyboard_text(slot_id, bytes, flags) {
+    match v::vinput::write_keyboard_text(slot_id, bytes, flags) {
         Ok(()) => 0,
         Err(rc) => rc,
     }
@@ -61,7 +61,7 @@ pub fn input_write_keyboard_key(
     modifiers: u32,
     flags: u32,
 ) -> i32 {
-    match trueos_v::vinput::write_keyboard_key(slot_id, codepoint, key_code, modifiers, flags) {
+    match v::vinput::write_keyboard_key(slot_id, codepoint, key_code, modifiers, flags) {
         Ok(()) => 0,
         Err(rc) => rc,
     }

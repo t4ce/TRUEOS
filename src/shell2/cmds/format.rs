@@ -20,7 +20,7 @@ pub(crate) fn print_format_disk_table(io: &'static dyn ShellBackend2) {
 fn print_target_summary(io: &'static dyn ShellBackend2, disk: DeviceHandle, prefix: &str) {
     let info = disk.info();
     let status = crate::wait::spawn_and_wait_local(async move {
-        crate::v::disc::detect::detect_physical_disk(disk).await
+        crate::r::disc::detect::detect_physical_disk(disk).await
     });
 
     let msg = alloc::format!(
@@ -139,7 +139,7 @@ async fn format_command_task(target: MatrixTarget, disk: DeviceHandle) {
 
         log("format: creating 1 partition + TRUEOSFS...");
         let parts = [crate::disc::install::gpt::GptPartitionSpec {
-            type_guid: crate::v::disc::partition::GPT_TYPE_LINUX_FILESYSTEM_BYTES,
+            type_guid: crate::r::disc::partition::GPT_TYPE_LINUX_FILESYSTEM_BYTES,
             name: "TRUEOS",
             size: crate::disc::install::gpt::PartitionSize::Remaining,
             attributes: 0,
@@ -149,19 +149,19 @@ async fn format_command_task(target: MatrixTarget, disk: DeviceHandle) {
         match crate::disc::install::gpt::write_gpt_layout_with_log(disk, &parts, &mut step_log)
             .await
         {
-            Ok(_) => match crate::v::disc::partition::register_gpt_partitions(disk).await {
+            Ok(_) => match crate::r::disc::partition::register_gpt_partitions(disk).await {
                 Ok(reg) => {
                     if let Some(first) = reg.first() {
                         match block::device_handle(first.id) {
                             Some(part_handle) => {
-                                match crate::v::fs::trueosfs::format_blank_partition_async(
+                                match crate::r::fs::trueosfs::format_blank_partition_async(
                                     part_handle,
                                 )
                                 .await
                                 {
                                     Ok(()) => {
                                         let (status, err) =
-                                            crate::v::disc::detect::detect_physical_disk_detail(
+                                            crate::r::disc::detect::detect_physical_disk_detail(
                                                 disk,
                                             )
                                             .await;
@@ -170,7 +170,7 @@ async fn format_command_task(target: MatrixTarget, disk: DeviceHandle) {
                                             status.short(),
                                             match (&status, err) {
                                                 (
-                                                    crate::v::disc::detect::DiscStatus::Unknown,
+                                                    crate::r::disc::detect::DiscStatus::Unknown,
                                                     Some(err),
                                                 ) => alloc::format!("; err={:?}", err),
                                                 _ => String::new(),

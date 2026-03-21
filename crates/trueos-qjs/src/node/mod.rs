@@ -158,7 +158,7 @@ unsafe extern "C" fn trueos_ntp_unix_seconds_js(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    let secs = trueos_v::vclock::ntp_current_unix_seconds();
+    let secs = v::vclock::ntp_current_unix_seconds();
     qjs::JS_NewFloat64(ctx, secs as f64)
 }
 
@@ -168,7 +168,7 @@ unsafe extern "C" fn trueos_kernel_date_day_month_year_js(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    let bytes: Vec<u8> = trueos_v::vclock::kernel_date_day_month_year()
+    let bytes: Vec<u8> = v::vclock::kernel_date_day_month_year()
         .map(|value| value.into_bytes())
         .unwrap_or_default();
     qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
@@ -378,7 +378,7 @@ unsafe extern "C" fn trueos_fetch_text(
     } else {
         let tmp_path = next_fetch_tmp_path();
         let tmp_path_bytes = tmp_path.as_bytes();
-        let _ = trueos_v::vfs::remove(tmp_path_bytes);
+        let _ = v::vfs::remove(tmp_path_bytes);
 
         let start_res = if is_post {
             qjs::async_ops::start_net_post_json_to_file(url, tmp_path_bytes, body, bearer)
@@ -884,7 +884,7 @@ fn log_bytes(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    trueos_v::vsys::write_stream(1, bytes);
+    v::vsys::write_stream(1, bytes);
 }
 
 #[inline]

@@ -4,7 +4,7 @@ use core::ffi::c_char;
 use core::ffi::c_int;
 
 use trueos_qjs as qjs;
-use trueos_v::{vgfx, vshell};
+use v::{vgfx, vshell};
 
 const LED_TOOL_MAX_PAYLOAD_BYTES: usize = 2048;
 
@@ -80,7 +80,7 @@ unsafe extern "C" fn trueos_browser_navigate_submit_js(
     } else {
         trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
     };
-    let op_id = crate::v::browser_net::submit_navigation(browser_instance_id, url);
+    let op_id = crate::r::browser_net::submit_navigation(browser_instance_id, url);
     qjs::JS_FreeCString(ctx, url_c);
     js_int32(op_id as i32)
 }
@@ -96,7 +96,7 @@ unsafe extern "C" fn trueos_browser_navigate_status_js(
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let op_id = js_to_i32(ctx, args[0]).unwrap_or(0).max(0) as u32;
-    let Some(status) = crate::v::browser_net::status(op_id) else {
+    let Some(status) = crate::r::browser_net::status(op_id) else {
         return js_null();
     };
 
@@ -135,9 +135,9 @@ unsafe extern "C" fn trueos_browser_navigate_status_js(
         b"done\0".as_ptr() as *const c_char,
         js_bool(matches!(
             status.state,
-            crate::v::browser_net::BrowserNetState::Succeeded
-                | crate::v::browser_net::BrowserNetState::Failed
-                | crate::v::browser_net::BrowserNetState::Superseded
+            crate::r::browser_net::BrowserNetState::Succeeded
+                | crate::r::browser_net::BrowserNetState::Failed
+                | crate::r::browser_net::BrowserNetState::Superseded
         )),
     );
     let _ = qjs::JS_SetPropertyStr(
@@ -146,8 +146,8 @@ unsafe extern "C" fn trueos_browser_navigate_status_js(
         b"loading\0".as_ptr() as *const c_char,
         js_bool(matches!(
             status.state,
-            crate::v::browser_net::BrowserNetState::Queued
-                | crate::v::browser_net::BrowserNetState::Loading
+            crate::r::browser_net::BrowserNetState::Queued
+                | crate::r::browser_net::BrowserNetState::Loading
         )),
     );
     let _ = qjs::JS_SetPropertyStr(
@@ -156,7 +156,7 @@ unsafe extern "C" fn trueos_browser_navigate_status_js(
         b"failed\0".as_ptr() as *const c_char,
         js_bool(matches!(
             status.state,
-            crate::v::browser_net::BrowserNetState::Failed
+            crate::r::browser_net::BrowserNetState::Failed
         )),
     );
     let _ = qjs::JS_SetPropertyStr(
@@ -165,7 +165,7 @@ unsafe extern "C" fn trueos_browser_navigate_status_js(
         b"superseded\0".as_ptr() as *const c_char,
         js_bool(matches!(
             status.state,
-            crate::v::browser_net::BrowserNetState::Superseded
+            crate::r::browser_net::BrowserNetState::Superseded
         )),
     );
     js_set_string_prop(ctx, obj, b"state\0", state);

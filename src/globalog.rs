@@ -39,7 +39,7 @@ pub async fn persist_once_task() {
     }
 
     loop {
-        let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+        let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
             Timer::after(EmbassyDuration::from_millis(RETRY_MS)).await;
             continue;
         };
@@ -62,19 +62,19 @@ async fn persist_snapshot(
     const CHUNK_BYTES: usize = 64 * 1024;
 
     let Some(handle) =
-        crate::v::fs::trueosfs::file_write_begin_async(disk, PATH, bytes.len() as u64).await?
+        crate::r::fs::trueosfs::file_write_begin_async(disk, PATH, bytes.len() as u64).await?
     else {
         return Err(crate::disc::block::Error::Io);
     };
 
     for chunk in bytes.chunks(CHUNK_BYTES) {
-        if let Err(e) = crate::v::fs::trueosfs::file_write_chunk_async(handle, chunk).await {
-            let _ = crate::v::fs::trueosfs::file_write_abort_async(handle).await;
+        if let Err(e) = crate::r::fs::trueosfs::file_write_chunk_async(handle, chunk).await {
+            let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
             return Err(e);
         }
     }
 
-    crate::v::fs::trueosfs::file_write_finish_async(handle).await
+    crate::r::fs::trueosfs::file_write_finish_async(handle).await
 }
 
 mod debugcon {
