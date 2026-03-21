@@ -14,7 +14,6 @@ use crate::wait::WaitQueue;
 
 const VM_STORE_PROBE_PATH: &str = "vm/.probe";
 const VM_STORE_MANIFEST_PREFIX: &str = "vm/committed-";
-const VM_STORE_PENDING_PREFIX: &str = "vm/pending-";
 const VM_STORE_OBJECT_PREFIX: &str = "vm/object-";
 const VM_STORE_REPL_PORT: u16 = 32123;
 const VM_STORE_REPL_CHUNK: usize = 1200;
@@ -287,6 +286,10 @@ pub fn load_bytes(vm_id: u8) -> Result<Vec<u8>, VmStoreError> {
         VmStoreResponse::Loaded(bytes) => Ok(bytes),
         VmStoreResponse::Saved(_) => Err(VmStoreError::Read(block::Error::Io)),
     }
+}
+
+pub fn committed_vm_count() -> usize {
+    VM_STORE_COMMITTED_SEQS.lock().len()
 }
 
 fn enqueue(kind: RequestKind) -> Result<Arc<Completion>, VmStoreError> {
@@ -703,19 +706,17 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
     match kind {
         RequestKind::Save(vm_id, bytes) => {
             let seq = VM_STORE_OBJECT_SEQ.fetch_add(1, Ordering::Relaxed).max(1);
-            let pending_path = object_path(VM_STORE_PENDING_PREFIX, seq);
             let committed_path = object_path(VM_STORE_OBJECT_PREFIX, seq);
             crate::log!(
-                "hv-store: save queued id={} vm_id={} bytes={} pending={} committed={}\n",
+                "hv-store: save queued id={} vm_id={} bytes={} committed={}\n",
                 id,
                 vm_id,
                 bytes.len(),
-                pending_path.as_str(),
                 committed_path.as_str()
             );
             let Some(handle) = crate::r::fs::trueosfs::file_write_begin_async(
                 disk,
-                pending_path.as_str(),
+                committed_path.as_str(),
                 bytes.len() as u64,
             )
             .await
@@ -733,17 +734,6 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
             crate::r::fs::trueosfs::file_write_finish_async(handle)
                 .await
                 .map_err(VmStoreError::Write)?;
-
-            let committed = crate::r::fs::trueosfs::file_rename_async(
-                disk,
-                pending_path.as_str(),
-                committed_path.as_str(),
-            )
-            .await
-            .map_err(VmStoreError::Write)?;
-            if !committed {
-                return Err(VmStoreError::Write(block::Error::Io));
-            }
 
             write_committed_manifest(disk, vm_id, seq)
                 .await

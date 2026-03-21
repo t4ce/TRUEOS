@@ -46,6 +46,8 @@ const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR
 const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
 const TRUEKEY_VENDOR_ID: u16 = 0x303A;
 const TRUEKEY_PRODUCT_ID: u16 = 0x1001;
+const HYPERX_VENDOR_ID: u16 = 0x0951;
+const HYPERX_PRODUCT_ID: u16 = 0x16A4;
 const TRUEKEY_STREAM_CHUNK: usize = 512;
 const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 
@@ -177,6 +179,11 @@ fn uac_sync_type_name(sync_type: u8) -> &'static str {
         3 => "synchronous",
         _ => "unknown",
     }
+}
+
+#[inline]
+fn is_hyperx_target(vendor_id: u16, product_id: u16) -> bool {
+    vendor_id == HYPERX_VENDOR_ID && product_id == HYPERX_PRODUCT_ID
 }
 
 #[derive(Copy, Clone)]
@@ -1254,18 +1261,29 @@ async fn configure_uac_playback_controls(
         feature.supports_volume
     );
 
+    let hyperx_master_only = is_hyperx_target(vendor_id, product_id);
+    if hyperx_master_only {
+        crate::log!(
+            "crabusb: target {:04X}:{:04X} audio control policy=master-only (skip ch1/ch2 probes)\n",
+            vendor_id,
+            product_id
+        );
+    }
+
     if feature.supports_mute {
         try_set_uac_fu_mute(device, vendor_id, product_id, feature, 0, false).await;
-        try_set_uac_fu_mute(device, vendor_id, product_id, feature, 1, false).await;
-        try_set_uac_fu_mute(device, vendor_id, product_id, feature, 2, false).await;
+        if !hyperx_master_only {
+            try_set_uac_fu_mute(device, vendor_id, product_id, feature, 1, false).await;
+            try_set_uac_fu_mute(device, vendor_id, product_id, feature, 2, false).await;
+        }
     }
 
     if feature.supports_volume {
         try_set_uac_fu_volume(device, vendor_id, product_id, feature, 0, 0).await;
     }
 
-    // Some headsets misreport volume capability bits; probe common channels anyway.
-    if !feature.supports_volume {
+    // Some devices misreport volume capability bits; probe common channels unless policy is master-only.
+    if !feature.supports_volume && !hyperx_master_only {
         crate::log!(
             "crabusb: target {:04X}:{:04X} audio volume probe fu={} ac_if={} (descriptor says unsupported)\n",
             vendor_id,
@@ -1273,9 +1291,9 @@ async fn configure_uac_playback_controls(
             feature.unit_id,
             feature.ac_interface
         );
+        try_set_uac_fu_volume(device, vendor_id, product_id, feature, 1, 0).await;
+        try_set_uac_fu_volume(device, vendor_id, product_id, feature, 2, 0).await;
     }
-    try_set_uac_fu_volume(device, vendor_id, product_id, feature, 1, 0).await;
-    try_set_uac_fu_volume(device, vendor_id, product_id, feature, 2, 0).await;
 }
 
 fn find_iso_out_endpoint(
@@ -1342,6 +1360,25 @@ fn fill_audio_packet(
             *sine_phase -= TAU;
         }
     }
+}
+
+fn audio_packet_level_probe(packet: &[u8]) -> (i16, u32) {
+    let mut peak = 0i16;
+    let mut sum_abs = 0u32;
+    let mut samples = 0u32;
+
+    for smp in packet.chunks_exact(2) {
+        let v = i16::from_le_bytes([smp[0], smp[1]]);
+        let a = v.unsigned_abs() as u32;
+        if a > peak as u32 {
+            peak = i16::try_from(a).unwrap_or(i16::MAX);
+        }
+        sum_abs = sum_abs.saturating_add(a);
+        samples = samples.saturating_add(1);
+    }
+
+    let mean_abs = if samples == 0 { 0 } else { sum_abs / samples };
+    (peak, mean_abs)
 }
 
 fn choose_audio_packet_bytes(frame_bytes: usize, endpoint_payload_limit: usize) -> usize {
@@ -1606,7 +1643,7 @@ async fn stream_target_audio(
     endpoint: IsoOutEndpoint,
     stream_target: Option<UacStreamTarget>,
 ) {
-    const AUDIO_WARMUP_US: usize = 200_000;
+    const AUDIO_WARMUP_US: usize = 0;
 
     let endpoint_payload_limit = stream_target
         .map(|target| usize::from(target.max_packet_payload.max(AUDIO_FRAME_BYTES as u16)))
@@ -1633,6 +1670,10 @@ async fn stream_target_audio(
     let mut sine_phase = 0.0f32;
     let mut logged_probe = false;
     let mut silent_packets_remaining = AUDIO_WARMUP_US / packet_duration_us;
+    let mut submit_count = 0u64;
+    let mut submitted_bytes = 0u64;
+    let mut zero_submit_count = 0u64;
+    let mut short_submit_count = 0u64;
 
     let endpoint_kind = match device.get_endpoint(endpoint.address).await {
         Ok(kind) => kind,
@@ -1708,8 +1749,33 @@ async fn stream_target_audio(
             .await
         {
             Ok(sent) => {
+                submit_count = submit_count.wrapping_add(1);
                 if sent == 0 {
+                    zero_submit_count = zero_submit_count.wrapping_add(1);
                     Timer::after(EmbassyDuration::from_millis(1)).await;
+                } else {
+                    submitted_bytes = submitted_bytes.saturating_add(sent as u64);
+                    if sent != urb_bytes {
+                        short_submit_count = short_submit_count.wrapping_add(1);
+                    }
+                }
+
+                if submit_count <= 4 || submit_count.is_multiple_of(1024) {
+                    let first_packet = &packet_batch[..packet_bytes];
+                    let (peak, mean_abs) = audio_packet_level_probe(first_packet);
+                    crate::log!(
+                        "crabusb: audio heartbeat {:04X}:{:04X} submits={} bytes={} last_sent={} zero_submits={} short_submits={} phase={:.3} first_peak={} first_mean_abs={}\n",
+                        vendor_id,
+                        product_id,
+                        submit_count,
+                        submitted_bytes,
+                        sent,
+                        zero_submit_count,
+                        short_submit_count,
+                        sine_phase,
+                        peak,
+                        mean_abs
+                    );
                 }
             }
             Err(err) => {
