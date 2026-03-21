@@ -338,7 +338,7 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn push_function_key_label(&self, out: &mut AllocString, text: &str) {
-        let styled = alloc::format!("{}", ecma48::style(text).bold().fg(FUNCTION_KEY_RGB));
+        let styled = alloc::format!("{}", ecma48::style(text).fg(FUNCTION_KEY_RGB));
         out.push_str(styled.as_str());
     }
 
@@ -356,7 +356,8 @@ impl<'a> AlignedWriter<'a> {
             let styled = alloc::format!("{}", ecma48::style(text).bold().fg(STATUS_SELECTED_RGB));
             out.push_str(styled.as_str());
         } else {
-            out.push_str(text);
+            let styled = alloc::format!("{}", ecma48::style(text).bold());
+            out.push_str(styled.as_str());
         }
     }
 
@@ -639,6 +640,7 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
         .and_then(|rest| rest.strip_suffix('§'))
         .is_some()
     {
+        shell2_qjs::free_slot(submitted);
         let _ = matrix::free_slot(submitted);
     } else {
         let requested = submitted.strip_prefix('§').unwrap_or("");
@@ -760,7 +762,8 @@ fn handle_submit(
             HandleSubmitResult::None
         }
         ShellMode2::Qjs => {
-            shell2_qjs::submit(io, qjs_mode, submitted);
+            let target = matrix_target_for_backend(io);
+            shell2_qjs::submit(spawner, io, &target, qjs_mode, submitted);
             HandleSubmitResult::None
         }
         ShellMode2::Ai => {

@@ -96,7 +96,7 @@ pub(crate) unsafe fn drain_pending_jobs(
     true
 }
 
-pub(crate) unsafe fn pump_runtime_once(
+pub unsafe fn pump_runtime_once(
     rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
     label: &str,

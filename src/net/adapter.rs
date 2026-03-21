@@ -2278,13 +2278,15 @@ impl NetService {
         }
 
         if total_sent != 0 {
-            crate::log!(
-                "net: sendtcp flush owner={} handle={} sent={} queued_left={}\n",
-                owner,
-                handle.0,
-                total_sent,
-                self.records[idx].tcp_tx.len()
-            );
+            if crate::logflag::NET_LOG_TCP_SEND_FLUSH {
+                crate::log!(
+                    "net: sendtcp flush owner={} handle={} sent={} queued_left={}\n",
+                    owner,
+                    handle.0,
+                    total_sent,
+                    self.records[idx].tcp_tx.len()
+                );
+            }
             let _ = push_event(
                 owner,
                 NetEvent::TcpSent {

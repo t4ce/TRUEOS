@@ -117,9 +117,6 @@ impl KernelOp for TrueosCrabUsbKernel {
     }
 }
 
-const HYPERX_VENDOR_ID: u16 = 0x0951;
-const HYPERX_PRODUCT_ID: u16 = 0x16A4;
-
 #[derive(Copy, Clone)]
 struct PreferredAlt {
     interface_number: u8,
@@ -255,6 +252,16 @@ fn pick_hid_boot_targets(
     }
 
     out
+}
+
+fn descriptor_has_audio_candidate(dev_info: &crab_usb::DeviceInfo) -> bool {
+    dev_info.interface_descriptors().any(|iface| {
+        iface.class == 0x01
+            || iface.endpoints.iter().any(|ep| {
+                ep.transfer_type == usb_if::descriptor::EndpointType::Isochronous
+                    && ep.direction == usb_if::transfer::Direction::Out
+            })
+    })
 }
 
 fn register_active_hid_stream(stream: ActiveHidStream) -> bool {
@@ -1150,9 +1157,6 @@ async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::Devic
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
-    if vendor_id != HYPERX_VENDOR_ID || product_id != HYPERX_PRODUCT_ID {
-        return;
-    }
 
     let mut device = match host.open_device(dev_info).await {
         Ok(device) => device,
@@ -1169,11 +1173,6 @@ async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::Devic
 
     let configs = device.configurations().to_vec();
     let Some(preferred) = pick_preferred_alt(&configs) else {
-        crate::log!(
-            "crabusb: target {:04X}:{:04X} no preferred interface found\n",
-            vendor_id,
-            product_id
-        );
         return;
     };
     let Some(endpoint) = find_iso_out_endpoint(
@@ -1222,7 +1221,7 @@ async fn log_opened_device_graph(
     dev_idx: usize,
     dev_info: &crab_usb::DeviceInfo,
 ) {
-    let mut device = match host.open_device(dev_info).await {
+    let device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
             let desc = dev_info.descriptor();
@@ -1265,12 +1264,11 @@ async fn log_opened_device_graph(
             target.protocol
         );
     }
-    if vendor_id == HYPERX_VENDOR_ID
-        && product_id == HYPERX_PRODUCT_ID
-        && let Some(preferred) = pick_preferred_alt(&configs)
+    if let Some(preferred) = pick_preferred_alt(&configs)
+        && (preferred.has_iso_out || preferred.class == 0x01)
     {
         crate::log!(
-            "crabusb: target {:04X}:{:04X} preferred if#{} alt={} class={:02X} subclass={:02X} proto={:02X} iso_out={}\n",
+            "crabusb: audio-candidate {:04X}:{:04X} if#{} alt={} class={:02X} subclass={:02X} proto={:02X} iso_out={}\n",
             vendor_id,
             product_id,
             preferred.interface_number,
@@ -1340,7 +1338,9 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: u32
                         desc.protocol
                     );
                     maybe_start_truekey_bridge(host, dev).await;
-                    maybe_start_target_audio(host, dev).await;
+                    if descriptor_has_audio_candidate(dev) {
+                        maybe_start_target_audio(host, dev).await;
+                    }
                     let _ =
                         super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id)
                             .await;
@@ -1402,9 +1402,8 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                     maybe_start_truekey_bridge(host, dev).await;
                     continue;
                 }
-                if desc.vendor_id == HYPERX_VENDOR_ID && desc.product_id == HYPERX_PRODUCT_ID {
+                if descriptor_has_audio_candidate(dev) {
                     maybe_start_target_audio(host, dev).await;
-                    continue;
                 }
                 if super::hid::leds::maybe_start_led_controller(
                     host,
