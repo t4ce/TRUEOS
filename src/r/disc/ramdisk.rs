@@ -166,10 +166,14 @@ impl block::BlockDevice for RamdiskDevice {
 fn create_labeled(
     size_bytes: u64,
     block_size: u32,
+    user_visible: bool,
     label: impl Into<String>,
 ) -> Result<block::DeviceHandle, block::Error> {
     let dev = RamdiskDevice::new(size_bytes, block_size)?;
-    let desc = block::DeviceDescriptor::new(block::DeviceKind::Ramdisk).with_label(label);
+    let mut desc = block::DeviceDescriptor::new(block::DeviceKind::Ramdisk).with_label(label);
+    if !user_visible {
+        desc = desc.mark_internal_hidden();
+    }
     Ok(block::register_device(desc, dev))
 }
 
@@ -178,7 +182,8 @@ pub async fn create_trueos_private(
     block_size: u32,
     label: impl Into<String>,
 ) -> Result<block::DeviceHandle, TrueosPrivateError> {
-    let disk = create_labeled(size_bytes, block_size, label).map_err(TrueosPrivateError::Create)?;
+    let disk =
+        create_labeled(size_bytes, block_size, false, label).map_err(TrueosPrivateError::Create)?;
     crate::r::fs::trueosfs::format_blank_force_async(disk)
         .await
         .map_err(TrueosPrivateError::Format)?;
@@ -193,7 +198,8 @@ pub async fn create_trueos_public(
     block_size: u32,
     label: impl Into<String>,
 ) -> Result<block::DeviceHandle, TrueosPublicError> {
-    let disk = create_labeled(size_bytes, block_size, label).map_err(TrueosPublicError::Create)?;
+    let disk =
+        create_labeled(size_bytes, block_size, true, label).map_err(TrueosPublicError::Create)?;
     crate::r::fs::trueosfs::format_blank_force_async(disk)
         .await
         .map_err(TrueosPublicError::Format)?;

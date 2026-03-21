@@ -223,6 +223,7 @@ pub struct DeviceInfo {
     pub kind: DeviceKind,
     pub parent: Option<DiscId>,
     pub label: Option<String>,
+    pub user_visible: bool,
     pub pci: Option<PciAddress>,
     pub block_size: u32,
     pub block_count: u64,
@@ -244,6 +245,7 @@ pub struct DeviceDescriptor {
     pub kind: DeviceKind,
     pub label: Option<String>,
     pub parent: Option<DiscId>,
+    pub user_visible: bool,
     pub pci: Option<PciAddress>,
     pub serial: Option<DeviceSerial>,
     pub read_only: bool,
@@ -255,6 +257,7 @@ impl DeviceDescriptor {
             kind,
             label: None,
             parent: None,
+            user_visible: true,
             pci: None,
             serial: None,
             read_only: false,
@@ -268,6 +271,11 @@ impl DeviceDescriptor {
 
     pub fn with_parent(mut self, parent: DiscId) -> Self {
         self.parent = Some(parent);
+        self
+    }
+
+    pub fn mark_internal_hidden(mut self) -> Self {
+        self.user_visible = false;
         self
     }
 
@@ -473,6 +481,7 @@ where
         kind: descriptor.kind,
         parent: descriptor.parent,
         label: descriptor.label.clone(),
+        user_visible: descriptor.user_visible,
         pci: descriptor.pci,
         block_size,
         block_count,

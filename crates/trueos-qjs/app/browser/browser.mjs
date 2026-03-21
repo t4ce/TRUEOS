@@ -1661,6 +1661,26 @@ function paintToCurrentTarget(options = null) {
   });
 }
 
+function refreshHostedRegions() {
+  if (!HOSTED_BY_UI2) {
+    return false;
+  }
+  const { vw, vh } = computeViewport();
+  const doc = browserCanRenderScene ? ensureDoc(vw) : null;
+  const { contentH } = doc
+    ? clampScrollForDoc(doc, vw, vh)
+    : { contentH: vh };
+  return browserUi.refreshHostedRegions({
+    hostedByUi2: HOSTED_BY_UI2,
+    browserCanRenderScene,
+    doc,
+    vw,
+    vh,
+    scrollY,
+    contentH,
+  });
+}
+
 function pushBrowserAction(event) {
   browserActionSeq += 1;
   const next = {
@@ -1747,7 +1767,13 @@ async function loadUrlIntoBrowser(url, request = null) {
     return { ok: 0, handled: 0, reason: 'missing-url' };
   }
   if (typeof runtime.host.__trueosPrewarmUrl === 'function') {
-    try { runtime.host.__trueosPrewarmUrl(resolved); } catch (_) {}
+    if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
+      Promise.resolve().then(() => {
+        try { runtime.host.__trueosPrewarmUrl(resolved); } catch (_) {}
+      }).catch(() => {});
+    } else {
+      try { runtime.host.__trueosPrewarmUrl(resolved); } catch (_) {}
+    }
   }
   setCurrentPageUrl(resolved);
   const hook = runtime.host.__trueosBrowserNavigate;
@@ -1998,6 +2024,7 @@ function resolveInteractiveTarget(target = null) {
 }
 
 function startAutoPaint() {
+  if (HOSTED_BY_UI2) return;
   const host = runtime.host;
   if (AUTO_PAINT_MS <= 0) return;
   if (typeof host.setInterval !== 'function') return;
@@ -2012,6 +2039,9 @@ runtime.host.__trueosBrowser = {
   paint,
   paintToCurrentTarget(options = null) {
     return paintToCurrentTarget(options);
+  },
+  refreshHostedRegions() {
+    return refreshHostedRegions();
   },
   setHtml,
   setNodeHtml,
@@ -2123,6 +2153,7 @@ runtime.host.__trueosBrowser = {
       ? clampScrollForDoc(doc, vw, vh)
       : { contentW: vw, contentH: vh, contentTopY: 0 };
     return browserUi.getSurfaceState({
+      hostedByUi2: HOSTED_BY_UI2,
       browserCanRenderScene,
       doc,
       vw,

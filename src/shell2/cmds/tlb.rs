@@ -1249,7 +1249,10 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
     writeln!(out).unwrap();
 
     writeln!(out, "=== Block Devices ===").unwrap();
-    let devices = crate::disc::block::devices();
+    let devices: alloc::vec::Vec<_> = crate::disc::block::devices()
+        .into_iter()
+        .filter(|dev| dev.user_visible)
+        .collect();
     if devices.is_empty() {
         writeln!(out, "No block devices found").unwrap();
     } else {

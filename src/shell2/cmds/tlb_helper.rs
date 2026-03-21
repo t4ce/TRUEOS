@@ -185,16 +185,22 @@ pub(crate) fn parse_disc_id_raw(s: &str) -> Option<u32> {
     s.parse::<u32>().ok()
 }
 
+#[inline]
+fn is_user_visible_top_level(handle: &DeviceHandle) -> bool {
+    let info = handle.info();
+    info.parent.is_none() && info.user_visible
+}
+
 pub(crate) fn select_top_level_disk(raw_id: u32) -> Option<DeviceHandle> {
     block::device_handles()
         .into_iter()
-        .find(|handle| handle.parent().is_none() && handle.id().raw() == raw_id)
+        .find(|handle| is_user_visible_top_level(handle) && handle.id().raw() == raw_id)
 }
 
 pub(crate) fn collect_top_level_disk_choices() -> Vec<DiskChoice> {
     let mut out = Vec::new();
     for handle in block::device_handles().into_iter() {
-        if handle.parent().is_some() {
+        if !is_user_visible_top_level(&handle) {
             continue;
         }
         let (status, err) = crate::wait::spawn_and_wait_local(async move {

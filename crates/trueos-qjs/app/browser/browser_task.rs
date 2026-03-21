@@ -1034,6 +1034,24 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
     let Some(browser) = browser_api_value(ctx) else {
         return;
     };
+
+    let refresh = qjs::JS_GetPropertyStr(
+        ctx,
+        browser,
+        b"refreshHostedRegions\0".as_ptr() as *const c_char,
+    );
+    if !refresh.is_exception()
+        && refresh.tag != qjs::JS_TAG_UNDEFINED
+        && refresh.tag != qjs::JS_TAG_NULL
+    {
+        let refresh_result = qjs::JS_Call(ctx, refresh, browser, 0, core::ptr::null());
+        if refresh_result.is_exception() {
+            qjs::qjs_diag::dump_last_exception(ctx, "browser refreshHostedRegions");
+        }
+        qjs::js_free_value(ctx, refresh_result);
+    }
+    qjs::js_free_value(ctx, refresh);
+
     let func = qjs::JS_GetPropertyStr(ctx, browser, b"getSurfaceState\0".as_ptr() as *const c_char);
     if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
         qjs::js_free_value(ctx, func);

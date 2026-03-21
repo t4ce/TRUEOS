@@ -81,11 +81,12 @@ pub(crate) fn try_parse(
             s.feature_control_vmx_outside_smx as u8
         ));
         io.write_fmt(format_args!(
-            "hv: vm1 running={} starting={} marker_seen={} guest_module={}\r\n",
+            "hv: vm1 running={} starting={} marker_seen={} guest_module={} stored_vms={}\r\n",
             s.vm1_running as u8,
             s.vm1_starting as u8,
             s.vm1_marker_seen as u8,
-            s.guest_module_present as u8
+            s.guest_module_present as u8,
+            s.stored_vm_count
         ));
         return ParseOutcome::Handled;
     }
