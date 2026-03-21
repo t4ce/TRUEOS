@@ -1,6 +1,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::v;
+use crate::vmcall;
 
 static STAGE: AtomicU32 = AtomicU32::new(0);
 
@@ -39,7 +40,7 @@ pub fn dump(tag: &str) {
 }
 
 fn write_raw(bytes: &[u8]) {
-    let _ = v::vshell::uart1_shell_write(bytes);
+    let _ = vmcall::net_tcp_write(bytes);
     v::vsys::write_stream(2, bytes);
 }
 
