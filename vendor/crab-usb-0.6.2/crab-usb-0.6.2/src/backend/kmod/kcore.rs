@@ -95,6 +95,7 @@ impl Core {
                     "crabusb/kcore: calling new_addressed_device root_port={} port={} speed={:?}",
                     info.root_port_id, info.port_id, info.port_speed
                 );
+                let reopen_info = info.clone();
                 let device = self.backend.new_addressed_device(info).await?;
 
                 let device_id = device.id();
@@ -148,8 +149,9 @@ impl Core {
 
                     self.inited_devices.insert(device_id, device);
 
-                    let device_info = Box::new(DeviceInfo::new(device_id, desc, &configs))
-                        as Box<dyn DeviceInfoOp>;
+                    let device_info =
+                        Box::new(DeviceInfo::new(device_id, desc, &configs, reopen_info))
+                            as Box<dyn DeviceInfoOp>;
 
                     info!("crabusb/kcore: device id={} kept as leaf device", device_id);
                     out.push(device_info);
@@ -213,9 +215,23 @@ impl BackendOp for Core {
         dev: &'a dyn crate::backend::ty::DeviceInfoOp,
     ) -> LocalBoxFuture<'a, Result<Box<dyn DeviceOp>, USBError>> {
         async {
-            let device = self.inited_devices.remove(&dev.id()).unwrap_or_else(|| {
+            let device = if let Some(device) = self.inited_devices.remove(&dev.id()) {
+                device
+            } else if let Some(dev_info) = (dev as &dyn core::any::Any).downcast_ref::<DeviceInfo>()
+            {
+                info!(
+                    "crabusb/kcore: reopening consumed leaf device id={} root_port={} port={} speed={:?}",
+                    dev_info.id,
+                    dev_info.addr_info.root_port_id,
+                    dev_info.addr_info.port_id,
+                    dev_info.addr_info.port_speed
+                );
+                self.backend
+                    .new_addressed_device(dev_info.addr_info.clone())
+                    .await?
+            } else {
                 panic!("Device id {} not found in inited_devices", dev.id());
-            });
+            };
 
             Ok(device)
         }
@@ -232,14 +248,21 @@ pub struct DeviceInfo {
     id: usize,
     desc: DeviceDescriptor,
     config_desc: Vec<ConfigurationDescriptor>,
+    addr_info: crate::backend::kmod::DeviceAddressInfo,
 }
 
 impl DeviceInfo {
-    pub fn new(id: usize, desc: DeviceDescriptor, config_desc: &[ConfigurationDescriptor]) -> Self {
+    pub fn new(
+        id: usize,
+        desc: DeviceDescriptor,
+        config_desc: &[ConfigurationDescriptor],
+        addr_info: crate::backend::kmod::DeviceAddressInfo,
+    ) -> Self {
         Self {
             id,
             desc,
             config_desc: config_desc.to_vec(),
+            addr_info,
         }
     }
 }

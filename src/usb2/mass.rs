@@ -19,6 +19,132 @@ const BOT_IO_TIMEOUT_MS: u64 = 500;
 const BOT_RECOVERY_SETTLE_MS: u64 = 25;
 
 #[derive(Copy, Clone, Debug)]
+pub(crate) struct MassProbeConcept {
+    pub name: &'static str,
+    pub settle_after_claim_ms: u64,
+    pub settle_after_open_ms: u64,
+    pub pre_bot_reset: bool,
+    pub pre_reset_bulk_out: bool,
+    pub pre_reset_bulk_in: bool,
+    pub reset_halted_bulk_in: bool,
+    pub recover_on_first_failure: bool,
+    pub reset_bulk_in_on_data_failure: bool,
+}
+
+pub(crate) const MASS_PROBE_CONCEPTS: [MassProbeConcept; 10] = [
+    MassProbeConcept {
+        name: "fresh-plain",
+        settle_after_claim_ms: 0,
+        settle_after_open_ms: 0,
+        pre_bot_reset: false,
+        pre_reset_bulk_out: false,
+        pre_reset_bulk_in: false,
+        reset_halted_bulk_in: false,
+        recover_on_first_failure: false,
+        reset_bulk_in_on_data_failure: false,
+    },
+    MassProbeConcept {
+        name: "fresh-settle-10ms",
+        settle_after_claim_ms: 10,
+        settle_after_open_ms: 10,
+        pre_bot_reset: false,
+        pre_reset_bulk_out: false,
+        pre_reset_bulk_in: false,
+        reset_halted_bulk_in: false,
+        recover_on_first_failure: false,
+        reset_bulk_in_on_data_failure: false,
+    },
+    MassProbeConcept {
+        name: "bot-reset-first",
+        settle_after_claim_ms: 0,
+        settle_after_open_ms: 10,
+        pre_bot_reset: true,
+        pre_reset_bulk_out: false,
+        pre_reset_bulk_in: false,
+        reset_halted_bulk_in: false,
+        recover_on_first_failure: false,
+        reset_bulk_in_on_data_failure: false,
+    },
+    MassProbeConcept {
+        name: "repair-halted-in",
+        settle_after_claim_ms: 0,
+        settle_after_open_ms: 0,
+        pre_bot_reset: false,
+        pre_reset_bulk_out: false,
+        pre_reset_bulk_in: false,
+        reset_halted_bulk_in: true,
+        recover_on_first_failure: false,
+        reset_bulk_in_on_data_failure: false,
+    },
+    MassProbeConcept {
+        name: "repair-both-preflight",
+        settle_after_claim_ms: 0,
+        settle_after_open_ms: 10,
+        pre_bot_reset: false,
+        pre_reset_bulk_out: true,
+        pre_reset_bulk_in: true,
+        reset_halted_bulk_in: false,
+        recover_on_first_failure: false,
+        reset_bulk_in_on_data_failure: false,
+    },
+    MassProbeConcept {
+        name: "plain-plus-recovery",
+        settle_after_claim_ms: 0,
+        settle_after_open_ms: 0,
+        pre_bot_reset: false,
+        pre_reset_bulk_out: false,
+        pre_reset_bulk_in: false,
+        reset_halted_bulk_in: false,
+        recover_on_first_failure: true,
+        reset_bulk_in_on_data_failure: false,
+    },
+    MassProbeConcept {
+        name: "repair-in-plus-recovery",
+        settle_after_claim_ms: 0,
+        settle_after_open_ms: 0,
+        pre_bot_reset: false,
+        pre_reset_bulk_out: false,
+        pre_reset_bulk_in: false,
+        reset_halted_bulk_in: true,
+        recover_on_first_failure: true,
+        reset_bulk_in_on_data_failure: true,
+    },
+    MassProbeConcept {
+        name: "bot-reset-plus-recovery",
+        settle_after_claim_ms: 10,
+        settle_after_open_ms: 10,
+        pre_bot_reset: true,
+        pre_reset_bulk_out: false,
+        pre_reset_bulk_in: false,
+        reset_halted_bulk_in: true,
+        recover_on_first_failure: true,
+        reset_bulk_in_on_data_failure: true,
+    },
+    MassProbeConcept {
+        name: "repair-both-plus-recovery",
+        settle_after_claim_ms: 10,
+        settle_after_open_ms: 10,
+        pre_bot_reset: false,
+        pre_reset_bulk_out: true,
+        pre_reset_bulk_in: true,
+        reset_halted_bulk_in: true,
+        recover_on_first_failure: true,
+        reset_bulk_in_on_data_failure: true,
+    },
+    MassProbeConcept {
+        name: "slow-path",
+        settle_after_claim_ms: 25,
+        settle_after_open_ms: 25,
+        pre_bot_reset: true,
+        pre_reset_bulk_out: true,
+        pre_reset_bulk_in: true,
+        reset_halted_bulk_in: true,
+        recover_on_first_failure: true,
+        reset_bulk_in_on_data_failure: true,
+    },
+];
+
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct MassTarget {
     pub configuration_value: u8,
     pub interface_number: u8,
@@ -275,10 +401,10 @@ fn log_xhci_mass_endpoint_state(
     bulk_out_ep: u8,
     bulk_in_ep: u8,
     reason: &'static str,
-) {
+) -> Option<u32> {
     let Some(ctrl) = super::discover_first_controller() else {
         crate::log!("crabusb: xhci {} no controller\n", reason);
-        return;
+        return None;
     };
 
     let mmio = ctrl.mmio_base.as_ptr() as *const u8;
@@ -293,7 +419,7 @@ fn log_xhci_mass_endpoint_state(
     let dcbaap = read_mmio_u64(operational, 0x30) & !0x3Fu64;
     if dcbaap == 0 {
         crate::log!("crabusb: xhci {} dcbaap=0\n", reason);
-        return;
+        return None;
     }
 
     let dcbaa_virt = crate::phys::phys_to_virt(dcbaap as usize) as *const u64;
@@ -305,7 +431,7 @@ fn log_xhci_mass_endpoint_state(
             slot_id,
             dcbaap
         );
-        return;
+        return None;
     }
 
     let out_ctx = crate::phys::phys_to_virt(slot_ctx_phys as usize) as *const u8;
@@ -326,9 +452,9 @@ fn log_xhci_mass_endpoint_state(
     log_endpoint_context("bulk-out", unsafe {
         out_ctx.add(bulk_out_dci * context_size)
     });
-    log_endpoint_context("bulk-in", unsafe {
-        out_ctx.add(bulk_in_dci * context_size)
-    });
+    let bulk_in_ctx = unsafe { out_ctx.add(bulk_in_dci * context_size) };
+    log_endpoint_context("bulk-in", bulk_in_ctx);
+    Some(unsafe { read_unaligned(bulk_in_ctx as *const u32) } & 0x7)
 }
 
 async fn read_and_validate_csw(
@@ -407,16 +533,49 @@ async fn bot_command_in(
 
     let mut got = 0usize;
     for _ in 0..BOT_IO_RETRIES {
-        got = with_timeout_or_none(bulk_in.submit_and_wait(data), BOT_IO_TIMEOUT_MS)
-            .await
-            .ok_or(MassProbeError::Transport("data-timeout"))?
-            .map_err(|_| MassProbeError::Transport("data-in"))?;
+        let Some(result) =
+            with_timeout_or_none(bulk_in.submit_and_wait(data), BOT_IO_TIMEOUT_MS).await
+        else {
+            log_transport_debug("data-timeout");
+            return Err(MassProbeError::Transport("data-timeout"));
+        };
+        got = result.map_err(|_| {
+            log_transport_debug("data-in");
+            MassProbeError::Transport("data-in")
+        })?;
         if got != 0 {
             break;
         }
     }
     read_and_validate_csw(bulk_in, cmd, tag).await?;
     Ok(got)
+}
+
+async fn xhci_reset_mass_endpoint(
+    device: &mut crab_usb::Device,
+    slot_id: u8,
+    bulk_out_ep: u8,
+    bulk_in_ep: u8,
+    ep: u8,
+    stage: &'static str,
+) {
+    crate::log!("crabusb: mass xhci reset stage={} ep=0x{:02X}\n", stage, ep);
+    match device.debug_reset_endpoint(ep, false).await {
+        Ok(()) => {
+            let _ = log_xhci_mass_endpoint_state(
+                slot_id,
+                bulk_out_ep,
+                bulk_in_ep,
+                "post-reset-endpoint",
+            );
+        }
+        Err(err) => crate::log!(
+            "crabusb: mass xhci reset stage={} ep=0x{:02X} failed: {:?}\n",
+            stage,
+            ep,
+            err
+        ),
+    }
 }
 
 async fn bot_recovery_before_inquiry(
@@ -544,6 +703,7 @@ pub(crate) async fn probe_mass_bot(
     interface_number: u8,
     bulk_out_ep: u8,
     bulk_in_ep: u8,
+    concept: MassProbeConcept,
 ) -> Result<MassProbeInfo, MassProbeError> {
     let mut max_lun_buf = [0u8; 1];
     let max_lun = match device
@@ -568,7 +728,53 @@ pub(crate) async fn probe_mass_bot(
     let lun = 0u8;
     let mut inquiry = [0u8; 36];
     let inquiry_cdb = [0x12, 0, 0, 0, inquiry.len() as u8, 0];
-    log_xhci_mass_endpoint_state(device.slot_id(), bulk_out_ep, bulk_in_ep, "pre-inquiry");
+    if concept.pre_bot_reset {
+        crate::log!(
+            "crabusb: mass concept={} pre-bot-reset if#{}\n",
+            concept.name,
+            interface_number
+        );
+        bot_recovery_before_inquiry(device, interface_number, bulk_out_ep, bulk_in_ep).await?;
+    }
+    if concept.pre_reset_bulk_out {
+        xhci_reset_mass_endpoint(
+            device,
+            device.slot_id(),
+            bulk_out_ep,
+            bulk_in_ep,
+            bulk_out_ep,
+            "preflight-bulk-out",
+        )
+        .await;
+    }
+    if concept.pre_reset_bulk_in {
+        xhci_reset_mass_endpoint(
+            device,
+            device.slot_id(),
+            bulk_out_ep,
+            bulk_in_ep,
+            bulk_in_ep,
+            "preflight-bulk-in",
+        )
+        .await;
+    }
+    let bulk_in_state =
+        log_xhci_mass_endpoint_state(device.slot_id(), bulk_out_ep, bulk_in_ep, "pre-inquiry");
+    if concept.reset_halted_bulk_in && bulk_in_state == Some(2) {
+        crate::log!(
+            "crabusb: mass pre-inquiry bulk-in halted; issuing xhci Reset Endpoint ep=0x{:02X}\n",
+            bulk_in_ep
+        );
+        xhci_reset_mass_endpoint(
+            device,
+            device.slot_id(),
+            bulk_out_ep,
+            bulk_in_ep,
+            bulk_in_ep,
+            "pre-inquiry",
+        )
+        .await;
+    }
     let inquiry_read = match bot_command_in(
         bulk_out,
         bulk_in,
@@ -582,6 +788,26 @@ pub(crate) async fn probe_mass_bot(
     {
         Ok(read) => read,
         Err(first_err) => {
+            if concept.reset_bulk_in_on_data_failure
+                && matches!(
+                    first_err,
+                    MassProbeError::Transport("data-in")
+                        | MassProbeError::Transport("data-timeout")
+                )
+            {
+                xhci_reset_mass_endpoint(
+                    device,
+                    device.slot_id(),
+                    bulk_out_ep,
+                    bulk_in_ep,
+                    bulk_in_ep,
+                    "inquiry-data-fail",
+                )
+                .await;
+            }
+            if !concept.recover_on_first_failure {
+                return Err(first_err);
+            }
             crate::log!(
                 "crabusb: mass inquiry initial attempt failed: {:?}; applying BOT recovery\n",
                 first_err
