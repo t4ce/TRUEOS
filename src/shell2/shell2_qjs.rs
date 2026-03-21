@@ -408,7 +408,8 @@ fn submit_repl(
 
     if let Some(text) = text {
         if !text.is_empty() && text != "undefined" {
-            let styled = shell2_qjs_c4::format_result_text(text.as_str(), analysis.hint);
+            let styled =
+                shell2_qjs_c4::format_js_value_pretty(text.as_str(), analysis.hint).unwrap_or(text);
             let line = alloc::format!("qjs repl => {}", styled);
             print_target_line(target, line.as_str());
             if let Some(summary) = shell2_qjs_c4::format_symbol_summary(analysis) {
@@ -454,7 +455,8 @@ fn submit_eval(target: &MatrixTarget, source: &str, analysis: &shell2_qjs_c4::An
 
     if let Some(text) = text {
         if !text.is_empty() && text != "undefined" {
-            let styled = shell2_qjs_c4::format_result_text(text.as_str(), analysis.hint);
+            let styled =
+                shell2_qjs_c4::format_js_value_pretty(text.as_str(), analysis.hint).unwrap_or(text);
             let line = alloc::format!("qjs eval => {}", styled);
             print_target_line(target, line.as_str());
             if let Some(summary) = shell2_qjs_c4::format_symbol_summary(analysis) {

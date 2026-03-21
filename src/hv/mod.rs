@@ -47,10 +47,11 @@ const EPT_PDPT_ENTRIES: usize = 4;
 const EPT_PD_ENTRIES: usize = 512;
 const GUEST_STACK_VA_BASE: u64 = 0x0000_0000_0040_0000;
 const GUEST_CODE_WINDOW_BYTES: usize = 64 * 1024;
+const GUEST_HIGH_IMAGE_PT_COUNT: usize = 16;
+const GUEST_SNAPSHOT_PAGE_COUNT: usize = 7 + GUEST_HIGH_IMAGE_PT_COUNT;
 const PAGE_SIZE_2M: u64 = 2 * 1024 * 1024;
 const PT_ENTRY_PRESENT: u64 = 1 << 0;
 const PT_ENTRY_WRITABLE: u64 = 1 << 1;
-const PT_ENTRY_LARGE_PAGE: u64 = 1 << 7;
 
 const VMCS_CTRL_PIN_BASED: u64 = 0x4000;
 const VMCS_CTRL_CPU_BASED: u64 = 0x4002;
@@ -130,6 +131,8 @@ const VMCS_GUEST_DR7: u64 = 0x681A;
 const VMCS_GUEST_RSP: u64 = 0x681C;
 const VMCS_GUEST_RIP: u64 = 0x681E;
 const VMCS_GUEST_RFLAGS: u64 = 0x6820;
+const VMCS_GUEST_LINEAR_ADDRESS: u64 = 0x640A;
+const VMCS_GUEST_PHYSICAL_ADDRESS: u64 = 0x2400;
 const VMCS_GUEST_PENDING_DBG: u64 = 0x6822;
 const VMCS_GUEST_SYSENTER_ESP: u64 = 0x6824;
 const VMCS_GUEST_SYSENTER_EIP: u64 = 0x6826;
@@ -192,7 +195,6 @@ static mut VMXON_REGION: VmxPage = VmxPage([0u8; VMX_PAGE_SIZE]);
 static mut VMCS_REGION: VmxPage = VmxPage([0u8; VMX_PAGE_SIZE]);
 
 unsafe extern "C" {
-    static __text_start: u8;
     static kernel_end: u8;
 }
 
@@ -216,6 +218,8 @@ static mut GUEST_LOW_PD: GuestPage = GuestPage([0u64; 512]);
 static mut GUEST_STACK_PT: GuestPage = GuestPage([0u64; 512]);
 static mut GUEST_HIGH_PDPT: GuestPage = GuestPage([0u64; 512]);
 static mut GUEST_HIGH_PD: GuestPage = GuestPage([0u64; 512]);
+static mut GUEST_IMAGE_PTS: [GuestPage; GUEST_HIGH_IMAGE_PT_COUNT] =
+    [GuestPage([0u64; 512]); GUEST_HIGH_IMAGE_PT_COUNT];
 static mut GUEST_CODE_PT: GuestPage = GuestPage([0u64; 512]);
 static mut HV_HOST_GDT: [u64; 8] = [0u64; 8];
 static mut HV_HOST_TSS: [u8; 104] = [0u8; 104];
@@ -1294,6 +1298,9 @@ fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> 
         zero_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0));
         zero_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0));
         zero_guest_page(core::ptr::addr_of_mut!(GUEST_CODE_PT.0));
+        for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
+            zero_guest_page(core::ptr::addr_of_mut!(GUEST_IMAGE_PTS[i].0));
+        }
 
         let pml4_pa =
             kernel_va_to_pa(core::ptr::addr_of!(GUEST_PML4.0) as u64).ok_or("guest pml4 pa")?;
@@ -1356,7 +1363,7 @@ fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> 
             code_pt_base,
             kernel_va_to_pa(code_pt_base).ok_or("guest code pa")?,
             PAGE_SIZE_2M as usize,
-            PT_ENTRY_PRESENT,
+            PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
         )?;
         map_guest_kernel_image(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), code_pt_base)?;
 
@@ -1435,17 +1442,19 @@ fn page_align_up_2m(addr: u64) -> u64 {
     }
 }
 
-fn kernel_image_start_va() -> u64 {
-    page_align_down_2m(unsafe { core::ptr::addr_of!(__text_start) as u64 })
+fn kernel_image_start_va() -> Option<u64> {
+    let (virt_base, _) = crate::limine::executable_address_bases()?;
+    Some(virt_base)
 }
 
 fn kernel_image_end_va() -> u64 {
-    page_align_up_2m(unsafe { core::ptr::addr_of!(kernel_end) as u64 })
+    unsafe { core::ptr::addr_of!(kernel_end) as u64 }
 }
 
 fn map_guest_kernel_image(pd: *mut [u64; 512], code_pt_base: u64) -> Result<(), &'static str> {
-    let start = kernel_image_start_va();
+    let start = kernel_image_start_va().ok_or("guest kernel image base")?;
     let end = kernel_image_end_va();
+    let start_chunk_base = page_align_down_2m(start);
     if pml4_index(start) != pml4_index(code_pt_base)
         || pdpt_index(start) != pdpt_index(code_pt_base)
         || pml4_index(end.saturating_sub(1)) != pml4_index(code_pt_base)
@@ -1454,16 +1463,30 @@ fn map_guest_kernel_image(pd: *mut [u64; 512], code_pt_base: u64) -> Result<(), 
         return Err("guest kernel image range");
     }
 
-    let mut va = start;
-    while va < end {
-        let idx = pd_index(va);
-        if idx != pd_index(code_pt_base) {
-            let phys = kernel_va_to_pa(va).ok_or("guest kernel image pa")?;
-            unsafe {
-                if (*pd)[idx] == 0 {
-                    (*pd)[idx] =
-                        (phys & 0x000F_FFFF_FFE0_0000) | PT_ENTRY_PRESENT | PT_ENTRY_LARGE_PAGE;
-                }
+    let mut pt_slot = 0usize;
+    let mut va = start_chunk_base;
+    let end_aligned = page_align_up_2m(end);
+    while va < end_aligned {
+        if va != code_pt_base {
+            if pt_slot >= GUEST_HIGH_IMAGE_PT_COUNT {
+                return Err("guest image pt pool");
+            }
+
+            let chunk_start = if va < start { start } else { va };
+            let chunk_end = core::cmp::min(va.saturating_add(PAGE_SIZE_2M), end);
+            if chunk_start < chunk_end {
+                let image_pt = unsafe { core::ptr::addr_of_mut!(GUEST_IMAGE_PTS[pt_slot].0) };
+                let image_pt_pa = kernel_va_to_pa(image_pt as u64).ok_or("guest image pt pa")?;
+                map_table_entry(pd, pd_index(va), image_pt_pa);
+                let phys = kernel_va_to_pa(chunk_start).ok_or("guest kernel image pa")?;
+                map_region_4k(
+                    image_pt,
+                    chunk_start,
+                    phys,
+                    chunk_end.saturating_sub(chunk_start) as usize,
+                    PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
+                )?;
+                pt_slot += 1;
             }
         }
         va = va
@@ -1507,7 +1530,7 @@ fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
 
     let header = parse_snapshot_header(&bytes[..header_len])?;
     let expected = header_len
-        + (7 * PAGE_SIZE_4K)
+        + (GUEST_SNAPSHOT_PAGE_COUNT * PAGE_SIZE_4K)
         + (header.guest_stack_bytes as usize)
         + (header.code_len as usize);
     if bytes.len() < expected
@@ -1549,6 +1572,13 @@ fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
             &bytes[off..off + PAGE_SIZE_4K],
         );
         off += PAGE_SIZE_4K;
+        for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
+            copy_into_guest_page(
+                core::ptr::addr_of_mut!(GUEST_IMAGE_PTS[i].0),
+                &bytes[off..off + PAGE_SIZE_4K],
+            );
+            off += PAGE_SIZE_4K;
+        }
         copy_into_guest_page(
             core::ptr::addr_of_mut!(GUEST_CODE_PT.0),
             &bytes[off..off + PAGE_SIZE_4K],
@@ -1671,7 +1701,7 @@ fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
     };
 
     let total = core::mem::size_of::<Vm1SnapshotHeader>()
-        + (7 * PAGE_SIZE_4K)
+        + (GUEST_SNAPSHOT_PAGE_COUNT * PAGE_SIZE_4K)
         + GUEST_STACK_BYTES
         + GUEST_CODE_WINDOW_BYTES;
     let mut out = Vec::with_capacity(total);
@@ -1688,6 +1718,9 @@ fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_STACK_PT.0));
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_HIGH_PDPT.0));
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_HIGH_PD.0));
+        for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
+            push_guest_page(&mut out, core::ptr::addr_of!(GUEST_IMAGE_PTS[i].0));
+        }
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_CODE_PT.0));
         push_bytes(
             &mut out,
@@ -1801,6 +1834,14 @@ fn log_vmexit_interrupt_info(label: &str) {
         err_valid as u8,
         err,
         info as u32
+    ));
+
+    let guest_rsp = vmread(VMCS_GUEST_RSP).unwrap_or(0);
+    let guest_linear = vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0);
+    let guest_physical = vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0);
+    hvlogf(format_args!(
+        "hv: vm1 reporting: {} vmexit addr guest_linear=0x{:016X} guest_physical=0x{:016X} guest_rsp=0x{:016X}",
+        label, guest_linear, guest_physical, guest_rsp,
     ));
 }
 

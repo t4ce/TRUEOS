@@ -4,7 +4,8 @@ use alloc::vec::Vec;
 
 use super::ecma48;
 pub(crate) use super::shell2_qjs_c4_contract::{
-    Analysis, Diagnostic, ResultHint, SymbolRef, SymbolRole,
+    Analysis, Diagnostic, ExprNodeKind, NodeRef, ResultHint, Span, SymbolRef, SymbolRole,
+    TokenKind as C4TokenKind, TokenRef,
 };
 
 const COLOR_STRING: (u8, u8, u8) = (80, 210, 80);
@@ -12,9 +13,20 @@ const COLOR_NUMBER: (u8, u8, u8) = (225, 190, 70);
 const COLOR_BOOLISH: (u8, u8, u8) = (95, 185, 235);
 const COLOR_FUNCTION: (u8, u8, u8) = (220, 120, 220);
 const COLOR_OBJECTISH: (u8, u8, u8) = (130, 170, 255);
+const COLOR_KEY: (u8, u8, u8) = (110, 160, 245);
+const COLOR_PUNCT: (u8, u8, u8) = (140, 140, 140);
+const PRETTY_MAX_BYTES: usize = 2 * 1024;
+const PRETTY_MAX_TOKENS: usize = 512;
+const PRETTY_MAX_DEPTH: usize = 24;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum TokenKind {
+pub(crate) enum FormatFallback {
+    LimitReached,
+    Unsupported,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LexTokenKind {
     Ident,
     String,
     Number,
@@ -42,7 +54,7 @@ enum TokenKind {
 
 #[derive(Clone, Copy)]
 struct Token {
-    kind: TokenKind,
+    kind: LexTokenKind,
     start: usize,
     end: usize,
 }
@@ -65,7 +77,7 @@ enum ExprKind {
     },
     Binary {
         left: Box<Expr>,
-        op: TokenKind,
+        op: LexTokenKind,
         right: Box<Expr>,
     },
     Group(Box<Expr>),
@@ -74,6 +86,8 @@ enum ExprKind {
 #[derive(Clone)]
 struct Expr {
     kind: ExprKind,
+    start: usize,
+    end: usize,
 }
 
 struct Lexer<'a> {
@@ -153,14 +167,14 @@ impl<'a> Lexer<'a> {
         let end = self.pos;
         let text = &self.src[start..end];
         let kind = match text {
-            "let" => TokenKind::Let,
-            "const" => TokenKind::Const,
-            "var" => TokenKind::Var,
-            "true" => TokenKind::True,
-            "false" => TokenKind::False,
-            "null" => TokenKind::Null,
-            "undefined" => TokenKind::Undefined,
-            _ => TokenKind::Ident,
+            "let" => LexTokenKind::Let,
+            "const" => LexTokenKind::Const,
+            "var" => LexTokenKind::Var,
+            "true" => LexTokenKind::True,
+            "false" => LexTokenKind::False,
+            "null" => LexTokenKind::Null,
+            "undefined" => LexTokenKind::Undefined,
+            _ => LexTokenKind::Ident,
         };
         Token { kind, start, end }
     }
@@ -184,7 +198,7 @@ impl<'a> Lexer<'a> {
             }
         }
         Token {
-            kind: TokenKind::Number,
+            kind: LexTokenKind::Number,
             start,
             end: self.pos,
         }
@@ -203,7 +217,7 @@ impl<'a> Lexer<'a> {
             }
             if c == quote {
                 return Ok(Token {
-                    kind: TokenKind::String,
+                    kind: LexTokenKind::String,
                     start,
                     end: self.pos,
                 });
@@ -223,7 +237,7 @@ impl<'a> Lexer<'a> {
         let start = self.pos;
         let Some(c) = self.bump() else {
             return Ok(Token {
-                kind: TokenKind::Eof,
+                kind: LexTokenKind::Eof,
                 start,
                 end: start,
             });
@@ -231,47 +245,47 @@ impl<'a> Lexer<'a> {
 
         let tok = match c {
             b'(' => Token {
-                kind: TokenKind::LParen,
+                kind: LexTokenKind::LParen,
                 start,
                 end: self.pos,
             },
             b')' => Token {
-                kind: TokenKind::RParen,
+                kind: LexTokenKind::RParen,
                 start,
                 end: self.pos,
             },
             b'.' => Token {
-                kind: TokenKind::Dot,
+                kind: LexTokenKind::Dot,
                 start,
                 end: self.pos,
             },
             b',' => Token {
-                kind: TokenKind::Comma,
+                kind: LexTokenKind::Comma,
                 start,
                 end: self.pos,
             },
             b';' => Token {
-                kind: TokenKind::Semi,
+                kind: LexTokenKind::Semi,
                 start,
                 end: self.pos,
             },
             b'+' => Token {
-                kind: TokenKind::Plus,
+                kind: LexTokenKind::Plus,
                 start,
                 end: self.pos,
             },
             b'-' => Token {
-                kind: TokenKind::Minus,
+                kind: LexTokenKind::Minus,
                 start,
                 end: self.pos,
             },
             b'*' => Token {
-                kind: TokenKind::Star,
+                kind: LexTokenKind::Star,
                 start,
                 end: self.pos,
             },
             b'/' => Token {
-                kind: TokenKind::Slash,
+                kind: LexTokenKind::Slash,
                 start,
                 end: self.pos,
             },
@@ -281,20 +295,20 @@ impl<'a> Lexer<'a> {
                     if self.peek() == Some(b'=') {
                         self.pos += 1;
                         Token {
-                            kind: TokenKind::EqEqEq,
+                            kind: LexTokenKind::EqEqEq,
                             start,
                             end: self.pos,
                         }
                     } else {
                         Token {
-                            kind: TokenKind::EqEq,
+                            kind: LexTokenKind::EqEq,
                             start,
                             end: self.pos,
                         }
                     }
                 } else {
                     Token {
-                        kind: TokenKind::Eq,
+                        kind: LexTokenKind::Eq,
                         start,
                         end: self.pos,
                     }
@@ -324,6 +338,7 @@ struct Parser<'a> {
     tokens: Vec<Token>,
     idx: usize,
     symbols: Vec<SymbolRef>,
+    nodes: Vec<NodeRef>,
 }
 
 impl<'a> Parser<'a> {
@@ -333,14 +348,22 @@ impl<'a> Parser<'a> {
             tokens,
             idx: 0,
             symbols: Vec::new(),
+            nodes: Vec::new(),
         }
+    }
+
+    fn push_node(&mut self, kind: ExprNodeKind, start: usize, end: usize) {
+        self.nodes.push(NodeRef {
+            kind,
+            span: Span { start, end },
+        });
     }
 
     fn current(&self) -> Token {
         self.tokens[self.idx]
     }
 
-    fn at(&self, kind: TokenKind) -> bool {
+    fn at(&self, kind: LexTokenKind) -> bool {
         self.current().kind == kind
     }
 
@@ -352,7 +375,7 @@ impl<'a> Parser<'a> {
         t
     }
 
-    fn eat(&mut self, kind: TokenKind) -> bool {
+    fn eat(&mut self, kind: LexTokenKind) -> bool {
         if self.at(kind) {
             self.bump();
             true
@@ -367,7 +390,7 @@ impl<'a> Parser<'a> {
 
     fn expect(
         &mut self,
-        kind: TokenKind,
+        kind: LexTokenKind,
         code: &'static str,
         msg: &str,
     ) -> Result<Token, Diagnostic> {
@@ -386,18 +409,23 @@ impl<'a> Parser<'a> {
 
     fn parse_program(&mut self) -> Result<ResultHint, Diagnostic> {
         let mut hint = ResultHint::Unknown;
-        while !self.at(TokenKind::Eof) {
+        let start = self.current().start;
+        while !self.at(LexTokenKind::Eof) {
             hint = self.parse_statement()?;
-            let _ = self.eat(TokenKind::Semi);
+            let _ = self.eat(LexTokenKind::Semi);
         }
+        let end = self.current().end;
+        self.push_node(ExprNodeKind::Program, start, end);
         Ok(hint)
     }
 
     fn parse_statement(&mut self) -> Result<ResultHint, Diagnostic> {
-        if self.at(TokenKind::Let) || self.at(TokenKind::Const) || self.at(TokenKind::Var) {
+        if self.at(LexTokenKind::Let) || self.at(LexTokenKind::Const) || self.at(LexTokenKind::Var)
+        {
+            let decl_start = self.current().start;
             self.bump();
             let id = self.expect(
-                TokenKind::Ident,
+                LexTokenKind::Ident,
                 "E_C4_DECL",
                 "expected identifier in declaration",
             )?;
@@ -406,22 +434,26 @@ impl<'a> Parser<'a> {
                 role: SymbolRole::Decl,
             });
 
-            if self.eat(TokenKind::Eq) {
+            if self.eat(LexTokenKind::Eq) {
                 let rhs = self.parse_assignment()?;
                 self.collect_reads(&rhs);
+                self.collect_nodes(&rhs);
+                self.push_node(ExprNodeKind::Declaration, decl_start, rhs.end);
                 return Ok(self.expr_hint(&rhs));
             }
+            self.push_node(ExprNodeKind::Declaration, decl_start, id.end);
             return Ok(ResultHint::Undefined);
         }
 
         let expr = self.parse_assignment()?;
         self.collect_reads(&expr);
+        self.collect_nodes(&expr);
         Ok(self.expr_hint(&expr))
     }
 
     fn parse_assignment(&mut self) -> Result<Expr, Diagnostic> {
         let lhs = self.parse_equality()?;
-        if self.eat(TokenKind::Eq) {
+        if self.eat(LexTokenKind::Eq) {
             if let Some(name) = self.assignable_name(&lhs) {
                 self.symbols.push(SymbolRef {
                     name: String::from(name),
@@ -438,6 +470,7 @@ impl<'a> Parser<'a> {
             }
 
             let rhs = self.parse_assignment()?;
+            self.push_node(ExprNodeKind::Assignment, lhs.start, rhs.end);
             return Ok(rhs);
         }
         Ok(lhs)
@@ -445,15 +478,19 @@ impl<'a> Parser<'a> {
 
     fn parse_equality(&mut self) -> Result<Expr, Diagnostic> {
         let mut expr = self.parse_additive()?;
-        while self.at(TokenKind::EqEq) || self.at(TokenKind::EqEqEq) {
+        while self.at(LexTokenKind::EqEq) || self.at(LexTokenKind::EqEqEq) {
             let op = self.bump().kind;
             let right = self.parse_additive()?;
+            let start = expr.start;
+            let end = right.end;
             expr = Expr {
                 kind: ExprKind::Binary {
                     left: Box::new(expr),
                     op,
                     right: Box::new(right),
                 },
+                start,
+                end,
             };
         }
         Ok(expr)
@@ -461,15 +498,19 @@ impl<'a> Parser<'a> {
 
     fn parse_additive(&mut self) -> Result<Expr, Diagnostic> {
         let mut expr = self.parse_multiplicative()?;
-        while self.at(TokenKind::Plus) || self.at(TokenKind::Minus) {
+        while self.at(LexTokenKind::Plus) || self.at(LexTokenKind::Minus) {
             let op = self.bump().kind;
             let right = self.parse_multiplicative()?;
+            let start = expr.start;
+            let end = right.end;
             expr = Expr {
                 kind: ExprKind::Binary {
                     left: Box::new(expr),
                     op,
                     right: Box::new(right),
                 },
+                start,
+                end,
             };
         }
         Ok(expr)
@@ -477,15 +518,19 @@ impl<'a> Parser<'a> {
 
     fn parse_multiplicative(&mut self) -> Result<Expr, Diagnostic> {
         let mut expr = self.parse_postfix()?;
-        while self.at(TokenKind::Star) || self.at(TokenKind::Slash) {
+        while self.at(LexTokenKind::Star) || self.at(LexTokenKind::Slash) {
             let op = self.bump().kind;
             let right = self.parse_postfix()?;
+            let start = expr.start;
+            let end = right.end;
             expr = Expr {
                 kind: ExprKind::Binary {
                     left: Box::new(expr),
                     op,
                     right: Box::new(right),
                 },
+                start,
+                end,
             };
         }
         Ok(expr)
@@ -494,33 +539,41 @@ impl<'a> Parser<'a> {
     fn parse_postfix(&mut self) -> Result<Expr, Diagnostic> {
         let mut expr = self.parse_primary()?;
         loop {
-            if self.eat(TokenKind::Dot) {
-                let member = self.expect(TokenKind::Ident, "E_C4_MEM", "expected property name")?;
+            if self.eat(LexTokenKind::Dot) {
+                let member =
+                    self.expect(LexTokenKind::Ident, "E_C4_MEM", "expected property name")?;
+                let start = expr.start;
                 expr = Expr {
                     kind: ExprKind::Member {
                         base: Box::new(expr),
                         name: String::from(self.token_text(member)),
                     },
+                    start,
+                    end: member.end,
                 };
                 continue;
             }
 
-            if self.eat(TokenKind::LParen) {
+            if self.eat(LexTokenKind::LParen) {
                 let mut args = Vec::new();
-                if !self.at(TokenKind::RParen) {
+                if !self.at(LexTokenKind::RParen) {
                     loop {
                         args.push(self.parse_assignment()?);
-                        if !self.eat(TokenKind::Comma) {
+                        if !self.eat(LexTokenKind::Comma) {
                             break;
                         }
                     }
                 }
-                let _ = self.expect(TokenKind::RParen, "E_C4_CALL", "expected ')' after call")?;
+                let close =
+                    self.expect(LexTokenKind::RParen, "E_C4_CALL", "expected ')' after call")?;
+                let start = expr.start;
                 expr = Expr {
                     kind: ExprKind::Call {
                         callee: Box::new(expr),
                         args,
                     },
+                    start,
+                    end: close.end,
                 };
                 continue;
             }
@@ -533,20 +586,24 @@ impl<'a> Parser<'a> {
     fn parse_primary(&mut self) -> Result<Expr, Diagnostic> {
         let tok = self.bump();
         let kind = match tok.kind {
-            TokenKind::String => ExprKind::String,
-            TokenKind::Number => ExprKind::Number,
-            TokenKind::True | TokenKind::False => ExprKind::Boolean,
-            TokenKind::Null => ExprKind::Null,
-            TokenKind::Undefined => ExprKind::Undefined,
-            TokenKind::Ident => ExprKind::Identifier(String::from(self.token_text(tok))),
-            TokenKind::LParen => {
+            LexTokenKind::String => ExprKind::String,
+            LexTokenKind::Number => ExprKind::Number,
+            LexTokenKind::True | LexTokenKind::False => ExprKind::Boolean,
+            LexTokenKind::Null => ExprKind::Null,
+            LexTokenKind::Undefined => ExprKind::Undefined,
+            LexTokenKind::Ident => ExprKind::Identifier(String::from(self.token_text(tok))),
+            LexTokenKind::LParen => {
                 let inner = self.parse_assignment()?;
-                let _ = self.expect(
-                    TokenKind::RParen,
+                let close = self.expect(
+                    LexTokenKind::RParen,
                     "E_C4_PAREN",
                     "expected ')' after expression",
                 )?;
-                ExprKind::Group(Box::new(inner))
+                return Ok(Expr {
+                    kind: ExprKind::Group(Box::new(inner)),
+                    start: tok.start,
+                    end: close.end,
+                });
             }
             _ => {
                 return Err(Diagnostic {
@@ -557,7 +614,11 @@ impl<'a> Parser<'a> {
                 });
             }
         };
-        Ok(Expr { kind })
+        Ok(Expr {
+            kind,
+            start: tok.start,
+            end: tok.end,
+        })
     }
 
     fn assignable_name<'b>(&'b self, expr: &'b Expr) -> Option<&'b str> {
@@ -584,7 +645,7 @@ impl<'a> Parser<'a> {
                 _ => ResultHint::Unknown,
             },
             ExprKind::Binary { left, op, right } => match op {
-                TokenKind::Plus => {
+                LexTokenKind::Plus => {
                     let l = self.expr_hint(left);
                     let r = self.expr_hint(right);
                     if l == ResultHint::String || r == ResultHint::String {
@@ -595,8 +656,10 @@ impl<'a> Parser<'a> {
                         ResultHint::Unknown
                     }
                 }
-                TokenKind::EqEq | TokenKind::EqEqEq => ResultHint::Boolean,
-                TokenKind::Minus | TokenKind::Star | TokenKind::Slash => ResultHint::Number,
+                LexTokenKind::EqEq | LexTokenKind::EqEqEq => ResultHint::Boolean,
+                LexTokenKind::Minus | LexTokenKind::Star | LexTokenKind::Slash => {
+                    ResultHint::Number
+                }
                 _ => ResultHint::Unknown,
             },
             ExprKind::Group(inner) => self.expr_hint(inner),
@@ -642,6 +705,44 @@ impl<'a> Parser<'a> {
             | ExprKind::Undefined => {}
         }
     }
+
+    fn collect_nodes(&mut self, expr: &Expr) {
+        let kind = match expr.kind {
+            ExprKind::String => ExprNodeKind::StringLiteral,
+            ExprKind::Number => ExprNodeKind::NumberLiteral,
+            ExprKind::Boolean => ExprNodeKind::BooleanLiteral,
+            ExprKind::Null => ExprNodeKind::NullLiteral,
+            ExprKind::Undefined => ExprNodeKind::UndefinedLiteral,
+            ExprKind::Identifier(_) => ExprNodeKind::Identifier,
+            ExprKind::Member { .. } => ExprNodeKind::MemberAccess,
+            ExprKind::Call { .. } => ExprNodeKind::Call,
+            ExprKind::Binary { .. } => ExprNodeKind::Binary,
+            ExprKind::Group(_) => ExprNodeKind::Group,
+        };
+
+        self.push_node(kind, expr.start, expr.end);
+
+        match &expr.kind {
+            ExprKind::Member { base, .. } => self.collect_nodes(base),
+            ExprKind::Call { callee, args } => {
+                self.collect_nodes(callee);
+                for arg in args {
+                    self.collect_nodes(arg);
+                }
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.collect_nodes(left);
+                self.collect_nodes(right);
+            }
+            ExprKind::Group(inner) => self.collect_nodes(inner),
+            ExprKind::String
+            | ExprKind::Number
+            | ExprKind::Boolean
+            | ExprKind::Null
+            | ExprKind::Undefined
+            | ExprKind::Identifier(_) => {}
+        }
+    }
 }
 
 pub(crate) fn analyze(source: &str) -> Analysis {
@@ -651,7 +752,7 @@ pub(crate) fn analyze(source: &str) -> Analysis {
     loop {
         match lexer.next_token() {
             Ok(token) => {
-                let done = token.kind == TokenKind::Eof;
+                let done = token.kind == LexTokenKind::Eof;
                 tokens.push(token);
                 if done {
                     break;
@@ -659,27 +760,80 @@ pub(crate) fn analyze(source: &str) -> Analysis {
             }
             Err(diag) => {
                 return Analysis {
+                    schema_version: super::shell2_qjs_c4_contract::version(),
                     hint: ResultHint::Unknown,
                     symbols: Vec::new(),
+                    tokens: Vec::new(),
+                    nodes: Vec::new(),
                     diagnostic: Some(diag),
                 };
             }
         }
     }
 
+    let token_refs = to_token_refs(&tokens);
+
     let mut parser = Parser::new(source, tokens);
     match parser.parse_program() {
         Ok(hint) => Analysis {
+            schema_version: super::shell2_qjs_c4_contract::version(),
             hint,
             symbols: parser.symbols,
+            tokens: token_refs,
+            nodes: parser.nodes,
             diagnostic: None,
         },
         Err(diag) => Analysis {
+            schema_version: super::shell2_qjs_c4_contract::version(),
             hint: ResultHint::Unknown,
             symbols: parser.symbols,
+            tokens: token_refs,
+            nodes: parser.nodes,
             diagnostic: Some(diag),
         },
     }
+}
+
+fn to_token_kind(kind: LexTokenKind) -> C4TokenKind {
+    match kind {
+        LexTokenKind::Ident => C4TokenKind::Ident,
+        LexTokenKind::String => C4TokenKind::String,
+        LexTokenKind::Number => C4TokenKind::Number,
+        LexTokenKind::True => C4TokenKind::True,
+        LexTokenKind::False => C4TokenKind::False,
+        LexTokenKind::Null => C4TokenKind::Null,
+        LexTokenKind::Undefined => C4TokenKind::Undefined,
+        LexTokenKind::Let => C4TokenKind::Let,
+        LexTokenKind::Const => C4TokenKind::Const,
+        LexTokenKind::Var => C4TokenKind::Var,
+        LexTokenKind::LParen => C4TokenKind::LParen,
+        LexTokenKind::RParen => C4TokenKind::RParen,
+        LexTokenKind::Dot => C4TokenKind::Dot,
+        LexTokenKind::Comma => C4TokenKind::Comma,
+        LexTokenKind::Semi => C4TokenKind::Semi,
+        LexTokenKind::Eq => C4TokenKind::Assign,
+        LexTokenKind::EqEq => C4TokenKind::Eq,
+        LexTokenKind::EqEqEq => C4TokenKind::StrictEq,
+        LexTokenKind::Plus => C4TokenKind::Plus,
+        LexTokenKind::Minus => C4TokenKind::Minus,
+        LexTokenKind::Star => C4TokenKind::Star,
+        LexTokenKind::Slash => C4TokenKind::Slash,
+        LexTokenKind::Eof => C4TokenKind::Eof,
+    }
+}
+
+fn to_token_refs(tokens: &[Token]) -> Vec<TokenRef> {
+    let mut out = Vec::new();
+    for token in tokens {
+        out.push(TokenRef {
+            kind: to_token_kind(token.kind),
+            span: Span {
+                start: token.start,
+                end: token.end,
+            },
+        });
+    }
+    out
 }
 
 pub(crate) fn format_tiny_diagnostic(diag: &Diagnostic) -> String {
@@ -737,7 +891,13 @@ fn hinted_or_text_kind(hint: ResultHint, text: &str) -> ResultHint {
     if trimmed.parse::<f64>().is_ok() {
         return ResultHint::Number;
     }
+    if is_special_number_text(trimmed) || is_bigint_text(trimmed) {
+        return ResultHint::Number;
+    }
     if trimmed.starts_with("function") || trimmed.contains("=>") {
+        return ResultHint::Function;
+    }
+    if trimmed.starts_with("async function") || trimmed.starts_with("async (") {
         return ResultHint::Function;
     }
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -746,16 +906,291 @@ fn hinted_or_text_kind(hint: ResultHint, text: &str) -> ResultHint {
     ResultHint::Unknown
 }
 
-pub(crate) fn format_result_text(text: &str, hint: ResultHint) -> String {
-    let kind = hinted_or_text_kind(hint, text);
-    match kind {
-        ResultHint::String => alloc::format!("{}", ecma48::style(text).fg(COLOR_STRING)),
-        ResultHint::Number => alloc::format!("{}", ecma48::style(text).fg(COLOR_NUMBER)),
-        ResultHint::Boolean | ResultHint::Null | ResultHint::Undefined => {
-            alloc::format!("{}", ecma48::style(text).fg(COLOR_BOOLISH).bold())
+fn style_punct(ch: char) -> String {
+    let glyph = alloc::format!("{}", ch);
+    alloc::format!("{}", ecma48::style(glyph.as_str()).fg(COLOR_PUNCT).dim())
+}
+
+fn style_string(text: &str) -> String {
+    alloc::format!("{}", ecma48::style(text).fg(COLOR_STRING))
+}
+
+fn style_key(text: &str) -> String {
+    alloc::format!("{}", ecma48::style(text).fg(COLOR_KEY))
+}
+
+fn style_number(text: &str) -> String {
+    alloc::format!("{}", ecma48::style(text).fg(COLOR_NUMBER))
+}
+
+fn style_boolish(text: &str) -> String {
+    alloc::format!("{}", ecma48::style(text).fg(COLOR_BOOLISH).bold())
+}
+
+fn style_function(text: &str) -> String {
+    alloc::format!("{}", ecma48::style(text).fg(COLOR_FUNCTION))
+}
+
+fn style_function_name(text: &str) -> String {
+    alloc::format!("{}", ecma48::style(text).fg(COLOR_FUNCTION).bold())
+}
+
+fn style_objectish(text: &str) -> String {
+    alloc::format!("{}", ecma48::style(text).fg(COLOR_OBJECTISH))
+}
+
+fn next_non_ws_byte(text: &str, mut idx: usize) -> Option<u8> {
+    let bytes = text.as_bytes();
+    while idx < bytes.len() {
+        let b = bytes[idx];
+        if !matches!(b, b' ' | b'\t' | b'\r' | b'\n') {
+            return Some(b);
         }
-        ResultHint::Function => alloc::format!("{}", ecma48::style(text).fg(COLOR_FUNCTION)),
-        ResultHint::Object => alloc::format!("{}", ecma48::style(text).fg(COLOR_OBJECTISH)),
-        ResultHint::Unknown => String::from(text),
+        idx += 1;
+    }
+    None
+}
+
+fn next_non_ws_index(text: &str, mut idx: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    while idx < bytes.len() {
+        let b = bytes[idx];
+        if !matches!(b, b' ' | b'\t' | b'\r' | b'\n') {
+            return Some(idx);
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn is_special_number_text(text: &str) -> bool {
+    matches!(text, "NaN" | "Infinity" | "-Infinity")
+}
+
+fn is_bigint_text(text: &str) -> bool {
+    let Some(number) = text.strip_suffix('n') else {
+        return false;
+    };
+
+    !number.is_empty()
+        && number != "-"
+        && number.bytes().all(|b| {
+            matches!(
+                b,
+                b'0'..=b'9'
+                    | b'_'
+                    | b'x'
+                    | b'X'
+                    | b'o'
+                    | b'O'
+                    | b'b'
+                    | b'B'
+                    | b'a'..=b'f'
+                    | b'A'..=b'F'
+                    | b'-'
+            )
+        })
+}
+
+fn looks_like_async_function(text: &str, after_async: usize) -> bool {
+    let Some(next_idx) = next_non_ws_index(text, after_async) else {
+        return false;
+    };
+
+    let rest = &text[next_idx..];
+    rest.starts_with("function") || rest.starts_with('(') || rest.contains("=>")
+}
+
+fn format_structured_text(text: &str) -> Result<String, FormatFallback> {
+    if text.len() > PRETTY_MAX_BYTES {
+        return Err(FormatFallback::LimitReached);
+    }
+
+    let bytes = text.as_bytes();
+    let mut out = String::new();
+    let mut idx = 0usize;
+    let mut depth = 0usize;
+    let mut tokens = 0usize;
+    let mut expect_function_name = false;
+
+    while idx < bytes.len() {
+        if tokens >= PRETTY_MAX_TOKENS {
+            return Err(FormatFallback::LimitReached);
+        }
+
+        let b = bytes[idx];
+        match b {
+            b'{' | b'[' | b'(' => {
+                depth = depth.saturating_add(1);
+                if depth > PRETTY_MAX_DEPTH {
+                    return Err(FormatFallback::LimitReached);
+                }
+                if b == b'(' {
+                    expect_function_name = false;
+                }
+                out.push_str(style_punct(b as char).as_str());
+                idx += 1;
+                tokens += 1;
+            }
+            b'}' | b']' | b')' => {
+                depth = depth.saturating_sub(1);
+                out.push_str(style_punct(b as char).as_str());
+                idx += 1;
+                tokens += 1;
+            }
+            b'=' if idx + 1 < bytes.len() && bytes[idx + 1] == b'>' => {
+                expect_function_name = false;
+                out.push_str(style_function("=>").as_str());
+                idx += 2;
+                tokens += 1;
+            }
+            b':' | b',' => {
+                expect_function_name = false;
+                out.push_str(style_punct(b as char).as_str());
+                idx += 1;
+                tokens += 1;
+            }
+            b' ' | b'\t' | b'\r' | b'\n' => {
+                out.push(b as char);
+                idx += 1;
+            }
+            b'\'' | b'"' | b'`' => {
+                let quote = b;
+                let start = idx;
+                idx += 1;
+                let mut escaped = false;
+                while idx < bytes.len() {
+                    let cur = bytes[idx];
+                    idx += 1;
+                    if escaped {
+                        escaped = false;
+                        continue;
+                    }
+                    if cur == b'\\' {
+                        escaped = true;
+                        continue;
+                    }
+                    if cur == quote {
+                        break;
+                    }
+                }
+                let token = &text[start..idx.min(text.len())];
+                if next_non_ws_byte(text, idx) == Some(b':') {
+                    out.push_str(style_key(token).as_str());
+                } else {
+                    out.push_str(style_string(token).as_str());
+                }
+                tokens += 1;
+            }
+            b'0'..=b'9' => {
+                let start = idx;
+                idx += 1;
+                while idx < bytes.len()
+                    && matches!(bytes[idx], b'0'..=b'9' | b'.' | b'_' | b'x' | b'X' | b'o' | b'O' | b'b' | b'B' | b'a'..=b'f' | b'A'..=b'F')
+                {
+                    idx += 1;
+                }
+                if idx < bytes.len() && bytes[idx] == b'n' {
+                    idx += 1;
+                }
+                out.push_str(style_number(&text[start..idx]).as_str());
+                tokens += 1;
+            }
+            b'-' if idx + 1 < bytes.len() && bytes[idx + 1].is_ascii_digit() => {
+                let start = idx;
+                idx += 1;
+                while idx < bytes.len()
+                    && matches!(bytes[idx], b'0'..=b'9' | b'.' | b'_' | b'x' | b'X' | b'o' | b'O' | b'b' | b'B' | b'a'..=b'f' | b'A'..=b'F')
+                {
+                    idx += 1;
+                }
+                if idx < bytes.len() && bytes[idx] == b'n' {
+                    idx += 1;
+                }
+                out.push_str(style_number(&text[start..idx]).as_str());
+                tokens += 1;
+            }
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' => {
+                let start = idx;
+                idx += 1;
+                while idx < bytes.len()
+                    && matches!(bytes[idx], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$')
+                {
+                    idx += 1;
+                }
+                let token = &text[start..idx];
+                let next_byte = next_non_ws_byte(text, idx);
+                match token {
+                    "true" | "false" | "null" | "undefined" => {
+                        expect_function_name = false;
+                        out.push_str(style_boolish(token).as_str())
+                    }
+                    "function" => {
+                        expect_function_name = true;
+                        out.push_str(style_function(token).as_str());
+                    }
+                    "async" if looks_like_async_function(text, idx) => {
+                        out.push_str(style_function(token).as_str());
+                    }
+                    "NaN" | "Infinity" => {
+                        expect_function_name = false;
+                        out.push_str(style_number(token).as_str());
+                    }
+                    _ if next_byte == Some(b':') => {
+                        expect_function_name = false;
+                        out.push_str(style_key(token).as_str());
+                    }
+                    _ if expect_function_name && next_byte == Some(b'(') => {
+                        expect_function_name = false;
+                        out.push_str(style_function_name(token).as_str());
+                    }
+                    _ => {
+                        expect_function_name = false;
+                        out.push_str(token);
+                    }
+                }
+                tokens += 1;
+            }
+            _ => {
+                if !matches!(b, b'*') {
+                    expect_function_name = false;
+                }
+                out.push(b as char);
+                idx += 1;
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+pub(crate) fn format_js_value_pretty(
+    text: &str,
+    hint: ResultHint,
+) -> Result<String, FormatFallback> {
+    let kind = hinted_or_text_kind(hint, text);
+    if text.len() > PRETTY_MAX_BYTES {
+        return Err(FormatFallback::LimitReached);
+    }
+
+    match kind {
+        ResultHint::String => Ok(style_string(text)),
+        ResultHint::Number => Ok(style_number(text)),
+        ResultHint::Boolean | ResultHint::Null | ResultHint::Undefined => Ok(style_boolish(text)),
+        ResultHint::Function => {
+            if text.contains('(') || text.starts_with("function") || text.contains("=>") {
+                format_structured_text(text).or_else(|_| Ok(style_function(text)))
+            } else {
+                Ok(style_function(text))
+            }
+        }
+        ResultHint::Object => {
+            if text.starts_with('{') || text.starts_with('[') || text.starts_with('(') {
+                format_structured_text(text).or_else(|_| Ok(style_objectish(text)))
+            } else {
+                Ok(style_objectish(text))
+            }
+        }
+        ResultHint::Unknown => Err(FormatFallback::Unsupported),
     }
 }
