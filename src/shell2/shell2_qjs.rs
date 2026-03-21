@@ -10,7 +10,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 use trueos_qjs as qjs;
 
-use super::{MatrixTarget, ShellBackend2, matrix};
+use super::{MatrixTarget, ShellBackend2, matrix, shell2_qjs_c4};
 
 struct ShellQjsContextOpaque {
     slot_id: matrix::MatrixSlotId,
@@ -73,13 +73,6 @@ impl QjsPromptMode {
         match self {
             Self::Repl => Self::Eval,
             Self::Eval => Self::Repl,
-        }
-    }
-
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Repl => "repl",
-            Self::Eval => "eval",
         }
     }
 }
@@ -377,7 +370,12 @@ fn ensure_repl_drainer_started(spawner: &Spawner) -> bool {
     true
 }
 
-fn submit_repl(spawner: &Spawner, target: &MatrixTarget, source: &str) {
+fn submit_repl(
+    spawner: &Spawner,
+    target: &MatrixTarget,
+    source: &str,
+    analysis: &shell2_qjs_c4::Analysis,
+) {
     if !ensure_repl_drainer_started(spawner) {
         print_target_line(target, "qjs repl error: failed to start repl drainer");
         return;
@@ -410,16 +408,23 @@ fn submit_repl(spawner: &Spawner, target: &MatrixTarget, source: &str) {
 
     if let Some(text) = text {
         if !text.is_empty() && text != "undefined" {
-            let line = alloc::format!("qjs repl => {}", text);
+            let styled = shell2_qjs_c4::format_result_text(text.as_str(), analysis.hint);
+            let line = alloc::format!("qjs repl => {}", styled);
             print_target_line(target, line.as_str());
+            if let Some(summary) = shell2_qjs_c4::format_symbol_summary(analysis) {
+                print_target_line(target, summary.as_str());
+            }
             return;
         }
     }
 
     print_target_line(target, "qjs repl ok");
+    if let Some(summary) = shell2_qjs_c4::format_symbol_summary(analysis) {
+        print_target_line(target, summary.as_str());
+    }
 }
 
-fn submit_eval(target: &MatrixTarget, source: &str) {
+fn submit_eval(target: &MatrixTarget, source: &str, analysis: &shell2_qjs_c4::Analysis) {
     let Ok(vm) = create_shell_vm(&target.slot_id) else {
         print_target_line(target, "qjs eval error: failed to initialize eval runtime");
         return;
@@ -449,13 +454,20 @@ fn submit_eval(target: &MatrixTarget, source: &str) {
 
     if let Some(text) = text {
         if !text.is_empty() && text != "undefined" {
-            let line = alloc::format!("qjs eval => {}", text);
+            let styled = shell2_qjs_c4::format_result_text(text.as_str(), analysis.hint);
+            let line = alloc::format!("qjs eval => {}", styled);
             print_target_line(target, line.as_str());
+            if let Some(summary) = shell2_qjs_c4::format_symbol_summary(analysis) {
+                print_target_line(target, summary.as_str());
+            }
             return;
         }
     }
 
     print_target_line(target, "qjs eval ok");
+    if let Some(summary) = shell2_qjs_c4::format_symbol_summary(analysis) {
+        print_target_line(target, summary.as_str());
+    }
 }
 
 pub(crate) fn free_slot(requested: &str) {
@@ -483,15 +495,23 @@ pub(crate) fn submit(
         return;
     }
 
+    let analysis = shell2_qjs_c4::analyze(source);
+
     if !is_likely_valid(source) {
-        print_target_line(target, "qjs: input looks incomplete");
+        if let Some(diag) = &analysis.diagnostic {
+            let diag_text = shell2_qjs_c4::format_tiny_diagnostic(diag);
+            let line = alloc::format!("qjs: input looks incomplete ({})", diag_text);
+            print_target_line(target, line.as_str());
+        } else {
+            print_target_line(target, "qjs: input looks incomplete");
+        }
         return;
     }
 
     if mode == QjsPromptMode::Repl {
-        submit_repl(spawner, target, source);
+        submit_repl(spawner, target, source, &analysis);
     } else {
-        submit_eval(target, source);
+        submit_eval(target, source, &analysis);
     }
 }
 

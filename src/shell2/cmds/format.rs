@@ -1,5 +1,3 @@
-use core::str::SplitWhitespace;
-
 use alloc::string::String;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -48,23 +46,6 @@ pub(crate) fn start_format_session_for_disk(
     );
     print_shell_line(io, &alloc::format!("{prefix}: type `sure`"));
     ParseOutcome::StartSession(CommandSessionKind::FormatSure(disk.id().raw()))
-}
-
-pub(crate) fn try_parse(
-    io: &'static dyn ShellBackend2,
-    args: &mut SplitWhitespace<'_>,
-) -> ParseOutcome {
-    if args.next().is_some() {
-        print_shell_line(io, "format: usage `format`");
-        return ParseOutcome::Handled;
-    }
-
-    let Some(target) = super::select_default_disk_target() else {
-        print_shell_line(io, "format: no writable disk device found");
-        return ParseOutcome::Handled;
-    };
-
-    start_format_session_for_disk(io, target, "format")
 }
 
 pub(crate) fn handle_session_input(

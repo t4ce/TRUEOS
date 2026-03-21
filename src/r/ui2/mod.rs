@@ -1643,17 +1643,108 @@ fn texture_is_drawable(tex_id: u32) -> bool {
         && crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id) == ASYNC_TEX_STATUS_READY
 }
 
-fn hosted_browser_has_drawable_content(snapshot: &UiHostedSurfaceState) -> bool {
-    if snapshot.regions.is_empty() || snapshot.viewport_width == 0 || snapshot.viewport_height == 0
-    {
+const HOSTED_SCENE_CMD_DRAW_TEX_RECT_UV: u8 = 1;
+
+#[inline]
+fn hosted_scene_cmd_read_u32(bytes: &[u8], cursor: &mut usize) -> Option<u32> {
+    let end = cursor.checked_add(4)?;
+    let slice = bytes.get(*cursor..end)?;
+    *cursor = end;
+    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+#[inline]
+fn hosted_scene_cmd_read_f32(bytes: &[u8], cursor: &mut usize) -> Option<f32> {
+    hosted_scene_cmd_read_u32(bytes, cursor).map(f32::from_bits)
+}
+
+fn draw_hosted_scene_cmds_no_present(
+    state: &Ui2State,
+    window: &Ui2Window,
+    snapshot: &UiHostedSurfaceState,
+    draw_x: f32,
+    draw_y: f32,
+) -> bool {
+    let bytes = snapshot.scene_cmds.as_slice();
+    if bytes.is_empty() {
         return false;
     }
-    snapshot.regions.iter().any(|region| {
-        region.tex_id != 0
-            && region.width != 0
-            && region.height != 0
-            && texture_is_drawable(region.tex_id)
-    })
+
+    let mut cursor = 0usize;
+    let mut drew = false;
+    while cursor < bytes.len() {
+        let op = bytes[cursor];
+        cursor += 1;
+        match op {
+            HOSTED_SCENE_CMD_DRAW_TEX_RECT_UV => {
+                let Some(tex_id) = hosted_scene_cmd_read_u32(bytes, &mut cursor) else {
+                    break;
+                };
+                let Some(x) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
+                    break;
+                };
+                let Some(y) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
+                    break;
+                };
+                let Some(width) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
+                    break;
+                };
+                let Some(height) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
+                    break;
+                };
+                let Some(u0) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
+                    break;
+                };
+                let Some(v0) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
+                    break;
+                };
+                let Some(u1) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
+                    break;
+                };
+                let Some(v1) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
+                    break;
+                };
+                let Some(&blend_u8) = bytes.get(cursor) else {
+                    break;
+                };
+                cursor += 1;
+                let Some(&cmd_alpha) = bytes.get(cursor) else {
+                    break;
+                };
+                cursor += 1;
+
+                if !texture_is_drawable(tex_id) {
+                    continue;
+                }
+                let alpha = modulate_alpha(cmd_alpha, window.alpha);
+                drew |= draw_texture_rect_uv_no_present(
+                    tex_id,
+                    draw_x + x,
+                    draw_y + y,
+                    width,
+                    height,
+                    u0,
+                    v0,
+                    u1,
+                    v1,
+                    state.view_w,
+                    state.view_h,
+                    blend_u8 != 0,
+                    alpha,
+                );
+            }
+            _ => break,
+        }
+    }
+
+    drew
+}
+
+fn hosted_browser_has_drawable_content(snapshot: &UiHostedSurfaceState) -> bool {
+    if snapshot.viewport_width == 0 || snapshot.viewport_height == 0 {
+        return false;
+    }
+    !snapshot.scene_cmds.is_empty()
 }
 
 fn draw_window_content_placeholder(
@@ -1730,61 +1821,7 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
     let draw_y_f = draw_y_i as f32;
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_scissor(sx, sy, sw, sh) };
 
-    let viewport_w = snapshot.viewport_width.max(1);
-    let viewport_h = snapshot.viewport_height.max(1);
-    let scroll_left = normalized_hosted_browser_scroll_x(&snapshot);
-    let scroll_top = snapshot
-        .content_top_y
-        .saturating_add(normalized_hosted_browser_scroll(&snapshot));
-    let scroll_bottom = scroll_top.saturating_add(viewport_h);
-    let mut drew = false;
-
-    for region in &snapshot.regions {
-        let tex_id = region.tex_id;
-        if tex_id == 0 || region.width == 0 || region.height == 0 || !texture_is_drawable(tex_id) {
-            continue;
-        }
-        let doc_y = region.doc_y;
-        let doc_bottom = doc_y.saturating_add(region.height);
-        if doc_bottom <= scroll_top || doc_y >= scroll_bottom {
-            continue;
-        }
-
-        let src_top = core::cmp::max(doc_y, scroll_top);
-        let src_bottom = core::cmp::min(doc_bottom, scroll_bottom);
-        let src_height = src_bottom.saturating_sub(src_top);
-        if src_height == 0 {
-            continue;
-        }
-
-        let src_offset_y = src_top.saturating_sub(doc_y);
-        let dest_y = src_top.saturating_sub(scroll_top);
-        if scroll_left >= region.width {
-            continue;
-        }
-        let draw_width =
-            core::cmp::min(viewport_w, region.width.saturating_sub(scroll_left)).max(1);
-        let u0 = (scroll_left as f32) / (region.width.max(1) as f32);
-        let u1 = ((scroll_left + draw_width) as f32) / (region.width.max(1) as f32);
-        let v0 = (src_offset_y as f32) / (region.height.max(1) as f32);
-        let v1 = ((src_offset_y + src_height) as f32) / (region.height.max(1) as f32);
-
-        drew |= draw_texture_rect_uv_no_present(
-            tex_id,
-            draw_x_f,
-            draw_y_f + dest_y as f32,
-            draw_width as f32,
-            src_height as f32,
-            u0,
-            v0,
-            u1,
-            v1,
-            state.view_w,
-            state.view_h,
-            true,
-            window.alpha,
-        );
-    }
+    let drew = draw_hosted_scene_cmds_no_present(state, window, &snapshot, draw_x_f, draw_y_f);
 
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_clear_scissor() };
     drew

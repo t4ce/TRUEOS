@@ -119,6 +119,7 @@ impl KernelOp for TrueosCrabUsbKernel {
 
 #[derive(Copy, Clone)]
 struct PreferredAlt {
+    configuration_index: u8,
     configuration_value: u8,
     interface_number: u8,
     alternate_setting: u8,
@@ -134,6 +135,29 @@ struct IsoOutEndpoint {
     address: u8,
     max_packet_size: u16,
     interval: u8,
+}
+
+#[derive(Copy, Clone)]
+struct UacFeatureUnitTarget {
+    ac_interface: u8,
+    unit_id: u8,
+    supports_mute: bool,
+    supports_volume: bool,
+}
+
+#[derive(Copy, Clone)]
+struct UacAudioControlTarget {
+    ac_interface: u8,
+    uac2: bool,
+    clock_source_id: Option<u8>,
+    feature_unit: Option<UacFeatureUnitTarget>,
+}
+
+#[derive(Copy, Clone)]
+struct UacStreamTarget {
+    sync_type: u8,
+    has_feedback_ep: bool,
+    max_packet_payload: u16,
 }
 
 #[derive(Copy, Clone)]
@@ -715,7 +739,7 @@ fn pick_preferred_alt(
 ) -> Option<PreferredAlt> {
     let mut best: Option<PreferredAlt> = None;
 
-    for config in configs.iter() {
+    for (config_index, config) in configs.iter().enumerate() {
         for interface in config.interfaces.iter() {
             for alt in interface.alt_settings.iter() {
                 let has_iso_out = alt.endpoints.iter().any(|ep| {
@@ -734,6 +758,7 @@ fn pick_preferred_alt(
                 };
 
                 let candidate = PreferredAlt {
+                    configuration_index: config_index as u8,
                     configuration_value: config.configuration_value,
                     interface_number: alt.interface_number,
                     alternate_setting: alt.alternate_setting,
@@ -774,6 +799,376 @@ fn pick_preferred_alt(
     }
 
     best
+}
+
+fn le_u16_at(bytes: &[u8], off: usize) -> Option<u16> {
+    Some(u16::from_le_bytes([*bytes.get(off)?, *bytes.get(off + 1)?]))
+}
+
+async fn fetch_raw_configuration_bytes(
+    device: &mut crab_usb::Device,
+    configuration_index: u8,
+) -> Option<Vec<u8>> {
+    let mut header = [0u8; 9];
+    device
+        .ep_ctrl()
+        .get_descriptor(
+            usb_if::descriptor::DescriptorType::CONFIGURATION,
+            configuration_index,
+            0,
+            &mut header,
+        )
+        .await
+        .ok()?;
+
+    let total_length = usize::from(le_u16_at(&header, 2)?);
+    if total_length < header.len() {
+        return None;
+    }
+
+    let mut full = Vec::from_iter(core::iter::repeat_n(0u8, total_length));
+    device
+        .ep_ctrl()
+        .get_descriptor(
+            usb_if::descriptor::DescriptorType::CONFIGURATION,
+            configuration_index,
+            0,
+            full.as_mut_slice(),
+        )
+        .await
+        .ok()?;
+    Some(full)
+}
+
+fn parse_uac_stream_target(
+    raw_cfg: &[u8],
+    interface_number: u8,
+    alternate_setting: u8,
+    endpoint_address: u8,
+) -> Option<UacStreamTarget> {
+    let mut idx = 0usize;
+    let mut current_if: Option<(u8, u8, u8, u8)> = None;
+    let mut pending_out: Option<(u8, u16, u8)> = None;
+    let mut has_feedback_ep = false;
+
+    while idx + 2 <= raw_cfg.len() {
+        let len = usize::from(raw_cfg[idx]);
+        if len < 2 || idx + len > raw_cfg.len() {
+            break;
+        }
+
+        match raw_cfg[idx + 1] {
+            0x04 if len >= 9 => {
+                current_if = Some((
+                    raw_cfg[idx + 2],
+                    raw_cfg[idx + 3],
+                    raw_cfg[idx + 5],
+                    raw_cfg[idx + 6],
+                ));
+                pending_out = None;
+                has_feedback_ep = false;
+            }
+            0x05 if len >= 7 => {
+                let ep_addr = raw_cfg[idx + 2];
+                let bm_attr = raw_cfg[idx + 3];
+                let xfer_type = bm_attr & 0x3;
+                let sync_type = (bm_attr >> 2) & 0x3;
+                let usage_type = (bm_attr >> 4) & 0x3;
+                let max_packet = le_u16_at(raw_cfg, idx + 4).unwrap_or(0) & 0x07FF;
+                let dir_in = (ep_addr & 0x80) != 0;
+
+                if !dir_in && xfer_type == 0x01 {
+                    pending_out = Some((ep_addr, max_packet, sync_type));
+                }
+                if dir_in && xfer_type == 0x01 && usage_type == 0x01 {
+                    has_feedback_ep = true;
+                }
+            }
+            _ => {}
+        }
+
+        if let (Some((ifnum, alt, class, subclass)), Some((ep_addr, max_packet, sync_type))) =
+            (current_if, pending_out)
+            && ifnum == interface_number
+            && alt == alternate_setting
+            && class == 0x01
+            && subclass == 0x02
+            && ep_addr == endpoint_address
+        {
+            return Some(UacStreamTarget {
+                sync_type,
+                has_feedback_ep,
+                max_packet_payload: max_packet,
+            });
+        }
+
+        idx += len;
+    }
+
+    None
+}
+
+fn parse_uac_audio_controls(raw_cfg: &[u8]) -> Option<UacAudioControlTarget> {
+    const USB_CLASS_AUDIO: u8 = 0x01;
+    const USB_SUBCLASS_AUDIOCONTROL: u8 = 0x01;
+    const CS_INTERFACE: u8 = 0x24;
+    const UAC_AC_HEADER: u8 = 0x01;
+    const UAC_AC_OUTPUT_TERMINAL: u8 = 0x03;
+    const UAC_AC_FEATURE_UNIT: u8 = 0x06;
+    const UAC2_CLOCK_SOURCE: u8 = 0x0A;
+
+    let mut idx = 0usize;
+    let mut current_ac_if: Option<u8> = None;
+    let mut current_ac_is_uac2 = false;
+    let mut playback_source_id: Option<u8> = None;
+    let mut first_fu: Option<UacFeatureUnitTarget> = None;
+    let mut clock_source_id: Option<u8> = None;
+
+    while idx + 2 <= raw_cfg.len() {
+        let len = usize::from(raw_cfg[idx]);
+        if len < 2 || idx + len > raw_cfg.len() {
+            break;
+        }
+
+        match raw_cfg[idx + 1] {
+            0x04 if len >= 9 => {
+                let interface_number = raw_cfg[idx + 2];
+                let alternate_setting = raw_cfg[idx + 3];
+                let class = raw_cfg[idx + 5];
+                let subclass = raw_cfg[idx + 6];
+                current_ac_if = if alternate_setting == 0
+                    && class == USB_CLASS_AUDIO
+                    && subclass == USB_SUBCLASS_AUDIOCONTROL
+                {
+                    Some(interface_number)
+                } else {
+                    None
+                };
+                current_ac_is_uac2 = false;
+                playback_source_id = None;
+                first_fu = None;
+                clock_source_id = None;
+            }
+            CS_INTERFACE if current_ac_if.is_some() && len >= 3 => {
+                let subtype = raw_cfg[idx + 2];
+                match subtype {
+                    UAC_AC_HEADER if len >= 5 => {
+                        current_ac_is_uac2 = le_u16_at(raw_cfg, idx + 3).unwrap_or(0) >= 0x0200;
+                    }
+                    UAC_AC_OUTPUT_TERMINAL if len >= 9 => {
+                        let terminal_type = le_u16_at(raw_cfg, idx + 4).unwrap_or(0);
+                        let source_id = raw_cfg[idx + 7];
+                        if matches!(terminal_type, 0x0301 | 0x0302 | 0x0303) {
+                            playback_source_id = Some(source_id);
+                        }
+                    }
+                    UAC_AC_FEATURE_UNIT if len >= 7 => {
+                        let unit_id = raw_cfg[idx + 3];
+                        let master_controls = if current_ac_is_uac2 {
+                            if len < 10 {
+                                idx += len;
+                                continue;
+                            }
+                            u32::from(raw_cfg[idx + 5])
+                                | (u32::from(raw_cfg[idx + 6]) << 8)
+                                | (u32::from(raw_cfg[idx + 7]) << 16)
+                                | (u32::from(raw_cfg[idx + 8]) << 24)
+                        } else {
+                            let control_size = usize::from(raw_cfg[idx + 5]);
+                            let controls_off = idx + 6;
+                            let controls_end = controls_off.saturating_add(control_size);
+                            if controls_end > idx + len {
+                                idx += len;
+                                continue;
+                            }
+                            let mut controls = 0u32;
+                            for (shift, b) in raw_cfg[controls_off..controls_end].iter().enumerate()
+                            {
+                                controls |= u32::from(*b) << (shift * 8);
+                            }
+                            controls
+                        };
+
+                        let candidate = UacFeatureUnitTarget {
+                            ac_interface: current_ac_if.unwrap_or(0),
+                            unit_id,
+                            supports_mute: (master_controls & 0x01) != 0,
+                            supports_volume: (master_controls & 0x02) != 0,
+                        };
+
+                        if playback_source_id == Some(unit_id) {
+                            return Some(UacAudioControlTarget {
+                                ac_interface: current_ac_if.unwrap_or(0),
+                                uac2: current_ac_is_uac2,
+                                clock_source_id,
+                                feature_unit: Some(candidate),
+                            });
+                        }
+                        if first_fu.is_none() {
+                            first_fu = Some(candidate);
+                        }
+                    }
+                    UAC2_CLOCK_SOURCE if current_ac_is_uac2 && len >= 4 => {
+                        clock_source_id = Some(raw_cfg[idx + 3]);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+
+        idx += len;
+    }
+
+    current_ac_if.map(|ac_interface| UacAudioControlTarget {
+        ac_interface,
+        uac2: current_ac_is_uac2,
+        clock_source_id,
+        feature_unit: first_fu,
+    })
+}
+
+async fn configure_uac_playback_controls(
+    device: &mut crab_usb::Device,
+    vendor_id: u16,
+    product_id: u16,
+    raw_cfg: &[u8],
+) {
+    let Some(controls) = parse_uac_audio_controls(raw_cfg) else {
+        crate::log!(
+            "crabusb: target {:04X}:{:04X} no audio control entities found\n",
+            vendor_id,
+            product_id
+        );
+        return;
+    };
+
+    crate::log!(
+        "crabusb: target {:04X}:{:04X} audio control ac_if={} uac2={} clock={} feature={}\n",
+        vendor_id,
+        product_id,
+        controls.ac_interface,
+        controls.uac2,
+        controls.clock_source_id.unwrap_or(0),
+        controls.feature_unit.map(|f| f.unit_id).unwrap_or(0)
+    );
+
+    if controls.uac2
+        && let Some(clock_id) = controls.clock_source_id
+    {
+        match device
+            .control_out(
+                usb_if::host::ControlSetup {
+                    request_type: usb_if::transfer::RequestType::Class,
+                    recipient: usb_if::transfer::Recipient::Interface,
+                    request: usb_if::transfer::Request::Other(0x01),
+                    value: 0x0100,
+                    index: (u16::from(clock_id) << 8) | u16::from(controls.ac_interface),
+                },
+                &48_000u32.to_le_bytes(),
+            )
+            .await
+        {
+            Ok(_) => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio clock-rate ok clock={} ac_if={} hz=48000\n",
+                vendor_id,
+                product_id,
+                clock_id,
+                controls.ac_interface
+            ),
+            Err(err) => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio clock-rate failed clock={} ac_if={} hz=48000 err={:?}\n",
+                vendor_id,
+                product_id,
+                clock_id,
+                controls.ac_interface,
+                err
+            ),
+        }
+    }
+
+    let Some(feature) = controls.feature_unit else {
+        crate::log!(
+            "crabusb: target {:04X}:{:04X} no playback feature unit found\n",
+            vendor_id,
+            product_id
+        );
+        return;
+    };
+
+    crate::log!(
+        "crabusb: target {:04X}:{:04X} audio feature unit id={} ac_if={} mute={} volume={}\n",
+        vendor_id,
+        product_id,
+        feature.unit_id,
+        feature.ac_interface,
+        feature.supports_mute,
+        feature.supports_volume
+    );
+
+    if feature.supports_mute {
+        match device
+            .control_out(
+                usb_if::host::ControlSetup {
+                    request_type: usb_if::transfer::RequestType::Class,
+                    recipient: usb_if::transfer::Recipient::Interface,
+                    request: usb_if::transfer::Request::Other(0x01),
+                    value: 0x0100,
+                    index: (u16::from(feature.unit_id) << 8) | u16::from(feature.ac_interface),
+                },
+                &[0],
+            )
+            .await
+        {
+            Ok(_) => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio unmute ok fu={} ac_if={}\n",
+                vendor_id,
+                product_id,
+                feature.unit_id,
+                feature.ac_interface
+            ),
+            Err(err) => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio unmute failed fu={} ac_if={} err={:?}\n",
+                vendor_id,
+                product_id,
+                feature.unit_id,
+                feature.ac_interface,
+                err
+            ),
+        }
+    }
+
+    if feature.supports_volume {
+        match device
+            .control_out(
+                usb_if::host::ControlSetup {
+                    request_type: usb_if::transfer::RequestType::Class,
+                    recipient: usb_if::transfer::Recipient::Interface,
+                    request: usb_if::transfer::Request::Other(0x01),
+                    value: 0x0200,
+                    index: (u16::from(feature.unit_id) << 8) | u16::from(feature.ac_interface),
+                },
+                &0i16.to_le_bytes(),
+            )
+            .await
+        {
+            Ok(_) => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio volume ok fu={} ac_if={} value_db256=0\n",
+                vendor_id,
+                product_id,
+                feature.unit_id,
+                feature.ac_interface
+            ),
+            Err(err) => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio volume failed fu={} ac_if={} err={:?}\n",
+                vendor_id,
+                product_id,
+                feature.unit_id,
+                feature.ac_interface,
+                err
+            ),
+        }
+    }
 }
 
 fn find_iso_out_endpoint(
@@ -1082,15 +1477,25 @@ async fn stream_target_audio(
     product_id: u16,
     preferred: PreferredAlt,
     endpoint: IsoOutEndpoint,
+    stream_target: Option<UacStreamTarget>,
 ) {
-    // This device is driven as s16le stereo 48kHz, which is 192 bytes per 1ms USB frame.
-    // Keep the payload explicit instead of inferring it from bInterval alone.
-    let packet_bytes = ((48_000usize * AUDIO_FRAME_BYTES) / 1_000)
+    const PACKETS_PER_REQUEST: usize = 64;
+
+    let endpoint_payload_limit = stream_target
+        .map(|target| usize::from(target.max_packet_payload.max(AUDIO_FRAME_BYTES as u16)))
+        .unwrap_or_else(|| {
+            usize::from((endpoint.max_packet_size & 0x07FF).max(AUDIO_FRAME_BYTES as u16))
+        });
+    // `submit_and_wait(..., num_packets)` treats the buffer as `num_packets` isoch packets.
+    // Keep each packet at the nominal 125us PCM payload and rely on a deeper request batch
+    // to keep the high-level crabusb path fed even when completions are awaited serially.
+    let packet_bytes = ((48_000usize * AUDIO_FRAME_BYTES) / 8_000)
         .max(AUDIO_FRAME_BYTES)
-        .min(usize::from(endpoint.max_packet_size));
-    let mut packet = Vec::from_iter(core::iter::repeat_n(0u8, packet_bytes));
-    let wav = parse_wav_pcm_s16_stereo_48k(DEMO_WAV_EMBEDDED)
-        .map(|(data_off, data_len)| &DEMO_WAV_EMBEDDED[data_off..data_off + data_len]);
+        .min(endpoint_payload_limit);
+    let urb_bytes = packet_bytes.saturating_mul(PACKETS_PER_REQUEST);
+    let mut packet_batch = Vec::from_iter(core::iter::repeat_n(0u8, urb_bytes));
+    // Diagnostic mode: force synthesized tone to rule out source-file silence.
+    let wav = None;
     let mut wav_cursor = 0usize;
     let mut sine_phase = 0.0f32;
 
@@ -1122,20 +1527,30 @@ async fn stream_target_audio(
 
     AUDIO_STREAM_ACTIVE.store(true, Ordering::Release);
     crate::log!(
-        "crabusb: audio streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} packet={} source={}\n",
+        "crabusb: audio streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} packet={} batch={} sync={} feedback={} source={}\n",
         vendor_id,
         product_id,
         preferred.interface_number,
         preferred.alternate_setting,
         endpoint.address,
         packet_bytes,
+        PACKETS_PER_REQUEST,
+        stream_target.map(|target| target.sync_type).unwrap_or(0xFF),
+        stream_target
+            .map(|target| target.has_feedback_ep)
+            .unwrap_or(false),
         if wav.is_some() { "demo.wav" } else { "sine" }
     );
 
     loop {
-        fill_audio_packet(packet.as_mut_slice(), wav, &mut wav_cursor, &mut sine_phase);
+        for packet in packet_batch.chunks_exact_mut(packet_bytes) {
+            fill_audio_packet(packet, wav, &mut wav_cursor, &mut sine_phase);
+        }
 
-        match iso_out.submit_and_wait(packet.as_slice(), 1).await {
+        match iso_out
+            .submit_and_wait(packet_batch.as_slice(), PACKETS_PER_REQUEST)
+            .await
+        {
             Ok(sent) => {
                 if sent == 0 {
                     Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -1200,6 +1615,27 @@ async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::Devic
         return;
     };
 
+    let raw_cfg = fetch_raw_configuration_bytes(&mut device, preferred.configuration_index).await;
+    let stream_target = raw_cfg.as_deref().and_then(|cfg| {
+        parse_uac_stream_target(
+            cfg,
+            preferred.interface_number,
+            preferred.alternate_setting,
+            endpoint.address,
+        )
+    });
+
+    if let Some(target) = stream_target {
+        crate::log!(
+            "crabusb: target {:04X}:{:04X} audio stream sync={} feedback={} max_payload={}\n",
+            vendor_id,
+            product_id,
+            target.sync_type,
+            target.has_feedback_ep,
+            target.max_packet_payload
+        );
+    }
+
     if let Err(err) = device
         .ep_ctrl()
         .set_configuration(preferred.configuration_value)
@@ -1239,7 +1675,7 @@ async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::Devic
                 ((48_000u32 >> 8) & 0xFF) as u8,
                 ((48_000u32 >> 16) & 0xFF) as u8,
             ];
-            let _ = device
+            match device
                 .control_out(
                     usb_if::host::ControlSetup {
                         request_type: usb_if::transfer::RequestType::Class,
@@ -1250,8 +1686,42 @@ async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::Devic
                     },
                     &rate_bytes,
                 )
-                .await;
-            stream_target_audio(&mut device, vendor_id, product_id, preferred, endpoint).await;
+                .await
+            {
+                Ok(_) => crate::log!(
+                    "crabusb: target {:04X}:{:04X} audio set-rate ok ep=0x{:02X} hz=48000\n",
+                    vendor_id,
+                    product_id,
+                    endpoint.address
+                ),
+                Err(err) => crate::log!(
+                    "crabusb: target {:04X}:{:04X} audio set-rate failed ep=0x{:02X} hz=48000 err={:?}\n",
+                    vendor_id,
+                    product_id,
+                    endpoint.address,
+                    err
+                ),
+            }
+
+            if let Some(raw_cfg) = raw_cfg.as_deref() {
+                configure_uac_playback_controls(&mut device, vendor_id, product_id, raw_cfg).await;
+            } else {
+                crate::log!(
+                    "crabusb: target {:04X}:{:04X} failed to fetch raw cfg#{} for audio controls\n",
+                    vendor_id,
+                    product_id,
+                    preferred.configuration_index
+                );
+            }
+            stream_target_audio(
+                &mut device,
+                vendor_id,
+                product_id,
+                preferred,
+                endpoint,
+                stream_target,
+            )
+            .await;
         }
         Err(err) => crate::log!(
             "crabusb: target {:04X}:{:04X} audio claim failed if#{} alt={}: {:?}\n",
@@ -1627,8 +2097,6 @@ pub async fn audio_task() {
         Timer::after(EmbassyDuration::from_secs(5)).await;
         if AUDIO_STREAM_ACTIVE.load(Ordering::Acquire) {
             crate::log!("crabusb: audio service streaming\n");
-        } else {
-            crate::log!("crabusb: audio service waiting for target audio device\n");
         }
     }
 }
@@ -1641,8 +2109,6 @@ pub async fn truekey_task() {
         Timer::after(EmbassyDuration::from_secs(5)).await;
         if TRUEKEY_STREAM_ACTIVE.load(Ordering::Acquire) {
             crate::log!("crabusb: truekey service streaming\n");
-        } else {
-            crate::log!("crabusb: truekey service waiting for scout handoff\n");
         }
     }
 }
