@@ -215,7 +215,14 @@ fn pick_hid_boot_targets(
                 let kind = match (alt.class, alt.subclass, alt.protocol) {
                     (0x03, 0x01, 0x01) => HidBootKind::Keyboard,
                     (0x03, 0x01, 0x02) => HidBootKind::Mouse,
-                    (0x03, 0x00, 0x00) => HidBootKind::Tablet,
+                    _ if super::hid::tablet::matches_interface(
+                        alt.class,
+                        alt.subclass,
+                        alt.protocol,
+                    ) =>
+                    {
+                        HidBootKind::Tablet
+                    }
                     _ => continue,
                 };
 
@@ -229,7 +236,9 @@ fn pick_hid_boot_targets(
                 let report_len = match kind {
                     HidBootKind::Keyboard => 8,
                     HidBootKind::Mouse => 4,
-                    HidBootKind::Tablet => usize::from(endpoint.max_packet_size.max(8)),
+                    HidBootKind::Tablet => {
+                        super::hid::tablet::report_len(endpoint.max_packet_size)
+                    }
                 };
                 out.push(HidBootTarget {
                     configuration_value: config.configuration_value,
@@ -300,6 +309,8 @@ async fn hid_boot_stream_task(
         ep_target,
         kind: target.kind,
     };
+    let mut boot_protocol_ok = false;
+    let mut set_idle_ok = false;
 
     if let Err(err) = device
         .ep_ctrl()
@@ -355,13 +366,7 @@ async fn hid_boot_stream_task(
             .await
         {
             Ok(_) => {
-                crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} boot protocol if#{} ok\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    target.interface_number
-                );
+                boot_protocol_ok = true;
             }
             Err(err) => {
                 crate::log!(
@@ -390,13 +395,7 @@ async fn hid_boot_stream_task(
             .await
         {
             Ok(_) => {
-                crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 ok\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    target.interface_number
-                );
+                set_idle_ok = true;
             }
             Err(err) => {
                 crate::log!(
@@ -427,13 +426,7 @@ async fn hid_boot_stream_task(
             .await
         {
             Ok(_) => {
-                crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 ok\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    target.interface_number
-                );
+                set_idle_ok = true;
             }
             Err(err) => {
                 crate::log!(
@@ -447,20 +440,6 @@ async fn hid_boot_stream_task(
             }
         }
     }
-
-    crate::log!(
-        "crabusb: hid {} {:04X}:{:04X} ownership if#{} alt={} cfg={} int_in=0x{:02X} mps={} ep_target={} proto={:02X}\n",
-        target.kind.as_str(),
-        vendor_id,
-        product_id,
-        target.interface_number,
-        target.alternate_setting,
-        target.configuration_value,
-        target.in_endpoint,
-        target.in_max_packet_size,
-        ep_target,
-        target.protocol
-    );
 
     let mut interrupt_in = match interface.endpoint_interrupt_in(target.in_endpoint).await {
         Ok(endpoint) => endpoint,
@@ -490,17 +469,26 @@ async fn hid_boot_stream_task(
     };
 
     crate::log!(
-        "crabusb: hid {} {:04X}:{:04X} endpoint wiring interrupt_in=true\n",
+        "crabusb: hid {} {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} ep_target={} proto={:02X} boot={} idle={}\n",
         target.kind.as_str(),
         vendor_id,
-        product_id
+        product_id,
+        slot_id,
+        target.interface_number,
+        target.alternate_setting,
+        target.configuration_value,
+        target.in_endpoint,
+        target.in_max_packet_size,
+        ep_target,
+        target.protocol,
+        boot_protocol_ok,
+        set_idle_ok
     );
 
     let mut report = Vec::from_iter(core::iter::repeat_n(
         0u8,
         usize::from(target.in_max_packet_size.max(target.report_len as u16)),
     ));
-    let mut sample_logs_left = 6u8;
     let mut timeout_logs = 0u32;
 
     loop {
@@ -533,19 +521,6 @@ async fn hid_boot_stream_task(
                 }
 
                 let sample = &report[..read.min(report.len())];
-                if sample_logs_left != 0 {
-                    sample_logs_left -= 1;
-                    let prefix_len = min(sample.len(), 8);
-                    crate::log!(
-                        "crabusb: hid {} {:04X}:{:04X} report ep=0x{:02X} len={} bytes={:02X?}\n",
-                        target.kind.as_str(),
-                        vendor_id,
-                        product_id,
-                        target.in_endpoint,
-                        sample.len(),
-                        &sample[..prefix_len]
-                    );
-                }
                 match target.kind {
                     HidBootKind::Keyboard => super::handle_keyboard_boot_report(
                         controller_id,
@@ -557,19 +532,12 @@ async fn hid_boot_stream_task(
                         super::handle_mouse_boot_report(controller_id, slot_id, ep_target, sample)
                     }
                     HidBootKind::Tablet => {
-                        let nonzero = sample.iter().copied().any(|byte| byte != 0);
-                        if sample_logs_left != 0 || nonzero {
-                            let prefix_len = min(sample.len(), 12);
-                            crate::log!(
-                                "crabusb: hid tablet {:04X}:{:04X} packet ep=0x{:02X} len={} nonzero={} bytes={:02X?}\n",
-                                vendor_id,
-                                product_id,
-                                target.in_endpoint,
-                                sample.len(),
-                                nonzero,
-                                &sample[..prefix_len]
-                            );
-                        }
+                        super::hid::tablet::handle_packet(
+                            vendor_id,
+                            product_id,
+                            target.in_endpoint,
+                            sample,
+                        );
                     }
                 }
             }
@@ -640,13 +608,16 @@ async fn maybe_start_hid_boot_streams(
             Ok(()) => {
                 started_any = true;
                 crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} handoff if#{} alt={} ep=0x{:02X}\n",
+                    "crabusb: hid {} {:04X}:{:04X} handoff if#{} alt={} cfg={} int_in=0x{:02X} mps={} proto={:02X}\n",
                     target.kind.as_str(),
                     vendor_id,
                     product_id,
                     target.interface_number,
                     target.alternate_setting,
-                    target.in_endpoint
+                    target.configuration_value,
+                    target.in_endpoint,
+                    target.in_max_packet_size,
+                    target.protocol
                 );
             }
             Err(err) => {
@@ -1345,7 +1316,6 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: u32
     match host.probe_devices().await {
         Ok(devices) => {
             if devices.is_empty() {
-                crate::log!("crabusb: no newly discovered devices\n");
                 if !ROOT_PORT_CHANGE_SEEN.load(Ordering::Acquire)
                     && NO_PORT_CHANGE_HINT_LOGGED
                         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -1372,6 +1342,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: u32
                     maybe_start_truekey_bridge(host, dev).await;
                     maybe_start_target_audio(host, dev).await;
                     let _ = maybe_start_hid_boot_streams(host, dev, spawner, controller_id).await;
+                    let _ = super::midi::maybe_start_midi(host, dev, spawner, controller_id).await;
                     let _ = super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id)
                         .await;
                 }
@@ -1392,14 +1363,6 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
     {
         return;
     }
-
-    crate::log!(
-        "crabusb: one-time snapshot controller={} bdf={:02X}:{:02X}.{}\n",
-        info.index,
-        info.bus,
-        info.slot,
-        info.function
-    );
 
     crate::log!("crabusb: scout begin\n");
     match host.probe_devices().await {
@@ -1441,6 +1404,9 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                     continue;
                 }
                 if maybe_start_hid_boot_streams(host, dev, spawner, info.index as u32).await {
+                    continue;
+                }
+                if super::midi::maybe_start_midi(host, dev, spawner, info.index as u32).await {
                     continue;
                 }
                 if super::pen::maybe_start_mass_storage(host, dev, spawner, info.index as u32).await
@@ -1556,10 +1522,6 @@ pub async fn bsp_service(spawner: Spawner) {
             continue;
         }
 
-        crate::log!(
-            "crabusb: host init complete for controller {}\n",
-            info.index
-        );
         ROOT_PORT_CHANGE_SEEN.store(false, Ordering::Release);
         NO_PORT_CHANGE_HINT_LOGGED.store(false, Ordering::Release);
         crab_scout_once(&mut host, info, &spawner).await;

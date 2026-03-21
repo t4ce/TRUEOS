@@ -926,7 +926,6 @@ pub(crate) async fn probe_mass_bot(
     let lun = 0u8;
     let mut inquiry = [0u8; 36];
     let inquiry_cdb = [0x12, 0, 0, 0, inquiry.len() as u8, 0];
-    let _ = log_xhci_mass_endpoint_state(device.slot_id(), bulk_out_ep, bulk_in_ep, "pre-inquiry");
     let inquiry_read = match bot_command_in(
         bulk_out,
         bulk_in,

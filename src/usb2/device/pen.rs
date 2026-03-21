@@ -664,19 +664,6 @@ pub async fn mass_storage_task(mut device: Device, controller_id: u32, target: M
         }
     };
 
-    crate::log!(
-        "crabusb: mass {:04X}:{:04X} ownership if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={}\n",
-        vendor_id,
-        product_id,
-        interface.interface_number(),
-        interface.alternate_setting(),
-        target.configuration_value,
-        target.bulk_in,
-        target.bulk_out,
-        target.bulk_in_max_packet_size,
-        target.bulk_out_max_packet_size
-    );
-
     let bulk_out = match interface.endpoint_bulk_out(target.bulk_out).await {
         Ok(ep) => ep,
         Err(err) => {
@@ -707,14 +694,6 @@ pub async fn mass_storage_task(mut device: Device, controller_id: u32, target: M
     };
     drop(interface);
 
-    crate::log!(
-        "crabusb: mass {:04X}:{:04X} endpoint wiring bulk_out={} bulk_in={}\n",
-        vendor_id,
-        product_id,
-        true,
-        true
-    );
-
     let mut bulk_out = bulk_out;
     let mut bulk_in = bulk_in;
     let probe = match mass::probe_mass_bot(
@@ -740,43 +719,36 @@ pub async fn mass_storage_task(mut device: Device, controller_id: u32, target: M
         }
     };
 
+    let identity = build_mass_identity(&mut device, controller_id, u32::from(slot)).await;
+    let existing_handle = registered_disk(identity.runtime_key);
+    let handle = register_block_device(&identity, vendor_id, product_id, &probe);
+    let attach_mode = if existing_handle.is_some() {
+        "reattached"
+    } else {
+        "registered"
+    };
     crate::log!(
-        "crabusb: mass {:04X}:{:04X} probe max_lun={} bs={} blocks={} vendor='{}' product='{}'\n",
+        "crabusb: mass {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} disk={} mode={} label={:?} serial={:?} key={} bs={} blocks={} vendor='{}' product='{}'\n",
         vendor_id,
         product_id,
-        probe.max_lun,
+        slot,
+        target.interface_number,
+        target.alternate_setting,
+        target.configuration_value,
+        target.bulk_in,
+        target.bulk_out,
+        target.bulk_in_max_packet_size,
+        target.bulk_out_max_packet_size,
+        handle.id(),
+        attach_mode,
+        handle.info().label,
+        identity.serial.as_deref(),
+        identity.key_kind,
         probe.block_size,
         probe.block_count,
         probe.vendor,
         probe.product
     );
-
-    let identity = build_mass_identity(&mut device, controller_id, u32::from(slot)).await;
-    let existing_handle = registered_disk(identity.runtime_key);
-    let handle = register_block_device(&identity, vendor_id, product_id, &probe);
-    if let Some(existing_handle) = existing_handle {
-        crate::log!(
-            "crabusb: mass {:04X}:{:04X} reattached disk {} key={} serial={:?} slot={}\n",
-            vendor_id,
-            product_id,
-            existing_handle.id(),
-            identity.key_kind,
-            identity.serial.as_deref(),
-            slot
-        );
-    } else {
-        crate::log!(
-            "crabusb: mass {:04X}:{:04X} registered disk {} label={:?} serial={:?} key={} bs={} blocks={}\n",
-            vendor_id,
-            product_id,
-            handle.id(),
-            handle.info().label,
-            identity.serial.as_deref(),
-            identity.key_kind,
-            probe.block_size,
-            probe.block_count
-        );
-    }
 
     register_runtime(UsbMassRuntime {
         controller_id,
@@ -872,13 +844,16 @@ pub(crate) async fn maybe_start_mass_storage(
     match spawner.spawn(mass_storage_task(device, controller_id, target)) {
         Ok(()) => {
             crate::log!(
-                "crabusb: mass {:04X}:{:04X} handoff if#{} alt={} bulk_in=0x{:02X} bulk_out=0x{:02X}\n",
+                "crabusb: mass {:04X}:{:04X} handoff if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={}\n",
                 vendor_id,
                 product_id,
                 target.interface_number,
                 target.alternate_setting,
+                target.configuration_value,
                 target.bulk_in,
-                target.bulk_out
+                target.bulk_out,
+                target.bulk_in_max_packet_size,
+                target.bulk_out_max_packet_size
             );
         }
         Err(err) => {
