@@ -17,10 +17,32 @@ trueos_vmx_guest_entry:
 .Lwrite_preserve:
     lodsb
     test al, al
-    jz .Ldo_vmcall
+    jz .Ldo_run
     mov dx, 0xE9
     out dx, al
     jmp .Lwrite_preserve
+
+.Ldo_run:
+    lea rsi, [rip + .Lrun]
+.Lwrite_run:
+    lodsb
+    test al, al
+    jz .Lcall_run
+    mov dx, 0xE9
+    out dx, al
+    jmp .Lwrite_run
+
+.Lcall_run:
+    call trueos_vm_guest_run
+
+    lea rsi, [rip + .Ldone]
+.Lwrite_done:
+    lodsb
+    test al, al
+    jz .Ldo_vmcall
+    mov dx, 0xE9
+    out dx, al
+    jmp .Lwrite_done
 
 .Ldo_vmcall:
     mov eax, 1
@@ -34,8 +56,17 @@ trueos_vmx_guest_entry:
     .asciz "VMCR3\n"
 .Lpreserve:
     .asciz "VMPRESERVE\n"
+.Lrun:
+    .asciz "VMRUN\n"
+.Ldone:
+    .asciz "VMRDONE\n"
 "#
 );
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_vm_guest_run() {
+    crate::demo::start();
+}
 
 unsafe extern "C" {
     #[link_name = "trueos_vmx_guest_entry"]
