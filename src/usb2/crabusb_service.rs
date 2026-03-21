@@ -132,6 +132,7 @@ struct PreferredAlt {
 struct IsoOutEndpoint {
     address: u8,
     max_packet_size: u16,
+    interval: u8,
 }
 
 #[derive(Copy, Clone)]
@@ -793,6 +794,7 @@ fn find_iso_out_endpoint(
                         return Some(IsoOutEndpoint {
                             address: ep.address,
                             max_packet_size: ep.max_packet_size,
+                            interval: ep.interval,
                         });
                     }
                 }
@@ -1078,7 +1080,16 @@ async fn stream_target_audio(
     preferred: PreferredAlt,
     endpoint: IsoOutEndpoint,
 ) {
-    let packet_bytes = usize::from(endpoint.max_packet_size.max(AUDIO_FRAME_BYTES as u16));
+    // Compute how many audio bytes belong in one isochronous period.
+    // For s16le stereo 48kHz: the period is typically 1ms (bInterval->1ms for FS, or
+    // bInterval=4->1ms for HS). We assume HS encoding: period_µs = 125 * 2^(interval-1).
+    // Clamp the result to [AUDIO_FRAME_BYTES, max_packet_size] so we never exceed MPS.
+    let period_us = 125u64.saturating_mul(1u64 << endpoint.interval.saturating_sub(1).min(7));
+    let bytes_from_rate =
+        (48_000u64 * AUDIO_FRAME_BYTES as u64).saturating_mul(period_us) / 1_000_000;
+    let packet_bytes = (bytes_from_rate as usize)
+        .max(AUDIO_FRAME_BYTES)
+        .min(usize::from(endpoint.max_packet_size));
     let mut packet = Vec::from_iter(core::iter::repeat_n(0u8, packet_bytes));
     let wav = parse_wav_pcm_s16_stereo_48k(DEMO_WAV_EMBEDDED)
         .map(|(data_off, data_len)| &DEMO_WAV_EMBEDDED[data_off..data_off + data_len]);
@@ -1125,6 +1136,7 @@ async fn stream_target_audio(
 
     loop {
         fill_audio_packet(packet.as_mut_slice(), wav, &mut wav_cursor, &mut sine_phase);
+
         match iso_out.submit_and_wait(packet.as_slice(), 1).await {
             Ok(sent) => {
                 if sent == 0 {
@@ -1196,13 +1208,36 @@ async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::Devic
     {
         Ok(()) => {
             crate::log!(
-                "crabusb: target {:04X}:{:04X} audio ownership if#{} alt={} ep=0x{:02X}\n",
+                "crabusb: target {:04X}:{:04X} audio ownership if#{} alt={} ep=0x{:02X} interval={}
+",
                 vendor_id,
                 product_id,
                 preferred.interface_number,
                 preferred.alternate_setting,
-                endpoint.address
+                endpoint.address,
+                endpoint.interval
             );
+            // UAC1: set sampling frequency on the isoch OUT endpoint.
+            // bmRequestType=0x22 (Class|Endpoint|H->D), bRequest=SET_CUR(0x01),
+            // wValue=0x0100 (SAMPLING_FREQ_CONTROL), wIndex=ep_addr, wLength=3.
+            // Devices that don't support this STALL; ignore errors.
+            let rate_bytes = [
+                (48_000u32 & 0xFF) as u8,
+                ((48_000u32 >> 8) & 0xFF) as u8,
+                ((48_000u32 >> 16) & 0xFF) as u8,
+            ];
+            let _ = device
+                .control_out(
+                    usb_if::host::ControlSetup {
+                        request_type: usb_if::transfer::RequestType::Class,
+                        recipient: usb_if::transfer::Recipient::Endpoint,
+                        request: usb_if::transfer::Request::Other(0x01),
+                        value: 0x0100,
+                        index: u16::from(endpoint.address),
+                    },
+                    &rate_bytes,
+                )
+                .await;
             stream_target_audio(&mut device, vendor_id, product_id, preferred, endpoint).await;
         }
         Err(err) => crate::log!(

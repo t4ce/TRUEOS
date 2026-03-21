@@ -67,13 +67,16 @@ QEMU_ISO_FLAGS_DBG = $(QEMU_GFX_FLAGS) -machine q35 -bios $(QEMU_UEFI_FIRMWARE) 
 QEMU_UPDATE_TARGET_PCI ?= 0000:08:00.0
 QEMU_UPDATE_TARGET_FLAGS = -device vfio-pci,host=$(QEMU_UPDATE_TARGET_PCI),bus=pcie.0,addr=0x6
 
+QEMU_USB_AUDIO_VENDOR_ID ?= 0x0db0
+QEMU_USB_AUDIO_PRODUCT_ID ?= 0x62a4
+
 QEMU_USB_HOST_FLAGS = -device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5  \
 	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=2,id=usbpendrive \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk   \
 	-device usb-storage,drive=usbdisk,bus=xhci.0,port=4,id=usbms   \
 	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd  \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse  \
-	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=5,id=usbhypx \
+	-device usb-host,vendorid=$(QEMU_USB_AUDIO_VENDOR_ID),productid=$(QEMU_USB_AUDIO_PRODUCT_ID),bus=xhci.0,port=5,id=usbaudio \
 
 #	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=1,id=usbtruekey \
 #	

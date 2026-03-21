@@ -5,6 +5,27 @@ use alloc::{string::String, vec};
 use crate::vcabi;
 
 #[inline]
+pub fn upload_svg_to_texture(tex_id: u32, svg: &[u8]) -> i32 {
+    if svg.is_empty() {
+        return -1;
+    }
+    unsafe { vcabi::trueos_cabi_gfx_upload_texture_svg(tex_id, svg.as_ptr(), svg.len()) }
+}
+
+#[inline]
+pub fn upload_svg_to_texture_async(tex_id: u32, svg: &[u8]) -> i32 {
+    if svg.is_empty() {
+        return -1;
+    }
+    unsafe { vcabi::trueos_cabi_gfx_upload_texture_svg_async(tex_id, svg.as_ptr(), svg.len()) }
+}
+
+#[inline]
+pub fn texture_status(tex_id: u32) -> i32 {
+    unsafe { vcabi::trueos_cabi_gfx_texture_status(tex_id) }
+}
+
+#[inline]
 pub fn capture_screenshot_data_url() -> Option<String> {
     let len = unsafe { vcabi::trueos_cabi_gfx_capture_screenshot_data_url(core::ptr::null_mut(), 0) };
     if len <= 0 {

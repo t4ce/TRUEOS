@@ -1,5 +1,6 @@
 pub use v::vclock;
 pub use v::vfs;
+pub use v::vgfx;
 pub use v::vinput;
 pub use v::vnet;
 pub use v::vnetfs;
