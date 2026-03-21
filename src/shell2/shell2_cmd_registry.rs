@@ -41,11 +41,6 @@ fn dispatch_etc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
     super::cmds::etc::try_parse(io, &mut args)
 }
 
-fn dispatch_format(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::format::try_parse(io, &mut args)
-}
-
 fn dispatch_hv(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::hv::try_parse(spawner, io, &mut args)
@@ -147,12 +142,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         mode: "cmd",
         color: None,
         handler: dispatch_file,
-    },
-    BuiltinShell2CmdEntry {
-        name: "format",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_format,
     },
     BuiltinShell2CmdEntry {
         name: "hv",

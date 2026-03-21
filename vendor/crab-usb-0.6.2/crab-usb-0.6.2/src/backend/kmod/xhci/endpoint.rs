@@ -142,11 +142,7 @@ impl Endpoint {
             .set_trb_transfer_length(buff_len as _)
             .set_interrupter_target(0)
             .set_interrupt_on_completion();
-
-        // if use_sia {
-        //     trb.set_start_isoch_asap(); // 启用SIA
-        // }
-
+    trb.set_start_isoch_asap();
         // 创建Isoch TRB
         let trb = transfer::Allowed::Isoch(trb);
         self.enque_trb(trb)
@@ -182,16 +178,17 @@ impl Endpoint {
                     // 第一个TRB必须是Isoch TRB
                     id = self.enque_iso_trb(current_addr, current_size as _);
                 } else {
-                    // 后续TRB使用Normal TRB
-                    let mut trb = Normal::new();
-                    trb.set_data_buffer_pointer(current_addr as _);
-                    trb.set_trb_transfer_length(current_size as _);
-                    trb.set_interrupter_target(0);
-
+                        // Each subsequent packet is its own isoch TD with SIA so the
+                        // controller schedules it at the next available service interval.
+                        let mut trb = Isoch::new();
+                        trb.set_data_buffer_pointer(current_addr as _)
+                            .set_trb_transfer_length(current_size as _)
+                            .set_interrupter_target(0)
+                            .set_start_isoch_asap();
                     if is_last {
                         trb.set_interrupt_on_completion();
                     }
-                    let trb = transfer::Allowed::Normal(trb);
+                        let trb = transfer::Allowed::Isoch(trb);
                     id = self.enque_trb(trb);
                 }
             }
