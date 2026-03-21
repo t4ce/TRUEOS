@@ -4,6 +4,7 @@ extern crate alloc;
 
 pub mod collections;
 pub mod fmt;
+pub mod iter;
 pub mod vled {
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     pub struct Rgb8 {
