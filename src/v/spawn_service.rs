@@ -567,7 +567,7 @@ fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_crabusb_bsp_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::usb2::crabusb_bsp_service())
+        spawner.spawn(crate::usb2::crabusb_bsp_service(spawner))
     })
 }
 
