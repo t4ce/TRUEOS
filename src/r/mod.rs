@@ -15,4 +15,5 @@ pub mod path;
 pub mod readiness;
 pub mod spawn_service;
 pub mod std;
+pub mod sync;
 pub mod ui2;
