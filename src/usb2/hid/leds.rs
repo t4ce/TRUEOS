@@ -1,8 +1,4 @@
-use crab_usb::{
-    Device, EndpointBulkOut, EndpointInterruptOut,
-    err::TransferError,
-    usb_if,
-};
+use crab_usb::{Device, EndpointBulkOut, EndpointInterruptOut, err::TransferError, usb_if};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
@@ -202,9 +198,14 @@ async fn send_output_report(
                 rt.slot_id,
                 err
             );
-            send_hid_set_report(&mut rt.device, rt.interface_number, report_id, control_payload)
-                .await
-                .map_err(|_| ())
+            send_hid_set_report(
+                &mut rt.device,
+                rt.interface_number,
+                report_id,
+                control_payload,
+            )
+            .await
+            .map_err(|_| ())
         }
     };
 
@@ -265,9 +266,7 @@ pub async fn send_preferred_output_report_for_handle(
     send_output_report(controller_id as u32, slot_id, report_id, &payload[..take]).await
 }
 
-fn pick_led_target(
-    configs: &[usb_if::descriptor::ConfigurationDescriptor],
-) -> Option<LedTarget> {
+fn pick_led_target(configs: &[usb_if::descriptor::ConfigurationDescriptor]) -> Option<LedTarget> {
     let mut best: Option<(u8, LedTarget)> = None;
 
     for config in configs.iter() {
@@ -388,7 +387,9 @@ pub async fn led_controller_task(mut device: Device, controller_id: u32, target:
                 return;
             }
         },
-        LedOutEndpointKind::Bulk => match interface.endpoint_bulk_out(target.out_endpoint.address).await
+        LedOutEndpointKind::Bulk => match interface
+            .endpoint_bulk_out(target.out_endpoint.address)
+            .await
         {
             Ok(ep) => LedOutEndpoint::Bulk(ep),
             Err(err) => {

@@ -262,7 +262,10 @@ pub async fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionIn
         .ok_or(Error::InvalidParam)?;
     let mut table = vec![0u8; table_len];
     let max_blocks_per_read = if device_info.max_transfer_bytes > 0 {
-        core::cmp::max(1usize, (device_info.max_transfer_bytes as usize) / block_size)
+        core::cmp::max(
+            1usize,
+            (device_info.max_transfer_bytes as usize) / block_size,
+        )
     } else {
         blocks_to_read.max(1)
     };

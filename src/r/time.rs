@@ -11,7 +11,7 @@ struct WakeEntry {
     waker: Waker,
 }
 
-const MAX_WAKEUPS: usize = 64;
+const MAX_WAKEUPS: usize = 9000;
 
 static START_TSC: AtomicU64 = AtomicU64::new(0);
 static TSC_HZ: AtomicU64 = AtomicU64::new(0);

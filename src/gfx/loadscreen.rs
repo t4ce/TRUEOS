@@ -237,9 +237,8 @@ pub async fn gfx_loadscreen_task() {
                 crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(LOADSCREEN_BG_RGB)
             };
             if begin_rc == 0 {
-                let _ = unsafe {
-                    crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0)
-                };
+                let _ =
+                    unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
                 let _ = crate::gfx::lyon::draw_solid_rect_no_present(
                     clear_x,
                     clear_y,
