@@ -9,6 +9,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
 
+use super::scsi;
 use crate::disc::block;
 
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
@@ -128,6 +129,15 @@ pub(crate) enum MassProbeError {
         expected_tag: u32,
         status: u8,
     },
+}
+
+impl MassProbeError {
+    pub(crate) fn transport_reason(self) -> Option<&'static str> {
+        match self {
+            MassProbeError::Transport(reason) => Some(reason),
+            _ => None,
+        }
+    }
 }
 
 fn make_cbw(tag: u32, data_len: u32, flags: u8, lun: u8, cdb: &[u8]) -> [u8; 31] {
@@ -461,7 +471,68 @@ async fn bot_command_no_data(
     read_and_validate_csw(bulk_in, cmd, tag).await
 }
 
-async fn bot_recovery_before_inquiry(
+async fn bot_command_out(
+    bulk_out: &mut EndpointBulkOut,
+    bulk_in: &mut EndpointBulkIn,
+    cmd: &'static str,
+    lun: u8,
+    cdb: &[u8],
+    data: &[u8],
+    tag: u32,
+) -> Result<(), MassProbeError> {
+    let cbw = make_cbw(tag, data.len() as u32, 0x00, lun, cdb);
+    let mut sent = 0usize;
+    for _ in 0..BOT_IO_RETRIES {
+        let Some(result) =
+            with_timeout_or_none(bulk_out.submit_and_wait(&cbw), BOT_IO_TIMEOUT_MS).await
+        else {
+            log_transport_debug("cbw-timeout");
+            return Err(MassProbeError::Transport("cbw-timeout"));
+        };
+        sent = result.map_err(|_| {
+            log_transport_debug("cbw-out");
+            MassProbeError::Transport("cbw-out")
+        })?;
+        if sent != 0 {
+            break;
+        }
+    }
+    if sent != cbw.len() {
+        return Err(MassProbeError::ShortData {
+            cmd,
+            got: sent,
+            need: cbw.len(),
+        });
+    }
+
+    let mut data_sent = 0usize;
+    for _ in 0..BOT_IO_RETRIES {
+        let Some(result) =
+            with_timeout_or_none(bulk_out.submit_and_wait(data), BOT_IO_TIMEOUT_MS).await
+        else {
+            log_transport_debug("data-timeout");
+            return Err(MassProbeError::Transport("data-timeout"));
+        };
+        data_sent = result.map_err(|_| {
+            log_transport_debug("data-out");
+            MassProbeError::Transport("data-out")
+        })?;
+        if data_sent != 0 {
+            break;
+        }
+    }
+    if data_sent != data.len() {
+        return Err(MassProbeError::ShortData {
+            cmd,
+            got: data_sent,
+            need: data.len(),
+        });
+    }
+
+    read_and_validate_csw(bulk_in, cmd, tag).await
+}
+
+pub(crate) async fn bot_recovery(
     device: &mut crab_usb::Device,
     interface_number: u8,
     bulk_out_ep: u8,
@@ -620,6 +691,20 @@ async fn request_sense(
     Ok(got)
 }
 
+pub(crate) async fn request_sense_fixed(
+    bulk_out: &mut EndpointBulkOut,
+    bulk_in: &mut EndpointBulkIn,
+    tag: u32,
+) -> Option<scsi::SenseFixed> {
+    let mut sense = [0u8; 18];
+    let cdb = scsi::cdb_request_sense(18);
+    let got = bot_command_in(bulk_out, bulk_in, "request-sense", 0, &cdb, &mut sense, tag)
+        .await
+        .ok()?;
+
+    scsi::parse_request_sense_fixed(&sense[..got.min(sense.len())])
+}
+
 async fn test_unit_ready_with_sense(
     bulk_out: &mut EndpointBulkOut,
     bulk_in: &mut EndpointBulkIn,
@@ -658,6 +743,47 @@ pub(crate) async fn keepalive_mass_bot(
     lun: u8,
 ) -> Result<(), MassProbeError> {
     test_unit_ready_with_sense(bulk_out, bulk_in, lun).await
+}
+
+pub(crate) async fn read_blocks_bot(
+    bulk_out: &mut EndpointBulkOut,
+    bulk_in: &mut EndpointBulkIn,
+    lba: u32,
+    blocks: u16,
+    out: &mut [u8],
+    tag: u32,
+) -> Result<(), MassProbeError> {
+    let cdb = scsi::cdb_read_10(lba, blocks);
+    let got = bot_command_in(bulk_out, bulk_in, "read-10", 0, &cdb, out, tag).await?;
+    if got < out.len() {
+        return Err(MassProbeError::ShortData {
+            cmd: "read-10",
+            got,
+            need: out.len(),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) async fn write_blocks_bot(
+    bulk_out: &mut EndpointBulkOut,
+    bulk_in: &mut EndpointBulkIn,
+    lba: u32,
+    blocks: u16,
+    data: &[u8],
+    tag: u32,
+) -> Result<(), MassProbeError> {
+    let cdb = scsi::cdb_write_10(lba, blocks);
+    bot_command_out(bulk_out, bulk_in, "write-10", 0, &cdb, data, tag).await
+}
+
+pub(crate) async fn synchronize_cache_bot(
+    bulk_out: &mut EndpointBulkOut,
+    bulk_in: &mut EndpointBulkIn,
+    tag: u32,
+) -> Result<(), MassProbeError> {
+    let cdb = scsi::cdb_synchronize_cache_10();
+    bot_command_no_data(bulk_out, bulk_in, "sync-cache-10", 0, &cdb, tag).await
 }
 
 async fn read_capacity_16(
@@ -818,7 +944,7 @@ pub(crate) async fn probe_mass_bot(
                 "crabusb: mass inquiry initial attempt failed: {:?}; applying BOT recovery\n",
                 first_err
             );
-            bot_recovery_before_inquiry(device, interface_number, bulk_out_ep, bulk_in_ep).await?;
+            bot_recovery(device, interface_number, bulk_out_ep, bulk_in_ep).await?;
             bot_command_in(
                 bulk_out,
                 bulk_in,
