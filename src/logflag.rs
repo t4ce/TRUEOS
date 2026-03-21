@@ -7,6 +7,7 @@ pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
 pub(crate) const NET_LOG_TCP_FLOW: bool = true;
+pub(crate) const NET_LOG_TCP_SEND_FLUSH: bool = false;
 pub(crate) const NET_LOG_ARP_RX: bool = false;
 pub(crate) const NET_LOG_DHCP_VERBOSE: bool = false;
 pub(crate) const NET_LOG_IPV6_RA: bool = false;
