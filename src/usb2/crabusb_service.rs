@@ -1341,6 +1341,9 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: u32
                     );
                     maybe_start_truekey_bridge(host, dev).await;
                     maybe_start_target_audio(host, dev).await;
+                    let _ =
+                        super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id)
+                            .await;
                     let _ = maybe_start_hid_boot_streams(host, dev, spawner, controller_id).await;
                     let _ = super::midi::maybe_start_midi(host, dev, spawner, controller_id).await;
                     let _ = super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id)
@@ -1401,6 +1404,16 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                 }
                 if desc.vendor_id == HYPERX_VENDOR_ID && desc.product_id == HYPERX_PRODUCT_ID {
                     maybe_start_target_audio(host, dev).await;
+                    continue;
+                }
+                if super::hid::leds::maybe_start_led_controller(
+                    host,
+                    dev,
+                    spawner,
+                    info.index as u32,
+                )
+                .await
+                {
                     continue;
                 }
                 if maybe_start_hid_boot_streams(host, dev, spawner, info.index as u32).await {
