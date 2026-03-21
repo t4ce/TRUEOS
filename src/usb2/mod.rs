@@ -11,6 +11,7 @@ pub(crate) mod api;
 mod crabusb_service;
 pub(crate) mod hid;
 mod mass;
+#[path = "device/pen.rs"]
 pub(crate) mod pen;
 pub(crate) mod scsi;
 
