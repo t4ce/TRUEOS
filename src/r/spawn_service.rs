@@ -539,15 +539,29 @@ fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_crabusb_bsp_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::usb2::crabusb_bsp_service(spawner))
-    })
+    let count = crate::usb2::pci_usb_controllers()
+        .len()
+        .min(crate::usb2::xhci::MAX_XHCI_CONTROLLERS)
+        .max(1);
+    for i in 0..count {
+        spawn_local(spawner, |spawner| {
+            spawner.spawn(crate::usb2::crabusb_bsp_service(i, spawner))
+        });
+    }
+    SpawnAttempt::Spawned
 }
 
 fn spawn_crabusb_event_pump(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::usb2::crabusb_event_pump_task())
-    })
+    let count = crate::usb2::pci_usb_controllers()
+        .len()
+        .min(crate::usb2::xhci::MAX_XHCI_CONTROLLERS)
+        .max(1);
+    for i in 0..count {
+        spawn_local(spawner, |spawner| {
+            spawner.spawn(crate::usb2::crabusb_event_pump_task(i))
+        });
+    }
+    SpawnAttempt::Spawned
 }
 
 fn spawn_crabusb_truekey(spawner: Spawner) -> SpawnAttempt {

@@ -652,8 +652,24 @@ pub fn set_hosted_scroll_for_browser(
     scroll_x: u32,
     scroll_y: u32,
 ) -> bool {
-    let _ = (browser_instance_id, scroll_x, scroll_y);
-    false
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    if !browser_started(browser_instance_id) {
+        return false;
+    }
+    let next = HostedScrollRequest { scroll_x, scroll_y };
+    let should_skip = with_browser_host_state(browser_instance_id, |state| {
+        state.pending_hosted_scroll.as_ref() == Some(&next)
+            || (state.pending_hosted_scroll.is_none()
+                && state.hosted_surface_state.scroll_x == scroll_x
+                && state.hosted_surface_state.scroll_y == scroll_y)
+    });
+    if should_skip {
+        return true;
+    }
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_hosted_scroll = Some(next);
+    });
+    true
 }
 
 pub fn hosted_surface_state() -> HostedBrowserSurfaceState {
@@ -967,10 +983,41 @@ unsafe fn apply_pending_hosted_viewport(ctx: *mut qjs::JSContext, browser_instan
 }
 
 unsafe fn apply_pending_hosted_scroll(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
-    let _ = ctx;
-    with_browser_host_state_mut(browser_instance_id, |state| {
-        state.pending_hosted_scroll = None;
-    });
+    let Some(next) = with_browser_host_state_mut(browser_instance_id, |state| {
+        state.pending_hosted_scroll.take()
+    }) else {
+        return;
+    };
+    let Some(browser) = browser_api_value(ctx) else {
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.pending_hosted_scroll = Some(next);
+        });
+        return;
+    };
+    let func = qjs::JS_GetPropertyStr(ctx, browser, b"setScroll\0".as_ptr() as *const c_char);
+    if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, func);
+        qjs::js_free_value(ctx, browser);
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.pending_hosted_scroll = Some(next);
+        });
+        return;
+    }
+
+    let args = [
+        qjs::JS_NewFloat64(ctx, next.scroll_x as f64),
+        qjs::JS_NewFloat64(ctx, next.scroll_y as f64),
+    ];
+    let result = qjs::JS_Call(ctx, func, browser, args.len() as i32, args.as_ptr());
+    if result.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "browser setScroll");
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            state.pending_hosted_scroll = Some(next);
+        });
+    }
+    qjs::js_free_value(ctx, result);
+    qjs::js_free_value(ctx, func);
+    qjs::js_free_value(ctx, browser);
 }
 
 unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_id: u32) {

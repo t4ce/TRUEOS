@@ -303,12 +303,23 @@ export function createBrowserUiBridge() {
       ? Math.max(1, Number(contentH || vh) | 0)
       : Math.max(1, Number(vh || 1) | 0);
     const _ = doc;
+    const orderedRegions = state.regionCache
+      .slice()
+      .sort((a, b) => {
+        const ay = Math.max(0, Number(a && a.docY || 0) | 0);
+        const by = Math.max(0, Number(b && b.docY || 0) | 0);
+        if (ay !== by) return ay - by;
+        const at = Math.max(0, Number(a && a.texId || 0) | 0);
+        const bt = Math.max(0, Number(b && b.texId || 0) | 0);
+        return at - bt;
+      });
+
     return {
       cacheRevision: state.regionCacheRevision,
       cacheWidth: state.regionCacheWidth,
       tileHeight: state.regionTileHeight,
       regionCount: state.regionCache.length,
-      regions: state.regionCache.map((entry) => ({
+      regions: orderedRegions.map((entry) => ({
         texId: Math.max(0, Number(entry && entry.texId || 0) | 0),
         docY: Math.max(0, Number(entry && entry.docY || 0) | 0),
         width: Math.max(0, Number(entry && entry.width || 0) | 0),
