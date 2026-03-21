@@ -8,10 +8,10 @@ pub(crate) mod xhci {
 }
 
 pub(crate) mod api;
-pub(crate) mod bot;
 mod crabusb_service;
 pub(crate) mod hid;
 mod mass;
+pub(crate) mod pen;
 pub(crate) mod scsi;
 
 pub(crate) use self::hid::TrueosHidCursorEvent;

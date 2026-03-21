@@ -1366,6 +1366,15 @@ pub async fn locate_async(
     handle: block::DeviceHandle,
 ) -> Result<Option<TrueosFsPlacement>, block::Error> {
     if handle.parent().is_some() {
+        let bs0 = read_blocks_aligned_retry_async(handle, 0, 1, 3).await?;
+        if looks_like_trueos_superblock(&bs0) {
+            return Ok(Some(TrueosFsPlacement {
+                bootable: false,
+                super_lba: 0,
+                data_lba: trueos_fs::data_lba_from_super(0),
+                data_end_lba_exclusive: Some(handle.info().block_count),
+            }));
+        }
         return Ok(None);
     }
 
@@ -1496,8 +1505,9 @@ pub async fn format_blank_force_async(handle: block::DeviceHandle) -> Result<(),
 fn validate_blank_format_args(
     handle: block::DeviceHandle,
     super_lba: u64,
+    allow_partition: bool,
 ) -> Result<(block::DeviceInfo, usize, usize, usize), block::Error> {
-    if handle.parent().is_some() {
+    if !allow_partition && handle.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
     if !handle.supports_write() {
@@ -1586,7 +1596,8 @@ pub(crate) async fn format_blank_at_async(
     handle: block::DeviceHandle,
     super_lba: u64,
 ) -> Result<(), block::Error> {
-    let (info, bs, max_blocks, align) = validate_blank_format_args(handle, super_lba)?;
+    let (info, bs, max_blocks, align) =
+        validate_blank_format_args(handle, super_lba, handle.parent().is_some())?;
     let blocks = core::cmp::min(8usize, max_blocks);
     let bytes = bs.saturating_mul(blocks);
 
