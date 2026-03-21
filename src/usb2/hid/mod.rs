@@ -371,9 +371,8 @@ pub(crate) fn handle_mouse_boot_report(
 
 pub(crate) fn remove_hid_slot(controller_id: u32, slot_id: u32) {
     let mut runtimes = HID_RUNTIMES.lock();
-    runtimes.retain(|runtime| {
-        !(runtime.controller_id == controller_id && runtime.slot_id == slot_id)
-    });
+    runtimes
+        .retain(|runtime| !(runtime.controller_id == controller_id && runtime.slot_id == slot_id));
     let _ = self::hut::remove_slot(controller_id, slot_id);
     let _ = crate::r::cursor::remove_snapshots(controller_id, slot_id);
     let _ = crate::r::keyboard::remove_snapshots(controller_id, slot_id);
