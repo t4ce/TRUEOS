@@ -287,8 +287,35 @@ export function createBrowserUiBridge() {
     return true;
   }
 
+  function refreshHostedRegions(args) {
+    const {
+      hostedByUi2,
+      browserCanRenderScene,
+      doc,
+      vw,
+      vh,
+      scrollY,
+      contentH,
+    } = args;
+    if (!hostedByUi2 || !browserCanRenderScene || !doc) {
+      return false;
+    }
+    if (typeof cmdStream.beginFrame === 'function' && typeof cmdStream.endFrame === 'function') {
+      cmdStream.beginFrame();
+      try {
+        ensureBrowserRegions(doc, vw, vh, scrollY, contentH);
+      } finally {
+        cmdStream.endFrame();
+      }
+      return true;
+    }
+    ensureBrowserRegions(doc, vw, vh, scrollY, contentH);
+    return true;
+  }
+
   function getSurfaceState(args) {
     const {
+      hostedByUi2,
       browserCanRenderScene,
       doc,
       vw,
@@ -299,13 +326,15 @@ export function createBrowserUiBridge() {
       contentH,
       contentTopY,
     } = args;
+    void hostedByUi2;
+
     const safeContentW = browserCanRenderScene
       ? Math.max(1, Number(contentW || vw) | 0)
       : Math.max(1, Number(vw || 1) | 0);
     const safeContentH = browserCanRenderScene
       ? Math.max(1, Number(contentH || vh) | 0)
       : Math.max(1, Number(vh || 1) | 0);
-    const _ = doc;
+    void doc;
     const orderedRegions = state.regionCache
       .slice()
       .sort((a, b) => {
@@ -342,6 +371,9 @@ export function createBrowserUiBridge() {
 
   function requestRepaint(onPaint) {
     invalidateRegionCache(false);
+    if (globalThis && globalThis.__trueosBrowserHostedByUi2) {
+      return;
+    }
     if (typeof onPaint === 'function') {
       onPaint();
     }
@@ -350,6 +382,7 @@ export function createBrowserUiBridge() {
   return {
     invalidateRegionCache,
     requestRepaint,
+    refreshHostedRegions,
     paint,
     paintToCurrentTarget,
     getSurfaceState,
