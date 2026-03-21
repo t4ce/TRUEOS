@@ -400,7 +400,7 @@ fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::surface::io::cabi::texture_upload_service_task())
+        ap1_spawner.spawn(crate::v::io::cabi::texture_upload_service_task())
     })
 }
 

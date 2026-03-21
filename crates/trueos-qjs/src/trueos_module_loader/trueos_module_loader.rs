@@ -22,7 +22,7 @@ unsafe extern "C" {
     ) -> isize;
 }
 
-include!("../../../../src/surface/cabi_codes.rs");
+include!("../../../../src/v/cabi_codes.rs");
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {

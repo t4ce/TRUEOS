@@ -46,15 +46,15 @@ fn push_rgb_vtx(out: &mut Vec<u8>, v: &MyVertex, view_w: f32, view_h: f32) {
 #[inline]
 fn submit_rgb_blob_no_present(blob: &[u8]) -> bool {
     let _ = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+        crate::v::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
     };
     let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+        crate::v::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
             blob.as_ptr(),
             blob.len(),
         )
     };
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    let _ = unsafe { crate::v::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
     rc == 0
 }
 
@@ -726,15 +726,15 @@ pub fn draw_lyon_icon_alpha_no_present(
     }
 
     let _ = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+        crate::v::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
     };
     let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+        crate::v::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
             icon_blob.as_ptr(),
             icon_blob.len(),
         )
     };
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    let _ = unsafe { crate::v::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
     rc
 }
 
@@ -774,7 +774,7 @@ pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
         }
 
         let draw_rc = unsafe {
-            crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+            crate::v::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
                 icon_blob.as_ptr(),
                 icon_blob.len(),
             )

@@ -94,13 +94,13 @@ pub(crate) fn load_inline_html(io: &'static dyn ShellBackend2, html: String) {
 
 pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str) {
     let path = normalize_file_reference(file_ref);
-    let bytes = match crate::surface::io::kfs::read_file(path.as_str()) {
+    let bytes = match crate::v::io::kfs::read_file(path.as_str()) {
         Ok(bytes) => bytes,
-        Err(crate::surface::io::kfs::FsError::NoRoot) => {
+        Err(crate::v::io::kfs::FsError::NoRoot) => {
             print_shell_line(io, "surf: no TRUEOSFS root mounted");
             return;
         }
-        Err(crate::surface::io::kfs::FsError::NotFound) => {
+        Err(crate::v::io::kfs::FsError::NotFound) => {
             print_shell_line(io, "surf: file not found");
             return;
         }

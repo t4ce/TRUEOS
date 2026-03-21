@@ -34,7 +34,6 @@ mod rng;
 mod runtime;
 mod shell2;
 mod smp;
-mod surface;
 mod tga;
 mod time;
 #[path = "tst/gfx_tetris.rs"]
@@ -61,8 +60,8 @@ mod z7;
 
 use embassy_executor::{Spawner, raw::Executor};
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
-pub use surface::pat as pattern;
-pub use surface::{io, path};
+pub use v::pat as pattern;
+pub use v::{io, path};
 
 fn qjs_font_atlas_small_provider() -> trueos_qjs::FontAtlasView<'static> {
     let atlas = crate::gfx::text::font_atlas_small_view();

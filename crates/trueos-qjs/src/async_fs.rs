@@ -20,7 +20,7 @@ use crate::trueos_shims::{
     trueos_cabi_poll_once,
 };
 
-include!("../../../src/surface/cabi_codes.rs");
+include!("../../../src/v/cabi_codes.rs");
 
 const ASYNC_FS_MAX_QUEUE: usize = 64;
 const ASYNC_FS_WRITE_CHUNK: usize = 256 * 1024;

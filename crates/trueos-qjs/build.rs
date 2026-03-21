@@ -561,12 +561,12 @@ fn main() {
     let quickjs_dir = ensure_quickjs_checkout(&out_dir);
 
     // Freestanding C ABI stubs for printf/vsnprintf/etc.
-    // Kept in the kernel's surface layer so both C and Rust can share the same routing.
+    // Kept in the kernel's v layer so both C and Rust can share the same routing.
     let trueos_stdio = manifest_dir
         .join("..")
         .join("..")
         .join("src")
-        .join("surface")
+        .join("v")
         .join("stdio.c");
     let yoga_cabi = manifest_dir.join("src").join("yoga").join("yoga_cabi.c");
     let enable_yoga_native = env::var_os("CARGO_FEATURE_YOGA_NATIVE").is_some();
