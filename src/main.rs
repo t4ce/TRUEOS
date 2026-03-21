@@ -19,6 +19,8 @@ mod gfx;
 mod globalog;
 mod host_api;
 mod hv;
+#[cfg(feature = "hvv")]
+pub mod hvv;
 mod iso9660;
 mod limine;
 mod logflag;

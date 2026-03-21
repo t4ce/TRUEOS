@@ -1,6 +1,7 @@
 pub mod memory;
 pub mod snapshot;
 pub mod store;
+pub mod vmcall;
 pub mod vmm;
 pub mod vmx;
 
@@ -517,51 +518,65 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
         return Err(e);
     }
 
+    // ── vmexit dispatch loop ──────────────────────────────────────────────────
     let mut lr = LaunchResult::default();
-    VM1_GUEST_BOOT_ARMED.store(true, Ordering::Release);
-    vmlaunch_once_wrapper(&mut lr);
-    VM1_GUEST_BOOT_ARMED.store(false, Ordering::Release);
-    if lr.launch_failed != 0 {
+    let mut first = true;
+    loop {
+        if first {
+            VM1_GUEST_BOOT_ARMED.store(true, Ordering::Release);
+            vmlaunch_once_wrapper(&mut lr);
+            VM1_GUEST_BOOT_ARMED.store(false, Ordering::Release);
+            first = false;
+        } else {
+            vmresume_once_wrapper(&mut lr);
+        }
+
+        if lr.launch_failed != 0 {
+            hvlogf(format_args!(
+                "hv: vm1 reporting: vmlaunch/vmresume failed instr_err={} rip=0x{:016X}",
+                lr.instr_err,
+                crate::hv::vmx::current_rip()
+            ));
+            break;
+        }
+        if lr.entered == 0 {
+            hvlogf(format_args!(
+                "hv: vm1 reporting: vmlaunch/vmresume: guest not entered"
+            ));
+            break;
+        }
+
+        let reason = lr.exit_reason & 0xFFFF;
         hvlogf(format_args!(
-            "hv: vm1 reporting: vmlaunch failed instr_err={} rip=0x{:016X}",
-            lr.instr_err,
-            crate::hv::vmx::current_rip()
+            "hv: vm1 reporting: vmexit reason=0x{:X} qual=0x{:X} guest_rip=0x{:016X}",
+            reason, lr.exit_qualification, lr.guest_rip
         ));
-    } else if lr.entered != 0 {
-        hvlogf(format_args!(
-            "hv: vm1 reporting: first vmexit reason=0x{:X} qual=0x{:X} guest_rip=0x{:016X}",
-            lr.exit_reason, lr.exit_qualification, lr.guest_rip
-        ));
-        crate::hv::vmx::log_vmexit_interrupt_info("first");
-        if (lr.exit_reason & 0xFFFF) == 0xC {
-            match crate::hv::vmx::handle_hlt_exit_resume_once() {
-                Ok((lr2, rip_before, exit_len, rip_after)) => {
-                    hvlogf(format_args!(
-                        "hv: vm1 reporting: hlt-resume once rip=0x{:016X} len={} next=0x{:016X}",
-                        rip_before, exit_len, rip_after
-                    ));
-                    if lr2.launch_failed != 0 {
-                        hvlogf(format_args!(
-                            "hv: vm1 reporting: vmresume failed instr_err={} rip=0x{:016X}",
-                            lr2.instr_err,
-                            crate::hv::vmx::current_rip()
-                        ));
-                    } else if lr2.entered != 0 {
-                        hvlogf(format_args!(
-                            "hv: vm1 reporting: second vmexit reason=0x{:X} qual=0x{:X} guest_rip=0x{:016X}",
-                            lr2.exit_reason, lr2.exit_qualification, lr2.guest_rip
-                        ));
-                        crate::hv::vmx::log_vmexit_interrupt_info("second");
-                    }
-                    lr = lr2;
+        crate::hv::vmx::log_vmexit_interrupt_info("vmexit");
+
+        match reason {
+            VMEXIT_REASON_VMCALL => {
+                let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len")?;
+                vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
+                if !crate::hv::vmcall::dispatch() {
+                    break; // preserve — stop the loop
                 }
-                Err(e) => hvlogf(format_args!(
-                    "hv: vm1 reporting: hlt-resume once failed ({})",
-                    e
-                )),
+                // service vmcall — loop → vmresume
+            }
+            0xC => {
+                // HLT — advance past it and continue
+                let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len hlt")?;
+                vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
+            }
+            _ => {
+                hvlogf(format_args!(
+                    "hv: vm1 reporting: unhandled vmexit reason=0x{:X}, stopping",
+                    reason
+                ));
+                break;
             }
         }
     }
+    // ─────────────────────────────────────────────────────────────────────────
     if !crate::hv::vmx::vmxoff() {
         return Err("vmxoff");
     }

@@ -1133,11 +1133,13 @@ fn parse_uac_audio_controls(raw_cfg: &[u8]) -> Option<UacAudioControlTarget> {
     const UAC2_CLOCK_SOURCE: u8 = 0x0A;
 
     let mut idx = 0usize;
+    let mut current_ac_if_number: Option<u8> = None; // Track AC interface number
     let mut current_ac_if: Option<u8> = None;
     let mut current_ac_is_uac2 = false;
     let mut playback_source_id: Option<u8> = None;
     let mut playback_terminal_id: Option<u8> = None;
     let mut first_fu: Option<UacFeatureUnitTarget> = None;
+    let mut playback_fu: Option<UacFeatureUnitTarget> = None;
     let mut clock_source_id: Option<u8> = None;
     let mut discovered: Option<UacAudioControlTarget> = None;
 
@@ -1163,33 +1165,103 @@ fn parse_uac_audio_controls(raw_cfg: &[u8]) -> Option<UacAudioControlTarget> {
 
         match raw_cfg[idx + 1] {
             0x04 if len >= 9 => {
-                if let Some(s) = snapshot_current(
-                    current_ac_if,
-                    current_ac_is_uac2,
-                    clock_source_id,
-                    playback_terminal_id,
-                    first_fu,
-                ) {
-                    discovered = Some(s);
-                }
-
                 let interface_number = raw_cfg[idx + 2];
                 let alternate_setting = raw_cfg[idx + 3];
                 let class = raw_cfg[idx + 5];
                 let subclass = raw_cfg[idx + 6];
-                current_ac_if = if alternate_setting == 0
-                    && class == USB_CLASS_AUDIO
-                    && subclass == USB_SUBCLASS_AUDIOCONTROL
-                {
-                    Some(interface_number)
-                } else {
-                    None
-                };
-                current_ac_is_uac2 = false;
-                playback_source_id = None;
-                playback_terminal_id = None;
-                first_fu = None;
-                clock_source_id = None;
+
+                let is_ac_interface =
+                    class == USB_CLASS_AUDIO && subclass == USB_SUBCLASS_AUDIOCONTROL;
+
+                // Only reset state if interface NUMBER changes (not just alternate setting)
+                if let Some(prev_if_num) = current_ac_if_number {
+                    if interface_number != prev_if_num {
+                        // Different interface, do second-pass cleanup BEFORE resetting
+                        if playback_fu.is_none() && playback_source_id.is_some() {
+                            let target_source_id = playback_source_id.unwrap();
+                            let mut idx2 = 0usize;
+                            while idx2 + 2 <= raw_cfg.len() {
+                                let len2 = usize::from(raw_cfg[idx2]);
+                                if len2 < 2 || idx2 + len2 > raw_cfg.len() {
+                                    break;
+                                }
+
+                                if raw_cfg[idx2 + 1] == 0x24
+                                    && len2 >= 7
+                                    && raw_cfg[idx2 + 2] == 0x06
+                                {
+                                    let unit_id = raw_cfg[idx2 + 3];
+                                    if unit_id == target_source_id {
+                                        let source_id = raw_cfg[idx2 + 4];
+                                        let master_controls = if current_ac_is_uac2 {
+                                            if len2 >= 10 {
+                                                u32::from(raw_cfg[idx2 + 5])
+                                                    | (u32::from(raw_cfg[idx2 + 6]) << 8)
+                                                    | (u32::from(raw_cfg[idx2 + 7]) << 16)
+                                                    | (u32::from(raw_cfg[idx2 + 8]) << 24)
+                                            } else {
+                                                0
+                                            }
+                                        } else {
+                                            let control_size = usize::from(raw_cfg[idx2 + 5]);
+                                            let controls_off = idx2 + 6;
+                                            let controls_end =
+                                                controls_off.saturating_add(control_size);
+                                            if controls_end <= idx2 + len2 {
+                                                let mut controls = 0u32;
+                                                for (shift, b) in raw_cfg
+                                                    [controls_off..controls_end]
+                                                    .iter()
+                                                    .enumerate()
+                                                {
+                                                    controls |= u32::from(*b) << (shift * 8);
+                                                }
+                                                controls
+                                            } else {
+                                                0
+                                            }
+                                        };
+                                        playback_fu = Some(UacFeatureUnitTarget {
+                                            ac_interface: current_ac_if.unwrap_or(0),
+                                            unit_id,
+                                            source_id,
+                                            supports_mute: (master_controls & 0x01) != 0,
+                                            supports_volume: (master_controls & 0x02) != 0,
+                                        });
+                                        break;
+                                    }
+                                }
+
+                                idx2 += len2;
+                            }
+                        }
+
+                        // NOW snapshot with corrected playback_fu
+                        if let Some(s) = snapshot_current(
+                            current_ac_if,
+                            current_ac_is_uac2,
+                            clock_source_id,
+                            playback_terminal_id,
+                            playback_fu.or(first_fu),
+                        ) {
+                            discovered = Some(s);
+                        }
+                        current_ac_if_number = None;
+                        current_ac_if = None;
+                        current_ac_is_uac2 = false;
+                        playback_source_id = None;
+                        playback_terminal_id = None;
+                        first_fu = None;
+                        playback_fu = None;
+                        clock_source_id = None;
+                    }
+                }
+
+                // Set current AC interface if this is a new AC interface we haven't seen
+                if is_ac_interface && alternate_setting == 0 && current_ac_if_number.is_none() {
+                    current_ac_if_number = Some(interface_number);
+                    current_ac_if = Some(interface_number);
+                }
             }
             CS_INTERFACE if current_ac_if.is_some() && len >= 3 => {
                 let subtype = raw_cfg[idx + 2];
@@ -1202,7 +1274,6 @@ fn parse_uac_audio_controls(raw_cfg: &[u8]) -> Option<UacAudioControlTarget> {
                         let terminal_type = le_u16_at(raw_cfg, idx + 4).unwrap_or(0);
                         let source_id = raw_cfg[idx + 7];
                         // Prefer the last non-USB-streaming output terminal as the playback sink.
-                        // HyperX exposes a capture chain first and the actual headphone sink later.
                         if !matches!(terminal_type, 0x0101 | 0x0102 | 0x0201) {
                             playback_terminal_id = Some(terminal_id);
                             playback_source_id = Some(source_id);
@@ -1244,14 +1315,9 @@ fn parse_uac_audio_controls(raw_cfg: &[u8]) -> Option<UacAudioControlTarget> {
                             supports_volume: (master_controls & 0x02) != 0,
                         };
 
+                        // Always scan full descriptor; collect playback FU if it matches later.
                         if playback_source_id == Some(unit_id) {
-                            return Some(UacAudioControlTarget {
-                                ac_interface: current_ac_if.unwrap_or(0),
-                                uac2: current_ac_is_uac2,
-                                clock_source_id,
-                                playback_terminal_link: playback_terminal_id,
-                                feature_unit: Some(candidate),
-                            });
+                            playback_fu = Some(candidate);
                         }
                         if first_fu.is_none() {
                             first_fu = Some(candidate);
@@ -1274,7 +1340,7 @@ fn parse_uac_audio_controls(raw_cfg: &[u8]) -> Option<UacAudioControlTarget> {
         current_ac_is_uac2,
         clock_source_id,
         playback_terminal_id,
-        first_fu,
+        playback_fu.or(first_fu),
     ) {
         discovered = Some(s);
     }

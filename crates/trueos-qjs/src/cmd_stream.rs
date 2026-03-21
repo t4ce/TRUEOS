@@ -22,6 +22,7 @@ static FIRST_QJS_END_FRAME_SEEN: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "C" {
     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
+    fn trueos_cabi_gfx_begin_frame_no_present(clear_rgb: u32) -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
     fn trueos_cabi_signal_loadscreen_end();
     fn trueos_cabi_gfx_set_blend(
@@ -962,7 +963,7 @@ pub(crate) unsafe fn try_create_native_module(
         ) -> qjs::JSValue {
             atlas_cmd_stream::clear_text_batches();
             let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
-            let _ = trueos_cabi_gfx_begin_frame(clear);
+            let _ = trueos_cabi_gfx_begin_frame_no_present(clear);
             cmd_stream_reset_frame_state_defaults();
             qjs::JSValue::undefined()
         }
