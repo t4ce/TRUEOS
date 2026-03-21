@@ -237,6 +237,9 @@ export function createBrowserUiBridge() {
     } = args;
 
     if (hostedByUi2) {
+      if (!browserCanRenderScene || !doc) {
+        return true;
+      }
       if (typeof cmdStream.beginFrame === 'function' && typeof cmdStream.endFrame === 'function') {
         cmdStream.beginFrame();
         try {

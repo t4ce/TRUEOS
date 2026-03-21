@@ -24,6 +24,7 @@ const EMPTY_BROWSER_HTML = '<!DOCTYPE html><html><head></head><body></body></htm
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 const SHOW_CLOSING_TAG_ROWS = false;
 const BROWSER_KEYBOARD_LOG_MAX = 128;
+const BROWSER_CONTENT_MAX_WIDTH = 2048;
 
 let cachedHtml = '';
 let cachedDoc = null;
@@ -1573,6 +1574,23 @@ function requestBrowserContentRepaint() {
   browserUi.requestRepaint(paint);
 }
 
+function invalidateBrowserRegionCache(reset = false) {
+  browserUi.invalidateRegionCache(reset);
+}
+
+function docContentWidth(doc, vw) {
+  const raw = Math.max(
+    Number(doc && doc.contentW || 0),
+    Number(doc && doc.themeLayout && doc.themeLayout.contentW || 0),
+    Number(vw || 0),
+  );
+  const contentW = Math.max(1, Math.round(Number.isFinite(raw) ? raw : Number(vw || 1)));
+  return Math.max(
+    Math.max(1, Number(vw || 1) | 0),
+    Math.min(BROWSER_CONTENT_MAX_WIDTH, contentW),
+  );
+}
+
 function docContentHeight(doc, vh) {
   const raw = Math.max(
     Number(doc && doc.contentH || 0),
@@ -1641,21 +1659,6 @@ function paintToCurrentTarget(options = null) {
     fpsOverlay,
     finalizePaintState,
   });
-}
-
-function armHtmlReadyFallback() {
-  if (htmlReadyTimeoutId != null) return;
-  if (runtime.host.__trueosBrowserAllowHtmlFallback !== true) return;
-  if (typeof runtime.host.setTimeout !== 'function') return;
-  try {
-    htmlReadyTimeoutId = runtime.host.setTimeout(() => {
-      htmlReadyTimeoutId = null;
-      if (browserCanRenderScene) return;
-      setHtml(runtime.host.__trueosUiHtml || '');
-    }, HTML_READY_TIMEOUT_MS);
-  } catch (_) {
-    htmlReadyTimeoutId = null;
-  }
 }
 
 function pushBrowserAction(event) {
@@ -2283,11 +2286,8 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
   (runtime.host.window || runtime.host).addEventListener('resize', paint);
 }
 
-armHtmlReadyFallback();
 installQjsInputBridge();
 startAutoPaint();
 if (!currentPageUrl) {
   setCurrentPageUrl('about:blank');
 }
-browserCanRenderScene = true;
-paint();

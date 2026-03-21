@@ -4,6 +4,69 @@ use alloc::vec::Vec;
 pub(crate) const C4_CORE_CONTRACT_VERSION: u16 = 1;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TokenKind {
+    Ident,
+    String,
+    Number,
+    True,
+    False,
+    Null,
+    Undefined,
+    Let,
+    Const,
+    Var,
+    LParen,
+    RParen,
+    Dot,
+    Comma,
+    Semi,
+    Assign,
+    Eq,
+    StrictEq,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Eof,
+    Unknown,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExprNodeKind {
+    StringLiteral,
+    NumberLiteral,
+    BooleanLiteral,
+    NullLiteral,
+    UndefinedLiteral,
+    Identifier,
+    MemberAccess,
+    Call,
+    Binary,
+    Group,
+    Declaration,
+    Assignment,
+    Program,
+}
+
+#[derive(Clone)]
+pub(crate) struct Span {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct TokenRef {
+    pub(crate) kind: TokenKind,
+    pub(crate) span: Span,
+}
+
+#[derive(Clone)]
+pub(crate) struct NodeRef {
+    pub(crate) kind: ExprNodeKind,
+    pub(crate) span: Span,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResultHint {
     String,
     Number,
@@ -39,8 +102,11 @@ pub(crate) struct Diagnostic {
 
 #[derive(Clone)]
 pub(crate) struct Analysis {
+    pub(crate) schema_version: u16,
     pub(crate) hint: ResultHint,
     pub(crate) symbols: Vec<SymbolRef>,
+    pub(crate) tokens: Vec<TokenRef>,
+    pub(crate) nodes: Vec<NodeRef>,
     pub(crate) diagnostic: Option<Diagnostic>,
 }
 

@@ -169,6 +169,16 @@ struct UacStreamTarget {
     max_packet_payload: u16,
 }
 
+fn uac_sync_type_name(sync_type: u8) -> &'static str {
+    match sync_type {
+        0 => "no-sync",
+        1 => "async",
+        2 => "adaptive",
+        3 => "synchronous",
+        _ => "unknown",
+    }
+}
+
 #[derive(Copy, Clone)]
 struct TruekeyTarget {
     interface_number: u8,
@@ -1060,6 +1070,63 @@ async fn configure_uac_playback_controls(
     product_id: u16,
     raw_cfg: &[u8],
 ) {
+    async fn try_set_uac_fu_mute(
+        device: &mut crab_usb::Device,
+        vendor_id: u16,
+        product_id: u16,
+        feature: UacFeatureUnitTarget,
+        channel: u8,
+        muted: bool,
+    ) {
+        const UAC_CONTROL_TIMEOUT_MS: u64 = 200;
+        let value = 0x0100u16 | u16::from(channel);
+        let payload = [if muted { 1 } else { 0 }];
+        match with_timeout_or_none(
+            device.control_out(
+                usb_if::host::ControlSetup {
+                    request_type: usb_if::transfer::RequestType::Class,
+                    recipient: usb_if::transfer::Recipient::Interface,
+                    request: usb_if::transfer::Request::Other(0x01),
+                    value,
+                    index: (u16::from(feature.unit_id) << 8) | u16::from(feature.ac_interface),
+                },
+                &payload,
+            ),
+            UAC_CONTROL_TIMEOUT_MS,
+        )
+        .await
+        {
+            Some(Ok(_)) => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio mute ok fu={} ac_if={} ch={} muted={}\n",
+                vendor_id,
+                product_id,
+                feature.unit_id,
+                feature.ac_interface,
+                channel,
+                muted
+            ),
+            Some(Err(err)) => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio mute failed fu={} ac_if={} ch={} muted={} err={:?}\n",
+                vendor_id,
+                product_id,
+                feature.unit_id,
+                feature.ac_interface,
+                channel,
+                muted,
+                err
+            ),
+            None => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio mute timeout fu={} ac_if={} ch={} muted={}\n",
+                vendor_id,
+                product_id,
+                feature.unit_id,
+                feature.ac_interface,
+                channel,
+                muted
+            ),
+        }
+    }
+
     let Some(controls) = parse_uac_audio_controls(raw_cfg) else {
         crate::log!(
             "crabusb: target {:04X}:{:04X} no audio control entities found\n",
@@ -1068,6 +1135,61 @@ async fn configure_uac_playback_controls(
         );
         return;
     };
+    async fn try_set_uac_fu_volume(
+        device: &mut crab_usb::Device,
+        vendor_id: u16,
+        product_id: u16,
+        feature: UacFeatureUnitTarget,
+        channel: u8,
+        value_db256: i16,
+    ) {
+        const UAC_CONTROL_TIMEOUT_MS: u64 = 200;
+        let value = 0x0200u16 | u16::from(channel);
+        match with_timeout_or_none(
+            device.control_out(
+                usb_if::host::ControlSetup {
+                    request_type: usb_if::transfer::RequestType::Class,
+                    recipient: usb_if::transfer::Recipient::Interface,
+                    request: usb_if::transfer::Request::Other(0x01),
+                    value,
+                    index: (u16::from(feature.unit_id) << 8) | u16::from(feature.ac_interface),
+                },
+                &value_db256.to_le_bytes(),
+            ),
+            UAC_CONTROL_TIMEOUT_MS,
+        )
+        .await
+        {
+            Some(Ok(_)) => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio volume ok fu={} ac_if={} ch={} value_db256={}\n",
+                vendor_id,
+                product_id,
+                feature.unit_id,
+                feature.ac_interface,
+                channel,
+                value_db256
+            ),
+            Some(Err(err)) => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio volume failed fu={} ac_if={} ch={} value_db256={} err={:?}\n",
+                vendor_id,
+                product_id,
+                feature.unit_id,
+                feature.ac_interface,
+                channel,
+                value_db256,
+                err
+            ),
+            None => crate::log!(
+                "crabusb: target {:04X}:{:04X} audio volume timeout fu={} ac_if={} ch={} value_db256={}\n",
+                vendor_id,
+                product_id,
+                feature.unit_id,
+                feature.ac_interface,
+                channel,
+                value_db256
+            ),
+        }
+    }
 
     crate::log!(
         "crabusb: target {:04X}:{:04X} audio control ac_if={} uac2={} clock={} feature={}\n",
@@ -1133,68 +1255,27 @@ async fn configure_uac_playback_controls(
     );
 
     if feature.supports_mute {
-        match device
-            .control_out(
-                usb_if::host::ControlSetup {
-                    request_type: usb_if::transfer::RequestType::Class,
-                    recipient: usb_if::transfer::Recipient::Interface,
-                    request: usb_if::transfer::Request::Other(0x01),
-                    value: 0x0100,
-                    index: (u16::from(feature.unit_id) << 8) | u16::from(feature.ac_interface),
-                },
-                &[0],
-            )
-            .await
-        {
-            Ok(_) => crate::log!(
-                "crabusb: target {:04X}:{:04X} audio unmute ok fu={} ac_if={}\n",
-                vendor_id,
-                product_id,
-                feature.unit_id,
-                feature.ac_interface
-            ),
-            Err(err) => crate::log!(
-                "crabusb: target {:04X}:{:04X} audio unmute failed fu={} ac_if={} err={:?}\n",
-                vendor_id,
-                product_id,
-                feature.unit_id,
-                feature.ac_interface,
-                err
-            ),
-        }
+        try_set_uac_fu_mute(device, vendor_id, product_id, feature, 0, false).await;
+        try_set_uac_fu_mute(device, vendor_id, product_id, feature, 1, false).await;
+        try_set_uac_fu_mute(device, vendor_id, product_id, feature, 2, false).await;
     }
 
     if feature.supports_volume {
-        match device
-            .control_out(
-                usb_if::host::ControlSetup {
-                    request_type: usb_if::transfer::RequestType::Class,
-                    recipient: usb_if::transfer::Recipient::Interface,
-                    request: usb_if::transfer::Request::Other(0x01),
-                    value: 0x0200,
-                    index: (u16::from(feature.unit_id) << 8) | u16::from(feature.ac_interface),
-                },
-                &0i16.to_le_bytes(),
-            )
-            .await
-        {
-            Ok(_) => crate::log!(
-                "crabusb: target {:04X}:{:04X} audio volume ok fu={} ac_if={} value_db256=0\n",
-                vendor_id,
-                product_id,
-                feature.unit_id,
-                feature.ac_interface
-            ),
-            Err(err) => crate::log!(
-                "crabusb: target {:04X}:{:04X} audio volume failed fu={} ac_if={} err={:?}\n",
-                vendor_id,
-                product_id,
-                feature.unit_id,
-                feature.ac_interface,
-                err
-            ),
-        }
+        try_set_uac_fu_volume(device, vendor_id, product_id, feature, 0, 0).await;
     }
+
+    // Some headsets misreport volume capability bits; probe common channels anyway.
+    if !feature.supports_volume {
+        crate::log!(
+            "crabusb: target {:04X}:{:04X} audio volume probe fu={} ac_if={} (descriptor says unsupported)\n",
+            vendor_id,
+            product_id,
+            feature.unit_id,
+            feature.ac_interface
+        );
+    }
+    try_set_uac_fu_volume(device, vendor_id, product_id, feature, 1, 0).await;
+    try_set_uac_fu_volume(device, vendor_id, product_id, feature, 2, 0).await;
 }
 
 fn find_iso_out_endpoint(
@@ -1525,7 +1606,7 @@ async fn stream_target_audio(
     endpoint: IsoOutEndpoint,
     stream_target: Option<UacStreamTarget>,
 ) {
-    const PACKETS_PER_REQUEST: usize = 64;
+    const AUDIO_WARMUP_US: usize = 200_000;
 
     let endpoint_payload_limit = stream_target
         .map(|target| usize::from(target.max_packet_payload.max(AUDIO_FRAME_BYTES as u16)))
@@ -1535,13 +1616,23 @@ async fn stream_target_audio(
     // Select packet cadence from endpoint capacity: FS endpoints need ~1ms payloads,
     // while HS/SS endpoints typically use 125us payloads.
     let packet_bytes = choose_audio_packet_bytes(AUDIO_FRAME_BYTES, endpoint_payload_limit);
-    let urb_bytes = packet_bytes.saturating_mul(PACKETS_PER_REQUEST);
+    let nominal_1ms_bytes = (48_000usize * AUDIO_FRAME_BYTES) / 1_000;
+    let packet_duration_us = if packet_bytes >= nominal_1ms_bytes {
+        1_000usize
+    } else {
+        125usize
+    };
+    // Keep FS-style payloads in short requests to avoid long isoch TD chains that some devices/controllers
+    // handle poorly. HS/SS-style payloads can run deeper batches.
+    let packets_per_request = if packet_bytes >= 160 { 8 } else { 32 };
+    let urb_bytes = packet_bytes.saturating_mul(packets_per_request);
     let mut packet_batch = Vec::from_iter(core::iter::repeat_n(0u8, urb_bytes));
     // Diagnostic mode: force synthesized tone to rule out source-file silence.
     let wav = None;
     let mut wav_cursor = 0usize;
     let mut sine_phase = 0.0f32;
     let mut logged_probe = false;
+    let mut silent_packets_remaining = AUDIO_WARMUP_US / packet_duration_us;
 
     let endpoint_kind = match device.get_endpoint(endpoint.address).await {
         Ok(kind) => kind,
@@ -1571,25 +1662,32 @@ async fn stream_target_audio(
 
     AUDIO_STREAM_ACTIVE.store(true, Ordering::Release);
     crate::log!(
-        "crabusb: audio streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} packet={} batch={} sync={} feedback={} source={} payload_limit={}\n",
+        "crabusb: audio streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} packet={} batch={} sync={}({}) feedback={} source={} payload_limit={} warmup_packets={}\n",
         vendor_id,
         product_id,
         preferred.interface_number,
         preferred.alternate_setting,
         endpoint.address,
         packet_bytes,
-        PACKETS_PER_REQUEST,
+        packets_per_request,
         stream_target.map(|target| target.sync_type).unwrap_or(0xFF),
+        uac_sync_type_name(stream_target.map(|target| target.sync_type).unwrap_or(0xFF)),
         stream_target
             .map(|target| target.has_feedback_ep)
             .unwrap_or(false),
         if wav.is_some() { "demo.wav" } else { "sine" },
-        endpoint_payload_limit
+        endpoint_payload_limit,
+        silent_packets_remaining
     );
 
     loop {
         for packet in packet_batch.chunks_exact_mut(packet_bytes) {
-            fill_audio_packet(packet, wav, &mut wav_cursor, &mut sine_phase);
+            if silent_packets_remaining > 0 {
+                packet.fill(0);
+                silent_packets_remaining -= 1;
+            } else {
+                fill_audio_packet(packet, wav, &mut wav_cursor, &mut sine_phase);
+            }
         }
 
         if !logged_probe {
@@ -1606,7 +1704,7 @@ async fn stream_target_audio(
         }
 
         match iso_out
-            .submit_and_wait(packet_batch.as_slice(), PACKETS_PER_REQUEST)
+            .submit_and_wait(packet_batch.as_slice(), packets_per_request)
             .await
         {
             Ok(sent) => {
