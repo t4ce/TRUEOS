@@ -652,6 +652,14 @@ async fn test_unit_ready_with_sense(
     Ok(())
 }
 
+pub(crate) async fn keepalive_mass_bot(
+    bulk_out: &mut EndpointBulkOut,
+    bulk_in: &mut EndpointBulkIn,
+    lun: u8,
+) -> Result<(), MassProbeError> {
+    test_unit_ready_with_sense(bulk_out, bulk_in, lun).await
+}
+
 async fn read_capacity_16(
     bulk_out: &mut EndpointBulkOut,
     bulk_in: &mut EndpointBulkIn,

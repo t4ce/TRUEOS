@@ -8,13 +8,17 @@ pub(crate) mod xhci {
 }
 
 pub(crate) mod api;
+pub(crate) mod bot;
 mod crabusb_service;
 pub(crate) mod hid;
 mod mass;
+pub(crate) mod scsi;
 
-pub(crate) use self::hid::{handle_keyboard_boot_report, handle_mouse_boot_report, remove_hid_slot};
-pub(crate) use self::hid::{hut, input};
 pub(crate) use self::hid::TrueosHidCursorEvent;
+pub(crate) use self::hid::{
+    handle_keyboard_boot_report, handle_mouse_boot_report, remove_hid_slot,
+};
+pub(crate) use self::hid::{hut, input};
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct UsbDeviceSummary {
