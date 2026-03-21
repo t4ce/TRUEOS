@@ -1,4 +1,7 @@
-use crab_usb::{Device, EndpointBulkIn, EndpointBulkOut, EndpointKind, err::USBError};
+use crab_usb::{
+    Device, EndpointBulkIn, EndpointBulkOut, EndpointInterruptIn, EndpointInterruptOut,
+    EndpointKind, err::USBError,
+};
 
 #[derive(Debug)]
 pub(crate) enum InterfaceEndpointError {
@@ -68,6 +71,32 @@ impl ClaimedInterface<'_> {
             _ => Err(InterfaceEndpointError::WrongKind {
                 address,
                 expected: "bulk-out",
+            }),
+        }
+    }
+
+    pub(crate) async fn endpoint_interrupt_in(
+        &mut self,
+        address: u8,
+    ) -> Result<EndpointInterruptIn, InterfaceEndpointError> {
+        match self.device.get_endpoint(address).await? {
+            EndpointKind::InterruptIn(endpoint) => Ok(endpoint),
+            _ => Err(InterfaceEndpointError::WrongKind {
+                address,
+                expected: "interrupt-in",
+            }),
+        }
+    }
+
+    pub(crate) async fn endpoint_interrupt_out(
+        &mut self,
+        address: u8,
+    ) -> Result<EndpointInterruptOut, InterfaceEndpointError> {
+        match self.device.get_endpoint(address).await? {
+            EndpointKind::InterruptOut(endpoint) => Ok(endpoint),
+            _ => Err(InterfaceEndpointError::WrongKind {
+                address,
+                expected: "interrupt-out",
             }),
         }
     }
