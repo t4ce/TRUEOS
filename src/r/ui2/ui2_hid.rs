@@ -2,8 +2,6 @@
 
 use super::*;
 
-const UI2_HID_KIND_MOUSE: u8 = 2;
-
 pub(super) fn cursor_color(slot_id: u32) -> (u8, u8, u8, u8) {
     match slot_id % 6 {
         0 => (0x3B, 0x82, 0xF6, 0xFF),
@@ -44,37 +42,6 @@ fn note_cursor_event_source(state: &mut Ui2State, event: &crate::usb2::hid::True
             event.buttons_down,
             event.wheel,
             event.flags
-        );
-    }
-}
-
-fn note_physical_mouse_event(
-    state: &mut Ui2State,
-    event: &crate::usb2::hid::TrueosHidCursorEvent,
-    px: f32,
-    py: f32,
-) {
-    if event.hid_kind != UI2_HID_KIND_MOUSE {
-        return;
-    }
-    state.physical_mouse_cursor_event_count =
-        state.physical_mouse_cursor_event_count.wrapping_add(1);
-    let count = state.physical_mouse_cursor_event_count;
-    if should_log_input_diag(count) {
-        crate::log!(
-            "ui2: mouse-cursor-event count={} seq={} ctrl={} slot={} ep={} flags=0x{:X} buttons=0x{:X} wheel={} norm=({:.3},{:.3}) px=({:.1},{:.1})\n",
-            count,
-            event.seq,
-            event.controller_id,
-            event.slot_id,
-            event.ep_target,
-            event.flags,
-            event.buttons_down,
-            event.wheel,
-            event.x,
-            event.y,
-            px,
-            py
         );
     }
 }
@@ -204,7 +171,6 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
 
     let px = cursor_event_px(event.x, state.view_w);
     let py = cursor_event_px(event.y, state.view_h);
-    note_physical_mouse_event(state, &event, px, py);
     let press_hit = state.hit_scene.hit_at(px, py);
     let release_hit = state.hit_scene.hit_at(px, py);
     let press_system_button_action = press_hit.and_then(|target| {

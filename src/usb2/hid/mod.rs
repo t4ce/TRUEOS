@@ -7,6 +7,7 @@ pub mod hut;
 pub mod input;
 pub mod keyboard;
 pub mod mouse;
+pub mod tablet;
 
 pub mod classreq {
     #[repr(u8)]

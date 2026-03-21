@@ -556,6 +556,12 @@ fn spawn_crabusb_truekey(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::usb2::midi::piano_drain_loop())
+    })
+}
+
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
@@ -808,6 +814,7 @@ static TASKS: &[TaskSpec] = &[
         &CRABUSB_TRUEKEY_STARTED,
         spawn_crabusb_truekey,
     ),
+    TaskSpec::enabled("piano-drain", 0, &PIANO_DRAIN_STARTED, spawn_piano_drain),
     TaskSpec::disabled(
         "boot-ws-smoke",
         WS_BOOT_READY,

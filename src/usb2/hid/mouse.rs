@@ -2,12 +2,7 @@ use super::{
     HID_DEBUG_REPORT_LOGS, HidRuntime, TrueosHidCursorEvent, clamp01, push_cursor_event,
     sync_runtime_cursor_snapshot,
 };
-use core::sync::atomic::{AtomicU32, Ordering};
-
 const HID_MOUSE_RING_CAP: usize = 2048;
-const HID_MOUSE_DIAG_LOG_FIRST: u32 = 8;
-const HID_MOUSE_DIAG_LOG_EVERY: u32 = 32;
-static HID_MOUSE_DIAG_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -90,12 +85,6 @@ impl Default for MouseRing {
     }
 }
 
-#[inline]
-fn should_log_mouse_diag(count: u32) -> bool {
-    count <= HID_MOUSE_DIAG_LOG_FIRST
-        || (count > HID_MOUSE_DIAG_LOG_FIRST && count.is_multiple_of(HID_MOUSE_DIAG_LOG_EVERY))
-}
-
 pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) {
     if data.len() < 3 {
         return;
@@ -147,28 +136,6 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
             buttons,
             prev_buttons as u8,
         );
-    }
-
-    if flags != 0 {
-        let count = HID_MOUSE_DIAG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-        if should_log_mouse_diag(count) {
-            crate::log!(
-                "hid-mouse: count={} ctrl={} slot={} ep={} seq={} dx={} dy={} wheel={} buttons=0x{:02X} flags=0x{:02X} pos=({:.3},{:.3}) len={}\n",
-                count,
-                runtime.controller_id as u32,
-                runtime.slot_id,
-                runtime.ep_target,
-                runtime.seq as u32,
-                dx,
-                dy,
-                wheel,
-                buttons,
-                flags,
-                runtime.mouse_x,
-                runtime.mouse_y,
-                data.len(),
-            );
-        }
     }
 
     push_cursor_event(TrueosHidCursorEvent {
