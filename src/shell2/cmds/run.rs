@@ -1,3 +1,4 @@
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::Layout;
@@ -604,6 +605,20 @@ fn build_argv(args: &[String]) -> (Vec<Vec<u8>>, Vec<*const c_char>) {
     (arg_storage, argv)
 }
 
+fn build_process_args(archive: &str, app_args: &[String]) -> Vec<String> {
+    let mut args = Vec::with_capacity(app_args.len().saturating_add(1));
+    args.push(String::from(archive));
+    args.extend(app_args.iter().cloned());
+    args
+}
+
+fn build_process_env(archive: &str) -> BTreeMap<String, String> {
+    let mut vars = BTreeMap::new();
+    vars.insert(String::from("PWD"), String::from("/"));
+    vars.insert(String::from("TRUEOS_APP_ARCHIVE"), String::from(archive));
+    vars
+}
+
 fn parse_blueprint(bytes: &[u8]) -> Result<BlueprintModule<'_>, &'static str> {
     if bytes.len() < BLUEPRINT_HEADER_LEN {
         return Err("module truncated");
@@ -810,7 +825,9 @@ async fn run_command_task(target: MatrixTarget, archive: String, app_args: Vec<S
                     )
                 }) {
                     Ok(main_addr) => {
-                        let (_arg_storage, argv) = build_argv(app_args.as_slice());
+                        let process_args = build_process_args(archive.as_str(), app_args.as_slice());
+                        let process_env = build_process_env(archive.as_str());
+                        let (_arg_storage, argv) = build_argv(process_args.as_slice());
                         log(alloc::format!(
                             "run: portal jump main=0x{:x} argc={}",
                             main_addr,
@@ -819,14 +836,16 @@ async fn run_command_task(target: MatrixTarget, archive: String, app_args: Vec<S
                         .as_str());
                         let main_fn: extern "C" fn(usize, *const *const c_char) =
                             unsafe { core::mem::transmute(main_addr) };
-                        main_fn(
-                            argv.len(),
-                            if argv.is_empty() {
-                                core::ptr::null()
-                            } else {
-                                argv.as_ptr()
-                            },
-                        );
+                        crate::r::io::env::with_launch_context(process_args, process_env, || {
+                            main_fn(
+                                argv.len(),
+                                if argv.is_empty() {
+                                    core::ptr::null()
+                                } else {
+                                    argv.as_ptr()
+                                },
+                            );
+                        });
                         log("run: portal returned");
                         drop(image);
                     }

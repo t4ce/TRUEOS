@@ -34,7 +34,6 @@ mod runtime;
 mod shell2;
 mod smp;
 mod tga;
-mod time;
 #[path = "tst/gfx_tetris.rs"]
 mod tst_gfx_tetris;
 #[path = "tst/html.rs"]
@@ -60,6 +59,7 @@ mod z7;
 use embassy_executor::{Spawner, raw::Executor};
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 pub use r::pat as pattern;
+pub use r::time;
 pub use r::{io, path};
 
 fn qjs_font_atlas_small_provider() -> trueos_qjs::FontAtlasView<'static> {
