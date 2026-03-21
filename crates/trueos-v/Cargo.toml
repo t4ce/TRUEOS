@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 trueos-sys = { path = "../trueos-sys" }
+spin = "0.10"
 
 [features]
 default = []

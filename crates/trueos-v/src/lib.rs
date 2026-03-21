@@ -26,6 +26,7 @@ pub mod vled {
 }
 
 pub mod vcabi;
+pub mod env;
 pub mod vclock;
 pub mod vfetch;
 pub mod vfs;
@@ -34,6 +35,7 @@ pub mod vhttp_srv;
 pub mod vinput;
 pub mod vnet;
 pub mod vnetfs;
+pub mod sync;
 pub mod vui2;
 pub mod vshell;
 pub mod vsys;

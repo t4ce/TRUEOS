@@ -375,6 +375,7 @@ async fn hid_boot_stream_task(
         0u8,
         usize::from(target.in_max_packet_size.max(target.report_len as u16)),
     ));
+    let mut sample_logs_left = 6u8;
 
     loop {
         match interrupt_in.submit_and_wait(report.as_mut_slice()).await {
@@ -385,6 +386,19 @@ async fn hid_boot_stream_task(
                 }
 
                 let sample = &report[..read.min(report.len())];
+                if sample_logs_left != 0 {
+                    sample_logs_left -= 1;
+                    let prefix_len = min(sample.len(), 8);
+                    crate::log!(
+                        "crabusb: hid {} {:04X}:{:04X} report ep=0x{:02X} len={} bytes={:02X?}\n",
+                        target.kind.as_str(),
+                        vendor_id,
+                        product_id,
+                        target.in_endpoint,
+                        sample.len(),
+                        &sample[..prefix_len]
+                    );
+                }
                 match target.kind {
                     HidBootKind::Keyboard => {
                         super::handle_keyboard_boot_report(controller_id, slot_id, ep_target, sample)
