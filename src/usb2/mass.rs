@@ -1,5 +1,9 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
-use core::{future::Future, task::Poll};
+use core::{
+    future::Future,
+    ptr::{read_unaligned, read_volatile},
+    task::Poll,
+};
 use crab_usb::{EndpointBulkIn, EndpointBulkOut, err::TransferError, usb_if};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use usb_if::host::ControlSetup;
@@ -11,7 +15,8 @@ const USB_CLASS_MASS_STORAGE: u8 = 0x08;
 const USB_SUBCLASS_SCSI: u8 = 0x06;
 const USB_PROTO_BULK_ONLY: u8 = 0x50;
 const BOT_IO_RETRIES: usize = 8;
-const BOT_IO_TIMEOUT_MS: u64 = 120;
+const BOT_IO_TIMEOUT_MS: u64 = 500;
+const BOT_RECOVERY_SETTLE_MS: u64 = 25;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MassTarget {
@@ -154,6 +159,178 @@ async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::O
     .await
 }
 
+async fn control_out_with_timeout(
+    device: &mut crab_usb::Device,
+    setup: ControlSetup,
+    data: &[u8],
+    timeout_ms: u64,
+) -> Option<Result<usize, TransferError>> {
+    with_timeout_or_none(device.control_out(setup, data), timeout_ms).await
+}
+
+fn log_transport_debug(stage: &'static str) {
+    let submit = crab_usb::debug_last_submit();
+    let event = crab_usb::debug_last_event();
+    crate::log!(
+        "crabusb: mass debug stage={} last_submit[dci={} dir={} len={} ptr=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+        stage,
+        submit.dci,
+        submit.direction,
+        submit.len,
+        submit.ptr,
+        event.slot_id,
+        event.ep_id,
+        event.completion_code,
+        event.residual,
+        event.ptr
+    );
+}
+
+fn read_mmio_u32(base: *const u8, offset: usize) -> u32 {
+    unsafe { read_volatile(base.add(offset) as *const u32) }
+}
+
+fn read_mmio_u64(base: *const u8, offset: usize) -> u64 {
+    unsafe { read_volatile(base.add(offset) as *const u64) }
+}
+
+fn endpoint_dci(endpoint_addr: u8) -> u8 {
+    let ep_num = endpoint_addr & 0x0F;
+    if ep_num == 0 {
+        1
+    } else {
+        (ep_num << 1) | if (endpoint_addr & 0x80) != 0 { 1 } else { 0 }
+    }
+}
+
+fn log_endpoint_context(label: &str, ctx_ptr: *const u8) {
+    let mut dw = [0u32; 8];
+    for (idx, slot) in dw.iter_mut().enumerate() {
+        *slot = unsafe { read_unaligned(ctx_ptr.add(idx * 4) as *const u32) };
+    }
+
+    let state = dw[0] & 0x7;
+    let interval = (dw[0] >> 16) & 0xFF;
+    let ep_type = (dw[1] >> 3) & 0x7;
+    let max_burst = (dw[1] >> 8) & 0xFF;
+    let max_packet_size = (dw[1] >> 16) & 0xFFFF;
+    let dequeue_ptr = (((dw[3] as u64) << 32) | (dw[2] as u64)) & !0xFu64;
+    let dcs = dw[2] & 0x1;
+    let avg_trb_len = dw[4] & 0xFFFF;
+    let max_esit_payload = (dw[4] >> 16) & 0xFFFF;
+
+    crate::log!(
+        "crabusb: xhci {} state={} type={} interval={} mps={} burst={} dcs={} tr_deq=0x{:X} avg_trb={} max_esit_payload={} raw=[{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}]\n",
+        label,
+        state,
+        ep_type,
+        interval,
+        max_packet_size,
+        max_burst,
+        dcs,
+        dequeue_ptr,
+        avg_trb_len,
+        max_esit_payload,
+        dw[0],
+        dw[1],
+        dw[2],
+        dw[3],
+        dw[4],
+        dw[5],
+        dw[6],
+        dw[7]
+    );
+}
+
+fn log_slot_context(ctx_ptr: *const u8) {
+    let mut dw = [0u32; 8];
+    for (idx, slot) in dw.iter_mut().enumerate() {
+        *slot = unsafe { read_unaligned(ctx_ptr.add(idx * 4) as *const u32) };
+    }
+    let route = dw[0] & 0xFFFFF;
+    let speed = (dw[0] >> 20) & 0xF;
+    let context_entries = (dw[0] >> 27) & 0x1F;
+    let root_port = (dw[1] >> 16) & 0xFF;
+    let max_exit_latency = dw[1] & 0xFFFF;
+    crate::log!(
+        "crabusb: xhci slot route=0x{:X} speed={} entries={} root_port={} max_exit_latency={} raw=[{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}]\n",
+        route,
+        speed,
+        context_entries,
+        root_port,
+        max_exit_latency,
+        dw[0],
+        dw[1],
+        dw[2],
+        dw[3],
+        dw[4],
+        dw[5],
+        dw[6],
+        dw[7]
+    );
+}
+
+fn log_xhci_mass_endpoint_state(
+    slot_id: u8,
+    bulk_out_ep: u8,
+    bulk_in_ep: u8,
+    reason: &'static str,
+) {
+    let Some(ctrl) = super::discover_first_controller() else {
+        crate::log!("crabusb: xhci {} no controller\n", reason);
+        return;
+    };
+
+    let mmio = ctrl.mmio_base.as_ptr() as *const u8;
+    let cap_len = unsafe { read_volatile(mmio) } as usize;
+    let hccparams1 = read_mmio_u32(mmio, 0x10);
+    let context_size = if (hccparams1 & (1 << 2)) != 0 {
+        64usize
+    } else {
+        32usize
+    };
+    let operational = unsafe { mmio.add(cap_len) };
+    let dcbaap = read_mmio_u64(operational, 0x30) & !0x3Fu64;
+    if dcbaap == 0 {
+        crate::log!("crabusb: xhci {} dcbaap=0\n", reason);
+        return;
+    }
+
+    let dcbaa_virt = crate::phys::phys_to_virt(dcbaap as usize) as *const u64;
+    let slot_ctx_phys = unsafe { read_unaligned(dcbaa_virt.add(slot_id as usize)) };
+    if slot_ctx_phys == 0 {
+        crate::log!(
+            "crabusb: xhci {} slot={} dcbaa entry empty dcbaap=0x{:X}\n",
+            reason,
+            slot_id,
+            dcbaap
+        );
+        return;
+    }
+
+    let out_ctx = crate::phys::phys_to_virt(slot_ctx_phys as usize) as *const u8;
+    crate::log!(
+        "crabusb: xhci {} slot={} caplen=0x{:X} hccparams1=0x{:08X} csz={} dcbaap=0x{:X} out_ctx=0x{:X}\n",
+        reason,
+        slot_id,
+        cap_len,
+        hccparams1,
+        context_size,
+        dcbaap,
+        slot_ctx_phys
+    );
+    log_slot_context(out_ctx);
+
+    let bulk_out_dci = endpoint_dci(bulk_out_ep) as usize;
+    let bulk_in_dci = endpoint_dci(bulk_in_ep) as usize;
+    log_endpoint_context("bulk-out", unsafe {
+        out_ctx.add(bulk_out_dci * context_size)
+    });
+    log_endpoint_context("bulk-in", unsafe {
+        out_ctx.add(bulk_in_dci * context_size)
+    });
+}
+
 async fn read_and_validate_csw(
     bulk_in: &mut EndpointBulkIn,
     cmd: &'static str,
@@ -206,10 +383,16 @@ async fn bot_command_in(
     let cbw = make_cbw(tag, data.len() as u32, 0x80, lun, cdb);
     let mut sent = 0usize;
     for _ in 0..BOT_IO_RETRIES {
-        sent = with_timeout_or_none(bulk_out.submit_and_wait(&cbw), BOT_IO_TIMEOUT_MS)
-            .await
-            .ok_or(MassProbeError::Transport("cbw-timeout"))?
-            .map_err(|_| MassProbeError::Transport("cbw-out"))?;
+        let Some(result) =
+            with_timeout_or_none(bulk_out.submit_and_wait(&cbw), BOT_IO_TIMEOUT_MS).await
+        else {
+            log_transport_debug("cbw-timeout");
+            return Err(MassProbeError::Transport("cbw-timeout"));
+        };
+        sent = result.map_err(|_| {
+            log_transport_debug("cbw-out");
+            MassProbeError::Transport("cbw-out")
+        })?;
         if sent != 0 {
             break;
         }
@@ -267,43 +450,77 @@ async fn bot_recovery_before_inquiry(
         interface_number,
         bulk_out_ep
     );
-    device
-        .control_out(
-            ControlSetup {
-                request_type: RequestType::Standard,
-                recipient: Recipient::Endpoint,
-                request: Request::ClearFeature,
-                value: 0,
-                index: bulk_out_ep as u16,
-            },
-            &[],
-        )
-        .await
-        .map_err(|_| MassProbeError::Transport("clear-halt-out"))?;
+    match control_out_with_timeout(
+        device,
+        ControlSetup {
+            request_type: RequestType::Standard,
+            recipient: Recipient::Endpoint,
+            request: Request::ClearFeature,
+            value: 0,
+            index: bulk_out_ep as u16,
+        },
+        &[],
+        BOT_IO_TIMEOUT_MS,
+    )
+    .await
+    {
+        Some(Ok(_)) => {}
+        Some(Err(err)) => {
+            crate::log!(
+                "crabusb: mass recovery if#{} clear-halt-out ep=0x{:02X} ignored err={:?}\n",
+                interface_number,
+                bulk_out_ep,
+                err
+            );
+        }
+        None => {
+            crate::log!(
+                "crabusb: mass recovery if#{} clear-halt-out ep=0x{:02X} ignored timeout\n",
+                interface_number,
+                bulk_out_ep
+            );
+        }
+    }
 
     crate::log!(
         "crabusb: mass recovery if#{} step=clear-halt-in ep=0x{:02X}\n",
         interface_number,
         bulk_in_ep
     );
-    device
-        .control_out(
-            ControlSetup {
-                request_type: RequestType::Standard,
-                recipient: Recipient::Endpoint,
-                request: Request::ClearFeature,
-                value: 0,
-                index: bulk_in_ep as u16,
-            },
-            &[],
-        )
-        .await
-        .map_err(|_| MassProbeError::Transport("clear-halt-in"))?;
+    match control_out_with_timeout(
+        device,
+        ControlSetup {
+            request_type: RequestType::Standard,
+            recipient: Recipient::Endpoint,
+            request: Request::ClearFeature,
+            value: 0,
+            index: bulk_in_ep as u16,
+        },
+        &[],
+        BOT_IO_TIMEOUT_MS,
+    )
+    .await
+    {
+        Some(Ok(_)) => {}
+        Some(Err(err)) => {
+            crate::log!(
+                "crabusb: mass recovery if#{} clear-halt-in ep=0x{:02X} ignored err={:?}\n",
+                interface_number,
+                bulk_in_ep,
+                err
+            );
+        }
+        None => {
+            crate::log!(
+                "crabusb: mass recovery if#{} clear-halt-in ep=0x{:02X} ignored timeout\n",
+                interface_number,
+                bulk_in_ep
+            );
+        }
+    }
 
-    crate::log!(
-        "crabusb: mass recovery if#{} step=done\n",
-        interface_number
-    );
+    crate::log!("crabusb: mass recovery if#{} step=done\n", interface_number);
+    Timer::after(EmbassyDuration::from_millis(BOT_RECOVERY_SETTLE_MS)).await;
 
     Ok(())
 }
@@ -348,12 +565,11 @@ pub(crate) async fn probe_mass_bot(
         Err(_) => return Err(MassProbeError::Transport("get-max-lun")),
     };
 
-    bot_recovery_before_inquiry(device, interface_number, bulk_out_ep, bulk_in_ep).await?;
-
     let lun = 0u8;
     let mut inquiry = [0u8; 36];
     let inquiry_cdb = [0x12, 0, 0, 0, inquiry.len() as u8, 0];
-    let inquiry_read = bot_command_in(
+    log_xhci_mass_endpoint_state(device.slot_id(), bulk_out_ep, bulk_in_ep, "pre-inquiry");
+    let inquiry_read = match bot_command_in(
         bulk_out,
         bulk_in,
         "inquiry",
@@ -362,7 +578,27 @@ pub(crate) async fn probe_mass_bot(
         &mut inquiry,
         0x544F_4E51,
     )
-    .await?;
+    .await
+    {
+        Ok(read) => read,
+        Err(first_err) => {
+            crate::log!(
+                "crabusb: mass inquiry initial attempt failed: {:?}; applying BOT recovery\n",
+                first_err
+            );
+            bot_recovery_before_inquiry(device, interface_number, bulk_out_ep, bulk_in_ep).await?;
+            bot_command_in(
+                bulk_out,
+                bulk_in,
+                "inquiry",
+                lun,
+                &inquiry_cdb,
+                &mut inquiry,
+                0x544F_4E51,
+            )
+            .await?
+        }
+    };
     if inquiry_read < 32 {
         return Err(MassProbeError::ShortData {
             cmd: "inquiry",
