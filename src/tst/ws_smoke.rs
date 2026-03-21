@@ -1,7 +1,7 @@
 extern crate alloc;
 
-use crate::v::net::ws::WsConnection;
-use crate::v::net::wss::WssConnection;
+use crate::r::net::ws::WsConnection;
+use crate::r::net::wss::WssConnection;
 
 #[embassy_executor::task]
 pub async fn boot_ws_smoke_task() {

@@ -192,7 +192,7 @@ fn ensure_atlas_uploaded() -> bool {
     let atlas = font_atlas_large_view();
     let rgba = atlas_rgba();
     let rc = unsafe {
-        crate::v::io::cabi::trueos_cabi_gfx_upload_texture_rgba(
+        crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba(
             ATLAS_TEX_ID,
             atlas.width,
             atlas.height,
@@ -400,9 +400,9 @@ pub fn draw_atlas_text_in_frame_alpha(
         return false;
     }
 
-    let _ = unsafe { crate::v::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
     let _ = unsafe {
-        crate::v::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+        crate::r::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
     };
 
     let mut verts = Vec::with_capacity(text.len().saturating_mul(6));
@@ -424,7 +424,7 @@ pub fn draw_atlas_text_in_frame_alpha(
         .len()
         .saturating_mul(core::mem::size_of::<TexVertex>());
     let rc = unsafe {
-        crate::v::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
+        crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
             ATLAS_TEX_ID,
             ptr,
             len,
@@ -439,12 +439,12 @@ pub fn draw_atlas_text(text: &[u8], x: f32, y: f32) -> bool {
         .map(|fb| (fb.width() as u32, fb.height() as u32))
         .unwrap_or((1024, 768));
 
-    let begin_rc = unsafe { crate::v::io::cabi::trueos_cabi_gfx_begin_frame(0xFFFFFF) };
+    let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xFFFFFF) };
     if begin_rc != 0 {
         return false;
     }
 
     let ok = draw_atlas_text_in_frame(text, x, y, view_w, view_h);
-    let end_rc = unsafe { crate::v::io::cabi::trueos_cabi_gfx_end_frame() };
+    let end_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
     ok && end_rc == 0
 }

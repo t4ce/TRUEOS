@@ -24,7 +24,7 @@ fn tree_child_names(
     let path_owned = String::from(path);
 
     let listing = crate::wait::spawn_and_wait_local(async move {
-        crate::v::fs::trueosfs::list_dir_async(disk, path_owned.as_str()).await
+        crate::r::fs::trueosfs::list_dir_async(disk, path_owned.as_str()).await
     });
 
     match listing {
@@ -43,7 +43,7 @@ fn file_size_bytes(disk_id: crate::disc::block::DiscId, path: &str) -> Option<u6
     let disk = crate::disc::block::device_handle(disk_id)?;
     let path_owned = String::from(path);
     match crate::wait::spawn_and_wait_local(async move {
-        crate::v::fs::trueosfs::file_info_async(disk, path_owned.as_str()).await
+        crate::r::fs::trueosfs::file_info_async(disk, path_owned.as_str()).await
     }) {
         Ok(Some(info)) => Some(info.data_len),
         _ => None,
@@ -61,7 +61,7 @@ fn child_path(parent: &str, name: &str) -> String {
     out
 }
 
-fn format_root_header(root: crate::v::fs::trueosfs::RootInfo) -> String {
+fn format_root_header(root: crate::r::fs::trueosfs::RootInfo) -> String {
     let Some(handle) = crate::disc::block::device_handle(root.disk_id) else {
         return alloc::format!("root {} seq={} (device missing)", root.disk_id, root.seq);
     };
@@ -141,7 +141,7 @@ fn push_tree_lines(
     }
 }
 
-fn print_root_tree(io: &'static dyn ShellBackend2, root: crate::v::fs::trueosfs::RootInfo) {
+fn print_root_tree(io: &'static dyn ShellBackend2, root: crate::r::fs::trueosfs::RootInfo) {
     print_shell_line(io, format_root_header(root).as_str());
 
     let mut lines = Vec::new();
@@ -188,7 +188,7 @@ pub(crate) fn try_parse(
             ParseOutcome::Handled
         }
         None => {
-            let roots = crate::v::fs::trueosfs::list_roots();
+            let roots = crate::r::fs::trueosfs::list_roots();
             if roots.is_empty() {
                 print_shell_line(io, "file: no TRUEOSFS roots mounted");
                 return ParseOutcome::Handled;

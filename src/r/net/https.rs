@@ -7,13 +7,13 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering}
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
-use trueos_v::vnet;
+use v::vnet;
 
 use super::dns::{self, DnsConfig};
 use super::{NetProfile, Queue};
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
-use crate::v::io::cabi::{
+use crate::r::io::cabi::{
     FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_IO, FS_ERR_NO_SPACE, FS_ERR_NOT_FOUND,
     FS_ERR_TIMEOUT, FS_ERR_TOO_LARGE, FS_ERR_USBMS_NOT_FOUND, NET_ERR_BAD_URL, NET_ERR_HTTP,
     NET_ERR_TIMEOUT, NET_ERR_TIMEOUT_BODY, NET_ERR_TIMEOUT_CONNECT, NET_ERR_TIMEOUT_DNS,
@@ -45,8 +45,8 @@ static CABI_NET_FETCH_WAIT_MODE_LOGGED: AtomicU8 = AtomicU8::new(0);
 
 #[inline]
 fn wait_on_net_fetch_queue_blocking(timeout_ms: u64) -> bool {
-    let ready = crate::v::readiness::is_set(
-        crate::v::readiness::NET_CONFIGURED | crate::v::readiness::TLS_SOCKET_SERVICE_READY,
+    let ready = crate::r::readiness::is_set(
+        crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
     );
     if ready {
         if CABI_NET_FETCH_WAIT_MODE_LOGGED
@@ -812,18 +812,18 @@ async fn write_body_to_tmp_file(
     body: &[u8],
 ) -> Result<(), i32> {
     let Some(sh) =
-        crate::v::fs::trueosfs::file_write_begin_async(disk, tmp_path, body.len() as u64)
+        crate::r::fs::trueosfs::file_write_begin_async(disk, tmp_path, body.len() as u64)
             .await
             .map_err(block_error_to_code)?
     else {
         return Err(FS_ERR_NO_SPACE);
     };
     if !body.is_empty() {
-        crate::v::fs::trueosfs::file_write_chunk_async(sh, body)
+        crate::r::fs::trueosfs::file_write_chunk_async(sh, body)
             .await
             .map_err(block_error_to_code)?;
     }
-    crate::v::fs::trueosfs::file_write_finish_async(sh)
+    crate::r::fs::trueosfs::file_write_finish_async(sh)
         .await
         .map_err(block_error_to_code)?;
     Ok(())
@@ -2751,7 +2751,7 @@ async fn fetch_on_device_to_file_keepalive(
                         header_buf.extend_from_slice(&data);
                         if header_buf.len() > (64 * 1024) {
                             if let Some(sh) = stream_handle.take() {
-                                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                             }
                             keepalive_release(conn);
                             return Err(FetchToFileError::Code(fetch_error_to_code(
@@ -2815,7 +2815,7 @@ async fn fetch_on_device_to_file_keepalive(
                             }
 
                             if !body_is_chunked {
-                                let sh = match crate::v::fs::trueosfs::file_write_begin_async(
+                                let sh = match crate::r::fs::trueosfs::file_write_begin_async(
                                     disk,
                                     tmp_path,
                                     body_expected as u64,
@@ -2847,7 +2847,7 @@ async fn fetch_on_device_to_file_keepalive(
                                     let rem = body_expected.saturating_sub(body_written);
                                     let take = part.len().min(rem);
                                     if take > 0 {
-                                        crate::v::fs::trueosfs::file_write_chunk_async(
+                                        crate::r::fs::trueosfs::file_write_chunk_async(
                                             sh,
                                             &part[..take],
                                         )
@@ -2870,7 +2870,7 @@ async fn fetch_on_device_to_file_keepalive(
                                     handle.0
                                 );
                                 if let Some(sh) = stream_handle.take() {
-                                    crate::v::fs::trueosfs::file_write_finish_async(sh)
+                                    crate::r::fs::trueosfs::file_write_finish_async(sh)
                                         .await
                                         .map_err(block_error_to_code)
                                         .map_err(FetchToFileError::Code)?;
@@ -2912,7 +2912,7 @@ async fn fetch_on_device_to_file_keepalive(
                         let rem = body_expected.saturating_sub(body_written);
                         let take = data.len().min(rem);
                         if take > 0 {
-                            crate::v::fs::trueosfs::file_write_chunk_async(sh, &data[..take])
+                            crate::r::fs::trueosfs::file_write_chunk_async(sh, &data[..take])
                                 .await
                                 .map_err(block_error_to_code)
                                 .map_err(FetchToFileError::Code)?;
@@ -2927,7 +2927,7 @@ async fn fetch_on_device_to_file_keepalive(
                                 body_expected,
                                 handle.0
                             );
-                            crate::v::fs::trueosfs::file_write_finish_async(sh)
+                            crate::r::fs::trueosfs::file_write_finish_async(sh)
                                 .await
                                 .map_err(block_error_to_code)
                                 .map_err(FetchToFileError::Code)?;
@@ -2958,7 +2958,7 @@ async fn fetch_on_device_to_file_keepalive(
                             st.connected = false;
                         }
                         if let Some(sh) = stream_handle.take() {
-                            let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                            let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                         }
                         keepalive_release(conn);
                         return Err(FetchToFileError::Code(fetch_error_to_code(
@@ -2973,7 +2973,7 @@ async fn fetch_on_device_to_file_keepalive(
                         st.connected = false;
                     }
                     if let Some(sh) = stream_handle.take() {
-                        let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                        let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                     }
                     keepalive_release(conn);
                     return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Tls)));
@@ -2996,7 +2996,7 @@ async fn fetch_on_device_to_file_keepalive(
                 handle.0
             );
             if let Some(sh) = stream_handle.take() {
-                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
             }
             keepalive_release(conn);
             return Err(FetchToFileError::Code(fetch_error_to_code(
@@ -3181,7 +3181,7 @@ async fn fetch_on_device_to_file(
                                 let _ = cmds.push(TlsCommand::Close { handle: h });
                             }
                             if let Some(sh) = stream_handle.take() {
-                                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                             }
                             return Err(FetchToFileError::Code(fetch_error_to_code(
                                 FetchError::Http(0),
@@ -3200,7 +3200,7 @@ async fn fetch_on_device_to_file(
                                         let _ = cmds.push(TlsCommand::Close { handle: h });
                                     }
                                     if let Some(sh) = stream_handle.take() {
-                                        let _ = crate::v::fs::trueosfs::file_write_abort_async(sh)
+                                        let _ = crate::r::fs::trueosfs::file_write_abort_async(sh)
                                             .await;
                                     }
                                     log_vhttps_file_timing(
@@ -3225,7 +3225,7 @@ async fn fetch_on_device_to_file(
                                 }
                                 if let Some(sh) = stream_handle.take() {
                                     let _ =
-                                        crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                        crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                                 }
                                 let rc = fetch_error_to_code(FetchError::Http(status));
                                 log_vhttps_file_timing(
@@ -3251,7 +3251,7 @@ async fn fetch_on_device_to_file(
                                 }
                                 if let Some(sh) = stream_handle.take() {
                                     let _ =
-                                        crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                        crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                                 }
                                 crate::log!(
                                     "vhttps-file: invalid-http-head host={} hdr_bytes={}\n",
@@ -3292,7 +3292,7 @@ async fn fetch_on_device_to_file(
                                 }
                                 if let Some(sh) = stream_handle.take() {
                                     let _ =
-                                        crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                        crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                                 }
                                 let rc = fetch_error_to_code(FetchError::ResponseTooLarge);
                                 log_vhttps_file_timing(
@@ -3316,7 +3316,7 @@ async fn fetch_on_device_to_file(
                                 if t_write_begin.is_none() {
                                     t_write_begin = Some(Instant::now());
                                 }
-                                let sh = match crate::v::fs::trueosfs::file_write_begin_async(
+                                let sh = match crate::r::fs::trueosfs::file_write_begin_async(
                                     disk,
                                     tmp_path,
                                     body_expected as u64,
@@ -3405,7 +3405,7 @@ async fn fetch_on_device_to_file(
                                     let rem = body_expected.saturating_sub(body_written);
                                     let take = part.len().min(rem);
                                     if take > 0 {
-                                        crate::v::fs::trueosfs::file_write_chunk_async(
+                                        crate::r::fs::trueosfs::file_write_chunk_async(
                                             sh,
                                             &part[..take],
                                         )
@@ -3420,7 +3420,7 @@ async fn fetch_on_device_to_file(
 
                             if !body_is_chunked && body_written >= body_expected {
                                 if let Some(sh) = stream_handle.take() {
-                                    crate::v::fs::trueosfs::file_write_finish_async(sh)
+                                    crate::r::fs::trueosfs::file_write_finish_async(sh)
                                         .await
                                         .map_err(block_error_to_code)
                                         .map_err(FetchToFileError::Code)?;
@@ -3548,14 +3548,14 @@ async fn fetch_on_device_to_file(
                         let rem = body_expected.saturating_sub(body_written);
                         let take = data.len().min(rem);
                         if take > 0 {
-                            crate::v::fs::trueosfs::file_write_chunk_async(sh, &data[..take])
+                            crate::r::fs::trueosfs::file_write_chunk_async(sh, &data[..take])
                                 .await
                                 .map_err(block_error_to_code)
                                 .map_err(FetchToFileError::Code)?;
                             body_written = body_written.saturating_add(take);
                         }
                         if body_written >= body_expected {
-                            crate::v::fs::trueosfs::file_write_finish_async(sh)
+                            crate::r::fs::trueosfs::file_write_finish_async(sh)
                                 .await
                                 .map_err(block_error_to_code)
                                 .map_err(FetchToFileError::Code)?;
@@ -3590,7 +3590,7 @@ async fn fetch_on_device_to_file(
                     if body_is_chunked && header_done {
                         let Some(decoded) = decode_http_chunked(chunked_raw_body.as_slice()) else {
                             if let Some(sh) = stream_handle.take() {
-                                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                             }
                             let rc = fetch_error_to_code(FetchError::Http(0));
                             log_vhttps_file_timing(
@@ -3611,7 +3611,7 @@ async fn fetch_on_device_to_file(
                         };
                         if decoded.len() > max_bytes {
                             if let Some(sh) = stream_handle.take() {
-                                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                             }
                             let rc = fetch_error_to_code(FetchError::ResponseTooLarge);
                             log_vhttps_file_timing(
@@ -3631,7 +3631,7 @@ async fn fetch_on_device_to_file(
                             return Err(FetchToFileError::Code(rc));
                         }
                         if let Some(sh) = stream_handle.take() {
-                            let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                            let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                         }
                         if t_write_begin.is_none() {
                             t_write_begin = Some(Instant::now());
@@ -3659,7 +3659,7 @@ async fn fetch_on_device_to_file(
                         return Ok(());
                     }
                     if let Some(sh) = stream_handle.take() {
-                        let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                        let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                     }
                     let rc = fetch_error_to_code(FetchError::BodyTimeout);
                     log_vhttps_file_timing(
@@ -3684,7 +3684,7 @@ async fn fetch_on_device_to_file(
                         let _ = cmds.push(TlsCommand::Close { handle: h });
                     }
                     if let Some(sh) = stream_handle.take() {
-                        let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                        let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
                     }
                     let rc = fetch_error_to_code(FetchError::Tls);
                     log_vhttps_file_timing(
@@ -3732,7 +3732,7 @@ async fn fetch_on_device_to_file(
                 let _ = cmds.push(TlsCommand::Close { handle: h });
             }
             if let Some(sh) = stream_handle.take() {
-                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
             }
             let rc = if tls_handle.is_none() {
                 fetch_error_to_code(FetchError::ConnectTimeout)
@@ -4038,13 +4038,13 @@ pub async fn fetch_https_to_file_with_profile_async(
     max_bytes: usize,
 ) -> Result<(), i32> {
     let t0 = Instant::now();
-    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         return Err(FS_ERR_USBMS_NOT_FOUND);
     };
 
     let key = normalize_rel(path, false)?;
 
-    match crate::v::fs::trueosfs::file_exists_async(disk, key.as_str()).await {
+    match crate::r::fs::trueosfs::file_exists_async(disk, key.as_str()).await {
         Ok(true) => return Ok(()),
         Ok(false) => {}
         Err(e) => return Err(block_error_to_code(e)),
@@ -4088,7 +4088,7 @@ pub async fn fetch_https_to_file_with_profile_async(
                 break;
             }
             Err(FetchToFileError::Redirect { status, url }) => {
-                let _ = crate::v::fs::trueosfs::file_delete_async(disk, key.as_str()).await;
+                let _ = crate::r::fs::trueosfs::file_delete_async(disk, key.as_str()).await;
                 if hop >= MAX_REDIRECTS {
                     return Err(fetch_error_to_code(FetchError::Http(status)));
                 }
@@ -4096,7 +4096,7 @@ pub async fn fetch_https_to_file_with_profile_async(
                 continue;
             }
             Err(FetchToFileError::Code(rc)) => {
-                let _ = crate::v::fs::trueosfs::file_delete_async(disk, key.as_str()).await;
+                let _ = crate::r::fs::trueosfs::file_delete_async(disk, key.as_str()).await;
                 last_err = rc;
             }
         }
@@ -4305,8 +4305,8 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
         .await
         {
             Ok(bytes) => {
-                if let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() {
-                    match crate::v::fs::trueosfs::file_in_async(
+                if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+                    match crate::r::fs::trueosfs::file_in_async(
                         disk,
                         key.as_str(),
                         bytes.as_slice(),

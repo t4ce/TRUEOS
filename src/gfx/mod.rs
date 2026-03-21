@@ -167,7 +167,7 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
         };
         crate::log!("gfx: backend={}\n", backend_name);
         if !matches!(&backend, backends::Backend::None(_)) {
-            crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
+            crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
         }
         Mutex::new(System::new(backend, framebuffers))
     });
@@ -351,7 +351,7 @@ pub fn switch_to_virgl() -> bool {
     with_system(|sys| {
         sys.backend = b;
         bump_backend_epoch();
-        crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
+        crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
         crate::log!("gfx: switch_to_virgl: ok epoch={}\n", backend_epoch());
         true
     })

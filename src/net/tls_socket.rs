@@ -8,10 +8,10 @@ use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
-use trueos_v::vnet;
+use v::vnet;
 
 use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsError, TlsRoots, TlsTime};
-use crate::v::net::{Queue, VNet};
+use crate::r::net::{Queue, VNet};
 
 static TLS_APP_QUEUES: Mutex<Vec<TlsAppQueues>> = Mutex::new(Vec::new());
 static TLS_CONN_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -237,7 +237,7 @@ fn maybe_notify_connected(conn: &mut TlsConn) {
 }
 
 fn tls_socket_tick_once() {
-    if !crate::v::readiness::is_set(crate::v::readiness::NET_CONFIGURED) {
+    if !crate::r::readiness::is_set(crate::r::readiness::NET_CONFIGURED) {
         return;
     }
 
@@ -502,7 +502,7 @@ fn tls_socket_tick_once() {
 pub async fn tls_socket_service_task() {
     async move {
         crate::log!("tls-socket: service running\n");
-        crate::v::readiness::set(crate::v::readiness::TLS_SOCKET_SERVICE_READY);
+        crate::r::readiness::set(crate::r::readiness::TLS_SOCKET_SERVICE_READY);
 
         loop {
             tls_socket_tick_once();

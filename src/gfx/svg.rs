@@ -471,7 +471,7 @@ pub fn upload_svg_text_to_texture(tex_id: u32, svg_text: &str) -> Result<SvgText
     let (info, rgba) = rasterize_svg_text_rgba(svg_text)?;
 
     let rc = unsafe {
-        crate::v::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
+        crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
             tex_id,
             info.width,
             info.height,

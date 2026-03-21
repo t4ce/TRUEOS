@@ -60,7 +60,7 @@ pub async fn frog_job(slot_id: u8, api_key: HString<128>) {
     let url =
         trueos_weather::oc3::openweather_geo_url(FROG_LATITUDE, FROG_LONGITUDE, api_key.as_str());
 
-    match crate::v::net::json::get_json(url.as_str()).await {
+    match crate::r::net::json::get_json(url.as_str()).await {
         Ok(raw) => {
             let pretty = pretty_json(raw.as_str());
             let blob: Vec<u8> = pretty.into_bytes();

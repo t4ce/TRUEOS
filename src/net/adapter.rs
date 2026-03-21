@@ -2591,8 +2591,8 @@ impl NetService {
                 }
 
                 // SLAAC produced (or maintained) a usable global address.
-                crate::v::readiness::set(
-                    crate::v::readiness::NET_CONFIGURED | crate::v::readiness::NET_V6_CONFIGURED,
+                crate::r::readiness::set(
+                    crate::r::readiness::NET_CONFIGURED | crate::r::readiness::NET_V6_CONFIGURED,
                 );
             }
 
@@ -3163,8 +3163,8 @@ impl NetService {
         self.ipv6_global_is_dhcp = true;
 
         // Mark IPv6 as configured. This is distinct from NET_V6_GATEWAY_REACHABLE.
-        crate::v::readiness::set(
-            crate::v::readiness::NET_CONFIGURED | crate::v::readiness::NET_V6_CONFIGURED,
+        crate::r::readiness::set(
+            crate::r::readiness::NET_CONFIGURED | crate::r::readiness::NET_V6_CONFIGURED,
         );
 
         // Preserve current IPv4 CIDR(s) while updating IPv6.
@@ -3759,8 +3759,8 @@ impl NetService {
 
                 // Network is configured (at least IPv4). This is intentionally weaker than
                 // NET_GATEWAY_REACHABLE, which depends on an ICMP-to-router probe.
-                crate::v::readiness::set(
-                    crate::v::readiness::NET_CONFIGURED | crate::v::readiness::NET_V4_CONFIGURED,
+                crate::r::readiness::set(
+                    crate::r::readiness::NET_CONFIGURED | crate::r::readiness::NET_V4_CONFIGURED,
                 );
             }
             Some(dhcpv4::Event::Deconfigured) => {
@@ -4063,9 +4063,9 @@ impl NetService {
                                         "net: icmp ok dev={} (gateway reachable)\n",
                                         self.device_index
                                     );
-                                    crate::v::readiness::set(
-                                        crate::v::readiness::NET_GATEWAY_REACHABLE
-                                            | crate::v::readiness::NET_V4_GATEWAY_REACHABLE,
+                                    crate::r::readiness::set(
+                                        crate::r::readiness::NET_GATEWAY_REACHABLE
+                                            | crate::r::readiness::NET_V4_GATEWAY_REACHABLE,
                                     );
                                 }
                             }
@@ -4113,9 +4113,9 @@ impl NetService {
                                     "net: icmp6 ok dev={} (v6 gateway reachable)\n",
                                     self.device_index
                                 );
-                                crate::v::readiness::set(
-                                    crate::v::readiness::NET_GATEWAY_REACHABLE
-                                        | crate::v::readiness::NET_V6_GATEWAY_REACHABLE,
+                                crate::r::readiness::set(
+                                    crate::r::readiness::NET_GATEWAY_REACHABLE
+                                        | crate::r::readiness::NET_V6_GATEWAY_REACHABLE,
                                 );
                             }
                             continue;

@@ -12,7 +12,7 @@ pub mod ping;
 pub mod ws;
 pub mod wss;
 
-use trueos_v::vnet as api;
+use v::vnet as api;
 
 use spin::Mutex;
 

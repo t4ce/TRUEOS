@@ -208,7 +208,7 @@ async fn read_private_file(
     disk: block::DeviceHandle,
     path: &str,
 ) -> Result<Option<Vec<u8>>, block::Error> {
-    let Some(placement) = crate::v::fs::trueosfs::locate_async(disk).await? else {
+    let Some(placement) = crate::r::fs::trueosfs::locate_async(disk).await? else {
         return Ok(None);
     };
 
@@ -259,7 +259,7 @@ async fn write_committed_manifest(
     let manifest_path = vm_manifest_path(vm_id);
     let manifest = format!("{}\n", seq);
     let ok =
-        crate::v::fs::trueosfs::file_in_async(disk, manifest_path.as_str(), manifest.as_bytes())
+        crate::r::fs::trueosfs::file_in_async(disk, manifest_path.as_str(), manifest.as_bytes())
             .await?;
     if ok { Ok(()) } else { Err(block::Error::Io) }
 }
@@ -626,16 +626,16 @@ pub async fn vm_store_replication_task() {
 async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
     let t0 = boot_probe_ms();
     crate::log!("boot-probe: hv-store ensure begin ms={}\n", t0);
-    let disk = crate::v::disc::ramdisk::create_trueos_private(
+    let disk = crate::r::disc::ramdisk::create_trueos_private(
         VM_STORE_RAMDISK_BYTES,
         VM_STORE_BLOCK_SIZE,
         "trueos-hv-store",
     )
     .await
     .map_err(|e| match e {
-        crate::v::disc::ramdisk::TrueosPrivateError::Create(err) => VmStoreError::Create(err),
-        crate::v::disc::ramdisk::TrueosPrivateError::Format(err)
-        | crate::v::disc::ramdisk::TrueosPrivateError::Validate(err) => VmStoreError::Format(err),
+        crate::r::disc::ramdisk::TrueosPrivateError::Create(err) => VmStoreError::Create(err),
+        crate::r::disc::ramdisk::TrueosPrivateError::Format(err)
+        | crate::r::disc::ramdisk::TrueosPrivateError::Validate(err) => VmStoreError::Format(err),
     })?;
     crate::log!(
         "boot-probe: hv-store ramdisk create done ms={} dt={}\n",
@@ -656,7 +656,7 @@ async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
         t2.saturating_sub(t1)
     );
     let wrote =
-        crate::v::fs::trueosfs::file_in_async(disk, VM_STORE_PROBE_PATH, VM_STORE_PROBE_BYTES)
+        crate::r::fs::trueosfs::file_in_async(disk, VM_STORE_PROBE_PATH, VM_STORE_PROBE_BYTES)
             .await
             .map_err(VmStoreError::Format)?;
     if !wrote {
@@ -713,7 +713,7 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
                 pending_path.as_str(),
                 committed_path.as_str()
             );
-            let Some(handle) = crate::v::fs::trueosfs::file_write_begin_async(
+            let Some(handle) = crate::r::fs::trueosfs::file_write_begin_async(
                 disk,
                 pending_path.as_str(),
                 bytes.len() as u64,
@@ -725,16 +725,16 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
             };
 
             if let Err(e) =
-                crate::v::fs::trueosfs::file_write_chunk_async(handle, bytes.as_slice()).await
+                crate::r::fs::trueosfs::file_write_chunk_async(handle, bytes.as_slice()).await
             {
-                let _ = crate::v::fs::trueosfs::file_write_abort_async(handle).await;
+                let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
                 return Err(VmStoreError::Write(e));
             }
-            crate::v::fs::trueosfs::file_write_finish_async(handle)
+            crate::r::fs::trueosfs::file_write_finish_async(handle)
                 .await
                 .map_err(VmStoreError::Write)?;
 
-            let committed = crate::v::fs::trueosfs::file_rename_async(
+            let committed = crate::r::fs::trueosfs::file_rename_async(
                 disk,
                 pending_path.as_str(),
                 committed_path.as_str(),

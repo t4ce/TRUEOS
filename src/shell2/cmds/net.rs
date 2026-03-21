@@ -1,12 +1,12 @@
 use core::str::SplitWhitespace;
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use trueos_v::vnet as api;
+use v::vnet as api;
 
 use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
 use super::tlb_helper::{TlbTable, print_table};
 use crate::shell2::shell2_cmd::ParseOutcome;
-use crate::v::net::VNet;
+use crate::r::net::VNet;
 
 const NET_MENU_HEADERS: [&str; 2] = ["Subcommand", "Arguments"];
 const NET_MENU_ROWS: [[&str; 2]; 3] = [
@@ -113,17 +113,17 @@ fn cmd_net_icmp(
     crate::wait::spawn_and_wait_local(async move {
         let ip_res = match device_index {
             Some(dev_idx) => {
-                crate::v::net::dns::resolve_ipv4_for_device(
+                crate::r::net::dns::resolve_ipv4_for_device(
                     dev_idx,
                     target.as_str(),
-                    crate::v::net::dns::DnsConfig::for_device(dev_idx),
+                    crate::r::net::dns::DnsConfig::for_device(dev_idx),
                 )
                 .await
             }
             None => {
-                crate::v::net::dns::resolve_ipv4_primary(
+                crate::r::net::dns::resolve_ipv4_primary(
                     target.as_str(),
-                    crate::v::net::dns::DnsConfig::default(),
+                    crate::r::net::dns::DnsConfig::default(),
                 )
                 .await
             }

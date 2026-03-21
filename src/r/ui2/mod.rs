@@ -1568,9 +1568,9 @@ fn draw_texture_rect_uv_no_present(
             a: alpha,
         },
     ];
-    let _ = unsafe { crate::v::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
     let _ = unsafe {
-        crate::v::io::cabi::trueos_cabi_gfx_set_blend(
+        crate::r::io::cabi::trueos_cabi_gfx_set_blend(
             if blend_enabled || alpha < 255 { 1 } else { 0 },
             0x0302,
             0x0303,
@@ -1581,13 +1581,13 @@ fn draw_texture_rect_uv_no_present(
         )
     };
     let rc = unsafe {
-        crate::v::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
+        crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
             tex_id,
             verts.as_ptr() as *const u8,
             verts.len() * core::mem::size_of::<Ui2TexVertex>(),
         )
     };
-    let _ = unsafe { crate::v::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
     rc == 0
 }
 
@@ -1640,7 +1640,7 @@ fn queue_browser_window_viewport(content_id: HostedContentId, content: Ui2Rect) 
 fn texture_is_drawable(tex_id: u32) -> bool {
     const ASYNC_TEX_STATUS_READY: i32 = 2;
     tex_id != 0
-        && crate::v::io::cabi::trueos_cabi_gfx_texture_status(tex_id)
+        && crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id)
             == ASYNC_TEX_STATUS_READY
 }
 
@@ -1729,7 +1729,7 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
     let sh = snapped_h;
     let draw_x_f = draw_x_i as f32;
     let draw_y_f = draw_y_i as f32;
-    let _ = unsafe { crate::v::io::cabi::trueos_cabi_gfx_set_scissor(sx, sy, sw, sh) };
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_scissor(sx, sy, sw, sh) };
 
     let viewport_w = snapshot.viewport_width.max(1);
     let viewport_h = snapshot.viewport_height.max(1);
@@ -1787,7 +1787,7 @@ fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui
         );
     }
 
-    let _ = unsafe { crate::v::io::cabi::trueos_cabi_gfx_clear_scissor() };
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_clear_scissor() };
     drew
 }
 
@@ -2194,24 +2194,24 @@ fn compose_windows(state: &mut Ui2State) {
                 dirty_count
             );
         }
-        unsafe { crate::v::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
+        unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
         for idx in sorted_window_indices(state) {
             let window = &state.windows[idx];
             draw_window_frame(state, window);
         }
         draw_resize_preview_outline(state);
-        unsafe { crate::v::io::cabi::trueos_cabi_gfx_end_frame() };
+        unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
         if state.compose_seq <= 2 {
             crate::log!("ui2: compose-frame seq={} end\n", state.compose_seq);
         }
     });
 
     if !state.loadscreen_end_signaled {
-        crate::v::readiness::set(crate::v::readiness::LOADSCREEN_END);
+        crate::r::readiness::set(crate::r::readiness::LOADSCREEN_END);
         state.loadscreen_end_signaled = true;
     }
     if !state.first_compose_signaled {
-        crate::v::readiness::set(crate::v::readiness::UI2_READY);
+        crate::r::readiness::set(crate::r::readiness::UI2_READY);
         state.first_compose_signaled = true;
     }
 }
@@ -2230,7 +2230,7 @@ pub async fn ui2_task() {
     if let Some(state_lock) = UI2_STATE.get() {
         let mut state = state_lock.lock();
         if !state.loadscreen_end_signaled {
-            crate::v::readiness::set(crate::v::readiness::LOADSCREEN_END);
+            crate::r::readiness::set(crate::r::readiness::LOADSCREEN_END);
             state.loadscreen_end_signaled = true;
             crate::log!(
                 "boot-probe: ui2 signaled loadscreen_end ms={}\n",

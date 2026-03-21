@@ -161,7 +161,7 @@ impl Path {
     /// Mirrors `std::path::Path::exists()` behavior by collapsing all backend
     /// errors into `false`.
     pub fn exists(&self) -> bool {
-        crate::v::io::kfs::exists(self.as_str()).unwrap_or(false)
+        crate::r::io::kfs::exists(self.as_str()).unwrap_or(false)
     }
 
     fn trim_trailing_slash(&self) -> &str {

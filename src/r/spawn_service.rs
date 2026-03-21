@@ -197,13 +197,13 @@ fn spawn_globalog_persist_once(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
     if !trueos_qjs::async_fs::claim_service_start() {
-        crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
+        crate::r::readiness::set(crate::r::readiness::QJS_ASYNC_FS_READY);
         return SpawnAttempt::Spawned;
     }
 
     match spawner.spawn(trueos_qjs::async_fs::async_fs_service_task()) {
         Ok(()) => {
-            crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
+            crate::r::readiness::set(crate::r::readiness::QJS_ASYNC_FS_READY);
             SpawnAttempt::Spawned
         }
         Err(e) => {
@@ -215,7 +215,7 @@ fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::v::fs::trueosfs::mount_service_task())
+        spawner.spawn(crate::r::fs::trueosfs::mount_service_task())
     })
 }
 
@@ -281,7 +281,7 @@ fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::v::net::ntp::ntp_sync_task())
+        spawner.spawn(crate::r::net::ntp::ntp_sync_task())
     })
 }
 
@@ -311,7 +311,7 @@ fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::v::net::ftp::ftp_server_task())
+        spawner.spawn(crate::r::net::ftp::ftp_server_task())
     })
 }
 
@@ -323,7 +323,7 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
 async fn gfx_virgl_ready_task() {
     crate::gfx::init(crate::limine::framebuffer_response());
 
-    if crate::v::readiness::is_set(crate::v::readiness::GFX_BACKEND_READY) {
+    if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
         return;
     }
 
@@ -335,16 +335,16 @@ async fn gfx_virgl_ready_task() {
     #[cfg(feature = "gfx_virgl")]
     {
         for _ in 0..400 {
-            if crate::v::readiness::is_set(crate::v::readiness::GFX_BACKEND_READY) {
+            if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
                 return;
             }
-            if crate::v::readiness::is_set(crate::v::readiness::GFX_VIRGL_READY) {
-                crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
+            if crate::r::readiness::is_set(crate::r::readiness::GFX_VIRGL_READY) {
+                crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
                 crate::log!("boot-probe: gfx-backend-ready ms={}\n", boot_probe_ms());
                 return;
             }
             if gfx_switched() {
-                crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
+                crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
                 crate::log!(
                     "boot-probe: gfx-backend-ready(switched) ms={}\n",
                     boot_probe_ms()
@@ -357,7 +357,7 @@ async fn gfx_virgl_ready_task() {
             "gfx-backend-ready: timeout virgl_active={} virgl_present_cached={} ready_mask=0x{:08X}\n",
             crate::gfx::is_virgl_active() as u8,
             crate::gfx::is_virgl_present_cached() as u8,
-            crate::v::readiness::mask()
+            crate::r::readiness::mask()
         );
     }
 }
@@ -380,7 +380,7 @@ async fn gfx_virgl_cursor_overlay_task() {
     #[cfg(feature = "gfx_virgl")]
     {
         loop {
-            if !crate::v::readiness::is_set(crate::v::readiness::GFX_BACKEND_READY) {
+            if !crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
                 Timer::after(EmbassyDuration::from_millis(16)).await;
                 continue;
             }
@@ -400,7 +400,7 @@ fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::v::io::cabi::texture_upload_service_task())
+        ap1_spawner.spawn(crate::r::io::cabi::texture_upload_service_task())
     })
 }
 
@@ -432,7 +432,7 @@ fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
 #[embassy_executor::task]
 async fn browser_startup_html_loader_task(browser_instance_id: u32) {
     const STARTUP_URL: &str = "https://www.google.de";
-    let op_id = crate::v::browser_net::submit_navigation(browser_instance_id, STARTUP_URL);
+    let op_id = crate::r::browser_net::submit_navigation(browser_instance_id, STARTUP_URL);
     if op_id == 0 {
         crate::log!(
             "browser-html-loader: failed to queue startup html browser_instance={}\n",
@@ -449,7 +449,7 @@ async fn browser_startup_html_loader_task(browser_instance_id: u32) {
 
 fn spawn_browser_net(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::v::browser_net::browser_net_task())
+        worker_spawner.spawn(crate::r::browser_net::browser_net_task())
     })
 }
 
@@ -522,7 +522,7 @@ fn spawn_secondary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::v::ui2::ui2_task())
+        ap1_spawner.spawn(crate::r::ui2::ui2_task())
     })
 }
 
@@ -638,14 +638,14 @@ fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
 // --- registry ---
 
 const NET_CONFIGURED_AND_ROOT_READY: u32 =
-    crate::v::readiness::NET_CONFIGURED | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
-const AI_QJS_ONESHOT_READY: u32 = crate::v::readiness::NET_CONFIGURED
-    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::v::readiness::QJS_ASYNC_FS_READY;
-const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
-    | crate::v::readiness::TLS_SOCKET_SERVICE_READY
-    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
-const WEBGPU_BROWSER_READY: u32 = crate::v::readiness::UI2_READY;
+    crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
+const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_CONFIGURED
+    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+    | crate::r::readiness::QJS_ASYNC_FS_READY;
+const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
+    | crate::r::readiness::TLS_SOCKET_SERVICE_READY
+    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
+const WEBGPU_BROWSER_READY: u32 = crate::r::readiness::UI2_READY;
 
 static TASKS: &[TaskSpec] = &[
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
@@ -684,13 +684,13 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
     TaskSpec::enabled(
         "tls-socket-service",
-        crate::v::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_CONFIGURED,
         &TLS_SOCKET_SERVICE_STARTED,
         spawn_tls_socket_service,
     ),
     TaskSpec::enabled(
         "ntp-sync",
-        crate::v::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_CONFIGURED,
         &NTP_SYNC_STARTED,
         spawn_ntp_sync,
     ),
@@ -709,7 +709,7 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled(
         "ws-time",
-        crate::v::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_CONFIGURED,
         &WS_TIME_STARTED,
         spawn_ws_time,
     ),
@@ -728,65 +728,65 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled(
         "gfx-virgl-cursor-overlay",
-        crate::v::readiness::LOADSCREEN_END,
+        crate::r::readiness::LOADSCREEN_END,
         &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
         spawn_gfx_virgl_cursor_overlay_task,
     ),
     TaskSpec::enabled(
         "gfx_loadscreen",
-        crate::v::readiness::GFX_BACKEND_READY,
+        crate::r::readiness::GFX_BACKEND_READY,
         &GFX_LOADSCREEN_STARTED,
         spawn_gfx_loadscreen,
     ),
     TaskSpec::enabled("browser-net", 0, &BROWSER_NET_STARTED, spawn_browser_net),
     TaskSpec::enabled(
         "gfx-texture-upload-service",
-        crate::v::readiness::GFX_BACKEND_READY,
+        crate::r::readiness::GFX_BACKEND_READY,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
     TaskSpec::enabled(
         "browser-startup-html-loader-primary",
-        crate::v::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_CONFIGURED,
         &BROWSER_PRIMARY_STARTUP_HTML_LOADER_STARTED,
         spawn_primary_browser_startup_html_loader,
     ),
     if ENABLE_BROWSER_2 {
         TaskSpec::disabled(
             "browser-startup-route-secondary",
-            crate::v::readiness::NET_CONFIGURED,
+            crate::r::readiness::NET_CONFIGURED,
             &BROWSER_SECONDARY_STARTUP_ROUTE_STARTED,
             spawn_secondary_browser_startup_route,
         )
     } else {
         TaskSpec::disabled(
             "browser-startup-route-secondary",
-            crate::v::readiness::NET_CONFIGURED,
+            crate::r::readiness::NET_CONFIGURED,
             &BROWSER_SECONDARY_STARTUP_ROUTE_STARTED,
             spawn_secondary_browser_startup_route,
         )
     },
     TaskSpec::enabled(
         "ui2",
-        crate::v::readiness::GFX_BACKEND_READY,
+        crate::r::readiness::GFX_BACKEND_READY,
         &UI2_STARTED,
         spawn_ui2,
     ),
     TaskSpec::enabled(
         "ui2-gfx-tetris",
-        crate::v::readiness::UI2_READY,
+        crate::r::readiness::UI2_READY,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
     ),
     TaskSpec::enabled(
         "ui2-triangle-demo",
-        crate::v::readiness::UI2_READY,
+        crate::r::readiness::UI2_READY,
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
     TaskSpec::enabled(
         "ui2-mandelbrot-demo",
-        crate::v::readiness::UI2_READY,
+        crate::r::readiness::UI2_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
@@ -813,7 +813,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec::enabled(
         "gfx-intel-scanout-demo",
-        crate::v::readiness::GFX_INTEL_CLAIMED,
+        crate::r::readiness::GFX_INTEL_CLAIMED,
         &GFX_INTEL_TRIANGLE_DEMO_STARTED,
         spawn_gfx_intel_triangle_demo,
     ),
@@ -867,7 +867,7 @@ static TASKS: &[TaskSpec] = &[
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
         loop {
-            let ready = crate::v::readiness::mask();
+            let ready = crate::r::readiness::mask();
             let mut pending = 0usize;
             let mut started_any = false;
 

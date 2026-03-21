@@ -53,7 +53,7 @@ crab-usb = { version = "0.6.2", default-features = false }
 dma-api = { version = "0.7.1", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
 trueos-fs = { path = "crates/trueos-fs" }
-trueos-v = { path = "crates/trueos-v" }
+v = { path = "crates/trueos-v" }
 trueos-tetris = { path = "crates/trueos-tetris" }
 trueos-weather = { path = "crates/trueos-weather" }
 trueos-vm = { path = "crates/trueos-vm" }

@@ -5,7 +5,7 @@ extern crate alloc;
 // use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 #[allow(unused_imports)]
-use trueos_v::vnet;
+use v::vnet;
 
 #[allow(unused_imports)]
 use super::VNet;

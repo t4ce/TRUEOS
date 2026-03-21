@@ -30,7 +30,7 @@ pub mod kfs {
     }
 
     fn root_disk() -> Result<block::DeviceHandle> {
-        crate::v::fs::trueosfs::primary_root_handle().ok_or(FsError::NoRoot)
+        crate::r::fs::trueosfs::primary_root_handle().ok_or(FsError::NoRoot)
     }
 
     fn normalize_rel(path: &str, allow_empty: bool) -> Result<String> {
@@ -68,7 +68,7 @@ pub mod kfs {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
         crate::wait::spawn_and_wait_local(async move {
-            match crate::v::fs::trueosfs::file_out_async(disk, name.as_str()).await? {
+            match crate::r::fs::trueosfs::file_out_async(disk, name.as_str()).await? {
                 Some(bytes) => Ok(bytes),
                 None => Err(FsError::NotFound),
             }
@@ -80,7 +80,7 @@ pub mod kfs {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
         crate::wait::spawn_and_wait_local(async move {
-            match crate::v::fs::trueosfs::file_info_async(disk, name.as_str()).await? {
+            match crate::r::fs::trueosfs::file_info_async(disk, name.as_str()).await? {
                 Some(info) => Ok(info.data_len as usize),
                 None => Err(FsError::NotFound),
             }
@@ -92,7 +92,7 @@ pub mod kfs {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
         crate::wait::spawn_and_wait_local(async move {
-            match crate::v::fs::trueosfs::file_write_begin_async(disk, name.as_str(), total_len)
+            match crate::r::fs::trueosfs::file_write_begin_async(disk, name.as_str(), total_len)
                 .await?
             {
                 Some(h) => Ok(h),
@@ -105,7 +105,7 @@ pub mod kfs {
     pub fn write_file_chunk(handle: u32, data: &[u8]) -> Result<()> {
         let data = data.to_vec();
         crate::wait::spawn_and_wait_local(async move {
-            crate::v::fs::trueosfs::file_write_chunk_async(handle, data.as_slice()).await?;
+            crate::r::fs::trueosfs::file_write_chunk_async(handle, data.as_slice()).await?;
             Ok(())
         })
     }
@@ -113,7 +113,7 @@ pub mod kfs {
     #[inline]
     pub fn write_file_finish(handle: u32) -> Result<()> {
         crate::wait::spawn_and_wait_local(async move {
-            crate::v::fs::trueosfs::file_write_finish_async(handle).await?;
+            crate::r::fs::trueosfs::file_write_finish_async(handle).await?;
             Ok(())
         })
     }
@@ -121,7 +121,7 @@ pub mod kfs {
     #[inline]
     pub fn write_file_abort(handle: u32) -> Result<()> {
         crate::wait::spawn_and_wait_local(async move {
-            crate::v::fs::trueosfs::file_write_abort_async(handle).await?;
+            crate::r::fs::trueosfs::file_write_abort_async(handle).await?;
             Ok(())
         })
     }
@@ -130,7 +130,7 @@ pub mod kfs {
     pub fn html_tree(max_entries: usize) -> Result<String> {
         let disk = root_disk()?;
         crate::wait::spawn_and_wait_local(async move {
-            match crate::v::fs::trueosfs::html_tree_async(disk, max_entries).await? {
+            match crate::r::fs::trueosfs::html_tree_async(disk, max_entries).await? {
                 Some(v) => Ok(v),
                 None => Err(FsError::NoRoot),
             }
@@ -142,7 +142,7 @@ pub mod kfs {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
         crate::wait::spawn_and_wait_local(async move {
-            let ok = crate::v::fs::trueosfs::file_delete_async(disk, name.as_str()).await?;
+            let ok = crate::r::fs::trueosfs::file_delete_async(disk, name.as_str()).await?;
             if ok { Ok(()) } else { Err(FsError::NotFound) }
         })
     }
@@ -152,7 +152,7 @@ pub mod kfs {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
         crate::wait::spawn_and_wait_local(async move {
-            Ok(crate::v::fs::trueosfs::file_exists_async(disk, name.as_str()).await?)
+            Ok(crate::r::fs::trueosfs::file_exists_async(disk, name.as_str()).await?)
         })
     }
 }
@@ -379,7 +379,7 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_ntp_current_unix_seconds() -> u64 {
-        crate::v::net::ntp::current_unix_seconds().unwrap_or(0)
+        crate::r::net::ntp::current_unix_seconds().unwrap_or(0)
     }
 
     #[unsafe(no_mangle)]
@@ -387,7 +387,7 @@ pub mod cabi {
         out_ptr: *mut u8,
         out_len: usize,
     ) -> usize {
-        let s = crate::v::net::ntp::kernel_date_day_month_year();
+        let s = crate::r::net::ntp::kernel_date_day_month_year();
         let bytes = s.as_bytes();
         if !out_ptr.is_null() && out_len != 0 {
             let n = bytes.len().min(out_len);
@@ -975,7 +975,7 @@ pub mod cabi {
                         }
                     }
                     if rc == 0 && req.repaint_window_id != 0 {
-                        let _ = crate::v::ui2::request_window_content_present(
+                        let _ = crate::r::ui2::request_window_content_present(
                             req.repaint_window_id,
                             req.repaint_reason,
                         );
@@ -988,7 +988,7 @@ pub mod cabi {
                         req.verts.as_slice(),
                     );
                     if rc == 0 && req.repaint_window_id != 0 {
-                        let _ = crate::v::ui2::request_window_content_present(
+                        let _ = crate::r::ui2::request_window_content_present(
                             req.repaint_window_id,
                             req.repaint_reason,
                         );
@@ -997,7 +997,7 @@ pub mod cabi {
                 TextureWorkReq::DrawMandelbrot(req) => {
                     let rc = render_mandelbrot_to_texture_now(req.tex_id, req.ticks, req.tick_hz);
                     if rc == 0 && req.repaint_window_id != 0 {
-                        let _ = crate::v::ui2::request_window_content_present(
+                        let _ = crate::r::ui2::request_window_content_present(
                             req.repaint_window_id,
                             req.repaint_reason,
                         );
@@ -4085,7 +4085,7 @@ pub mod cabi {
                 let first = !crate::logflag::GFX_CABI_VIRGL_FIRST_FRAME_SEEN
                     .swap(true, core::sync::atomic::Ordering::AcqRel);
                 if first {
-                    crate::v::readiness::set(crate::v::readiness::GFX_VIRGL_READY);
+                    crate::r::readiness::set(crate::r::readiness::GFX_VIRGL_READY);
                     crate::globalog::log(format_args!(
                         "gfx: virgl first frame ready seq={} bytes={}\n",
                         seq, draw_bytes
@@ -4171,7 +4171,7 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_input_keyboard_count() -> u32 {
-        crate::v::keyboard::keyboard_count()
+        crate::r::keyboard::keyboard_count()
     }
 
     #[unsafe(no_mangle)]
@@ -4182,7 +4182,7 @@ pub mod cabi {
         if out_modifiers.is_null() {
             return -1;
         }
-        let Some(modifiers) = crate::v::keyboard::keyboard_modifiers(keyboard_id) else {
+        let Some(modifiers) = crate::r::keyboard::keyboard_modifiers(keyboard_id) else {
             return 1;
         };
         *out_modifiers = modifiers;
@@ -4198,7 +4198,7 @@ pub mod cabi {
         if out_keys.is_null() || out_ascii.is_null() {
             return -1;
         }
-        let Some(state) = crate::v::keyboard::keyboard_state(keyboard_id) else {
+        let Some(state) = crate::r::keyboard::keyboard_state(keyboard_id) else {
             return 1;
         };
         core::ptr::copy_nonoverlapping(state.keys.as_ptr(), out_keys, state.keys.len());
@@ -4208,12 +4208,12 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_input_pop_keyboard_output(
-        out: *mut crate::v::keyboard::TrueosKeyboardOutputEvent,
+        out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
     ) -> i32 {
         if out.is_null() {
             return -1;
         }
-        let Some(evt) = crate::v::keyboard::pop_output_event() else {
+        let Some(evt) = crate::r::keyboard::pop_output_event() else {
             return 0;
         };
         *out = evt;
@@ -4223,7 +4223,7 @@ pub mod cabi {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_input_read_keyboard_output_since(
         read_seq: u64,
-        out: *mut crate::v::keyboard::TrueosKeyboardOutputEvent,
+        out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
         out_cap: u32,
         out_next_seq: *mut u64,
         out_dropped: *mut u32,
@@ -4235,7 +4235,7 @@ pub mod cabi {
         } else {
             let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
             let (next, lost, written) =
-                crate::v::keyboard::read_output_events_since(read_seq, out_slice);
+                crate::r::keyboard::read_output_events_since(read_seq, out_slice);
             next_seq = next;
             dropped = lost;
             written
@@ -4264,7 +4264,7 @@ pub mod cabi {
         let Ok(text) = core::str::from_utf8(bytes) else {
             return -2;
         };
-        crate::v::keyboard::inject_text(slot_id, text, flags) as i32
+        crate::r::keyboard::inject_text(slot_id, text, flags) as i32
     }
 
     #[unsafe(no_mangle)]
@@ -4281,7 +4281,7 @@ pub mod cabi {
             key_code as u16
         };
         let modifiers = (modifiers & 0xff) as u8;
-        if crate::v::keyboard::inject_key(slot_id, codepoint, key_code, modifiers, flags) {
+        if crate::r::keyboard::inject_key(slot_id, codepoint, key_code, modifiers, flags) {
             1
         } else {
             0

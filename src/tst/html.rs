@@ -4,12 +4,12 @@ use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
 
-use trueos_v::vnet as api;
+use v::vnet as api;
 
-use crate::v::net::NetProfile;
-use crate::v::net::VNet;
-use crate::v::net::dns::{self, DnsConfig};
-use crate::v::net::https;
+use crate::r::net::NetProfile;
+use crate::r::net::VNet;
+use crate::r::net::dns::{self, DnsConfig};
+use crate::r::net::https;
 
 const SURF_TIMEOUT_MS: u32 = 35_000;
 const SURF_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -229,8 +229,8 @@ async fn fetch_http_plain_body(
 ) -> Result<Vec<u8>, HttpPlainFetchError> {
     let parsed = parse_http_url(url).map_err(|_| HttpPlainFetchError::BadUrl)?;
 
-    let ready = crate::v::readiness::wait_for_timeout(
-        crate::v::readiness::NET_CONFIGURED,
+    let ready = crate::r::readiness::wait_for_timeout(
+        crate::r::readiness::NET_CONFIGURED,
         EmbassyDuration::from_secs(3),
     )
     .await;

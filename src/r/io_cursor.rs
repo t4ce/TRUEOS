@@ -88,7 +88,7 @@ fn append_cursor_cross(
 fn collect_real_cursor_norm(out: &mut Vec<(f32, f32)>) {
     out.clear();
 
-    let cursors = crate::v::cursor::ordered_cursor_snapshot();
+    let cursors = crate::r::cursor::ordered_cursor_snapshot();
     for (cx, cy) in cursors {
         let nx = if cx.is_finite() {
             cx.clamp(0.0, 1.0) as f32
@@ -135,7 +135,7 @@ unsafe fn input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i3
         return -1;
     }
 
-    let Some(buttons_down) = crate::v::cursor::cursor_buttons(cursor_id) else {
+    let Some(buttons_down) = crate::r::cursor::cursor_buttons(cursor_id) else {
         return 1;
     };
     *out_buttons_down = buttons_down;
@@ -942,7 +942,7 @@ pub unsafe extern "C" fn trueos_cabi_input_cursor_pos(
         return -1;
     }
 
-    let Some((nx, ny)) = crate::v::cursor::cursor_pos(cursor_id) else {
+    let Some((nx, ny)) = crate::r::cursor::cursor_pos(cursor_id) else {
         return 1;
     };
 

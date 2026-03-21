@@ -6,7 +6,7 @@ use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 use embassy_time::{Duration, Instant, Timer};
-use trueos_v::vnet::{self, ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
+use v::vnet::{self, ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
 
 use super::dns::{self, DnsConfig};
 use super::{NetProfile, VNet};
@@ -712,8 +712,8 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
             if !sess.logged_in {
                 let _ = ftp_send_reply(vnet, sess, 530, "login first");
             } else if let Some(path) = ftp_normalize_path(sess.cwd.as_str(), arg) {
-                if let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() {
-                    match crate::v::fs::trueosfs::list_dir_async(disk, path.as_str()).await {
+                if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+                    match crate::r::fs::trueosfs::list_dir_async(disk, path.as_str()).await {
                         Ok(Some(_)) => {
                             sess.cwd = if path.is_empty() {
                                 String::from("/")
@@ -764,12 +764,12 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                 let _ = ftp_send_reply(vnet, sess, 150, "opening data connection");
                 match ftp_wait_passive_data(vnet, sess, FTP_SERVER_IO_TIMEOUT_MS).await {
                     Ok(data_handle) => {
-                        let root = crate::v::fs::trueosfs::primary_root_handle();
+                        let root = crate::r::fs::trueosfs::primary_root_handle();
                         if let Some(disk) = root {
                             let path = ftp_normalize_path(sess.cwd.as_str(), arg)
                                 .unwrap_or_else(|| ftp_cwd_rel(sess.cwd.as_str()));
                             let payload =
-                                match crate::v::fs::trueosfs::list_dir_async(disk, path.as_str())
+                                match crate::r::fs::trueosfs::list_dir_async(disk, path.as_str())
                                     .await
                                 {
                                     Ok(Some(list)) => ftp_listing_from_names(list.as_str()),
@@ -796,8 +796,8 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
             if !sess.logged_in {
                 let _ = ftp_send_reply(vnet, sess, 530, "login first");
             } else if let Some(path) = ftp_normalize_path(sess.cwd.as_str(), arg) {
-                if let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() {
-                    match crate::v::fs::trueosfs::file_info_async(disk, path.as_str()).await {
+                if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+                    match crate::r::fs::trueosfs::file_info_async(disk, path.as_str()).await {
                         Ok(Some(info)) => {
                             let _ = ftp_send_reply(
                                 vnet,
@@ -821,7 +821,7 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
             if !sess.logged_in {
                 let _ = ftp_send_reply(vnet, sess, 530, "login first");
             } else if let Some(path) = ftp_normalize_path(sess.cwd.as_str(), arg) {
-                let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+                let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
                     let _ = ftp_send_reply(vnet, sess, 550, "filesystem unavailable");
                     return false;
                 };
@@ -835,7 +835,7 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                     return false;
                 };
 
-                match crate::v::fs::trueosfs::file_out_async(disk, path.as_str()).await {
+                match crate::r::fs::trueosfs::file_out_async(disk, path.as_str()).await {
                     Ok(Some(bytes)) => {
                         let _ = ftp_send_raw(vnet, data_handle, bytes.as_slice());
                         let _ = vnet.submit(Command::Close {
@@ -860,7 +860,7 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
             if !sess.logged_in {
                 let _ = ftp_send_reply(vnet, sess, 530, "login first");
             } else if let Some(path) = ftp_normalize_path(sess.cwd.as_str(), arg) {
-                let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+                let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
                     let _ = ftp_send_reply(vnet, sess, 550, "filesystem unavailable");
                     return false;
                 };
@@ -888,7 +888,7 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                             handle: data_handle,
                         });
                         ftp_close_passive(vnet, sess);
-                        match crate::v::fs::trueosfs::file_in_async(
+                        match crate::r::fs::trueosfs::file_in_async(
                             disk,
                             path.as_str(),
                             bytes.as_slice(),
@@ -919,8 +919,8 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
             if !sess.logged_in {
                 let _ = ftp_send_reply(vnet, sess, 530, "login first");
             } else if let Some(path) = ftp_normalize_path(sess.cwd.as_str(), arg) {
-                if let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() {
-                    match crate::v::fs::trueosfs::file_delete_async(disk, path.as_str()).await {
+                if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+                    match crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await {
                         Ok(true) => {
                             let _ = ftp_send_reply(vnet, sess, 250, "deleted");
                         }

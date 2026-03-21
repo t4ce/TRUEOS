@@ -565,16 +565,16 @@ fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'static str> 
 fn resolve_import(name: &str) -> Option<usize> {
     match name {
         "trueos_cabi_alloc" => {
-            Some(crate::v::io::cabi::trueos_cabi_alloc as *const () as usize)
+            Some(crate::r::io::cabi::trueos_cabi_alloc as *const () as usize)
         }
         "trueos_cabi_free" => {
-            Some(crate::v::io::cabi::trueos_cabi_free as *const () as usize)
+            Some(crate::r::io::cabi::trueos_cabi_free as *const () as usize)
         }
         "trueos_cabi_realloc" => {
-            Some(crate::v::io::cabi::trueos_cabi_realloc as *const () as usize)
+            Some(crate::r::io::cabi::trueos_cabi_realloc as *const () as usize)
         }
         "trueos_cabi_write" => {
-            Some(crate::v::io::cabi::trueos_cabi_write as *const () as usize)
+            Some(crate::r::io::cabi::trueos_cabi_write as *const () as usize)
         }
         "_RNvCs75cmLyI1ip2_7___rustc26___rust_alloc_error_handler" => {
             Some(portal_alloc_error_handler as *const () as usize)
@@ -643,12 +643,12 @@ fn unpack_blueprint(module: &BlueprintModule<'_>) -> Result<Vec<u8>, &'static st
 }
 
 fn root_archives() -> Result<Vec<String>, &'static str> {
-    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         return Err("no TRUEOSFS root mounted");
     };
 
     let listing = crate::wait::spawn_and_wait_local(async move {
-        crate::v::fs::trueosfs::list_dir_async(disk, "").await
+        crate::r::fs::trueosfs::list_dir_async(disk, "").await
     })
     .map_err(|_| "root listing failed")?
     .ok_or("root is not TRUEOSFS")?;
@@ -708,7 +708,7 @@ async fn run_command_task(target: MatrixTarget, archive: String, app_args: Vec<S
 
         log(alloc::format!("run: worker start module={}", archive.as_str()).as_str());
 
-        let module_bytes = match crate::v::io::kfs::read_file(archive.as_str()) {
+        let module_bytes = match crate::r::io::kfs::read_file(archive.as_str()) {
             Ok(bytes) => bytes,
             Err(_) => {
                 log("run: failed to read selected module from TRUEOSFS");

@@ -9,7 +9,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::Vec as HVec;
 use spin::Mutex;
 
-use trueos_v::vnet;
+use v::vnet;
 
 use super::{NetProfile, VNet};
 
@@ -281,8 +281,8 @@ fn parse_dns_fs_cache_line(line: &str) -> Option<(usize, &str, [u8; 4])> {
 }
 
 async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 4]> {
-    let disk = crate::v::fs::trueosfs::primary_root_handle()?;
-    let bytes = crate::v::fs::trueosfs::file_out_async(disk, DNS_FS_CACHE_PATH)
+    let disk = crate::r::fs::trueosfs::primary_root_handle()?;
+    let bytes = crate::r::fs::trueosfs::file_out_async(disk, DNS_FS_CACHE_PATH)
         .await
         .ok()
         .flatten()?;
@@ -300,11 +300,11 @@ async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 
 }
 
 async fn dns_fs_cache_update(dev_idx: usize, host_trimmed: &str, ip: [u8; 4]) {
-    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         return;
     };
 
-    let existing = crate::v::fs::trueosfs::file_out_async(disk, DNS_FS_CACHE_PATH)
+    let existing = crate::r::fs::trueosfs::file_out_async(disk, DNS_FS_CACHE_PATH)
         .await
         .ok()
         .flatten();
@@ -343,7 +343,7 @@ async fn dns_fs_cache_update(dev_idx: usize, host_trimmed: &str, ip: [u8; 4]) {
         }
         body.push_str(line.as_str());
     }
-    let _ = crate::v::fs::trueosfs::file_in_async(disk, DNS_FS_CACHE_PATH, body.as_bytes()).await;
+    let _ = crate::r::fs::trueosfs::file_in_async(disk, DNS_FS_CACHE_PATH, body.as_bytes()).await;
 }
 
 fn dns_make_query(id: u16, host: &str, qtype: u16) -> Result<Vec<u8>, DnsError> {

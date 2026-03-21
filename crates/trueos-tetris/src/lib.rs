@@ -1,7 +1,7 @@
 #![no_std]
 
 use core::cmp::{max, min};
-use trueos_v::vled::Rgb8;
+use v::vled::Rgb8;
 
 pub mod shell;
 

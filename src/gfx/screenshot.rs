@@ -115,7 +115,7 @@ impl LastScreenshotBuffer {
 
     fn arm_capture(&self) {
         self.capture_armed.store(true, Ordering::Release);
-        crate::v::ui2::request_full_recompose("screenshot-capture");
+        crate::r::ui2::request_full_recompose("screenshot-capture");
     }
 
     fn is_capture_armed(&self) -> bool {

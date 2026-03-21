@@ -340,14 +340,14 @@ fn queue_tetris_text(text: &str) -> bool {
 
 pub fn queue_ui2_keyboard_event(
     window_id: u32,
-    event: crate::v::keyboard::TrueosKeyboardOutputEvent,
+    event: crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) -> bool {
     let active_window_id = UI2_TETRIS_WINDOW_ID.load(Ordering::Acquire);
     if window_id == 0 || active_window_id == 0 || active_window_id != window_id {
         return false;
     }
     match event.kind {
-        crate::v::keyboard::KEYBOARD_OUTPUT_KIND_TEXT => {
+        crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT => {
             let utf8_len = (event.utf8_len as usize).min(event.utf8.len());
             if utf8_len != 0 {
                 if let Ok(text) = core::str::from_utf8(&event.utf8[..utf8_len]) {
@@ -366,24 +366,24 @@ pub fn queue_ui2_keyboard_event(
             }
             false
         }
-        crate::v::keyboard::KEYBOARD_OUTPUT_KIND_KEY => {
+        crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY => {
             match event.key_code {
-                crate::v::keyboard::KEYBOARD_KEY_ARROW_LEFT => {
+                crate::r::keyboard::KEYBOARD_KEY_ARROW_LEFT => {
                     queue_tetris_action(UI2_TETRIS_ACTION_MOVE_LEFT)
                 }
-                crate::v::keyboard::KEYBOARD_KEY_ARROW_RIGHT => {
+                crate::r::keyboard::KEYBOARD_KEY_ARROW_RIGHT => {
                     queue_tetris_action(UI2_TETRIS_ACTION_MOVE_RIGHT)
                 }
-                crate::v::keyboard::KEYBOARD_KEY_ARROW_DOWN => {
+                crate::r::keyboard::KEYBOARD_KEY_ARROW_DOWN => {
                     queue_tetris_action(UI2_TETRIS_ACTION_SOFT_DROP)
                 }
-                crate::v::keyboard::KEYBOARD_KEY_ARROW_UP => {
+                crate::r::keyboard::KEYBOARD_KEY_ARROW_UP => {
                     queue_tetris_action(UI2_TETRIS_ACTION_ROTATE_CW)
                 }
-                crate::v::keyboard::KEYBOARD_KEY_SPACE => {
+                crate::r::keyboard::KEYBOARD_KEY_SPACE => {
                     queue_tetris_action(UI2_TETRIS_ACTION_HARD_DROP)
                 }
-                crate::v::keyboard::KEYBOARD_KEY_ENTER => {
+                crate::r::keyboard::KEYBOARD_KEY_ENTER => {
                     queue_tetris_action(UI2_TETRIS_ACTION_HARD_DROP)
                 }
                 _ => return false,
@@ -401,9 +401,9 @@ pub async fn ui2_gfx_tetris_task() {
         .unwrap_or(0x5445_5452)
         ^ 0xA11C_E123;
     let mut app = GfxTetrisApp::new(seed);
-    let Some(surface) = crate::v::ui2::Ui2SurfaceWindow::new(
+    let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
         "Gfx Tetris",
-        crate::v::ui2::Ui2Rect {
+        crate::r::ui2::Ui2Rect {
             x: UI2_TETRIS_WINDOW_X,
             y: UI2_TETRIS_WINDOW_Y,
             w: UI2_TETRIS_RT_W as f32,
@@ -418,8 +418,8 @@ pub async fn ui2_gfx_tetris_task() {
         return;
     };
     let window_id = surface.window_id();
-    let _ = crate::v::ui2::set_window_left_scrollbar_visible(window_id, false);
-    let _ = crate::v::ui2::set_window_bottom_scrollbar_visible(window_id, false);
+    let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);
+    let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, false);
     let (surface_w, surface_h) = surface.size();
     crate::log!(
         "gfx-tetris: window={} tex={} size={}x{}\n",

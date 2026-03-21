@@ -11,7 +11,7 @@ const MIN_COL_WIDTH: usize = 3;
 #[derive(Clone)]
 pub(crate) struct DiskChoice {
     pub(crate) handle: DeviceHandle,
-    pub(crate) status: crate::v::disc::detect::DiscStatus,
+    pub(crate) status: crate::r::disc::detect::DiscStatus,
     pub(crate) err: Option<block::Error>,
 }
 
@@ -46,7 +46,7 @@ impl DiskChoice {
 
     pub(crate) fn status_text(&self) -> String {
         match (&self.status, self.err) {
-            (crate::v::disc::detect::DiscStatus::Unknown, Some(err)) => {
+            (crate::r::disc::detect::DiscStatus::Unknown, Some(err)) => {
                 alloc::format!("{}:{:?}", self.status.short(), err)
             }
             _ => String::from(self.status.short()),
@@ -198,7 +198,7 @@ pub(crate) fn collect_top_level_disk_choices() -> Vec<DiskChoice> {
             continue;
         }
         let (status, err) = crate::wait::spawn_and_wait_local(async move {
-            crate::v::disc::detect::detect_physical_disk_detail(handle).await
+            crate::r::disc::detect::detect_physical_disk_detail(handle).await
         });
         out.push(DiskChoice {
             handle,

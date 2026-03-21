@@ -221,7 +221,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         "human",
         false,
     );
-    crate::v::keyboard::apply_report(
+    crate::r::keyboard::apply_report(
         runtime.controller_id as u32,
         runtime.slot_id,
         runtime.ep_target,

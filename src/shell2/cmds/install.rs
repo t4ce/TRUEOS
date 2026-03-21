@@ -110,12 +110,12 @@ async fn install_command_task(
         )
         .as_str());
 
-        let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(disk).await;
+        let (status, err) = crate::r::disc::detect::detect_physical_disk_detail(disk).await;
         log(alloc::format!(
             "install: target status={}{}",
             status.short(),
             match (&status, err) {
-                (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                (crate::r::disc::detect::DiscStatus::Unknown, Some(e)) => {
                     alloc::format!(" (err={:?})", e)
                 }
                 _ => alloc::string::String::new(),

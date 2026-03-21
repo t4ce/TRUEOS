@@ -2,7 +2,7 @@ pub const PCI_IDS_URL: &str = "https://raw.githubusercontent.com/pciutils/pciids
 pub const PCI_IDS_KEY: &str = "trueos/pci/pci.ids";
 
 pub async fn download_once_async() -> Result<usize, &'static str> {
-    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         crate::log!(
             "pciids: download skipped; no root disk url={} key={}\n",
             PCI_IDS_URL,
@@ -12,7 +12,7 @@ pub async fn download_once_async() -> Result<usize, &'static str> {
     };
 
     let raw =
-        match crate::v::net::https::fetch_https_body_async(PCI_IDS_URL, 120_000, 4 * 1024 * 1024)
+        match crate::r::net::https::fetch_https_body_async(PCI_IDS_URL, 120_000, 4 * 1024 * 1024)
             .await
         {
             Ok(body) => body,
@@ -23,7 +23,7 @@ pub async fn download_once_async() -> Result<usize, &'static str> {
         };
 
     let tmp = alloc::format!("{}.tmp", PCI_IDS_KEY);
-    match crate::v::fs::trueosfs::file_in_async(disk, tmp.as_str(), &raw).await {
+    match crate::r::fs::trueosfs::file_in_async(disk, tmp.as_str(), &raw).await {
         Ok(true) => {}
         Ok(false) => {
             crate::log!("pciids: write failed (no space?) tmp={}\n", tmp);
@@ -35,9 +35,9 @@ pub async fn download_once_async() -> Result<usize, &'static str> {
         }
     }
 
-    let _ = crate::v::fs::trueosfs::file_delete_async(disk, PCI_IDS_KEY).await;
+    let _ = crate::r::fs::trueosfs::file_delete_async(disk, PCI_IDS_KEY).await;
 
-    match crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), PCI_IDS_KEY).await {
+    match crate::r::fs::trueosfs::file_rename_async(disk, tmp.as_str(), PCI_IDS_KEY).await {
         Ok(true) => {
             crate::log!(
                 "pciids: downloaded ok url={} key={} bytes={}\n",
@@ -48,12 +48,12 @@ pub async fn download_once_async() -> Result<usize, &'static str> {
             Ok(raw.len())
         }
         Ok(false) => {
-            let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
+            let _ = crate::r::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
             crate::log!("pciids: rename failed tmp={} key={}\n", tmp, PCI_IDS_KEY);
             Err("rename failed")
         }
         Err(e) => {
-            let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
+            let _ = crate::r::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
             crate::log!(
                 "pciids: rename failed={:?} tmp={} key={}\n",
                 e,
@@ -75,12 +75,12 @@ pub fn load_raw_from_root_blocking()
 
     // Try every mounted TRUEOSFS root (newest first) so a valid pci.ids on an
     // older root still works if the primary root switched later in boot.
-    for root in crate::v::fs::trueosfs::list_roots() {
+    for root in crate::r::fs::trueosfs::list_roots() {
         let Some(disk) = crate::disc::block::device_handle(root.disk_id) else {
             continue;
         };
         match crate::wait::spawn_and_wait_local(async move {
-            crate::v::fs::trueosfs::file_out_async(disk, PCI_IDS_KEY).await
+            crate::r::fs::trueosfs::file_out_async(disk, PCI_IDS_KEY).await
         }) {
             Ok(Some(raw)) => return Ok(Some(raw)),
             Ok(None) => {}

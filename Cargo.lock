@@ -46,13 +46,13 @@ dependencies = [
  "trueos-math",
  "trueos-qjs",
  "trueos-tetris",
- "trueos-v",
  "trueos-vm",
  "trueos-weather",
  "twoway",
  "unicode-normalization",
  "unicode-segmentation",
  "usvg",
+ "v",
  "vp9-parser",
  "webpki-roots",
  "x86_64",
@@ -2214,9 +2214,9 @@ dependencies = [
  "parry2d",
  "spin 0.10.0",
  "trueos-math",
- "trueos-v",
  "trueos-weather",
  "usvg",
+ "v",
 ]
 
 [[package]]
@@ -2227,21 +2227,14 @@ version = "0.1.0"
 name = "trueos-tetris"
 version = "0.1.0"
 dependencies = [
- "trueos-v",
-]
-
-[[package]]
-name = "trueos-v"
-version = "0.1.0"
-dependencies = [
- "trueos-sys",
+ "v",
 ]
 
 [[package]]
 name = "trueos-vm"
 version = "0.1.0"
 dependencies = [
- "trueos-v",
+ "v",
 ]
 
 [[package]]
@@ -2354,6 +2347,13 @@ dependencies = [
  "svgtypes",
  "tiny-skia-path",
  "xmlwriter",
+]
+
+[[package]]
+name = "v"
+version = "0.1.0"
+dependencies = [
+ "trueos-sys",
 ]
 
 [[package]]

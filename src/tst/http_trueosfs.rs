@@ -5,11 +5,11 @@ use alloc::{format, string::String, string::ToString, vec::Vec};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use trueos_v::vhttp_srv;
-use trueos_v::vnet as api;
+use v::vhttp_srv;
+use v::vnet as api;
 
 use crate::disc::block::DeviceHandle;
-use crate::v::net::VNet;
+use crate::r::net::VNet;
 
 #[inline]
 fn tsc_now() -> u64 {
@@ -275,7 +275,7 @@ async fn http_prepare_file_response(
     path: String,
     req: &[u8],
 ) -> HttpResponsePlan {
-    let info = match crate::v::fs::trueosfs::file_info_async(disk, path.as_str()).await {
+    let info = match crate::r::fs::trueosfs::file_info_async(disk, path.as_str()).await {
         Ok(Some(v)) => v,
         Ok(None) => return http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n"),
         Err(_) => {
@@ -524,7 +524,7 @@ pub async fn http_trueosfs_task() {
                         let target = request.target().to_string();
                         let req = request.raw_bytes();
                         let body_bytes = request.body_bytes();
-                        let roots = crate::v::fs::trueosfs::list_roots();
+                        let roots = crate::r::fs::trueosfs::list_roots();
 
                         let response: HttpResponsePlan = if method == "GET"
                             && vhttp_srv::path_only(target.as_str()).starts_with("/dl/")
@@ -596,7 +596,7 @@ pub async fn http_trueosfs_task() {
                             }
                         } else if method == "GET" && target.starts_with("/dl") {
                             // Back-compat download endpoint: /dl?path=<urlencoded path> (uses primary root)
-                            let disk = crate::v::fs::trueosfs::primary_root_handle();
+                            let disk = crate::r::fs::trueosfs::primary_root_handle();
                             match disk {
                                 None => http_plain_response(
                                     "HTTP/1.1 503 Service Unavailable\r\n",
@@ -669,7 +669,7 @@ pub async fn http_trueosfs_task() {
                                     }
                                 };
                                 let full_path = http_join_rel_path(dir.as_str(), name.as_str());
-                                match crate::v::fs::trueosfs::file_in_async(
+                                match crate::r::fs::trueosfs::file_in_async(
                                     disk,
                                     full_path.as_str(),
                                     body_bytes,
@@ -732,7 +732,7 @@ pub async fn http_trueosfs_task() {
                                 };
                                 let folder = http_join_rel_path(dir.as_str(), name.as_str());
                                 let marker = http_join_rel_path(folder.as_str(), ".keep");
-                                match crate::v::fs::trueosfs::file_in_async(disk, marker.as_str(), &[])
+                                match crate::r::fs::trueosfs::file_in_async(disk, marker.as_str(), &[])
                                     .await
                                 {
                                     Ok(true) => http_plain_response(
@@ -798,7 +798,7 @@ pub async fn http_trueosfs_task() {
                                         )
                                     }
                                 };
-                                match crate::v::fs::trueosfs::file_delete_async(disk, path.as_str()).await {
+                                match crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await {
                                     Ok(true) => http_plain_response(
                                         "HTTP/1.1 200 OK\r\n",
                                         "delete ok\n",
@@ -821,7 +821,7 @@ pub async fn http_trueosfs_task() {
 
                                 let tree = match crate::disc::block::device_handle(r.disk_id) {
                                     None => None,
-                                    Some(disk) => match crate::v::fs::trueosfs::html_tree_async(
+                                    Some(disk) => match crate::r::fs::trueosfs::html_tree_async(
                                         disk,
                                         HTTP_TRUEOSFS_MAX_ENTRIES,
                                     )
@@ -889,7 +889,7 @@ pub async fn http_trueosfs_task() {
                             while remaining > 0 {
                                 let want = core::cmp::min(remaining, buf.len() as u64) as usize;
                                 let t0 = tsc_now();
-                                let read = match crate::v::fs::trueosfs::file_read_range_async(
+                                let read = match crate::r::fs::trueosfs::file_read_range_async(
                                     disk,
                                     path.as_str(),
                                     off,
@@ -931,7 +931,7 @@ pub async fn http_trueosfs_task() {
                                 while remaining > 0 {
                                     let want = core::cmp::min(remaining, buf.len() as u64) as usize;
                                     let t0 = tsc_now();
-                                    let read = match crate::v::fs::trueosfs::file_read_range_async(
+                                    let read = match crate::r::fs::trueosfs::file_read_range_async(
                                         disk,
                                         path.as_str(),
                                         off,

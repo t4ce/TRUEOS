@@ -1,4 +1,4 @@
-use trueos_v::vled::Rgb8;
+use v::vled::Rgb8;
 
 use crate::{Game, Lcg32, RandomSource, Rotation, TetrisEvents};
 
