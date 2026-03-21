@@ -1,6 +1,5 @@
 import * as cmdStream from 'trueos:cmd_stream';
 import {
-  renderScene,
   renderSceneRegionToCurrentTarget,
   composeSceneRegionsToCurrentTarget,
 } from './scene.mjs';
@@ -249,38 +248,7 @@ export function createBrowserUiBridge() {
       finalizePaintState(doc);
       return true;
     }
-
-    if (typeof cmdStream.createRenderTarget === 'function') {
-      cmdStream.setClearRgb(0xF4F4F4);
-      cmdStream.setViewport(Math.max(1, Number(vw || 1) | 0), Math.max(1, Number(vh || 1) | 0));
-      cmdStream.beginFrame();
-      try {
-        if (paintToCurrentTarget({
-          browserCanRenderScene,
-          doc,
-          vw,
-          vh,
-          scrollX,
-          scrollY,
-          contentH,
-          contentTopY,
-          composeViewportWidth: vw,
-          composeViewportHeight: vh,
-          fpsOverlayEnabled,
-          fpsOverlay,
-          finalizePaintState,
-        })) {
-          return true;
-        }
-      } finally {
-        cmdStream.endFrame();
-      }
-    }
-
-    const overlayRuns = buildOverlayRuns(fpsOverlayEnabled, fpsOverlay, vw);
-    renderScene(doc, vw, vh, scrollX, scrollY, overlayRuns, null);
-    finalizePaintState(doc);
-    return true;
+    return false;
   }
 
   function refreshHostedRegions(args) {

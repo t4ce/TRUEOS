@@ -132,11 +132,6 @@ unsafe extern "C" {
     pub fn trueos_cabi_shell_qjs_write_byte(byte: u8) -> i32;
     pub fn trueos_cabi_shell_qjs_read(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_shell_qjs_read_byte() -> i32;
-    pub fn trueos_cabi_vm_tcp_shell_start(port: u16) -> i32;
-    pub fn trueos_cabi_vm_tcp_shell_status() -> u32;
-    pub fn trueos_cabi_vm_tcp_shell_write(data_ptr: *const u8, data_len: usize) -> usize;
-    pub fn trueos_cabi_vm_tcp_shell_read(out_ptr: *mut u8, out_cap: usize) -> isize;
-
     pub fn trueos_cabi_gfx_capture_screenshot_data_url(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_gfx_upload_texture_svg(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_gfx_upload_texture_svg_async(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32;

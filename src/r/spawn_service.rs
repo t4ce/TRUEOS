@@ -804,19 +804,19 @@ static TASKS: &[TaskSpec] = &[
         &UI2_PRIMARY_BROWSER_WINDOW_STARTED,
         spawn_ui2_primary_browser_window,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-gfx-tetris",
         crate::r::readiness::UI2_READY,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-triangle-demo",
         crate::r::readiness::UI2_READY,
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-mandelbrot-demo",
         crate::r::readiness::UI2_READY,
         &UI2_MANDELBROT_DEMO_STARTED,

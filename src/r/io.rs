@@ -239,180 +239,12 @@ pub mod cabi {
     include!("cabi_codes.rs");
 
     use super::VecDeque;
-    use v::vnet as vnet_api;
 
     #[repr(u32)]
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum CStream {
         Stdout = 1,
         Stderr = 2,
-    }
-
-    struct VmTcpShellBridge {
-        vnet: crate::r::net::VNet,
-        port: u16,
-        listener_handle: Option<vnet_api::NetHandle>,
-        conn_handle: Option<vnet_api::NetHandle>,
-        pending_handle: Option<vnet_api::NetHandle>,
-        pending_len: usize,
-        rx: VecDeque<u8>,
-        tx: VecDeque<u8>,
-    }
-
-    static VM_TCP_SHELL: spin::Mutex<Option<VmTcpShellBridge>> = spin::Mutex::new(None);
-
-    impl VmTcpShellBridge {
-        fn new(port: u16) -> Option<Self> {
-            let vnet = crate::r::net::VNet::open_primary()?;
-            if vnet
-                .submit(vnet_api::Command::OpenTcpListen { port })
-                .is_err()
-            {
-                return None;
-            }
-            Some(Self {
-                vnet,
-                port,
-                listener_handle: None,
-                conn_handle: None,
-                pending_handle: None,
-                pending_len: 0,
-                rx: VecDeque::new(),
-                tx: VecDeque::new(),
-            })
-        }
-
-        fn pump(&mut self) {
-            while let Some(ev) = self.vnet.pop_event() {
-                match ev {
-                    vnet_api::Event::Opened { handle, kind }
-                        if kind == vnet_api::SocketKind::Tcp =>
-                    {
-                        if self.listener_handle.is_none() {
-                            self.listener_handle = Some(handle);
-                        }
-                    }
-                    vnet_api::Event::TcpEstablished { handle } => {
-                        self.conn_handle = Some(handle);
-                        self.pending_handle = None;
-                        self.pending_len = 0;
-                    }
-                    vnet_api::Event::TcpData { handle, data } => {
-                        if self.conn_handle.is_none() {
-                            self.conn_handle = Some(handle);
-                        }
-                        if self.conn_handle != Some(handle) {
-                            continue;
-                        }
-                        const MAX_RX: usize = 16 * 1024;
-                        for &byte in data.as_slice() {
-                            if self.rx.len() >= MAX_RX {
-                                let _ = self.rx.pop_front();
-                            }
-                            self.rx.push_back(byte);
-                        }
-                    }
-                    vnet_api::Event::TcpSent { handle, len } => {
-                        if self.pending_handle != Some(handle) {
-                            continue;
-                        }
-                        for _ in 0..usize::from(len) {
-                            let _ = self.tx.pop_front();
-                        }
-                        self.pending_handle = None;
-                        self.pending_len = 0;
-                    }
-                    vnet_api::Event::Closed { handle } => {
-                        if self.conn_handle == Some(handle) {
-                            self.conn_handle = None;
-                            self.pending_handle = None;
-                            self.pending_len = 0;
-                        }
-                        if self.listener_handle == Some(handle) {
-                            self.listener_handle = None;
-                            let _ = self
-                                .vnet
-                                .submit(vnet_api::Command::OpenTcpListen { port: self.port });
-                        }
-                    }
-                    vnet_api::Event::Error { .. } => {}
-                    _ => {}
-                }
-            }
-
-            if self.pending_handle.is_some() {
-                return;
-            }
-
-            let Some(handle) = self.conn_handle else {
-                return;
-            };
-
-            if self.tx.is_empty() {
-                return;
-            }
-
-            let mut chunk = [0u8; 512];
-            let mut len = 0usize;
-            for &byte in self.tx.iter().take(chunk.len()) {
-                chunk[len] = byte;
-                len += 1;
-            }
-            if len == 0 {
-                return;
-            }
-
-            if self
-                .vnet
-                .submit(vnet_api::Command::SendTcp {
-                    handle,
-                    data: vnet_api::ByteBuf::from_slice_trunc(&chunk[..len]),
-                })
-                .is_ok()
-            {
-                self.pending_handle = Some(handle);
-                self.pending_len = len;
-            }
-        }
-
-        fn status_bits(&self) -> u32 {
-            let mut bits = 1u32;
-            if self.listener_handle.is_some() {
-                bits |= 1 << 1;
-            }
-            if self.conn_handle.is_some() {
-                bits |= 1 << 2;
-            }
-            bits
-        }
-
-        fn read(&mut self, out_ptr: *mut u8, out_cap: usize) -> isize {
-            if out_ptr.is_null() || out_cap == 0 {
-                return 0;
-            }
-            let mut copied = 0usize;
-            while copied < out_cap {
-                let Some(byte) = self.rx.pop_front() else {
-                    break;
-                };
-                unsafe {
-                    *out_ptr.add(copied) = byte;
-                }
-                copied += 1;
-            }
-            copied as isize
-        }
-
-        fn write(&mut self, bytes: &[u8]) -> usize {
-            const MAX_TX: usize = 32 * 1024;
-            for &byte in bytes {
-                if self.tx.len() >= MAX_TX {
-                    let _ = self.tx.pop_front();
-                }
-                self.tx.push_back(byte);
-            }
-            bytes.len()
-        }
     }
 
     #[inline]
@@ -497,63 +329,6 @@ pub mod cabi {
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
         crate::shell2::uart1_com1::inject_bytes(data)
-    }
-
-    #[unsafe(no_mangle)]
-    pub extern "C" fn trueos_cabi_vm_tcp_shell_start(port: u16) -> i32 {
-        let port = if port == 0 { 4246 } else { port };
-        let mut state = VM_TCP_SHELL.lock();
-        if state.as_ref().is_some_and(|bridge| bridge.port == port) {
-            return 0;
-        }
-        let Some(bridge) = VmTcpShellBridge::new(port) else {
-            return -1;
-        };
-        *state = Some(bridge);
-        crate::log!("vm-tcp-shell: listening on tcp {}\n", port);
-        0
-    }
-
-    #[unsafe(no_mangle)]
-    pub extern "C" fn trueos_cabi_vm_tcp_shell_status() -> u32 {
-        let mut state = VM_TCP_SHELL.lock();
-        let Some(bridge) = state.as_mut() else {
-            return 0;
-        };
-        bridge.pump();
-        bridge.status_bits()
-    }
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn trueos_cabi_vm_tcp_shell_write(
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> usize {
-        if data_ptr.is_null() || data_len == 0 {
-            return 0;
-        }
-        let mut state = VM_TCP_SHELL.lock();
-        let Some(bridge) = state.as_mut() else {
-            return 0;
-        };
-        bridge.pump();
-        let data = core::slice::from_raw_parts(data_ptr, data_len);
-        let wrote = bridge.write(data);
-        bridge.pump();
-        wrote
-    }
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn trueos_cabi_vm_tcp_shell_read(
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize {
-        let mut state = VM_TCP_SHELL.lock();
-        let Some(bridge) = state.as_mut() else {
-            return 0;
-        };
-        bridge.pump();
-        bridge.read(out_ptr, out_cap)
     }
 
     fn copy_cabi_text(bytes: &[u8], out_ptr: *mut u8, out_cap: usize) -> isize {
@@ -667,12 +442,6 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_poll_once() {
-        {
-            let mut state = VM_TCP_SHELL.lock();
-            if let Some(bridge) = state.as_mut() {
-                bridge.pump();
-            }
-        }
         crate::wait::spin_step();
     }
 
@@ -1642,6 +1411,7 @@ pub mod cabi {
         swapchain_desc: SwapchainDesc,
         viewport_configured: bool,
         frame_active: bool,
+        frame_allow_screen_present: bool,
         frame_preserve_contents: bool,
         frame_clear_rgb: u32,
         frame_seq: u32,
@@ -1774,6 +1544,7 @@ pub mod cabi {
                 },
                 viewport_configured: false,
                 frame_active: false,
+                frame_allow_screen_present: true,
                 frame_preserve_contents: false,
                 frame_clear_rgb: 0x00ff_ffff,
                 frame_seq: 0,
@@ -2864,6 +2635,7 @@ pub mod cabi {
             st.swapchain_configured = false;
             st.viewport_configured = false;
             st.frame_active = false;
+            st.frame_allow_screen_present = true;
             st.frame_seq = 0;
             st.frame_rgb_draws = 0;
             st.frame_tex_draws = 0;
@@ -3728,7 +3500,11 @@ pub mod cabi {
     }
 
     #[inline]
-    fn begin_frame_inner(clear_rgb: u32, preserve_contents: bool) -> i32 {
+    fn begin_frame_inner(
+        clear_rgb: u32,
+        preserve_contents: bool,
+        allow_screen_present: bool,
+    ) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
         let mut st = GFX_CABI_STATE.lock();
@@ -3737,6 +3513,7 @@ pub mod cabi {
         st.epoch = crate::gfx::backend_epoch();
         st.frame_seq = st.frame_seq.wrapping_add(1);
         st.frame_active = true;
+        st.frame_allow_screen_present = allow_screen_present;
         st.frame_preserve_contents = preserve_contents;
         st.frame_clear_rgb = clear_rgb;
         st.frame_rgb_draws = 0;
@@ -3761,12 +3538,17 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32 {
-        begin_frame_inner(clear_rgb, false)
+        begin_frame_inner(clear_rgb, false, true)
     }
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame_preserve(clear_rgb: u32) -> i32 {
-        begin_frame_inner(clear_rgb, true)
+        begin_frame_inner(clear_rgb, true, true)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame_no_present(clear_rgb: u32) -> i32 {
+        begin_frame_inner(clear_rgb, false, false)
     }
 
     #[unsafe(no_mangle)]
@@ -3922,6 +3704,7 @@ pub mod cabi {
             tex_draws,
             draw_bytes,
             was_active,
+            allow_screen_present,
             preserve_contents,
             clear_rgb,
             draws,
@@ -3935,6 +3718,7 @@ pub mod cabi {
                 st.frame_tex_draws,
                 st.frame_draw_bytes,
                 st.frame_active,
+                st.frame_allow_screen_present,
                 st.frame_preserve_contents,
                 st.frame_clear_rgb,
                 core::mem::take(&mut st.frame_draws),
@@ -3942,6 +3726,7 @@ pub mod cabi {
                 core::mem::take(&mut st.frame_tex_blob),
             );
             st.frame_active = false;
+            st.frame_allow_screen_present = true;
             st.frame_preserve_contents = false;
             st.frame_render_target_tex_id = 0;
             out
@@ -3958,6 +3743,15 @@ pub mod cabi {
             }
         }
         let is_screen_present_frame = final_render_target_tex_id == 0;
+        if is_screen_present_frame && !allow_screen_present {
+            if rgb_draws > 0 || tex_draws > 0 {
+                crate::globalog::log(format_args!(
+                    "gfx-cabi: end rejected screen-present in no-present frame seq={} rgb={} tex={} bytes={}\n",
+                    seq, rgb_draws, tex_draws, draw_bytes
+                ));
+            }
+            return -4;
+        }
 
         let Some(ret) = crate::gfx::with_context_tag(
             crate::gfx::SystemLockOwner::EndFrame,

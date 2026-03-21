@@ -120,29 +120,3 @@ pub fn shell_qjs_read_byte() -> Option<u8> {
     }
 }
 
-#[inline]
-pub fn vm_tcp_shell_start(port: u16) -> bool {
-    unsafe { vcabi::trueos_cabi_vm_tcp_shell_start(port) == 0 }
-}
-
-#[inline]
-pub fn vm_tcp_shell_status() -> u32 {
-    unsafe { vcabi::trueos_cabi_vm_tcp_shell_status() }
-}
-
-#[inline]
-pub fn vm_tcp_shell_write(bytes: &[u8]) -> usize {
-    if bytes.is_empty() {
-        return 0;
-    }
-    unsafe { vcabi::trueos_cabi_vm_tcp_shell_write(bytes.as_ptr(), bytes.len()) }
-}
-
-#[inline]
-pub fn vm_tcp_shell_read(out: &mut [u8]) -> usize {
-    if out.is_empty() {
-        return 0;
-    }
-    let got = unsafe { vcabi::trueos_cabi_vm_tcp_shell_read(out.as_mut_ptr(), out.len()) };
-    if got <= 0 { 0 } else { got as usize }
-}

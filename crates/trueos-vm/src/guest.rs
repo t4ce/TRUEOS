@@ -45,8 +45,7 @@ trueos_vmx_guest_entry:
     jmp .Lwrite_done
 
 .Ldo_vmcall:
-    mov eax, 1
-    vmcall
+    call trueos_vm_preserve
     cli
 .Lhalt:
     hlt
@@ -66,6 +65,11 @@ trueos_vmx_guest_entry:
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_vm_guest_run() {
     crate::demo::start();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_vm_preserve() {
+    crate::vmcall::preserve();
 }
 
 unsafe extern "C" {

@@ -178,6 +178,12 @@ pub fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static s
             PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
         )?;
 
+        // Map comm page immediately after stack top (guest VA 0x410000).
+        let comm_pa = crate::hv::vmcall::pa().ok_or("comm page pa")?;
+        (*core::ptr::addr_of_mut!(GUEST_STACK_PT.0))
+            [pt_index(crate::hv::vmcall::COMM_PAGE_GUEST_VA)] =
+            (comm_pa & 0x000F_FFFF_FFFF_F000) | PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE;
+
         let code_base = page_align_down(guest_rip);
         let code_pt_base = page_align_down_2m(guest_rip);
         map_table_entry(
