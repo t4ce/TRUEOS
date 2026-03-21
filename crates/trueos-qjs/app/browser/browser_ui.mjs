@@ -138,11 +138,7 @@ export function createBrowserUiBridge() {
       if (entry.dirty || entry.revision !== state.regionCacheRevision) {
         cmdStream.setRenderTarget(entry.texId);
         cmdStream.setViewport(entry.width, entry.height);
-        try {
-          renderSceneRegionToCurrentTarget(doc, entry.width, entry.docY, entry.height);
-        } finally {
-          cmdStream.clearRenderTarget();
-        }
+        renderSceneRegionToCurrentTarget(doc, entry.width, entry.docY, entry.height);
         entry.revision = state.regionCacheRevision;
         entry.dirty = false;
       }
