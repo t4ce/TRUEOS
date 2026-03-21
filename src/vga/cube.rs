@@ -152,7 +152,7 @@ fn draw_cursor_rings_in_tile(fb: &super::FramebufferSurface, ox: i32, oy: i32, s
     }
 
     // Snapshot cursor positions up-front so we don't hold the cursor store lock while drawing.
-    let cursors = crate::v::cursor::ordered_cursor_snapshot();
+    let cursors = crate::r::cursor::ordered_cursor_snapshot();
 
     let span = (size - 1).max(1) as f32;
 

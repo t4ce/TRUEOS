@@ -326,7 +326,7 @@ fn print_menu(io: &'static dyn ShellBackend2) {
 fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
     ensure_pci_devices_enumerated();
 
-    let db = if crate::v::readiness::is_set(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED) {
+    let db = if crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
         crate::pci::pciids::load_sanitized_from_root_blocking()
             .ok()
             .flatten()
@@ -1295,11 +1295,11 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
     let out_bytes = out.into_bytes();
     let result: Result<(), crate::disc::block::Error> =
         crate::wait::spawn_and_wait_local(async move {
-            let Some(handle) = crate::v::fs::trueosfs::primary_root_handle() else {
+            let Some(handle) = crate::r::fs::trueosfs::primary_root_handle() else {
                 return Err(crate::disc::block::Error::NotReady);
             };
 
-            match crate::v::fs::trueosfs::file_in_async(handle, file_path, &out_bytes).await {
+            match crate::r::fs::trueosfs::file_in_async(handle, file_path, &out_bytes).await {
                 Ok(true) => Ok(()),
                 Ok(false) => Err(crate::disc::block::Error::Io),
                 Err(err) => Err(err),

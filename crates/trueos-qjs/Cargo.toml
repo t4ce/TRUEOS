@@ -18,7 +18,7 @@ embassy-time-driver = { version = "0.2.1", default-features = false, optional = 
 embassy-executor = { version = "0.9.1", default-features = false, optional = true, features = ["executor-thread", "arch-spin"] }
 embassy-time = { version = "0.5.0", default-features = false, optional = true, features = ["tick-hz-1_000"] }
 libm = { version = "0.2", default-features = false, optional = true }
-trueos-v = { path = "../trueos-v", default-features = false }
+v = { path = "../trueos-v", default-features = false }
 trueos-math = { path = "../trueos-math", default-features = false, optional = true }
 trueos-weather = { path = "../trueos-weather", default-features = false, optional = true }
 lightningcss = { version = "1.0.0-alpha.70", default-features = false, optional = true }

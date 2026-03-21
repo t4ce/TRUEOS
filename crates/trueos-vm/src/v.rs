@@ -1,6 +1,6 @@
-pub use trueos_v::vclock;
-pub use trueos_v::vfs;
-pub use trueos_v::vinput;
-pub use trueos_v::vnet;
-pub use trueos_v::vnetfs;
-pub use trueos_v::vsys;
+pub use v::vclock;
+pub use v::vfs;
+pub use v::vinput;
+pub use v::vnet;
+pub use v::vnetfs;
+pub use v::vsys;

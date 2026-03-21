@@ -8,12 +8,12 @@ use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
 
-use trueos_v::vnet;
+use v::vnet;
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
-use crate::v::net::Queue;
-use crate::v::net::dns::{self, DnsConfig};
+use crate::r::net::Queue;
+use crate::r::net::dns::{self, DnsConfig};
 
 // Default host for the demo.
 // NOTE: We now resolve via the slirp DNS server so the demo is resilient to
@@ -417,7 +417,7 @@ pub async fn tls_demo_matrix_job_run(slot_id: u8, host_arg: HString<96>) {
     crate::matrix::push_line(slot_id, "https: rustls demo starting");
 
     // Permanent FSM gating: do not run until the network is actually usable.
-    crate::v::readiness::wait_for(crate::v::readiness::NET_CONFIGURED).await;
+    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
 
     let dev_count = loop {
         let c = crate::net::device_count();

@@ -3,7 +3,7 @@
 use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
 use crate::disc::block;
-use crate::v::disc::partition;
+use crate::r::disc::partition;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
@@ -340,7 +340,7 @@ pub async fn mount_root_async(
 
     file_record_cache_invalidate_disk(disk_id);
 
-    crate::v::readiness::set(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED);
+    crate::r::readiness::set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
 
     Ok(Some(disk_id))
 }

@@ -7,7 +7,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use trueos_v::vnet as api;
+use v::vnet as api;
 
 use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
@@ -530,7 +530,7 @@ pub(crate) fn handle_session_input(
 
 fn submit_filebench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
     let Some(disk) =
-        crate::v::fs::trueosfs::primary_root_handle().or_else(super::select_default_disk_target)
+        crate::r::fs::trueosfs::primary_root_handle().or_else(super::select_default_disk_target)
     else {
         print_shell_line(io, "bench file: no disk device found");
         return None;
@@ -612,7 +612,7 @@ async fn filebench_task(
             print_matrix_target_line(&task_target, line);
         };
 
-        let Some(placement) = crate::v::fs::trueosfs::locate_async(disk)
+        let Some(placement) = crate::r::fs::trueosfs::locate_async(disk)
             .await
             .ok()
             .flatten()
@@ -649,7 +649,7 @@ async fn filebench_task(
             256 * 1024
         };
 
-        let Some(stream_handle) = (match crate::v::fs::trueosfs::file_write_begin_async(
+        let Some(stream_handle) = (match crate::r::fs::trueosfs::file_write_begin_async(
             disk,
             FILEBENCH_PATH,
             FILEBENCH_TOTAL_BYTES,
@@ -694,7 +694,7 @@ async fn filebench_task(
             let n = core::cmp::min(remaining, chunk.len());
 
             if let Err(e) =
-                crate::v::fs::trueosfs::file_write_chunk_async(stream_handle, &chunk[..n]).await
+                crate::r::fs::trueosfs::file_write_chunk_async(stream_handle, &chunk[..n]).await
             {
                 write_err = Some(e);
                 break;
@@ -717,20 +717,20 @@ async fn filebench_task(
         }
 
         if cancelled {
-            let _ = crate::v::fs::trueosfs::file_write_abort_async(stream_handle).await;
+            let _ = crate::r::fs::trueosfs::file_write_abort_async(stream_handle).await;
         } else if write_err.is_none() {
-            match crate::v::fs::trueosfs::file_write_finish_async(stream_handle).await {
+            match crate::r::fs::trueosfs::file_write_finish_async(stream_handle).await {
                 Ok(()) => finished_ok = true,
                 Err(e) => {
-                    let _ = crate::v::fs::trueosfs::file_write_abort_async(stream_handle).await;
+                    let _ = crate::r::fs::trueosfs::file_write_abort_async(stream_handle).await;
                     write_err = Some(e);
                 }
             }
         } else {
-            let _ = crate::v::fs::trueosfs::file_write_abort_async(stream_handle).await;
+            let _ = crate::r::fs::trueosfs::file_write_abort_async(stream_handle).await;
         }
 
-        let _ = crate::v::fs::trueosfs::file_delete_async(disk, FILEBENCH_PATH).await;
+        let _ = crate::r::fs::trueosfs::file_delete_async(disk, FILEBENCH_PATH).await;
 
         let elapsed_ms = elapsed_ms_since(start_tick);
         let bps = bps_from_progress(written, elapsed_ms);
@@ -1123,7 +1123,7 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
         let mut cancelled = false;
 
         log("bench net: waiting for net");
-        crate::v::readiness::wait_for(crate::v::readiness::NET_CONFIGURED).await;
+        crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
         if bench_cancel_requested(session_id) {
             cancelled = true;
         }
@@ -1141,21 +1141,21 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
 
         let (ip4, ip6) = match parsed.target {
             HostTarget::V4(ip) => (Ok(ip), None),
-            HostTarget::V6(ip) => (Err(crate::v::net::dns::DnsError::NoAnswer), Some(ip)),
+            HostTarget::V6(ip) => (Err(crate::r::net::dns::DnsError::NoAnswer), Some(ip)),
             HostTarget::Name(host) => {
                 log(format!("bench net: resolving {}", host).as_str());
-                let ip4 = crate::v::net::dns::resolve_ipv4_for_device(
+                let ip4 = crate::r::net::dns::resolve_ipv4_for_device(
                     nic_index,
                     host.as_str(),
-                    crate::v::net::dns::DnsConfig::for_device(nic_index),
+                    crate::r::net::dns::DnsConfig::for_device(nic_index),
                 )
                 .await;
 
                 let ip6 = if ip4.is_err() {
-                    crate::v::net::dns::resolve_ipv6_for_device(
+                    crate::r::net::dns::resolve_ipv6_for_device(
                         nic_index,
                         host.as_str(),
-                        crate::v::net::dns::DnsConfig::for_device(nic_index),
+                        crate::r::net::dns::DnsConfig::for_device(nic_index),
                     )
                     .await
                     .ok()
@@ -1190,7 +1190,7 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
             );
         }
 
-        let Some(vnet) = crate::v::net::VNet::open_with_event_queue_depth(nic_index, 4096) else {
+        let Some(vnet) = crate::r::net::VNet::open_with_event_queue_depth(nic_index, 4096) else {
             log("bench net: vnet open failed");
             return;
         };

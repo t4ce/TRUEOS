@@ -1,6 +1,6 @@
 use crate::disc::block;
-use crate::v::disc::partition;
-use crate::v::fs::trueosfs;
+use crate::r::disc::partition;
+use crate::r::fs::trueosfs;
 
 use super::{fat32, gpt};
 

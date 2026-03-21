@@ -177,10 +177,10 @@ pub async fn boot_netbench_task() {
             // Boot netbench is intentionally IPv6-only.
             let ip6: [u8; 16] = match parsed.target {
                 Target::V6Literal(ip) => ip,
-                Target::Name(host) => match crate::v::net::dns::resolve_ipv6_for_device(
+                Target::Name(host) => match crate::r::net::dns::resolve_ipv6_for_device(
                     nic_index,
                     host.as_str(),
-                    crate::v::net::dns::DnsConfig::for_device(nic_index),
+                    crate::r::net::dns::DnsConfig::for_device(nic_index),
                 )
                 .await
                 {

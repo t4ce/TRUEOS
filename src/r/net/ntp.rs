@@ -5,10 +5,10 @@ use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
-use trueos_v::vnet;
+use v::vnet;
 
-use crate::v::net::dns::{self, DnsConfig};
-use crate::v::net::{NetProfile, VNet};
+use crate::r::net::dns::{self, DnsConfig};
+use crate::r::net::{NetProfile, VNet};
 
 const NTP_SERVER_HOSTS: [&str; 4] = [
     "time.google.com",
@@ -224,7 +224,7 @@ pub fn kernel_date_day_month_year() -> String {
 
 #[embassy_executor::task]
 pub async fn ntp_sync_task() {
-    crate::v::readiness::wait_for(crate::v::readiness::NET_CONFIGURED).await;
+    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
 
     loop {
         let profile = NetProfile::default();
