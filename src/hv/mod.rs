@@ -47,7 +47,6 @@ const EPT_PDPT_ENTRIES: usize = 4;
 const EPT_PD_ENTRIES: usize = 512;
 const GUEST_STACK_VA_BASE: u64 = 0x0000_0000_0040_0000;
 const GUEST_CODE_WINDOW_BYTES: usize = 64 * 1024;
-const GUEST_EXEC_TARGET_SPAN_BYTES: u64 = 2 * 1024 * 1024;
 const PAGE_SIZE_2M: u64 = 2 * 1024 * 1024;
 const PT_ENTRY_PRESENT: u64 = 1 << 0;
 const PT_ENTRY_WRITABLE: u64 = 1 << 1;
@@ -191,6 +190,11 @@ struct VmxPage([u8; VMX_PAGE_SIZE]);
 
 static mut VMXON_REGION: VmxPage = VmxPage([0u8; VMX_PAGE_SIZE]);
 static mut VMCS_REGION: VmxPage = VmxPage([0u8; VMX_PAGE_SIZE]);
+
+unsafe extern "C" {
+    static __text_start: u8;
+    static kernel_end: u8;
+}
 
 #[repr(align(16))]
 struct GuestStack([u8; GUEST_STACK_BYTES]);
@@ -1331,6 +1335,7 @@ fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> 
         )?;
 
         let code_base = page_align_down(guest_rip);
+        let code_pt_base = page_align_down_2m(guest_rip);
         map_table_entry(
             core::ptr::addr_of_mut!(GUEST_PML4.0),
             pml4_index(code_base),
@@ -1348,23 +1353,12 @@ fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> 
         );
         map_region_4k(
             core::ptr::addr_of_mut!(GUEST_CODE_PT.0),
-            code_base,
-            kernel_va_to_pa(code_base).ok_or("guest code pa")?,
-            GUEST_CODE_WINDOW_BYTES,
+            code_pt_base,
+            kernel_va_to_pa(code_pt_base).ok_or("guest code pa")?,
+            PAGE_SIZE_2M as usize,
             PT_ENTRY_PRESENT,
         )?;
-        map_exec_huge_span_around(
-            core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
-            code_base,
-            code_base,
-            GUEST_EXEC_TARGET_SPAN_BYTES,
-        )?;
-        map_exec_huge_span_around(
-            core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
-            code_base,
-            guest::trueos_vm_guest_run as *const () as u64,
-            GUEST_EXEC_TARGET_SPAN_BYTES,
-        )?;
+        map_guest_kernel_image(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), code_pt_base)?;
 
         hvlogf(format_args!(
             "hv: vm1 reporting: guest-cr3=0x{:016X} code=0x{:016X} stack=0x{:016X}",
@@ -1433,32 +1427,42 @@ fn page_align_down_2m(addr: u64) -> u64 {
     addr & !(PAGE_SIZE_2M - 1)
 }
 
-fn map_exec_huge_span_around(
-    pd: *mut [u64; 512],
-    anchor_va: u64,
-    target_va: u64,
-    span_bytes: u64,
-) -> Result<(), &'static str> {
-    if pml4_index(target_va) != pml4_index(anchor_va)
-        || pdpt_index(target_va) != pdpt_index(anchor_va)
+fn page_align_up_2m(addr: u64) -> u64 {
+    if addr & (PAGE_SIZE_2M - 1) == 0 {
+        addr
+    } else {
+        (addr + PAGE_SIZE_2M) & !(PAGE_SIZE_2M - 1)
+    }
+}
+
+fn kernel_image_start_va() -> u64 {
+    page_align_down_2m(unsafe { core::ptr::addr_of!(__text_start) as u64 })
+}
+
+fn kernel_image_end_va() -> u64 {
+    page_align_up_2m(unsafe { core::ptr::addr_of!(kernel_end) as u64 })
+}
+
+fn map_guest_kernel_image(pd: *mut [u64; 512], code_pt_base: u64) -> Result<(), &'static str> {
+    let start = kernel_image_start_va();
+    let end = kernel_image_end_va();
+    if pml4_index(start) != pml4_index(code_pt_base)
+        || pdpt_index(start) != pdpt_index(code_pt_base)
+        || pml4_index(end.saturating_sub(1)) != pml4_index(code_pt_base)
+        || pdpt_index(end.saturating_sub(1)) != pdpt_index(code_pt_base)
     {
-        return Err("guest exec range");
+        return Err("guest kernel image range");
     }
 
-    let start = page_align_down_2m(target_va.saturating_sub(span_bytes));
-    let end = page_align_down_2m(target_va.saturating_add(span_bytes));
     let mut va = start;
-    while va <= end {
-        let pml4_ok = pml4_index(va) == pml4_index(anchor_va);
-        let pdpt_ok = pdpt_index(va) == pdpt_index(anchor_va);
-        if pml4_ok && pdpt_ok {
-            if let Some(phys) = kernel_va_to_pa(va) {
-                let idx = pd_index(va);
-                unsafe {
-                    if (*pd)[idx] == 0 {
-                        (*pd)[idx] =
-                            (phys & 0x000F_FFFF_FFE0_0000) | PT_ENTRY_PRESENT | PT_ENTRY_LARGE_PAGE;
-                    }
+    while va < end {
+        let idx = pd_index(va);
+        if idx != pd_index(code_pt_base) {
+            let phys = kernel_va_to_pa(va).ok_or("guest kernel image pa")?;
+            unsafe {
+                if (*pd)[idx] == 0 {
+                    (*pd)[idx] =
+                        (phys & 0x000F_FFFF_FFE0_0000) | PT_ENTRY_PRESENT | PT_ENTRY_LARGE_PAGE;
                 }
             }
         }

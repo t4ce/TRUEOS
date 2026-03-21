@@ -1835,9 +1835,7 @@ fn log_browser_surface_updates(state: &mut Ui2State) {
         }
         let snapshot = browser_surface_state_for_window(window);
         if let Some(content) = window_content_rect(state, window) {
-            let _ = content;
-            let want_w = UI2_STATIC_BROWSER_VIEWPORT_W;
-            let want_h = UI2_STATIC_BROWSER_VIEWPORT_H;
+            let (_, _, want_w, want_h) = snap_browser_content_rect(content);
             if snapshot.viewport_width != want_w || snapshot.viewport_height != want_h {
                 let _ = note_window_viewport_sync_needed(state, window.id);
                 crate::log!(
