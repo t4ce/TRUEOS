@@ -90,7 +90,6 @@ define_started_flags!(
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     GFX_LOADSCREEN_STARTED,
     BROWSER_NET_STARTED,
-    BROWSER_PRIMARY_STARTUP_HTML_LOADER_STARTED,
     BROWSER_SECONDARY_STARTUP_ROUTE_STARTED,
     WEBGPU_BROWSER_PRIMARY_STARTED,
     WEBGPU_BROWSER_SECONDARY_STARTED,
@@ -429,24 +428,6 @@ fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-#[embassy_executor::task]
-async fn browser_startup_html_loader_task(browser_instance_id: u32) {
-    const STARTUP_URL: &str = "https://www.google.de";
-    let op_id = crate::r::browser_net::submit_navigation(browser_instance_id, STARTUP_URL);
-    if op_id == 0 {
-        crate::log!(
-            "browser-html-loader: failed to queue startup html browser_instance={}\n",
-            browser_instance_id
-        );
-        return;
-    }
-    crate::log!(
-        "browser-html-loader: queued startup html browser_instance={} op={}\n",
-        browser_instance_id,
-        op_id
-    );
-}
-
 fn spawn_browser_net(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::r::browser_net::browser_net_task())
@@ -480,14 +461,6 @@ async fn browser_svg_startup_route_task(browser_instance_id: u32) {
 
         Timer::after(EmbassyDuration::from_millis(HANDOFF_RETRY_MS)).await;
     }
-}
-
-fn spawn_primary_browser_startup_html_loader(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(browser_startup_html_loader_task(
-            PRIMARY_BROWSER_INSTANCE_ID,
-        ))
-    })
 }
 
 fn spawn_secondary_browser_startup_route(spawner: Spawner) -> SpawnAttempt {
@@ -744,12 +717,6 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::GFX_BACKEND_READY,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
-    ),
-    TaskSpec::enabled(
-        "browser-startup-html-loader-primary",
-        crate::r::readiness::NET_CONFIGURED,
-        &BROWSER_PRIMARY_STARTUP_HTML_LOADER_STARTED,
-        spawn_primary_browser_startup_html_loader,
     ),
     if ENABLE_BROWSER_2 {
         TaskSpec::disabled(

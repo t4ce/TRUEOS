@@ -17,7 +17,10 @@ const MAX_ACTIVE_STREAMS: usize = 8;
 const MASS_KEEPALIVE_MS: u64 = 2_000;
 const MASS_IO_RETRY_LIMIT: u8 = 8;
 const MASS_IO_RETRY_DELAY_MS: u64 = 25;
-const MAX_IO_BYTES: usize = 64 * 1024;
+// Physical USB flash media is noticeably less tolerant than the QEMU disk path to
+// larger BOT transfers. Keep the public block-device hint conservative so upper
+// layers naturally batch into smaller chunks during install/format workloads.
+const MAX_IO_BYTES: usize = 8 * 1024;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveMassStream {

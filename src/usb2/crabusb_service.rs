@@ -1,10 +1,12 @@
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::cmp::min;
+use core::future::Future;
 use core::f32::consts::TAU;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::task::Poll;
 use core::time::Duration;
 
 use crab_usb::{EndpointKind, Event, EventHandler, KernelOp, USBHost, usb_if};
@@ -13,8 +15,6 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use libm::sinf;
 use spin::Mutex;
-use usb_if::host::ControlSetup;
-use usb_if::transfer::{Recipient, Request, RequestType};
 
 use super::api::{InterfaceEndpointError, claim_interface};
 
@@ -38,6 +38,7 @@ const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
 const TRUEKEY_VENDOR_ID: u16 = 0x303A;
 const TRUEKEY_PRODUCT_ID: u16 = 0x1001;
 const TRUEKEY_STREAM_CHUNK: usize = 512;
+const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 
 impl DmaOp for TrueosCrabUsbKernel {
     fn page_size(&self) -> usize {
@@ -137,21 +138,18 @@ struct IsoOutEndpoint {
 }
 
 #[derive(Copy, Clone)]
-struct SerialTarget {
-    control_interface: Option<u8>,
-    data_interface: u8,
+struct TruekeyTarget {
+    interface_number: u8,
     alternate_setting: u8,
     out_endpoint: u8,
     out_max_packet_size: u16,
-    class: u8,
-    subclass: u8,
-    protocol: u8,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum HidBootKind {
     Keyboard,
     Mouse,
+    Tablet,
 }
 
 impl HidBootKind {
@@ -160,6 +158,7 @@ impl HidBootKind {
         match self {
             HidBootKind::Keyboard => "keyboard",
             HidBootKind::Mouse => "mouse",
+            HidBootKind::Tablet => "tablet",
         }
     }
 
@@ -168,6 +167,7 @@ impl HidBootKind {
         match self {
             HidBootKind::Keyboard => 0x01,
             HidBootKind::Mouse => 0x02,
+            HidBootKind::Tablet => 0x00,
         }
     }
 }
@@ -215,6 +215,7 @@ fn pick_hid_boot_targets(
                 let kind = match (alt.class, alt.subclass, alt.protocol) {
                     (0x03, 0x01, 0x01) => HidBootKind::Keyboard,
                     (0x03, 0x01, 0x02) => HidBootKind::Mouse,
+                    (0x03, 0x00, 0x00) => HidBootKind::Tablet,
                     _ => continue,
                 };
 
@@ -228,6 +229,7 @@ fn pick_hid_boot_targets(
                 let report_len = match kind {
                     HidBootKind::Keyboard => 8,
                     HidBootKind::Mouse => 4,
+                    HidBootKind::Tablet => usize::from(endpoint.max_packet_size.max(8)),
                 };
                 out.push(HidBootTarget {
                     configuration_value: config.configuration_value,
@@ -263,6 +265,22 @@ fn unregister_active_hid_stream(stream: ActiveHidStream) -> bool {
     !streams.iter().any(|active| {
         active.controller_id == stream.controller_id && active.slot_id == stream.slot_id
     })
+}
+
+async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {
+    let mut fut = core::pin::pin!(fut);
+    let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(timeout_ms)));
+
+    core::future::poll_fn(|cx| {
+        if let Poll::Ready(out) = fut.as_mut().poll(cx) {
+            return Poll::Ready(Some(out));
+        }
+        if timeout.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(None);
+        }
+        Poll::Pending
+    })
+    .await
 }
 
 #[embassy_executor::task(pool_size = 8)]
@@ -321,6 +339,115 @@ async fn hid_boot_stream_task(
         }
     };
 
+    if matches!(target.kind, HidBootKind::Mouse | HidBootKind::Keyboard) {
+        match interface
+            .device()
+            .control_out(
+                usb_if::host::ControlSetup {
+                    request_type: usb_if::transfer::RequestType::Class,
+                    recipient: usb_if::transfer::Recipient::Interface,
+                    request: usb_if::transfer::Request::Other(0x0B),
+                    value: 0,
+                    index: u16::from(target.interface_number),
+                },
+                &[],
+            )
+            .await
+        {
+            Ok(_) => {
+                crate::log!(
+                    "crabusb: hid {} {:04X}:{:04X} boot protocol if#{} ok\n",
+                    target.kind.as_str(),
+                    vendor_id,
+                    product_id,
+                    target.interface_number
+                );
+            }
+            Err(err) => {
+                crate::log!(
+                    "crabusb: hid {} {:04X}:{:04X} boot protocol if#{} failed: {:?}\n",
+                    target.kind.as_str(),
+                    vendor_id,
+                    product_id,
+                    target.interface_number,
+                    err
+                );
+            }
+        }
+
+        match interface
+            .device()
+            .control_out(
+                usb_if::host::ControlSetup {
+                    request_type: usb_if::transfer::RequestType::Class,
+                    recipient: usb_if::transfer::Recipient::Interface,
+                    request: usb_if::transfer::Request::Other(0x0A),
+                    value: 1 << 8,
+                    index: u16::from(target.interface_number),
+                },
+                &[],
+            )
+            .await
+        {
+            Ok(_) => {
+                crate::log!(
+                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 ok\n",
+                    target.kind.as_str(),
+                    vendor_id,
+                    product_id,
+                    target.interface_number
+                );
+            }
+            Err(err) => {
+                crate::log!(
+                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 failed: {:?}\n",
+                    target.kind.as_str(),
+                    vendor_id,
+                    product_id,
+                    target.interface_number,
+                    err
+                );
+            }
+        }
+    }
+
+    if matches!(target.kind, HidBootKind::Tablet) {
+        match interface
+            .device()
+            .control_out(
+                usb_if::host::ControlSetup {
+                    request_type: usb_if::transfer::RequestType::Class,
+                    recipient: usb_if::transfer::Recipient::Interface,
+                    request: usb_if::transfer::Request::Other(0x0A),
+                    value: 1 << 8,
+                    index: u16::from(target.interface_number),
+                },
+                &[],
+            )
+            .await
+        {
+            Ok(_) => {
+                crate::log!(
+                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 ok\n",
+                    target.kind.as_str(),
+                    vendor_id,
+                    product_id,
+                    target.interface_number
+                );
+            }
+            Err(err) => {
+                crate::log!(
+                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 failed: {:?}\n",
+                    target.kind.as_str(),
+                    vendor_id,
+                    product_id,
+                    target.interface_number,
+                    err
+                );
+            }
+        }
+    }
+
     crate::log!(
         "crabusb: hid {} {:04X}:{:04X} ownership if#{} alt={} cfg={} int_in=0x{:02X} mps={} ep_target={} proto={:02X}\n",
         target.kind.as_str(),
@@ -374,10 +501,32 @@ async fn hid_boot_stream_task(
         usize::from(target.in_max_packet_size.max(target.report_len as u16)),
     ));
     let mut sample_logs_left = 6u8;
+    let mut timeout_logs = 0u32;
 
     loop {
-        match interrupt_in.submit_and_wait(report.as_mut_slice()).await {
+        match with_timeout_or_none(
+            interrupt_in.submit_and_wait(report.as_mut_slice()),
+            HID_INTERRUPT_TIMEOUT_MS,
+        )
+        .await
+        {
+            None => {
+                timeout_logs = timeout_logs.wrapping_add(1);
+                if timeout_logs <= 8 || timeout_logs.is_multiple_of(32) {
+                    crate::log!(
+                        "crabusb: hid {} {:04X}:{:04X} interrupt timeout ep=0x{:02X} count={}\n",
+                        target.kind.as_str(),
+                        vendor_id,
+                        product_id,
+                        target.in_endpoint,
+                        timeout_logs
+                    );
+                }
+                continue;
+            }
+            Some(result) => match result {
             Ok(read) => {
+                timeout_logs = 0;
                 if read == 0 {
                     Timer::after(EmbassyDuration::from_millis(1)).await;
                     continue;
@@ -407,6 +556,21 @@ async fn hid_boot_stream_task(
                     HidBootKind::Mouse => {
                         super::handle_mouse_boot_report(controller_id, slot_id, ep_target, sample)
                     }
+                    HidBootKind::Tablet => {
+                        let nonzero = sample.iter().copied().any(|byte| byte != 0);
+                        if sample_logs_left != 0 || nonzero {
+                            let prefix_len = min(sample.len(), 12);
+                            crate::log!(
+                                "crabusb: hid tablet {:04X}:{:04X} packet ep=0x{:02X} len={} nonzero={} bytes={:02X?}\n",
+                                vendor_id,
+                                product_id,
+                                target.in_endpoint,
+                                sample.len(),
+                                nonzero,
+                                &sample[..prefix_len]
+                            );
+                        }
+                    }
                 }
             }
             Err(err) => {
@@ -420,6 +584,7 @@ async fn hid_boot_stream_task(
                 );
                 break;
             }
+        },
         }
     }
 
@@ -694,25 +859,12 @@ fn fill_audio_packet(
     }
 }
 
-fn pick_serial_target(
+fn pick_truekey_target(
     configs: &[usb_if::descriptor::ConfigurationDescriptor],
-) -> Option<SerialTarget> {
-    let mut best: Option<(u32, SerialTarget)> = None;
+) -> Option<TruekeyTarget> {
+    let mut best: Option<(u32, TruekeyTarget)> = None;
 
     for config in configs.iter() {
-        let mut control_interface = None;
-        for interface in config.interfaces.iter() {
-            for alt in interface.alt_settings.iter() {
-                if alt.class == 0x02 {
-                    control_interface = Some(alt.interface_number);
-                    break;
-                }
-            }
-            if control_interface.is_some() {
-                break;
-            }
-        }
-
         for interface in config.interfaces.iter() {
             for alt in interface.alt_settings.iter() {
                 let Some(out_ep) = alt.endpoints.iter().find(|ep| {
@@ -730,21 +882,14 @@ fn pick_serial_target(
                 } else if alt.class == 0xFF {
                     score += 40;
                 }
-                if control_interface.is_some() {
-                    score += 10;
-                }
                 score += alt.endpoints.len() as u32;
                 score += u32::from(alt.alternate_setting);
 
-                let target = SerialTarget {
-                    control_interface,
-                    data_interface: alt.interface_number,
+                let target = TruekeyTarget {
+                    interface_number: alt.interface_number,
                     alternate_setting: alt.alternate_setting,
                     out_endpoint: out_ep.address,
                     out_max_packet_size: out_ep.max_packet_size,
-                    class: alt.class,
-                    subclass: alt.subclass,
-                    protocol: alt.protocol,
                 };
 
                 match best {
@@ -758,53 +903,11 @@ fn pick_serial_target(
     best.map(|(_, target)| target)
 }
 
-async fn configure_cdc_acm_bridge(
-    device: &mut crab_usb::Device,
-    control_interface: u8,
-) -> crab_usb::err::Result {
-    let line_coding = [
-        0x00, 0x10, 0x0E, 0x00, // 921600 baud, LE
-        0x00, // 1 stop bit
-        0x00, // no parity
-        0x08, // 8 data bits
-    ];
-
-    device
-        .ep_ctrl()
-        .control_out(
-            ControlSetup {
-                request_type: RequestType::Class,
-                recipient: Recipient::Interface,
-                request: Request::Other(0x20), // SET_LINE_CODING
-                value: 0,
-                index: control_interface as u16,
-            },
-            &line_coding,
-        )
-        .await?;
-
-    device
-        .ep_ctrl()
-        .control_out(
-            ControlSetup {
-                request_type: RequestType::Class,
-                recipient: Recipient::Interface,
-                request: Request::Other(0x22), // SET_CONTROL_LINE_STATE
-                value: 0x0003,                 // DTR | RTS
-                index: control_interface as u16,
-            },
-            &[],
-        )
-        .await?;
-
-    Ok(())
-}
-
 async fn stream_truekey_logs(
     device: &mut crab_usb::Device,
     vendor_id: u16,
     product_id: u16,
-    target: SerialTarget,
+    target: TruekeyTarget,
 ) {
     let endpoint_kind = match device.get_endpoint(target.out_endpoint).await {
         Ok(kind) => kind,
@@ -832,16 +935,13 @@ async fn stream_truekey_logs(
 
     TRUEKEY_STREAM_ACTIVE.store(true, Ordering::Release);
     crate::log!(
-        "crabusb: truekey streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} mps={} class={:02X} subclass={:02X} proto={:02X}\n",
+        "crabusb: truekey streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} mps={}\n",
         vendor_id,
         product_id,
-        target.data_interface,
+        target.interface_number,
         target.alternate_setting,
         target.out_endpoint,
-        target.out_max_packet_size,
-        target.class,
-        target.subclass,
-        target.protocol
+        target.out_max_packet_size
     );
 
     let chunk_limit = min(
@@ -889,13 +989,13 @@ async fn truekey_logdrain_task(
     device: &mut crab_usb::Device,
     vendor_id: u16,
     product_id: u16,
-    target: SerialTarget,
+    target: TruekeyTarget,
 ) {
     crate::log!(
         "crabusb: truekey {:04X}:{:04X} handoff -> logdrain if#{} alt={} ep=0x{:02X}\n",
         vendor_id,
         product_id,
-        target.data_interface,
+        target.interface_number,
         target.alternate_setting,
         target.out_endpoint
     );
@@ -942,9 +1042,9 @@ async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::Dev
         product_id,
         configs.len()
     );
-    let Some(target) = pick_serial_target(&configs) else {
+    let Some(target) = pick_truekey_target(&configs) else {
         crate::log!(
-            "crabusb: truekey {:04X}:{:04X} no serial target found\n",
+            "crabusb: truekey {:04X}:{:04X} no bulk-out sink target found\n",
             vendor_id,
             product_id
         );
@@ -952,34 +1052,23 @@ async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::Dev
     };
 
     crate::log!(
-        "crabusb: truekey {:04X}:{:04X} selected if#{} alt={} ep=0x{:02X} ctrl_if={:?} class={:02X} subclass={:02X} proto={:02X}\n",
+        "crabusb: truekey {:04X}:{:04X} selected if#{} alt={} ep=0x{:02X}\n",
         vendor_id,
         product_id,
-        target.data_interface,
+        target.interface_number,
         target.alternate_setting,
-        target.out_endpoint,
-        target.control_interface,
-        target.class,
-        target.subclass,
-        target.protocol
-    );
-
-    crate::log!(
-        "crabusb: truekey {:04X}:{:04X} data-only probe ctrl_if={:?}\n",
-        vendor_id,
-        product_id,
-        target.control_interface
+        target.out_endpoint
     );
 
     crate::log!(
         "crabusb: truekey {:04X}:{:04X} data claim begin if#{} alt={}\n",
         vendor_id,
         product_id,
-        target.data_interface,
+        target.interface_number,
         target.alternate_setting
     );
     match device
-        .claim_interface(target.data_interface, target.alternate_setting)
+        .claim_interface(target.interface_number, target.alternate_setting)
         .await
     {
         Ok(()) => {
@@ -987,7 +1076,7 @@ async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::Dev
                 "crabusb: truekey {:04X}:{:04X} ownership if#{} alt={} ep=0x{:02X}\n",
                 vendor_id,
                 product_id,
-                target.data_interface,
+                target.interface_number,
                 target.alternate_setting,
                 target.out_endpoint
             );
@@ -997,7 +1086,7 @@ async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::Dev
             "crabusb: truekey {:04X}:{:04X} data if#{} alt={} claim failed: {:?}\n",
             vendor_id,
             product_id,
-            target.data_interface,
+            target.interface_number,
             target.alternate_setting,
             err
         ),

@@ -257,7 +257,27 @@ pub async fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionIn
         return Err(Error::Corrupted);
     }
 
-    let table = device.read_blocks(entries_lba, blocks_to_read).await?;
+    let table_len = blocks_to_read
+        .checked_mul(block_size)
+        .ok_or(Error::InvalidParam)?;
+    let mut table = vec![0u8; table_len];
+    let max_blocks_per_read = if device_info.max_transfer_bytes > 0 {
+        core::cmp::max(1usize, (device_info.max_transfer_bytes as usize) / block_size)
+    } else {
+        blocks_to_read.max(1)
+    };
+
+    let mut blocks_read = 0usize;
+    while blocks_read < blocks_to_read {
+        let blocks_here = core::cmp::min(max_blocks_per_read, blocks_to_read - blocks_read);
+        let chunk = device
+            .read_blocks(entries_lba + blocks_read as u64, blocks_here)
+            .await?;
+        let dst_off = blocks_read * block_size;
+        let dst_end = dst_off + chunk.len();
+        table[dst_off..dst_end].copy_from_slice(&chunk);
+        blocks_read += blocks_here;
+    }
 
     let mut partitions = Vec::new();
     for idx in 0..entry_count as usize {
