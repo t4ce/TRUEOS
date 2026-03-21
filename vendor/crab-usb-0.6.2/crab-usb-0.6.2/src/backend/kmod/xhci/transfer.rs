@@ -34,6 +34,10 @@ impl TransferResultHandler {
         self.inner.lock().insert(id, handle);
     }
 
+    pub fn unregister_slot(&mut self, slot_id: u8) {
+        self.inner.lock().retain(|id, _| id.slot_id != slot_id);
+    }
+
     pub unsafe fn set_finished(&self, slot_id: u8, ep_id: u8, ptr: BusAddr, res: TransferEvent) {
         let queue_id = TransQueueId { slot_id, ep_id };
         if let Some(q) = unsafe { self.inner.force_use().get(&queue_id) } {

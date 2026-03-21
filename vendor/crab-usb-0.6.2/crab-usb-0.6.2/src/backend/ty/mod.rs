@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use core::any::Any;
 use core::fmt::Debug;
 
@@ -52,6 +53,18 @@ pub(crate) trait DeviceOp: Send + Any + 'static {
         &mut self,
         desc: &usb_if::descriptor::EndpointDescriptor,
     ) -> Result<ep::EndpointBase, USBError>;
+
+    fn debug_reset_endpoint<'a>(
+        &'a mut self,
+        _endpoint_address: u8,
+        _preserve_transfer_state: bool,
+    ) -> BoxFuture<'a, Result<(), USBError>> {
+        Box::pin(async { Err(USBError::NotSupported) })
+    }
+
+    fn debug_close_slot<'a>(&'a mut self) -> BoxFuture<'a, Result<(), USBError>> {
+        Box::pin(async { Err(USBError::NotSupported) })
+    }
 
     fn update_hub(&mut self, params: HubParams) -> BoxFuture<'_, Result<(), USBError>>;
 }

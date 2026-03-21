@@ -201,6 +201,20 @@ impl Device {
         self.inner.update_hub(params).await
     }
 
+    pub async fn debug_reset_endpoint(
+        &mut self,
+        endpoint_address: u8,
+        preserve_transfer_state: bool,
+    ) -> Result<(), USBError> {
+        self.inner
+            .debug_reset_endpoint(endpoint_address, preserve_transfer_state)
+            .await
+    }
+
+    pub async fn debug_close_slot(&mut self) -> Result<(), USBError> {
+        self.inner.debug_close_slot().await
+    }
+
     pub async fn current_configuration_descriptor(
         &mut self,
     ) -> Result<ConfigurationDescriptor, USBError> {
