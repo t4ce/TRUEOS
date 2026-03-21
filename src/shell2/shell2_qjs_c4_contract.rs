@@ -1,7 +1,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-pub(crate) const C4_CORE_CONTRACT_VERSION: u16 = 1;
+pub(crate) const C4_CORE_CONTRACT_VERSION: u16 = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TokenKind {
@@ -12,17 +12,25 @@ pub(crate) enum TokenKind {
     False,
     Null,
     Undefined,
+    Function,
+    Async,
     Let,
     Const,
     Var,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
     Dot,
     Comma,
+    Colon,
     Semi,
     Assign,
     Eq,
     StrictEq,
+    Arrow,
     Plus,
     Minus,
     Star,

@@ -49,8 +49,6 @@ const UI2_WINDOW_RESIZE_LEFT: u32 = 1 << 0;
 const UI2_WINDOW_RESIZE_TOP: u32 = 1 << 1;
 const UI2_WINDOW_RESIZE_RIGHT: u32 = 1 << 2;
 const UI2_WINDOW_RESIZE_BOTTOM: u32 = 1 << 3;
-const UI2_STATIC_BROWSER_VIEWPORT_W: u32 = 512;
-const UI2_STATIC_BROWSER_VIEWPORT_H: u32 = 512;
 
 #[inline]
 const fn ui2_window_min_extent() -> f32 {
@@ -410,17 +408,11 @@ fn window_browser_instance_id(window: &Ui2Window) -> u32 {
 
 fn browser_surface_state_for_window(window: &Ui2Window) -> UiHostedSurfaceState {
     let mut snapshot = hosted_surface_state(window_browser_instance_id(window));
-    if snapshot.viewport_width == 0 {
-        snapshot.viewport_width = UI2_STATIC_BROWSER_VIEWPORT_W;
-    }
-    if snapshot.viewport_height == 0 {
-        snapshot.viewport_height = UI2_STATIC_BROWSER_VIEWPORT_H;
-    }
     if snapshot.content_width == 0 {
-        snapshot.content_width = snapshot.viewport_width;
+        snapshot.content_width = snapshot.viewport_width.max(1);
     }
     if snapshot.content_height == 0 {
-        snapshot.content_height = snapshot.viewport_height;
+        snapshot.content_height = snapshot.viewport_height.max(1);
     }
     snapshot
 }
