@@ -226,7 +226,7 @@ fn _loop(
     loop {
         time::poll();
         unsafe { executor.poll() };
-        if counter.is_multiple_of(250_000) {
+        if counter.is_multiple_of(5_000) {
             vga::cube::tick();
         }
         if counter.is_multiple_of(10_000_000) {
