@@ -115,6 +115,7 @@ pub(crate) mod hid {
     }
 }
 
+pub(crate) mod api;
 mod crabusb_service;
 pub(crate) mod input;
 mod mass;

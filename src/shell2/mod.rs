@@ -48,6 +48,7 @@ static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LineSource {
     User,
+    Native,
     System,
 }
 
@@ -152,7 +153,7 @@ impl<'a> AlignedWriter<'a> {
         self.io.write_str(ecma48::RESET);
 
         match source {
-            LineSource::User => {
+            LineSource::User | LineSource::Native => {
                 self.io.write_str(s);
             }
             LineSource::System => {
@@ -170,9 +171,16 @@ impl<'a> AlignedWriter<'a> {
         self.move_to(SCROLL_TOP_ROW, 1);
         self.io.write_str("\x1b[J");
 
-        for (idx, entry) in transcript.iter().rev().enumerate() {
-            let row = SCROLL_TOP_ROW + idx;
-            self.transcript_line_at(row, entry.source, entry.text.as_str());
+        if transcript_prefers_chronological_layout(transcript) {
+            for (idx, entry) in transcript.iter().enumerate() {
+                let row = SCROLL_TOP_ROW + idx;
+                self.transcript_line_at(row, entry.source, entry.text.as_str());
+            }
+        } else {
+            for (idx, entry) in transcript.iter().rev().enumerate() {
+                let row = SCROLL_TOP_ROW + idx;
+                self.transcript_line_at(row, entry.source, entry.text.as_str());
+            }
         }
         self.io.write_str(ecma48::RESTORE_CURSOR);
     }
@@ -443,6 +451,10 @@ pub(crate) fn print_shell_line(io: &dyn ShellIo2, text: &str) {
     enqueue_transcript_line(io, LineSource::System, text);
 }
 
+pub(crate) fn print_native_line(io: &dyn ShellIo2, text: &str) {
+    enqueue_transcript_line(io, LineSource::Native, text);
+}
+
 fn same_backend_io(io: &dyn ShellIo2, target: &'static dyn ShellIo2) -> bool {
     (io as *const dyn ShellIo2 as *const ()) == (target as *const dyn ShellIo2 as *const ())
 }
@@ -578,6 +590,10 @@ pub(crate) fn print_matrix_target_line(target: &MatrixTarget, text: &str) {
     matrix::record_line_in_slot(&target.slot_id, LineSource::System, text);
 }
 
+pub(crate) fn print_matrix_target_native_line(target: &MatrixTarget, text: &str) {
+    matrix::record_line_in_slot(&target.slot_id, LineSource::Native, text);
+}
+
 fn current_transcript_for_task(io: &'static dyn ShellBackend2) -> VecDeque<TranscriptEntry> {
     matrix::active_lines(output_target_for_backend(io))
 }
@@ -586,6 +602,12 @@ fn appended_transcript_line<'a>(
     prev: &VecDeque<TranscriptEntry>,
     next: &'a VecDeque<TranscriptEntry>,
 ) -> Option<&'a TranscriptEntry> {
+    if transcript_prefers_chronological_layout(prev)
+        || transcript_prefers_chronological_layout(next)
+    {
+        return None;
+    }
+
     if next.len() != prev.len().saturating_add(1) {
         return None;
     }
@@ -597,6 +619,12 @@ fn appended_transcript_line<'a>(
     }
 
     next.back()
+}
+
+fn transcript_prefers_chronological_layout(transcript: &VecDeque<TranscriptEntry>) -> bool {
+    transcript
+        .iter()
+        .any(|entry| matches!(entry.source, LineSource::Native))
 }
 
 fn record_user_line_for_active_slot(io: &'static dyn ShellBackend2, submitted: &str) {
