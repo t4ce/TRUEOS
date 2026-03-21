@@ -6,6 +6,7 @@ use spin::Mutex;
 pub mod hut;
 pub mod input;
 pub mod keyboard;
+pub mod leds;
 pub mod mouse;
 pub mod tablet;
 
