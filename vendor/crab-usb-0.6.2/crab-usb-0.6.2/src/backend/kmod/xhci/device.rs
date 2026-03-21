@@ -545,7 +545,7 @@ impl Device {
                             1
                         } else {
                             // 计算 floor(log2(bInterval))
-                            let log2_binterval = 31 - (binterval as u32).leading_zeros() as u8 - 1;
+                            let log2_binterval = binterval.ilog2() as u8;
                             let interval = (log2_binterval + 3).clamp(1, 16);
                             info!(
                                 "ISO endpoint FS/LS: bInterval={} -> log2={} -> XHCI interval={}",
@@ -575,7 +575,7 @@ impl Device {
                             1
                         } else {
                             // 计算 floor(log2(bInterval))
-                            let log2_binterval = 31 - (binterval as u32).leading_zeros() as u8 - 1;
+                            let log2_binterval = binterval.ilog2() as u8;
                             let interval = (log2_binterval + 3).clamp(1, 16);
                             info!(
                                 "INT endpoint FS/LS: bInterval={} -> log2={} -> XHCI interval={}",
@@ -630,7 +630,7 @@ impl Device {
                 // params.tt_think_time_ns 已经是转换后的值 (0, 666, 1333, 1999)
                 // 需要转换为 xHCI 寄存器值
                 let think_time = if params.tt_think_time_ns > 0 {
-                    ((params.tt_think_time_ns / 666) - 1) as u8
+                    (params.tt_think_time_ns / 666).saturating_sub(1) as u8
                 } else {
                     0
                 };
