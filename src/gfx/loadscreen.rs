@@ -61,7 +61,7 @@ fn ensure_logo_uploaded() -> bool {
 
     let logo = loadscreen_logo();
     let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
+        crate::v::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
             LOADSCREEN_LOGO_TEX_ID,
             logo.width,
             logo.height,
@@ -159,13 +159,13 @@ fn draw_logo_in_frame(view_w: u32, view_h: u32) -> bool {
         },
     ];
 
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+    let _ = unsafe { crate::v::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
     let _ = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+        crate::v::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
     };
 
     let rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
+        crate::v::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
             LOADSCREEN_LOGO_TEX_ID,
             verts.as_ptr() as *const u8,
             core::mem::size_of_val(&verts),
@@ -212,7 +212,7 @@ pub async fn gfx_loadscreen_task() {
 
     crate::gfx::with_cabi_frame_lock(|| {
         let begin_rc =
-            unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(LOADSCREEN_BG_RGB) };
+            unsafe { crate::v::io::cabi::trueos_cabi_gfx_begin_frame(LOADSCREEN_BG_RGB) };
         if begin_rc == 0 {
             let _ = crate::gfx::lyon::lyon_geom_api_demo_no_present(fb_w as u32, fb_h as u32);
             let _ = draw_logo_in_frame(fb_w as u32, fb_h as u32);
@@ -224,7 +224,7 @@ pub async fn gfx_loadscreen_task() {
                 fb_h as u32,
                 255,
             );
-            unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
+            unsafe { crate::v::io::cabi::trueos_cabi_gfx_end_frame() };
         }
     });
 
@@ -234,11 +234,11 @@ pub async fn gfx_loadscreen_task() {
         let alpha = ((libm::sinf(phase) * 0.5 + 0.5) * 255.0) as u8;
         crate::gfx::with_cabi_frame_lock(|| {
             let begin_rc = unsafe {
-                crate::surface::io::cabi::trueos_cabi_gfx_begin_frame_preserve(LOADSCREEN_BG_RGB)
+                crate::v::io::cabi::trueos_cabi_gfx_begin_frame_preserve(LOADSCREEN_BG_RGB)
             };
             if begin_rc == 0 {
                 let _ = unsafe {
-                    crate::surface::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0)
+                    crate::v::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0)
                 };
                 let _ = crate::gfx::lyon::draw_solid_rect_no_present(
                     clear_x,
@@ -258,7 +258,7 @@ pub async fn gfx_loadscreen_task() {
                     fb_h as u32,
                     alpha,
                 );
-                unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
+                unsafe { crate::v::io::cabi::trueos_cabi_gfx_end_frame() };
             }
         });
         frame = frame.wrapping_add(1);

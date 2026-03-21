@@ -16,10 +16,7 @@ use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
 
 use super::api::{ClaimedInterface, InterfaceEndpointError, claim_interface};
-use super::mass::{
-    MASS_PROBE_CONCEPTS, MassProbeConcept, pick_mass_target, probe_mass_bot,
-    register_mass_geometry_placeholder,
-};
+use super::mass::{pick_mass_target, probe_mass_bot, register_mass_geometry_placeholder};
 
 pub(super) struct TrueosCrabUsbKernel;
 
@@ -30,8 +27,6 @@ static EVENT_HANDLER: Mutex<Option<EventHandler>> = Mutex::new(None);
 static PROBE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static ROOT_PORT_CHANGE_SEEN: AtomicBool = AtomicBool::new(false);
 static NO_PORT_CHANGE_HINT_LOGGED: AtomicBool = AtomicBool::new(false);
-const MASS_PROBE_ATTEMPTS: usize = 4;
-const MASS_PROBE_RETRY_DELAY_MS: u64 = 150;
 static AUDIO_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -872,40 +867,109 @@ async fn maybe_start_mass_storage(host: &mut USBHost, dev_info: &crab_usb::Devic
         return false;
     };
 
-    let mut probe = None;
-    let mut slot = 0u8;
+    let mut device = match host.open_device(dev_info).await {
+        Ok(device) => device,
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} open failed: {:?}\n",
+                vendor_id,
+                product_id,
+                err
+            );
+            return true;
+        }
+    };
 
-    for (attempt, concept) in MASS_PROBE_CONCEPTS.iter().enumerate() {
-        match try_mass_probe_concept(
-            host,
-            dev_info,
+    let slot = device.slot_id();
+
+    if let Err(err) = device
+        .ep_ctrl()
+        .set_configuration(target.configuration_value)
+        .await
+    {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} set cfg={} failed: {:?}\n",
             vendor_id,
             product_id,
-            target,
-            *concept,
-            attempt + 1,
-            MASS_PROBE_CONCEPTS.len(),
-        )
-        .await
-        {
-            Ok((info, current_slot)) => {
-                slot = current_slot;
-                probe = Some(info);
-                break;
-            }
-            Err(current_slot) => {
-                slot = current_slot;
-            }
-        }
+            target.configuration_value,
+            err
+        );
     }
 
-    let Some(probe) = probe else {
-        crate::log!(
-            "crabusb: mass {:04X}:{:04X} exhausted lifecycle concepts\n",
-            vendor_id,
-            product_id
-        );
-        return true;
+    let probe = match claim_interface(
+        &mut device,
+        target.interface_number,
+        target.alternate_setting,
+    )
+    .await
+    {
+        Ok(mut interface) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} ownership if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={}\n",
+                vendor_id,
+                product_id,
+                interface.interface_number(),
+                interface.alternate_setting(),
+                target.configuration_value,
+                target.bulk_in,
+                target.bulk_out,
+                target.bulk_in_max_packet_size,
+                target.bulk_out_max_packet_size
+            );
+
+            let Some((mut bulk_out, mut bulk_in)) = open_mass_bulk_endpoints(
+                &mut interface,
+                vendor_id,
+                product_id,
+                target.bulk_out,
+                target.bulk_in,
+            )
+            .await
+            else {
+                return true;
+            };
+
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} endpoint wiring bulk_out={} bulk_in={}\n",
+                vendor_id,
+                product_id,
+                true,
+                true
+            );
+
+            match probe_mass_bot(
+                interface.device(),
+                &mut bulk_out,
+                &mut bulk_in,
+                target.interface_number,
+                target.bulk_out,
+                target.bulk_in,
+            )
+            .await
+            {
+                Ok(info) => info,
+                Err(err) => {
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} probe failed: {:?}\n",
+                        vendor_id,
+                        product_id,
+                        err
+                    );
+                    return true;
+                }
+            }
+        }
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
+                vendor_id,
+                product_id,
+                target.interface_number,
+                target.alternate_setting,
+                err
+            );
+            return true;
+        }
     };
 
     crate::log!(
@@ -948,187 +1012,6 @@ async fn maybe_start_mass_storage(host: &mut USBHost, dev_info: &crab_usb::Devic
     }
 
     true
-}
-
-async fn try_mass_probe_concept(
-    host: &mut USBHost,
-    dev_info: &crab_usb::DeviceInfo,
-    vendor_id: u16,
-    product_id: u16,
-    target: super::mass::MassTarget,
-    concept: MassProbeConcept,
-    attempt: usize,
-    total: usize,
-) -> Result<(super::mass::MassProbeInfo, u8), u8> {
-    let mut device = match host.open_device(dev_info).await {
-        Ok(device) => device,
-        Err(err) => {
-            crate::log!(
-                "crabusb: mass {:04X}:{:04X} concept {}/{} '{}' open failed: {:?}\n",
-                vendor_id,
-                product_id,
-                attempt,
-                total,
-                concept.name,
-                err
-            );
-            return Err(0);
-        }
-    };
-
-    let slot = device.slot_id();
-
-    if let Err(err) = device
-        .ep_ctrl()
-        .set_configuration(target.configuration_value)
-        .await
-    {
-        crate::log!(
-            "crabusb: mass {:04X}:{:04X} concept {}/{} '{}' set cfg={} failed: {:?}\n",
-            vendor_id,
-            product_id,
-            attempt,
-            total,
-            concept.name,
-            target.configuration_value,
-            err
-        );
-    }
-
-    match claim_interface(
-        &mut device,
-        target.interface_number,
-        target.alternate_setting,
-    )
-    .await
-    {
-        Ok(mut interface) => {
-            crate::log!(
-                "crabusb: mass {:04X}:{:04X} concept {}/{} '{}' ownership if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={}\n",
-                vendor_id,
-                product_id,
-                attempt,
-                total,
-                concept.name,
-                interface.interface_number(),
-                interface.alternate_setting(),
-                target.configuration_value,
-                target.bulk_in,
-                target.bulk_out,
-                target.bulk_in_max_packet_size,
-                target.bulk_out_max_packet_size
-            );
-
-            if concept.settle_after_claim_ms != 0 {
-                Timer::after(EmbassyDuration::from_millis(concept.settle_after_claim_ms)).await;
-            }
-
-            let Some((mut bulk_out, mut bulk_in)) = open_mass_bulk_endpoints(
-                &mut interface,
-                vendor_id,
-                product_id,
-                target.bulk_out,
-                target.bulk_in,
-            )
-            .await
-            else {
-                if let Err(close_err) = interface.device().debug_close_slot().await {
-                    crate::log!(
-                        "crabusb: mass {:04X}:{:04X} concept {}/{} '{}' close failed: {:?}\n",
-                        vendor_id,
-                        product_id,
-                        attempt,
-                        total,
-                        concept.name,
-                        close_err
-                    );
-                }
-                return Err(slot);
-            };
-
-            crate::log!(
-                "crabusb: mass {:04X}:{:04X} concept {}/{} '{}' endpoint wiring bulk_out={} bulk_in={}\n",
-                vendor_id,
-                product_id,
-                attempt,
-                total,
-                concept.name,
-                true,
-                true
-            );
-
-            if concept.settle_after_open_ms != 0 {
-                Timer::after(EmbassyDuration::from_millis(concept.settle_after_open_ms)).await;
-            }
-
-            match probe_mass_bot(
-                interface.device(),
-                &mut bulk_out,
-                &mut bulk_in,
-                target.interface_number,
-                target.bulk_out,
-                target.bulk_in,
-                concept,
-            )
-            .await
-            {
-                Ok(info) => {
-                    if let Err(close_err) = interface.device().debug_close_slot().await {
-                        crate::log!(
-                            "crabusb: mass {:04X}:{:04X} concept {}/{} '{}' close failed: {:?}\n",
-                            vendor_id,
-                            product_id,
-                            attempt,
-                            total,
-                            concept.name,
-                            close_err
-                        );
-                    }
-                    Ok((info, slot))
-                }
-                Err(err) => {
-                    crate::log!(
-                        "crabusb: mass {:04X}:{:04X} concept {}/{} '{}' failed: {:?}\n",
-                        vendor_id,
-                        product_id,
-                        attempt,
-                        total,
-                        concept.name,
-                        err
-                    );
-                    if let Err(close_err) = interface.device().debug_close_slot().await {
-                        crate::log!(
-                            "crabusb: mass {:04X}:{:04X} concept {}/{} '{}' close failed: {:?}\n",
-                            vendor_id,
-                            product_id,
-                            attempt,
-                            total,
-                            concept.name,
-                            close_err
-                        );
-                    }
-                    if attempt < total {
-                        Timer::after(EmbassyDuration::from_millis(MASS_PROBE_RETRY_DELAY_MS)).await;
-                    }
-                    Err(slot)
-                }
-            }
-        }
-        Err(err) => {
-            crate::log!(
-                "crabusb: mass {:04X}:{:04X} concept {}/{} '{}' claim failed if#{} alt={}: {:?}\n",
-                vendor_id,
-                product_id,
-                attempt,
-                total,
-                concept.name,
-                target.interface_number,
-                target.alternate_setting,
-                err
-            );
-            Err(slot)
-        }
-    }
 }
 
 async fn log_opened_device_graph(
