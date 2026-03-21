@@ -197,7 +197,10 @@ fn pick_midi_target(
     None
 }
 
-async fn with_timeout_or_none<F: core::future::Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {
+async fn with_timeout_or_none<F: core::future::Future>(
+    fut: F,
+    timeout_ms: u64,
+) -> Option<F::Output> {
     let mut fut = core::pin::pin!(fut);
     let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(timeout_ms)));
 
@@ -218,7 +221,8 @@ fn handle_midi_packets(adapter: MidiAdapterKind, sample: &[u8]) {
         let pkt = [chunk[0], chunk[1], chunk[2], chunk[3]];
         if adapter == MidiAdapterKind::CasioCtk3500 {
             if is_active_sensing_heartbeat(&pkt) {
-                let now = crate::time::unix_time_seconds().unwrap_or_else(crate::time::uptime_seconds);
+                let now =
+                    crate::time::unix_time_seconds().unwrap_or_else(crate::time::uptime_seconds);
                 PIANO_LAST_HEARTBEAT_SECS.store(now, Ordering::Release);
                 continue;
             }

@@ -52,7 +52,7 @@ impl NetDevice for ActiveDevice {
     fn pop_rx(&mut self) -> Option<alloc::vec::Vec<u8>> {
         match self {
             ActiveDevice::Virtio(dev) => dev.pop_rx(),
-           // ActiveDevice::E1000(dev) => dev.pop_rx(),
+            // ActiveDevice::E1000(dev) => dev.pop_rx(),
             ActiveDevice::R8125(dev) => dev.pop_rx(),
         }
     }
@@ -60,7 +60,7 @@ impl NetDevice for ActiveDevice {
     fn rx_queue_len(&self) -> usize {
         match self {
             ActiveDevice::Virtio(dev) => dev.rx_queue_len(),
-        //   ActiveDevice::E1000(dev) => dev.rx_queue_len(),
+            //   ActiveDevice::E1000(dev) => dev.rx_queue_len(),
             ActiveDevice::R8125(dev) => dev.rx_queue_len(),
         }
     }
@@ -68,7 +68,7 @@ impl NetDevice for ActiveDevice {
     fn drain_rx(&mut self, limit: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
         match self {
             ActiveDevice::Virtio(dev) => dev.drain_rx(limit),
-          //  ActiveDevice::E1000(dev) => dev.drain_rx(limit),
+            //  ActiveDevice::E1000(dev) => dev.drain_rx(limit),
             ActiveDevice::R8125(dev) => dev.drain_rx(limit),
         }
     }
@@ -76,7 +76,7 @@ impl NetDevice for ActiveDevice {
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         match self {
             ActiveDevice::Virtio(dev) => dev.transmit(frame),
-          //  ActiveDevice::E1000(dev) => dev.transmit(frame),
+            //  ActiveDevice::E1000(dev) => dev.transmit(frame),
             ActiveDevice::R8125(dev) => dev.transmit(frame),
         }
     }
@@ -84,7 +84,7 @@ impl NetDevice for ActiveDevice {
     fn link_state(&self) -> crate::net::device::LinkState {
         match self {
             ActiveDevice::Virtio(dev) => dev.link_state(),
-          //  ActiveDevice::E1000(dev) => dev.link_state(),
+            //  ActiveDevice::E1000(dev) => dev.link_state(),
             ActiveDevice::R8125(dev) => dev.link_state(),
         }
     }
@@ -96,7 +96,7 @@ pub fn device_name_at(index: usize) -> Option<&'static str> {
     let dev = guard.get(index)?;
     Some(match dev {
         ActiveDevice::Virtio(_) => "Virtio Net",
-       // ActiveDevice::E1000(_) => "Intel E1000",
+        // ActiveDevice::E1000(_) => "Intel E1000",
         ActiveDevice::R8125(_) => "Realtek RTL8125",
     })
 }
@@ -106,7 +106,7 @@ pub fn pci_device_at(index: usize) -> Option<PciDevice> {
     let dev = guard.get(index)?;
     match dev {
         ActiveDevice::Virtio(n) => n.pci_device(),
-      //  ActiveDevice::E1000(n) => n.pci_device(),
+        //  ActiveDevice::E1000(n) => n.pci_device(),
         ActiveDevice::R8125(n) => n.pci_device(),
     }
 }

@@ -5,8 +5,8 @@ use v::vnet as api;
 
 use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
 use super::tlb_helper::{TlbTable, print_table};
-use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::r::net::VNet;
+use crate::shell2::shell2_cmd::ParseOutcome;
 
 const NET_MENU_HEADERS: [&str; 2] = ["Subcommand", "Arguments"];
 const NET_MENU_ROWS: [[&str; 2]; 3] = [

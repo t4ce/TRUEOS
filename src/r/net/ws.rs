@@ -13,8 +13,8 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 use v::vnet::{ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
 
-use crate::time::unix_time_seconds;
 use crate::r::net::{NetProfile, VNet};
+use crate::time::unix_time_seconds;
 
 static WS_SEQ: AtomicU32 = AtomicU32::new(1);
 const RX_BUF_SIZE: usize = 4096;

@@ -424,11 +424,7 @@ pub fn draw_atlas_text_in_frame_alpha(
         .len()
         .saturating_mul(core::mem::size_of::<TexVertex>());
     let rc = unsafe {
-        crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
-            ATLAS_TEX_ID,
-            ptr,
-            len,
-        )
+        crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(ATLAS_TEX_ID, ptr, len)
     };
     rc == 0
 }

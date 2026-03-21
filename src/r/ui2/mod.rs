@@ -1640,8 +1640,7 @@ fn queue_browser_window_viewport(content_id: HostedContentId, content: Ui2Rect) 
 fn texture_is_drawable(tex_id: u32) -> bool {
     const ASYNC_TEX_STATUS_READY: i32 = 2;
     tex_id != 0
-        && crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id)
-            == ASYNC_TEX_STATUS_READY
+        && crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id) == ASYNC_TEX_STATUS_READY
 }
 
 fn hosted_browser_has_drawable_content(snapshot: &UiHostedSurfaceState) -> bool {
