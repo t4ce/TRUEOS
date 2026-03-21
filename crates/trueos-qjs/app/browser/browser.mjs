@@ -2106,6 +2106,8 @@ runtime.host.__trueosBrowser = {
       && (Number(prevContentRect.x || 0) !== nextContentRect.x
         || Number(prevContentRect.y || 0) !== nextContentRect.y);
     if (contentOnlyMoved) {
+      runtime.host.__trueosBrowserViewport = nextViewport;
+      runtime.host.__trueosBrowserContentRect = nextContentRect;
       return true;
     }
     runtime.host.__trueosBrowserViewport = nextViewport;

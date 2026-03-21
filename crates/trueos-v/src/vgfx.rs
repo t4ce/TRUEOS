@@ -21,6 +21,11 @@ pub fn upload_svg_to_texture_async(tex_id: u32, svg: &[u8]) -> i32 {
 }
 
 #[inline]
+pub fn probe_upload_svg_to_texture_async(tex_id: u32) -> i32 {
+    unsafe { vcabi::trueos_cabi_gfx_upload_texture_svg_async(tex_id, core::ptr::null(), 0) }
+}
+
+#[inline]
 pub fn texture_status(tex_id: u32) -> i32 {
     unsafe { vcabi::trueos_cabi_gfx_texture_status(tex_id) }
 }

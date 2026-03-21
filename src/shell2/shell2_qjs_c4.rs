@@ -17,7 +17,6 @@ const COLOR_KEY: (u8, u8, u8) = (110, 160, 245);
 const COLOR_PUNCT: (u8, u8, u8) = (140, 140, 140);
 const PRETTY_MAX_BYTES: usize = 2 * 1024;
 const PRETTY_MAX_TOKENS: usize = 512;
-const PRETTY_MAX_DEPTH: usize = 24;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FormatFallback {
@@ -34,17 +33,25 @@ enum LexTokenKind {
     False,
     Null,
     Undefined,
+    Function,
+    Async,
     Let,
     Const,
     Var,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
     Dot,
     Comma,
+    Colon,
     Semi,
     Eq,
     EqEq,
     EqEqEq,
+    Arrow,
     Plus,
     Minus,
     Star,
@@ -170,6 +177,8 @@ impl<'a> Lexer<'a> {
             "let" => LexTokenKind::Let,
             "const" => LexTokenKind::Const,
             "var" => LexTokenKind::Var,
+            "function" => LexTokenKind::Function,
+            "async" => LexTokenKind::Async,
             "true" => LexTokenKind::True,
             "false" => LexTokenKind::False,
             "null" => LexTokenKind::Null,
@@ -254,6 +263,26 @@ impl<'a> Lexer<'a> {
                 start,
                 end: self.pos,
             },
+            b'{' => Token {
+                kind: LexTokenKind::LBrace,
+                start,
+                end: self.pos,
+            },
+            b'}' => Token {
+                kind: LexTokenKind::RBrace,
+                start,
+                end: self.pos,
+            },
+            b'[' => Token {
+                kind: LexTokenKind::LBracket,
+                start,
+                end: self.pos,
+            },
+            b']' => Token {
+                kind: LexTokenKind::RBracket,
+                start,
+                end: self.pos,
+            },
             b'.' => Token {
                 kind: LexTokenKind::Dot,
                 start,
@@ -261,6 +290,11 @@ impl<'a> Lexer<'a> {
             },
             b',' => Token {
                 kind: LexTokenKind::Comma,
+                start,
+                end: self.pos,
+            },
+            b':' => Token {
+                kind: LexTokenKind::Colon,
                 start,
                 end: self.pos,
             },
@@ -290,7 +324,14 @@ impl<'a> Lexer<'a> {
                 end: self.pos,
             },
             b'=' => {
-                if self.peek() == Some(b'=') {
+                if self.peek() == Some(b'>') {
+                    self.pos += 1;
+                    Token {
+                        kind: LexTokenKind::Arrow,
+                        start,
+                        end: self.pos,
+                    }
+                } else if self.peek() == Some(b'=') {
                     self.pos += 1;
                     if self.peek() == Some(b'=') {
                         self.pos += 1;
@@ -759,11 +800,20 @@ pub(crate) fn analyze(source: &str) -> Analysis {
                 }
             }
             Err(diag) => {
+                let token_refs = to_token_refs(&tokens);
+                let mut token_refs = token_refs;
+                token_refs.push(TokenRef {
+                    kind: C4TokenKind::Unknown,
+                    span: Span {
+                        start: diag.start,
+                        end: diag.end,
+                    },
+                });
                 return Analysis {
                     schema_version: super::shell2_qjs_c4_contract::version(),
                     hint: ResultHint::Unknown,
                     symbols: Vec::new(),
-                    tokens: Vec::new(),
+                    tokens: token_refs,
                     nodes: Vec::new(),
                     diagnostic: Some(diag),
                 };
@@ -803,17 +853,25 @@ fn to_token_kind(kind: LexTokenKind) -> C4TokenKind {
         LexTokenKind::False => C4TokenKind::False,
         LexTokenKind::Null => C4TokenKind::Null,
         LexTokenKind::Undefined => C4TokenKind::Undefined,
+        LexTokenKind::Function => C4TokenKind::Function,
+        LexTokenKind::Async => C4TokenKind::Async,
         LexTokenKind::Let => C4TokenKind::Let,
         LexTokenKind::Const => C4TokenKind::Const,
         LexTokenKind::Var => C4TokenKind::Var,
         LexTokenKind::LParen => C4TokenKind::LParen,
         LexTokenKind::RParen => C4TokenKind::RParen,
+        LexTokenKind::LBrace => C4TokenKind::LBrace,
+        LexTokenKind::RBrace => C4TokenKind::RBrace,
+        LexTokenKind::LBracket => C4TokenKind::LBracket,
+        LexTokenKind::RBracket => C4TokenKind::RBracket,
         LexTokenKind::Dot => C4TokenKind::Dot,
         LexTokenKind::Comma => C4TokenKind::Comma,
+        LexTokenKind::Colon => C4TokenKind::Colon,
         LexTokenKind::Semi => C4TokenKind::Semi,
         LexTokenKind::Eq => C4TokenKind::Assign,
         LexTokenKind::EqEq => C4TokenKind::Eq,
         LexTokenKind::EqEqEq => C4TokenKind::StrictEq,
+        LexTokenKind::Arrow => C4TokenKind::Arrow,
         LexTokenKind::Plus => C4TokenKind::Plus,
         LexTokenKind::Minus => C4TokenKind::Minus,
         LexTokenKind::Star => C4TokenKind::Star,
@@ -906,9 +964,8 @@ fn hinted_or_text_kind(hint: ResultHint, text: &str) -> ResultHint {
     ResultHint::Unknown
 }
 
-fn style_punct(ch: char) -> String {
-    let glyph = alloc::format!("{}", ch);
-    alloc::format!("{}", ecma48::style(glyph.as_str()).fg(COLOR_PUNCT).dim())
+fn style_punct(text: &str) -> String {
+    alloc::format!("{}", ecma48::style(text).fg(COLOR_PUNCT).dim())
 }
 
 fn style_string(text: &str) -> String {
@@ -933,34 +990,6 @@ fn style_function(text: &str) -> String {
 
 fn style_function_name(text: &str) -> String {
     alloc::format!("{}", ecma48::style(text).fg(COLOR_FUNCTION).bold())
-}
-
-fn style_objectish(text: &str) -> String {
-    alloc::format!("{}", ecma48::style(text).fg(COLOR_OBJECTISH))
-}
-
-fn next_non_ws_byte(text: &str, mut idx: usize) -> Option<u8> {
-    let bytes = text.as_bytes();
-    while idx < bytes.len() {
-        let b = bytes[idx];
-        if !matches!(b, b' ' | b'\t' | b'\r' | b'\n') {
-            return Some(b);
-        }
-        idx += 1;
-    }
-    None
-}
-
-fn next_non_ws_index(text: &str, mut idx: usize) -> Option<usize> {
-    let bytes = text.as_bytes();
-    while idx < bytes.len() {
-        let b = bytes[idx];
-        if !matches!(b, b' ' | b'\t' | b'\r' | b'\n') {
-            return Some(idx);
-        }
-        idx += 1;
-    }
-    None
 }
 
 fn is_special_number_text(text: &str) -> bool {
@@ -992,173 +1021,134 @@ fn is_bigint_text(text: &str) -> bool {
         })
 }
 
-fn looks_like_async_function(text: &str, after_async: usize) -> bool {
-    let Some(next_idx) = next_non_ws_index(text, after_async) else {
-        return false;
-    };
-
-    let rest = &text[next_idx..];
-    rest.starts_with("function") || rest.starts_with('(') || rest.contains("=>")
+fn token_text<'a>(text: &'a str, span: &Span) -> Option<&'a str> {
+    if span.start > span.end || span.end > text.len() {
+        return None;
+    }
+    if !text.is_char_boundary(span.start) || !text.is_char_boundary(span.end) {
+        return None;
+    }
+    Some(&text[span.start..span.end])
 }
 
-fn format_structured_text(text: &str) -> Result<String, FormatFallback> {
+fn prev_token(tokens: &[TokenRef], idx: usize) -> Option<&TokenRef> {
+    tokens[..idx]
+        .iter()
+        .rev()
+        .find(|token| token.kind != C4TokenKind::Eof)
+}
+
+fn next_token(tokens: &[TokenRef], idx: usize) -> Option<&TokenRef> {
+    tokens[idx + 1..]
+        .iter()
+        .find(|token| token.kind != C4TokenKind::Eof)
+}
+
+fn token_has_covering_node(analysis: &Analysis, idx: usize, kind: ExprNodeKind) -> bool {
+    let span = &analysis.tokens[idx].span;
+    analysis
+        .nodes
+        .iter()
+        .any(|node| node.kind == kind && node.span.start <= span.start && node.span.end >= span.end)
+}
+
+fn style_token_segment(text: &str, analysis: &Analysis, idx: usize) -> Option<String> {
+    let tokens = &analysis.tokens;
+    let token = &tokens[idx];
+    let raw = token_text(text, &token.span)?;
+    let prev = prev_token(tokens, idx);
+    let next = next_token(tokens, idx);
+
+    Some(match token.kind {
+        C4TokenKind::String => {
+            if matches!(next.map(|token| token.kind), Some(C4TokenKind::Colon)) {
+                style_key(raw)
+            } else {
+                style_string(raw)
+            }
+        }
+        C4TokenKind::Number => style_number(raw),
+        C4TokenKind::True | C4TokenKind::False | C4TokenKind::Null | C4TokenKind::Undefined => {
+            style_boolish(raw)
+        }
+        C4TokenKind::Function | C4TokenKind::Async => style_function(raw),
+        C4TokenKind::Arrow => style_function(raw),
+        C4TokenKind::Ident => {
+            if matches!(next.map(|token| token.kind), Some(C4TokenKind::Colon)) {
+                style_key(raw)
+            } else if matches!(prev.map(|token| token.kind), Some(C4TokenKind::Function))
+                && matches!(next.map(|token| token.kind), Some(C4TokenKind::LParen))
+            {
+                style_function_name(raw)
+            } else if matches!(prev.map(|token| token.kind), Some(C4TokenKind::Dot))
+                || token_has_covering_node(analysis, idx, ExprNodeKind::MemberAccess)
+            {
+                alloc::format!("{}", ecma48::style(raw).fg(COLOR_OBJECTISH))
+            } else {
+                String::from(raw)
+            }
+        }
+        C4TokenKind::LParen
+        | C4TokenKind::RParen
+        | C4TokenKind::LBrace
+        | C4TokenKind::RBrace
+        | C4TokenKind::LBracket
+        | C4TokenKind::RBracket
+        | C4TokenKind::Dot
+        | C4TokenKind::Comma
+        | C4TokenKind::Colon
+        | C4TokenKind::Semi
+        | C4TokenKind::Assign
+        | C4TokenKind::Eq
+        | C4TokenKind::StrictEq
+        | C4TokenKind::Plus
+        | C4TokenKind::Minus
+        | C4TokenKind::Star
+        | C4TokenKind::Slash => style_punct(raw),
+        C4TokenKind::Let | C4TokenKind::Const | C4TokenKind::Var => {
+            alloc::format!("{}", ecma48::style(raw).fg(COLOR_OBJECTISH).bold())
+        }
+        C4TokenKind::Eof | C4TokenKind::Unknown => String::from(raw),
+    })
+}
+
+fn format_contract_tokens(text: &str, analysis: &Analysis) -> Result<String, FormatFallback> {
     if text.len() > PRETTY_MAX_BYTES {
         return Err(FormatFallback::LimitReached);
     }
+    if analysis.schema_version != super::shell2_qjs_c4_contract::version() {
+        return Err(FormatFallback::Unsupported);
+    }
 
-    let bytes = text.as_bytes();
     let mut out = String::new();
-    let mut idx = 0usize;
-    let mut depth = 0usize;
+    let mut cursor = 0usize;
     let mut tokens = 0usize;
-    let mut expect_function_name = false;
 
-    while idx < bytes.len() {
+    for idx in 0..analysis.tokens.len() {
+        let token = &analysis.tokens[idx];
+        if token.kind == C4TokenKind::Eof {
+            continue;
+        }
         if tokens >= PRETTY_MAX_TOKENS {
             return Err(FormatFallback::LimitReached);
         }
-
-        let b = bytes[idx];
-        match b {
-            b'{' | b'[' | b'(' => {
-                depth = depth.saturating_add(1);
-                if depth > PRETTY_MAX_DEPTH {
-                    return Err(FormatFallback::LimitReached);
-                }
-                if b == b'(' {
-                    expect_function_name = false;
-                }
-                out.push_str(style_punct(b as char).as_str());
-                idx += 1;
-                tokens += 1;
-            }
-            b'}' | b']' | b')' => {
-                depth = depth.saturating_sub(1);
-                out.push_str(style_punct(b as char).as_str());
-                idx += 1;
-                tokens += 1;
-            }
-            b'=' if idx + 1 < bytes.len() && bytes[idx + 1] == b'>' => {
-                expect_function_name = false;
-                out.push_str(style_function("=>").as_str());
-                idx += 2;
-                tokens += 1;
-            }
-            b':' | b',' => {
-                expect_function_name = false;
-                out.push_str(style_punct(b as char).as_str());
-                idx += 1;
-                tokens += 1;
-            }
-            b' ' | b'\t' | b'\r' | b'\n' => {
-                out.push(b as char);
-                idx += 1;
-            }
-            b'\'' | b'"' | b'`' => {
-                let quote = b;
-                let start = idx;
-                idx += 1;
-                let mut escaped = false;
-                while idx < bytes.len() {
-                    let cur = bytes[idx];
-                    idx += 1;
-                    if escaped {
-                        escaped = false;
-                        continue;
-                    }
-                    if cur == b'\\' {
-                        escaped = true;
-                        continue;
-                    }
-                    if cur == quote {
-                        break;
-                    }
-                }
-                let token = &text[start..idx.min(text.len())];
-                if next_non_ws_byte(text, idx) == Some(b':') {
-                    out.push_str(style_key(token).as_str());
-                } else {
-                    out.push_str(style_string(token).as_str());
-                }
-                tokens += 1;
-            }
-            b'0'..=b'9' => {
-                let start = idx;
-                idx += 1;
-                while idx < bytes.len()
-                    && matches!(bytes[idx], b'0'..=b'9' | b'.' | b'_' | b'x' | b'X' | b'o' | b'O' | b'b' | b'B' | b'a'..=b'f' | b'A'..=b'F')
-                {
-                    idx += 1;
-                }
-                if idx < bytes.len() && bytes[idx] == b'n' {
-                    idx += 1;
-                }
-                out.push_str(style_number(&text[start..idx]).as_str());
-                tokens += 1;
-            }
-            b'-' if idx + 1 < bytes.len() && bytes[idx + 1].is_ascii_digit() => {
-                let start = idx;
-                idx += 1;
-                while idx < bytes.len()
-                    && matches!(bytes[idx], b'0'..=b'9' | b'.' | b'_' | b'x' | b'X' | b'o' | b'O' | b'b' | b'B' | b'a'..=b'f' | b'A'..=b'F')
-                {
-                    idx += 1;
-                }
-                if idx < bytes.len() && bytes[idx] == b'n' {
-                    idx += 1;
-                }
-                out.push_str(style_number(&text[start..idx]).as_str());
-                tokens += 1;
-            }
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' => {
-                let start = idx;
-                idx += 1;
-                while idx < bytes.len()
-                    && matches!(bytes[idx], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$')
-                {
-                    idx += 1;
-                }
-                let token = &text[start..idx];
-                let next_byte = next_non_ws_byte(text, idx);
-                match token {
-                    "true" | "false" | "null" | "undefined" => {
-                        expect_function_name = false;
-                        out.push_str(style_boolish(token).as_str())
-                    }
-                    "function" => {
-                        expect_function_name = true;
-                        out.push_str(style_function(token).as_str());
-                    }
-                    "async" if looks_like_async_function(text, idx) => {
-                        out.push_str(style_function(token).as_str());
-                    }
-                    "NaN" | "Infinity" => {
-                        expect_function_name = false;
-                        out.push_str(style_number(token).as_str());
-                    }
-                    _ if next_byte == Some(b':') => {
-                        expect_function_name = false;
-                        out.push_str(style_key(token).as_str());
-                    }
-                    _ if expect_function_name && next_byte == Some(b'(') => {
-                        expect_function_name = false;
-                        out.push_str(style_function_name(token).as_str());
-                    }
-                    _ => {
-                        expect_function_name = false;
-                        out.push_str(token);
-                    }
-                }
-                tokens += 1;
-            }
-            _ => {
-                if !matches!(b, b'*') {
-                    expect_function_name = false;
-                }
-                out.push(b as char);
-                idx += 1;
-            }
+        if token.span.start < cursor {
+            return Err(FormatFallback::Unsupported);
         }
+        let raw = token_text(text, &token.span).ok_or(FormatFallback::Unsupported)?;
+        out.push_str(&text[cursor..token.span.start]);
+        out.push_str(
+            style_token_segment(text, analysis, idx)
+                .as_deref()
+                .unwrap_or(raw),
+        );
+        cursor = token.span.end;
+        tokens += 1;
+    }
+
+    out.push_str(&text[cursor..]);
+    if tokens == 0 {
+        return Err(FormatFallback::Unsupported);
     }
 
     Ok(out)
@@ -1177,20 +1167,7 @@ pub(crate) fn format_js_value_pretty(
         ResultHint::String => Ok(style_string(text)),
         ResultHint::Number => Ok(style_number(text)),
         ResultHint::Boolean | ResultHint::Null | ResultHint::Undefined => Ok(style_boolish(text)),
-        ResultHint::Function => {
-            if text.contains('(') || text.starts_with("function") || text.contains("=>") {
-                format_structured_text(text).or_else(|_| Ok(style_function(text)))
-            } else {
-                Ok(style_function(text))
-            }
-        }
-        ResultHint::Object => {
-            if text.starts_with('{') || text.starts_with('[') || text.starts_with('(') {
-                format_structured_text(text).or_else(|_| Ok(style_objectish(text)))
-            } else {
-                Ok(style_objectish(text))
-            }
-        }
+        ResultHint::Function | ResultHint::Object => format_contract_tokens(text, &analyze(text)),
         ResultHint::Unknown => Err(FormatFallback::Unsupported),
     }
 }
