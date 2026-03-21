@@ -1,0 +1,22 @@
+Exactly this is now the enforced shape.
+
+I changed the high-level interconnect so hosted region refresh is explicit browser contract, and ui2 only declares desired dynamic view:
+
+Browser owns region refresh explicitly:
+Added explicit hosted refresh operation in browser_ui.mjs:290
+Exported it through browser API in browser.mjs:2020
+Snapshot is now pure read:
+Removed refresh side effects from browser_ui.mjs:320
+getSurfaceState now reads state; it no longer silently performs refresh work
+Host sync follows contract order:
+Rust now calls refresh first, snapshot second in browser_task.rs:1033
+Hosted mode stays non-periodic:
+Autopaint remains disabled in hosted mode in browser.mjs:2000
+Validation after clean run:
+
+ui2/browser startup present
+no browser import failure
+no draw-rgb without active frame
+no draw-tex without active frame
+no end without active frame
+no SYSTEM lock timeout

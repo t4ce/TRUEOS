@@ -1,7 +1,10 @@
 pub mod memory;
 pub mod snapshot;
 pub mod store;
+pub mod vmm;
 pub mod vmx;
+
+use crate::hv::vmx::*;
 
 pub use trueos_vm::guest;
 pub use trueos_vm::stream;
@@ -26,13 +29,14 @@ use crate::shell2::{ShellBackend2, ShellIo2};
 use guest::*;
 use memory::*;
 use snapshot::*;
-use vmx::*;
+use vmm::VmManager;
 
 const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
 const HV_LOG_CAP: usize = 64;
 const HV_LOG_LINE: usize = 200;
 
+static VMM: VmManager = VmManager::new();
 static VM1_RUNNING: AtomicBool = AtomicBool::new(false);
 static VM1_STARTING: AtomicBool = AtomicBool::new(false);
 static VM1_STOP_REQ: AtomicBool = AtomicBool::new(false);
@@ -67,6 +71,7 @@ pub enum StartError {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StopError {
     UnsupportedVmId,
+    NotRunning,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -310,11 +315,26 @@ pub fn guest_boot_take() -> bool {
     VM1_GUEST_BOOT_ARMED.swap(false, Ordering::AcqRel)
 }
 
+#[derive(Copy, Clone)]
+struct LineageRecord {
+    level: u8,
+}
+
+impl LineageRecord {
+    const fn new() -> Self {
+        Self { level: 1 }
+    }
+}
+
 #[task(pool_size = 1)]
 async fn vm1_task(_io: &'static dyn ShellBackend2) {
+    let lineage_record = LineageRecord::new();
     VM1_STARTING.store(false, Ordering::Release);
     VM1_RUNNING.store(true, Ordering::Release);
-    hvlogf(format_args!("hv: vm1 lifecycle: starting"));
+    hvlogf(format_args!(
+        "hv: vm1-{} lifecycle: starting",
+        lineage_record.level
+    ));
 
     let guest = crate::limine::guest_kernel_bytes();
     let guest_len = guest.map(|b| b.len()).unwrap_or(0);
@@ -345,20 +365,25 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
         )),
         Err(e) => hvlogf(format_args!("hv: vm1 reporting: vmx smoke failed ({})", e)),
     }
-    match vmx_launch_once_with_ept() {
+    match vmx_launch_once_with_ept(lineage_record) {
         Ok(lr) => {
             capture_snapshot_meta(lr);
             if vmexit_is_preserve(lr) {
                 snapshot_on_preserve_exit();
             }
             hvlogf(format_args!(
-                "hv: vm1 reporting: vmlaunch entered={} launch_failed={} exit_reason=0x{:X} exit_qual=0x{:X} guest_rip=0x{:016X}",
-                lr.entered, lr.launch_failed, lr.exit_reason, lr.exit_qualification, lr.guest_rip
+                "hv: vm1-{} reporting: vmlaunch entered={} launch_failed={} exit_reason=0x{:X} exit_qual=0x{:X} guest_rip=0x{:016X}",
+                lineage_record.level,
+                lr.entered,
+                lr.launch_failed,
+                lr.exit_reason,
+                lr.exit_qualification,
+                lr.guest_rip
             ));
         }
         Err(e) => hvlogf(format_args!(
-            "hv: vm1 reporting: vmlaunch/ept failed ({})",
-            e
+            "hv: vm1-{} reporting: vmlaunch/ept failed ({})",
+            lineage_record.level, e
         )),
     }
 
@@ -428,7 +453,7 @@ fn vmx_caps() -> (bool, bool, bool, bool, bool) {
     )
 }
 
-fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
+fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResult, &'static str> {
     let caps = status();
     if !caps.vendor_intel || !caps.has_msr || !caps.has_vmx {
         return Err("vmx unsupported");
@@ -449,7 +474,7 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
         Cr4::write(Cr4Flags::from_bits_truncate(cr4));
     }
 
-    let basic = unsafe { Msr::new(vmx::IA32_VMX_BASIC).read() };
+    let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
     let revision = (basic & 0x7fff_ffff) as u32;
 
     let vmxon_va = unsafe { core::ptr::addr_of_mut!(VMXON_REGION.0) } as *mut u8;
@@ -468,15 +493,15 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
         revision, vmxon_pa, vmcs_pa
     ));
 
-    if !vmxon(vmxon_pa) {
+    if !crate::hv::vmx::vmxon(vmxon_pa) {
         return Err("vmxon");
     }
-    if !vmclear(vmcs_pa) {
-        let _ = vmxoff();
+    if !crate::hv::vmx::vmclear(vmcs_pa) {
+        let _ = crate::hv::vmx::vmxoff();
         return Err("vmclear");
     }
-    if !vmptrld(vmcs_pa) {
-        let _ = vmxoff();
+    if !crate::hv::vmx::vmptrld(vmcs_pa) {
+        let _ = crate::hv::vmx::vmxoff();
         return Err("vmptrld");
     }
 
@@ -487,7 +512,7 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
             return Err(e);
         }
     };
-    if let Err(e) = setup_vmcs_for_launch(eptp) {
+    if let Err(e) = setup_vmcs_for_launch(eptp, lineage_record) {
         let _ = vmxoff();
         return Err(e);
     }
@@ -500,16 +525,16 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
         hvlogf(format_args!(
             "hv: vm1 reporting: vmlaunch failed instr_err={} rip=0x{:016X}",
             lr.instr_err,
-            vmx::current_rip()
+            crate::hv::vmx::current_rip()
         ));
     } else if lr.entered != 0 {
         hvlogf(format_args!(
             "hv: vm1 reporting: first vmexit reason=0x{:X} qual=0x{:X} guest_rip=0x{:016X}",
             lr.exit_reason, lr.exit_qualification, lr.guest_rip
         ));
-        log_vmexit_interrupt_info("first");
+        crate::hv::vmx::log_vmexit_interrupt_info("first");
         if (lr.exit_reason & 0xFFFF) == 0xC {
-            match handle_hlt_exit_resume_once() {
+            match crate::hv::vmx::handle_hlt_exit_resume_once() {
                 Ok((lr2, rip_before, exit_len, rip_after)) => {
                     hvlogf(format_args!(
                         "hv: vm1 reporting: hlt-resume once rip=0x{:016X} len={} next=0x{:016X}",
@@ -519,14 +544,14 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
                         hvlogf(format_args!(
                             "hv: vm1 reporting: vmresume failed instr_err={} rip=0x{:016X}",
                             lr2.instr_err,
-                            vmx::current_rip()
+                            crate::hv::vmx::current_rip()
                         ));
                     } else if lr2.entered != 0 {
                         hvlogf(format_args!(
                             "hv: vm1 reporting: second vmexit reason=0x{:X} qual=0x{:X} guest_rip=0x{:016X}",
                             lr2.exit_reason, lr2.exit_qualification, lr2.guest_rip
                         ));
-                        log_vmexit_interrupt_info("second");
+                        crate::hv::vmx::log_vmexit_interrupt_info("second");
                     }
                     lr = lr2;
                 }
@@ -537,58 +562,63 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
             }
         }
     }
-    if !vmxoff() {
+    if !crate::hv::vmx::vmxoff() {
         return Err("vmxoff");
     }
     Ok(lr)
 }
 
-fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
-    let basic = unsafe { Msr::new(vmx::IA32_VMX_BASIC).read() };
+fn setup_vmcs_for_launch(eptp: u64, lineage_record: LineageRecord) -> Result<(), &'static str> {
+    let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
     let true_ctls = ((basic >> 55) & 1) != 0;
     let pin_msr = if true_ctls {
-        vmx::IA32_VMX_TRUE_PINBASED_CTLS
+        crate::hv::vmx::IA32_VMX_TRUE_PINBASED_CTLS
     } else {
         0x481
     };
     let proc_msr = if true_ctls {
-        vmx::IA32_VMX_TRUE_PROCBASED_CTLS
+        crate::hv::vmx::IA32_VMX_TRUE_PROCBASED_CTLS
     } else {
         0x482
     };
     let exit_msr = if true_ctls {
-        vmx::IA32_VMX_TRUE_EXIT_CTLS
+        crate::hv::vmx::IA32_VMX_TRUE_EXIT_CTLS
     } else {
         0x483
     };
     let entry_msr = if true_ctls {
-        vmx::IA32_VMX_TRUE_ENTRY_CTLS
+        crate::hv::vmx::IA32_VMX_TRUE_ENTRY_CTLS
     } else {
         0x484
     };
 
-    let pin = vmx::adjust_vmx_ctrl(pin_msr, 0);
-    let proc = vmx::adjust_vmx_ctrl(
+    let pin = crate::hv::vmx::adjust_vmx_ctrl(pin_msr, 0);
+    let proc = crate::hv::vmx::adjust_vmx_ctrl(
         proc_msr,
-        PROC_BASED_HLT_EXITING | PROC_BASED_ACTIVATE_SECONDARY,
+        PROC_BASED_HLT_EXITING | PROC_BASED_ACTIVATE_SECONDARY | PROC_BASED_VMX_PREEMPTION_TIMER,
     );
-    let proc2 = vmx::adjust_vmx_ctrl(vmx::IA32_VMX_PROCBASED_CTLS2, PROC2_BASED_ENABLE_EPT);
-    let exit = vmx::adjust_vmx_ctrl(exit_msr, EXIT_CTL_HOST_ADDR_SPACE_SIZE);
-    let entry = vmx::adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
+    let proc2 = crate::hv::vmx::adjust_vmx_ctrl(
+        crate::hv::vmx::IA32_VMX_PROCBASED_CTLS2,
+        PROC2_BASED_ENABLE_EPT,
+    );
+    let exit = crate::hv::vmx::adjust_vmx_ctrl(exit_msr, EXIT_CTL_HOST_ADDR_SPACE_SIZE);
+    let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
     hvlogf(format_args!(
-        "hv: vm1 reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X}",
-        pin as u32, proc as u32, proc2 as u32, exit as u32, entry as u32
+        "hv: vm1-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X}",
+        lineage_record.level, pin as u32, proc as u32, proc2 as u32, exit as u32, entry as u32
     ));
 
     if (proc & PROC_BASED_ACTIVATE_SECONDARY) == 0 {
         hvlogf(format_args!(
-            "hv: vm1 reporting: vmcs ctrl unsupported: primary bit ACTIVATE_SECONDARY not available"
+            "hv: vm1-{} reporting: vmcs ctrl unsupported: primary bit ACTIVATE_SECONDARY not available",
+            lineage_record.level
         ));
         return Err("secondary controls unsupported");
     }
     if (proc2 & PROC2_BASED_ENABLE_EPT) == 0 {
         hvlogf(format_args!(
-            "hv: vm1 reporting: vmcs ctrl unsupported: secondary bit ENABLE_EPT not available"
+            "hv: vm1-{} reporting: vmcs ctrl unsupported: secondary bit ENABLE_EPT not available",
+            lineage_record.level
         ));
         return Err("ept unsupported");
     }
@@ -606,7 +636,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     let host_cr0 = Cr0::read().bits();
     let host_cr4 = Cr4::read().bits();
     let guest_rflags = rflags::read().bits();
-    let mut tr_sel = vmx::read_tr_selector();
+    let mut tr_sel = crate::hv::vmx::read_tr_selector();
     let gdtr = sgdt();
     let idtr = sidt();
     let mut host_gdtr_base = gdtr.base.as_u64();
@@ -619,30 +649,32 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     let tr_base: u64;
 
     if tr_sel == 0 {
-        if let Some((busy_sel, 0xB)) = vmx::find_tss_selector(gdtr.base.as_u64(), gdtr.limit) {
+        if let Some((busy_sel, 0xB)) =
+            crate::hv::vmx::find_tss_selector(gdtr.base.as_u64(), gdtr.limit)
+        {
             tr_sel = busy_sel;
             hvlogf(format_args!(
-                "hv: vm1 reporting: host-state recovered: adopted busy tss selector=0x{:04X}",
-                tr_sel
+                "hv: vm1-{} reporting: host-state recovered: adopted busy tss selector=0x{:04X}",
+                lineage_record.level, tr_sel
             ));
         } else if let Some((avail_sel, 0x9)) =
-            vmx::find_tss_selector(gdtr.base.as_u64(), gdtr.limit)
+            crate::hv::vmx::find_tss_selector(gdtr.base.as_u64(), gdtr.limit)
         {
-            vmx::load_tr_selector(avail_sel);
-            tr_sel = vmx::read_tr_selector();
+            crate::hv::vmx::load_tr_selector(avail_sel);
+            tr_sel = crate::hv::vmx::read_tr_selector();
             if tr_sel == 0 {
                 hvlogf(format_args!(
-                    "hv: vm1 reporting: host-state invalid: tr selector null after ltr candidate=0x{:04X}",
-                    avail_sel
+                    "hv: vm1-{} reporting: host-state invalid: tr selector null after ltr candidate=0x{:04X}",
+                    lineage_record.level, avail_sel
                 ));
                 return Err("host tr ltr");
             }
             hvlogf(format_args!(
-                "hv: vm1 reporting: host-state recovered: loaded tr selector=0x{:04X}",
-                tr_sel
+                "hv: vm1-{} reporting: host-state recovered: loaded tr selector=0x{:04X}",
+                lineage_record.level, tr_sel
             ));
         } else {
-            let synth = vmx::synthesize_host_gdt_tss();
+            let synth = crate::hv::vmx::synthesize_host_gdt_tss();
             tr_sel = synth.tr_sel;
             host_gdtr_base = synth.gdt_base;
             host_cs = synth.cs_sel as u64;
@@ -653,47 +685,48 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
             host_gs = 0;
             tr_base = synth.tr_base;
             hvlogf(format_args!(
-                "hv: vm1 reporting: host-state recovered: using synthetic hv gdt+tss tr=0x{:04X} tr_base=0x{:016X}",
-                synth.tr_sel, synth.tr_base
+                "hv: vm1-{} reporting: host-state recovered: using synthetic hv gdt+tss tr=0x{:04X} tr_base=0x{:016X}",
+                lineage_record.level, synth.tr_sel, synth.tr_base
             ));
-            let fs_base = unsafe { Msr::new(vmx::IA32_FS_BASE).read() };
-            let gs_base = unsafe { Msr::new(vmx::IA32_GS_BASE).read() };
-            let sysenter_cs = unsafe { Msr::new(vmx::IA32_SYSENTER_CS).read() };
-            let sysenter_esp = unsafe { Msr::new(vmx::IA32_SYSENTER_ESP).read() };
-            let sysenter_eip = unsafe { Msr::new(vmx::IA32_SYSENTER_EIP).read() };
+            let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
+            let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
+            let sysenter_cs = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_CS).read() };
+            let sysenter_esp = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_ESP).read() };
+            let sysenter_eip = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_EIP).read() };
             let r0 = __cpuid(0);
             let r1 = __cpuid(1);
             let has_pat = (r1.edx & (1 << 16)) != 0;
             let has_perfmon = r0.eax >= 0xA && (__cpuid(0xA).eax & 0xFF) != 0;
             let pat = if has_pat {
-                unsafe { Msr::new(vmx::IA32_PAT).read() }
+                unsafe { Msr::new(crate::hv::vmx::IA32_PAT).read() }
             } else {
                 0x0007_0406_0007_0406
             };
             let perf_global = if has_perfmon {
-                unsafe { Msr::new(vmx::IA32_PERF_GLOBAL_CTRL).read() }
+                unsafe { Msr::new(crate::hv::vmx::IA32_PERF_GLOBAL_CTRL).read() }
             } else {
                 0
             };
-            let efer = unsafe { Msr::new(vmx::IA32_EFER).read() };
+            let efer = unsafe { Msr::new(crate::hv::vmx::IA32_EFER).read() };
             let host_tr = (tr_sel & !0x7) as u64;
             let host_sysenter_cs = sysenter_cs & 0xFFFF;
 
             if host_cs == 0 || host_ss == 0 || host_tr == 0 {
                 hvlogf(format_args!(
-                    "hv: vm1 reporting: host-state invalid selectors cs=0x{:04X} ss=0x{:04X} tr=0x{:04X}",
-                    host_cs as u16, host_ss as u16, host_tr as u16
+                    "hv: vm1-{} reporting: host-state invalid selectors cs=0x{:04X} ss=0x{:04X} tr=0x{:04X}",
+                    lineage_record.level, host_cs as u16, host_ss as u16, host_tr as u16
                 ));
                 return Err("host selectors");
             }
-            if !vmx::is_canonical(tr_base)
-                || !vmx::is_canonical(fs_base)
-                || !vmx::is_canonical(gs_base)
-                || !vmx::is_canonical(host_gdtr_base)
-                || !vmx::is_canonical(idtr.base.as_u64())
+            if !crate::hv::vmx::is_canonical(tr_base)
+                || !crate::hv::vmx::is_canonical(fs_base)
+                || !crate::hv::vmx::is_canonical(gs_base)
+                || !crate::hv::vmx::is_canonical(host_gdtr_base)
+                || !crate::hv::vmx::is_canonical(idtr.base.as_u64())
             {
                 hvlogf(format_args!(
-                    "hv: vm1 reporting: host-state invalid bases tr=0x{:016X} fs=0x{:016X} gs=0x{:016X} gdtr=0x{:016X} idtr=0x{:016X}",
+                    "hv: vm1-{} reporting: host-state invalid bases tr=0x{:016X} fs=0x{:016X} gs=0x{:016X} gdtr=0x{:016X} idtr=0x{:016X}",
+                    lineage_record.level,
                     tr_base,
                     fs_base,
                     gs_base,
@@ -703,8 +736,8 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
                 return Err("host bases");
             }
             hvlogf(format_args!(
-                "hv: vm1 reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
-                host_cs as u16, host_ss as u16, host_tr as u16, tr_base
+                "hv: vm1-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
+                lineage_record.level, host_cs as u16, host_ss as u16, host_tr as u16, tr_base
             ));
 
             vmwrite(VMCS_HOST_CR0, host_cr0)?;
@@ -815,58 +848,61 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     }
     if tr_sel == 0 {
         hvlogf(format_args!(
-            "hv: vm1 reporting: host-state invalid: tr selector remains null after recovery"
+            "hv: vm1-{} reporting: host-state invalid: tr selector remains null after recovery",
+            lineage_record.level
         ));
         return Err("host tr selector");
     }
-    tr_base = match vmx::tss_base_from_gdt(host_gdtr_base, tr_sel) {
+    tr_base = match crate::hv::vmx::tss_base_from_gdt(host_gdtr_base, tr_sel) {
         Some(v) => v,
         None => {
             hvlogf(format_args!(
-                "hv: vm1 reporting: host-state invalid: unable to resolve tss base from gdt"
+                "hv: vm1-{} reporting: host-state invalid: unable to resolve tss base from gdt",
+                lineage_record.level
             ));
             return Err("host tr base");
         }
     };
-    let fs_base = unsafe { Msr::new(vmx::IA32_FS_BASE).read() };
-    let gs_base = unsafe { Msr::new(vmx::IA32_GS_BASE).read() };
-    let sysenter_cs = unsafe { Msr::new(vmx::IA32_SYSENTER_CS).read() };
-    let sysenter_esp = unsafe { Msr::new(vmx::IA32_SYSENTER_ESP).read() };
-    let sysenter_eip = unsafe { Msr::new(vmx::IA32_SYSENTER_EIP).read() };
+    let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
+    let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
+    let sysenter_cs = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_CS).read() };
+    let sysenter_esp = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_ESP).read() };
+    let sysenter_eip = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_EIP).read() };
     let r0 = __cpuid(0);
     let r1 = __cpuid(1);
     let has_pat = (r1.edx & (1 << 16)) != 0;
     let has_perfmon = r0.eax >= 0xA && (__cpuid(0xA).eax & 0xFF) != 0;
     let pat = if has_pat {
-        unsafe { Msr::new(vmx::IA32_PAT).read() }
+        unsafe { Msr::new(crate::hv::vmx::IA32_PAT).read() }
     } else {
         0x0007_0406_0007_0406
     };
     let perf_global = if has_perfmon {
-        unsafe { Msr::new(vmx::IA32_PERF_GLOBAL_CTRL).read() }
+        unsafe { Msr::new(crate::hv::vmx::IA32_PERF_GLOBAL_CTRL).read() }
     } else {
         0
     };
-    let efer = unsafe { Msr::new(vmx::IA32_EFER).read() };
+    let efer = unsafe { Msr::new(crate::hv::vmx::IA32_EFER).read() };
 
     let host_tr = (tr_sel & !0x7) as u64;
     let host_sysenter_cs = sysenter_cs & 0xFFFF;
 
     if host_cs == 0 || host_ss == 0 || host_tr == 0 {
         hvlogf(format_args!(
-            "hv: vm1 reporting: host-state invalid selectors cs=0x{:04X} ss=0x{:04X} tr=0x{:04X}",
-            host_cs as u16, host_ss as u16, host_tr as u16
+            "hv: vm1-{} reporting: host-state invalid selectors cs=0x{:04X} ss=0x{:04X} tr=0x{:04X}",
+            lineage_record.level, host_cs as u16, host_ss as u16, host_tr as u16
         ));
         return Err("host selectors");
     }
-    if !vmx::is_canonical(tr_base)
-        || !vmx::is_canonical(fs_base)
-        || !vmx::is_canonical(gs_base)
-        || !vmx::is_canonical(host_gdtr_base)
-        || !vmx::is_canonical(idtr.base.as_u64())
+    if !crate::hv::vmx::is_canonical(tr_base)
+        || !crate::hv::vmx::is_canonical(fs_base)
+        || !crate::hv::vmx::is_canonical(gs_base)
+        || !crate::hv::vmx::is_canonical(host_gdtr_base)
+        || !crate::hv::vmx::is_canonical(idtr.base.as_u64())
     {
         hvlogf(format_args!(
-            "hv: vm1 reporting: host-state invalid bases tr=0x{:016X} fs=0x{:016X} gs=0x{:016X} gdtr=0x{:016X} idtr=0x{:016X}",
+            "hv: vm1-{} reporting: host-state invalid bases tr=0x{:016X} fs=0x{:016X} gs=0x{:016X} gdtr=0x{:016X} idtr=0x{:016X}",
+            lineage_record.level,
             tr_base,
             fs_base,
             gs_base,
@@ -876,8 +912,8 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
         return Err("host bases");
     }
     hvlogf(format_args!(
-        "hv: vm1 reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
-        host_cs as u16, host_ss as u16, host_tr as u16, tr_base
+        "hv: vm1-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
+        lineage_record.level, host_cs as u16, host_ss as u16, host_tr as u16, tr_base
     ));
 
     let (host_cr3, _) = Cr3::read();

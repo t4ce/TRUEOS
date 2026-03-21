@@ -1,7 +1,9 @@
 pub use v::vclock;
+pub use v::env;
 pub use v::vfs;
 pub use v::vgfx;
 pub use v::vinput;
 pub use v::vnet;
 pub use v::vnetfs;
+pub use v::vshell;
 pub use v::vsys;

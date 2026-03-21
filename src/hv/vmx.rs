@@ -4,8 +4,8 @@ use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use x86_64::registers::model_specific::Msr;
 use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
-use super::hvlogf;
 use crate::hv::guest;
+use crate::hv::hvlogf;
 
 // MSR indices
 pub const IA32_FEATURE_CONTROL: u32 = 0x3A;
@@ -133,6 +133,7 @@ pub const VMCS_VM_INSTRUCTION_ERROR: u64 = 0x4400;
 pub const VMCS_VMEXIT_GUEST_RIP: u64 = 0x681E;
 
 pub const PROC_BASED_HLT_EXITING: u64 = 1 << 7;
+pub const PROC_BASED_VMX_PREEMPTION_TIMER: u64 = 1 << 6;
 pub const PROC_BASED_ACTIVATE_SECONDARY: u64 = 1 << 31;
 pub const PROC2_BASED_ENABLE_EPT: u64 = 1 << 1;
 pub const EXIT_CTL_HOST_ADDR_SPACE_SIZE: u64 = 1 << 9;

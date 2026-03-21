@@ -1,7 +1,6 @@
 use core::mem::size_of;
 
 use super::hvlogf;
-use crate::hv::vmx;
 use spin::Mutex;
 
 // Guest memory constants
