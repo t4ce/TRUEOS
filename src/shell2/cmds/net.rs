@@ -9,8 +9,9 @@ use crate::r::net::VNet;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const NET_MENU_HEADERS: [&str; 2] = ["Subcommand", "Arguments"];
-const NET_MENU_ROWS: [[&str; 2]; 3] = [
+const NET_MENU_ROWS: [[&str; 2]; 4] = [
     ["icmp", "<target> [index|vid:pid|bb:dd.f]"],
+    ["irc", "<host> [#channel]"],
     ["nic", "[index|vid:pid|bb:dd.f]"],
     ["hostname", "[name]"],
 ];
@@ -211,6 +212,89 @@ fn cmd_net_icmp(
     });
 }
 
+fn cmd_net_irc(
+    io: &'static dyn ShellBackend2,
+    host: &str,
+    channel: Option<&str>,
+    extra: Option<&str>,
+) {
+    if host.is_empty() || extra.is_some() {
+        line(io, "net: usage `net irc <host> [#channel]`");
+        return;
+    }
+
+    let mut server: heapless::String<128> = heapless::String::new();
+    if server.push_str(host).is_err() {
+        line(io, "net irc: host too long");
+        return;
+    }
+
+    let mut chan: Option<heapless::String<64>> = None;
+    if let Some(ch) = channel {
+        let mut s: heapless::String<64> = heapless::String::new();
+        if s.push_str(ch).is_err() {
+            line(io, "net irc: channel too long");
+            return;
+        }
+        chan = Some(s);
+    }
+
+    crate::wait::spawn_and_wait_local(async move {
+        use crate::r::net::cli::irc::{IRC_DEFAULT_PORT, IrcError, IrcSession};
+
+        let msg = alloc::format!("irc: connecting {}:{}", server.as_str(), IRC_DEFAULT_PORT);
+        line(io, msg.as_str());
+
+        let mut session = match IrcSession::connect(
+            server.as_str(),
+            IRC_DEFAULT_PORT,
+            crate::r::net::NetProfile::default(),
+            10_000,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                let msg = alloc::format!("irc: connect failed {:?}", e);
+                line(io, msg.as_str());
+                return;
+            }
+        };
+
+        if let Err(e) = session
+            .register("trueos", "trueos", "TrueOS kernel", 15_000)
+            .await
+        {
+            let msg = alloc::format!("irc: register failed {:?}", e);
+            line(io, msg.as_str());
+            let _ = session.quit("bye", 1_000).await;
+            return;
+        }
+        line(io, "irc: registered");
+
+        if let Some(ch) = chan.as_ref() {
+            let msg = alloc::format!("irc: joining {}", ch.as_str());
+            line(io, msg.as_str());
+            if let Err(e) = session.join(ch.as_str()) {
+                let msg = alloc::format!("irc: join failed {:?}", e);
+                line(io, msg.as_str());
+            }
+        }
+
+        let deadline = Instant::now() + EmbassyDuration::from_secs(10);
+        while Instant::now() < deadline {
+            match session.recv_line(500).await {
+                Ok(Some(l)) => line(io, l.as_str()),
+                Ok(None) => {}
+                Err(_) => break,
+            }
+        }
+
+        let _ = session.quit("bye", 2_000).await;
+        line(io, "irc: done");
+    });
+}
+
 fn cmd_net_nic(io: &'static dyn ShellBackend2, selector: Option<&str>, extra: Option<&str>) {
     if extra.is_some() {
         line(io, "net: usage `net nic [index|vid:pid|bb:dd.f]`");
@@ -329,6 +413,12 @@ pub(crate) fn try_parse(
             let selector = args.next();
             let extra = args.next();
             cmd_net_icmp(io, target, selector, extra);
+        }
+        Some("irc") => {
+            let host = args.next().unwrap_or("");
+            let channel = args.next();
+            let extra = args.next();
+            cmd_net_irc(io, host, channel, extra);
         }
         Some("nic") => {
             let selector = args.next();

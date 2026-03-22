@@ -3,6 +3,7 @@ pub mod ftp;
 pub mod html;
 pub mod http;
 pub mod https;
+pub mod irc;
 pub mod json;
 pub mod ntp;
 pub mod ping;
