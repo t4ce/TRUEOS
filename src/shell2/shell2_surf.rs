@@ -80,47 +80,25 @@ pub(crate) fn try_file_reference(line: &str) -> Option<String> {
 }
 
 pub(crate) fn load_inline_html(io: &'static dyn ShellBackend2, html: String) {
-    /*
-    if !trueos_qjs::browser_task::queue_set_html_with_url(
-        html,
-        Some(String::from("trueos://surf/inline")),
-    ) {
-        print_shell_line(io, "surf: browser not running");
-        return;
-    }
-
-    print_shell_line(io, "surf: inline html loaded");
-    */
+    let _ = crate::tst_html_shack::get_ready_inline_html(html);
+    print_shell_line(io, "surf: inline html queued");
 }
 
 pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str) {
-    let path = normalize_file_reference(file_ref);
-    let bytes = match crate::r::io::kfs::read_file(path.as_str()) {
-        Ok(bytes) => bytes,
-        Err(crate::r::io::kfs::FsError::NoRoot) => {
+    match crate::tst_html_shack::get_ready_file_html(file_ref) {
+        Ok(_) => {
+            print_shell_line(io, "surf: file html queued");
+        }
+        Err(crate::tst_html_shack::HtmlShackFileError::NoRoot) => {
             print_shell_line(io, "surf: no TRUEOSFS root mounted");
-            return;
         }
-        Err(crate::r::io::kfs::FsError::NotFound) => {
+        Err(crate::tst_html_shack::HtmlShackFileError::NotFound) => {
             print_shell_line(io, "surf: file not found");
-            return;
         }
-        Err(_) => {
+        Err(crate::tst_html_shack::HtmlShackFileError::ReadFailed) => {
             print_shell_line(io, "surf: file read failed");
-            return;
         }
-    };
-
-    let html = String::from_utf8_lossy(bytes.as_slice()).into_owned();
-    if !trueos_qjs::browser_task::queue_set_html_with_url_for_browser(0,
-        html,
-        Some(alloc::format!("file://{}", file_ref)),
-    ) {
-        print_shell_line(io, "surf: browser not running");
-        return;
     }
-
-    print_shell_line(io, "surf: file html loaded");
 }
 
 pub(crate) fn prepare_call_with_url(_spawner: &Spawner, io: &'static dyn ShellBackend2, url: &str) {
@@ -185,14 +163,6 @@ fn has_known_scheme(s: &str) -> bool {
 
 fn is_url_token(s: &str) -> bool {
     !s.is_empty() && !s.chars().any(char::is_whitespace)
-}
-
-fn normalize_file_reference(path: &str) -> String {
-    let trimmed = path.trim();
-    if let Some(rest) = trimmed.strip_prefix('/') {
-        return String::from(rest);
-    }
-    String::from(trimmed)
 }
 
 fn looks_like_inline_html(s: &str) -> bool {
