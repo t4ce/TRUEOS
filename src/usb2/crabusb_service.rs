@@ -648,12 +648,43 @@ async fn maybe_start_hid_boot_streams(
     let product_id = desc.product_id;
     let targets = pick_hid_boot_targets(dev_info.configurations());
     if targets.is_empty() {
+        let hid_iface_count = dev_info
+            .interface_descriptors()
+            .filter(|iface| iface.class == 0x03)
+            .count();
+        if hid_iface_count != 0 {
+            crate::log!(
+                "crabusb: hid {:04X}:{:04X} found {} HID interface(s) but no boot/tablet targets\n",
+                vendor_id,
+                product_id,
+                hid_iface_count
+            );
+        }
         return false;
     }
+
+    crate::log!(
+        "crabusb: hid {:04X}:{:04X} candidate targets={}\n",
+        vendor_id,
+        product_id,
+        targets.len()
+    );
 
     let mut started_any = false;
 
     for target in targets {
+        crate::log!(
+            "crabusb: hid {:04X}:{:04X} target kind={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} proto={:02X}\n",
+            vendor_id,
+            product_id,
+            target.kind.as_str(),
+            target.interface_number,
+            target.alternate_setting,
+            target.configuration_value,
+            target.in_endpoint,
+            target.in_max_packet_size,
+            target.protocol
+        );
         let device = match host.open_device(dev_info).await {
             Ok(device) => device,
             Err(err) => {
@@ -2190,9 +2221,6 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                         desc.protocol
                     );
                     maybe_start_truekey_bridge(host, dev).await;
-                    if descriptor_has_audio_candidate(dev) {
-                        sound::maybe_start_target_audio(host, dev).await;
-                    }
                     let _ = super::hid::leds::maybe_start_led_controller(
                         host,
                         dev,
@@ -2202,6 +2230,9 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                     .await;
                     let _ = maybe_start_hid_boot_streams(host, dev, spawner, controller_id as u32)
                         .await;
+                    if descriptor_has_audio_candidate(dev) {
+                        sound::maybe_start_target_audio(host, dev, spawner).await;
+                    }
                     let _ = super::midi::maybe_start_midi(host, dev, spawner, controller_id as u32)
                         .await;
                     let _ = super::pen::maybe_start_mass_storage(
@@ -2265,9 +2296,6 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                     maybe_start_truekey_bridge(host, dev).await;
                     continue;
                 }
-                if descriptor_has_audio_candidate(dev) {
-                    sound::maybe_start_target_audio(host, dev).await;
-                }
                 if super::hid::leds::maybe_start_led_controller(
                     host,
                     dev,
@@ -2280,6 +2308,9 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                 }
                 if maybe_start_hid_boot_streams(host, dev, spawner, info.index as u32).await {
                     continue;
+                }
+                if descriptor_has_audio_candidate(dev) {
+                    sound::maybe_start_target_audio(host, dev, spawner).await;
                 }
                 if super::midi::maybe_start_midi(host, dev, spawner, info.index as u32).await {
                     continue;
