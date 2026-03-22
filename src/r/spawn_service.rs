@@ -117,19 +117,16 @@ define_started_flags!(
     ATOMIC_BOMB_STARTED,
 );
 
-const UI2_FACTORY_WINDOW_COUNT: u32 = 1;
+const UI2_FACTORY_WINDOW_COUNT: u32 = 3;
+const UI2_FACTORY_TEX_ID_BASE: u32 = 4_800;
 
 fn ui2_factory_window_title(slot: u32) -> String {
-    if slot == 0 {
-        String::from("Browser")
-    } else {
-        alloc::format!("Empty UI2 Window {}", slot.saturating_add(1))
-    }
+    alloc::format!("UI2 Window {}", slot.saturating_add(1))
 }
 
 fn ui2_factory_window_rect(slot: u32, total: u32) -> crate::r::ui2::Ui2Rect {
     let (fb_w, fb_h) = crate::vga::framebuffer_dimensions().unwrap_or((1280, 800));
-    let cols = 1u32;
+    let cols = if total >= 2 { 2u32 } else { 1u32 };
     let rows = total.div_ceil(cols).max(1);
     let margin_x = 48.0f32;
     let margin_y = 84.0f32;
@@ -147,6 +144,14 @@ fn ui2_factory_window_rect(slot: u32, total: u32) -> crate::r::ui2::Ui2Rect {
         y: margin_y + row as f32 * (height + gutter),
         w: width,
         h: height,
+    }
+}
+
+fn ui2_factory_window_clear_rgba(slot: u32) -> [u8; 4] {
+    match slot % 3 {
+        0 => [0x1C, 0x24, 0x32, 0xFF],
+        1 => [0x2C, 0x1E, 0x28, 0xFF],
+        _ => [0x1D, 0x2A, 0x22, 0xFF],
     }
 }
 
@@ -451,42 +456,31 @@ fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_browser_tab_factory(spawner: Spawner) -> SpawnAttempt {
+fn spawn_ui2_window_factory(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
 
     for slot in 0..UI2_FACTORY_WINDOW_COUNT {
         let rect = ui2_factory_window_rect(slot, UI2_FACTORY_WINDOW_COUNT);
         let title = ui2_factory_window_title(slot);
-        let window_id = if slot == 0 {
-            let browser_instance_id = trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID;
-            let tex_id = trueos_qjs::browser_task::PRIMARY_BROWSER_RENDER_TEX_ID;
-            let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
-                browser_instance_id,
-                tex_id,
-            );
-            crate::r::ui2::create_hosted_browser_window(
-                title.as_str(),
-                rect,
-                40i16.saturating_add(slot as i16),
-                255,
-                browser_instance_id,
-                tex_id,
-            )
-        } else {
-            crate::r::ui2::create_empty_ui2_window(
-                title.as_str(),
-                rect,
-                40i16.saturating_add(slot as i16),
-                255,
-            )
-        };
-        if window_id == 0 {
-            crate::log!("ui2-window-factory: failed empty window slot={}\n", slot);
+        let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
+            title.as_str(),
+            rect,
+            40i16.saturating_add(slot as i16),
+            255,
+            UI2_FACTORY_TEX_ID_BASE.saturating_add(slot),
+            false,
+            ui2_factory_window_clear_rgba(slot),
+        ) else {
+            crate::log!("ui2-window-factory: failed window slot={}\n", slot);
             continue;
-        }
+        };
+        let window_id = surface.window_id();
+        let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);
+        let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, false);
         crate::log!(
-            "ui2-window-factory: window={} rect={}x{}@{},{}\n",
+            "ui2-window-factory: window={} tex={} rect={}x{}@{},{}\n",
             window_id,
+            surface.tex_id(),
             rect.w as u32,
             rect.h as u32,
             rect.x as i32,
@@ -775,10 +769,10 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2,
     ),
     TaskSpec::enabled(
-        "browser-tab-factory",
+        "ui2-window-factory",
         crate::r::readiness::UI2_READY,
         &BROWSER_TAB_FACTORY_STARTED,
-        spawn_browser_tab_factory,
+        spawn_ui2_window_factory,
     ),
     TaskSpec::enabled(
         "ui2-gfx-browser",
