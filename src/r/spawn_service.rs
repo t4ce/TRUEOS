@@ -90,7 +90,7 @@ define_started_flags!(
     GFX_VIRGL_CURSOR_OVERLAY_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     GFX_LOADSCREEN_STARTED,
-    BROWSER_NET_STARTED,
+    HTML_SHACK_SERVICE_STARTED,
     BROWSER_TAB_FACTORY_STARTED,
     UI2_STARTED,
     UI2_GFX_BROWSER_STARTED,
@@ -452,7 +452,7 @@ fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::r::net::html::html_fetch_service())
+        worker_spawner.spawn(crate::tst_html_shack::html_fetch_service())
     })
 }
 
@@ -494,7 +494,7 @@ fn spawn_ui2_window_factory(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ui2_gfx_browser(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(trueos_qjs::browser_task::ui2_gfx_browser_task(
-            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
+            trueos_qjs::browser_task::DEFAULT_BROWSER_INSTANCE_ID,
         ))
     })
 }
@@ -751,7 +751,7 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::enabled(
         "html_fetch_service",
         0,
-        &BROWSER_NET_STARTED,
+        &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,
     ),
     TaskSpec::enabled(

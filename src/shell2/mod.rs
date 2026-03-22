@@ -757,7 +757,7 @@ fn handle_submit(
     mode: ShellMode2,
     ai_mode: AiPromptMode,
     qjs_mode: QjsPromptMode,
-    _irc_mode: IrcPromptMode,
+    irc_mode: IrcPromptMode,
     surf_prefix: SurfPromptPrefix,
     submitted: &str,
 ) -> HandleSubmitResult {
@@ -795,7 +795,10 @@ fn handle_submit(
             shell2_ai::submit(spawner, io, ai_mode, submitted);
             HandleSubmitResult::None
         }
-        ShellMode2::Irc => HandleSubmitResult::None,
+        ShellMode2::Irc => {
+            shell2_irc::submit(io, irc_mode, submitted);
+            HandleSubmitResult::None
+        }
     }
 }
 
