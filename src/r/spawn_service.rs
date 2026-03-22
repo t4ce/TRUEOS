@@ -79,6 +79,7 @@ define_started_flags!(
     NET_SERVICE_STARTED,
     TLS_SOCKET_SERVICE_STARTED,
     NTP_SYNC_STARTED,
+    SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
@@ -302,6 +303,12 @@ fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         spawner.spawn(crate::r::net::ntp::ntp_sync_task())
+    })
+}
+
+fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::r::net::sntp::sntp_service_task())
     })
 }
 
@@ -696,6 +703,12 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::NET_CONFIGURED,
         &NTP_SYNC_STARTED,
         spawn_ntp_sync,
+    ),
+    TaskSpec::enabled(
+        "sntp-service",
+        crate::r::readiness::NET_V4_CONFIGURED,
+        &SNTP_SERVICE_STARTED,
+        spawn_sntp_service,
     ),
     TaskSpec::enabled("net-shell", 0, &NET_SHELL_STARTED, spawn_net_shell),
     TaskSpec::disabled(

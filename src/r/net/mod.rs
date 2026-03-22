@@ -6,8 +6,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 pub mod cli;
 pub mod srv;
 
-pub use cli::{dns, ftp, html, https, json, ntp, ping, pop3, smtp, ws};
-pub use srv::{spop3, ssmtp, wss};
+pub use cli::{dns, ftp, html, http, https, json, ntp, ping, pop3, smtp, ws};
+pub use srv::{sntp, spop3, ssmtp, wss};
 
 use v::vnet as api;
 
