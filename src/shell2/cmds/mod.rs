@@ -5,6 +5,7 @@ use crate::disc::block::{DeviceHandle, DeviceInfo, DeviceKind};
 pub(crate) mod acpi;
 pub(crate) mod ample;
 pub(crate) mod bench;
+pub(crate) mod email;
 pub(crate) mod etc;
 pub(crate) mod file;
 pub(crate) mod format;

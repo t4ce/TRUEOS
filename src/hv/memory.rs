@@ -33,6 +33,21 @@ static mut EPT_PML4: EptPage = EptPage([0u64; 512]);
 static mut EPT_PDPT: EptPage = EptPage([0u64; 512]);
 static mut EPT_PD: [EptPage; EPT_PDPT_ENTRIES] = [EptPage([0u64; 512]); EPT_PDPT_ENTRIES];
 
+// EPTP list for VMFUNC leaf-0 (EPTP switching): 512 slots × 8 bytes = one 4K page.
+// Slot 0 = current identity EPT; remaining slots zero (unused).
+#[repr(C, align(4096))]
+pub struct EptpList(pub [u64; 512]);
+
+pub static mut EPTP_LIST: EptpList = EptpList([0u64; 512]);
+
+pub fn init_eptp_list(slot0_eptp: u64) -> Result<u64, &'static str> {
+    let list = unsafe { core::ptr::addr_of_mut!(EPTP_LIST.0) };
+    unsafe {
+        (*list)[0] = slot0_eptp;
+    }
+    kernel_va_to_pa(list as u64).ok_or("eptp list pa")
+}
+
 pub static mut GUEST_PML4: GuestPage = GuestPage([0u64; 512]);
 pub static mut GUEST_LOW_PDPT: GuestPage = GuestPage([0u64; 512]);
 pub static mut GUEST_LOW_PD: GuestPage = GuestPage([0u64; 512]);

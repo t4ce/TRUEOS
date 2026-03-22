@@ -755,9 +755,7 @@ fn handle_submit(
                         shell2_surf::load_file_reference(io, file_ref.as_str());
                     }
                     shell2_surf::SurfSubmit::Url(url) => {
-                        if shell2_surf::prepare_call_with_url(spawner, io, url.as_str()).is_err() {
-                            print_shell_line(io, "surf: spawn failed");
-                        }
+                        shell2_surf::prepare_call_with_url(spawner, io, url.as_str());
                     }
                 }
             }
