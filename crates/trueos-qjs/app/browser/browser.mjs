@@ -2,8 +2,6 @@ import * as parse5 from 'parse5';
 import * as cmdStream from 'trueos:cmd_stream';
 import Yoga from 'yoga-layout';
 import { createBrowserAssetManager } from './browser_assets.mjs';
-import { createBrowserUiBridge } from './browser_ui.mjs';
-import { createBrowserPageState } from './browser_page_state.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
 import { parseKeyboardInput } from '../input/keyboard_wire.mjs';
 import { registerSvgDemoRoute } from './svg_demo.mjs';
@@ -14,16 +12,13 @@ const runtime = resolveRuntime();
 registerSvgDemoRoute(runtime.host, { iconSize: 64 });
 
 const INDENT_PX = 12;
-const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs || 0) || 0);
-const HOSTED_BY_UI2 = !!runtime.host.__trueosBrowserHostedByUi2;
 const ERROR_PREVIEW_MAX = 160;
 const MAX_RENDER_TEXT_CHARS = 512;
-const HTML_READY_TIMEOUT_MS = 10000;
 const EMPTY_BROWSER_HTML = '<!DOCTYPE html><html><head></head><body></body></html>';
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 const SHOW_CLOSING_TAG_ROWS = false;
 const BROWSER_KEYBOARD_LOG_MAX = 128;
-const BROWSER_CONTENT_MAX_WIDTH = 2048;
+const BROWSER_LAYOUT_LOG_MAX_ROWS = 24;
 
 let cachedHtml = '';
 let cachedDoc = null;
@@ -37,13 +32,8 @@ let currentPageUrl = String(
 let browserActionSeq = 0;
 let browserRenderDirtySeq = 1;
 let browserRenderedSeq = 0;
-let browserHostedFrameActive = false;
 const qjsInputQueue = [];
 let qjsInputDrainPromise = Promise.resolve();
-let browserCanRenderScene = false;
-let htmlReadyTimeoutId = null;
-
-const browserUi = createBrowserUiBridge();
 runtime.host.__trueosBrowserShowClosingTagRows = SHOW_CLOSING_TAG_ROWS;
 const FALLBACK_BROWSER_API_CONTRACT = {
   version: 1,
@@ -128,18 +118,11 @@ function recordKeyboardLog(payload) {
 const assetManager = createBrowserAssetManager({
   cmdStream,
   host: runtime.host,
-  paint: requestBrowserContentRepaint,
+  paint: requestBrowserLayoutRefresh,
   resolveNavigationUrl,
   raiseBrowserError,
   describeError,
-  onAssetStateChanged: refreshBrowserPageState,
-});
-const browserPageState = createBrowserPageState({
-  host: runtime.host,
-  nowMs,
-  getCurrentUrl: () => currentPageUrl,
-  getHtmlBytes: () => cachedHtml.length,
-  summarizeAssets: (urls) => assetManager.summarizeImageUrls(urls),
+  onAssetStateChanged: requestBrowserLayoutRefresh,
 });
 
 const BROWSER_INTERACTION_EXTERNAL_RESULT = Object.freeze({
@@ -148,13 +131,14 @@ const BROWSER_INTERACTION_EXTERNAL_RESULT = Object.freeze({
   reason: 'ui2-owned-input',
 });
 
-function refreshBrowserPageState(reason = 'state-refresh') {
-  return browserPageState.refresh(reason);
-}
-
 function markBrowserRenderDirty() {
   browserRenderDirtySeq = (browserRenderDirtySeq + 1) >>> 0;
   if (browserRenderDirtySeq === 0) browserRenderDirtySeq = 1;
+}
+
+function requestBrowserLayoutRefresh(_reason = 'layout-refresh') {
+  markBrowserRenderDirty();
+  return true;
 }
 
 function resolveRuntime() {
@@ -1520,30 +1504,19 @@ function setHtml(nextHtml) {
   if (assetManager && typeof assetManager.beginPageLoad === 'function') {
     assetManager.beginPageLoad();
   }
-  invalidateBrowserRegionCache(true);
   markBrowserRenderDirty();
-  browserPageState.beginLoad('html-set');
-  browserCanRenderScene = true;
-  if (htmlReadyTimeoutId != null && typeof runtime.host.clearTimeout === 'function') {
-    try { runtime.host.clearTimeout(htmlReadyTimeoutId); } catch (_) {}
-    htmlReadyTimeoutId = null;
-  }
   paint();
   if (!cachedHtml.trim()) {
-    browserPageState.updateAssetUrls([], 'blank-html');
     return true;
   }
   const htmlSnapshot = cachedHtml;
-  const pageLoadSeqSnapshot = browserPageState.getState('html-snapshot').seq;
   if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
     Promise.resolve().then(() => {
-      if (cachedHtml !== htmlSnapshot || browserPageState.getState('html-snapshot-check').seq !== pageLoadSeqSnapshot) return;
-      const urls = assetManager.primeHtmlImageUrls(htmlSnapshot);
-      browserPageState.updateAssetUrls(urls, 'html-assets-primed');
+      if (cachedHtml !== htmlSnapshot) return;
+      assetManager.primeHtmlImageUrls(htmlSnapshot);
     }).catch(() => {});
   } else {
-    const urls = assetManager.primeHtmlImageUrls(htmlSnapshot);
-    browserPageState.updateAssetUrls(urls, 'html-assets-primed');
+    assetManager.primeHtmlImageUrls(htmlSnapshot);
   }
   return true;
 }
@@ -1555,30 +1528,37 @@ function nowMs() {
   return 0;
 }
 
-function finalizePaintState(doc) {
-  browserPageState.markRendered('first-page-paint');
+function hasConsoleLog() {
+  return typeof console !== 'undefined' && typeof console.log === 'function';
 }
 
-function requestBrowserContentRepaint() {
-  markBrowserRenderDirty();
-  browserUi.requestRepaint(paint);
+function formatLayoutRow(row, index, rowX = [], rowY = []) {
+  const entry = row && typeof row === 'object' ? row : {};
+  const x = Math.round(Number(rowX[index] ?? LEFT_PAD));
+  const y = Math.round(Number(rowY[index] ?? (index * LINE_H)));
+  const kind = String(entry.kind || 'text');
+  const text = summarizeForError(String(entry.text || ''), 72);
+  const path = typeof entry.path === 'string' && entry.path ? ` path=${entry.path}` : '';
+  const target = typeof entry.targetPath === 'string' && entry.targetPath ? ` target=${entry.targetPath}` : '';
+  return `${index}: (${x},${y}) ${kind} "${text}"${path}${target}`;
 }
 
-function invalidateBrowserRegionCache(reset = false) {
-  browserUi.invalidateRegionCache(reset);
-}
-
-function docContentWidth(doc, vw) {
-  const raw = Math.max(
-    Number(doc && doc.contentW || 0),
-    Number(doc && doc.themeLayout && doc.themeLayout.contentW || 0),
-    Number(vw || 0),
-  );
-  const contentW = Math.max(1, Math.round(Number.isFinite(raw) ? raw : Number(vw || 1)));
-  return Math.max(
-    Math.max(1, Number(vw || 1) | 0),
-    Math.min(BROWSER_CONTENT_MAX_WIDTH, contentW),
-  );
+function logLayoutDoc(doc, vw, vh) {
+  if (!hasConsoleLog()) return false;
+  const rows = Array.isArray(doc && doc.rows) ? doc.rows : [];
+  const rowX = Array.isArray(doc && doc.rowX) ? doc.rowX : [];
+  const rowY = Array.isArray(doc && doc.rowY) ? doc.rowY : [];
+  const visibleRows = Math.min(BROWSER_LAYOUT_LOG_MAX_ROWS, rows.length);
+  const contentW = Math.max(1, Math.round(Number(doc && doc.contentW || vw || 1)));
+  const contentH = Math.max(1, Math.round(Number(doc && doc.contentH || vh || 1)));
+  console.log(`[browser.layout] rows=${rows.length} content=${contentW}x${contentH} viewport=${vw}x${vh} scroll=${scrollX},${scrollY}`);
+  for (let i = 0; i < visibleRows; i += 1) {
+    console.log(`[browser.layout] ${formatLayoutRow(rows[i], i, rowX, rowY)}`);
+  }
+  if (rows.length > visibleRows) {
+    console.log(`[browser.layout] ... ${rows.length - visibleRows} more rows`);
+  }
+  return true;
 }
 
 function docContentHeight(doc, vh) {
@@ -1595,7 +1575,16 @@ function docContentTopY(doc) {
 }
 
 function clampScrollForDoc(doc, vw, vh) {
-  const contentW = docContentWidth(doc, vw);
+  const contentW = Math.max(
+    1,
+    Math.round(
+      Math.max(
+        Number(doc && doc.contentW || 0),
+        Number(doc && doc.themeLayout && doc.themeLayout.contentW || 0),
+        Number(vw || 0),
+      ) || Number(vw || 1),
+    ),
+  );
   const contentH = docContentHeight(doc, vh);
   const contentTopY = docContentTopY(doc);
   const maxScrollX = Math.max(0, contentW - Math.max(1, Number(vw || 1)));
@@ -1625,72 +1614,6 @@ function setScroll(nextScrollX = 0, nextScrollY = 0) {
   markBrowserRenderDirty();
   paint();
   return true;
-}
-
-function paintToCurrentTarget(options = null) {
-  const opts = options && typeof options === 'object' ? options : null;
-  const { vw, vh } = computeViewport();
-  const doc = ensureDoc(vw);
-  const { contentH, contentTopY } = clampScrollForDoc(doc, vw, vh);
-  publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
-  const composeViewportWidth = normalizeViewportSize(opts && opts.viewportWidth, vw);
-  const composeViewportHeight = normalizeViewportSize(opts && opts.viewportHeight, vh);
-  return browserUi.paintToCurrentTarget({
-    browserCanRenderScene,
-    doc,
-    vw,
-    vh,
-    scrollX,
-    scrollY,
-    contentH,
-    contentTopY,
-    composeViewportWidth,
-    composeViewportHeight,
-    finalizePaintState,
-  });
-}
-
-function renderToTexture(texId = 0, width = 0, height = 0, force = false) {
-  const targetTexId = Math.max(0, Number(texId || 0) | 0);
-  if (targetTexId <= 0) return false;
-  if (!force && browserRenderedSeq === browserRenderDirtySeq) {
-    return false;
-  }
-
-  const { vw, vh } = computeViewport();
-  const targetW = normalizeViewportSize(width, vw);
-  const targetH = normalizeViewportSize(height, vh);
-  let repainted = false;
-
-  if (typeof cmdStream.beginFrame === 'function' && typeof cmdStream.endFrame === 'function') {
-    browserHostedFrameActive = true;
-    runtime.host.__trueosBrowserFrameActive = true;
-    cmdStream.beginFrame();
-    try {
-      if (typeof cmdStream.setRenderTarget === 'function') {
-        cmdStream.setRenderTarget(targetTexId);
-      }
-      cmdStream.setViewport(targetW, targetH);
-      repainted = !!paintToCurrentTarget({
-        viewportWidth: targetW,
-        viewportHeight: targetH,
-      });
-    } finally {
-      cmdStream.endFrame();
-      browserHostedFrameActive = false;
-      runtime.host.__trueosBrowserFrameActive = false;
-    }
-  } else {
-    repainted = !!paintToCurrentTarget({
-      viewportWidth: targetW,
-      viewportHeight: targetH,
-    });
-  }
-
-  if (repainted) {
-    browserRenderedSeq = browserRenderDirtySeq;
-  }
-  return repainted;
 }
 
 function pushBrowserAction(event) {
@@ -1824,24 +1747,16 @@ function paint() {
 
   try {
     const doc = ensureDoc(vw);
-    const { contentH, contentTopY } = clampScrollForDoc(doc, vw, vh);
+    clampScrollForDoc(doc, vw, vh);
     publishThemeLayoutInteractives(doc && doc.themeLayout ? doc.themeLayout : null);
-    return browserUi.paint({
-      hostedByUi2: HOSTED_BY_UI2,
-      browserCanRenderScene,
-      doc,
-      vw,
-      vh,
-      scrollX,
-      scrollY,
-      contentH,
-      contentTopY,
-      finalizePaintState,
-    });
+    const logged = logLayoutDoc(doc, vw, vh);
+    browserRenderedSeq = browserRenderDirtySeq;
+    runtime.host.__trueosBrowserLastLayoutLogAtMs = nowMs();
+    return logged;
   } catch (err) {
     raiseBrowserError(
       'TRUEOS_BROWSER_RENDER_FAILED',
-      'Browser paint failed while rendering scene',
+      'Browser layout logging failed',
       {
         reason: describeError(err),
         viewportWidth: vw,
@@ -2033,23 +1948,8 @@ function resolveInteractiveTarget(target = null) {
   return null;
 }
 
-function startAutoPaint() {
-  if (HOSTED_BY_UI2) return;
-  const host = runtime.host;
-  if (AUTO_PAINT_MS <= 0) return;
-  if (typeof host.setInterval !== 'function') return;
-  try {
-    host.setInterval(() => {
-      paint();
-    }, AUTO_PAINT_MS);
-  } catch (_) {}
-}
-
 runtime.host.__trueosBrowser = {
   paint,
-  paintToCurrentTarget(options = null) {
-    return paintToCurrentTarget(options);
-  },
   setHtml,
   setNodeHtml,
   setBodyHtml,
@@ -2103,7 +2003,6 @@ runtime.host.__trueosBrowser = {
     if (!viewport || typeof viewport !== 'object') {
       delete runtime.host.__trueosBrowserViewport;
       delete runtime.host.__trueosBrowserContentRect;
-      browserUi.invalidateRegionCache(true);
       markBrowserRenderDirty();
       paint();
       return true;
@@ -2150,38 +2049,48 @@ runtime.host.__trueosBrowser = {
     }
     runtime.host.__trueosBrowserViewport = nextViewport;
     runtime.host.__trueosBrowserContentRect = nextContentRect;
-    browserUi.invalidateRegionCache(true);
     markBrowserRenderDirty();
     paint();
     return true;
   },
   renderToTexture(texId = 0, width = 0, height = 0, force = false) {
-    return renderToTexture(texId, width, height, force);
+    void texId;
+    void width;
+    void height;
+    void force;
+    return false;
   },
   getSurfaceState() {
     const { vw, vh } = computeViewport();
-    const doc = browserCanRenderScene ? ensureDoc(vw) : null;
+    const doc = ensureDoc(vw);
     const { contentW, contentH, contentTopY } = doc
       ? clampScrollForDoc(doc, vw, vh)
       : { contentW: vw, contentH: vh, contentTopY: 0 };
-    return browserUi.getSurfaceState({
-      hostedByUi2: HOSTED_BY_UI2,
-      browserCanRenderScene,
-      doc,
-      vw,
-      vh,
-      scrollX,
-      scrollY,
-      contentW,
-      contentH,
-      contentTopY,
-    });
+    return {
+      viewportWidth: Math.max(1, Number(vw || 1) | 0),
+      viewportHeight: Math.max(1, Number(vh || 1) | 0),
+      contentWidth: Math.max(1, Number(contentW || vw) | 0),
+      contentHeight: Math.max(1, Number(contentH || vh) | 0),
+      contentTopY: Math.max(0, Number(contentTopY || 0) | 0),
+      scrollX: Math.max(0, Number(scrollX || 0) | 0),
+      scrollY: Math.max(0, Number(scrollY || 0) | 0),
+      layoutRows: Array.isArray(doc && doc.rows) ? doc.rows.length : 0,
+      interactiveCount: Array.isArray(runtime.host.__trueosBrowserThemeLayoutInteractives)
+        ? runtime.host.__trueosBrowserThemeLayoutInteractives.length
+        : 0,
+    };
   },
   getPageLoadedState() {
-    return browserPageState.getState('api');
+    return {
+      loaded: 1,
+      rendered: browserRenderedSeq === browserRenderDirtySeq ? 1 : 0,
+      url: currentPageUrl,
+      htmlBytes: cachedHtml.length,
+      timestampMs: nowMs(),
+    };
   },
   popPageLoadedEvent() {
-    return browserPageState.popEvent();
+    return null;
   },
   getWindowId() {
     return currentWindowId();
@@ -2332,7 +2241,6 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
 }
 
 installQjsInputBridge();
-startAutoPaint();
 if (!currentPageUrl) {
   setCurrentPageUrl('about:blank');
 }
