@@ -2,6 +2,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use spin::Once;
 
 pub(crate) const USB_VERBOSE: bool = false;
+pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = false;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;

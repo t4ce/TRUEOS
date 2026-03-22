@@ -95,6 +95,7 @@ define_started_flags!(
     WEBGPU_BROWSER_SECONDARY_STARTED,
     UI2_STARTED,
     UI2_PRIMARY_BROWSER_WINDOW_STARTED,
+    UI2_TRUE_SURFER_TAB1_STARTED,
     UI2_GFX_TETRIS_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
@@ -112,6 +113,7 @@ define_started_flags!(
     PIANO_DRAIN_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
+    SMTP_SMOKE_STARTED,
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
     ATOMIC_BOMB_STARTED,
@@ -483,17 +485,6 @@ fn spawn_primary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_secondary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
-    if !secondary_browser_enabled() {
-        return SpawnAttempt::Skipped;
-    }
-    spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(trueos_qjs::browser_task::boot_browser(
-            SECONDARY_BROWSER_INSTANCE_ID,
-        ))
-    })
-}
-
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
         ap1_spawner.spawn(crate::r::ui2::ui2_task())
@@ -538,6 +529,36 @@ fn spawn_ui2_primary_browser_window(spawner: Spawner) -> SpawnAttempt {
     SpawnAttempt::Spawned
 }
 
+fn spawn_ui2_true_surfer_tab1_window(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
+
+    let (fb_w, fb_h) = crate::vga::framebuffer_dimensions().unwrap_or((1280, 800));
+    let width = ((fb_w as f32) * 0.38).clamp(360.0, 640.0);
+    let height = ((fb_h as f32) * 0.32).clamp(240.0, 420.0);
+    let rect = crate::r::ui2::Ui2Rect {
+        x: (((fb_w as f32) - width) * 0.5 + 120.0).min((fb_w as f32) - width - 16.0),
+        y: (((fb_h as f32) - height) * 0.5 + 72.0).min((fb_h as f32) - height - 16.0),
+        w: width,
+        h: height,
+    };
+
+    let window_id = crate::r::ui2::create_window("True Surfer Tab1", rect, 41, 255);
+    if window_id == 0 {
+        crate::log!("ui2-window: failed to create true surfer tab1 window\n");
+        return SpawnAttempt::Skipped;
+    }
+
+    crate::log!(
+        "ui2-window: created true surfer tab1 window={} rect={}x{}@{},{}\n",
+        window_id,
+        rect.w as u32,
+        rect.h as u32,
+        rect.x as i32,
+        rect.y as i32
+    );
+    SpawnAttempt::Spawned
+}
+
 fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_gfx_tetris::ui2_gfx_tetris_task())
@@ -566,7 +587,7 @@ fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
     #[cfg(feature = "gfx_intel")]
     {
         spawn_local(spawner, |spawner| {
-            spawner.spawn(crate::gfx::intel::scanout_smoke_task())
+            spawner.spawn(crate::intel::scanout_smoke_task())
         })
     }
 }
@@ -623,6 +644,12 @@ fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
 fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
+}
+
+fn spawn_smtp_smoke(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::tst_smtp_smoke::smtp_smoke_task())
+    })
 }
 
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
@@ -770,7 +797,7 @@ static TASKS: &[TaskSpec] = &[
         &GFX_LOADSCREEN_STARTED,
         spawn_gfx_loadscreen,
     ),
-    TaskSpec::enabled("browser-net", 0, &BROWSER_NET_STARTED, spawn_browser_net),
+    TaskSpec::disabled("browser-net", 0, &BROWSER_NET_STARTED, spawn_browser_net),
     TaskSpec::enabled(
         "gfx-texture-upload-service",
         crate::r::readiness::GFX_BACKEND_READY,
@@ -798,51 +825,42 @@ static TASKS: &[TaskSpec] = &[
         &UI2_STARTED,
         spawn_ui2,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-browser-primary-window",
         crate::r::readiness::UI2_READY,
         &UI2_PRIMARY_BROWSER_WINDOW_STARTED,
         spawn_ui2_primary_browser_window,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
+        "ui2-true-surfer-tab1-window",
+        crate::r::readiness::UI2_READY,
+        &UI2_TRUE_SURFER_TAB1_STARTED,
+        spawn_ui2_true_surfer_tab1_window,
+    ),
+    TaskSpec::enabled(
         "ui2-gfx-tetris",
         crate::r::readiness::UI2_READY,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-triangle-demo",
         crate::r::readiness::UI2_READY,
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-mandelbrot-demo",
         crate::r::readiness::UI2_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "webgpu-browser-primary",
         WEBGPU_BROWSER_READY,
         &WEBGPU_BROWSER_PRIMARY_STARTED,
         spawn_primary_webgpu_browser,
     ),
-    if ENABLE_BROWSER_2 {
-        TaskSpec::disabled(
-            "webgpu-browser-secondary",
-            WEBGPU_BROWSER_READY,
-            &WEBGPU_BROWSER_SECONDARY_STARTED,
-            spawn_secondary_webgpu_browser,
-        )
-    } else {
-        TaskSpec::disabled(
-            "webgpu-browser-secondary",
-            WEBGPU_BROWSER_READY,
-            &WEBGPU_BROWSER_SECONDARY_STARTED,
-            spawn_secondary_webgpu_browser,
-        )
-    },
     TaskSpec::enabled(
         "gfx-intel-scanout-demo",
         crate::r::readiness::GFX_INTEL_CLAIMED,
@@ -879,6 +897,12 @@ static TASKS: &[TaskSpec] = &[
         WS_BOOT_READY,
         &BOOT_WS_SMOKE_STARTED,
         spawn_boot_ws_smoke,
+    ),
+    TaskSpec::disabled(
+        "smtp-smoke",
+        crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
+        &SMTP_SMOKE_STARTED,
+        spawn_smtp_smoke,
     ),
     TaskSpec::disabled(
         "boot-netbench",
