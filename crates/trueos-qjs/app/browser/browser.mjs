@@ -16,6 +16,9 @@ registerSvgDemoRoute(runtime.host, { iconSize: 64 });
 
 const INDENT_PX = 12;
 const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs || 0) || 0);
+const BROWSER_INSTANCE_ID = Math.max(1, Number(runtime.host.__trueosBrowserInstanceId || 1) || 1);
+const BROWSER_VM_DEBUG_LOGS = !!runtime.host.__trueosBrowserDebugLogs;
+const BROWSER_HTML_PREVIEW_LOGS = !!runtime.host.__trueosBrowserHtmlPreviewLogs;
 const HOSTED_BY_UI2 = !!runtime.host.__trueosBrowserHostedByUi2;
 const ERROR_PREVIEW_MAX = 160;
 const MAX_RENDER_TEXT_CHARS = 512;
@@ -38,12 +41,12 @@ let currentPageUrl = String(
 let browserActionSeq = 0;
 let browserRenderDirtySeq = 1;
 let browserRenderedSeq = 0;
-let browserHostedFrameActive = false;
 const qjsInputQueue = [];
 let qjsInputDrainPromise = Promise.resolve();
 let fpsOverlayEnabled = false;
 let browserCanRenderScene = false;
 let htmlReadyTimeoutId = null;
+let browserFirstHtmlPreviewLogged = false;
 
 const fpsOverlay = createFpsOverlay();
 const browserUi = createBrowserUiBridge();
@@ -310,6 +313,26 @@ function qjsShellWrite(text) {
     } catch (_) {}
   }
   return false;
+}
+
+function browserDebugLog(message) {
+  if (!BROWSER_VM_DEBUG_LOGS) return;
+  const line = typeof message === 'string' ? message : String(message == null ? '' : message);
+  if (!line) return;
+  try { console.log(`[browser.${BROWSER_INSTANCE_ID}] ${line}`); } catch (_) {}
+}
+
+function maybeLogFirstHtmlPreview(nextHtml) {
+  if (!BROWSER_HTML_PREVIEW_LOGS || browserFirstHtmlPreviewLogged || BROWSER_INSTANCE_ID !== 1) {
+    return;
+  }
+  const html = String(nextHtml || '');
+  if (!html.trim()) return;
+  browserFirstHtmlPreviewLogged = true;
+  const preview = html.slice(0, 150).replace(/\s+/g, ' ').trim();
+  try {
+    console.log(`[browser.html] instance=${BROWSER_INSTANCE_ID} bytes=${html.length} preview=${JSON.stringify(preview)}`);
+  } catch (_) {}
 }
 
 function summarizeQjsValue(value) {
@@ -1518,6 +1541,7 @@ function getViewport() {
 }
 
 function setHtml(nextHtml) {
+  maybeLogFirstHtmlPreview(nextHtml);
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
   if (assetManager && typeof assetManager.beginPageLoad === 'function') {
@@ -1678,43 +1702,10 @@ function renderToTexture(texId = 0, width = 0, height = 0, force = false) {
   if (!force && browserRenderedSeq === browserRenderDirtySeq) {
     return false;
   }
-
-  const { vw, vh } = computeViewport();
-  const targetW = normalizeViewportSize(width, vw);
-  const targetH = normalizeViewportSize(height, vh);
-  let repainted = false;
-
-  if (typeof cmdStream.beginFrame === 'function' && typeof cmdStream.endFrame === 'function') {
-    browserHostedFrameActive = true;
-    runtime.host.__trueosBrowserFrameActive = true;
-    cmdStream.beginFrame();
-    try {
-      if (typeof cmdStream.setRenderTarget === 'function') {
-        cmdStream.setRenderTarget(targetTexId);
-      }
-      cmdStream.setViewport(targetW, targetH);
-      repainted = !!paintToCurrentTarget({
-        viewportWidth: targetW,
-        viewportHeight: targetH,
-        includeFpsOverlay: false,
-      });
-    } finally {
-      cmdStream.endFrame();
-      browserHostedFrameActive = false;
-      runtime.host.__trueosBrowserFrameActive = false;
-    }
-  } else {
-    repainted = !!paintToCurrentTarget({
-      viewportWidth: targetW,
-      viewportHeight: targetH,
-      includeFpsOverlay: false,
-    });
-  }
-
-  if (repainted) {
-    browserRenderedSeq = browserRenderDirtySeq;
-  }
-  return repainted;
+  void width;
+  void height;
+  browserRenderedSeq = browserRenderDirtySeq;
+  return false;
 }
 
 function pushBrowserAction(event) {
@@ -2359,6 +2350,7 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
 
 installQjsInputBridge();
 startAutoPaint();
+browserDebugLog(`init hosted=${HOSTED_BY_UI2 ? 1 : 0} url=${JSON.stringify(currentPageUrl)}`);
 if (!currentPageUrl) {
   setCurrentPageUrl('about:blank');
 }

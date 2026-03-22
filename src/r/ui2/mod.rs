@@ -1230,7 +1230,8 @@ fn ensure_window_texture_size(
         return true;
     }
 
-    let pixels = alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
+    let pixels =
+        alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
     crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
         tex_id,
         width,
@@ -1274,7 +1275,14 @@ fn sync_window_container(
 }
 
 fn sync_pending_window_containers(state: &mut Ui2State) {
-    let pending: Vec<(u32, bool, Ui2WindowKind, HostedContentId, u32, Option<Ui2Rect>)> = state
+    let pending: Vec<(
+        u32,
+        bool,
+        Ui2WindowKind,
+        HostedContentId,
+        u32,
+        Option<Ui2Rect>,
+    )> = state
         .windows
         .iter()
         .filter(|window| window.container_sync_needed)
