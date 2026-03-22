@@ -552,18 +552,7 @@ pub fn set_window_hit_test_visible(id: u32, visible: bool) -> bool {
     window.hit_test_visible = visible;
     state.compose_reason = "hit-test-window";
     if !visible {
-        if state.move_drag.window_id == id {
-            state.move_drag = Ui2WindowMoveDrag::default();
-        }
-        if state.resize_drag.window_id == id {
-            state.resize_drag = Ui2WindowResizeDrag::default();
-        }
-        if state.scroll_drag.window_id == id {
-            state.scroll_drag = Ui2WindowScrollDrag::default();
-        }
-        if state.scroll_pan_drag.window_id == id {
-            state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
-        }
+        clear_window_drag_claims(&mut state, id);
         for cursor in &mut state.cursors {
             if cursor.selected_window_id == id {
                 cursor.selected_window_id = 0;
@@ -650,15 +639,17 @@ pub fn begin_window_move(id: u32) -> bool {
     if (cursor.buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
         return false;
     }
-    state.move_drag = Ui2WindowMoveDrag {
+    let edge_actions_armed = window_edge_drop_action(&state, cursor.x, cursor.y).is_none();
+    clear_window_drag_claims(&mut state, id);
+    clear_other_drag_modes_for_slot(&mut state, cursor_slot_id);
+    upsert_move_drag(&mut state, Ui2WindowMoveDrag {
         active: true,
         window_id: id,
         cursor_slot_id,
         grab_dx: cursor.x - window.rect.x,
         grab_dy: cursor.y - window.rect.y,
-        edge_actions_armed: window_edge_drop_action(&state, cursor.x, cursor.y).is_none(),
-    };
-    state.resize_drag = Ui2WindowResizeDrag::default();
+        edge_actions_armed,
+    });
     state.compose_reason = "begin-window-move";
     let top_z = state
         .windows

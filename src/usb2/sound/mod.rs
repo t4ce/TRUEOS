@@ -1,5 +1,16 @@
 use super::*;
 
+pub const DEFAULT_RATE_HZ: u32 = 48_000;
+pub const DEFAULT_CHANNELS: u16 = 2;
+
+/// Simple PCM format descriptor for sinks.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct PcmFormat {
+    pub rate_hz: u32,
+    pub channels: u8,
+    pub bits_per_sample: u8,
+}
+
 async fn stream_target_audio(
     device: &mut crab_usb::Device,
     vendor_id: u16,
@@ -69,7 +80,6 @@ async fn stream_target_audio(
         return;
     };
 
-    AUDIO_STREAM_ACTIVE.store(true, Ordering::Release);
     crate::log!(
         "crabusb: audio streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} packet={} batch={} sync={}({}) feedback={} source=demo.wav payload_limit={} warmup_packets={}\n",
         vendor_id,
@@ -159,10 +169,34 @@ async fn stream_target_audio(
         }
     }
 
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn audio_stream_task(
+    mut device: crab_usb::Device,
+    vendor_id: u16,
+    product_id: u16,
+    preferred: PreferredAlt,
+    endpoint: IsoOutEndpoint,
+    stream_target: Option<UacStreamTarget>,
+) {
+    stream_target_audio(
+        &mut device,
+        vendor_id,
+        product_id,
+        preferred,
+        endpoint,
+        stream_target,
+    )
+    .await;
     AUDIO_STREAM_ACTIVE.store(false, Ordering::Release);
 }
 
-pub(super) async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab_usb::DeviceInfo) {
+pub(super) async fn maybe_start_target_audio(
+    host: &mut USBHost,
+    dev_info: &crab_usb::DeviceInfo,
+    spawner: &embassy_executor::Spawner,
+) {
     if !AUDIO_STREAM_REQUESTED.load(Ordering::Acquire)
         || AUDIO_STREAM_ACTIVE.load(Ordering::Acquire)
     {
@@ -462,15 +496,28 @@ pub(super) async fn maybe_start_target_audio(host: &mut USBHost, dev_info: &crab
                     preferred.configuration_index
                 );
             }
-            stream_target_audio(
-                &mut device,
+            AUDIO_STREAM_ACTIVE.store(true, Ordering::Release);
+            match spawner.spawn(audio_stream_task(
+                device,
                 vendor_id,
                 product_id,
                 preferred,
                 endpoint,
                 stream_target,
-            )
-            .await;
+            )) {
+                Ok(()) => {}
+                Err(err) => {
+                    AUDIO_STREAM_ACTIVE.store(false, Ordering::Release);
+                    crate::log!(
+                        "crabusb: target {:04X}:{:04X} audio spawn failed if#{} alt={}: {:?}\n",
+                        vendor_id,
+                        product_id,
+                        preferred.interface_number,
+                        preferred.alternate_setting,
+                        err
+                    );
+                }
+            }
         }
         Err(err) => crate::log!(
             "crabusb: target {:04X}:{:04X} audio claim failed if#{} alt={}: {:?}\n",
