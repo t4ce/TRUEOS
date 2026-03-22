@@ -1,5 +1,11 @@
 [build]
 target-dir = "tgt"
+target = "86_64.json"
+
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]
+json-target-spec = true
 
 [target.'86_64.json']
 linker = "rust-lld"

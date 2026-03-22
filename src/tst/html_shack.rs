@@ -3,7 +3,13 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::string::String;
+use embassy_time::{Duration as EmbassyDuration, Timer};
+use heapless::String as HString;
 use spin::Mutex;
+
+const HTML_FETCH_IDLE_MS: u64 = 100;
+const HTML_PREVIEW_FRONT_LINES: usize = 5;
+const HTML_PREVIEW_LINE_CHARS: usize = 160;
 
 /// A fetched HTML document.
 ///
@@ -161,10 +167,104 @@ pub fn get_ready_file_html(file_ref: &str) -> Result<usize, HtmlShackFileError> 
     with_html_shack(|shack| shack.get_ready_file_html(file_ref))
 }
 
+fn pop_next_request() -> Option<HtmlRequest> {
+    with_html_shack(HtmlShack::pop_next)
+}
+
+fn store_ready_html(html: Html) -> usize {
+    with_html_shack(|shack| shack.put_ready_html(html))
+}
+
 fn normalize_file_reference(path: &str) -> String {
     let trimmed = path.trim();
     if let Some(rest) = trimmed.strip_prefix('/') {
         return String::from(rest);
     }
     String::from(trimmed)
+}
+
+fn resolve_request_url(request: &HtmlRequest) -> String {
+    let trimmed = request.url.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return String::from(trimmed);
+    }
+
+    let mut out = String::from(request.road.as_scheme());
+    out.push_str(trimmed);
+    out
+}
+
+fn preview_line(line: &str) -> &str {
+    if line.len() <= HTML_PREVIEW_LINE_CHARS {
+        return line;
+    }
+
+    let mut end = 0usize;
+    for (idx, ch) in line.char_indices() {
+        let next = idx + ch.len_utf8();
+        if next > HTML_PREVIEW_LINE_CHARS {
+            break;
+        }
+        end = next;
+    }
+
+    if end == 0 { "" } else { &line[..end] }
+}
+
+fn log_html_preview(url: &str, html: &str) {
+    let line_count = html.lines().count();
+    crate::log!(
+        "html_shack: preserved url={} bytes={} lines={} front={}\n",
+        url,
+        html.len(),
+        line_count,
+        HTML_PREVIEW_FRONT_LINES
+    );
+
+    for (idx, line) in html.lines().take(HTML_PREVIEW_FRONT_LINES).enumerate() {
+        let front = preview_line(line);
+        if front.len() == line.len() {
+            crate::log!("html_shack: [{}] {}\n", idx + 1, front);
+        } else {
+            crate::log!("html_shack: [{}] {}...\n", idx + 1, front);
+        }
+    }
+}
+
+#[embassy_executor::task]
+pub async fn html_fetch_service() {
+    loop {
+        let Some(mut request) = pop_next_request() else {
+            Timer::after(EmbassyDuration::from_millis(HTML_FETCH_IDLE_MS)).await;
+            continue;
+        };
+
+        let fetch_url = resolve_request_url(&request);
+        let mut fetch_url_buf: HString<256> = HString::new();
+        if fetch_url_buf.push_str(fetch_url.as_str()).is_err() {
+            crate::log!(
+                "html_shack: drop url={} reason=url too long max=256\n",
+                fetch_url
+            );
+            continue;
+        }
+
+        match crate::r::net::html::fetch_html_best_effort(fetch_url_buf).await {
+            Ok(html) => {
+                log_html_preview(fetch_url.as_str(), html.as_str());
+                let ready = Html::new(fetch_url.as_str(), html);
+                let ready_len = store_ready_html(ready.clone());
+                crate::log!(
+                    "html_shack: ready url={} ready_queue={}\n",
+                    ready.url,
+                    ready_len
+                );
+
+                let _ = request.auto_handoff_callback.take();
+            }
+            Err(err) => {
+                crate::log!("html_shack: fetch failed url={} err={}\n", fetch_url, err);
+            }
+        }
+    }
 }

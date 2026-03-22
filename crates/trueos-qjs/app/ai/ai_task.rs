@@ -41,7 +41,7 @@ pub enum EnsureStartedResult {
 }
 
 pub fn ensure_started(spawner: &Spawner) -> EnsureStartedResult {
-    if !qjs::browser_task::primary_browser_started() {
+    if !qjs::browser_task::default_browser_started() {
         return EnsureStartedResult::BrowserNotReady;
     }
 

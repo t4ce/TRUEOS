@@ -5,7 +5,7 @@ pub(super) type UiHostedTextState = trueos_qjs::browser_task::HostedBrowserTextS
 pub(super) type UiHostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 
 pub(super) const PRIMARY_HOSTED_CONTENT_ID: HostedContentId =
-    trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID;
+    trueos_qjs::browser_task::DEFAULT_BROWSER_INSTANCE_ID;
 pub(super) const HOSTED_KEYBOARD_MOD_SHIFT: u8 =
     trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_SHIFT;
 pub(super) const HOSTED_KEYBOARD_MOD_CTRL: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_CTRL;
