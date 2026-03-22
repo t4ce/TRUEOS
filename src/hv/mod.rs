@@ -547,10 +547,6 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
         }
 
         let reason = lr.exit_reason & 0xFFFF;
-        hvlogf(format_args!(
-            "hv: vm1 reporting: vmexit reason=0x{:X} qual=0x{:X} guest_rip=0x{:016X}",
-            reason, lr.exit_qualification, lr.guest_rip
-        ));
         crate::hv::vmx::log_vmexit_interrupt_info("vmexit");
 
         match reason {
@@ -610,11 +606,14 @@ fn setup_vmcs_for_launch(eptp: u64, lineage_record: LineageRecord) -> Result<(),
     let pin = crate::hv::vmx::adjust_vmx_ctrl(pin_msr, 0);
     let proc = crate::hv::vmx::adjust_vmx_ctrl(
         proc_msr,
-        PROC_BASED_HLT_EXITING | PROC_BASED_ACTIVATE_SECONDARY | PROC_BASED_VMX_PREEMPTION_TIMER,
+        PROC_BASED_HLT_EXITING
+            | PROC_BASED_ACTIVATE_SECONDARY
+            | PROC_BASED_VMX_PREEMPTION_TIMER
+            | PROC_BASED_USE_TSC_OFFSETTING,
     );
     let proc2 = crate::hv::vmx::adjust_vmx_ctrl(
         crate::hv::vmx::IA32_VMX_PROCBASED_CTLS2,
-        PROC2_BASED_ENABLE_EPT,
+        PROC2_BASED_ENABLE_EPT | PROC2_BASED_ENABLE_VPID | PROC2_BASED_ENABLE_VMFUNC,
     );
     let exit = crate::hv::vmx::adjust_vmx_ctrl(exit_msr, EXIT_CTL_HOST_ADDR_SPACE_SIZE);
     let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
@@ -646,6 +645,18 @@ fn setup_vmcs_for_launch(eptp: u64, lineage_record: LineageRecord) -> Result<(),
     vmwrite(VMCS_CTRL_ENTRY, entry)?;
     vmwrite(VMCS_CTRL_EPT_POINTER, eptp)?;
     vmwrite(VMCS_CTRL_VMCS_LINK_POINTER, !0u64)?;
+    // VPID: unique TLB tag per level — avoids flush on level switches
+    if (proc2 & PROC2_BASED_ENABLE_VPID) != 0 {
+        vmwrite(VMCS_CTRL_VPID, lineage_record.level as u64)?;
+    }
+    // TSC offset: 0 = transparent pass-through; snapshot-restore can set delta later
+    vmwrite(VMCS_TSC_OFFSET, 0u64)?;
+    // EPTP switching: slot 0 = identity EPT; guest uses vmfunc(0, idx) to switch namespaces
+    if (proc2 & PROC2_BASED_ENABLE_VMFUNC) != 0 {
+        let eptp_list_pa = memory::init_eptp_list(eptp)?;
+        vmwrite(VMCS_CTRL_VMFUNC_CONTROLS, VMFUNC_EPTP_SWITCHING)?;
+        vmwrite(VMCS_CTRL_EPTP_LIST_ADDR, eptp_list_pa)?;
+    }
 
     let (host_cr3, _) = Cr3::read();
     let host_cr0 = Cr0::read().bits();

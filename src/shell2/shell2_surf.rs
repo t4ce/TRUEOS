@@ -1,6 +1,5 @@
 use alloc::string::String;
-use embassy_executor::{SpawnError, Spawner};
-use heapless::String as HString;
+use embassy_executor::Spawner;
 
 use super::{ShellBackend2, print_shell_line};
 
@@ -122,28 +121,23 @@ pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str
     print_shell_line(io, "surf: file html loaded");
 }
 
-pub(crate) fn prepare_call_with_url(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    url: &str,
-) -> Result<(), SpawnError> {
-    let mut job_url: HString<256> = HString::new();
-    for ch in url.trim().chars() {
-        if job_url.push(ch).is_err() {
-            print_shell_line(io, "surf: url too long (max 256 chars)");
-            return Ok(());
-        }
+pub(crate) fn prepare_call_with_url(_spawner: &Spawner, io: &'static dyn ShellBackend2, url: &str) {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return;
     }
 
-    if job_url.is_empty() {
-        return Ok(());
+    if trimmed.len() > 256 {
+        print_shell_line(io, "surf: url too long (max 256 chars)");
+        return;
     }
 
-    let rc = spawner.spawn(surf_job(io, job_url));
-    if rc.is_ok() {
+    let op_id = crate::r::browser_net::submit_navigation(0, trimmed);
+    if op_id != 0 {
         print_shell_line(io, "surf: started");
+    } else {
+        print_shell_line(io, "surf: submit failed");
     }
-    rc
 }
 
 fn prepare_url_with_prefix(host: &str, prefix: SurfPromptPrefix) -> String {
@@ -213,27 +207,4 @@ fn looks_like_inline_html(s: &str) -> bool {
     (lower.starts_with("<html") && lower.ends_with("</html>"))
         || lower.starts_with("<!doctype html")
         || (lower.starts_with('<') && lower.ends_with('>') && lower.contains("</"))
-}
-
-#[embassy_executor::task]
-async fn surf_job(io: &'static dyn ShellBackend2, url: HString<256>) {
-    let source_url = String::from(url.as_str().trim());
-    match crate::tst_html::fetch_html_best_effort(url).await {
-        Ok(html) => {
-            if !trueos_qjs::browser_task::queue_set_html_with_url(
-                String::from(html.as_str()),
-                Some(source_url),
-            ) {
-                print_shell_line(io, "surf: browser not running");
-            }
-        }
-        Err(e) => {
-            if e == "timed out" {
-                print_shell_line(io, "surf: download timed out");
-            } else {
-                let msg = alloc::format!("surf: fetch failed: {}", e);
-                print_shell_line(io, msg.as_str());
-            }
-        }
-    }
 }

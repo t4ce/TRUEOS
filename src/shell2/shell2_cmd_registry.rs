@@ -41,6 +41,11 @@ fn dispatch_etc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
     super::cmds::etc::try_parse(io, &mut args)
 }
 
+fn dispatch_email(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    super::cmds::email::try_parse(io, &mut args)
+}
+
 fn dispatch_hv(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::hv::try_parse(spawner, io, &mut args)
@@ -136,6 +141,12 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         mode: "cmd",
         color: None,
         handler: dispatch_etc,
+    },
+    BuiltinShell2CmdEntry {
+        name: "email",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_email,
     },
     BuiltinShell2CmdEntry {
         name: "file",

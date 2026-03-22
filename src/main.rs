@@ -21,6 +21,8 @@ mod host_api;
 mod hv;
 #[cfg(feature = "hvv")]
 pub mod hvv;
+#[cfg(feature = "gfx_intel")]
+mod intel;
 mod iso9660;
 mod limine;
 mod logflag;
@@ -45,6 +47,8 @@ mod tst_html;
 mod tst_http_trueosfs;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
+#[path = "tst/smtp_smoke.rs"]
+mod tst_smtp_smoke;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
 mod tst_ui2_mandelbrot_demo;
 #[path = "tst/ui2_triangle_demo.rs"]
@@ -167,7 +171,7 @@ pub extern "C" fn kmain() -> ! {
     pci::enumerate_impl();
 
     #[cfg(feature = "gfx_intel")]
-    gfx::intel::init_once();
+    intel::init_once();
 
     vga::cube::tick();
     trueos_qjs::set_font_atlas_small_provider(qjs_font_atlas_small_provider);

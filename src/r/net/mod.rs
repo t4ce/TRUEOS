@@ -9,6 +9,10 @@ pub mod https;
 pub mod json;
 pub mod ntp;
 pub mod ping;
+pub mod pop3;
+pub mod smtp;
+pub mod spop3;
+pub mod ssmtp;
 pub mod ws;
 pub mod wss;
 

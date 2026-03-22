@@ -120,10 +120,8 @@ impl Backend {
 
         #[cfg(feature = "gfx_intel")]
         {
-            if let Some(i) = Self::init_intel(framebuffers) {
-                return i;
-            }
-            crate::log!("gfx: intel auto init failed\n");
+            let _ = framebuffers;
+            crate::log!("gfx: intel feature enabled, but Intel gfx backend is not wired in yet\n");
         }
 
         crate::log!("gfx: no accelerated backend available; gfx backend inactive\n");

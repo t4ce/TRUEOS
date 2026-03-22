@@ -161,8 +161,6 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
         let backend_name = match &backend {
             #[cfg(feature = "gfx_virgl")]
             backends::Backend::Virgl(_) => "virgl",
-            #[cfg(feature = "gfx_intel")]
-            backends::Backend::Intel(_) => "intel",
             backends::Backend::None(_) => "none",
         };
         crate::log!("gfx: backend={}\n", backend_name);
@@ -362,8 +360,6 @@ pub fn switch_to_virgl() -> bool {
 pub enum BackendKind {
     #[cfg(feature = "gfx_virgl")]
     Virgl,
-    #[cfg(feature = "gfx_intel")]
-    Intel,
     None,
 }
 
@@ -371,8 +367,6 @@ pub fn backend_kind() -> Option<BackendKind> {
     with_system(|sys| match &sys.backend {
         #[cfg(feature = "gfx_virgl")]
         backends::Backend::Virgl(_) => BackendKind::Virgl,
-        #[cfg(feature = "gfx_intel")]
-        backends::Backend::Intel(_) => BackendKind::Intel,
         backends::Backend::None(_) => BackendKind::None,
     })
 }
@@ -386,8 +380,6 @@ pub fn toggle_backend() -> BackendKind {
     };
 
     match kind {
-        #[cfg(feature = "gfx_intel")]
-        BackendKind::Intel => BackendKind::Intel,
         #[cfg(feature = "gfx_virgl")]
         BackendKind::Virgl => BackendKind::Virgl,
         BackendKind::None => {
