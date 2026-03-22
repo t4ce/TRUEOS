@@ -17,8 +17,10 @@ unsafe extern "C" {
     fn trueos_cabi_gfx_frame_lock_end();
 }
 
-pub const PRIMARY_BROWSER_INSTANCE_ID: u32 = 1;
-pub const PRIMARY_BROWSER_RENDER_TEX_ID: u32 = 4_703;
+pub const DEFAULT_BROWSER_INSTANCE_ID: u32 = 1;
+pub const PRIMARY_BROWSER_INSTANCE_ID: u32 = DEFAULT_BROWSER_INSTANCE_ID;
+pub const DEFAULT_BROWSER_RENDER_TEX_ID: u32 = 4_703;
+pub const PRIMARY_BROWSER_RENDER_TEX_ID: u32 = DEFAULT_BROWSER_RENDER_TEX_ID;
 const STATIC_BROWSER_VIEWPORT_W: u32 = 512;
 const STATIC_BROWSER_VIEWPORT_H: u32 = 512;
 
@@ -269,10 +271,15 @@ fn append_js_u8_array(dst: &mut String, values: &[u8]) {
 #[inline]
 fn normalize_browser_instance_id(instance_id: u32) -> u32 {
     if instance_id == 0 {
-        PRIMARY_BROWSER_INSTANCE_ID
+        DEFAULT_BROWSER_INSTANCE_ID
     } else {
         instance_id
     }
+}
+
+#[inline]
+fn default_browser_window_id() -> u32 {
+    unsafe { trueos_cabi_ui2_primary_browser_window_id() }
 }
 
 fn ensure_browser_host_state(
@@ -333,8 +340,8 @@ pub fn browser_window_id_for_instance(browser_instance_id: u32) -> u32 {
         if state.window_id != 0 {
             return state.window_id;
         }
-        if browser_instance_id == PRIMARY_BROWSER_INSTANCE_ID {
-            unsafe { trueos_cabi_ui2_primary_browser_window_id() }
+        if browser_instance_id == DEFAULT_BROWSER_INSTANCE_ID {
+            default_browser_window_id()
         } else {
             0
         }
@@ -343,7 +350,7 @@ pub fn browser_window_id_for_instance(browser_instance_id: u32) -> u32 {
 
 pub fn browser_instance_id_for_window(browser_window_id: u32) -> u32 {
     if browser_window_id == 0 {
-        return PRIMARY_BROWSER_INSTANCE_ID;
+        return DEFAULT_BROWSER_INSTANCE_ID;
     }
     let states = BROWSER_HOST_STATES.lock();
     if let Some(state) = states
@@ -352,28 +359,32 @@ pub fn browser_instance_id_for_window(browser_window_id: u32) -> u32 {
     {
         return state.instance_id;
     }
-    let primary_window_id = unsafe { trueos_cabi_ui2_primary_browser_window_id() };
-    if browser_window_id == primary_window_id {
-        PRIMARY_BROWSER_INSTANCE_ID
+    if browser_window_id == default_browser_window_id() {
+        DEFAULT_BROWSER_INSTANCE_ID
     } else {
         0
     }
 }
 
 #[inline]
-pub fn primary_browser_instance_id() -> u32 {
-    PRIMARY_BROWSER_INSTANCE_ID
+pub fn browser_started_for_instance(browser_instance_id: u32) -> bool {
+    browser_started(browser_instance_id)
 }
 
 #[inline]
-pub fn primary_browser_started() -> bool {
-    browser_started(PRIMARY_BROWSER_INSTANCE_ID)
+pub fn default_browser_instance_id() -> u32 {
+    DEFAULT_BROWSER_INSTANCE_ID
 }
 
 #[inline]
-pub fn active_browser_instance_id() -> u32 {
-    if browser_started(PRIMARY_BROWSER_INSTANCE_ID) {
-        return PRIMARY_BROWSER_INSTANCE_ID;
+pub fn default_browser_started() -> bool {
+    browser_started_for_instance(default_browser_instance_id())
+}
+
+#[inline]
+pub fn first_started_browser_instance_id() -> u32 {
+    if browser_started_for_instance(default_browser_instance_id()) {
+        return default_browser_instance_id();
     }
     let states = BROWSER_HOST_STATES.lock();
     states
@@ -384,12 +395,32 @@ pub fn active_browser_instance_id() -> u32 {
 }
 
 #[inline]
-pub fn active_browser_target() -> BrowserHostTarget {
-    let instance_id = active_browser_instance_id();
+pub fn first_started_browser_target() -> BrowserHostTarget {
+    let instance_id = first_started_browser_instance_id();
     BrowserHostTarget {
         instance_id,
         window_id: browser_window_id_for_instance(instance_id),
     }
+}
+
+#[inline]
+pub fn primary_browser_instance_id() -> u32 {
+    default_browser_instance_id()
+}
+
+#[inline]
+pub fn primary_browser_started() -> bool {
+    default_browser_started()
+}
+
+#[inline]
+pub fn active_browser_instance_id() -> u32 {
+    first_started_browser_instance_id()
+}
+
+#[inline]
+pub fn active_browser_target() -> BrowserHostTarget {
+    first_started_browser_target()
 }
 
 fn browser_text_widths_by_char() -> [u8; 256] {
@@ -425,7 +456,7 @@ pub fn queue_set_html(next_html: String) -> bool {
 }
 
 pub fn queue_set_html_with_url(next_html: String, next_url: Option<String>) -> bool {
-    queue_set_html_with_url_for_browser(PRIMARY_BROWSER_INSTANCE_ID, next_html, next_url)
+    queue_set_html_with_url_for_browser(default_browser_instance_id(), next_html, next_url)
 }
 
 pub fn queue_set_html_with_url_for_browser(
@@ -448,7 +479,7 @@ pub fn queue_set_html_with_url_for_browser(
 }
 
 pub fn queue_qjs_input(next: QjsInputEntry) -> bool {
-    queue_qjs_input_for_browser(PRIMARY_BROWSER_INSTANCE_ID, next)
+    queue_qjs_input_for_browser(default_browser_instance_id(), next)
 }
 
 pub fn queue_qjs_input_for_browser(browser_instance_id: u32, next: QjsInputEntry) -> bool {
@@ -464,7 +495,7 @@ pub fn queue_qjs_input_for_browser(browser_instance_id: u32, next: QjsInputEntry
 
 pub fn queue_browser_rpc(method: String, args_json: String, browser_window_id: u32) -> u32 {
     queue_browser_rpc_for_browser(
-        PRIMARY_BROWSER_INSTANCE_ID,
+        default_browser_instance_id(),
         method,
         args_json,
         browser_window_id,
@@ -513,7 +544,7 @@ pub fn set_hosted_viewport(
     content_height: u32,
 ) -> bool {
     set_hosted_viewport_for_browser(
-        PRIMARY_BROWSER_INSTANCE_ID,
+        default_browser_instance_id(),
         viewport_width,
         viewport_height,
         content_x,
@@ -569,7 +600,7 @@ pub fn set_hosted_viewport_for_browser(
 }
 
 pub fn set_hosted_scroll_y(scroll_y: u32) -> bool {
-    set_hosted_scroll_y_for_browser(PRIMARY_BROWSER_INSTANCE_ID, scroll_y)
+    set_hosted_scroll_y_for_browser(default_browser_instance_id(), scroll_y)
 }
 
 pub fn set_hosted_scroll_y_for_browser(browser_instance_id: u32, scroll_y: u32) -> bool {
@@ -608,7 +639,7 @@ pub fn set_hosted_scroll_for_browser(
 }
 
 pub fn hosted_surface_state() -> HostedBrowserSurfaceState {
-    hosted_surface_state_for_browser(PRIMARY_BROWSER_INSTANCE_ID)
+    hosted_surface_state_for_browser(default_browser_instance_id())
 }
 
 pub fn hosted_surface_state_for_browser(browser_instance_id: u32) -> HostedBrowserSurfaceState {
@@ -618,7 +649,7 @@ pub fn hosted_surface_state_for_browser(browser_instance_id: u32) -> HostedBrows
 }
 
 pub fn hosted_surface_seq() -> u32 {
-    hosted_surface_seq_for_browser(PRIMARY_BROWSER_INSTANCE_ID)
+    hosted_surface_seq_for_browser(default_browser_instance_id())
 }
 
 pub fn hosted_surface_seq_for_browser(browser_instance_id: u32) -> u32 {
@@ -626,7 +657,7 @@ pub fn hosted_surface_seq_for_browser(browser_instance_id: u32) -> u32 {
 }
 
 pub fn hosted_interactive_state() -> HostedBrowserInteractiveState {
-    hosted_interactive_state_for_browser(PRIMARY_BROWSER_INSTANCE_ID)
+    hosted_interactive_state_for_browser(default_browser_instance_id())
 }
 
 pub fn hosted_interactive_state_for_browser(
@@ -638,7 +669,15 @@ pub fn hosted_interactive_state_for_browser(
 }
 
 pub fn hosted_interactive_seq() -> u32 {
-    hosted_interactive_seq_for_browser(PRIMARY_BROWSER_INSTANCE_ID)
+    hosted_interactive_seq_for_browser(default_browser_instance_id())
+}
+
+pub fn hosted_text_state() -> HostedBrowserTextState {
+    hosted_text_state_for_browser(default_browser_instance_id())
+}
+
+pub fn hosted_text_seq() -> u32 {
+    hosted_text_seq_for_browser(default_browser_instance_id())
 }
 
 pub fn hosted_interactive_seq_for_browser(browser_instance_id: u32) -> u32 {
@@ -1405,7 +1444,8 @@ G.__trueosBrowserRpcDonePayload = '';
 
     ai_api::install_globals(ctx)
 }
-
+// The pool already permits multiple concurrent browser runtimes.
+// Boot still spawns the default browser instance unless a caller starts more.
 #[embassy_executor::task(pool_size = 10)]
 pub async fn ui2_gfx_browser_task(browser_instance_id: u32) {
     let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
