@@ -3804,7 +3804,9 @@ pub mod cabi {
                     images
                         .iter()
                         .map(|entry| {
-                            entry.as_ref().map(|img| (img.image, img.width.max(1), img.height.max(1)))
+                            entry
+                                .as_ref()
+                                .map(|img| (img.image, img.width.max(1), img.height.max(1)))
                         })
                         .collect()
                 })
@@ -3820,9 +3822,19 @@ pub mod cabi {
                     None => return -1,
                 };
                 let swap = ctx.swapchain_desc();
+                // Compose cursor into app-driven presents to avoid one-frame cursor blink
+                // between end_frame and the async cursor overlay tick.
                 let mut submit_draws = draws.clone();
                 let mut submit_rgb_src = rgb_src.clone();
                 let submit_tex_src = tex_src.clone();
+                if is_screen_present_frame {
+                    append_kernel_cursor_overlay_draws(
+                        &mut submit_draws,
+                        &mut submit_rgb_src,
+                        swap.extent.width,
+                        swap.extent.height,
+                    );
+                }
                 const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
 
                 enum Plan {
@@ -3920,9 +3932,8 @@ pub mod cabi {
                                     current_vp_h = swap.extent.height;
                                 } else {
                                     let idx = tex_id.saturating_sub(1) as usize;
-                                    let Some((image, width, height)) = resolved_tex_images
-                                        .get(idx)
-                                        .and_then(|entry| *entry)
+                                    let Some((image, width, height)) =
+                                        resolved_tex_images.get(idx).and_then(|entry| *entry)
                                     else {
                                         return -12;
                                     };
@@ -4135,9 +4146,8 @@ pub mod cabi {
                                     (image, false)
                                 } else {
                                     let idx = tex_id.saturating_sub(1) as usize;
-                                    let Some((resolved_image, _, _)) = resolved_tex_images
-                                        .get(idx)
-                                        .and_then(|entry| *entry)
+                                    let Some((resolved_image, _, _)) =
+                                        resolved_tex_images.get(idx).and_then(|entry| *entry)
                                     else {
                                         return -10;
                                     };
@@ -4267,11 +4277,27 @@ pub mod cabi {
             drop(st);
 
             if is_screen_present_frame {
+                let mut screenshot_draws = draws.clone();
+                let mut screenshot_rgb = rgb_src.clone();
+                if let Some((vp_w, vp_h)) = crate::gfx::with_context_tag(
+                    crate::gfx::SystemLockOwner::CursorQueryViewport,
+                    |ctx| {
+                        let extent = ctx.swapchain_desc().extent;
+                        (extent.width, extent.height)
+                    },
+                ) {
+                    append_kernel_cursor_overlay_draws(
+                        &mut screenshot_draws,
+                        &mut screenshot_rgb,
+                        vp_w,
+                        vp_h,
+                    );
+                }
                 maybe_publish_composed_screenshot(
                     preserve_contents,
                     clear_rgb,
-                    draws.as_slice(),
-                    rgb_src.as_slice(),
+                    screenshot_draws.as_slice(),
+                    screenshot_rgb.as_slice(),
                     tex_src.as_slice(),
                 );
             }

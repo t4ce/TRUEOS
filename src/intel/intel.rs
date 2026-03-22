@@ -293,7 +293,11 @@ fn log_signature_window(info: IntelDeviceInfo, page: usize) {
     while idx < INTEL_DISPLAY_SIGNATURE_WINDOW_DWORDS {
         let off = page + idx.saturating_mul(4);
         let value = mmio_read32(info, off);
-        crate::log!("intel: signature-mmio off=0x{:05X} value=0x{:08X}\n", off, value);
+        crate::log!(
+            "intel: signature-mmio off=0x{:05X} value=0x{:08X}\n",
+            off,
+            value
+        );
         idx += 1;
     }
 }
@@ -366,15 +370,31 @@ fn log_display_signature_sweep(info: IntelDeviceInfo) {
             cand.page,
             cand.score,
             cand.nonzero_dwords,
-            if cand.pipe_src_off == usize::MAX { -1isize } else { cand.pipe_src_off as isize },
+            if cand.pipe_src_off == usize::MAX {
+                -1isize
+            } else {
+                cand.pipe_src_off as isize
+            },
             cand.pipe_src_value,
             pipe_w,
             pipe_h,
-            if cand.stride_off == usize::MAX { -1isize } else { cand.stride_off as isize },
+            if cand.stride_off == usize::MAX {
+                -1isize
+            } else {
+                cand.stride_off as isize
+            },
             cand.stride_value,
-            if cand.surf_off == usize::MAX { -1isize } else { cand.surf_off as isize },
+            if cand.surf_off == usize::MAX {
+                -1isize
+            } else {
+                cand.surf_off as isize
+            },
             cand.surf_value,
-            if cand.ctl_off == usize::MAX { -1isize } else { cand.ctl_off as isize },
+            if cand.ctl_off == usize::MAX {
+                -1isize
+            } else {
+                cand.ctl_off as isize
+            },
             cand.ctl_value
         );
         if rank < 2 {
