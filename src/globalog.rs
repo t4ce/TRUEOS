@@ -14,6 +14,16 @@ pub enum LogAmount {
     Chars,
 }
 
+pub mod range {
+    use super::LogRange;
+    pub const START: LogRange = LogRange::Start;
+    pub const BEGIN: LogRange = LogRange::Start;
+    pub const FRONT: LogRange = LogRange::Start;
+    pub const END: LogRange = LogRange::End;
+    pub const BACK: LogRange = LogRange::End;
+    pub const REAR: LogRange = LogRange::End;
+}
+
 #[macro_export]
 macro_rules! log {
     ($($tt:tt)*) => {{
