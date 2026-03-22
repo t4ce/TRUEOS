@@ -1,13 +1,4 @@
-#![allow(dead_code)]
-
 extern crate alloc;
-
-use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
-
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-
-use v::vnet;
 
 use super::dns::{self, DnsConfig};
 use crate::net::tls::{TlsClientConfig, TlsRoots};
@@ -20,7 +11,11 @@ use crate::r::io::cabi::{
 };
 use crate::r::net::{NetProfile, Queue};
 use crate::wait::WaitQueue;
+use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
+use v::vnet;
 
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());

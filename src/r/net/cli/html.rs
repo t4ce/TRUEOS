@@ -1,430 +1,19 @@
 extern crate alloc;
 
-use crate::globalog::{self, LogAmount, LogRange};
-use crate::r::net::NetProfile;
-use crate::r::net::VNet;
-use crate::r::net::dns::{self, DnsConfig};
+use super::http::{self, HttpFetchError};
 use crate::r::net::https;
-use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
-use spin::Mutex;
-use v::vnet as api;
 
 const SURF_TIMEOUT_MS: u32 = 35_000;
 const SURF_MAX_BYTES: usize = 4 * 1024 * 1024;
 const SURF_HTTPS_TIMEOUT_MS: u32 = SURF_TIMEOUT_MS * 4;
-const MAX_PENDING_REQUESTS: usize = 32;
-const MAX_STATUS_ENTRIES: usize = 64;
-
-#[derive(Clone, Debug)]
-struct ParsedHttpUrl {
-    host: HString<96>,
-    port: u16,
-    path: HString<160>,
-}
-
-#[derive(Clone, Debug)]
-enum HttpPlainFetchError {
-    BadUrl,
-    TimedOut,
-    DnsFailed,
-    HttpStatus,
-    Redirect(String),
-    ResponseTooLarge,
-}
-
-/*
-static NEXT_BROWSER_NET_OP_ID: AtomicU32 = AtomicU32::new(1);
-static BROWSER_NET_QUEUE: Mutex<VecDeque<BrowserNetRequest>> = Mutex::new(VecDeque::new());
-static BROWSER_NET_STATUS: Mutex<VecDeque<BrowserNetStatus>> = Mutex::new(VecDeque::new());
-static BROWSER_NET_LATEST: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
-
-#[derive(Clone, Debug)]
-struct BrowserNetRequest {
-    op_id: u32,
-    browser_instance_id: u32,
-    url: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BrowserNetState {
-    Queued,
-    Loading,
-    Succeeded,
-    Failed,
-    Superseded,
-}
-
-impl BrowserNetState {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Queued => "queued",
-            Self::Loading => "loading",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Superseded => "superseded",
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct BrowserNetStatus {
-    pub op_id: u32,
-    pub browser_instance_id: u32,
-    pub url: String,
-    pub state: BrowserNetState,
-    pub delivered: bool,
-    pub bytes: usize,
-    pub error: Option<String>,
-}
-
-impl BrowserNetStatus {
-    fn new(op_id: u32, browser_instance_id: u32, url: String) -> Self {
-        Self {
-            op_id,
-            browser_instance_id,
-            url,
-            state: BrowserNetState::Queued,
-            delivered: false,
-            bytes: 0,
-            error: None,
-        }
-    }
-}
-
-fn normalize_browser_instance_id(instance_id: u32) -> u32 {
-    if instance_id == 0 {
-        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
-    } else {
-        instance_id
-    }
-}
-
-fn upsert_latest_op(browser_instance_id: u32, op_id: u32) {
-    let mut latest = BROWSER_NET_LATEST.lock();
-    if let Some(entry) = latest
-        .iter_mut()
-        .find(|entry| entry.0 == browser_instance_id)
-    {
-        entry.1 = op_id;
-        return;
-    }
-    latest.push((browser_instance_id, op_id));
-}
-
-fn latest_op_for_browser(browser_instance_id: u32) -> u32 {
-    BROWSER_NET_LATEST
-        .lock()
-        .iter()
-        .find(|entry| entry.0 == browser_instance_id)
-        .map(|entry| entry.1)
-        .unwrap_or(0)
-}
-
-fn push_status(status: BrowserNetStatus) {
-    let mut statuses = BROWSER_NET_STATUS.lock();
-    if let Some(existing) = statuses
-        .iter_mut()
-        .find(|entry| entry.op_id == status.op_id)
-    {
-        *existing = status;
-        return;
-    }
-    if statuses.len() >= MAX_STATUS_ENTRIES {
-        let _ = statuses.pop_front();
-    }
-    statuses.push_back(status);
-}
-
-fn update_status(op_id: u32, update: impl FnOnce(&mut BrowserNetStatus)) {
-    let mut statuses = BROWSER_NET_STATUS.lock();
-    if let Some(entry) = statuses.iter_mut().find(|entry| entry.op_id == op_id) {
-        update(entry);
-    }
-}
-
-fn pop_request() -> Option<BrowserNetRequest> {
-    BROWSER_NET_QUEUE.lock().pop_front()
-}
-
-pub fn submit_navigation(browser_instance_id: u32, url: &str) -> u32 {
-    let trimmed = url.trim();
-    if trimmed.is_empty() {
-        return 0;
-    }
-
-    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
-    let op_id = NEXT_BROWSER_NET_OP_ID.fetch_add(1, Ordering::Relaxed);
-    let request = BrowserNetRequest {
-        op_id,
-        browser_instance_id,
-        url: String::from(trimmed),
-    };
-
-    {
-        let mut queue = BROWSER_NET_QUEUE.lock();
-        if queue.len() >= MAX_PENDING_REQUESTS {
-            return 0;
-        }
-        queue.push_back(request.clone());
-    }
-
-    upsert_latest_op(browser_instance_id, op_id);
-    push_status(BrowserNetStatus::new(
-        op_id,
-        browser_instance_id,
-        request.url.clone(),
-    ));
-    op_id
-}
-
-pub fn status(op_id: u32) -> Option<BrowserNetStatus> {
-    BROWSER_NET_STATUS
-        .lock()
-        .iter()
-        .find(|entry| entry.op_id == op_id)
-        .cloned()
-}
-*/
 
 #[embassy_executor::task]
 pub async fn html_fetch_service() {
-    loop { /*
-        let Some(request) = pop_request() else {
-        Timer::after(EmbassyDuration::from_millis(100)).await;
-        continue;
-        };
-
-        update_status(request.op_id, |entry| {
-        entry.state = BrowserNetState::Loading;
-        entry.error = None;
-        entry.delivered = false;
-        entry.bytes = 0;
-        });
-
-        let mut url: HString<256> = HString::new();
-        if url.push_str(request.url.as_str()).is_err() {
-        update_status(request.op_id, |entry| {
-        entry.state = BrowserNetState::Failed;
-        entry.error = Some(String::from("url too long"));
-        });
-        continue;
-        }
-
-        match crate::tst_html::fetch_html_best_effort(url).await {
-        Ok(html) => {
-        let is_latest = latest_op_for_browser(request.browser_instance_id) == request.op_id;
-        let delivered = if is_latest {
-        trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
-        request.browser_instance_id,
-        html.clone(),
-        Some(request.url.clone()),
-        )
-        } else {
-        false
-        };
-        update_status(request.op_id, |entry| {
-        entry.state = if is_latest {
-        BrowserNetState::Succeeded
-        } else {
-        BrowserNetState::Superseded
-        };
-        entry.bytes = html.len();
-        entry.delivered = delivered;
-        entry.error = None;
-        });
-        let preview_len = core::cmp::min(10, html.len());
-        let preview = &html.as_str()[..preview_len];
-        crate::log!(
-        "browser-net: op={} browser={} state={} delivered={} bytes={} preview='{}'\n",
-        request.op_id,
-        request.browser_instance_id,
-        if is_latest { "ok" } else { "superseded" },
-        if delivered { 1 } else { 0 },
-        html.len(),
-        preview
-        );
-        }
-        Err(err) => {
-        update_status(request.op_id, |entry| {
-        entry.state = BrowserNetState::Failed;
-        entry.error = Some(String::from(err));
-        });
-        crate::log!(
-        "browser-net: op={} browser={} state=failed err={}\n",
-        request.op_id,
-        request.browser_instance_id,
-        err
-        );
-        }
-        }
-         */
-    }
-}
-
-fn is_redirect_status(status: u16) -> bool {
-    matches!(status, 301 | 302 | 303 | 307 | 308)
-}
-
-fn header_get_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
-    let mut i = 0;
-    while i < headers.len() {
-        let line_start = i;
-        while i < headers.len() && headers[i] != b'\n' {
-            i += 1;
-        }
-        let mut line = &headers[line_start..i];
-        if i < headers.len() && headers[i] == b'\n' {
-            i += 1;
-        }
-        if let Some((&b'\r', rest)) = line.split_last() {
-            line = rest;
-        }
-        if line.is_empty() {
-            continue;
-        }
-        let Some(colon) = line.iter().position(|b| *b == b':') else {
-            continue;
-        };
-        let (k, mut v) = line.split_at(colon);
-        v = v.get(1..).unwrap_or(&[]);
-        if k.len() != name.len() {
-            continue;
-        }
-        if !k
-            .iter()
-            .zip(name.iter())
-            .all(|(a, b)| a.eq_ignore_ascii_case(b))
-        {
-            continue;
-        }
-        while !v.is_empty() && (v[0] == b' ' || v[0] == b'\t') {
-            v = &v[1..];
-        }
-        return Some(v);
-    }
-    None
-}
-
-fn parse_http_status(buf: &[u8]) -> Option<u16> {
-    // Expect: HTTP/1.1 200 ...\r\n
-    if !buf.starts_with(b"HTTP/") {
-        return None;
-    }
-    let mut i = 0;
-    while i < buf.len() && buf[i] != b' ' {
-        i += 1;
-    }
-    if i + 4 >= buf.len() {
-        return None;
-    }
-    if buf[i] != b' ' {
-        return None;
-    }
-    let d1 = buf.get(i + 1)?.wrapping_sub(b'0');
-    let d2 = buf.get(i + 2)?.wrapping_sub(b'0');
-    let d3 = buf.get(i + 3)?.wrapping_sub(b'0');
-    if d1 > 9 || d2 > 9 || d3 > 9 {
-        return None;
-    }
-    Some((d1 as u16) * 100 + (d2 as u16) * 10 + (d3 as u16))
-}
-
-fn parse_http_url(url: &str) -> Result<ParsedHttpUrl, &'static str> {
-    // Accept:
-    // - http://host[:port][/path]
-    // - host[:port][/path]
-    // (no IPv6 bracket support here yet)
-    let mut u = url.trim();
-    if u.is_empty() {
-        return Err("empty url");
-    }
-    if let Some(rest) = u.strip_prefix("http://") {
-        u = rest;
-    } else if u.strip_prefix("https://").is_some() {
-        return Err("https:// not supported here (use plaintext http://)");
-    }
-
-    let (hostport, path) = match u.split_once('/') {
-        Some((a, b)) => (a, b),
-        None => (u, ""),
-    };
-
-    let (host_str, port) = match hostport.split_once(':') {
-        Some((h, p)) => {
-            let p = p.trim();
-            if p.is_empty() {
-                return Err("empty port");
-            }
-            let port = p.parse::<u16>().map_err(|_| "bad port")?;
-            (h, port)
-        }
-        None => (hostport, 80u16),
-    };
-
-    let host_str = host_str.trim();
-    if host_str.is_empty() {
-        return Err("empty host");
-    }
-
-    let mut host: HString<96> = HString::new();
-    for ch in host_str.chars() {
-        if host.push(ch).is_err() {
-            break;
-        }
-    }
-
-    let mut out_path: HString<160> = HString::new();
-    if path.is_empty() {
-        let _ = out_path.push('/');
-    } else {
-        let _ = out_path.push('/');
-        for ch in path.chars() {
-            if out_path.push(ch).is_err() {
-                break;
-            }
-        }
-    }
-
-    Ok(ParsedHttpUrl {
-        host,
-        port,
-        path: out_path,
-    })
-}
-
-fn find_http_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
-}
-
-fn redirect_url_from_location_http(current: &ParsedHttpUrl, headers: &[u8]) -> Option<String> {
-    let loc = header_get_value(headers, b"location")?;
-    let loc = core::str::from_utf8(loc).ok()?.trim();
-    if loc.is_empty() {
-        return None;
-    }
-
-    if loc.starts_with("http://") || loc.starts_with("https://") {
-        return Some(String::from(loc));
-    }
-
-    if loc.starts_with('/') {
-        if current.port == 80 {
-            return Some(alloc::format!("http://{}{}", current.host, loc));
-        }
-        return Some(alloc::format!(
-            "http://{}:{}{}",
-            current.host,
-            current.port,
-            loc
-        ));
-    }
-
-    None
+    loop {}
 }
 
 fn build_best_effort_attempts(url: &str) -> Vec<String> {
@@ -433,7 +22,6 @@ fn build_best_effort_attempts(url: &str) -> Vec<String> {
     if trimmed.is_empty() {
         return out;
     }
-
     if let Some(rest) = trimmed.strip_prefix("https://") {
         out.push(String::from(trimmed));
         out.push(alloc::format!("http://{}", rest));
@@ -444,7 +32,6 @@ fn build_best_effort_attempts(url: &str) -> Vec<String> {
         out.push(alloc::format!("https://{}", rest));
         return out;
     }
-
     out.push(alloc::format!("https://{}", trimmed));
     out.push(alloc::format!("http://{}", trimmed));
     out
@@ -452,193 +39,6 @@ fn build_best_effort_attempts(url: &str) -> Vec<String> {
 
 fn bytes_to_string_lossy(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(bytes.as_slice()).into_owned()
-}
-
-async fn fetch_http_plain_body(
-    url: &str,
-    timeout_ms: u32,
-    max_rx: usize,
-) -> Result<Vec<u8>, HttpPlainFetchError> {
-    let parsed = parse_http_url(url).map_err(|_| HttpPlainFetchError::BadUrl)?;
-
-    let ready = crate::r::readiness::wait_for_timeout(
-        crate::r::readiness::NET_CONFIGURED,
-        EmbassyDuration::from_secs(3),
-    )
-    .await;
-    if !ready {
-        // Best-effort: continue and let DNS/TCP timeouts decide final outcome.
-    }
-
-    let profile = NetProfile::default();
-    let Ok(ip) = dns::resolve_ipv4_with_profile(
-        parsed.host.as_str(),
-        profile,
-        DnsConfig::for_profile(profile),
-    )
-    .await
-    else {
-        return Err(HttpPlainFetchError::DnsFailed);
-    };
-
-    let net = loop {
-        if let Some(v) = VNet::open_with_profile(profile) {
-            break v;
-        }
-        Timer::after(EmbassyDuration::from_millis(50)).await;
-    };
-
-    let mut open_sent = false;
-    for _ in 0..64 {
-        if net
-            .submit(api::Command::OpenTcpConnect {
-                remote: api::EndpointV4 {
-                    addr: ip,
-                    port: parsed.port,
-                },
-            })
-            .is_ok()
-        {
-            open_sent = true;
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-    }
-    if !open_sent {
-        crate::log!(
-            "surf/http: open submit failed host={} port={}\n",
-            parsed.host,
-            parsed.port
-        );
-        return Err(HttpPlainFetchError::TimedOut);
-    }
-
-    let mut tcp_handle: Option<api::NetHandle> = None;
-    let mut sent_get = false;
-
-    // Cap to avoid unbounded kernel heap growth.
-    let mut rx: Vec<u8> = Vec::new();
-    let mut truncated = false;
-
-    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
-
-    loop {
-        for _ in 0..32 {
-            let Some(ev) = net.pop_event() else { break };
-            match ev {
-                api::Event::Opened { handle, kind } => match kind {
-                    api::SocketKind::Tcp => {
-                        tcp_handle = Some(handle);
-                    }
-                    api::SocketKind::Udp => {}
-                },
-                api::Event::UdpPacket { .. } => {}
-                api::Event::UdpPacketV6 { .. } => {}
-                api::Event::TcpSent { .. } => {}
-                api::Event::IcmpReply { .. } => {}
-                api::Event::IcmpReplyV6 { .. } => {}
-                api::Event::TcpEstablished { handle } => {
-                    if tcp_handle.is_none() {
-                        tcp_handle = Some(handle);
-                    }
-                    if tcp_handle != Some(handle) {
-                        continue;
-                    }
-                    if !sent_get {
-                        let mut req: Vec<u8> = Vec::new();
-                        req.extend_from_slice(b"GET ");
-                        req.extend_from_slice(parsed.path.as_str().as_bytes());
-                        req.extend_from_slice(b" HTTP/1.1\r\nHost: ");
-                        req.extend_from_slice(parsed.host.as_str().as_bytes());
-                        req.extend_from_slice(
-                            b"\r\nUser-Agent: TRUEOS get\r\nAccept: text/html,application/xhtml+xml,*/*;q=0.8\r\nConnection: close\r\n\r\n",
-                        );
-                        if let Some(h) = tcp_handle {
-                            let mut send_ok = false;
-                            for _ in 0..64 {
-                                if net
-                                    .submit(api::Command::SendTcp {
-                                        handle: h,
-                                        data: api::ByteBuf::from_slice_trunc(req.as_slice()),
-                                    })
-                                    .is_ok()
-                                {
-                                    send_ok = true;
-                                    break;
-                                }
-                                Timer::after(EmbassyDuration::from_millis(1)).await;
-                            }
-                            if send_ok {
-                                sent_get = true;
-                            } else {
-                                crate::log!(
-                                    "surf/http: get submit failed host={} handle={}\n",
-                                    parsed.host,
-                                    h.0
-                                );
-                            }
-                        }
-                    }
-                }
-                api::Event::TcpData { handle, data } => {
-                    if tcp_handle != Some(handle) {
-                        continue;
-                    }
-                    let data = data.as_slice();
-                    if rx.len() < max_rx {
-                        let room = max_rx - rx.len();
-                        let take = data.len().min(room);
-                        rx.extend_from_slice(&data[..take]);
-                        if take < data.len() {
-                            truncated = true;
-                        }
-                    } else {
-                        truncated = true;
-                    }
-                }
-                api::Event::Closed { handle } => {
-                    if tcp_handle == Some(handle) {
-                        let hdr_end = find_http_header_end(&rx);
-                        let body_off = hdr_end.unwrap_or(0);
-                        let status = parse_http_status(&rx).unwrap_or(0);
-                        if is_redirect_status(status)
-                            && let Some(hdr_end) = hdr_end
-                            && let Some(next) =
-                                redirect_url_from_location_http(&parsed, &rx[..hdr_end])
-                        {
-                            return Err(HttpPlainFetchError::Redirect(next));
-                        }
-                        if status >= 400 {
-                            return Err(HttpPlainFetchError::HttpStatus);
-                        }
-
-                        let body = if body_off <= rx.len() {
-                            rx.split_off(body_off)
-                        } else {
-                            Vec::new()
-                        };
-                        if truncated {
-                            return Err(HttpPlainFetchError::ResponseTooLarge);
-                        }
-
-                        return Ok(body);
-                    }
-                }
-                api::Event::Error { msg } => {
-                    let _ = msg;
-                }
-            }
-        }
-
-        if Instant::now() >= deadline {
-            if let Some(h) = tcp_handle {
-                let _ = net.submit(api::Command::Close { handle: h });
-            }
-            return Err(HttpPlainFetchError::TimedOut);
-        }
-
-        Timer::after(EmbassyDuration::from_millis(50)).await;
-    }
 }
 
 async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'static str> {
@@ -673,17 +73,17 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
                 Err(_) => break,
             }
         } else if current_url.starts_with("http://") {
-            match fetch_http_plain_body(current_url.as_str(), SURF_TIMEOUT_MS, SURF_MAX_BYTES).await
+            match http::fetch_http_body(current_url.as_str(), SURF_TIMEOUT_MS, SURF_MAX_BYTES).await
             {
                 Ok(body) => return Ok(body),
-                Err(HttpPlainFetchError::Redirect(url)) => {
+                Err(HttpFetchError::Redirect(url)) => {
                     if hop >= MAX_REDIRECTS {
                         return Err("too many redirects");
                     }
                     current_url = url;
                     continue;
                 }
-                Err(HttpPlainFetchError::TimedOut) => {
+                Err(HttpFetchError::TimedOut) => {
                     saw_timeout = true;
                     break;
                 }
@@ -697,7 +97,6 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
     if saw_timeout {
         return Err("timed out");
     }
-
     Err("all attempts failed")
 }
 
@@ -706,9 +105,7 @@ pub async fn fetch_html_best_effort(url: HString<256>) -> Result<String, &'stati
     if attempts.is_empty() {
         return Err("bad url");
     }
-
     let mut saw_timeout = false;
-
     for attempt in attempts.iter() {
         match fetch_html_attempt_with_redirects(attempt.as_str()).await {
             Ok(body) => return Ok(bytes_to_string_lossy(body)),
@@ -718,10 +115,8 @@ pub async fn fetch_html_best_effort(url: HString<256>) -> Result<String, &'stati
             Err(_) => {}
         }
     }
-
     if saw_timeout {
         return Err("timed out");
     }
-
     Err("all attempts failed")
 }
