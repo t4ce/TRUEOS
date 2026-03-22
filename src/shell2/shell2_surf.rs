@@ -116,7 +116,6 @@ pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str
 }
 
 pub(crate) fn prepare_call_with_url(_spawner: &Spawner, io: &'static dyn ShellBackend2, url: &str) {
-    
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return;
@@ -126,7 +125,6 @@ pub(crate) fn prepare_call_with_url(_spawner: &Spawner, io: &'static dyn ShellBa
         print_shell_line(io, "surf: url too long (max 256 chars)");
         return;
     }
-    
 }
 
 fn prepare_url_with_prefix(host: &str, prefix: SurfPromptPrefix) -> String {
