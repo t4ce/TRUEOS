@@ -421,17 +421,23 @@ fn upsert_scroll_pan_drag(state: &mut Ui2State, drag: Ui2WindowScrollPanDrag) {
 
 #[inline]
 fn clear_move_drag_for_slot(state: &mut Ui2State, slot_id: u32) {
-    state.move_drags.retain(|drag| drag.cursor_slot_id != slot_id);
+    state
+        .move_drags
+        .retain(|drag| drag.cursor_slot_id != slot_id);
 }
 
 #[inline]
 fn clear_resize_drag_for_slot(state: &mut Ui2State, slot_id: u32) {
-    state.resize_drags.retain(|drag| drag.cursor_slot_id != slot_id);
+    state
+        .resize_drags
+        .retain(|drag| drag.cursor_slot_id != slot_id);
 }
 
 #[inline]
 fn clear_scroll_drag_for_slot(state: &mut Ui2State, slot_id: u32) {
-    state.scroll_drags.retain(|drag| drag.cursor_slot_id != slot_id);
+    state
+        .scroll_drags
+        .retain(|drag| drag.cursor_slot_id != slot_id);
 }
 
 #[inline]
@@ -452,8 +458,12 @@ fn clear_other_drag_modes_for_slot(state: &mut Ui2State, slot_id: u32) {
 #[inline]
 fn clear_window_drag_claims(state: &mut Ui2State, window_id: u32) {
     state.move_drags.retain(|drag| drag.window_id != window_id);
-    state.resize_drags.retain(|drag| drag.window_id != window_id);
-    state.scroll_drags.retain(|drag| drag.window_id != window_id);
+    state
+        .resize_drags
+        .retain(|drag| drag.window_id != window_id);
+    state
+        .scroll_drags
+        .retain(|drag| drag.window_id != window_id);
     state
         .scroll_pan_drags
         .retain(|drag| drag.window_id != window_id);

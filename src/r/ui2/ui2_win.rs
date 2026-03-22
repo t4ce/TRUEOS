@@ -642,14 +642,17 @@ pub fn begin_window_move(id: u32) -> bool {
     let edge_actions_armed = window_edge_drop_action(&state, cursor.x, cursor.y).is_none();
     clear_window_drag_claims(&mut state, id);
     clear_other_drag_modes_for_slot(&mut state, cursor_slot_id);
-    upsert_move_drag(&mut state, Ui2WindowMoveDrag {
-        active: true,
-        window_id: id,
-        cursor_slot_id,
-        grab_dx: cursor.x - window.rect.x,
-        grab_dy: cursor.y - window.rect.y,
-        edge_actions_armed,
-    });
+    upsert_move_drag(
+        &mut state,
+        Ui2WindowMoveDrag {
+            active: true,
+            window_id: id,
+            cursor_slot_id,
+            grab_dx: cursor.x - window.rect.x,
+            grab_dy: cursor.y - window.rect.y,
+            edge_actions_armed,
+        },
+    );
     state.compose_reason = "begin-window-move";
     let top_z = state
         .windows
