@@ -13,9 +13,12 @@ mod helpers;
 
 unsafe extern "C" {
     fn trueos_cabi_ui2_primary_browser_window_id() -> u32;
+    fn trueos_cabi_gfx_frame_lock_begin();
+    fn trueos_cabi_gfx_frame_lock_end();
 }
 
 pub const PRIMARY_BROWSER_INSTANCE_ID: u32 = 1;
+pub const PRIMARY_BROWSER_RENDER_TEX_ID: u32 = 4_703;
 const STATIC_BROWSER_VIEWPORT_W: u32 = 512;
 const STATIC_BROWSER_VIEWPORT_H: u32 = 512;
 
@@ -26,21 +29,9 @@ pub struct BrowserHostTarget {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct HostedBrowserRegion {
-    pub tex_id: u32,
-    pub doc_y: u32,
-    pub width: u32,
-    pub height: u32,
-    pub revision: u32,
-    pub dirty: bool,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HostedBrowserSurfaceState {
     pub seq: u32,
-    pub cache_revision: u32,
-    pub cache_width: u32,
-    pub tile_height: u32,
+    pub render_revision: u32,
     pub viewport_width: u32,
     pub viewport_height: u32,
     pub content_width: u32,
@@ -48,84 +39,6 @@ pub struct HostedBrowserSurfaceState {
     pub content_top_y: u32,
     pub scroll_x: u32,
     pub scroll_y: u32,
-    pub regions: Vec<HostedBrowserRegion>,
-    pub scene_cmds: Vec<u8>,
-}
-
-const HOSTED_SCENE_CMD_DRAW_TEX_RECT_UV: u8 = 1;
-
-#[inline]
-fn hosted_scene_cmd_push_u32(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-#[inline]
-fn hosted_scene_cmd_push_f32(out: &mut Vec<u8>, value: f32) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn build_surface_scene_cmds(surface: &HostedBrowserSurfaceState) -> Vec<u8> {
-    let viewport_w = surface.viewport_width.max(1);
-    let viewport_h = surface.viewport_height.max(1);
-    let content_w = surface.content_width.max(viewport_w);
-    let content_h = surface.content_height.max(viewport_h);
-    let max_scroll_x = content_w.saturating_sub(viewport_w);
-    let max_scroll_y = content_h.saturating_sub(viewport_h);
-    let scroll_left = surface.scroll_x.min(max_scroll_x);
-    let scroll_top = surface
-        .content_top_y
-        .saturating_add(surface.scroll_y.min(max_scroll_y));
-    let scroll_bottom = scroll_top.saturating_add(viewport_h);
-
-    let mut out = Vec::new();
-    for region in &surface.regions {
-        let tex_id = region.tex_id;
-        if tex_id == 0 || region.width == 0 || region.height == 0 {
-            continue;
-        }
-
-        let doc_y = region.doc_y;
-        let doc_bottom = doc_y.saturating_add(region.height);
-        if doc_bottom <= scroll_top || doc_y >= scroll_bottom {
-            continue;
-        }
-
-        let src_top = core::cmp::max(doc_y, scroll_top);
-        let src_bottom = core::cmp::min(doc_bottom, scroll_bottom);
-        let src_height = src_bottom.saturating_sub(src_top);
-        if src_height == 0 || scroll_left >= region.width {
-            continue;
-        }
-
-        let src_offset_y = src_top.saturating_sub(doc_y);
-        let dest_y = src_top.saturating_sub(scroll_top);
-        let draw_width = core::cmp::min(viewport_w, region.width.saturating_sub(scroll_left));
-        if draw_width == 0 {
-            continue;
-        }
-
-        let width_f = region.width.max(1) as f32;
-        let height_f = region.height.max(1) as f32;
-        let u0 = (scroll_left as f32) / width_f;
-        let u1 = ((scroll_left + draw_width) as f32) / width_f;
-        let v0 = (src_offset_y as f32) / height_f;
-        let v1 = ((src_offset_y + src_height) as f32) / height_f;
-
-        out.push(HOSTED_SCENE_CMD_DRAW_TEX_RECT_UV);
-        hosted_scene_cmd_push_u32(&mut out, tex_id);
-        hosted_scene_cmd_push_f32(&mut out, 0.0);
-        hosted_scene_cmd_push_f32(&mut out, dest_y as f32);
-        hosted_scene_cmd_push_f32(&mut out, draw_width as f32);
-        hosted_scene_cmd_push_f32(&mut out, src_height as f32);
-        hosted_scene_cmd_push_f32(&mut out, u0);
-        hosted_scene_cmd_push_f32(&mut out, v0);
-        hosted_scene_cmd_push_f32(&mut out, u1);
-        hosted_scene_cmd_push_f32(&mut out, v1);
-        out.push(1);
-        out.push(255);
-    }
-
-    out
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -203,6 +116,8 @@ struct BrowserHostState {
     instance_id: u32,
     started: bool,
     window_id: u32,
+    render_target_tex_id: u32,
+    render_revision: u32,
     pending_html: Option<PendingHtmlEntry>,
     pending_qjs_input: VecDeque<QjsInputEntry>,
     pending_browser_rpc: VecDeque<BrowserRpcRequest>,
@@ -224,6 +139,8 @@ impl BrowserHostState {
             instance_id,
             started: false,
             window_id: 0,
+            render_target_tex_id: 0,
+            render_revision: 0,
             pending_html: None,
             pending_qjs_input: VecDeque::new(),
             pending_browser_rpc: VecDeque::new(),
@@ -398,6 +315,14 @@ pub fn bind_browser_window_to_instance(browser_instance_id: u32, browser_window_
     let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
     with_browser_host_state_mut(browser_instance_id, |state| {
         state.window_id = browser_window_id;
+    });
+    true
+}
+
+pub fn set_browser_render_target_tex_id_for_browser(browser_instance_id: u32, tex_id: u32) -> bool {
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    with_browser_host_state_mut(browser_instance_id, |state| {
+        state.render_target_tex_id = tex_id;
     });
     true
 }
@@ -1030,27 +955,70 @@ unsafe fn apply_pending_hosted_scroll(ctx: *mut qjs::JSContext, browser_instance
     qjs::js_free_value(ctx, browser);
 }
 
+unsafe fn render_browser_to_texture(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    let (tex_id, viewport_width, viewport_height) =
+        with_browser_host_state(browser_instance_id, |state| {
+            let view = state.pending_hosted_viewport.or(state.applied_hosted_viewport);
+            (
+                state.render_target_tex_id,
+                view.map(|entry| entry.viewport_width)
+                    .unwrap_or(state.hosted_surface_state.viewport_width)
+                    .max(1),
+                view.map(|entry| entry.viewport_height)
+                    .unwrap_or(state.hosted_surface_state.viewport_height)
+                    .max(1),
+            )
+        });
+    if tex_id == 0 || viewport_width == 0 || viewport_height == 0 {
+        return;
+    }
+
+    let Some(browser) = browser_api_value(ctx) else {
+        return;
+    };
+    let func = qjs::JS_GetPropertyStr(
+        ctx,
+        browser,
+        b"renderToTexture\0".as_ptr() as *const c_char,
+    );
+    if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, func);
+        qjs::js_free_value(ctx, browser);
+        return;
+    }
+
+    let args = [
+        qjs::JS_NewFloat64(ctx, tex_id as f64),
+        qjs::JS_NewFloat64(ctx, viewport_width as f64),
+        qjs::JS_NewFloat64(ctx, viewport_height as f64),
+    ];
+    let mut repainted = 0.0f64;
+    trueos_cabi_gfx_frame_lock_begin();
+    let result = qjs::JS_Call(ctx, func, browser, args.len() as i32, args.as_ptr());
+    trueos_cabi_gfx_frame_lock_end();
+    if result.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "browser renderToTexture");
+    } else {
+        let _ = qjs::JS_ToFloat64(ctx, &mut repainted as *mut f64, result);
+    }
+    qjs::js_free_value(ctx, result);
+    if repainted != 0.0 {
+        with_browser_host_state_mut(browser_instance_id, |state| {
+            let mut next = state.render_revision.wrapping_add(1);
+            if next == 0 {
+                next = 1;
+            }
+            state.render_revision = next;
+        });
+    }
+    qjs::js_free_value(ctx, func);
+    qjs::js_free_value(ctx, browser);
+}
+
 unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
     let Some(browser) = browser_api_value(ctx) else {
         return;
     };
-
-    let refresh = qjs::JS_GetPropertyStr(
-        ctx,
-        browser,
-        b"refreshHostedRegions\0".as_ptr() as *const c_char,
-    );
-    if !refresh.is_exception()
-        && refresh.tag != qjs::JS_TAG_UNDEFINED
-        && refresh.tag != qjs::JS_TAG_NULL
-    {
-        let refresh_result = qjs::JS_Call(ctx, refresh, browser, 0, core::ptr::null());
-        if refresh_result.is_exception() {
-            qjs::qjs_diag::dump_last_exception(ctx, "browser refreshHostedRegions");
-        }
-        qjs::js_free_value(ctx, refresh_result);
-    }
-    qjs::js_free_value(ctx, refresh);
 
     let func = qjs::JS_GetPropertyStr(ctx, browser, b"getSurfaceState\0".as_ptr() as *const c_char);
     if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
@@ -1074,15 +1042,7 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
 
     let mut next = HostedBrowserSurfaceState {
         seq: 0,
-        cache_revision: js_prop_f64(ctx, result, b"cacheRevision\0")
-            .unwrap_or(0.0)
-            .max(0.0) as u32,
-        cache_width: js_prop_f64(ctx, result, b"cacheWidth\0")
-            .unwrap_or(0.0)
-            .max(0.0) as u32,
-        tile_height: js_prop_f64(ctx, result, b"tileHeight\0")
-            .unwrap_or(0.0)
-            .max(0.0) as u32,
+        render_revision: 0,
         viewport_width: js_prop_f64(ctx, result, b"viewportWidth\0")
             .unwrap_or(0.0)
             .max(0.0) as u32,
@@ -1104,41 +1064,8 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
         scroll_y: js_prop_f64(ctx, result, b"scrollY\0")
             .unwrap_or(0.0)
             .max(0.0) as u32,
-        regions: Vec::new(),
-        scene_cmds: Vec::new(),
     };
 
-    let regions = qjs::JS_GetPropertyStr(ctx, result, b"regions\0".as_ptr() as *const c_char);
-    if !regions.is_exception()
-        && regions.tag != qjs::JS_TAG_UNDEFINED
-        && regions.tag != qjs::JS_TAG_NULL
-    {
-        let len = js_prop_f64(ctx, regions, b"length\0")
-            .unwrap_or(0.0)
-            .max(0.0) as usize;
-        for idx in 0..len {
-            let item = qjs::JS_GetPropertyUint32(ctx, regions, idx as u32);
-            if item.is_exception()
-                || item.tag == qjs::JS_TAG_UNDEFINED
-                || item.tag == qjs::JS_TAG_NULL
-            {
-                qjs::js_free_value(ctx, item);
-                continue;
-            }
-            next.regions.push(HostedBrowserRegion {
-                tex_id: js_prop_f64(ctx, item, b"texId\0").unwrap_or(0.0).max(0.0) as u32,
-                doc_y: js_prop_f64(ctx, item, b"docY\0").unwrap_or(0.0).max(0.0) as u32,
-                width: js_prop_f64(ctx, item, b"width\0").unwrap_or(0.0).max(0.0) as u32,
-                height: js_prop_f64(ctx, item, b"height\0").unwrap_or(0.0).max(0.0) as u32,
-                revision: js_prop_f64(ctx, item, b"revision\0")
-                    .unwrap_or(0.0)
-                    .max(0.0) as u32,
-                dirty: js_prop_f64(ctx, item, b"dirty\0").unwrap_or(0.0) != 0.0,
-            });
-            qjs::js_free_value(ctx, item);
-        }
-    }
-    qjs::js_free_value(ctx, regions);
     qjs::js_free_value(ctx, result);
 
     let fallback_view = with_browser_host_state(browser_instance_id, |state| {
@@ -1185,7 +1112,8 @@ unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_i
         next.content_height = next.viewport_height;
     }
 
-    next.scene_cmds = build_surface_scene_cmds(&next);
+    next.render_revision =
+        with_browser_host_state(browser_instance_id, |state| state.render_revision);
 
     with_browser_host_state_mut(browser_instance_id, |state| {
         let prev = state.hosted_surface_state.clone();
@@ -1478,8 +1406,8 @@ G.__trueosBrowserRpcDonePayload = '';
     ai_api::install_globals(ctx)
 }
 
-#[embassy_executor::task(pool_size = 5)]
-pub async fn boot_browser(browser_instance_id: u32) {
+#[embassy_executor::task(pool_size = 10)]
+pub async fn ui2_gfx_browser_task(browser_instance_id: u32) {
     let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
     let already_running = with_browser_host_state_mut(browser_instance_id, |state| {
         let was_running = state.started;
@@ -1564,6 +1492,7 @@ pub async fn boot_browser(browser_instance_id: u32) {
                 break;
             }
             collect_browser_rpc_result(ctx, browser_instance_id);
+            render_browser_to_texture(ctx, browser_instance_id);
             sync_hosted_surface_state(ctx, browser_instance_id);
             sync_hosted_interactive_state(ctx, browser_instance_id);
             sync_hosted_text_state(ctx, browser_instance_id);

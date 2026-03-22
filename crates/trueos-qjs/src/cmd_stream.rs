@@ -141,6 +141,7 @@ static CMD_STREAM_LYON_ICON_TEX_RECS: Mutex<Vec<CmdStreamLyonIconTexRecord>> =
     Mutex::new(Vec::new());
 static CMD_STREAM_LYON_UNIT_QUAD_RECS: Mutex<Vec<CmdStreamLyonUnitQuadRecord>> =
     Mutex::new(Vec::new());
+static CMD_STREAM_FRAME_OPEN: AtomicBool = AtomicBool::new(false);
 
 const CMD_STREAM_DEFAULT_BLEND_MODE: u32 = 0;
 const CMD_STREAM_DEFAULT_PMA: u32 = 0;
@@ -492,6 +493,9 @@ fn cmd_stream_draw_texture_rect(
     v1: f32,
     rgba: u32,
 ) -> bool {
+    if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
+        return false;
+    }
     if tex_id == 0 || !(width > 0.0 && height > 0.0) {
         return false;
     }
@@ -538,6 +542,9 @@ fn cmd_stream_push_rgb_vtx(out: &mut Vec<u8>, x: f32, y: f32, r: u8, g: u8, b: u
 
 #[inline]
 fn cmd_stream_draw_rgb_triangles(verts: &[u8], a: u8) -> bool {
+    if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
+        return false;
+    }
     if verts.is_empty() {
         return false;
     }
@@ -782,6 +789,9 @@ pub fn draw_lyon_in_frame(
     view_h: u32,
     color_id: u32,
 ) -> bool {
+    if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
+        return false;
+    }
     CMD_STREAM_VIEW_W.store(view_w.max(1), Ordering::Relaxed);
     CMD_STREAM_VIEW_H.store(view_h.max(1), Ordering::Relaxed);
 
@@ -963,8 +973,12 @@ pub(crate) unsafe fn try_create_native_module(
         ) -> qjs::JSValue {
             atlas_cmd_stream::clear_text_batches();
             let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
-            let _ = trueos_cabi_gfx_begin_frame_no_present(clear);
-            cmd_stream_reset_frame_state_defaults();
+            let rc = trueos_cabi_gfx_begin_frame_no_present(clear);
+            let opened = rc == 0;
+            CMD_STREAM_FRAME_OPEN.store(opened, Ordering::Relaxed);
+            if opened {
+                cmd_stream_reset_frame_state_defaults();
+            }
             qjs::JSValue::undefined()
         }
 
@@ -974,6 +988,10 @@ pub(crate) unsafe fn try_create_native_module(
             _argc: i32,
             _argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
+            if !CMD_STREAM_FRAME_OPEN.swap(false, Ordering::Relaxed) {
+                atlas_cmd_stream::clear_text_batches();
+                return qjs::JSValue::undefined();
+            }
             atlas_cmd_stream::flush_text_batches();
             let _ = trueos_cabi_gfx_end_frame();
             qjs::JSValue::undefined()
@@ -1142,6 +1160,9 @@ pub(crate) unsafe fn try_create_native_module(
             argc: i32,
             argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
+            if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
+                return qjs::JSValue::undefined();
+            }
             let Some(args) = cmd_stream_args(argv, argc, 1) else {
                 return qjs::JSValue::undefined();
             };
@@ -1160,6 +1181,9 @@ pub(crate) unsafe fn try_create_native_module(
             _argc: i32,
             _argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
+            if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
+                return qjs::JSValue::undefined();
+            }
             atlas_cmd_stream::flush_text_batches();
             let _ = trueos_cabi_gfx_clear_render_target();
             qjs::JSValue::undefined()

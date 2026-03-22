@@ -36,6 +36,9 @@ let currentPageUrl = String(
   || '',
 );
 let browserActionSeq = 0;
+let browserRenderDirtySeq = 1;
+let browserRenderedSeq = 0;
+let browserHostedFrameActive = false;
 const qjsInputQueue = [];
 let qjsInputDrainPromise = Promise.resolve();
 let fpsOverlayEnabled = false;
@@ -150,6 +153,11 @@ const BROWSER_INTERACTION_EXTERNAL_RESULT = Object.freeze({
 
 function refreshBrowserPageState(reason = 'state-refresh') {
   return browserPageState.refresh(reason);
+}
+
+function markBrowserRenderDirty() {
+  browserRenderDirtySeq = (browserRenderDirtySeq + 1) >>> 0;
+  if (browserRenderDirtySeq === 0) browserRenderDirtySeq = 1;
 }
 
 function resolveRuntime() {
@@ -1516,6 +1524,7 @@ function setHtml(nextHtml) {
     assetManager.beginPageLoad();
   }
   invalidateBrowserRegionCache(true);
+  markBrowserRenderDirty();
   browserPageState.beginLoad('html-set');
   browserCanRenderScene = true;
   if (htmlReadyTimeoutId != null && typeof runtime.host.clearTimeout === 'function') {
@@ -1571,6 +1580,7 @@ function finalizePaintState(doc) {
 }
 
 function requestBrowserContentRepaint() {
+  markBrowserRenderDirty();
   browserUi.requestRepaint(paint);
 }
 
@@ -1632,6 +1642,7 @@ function setScroll(nextScrollX = 0, nextScrollY = 0) {
   }
   scrollX = clampedScrollX;
   scrollY = clampedScrollY;
+  markBrowserRenderDirty();
   paint();
   return true;
 }
@@ -1661,24 +1672,49 @@ function paintToCurrentTarget(options = null) {
   });
 }
 
-function refreshHostedRegions() {
-  if (!HOSTED_BY_UI2) {
+function renderToTexture(texId = 0, width = 0, height = 0, force = false) {
+  const targetTexId = Math.max(0, Number(texId || 0) | 0);
+  if (targetTexId <= 0) return false;
+  if (!force && browserRenderedSeq === browserRenderDirtySeq) {
     return false;
   }
+
   const { vw, vh } = computeViewport();
-  const doc = browserCanRenderScene ? ensureDoc(vw) : null;
-  const { contentH } = doc
-    ? clampScrollForDoc(doc, vw, vh)
-    : { contentH: vh };
-  return browserUi.refreshHostedRegions({
-    hostedByUi2: HOSTED_BY_UI2,
-    browserCanRenderScene,
-    doc,
-    vw,
-    vh,
-    scrollY,
-    contentH,
-  });
+  const targetW = normalizeViewportSize(width, vw);
+  const targetH = normalizeViewportSize(height, vh);
+  let repainted = false;
+
+  if (typeof cmdStream.beginFrame === 'function' && typeof cmdStream.endFrame === 'function') {
+    browserHostedFrameActive = true;
+    runtime.host.__trueosBrowserFrameActive = true;
+    cmdStream.beginFrame();
+    try {
+      if (typeof cmdStream.setRenderTarget === 'function') {
+        cmdStream.setRenderTarget(targetTexId);
+      }
+      cmdStream.setViewport(targetW, targetH);
+      repainted = !!paintToCurrentTarget({
+        viewportWidth: targetW,
+        viewportHeight: targetH,
+        includeFpsOverlay: false,
+      });
+    } finally {
+      cmdStream.endFrame();
+      browserHostedFrameActive = false;
+      runtime.host.__trueosBrowserFrameActive = false;
+    }
+  } else {
+    repainted = !!paintToCurrentTarget({
+      viewportWidth: targetW,
+      viewportHeight: targetH,
+      includeFpsOverlay: false,
+    });
+  }
+
+  if (repainted) {
+    browserRenderedSeq = browserRenderDirtySeq;
+  }
+  return repainted;
 }
 
 function pushBrowserAction(event) {
@@ -2040,9 +2076,6 @@ runtime.host.__trueosBrowser = {
   paintToCurrentTarget(options = null) {
     return paintToCurrentTarget(options);
   },
-  refreshHostedRegions() {
-    return refreshHostedRegions();
-  },
   setHtml,
   setNodeHtml,
   setBodyHtml,
@@ -2097,6 +2130,7 @@ runtime.host.__trueosBrowser = {
       delete runtime.host.__trueosBrowserViewport;
       delete runtime.host.__trueosBrowserContentRect;
       browserUi.invalidateRegionCache(true);
+      markBrowserRenderDirty();
       paint();
       return true;
     }
@@ -2143,8 +2177,12 @@ runtime.host.__trueosBrowser = {
     runtime.host.__trueosBrowserViewport = nextViewport;
     runtime.host.__trueosBrowserContentRect = nextContentRect;
     browserUi.invalidateRegionCache(true);
+    markBrowserRenderDirty();
     paint();
     return true;
+  },
+  renderToTexture(texId = 0, width = 0, height = 0, force = false) {
+    return renderToTexture(texId, width, height, force);
   },
   getSurfaceState() {
     const { vw, vh } = computeViewport();

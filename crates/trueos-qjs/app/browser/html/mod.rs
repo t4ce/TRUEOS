@@ -4,7 +4,38 @@ extern crate alloc;
 
 use alloc::string::String;
 
+pub mod ui_html;
+
+pub const UI_EMBEDDED_URL: &str = "trueos://ui/ui-html";
 pub const SVG_EMBEDDED_URL: &str = "trueos://ui/svg-demo";
+
+fn append_js_string_literal(dst: &mut String, value: &str) {
+    dst.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => dst.push_str("\\\""),
+            '\\' => dst.push_str("\\\\"),
+            '\u{0008}' => dst.push_str("\\b"),
+            '\u{000C}' => dst.push_str("\\f"),
+            '\n' => dst.push_str("\\n"),
+            '\r' => dst.push_str("\\r"),
+            '\t' => dst.push_str("\\t"),
+            ch if ch <= '\u{001F}' => {
+                dst.push_str(alloc::format!("\\u{:04X}", ch as u32).as_str());
+            }
+            _ => dst.push(ch),
+        }
+    }
+    dst.push('"');
+}
+
+fn append_embedded_route(dst: &mut String, url: &str, html: &str) {
+    dst.push_str("G.__trueosBrowserEmbeddedRoutes[");
+    append_js_string_literal(dst, url);
+    dst.push_str("] = ");
+    append_js_string_literal(dst, html);
+    dst.push_str(";\n");
+}
 
 pub fn append_embedded_browser_globals_js(dst: &mut String) {
     dst.push_str(
@@ -61,4 +92,5 @@ if (typeof G.__trueosBrowserNavigate !== 'function') {
 }
 "#,
     );
+    append_embedded_route(dst, UI_EMBEDDED_URL, ui_html::UI_HTML);
 }

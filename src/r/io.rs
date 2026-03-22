@@ -2959,6 +2959,24 @@ pub mod cabi {
             return 0;
         }
 
+        let (image, width, height) = {
+            let st = GFX_CABI_STATE.lock();
+            let idx = tex_id.saturating_sub(1) as usize;
+            let Some(entry) = st
+                .tex_images
+                .as_ref()
+                .and_then(|images| images.get(idx))
+                .and_then(|entry| entry.as_ref())
+            else {
+                return -5;
+            };
+            (entry.image, entry.width.max(1), entry.height.max(1))
+        };
+
+        if !image.is_valid() {
+            return -6;
+        }
+
         crate::gfx::with_cabi_frame_lock(|| {
             let Some(ret) = crate::gfx::with_context_tag(
                 crate::gfx::SystemLockOwner::DrawRgbTriangles,
@@ -2970,24 +2988,6 @@ pub mod cabi {
 
                     if ctx.write_buffer(vbuf, 0, &vtx[..usable]).is_err() {
                         return -4;
-                    }
-
-                    let (image, width, height) = {
-                        let st = GFX_CABI_STATE.lock();
-                        let idx = tex_id.saturating_sub(1) as usize;
-                        let Some(entry) = st
-                            .tex_images
-                            .as_ref()
-                            .and_then(|images| images.get(idx))
-                            .and_then(|entry| entry.as_ref())
-                        else {
-                            return -5;
-                        };
-                        (entry.image, entry.width.max(1), entry.height.max(1))
-                    };
-
-                    if !image.is_valid() {
-                        return -6;
                     }
 
                     let cmds = [
@@ -3017,52 +3017,53 @@ pub mod cabi {
                     if ctx.submit(CommandBuffer { commands: &cmds }).is_err() {
                         return -8;
                     }
-
-                    let mut st = GFX_CABI_STATE.lock();
-                    if let Some(entry) = st
-                        .tex_images
-                        .as_mut()
-                        .and_then(|images| images.get_mut(tex_id.saturating_sub(1) as usize))
-                        .and_then(|entry| entry.as_mut())
-                    {
-                        let need = (entry.width as usize)
-                            .saturating_mul(entry.height as usize)
-                            .saturating_mul(4);
-                        if entry.rgba.len() != need {
-                            entry.rgba.resize(need, 0);
-                        }
-                        clear_rgba_buffer(entry.rgba.as_mut_slice(), clear_rgb);
-                        let mut off = 0usize;
-                        while off + 36 <= usable {
-                            let Some(v0) = read_rgb_vtx(&vtx[..usable], off) else {
-                                break;
-                            };
-                            let Some(v1) = read_rgb_vtx(&vtx[..usable], off + 12) else {
-                                break;
-                            };
-                            let Some(v2) = read_rgb_vtx(&vtx[..usable], off + 24) else {
-                                break;
-                            };
-                            draw_rgb_triangle_rgba(
-                                entry.rgba.as_mut_slice(),
-                                entry.width,
-                                entry.height,
-                                None,
-                                trueos_gfx_core::BlendDesc::disabled(),
-                                v0,
-                                v1,
-                                v2,
-                            );
-                            off += 36;
-                        }
-                    }
-                    st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
-                    st.viewport_configured = false;
                     0
                 },
             ) else {
                 return -9;
             };
+            if ret == 0 {
+                let mut st = GFX_CABI_STATE.lock();
+                if let Some(entry) = st
+                    .tex_images
+                    .as_mut()
+                    .and_then(|images| images.get_mut(tex_id.saturating_sub(1) as usize))
+                    .and_then(|entry| entry.as_mut())
+                {
+                    let need = (entry.width as usize)
+                        .saturating_mul(entry.height as usize)
+                        .saturating_mul(4);
+                    if entry.rgba.len() != need {
+                        entry.rgba.resize(need, 0);
+                    }
+                    clear_rgba_buffer(entry.rgba.as_mut_slice(), clear_rgb);
+                    let mut off = 0usize;
+                    while off + 36 <= usable {
+                        let Some(v0) = read_rgb_vtx(&vtx[..usable], off) else {
+                            break;
+                        };
+                        let Some(v1) = read_rgb_vtx(&vtx[..usable], off + 12) else {
+                            break;
+                        };
+                        let Some(v2) = read_rgb_vtx(&vtx[..usable], off + 24) else {
+                            break;
+                        };
+                        draw_rgb_triangle_rgba(
+                            entry.rgba.as_mut_slice(),
+                            entry.width,
+                            entry.height,
+                            None,
+                            trueos_gfx_core::BlendDesc::disabled(),
+                            v0,
+                            v1,
+                            v2,
+                        );
+                        off += 36;
+                    }
+                }
+                st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                st.viewport_configured = false;
+            }
             ret
         })
     }
@@ -3087,6 +3088,24 @@ pub mod cabi {
             return -3;
         }
 
+        let (image, width, height) = {
+            let st = GFX_CABI_STATE.lock();
+            let idx = tex_id.saturating_sub(1) as usize;
+            let Some(entry) = st
+                .tex_images
+                .as_ref()
+                .and_then(|images| images.get(idx))
+                .and_then(|entry| entry.as_ref())
+            else {
+                return -6;
+            };
+            (entry.image, entry.width.max(1), entry.height.max(1))
+        };
+
+        if !image.is_valid() {
+            return -7;
+        }
+
         crate::gfx::with_cabi_frame_lock(|| {
             let Some(ret) =
                 crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::DrawMandelbrot, |ctx| {
@@ -3098,24 +3117,6 @@ pub mod cabi {
 
                     if ctx.write_buffer(vbuf, 0, verts.as_slice()).is_err() {
                         return -5;
-                    }
-
-                    let (image, width, height) = {
-                        let st = GFX_CABI_STATE.lock();
-                        let idx = tex_id.saturating_sub(1) as usize;
-                        let Some(entry) = st
-                            .tex_images
-                            .as_ref()
-                            .and_then(|images| images.get(idx))
-                            .and_then(|entry| entry.as_ref())
-                        else {
-                            return -6;
-                        };
-                        (entry.image, entry.width.max(1), entry.height.max(1))
-                    };
-
-                    if !image.is_valid() {
-                        return -7;
                     }
 
                     let cmds = [
@@ -3144,15 +3145,16 @@ pub mod cabi {
                     if ctx.submit(CommandBuffer { commands: &cmds }).is_err() {
                         return -9;
                     }
-
-                    let mut st = GFX_CABI_STATE.lock();
-                    st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
-                    st.viewport_configured = false;
                     0
                 })
             else {
                 return -10;
             };
+            if ret == 0 {
+                let mut st = GFX_CABI_STATE.lock();
+                st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                st.viewport_configured = false;
+            }
             ret
         })
     }
@@ -3308,6 +3310,44 @@ pub mod cabi {
             data_len,
             TexSampleKind::Rgba,
         )
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_rgba_image_async(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        if tex_id == 0 || width == 0 || height == 0 {
+            return -1;
+        }
+        if data_ptr.is_null() {
+            return -2;
+        }
+        let expected = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
+        if data_len < expected {
+            return -3;
+        }
+        let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+        if !queue_texture_rgba_upload_owned(
+            tex_id,
+            width,
+            height,
+            data.to_vec(),
+            TexSampleKind::Rgba,
+            0,
+            "rgba-async",
+            false,
+        ) {
+            return -4;
+        }
+        0
     }
 
     #[unsafe(no_mangle)]
@@ -3508,6 +3548,9 @@ pub mod cabi {
         crate::gfx::init(crate::limine::framebuffer_response());
 
         let mut st = GFX_CABI_STATE.lock();
+        if st.frame_active {
+            return -2;
+        }
         // Keep CABI epoch aligned at frame start so first-use texture upload does not
         // treat initial bootstrap as a backend switch and invalidate this frame.
         st.epoch = crate::gfx::backend_epoch();
@@ -3753,6 +3796,22 @@ pub mod cabi {
             return -4;
         }
 
+        let resolved_tex_images: Vec<Option<(ImageId, u32, u32)>> = {
+            let st = GFX_CABI_STATE.lock();
+            st.tex_images
+                .as_ref()
+                .map(|images| {
+                    images
+                        .iter()
+                        .map(|entry| {
+                            entry.as_ref().map(|img| (img.image, img.width.max(1), img.height.max(1)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let mut submitted_passes = 0usize;
+
         let Some(ret) = crate::gfx::with_context_tag(
             crate::gfx::SystemLockOwner::EndFrame,
             |ctx| {
@@ -3761,19 +3820,9 @@ pub mod cabi {
                     None => return -1,
                 };
                 let swap = ctx.swapchain_desc();
-                // Compose cursor into app-driven presents to avoid one-frame cursor blink
-                // between end_frame and the async cursor overlay tick.
                 let mut submit_draws = draws.clone();
                 let mut submit_rgb_src = rgb_src.clone();
                 let submit_tex_src = tex_src.clone();
-                if is_screen_present_frame {
-                    append_kernel_cursor_overlay_draws(
-                        &mut submit_draws,
-                        &mut submit_rgb_src,
-                        swap.extent.width,
-                        swap.extent.height,
-                    );
-                }
                 const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
 
                 enum Plan {
@@ -3870,19 +3919,16 @@ pub mod cabi {
                                     current_vp_w = swap.extent.width;
                                     current_vp_h = swap.extent.height;
                                 } else {
-                                    let st = GFX_CABI_STATE.lock();
                                     let idx = tex_id.saturating_sub(1) as usize;
-                                    let Some(img) = st
-                                        .tex_images
-                                        .as_ref()
-                                        .and_then(|images| images.get(idx))
-                                        .and_then(|entry| entry.as_ref())
+                                    let Some((image, width, height)) = resolved_tex_images
+                                        .get(idx)
+                                        .and_then(|entry| *entry)
                                     else {
                                         return -12;
                                     };
-                                    current_target_image = Some(img.image);
-                                    current_vp_w = img.width.max(1);
-                                    current_vp_h = img.height.max(1);
+                                    current_target_image = Some(image);
+                                    current_vp_w = width;
+                                    current_vp_h = height;
                                 }
                                 plans.push(Plan::SetRenderTarget {
                                     image: current_target_image,
@@ -4088,37 +4134,14 @@ pub mod cabi {
                                 let (image_id, log_missing_tex) = if image.is_valid() {
                                     (image, false)
                                 } else {
-                                    let mut st = GFX_CABI_STATE.lock();
                                     let idx = tex_id.saturating_sub(1) as usize;
-                                    let should_log = st.missing_tex_logs < 16
-                                        && st.last_missing_tex_id != tex_id;
-                                    if should_log {
-                                        st.last_missing_tex_id = tex_id;
-                                        st.missing_tex_logs = st.missing_tex_logs.saturating_add(1);
-                                    }
-                                    let desc = ImageDesc {
-                                        width: 1,
-                                        height: 1,
-                                        format: ImageFormat::Rgba8888,
-                                    };
-                                    let Ok(img) = ctx.create_image(desc) else {
+                                    let Some((resolved_image, _, _)) = resolved_tex_images
+                                        .get(idx)
+                                        .and_then(|entry| *entry)
+                                    else {
                                         return -10;
                                     };
-                                    let white = [255u8, 255u8, 255u8, 255u8];
-                                    let _ = ctx.write_image(img, &white);
-                                    let images = st.tex_images.get_or_insert_with(Vec::new);
-                                    if idx >= images.len() {
-                                        images.resize_with(idx + 1, || None);
-                                    }
-                                    images[idx] = Some(TexImage {
-                                        image: img,
-                                        width: 1,
-                                        height: 1,
-                                        sample_kind,
-                                        origin: TexCoordOrigin::TopLeft,
-                                        rgba: white.to_vec(),
-                                    });
-                                    (img, should_log)
+                                    (resolved_image, false)
                                 };
                                 if log_missing_tex {
                                     crate::globalog::log(format_args!(
@@ -4156,8 +4179,7 @@ pub mod cabi {
                         commands: cmds.as_slice(),
                     });
                     if submit_res.is_ok() {
-                        let mut st = GFX_CABI_STATE.lock();
-                        st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                        submitted_passes = submitted_passes.saturating_add(1);
                     } else {
                         if let Err(e) = submit_res {
                             crate::globalog::log(format_args!(
@@ -4195,8 +4217,7 @@ pub mod cabi {
                         commands: cmds.as_slice(),
                     });
                     if submit_res.is_ok() {
-                        let mut st = GFX_CABI_STATE.lock();
-                        st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                        submitted_passes = submitted_passes.saturating_add(1);
                         return 0;
                     }
                     if let Err(e) = submit_res {
@@ -4212,6 +4233,9 @@ pub mod cabi {
 
         if ret == 0 {
             let mut st = GFX_CABI_STATE.lock();
+            if submitted_passes != 0 {
+                st.ring_idx = (st.ring_idx + submitted_passes) % GFX_CABI_VBUF_RING_LEN;
+            }
             if is_screen_present_frame {
                 st.base_cache_valid = true;
                 st.base_cache_updated_at_ticks = embassy_time_driver::now();
@@ -4243,27 +4267,11 @@ pub mod cabi {
             drop(st);
 
             if is_screen_present_frame {
-                let mut screenshot_draws = draws.clone();
-                let mut screenshot_rgb = rgb_src.clone();
-                if let Some((vp_w, vp_h)) = crate::gfx::with_context_tag(
-                    crate::gfx::SystemLockOwner::CursorQueryViewport,
-                    |ctx| {
-                        let extent = ctx.swapchain_desc().extent;
-                        (extent.width, extent.height)
-                    },
-                ) {
-                    append_kernel_cursor_overlay_draws(
-                        &mut screenshot_draws,
-                        &mut screenshot_rgb,
-                        vp_w,
-                        vp_h,
-                    );
-                }
                 maybe_publish_composed_screenshot(
                     preserve_contents,
                     clear_rgb,
-                    screenshot_draws.as_slice(),
-                    screenshot_rgb.as_slice(),
+                    draws.as_slice(),
+                    rgb_src.as_slice(),
                     tex_src.as_slice(),
                 );
             }

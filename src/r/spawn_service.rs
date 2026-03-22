@@ -90,12 +90,9 @@ define_started_flags!(
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     GFX_LOADSCREEN_STARTED,
     BROWSER_NET_STARTED,
-    BROWSER_SECONDARY_STARTUP_ROUTE_STARTED,
-    WEBGPU_BROWSER_PRIMARY_STARTED,
-    WEBGPU_BROWSER_SECONDARY_STARTED,
+    BROWSER_TAB_FACTORY_STARTED,
     UI2_STARTED,
-    UI2_PRIMARY_BROWSER_WINDOW_STARTED,
-    UI2_TRUE_SURFER_TAB1_STARTED,
+    UI2_GFX_BROWSER_STARTED,
     UI2_GFX_TETRIS_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
@@ -119,19 +116,42 @@ define_started_flags!(
     ATOMIC_BOMB_STARTED,
 );
 
-const ENABLE_BROWSER_2: bool = false;
-const PRIMARY_BROWSER_INSTANCE_ID: u32 = trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID;
-const SECONDARY_BROWSER_INSTANCE_ID: u32 = PRIMARY_BROWSER_INSTANCE_ID + 1;
+const UI2_FACTORY_WINDOW_COUNT: u32 = 1;
+
+fn ui2_factory_window_title(slot: u32) -> String {
+    if slot == 0 {
+        String::from("Browser")
+    } else {
+        alloc::format!("Empty UI2 Window {}", slot.saturating_add(1))
+    }
+}
+
+fn ui2_factory_window_rect(slot: u32, total: u32) -> crate::r::ui2::Ui2Rect {
+    let (fb_w, fb_h) = crate::vga::framebuffer_dimensions().unwrap_or((1280, 800));
+    let cols = 1u32;
+    let rows = total.div_ceil(cols).max(1);
+    let margin_x = 48.0f32;
+    let margin_y = 84.0f32;
+    let gutter = 18.0f32;
+    let bottom_margin = 36.0f32;
+    let usable_w = (fb_w as f32) - margin_x * 2.0 - gutter * (cols.saturating_sub(1) as f32);
+    let usable_h = (fb_h as f32) - margin_y - bottom_margin - gutter * (rows.saturating_sub(1) as f32);
+    let width = (usable_w / cols as f32).clamp(520.0, 960.0);
+    let height = (usable_h / rows as f32).clamp(320.0, 640.0);
+    let col = slot % cols;
+    let row = slot / cols;
+    crate::r::ui2::Ui2Rect {
+        x: margin_x + col as f32 * (width + gutter),
+        y: margin_y + row as f32 * (height + gutter),
+        w: width,
+        h: height,
+    }
+}
 
 #[inline]
 fn boot_probe_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     embassy_time_driver::now().saturating_mul(1000) / hz
-}
-
-#[inline]
-pub const fn secondary_browser_enabled() -> bool {
-    ENABLE_BROWSER_2
 }
 
 #[inline]
@@ -374,24 +394,7 @@ async fn gfx_virgl_cursor_overlay_task() {
         "boot-probe: gfx-cursor-overlay task start ms={}\n",
         boot_probe_ms()
     );
-    #[cfg(not(feature = "gfx_virgl"))]
-    {
-        return;
-    }
-
-    #[cfg(feature = "gfx_virgl")]
-    {
-        loop {
-            if !crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
-                Timer::after(EmbassyDuration::from_millis(16)).await;
-                continue;
-            }
-
-            let _ = crate::gfx::cursor_overlay_tick();
-
-            Timer::after(EmbassyDuration::from_millis(16)).await;
-        }
-    }
+    return;
 }
 
 fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
@@ -437,51 +440,59 @@ fn spawn_browser_net(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-#[embassy_executor::task]
-async fn browser_svg_startup_route_task(browser_instance_id: u32) {
-    const HANDOFF_RETRY_MS: u64 = 100;
+fn spawn_browser_tab_factory(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
 
-    loop {
-        let window_id =
-            trueos_qjs::browser_task::browser_window_id_for_instance(browser_instance_id);
-        if window_id != 0 {
-            let rpc_id = trueos_qjs::browser_task::queue_browser_rpc_for_browser(
+    for slot in 0..UI2_FACTORY_WINDOW_COUNT {
+        let rect = ui2_factory_window_rect(slot, UI2_FACTORY_WINDOW_COUNT);
+        let title = ui2_factory_window_title(slot);
+        let window_id = if slot == 0 {
+            let browser_instance_id = trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID;
+            let tex_id = trueos_qjs::browser_task::PRIMARY_BROWSER_RENDER_TEX_ID;
+            let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
                 browser_instance_id,
-                String::from("navigate"),
-                String::from("[{\"url\":\"trueos://ui/svg-demo\"}]"),
-                window_id,
+                tex_id,
             );
-            if rpc_id != 0 {
-                crate::log!(
-                    "browser-html-loader: queued svg demo route for browser_instance={} window={}\n",
-                    browser_instance_id,
-                    window_id
-                );
-                Timer::after(EmbassyDuration::from_secs(60)).await;
-                continue;
-            }
+            crate::r::ui2::create_hosted_browser_window(
+                title.as_str(),
+                rect,
+                40i16.saturating_add(slot as i16),
+                255,
+                browser_instance_id,
+                tex_id,
+            )
+        } else {
+            crate::r::ui2::create_empty_ui2_window(
+                title.as_str(),
+                rect,
+                40i16.saturating_add(slot as i16),
+                255,
+            )
+        };
+        if window_id == 0 {
+            crate::log!("ui2-window-factory: failed empty window slot={}\n", slot);
+            continue;
         }
-
-        Timer::after(EmbassyDuration::from_millis(HANDOFF_RETRY_MS)).await;
+        crate::log!(
+            "ui2-window-factory: window={} rect={}x{}@{},{}\n",
+            window_id,
+            rect.w as u32,
+            rect.h as u32,
+            rect.x as i32,
+            rect.y as i32
+        );
     }
+
+    SpawnAttempt::Spawned
 }
 
-fn spawn_secondary_browser_startup_route(spawner: Spawner) -> SpawnAttempt {
-    if !secondary_browser_enabled() {
-        return SpawnAttempt::Skipped;
-    }
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(browser_svg_startup_route_task(
-            SECONDARY_BROWSER_INSTANCE_ID,
-        ))
-    })
-}
-
-fn spawn_primary_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
+fn spawn_ui2_gfx_browser(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(trueos_qjs::browser_task::boot_browser(
-            PRIMARY_BROWSER_INSTANCE_ID,
-        ))
+        worker_spawner.spawn(
+            trueos_qjs::browser_task::ui2_gfx_browser_task(
+                trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
+            ),
+        )
     })
 }
 
@@ -489,74 +500,6 @@ fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
         ap1_spawner.spawn(crate::r::ui2::ui2_task())
     })
-}
-
-fn spawn_ui2_primary_browser_window(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-
-    let (fb_w, fb_h) = crate::vga::framebuffer_dimensions().unwrap_or((1280, 800));
-    let margin_x = 44.0f32;
-    let margin_y = 96.0f32;
-    let width = ((fb_w as f32) - margin_x * 2.0).clamp(640.0, 1080.0);
-    let height = ((fb_h as f32) - margin_y * 2.0).clamp(420.0, 720.0);
-    let rect = crate::r::ui2::Ui2Rect {
-        x: (((fb_w as f32) - width) * 0.5).max(24.0),
-        y: (((fb_h as f32) - height) * 0.5).max(64.0),
-        w: width,
-        h: height,
-    };
-
-    let window_id = crate::r::ui2::create_hosted_browser_window(
-        "Browser",
-        rect,
-        40,
-        255,
-        PRIMARY_BROWSER_INSTANCE_ID,
-    );
-    if window_id == 0 {
-        crate::log!("ui2-browser: failed to create primary browser window\n");
-        return SpawnAttempt::Skipped;
-    }
-
-    crate::log!(
-        "ui2-browser: created primary browser window={} rect={}x{}@{},{}\n",
-        window_id,
-        rect.w as u32,
-        rect.h as u32,
-        rect.x as i32,
-        rect.y as i32
-    );
-    SpawnAttempt::Spawned
-}
-
-fn spawn_ui2_true_surfer_tab1_window(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-
-    let (fb_w, fb_h) = crate::vga::framebuffer_dimensions().unwrap_or((1280, 800));
-    let width = ((fb_w as f32) * 0.38).clamp(360.0, 640.0);
-    let height = ((fb_h as f32) * 0.32).clamp(240.0, 420.0);
-    let rect = crate::r::ui2::Ui2Rect {
-        x: (((fb_w as f32) - width) * 0.5 + 120.0).min((fb_w as f32) - width - 16.0),
-        y: (((fb_h as f32) - height) * 0.5 + 72.0).min((fb_h as f32) - height - 16.0),
-        w: width,
-        h: height,
-    };
-
-    let window_id = crate::r::ui2::create_window("True Surfer Tab1", rect, 41, 255);
-    if window_id == 0 {
-        crate::log!("ui2-window: failed to create true surfer tab1 window\n");
-        return SpawnAttempt::Skipped;
-    }
-
-    crate::log!(
-        "ui2-window: created true surfer tab1 window={} rect={}x{}@{},{}\n",
-        window_id,
-        rect.w as u32,
-        rect.h as u32,
-        rect.x as i32,
-        rect.y as i32
-    );
-    SpawnAttempt::Spawned
 }
 
 fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
@@ -704,8 +647,6 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_CONFIGURED
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-const WEBGPU_BROWSER_READY: u32 = crate::r::readiness::UI2_READY;
-
 static TASKS: &[TaskSpec] = &[
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -804,38 +745,23 @@ static TASKS: &[TaskSpec] = &[
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    if ENABLE_BROWSER_2 {
-        TaskSpec::disabled(
-            "browser-startup-route-secondary",
-            crate::r::readiness::NET_CONFIGURED,
-            &BROWSER_SECONDARY_STARTUP_ROUTE_STARTED,
-            spawn_secondary_browser_startup_route,
-        )
-    } else {
-        TaskSpec::disabled(
-            "browser-startup-route-secondary",
-            crate::r::readiness::NET_CONFIGURED,
-            &BROWSER_SECONDARY_STARTUP_ROUTE_STARTED,
-            spawn_secondary_browser_startup_route,
-        )
-    },
     TaskSpec::enabled(
         "ui2",
         crate::r::readiness::GFX_BACKEND_READY,
         &UI2_STARTED,
         spawn_ui2,
     ),
-    TaskSpec::disabled(
-        "ui2-browser-primary-window",
+    TaskSpec::enabled(
+        "browser-tab-factory",
         crate::r::readiness::UI2_READY,
-        &UI2_PRIMARY_BROWSER_WINDOW_STARTED,
-        spawn_ui2_primary_browser_window,
+        &BROWSER_TAB_FACTORY_STARTED,
+        spawn_browser_tab_factory,
     ),
     TaskSpec::enabled(
-        "ui2-true-surfer-tab1-window",
+        "ui2-gfx-browser",
         crate::r::readiness::UI2_READY,
-        &UI2_TRUE_SURFER_TAB1_STARTED,
-        spawn_ui2_true_surfer_tab1_window,
+        &UI2_GFX_BROWSER_STARTED,
+        spawn_ui2_gfx_browser,
     ),
     TaskSpec::enabled(
         "ui2-gfx-tetris",
@@ -854,12 +780,6 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::UI2_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
-    ),
-    TaskSpec::disabled(
-        "webgpu-browser-primary",
-        WEBGPU_BROWSER_READY,
-        &WEBGPU_BROWSER_PRIMARY_STARTED,
-        spawn_primary_webgpu_browser,
     ),
     TaskSpec::enabled(
         "gfx-intel-scanout-demo",
@@ -957,6 +877,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
                             spec.name,
                             "gfx_loadscreen"
                                 | "ui2"
+                                | "ui2-gfx-browser"
                                 | "ui2-gfx-tetris"
                                 | "ui2-triangle-demo"
                                 | "ui2-mandelbrot-demo"

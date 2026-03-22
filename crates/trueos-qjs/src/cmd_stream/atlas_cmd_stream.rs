@@ -671,6 +671,9 @@ pub(super) unsafe extern "C" fn qjs_cmd_stream_draw_atlas_text(
     argc: i32,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
+    if !super::CMD_STREAM_FRAME_OPEN.load(core::sync::atomic::Ordering::Relaxed) {
+        return qjs::JSValue::undefined();
+    }
     if argv.is_null() || argc < 5 {
         return qjs::JSValue::undefined();
     }

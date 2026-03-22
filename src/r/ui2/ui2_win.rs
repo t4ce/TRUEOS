@@ -101,12 +101,18 @@ pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     id
 }
 
+pub fn create_empty_ui2_window(title: &str, content_rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
+    let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
+    create_window(title, rect, z, alpha)
+}
+
 pub fn create_hosted_browser_window(
     title: &str,
     rect: Ui2Rect,
     z: i16,
     alpha: u8,
     browser_instance_id: u32,
+    tex_id: u32,
 ) -> u32 {
     let browser_instance_id = if browser_instance_id == 0 {
         PRIMARY_HOSTED_CONTENT_ID
@@ -125,7 +131,18 @@ pub fn create_hosted_browser_window(
     );
     if let Some(window) = window_mut(&mut state, id) {
         window.browser_instance_id = browser_instance_id;
+        window.content_tex_id = tex_id;
+        window.content_tex_blend = true;
     }
+    let initial_content = state
+        .windows
+        .iter()
+        .find(|window| window.id == id)
+        .and_then(|window| window_content_rect(&state, window))
+        .map(|content| {
+            let (_, _, width, height) = snap_browser_content_rect(content);
+            (width, height)
+        });
     if browser_instance_id == PRIMARY_HOSTED_CONTENT_ID {
         UI2_BROWSER_WINDOW_ID.store(id, Ordering::Release);
     }
@@ -133,6 +150,19 @@ pub fn create_hosted_browser_window(
     state.compose_reason = "create-browser-window";
     refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
+    drop(state);
+
+    if let Some((width, height)) = initial_content {
+        let pixels = alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
+        let _ = crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+            tex_id,
+            width,
+            height,
+            pixels.as_slice(),
+            id,
+            "create-browser-window",
+        );
+    }
     id
 }
 

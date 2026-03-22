@@ -217,7 +217,7 @@ fn push_border_rect_rgba(
     push_rect(out, x1 - bw, y0, x1, y1, r, g, b, a, viewport_w, viewport_h);
 }
 
-fn push_filled_rect(
+pub(crate) fn push_filled_rect(
     out: &mut Vec<u8>,
     x: f32,
     y: f32,
