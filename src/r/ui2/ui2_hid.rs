@@ -642,14 +642,17 @@ fn begin_move_drag_for_cursor(
     }
     clear_window_drag_claims(state, window_id);
     clear_other_drag_modes_for_slot(state, slot_id);
-    upsert_move_drag(state, Ui2WindowMoveDrag {
-        active: true,
-        window_id,
-        cursor_slot_id: slot_id,
-        grab_dx: cursor_x - next_rect.x,
-        grab_dy: cursor_y - next_rect.y,
-        edge_actions_armed: window_edge_drop_action(state, cursor_x, cursor_y).is_none(),
-    });
+    upsert_move_drag(
+        state,
+        Ui2WindowMoveDrag {
+            active: true,
+            window_id,
+            cursor_slot_id: slot_id,
+            grab_dx: cursor_x - next_rect.x,
+            grab_dy: cursor_y - next_rect.y,
+            edge_actions_armed: window_edge_drop_action(state, cursor_x, cursor_y).is_none(),
+        },
+    );
     state.compose_reason = "begin-window-move";
     refresh_window_hit_entries(state, window_id);
     true
@@ -694,17 +697,20 @@ pub(super) fn begin_window_resize_for_cursor(
 
     clear_window_drag_claims(state, window_id);
     clear_other_drag_modes_for_slot(state, slot_id);
-    upsert_resize_drag(state, Ui2WindowResizeDrag {
-        active: true,
-        window_id,
-        cursor_slot_id: slot_id,
-        live_apply: window_uses_live_resize(window.kind),
-        edge_mask,
-        start_cursor_x: cursor.x,
-        start_cursor_y: cursor.y,
-        start_rect: window.rect,
-        preview_rect: window.rect,
-    });
+    upsert_resize_drag(
+        state,
+        Ui2WindowResizeDrag {
+            active: true,
+            window_id,
+            cursor_slot_id: slot_id,
+            live_apply: window_uses_live_resize(window.kind),
+            edge_mask,
+            start_cursor_x: cursor.x,
+            start_cursor_y: cursor.y,
+            start_rect: window.rect,
+            preview_rect: window.rect,
+        },
+    );
     state.compose_reason = "begin-window-resize";
     let top_z = state
         .windows
@@ -782,14 +788,17 @@ fn begin_vertical_scroll_drag_for_cursor(
     };
     clear_window_drag_claims(state, window_id);
     clear_other_drag_modes_for_slot(state, slot_id);
-    upsert_scroll_drag(state, Ui2WindowScrollDrag {
-        active: true,
-        window_id,
-        cursor_slot_id: slot_id,
-        track_rect: track,
-        thumb_extent: thumb_h,
-        grab_offset,
-    });
+    upsert_scroll_drag(
+        state,
+        Ui2WindowScrollDrag {
+            active: true,
+            window_id,
+            cursor_slot_id: slot_id,
+            track_rect: track,
+            thumb_extent: thumb_h,
+            grab_offset,
+        },
+    );
     update_scroll_drag_for_cursor(state, slot_id, cursor_y, UI2_PRIMARY_BUTTON_MASK)
 }
 
@@ -812,13 +821,16 @@ fn begin_window_scroll_pan_for_cursor(
     }
     clear_window_drag_claims(state, window_id);
     clear_other_drag_modes_for_slot(state, slot_id);
-    upsert_scroll_pan_drag(state, Ui2WindowScrollPanDrag {
-        active: true,
-        window_id,
-        cursor_slot_id: slot_id,
-        last_cursor_x: cursor_x,
-        last_cursor_y: cursor_y,
-    });
+    upsert_scroll_pan_drag(
+        state,
+        Ui2WindowScrollPanDrag {
+            active: true,
+            window_id,
+            cursor_slot_id: slot_id,
+            last_cursor_x: cursor_x,
+            last_cursor_y: cursor_y,
+        },
+    );
     state.compose_reason = "begin-scroll-pan";
     true
 }

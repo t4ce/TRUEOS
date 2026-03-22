@@ -493,11 +493,9 @@ fn spawn_ui2_window_factory(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ui2_gfx_browser(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(
-            trueos_qjs::browser_task::ui2_gfx_browser_task(
-                trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
-            ),
-        )
+        worker_spawner.spawn(trueos_qjs::browser_task::ui2_gfx_browser_task(
+            trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
+        ))
     })
 }
 

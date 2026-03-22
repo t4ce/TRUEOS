@@ -120,11 +120,13 @@ async fn open_udp(net: &VNet, port: u16) -> Option<vnet::NetHandle> {
             if let vnet::Event::Opened { handle, kind } = ev
                 && kind == vnet::SocketKind::Udp
             {
+                crate::log!("sntp: udp opened on port={} handle={:?}\n", port, handle);
                 return Some(handle);
             }
         }
 
         if Instant::now() >= deadline {
+            crate::log!("sntp: udp open timed out on port={}\n", port);
             return None;
         }
 
@@ -134,27 +136,83 @@ async fn open_udp(net: &VNet, port: u16) -> Option<vnet::NetHandle> {
 
 #[embassy_executor::task]
 pub async fn sntp_service_task() {
+    crate::log!("sntp: waiting for NET_V4_CONFIGURED\n");
     crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
+    crate::log!("sntp: readiness reached, starting service loop\n");
+
+    let mut no_dev_count: u32 = 0;
+    let mut vnet_open_fail_count: u32 = 0;
+    let mut udp_open_fail_count: u32 = 0;
 
     loop {
         let profile = NetProfile::default();
         let Some(dev_idx) = profile.resolve_device_index() else {
+            no_dev_count = no_dev_count.saturating_add(1);
+            if no_dev_count == 1 || no_dev_count % 20 == 0 {
+                crate::log!(
+                    "sntp: no network device for default profile (retry_count={})\n",
+                    no_dev_count
+                );
+            }
             Timer::after(EmbassyDuration::from_millis(250)).await;
             continue;
         };
+        if no_dev_count != 0 {
+            crate::log!(
+                "sntp: network device resolved after {} retries (dev_idx={})\n",
+                no_dev_count,
+                dev_idx
+            );
+            no_dev_count = 0;
+        }
 
         let Some(net) = VNet::open(dev_idx) else {
+            vnet_open_fail_count = vnet_open_fail_count.saturating_add(1);
+            if vnet_open_fail_count == 1 || vnet_open_fail_count % 20 == 0 {
+                crate::log!(
+                    "sntp: VNet::open failed (dev_idx={}, retry_count={})\n",
+                    dev_idx,
+                    vnet_open_fail_count
+                );
+            }
             Timer::after(EmbassyDuration::from_millis(250)).await;
             continue;
         };
+        if vnet_open_fail_count != 0 {
+            crate::log!(
+                "sntp: VNet::open recovered after {} retries (dev_idx={})\n",
+                vnet_open_fail_count,
+                dev_idx
+            );
+            vnet_open_fail_count = 0;
+        }
 
         let Some(udp) = open_udp(&net, SNTP_PORT).await else {
+            udp_open_fail_count = udp_open_fail_count.saturating_add(1);
+            if udp_open_fail_count == 1 || udp_open_fail_count % 20 == 0 {
+                crate::log!(
+                    "sntp: failed to open UDP socket on port {} (retry_count={})\n",
+                    SNTP_PORT,
+                    udp_open_fail_count
+                );
+            }
             Timer::after(EmbassyDuration::from_millis(250)).await;
             continue;
         };
+        if udp_open_fail_count != 0 {
+            crate::log!(
+                "sntp: UDP socket open recovered after {} retries\n",
+                udp_open_fail_count
+            );
+            udp_open_fail_count = 0;
+        }
+
+        let mut served_packets: u64 = 0;
+        let mut rejected_packets: u64 = 0;
 
         loop {
             let mut had_event = false;
+            let mut socket_closed = false;
 
             for _ in 0..64 {
                 let Some(ev) = net.pop_event() else {
@@ -168,16 +226,41 @@ pub async fn sntp_service_task() {
                             continue;
                         }
                         if let Some(reply) = build_sntp_response(data.as_slice()) {
+                            served_packets = served_packets.saturating_add(1);
+                            if served_packets == 1 || served_packets % 64 == 0 {
+                                crate::log!(
+                                    "sntp: replied to {} requests (last_from={:?})\n",
+                                    served_packets,
+                                    from
+                                );
+                            }
                             let _ = net.submit(vnet::Command::SendUdp {
                                 handle: udp,
                                 remote: from,
                                 data: vnet::ByteBuf::from_slice_trunc(&reply),
                             });
+                        } else {
+                            rejected_packets = rejected_packets.saturating_add(1);
+                            if rejected_packets == 1 || rejected_packets % 64 == 0 {
+                                crate::log!(
+                                    "sntp: ignored non-client/invalid packet count={} (from={:?})\n",
+                                    rejected_packets,
+                                    from
+                                );
+                            }
                         }
                     }
-                    vnet::Event::Closed { handle } if handle == udp => break,
+                    vnet::Event::Closed { handle } if handle == udp => {
+                        crate::log!("sntp: UDP socket closed (handle={:?}), reopening\n", handle);
+                        socket_closed = true;
+                        break;
+                    }
                     _ => {}
                 }
+            }
+
+            if socket_closed {
+                break;
             }
 
             if !had_event {
