@@ -2,6 +2,18 @@ use core::fmt;
 
 extern crate alloc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogRange {
+    Start,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogAmount {
+    Lines,
+    Chars,
+}
+
 #[macro_export]
 macro_rules! log {
     ($($tt:tt)*) => {{
@@ -14,6 +26,57 @@ pub fn log(args: fmt::Arguments<'_>) {
     debugcon::log(args);
     let _ = crate::vga::log(args);
     placeholder::log(args);
+}
+
+pub fn log_excerpt(src: &str, range: LogRange, amount: LogAmount, count: usize) {
+    let excerpt = match amount {
+        LogAmount::Lines => excerpt_lines(src, range, count),
+        LogAmount::Chars => excerpt_chars(src, range, count),
+    };
+    log(format_args!("{}\n", excerpt));
+}
+
+fn excerpt_chars(src: &str, range: LogRange, count: usize) -> alloc::string::String {
+    if count == 0 || src.is_empty() {
+        return alloc::string::String::new();
+    }
+
+    match range {
+        LogRange::Start => src.chars().take(count).collect(),
+        LogRange::End => src
+            .chars()
+            .rev()
+            .take(count)
+            .collect::<alloc::vec::Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect(),
+    }
+}
+
+fn excerpt_lines(src: &str, range: LogRange, count: usize) -> alloc::string::String {
+    if count == 0 || src.is_empty() {
+        return alloc::string::String::new();
+    }
+
+    let lines: alloc::vec::Vec<&str> = src.lines().collect();
+    if lines.is_empty() {
+        return alloc::string::String::new();
+    }
+
+    let slice = match range {
+        LogRange::Start => &lines[..core::cmp::min(count, lines.len())],
+        LogRange::End => &lines[lines.len().saturating_sub(count)..],
+    };
+
+    let mut out = alloc::string::String::new();
+    for (idx, line) in slice.iter().enumerate() {
+        if idx != 0 {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    out
 }
 
 pub fn snapshot() -> alloc::vec::Vec<u8> {

@@ -4,6 +4,7 @@ use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
+use crate::globalog::{self, LogAmount, LogRange};
 use heapless::String as HString;
 use spin::Mutex;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -18,7 +19,6 @@ const SURF_MAX_BYTES: usize = 4 * 1024 * 1024;
 const SURF_HTTPS_TIMEOUT_MS: u32 = SURF_TIMEOUT_MS * 4;
 const MAX_PENDING_REQUESTS: usize = 32;
 const MAX_STATUS_ENTRIES: usize = 64;
-
 
 #[derive(Clone, Debug)]
 struct ParsedHttpUrl {
@@ -36,6 +36,8 @@ enum HttpPlainFetchError {
     Redirect(String),
     ResponseTooLarge,
 }
+
+
 
 /*
 static NEXT_BROWSER_NET_OP_ID: AtomicU32 = AtomicU32::new(1);
@@ -193,21 +195,20 @@ pub fn status(op_id: u32) -> Option<BrowserNetStatus> {
 
 #[embassy_executor::task]
 pub async fn html_fetch_service() {
-    loop {
+    loop {/*
         let Some(request) = pop_request() else {
             Timer::after(EmbassyDuration::from_millis(100)).await;
             continue;
         };
 
-        /*
+        
         update_status(request.op_id, |entry| {
             entry.state = BrowserNetState::Loading;
             entry.error = None;
             entry.delivered = false;
             entry.bytes = 0;
         });
-        */
-        /*
+    
         let mut url: HString<256> = HString::new();
         if url.push_str(request.url.as_str()).is_err() {
             update_status(request.op_id, |entry| {
@@ -216,7 +217,7 @@ pub async fn html_fetch_service() {
             });
             continue;
         }
-        */
+        
         match crate::tst_html::fetch_html_best_effort(url).await {
             Ok(html) => {
                 let is_latest = latest_op_for_browser(request.browser_instance_id) == request.op_id;
@@ -263,7 +264,8 @@ pub async fn html_fetch_service() {
                     err
                 );
             }
-        }
+        } 
+            */
     }
 }
 

@@ -41,8 +41,6 @@ mod smp;
 mod tga;
 #[path = "tst/gfx_tetris.rs"]
 mod tst_gfx_tetris;
-#[path = "tst/html.rs"]
-mod tst_html;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
 #[path = "tst/net_tcp_shell.rs"]
