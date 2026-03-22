@@ -1,6 +1,7 @@
 pub mod dns;
 pub mod ftp;
 pub mod html;
+pub mod http;
 pub mod https;
 pub mod json;
 pub mod ntp;
