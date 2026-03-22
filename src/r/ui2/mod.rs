@@ -1205,10 +1205,48 @@ fn note_window_viewport_sync_needed(state: &mut Ui2State, id: u32) -> bool {
     true
 }
 
+fn ensure_window_texture_size(
+    tex_id: u32,
+    width: u32,
+    height: u32,
+    repaint_window_id: u32,
+    repaint_reason: &'static str,
+) -> bool {
+    if tex_id == 0 || width == 0 || height == 0 {
+        return false;
+    }
+
+    let mut existing_w = 0u32;
+    let mut existing_h = 0u32;
+    let already_sized = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_texture_dimensions(
+            tex_id,
+            &mut existing_w as *mut u32,
+            &mut existing_h as *mut u32,
+        ) == 0
+    } && existing_w == width
+        && existing_h == height;
+    if already_sized {
+        return true;
+    }
+
+    let pixels = alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
+    crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+        tex_id,
+        width,
+        height,
+        pixels.as_slice(),
+        repaint_window_id,
+        repaint_reason,
+    )
+}
+
 fn sync_window_container(
+    window_id: u32,
     renderable: bool,
     kind: Ui2WindowKind,
     content_id: HostedContentId,
+    content_tex_id: u32,
     content: Option<Ui2Rect>,
 ) -> bool {
     if !renderable {
@@ -1219,6 +1257,16 @@ fn sync_window_container(
             let Some(content) = content else {
                 return true;
             };
+            let (_, _, viewport_w, viewport_h) = snap_browser_content_rect(content);
+            if !ensure_window_texture_size(
+                content_tex_id,
+                viewport_w,
+                viewport_h,
+                window_id,
+                "browser-tab-texture-resize",
+            ) {
+                return false;
+            }
             queue_browser_window_viewport(content_id, content)
         }
         Ui2WindowKind::HostedSurface => true,
@@ -1226,7 +1274,7 @@ fn sync_window_container(
 }
 
 fn sync_pending_window_containers(state: &mut Ui2State) {
-    let pending: Vec<(u32, bool, Ui2WindowKind, HostedContentId, Option<Ui2Rect>)> = state
+    let pending: Vec<(u32, bool, Ui2WindowKind, HostedContentId, u32, Option<Ui2Rect>)> = state
         .windows
         .iter()
         .filter(|window| window.container_sync_needed)
@@ -1242,14 +1290,15 @@ fn sync_pending_window_containers(state: &mut Ui2State) {
                 renderable,
                 window.kind,
                 window_browser_instance_id(window),
+                window.content_tex_id,
                 content,
             )
         })
         .collect();
 
     let mut synced_ids = Vec::new();
-    for (id, renderable, kind, content_id, content) in pending {
-        if sync_window_container(renderable, kind, content_id, content) {
+    for (id, renderable, kind, content_id, content_tex_id, content) in pending {
+        if sync_window_container(id, renderable, kind, content_id, content_tex_id, content) {
             synced_ids.push(id);
         }
     }
@@ -1635,110 +1684,6 @@ fn texture_is_drawable(tex_id: u32) -> bool {
         && crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id) == ASYNC_TEX_STATUS_READY
 }
 
-const HOSTED_SCENE_CMD_DRAW_TEX_RECT_UV: u8 = 1;
-
-#[inline]
-fn hosted_scene_cmd_read_u32(bytes: &[u8], cursor: &mut usize) -> Option<u32> {
-    let end = cursor.checked_add(4)?;
-    let slice = bytes.get(*cursor..end)?;
-    *cursor = end;
-    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
-}
-
-#[inline]
-fn hosted_scene_cmd_read_f32(bytes: &[u8], cursor: &mut usize) -> Option<f32> {
-    hosted_scene_cmd_read_u32(bytes, cursor).map(f32::from_bits)
-}
-
-fn draw_hosted_scene_cmds_no_present(
-    state: &Ui2State,
-    window: &Ui2Window,
-    snapshot: &UiHostedSurfaceState,
-    draw_x: f32,
-    draw_y: f32,
-) -> bool {
-    let bytes = snapshot.scene_cmds.as_slice();
-    if bytes.is_empty() {
-        return false;
-    }
-
-    let mut cursor = 0usize;
-    let mut drew = false;
-    while cursor < bytes.len() {
-        let op = bytes[cursor];
-        cursor += 1;
-        match op {
-            HOSTED_SCENE_CMD_DRAW_TEX_RECT_UV => {
-                let Some(tex_id) = hosted_scene_cmd_read_u32(bytes, &mut cursor) else {
-                    break;
-                };
-                let Some(x) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
-                    break;
-                };
-                let Some(y) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
-                    break;
-                };
-                let Some(width) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
-                    break;
-                };
-                let Some(height) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
-                    break;
-                };
-                let Some(u0) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
-                    break;
-                };
-                let Some(v0) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
-                    break;
-                };
-                let Some(u1) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
-                    break;
-                };
-                let Some(v1) = hosted_scene_cmd_read_f32(bytes, &mut cursor) else {
-                    break;
-                };
-                let Some(&blend_u8) = bytes.get(cursor) else {
-                    break;
-                };
-                cursor += 1;
-                let Some(&cmd_alpha) = bytes.get(cursor) else {
-                    break;
-                };
-                cursor += 1;
-
-                if !texture_is_drawable(tex_id) {
-                    continue;
-                }
-                let alpha = modulate_alpha(cmd_alpha, window.alpha);
-                drew |= draw_texture_rect_uv_no_present(
-                    tex_id,
-                    draw_x + x,
-                    draw_y + y,
-                    width,
-                    height,
-                    u0,
-                    v0,
-                    u1,
-                    v1,
-                    state.view_w,
-                    state.view_h,
-                    blend_u8 != 0,
-                    alpha,
-                );
-            }
-            _ => break,
-        }
-    }
-
-    drew
-}
-
-fn hosted_browser_has_drawable_content(snapshot: &UiHostedSurfaceState) -> bool {
-    if snapshot.viewport_width == 0 || snapshot.viewport_height == 0 {
-        return false;
-    }
-    !snapshot.scene_cmds.is_empty()
-}
-
 fn draw_window_content_placeholder(
     state: &Ui2State,
     window: &Ui2Window,
@@ -1796,27 +1741,6 @@ fn draw_window_content_placeholder(
         state.view_h,
         subline_alpha,
     );
-}
-
-fn draw_browser_window_content(state: &Ui2State, window: &Ui2Window, content: Ui2Rect) -> bool {
-    let snapshot = browser_surface_state_for_window(window);
-    if !hosted_browser_has_drawable_content(&snapshot) {
-        return false;
-    }
-
-    let (draw_x_i, draw_y_i, snapped_w, snapped_h) = snap_browser_content_rect(content);
-    let sx = draw_x_i.max(0) as u32;
-    let sy = draw_y_i.max(0) as u32;
-    let sw = snapped_w;
-    let sh = snapped_h;
-    let draw_x_f = draw_x_i as f32;
-    let draw_y_f = draw_y_i as f32;
-    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_scissor(sx, sy, sw, sh) };
-
-    let drew = draw_hosted_scene_cmds_no_present(state, window, &snapshot, draw_x_f, draw_y_f);
-
-    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_clear_scissor() };
-    drew
 }
 
 fn log_browser_surface_updates(state: &mut Ui2State) {
@@ -2105,15 +2029,27 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
             if let Some(content) = content_rect {
-                if draw_browser_window_content(state, window, content) {
+                if texture_is_drawable(window.content_tex_id)
+                    && draw_texture_rect_no_present(
+                        window.content_tex_id,
+                        content.x,
+                        content.y,
+                        content.w,
+                        content.h,
+                        state.view_w,
+                        state.view_h,
+                        true,
+                        window.alpha,
+                    )
+                {
                     return;
                 }
                 draw_window_content_placeholder(
                     state,
                     window,
                     content,
-                    b"Starting Browser",
-                    b"Waiting for first frame",
+                    b"Starting Browser Tab",
+                    b"Waiting for texture frame",
                 );
                 return;
             }
@@ -2220,7 +2156,10 @@ fn compose_windows(state: &mut Ui2State) {
                 dirty_count
             );
         }
-        unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
+        let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
+        if begin_rc != 0 {
+            return;
+        }
         for idx in sorted_window_indices(state) {
             let window = &state.windows[idx];
             draw_window_frame(state, window);

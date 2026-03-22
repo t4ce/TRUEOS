@@ -207,10 +207,8 @@ export function createBrowserUiBridge() {
       return false;
     }
 
-    cmdStream.clearRenderTarget();
     cmdStream.setViewport(composeViewportWidth, composeViewportHeight);
     composeSceneRegionsToCurrentTarget(regions, vw, vh, scrollX, scrollY, contentTopY, overlayRuns, null);
-    cmdStream.clearRenderTarget();
     finalizePaintState(doc);
     return true;
   }
@@ -235,46 +233,12 @@ export function createBrowserUiBridge() {
       if (!browserCanRenderScene || !doc) {
         return true;
       }
-      if (typeof cmdStream.beginFrame === 'function' && typeof cmdStream.endFrame === 'function') {
-        cmdStream.beginFrame();
-        try {
-          ensureBrowserRegions(doc, vw, vh, scrollY, contentH);
-        } finally {
-          cmdStream.endFrame();
-        }
-      } else {
-        ensureBrowserRegions(doc, vw, vh, scrollY, contentH);
-      }
+      // In hosted/ui2 mode, the browser window owns invalidation state but not
+      // frame lifetime. Only renderToTexture() is allowed to drive cmdStream.
       finalizePaintState(doc);
       return true;
     }
     return false;
-  }
-
-  function refreshHostedRegions(args) {
-    const {
-      hostedByUi2,
-      browserCanRenderScene,
-      doc,
-      vw,
-      vh,
-      scrollY,
-      contentH,
-    } = args;
-    if (!hostedByUi2 || !browserCanRenderScene || !doc) {
-      return false;
-    }
-    if (typeof cmdStream.beginFrame === 'function' && typeof cmdStream.endFrame === 'function') {
-      cmdStream.beginFrame();
-      try {
-        ensureBrowserRegions(doc, vw, vh, scrollY, contentH);
-      } finally {
-        cmdStream.endFrame();
-      }
-      return true;
-    }
-    ensureBrowserRegions(doc, vw, vh, scrollY, contentH);
-    return true;
   }
 
   function getSurfaceState(args) {
@@ -299,30 +263,8 @@ export function createBrowserUiBridge() {
       ? Math.max(1, Number(contentH || vh) | 0)
       : Math.max(1, Number(vh || 1) | 0);
     void doc;
-    const orderedRegions = state.regionCache
-      .slice()
-      .sort((a, b) => {
-        const ay = Math.max(0, Number(a && a.docY || 0) | 0);
-        const by = Math.max(0, Number(b && b.docY || 0) | 0);
-        if (ay !== by) return ay - by;
-        const at = Math.max(0, Number(a && a.texId || 0) | 0);
-        const bt = Math.max(0, Number(b && b.texId || 0) | 0);
-        return at - bt;
-      });
 
     return {
-      cacheRevision: state.regionCacheRevision,
-      cacheWidth: state.regionCacheWidth,
-      tileHeight: state.regionTileHeight,
-      regionCount: state.regionCache.length,
-      regions: orderedRegions.map((entry) => ({
-        texId: Math.max(0, Number(entry && entry.texId || 0) | 0),
-        docY: Math.max(0, Number(entry && entry.docY || 0) | 0),
-        width: Math.max(0, Number(entry && entry.width || 0) | 0),
-        height: Math.max(0, Number(entry && entry.height || 0) | 0),
-        revision: Math.max(0, Number(entry && entry.revision || 0) | 0),
-        dirty: !!(entry && entry.dirty),
-      })),
       viewportWidth: vw,
       viewportHeight: vh,
       contentWidth: safeContentW,
@@ -346,7 +288,6 @@ export function createBrowserUiBridge() {
   return {
     invalidateRegionCache,
     requestRepaint,
-    refreshHostedRegions,
     paint,
     paintToCurrentTarget,
     getSurfaceState,
