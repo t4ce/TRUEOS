@@ -1,7 +1,6 @@
 import * as parse5 from 'parse5';
 import * as cmdStream from 'trueos:cmd_stream';
 import Yoga from 'yoga-layout';
-import { createFpsOverlay } from './fps.mjs';
 import { createBrowserAssetManager } from './browser_assets.mjs';
 import { createBrowserUiBridge } from './browser_ui.mjs';
 import { createBrowserPageState } from './browser_page_state.mjs';
@@ -41,11 +40,9 @@ let browserRenderedSeq = 0;
 let browserHostedFrameActive = false;
 const qjsInputQueue = [];
 let qjsInputDrainPromise = Promise.resolve();
-let fpsOverlayEnabled = false;
 let browserCanRenderScene = false;
 let htmlReadyTimeoutId = null;
 
-const fpsOverlay = createFpsOverlay();
 const browserUi = createBrowserUiBridge();
 runtime.host.__trueosBrowserShowClosingTagRows = SHOW_CLOSING_TAG_ROWS;
 const FALLBACK_BROWSER_API_CONTRACT = {
@@ -1558,25 +1555,8 @@ function nowMs() {
   return 0;
 }
 
-function docHasTextRows(doc) {
-  const rows = Array.isArray(doc && doc.rows) ? doc.rows : [];
-  for (let i = 0; i < rows.length; i += 1) {
-    const row = rows[i];
-    const kind = String(row && row.kind || '');
-    if (kind === 'image' || kind === 'hr') continue;
-    if (String(row && row.text || '').trim()) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function finalizePaintState(doc) {
-  const hasRealSceneContent = Array.isArray(doc && doc.rows) && doc.rows.length > 0;
   browserPageState.markRendered('first-page-paint');
-  if (!fpsOverlayEnabled && hasRealSceneContent) {
-    fpsOverlayEnabled = true;
-  }
 }
 
 function requestBrowserContentRepaint() {
@@ -1666,8 +1646,6 @@ function paintToCurrentTarget(options = null) {
     contentTopY,
     composeViewportWidth,
     composeViewportHeight,
-    fpsOverlayEnabled: (!opts || opts.includeFpsOverlay !== false) && fpsOverlayEnabled,
-    fpsOverlay,
     finalizePaintState,
   });
 }
@@ -1696,7 +1674,6 @@ function renderToTexture(texId = 0, width = 0, height = 0, force = false) {
       repainted = !!paintToCurrentTarget({
         viewportWidth: targetW,
         viewportHeight: targetH,
-        includeFpsOverlay: false,
       });
     } finally {
       cmdStream.endFrame();
@@ -1707,7 +1684,6 @@ function renderToTexture(texId = 0, width = 0, height = 0, force = false) {
     repainted = !!paintToCurrentTarget({
       viewportWidth: targetW,
       viewportHeight: targetH,
-      includeFpsOverlay: false,
     });
   }
 
@@ -1860,8 +1836,6 @@ function paint() {
       scrollY,
       contentH,
       contentTopY,
-      fpsOverlayEnabled,
-      fpsOverlay,
       finalizePaintState,
     });
   } catch (err) {
