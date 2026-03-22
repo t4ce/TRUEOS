@@ -49,6 +49,7 @@ if (typeof G.__trueosBrowserAllowHtmlFallback !== 'boolean') {
 if (typeof G.__trueosBrowserNavigate !== 'function') {
     G.__trueosBrowserNavigate = (event) => {
         const url = String(event && event.url || '').trim();
+        const browserInstanceId = Number(G.__trueosBrowserInstanceId || 1) || 1;
         const html = G.__trueosBrowserEmbeddedRoutes && typeof G.__trueosBrowserEmbeddedRoutes[url] === 'string'
             ? G.__trueosBrowserEmbeddedRoutes[url]
             : '';
@@ -60,7 +61,7 @@ if (typeof G.__trueosBrowserNavigate !== 'function') {
             }
             if (G.__trueosBrowser && typeof G.__trueosBrowser.setHtml === 'function') {
                 G.__trueosBrowser.setHtml(html);
-            } else {
+            } else if (browserInstanceId === 1) {
                 G.__trueosUiHtml = html;
             }
             return { ok: 1, handled: 1, loaded: 1, embedded: 1, url };
@@ -69,7 +70,6 @@ if (typeof G.__trueosBrowserNavigate !== 'function') {
         if (typeof submit !== 'function') {
             return { ok: 0, handled: 0, reason: 'navigate-submit-unavailable', url };
         }
-        const browserInstanceId = Number(G.__trueosBrowserInstanceId || 1) || 1;
         const opId = Number(submit(url, browserInstanceId) || 0) | 0;
         if (!(opId > 0)) {
             return { ok: 0, handled: 0, reason: 'navigate-submit-failed', url };

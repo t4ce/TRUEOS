@@ -17,6 +17,8 @@ pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
 pub(crate) const R8125_VERBOSE_LOGS: bool = false;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
+pub(crate) const BROWSER_VM_DEBUG_LOGS: bool = true;
+pub(crate) const BROWSER_HTML_PREVIEW_LOGS: bool = true;
 pub(crate) const VHTTPS_VERBOSE: bool = false;
 
 pub(crate) const VIRGL_DRAW_DIAGNOSTICS_LOGS: bool = false;

@@ -153,7 +153,8 @@ pub fn create_hosted_browser_window(
     drop(state);
 
     if let Some((width, height)) = initial_content {
-        let pixels = alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
+        let pixels =
+            alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
         let _ = crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
             tex_id,
             width,

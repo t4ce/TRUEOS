@@ -13,8 +13,8 @@ mod helpers;
 
 unsafe extern "C" {
     fn trueos_cabi_ui2_primary_browser_window_id() -> u32;
-    fn trueos_cabi_gfx_frame_lock_begin();
-    fn trueos_cabi_gfx_frame_lock_end();
+    fn trueos_cabi_browser_debug_logs_enabled() -> u32;
+    fn trueos_cabi_browser_html_preview_logs_enabled() -> u32;
 }
 
 pub const PRIMARY_BROWSER_INSTANCE_ID: u32 = 1;
@@ -422,10 +422,6 @@ pub struct QjsInputEntry {
 
 pub fn queue_set_html(next_html: String) -> bool {
     queue_set_html_with_url(next_html, None)
-}
-
-pub fn queue_set_html_with_url(next_html: String, next_url: Option<String>) -> bool {
-    queue_set_html_with_url_for_browser(PRIMARY_BROWSER_INSTANCE_ID, next_html, next_url)
 }
 
 pub fn queue_set_html_with_url_for_browser(
@@ -956,63 +952,8 @@ unsafe fn apply_pending_hosted_scroll(ctx: *mut qjs::JSContext, browser_instance
 }
 
 unsafe fn render_browser_to_texture(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
-    let (tex_id, viewport_width, viewport_height) =
-        with_browser_host_state(browser_instance_id, |state| {
-            let view = state.pending_hosted_viewport.or(state.applied_hosted_viewport);
-            (
-                state.render_target_tex_id,
-                view.map(|entry| entry.viewport_width)
-                    .unwrap_or(state.hosted_surface_state.viewport_width)
-                    .max(1),
-                view.map(|entry| entry.viewport_height)
-                    .unwrap_or(state.hosted_surface_state.viewport_height)
-                    .max(1),
-            )
-        });
-    if tex_id == 0 || viewport_width == 0 || viewport_height == 0 {
-        return;
-    }
-
-    let Some(browser) = browser_api_value(ctx) else {
-        return;
-    };
-    let func = qjs::JS_GetPropertyStr(
-        ctx,
-        browser,
-        b"renderToTexture\0".as_ptr() as *const c_char,
-    );
-    if func.is_exception() || func.tag == qjs::JS_TAG_UNDEFINED || func.tag == qjs::JS_TAG_NULL {
-        qjs::js_free_value(ctx, func);
-        qjs::js_free_value(ctx, browser);
-        return;
-    }
-
-    let args = [
-        qjs::JS_NewFloat64(ctx, tex_id as f64),
-        qjs::JS_NewFloat64(ctx, viewport_width as f64),
-        qjs::JS_NewFloat64(ctx, viewport_height as f64),
-    ];
-    let mut repainted = 0.0f64;
-    trueos_cabi_gfx_frame_lock_begin();
-    let result = qjs::JS_Call(ctx, func, browser, args.len() as i32, args.as_ptr());
-    trueos_cabi_gfx_frame_lock_end();
-    if result.is_exception() {
-        qjs::qjs_diag::dump_last_exception(ctx, "browser renderToTexture");
-    } else {
-        let _ = qjs::JS_ToFloat64(ctx, &mut repainted as *mut f64, result);
-    }
-    qjs::js_free_value(ctx, result);
-    if repainted != 0.0 {
-        with_browser_host_state_mut(browser_instance_id, |state| {
-            let mut next = state.render_revision.wrapping_add(1);
-            if next == 0 {
-                next = 1;
-            }
-            state.render_revision = next;
-        });
-    }
-    qjs::js_free_value(ctx, func);
-    qjs::js_free_value(ctx, browser);
+    let _ = ctx;
+    let _ = browser_instance_id;
 }
 
 unsafe fn sync_hosted_surface_state(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
@@ -1306,7 +1247,13 @@ unsafe fn apply_pending_html(ctx: *mut qjs::JSContext, browser_instance_id: u32)
     } else {
         src.push_str(";");
     }
-    src.push_str("if(__g.__trueosBrowser&&typeof __g.__trueosBrowser.setHtml==='function'){__g.__trueosBrowser.setHtml(__h);}else{__g.__trueosUiHtml=__h;}})();");
+    src.push_str("if(__g.__trueosBrowser&&typeof __g.__trueosBrowser.setHtml==='function'){__g.__trueosBrowser.setHtml(__h);}else if(");
+    src.push_str(if browser_instance_id == PRIMARY_BROWSER_INSTANCE_ID {
+        "true"
+    } else {
+        "false"
+    });
+    src.push_str("){__g.__trueosUiHtml=__h;}})();");
     let filename = b"<browser-set-html>\0";
     let _ = helpers::eval_or_log(
         ctx,
@@ -1355,6 +1302,20 @@ unsafe fn install_globals(ctx: *mut qjs::JSContext, browser_instance_id: u32) ->
     init_src.push_str("G.__trueosBrowserDefaultFontPx = 16;\n");
     init_src.push_str("G.__trueosBrowserInstanceId = ");
     init_src.push_str(alloc::format!("{}", browser_instance_id).as_str());
+    init_src.push_str(";\n");
+    init_src.push_str("G.__trueosBrowserDebugLogs = ");
+    init_src.push_str(if unsafe { trueos_cabi_browser_debug_logs_enabled() } != 0 {
+        "true"
+    } else {
+        "false"
+    });
+    init_src.push_str(";\n");
+    init_src.push_str("G.__trueosBrowserHtmlPreviewLogs = ");
+    init_src.push_str(if unsafe { trueos_cabi_browser_html_preview_logs_enabled() } != 0 {
+        "true"
+    } else {
+        "false"
+    });
     init_src.push_str(";\n");
     init_src.push_str(
         r#"

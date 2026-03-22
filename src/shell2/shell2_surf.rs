@@ -110,7 +110,7 @@ pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str
     };
 
     let html = String::from_utf8_lossy(bytes.as_slice()).into_owned();
-    if !trueos_qjs::browser_task::queue_set_html_with_url(
+    if !trueos_qjs::browser_task::queue_set_html_with_url_for_browser(0,
         html,
         Some(alloc::format!("file://{}", file_ref)),
     ) {
