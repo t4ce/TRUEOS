@@ -15,14 +15,14 @@ pub mod virtio_gpu_3d;
 
 use spin::{Mutex, Once};
 
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use embassy_time_driver::{TICK_HZ, now};
 use trueos_gfx_core::GfxContext;
 
 pub(crate) use screenshot::{publish_screenshot_rgba_buffer, screenshot_capture_armed};
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
-static CABI_FRAME_LOCK: Mutex<()> = Mutex::new(());
+static CABI_FRAME_LOCK: AtomicBool = AtomicBool::new(false);
 static BACKEND_EPOCH: AtomicU64 = AtomicU64::new(1);
 static PRESENT_OWNER: AtomicU8 = AtomicU8::new(0);
 static SYSTEM_LOCK_OWNER: AtomicU32 = AtomicU32::new(SystemLockOwner::Unknown as u32);
@@ -172,8 +172,40 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
 }
 
 pub fn with_cabi_frame_lock<R>(f: impl FnOnce() -> R) -> R {
-    let _guard = CABI_FRAME_LOCK.lock();
+    cabi_frame_lock_begin();
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            cabi_frame_lock_end();
+        }
+    }
+    let _guard = Guard;
     f()
+}
+
+#[inline]
+pub fn cabi_frame_lock_begin() {
+    while CABI_FRAME_LOCK
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+
+#[inline]
+pub fn cabi_frame_lock_end() {
+    CABI_FRAME_LOCK.store(false, Ordering::Release);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_gfx_frame_lock_begin() {
+    cabi_frame_lock_begin();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_gfx_frame_lock_end() {
+    cabi_frame_lock_end();
 }
 
 pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
