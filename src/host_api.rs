@@ -75,7 +75,7 @@ unsafe extern "C" fn trueos_browser_navigate_submit_js(
     _this_val: qjs::JSValueConst,
     argc: c_int,
     argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
+) -> qjs::JSValue { /* HTMLLOADGOOD
     if argv.is_null() || argc <= 0 {
         return js_int32(0);
     }
@@ -100,7 +100,13 @@ unsafe extern "C" fn trueos_browser_navigate_submit_js(
     };
     let op_id = crate::r::browser_net::submit_navigation(browser_instance_id, url);
     qjs::JS_FreeCString(ctx, url_c);
-    js_int32(op_id as i32)
+    js_int32(op_id as i32) */
+    let _ = ctx;
+    let _ = argc;
+    let _ = argv;
+    // Old browser_net path intentionally left above for the in-progress rewire.
+    // Stub this out for now so host_api stops depending on the removed module.
+    js_int32(0)
 }
 
 unsafe extern "C" fn trueos_browser_navigate_status_js(
@@ -114,83 +120,64 @@ unsafe extern "C" fn trueos_browser_navigate_status_js(
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let op_id = js_to_i32(ctx, args[0]).unwrap_or(0).max(0) as u32;
-    let Some(status) = crate::r::browser_net::status(op_id) else {
-        return js_null();
-    };
 
     let obj = qjs::JS_NewObject(ctx);
     if obj.is_exception() {
         return js_null();
     }
-    let state = status.state.as_str();
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,
         b"opId\0".as_ptr() as *const c_char,
-        js_int32(status.op_id as i32),
+        js_int32(op_id as i32),
     );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,
         b"browserInstanceId\0".as_ptr() as *const c_char,
-        js_int32(status.browser_instance_id as i32),
+        js_int32(0),
     );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,
         b"bytes\0".as_ptr() as *const c_char,
-        js_int32(status.bytes.min(i32::MAX as usize) as i32),
+        js_int32(0),
     );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,
         b"delivered\0".as_ptr() as *const c_char,
-        js_bool(status.delivered),
+        js_bool(false),
     );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,
         b"done\0".as_ptr() as *const c_char,
-        js_bool(matches!(
-            status.state,
-            crate::r::browser_net::BrowserNetState::Succeeded
-                | crate::r::browser_net::BrowserNetState::Failed
-                | crate::r::browser_net::BrowserNetState::Superseded
-        )),
+        js_bool(true),
     );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,
         b"loading\0".as_ptr() as *const c_char,
-        js_bool(matches!(
-            status.state,
-            crate::r::browser_net::BrowserNetState::Queued
-                | crate::r::browser_net::BrowserNetState::Loading
-        )),
+        js_bool(false),
     );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,
         b"failed\0".as_ptr() as *const c_char,
-        js_bool(matches!(
-            status.state,
-            crate::r::browser_net::BrowserNetState::Failed
-        )),
+        js_bool(true),
     );
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,
         b"superseded\0".as_ptr() as *const c_char,
-        js_bool(matches!(
-            status.state,
-            crate::r::browser_net::BrowserNetState::Superseded
-        )),
+        js_bool(false),
     );
-    js_set_string_prop(ctx, obj, b"state\0", state);
-    js_set_string_prop(ctx, obj, b"url\0", status.url.as_str());
-    if let Some(error) = status.error.as_ref() {
-        js_set_string_prop(ctx, obj, b"error\0", error.as_str());
-    }
+    // Old browser_net status lookup is temporarily disabled while the html/net
+    // pipeline is being rewired. Keep polling callers alive with a terminal stub.
+    js_set_string_prop(ctx, obj, b"state\0", "failed");
+    js_set_string_prop(ctx, obj, b"url\0", "");
+    js_set_string_prop(ctx, obj, b"error\0", "browser_net stubbed in host_api");
     obj
 }
 
