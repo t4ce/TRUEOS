@@ -1,4 +1,3 @@
-pub mod browser_net;
 mod pattern;
 
 pub mod pat {

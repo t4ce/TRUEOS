@@ -420,10 +420,6 @@ pub struct QjsInputEntry {
     pub repl: bool,
 }
 
-pub fn queue_set_html(next_html: String) -> bool {
-    queue_set_html_with_url(next_html, None)
-}
-
 pub fn queue_set_html_with_url_for_browser(
     browser_instance_id: u32,
     next_html: String,

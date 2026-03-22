@@ -80,6 +80,7 @@ pub(crate) fn try_file_reference(line: &str) -> Option<String> {
 }
 
 pub(crate) fn load_inline_html(io: &'static dyn ShellBackend2, html: String) {
+    /*
     if !trueos_qjs::browser_task::queue_set_html_with_url(
         html,
         Some(String::from("trueos://surf/inline")),
@@ -89,6 +90,7 @@ pub(crate) fn load_inline_html(io: &'static dyn ShellBackend2, html: String) {
     }
 
     print_shell_line(io, "surf: inline html loaded");
+    */
 }
 
 pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str) {
@@ -122,6 +124,7 @@ pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str
 }
 
 pub(crate) fn prepare_call_with_url(_spawner: &Spawner, io: &'static dyn ShellBackend2, url: &str) {
+    
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return;
@@ -131,13 +134,7 @@ pub(crate) fn prepare_call_with_url(_spawner: &Spawner, io: &'static dyn ShellBa
         print_shell_line(io, "surf: url too long (max 256 chars)");
         return;
     }
-
-    let op_id = crate::r::browser_net::submit_navigation(0, trimmed);
-    if op_id != 0 {
-        print_shell_line(io, "surf: started");
-    } else {
-        print_shell_line(io, "surf: submit failed");
-    }
+    
 }
 
 fn prepare_url_with_prefix(host: &str, prefix: SurfPromptPrefix) -> String {

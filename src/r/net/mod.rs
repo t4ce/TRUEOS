@@ -5,6 +5,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 pub mod dns;
 pub mod ftp;
+pub mod html;
 pub mod https;
 pub mod json;
 pub mod ntp;

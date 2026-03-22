@@ -435,9 +435,9 @@ fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_browser_net(spawner: Spawner) -> SpawnAttempt {
+fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::r::browser_net::browser_net_task())
+        worker_spawner.spawn(crate::r::net::html::html_fetch_service())
     })
 }
 
@@ -741,7 +741,7 @@ static TASKS: &[TaskSpec] = &[
         &GFX_LOADSCREEN_STARTED,
         spawn_gfx_loadscreen,
     ),
-    TaskSpec::disabled("browser-net", 0, &BROWSER_NET_STARTED, spawn_browser_net),
+    TaskSpec::enabled("html_fetch_service", 0, &BROWSER_NET_STARTED, html_fetch_service),
     TaskSpec::enabled(
         "gfx-texture-upload-service",
         crate::r::readiness::GFX_BACKEND_READY,
