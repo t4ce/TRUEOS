@@ -117,16 +117,19 @@ define_started_flags!(
     ATOMIC_BOMB_STARTED,
 );
 
-const UI2_FACTORY_WINDOW_COUNT: u32 = 3;
-const UI2_FACTORY_BROWSER_TEX_ID_BASE: u32 = 4_703;
+const UI2_FACTORY_WINDOW_COUNT: u32 = 1;
 
 fn ui2_factory_window_title(slot: u32) -> String {
-    alloc::format!("Browser {}", slot.saturating_add(1))
+    if slot == 0 {
+        String::from("Browser")
+    } else {
+        alloc::format!("Empty UI2 Window {}", slot.saturating_add(1))
+    }
 }
 
 fn ui2_factory_window_rect(slot: u32, total: u32) -> crate::r::ui2::Ui2Rect {
     let (fb_w, fb_h) = crate::vga::framebuffer_dimensions().unwrap_or((1280, 800));
-    let cols = if total >= 3 { 2 } else { 1 };
+    let cols = 1u32;
     let rows = total.div_ceil(cols).max(1);
     let margin_x = 48.0f32;
     let margin_y = 84.0f32;
@@ -454,22 +457,31 @@ fn spawn_browser_tab_factory(spawner: Spawner) -> SpawnAttempt {
     for slot in 0..UI2_FACTORY_WINDOW_COUNT {
         let rect = ui2_factory_window_rect(slot, UI2_FACTORY_WINDOW_COUNT);
         let title = ui2_factory_window_title(slot);
-        let browser_instance_id = slot.saturating_add(1);
-        let tex_id = UI2_FACTORY_BROWSER_TEX_ID_BASE.saturating_add(slot);
-        let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
-            browser_instance_id,
-            tex_id,
-        );
-        let window_id = crate::r::ui2::create_hosted_browser_window(
-            title.as_str(),
-            rect,
-            40i16.saturating_add(slot as i16),
-            255,
-            browser_instance_id,
-            tex_id,
-        );
+        let window_id = if slot == 0 {
+            let browser_instance_id = trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID;
+            let tex_id = trueos_qjs::browser_task::PRIMARY_BROWSER_RENDER_TEX_ID;
+            let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
+                browser_instance_id,
+                tex_id,
+            );
+            crate::r::ui2::create_hosted_browser_window(
+                title.as_str(),
+                rect,
+                40i16.saturating_add(slot as i16),
+                255,
+                browser_instance_id,
+                tex_id,
+            )
+        } else {
+            crate::r::ui2::create_empty_ui2_window(
+                title.as_str(),
+                rect,
+                40i16.saturating_add(slot as i16),
+                255,
+            )
+        };
         if window_id == 0 {
-            crate::log!("ui2-window-factory: failed browser window slot={}\n", slot);
+            crate::log!("ui2-window-factory: failed empty window slot={}\n", slot);
             continue;
         }
         crate::log!(
@@ -486,23 +498,13 @@ fn spawn_browser_tab_factory(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui2_gfx_browser(spawner: Spawner) -> SpawnAttempt {
-    let mut any_spawned = false;
-    for browser_instance_id in 1..=UI2_FACTORY_WINDOW_COUNT {
-        match spawn_on_worker(spawner, |worker_spawner| {
-            worker_spawner.spawn(trueos_qjs::browser_task::ui2_gfx_browser_task(
-                browser_instance_id,
-            ))
-        }) {
-            SpawnAttempt::Spawned => any_spawned = true,
-            SpawnAttempt::Failed(e) => return SpawnAttempt::Failed(e),
-            SpawnAttempt::Skipped => {}
-        }
-    }
-    if any_spawned {
-        SpawnAttempt::Spawned
-    } else {
-        SpawnAttempt::Skipped
-    }
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(
+            trueos_qjs::browser_task::ui2_gfx_browser_task(
+                trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
+            ),
+        )
+    })
 }
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
