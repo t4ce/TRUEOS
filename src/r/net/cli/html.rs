@@ -1,18 +1,18 @@
 extern crate alloc;
 
-use alloc::collections::VecDeque;
-use alloc::string::String;
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
 use crate::globalog::{self, LogAmount, LogRange};
-use heapless::String as HString;
-use spin::Mutex;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use v::vnet as api;
 use crate::r::net::NetProfile;
 use crate::r::net::VNet;
 use crate::r::net::dns::{self, DnsConfig};
 use crate::r::net::https;
+use alloc::collections::VecDeque;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use heapless::String as HString;
+use spin::Mutex;
+use v::vnet as api;
 
 const SURF_TIMEOUT_MS: u32 = 35_000;
 const SURF_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -36,8 +36,6 @@ enum HttpPlainFetchError {
     Redirect(String),
     ResponseTooLarge,
 }
-
-
 
 /*
 static NEXT_BROWSER_NET_OP_ID: AtomicU32 = AtomicU32::new(1);
@@ -195,80 +193,78 @@ pub fn status(op_id: u32) -> Option<BrowserNetStatus> {
 
 #[embassy_executor::task]
 pub async fn html_fetch_service() {
-    loop {/*
+    loop { /*
         let Some(request) = pop_request() else {
-            Timer::after(EmbassyDuration::from_millis(100)).await;
-            continue;
+        Timer::after(EmbassyDuration::from_millis(100)).await;
+        continue;
         };
 
-        
         update_status(request.op_id, |entry| {
-            entry.state = BrowserNetState::Loading;
-            entry.error = None;
-            entry.delivered = false;
-            entry.bytes = 0;
+        entry.state = BrowserNetState::Loading;
+        entry.error = None;
+        entry.delivered = false;
+        entry.bytes = 0;
         });
-    
+
         let mut url: HString<256> = HString::new();
         if url.push_str(request.url.as_str()).is_err() {
-            update_status(request.op_id, |entry| {
-                entry.state = BrowserNetState::Failed;
-                entry.error = Some(String::from("url too long"));
-            });
-            continue;
+        update_status(request.op_id, |entry| {
+        entry.state = BrowserNetState::Failed;
+        entry.error = Some(String::from("url too long"));
+        });
+        continue;
         }
-        
+
         match crate::tst_html::fetch_html_best_effort(url).await {
-            Ok(html) => {
-                let is_latest = latest_op_for_browser(request.browser_instance_id) == request.op_id;
-                let delivered = if is_latest {
-                    trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
-                        request.browser_instance_id,
-                        html.clone(),
-                        Some(request.url.clone()),
-                    )
-                } else {
-                    false
-                };
-                update_status(request.op_id, |entry| {
-                    entry.state = if is_latest {
-                        BrowserNetState::Succeeded
-                    } else {
-                        BrowserNetState::Superseded
-                    };
-                    entry.bytes = html.len();
-                    entry.delivered = delivered;
-                    entry.error = None;
-                });
-                let preview_len = core::cmp::min(10, html.len());
-                let preview = &html.as_str()[..preview_len];
-                crate::log!(
-                    "browser-net: op={} browser={} state={} delivered={} bytes={} preview='{}'\n",
-                    request.op_id,
-                    request.browser_instance_id,
-                    if is_latest { "ok" } else { "superseded" },
-                    if delivered { 1 } else { 0 },
-                    html.len(),
-                    preview
-                );
-            }
-            Err(err) => {
-                update_status(request.op_id, |entry| {
-                    entry.state = BrowserNetState::Failed;
-                    entry.error = Some(String::from(err));
-                });
-                crate::log!(
-                    "browser-net: op={} browser={} state=failed err={}\n",
-                    request.op_id,
-                    request.browser_instance_id,
-                    err
-                );
-            }
-        } 
-            */
+        Ok(html) => {
+        let is_latest = latest_op_for_browser(request.browser_instance_id) == request.op_id;
+        let delivered = if is_latest {
+        trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
+        request.browser_instance_id,
+        html.clone(),
+        Some(request.url.clone()),
+        )
+        } else {
+        false
+        };
+        update_status(request.op_id, |entry| {
+        entry.state = if is_latest {
+        BrowserNetState::Succeeded
+        } else {
+        BrowserNetState::Superseded
+        };
+        entry.bytes = html.len();
+        entry.delivered = delivered;
+        entry.error = None;
+        });
+        let preview_len = core::cmp::min(10, html.len());
+        let preview = &html.as_str()[..preview_len];
+        crate::log!(
+        "browser-net: op={} browser={} state={} delivered={} bytes={} preview='{}'\n",
+        request.op_id,
+        request.browser_instance_id,
+        if is_latest { "ok" } else { "superseded" },
+        if delivered { 1 } else { 0 },
+        html.len(),
+        preview
+        );
+        }
+        Err(err) => {
+        update_status(request.op_id, |entry| {
+        entry.state = BrowserNetState::Failed;
+        entry.error = Some(String::from(err));
+        });
+        crate::log!(
+        "browser-net: op={} browser={} state=failed err={}\n",
+        request.op_id,
+        request.browser_instance_id,
+        err
+        );
+        }
+        }
+         */
     }
 }
-
 
 fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
@@ -337,7 +333,6 @@ fn parse_http_status(buf: &[u8]) -> Option<u16> {
     }
     Some((d1 as u16) * 100 + (d2 as u16) * 10 + (d3 as u16))
 }
-
 
 fn parse_http_url(url: &str) -> Result<ParsedHttpUrl, &'static str> {
     // Accept:

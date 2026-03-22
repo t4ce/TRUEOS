@@ -9,7 +9,7 @@ use embassy_time::{Duration, Instant, Timer};
 use v::vnet::{self, ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
 
 use super::dns::{self, DnsConfig};
-use super::{NetProfile, VNet};
+use crate::r::net::{NetProfile, VNet};
 
 const FTP_SERVER_PORT: u16 = 2121;
 const FTP_SERVER_PASV_MIN: u16 = 40000;

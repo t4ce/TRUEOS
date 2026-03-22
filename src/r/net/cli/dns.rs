@@ -11,7 +11,7 @@ use spin::Mutex;
 
 use v::vnet;
 
-use super::{NetProfile, VNet};
+use crate::r::net::{NetProfile, VNet};
 
 #[derive(Clone, Copy, Debug)]
 pub enum DnsError {

@@ -97,11 +97,8 @@ impl HtmlShack {
         road: HtmlRoad,
         auto_handoff_callback: Option<HtmlAutoHandoffCallback>,
     ) -> usize {
-        self.html_request_queue.push_back(HtmlRequest::new(
-            url,
-            road,
-            auto_handoff_callback,
-        ));
+        self.html_request_queue
+            .push_back(HtmlRequest::new(url, road, auto_handoff_callback));
         self.html_request_queue.len()
     }
 
@@ -118,10 +115,7 @@ impl HtmlShack {
         self.put_ready_html(Html::new("inline", html))
     }
 
-    pub fn get_ready_file_html(
-        &mut self,
-        file_ref: &str,
-    ) -> Result<usize, HtmlShackFileError> {
+    pub fn get_ready_file_html(&mut self, file_ref: &str) -> Result<usize, HtmlShackFileError> {
         let path = normalize_file_reference(file_ref);
         let bytes = match crate::r::io::kfs::read_file(path.as_str()) {
             Ok(bytes) => bytes,
@@ -131,10 +125,7 @@ impl HtmlShack {
         };
 
         let html = String::from_utf8_lossy(bytes.as_slice()).into_owned();
-        Ok(self.put_ready_html(Html::new(
-            alloc::format!("file://{}", path),
-            html,
-        )))
+        Ok(self.put_ready_html(Html::new(alloc::format!("file://{}", path), html)))
     }
 
     pub fn pop_ready_html(&mut self) -> Option<Html> {
