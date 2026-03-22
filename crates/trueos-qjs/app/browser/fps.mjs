@@ -67,3 +67,12 @@ export function createFpsOverlay() {
 
   return { appendRuns };
 }
+
+/*
+Browser 2 historical note:
+- This module was used by browser.mjs via createFpsOverlay().
+- The browser passed fpsOverlayEnabled/fpsOverlay into browserUi.paint() and
+  browserUi.paintToCurrentTarget(), and render paths emitted overlay text runs.
+- With the ui2-hosted design this became conceptually the wrong layer, so the
+  browser integration was removed and this file is currently unused.
+*/

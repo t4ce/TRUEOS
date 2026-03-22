@@ -111,7 +111,11 @@ pub(crate) fn prepare_call_with_url(_spawner: &Spawner, io: &'static dyn ShellBa
         return;
     }
 
-    let road = if trimmed.get(..8).map(|p| p.eq_ignore_ascii_case("https://")).unwrap_or(false) {
+    let road = if trimmed
+        .get(..8)
+        .map(|p| p.eq_ignore_ascii_case("https://"))
+        .unwrap_or(false)
+    {
         HtmlRoad::Https
     } else {
         HtmlRoad::Http
