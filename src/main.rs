@@ -9,7 +9,6 @@ const _: f16 = 0.0_f16;
 pub extern crate alloc;
 
 mod allocators;
-mod audio;
 mod cpu;
 mod disc;
 pub mod dma;

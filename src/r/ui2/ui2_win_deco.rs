@@ -92,8 +92,8 @@ pub fn set_window_titlebar_visible(id: u32, visible: bool) -> bool {
     if noted {
         let _ = note_window_viewport_sync_needed(&mut state, id);
         refresh_window_hit_entries(&mut state, id);
-        if !visible && state.move_drag.window_id == id {
-            state.move_drag = Ui2WindowMoveDrag::default();
+        if !visible {
+            clear_window_drag_claims(&mut state, id);
         }
     }
     noted
@@ -114,8 +114,8 @@ pub fn set_window_bottom_bar_visible(id: u32, visible: bool) -> bool {
     if noted {
         let _ = note_window_viewport_sync_needed(&mut state, id);
         refresh_window_hit_entries(&mut state, id);
-        if !visible && state.resize_drag.window_id == id {
-            state.resize_drag = Ui2WindowResizeDrag::default();
+        if !visible {
+            clear_window_drag_claims(&mut state, id);
         }
     }
     noted
@@ -136,8 +136,8 @@ pub fn set_window_left_scrollbar_visible(id: u32, visible: bool) -> bool {
     if noted {
         let _ = note_window_viewport_sync_needed(&mut state, id);
         refresh_window_hit_entries(&mut state, id);
-        if !visible && state.scroll_drag.window_id == id {
-            state.scroll_drag = Ui2WindowScrollDrag::default();
+        if !visible {
+            clear_window_drag_claims(&mut state, id);
         }
     }
     noted
@@ -158,8 +158,8 @@ pub fn set_window_bottom_scrollbar_visible(id: u32, visible: bool) -> bool {
     if noted {
         let _ = note_window_viewport_sync_needed(&mut state, id);
         refresh_window_hit_entries(&mut state, id);
-        if !visible && state.scroll_drag.window_id == id {
-            state.scroll_drag = Ui2WindowScrollDrag::default();
+        if !visible {
+            clear_window_drag_claims(&mut state, id);
         }
     }
     noted
@@ -180,9 +180,7 @@ pub fn set_window_vertical_scrollbar_side(id: u32, side: Ui2WindowVerticalScroll
     if noted {
         let _ = note_window_viewport_sync_needed(&mut state, id);
         refresh_window_hit_entries(&mut state, id);
-        if state.scroll_drag.window_id == id {
-            state.scroll_drag = Ui2WindowScrollDrag::default();
-        }
+        clear_window_drag_claims(&mut state, id);
     }
     noted
 }

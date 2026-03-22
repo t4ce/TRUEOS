@@ -640,16 +640,16 @@ fn begin_move_drag_for_cursor(
     if window.state == Ui2WindowStateKind::Maximized {
         let _ = note_window_viewport_sync_needed(state, window_id);
     }
-    state.move_drag = Ui2WindowMoveDrag {
+    clear_window_drag_claims(state, window_id);
+    clear_other_drag_modes_for_slot(state, slot_id);
+    upsert_move_drag(state, Ui2WindowMoveDrag {
         active: true,
         window_id,
         cursor_slot_id: slot_id,
         grab_dx: cursor_x - next_rect.x,
         grab_dy: cursor_y - next_rect.y,
         edge_actions_armed: window_edge_drop_action(state, cursor_x, cursor_y).is_none(),
-    };
-    state.resize_drag = Ui2WindowResizeDrag::default();
-    state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
+    });
     state.compose_reason = "begin-window-move";
     refresh_window_hit_entries(state, window_id);
     true
@@ -692,9 +692,9 @@ pub(super) fn begin_window_resize_for_cursor(
         return false;
     }
 
-    state.move_drag = Ui2WindowMoveDrag::default();
-    state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
-    state.resize_drag = Ui2WindowResizeDrag {
+    clear_window_drag_claims(state, window_id);
+    clear_other_drag_modes_for_slot(state, slot_id);
+    upsert_resize_drag(state, Ui2WindowResizeDrag {
         active: true,
         window_id,
         cursor_slot_id: slot_id,
@@ -704,7 +704,7 @@ pub(super) fn begin_window_resize_for_cursor(
         start_cursor_y: cursor.y,
         start_rect: window.rect,
         preview_rect: window.rect,
-    };
+    });
     state.compose_reason = "begin-window-resize";
     let top_z = state
         .windows
@@ -780,17 +780,16 @@ fn begin_vertical_scroll_drag_for_cursor(
     } else {
         thumb_h * 0.5
     };
-    state.move_drag = Ui2WindowMoveDrag::default();
-    state.resize_drag = Ui2WindowResizeDrag::default();
-    state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
-    state.scroll_drag = Ui2WindowScrollDrag {
+    clear_window_drag_claims(state, window_id);
+    clear_other_drag_modes_for_slot(state, slot_id);
+    upsert_scroll_drag(state, Ui2WindowScrollDrag {
         active: true,
         window_id,
         cursor_slot_id: slot_id,
         track_rect: track,
         thumb_extent: thumb_h,
         grab_offset,
-    };
+    });
     update_scroll_drag_for_cursor(state, slot_id, cursor_y, UI2_PRIMARY_BUTTON_MASK)
 }
 
@@ -811,16 +810,15 @@ fn begin_window_scroll_pan_for_cursor(
     if window.kind != Ui2WindowKind::HostedBrowser {
         return false;
     }
-    state.move_drag = Ui2WindowMoveDrag::default();
-    state.resize_drag = Ui2WindowResizeDrag::default();
-    state.scroll_drag = Ui2WindowScrollDrag::default();
-    state.scroll_pan_drag = Ui2WindowScrollPanDrag {
+    clear_window_drag_claims(state, window_id);
+    clear_other_drag_modes_for_slot(state, slot_id);
+    upsert_scroll_pan_drag(state, Ui2WindowScrollPanDrag {
         active: true,
         window_id,
         cursor_slot_id: slot_id,
         last_cursor_x: cursor_x,
         last_cursor_y: cursor_y,
-    };
+    });
     state.compose_reason = "begin-scroll-pan";
     true
 }
@@ -831,36 +829,42 @@ fn update_scroll_drag_for_cursor(
     cursor_y: f32,
     buttons_down: u32,
 ) -> bool {
-    if !state.scroll_drag.active || state.scroll_drag.cursor_slot_id != slot_id {
+    let Some(drag_idx) = state
+        .scroll_drags
+        .iter()
+        .position(|drag| drag.active && drag.cursor_slot_id == slot_id)
+    else {
         return false;
-    }
+    };
     if (buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
-        state.scroll_drag = Ui2WindowScrollDrag::default();
+        state.scroll_drags.remove(drag_idx);
         return false;
     }
+    let drag = state.scroll_drags[drag_idx];
     let Some(window) = state
         .windows
         .iter()
-        .find(|window| window.id == state.scroll_drag.window_id && window_is_renderable(window))
+        .find(|window| window.id == drag.window_id && window_is_renderable(window))
     else {
-        state.scroll_drag = Ui2WindowScrollDrag::default();
+        state.scroll_drags.remove(drag_idx);
         return false;
     };
     let Some((track, _thumb_h, _thumb_y, scroll_range)) =
         browser_vertical_scrollbar_metrics(state, window)
     else {
-        state.scroll_drag = Ui2WindowScrollDrag::default();
+        state.scroll_drags.remove(drag_idx);
         return false;
     };
-    state.scroll_drag.track_rect = track;
+    state.scroll_drags[drag_idx].track_rect = track;
     if scroll_range == 0 {
         return false;
     }
-    let avail = (track.h - state.scroll_drag.thumb_extent).max(0.0);
+    let avail = (track.h - state.scroll_drags[drag_idx].thumb_extent).max(0.0);
     if avail <= 0.0 {
         return false;
     }
-    let thumb_y = (cursor_y - state.scroll_drag.grab_offset).clamp(track.y, track.y + avail);
+    let thumb_y =
+        (cursor_y - state.scroll_drags[drag_idx].grab_offset).clamp(track.y, track.y + avail);
     let ratio = ((thumb_y - track.y) / avail).clamp(0.0, 1.0);
     let next_scroll = clamp_hosted_browser_scroll(
         &browser_surface_state_for_window(window),
@@ -869,7 +873,7 @@ fn update_scroll_drag_for_cursor(
     let Some(window) = state
         .windows
         .iter()
-        .find(|window| window.id == state.scroll_drag.window_id)
+        .find(|window| window.id == drag.window_id)
     else {
         return false;
     };
@@ -888,31 +892,35 @@ fn update_scroll_pan_for_cursor(
     cursor_y: f32,
     buttons_down: u32,
 ) -> bool {
-    if !state.scroll_pan_drag.active || state.scroll_pan_drag.cursor_slot_id != slot_id {
+    let Some(drag_idx) = state
+        .scroll_pan_drags
+        .iter()
+        .position(|drag| drag.active && drag.cursor_slot_id == slot_id)
+    else {
         return false;
-    }
+    };
     if (buttons_down & UI2_MIDDLE_BUTTON_MASK) == 0 {
-        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
+        state.scroll_pan_drags.remove(drag_idx);
         return false;
     }
-    let drag = state.scroll_pan_drag;
+    let drag = state.scroll_pan_drags[drag_idx];
     let Some(window) = state
         .windows
         .iter()
         .find(|window| window.id == drag.window_id && window_is_renderable(window))
     else {
-        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
+        state.scroll_pan_drags.remove(drag_idx);
         return false;
     };
     if window.kind != Ui2WindowKind::HostedBrowser {
-        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
+        state.scroll_pan_drags.remove(drag_idx);
         return false;
     }
 
     let dx = cursor_x - drag.last_cursor_x;
     let dy = cursor_y - drag.last_cursor_y;
-    state.scroll_pan_drag.last_cursor_x = cursor_x;
-    state.scroll_pan_drag.last_cursor_y = cursor_y;
+    state.scroll_pan_drags[drag_idx].last_cursor_x = cursor_x;
+    state.scroll_pan_drags[drag_idx].last_cursor_y = cursor_y;
 
     let dx_px = libm::roundf(dx) as i32;
     let dy_px = libm::roundf(dy) as i32;
@@ -948,29 +956,33 @@ fn update_move_drag_for_cursor(
     cursor_y: f32,
     buttons_down: u32,
 ) {
-    if !state.move_drag.active || state.move_drag.cursor_slot_id != slot_id {
+    let Some(drag_idx) = state
+        .move_drags
+        .iter()
+        .position(|drag| drag.active && drag.cursor_slot_id == slot_id)
+    else {
         return;
-    }
+    };
     if (buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
-        state.move_drag = Ui2WindowMoveDrag::default();
+        state.move_drags.remove(drag_idx);
         return;
     }
     let edge_action = window_edge_drop_action(state, cursor_x, cursor_y);
-    if !state.move_drag.edge_actions_armed {
+    if !state.move_drags[drag_idx].edge_actions_armed {
         if edge_action.is_none() {
-            state.move_drag.edge_actions_armed = true;
+            state.move_drags[drag_idx].edge_actions_armed = true;
         }
     } else if let Some(action) = edge_action {
-        let window_id = state.move_drag.window_id;
-        state.move_drag = Ui2WindowMoveDrag::default();
+        let window_id = state.move_drags[drag_idx].window_id;
+        state.move_drags.remove(drag_idx);
         let _ = apply_window_edge_drop_action(state, window_id, action);
         return;
     }
-    let next_x = cursor_x - state.move_drag.grab_dx;
-    let next_y = cursor_y - state.move_drag.grab_dy;
-    let window_id = state.move_drag.window_id;
+    let next_x = cursor_x - state.move_drags[drag_idx].grab_dx;
+    let next_y = cursor_y - state.move_drags[drag_idx].grab_dy;
+    let window_id = state.move_drags[drag_idx].window_id;
     let Some(window) = window_mut(state, window_id) else {
-        state.move_drag = Ui2WindowMoveDrag::default();
+        state.move_drags.remove(drag_idx);
         return;
     };
     let mut moved = false;
@@ -995,11 +1007,15 @@ fn update_resize_drag_for_cursor(
     cursor_y: f32,
     buttons_down: u32,
 ) {
-    if !state.resize_drag.active || state.resize_drag.cursor_slot_id != slot_id {
+    let Some(drag_idx) = state
+        .resize_drags
+        .iter()
+        .position(|drag| drag.active && drag.cursor_slot_id == slot_id)
+    else {
         return;
-    }
+    };
     if (buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
-        let drag = state.resize_drag;
+        let drag = state.resize_drags[drag_idx];
         if drag.active && !drag.live_apply && drag.preview_rect != drag.start_rect {
             if let Some(window) = window_mut(state, drag.window_id) {
                 window.rect = drag.preview_rect;
@@ -1011,21 +1027,21 @@ fn update_resize_drag_for_cursor(
             state.compose_reason = "window-resize-cancel";
             let _ = note_window_dirty(state, drag.window_id, "window-resize-cancel");
         }
-        state.resize_drag = Ui2WindowResizeDrag::default();
+        state.resize_drags.remove(drag_idx);
         return;
     }
 
-    let drag = state.resize_drag;
+    let drag = state.resize_drags[drag_idx];
     let Some(window) = state
         .windows
         .iter()
         .find(|window| window.id == drag.window_id)
     else {
-        state.resize_drag = Ui2WindowResizeDrag::default();
+        state.resize_drags.remove(drag_idx);
         return;
     };
     if window.state == Ui2WindowStateKind::Maximized {
-        state.resize_drag = Ui2WindowResizeDrag::default();
+        state.resize_drags.remove(drag_idx);
         return;
     }
 
@@ -1064,7 +1080,7 @@ fn update_resize_drag_for_cursor(
             refresh_window_hit_entries(state, drag.window_id);
         }
     } else if drag.preview_rect != next {
-        state.resize_drag.preview_rect = next;
+        state.resize_drags[drag_idx].preview_rect = next;
         state.compose_reason = "window-resize-preview";
         let _ = note_window_dirty(state, drag.window_id, "window-resize-preview");
     }

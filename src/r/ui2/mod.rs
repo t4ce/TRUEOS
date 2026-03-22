@@ -261,10 +261,10 @@ struct Ui2State {
     cursors: Vec<Ui2CursorState>,
     hit_scene: Ui2HitScene,
     last_browser_interactive_seq: u32,
-    move_drag: Ui2WindowMoveDrag,
-    resize_drag: Ui2WindowResizeDrag,
-    scroll_drag: Ui2WindowScrollDrag,
-    scroll_pan_drag: Ui2WindowScrollPanDrag,
+    move_drags: Vec<Ui2WindowMoveDrag>,
+    resize_drags: Vec<Ui2WindowResizeDrag>,
+    scroll_drags: Vec<Ui2WindowScrollDrag>,
+    scroll_pan_drags: Vec<Ui2WindowScrollPanDrag>,
     windows: Vec<Ui2Window>,
     loadscreen_end_signaled: bool,
     first_compose_signaled: bool,
@@ -304,10 +304,10 @@ fn init_state() -> &'static Mutex<Ui2State> {
             cursors: Vec::new(),
             hit_scene: Ui2HitScene::default(),
             last_browser_interactive_seq: 0,
-            move_drag: Ui2WindowMoveDrag::default(),
-            resize_drag: Ui2WindowResizeDrag::default(),
-            scroll_drag: Ui2WindowScrollDrag::default(),
-            scroll_pan_drag: Ui2WindowScrollPanDrag::default(),
+            move_drags: Vec::new(),
+            resize_drags: Vec::new(),
+            scroll_drags: Vec::new(),
+            scroll_pan_drags: Vec::new(),
             windows: Vec::new(),
             loadscreen_end_signaled: false,
             first_compose_signaled: false,
@@ -365,6 +365,98 @@ fn alloc_window(
         last_logged_browser_surface_seq: 0,
     });
     id
+}
+
+#[inline]
+fn upsert_move_drag(state: &mut Ui2State, drag: Ui2WindowMoveDrag) {
+    if let Some(existing) = state
+        .move_drags
+        .iter_mut()
+        .find(|existing| existing.cursor_slot_id == drag.cursor_slot_id)
+    {
+        *existing = drag;
+    } else {
+        state.move_drags.push(drag);
+    }
+}
+
+#[inline]
+fn upsert_resize_drag(state: &mut Ui2State, drag: Ui2WindowResizeDrag) {
+    if let Some(existing) = state
+        .resize_drags
+        .iter_mut()
+        .find(|existing| existing.cursor_slot_id == drag.cursor_slot_id)
+    {
+        *existing = drag;
+    } else {
+        state.resize_drags.push(drag);
+    }
+}
+
+#[inline]
+fn upsert_scroll_drag(state: &mut Ui2State, drag: Ui2WindowScrollDrag) {
+    if let Some(existing) = state
+        .scroll_drags
+        .iter_mut()
+        .find(|existing| existing.cursor_slot_id == drag.cursor_slot_id)
+    {
+        *existing = drag;
+    } else {
+        state.scroll_drags.push(drag);
+    }
+}
+
+#[inline]
+fn upsert_scroll_pan_drag(state: &mut Ui2State, drag: Ui2WindowScrollPanDrag) {
+    if let Some(existing) = state
+        .scroll_pan_drags
+        .iter_mut()
+        .find(|existing| existing.cursor_slot_id == drag.cursor_slot_id)
+    {
+        *existing = drag;
+    } else {
+        state.scroll_pan_drags.push(drag);
+    }
+}
+
+#[inline]
+fn clear_move_drag_for_slot(state: &mut Ui2State, slot_id: u32) {
+    state.move_drags.retain(|drag| drag.cursor_slot_id != slot_id);
+}
+
+#[inline]
+fn clear_resize_drag_for_slot(state: &mut Ui2State, slot_id: u32) {
+    state.resize_drags.retain(|drag| drag.cursor_slot_id != slot_id);
+}
+
+#[inline]
+fn clear_scroll_drag_for_slot(state: &mut Ui2State, slot_id: u32) {
+    state.scroll_drags.retain(|drag| drag.cursor_slot_id != slot_id);
+}
+
+#[inline]
+fn clear_scroll_pan_drag_for_slot(state: &mut Ui2State, slot_id: u32) {
+    state
+        .scroll_pan_drags
+        .retain(|drag| drag.cursor_slot_id != slot_id);
+}
+
+#[inline]
+fn clear_other_drag_modes_for_slot(state: &mut Ui2State, slot_id: u32) {
+    clear_move_drag_for_slot(state, slot_id);
+    clear_resize_drag_for_slot(state, slot_id);
+    clear_scroll_drag_for_slot(state, slot_id);
+    clear_scroll_pan_drag_for_slot(state, slot_id);
+}
+
+#[inline]
+fn clear_window_drag_claims(state: &mut Ui2State, window_id: u32) {
+    state.move_drags.retain(|drag| drag.window_id != window_id);
+    state.resize_drags.retain(|drag| drag.window_id != window_id);
+    state.scroll_drags.retain(|drag| drag.window_id != window_id);
+    state
+        .scroll_pan_drags
+        .retain(|drag| drag.window_id != window_id);
 }
 
 fn sorted_window_indices(state: &Ui2State) -> Vec<usize> {
@@ -871,18 +963,7 @@ fn set_window_rect_in_state(
     window.restore_rect = next_rect;
     window.state = Ui2WindowStateKind::Normal;
     state.compose_reason = reason;
-    if state.move_drag.window_id == id {
-        state.move_drag = Ui2WindowMoveDrag::default();
-    }
-    if state.resize_drag.window_id == id {
-        state.resize_drag = Ui2WindowResizeDrag::default();
-    }
-    if state.scroll_drag.window_id == id {
-        state.scroll_drag = Ui2WindowScrollDrag::default();
-    }
-    if state.scroll_pan_drag.window_id == id {
-        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
-    }
+    clear_window_drag_claims(state, id);
     commit_window_geometry_change(state, id, reason)
 }
 
@@ -964,18 +1045,7 @@ fn minimize_window_in_state(state: &mut Ui2State, id: u32) -> bool {
     }
     window.state = Ui2WindowStateKind::Minimized;
     state.compose_reason = "minimize-window";
-    if state.move_drag.window_id == id {
-        state.move_drag = Ui2WindowMoveDrag::default();
-    }
-    if state.resize_drag.window_id == id {
-        state.resize_drag = Ui2WindowResizeDrag::default();
-    }
-    if state.scroll_drag.window_id == id {
-        state.scroll_drag = Ui2WindowScrollDrag::default();
-    }
-    if state.scroll_pan_drag.window_id == id {
-        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
-    }
+    clear_window_drag_claims(state, id);
     commit_window_geometry_change(state, id, "minimize-window")
 }
 
@@ -995,18 +1065,7 @@ fn maximize_window_in_state(state: &mut Ui2State, id: u32) -> bool {
     window.rect = next_rect;
     window.state = Ui2WindowStateKind::Maximized;
     state.compose_reason = "maximize-window";
-    if state.move_drag.window_id == id {
-        state.move_drag = Ui2WindowMoveDrag::default();
-    }
-    if state.resize_drag.window_id == id {
-        state.resize_drag = Ui2WindowResizeDrag::default();
-    }
-    if state.scroll_drag.window_id == id {
-        state.scroll_drag = Ui2WindowScrollDrag::default();
-    }
-    if state.scroll_pan_drag.window_id == id {
-        state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
-    }
+    clear_window_drag_claims(state, id);
     commit_window_geometry_change(state, id, "maximize-window")
 }
 
@@ -1041,18 +1100,7 @@ fn set_window_visible_in_state(state: &mut Ui2State, id: u32, visible: bool) -> 
     if !visible {
         state.hit_scene.remove_window(id);
         state.hit_scene.seq = state.hit_scene.seq.wrapping_add(1);
-        if state.move_drag.window_id == id {
-            state.move_drag = Ui2WindowMoveDrag::default();
-        }
-        if state.resize_drag.window_id == id {
-            state.resize_drag = Ui2WindowResizeDrag::default();
-        }
-        if state.scroll_drag.window_id == id {
-            state.scroll_drag = Ui2WindowScrollDrag::default();
-        }
-        if state.scroll_pan_drag.window_id == id {
-            state.scroll_pan_drag = Ui2WindowScrollPanDrag::default();
-        }
+        clear_window_drag_claims(state, id);
     }
     let noted = note_window_dirty(state, id, reason);
     if noted {
@@ -1101,89 +1149,90 @@ fn is_valid_resize_edge_mask(edge_mask: u32) -> bool {
 }
 
 fn draw_resize_preview_outline(state: &Ui2State) {
-    let drag = state.resize_drag;
-    if !drag.active || drag.live_apply {
-        return;
-    }
-    let rect = drag.preview_rect;
-    if !(rect.w > 0.0 && rect.h > 0.0) {
-        return;
-    }
     let outer = (0x2B, 0x6C, 0xD6, 0xFF);
     let inner = (0xD9, 0xE7, 0xFF, 0xFF);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        rect.x,
-        rect.y,
-        rect.w,
-        1.0,
-        outer,
-        state.view_w,
-        state.view_h,
-    );
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        rect.x,
-        rect.y + rect.h - 1.0,
-        rect.w,
-        1.0,
-        outer,
-        state.view_w,
-        state.view_h,
-    );
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        rect.x,
-        rect.y,
-        1.0,
-        rect.h,
-        outer,
-        state.view_w,
-        state.view_h,
-    );
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        rect.x + rect.w - 1.0,
-        rect.y,
-        1.0,
-        rect.h,
-        outer,
-        state.view_w,
-        state.view_h,
-    );
-    if rect.w > 4.0 && rect.h > 4.0 {
+    for drag in &state.resize_drags {
+        if !drag.active || drag.live_apply {
+            continue;
+        }
+        let rect = drag.preview_rect;
+        if !(rect.w > 0.0 && rect.h > 0.0) {
+            continue;
+        }
         let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-            rect.x + 1.0,
-            rect.y + 1.0,
-            rect.w - 2.0,
+            rect.x,
+            rect.y,
+            rect.w,
             1.0,
-            inner,
+            outer,
             state.view_w,
             state.view_h,
         );
         let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-            rect.x + 1.0,
-            rect.y + rect.h - 2.0,
-            rect.w - 2.0,
+            rect.x,
+            rect.y + rect.h - 1.0,
+            rect.w,
             1.0,
-            inner,
+            outer,
             state.view_w,
             state.view_h,
         );
         let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-            rect.x + 1.0,
-            rect.y + 1.0,
+            rect.x,
+            rect.y,
             1.0,
-            rect.h - 2.0,
-            inner,
+            rect.h,
+            outer,
             state.view_w,
             state.view_h,
         );
         let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-            rect.x + rect.w - 2.0,
-            rect.y + 1.0,
+            rect.x + rect.w - 1.0,
+            rect.y,
             1.0,
-            rect.h - 2.0,
-            inner,
+            rect.h,
+            outer,
             state.view_w,
             state.view_h,
         );
+        if rect.w > 4.0 && rect.h > 4.0 {
+            let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+                rect.x + 1.0,
+                rect.y + 1.0,
+                rect.w - 2.0,
+                1.0,
+                inner,
+                state.view_w,
+                state.view_h,
+            );
+            let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+                rect.x + 1.0,
+                rect.y + rect.h - 2.0,
+                rect.w - 2.0,
+                1.0,
+                inner,
+                state.view_w,
+                state.view_h,
+            );
+            let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+                rect.x + 1.0,
+                rect.y + 1.0,
+                1.0,
+                rect.h - 2.0,
+                inner,
+                state.view_w,
+                state.view_h,
+            );
+            let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+                rect.x + rect.w - 2.0,
+                rect.y + 1.0,
+                1.0,
+                rect.h - 2.0,
+                inner,
+                state.view_w,
+                state.view_h,
+            );
+        }
     }
 }
 

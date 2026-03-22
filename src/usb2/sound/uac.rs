@@ -6,7 +6,7 @@
 //! - Configure the xHCI isoch OUT endpoint.
 //! - Provide a small API to feed isoch OUT packets.
 
-use crate::audio::PcmFormat;
+use super::PcmFormat;
 use crate::pci::dma;
 use crate::usb::isoch::{IsochOutConfig, IsochOutPipe};
 use crate::usb::xhci::{self, MAX_XHCI_CONTROLLERS, Trb, TrbRing, XhciContext};
@@ -476,7 +476,7 @@ fn parse_as_sample_rates(cfg: &[u8], ifnum: u8, alt: u8, uac2: bool) -> UacRateI
 }
 
 fn select_sample_rate(info: &UacRateInfo) -> u32 {
-    let preferred = crate::audio::DEFAULT_RATE_HZ;
+    let preferred = super::DEFAULT_RATE_HZ;
     if !info.rates.is_empty() {
         if info.rates.contains(&preferred) {
             return preferred;
@@ -501,7 +501,7 @@ fn select_sample_rate(info: &UacRateInfo) -> u32 {
         }
         return min;
     }
-    crate::audio::DEFAULT_RATE_HZ
+    super::DEFAULT_RATE_HZ
 }
 
 fn service_interval_us(speed_code: u32, interval: u8) -> u64 {
@@ -850,7 +850,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     // Configure isoch endpoint.
     let mut sink = UacSink::new(PcmFormat {
         rate_hz: selected_rate,
-        channels: crate::audio::DEFAULT_CHANNELS as u8,
+        channels: super::DEFAULT_CHANNELS as u8,
         bits_per_sample: 16,
     });
     sink.configure_isoch(
