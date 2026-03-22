@@ -8,8 +8,8 @@ use embassy_time::{Duration, Instant, Timer};
 use v::vnet::{self, ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
 
 use super::dns::{self, DnsConfig};
-use super::{NetProfile, VNet};
 use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsRoots, TlsTime};
+use crate::r::net::{NetProfile, VNet};
 
 pub const SMTP_HOST: &str = "smtp.mail.com";
 pub const SMTP_PORT: u16 = 587;

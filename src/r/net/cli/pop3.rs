@@ -14,9 +14,9 @@ use embassy_time::{Duration, Instant, Timer};
 use v::vnet::{self, EndpointV4};
 
 use super::dns::{self, DnsConfig};
-use super::{NetProfile, Queue};
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues};
+use crate::r::net::{NetProfile, Queue};
 
 // Hardcoded incoming POP3-over-TLS server.
 pub const POP3_HOST: &str = "pop.mail.com";

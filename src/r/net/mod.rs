@@ -3,19 +3,11 @@
 use alloc::{boxed::Box, collections::VecDeque, format, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-pub mod dns;
-pub mod ftp;
-pub mod html;
-pub mod https;
-pub mod json;
-pub mod ntp;
-pub mod ping;
-pub mod pop3;
-pub mod smtp;
-pub mod spop3;
-pub mod ssmtp;
-pub mod ws;
-pub mod wss;
+pub mod cli;
+pub mod srv;
+
+pub use cli::{dns, ftp, html, https, json, ntp, ping, pop3, smtp, ws};
+pub use srv::{spop3, ssmtp, wss};
 
 use v::vnet as api;
 

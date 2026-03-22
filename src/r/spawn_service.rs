@@ -741,7 +741,12 @@ static TASKS: &[TaskSpec] = &[
         &GFX_LOADSCREEN_STARTED,
         spawn_gfx_loadscreen,
     ),
-    TaskSpec::enabled("html_fetch_service", 0, &BROWSER_NET_STARTED, html_fetch_service),
+    TaskSpec::enabled(
+        "html_fetch_service",
+        0,
+        &BROWSER_NET_STARTED,
+        html_fetch_service,
+    ),
     TaskSpec::enabled(
         "gfx-texture-upload-service",
         crate::r::readiness::GFX_BACKEND_READY,

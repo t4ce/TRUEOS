@@ -10,7 +10,6 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet;
 
 use super::dns::{self, DnsConfig};
-use super::{NetProfile, Queue};
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::r::io::cabi::{
@@ -19,6 +18,7 @@ use crate::r::io::cabi::{
     NET_ERR_TIMEOUT, NET_ERR_TIMEOUT_BODY, NET_ERR_TIMEOUT_CONNECT, NET_ERR_TIMEOUT_DNS,
     NET_ERR_TIMEOUT_TLS, NET_ERR_TLS,
 };
+use crate::r::net::{NetProfile, Queue};
 use crate::wait::WaitQueue;
 use spin::Mutex;
 

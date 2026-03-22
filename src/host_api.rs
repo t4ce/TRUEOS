@@ -75,7 +75,8 @@ unsafe extern "C" fn trueos_browser_navigate_submit_js(
     _this_val: qjs::JSValueConst,
     argc: c_int,
     argv: *const qjs::JSValueConst,
-) -> qjs::JSValue { /* HTMLLOADGOOD
+) -> qjs::JSValue {
+    /* HTMLLOADGOOD
     if argv.is_null() || argc <= 0 {
         return js_int32(0);
     }
@@ -137,24 +138,14 @@ unsafe extern "C" fn trueos_browser_navigate_status_js(
         b"browserInstanceId\0".as_ptr() as *const c_char,
         js_int32(0),
     );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"bytes\0".as_ptr() as *const c_char,
-        js_int32(0),
-    );
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"bytes\0".as_ptr() as *const c_char, js_int32(0));
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,
         b"delivered\0".as_ptr() as *const c_char,
         js_bool(false),
     );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"done\0".as_ptr() as *const c_char,
-        js_bool(true),
-    );
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"done\0".as_ptr() as *const c_char, js_bool(true));
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         obj,

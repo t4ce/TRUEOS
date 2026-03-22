@@ -8,8 +8,8 @@ extern crate alloc;
 use v::vnet;
 
 #[allow(unused_imports)]
-use super::VNet;
-#[allow(unused_imports)]
 use super::dns::{self, DnsConfig, DnsError};
+#[allow(unused_imports)]
+use crate::r::net::VNet;
 
 // Ping functionality removed as per request
