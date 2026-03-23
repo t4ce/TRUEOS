@@ -1,5 +1,6 @@
 import parse5 from 'parse5';
 import { passHtmlThroughDiffBox } from '/qjs/truesurfer/diff_box.mjs';
+import { buildCssStyleRefIndex } from '/qjs/truesurfer/css.mjs';
 
 const root = globalThis;
 const browserId = Number(root.__trueosTruesurferBrowserId || 0);
@@ -15,6 +16,16 @@ function emptyStyleIndex() {
     ruleCount: 0,
     elementCount: 0,
   };
+}
+
+function buildStyleIndex(doc) {
+  try {
+    return buildCssStyleRefIndex(doc);
+  } catch (error) {
+    const message = error && typeof error.message === 'string' ? error.message : String(error || 'unknown');
+    log(`[truesurfer css] browser=${browserId} soft-fail error=${message}`);
+    return emptyStyleIndex();
+  }
 }
 
 function log(line) {
@@ -176,7 +187,7 @@ function walkAndExtractResiduals(node, artifacts) {
 function extractDocumentArtifacts(source) {
   const startedAt = Date.now();
   const doc = parse5.parse(source);
-  const styleIndex = emptyStyleIndex();
+  const styleIndex = buildStyleIndex(doc);
   const title = extractDocumentTitle(doc);
   const htmlNode = firstChildElementByTagName(doc, 'html');
   const bodyNode = firstChildElementByTagName(htmlNode || doc, 'body');
