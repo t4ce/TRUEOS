@@ -462,11 +462,16 @@ function isTextNode(node) {
   return !!node && typeof node === 'object' && node.nodeName === '#text' && typeof node.value === 'string';
 }
 
-// Old inline page-model/layout helper block.
-// Keep it commented for now as reference while the live path runs through
-// page_pipeline.mjs. The intended architecture remains:
+// Architecture goal:
+// Keep this handoff split into two explicit phases:
 // 1. world -> page model
 // 2. page model -> realized layout/render data
+// That is the seam we want for N-browser rollout, backend swapping, and
+// reducing hidden coupling in browser.mjs.
+//
+// Old inline page-model/layout helper block.
+// Keep it commented for now as reference while the live path runs through
+// page_pipeline.mjs.
 /*
 function pushRow(rows, text, depth, kind = 'text', style = null, meta = null) {
   const t = collapseWhitespace(text);
