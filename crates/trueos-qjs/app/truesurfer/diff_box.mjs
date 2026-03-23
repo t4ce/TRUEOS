@@ -22,12 +22,6 @@ export function passHtmlThroughDiffBox(html, meta = {}) {
   const url = safeString(meta.url);
   const previousHtml = url ? htmlByUrl.get(url) : undefined;
 
-  if (!url || previousHtml === undefined || previousHtml === nextHtml) {
-    log(`[diff box] Diff Box New url=${url}`);
-  } else {
-    log(`[diff box] Diff Box Difference url=${url}`);
-  }
-
   if (url) {
     htmlByUrl.set(url, nextHtml);
   }

@@ -39,14 +39,34 @@ const TRUESURFER_RESULT_OK_PROP: &[u8] = b"ok\0";
 const TRUESURFER_RESULT_BYTES_PROP: &[u8] = b"bytes\0";
 const TRUESURFER_RESULT_LINES_PROP: &[u8] = b"lines\0";
 const TRUESURFER_RESULT_PARSE_MS_PROP: &[u8] = b"parseMs\0";
-const TRUESURFER_RESULT_ROOTS_PROP: &[u8] = b"roots\0";
-const TRUESURFER_RESULT_NODES_PROP: &[u8] = b"nodes\0";
+const TRUESURFER_RESULT_TITLE_PROP: &[u8] = b"title\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
+const TRUESURFER_PROMISE_PENDING_PROP: &[u8] = b"__trueosTruesurferPending\0";
+const TRUESURFER_PROMISE_DONE_PROP: &[u8] = b"__trueosTruesurferBridgeDone\0";
+const TRUESURFER_PROMISE_OK_PROP: &[u8] = b"__trueosTruesurferBridgeOk\0";
+const TRUESURFER_PROMISE_VALUE_PROP: &[u8] = b"__trueosTruesurferBridgeValue\0";
+const TRUESURFER_PROMISE_ERROR_PROP: &[u8] = b"__trueosTruesurferBridgeError\0";
+const TRUESURFER_PROMISE_BRIDGE_FILENAME: &[u8] = b"<truesurfer-promise-bridge>\0";
+const TRUESURFER_PROMISE_BRIDGE_SOURCE: &[u8] = br#"
+Promise.resolve(globalThis.__trueosTruesurferPending).then(
+    (value) => {
+        globalThis.__trueosTruesurferBridgeValue = value;
+        globalThis.__trueosTruesurferBridgeOk = 1;
+        globalThis.__trueosTruesurferBridgeDone = 1;
+    },
+    (error) => {
+        globalThis.__trueosTruesurferBridgeError = error && error.stack ? String(error.stack) : String(error);
+        globalThis.__trueosTruesurferBridgeOk = 0;
+        globalThis.__trueosTruesurferBridgeDone = 1;
+    }
+);
+"#;
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
 const TRUESURFER_BUSY_SLEEP_MS: u64 = 1;
 const TRUESURFER_IDLE_SLEEP_MS: u64 = 16;
+const TRUESURFER_PROMISE_WAIT_MS: u64 = 250;
 
 struct SpinRawMutex(Mutex<()>);
 
@@ -99,8 +119,7 @@ pub struct ParseResult {
     pub bytes: u32,
     pub lines: u32,
     pub parse_ms: u32,
-    pub roots: u32,
-    pub nodes: u32,
+    pub title: String,
     pub error: String,
 }
 
@@ -380,6 +399,19 @@ unsafe fn set_global_i32(ctx: *mut qjs::JSContext, key: &[u8], value: i32) {
     qjs::js_free_value(ctx, global);
 }
 
+unsafe fn set_global_value(ctx: *mut qjs::JSContext, key: &[u8], value: qjs::JSValue) {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let _ = qjs::JS_SetPropertyStr(ctx, global, key.as_ptr() as *const c_char, value);
+    qjs::js_free_value(ctx, global);
+}
+
+unsafe fn get_global_value(ctx: *mut qjs::JSContext, key: &[u8]) -> qjs::JSValue {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let value = qjs::JS_GetPropertyStr(ctx, global, key.as_ptr() as *const c_char);
+    qjs::js_free_value(ctx, global);
+    value
+}
+
 unsafe fn truesurfer_ready(ctx: *mut qjs::JSContext) -> bool {
     let global = qjs::JS_GetGlobalObject(ctx);
     let ready = qjs::JS_GetPropertyStr(ctx, global, TRUESURFER_READY_PROP.as_ptr() as *const c_char);
@@ -425,6 +457,105 @@ unsafe fn read_result_string(
     out
 }
 
+unsafe fn read_value_string(ctx: *mut qjs::JSContext, value: qjs::JSValueConst) -> String {
+    if value.is_exception() || value.tag == qjs::JS_TAG_UNDEFINED || value.tag == qjs::JS_TAG_NULL {
+        return String::new();
+    }
+    let cstr = qjs::js_to_cstring(ctx, value);
+    if cstr.is_null() {
+        return String::new();
+    }
+    let out = core::ffi::CStr::from_ptr(cstr)
+        .to_str()
+        .ok()
+        .map(String::from)
+        .unwrap_or_default();
+    qjs::JS_FreeCString(ctx, cstr);
+    out
+}
+
+unsafe fn read_global_flag(ctx: *mut qjs::JSContext, key: &[u8]) -> bool {
+    let value = get_global_value(ctx, key);
+    let mut out = 0.0f64;
+    let ok = qjs::JS_ToFloat64(ctx, &mut out as *mut f64, value) == 0 && out.is_finite() && out >= 1.0;
+    qjs::js_free_value(ctx, value);
+    ok
+}
+
+unsafe fn promise_bridge_start(ctx: *mut qjs::JSContext, result: qjs::JSValueConst) -> bool {
+    set_global_value(ctx, TRUESURFER_PROMISE_PENDING_PROP, qjs::js_dup_value(ctx, result));
+    set_global_i32(ctx, TRUESURFER_PROMISE_DONE_PROP, 0);
+    set_global_i32(ctx, TRUESURFER_PROMISE_OK_PROP, 0);
+    set_global_value(ctx, TRUESURFER_PROMISE_VALUE_PROP, qjs::JSValue::undefined());
+    set_global_value(
+        ctx,
+        TRUESURFER_PROMISE_ERROR_PROP,
+        qjs::JS_NewStringLen(ctx, b"\0".as_ptr() as *const c_char, 0),
+    );
+
+    let bridge = qjs::js_eval_bytes(
+        ctx,
+        TRUESURFER_PROMISE_BRIDGE_SOURCE,
+        TRUESURFER_PROMISE_BRIDGE_FILENAME.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+    );
+    if bridge.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer promise bridge");
+        qjs::js_free_value(ctx, bridge);
+        return false;
+    }
+    qjs::js_free_value(ctx, bridge);
+    true
+}
+
+unsafe fn promise_bridge_clear(ctx: *mut qjs::JSContext) {
+    set_global_value(ctx, TRUESURFER_PROMISE_PENDING_PROP, qjs::JSValue::undefined());
+    set_global_value(ctx, TRUESURFER_PROMISE_VALUE_PROP, qjs::JSValue::undefined());
+    set_global_value(
+        ctx,
+        TRUESURFER_PROMISE_ERROR_PROP,
+        qjs::JS_NewStringLen(ctx, b"\0".as_ptr() as *const c_char, 0),
+    );
+    set_global_i32(ctx, TRUESURFER_PROMISE_DONE_PROP, 0);
+    set_global_i32(ctx, TRUESURFER_PROMISE_OK_PROP, 0);
+}
+
+async unsafe fn promise_bridge_take_result(
+    rt: *mut qjs::JSRuntime,
+    ctx: *mut qjs::JSContext,
+) -> Result<qjs::JSValue, String> {
+    for _ in 0..TRUESURFER_PROMISE_WAIT_MS {
+        if !qjs::vm::pump_runtime_once(rt, ctx, "truesurfer-branch-parse") {
+            promise_bridge_clear(ctx);
+            return Err(String::from("runtime pump failed while waiting for branch parse"));
+        }
+
+        let done = read_global_flag(ctx, TRUESURFER_PROMISE_DONE_PROP);
+        if done {
+            let ok = read_global_flag(ctx, TRUESURFER_PROMISE_OK_PROP);
+            if ok {
+                let value = get_global_value(ctx, TRUESURFER_PROMISE_VALUE_PROP);
+                promise_bridge_clear(ctx);
+                return Ok(value);
+            }
+            let error_value = get_global_value(ctx, TRUESURFER_PROMISE_ERROR_PROP);
+            let error = read_value_string(ctx, error_value);
+            qjs::js_free_value(ctx, error_value);
+            promise_bridge_clear(ctx);
+            return Err(if error.is_empty() {
+                String::from("branch parse promise rejected")
+            } else {
+                error
+            });
+        }
+
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+
+    promise_bridge_clear(ctx);
+    Err(String::from("branch parse promise wait timeout"))
+}
+
 fn take_queued_html_for_browser(browser_instance_id: u32) -> Option<PendingHtml> {
     let queue = html_handoff_queue(browser_instance_id)?;
     let mut receiver = queue.receiver.lock();
@@ -437,7 +568,8 @@ fn take_queued_html_for_browser(browser_instance_id: u32) -> Option<PendingHtml>
     Some(pending)
 }
 
-unsafe fn dispatch_html(
+async unsafe fn dispatch_html(
+    rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
     browser_instance_id: u32,
     pending: PendingHtml,
@@ -480,14 +612,54 @@ unsafe fn dispatch_html(
         return false;
     }
 
+    if !promise_bridge_start(ctx, result) {
+        qjs::js_free_value(ctx, result);
+        qjs::js_free_value(ctx, set_html);
+        qjs::js_free_value(ctx, surfer);
+        qjs::js_free_value(ctx, global);
+        qjs::js_free_value(ctx, args[0]);
+        qjs::js_free_value(ctx, args[1]);
+        return false;
+    }
+    qjs::js_free_value(ctx, result);
+
+    let result = match promise_bridge_take_result(rt, ctx).await {
+        Ok(value) => value,
+        Err(error) => {
+            let parse_result = ParseResult {
+                ok: false,
+                url: pending.url.clone(),
+                bytes: pending.html.len() as u32,
+                lines: pending.html.lines().count() as u32,
+                error,
+                ..ParseResult::default()
+            };
+            let _ = with_browser_state_mut(browser_instance_id, |state| {
+                state.last_parse_result = Some(parse_result.clone());
+                state.text_seq = state.text_seq.wrapping_add(1);
+            });
+            log_error(format!(
+                "qjs-truesurfer[{}]: branch parse promise failed url={} err={}\n",
+                browser_instance_id,
+                parse_result.url,
+                parse_result.error
+            ));
+            qjs::js_free_value(ctx, set_html);
+            qjs::js_free_value(ctx, surfer);
+            qjs::js_free_value(ctx, global);
+            qjs::js_free_value(ctx, args[0]);
+            qjs::js_free_value(ctx, args[1]);
+            return false;
+        }
+    };
+
     let parse_result = ParseResult {
         ok: read_result_u32(ctx, result, TRUESURFER_RESULT_OK_PROP) >= 1,
         url: pending.url.clone(),
         bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_BYTES_PROP),
         lines: read_result_u32(ctx, result, TRUESURFER_RESULT_LINES_PROP),
         parse_ms: read_result_u32(ctx, result, TRUESURFER_RESULT_PARSE_MS_PROP),
-        roots: read_result_u32(ctx, result, TRUESURFER_RESULT_ROOTS_PROP),
-        nodes: read_result_u32(ctx, result, TRUESURFER_RESULT_NODES_PROP),
+        title: read_result_string(ctx, result, TRUESURFER_RESULT_TITLE_PROP),
         error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
     };
 
@@ -499,11 +671,10 @@ unsafe fn dispatch_html(
 
     if parse_result.ok {
         log_line(format!(
-            "qjs-truesurfer[{}]: parsed bytes={} nodes={} roots={} ms={} url={}\n",
+            "qjs-truesurfer[{}]: parsed bytes={} title={} ms={} url={}\n",
             browser_instance_id,
             parse_result.bytes,
-            parse_result.nodes,
-            parse_result.roots,
+            parse_result.title,
             parse_result.parse_ms,
             parse_result.url
         ));
@@ -600,7 +771,7 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                 });
                 if ready {
                     if let Some(pending) = take_queued_html_for_browser(browser_instance_id) {
-                        let _ = dispatch_html(ctx, browser_instance_id, pending);
+                        let _ = dispatch_html(rt, ctx, browser_instance_id, pending).await;
                     }
                 }
 

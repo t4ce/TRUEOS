@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Ordering as CmpOrdering;
@@ -13,11 +14,15 @@ use spin::{Mutex, Once};
 
 mod ui2_hid;
 mod ui2_hosted;
+mod ui2_text_scene;
 mod ui2_win_deco;
 
 mod ui2_win;
 
+pub(crate) use self::ui2_hosted::signal_hosted_browser_factory_mask;
 use self::ui2_hosted::*;
+pub use self::ui2_text_scene::*;
+use self::ui2_text_scene::*;
 pub use self::ui2_win::*;
 pub use self::ui2_win_deco::*;
 
@@ -140,6 +145,7 @@ enum Ui2SystemButtonAction {
 enum Ui2WindowKind {
     HostedBrowser,
     HostedSurface,
+    TextScene,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -268,6 +274,7 @@ struct Ui2State {
     scroll_drags: Vec<Ui2WindowScrollDrag>,
     scroll_pan_drags: Vec<Ui2WindowScrollPanDrag>,
     windows: Vec<Ui2Window>,
+    text_scene: Ui2TextSceneState,
     loadscreen_end_signaled: bool,
     first_compose_signaled: bool,
 }
@@ -281,6 +288,88 @@ static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
 fn boot_probe_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     embassy_time_driver::now().saturating_mul(1000) / hz
+}
+
+fn hosted_browser_factory_content_rect_for_view(
+    view_w: u32,
+    view_h: u32,
+    slot: u32,
+    total: u32,
+) -> Ui2Rect {
+    let cols = if total >= 2 { 2u32 } else { 1u32 };
+    let rows = total.div_ceil(cols).max(1);
+    let margin_x = 48.0f32;
+    let margin_y = 84.0f32;
+    let gutter = 18.0f32;
+    let bottom_margin = 36.0f32;
+    let usable_w = (view_w as f32) - margin_x * 2.0 - gutter * (cols.saturating_sub(1) as f32);
+    let usable_h =
+        (view_h as f32) - margin_y - bottom_margin - gutter * (rows.saturating_sub(1) as f32);
+    let width = (usable_w / cols as f32).clamp(520.0, 960.0);
+    let height = (usable_h / rows as f32).clamp(320.0, 640.0);
+    let col = slot % cols;
+    let row = slot / cols;
+    Ui2Rect::new(
+        margin_x + col as f32 * (width + gutter),
+        margin_y + row as f32 * (height + gutter),
+        width,
+        height,
+    )
+}
+
+fn sync_hosted_browser_factory_windows(active_mask: u32) -> usize {
+    if active_mask == 0 {
+        return 0;
+    }
+
+    let active_ids: Vec<u32> = trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
+        .iter()
+        .copied()
+        .filter(|browser_instance_id| {
+            let bit = 1u32 << browser_instance_id.saturating_sub(1);
+            (active_mask & bit) != 0
+        })
+        .collect();
+    if active_ids.is_empty() {
+        return 0;
+    }
+
+    let (view_w, view_h) = {
+        let state_lock = init_state();
+        let state = state_lock.lock();
+        (state.view_w, state.view_h)
+    };
+
+    let total = active_ids.len() as u32;
+    let mut created = 0usize;
+    for (slot, browser_instance_id) in active_ids.into_iter().enumerate() {
+        if hosted_window_id_for_content(browser_instance_id) != 0 {
+            continue;
+        }
+        let title = format!("Truesurfer {}", browser_instance_id);
+        let content_rect =
+            hosted_browser_factory_content_rect_for_view(view_w, view_h, slot as u32, total);
+        let tex_id =
+            trueos_qjs::browser_task::render_tex_id_for_browser_instance(browser_instance_id);
+        let window_id = create_hosted_browser_content_window(
+            title.as_str(),
+            content_rect,
+            40i16.saturating_add(slot as i16),
+            255,
+            browser_instance_id,
+            tex_id,
+        );
+        crate::log!(
+            "ui2: hosted-browser-factory window={} browser={} tex={} slot={} total={}\n",
+            window_id,
+            browser_instance_id,
+            tex_id,
+            slot,
+            total
+        );
+        created = created.saturating_add(1);
+    }
+    created
 }
 
 fn init_state() -> &'static Mutex<Ui2State> {
@@ -311,6 +400,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             scroll_drags: Vec::new(),
             scroll_pan_drags: Vec::new(),
             windows: Vec::new(),
+            text_scene: Ui2TextSceneState::default(),
             loadscreen_end_signaled: false,
             first_compose_signaled: false,
         };
@@ -496,6 +586,7 @@ fn window_kind_id(kind: Ui2WindowKind) -> u32 {
     match kind {
         Ui2WindowKind::HostedBrowser => 1,
         Ui2WindowKind::HostedSurface => 3,
+        Ui2WindowKind::TextScene => 5,
     }
 }
 
@@ -674,7 +765,7 @@ impl Ui2WindowHitSource for Ui2Window {
                     });
                 }
             }
-            Ui2WindowKind::HostedSurface => {}
+            Ui2WindowKind::HostedSurface | Ui2WindowKind::TextScene => {}
         }
     }
 }
@@ -1224,6 +1315,7 @@ fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) -> bool {
             )
         }
         Ui2WindowKind::HostedSurface => (0, source_window.content_tex_id, "fork-surface-window"),
+        Ui2WindowKind::TextScene => (0, 0, "fork-text-scene-window"),
     };
 
     let id = alloc_window(
@@ -1287,6 +1379,13 @@ fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) -> bool {
                 "ui2: surface-fork window={} tex={} from_window={}\n",
                 id,
                 next_tex_id,
+                source_window_id
+            );
+        }
+        Ui2WindowKind::TextScene => {
+            crate::log!(
+                "ui2: text-scene-fork window={} from_window={}\n",
+                id,
                 source_window_id
             );
         }
@@ -1495,7 +1594,7 @@ fn sync_window_container(
             }
             queue_browser_window_viewport(content_id, content)
         }
-        Ui2WindowKind::HostedSurface => true,
+        Ui2WindowKind::HostedSurface | Ui2WindowKind::TextScene => true,
     }
 }
 
@@ -2344,6 +2443,12 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                 return;
             }
         }
+        Ui2WindowKind::TextScene => {
+            if let Some(content) = content_rect {
+                draw_text_scene_window(state, window, content);
+                return;
+            }
+        }
     }
 }
 
@@ -2475,12 +2580,30 @@ pub async fn ui2_task() {
         if loop_seq <= 4 {
             crate::log!("ui2: loop seq={} begin\n", loop_seq);
         }
+        if let Some(active_mask) = take_hosted_browser_factory_mask() {
+            let created = sync_hosted_browser_factory_windows(active_mask);
+            if created != 0 {
+                crate::log!(
+                    "ui2: hosted-browser-factory reconcile mask={:#x} created={}\n",
+                    active_mask,
+                    created
+                );
+            }
+        }
         let mut browser_surface_changed = false;
         {
             let state_lock = init_state();
             let mut state = state_lock.lock();
             if loop_seq <= 4 {
                 crate::log!("ui2: loop seq={} locked\n", loop_seq);
+            }
+            let drained_text_scene_cmds = drain_text_scene_cmds(&mut state);
+            if drained_text_scene_cmds != 0 && loop_seq <= 8 {
+                crate::log!(
+                    "ui2: text-scene-cmds drained={} seq={}\n",
+                    drained_text_scene_cmds,
+                    loop_seq
+                );
             }
             refresh_browser_hit_entries_if_needed(&mut state);
             ui2_hid::pump_cursor_selection(&mut state);

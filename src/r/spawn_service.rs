@@ -1,4 +1,3 @@
-use alloc::string::String;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_executor::{SendSpawner, SpawnError, Spawner};
@@ -92,10 +91,10 @@ define_started_flags!(
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     GFX_LOADSCREEN_STARTED,
     HTML_SHACK_SERVICE_STARTED,
-    BROWSER_TAB_FACTORY_STARTED,
     UI2_STARTED,
     UI2_GFX_BROWSER_STARTED,
     UI2_GFX_TETRIS_STARTED,
+    UI2_TEXT_SCENE_DEMO_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     GFX_INTEL_TRIANGLE_DEMO_STARTED,
@@ -119,18 +118,18 @@ define_started_flags!(
     SURFER_FACTORY_STARTED
 );
 
-const UI2_FACTORY_WINDOW_COUNT: u32 = 3;
-const UI2_FACTORY_TEX_ID_BASE: u32 = 4_800;
 const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 3;
 
 struct TruesurferFactory {
     next_instance_id: u32,
+    spawned_mask: u32,
 }
 
 impl TruesurferFactory {
     const fn new() -> Self {
         Self {
             next_instance_id: trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
+            spawned_mask: 0,
         }
     }
 
@@ -142,47 +141,17 @@ impl TruesurferFactory {
         }
     }
 
-    fn mark_spawned(&mut self) {
+    fn mark_spawned(&mut self, browser_instance_id: u32) {
         self.next_instance_id = self.next_instance_id.saturating_add(1);
+        let bit = 1u32 << browser_instance_id.saturating_sub(1);
+        self.spawned_mask |= bit;
+    }
+    fn spawned_mask(&self) -> u32 {
+        self.spawned_mask
     }
 }
 
 static TRUESURFER_FACTORY: Mutex<TruesurferFactory> = Mutex::new(TruesurferFactory::new());
-
-fn ui2_factory_window_title(slot: u32) -> String {
-    alloc::format!("UI2 Window {}", slot.saturating_add(1))
-}
-
-fn ui2_factory_window_rect(slot: u32, total: u32) -> crate::r::ui2::Ui2Rect {
-    let (fb_w, fb_h) = crate::vga::framebuffer_dimensions().unwrap_or((1280, 800));
-    let cols = if total >= 2 { 2u32 } else { 1u32 };
-    let rows = total.div_ceil(cols).max(1);
-    let margin_x = 48.0f32;
-    let margin_y = 84.0f32;
-    let gutter = 18.0f32;
-    let bottom_margin = 36.0f32;
-    let usable_w = (fb_w as f32) - margin_x * 2.0 - gutter * (cols.saturating_sub(1) as f32);
-    let usable_h =
-        (fb_h as f32) - margin_y - bottom_margin - gutter * (rows.saturating_sub(1) as f32);
-    let width = (usable_w / cols as f32).clamp(520.0, 960.0);
-    let height = (usable_h / rows as f32).clamp(320.0, 640.0);
-    let col = slot % cols;
-    let row = slot / cols;
-    crate::r::ui2::Ui2Rect {
-        x: margin_x + col as f32 * (width + gutter),
-        y: margin_y + row as f32 * (height + gutter),
-        w: width,
-        h: height,
-    }
-}
-
-fn ui2_factory_window_clear_rgba(slot: u32) -> [u8; 4] {
-    match slot % 3 {
-        0 => [0x1C, 0x24, 0x32, 0xFF],
-        1 => [0x2C, 0x1E, 0x28, 0xFF],
-        _ => [0x1D, 0x2A, 0x22, 0xFF],
-    }
-}
 
 #[inline]
 fn boot_probe_ms() -> u64 {
@@ -492,41 +461,6 @@ fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     result
 }
 
-fn spawn_ui2_window_factory(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-
-    for slot in 0..UI2_FACTORY_WINDOW_COUNT {
-        let rect = ui2_factory_window_rect(slot, UI2_FACTORY_WINDOW_COUNT);
-        let title = ui2_factory_window_title(slot);
-        let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
-            title.as_str(),
-            rect,
-            40i16.saturating_add(slot as i16),
-            255,
-            UI2_FACTORY_TEX_ID_BASE.saturating_add(slot),
-            false,
-            ui2_factory_window_clear_rgba(slot),
-        ) else {
-            crate::log!("ui2-window-factory: failed window slot={}\n", slot);
-            continue;
-        };
-        let window_id = surface.window_id();
-        let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);
-        let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, false);
-        crate::log!(
-            "ui2-window-factory: window={} tex={} rect={}x{}@{},{}\n",
-            window_id,
-            surface.tex_id(),
-            rect.w as u32,
-            rect.h as u32,
-            rect.x as i32,
-            rect.y as i32
-        );
-    }
-
-    SpawnAttempt::Spawned
-}
-
 fn spawn_truesurfer_batch(spawner: Spawner, requested: u32) -> SpawnAttempt {
     if requested == 0 {
         return SpawnAttempt::Skipped;
@@ -546,11 +480,13 @@ fn spawn_truesurfer_batch(spawner: Spawner, requested: u32) -> SpawnAttempt {
             ))
         }) {
             SpawnAttempt::Spawned => {
-                factory.mark_spawned();
+                factory.mark_spawned(browser_instance_id);
+                crate::r::ui2::signal_hosted_browser_factory_mask(factory.spawned_mask());
                 spawned_any = true;
                 crate::log!(
-                    "truesurfer-factory: spawned browser_instance_id={} remaining={}\n",
+                    "truesurfer-factory: spawned browser_instance_id={} mask={:#x} remaining={}\n",
                     browser_instance_id,
+                    factory.spawned_mask(),
                     trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID
                         .saturating_sub(browser_instance_id)
                 );
@@ -599,6 +535,12 @@ fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_gfx_tetris::ui2_gfx_tetris_task())
+    })
+}
+
+fn spawn_ui2_text_scene_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_text_scene_demo::ui2_text_scene_demo_task())
     })
 }
 
@@ -858,12 +800,6 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2,
     ),
     TaskSpec::enabled(
-        "ui2-window-factory",
-        crate::r::readiness::UI2_READY,
-        &BROWSER_TAB_FACTORY_STARTED,
-        spawn_ui2_window_factory,
-    ),
-    TaskSpec::enabled(
         "truesurfer-factory",
         0,
         &SURFER_FACTORY_STARTED,
@@ -874,6 +810,12 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::UI2_READY,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
+    ),
+    TaskSpec::enabled(
+        "ui2-text-scene-demo",
+        crate::r::readiness::UI2_READY,
+        &UI2_TEXT_SCENE_DEMO_STARTED,
+        spawn_ui2_text_scene_demo,
     ),
     TaskSpec::enabled(
         "ui2-triangle-demo",
