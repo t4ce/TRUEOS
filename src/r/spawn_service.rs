@@ -213,7 +213,7 @@ fn spawn_on_worker(
 
 fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::vga::init_font_cache_task())
+       // spawner.spawn(crate::vga::init_font_cache_task())
     })
 }
 

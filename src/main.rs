@@ -56,7 +56,7 @@ mod tst_ui2_triangle_demo;
 mod tst_ws_time;
 mod turbo;
 mod usb2;
-mod vga;
+//mod vga;
 mod wait;
 mod x2apic;
 mod z7;
@@ -144,7 +144,7 @@ pub extern "C" fn kmain() -> ! {
         cpu::enable_sse();
     }
     exceptions::init();
-    vga::init(limine::framebuffer_response());
+    //vga::init(limine::framebuffer_response());
     crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
@@ -172,7 +172,7 @@ pub extern "C" fn kmain() -> ! {
     #[cfg(feature = "gfx_intel")]
     intel::init_once();
 
-    vga::cube::tick();
+    //vga::cube::tick();
     trueos_qjs::set_font_atlas_small_provider(qjs_font_atlas_small_provider);
     trueos_qjs::set_font_atlas_large_provider(qjs_font_atlas_large_provider);
     trueos_qjs::host_api_hook::set_context_init_hook(host_api::install);
@@ -232,7 +232,7 @@ fn _loop(
         time::poll();
         unsafe { executor.poll() };
         if counter.is_multiple_of(5_000) {
-            vga::cube::tick();
+            //vga::cube::tick();
         }
         if counter.is_multiple_of(10_000_000) {
             globalog::debugcon_write_byte_raw(b'0');
