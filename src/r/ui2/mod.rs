@@ -14,15 +14,12 @@ use spin::{Mutex, Once};
 
 mod ui2_hid;
 mod ui2_hosted;
-mod ui2_text_scene;
 mod ui2_win_deco;
 
 mod ui2_win;
 
 pub(crate) use self::ui2_hosted::signal_hosted_browser_factory_mask;
 use self::ui2_hosted::*;
-pub use self::ui2_text_scene::*;
-use self::ui2_text_scene::*;
 pub use self::ui2_win::*;
 pub use self::ui2_win_deco::*;
 
@@ -145,7 +142,6 @@ enum Ui2SystemButtonAction {
 enum Ui2WindowKind {
     HostedBrowser,
     HostedSurface,
-    TextScene,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -274,7 +270,6 @@ struct Ui2State {
     scroll_drags: Vec<Ui2WindowScrollDrag>,
     scroll_pan_drags: Vec<Ui2WindowScrollPanDrag>,
     windows: Vec<Ui2Window>,
-    text_scene: Ui2TextSceneState,
     loadscreen_end_signaled: bool,
     first_compose_signaled: bool,
 }
@@ -400,7 +395,6 @@ fn init_state() -> &'static Mutex<Ui2State> {
             scroll_drags: Vec::new(),
             scroll_pan_drags: Vec::new(),
             windows: Vec::new(),
-            text_scene: Ui2TextSceneState::default(),
             loadscreen_end_signaled: false,
             first_compose_signaled: false,
         };
@@ -586,7 +580,6 @@ fn window_kind_id(kind: Ui2WindowKind) -> u32 {
     match kind {
         Ui2WindowKind::HostedBrowser => 1,
         Ui2WindowKind::HostedSurface => 3,
-        Ui2WindowKind::TextScene => 5,
     }
 }
 
@@ -765,7 +758,7 @@ impl Ui2WindowHitSource for Ui2Window {
                     });
                 }
             }
-            Ui2WindowKind::HostedSurface | Ui2WindowKind::TextScene => {}
+            Ui2WindowKind::HostedSurface => {}
         }
     }
 }
@@ -1315,7 +1308,6 @@ fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) -> bool {
             )
         }
         Ui2WindowKind::HostedSurface => (0, source_window.content_tex_id, "fork-surface-window"),
-        Ui2WindowKind::TextScene => (0, 0, "fork-text-scene-window"),
     };
 
     let id = alloc_window(
@@ -1379,13 +1371,6 @@ fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) -> bool {
                 "ui2: surface-fork window={} tex={} from_window={}\n",
                 id,
                 next_tex_id,
-                source_window_id
-            );
-        }
-        Ui2WindowKind::TextScene => {
-            crate::log!(
-                "ui2: text-scene-fork window={} from_window={}\n",
-                id,
                 source_window_id
             );
         }
@@ -1594,7 +1579,7 @@ fn sync_window_container(
             }
             queue_browser_window_viewport(content_id, content)
         }
-        Ui2WindowKind::HostedSurface | Ui2WindowKind::TextScene => true,
+        Ui2WindowKind::HostedSurface => true,
     }
 }
 
@@ -2272,6 +2257,51 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
     }
 }
 
+fn draw_hosted_browser_text_rows(state: &Ui2State, window: &Ui2Window, content: Ui2Rect) -> bool {
+    let text_state = hosted_text_state(window_browser_instance_id(window));
+    if text_state.rows.is_empty() {
+        return false;
+    }
+
+    let panel_rgba = modulate_rgba_alpha((0xF8, 0xF8, 0xF4, 0xFF), window.alpha);
+    let row_rgba = modulate_rgba_alpha((0xDC, 0xE3, 0xED, 0xFF), window.alpha);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        content.x,
+        content.y,
+        content.w,
+        content.h,
+        panel_rgba,
+        state.view_w,
+        state.view_h,
+    );
+
+    for (idx, row) in text_state.rows.iter().take(10).enumerate() {
+        let top = content.y + 10.0 + (idx as f32 * 18.0);
+        if top + 18.0 > content.y + content.h {
+            break;
+        }
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            content.x + 6.0,
+            top - 1.0,
+            (content.w - 12.0).max(1.0),
+            16.0,
+            row_rgba,
+            state.view_w,
+            state.view_h,
+        );
+        crate::gfx::text::draw_atlas_text_in_frame_alpha(
+            row.as_bytes(),
+            content.x + 10.0,
+            top + 1.0,
+            state.view_w,
+            state.view_h,
+            window.alpha,
+        );
+    }
+
+    true
+}
+
 fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     if !window_is_renderable(window) {
         return;
@@ -2391,6 +2421,9 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
             if let Some(content) = content_rect {
+                if draw_hosted_browser_text_rows(state, window, content) {
+                    return;
+                }
                 if texture_is_drawable(window.content_tex_id)
                     && draw_texture_rect_no_present(
                         window.content_tex_id,
@@ -2440,12 +2473,6 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                     b"Preparing Window",
                     b"Waiting for texture upload",
                 );
-                return;
-            }
-        }
-        Ui2WindowKind::TextScene => {
-            if let Some(content) = content_rect {
-                draw_text_scene_window(state, window, content);
                 return;
             }
         }
@@ -2597,14 +2624,6 @@ pub async fn ui2_task() {
             if loop_seq <= 4 {
                 crate::log!("ui2: loop seq={} locked\n", loop_seq);
             }
-            let drained_text_scene_cmds = drain_text_scene_cmds(&mut state);
-            if drained_text_scene_cmds != 0 && loop_seq <= 8 {
-                crate::log!(
-                    "ui2: text-scene-cmds drained={} seq={}\n",
-                    drained_text_scene_cmds,
-                    loop_seq
-                );
-            }
             refresh_browser_hit_entries_if_needed(&mut state);
             ui2_hid::pump_cursor_selection(&mut state);
             ui2_hid::pump_keyboard_input(&mut state);
@@ -2631,7 +2650,7 @@ pub async fn ui2_task() {
         if dirty {
             let state_lock = init_state();
             let mut state = state_lock.lock();
-            if loop_seq <= 4 {
+            if crate::logflag::GFX_FRAME_PROGRESS_LOGS && loop_seq <= 4 {
                 crate::log!("ui2: compose seq={} start\n", loop_seq);
             }
             if state.compose_seq == 0 {
@@ -2644,7 +2663,7 @@ pub async fn ui2_task() {
             if state.first_compose_signaled && state.compose_seq == 1 {
                 crate::log!("boot-probe: ui2 ready ms={}\n", boot_probe_ms());
             }
-            if loop_seq <= 4 {
+            if crate::logflag::GFX_FRAME_PROGRESS_LOGS && loop_seq <= 4 {
                 crate::log!("ui2: compose seq={} done\n", loop_seq);
             }
         }

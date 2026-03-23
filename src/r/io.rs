@@ -4267,7 +4267,7 @@ pub mod cabi {
                 }
                 let n = crate::logflag::GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS
                     .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                if first || n < 12 {
+                if crate::logflag::GFX_FRAME_PROGRESS_LOGS && (first || n < 12) {
                     crate::globalog::log(format_args!(
                         "gfx-cabi: virgl end_frame ok seq={} rgb={} tex={} bytes={} first={}\n",
                         seq, rgb_draws, tex_draws, draw_bytes, first as u8
@@ -4304,7 +4304,7 @@ pub mod cabi {
         } else if crate::gfx::is_virgl_active() {
             let n = crate::logflag::GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            if n < 12 {
+            if crate::logflag::GFX_FRAME_PROGRESS_LOGS && n < 12 {
                 crate::globalog::log(format_args!(
                     "gfx-cabi: virgl end_frame failed seq={} rgb={} tex={} bytes={} rc={}\n",
                     seq, rgb_draws, tex_draws, draw_bytes, ret

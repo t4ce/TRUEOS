@@ -178,23 +178,6 @@ pub fn create_hosted_browser_content_window(
     create_hosted_browser_window(title, rect, z, alpha, browser_instance_id, tex_id)
 }
 
-pub fn create_text_scene_window(title: &str, content_rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
-    let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
-    let state_lock = init_state();
-    let mut state = state_lock.lock();
-    let id = alloc_window(&mut state, Ui2WindowKind::TextScene, title, rect, z, alpha);
-    if let Some(window) = window_mut(&mut state, id) {
-        window.left_scrollbar_visible = false;
-        window.bottom_scrollbar_visible = false;
-        window.content_tex_id = 0;
-        window.content_tex_blend = false;
-    }
-    state.compose_reason = "create-text-scene-window";
-    refresh_window_hit_entries(&mut state, id);
-    UI2_DIRTY.store(true, Ordering::Release);
-    id
-}
-
 pub fn create_hosted_surface_window(
     title: &str,
     rect: Ui2Rect,
