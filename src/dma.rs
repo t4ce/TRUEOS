@@ -13,7 +13,6 @@ static DMA_ALLOCS: Mutex<Vec<DmaAlloc, MAX_DMA_ALLOCS>> = Mutex::new(Vec::new())
 
 #[derive(Copy, Clone)]
 enum DmaAllocOrigin {
-    Heap,
     Pmm,
 }
 
@@ -32,7 +31,7 @@ pub fn init_from_limine() {
     }
 
     DMA_READY.store(true, Ordering::Release);
-    crate::log!("dma: allocator-backed DMA boundary active\n");
+    crate::log!("dma: pmm-backed DMA allocator active\n");
 }
 
 pub fn alloc(size: usize, align: usize) -> Option<(u64, *mut u8)> {
@@ -50,16 +49,13 @@ pub fn alloc_with_max(
 
     let layout = Layout::from_size_align(size, align.max(1)).ok()?;
 
-    if let Some((phys, virt, origin)) = alloc_from_heap(layout, max_phys_exclusive)
-        .or_else(|| alloc_from_pmm(size, layout.align(), max_phys_exclusive))
-    {
+    if let Some((phys, virt, origin)) = alloc_from_pmm(size, layout.align(), max_phys_exclusive) {
         if register_alloc(virt, phys, size, origin) {
             return Some((phys, virt));
         }
 
         unsafe {
             match origin {
-                DmaAllocOrigin::Heap => crate::allocators::dealloc_raw(virt),
                 DmaAllocOrigin::Pmm => {
                     let _ = crate::phys::free_phys_range(phys, size);
                 }
@@ -85,9 +81,6 @@ pub fn dealloc(ptr: *mut u8, size: usize) {
     };
 
     match alloc.origin {
-        DmaAllocOrigin::Heap => unsafe {
-            crate::allocators::dealloc_raw(ptr);
-        },
         DmaAllocOrigin::Pmm => {
             if !crate::phys::free_phys_range(alloc.phys, alloc.size) {
                 crate::log!(
@@ -107,28 +100,6 @@ fn ensure_ready() -> bool {
         crate::log!("dma: not initialized\n");
         false
     }
-}
-
-fn alloc_from_heap(
-    layout: Layout,
-    max_phys_exclusive: Option<u64>,
-) -> Option<(u64, *mut u8, DmaAllocOrigin)> {
-    let virt = unsafe { crate::allocators::alloc_raw(layout) };
-    if virt.is_null() {
-        return None;
-    }
-
-    let Some(phys) = crate::phys::virt_to_phys_checked(virt as *const u8) else {
-        unsafe { crate::allocators::dealloc_raw(virt) };
-        return None;
-    };
-
-    if !fits_range(phys, layout.size(), max_phys_exclusive) || phys < MIN_DMA_BASE {
-        unsafe { crate::allocators::dealloc_raw(virt) };
-        return None;
-    }
-
-    Some((phys, virt, DmaAllocOrigin::Heap))
 }
 
 fn alloc_from_pmm(

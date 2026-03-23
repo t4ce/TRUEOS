@@ -12,6 +12,7 @@ use core::ffi::c_char;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_sync::blocking_mutex::raw::RawMutex;
+use embassy_sync::signal::Signal;
 use embassy_sync::zerocopy_channel::{Channel, Receiver, Sender};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::{Mutex, Once};
@@ -156,6 +157,8 @@ struct BrowserInstanceState {
 static TRUESURFER_STATE: Mutex<BTreeMap<u32, BrowserInstanceState>> = Mutex::new(BTreeMap::new());
 static BROWSER_RPC_SEQ: AtomicU32 = AtomicU32::new(1);
 static TRUESURFER_HTML_QUEUES: Once<Vec<BrowserHtmlQueue>> = Once::new();
+static TRUESURFER_HTML_READY: [Signal<SpinRawMutex, ()>; MAX_BROWSER_INSTANCE_ID as usize] =
+    [const { Signal::new() }; MAX_BROWSER_INSTANCE_ID as usize];
 
 fn text_row(text: &str, indent_px: u32) -> HostedBrowserTextRow {
     HostedBrowserTextRow {
@@ -188,6 +191,13 @@ fn html_handoff_queue(browser_instance_id: u32) -> Option<&'static BrowserHtmlQu
         return None;
     }
     html_handoff_queues().get(browser_instance_id.saturating_sub(1) as usize)
+}
+
+fn html_ready_signal(browser_instance_id: u32) -> Option<&'static Signal<SpinRawMutex, ()>> {
+    if !browser_valid(browser_instance_id) {
+        return None;
+    }
+    TRUESURFER_HTML_READY.get(browser_instance_id.saturating_sub(1) as usize)
 }
 
 #[inline]
@@ -261,6 +271,9 @@ pub async fn queue_set_html_with_url_for_browser(
     let Some(queue) = html_handoff_queue(browser_instance_id) else {
         return false;
     };
+    let Some(ready_signal) = html_ready_signal(browser_instance_id) else {
+        return false;
+    };
 
     let html_len = html.len();
     let mut next_html = Some(html);
@@ -273,8 +286,9 @@ pub async fn queue_set_html_with_url_for_browser(
                 slot.html = next_html.take().unwrap_or_default();
                 slot.url = next_url.take().unwrap_or_default();
                 sender.send_done();
+                ready_signal.signal(());
                 log_line(format!(
-                    "qjs-truesurfer[{}]: queued html bytes={} depth={}\n",
+                    "qjs-truesurfer[{}]: queued html bytes={} depth={} signal=1\n",
                     browser_instance_id,
                     html_len,
                     sender.len()
@@ -485,6 +499,13 @@ fn take_queued_html_for_browser(browser_instance_id: u32) -> Option<PendingHtml>
     Some(pending)
 }
 
+async fn wait_for_queued_html(browser_instance_id: u32) {
+    let Some(signal) = html_ready_signal(browser_instance_id) else {
+        return;
+    };
+    signal.wait().await;
+}
+
 unsafe fn dispatch_html(
     _rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
@@ -662,13 +683,15 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                 let _ = with_browser_state_mut(browser_instance_id, |state| {
                     state.api_ready = ready;
                 });
+                let mut dispatched_html = false;
                 if ready {
-                    if let Some(pending) = take_queued_html_for_browser(browser_instance_id) {
+                    while let Some(pending) = take_queued_html_for_browser(browser_instance_id) {
                         let _ = dispatch_html(rt, ctx, browser_instance_id, pending);
+                        dispatched_html = true;
                     }
                 }
 
-                busy = !ready || runtime_has_pending_work(rt, ctx);
+                busy = !ready || dispatched_html || runtime_has_pending_work(rt, ctx);
                 if !busy {
                     break;
                 }
@@ -679,7 +702,11 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
             }
 
             if !busy && !runtime_has_pending_work(rt, ctx) && truesurfer_ready(ctx) {
-                Timer::after(EmbassyDuration::from_millis(TRUESURFER_IDLE_SLEEP_MS)).await;
+                if let Some(pending) = take_queued_html_for_browser(browser_instance_id) {
+                    let _ = dispatch_html(rt, ctx, browser_instance_id, pending);
+                    continue;
+                }
+                wait_for_queued_html(browser_instance_id).await;
                 continue;
             }
 
