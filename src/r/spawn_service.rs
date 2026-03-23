@@ -117,7 +117,15 @@ define_started_flags!(
     SURFER_FACTORY_STARTED
 );
 
-const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 10;
+const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 2;
+
+pub const fn truesurfer_factory_boot_count() -> u32 {
+    if TRUESURFER_FACTORY_BOOT_COUNT > trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID {
+        trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID
+    } else {
+        TRUESURFER_FACTORY_BOOT_COUNT
+    }
+}
 
 struct TruesurferFactory {
     next_instance_id: u32,
@@ -522,7 +530,7 @@ pub fn spawn_additional_truesurfers(spawner: Spawner, requested: u32) -> bool {
 }
 
 fn spawn_truesurfer_factory(spawner: Spawner) -> SpawnAttempt {
-    spawn_truesurfer_batch(spawner, TRUESURFER_FACTORY_BOOT_COUNT)
+    spawn_truesurfer_batch(spawner, truesurfer_factory_boot_count())
 }
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
@@ -788,7 +796,7 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled(
         "ui2",
-        crate::r::readiness::GFX_BACKEND_READY,
+        crate::r::readiness::LOADSCREEN_END,
         &UI2_STARTED,
         spawn_ui2,
     ),

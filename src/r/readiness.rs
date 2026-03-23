@@ -35,6 +35,7 @@ pub const LOADSCREEN_END: u32 = 1 << 20;
 pub const GFX_INTEL_CLAIMED: u32 = 1 << 21;
 pub const GFX_BACKEND_READY: u32 = 1 << 22;
 pub const UI2_READY: u32 = 1 << 23;
+pub const LOADSCREEN_FRAME_READY: u32 = 1 << 24;
 
 static READY: AtomicU32 = AtomicU32::new(0);
 

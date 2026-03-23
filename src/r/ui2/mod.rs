@@ -269,7 +269,6 @@ struct Ui2State {
     scroll_drags: Vec<Ui2WindowScrollDrag>,
     scroll_pan_drags: Vec<Ui2WindowScrollPanDrag>,
     windows: Vec<Ui2Window>,
-    loadscreen_end_signaled: bool,
     first_compose_signaled: bool,
 }
 
@@ -394,7 +393,6 @@ fn init_state() -> &'static Mutex<Ui2State> {
             scroll_drags: Vec::new(),
             scroll_pan_drags: Vec::new(),
             windows: Vec::new(),
-            loadscreen_end_signaled: false,
             first_compose_signaled: false,
         };
 
@@ -2569,10 +2567,6 @@ fn compose_windows(state: &mut Ui2State) {
         }
     });
 
-    if !state.loadscreen_end_signaled {
-        crate::r::readiness::set(crate::r::readiness::LOADSCREEN_END);
-        state.loadscreen_end_signaled = true;
-    }
     if !state.first_compose_signaled {
         crate::r::readiness::set(crate::r::readiness::UI2_READY);
         state.first_compose_signaled = true;
@@ -2590,17 +2584,6 @@ pub async fn ui2_task() {
     crate::gfx::init(crate::limine::framebuffer_response());
     init_state();
     request_full_recompose("boot");
-    if let Some(state_lock) = UI2_STATE.get() {
-        let mut state = state_lock.lock();
-        if !state.loadscreen_end_signaled {
-            crate::r::readiness::set(crate::r::readiness::LOADSCREEN_END);
-            state.loadscreen_end_signaled = true;
-            crate::log!(
-                "boot-probe: ui2 signaled loadscreen_end ms={}\n",
-                boot_probe_ms()
-            );
-        }
-    }
     crate::log!("ui2: boot window manager\n");
     let mut last_browser_content_seq = 0u32;
     let mut loop_seq = 0u32;

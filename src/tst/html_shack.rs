@@ -184,10 +184,21 @@ async fn store_ready_html(html: Html) -> usize {
 }
 
 async fn handoff_ready_html_to_boot_browsers(html: Html) {
-    for browser_instance_id in trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
-        .iter()
-        .copied()
-    {
+    let browser_count = crate::r::spawn_service::truesurfer_factory_boot_count();
+    if browser_count == 0 {
+        crate::log!(
+            "html_shack: browser_handoff skipped url={} browsers=0\n",
+            html.url
+        );
+        return;
+    }
+
+    let first_browser_instance_id = trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID;
+    let last_browser_instance_id = first_browser_instance_id
+        .saturating_add(browser_count.saturating_sub(1))
+        .min(trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID);
+
+    for browser_instance_id in first_browser_instance_id..=last_browser_instance_id {
         let handed_off = trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
             browser_instance_id,
             html.html.clone(),
