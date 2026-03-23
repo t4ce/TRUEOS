@@ -23,6 +23,8 @@ const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'l
 const SHOW_CLOSING_TAG_ROWS = false;
 const BROWSER_KEYBOARD_LOG_MAX = 128;
 const BROWSER_LAYOUT_LOG_MAX_ROWS = 24;
+const BROWSER_HTML_PREVIEW_FRONT_LINES = 5;
+const BROWSER_HTML_PREVIEW_LINE_CHARS = 160;
 
 let cachedHtml = '';
 let cachedDoc = null;
@@ -1496,6 +1498,7 @@ function getViewport() {
 function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
+  logHtmlPreview(currentPageUrl, cachedHtml);
   if (browserAssetsEnabled() && assetManager && typeof assetManager.beginPageLoad === 'function') {
     assetManager.beginPageLoad();
   }
@@ -1532,6 +1535,44 @@ function hasConsoleLog() {
 
 function surferLogPrefix() {
   return `[surfer ${currentWindowId()}]`;
+}
+
+function surferHtmlPreviewLogsEnabled() {
+  const fn = runtime.host.__trueosBrowserHtmlPreviewLogsEnabled;
+  if (typeof fn !== 'function') return true;
+  try {
+    return !!fn();
+  } catch (_) {
+    return true;
+  }
+}
+
+function previewHtmlLine(line) {
+  const text = typeof line === 'string' ? line : String(line == null ? '' : line);
+  if (text.length <= BROWSER_HTML_PREVIEW_LINE_CHARS) return text;
+  return text.slice(0, BROWSER_HTML_PREVIEW_LINE_CHARS);
+}
+
+function logHtmlPreview(url, html) {
+  if (!surferHtmlPreviewLogsEnabled() || !hasConsoleLog()) return false;
+  const source = typeof html === 'string' ? html : String(html == null ? '' : html);
+  if (!source) return false;
+  const resolvedUrl = typeof url === 'string' && url ? url : '(unknown)';
+  const lines = source.split('\n');
+  const prefix = surferLogPrefix();
+  console.log(`${prefix} received url=${resolvedUrl} bytes=${source.length} lines=${lines.length} front=${BROWSER_HTML_PREVIEW_FRONT_LINES}`);
+  for (let i = 0; i < Math.min(BROWSER_HTML_PREVIEW_FRONT_LINES, lines.length); i += 1) {
+    console.log(`${prefix} [${i + 1}] ${previewHtmlLine(lines[i])}`);
+  }
+  return true;
+}
+
+function consumePendingBootHtml() {
+  const pending = runtime.host.__trueosUiHtml;
+  if (typeof pending !== 'string' || !pending) return false;
+  delete runtime.host.__trueosUiHtml;
+  setHtml(pending);
+  return true;
 }
 
 function formatLayoutRow(row, index, rowX = [], rowY = []) {
@@ -2247,3 +2288,4 @@ installQjsInputBridge();
 if (!currentPageUrl) {
   setCurrentPageUrl('about:blank');
 }
+consumePendingBootHtml();

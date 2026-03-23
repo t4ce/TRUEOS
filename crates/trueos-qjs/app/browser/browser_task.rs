@@ -742,6 +742,32 @@ unsafe fn js_prop_string(
     out
 }
 
+unsafe fn js_value_to_bool(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> bool {
+    if value.is_exception() || value.tag == qjs::JS_TAG_UNDEFINED || value.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, value);
+        return false;
+    }
+    if value.tag == qjs::JS_TAG_BOOL || value.tag == qjs::JS_TAG_INT {
+        let out = value.u.int32 != 0;
+        qjs::js_free_value(ctx, value);
+        return out;
+    }
+    let mut out = 0.0f64;
+    let ok = qjs::JS_ToFloat64(ctx, &mut out as *mut f64, value) == 0;
+    qjs::js_free_value(ctx, value);
+    ok && out != 0.0
+}
+
+unsafe fn browser_set_html_ready(ctx: *mut qjs::JSContext) -> bool {
+    let value = qjs::js_eval_bytes(
+        ctx,
+        br#"(function(){const __g=(typeof globalThis!=='undefined')?globalThis:this;return !!(__g.__trueosBrowser&&typeof __g.__trueosBrowser.setHtml==='function');})()"#,
+        b"<browser-set-html-ready>\0".as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+    );
+    js_value_to_bool(ctx, value)
+}
+
 #[inline]
 unsafe fn set_event_num_prop(
     ctx: *mut qjs::JSContext,
@@ -1331,6 +1357,15 @@ unsafe fn sync_hosted_text_state(ctx: *mut qjs::JSContext, browser_instance_id: 
 }
 
 unsafe fn apply_pending_html(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    let Some(pending) = with_browser_host_state(browser_instance_id, |state| state.pending_html.clone()) else {
+        return;
+    };
+    if pending.browser_instance_id != browser_instance_id {
+        return;
+    }
+    if !browser_set_html_ready(ctx) {
+        return;
+    }
     let Some(next) =
         with_browser_host_state_mut(browser_instance_id, |state| state.pending_html.take())
     else {
@@ -1358,7 +1393,7 @@ unsafe fn apply_pending_html(ctx: *mut qjs::JSContext, browser_instance_id: u32)
     } else {
         src.push_str(";");
     }
-    src.push_str("if(__g.__trueosBrowser&&typeof __g.__trueosBrowser.setHtml==='function'){__g.__trueosBrowser.setHtml(__h);}else{__g.__trueosUiHtml=__h;}})();");
+    src.push_str("__g.__trueosBrowser.setHtml(__h);})();");
     let filename = b"<browser-set-html>\0";
     let _ = helpers::eval_or_log(
         ctx,
