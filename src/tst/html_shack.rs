@@ -183,7 +183,11 @@ fn store_ready_html(html: Html) -> usize {
 }
 
 fn handoff_ready_html_to_boot_browsers(html: &Html) {
-    for browser_instance_id in trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS {
+    for browser_instance_id in trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
+        .iter()
+        .copied()
+        .take(3)
+    {
         let handed_off = trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
             browser_instance_id,
             html.html.clone(),
