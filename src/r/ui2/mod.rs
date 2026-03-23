@@ -27,6 +27,7 @@ const UI2_SYSTEM_SCROLLBAR_PX: f32 = 4.0;
 const UI2_SYSTEM_BUTTON_W: f32 = 24.0;
 const UI2_SYSTEM_BUTTON_H: f32 = 14.0;
 const UI2_SYSTEM_BUTTON_GAP: f32 = 4.0;
+const UI2_BROWSER_FORK_WINDOW_OFFSET_PX: f32 = 24.0;
 const UI2_BOTTOM_RESIZE_BUTTON_W: f32 = 18.0;
 const UI2_BOTTOM_RESIZE_BUTTON_H: f32 = 14.0;
 const UI2_BOTTOM_RESIZE_BUTTON_PAD: f32 = 2.0;
@@ -129,6 +130,7 @@ enum Ui2HitKind {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui2SystemButtonAction {
+    Fork,
     Minimize,
     ToggleMaximize,
     Close,
@@ -1126,6 +1128,7 @@ fn handle_system_button_action(
     action: Ui2SystemButtonAction,
 ) -> bool {
     match action {
+        Ui2SystemButtonAction::Fork => fork_hosted_browser_window_in_state(state, window_id),
         Ui2SystemButtonAction::Minimize => minimize_window_in_state(state, window_id),
         Ui2SystemButtonAction::ToggleMaximize => {
             let is_maximized = state
@@ -1142,6 +1145,140 @@ fn handle_system_button_action(
         }
         Ui2SystemButtonAction::Close => set_window_visible_in_state(state, window_id, false),
     }
+}
+
+fn fork_hosted_browser_window_in_state(state: &mut Ui2State, source_window_id: u32) -> bool {
+    let Some(source_window) = state.windows.iter().find(|window| {
+        window.id == source_window_id && window.kind == Ui2WindowKind::HostedBrowser
+    }) else {
+        return false;
+    };
+
+    let source_browser_instance_id = window_browser_instance_id(source_window);
+    let target_browser_instance_id = trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
+        .iter()
+        .copied()
+        .find(|browser_instance_id| {
+            *browser_instance_id != source_browser_instance_id
+                && state.windows.iter().all(|window| {
+                    window.kind != Ui2WindowKind::HostedBrowser
+                        || window_browser_instance_id(window) != *browser_instance_id
+                })
+        });
+    let Some(target_browser_instance_id) = target_browser_instance_id else {
+        crate::log!(
+            "ui2: browser-fork no-target window={} source_browser={}\n",
+            source_window_id,
+            source_browser_instance_id
+        );
+        return false;
+    };
+
+    let source_rect = if source_window.state == Ui2WindowStateKind::Normal {
+        source_window.rect
+    } else if source_window.restore_rect.w > 0.0 && source_window.restore_rect.h > 0.0 {
+        source_window.restore_rect
+    } else {
+        source_window.rect
+    };
+    let next_rect = normalized_window_rect_for_view(
+        state.view_w,
+        state.view_h,
+        Ui2Rect::new(
+            source_rect.x + UI2_BROWSER_FORK_WINDOW_OFFSET_PX,
+            source_rect.y + UI2_BROWSER_FORK_WINDOW_OFFSET_PX,
+            source_rect.w,
+            source_rect.h,
+        ),
+    );
+    let next_tex_id =
+        trueos_qjs::browser_task::render_tex_id_for_browser_instance(target_browser_instance_id);
+    let next_z = state
+        .windows
+        .iter()
+        .map(|window| window.z)
+        .max()
+        .unwrap_or(source_window.z)
+        .saturating_add(1);
+    let next_title = source_window.title.clone();
+    let next_icon_id = source_window.icon_id;
+    let next_alpha = source_window.alpha;
+    let next_hit_test_visible = source_window.hit_test_visible;
+    let next_decoration_mode = source_window.decoration_mode;
+    let next_titlebar_visible = source_window.titlebar_visible;
+    let next_bottom_bar_visible = source_window.bottom_bar_visible;
+    let next_left_scrollbar_visible = source_window.left_scrollbar_visible;
+    let next_bottom_scrollbar_visible = source_window.bottom_scrollbar_visible;
+    let next_vertical_scrollbar_side = source_window.vertical_scrollbar_side;
+    let next_horizontal_scrollbar_side = source_window.horizontal_scrollbar_side;
+
+    let id = alloc_window(
+        state,
+        Ui2WindowKind::HostedBrowser,
+        next_title.as_str(),
+        next_rect,
+        next_z,
+        next_alpha,
+    );
+    if let Some(window) = window_mut(state, id) {
+        window.browser_instance_id = target_browser_instance_id;
+        window.icon_id = next_icon_id;
+        window.content_tex_id = next_tex_id;
+        window.content_tex_blend = true;
+        window.hit_test_visible = next_hit_test_visible;
+        window.decoration_mode = next_decoration_mode;
+        window.titlebar_visible = next_titlebar_visible;
+        window.bottom_bar_visible = next_bottom_bar_visible;
+        window.left_scrollbar_visible = next_left_scrollbar_visible;
+        window.bottom_scrollbar_visible = next_bottom_scrollbar_visible;
+        window.vertical_scrollbar_side = next_vertical_scrollbar_side;
+        window.horizontal_scrollbar_side = next_horizontal_scrollbar_side;
+        window.state = Ui2WindowStateKind::Normal;
+        window.rect = next_rect;
+        window.restore_rect = next_rect;
+    }
+
+    let initial_content = state
+        .windows
+        .iter()
+        .find(|window| window.id == id)
+        .and_then(|window| window_content_rect(state, window))
+        .map(|content| {
+            let (_, _, width, height) = snap_browser_content_rect(content);
+            (width, height)
+        });
+
+    let _ = hosted_bind_window(target_browser_instance_id, id);
+    let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
+        target_browser_instance_id,
+        next_tex_id,
+    );
+    state.compose_reason = "fork-browser-window";
+    let _ = note_window_dirty(state, id, "fork-browser-window");
+    let _ = note_window_viewport_sync_needed(state, id);
+    refresh_window_hit_entries(state, id);
+    crate::log!(
+        "ui2: browser-fork window={} browser={} from_window={} from_browser={}\n",
+        id,
+        target_browser_instance_id,
+        source_window_id,
+        source_browser_instance_id
+    );
+
+    if let Some((width, height)) = initial_content {
+        let pixels =
+            alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
+        let _ = crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+            next_tex_id,
+            width,
+            height,
+            pixels.as_slice(),
+            id,
+            "fork-browser-window",
+        );
+    }
+
+    true
 }
 
 #[inline]
@@ -1844,23 +1981,42 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
         return;
     };
 
-    let icon_id = match action {
-        Ui2SystemButtonAction::Minimize => 5,
-        Ui2SystemButtonAction::ToggleMaximize => 7,
-        Ui2SystemButtonAction::Close => 11,
-    };
-    let icon_x = rect.x + ((rect.w - 16.0) * 0.5);
-    let icon_y = rect.y + ((rect.h - 16.0) * 0.5);
-    let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
-        icon_id,
-        0,
-        1,
-        icon_x,
-        icon_y,
-        state.view_w,
-        state.view_h,
-        window.alpha,
-    );
+    match action {
+        Ui2SystemButtonAction::Fork => {
+            let text = b"+1";
+            let text_w = crate::gfx::text::atlas_text_width_px(text);
+            crate::gfx::text::draw_atlas_text_in_frame_alpha(
+                text,
+                rect.x + ((rect.w - text_w) * 0.5),
+                rect.y + 3.0,
+                state.view_w,
+                state.view_h,
+                window.alpha,
+            );
+        }
+        Ui2SystemButtonAction::Minimize
+        | Ui2SystemButtonAction::ToggleMaximize
+        | Ui2SystemButtonAction::Close => {
+            let icon_id = match action {
+                Ui2SystemButtonAction::Fork => 0,
+                Ui2SystemButtonAction::Minimize => 5,
+                Ui2SystemButtonAction::ToggleMaximize => 7,
+                Ui2SystemButtonAction::Close => 11,
+            };
+            let icon_x = rect.x + ((rect.w - 16.0) * 0.5);
+            let icon_y = rect.y + ((rect.h - 16.0) * 0.5);
+            let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
+                icon_id,
+                0,
+                1,
+                icon_x,
+                icon_y,
+                state.view_w,
+                state.view_h,
+                window.alpha,
+            );
+        }
+    }
 }
 
 fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
@@ -2084,6 +2240,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
             state.view_h,
             title_rgba.3,
         );
+        draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleMaximize);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Close);

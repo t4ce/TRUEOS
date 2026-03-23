@@ -17,10 +17,14 @@ unsafe extern "C" {
     fn trueos_cabi_gfx_frame_lock_end();
 }
 
-pub const DEFAULT_BROWSER_INSTANCE_ID: u32 = 1;
-pub const PRIMARY_BROWSER_INSTANCE_ID: u32 = DEFAULT_BROWSER_INSTANCE_ID;
+pub const PRIMARY_BROWSER_INSTANCE_ID: u32 = 1;
+pub const DEFAULT_BROWSER_INSTANCE_ID: u32 = PRIMARY_BROWSER_INSTANCE_ID;
+pub const SECONDARY_BROWSER_INSTANCE_ID: u32 = PRIMARY_BROWSER_INSTANCE_ID + 1;
+pub const BOOT_BROWSER_INSTANCE_IDS: [u32; 2] =
+    [PRIMARY_BROWSER_INSTANCE_ID, SECONDARY_BROWSER_INSTANCE_ID];
 pub const DEFAULT_BROWSER_RENDER_TEX_ID: u32 = 4_703;
 pub const PRIMARY_BROWSER_RENDER_TEX_ID: u32 = DEFAULT_BROWSER_RENDER_TEX_ID;
+pub const BROWSER_RENDER_TEX_ID_STRIDE: u32 = 1;
 const STATIC_BROWSER_VIEWPORT_W: u32 = 512;
 const STATIC_BROWSER_VIEWPORT_H: u32 = 512;
 
@@ -379,6 +383,15 @@ pub fn default_browser_instance_id() -> u32 {
 #[inline]
 pub fn default_browser_started() -> bool {
     browser_started_for_instance(default_browser_instance_id())
+}
+
+#[inline]
+pub fn render_tex_id_for_browser_instance(browser_instance_id: u32) -> u32 {
+    let browser_instance_id = normalize_browser_instance_id(browser_instance_id);
+    DEFAULT_BROWSER_RENDER_TEX_ID.saturating_add(
+        browser_instance_id.saturating_sub(DEFAULT_BROWSER_INSTANCE_ID)
+            * BROWSER_RENDER_TEX_ID_STRIDE,
+    )
 }
 
 #[inline]
@@ -1502,7 +1515,7 @@ pub async fn ui2_gfx_browser_task(browser_instance_id: u32) {
         let import_filename = b"<browser-init>\0";
         let import_src = br#"
         import('/qjs/browser/browser_bootstrap.mjs').catch((e) => {
-            try { console.log('[browser.mjs] import failed', String(e && e.stack ? e.stack : e)); } catch (_) {}
+            try { console.log('[surfer bootstrap] import failed', String(e && e.stack ? e.stack : e)); } catch (_) {}
         });
         "#;
         if !helpers::eval_or_log(
