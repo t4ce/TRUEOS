@@ -4,6 +4,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Once;
 
+use crate::gfx::imbafont::{ImbaFontFace, ImbaFontRunLayout};
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct TexVertex {
@@ -23,16 +25,58 @@ struct LogoTexture {
     height: u32,
 }
 
+#[derive(Clone, Copy)]
+struct LoadscreenStripSpec {
+    face: ImbaFontFace,
+    rgb: (u8, u8, u8),
+    scale_start: f32,
+    scale_end: f32,
+}
+
+#[derive(Clone, Copy)]
+struct LoadscreenStripLayout {
+    spec: LoadscreenStripSpec,
+    layout: ImbaFontRunLayout,
+}
+
 const LOADSCREEN_LOGO_TEX_ID: u32 = 1002;
 const LOGO_PAD_X: f32 = 24.0;
 const LOGO_PAD_Y: f32 = 24.0;
-const LOADSCREEN_ICON_GAP_Y: f32 = 8.0;
-const LOADSCREEN_ICON_TILE_SCALE: f32 = 0.72;
-const LOADSCREEN_ICON_SCALE_START: f32 = 0.70;
-const LOADSCREEN_ICON_SCALE_END: f32 = 1.30;
+const STRIP_GAP_Y: f32 = 8.0;
+const STRIP_ROW_GAP_Y: f32 = 10.0;
+const STRIP_TILE_SCALE: f32 = 0.72;
+const STRIP_SCALE_START: f32 = 0.70;
+const STRIP_SCALE_END: f32 = 1.30;
 
 static LOADSCREEN_LOGO: Once<LogoTexture> = Once::new();
 static LOADSCREEN_LOGO_UPLOADED: AtomicBool = AtomicBool::new(false);
+
+const STRIP_SPECS: [LoadscreenStripSpec; 4] = [
+    LoadscreenStripSpec {
+        face: ImbaFontFace::Regular,
+        rgb: (0, 0, 0),
+        scale_start: STRIP_SCALE_START,
+        scale_end: STRIP_SCALE_END,
+    },
+    LoadscreenStripSpec {
+        face: ImbaFontFace::Block,
+        rgb: (0, 0, 0),
+        scale_start: STRIP_SCALE_START,
+        scale_end: STRIP_SCALE_END,
+    },
+    LoadscreenStripSpec {
+        face: ImbaFontFace::Grow,
+        rgb: (0, 0, 0),
+        scale_start: STRIP_SCALE_START,
+        scale_end: STRIP_SCALE_END,
+    },
+    LoadscreenStripSpec {
+        face: ImbaFontFace::Impact,
+        rgb: (0, 0, 0),
+        scale_start: STRIP_SCALE_START,
+        scale_end: STRIP_SCALE_END,
+    },
+];
 
 #[inline]
 fn boot_probe_ms() -> u64 {
@@ -43,18 +87,19 @@ fn boot_probe_ms() -> u64 {
 fn loadscreen_logo() -> &'static LogoTexture {
     LOADSCREEN_LOGO.call_once(|| {
         let (pixels, width, height) = crate::vga::get_logo_buffer();
-    builder.build()
-}
-
-#[inline]
-fn loadscreen_icon_scale(index: usize, total: usize) -> f32 {
-    if total <= 1 {
-        return 1.0;
-    }
-
-    let t = index as f32 / (total.saturating_sub(1)) as f32;
-    let eased = t * t * (3.0 - 2.0 * t);
-    LOADSCREEN_ICON_SCALE_START + (LOADSCREEN_ICON_SCALE_END - LOADSCREEN_ICON_SCALE_START) * eased
+        let mut rgba = Vec::with_capacity(pixels.len().saturating_mul(4));
+        for pixel in pixels {
+            rgba.push(((pixel >> 16) & 0xFF) as u8);
+            rgba.push(((pixel >> 8) & 0xFF) as u8);
+            rgba.push((pixel & 0xFF) as u8);
+            rgba.push((pixel >> 24) as u8);
+        }
+        LogoTexture {
+            rgba,
+            width: width as u32,
+            height: height as u32,
+        }
+    })
 }
 
 fn draw_textured_quad_in_frame(
@@ -157,46 +202,6 @@ fn draw_textured_quad_in_frame(
     rc == 0
 }
 
-fn draw_icon_strip_in_frame(
-    layout: &crate::gfx::imbafont::ImbaFontRunLayout,
-    view_w: u32,
-    view_h: u32,
-    alpha: u8,
-) -> bool {
-    crate::gfx::imbafont::draw_run_in_frame(
-        layout,
-        view_w,
-        view_h,
-        (0, 0, 0),
-        alpha,
-        LOADSCREEN_ICON_SCALE_START,
-        LOADSCREEN_ICON_SCALE_END,
-    )
-}
-
-fn loadscreen_icon_layout(view_w: f32, text_y: f32, text_h: f32) -> Option<crate::gfx::imbafont::ImbaFontRunLayout> {
-    crate::gfx::imbafont::layout_run_centered(
-        view_w,
-        text_y + text_h + LOADSCREEN_ICON_GAP_Y,
-        (text_h * LOADSCREEN_ICON_TILE_SCALE).max(12.0),
-        LOADSCREEN_ICON_SCALE_START,
-        LOADSCREEN_ICON_SCALE_END,
-    )
-}
-
-fn draw_icon_strip_with_text_metrics(
-    view_w: u32,
-    view_h: u32,
-    text_y: f32,
-    text_h: f32,
-    alpha: u8,
-) -> bool {
-    let Some(layout) = loadscreen_icon_layout(view_w as f32, text_y, text_h) else {
-        return false;
-    };
-    draw_icon_strip_in_frame(&layout, view_w, view_h, alpha)
-}
-
 fn ensure_logo_uploaded() -> bool {
     if LOADSCREEN_LOGO_UPLOADED.load(Ordering::Acquire) {
         return true;
@@ -243,6 +248,49 @@ fn draw_logo_in_frame(view_w: u32, view_h: u32) -> bool {
     )
 }
 
+fn build_strip_layouts(view_w: f32, text_y: f32, text_h: f32) -> Vec<LoadscreenStripLayout> {
+    let tile_h = (text_h * STRIP_TILE_SCALE).max(12.0);
+    let mut top_y = text_y + text_h + STRIP_GAP_Y;
+    let mut layouts = Vec::with_capacity(STRIP_SPECS.len());
+
+    for spec in STRIP_SPECS {
+        let Some(layout) = crate::gfx::imbafont::layout_run_centered(
+            spec.face,
+            view_w,
+            top_y,
+            tile_h,
+            spec.scale_start,
+            spec.scale_end,
+        ) else {
+            continue;
+        };
+        top_y = layout.baseline_y + layout.vis_bottom + STRIP_ROW_GAP_Y;
+        layouts.push(LoadscreenStripLayout { spec, layout });
+    }
+
+    layouts
+}
+
+fn draw_strip_layouts_in_frame(
+    strips: &[LoadscreenStripLayout],
+    view_w: u32,
+    view_h: u32,
+    alpha: u8,
+) {
+    for strip in strips {
+        let _ = crate::gfx::imbafont::draw_run_in_frame(
+            strip.spec.face,
+            &strip.layout,
+            view_w,
+            view_h,
+            strip.spec.rgb,
+            alpha,
+            strip.spec.scale_start,
+            strip.spec.scale_end,
+        );
+    }
+}
+
 #[embassy_executor::task]
 pub async fn gfx_loadscreen_task() {
     const LOADSCREEN_BG_RGB: u32 = 0xF4F4F4;
@@ -269,30 +317,34 @@ pub async fn gfx_loadscreen_task() {
             .copied()
             .unwrap_or(atlas.cell_w as u8) as f32;
     }
+
     let text_x = ((fb_w - text_w) * 0.5).max(0.0);
     let text_y = ((fb_h - atlas.cell_h as f32) * 0.5).max(0.0);
     let text_clear_x = (text_x - TEXT_PAD_X).max(0.0);
     let text_clear_y = (text_y - TEXT_PAD_Y).max(0.0);
     let text_clear_w = (text_w + (TEXT_PAD_X * 2.0)).min(fb_w - text_clear_x);
     let text_clear_h = (atlas.cell_h as f32 + (TEXT_PAD_Y * 2.0)).min(fb_h - text_clear_y);
-    let icon_layout = loadscreen_icon_layout(fb_w, text_y, atlas.cell_h as f32);
-    let (clear_x, clear_y, clear_w, clear_h) = if let Some(layout) = icon_layout {
-        let icon_x0 = (layout.origin_x + layout.vis_left).max(0.0);
-        let icon_y0 = (layout.baseline_y + layout.vis_top).max(0.0);
-        let icon_x1 = (layout.origin_x + layout.vis_right).min(fb_w);
-        let icon_y1 = (layout.baseline_y + layout.vis_bottom).min(fb_h);
-        let clear_x = text_clear_x.min(icon_x0);
-        let clear_y = text_clear_y.min(icon_y0);
-        let clear_x1 = (text_clear_x + text_clear_w).max(icon_x1);
-        let clear_y1 = (text_clear_y + text_clear_h).max(icon_y1);
-        (
-            clear_x,
-            clear_y,
-            (clear_x1 - clear_x).max(0.0),
-            (clear_y1 - clear_y).max(0.0),
-        )
-    } else {
+
+    let strip_layouts = build_strip_layouts(fb_w, text_y, atlas.cell_h as f32);
+    let (clear_x, clear_y, clear_w, clear_h) = if strip_layouts.is_empty() {
         (text_clear_x, text_clear_y, text_clear_w, text_clear_h)
+    } else {
+        let mut min_x = text_clear_x;
+        let mut min_y = text_clear_y;
+        let mut max_x = text_clear_x + text_clear_w;
+        let mut max_y = text_clear_y + text_clear_h;
+        for strip in &strip_layouts {
+            min_x = min_x.min((strip.layout.origin_x + strip.layout.vis_left).max(0.0));
+            min_y = min_y.min((strip.layout.baseline_y + strip.layout.vis_top).max(0.0));
+            max_x = max_x.max((strip.layout.origin_x + strip.layout.vis_right).min(fb_w));
+            max_y = max_y.max((strip.layout.baseline_y + strip.layout.vis_bottom).min(fb_h));
+        }
+        (
+            min_x,
+            min_y,
+            (max_x - min_x).max(0.0),
+            (max_y - min_y).max(0.0),
+        )
     };
 
     let start_ms = boot_probe_ms();
@@ -302,7 +354,6 @@ pub async fn gfx_loadscreen_task() {
         let begin_rc =
             unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(LOADSCREEN_BG_RGB) };
         if begin_rc == 0 {
-            let _ = crate::gfx::lyon::lyon_geom_api_demo_no_present(fb_w as u32, fb_h as u32);
             let _ = draw_logo_in_frame(fb_w as u32, fb_h as u32);
             crate::gfx::text::draw_atlas_text_in_frame_alpha(
                 MSG,
@@ -312,13 +363,7 @@ pub async fn gfx_loadscreen_task() {
                 fb_h as u32,
                 255,
             );
-            let _ = draw_icon_strip_with_text_metrics(
-                fb_w as u32,
-                fb_h as u32,
-                text_y,
-                atlas.cell_h as f32,
-                255,
-            );
+            draw_strip_layouts_in_frame(&strip_layouts, fb_w as u32, fb_h as u32, 255);
             unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
         }
     });
@@ -352,19 +397,14 @@ pub async fn gfx_loadscreen_task() {
                     fb_h as u32,
                     alpha,
                 );
-                let _ = draw_icon_strip_with_text_metrics(
-                    fb_w as u32,
-                    fb_h as u32,
-                    text_y,
-                    atlas.cell_h as f32,
-                    alpha,
-                );
+                draw_strip_layouts_in_frame(&strip_layouts, fb_w as u32, fb_h as u32, alpha);
                 unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
             }
         });
         frame = frame.wrapping_add(1);
         Timer::after(EmbassyDuration::from_millis(16)).await;
     }
+
     crate::log!(
         "boot-probe: loadscreen end ms={} frames={} lived_ms={}\n",
         boot_probe_ms(),

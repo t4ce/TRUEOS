@@ -40,6 +40,14 @@ struct ImbaFontIcon {
     mesh: ImbaFontIconMesh,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImbaFontFace {
+    Regular,
+    Block,
+    Grow,
+    Impact,
+}
+
 #[derive(Clone, Copy)]
 pub struct ImbaFontRunLayout {
     pub origin_x: f32,
@@ -52,84 +60,125 @@ pub struct ImbaFontRunLayout {
 }
 
 macro_rules! svg_icon_asset {
-    ($ch:literal, $path:literal) => {
+    ($ch:literal, $dir:literal, $file:literal) => {
         SvgIconAsset {
             ch: $ch,
-            bytes: include_bytes!($path),
+            bytes: include_bytes!(concat!("imbafont/", $dir, "/", $file)),
         }
     };
 }
 
-static IMBAFONT_ASSETS: &[SvgIconAsset] = &[
-    svg_icon_asset!('0', "imbafont/imbasvgs/0.svg"),
-    svg_icon_asset!('1', "imbafont/imbasvgs/1.svg"),
-    svg_icon_asset!('2', "imbafont/imbasvgs/2.svg"),
-    svg_icon_asset!('3', "imbafont/imbasvgs/3.svg"),
-    svg_icon_asset!('4', "imbafont/imbasvgs/4.svg"),
-    svg_icon_asset!('5', "imbafont/imbasvgs/5.svg"),
-    svg_icon_asset!('6', "imbafont/imbasvgs/6.svg"),
-    svg_icon_asset!('7', "imbafont/imbasvgs/7.svg"),
-    svg_icon_asset!('8', "imbafont/imbasvgs/8.svg"),
-    svg_icon_asset!('9', "imbafont/imbasvgs/9.svg"),
-    svg_icon_asset!('a', "imbafont/imbasvgs/a.svg"),
-    svg_icon_asset!('b', "imbafont/imbasvgs/b.svg"),
-    svg_icon_asset!('c', "imbafont/imbasvgs/c.svg"),
-    svg_icon_asset!('d', "imbafont/imbasvgs/d.svg"),
-    svg_icon_asset!('e', "imbafont/imbasvgs/e.svg"),
-    svg_icon_asset!('f', "imbafont/imbasvgs/f.svg"),
-    svg_icon_asset!('g', "imbafont/imbasvgs/g.svg"),
-    svg_icon_asset!('h', "imbafont/imbasvgs/h.svg"),
-    svg_icon_asset!('i', "imbafont/imbasvgs/i.svg"),
-    svg_icon_asset!('j', "imbafont/imbasvgs/j.svg"),
-    svg_icon_asset!('k', "imbafont/imbasvgs/k.svg"),
-    svg_icon_asset!('l', "imbafont/imbasvgs/l.svg"),
-    svg_icon_asset!('m', "imbafont/imbasvgs/m.svg"),
-    svg_icon_asset!('n', "imbafont/imbasvgs/n.svg"),
-    svg_icon_asset!('o', "imbafont/imbasvgs/o.svg"),
-    svg_icon_asset!('p', "imbafont/imbasvgs/p.svg"),
-    svg_icon_asset!('q', "imbafont/imbasvgs/q.svg"),
-    svg_icon_asset!('r', "imbafont/imbasvgs/r.svg"),
-    svg_icon_asset!('s', "imbafont/imbasvgs/s.svg"),
-    svg_icon_asset!('t', "imbafont/imbasvgs/t.svg"),
-    svg_icon_asset!('u', "imbafont/imbasvgs/u.svg"),
-    svg_icon_asset!('v', "imbafont/imbasvgs/v.svg"),
-    svg_icon_asset!('w', "imbafont/imbasvgs/w.svg"),
-    svg_icon_asset!('x', "imbafont/imbasvgs/x.svg"),
-    svg_icon_asset!('y', "imbafont/imbasvgs/y.svg"),
-    svg_icon_asset!('z', "imbafont/imbasvgs/z.svg"),
-    svg_icon_asset!('A', "imbafont/imbasvgs/aa.svg"),
-    svg_icon_asset!('B', "imbafont/imbasvgs/bb.svg"),
-    svg_icon_asset!('C', "imbafont/imbasvgs/cc.svg"),
-    svg_icon_asset!('D', "imbafont/imbasvgs/dd.svg"),
-    svg_icon_asset!('E', "imbafont/imbasvgs/ee.svg"),
-    svg_icon_asset!('F', "imbafont/imbasvgs/ff.svg"),
-    svg_icon_asset!('G', "imbafont/imbasvgs/gg.svg"),
-    svg_icon_asset!('H', "imbafont/imbasvgs/hh.svg"),
-    svg_icon_asset!('I', "imbafont/imbasvgs/ii.svg"),
-    svg_icon_asset!('J', "imbafont/imbasvgs/jj.svg"),
-    svg_icon_asset!('K', "imbafont/imbasvgs/kk.svg"),
-    svg_icon_asset!('L', "imbafont/imbasvgs/ll.svg"),
-    svg_icon_asset!('M', "imbafont/imbasvgs/mm.svg"),
-    svg_icon_asset!('N', "imbafont/imbasvgs/nn.svg"),
-    svg_icon_asset!('O', "imbafont/imbasvgs/oo.svg"),
-    svg_icon_asset!('P', "imbafont/imbasvgs/pp.svg"),
-    svg_icon_asset!('Q', "imbafont/imbasvgs/qq.svg"),
-    svg_icon_asset!('R', "imbafont/imbasvgs/rr.svg"),
-    svg_icon_asset!('S', "imbafont/imbasvgs/ss.svg"),
-    svg_icon_asset!('T', "imbafont/imbasvgs/tt.svg"),
-    svg_icon_asset!('U', "imbafont/imbasvgs/uu.svg"),
-    svg_icon_asset!('V', "imbafont/imbasvgs/vv.svg"),
-    svg_icon_asset!('W', "imbafont/imbasvgs/ww.svg"),
-    svg_icon_asset!('X', "imbafont/imbasvgs/xx.svg"),
-    svg_icon_asset!('Y', "imbafont/imbasvgs/yy.svg"),
-    svg_icon_asset!('Z', "imbafont/imbasvgs/zz.svg"),
-];
+macro_rules! define_font_assets {
+    ($name:ident, $dir:literal) => {
+        static $name: &[SvgIconAsset] = &[
+            svg_icon_asset!('0', $dir, "0.svg"),
+            svg_icon_asset!('1', $dir, "1.svg"),
+            svg_icon_asset!('2', $dir, "2.svg"),
+            svg_icon_asset!('3', $dir, "3.svg"),
+            svg_icon_asset!('4', $dir, "4.svg"),
+            svg_icon_asset!('5', $dir, "5.svg"),
+            svg_icon_asset!('6', $dir, "6.svg"),
+            svg_icon_asset!('7', $dir, "7.svg"),
+            svg_icon_asset!('8', $dir, "8.svg"),
+            svg_icon_asset!('9', $dir, "9.svg"),
+            svg_icon_asset!('a', $dir, "a.svg"),
+            svg_icon_asset!('b', $dir, "b.svg"),
+            svg_icon_asset!('c', $dir, "c.svg"),
+            svg_icon_asset!('d', $dir, "d.svg"),
+            svg_icon_asset!('e', $dir, "e.svg"),
+            svg_icon_asset!('f', $dir, "f.svg"),
+            svg_icon_asset!('g', $dir, "g.svg"),
+            svg_icon_asset!('h', $dir, "h.svg"),
+            svg_icon_asset!('i', $dir, "i.svg"),
+            svg_icon_asset!('j', $dir, "j.svg"),
+            svg_icon_asset!('k', $dir, "k.svg"),
+            svg_icon_asset!('l', $dir, "l.svg"),
+            svg_icon_asset!('m', $dir, "m.svg"),
+            svg_icon_asset!('n', $dir, "n.svg"),
+            svg_icon_asset!('o', $dir, "o.svg"),
+            svg_icon_asset!('p', $dir, "p.svg"),
+            svg_icon_asset!('q', $dir, "q.svg"),
+            svg_icon_asset!('r', $dir, "r.svg"),
+            svg_icon_asset!('s', $dir, "s.svg"),
+            svg_icon_asset!('t', $dir, "t.svg"),
+            svg_icon_asset!('u', $dir, "u.svg"),
+            svg_icon_asset!('v', $dir, "v.svg"),
+            svg_icon_asset!('w', $dir, "w.svg"),
+            svg_icon_asset!('x', $dir, "x.svg"),
+            svg_icon_asset!('y', $dir, "y.svg"),
+            svg_icon_asset!('z', $dir, "z.svg"),
+            svg_icon_asset!('A', $dir, "aa.svg"),
+            svg_icon_asset!('B', $dir, "bb.svg"),
+            svg_icon_asset!('C', $dir, "cc.svg"),
+            svg_icon_asset!('D', $dir, "dd.svg"),
+            svg_icon_asset!('E', $dir, "ee.svg"),
+            svg_icon_asset!('F', $dir, "ff.svg"),
+            svg_icon_asset!('G', $dir, "gg.svg"),
+            svg_icon_asset!('H', $dir, "hh.svg"),
+            svg_icon_asset!('I', $dir, "ii.svg"),
+            svg_icon_asset!('J', $dir, "jj.svg"),
+            svg_icon_asset!('K', $dir, "kk.svg"),
+            svg_icon_asset!('L', $dir, "ll.svg"),
+            svg_icon_asset!('M', $dir, "mm.svg"),
+            svg_icon_asset!('N', $dir, "nn.svg"),
+            svg_icon_asset!('O', $dir, "oo.svg"),
+            svg_icon_asset!('P', $dir, "pp.svg"),
+            svg_icon_asset!('Q', $dir, "qq.svg"),
+            svg_icon_asset!('R', $dir, "rr.svg"),
+            svg_icon_asset!('S', $dir, "ss.svg"),
+            svg_icon_asset!('T', $dir, "tt.svg"),
+            svg_icon_asset!('U', $dir, "uu.svg"),
+            svg_icon_asset!('V', $dir, "vv.svg"),
+            svg_icon_asset!('W', $dir, "ww.svg"),
+            svg_icon_asset!('X', $dir, "xx.svg"),
+            svg_icon_asset!('Y', $dir, "yy.svg"),
+            svg_icon_asset!('Z', $dir, "zz.svg"),
+        ];
+    };
+}
 
-static IMBAFONT_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
+define_font_assets!(IMBAFONT_REGULAR_ASSETS, "imbasvgs");
+define_font_assets!(IMBAFONT_BLOCK_ASSETS, "imbasvgs_block");
+define_font_assets!(IMBAFONT_GROW_ASSETS, "imbasvgs_grow");
+define_font_assets!(IMBAFONT_IMPACT_ASSETS, "imbasvgs_impact");
 
-fn imbafont_metrics() -> [Option<SvgGlyphMetric>; 128] {
+static IMBAFONT_REGULAR_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
+static IMBAFONT_BLOCK_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
+static IMBAFONT_GROW_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
+static IMBAFONT_IMPACT_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
+
+#[inline]
+fn icon_scale(index: usize, total: usize, scale_start: f32, scale_end: f32) -> f32 {
+    if total <= 1 {
+        return 1.0;
+    }
+
+    let t = index as f32 / (total.saturating_sub(1)) as f32;
+    let eased = t * t * (3.0 - 2.0 * t);
+    scale_start + (scale_end - scale_start) * eased
+}
+
+fn metrics_bytes_for_face(face: ImbaFontFace) -> &'static [u8] {
+    match face {
+        ImbaFontFace::Regular => include_bytes!("imbafont/imbasvgs/metrics.txt"),
+        ImbaFontFace::Block => include_bytes!("imbafont/imbasvgs_block/metrics.txt"),
+        ImbaFontFace::Grow => include_bytes!("imbafont/imbasvgs_grow/metrics.txt"),
+        ImbaFontFace::Impact => include_bytes!("imbafont/imbasvgs_impact/metrics.txt"),
+    }
+}
+
+fn assets_for_face(face: ImbaFontFace) -> &'static [SvgIconAsset] {
+    match face {
+        ImbaFontFace::Regular => IMBAFONT_REGULAR_ASSETS,
+        ImbaFontFace::Block => IMBAFONT_BLOCK_ASSETS,
+        ImbaFontFace::Grow => IMBAFONT_GROW_ASSETS,
+        ImbaFontFace::Impact => IMBAFONT_IMPACT_ASSETS,
+    }
+}
+
+fn parse_metrics(bytes: &[u8]) -> [Option<SvgGlyphMetric>; 128] {
     let mut metrics = [None; 128];
-    let Ok(text) = core::str::from_utf8(include_bytes!("imbafont/imbasvgs/metrics.txt")) else {
+    let Ok(text) = core::str::from_utf8(bytes) else {
         return metrics;
     };
 
@@ -143,11 +192,11 @@ fn imbafont_metrics() -> [Option<SvgGlyphMetric>; 128] {
         let Some(ch_text) = cols.next() else {
             continue;
         };
-        let mut ch_iter = ch_text.chars();
-        let Some(ch) = ch_iter.next() else {
+        let mut chars = ch_text.chars();
+        let Some(ch) = chars.next() else {
             continue;
         };
-        if ch_iter.next().is_some() || (ch as usize) >= metrics.len() {
+        if chars.next().is_some() || (ch as usize) >= metrics.len() {
             continue;
         }
 
@@ -184,11 +233,13 @@ fn imbafont_metrics() -> [Option<SvgGlyphMetric>; 128] {
     metrics
 }
 
-fn imbafont_icons() -> &'static Vec<ImbaFontIcon> {
-    IMBAFONT_ICONS.call_once(|| {
-        let metrics = imbafont_metrics();
-        let mut icons = Vec::with_capacity(IMBAFONT_ASSETS.len());
-        for asset in IMBAFONT_ASSETS {
+fn icons_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontIcon> {
+    let metrics = parse_metrics(metrics_bytes_for_face(face));
+    let assets = assets_for_face(face);
+
+    let build = || {
+        let mut icons = Vec::with_capacity(assets.len());
+        for asset in assets {
             let Some(metric) = metrics.get(asset.ch as usize).copied().flatten() else {
                 continue;
             };
@@ -198,7 +249,14 @@ fn imbafont_icons() -> &'static Vec<ImbaFontIcon> {
             icons.push(ImbaFontIcon { metric, mesh });
         }
         icons
-    })
+    };
+
+    match face {
+        ImbaFontFace::Regular => IMBAFONT_REGULAR_ICONS.call_once(build),
+        ImbaFontFace::Block => IMBAFONT_BLOCK_ICONS.call_once(build),
+        ImbaFontFace::Grow => IMBAFONT_GROW_ICONS.call_once(build),
+        ImbaFontFace::Impact => IMBAFONT_IMPACT_ICONS.call_once(build),
+    }
 }
 
 fn build_svg_mesh(bytes: &[u8]) -> Option<ImbaFontIconMesh> {
@@ -379,25 +437,15 @@ fn tiny_path_to_lyon(path: &TinyPath) -> LyonPath {
     builder.build()
 }
 
-#[inline]
-fn icon_scale(index: usize, total: usize, scale_start: f32, scale_end: f32) -> f32 {
-    if total <= 1 {
-        return 1.0;
-    }
-
-    let t = index as f32 / (total.saturating_sub(1)) as f32;
-    let eased = t * t * (3.0 - 2.0 * t);
-    scale_start + (scale_end - scale_start) * eased
-}
-
 pub fn layout_run_centered(
+    face: ImbaFontFace,
     view_w: f32,
     top_y: f32,
     tile_h: f32,
     scale_start: f32,
     scale_end: f32,
 ) -> Option<ImbaFontRunLayout> {
-    let icons = imbafont_icons();
+    let icons = icons_for_face(face);
     if icons.is_empty() {
         return None;
     }
@@ -439,6 +487,7 @@ pub fn layout_run_centered(
 }
 
 pub fn draw_run_in_frame(
+    face: ImbaFontFace,
     layout: &ImbaFontRunLayout,
     view_w: u32,
     view_h: u32,
@@ -447,7 +496,7 @@ pub fn draw_run_in_frame(
     scale_start: f32,
     scale_end: f32,
 ) -> bool {
-    let icons = imbafont_icons();
+    let icons = icons_for_face(face);
     if icons.is_empty() {
         return false;
     }
