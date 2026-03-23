@@ -246,7 +246,6 @@ struct Ui2Window {
     last_reason: &'static str,
     last_logged_dirty_seq: u32,
     last_logged_reason: &'static str,
-    last_logged_browser_surface_seq: u32,
 }
 
 struct Ui2State {
@@ -448,7 +447,6 @@ fn alloc_window(
         last_reason: "create",
         last_logged_dirty_seq: 0,
         last_logged_reason: "",
-        last_logged_browser_surface_seq: 0,
     });
     id
 }
@@ -654,15 +652,20 @@ fn hosted_browser_interactive_seq(state: &Ui2State) -> u32 {
         })
 }
 
-fn hosted_browser_surface_seq(state: &Ui2State) -> u32 {
+fn hosted_browser_content_seq(state: &Ui2State) -> u32 {
     state
         .windows
         .iter()
         .filter(|window| window.kind == Ui2WindowKind::HostedBrowser)
         .map(|window| {
             let instance_id = window_browser_instance_id(window);
-            let seq = hosted_surface_seq(instance_id);
-            instance_id.wrapping_mul(1315423911).wrapping_add(seq)
+            let surface_seq = hosted_surface_seq(instance_id);
+            let text_seq = hosted_text_seq(instance_id);
+            instance_id
+                .wrapping_mul(1315423911)
+                .wrapping_add(surface_seq)
+                .wrapping_mul(16777619)
+                .wrapping_add(text_seq)
         })
         .fold(0u32, |acc, value| {
             acc.wrapping_mul(16777619).wrapping_add(value)
@@ -2599,7 +2602,7 @@ pub async fn ui2_task() {
         }
     }
     crate::log!("ui2: boot window manager\n");
-    let mut last_browser_surface_seq = 0u32;
+    let mut last_browser_content_seq = 0u32;
     let mut loop_seq = 0u32;
 
     loop {
@@ -2617,7 +2620,7 @@ pub async fn ui2_task() {
                 );
             }
         }
-        let mut browser_surface_changed = false;
+        let mut browser_content_changed = false;
         {
             let state_lock = init_state();
             let mut state = state_lock.lock();
@@ -2628,23 +2631,23 @@ pub async fn ui2_task() {
             ui2_hid::pump_cursor_selection(&mut state);
             ui2_hid::pump_keyboard_input(&mut state);
             sync_pending_window_containers(&mut state);
-            let next_browser_surface_seq = hosted_browser_surface_seq(&state);
-            if next_browser_surface_seq != last_browser_surface_seq {
-                last_browser_surface_seq = next_browser_surface_seq;
+            let next_browser_content_seq = hosted_browser_content_seq(&state);
+            if next_browser_content_seq != last_browser_content_seq {
+                last_browser_content_seq = next_browser_content_seq;
                 log_browser_surface_updates(&mut state);
-                browser_surface_changed = true;
+                browser_content_changed = true;
             }
         }
-        if browser_surface_changed {
-            request_full_recompose("browser-surface");
+        if browser_content_changed {
+            request_full_recompose("browser-content");
         }
         let dirty = UI2_DIRTY.swap(false, Ordering::AcqRel);
         if loop_seq <= 4 {
             crate::log!(
-                "ui2: loop seq={} dirty={} browser_surface_changed={}\n",
+                "ui2: loop seq={} dirty={} browser_content_changed={}\n",
                 loop_seq,
                 dirty,
-                browser_surface_changed
+                browser_content_changed
             );
         }
         if dirty {

@@ -440,12 +440,31 @@ unsafe fn truesurfer_ready(ctx: *mut qjs::JSContext) -> bool {
     let global = qjs::JS_GetGlobalObject(ctx);
     let ready = qjs::JS_GetPropertyStr(ctx, global, TRUESURFER_READY_PROP.as_ptr() as *const c_char);
     let mut ready_f = 0.0f64;
-    let ok = qjs::JS_ToFloat64(ctx, &mut ready_f as *mut f64, ready) == 0
+    let ready_flag = qjs::JS_ToFloat64(ctx, &mut ready_f as *mut f64, ready) == 0
         && ready_f.is_finite()
         && ready_f >= 1.0;
+
+    let surfer = qjs::JS_GetPropertyStr(ctx, global, TRUESURFER_OBJ_PROP.as_ptr() as *const c_char);
+    let set_html = if surfer.is_exception()
+        || surfer.tag == qjs::JS_TAG_UNDEFINED
+        || surfer.tag == qjs::JS_TAG_NULL
+    {
+        qjs::JSValue {
+            u: qjs::JSValueUnion { int32: 0 },
+            tag: qjs::JS_TAG_UNDEFINED,
+        }
+    } else {
+        qjs::JS_GetPropertyStr(ctx, surfer, TRUESURFER_SET_HTML_PROP.as_ptr() as *const c_char)
+    };
+    let has_set_html = !set_html.is_exception()
+        && set_html.tag != qjs::JS_TAG_UNDEFINED
+        && set_html.tag != qjs::JS_TAG_NULL;
+
+    qjs::js_free_value(ctx, set_html);
+    qjs::js_free_value(ctx, surfer);
     qjs::js_free_value(ctx, ready);
     qjs::js_free_value(ctx, global);
-    ok
+    ready_flag || has_set_html
 }
 
 unsafe fn read_result_u32(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst, key: &[u8]) -> u32 {
@@ -490,6 +509,12 @@ fn take_queued_html_for_browser(browser_instance_id: u32) -> Option<PendingHtml>
         url: core::mem::take(&mut slot.url),
     };
     receiver.receive_done();
+    log_line(format!(
+        "[surfer] pipeline DIFFBOX browser={} pull html bytes={} url={}\n",
+        browser_instance_id,
+        pending.html.len(),
+        pending.url
+    ));
     Some(pending)
 }
 
@@ -655,6 +680,8 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
         }
         qjs::js_free_value(ctx, boot);
 
+        let mut last_ready = false;
+
         loop {
             let mut busy = false;
             let mut runtime_alive = true;
@@ -666,6 +693,14 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                 }
 
                 let ready = truesurfer_ready(ctx);
+                if ready != last_ready {
+                    log_line(format!(
+                        "qjs-truesurfer[{}]: ready={}\n",
+                        browser_instance_id,
+                        if ready { 1 } else { 0 }
+                    ));
+                    last_ready = ready;
+                }
                 let _ = with_browser_state_mut(browser_instance_id, |state| {
                     state.api_ready = ready;
                 });
