@@ -1,6 +1,25 @@
 import * as lightningcss from 'trueos:lightningcss';
 import { createComputedStyle } from './cssDefaults.mjs';
 
+const COMPACT_STYLE_FIELDS = [
+  'display',
+  'color',
+  'backgroundColor',
+  'fontSizePx',
+  'fontWeight',
+  'fontStyle',
+  'textAlign',
+  'whiteSpace',
+  'marginLeftPx',
+  'marginTopPx',
+  'marginRightPx',
+  'marginBottomPx',
+  'paddingLeftPx',
+  'paddingTopPx',
+  'paddingRightPx',
+  'paddingBottomPx',
+];
+
 function collapseWhitespace(s) {
   return String(s || '').replace(/\s+/g, ' ').trim();
 }
@@ -542,6 +561,99 @@ function buildCssContext(cssObjects) {
   }
 
   return { byPath, stylesheets, rules };
+}
+
+function compactStyleEntry(style) {
+  const entry = Object.create(null);
+  for (let i = 0; i < COMPACT_STYLE_FIELDS.length; i++) {
+    const key = COMPACT_STYLE_FIELDS[i];
+    entry[key] = style && style[key] != null ? style[key] : null;
+  }
+  return entry;
+}
+
+function compactStyleKey(style) {
+  let key = '';
+  for (let i = 0; i < COMPACT_STYLE_FIELDS.length; i++) {
+    const field = COMPACT_STYLE_FIELDS[i];
+    const value = style && style[field] != null ? style[field] : '';
+    if (i > 0) key += '\x1f';
+    key += String(value);
+  }
+  return key;
+}
+
+function walkElementTree(node, path, ancestors, visit) {
+  if (!node || typeof node !== 'object') return;
+  if (!isElement(node)) {
+    const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+    for (let i = 0; i < kids.length; i++) {
+      walkElementTree(kids[i], `${path}.${i}`, ancestors, visit);
+    }
+    return;
+  }
+
+  visit(node, path, ancestors);
+  const nextAncestors = ancestors.concat([{ node, path }]);
+  const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+  for (let i = 0; i < kids.length; i++) {
+    walkElementTree(kids[i], `${path}.${i}`, nextAncestors, visit);
+  }
+}
+
+export function buildCssStyleRefIndex(doc) {
+  const cssObjects = extractCssObjects(doc);
+  const context = buildCssContext(cssObjects);
+  const cssSection = {
+    byPath: context.byPath,
+    stylesheets: context.stylesheets,
+    rules: context.rules,
+  };
+  const styleTable = [];
+  const styleRefByKey = Object.create(null);
+  const nodeStyleRefs = [];
+  let inlineStyleCount = 0;
+  let elementCount = 0;
+
+  walkElementTree(doc, 'root', [], (node, path, ancestors) => {
+    const parent = ancestors.length > 0 ? ancestors[ancestors.length - 1] : null;
+    const parentStyle = parent && parent.node && parent.node.__trueosComputedStyle
+      ? parent.node.__trueosComputedStyle
+      : null;
+    const computedStyle = resolveNodeStyle(node, path, cssSection, ancestors, parentStyle);
+    if (!computedStyle) return;
+
+    const styleKey = compactStyleKey(computedStyle);
+    let styleRef = styleRefByKey[styleKey];
+    if (styleRef == null) {
+      styleRef = styleTable.length;
+      styleRefByKey[styleKey] = styleRef;
+      styleTable.push(compactStyleEntry(computedStyle));
+    }
+
+    if (computedStyle.source && computedStyle.source.inline) {
+      inlineStyleCount += 1;
+    }
+    elementCount += 1;
+    node.__trueosComputedStyle = computedStyle;
+    node.__trueosStyleRef = styleRef;
+    node.__trueosNodePath = path;
+    nodeStyleRefs.push({
+      path,
+      styleRef,
+    });
+  });
+
+  return {
+    styleTable,
+    nodeStyleRefs,
+    styleSlotCount: styleTable.length,
+    nodeRefCount: nodeStyleRefs.length,
+    inlineStyleCount,
+    stylesheetCount: context.stylesheets.length,
+    ruleCount: context.rules.length,
+    elementCount,
+  };
 }
 
 export function resolveNodeStyle(node, path, cssSection, ancestors, parentStyle = null) {
