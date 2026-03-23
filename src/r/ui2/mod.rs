@@ -2568,8 +2568,13 @@ fn compose_windows(state: &mut Ui2State) {
     });
 
     if !state.first_compose_signaled {
+        crate::r::readiness::set(crate::r::readiness::LOADSCREEN_END);
         crate::r::readiness::set(crate::r::readiness::UI2_READY);
         state.first_compose_signaled = true;
+        crate::log!(
+            "boot-probe: ui2 signaled loadscreen_end ms={}\n",
+            boot_probe_ms()
+        );
     }
 }
 
