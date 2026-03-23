@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, format, vec::Vec};
+use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 use embassy_executor::task;
@@ -21,6 +21,8 @@ pub async fn net_shell_task() {
             return;
         }
 
+        crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+
         // Route the shell over a NIC that is actually usable.
         // Historically this was pinned to dev0, but on real hardware dev0 is often the
         // physically-unplugged port. Prefer the current primary, but fall back to any
@@ -41,19 +43,9 @@ pub async fn net_shell_task() {
             }
         }
 
-        // Use a stable selector so routing keeps working even if device indices change.
-        // (Owner suffix is resolved by `device_index_from_owner`.)
-        let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
-            format!("{:02x}:{:02x}.{}", bus, slot, func)
-        } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
-            format!("{:04x}:{:04x}", vid, pid)
-        } else {
-            format!("{}", dev_idx)
-        };
-        let owner: &'static str = {
-            let s = format!("net-shell@{}", selector);
-            Box::leak(s.into_boxed_str())
-        };
+        // Keep owner unsuffixed so command routing follows the current primary NIC
+        // instead of a one-time pre-readiness device snapshot.
+        let owner: &'static str = "net-shell";
 
         let ip = crate::net::adapter::ipv4_at(dev_idx);
         let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
