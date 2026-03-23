@@ -2023,14 +2023,25 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
                 window.alpha,
             );
         }
+        Ui2SystemButtonAction::Close => {
+            let text = b"-1";
+            let text_w = crate::gfx::text::atlas_text_width_px(text);
+            crate::gfx::text::draw_atlas_text_in_frame_alpha(
+                text,
+                rect.x + ((rect.w - text_w) * 0.5),
+                rect.y + 3.0,
+                state.view_w,
+                state.view_h,
+                window.alpha,
+            );
+        }
         Ui2SystemButtonAction::Minimize
-        | Ui2SystemButtonAction::ToggleMaximize
-        | Ui2SystemButtonAction::Close => {
+        | Ui2SystemButtonAction::ToggleMaximize => {
             let icon_id = match action {
                 Ui2SystemButtonAction::Fork => 0,
                 Ui2SystemButtonAction::Minimize => 5,
                 Ui2SystemButtonAction::ToggleMaximize => 7,
-                Ui2SystemButtonAction::Close => 11,
+                Ui2SystemButtonAction::Close => 0,
             };
             let icon_x = rect.x + ((rect.w - 16.0) * 0.5);
             let icon_y = rect.y + ((rect.h - 16.0) * 0.5);
