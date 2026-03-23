@@ -245,7 +245,7 @@ fn log_html_preview(url: &str, html: &str) {
     }
 }
 
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = 3)]
 pub async fn html_fetch_service() {
     loop {
         let Some(mut request) = pop_next_request() else {
