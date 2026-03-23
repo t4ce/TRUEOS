@@ -164,76 +164,34 @@ fn text_row(text: &str, indent_px: u32) -> HostedBrowserTextRow {
     }
 }
 
-fn find_tag_open_end(lower_html: &str, tag_name: &str) -> Option<usize> {
-    let open_start = lower_html.find(format!("<{tag_name}").as_str())?;
-    lower_html[open_start..].find('>').map(|offset| open_start + offset + 1)
+fn build_stats_text_row(parse_result: &ParseResult) -> String {
+    if parse_result.ok {
+        format!(
+            "stats=bytes:{} lines:{} ms:{} shell:{} body:{} styles:{} scripts:{}",
+            parse_result.bytes,
+            parse_result.lines,
+            parse_result.parse_ms,
+            parse_result.shell_bytes,
+            parse_result.body_bytes,
+            parse_result.style_count,
+            parse_result.script_count,
+        )
+    } else {
+        format!("stats=error:{}", parse_result.error)
+    }
 }
 
-fn find_tag_close_start(lower_html: &str, tag_name: &str) -> Option<usize> {
-    lower_html.find(format!("</{tag_name}>").as_str())
-}
-
-fn section_has_visible_content(lower_html: &str, tag_name: &str) -> bool {
-    let Some(content_start) = find_tag_open_end(lower_html, tag_name) else {
-        return false;
+fn build_text_state_from_parse_result(parse_result: &ParseResult) -> HostedBrowserTextState {
+    let title = parse_result.title.trim();
+    let title_row = if title.is_empty() {
+        String::from("title=(untitled)")
+    } else {
+        format!("title={title}")
     };
-    let Some(content_end) = find_tag_close_start(lower_html, tag_name) else {
-        return false;
-    };
-    if content_end <= content_start {
-        return false;
-    }
-    lower_html[content_start..content_end]
-        .chars()
-        .any(|ch| !ch.is_whitespace())
-}
-
-fn build_waiting_text_state() -> HostedBrowserTextState {
-    HostedBrowserTextState {
-        rows: vec![text_row("waiting html", 0)],
-    }
-}
-
-fn build_hierarchy_text_state_from_html(html: &str) -> HostedBrowserTextState {
-    if html.trim().is_empty() {
-        return build_waiting_text_state();
-    }
-
-    let lower_html = html.to_ascii_lowercase();
-    let mut rows = Vec::new();
-
-    if find_tag_open_end(lower_html.as_str(), "html").is_some() {
-        rows.push(text_row("<html>", 0));
-    }
-
-    if find_tag_open_end(lower_html.as_str(), "head").is_some() {
-        rows.push(text_row("<head>", 8));
-        if section_has_visible_content(lower_html.as_str(), "head") {
-            rows.push(text_row("...", 16));
-        }
-        if find_tag_close_start(lower_html.as_str(), "head").is_some() {
-            rows.push(text_row("</head>", 8));
-        }
-    }
-
-    if find_tag_open_end(lower_html.as_str(), "body").is_some() {
-        rows.push(text_row("<body>", 8));
-        if section_has_visible_content(lower_html.as_str(), "body") {
-            rows.push(text_row("...", 16));
-        }
-        if find_tag_close_start(lower_html.as_str(), "body").is_some() {
-            rows.push(text_row("</body>", 8));
-        }
-    }
-
-    if find_tag_close_start(lower_html.as_str(), "html").is_some() {
-        rows.push(text_row("</html>", 0));
-    }
-
-    if rows.is_empty() {
-        rows.push(text_row("html without hierarchy tags", 0));
-    }
-
+    let mut rows = Vec::with_capacity(2);
+    rows.push(text_row(title_row.as_str(), 0));
+    let stats_row = build_stats_text_row(parse_result);
+    rows.push(text_row(stats_row.as_str(), 0));
     HostedBrowserTextState { rows }
 }
 
@@ -282,7 +240,7 @@ fn with_browser_state_mut<R>(
     }
     let mut guard = TRUESURFER_STATE.lock();
     let state = guard.entry(browser_instance_id).or_insert_with(|| BrowserInstanceState {
-        text_state: build_waiting_text_state(),
+        text_state: HostedBrowserTextState::default(),
         render_tex_id: default_render_tex_id(browser_instance_id),
         surface_state: HostedBrowserSurfaceState {
             viewport_width: 512,
@@ -568,7 +526,7 @@ unsafe fn dispatch_html(
             error: String::from("truesurfer setHtml exception"),
             ..ParseResult::default()
         };
-        let text_state = build_hierarchy_text_state_from_html(pending.html.as_str());
+        let text_state = build_text_state_from_parse_result(&parse_result);
         let _ = with_browser_state_mut(browser_instance_id, |state| {
             state.last_parse_result = Some(parse_result.clone());
             state.text_state = text_state;
@@ -599,7 +557,7 @@ unsafe fn dispatch_html(
         script_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SCRIPT_BYTES_PROP),
         error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
     };
-    let text_state = build_hierarchy_text_state_from_html(pending.html.as_str());
+    let text_state = build_text_state_from_parse_result(&parse_result);
 
     let _ = with_browser_state_mut(browser_instance_id, |state| {
         state.last_parse_result = Some(parse_result.clone());
