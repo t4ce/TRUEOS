@@ -3,6 +3,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_executor::{SendSpawner, SpawnError, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use spin::Mutex;
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.
 
 /// Central task orchestrator ("FSM spawn service").
@@ -115,10 +116,38 @@ define_started_flags!(
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
     ATOMIC_BOMB_STARTED,
+    SURFER_FACTORY_STARTED
 );
 
 const UI2_FACTORY_WINDOW_COUNT: u32 = 3;
 const UI2_FACTORY_TEX_ID_BASE: u32 = 4_800;
+const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 3;
+
+struct TruesurferFactory {
+    next_instance_id: u32,
+}
+
+impl TruesurferFactory {
+    const fn new() -> Self {
+        Self {
+            next_instance_id: trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
+        }
+    }
+
+    fn next_instance_id(&self) -> Option<u32> {
+        if self.next_instance_id > trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID {
+            None
+        } else {
+            Some(self.next_instance_id)
+        }
+    }
+
+    fn mark_spawned(&mut self) {
+        self.next_instance_id = self.next_instance_id.saturating_add(1);
+    }
+}
+
+static TRUESURFER_FACTORY: Mutex<TruesurferFactory> = Mutex::new(TruesurferFactory::new());
 
 fn ui2_factory_window_title(slot: u32) -> String {
     alloc::format!("UI2 Window {}", slot.saturating_add(1))
@@ -498,19 +527,67 @@ fn spawn_ui2_window_factory(spawner: Spawner) -> SpawnAttempt {
     SpawnAttempt::Spawned
 }
 
-fn spawn_ui2_gfx_browser(spawner: Spawner) -> SpawnAttempt {
-    let mut result = SpawnAttempt::Skipped;
-    for browser_instance_id in trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS {
-        let attempt = spawn_on_worker(spawner, |worker_spawner| {
-            worker_spawner.spawn(trueos_qjs::browser_task::ui2_gfx_browser_task(
+fn spawn_truesurfer_batch(spawner: Spawner, requested: u32) -> SpawnAttempt {
+    if requested == 0 {
+        return SpawnAttempt::Skipped;
+    }
+
+    let mut factory = TRUESURFER_FACTORY.lock();
+    let mut spawned_any = false;
+
+    for _ in 0..requested {
+        let Some(browser_instance_id) = factory.next_instance_id() else {
+            break;
+        };
+
+        match spawn_on_worker(spawner, |worker_spawner| {
+            worker_spawner.spawn(trueos_qjs::browser_task::truesurfer_task(
                 browser_instance_id,
             ))
-        });
-        if matches!(attempt, SpawnAttempt::Spawned) {
-            result = SpawnAttempt::Spawned;
+        }) {
+            SpawnAttempt::Spawned => {
+                factory.mark_spawned();
+                spawned_any = true;
+                crate::log!(
+                    "truesurfer-factory: spawned browser_instance_id={} remaining={}\n",
+                    browser_instance_id,
+                    trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID
+                        .saturating_sub(browser_instance_id)
+                );
+            }
+            SpawnAttempt::Skipped => {
+                break;
+            }
+            SpawnAttempt::Failed(e) => {
+                if !spawned_any {
+                    return SpawnAttempt::Failed(e);
+                }
+                crate::log!(
+                    "truesurfer-factory: spawn failed browser_instance_id={} err={:?}\n",
+                    browser_instance_id,
+                    e
+                );
+                break;
+            }
         }
     }
-    result
+
+    if spawned_any {
+        SpawnAttempt::Spawned
+    } else {
+        SpawnAttempt::Skipped
+    }
+}
+
+pub fn spawn_additional_truesurfers(spawner: Spawner, requested: u32) -> bool {
+    matches!(
+        spawn_truesurfer_batch(spawner, requested),
+        SpawnAttempt::Spawned
+    )
+}
+
+fn spawn_truesurfer_factory(spawner: Spawner) -> SpawnAttempt {
+    spawn_truesurfer_batch(spawner, TRUESURFER_FACTORY_BOOT_COUNT)
 }
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
@@ -787,10 +864,10 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_window_factory,
     ),
     TaskSpec::enabled(
-        "ui2-gfx-browser",
-        crate::r::readiness::UI2_READY,
-        &UI2_GFX_BROWSER_STARTED,
-        spawn_ui2_gfx_browser,
+        "truesurfer-factory",
+        0,
+        &SURFER_FACTORY_STARTED,
+        spawn_truesurfer_factory,
     ),
     TaskSpec::enabled(
         "ui2-gfx-tetris",
