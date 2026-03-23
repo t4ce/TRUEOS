@@ -370,11 +370,7 @@ impl IrcSession {
     }
 
     /// Wait for end-of-names (366) on the given channel after a JOIN has been sent.
-    pub async fn wait_for_join(
-        &mut self,
-        channel: &str,
-        timeout_ms: u32,
-    ) -> Result<(), IrcError> {
+    pub async fn wait_for_join(&mut self, channel: &str, timeout_ms: u32) -> Result<(), IrcError> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
         let chan_upper = channel.to_ascii_uppercase();
         loop {
