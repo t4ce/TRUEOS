@@ -307,11 +307,11 @@ fn draw_loadscreen_title_fx(
         + tile_h * (LOADSCREEN_BAND_W_PAD_TILES + LOADSCREEN_BAND_W_DRIFT_TILES * drift_b))
         * global_scale;
     let band_h = (tile_h * LOADSCREEN_BAND_H_TILES).max(LOADSCREEN_BAND_MIN_H);
-    let band_mid = (LOADSCREEN_BAND_MID_BASE + LOADSCREEN_BAND_MID_SWING * drift_d).clamp(0.15, 0.85);
-    let band_mid_alpha = (LOADSCREEN_BAND_MID_ALPHA_BASE
-        + LOADSCREEN_BAND_MID_ALPHA_SWING * drift_b
-        + alpha_bias)
-        .clamp(LOADSCREEN_BAND_MID_ALPHA_MIN, LOADSCREEN_BAND_MID_ALPHA_MAX) as u8;
+    let band_mid =
+        (LOADSCREEN_BAND_MID_BASE + LOADSCREEN_BAND_MID_SWING * drift_d).clamp(0.15, 0.85);
+    let band_mid_alpha =
+        (LOADSCREEN_BAND_MID_ALPHA_BASE + LOADSCREEN_BAND_MID_ALPHA_SWING * drift_b + alpha_bias)
+            .clamp(LOADSCREEN_BAND_MID_ALPHA_MIN, LOADSCREEN_BAND_MID_ALPHA_MAX) as u8;
     let _ = crate::gfx::lyon::draw_horizontal_three_stop_rect_no_present(
         band_x,
         band_y,
@@ -330,13 +330,16 @@ fn draw_loadscreen_title_fx(
         view_h,
     );
 
-    let core_alpha = (LOADSCREEN_CORE_ALPHA_BASE + LOADSCREEN_CORE_ALPHA_SWING * drift_c + alpha_bias)
-        .clamp(LOADSCREEN_CORE_ALPHA_MIN, LOADSCREEN_CORE_ALPHA_MAX) as u8;
+    let core_alpha =
+        (LOADSCREEN_CORE_ALPHA_BASE + LOADSCREEN_CORE_ALPHA_SWING * drift_c + alpha_bias)
+            .clamp(LOADSCREEN_CORE_ALPHA_MIN, LOADSCREEN_CORE_ALPHA_MAX) as u8;
     let _ = draw_mask_quad_uv_no_present(
         tex_id,
-        title.draw_x + tile_h * (LOADSCREEN_CORE_X_BASE_TILES + LOADSCREEN_CORE_X_SWING_TILES * drift_b)
+        title.draw_x
+            + tile_h * (LOADSCREEN_CORE_X_BASE_TILES + LOADSCREEN_CORE_X_SWING_TILES * drift_b)
             + global_x_bias,
-        title.draw_y + tile_h * (LOADSCREEN_CORE_Y_BASE_TILES + LOADSCREEN_CORE_Y_SWING_TILES * drift_a),
+        title.draw_y
+            + tile_h * (LOADSCREEN_CORE_Y_BASE_TILES + LOADSCREEN_CORE_Y_SWING_TILES * drift_a),
         title.width as f32
             * (LOADSCREEN_CORE_W_SCALE_BASE + LOADSCREEN_CORE_W_SCALE_SWING * drift_d.abs())
             * global_scale,
@@ -371,7 +374,8 @@ fn draw_loadscreen_title_fx(
             LOADSCREEN_SLICE_0_RGB.1,
             LOADSCREEN_SLICE_0_RGB.2,
             (LOADSCREEN_SLICE_0_ALPHA_BASE + LOADSCREEN_SLICE_0_ALPHA_SWING * drift_c + alpha_bias)
-                .clamp(LOADSCREEN_SLICE_0_ALPHA_MIN, LOADSCREEN_SLICE_0_ALPHA_MAX) as u8,
+                .clamp(LOADSCREEN_SLICE_0_ALPHA_MIN, LOADSCREEN_SLICE_0_ALPHA_MAX)
+                as u8,
         ),
         view_w,
         view_h,
@@ -389,7 +393,8 @@ fn draw_loadscreen_title_fx(
             LOADSCREEN_SLICE_1_RGB.1,
             LOADSCREEN_SLICE_1_RGB.2,
             (LOADSCREEN_SLICE_1_ALPHA_BASE + LOADSCREEN_SLICE_1_ALPHA_SWING * drift_a + alpha_bias)
-                .clamp(LOADSCREEN_SLICE_1_ALPHA_MIN, LOADSCREEN_SLICE_1_ALPHA_MAX) as u8,
+                .clamp(LOADSCREEN_SLICE_1_ALPHA_MIN, LOADSCREEN_SLICE_1_ALPHA_MAX)
+                as u8,
         ),
         view_w,
         view_h,
@@ -407,7 +412,8 @@ fn draw_loadscreen_title_fx(
             LOADSCREEN_SLICE_2_RGB.1,
             LOADSCREEN_SLICE_2_RGB.2,
             (LOADSCREEN_SLICE_2_ALPHA_BASE + LOADSCREEN_SLICE_2_ALPHA_SWING * drift_d + alpha_bias)
-                .clamp(LOADSCREEN_SLICE_2_ALPHA_MIN, LOADSCREEN_SLICE_2_ALPHA_MAX) as u8,
+                .clamp(LOADSCREEN_SLICE_2_ALPHA_MIN, LOADSCREEN_SLICE_2_ALPHA_MAX)
+                as u8,
         ),
         view_w,
         view_h,
@@ -425,7 +431,8 @@ fn draw_loadscreen_title_fx(
             LOADSCREEN_SLICE_3_RGB.1,
             LOADSCREEN_SLICE_3_RGB.2,
             (LOADSCREEN_SLICE_3_ALPHA_BASE + LOADSCREEN_SLICE_3_ALPHA_SWING * drift_b + alpha_bias)
-                .clamp(LOADSCREEN_SLICE_3_ALPHA_MIN, LOADSCREEN_SLICE_3_ALPHA_MAX) as u8,
+                .clamp(LOADSCREEN_SLICE_3_ALPHA_MIN, LOADSCREEN_SLICE_3_ALPHA_MAX)
+                as u8,
         ),
         view_w,
         view_h,
@@ -443,7 +450,8 @@ fn draw_loadscreen_title_fx(
             LOADSCREEN_SLICE_4_RGB.1,
             LOADSCREEN_SLICE_4_RGB.2,
             (LOADSCREEN_SLICE_4_ALPHA_BASE + LOADSCREEN_SLICE_4_ALPHA_SWING * drift_d + alpha_bias)
-                .clamp(LOADSCREEN_SLICE_4_ALPHA_MIN, LOADSCREEN_SLICE_4_ALPHA_MAX) as u8,
+                .clamp(LOADSCREEN_SLICE_4_ALPHA_MIN, LOADSCREEN_SLICE_4_ALPHA_MAX)
+                as u8,
         ),
         view_w,
         view_h,
@@ -474,7 +482,10 @@ fn render_loadscreen_frame(
     if let Some(layout) = text_layout {
         let title_alpha = (LOADSCREEN_TITLE_ALPHA_BASE
             + LOADSCREEN_TITLE_ALPHA_SWING
-                * libm::sinf(anim_ms as f32 * 0.001 * LOADSCREEN_TITLE_ALPHA_FREQ + LOADSCREEN_TITLE_ALPHA_PHASE)
+                * libm::sinf(
+                    anim_ms as f32 * 0.001 * LOADSCREEN_TITLE_ALPHA_FREQ
+                        + LOADSCREEN_TITLE_ALPHA_PHASE,
+                )
             + LOADSCREEN_FX_GLOBAL_ALPHA_BIAS)
             .clamp(236.0, 250.0) as u8;
         let _ = crate::gfx::imbafont::draw_text_in_frame(
@@ -504,7 +515,8 @@ pub async fn gfx_loadscreen_task() {
         .and_then(|resp| resp.framebuffers().next())
         .map(|fb| (fb.width() as f32, fb.height() as f32))
         .unwrap_or((1024.0, 768.0));
-    let tile_h = (fb_h * LOADSCREEN_TILE_H_FACTOR).clamp(LOADSCREEN_TILE_H_MIN, LOADSCREEN_TILE_H_MAX);
+    let tile_h =
+        (fb_h * LOADSCREEN_TILE_H_FACTOR).clamp(LOADSCREEN_TILE_H_MIN, LOADSCREEN_TILE_H_MAX);
     let text_layout = crate::gfx::imbafont::layout_text_centered(
         crate::gfx::imbafont::ImbaFontFace::Grow,
         LOADSCREEN_MSG,
