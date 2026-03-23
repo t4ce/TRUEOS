@@ -2482,6 +2482,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
 
 fn compose_windows(state: &mut Ui2State) {
     let dirty_count = state.windows.iter().filter(|window| window.dirty).count();
+    let presentation_allowed = crate::r::readiness::is_set(crate::r::readiness::LOADSCREEN_END);
     for window in &mut state.windows {
         if window.dirty {
             window.dirty_seq = window.dirty_seq.wrapping_add(1);
@@ -2543,29 +2544,37 @@ fn compose_windows(state: &mut Ui2State) {
         state.last_logged_compose_dirty_count = dirty_count;
     }
 
-    crate::gfx::with_cabi_frame_lock(|| {
-        if state.compose_seq <= 2 {
-            crate::log!(
-                "ui2: compose-frame seq={} begin windows={} dirty={}\n",
-                state.compose_seq,
-                state.windows.len(),
-                dirty_count
-            );
-        }
-        let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
-        if begin_rc != 0 {
-            return;
-        }
-        for idx in sorted_window_indices(state) {
-            let window = &state.windows[idx];
-            draw_window_frame(state, window);
-        }
-        draw_resize_preview_outline(state);
-        unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
-        if state.compose_seq <= 2 {
-            crate::log!("ui2: compose-frame seq={} end\n", state.compose_seq);
-        }
-    });
+    if presentation_allowed {
+        crate::gfx::with_cabi_frame_lock(|| {
+            if state.compose_seq <= 2 {
+                crate::log!(
+                    "ui2: compose-frame seq={} begin windows={} dirty={}\n",
+                    state.compose_seq,
+                    state.windows.len(),
+                    dirty_count
+                );
+            }
+            let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
+            if begin_rc != 0 {
+                return;
+            }
+            for idx in sorted_window_indices(state) {
+                let window = &state.windows[idx];
+                draw_window_frame(state, window);
+            }
+            draw_resize_preview_outline(state);
+            unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+            if state.compose_seq <= 2 {
+                crate::log!("ui2: compose-frame seq={} end\n", state.compose_seq);
+            }
+        });
+    } else if state.compose_seq <= 2 {
+        crate::log!(
+            "ui2: compose-frame seq={} deferred-by-loadscreen dirty={}\n",
+            state.compose_seq,
+            dirty_count
+        );
+    }
 
     if !state.first_compose_signaled {
         crate::r::readiness::set(crate::r::readiness::UI2_READY);

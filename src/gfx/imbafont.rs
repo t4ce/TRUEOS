@@ -65,6 +65,85 @@ pub struct ImbaFontRunLayout {
     tile_h: f32,
 }
 
+pub struct ImbaFontMaskTexture {
+    pub width: u32,
+    pub height: u32,
+    pub draw_x: f32,
+    pub draw_y: f32,
+    pub rgba: Vec<u8>,
+}
+
+#[inline]
+fn raster_edge(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
+    (px - ax) * (by - ay) - (py - ay) * (bx - ax)
+}
+
+fn rasterize_mask_triangle(
+    rgba: &mut [u8],
+    width: u32,
+    height: u32,
+    p0: (f32, f32),
+    p1: (f32, f32),
+    p2: (f32, f32),
+) {
+    let area = raster_edge(p0.0, p0.1, p1.0, p1.1, p2.0, p2.1);
+    if area.abs() <= 1e-6 {
+        return;
+    }
+
+    let mut min_x = libm::floorf(p0.0.min(p1.0).min(p2.0)).max(0.0) as i32;
+    let mut max_x = libm::ceilf(p0.0.max(p1.0).max(p2.0)).min(width as f32) as i32;
+    let mut min_y = libm::floorf(p0.1.min(p1.1).min(p2.1)).max(0.0) as i32;
+    let mut max_y = libm::ceilf(p0.1.max(p1.1).max(p2.1)).min(height as f32) as i32;
+
+    if min_x >= max_x || min_y >= max_y {
+        return;
+    }
+
+    min_x = min_x.max(0);
+    min_y = min_y.max(0);
+    max_x = max_x.min(width as i32);
+    max_y = max_y.min(height as i32);
+
+    const SAMPLE_POINTS: [(f32, f32); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
+
+    for py in min_y..max_y {
+        for px in min_x..max_x {
+            let mut covered = 0u32;
+            for (sx, sy) in SAMPLE_POINTS {
+                let fx = px as f32 + sx;
+                let fy = py as f32 + sy;
+                let w0 = raster_edge(p1.0, p1.1, p2.0, p2.1, fx, fy);
+                let w1 = raster_edge(p2.0, p2.1, p0.0, p0.1, fx, fy);
+                let w2 = raster_edge(p0.0, p0.1, p1.0, p1.1, fx, fy);
+                if (area > 0.0 && w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0)
+                    || (area < 0.0 && w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0)
+                {
+                    covered = covered.saturating_add(1);
+                }
+            }
+
+            if covered == 0 {
+                continue;
+            }
+
+            let idx = (py as usize)
+                .saturating_mul(width as usize)
+                .saturating_add(px as usize)
+                .saturating_mul(4);
+            if idx + 4 > rgba.len() {
+                continue;
+            }
+
+            let alpha = (((covered * 255) + 2) / 4) as u8;
+            rgba[idx] = 0xFF;
+            rgba[idx + 1] = 0xFF;
+            rgba[idx + 2] = 0xFF;
+            rgba[idx + 3] = rgba[idx + 3].max(alpha);
+        }
+    }
+}
+
 #[inline]
 fn space_advance(tile_h: f32) -> f32 {
     tile_h * 0.42
@@ -603,6 +682,85 @@ pub fn layout_text_centered(
         vis_top,
         vis_bottom,
         tile_h,
+    })
+}
+
+pub fn rasterize_text_mask_texture(
+    face: ImbaFontFace,
+    text: &[u8],
+    layout: &ImbaFontRunLayout,
+    padding_px: f32,
+) -> Option<ImbaFontMaskTexture> {
+    if text.is_empty() {
+        return None;
+    }
+
+    let visible_w = (layout.vis_right - layout.vis_left).max(1.0);
+    let visible_h = (layout.vis_bottom - layout.vis_top).max(1.0);
+    let pad = padding_px.max(0.0);
+    let draw_x = layout.origin_x + layout.vis_left - pad;
+    let draw_y = layout.baseline_y + layout.vis_top - pad;
+    let width = libm::ceilf(visible_w + pad * 2.0).max(1.0) as u32;
+    let height = libm::ceilf(visible_h + pad * 2.0).max(1.0) as u32;
+    let mut rgba = vec![
+        0u8;
+        (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4)
+    ];
+    let mut pen_x = layout.origin_x;
+    let mut any_ink = false;
+
+    for &byte in text {
+        let ch = byte as char;
+        if ch == ' ' {
+            pen_x += space_advance(layout.tile_h);
+            continue;
+        }
+
+        let Some(metric) = layout_metric_for_char(face, ch) else {
+            continue;
+        };
+        let Some(icon) = icon_for_char(face, ch) else {
+            pen_x += metric.advance_w * layout.tile_h;
+            continue;
+        };
+
+        let y = layout.baseline_y - metric.baseline_y * layout.tile_h;
+        let sx = layout.tile_h / icon.mesh.width.max(0.0001);
+        let sy = layout.tile_h / icon.mesh.height.max(0.0001);
+
+        for tri in icon.mesh.indices.chunks_exact(3) {
+            let Some(v0) = icon.mesh.vertices.get(tri[0] as usize) else {
+                continue;
+            };
+            let Some(v1) = icon.mesh.vertices.get(tri[1] as usize) else {
+                continue;
+            };
+            let Some(v2) = icon.mesh.vertices.get(tri[2] as usize) else {
+                continue;
+            };
+
+            let p0 = (pen_x + v0[0] * sx - draw_x, y + v0[1] * sy - draw_y);
+            let p1 = (pen_x + v1[0] * sx - draw_x, y + v1[1] * sy - draw_y);
+            let p2 = (pen_x + v2[0] * sx - draw_x, y + v2[1] * sy - draw_y);
+            rasterize_mask_triangle(&mut rgba, width, height, p0, p1, p2);
+            any_ink = true;
+        }
+
+        pen_x += metric.advance_w * layout.tile_h;
+    }
+
+    if !any_ink {
+        return None;
+    }
+
+    Some(ImbaFontMaskTexture {
+        width,
+        height,
+        draw_x,
+        draw_y,
+        rgba,
     })
 }
 
