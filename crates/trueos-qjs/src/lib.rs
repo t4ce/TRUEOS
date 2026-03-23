@@ -16,8 +16,11 @@ pub mod async_fs;
 pub mod trueos_module_loader;
 
 #[cfg(feature = "trueos")]
-#[path = "../app/truesurfer/truesurfer_task.rs"]
-pub mod browser_task;
+#[path = "../app/truesurfer/truesurfer_qjs_vm_task.rs"]
+pub mod truesurfer_qjs_vm_task;
+
+#[cfg(feature = "trueos")]
+pub use truesurfer_qjs_vm_task as browser_task;
 
 #[cfg(feature = "trueos")]
 #[path = "../app/ai/ai_task.rs"]
