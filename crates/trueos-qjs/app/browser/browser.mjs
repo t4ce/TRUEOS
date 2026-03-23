@@ -2,6 +2,7 @@ import * as parse5 from 'parse5';
 import * as cmdStream from 'trueos:cmd_stream';
 import Yoga from 'yoga-layout';
 import { createBrowserAssetManager } from './browser_assets.mjs';
+import { buildWorldPageModel, realizePageModel } from './page_pipeline.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
 import { parseKeyboardInput } from '../input/keyboard_wire.mjs';
 import { registerSvgDemoRoute } from './svg_demo.mjs';
@@ -747,69 +748,32 @@ function publishThemeLayoutInteractives(themeLayout) {
 }
 
 function buildDocFromParsed(parsed, vw, context = 'document') {
-  const doc = parsed && typeof parsed === 'object'
-    ? parsed
-    : parse5.parse('');
-
-  const rows = [];
-  const cssSection = (() => {
-    try {
-      return typeof extractCssSection === 'function' ? extractCssSection(doc) : null;
-    } catch (err) {
-      raiseBrowserError(
-        'TRUEOS_BROWSER_CSS_PARSE_FAILED',
-        `CSS extraction failed while building ${context}`,
-        { context, reason: describeError(err) },
-        err,
-      );
-    }
-  })();
-  try {
-    collectRows(doc, 0, rows, cssSection, null, 'root', []);
-  } catch (err) {
-    raiseBrowserError(
-      'TRUEOS_BROWSER_DOM_BUILD_FAILED',
-      `DOM row collection failed while building ${context}`,
-      { context, reason: describeError(err) },
-      err,
-    );
-  }
-  const layout = applyYoga(rows, vw, context);
-  const themeLayout = (() => {
-    try {
-      return buildThemeLayout(doc, cssSection, vw, context, rows, layout.rowX, layout.rowY);
-    } catch (err) {
-      raiseBrowserError(
-        'TRUEOS_BROWSER_THEME_LAYOUT_FAILED',
-        `Theme layout build failed while building ${context}`,
-        { context, reason: describeError(err) },
-        err,
-      );
-    }
-  })();
-  /* debug
-  const cssRows = Array.isArray(cssSection && cssSection.rows) ? cssSection.rows : [];
-  for (let i = 0; i < cssRows.length; i++) {
-    const r = cssRows[i];
-    rows.push({
-      depth: Math.max(0, Number(r && r.depth || 0) | 0),
-      text: String(r && r.text || ''),
-      kind: 'css',
-      style: null,
-    });
-  }
-  */
-  runtime.host.__trueosKernelCssObjects = Array.isArray(cssSection && cssSection.cssObjects) ? cssSection.cssObjects : [];
-  publishThemeLayoutInteractives(themeLayout);
+  const pageModel = buildWorldPageModel(parsed, {
+    context,
+    raiseBrowserError,
+    describeError,
+  });
+  const layoutModel = realizePageModel(pageModel, vw, {
+    context,
+    host: runtime.host,
+    raiseBrowserError,
+    describeError,
+  });
+  runtime.host.__trueosKernelCssObjects = Array.isArray(pageModel && pageModel.css && pageModel.css.cssObjects)
+    ? pageModel.css.cssObjects
+    : [];
+  publishThemeLayoutInteractives(layoutModel.themeLayout);
   return {
-    dom: doc,
-    css: cssSection,
-    themeLayout,
-    rows,
-    rowX: layout.rowX,
-    rowY: layout.rowY,
-    contentW: layout.contentW,
-    contentH: layout.contentH,
+    dom: pageModel.dom,
+    pageModel,
+    layoutModel,
+    css: pageModel.css,
+    themeLayout: layoutModel.themeLayout,
+    rows: pageModel.rows,
+    rowX: layoutModel.rowX,
+    rowY: layoutModel.rowY,
+    contentW: layoutModel.contentW,
+    contentH: layoutModel.contentH,
     width: vw,
   };
 }
