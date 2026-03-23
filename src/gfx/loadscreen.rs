@@ -6,43 +6,9 @@ fn boot_probe_ms() -> u64 {
     embassy_time_driver::now().saturating_mul(1000) / hz
 }
 
-fn centered_text_origin(msg: &[u8], fb_w: f32, fb_h: f32) -> (f32, f32) {
-    let atlas = crate::gfx::text::font_atlas_large_view();
-    let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
-    let space_adv_px = atlas.cell_w as f32 * 0.60;
-
-    let glyph_slot = |ch: u8| {
-        let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
-        if slot == u16::MAX {
-            slot = fallback;
-        }
-        slot
-    };
-
-    let mut width_px = 0.0f32;
-    for &ch in msg {
-        if ch == b' ' {
-            width_px += space_adv_px;
-            continue;
-        }
-
-        let slot = glyph_slot(ch);
-        let glyph_w_px = atlas
-            .widths
-            .get(slot as usize)
-            .copied()
-            .unwrap_or(atlas.cell_w as u8) as f32;
-        width_px += glyph_w_px;
-    }
-
-    let x = ((fb_w - width_px) * 0.5).max(0.0);
-    let y = ((fb_h - atlas.cell_h as f32) * 0.5).max(0.0);
-    (x, y)
-}
-
 #[embassy_executor::task]
 pub async fn gfx_loadscreen_task() {
-    const LOADSCREEN_BG_RGB: u32 = 0xF4F4F4;
+    const LOADSCREEN_BG_RGB: u32 = 0xFFFFFF;
     const MSG: &[u8] = b"TRUE OS";
 
     let (fb_w, fb_h) = crate::limine::framebuffer_response()
@@ -50,7 +16,14 @@ pub async fn gfx_loadscreen_task() {
         .map(|fb| (fb.width() as f32, fb.height() as f32))
         .unwrap_or((1024.0, 768.0));
     let start_ms = boot_probe_ms();
-    let (text_x, text_y) = centered_text_origin(MSG, fb_w, fb_h);
+    let tile_h = (fb_h * 0.16).clamp(56.0, 140.0);
+    let text_layout = crate::gfx::imbafont::layout_text_centered(
+        crate::gfx::imbafont::ImbaFontFace::Grow,
+        MSG,
+        fb_w,
+        fb_h,
+        tile_h,
+    );
 
     crate::log!("boot-probe: loadscreen start ms={}\n", start_ms);
 
@@ -58,14 +31,17 @@ pub async fn gfx_loadscreen_task() {
         let begin_rc =
             unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(LOADSCREEN_BG_RGB) };
         if begin_rc == 0 {
-            let _ = crate::gfx::text::draw_atlas_text_in_frame_alpha(
-                MSG,
-                text_x,
-                text_y,
-                fb_w as u32,
-                fb_h as u32,
-                255,
-            );
+            if let Some(layout) = text_layout {
+                let _ = crate::gfx::imbafont::draw_text_in_frame(
+                    crate::gfx::imbafont::ImbaFontFace::Grow,
+                    MSG,
+                    &layout,
+                    fb_w as u32,
+                    fb_h as u32,
+                    (0, 0, 0),
+                    255,
+                );
+            }
             unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
         } else {
             crate::log!("gfx-loadscreen: begin_frame failed rc={}\n", begin_rc);
@@ -73,7 +49,7 @@ pub async fn gfx_loadscreen_task() {
     });
 
     while !crate::r::readiness::is_set(crate::r::readiness::LOADSCREEN_END) {
-        Timer::after(EmbassyDuration::from_millis(16)).await;
+        Timer::after(EmbassyDuration::from_millis(300)).await;
     }
 
     crate::log!(

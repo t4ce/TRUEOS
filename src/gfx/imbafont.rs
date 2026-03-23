@@ -36,6 +36,7 @@ struct ImbaFontIconMesh {
 }
 
 struct ImbaFontIcon {
+    ch: char,
     metric: SvgGlyphMetric,
     mesh: ImbaFontIconMesh,
 }
@@ -62,6 +63,35 @@ pub struct ImbaFontRunLayout {
     pub vis_top: f32,
     pub vis_bottom: f32,
     tile_h: f32,
+}
+
+#[inline]
+fn space_advance(tile_h: f32) -> f32 {
+    tile_h * 0.42
+}
+
+fn layout_metric_for_char(face: ImbaFontFace, ch: char) -> Option<SvgGlyphMetric> {
+    let layout_metrics = layout_metrics_for_face(face);
+    let assets = assets_for_face(face);
+
+    for (index, asset) in assets.iter().enumerate() {
+        if asset.ch == ch {
+            return layout_metrics.get(index).map(|entry| entry.metric);
+        }
+    }
+
+    None
+}
+
+fn icon_for_char(face: ImbaFontFace, ch: char) -> Option<&'static ImbaFontIcon> {
+    let icons = icons_for_face(face);
+    for icon in icons {
+        if icon.ch == ch {
+            return Some(icon);
+        }
+    }
+
+    None
 }
 
 macro_rules! svg_icon_asset {
@@ -255,7 +285,11 @@ fn icons_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontIcon> {
             let Some(mesh) = build_svg_mesh(asset.bytes) else {
                 continue;
             };
-            icons.push(ImbaFontIcon { metric, mesh });
+            icons.push(ImbaFontIcon {
+                ch: asset.ch,
+                metric,
+                mesh,
+            });
         }
         icons
     };
@@ -518,6 +552,60 @@ pub fn layout_run_centered(
     })
 }
 
+pub fn layout_text_centered(
+    face: ImbaFontFace,
+    text: &[u8],
+    view_w: f32,
+    view_h: f32,
+    tile_h: f32,
+) -> Option<ImbaFontRunLayout> {
+    if text.is_empty() {
+        return None;
+    }
+
+    let mut pen_x = 0.0f32;
+    let mut vis_left = f32::INFINITY;
+    let mut vis_right = f32::NEG_INFINITY;
+    let mut vis_top = f32::INFINITY;
+    let mut vis_bottom = f32::NEG_INFINITY;
+
+    for &byte in text {
+        let ch = byte as char;
+        if ch == ' ' {
+            pen_x += space_advance(tile_h);
+            continue;
+        }
+
+        let Some(metric) = layout_metric_for_char(face, ch) else {
+            continue;
+        };
+        vis_left = vis_left.min(pen_x + metric.ink_left * tile_h);
+        vis_right = vis_right.max(pen_x + metric.ink_right * tile_h);
+        vis_top = vis_top.min((metric.ink_top - metric.baseline_y) * tile_h);
+        vis_bottom = vis_bottom.max((metric.ink_bottom - metric.baseline_y) * tile_h);
+        pen_x += metric.advance_w * tile_h;
+    }
+
+    if !vis_left.is_finite() || !vis_right.is_finite() || vis_right <= vis_left {
+        return None;
+    }
+
+    let visible_w = vis_right - vis_left;
+    let visible_h = vis_bottom - vis_top;
+    let origin_x = ((view_w - visible_w) * 0.5).max(0.0) - vis_left;
+    let baseline_y = ((view_h - visible_h) * 0.5).max(0.0) - vis_top;
+
+    Some(ImbaFontRunLayout {
+        origin_x,
+        baseline_y,
+        vis_left,
+        vis_right,
+        vis_top,
+        vis_bottom,
+        tile_h,
+    })
+}
+
 pub fn draw_run_in_frame(
     face: ImbaFontFace,
     layout: &ImbaFontRunLayout,
@@ -576,6 +664,75 @@ pub fn draw_run_in_frame(
         }
 
         pen_x += icon.metric.advance_w * icon_tile_h;
+    }
+
+    true
+}
+
+pub fn draw_text_in_frame(
+    face: ImbaFontFace,
+    text: &[u8],
+    layout: &ImbaFontRunLayout,
+    view_w: u32,
+    view_h: u32,
+    rgb: (u8, u8, u8),
+    alpha: u8,
+) -> bool {
+    let fb_w = view_w.max(1) as f32;
+    let fb_h = view_h.max(1) as f32;
+    let mut pen_x = layout.origin_x;
+
+    for &byte in text {
+        let ch = byte as char;
+        if ch == ' ' {
+            pen_x += space_advance(layout.tile_h);
+            continue;
+        }
+
+        let Some(metric) = layout_metric_for_char(face, ch) else {
+            continue;
+        };
+        let Some(icon) = icon_for_char(face, ch) else {
+            pen_x += metric.advance_w * layout.tile_h;
+            continue;
+        };
+
+        let y = layout.baseline_y - metric.baseline_y * layout.tile_h;
+        let sx = layout.tile_h / icon.mesh.width.max(0.0001);
+        let sy = layout.tile_h / icon.mesh.height.max(0.0001);
+        let mut blob = Vec::with_capacity(icon.mesh.indices.len().saturating_mul(12));
+
+        for &idx in &icon.mesh.indices {
+            let Some(vertex) = icon.mesh.vertices.get(idx as usize) else {
+                continue;
+            };
+            let px = pen_x + vertex[0] * sx;
+            let py = y + vertex[1] * sy;
+            let nx = (2.0 * (px / fb_w)) - 1.0;
+            let ny = 1.0 - (2.0 * (py / fb_h));
+            blob.extend_from_slice(&nx.to_le_bytes());
+            blob.extend_from_slice(&ny.to_le_bytes());
+            blob.push(rgb.0);
+            blob.push(rgb.1);
+            blob.push(rgb.2);
+            blob.push(alpha);
+        }
+
+        if !blob.is_empty() {
+            let _ = unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_set_blend(
+                    1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0,
+                )
+            };
+            let _ = unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+                    blob.as_ptr(),
+                    blob.len(),
+                )
+            };
+        }
+
+        pen_x += metric.advance_w * layout.tile_h;
     }
 
     true
