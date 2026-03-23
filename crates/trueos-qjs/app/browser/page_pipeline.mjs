@@ -7,6 +7,28 @@ import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './theme.mjs';
 const INDENT_PX = 12;
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 
+function nowMs() {
+  if (typeof Date !== 'undefined' && typeof Date.now === 'function') {
+    return Number(Date.now()) || 0;
+  }
+  return 0;
+}
+
+function logProbe(options, line) {
+  const host = options && options.host && typeof options.host === 'object'
+    ? options.host
+    : ((typeof globalThis !== 'undefined' && globalThis) ? globalThis : null);
+  if (!host || typeof console === 'undefined' || typeof console.log !== 'function') return false;
+  const browserInstanceId = Math.max(0, Number(host.__trueosBrowserInstanceId || 0) | 0);
+  const label = browserInstanceId > 0 ? `surfer ${browserInstanceId}` : 'surfer ?';
+  try {
+    console.log(`[${label}] ${line}`);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function collapseWhitespace(s) {
   return String(s || '').replace(/\s+/g, ' ').trim();
 }
@@ -538,6 +560,7 @@ export function buildWorldPageModel(parsed, options = {}) {
   const context = String(options.context || 'document');
   const doc = parsed && typeof parsed === 'object' ? parsed : parse5.parse('');
   let cssSection = null;
+  const cssStartMs = nowMs();
   try {
     cssSection = typeof extractCssSection === 'function' ? extractCssSection(doc) : null;
   } catch (err) {
@@ -549,8 +572,12 @@ export function buildWorldPageModel(parsed, options = {}) {
       err,
     );
   }
+  const cssMs = Math.max(0, nowMs() - cssStartMs);
+  const cssObjects = Array.isArray(cssSection && cssSection.cssObjects) ? cssSection.cssObjects.length : 0;
+  logProbe(options, `probe css ms=${cssMs} context=${context} css_objects=${cssObjects}`);
 
   const rows = [];
+  const rowsStartMs = nowMs();
   try {
     collectRows(doc, 0, rows, cssSection, null, 'root', []);
   } catch (err) {
@@ -562,6 +589,8 @@ export function buildWorldPageModel(parsed, options = {}) {
       err,
     );
   }
+  const rowsMs = Math.max(0, nowMs() - rowsStartMs);
+  logProbe(options, `probe rows ms=${rowsMs} context=${context} rows=${rows.length}`);
 
   return {
     kind: 'world-page-model',
@@ -575,13 +604,17 @@ export function buildWorldPageModel(parsed, options = {}) {
 export function realizePageModel(pageModel, vw, options = {}) {
   const context = String(options.context || pageModel && pageModel.context || 'document');
   const host = options.host || null;
+  const yogaStartMs = nowMs();
   const layout = applyYoga(pageModel.rows, vw, context, host, options);
+  const yogaMs = Math.max(0, nowMs() - yogaStartMs);
+  logProbe(options, `probe yoga ms=${yogaMs} context=${context} rows=${Array.isArray(pageModel && pageModel.rows) ? pageModel.rows.length : 0} viewport=${vw}`);
   const shapedPageModel = {
     ...pageModel,
     rowX: layout.rowX,
     rowY: layout.rowY,
   };
   let themeLayout = null;
+  const themeStartMs = nowMs();
   try {
     themeLayout = buildThemeLayout(shapedPageModel, vw, context, host);
   } catch (err) {
@@ -593,6 +626,9 @@ export function realizePageModel(pageModel, vw, options = {}) {
       err,
     );
   }
+  const themeMs = Math.max(0, nowMs() - themeStartMs);
+  const interactives = Array.isArray(themeLayout && themeLayout.interactives) ? themeLayout.interactives.length : 0;
+  logProbe(options, `probe theme ms=${themeMs} context=${context} interactives=${interactives}`);
   return {
     kind: 'realized-page-layout',
     context,
