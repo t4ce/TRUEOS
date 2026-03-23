@@ -76,14 +76,14 @@ pub fn run_ap_forever() -> ! {
                 0x00_FF_37_FF // 255,55,255
             } else {
                 0x00_FF_FF_FF
-            };
+            };/*
             crate::vga::draw_header_square(
                 total,
                 slot,
                 crate::vga::DEFAULT_SHADOW_COLOR,
                 outline,
                 (counter % 360) as u32,
-            );
+            );*/
         }
         counter = counter.wrapping_add(1);
         crate::power::idle_hint();

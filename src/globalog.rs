@@ -34,7 +34,7 @@ macro_rules! log {
 pub fn log(args: fmt::Arguments<'_>) {
     //crate::usb::truekey::push_fmt(args);
     debugcon::log(args);
-    let _ = crate::vga::log(args);
+   // let _ = crate::vga::log(args);
     placeholder::log(args);
 }
 
