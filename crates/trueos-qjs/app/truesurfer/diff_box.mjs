@@ -1,5 +1,6 @@
 const htmlByUrl = new Map();
-
+// surfer internal diff box, for now just should md5 for example to detect a basic
+// has not changed, then we could later atleast play a "quasi refresh, effect, as it would be honest still"
 function safeString(value) {
   if (typeof value === 'string') {
     return value;
