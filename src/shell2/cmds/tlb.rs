@@ -10,6 +10,8 @@ use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
 use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
+pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
+
 const TLB_USAGE: &str = "tlb: usage `tlb [pci|pciids|pcibar|mem|cpu|acpi|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb|dump]`";
 const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const TLB_MENU_ROWS: [(&str, &str); 15] = [
@@ -921,7 +923,7 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
     table.emit_footer(|text| line(io, text));
 }
 
-fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
+pub(crate) fn build_dump_text() -> String {
     let mut out = String::new();
 
     writeln!(out, "=== Memory Map ===").unwrap();
@@ -1289,24 +1291,34 @@ fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
     }
     writeln!(out).unwrap();
 
-    let file_path = "trueos/pci/tlb.txt";
+    out
+}
+
+pub(crate) async fn write_dump_bytes_to_default_path(
+    bytes: &[u8],
+) -> Result<(), crate::disc::block::Error> {
+    let Some(handle) = crate::r::fs::trueosfs::primary_root_handle() else {
+        return Err(crate::disc::block::Error::NotReady);
+    };
+
+    match crate::r::fs::trueosfs::file_in_async(handle, DUMP_FILE_PATH, bytes).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(crate::disc::block::Error::Io),
+        Err(err) => Err(err),
+    }
+}
+
+fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
+    let out = build_dump_text();
     line(
         io,
-        alloc::format!("Writing {} bytes to {}...", out.len(), file_path).as_str(),
+        alloc::format!("Writing {} bytes to {}...", out.len(), DUMP_FILE_PATH).as_str(),
     );
 
     let out_bytes = out.into_bytes();
     let result: Result<(), crate::disc::block::Error> =
         crate::wait::spawn_and_wait_local(async move {
-            let Some(handle) = crate::r::fs::trueosfs::primary_root_handle() else {
-                return Err(crate::disc::block::Error::NotReady);
-            };
-
-            match crate::r::fs::trueosfs::file_in_async(handle, file_path, &out_bytes).await {
-                Ok(true) => Ok(()),
-                Ok(false) => Err(crate::disc::block::Error::Io),
-                Err(err) => Err(err),
-            }
+            write_dump_bytes_to_default_path(&out_bytes).await
         });
 
     match result {
