@@ -2083,9 +2083,7 @@ async fn fetch_on_device_keepalive(
         if reused { 1 } else { 0 }
     );
 
-    let handle = ready_handle
-        .or_else(|| conn.state.lock().handle)
-        .expect("connected handle");
+    let handle = ready_handle.expect("connected handle");
     let req = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: keep-alive\r\n\r\n",
         parsed.path, parsed.host
@@ -2610,9 +2608,7 @@ async fn fetch_on_device_keepalive_post_json(
         if reused { 1 } else { 0 }
     );
 
-    let handle = ready_handle
-        .or_else(|| conn.state.lock().handle)
-        .expect("connected handle");
+    let handle = ready_handle.expect("connected handle");
     let auth = if let Some(token) = auth_token {
         format!("Authorization: Bearer {}\r\n", token)
     } else {
