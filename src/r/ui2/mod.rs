@@ -1128,7 +1128,7 @@ fn handle_system_button_action(
     action: Ui2SystemButtonAction,
 ) -> bool {
     match action {
-        Ui2SystemButtonAction::Fork => fork_hosted_browser_window_in_state(state, window_id),
+        Ui2SystemButtonAction::Fork => fork_window_in_state(state, window_id),
         Ui2SystemButtonAction::Minimize => minimize_window_in_state(state, window_id),
         Ui2SystemButtonAction::ToggleMaximize => {
             let is_maximized = state
@@ -1147,30 +1147,12 @@ fn handle_system_button_action(
     }
 }
 
-fn fork_hosted_browser_window_in_state(state: &mut Ui2State, source_window_id: u32) -> bool {
-    let Some(source_window) = state.windows.iter().find(|window| {
-        window.id == source_window_id && window.kind == Ui2WindowKind::HostedBrowser
-    }) else {
-        return false;
-    };
-
-    let source_browser_instance_id = window_browser_instance_id(source_window);
-    let target_browser_instance_id = trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
+fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) -> bool {
+    let Some(source_window) = state
+        .windows
         .iter()
-        .copied()
-        .find(|browser_instance_id| {
-            *browser_instance_id != source_browser_instance_id
-                && state.windows.iter().all(|window| {
-                    window.kind != Ui2WindowKind::HostedBrowser
-                        || window_browser_instance_id(window) != *browser_instance_id
-                })
-        });
-    let Some(target_browser_instance_id) = target_browser_instance_id else {
-        crate::log!(
-            "ui2: browser-fork no-target window={} source_browser={}\n",
-            source_window_id,
-            source_browser_instance_id
-        );
+        .find(|window| window.id == source_window_id)
+    else {
         return false;
     };
 
@@ -1191,8 +1173,6 @@ fn fork_hosted_browser_window_in_state(state: &mut Ui2State, source_window_id: u
             source_rect.h,
         ),
     );
-    let next_tex_id =
-        trueos_qjs::browser_task::render_tex_id_for_browser_instance(target_browser_instance_id);
     let next_z = state
         .windows
         .iter()
@@ -1211,20 +1191,54 @@ fn fork_hosted_browser_window_in_state(state: &mut Ui2State, source_window_id: u
     let next_bottom_scrollbar_visible = source_window.bottom_scrollbar_visible;
     let next_vertical_scrollbar_side = source_window.vertical_scrollbar_side;
     let next_horizontal_scrollbar_side = source_window.horizontal_scrollbar_side;
+    let next_content_tex_blend = source_window.content_tex_blend;
+    let next_kind = source_window.kind;
+
+    let (next_browser_instance_id, next_tex_id, fork_reason) = match next_kind {
+        Ui2WindowKind::HostedBrowser => {
+            let source_browser_instance_id = window_browser_instance_id(source_window);
+            let target_browser_instance_id = trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
+                .iter()
+                .copied()
+                .find(|browser_instance_id| {
+                    *browser_instance_id != source_browser_instance_id
+                        && state.windows.iter().all(|window| {
+                            window.kind != Ui2WindowKind::HostedBrowser
+                                || window_browser_instance_id(window) != *browser_instance_id
+                        })
+                });
+            let Some(target_browser_instance_id) = target_browser_instance_id else {
+                crate::log!(
+                    "ui2: browser-fork no-target window={} source_browser={}\n",
+                    source_window_id,
+                    source_browser_instance_id
+                );
+                return false;
+            };
+            (
+                target_browser_instance_id,
+                trueos_qjs::browser_task::render_tex_id_for_browser_instance(
+                    target_browser_instance_id,
+                ),
+                "fork-browser-window",
+            )
+        }
+        Ui2WindowKind::HostedSurface => (0, source_window.content_tex_id, "fork-surface-window"),
+    };
 
     let id = alloc_window(
         state,
-        Ui2WindowKind::HostedBrowser,
+        next_kind,
         next_title.as_str(),
         next_rect,
         next_z,
         next_alpha,
     );
     if let Some(window) = window_mut(state, id) {
-        window.browser_instance_id = target_browser_instance_id;
+        window.browser_instance_id = next_browser_instance_id;
         window.icon_id = next_icon_id;
         window.content_tex_id = next_tex_id;
-        window.content_tex_blend = true;
+        window.content_tex_blend = next_content_tex_blend;
         window.hit_test_visible = next_hit_test_visible;
         window.decoration_mode = next_decoration_mode;
         window.titlebar_visible = next_titlebar_visible;
@@ -1248,24 +1262,39 @@ fn fork_hosted_browser_window_in_state(state: &mut Ui2State, source_window_id: u
             (width, height)
         });
 
-    let _ = hosted_bind_window(target_browser_instance_id, id);
-    let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
-        target_browser_instance_id,
-        next_tex_id,
-    );
-    state.compose_reason = "fork-browser-window";
-    let _ = note_window_dirty(state, id, "fork-browser-window");
+    if next_kind == Ui2WindowKind::HostedBrowser {
+        let _ = hosted_bind_window(next_browser_instance_id, id);
+        let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
+            next_browser_instance_id,
+            next_tex_id,
+        );
+    }
+    state.compose_reason = fork_reason;
+    let _ = note_window_dirty(state, id, fork_reason);
     let _ = note_window_viewport_sync_needed(state, id);
     refresh_window_hit_entries(state, id);
-    crate::log!(
-        "ui2: browser-fork window={} browser={} from_window={} from_browser={}\n",
-        id,
-        target_browser_instance_id,
-        source_window_id,
-        source_browser_instance_id
-    );
+    match next_kind {
+        Ui2WindowKind::HostedBrowser => {
+            crate::log!(
+                "ui2: browser-fork window={} browser={} from_window={}\n",
+                id,
+                next_browser_instance_id,
+                source_window_id
+            );
+        }
+        Ui2WindowKind::HostedSurface => {
+            crate::log!(
+                "ui2: surface-fork window={} tex={} from_window={}\n",
+                id,
+                next_tex_id,
+                source_window_id
+            );
+        }
+    }
 
-    if let Some((width, height)) = initial_content {
+    if let Some((width, height)) = initial_content
+        && next_kind == Ui2WindowKind::HostedBrowser
+    {
         let pixels =
             alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
         let _ = crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
@@ -1274,7 +1303,7 @@ fn fork_hosted_browser_window_in_state(state: &mut Ui2State, source_window_id: u
             height,
             pixels.as_slice(),
             id,
-            "fork-browser-window",
+            fork_reason,
         );
     }
 
