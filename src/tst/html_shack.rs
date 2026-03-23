@@ -10,6 +10,7 @@ use spin::Mutex;
 const HTML_FETCH_IDLE_MS: u64 = 100;
 const HTML_PREVIEW_FRONT_LINES: usize = 5;
 const HTML_PREVIEW_LINE_CHARS: usize = 160;
+const HTML_SHACK_BROWSER_HANDOFF_ENABLE: bool = false;
 
 /// A fetched HTML document.
 ///
@@ -173,7 +174,11 @@ fn pop_next_request() -> Option<HtmlRequest> {
 
 fn store_ready_html(html: Html) -> usize {
     let ready_len = with_html_shack(|shack| shack.put_ready_html(html.clone()));
-    handoff_ready_html_to_primary_browser(&html);
+    if HTML_SHACK_BROWSER_HANDOFF_ENABLE {
+        handoff_ready_html_to_primary_browser(&html);
+    } else {
+        crate::log!("html_shack: browser_handoff disabled url={}\n", html.url);
+    }
     ready_len
 }
 

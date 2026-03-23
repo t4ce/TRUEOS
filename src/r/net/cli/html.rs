@@ -11,6 +11,8 @@ use heapless::String as HString;
 const SURF_TIMEOUT_MS: u32 = 35_000;
 const SURF_MAX_BYTES: usize = 4 * 1024 * 1024;
 const SURF_HTTPS_TIMEOUT_MS: u32 = SURF_TIMEOUT_MS * 4;
+const HTML_PREVIEW_FRONT_LINES: usize = 5;
+const HTML_PREVIEW_LINE_CHARS: usize = 160;
 
 fn build_best_effort_attempts(url: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -35,6 +37,43 @@ fn build_best_effort_attempts(url: &str) -> Vec<String> {
 
 fn bytes_to_string_lossy(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(bytes.as_slice()).into_owned()
+}
+
+fn preview_line(line: &str) -> &str {
+    if line.len() <= HTML_PREVIEW_LINE_CHARS {
+        return line;
+    }
+
+    let mut end = 0usize;
+    for (idx, ch) in line.char_indices() {
+        let next = idx + ch.len_utf8();
+        if next > HTML_PREVIEW_LINE_CHARS {
+            break;
+        }
+        end = next;
+    }
+
+    if end == 0 { "" } else { &line[..end] }
+}
+
+fn log_html_preview(url: &str, html: &str) {
+    let line_count = html.lines().count();
+    crate::log!(
+        "html: received url={} bytes={} lines={} front={}\n",
+        url,
+        html.len(),
+        line_count,
+        HTML_PREVIEW_FRONT_LINES
+    );
+
+    for (idx, line) in html.lines().take(HTML_PREVIEW_FRONT_LINES).enumerate() {
+        let front = preview_line(line);
+        if front.len() == line.len() {
+            crate::log!("html: [{}] {}\n", idx + 1, front);
+        } else {
+            crate::log!("html: [{}] {}...\n", idx + 1, front);
+        }
+    }
 }
 
 async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'static str> {
@@ -141,7 +180,11 @@ pub async fn fetch_html_best_effort(url: HString<256>) -> Result<String, &'stati
     let mut saw_timeout = false;
     for attempt in attempts.iter() {
         match fetch_html_attempt_with_redirects(attempt.as_str()).await {
-            Ok(body) => return Ok(bytes_to_string_lossy(body)),
+            Ok(body) => {
+                let html = bytes_to_string_lossy(body);
+                log_html_preview(attempt.as_str(), html.as_str());
+                return Ok(html);
+            }
             Err("timed out") => {
                 saw_timeout = true;
             }
