@@ -269,6 +269,7 @@ struct Ui2State {
     scroll_drags: Vec<Ui2WindowScrollDrag>,
     scroll_pan_drags: Vec<Ui2WindowScrollPanDrag>,
     windows: Vec<Ui2Window>,
+    loadscreen_end_signaled: bool,
     first_compose_signaled: bool,
 }
 
@@ -393,6 +394,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             scroll_drags: Vec::new(),
             scroll_pan_drags: Vec::new(),
             windows: Vec::new(),
+            loadscreen_end_signaled: false,
             first_compose_signaled: false,
         };
 
@@ -2567,14 +2569,12 @@ fn compose_windows(state: &mut Ui2State) {
         }
     });
 
+    if !state.loadscreen_end_signaled {
+        state.loadscreen_end_signaled = true;
+    }
     if !state.first_compose_signaled {
-        crate::r::readiness::set(crate::r::readiness::LOADSCREEN_END);
         crate::r::readiness::set(crate::r::readiness::UI2_READY);
         state.first_compose_signaled = true;
-        crate::log!(
-            "boot-probe: ui2 signaled loadscreen_end ms={}\n",
-            boot_probe_ms()
-        );
     }
 }
 

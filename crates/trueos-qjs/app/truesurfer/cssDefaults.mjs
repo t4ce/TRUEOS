@@ -1,5 +1,7 @@
 import { BLOCK_TAGS } from './htmlDefaults.mjs';
-import { FONT_PX, FONT_RGB } from './theme.mjs';
+
+const FONT_PX = 16;
+const FONT_RGB = 0x000000;
 
 const TAG_THEME_DEFAULTS = {
   b: {
