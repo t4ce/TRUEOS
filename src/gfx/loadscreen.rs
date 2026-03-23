@@ -1,6 +1,6 @@
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-const LOADSCREEN_MIN_LIFETIME_MS: u64 = 1_000;
+const LOADSCREEN_MIN_LIFETIME_MS: u64 = 4_000;
 const LOADSCREEN_WAIT_POLL_MS: u64 = 100;
 
 #[inline]
