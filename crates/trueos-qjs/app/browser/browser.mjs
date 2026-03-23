@@ -11,6 +11,9 @@ import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './theme.mjs';
 
 const runtime = resolveRuntime();
 registerSvgDemoRoute(runtime.host, { iconSize: 64 });
+if (typeof runtime.host.__trueosBrowserAssetsEnabled === 'undefined') {
+  runtime.host.__trueosBrowserAssetsEnabled = 0;
+}
 
 const INDENT_PX = 12;
 const ERROR_PREVIEW_MAX = 160;
@@ -140,6 +143,10 @@ function markBrowserRenderDirty() {
 function requestBrowserLayoutRefresh(_reason = 'layout-refresh') {
   markBrowserRenderDirty();
   return true;
+}
+
+function browserAssetsEnabled() {
+  return !!runtime.host.__trueosBrowserAssetsEnabled;
 }
 
 function resolveRuntime() {
@@ -725,6 +732,8 @@ function alignThemeLayoutToRows(themeLayout, rows, rowX, rowY) {
   };
 }
 
+*/
+
 function viewportThemeLayout(themeLayout) {
   const source = themeLayout && typeof themeLayout === 'object' ? themeLayout : null;
   const interactives = Array.isArray(source && source.interactives) ? source.interactives : [];
@@ -816,6 +825,7 @@ function effectiveBrowserHtmlSource() {
   return cachedHtml.trim() ? cachedHtml : EMPTY_BROWSER_HTML;
 }
 
+/*
 function readNodeText(node) {
   if (!node || typeof node !== 'object') return '';
   if (isTextNode(node)) return String(node.value || '');
@@ -1073,8 +1083,10 @@ function ensureDoc(vw) {
   } else if (cachedDoc.width !== vw) {
     cachedDoc = buildDocFromParsed(cachedDoc.dom, vw, 'cached html document');
   }
-  assetManager.applyResourcesToRows(cachedDoc && cachedDoc.rows ? cachedDoc.rows : []);
-  assetManager.requestAssetsForRows(cachedDoc && cachedDoc.rows ? cachedDoc.rows : []);
+  if (browserAssetsEnabled()) {
+    assetManager.applyResourcesToRows(cachedDoc && cachedDoc.rows ? cachedDoc.rows : []);
+    assetManager.requestAssetsForRows(cachedDoc && cachedDoc.rows ? cachedDoc.rows : []);
+  }
   return cachedDoc;
 }
 
@@ -1484,7 +1496,7 @@ function getViewport() {
 function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
-  if (assetManager && typeof assetManager.beginPageLoad === 'function') {
+  if (browserAssetsEnabled() && assetManager && typeof assetManager.beginPageLoad === 'function') {
     assetManager.beginPageLoad();
   }
   markBrowserRenderDirty();
@@ -1493,6 +1505,9 @@ function setHtml(nextHtml) {
     return true;
   }
   const htmlSnapshot = cachedHtml;
+  if (!browserAssetsEnabled()) {
+    return true;
+  }
   if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
     Promise.resolve().then(() => {
       if (cachedHtml !== htmlSnapshot) return;
