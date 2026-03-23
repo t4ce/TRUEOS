@@ -3,7 +3,7 @@ import { passHtmlThroughDiffBox } from '/qjs/truesurfer/diff_box.mjs';
 
 const root = globalThis;
 const browserId = Number(root.__trueosTruesurferBrowserId || 0);
-const LOG_REAR_ENABLE = false;
+const LOG_REAR_ENABLE = true;
 const LOG_PARSE_ENABLE = true;
 
 function log(line) {
@@ -70,7 +70,7 @@ function logRearLines(source) {
   if (!LOG_REAR_ENABLE) {
     return;
   }
-  const tail = rearLines(source, 10);
+  const tail = rearLines(source, 3);
   log(`[truesurfer rear] browser=${browserId} lines=${tail.length}`);
   for (let index = 0; index < tail.length; index += 1) {
     log(

@@ -17,6 +17,7 @@ spin = "0.10"
 embassy-time-driver = { version = "0.2.1", default-features = false, optional = true }
 embassy-executor = { version = "0.9.1", default-features = false, optional = true, features = ["executor-thread", "arch-spin"] }
 embassy-time = { version = "0.5.0", default-features = false, optional = true, features = ["tick-hz-1_000"] }
+embassy-sync = { version = "0.8.0", default-features = false, optional = true }
 libm = { version = "0.2", default-features = false, optional = true }
 v = { path = "../trueos-v", default-features = false }
 trueos-math = { path = "../trueos-math", default-features = false, optional = true }
@@ -31,7 +32,7 @@ yoga-native = []
 lightningcss-native = ["dep:lightningcss"]
 
 # TRUEOS-only helpers (kernel logging via trueos_cabi_write + Complex-backed module smoke).
-trueos = ["dep:trueos-math", "dep:trueos-weather", "dep:embassy-time-driver", "dep:embassy-executor", "dep:embassy-time", "dep:libm", "dep:parry2d"]
+trueos = ["dep:trueos-math", "dep:trueos-weather", "dep:embassy-time-driver", "dep:embassy-executor", "dep:embassy-time", "dep:embassy-sync", "dep:libm", "dep:parry2d"]
 
 [patch.crates-io]
 num-traits = { path = "../../vendor/num-traits-0.2.19" }

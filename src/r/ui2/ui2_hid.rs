@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use super::*;
 
 pub(super) fn cursor_color(slot_id: u32) -> (u8, u8, u8, u8) {
