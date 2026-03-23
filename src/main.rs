@@ -56,7 +56,6 @@ mod tst_ui2_triangle_demo;
 mod tst_ws_time;
 mod turbo;
 mod usb2;
-//mod vga;
 mod wait;
 mod x2apic;
 mod z7;
@@ -144,7 +143,6 @@ pub extern "C" fn kmain() -> ! {
         cpu::enable_sse();
     }
     exceptions::init();
-    //vga::init(limine::framebuffer_response());
     crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();

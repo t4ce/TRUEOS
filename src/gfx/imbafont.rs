@@ -73,6 +73,16 @@ pub struct ImbaFontMaskTexture {
     pub rgba: Vec<u8>,
 }
 
+#[derive(Clone, Copy)]
+pub struct ImbaFontGlyphMetricsPx {
+    pub baseline: f32,
+    pub top: f32,
+    pub bottom: f32,
+    pub left: f32,
+    pub right: f32,
+    pub advance: f32,
+}
+
 #[inline]
 fn raster_edge(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
     (px - ax) * (by - ay) - (py - ay) * (bx - ax)
@@ -171,6 +181,93 @@ fn icon_for_char(face: ImbaFontFace, ch: char) -> Option<&'static ImbaFontIcon> 
     }
 
     None
+}
+
+pub fn glyph_metrics_px(
+    face: ImbaFontFace,
+    ch: char,
+    tile_h: f32,
+) -> Option<ImbaFontGlyphMetricsPx> {
+    if ch == ' ' {
+        return Some(ImbaFontGlyphMetricsPx {
+            baseline: 0.0,
+            top: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+            right: 0.0,
+            advance: space_advance(tile_h),
+        });
+    }
+
+    let metric = layout_metric_for_char(face, ch)?;
+    Some(ImbaFontGlyphMetricsPx {
+        baseline: metric.baseline_y * tile_h,
+        top: metric.ink_top * tile_h,
+        bottom: metric.ink_bottom * tile_h,
+        left: metric.ink_left * tile_h,
+        right: metric.ink_right * tile_h,
+        advance: metric.advance_w * tile_h,
+    })
+}
+
+pub fn rasterize_glyph_mask_texture(
+    face: ImbaFontFace,
+    ch: char,
+    tile_h: f32,
+    padding_px: f32,
+) -> Option<ImbaFontMaskTexture> {
+    if ch == ' ' {
+        return None;
+    }
+
+    let metric = layout_metric_for_char(face, ch)?;
+    let icon = icon_for_char(face, ch)?;
+    let visible_w = ((metric.ink_right - metric.ink_left) * tile_h).max(1.0);
+    let visible_h = ((metric.ink_bottom - metric.ink_top) * tile_h).max(1.0);
+    let pad = padding_px.max(0.0);
+    let draw_x = metric.ink_left * tile_h - pad;
+    let draw_y = metric.ink_top * tile_h - pad;
+    let width = libm::ceilf(visible_w + pad * 2.0).max(1.0) as u32;
+    let height = libm::ceilf(visible_h + pad * 2.0).max(1.0) as u32;
+    let mut rgba = vec![
+        0u8;
+        (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4)
+    ];
+    let sx = tile_h / icon.mesh.width.max(0.0001);
+    let sy = tile_h / icon.mesh.height.max(0.0001);
+    let mut any_ink = false;
+
+    for tri in icon.mesh.indices.chunks_exact(3) {
+        let Some(v0) = icon.mesh.vertices.get(tri[0] as usize) else {
+            continue;
+        };
+        let Some(v1) = icon.mesh.vertices.get(tri[1] as usize) else {
+            continue;
+        };
+        let Some(v2) = icon.mesh.vertices.get(tri[2] as usize) else {
+            continue;
+        };
+
+        let p0 = (v0[0] * sx - draw_x, v0[1] * sy - draw_y);
+        let p1 = (v1[0] * sx - draw_x, v1[1] * sy - draw_y);
+        let p2 = (v2[0] * sx - draw_x, v2[1] * sy - draw_y);
+        rasterize_mask_triangle(&mut rgba, width, height, p0, p1, p2);
+        any_ink = true;
+    }
+
+    if !any_ink {
+        return None;
+    }
+
+    Some(ImbaFontMaskTexture {
+        width,
+        height,
+        draw_x,
+        draw_y,
+        rgba,
+    })
 }
 
 macro_rules! svg_icon_asset {

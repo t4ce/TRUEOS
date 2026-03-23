@@ -1,7 +1,13 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
+use libm::{ceilf, floorf};
 use spin::Once;
+
+use crate::gfx::imbafont::{
+    ImbaFontFace, ImbaFontGlyphMetricsPx, ImbaFontMaskTexture, glyph_metrics_px,
+    rasterize_glyph_mask_texture,
+};
 
 struct FontAtlasBuffers {
     alpha: Vec<u8>,
@@ -47,6 +53,19 @@ const ATLAS_TEX_ID: u32 = 1001;
 static ATLAS_UPLOADED: AtomicBool = AtomicBool::new(false);
 static ATLAS_RGBA: Once<Vec<u8>> = Once::new();
 
+const ATLAS_GRID: usize = 16;
+const SMALL_TILE_H: f32 = 14.0;
+const LARGE_TILE_H: f32 = 24.0;
+const ATLAS_SIDE_PAD_PX: f32 = 1.0;
+const ATLAS_TOP_PAD_PX: f32 = 1.0;
+const ATLAS_BOTTOM_PAD_PX: f32 = 1.0;
+const PLACEHOLDER_ADVANCE_FACTOR: f32 = 0.72;
+
+struct AtlasGlyphSource {
+    metrics: Option<ImbaFontGlyphMetricsPx>,
+    mask: Option<ImbaFontMaskTexture>,
+}
+
 #[inline]
 fn fill_cell(
     alpha: &mut [u8],
@@ -56,9 +75,8 @@ fn fill_cell(
     slot: usize,
     src: &[u8],
 ) {
-    const GRID: usize = 16;
-    let cell_x = (slot % GRID) * cell_w;
-    let cell_y = (slot / GRID) * cell_h;
+    let cell_x = (slot % ATLAS_GRID) * cell_w;
+    let cell_y = (slot / ATLAS_GRID) * cell_h;
     for y in 0..cell_h {
         let dst_y = cell_y + y;
         let src_off = y * cell_w;
@@ -67,61 +85,144 @@ fn fill_cell(
     }
 }
 
-fn build_font_atlas_small() -> FontAtlasBuffers {
-    const GRID: usize = 16;
-    let cell_w = crate::vga::FONT_CELL_W;
-    let cell_h = crate::vga::FONT_CELL_H;
-    let width = GRID * cell_w;
-    let height = GRID * cell_h;
-    let mut alpha = vec![0u8; width * height];
-    let mut index = vec![u16::MAX; 256];
+#[inline]
+fn round_px(value: f32) -> usize {
+    floorf(value + 0.5).max(0.0) as usize
+}
 
-    for code in 0u32..=0xFF {
-        let Some(ch) = core::char::from_u32(code) else {
+fn blit_mask_alpha(
+    cell: &mut [u8],
+    cell_w: usize,
+    cell_h: usize,
+    mask: &ImbaFontMaskTexture,
+    dst_x: usize,
+    dst_y: usize,
+) {
+    for sy in 0..mask.height as usize {
+        let cy = dst_y.saturating_add(sy);
+        if cy >= cell_h {
             continue;
-        };
-        let Some(glyph) = crate::vga::get_small_glyph(ch) else {
-            continue;
-        };
-        let slot = code as usize;
-        fill_cell(&mut alpha, width, cell_w, cell_h, slot, glyph);
-        index[slot] = slot as u16;
-    }
+        }
 
-    FontAtlasBuffers {
-        alpha,
-        index,
-        widths: Vec::new(),
-        width: width as u32,
-        height: height as u32,
-        cell_w: cell_w as u32,
-        cell_h: cell_h as u32,
-        grid_w: GRID as u32,
-        grid_h: GRID as u32,
+        for sx in 0..mask.width as usize {
+            let cx = dst_x.saturating_add(sx);
+            if cx >= cell_w {
+                continue;
+            }
+
+            let src_idx = sy
+                .saturating_mul(mask.width as usize)
+                .saturating_add(sx)
+                .saturating_mul(4)
+                .saturating_add(3);
+            let Some(&alpha) = mask.rgba.get(src_idx) else {
+                continue;
+            };
+            if alpha == 0 {
+                continue;
+            }
+
+            let dst_idx = cy.saturating_mul(cell_w).saturating_add(cx);
+            if let Some(dst) = cell.get_mut(dst_idx) {
+                *dst = (*dst).max(alpha);
+            }
+        }
     }
 }
 
-fn build_font_atlas_large() -> FontAtlasBuffers {
-    const GRID: usize = 16;
-    let cell_w = crate::vga::BANNER_CELL_W;
-    let cell_h = crate::vga::BANNER_CELL_H;
-    let width = GRID * cell_w;
-    let height = GRID * cell_h;
+fn draw_placeholder_cell(cell: &mut [u8], cell_w: usize, cell_h: usize, glyph_w: usize) {
+    if cell_w == 0 || cell_h == 0 {
+        return;
+    }
+
+    let draw_w = glyph_w.min(cell_w).max(3);
+    let left = 1usize.min(draw_w.saturating_sub(1));
+    let right = draw_w.saturating_sub(2).max(left);
+    let top = 1usize.min(cell_h.saturating_sub(1));
+    let bottom = cell_h.saturating_sub(2).max(top);
+
+    for y in top..=bottom {
+        for x in left..=right {
+            let border = y == top || y == bottom || x == left || x == right;
+            let slash = (x - left) == (y - top).min(right.saturating_sub(left));
+            if !border && !slash {
+                continue;
+            }
+            let idx = y.saturating_mul(cell_w).saturating_add(x);
+            if let Some(px) = cell.get_mut(idx) {
+                *px = 0xE0;
+            }
+        }
+    }
+}
+
+fn build_font_atlas(face: ImbaFontFace, tile_h: f32) -> FontAtlasBuffers {
+    let mut glyphs = Vec::with_capacity(256);
+    let mut ascent = tile_h;
+    let mut descent = 0.0f32;
+    let mut min_left = 0.0f32;
+    let mut max_right = tile_h;
+    let mut max_advance = tile_h * PLACEHOLDER_ADVANCE_FACTOR;
+
+    for code in 0u16..=0xFF {
+        let ch = code as u8 as char;
+        let metrics = glyph_metrics_px(face, ch, tile_h);
+        let mask = rasterize_glyph_mask_texture(face, ch, tile_h, 0.0);
+
+        if let (Some(metrics), Some(_)) = (metrics, mask.as_ref()) {
+            ascent = ascent.max((metrics.baseline - metrics.top).max(0.0));
+            descent = descent.max((metrics.bottom - metrics.baseline).max(0.0));
+            min_left = min_left.min(metrics.left);
+            max_right = max_right.max(metrics.right);
+            max_advance = max_advance.max(metrics.advance);
+        } else if let Some(metrics) = metrics {
+            max_advance = max_advance.max(metrics.advance);
+        }
+
+        glyphs.push(AtlasGlyphSource { metrics, mask });
+    }
+
+    let left_pad = ceilf((-min_left).max(0.0) + ATLAS_SIDE_PAD_PX).max(1.0) as usize;
+    let baseline_y = ceilf(ascent + ATLAS_TOP_PAD_PX).max(1.0) as usize;
+    let cell_h = ceilf(ascent + descent + ATLAS_TOP_PAD_PX + ATLAS_BOTTOM_PAD_PX).max(1.0) as usize;
+    let placeholder_w =
+        ceilf(tile_h * PLACEHOLDER_ADVANCE_FACTOR + left_pad as f32 + ATLAS_SIDE_PAD_PX).max(3.0)
+            as usize;
+    let cell_w = ceilf(max_advance.max(max_right - min_left) + left_pad as f32 + ATLAS_SIDE_PAD_PX)
+        .max(placeholder_w as f32)
+        .max(1.0) as usize;
+
+    let width = ATLAS_GRID * cell_w;
+    let height = ATLAS_GRID * cell_h;
     let mut alpha = vec![0u8; width * height];
     let mut index = vec![u16::MAX; 256];
     let mut widths = vec![0u8; 256];
 
-    for code in 0u32..=0xFF {
-        let Some(ch) = core::char::from_u32(code) else {
-            continue;
+    for (slot, glyph) in glyphs.iter().enumerate() {
+        let ch = slot as u8 as char;
+        let mut cell = vec![0u8; cell_w * cell_h];
+        let glyph_w = match (&glyph.metrics, &glyph.mask) {
+            (Some(metrics), Some(mask)) => {
+                let glyph_w = ceilf(
+                    (metrics.advance + left_pad as f32 + ATLAS_SIDE_PAD_PX)
+                        .max(metrics.right + left_pad as f32 + ATLAS_SIDE_PAD_PX),
+                )
+                .max(1.0) as usize;
+                let dst_x = round_px(left_pad as f32 + mask.draw_x);
+                let dst_y = round_px(baseline_y as f32 - metrics.baseline + mask.draw_y);
+                blit_mask_alpha(&mut cell, cell_w, cell_h, mask, dst_x, dst_y);
+                glyph_w
+            }
+            (Some(metrics), None) if ch == ' ' => ceilf(metrics.advance).max(1.0) as usize,
+            _ => {
+                draw_placeholder_cell(&mut cell, cell_w, cell_h, placeholder_w);
+                placeholder_w
+            }
         };
-        let Some((glyph, w)) = crate::vga::get_banner_glyph(ch) else {
-            continue;
-        };
-        let slot = code as usize;
-        fill_cell(&mut alpha, width, cell_w, cell_h, slot, glyph);
+
+        fill_cell(&mut alpha, width, cell_w, cell_h, slot, &cell);
         index[slot] = slot as u16;
-        widths[slot] = w.min(cell_w) as u8;
+        widths[slot] = glyph_w.min(cell_w).min(u8::MAX as usize) as u8;
     }
 
     FontAtlasBuffers {
@@ -132,9 +233,17 @@ fn build_font_atlas_large() -> FontAtlasBuffers {
         height: height as u32,
         cell_w: cell_w as u32,
         cell_h: cell_h as u32,
-        grid_w: GRID as u32,
-        grid_h: GRID as u32,
+        grid_w: ATLAS_GRID as u32,
+        grid_h: ATLAS_GRID as u32,
     }
+}
+
+fn build_font_atlas_small() -> FontAtlasBuffers {
+    build_font_atlas(ImbaFontFace::Regular, SMALL_TILE_H)
+}
+
+fn build_font_atlas_large() -> FontAtlasBuffers {
+    build_font_atlas(ImbaFontFace::Regular, LARGE_TILE_H)
 }
 
 fn font_atlas_small() -> &'static FontAtlasBuffers {

@@ -67,23 +67,16 @@ pub fn run_ap_forever() -> ! {
             crate::smp::poll();
         }
         if counter.is_multiple_of(500_000) {
-            let slot = crate::percpu::this_cpu().cpu_index() as usize;
-            let total = crate::smp::cpu_count().max(1);
-            let outline = if crate::cpu::CpuProfile::current()
+            let _slot = crate::percpu::this_cpu().cpu_index() as usize;
+            let _total = crate::smp::cpu_count().max(1);
+            let _outline = if crate::cpu::CpuProfile::current()
                 .map(|profile| profile.is_perf())
                 .unwrap_or(false)
             {
                 0x00_FF_37_FF // 255,55,255
             } else {
                 0x00_FF_FF_FF
-            };/*
-            crate::vga::draw_header_square(
-                total,
-                slot,
-                crate::vga::DEFAULT_SHADOW_COLOR,
-                outline,
-                (counter % 360) as u32,
-            );*/
+            };
         }
         counter = counter.wrapping_add(1);
         crate::power::idle_hint();

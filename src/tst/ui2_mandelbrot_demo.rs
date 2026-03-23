@@ -9,12 +9,12 @@ const UI2_MANDELBROT_WINDOW_Z: i16 = 31;
 pub async fn ui2_mandelbrot_demo_task() {
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
         "Demo Mandelbrot",
-            crate::r::ui2::Ui2Rect {
-        10,
-        10,
-        w: UI2_MANDELBROT_RT_W as f32,
-        h: UI2_MANDELBROT_RT_H as f32,
-    },
+        crate::r::ui2::Ui2Rect {
+            x: 10.0,
+            y: 10.0,
+            w: UI2_MANDELBROT_RT_W as f32,
+            h: UI2_MANDELBROT_RT_H as f32,
+        },
         UI2_MANDELBROT_WINDOW_Z,
         128,
         UI2_MANDELBROT_TEX_ID,
