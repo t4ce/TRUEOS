@@ -172,7 +172,21 @@ fn pop_next_request() -> Option<HtmlRequest> {
 }
 
 fn store_ready_html(html: Html) -> usize {
-    with_html_shack(|shack| shack.put_ready_html(html))
+    let ready_len = with_html_shack(|shack| shack.put_ready_html(html.clone()));
+    handoff_ready_html_to_primary_browser(&html);
+    ready_len
+}
+
+fn handoff_ready_html_to_primary_browser(html: &Html) {
+    let handed_off = trueos_qjs::browser_task::queue_set_html_with_url(
+        html.html.clone(),
+        Some(html.url.clone()),
+    );
+    crate::log!(
+        "html_shack: browser_handoff url={} ok={}\n",
+        html.url,
+        if handed_off { 1 } else { 0 }
+    );
 }
 
 fn normalize_file_reference(path: &str) -> String {

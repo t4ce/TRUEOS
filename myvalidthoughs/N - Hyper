@@ -1,3 +1,52 @@
+We hit a hard emulator wall here when we wanted to cleanlyinto 
+the host V abi with network
+
+it led us to 3 boxes... exec and 2 things i forgot :D 
+but be withe me, i dont think we can "hand" in thisas we was
+to really get the hang of the hyperv commands for intel
+its seems to be like a command wrapper that lets it flow
+so vmx works and some C3?? lets not forget about C3
+and that we i think ID vms by it
+
+
+#either way we have a wall because perhaps GPU
+can be handed in but after long long talk it revealed
+that consequentally tis LEVEL 0 , level 0,5 exact
+and where exactly the hypervisor lives on lonux and windows
+it was pretty mentally clear that its immieaditly
+and impossible endevour to even try had that in.
+
+ther is no "multiplexing" to the hypervisor.
+deeper levels of virtualization works differently
+plus i jet did not find out what exactly it would
+actually yield besides keeping it simple flat = why not
+still
+there is a deeper truth here about what we do with 
+vm and such in the real world at work etc.
+not the obvious once, the more subtle once,
+that would give a meaning to Layers for our
+VM/COntainer like trueos-vm (minios) based vmx
+
+but here i will stop phylosophy and ask ai perhaps
+but only after i try to use "network" on the baremetal system
+where there is clarly a hypervisor and we are not
+ad linux guest vm on it (no qemu).
+
+any how would be really cool to recall what was the
+actual raw hardware lmit we was dealing with when 
+hv start launced the vm and we entered net tcp shellthen
+we hit a limit even tho we handed it in, commandskernel flow
+raw device access etc...
+
+whateveer there must be easy or decent or optimal solutions
+perhaps mutliple paths for us as we are actually for the first tim ein full control
+about where and how stuff will flow on our platform
+
+
+
+
+
+
 we can allow for 10 level deep so our attempt to boot that once recursively, will friendly stop at 10
 
 Considered level cap scheme design
