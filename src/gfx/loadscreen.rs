@@ -1,5 +1,8 @@
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
+const LOADSCREEN_MIN_LIFETIME_MS: u64 = 5_000;
+const LOADSCREEN_WAIT_POLL_MS: u64 = 100;
+
 #[inline]
 fn boot_probe_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
@@ -16,6 +19,7 @@ pub async fn gfx_loadscreen_task() {
         .map(|fb| (fb.width() as f32, fb.height() as f32))
         .unwrap_or((1024.0, 768.0));
     let start_ms = boot_probe_ms();
+    let min_end_ms = start_ms.saturating_add(LOADSCREEN_MIN_LIFETIME_MS);
     let tile_h = (fb_h * 0.16).clamp(56.0, 140.0);
     let text_layout = crate::gfx::imbafont::layout_text_centered(
         crate::gfx::imbafont::ImbaFontFace::Grow,
@@ -48,8 +52,16 @@ pub async fn gfx_loadscreen_task() {
         }
     });
 
-    while !crate::r::readiness::is_set(crate::r::readiness::LOADSCREEN_END) {
-        Timer::after(EmbassyDuration::from_millis(300)).await;
+    loop {
+        let now_ms = boot_probe_ms();
+        let min_lifetime_elapsed = now_ms >= min_end_ms;
+        let ui2_ready = crate::r::readiness::is_set(crate::r::readiness::UI2_READY);
+        if ui2_ready && min_lifetime_elapsed {
+            crate::r::readiness::set(crate::r::readiness::LOADSCREEN_END);
+            break;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(LOADSCREEN_WAIT_POLL_MS)).await;
     }
 
     crate::log!(
