@@ -451,9 +451,16 @@ fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_html_shack::html_fetch_service())
-    })
+    let mut result = SpawnAttempt::Skipped;
+    for _ in 0..3 {
+        let attempt = spawn_on_worker(spawner, |worker_spawner| {
+            worker_spawner.spawn(crate::tst_html_shack::html_fetch_service())
+        });
+        if matches!(attempt, SpawnAttempt::Spawned) {
+            result = SpawnAttempt::Spawned;
+        }
+    }
+    result
 }
 
 fn spawn_ui2_window_factory(spawner: Spawner) -> SpawnAttempt {

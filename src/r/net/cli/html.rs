@@ -2,6 +2,7 @@ extern crate alloc;
 
 use super::http::{self, HttpFetchError};
 use crate::r::net::https;
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -10,11 +11,6 @@ use heapless::String as HString;
 const SURF_TIMEOUT_MS: u32 = 35_000;
 const SURF_MAX_BYTES: usize = 4 * 1024 * 1024;
 const SURF_HTTPS_TIMEOUT_MS: u32 = SURF_TIMEOUT_MS * 4;
-
-#[embassy_executor::task]
-pub async fn html_fetch_service() {
-    loop {}
-}
 
 fn build_best_effort_attempts(url: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -42,11 +38,23 @@ fn bytes_to_string_lossy(bytes: Vec<u8>) -> String {
 }
 
 async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'static str> {
-    const MAX_REDIRECTS: usize = 5;
+    // Legit sites need at most 2 hops (http→https, www→bare). Cap at 3 to give
+    // one extra for edge cases and hard-stop tracker/ad redirect chains.
+    const MAX_REDIRECTS: usize = 3;
     let mut current_url = String::from(url);
     let mut saw_timeout = false;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
 
     for hop in 0..=MAX_REDIRECTS {
+        if !seen.insert(current_url.clone()) {
+            crate::log!(
+                "html: redirect loop detected at hop={} url={}\n",
+                hop,
+                current_url
+            );
+            return Err("redirect loop");
+        }
+
         if current_url.starts_with("https://") {
             match https::fetch_https_body_async(
                 current_url.as_str(),
@@ -56,11 +64,24 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
             .await
             {
                 Ok(body) => return Ok(body),
-                Err(https::FetchError::Redirect { url, .. }) => {
+                Err(https::FetchError::Redirect { url: next, status }) => {
                     if hop >= MAX_REDIRECTS {
+                        crate::log!(
+                            "html: too many redirects ({}), last={} next={}\n",
+                            hop,
+                            current_url,
+                            next
+                        );
                         return Err("too many redirects");
                     }
-                    current_url = url;
+                    crate::log!(
+                        "html: redirect hop={} status={} {} -> {}\n",
+                        hop + 1,
+                        status,
+                        current_url,
+                        next
+                    );
+                    current_url = next;
                     continue;
                 }
                 Err(https::FetchError::ConnectTimeout)
@@ -76,11 +97,23 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
             match http::fetch_http_body(current_url.as_str(), SURF_TIMEOUT_MS, SURF_MAX_BYTES).await
             {
                 Ok(body) => return Ok(body),
-                Err(HttpFetchError::Redirect(url)) => {
+                Err(HttpFetchError::Redirect(next)) => {
                     if hop >= MAX_REDIRECTS {
+                        crate::log!(
+                            "html: too many redirects ({}), last={} next={}\n",
+                            hop,
+                            current_url,
+                            next
+                        );
                         return Err("too many redirects");
                     }
-                    current_url = url;
+                    crate::log!(
+                        "html: redirect hop={} {} -> {}\n",
+                        hop + 1,
+                        current_url,
+                        next
+                    );
+                    current_url = next;
                     continue;
                 }
                 Err(HttpFetchError::TimedOut) => {

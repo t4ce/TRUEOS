@@ -462,6 +462,12 @@ function isTextNode(node) {
   return !!node && typeof node === 'object' && node.nodeName === '#text' && typeof node.value === 'string';
 }
 
+// Old inline page-model/layout helper block.
+// Keep it commented for now as reference while the live path runs through
+// page_pipeline.mjs. The intended architecture remains:
+// 1. world -> page model
+// 2. page model -> realized layout/render data
+/*
 function pushRow(rows, text, depth, kind = 'text', style = null, meta = null) {
   const t = collapseWhitespace(text);
   if (!t) return;
@@ -748,6 +754,13 @@ function publishThemeLayoutInteractives(themeLayout) {
 }
 
 function buildDocFromParsed(parsed, vw, context = 'document') {
+  // Architecture goal:
+  // Keep this handoff split into two explicit phases:
+  // 1. world -> page model
+  // 2. page model -> realized layout/render data
+  // That is the seam we want for N-browser rollout, backend swapping, and
+  // reducing hidden coupling in browser.mjs. Leave the compatibility fields
+  // below in place for now while the rest of the browser catches up.
   const pageModel = buildWorldPageModel(parsed, {
     context,
     raiseBrowserError,
@@ -1047,6 +1060,7 @@ function applyYoga(rows, vw, context = 'document') {
     }
   }
 }
+*/
 
 function ensureDoc(vw) {
   if (!cachedDoc) {
