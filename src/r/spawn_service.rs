@@ -499,11 +499,18 @@ fn spawn_ui2_window_factory(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui2_gfx_browser(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(trueos_qjs::browser_task::ui2_gfx_browser_task(
-            trueos_qjs::browser_task::DEFAULT_BROWSER_INSTANCE_ID,
-        ))
-    })
+    let mut result = SpawnAttempt::Skipped;
+    for browser_instance_id in trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS {
+        let attempt = spawn_on_worker(spawner, |worker_spawner| {
+            worker_spawner.spawn(trueos_qjs::browser_task::ui2_gfx_browser_task(
+                browser_instance_id,
+            ))
+        });
+        if matches!(attempt, SpawnAttempt::Spawned) {
+            result = SpawnAttempt::Spawned;
+        }
+    }
+    result
 }
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {

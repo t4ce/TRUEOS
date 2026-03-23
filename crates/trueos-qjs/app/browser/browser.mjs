@@ -10,7 +10,7 @@ import { BLOCK_TAGS, TEXT_LEVEL_SEMANTICS_TAGS } from './htmlDefaults.mjs';
 import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './theme.mjs';
 
 const runtime = resolveRuntime();
-registerSvgDemoRoute(runtime.host, { iconSize: 64 });
+//registerSvgDemoRoute(runtime.host, { iconSize: 64 });
 if (typeof runtime.host.__trueosBrowserAssetsEnabled === 'undefined') {
   runtime.host.__trueosBrowserAssetsEnabled = 0;
 }
@@ -291,7 +291,7 @@ function normalizeQjsInput(entry) {
 function qjsShellWrite(text) {
   const line = typeof text === 'string' ? text : String(text == null ? '' : text);
   if (!line) return;
-  try { console.log(`[browser.qjs] ${line}`); } catch (_) {}
+  try { console.log(`${surferLogPrefix()} qjs ${line}`); } catch (_) {}
   if (typeof runtime.host.__trueosShell2PrintLine === 'function') {
     try {
       runtime.host.__trueosShell2PrintLine(line);
@@ -1530,6 +1530,10 @@ function hasConsoleLog() {
   return typeof console !== 'undefined' && typeof console.log === 'function';
 }
 
+function surferLogPrefix() {
+  return `[surfer ${currentWindowId()}]`;
+}
+
 function formatLayoutRow(row, index, rowX = [], rowY = []) {
   const entry = row && typeof row === 'object' ? row : {};
   const x = Math.round(Number(rowX[index] ?? LEFT_PAD));
@@ -1549,12 +1553,13 @@ function logLayoutDoc(doc, vw, vh) {
   const visibleRows = Math.min(BROWSER_LAYOUT_LOG_MAX_ROWS, rows.length);
   const contentW = Math.max(1, Math.round(Number(doc && doc.contentW || vw || 1)));
   const contentH = Math.max(1, Math.round(Number(doc && doc.contentH || vh || 1)));
-  console.log(`[browser.layout] rows=${rows.length} content=${contentW}x${contentH} viewport=${vw}x${vh} scroll=${scrollX},${scrollY}`);
+  const prefix = surferLogPrefix();
+  console.log(`${prefix} layout rows=${rows.length} content=${contentW}x${contentH} viewport=${vw}x${vh} scroll=${scrollX},${scrollY}`);
   for (let i = 0; i < visibleRows; i += 1) {
-    console.log(`[browser.layout] ${formatLayoutRow(rows[i], i, rowX, rowY)}`);
+    console.log(`${prefix} ${formatLayoutRow(rows[i], i, rowX, rowY)}`);
   }
   if (rows.length > visibleRows) {
-    console.log(`[browser.layout] ... ${rows.length - visibleRows} more rows`);
+    console.log(`${prefix} ... ${rows.length - visibleRows} more rows`);
   }
   return true;
 }

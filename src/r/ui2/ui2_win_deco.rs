@@ -439,7 +439,15 @@ pub(super) fn window_system_button_rect(
     let maximize_x = right_x;
     right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
     let minimize_x = right_x;
+    right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
+    let fork_x = right_x;
     let x = match action {
+        Ui2SystemButtonAction::Fork => {
+            if window.kind != Ui2WindowKind::HostedBrowser {
+                return None;
+            }
+            fork_x
+        }
         Ui2SystemButtonAction::Minimize => minimize_x,
         Ui2SystemButtonAction::ToggleMaximize => maximize_x,
         Ui2SystemButtonAction::Close => close_x,
@@ -460,11 +468,14 @@ pub(super) fn system_button_action_at(
 ) -> Option<Ui2SystemButtonAction> {
     let window = state.windows.iter().find(|window| window.id == window_id)?;
     for action in [
+        Ui2SystemButtonAction::Fork,
         Ui2SystemButtonAction::Minimize,
         Ui2SystemButtonAction::ToggleMaximize,
         Ui2SystemButtonAction::Close,
     ] {
-        let rect = window_system_button_rect(state, window, action)?;
+        let Some(rect) = window_system_button_rect(state, window, action) else {
+            continue;
+        };
         if rect_contains_point(rect, x, y) {
             return Some(action);
         }

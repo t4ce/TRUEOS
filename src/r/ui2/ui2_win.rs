@@ -147,6 +147,10 @@ pub fn create_hosted_browser_window(
         UI2_BROWSER_WINDOW_ID.store(id, Ordering::Release);
     }
     let _ = hosted_bind_window(browser_instance_id, id);
+    let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
+        browser_instance_id,
+        tex_id,
+    );
     state.compose_reason = "create-browser-window";
     refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
