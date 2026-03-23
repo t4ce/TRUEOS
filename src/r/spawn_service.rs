@@ -117,7 +117,7 @@ define_started_flags!(
     SURFER_FACTORY_STARTED
 );
 
-const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 3;
+const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 10;
 
 struct TruesurferFactory {
     next_instance_id: u32,
