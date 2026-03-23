@@ -1,4 +1,5 @@
 import parse5 from 'parse5';
+import { buildCssStyleRefIndex } from '/qjs/truesurfer/css.mjs';
 import { passHtmlThroughDiffBox } from '/qjs/truesurfer/diff_box.mjs';
 
 const root = globalThis;
@@ -185,6 +186,7 @@ function buildHierarchyRowsText(doc) {
 function extractDocumentArtifacts(source) {
   const startedAt = Date.now();
   const doc = parse5.parse(source);
+  const styleIndex = buildCssStyleRefIndex(doc);
   const title = extractDocumentTitle(doc);
   const htmlNode = firstChildElementByTagName(doc, 'html');
   const bodyNode = firstChildElementByTagName(htmlNode || doc, 'body');
@@ -231,10 +233,14 @@ function extractDocumentArtifacts(source) {
     hierarchyRowsText: artifacts.hierarchyRowsText,
     styleCount: artifacts.styles.length,
     styleBytes,
+    styleSlotCount: styleIndex.styleSlotCount,
+    styledNodeCount: styleIndex.nodeRefCount,
+    styleRuleCount: styleIndex.ruleCount,
     scriptCount: artifacts.scripts.length,
     scriptBytes,
     styles: artifacts.styles,
     scripts: artifacts.scripts,
+    styleIndex,
   };
 }
 
@@ -246,6 +252,7 @@ function setHtml(nextHtml, meta) {
 
   try {
     const parsed = extractDocumentArtifacts(html);
+    root.__trueosTruesurferLastStyleIndex = parsed.styleIndex;
     root.__trueosTruesurferLastArtifacts = {
       url,
       title: parsed.title,
@@ -254,9 +261,12 @@ function setHtml(nextHtml, meta) {
       hierarchyRowsText: parsed.hierarchyRowsText,
       styles: parsed.styles,
       scripts: parsed.scripts,
+      styleSlotCount: parsed.styleSlotCount,
+      styledNodeCount: parsed.styledNodeCount,
+      styleRuleCount: parsed.styleRuleCount,
     };
     log(
-      `[truesurfer extract] browser=${browserId} title=${parsed.title} shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} style_count=${parsed.styleCount} script_count=${parsed.scriptCount} ms=${parsed.parseMs} url=${url}`,
+      `[truesurfer extract] browser=${browserId} title=${parsed.title} shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} style_count=${parsed.styleCount} style_slots=${parsed.styleSlotCount} styled_nodes=${parsed.styledNodeCount} style_rules=${parsed.styleRuleCount} script_count=${parsed.scriptCount} ms=${parsed.parseMs} url=${url}`,
     );
     return {
       ok: 1,
@@ -269,6 +279,9 @@ function setHtml(nextHtml, meta) {
       bodyBytes: parsed.bodyBytes,
       styleCount: parsed.styleCount,
       styleBytes: parsed.styleBytes,
+      styleSlotCount: parsed.styleSlotCount,
+      styledNodeCount: parsed.styledNodeCount,
+      styleRuleCount: parsed.styleRuleCount,
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
     };
