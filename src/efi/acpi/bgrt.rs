@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{limine, pci::mmio, vga};
+use crate::{limine, pci::mmio, }; // vga
 
 use super::ensure_tables;
 
@@ -71,8 +71,8 @@ pub fn log_once() {
 
         // If it is a BMP we understand, blit (cropped to 256x256) into the framebuffer.
         if let Some(bmp) = bmp {
-            let Some((fb_w, fb_h)) =
-                vga::framebuffer_dimensions().map(|(w, h)| (w as usize, h as usize))
+            let Some((fb_w, fb_h)) = return
+                //vga::framebuffer_dimensions().map(|(w, h)| (w as usize, h as usize))
             else {
                 return;
             };
@@ -493,14 +493,15 @@ fn emit_image(
     height: usize,
     expected: usize,
 ) -> bool {
-    let img = unsafe {
+    false
+   /* let img = unsafe {
         vga::Image {
             width,
             height,
             pixels: &BGRT_PIXELS[..expected],
         }
     };
-    vga::blit_image(origin_x, origin_y, &img)
+    vga::blit_image(origin_x, origin_y, &img)*/
 }
 
 fn range_fits_in_file(bmp: &BmpInfo, needed: u64) -> bool {

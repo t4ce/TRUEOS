@@ -5,25 +5,16 @@ const UI2_MANDELBROT_RT_W: u32 = 768;
 const UI2_MANDELBROT_RT_H: u32 = 512;
 const UI2_MANDELBROT_WINDOW_Z: i16 = 31;
 
-fn mandelbrot_window_rect() -> crate::r::ui2::Ui2Rect {
-    let (fb_w, fb_h) = crate::vga::framebuffer_dimensions().unwrap_or((1600, 900));
-    let margin_x = 40.0f32;
-    let margin_y = 92.0f32;
-    let x = ((fb_w as f32) - UI2_MANDELBROT_RT_W as f32 - margin_x).max(24.0);
-    let y = ((fb_h as f32) - UI2_MANDELBROT_RT_H as f32 - margin_y).max(96.0);
-    crate::r::ui2::Ui2Rect {
-        x,
-        y,
-        w: UI2_MANDELBROT_RT_W as f32,
-        h: UI2_MANDELBROT_RT_H as f32,
-    }
-}
-
 #[embassy_executor::task]
 pub async fn ui2_mandelbrot_demo_task() {
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
         "Demo Mandelbrot",
-        mandelbrot_window_rect(),
+            crate::r::ui2::Ui2Rect {
+        10,
+        10,
+        w: UI2_MANDELBROT_RT_W as f32,
+        h: UI2_MANDELBROT_RT_H as f32,
+    },
         UI2_MANDELBROT_WINDOW_Z,
         128,
         UI2_MANDELBROT_TEX_ID,
