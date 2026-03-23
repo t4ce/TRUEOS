@@ -16,20 +16,12 @@ pub mod async_fs;
 pub mod trueos_module_loader;
 
 #[cfg(feature = "trueos")]
-#[path = "../app/browser/browser_task.rs"]
+#[path = "../app/truesurfer/truesurfer_task.rs"]
 pub mod browser_task;
 
 #[cfg(feature = "trueos")]
 #[path = "../app/ai/ai_task.rs"]
 pub mod ai_task;
-
-#[cfg(feature = "trueos")]
-#[path = "../app/browser/layout.rs"]
-pub mod layout;
-
-#[cfg(feature = "trueos")]
-#[path = "../app/browser/html/mod.rs"]
-pub mod html;
 
 #[cfg(feature = "trueos")]
 pub mod cmd_stream;
