@@ -4,6 +4,8 @@ pub(super) type UiHostedInteractiveState = trueos_qjs::browser_task::HostedBrows
 pub(super) type UiHostedTextState = trueos_qjs::browser_task::HostedBrowserTextState;
 pub(super) type UiHostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 
+use spin::Mutex;
+
 pub(super) const PRIMARY_HOSTED_CONTENT_ID: HostedContentId =
     trueos_qjs::browser_task::DEFAULT_BROWSER_INSTANCE_ID;
 pub(super) const HOSTED_KEYBOARD_MOD_SHIFT: u8 =
@@ -13,6 +15,20 @@ pub(super) const HOSTED_KEYBOARD_MOD_ALT: u8 = trueos_qjs::browser_task::HOSTED_
 pub(super) const HOSTED_KEYBOARD_MOD_META: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_META;
 
 const UI2_BROWSER_ADAPTER_ENABLED: bool = true;
+
+#[derive(Copy, Clone, Debug, Default)]
+struct HostedBrowserFactorySignalState {
+    latest_mask: u32,
+    seq: u32,
+    taken_seq: u32,
+}
+
+static HOSTED_BROWSER_FACTORY_SIGNAL: Mutex<HostedBrowserFactorySignalState> =
+    Mutex::new(HostedBrowserFactorySignalState {
+        latest_mask: 0,
+        seq: 0,
+        taken_seq: 0,
+    });
 
 pub(super) trait UiHostedSurfaceProvider {
     fn surface_seq(&self, content_id: HostedContentId) -> u32;
@@ -247,4 +263,20 @@ pub(super) fn hosted_queue_keyboard_events(
         return false;
     }
     hosted_adapter().send_input(content_id, UiHostedInput::Keyboard { events })
+}
+
+pub(crate) fn signal_hosted_browser_factory_mask(mask: u32) {
+    let mut signal = HOSTED_BROWSER_FACTORY_SIGNAL.lock();
+    signal.latest_mask = mask;
+    signal.seq = signal.seq.wrapping_add(1).max(1);
+}
+
+#[inline]
+pub(super) fn take_hosted_browser_factory_mask() -> Option<u32> {
+    let mut signal = HOSTED_BROWSER_FACTORY_SIGNAL.lock();
+    if signal.seq == signal.taken_seq {
+        return None;
+    }
+    signal.taken_seq = signal.seq;
+    Some(signal.latest_mask)
 }

@@ -50,6 +50,8 @@ mod tst_net_tcp_shell;
 mod tst_smtp_smoke;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
 mod tst_ui2_mandelbrot_demo;
+#[path = "tst/ui2_text_scene_demo.rs"]
+mod tst_ui2_text_scene_demo;
 #[path = "tst/ui2_triangle_demo.rs"]
 mod tst_ui2_triangle_demo;
 #[path = "tst/ws_time.rs"]
