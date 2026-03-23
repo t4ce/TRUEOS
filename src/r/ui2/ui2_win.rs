@@ -101,11 +101,6 @@ pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     id
 }
 
-pub fn create_empty_ui2_window(title: &str, content_rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
-    let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
-    create_window(title, rect, z, alpha)
-}
-
 pub fn create_hosted_browser_window(
     title: &str,
     rect: Ui2Rect,
@@ -171,6 +166,35 @@ pub fn create_hosted_browser_window(
     id
 }
 
+pub fn create_hosted_browser_content_window(
+    title: &str,
+    content_rect: Ui2Rect,
+    z: i16,
+    alpha: u8,
+    browser_instance_id: u32,
+    tex_id: u32,
+) -> u32 {
+    let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
+    create_hosted_browser_window(title, rect, z, alpha, browser_instance_id, tex_id)
+}
+
+pub fn create_text_scene_window(title: &str, content_rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
+    let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let id = alloc_window(&mut state, Ui2WindowKind::TextScene, title, rect, z, alpha);
+    if let Some(window) = window_mut(&mut state, id) {
+        window.left_scrollbar_visible = false;
+        window.bottom_scrollbar_visible = false;
+        window.content_tex_id = 0;
+        window.content_tex_blend = false;
+    }
+    state.compose_reason = "create-text-scene-window";
+    refresh_window_hit_entries(&mut state, id);
+    UI2_DIRTY.store(true, Ordering::Release);
+    id
+}
+
 pub fn create_hosted_surface_window(
     title: &str,
     rect: Ui2Rect,
@@ -228,35 +252,6 @@ pub fn set_window_hosted_surface_content(id: u32, tex_id: u32, blend_enabled: bo
         let _ = note_window_viewport_sync_needed(&mut state, id);
     }
     noted
-}
-
-#[allow(dead_code)]
-pub fn create_texture_window(
-    title: &str,
-    rect: Ui2Rect,
-    z: i16,
-    alpha: u8,
-    tex_id: u32,
-    blend_enabled: bool,
-) -> u32 {
-    create_hosted_surface_window(title, rect, z, alpha, tex_id, blend_enabled)
-}
-
-#[allow(dead_code)]
-pub fn create_texture_content_window(
-    title: &str,
-    content_rect: Ui2Rect,
-    z: i16,
-    alpha: u8,
-    tex_id: u32,
-    blend_enabled: bool,
-) -> u32 {
-    create_hosted_surface_content_window(title, content_rect, z, alpha, tex_id, blend_enabled)
-}
-
-#[allow(dead_code)]
-pub fn set_window_texture_content(id: u32, tex_id: u32, blend_enabled: bool) -> bool {
-    set_window_hosted_surface_content(id, tex_id, blend_enabled)
 }
 
 pub struct Ui2SurfaceWindow {
