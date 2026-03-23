@@ -442,12 +442,7 @@ pub(super) fn window_system_button_rect(
     right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
     let fork_x = right_x;
     let x = match action {
-        Ui2SystemButtonAction::Fork => {
-            if window.kind != Ui2WindowKind::HostedBrowser {
-                return None;
-            }
-            fork_x
-        }
+        Ui2SystemButtonAction::Fork => fork_x,
         Ui2SystemButtonAction::Minimize => minimize_x,
         Ui2SystemButtonAction::ToggleMaximize => maximize_x,
         Ui2SystemButtonAction::Close => close_x,
