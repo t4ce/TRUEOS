@@ -160,6 +160,28 @@ function walkAndExtractResiduals(node, artifacts) {
   }
 }
 
+function pushHierarchyRows(node, depth, rows) {
+  if (!node || !Array.isArray(node.childNodes) || node.childNodes.length === 0) {
+    return;
+  }
+
+  for (const child of node.childNodes) {
+    const tagName = safeString(child && (child.tagName || child.nodeName)).toLowerCase();
+    if (!tagName || tagName.startsWith('#')) {
+      continue;
+    }
+    rows.push(`${depth}|<${tagName}>`);
+    pushHierarchyRows(child, depth + 1, rows);
+    rows.push(`${depth}|</${tagName}>`);
+  }
+}
+
+function buildHierarchyRowsText(doc) {
+  const rows = [];
+  pushHierarchyRows(doc, 0, rows);
+  return rows.join('\n');
+}
+
 function extractDocumentArtifacts(source) {
   const startedAt = Date.now();
   const doc = parse5.parse(source);
@@ -171,9 +193,11 @@ function extractDocumentArtifacts(source) {
     scripts: [],
     bodyHtml: '',
     shellHtml: '',
+    hierarchyRowsText: '',
   };
 
   walkAndExtractResiduals(doc, artifacts);
+  artifacts.hierarchyRowsText = buildHierarchyRowsText(doc);
 
   if (bodyNode) {
     artifacts.bodyHtml = serializeChildNodes(bodyNode);
@@ -204,6 +228,7 @@ function extractDocumentArtifacts(source) {
     shellBytes: artifacts.shellHtml.length,
     bodyHtml: artifacts.bodyHtml,
     bodyBytes: artifacts.bodyHtml.length,
+    hierarchyRowsText: artifacts.hierarchyRowsText,
     styleCount: artifacts.styles.length,
     styleBytes,
     scriptCount: artifacts.scripts.length,
@@ -226,6 +251,7 @@ function setHtml(nextHtml, meta) {
       title: parsed.title,
       shellHtml: parsed.shellHtml,
       bodyHtml: parsed.bodyHtml,
+      hierarchyRowsText: parsed.hierarchyRowsText,
       styles: parsed.styles,
       scripts: parsed.scripts,
     };
@@ -238,6 +264,7 @@ function setHtml(nextHtml, meta) {
       lines,
       parseMs: parsed.parseMs,
       title: parsed.title,
+      hierarchyRows: parsed.hierarchyRowsText,
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
       styleCount: parsed.styleCount,
