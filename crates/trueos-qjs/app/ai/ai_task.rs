@@ -41,7 +41,7 @@ pub enum EnsureStartedResult {
 }
 
 pub fn ensure_started(spawner: &Spawner) -> EnsureStartedResult {
-    if !qjs::browser_task::default_browser_started() {
+    if !qjs::truesurfer_qjs_vm_task::default_browser_started() {
         return EnsureStartedResult::BrowserNotReady;
     }
 
@@ -171,7 +171,7 @@ unsafe extern "C" fn qjs_browser_rpc_start(
             browser_window_id = window_id_f as u32;
         }
     }
-    let id = qjs::browser_task::queue_browser_rpc(method, args_json, browser_window_id);
+    let id = qjs::truesurfer_qjs_vm_task::queue_browser_rpc(method, args_json, browser_window_id);
     qjs::JS_NewFloat64(ctx, id as f64)
 }
 
@@ -193,7 +193,7 @@ unsafe extern "C" fn qjs_browser_rpc_poll(
         return qjs::JSValue::undefined();
     }
     let id = id_f as u32;
-    let Some(payload) = qjs::browser_task::take_browser_rpc_result(id) else {
+    let Some(payload) = qjs::truesurfer_qjs_vm_task::take_browser_rpc_result(id) else {
         return qjs::JSValue::undefined();
     };
     qjs::JS_NewStringLen(ctx, payload.as_ptr() as *const c_char, payload.len())
