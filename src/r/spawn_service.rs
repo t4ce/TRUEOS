@@ -796,7 +796,7 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled(
         "ui2",
-        crate::r::readiness::GFX_BACKEND_READY,
+        crate::r::readiness::LOADSCREEN_END,
         &UI2_STARTED,
         spawn_ui2,
     ),
