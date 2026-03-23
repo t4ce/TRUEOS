@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use embassy_executor::{SendSpawner, SpawnError, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -86,6 +86,7 @@ define_started_flags!(
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
     GFX_VIRGL_READY_TASK_STARTED,
+    GFX_BOOT_FRAME_READY_TASK_STARTED,
     GFX_VIRGL_CURSOR_OVERLAY_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     GFX_LOADSCREEN_STARTED,
@@ -158,6 +159,7 @@ impl TruesurferFactory {
 }
 
 static TRUESURFER_FACTORY: Mutex<TruesurferFactory> = Mutex::new(TruesurferFactory::new());
+static GFX_VIRGL_RETRY_AFTER_MS: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn boot_probe_ms() -> u64 {
@@ -400,6 +402,39 @@ fn spawn_gfx_virgl_ready_task(spawner: Spawner) -> SpawnAttempt {
 }
 
 #[embassy_executor::task]
+async fn gfx_boot_frame_ready_task() {
+    crate::log!(
+        "boot-probe: gfx-boot-frame-ready task start ms={}\n",
+        boot_probe_ms()
+    );
+
+    loop {
+        let mut ready = false;
+        crate::gfx::with_cabi_frame_lock(|| {
+            let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0x000000) };
+            if begin_rc == 0 {
+                unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+                ready = true;
+            }
+        });
+
+        if ready {
+            crate::r::readiness::set(crate::r::readiness::GFX_BOOT_FRAME_READY);
+            crate::log!("boot-probe: gfx-boot-frame-ready ms={}\n", boot_probe_ms());
+            return;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(25)).await;
+    }
+}
+
+fn spawn_gfx_boot_frame_ready_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(gfx_boot_frame_ready_task())
+    })
+}
+
+#[embassy_executor::task]
 async fn gfx_virgl_cursor_overlay_task() {
     crate::log!(
         "boot-probe: gfx-cursor-overlay task start ms={}\n",
@@ -427,11 +462,25 @@ fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
 fn gfx_switched() -> bool {
     #[cfg(feature = "gfx_virgl")]
     {
+        let now_ms = boot_probe_ms();
         if crate::gfx::is_virgl_active() {
+            GFX_VIRGL_RETRY_AFTER_MS.store(0, Ordering::Release);
             return true;
         }
+        let retry_after_ms = GFX_VIRGL_RETRY_AFTER_MS.load(Ordering::Acquire);
+        if retry_after_ms != 0 && now_ms < retry_after_ms {
+            return false;
+        }
         if crate::gfx::is_virgl_present_cached() {
-            return crate::gfx::switch_to_virgl();
+            if crate::gfx::switch_to_virgl() {
+                GFX_VIRGL_RETRY_AFTER_MS.store(0, Ordering::Release);
+                return true;
+            }
+
+            // A failed virgl init is usually not recoverable within the next
+            // scheduler tick. Back off to avoid log storms and repeated heavy
+            // re-initialization while the rest of boot continues.
+            GFX_VIRGL_RETRY_AFTER_MS.store(now_ms.saturating_add(1000), Ordering::Release);
         }
         false
     }
@@ -758,6 +807,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_gfx_virgl_ready_task,
     ),
     TaskSpec::enabled(
+        "gfx-boot-frame-ready",
+        crate::r::readiness::GFX_BACKEND_READY,
+        &GFX_BOOT_FRAME_READY_TASK_STARTED,
+        spawn_gfx_boot_frame_ready_task,
+    ),
+    TaskSpec::enabled(
         "gfx-virgl-cursor-overlay",
         crate::r::readiness::LOADSCREEN_END,
         &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
@@ -765,7 +820,7 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled(
         "gfx_loadscreen",
-        crate::r::readiness::GFX_BACKEND_READY,
+        crate::r::readiness::GFX_BOOT_FRAME_READY,
         &GFX_LOADSCREEN_STARTED,
         spawn_gfx_loadscreen,
     ),
@@ -777,7 +832,7 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled(
         "gfx-texture-upload-service",
-        crate::r::readiness::GFX_BACKEND_READY,
+        crate::r::readiness::GFX_BOOT_FRAME_READY,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
@@ -848,12 +903,7 @@ static TASKS: &[TaskSpec] = &[
         &BOOT_WS_SMOKE_STARTED,
         spawn_boot_ws_smoke,
     ),
-    TaskSpec::disabled(
-        "smtp-smoke",
-        crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
-        &SMTP_SMOKE_STARTED,
-        spawn_smtp_smoke,
-    ),
+    TaskSpec::enabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
     TaskSpec::disabled(
         "boot-netbench",
         0,

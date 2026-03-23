@@ -1,5 +1,6 @@
 import * as lightningcss from 'trueos:lightningcss';
 import { createComputedStyle } from './cssDefaults.mjs';
+import { SUPPORTED_STYLE_TAGS } from './htmlDefaults.mjs';
 
 const COMPACT_STYLE_FIELDS = [
   'display',
@@ -34,6 +35,9 @@ function isTextNode(node) {
 
 function getAttr(node, name) {
   if (!node || !Array.isArray(node.attrs)) return '';
+  function isSupportedStyleTagName(tagName) {
+    return SUPPORTED_STYLE_TAGS.has(String(tagName || '').toLowerCase());
+  }
   const key = String(name || '').toLowerCase();
   for (let i = 0; i < node.attrs.length; i++) {
     const a = node.attrs[i];
@@ -446,7 +450,9 @@ function collectCssObjects(node, path, out) {
   if (isElement(node)) {
     const tag = String(node.tagName || '').toLowerCase();
     const styleText = getAttr(node, 'style');
-    const parsed = parseInlineStyleToKernelObject(styleText);
+    const parsed = isSupportedStyleTagName(tag)
+      ? parseInlineStyleToKernelObject(styleText)
+      : null;
     if (parsed) {
       out.push({
         path,
@@ -616,6 +622,9 @@ export function buildCssStyleRefIndex(doc) {
   let elementCount = 0;
 
   walkElementTree(doc, 'root', [], (node, path, ancestors) => {
+    const tag = String(node && node.tagName || '').toLowerCase();
+    if (!isSupportedStyleTagName(tag)) return;
+
     const parent = ancestors.length > 0 ? ancestors[ancestors.length - 1] : null;
     const parentStyle = parent && parent.node && parent.node.__trueosComputedStyle
       ? parent.node.__trueosComputedStyle

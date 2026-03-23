@@ -1,0 +1,543 @@
+import * as parse5 from 'parse5';
+import { Buffer } from 'node:buffer';
+
+const MAX_FETCHED_IMAGE_BINARIES = 64;
+
+function getNodeAttr(node, name) {
+  const wanted = String(name || '').toLowerCase();
+  if (!wanted || !node || !Array.isArray(node.attrs)) return '';
+  for (let i = 0; i < node.attrs.length; i += 1) {
+    const attr = node.attrs[i];
+    if (!attr || String(attr.name || '').toLowerCase() !== wanted) continue;
+    return String(attr.value || '');
+  }
+  return '';
+}
+
+function isImageNode(node) {
+  return !!node && typeof node === 'object' && String(node.tagName || '').toLowerCase() === 'img';
+}
+
+function isInlineSvgNode(node) {
+  return !!node && typeof node === 'object' && String(node.tagName || '').toLowerCase() === 'svg';
+}
+
+function inlineSvgNodeToDataUrl(node) {
+  if (!node || typeof node !== 'object') return '';
+  try {
+    const svg = typeof parse5.serializeOuter === 'function'
+      ? String(parse5.serializeOuter(node) || '')
+      : String(parse5.serialize(node) || '');
+    const trimmed = svg.trim();
+    if (!trimmed) return '';
+    return `data:image/svg+xml;utf8,${encodeURIComponent(trimmed)}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+export function createBrowserAssetManager(options = {}) {
+  const cmdStream = options.cmdStream;
+  const host = options.host;
+  const paint = typeof options.paint === 'function' ? options.paint : () => {};
+  const resolveNavigationUrl = typeof options.resolveNavigationUrl === 'function'
+    ? options.resolveNavigationUrl
+    : (url) => String(url || '');
+  const raiseBrowserError = typeof options.raiseBrowserError === 'function'
+    ? options.raiseBrowserError
+    : ((code, message) => {
+      const err = new Error(String(message || 'browser asset error'));
+      err.code = String(code || 'TRUEOS_BROWSER_ASSET_ERROR');
+      throw err;
+    });
+  const describeError = typeof options.describeError === 'function'
+    ? options.describeError
+    : ((err) => String(err && err.message ? err.message : err || 'unknown error'));
+  const onAssetStateChanged = typeof options.onAssetStateChanged === 'function'
+    ? options.onAssetStateChanged
+    : () => {};
+
+  const imageTextureCache = new Map();
+  const imageTextureLoads = new Map();
+  const fetchedImageBinaryUrls = new Set();
+  const prewarmedUrls = new Set();
+  const pendingImagePrimeUrls = new Set();
+  let imagePrimeScheduled = false;
+
+  function maybePrewarmUrl(url) {
+    const value = String(url || '').trim();
+    if (!value || value.startsWith('data:')) return;
+    if (prewarmedUrls.has(value)) return;
+    if (typeof host.__trueosPrewarmUrl !== 'function') return;
+    try {
+      const rc = Number(host.__trueosPrewarmUrl(value) || 0);
+      if (rc >= 0) {
+        prewarmedUrls.add(value);
+      }
+    } catch (_) {}
+  }
+
+  function dataUrlToBytes(url) {
+    const value = String(url || '');
+    const match = value.match(/^data:([^,]*?),(.*)$/s);
+    if (!match) {
+      raiseBrowserError('TRUEOS_BROWSER_IMAGE_DATA_URL_INVALID', 'Image data URL could not be decoded', {
+        url: value,
+      });
+    }
+
+    const meta = String(match[1] || '');
+    const payload = String(match[2] || '');
+    const parts = meta.split(';').map((part) => String(part || '').trim().toLowerCase()).filter(Boolean);
+    const mime = parts.length > 0 && !parts[0].includes('=') ? parts[0] : 'text/plain';
+    const isBase64 = parts.includes('base64');
+
+    if (isBase64) {
+      const decoded = Buffer.from(payload, 'base64');
+      return {
+        mime,
+        bytes: new Uint8Array(decoded.buffer, decoded.byteOffset, decoded.byteLength).slice(),
+      };
+    }
+
+    const text = decodeURIComponent(payload);
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i += 1) {
+      bytes[i] = text.charCodeAt(i) & 0xFF;
+    }
+    return { mime, bytes };
+  }
+
+  function readPngDimensions(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : null;
+    if (!data || data.length < 24) {
+      return { width: 0, height: 0 };
+    }
+    if (
+      data[0] !== 0x89 || data[1] !== 0x50 || data[2] !== 0x4E || data[3] !== 0x47
+      || data[4] !== 0x0D || data[5] !== 0x0A || data[6] !== 0x1A || data[7] !== 0x0A
+    ) {
+      return { width: 0, height: 0 };
+    }
+    if (String.fromCharCode(data[12], data[13], data[14], data[15]) !== 'IHDR') {
+      return { width: 0, height: 0 };
+    }
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    return {
+      width: Math.max(0, view.getUint32(16, false) | 0),
+      height: Math.max(0, view.getUint32(20, false) | 0),
+    };
+  }
+
+  function readJpegDimensions(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : null;
+    if (!data || data.length < 4 || data[0] !== 0xFF || data[1] !== 0xD8) {
+      return { width: 0, height: 0 };
+    }
+
+    let offset = 2;
+    while (offset + 1 < data.length) {
+      while (offset < data.length && data[offset] !== 0xFF) {
+        offset += 1;
+      }
+      while (offset < data.length && data[offset] === 0xFF) {
+        offset += 1;
+      }
+      if (offset >= data.length) break;
+
+      const marker = data[offset];
+      offset += 1;
+
+      if (marker === 0xD8 || marker === 0xD9) {
+        continue;
+      }
+      if (marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7)) {
+        continue;
+      }
+      if (offset + 1 >= data.length) break;
+
+      const segmentLen = (data[offset] << 8) | data[offset + 1];
+      if (segmentLen < 2 || offset + segmentLen > data.length) {
+        break;
+      }
+
+      if (
+        (marker >= 0xC0 && marker <= 0xC3)
+        || (marker >= 0xC5 && marker <= 0xC7)
+        || (marker >= 0xC9 && marker <= 0xCB)
+        || (marker >= 0xCD && marker <= 0xCF)
+      ) {
+        if (segmentLen >= 7) {
+          const height = (data[offset + 3] << 8) | data[offset + 4];
+          const width = (data[offset + 5] << 8) | data[offset + 6];
+          return {
+            width: Math.max(0, width | 0),
+            height: Math.max(0, height | 0),
+          };
+        }
+        break;
+      }
+
+      offset += segmentLen;
+    }
+
+    return { width: 0, height: 0 };
+  }
+
+  function isSvgMime(mime) {
+    const value = String(mime || '').trim().toLowerCase();
+    return value === 'image/svg+xml' || value.endsWith('+svg') || value.includes('svg+xml');
+  }
+
+  function isJpegMime(mime) {
+    const value = String(mime || '').trim().toLowerCase();
+    return value === 'image/jpeg' || value === 'image/jpg';
+  }
+
+  function waitForNextImageUploadTick() {
+    return new Promise((resolve) => {
+      if (typeof setTimeout === 'function') {
+        setTimeout(() => resolve(), 1);
+        return;
+      }
+      throw new Error('image upload wait requires setTimeout');
+    });
+  }
+
+  async function waitForTextureReady(texId) {
+    const id = Math.max(0, Number(texId || 0) | 0);
+    if (id <= 0) {
+      throw new Error('invalid texture id');
+    }
+    while (true) {
+      const status = Math.round(Number(cmdStream.getTextureStatus(id) || 0) || 0);
+      if (status === 2) {
+        return true;
+      }
+      if (status < 0) {
+        throw new Error(`texture upload failed (${status})`);
+      }
+      await waitForNextImageUploadTick();
+    }
+  }
+
+  function resolveFetchableImageKind(url) {
+    const normalizedUrl = String(url || '').toLowerCase();
+    if (/\.png(?:$|[?#])/.test(normalizedUrl)) return 'png';
+    if (/\.jpe?g(?:$|[?#])/.test(normalizedUrl)) return 'jpeg';
+    if (/\.bmp(?:$|[?#])/.test(normalizedUrl)) return 'bmp';
+    if (/\.svg(?:$|[?#])/.test(normalizedUrl)) return 'svg';
+    return '';
+  }
+
+  function beginPageLoad() {
+    fetchedImageBinaryUrls.clear();
+  }
+
+  function noteFetchedImageBinary(url) {
+    const key = String(url || '').trim();
+    if (!key || fetchedImageBinaryUrls.has(key)) return true;
+    if (fetchedImageBinaryUrls.size >= MAX_FETCHED_IMAGE_BINARIES) {
+      return false;
+    }
+    fetchedImageBinaryUrls.add(key);
+    return true;
+  }
+
+  function queueRepaint() {
+    try {
+      paint();
+    } catch (_) {}
+  }
+
+  function createFailedImageTexture(url, error) {
+    return {
+      state: 'error',
+      texId: 0,
+      url: String(url || '').trim(),
+      mime: '',
+      error: String(error || 'image unavailable'),
+    };
+  }
+
+  async function requestReadyImageTexture(url) {
+    const value = String(url || '').trim();
+    if (!value) {
+      raiseBrowserError('TRUEOS_BROWSER_IMAGE_URL_MISSING', 'Image request failed because src was empty');
+    }
+    maybePrewarmUrl(value);
+
+    if (!value.startsWith('data:')) {
+      const requestedKind = resolveFetchableImageKind(value);
+      if (!requestedKind) {
+        raiseBrowserError(
+          'TRUEOS_BROWSER_IMAGE_FETCH_KIND_UNSUPPORTED',
+          'Image fetch is restricted to png, jpeg, bmp, or svg URLs',
+          { url: value },
+        );
+      }
+      if (!noteFetchedImageBinary(value)) {
+        throw new Error(`image fetch limit reached (${MAX_FETCHED_IMAGE_BINARIES})`);
+      }
+    }
+
+    if (typeof host.__trueosResolveReadyImageTexture !== 'function') {
+      raiseBrowserError('TRUEOS_BROWSER_IMAGE_NATIVE_UNAVAILABLE', 'Native image request is unavailable', {
+        url: value,
+      });
+    }
+
+    const result = await host.__trueosResolveReadyImageTexture(value);
+    const texId = Math.max(0, Number(result && result.texId || 0) | 0);
+    if (texId <= 0) {
+      raiseBrowserError('TRUEOS_BROWSER_IMAGE_NATIVE_FAILED', 'Native image request did not yield a texture id', {
+        url: value,
+      });
+    }
+    return {
+      texId,
+      mime: String(result && result.mime || ''),
+      pixelWidth: Math.max(0, Number(result && result.width || 0) | 0),
+      pixelHeight: Math.max(0, Number(result && result.height || 0) | 0),
+    };
+  }
+
+  async function ensureImageTexture(resolvedUrl) {
+    const cacheKey = String(resolvedUrl || '').trim();
+    if (!cacheKey) return null;
+
+    const cached = imageTextureCache.get(cacheKey) || null;
+    if (cached && (cached.state === 'ready' || cached.state === 'error')) {
+      return cached;
+    }
+
+    const inFlight = imageTextureLoads.get(cacheKey) || null;
+    if (inFlight) {
+      return inFlight;
+    }
+
+    imageTextureCache.set(cacheKey, {
+      state: 'loading',
+      texId: 0,
+      url: cacheKey,
+      mime: '',
+      error: '',
+    });
+
+    const task = (async () => {
+      try {
+        let ready;
+        if (cacheKey.startsWith('data:')) {
+          const { mime, bytes } = dataUrlToBytes(cacheKey);
+          const dims = isSvgMime(mime)
+            ? { width: 0, height: 0 }
+            : (isJpegMime(mime) ? readJpegDimensions(bytes) : readPngDimensions(bytes));
+          const texId = Number(
+            (isSvgMime(mime)
+              ? cmdStream.createTextureSvgAsync(bytes)
+              : (isJpegMime(mime)
+                ? cmdStream.createTextureJpegAsync(bytes)
+                : cmdStream.createTexturePngAsync(bytes))) || 0,
+          );
+          if (!Number.isFinite(texId) || texId <= 0) {
+            throw new Error('inline image texture upload failed');
+          }
+          await waitForTextureReady(texId);
+          ready = {
+            state: 'ready',
+            texId,
+            url: cacheKey,
+            mime: String(mime || (isJpegMime(mime) ? 'image/jpeg' : 'image/png')),
+            pixelWidth: Math.max(0, Number(dims.width || 0) | 0),
+            pixelHeight: Math.max(0, Number(dims.height || 0) | 0),
+            error: '',
+          };
+        } else {
+          const requestedKind = resolveFetchableImageKind(cacheKey);
+          if (!requestedKind) {
+            ready = createFailedImageTexture(cacheKey, 'unsupported image URL kind');
+            imageTextureCache.set(cacheKey, ready);
+            return ready;
+          }
+          const loaded = await requestReadyImageTexture(cacheKey);
+          ready = {
+            state: 'ready',
+            texId: Math.max(0, Number(loaded.texId || 0) | 0),
+            url: cacheKey,
+            mime: String(loaded.mime || 'image/png'),
+            pixelWidth: Math.max(0, Number(loaded.pixelWidth || 0) | 0),
+            pixelHeight: Math.max(0, Number(loaded.pixelHeight || 0) | 0),
+            error: '',
+          };
+        }
+        imageTextureCache.set(cacheKey, ready);
+        return ready;
+      } catch (err) {
+        const failed = createFailedImageTexture(cacheKey, describeError(err));
+        imageTextureCache.set(cacheKey, failed);
+        return failed;
+      } finally {
+        imageTextureLoads.delete(cacheKey);
+        try { onAssetStateChanged(cacheKey); } catch (_) {}
+        queueRepaint();
+      }
+    })();
+
+    imageTextureLoads.set(cacheKey, task);
+    return task;
+  }
+
+  function flushQueuedImagePrimes() {
+    imagePrimeScheduled = false;
+    if (pendingImagePrimeUrls.size <= 0) return;
+    const urls = Array.from(pendingImagePrimeUrls);
+    pendingImagePrimeUrls.clear();
+    for (let i = 0; i < urls.length; i += 1) {
+      const resolvedSrc = String(urls[i] || '').trim();
+      if (!resolvedSrc) continue;
+      const cached = imageTextureCache.get(resolvedSrc) || null;
+      if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
+        continue;
+      }
+      void ensureImageTexture(resolvedSrc).catch(() => {});
+    }
+  }
+
+  function scheduleImagePrimeFlush() {
+    if (imagePrimeScheduled) return;
+    imagePrimeScheduled = true;
+    const job = () => {
+      try {
+        flushQueuedImagePrimes();
+      } catch (_) {}
+    };
+    if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
+      Promise.resolve().then(job).catch(() => {
+        imagePrimeScheduled = false;
+      });
+      return;
+    }
+    job();
+  }
+
+  function applyResourcesToRows(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    for (let i = 0; i < list.length; i += 1) {
+      const row = list[i];
+      if (!row || String(row.kind || '') !== 'image') continue;
+      const rawSrc = String(row.src || '').trim();
+      const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
+      row.resolvedSrc = resolvedSrc;
+      row.texId = 0;
+      row.imagePixelWidth = 0;
+      row.imagePixelHeight = 0;
+      if (!resolvedSrc) continue;
+      const cached = imageTextureCache.get(resolvedSrc) || null;
+      if (cached && cached.state === 'ready') {
+        row.texId = Number(cached.texId || 0);
+        row.imagePixelWidth = Math.max(0, Number(cached.pixelWidth || 0) | 0);
+        row.imagePixelHeight = Math.max(0, Number(cached.pixelHeight || 0) | 0);
+      }
+    }
+  }
+
+  function requestAssetsForRows(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    for (let i = 0; i < list.length; i += 1) {
+      const row = list[i];
+      if (!row || String(row.kind || '') !== 'image') continue;
+      const resolvedSrc = String(row.resolvedSrc || '').trim();
+      if (!resolvedSrc) continue;
+      maybePrewarmUrl(resolvedSrc);
+      const cached = imageTextureCache.get(resolvedSrc) || null;
+      if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
+        continue;
+      }
+      pendingImagePrimeUrls.add(resolvedSrc);
+    }
+    scheduleImagePrimeFlush();
+  }
+
+  function collectImagePrimeUrls(node, out = null) {
+    const urls = Array.isArray(out) ? out : [];
+    if (!node || typeof node !== 'object') return urls;
+    if (isImageNode(node)) {
+      const rawSrc = String(getNodeAttr(node, 'src') || '').trim();
+      const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
+      if (resolvedSrc) {
+        urls.push(resolvedSrc);
+      }
+    } else if (isInlineSvgNode(node)) {
+      const resolvedSrc = inlineSvgNodeToDataUrl(node);
+      if (resolvedSrc) {
+        urls.push(resolvedSrc);
+      }
+    }
+    const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+    for (let i = 0; i < kids.length; i += 1) {
+      collectImagePrimeUrls(kids[i], urls);
+    }
+    return urls;
+  }
+
+  function primeHtmlImageUrls(html) {
+    const source = String(html || '');
+    if (!source) return;
+    let parsed;
+    try {
+      parsed = parse5.parse(source);
+    } catch (_) {
+      return;
+    }
+    const urls = collectImagePrimeUrls(parsed, []);
+    for (let i = 0; i < urls.length; i += 1) {
+      const resolvedSrc = String(urls[i] || '').trim();
+      if (!resolvedSrc) continue;
+      maybePrewarmUrl(resolvedSrc);
+      const cached = imageTextureCache.get(resolvedSrc) || null;
+      if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
+        continue;
+      }
+      pendingImagePrimeUrls.add(resolvedSrc);
+    }
+    scheduleImagePrimeFlush();
+    return urls;
+  }
+
+  function summarizeImageUrls(urls) {
+    const unique = new Set();
+    const source = Array.isArray(urls) ? urls : [];
+    for (let i = 0; i < source.length; i += 1) {
+      const value = String(source[i] || '').trim();
+      if (value) unique.add(value);
+    }
+    let pending = 0;
+    let ready = 0;
+    let error = 0;
+    for (const url of unique) {
+      const cached = imageTextureCache.get(url) || null;
+      if (!cached) continue;
+      if (cached.state === 'ready') {
+        ready += 1;
+      } else if (cached.state === 'error') {
+        error += 1;
+      } else {
+        pending += 1;
+      }
+    }
+    return {
+      total: unique.size,
+      pending,
+      ready,
+      error,
+    };
+  }
+
+  return {
+    beginPageLoad,
+    applyResourcesToRows,
+    requestAssetsForRows,
+    primeHtmlImageUrls,
+    summarizeImageUrls,
+  };
+}

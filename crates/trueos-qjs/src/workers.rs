@@ -131,6 +131,29 @@ fn pick_from_pool(
     Some(pool[idx % pool.len()].clone())
 }
 
+#[inline]
+fn pick_any_noncritical(pool: &[(u32, u8, embassy_executor::SendSpawner)]) -> Option<(
+    u32,
+    u8,
+    embassy_executor::SendSpawner,
+)> {
+    if pool.is_empty() {
+        return None;
+    }
+
+    let perf_only: Vec<(u32, u8, embassy_executor::SendSpawner)> = pool
+        .iter()
+        .filter(|(_, kind, _)| *kind == CORE_KIND_PERF)
+        .cloned()
+        .collect();
+
+    if !perf_only.is_empty() {
+        pick_from_pool(&perf_only)
+    } else {
+        pick_from_pool(pool)
+    }
+}
+
 fn pick_spawner_with_policy(
     policy: SpawnPolicy,
 ) -> Option<(u32, u8, embassy_executor::SendSpawner)> {
@@ -152,7 +175,7 @@ fn pick_spawner_with_policy(
     }
 
     match policy {
-        SpawnPolicy::AnyNonCritical => pick_from_pool(&eligible),
+        SpawnPolicy::AnyNonCritical => pick_any_noncritical(&eligible),
     }
 }
 
