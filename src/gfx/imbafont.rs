@@ -40,6 +40,11 @@ struct ImbaFontIcon {
     mesh: ImbaFontIconMesh,
 }
 
+#[derive(Clone, Copy)]
+struct ImbaFontLayoutMetric {
+    metric: SvgGlyphMetric,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImbaFontFace {
     Regular,
@@ -146,6 +151,10 @@ static IMBAFONT_REGULAR_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
 static IMBAFONT_BLOCK_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
 static IMBAFONT_GROW_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
 static IMBAFONT_IMPACT_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
+static IMBAFONT_REGULAR_LAYOUT_METRICS: Once<Vec<ImbaFontLayoutMetric>> = Once::new();
+static IMBAFONT_BLOCK_LAYOUT_METRICS: Once<Vec<ImbaFontLayoutMetric>> = Once::new();
+static IMBAFONT_GROW_LAYOUT_METRICS: Once<Vec<ImbaFontLayoutMetric>> = Once::new();
+static IMBAFONT_IMPACT_LAYOUT_METRICS: Once<Vec<ImbaFontLayoutMetric>> = Once::new();
 
 #[inline]
 fn icon_scale(index: usize, total: usize, scale_start: f32, scale_end: f32) -> f32 {
@@ -256,6 +265,29 @@ fn icons_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontIcon> {
         ImbaFontFace::Block => IMBAFONT_BLOCK_ICONS.call_once(build),
         ImbaFontFace::Grow => IMBAFONT_GROW_ICONS.call_once(build),
         ImbaFontFace::Impact => IMBAFONT_IMPACT_ICONS.call_once(build),
+    }
+}
+
+fn layout_metrics_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontLayoutMetric> {
+    let metrics = parse_metrics(metrics_bytes_for_face(face));
+    let assets = assets_for_face(face);
+
+    let build = || {
+        let mut layout_metrics = Vec::with_capacity(assets.len());
+        for asset in assets {
+            let Some(metric) = metrics.get(asset.ch as usize).copied().flatten() else {
+                continue;
+            };
+            layout_metrics.push(ImbaFontLayoutMetric { metric });
+        }
+        layout_metrics
+    };
+
+    match face {
+        ImbaFontFace::Regular => IMBAFONT_REGULAR_LAYOUT_METRICS.call_once(build),
+        ImbaFontFace::Block => IMBAFONT_BLOCK_LAYOUT_METRICS.call_once(build),
+        ImbaFontFace::Grow => IMBAFONT_GROW_LAYOUT_METRICS.call_once(build),
+        ImbaFontFace::Impact => IMBAFONT_IMPACT_LAYOUT_METRICS.call_once(build),
     }
 }
 
@@ -445,8 +477,8 @@ pub fn layout_run_centered(
     scale_start: f32,
     scale_end: f32,
 ) -> Option<ImbaFontRunLayout> {
-    let icons = icons_for_face(face);
-    if icons.is_empty() {
+    let layout_metrics = layout_metrics_for_face(face);
+    if layout_metrics.is_empty() {
         return None;
     }
 
@@ -455,11 +487,11 @@ pub fn layout_run_centered(
     let mut vis_right = f32::NEG_INFINITY;
     let mut vis_top = f32::INFINITY;
     let mut vis_bottom = f32::NEG_INFINITY;
-    let icon_count = icons.len();
+    let icon_count = layout_metrics.len();
 
-    for (index, icon) in icons.iter().enumerate() {
+    for (index, layout_metric) in layout_metrics.iter().enumerate() {
         let icon_tile_h = tile_h * icon_scale(index, icon_count, scale_start, scale_end);
-        let metric = icon.metric;
+        let metric = layout_metric.metric;
         vis_left = vis_left.min(pen_x + metric.ink_left * icon_tile_h);
         vis_right = vis_right.max(pen_x + metric.ink_right * icon_tile_h);
         vis_top = vis_top.min((metric.ink_top - metric.baseline_y) * icon_tile_h);
