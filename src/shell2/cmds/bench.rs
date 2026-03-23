@@ -17,6 +17,8 @@ use crate::shell2::CommandSessionInputResult;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const NETBENCH_URL: &str = "http://ipv4.download.thinkbroadband.com/5GB.zip";
+const INTERNAL_NETBENCH_DEFAULT_FLOWS: usize = 2;
+const INTERNAL_NETBENCH_MAX_FLOWS: usize = 4;
 const FILEBENCH_PATH: &str = "bench-lorem-100mb.txt";
 const FILEBENCH_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
 const FILEBENCH_PATTERN: &[u8] = b"10101010";
@@ -24,9 +26,13 @@ const CPUBENCH_PHASE_MS: u64 = 10_000;
 const CPUBENCH_STOP_GRACE_MS: u64 = 2_000;
 const PROGRESS_LOG_MS: u64 = 3000;
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const BENCH_MENU_ROWS: [[&str; 2]; 3] = [
+const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
     ["cpu", "Run CPU-only compute benchmark"],
     ["net", "Run network throughput benchmark"],
+    [
+        "netk",
+        "Run internal netbench (literal URL, default 2 flows)",
+    ],
     ["file", "Run TRUEOSFS streaming write benchmark"],
 ];
 
@@ -409,13 +415,12 @@ pub(crate) fn try_parse(
         print_usage(io);
         return ParseOutcome::Handled;
     };
-    if args.next().is_some() {
-        print_usage(io);
-        return ParseOutcome::Handled;
-    }
-
     match kind {
         "net" => {
+            if args.next().is_some() {
+                print_usage(io);
+                return ParseOutcome::Handled;
+            }
             if let Some(session_id) = submit_netbench(spawner, io) {
                 ParseOutcome::StartSession(
                     crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
@@ -424,7 +429,24 @@ pub(crate) fn try_parse(
                 ParseOutcome::Handled
             }
         }
+        "netk" => {
+            let url = args.next();
+            let flows = args.next();
+            if args.next().is_some() {
+                print_shell_line(
+                    io,
+                    "bench netk: usage `bench netk [http://ip[:port]/path] [flows]`",
+                );
+                return ParseOutcome::Handled;
+            }
+            submit_internal_netbench(io, url, flows);
+            ParseOutcome::Handled
+        }
         "cpu" => {
+            if args.next().is_some() {
+                print_usage(io);
+                return ParseOutcome::Handled;
+            }
             if let Some(session_id) = submit_cpubench(spawner, io) {
                 ParseOutcome::StartSession(
                     crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
@@ -434,6 +456,10 @@ pub(crate) fn try_parse(
             }
         }
         "file" => {
+            if args.next().is_some() {
+                print_usage(io);
+                return ParseOutcome::Handled;
+            }
             if let Some(session_id) = submit_filebench(spawner, io) {
                 ParseOutcome::StartSession(
                     crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
@@ -596,6 +622,96 @@ fn submit_netbench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
     }
     print_matrix_target_line(&target, "bench net: send `q` in this slot to stop");
     Some(session_id)
+}
+
+fn submit_internal_netbench(
+    io: &'static dyn ShellBackend2,
+    url_arg: Option<&str>,
+    flows_arg: Option<&str>,
+) {
+    if crate::net::device_count() == 0 {
+        print_shell_line(io, "bench netk: no NIC available");
+        return;
+    }
+
+    let url = url_arg.unwrap_or(NETBENCH_URL);
+    let Some(parsed) = parse_http_url(url) else {
+        print_shell_line(io, "bench netk: bad url");
+        return;
+    };
+
+    let flows = match flows_arg {
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(n) if (1..=INTERNAL_NETBENCH_MAX_FLOWS).contains(&n) => n,
+            _ => {
+                print_shell_line(io, "bench netk: flows must be 1..=4");
+                return;
+            }
+        },
+        None => INTERNAL_NETBENCH_DEFAULT_FLOWS,
+    };
+
+    let nic_index = crate::net::primary_device_index();
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS netbench\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+        parsed.path.as_str(),
+        parsed.host_header.as_str()
+    );
+
+    let submitted = match parsed.target {
+        HostTarget::V4(ip) => (0..flows)
+            .filter(|_| {
+                crate::net::adapter::internal_netbench_submit(
+                    nic_index,
+                    ip,
+                    parsed.port,
+                    request.as_bytes(),
+                )
+            })
+            .count(),
+        HostTarget::V6(ip) => (0..flows)
+            .filter(|_| {
+                crate::net::adapter::internal_netbench_submit_v6(
+                    nic_index,
+                    ip,
+                    parsed.port,
+                    request.as_bytes(),
+                )
+            })
+            .count(),
+        HostTarget::Name(_) => {
+            print_shell_line(
+                io,
+                "bench netk: use a literal http://ip[:port]/path URL to avoid DNS/readiness noise",
+            );
+            return;
+        }
+    };
+
+    print_shell_line(
+        io,
+        format!(
+            "bench netk: nic={} ({}) url={} flows={} submitted={}",
+            nic_index,
+            crate::net::device_name_at(nic_index).unwrap_or("Unknown"),
+            url,
+            flows,
+            submitted
+        )
+        .as_str(),
+    );
+
+    if submitted == 0 {
+        print_shell_line(
+            io,
+            "bench netk: submit failed (queue full or service not ready)",
+        );
+    } else {
+        print_shell_line(
+            io,
+            "bench netk: watch for `netbench-internal:` logs for rx/progress/done",
+        );
+    }
 }
 
 #[embassy_executor::task(pool_size = 2)]

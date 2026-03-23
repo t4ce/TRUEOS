@@ -2,6 +2,9 @@ import * as lightningcss from 'trueos:lightningcss';
 import { createComputedStyle } from './cssDefaults.mjs';
 import { SUPPORTED_STYLE_TAGS } from './htmlDefaults.mjs';
 
+const CSS_MAX_STYLE_ROOTS = 1;
+const CSS_MAX_TOTAL_BYTES = 15 * 1024;
+
 const COMPACT_STYLE_FIELDS = [
   'display',
   'color',
@@ -33,11 +36,12 @@ function isTextNode(node) {
   return !!node && typeof node === 'object' && node.nodeName === '#text' && typeof node.value === 'string';
 }
 
+function isSupportedStyleTagName(tagName) {
+  return SUPPORTED_STYLE_TAGS.has(String(tagName || '').toLowerCase());
+}
+
 function getAttr(node, name) {
   if (!node || !Array.isArray(node.attrs)) return '';
-  function isSupportedStyleTagName(tagName) {
-    return SUPPORTED_STYLE_TAGS.has(String(tagName || '').toLowerCase());
-  }
   const key = String(name || '').toLowerCase();
   for (let i = 0; i < node.attrs.length; i++) {
     const a = node.attrs[i];
@@ -499,6 +503,72 @@ function collectCssObjects(node, path, out) {
   }
 }
 
+function cssObjectKind(entry) {
+  return String(entry && entry.style && entry.style.kind || 'unknown');
+}
+
+function isStyleRootKind(kind) {
+  return kind === 'stylesheet' || kind === 'external';
+}
+
+function cssObjectByteLength(entry) {
+  const style = entry && entry.style || null;
+  const kind = cssObjectKind(entry);
+  if (kind === 'stylesheet') {
+    return String(style && style.css || style && style.source || '').length;
+  }
+  if (kind === 'inline') {
+    return String(style && style.css || style && style.source || '').length;
+  }
+  return 0;
+}
+
+function limitCssObjects(cssObjects) {
+  const limited = [];
+  let styleRootCount = 0;
+  let keptRootCount = 0;
+  let keptCssBytes = 0;
+  let droppedRootCount = 0;
+
+  for (let i = 0; i < cssObjects.length; i++) {
+    const entry = cssObjects[i];
+    const kind = cssObjectKind(entry);
+    if (!isStyleRootKind(kind)) {
+      limited.push(entry);
+      continue;
+    }
+
+    styleRootCount += 1;
+    if (keptRootCount >= CSS_MAX_STYLE_ROOTS) {
+      droppedRootCount += 1;
+      continue;
+    }
+
+    keptRootCount += 1;
+    keptCssBytes += cssObjectByteLength(entry);
+    limited.push(entry);
+  }
+
+  if (keptCssBytes > CSS_MAX_TOTAL_BYTES) {
+    return {
+      cssObjects: [],
+      skipped: true,
+      summary: `css-skip roots=${keptRootCount}/${styleRootCount} bytes=${keptCssBytes} limit=${CSS_MAX_TOTAL_BYTES}`,
+    };
+  }
+
+  let summary = '';
+  if (droppedRootCount > 0) {
+    summary = `css-limit roots=${keptRootCount}/${styleRootCount} bytes=${keptCssBytes} limit=${CSS_MAX_TOTAL_BYTES}`;
+  }
+
+  return {
+    cssObjects: limited,
+    skipped: false,
+    summary,
+  };
+}
+
 function formatCssRows(cssText, baseDepth) {
   const raw = String(cssText || '').trim();
   if (!raw) return [];
@@ -608,7 +678,23 @@ function walkElementTree(node, path, ancestors, visit) {
 }
 
 export function buildCssStyleRefIndex(doc) {
-  const cssObjects = extractCssObjects(doc);
+  const extractedCssObjects = extractCssObjects(doc);
+  const limit = limitCssObjects(extractedCssObjects);
+  if (limit.skipped) {
+    return {
+      styleTable: [],
+      nodeStyleRefs: [],
+      styleSlotCount: 0,
+      nodeRefCount: 0,
+      inlineStyleCount: 0,
+      stylesheetCount: 0,
+      ruleCount: 0,
+      elementCount: 0,
+      summary: limit.summary,
+    };
+  }
+
+  const cssObjects = limit.cssObjects;
   const context = buildCssContext(cssObjects);
   const cssSection = {
     byPath: context.byPath,
@@ -662,6 +748,7 @@ export function buildCssStyleRefIndex(doc) {
     stylesheetCount: context.stylesheets.length,
     ruleCount: context.rules.length,
     elementCount,
+    summary: limit.summary,
   };
 }
 
@@ -727,12 +814,17 @@ export function extractCssObjects(doc) {
 }
 
 export function extractCssSection(doc) {
-  const cssObjects = extractCssObjects(doc);
+  const limit = limitCssObjects(extractCssObjects(doc));
+  const cssObjects = limit.cssObjects;
   const context = buildCssContext(cssObjects);
   const rows = [
     { depth: 0, text: '' },
     { depth: 0, text: '/* CSS */' },
   ];
+
+  if (limit.summary) {
+    rows.push({ depth: 0, text: `/* ${limit.summary} */` });
+  }
 
   if (cssObjects.length <= 0) {
     rows.push({ depth: 0, text: '(no styles found)' });
