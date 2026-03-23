@@ -31,6 +31,9 @@ const TRUESURFER_ID_PROP: &[u8] = b"__trueosTruesurferBrowserId\0";
 const TRUESURFER_OBJ_PROP: &[u8] = b"__trueosTruesurfer\0";
 const TRUESURFER_SET_HTML_PROP: &[u8] = b"setHtml\0";
 const TRUESURFER_META_URL_PROP: &[u8] = b"url\0";
+const TRUESURFER_BUSY_PUMP_BUDGET: usize = 64;
+const TRUESURFER_BUSY_SLEEP_MS: u64 = 1;
+const TRUESURFER_IDLE_SLEEP_MS: u64 = 16;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HostedBrowserSurfaceState {
@@ -153,21 +156,24 @@ pub fn queue_set_html_with_url_for_browser(
     html: String,
     url: Option<String>,
 ) -> bool {
-    with_browser_state_mut(browser_instance_id, |state| {
-        let html_len = html.len();
+    let html_len = html.len();
+    let queued = with_browser_state_mut(browser_instance_id, |state| {
         state.pending_html = Some(PendingHtml {
             html,
             url: url.unwrap_or_default(),
         });
         state.surface_seq = state.surface_seq.wrapping_add(1);
         state.text_seq = state.text_seq.wrapping_add(1);
+        true
+    })
+    .unwrap_or(false);
+    if queued {
         log_line(format!(
             "qjs-truesurfer[{}]: queued html bytes={}\n",
             browser_instance_id, html_len
         ));
-        true
-    })
-    .unwrap_or(false)
+    }
+    queued
 }
 
 pub fn queue_browser_rpc(_method: String, _args_json: String, _browser_window_id: u32) -> u32 {
@@ -359,6 +365,20 @@ unsafe fn dispatch_pending_html(ctx: *mut qjs::JSContext, browser_instance_id: u
     dispatched
 }
 
+fn browser_has_pending_work(browser_instance_id: u32) -> bool {
+    with_browser_state(browser_instance_id, |state| {
+        state.pending_html.is_some() || !state.keyboard_events.is_empty()
+    })
+    .unwrap_or(false)
+}
+
+unsafe fn runtime_has_pending_work(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext) -> bool {
+    qjs::JS_IsJobPending(rt) > 0
+        || qjs::async_ops::has_pending(ctx)
+        || qjs::timers::has_pending(ctx)
+        || qjs::workers::has_pending_for_ctx(ctx)
+}
+
 #[embassy_executor::task(pool_size = 10)]
 pub async fn ui2_gfx_browser_task(browser_instance_id: u32) {
     if !browser_valid(browser_instance_id) {
@@ -412,19 +432,41 @@ pub async fn ui2_gfx_browser_task(browser_instance_id: u32) {
         qjs::js_free_value(ctx, boot);
 
         loop {
-            if !qjs::vm::pump_runtime_once(rt, ctx, "truesurfer") {
+            let mut busy = false;
+            let mut runtime_alive = true;
+
+            for _ in 0..TRUESURFER_BUSY_PUMP_BUDGET {
+                if !qjs::vm::pump_runtime_once(rt, ctx, "truesurfer") {
+                    runtime_alive = false;
+                    break;
+                }
+
+                let ready = truesurfer_ready(ctx);
+                let _ = with_browser_state_mut(browser_instance_id, |state| {
+                    state.api_ready = ready;
+                });
+                if ready {
+                    let _ = dispatch_pending_html(ctx, browser_instance_id);
+                }
+
+                busy = !ready
+                    || browser_has_pending_work(browser_instance_id)
+                    || runtime_has_pending_work(rt, ctx);
+                if !busy {
+                    break;
+                }
+            }
+
+            if !runtime_alive {
                 break;
             }
 
-            let ready = truesurfer_ready(ctx);
-            let _ = with_browser_state_mut(browser_instance_id, |state| {
-                state.api_ready = ready;
-            });
-            if ready {
-                let _ = dispatch_pending_html(ctx, browser_instance_id);
+            if !busy && !runtime_has_pending_work(rt, ctx) && truesurfer_ready(ctx) {
+                Timer::after(EmbassyDuration::from_millis(TRUESURFER_IDLE_SLEEP_MS)).await;
+                continue;
             }
 
-            Timer::after(EmbassyDuration::from_millis(16)).await;
+            Timer::after(EmbassyDuration::from_millis(TRUESURFER_BUSY_SLEEP_MS)).await;
         }
 
         let _ = qjs::vm::teardown_main_context(rt, ctx, 500).await;

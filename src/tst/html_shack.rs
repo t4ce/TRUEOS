@@ -11,6 +11,7 @@ const HTML_FETCH_IDLE_MS: u64 = 100;
 const HTML_PREVIEW_FRONT_LINES: usize = 5;
 const HTML_PREVIEW_LINE_CHARS: usize = 160;
 const HTML_SHACK_BROWSER_HANDOFF_ENABLE: bool = true;
+const HTML_SHACK_PREVIEW_ENABLE: bool = false;
 
 /// A fetched HTML document.
 ///
@@ -186,7 +187,6 @@ fn handoff_ready_html_to_boot_browsers(html: &Html) {
     for browser_instance_id in trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
         .iter()
         .copied()
-        .take(3)
     {
         let handed_off = trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
             browser_instance_id,
@@ -278,7 +278,9 @@ pub async fn html_fetch_service() {
 
         match crate::r::net::html::fetch_html_best_effort(fetch_url_buf).await {
             Ok(html) => {
-                log_html_preview(fetch_url.as_str(), html.as_str());
+                if HTML_SHACK_PREVIEW_ENABLE {
+                    log_html_preview(fetch_url.as_str(), html.as_str());
+                }
                 let ready = Html::new(fetch_url.as_str(), html);
                 let ready_len = store_ready_html(ready.clone());
                 crate::log!(

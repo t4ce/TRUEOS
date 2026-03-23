@@ -2035,8 +2035,7 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
                 window.alpha,
             );
         }
-        Ui2SystemButtonAction::Minimize
-        | Ui2SystemButtonAction::ToggleMaximize => {
+        Ui2SystemButtonAction::Minimize | Ui2SystemButtonAction::ToggleMaximize => {
             let icon_id = match action {
                 Ui2SystemButtonAction::Fork => 0,
                 Ui2SystemButtonAction::Minimize => 5,
