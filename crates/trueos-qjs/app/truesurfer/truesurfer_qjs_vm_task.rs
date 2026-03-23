@@ -40,6 +40,7 @@ const TRUESURFER_RESULT_BYTES_PROP: &[u8] = b"bytes\0";
 const TRUESURFER_RESULT_LINES_PROP: &[u8] = b"lines\0";
 const TRUESURFER_RESULT_PARSE_MS_PROP: &[u8] = b"parseMs\0";
 const TRUESURFER_RESULT_TITLE_PROP: &[u8] = b"title\0";
+const TRUESURFER_RESULT_HIERARCHY_ROWS_PROP: &[u8] = b"hierarchyRows\0";
 const TRUESURFER_RESULT_SHELL_BYTES_PROP: &[u8] = b"shellBytes\0";
 const TRUESURFER_RESULT_BODY_BYTES_PROP: &[u8] = b"bodyBytes\0";
 const TRUESURFER_RESULT_STYLE_COUNT_PROP: &[u8] = b"styleCount\0";
@@ -113,6 +114,7 @@ pub struct ParseResult {
     pub lines: u32,
     pub parse_ms: u32,
     pub title: String,
+    pub hierarchy_rows: String,
     pub shell_bytes: u32,
     pub body_bytes: u32,
     pub style_count: u32,
@@ -164,34 +166,30 @@ fn text_row(text: &str, indent_px: u32) -> HostedBrowserTextRow {
     }
 }
 
-fn build_stats_text_row(parse_result: &ParseResult) -> String {
-    if parse_result.ok {
-        format!(
-            "stats=bytes:{} lines:{} ms:{} shell:{} body:{} styles:{} scripts:{}",
-            parse_result.bytes,
-            parse_result.lines,
-            parse_result.parse_ms,
-            parse_result.shell_bytes,
-            parse_result.body_bytes,
-            parse_result.style_count,
-            parse_result.script_count,
-        )
-    } else {
-        format!("stats=error:{}", parse_result.error)
+fn build_waiting_text_state() -> HostedBrowserTextState {
+    HostedBrowserTextState {
+        rows: vec![text_row("waiting html", 0)],
     }
 }
 
-fn build_text_state_from_parse_result(parse_result: &ParseResult) -> HostedBrowserTextState {
-    let title = parse_result.title.trim();
-    let title_row = if title.is_empty() {
-        String::from("title=(untitled)")
-    } else {
-        format!("title={title}")
-    };
-    let mut rows = Vec::with_capacity(2);
-    rows.push(text_row(title_row.as_str(), 0));
-    let stats_row = build_stats_text_row(parse_result);
-    rows.push(text_row(stats_row.as_str(), 0));
+fn build_text_state_from_hierarchy_rows(rows_text: &str) -> HostedBrowserTextState {
+    let mut rows = Vec::new();
+    for line in rows_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((depth_raw, text)) = trimmed.split_once('|') else {
+            continue;
+        };
+        let depth = depth_raw.parse::<u32>().unwrap_or(0);
+        rows.push(text_row(text, depth.saturating_mul(8)));
+    }
+
+    if rows.is_empty() {
+        return build_waiting_text_state();
+    }
+
     HostedBrowserTextState { rows }
 }
 
@@ -240,7 +238,7 @@ fn with_browser_state_mut<R>(
     }
     let mut guard = TRUESURFER_STATE.lock();
     let state = guard.entry(browser_instance_id).or_insert_with(|| BrowserInstanceState {
-        text_state: HostedBrowserTextState::default(),
+        text_state: build_waiting_text_state(),
         render_tex_id: default_render_tex_id(browser_instance_id),
         surface_state: HostedBrowserSurfaceState {
             viewport_width: 512,
@@ -526,7 +524,7 @@ unsafe fn dispatch_html(
             error: String::from("truesurfer setHtml exception"),
             ..ParseResult::default()
         };
-        let text_state = build_text_state_from_parse_result(&parse_result);
+        let text_state = build_waiting_text_state();
         let _ = with_browser_state_mut(browser_instance_id, |state| {
             state.last_parse_result = Some(parse_result.clone());
             state.text_state = text_state;
@@ -549,6 +547,7 @@ unsafe fn dispatch_html(
         lines: read_result_u32(ctx, result, TRUESURFER_RESULT_LINES_PROP),
         parse_ms: read_result_u32(ctx, result, TRUESURFER_RESULT_PARSE_MS_PROP),
         title: read_result_string(ctx, result, TRUESURFER_RESULT_TITLE_PROP),
+        hierarchy_rows: read_result_string(ctx, result, TRUESURFER_RESULT_HIERARCHY_ROWS_PROP),
         shell_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SHELL_BYTES_PROP),
         body_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_BODY_BYTES_PROP),
         style_count: read_result_u32(ctx, result, TRUESURFER_RESULT_STYLE_COUNT_PROP),
@@ -557,7 +556,7 @@ unsafe fn dispatch_html(
         script_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SCRIPT_BYTES_PROP),
         error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
     };
-    let text_state = build_text_state_from_parse_result(&parse_result);
+    let text_state = build_text_state_from_hierarchy_rows(parse_result.hierarchy_rows.as_str());
 
     let _ = with_browser_state_mut(browser_instance_id, |state| {
         state.last_parse_result = Some(parse_result.clone());
