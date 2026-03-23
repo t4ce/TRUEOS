@@ -10,6 +10,7 @@ import { BLOCK_TAGS, TEXT_LEVEL_SEMANTICS_TAGS } from './htmlDefaults.mjs';
 import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './theme.mjs';
 
 const runtime = resolveRuntime();
+try { console.log('[surfer bootstrap] browser.mjs loaded'); } catch (_) {}
 //registerSvgDemoRoute(runtime.host, { iconSize: 64 });
 if (typeof runtime.host.__trueosBrowserAssetsEnabled === 'undefined') {
   runtime.host.__trueosBrowserAssetsEnabled = 0;
@@ -23,8 +24,6 @@ const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'l
 const SHOW_CLOSING_TAG_ROWS = false;
 const BROWSER_KEYBOARD_LOG_MAX = 128;
 const BROWSER_LAYOUT_LOG_MAX_ROWS = 24;
-const BROWSER_HTML_PREVIEW_FRONT_LINES = 5;
-const BROWSER_HTML_PREVIEW_LINE_CHARS = 160;
 
 let cachedHtml = '';
 let cachedDoc = null;
@@ -121,15 +120,24 @@ function recordKeyboardLog(payload) {
   return entry;
 }
 
-const assetManager = createBrowserAssetManager({
-  cmdStream,
-  host: runtime.host,
-  paint: requestBrowserLayoutRefresh,
-  resolveNavigationUrl,
-  raiseBrowserError,
-  describeError,
-  onAssetStateChanged: requestBrowserLayoutRefresh,
-});
+let assetManager = null;
+try { console.log('[surfer bootstrap] asset manager init start'); } catch (_) {}
+try {
+  assetManager = createBrowserAssetManager({
+    cmdStream,
+    host: runtime.host,
+    paint: requestBrowserLayoutRefresh,
+    resolveNavigationUrl,
+    raiseBrowserError,
+    describeError,
+    onAssetStateChanged: requestBrowserLayoutRefresh,
+  });
+  try { console.log('[surfer bootstrap] asset manager init ok'); } catch (_) {}
+} catch (err) {
+  try {
+    console.log('[surfer bootstrap] asset manager init failed', String(err && err.stack ? err.stack : err));
+  } catch (_) {}
+}
 
 const BROWSER_INTERACTION_EXTERNAL_RESULT = Object.freeze({
   ok: 0,
@@ -777,21 +785,30 @@ function buildDocFromParsed(parsed, vw, context = 'document') {
   // That is the seam we want for N-browser rollout, backend swapping, and
   // reducing hidden coupling in browser.mjs. Leave the compatibility fields
   // below in place for now while the rest of the browser catches up.
+  const buildStartMs = nowMs();
   const pageModel = buildWorldPageModel(parsed, {
     context,
+    host: runtime.host,
     raiseBrowserError,
     describeError,
   });
+  const worldMs = Math.max(0, nowMs() - buildStartMs);
+  const layoutStartMs = nowMs();
   const layoutModel = realizePageModel(pageModel, vw, {
     context,
     host: runtime.host,
     raiseBrowserError,
     describeError,
   });
+  const layoutMs = Math.max(0, nowMs() - layoutStartMs);
+  const totalMs = Math.max(0, nowMs() - buildStartMs);
   runtime.host.__trueosKernelCssObjects = Array.isArray(pageModel && pageModel.css && pageModel.css.cssObjects)
     ? pageModel.css.cssObjects
     : [];
   publishThemeLayoutInteractives(layoutModel.themeLayout);
+  logSurferProbe(
+    `probe summary context=${context} world_ms=${worldMs} layout_ms=${layoutMs} total_ms=${totalMs} rows=${Array.isArray(pageModel && pageModel.rows) ? pageModel.rows.length : 0} interactives=${Array.isArray(layoutModel && layoutModel.themeLayout && layoutModel.themeLayout.interactives) ? layoutModel.themeLayout.interactives.length : 0} viewport=${vw}`,
+  );
   return {
     dom: pageModel.dom,
     pageModel,
@@ -810,6 +827,7 @@ function buildDocFromParsed(parsed, vw, context = 'document') {
 function buildDocFromHtml(html, vw, context = 'document') {
   const source = String(html || '');
   let parsed;
+  const parseStartMs = nowMs();
   try {
     parsed = parse5.parse(source);
   } catch (err) {
@@ -820,6 +838,8 @@ function buildDocFromHtml(html, vw, context = 'document') {
       err,
     );
   }
+  const parseMs = Math.max(0, nowMs() - parseStartMs);
+  logSurferProbe(`probe parse5 ms=${parseMs} context=${context} bytes=${source.length} viewport=${vw}`);
   return buildDocFromParsed(parsed, vw, context);
 }
 
@@ -1498,7 +1518,9 @@ function getViewport() {
 function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
-  logHtmlPreview(currentPageUrl, cachedHtml);
+  try {
+    console.log(`${surferLogPrefix()}${surferIdentitySuffix()} setHtml bytes=${cachedHtml.length} url=${currentPageUrl || '(unknown)'}`);
+  } catch (_) {}
   if (browserAssetsEnabled() && assetManager && typeof assetManager.beginPageLoad === 'function') {
     assetManager.beginPageLoad();
   }
@@ -1533,46 +1555,48 @@ function hasConsoleLog() {
   return typeof console !== 'undefined' && typeof console.log === 'function';
 }
 
+function browserInstanceId() {
+  return Math.max(0, Number(runtime.host.__trueosBrowserInstanceId || 0) | 0);
+}
+
+function safeCpuProfile() {
+  const fn = runtime.host.__trueosCpuProfile;
+  if (typeof fn !== 'function') return null;
+  try {
+    const profile = fn();
+    return profile && typeof profile === 'object' ? profile : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function surferIdentitySuffix() {
+  const browserId = browserInstanceId();
+  const profile = safeCpuProfile();
+  const parts = [];
+  if (browserId > 0) parts.push(`browser=${browserId}`);
+  if (profile) {
+    parts.push(`ap=${Math.max(0, Number(profile.slot || 0) | 0)}`);
+    parts.push(`lapic=${Math.max(0, Number(profile.lapic_id || 0) | 0)}`);
+    if (typeof profile.core_kind_name === 'string' && profile.core_kind_name) {
+      parts.push(`core=${profile.core_kind_name}`);
+    }
+  }
+  return parts.length > 0 ? ` ${parts.join(' ')}` : '';
+}
+
 function surferLogPrefix() {
   return `[surfer ${currentWindowId()}]`;
 }
 
-function surferHtmlPreviewLogsEnabled() {
-  const fn = runtime.host.__trueosBrowserHtmlPreviewLogsEnabled;
-  if (typeof fn !== 'function') return true;
+function logSurferProbe(line) {
+  if (!hasConsoleLog()) return false;
   try {
-    return !!fn();
-  } catch (_) {
+    console.log(`${surferLogPrefix()}${surferIdentitySuffix()} ${line}`);
     return true;
+  } catch (_) {
+    return false;
   }
-}
-
-function previewHtmlLine(line) {
-  const text = typeof line === 'string' ? line : String(line == null ? '' : line);
-  if (text.length <= BROWSER_HTML_PREVIEW_LINE_CHARS) return text;
-  return text.slice(0, BROWSER_HTML_PREVIEW_LINE_CHARS);
-}
-
-function logHtmlPreview(url, html) {
-  if (!surferHtmlPreviewLogsEnabled() || !hasConsoleLog()) return false;
-  const source = typeof html === 'string' ? html : String(html == null ? '' : html);
-  if (!source) return false;
-  const resolvedUrl = typeof url === 'string' && url ? url : '(unknown)';
-  const lines = source.split('\n');
-  const prefix = surferLogPrefix();
-  console.log(`${prefix} received url=${resolvedUrl} bytes=${source.length} lines=${lines.length} front=${BROWSER_HTML_PREVIEW_FRONT_LINES}`);
-  for (let i = 0; i < Math.min(BROWSER_HTML_PREVIEW_FRONT_LINES, lines.length); i += 1) {
-    console.log(`${prefix} [${i + 1}] ${previewHtmlLine(lines[i])}`);
-  }
-  return true;
-}
-
-function consumePendingBootHtml() {
-  const pending = runtime.host.__trueosUiHtml;
-  if (typeof pending !== 'string' || !pending) return false;
-  delete runtime.host.__trueosUiHtml;
-  setHtml(pending);
-  return true;
 }
 
 function formatLayoutRow(row, index, rowX = [], rowY = []) {
@@ -2280,6 +2304,8 @@ runtime.host.__trueosBrowser = {
   },
 };
 
+try { console.log(`${surferLogPrefix()}${surferIdentitySuffix()} browser api installed`); } catch (_) {}
+
 if (typeof (runtime.host.window || runtime.host).addEventListener === 'function') {
   (runtime.host.window || runtime.host).addEventListener('resize', paint);
 }
@@ -2288,4 +2314,3 @@ installQjsInputBridge();
 if (!currentPageUrl) {
   setCurrentPageUrl('about:blank');
 }
-consumePendingBootHtml();
