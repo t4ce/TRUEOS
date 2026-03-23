@@ -89,8 +89,14 @@ pub struct HostedBrowserInteractiveState {
 }
 
 #[derive(Clone, Debug, Default)]
+pub struct HostedBrowserTextRow {
+    pub text: String,
+    pub indent_px: u32,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct HostedBrowserTextState {
-    pub rows: Vec<String>,
+    pub rows: Vec<HostedBrowserTextRow>,
 }
 
 #[derive(Clone, Debug)]
@@ -151,58 +157,84 @@ static TRUESURFER_STATE: Mutex<BTreeMap<u32, BrowserInstanceState>> = Mutex::new
 static BROWSER_RPC_SEQ: AtomicU32 = AtomicU32::new(1);
 static TRUESURFER_HTML_QUEUES: Once<Vec<BrowserHtmlQueue>> = Once::new();
 
-fn build_waiting_text_state(browser_instance_id: u32) -> HostedBrowserTextState {
-    HostedBrowserTextState {
-        rows: vec![
-            format!("browser_id={}", browser_instance_id),
-            String::from("status=waiting-html"),
-            String::from("url="),
-            String::from("title="),
-            String::from("bytes=0"),
-            String::from("lines=0"),
-            String::from("parse_ms=0"),
-            String::from("shell_bytes=0 body_bytes=0"),
-            String::from("style_count=0 style_bytes=0"),
-            String::from("script_count=0 script_bytes=0"),
-        ],
+fn text_row(text: &str, indent_px: u32) -> HostedBrowserTextRow {
+    HostedBrowserTextRow {
+        text: String::from(text),
+        indent_px,
     }
 }
 
-fn build_text_state_from_parse_result(
-    browser_instance_id: u32,
-    parse_result: &ParseResult,
-) -> HostedBrowserTextState {
-    let final_row = if parse_result.ok {
-        format!(
-            "script_count={} script_bytes={}",
-            parse_result.script_count,
-            parse_result.script_bytes
-        )
-    } else {
-        format!("error={}", parse_result.error)
+fn find_tag_open_end(lower_html: &str, tag_name: &str) -> Option<usize> {
+    let open_start = lower_html.find(format!("<{tag_name}").as_str())?;
+    lower_html[open_start..].find('>').map(|offset| open_start + offset + 1)
+}
+
+fn find_tag_close_start(lower_html: &str, tag_name: &str) -> Option<usize> {
+    lower_html.find(format!("</{tag_name}>").as_str())
+}
+
+fn section_has_visible_content(lower_html: &str, tag_name: &str) -> bool {
+    let Some(content_start) = find_tag_open_end(lower_html, tag_name) else {
+        return false;
     };
-    HostedBrowserTextState {
-        rows: vec![
-            format!("browser_id={}", browser_instance_id),
-            format!("status=ok:{}", if parse_result.ok { 1 } else { 0 }),
-            format!("url={}", parse_result.url),
-            format!("title={}", parse_result.title),
-            format!("bytes={}", parse_result.bytes),
-            format!("lines={}", parse_result.lines),
-            format!("parse_ms={}", parse_result.parse_ms),
-            format!(
-                "shell_bytes={} body_bytes={}",
-                parse_result.shell_bytes,
-                parse_result.body_bytes
-            ),
-            format!(
-                "style_count={} style_bytes={}",
-                parse_result.style_count,
-                parse_result.style_bytes
-            ),
-            final_row,
-        ],
+    let Some(content_end) = find_tag_close_start(lower_html, tag_name) else {
+        return false;
+    };
+    if content_end <= content_start {
+        return false;
     }
+    lower_html[content_start..content_end]
+        .chars()
+        .any(|ch| !ch.is_whitespace())
+}
+
+fn build_waiting_text_state() -> HostedBrowserTextState {
+    HostedBrowserTextState {
+        rows: vec![text_row("waiting html", 0)],
+    }
+}
+
+fn build_hierarchy_text_state_from_html(html: &str) -> HostedBrowserTextState {
+    if html.trim().is_empty() {
+        return build_waiting_text_state();
+    }
+
+    let lower_html = html.to_ascii_lowercase();
+    let mut rows = Vec::new();
+
+    if find_tag_open_end(lower_html.as_str(), "html").is_some() {
+        rows.push(text_row("<html>", 0));
+    }
+
+    if find_tag_open_end(lower_html.as_str(), "head").is_some() {
+        rows.push(text_row("<head>", 8));
+        if section_has_visible_content(lower_html.as_str(), "head") {
+            rows.push(text_row("...", 16));
+        }
+        if find_tag_close_start(lower_html.as_str(), "head").is_some() {
+            rows.push(text_row("</head>", 8));
+        }
+    }
+
+    if find_tag_open_end(lower_html.as_str(), "body").is_some() {
+        rows.push(text_row("<body>", 8));
+        if section_has_visible_content(lower_html.as_str(), "body") {
+            rows.push(text_row("...", 16));
+        }
+        if find_tag_close_start(lower_html.as_str(), "body").is_some() {
+            rows.push(text_row("</body>", 8));
+        }
+    }
+
+    if find_tag_close_start(lower_html.as_str(), "html").is_some() {
+        rows.push(text_row("</html>", 0));
+    }
+
+    if rows.is_empty() {
+        rows.push(text_row("html without hierarchy tags", 0));
+    }
+
+    HostedBrowserTextState { rows }
 }
 
 fn html_handoff_queues() -> &'static Vec<BrowserHtmlQueue> {
@@ -250,7 +282,7 @@ fn with_browser_state_mut<R>(
     }
     let mut guard = TRUESURFER_STATE.lock();
     let state = guard.entry(browser_instance_id).or_insert_with(|| BrowserInstanceState {
-        text_state: build_waiting_text_state(browser_instance_id),
+        text_state: build_waiting_text_state(),
         render_tex_id: default_render_tex_id(browser_instance_id),
         surface_state: HostedBrowserSurfaceState {
             viewport_width: 512,
@@ -536,9 +568,11 @@ unsafe fn dispatch_html(
             error: String::from("truesurfer setHtml exception"),
             ..ParseResult::default()
         };
+        let text_state = build_hierarchy_text_state_from_html(pending.html.as_str());
         let _ = with_browser_state_mut(browser_instance_id, |state| {
             state.last_parse_result = Some(parse_result.clone());
-            state.text_state = build_text_state_from_parse_result(browser_instance_id, &parse_result);
+            state.text_state = text_state;
+            state.surface_seq = state.surface_seq.wrapping_add(1);
             state.text_seq = state.text_seq.wrapping_add(1);
         });
         qjs::js_free_value(ctx, result);
@@ -565,10 +599,11 @@ unsafe fn dispatch_html(
         script_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SCRIPT_BYTES_PROP),
         error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
     };
+    let text_state = build_hierarchy_text_state_from_html(pending.html.as_str());
 
     let _ = with_browser_state_mut(browser_instance_id, |state| {
         state.last_parse_result = Some(parse_result.clone());
-        state.text_state = build_text_state_from_parse_result(browser_instance_id, &parse_result);
+        state.text_state = text_state;
         state.surface_seq = state.surface_seq.wrapping_add(1);
         state.text_seq = state.text_seq.wrapping_add(1);
     });
