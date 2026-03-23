@@ -3,6 +3,8 @@ import { passHtmlThroughDiffBox } from '/qjs/truesurfer/diff_box.mjs';
 
 const root = globalThis;
 const browserId = Number(root.__trueosTruesurferBrowserId || 0);
+const LOG_REAR_ENABLE = false;
+const LOG_PARSE_ENABLE = true;
 
 function log(line) {
   if (typeof console !== 'undefined' && console && typeof console.log === 'function') {
@@ -65,6 +67,9 @@ function summarizeDocument(doc) {
 }
 
 function logRearLines(source) {
+  if (!LOG_REAR_ENABLE) {
+    return;
+  }
   const tail = rearLines(source, 10);
   log(`[truesurfer rear] browser=${browserId} lines=${tail.length}`);
   for (let index = 0; index < tail.length; index += 1) {
@@ -78,14 +83,18 @@ function logRearLines(source) {
 }
 
 function parseHtmlDocument(source, url) {
-  log(`[truesurfer parse5] browser=${browserId} enter bytes=${source.length} url=${url}`);
+  if (LOG_PARSE_ENABLE) {
+    log(`[truesurfer parse5] browser=${browserId} enter bytes=${source.length} url=${url}`);
+  }
   const startedAt = Date.now();
   const doc = parse5.parse(source);
   const summary = summarizeDocument(doc);
   const elapsedMs = Date.now() - startedAt;
-  log(
-    `[truesurfer parse5] browser=${browserId} ok ms=${elapsedMs} roots=${summary.roots} nodes=${summary.nodes}`,
-  );
+  if (LOG_PARSE_ENABLE) {
+    log(
+      `[truesurfer parse5] browser=${browserId} ok ms=${elapsedMs} roots=${summary.roots} nodes=${summary.nodes}`,
+    );
+  }
   return {
     doc,
     elapsedMs,
