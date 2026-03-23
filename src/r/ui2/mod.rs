@@ -2290,8 +2290,8 @@ fn draw_hosted_browser_text_rows(state: &Ui2State, window: &Ui2Window, content: 
             state.view_h,
         );
         crate::gfx::text::draw_atlas_text_in_frame_alpha(
-            row.as_bytes(),
-            content.x + 10.0,
+            row.text.as_bytes(),
+            content.x + 10.0 + row.indent_px as f32,
             top + 1.0,
             state.view_w,
             state.view_h,
