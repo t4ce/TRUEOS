@@ -347,7 +347,7 @@ fn forward_cursor_wheel_to_selected_window(
                 false
             }
         }
-        Ui2WindowKind::HostedSurface | Ui2WindowKind::TextScene => false,
+        Ui2WindowKind::HostedSurface => false,
     }
 }
 
@@ -537,11 +537,6 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
                     for event in raw_events.iter().take(wrote).copied() {
                         note_keyboard_event_source(state, &event);
                         let _ = crate::tst_gfx_tetris::queue_ui2_keyboard_event(window_id, event);
-                    }
-                }
-                Some(Ui2WindowKind::TextScene) => {
-                    for event in raw_events.iter().take(wrote) {
-                        note_keyboard_event_source(state, event);
                     }
                 }
                 None => {}

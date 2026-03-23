@@ -13,7 +13,6 @@ dependencies = [
  "crc32fast",
  "dma-api",
  "embassy-executor",
- "embassy-sync",
  "embassy-time",
  "embassy-time-driver",
  "embedded-websocket",

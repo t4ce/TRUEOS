@@ -1,47 +1,8 @@
 import parse5 from 'parse5';
-import { Worker } from 'node:worker_threads';
 import { passHtmlThroughDiffBox } from '/qjs/truesurfer/diff_box.mjs';
 
 const root = globalThis;
 const browserId = Number(root.__trueosTruesurferBrowserId || 0);
-const BODY_CLOSE_TAG = '</body>';
-const BRANCH_PARSE5_BODY_WORKER_SOURCE = `
-import parse5 from 'parse5';
-import { parentPort } from 'node:worker_threads';
-
-function safeString(value) {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (value === null || value === undefined) {
-    return '';
-  }
-  return String(value);
-}
-
-function parseBodyBranch(bodyHtml) {
-  const startedAt = Date.now();
-  const fragment = parse5.parseFragment(bodyHtml);
-  const elapsedMs = Date.now() - startedAt;
-  return {
-    ok: 1,
-    parseMs: elapsedMs,
-    topLevelCount: Array.isArray(fragment.childNodes) ? fragment.childNodes.length : 0,
-  };
-}
-
-parentPort.onMessage((raw) => {
-  try {
-    const message = typeof raw === 'string' ? JSON.parse(raw) : {};
-    const result = parseBodyBranch(safeString(message && message.bodyHtml));
-    parentPort.postMessage(JSON.stringify(result));
-  } catch (error) {
-    const message =
-      error && error.stack ? String(error.stack) : error ? String(error) : 'body branch parse failed';
-    parentPort.postMessage(JSON.stringify({ ok: 0, error: message, parseMs: 0, topLevelCount: 0 }));
-  }
-});
-`;
 
 function log(line) {
   if (typeof console !== 'undefined' && console && typeof console.log === 'function') {
@@ -57,17 +18,6 @@ function safeString(value) {
     return '';
   }
   return String(value);
-}
-
-function parseJsonString(raw) {
-  if (typeof raw !== 'string' || !raw) {
-    return null;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch (_error) {
-    return null;
-  }
 }
 
 function countLines(source) {
@@ -118,139 +68,169 @@ function extractDocumentTitle(doc) {
   return title.trim();
 }
 
-function parseHtmlDocument(source) {
+function relListIncludes(node, value) {
+  const attrs = Array.isArray(node && node.attrs) ? node.attrs : [];
+  const relAttr = attrs.find((attr) => safeString(attr && attr.name).toLowerCase() === 'rel');
+  if (!relAttr) {
+    return false;
+  }
+  const relValue = safeString(relAttr.value).toLowerCase();
+  return relValue.split(/\s+/).includes(safeString(value).toLowerCase());
+}
+
+function findAttr(node, name) {
+  const target = safeString(name).toLowerCase();
+  const attrs = Array.isArray(node && node.attrs) ? node.attrs : [];
+  const attr = attrs.find((candidate) => safeString(candidate && candidate.name).toLowerCase() === target);
+  return attr ? safeString(attr.value) : '';
+}
+
+function serializeNode(node) {
+  return node ? parse5.serialize(node) : '';
+}
+
+function serializeChildNodes(node) {
+  if (!node || !Array.isArray(node.childNodes) || node.childNodes.length === 0) {
+    return '';
+  }
+  let html = '';
+  for (const child of node.childNodes) {
+    html += serializeNode(child);
+  }
+  return html;
+}
+
+function detachNodeFromParent(node) {
+  const parent = node && node.parentNode;
+  if (!parent || !Array.isArray(parent.childNodes)) {
+    return;
+  }
+  const nextChildren = [];
+  for (const child of parent.childNodes) {
+    if (child !== node) {
+      nextChildren.push(child);
+    }
+  }
+  parent.childNodes = nextChildren;
+  node.parentNode = null;
+}
+
+function walkAndExtractResiduals(node, artifacts) {
+  if (!node || !Array.isArray(node.childNodes) || node.childNodes.length === 0) {
+    return;
+  }
+
+  const snapshot = node.childNodes.slice();
+  for (const child of snapshot) {
+    const tagName = safeString(child && (child.tagName || child.nodeName)).toLowerCase();
+
+    if (tagName === 'style') {
+      artifacts.styles.push({
+        order: artifacts.styles.length,
+        cssText: serializeChildNodes(child),
+        tagHtml: serializeNode(child),
+      });
+      detachNodeFromParent(child);
+      continue;
+    }
+
+    if (tagName === 'script') {
+      artifacts.scripts.push({
+        order: artifacts.scripts.length,
+        src: findAttr(child, 'src'),
+        scriptText: serializeChildNodes(child),
+        tagHtml: serializeNode(child),
+      });
+      detachNodeFromParent(child);
+      continue;
+    }
+
+    if (tagName === 'link' && relListIncludes(child, 'stylesheet')) {
+      artifacts.styles.push({
+        order: artifacts.styles.length,
+        href: findAttr(child, 'href'),
+        cssText: '',
+        tagHtml: serializeNode(child),
+      });
+      detachNodeFromParent(child);
+      continue;
+    }
+
+    walkAndExtractResiduals(child, artifacts);
+  }
+}
+
+function extractDocumentArtifacts(source) {
   const startedAt = Date.now();
   const doc = parse5.parse(source);
-  const elapsedMs = Date.now() - startedAt;
+  const title = extractDocumentTitle(doc);
+  const htmlNode = firstChildElementByTagName(doc, 'html');
+  const bodyNode = firstChildElementByTagName(htmlNode || doc, 'body');
+  const artifacts = {
+    styles: [],
+    scripts: [],
+    bodyHtml: '',
+    shellHtml: '',
+  };
+
+  walkAndExtractResiduals(doc, artifacts);
+
+  if (bodyNode) {
+    artifacts.bodyHtml = serializeChildNodes(bodyNode);
+    bodyNode.childNodes = [];
+  }
+
+  artifacts.shellHtml = parse5.serialize(doc);
+  const parseMs = Date.now() - startedAt;
+
+  let styleBytes = 0;
+  for (const style of artifacts.styles) {
+    styleBytes += safeString(style.cssText).length;
+    styleBytes += safeString(style.tagHtml).length;
+    styleBytes += safeString(style.href).length;
+  }
+
+  let scriptBytes = 0;
+  for (const script of artifacts.scripts) {
+    scriptBytes += safeString(script.scriptText).length;
+    scriptBytes += safeString(script.tagHtml).length;
+    scriptBytes += safeString(script.src).length;
+  }
+
   return {
-    elapsedMs,
-    title: extractDocumentTitle(doc),
+    title,
+    parseMs,
+    shellHtml: artifacts.shellHtml,
+    shellBytes: artifacts.shellHtml.length,
+    bodyHtml: artifacts.bodyHtml,
+    bodyBytes: artifacts.bodyHtml.length,
+    styleCount: artifacts.styles.length,
+    styleBytes,
+    scriptCount: artifacts.scripts.length,
+    scriptBytes,
+    styles: artifacts.styles,
+    scripts: artifacts.scripts,
   };
 }
 
-function splitDocumentForBranchParse(source) {
-  const html = safeString(source);
-  const lower = html.toLowerCase();
-  const bodyOpenStart = lower.indexOf('<body');
-  if (bodyOpenStart < 0) {
-    return null;
-  }
-
-  const bodyOpenEnd = html.indexOf('>', bodyOpenStart);
-  if (bodyOpenEnd < 0) {
-    return null;
-  }
-
-  const bodyCloseStart = lower.lastIndexOf(BODY_CLOSE_TAG);
-  if (bodyCloseStart < 0 || bodyCloseStart < bodyOpenEnd) {
-    return null;
-  }
-
-  const beforeBody = html.slice(0, bodyOpenStart);
-  const bodyOpenTag = html.slice(bodyOpenStart, bodyOpenEnd + 1);
-  const bodyHtml = html.slice(bodyOpenEnd + 1, bodyCloseStart);
-  const afterBody = html.slice(bodyCloseStart + BODY_CLOSE_TAG.length);
-
-  return {
-    bodyHtml,
-    shellHtml: `${beforeBody}${bodyOpenTag}${BODY_CLOSE_TAG}${afterBody}`,
-  };
-}
-
-function parseBodyBranchLocal(bodyHtml) {
-  const startedAt = Date.now();
-  const fragment = parse5.parseFragment(bodyHtml);
-  const elapsedMs = Date.now() - startedAt;
-  return {
-    ok: 1,
-    parseMs: elapsedMs,
-    topLevelCount: Array.isArray(fragment.childNodes) ? fragment.childNodes.length : 0,
-  };
-}
-
-function parseBodyBranchInWorker(bodyHtml) {
-  return new Promise((resolve) => {
-    if (typeof Worker !== 'function') {
-      resolve(parseBodyBranchLocal(bodyHtml));
-      return;
-    }
-
-    let settled = false;
-    let worker = null;
-    const finish = (result) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        if (worker && typeof worker.terminate === 'function') {
-          worker.terminate();
-        }
-      } catch (_error) {}
-      resolve(result);
-    };
-
-    try {
-      worker = new Worker(BRANCH_PARSE5_BODY_WORKER_SOURCE);
-      worker.onMessage((raw) => {
-        const message = parseJsonString(raw);
-        if (!message || !message.ok) {
-          finish(parseBodyBranchLocal(bodyHtml));
-          return;
-        }
-        finish({
-          ok: 1,
-          parseMs: Number(message.parseMs || 0) | 0,
-          topLevelCount: Number(message.topLevelCount || 0) | 0,
-        });
-      });
-      worker.postMessage(JSON.stringify({ bodyHtml }));
-    } catch (_error) {
-      finish(parseBodyBranchLocal(bodyHtml));
-    }
-  });
-}
-
-async function branchParse5Document(source) {
-  const split = splitDocumentForBranchParse(source);
-  if (!split) {
-    const parsed = parseHtmlDocument(source);
-    return {
-      title: parsed.title,
-      parseMs: parsed.elapsedMs,
-      shellParseMs: parsed.elapsedMs,
-      bodyParseMs: 0,
-      bodyTopLevelCount: 0,
-      mode: 'full-document',
-    };
-  }
-
-  const bodyPromise = parseBodyBranchInWorker(split.bodyHtml);
-  const shellStartedAt = Date.now();
-  const shellDoc = parse5.parse(split.shellHtml);
-  const shellParseMs = Date.now() - shellStartedAt;
-  const bodyResult = await bodyPromise;
-
-  return {
-    title: extractDocumentTitle(shellDoc),
-    parseMs: shellParseMs + Number(bodyResult.parseMs || 0),
-    shellParseMs,
-    bodyParseMs: Number(bodyResult.parseMs || 0),
-    bodyTopLevelCount: Number(bodyResult.topLevelCount || 0),
-    mode: 'branch-parse5',
-  };
-}
-
-async function setHtml(nextHtml, meta) {
+function setHtml(nextHtml, meta) {
   const forwarded = passHtmlThroughDiffBox(nextHtml, meta || {});
   const html = forwarded.html;
   const url = forwarded.url;
   const lines = countLines(html);
 
   try {
-    const parsed = await branchParse5Document(html);
+    const parsed = extractDocumentArtifacts(html);
+    root.__trueosTruesurferLastArtifacts = {
+      url,
+      title: parsed.title,
+      shellHtml: parsed.shellHtml,
+      bodyHtml: parsed.bodyHtml,
+      styles: parsed.styles,
+      scripts: parsed.scripts,
+    };
     log(
-      `[truesurfer branch_parse5] browser=${browserId} title=${parsed.title} shell_ms=${parsed.shellParseMs} body_ms=${parsed.bodyParseMs} body_top=${parsed.bodyTopLevelCount} mode=${parsed.mode} url=${url}`,
+      `[truesurfer extract] browser=${browserId} title=${parsed.title} shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} style_count=${parsed.styleCount} script_count=${parsed.scriptCount} ms=${parsed.parseMs} url=${url}`,
     );
     return {
       ok: 1,
@@ -258,6 +238,12 @@ async function setHtml(nextHtml, meta) {
       lines,
       parseMs: parsed.parseMs,
       title: parsed.title,
+      shellBytes: parsed.shellBytes,
+      bodyBytes: parsed.bodyBytes,
+      styleCount: parsed.styleCount,
+      styleBytes: parsed.styleBytes,
+      scriptCount: parsed.scriptCount,
+      scriptBytes: parsed.scriptBytes,
     };
   } catch (error) {
     const message =
