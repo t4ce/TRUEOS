@@ -1,9 +1,21 @@
 import parse5 from 'parse5';
-import { buildCssStyleRefIndex } from '/qjs/truesurfer/css.mjs';
 import { passHtmlThroughDiffBox } from '/qjs/truesurfer/diff_box.mjs';
 
 const root = globalThis;
 const browserId = Number(root.__trueosTruesurferBrowserId || 0);
+
+function emptyStyleIndex() {
+  return {
+    styleTable: [],
+    nodeStyleRefs: [],
+    styleSlotCount: 0,
+    nodeRefCount: 0,
+    inlineStyleCount: 0,
+    stylesheetCount: 0,
+    ruleCount: 0,
+    elementCount: 0,
+  };
+}
 
 function log(line) {
   if (typeof console !== 'undefined' && console && typeof console.log === 'function') {
@@ -161,32 +173,10 @@ function walkAndExtractResiduals(node, artifacts) {
   }
 }
 
-function pushHierarchyRows(node, depth, rows) {
-  if (!node || !Array.isArray(node.childNodes) || node.childNodes.length === 0) {
-    return;
-  }
-
-  for (const child of node.childNodes) {
-    const tagName = safeString(child && (child.tagName || child.nodeName)).toLowerCase();
-    if (!tagName || tagName.startsWith('#')) {
-      continue;
-    }
-    rows.push(`${depth}|<${tagName}>`);
-    pushHierarchyRows(child, depth + 1, rows);
-    rows.push(`${depth}|</${tagName}>`);
-  }
-}
-
-function buildHierarchyRowsText(doc) {
-  const rows = [];
-  pushHierarchyRows(doc, 0, rows);
-  return rows.join('\n');
-}
-
 function extractDocumentArtifacts(source) {
   const startedAt = Date.now();
   const doc = parse5.parse(source);
-  const styleIndex = buildCssStyleRefIndex(doc);
+  const styleIndex = emptyStyleIndex();
   const title = extractDocumentTitle(doc);
   const htmlNode = firstChildElementByTagName(doc, 'html');
   const bodyNode = firstChildElementByTagName(htmlNode || doc, 'body');
@@ -195,11 +185,9 @@ function extractDocumentArtifacts(source) {
     scripts: [],
     bodyHtml: '',
     shellHtml: '',
-    hierarchyRowsText: '',
   };
 
   walkAndExtractResiduals(doc, artifacts);
-  artifacts.hierarchyRowsText = buildHierarchyRowsText(doc);
 
   if (bodyNode) {
     artifacts.bodyHtml = serializeChildNodes(bodyNode);
@@ -230,7 +218,6 @@ function extractDocumentArtifacts(source) {
     shellBytes: artifacts.shellHtml.length,
     bodyHtml: artifacts.bodyHtml,
     bodyBytes: artifacts.bodyHtml.length,
-    hierarchyRowsText: artifacts.hierarchyRowsText,
     styleCount: artifacts.styles.length,
     styleBytes,
     styleSlotCount: styleIndex.styleSlotCount,
@@ -256,14 +243,15 @@ function setHtml(nextHtml, meta) {
     root.__trueosTruesurferLastArtifacts = {
       url,
       title: parsed.title,
-      shellHtml: parsed.shellHtml,
-      bodyHtml: parsed.bodyHtml,
-      hierarchyRowsText: parsed.hierarchyRowsText,
-      styles: parsed.styles,
-      scripts: parsed.scripts,
+      shellBytes: parsed.shellBytes,
+      bodyBytes: parsed.bodyBytes,
+      styleCount: parsed.styleCount,
+      styleBytes: parsed.styleBytes,
       styleSlotCount: parsed.styleSlotCount,
       styledNodeCount: parsed.styledNodeCount,
       styleRuleCount: parsed.styleRuleCount,
+      scriptCount: parsed.scriptCount,
+      scriptBytes: parsed.scriptBytes,
     };
     log(
       `[truesurfer extract] browser=${browserId} title=${parsed.title} shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} style_count=${parsed.styleCount} style_slots=${parsed.styleSlotCount} styled_nodes=${parsed.styledNodeCount} style_rules=${parsed.styleRuleCount} script_count=${parsed.scriptCount} ms=${parsed.parseMs} url=${url}`,
@@ -274,7 +262,6 @@ function setHtml(nextHtml, meta) {
       lines,
       parseMs: parsed.parseMs,
       title: parsed.title,
-      hierarchyRows: parsed.hierarchyRowsText,
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
       styleCount: parsed.styleCount,

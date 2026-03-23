@@ -39,9 +39,12 @@ struct LoadscreenStripLayout {
     layout: ImbaFontRunLayout,
 }
 
+const LOADSCREEN_BG_RGB: u32 = 0xF4F4F4;
 const LOADSCREEN_LOGO_TEX_ID: u32 = 1002;
 const LOGO_PAD_X: f32 = 24.0;
 const LOGO_PAD_Y: f32 = 24.0;
+const TEXT_PAD_X: f32 = 12.0;
+const TEXT_PAD_Y: f32 = 10.0;
 const STRIP_GAP_Y: f32 = 8.0;
 const STRIP_ROW_GAP_Y: f32 = 10.0;
 const STRIP_TILE_SCALE: f32 = 0.72;
@@ -61,20 +64,20 @@ const STRIP_SPECS: [LoadscreenStripSpec; 4] = [
     LoadscreenStripSpec {
         face: ImbaFontFace::Block,
         rgb: (0, 0, 0),
-        scale_start: STRIP_SCALE_START,
-        scale_end: STRIP_SCALE_END,
+        scale_start: 0.58,
+        scale_end: 1.52,
     },
     LoadscreenStripSpec {
         face: ImbaFontFace::Grow,
         rgb: (0, 0, 0),
-        scale_start: STRIP_SCALE_START,
-        scale_end: STRIP_SCALE_END,
+        scale_start: 0.48,
+        scale_end: 1.74,
     },
     LoadscreenStripSpec {
         face: ImbaFontFace::Impact,
         rgb: (0, 0, 0),
-        scale_start: STRIP_SCALE_START,
-        scale_end: STRIP_SCALE_END,
+        scale_start: 0.38,
+        scale_end: 1.98,
     },
 ];
 
@@ -82,6 +85,81 @@ const STRIP_SPECS: [LoadscreenStripSpec; 4] = [
 fn boot_probe_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     embassy_time_driver::now().saturating_mul(1000) / hz
+}
+
+fn draw_de_flag_bottom_left_in_frame(view_w: u32, view_h: u32) -> bool {
+    let vw = view_w.max(1) as f32;
+    let vh = view_h.max(1) as f32;
+
+    let flag_w = 128.0f32.min(vw);
+    let flag_h = 128.0f32.min(vh);
+    let x = 0.0f32;
+    let y = (vh - flag_h).max(0.0);
+    let stripe_h = flag_h / 3.0;
+
+    let top_ok = crate::gfx::lyon::draw_solid_rect_no_present(
+        x,
+        y,
+        flag_w,
+        stripe_h,
+        (0x00, 0x00, 0x00, 0xFF),
+        view_w,
+        view_h,
+    );
+    let mid_ok = crate::gfx::lyon::draw_solid_rect_no_present(
+        x,
+        y + stripe_h,
+        flag_w,
+        stripe_h,
+        (0xDD, 0x00, 0x00, 0xFF),
+        view_w,
+        view_h,
+    );
+    let bot_ok = crate::gfx::lyon::draw_solid_rect_no_present(
+        x,
+        y + (2.0 * stripe_h),
+        flag_w,
+        flag_h - (2.0 * stripe_h),
+        (0xFF, 0xCE, 0x00, 0xFF),
+        view_w,
+        view_h,
+    );
+
+    top_ok && mid_ok && bot_ok
+}
+
+fn centered_text_origin(msg: &[u8], fb_w: f32, fb_h: f32) -> (f32, f32, f32, f32) {
+    let atlas = crate::gfx::text::font_atlas_large_view();
+    let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+    let space_adv_px = atlas.cell_w as f32 * 0.60;
+
+    let glyph_slot = |ch: u8| {
+        let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
+        if slot == u16::MAX {
+            slot = fallback;
+        }
+        slot
+    };
+
+    let mut width_px = 0.0f32;
+    for &ch in msg {
+        if ch == b' ' {
+            width_px += space_adv_px;
+            continue;
+        }
+
+        let slot = glyph_slot(ch);
+        let glyph_w_px = atlas
+            .widths
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(atlas.cell_w as u8) as f32;
+        width_px += glyph_w_px;
+    }
+
+    let x = ((fb_w - width_px) * 0.5).max(0.0);
+    let y = ((fb_h - atlas.cell_h as f32) * 0.5).max(0.0);
+    (x, y, width_px, atlas.cell_h as f32)
 }
 
 fn loadscreen_logo() -> &'static LogoTexture {
@@ -94,6 +172,7 @@ fn loadscreen_logo() -> &'static LogoTexture {
             rgba.push((pixel & 0xFF) as u8);
             rgba.push((pixel >> 24) as u8);
         }
+
         LogoTexture {
             rgba,
             width: width as u32,
@@ -118,7 +197,6 @@ fn draw_textured_quad_in_frame(
 
     let x1 = (x0 + width).min(view_w as f32);
     let y1 = (y0 + height).min(view_h as f32);
-
     let nx0 = (2.0 * (x0.max(0.0) / view_w.max(1) as f32)) - 1.0;
     let ny0 = 1.0 - (2.0 * (y0.max(0.0) / view_h.max(1) as f32));
     let nx1 = (2.0 * (x1 / view_w.max(1) as f32)) - 1.0;
@@ -220,6 +298,7 @@ fn ensure_logo_uploaded() -> bool {
     if rc != 0 {
         return false;
     }
+
     LOADSCREEN_LOGO_UPLOADED.store(true, Ordering::Release);
     true
 }
@@ -264,6 +343,7 @@ fn build_strip_layouts(view_w: f32, text_y: f32, text_h: f32) -> Vec<LoadscreenS
         ) else {
             continue;
         };
+
         top_y = layout.baseline_y + layout.vis_bottom + STRIP_ROW_GAP_Y;
         layouts.push(LoadscreenStripLayout { spec, layout });
     }
@@ -293,39 +373,19 @@ fn draw_strip_layouts_in_frame(
 
 #[embassy_executor::task]
 pub async fn gfx_loadscreen_task() {
-    const LOADSCREEN_BG_RGB: u32 = 0xF4F4F4;
     const MSG: &[u8] = b"TRUE OS \xA7";
-    const TEXT_PAD_X: f32 = 12.0;
-    const TEXT_PAD_Y: f32 = 10.0;
 
     let (fb_w, fb_h) = crate::limine::framebuffer_response()
         .and_then(|resp| resp.framebuffers().next())
         .map(|fb| (fb.width() as f32, fb.height() as f32))
         .unwrap_or((1024.0, 768.0));
-
-    let atlas = crate::gfx::text::font_atlas_large_view();
-    let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
-    let mut text_w = 0.0f32;
-    for &ch in MSG {
-        let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
-        if slot == u16::MAX {
-            slot = fallback;
-        }
-        text_w += atlas
-            .widths
-            .get(slot as usize)
-            .copied()
-            .unwrap_or(atlas.cell_w as u8) as f32;
-    }
-
-    let text_x = ((fb_w - text_w) * 0.5).max(0.0);
-    let text_y = ((fb_h - atlas.cell_h as f32) * 0.5).max(0.0);
+    let (text_x, text_y, text_w, text_h) = centered_text_origin(MSG, fb_w, fb_h);
     let text_clear_x = (text_x - TEXT_PAD_X).max(0.0);
     let text_clear_y = (text_y - TEXT_PAD_Y).max(0.0);
     let text_clear_w = (text_w + (TEXT_PAD_X * 2.0)).min(fb_w - text_clear_x);
-    let text_clear_h = (atlas.cell_h as f32 + (TEXT_PAD_Y * 2.0)).min(fb_h - text_clear_y);
+    let text_clear_h = (text_h + (TEXT_PAD_Y * 2.0)).min(fb_h - text_clear_y);
+    let strip_layouts = build_strip_layouts(fb_w, text_y, text_h);
 
-    let strip_layouts = build_strip_layouts(fb_w, text_y, atlas.cell_h as f32);
     let (clear_x, clear_y, clear_w, clear_h) = if strip_layouts.is_empty() {
         (text_clear_x, text_clear_y, text_clear_w, text_clear_h)
     } else {
@@ -333,12 +393,14 @@ pub async fn gfx_loadscreen_task() {
         let mut min_y = text_clear_y;
         let mut max_x = text_clear_x + text_clear_w;
         let mut max_y = text_clear_y + text_clear_h;
+
         for strip in &strip_layouts {
             min_x = min_x.min((strip.layout.origin_x + strip.layout.vis_left).max(0.0));
             min_y = min_y.min((strip.layout.baseline_y + strip.layout.vis_top).max(0.0));
             max_x = max_x.max((strip.layout.origin_x + strip.layout.vis_right).min(fb_w));
             max_y = max_y.max((strip.layout.baseline_y + strip.layout.vis_bottom).min(fb_h));
         }
+
         (
             min_x,
             min_y,
@@ -348,14 +410,17 @@ pub async fn gfx_loadscreen_task() {
     };
 
     let start_ms = boot_probe_ms();
+    crate::log!("GFX Loadscreen\n");
     crate::log!("boot-probe: loadscreen start ms={}\n", start_ms);
 
     crate::gfx::with_cabi_frame_lock(|| {
         let begin_rc =
             unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(LOADSCREEN_BG_RGB) };
         if begin_rc == 0 {
+            let _ = crate::gfx::lyon::lyon_geom_api_demo_no_present(fb_w as u32, fb_h as u32);
+            let _ = draw_de_flag_bottom_left_in_frame(fb_w as u32, fb_h as u32);
             let _ = draw_logo_in_frame(fb_w as u32, fb_h as u32);
-            crate::gfx::text::draw_atlas_text_in_frame_alpha(
+            let _ = crate::gfx::text::draw_atlas_text_in_frame_alpha(
                 MSG,
                 text_x,
                 text_y,
@@ -365,11 +430,15 @@ pub async fn gfx_loadscreen_task() {
             );
             draw_strip_layouts_in_frame(&strip_layouts, fb_w as u32, fb_h as u32, 255);
             unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+        } else {
+            crate::log!("gfx-loadscreen: begin_frame failed rc={}\n", begin_rc);
         }
     });
 
     let mut frame: u32 = 0;
     while !crate::r::readiness::is_set(crate::r::readiness::LOADSCREEN_END) {
+        Timer::after(EmbassyDuration::from_millis(16)).await;
+
         let phase = (frame as f32) * (core::f32::consts::TAU / 120.0);
         let alpha = ((libm::sinf(phase) * 0.5 + 0.5) * 255.0) as u8;
         crate::gfx::with_cabi_frame_lock(|| {
@@ -388,8 +457,9 @@ pub async fn gfx_loadscreen_task() {
                     fb_w as u32,
                     fb_h as u32,
                 );
+                let _ = draw_de_flag_bottom_left_in_frame(fb_w as u32, fb_h as u32);
                 let _ = draw_logo_in_frame(fb_w as u32, fb_h as u32);
-                crate::gfx::text::draw_atlas_text_in_frame_alpha(
+                let _ = crate::gfx::text::draw_atlas_text_in_frame_alpha(
                     MSG,
                     text_x,
                     text_y,
@@ -402,7 +472,6 @@ pub async fn gfx_loadscreen_task() {
             }
         });
         frame = frame.wrapping_add(1);
-        Timer::after(EmbassyDuration::from_millis(16)).await;
     }
 
     crate::log!(
