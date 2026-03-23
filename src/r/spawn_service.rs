@@ -69,7 +69,6 @@ macro_rules! define_started_flags {
 
 define_started_flags!(
     JOB_RUNNER_STARTED,
-    VGA_FONT_CACHE_STARTED,
     GLOBALOG_PERSIST_ONCE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
@@ -209,12 +208,6 @@ fn spawn_on_worker(
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
-}
-
-fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-       // spawner.spawn(crate::vga::init_font_cache_task())
-    })
 }
 
 fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
@@ -687,12 +680,6 @@ const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 static TASKS: &[TaskSpec] = &[
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
-    TaskSpec::enabled(
-        "vga-font-cache",
-        0,
-        &VGA_FONT_CACHE_STARTED,
-        spawn_vga_font_cache,
-    ),
     TaskSpec::enabled(
         "globalog-persist-once",
         0,
