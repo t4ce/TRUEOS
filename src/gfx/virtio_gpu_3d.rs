@@ -3362,7 +3362,7 @@ impl GfxDevice for VirglGfxBackend {
             // Do not upload guest backing here: scanout_backing is only zeroed/attached during
             // bringup and uploading it would overwrite the freshly copied frame with stale pixels.
             let n = crate::logflag::VIRGL_PRESENT_DIAG_LOGS.fetch_add(1, Ordering::Relaxed);
-            if n < 12 {
+            if crate::logflag::GFX_FRAME_PROGRESS_LOGS && n < 12 {
                 crate::log!(
                     "virgl-present: frame={} clears={} draws={} presents={} reassert_ok={} flush_ok={} size={}x{} fence={}\n",
                     frame_no,

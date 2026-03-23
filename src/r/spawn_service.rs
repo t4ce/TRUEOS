@@ -94,7 +94,6 @@ define_started_flags!(
     UI2_STARTED,
     UI2_GFX_BROWSER_STARTED,
     UI2_GFX_TETRIS_STARTED,
-    UI2_TEXT_SCENE_DEMO_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     GFX_INTEL_TRIANGLE_DEMO_STARTED,
@@ -538,12 +537,6 @@ fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_ui2_text_scene_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_text_scene_demo::ui2_text_scene_demo_task())
-    })
-}
-
 fn spawn_ui2_triangle_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_triangle_demo::ui2_triangle_demo_task())
@@ -810,12 +803,6 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::UI2_READY,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
-    ),
-    TaskSpec::enabled(
-        "ui2-text-scene-demo",
-        crate::r::readiness::UI2_READY,
-        &UI2_TEXT_SCENE_DEMO_STARTED,
-        spawn_ui2_text_scene_demo,
     ),
     TaskSpec::enabled(
         "ui2-triangle-demo",
