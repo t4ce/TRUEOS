@@ -31,3 +31,9 @@ export const BLOCK_TAGS = new Set(uniqueTags([
   'dialog', ...TABULAR_DATA_TAGS, ...EMBEDDED_CONTENT_TAGS, 'svg', 'canvas',
   'iframe',
 ]));
+ 
+export const SUPPORTED_STYLE_TAGS = new Set(uniqueTags([
+  ...BLOCK_TAGS,
+  ...TEXT_LEVEL_SEMANTICS_TAGS,
+  ...EMBEDDED_CONTENT_TAGS,
+]));
