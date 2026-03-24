@@ -9,7 +9,7 @@ use crate::gfx::imbafont::{
     rasterize_glyph_mask_texture,
 };
 
-struct FontAtlasBuffers {
+struct ImbaAthlasBuffers {
     alpha: Vec<u8>,
     index: Vec<u16>,
     widths: Vec<u8>,
@@ -21,7 +21,7 @@ struct FontAtlasBuffers {
     grid_h: u32,
 }
 
-pub struct FontAtlasView<'a> {
+pub struct ImbaAthlasView<'a> {
     pub alpha: &'a [u8],
     pub index: &'a [u16],
     pub widths: &'a [u8],
@@ -33,8 +33,8 @@ pub struct FontAtlasView<'a> {
     pub grid_h: u32,
 }
 
-static FONT_ATLAS_SMALL: Once<FontAtlasBuffers> = Once::new();
-static FONT_ATLAS_LARGE: Once<FontAtlasBuffers> = Once::new();
+static IMBA_ATHLAS_SMALL: Once<ImbaAthlasBuffers> = Once::new();
+static IMBA_ATHLAS_LARGE: Once<ImbaAthlasBuffers> = Once::new();
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -49,19 +49,19 @@ struct TexVertex {
     a: u8,
 }
 
-const ATLAS_TEX_ID: u32 = 1001;
-static ATLAS_UPLOADED: AtomicBool = AtomicBool::new(false);
-static ATLAS_RGBA: Once<Vec<u8>> = Once::new();
+const IMBA_ATHLAS_TEX_ID: u32 = 1001;
+static IMBA_ATHLAS_UPLOADED: AtomicBool = AtomicBool::new(false);
+static IMBA_ATHLAS_RGBA: Once<Vec<u8>> = Once::new();
 
-const ATLAS_GRID: usize = 16;
-const SMALL_TILE_H: f32 = 14.0;
-const LARGE_TILE_H: f32 = 24.0;
-const ATLAS_SIDE_PAD_PX: f32 = 1.0;
-const ATLAS_TOP_PAD_PX: f32 = 1.0;
-const ATLAS_BOTTOM_PAD_PX: f32 = 1.0;
-const PLACEHOLDER_ADVANCE_FACTOR: f32 = 0.72;
+const IMBA_ATHLAS_GRID: usize = 16;
+const IMBA_ATHLAS_SMALL_TILE_H: f32 = 14.0;
+const IMBA_ATHLAS_LARGE_TILE_H: f32 = 24.0;
+const IMBA_ATHLAS_SIDE_PAD_PX: f32 = 1.0;
+const IMBA_ATHLAS_TOP_PAD_PX: f32 = 1.0;
+const IMBA_ATHLAS_BOTTOM_PAD_PX: f32 = 1.0;
+const IMBA_ATHLAS_PLACEHOLDER_ADVANCE_FACTOR: f32 = 0.72;
 
-struct AtlasGlyphSource {
+struct ImbaAthlasGlyphSource {
     metrics: Option<ImbaFontGlyphMetricsPx>,
     mask: Option<ImbaFontMaskTexture>,
 }
@@ -69,18 +69,18 @@ struct AtlasGlyphSource {
 #[inline]
 fn fill_cell(
     alpha: &mut [u8],
-    atlas_w: usize,
+    athlas_w: usize,
     cell_w: usize,
     cell_h: usize,
     slot: usize,
     src: &[u8],
 ) {
-    let cell_x = (slot % ATLAS_GRID) * cell_w;
-    let cell_y = (slot / ATLAS_GRID) * cell_h;
+    let cell_x = (slot % IMBA_ATHLAS_GRID) * cell_w;
+    let cell_y = (slot / IMBA_ATHLAS_GRID) * cell_h;
     for y in 0..cell_h {
         let dst_y = cell_y + y;
         let src_off = y * cell_w;
-        let dst_off = dst_y * atlas_w + cell_x;
+        let dst_off = dst_y * athlas_w + cell_x;
         alpha[dst_off..dst_off + cell_w].copy_from_slice(&src[src_off..src_off + cell_w]);
     }
 }
@@ -156,13 +156,13 @@ fn draw_placeholder_cell(cell: &mut [u8], cell_w: usize, cell_h: usize, glyph_w:
     }
 }
 
-fn build_font_atlas(face: ImbaFontFace, tile_h: f32) -> FontAtlasBuffers {
+fn build_imba_athlas(face: ImbaFontFace, tile_h: f32) -> ImbaAthlasBuffers {
     let mut glyphs = Vec::with_capacity(256);
     let mut ascent = tile_h;
     let mut descent = 0.0f32;
     let mut min_left = 0.0f32;
     let mut max_right = tile_h;
-    let mut max_advance = tile_h * PLACEHOLDER_ADVANCE_FACTOR;
+    let mut max_advance = tile_h * IMBA_ATHLAS_PLACEHOLDER_ADVANCE_FACTOR;
 
     for code in 0u16..=0xFF {
         let ch = code as u8 as char;
@@ -179,21 +179,24 @@ fn build_font_atlas(face: ImbaFontFace, tile_h: f32) -> FontAtlasBuffers {
             max_advance = max_advance.max(metrics.advance);
         }
 
-        glyphs.push(AtlasGlyphSource { metrics, mask });
+        glyphs.push(ImbaAthlasGlyphSource { metrics, mask });
     }
 
-    let left_pad = ceilf((-min_left).max(0.0) + ATLAS_SIDE_PAD_PX).max(1.0) as usize;
-    let baseline_y = ceilf(ascent + ATLAS_TOP_PAD_PX).max(1.0) as usize;
-    let cell_h = ceilf(ascent + descent + ATLAS_TOP_PAD_PX + ATLAS_BOTTOM_PAD_PX).max(1.0) as usize;
-    let placeholder_w =
-        ceilf(tile_h * PLACEHOLDER_ADVANCE_FACTOR + left_pad as f32 + ATLAS_SIDE_PAD_PX).max(3.0)
-            as usize;
-    let cell_w = ceilf(max_advance.max(max_right - min_left) + left_pad as f32 + ATLAS_SIDE_PAD_PX)
-        .max(placeholder_w as f32)
+    let left_pad = ceilf((-min_left).max(0.0) + IMBA_ATHLAS_SIDE_PAD_PX).max(1.0) as usize;
+    let baseline_y = ceilf(ascent + IMBA_ATHLAS_TOP_PAD_PX).max(1.0) as usize;
+    let cell_h = ceilf(ascent + descent + IMBA_ATHLAS_TOP_PAD_PX + IMBA_ATHLAS_BOTTOM_PAD_PX)
         .max(1.0) as usize;
+    let placeholder_w = ceilf(
+        tile_h * IMBA_ATHLAS_PLACEHOLDER_ADVANCE_FACTOR + left_pad as f32 + IMBA_ATHLAS_SIDE_PAD_PX,
+    )
+    .max(3.0) as usize;
+    let cell_w =
+        ceilf(max_advance.max(max_right - min_left) + left_pad as f32 + IMBA_ATHLAS_SIDE_PAD_PX)
+            .max(placeholder_w as f32)
+            .max(1.0) as usize;
 
-    let width = ATLAS_GRID * cell_w;
-    let height = ATLAS_GRID * cell_h;
+    let width = IMBA_ATHLAS_GRID * cell_w;
+    let height = IMBA_ATHLAS_GRID * cell_h;
     let mut alpha = vec![0u8; width * height];
     let mut index = vec![u16::MAX; 256];
     let mut widths = vec![0u8; 256];
@@ -204,8 +207,8 @@ fn build_font_atlas(face: ImbaFontFace, tile_h: f32) -> FontAtlasBuffers {
         let glyph_w = match (&glyph.metrics, &glyph.mask) {
             (Some(metrics), Some(mask)) => {
                 let glyph_w = ceilf(
-                    (metrics.advance + left_pad as f32 + ATLAS_SIDE_PAD_PX)
-                        .max(metrics.right + left_pad as f32 + ATLAS_SIDE_PAD_PX),
+                    (metrics.advance + left_pad as f32 + IMBA_ATHLAS_SIDE_PAD_PX)
+                        .max(metrics.right + left_pad as f32 + IMBA_ATHLAS_SIDE_PAD_PX),
                 )
                 .max(1.0) as usize;
                 let dst_x = round_px(left_pad as f32 + mask.draw_x);
@@ -225,7 +228,7 @@ fn build_font_atlas(face: ImbaFontFace, tile_h: f32) -> FontAtlasBuffers {
         widths[slot] = glyph_w.min(cell_w).min(u8::MAX as usize) as u8;
     }
 
-    FontAtlasBuffers {
+    ImbaAthlasBuffers {
         alpha,
         index,
         widths,
@@ -233,56 +236,56 @@ fn build_font_atlas(face: ImbaFontFace, tile_h: f32) -> FontAtlasBuffers {
         height: height as u32,
         cell_w: cell_w as u32,
         cell_h: cell_h as u32,
-        grid_w: ATLAS_GRID as u32,
-        grid_h: ATLAS_GRID as u32,
+        grid_w: IMBA_ATHLAS_GRID as u32,
+        grid_h: IMBA_ATHLAS_GRID as u32,
     }
 }
 
-fn build_font_atlas_small() -> FontAtlasBuffers {
-    build_font_atlas(ImbaFontFace::Regular, SMALL_TILE_H)
+fn build_imba_athlas_small() -> ImbaAthlasBuffers {
+    build_imba_athlas(ImbaFontFace::Regular, IMBA_ATHLAS_SMALL_TILE_H)
 }
 
-fn build_font_atlas_large() -> FontAtlasBuffers {
-    build_font_atlas(ImbaFontFace::Regular, LARGE_TILE_H)
+fn build_imba_athlas_large() -> ImbaAthlasBuffers {
+    build_imba_athlas(ImbaFontFace::Regular, IMBA_ATHLAS_LARGE_TILE_H)
 }
 
-fn font_atlas_small() -> &'static FontAtlasBuffers {
-    FONT_ATLAS_SMALL.call_once(build_font_atlas_small)
+fn imba_athlas_small() -> &'static ImbaAthlasBuffers {
+    IMBA_ATHLAS_SMALL.call_once(build_imba_athlas_small)
 }
 
-fn font_atlas_large() -> &'static FontAtlasBuffers {
-    FONT_ATLAS_LARGE.call_once(build_font_atlas_large)
+fn imba_athlas_large() -> &'static ImbaAthlasBuffers {
+    IMBA_ATHLAS_LARGE.call_once(build_imba_athlas_large)
 }
 
 #[inline]
-fn font_atlas_view_from_buffers(atlas: &'static FontAtlasBuffers) -> FontAtlasView<'static> {
-    FontAtlasView {
-        alpha: atlas.alpha.as_slice(),
-        index: atlas.index.as_slice(),
-        widths: atlas.widths.as_slice(),
-        width: atlas.width,
-        height: atlas.height,
-        cell_w: atlas.cell_w,
-        cell_h: atlas.cell_h,
-        grid_w: atlas.grid_w,
-        grid_h: atlas.grid_h,
+fn imba_athlas_view_from_buffers(athlas: &'static ImbaAthlasBuffers) -> ImbaAthlasView<'static> {
+    ImbaAthlasView {
+        alpha: athlas.alpha.as_slice(),
+        index: athlas.index.as_slice(),
+        widths: athlas.widths.as_slice(),
+        width: athlas.width,
+        height: athlas.height,
+        cell_w: athlas.cell_w,
+        cell_h: athlas.cell_h,
+        grid_w: athlas.grid_w,
+        grid_h: athlas.grid_h,
     }
 }
 
-pub fn font_atlas_small_view() -> FontAtlasView<'static> {
-    font_atlas_view_from_buffers(font_atlas_small())
+pub fn imba_athlas_small_view() -> ImbaAthlasView<'static> {
+    imba_athlas_view_from_buffers(imba_athlas_small())
 }
 
-pub fn font_atlas_large_view() -> FontAtlasView<'static> {
-    font_atlas_view_from_buffers(font_atlas_large())
+pub fn imba_athlas_large_view() -> ImbaAthlasView<'static> {
+    imba_athlas_view_from_buffers(imba_athlas_large())
 }
 
-fn atlas_rgba() -> &'static [u8] {
-    ATLAS_RGBA.call_once(|| {
-        let atlas = font_atlas_large_view();
-        let tex_px = (atlas.width as usize).saturating_mul(atlas.height as usize);
+fn imba_athlas_rgba() -> &'static [u8] {
+    IMBA_ATHLAS_RGBA.call_once(|| {
+        let athlas = imba_athlas_large_view();
+        let tex_px = (athlas.width as usize).saturating_mul(athlas.height as usize);
         let mut tex_rgba = alloc::vec![0u8; tex_px.saturating_mul(4)];
-        for (i, &a) in atlas.alpha.iter().enumerate() {
+        for (i, &a) in athlas.alpha.iter().enumerate() {
             let o = i.saturating_mul(4);
             tex_rgba[o] = 255;
             tex_rgba[o + 1] = 255;
@@ -293,18 +296,18 @@ fn atlas_rgba() -> &'static [u8] {
     })
 }
 
-fn ensure_atlas_uploaded() -> bool {
-    if ATLAS_UPLOADED.load(Ordering::Acquire) {
+fn ensure_imba_athlas_uploaded() -> bool {
+    if IMBA_ATHLAS_UPLOADED.load(Ordering::Acquire) {
         return true;
     }
 
-    let atlas = font_atlas_large_view();
-    let rgba = atlas_rgba();
+    let athlas = imba_athlas_large_view();
+    let rgba = imba_athlas_rgba();
     let rc = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba(
-            ATLAS_TEX_ID,
-            atlas.width,
-            atlas.height,
+            IMBA_ATHLAS_TEX_ID,
+            athlas.width,
+            athlas.height,
             rgba.as_ptr(),
             rgba.len(),
         )
@@ -312,7 +315,7 @@ fn ensure_atlas_uploaded() -> bool {
     if rc != 0 {
         return false;
     }
-    ATLAS_UPLOADED.store(true, Ordering::Release);
+    IMBA_ATHLAS_UPLOADED.store(true, Ordering::Release);
     true
 }
 
@@ -329,22 +332,22 @@ fn build_vertices(
         return;
     }
 
-    let atlas = font_atlas_large_view();
-    let grid_w = atlas.grid_w.max(1);
-    let atlas_w = atlas.width as f32;
-    let atlas_h = atlas.height as f32;
-    let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+    let athlas = imba_athlas_large_view();
+    let grid_w = athlas.grid_w.max(1);
+    let athlas_w = athlas.width as f32;
+    let athlas_h = athlas.height as f32;
+    let fallback = athlas.index.get(b'?' as usize).copied().unwrap_or(0);
 
     let glyph_advance_px = |ch: u8| {
-        let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
+        let mut slot = athlas.index.get(ch as usize).copied().unwrap_or(fallback);
         if slot == u16::MAX {
             slot = fallback;
         }
-        atlas
+        athlas
             .widths
             .get(slot as usize)
             .copied()
-            .unwrap_or(atlas.cell_w as u8) as f32
+            .unwrap_or(athlas.cell_w as u8) as f32
     };
 
     let mut pen_x = x;
@@ -353,7 +356,7 @@ fn build_vertices(
     for &ch in text {
         if ch == b'\n' {
             pen_x = x;
-            pen_y += atlas.cell_h as f32;
+            pen_y += athlas.cell_h as f32;
             continue;
         }
         if ch == b' ' {
@@ -361,26 +364,26 @@ fn build_vertices(
             continue;
         }
 
-        let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
+        let mut slot = athlas.index.get(ch as usize).copied().unwrap_or(fallback);
         if slot == u16::MAX {
             slot = fallback;
         }
 
-        let glyph_w_px = atlas
+        let glyph_w_px = athlas
             .widths
             .get(slot as usize)
             .copied()
-            .unwrap_or(atlas.cell_w as u8) as f32;
-        let glyph_h_px = atlas.cell_h as f32;
+            .unwrap_or(athlas.cell_w as u8) as f32;
+        let glyph_h_px = athlas.cell_h as f32;
 
         let sx = (slot as u32) % grid_w;
         let sy = (slot as u32) / grid_w;
-        let px0 = (sx * atlas.cell_w) as f32;
-        let py0 = (sy * atlas.cell_h) as f32;
-        let u0 = px0 / atlas_w;
-        let v0 = py0 / atlas_h;
-        let u1 = (px0 + glyph_w_px) / atlas_w;
-        let v1 = (py0 + glyph_h_px) / atlas_h;
+        let px0 = (sx * athlas.cell_w) as f32;
+        let py0 = (sy * athlas.cell_h) as f32;
+        let u0 = px0 / athlas_w;
+        let v0 = py0 / athlas_h;
+        let u1 = (px0 + glyph_w_px) / athlas_w;
+        let v1 = (py0 + glyph_h_px) / athlas_h;
 
         let x0 = pen_x;
         let y0 = pen_y;
@@ -458,27 +461,33 @@ fn build_vertices(
     }
 }
 
-pub fn draw_atlas_text_in_frame(text: &[u8], x: f32, y: f32, view_w: u32, view_h: u32) -> bool {
-    draw_atlas_text_in_frame_alpha(text, x, y, view_w, view_h, 255)
+pub fn draw_imba_athlas_text_in_frame(
+    text: &[u8],
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+) -> bool {
+    draw_imba_athlas_text_in_frame_alpha(text, x, y, view_w, view_h, 255)
 }
 
-pub fn atlas_text_width_px(text: &[u8]) -> f32 {
+pub fn imba_athlas_text_width_px(text: &[u8]) -> f32 {
     if text.is_empty() {
         return 0.0;
     }
 
-    let atlas = font_atlas_large_view();
-    let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+    let athlas = imba_athlas_large_view();
+    let fallback = athlas.index.get(b'?' as usize).copied().unwrap_or(0);
     let glyph_advance_px = |ch: u8| {
-        let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
+        let mut slot = athlas.index.get(ch as usize).copied().unwrap_or(fallback);
         if slot == u16::MAX {
             slot = fallback;
         }
-        atlas
+        athlas
             .widths
             .get(slot as usize)
             .copied()
-            .unwrap_or(atlas.cell_w as u8) as f32
+            .unwrap_or(athlas.cell_w as u8) as f32
     };
 
     let mut line_w = 0.0f32;
@@ -494,7 +503,7 @@ pub fn atlas_text_width_px(text: &[u8]) -> f32 {
     max_w.max(line_w)
 }
 
-pub fn draw_atlas_text_in_frame_alpha(
+pub fn draw_imba_athlas_text_in_frame_alpha(
     text: &[u8],
     x: f32,
     y: f32,
@@ -505,7 +514,7 @@ pub fn draw_atlas_text_in_frame_alpha(
     if text.is_empty() {
         return false;
     }
-    if !ensure_atlas_uploaded() {
+    if !ensure_imba_athlas_uploaded() {
         return false;
     }
 
@@ -533,12 +542,16 @@ pub fn draw_atlas_text_in_frame_alpha(
         .len()
         .saturating_mul(core::mem::size_of::<TexVertex>());
     let rc = unsafe {
-        crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(ATLAS_TEX_ID, ptr, len)
+        crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
+            IMBA_ATHLAS_TEX_ID,
+            ptr,
+            len,
+        )
     };
     rc == 0
 }
 
-pub fn draw_atlas_text(text: &[u8], x: f32, y: f32) -> bool {
+pub fn draw_imba_athlas_text(text: &[u8], x: f32, y: f32) -> bool {
     let (view_w, view_h) = crate::limine::framebuffer_response()
         .and_then(|resp| resp.framebuffers().next())
         .map(|fb| (fb.width() as u32, fb.height() as u32))
@@ -549,7 +562,7 @@ pub fn draw_atlas_text(text: &[u8], x: f32, y: f32) -> bool {
         return false;
     }
 
-    let ok = draw_atlas_text_in_frame(text, x, y, view_w, view_h);
+    let ok = draw_imba_athlas_text_in_frame(text, x, y, view_w, view_h);
     let end_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
     ok && end_rc == 0
 }
