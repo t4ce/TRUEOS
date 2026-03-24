@@ -29,6 +29,7 @@ const UI2_SYSTEM_SCROLLBAR_PX: f32 = 4.0;
 const UI2_SYSTEM_BUTTON_W: f32 = 24.0;
 const UI2_SYSTEM_BUTTON_H: f32 = 14.0;
 const UI2_SYSTEM_BUTTON_GAP: f32 = 4.0;
+const UI2_BROWSER_TITLE_OVERLAY_PERIOD_MS: u64 = 2400;
 const UI2_BROWSER_FORK_WINDOW_OFFSET_PX: f32 = 24.0;
 const UI2_BOTTOM_RESIZE_BUTTON_W: f32 = 18.0;
 const UI2_BOTTOM_RESIZE_BUTTON_H: f32 = 14.0;
@@ -283,6 +284,20 @@ static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
 fn boot_probe_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     embassy_time_driver::now().saturating_mul(1000) / hz
+}
+
+#[inline]
+fn browser_title_overlay_mid_offset(window: &Ui2Window, now_ms: u64) -> f32 {
+    if window.kind != Ui2WindowKind::HostedBrowser {
+        return 0.5;
+    }
+
+    let period_ms = UI2_BROWSER_TITLE_OVERLAY_PERIOD_MS.max(1);
+    let phase_ms = now_ms
+        .wrapping_add((window_browser_instance_id(window) as u64).saturating_mul(period_ms / 5))
+        % period_ms;
+    let t = phase_ms as f32 / period_ms as f32;
+    0.18 + (0.64 * t)
 }
 
 fn hosted_browser_factory_content_rect_for_view(
@@ -662,12 +677,12 @@ fn hosted_browser_content_seq(state: &Ui2State) -> u32 {
         .map(|window| {
             let instance_id = window_browser_instance_id(window);
             let surface_seq = hosted_surface_seq(instance_id);
-            let text_seq = hosted_text_seq(instance_id);
+            let layout_seq = hosted_layout_seq(instance_id);
             instance_id
                 .wrapping_mul(1315423911)
                 .wrapping_add(surface_seq)
                 .wrapping_mul(16777619)
-                .wrapping_add(text_seq)
+                .wrapping_add(layout_seq)
         })
         .fold(0u32, |acc, value| {
             acc.wrapping_mul(16777619).wrapping_add(value)
@@ -2262,14 +2277,20 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
     }
 }
 
-fn draw_hosted_browser_text_rows(state: &Ui2State, window: &Ui2Window, content: Ui2Rect) -> bool {
-    let text_state = hosted_text_state(window_browser_instance_id(window));
-    if text_state.rows.is_empty() {
+fn draw_hosted_browser_layout_preview(
+    state: &Ui2State,
+    window: &Ui2Window,
+    content: Ui2Rect,
+) -> bool {
+    let layout_state = hosted_layout_state(window_browser_instance_id(window));
+    if layout_state.nodes.is_empty() {
         return false;
     }
 
     let panel_rgba = modulate_rgba_alpha((0xF8, 0xF8, 0xF4, 0xFF), window.alpha);
-    let row_rgba = modulate_rgba_alpha((0xDC, 0xE3, 0xED, 0xFF), window.alpha);
+    let block_rgba = modulate_rgba_alpha((0xDC, 0xE3, 0xED, 0xFF), window.alpha);
+    let inline_rgba = modulate_rgba_alpha((0xB9, 0xCB, 0xDE, 0xFF), window.alpha);
+    let accent_rgba = modulate_rgba_alpha((0x8E, 0xAE, 0xC8, 0xFF), window.alpha);
     let _ = crate::gfx::lyon::draw_solid_rect_no_present(
         content.x,
         content.y,
@@ -2280,27 +2301,40 @@ fn draw_hosted_browser_text_rows(state: &Ui2State, window: &Ui2Window, content: 
         state.view_h,
     );
 
-    for (idx, row) in text_state.rows.iter().take(10).enumerate() {
-        let top = content.y + 10.0 + (idx as f32 * 18.0);
-        if top + 18.0 > content.y + content.h {
-            break;
+    for node in layout_state.nodes.iter().take(24) {
+        if node.parent_id == 0 {
+            continue;
         }
+        let left = content.x + 8.0 + node.margin_left_px as f32;
+        let top = content.y + 8.0 + (node.depth.saturating_sub(1) as f32 * 10.0);
+        let width = if node.intrinsic_width_px > 0 {
+            node.intrinsic_width_px.min(content.w.max(1.0) as u32) as f32
+        } else {
+            (content.w - 16.0 - node.margin_left_px as f32).max(12.0)
+        };
+        let height = node.intrinsic_height_px.max(node.min_height_px).max(10) as f32;
+        let block_rect = Ui2Rect {
+            x: left,
+            y: top,
+            w: width.max(12.0),
+            h: height.min((content.y + content.h - top).max(0.0)),
+        };
+        if block_rect.h <= 0.0 || block_rect.y >= content.y + content.h {
+            continue;
+        }
+        let rgba = match node.kind.as_str() {
+            "button" | "input" => accent_rgba,
+            "inline" | "text" => inline_rgba,
+            _ => block_rgba,
+        };
         let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-            content.x + 6.0,
-            top - 1.0,
-            (content.w - 12.0).max(1.0),
-            16.0,
-            row_rgba,
+            block_rect.x,
+            block_rect.y,
+            block_rect.w,
+            block_rect.h,
+            rgba,
             state.view_w,
             state.view_h,
-        );
-        crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
-            row.text.as_bytes(),
-            content.x + 10.0 + row.indent_px as f32,
-            top + 1.0,
-            state.view_w,
-            state.view_h,
-            window.alpha,
         );
     }
 
@@ -2339,6 +2373,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
         state.view_h,
     );
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
+        let title_mid_offset = browser_title_overlay_mid_offset(window, boot_probe_ms());
         let _ = crate::gfx::lyon::draw_horizontal_three_stop_rect_no_present(
             rect.x,
             rect.y,
@@ -2351,7 +2386,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
             frame_left_rgba,
             frame_mid_rgba,
             frame_right_rgba,
-            0.5,
+            title_mid_offset,
             state.view_w,
             state.view_h,
         );
@@ -2399,7 +2434,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
             );
         }
         let title_face = crate::gfx::imbafont::ImbaFontFace::Loop;
-        let title_text_h = (UI2_TITLE_H - 2.0).max(1.0);
+        let title_text_h = UI2_TITLE_H.max(1.0);
         let title_tracking_px = -0.75f32;
         let title_w = crate::gfx::imbafont::measure_text_width_px_tracked(
             title_face,
@@ -2444,9 +2479,6 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
             if let Some(content) = content_rect {
-                if draw_hosted_browser_text_rows(state, window, content) {
-                    return;
-                }
                 if texture_is_drawable(window.content_tex_id)
                     && draw_texture_rect_no_present(
                         window.content_tex_id,
@@ -2460,6 +2492,9 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                         window.alpha,
                     )
                 {
+                    return;
+                }
+                if draw_hosted_browser_layout_preview(state, window, content) {
                     return;
                 }
                 draw_window_content_placeholder(
@@ -2502,7 +2537,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     }
 }
 
-fn update_compose_fps_history(state: &mut Ui2State, now_ms: u64) {
+fn update_hud_fps_history(state: &mut Ui2State, now_ms: u64) {
     state.compose_present_history_ms.push(now_ms);
     let window_start = now_ms.saturating_sub(1000);
     state
@@ -2511,7 +2546,7 @@ fn update_compose_fps_history(state: &mut Ui2State, now_ms: u64) {
     state.compose_fps_display = state.compose_present_history_ms.len().min(999) as u16;
 }
 
-fn draw_compose_fps_overlay(state: &Ui2State) {
+fn draw_hud_fps_overlay(state: &Ui2State) {
     let text = format!("{:03}", state.compose_fps_display.min(999));
     let text_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(text.as_bytes());
     let pad_x = 6.0f32;
@@ -2537,6 +2572,14 @@ fn draw_compose_fps_overlay(state: &Ui2State) {
         state.view_h,
         255,
     );
+}
+
+fn draw_hud_pass(state: &Ui2State) {
+    draw_hud_fps_overlay(state);
+}
+
+fn update_hud_pass(state: &mut Ui2State, now_ms: u64) {
+    update_hud_fps_history(state, now_ms);
 }
 
 fn compose_windows(state: &mut Ui2State) {
@@ -2622,9 +2665,9 @@ fn compose_windows(state: &mut Ui2State) {
                 draw_window_frame(state, window);
             }
             draw_resize_preview_outline(state);
-            draw_compose_fps_overlay(state);
+            draw_hud_pass(state);
             unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
-            update_compose_fps_history(state, boot_probe_ms());
+            update_hud_pass(state, boot_probe_ms());
             if state.compose_seq <= 2 {
                 crate::log!("ui2: compose-frame seq={} end\n", state.compose_seq);
             }
