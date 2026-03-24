@@ -2,7 +2,7 @@ import * as parse5 from 'parse5';
 import Yoga from 'yoga-layout';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
 import { BLOCK_TAGS, TEXT_LEVEL_SEMANTICS_TAGS } from './htmlDefaults.mjs';
-import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './REV_theme.mjs';
+import { LEFT_PAD, TOP_PAD, LINE_H, FONT_PX } from './theme.mjs';
 
 const INDENT_PX = 12;
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);

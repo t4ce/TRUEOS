@@ -176,14 +176,14 @@ fn pop_next_request() -> Option<HtmlRequest> {
 async fn store_ready_html(html: Html) -> usize {
     let ready_len = with_html_shack(|shack| shack.put_ready_html(html.clone()));
     if HTML_SHACK_BROWSER_HANDOFF_ENABLE {
-        handoff_ready_html_to_boot_browsers(html).await;
+        html_ready_to_truesurfer(html).await;
     } else {
         crate::log!("html_shack: browser_handoff disabled url={}\n", html.url);
     }
     ready_len
 }
 
-async fn handoff_ready_html_to_boot_browsers(html: Html) {
+async fn html_ready_to_truesurfer(html: Html) {
     let browser_count = crate::r::spawn_service::truesurfer_factory_boot_count();
     if browser_count == 0 {
         crate::log!(
@@ -193,12 +193,11 @@ async fn handoff_ready_html_to_boot_browsers(html: Html) {
         return;
     }
 
-    let first_browser_instance_id = trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID;
-    let last_browser_instance_id = first_browser_instance_id
-        .saturating_add(browser_count.saturating_sub(1))
-        .min(trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID);
-
-    for browser_instance_id in first_browser_instance_id..=last_browser_instance_id {
+    for browser_instance_id in trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
+        .iter()
+        .copied()
+        .take(browser_count as usize)
+    {
         let handed_off = trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
             browser_instance_id,
             html.html.clone(),
