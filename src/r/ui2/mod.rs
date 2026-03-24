@@ -2398,11 +2398,14 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                 window.alpha,
             );
         }
+        let title_face = crate::gfx::imbafont::ImbaFontFace::Loop;
         let title_text_h = (UI2_TITLE_H - 2.0).max(1.0);
-        let title_w = crate::gfx::imbafont::measure_text_width_px(
-            crate::gfx::imbafont::ImbaFontFace::Impact,
+        let title_tracking_px = -0.75f32;
+        let title_w = crate::gfx::imbafont::measure_text_width_px_tracked(
+            title_face,
             window.title.as_bytes(),
             title_text_h,
+            title_tracking_px,
         );
         let title_left = if window.icon_id != 0 {
             rect.x + 28.0
@@ -2411,20 +2414,20 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
         };
         let title_x = (rect.x + ((rect.w - title_w) * 0.5)).max(title_left);
         let title_y = rect.y + ((UI2_TITLE_H - title_text_h) * 0.5);
-        if let Some(layout) = crate::gfx::imbafont::layout_text_top_left(
-            crate::gfx::imbafont::ImbaFontFace::Impact,
+        if let Some(layout) = crate::gfx::imbafont::layout_text_top_left_tracked(
+            title_face,
             window.title.as_bytes(),
             title_x,
             title_y,
             title_text_h,
+            title_tracking_px,
         ) {
-            let _ = crate::gfx::imbafont::draw_text_in_frame(
-                crate::gfx::imbafont::ImbaFontFace::Impact,
+            let _ = crate::gfx::imbafont::draw_text_in_frame_negative(
+                title_face,
                 window.title.as_bytes(),
                 &layout,
                 state.view_w,
                 state.view_h,
-                (title_rgba.0, title_rgba.1, title_rgba.2),
                 title_rgba.3,
             );
         }
@@ -2512,7 +2515,7 @@ fn draw_compose_fps_overlay(state: &Ui2State) {
     let text = format!("{:03}", state.compose_fps_display.min(999));
     let text_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(text.as_bytes());
     let pad_x = 6.0f32;
-    let pad_y = 4.0f32;
+    let pad_y = 3.0f32;
     let box_w = text_w + pad_x * 2.0;
     let box_h = 16.0f32;
     let x = ((state.view_w as f32) - box_w - 8.0).max(0.0);

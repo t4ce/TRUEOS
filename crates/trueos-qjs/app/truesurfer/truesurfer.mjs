@@ -19,6 +19,7 @@ const TRUESURFER_SUBSET_PROFILE = Object.freeze({
 const COMMON_BODY_TAGS = new Set(TRUESURFER_SUBSET_PROFILE.bodyTags);
 const BODY_HIERARCHY_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyNodes;
 const BODY_HIERARCHY_DEPTH_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyDepth;
+const LAYOUT_INTENT_NODE_LIMIT = 32;
 const DEFAULT_HEAD_SHELL = '<head></head>';
 const DEFAULT_BODY_SHELL = '<body></body>';
 const COMMON_BODY_TAGS_FALLBACK = new Set([
@@ -260,6 +261,199 @@ function buildHostedTextRows(title, bodyHierarchy, limit = 24) {
   return rows;
 }
 
+function estimateTextWidthPx(text, fontPx) {
+  const value = collapseWhitespace(text);
+  if (!value) {
+    return Math.max(1, Math.round(fontPx * 0.56));
+  }
+  const glyphPx = Math.max(6, Math.round(Number(fontPx || 14) * 0.56));
+  return Math.max(glyphPx, value.length * glyphPx);
+}
+
+function classifyLayoutTag(tag) {
+  switch (safeString(tag).toLowerCase()) {
+    case 'img':
+      return 'image';
+    case 'button':
+      return 'button';
+    case 'input':
+      return 'input';
+    case 'hr':
+      return 'rule';
+    case 'a':
+      return 'inline';
+    case 'span':
+      return 'inline';
+    default:
+      return 'block';
+  }
+}
+
+function estimateLayoutNodeMetrics(tag, depth) {
+  const name = safeString(tag).toLowerCase();
+  const indent = Math.max(0, Number(depth) || 0) * 12;
+  let intrinsicWidthPx = 0;
+  let intrinsicHeightPx = 20;
+  let minWidthPx = 0;
+  let minHeightPx = 20;
+  let paddingLeftPx = 0;
+  let paddingTopPx = 0;
+  let paddingRightPx = 0;
+  let paddingBottomPx = 0;
+  let marginBottomPx = 4;
+
+  if (/^h[1-6]$/.test(name)) {
+    const level = Number(name[1] || 1);
+    intrinsicHeightPx = Math.max(20, 34 - (level * 3));
+    minHeightPx = intrinsicHeightPx;
+    marginBottomPx = 8;
+  } else if (name === 'button') {
+    intrinsicWidthPx = 120;
+    intrinsicHeightPx = 32;
+    minWidthPx = intrinsicWidthPx;
+    minHeightPx = intrinsicHeightPx;
+    paddingLeftPx = 12;
+    paddingRightPx = 12;
+    paddingTopPx = 6;
+    paddingBottomPx = 6;
+    marginBottomPx = 6;
+  } else if (name === 'input') {
+    intrinsicWidthPx = 180;
+    intrinsicHeightPx = 30;
+    minWidthPx = intrinsicWidthPx;
+    minHeightPx = intrinsicHeightPx;
+    paddingLeftPx = 10;
+    paddingRightPx = 10;
+    paddingTopPx = 6;
+    paddingBottomPx = 6;
+    marginBottomPx = 6;
+  } else if (name === 'img') {
+    intrinsicWidthPx = 160;
+    intrinsicHeightPx = 120;
+    minWidthPx = intrinsicWidthPx;
+    minHeightPx = intrinsicHeightPx;
+    marginBottomPx = 8;
+  } else if (name === 'hr') {
+    intrinsicHeightPx = 8;
+    minHeightPx = intrinsicHeightPx;
+    marginBottomPx = 8;
+  } else if (name === 'a' || name === 'span') {
+    intrinsicWidthPx = estimateTextWidthPx(name, 14);
+    intrinsicHeightPx = 20;
+    minWidthPx = intrinsicWidthPx;
+    minHeightPx = intrinsicHeightPx;
+  }
+
+  return {
+    indentPx: indent,
+    intrinsicWidthPx,
+    intrinsicHeightPx,
+    minWidthPx,
+    minHeightPx,
+    paddingLeftPx,
+    paddingTopPx,
+    paddingRightPx,
+    paddingBottomPx,
+    marginBottomPx,
+  };
+}
+
+function buildLayoutIntent(title, bodyHierarchy, limit = LAYOUT_INTENT_NODE_LIMIT) {
+  const nodes = [{
+    nodeId: 1,
+    parentId: 0,
+    depth: 0,
+    kind: 'root',
+    tag: 'body',
+    intrinsicWidthPx: 0,
+    intrinsicHeightPx: 0,
+    minWidthPx: 0,
+    minHeightPx: 0,
+    marginLeftPx: 0,
+    marginTopPx: 0,
+    marginRightPx: 0,
+    marginBottomPx: 0,
+    paddingLeftPx: 0,
+    paddingTopPx: 0,
+    paddingRightPx: 0,
+    paddingBottomPx: 0,
+    flexGrow: 0,
+    flexShrink: 0,
+  }];
+  const stack = [1];
+  let nextNodeId = 2;
+  const titleText = collapseWhitespace(title);
+
+  if (titleText && nodes.length < limit) {
+    nodes.push({
+      nodeId: nextNodeId,
+      parentId: 1,
+      depth: 1,
+      kind: 'text',
+      tag: 'title',
+      intrinsicWidthPx: estimateTextWidthPx(titleText, 18),
+      intrinsicHeightPx: 26,
+      minWidthPx: 0,
+      minHeightPx: 26,
+      marginLeftPx: 0,
+      marginTopPx: 0,
+      marginRightPx: 0,
+      marginBottomPx: 8,
+      paddingLeftPx: 0,
+      paddingTopPx: 0,
+      paddingRightPx: 0,
+      paddingBottomPx: 0,
+      flexGrow: 0,
+      flexShrink: 0,
+    });
+    nextNodeId += 1;
+  }
+
+  const items = Array.isArray(bodyHierarchy) ? bodyHierarchy : [];
+  for (let index = 0; index < items.length && nodes.length < limit; index += 1) {
+    const entry = items[index] || {};
+    const tag = collapseWhitespace(entry.tag).toLowerCase();
+    if (!tag) {
+      continue;
+    }
+    const depth = Math.max(0, Number(entry.depth) || 0);
+    while (stack.length > depth + 1) {
+      stack.pop();
+    }
+    const parentId = stack[stack.length - 1] || 1;
+    const metrics = estimateLayoutNodeMetrics(tag, depth);
+    const nodeId = nextNodeId;
+    nextNodeId += 1;
+    nodes.push({
+      nodeId,
+      parentId,
+      depth: depth + 1,
+      kind: classifyLayoutTag(tag),
+      tag,
+      intrinsicWidthPx: metrics.intrinsicWidthPx,
+      intrinsicHeightPx: metrics.intrinsicHeightPx,
+      minWidthPx: metrics.minWidthPx,
+      minHeightPx: metrics.minHeightPx,
+      marginLeftPx: metrics.indentPx,
+      marginTopPx: 0,
+      marginRightPx: 0,
+      marginBottomPx: metrics.marginBottomPx,
+      paddingLeftPx: metrics.paddingLeftPx,
+      paddingTopPx: metrics.paddingTopPx,
+      paddingRightPx: metrics.paddingRightPx,
+      paddingBottomPx: metrics.paddingBottomPx,
+      flexGrow: 0,
+      flexShrink: 0,
+    });
+    stack.push(nodeId);
+  }
+
+  return {
+    version: 1,
+    nodes,
+  };
+}
+
 function collectStyleArtifacts(source) {
   const html = safeString(source);
   const styles = [];
@@ -351,6 +545,7 @@ function extractDocumentArtifacts(source) {
   const textRows = TRUESURFER_SUBSET_PROFILE.includeHostedTextRows
     ? buildHostedTextRows(title, bodyHierarchy)
     : [];
+  const layoutIntent = buildLayoutIntent(title, bodyHierarchy);
 
   let styleBytes = 0;
   for (const style of styles) {
@@ -378,6 +573,7 @@ function extractDocumentArtifacts(source) {
     bodyHierarchy,
     bodyHierarchySummary,
     textRows,
+    layoutIntent,
     styleCount: styles.length,
     styleBytes,
     styleSlotCount: styleIndex.styleSlotCount,
@@ -414,6 +610,7 @@ function setHtml(nextHtml, meta) {
       bodyHierarchy: parsed.bodyHierarchy,
       bodyHierarchySummary: parsed.bodyHierarchySummary,
       textRows: parsed.textRows,
+      layoutIntent: parsed.layoutIntent,
       styleCount: parsed.styleCount,
       styleBytes: parsed.styleBytes,
       styleSlotCount: parsed.styleSlotCount,
@@ -436,6 +633,7 @@ function setHtml(nextHtml, meta) {
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
       textRows: parsed.textRows,
+      layoutIntent: parsed.layoutIntent,
       styleCount: parsed.styleCount,
       styleBytes: parsed.styleBytes,
       styleSlotCount: parsed.styleSlotCount,
