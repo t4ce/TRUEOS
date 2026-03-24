@@ -43,11 +43,14 @@ const TRUESURFER_RESULT_PARSE_MS_PROP: &[u8] = b"parseMs\0";
 const TRUESURFER_RESULT_TITLE_PROP: &[u8] = b"title\0";
 const TRUESURFER_RESULT_SHELL_BYTES_PROP: &[u8] = b"shellBytes\0";
 const TRUESURFER_RESULT_BODY_BYTES_PROP: &[u8] = b"bodyBytes\0";
+const TRUESURFER_RESULT_TEXT_ROWS_PROP: &[u8] = b"textRows\0";
 const TRUESURFER_RESULT_STYLE_COUNT_PROP: &[u8] = b"styleCount\0";
 const TRUESURFER_RESULT_STYLE_BYTES_PROP: &[u8] = b"styleBytes\0";
 const TRUESURFER_RESULT_SCRIPT_COUNT_PROP: &[u8] = b"scriptCount\0";
 const TRUESURFER_RESULT_SCRIPT_BYTES_PROP: &[u8] = b"scriptBytes\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
+const TRUESURFER_TEXT_ROW_TEXT_PROP: &[u8] = b"text\0";
+const TRUESURFER_TEXT_ROW_INDENT_PROP: &[u8] = b"indentPx\0";
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
@@ -481,6 +484,50 @@ unsafe fn read_result_string(
     out
 }
 
+unsafe fn read_array_len(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst) -> u32 {
+    static LENGTH_PROP: &[u8] = b"length\0";
+    read_result_u32(ctx, obj, LENGTH_PROP)
+}
+
+unsafe fn read_text_rows(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst) -> HostedBrowserTextState {
+    let rows_value = qjs::JS_GetPropertyStr(
+        ctx,
+        obj,
+        TRUESURFER_RESULT_TEXT_ROWS_PROP.as_ptr() as *const c_char,
+    );
+    if rows_value.is_exception()
+        || rows_value.tag == qjs::JS_TAG_UNDEFINED
+        || rows_value.tag == qjs::JS_TAG_NULL
+    {
+        qjs::js_free_value(ctx, rows_value);
+        return HostedBrowserTextState::default();
+    }
+
+    let row_count = read_array_len(ctx, rows_value).min(32);
+    let mut rows = Vec::with_capacity(row_count as usize);
+    for idx in 0..row_count {
+        let row_value = qjs::JS_GetPropertyUint32(ctx, rows_value, idx);
+        if row_value.is_exception()
+            || row_value.tag == qjs::JS_TAG_UNDEFINED
+            || row_value.tag == qjs::JS_TAG_NULL
+        {
+            qjs::js_free_value(ctx, row_value);
+            continue;
+        }
+        let text = read_result_string(ctx, row_value, TRUESURFER_TEXT_ROW_TEXT_PROP);
+        if text.is_empty() {
+            qjs::js_free_value(ctx, row_value);
+            continue;
+        }
+        let indent_px = read_result_u32(ctx, row_value, TRUESURFER_TEXT_ROW_INDENT_PROP);
+        rows.push(HostedBrowserTextRow { text, indent_px });
+        qjs::js_free_value(ctx, row_value);
+    }
+
+    qjs::js_free_value(ctx, rows_value);
+    HostedBrowserTextState { rows }
+}
+
 fn take_queued_html_for_browser(browser_instance_id: u32) -> Option<PendingHtml> {
     let queue = html_handoff_queue(browser_instance_id)?;
     let mut receiver = queue.receiver.lock();
@@ -564,9 +611,17 @@ unsafe fn dispatch_html(
         script_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SCRIPT_BYTES_PROP),
         error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
     };
+    let text_state = read_text_rows(ctx, result);
 
     let _ = with_browser_state_mut(browser_instance_id, |state| {
         state.last_parse_result = Some(parse_result.clone());
+        state.text_state = text_state.clone();
+        state.text_seq = state.text_seq.wrapping_add(1);
+        if !state.text_state.rows.is_empty() {
+            state.surface_state.content_height = ((state.text_state.rows.len() as u32) * 18)
+                .saturating_add(20)
+                .max(state.surface_state.viewport_height);
+        }
     });
 
     if parse_result.ok {
