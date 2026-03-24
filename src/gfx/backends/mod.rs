@@ -1,7 +1,7 @@
 use trueos_gfx_core::{
     BufferDesc, BufferId, CommandBuffer, DeviceCaps, Error, Extent2D, FenceId, GfxContext,
-    GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, PipelineDesc, PipelineId, Result,
-    ShaderDesc, ShaderId, SwapchainDesc,
+    GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, ImageRegion, PipelineDesc, PipelineId,
+    Result, ShaderDesc, ShaderId, SwapchainDesc,
 };
 
 //#[cfg(feature = "gfx_intel")]
@@ -60,6 +60,15 @@ impl GfxDevice for NullBackend {
     fn destroy_image(&mut self, _id: ImageId) {}
 
     fn write_image(&mut self, _id: ImageId, _data: &[u8]) -> Result<()> {
+        Err(Error::Unsupported)
+    }
+
+    fn write_image_region(
+        &mut self,
+        _id: ImageId,
+        _region: ImageRegion,
+        _data: &[u8],
+    ) -> Result<()> {
         Err(Error::Unsupported)
     }
 

@@ -500,14 +500,14 @@ impl WidgetTree {
             let node = &mut self.nodes[node_index];
             if local {
                 node.dirty_local = true;
+                if let Some(rect) = rect_hint {
+                    node.dirty_rect_hint = Some(match node.dirty_rect_hint {
+                        Some(prev) => union_rect(prev, rect),
+                        None => rect,
+                    });
+                }
             }
             node.dirty_subtree = true;
-            if let Some(rect) = rect_hint {
-                node.dirty_rect_hint = Some(match node.dirty_rect_hint {
-                    Some(prev) => union_rect(prev, rect),
-                    None => rect,
-                });
-            }
             current = node.parent;
             local = false;
         }
@@ -604,7 +604,7 @@ impl WidgetTree {
             return;
         }
 
-        if node.dirty_local || node.dirty_subtree {
+        if node.dirty_local || node.dirty_rect_hint.is_some() {
             push_dirty_rect(
                 &mut frame.dirty_rects,
                 clip_rect(node.dirty_rect_hint.unwrap_or(node.rect), viewport),
@@ -856,6 +856,46 @@ fn stroke_pixels_rgba(
     );
 }
 
+fn draw_widget_paint_item(pixels: &mut [u8], width: u32, height: u32, item: &WidgetPaintItem) {
+    match item {
+        WidgetPaintItem::FillRect { rect, rgba } => {
+            fill_pixels_rgba(pixels, width, height, *rect, *rgba);
+        }
+        WidgetPaintItem::StrokeRect {
+            rect,
+            rgba,
+            width: border,
+        } => {
+            stroke_pixels_rgba(pixels, width, height, *rect, *rgba, *border);
+        }
+        WidgetPaintItem::Text { rect, text, rgba } => {
+            let bar_w = (text.len() as f32 * 6.0).min(rect.w.max(0.0)).max(4.0);
+            fill_pixels_rgba(
+                pixels,
+                width,
+                height,
+                Ui2Rect {
+                    x: rect.x,
+                    y: rect.y + 4.0,
+                    w: bar_w,
+                    h: (rect.h - 8.0).min(8.0).max(3.0),
+                },
+                *rgba,
+            );
+        }
+        WidgetPaintItem::Texture { rect, tex_id } => {
+            let tint = ((*tex_id % 251) as u8).max(32);
+            fill_pixels_rgba(
+                pixels,
+                width,
+                height,
+                *rect,
+                [tint, tint / 2, 255u8.saturating_sub(tint / 3), 0xFF],
+            );
+        }
+    }
+}
+
 fn rasterize_widget_frame(frame: &WidgetFrame, width: u32, height: u32) -> Vec<u8> {
     let mut pixels = vec![0u8; width as usize * height as usize * 4];
     fill_pixels_rgba(
@@ -872,46 +912,58 @@ fn rasterize_widget_frame(frame: &WidgetFrame, width: u32, height: u32) -> Vec<u
     );
 
     for item in &frame.paint_items {
-        match item {
-            WidgetPaintItem::FillRect { rect, rgba } => {
-                fill_pixels_rgba(&mut pixels, width, height, *rect, *rgba);
-            }
-            WidgetPaintItem::StrokeRect {
-                rect,
-                rgba,
-                width: border,
-            } => {
-                stroke_pixels_rgba(&mut pixels, width, height, *rect, *rgba, *border);
-            }
-            WidgetPaintItem::Text { rect, text, rgba } => {
-                let bar_w = (text.len() as f32 * 6.0).min(rect.w.max(0.0)).max(4.0);
-                fill_pixels_rgba(
-                    &mut pixels,
-                    width,
-                    height,
-                    Ui2Rect {
-                        x: rect.x,
-                        y: rect.y + 4.0,
-                        w: bar_w,
-                        h: (rect.h - 8.0).min(8.0).max(3.0),
-                    },
-                    *rgba,
-                );
-            }
-            WidgetPaintItem::Texture { rect, tex_id } => {
-                let tint = ((*tex_id % 251) as u8).max(32);
-                fill_pixels_rgba(
-                    &mut pixels,
-                    width,
-                    height,
-                    *rect,
-                    [tint, tint / 2, 255u8.saturating_sub(tint / 3), 0xFF],
-                );
-            }
-        }
+        draw_widget_paint_item(&mut pixels, width, height, item);
     }
 
     pixels
+}
+
+fn extract_pixels_rgba_region(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    region: Ui2Rect,
+) -> Option<(u32, u32, u32, u32, Vec<u8>)> {
+    let x0 = libm::floorf(region.x.max(0.0)) as u32;
+    let y0 = libm::floorf(region.y.max(0.0)) as u32;
+    let x1 = libm::ceilf(region.x + region.w).min(width as f32) as u32;
+    let y1 = libm::ceilf(region.y + region.h).min(height as f32) as u32;
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let row_bytes = (x1 - x0) as usize * 4;
+    let row_count = (y1 - y0) as usize;
+    let mut out = vec![0u8; row_bytes.saturating_mul(row_count)];
+    for row in 0usize..row_count {
+        let src_off = ((y0 as usize + row)
+            .saturating_mul(width as usize)
+            .saturating_add(x0 as usize))
+        .saturating_mul(4);
+        let dst_off = row.saturating_mul(row_bytes);
+        out[dst_off..dst_off + row_bytes].copy_from_slice(&src[src_off..src_off + row_bytes]);
+    }
+    Some((x0, y0, x1 - x0, y1 - y0, out))
+}
+
+fn rerasterize_widget_frame_region(
+    pixels: &mut [u8],
+    frame: &WidgetFrame,
+    width: u32,
+    height: u32,
+    dirty: Ui2Rect,
+) {
+    fill_pixels_rgba(pixels, width, height, dirty, [0xE8, 0xE2, 0xD5, 0xFF]);
+    for item in &frame.paint_items {
+        let item_rect = match item {
+            WidgetPaintItem::FillRect { rect, .. } => *rect,
+            WidgetPaintItem::StrokeRect { rect, .. } => *rect,
+            WidgetPaintItem::Text { rect, .. } => *rect,
+            WidgetPaintItem::Texture { rect, .. } => *rect,
+        };
+        if rect_intersects(item_rect, dirty) {
+            draw_widget_paint_item(pixels, width, height, item);
+        }
+    }
 }
 
 #[embassy_executor::task]
@@ -940,6 +992,8 @@ pub async fn ui2_widget_tree_demo_task() {
         h: UI2_WIDGET_TREE_DEMO_H as f32,
     };
     let (mut tree, demo) = WidgetTree::build_basic_demo(viewport);
+    let mut pixels =
+        vec![0u8; UI2_WIDGET_TREE_DEMO_W as usize * UI2_WIDGET_TREE_DEMO_H as usize * 4];
     let mut step = 0u32;
 
     loop {
@@ -969,17 +1023,59 @@ pub async fn ui2_widget_tree_demo_task() {
 
         let frame = tree.build_frame(viewport);
         if !frame.dirty_rects.is_empty() {
-            let pixels =
-                rasterize_widget_frame(&frame, UI2_WIDGET_TREE_DEMO_W, UI2_WIDGET_TREE_DEMO_H);
-            let _ = surface.upload_rgba(&pixels, "widget-tree-demo");
+            let mut upload_mode = "none";
+            let mut upload_rect = (0u32, 0u32, 0u32, 0u32);
+            let mut upload_count = 0usize;
+            if step == 0 {
+                pixels =
+                    rasterize_widget_frame(&frame, UI2_WIDGET_TREE_DEMO_W, UI2_WIDGET_TREE_DEMO_H);
+                let _ = surface.upload_rgba(&pixels, "widget-tree-demo-init");
+                upload_mode = "full";
+                upload_rect = (0, 0, UI2_WIDGET_TREE_DEMO_W, UI2_WIDGET_TREE_DEMO_H);
+                upload_count = 1;
+            } else {
+                for dirty in &frame.dirty_rects {
+                    rerasterize_widget_frame_region(
+                        &mut pixels,
+                        &frame,
+                        UI2_WIDGET_TREE_DEMO_W,
+                        UI2_WIDGET_TREE_DEMO_H,
+                        *dirty,
+                    );
+                    if let Some((x, y, w, h, region_pixels)) = extract_pixels_rgba_region(
+                        pixels.as_slice(),
+                        UI2_WIDGET_TREE_DEMO_W,
+                        UI2_WIDGET_TREE_DEMO_H,
+                        *dirty,
+                    ) {
+                        let _ = surface.upload_rgba_region(
+                            x,
+                            y,
+                            w,
+                            h,
+                            region_pixels.as_slice(),
+                            "widget-tree-demo-region",
+                        );
+                        upload_mode = "region";
+                        upload_rect = (x, y, w, h);
+                        upload_count = upload_count.saturating_add(1);
+                    }
+                }
+            }
             crate::log!(
-                "ui2-widget-tree-demo: dirty={} paint={} solved={} visited={} culled={} step={}\n",
+                "ui2-widget-tree-demo: dirty={} paint={} solved={} visited={} culled={} step={} upload={} uploads={} rect={}x{}@{},{}\n",
                 frame.dirty_rects.len(),
                 frame.paint_items.len(),
                 frame.solved_nodes.len(),
                 frame.visited_nodes,
                 frame.culled_nodes,
-                step
+                step,
+                upload_mode,
+                upload_count,
+                upload_rect.2,
+                upload_rect.3,
+                upload_rect.0,
+                upload_rect.1
             );
         }
 
