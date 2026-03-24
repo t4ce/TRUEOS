@@ -2036,10 +2036,10 @@ fn draw_window_content_placeholder(
         state.view_h,
     );
 
-    let headline_w = crate::gfx::text::atlas_text_width_px(headline);
+    let headline_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(headline);
     let headline_x = content.x + ((content.w - headline_w) * 0.5).max(10.0);
     let headline_y = content.y + 40.0;
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(
+    crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
         headline,
         headline_x,
         headline_y,
@@ -2048,10 +2048,10 @@ fn draw_window_content_placeholder(
         headline_alpha,
     );
 
-    let subline_w = crate::gfx::text::atlas_text_width_px(subline);
+    let subline_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(subline);
     let subline_x = content.x + ((content.w - subline_w) * 0.5).max(10.0);
     let subline_y = headline_y + 20.0;
-    crate::gfx::text::draw_atlas_text_in_frame_alpha(
+    crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
         subline,
         subline_x,
         subline_y,
@@ -2098,8 +2098,8 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
     match action {
         Ui2SystemButtonAction::Fork => {
             let text = b"+1";
-            let text_w = crate::gfx::text::atlas_text_width_px(text);
-            crate::gfx::text::draw_atlas_text_in_frame_alpha(
+            let text_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(text);
+            crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
                 text,
                 rect.x + ((rect.w - text_w) * 0.5),
                 rect.y + 3.0,
@@ -2110,8 +2110,8 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
         }
         Ui2SystemButtonAction::Close => {
             let text = b"-1";
-            let text_w = crate::gfx::text::atlas_text_width_px(text);
-            crate::gfx::text::draw_atlas_text_in_frame_alpha(
+            let text_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(text);
+            crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
                 text,
                 rect.x + ((rect.w - text_w) * 0.5),
                 rect.y + 3.0,
@@ -2290,7 +2290,7 @@ fn draw_hosted_browser_text_rows(state: &Ui2State, window: &Ui2Window, content: 
             state.view_w,
             state.view_h,
         );
-        crate::gfx::text::draw_atlas_text_in_frame_alpha(
+        crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
             row.text.as_bytes(),
             content.x + 10.0 + row.indent_px as f32,
             top + 1.0,
@@ -2394,14 +2394,14 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                 window.alpha,
             );
         }
-        let title_w = crate::gfx::text::atlas_text_width_px(window.title.as_bytes());
+        let title_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(window.title.as_bytes());
         let title_left = if window.icon_id != 0 {
             rect.x + 28.0
         } else {
             rect.x + 8.0
         };
         let title_x = (rect.x + ((rect.w - title_w) * 0.5)).max(title_left);
-        crate::gfx::text::draw_atlas_text_in_frame_alpha(
+        crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
             window.title.as_bytes(),
             title_x,
             rect.y + 5.0,
