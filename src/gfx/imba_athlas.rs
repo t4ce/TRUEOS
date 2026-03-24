@@ -503,6 +503,120 @@ pub fn imba_athlas_text_width_px(text: &[u8]) -> f32 {
     max_w.max(line_w)
 }
 
+#[inline]
+fn blend_rgba_pixel(dst: &mut [u8], dst_idx: usize, rgba: (u8, u8, u8, u8), coverage: u8) {
+    if dst_idx + 3 >= dst.len() || coverage == 0 || rgba.3 == 0 {
+        return;
+    }
+
+    let src_a = ((rgba.3 as u32) * (coverage as u32) + 127) / 255;
+    if src_a == 0 {
+        return;
+    }
+    let inv = 255u32.saturating_sub(src_a);
+    let dst_r = dst[dst_idx] as u32;
+    let dst_g = dst[dst_idx + 1] as u32;
+    let dst_b = dst[dst_idx + 2] as u32;
+    let dst_a = dst[dst_idx + 3] as u32;
+
+    dst[dst_idx] = (((rgba.0 as u32) * src_a + dst_r * inv + 127) / 255).min(255) as u8;
+    dst[dst_idx + 1] = (((rgba.1 as u32) * src_a + dst_g * inv + 127) / 255).min(255) as u8;
+    dst[dst_idx + 2] = (((rgba.2 as u32) * src_a + dst_b * inv + 127) / 255).min(255) as u8;
+    dst[dst_idx + 3] = (src_a + ((dst_a * inv + 127) / 255)).min(255) as u8;
+}
+
+pub fn blit_imba_athlas_text_rgba(
+    dst: &mut [u8],
+    dst_w: u32,
+    dst_h: u32,
+    text: &[u8],
+    x: i32,
+    y: i32,
+    rgba: (u8, u8, u8, u8),
+) -> bool {
+    if text.is_empty() || dst_w == 0 || dst_h == 0 {
+        return false;
+    }
+
+    let athlas = imba_athlas_large_view();
+    if athlas.alpha.is_empty() {
+        return false;
+    }
+
+    let expected = (dst_w as usize)
+        .saturating_mul(dst_h as usize)
+        .saturating_mul(4);
+    if dst.len() < expected {
+        return false;
+    }
+
+    let fallback = athlas.index.get(b'?' as usize).copied().unwrap_or(0);
+    let mut pen_x = x;
+    let mut pen_y = y;
+    let base_x = x;
+    let mut touched = false;
+
+    for &ch in text {
+        if ch == b'\n' {
+            pen_x = base_x;
+            pen_y += athlas.cell_h as i32;
+            continue;
+        }
+
+        let mut slot = athlas.index.get(ch as usize).copied().unwrap_or(fallback);
+        if slot == u16::MAX {
+            slot = fallback;
+        }
+        let advance = athlas
+            .widths
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(athlas.cell_w as u8) as i32;
+        if ch == b' ' {
+            pen_x += advance.max(1);
+            continue;
+        }
+
+        let glyph_x = (slot as u32 % athlas.grid_w) * athlas.cell_w;
+        let glyph_y = (slot as u32 / athlas.grid_w) * athlas.cell_h;
+        for row in 0..athlas.cell_h {
+            let dst_y = pen_y + row as i32;
+            if dst_y < 0 || dst_y >= dst_h as i32 {
+                continue;
+            }
+            for col in 0..athlas.cell_w {
+                let dst_x = pen_x + col as i32;
+                if dst_x < 0 || dst_x >= dst_w as i32 {
+                    continue;
+                }
+
+                let src_x = glyph_x + col;
+                let src_y = glyph_y + row;
+                let src_idx = (src_y as usize)
+                    .saturating_mul(athlas.width as usize)
+                    .saturating_add(src_x as usize);
+                let Some(&coverage) = athlas.alpha.get(src_idx) else {
+                    continue;
+                };
+                if coverage == 0 {
+                    continue;
+                }
+
+                let dst_idx = ((dst_y as usize)
+                    .saturating_mul(dst_w as usize)
+                    .saturating_add(dst_x as usize))
+                .saturating_mul(4);
+                blend_rgba_pixel(dst, dst_idx, rgba, coverage);
+                touched = true;
+            }
+        }
+
+        pen_x += advance.max(1);
+    }
+
+    touched
+}
+
 pub fn draw_imba_athlas_text_in_frame_alpha(
     text: &[u8],
     x: f32,
