@@ -3,7 +3,7 @@ what the god of time gives to you
 
 fast actual time
 reliable hardware interrupt callbacks at desired intervalls
-convinient api
+easy api
 */
 // this is our apic helper
 use core::arch::x86_64::_rdtsc;

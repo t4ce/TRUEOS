@@ -190,10 +190,12 @@ pub extern "C" fn kmain() -> ! {
 
     disc::probe_once();
     efi::acpi::ensure_tables();
+
+    // Chronos awake hpet dependend
     efi::acpi::hpet::ensure();
-    // Chronos awake currently seeds the first snapshot through the TSC time path,
-    // which may calibrate against HPET via ACPI-backed mappings.
     chronos::awake();
+    // i hope fmt dont make this syntax 2 row
+
     power::init();
     smp::init(percpu::total_slots());
     smp::mark_online();
