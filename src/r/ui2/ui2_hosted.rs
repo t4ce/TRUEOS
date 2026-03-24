@@ -2,6 +2,7 @@ pub(super) type HostedContentId = u32;
 pub(super) type UiHostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurfaceState;
 pub(super) type UiHostedInteractiveState = trueos_qjs::browser_task::HostedBrowserInteractiveState;
 pub(super) type UiHostedTextState = trueos_qjs::browser_task::HostedBrowserTextState;
+pub(super) type UiHostedLayoutState = trueos_qjs::browser_task::HostedBrowserLayoutState;
 pub(super) type UiHostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 
 use spin::Mutex;
@@ -33,9 +34,11 @@ pub(super) trait UiHostedSurfaceProvider {
     fn surface_seq(&self, content_id: HostedContentId) -> u32;
     fn interactive_seq(&self, content_id: HostedContentId) -> u32;
     fn text_seq(&self, content_id: HostedContentId) -> u32;
+    fn layout_seq(&self, content_id: HostedContentId) -> u32;
     fn surface_state(&self, content_id: HostedContentId) -> UiHostedSurfaceState;
     fn interactive_state(&self, content_id: HostedContentId) -> UiHostedInteractiveState;
     fn text_state(&self, content_id: HostedContentId) -> UiHostedTextState;
+    fn layout_state(&self, content_id: HostedContentId) -> UiHostedLayoutState;
 }
 
 pub(super) trait UiHostedViewportSink {
@@ -81,6 +84,10 @@ impl UiHostedSurfaceProvider for BrowserUiHostedAdapter {
         trueos_qjs::browser_task::hosted_text_seq_for_browser(content_id)
     }
 
+    fn layout_seq(&self, content_id: HostedContentId) -> u32 {
+        trueos_qjs::browser_task::hosted_layout_seq_for_browser(content_id)
+    }
+
     fn surface_state(&self, content_id: HostedContentId) -> UiHostedSurfaceState {
         trueos_qjs::browser_task::hosted_surface_state_for_browser(content_id)
     }
@@ -91,6 +98,10 @@ impl UiHostedSurfaceProvider for BrowserUiHostedAdapter {
 
     fn text_state(&self, content_id: HostedContentId) -> UiHostedTextState {
         trueos_qjs::browser_task::hosted_text_state_for_browser(content_id)
+    }
+
+    fn layout_state(&self, content_id: HostedContentId) -> UiHostedLayoutState {
+        trueos_qjs::browser_task::hosted_layout_state_for_browser(content_id)
     }
 }
 
@@ -202,6 +213,16 @@ pub(super) fn hosted_text_state(content_id: HostedContentId) -> UiHostedTextStat
 #[inline]
 pub(super) fn hosted_text_seq(content_id: HostedContentId) -> u32 {
     hosted_adapter().text_seq(content_id)
+}
+
+#[inline]
+pub(super) fn hosted_layout_state(content_id: HostedContentId) -> UiHostedLayoutState {
+    hosted_adapter().layout_state(content_id)
+}
+
+#[inline]
+pub(super) fn hosted_layout_seq(content_id: HostedContentId) -> u32 {
+    hosted_adapter().layout_seq(content_id)
 }
 
 #[inline]
