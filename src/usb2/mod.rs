@@ -328,56 +328,13 @@ pub(crate) fn tlb_snapshot() -> TlbUsbSnapshot {
         };
     }
 
-    let probe_ctrl = controllers[0];
-    let devices = crate::wait::spawn_and_wait_local(async move {
-        let mut out = Vec::new();
-
-        crate::pci::enable_mem_and_bus_master(probe_ctrl.bus, probe_ctrl.slot, probe_ctrl.function);
-
-        let mut host = match crab_usb::USBHost::new_xhci(
-            probe_ctrl.mmio_base,
-            &self::crabusb_service::CRABUSB_KERNEL,
-        ) {
-            Ok(host) => host,
-            Err(_) => return Err("host-new"),
-        };
-
-        if host.init().await.is_err() {
-            return Err("host-init");
-        }
-
-        match host.probe_devices().await {
-            Ok(found) => {
-                for dev in found.iter() {
-                    let desc = dev.descriptor();
-                    out.push(TlbUsbDevice {
-                        controller_index: probe_ctrl.index,
-                        vendor_id: desc.vendor_id,
-                        product_id: desc.product_id,
-                        class: desc.class,
-                        subclass: desc.subclass,
-                        protocol: desc.protocol,
-                        config_count: dev.configurations().len(),
-                        interface_count: dev.interface_descriptors().count(),
-                    });
-                }
-                Ok(out)
-            }
-            Err(_) => Err("probe"),
-        }
-    });
-
-    match devices {
-        Ok(devices) => TlbUsbSnapshot {
-            controllers,
-            devices,
-            probe_error: None,
-        },
-        Err(probe_error) => TlbUsbSnapshot {
-            controllers,
-            devices: Vec::new(),
-            probe_error: Some(probe_error),
-        },
+    // `tlb usb` is a diagnostic dump, not an ownership handoff. Reinitializing and
+    // reprobeing a live XHCI controller here races the active crabusb BSP service and
+    // can destabilize the running host. Keep this snapshot passive.
+    TlbUsbSnapshot {
+        controllers,
+        devices: Vec::new(),
+        probe_error: Some("passive"),
     }
 }
 
