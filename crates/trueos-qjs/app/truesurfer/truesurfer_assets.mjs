@@ -22,6 +22,19 @@ function isInlineSvgNode(node) {
   return !!node && typeof node === 'object' && String(node.tagName || '').toLowerCase() === 'svg';
 }
 
+function isLinkNode(node) {
+  return !!node && typeof node === 'object' && String(node.tagName || '').toLowerCase() === 'link';
+}
+
+function isFaviconRel(rel) {
+  const parts = String(rel || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.includes('icon') || parts.includes('shortcut') || parts.includes('apple-touch-icon');
+}
+
 function inlineSvgNodeToDataUrl(node) {
   if (!node || typeof node !== 'object') return '';
   try {
@@ -61,8 +74,45 @@ export function createBrowserAssetManager(options = {}) {
   const imageTextureLoads = new Map();
   const fetchedImageBinaryUrls = new Set();
   const prewarmedUrls = new Set();
-  const pendingImagePrimeUrls = new Set();
+  const pendingPriorityImageUrls = new Set();
+  const pendingNormalImageUrls = new Set();
   let imagePrimeScheduled = false;
+
+  function queuedImageUrlCount() {
+    return pendingPriorityImageUrls.size + pendingNormalImageUrls.size;
+  }
+
+  function dequeuePendingImageUrl() {
+    const priority = pendingPriorityImageUrls.values().next();
+    if (!priority.done) {
+      const value = String(priority.value || '').trim();
+      pendingPriorityImageUrls.delete(priority.value);
+      pendingNormalImageUrls.delete(priority.value);
+      return value;
+    }
+    const normal = pendingNormalImageUrls.values().next();
+    if (!normal.done) {
+      const value = String(normal.value || '').trim();
+      pendingNormalImageUrls.delete(normal.value);
+      return value;
+    }
+    return '';
+  }
+
+  function enqueuePendingImageUrl(url, priority = false) {
+    const resolvedSrc = String(url || '').trim();
+    if (!resolvedSrc) return false;
+    if (priority) {
+      pendingNormalImageUrls.delete(resolvedSrc);
+      pendingPriorityImageUrls.add(resolvedSrc);
+      return true;
+    }
+    if (pendingPriorityImageUrls.has(resolvedSrc) || pendingNormalImageUrls.has(resolvedSrc)) {
+      return false;
+    }
+    pendingNormalImageUrls.add(resolvedSrc);
+    return true;
+  }
 
   function maybePrewarmUrl(url) {
     const value = String(url || '').trim();
@@ -389,11 +439,8 @@ export function createBrowserAssetManager(options = {}) {
 
   function flushQueuedImagePrimes() {
     imagePrimeScheduled = false;
-    if (pendingImagePrimeUrls.size <= 0) return;
-    const urls = Array.from(pendingImagePrimeUrls);
-    pendingImagePrimeUrls.clear();
-    for (let i = 0; i < urls.length; i += 1) {
-      const resolvedSrc = String(urls[i] || '').trim();
+    while (queuedImageUrlCount() > 0) {
+      const resolvedSrc = dequeuePendingImageUrl();
       if (!resolvedSrc) continue;
       const cached = imageTextureCache.get(resolvedSrc) || null;
       if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
@@ -453,31 +500,37 @@ export function createBrowserAssetManager(options = {}) {
       if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
         continue;
       }
-      pendingImagePrimeUrls.add(resolvedSrc);
+      enqueuePendingImageUrl(resolvedSrc, false);
     }
     scheduleImagePrimeFlush();
   }
 
-  function collectImagePrimeUrls(node, out = null) {
-    const urls = Array.isArray(out) ? out : [];
-    if (!node || typeof node !== 'object') return urls;
+  function collectPrimeTargets(node, out = null) {
+    const targets = Array.isArray(out) ? out : [];
+    if (!node || typeof node !== 'object') return targets;
     if (isImageNode(node)) {
       const rawSrc = String(getNodeAttr(node, 'src') || '').trim();
       const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
       if (resolvedSrc) {
-        urls.push(resolvedSrc);
+        targets.push({ url: resolvedSrc, priority: false });
+      }
+    } else if (isLinkNode(node) && isFaviconRel(getNodeAttr(node, 'rel'))) {
+      const rawHref = String(getNodeAttr(node, 'href') || '').trim();
+      const resolvedHref = rawHref ? resolveNavigationUrl(rawHref) : '';
+      if (resolvedHref) {
+        targets.push({ url: resolvedHref, priority: true });
       }
     } else if (isInlineSvgNode(node)) {
       const resolvedSrc = inlineSvgNodeToDataUrl(node);
       if (resolvedSrc) {
-        urls.push(resolvedSrc);
+        targets.push({ url: resolvedSrc, priority: false });
       }
     }
     const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
     for (let i = 0; i < kids.length; i += 1) {
-      collectImagePrimeUrls(kids[i], urls);
+      collectPrimeTargets(kids[i], targets);
     }
-    return urls;
+    return targets;
   }
 
   function primeHtmlImageUrls(html) {
@@ -489,16 +542,19 @@ export function createBrowserAssetManager(options = {}) {
     } catch (_) {
       return;
     }
-    const urls = collectImagePrimeUrls(parsed, []);
-    for (let i = 0; i < urls.length; i += 1) {
-      const resolvedSrc = String(urls[i] || '').trim();
+    const targets = collectPrimeTargets(parsed, []);
+    const urls = [];
+    for (let i = 0; i < targets.length; i += 1) {
+      const entry = targets[i] || {};
+      const resolvedSrc = String(entry.url || '').trim();
       if (!resolvedSrc) continue;
+      urls.push(resolvedSrc);
       maybePrewarmUrl(resolvedSrc);
       const cached = imageTextureCache.get(resolvedSrc) || null;
       if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
         continue;
       }
-      pendingImagePrimeUrls.add(resolvedSrc);
+      enqueuePendingImageUrl(resolvedSrc, entry.priority === true);
     }
     scheduleImagePrimeFlush();
     return urls;

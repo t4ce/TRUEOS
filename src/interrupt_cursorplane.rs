@@ -1,5 +1,6 @@
 // Currently this interrupt only logs a marker, but it is intended as a ready-to-use
 // hook for future cursor-plane or similar deferred work.
+// i think this comment is a LIE because well, it interfered with GFX and UI2 + loadscreen bad when inited in main.rs
 use x86_64::structures::idt::InterruptStackFrame;
 
 const PIC1_CMD: u16 = 0x20;

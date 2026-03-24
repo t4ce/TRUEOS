@@ -2,6 +2,7 @@ pub mod backends;
 pub mod cursor;
 //#[cfg(feature = "gfx_intel")]
 //pub mod intel;
+pub mod imba_athlas;
 pub mod imbafont;
 pub mod jpeg_codec;
 pub mod loadscreen;
@@ -10,7 +11,6 @@ pub mod mandelbrot;
 pub mod png_codec;
 pub mod screenshot;
 pub mod svg;
-pub mod text;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
 

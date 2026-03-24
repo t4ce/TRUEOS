@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::str;
 
-use crate::gfx::text::{FontAtlasView, font_atlas_large_view};
+use crate::gfx::imba_athlas::{ImbaAthlasView, imba_athlas_large_view};
 use libm::{ceilf, floorf, sqrtf};
 use lyon_geom::point;
 use lyon_tessellation::path::Path as LyonPath;
@@ -227,7 +227,7 @@ impl SvgRasterizer {
     }
 
     fn render_text_node(&mut self, text: &usvg::Text, inherited_opacity: f32) {
-        let atlas = font_atlas_large_view();
+        let atlas = imba_athlas_large_view();
         if atlas.alpha.is_empty() {
             return;
         }
@@ -286,7 +286,7 @@ impl SvgRasterizer {
         x: f32,
         y: f32,
         rgba: [f32; 4],
-        atlas: &FontAtlasView<'_>,
+        atlas: &ImbaAthlasView<'_>,
     ) -> (f32, f32) {
         let mut pen_x = x;
         let mut pen_y = y;
@@ -318,7 +318,7 @@ impl SvgRasterizer {
         x: f32,
         y: f32,
         rgba: [f32; 4],
-        atlas: &FontAtlasView<'_>,
+        atlas: &ImbaAthlasView<'_>,
     ) {
         let glyph_x = (slot as u32 % atlas.grid_w) * atlas.cell_w;
         let glyph_y = (slot as u32 / atlas.grid_w) * atlas.cell_h;
@@ -624,7 +624,7 @@ fn text_span_rgba(fill: Option<&usvg::Fill>, inherited_opacity: f32) -> Option<[
     }
 }
 
-fn measure_text_block_width(text: &str, atlas: &FontAtlasView<'_>) -> f32 {
+fn measure_text_block_width(text: &str, atlas: &ImbaAthlasView<'_>) -> f32 {
     let mut width = 0.0;
     let mut max_width: f32 = 0.0;
 
@@ -642,7 +642,7 @@ fn measure_text_block_width(text: &str, atlas: &FontAtlasView<'_>) -> f32 {
     max_width.max(width)
 }
 
-fn atlas_glyph_slot_and_advance(ch: char, atlas: &FontAtlasView<'_>) -> (usize, f32) {
+fn atlas_glyph_slot_and_advance(ch: char, atlas: &ImbaAthlasView<'_>) -> (usize, f32) {
     let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
     let code = if (ch as u32) <= 0xFF {
         ch as usize

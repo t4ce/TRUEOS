@@ -162,11 +162,11 @@ fn cmd_stream_find_atlas_tex(kind: u32) -> Option<u32> {
 }
 
 #[inline]
-fn cmd_stream_select_atlas(kind: u32) -> Option<qjs::FontAtlasView<'static>> {
+fn cmd_stream_select_atlas(kind: u32) -> Option<qjs::ImbaAthlasView<'static>> {
     if kind == 0 {
-        qjs::font_atlas_small_view()
+        qjs::imba_athlas_small_view()
     } else {
-        qjs::font_atlas_large_view().or_else(qjs::font_atlas_small_view)
+        qjs::imba_athlas_large_view().or_else(qjs::imba_athlas_small_view)
     }
 }
 
@@ -187,7 +187,7 @@ fn cmd_stream_atlas_meta_kind(kind: u32) -> u32 {
 #[inline]
 fn cmd_stream_atlas_meta_is_compatible(
     table: &CmdStreamAtlasGlyphMetaTable,
-    atlas: qjs::FontAtlasView<'static>,
+    atlas: qjs::ImbaAthlasView<'static>,
 ) -> bool {
     table.width == atlas.width
         && table.height == atlas.height
@@ -199,7 +199,7 @@ fn cmd_stream_atlas_meta_is_compatible(
         && table.widths_len == atlas.widths.len()
 }
 
-fn cmd_stream_build_atlas_meta(atlas: qjs::FontAtlasView<'static>) -> CmdStreamAtlasGlyphMetaTable {
+fn cmd_stream_build_atlas_meta(atlas: qjs::ImbaAthlasView<'static>) -> CmdStreamAtlasGlyphMetaTable {
     let aw = (atlas.width.max(1)) as f32;
     let ah = (atlas.height.max(1)) as f32;
     let grid_w = atlas.grid_w.max(1);
@@ -257,7 +257,7 @@ fn cmd_stream_build_atlas_meta(atlas: qjs::FontAtlasView<'static>) -> CmdStreamA
 
 fn cmd_stream_atlas_meta_get_or_build(
     kind: u32,
-    atlas: qjs::FontAtlasView<'static>,
+    atlas: qjs::ImbaAthlasView<'static>,
 ) -> spin::MutexGuard<'static, Option<CmdStreamAtlasGlyphMetaTable>> {
     let slot = cmd_stream_atlas_meta_slot(kind);
     let mut guard = slot.lock();
@@ -281,7 +281,7 @@ fn cmd_stream_atlas_meta_lookup(
 }
 
 #[inline]
-fn cmd_stream_upload_atlas_to_tex(tex_id: u32, atlas: qjs::FontAtlasView<'static>) -> bool {
+fn cmd_stream_upload_atlas_to_tex(tex_id: u32, atlas: qjs::ImbaAthlasView<'static>) -> bool {
     let px = atlas.alpha.len();
     if px == 0 {
         return false;

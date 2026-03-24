@@ -61,7 +61,7 @@ pub mod lightningcss_native;
 
 #[cfg(feature = "trueos")]
 #[derive(Clone, Copy)]
-pub struct FontAtlasView<'a> {
+pub struct ImbaAthlasView<'a> {
     pub alpha: &'a [u8],
     pub index: &'a [u16],
     pub widths: &'a [u8],
@@ -74,37 +74,37 @@ pub struct FontAtlasView<'a> {
 }
 
 #[cfg(feature = "trueos")]
-pub type FontAtlasSmallProvider = fn() -> FontAtlasView<'static>;
+pub type ImbaAthlasSmallProvider = fn() -> ImbaAthlasView<'static>;
 #[cfg(feature = "trueos")]
-pub type FontAtlasLargeProvider = fn() -> FontAtlasView<'static>;
+pub type ImbaAthlasLargeProvider = fn() -> ImbaAthlasView<'static>;
 
 #[cfg(feature = "trueos")]
-static FONT_ATLAS_SMALL_PROVIDER: spin::Mutex<Option<FontAtlasSmallProvider>> =
+static IMBA_ATHLAS_SMALL_PROVIDER: spin::Mutex<Option<ImbaAthlasSmallProvider>> =
     spin::Mutex::new(None);
 #[cfg(feature = "trueos")]
-static FONT_ATLAS_LARGE_PROVIDER: spin::Mutex<Option<FontAtlasLargeProvider>> =
+static IMBA_ATHLAS_LARGE_PROVIDER: spin::Mutex<Option<ImbaAthlasLargeProvider>> =
     spin::Mutex::new(None);
 
 #[cfg(feature = "trueos")]
-pub fn set_font_atlas_small_provider(provider: FontAtlasSmallProvider) {
-    *FONT_ATLAS_SMALL_PROVIDER.lock() = Some(provider);
+pub fn set_imba_athlas_small_provider(provider: ImbaAthlasSmallProvider) {
+    *IMBA_ATHLAS_SMALL_PROVIDER.lock() = Some(provider);
 }
 #[cfg(feature = "trueos")]
-pub fn set_font_atlas_large_provider(provider: FontAtlasLargeProvider) {
-    *FONT_ATLAS_LARGE_PROVIDER.lock() = Some(provider);
+pub fn set_imba_athlas_large_provider(provider: ImbaAthlasLargeProvider) {
+    *IMBA_ATHLAS_LARGE_PROVIDER.lock() = Some(provider);
 }
 
 #[cfg(feature = "trueos")]
-pub fn font_atlas_small_view() -> Option<FontAtlasView<'static>> {
-    FONT_ATLAS_SMALL_PROVIDER
+pub fn imba_athlas_small_view() -> Option<ImbaAthlasView<'static>> {
+    IMBA_ATHLAS_SMALL_PROVIDER
         .lock()
         .as_ref()
         .copied()
         .map(|f| f())
 }
 #[cfg(feature = "trueos")]
-pub fn font_atlas_large_view() -> Option<FontAtlasView<'static>> {
-    FONT_ATLAS_LARGE_PROVIDER
+pub fn imba_athlas_large_view() -> Option<ImbaAthlasView<'static>> {
+    IMBA_ATHLAS_LARGE_PROVIDER
         .lock()
         .as_ref()
         .copied()
