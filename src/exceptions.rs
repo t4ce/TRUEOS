@@ -15,6 +15,8 @@ static IN_HANDLER: AtomicUsize = AtomicUsize::new(0);
 fn idt() -> &'static InterruptDescriptorTable {
     IDT.call_once(|| {
         let mut idt = InterruptDescriptorTable::new();
+        idt[crate::interrupt_cursorplane::INTERRUPT_CURSORPLANE_VECTOR]
+            .set_handler_fn(crate::interrupt_cursorplane::INTERRUPT_CURSORPLANE);
         idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
         idt.device_not_available
             .set_handler_fn(device_not_available_handler);
