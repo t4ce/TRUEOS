@@ -2253,6 +2253,97 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
     }
 }
 
+fn truncate_hosted_browser_text_preview_row(text: &str, max_width_px: f32, px_h: f32) -> Vec<u8> {
+    if text.is_empty() || max_width_px <= 0.0 {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity(text.len().min(96));
+    for &byte in text.as_bytes() {
+        let normalized = match byte {
+            b'\n' | b'\r' | b'\t' => b' ',
+            _ => byte,
+        };
+        out.push(normalized);
+        let width = crate::gfx::imba_athlas::imba_athlas_text_width_scaled_px(&out, px_h);
+        if width > max_width_px {
+            out.pop();
+            break;
+        }
+    }
+
+    while out.last() == Some(&b' ') {
+        out.pop();
+    }
+
+    out
+}
+
+fn draw_hosted_browser_text_preview(
+    state: &Ui2State,
+    window: &Ui2Window,
+    content: Ui2Rect,
+) -> bool {
+    let text_state = hosted_text_state(window_browser_instance_id(window));
+    if text_state.rows.is_empty() {
+        return false;
+    }
+
+    let surface_state = browser_surface_state_for_window(window);
+    let panel_rgba = modulate_rgba_alpha((0xFB, 0xFB, 0xF8, 0xFF), window.alpha);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        content.x,
+        content.y,
+        content.w,
+        content.h,
+        panel_rgba,
+        state.view_w,
+        state.view_h,
+    );
+
+    let pad_x = 10.0f32;
+    let pad_y = 8.0f32;
+    let text_px_h = 14.0f32;
+    let row_step = text_px_h + 4.0;
+    let visible_bottom = content.y + content.h - pad_y;
+    let scroll_x = surface_state.scroll_x as f32;
+    let scroll_y = surface_state.scroll_y as f32;
+    let content_right = content.x + content.w - pad_x;
+    let mut drew_any = false;
+
+    for (row_index, row) in text_state.rows.iter().enumerate() {
+        let x = content.x + pad_x + row.indent_px as f32 - scroll_x;
+        let y = content.y + pad_y + (row_index as f32 * row_step) - scroll_y;
+        if y + text_px_h <= content.y || y >= visible_bottom {
+            continue;
+        }
+        if x >= content_right {
+            continue;
+        }
+
+        let max_width_px = (content_right - x).max(0.0);
+        let row_bytes =
+            truncate_hosted_browser_text_preview_row(&row.text, max_width_px, text_px_h);
+        if row_bytes.is_empty() {
+            continue;
+        }
+
+        if crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_scaled(
+            &row_bytes,
+            x,
+            y,
+            state.view_w,
+            state.view_h,
+            text_px_h,
+            window.alpha,
+        ) {
+            drew_any = true;
+        }
+    }
+
+    drew_any
+}
+
 fn draw_hosted_browser_layout_preview(
     state: &Ui2State,
     window: &Ui2Window,
@@ -2264,9 +2355,7 @@ fn draw_hosted_browser_layout_preview(
     }
 
     let panel_rgba = modulate_rgba_alpha((0xF8, 0xF8, 0xF4, 0xFF), window.alpha);
-    let block_rgba = modulate_rgba_alpha((0xDC, 0xE3, 0xED, 0xFF), window.alpha);
-    let inline_rgba = modulate_rgba_alpha((0xB9, 0xCB, 0xDE, 0xFF), window.alpha);
-    let accent_rgba = modulate_rgba_alpha((0x8E, 0xAE, 0xC8, 0xFF), window.alpha);
+    let text_rgb = (0x14, 0x18, 0x1D);
     let _ = crate::gfx::lyon::draw_solid_rect_no_present(
         content.x,
         content.y,
@@ -2277,44 +2366,61 @@ fn draw_hosted_browser_layout_preview(
         state.view_h,
     );
 
+    let face = crate::gfx::imbafont::ImbaFontFace::Loop;
+    let mut y_cursor = content.y + 8.0;
+    let bottom = content.y + content.h - 4.0;
+    let mut drew_any = false;
+
     for node in layout_state.nodes.iter().take(24) {
         if node.parent_id == 0 {
             continue;
         }
-        let left = content.x + 8.0 + node.margin_left_px as f32;
-        let top = content.y + 8.0 + (node.depth.saturating_sub(1) as f32 * 10.0);
-        let width = if node.intrinsic_width_px > 0 {
-            node.intrinsic_width_px.min(content.w.max(1.0) as u32) as f32
-        } else {
-            (content.w - 16.0 - node.margin_left_px as f32).max(12.0)
-        };
-        let height = node.intrinsic_height_px.max(node.min_height_px).max(10) as f32;
-        let block_rect = Ui2Rect {
-            x: left,
-            y: top,
-            w: width.max(12.0),
-            h: height.min((content.y + content.h - top).max(0.0)),
-        };
-        if block_rect.h <= 0.0 || block_rect.y >= content.y + content.h {
+        let margin_top = node.margin_top_px as f32;
+        let margin_bottom = node.margin_bottom_px as f32;
+        let text_top = y_cursor + margin_top;
+        if text_top >= bottom {
             continue;
         }
-        let rgba = match node.kind.as_str() {
-            "button" | "input" => accent_rgba,
-            "inline" | "text" => inline_rgba,
-            _ => block_rgba,
+        let text = if !node.text.is_empty() {
+            node.text.as_str()
+        } else if node.kind == "text" || node.kind == "inline" {
+            node.tag.as_str()
+        } else {
+            ""
         };
-        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-            block_rect.x,
-            block_rect.y,
-            block_rect.w,
-            block_rect.h,
-            rgba,
-            state.view_w,
-            state.view_h,
-        );
+        let line_h = node
+            .intrinsic_height_px
+            .max(node.min_height_px)
+            .clamp(12, 24) as f32;
+        let block_h = node.intrinsic_height_px.max(node.min_height_px).max(10) as f32
+            + margin_top
+            + margin_bottom
+            + node.padding_top_px as f32
+            + node.padding_bottom_px as f32;
+        if !text.is_empty() {
+            let left = content.x + 8.0 + node.margin_left_px as f32 + node.padding_left_px as f32;
+            let max_width_px = (content.x + content.w - 8.0 - left).max(0.0);
+            let row_bytes = truncate_hosted_browser_text_preview_row(text, max_width_px, line_h);
+            if !row_bytes.is_empty() {
+                if let Some(layout) = crate::gfx::imbafont::layout_text_top_left(
+                    face, &row_bytes, left, text_top, line_h,
+                ) {
+                    drew_any |= crate::gfx::imbafont::draw_text_in_frame(
+                        face,
+                        &row_bytes,
+                        &layout,
+                        state.view_w,
+                        state.view_h,
+                        text_rgb,
+                        window.alpha,
+                    );
+                }
+            }
+        }
+        y_cursor += block_h.max(8.0);
     }
 
-    true
+    drew_any
 }
 
 fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
@@ -2455,6 +2561,9 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
             if let Some(content) = content_rect {
+                if draw_hosted_browser_layout_preview(state, window, content) {
+                    return;
+                }
                 if texture_is_drawable(window.content_tex_id)
                     && draw_texture_rect_no_present(
                         window.content_tex_id,
@@ -2468,9 +2577,6 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                         window.alpha,
                     )
                 {
-                    return;
-                }
-                if draw_hosted_browser_layout_preview(state, window, content) {
                     return;
                 }
                 draw_window_content_placeholder(

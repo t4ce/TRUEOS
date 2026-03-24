@@ -84,6 +84,47 @@ pub struct ImbaFontGlyphMetricsPx {
     pub advance: f32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImbaFontRowBoxMode {
+    InkBounds,
+    FaceBounds,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ImbaFontFaceRowMetricsPx {
+    pub baseline: f32,
+    pub row_top: f32,
+    pub row_bottom: f32,
+    pub ascent: f32,
+    pub descent: f32,
+    pub row_h: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ImbaFontTextRowMetricsPx {
+    pub baseline: f32,
+    pub row_top: f32,
+    pub row_bottom: f32,
+    pub ascent: f32,
+    pub descent: f32,
+    pub row_h: f32,
+    pub ink_left: f32,
+    pub ink_right: f32,
+    pub ink_top: f32,
+    pub ink_bottom: f32,
+    pub advance_w: f32,
+}
+
+#[derive(Clone, Copy)]
+struct ImbaFontInkRowMetricsPx {
+    ink_left: f32,
+    ink_right: f32,
+    ink_top: f32,
+    ink_bottom: f32,
+    advance_w: f32,
+    has_ink: bool,
+}
+
 #[inline]
 fn raster_edge(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
     (px - ax) * (by - ay) - (py - ay) * (bx - ax)
@@ -208,6 +249,164 @@ pub fn glyph_metrics_px(
         left: metric.ink_left * tile_h,
         right: metric.ink_right * tile_h,
         advance: metric.advance_w * tile_h,
+    })
+}
+
+pub fn face_row_metrics_px(face: ImbaFontFace, tile_h: f32) -> Option<ImbaFontFaceRowMetricsPx> {
+    if !tile_h.is_finite() || tile_h <= 0.0 {
+        return None;
+    }
+
+    let mut baseline = 0.0f32;
+    let mut row_top = f32::INFINITY;
+    let mut row_bottom = f32::NEG_INFINITY;
+    let mut found = false;
+
+    for metric in layout_metrics_for_face(face) {
+        let baseline_px = metric.metric.baseline_y * tile_h;
+        baseline = baseline.max(baseline_px);
+        row_top = row_top.min((metric.metric.ink_top - metric.metric.baseline_y) * tile_h);
+        row_bottom = row_bottom.max((metric.metric.ink_bottom - metric.metric.baseline_y) * tile_h);
+        found = true;
+    }
+
+    if !found || !row_top.is_finite() || !row_bottom.is_finite() {
+        return None;
+    }
+
+    let ascent = (-row_top).max(0.0);
+    let descent = row_bottom.max(0.0);
+    Some(ImbaFontFaceRowMetricsPx {
+        baseline,
+        row_top,
+        row_bottom,
+        ascent,
+        descent,
+        row_h: (row_bottom - row_top).max(0.0),
+    })
+}
+
+fn text_ink_row_metrics_px_tracked(
+    face: ImbaFontFace,
+    text: &[u8],
+    tile_h: f32,
+    tracking_px: f32,
+) -> Option<ImbaFontInkRowMetricsPx> {
+    if text.is_empty() || !tile_h.is_finite() || tile_h <= 0.0 {
+        return None;
+    }
+
+    let mut pen_x = 0.0f32;
+    let mut ink_left = f32::INFINITY;
+    let mut ink_right = f32::NEG_INFINITY;
+    let mut ink_top = f32::INFINITY;
+    let mut ink_bottom = f32::NEG_INFINITY;
+    let mut has_advance = false;
+    let mut has_ink = false;
+
+    for &byte in text {
+        let ch = byte as char;
+        if ch == '\n' {
+            break;
+        }
+        if ch == ' ' {
+            if has_advance {
+                pen_x += tracking_px;
+            }
+            pen_x += space_advance(tile_h);
+            has_advance = true;
+            continue;
+        }
+
+        let Some(metric) = layout_metric_for_char(face, ch) else {
+            continue;
+        };
+        if has_advance {
+            pen_x += tracking_px;
+        }
+        ink_left = ink_left.min(pen_x + metric.ink_left * tile_h);
+        ink_right = ink_right.max(pen_x + metric.ink_right * tile_h);
+        ink_top = ink_top.min((metric.ink_top - metric.baseline_y) * tile_h);
+        ink_bottom = ink_bottom.max((metric.ink_bottom - metric.baseline_y) * tile_h);
+        pen_x += metric.advance_w * tile_h;
+        has_advance = true;
+        has_ink = true;
+    }
+
+    if !has_advance {
+        return None;
+    }
+
+    Some(ImbaFontInkRowMetricsPx {
+        ink_left: if ink_left.is_finite() { ink_left } else { 0.0 },
+        ink_right: if ink_right.is_finite() {
+            ink_right
+        } else {
+            pen_x.max(0.0)
+        },
+        ink_top: if ink_top.is_finite() { ink_top } else { 0.0 },
+        ink_bottom: if ink_bottom.is_finite() {
+            ink_bottom
+        } else {
+            0.0
+        },
+        advance_w: pen_x.max(0.0),
+        has_ink,
+    })
+}
+
+pub fn text_row_metrics_px(
+    face: ImbaFontFace,
+    text: &[u8],
+    tile_h: f32,
+    row_box_mode: ImbaFontRowBoxMode,
+) -> Option<ImbaFontTextRowMetricsPx> {
+    text_row_metrics_px_tracked(face, text, tile_h, 0.0, row_box_mode)
+}
+
+pub fn text_row_metrics_px_tracked(
+    face: ImbaFontFace,
+    text: &[u8],
+    tile_h: f32,
+    tracking_px: f32,
+    row_box_mode: ImbaFontRowBoxMode,
+) -> Option<ImbaFontTextRowMetricsPx> {
+    let ink = text_ink_row_metrics_px_tracked(face, text, tile_h, tracking_px)?;
+    let (row_top, row_bottom) = match row_box_mode {
+        ImbaFontRowBoxMode::InkBounds => {
+            let fallback_bottom = if ink.has_ink {
+                ink.ink_bottom
+            } else {
+                tile_h.max(0.0)
+            };
+            (ink.ink_top, fallback_bottom)
+        }
+        ImbaFontRowBoxMode::FaceBounds => face_row_metrics_px(face, tile_h)
+            .map(|metrics| (metrics.row_top, metrics.row_bottom))
+            .unwrap_or_else(|| {
+                let fallback_bottom = if ink.has_ink {
+                    ink.ink_bottom
+                } else {
+                    tile_h.max(0.0)
+                };
+                (ink.ink_top, fallback_bottom)
+            }),
+    };
+    let ascent = (-row_top).max(0.0);
+    let descent = row_bottom.max(0.0);
+
+    Some(ImbaFontTextRowMetricsPx {
+        baseline: -row_top,
+        row_top,
+        row_bottom,
+        ascent,
+        descent,
+        row_h: (row_bottom - row_top).max(0.0),
+        ink_left: ink.ink_left,
+        ink_right: ink.ink_right,
+        ink_top: ink.ink_top,
+        ink_bottom: ink.ink_bottom,
+        advance_w: ink.advance_w,
     })
 }
 
@@ -861,6 +1060,39 @@ pub fn layout_text_top_left(
     layout_text_top_left_tracked(face, text, x, top_y, tile_h, 0.0)
 }
 
+pub fn layout_text_row_top_left(
+    face: ImbaFontFace,
+    text: &[u8],
+    x: f32,
+    row_top_y: f32,
+    tile_h: f32,
+    row_box_mode: ImbaFontRowBoxMode,
+) -> Option<ImbaFontRunLayout> {
+    layout_text_row_top_left_tracked(face, text, x, row_top_y, tile_h, 0.0, row_box_mode)
+}
+
+pub fn layout_text_row_top_left_tracked(
+    face: ImbaFontFace,
+    text: &[u8],
+    x: f32,
+    row_top_y: f32,
+    tile_h: f32,
+    tracking_px: f32,
+    row_box_mode: ImbaFontRowBoxMode,
+) -> Option<ImbaFontRunLayout> {
+    let metrics = text_row_metrics_px_tracked(face, text, tile_h, tracking_px, row_box_mode)?;
+
+    Some(ImbaFontRunLayout {
+        origin_x: x - metrics.ink_left,
+        baseline_y: row_top_y - metrics.row_top,
+        vis_left: metrics.ink_left,
+        vis_right: metrics.ink_right,
+        vis_top: metrics.ink_top,
+        vis_bottom: metrics.ink_bottom,
+        tile_h,
+    })
+}
+
 pub fn layout_text_top_left_tracked(
     face: ImbaFontFace,
     text: &[u8],
@@ -869,66 +1101,15 @@ pub fn layout_text_top_left_tracked(
     tile_h: f32,
     tracking_px: f32,
 ) -> Option<ImbaFontRunLayout> {
-    if text.is_empty() || !tile_h.is_finite() || tile_h <= 0.0 {
-        return None;
-    }
-
-    let mut pen_x = 0.0f32;
-    let mut vis_left = f32::INFINITY;
-    let mut vis_right = f32::NEG_INFINITY;
-    let mut vis_top = f32::INFINITY;
-    let mut vis_bottom = f32::NEG_INFINITY;
-    let mut has_advance = false;
-
-    for &byte in text {
-        let ch = byte as char;
-        if ch == '\n' {
-            continue;
-        }
-        if ch == ' ' {
-            if has_advance {
-                pen_x += tracking_px;
-            }
-            pen_x += space_advance(tile_h);
-            has_advance = true;
-            continue;
-        }
-
-        let Some(metric) = layout_metric_for_char(face, ch) else {
-            continue;
-        };
-        if has_advance {
-            pen_x += tracking_px;
-        }
-        vis_left = vis_left.min(pen_x + metric.ink_left * tile_h);
-        vis_right = vis_right.max(pen_x + metric.ink_right * tile_h);
-        vis_top = vis_top.min((metric.ink_top - metric.baseline_y) * tile_h);
-        vis_bottom = vis_bottom.max((metric.ink_bottom - metric.baseline_y) * tile_h);
-        pen_x += metric.advance_w * tile_h;
-        has_advance = true;
-    }
-
-    if !vis_top.is_finite() {
-        vis_top = 0.0;
-    }
-    if !vis_bottom.is_finite() {
-        vis_bottom = tile_h;
-    }
-
-    let baseline_y = top_y - vis_top;
-    Some(ImbaFontRunLayout {
-        origin_x: x - if vis_left.is_finite() { vis_left } else { 0.0 },
-        baseline_y,
-        vis_left: if vis_left.is_finite() { vis_left } else { 0.0 },
-        vis_right: if vis_right.is_finite() {
-            vis_right
-        } else {
-            0.0
-        },
-        vis_top,
-        vis_bottom,
+    layout_text_row_top_left_tracked(
+        face,
+        text,
+        x,
+        top_y,
         tile_h,
-    })
+        tracking_px,
+        ImbaFontRowBoxMode::InkBounds,
+    )
 }
 
 pub fn rasterize_text_mask_texture(
