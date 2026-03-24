@@ -3,6 +3,7 @@
 //! This module intentionally defines abstract ports and gadget shapes without
 //! committing to storage, scheduling, locking, routing, or execution strategy.
 
+pub mod calculator;
 pub mod instruction_ram;
 pub mod park;
 
@@ -241,11 +242,19 @@ pub trait MarbleGhostwalk<M: Marble>: MarbleGadget {
     fn ghostwalk(&mut self, marble: M) -> Result<M, Self::Error>;
 }
 
-/// Contract for a gadget where marbles may compete for passage or priority.
+/// Contract for a gadget where lane-fed marbles compete for one downstream path.
+///
+/// The intended policy is priority ordered by lane index: lane 0 is the highest
+/// priority, and a newly non-empty higher-priority lane may preempt the current
+/// flow on the next take.
 pub trait MarbleRace<M: Marble>: MarbleGadget {
     type Error;
 
-    fn enter_race(&mut self, marble: M) -> Result<(), Self::Error>;
+    fn lanes(&self) -> usize;
+
+    fn enter_race(&mut self, lane: usize, marble: M) -> Result<(), Self::Error>;
+
+    fn active_lane(&self) -> Option<usize>;
 
     fn finish_race(&mut self) -> Result<Option<M>, Self::Error>;
 }
@@ -271,4 +280,107 @@ pub trait MarbleRiver<M: Marble>: MarbleGadget {
     fn flow(&mut self, marble: M) -> Result<(), Self::Error>;
 
     fn next(&mut self) -> Result<Option<M>, Self::Error>;
+}
+
+/// Contract for a gateway that carries marbles across a boundary as discrete hops.
+pub trait MarblePortal<M: Marble>: MarbleGadget {
+    type Error;
+
+    fn send(&mut self, marble: M) -> Result<(), Self::Error>;
+
+    fn receive(&mut self) -> Result<Option<M>, Self::Error>;
+}
+
+/// A normalized direction carried by a marble-side trajectory.
+///
+/// The contract is semantic rather than enforced here: implementations are
+/// expected to provide a unit-length direction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MarbleUnitVector3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl MarbleUnitVector3 {
+    pub const fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+}
+
+/// Minimal trajectory payload that can be transferred between marbles.
+///
+/// `direction` says where the motion points. `amount` is the scalar intensity
+/// carried along that direction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MarbleImpulse {
+    pub direction: MarbleUnitVector3,
+    pub amount: f32,
+}
+
+impl MarbleImpulse {
+    pub const fn new(direction: MarbleUnitVector3, amount: f32) -> Self {
+        Self { direction, amount }
+    }
+}
+
+/// Contract for a marble that currently carries a trajectory.
+pub trait MarbleTrajectory: Marble {
+    fn trajectory(&self) -> MarbleImpulse;
+}
+
+/// Contract for a marble that can have a trajectory written onto it.
+pub trait MarbleTrajectorySink: Marble {
+    type Error;
+
+    fn receive_trajectory(&mut self, impulse: MarbleImpulse) -> Result<(), Self::Error>;
+}
+
+/// Contract for the one direct marble-to-marble interaction: impact transfer.
+///
+/// A source marble does not need to know where the target goes next. It only
+/// provides a directed amount, and the target decides how to absorb it.
+pub trait MarbleImpact<Target: MarbleTrajectorySink>: MarbleTrajectory {
+    type Error;
+
+    fn hit(&self, target: &mut Target) -> Result<(), Self::Error>;
+}
+
+/// Contract for a marble that represents the deliberate absence of payload.
+///
+/// This is the "leading zero" marble: it occupies a lane slot meaningfully
+/// enough to keep flow going, while carrying no domain payload.
+pub trait MarbleEmpty: Marble {
+    fn is_empty(&self) -> bool;
+}
+
+/// Contract for a package built from one marble position per lane.
+pub trait MarblePackage<M: Marble>: Marble {
+    fn width(&self) -> usize;
+
+    fn lane(&self, index: usize) -> Option<&M>;
+}
+
+/// Contract for an N-lane marble trace field backed by per-lane slots.
+///
+/// The intended shape is a mapped area where each lane advances independently,
+/// but package release observes one exact slot at the end of every lane.
+pub trait MarbleTraceField<M: Marble>: MarbleGadget {
+    type Error;
+
+    fn lanes(&self) -> usize;
+
+    fn try_put_lane(&mut self, lane: usize, marble: M) -> Result<(), Self::Error>;
+
+    fn lane_ready(&self, lane: usize) -> bool;
+}
+
+/// Contract for a gadget that gathers one marble from each lane into a package.
+///
+/// Implementations choose whether an incomplete set halts release, or whether
+/// they inject empty marbles to complete the package.
+pub trait MarbleGather<M: Marble, P: MarblePackage<M>>: MarbleGadget {
+    type Error;
+
+    fn gather(&mut self) -> Result<Option<P>, Self::Error>;
 }

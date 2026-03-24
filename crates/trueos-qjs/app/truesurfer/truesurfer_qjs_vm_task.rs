@@ -57,6 +57,7 @@ const TRUESURFER_LAYOUT_NODE_PARENT_ID_PROP: &[u8] = b"parentId\0";
 const TRUESURFER_LAYOUT_NODE_DEPTH_PROP: &[u8] = b"depth\0";
 const TRUESURFER_LAYOUT_NODE_KIND_PROP: &[u8] = b"kind\0";
 const TRUESURFER_LAYOUT_NODE_TAG_PROP: &[u8] = b"tag\0";
+const TRUESURFER_LAYOUT_NODE_TEXT_PROP: &[u8] = b"text\0";
 const TRUESURFER_LAYOUT_NODE_INTRINSIC_WIDTH_PROP: &[u8] = b"intrinsicWidthPx\0";
 const TRUESURFER_LAYOUT_NODE_INTRINSIC_HEIGHT_PROP: &[u8] = b"intrinsicHeightPx\0";
 const TRUESURFER_LAYOUT_NODE_MIN_WIDTH_PROP: &[u8] = b"minWidthPx\0";
@@ -88,7 +89,7 @@ unsafe impl RawMutex for SpinRawMutex {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct HostedBrowserSurfaceState {
     pub viewport_width: u32,
     pub viewport_height: u32,
@@ -98,7 +99,7 @@ pub struct HostedBrowserSurfaceState {
     pub scroll_y: u32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct HostedBrowserInteractiveItem {
     pub item_id: u32,
     pub x: i32,
@@ -107,29 +108,30 @@ pub struct HostedBrowserInteractiveItem {
     pub height: u32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct HostedBrowserInteractiveState {
     pub interactives: alloc::vec::Vec<HostedBrowserInteractiveItem>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct HostedBrowserTextRow {
     pub text: String,
     pub indent_px: u32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct HostedBrowserTextState {
     pub rows: Vec<HostedBrowserTextRow>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct HostedBrowserLayoutNode {
     pub node_id: u32,
     pub parent_id: u32,
     pub depth: u32,
     pub kind: String,
     pub tag: String,
+    pub text: String,
     pub intrinsic_width_px: u32,
     pub intrinsic_height_px: u32,
     pub min_width_px: u32,
@@ -146,7 +148,7 @@ pub struct HostedBrowserLayoutNode {
     pub flex_shrink: f32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct HostedBrowserLayoutState {
     pub version: u32,
     pub nodes: Vec<HostedBrowserLayoutNode>,
@@ -158,7 +160,7 @@ pub enum HostedKeyboardEvent {
     Key { key: String, modifiers: u8 },
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ParseResult {
     pub ok: bool,
     pub url: String,
@@ -410,10 +412,18 @@ pub fn set_hosted_viewport_for_browser(
     content_height: u32,
 ) -> bool {
     with_browser_state_mut(browser_instance_id, |state| {
-        state.surface_state.viewport_width = viewport_width.max(1);
-        state.surface_state.viewport_height = viewport_height.max(1);
-        state.surface_state.content_width = content_width.max(viewport_width.max(1));
-        state.surface_state.content_height = content_height.max(1);
+        let next = HostedBrowserSurfaceState {
+            viewport_width: viewport_width.max(1),
+            viewport_height: viewport_height.max(1),
+            content_width: content_width.max(viewport_width.max(1)),
+            content_height: content_height.max(1),
+            scroll_x: state.surface_state.scroll_x,
+            scroll_y: state.surface_state.scroll_y,
+        };
+        if state.surface_state == next {
+            return true;
+        }
+        state.surface_state = next;
         state.surface_seq = state.surface_seq.wrapping_add(1);
         true
     })
@@ -422,6 +432,9 @@ pub fn set_hosted_viewport_for_browser(
 
 pub fn set_hosted_scroll_for_browser(browser_instance_id: u32, scroll_x: u32, scroll_y: u32) -> bool {
     with_browser_state_mut(browser_instance_id, |state| {
+        if state.surface_state.scroll_x == scroll_x && state.surface_state.scroll_y == scroll_y {
+            return true;
+        }
         state.surface_state.scroll_x = scroll_x;
         state.surface_state.scroll_y = scroll_y;
         state.surface_seq = state.surface_seq.wrapping_add(1);
@@ -656,6 +669,7 @@ unsafe fn read_layout_state(
             depth: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_DEPTH_PROP),
             kind: read_result_string(ctx, node_value, TRUESURFER_LAYOUT_NODE_KIND_PROP),
             tag: read_result_string(ctx, node_value, TRUESURFER_LAYOUT_NODE_TAG_PROP),
+            text: read_result_string(ctx, node_value, TRUESURFER_LAYOUT_NODE_TEXT_PROP),
             intrinsic_width_px: read_result_u32(
                 ctx,
                 node_value,
@@ -819,23 +833,43 @@ unsafe fn dispatch_html(
     let layout_state = read_layout_state(ctx, result);
 
     let _ = with_browser_state_mut(browser_instance_id, |state| {
-        state.last_parse_result = Some(parse_result.clone());
-        state.text_state = text_state.clone();
-        state.layout_state = layout_state.clone();
-        state.text_seq = state.text_seq.wrapping_add(1);
-        state.layout_seq = state.layout_seq.wrapping_add(1);
+        let text_changed = state.text_state != text_state;
+        let layout_changed = state.layout_state != layout_state;
+        let parse_changed = state
+            .last_parse_result
+            .as_ref()
+            .map(|prev| prev != &parse_result)
+            .unwrap_or(true);
+
+        if parse_changed {
+            state.last_parse_result = Some(parse_result.clone());
+        }
+        if text_changed {
+            state.text_state = text_state.clone();
+            state.text_seq = state.text_seq.wrapping_add(1);
+        }
+        if layout_changed {
+            state.layout_state = layout_state.clone();
+            state.layout_seq = state.layout_seq.wrapping_add(1);
+        }
+
+        let mut next_content_height = state.surface_state.content_height.max(1);
         if !state.text_state.rows.is_empty() {
-            state.surface_state.content_height = ((state.text_state.rows.len() as u32) * 18)
-                .saturating_add(20)
-                .max(state.surface_state.viewport_height);
+            next_content_height = next_content_height.max(
+                ((state.text_state.rows.len() as u32) * 18)
+                    .saturating_add(20)
+                    .max(state.surface_state.viewport_height),
+            );
         }
         let layout_height = layout_content_height(&state.layout_state);
         if layout_height > 0 {
-            state.surface_state.content_height = state
-                .surface_state
-                .content_height
+            next_content_height = next_content_height
                 .max(layout_height)
                 .max(state.surface_state.viewport_height);
+        }
+        if next_content_height != state.surface_state.content_height {
+            state.surface_state.content_height = next_content_height;
+            state.surface_seq = state.surface_seq.wrapping_add(1);
         }
     });
 

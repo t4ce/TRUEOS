@@ -193,12 +193,21 @@ function stripCommentAndRawTextNoise(html) {
 
 function collectBodyHierarchy(bodyHtml, limit = BODY_HIERARCHY_LIMIT) {
   const source = stripCommentAndRawTextNoise(bodyHtml);
-  const tagRe = /<\/?([a-zA-Z0-9:-]+)\b[^>]*>/g;
+  const tokenRe = /<\/?([a-zA-Z0-9:-]+)\b[^>]*>|([^<]+)/g;
   const stack = ['body'];
   const out = [];
   let match;
 
-  while ((match = tagRe.exec(source)) && out.length < limit) {
+  while ((match = tokenRe.exec(source)) && out.length < limit) {
+    const textChunk = match[2];
+    if (textChunk != null) {
+      const text = collapseWhitespace(decodeBasicEntities(textChunk));
+      if (text && (stack.length - 1) <= BODY_HIERARCHY_DEPTH_LIMIT) {
+        out.push({ depth: stack.length - 1, tag: '#text', text });
+      }
+      continue;
+    }
+
     const fullTag = match[0];
     const tagName = safeString(match[1]).toLowerCase();
     const isClose = fullTag[1] === '/';
@@ -216,7 +225,7 @@ function collectBodyHierarchy(bodyHtml, limit = BODY_HIERARCHY_LIMIT) {
 
     const currentDepth = stack.length - 1;
     if ((COMMON_BODY_TAGS.has(tagName) || COMMON_BODY_TAGS_FALLBACK.has(tagName)) && currentDepth <= BODY_HIERARCHY_DEPTH_LIMIT) {
-      out.push({ depth: stack.length - 1, tag: tagName });
+      out.push({ depth: stack.length - 1, tag: tagName, text: '' });
     }
 
     if (!isSelfClosing) {
@@ -233,6 +242,9 @@ function summarizeBodyHierarchy(bodyHierarchy) {
   }
   const parts = ['body'];
   for (const entry of bodyHierarchy) {
+    if (entry.tag === '#text') {
+      continue;
+    }
     const depth = Math.max(0, Number(entry.depth) || 0);
     parts.push(`${'.'.repeat(depth)}${entry.tag}`);
   }
@@ -249,6 +261,15 @@ function buildHostedTextRows(title, bodyHierarchy, limit = 24) {
   for (let index = 0; index < items.length && rows.length < limit; index += 1) {
     const entry = items[index] || {};
     const tag = collapseWhitespace(entry.tag);
+    const text = collapseWhitespace(entry.text);
+    if (tag === '#text' && text) {
+      const depth = Math.max(0, Number(entry.depth) || 0);
+      rows.push({
+        text,
+        indentPx: depth * 12,
+      });
+      continue;
+    }
     if (!tag) {
       continue;
     }
@@ -272,6 +293,8 @@ function estimateTextWidthPx(text, fontPx) {
 
 function classifyLayoutTag(tag) {
   switch (safeString(tag).toLowerCase()) {
+    case '#text':
+      return 'text';
     case 'img':
       return 'image';
     case 'button':
@@ -289,7 +312,7 @@ function classifyLayoutTag(tag) {
   }
 }
 
-function estimateLayoutNodeMetrics(tag, depth) {
+function estimateLayoutNodeMetrics(tag, depth, text = '') {
   const name = safeString(tag).toLowerCase();
   const indent = Math.max(0, Number(depth) || 0) * 12;
   let intrinsicWidthPx = 0;
@@ -302,7 +325,13 @@ function estimateLayoutNodeMetrics(tag, depth) {
   let paddingBottomPx = 0;
   let marginBottomPx = 4;
 
-  if (/^h[1-6]$/.test(name)) {
+  if (name === '#text') {
+    intrinsicWidthPx = estimateTextWidthPx(text, 14);
+    intrinsicHeightPx = 20;
+    minWidthPx = intrinsicWidthPx;
+    minHeightPx = intrinsicHeightPx;
+    marginBottomPx = 2;
+  } else if (/^h[1-6]$/.test(name)) {
     const level = Number(name[1] || 1);
     intrinsicHeightPx = Math.max(20, 34 - (level * 3));
     minHeightPx = intrinsicHeightPx;
@@ -391,6 +420,7 @@ function buildLayoutIntent(title, bodyHierarchy, limit = LAYOUT_INTENT_NODE_LIMI
       depth: 1,
       kind: 'text',
       tag: 'title',
+      text: titleText,
       intrinsicWidthPx: estimateTextWidthPx(titleText, 18),
       intrinsicHeightPx: 26,
       minWidthPx: 0,
@@ -413,6 +443,7 @@ function buildLayoutIntent(title, bodyHierarchy, limit = LAYOUT_INTENT_NODE_LIMI
   for (let index = 0; index < items.length && nodes.length < limit; index += 1) {
     const entry = items[index] || {};
     const tag = collapseWhitespace(entry.tag).toLowerCase();
+    const text = collapseWhitespace(entry.text);
     if (!tag) {
       continue;
     }
@@ -421,7 +452,7 @@ function buildLayoutIntent(title, bodyHierarchy, limit = LAYOUT_INTENT_NODE_LIMI
       stack.pop();
     }
     const parentId = stack[stack.length - 1] || 1;
-    const metrics = estimateLayoutNodeMetrics(tag, depth);
+    const metrics = estimateLayoutNodeMetrics(tag, depth, text);
     const nodeId = nextNodeId;
     nextNodeId += 1;
     nodes.push({
@@ -430,6 +461,7 @@ function buildLayoutIntent(title, bodyHierarchy, limit = LAYOUT_INTENT_NODE_LIMI
       depth: depth + 1,
       kind: classifyLayoutTag(tag),
       tag,
+      text,
       intrinsicWidthPx: metrics.intrinsicWidthPx,
       intrinsicHeightPx: metrics.intrinsicHeightPx,
       minWidthPx: metrics.minWidthPx,
@@ -445,7 +477,9 @@ function buildLayoutIntent(title, bodyHierarchy, limit = LAYOUT_INTENT_NODE_LIMI
       flexGrow: 0,
       flexShrink: 0,
     });
-    stack.push(nodeId);
+    if (tag !== '#text') {
+      stack.push(nodeId);
+    }
   }
 
   return {

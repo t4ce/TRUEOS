@@ -3,7 +3,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
 
-use super::{Marble, MarbleGadget, MarblePool, MarbleTransform};
+use super::{Marble, MarbleGadget, MarblePool, MarblePortal, MarbleRace, MarbleTransform};
 
 pub type ParkStateId = u16;
 pub type ParkShardId = u16;
@@ -273,6 +273,148 @@ impl<const WINDOW: usize> Marble for MarbleParkWorkerReportMarble<WINDOW> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarbleParkPriorityRaceError {
+    InvalidLane,
+    Full,
+}
+
+#[derive(Debug, Clone)]
+pub struct MarbleParkPriorityRace<M: Marble> {
+    channels: Vec<VecDeque<M>>,
+    capacity_per_lane: usize,
+}
+
+impl<M: Marble> MarbleParkPriorityRace<M> {
+    pub fn new(lanes: usize, capacity_per_lane: usize) -> Self {
+        let mut channels = Vec::with_capacity(lanes);
+        for _ in 0..lanes {
+            channels.push(VecDeque::with_capacity(capacity_per_lane));
+        }
+
+        Self {
+            channels,
+            capacity_per_lane,
+        }
+    }
+
+    pub fn lane_len(&self, lane: usize) -> Option<usize> {
+        self.channels.get(lane).map(VecDeque::len)
+    }
+
+    fn highest_ready_lane(&self) -> Option<usize> {
+        self.channels.iter().position(|lane| !lane.is_empty())
+    }
+}
+
+impl<M: Marble> MarbleGadget for MarbleParkPriorityRace<M> {
+    fn name(&self) -> &'static str {
+        "marble-park-priority-race"
+    }
+}
+
+impl<M: Marble> MarbleRace<M> for MarbleParkPriorityRace<M> {
+    type Error = MarbleParkPriorityRaceError;
+
+    fn lanes(&self) -> usize {
+        self.channels.len()
+    }
+
+    fn enter_race(&mut self, lane: usize, marble: M) -> Result<(), Self::Error> {
+        let Some(queue) = self.channels.get_mut(lane) else {
+            return Err(MarbleParkPriorityRaceError::InvalidLane);
+        };
+
+        if queue.len() >= self.capacity_per_lane {
+            return Err(MarbleParkPriorityRaceError::Full);
+        }
+
+        queue.push_back(marble);
+        Ok(())
+    }
+
+    fn active_lane(&self) -> Option<usize> {
+        self.highest_ready_lane()
+    }
+
+    fn finish_race(&mut self) -> Result<Option<M>, Self::Error> {
+        let Some(lane) = self.highest_ready_lane() else {
+            return Ok(None);
+        };
+        Ok(self.channels[lane].pop_front())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarbleParkPortalPacketMarble<const WINDOW: usize> {
+    pub from_shard: ParkShardId,
+    pub to_shard: ParkShardId,
+    pub wave: u32,
+    pub configs: Vec<MarbleParkConfigMarble<WINDOW>>,
+}
+
+impl<const WINDOW: usize> Marble for MarbleParkPortalPacketMarble<WINDOW> {
+    fn kind(&self) -> &'static str {
+        "park-portal-packet"
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarbleParkPortalError {
+    Full,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarbleParkGatewayPortal<const WINDOW: usize> {
+    source_shard: ParkShardId,
+    destination_shard: ParkShardId,
+    capacity: usize,
+    queue: VecDeque<MarbleParkPortalPacketMarble<WINDOW>>,
+}
+
+impl<const WINDOW: usize> MarbleParkGatewayPortal<WINDOW> {
+    pub fn new(source_shard: ParkShardId, destination_shard: ParkShardId, capacity: usize) -> Self {
+        Self {
+            source_shard,
+            destination_shard,
+            capacity,
+            queue: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    pub fn source_shard(&self) -> ParkShardId {
+        self.source_shard
+    }
+
+    pub fn destination_shard(&self) -> ParkShardId {
+        self.destination_shard
+    }
+}
+
+impl<const WINDOW: usize> MarbleGadget for MarbleParkGatewayPortal<WINDOW> {
+    fn name(&self) -> &'static str {
+        "marble-park-gateway-portal"
+    }
+}
+
+impl<const WINDOW: usize> MarblePortal<MarbleParkPortalPacketMarble<WINDOW>>
+    for MarbleParkGatewayPortal<WINDOW>
+{
+    type Error = MarbleParkPortalError;
+
+    fn send(&mut self, marble: MarbleParkPortalPacketMarble<WINDOW>) -> Result<(), Self::Error> {
+        if self.queue.len() >= self.capacity {
+            return Err(MarbleParkPortalError::Full);
+        }
+        self.queue.push_back(marble);
+        Ok(())
+    }
+
+    fn receive(&mut self) -> Result<Option<MarbleParkPortalPacketMarble<WINDOW>>, Self::Error> {
+        Ok(self.queue.pop_front())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarbleParkPoolError {
     Full,
 }
@@ -433,6 +575,7 @@ impl<const WINDOW: usize>
 pub enum MarbleParkRunError {
     InvalidShardCount,
     QueueFull { shard: ParkShardId },
+    PortalFull,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -504,6 +647,80 @@ impl<const WINDOW: usize> MarblePark<WINDOW> {
             .map_err(|_| MarbleParkRunError::QueueFull {
                 shard: shard_index as ParkShardId,
             })
+    }
+
+    pub fn export_portal_packet(
+        &mut self,
+        source_shard: ParkShardId,
+        destination_shard: ParkShardId,
+        max: usize,
+    ) -> Option<MarbleParkPortalPacketMarble<WINDOW>> {
+        let source_index = self.route_shard(source_shard);
+        let batch = self.pools[source_index].take_batch(self.wave, max);
+        if batch.configs.is_empty() {
+            return None;
+        }
+
+        Some(MarbleParkPortalPacketMarble {
+            from_shard: source_index as ParkShardId,
+            to_shard: self.route_shard(destination_shard) as ParkShardId,
+            wave: batch.wave,
+            configs: batch.configs,
+        })
+    }
+
+    pub fn import_portal_packet(
+        &mut self,
+        packet: MarbleParkPortalPacketMarble<WINDOW>,
+    ) -> Result<usize, MarbleParkRunError> {
+        let mut delivered = 0usize;
+        let destination = self.route_shard(packet.to_shard);
+
+        for mut config in packet.configs {
+            config.shard_hint = destination as ParkShardId;
+            self.pools[destination]
+                .push(config)
+                .map_err(|_| MarbleParkRunError::QueueFull {
+                    shard: destination as ParkShardId,
+                })?;
+            delivered = delivered.saturating_add(1);
+        }
+
+        Ok(delivered)
+    }
+
+    pub fn portal_rebalance_once(
+        &mut self,
+        portal: &mut MarbleParkGatewayPortal<WINDOW>,
+        packet_limit: usize,
+    ) -> Result<bool, MarbleParkRunError> {
+        let source = self.route_shard(portal.source_shard());
+        let destination = self.route_shard(portal.destination_shard());
+        if source == destination || self.pools[source].len() <= self.pools[destination].len() + 1 {
+            return Ok(false);
+        }
+
+        let Some(packet) = self.export_portal_packet(
+            source as ParkShardId,
+            destination as ParkShardId,
+            packet_limit,
+        ) else {
+            return Ok(false);
+        };
+
+        portal
+            .send(packet)
+            .map_err(|_| MarbleParkRunError::PortalFull)?;
+
+        let Some(packet) = portal
+            .receive()
+            .map_err(|_| MarbleParkRunError::PortalFull)?
+        else {
+            return Ok(false);
+        };
+
+        self.import_portal_packet(packet)?;
+        Ok(true)
     }
 
     pub fn run_wave(&mut self) -> Result<MarbleParkWaveSummary<WINDOW>, MarbleParkRunError> {
@@ -722,6 +939,53 @@ mod tests {
     }
 
     #[test]
+    fn priority_race_hotswaps_to_higher_priority_lane() {
+        let mut race = MarbleParkPriorityRace::<MarbleParkConfigMarble<8>>::new(3, 4);
+
+        race.enter_race(
+            2,
+            MarbleParkConfigMarble::with_input(2, PARK_BLANK, 0, b"2"),
+        )
+        .unwrap();
+        assert_eq!(race.active_lane(), Some(2));
+
+        let first = race.finish_race().unwrap().unwrap();
+        assert_eq!(first.shard_hint, 2);
+
+        race.enter_race(
+            2,
+            MarbleParkConfigMarble::with_input(2, PARK_BLANK, 0, b"b"),
+        )
+        .unwrap();
+        race.enter_race(
+            0,
+            MarbleParkConfigMarble::with_input(0, PARK_BLANK, 0, b"a"),
+        )
+        .unwrap();
+
+        assert_eq!(race.active_lane(), Some(0));
+        let next = race.finish_race().unwrap().unwrap();
+        assert_eq!(next.shard_hint, 0);
+    }
+
+    #[test]
+    fn priority_race_can_carry_boxed_packages() {
+        let mut race = MarbleParkPriorityRace::<MarbleParkBatchMarble<8>>::new(2, 2);
+        let package = MarbleParkBatchMarble::new(
+            1,
+            7,
+            vec![MarbleParkConfigMarble::with_input(1, PARK_BLANK, 0, b"x")],
+        );
+
+        race.enter_race(1, package).unwrap();
+
+        let taken = race.finish_race().unwrap().unwrap();
+        assert_eq!(taken.shard, 1);
+        assert_eq!(taken.wave, 7);
+        assert_eq!(taken.configs.len(), 1);
+    }
+
+    #[test]
     fn park_rebalances_between_shards() {
         let mut park = MarblePark::<8>::new(2, 8, 4, contains_one_park_expander()).unwrap();
         for _ in 0..4 {
@@ -744,5 +1008,29 @@ mod tests {
         assert_eq!(summary.wave, 0);
         assert_eq!(summary.explored, 1);
         assert!(summary.generated > 0 || summary.accepted.is_some());
+    }
+
+    #[test]
+    fn portal_moves_whole_package_between_shards() {
+        let mut park = MarblePark::<8>::new(2, 8, 4, contains_one_park_expander()).unwrap();
+        let mut portal = MarbleParkGatewayPortal::<8>::new(0, 1, 1);
+
+        for _ in 0..3 {
+            park.enqueue(MarbleParkConfigMarble::with_input(0, PARK_BLANK, 0, b"0"))
+                .unwrap();
+        }
+
+        let packet = park.export_portal_packet(0, 1, 2).unwrap();
+        assert_eq!(packet.from_shard, 0);
+        assert_eq!(packet.to_shard, 1);
+        assert_eq!(packet.configs.len(), 2);
+        assert_eq!(park.shard_loads(), vec![1, 0]);
+
+        portal.send(packet).unwrap();
+        let packet = portal.receive().unwrap().unwrap();
+        let delivered = park.import_portal_packet(packet).unwrap();
+
+        assert_eq!(delivered, 2);
+        assert_eq!(park.shard_loads(), vec![1, 2]);
     }
 }
