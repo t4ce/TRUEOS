@@ -9,6 +9,7 @@ const TRUESURFER_SUBSET_PROFILE = Object.freeze({
   includeStyles: true,
   includeScripts: true,
   includeBodyHierarchy: true,
+  includeHostedTextRows: false,
   maxBodyHierarchyNodes: 10,
   maxBodyHierarchyDepth: 6,
   bodyTags: Object.freeze([
@@ -240,6 +241,28 @@ function summarizeBodyHierarchy(bodyHierarchy) {
   return parts.join(' > ');
 }
 
+function buildHostedTextRows(title, bodyHierarchy, limit = 24) {
+  const rows = [];
+  const titleText = collapseWhitespace(title);
+  if (titleText) {
+    rows.push({ text: titleText, indentPx: 0 });
+  }
+  const items = Array.isArray(bodyHierarchy) ? bodyHierarchy : [];
+  for (let index = 0; index < items.length && rows.length < limit; index += 1) {
+    const entry = items[index] || {};
+    const tag = collapseWhitespace(entry.tag);
+    if (!tag) {
+      continue;
+    }
+    const depth = Math.max(0, Number(entry.depth) || 0);
+    rows.push({
+      text: tag,
+      indentPx: depth * 12,
+    });
+  }
+  return rows;
+}
+
 function collectStyleArtifacts(source) {
   const html = safeString(source);
   const styles = [];
@@ -328,6 +351,9 @@ function extractDocumentArtifacts(source) {
   const styleIndexMs = 0;
   const shellHtml = buildMinimalShell(title);
   const parseMs = Date.now() - startedAt;
+  const textRows = TRUESURFER_SUBSET_PROFILE.includeHostedTextRows
+    ? buildHostedTextRows(title, bodyHierarchy)
+    : [];
 
   let styleBytes = 0;
   for (const style of styles) {
@@ -354,6 +380,7 @@ function extractDocumentArtifacts(source) {
     bodyBytes: bodyHtml.length,
     bodyHierarchy,
     bodyHierarchySummary,
+    textRows,
     styleCount: styles.length,
     styleBytes,
     styleSlotCount: styleIndex.styleSlotCount,
@@ -391,6 +418,7 @@ function setHtml(nextHtml, meta) {
       bodyBytes: parsed.bodyBytes,
       bodyHierarchy: parsed.bodyHierarchy,
       bodyHierarchySummary: parsed.bodyHierarchySummary,
+      textRows: parsed.textRows,
       styleCount: parsed.styleCount,
       styleBytes: parsed.styleBytes,
       styleSlotCount: parsed.styleSlotCount,
@@ -412,6 +440,7 @@ function setHtml(nextHtml, meta) {
       title: parsed.title,
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
+      textRows: parsed.textRows,
       styleCount: parsed.styleCount,
       styleBytes: parsed.styleBytes,
       styleSlotCount: parsed.styleSlotCount,

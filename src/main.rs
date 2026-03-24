@@ -22,6 +22,7 @@ mod hv;
 pub mod hvv;
 #[cfg(feature = "gfx_intel")]
 mod intel;
+mod interrupt_cursorplane;
 mod iso9660;
 mod limine;
 mod logflag;
@@ -194,6 +195,7 @@ pub extern "C" fn kmain() -> ! {
     // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
     tga::init_once();
     net::init();
+    interrupt_cursorplane::init_bsp();
 
     #[cfg(feature = "dma_nic_fpga")]
     {
