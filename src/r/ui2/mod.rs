@@ -29,6 +29,10 @@ const UI2_SYSTEM_SCROLLBAR_PX: f32 = 4.0;
 const UI2_SYSTEM_BUTTON_W: f32 = 24.0;
 const UI2_SYSTEM_BUTTON_H: f32 = 14.0;
 const UI2_SYSTEM_BUTTON_GAP: f32 = 4.0;
+const UI2_SYSTEM_BUTTON_FORK_ICON_ID: u32 = 3;
+const UI2_SYSTEM_BUTTON_MINIMIZE_ICON_ID: u32 = 5;
+const UI2_SYSTEM_BUTTON_MAXIMIZE_ICON_ID: u32 = 7;
+const UI2_SYSTEM_BUTTON_CLOSE_ICON_ID: u32 = 9;
 const UI2_BROWSER_TITLE_OVERLAY_PERIOD_MS: u64 = 2400;
 const UI2_BROWSER_FORK_WINDOW_OFFSET_PX: f32 = 24.0;
 const UI2_BOTTOM_RESIZE_BUTTON_W: f32 = 18.0;
@@ -2114,52 +2118,24 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
         return;
     };
 
-    match action {
-        Ui2SystemButtonAction::Fork => {
-            let text = b"+1";
-            let text_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(text);
-            crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
-                text,
-                rect.x + ((rect.w - text_w) * 0.5),
-                rect.y + 3.0,
-                state.view_w,
-                state.view_h,
-                window.alpha,
-            );
-        }
-        Ui2SystemButtonAction::Close => {
-            let text = b"-1";
-            let text_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(text);
-            crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
-                text,
-                rect.x + ((rect.w - text_w) * 0.5),
-                rect.y + 3.0,
-                state.view_w,
-                state.view_h,
-                window.alpha,
-            );
-        }
-        Ui2SystemButtonAction::Minimize | Ui2SystemButtonAction::ToggleMaximize => {
-            let icon_id = match action {
-                Ui2SystemButtonAction::Fork => 0,
-                Ui2SystemButtonAction::Minimize => 5,
-                Ui2SystemButtonAction::ToggleMaximize => 7,
-                Ui2SystemButtonAction::Close => 0,
-            };
-            let icon_x = rect.x + ((rect.w - 16.0) * 0.5);
-            let icon_y = rect.y + ((rect.h - 16.0) * 0.5);
-            let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
-                icon_id,
-                0,
-                1,
-                icon_x,
-                icon_y,
-                state.view_w,
-                state.view_h,
-                window.alpha,
-            );
-        }
-    }
+    let icon_id = match action {
+        Ui2SystemButtonAction::Fork => UI2_SYSTEM_BUTTON_FORK_ICON_ID,
+        Ui2SystemButtonAction::Minimize => UI2_SYSTEM_BUTTON_MINIMIZE_ICON_ID,
+        Ui2SystemButtonAction::ToggleMaximize => UI2_SYSTEM_BUTTON_MAXIMIZE_ICON_ID,
+        Ui2SystemButtonAction::Close => UI2_SYSTEM_BUTTON_CLOSE_ICON_ID,
+    };
+    let icon_x = rect.x + ((rect.w - 16.0) * 0.5);
+    let icon_y = rect.y + ((rect.h - 16.0) * 0.5);
+    let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
+        icon_id,
+        0,
+        1,
+        icon_x,
+        icon_y,
+        state.view_w,
+        state.view_h,
+        window.alpha,
+    );
 }
 
 fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
@@ -2434,7 +2410,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
             );
         }
         let title_face = crate::gfx::imbafont::ImbaFontFace::Loop;
-        let title_text_h = UI2_TITLE_H.max(1.0);
+        let title_text_h = UI2_TITLE_H.max(35.0);
         let title_tracking_px = -0.75f32;
         let title_w = crate::gfx::imbafont::measure_text_width_px_tracked(
             title_face,

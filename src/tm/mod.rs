@@ -1,4 +1,4 @@
-//! Raw no-std Turing machine core used by the kernel build.
+//! Raw no-std NTM playground built around configuration frontiers.
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
@@ -30,28 +30,11 @@ pub struct TransitionRule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StepRecord {
-    pub prev_state: StateId,
-    pub next_state: StateId,
-    pub read: Symbol,
-    pub write: Symbol,
-    pub dir: Dir,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HaltReason {
-    Accept,
-    Reject,
-    MissingTransition,
-    StepLimit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchHalt {
+pub enum NtmHalt {
     Accept,
     Exhausted,
     StepLimit,
-    BranchLimit,
+    FrontierLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +90,10 @@ impl Tape {
         }
     }
 
+    pub fn head_index(&self) -> usize {
+        self.head
+    }
+
     pub fn trimmed_bytes(&self) -> Vec<u8> {
         let mut left = 0usize;
         let mut right = self.cells.len();
@@ -141,56 +128,18 @@ impl Tape {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct RawMachine {
-    tape: Tape,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NtmConfig {
+    pub tape: Tape,
     state: StateId,
-    accept_state: StateId,
-    reject_state: StateId,
-    rules: Vec<TransitionRule>,
     steps: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchBranch {
-    pub tape: Tape,
-    pub state: StateId,
-    pub steps: usize,
-    pub trace: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchResult {
-    pub halt: SearchHalt,
-    pub explored: usize,
-    pub frontier: usize,
-    pub accepted: Option<SearchBranch>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NondeterministicMachine {
-    blank: Symbol,
-    start_state: StateId,
-    accept_state: StateId,
-    reject_state: StateId,
-    rules: Vec<TransitionRule>,
-}
-
-impl RawMachine {
-    pub fn new(
-        input: &[u8],
-        blank: Symbol,
-        start_state: StateId,
-        accept_state: StateId,
-        reject_state: StateId,
-        rules: Vec<TransitionRule>,
-    ) -> Self {
+impl NtmConfig {
+    pub fn new(input: &[u8], blank: Symbol, start_state: StateId) -> Self {
         Self {
             tape: Tape::from_bytes(input, blank),
             state: start_state,
-            accept_state,
-            reject_state,
-            rules,
             steps: 0,
         }
     }
@@ -203,91 +152,99 @@ impl RawMachine {
         self.steps
     }
 
-    pub fn tape(&self) -> &Tape {
-        &self.tape
-    }
-
-    pub fn step(&mut self) -> Result<StepRecord, HaltReason> {
-        if self.state == self.accept_state {
-            return Err(HaltReason::Accept);
-        }
-        if self.state == self.reject_state {
-            return Err(HaltReason::Reject);
-        }
-
-        let read = self.tape.read();
-        let Some(rule) = self.find_rule(self.state, read) else {
-            return Err(HaltReason::MissingTransition);
-        };
-
-        self.tape.write(rule.write);
-        self.tape.move_dir(rule.dir);
-        let prev_state = self.state;
-        self.state = rule.next_state;
-        self.steps = self.steps.saturating_add(1);
-
-        Ok(StepRecord {
-            prev_state,
-            next_state: self.state,
-            read,
-            write: rule.write,
-            dir: rule.dir,
-        })
-    }
-
-    pub fn run(&mut self, max_steps: usize) -> HaltReason {
-        for _ in 0..max_steps {
-            match self.step() {
-                Ok(_) => {}
-                Err(reason) => return reason,
-            }
-        }
-        HaltReason::StepLimit
-    }
-
-    pub fn trace(&mut self, max_steps: usize) -> String {
+    pub fn render(&self) -> String {
         let mut out = String::new();
         let _ = write!(
             out,
-            "state={} tape={}",
+            "state={} steps={} tape={}",
             self.state,
+            self.steps,
             self.tape.render_with_head()
         );
-
-        for _ in 0..max_steps {
-            match self.step() {
-                Ok(step) => {
-                    let _ = write!(
-                        out,
-                        "\n{} --{}:{}:{}--> {} tape={}",
-                        step.prev_state,
-                        step.read as char,
-                        step.write as char,
-                        dir_name(step.dir),
-                        step.next_state,
-                        self.tape.render_with_head()
-                    );
-                }
-                Err(reason) => {
-                    let _ = write!(out, "\nhalt={}", halt_name(reason));
-                    return out;
-                }
-            }
-        }
-
-        let _ = write!(out, "\nhalt={}", halt_name(HaltReason::StepLimit));
         out
-    }
-
-    fn find_rule(&self, state: StateId, read: Symbol) -> Option<TransitionRule> {
-        self.rules
-            .iter()
-            .copied()
-            .find(|rule| rule.state == state && rule.read == read)
     }
 }
 
-impl NondeterministicMachine {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NtmFrontier {
+    slots: VecDeque<NtmConfig>,
+}
+
+impl NtmFrontier {
+    pub fn new() -> Self {
+        Self {
+            slots: VecDeque::new(),
+        }
+    }
+
+    pub fn push(&mut self, config: NtmConfig) {
+        self.slots.push_back(config);
+    }
+
+    pub fn pop(&mut self) -> Option<NtmConfig> {
+        self.slots.pop_front()
+    }
+
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.slots.clear();
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &NtmConfig> {
+        self.slots.iter()
+    }
+
+    pub fn take_batch(&mut self, max: usize) -> Vec<NtmConfig> {
+        let mut out = Vec::with_capacity(max);
+        for _ in 0..max {
+            let Some(config) = self.pop() else {
+                break;
+            };
+            out.push(config);
+        }
+        out
+    }
+}
+
+impl Default for NtmFrontier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NtmStats {
+    pub explored: usize,
+    pub expanded: usize,
+    pub generated: usize,
+    pub waves: usize,
+    pub peak_frontier: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NtmRunResult {
+    pub halt: NtmHalt,
+    pub accepted: Option<NtmConfig>,
+    pub stats: NtmStats,
+}
+
+#[derive(Debug, Clone)]
+pub struct NtmProgram {
+    blank: Symbol,
+    start_state: StateId,
+    accept_state: StateId,
+    reject_state: StateId,
+    rules: Vec<TransitionRule>,
+}
+
+impl NtmProgram {
     pub fn new(
         blank: Symbol,
         start_state: StateId,
@@ -304,183 +261,200 @@ impl NondeterministicMachine {
         }
     }
 
-    pub fn run_bfs(&self, input: &[u8], max_steps: usize, max_branches: usize) -> SearchResult {
-        let start_tape = Tape::from_bytes(input, self.blank);
-        let mut frontier = VecDeque::new();
-        frontier.push_back(SearchBranch {
-            tape: start_tape.clone(),
-            state: self.start_state,
-            steps: 0,
-            trace: format!(
-                "state={} tape={}",
-                self.start_state,
-                start_tape.render_with_head()
-            ),
-        });
-
-        let mut explored = 0usize;
-        let mut saw_step_limit = false;
-
-        while let Some(branch) = frontier.pop_front() {
-            if branch.state == self.accept_state {
-                return SearchResult {
-                    halt: SearchHalt::Accept,
-                    explored,
-                    frontier: frontier.len(),
-                    accepted: Some(branch),
-                };
-            }
-
-            if branch.state == self.reject_state {
-                explored = explored.saturating_add(1);
-                continue;
-            }
-
-            if branch.steps >= max_steps {
-                explored = explored.saturating_add(1);
-                saw_step_limit = true;
-                continue;
-            }
-
-            let next = self.step_branch(&branch);
-            explored = explored.saturating_add(1);
-
-            if next.is_empty() {
-                continue;
-            }
-
-            let next_total = frontier.len().saturating_add(next.len());
-            if next_total > max_branches {
-                return SearchResult {
-                    halt: SearchHalt::BranchLimit,
-                    explored,
-                    frontier: frontier.len(),
-                    accepted: None,
-                };
-            }
-
-            for child in next {
-                frontier.push_back(child);
-            }
-        }
-
-        SearchResult {
-            halt: if saw_step_limit {
-                SearchHalt::StepLimit
-            } else {
-                SearchHalt::Exhausted
-            },
-            explored,
-            frontier: 0,
-            accepted: None,
-        }
+    pub fn seed(&self, input: &[u8]) -> NtmConfig {
+        NtmConfig::new(input, self.blank, self.start_state)
     }
 
-    fn step_branch(&self, branch: &SearchBranch) -> Vec<SearchBranch> {
-        let read = branch.tape.read();
-        let mut out = Vec::new();
+    fn is_accept(&self, state: StateId) -> bool {
+        state == self.accept_state
+    }
 
-        for rule in self
-            .rules
+    fn is_reject(&self, state: StateId) -> bool {
+        state == self.reject_state
+    }
+
+    fn matching_rules(
+        &self,
+        state: StateId,
+        read: Symbol,
+    ) -> impl Iterator<Item = TransitionRule> + '_ {
+        self.rules
             .iter()
             .copied()
-            .filter(|rule| rule.state == branch.state && rule.read == read)
-        {
-            let mut tape = branch.tape.clone();
-            tape.write(rule.write);
-            tape.move_dir(rule.dir);
-
-            let mut trace = branch.trace.clone();
-            let _ = write!(
-                trace,
-                "\n{} --{}:{}:{}--> {} tape={}",
-                branch.state,
-                read as char,
-                rule.write as char,
-                dir_name(rule.dir),
-                rule.next_state,
-                tape.render_with_head()
-            );
-
-            out.push(SearchBranch {
-                tape,
-                state: rule.next_state,
-                steps: branch.steps.saturating_add(1),
-                trace,
-            });
-        }
-
-        out
+            .filter(move |rule| rule.state == state && rule.read == read)
     }
 }
 
-pub fn binary_increment_machine(input: &[u8]) -> RawMachine {
-    const STATE_SCAN_RIGHT: StateId = STATE_START;
-    const STATE_CARRY_LEFT: StateId = 3;
-
-    RawMachine::new(
-        input,
-        BLANK,
-        STATE_START,
-        STATE_ACCEPT,
-        STATE_REJECT,
-        vec![
-            TransitionRule {
-                state: STATE_SCAN_RIGHT,
-                read: b'0',
-                next_state: STATE_SCAN_RIGHT,
-                write: b'0',
-                dir: Dir::Right,
-            },
-            TransitionRule {
-                state: STATE_SCAN_RIGHT,
-                read: b'1',
-                next_state: STATE_SCAN_RIGHT,
-                write: b'1',
-                dir: Dir::Right,
-            },
-            TransitionRule {
-                state: STATE_SCAN_RIGHT,
-                read: BLANK,
-                next_state: STATE_CARRY_LEFT,
-                write: BLANK,
-                dir: Dir::Left,
-            },
-            TransitionRule {
-                state: STATE_CARRY_LEFT,
-                read: b'0',
-                next_state: STATE_ACCEPT,
-                write: b'1',
-                dir: Dir::Stay,
-            },
-            TransitionRule {
-                state: STATE_CARRY_LEFT,
-                read: b'1',
-                next_state: STATE_CARRY_LEFT,
-                write: b'0',
-                dir: Dir::Left,
-            },
-            TransitionRule {
-                state: STATE_CARRY_LEFT,
-                read: BLANK,
-                next_state: STATE_ACCEPT,
-                write: b'1',
-                dir: Dir::Stay,
-            },
-        ],
-    )
+#[derive(Debug, Clone)]
+pub struct NtmEngine {
+    program: NtmProgram,
 }
 
-pub fn binary_increment_trace(input: &[u8], max_steps: usize) -> String {
-    let mut machine = binary_increment_machine(input);
-    machine.trace(max_steps)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NtmWaveReport {
+    pub explored: usize,
+    pub generated: usize,
+    pub accepted: bool,
+    pub step_limited: bool,
+    pub frontier_limited: bool,
 }
 
-pub fn contains_one_ntm() -> NondeterministicMachine {
+impl NtmEngine {
+    pub fn new(program: NtmProgram) -> Self {
+        Self { program }
+    }
+
+    pub fn program(&self) -> &NtmProgram {
+        &self.program
+    }
+
+    pub fn seed_frontier(&self, input: &[u8]) -> NtmFrontier {
+        let mut frontier = NtmFrontier::new();
+        frontier.push(self.program.seed(input));
+        frontier
+    }
+
+    pub fn expand_batch(
+        &self,
+        batch: impl IntoIterator<Item = NtmConfig>,
+        output: &mut NtmFrontier,
+        max_steps: usize,
+        frontier_limit: usize,
+    ) -> NtmWaveReport {
+        let mut explored = 0usize;
+        let mut generated = 0usize;
+        let mut step_limited = false;
+
+        for config in batch {
+            explored = explored.saturating_add(1);
+
+            if self.program.is_accept(config.state) {
+                output.push(config);
+                return NtmWaveReport {
+                    explored,
+                    generated,
+                    accepted: true,
+                    step_limited,
+                    frontier_limited: false,
+                };
+            }
+
+            if self.program.is_reject(config.state) {
+                continue;
+            }
+
+            if config.steps >= max_steps {
+                step_limited = true;
+                continue;
+            }
+
+            let read = config.tape.read();
+            for rule in self.program.matching_rules(config.state, read) {
+                if output.len() >= frontier_limit {
+                    return NtmWaveReport {
+                        explored,
+                        generated,
+                        accepted: false,
+                        step_limited,
+                        frontier_limited: true,
+                    };
+                }
+
+                let mut tape = config.tape.clone();
+                tape.write(rule.write);
+                tape.move_dir(rule.dir);
+                output.push(NtmConfig {
+                    tape,
+                    state: rule.next_state,
+                    steps: config.steps.saturating_add(1),
+                });
+                generated = generated.saturating_add(1);
+            }
+        }
+
+        NtmWaveReport {
+            explored,
+            generated,
+            accepted: false,
+            step_limited,
+            frontier_limited: false,
+        }
+    }
+
+    pub fn expand_frontier(
+        &self,
+        current: &mut NtmFrontier,
+        next: &mut NtmFrontier,
+        max_steps: usize,
+        frontier_limit: usize,
+    ) -> NtmWaveReport {
+        let batch = current.take_batch(current.len());
+        self.expand_batch(batch, next, max_steps, frontier_limit)
+    }
+
+    pub fn run_wavefront(
+        &self,
+        input: &[u8],
+        max_steps: usize,
+        frontier_limit: usize,
+    ) -> NtmRunResult {
+        let mut current = self.seed_frontier(input);
+        let mut next = NtmFrontier::new();
+        let mut stats = NtmStats {
+            explored: 0,
+            expanded: 0,
+            generated: 0,
+            waves: 0,
+            peak_frontier: current.len(),
+        };
+        let mut saw_step_limit = false;
+
+        while !current.is_empty() {
+            stats.waves = stats.waves.saturating_add(1);
+            let report = self.expand_frontier(&mut current, &mut next, max_steps, frontier_limit);
+            stats.explored = stats.explored.saturating_add(report.explored);
+            stats.expanded = stats.expanded.saturating_add(report.explored);
+            stats.generated = stats.generated.saturating_add(report.generated);
+            stats.peak_frontier = stats.peak_frontier.max(next.len());
+            saw_step_limit = saw_step_limit || report.step_limited;
+
+            if report.accepted {
+                return NtmRunResult {
+                    halt: NtmHalt::Accept,
+                    accepted: next.pop(),
+                    stats,
+                };
+            }
+
+            if report.frontier_limited {
+                return NtmRunResult {
+                    halt: NtmHalt::FrontierLimit,
+                    accepted: None,
+                    stats,
+                };
+            }
+
+            core::mem::swap(&mut current, &mut next);
+            next.clear();
+        }
+
+        NtmRunResult {
+            halt: if saw_step_limit {
+                NtmHalt::StepLimit
+            } else {
+                NtmHalt::Exhausted
+            },
+            accepted: None,
+            stats,
+        }
+    }
+}
+
+pub fn contains_one_program() -> NtmProgram {
     const STATE_SCAN: StateId = STATE_START;
-    const STATE_SKIP_TO_END: StateId = 3;
+    const STATE_SKIP: StateId = 3;
 
-    NondeterministicMachine::new(
+    NtmProgram::new(
         BLANK,
         STATE_START,
         STATE_ACCEPT,
@@ -509,34 +483,34 @@ pub fn contains_one_ntm() -> NondeterministicMachine {
             },
             TransitionRule {
                 state: STATE_SCAN,
+                read: b'0',
+                next_state: STATE_SKIP,
+                write: b'0',
+                dir: Dir::Right,
+            },
+            TransitionRule {
+                state: STATE_SCAN,
                 read: BLANK,
                 next_state: STATE_REJECT,
                 write: BLANK,
                 dir: Dir::Stay,
             },
             TransitionRule {
-                state: STATE_SCAN,
+                state: STATE_SKIP,
                 read: b'0',
-                next_state: STATE_SKIP_TO_END,
+                next_state: STATE_SKIP,
                 write: b'0',
                 dir: Dir::Right,
             },
             TransitionRule {
-                state: STATE_SKIP_TO_END,
-                read: b'0',
-                next_state: STATE_SKIP_TO_END,
-                write: b'0',
-                dir: Dir::Right,
-            },
-            TransitionRule {
-                state: STATE_SKIP_TO_END,
+                state: STATE_SKIP,
                 read: b'1',
-                next_state: STATE_SKIP_TO_END,
+                next_state: STATE_SKIP,
                 write: b'1',
                 dir: Dir::Right,
             },
             TransitionRule {
-                state: STATE_SKIP_TO_END,
+                state: STATE_SKIP,
                 read: BLANK,
                 next_state: STATE_REJECT,
                 write: BLANK,
@@ -546,46 +520,78 @@ pub fn contains_one_ntm() -> NondeterministicMachine {
     )
 }
 
-pub fn contains_one_ntm_trace(input: &[u8], max_steps: usize, max_branches: usize) -> String {
-    let result = contains_one_ntm().run_bfs(input, max_steps, max_branches);
-    match result.accepted {
-        Some(branch) => branch.trace,
-        None => {
-            let mut out = String::new();
-            let _ = write!(
-                out,
-                "halt={} explored={} frontier={}",
-                search_halt_name(result.halt),
-                result.explored,
-                result.frontier
-            );
-            out
-        }
-    }
+pub fn contains_one_engine() -> NtmEngine {
+    NtmEngine::new(contains_one_program())
 }
 
-fn dir_name(dir: Dir) -> &'static str {
-    match dir {
-        Dir::Left => "L",
-        Dir::Right => "R",
-        Dir::Stay => "S",
+pub fn contains_one_summary(input: &[u8], max_steps: usize, frontier_limit: usize) -> String {
+    let result = contains_one_engine().run_wavefront(input, max_steps, frontier_limit);
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "halt={} explored={} expanded={} generated={} waves={} peak_frontier={}",
+        ntm_halt_name(result.halt),
+        result.stats.explored,
+        result.stats.expanded,
+        result.stats.generated,
+        result.stats.waves,
+        result.stats.peak_frontier
+    );
+
+    if let Some(config) = result.accepted {
+        let _ = write!(out, " accepted=({})", config.render());
     }
+
+    out
 }
 
-fn halt_name(reason: HaltReason) -> &'static str {
+pub fn expand_contains_one_once(input: &[u8], frontier_limit: usize) -> String {
+    let engine = contains_one_engine();
+    let mut current = engine.seed_frontier(input);
+    let mut next = NtmFrontier::new();
+    let report = engine.expand_frontier(&mut current, &mut next, usize::MAX, frontier_limit);
+
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "explored={} generated={} accepted={} next_frontier={}",
+        report.explored,
+        report.generated,
+        report.accepted,
+        next.len()
+    );
+
+    for (index, config) in next.iter().enumerate() {
+        let _ = write!(out, "\nbranch[{}] {}", index, config.render());
+    }
+
+    out
+}
+
+fn ntm_halt_name(reason: NtmHalt) -> &'static str {
     match reason {
-        HaltReason::Accept => "accept",
-        HaltReason::Reject => "reject",
-        HaltReason::MissingTransition => "missing-transition",
-        HaltReason::StepLimit => "step-limit",
+        NtmHalt::Accept => "accept",
+        NtmHalt::Exhausted => "exhausted",
+        NtmHalt::StepLimit => "step-limit",
+        NtmHalt::FrontierLimit => "frontier-limit",
     }
 }
 
-fn search_halt_name(reason: SearchHalt) -> &'static str {
-    match reason {
-        SearchHalt::Accept => "accept",
-        SearchHalt::Exhausted => "exhausted",
-        SearchHalt::StepLimit => "step-limit",
-        SearchHalt::BranchLimit => "branch-limit",
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contains_one_accepts_when_input_has_one() {
+        let result = contains_one_engine().run_wavefront(b"00100", 16, 64);
+        assert_eq!(result.halt, NtmHalt::Accept);
+        assert!(result.accepted.is_some());
+    }
+
+    #[test]
+    fn contains_one_exhausts_when_input_has_no_one() {
+        let result = contains_one_engine().run_wavefront(b"00000", 16, 64);
+        assert_eq!(result.halt, NtmHalt::Exhausted);
+        assert!(result.accepted.is_none());
     }
 }

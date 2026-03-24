@@ -257,6 +257,14 @@ pub struct ImageDesc {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImageRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Extent2D {
     pub width: u32,
     pub height: u32,
@@ -475,6 +483,10 @@ pub trait GfxDevice {
     fn create_image(&mut self, desc: ImageDesc) -> Result<ImageId>;
     fn destroy_image(&mut self, id: ImageId);
     fn write_image(&mut self, id: ImageId, data: &[u8]) -> Result<()>;
+
+    fn write_image_region(&mut self, _id: ImageId, _region: ImageRegion, _data: &[u8]) -> Result<()> {
+        Err(Error::Unsupported)
+    }
 
     fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> Result<()>;
 

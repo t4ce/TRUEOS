@@ -1376,9 +1376,9 @@ const TEX_PIPELINE_FS_RGBA_TAG_RAW: u32 = 0x5247_4241;
 
 use trueos_gfx_core::{
     BlendDesc, BlendFactor, BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps,
-    Error, FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange,
-    MemoryType, PipelineDesc, PipelineId, SamplerDesc, ScissorRect, ShaderDesc, ShaderId,
-    SwapchainDesc, TexCoordFormat, VertexLayout, Viewport,
+    Error, FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, ImageRegion, MapMode,
+    MappedRange, MemoryType, PipelineDesc, PipelineId, SamplerDesc, ScissorRect, ShaderDesc,
+    ShaderId, SwapchainDesc, TexCoordFormat, VertexLayout, Viewport,
 };
 
 // NOTE: Do not import `trueos_gfx_core::Result` as `Result` at module scope.
@@ -1446,6 +1446,7 @@ struct HostImage {
     desc: ImageDesc,
     bytes: Vec<u8>,
     revision: u32,
+    dirty_region: Option<ImageRegion>,
 
     // virgl-side handles for real GPU texturing.
     virgl_res: u32,
@@ -2510,6 +2511,12 @@ impl GfxDevice for VirglGfxBackend {
                 desc,
                 bytes,
                 revision: 1,
+                dirty_region: Some(ImageRegion {
+                    x: 0,
+                    y: 0,
+                    width: desc.width,
+                    height: desc.height,
+                }),
                 virgl_res,
                 virgl_view,
                 virgl_uploaded_rev: 0,
@@ -2565,6 +2572,66 @@ impl GfxDevice for VirglGfxBackend {
             if img.revision == 0 {
                 img.revision = 1;
             }
+            img.dirty_region = Some(ImageRegion {
+                x: 0,
+                y: 0,
+                width: img.desc.width,
+                height: img.desc.height,
+            });
+        }
+        self.converted_cache.key = None;
+        self.uploaded_cache_key = None;
+        self.uploaded_cache_vbo_generation = 0;
+        self.last_submitted_frame = None;
+        Ok(())
+    }
+
+    fn write_image_region(
+        &mut self,
+        id: ImageId,
+        region: ImageRegion,
+        data: &[u8],
+    ) -> GfxResult<()> {
+        let raw = id.raw();
+        if raw == 0 || region.width == 0 || region.height == 0 {
+            return Err(Error::Invalid);
+        }
+        let idx = (raw - 1) as usize;
+        {
+            let Some(img) = self.images.get_mut(idx).and_then(|i| i.as_mut()) else {
+                return Err(Error::NotFound);
+            };
+            if region.x.saturating_add(region.width) > img.desc.width
+                || region.y.saturating_add(region.height) > img.desc.height
+            {
+                return Err(Error::Invalid);
+            }
+            let expected = (region.width as usize)
+                .saturating_mul(region.height as usize)
+                .saturating_mul(4);
+            if data.len() < expected {
+                return Err(Error::Invalid);
+            }
+            for row in 0..region.height as usize {
+                let src_off = row.saturating_mul(region.width as usize).saturating_mul(4);
+                let dst_off = ((region.y as usize + row)
+                    .saturating_mul(img.desc.width as usize)
+                    .saturating_add(region.x as usize))
+                .saturating_mul(4);
+                let row_len = region.width as usize * 4;
+                img.bytes[dst_off..dst_off + row_len]
+                    .copy_from_slice(&data[src_off..src_off + row_len]);
+            }
+            img.revision = img.revision.wrapping_add(1);
+            if img.revision == 0 {
+                img.revision = 1;
+            }
+            img.dirty_region = Some(match img.dirty_region {
+                Some(existing) => {
+                    image_region_union(existing, region, img.desc.width, img.desc.height)
+                }
+                None => region,
+            });
         }
         self.converted_cache.key = None;
         self.uploaded_cache_key = None;
@@ -3152,14 +3219,47 @@ impl GfxDevice for VirglGfxBackend {
                                         img.virgl_view
                                     );
                                 }
-                                encode_inline_write_texture(
-                                    &mut cmd,
-                                    img.virgl_res,
-                                    img.desc.width,
-                                    img.desc.height,
-                                    img.bytes.as_slice(),
-                                );
+                                if let Some(region) = img.dirty_region {
+                                    if region.x == 0
+                                        && region.y == 0
+                                        && region.width == img.desc.width
+                                        && region.height == img.desc.height
+                                    {
+                                        encode_inline_write_texture(
+                                            &mut cmd,
+                                            img.virgl_res,
+                                            img.desc.width,
+                                            img.desc.height,
+                                            img.bytes.as_slice(),
+                                        );
+                                    } else {
+                                        let region_bytes = copy_image_region_rgba(
+                                            img.bytes.as_slice(),
+                                            img.desc.width,
+                                            region,
+                                        );
+                                        encode_inline_write_texture_region(
+                                            &mut cmd,
+                                            img.virgl_res,
+                                            region.x,
+                                            region.y,
+                                            region.width,
+                                            region.height,
+                                            region.width,
+                                            region_bytes.as_slice(),
+                                        );
+                                    }
+                                } else {
+                                    encode_inline_write_texture(
+                                        &mut cmd,
+                                        img.virgl_res,
+                                        img.desc.width,
+                                        img.desc.height,
+                                        img.bytes.as_slice(),
+                                    );
+                                }
                                 img.virgl_uploaded_rev = img.revision;
+                                img.dirty_region = None;
                             }
 
                             if !img.virgl_view_created {
@@ -3750,6 +3850,19 @@ fn encode_inline_write_texture(
     height: u32,
     rgba: &[u8],
 ) {
+    encode_inline_write_texture_region(buf, res_handle, 0, 0, width, height, width, rgba);
+}
+
+fn encode_inline_write_texture_region(
+    buf: &mut VirglCmdBuf,
+    res_handle: u32,
+    dst_x: u32,
+    dst_y: u32,
+    width: u32,
+    height: u32,
+    stride_width: u32,
+    rgba: &[u8],
+) {
     // Matches virgl_encoder_inline_write() with a provided box for a 2D texture.
     // VIRGL_CMD0 stores payload length in 16 bits (dwords), so large textures must
     // be split into multiple RESOURCE_INLINE_WRITE commands.
@@ -3761,7 +3874,7 @@ fn encode_inline_write_texture(
     } else {
         rgba
     };
-    let stride = width.saturating_mul(4);
+    let stride = stride_width.saturating_mul(4);
     if stride == 0 || height == 0 || data.is_empty() {
         return;
     }
@@ -3791,8 +3904,8 @@ fn encode_inline_write_texture(
         buf.push(0); // usage
         buf.push(stride); // stride
         buf.push(stride.saturating_mul(chunk_rows as u32)); // layer_stride
-        buf.push(0); // box x
-        buf.push(row as u32); // box y
+        buf.push(dst_x); // box x
+        buf.push(dst_y.saturating_add(row as u32)); // box y
         buf.push(0); // box z
         buf.push(width); // box width
         buf.push(chunk_rows as u32); // box height
@@ -3801,6 +3914,39 @@ fn encode_inline_write_texture(
 
         row += chunk_rows;
     }
+}
+
+fn image_region_union(a: ImageRegion, b: ImageRegion, max_w: u32, max_h: u32) -> ImageRegion {
+    let x0 = a.x.min(b.x);
+    let y0 = a.y.min(b.y);
+    let x1 =
+        a.x.saturating_add(a.width)
+            .max(b.x.saturating_add(b.width))
+            .min(max_w);
+    let y1 =
+        a.y.saturating_add(a.height)
+            .max(b.y.saturating_add(b.height))
+            .min(max_h);
+    ImageRegion {
+        x: x0,
+        y: y0,
+        width: x1.saturating_sub(x0),
+        height: y1.saturating_sub(y0),
+    }
+}
+
+fn copy_image_region_rgba(bytes: &[u8], texture_w: u32, region: ImageRegion) -> Vec<u8> {
+    let row_bytes = region.width as usize * 4;
+    let mut out = vec![0u8; row_bytes.saturating_mul(region.height as usize)];
+    for row in 0..region.height as usize {
+        let src_off = ((region.y as usize + row)
+            .saturating_mul(texture_w as usize)
+            .saturating_add(region.x as usize))
+        .saturating_mul(4);
+        let dst_off = row.saturating_mul(row_bytes);
+        out[dst_off..dst_off + row_bytes].copy_from_slice(&bytes[src_off..src_off + row_bytes]);
+    }
+    out
 }
 
 fn encode_resource_copy_region(

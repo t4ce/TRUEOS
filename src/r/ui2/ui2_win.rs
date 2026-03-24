@@ -403,6 +403,61 @@ impl Ui2SurfaceWindow {
         }
         true
     }
+
+    #[allow(dead_code)]
+    pub fn upload_rgba_region(
+        &self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        repaint_reason: &'static str,
+    ) -> bool {
+        let expected = width as usize * height as usize * 4;
+        if pixels.len() != expected {
+            crate::log!(
+                "ui2-surface-window: region upload size mismatch tex={} got={} expected={} rect={}x{}@{},{}\n",
+                self.tex_id,
+                pixels.len(),
+                expected,
+                width,
+                height,
+                x,
+                y
+            );
+            return false;
+        }
+        let repaint_window_id = if is_window_minimized(self.window_id) {
+            0
+        } else {
+            self.window_id
+        };
+        if !crate::r::io::cabi::queue_texture_rgba_image_region_upload_copy(
+            self.tex_id,
+            self.width,
+            self.height,
+            x,
+            y,
+            width,
+            height,
+            pixels,
+            repaint_window_id,
+            repaint_reason,
+        ) {
+            crate::log!(
+                "ui2-surface-window: rgba region upload queue failed window={} tex={} rect={}x{}@{},{}\n",
+                self.window_id,
+                self.tex_id,
+                width,
+                height,
+                x,
+                y
+            );
+            return false;
+        }
+        true
+    }
 }
 
 pub fn window_content_rect_by_id(id: u32) -> Option<Ui2Rect> {
