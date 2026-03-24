@@ -269,6 +269,8 @@ struct Ui2State {
     scroll_drags: Vec<Ui2WindowScrollDrag>,
     scroll_pan_drags: Vec<Ui2WindowScrollPanDrag>,
     windows: Vec<Ui2Window>,
+    compose_present_history_ms: Vec<u64>,
+    compose_fps_display: u16,
     first_compose_signaled: bool,
 }
 
@@ -393,6 +395,8 @@ fn init_state() -> &'static Mutex<Ui2State> {
             scroll_drags: Vec::new(),
             scroll_pan_drags: Vec::new(),
             windows: Vec::new(),
+            compose_present_history_ms: Vec::new(),
+            compose_fps_display: 0,
             first_compose_signaled: false,
         };
 
@@ -2394,21 +2398,36 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                 window.alpha,
             );
         }
-        let title_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(window.title.as_bytes());
+        let title_text_h = (UI2_TITLE_H - 2.0).max(1.0);
+        let title_w = crate::gfx::imbafont::measure_text_width_px(
+            crate::gfx::imbafont::ImbaFontFace::Impact,
+            window.title.as_bytes(),
+            title_text_h,
+        );
         let title_left = if window.icon_id != 0 {
             rect.x + 28.0
         } else {
             rect.x + 8.0
         };
         let title_x = (rect.x + ((rect.w - title_w) * 0.5)).max(title_left);
-        crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
+        let title_y = rect.y + ((UI2_TITLE_H - title_text_h) * 0.5);
+        if let Some(layout) = crate::gfx::imbafont::layout_text_top_left(
+            crate::gfx::imbafont::ImbaFontFace::Impact,
             window.title.as_bytes(),
             title_x,
-            rect.y + 5.0,
-            state.view_w,
-            state.view_h,
-            title_rgba.3,
-        );
+            title_y,
+            title_text_h,
+        ) {
+            let _ = crate::gfx::imbafont::draw_text_in_frame(
+                crate::gfx::imbafont::ImbaFontFace::Impact,
+                window.title.as_bytes(),
+                &layout,
+                state.view_w,
+                state.view_h,
+                (title_rgba.0, title_rgba.1, title_rgba.2),
+                title_rgba.3,
+            );
+        }
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleMaximize);
@@ -2478,6 +2497,43 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
             }
         }
     }
+}
+
+fn update_compose_fps_history(state: &mut Ui2State, now_ms: u64) {
+    state.compose_present_history_ms.push(now_ms);
+    let window_start = now_ms.saturating_sub(1000);
+    state
+        .compose_present_history_ms
+        .retain(|&sample_ms| sample_ms >= window_start);
+    state.compose_fps_display = state.compose_present_history_ms.len().min(999) as u16;
+}
+
+fn draw_compose_fps_overlay(state: &Ui2State) {
+    let text = format!("{:03}", state.compose_fps_display.min(999));
+    let text_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(text.as_bytes());
+    let pad_x = 6.0f32;
+    let pad_y = 4.0f32;
+    let box_w = text_w + pad_x * 2.0;
+    let box_h = 16.0f32;
+    let x = ((state.view_w as f32) - box_w - 8.0).max(0.0);
+    let y = ((state.view_h as f32) - box_h - 6.0).max(0.0);
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        x,
+        y,
+        box_w,
+        box_h,
+        (0xF8, 0xF8, 0xF4, 0xD8),
+        state.view_w,
+        state.view_h,
+    );
+    crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
+        text.as_bytes(),
+        x + pad_x,
+        y + pad_y,
+        state.view_w,
+        state.view_h,
+        255,
+    );
 }
 
 fn compose_windows(state: &mut Ui2State) {
@@ -2563,7 +2619,9 @@ fn compose_windows(state: &mut Ui2State) {
                 draw_window_frame(state, window);
             }
             draw_resize_preview_outline(state);
+            draw_compose_fps_overlay(state);
             unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+            update_compose_fps_history(state, boot_probe_ms());
             if state.compose_seq <= 2 {
                 crate::log!("ui2: compose-frame seq={} end\n", state.compose_seq);
             }

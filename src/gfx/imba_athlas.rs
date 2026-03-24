@@ -242,11 +242,11 @@ fn build_imba_athlas(face: ImbaFontFace, tile_h: f32) -> ImbaAthlasBuffers {
 }
 
 fn build_imba_athlas_small() -> ImbaAthlasBuffers {
-    build_imba_athlas(ImbaFontFace::Regular, IMBA_ATHLAS_SMALL_TILE_H)
+    build_imba_athlas(ImbaFontFace::Loop, IMBA_ATHLAS_SMALL_TILE_H)
 }
 
 fn build_imba_athlas_large() -> ImbaAthlasBuffers {
-    build_imba_athlas(ImbaFontFace::Regular, IMBA_ATHLAS_LARGE_TILE_H)
+    build_imba_athlas(ImbaFontFace::Loop, IMBA_ATHLAS_LARGE_TILE_H)
 }
 
 fn imba_athlas_small() -> &'static ImbaAthlasBuffers {
@@ -325,6 +325,7 @@ fn build_vertices(
     y: f32,
     view_w: f32,
     view_h: f32,
+    scale: f32,
     alpha: u8,
     out: &mut Vec<TexVertex>,
 ) {
@@ -352,15 +353,20 @@ fn build_vertices(
 
     let mut pen_x = x;
     let mut pen_y = y;
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
 
     for &ch in text {
         if ch == b'\n' {
             pen_x = x;
-            pen_y += athlas.cell_h as f32;
+            pen_y += athlas.cell_h as f32 * scale;
             continue;
         }
         if ch == b' ' {
-            pen_x += glyph_advance_px(ch);
+            pen_x += glyph_advance_px(ch) * scale;
             continue;
         }
 
@@ -373,8 +379,9 @@ fn build_vertices(
             .widths
             .get(slot as usize)
             .copied()
-            .unwrap_or(athlas.cell_w as u8) as f32;
-        let glyph_h_px = athlas.cell_h as f32;
+            .unwrap_or(athlas.cell_w as u8) as f32
+            * scale;
+        let glyph_h_px = athlas.cell_h as f32 * scale;
 
         let sx = (slot as u32) % grid_w;
         let sy = (slot as u32) / grid_w;
@@ -471,12 +478,28 @@ pub fn draw_imba_athlas_text_in_frame(
     draw_imba_athlas_text_in_frame_alpha(text, x, y, view_w, view_h, 255)
 }
 
+#[inline]
+fn imba_athlas_scale_for_px_h(px_h: f32) -> f32 {
+    let athlas = imba_athlas_large_view();
+    let base_h = athlas.cell_h.max(1) as f32;
+    if px_h.is_finite() && px_h > 0.0 {
+        px_h / base_h
+    } else {
+        1.0
+    }
+}
+
 pub fn imba_athlas_text_width_px(text: &[u8]) -> f32 {
+    imba_athlas_text_width_scaled_px(text, imba_athlas_large_view().cell_h as f32)
+}
+
+pub fn imba_athlas_text_width_scaled_px(text: &[u8], px_h: f32) -> f32 {
     if text.is_empty() {
         return 0.0;
     }
 
     let athlas = imba_athlas_large_view();
+    let scale = imba_athlas_scale_for_px_h(px_h);
     let fallback = athlas.index.get(b'?' as usize).copied().unwrap_or(0);
     let glyph_advance_px = |ch: u8| {
         let mut slot = athlas.index.get(ch as usize).copied().unwrap_or(fallback);
@@ -498,7 +521,7 @@ pub fn imba_athlas_text_width_px(text: &[u8]) -> f32 {
             line_w = 0.0;
             continue;
         }
-        line_w += glyph_advance_px(ch);
+        line_w += glyph_advance_px(ch) * scale;
     }
     max_w.max(line_w)
 }
@@ -625,6 +648,26 @@ pub fn draw_imba_athlas_text_in_frame_alpha(
     view_h: u32,
     alpha: u8,
 ) -> bool {
+    draw_imba_athlas_text_in_frame_alpha_scaled(
+        text,
+        x,
+        y,
+        view_w,
+        view_h,
+        imba_athlas_large_view().cell_h as f32,
+        alpha,
+    )
+}
+
+pub fn draw_imba_athlas_text_in_frame_alpha_scaled(
+    text: &[u8],
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+    px_h: f32,
+    alpha: u8,
+) -> bool {
     if text.is_empty() {
         return false;
     }
@@ -644,6 +687,7 @@ pub fn draw_imba_athlas_text_in_frame_alpha(
         y,
         view_w.max(1) as f32,
         view_h.max(1) as f32,
+        imba_athlas_scale_for_px_h(px_h),
         alpha,
         &mut verts,
     );
