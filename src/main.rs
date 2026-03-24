@@ -56,6 +56,8 @@ mod tst_ui2_imba_athlas_demo;
 mod tst_ui2_mandelbrot_demo;
 #[path = "tst/ui2_triangle_demo.rs"]
 mod tst_ui2_triangle_demo;
+#[path = "tst/widget_fps.rs"]
+mod tst_widget_fps;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
