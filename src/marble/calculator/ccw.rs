@@ -140,6 +140,136 @@ impl MarblePackage<ByteMarble> for BytePackage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalculatorTopologyNodeKind {
+    WhiteHole,
+    Selector,
+    MarblePlus1,
+    MarbleTimes2x,
+    BlackHole,
+}
+
+impl CalculatorTopologyNodeKind {
+    pub const fn name(self) -> &'static str {
+        match self {
+            CalculatorTopologyNodeKind::WhiteHole => "white-hole",
+            CalculatorTopologyNodeKind::Selector => "selector-widget",
+            CalculatorTopologyNodeKind::MarblePlus1 => "marble_+1",
+            CalculatorTopologyNodeKind::MarbleTimes2x => "marble_times_2x",
+            CalculatorTopologyNodeKind::BlackHole => "black-hole",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalculatorTopologyLaneKind {
+    Data37,
+    Control1,
+    Data38,
+}
+
+impl CalculatorTopologyLaneKind {
+    pub const fn name(self) -> &'static str {
+        match self {
+            CalculatorTopologyLaneKind::Data37 => "data[37]",
+            CalculatorTopologyLaneKind::Control1 => "control[1]",
+            CalculatorTopologyLaneKind::Data38 => "data[38]",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalculatorTopologyNode {
+    pub id: usize,
+    pub kind: CalculatorTopologyNodeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalculatorTopologyEdge {
+    pub id: usize,
+    pub from: usize,
+    pub to: usize,
+    pub lane: CalculatorTopologyLaneKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalculatorCcwTopology {
+    pub nodes: Vec<CalculatorTopologyNode>,
+    pub edges: Vec<CalculatorTopologyEdge>,
+}
+
+impl CalculatorCcwTopology {
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        let _ = writeln!(out, "topology-nodes");
+        for node in &self.nodes {
+            let _ = writeln!(out, "node{}={}", node.id, node.kind.name());
+        }
+        let _ = writeln!(out, "topology-edges");
+        for edge in &self.edges {
+            let from = self
+                .nodes
+                .get(edge.from)
+                .map(|node| node.kind.name())
+                .unwrap_or("?");
+            let to = self
+                .nodes
+                .get(edge.to)
+                .map(|node| node.kind.name())
+                .unwrap_or("?");
+            let _ = writeln!(
+                out,
+                "edge{}={} -> {} via {}",
+                edge.id,
+                from,
+                to,
+                edge.lane.name()
+            );
+        }
+        out
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalculatorEdgeLoad {
+    pub edge_id: usize,
+    pub marble_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalculatorCcwRunReport {
+    pub route: CalculatorControlRoute,
+    pub output: BytePackage,
+    pub edge_loads: Vec<CalculatorEdgeLoad>,
+}
+
+impl CalculatorCcwRunReport {
+    pub fn render(&self, topology: &CalculatorCcwTopology) -> String {
+        let mut out = String::new();
+        let _ = writeln!(out, "route={}", self.route.name());
+        let _ = writeln!(out, "edge-loads");
+        for load in &self.edge_loads {
+            let edge = topology.edges.get(load.edge_id);
+            let from = edge
+                .and_then(|edge| topology.nodes.get(edge.from))
+                .map(|node| node.kind.name())
+                .unwrap_or("?");
+            let to = edge
+                .and_then(|edge| topology.nodes.get(edge.to))
+                .map(|node| node.kind.name())
+                .unwrap_or("?");
+            let lane = edge.map(|edge| edge.lane.name()).unwrap_or("?");
+            let _ = writeln!(
+                out,
+                "edge{}={} -> {} via {} marbles={}",
+                load.edge_id, from, to, lane, load.marble_count
+            );
+        }
+        let _ = writeln!(out, "output={}", self.output.render_hex());
+        out
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CcwHole {
     pub index: usize,
 }
@@ -420,6 +550,12 @@ pub struct CalculatorCollapsedWorld {
 
 impl CalculatorCollapsedWorld {
     pub const NAME: &'static str = "calculator-ccw";
+    pub const WHITE_TO_SELECTOR_DATA_EDGE: usize = 0;
+    pub const WHITE_TO_SELECTOR_CONTROL_EDGE: usize = 1;
+    pub const SELECTOR_TO_PLUS1_EDGE: usize = 2;
+    pub const SELECTOR_TO_TIMES2X_EDGE: usize = 3;
+    pub const PLUS1_TO_BLACK_EDGE: usize = 4;
+    pub const TIMES2X_TO_BLACK_EDGE: usize = 5;
 
     pub const fn new(bit_width: usize) -> Self {
         Self {
@@ -433,11 +569,76 @@ impl CalculatorCollapsedWorld {
         }
     }
 
-    pub fn run_once(
+    pub fn topology(&self) -> CalculatorCcwTopology {
+        CalculatorCcwTopology {
+            nodes: vec![
+                CalculatorTopologyNode {
+                    id: 0,
+                    kind: CalculatorTopologyNodeKind::WhiteHole,
+                },
+                CalculatorTopologyNode {
+                    id: 1,
+                    kind: CalculatorTopologyNodeKind::Selector,
+                },
+                CalculatorTopologyNode {
+                    id: 2,
+                    kind: CalculatorTopologyNodeKind::MarblePlus1,
+                },
+                CalculatorTopologyNode {
+                    id: 3,
+                    kind: CalculatorTopologyNodeKind::MarbleTimes2x,
+                },
+                CalculatorTopologyNode {
+                    id: 4,
+                    kind: CalculatorTopologyNodeKind::BlackHole,
+                },
+            ],
+            edges: vec![
+                CalculatorTopologyEdge {
+                    id: Self::WHITE_TO_SELECTOR_DATA_EDGE,
+                    from: 0,
+                    to: 1,
+                    lane: CalculatorTopologyLaneKind::Data37,
+                },
+                CalculatorTopologyEdge {
+                    id: Self::WHITE_TO_SELECTOR_CONTROL_EDGE,
+                    from: 0,
+                    to: 1,
+                    lane: CalculatorTopologyLaneKind::Control1,
+                },
+                CalculatorTopologyEdge {
+                    id: Self::SELECTOR_TO_PLUS1_EDGE,
+                    from: 1,
+                    to: 2,
+                    lane: CalculatorTopologyLaneKind::Data37,
+                },
+                CalculatorTopologyEdge {
+                    id: Self::SELECTOR_TO_TIMES2X_EDGE,
+                    from: 1,
+                    to: 3,
+                    lane: CalculatorTopologyLaneKind::Data37,
+                },
+                CalculatorTopologyEdge {
+                    id: Self::PLUS1_TO_BLACK_EDGE,
+                    from: 2,
+                    to: 4,
+                    lane: CalculatorTopologyLaneKind::Data38,
+                },
+                CalculatorTopologyEdge {
+                    id: Self::TIMES2X_TO_BLACK_EDGE,
+                    from: 3,
+                    to: 4,
+                    lane: CalculatorTopologyLaneKind::Data38,
+                },
+            ],
+        }
+    }
+
+    pub fn execute(
         &mut self,
         input: BytePackage,
         control: CalculatorControlMarble,
-    ) -> (CalculatorControlRoute, BytePackage) {
+    ) -> CalculatorCcwRunReport {
         let route = self.selector.route(control);
         let output = match route {
             CalculatorControlRoute::MarblePlus1 => self.marble_plus_1.run(self.bit_width, input),
@@ -445,7 +646,56 @@ impl CalculatorCollapsedWorld {
                 self.marble_times_2x.run(self.bit_width, input)
             }
         };
-        (route, output)
+
+        let input_width = byte_count_for_bits(self.bit_width);
+        let mut edge_loads = vec![
+            CalculatorEdgeLoad {
+                edge_id: Self::WHITE_TO_SELECTOR_DATA_EDGE,
+                marble_count: input_width,
+            },
+            CalculatorEdgeLoad {
+                edge_id: Self::WHITE_TO_SELECTOR_CONTROL_EDGE,
+                marble_count: 1,
+            },
+        ];
+
+        match route {
+            CalculatorControlRoute::MarblePlus1 => {
+                edge_loads.push(CalculatorEdgeLoad {
+                    edge_id: Self::SELECTOR_TO_PLUS1_EDGE,
+                    marble_count: input_width,
+                });
+                edge_loads.push(CalculatorEdgeLoad {
+                    edge_id: Self::PLUS1_TO_BLACK_EDGE,
+                    marble_count: output.width(),
+                });
+            }
+            CalculatorControlRoute::MarbleTimes2x => {
+                edge_loads.push(CalculatorEdgeLoad {
+                    edge_id: Self::SELECTOR_TO_TIMES2X_EDGE,
+                    marble_count: input_width,
+                });
+                edge_loads.push(CalculatorEdgeLoad {
+                    edge_id: Self::TIMES2X_TO_BLACK_EDGE,
+                    marble_count: output.width(),
+                });
+            }
+        }
+
+        CalculatorCcwRunReport {
+            route,
+            output,
+            edge_loads,
+        }
+    }
+
+    pub fn run_once(
+        &mut self,
+        input: BytePackage,
+        control: CalculatorControlMarble,
+    ) -> (CalculatorControlRoute, BytePackage) {
+        let report = self.execute(input, control);
+        (report.route, report.output)
     }
 }
 
@@ -472,7 +722,8 @@ fn render_ccw_run(
     input: BytePackage,
     control: CalculatorControlMarble,
 ) -> String {
-    let (route, output) = world.run_once(input.clone(), control);
+    let topology = world.topology();
+    let report = world.execute(input.clone(), control);
     let mut out = String::new();
     let _ = writeln!(out, "{}", CalculatorCollapsedWorld::NAME);
     let _ = writeln!(out, "white-hole={}", world.white_hole.index);
@@ -483,14 +734,17 @@ fn render_ccw_run(
     );
     let _ = writeln!(out, "control-lane={} via white-hole", world.control_lane);
     let _ = writeln!(out, "selector={}", world.selector.name());
-    let _ = writeln!(out, "selected-route={}", route.name());
+    let _ = writeln!(out, "selected-route={}", report.route.name());
     let _ = writeln!(out, "widget-a={}", world.marble_plus_1.name());
     let _ = writeln!(out, "widget-b={}", world.marble_times_2x.name());
     let _ = writeln!(out, "black-hole={}", world.black_hole.index);
     let _ = writeln!(out, "input-kind={}", input.kind());
     let _ = writeln!(out, "input={}", input.render_hex());
-    let _ = writeln!(out, "output-kind={}", output.kind());
-    let _ = writeln!(out, "output={}", output.render_hex());
+    let _ = writeln!(out, "output-kind={}", report.output.kind());
+    let _ = writeln!(out, "output={}", report.output.render_hex());
+    let _ = writeln!(out);
+    let _ = write!(out, "{}", topology.render());
+    let _ = write!(out, "{}", report.render(&topology));
     out
 }
 
@@ -548,6 +802,72 @@ mod tests {
     }
 
     #[test]
+    fn calculator_ccw_topology_is_explicit_and_stable() {
+        let world = calculator_ccw_289();
+        let topology = world.topology();
+
+        assert_eq!(topology.nodes.len(), 5);
+        assert_eq!(topology.edges.len(), 6);
+        assert_eq!(
+            topology.nodes[0].kind,
+            CalculatorTopologyNodeKind::WhiteHole
+        );
+        assert_eq!(topology.nodes[1].kind, CalculatorTopologyNodeKind::Selector);
+        assert_eq!(
+            topology.nodes[4].kind,
+            CalculatorTopologyNodeKind::BlackHole
+        );
+        assert_eq!(topology.edges[0].lane, CalculatorTopologyLaneKind::Data37);
+        assert_eq!(topology.edges[1].lane, CalculatorTopologyLaneKind::Control1);
+        assert_eq!(topology.edges[4].lane, CalculatorTopologyLaneKind::Data38);
+    }
+
+    #[test]
+    fn calculator_ccw_report_marks_active_plus1_branch() {
+        let mut world = calculator_ccw_289();
+        let input = BytePackage::from_words(289, &[0, 0, 0, 0, 0]);
+
+        let report = world.execute(input, CalculatorControlMarble::zero());
+
+        assert_eq!(report.route, CalculatorControlRoute::MarblePlus1);
+        assert_eq!(report.edge_loads.len(), 4);
+        assert!(report.edge_loads.iter().any(|load| {
+            load.edge_id == CalculatorCollapsedWorld::WHITE_TO_SELECTOR_DATA_EDGE
+                && load.marble_count == 37
+        }));
+        assert!(report.edge_loads.iter().any(|load| {
+            load.edge_id == CalculatorCollapsedWorld::WHITE_TO_SELECTOR_CONTROL_EDGE
+                && load.marble_count == 1
+        }));
+        assert!(report.edge_loads.iter().any(|load| {
+            load.edge_id == CalculatorCollapsedWorld::SELECTOR_TO_PLUS1_EDGE
+                && load.marble_count == 37
+        }));
+        assert!(report.edge_loads.iter().any(|load| {
+            load.edge_id == CalculatorCollapsedWorld::PLUS1_TO_BLACK_EDGE && load.marble_count == 38
+        }));
+    }
+
+    #[test]
+    fn calculator_ccw_report_marks_active_times2x_branch() {
+        let mut world = calculator_ccw_289();
+        let input = BytePackage::from_words(289, &[1, 0, 0, 0, 0]);
+
+        let report = world.execute(input, CalculatorControlMarble::one());
+
+        assert_eq!(report.route, CalculatorControlRoute::MarbleTimes2x);
+        assert_eq!(report.edge_loads.len(), 4);
+        assert!(report.edge_loads.iter().any(|load| {
+            load.edge_id == CalculatorCollapsedWorld::SELECTOR_TO_TIMES2X_EDGE
+                && load.marble_count == 37
+        }));
+        assert!(report.edge_loads.iter().any(|load| {
+            load.edge_id == CalculatorCollapsedWorld::TIMES2X_TO_BLACK_EDGE
+                && load.marble_count == 38
+        }));
+    }
+
+    #[test]
     fn marble_plus_1_keeps_overflow_explicit_at_black_hole() {
         let mut world = calculator_ccw_289();
         let input = BytePackage::from_words(
@@ -562,6 +882,7 @@ mod tests {
         assert_eq!(output.bytes_le()[37], 1);
         assert!(output.overflowed);
         assert!(calculator_ccw_marble_plus_1_visual().contains("selected-route=marble_+1"));
+        assert!(calculator_ccw_marble_plus_1_visual().contains("topology-nodes"));
     }
 
     #[test]
@@ -581,5 +902,6 @@ mod tests {
         assert_eq!(output.bytes_le()[37], 1);
         assert!(output.overflowed);
         assert!(calculator_ccw_marble_times_2x_visual().contains("selected-route=marble_times_2x"));
+        assert!(calculator_ccw_marble_times_2x_visual().contains("edge-loads"));
     }
 }
