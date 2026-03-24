@@ -1,3 +1,19 @@
+/*
+Truesurfer pipeline bridge:
+
+html shack -> N-Browsers (Truesurfers)
+
+In Truesurfer:
+- Parse5 + CSS parse, JavaScript in parallel isolated
+- Lightning CSS enrichment of the document and DOM subset
+- Pipeline channel handoff to Yoga for layout enrichment
+
+In UI2:
+- N-window compositor-pattern UI that can already render the minimal demo
+- Conceptually the full bridge is in place: acquired HTML can flow through parse,
+  enrichment, layout, and minimal hosted composition for visual feedback
+*/
+
 const root = globalThis;
 const browserId = Number(root.__trueosTruesurferBrowserId || 0);
 const TRUESURFER_SUBSET_PROFILE = Object.freeze({

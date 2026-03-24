@@ -33,6 +33,9 @@ const UI2_SYSTEM_BUTTON_FORK_ICON_ID: u32 = 3;
 const UI2_SYSTEM_BUTTON_MINIMIZE_ICON_ID: u32 = 5;
 const UI2_SYSTEM_BUTTON_MAXIMIZE_ICON_ID: u32 = 7;
 const UI2_SYSTEM_BUTTON_CLOSE_ICON_ID: u32 = 9;
+// Experimental in debug.
+const UI2_BROWSER_TITLE_OVERLAY_ANIMATION_ENABLED: bool = false;
+const UI2_DEBUG_FPS_OVERLAY_ENABLED: bool = false;
 const UI2_BROWSER_TITLE_OVERLAY_PERIOD_MS: u64 = 2400;
 const UI2_BROWSER_FORK_WINDOW_OFFSET_PX: f32 = 24.0;
 const UI2_BOTTOM_RESIZE_BUTTON_W: f32 = 18.0;
@@ -292,7 +295,7 @@ fn boot_probe_ms() -> u64 {
 
 #[inline]
 fn browser_title_overlay_mid_offset(window: &Ui2Window, now_ms: u64) -> f32 {
-    if window.kind != Ui2WindowKind::HostedBrowser {
+    if window.kind != Ui2WindowKind::HostedBrowser || !UI2_BROWSER_TITLE_OVERLAY_ANIMATION_ENABLED {
         return 0.5;
     }
 
@@ -2258,6 +2261,7 @@ fn truncate_hosted_browser_text_preview_row(text: &str, max_width_px: f32, px_h:
         return Vec::new();
     }
 
+    let face = crate::gfx::imbafont::ImbaFontFace::Regular;
     let mut out = Vec::with_capacity(text.len().min(96));
     for &byte in text.as_bytes() {
         let normalized = match byte {
@@ -2265,7 +2269,7 @@ fn truncate_hosted_browser_text_preview_row(text: &str, max_width_px: f32, px_h:
             _ => byte,
         };
         out.push(normalized);
-        let width = crate::gfx::imba_athlas::imba_athlas_text_width_scaled_px(&out, px_h);
+        let width = crate::gfx::imbafont::measure_text_width_px_tracked(face, &out, px_h, 0.0);
         if width > max_width_px {
             out.pop();
             break;
@@ -2303,7 +2307,8 @@ fn draw_hosted_browser_text_preview(
 
     let pad_x = 10.0f32;
     let pad_y = 8.0f32;
-    let text_px_h = 14.0f32;
+    let face = crate::gfx::imbafont::ImbaFontFace::Regular;
+    let text_px_h = 7.0f32;
     let row_step = text_px_h + 4.0;
     let visible_bottom = content.y + content.h - pad_y;
     let scroll_x = surface_state.scroll_x as f32;
@@ -2328,16 +2333,20 @@ fn draw_hosted_browser_text_preview(
             continue;
         }
 
-        if crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_scaled(
-            &row_bytes,
-            x,
-            y,
-            state.view_w,
-            state.view_h,
-            text_px_h,
-            window.alpha,
-        ) {
-            drew_any = true;
+        if let Some(layout) =
+            crate::gfx::imbafont::layout_text_top_left(face, &row_bytes, x, y, text_px_h)
+        {
+            if crate::gfx::imbafont::draw_text_in_frame(
+                face,
+                &row_bytes,
+                &layout,
+                state.view_w,
+                state.view_h,
+                (0x14, 0x18, 0x1D),
+                window.alpha,
+            ) {
+                drew_any = true;
+            }
         }
     }
 
@@ -2657,10 +2666,16 @@ fn draw_hud_fps_overlay(state: &Ui2State) {
 }
 
 fn draw_hud_pass(state: &Ui2State) {
+    if !UI2_DEBUG_FPS_OVERLAY_ENABLED {
+        return;
+    }
     draw_hud_fps_overlay(state);
 }
 
 fn update_hud_pass(state: &mut Ui2State, now_ms: u64) {
+    if !UI2_DEBUG_FPS_OVERLAY_ENABLED {
+        return;
+    }
     update_hud_fps_history(state, now_ms);
 }
 
