@@ -97,7 +97,7 @@ unsafe extern "C" fn trueos_browser_navigate_submit_js(
     let browser_instance_id = if argc >= 2 {
         js_to_i32(ctx, args[1]).unwrap_or(1).max(0) as u32
     } else {
-        trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID
+        1
     };
     let op_id = crate::r::browser_net::submit_navigation(browser_instance_id, url);
     qjs::JS_FreeCString(ctx, url_c);

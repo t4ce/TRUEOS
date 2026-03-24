@@ -9,7 +9,7 @@ const TRUESURFER_SUBSET_PROFILE = Object.freeze({
   includeStyles: true,
   includeScripts: true,
   includeBodyHierarchy: true,
-  includeHostedTextRows: false,
+  includeHostedTextRows: true,
   maxBodyHierarchyNodes: 10,
   maxBodyHierarchyDepth: 6,
   bodyTags: Object.freeze([

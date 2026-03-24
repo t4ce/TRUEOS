@@ -135,7 +135,7 @@ struct TruesurferFactory {
 impl TruesurferFactory {
     const fn new() -> Self {
         Self {
-            next_instance_id: trueos_qjs::browser_task::PRIMARY_BROWSER_INSTANCE_ID,
+            next_instance_id: 1,
             spawned_mask: 0,
         }
     }
