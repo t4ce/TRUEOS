@@ -4,6 +4,7 @@
 //! committing to storage, scheduling, locking, routing, or execution strategy.
 
 pub mod instruction_ram;
+pub mod park;
 
 /// Marker contract for a pipeline artifact that can move through a marble track.
 pub trait Marble {

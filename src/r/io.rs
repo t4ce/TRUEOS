@@ -777,8 +777,8 @@ pub mod cabi {
     use embassy_time::Timer;
     use trueos_gfx_core::{
         BlendDesc, BlendFactor, BufferDesc, BufferId, BufferUsage, ColorFormat, Command,
-        CommandBuffer, Extent2D, GfxContext, ImageDesc, ImageFormat, ImageId, MemoryType,
-        PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap,
+        CommandBuffer, Extent2D, GfxContext, ImageDesc, ImageFormat, ImageId, ImageRegion,
+        MemoryType, PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap,
         ScissorRect as GfxScissorRect, ShaderId, SwapchainDesc, TexCoordFormat, VertexLayout,
         Viewport,
     };
@@ -834,6 +834,7 @@ pub mod cabi {
         tex_id: u32,
         width: u32,
         height: u32,
+        region: Option<ImageRegion>,
         rgba: Vec<u8>,
         sample_kind: TexSampleKind,
         repaint_window_id: u32,
@@ -969,6 +970,7 @@ pub mod cabi {
         tex_id: u32,
         width: u32,
         height: u32,
+        region: Option<ImageRegion>,
         rgba: Vec<u8>,
         sample_kind: TexSampleKind,
         repaint_window_id: u32,
@@ -978,9 +980,23 @@ pub mod cabi {
         if tex_id == 0 || width == 0 || height == 0 {
             return false;
         }
-        let expected = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4);
+        let expected = match region {
+            Some(region) => {
+                if region.width == 0
+                    || region.height == 0
+                    || region.x.saturating_add(region.width) > width
+                    || region.y.saturating_add(region.height) > height
+                {
+                    return false;
+                }
+                (region.width as usize)
+                    .saturating_mul(region.height as usize)
+                    .saturating_mul(4)
+            }
+            None => (width as usize)
+                .saturating_mul(height as usize)
+                .saturating_mul(4),
+        };
         if rgba.len() < expected {
             return false;
         }
@@ -988,6 +1004,7 @@ pub mod cabi {
             tex_id,
             width,
             height,
+            region,
             rgba,
             sample_kind,
             repaint_window_id,
@@ -1009,6 +1026,37 @@ pub mod cabi {
             tex_id,
             width,
             height,
+            None,
+            rgba.to_vec(),
+            TexSampleKind::Rgba,
+            repaint_window_id,
+            repaint_reason,
+            false,
+        )
+    }
+
+    pub fn queue_texture_rgba_image_region_upload_copy(
+        tex_id: u32,
+        texture_width: u32,
+        texture_height: u32,
+        region_x: u32,
+        region_y: u32,
+        region_width: u32,
+        region_height: u32,
+        rgba: &[u8],
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    ) -> bool {
+        queue_texture_rgba_upload_owned(
+            tex_id,
+            texture_width,
+            texture_height,
+            Some(ImageRegion {
+                x: region_x,
+                y: region_y,
+                width: region_width,
+                height: region_height,
+            }),
             rgba.to_vec(),
             TexSampleKind::Rgba,
             repaint_window_id,
@@ -1078,6 +1126,7 @@ pub mod cabi {
                         req.tex_id,
                         req.width,
                         req.height,
+                        req.region,
                         req.rgba.as_ptr(),
                         req.rgba.len(),
                         req.sample_kind,
@@ -1138,6 +1187,7 @@ pub mod cabi {
                     tex_id,
                     decoded.width,
                     decoded.height,
+                    None,
                     decoded.rgba,
                     TexSampleKind::Rgba,
                     0,
@@ -1179,6 +1229,7 @@ pub mod cabi {
                     tex_id,
                     decoded.width,
                     decoded.height,
+                    None,
                     decoded.rgba,
                     TexSampleKind::Rgba,
                     0,
@@ -1220,6 +1271,7 @@ pub mod cabi {
                     tex_id,
                     info.width,
                     info.height,
+                    None,
                     rgba,
                     TexSampleKind::Rgba,
                     0,
@@ -3167,6 +3219,7 @@ pub mod cabi {
         tex_id: u32,
         width: u32,
         height: u32,
+        region: Option<ImageRegion>,
         data_ptr: *const u8,
         data_len: usize,
         sample_kind: TexSampleKind,
@@ -3179,9 +3232,14 @@ pub mod cabi {
         if data_ptr.is_null() {
             return -2;
         }
-        let expected = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4);
+        let expected = match region {
+            Some(region) => (region.width as usize)
+                .saturating_mul(region.height as usize)
+                .saturating_mul(4),
+            None => (width as usize)
+                .saturating_mul(height as usize)
+                .saturating_mul(4),
+        };
         if data_len < expected {
             return -3;
         }
@@ -3261,15 +3319,57 @@ pub mod cabi {
                     };
                     image_id = img;
                 }
+                let mut cached_rgba = if recreate {
+                    vec![
+                        0;
+                        (width as usize)
+                            .saturating_mul(height as usize)
+                            .saturating_mul(4)
+                    ]
+                } else {
+                    images[idx]
+                        .as_ref()
+                        .map(|entry| entry.rgba.clone())
+                        .unwrap_or_else(|| {
+                            vec![
+                                0;
+                                (width as usize)
+                                    .saturating_mul(height as usize)
+                                    .saturating_mul(4)
+                            ]
+                        })
+                };
+                match region {
+                    Some(region) => {
+                        for row in 0..region.height as usize {
+                            let src_off =
+                                row.saturating_mul(region.width as usize).saturating_mul(4);
+                            let dst_off = ((region.y as usize + row)
+                                .saturating_mul(width as usize)
+                                .saturating_add(region.x as usize))
+                            .saturating_mul(4);
+                            let row_len = region.width as usize * 4;
+                            cached_rgba[dst_off..dst_off + row_len]
+                                .copy_from_slice(&data[src_off..src_off + row_len]);
+                        }
+                    }
+                    None => {
+                        cached_rgba[..expected].copy_from_slice(&data[..expected]);
+                    }
+                }
                 images[idx] = Some(TexImage {
                     image: image_id,
                     width,
                     height,
                     sample_kind,
                     origin: TexCoordOrigin::TopLeft,
-                    rgba: data[..expected].to_vec(),
+                    rgba: cached_rgba,
                 });
-                if ctx.write_image(image_id, data).is_err() {
+                let write_res = match region {
+                    Some(region) if !recreate => ctx.write_image_region(image_id, region, data),
+                    _ => ctx.write_image(image_id, images[idx].as_ref().unwrap().rgba.as_slice()),
+                };
+                if write_res.is_err() {
                     return -5;
                 }
                 0
@@ -3292,6 +3392,7 @@ pub mod cabi {
             tex_id,
             width,
             height,
+            None,
             data_ptr,
             data_len,
             TexSampleKind::Mask,
@@ -3310,6 +3411,7 @@ pub mod cabi {
             tex_id,
             width,
             height,
+            None,
             data_ptr,
             data_len,
             TexSampleKind::Rgba,
@@ -3343,6 +3445,7 @@ pub mod cabi {
             tex_id,
             width,
             height,
+            None,
             data.to_vec(),
             TexSampleKind::Rgba,
             0,
@@ -3378,6 +3481,7 @@ pub mod cabi {
             tex_id,
             decoded.width,
             decoded.height,
+            None,
             decoded.rgba.as_ptr(),
             decoded.rgba.len(),
             TexSampleKind::Rgba,
@@ -3432,6 +3536,7 @@ pub mod cabi {
             tex_id,
             decoded.width,
             decoded.height,
+            None,
             decoded.rgba.as_ptr(),
             decoded.rgba.len(),
             TexSampleKind::Rgba,

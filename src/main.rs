@@ -41,6 +41,8 @@ mod shell2;
 mod smp;
 mod tga;
 pub mod tm;
+#[path = "tst/fps.rs"]
+mod tst_fps;
 #[path = "tst/gfx_tetris.rs"]
 mod tst_gfx_tetris;
 #[path = "tst/html_shack.rs"]
@@ -51,10 +53,14 @@ mod tst_http_trueosfs;
 mod tst_net_tcp_shell;
 #[path = "tst/smtp_smoke.rs"]
 mod tst_smtp_smoke;
+#[path = "tst/ui2_imba_athlas_demo.rs"]
+mod tst_ui2_imba_athlas_demo;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
 mod tst_ui2_mandelbrot_demo;
 #[path = "tst/ui2_triangle_demo.rs"]
 mod tst_ui2_triangle_demo;
+#[path = "tst/widget_tree.rs"]
+mod tst_widget_tree;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
@@ -69,9 +75,9 @@ pub use r::pat as pattern;
 pub use r::time;
 pub use r::{io, path};
 
-fn qjs_font_atlas_small_provider() -> trueos_qjs::FontAtlasView<'static> {
-    let atlas = crate::gfx::text::font_atlas_small_view();
-    trueos_qjs::FontAtlasView {
+fn qjs_imba_athlas_small_provider() -> trueos_qjs::ImbaAthlasView<'static> {
+    let atlas = crate::gfx::imba_athlas::imba_athlas_small_view();
+    trueos_qjs::ImbaAthlasView {
         alpha: atlas.alpha,
         index: atlas.index,
         widths: atlas.widths,
@@ -84,9 +90,9 @@ fn qjs_font_atlas_small_provider() -> trueos_qjs::FontAtlasView<'static> {
     }
 }
 
-fn qjs_font_atlas_large_provider() -> trueos_qjs::FontAtlasView<'static> {
-    let atlas = crate::gfx::text::font_atlas_large_view();
-    trueos_qjs::FontAtlasView {
+fn qjs_imba_athlas_large_provider() -> trueos_qjs::ImbaAthlasView<'static> {
+    let atlas = crate::gfx::imba_athlas::imba_athlas_large_view();
+    trueos_qjs::ImbaAthlasView {
         alpha: atlas.alpha,
         index: atlas.index,
         widths: atlas.widths,
@@ -174,8 +180,8 @@ pub extern "C" fn kmain() -> ! {
     intel::init_once();
 
     //vga::cube::tick();
-    trueos_qjs::set_font_atlas_small_provider(qjs_font_atlas_small_provider);
-    trueos_qjs::set_font_atlas_large_provider(qjs_font_atlas_large_provider);
+    trueos_qjs::set_imba_athlas_small_provider(qjs_imba_athlas_small_provider);
+    trueos_qjs::set_imba_athlas_large_provider(qjs_imba_athlas_large_provider);
     trueos_qjs::host_api_hook::set_context_init_hook(host_api::install);
 
     pci::vrng::init_once();
@@ -196,7 +202,7 @@ pub extern "C" fn kmain() -> ! {
     // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
     tga::init_once();
     net::init();
-    interrupt_cursorplane::init_bsp();
+    //interrupt_cursorplane::init_bsp();
 
     #[cfg(feature = "dma_nic_fpga")]
     {
