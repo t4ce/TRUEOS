@@ -97,6 +97,7 @@ define_started_flags!(
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_IMBA_ATHLAS_DEMO_STARTED,
+    UI2_WIDGET_TREE_DEMO_STARTED,
     GFX_INTEL_TRIANGLE_DEMO_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
     CRABUSB_EVENT_PUMP_STARTED,
@@ -606,6 +607,12 @@ fn spawn_ui2_imba_athlas_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_widget_tree_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_widget_tree::ui2_widget_tree_demo_task())
+    })
+}
+
 // currently ofc esotheric
 fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
     #[cfg(not(feature = "gfx_intel"))]
@@ -878,6 +885,12 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::UI2_READY,
         &UI2_IMBA_ATHLAS_DEMO_STARTED,
         spawn_ui2_imba_athlas_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-widget-tree-demo",
+        crate::r::readiness::UI2_READY,
+        &UI2_WIDGET_TREE_DEMO_STARTED,
+        spawn_ui2_widget_tree_demo,
     ),
     TaskSpec::enabled(
         "gfx-intel-scanout-demo",

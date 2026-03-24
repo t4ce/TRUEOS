@@ -3,6 +3,8 @@
 //! This module intentionally defines abstract ports and gadget shapes without
 //! committing to storage, scheduling, locking, routing, or execution strategy.
 
+pub mod instruction_ram;
+
 /// Marker contract for a pipeline artifact that can move through a marble track.
 pub trait Marble {
     fn kind(&self) -> &'static str;
