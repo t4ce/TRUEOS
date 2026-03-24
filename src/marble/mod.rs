@@ -5,6 +5,7 @@
 
 pub mod calculator;
 pub mod instruction_ram;
+pub mod nic_gpu_cw;
 pub mod park;
 
 /// Marker contract for a pipeline artifact that can move through a marble track.
