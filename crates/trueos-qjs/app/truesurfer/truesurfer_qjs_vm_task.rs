@@ -19,9 +19,7 @@ use spin::{Mutex, Once};
 
 use crate as qjs;
 
-pub const DEFAULT_BROWSER_INSTANCE_ID: u32 = 1;
-pub const PRIMARY_BROWSER_INSTANCE_ID: u32 = 1;
-pub const MAX_BROWSER_INSTANCE_ID: u32 = 10;
+pub const MAX_BROWSER_INSTANCE_ID: u32 = 50;
 pub const BOOT_BROWSER_INSTANCE_IDS: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 pub const HOSTED_KEYBOARD_MOD_SHIFT: u8 = 1 << 0;
@@ -259,7 +257,7 @@ fn log_error(line: String) {
 }
 
 pub fn default_browser_started() -> bool {
-    with_browser_state(DEFAULT_BROWSER_INSTANCE_ID, |state| state.started).unwrap_or(false)
+    with_browser_state(1, |state| state.started).unwrap_or(false)
 }
 
 pub fn latest_parse_result_for_browser(browser_instance_id: u32) -> Option<ParseResult> {

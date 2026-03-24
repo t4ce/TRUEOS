@@ -6,7 +6,7 @@ export const DEFAULT_THEME = {
 	CLEAR_RGB: 0xF4F4F4,
 	FONT_RGB: 0x101010,
 	FONT_ALPHA: 255,
-	FONT_PX: 16,
+	FONT_PX: 15,
 };
 
 export const {
