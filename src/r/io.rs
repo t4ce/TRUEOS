@@ -1947,6 +1947,9 @@ pub mod cabi {
                 [v, v, v, v]
             }
             BlendFactor::DstColor => dst,
+            BlendFactor::OneMinusDstColor => {
+                [1.0 - dst[0], 1.0 - dst[1], 1.0 - dst[2], 1.0 - dst[3]]
+            }
             BlendFactor::OneMinusSrcColor => {
                 [1.0 - src[0], 1.0 - src[1], 1.0 - src[2], 1.0 - src[3]]
             }
@@ -2439,6 +2442,7 @@ pub mod cabi {
             0x0302 => BlendFactor::SrcAlpha,         // GL_SRC_ALPHA
             0x0303 => BlendFactor::OneMinusSrcAlpha, // GL_ONE_MINUS_SRC_ALPHA
             0x0306 => BlendFactor::DstColor,         // GL_DST_COLOR
+            0x0307 => BlendFactor::OneMinusDstColor, // GL_ONE_MINUS_DST_COLOR
             _ => BlendFactor::One,
         }
     }

@@ -360,6 +360,7 @@ pub enum BlendFactor {
     SrcAlpha,
     OneMinusSrcAlpha,
     DstColor,
+    OneMinusDstColor,
     OneMinusSrcColor,
 }
 

@@ -1578,6 +1578,7 @@ pub struct VirglGfxBackend {
     blend_handle_additive: u32,
     blend_handle_multiply: u32,
     blend_handle_screen: u32,
+    blend_handle_invert: u32,
     blend_handle_premult: u32,
 
     swapchain: SwapchainDesc,
@@ -1880,6 +1881,7 @@ impl VirglGfxBackend {
         let blend_handle_additive = 35u32;
         let blend_handle_multiply = 36u32;
         let blend_handle_screen = 37u32;
+        let blend_handle_invert = 38u32;
         let blend_handle_premult = 34u32;
         let dsa_handle = 31u32;
         let rs_handle = 32u32;
@@ -1959,6 +1961,7 @@ impl VirglGfxBackend {
         const PIPE_BLENDFACTOR_INV_SRC_COLOR: u32 = 0x12;
         const PIPE_BLENDFACTOR_SRC_ALPHA: u32 = 3;
         const PIPE_BLENDFACTOR_INV_SRC_ALPHA: u32 = 0x13;
+        const PIPE_BLENDFACTOR_INV_DST_COLOR: u32 = 0x15;
 
         // Disabled blending (opaque path).
         encode_create_blend(&mut init, blend_handle_disabled, false, 0, 0);
@@ -1993,6 +1996,14 @@ impl VirglGfxBackend {
             true,
             PIPE_BLENDFACTOR_ONE,
             PIPE_BLENDFACTOR_INV_SRC_COLOR,
+        );
+        // Invert: src*(1-dstColor) + dst*0, expects white source.
+        encode_create_blend(
+            &mut init,
+            blend_handle_invert,
+            true,
+            PIPE_BLENDFACTOR_INV_DST_COLOR,
+            0,
         );
         // Premult alpha: src*1 + dst*(1-srcA)
         encode_create_blend(
@@ -2066,6 +2077,7 @@ impl VirglGfxBackend {
             blend_handle_additive,
             blend_handle_multiply,
             blend_handle_screen,
+            blend_handle_invert,
             blend_handle_premult,
             swapchain,
 
@@ -2894,6 +2906,9 @@ impl GfxDevice for VirglGfxBackend {
                             }
                             (BlendFactor::One, BlendFactor::OneMinusSrcAlpha) => {
                                 self.blend_handle_premult
+                            }
+                            (BlendFactor::OneMinusDstColor, BlendFactor::Zero) => {
+                                self.blend_handle_invert
                             }
                             (BlendFactor::One, BlendFactor::Zero) => self.blend_handle_disabled,
                             other => {

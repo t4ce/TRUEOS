@@ -42,6 +42,7 @@ const TRUESURFER_RESULT_TITLE_PROP: &[u8] = b"title\0";
 const TRUESURFER_RESULT_SHELL_BYTES_PROP: &[u8] = b"shellBytes\0";
 const TRUESURFER_RESULT_BODY_BYTES_PROP: &[u8] = b"bodyBytes\0";
 const TRUESURFER_RESULT_TEXT_ROWS_PROP: &[u8] = b"textRows\0";
+const TRUESURFER_RESULT_LAYOUT_INTENT_PROP: &[u8] = b"layoutIntent\0";
 const TRUESURFER_RESULT_STYLE_COUNT_PROP: &[u8] = b"styleCount\0";
 const TRUESURFER_RESULT_STYLE_BYTES_PROP: &[u8] = b"styleBytes\0";
 const TRUESURFER_RESULT_SCRIPT_COUNT_PROP: &[u8] = b"scriptCount\0";
@@ -49,6 +50,27 @@ const TRUESURFER_RESULT_SCRIPT_BYTES_PROP: &[u8] = b"scriptBytes\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
 const TRUESURFER_TEXT_ROW_TEXT_PROP: &[u8] = b"text\0";
 const TRUESURFER_TEXT_ROW_INDENT_PROP: &[u8] = b"indentPx\0";
+const TRUESURFER_LAYOUT_INTENT_VERSION_PROP: &[u8] = b"version\0";
+const TRUESURFER_LAYOUT_INTENT_NODES_PROP: &[u8] = b"nodes\0";
+const TRUESURFER_LAYOUT_NODE_ID_PROP: &[u8] = b"nodeId\0";
+const TRUESURFER_LAYOUT_NODE_PARENT_ID_PROP: &[u8] = b"parentId\0";
+const TRUESURFER_LAYOUT_NODE_DEPTH_PROP: &[u8] = b"depth\0";
+const TRUESURFER_LAYOUT_NODE_KIND_PROP: &[u8] = b"kind\0";
+const TRUESURFER_LAYOUT_NODE_TAG_PROP: &[u8] = b"tag\0";
+const TRUESURFER_LAYOUT_NODE_INTRINSIC_WIDTH_PROP: &[u8] = b"intrinsicWidthPx\0";
+const TRUESURFER_LAYOUT_NODE_INTRINSIC_HEIGHT_PROP: &[u8] = b"intrinsicHeightPx\0";
+const TRUESURFER_LAYOUT_NODE_MIN_WIDTH_PROP: &[u8] = b"minWidthPx\0";
+const TRUESURFER_LAYOUT_NODE_MIN_HEIGHT_PROP: &[u8] = b"minHeightPx\0";
+const TRUESURFER_LAYOUT_NODE_MARGIN_LEFT_PROP: &[u8] = b"marginLeftPx\0";
+const TRUESURFER_LAYOUT_NODE_MARGIN_TOP_PROP: &[u8] = b"marginTopPx\0";
+const TRUESURFER_LAYOUT_NODE_MARGIN_RIGHT_PROP: &[u8] = b"marginRightPx\0";
+const TRUESURFER_LAYOUT_NODE_MARGIN_BOTTOM_PROP: &[u8] = b"marginBottomPx\0";
+const TRUESURFER_LAYOUT_NODE_PADDING_LEFT_PROP: &[u8] = b"paddingLeftPx\0";
+const TRUESURFER_LAYOUT_NODE_PADDING_TOP_PROP: &[u8] = b"paddingTopPx\0";
+const TRUESURFER_LAYOUT_NODE_PADDING_RIGHT_PROP: &[u8] = b"paddingRightPx\0";
+const TRUESURFER_LAYOUT_NODE_PADDING_BOTTOM_PROP: &[u8] = b"paddingBottomPx\0";
+const TRUESURFER_LAYOUT_NODE_FLEX_GROW_PROP: &[u8] = b"flexGrow\0";
+const TRUESURFER_LAYOUT_NODE_FLEX_SHRINK_PROP: &[u8] = b"flexShrink\0";
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
@@ -101,6 +123,35 @@ pub struct HostedBrowserTextState {
     pub rows: Vec<HostedBrowserTextRow>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct HostedBrowserLayoutNode {
+    pub node_id: u32,
+    pub parent_id: u32,
+    pub depth: u32,
+    pub kind: String,
+    pub tag: String,
+    pub intrinsic_width_px: u32,
+    pub intrinsic_height_px: u32,
+    pub min_width_px: u32,
+    pub min_height_px: u32,
+    pub margin_left_px: u32,
+    pub margin_top_px: u32,
+    pub margin_right_px: u32,
+    pub margin_bottom_px: u32,
+    pub padding_left_px: u32,
+    pub padding_top_px: u32,
+    pub padding_right_px: u32,
+    pub padding_bottom_px: u32,
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct HostedBrowserLayoutState {
+    pub version: u32,
+    pub nodes: Vec<HostedBrowserLayoutNode>,
+}
+
 #[derive(Clone, Debug)]
 pub enum HostedKeyboardEvent {
     Text { text: String },
@@ -147,11 +198,13 @@ struct BrowserInstanceState {
     api_ready: bool,
     last_parse_result: Option<ParseResult>,
     text_state: HostedBrowserTextState,
+    layout_state: HostedBrowserLayoutState,
     window_id: u32,
     render_tex_id: u32,
     surface_seq: u32,
     interactive_seq: u32,
     text_seq: u32,
+    layout_seq: u32,
     surface_state: HostedBrowserSurfaceState,
 }
 
@@ -325,6 +378,10 @@ pub fn hosted_text_seq_for_browser(browser_instance_id: u32) -> u32 {
     with_browser_state(browser_instance_id, |state| state.text_seq).unwrap_or(0)
 }
 
+pub fn hosted_layout_seq_for_browser(browser_instance_id: u32) -> u32 {
+    with_browser_state(browser_instance_id, |state| state.layout_seq).unwrap_or(0)
+}
+
 pub fn hosted_surface_state_for_browser(browser_instance_id: u32) -> HostedBrowserSurfaceState {
     with_browser_state(browser_instance_id, |state| state.surface_state).unwrap_or_default()
 }
@@ -337,6 +394,10 @@ pub fn hosted_interactive_state_for_browser(
 
 pub fn hosted_text_state_for_browser(browser_instance_id: u32) -> HostedBrowserTextState {
     with_browser_state(browser_instance_id, |state| state.text_state.clone()).unwrap_or_default()
+}
+
+pub fn hosted_layout_state_for_browser(browser_instance_id: u32) -> HostedBrowserLayoutState {
+    with_browser_state(browser_instance_id, |state| state.layout_state.clone()).unwrap_or_default()
 }
 
 pub fn set_hosted_viewport_for_browser(
@@ -526,6 +587,151 @@ unsafe fn read_text_rows(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst) -> Ho
     HostedBrowserTextState { rows }
 }
 
+unsafe fn read_result_f32(
+    ctx: *mut qjs::JSContext,
+    obj: qjs::JSValueConst,
+    key: &[u8],
+) -> f32 {
+    let value = qjs::JS_GetPropertyStr(ctx, obj, key.as_ptr() as *const c_char);
+    if value.is_exception() {
+        qjs::js_free_value(ctx, value);
+        return 0.0;
+    }
+    let mut out = 0.0f64;
+    let _ = qjs::JS_ToFloat64(ctx, &mut out as *mut f64, value);
+    qjs::js_free_value(ctx, value);
+    out as f32
+}
+
+unsafe fn read_layout_state(
+    ctx: *mut qjs::JSContext,
+    obj: qjs::JSValueConst,
+) -> HostedBrowserLayoutState {
+    let layout_value = qjs::JS_GetPropertyStr(
+        ctx,
+        obj,
+        TRUESURFER_RESULT_LAYOUT_INTENT_PROP.as_ptr() as *const c_char,
+    );
+    if layout_value.is_exception()
+        || layout_value.tag == qjs::JS_TAG_UNDEFINED
+        || layout_value.tag == qjs::JS_TAG_NULL
+    {
+        qjs::js_free_value(ctx, layout_value);
+        return HostedBrowserLayoutState::default();
+    }
+
+    let version = read_result_u32(ctx, layout_value, TRUESURFER_LAYOUT_INTENT_VERSION_PROP);
+    let nodes_value = qjs::JS_GetPropertyStr(
+        ctx,
+        layout_value,
+        TRUESURFER_LAYOUT_INTENT_NODES_PROP.as_ptr() as *const c_char,
+    );
+    if nodes_value.is_exception()
+        || nodes_value.tag == qjs::JS_TAG_UNDEFINED
+        || nodes_value.tag == qjs::JS_TAG_NULL
+    {
+        qjs::js_free_value(ctx, nodes_value);
+        qjs::js_free_value(ctx, layout_value);
+        return HostedBrowserLayoutState {
+            version,
+            nodes: Vec::new(),
+        };
+    }
+
+    let node_count = read_array_len(ctx, nodes_value).min(48);
+    let mut nodes = Vec::with_capacity(node_count as usize);
+    for idx in 0..node_count {
+        let node_value = qjs::JS_GetPropertyUint32(ctx, nodes_value, idx);
+        if node_value.is_exception()
+            || node_value.tag == qjs::JS_TAG_UNDEFINED
+            || node_value.tag == qjs::JS_TAG_NULL
+        {
+            qjs::js_free_value(ctx, node_value);
+            continue;
+        }
+
+        nodes.push(HostedBrowserLayoutNode {
+            node_id: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_ID_PROP),
+            parent_id: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_PARENT_ID_PROP),
+            depth: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_DEPTH_PROP),
+            kind: read_result_string(ctx, node_value, TRUESURFER_LAYOUT_NODE_KIND_PROP),
+            tag: read_result_string(ctx, node_value, TRUESURFER_LAYOUT_NODE_TAG_PROP),
+            intrinsic_width_px: read_result_u32(
+                ctx,
+                node_value,
+                TRUESURFER_LAYOUT_NODE_INTRINSIC_WIDTH_PROP,
+            ),
+            intrinsic_height_px: read_result_u32(
+                ctx,
+                node_value,
+                TRUESURFER_LAYOUT_NODE_INTRINSIC_HEIGHT_PROP,
+            ),
+            min_width_px: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_MIN_WIDTH_PROP),
+            min_height_px: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_MIN_HEIGHT_PROP),
+            margin_left_px: read_result_u32(
+                ctx,
+                node_value,
+                TRUESURFER_LAYOUT_NODE_MARGIN_LEFT_PROP,
+            ),
+            margin_top_px: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_MARGIN_TOP_PROP),
+            margin_right_px: read_result_u32(
+                ctx,
+                node_value,
+                TRUESURFER_LAYOUT_NODE_MARGIN_RIGHT_PROP,
+            ),
+            margin_bottom_px: read_result_u32(
+                ctx,
+                node_value,
+                TRUESURFER_LAYOUT_NODE_MARGIN_BOTTOM_PROP,
+            ),
+            padding_left_px: read_result_u32(
+                ctx,
+                node_value,
+                TRUESURFER_LAYOUT_NODE_PADDING_LEFT_PROP,
+            ),
+            padding_top_px: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_PADDING_TOP_PROP),
+            padding_right_px: read_result_u32(
+                ctx,
+                node_value,
+                TRUESURFER_LAYOUT_NODE_PADDING_RIGHT_PROP,
+            ),
+            padding_bottom_px: read_result_u32(
+                ctx,
+                node_value,
+                TRUESURFER_LAYOUT_NODE_PADDING_BOTTOM_PROP,
+            ),
+            flex_grow: read_result_f32(ctx, node_value, TRUESURFER_LAYOUT_NODE_FLEX_GROW_PROP),
+            flex_shrink: read_result_f32(ctx, node_value, TRUESURFER_LAYOUT_NODE_FLEX_SHRINK_PROP),
+        });
+        qjs::js_free_value(ctx, node_value);
+    }
+
+    qjs::js_free_value(ctx, nodes_value);
+    qjs::js_free_value(ctx, layout_value);
+    HostedBrowserLayoutState { version, nodes }
+}
+
+fn layout_content_height(layout_state: &HostedBrowserLayoutState) -> u32 {
+    if layout_state.nodes.is_empty() {
+        return 0;
+    }
+    let mut total = 0u32;
+    for node in &layout_state.nodes {
+        if node.parent_id == 0 {
+            continue;
+        }
+        let block_h = node
+            .intrinsic_height_px
+            .max(node.min_height_px)
+            .saturating_add(node.margin_top_px)
+            .saturating_add(node.margin_bottom_px)
+            .saturating_add(node.padding_top_px)
+            .saturating_add(node.padding_bottom_px);
+        total = total.saturating_add(block_h.max(1));
+    }
+    total
+}
+
 fn take_queued_html_for_browser(browser_instance_id: u32) -> Option<PendingHtml> {
     let queue = html_handoff_queue(browser_instance_id)?;
     let mut receiver = queue.receiver.lock();
@@ -610,27 +816,39 @@ unsafe fn dispatch_html(
         error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
     };
     let text_state = read_text_rows(ctx, result);
+    let layout_state = read_layout_state(ctx, result);
 
     let _ = with_browser_state_mut(browser_instance_id, |state| {
         state.last_parse_result = Some(parse_result.clone());
         state.text_state = text_state.clone();
+        state.layout_state = layout_state.clone();
         state.text_seq = state.text_seq.wrapping_add(1);
+        state.layout_seq = state.layout_seq.wrapping_add(1);
         if !state.text_state.rows.is_empty() {
             state.surface_state.content_height = ((state.text_state.rows.len() as u32) * 18)
                 .saturating_add(20)
+                .max(state.surface_state.viewport_height);
+        }
+        let layout_height = layout_content_height(&state.layout_state);
+        if layout_height > 0 {
+            state.surface_state.content_height = state
+                .surface_state
+                .content_height
+                .max(layout_height)
                 .max(state.surface_state.viewport_height);
         }
     });
 
     if parse_result.ok {
         log_line(format!(
-            "qjs-truesurfer[{}]: parsed bytes={} title={} ms={} shell_bytes={} body_bytes={} styles={} scripts={} url={}\n",
+            "qjs-truesurfer[{}]: parsed bytes={} title={} ms={} shell_bytes={} body_bytes={} layout_nodes={} styles={} scripts={} url={}\n",
             browser_instance_id,
             parse_result.bytes,
             parse_result.title,
             parse_result.parse_ms,
             parse_result.shell_bytes,
             parse_result.body_bytes,
+            layout_state.nodes.len(),
             parse_result.style_count,
             parse_result.script_count,
             parse_result.url
