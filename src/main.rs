@@ -9,6 +9,8 @@ const _: f16 = 0.0_f16;
 pub extern crate alloc;
 
 mod allocators;
+#[path = "Chronos.rs"]
+mod chronos;
 mod cpu;
 mod disc;
 pub mod dma;
@@ -22,7 +24,6 @@ mod hv;
 pub mod hvv;
 #[cfg(feature = "gfx_intel")]
 mod intel;
-mod interrupt_cursorplane;
 mod iso9660;
 mod limine;
 mod logflag;
@@ -40,7 +41,6 @@ mod runtime;
 mod shell2;
 mod smp;
 mod tga;
-pub mod tm;
 #[path = "tst/fps.rs"]
 mod tst_fps;
 #[path = "tst/gfx_tetris.rs"]
@@ -191,6 +191,9 @@ pub extern "C" fn kmain() -> ! {
     disc::probe_once();
     efi::acpi::ensure_tables();
     efi::acpi::hpet::ensure();
+    // Chronos awake currently seeds the first snapshot through the TSC time path,
+    // which may calibrate against HPET via ACPI-backed mappings.
+    chronos::awake();
     power::init();
     smp::init(percpu::total_slots());
     smp::mark_online();
@@ -202,7 +205,6 @@ pub extern "C" fn kmain() -> ! {
     // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
     tga::init_once();
     net::init();
-    //interrupt_cursorplane::init_bsp();
 
     #[cfg(feature = "dma_nic_fpga")]
     {
