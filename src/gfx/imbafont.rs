@@ -791,29 +791,64 @@ pub fn layout_text_centered(
 }
 
 pub fn measure_text_width_px(face: ImbaFontFace, text: &[u8], tile_h: f32) -> f32 {
+    measure_text_width_px_tracked(face, text, tile_h, 0.0)
+}
+
+pub fn measure_text_width_px_tracked(
+    face: ImbaFontFace,
+    text: &[u8],
+    tile_h: f32,
+    tracking_px: f32,
+) -> f32 {
     if text.is_empty() || !tile_h.is_finite() || tile_h <= 0.0 {
         return 0.0;
     }
 
-    let mut line_w = 0.0f32;
+    let mut pen_x = 0.0f32;
+    let mut vis_left = f32::INFINITY;
+    let mut vis_right = f32::NEG_INFINITY;
+    let mut line_has_ink = false;
+    let mut line_has_advance = false;
     let mut max_w = 0.0f32;
     for &byte in text {
         let ch = byte as char;
         if ch == '\n' {
-            max_w = max_w.max(line_w);
-            line_w = 0.0;
+            if line_has_ink && vis_left.is_finite() && vis_right.is_finite() {
+                max_w = max_w.max((vis_right - vis_left).max(0.0));
+            }
+            pen_x = 0.0;
+            vis_left = f32::INFINITY;
+            vis_right = f32::NEG_INFINITY;
+            line_has_ink = false;
+            line_has_advance = false;
             continue;
         }
         if ch == ' ' {
-            line_w += space_advance(tile_h);
+            if line_has_advance {
+                pen_x += tracking_px;
+            }
+            pen_x += space_advance(tile_h);
+            line_has_advance = true;
             continue;
         }
-        if let Some(metric) = layout_metric_for_char(face, ch) {
-            line_w += metric.advance_w * tile_h;
+        let Some(metric) = layout_metric_for_char(face, ch) else {
+            continue;
+        };
+        if line_has_advance {
+            pen_x += tracking_px;
         }
+        vis_left = vis_left.min(pen_x + metric.ink_left * tile_h);
+        vis_right = vis_right.max(pen_x + metric.ink_right * tile_h);
+        pen_x += metric.advance_w * tile_h;
+        line_has_ink = true;
+        line_has_advance = true;
     }
 
-    max_w.max(line_w)
+    if line_has_ink && vis_left.is_finite() && vis_right.is_finite() {
+        max_w = max_w.max((vis_right - vis_left).max(0.0));
+    }
+
+    max_w
 }
 
 pub fn layout_text_top_left(
@@ -822,6 +857,17 @@ pub fn layout_text_top_left(
     x: f32,
     top_y: f32,
     tile_h: f32,
+) -> Option<ImbaFontRunLayout> {
+    layout_text_top_left_tracked(face, text, x, top_y, tile_h, 0.0)
+}
+
+pub fn layout_text_top_left_tracked(
+    face: ImbaFontFace,
+    text: &[u8],
+    x: f32,
+    top_y: f32,
+    tile_h: f32,
+    tracking_px: f32,
 ) -> Option<ImbaFontRunLayout> {
     if text.is_empty() || !tile_h.is_finite() || tile_h <= 0.0 {
         return None;
@@ -832,6 +878,7 @@ pub fn layout_text_top_left(
     let mut vis_right = f32::NEG_INFINITY;
     let mut vis_top = f32::INFINITY;
     let mut vis_bottom = f32::NEG_INFINITY;
+    let mut has_advance = false;
 
     for &byte in text {
         let ch = byte as char;
@@ -839,18 +886,26 @@ pub fn layout_text_top_left(
             continue;
         }
         if ch == ' ' {
+            if has_advance {
+                pen_x += tracking_px;
+            }
             pen_x += space_advance(tile_h);
+            has_advance = true;
             continue;
         }
 
         let Some(metric) = layout_metric_for_char(face, ch) else {
             continue;
         };
+        if has_advance {
+            pen_x += tracking_px;
+        }
         vis_left = vis_left.min(pen_x + metric.ink_left * tile_h);
         vis_right = vis_right.max(pen_x + metric.ink_right * tile_h);
         vis_top = vis_top.min((metric.ink_top - metric.baseline_y) * tile_h);
         vis_bottom = vis_bottom.max((metric.ink_bottom - metric.baseline_y) * tile_h);
         pen_x += metric.advance_w * tile_h;
+        has_advance = true;
     }
 
     if !vis_top.is_finite() {
@@ -862,7 +917,7 @@ pub fn layout_text_top_left(
 
     let baseline_y = top_y - vis_top;
     Some(ImbaFontRunLayout {
-        origin_x: x,
+        origin_x: x - if vis_left.is_finite() { vis_left } else { 0.0 },
         baseline_y,
         vis_left: if vis_left.is_finite() { vis_left } else { 0.0 },
         vis_right: if vis_right.is_finite() {
@@ -1077,6 +1132,77 @@ pub fn draw_text_in_frame(
                 crate::r::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
                     blob.as_ptr(),
                     blob.len(),
+                )
+            };
+        }
+
+        pen_x += metric.advance_w * layout.tile_h;
+    }
+
+    true
+}
+
+pub fn draw_text_in_frame_negative(
+    face: ImbaFontFace,
+    text: &[u8],
+    layout: &ImbaFontRunLayout,
+    view_w: u32,
+    view_h: u32,
+    alpha: u8,
+) -> bool {
+    let fb_w = view_w.max(1) as f32;
+    let fb_h = view_h.max(1) as f32;
+    let mut pen_x = layout.origin_x;
+
+    for &byte in text {
+        let ch = byte as char;
+        if ch == ' ' {
+            pen_x += space_advance(layout.tile_h);
+            continue;
+        }
+
+        let Some(metric) = layout_metric_for_char(face, ch) else {
+            continue;
+        };
+        let Some(icon) = icon_for_char(face, ch) else {
+            pen_x += metric.advance_w * layout.tile_h;
+            continue;
+        };
+
+        let y = layout.baseline_y - metric.baseline_y * layout.tile_h;
+        let sx = layout.tile_h / icon.mesh.width.max(0.0001);
+        let sy = layout.tile_h / icon.mesh.height.max(0.0001);
+        let mut blob = Vec::with_capacity(icon.mesh.indices.len().saturating_mul(12));
+
+        for &idx in &icon.mesh.indices {
+            let Some(vertex) = icon.mesh.vertices.get(idx as usize) else {
+                continue;
+            };
+            let px = pen_x + vertex[0] * sx;
+            let py = y + vertex[1] * sy;
+            let nx = (2.0 * (px / fb_w)) - 1.0;
+            let ny = 1.0 - (2.0 * (py / fb_h));
+            blob.extend_from_slice(&nx.to_le_bytes());
+            blob.extend_from_slice(&ny.to_le_bytes());
+            blob.push(0xFF);
+            blob.push(0xFF);
+            blob.push(0xFF);
+            blob.push(alpha);
+        }
+
+        if !blob.is_empty() {
+            let _ = unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0307, 0, 0x0307, 0, 0, 0)
+            };
+            let _ = unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+                    blob.as_ptr(),
+                    blob.len(),
+                )
+            };
+            let _ = unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_set_blend(
+                    1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0,
                 )
             };
         }
