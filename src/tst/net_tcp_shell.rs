@@ -100,13 +100,21 @@ pub async fn net_shell_task() {
                         }
                     }
                     NetEvent::TcpEstablished { handle } => {
+                        let mut repaint_screen = false;
                         {
                             let mut st = NET_SHELL_STATE.lock();
                             let is_new_conn = st.handle != Some(handle);
                             st.handle = Some(handle);
                             if is_new_conn {
                                 st.rx.clear();
+                                st.tx.clear();
+                                repaint_screen = true;
                             }
+                        }
+                        if repaint_screen {
+                            crate::shell2::repaint_backend_screen(
+                                &crate::shell2::NET_TCP_SHELL_BACKEND,
+                            );
                         }
                         pending = None;
                         pending_handle = Some(handle);

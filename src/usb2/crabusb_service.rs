@@ -41,6 +41,7 @@ static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static HID_STREAMS_ACTIVE: Mutex<Vec<ActiveHidStream>> = Mutex::new(Vec::new());
+static BOUNCE_MAPPINGS: Mutex<Vec<BounceMapping>> = Mutex::new(Vec::new());
 
 const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
 const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
@@ -48,6 +49,14 @@ const TRUEKEY_VENDOR_ID: u16 = 0x303A;
 const TRUEKEY_PRODUCT_ID: u16 = 0x1001;
 const TRUEKEY_STREAM_CHUNK: usize = 512;
 const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
+
+#[derive(Copy, Clone)]
+struct BounceMapping {
+    orig_virt: usize,
+    bounce_virt: usize,
+    size: usize,
+    direction: DmaDirection,
+}
 
 impl DmaOp for TrueosCrabUsbKernel {
     fn page_size(&self) -> usize {
@@ -87,6 +96,22 @@ impl DmaOp for TrueosCrabUsbKernel {
                 .ok_or(DmaError::NoMemory)?;
         let bounce_virt = NonNull::new(bounce_virt).ok_or(DmaError::NoMemory)?;
 
+        if matches!(
+            _direction,
+            DmaDirection::ToDevice | DmaDirection::Bidirectional
+        ) {
+            unsafe {
+                core::ptr::copy_nonoverlapping(addr.as_ptr(), bounce_virt.as_ptr(), layout.size())
+            };
+        }
+
+        BOUNCE_MAPPINGS.lock().push(BounceMapping {
+            orig_virt: addr.as_ptr() as usize,
+            bounce_virt: bounce_virt.as_ptr() as usize,
+            size: layout.size(),
+            direction: _direction,
+        });
+
         Ok(unsafe {
             DmaMapHandle::new(addr, DmaAddr::from(bounce_phys), layout, Some(bounce_virt))
         })
@@ -94,6 +119,27 @@ impl DmaOp for TrueosCrabUsbKernel {
 
     unsafe fn unmap_single(&self, handle: DmaMapHandle) {
         if let Some(alloc_virt) = handle.alloc_virt() {
+            let mapping = {
+                let mut mappings = BOUNCE_MAPPINGS.lock();
+                mappings
+                    .iter()
+                    .position(|entry| entry.bounce_virt == alloc_virt.as_ptr() as usize)
+                    .map(|idx| mappings.swap_remove(idx))
+            };
+
+            if let Some(mapping) = mapping
+                && matches!(
+                    mapping.direction,
+                    DmaDirection::FromDevice | DmaDirection::Bidirectional
+                )
+            {
+                core::ptr::copy_nonoverlapping(
+                    mapping.bounce_virt as *const u8,
+                    mapping.orig_virt as *mut u8,
+                    mapping.size,
+                );
+            }
+
             crate::dma::dealloc(alloc_virt.as_ptr(), handle.size());
         }
     }

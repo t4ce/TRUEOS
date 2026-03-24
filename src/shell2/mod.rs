@@ -633,6 +633,39 @@ fn current_transcript_for_task(io: &'static dyn ShellBackend2) -> VecDeque<Trans
     matrix::active_lines(output_target_for_backend(io))
 }
 
+pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
+    register_output(io);
+    let out = AlignedWriter::new(io);
+    let output_mask = output_target_for_backend(io);
+    out.set_line_width(matrix::active_line_width(output_mask));
+    out.clear_screen_home();
+    out.reset_scroll_region();
+
+    let (_, time_text) = clock_bucket_and_text();
+    let mode = ShellMode2::Cmd;
+    let ai_mode = AiPromptMode::Normal;
+    let qjs_mode = QjsPromptMode::Repl;
+    let irc_mode = IrcPromptMode::User;
+    let surf_prefix = SurfPromptPrefix::Http;
+
+    out.banner(output_mask, mode, time_text.as_str());
+    out.mode_status(
+        output_mask,
+        mode,
+        ai_mode,
+        qjs_mode,
+        irc_mode,
+        surf_prefix,
+        None,
+        0,
+    );
+    out.set_scroll_region(SCROLL_TOP_ROW);
+
+    let transcript = current_transcript_for_task(io);
+    out.render_transcript(&transcript);
+    out.prompt(output_mask);
+}
+
 fn appended_transcript_line<'a>(
     prev: &VecDeque<TranscriptEntry>,
     next: &'a VecDeque<TranscriptEntry>,
