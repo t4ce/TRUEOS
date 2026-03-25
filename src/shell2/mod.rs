@@ -296,14 +296,14 @@ impl<'a> AlignedWriter<'a> {
         self.push_plain(&mut text, " ");
         self.push_ai_token(
             &mut text,
-            SurfPromptPrefix::Http.label(),
-            surf_prefix == SurfPromptPrefix::Http,
+            SurfPromptPrefix::Https.label(),
+            surf_prefix == SurfPromptPrefix::Https,
         );
         self.push_plain(&mut text, " - ");
         self.push_ai_token(
             &mut text,
-            SurfPromptPrefix::Https.label(),
-            surf_prefix == SurfPromptPrefix::Https,
+            SurfPromptPrefix::Http.label(),
+            surf_prefix == SurfPromptPrefix::Http,
         );
         self.push_plain(&mut text, " - ");
         self.push_ai_token(
@@ -646,7 +646,7 @@ pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
     let ai_mode = AiPromptMode::Normal;
     let qjs_mode = QjsPromptMode::Repl;
     let irc_mode = IrcPromptMode::User;
-    let surf_prefix = SurfPromptPrefix::Http;
+    let surf_prefix = SurfPromptPrefix::Https;
 
     out.banner(output_mask, mode, time_text.as_str());
     out.mode_status(
@@ -1012,7 +1012,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     out.reset_scroll_region();
     let (mut last_minute_bucket, time_text) = clock_bucket_and_text();
     let mut mode = ShellMode2::Cmd;
-    let mut surf_prefix = SurfPromptPrefix::Http;
+    let mut surf_prefix = SurfPromptPrefix::Https;
     out.banner(output_mask, mode, time_text.as_str());
     let mut ai_mode = AiPromptMode::Normal;
     let mut qjs_mode = QjsPromptMode::Repl;
