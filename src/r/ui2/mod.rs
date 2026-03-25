@@ -2375,7 +2375,7 @@ fn draw_hosted_browser_layout_preview(
         state.view_h,
     );
 
-    let face = crate::gfx::imbafont::ImbaFontFace::Loop;
+    let face = crate::gfx::imbafont::ImbaFontFace::Regular;
     let mut y_cursor = content.y + 8.0;
     let bottom = content.y + content.h - 4.0;
     let mut drew_any = false;
