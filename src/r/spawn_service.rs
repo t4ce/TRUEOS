@@ -568,6 +568,39 @@ fn spawn_truesurfer_batch(spawner: Spawner, requested: u32) -> SpawnAttempt {
     }
 }
 
+pub fn spawn_truesurfer_tab_with_html() -> Option<u32> {
+    let mut factory = TRUESURFER_FACTORY.lock();
+    let browser_instance_id = factory.next_instance_id()?;
+
+    match trueos_qjs::workers::pick_background_spawner().and_then(|worker_spawner| {
+        worker_spawner
+            .spawn(trueos_qjs::browser_task::truesurfer_task(
+                browser_instance_id,
+            ))
+            .ok()
+    }) {
+        Some(()) => {
+            factory.mark_spawned(browser_instance_id);
+            crate::r::ui2::signal_hosted_browser_factory_mask(factory.spawned_mask());
+            crate::log!(
+                "truesurfer-factory: handoff-spawned browser_instance_id={} mask={:#x} remaining={}\n",
+                browser_instance_id,
+                factory.spawned_mask(),
+                trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID
+                    .saturating_sub(browser_instance_id)
+            );
+            Some(browser_instance_id)
+        }
+        None => {
+            crate::log!(
+                "truesurfer-factory: handoff-spawn skipped browser_instance_id={}\n",
+                browser_instance_id
+            );
+            None
+        }
+    }
+}
+
 pub fn spawn_additional_truesurfers(spawner: Spawner, requested: u32) -> bool {
     matches!(
         spawn_truesurfer_batch(spawner, requested),

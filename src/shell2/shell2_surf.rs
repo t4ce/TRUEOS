@@ -15,10 +15,10 @@ pub(crate) enum SurfPromptPrefix {
 impl SurfPromptPrefix {
     pub(crate) const fn next(self) -> Self {
         match self {
-            Self::Http => Self::Https,
-            Self::Https => Self::File,
+            Self::Https => Self::Http,
+            Self::Http => Self::File,
             Self::File => Self::Html,
-            Self::Html => Self::Http,
+            Self::Html => Self::Https,
         }
     }
 

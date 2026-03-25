@@ -184,33 +184,27 @@ async fn store_ready_html(html: Html) -> usize {
 }
 
 async fn html_ready_to_truesurfer(html: Html) {
-    let browser_count = crate::r::spawn_service::truesurfer_factory_boot_count();
-    if browser_count == 0 {
+    let Some(browser_instance_id) = crate::r::spawn_service::spawn_truesurfer_tab_with_html()
+    else {
         crate::log!(
-            "html_shack: browser_handoff skipped url={} browsers=0\n",
+            "html_shack: browser_handoff skipped url={} reason=spawn_failed\n",
             html.url
         );
         return;
-    }
+    };
 
-    for browser_instance_id in trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
-        .iter()
-        .copied()
-        .take(browser_count as usize)
-    {
-        let handed_off = trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
-            browser_instance_id,
-            html.html.clone(),
-            Some(html.url.clone()),
-        )
-        .await;
-        crate::log!(
-            "html_shack: browser_handoff url={} browser={} ok={}\n",
-            html.url,
-            browser_instance_id,
-            if handed_off { 1 } else { 0 }
-        );
-    }
+    let handed_off = trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
+        browser_instance_id,
+        html.html,
+        Some(html.url.clone()),
+    )
+    .await;
+    crate::log!(
+        "html_shack: browser_handoff url={} browser={} ok={}\n",
+        html.url,
+        browser_instance_id,
+        if handed_off { 1 } else { 0 }
+    );
 }
 
 fn normalize_file_reference(path: &str) -> String {
