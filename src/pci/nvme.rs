@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, string::String};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{
     mem,
     ptr::{NonNull, read_volatile, write_bytes, write_volatile},
@@ -765,14 +765,30 @@ impl NvmeController {
         io_depth: u16,
         io_cq_irq_enabled: bool,
     ) -> core::result::Result<Self, block::Error> {
-        unsafe {
+        let cap = {
             let regs = mmio.as_ptr();
-            let cap = read_volatile(regs.add(NVME_REG_CAP) as *const u64);
-            let vs = read_volatile(regs.add(NVME_REG_VS) as *const u32);
+            let mut cap = 0u64;
+            let mut vs = 0u32;
+            for _ in 0..20 {
+                cap = unsafe { read_volatile(regs.add(NVME_REG_CAP) as *const u64) };
+                vs = unsafe { read_volatile(regs.add(NVME_REG_VS) as *const u32) };
+                if cap != 0 && cap != u64::MAX {
+                    break;
+                }
+                let _ = crate::wait::spin_until_timeout(10, || false);
+            }
             crate::log!("nvme: {} CAP=0x{:016X} VS=0x{:08X}\n", pci, cap, vs);
-        }
+            if cap == 0 || cap == u64::MAX {
+                crate::log!(
+                    "nvme: {} controller regs unreadable after settle (cap=0x{:016X})\n",
+                    pci,
+                    cap
+                );
+                return Err(block::Error::MmioMapFailed);
+            }
+            cap
+        };
 
-        let cap = unsafe { read_volatile(mmio.as_ptr().add(NVME_REG_CAP) as *const u64) };
         let dstrd = ((cap >> 32) & 0xF) as u32;
         let doorbell_stride_bytes = (4u32) << dstrd;
         let mpsmin = ((cap >> 48) & 0xF) as u8;
@@ -1822,12 +1838,21 @@ pub fn probe_once() {
     let mut did_any = false;
     let mut registered_any = false;
 
+    let mut nvme_devices: Vec<crate::pci::PciDevice> = Vec::new();
     crate::pci::with_devices(|list| {
         for dev in list {
-            if !is_nvme(dev) {
-                continue;
+            if is_nvme(dev) {
+                did_any = true;
+                nvme_devices.push(*dev);
             }
-            did_any = true;
+        }
+    });
+
+    for dev in nvme_devices {
+        // Quirk: FLR can wedge bring-up on some targets/emulators and leave boot
+        // stuck after the reset log. Keep probe progress deterministic by default.
+        let do_flr = false;
+        if do_flr {
             if crate::pci::try_function_level_reset(dev.bus, dev.slot, dev.function) {
                 crate::log!(
                     "nvme: {:02X}:{:02X}.{} function-level reset issued\n",
@@ -1836,228 +1861,337 @@ pub fn probe_once() {
                     dev.function
                 );
             }
-            crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
+        } else {
+            crate::log!(
+                "nvme: {:02X}:{:02X}.{} skipping FLR (stability quirk)\n",
+                dev.bus,
+                dev.slot,
+                dev.function
+            );
+        }
+        crate::log!(
+            "nvme: {:02X}:{:02X}.{} probe step=bar-read\n",
+            dev.bus,
+            dev.slot,
+            dev.function
+        );
 
-            let (bar_lo, bar_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
-            if (bar_lo & 0x1) != 0 {
+        let (mut bar_lo, mut bar_hi) =
+            crate::pci::read_bar0_raw_legacy(dev.bus, dev.slot, dev.function);
+        crate::log!(
+            "nvme: {:02X}:{:02X}.{} probe step=bar-read-done lo=0x{:08X} hi={:?}\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            bar_lo,
+            bar_hi
+        );
+        if (bar_lo & 0x1) != 0 {
+            crate::log!(
+                "nvme: {:02X}:{:02X}.{} BAR0 is IO space (unsupported)\n",
+                dev.bus,
+                dev.slot,
+                dev.function
+            );
+            continue;
+        }
+
+        let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+        let mut base = (bar_lo & 0xFFFF_FFF0) as u64;
+        if is_64 {
+            base |= (bar_hi.unwrap_or(0) as u64) << 32;
+        }
+        // Avoid BAR size probe writes during bring-up on fragile targets.
+        // NVMe register space is small; 16KiB mapping is sufficient.
+        let mut size = 0x4000u64;
+
+        // Hotplug/firmware gap handling: some setups expose NVMe with BAR0 still unassigned.
+        // Program a safe MMIO base so CAP/VS reads become meaningful.
+        if base == 0 || base >= 0x40_0000_0000 {
+            if size == 0 {
+                size = 0x4000;
+            }
+            let align = size.max(0x1000);
+            crate::log!(
+                "nvme: {:02X}:{:02X}.{} probe step=bar-alloc size=0x{:X} align=0x{:X}\n",
+                dev.bus,
+                dev.slot,
+                dev.function,
+                size,
+                align
+            );
+            let Some(new_base) = crate::pci::alloc_hotplug_mmio_base(dev.bus, size, align) else {
                 crate::log!(
-                    "nvme: {:02X}:{:02X}.{} BAR0 is IO space (unsupported)\n",
+                    "nvme: {:02X}:{:02X}.{} BAR0 unassigned and allocator failed (size=0x{:X} align=0x{:X})\n",
                     dev.bus,
                     dev.slot,
-                    dev.function
+                    dev.function,
+                    size,
+                    align
                 );
                 continue;
+            };
+
+            let new_lo = ((new_base as u32) & !0xFu32) | (bar_lo & 0xFu32);
+            crate::log!(
+                "nvme: {:02X}:{:02X}.{} probe step=bar-write new_base=0x{:X} new_lo=0x{:08X}\n",
+                dev.bus,
+                dev.slot,
+                dev.function,
+                new_base,
+                new_lo
+            );
+            crate::pci::config_write_u32_legacy(dev.bus, dev.slot, dev.function, 0x10, new_lo);
+            if is_64 {
+                crate::pci::config_write_u32_legacy(
+                    dev.bus,
+                    dev.slot,
+                    dev.function,
+                    0x14,
+                    (new_base >> 32) as u32,
+                );
             }
 
-            let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
-            let mut base = (bar_lo & 0xFFFF_FFF0) as u64;
+            crate::log!(
+                "nvme: {:02X}:{:02X}.{} probe step=bar-reread\n",
+                dev.bus,
+                dev.slot,
+                dev.function
+            );
+            (bar_lo, bar_hi) = crate::pci::read_bar0_raw_legacy(dev.bus, dev.slot, dev.function);
+            base = (bar_lo & 0xFFFF_FFF0) as u64;
             if is_64 {
                 base |= (bar_hi.unwrap_or(0) as u64) << 32;
             }
-            let size = crate::pci::bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
 
-            let mut map_len = if size == 0 {
-                0x4000usize
-            } else {
-                size as usize
-            };
-            map_len = map_len.clamp(0x4000, 0x10000);
+            crate::log!(
+                "nvme: {:02X}:{:02X}.{} BAR0 assigned by OS base=0x{:X} size=0x{:X}\n",
+                dev.bus,
+                dev.slot,
+                dev.function,
+                base,
+                size
+            );
+            crate::pci::enable_mem_and_bus_master_legacy(dev.bus, dev.slot, dev.function);
+        }
 
-            let mmio_ptr = match mmio::map_mmio_region(base, map_len) {
-                Ok(ptr) => ptr,
-                Err(err) => {
-                    crate::log!("nvme: failed to map MMIO: {:?}\n", err);
-                    continue;
-                }
-            };
+        crate::pci::enable_mem_and_bus_master_legacy(dev.bus, dev.slot, dev.function);
 
-            let pci_addr = block::PciAddress::new(dev.bus, dev.slot, dev.function);
-            let mut ctrl = match NvmeController::init(mmio_ptr, pci_addr) {
-                Ok(c) => c,
-                Err(e) => {
-                    crate::log!("nvme: {} init failed: {:?}\n", pci_addr, e);
-                    continue;
-                }
-            };
+        crate::log!(
+            "nvme: {:02X}:{:02X}.{} BAR0 raw lo=0x{:08X} hi={:?} base=0x{:X} size=0x{:X}\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            bar_lo,
+            bar_hi,
+            base,
+            size
+        );
 
-            let ctrl_info = match ctrl.identify_controller_info() {
+        let mut map_len = if size == 0 {
+            0x4000usize
+        } else {
+            size as usize
+        };
+        map_len = map_len.clamp(0x4000, 0x10000);
+
+        crate::log!(
+            "nvme: {:02X}:{:02X}.{} probe step=mmio-map base=0x{:X} len=0x{:X}\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            base,
+            map_len
+        );
+
+        let mmio_ptr = match mmio::map_mmio_region(base, map_len) {
+            Ok(ptr) => ptr,
+            Err(err) => {
+                crate::log!("nvme: failed to map MMIO: {:?}\n", err);
+                continue;
+            }
+        };
+
+        let pci_addr = block::PciAddress::new(dev.bus, dev.slot, dev.function);
+        let mut ctrl = match NvmeController::init(mmio_ptr, pci_addr) {
+            Ok(c) => c,
+            Err(e) => {
+                crate::log!("nvme: {} init failed: {:?}\n", pci_addr, e);
+                continue;
+            }
+        };
+
+        let ctrl_info = match ctrl.identify_controller_info() {
+            Ok(info) => info,
+            Err(e) => {
+                crate::log!("nvme: {} identify controller failed: {:?}\n", pci_addr, e);
+                continue;
+            }
+        };
+
+        let mut nsid = match ctrl.identify_first_active_namespace(ctrl_info.nn) {
+            Ok(id) => id,
+            Err(e) => {
+                crate::log!("nvme: {} no active namespace found: {:?}\n", pci_addr, e);
+                continue;
+            }
+        };
+
+        // Register the first active namespace.
+        let (mut blocks, mut block_size) = match ctrl.identify_namespace(nsid) {
+            Ok(v) => v,
+            Err(e) => {
+                crate::log!(
+                    "nvme: {} identify namespace {} failed: {:?}\n",
+                    pci_addr,
+                    nsid,
+                    e
+                );
+                continue;
+            }
+        };
+        if blocks == 0 || block_size == 0 {
+            crate::log!(
+                "nvme: {} namespace {} has invalid capacity\n",
+                pci_addr,
+                nsid
+            );
+            continue;
+        }
+
+        // Strict gate: the IO queue must first complete a no-data command, then
+        // complete a data-bearing READ before we register the controller.
+        let mut io_ready = io_selftest_flush(&mut ctrl, pci_addr, nsid)
+            && io_selftest_read(&mut ctrl, pci_addr, nsid, block_size);
+        let mut admin_fallback_mode = false;
+        if !io_ready {
+            crate::log!(
+                "nvme: {} io-selftest failed; attempting one controller reinit\n",
+                pci_addr
+            );
+
+            let mut retry_ctrl =
+                match NvmeController::init_with_io_profile(mmio_ptr, pci_addr, 2, true) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        crate::log!("nvme: {} reinit failed: {:?}\n", pci_addr, e);
+                        continue;
+                    }
+                };
+
+            let retry_ctrl_info = match retry_ctrl.identify_controller_info() {
                 Ok(info) => info,
                 Err(e) => {
-                    crate::log!("nvme: {} identify controller failed: {:?}\n", pci_addr, e);
-                    continue;
-                }
-            };
-
-            let mut nsid = match ctrl.identify_first_active_namespace(ctrl_info.nn) {
-                Ok(id) => id,
-                Err(e) => {
-                    crate::log!("nvme: {} no active namespace found: {:?}\n", pci_addr, e);
-                    continue;
-                }
-            };
-
-            // Register the first active namespace.
-            let (mut blocks, mut block_size) = match ctrl.identify_namespace(nsid) {
-                Ok(v) => v,
-                Err(e) => {
                     crate::log!(
-                        "nvme: {} identify namespace {} failed: {:?}\n",
+                        "nvme: {} reinit identify controller failed: {:?}\n",
                         pci_addr,
-                        nsid,
                         e
                     );
                     continue;
                 }
             };
-            if blocks == 0 || block_size == 0 {
+
+            let retry_nsid = match retry_ctrl.identify_first_active_namespace(retry_ctrl_info.nn) {
+                Ok(id) => id,
+                Err(e) => {
+                    crate::log!(
+                        "nvme: {} reinit no active namespace found: {:?}\n",
+                        pci_addr,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            let (retry_blocks, retry_block_size) = match retry_ctrl.identify_namespace(retry_nsid) {
+                Ok(v) => v,
+                Err(e) => {
+                    crate::log!(
+                        "nvme: {} reinit identify namespace {} failed: {:?}\n",
+                        pci_addr,
+                        retry_nsid,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            if retry_blocks == 0 || retry_block_size == 0 {
                 crate::log!(
-                    "nvme: {} namespace {} has invalid capacity\n",
+                    "nvme: {} reinit namespace {} has invalid capacity\n",
                     pci_addr,
-                    nsid
+                    retry_nsid
                 );
                 continue;
             }
 
-            // Strict gate: the IO queue must first complete a no-data command, then
-            // complete a data-bearing READ before we register the controller.
-            let mut io_ready = io_selftest_flush(&mut ctrl, pci_addr, nsid)
-                && io_selftest_read(&mut ctrl, pci_addr, nsid, block_size);
-            let mut admin_fallback_mode = false;
+            io_ready = io_selftest_flush(&mut retry_ctrl, pci_addr, retry_nsid)
+                && io_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size);
             if !io_ready {
+                let _ =
+                    admin_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size);
                 crate::log!(
-                    "nvme: {} io-selftest failed; attempting one controller reinit\n",
+                    "nvme: {} io-selftest still failed after reinit; registering anyway (degraded probe gate)\n",
                     pci_addr
                 );
-
-                let mut retry_ctrl =
-                    match NvmeController::init_with_io_profile(mmio_ptr, pci_addr, 2, true) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            crate::log!("nvme: {} reinit failed: {:?}\n", pci_addr, e);
-                            continue;
-                        }
-                    };
-
-                let retry_ctrl_info = match retry_ctrl.identify_controller_info() {
-                    Ok(info) => info,
-                    Err(e) => {
-                        crate::log!(
-                            "nvme: {} reinit identify controller failed: {:?}\n",
-                            pci_addr,
-                            e
-                        );
-                        continue;
-                    }
-                };
-
-                let retry_nsid =
-                    match retry_ctrl.identify_first_active_namespace(retry_ctrl_info.nn) {
-                        Ok(id) => id,
-                        Err(e) => {
-                            crate::log!(
-                                "nvme: {} reinit no active namespace found: {:?}\n",
-                                pci_addr,
-                                e
-                            );
-                            continue;
-                        }
-                    };
-
-                let (retry_blocks, retry_block_size) =
-                    match retry_ctrl.identify_namespace(retry_nsid) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            crate::log!(
-                                "nvme: {} reinit identify namespace {} failed: {:?}\n",
-                                pci_addr,
-                                retry_nsid,
-                                e
-                            );
-                            continue;
-                        }
-                    };
-
-                if retry_blocks == 0 || retry_block_size == 0 {
-                    crate::log!(
-                        "nvme: {} reinit namespace {} has invalid capacity\n",
-                        pci_addr,
-                        retry_nsid
-                    );
-                    continue;
-                }
-
-                io_ready = io_selftest_flush(&mut retry_ctrl, pci_addr, retry_nsid)
-                    && io_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size);
-                if !io_ready {
-                    let _ = admin_selftest_read(
-                        &mut retry_ctrl,
-                        pci_addr,
-                        retry_nsid,
-                        retry_block_size,
-                    );
-                    crate::log!(
-                        "nvme: {} io-selftest still failed after reinit; registering anyway (degraded probe gate)\n",
-                        pci_addr
-                    );
-                }
-
-                if io_ready {
-                    crate::log!("nvme: {} IO queue recovered after reinit\n", pci_addr);
-                }
-                ctrl = retry_ctrl;
-                nsid = retry_nsid;
-                blocks = retry_blocks;
-                block_size = retry_block_size;
             }
 
-            let label = if let Some(s) = ctrl.serial.as_deref() {
-                if !s.is_empty() {
-                    alloc::format!("nvme:{}", s)
-                } else {
-                    String::from("nvme")
-                }
+            if io_ready {
+                crate::log!("nvme: {} IO queue recovered after reinit\n", pci_addr);
+            }
+            ctrl = retry_ctrl;
+            nsid = retry_nsid;
+            blocks = retry_blocks;
+            block_size = retry_block_size;
+        }
+
+        let label = if let Some(s) = ctrl.serial.as_deref() {
+            if !s.is_empty() {
+                alloc::format!("nvme:{}", s)
             } else {
                 String::from("nvme")
-            };
-
-            let mut desc = block::DeviceDescriptor::new(block::DeviceKind::Nvme)
-                .with_label(label)
-                .with_pci(pci_addr);
-
-            if let Some(s) = ctrl.serial.clone() {
-                desc = desc.with_serial(s);
             }
+        } else {
+            String::from("nvme")
+        };
 
-            let max_transfer_bytes = ctrl.max_transfer_bytes;
-            let dev = NvmeBlockDevice {
-                ctrl,
-                nsid,
-                block_size,
-                block_count: blocks,
-                max_transfer_bytes,
-                admin_fallback_mode,
-            };
-            let handle = block::register_device(desc, dev);
-            crate::r::fs::trueosfs::request_mount_root(handle);
-            crate::log!(
-                "nvme: registered {} nsid={} id={} blocks={} bs={} max_io={}\n",
-                pci_addr,
-                nsid,
-                handle.id().raw(),
-                blocks,
-                block_size,
-                max_transfer_bytes,
-            );
-            if admin_fallback_mode {
-                crate::log!("nvme: {} registered in admin-fallback mode\n", pci_addr);
-            }
-            crate::log!("nvme: {} probe outcome: registered\n", pci_addr);
-            registered_any = true;
+        let mut desc = block::DeviceDescriptor::new(block::DeviceKind::Nvme)
+            .with_label(label)
+            .with_pci(pci_addr);
 
-            // For now, only claim/register the first controller.
-            break;
+        if let Some(s) = ctrl.serial.clone() {
+            desc = desc.with_serial(s);
         }
-    });
+
+        let max_transfer_bytes = ctrl.max_transfer_bytes;
+        let dev = NvmeBlockDevice {
+            ctrl,
+            nsid,
+            block_size,
+            block_count: blocks,
+            max_transfer_bytes,
+            admin_fallback_mode,
+        };
+        let handle = block::register_device(desc, dev);
+        crate::r::fs::trueosfs::request_mount_root(handle);
+        crate::log!(
+            "nvme: registered {} nsid={} id={} blocks={} bs={} max_io={}\n",
+            pci_addr,
+            nsid,
+            handle.id().raw(),
+            blocks,
+            block_size,
+            max_transfer_bytes,
+        );
+        if admin_fallback_mode {
+            crate::log!("nvme: {} registered in admin-fallback mode\n", pci_addr);
+        }
+        crate::log!("nvme: {} probe outcome: registered\n", pci_addr);
+        registered_any = true;
+
+        // For now, only claim/register the first controller.
+        break;
+    }
 
     if !did_any {
         crate::log!("nvme: none found\n");
