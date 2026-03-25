@@ -204,6 +204,267 @@ pub(super) fn draw_window_decoration_icon(
     }
 }
 
+fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2SystemButtonAction) {
+    if window.state == Ui2WindowStateKind::Minimized
+        && action != Ui2SystemButtonAction::ToggleMaximize
+    {
+        return;
+    }
+    let Some(rect) = window_system_button_rect(state, window, action) else {
+        return;
+    };
+
+    let icon_x = rect.x + ((rect.w - 16.0) * 0.5);
+    let icon_y = rect.y + ((rect.h - 16.0) * 0.5);
+    draw_window_decoration_icon(
+        state,
+        window,
+        Ui2DecorationIconKind::SystemButton(action),
+        icon_x,
+        icon_y,
+        16.0,
+    );
+}
+
+fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
+    let Some(rect) = window_bottom_resize_button_rect(state, window) else {
+        return;
+    };
+    let icon_side = 16.0f32;
+    let icon_x = rect.x + ((rect.w - icon_side) * 0.5);
+    let icon_y = rect.y + ((rect.h - icon_side) * 0.5);
+    draw_window_decoration_icon(
+        state,
+        window,
+        Ui2DecorationIconKind::ResizeHandle,
+        icon_x,
+        icon_y,
+        icon_side,
+    );
+}
+
+fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
+    let track = (0xEA, 0xEC, 0xEF, 0xFF);
+    let thumb = (0xB6, 0xBC, 0xC4, 0xFF);
+    let inset = (0xD7, 0xDB, 0xE1, 0xFF);
+
+    if let Some(vbar) = window_vertical_scrollbar_rect(state, window) {
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            vbar.x,
+            vbar.y,
+            vbar.w,
+            vbar.h,
+            track,
+            state.view_w,
+            state.view_h,
+        );
+        let thumb_h = if window.kind == Ui2WindowKind::HostedBrowser {
+            let snapshot = browser_surface_state_for_window(window);
+            let viewport_h = snapshot.viewport_height.max(1) as f32;
+            let content_h = snapshot.content_height.max(snapshot.viewport_height.max(1)) as f32;
+            libm::fmaxf(10.0, (vbar.h * (viewport_h / content_h)).min(vbar.h))
+        } else {
+            libm::fminf(vbar.h, 18.0)
+        };
+        let thumb_y = if window.kind == Ui2WindowKind::HostedBrowser {
+            let snapshot = browser_surface_state_for_window(window);
+            let scroll_range = hosted_browser_scroll_max(&snapshot) as f32;
+            let avail = (vbar.h - thumb_h).max(0.0);
+            if scroll_range > 0.0 {
+                vbar.y + (avail * ((normalized_hosted_browser_scroll(&snapshot) as f32) / scroll_range))
+            } else {
+                vbar.y
+            }
+        } else {
+            vbar.y
+        };
+        let thumb_x = vbar.x + 1.0;
+        let thumb_w = (vbar.w - 2.0).max(1.0);
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            thumb_x,
+            thumb_y,
+            thumb_w,
+            thumb_h,
+            thumb,
+            state.view_w,
+            state.view_h,
+        );
+    }
+
+    if let Some(hbar) = window_horizontal_scrollbar_rect(state, window) {
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            hbar.x,
+            hbar.y,
+            hbar.w,
+            hbar.h,
+            track,
+            state.view_w,
+            state.view_h,
+        );
+        let thumb_w = if window.kind == Ui2WindowKind::HostedBrowser {
+            let snapshot = browser_surface_state_for_window(window);
+            let viewport_w = snapshot.viewport_width.max(1) as f32;
+            let content_w = snapshot.content_width.max(snapshot.viewport_width.max(1)) as f32;
+            libm::fmaxf(10.0, (hbar.w * (viewport_w / content_w)).min(hbar.w))
+        } else {
+            libm::fminf((hbar.w - 2.0).max(8.0), 18.0)
+        };
+        let thumb_x = if window.kind == Ui2WindowKind::HostedBrowser {
+            let snapshot = browser_surface_state_for_window(window);
+            let scroll_range = hosted_browser_scroll_x_max(&snapshot) as f32;
+            let avail = (hbar.w - thumb_w).max(0.0);
+            if scroll_range > 0.0 {
+                hbar.x
+                    + (avail
+                        * ((normalized_hosted_browser_scroll_x(&snapshot) as f32) / scroll_range))
+            } else {
+                hbar.x
+            }
+        } else {
+            hbar.x + ((hbar.w - thumb_w) * 0.5)
+        };
+        let thumb_y = hbar.y + 1.0;
+        let thumb_h = (hbar.h - 2.0).max(1.0);
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            thumb_x,
+            thumb_y,
+            thumb_w,
+            thumb_h,
+            inset,
+            state.view_w,
+            state.view_h,
+        );
+    }
+}
+
+pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2Rect) {
+    let frame_base_rgba = (0xD9, 0xDE, 0xE5, 0xFF);
+    let frame_left_rgba = blend_rgba_over((0x00, 0x00, 0x00, 0x52), frame_base_rgba);
+    let frame_mid_rgba = frame_base_rgba;
+    let frame_right_rgba = blend_rgba_over((0xFF, 0xFF, 0xFF, 0x52), frame_base_rgba);
+    let frame_left_rgba = modulate_rgba_alpha(frame_left_rgba, window.alpha);
+    let frame_mid_rgba = modulate_rgba_alpha(frame_mid_rgba, window.alpha);
+    let frame_right_rgba = modulate_rgba_alpha(frame_right_rgba, window.alpha);
+    let title_rgba = modulate_rgba_alpha((0xF3, 0xF4, 0xF6, 0xFF), window.alpha);
+    let body_rgba = (0xFB, 0xFB, 0xF8, window.alpha);
+    let selection_rgba = window
+        .selected_cursor_slots
+        .first()
+        .map(|slot_id| super::ui2_hid::cursor_color(*slot_id))
+        .map(|rgba| modulate_rgba_alpha(rgba, window.alpha))
+        .unwrap_or((0, 0, 0, 0));
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        body_rgba,
+        state.view_w,
+        state.view_h,
+    );
+    if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
+        let title_mid_offset = browser_title_overlay_mid_offset(window, boot_probe_ms());
+        let _ = crate::gfx::lyon::draw_horizontal_three_stop_rect_no_present(
+            rect.x,
+            rect.y,
+            rect.w,
+            if window.state == Ui2WindowStateKind::Minimized {
+                rect.h
+            } else {
+                UI2_TITLE_H
+            },
+            frame_left_rgba,
+            frame_mid_rgba,
+            frame_right_rgba,
+            title_mid_offset,
+            state.view_w,
+            state.view_h,
+        );
+    }
+    if let Some(bottom_bar) = window_bottom_bar_rect(state, window) {
+        let _ = crate::gfx::lyon::draw_horizontal_three_stop_rect_no_present(
+            bottom_bar.x,
+            bottom_bar.y,
+            bottom_bar.w,
+            bottom_bar.h,
+            frame_left_rgba,
+            frame_mid_rgba,
+            frame_right_rgba,
+            0.5,
+            state.view_w,
+            state.view_h,
+        );
+    }
+    if !window.selected_cursor_slots.is_empty() {
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            rect.x + 1.0,
+            rect.y + 1.0,
+            rect.w - 2.0,
+            2.0,
+            selection_rgba,
+            state.view_w,
+            state.view_h,
+        );
+    }
+
+    if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
+        if window.icon_id != 0 {
+            let icon_side = 16.0f32;
+            let icon_x = rect.x + 8.0;
+            let icon_y = rect.y + ((UI2_TITLE_H - icon_side) * 0.5);
+            draw_window_decoration_icon(
+                state,
+                window,
+                Ui2DecorationIconKind::TitlebarWindow,
+                icon_x,
+                icon_y,
+                icon_side,
+            );
+        }
+        let title_face = crate::gfx::imbafont::ImbaFontFace::Loop;
+        let title_text_h = UI2_TITLE_H.max(35.0);
+        let title_tracking_px = -0.75f32;
+        let title_w = crate::gfx::imbafont::measure_text_width_px_tracked(
+            title_face,
+            window.title.as_bytes(),
+            title_text_h,
+            title_tracking_px,
+        );
+        let title_left = if window.icon_id != 0 {
+            rect.x + 28.0
+        } else {
+            rect.x + 8.0
+        };
+        let title_x = (rect.x + ((rect.w - title_w) * 0.5)).max(title_left);
+        let title_y = rect.y + ((UI2_TITLE_H - title_text_h) * 0.5);
+        if let Some(layout) = crate::gfx::imbafont::layout_text_top_left_tracked(
+            title_face,
+            window.title.as_bytes(),
+            title_x,
+            title_y,
+            title_text_h,
+            title_tracking_px,
+        ) {
+            let _ = crate::gfx::imbafont::draw_text_in_frame_negative(
+                title_face,
+                window.title.as_bytes(),
+                &layout,
+                state.view_w,
+                state.view_h,
+                title_rgba.3,
+            );
+        }
+        draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
+        draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
+        draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleMaximize);
+        draw_window_system_button(state, window, Ui2SystemButtonAction::Close);
+    }
+    if window.decoration_mode == Ui2WindowDecorationMode::System {
+        draw_window_system_scrollbars(state, window);
+        draw_window_bottom_resize_button(state, window);
+    }
+}
+
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Ui2WindowDecorationMode {
