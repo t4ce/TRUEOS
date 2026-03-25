@@ -44,6 +44,9 @@ pub(crate) struct TlbUsbController {
     pub vendor_id: u16,
     pub device_id: u16,
     pub mmio_base: NonNull<u8>,
+    pub event_ready: bool,
+    pub root_port_change_seen: bool,
+    pub empty_probe_streak: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -124,9 +127,23 @@ pub(crate) fn pci_usb_controllers() -> Vec<TlbUsbController> {
                 vendor_id: dev.vendor,
                 device_id: dev.device,
                 mmio_base,
+                event_ready: false,
+                root_port_change_seen: false,
+                empty_probe_streak: 0,
             });
         }
     });
+
+    for ctrl in ctrls.iter_mut() {
+        if let Some((event_ready, root_port_change_seen, empty_probe_streak)) =
+            self::crabusb_service::diag_counters(ctrl.index)
+        {
+            ctrl.event_ready = event_ready;
+            ctrl.root_port_change_seen = root_port_change_seen;
+            ctrl.empty_probe_streak = empty_probe_streak;
+        }
+    }
+
     ctrls
 }
 
