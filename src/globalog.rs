@@ -34,6 +34,7 @@ macro_rules! log {
 pub fn log(args: fmt::Arguments<'_>) {
     //crate::usb::truekey::push_fmt(args);
     debugcon::log(args);
+    logtotcp::log(args);
     placeholder::log(args);
 }
 
@@ -147,6 +148,116 @@ async fn persist_snapshot(
     }
 
     crate::r::fs::trueosfs::file_write_finish_async(handle).await
+}
+
+pub mod logtotcp {
+    use alloc::{collections::VecDeque, vec::Vec};
+    use core::fmt;
+    use spin::Mutex;
+
+    const MAX_BYTES: usize = 256 * 1024;
+
+    static RING: Mutex<VecDeque<u8>> = Mutex::new(VecDeque::new());
+
+    pub(super) fn log(args: fmt::Arguments<'_>) {
+        struct Writer;
+
+        impl fmt::Write for Writer {
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                let mut ring = RING.lock();
+                for &b in s.as_bytes() {
+                    if ring.len() >= MAX_BYTES {
+                        ring.pop_front();
+                    }
+                    ring.push_back(b);
+                }
+                Ok(())
+            }
+        }
+
+        let _ = fmt::write(&mut Writer, args);
+    }
+
+    fn drain_bytes(max: usize) -> Vec<u8> {
+        let mut ring = RING.lock();
+        let n = ring.len().min(max);
+        ring.drain(..n).collect()
+    }
+
+    #[embassy_executor::task]
+    pub async fn logtotcp_task() {
+        use embassy_time::{Duration as EmbassyDuration, Timer};
+
+        use crate::net::adapter::{
+            NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
+        };
+
+        const PORT: u16 = 1;
+        const OWNER: &str = "logtotcp";
+        const DRAIN_CHUNK: usize = 4096;
+
+        crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+
+        let cmds = NetQueue::new_leaked("logtotcp-cmd", 64);
+        let events = NetQueue::new_leaked("logtotcp-evt", 64);
+        register_app_queues(OWNER, cmds, events);
+
+        let _ = cmds.push(NetCommand::OpenTcpListen { port: PORT });
+        crate::log!("logtotcp: listening on tcp {}\n", PORT);
+
+        let mut tcp_handle: Option<NetHandle> = None;
+        let mut conn_handle: Option<NetHandle> = None;
+        let mut pending: bool = false;
+
+        loop {
+            for ev in events.drain(32) {
+                match ev {
+                    NetEvent::Opened { handle, kind } if kind == SocketKind::Tcp => {
+                        tcp_handle = Some(handle);
+                    }
+                    NetEvent::TcpEstablished { handle } => {
+                        conn_handle = Some(handle);
+                        pending = false;
+                        crate::log!("logtotcp: client connected handle={}\n", handle.0);
+                    }
+                    NetEvent::TcpSent { handle, .. } if conn_handle == Some(handle) => {
+                        pending = false;
+                    }
+                    NetEvent::Closed { handle } => {
+                        if conn_handle == Some(handle) {
+                            conn_handle = None;
+                            pending = false;
+                            crate::log!("logtotcp: client disconnected handle={}\n", handle.0);
+                        }
+                        if tcp_handle == Some(handle) {
+                            tcp_handle = None;
+                            let _ = cmds.push(NetCommand::OpenTcpListen { port: PORT });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if !pending {
+                if let Some(handle) = conn_handle {
+                    let chunk = drain_bytes(DRAIN_CHUNK);
+                    if !chunk.is_empty() {
+                        if cmds
+                            .push(NetCommand::SendTcp {
+                                handle,
+                                data: chunk,
+                            })
+                            .is_ok()
+                        {
+                            pending = true;
+                        }
+                    }
+                }
+            }
+
+            Timer::after(EmbassyDuration::from_millis(10)).await;
+        }
+    }
 }
 
 mod debugcon {

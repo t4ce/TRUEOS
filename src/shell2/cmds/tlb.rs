@@ -853,6 +853,11 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         return;
     }
 
+    // The shell renders System lines newest-first (each line() inserts at top of scroll
+    // area). Collect all output first, then emit in reverse so the first logical line
+    // ends up being the last thing written → lands at the top of the screen.
+    let mut out: Vec<String> = Vec::new();
+
     for ctrl_info in snapshot.controllers.iter() {
         let bdf = alloc::format!(
             "{:02X}:{:02X}.{}",
@@ -866,19 +871,15 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
             ctrl_info.root_port_change_seen as u8,
             ctrl_info.empty_probe_streak
         );
-        line(
-            io,
-            alloc::format!(
-                "xhci ctrl={} bdf={} diag={} vidpid={:04X}:{:04X} mmio=0x{:X}",
-                ctrl_info.index,
-                bdf,
-                diag,
-                ctrl_info.vendor_id,
-                ctrl_info.device_id,
-                ctrl_info.mmio_base.as_ptr() as usize
-            )
-            .as_str(),
-        );
+        out.push(alloc::format!(
+            "xhci ctrl={} bdf={} diag={} vidpid={:04X}:{:04X} mmio=0x{:X}",
+            ctrl_info.index,
+            bdf,
+            diag,
+            ctrl_info.vendor_id,
+            ctrl_info.device_id,
+            ctrl_info.mmio_base.as_ptr() as usize
+        ));
 
         let mut emitted_any = false;
         for dev in snapshot
@@ -887,49 +888,37 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
             .filter(|dev| dev.controller_index == ctrl_info.index)
         {
             emitted_any = true;
-            line(
-                io,
-                alloc::format!(
-                    "  dev slot={} vidpid={:04X}:{:04X} dev={:02X}/{:02X}/{:02X} cfgs={} ep0_mps={}",
-                    dev.slot_id,
-                    dev.vendor_id,
-                    dev.product_id,
-                    dev.class,
-                    dev.subclass,
-                    dev.protocol,
-                    dev.num_configurations,
-                    dev.max_packet_size_0
-                )
-                .as_str(),
-            );
+            out.push(alloc::format!(
+                "  dev slot={} vidpid={:04X}:{:04X} dev={:02X}/{:02X}/{:02X} cfgs={} ep0_mps={}",
+                dev.slot_id,
+                dev.vendor_id,
+                dev.product_id,
+                dev.class,
+                dev.subclass,
+                dev.protocol,
+                dev.num_configurations,
+                dev.max_packet_size_0
+            ));
 
             for cfg in dev.configurations.iter() {
-                line(
-                    io,
-                    alloc::format!(
-                        "    cfg value={} attrs=0x{:02X} max_power={} ifs={}",
-                        cfg.configuration_value,
-                        cfg.attributes,
-                        cfg.max_power,
-                        cfg.interfaces.len()
-                    )
-                    .as_str(),
-                );
+                out.push(alloc::format!(
+                    "    cfg value={} attrs=0x{:02X} max_power={} ifs={}",
+                    cfg.configuration_value,
+                    cfg.attributes,
+                    cfg.max_power,
+                    cfg.interfaces.len()
+                ));
 
                 for iface in cfg.interfaces.iter() {
-                    line(
-                        io,
-                        alloc::format!(
-                            "      if num={} alt={} class={:02X}/{:02X}/{:02X} eps={}",
-                            iface.interface_number,
-                            iface.alternate_setting,
-                            iface.class,
-                            iface.subclass,
-                            iface.protocol,
-                            iface.endpoints.len()
-                        )
-                        .as_str(),
-                    );
+                    out.push(alloc::format!(
+                        "      if num={} alt={} class={:02X}/{:02X}/{:02X} eps={}",
+                        iface.interface_number,
+                        iface.alternate_setting,
+                        iface.class,
+                        iface.subclass,
+                        iface.protocol,
+                        iface.endpoints.len()
+                    ));
 
                     for ep in iface.endpoints.iter() {
                         let direction = if (ep.address & 0x80) != 0 {
@@ -937,30 +926,30 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                         } else {
                             "out"
                         };
-                        line(
-                            io,
-                            alloc::format!(
-                                "        ep addr=0x{:02X} {} {} mps={} interval={}",
-                                ep.address,
-                                ep.transfer_type,
-                                direction,
-                                ep.max_packet_size,
-                                ep.interval
-                            )
-                            .as_str(),
-                        );
+                        out.push(alloc::format!(
+                            "        ep addr=0x{:02X} {} {} mps={} interval={}",
+                            ep.address,
+                            ep.transfer_type,
+                            direction,
+                            ep.max_packet_size,
+                            ep.interval
+                        ));
                     }
                 }
             }
         }
 
         if !emitted_any {
-            line(io, "  (no leaf devices cached)");
+            out.push(alloc::format!("  (no leaf devices cached)"));
         }
 
         if let Some(err) = snapshot.probe_error {
-            line(io, alloc::format!("  probe_error={}", err).as_str());
+            out.push(alloc::format!("  probe_error={}", err));
         }
+    }
+
+    for l in out.into_iter().rev() {
+        line(io, l.as_str());
     }
 }
 
