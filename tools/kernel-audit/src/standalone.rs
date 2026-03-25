@@ -186,7 +186,16 @@ fn collect_facts(source: &str) -> FileFacts {
     facts
 }
 
+fn strip_vis(line: &str) -> &str {
+    if let Some(rest) = line.strip_prefix("pub(crate) ") { return rest; }
+    if let Some(rest) = line.strip_prefix("pub(super) ") { return rest; }
+    if let Some(rest) = line.strip_prefix("pub(self) ") { return rest; }
+    if let Some(rest) = line.strip_prefix("pub ") { return rest; }
+    line
+}
+
 fn parse_const(line: &str, line_no: usize) -> Option<ConstInfo> {
+    let line = strip_vis(line);
     if !line.starts_with("const ") {
         return None;
     }
@@ -201,12 +210,17 @@ fn parse_const(line: &str, line_no: usize) -> Option<ConstInfo> {
 }
 
 fn parse_array_const(line: &str, line_no: usize) -> Option<ArrayInfo> {
-    if !line.starts_with("const ") || !line.contains('[') || !line.contains(']') {
+    let stripped = strip_vis(line);
+    if !stripped.starts_with("const ") || !stripped.contains('[') || !stripped.contains(']') {
         return None;
     }
-    let name = line.strip_prefix("const ")?.split(':').next()?.trim();
-    let after_semicolon = line.split(';').nth(1)?;
-    let len_text = after_semicolon.split(']').next()?.trim();
+    let name = stripped.strip_prefix("const ")?.split(':').next()?.trim();
+    // type is [T; N] — the semicolon inside the brackets holds the length
+    let bracket_content = stripped.split('[').nth(1)?.split(']').next()?;
+    if !bracket_content.contains(';') {
+        return None; // no length — not a fixed-size array const
+    }
+    let len_text = bracket_content.split(';').nth(1)?.trim();
     let len = parse_integer(len_text).and_then(|value| usize::try_from(value).ok())?;
     Some(ArrayInfo {
         name: name.to_string(),
@@ -228,9 +242,10 @@ fn parse_mask_decl(line: &str, line_no: usize) -> Option<MaskInfo> {
         .find(|segment| !segment.is_empty())?
         .trim();
     let bits = int_width_bits(ty)?;
-    let origin = if line.starts_with("static ") || line.starts_with("pub static ") {
+    let stripped = strip_vis(line);
+    let origin = if stripped.starts_with("static ") {
         "static"
-    } else if line.starts_with("fn ") || line.contains(" fn ") {
+    } else if stripped.starts_with("fn ") || stripped.contains(" fn ") {
         "fn-sig"
     } else {
         "field"
