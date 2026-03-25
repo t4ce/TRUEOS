@@ -201,6 +201,7 @@ struct Ui2Window {
     id: u32,
     kind: Ui2WindowKind,
     browser_instance_id: u32,
+    hosted_browser_snapshot: UiHostedBrowserSnapshot,
     title: String,
     icon_id: u32,
     rect: Ui2Rect,
@@ -510,14 +511,7 @@ fn window_browser_instance_id(window: &Ui2Window) -> u32 {
 }
 
 fn browser_surface_state_for_window(window: &Ui2Window) -> UiHostedSurfaceState {
-    let mut snapshot = hosted_surface_state(window_browser_instance_id(window));
-    if snapshot.content_width == 0 {
-        snapshot.content_width = snapshot.viewport_width.max(1);
-    }
-    if snapshot.content_height == 0 {
-        snapshot.content_height = snapshot.viewport_height.max(1);
-    }
-    snapshot
+    window.hosted_browser_snapshot.surface
 }
 
 fn hosted_browser_scroll_max(snapshot: &UiHostedSurfaceState) -> u32 {
@@ -551,7 +545,14 @@ fn normalized_hosted_browser_scroll_x(snapshot: &UiHostedSurfaceState) -> u32 {
 }
 
 fn browser_interactive_state_for_window(window: &Ui2Window) -> UiHostedInteractiveState {
-    hosted_interactive_state(window_browser_instance_id(window))
+    window.hosted_browser_snapshot.interactive.clone()
+}
+
+fn refresh_hosted_browser_snapshot(window: &mut Ui2Window) {
+    if window.kind != Ui2WindowKind::HostedBrowser {
+        return;
+    }
+    window.hosted_browser_snapshot = hosted_browser_snapshot(window_browser_instance_id(window));
 }
 
 fn hosted_browser_interactive_seq(state: &Ui2State) -> u32 {
@@ -569,24 +570,43 @@ fn hosted_browser_interactive_seq(state: &Ui2State) -> u32 {
         })
 }
 
-fn hosted_browser_content_seq(state: &Ui2State) -> u32 {
-    state
-        .windows
-        .iter()
-        .filter(|window| window.kind == Ui2WindowKind::HostedBrowser)
-        .map(|window| {
-            let instance_id = window_browser_instance_id(window);
-            let surface_seq = hosted_surface_seq(instance_id);
-            let layout_seq = hosted_layout_seq(instance_id);
-            instance_id
-                .wrapping_mul(1315423911)
-                .wrapping_add(surface_seq)
-                .wrapping_mul(16777619)
-                .wrapping_add(layout_seq)
-        })
-        .fold(0u32, |acc, value| {
-            acc.wrapping_mul(16777619).wrapping_add(value)
-        })
+fn apply_hosted_browser_dirty(state: &mut Ui2State, dirty: HostedBrowserDirtyMask) {
+    if dirty.content == 0 && dirty.interactive == 0 {
+        return;
+    }
+
+    let mut interactive_window_ids = Vec::new();
+
+    for window in &mut state.windows {
+        if window.kind != Ui2WindowKind::HostedBrowser {
+            continue;
+        }
+        let instance_id = window_browser_instance_id(window);
+        if !(1..=64).contains(&instance_id) {
+            continue;
+        }
+        let bit = 1u64 << instance_id.saturating_sub(1);
+        let content_dirty = (dirty.content & bit) != 0;
+        let interactive_dirty = (dirty.interactive & bit) != 0;
+        if content_dirty || interactive_dirty {
+            refresh_hosted_browser_snapshot(window);
+        }
+        if content_dirty {
+            window.dirty = true;
+            window.last_reason = "browser-content";
+            UI2_DIRTY.store(true, Ordering::Release);
+            state.compose_reason = "browser-content";
+        }
+        if interactive_dirty {
+            interactive_window_ids.push(window.id);
+        }
+    }
+
+    if !interactive_window_ids.is_empty() {
+        for window_id in interactive_window_ids {
+            refresh_window_hit_entries(state, window_id);
+        }
+    }
 }
 
 fn window_is_renderable(window: &Ui2Window) -> bool {
@@ -778,6 +798,11 @@ fn note_window_viewport_sync_needed(state: &mut Ui2State, id: u32) -> bool {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_primary_browser_window_id() -> u32 {
     browser_window_id().unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_signal_hosted_browser_dirty(content_id: u32, flags: u32) {
+    signal_hosted_browser_dirty(content_id, flags);
 }
 
 #[unsafe(no_mangle)]
@@ -1265,7 +1290,7 @@ fn draw_hosted_browser_text_preview(
     window: &Ui2Window,
     content: Ui2Rect,
 ) -> bool {
-    let text_state = hosted_text_state(window_browser_instance_id(window));
+    let text_state = &window.hosted_browser_snapshot.text;
     if text_state.rows.is_empty() {
         return false;
     }
@@ -1335,7 +1360,7 @@ fn draw_hosted_browser_layout_preview(
     window: &Ui2Window,
     content: Ui2Rect,
 ) -> bool {
-    let layout_state = hosted_layout_state(window_browser_instance_id(window));
+    let layout_state = &window.hosted_browser_snapshot.layout;
     if layout_state.nodes.is_empty() {
         return false;
     }
@@ -1688,7 +1713,6 @@ pub async fn ui2_task() {
 
     crate::log!("boot-probe: ui2 task start ms={}\n", boot_probe_ms());
     let state_lock = init_state();
-    let mut last_browser_content_seq = 0u32;
 
     loop {
         let mut created_factory_windows = 0usize;
@@ -1698,6 +1722,7 @@ pub async fn ui2_task() {
                 UI2_DIRTY.store(true, Ordering::Release);
             }
         }
+        let hosted_browser_dirty = take_hosted_browser_dirty_mask();
 
         let mut did_compose = false;
         {
@@ -1710,13 +1735,7 @@ pub async fn ui2_task() {
             pump_keyboard_input(&mut state);
             log_browser_surface_updates(&mut state);
             sync_pending_window_containers(&mut state);
-
-            let browser_content_seq = hosted_browser_content_seq(&state);
-            if browser_content_seq != last_browser_content_seq {
-                last_browser_content_seq = browser_content_seq;
-                state.compose_reason = "browser-content";
-                UI2_DIRTY.store(true, Ordering::Release);
-            }
+            apply_hosted_browser_dirty(&mut state, hosted_browser_dirty);
 
             let loadscreen_ended = crate::r::readiness::is_set(crate::r::readiness::LOADSCREEN_END);
             let should_compose = if loadscreen_ended {
