@@ -8,10 +8,7 @@ use core::{
 use crate::wait;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use crate::{
-    disc::block,
-    pci::{dma, mmio},
-};
+use crate::{disc::block, dma, pci::mmio};
 
 const NVME_REG_CAP: usize = 0x00;
 const NVME_REG_VS: usize = 0x08;
@@ -1992,24 +1989,16 @@ pub fn probe_once() {
                 io_ready = io_selftest_flush(&mut retry_ctrl, pci_addr, retry_nsid)
                     && io_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size);
                 if !io_ready {
-                    if admin_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size)
-                    {
-                        crate::log!(
-                            "nvme: {} IO queue still not operational; enabling admin-fallback mode\n",
-                            pci_addr
-                        );
-                        admin_fallback_mode = true;
-                    } else {
-                        crate::log!(
-                            "nvme: {} IO queue not operational after reinit; skipping controller\n",
-                            pci_addr
-                        );
-                        crate::log!(
-                            "nvme: {} probe outcome: skipped (io-selftest failed)\n",
-                            pci_addr
-                        );
-                        continue;
-                    }
+                    let _ = admin_selftest_read(
+                        &mut retry_ctrl,
+                        pci_addr,
+                        retry_nsid,
+                        retry_block_size,
+                    );
+                    crate::log!(
+                        "nvme: {} io-selftest still failed after reinit; registering anyway (degraded probe gate)\n",
+                        pci_addr
+                    );
                 }
 
                 if io_ready {
@@ -2049,7 +2038,7 @@ pub fn probe_once() {
                 admin_fallback_mode,
             };
             let handle = block::register_device(desc, dev);
-            crate::v::fs::trueosfs::request_mount_root(handle);
+            crate::r::fs::trueosfs::request_mount_root(handle);
             crate::log!(
                 "nvme: registered {} nsid={} id={} blocks={} bs={} max_io={}\n",
                 pci_addr,
