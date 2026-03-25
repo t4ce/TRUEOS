@@ -1,11 +1,41 @@
 use super::super::control;
 use super::super::syscall::{control_in_sync, control_out_sync};
 use super::super::xhci::{Trb, TrbRing, XhciContext, trb_type, xhc_list};
-use crate::dma;
 use core::ptr::write_bytes;
+use dma_api::{DArray, DeviceDma, DmaDirection};
 use heapless::Vec;
 
 const SYNC_REPORT_MAX: usize = 256;
+const USB_DMA_MASK: u64 = 0xFFFF_FFFF;
+
+struct UsbDmaBuf {
+    data: DArray<u8>,
+}
+
+impl UsbDmaBuf {
+    fn alloc(size: usize, align: usize) -> Option<Self> {
+        usb_dma()
+            .array_zero_with_align::<u8>(size, align, DmaDirection::Bidirectional)
+            .ok()
+            .map(|data| Self { data })
+    }
+
+    fn phys(&self) -> u64 {
+        self.data.dma_addr().as_u64()
+    }
+
+    fn as_ptr(&self) -> *mut u8 {
+        self.data.as_ptr().as_ptr()
+    }
+
+    unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.data.as_mut_slice()
+    }
+}
+
+fn usb_dma() -> DeviceDma {
+    DeviceDma::new(USB_DMA_MASK, &super::super::crabusb_service::CRABUSB_KERNEL)
+}
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -51,8 +81,8 @@ pub async fn get_protocol(
     slot_id: u32,
     iface: u8,
 ) -> Result<u8, ()> {
-    let (phys, virt) = dma::alloc(1, 64).ok_or(())?;
-    unsafe { write_bytes(virt, 0, 1) };
+    let mut buf = UsbDmaBuf::alloc(1, 64).ok_or(())?;
+    let phys = buf.phys();
 
     let setup = setup_class_in(0x03, 0, iface as u16, 1);
     let res = control::control_in(ctx, ep0_ring, slot_id, setup, phys, 1, "hid-get-proto", 800)
@@ -60,14 +90,10 @@ pub async fn get_protocol(
         .map(|(_, xfer)| xfer);
 
     let out = match res {
-        Ok(xfer) if xfer >= 1 => unsafe { core::slice::from_raw_parts(virt, 1)[0] },
-        _ => {
-            dma::dealloc(virt, 1);
-            return Err(());
-        }
+        Ok(xfer) if xfer >= 1 => unsafe { buf.as_mut_slice()[0] },
+        _ => return Err(()),
     };
 
-    dma::dealloc(virt, 1);
     Ok(out)
 }
 
@@ -90,8 +116,8 @@ pub async fn get_idle(
     iface: u8,
     report_id: u8,
 ) -> Result<u8, ()> {
-    let (phys, virt) = dma::alloc(1, 64).ok_or(())?;
-    unsafe { write_bytes(virt, 0, 1) };
+    let mut buf = UsbDmaBuf::alloc(1, 64).ok_or(())?;
+    let phys = buf.phys();
 
     let value = (report_id as u16) << 8;
     let setup = setup_class_in(0x02, value, iface as u16, 1);
@@ -100,14 +126,10 @@ pub async fn get_idle(
         .map(|(_, xfer)| xfer);
 
     let out = match res {
-        Ok(xfer) if xfer >= 1 => unsafe { core::slice::from_raw_parts(virt, 1)[0] },
-        _ => {
-            dma::dealloc(virt, 1);
-            return Err(());
-        }
+        Ok(xfer) if xfer >= 1 => unsafe { buf.as_mut_slice()[0] },
+        _ => return Err(()),
     };
 
-    dma::dealloc(virt, 1);
     Ok(out)
 }
 
@@ -138,8 +160,8 @@ pub async fn get_report_into(
     }
 
     let want_len: usize = out.len();
-    let (phys, virt) = dma::alloc(want_len, 64).ok_or(())?;
-    unsafe { write_bytes(virt, 0, want_len) };
+    let mut buf = UsbDmaBuf::alloc(want_len, 64).ok_or(())?;
+    let phys = buf.phys();
 
     let value = ((report_type as u16) << 8) | (report_id as u16);
     let setup = setup_class_in(0x01, value, iface as u16, want_len as u16);
@@ -157,19 +179,15 @@ pub async fn get_report_into(
     .await
     {
         Ok((_, xfer)) => xfer as usize,
-        Err(()) => {
-            dma::dealloc(virt, want_len);
-            return Err(());
-        }
+        Err(()) => return Err(()),
     };
 
     let n = core::cmp::min(transferred, want_len);
     unsafe {
-        let src = core::slice::from_raw_parts(virt, want_len);
+        let src = buf.as_mut_slice();
         out[..n].copy_from_slice(&src[..n]);
     }
 
-    dma::dealloc(virt, want_len);
     Ok(n)
 }
 
@@ -200,10 +218,10 @@ pub async fn set_report(
     }
 
     let want_len = data.len();
-    let (phys, virt) = dma::alloc(want_len, 64).ok_or(())?;
+    let mut buf = UsbDmaBuf::alloc(want_len, 64).ok_or(())?;
+    let phys = buf.phys();
     unsafe {
-        write_bytes(virt, 0, want_len);
-        core::ptr::copy_nonoverlapping(data.as_ptr(), virt, want_len);
+        core::ptr::copy_nonoverlapping(data.as_ptr(), buf.as_ptr(), want_len);
     }
 
     let setup = setup_class_out_data(0x09, value, iface as u16, want_len as u16);
@@ -219,7 +237,6 @@ pub async fn set_report(
     )
     .await;
 
-    dma::dealloc(virt, want_len);
     res
 }
 
@@ -241,22 +258,18 @@ pub fn get_protocol_slot_sync(
     let ctx = ctx_for_controller(controller_id).ok()?;
     let st = super::ep0_state_for_slot(controller_id, slot_id)?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
-    let (phys, virt) = dma::alloc(1, 64)?;
-    unsafe { write_bytes(virt, 0, 1) };
+    let mut buf = UsbDmaBuf::alloc(1, 64)?;
+    let phys = buf.phys();
 
     let setup = setup_class_in(0x03, 0, iface as u16, 1);
     let out = match control_in_sync(&ctx, &mut ep0_ring, slot_id, setup, phys, 1, timeout_ms) {
-        Ok((_, transferred)) if transferred >= 1 => unsafe {
-            core::slice::from_raw_parts(virt, 1)[0]
-        },
+        Ok((_, transferred)) if transferred >= 1 => unsafe { buf.as_mut_slice()[0] },
         _ => {
-            dma::dealloc(virt, 1);
             super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
             return None;
         }
     };
 
-    dma::dealloc(virt, 1);
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
     Some(out)
 }
@@ -288,23 +301,19 @@ pub fn get_idle_slot_sync(
     let ctx = ctx_for_controller(controller_id).ok()?;
     let st = super::ep0_state_for_slot(controller_id, slot_id)?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
-    let (phys, virt) = dma::alloc(1, 64)?;
-    unsafe { write_bytes(virt, 0, 1) };
+    let mut buf = UsbDmaBuf::alloc(1, 64)?;
+    let phys = buf.phys();
 
     let value = (report_id as u16) << 8;
     let setup = setup_class_in(0x02, value, iface as u16, 1);
     let out = match control_in_sync(&ctx, &mut ep0_ring, slot_id, setup, phys, 1, timeout_ms) {
-        Ok((_, transferred)) if transferred >= 1 => unsafe {
-            core::slice::from_raw_parts(virt, 1)[0]
-        },
+        Ok((_, transferred)) if transferred >= 1 => unsafe { buf.as_mut_slice()[0] },
         _ => {
-            dma::dealloc(virt, 1);
             super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
             return None;
         }
     };
 
-    dma::dealloc(virt, 1);
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
     Some(out)
 }
@@ -340,8 +349,8 @@ pub fn get_report_slot_sync(
     let st = super::ep0_state_for_slot(controller_id, slot_id)?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
     let want_len = length.clamp(1, SYNC_REPORT_MAX);
-    let (phys, virt) = dma::alloc(want_len, 64)?;
-    unsafe { write_bytes(virt, 0, want_len) };
+    let mut buf = UsbDmaBuf::alloc(want_len, 64)?;
+    let phys = buf.phys();
 
     let value = ((report_type as u16) << 8) | (report_id as u16);
     let setup = setup_class_in(0x01, value, iface as u16, want_len as u16);
@@ -356,7 +365,6 @@ pub fn get_report_slot_sync(
     ) {
         Ok((_, transferred)) => transferred as usize,
         Err(()) => {
-            dma::dealloc(virt, want_len);
             super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
             return None;
         }
@@ -364,11 +372,10 @@ pub fn get_report_slot_sync(
 
     let mut out = Vec::new();
     unsafe {
-        let src = core::slice::from_raw_parts(virt, want_len);
+        let src = buf.as_mut_slice();
         let _ = out.extend_from_slice(&src[..core::cmp::min(transferred, want_len)]);
     }
 
-    dma::dealloc(virt, want_len);
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
     Some(out)
 }
@@ -392,10 +399,10 @@ pub fn set_report_slot_sync(
         control_out_sync(&ctx, &mut ep0_ring, slot_id, setup, None, 0, timeout_ms).ok()
     } else {
         let want_len = data.len().min(SYNC_REPORT_MAX);
-        let (phys, virt) = dma::alloc(want_len, 64)?;
+        let mut buf = UsbDmaBuf::alloc(want_len, 64)?;
+        let phys = buf.phys();
         unsafe {
-            write_bytes(virt, 0, want_len);
-            core::ptr::copy_nonoverlapping(data.as_ptr(), virt, want_len);
+            core::ptr::copy_nonoverlapping(data.as_ptr(), buf.as_ptr(), want_len);
         }
         let setup = setup_class_out_data(0x09, value, iface as u16, want_len as u16);
         let out = control_out_sync(
@@ -408,7 +415,6 @@ pub fn set_report_slot_sync(
             timeout_ms,
         )
         .ok();
-        dma::dealloc(virt, want_len);
         out
     };
 

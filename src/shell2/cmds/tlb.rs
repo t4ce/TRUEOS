@@ -363,28 +363,12 @@ fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
 }
 
 fn cmd_tlb_pciids(io: &'static dyn ShellBackend2) {
-    line(io, "tlb pciids: downloading pci.ids once...");
-
-    match crate::pci::pciids::download_once_blocking() {
-        Ok(bytes) => {
-            line(
-                io,
-                alloc::format!(
-                    "tlb pciids: downloaded {} bytes to {}",
-                    bytes,
-                    crate::pci::pciids::PCI_IDS_KEY
-                )
-                .as_str(),
-            );
-            line(io, "tlb pciids: tlb pci will auto-use it on the next run");
-        }
-        Err(reason) => {
-            line(
-                io,
-                alloc::format!("tlb pciids: failed ({})", reason).as_str(),
-            );
-        }
-    }
+    crate::pci::pciids::download_once_detached();
+    line(io, "tlb pciids: scheduled background download");
+    line(
+        io,
+        "tlb pciids: check global log for success/timeout/failure",
+    );
 }
 
 fn cmd_tlb_pci_bar(io: &'static dyn ShellBackend2) {

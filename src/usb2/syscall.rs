@@ -1,10 +1,36 @@
 use super::control::{setup_get_descriptor, setup_get_descriptor_interface};
 use super::xhci::{self, Trb, TrbRing, XhciContext, hi, lo, trb_type};
-use crate::dma;
 use core::ptr::{write_bytes, write_volatile};
+use dma_api::{DArray, DeviceDma, DmaDirection};
 use heapless::Vec;
 
 const DESC_MAX: usize = 256;
+const USB_DMA_MASK: u64 = 0xFFFF_FFFF;
+
+struct UsbDmaBuf {
+    data: DArray<u8>,
+}
+
+impl UsbDmaBuf {
+    fn alloc(size: usize, align: usize) -> Option<Self> {
+        usb_dma()
+            .array_zero_with_align::<u8>(size, align, DmaDirection::Bidirectional)
+            .ok()
+            .map(|data| Self { data })
+    }
+
+    fn phys(&self) -> u64 {
+        self.data.dma_addr().as_u64()
+    }
+
+    unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.data.as_mut_slice()
+    }
+}
+
+fn usb_dma() -> DeviceDma {
+    DeviceDma::new(USB_DMA_MASK, &super::crabusb_service::CRABUSB_KERNEL)
+}
 
 /// Trigger a port reset on `port_idx` of the given controller.
 /// Returns 0 on success, -1 if the controller was not found.
@@ -41,8 +67,8 @@ pub fn control_get_descriptor(
     let ctx = unsafe { XhciContext::new(info) };
 
     let clamped = (length as usize).min(DESC_MAX);
-    let (buf_phys, buf_virt) = dma::alloc(clamped, 64)?;
-    unsafe { write_bytes(buf_virt, 0, clamped) };
+    let mut buf = UsbDmaBuf::alloc(clamped, 64)?;
+    let buf_phys = buf.phys();
 
     let mut state = ring_state;
     state.pending = 0; // treat any pre-syscall enqueued TRBs as already retired
@@ -64,17 +90,16 @@ pub fn control_get_descriptor(
     let (_, transferred) = match result {
         Ok(r) => r,
         Err(()) => {
-            dma::dealloc(buf_virt, clamped);
             return None;
         }
     };
 
-    let data = unsafe { core::slice::from_raw_parts(buf_virt, transferred as usize) };
+    let n = core::cmp::min(transferred as usize, clamped);
+    let data = unsafe { &buf.as_mut_slice()[..n] };
     let mut out: Vec<u8, DESC_MAX> = Vec::new();
     for &b in data {
         let _ = out.push(b);
     }
-    dma::dealloc(buf_virt, clamped);
     Some(out)
 }
 
@@ -100,8 +125,8 @@ pub fn control_get_descriptor_interface(
     let ctx = unsafe { XhciContext::new(info) };
 
     let clamped = (length as usize).min(DESC_MAX);
-    let (buf_phys, buf_virt) = dma::alloc(clamped, 64)?;
-    unsafe { write_bytes(buf_virt, 0, clamped) };
+    let mut buf = UsbDmaBuf::alloc(clamped, 64)?;
+    let buf_phys = buf.phys();
 
     let mut state = ring_state;
     state.pending = 0;
@@ -124,17 +149,16 @@ pub fn control_get_descriptor_interface(
     let (_, transferred) = match result {
         Ok(r) => r,
         Err(()) => {
-            dma::dealloc(buf_virt, clamped);
             return None;
         }
     };
 
-    let data = unsafe { core::slice::from_raw_parts(buf_virt, transferred as usize) };
+    let n = core::cmp::min(transferred as usize, clamped);
+    let data = unsafe { &buf.as_mut_slice()[..n] };
     let mut out: Vec<u8, DESC_MAX> = Vec::new();
     for &b in data {
         let _ = out.push(b);
     }
-    dma::dealloc(buf_virt, clamped);
     Some(out)
 }
 

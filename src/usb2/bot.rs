@@ -1,6 +1,6 @@
 use super::xhci::{self, Trb, TrbRing, XhciContext, hi, lo, trb_type};
-use crate::dma;
 use core::ptr::{write_bytes, write_volatile};
+use dma_api::{DArray, DeviceDma, DmaDirection};
 use embassy_time::Duration as EmbassyDuration;
 
 const CBW_SIGNATURE: u32 = 0x4342_5355; // 'USBC'
@@ -8,6 +8,32 @@ const CSW_SIGNATURE: u32 = 0x5342_5355; // 'USBS'
 
 const CBW_LEN: usize = 31;
 const CSW_LEN: usize = 13;
+const USB_DMA_MASK: u64 = 0xFFFF_FFFF;
+
+struct UsbDmaBuf {
+    data: DArray<u8>,
+}
+
+impl UsbDmaBuf {
+    fn alloc(size: usize, align: usize) -> Option<Self> {
+        usb_dma()
+            .array_zero_with_align::<u8>(size, align, DmaDirection::Bidirectional)
+            .ok()
+            .map(|data| Self { data })
+    }
+
+    fn phys(&self) -> u64 {
+        self.data.dma_addr().as_u64()
+    }
+
+    fn as_ptr(&self) -> *mut u8 {
+        self.data.as_ptr().as_ptr()
+    }
+}
+
+fn usb_dma() -> DeviceDma {
+    DeviceDma::new(USB_DMA_MASK, &super::crabusb_service::CRABUSB_KERNEL)
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BotStatus {
@@ -219,14 +245,12 @@ pub(crate) async fn command_in(
     data_in: Option<&mut [u8]>,
 ) -> Result<Csw, ()> {
     // Allocate DMA for CBW + CSW.
-    let (cbw_phys, cbw_virt) = dma::alloc(CBW_LEN, 64).ok_or(())?;
-    let (csw_phys, csw_virt) = match dma::alloc(CSW_LEN, 64) {
-        Some(p) => p,
-        None => {
-            dma::dealloc(cbw_virt, CBW_LEN);
-            return Err(());
-        }
-    };
+    let cbw = UsbDmaBuf::alloc(CBW_LEN, 64).ok_or(())?;
+    let csw = UsbDmaBuf::alloc(CSW_LEN, 64).ok_or(())?;
+    let cbw_phys = cbw.phys();
+    let csw_phys = csw.phys();
+    let cbw_virt = cbw.as_ptr();
+    let csw_virt = csw.as_ptr();
 
     unsafe {
         write_bytes(cbw_virt, 0, CBW_LEN);
@@ -235,21 +259,14 @@ pub(crate) async fn command_in(
 
     // If we have a data stage, allocate DMA buffer for it.
     let mut data_phys: u64 = 0;
-    let mut data_virt: *mut u8 = core::ptr::null_mut();
+    let mut data_dma: Option<UsbDmaBuf> = None;
     let mut data_len: usize = 0;
     if let Some(data) = data_in.as_deref() {
         data_len = data.len();
-        let (p, v) = match dma::alloc(data_len, 64) {
-            Some(p) => p,
-            None => {
-                dma::dealloc(csw_virt, CSW_LEN);
-                dma::dealloc(cbw_virt, CBW_LEN);
-                return Err(());
-            }
-        };
-        data_phys = p;
-        data_virt = v;
-        unsafe { write_bytes(data_virt, 0, data_len) };
+        let dma = UsbDmaBuf::alloc(data_len, 64).ok_or(())?;
+        data_phys = dma.phys();
+        unsafe { write_bytes(dma.as_ptr(), 0, data_len) };
+        data_dma = Some(dma);
     }
 
     // Build and write CBW.
@@ -293,13 +310,12 @@ pub(crate) async fn command_in(
         // CC=13 (short packet) is common/acceptable for some reads.
         if cc_data != 1 && cc_data != 13 {
             crate::log!("usb: bot: data-in cc={}\n", cc_data);
-            goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
             return Err(());
         }
 
         let n = (xfer as usize).min(data.len());
         unsafe {
-            let src = core::slice::from_raw_parts(data_virt, n);
+            let src = core::slice::from_raw_parts(data_dma.as_ref().ok_or(())?.as_ptr(), n);
             data[..n].copy_from_slice(src);
         }
     }
@@ -318,7 +334,6 @@ pub(crate) async fn command_in(
     .await?;
     if cc_csw != 1 && cc_csw != 13 {
         crate::log!("usb: bot: csw cc={}\n", cc_csw);
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     }
 
@@ -329,17 +344,15 @@ pub(crate) async fn command_in(
 
     let Some((csw_tag, csw)) = parse_csw(csw_buf) else {
         crate::log!("usb: bot: invalid csw (len={})\n", xfer_csw);
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     };
 
     if csw_tag != tag {
         crate::log!("usb: bot: csw tag mismatch {} != {}\n", csw_tag, tag);
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     }
 
-    goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
+    let _ = data_len;
     Ok(csw)
 }
 
@@ -355,14 +368,12 @@ pub(crate) async fn command_out(
     data_out: &[u8],
 ) -> Result<Csw, ()> {
     // Allocate DMA for CBW + CSW + OUT data.
-    let (cbw_phys, cbw_virt) = dma::alloc(CBW_LEN, 64).ok_or(())?;
-    let (csw_phys, csw_virt) = match dma::alloc(CSW_LEN, 64) {
-        Some(p) => p,
-        None => {
-            dma::dealloc(cbw_virt, CBW_LEN);
-            return Err(());
-        }
-    };
+    let cbw = UsbDmaBuf::alloc(CBW_LEN, 64).ok_or(())?;
+    let csw = UsbDmaBuf::alloc(CSW_LEN, 64).ok_or(())?;
+    let cbw_phys = cbw.phys();
+    let csw_phys = csw.phys();
+    let cbw_virt = cbw.as_ptr();
+    let csw_virt = csw.as_ptr();
 
     unsafe {
         write_bytes(cbw_virt, 0, CBW_LEN);
@@ -370,14 +381,9 @@ pub(crate) async fn command_out(
     }
 
     let data_len = data_out.len();
-    let (data_phys, data_virt) = match dma::alloc(data_len, 64) {
-        Some(p) => p,
-        None => {
-            dma::dealloc(csw_virt, CSW_LEN);
-            dma::dealloc(cbw_virt, CBW_LEN);
-            return Err(());
-        }
-    };
+    let data_dma = UsbDmaBuf::alloc(data_len, 64).ok_or(())?;
+    let data_phys = data_dma.phys();
+    let data_virt = data_dma.as_ptr();
     unsafe {
         core::ptr::copy_nonoverlapping(data_out.as_ptr(), data_virt, data_len);
     }
@@ -400,7 +406,6 @@ pub(crate) async fn command_out(
     )
     .await?;
     if cc_cbw != 1 {
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     }
 
@@ -417,7 +422,6 @@ pub(crate) async fn command_out(
     )
     .await?;
     if cc_data != 1 {
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     }
 
@@ -434,7 +438,6 @@ pub(crate) async fn command_out(
     )
     .await?;
     if cc_csw != 1 && cc_csw != 13 {
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     }
 
@@ -444,15 +447,13 @@ pub(crate) async fn command_out(
     };
 
     let Some((csw_tag, csw)) = parse_csw(csw_buf) else {
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     };
     if csw_tag != tag {
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     }
 
-    goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
+    let _ = (data_len, data_dma);
     Ok(csw)
 }
 
@@ -467,14 +468,12 @@ pub(crate) fn command_in_sync(
     cdb: &[u8],
     data_in: Option<&mut [u8]>,
 ) -> Result<Csw, ()> {
-    let (cbw_phys, cbw_virt) = dma::alloc(CBW_LEN, 64).ok_or(())?;
-    let (csw_phys, csw_virt) = match dma::alloc(CSW_LEN, 64) {
-        Some(p) => p,
-        None => {
-            dma::dealloc(cbw_virt, CBW_LEN);
-            return Err(());
-        }
-    };
+    let cbw = UsbDmaBuf::alloc(CBW_LEN, 64).ok_or(())?;
+    let csw = UsbDmaBuf::alloc(CSW_LEN, 64).ok_or(())?;
+    let cbw_phys = cbw.phys();
+    let csw_phys = csw.phys();
+    let cbw_virt = cbw.as_ptr();
+    let csw_virt = csw.as_ptr();
 
     unsafe {
         write_bytes(cbw_virt, 0, CBW_LEN);
@@ -482,21 +481,14 @@ pub(crate) fn command_in_sync(
     }
 
     let mut data_phys: u64 = 0;
-    let mut data_virt: *mut u8 = core::ptr::null_mut();
+    let mut data_dma: Option<UsbDmaBuf> = None;
     let mut data_len: usize = 0;
     if let Some(data) = data_in.as_deref() {
         data_len = data.len();
-        let (p, v) = match dma::alloc(data_len, 64) {
-            Some(p) => p,
-            None => {
-                dma::dealloc(csw_virt, CSW_LEN);
-                dma::dealloc(cbw_virt, CBW_LEN);
-                return Err(());
-            }
-        };
-        data_phys = p;
-        data_virt = v;
-        unsafe { write_bytes(data_virt, 0, data_len) };
+        let dma = UsbDmaBuf::alloc(data_len, 64).ok_or(())?;
+        data_phys = dma.phys();
+        unsafe { write_bytes(dma.as_ptr(), 0, data_len) };
+        data_dma = Some(dma);
     }
 
     let cbw = build_cbw(tag, data_len as u32, data_in.is_some(), 0, cdb);
@@ -516,7 +508,6 @@ pub(crate) fn command_in_sync(
     )?;
     if cc_cbw != 1 {
         crate::log!("usb: bot: cbw cc={}\n", cc_cbw);
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     }
 
@@ -534,13 +525,12 @@ pub(crate) fn command_in_sync(
 
         if cc_data != 1 && cc_data != 13 {
             crate::log!("usb: bot: data-in cc={}\n", cc_data);
-            goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
             return Err(());
         }
 
         let n = (xfer as usize).min(data.len());
         unsafe {
-            let src = core::slice::from_raw_parts(data_virt, n);
+            let src = core::slice::from_raw_parts(data_dma.as_ref().ok_or(())?.as_ptr(), n);
             data[..n].copy_from_slice(src);
         }
     }
@@ -557,7 +547,6 @@ pub(crate) fn command_in_sync(
     )?;
     if cc_csw != 1 && cc_csw != 13 {
         crate::log!("usb: bot: csw cc={}\n", cc_csw);
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     }
 
@@ -568,24 +557,14 @@ pub(crate) fn command_in_sync(
 
     let Some((csw_tag, csw)) = parse_csw(csw_buf) else {
         crate::log!("usb: bot: invalid csw (len={})\n", xfer_csw);
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     };
 
     if csw_tag != tag {
         crate::log!("usb: bot: csw tag mismatch {} != {}\n", csw_tag, tag);
-        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     }
 
-    goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
+    let _ = data_len;
     Ok(csw)
-}
-
-fn goto_cleanup(cbw_virt: *mut u8, csw_virt: *mut u8, data_virt: *mut u8, data_len: usize) {
-    if !data_virt.is_null() && data_len != 0 {
-        dma::dealloc(data_virt, data_len);
-    }
-    dma::dealloc(csw_virt, CSW_LEN);
-    dma::dealloc(cbw_virt, CBW_LEN);
 }
