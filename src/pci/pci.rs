@@ -468,6 +468,59 @@ pub fn config_write_u32(bus: u8, slot: u8, function: u8, offset: u16, value: u32
     let off = normalize_offset(offset);
     write_u32(bus, slot, function, off, value);
 }
+
+/// Read config space via legacy CF8/CFC mechanism only (never ECAM).
+pub fn config_read_u16_legacy(bus: u8, slot: u8, function: u8, offset: u16) -> u16 {
+    read_u16(bus, slot, function, normalize_offset(offset))
+}
+
+/// Read config space via legacy CF8/CFC mechanism only (never ECAM).
+pub fn config_read_u32_legacy(bus: u8, slot: u8, function: u8, offset: u16) -> u32 {
+    if (offset & 0x3) != 0 {
+        panic!(
+            "Unaligned PCI legacy config dword read at offset 0x{:X}",
+            offset
+        );
+    }
+    read_u32(bus, slot, function, normalize_offset(offset))
+}
+
+/// Write config space via legacy CF8/CFC mechanism only (never ECAM).
+pub fn config_write_u16_legacy(bus: u8, slot: u8, function: u8, offset: u16, value: u16) {
+    write_u16(bus, slot, function, normalize_offset(offset), value);
+}
+
+/// Write config space via legacy CF8/CFC mechanism only (never ECAM).
+pub fn config_write_u32_legacy(bus: u8, slot: u8, function: u8, offset: u16, value: u32) {
+    if (offset & 0x3) != 0 {
+        panic!(
+            "Unaligned PCI legacy config dword write at offset 0x{:X}",
+            offset
+        );
+    }
+    write_u32(bus, slot, function, normalize_offset(offset), value);
+}
+
+pub fn read_bar0_raw_legacy(bus: u8, slot: u8, function: u8) -> (u32, Option<u32>) {
+    let bar_lo = config_read_u32_legacy(bus, slot, function, 0x10);
+    if (bar_lo & 0x1) != 0 {
+        return (bar_lo, None);
+    }
+    let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+    if is_64 {
+        let bar_hi = config_read_u32_legacy(bus, slot, function, 0x14);
+        (bar_lo, Some(bar_hi))
+    } else {
+        (bar_lo, None)
+    }
+}
+
+pub fn enable_mem_and_bus_master_legacy(bus: u8, slot: u8, function: u8) {
+    let mut cmd = config_read_u16_legacy(bus, slot, function, 0x04);
+    cmd |= PCI_COMMAND_MEM_SPACE | PCI_COMMAND_BUS_MASTER;
+    config_write_u16_legacy(bus, slot, function, 0x04, cmd);
+}
+
 pub fn bar_size_bytes(bus: u8, slot: u8, function: u8, index: u8) -> Option<u64> {
     if index >= 6 {
         return None;

@@ -44,6 +44,8 @@ static HID_STREAMS_ACTIVE: Mutex<Vec<ActiveHidStream>> = Mutex::new(Vec::new());
 static BOUNCE_MAPPINGS: Mutex<Vec<BounceMapping>> = Mutex::new(Vec::new());
 static EMPTY_PROBE_STREAK: [AtomicU32; MAX_XHCI_CONTROLLERS] =
     [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
+static TLB_DEVICES: [Mutex<Vec<super::TlbUsbDevice>>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
 
 const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
 const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
@@ -314,6 +316,78 @@ fn endpoint_target_from_address(address: u8) -> u32 {
         (ep_num * 2) + 1
     } else {
         ep_num * 2
+    }
+}
+
+fn tlb_transfer_type_name(transfer_type: usb_if::descriptor::EndpointType) -> &'static str {
+    match transfer_type {
+        usb_if::descriptor::EndpointType::Control => "ctrl",
+        usb_if::descriptor::EndpointType::Isochronous => "iso",
+        usb_if::descriptor::EndpointType::Bulk => "bulk",
+        usb_if::descriptor::EndpointType::Interrupt => "intr",
+    }
+}
+
+fn snapshot_tlb_device(controller_id: usize, dev: &crab_usb::DeviceInfo) -> super::TlbUsbDevice {
+    let desc = dev.descriptor();
+    let mut configurations = Vec::new();
+    for cfg in dev.configurations().iter() {
+        let mut interfaces = Vec::new();
+        for iface_group in cfg.interfaces.iter() {
+            for alt in iface_group.alt_settings.iter() {
+                let mut endpoints = Vec::new();
+                for ep in alt.endpoints.iter() {
+                    endpoints.push(super::TlbUsbEndpoint {
+                        address: ep.address,
+                        transfer_type: tlb_transfer_type_name(ep.transfer_type),
+                        max_packet_size: ep.max_packet_size,
+                        interval: ep.interval,
+                    });
+                }
+                interfaces.push(super::TlbUsbInterface {
+                    interface_number: alt.interface_number,
+                    alternate_setting: alt.alternate_setting,
+                    class: alt.class,
+                    subclass: alt.subclass,
+                    protocol: alt.protocol,
+                    endpoints,
+                });
+            }
+        }
+        configurations.push(super::TlbUsbConfiguration {
+            configuration_value: cfg.configuration_value,
+            attributes: cfg.attributes,
+            max_power: cfg.max_power,
+            interfaces,
+        });
+    }
+
+    super::TlbUsbDevice {
+        controller_index: controller_id,
+        slot_id: dev.id() as u32,
+        vendor_id: desc.vendor_id,
+        product_id: desc.product_id,
+        class: desc.class,
+        subclass: desc.subclass,
+        protocol: desc.protocol,
+        num_configurations: desc.num_configurations,
+        max_packet_size_0: desc.max_packet_size_0,
+        configurations,
+    }
+}
+
+fn update_tlb_devices(controller_id: usize, devices: &[crab_usb::DeviceInfo]) {
+    let mut cache = TLB_DEVICES[controller_id].lock();
+    for dev in devices.iter() {
+        let snapshot = snapshot_tlb_device(controller_id, dev);
+        if let Some(existing) = cache
+            .iter_mut()
+            .find(|known| known.slot_id == snapshot.slot_id)
+        {
+            *existing = snapshot;
+        } else {
+            cache.push(snapshot);
+        }
     }
 }
 
@@ -2268,6 +2342,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
             } else {
                 EMPTY_PROBE_STREAK[controller_id].store(0, Ordering::Release);
                 NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
+                update_tlb_devices(controller_id, &devices);
                 crate::log!("crabusb: discovered {} new device(s)\n", devices.len());
                 for dev in devices.iter() {
                     let desc = dev.descriptor();
@@ -2323,6 +2398,7 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
     crate::log!("crabusb: scout begin\n");
     match host.probe_devices().await {
         Ok(devices) => {
+            update_tlb_devices(info.index, &devices);
             crate::log!("crabusb: scout devices={}\n", devices.len());
             for (dev_idx, dev) in devices.iter().enumerate() {
                 let desc = dev.descriptor();
@@ -2499,6 +2575,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         ROOT_PORT_CHANGE_SEEN[info.index].store(false, Ordering::Release);
         NO_PORT_CHANGE_HINT_LOGGED[info.index].store(false, Ordering::Release);
         EMPTY_PROBE_STREAK[info.index].store(0, Ordering::Release);
+        TLB_DEVICES[info.index].lock().clear();
         crab_scout_once(&mut host, info, &spawner).await;
 
         let mut idle_ticks = 0u32;
@@ -2564,4 +2641,12 @@ pub(super) fn diag_counters(controller_id: usize) -> Option<(bool, bool, u32)> {
         ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire),
         EMPTY_PROBE_STREAK[controller_id].load(Ordering::Acquire),
     ))
+}
+
+pub(super) fn diag_devices(controller_id: usize) -> Vec<super::TlbUsbDevice> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return Vec::new();
+    }
+
+    TLB_DEVICES[controller_id].lock().clone()
 }

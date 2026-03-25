@@ -853,64 +853,115 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         return;
     }
 
-    let headers = [
-        "Ctrl", "BDF", "Probe", "Device", "VID:PID", "Class", "Cfg/If",
-    ];
-    let table = TlbTable::with_width(&headers, line_width_for_backend(io).saturating_sub(2));
-    table.emit_header(|text| line(io, text));
-
     for ctrl_info in snapshot.controllers.iter() {
-        let ctrl = alloc::format!("{}", ctrl_info.index);
         let bdf = alloc::format!(
             "{:02X}:{:02X}.{}",
             ctrl_info.bus,
             ctrl_info.slot,
             ctrl_info.function
         );
-        let probe = if let Some(err) = snapshot.probe_error {
-            err
-        } else if snapshot.devices.is_empty() {
-            "empty"
-        } else {
-            "ok"
-        };
         let diag = alloc::format!(
             "ev={} rp={} empty={}",
             ctrl_info.event_ready as u8,
             ctrl_info.root_port_change_seen as u8,
             ctrl_info.empty_probe_streak
         );
+        line(
+            io,
+            alloc::format!(
+                "xhci ctrl={} bdf={} diag={} vidpid={:04X}:{:04X} mmio=0x{:X}",
+                ctrl_info.index,
+                bdf,
+                diag,
+                ctrl_info.vendor_id,
+                ctrl_info.device_id,
+                ctrl_info.mmio_base.as_ptr() as usize
+            )
+            .as_str(),
+        );
 
-        let mut emitted = false;
+        let mut emitted_any = false;
         for dev in snapshot
             .devices
             .iter()
             .filter(|dev| dev.controller_index == ctrl_info.index)
         {
-            let vidpid = alloc::format!("{:04X}:{:04X}", dev.vendor_id, dev.product_id);
-            let class = alloc::format!(
-                "{:02X}/{:02X}/{:02X}",
-                dev.class,
-                dev.subclass,
-                dev.protocol
+            emitted_any = true;
+            line(
+                io,
+                alloc::format!(
+                    "  dev slot={} vidpid={:04X}:{:04X} dev={:02X}/{:02X}/{:02X} cfgs={} ep0_mps={}",
+                    dev.slot_id,
+                    dev.vendor_id,
+                    dev.product_id,
+                    dev.class,
+                    dev.subclass,
+                    dev.protocol,
+                    dev.num_configurations,
+                    dev.max_packet_size_0
+                )
+                .as_str(),
             );
-            let cfg_if = alloc::format!("{}/{}", dev.config_count, dev.interface_count);
-            table.emit_row(
-                &[&ctrl, &bdf, &diag, "descriptor", &vidpid, &class, &cfg_if],
-                |text| line(io, text),
-            );
-            emitted = true;
+
+            for cfg in dev.configurations.iter() {
+                line(
+                    io,
+                    alloc::format!(
+                        "    cfg value={} attrs=0x{:02X} max_power={} ifs={}",
+                        cfg.configuration_value,
+                        cfg.attributes,
+                        cfg.max_power,
+                        cfg.interfaces.len()
+                    )
+                    .as_str(),
+                );
+
+                for iface in cfg.interfaces.iter() {
+                    line(
+                        io,
+                        alloc::format!(
+                            "      if num={} alt={} class={:02X}/{:02X}/{:02X} eps={}",
+                            iface.interface_number,
+                            iface.alternate_setting,
+                            iface.class,
+                            iface.subclass,
+                            iface.protocol,
+                            iface.endpoints.len()
+                        )
+                        .as_str(),
+                    );
+
+                    for ep in iface.endpoints.iter() {
+                        let direction = if (ep.address & 0x80) != 0 {
+                            "in"
+                        } else {
+                            "out"
+                        };
+                        line(
+                            io,
+                            alloc::format!(
+                                "        ep addr=0x{:02X} {} {} mps={} interval={}",
+                                ep.address,
+                                ep.transfer_type,
+                                direction,
+                                ep.max_packet_size,
+                                ep.interval
+                            )
+                            .as_str(),
+                        );
+                    }
+                }
+            }
         }
 
-        if !emitted {
-            let vidpid = alloc::format!("{:04X}:{:04X}", ctrl_info.vendor_id, ctrl_info.device_id);
-            let mmio = alloc::format!("mmio=0x{:X}", ctrl_info.mmio_base.as_ptr() as usize);
-            table.emit_row(&[&ctrl, &bdf, &diag, "-", &vidpid, "xhci", &mmio], |text| {
-                line(io, text)
-            });
+        if !emitted_any {
+            line(io, "  (no leaf devices cached)");
+        }
+
+        if let Some(err) = snapshot.probe_error {
+            line(io, alloc::format!("  probe_error={}", err).as_str());
         }
     }
-    table.emit_footer(|text| line(io, text));
 }
 
 pub(crate) fn build_dump_text() -> String {
@@ -1160,7 +1211,12 @@ pub(crate) fn build_dump_text() -> String {
                     dev.subclass,
                     dev.protocol
                 );
-                let cfg_if = alloc::format!("{}/{}", dev.config_count, dev.interface_count);
+                let interface_count: usize = dev
+                    .configurations
+                    .iter()
+                    .map(|cfg| cfg.interfaces.len())
+                    .sum();
+                let cfg_if = alloc::format!("{}/{}", dev.configurations.len(), interface_count);
                 writeln!(
                     out,
                     "{:<4}  {:02X}:{:02X}.{}  {:<8}  {:<12}  {:<11}  {:<10}  {:<12}",

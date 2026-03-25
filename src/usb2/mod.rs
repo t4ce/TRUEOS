@@ -49,16 +49,44 @@ pub(crate) struct TlbUsbController {
     pub empty_probe_streak: u32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
+pub(crate) struct TlbUsbEndpoint {
+    pub address: u8,
+    pub transfer_type: &'static str,
+    pub max_packet_size: u16,
+    pub interval: u8,
+}
+
+#[derive(Clone)]
+pub(crate) struct TlbUsbInterface {
+    pub interface_number: u8,
+    pub alternate_setting: u8,
+    pub class: u8,
+    pub subclass: u8,
+    pub protocol: u8,
+    pub endpoints: Vec<TlbUsbEndpoint>,
+}
+
+#[derive(Clone)]
+pub(crate) struct TlbUsbConfiguration {
+    pub configuration_value: u8,
+    pub attributes: u8,
+    pub max_power: u8,
+    pub interfaces: Vec<TlbUsbInterface>,
+}
+
+#[derive(Clone)]
 pub(crate) struct TlbUsbDevice {
     pub controller_index: usize,
+    pub slot_id: u32,
     pub vendor_id: u16,
     pub product_id: u16,
     pub class: u8,
     pub subclass: u8,
     pub protocol: u8,
-    pub config_count: usize,
-    pub interface_count: usize,
+    pub num_configurations: u8,
+    pub max_packet_size_0: u8,
+    pub configurations: Vec<TlbUsbConfiguration>,
 }
 
 pub(crate) struct TlbUsbSnapshot {
@@ -345,13 +373,18 @@ pub(crate) fn tlb_snapshot() -> TlbUsbSnapshot {
         };
     }
 
-    // `tlb usb` is a diagnostic dump, not an ownership handoff. Reinitializing and
-    // reprobeing a live XHCI controller here races the active crabusb BSP service and
-    // can destabilize the running host. Keep this snapshot passive.
+    // `tlb usb` is a diagnostic dump, not an ownership handoff. Reinitializing or
+    // reprobeing a live XHCI controller here races the active crabusb BSP service.
+    // Keep this passive by reading the device cache populated by the running service.
+    let mut devices = Vec::new();
+    for ctrl in controllers.iter() {
+        devices.extend(self::crabusb_service::diag_devices(ctrl.index));
+    }
+
     TlbUsbSnapshot {
         controllers,
-        devices: Vec::new(),
-        probe_error: Some("passive"),
+        devices,
+        probe_error: None,
     }
 }
 
