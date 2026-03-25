@@ -119,7 +119,7 @@ define_started_flags!(
     SURFER_FACTORY_STARTED
 );
 
-const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 0;
+const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 2;
 
 pub const fn truesurfer_factory_boot_count() -> u32 {
     if TRUESURFER_FACTORY_BOOT_COUNT > trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID {

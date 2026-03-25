@@ -62,6 +62,7 @@ const UI2_WINDOW_RESIZE_LEFT: u32 = 1 << 0;
 const UI2_WINDOW_RESIZE_TOP: u32 = 1 << 1;
 const UI2_WINDOW_RESIZE_RIGHT: u32 = 1 << 2;
 const UI2_WINDOW_RESIZE_BOTTOM: u32 = 1 << 3;
+const UI2_WARMUP_RENDER_TARGET_TEX_ID: u32 = 4_706;
 
 #[inline]
 const fn ui2_window_min_extent() -> f32 {
@@ -1791,6 +1792,36 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
     }
 }
 
+fn ensure_ui2_warmup_render_target(view_w: u32, view_h: u32) -> bool {
+    let width = view_w.max(1);
+    let height = view_h.max(1);
+
+    let mut existing_w = 0u32;
+    let mut existing_h = 0u32;
+    let already_sized = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_texture_dimensions(
+            UI2_WARMUP_RENDER_TARGET_TEX_ID,
+            &mut existing_w as *mut u32,
+            &mut existing_h as *mut u32,
+        ) == 0
+    } && existing_w == width
+        && existing_h == height;
+    if already_sized {
+        return true;
+    }
+
+    let pixels =
+        alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
+    crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+        UI2_WARMUP_RENDER_TARGET_TEX_ID,
+        width,
+        height,
+        pixels.as_slice(),
+        0,
+        "ui2-warmup-render-target",
+    )
+}
+
 fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     let stats = collect_compose_window_stats(state);
     let compose_seq = state.compose_seq.wrapping_add(1);
@@ -1798,6 +1829,11 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     let compose_started_ms = boot_probe_ms();
     let mut surface_timings = Vec::new();
     let mut frame_ok = false;
+
+    if !present_to_screen && !ensure_ui2_warmup_render_target(state.view_w, state.view_h) {
+        crate::log!("ui2: warmup render-target ensure failed\n");
+        return false;
+    }
 
     crate::gfx::with_cabi_frame_lock(|| {
         let begin_rc = unsafe {
@@ -1814,6 +1850,19 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
                 begin_rc
             );
             return;
+        }
+
+        if !present_to_screen {
+            let set_rt_rc = unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_set_render_target(
+                    UI2_WARMUP_RENDER_TARGET_TEX_ID,
+                )
+            };
+            if set_rt_rc != 0 {
+                crate::log!("ui2: warmup render-target bind failed rc={}\n", set_rt_rc);
+                let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+                return;
+            }
         }
 
         for idx in sorted_window_indices(state) {
