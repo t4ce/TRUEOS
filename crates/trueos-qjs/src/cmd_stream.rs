@@ -17,6 +17,8 @@ use crate as qjs;
 
 #[path = "cmd_stream/atlas_cmd_stream.rs"]
 mod atlas_cmd_stream;
+#[path = "cmd_stream/lyon_cmd_stream.rs"]
+mod lyon_cmd_stream;
 
 static FIRST_QJS_END_FRAME_SEEN: AtomicBool = AtomicBool::new(false);
 
@@ -111,24 +113,6 @@ static CMD_STREAM_ORIGIN_STACK: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
 static CMD_STREAM_CLIP_STACK: Mutex<Vec<Option<CmdStreamClipRect>>> = Mutex::new(Vec::new());
 static CMD_STREAM_CUR_CLIP: Mutex<Option<CmdStreamClipRect>> = Mutex::new(None);
 
-struct CmdStreamLyonIconTexRecord {
-    icon_id: u32,
-    color_id: u32,
-    small_set: u32,
-    tex_id: u32,
-    side_px: u32,
-}
-
-struct CmdStreamLyonUnitQuadRecord {
-    view_w: u32,
-    view_h: u32,
-    side_px: u32,
-    r: u8,
-    g: u8,
-    b: u8,
-    verts: Arc<[u8]>,
-}
-
 #[derive(Copy, Clone)]
 struct CmdStreamClipRect {
     x: u32,
@@ -137,10 +121,6 @@ struct CmdStreamClipRect {
     height: u32,
 }
 
-static CMD_STREAM_LYON_ICON_TEX_RECS: Mutex<Vec<CmdStreamLyonIconTexRecord>> =
-    Mutex::new(Vec::new());
-static CMD_STREAM_LYON_UNIT_QUAD_RECS: Mutex<Vec<CmdStreamLyonUnitQuadRecord>> =
-    Mutex::new(Vec::new());
 static CMD_STREAM_FRAME_OPEN: AtomicBool = AtomicBool::new(false);
 
 const CMD_STREAM_DEFAULT_BLEND_MODE: u32 = 0;
@@ -338,6 +318,7 @@ fn cmd_stream_release_tex_id(id: u32) {
         ids.swap_remove(pos);
     }
     atlas_cmd_stream::release_tex_id(id);
+    lyon_cmd_stream::release_tex_id(id);
 }
 
 #[inline]
@@ -1060,179 +1041,783 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
     cmd_stream_draw_rgb_triangles(&verts, a)
 }
 
-pub fn draw_lyon_in_frame(
-    icon_id: u32,
-    x: f32,
-    y: f32,
-    view_w: u32,
-    view_h: u32,
-    color_id: u32,
-) -> bool {
-    if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
-        return false;
-    }
-    CMD_STREAM_VIEW_W.store(view_w.max(1), Ordering::Relaxed);
-    CMD_STREAM_VIEW_H.store(view_h.max(1), Ordering::Relaxed);
+    type CmdStreamQjsCallback = unsafe extern "C" fn(
+        *mut qjs::JSContext,
+        qjs::JSValueConst,
+        i32,
+        *const qjs::JSValueConst,
+    ) -> qjs::JSValue;
 
-    // Preserve in-frame ordering with queued atlas text, but do not mutate global
-    // frame state here (blend/sampler), since callers may have configured it.
-    let Some((tex_id, side_px)) = cmd_stream_ensure_lyon_icon_tex(icon_id, 0, 1) else {
-        return false;
-    };
-    let (r, g, b) = cmd_stream_lyon_palette_rgb(color_id);
+    type CmdStreamModuleExport = (&'static [u8], CmdStreamQjsCallback, i32);
 
-    let view_w_u = view_w.max(1);
-    let view_h_u = view_h.max(1);
-    let view_w_f = view_w_u as f32;
-    let view_h_f = view_h_u as f32;
-    let (origin_x, origin_y) = cmd_stream_origin_px();
-    let origin_x_ndc = (2.0 * ((x + origin_x) / view_w_f)) - 1.0;
-    let origin_y_ndc = 1.0 - (2.0 * ((y + origin_y) / view_h_f));
-
-    let verts = cmd_stream_get_lyon_unit_quad_verts(view_w_u, view_h_u, side_px, r, g, b);
-    atlas_cmd_stream::enqueue_text_batch(tex_id, verts.as_ref(), origin_x_ndc, origin_y_ndc);
-    true
-}
-
-#[inline]
-fn cmd_stream_lyon_palette_rgb(color_id: u32) -> (u8, u8, u8) {
-    match (color_id % 5) as usize {
-        0 => (0, 0, 0),
-        1 => (217, 46, 46),
-        2 => (31, 158, 56),
-        3 => (31, 82, 217),
-        _ => (242, 140, 31),
-    }
-}
-
-#[inline]
-fn cmd_stream_ensure_lyon_icon_tex(
-    icon_id: u32,
-    color_id: u32,
-    small_set: u32,
-) -> Option<(u32, u32)> {
-    {
-        let recs = CMD_STREAM_LYON_ICON_TEX_RECS.lock();
-        if let Some(rec) = recs
-            .iter()
-            .find(|r| r.icon_id == icon_id && r.color_id == color_id && r.small_set == small_set)
-        {
-            return Some((rec.tex_id, rec.side_px));
+    #[inline]
+    unsafe fn cmd_stream_register_module_exports(
+        ctx: *mut qjs::JSContext,
+        m: *mut qjs::JSModuleDef,
+        exports: &[CmdStreamModuleExport],
+    ) {
+        for &(name, func, argc) in exports {
+            let f = qjs::JS_NewCFunction2(
+                ctx,
+                Some(func),
+                name.as_ptr() as *const c_char,
+                argc,
+                qjs::JS_CFUNC_GENERIC,
+                0,
+            );
+            let _ = qjs::JS_SetModuleExport(ctx, m, name.as_ptr() as *const c_char, f);
         }
     }
 
-    let need = unsafe {
-        trueos_cabi_gfx_bake_lyon_icon_rgba(icon_id, color_id, small_set, core::ptr::null_mut(), 0)
-    };
-    if need <= 0 {
-        return None;
-    }
-    let need = need as usize;
-    if need % 4 != 0 {
-        return None;
-    }
-    let px_count = need / 4;
-    let side = if small_set != 0 { 16usize } else { 32usize };
-    if side.saturating_mul(side) != px_count {
-        return None;
+    #[inline]
+    unsafe fn cmd_stream_add_module_exports(
+        ctx: *mut qjs::JSContext,
+        m: *mut qjs::JSModuleDef,
+        exports: &[CmdStreamModuleExport],
+    ) {
+        for &(name, _, _) in exports {
+            let _ = qjs::JS_AddModuleExport(ctx, m, name.as_ptr() as *const c_char);
+        }
     }
 
-    let mut rgba = vec![0u8; need];
-    let wrote = unsafe {
-        trueos_cabi_gfx_bake_lyon_icon_rgba(
-            icon_id,
-            color_id,
-            small_set,
-            rgba.as_mut_ptr(),
-            rgba.len(),
-        )
-    };
-    if wrote != need as i32 {
-        return None;
+    unsafe extern "C" fn qjs_cmd_stream_begin_frame(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: i32,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        atlas_cmd_stream::clear_text_batches();
+        let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
+        let rc = trueos_cabi_gfx_begin_frame_no_present(clear);
+        let opened = rc == 0;
+        CMD_STREAM_FRAME_OPEN.store(opened, Ordering::Relaxed);
+        if opened {
+            cmd_stream_reset_frame_state_defaults();
+        }
+        qjs::JSValue::undefined()
     }
 
-    let tex_id = cmd_stream_alloc_tex_id();
-    let rc = unsafe {
-        trueos_cabi_gfx_upload_texture_rgba(
-            tex_id,
-            side as u32,
-            side as u32,
-            rgba.as_ptr(),
-            rgba.len(),
-        )
-    };
-    if rc != 0 {
-        cmd_stream_release_tex_id(tex_id);
-        return None;
+    unsafe extern "C" fn qjs_cmd_stream_end_frame(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: i32,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if !CMD_STREAM_FRAME_OPEN.swap(false, Ordering::Relaxed) {
+            atlas_cmd_stream::clear_text_batches();
+            return qjs::JSValue::undefined();
+        }
+        atlas_cmd_stream::flush_text_batches();
+        let _ = trueos_cabi_gfx_end_frame();
+        qjs::JSValue::undefined()
     }
 
-    CMD_STREAM_LYON_ICON_TEX_RECS
-        .lock()
-        .push(CmdStreamLyonIconTexRecord {
-            icon_id,
-            color_id,
-            small_set,
-            tex_id,
-            side_px: side as u32,
+    unsafe extern "C" fn qjs_cmd_stream_signal_loadscreen_end(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: i32,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if !FIRST_QJS_END_FRAME_SEEN.swap(true, Ordering::AcqRel) {
+            trueos_cabi_signal_loadscreen_end();
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_set_clear_rgb(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(v_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let rgb = (v_f as i64).max(0) as u32 & 0x00FF_FFFF;
+        CMD_STREAM_CLEAR_RGB.store(rgb, Ordering::Relaxed);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_set_viewport(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 2) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(w_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(h_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let w = (w_f as i64).max(1) as u32;
+        let h = (h_f as i64).max(1) as u32;
+        CMD_STREAM_VIEW_W.store(w, Ordering::Relaxed);
+        CMD_STREAM_VIEW_H.store(h, Ordering::Relaxed);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_set_origin(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 2) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        cmd_stream_set_origin_px(x_f as f32, y_f as f32);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_set_clip_rect(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 4) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+            return qjs::JSValue::undefined();
+        };
+        cmd_stream_apply_clip_state(cmd_stream_clip_rect_from_local(
+            x_f as f32,
+            y_f as f32,
+            w_f as f32,
+            h_f as f32,
+        ));
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_push_clip_rect(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 4) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+            return qjs::JSValue::undefined();
+        };
+
+        let next_local = cmd_stream_clip_rect_from_local(x_f as f32, y_f as f32, w_f as f32, h_f as f32);
+        let prev = *CMD_STREAM_CUR_CLIP.lock();
+        CMD_STREAM_CLIP_STACK.lock().push(prev);
+        let (view_w, view_h) = cmd_stream_view_size();
+        let next = match (prev, next_local) {
+            (_, None) => Some(cmd_stream_empty_clip_rect(view_w, view_h)),
+            (None, Some(next_rect)) => Some(next_rect),
+            (Some(prev_rect), Some(next_rect)) => {
+                Some(cmd_stream_intersect_clip_rects(prev_rect, next_rect, view_w, view_h))
+            }
+        };
+        cmd_stream_apply_clip_state(next);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_pop_clip_rect(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: i32,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let prev = CMD_STREAM_CLIP_STACK.lock().pop().flatten();
+        cmd_stream_apply_clip_state(prev);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_clear_clip_rect(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: i32,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        CMD_STREAM_CLIP_STACK.lock().clear();
+        cmd_stream_apply_clip_state(None);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_set_render_target(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
+            return qjs::JSValue::undefined();
+        }
+        let Some(args) = cmd_stream_args(argv, argc, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        atlas_cmd_stream::flush_text_batches();
+        let tex_id = (tex_id_f as i64).max(0) as u32;
+        let _ = trueos_cabi_gfx_set_render_target(tex_id);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_clear_render_target(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: i32,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
+            return qjs::JSValue::undefined();
+        }
+        atlas_cmd_stream::flush_text_batches();
+        let _ = trueos_cabi_gfx_clear_render_target();
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_push_origin(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 2) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(dx_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(dy_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let current = (
+            CMD_STREAM_ORIGIN_X_BITS.load(Ordering::Relaxed),
+            CMD_STREAM_ORIGIN_Y_BITS.load(Ordering::Relaxed),
+        );
+        CMD_STREAM_ORIGIN_STACK.lock().push(current);
+        let (cur_x, cur_y) = cmd_stream_origin_px();
+        cmd_stream_set_origin_px(cur_x + dx_f as f32, cur_y + dy_f as f32);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_pop_origin(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: i32,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let prev = CMD_STREAM_ORIGIN_STACK.lock().pop();
+        if let Some((x_bits, y_bits)) = prev {
+            CMD_STREAM_ORIGIN_X_BITS.store(x_bits, Ordering::Relaxed);
+            CMD_STREAM_ORIGIN_Y_BITS.store(y_bits, Ordering::Relaxed);
+        } else {
+            cmd_stream_set_origin_px(0.0, 0.0);
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_set_blend_enabled(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(enabled_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        atlas_cmd_stream::flush_text_batches();
+        if enabled_f != 0.0 {
+            CMD_STREAM_BLEND_ENABLED.store(1, Ordering::Relaxed);
+            let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
+            let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
+            cmd_stream_apply_blend_mode(mode, pma);
+        } else {
+            CMD_STREAM_BLEND_ENABLED.store(0, Ordering::Relaxed);
+            let _ = trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0);
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_set_sampler(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 4) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(wrap_u) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(wrap_v) = cmd_stream_arg_f64(ctx, args, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(min_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(mag_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+            return qjs::JSValue::undefined();
+        };
+        atlas_cmd_stream::flush_text_batches();
+        let _ = trueos_cabi_gfx_set_sampler(
+            (wrap_u as i64).max(0) as u32,
+            (wrap_v as i64).max(0) as u32,
+            (min_f as i64).max(0) as u32,
+            (mag_f as i64).max(0) as u32,
+        );
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_set_blend_mode(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(mode_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        atlas_cmd_stream::flush_text_batches();
+        let mode = ((mode_f as i64).clamp(0, 3)) as u32;
+        CMD_STREAM_BLEND_MODE.store(mode, Ordering::Relaxed);
+        if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
+            let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
+            cmd_stream_apply_blend_mode(mode, pma);
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_set_premultiplied_alpha(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(pma_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        atlas_cmd_stream::flush_text_batches();
+        CMD_STREAM_PMA.store(if pma_f != 0.0 { 1 } else { 0 }, Ordering::Relaxed);
+        if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
+            let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
+            cmd_stream_apply_blend_mode(mode, pma_f != 0.0);
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_draw_triangles_u8(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        atlas_cmd_stream::flush_text_batches();
+        let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
+            if len > 0 {
+                let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(ptr, len);
+            }
         });
-    Some((tex_id, side as u32))
-}
+        qjs::JSValue::undefined()
+    }
 
-#[inline]
-fn cmd_stream_get_lyon_unit_quad_verts(
-    view_w: u32,
-    view_h: u32,
-    side_px: u32,
-    r: u8,
-    g: u8,
-    b: u8,
-) -> Arc<[u8]> {
-    {
-        let recs = CMD_STREAM_LYON_UNIT_QUAD_RECS.lock();
-        if let Some(rec) = recs.iter().find(|rec| {
-            rec.view_w == view_w
-                && rec.view_h == view_h
-                && rec.side_px == side_px
-                && rec.r == r
-                && rec.g == g
-                && rec.b == b
-        }) {
-            return rec.verts.clone();
+    unsafe extern "C" fn qjs_cmd_stream_fill_rect(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 5) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(rgba_f) = cmd_stream_arg_f64(ctx, args, 4) else {
+            return qjs::JSValue::undefined();
+        };
+
+        atlas_cmd_stream::flush_text_batches();
+        let rgba = (rgba_f as i64).max(0) as u32;
+        let outline = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) != 0.0;
+        let chamfer = cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) != 0.0;
+        let _ = cmd_stream_fill_rect(
+            x_f as f32,
+            y_f as f32,
+            w_f as f32,
+            h_f as f32,
+            rgba,
+            outline,
+            chamfer,
+        );
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_draw_line(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 5) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(x1_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(y1_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(x2_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(y2_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(rgba_f) = cmd_stream_arg_f64(ctx, args, 4) else {
+            return qjs::JSValue::undefined();
+        };
+
+        atlas_cmd_stream::flush_text_batches();
+        let rgba = (rgba_f as i64).max(0) as u32;
+        let thickness = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(1.0).max(0.5) as f32;
+        let _ = cmd_stream_draw_line(
+            x1_f as f32,
+            y1_f as f32,
+            x2_f as f32,
+            y2_f as f32,
+            rgba,
+            thickness,
+        );
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn qjs_cmd_stream_draw_textured_triangles_u8(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 2) else {
+            return qjs::JSValue::undefined();
+        };
+        atlas_cmd_stream::flush_text_batches();
+        let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let tex_id = (tex_id_f as i64).max(0) as u32;
+        if tex_id == 0 {
+            return qjs::JSValue::undefined();
         }
+        let _ = cmd_stream_with_u8_buffer(ctx, args[1], |ptr, len| {
+            if len > 0 {
+                let _ = trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, ptr, len);
+            }
+        });
+        qjs::JSValue::undefined()
     }
 
-    let vw = view_w.max(1) as f32;
-    let vh = view_h.max(1) as f32;
-    let side = side_px.max(1) as f32;
-    let dx = 2.0 * (side / vw);
-    let dy = 2.0 * (side / vh);
+    unsafe extern "C" fn qjs_cmd_stream_draw_texture_rect(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 5) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(x_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(y_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(w_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+            return qjs::JSValue::undefined();
+        };
+        let Some(h_f) = cmd_stream_arg_f64(ctx, args, 4) else {
+            return qjs::JSValue::undefined();
+        };
+        let tex_id = (tex_id_f as i64).max(0) as u32;
+        if tex_id == 0 {
+            return qjs::JSValue::undefined();
+        }
 
-    let mut verts = Vec::with_capacity(6 * 20);
-    // Local quad in NDC delta-space with top-left origin at (0, 0).
-    cmd_stream_push_tex_vtx(&mut verts, 0.0, -dy, 0.0, 1.0, r, g, b, 255);
-    cmd_stream_push_tex_vtx(&mut verts, dx, -dy, 1.0, 1.0, r, g, b, 255);
-    cmd_stream_push_tex_vtx(&mut verts, dx, 0.0, 1.0, 0.0, r, g, b, 255);
-    cmd_stream_push_tex_vtx(&mut verts, 0.0, -dy, 0.0, 1.0, r, g, b, 255);
-    cmd_stream_push_tex_vtx(&mut verts, dx, 0.0, 1.0, 0.0, r, g, b, 255);
-    cmd_stream_push_tex_vtx(&mut verts, 0.0, 0.0, 0.0, 0.0, r, g, b, 255);
+        let u0 = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) as f32;
+        let v0 = cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) as f32;
+        let u1 = cmd_stream_arg_f64(ctx, args, 7).unwrap_or(1.0) as f32;
+        let v1 = cmd_stream_arg_f64(ctx, args, 8).unwrap_or(1.0) as f32;
+        let rgba =
+            (cmd_stream_arg_f64(ctx, args, 9).unwrap_or(0xFFFF_FFFFu32 as f64) as i64).max(0) as u32;
 
-    let out: Arc<[u8]> = Arc::from(verts.into_boxed_slice());
-    let mut recs = CMD_STREAM_LYON_UNIT_QUAD_RECS.lock();
-    recs.push(CmdStreamLyonUnitQuadRecord {
-        view_w,
-        view_h,
-        side_px,
-        r,
-        g,
-        b,
-        verts: out.clone(),
-    });
-    if recs.len() > 64 {
-        let excess = recs.len() - 64;
-        recs.drain(0..excess);
+        atlas_cmd_stream::flush_text_batches();
+        let _ = cmd_stream_draw_texture_rect(
+            tex_id,
+            x_f as f32,
+            y_f as f32,
+            w_f as f32,
+            h_f as f32,
+            u0,
+            v0,
+            u1,
+            v1,
+            rgba,
+        );
+        qjs::JSValue::undefined()
     }
-    out
-}
+
+    unsafe extern "C" fn qjs_cmd_stream_step_icon_collisions(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let Some(args) = cmd_stream_args(argv, argc, 5) else {
+            return qjs::JS_NewFloat64(ctx, 0.0);
+        };
+
+        let Some((pos_ptr, pos_len, pos_ab)) = cmd_stream_read_f32_slice_from_value(ctx, args[0]) else {
+            return qjs::JS_NewFloat64(ctx, 0.0);
+        };
+        let Some((vel_ptr, vel_len, vel_ab)) = cmd_stream_read_f32_slice_from_value(ctx, args[1]) else {
+            qjs::js_free_value(ctx, pos_ab);
+            return qjs::JS_NewFloat64(ctx, 0.0);
+        };
+
+        let Some(dt_ms_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+            qjs::js_free_value(ctx, vel_ab);
+            qjs::js_free_value(ctx, pos_ab);
+            return qjs::JS_NewFloat64(ctx, 0.0);
+        };
+        let Some(icon_size_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+            qjs::js_free_value(ctx, vel_ab);
+            qjs::js_free_value(ctx, pos_ab);
+            return qjs::JS_NewFloat64(ctx, 0.0);
+        };
+        let Some(restitution_f) = cmd_stream_arg_f64(ctx, args, 4) else {
+            qjs::js_free_value(ctx, vel_ab);
+            qjs::js_free_value(ctx, pos_ab);
+            return qjs::JS_NewFloat64(ctx, 0.0);
+        };
+
+        let icon_size = (icon_size_f as f32).max(1.0);
+        let radius = (icon_size * 0.5).max(0.5);
+        let dt = ((dt_ms_f as f32) / 1000.0).clamp(0.0, 0.05);
+        let restitution = (restitution_f as f32).clamp(0.0, 1.0);
+        let n = core::cmp::min(pos_len, vel_len) / 2;
+        if n < 2 {
+            qjs::js_free_value(ctx, vel_ab);
+            qjs::js_free_value(ctx, pos_ab);
+            return qjs::JS_NewFloat64(ctx, 0.0);
+        }
+
+        let pos = core::slice::from_raw_parts_mut(pos_ptr, n * 2);
+        let vel = core::slice::from_raw_parts_mut(vel_ptr, n * 2);
+        let view_w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
+        let view_h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
+
+        for i in 0..n {
+            let b = i * 2;
+            pos[b] += vel[b] * dt;
+            pos[b + 1] += vel[b + 1] * dt;
+
+            if pos[b] < 0.0 {
+                pos[b] = 0.0;
+                vel[b] = vel[b].abs() * restitution;
+            } else if pos[b] + icon_size > view_w {
+                pos[b] = (view_w - icon_size).max(0.0);
+                vel[b] = -vel[b].abs() * restitution;
+            }
+
+            if pos[b + 1] < 0.0 {
+                pos[b + 1] = 0.0;
+                vel[b + 1] = vel[b + 1].abs() * restitution;
+            } else if pos[b + 1] + icon_size > view_h {
+                pos[b + 1] = (view_h - icon_size).max(0.0);
+                vel[b + 1] = -vel[b + 1].abs() * restitution;
+            }
+        }
+
+        let shape = Ball::new(radius);
+        let mut contacts = 0u32;
+        for i in 0..n {
+            let ib = i * 2;
+            let ci_x = pos[ib] + radius;
+            let ci_y = pos[ib + 1] + radius;
+            let pi = Isometry::translation(ci_x, ci_y);
+
+            for j in (i + 1)..n {
+                let jb = j * 2;
+                let cj_x = pos[jb] + radius;
+                let cj_y = pos[jb + 1] + radius;
+                let pj = Isometry::translation(cj_x, cj_y);
+
+                let Ok(Some(c)) = query::contact(&pi, &shape, &pj, &shape, 0.0) else {
+                    continue;
+                };
+
+                if c.dist >= 0.0 {
+                    continue;
+                }
+                contacts = contacts.saturating_add(1);
+
+                let nrm = c.normal1.into_inner();
+                let nx = nrm.x;
+                let ny = nrm.y;
+
+                let rvx = vel[jb] - vel[ib];
+                let rvy = vel[jb + 1] - vel[ib + 1];
+                let rel = (rvx * nx) + (rvy * ny);
+                if rel < 0.0 {
+                    let impulse = -((1.0 + restitution) * rel) * 0.5;
+                    vel[ib] -= impulse * nx;
+                    vel[ib + 1] -= impulse * ny;
+                    vel[jb] += impulse * nx;
+                    vel[jb + 1] += impulse * ny;
+                }
+
+                let penetration = (-c.dist).max(0.0);
+                if penetration > 0.0 {
+                    let corr = (penetration * 0.5) + 0.01;
+                    pos[ib] -= corr * nx;
+                    pos[ib + 1] -= corr * ny;
+                    pos[jb] += corr * nx;
+                    pos[jb + 1] += corr * ny;
+                }
+            }
+        }
+
+        qjs::js_free_value(ctx, vel_ab);
+        qjs::js_free_value(ctx, pos_ab);
+        qjs::JS_NewFloat64(ctx, contacts as f64)
+    }
+
+    const CMD_STREAM_MODULE_EXPORTS: &[CmdStreamModuleExport] = &[
+        (b"beginFrame\0", qjs_cmd_stream_begin_frame, 0),
+        (b"endFrame\0", qjs_cmd_stream_end_frame, 0),
+        (b"signalLoadscreenEnd\0", qjs_cmd_stream_signal_loadscreen_end, 0),
+        (b"setClearRgb\0", qjs_cmd_stream_set_clear_rgb, 1),
+        (b"setViewport\0", qjs_cmd_stream_set_viewport, 2),
+        (b"setOrigin\0", qjs_cmd_stream_set_origin, 2),
+        (b"setClipRect\0", qjs_cmd_stream_set_clip_rect, 4),
+        (b"pushClipRect\0", qjs_cmd_stream_push_clip_rect, 4),
+        (b"popClipRect\0", qjs_cmd_stream_pop_clip_rect, 0),
+        (b"clearClipRect\0", qjs_cmd_stream_clear_clip_rect, 0),
+        (b"setRenderTarget\0", qjs_cmd_stream_set_render_target, 1),
+        (b"clearRenderTarget\0", qjs_cmd_stream_clear_render_target, 0),
+        (b"pushOrigin\0", qjs_cmd_stream_push_origin, 2),
+        (b"popOrigin\0", qjs_cmd_stream_pop_origin, 0),
+        (b"setBlendEnabled\0", qjs_cmd_stream_set_blend_enabled, 1),
+        (b"setSampler\0", qjs_cmd_stream_set_sampler, 4),
+        (b"setBlendMode\0", qjs_cmd_stream_set_blend_mode, 1),
+        (
+            b"setPremultipliedAlpha\0",
+            qjs_cmd_stream_set_premultiplied_alpha,
+            1,
+        ),
+        (b"createTextureRgba\0", qjs_cmd_stream_create_texture_rgba, 3),
+        (b"createRenderTarget\0", qjs_cmd_stream_create_render_target, 2),
+        (b"createTexturePng\0", qjs_cmd_stream_create_texture_png, 1),
+        (b"createTextureJpeg\0", qjs_cmd_stream_create_texture_jpeg, 1),
+        (b"createTextureSvg\0", qjs_cmd_stream_create_texture_svg, 1),
+        (b"createTexturePngAsync\0", qjs_cmd_stream_create_texture_png_async, 1),
+        (b"createTextureJpegAsync\0", qjs_cmd_stream_create_texture_jpeg_async, 1),
+        (b"createTextureSvgAsync\0", qjs_cmd_stream_create_texture_svg_async, 1),
+        (b"updateTextureRgba\0", qjs_cmd_stream_update_texture_rgba, 4),
+        (b"updateTexturePng\0", qjs_cmd_stream_update_texture_png, 2),
+        (b"updateTextureJpeg\0", qjs_cmd_stream_update_texture_jpeg, 2),
+        (b"updateTextureSvg\0", qjs_cmd_stream_update_texture_svg, 2),
+        (b"getTextureStatus\0", qjs_cmd_stream_get_texture_status, 1),
+        (b"destroyTexture\0", qjs_cmd_stream_destroy_texture, 1),
+        (
+            b"createAtlasTexture\0",
+            atlas_cmd_stream::qjs_cmd_stream_create_atlas_texture,
+            1,
+        ),
+        (b"drawTrianglesU8\0", qjs_cmd_stream_draw_triangles_u8, 1),
+        (b"fillRect\0", qjs_cmd_stream_fill_rect, 5),
+        (b"drawLine\0", qjs_cmd_stream_draw_line, 5),
+        (
+            b"drawTexturedTrianglesU8\0",
+            qjs_cmd_stream_draw_textured_triangles_u8,
+            2,
+        ),
+        (b"drawTextureRect\0", qjs_cmd_stream_draw_texture_rect, 5),
+        (
+            b"drawAtlasText\0",
+            atlas_cmd_stream::qjs_cmd_stream_draw_atlas_text,
+            10,
+        ),
+        (
+            b"drawLyonIconInFrame\0",
+            lyon_cmd_stream::qjs_cmd_stream_draw_lyon_icon_in_frame,
+            4,
+        ),
+        (b"stepIconCollisions\0", qjs_cmd_stream_step_icon_collisions, 5),
+    ];
+
+    unsafe extern "C" fn qjs_cmd_stream_module_init(
+        ctx: *mut qjs::JSContext,
+        m: *mut qjs::JSModuleDef,
+    ) -> i32 {
+        unsafe { cmd_stream_register_module_exports(ctx, m, CMD_STREAM_MODULE_EXPORTS) };
+        0
+    }
 
 #[inline]
 pub(crate) unsafe fn try_create_native_module(
@@ -1244,840 +1829,11 @@ pub(crate) unsafe fn try_create_native_module(
     }
     let name = CStr::from_ptr(module_name).to_bytes();
     if name == b"cmd_stream" || name == b"trueos:cmd_stream" {
-        unsafe extern "C" fn qjs_cmd_stream_begin_frame(
-            _ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            _argc: i32,
-            _argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            atlas_cmd_stream::clear_text_batches();
-            let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
-            let rc = trueos_cabi_gfx_begin_frame_no_present(clear);
-            let opened = rc == 0;
-            CMD_STREAM_FRAME_OPEN.store(opened, Ordering::Relaxed);
-            if opened {
-                cmd_stream_reset_frame_state_defaults();
-            }
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_end_frame(
-            _ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            _argc: i32,
-            _argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            if !CMD_STREAM_FRAME_OPEN.swap(false, Ordering::Relaxed) {
-                atlas_cmd_stream::clear_text_batches();
-                return qjs::JSValue::undefined();
-            }
-            atlas_cmd_stream::flush_text_batches();
-            let _ = trueos_cabi_gfx_end_frame();
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_signal_loadscreen_end(
-            _ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            _argc: i32,
-            _argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            if !FIRST_QJS_END_FRAME_SEEN.swap(true, Ordering::AcqRel) {
-                trueos_cabi_signal_loadscreen_end();
-            }
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_set_clear_rgb(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(v_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let rgb = (v_f as i64).max(0) as u32 & 0x00FF_FFFF;
-            CMD_STREAM_CLEAR_RGB.store(rgb, Ordering::Relaxed);
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_set_viewport(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(w_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(h_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let w = (w_f as i64).max(1) as u32;
-            let h = (h_f as i64).max(1) as u32;
-            CMD_STREAM_VIEW_W.store(w, Ordering::Relaxed);
-            CMD_STREAM_VIEW_H.store(h, Ordering::Relaxed);
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_set_origin(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            cmd_stream_set_origin_px(x_f as f32, y_f as f32);
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_set_clip_rect(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 4) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-                return qjs::JSValue::undefined();
-            };
-            cmd_stream_apply_clip_state(cmd_stream_clip_rect_from_local(
-                x_f as f32, y_f as f32, w_f as f32, h_f as f32,
-            ));
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_push_clip_rect(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 4) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-                return qjs::JSValue::undefined();
-            };
-
-            let next_local =
-                cmd_stream_clip_rect_from_local(x_f as f32, y_f as f32, w_f as f32, h_f as f32);
-            let prev = *CMD_STREAM_CUR_CLIP.lock();
-            CMD_STREAM_CLIP_STACK.lock().push(prev);
-            let (view_w, view_h) = cmd_stream_view_size();
-            let next = match (prev, next_local) {
-                (_, None) => Some(cmd_stream_empty_clip_rect(view_w, view_h)),
-                (None, Some(next_rect)) => Some(next_rect),
-                (Some(prev_rect), Some(next_rect)) => Some(cmd_stream_intersect_clip_rects(
-                    prev_rect, next_rect, view_w, view_h,
-                )),
-            };
-            cmd_stream_apply_clip_state(next);
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_pop_clip_rect(
-            _ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            _argc: i32,
-            _argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let prev = CMD_STREAM_CLIP_STACK.lock().pop().flatten();
-            cmd_stream_apply_clip_state(prev);
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_clear_clip_rect(
-            _ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            _argc: i32,
-            _argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            CMD_STREAM_CLIP_STACK.lock().clear();
-            cmd_stream_apply_clip_state(None);
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_set_render_target(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
-                return qjs::JSValue::undefined();
-            }
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            atlas_cmd_stream::flush_text_batches();
-            let tex_id = (tex_id_f as i64).max(0) as u32;
-            let _ = trueos_cabi_gfx_set_render_target(tex_id);
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_clear_render_target(
-            _ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            _argc: i32,
-            _argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
-                return qjs::JSValue::undefined();
-            }
-            atlas_cmd_stream::flush_text_batches();
-            let _ = trueos_cabi_gfx_clear_render_target();
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_push_origin(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(dx_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(dy_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let current = (
-                CMD_STREAM_ORIGIN_X_BITS.load(Ordering::Relaxed),
-                CMD_STREAM_ORIGIN_Y_BITS.load(Ordering::Relaxed),
-            );
-            CMD_STREAM_ORIGIN_STACK.lock().push(current);
-            let (cur_x, cur_y) = cmd_stream_origin_px();
-            cmd_stream_set_origin_px(cur_x + dx_f as f32, cur_y + dy_f as f32);
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_pop_origin(
-            _ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            _argc: i32,
-            _argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let prev = CMD_STREAM_ORIGIN_STACK.lock().pop();
-            if let Some((x_bits, y_bits)) = prev {
-                CMD_STREAM_ORIGIN_X_BITS.store(x_bits, Ordering::Relaxed);
-                CMD_STREAM_ORIGIN_Y_BITS.store(y_bits, Ordering::Relaxed);
-            } else {
-                cmd_stream_set_origin_px(0.0, 0.0);
-            }
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_set_blend_enabled(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(enabled_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            atlas_cmd_stream::flush_text_batches();
-            if enabled_f != 0.0 {
-                CMD_STREAM_BLEND_ENABLED.store(1, Ordering::Relaxed);
-                let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
-                let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
-                cmd_stream_apply_blend_mode(mode, pma);
-            } else {
-                CMD_STREAM_BLEND_ENABLED.store(0, Ordering::Relaxed);
-                // disabled
-                let _ = trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0);
-            }
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_set_sampler(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 4) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(wrap_u) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(wrap_v) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(min_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(mag_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-                return qjs::JSValue::undefined();
-            };
-            atlas_cmd_stream::flush_text_batches();
-            let _ = trueos_cabi_gfx_set_sampler(
-                (wrap_u as i64).max(0) as u32,
-                (wrap_v as i64).max(0) as u32,
-                (min_f as i64).max(0) as u32,
-                (mag_f as i64).max(0) as u32,
-            );
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_set_blend_mode(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(mode_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            atlas_cmd_stream::flush_text_batches();
-            let mode = ((mode_f as i64).clamp(0, 3)) as u32;
-            CMD_STREAM_BLEND_MODE.store(mode, Ordering::Relaxed);
-            if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
-                let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
-                cmd_stream_apply_blend_mode(mode, pma);
-            }
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_set_premultiplied_alpha(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(pma_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            atlas_cmd_stream::flush_text_batches();
-            CMD_STREAM_PMA.store(if pma_f != 0.0 { 1 } else { 0 }, Ordering::Relaxed);
-            if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
-                let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
-                cmd_stream_apply_blend_mode(mode, pma_f != 0.0);
-            }
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_draw_triangles_u8(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            atlas_cmd_stream::flush_text_batches();
-            let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
-                if len > 0 {
-                    let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(ptr, len);
-                }
-            });
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_fill_rect(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 5) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(rgba_f) = cmd_stream_arg_f64(ctx, args, 4) else {
-                return qjs::JSValue::undefined();
-            };
-
-            atlas_cmd_stream::flush_text_batches();
-            let rgba = (rgba_f as i64).max(0) as u32;
-            let outline = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) != 0.0;
-            let chamfer = cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) != 0.0;
-            let _ = cmd_stream_fill_rect(
-                x_f as f32, y_f as f32, w_f as f32, h_f as f32, rgba, outline, chamfer,
-            );
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_draw_line(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 5) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(x1_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(y1_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(x2_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(y2_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(rgba_f) = cmd_stream_arg_f64(ctx, args, 4) else {
-                return qjs::JSValue::undefined();
-            };
-
-            atlas_cmd_stream::flush_text_batches();
-            let rgba = (rgba_f as i64).max(0) as u32;
-            let thickness = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(1.0).max(0.5) as f32;
-            let _ = cmd_stream_draw_line(
-                x1_f as f32,
-                y1_f as f32,
-                x2_f as f32,
-                y2_f as f32,
-                rgba,
-                thickness,
-            );
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_draw_textured_triangles_u8(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            atlas_cmd_stream::flush_text_batches();
-            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = (tex_id_f as i64).max(0) as u32;
-            if tex_id == 0 {
-                return qjs::JSValue::undefined();
-            }
-            let _ = cmd_stream_with_u8_buffer(ctx, args[1], |ptr, len| {
-                if len > 0 {
-                    let _ = trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, ptr, len);
-                }
-            });
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_draw_texture_rect(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 5) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(x_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(y_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(w_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(h_f) = cmd_stream_arg_f64(ctx, args, 4) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = (tex_id_f as i64).max(0) as u32;
-            if tex_id == 0 {
-                return qjs::JSValue::undefined();
-            }
-
-            let u0 = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) as f32;
-            let v0 = cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) as f32;
-            let u1 = cmd_stream_arg_f64(ctx, args, 7).unwrap_or(1.0) as f32;
-            let v1 = cmd_stream_arg_f64(ctx, args, 8).unwrap_or(1.0) as f32;
-            let rgba = (cmd_stream_arg_f64(ctx, args, 9).unwrap_or(0xFFFF_FFFFu32 as f64) as i64)
-                .max(0) as u32;
-
-            atlas_cmd_stream::flush_text_batches();
-            let _ = cmd_stream_draw_texture_rect(
-                tex_id, x_f as f32, y_f as f32, w_f as f32, h_f as f32, u0, v0, u1, v1, rgba,
-            );
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_draw_lyon_icon_in_frame(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 3) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(icon_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(x_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(y_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-                return qjs::JSValue::undefined();
-            };
-
-            let color_id_f = cmd_stream_arg_f64(ctx, args, 3).unwrap_or(0.0);
-
-            let icon_id = (icon_id_f as i64).max(0) as u32;
-            let color_id = (color_id_f as i64).max(0) as u32;
-            let view_w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1);
-            let view_h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1);
-
-            let _ = draw_lyon_in_frame(icon_id, x_f as f32, y_f as f32, view_w, view_h, color_id);
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_step_icon_collisions(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 5) else {
-                return qjs::JS_NewFloat64(ctx, 0.0);
-            };
-
-            let Some((pos_ptr, pos_len, pos_ab)) =
-                cmd_stream_read_f32_slice_from_value(ctx, args[0])
-            else {
-                return qjs::JS_NewFloat64(ctx, 0.0);
-            };
-            let Some((vel_ptr, vel_len, vel_ab)) =
-                cmd_stream_read_f32_slice_from_value(ctx, args[1])
-            else {
-                qjs::js_free_value(ctx, pos_ab);
-                return qjs::JS_NewFloat64(ctx, 0.0);
-            };
-
-            let Some(dt_ms_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-                qjs::js_free_value(ctx, vel_ab);
-                qjs::js_free_value(ctx, pos_ab);
-                return qjs::JS_NewFloat64(ctx, 0.0);
-            };
-            let Some(icon_size_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-                qjs::js_free_value(ctx, vel_ab);
-                qjs::js_free_value(ctx, pos_ab);
-                return qjs::JS_NewFloat64(ctx, 0.0);
-            };
-            let Some(restitution_f) = cmd_stream_arg_f64(ctx, args, 4) else {
-                qjs::js_free_value(ctx, vel_ab);
-                qjs::js_free_value(ctx, pos_ab);
-                return qjs::JS_NewFloat64(ctx, 0.0);
-            };
-
-            let icon_size = (icon_size_f as f32).max(1.0);
-            let radius = (icon_size * 0.5).max(0.5);
-            let dt = ((dt_ms_f as f32) / 1000.0).clamp(0.0, 0.05);
-            let restitution = (restitution_f as f32).clamp(0.0, 1.0);
-            let n = core::cmp::min(pos_len, vel_len) / 2;
-            if n < 2 {
-                qjs::js_free_value(ctx, vel_ab);
-                qjs::js_free_value(ctx, pos_ab);
-                return qjs::JS_NewFloat64(ctx, 0.0);
-            }
-
-            let pos = core::slice::from_raw_parts_mut(pos_ptr, n * 2);
-            let vel = core::slice::from_raw_parts_mut(vel_ptr, n * 2);
-            let view_w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
-            let view_h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
-
-            for i in 0..n {
-                let b = i * 2;
-                pos[b] += vel[b] * dt;
-                pos[b + 1] += vel[b + 1] * dt;
-
-                if pos[b] < 0.0 {
-                    pos[b] = 0.0;
-                    vel[b] = vel[b].abs() * restitution;
-                } else if pos[b] + icon_size > view_w {
-                    pos[b] = (view_w - icon_size).max(0.0);
-                    vel[b] = -vel[b].abs() * restitution;
-                }
-
-                if pos[b + 1] < 0.0 {
-                    pos[b + 1] = 0.0;
-                    vel[b + 1] = vel[b + 1].abs() * restitution;
-                } else if pos[b + 1] + icon_size > view_h {
-                    pos[b + 1] = (view_h - icon_size).max(0.0);
-                    vel[b + 1] = -vel[b + 1].abs() * restitution;
-                }
-            }
-
-            let shape = Ball::new(radius);
-            let mut contacts = 0u32;
-            for i in 0..n {
-                let ib = i * 2;
-                let ci_x = pos[ib] + radius;
-                let ci_y = pos[ib + 1] + radius;
-                let pi = Isometry::translation(ci_x, ci_y);
-
-                for j in (i + 1)..n {
-                    let jb = j * 2;
-                    let cj_x = pos[jb] + radius;
-                    let cj_y = pos[jb + 1] + radius;
-                    let pj = Isometry::translation(cj_x, cj_y);
-
-                    let Ok(Some(c)) = query::contact(&pi, &shape, &pj, &shape, 0.0) else {
-                        continue;
-                    };
-
-                    if c.dist >= 0.0 {
-                        continue;
-                    }
-                    contacts = contacts.saturating_add(1);
-
-                    let nrm = c.normal1.into_inner();
-                    let nx = nrm.x;
-                    let ny = nrm.y;
-
-                    let rvx = vel[jb] - vel[ib];
-                    let rvy = vel[jb + 1] - vel[ib + 1];
-                    let rel = (rvx * nx) + (rvy * ny);
-                    if rel < 0.0 {
-                        let impulse = -((1.0 + restitution) * rel) * 0.5;
-                        vel[ib] -= impulse * nx;
-                        vel[ib + 1] -= impulse * ny;
-                        vel[jb] += impulse * nx;
-                        vel[jb + 1] += impulse * ny;
-                    }
-
-                    let penetration = (-c.dist).max(0.0);
-                    if penetration > 0.0 {
-                        let corr = (penetration * 0.5) + 0.01;
-                        pos[ib] -= corr * nx;
-                        pos[ib + 1] -= corr * ny;
-                        pos[jb] += corr * nx;
-                        pos[jb + 1] += corr * ny;
-                    }
-                }
-            }
-
-            qjs::js_free_value(ctx, vel_ab);
-            qjs::js_free_value(ctx, pos_ab);
-            qjs::JS_NewFloat64(ctx, contacts as f64)
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_module_init(
-            ctx: *mut qjs::JSContext,
-            m: *mut qjs::JSModuleDef,
-        ) -> i32 {
-            macro_rules! export_fn {
-                ($name:literal, $func:expr, $argc:expr) => {{
-                    let k = concat!($name, "\0");
-                    let f = qjs::JS_NewCFunction2(
-                        ctx,
-                        Some($func),
-                        k.as_ptr() as *const c_char,
-                        $argc,
-                        qjs::JS_CFUNC_GENERIC,
-                        0,
-                    );
-                    let _ = qjs::JS_SetModuleExport(ctx, m, k.as_ptr() as *const c_char, f);
-                }};
-            }
-            export_fn!("beginFrame", qjs_cmd_stream_begin_frame, 0);
-            export_fn!("endFrame", qjs_cmd_stream_end_frame, 0);
-            export_fn!(
-                "signalLoadscreenEnd",
-                qjs_cmd_stream_signal_loadscreen_end,
-                0
-            );
-            export_fn!("setClearRgb", qjs_cmd_stream_set_clear_rgb, 1);
-            export_fn!("setViewport", qjs_cmd_stream_set_viewport, 2);
-            export_fn!("setOrigin", qjs_cmd_stream_set_origin, 2);
-            export_fn!("setClipRect", qjs_cmd_stream_set_clip_rect, 4);
-            export_fn!("pushClipRect", qjs_cmd_stream_push_clip_rect, 4);
-            export_fn!("popClipRect", qjs_cmd_stream_pop_clip_rect, 0);
-            export_fn!("clearClipRect", qjs_cmd_stream_clear_clip_rect, 0);
-            export_fn!("setRenderTarget", qjs_cmd_stream_set_render_target, 1);
-            export_fn!("clearRenderTarget", qjs_cmd_stream_clear_render_target, 0);
-            export_fn!("pushOrigin", qjs_cmd_stream_push_origin, 2);
-            export_fn!("popOrigin", qjs_cmd_stream_pop_origin, 0);
-            export_fn!("setBlendEnabled", qjs_cmd_stream_set_blend_enabled, 1);
-            export_fn!("setSampler", qjs_cmd_stream_set_sampler, 4);
-            export_fn!("setBlendMode", qjs_cmd_stream_set_blend_mode, 1);
-            export_fn!(
-                "setPremultipliedAlpha",
-                qjs_cmd_stream_set_premultiplied_alpha,
-                1
-            );
-            export_fn!("createTextureRgba", qjs_cmd_stream_create_texture_rgba, 3);
-            export_fn!("createRenderTarget", qjs_cmd_stream_create_render_target, 2);
-            export_fn!("createTexturePng", qjs_cmd_stream_create_texture_png, 1);
-            export_fn!("createTextureJpeg", qjs_cmd_stream_create_texture_jpeg, 1);
-            export_fn!("createTextureSvg", qjs_cmd_stream_create_texture_svg, 1);
-            export_fn!(
-                "createTexturePngAsync",
-                qjs_cmd_stream_create_texture_png_async,
-                1
-            );
-            export_fn!(
-                "createTextureJpegAsync",
-                qjs_cmd_stream_create_texture_jpeg_async,
-                1
-            );
-            export_fn!(
-                "createTextureSvgAsync",
-                qjs_cmd_stream_create_texture_svg_async,
-                1
-            );
-            export_fn!("updateTextureRgba", qjs_cmd_stream_update_texture_rgba, 4);
-            export_fn!("updateTexturePng", qjs_cmd_stream_update_texture_png, 2);
-            export_fn!("updateTextureJpeg", qjs_cmd_stream_update_texture_jpeg, 2);
-            export_fn!("updateTextureSvg", qjs_cmd_stream_update_texture_svg, 2);
-            export_fn!("getTextureStatus", qjs_cmd_stream_get_texture_status, 1);
-            export_fn!("destroyTexture", qjs_cmd_stream_destroy_texture, 1);
-            export_fn!(
-                "createAtlasTexture",
-                atlas_cmd_stream::qjs_cmd_stream_create_atlas_texture,
-                1
-            );
-            export_fn!("drawTrianglesU8", qjs_cmd_stream_draw_triangles_u8, 1);
-            export_fn!("fillRect", qjs_cmd_stream_fill_rect, 5);
-            export_fn!("drawLine", qjs_cmd_stream_draw_line, 5);
-            export_fn!(
-                "drawTexturedTrianglesU8",
-                qjs_cmd_stream_draw_textured_triangles_u8,
-                2
-            );
-            export_fn!("drawTextureRect", qjs_cmd_stream_draw_texture_rect, 5);
-            export_fn!(
-                "drawAtlasText",
-                atlas_cmd_stream::qjs_cmd_stream_draw_atlas_text,
-                10
-            );
-            export_fn!(
-                "drawLyonIconInFrame",
-                qjs_cmd_stream_draw_lyon_icon_in_frame,
-                4
-            );
-            export_fn!("stepIconCollisions", qjs_cmd_stream_step_icon_collisions, 5);
-            0
-        }
-
         let m = qjs::JS_NewCModule(ctx, module_name, Some(qjs_cmd_stream_module_init));
         if m.is_null() {
             return core::ptr::null_mut();
         }
-        macro_rules! add_export {
-            ($name:literal) => {{
-                let k = concat!($name, "\0");
-                let _ = qjs::JS_AddModuleExport(ctx, m, k.as_ptr() as *const c_char);
-            }};
-        }
-        add_export!("beginFrame");
-        add_export!("endFrame");
-        add_export!("signalLoadscreenEnd");
-        add_export!("setClearRgb");
-        add_export!("setViewport");
-        add_export!("setOrigin");
-        add_export!("setClipRect");
-        add_export!("pushClipRect");
-        add_export!("popClipRect");
-        add_export!("clearClipRect");
-        add_export!("setRenderTarget");
-        add_export!("clearRenderTarget");
-        add_export!("pushOrigin");
-        add_export!("popOrigin");
-        add_export!("setBlendEnabled");
-        add_export!("setSampler");
-        add_export!("setBlendMode");
-        add_export!("setPremultipliedAlpha");
-        add_export!("createTextureRgba");
-        add_export!("createRenderTarget");
-        add_export!("createTexturePng");
-        add_export!("createTextureJpeg");
-        add_export!("createTextureSvg");
-        add_export!("createTexturePngAsync");
-        add_export!("createTextureJpegAsync");
-        add_export!("createTextureSvgAsync");
-        add_export!("updateTextureRgba");
-        add_export!("updateTexturePng");
-        add_export!("updateTextureJpeg");
-        add_export!("updateTextureSvg");
-        add_export!("getTextureStatus");
-        add_export!("destroyTexture");
-        add_export!("createAtlasTexture");
-        add_export!("drawTrianglesU8");
-        add_export!("fillRect");
-        add_export!("drawLine");
-        add_export!("drawTexturedTrianglesU8");
-        add_export!("drawTextureRect");
-        add_export!("drawAtlasText");
-        add_export!("drawLyonIconInFrame");
-        add_export!("stepIconCollisions");
+            unsafe { cmd_stream_add_module_exports(ctx, m, CMD_STREAM_MODULE_EXPORTS) };
         return m;
     }
 

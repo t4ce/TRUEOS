@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
+// im not sure if we use this in some meaningful way entire file imean.
 extern void trueos_cabi_write(uint32_t stream, const uint8_t *bytes, size_t len);
 extern void trueos_cabi_write_cstr(uint32_t stream, const uint8_t *cstr);
 extern int32_t trueos_cabi_copy_cstr_into(uint8_t *dst, size_t cap, const uint8_t *cstr);
