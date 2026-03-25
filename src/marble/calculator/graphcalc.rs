@@ -11,11 +11,61 @@ use super::sidequest::{
 };
 use super::{Marble, MarbleGadget, WidgetKind};
 
+#[inline(always)]
+fn raw_port_write_bytes(bytes: &[u8]) {
+    for &byte in bytes {
+        unsafe { crate::portio::outb(0xE9, byte) };
+    }
+}
+
+#[inline(always)]
+fn raw_port_repeat(byte: u8, count: usize) {
+    for _ in 0..count {
+        unsafe { crate::portio::outb(0xE9, byte) };
+    }
+}
+
+pub const MARBLE_COLOR_WORDS_100: [&str; 100] = [
+    "red", "green", "blue", "purble", "red", "green", "blue", "purble", "red", "green",
+    "blue", "purble", "red", "green", "blue", "purble", "red", "green", "blue", "purble",
+    "red", "green", "blue", "purble", "red", "green", "blue", "purble", "red", "green",
+    "blue", "purble", "red", "green", "blue", "purble", "red", "green", "blue", "purble",
+    "red", "green", "blue", "purble", "red", "green", "blue", "purble", "red", "green",
+    "blue", "purble", "red", "green", "blue", "purble", "red", "green", "blue", "purble",
+    "red", "green", "blue", "purble", "red", "green", "blue", "purble", "red", "green",
+    "blue", "purble", "red", "green", "blue", "purble", "red", "green", "blue", "purble",
+    "red", "green", "blue", "purble", "red", "green", "blue", "purble", "red", "green",
+    "blue", "purble", "red", "green", "blue", "purble", "red", "green", "blue", "purble",
+];
+
+#[inline(always)]
+fn marble_color_word(index: usize) -> &'static str {
+    MARBLE_COLOR_WORDS_100[index % MARBLE_COLOR_WORDS_100.len()]
+}
+
+#[inline(always)]
+fn raw_port_log_edge_ordered_colors(instance: &GraphColoringProblemInstance, colors: &[u8]) {
+    for &(left, right) in &instance.edges {
+        raw_port_write_bytes(marble_color_word(colors[left] as usize).as_bytes());
+        raw_port_write_bytes(b", ");
+        raw_port_write_bytes(marble_color_word(colors[right] as usize).as_bytes());
+        raw_port_write_bytes(b"; ");
+    }
+    raw_port_write_bytes(b"\n");
+}
+
+#[inline(always)]
+fn raw_port_log_vertex_marbles(vertex_count: usize) {
+    raw_port_repeat(b'O', vertex_count);
+    unsafe {
+        crate::portio::outb(0xE9, b'\n');
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RiverMarble {
     // Control marble announces how many payload marbles must follow in the same serial stream.
     ControlN(usize),
-    VertexCount(usize),
     PaletteSize(usize),
     Edge { left: usize, right: usize },
 }
@@ -24,7 +74,6 @@ impl Marble for RiverMarble {
     fn kind(&self) -> &'static str {
         match self {
             RiverMarble::ControlN(_) => "river-control-marble",
-            RiverMarble::VertexCount(_) => "river-vertex-count-marble",
             RiverMarble::PaletteSize(_) => "river-palette-size-marble",
             RiverMarble::Edge { .. } => "river-edge-marble",
         }
@@ -143,10 +192,9 @@ pub enum IntakeError {
     ControlCountZero,
     PayloadOverflow,
     ConveyorNotFull,
-    MissingVertexCount,
     MissingPaletteSize,
-    DuplicateVertexCount,
     DuplicatePaletteSize,
+    MissingEdges,
     InvalidPaletteSize,
     InvalidEdge,
 }
@@ -164,23 +212,16 @@ impl GraphColoringProblemInstance {
         universe: MarbleUniverseId,
         conveyor: SerialProblemConveyor,
     ) -> Result<Self, IntakeError> {
-        let mut vertex_count = None;
         let mut palette_size = None;
         let mut edges = Vec::new();
 
         for marble in conveyor.payload {
             match marble {
-                RiverMarble::VertexCount(n) => {
-                    if vertex_count.is_some() {
-                        return Err(IntakeError::DuplicateVertexCount);
-                    }
-                    vertex_count = Some(n);
-                }
                 RiverMarble::PaletteSize(n) => {
                     if palette_size.is_some() {
                         return Err(IntakeError::DuplicatePaletteSize);
                     }
-                    if n == 0 || n > 4 {
+                    if n == 0 {
                         return Err(IntakeError::InvalidPaletteSize);
                     }
                     palette_size = Some(n);
@@ -190,8 +231,19 @@ impl GraphColoringProblemInstance {
             }
         }
 
-        let vertex_count = vertex_count.ok_or(IntakeError::MissingVertexCount)?;
         let palette_size = palette_size.ok_or(IntakeError::MissingPaletteSize)?;
+        let mut vertex_count = 0usize;
+        let mut saw_edge = false;
+
+        for &(left, right) in &edges {
+            saw_edge = true;
+            let max_endpoint = core::cmp::max(left, right);
+            vertex_count = core::cmp::max(vertex_count, max_endpoint.saturating_add(1));
+        }
+
+        if !saw_edge {
+            return Err(IntakeError::MissingEdges);
+        }
 
         for &(left, right) in &edges {
             if left >= vertex_count || right >= vertex_count || left == right {
@@ -389,8 +441,7 @@ fn color_to_tile(color: u8) -> CalculatorTile {
 
 pub fn manual_graph_coloring_pipeline_visual() -> String {
     let mut intake = WhiteHoleRiverIntakeWidget::new();
-    intake.push_serial(RiverMarble::ControlN(5)).unwrap();
-    intake.push_serial(RiverMarble::VertexCount(3)).unwrap();
+    intake.push_serial(RiverMarble::ControlN(4)).unwrap();
     intake.push_serial(RiverMarble::PaletteSize(3)).unwrap();
     intake.push_serial(RiverMarble::Edge { left: 0, right: 1 })
         .unwrap();
@@ -406,19 +457,111 @@ pub fn manual_graph_coloring_pipeline_visual() -> String {
 }
 
 pub fn to_serial_graph_coloring_stream(
-    vertex_count: usize,
     palette_size: usize,
     edges: &[(usize, usize)],
 ) -> Vec<RiverMarble> {
-    let payload_count = edges.len().saturating_add(2);
+    let payload_count = edges.len().saturating_add(1);
     let mut stream = Vec::with_capacity(payload_count.saturating_add(1));
     stream.push(RiverMarble::ControlN(payload_count));
-    stream.push(RiverMarble::VertexCount(vertex_count));
     stream.push(RiverMarble::PaletteSize(palette_size));
     for &(left, right) in edges {
         stream.push(RiverMarble::Edge { left, right });
     }
     stream
+}
+
+pub const PETERSEN_EDGES: [(usize, usize); 15] = [
+    // Outer 5-cycle
+    (0, 1),
+    (1, 2),
+    (2, 3),
+    (3, 4),
+    (4, 0),
+    // Spokes
+    (0, 5),
+    (1, 6),
+    (2, 7),
+    (3, 8),
+    (4, 9),
+    // Inner star pentagram
+    (5, 7),
+    (7, 9),
+    (9, 6),
+    (6, 8),
+    (8, 5),
+];
+
+pub fn petersen_serial_graph_coloring_stream(palette_size: usize) -> Vec<RiverMarble> {
+    to_serial_graph_coloring_stream(palette_size, &PETERSEN_EDGES)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphPipelineError {
+    Intake(IntakeError),
+    Manual(ManualPlacementError),
+    NoColoringFound,
+    SearchSpaceTooLarge,
+}
+
+fn is_valid_coloring(instance: &GraphColoringProblemInstance, colors: &[u8]) -> bool {
+    instance
+        .edges
+        .iter()
+        .all(|&(left, right)| colors[left] != colors[right])
+}
+
+fn find_coloring_bruteforce(instance: &GraphColoringProblemInstance) -> Result<Vec<u8>, GraphPipelineError> {
+    let n = instance.vertex_count;
+    let k = instance.palette_size;
+
+    let mut total: u128 = 1;
+    for _ in 0..n {
+        total = total
+            .checked_mul(k as u128)
+            .ok_or(GraphPipelineError::SearchSpaceTooLarge)?;
+    }
+
+    let mut colors = vec![0u8; n];
+    for mut state in 0..total {
+        for slot in &mut colors {
+            *slot = (state % (k as u128)) as u8;
+            state /= k as u128;
+        }
+
+        if is_valid_coloring(instance, &colors) {
+            return Ok(colors.clone());
+        }
+    }
+
+    Err(GraphPipelineError::NoColoringFound)
+}
+
+pub fn petersen_whitehole_to_world(
+    universe: MarbleUniverseId,
+) -> Result<ManualGraphColoringWorld, GraphPipelineError> {
+    let mut intake = WhiteHoleRiverIntakeWidget::new();
+    for marble in petersen_serial_graph_coloring_stream(3) {
+        intake.push_serial(marble).map_err(GraphPipelineError::Intake)?;
+    }
+
+    let conveyor = intake
+        .take_full_conveyor()
+        .map_err(GraphPipelineError::Intake)?;
+    let instance =
+        GraphColoringProblemInstance::from_conveyor(universe, conveyor).map_err(GraphPipelineError::Intake)?;
+    raw_port_log_vertex_marbles(instance.vertex_count);
+    let colors = find_coloring_bruteforce(&instance)?;
+    raw_port_log_edge_ordered_colors(&instance, &colors);
+
+    let world = manual_place_graph_coloring_world(instance, &colors)
+        .map_err(GraphPipelineError::Manual)?;
+    Ok(world)
+}
+
+pub fn petersen_whitehole_to_world_visual() -> String {
+    petersen_whitehole_to_world(MarbleUniverseId(304))
+        .unwrap()
+        .render()
 }
 
 pub fn manual_graph_coloring_placement_record(
@@ -447,12 +590,11 @@ mod tests {
     fn serial_intake_waits_for_control_then_fills_until_n() {
         let mut intake = WhiteHoleRiverIntakeWidget::new();
         assert!(matches!(
-            intake.push_serial(RiverMarble::VertexCount(4)),
+            intake.push_serial(RiverMarble::PaletteSize(3)),
             Err(IntakeError::ExpectedControlMarble)
         ));
 
-        intake.push_serial(RiverMarble::ControlN(3)).unwrap();
-        intake.push_serial(RiverMarble::VertexCount(4)).unwrap();
+        intake.push_serial(RiverMarble::ControlN(2)).unwrap();
         intake.push_serial(RiverMarble::PaletteSize(3)).unwrap();
         assert!(!intake.is_full());
         intake.push_serial(RiverMarble::Edge { left: 0, right: 1 })
@@ -463,7 +605,7 @@ mod tests {
     #[test]
     fn conveyor_decodes_problem_instance() {
         let mut intake = WhiteHoleRiverIntakeWidget::new();
-        for marble in to_serial_graph_coloring_stream(4, 3, &[(0, 1), (1, 2), (2, 3)]) {
+        for marble in to_serial_graph_coloring_stream(3, &[(0, 1), (1, 2), (2, 3)]) {
             intake.push_serial(marble).unwrap();
         }
 
@@ -479,7 +621,7 @@ mod tests {
     #[test]
     fn manual_placement_uses_etcher1_and_produces_placement() {
         let mut intake = WhiteHoleRiverIntakeWidget::new();
-        for marble in to_serial_graph_coloring_stream(3, 3, &[(0, 1), (1, 2), (2, 0)]) {
+        for marble in to_serial_graph_coloring_stream(3, &[(0, 1), (1, 2), (2, 0)]) {
             intake.push_serial(marble).unwrap();
         }
 
@@ -518,5 +660,32 @@ mod tests {
         assert!(rendered.contains("problem-kind=graph-coloring"));
         assert!(rendered.contains("manual-widgets"));
         assert!(rendered.contains("etcher=etcher1"));
+    }
+
+    #[test]
+    fn petersen_graph_can_be_dropped_in_from_edges_only_stream() {
+        let mut intake = WhiteHoleRiverIntakeWidget::new();
+        for marble in petersen_serial_graph_coloring_stream(3) {
+            intake.push_serial(marble).unwrap();
+        }
+
+        let conveyor = intake.take_full_conveyor().unwrap();
+        let instance = GraphColoringProblemInstance::from_conveyor(MarbleUniverseId(303), conveyor)
+            .unwrap();
+
+        assert_eq!(instance.vertex_count, 10);
+        assert_eq!(instance.edges.len(), 15);
+        assert_eq!(instance.palette_size, 3);
+    }
+
+    #[test]
+    fn petersen_whitehole_pipeline_places_world_with_etcher1() {
+        let world = petersen_whitehole_to_world(MarbleUniverseId(305)).unwrap();
+        assert_eq!(world.instance.vertex_count, 10);
+        assert_eq!(world.instance.edges.len(), 15);
+        assert_eq!(world.colors.len(), 10);
+        assert!(is_valid_coloring(&world.instance, &world.colors));
+        assert_eq!(world.etched.etcher.name(), "etcher1");
+        assert!(petersen_whitehole_to_world_visual().contains("problem-kind=graph-coloring"));
     }
 }

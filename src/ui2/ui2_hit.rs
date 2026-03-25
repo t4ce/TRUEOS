@@ -157,6 +157,7 @@ impl Ui2WindowHitSource for Ui2Window {
                 }
             }
             Ui2WindowKind::HostedSurface => {}
+            Ui2WindowKind::Hosted3d => {}
         }
     }
 }

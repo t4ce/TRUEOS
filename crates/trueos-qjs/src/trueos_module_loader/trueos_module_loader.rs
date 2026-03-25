@@ -476,6 +476,7 @@ fn qjs_vendor_specifier(spec: &[u8]) -> Option<&'static [u8]> {
         b"openai" => Some(b"/qjs/vendor/openai.mjs"),
         b"parse5" => Some(b"/qjs/vendor/parse5.mjs"),
         b"yoga-layout" => Some(b"/qjs/vendor/yoga.mjs"),
+        b"three" => Some(b"https://esm.sh/three@0.162.0"),
         _ => None,
     }
 }
@@ -576,7 +577,6 @@ pub(crate) unsafe fn normalize_with_mode(
             || spec == b"worker_threads"
             || spec == b"trueos:yoga"
             || spec == b"yoga-native"
-            || spec == b"three"
             || spec == b"trueos:threejs"
             || spec == b"threejs-native"
             || spec == b"process"

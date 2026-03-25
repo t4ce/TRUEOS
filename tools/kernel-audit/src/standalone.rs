@@ -3,7 +3,6 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCAN_DIRS: &[&str] = &["src", "crates"];
 const SKIP_DIRS: &[&str] = &["vendor", "target", "tgt", "bld", ".git"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -34,6 +33,7 @@ struct Finding {
 struct ConstInfo {
     name: String,
     value: u64,
+    #[allow(dead_code)]
     line: usize,
 }
 
@@ -82,6 +82,7 @@ struct FileFacts {
 struct ParsedFile {
     path: PathBuf,
     facts: FileFacts,
+    lines: Vec<String>,
 }
 
 fn main() {
@@ -122,12 +123,7 @@ fn main() {
 
 fn scan_repo(root: &Path) -> Vec<ParsedFile> {
     let mut out = Vec::new();
-    for dir in SCAN_DIRS {
-        let base = root.join(dir);
-        if base.exists() {
-            walk_rs(&base, &mut out);
-        }
-    }
+    walk_rs(root, &mut out);
     out.sort_by(|left, right| left.path.cmp(&right.path));
     out
 }
@@ -155,9 +151,11 @@ fn walk_rs(path: &Path, out: &mut Vec<ParsedFile>) {
         let Ok(source) = fs::read_to_string(&path) else {
             continue;
         };
+        let lines = source.lines().map(|line| line.to_string()).collect();
         out.push(ParsedFile {
             path,
             facts: collect_facts(&source),
+            lines,
         });
     }
 }
@@ -462,6 +460,92 @@ fn analyze(root: &Path, files: &[ParsedFile]) -> Vec<Finding> {
         });
     }
 
+    // Broader static checks over all scanned lines.
+    for file in files {
+        for (idx, raw_line) in file.lines.iter().enumerate() {
+            let line_no = idx + 1;
+            let line = raw_line.trim();
+            if line.starts_with("//") {
+                continue;
+            }
+
+            if line.contains(".unwrap()") || line.contains(".expect(") {
+                findings.push(Finding {
+                    severity: Severity::Warning,
+                    path: file.path.clone(),
+                    line: line_no,
+                    kind: "panic-path",
+                    message: "unwrap/expect in kernel path may panic unexpectedly".to_string(),
+                });
+            }
+
+            if line.contains("todo!(") || line.contains("unimplemented!(") {
+                findings.push(Finding {
+                    severity: Severity::Warning,
+                    path: file.path.clone(),
+                    line: line_no,
+                    kind: "unfinished-code",
+                    message: "todo!/unimplemented! left in executable code path".to_string(),
+                });
+            }
+
+            if line.contains("panic!(")
+                && !line.contains("assert!")
+                && !line.contains("debug_assert!")
+            {
+                findings.push(Finding {
+                    severity: Severity::Warning,
+                    path: file.path.clone(),
+                    line: line_no,
+                    kind: "explicit-panic",
+                    message: "explicit panic! in kernel code path".to_string(),
+                });
+            }
+
+            if line.contains("Ordering::Relaxed") {
+                findings.push(Finding {
+                    severity: Severity::Warning,
+                    path: file.path.clone(),
+                    line: line_no,
+                    kind: "atomic-ordering",
+                    message: "Ordering::Relaxed used; validate memory-ordering contract".to_string(),
+                });
+            }
+
+            if (line.contains(" as u8") || line.contains(" as u16") || line.contains(" as u32"))
+                && (line.contains("len")
+                    || line.contains("count")
+                    || line.contains("index")
+                    || line.contains("_id")
+                    || line.contains("size"))
+            {
+                findings.push(Finding {
+                    severity: Severity::Warning,
+                    path: file.path.clone(),
+                    line: line_no,
+                    kind: "narrow-cast",
+                    message: "potentially narrowing integer cast on size/id/count value".to_string(),
+                });
+            }
+
+            if line.contains('[')
+                && line.contains(']')
+                && (line.contains("_id") || line.contains("index"))
+                && !line.contains(".get(")
+                && !line.contains(".get_mut(")
+            {
+                findings.push(Finding {
+                    severity: Severity::Warning,
+                    path: file.path.clone(),
+                    line: line_no,
+                    kind: "unchecked-index",
+                    message: "indexing by id/index detected without get()/get_mut() guard on this line"
+                        .to_string(),
+                });
+            }
+        }
+    }
+
     let mut dedup = BTreeSet::new();
     findings.retain(|finding| {
         dedup.insert((
@@ -502,7 +586,12 @@ fn parse_integer(text: &str) -> Option<u64> {
 }
 
 fn is_max_range_const(name: &str) -> bool {
-    name.contains("MAX") && (name.contains("ID") || name.contains("INSTANCE") || name.contains("COUNT"))
+    name.contains("MAX")
+        && (name.contains("ID")
+            || name.contains("INSTANCE")
+            || name.contains("COUNT")
+            || name.contains("SLOT")
+            || name.contains("SIZE"))
 }
 
 fn domains_match(left: &str, right: &str) -> bool {
