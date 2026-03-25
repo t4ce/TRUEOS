@@ -248,6 +248,25 @@ fn queue_ui2_hit_scene_refresh() {
     runtime.queued_ui2_scene = true;
 }
 
+#[inline]
+fn cursor_source_snapshot_px(
+    view_w: u32,
+    view_h: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    hid_kind: u8,
+) -> Option<(f32, f32)> {
+    let (nx, ny) =
+        crate::r::cursor::cursor_source_pos(controller_id, slot_id, ep_target, hid_kind)?;
+    let max_x = view_w.saturating_sub(1) as f32;
+    let max_y = view_h.saturating_sub(1) as f32;
+    Some((
+        (nx.clamp(0.0, 1.0) as f32) * max_x,
+        (ny.clamp(0.0, 1.0) as f32) * max_y,
+    ))
+}
+
 fn publish_ui2_hit_scene() {
     let next_seq = {
         let runtime = hit_runtime().lock();
@@ -283,6 +302,31 @@ fn publish_ui2_hit_scene() {
 
 pub(super) fn ui2_hit_at(cursor_x: f32, cursor_y: f32) -> Option<Ui2HitTarget> {
     hit_runtime().lock().scene.hit_at(cursor_x, cursor_y)
+}
+
+pub(super) fn ui2_hit_for_cursor_source(
+    view_w: u32,
+    view_h: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    hid_kind: u8,
+) -> Option<(f32, f32, Ui2HitTarget)> {
+    let (cursor_x, cursor_y) =
+        cursor_source_snapshot_px(view_w, view_h, controller_id, slot_id, ep_target, hid_kind)?;
+    let hit = hit_runtime().lock().scene.hit_at(cursor_x, cursor_y)?;
+    Some((cursor_x, cursor_y, hit))
+}
+
+pub(super) fn ui2_cursor_px_for_source(
+    view_w: u32,
+    view_h: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    hid_kind: u8,
+) -> Option<(f32, f32)> {
+    cursor_source_snapshot_px(view_w, view_h, controller_id, slot_id, ep_target, hid_kind)
 }
 
 pub(super) fn refresh_all_window_hit_entries(state: &mut Ui2State) {

@@ -40,6 +40,20 @@ fn snapshot_order_match(snapshot: &CursorSnapshot, phase: u8) -> bool {
     }
 }
 
+#[inline]
+fn snapshot_source_match(
+    snapshot: &CursorSnapshot,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    hid_kind: u8,
+) -> bool {
+    snapshot.controller_id == controller_id
+        && snapshot.slot_id == slot_id
+        && snapshot.ep_target == ep_target
+        && snapshot.hid_kind == hid_kind
+}
+
 pub fn upsert_snapshot(
     controller_id: u32,
     slot_id: u32,
@@ -165,6 +179,21 @@ pub fn cursor_pos(cursor_id: u32) -> Option<(f64, f64)> {
         }
     }
     None
+}
+
+pub fn cursor_source_pos(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    hid_kind: u8,
+) -> Option<(f64, f64)> {
+    let guard = CURSOR_SNAPSHOTS.lock();
+    guard
+        .iter()
+        .find(|snapshot| {
+            snapshot_source_match(snapshot, controller_id, slot_id, ep_target, hid_kind)
+        })
+        .map(|snapshot| (snapshot.x, snapshot.y))
 }
 
 pub fn cursor_buttons(cursor_id: u32) -> Option<u32> {
