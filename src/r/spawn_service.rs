@@ -117,6 +117,7 @@ define_started_flags!(
     SMTP_SMOKE_STARTED,
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
+    LOGTOTCP_STARTED,
     ATOMIC_BOMB_STARTED,
     SURFER_FACTORY_STARTED
 );
@@ -327,6 +328,12 @@ fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         spawner.spawn(crate::tst_net_tcp_shell::net_shell_task())
+    })
+}
+
+fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::globalog::logtotcp::logtotcp_task())
     })
 }
 
@@ -836,6 +843,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_sntp_service,
     ),
     TaskSpec::enabled("net-shell", 0, &NET_SHELL_STARTED, spawn_net_shell),
+    TaskSpec::enabled(
+        "logtotcp",
+        crate::r::readiness::NET_CONFIGURED,
+        &LOGTOTCP_STARTED,
+        spawn_logtotcp,
+    ),
     TaskSpec::disabled(
         "ai-task",
         AI_QJS_ONESHOT_READY,
