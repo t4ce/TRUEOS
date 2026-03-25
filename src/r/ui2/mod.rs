@@ -19,6 +19,7 @@ mod ui2_win_deco;
 
 mod ui2_win;
 
+use self::ui2_hid::*;
 pub(crate) use self::ui2_hosted::signal_hosted_browser_factory_mask;
 use self::ui2_hosted::*;
 pub use self::ui2_win::*;
@@ -281,6 +282,7 @@ struct Ui2State {
     compose_present_history_ms: Vec<u64>,
     compose_fps_display: u16,
     last_compose_heartbeat_seq: u32,
+    loadscreen_release_requested: bool,
     first_compose_signaled: bool,
 }
 
@@ -366,6 +368,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             compose_present_history_ms: Vec::new(),
             compose_fps_display: 0,
             last_compose_heartbeat_seq: 0,
+            loadscreen_release_requested: false,
             first_compose_signaled: false,
         };
 
@@ -920,282 +923,6 @@ fn apply_window_edge_drop_action(
     }
 }
 
-fn commit_window_geometry_change(state: &mut Ui2State, id: u32, reason: &'static str) -> bool {
-    let noted = note_window_dirty(state, id, reason);
-    if noted {
-        let _ = note_window_viewport_sync_needed(state, id);
-        refresh_window_hit_entries(state, id);
-    }
-    noted
-}
-
-fn minimize_window_in_state(state: &mut Ui2State, id: u32) -> bool {
-    let view_w = state.view_w;
-    let view_h = state.view_h;
-    let Some(window) = window_mut(state, id) else {
-        return false;
-    };
-    if window.state == Ui2WindowStateKind::Minimized {
-        return true;
-    }
-    if window.state == Ui2WindowStateKind::Normal {
-        window.restore_rect = normalized_window_rect_for_view(view_w, view_h, window.rect);
-    }
-    window.state = Ui2WindowStateKind::Minimized;
-    state.compose_reason = "minimize-window";
-    clear_window_drag_claims(state, id);
-    commit_window_geometry_change(state, id, "minimize-window")
-}
-
-fn maximize_window_in_state(state: &mut Ui2State, id: u32) -> bool {
-    let next_rect = maximize_window_rect(state);
-    let view_w = state.view_w;
-    let view_h = state.view_h;
-    let Some(window) = window_mut(state, id) else {
-        return false;
-    };
-    if window.state == Ui2WindowStateKind::Maximized && window.rect == next_rect {
-        return true;
-    }
-    if window.state != Ui2WindowStateKind::Maximized {
-        window.restore_rect = normalized_window_rect_for_view(view_w, view_h, window.rect);
-    }
-    window.rect = next_rect;
-    window.state = Ui2WindowStateKind::Maximized;
-    state.compose_reason = "maximize-window";
-    clear_window_drag_claims(state, id);
-    commit_window_geometry_change(state, id, "maximize-window")
-}
-
-fn restore_window_in_state(state: &mut Ui2State, id: u32) -> bool {
-    let view_w = state.view_w;
-    let view_h = state.view_h;
-    let Some(window) = window_mut(state, id) else {
-        return false;
-    };
-    if window.state == Ui2WindowStateKind::Normal {
-        return true;
-    }
-    if window.restore_rect.w > 0.0 && window.restore_rect.h > 0.0 {
-        window.rect = normalized_window_rect_for_view(view_w, view_h, window.restore_rect);
-    }
-    window.state = Ui2WindowStateKind::Normal;
-    state.compose_reason = "restore-window";
-    commit_window_geometry_change(state, id, "restore-window")
-}
-
-fn set_window_visible_in_state(state: &mut Ui2State, id: u32, visible: bool) -> bool {
-    let Some(window) = window_mut(state, id) else {
-        return false;
-    };
-    window.visible = visible;
-    let reason = if visible {
-        "show-window"
-    } else {
-        "hide-window"
-    };
-    state.compose_reason = reason;
-    if !visible {
-        state.hit_scene.remove_window(id);
-        state.hit_scene.seq = state.hit_scene.seq.wrapping_add(1);
-        clear_window_drag_claims(state, id);
-    }
-    let noted = note_window_dirty(state, id, reason);
-    if noted {
-        let _ = note_window_viewport_sync_needed(state, id);
-        refresh_window_hit_entries(state, id);
-    }
-    noted
-}
-
-fn handle_system_button_action(
-    state: &mut Ui2State,
-    window_id: u32,
-    action: Ui2SystemButtonAction,
-) -> bool {
-    match action {
-        Ui2SystemButtonAction::Fork => fork_window_in_state(state, window_id),
-        Ui2SystemButtonAction::Minimize => minimize_window_in_state(state, window_id),
-        Ui2SystemButtonAction::ToggleMaximize => {
-            let is_maximized = state
-                .windows
-                .iter()
-                .find(|window| window.id == window_id)
-                .map(|window| window.state == Ui2WindowStateKind::Maximized)
-                .unwrap_or(false);
-            if is_maximized {
-                restore_window_in_state(state, window_id)
-            } else {
-                maximize_window_in_state(state, window_id)
-            }
-        }
-        Ui2SystemButtonAction::Close => set_window_visible_in_state(state, window_id, false),
-    }
-}
-
-fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) -> bool {
-    let Some(source_window) = state
-        .windows
-        .iter()
-        .find(|window| window.id == source_window_id)
-    else {
-        return false;
-    };
-
-    let source_rect = if source_window.state == Ui2WindowStateKind::Normal {
-        source_window.rect
-    } else if source_window.restore_rect.w > 0.0 && source_window.restore_rect.h > 0.0 {
-        source_window.restore_rect
-    } else {
-        source_window.rect
-    };
-    let next_rect = normalized_window_rect_for_view(
-        state.view_w,
-        state.view_h,
-        Ui2Rect::new(
-            source_rect.x + UI2_BROWSER_FORK_WINDOW_OFFSET_PX,
-            source_rect.y + UI2_BROWSER_FORK_WINDOW_OFFSET_PX,
-            source_rect.w,
-            source_rect.h,
-        ),
-    );
-    let next_z = state
-        .windows
-        .iter()
-        .map(|window| window.z)
-        .max()
-        .unwrap_or(source_window.z)
-        .saturating_add(1);
-    let next_title = source_window.title.clone();
-    let next_icon_id = source_window.icon_id;
-    let next_alpha = source_window.alpha;
-    let next_hit_test_visible = source_window.hit_test_visible;
-    let next_decoration_mode = source_window.decoration_mode;
-    let next_titlebar_visible = source_window.titlebar_visible;
-    let next_bottom_bar_visible = source_window.bottom_bar_visible;
-    let next_left_scrollbar_visible = source_window.left_scrollbar_visible;
-    let next_bottom_scrollbar_visible = source_window.bottom_scrollbar_visible;
-    let next_vertical_scrollbar_side = source_window.vertical_scrollbar_side;
-    let next_horizontal_scrollbar_side = source_window.horizontal_scrollbar_side;
-    let next_content_tex_blend = source_window.content_tex_blend;
-    let next_kind = source_window.kind;
-
-    let (next_browser_instance_id, next_tex_id, fork_reason) = match next_kind {
-        Ui2WindowKind::HostedBrowser => {
-            let source_browser_instance_id = window_browser_instance_id(source_window);
-            let target_browser_instance_id = trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
-                .iter()
-                .copied()
-                .find(|browser_instance_id| {
-                    *browser_instance_id != source_browser_instance_id
-                        && state.windows.iter().all(|window| {
-                            window.kind != Ui2WindowKind::HostedBrowser
-                                || window_browser_instance_id(window) != *browser_instance_id
-                        })
-                });
-            let Some(target_browser_instance_id) = target_browser_instance_id else {
-                crate::log!(
-                    "ui2: browser-fork no-target window={} source_browser={}\n",
-                    source_window_id,
-                    source_browser_instance_id
-                );
-                return false;
-            };
-            (
-                target_browser_instance_id,
-                trueos_qjs::browser_task::render_tex_id_for_browser_instance(
-                    target_browser_instance_id,
-                ),
-                "fork-browser-window",
-            )
-        }
-        Ui2WindowKind::HostedSurface => (0, source_window.content_tex_id, "fork-surface-window"),
-    };
-
-    let id = alloc_window(
-        state,
-        next_kind,
-        next_title.as_str(),
-        next_rect,
-        next_z,
-        next_alpha,
-    );
-    if let Some(window) = window_mut(state, id) {
-        window.browser_instance_id = next_browser_instance_id;
-        window.icon_id = next_icon_id;
-        window.content_tex_id = next_tex_id;
-        window.content_tex_blend = next_content_tex_blend;
-        window.hit_test_visible = next_hit_test_visible;
-        window.decoration_mode = next_decoration_mode;
-        window.titlebar_visible = next_titlebar_visible;
-        window.bottom_bar_visible = next_bottom_bar_visible;
-        window.left_scrollbar_visible = next_left_scrollbar_visible;
-        window.bottom_scrollbar_visible = next_bottom_scrollbar_visible;
-        window.vertical_scrollbar_side = next_vertical_scrollbar_side;
-        window.horizontal_scrollbar_side = next_horizontal_scrollbar_side;
-        window.state = Ui2WindowStateKind::Normal;
-        window.rect = next_rect;
-        window.restore_rect = next_rect;
-    }
-
-    let initial_content = state
-        .windows
-        .iter()
-        .find(|window| window.id == id)
-        .and_then(|window| window_content_rect(state, window))
-        .map(|content| {
-            let (_, _, width, height) = snap_browser_content_rect(content);
-            (width, height)
-        });
-
-    if next_kind == Ui2WindowKind::HostedBrowser {
-        let _ = hosted_bind_window(next_browser_instance_id, id);
-        let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
-            next_browser_instance_id,
-            next_tex_id,
-        );
-    }
-    state.compose_reason = fork_reason;
-    let _ = note_window_dirty(state, id, fork_reason);
-    let _ = note_window_viewport_sync_needed(state, id);
-    refresh_window_hit_entries(state, id);
-    match next_kind {
-        Ui2WindowKind::HostedBrowser => {
-            crate::log!(
-                "ui2: browser-fork window={} browser={} from_window={}\n",
-                id,
-                next_browser_instance_id,
-                source_window_id
-            );
-        }
-        Ui2WindowKind::HostedSurface => {
-            crate::log!(
-                "ui2: surface-fork window={} tex={} from_window={}\n",
-                id,
-                next_tex_id,
-                source_window_id
-            );
-        }
-    }
-
-    if let Some((width, height)) = initial_content
-        && next_kind == Ui2WindowKind::HostedBrowser
-    {
-        let pixels =
-            alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
-        let _ = crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
-            next_tex_id,
-            width,
-            height,
-            pixels.as_slice(),
-            id,
-            fork_reason,
-        );
-    }
-
-    true
-}
-
 #[inline]
 fn is_valid_resize_edge_mask(edge_mask: u32) -> bool {
     if edge_mask == 0 {
@@ -1314,118 +1041,6 @@ fn note_window_viewport_sync_needed(state: &mut Ui2State, id: u32) -> bool {
     };
     window.container_sync_needed = true;
     true
-}
-
-fn ensure_window_texture_size(
-    tex_id: u32,
-    width: u32,
-    height: u32,
-    repaint_window_id: u32,
-    repaint_reason: &'static str,
-) -> bool {
-    if tex_id == 0 || width == 0 || height == 0 {
-        return false;
-    }
-
-    let mut existing_w = 0u32;
-    let mut existing_h = 0u32;
-    let already_sized = unsafe {
-        crate::r::io::cabi::trueos_cabi_gfx_texture_dimensions(
-            tex_id,
-            &mut existing_w as *mut u32,
-            &mut existing_h as *mut u32,
-        ) == 0
-    } && existing_w == width
-        && existing_h == height;
-    if already_sized {
-        return true;
-    }
-
-    let pixels =
-        alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
-    crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
-        tex_id,
-        width,
-        height,
-        pixels.as_slice(),
-        repaint_window_id,
-        repaint_reason,
-    )
-}
-
-fn sync_window_container(
-    window_id: u32,
-    renderable: bool,
-    kind: Ui2WindowKind,
-    content_id: HostedContentId,
-    content_tex_id: u32,
-    content: Option<Ui2Rect>,
-) -> bool {
-    if !renderable {
-        return true;
-    }
-    match kind {
-        Ui2WindowKind::HostedBrowser => {
-            let Some(content) = content else {
-                return true;
-            };
-            let (_, _, viewport_w, viewport_h) = snap_browser_content_rect(content);
-            if !ensure_window_texture_size(
-                content_tex_id,
-                viewport_w,
-                viewport_h,
-                window_id,
-                "browser-tab-texture-resize",
-            ) {
-                return false;
-            }
-            queue_browser_window_viewport(content_id, content)
-        }
-        Ui2WindowKind::HostedSurface => true,
-    }
-}
-
-fn sync_pending_window_containers(state: &mut Ui2State) {
-    let pending: Vec<(
-        u32,
-        bool,
-        Ui2WindowKind,
-        HostedContentId,
-        u32,
-        Option<Ui2Rect>,
-    )> = state
-        .windows
-        .iter()
-        .filter(|window| window.container_sync_needed)
-        .map(|window| {
-            let renderable = window_is_renderable(window);
-            let content = if renderable {
-                window_content_rect(state, window)
-            } else {
-                None
-            };
-            (
-                window.id,
-                renderable,
-                window.kind,
-                window_browser_instance_id(window),
-                window.content_tex_id,
-                content,
-            )
-        })
-        .collect();
-
-    let mut synced_ids = Vec::new();
-    for (id, renderable, kind, content_id, content_tex_id, content) in pending {
-        if sync_window_container(id, renderable, kind, content_id, content_tex_id, content) {
-            synced_ids.push(id);
-        }
-    }
-    for id in synced_ids {
-        if let Some(window) = window_mut(state, id) {
-            window.container_sync_needed = false;
-        }
-    }
 }
 
 #[unsafe(no_mangle)]
@@ -2176,5 +1791,179 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
     }
 }
 
-                    "boot-probe: ui2 first compose begin ms={}\n",
-        let width = crate::gfx::imbafont::measure_text_width_px_tracked(face, &out, px_h, 0.0);
+fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
+    let stats = collect_compose_window_stats(state);
+    let compose_seq = state.compose_seq.wrapping_add(1);
+    let compose_reason = state.compose_reason;
+    let compose_started_ms = boot_probe_ms();
+    let mut surface_timings = Vec::new();
+    let mut frame_ok = false;
+
+    crate::gfx::with_cabi_frame_lock(|| {
+        let begin_rc = unsafe {
+            if present_to_screen {
+                crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xE9EEF2)
+            } else {
+                crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0xE9EEF2)
+            }
+        };
+        if begin_rc != 0 {
+            crate::log!(
+                "ui2: begin_frame{} failed rc={}\n",
+                if present_to_screen { "" } else { "-no-present" },
+                begin_rc
+            );
+            return;
+        }
+
+        for idx in sorted_window_indices(state) {
+            let window = &state.windows[idx];
+            if !window_is_renderable(window) {
+                continue;
+            }
+            let timing = draw_window_frame(state, window);
+            surface_timings.push(Ui2ComposeSurfaceTiming {
+                id: window.id,
+                chrome_ms: timing.chrome_ms,
+                texture_ms: timing.texture_ms,
+                placeholder_ms: timing.placeholder_ms,
+                path: timing.content_path,
+            });
+        }
+        draw_resize_preview_outline(state);
+        unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_end_frame();
+        }
+        frame_ok = true;
+    });
+
+    if !frame_ok {
+        return false;
+    }
+
+    state.compose_seq = compose_seq;
+    state.last_logged_compose_seq = compose_seq;
+    state.last_logged_compose_reason = compose_reason;
+    state.last_logged_compose_dirty_count =
+        state.windows.iter().filter(|window| window.dirty).count();
+    UI2_DIRTY.store(false, Ordering::Release);
+    for window in &mut state.windows {
+        if window.dirty {
+            window.dirty = false;
+            window.dirty_seq = window.dirty_seq.wrapping_add(1);
+            window.last_logged_dirty_seq = window.dirty_seq;
+            window.last_logged_reason = window.last_reason;
+        }
+    }
+
+    if present_to_screen && !state.first_compose_signaled {
+        state.first_compose_signaled = true;
+        crate::r::readiness::set(crate::r::readiness::UI2_READY);
+        crate::log!(
+            "boot-probe: ui2 first compose begin ms={}\n",
+            compose_started_ms
+        );
+    }
+
+    if compose_seq <= 2 || compose_seq.is_multiple_of(UI2_COMPOSE_LOG_EVERY) {
+        let present_ms = boot_probe_ms().saturating_sub(compose_started_ms);
+        state.compose_present_history_ms.push(present_ms);
+        if state.compose_present_history_ms.len() > 64 {
+            let excess = state.compose_present_history_ms.len() - 64;
+            state.compose_present_history_ms.drain(..excess);
+        }
+        crate::log!(
+            "ui2: compose-heartbeat seq={} reason={} visible={} browser={} drawable={} pending={} surface={} present_ms={} present={}\n",
+            compose_seq,
+            compose_reason,
+            stats.visible_windows,
+            stats.hosted_browser_windows,
+            stats.hosted_browser_drawable,
+            stats.hosted_browser_pending,
+            stats.hosted_surface_windows,
+            present_ms,
+            if present_to_screen { 1 } else { 0 }
+        );
+        for timing in &surface_timings {
+            crate::log!(
+                "ui2: compose-surface-ms seq={} window={} chrome_ms={} texture_ms={} placeholder_ms={} path={}\n",
+                compose_seq,
+                timing.id,
+                timing.chrome_ms,
+                timing.texture_ms,
+                timing.placeholder_ms,
+                timing.path
+            );
+        }
+    }
+
+    true
+}
+
+#[embassy_executor::task]
+pub async fn ui2_task() {
+    if UI2_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    crate::log!("boot-probe: ui2 task start ms={}\n", boot_probe_ms());
+    let state_lock = init_state();
+    let mut last_browser_content_seq = 0u32;
+
+    loop {
+        let mut created_factory_windows = 0usize;
+        if let Some(active_mask) = take_hosted_browser_factory_mask() {
+            created_factory_windows = sync_hosted_browser_factory_windows(active_mask);
+            if created_factory_windows != 0 {
+                UI2_DIRTY.store(true, Ordering::Release);
+            }
+        }
+
+        let mut did_compose = false;
+        {
+            let mut state = state_lock.lock();
+            if created_factory_windows != 0 {
+                state.compose_reason = "hosted-browser-factory";
+            }
+
+            pump_cursor_selection(&mut state);
+            pump_keyboard_input(&mut state);
+            refresh_browser_hit_entries_if_needed(&mut state);
+            log_browser_surface_updates(&mut state);
+            sync_pending_window_containers(&mut state);
+
+            let browser_content_seq = hosted_browser_content_seq(&state);
+            if browser_content_seq != last_browser_content_seq {
+                last_browser_content_seq = browser_content_seq;
+                state.compose_reason = "browser-content";
+                UI2_DIRTY.store(true, Ordering::Release);
+            }
+
+            let loadscreen_ended = crate::r::readiness::is_set(crate::r::readiness::LOADSCREEN_END);
+            let should_compose = if loadscreen_ended {
+                !state.first_compose_signaled || UI2_DIRTY.load(Ordering::Acquire)
+            } else {
+                !state.loadscreen_release_requested || UI2_DIRTY.load(Ordering::Acquire)
+            };
+
+            if should_compose {
+                did_compose = compose_ui2_frame(&mut state, loadscreen_ended);
+                if did_compose && !loadscreen_ended && !state.loadscreen_release_requested {
+                    state.loadscreen_release_requested = true;
+                    crate::r::readiness::set_loadscreen_expire_requested(true);
+                    crate::log!(
+                        "boot-probe: ui2 requested loadscreen release ms={}\n",
+                        boot_probe_ms()
+                    );
+                }
+            }
+        }
+
+        Timer::after(EmbassyDuration::from_millis(if did_compose {
+            16
+        } else {
+            10
+        }))
+        .await;
+    }
+}
