@@ -110,6 +110,17 @@ pub fn last_logo_rect() -> Option<(usize, usize, usize, usize)> {
     Some((x, y, w, h))
 }
 
+pub fn decoded_logo_rgba() -> Option<(usize, usize, &'static [u32])> {
+    log_once();
+    let (_, _, w, h) = last_logo_rect()?;
+    let expected = w.checked_mul(h)?;
+    if expected == 0 || expected > MAX_PIXELS {
+        return None;
+    }
+    let pixels = unsafe { &BGRT_PIXELS[..expected] };
+    Some((w, h, pixels))
+}
+
 fn set_last_logo_rect(x: usize, y: usize, w: usize, h: usize) {
     let x = (x.min(0xFFFF)) as u64;
     let y = (y.min(0xFFFF)) as u64;

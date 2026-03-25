@@ -95,6 +95,7 @@ define_started_flags!(
     UI2_GFX_BROWSER_STARTED,
     UI2_GFX_TETRIS_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
+    UI2_BGRT_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_IMBA_ATHLAS_DEMO_STARTED,
     GFX_INTEL_TRIANGLE_DEMO_STARTED,
@@ -594,6 +595,12 @@ fn spawn_ui2_triangle_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_bgrt_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_bgrt::ui2_bgrt_demo_task())
+    })
+}
+
 fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_mandelbrot_demo::ui2_mandelbrot_demo_task())
@@ -868,6 +875,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_triangle_demo,
     ),
     TaskSpec::enabled(
+        "ui2-bgrt-demo",
+        crate::r::readiness::UI2_READY,
+        &UI2_BGRT_DEMO_STARTED,
+        spawn_ui2_bgrt_demo,
+    ),
+    TaskSpec::enabled(
         "ui2-mandelbrot-demo",
         crate::r::readiness::UI2_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
@@ -911,7 +924,7 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled("piano-drain", 0, &PIANO_DRAIN_STARTED, spawn_piano_drain),
     TaskSpec::disabled(
-        "boot-ws-smoke",d("smtp
+        "boot-ws-smoke",
         WS_BOOT_READY,
         &BOOT_WS_SMOKE_STARTED,
         spawn_boot_ws_smoke,
