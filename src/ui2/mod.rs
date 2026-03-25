@@ -20,8 +20,8 @@ mod ui2_win;
 use self::ui2_hid::*;
 pub(crate) use self::ui2_hit::ui2_hit_task;
 use self::ui2_hit::*;
-pub(crate) use self::ui2_hosted::signal_hosted_browser_factory_mask;
 use self::ui2_hosted::*;
+pub(crate) use self::ui2_hosted::{signal_hosted_browser_factory_mask, ui2_hosted_task};
 pub use self::ui2_win::*;
 pub use self::ui2_win_deco::*;
 
@@ -792,6 +792,7 @@ fn note_window_viewport_sync_needed(state: &mut Ui2State, id: u32) -> bool {
         return false;
     };
     window.container_sync_needed = true;
+    queue_hosted_container_sync();
     true
 }
 
@@ -1734,7 +1735,6 @@ pub async fn ui2_task() {
             pump_cursor_selection(&mut state);
             pump_keyboard_input(&mut state);
             log_browser_surface_updates(&mut state);
-            sync_pending_window_containers(&mut state);
             apply_hosted_browser_dirty(&mut state, hosted_browser_dirty);
 
             let loadscreen_ended = crate::r::readiness::is_set(crate::r::readiness::LOADSCREEN_END);
