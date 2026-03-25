@@ -135,6 +135,7 @@ fn window_kind_id(kind: Ui2WindowKind) -> u32 {
     match kind {
         Ui2WindowKind::HostedBrowser => 1,
         Ui2WindowKind::HostedSurface => 2,
+        Ui2WindowKind::Hosted3d => 4,
     }
 }
 
@@ -427,6 +428,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
             )
         }
         Ui2WindowKind::HostedSurface => (0, source_window.content_tex_id, "fork-surface-window"),
+        Ui2WindowKind::Hosted3d => (0, source_window.content_tex_id, "fork-3d-window"),
     };
 
     let id = alloc_window(
@@ -488,6 +490,14 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         Ui2WindowKind::HostedSurface => {
             crate::log!(
                 "ui2: surface-fork window={} tex={} from_window={}\n",
+                id,
+                next_tex_id,
+                source_window_id
+            );
+        }
+        Ui2WindowKind::Hosted3d => {
+            crate::log!(
+                "ui2: 3d-fork window={} tex={} from_window={}\n",
                 id,
                 next_tex_id,
                 source_window_id
@@ -708,6 +718,39 @@ pub fn create_hosted_surface_content_window(
 ) -> u32 {
     let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
     create_hosted_surface_window(title, rect, z, alpha, tex_id, blend_enabled)
+}
+
+pub fn create_hosted_3d_window(
+    title: &str,
+    rect: Ui2Rect,
+    z: i16,
+    alpha: u8,
+    tex_id: u32,
+    blend_enabled: bool,
+) -> u32 {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let id = alloc_window(&mut state, Ui2WindowKind::Hosted3d, title, rect, z, alpha);
+    if let Some(window) = window_mut(&mut state, id) {
+        window.content_tex_id = tex_id;
+        window.content_tex_blend = blend_enabled;
+    }
+    state.compose_reason = "create-3d-window";
+    refresh_window_hit_entries(&mut state, id);
+    UI2_DIRTY.store(true, Ordering::Release);
+    id
+}
+
+pub fn create_hosted_3d_content_window(
+    title: &str,
+    content_rect: Ui2Rect,
+    z: i16,
+    alpha: u8,
+    tex_id: u32,
+    blend_enabled: bool,
+) -> u32 {
+    let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
+    create_hosted_3d_window(title, rect, z, alpha, tex_id, blend_enabled)
 }
 
 pub fn set_window_hosted_surface_content(id: u32, tex_id: u32, blend_enabled: bool) -> bool {

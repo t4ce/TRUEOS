@@ -144,6 +144,7 @@ enum Ui2SystemButtonAction {
 enum Ui2WindowKind {
     HostedBrowser,
     HostedSurface,
+    Hosted3d,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -364,6 +365,9 @@ fn collect_compose_window_stats(state: &Ui2State) -> Ui2ComposeWindowStats {
             Ui2WindowKind::HostedSurface => {
                 stats.hosted_surface_windows = stats.hosted_surface_windows.saturating_add(1);
             }
+            Ui2WindowKind::Hosted3d => {
+                stats.hosted_surface_windows = stats.hosted_surface_windows.saturating_add(1);
+            }
         }
     }
     stats
@@ -496,6 +500,7 @@ fn window_kind_id(kind: Ui2WindowKind) -> u32 {
     match kind {
         Ui2WindowKind::HostedBrowser => 1,
         Ui2WindowKind::HostedSurface => 3,
+        Ui2WindowKind::Hosted3d => 4,
     }
 }
 
@@ -1531,6 +1536,50 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
                         "surface-texture-fallback"
                     } else {
                         "surface-placeholder"
+                    },
+                };
+            }
+        }
+        Ui2WindowKind::Hosted3d => {
+            if let Some(content) = content_rect {
+                let texture_drawable = texture_is_drawable(window.content_tex_id);
+                if texture_drawable {
+                    let texture_started_ms = boot_probe_ms();
+                    if draw_texture_rect_no_present(
+                        window.content_tex_id,
+                        content.x,
+                        content.y,
+                        content.w,
+                        content.h,
+                        state.view_w,
+                        state.view_h,
+                        window.content_tex_blend,
+                        window.alpha,
+                    ) {
+                        return Ui2WindowDrawTiming {
+                            chrome_ms,
+                            texture_ms: boot_probe_ms().saturating_sub(texture_started_ms),
+                            placeholder_ms: 0,
+                            content_path: "3d-texture",
+                        };
+                    }
+                }
+                let placeholder_started_ms = boot_probe_ms();
+                draw_window_content_placeholder(
+                    state,
+                    window,
+                    content,
+                    b"Starting 3D Scene",
+                    b"Waiting for scene frame",
+                );
+                return Ui2WindowDrawTiming {
+                    chrome_ms,
+                    texture_ms: 0,
+                    placeholder_ms: boot_probe_ms().saturating_sub(placeholder_started_ms),
+                    content_path: if texture_drawable {
+                        "3d-texture-fallback"
+                    } else {
+                        "3d-placeholder"
                     },
                 };
             }

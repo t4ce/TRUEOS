@@ -499,7 +499,7 @@ pub fn queue_hosted_keyboard_events(browser_window_id: u32, events: &[HostedKeyb
     if events.is_empty() {
         return true;
     }
-    let Some(browser_instance_id) = BOOT_BROWSER_INSTANCE_IDS.iter().copied().find(|candidate| {
+    let Some(browser_instance_id) = (1..=MAX_BROWSER_INSTANCE_ID).find(|candidate| {
         browser_window_id_for_instance(*candidate) == browser_window_id
     }) else {
         return false;
