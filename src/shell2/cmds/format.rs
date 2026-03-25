@@ -141,6 +141,7 @@ async fn format_command_task(target: MatrixTarget, disk: DeviceHandle) {
                                 .await
                                 {
                                     Ok(()) => {
+                                        crate::r::fs::trueosfs::request_mount_root(disk);
                                         let (status, err) =
                                             crate::r::disc::detect::detect_physical_disk_detail(
                                                 disk,
