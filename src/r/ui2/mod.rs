@@ -4,6 +4,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Ordering as CmpOrdering;
+use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -290,6 +291,23 @@ struct Ui2ComposeWindowStats {
     hosted_browser_drawable: usize,
     hosted_browser_pending: usize,
     hosted_surface_windows: usize,
+}
+
+#[derive(Clone, Debug)]
+struct Ui2ComposeSurfaceTiming {
+    id: u32,
+    chrome_ms: u64,
+    texture_ms: u64,
+    placeholder_ms: u64,
+    path: &'static str,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui2WindowDrawTiming {
+    chrome_ms: u64,
+    texture_ms: u64,
+    placeholder_ms: u64,
+    content_path: &'static str,
 }
 
 static UI2_STATE: Once<Mutex<Ui2State>> = Once::new();
@@ -2162,17 +2180,16 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
         Ui2SystemButtonAction::ToggleMaximize => UI2_SYSTEM_BUTTON_MAXIMIZE_ICON_ID,
         Ui2SystemButtonAction::Close => UI2_SYSTEM_BUTTON_CLOSE_ICON_ID,
     };
+    let _ = icon_id;
     let icon_x = rect.x + ((rect.w - 16.0) * 0.5);
     let icon_y = rect.y + ((rect.h - 16.0) * 0.5);
-    let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
-        icon_id,
-        0,
-        1,
+    draw_window_decoration_icon(
+        state,
+        window,
+        Ui2DecorationIconKind::SystemButton(action),
         icon_x,
         icon_y,
-        state.view_w,
-        state.view_h,
-        window.alpha,
+        16.0,
     );
 }
 
@@ -2183,15 +2200,13 @@ fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
     let icon_side = 16.0f32;
     let icon_x = rect.x + ((rect.w - icon_side) * 0.5);
     let icon_y = rect.y + ((rect.h - icon_side) * 0.5);
-    let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
-        1,
-        0,
-        1,
+    draw_window_decoration_icon(
+        state,
+        window,
+        Ui2DecorationIconKind::ResizeHandle,
         icon_x,
         icon_y,
-        state.view_w,
-        state.view_h,
-        window.alpha,
+        icon_side,
     );
 }
 
@@ -2467,11 +2482,12 @@ fn draw_hosted_browser_layout_preview(
     drew_any
 }
 
-fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
+fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTiming {
     if !window_is_renderable(window) {
-        return;
+        return Ui2WindowDrawTiming::default();
     }
 
+    let frame_started_ms = boot_probe_ms();
     let rect = effective_window_rect(state, window);
     let content_rect = window_content_rect(state, window);
     let frame_base_rgba = (0xD9, 0xDE, 0xE5, 0xFF);
@@ -2548,15 +2564,13 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
             let icon_side = 16.0f32;
             let icon_x = rect.x + 8.0;
             let icon_y = rect.y + ((UI2_TITLE_H - icon_side) * 0.5);
-            let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
-                window.icon_id,
-                0,
-                1,
+            draw_window_decoration_icon(
+                state,
+                window,
+                Ui2DecorationIconKind::TitlebarWindow,
                 icon_x,
                 icon_y,
-                state.view_w,
-                state.view_h,
-                window.alpha,
+                icon_side,
             );
         }
         let title_face = crate::gfx::imbafont::ImbaFontFace::Loop;
@@ -2602,11 +2616,19 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
         draw_window_bottom_resize_button(state, window);
     }
 
+    let chrome_ms = boot_probe_ms().saturating_sub(frame_started_ms);
+
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
             if let Some(content) = content_rect {
+                let content_started_ms = boot_probe_ms();
                 if draw_hosted_browser_layout_preview(state, window, content) {
-                    return;
+                    return Ui2WindowDrawTiming {
+                        chrome_ms,
+                        texture_ms: boot_probe_ms().saturating_sub(content_started_ms),
+                        placeholder_ms: 0,
+                        content_path: "browser-preview",
+                    };
                 }
                 if texture_is_drawable(window.content_tex_id)
                     && draw_texture_rect_no_present(
@@ -2621,8 +2643,14 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                         window.alpha,
                     )
                 {
-                    return;
+                    return Ui2WindowDrawTiming {
+                        chrome_ms,
+                        texture_ms: boot_probe_ms().saturating_sub(content_started_ms),
+                        placeholder_ms: 0,
+                        content_path: "browser-texture",
+                    };
                 }
+                let placeholder_started_ms = boot_probe_ms();
                 draw_window_content_placeholder(
                     state,
                     window,
@@ -2630,13 +2658,20 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                     b"Starting Browser Tab",
                     b"Waiting for texture frame",
                 );
-                return;
+                return Ui2WindowDrawTiming {
+                    chrome_ms,
+                    texture_ms: 0,
+                    placeholder_ms: boot_probe_ms().saturating_sub(placeholder_started_ms),
+                    content_path: "browser-placeholder",
+                };
             }
         }
         Ui2WindowKind::HostedSurface => {
             if let Some(content) = content_rect {
-                if texture_is_drawable(window.content_tex_id)
-                    && draw_texture_rect_no_present(
+                let texture_drawable = texture_is_drawable(window.content_tex_id);
+                if texture_drawable {
+                    let texture_started_ms = boot_probe_ms();
+                    if draw_texture_rect_no_present(
                         window.content_tex_id,
                         content.x,
                         content.y,
@@ -2646,10 +2681,16 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                         state.view_h,
                         window.content_tex_blend,
                         window.alpha,
-                    )
-                {
-                    return;
+                    ) {
+                        return Ui2WindowDrawTiming {
+                            chrome_ms,
+                            texture_ms: boot_probe_ms().saturating_sub(texture_started_ms),
+                            placeholder_ms: 0,
+                            content_path: "surface-texture",
+                        };
+                    }
                 }
+                let placeholder_started_ms = boot_probe_ms();
                 draw_window_content_placeholder(
                     state,
                     window,
@@ -2657,9 +2698,25 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) {
                     b"Preparing Window",
                     b"Waiting for texture upload",
                 );
-                return;
+                return Ui2WindowDrawTiming {
+                    chrome_ms,
+                    texture_ms: 0,
+                    placeholder_ms: boot_probe_ms().saturating_sub(placeholder_started_ms),
+                    content_path: if texture_drawable {
+                        "surface-texture-fallback"
+                    } else {
+                        "surface-placeholder"
+                    },
+                };
             }
         }
+    }
+
+    Ui2WindowDrawTiming {
+        chrome_ms,
+        texture_ms: 0,
+        placeholder_ms: 0,
+        content_path: "none",
     }
 }
 
@@ -2784,6 +2841,7 @@ fn compose_windows(state: &mut Ui2State) {
         let mut frame_begin_done_ms = compose_started_ms;
         let mut draw_done_ms = compose_started_ms;
         let mut end_done_ms = compose_started_ms;
+        let mut surface_timings = Vec::new();
         crate::gfx::with_cabi_frame_lock(|| {
             if state.compose_seq <= 2 {
                 crate::log!(
@@ -2800,7 +2858,16 @@ fn compose_windows(state: &mut Ui2State) {
             frame_begin_done_ms = boot_probe_ms();
             for idx in sorted_window_indices(state) {
                 let window = &state.windows[idx];
-                draw_window_frame(state, window);
+                let breakdown = draw_window_frame(state, window);
+                if window.kind == Ui2WindowKind::HostedSurface {
+                    surface_timings.push(Ui2ComposeSurfaceTiming {
+                        id: window.id,
+                        chrome_ms: breakdown.chrome_ms,
+                        texture_ms: breakdown.texture_ms,
+                        placeholder_ms: breakdown.placeholder_ms,
+                        path: breakdown.content_path,
+                    });
+                }
             }
             draw_resize_preview_outline(state);
             draw_hud_pass(state);
@@ -2837,6 +2904,27 @@ fn compose_windows(state: &mut Ui2State) {
                 window_stats.hosted_surface_windows,
                 dirty_count,
             );
+            if !surface_timings.is_empty() {
+                let mut surface_line = String::new();
+                let _ = write!(
+                    &mut surface_line,
+                    "ui2: compose-surface-ms seq={} ",
+                    state.compose_seq
+                );
+                for timing in &surface_timings {
+                    let _ = write!(
+                        &mut surface_line,
+                        "id={} path={} chrome_ms={} texture_ms={} placeholder_ms={} ",
+                        timing.id,
+                        timing.path,
+                        timing.chrome_ms,
+                        timing.texture_ms,
+                        timing.placeholder_ms,
+                    );
+                }
+                surface_line.push('\n');
+                crate::log!("{}", surface_line);
+            }
             state.last_compose_heartbeat_seq = state.compose_seq;
         }
     } else if state.compose_seq <= 2 {
