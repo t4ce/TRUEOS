@@ -27,7 +27,6 @@ mod intel;
 mod iso9660;
 mod limine;
 mod logflag;
-pub mod marble;
 mod net;
 mod pci;
 mod percpu;
@@ -59,13 +58,12 @@ mod tst_ui2_imba_athlas_demo;
 mod tst_ui2_mandelbrot_demo;
 #[path = "tst/ui2_triangle_demo.rs"]
 mod tst_ui2_triangle_demo;
-#[path = "tst/widget_tree.rs"]
-mod tst_widget_tree;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
 mod usb2;
 mod wait;
+mod widget_kind;
 mod x2apic;
 mod z7;
 

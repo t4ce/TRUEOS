@@ -3,7 +3,35 @@ what the god of time gives to you
 
 fast actual time
 reliable hardware interrupt callbacks at desired intervalls
-easy api
+normal code
+  ->
+APIC fires
+  ->
+Chronos ISR
+  ->
+update time + mark expired timers
+  ->
+return to interrupted code
+  ->
+consumer task wakes and runs
+
+EXAMPLE TIME
+
+time_source / Chronos ISR
+  updates latest TimeSnapshot
+  increments watch seq
+  marks timer A due every 10 ms
+  marks timer B due every 1000 ms
+
+consumer_a task
+  wakes when A becomes due
+  reads latest snapshot
+  does 10 ms work
+
+consumer_b task
+  wakes when B becomes due
+  reads latest snapshot
+  does 1 s work
 */
 // this is our apic helper
 use core::arch::x86_64::_rdtsc;
