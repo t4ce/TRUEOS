@@ -91,6 +91,7 @@ define_started_flags!(
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     GFX_LOADSCREEN_STARTED,
     HTML_SHACK_SERVICE_STARTED,
+    UI2_HIT_TASK_STARTED,
     UI2_STARTED,
     UI2_GFX_BROWSER_STARTED,
     UI2_GFX_TETRIS_STARTED,
@@ -583,6 +584,12 @@ fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_hit(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1(spawner, |ap1_spawner| {
+        ap1_spawner.spawn(crate::r::ui2::ui2_hit_task())
+    })
+}
+
 fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_gfx_tetris::ui2_gfx_tetris_task())
@@ -855,6 +862,12 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::GFX_BOOT_FRAME_READY,
         &UI2_STARTED,
         spawn_ui2,
+    ),
+    TaskSpec::enabled(
+        "ui2-hit",
+        crate::r::readiness::GFX_BOOT_FRAME_READY,
+        &UI2_HIT_TASK_STARTED,
+        spawn_ui2_hit,
     ),
     TaskSpec::enabled(
         "truesurfer-factory",

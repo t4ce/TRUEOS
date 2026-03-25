@@ -1,5 +1,9 @@
 use super::*;
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
+static UI2_CURSOR_CAP_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+
 pub(super) fn cursor_color(slot_id: u32) -> (u8, u8, u8, u8) {
     match slot_id % 6 {
         0 => (0x3B, 0x82, 0xF6, 0xFF),
@@ -77,15 +81,28 @@ fn cursor_index(state: &Ui2State, slot_id: u32) -> Option<usize> {
         .position(|cursor| cursor.slot_id == slot_id)
 }
 
-fn ensure_cursor_index(state: &mut Ui2State, slot_id: u32) -> usize {
+fn ensure_cursor_index(state: &mut Ui2State, slot_id: u32) -> Option<usize> {
     if let Some(idx) = cursor_index(state, slot_id) {
-        return idx;
+        return Some(idx);
+    }
+    if state.cursors.len() >= UI2_CURSOR_CAP {
+        let drop_count = UI2_CURSOR_CAP_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if drop_count <= 8 || drop_count.is_multiple_of(32) {
+            crate::log!(
+                "ui2: cursor-cap drop slot={} cap={} tracked={} count={}\n",
+                slot_id,
+                UI2_CURSOR_CAP,
+                state.cursors.len(),
+                drop_count
+            );
+        }
+        return None;
     }
     state.cursors.push(Ui2CursorState {
         slot_id,
         ..Ui2CursorState::default()
     });
-    state.cursors.len() - 1
+    Some(state.cursors.len() - 1)
 }
 
 pub(super) fn note_selection_change(window: &mut Ui2Window) {
@@ -94,7 +111,9 @@ pub(super) fn note_selection_change(window: &mut Ui2Window) {
 }
 
 fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id: u32) -> bool {
-    let cursor_idx = ensure_cursor_index(state, slot_id);
+    let Some(cursor_idx) = ensure_cursor_index(state, slot_id) else {
+        return false;
+    };
     if state.cursors[cursor_idx].selected_window_id == next_window_id {
         return false;
     }
@@ -169,8 +188,8 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
 
     let px = cursor_event_px(event.x, state.view_w);
     let py = cursor_event_px(event.y, state.view_h);
-    let press_hit = state.hit_scene.hit_at(px, py);
-    let release_hit = state.hit_scene.hit_at(px, py);
+    let press_hit = ui2_hit_at(px, py);
+    let release_hit = ui2_hit_at(px, py);
     let press_system_button_action = press_hit.and_then(|target| {
         if target.kind == Ui2HitKind::WindowDecoration {
             system_button_action_at(state, target.owner_window_id, px, py)
@@ -186,7 +205,9 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     let release_window_id = release_hit
         .map(|target| target.owner_window_id)
         .unwrap_or(0);
-    let cursor_idx = ensure_cursor_index(state, slot_id);
+    let Some(cursor_idx) = ensure_cursor_index(state, slot_id) else {
+        return;
+    };
 
     let mut select_window_id: Option<u32> = None;
     let mut window_button_action: Option<(u32, Ui2SystemButtonAction)> = None;
