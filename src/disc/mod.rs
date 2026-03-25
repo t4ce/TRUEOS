@@ -6,6 +6,6 @@ static PROBE_ONCE: spin::Once<()> = spin::Once::new();
 
 pub fn probe_once() {
     PROBE_ONCE.call_once(|| {
-        //nvme::probe_once();
+        crate::pci::nvme::probe_once();
     });
 }
