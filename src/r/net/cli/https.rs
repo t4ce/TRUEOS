@@ -13,7 +13,10 @@ use crate::r::io::cabi::{
 use crate::r::net::{NetProfile, Queue};
 use crate::wait::WaitQueue;
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
+use core::{
+    fmt::Write as _,
+    sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering},
+};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use v::vnet;
@@ -241,6 +244,541 @@ fn keepalive_record_connect_failure(conn: &'static KeepAliveConn, host: &str, de
         st.connect_fail_streak,
         delay_ms
     );
+}
+
+struct KeepAliveReady {
+    conn: &'static KeepAliveConn,
+    handle: vnet::NetHandle,
+    reused: bool,
+    deadline: Instant,
+    last_activity: Instant,
+}
+
+async fn keepalive_prepare_ready(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    timeout_ms: u32,
+    log_prefix: &str,
+) -> Result<KeepAliveReady, FetchError> {
+    let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
+    keepalive_acquire(conn).await;
+
+    // Drain pending events so each request starts from a clean boundary while
+    // still preserving pooled socket state transitions.
+    keepalive_sync_state(conn);
+
+    let mut reused = false;
+    {
+        let mut st = conn.state.lock();
+        let idle_ms = Instant::now()
+            .saturating_duration_since(st.last_used)
+            .as_millis() as u64;
+        if st.handle.is_some() && idle_ms > HttpsLimits::KEEPALIVE_IDLE_CLOSE_MS {
+            if let Some(h) = st.handle.take() {
+                let _ = conn.cmds.push(TlsCommand::Close { handle: h });
+            }
+            st.connected = false;
+        } else if st.handle.is_some() && st.connected {
+            reused = true;
+        }
+    }
+
+    let mut ip: Option<[u8; 4]> = None;
+    if !reused {
+        match dns::resolve_ipv4_for_device(
+            dev_idx,
+            parsed.host.as_str(),
+            DnsConfig::for_device(dev_idx),
+        )
+        .await
+        {
+            Ok(v) => ip = Some(v),
+            Err(dns::DnsError::Timeout) => {
+                keepalive_release(conn);
+                return Err(FetchError::DnsTimeout);
+            }
+            Err(_) => {
+                keepalive_release(conn);
+                return Err(FetchError::DnsFailed);
+            }
+        }
+    }
+
+    let roots = TlsRoots::mozilla();
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let server_name = leak_str(parsed.host.clone());
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
+    let mut connect_in_flight = false;
+    let mut last_activity = Instant::now();
+    let mut ready_handle: Option<vnet::NetHandle> = None;
+
+    'connect_wait: loop {
+        let (handle, connected) = {
+            let st = conn.state.lock();
+            (st.handle, st.connected)
+        };
+
+        if handle.is_some() && connected {
+            crate::log!(
+                "{}: connected host={} dev={} handle={}\n",
+                log_prefix,
+                parsed.host,
+                dev_idx,
+                handle.expect("checked is_some").0
+            );
+            ready_handle = handle;
+            break;
+        }
+
+        if handle.is_none() && !connect_in_flight {
+            let wait_ms = keepalive_connect_wait_ms(conn);
+            if wait_ms != 0 {
+                Timer::after(EmbassyDuration::from_millis(wait_ms.min(250))).await;
+                continue;
+            }
+            let Some(ip) = ip else {
+                keepalive_release(conn);
+                return Err(FetchError::ConnectTimeout);
+            };
+            crate::log!(
+                "{}: connect host={} dev={} fresh=1\n",
+                log_prefix,
+                parsed.host,
+                dev_idx
+            );
+            let _ = conn.cmds.push(TlsCommand::OpenTcpConnect {
+                remote: vnet::EndpointV4 {
+                    addr: ip,
+                    port: parsed.port,
+                },
+                server_name,
+                cfg: cfg.clone(),
+                roots: roots.clone(),
+                timeouts: crate::net::tls_socket::TlsTimeouts {
+                    connect_ms: (timeout_ms / 4).max(5_000),
+                    tls_ms: (timeout_ms / 4).max(5_000),
+                    idle_ms: timeout_ms,
+                },
+            });
+            connect_in_flight = true;
+        }
+
+        for ev in conn.events.drain(1024) {
+            match ev {
+                TlsEvent::Opened { handle } => {
+                    let mut st = conn.state.lock();
+                    if st.handle.is_none() {
+                        st.handle = Some(handle);
+                        crate::log!(
+                            "{}: opened host={} dev={} handle={}\n",
+                            log_prefix,
+                            parsed.host,
+                            dev_idx,
+                            handle.0
+                        );
+                    }
+                    last_activity = Instant::now();
+                }
+                TlsEvent::Connected { handle } => {
+                    let matched = {
+                        let mut st = conn.state.lock();
+                        if st.handle == Some(handle) {
+                            st.connected = true;
+                            crate::log!(
+                                "{}: tls-connected host={} dev={} handle={}\n",
+                                log_prefix,
+                                parsed.host,
+                                dev_idx,
+                                handle.0
+                            );
+                            ready_handle = Some(handle);
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if matched {
+                        keepalive_record_connect_success(conn);
+                        last_activity = Instant::now();
+                        break 'connect_wait;
+                    }
+                }
+                TlsEvent::Closed { handle } => {
+                    let mut st = conn.state.lock();
+                    if st.handle == Some(handle) {
+                        let was_connected = st.connected;
+                        crate::log!(
+                            "{}: closed-connect-phase host={} dev={} handle={} was_connected={}\n",
+                            log_prefix,
+                            parsed.host,
+                            dev_idx,
+                            handle.0,
+                            if was_connected { 1 } else { 0 }
+                        );
+                        st.handle = None;
+                        st.connected = false;
+                        connect_in_flight = false;
+                        if !was_connected {
+                            drop(st);
+                            keepalive_record_connect_failure(conn, parsed.host.as_str(), dev_idx);
+                        }
+                    }
+                }
+                TlsEvent::TlsError { .. } => {
+                    let mut st = conn.state.lock();
+                    st.handle = None;
+                    st.connected = false;
+                    connect_in_flight = false;
+                    drop(st);
+                    keepalive_record_connect_failure(conn, parsed.host.as_str(), dev_idx);
+                }
+                _ => {}
+            }
+        }
+
+        if Instant::now() >= deadline {
+            keepalive_record_connect_failure(conn, parsed.host.as_str(), dev_idx);
+            let (handle, connected) = {
+                let st = conn.state.lock();
+                (st.handle, st.connected)
+            };
+            crate::log!(
+                "{}: connect-phase-timeout host={} dev={} handle={} connected={}\n",
+                log_prefix,
+                parsed.host,
+                dev_idx,
+                if handle.is_some() { 1 } else { 0 },
+                if connected { 1 } else { 0 }
+            );
+            keepalive_release(conn);
+            return Err(if handle.is_none() {
+                FetchError::ConnectTimeout
+            } else {
+                FetchError::TlsTimeout
+            });
+        }
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
+
+    Ok(KeepAliveReady {
+        conn,
+        handle: ready_handle.expect("connected handle"),
+        reused,
+        deadline,
+        last_activity,
+    })
+}
+
+#[inline]
+fn keepalive_mark_disconnected(conn: &'static KeepAliveConn) {
+    let mut st = conn.state.lock();
+    st.handle = None;
+    st.connected = false;
+}
+
+#[inline]
+fn keepalive_release_connected(conn: &'static KeepAliveConn) {
+    let mut st = conn.state.lock();
+    st.last_used = Instant::now();
+    keepalive_release(conn);
+}
+
+#[inline]
+fn keepalive_discard_and_release(conn: &'static KeepAliveConn) {
+    keepalive_mark_disconnected(conn);
+    keepalive_release(conn);
+}
+
+#[inline]
+fn keepalive_close_discard_and_release(conn: &'static KeepAliveConn, handle: vnet::NetHandle) {
+    let _ = conn.cmds.push(TlsCommand::Close { handle });
+    keepalive_discard_and_release(conn);
+}
+
+fn log_keepalive_done(
+    log_prefix: &str,
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    status: u16,
+    bytes: usize,
+    reused: bool,
+    closed: bool,
+) {
+    if closed {
+        crate::log!(
+            "{}: done host={} dev={} status={} bytes={} reused={} closed=1\n",
+            log_prefix,
+            parsed.host,
+            dev_idx,
+            status,
+            bytes,
+            if reused { 1 } else { 0 }
+        );
+    } else {
+        crate::log!(
+            "{}: done host={} dev={} status={} bytes={} reused={}\n",
+            log_prefix,
+            parsed.host,
+            dev_idx,
+            status,
+            bytes,
+            if reused { 1 } else { 0 }
+        );
+    }
+}
+
+struct KeepAliveByteFetch<'a> {
+    log_prefix: &'static str,
+    request: String,
+    request_path: Option<&'a str>,
+    done_log: bool,
+    log_close_details: bool,
+    progress: Option<&'a mut dyn FetchProgress>,
+}
+
+async fn fetch_keepalive_bytes(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    timeout_ms: u32,
+    max_bytes: usize,
+    mut fetch: KeepAliveByteFetch<'_>,
+) -> Result<Vec<u8>, FetchError> {
+    let KeepAliveReady {
+        conn,
+        handle,
+        reused,
+        deadline,
+        mut last_activity,
+    } = keepalive_prepare_ready(parsed, dev_idx, timeout_ms, fetch.log_prefix).await?;
+    let mut last_progress = Instant::now();
+
+    crate::log!(
+        "{}: request host={} dev={} reused={}\n",
+        fetch.log_prefix,
+        parsed.host,
+        dev_idx,
+        if reused { 1 } else { 0 }
+    );
+
+    let req_len = fetch.request.len();
+    let _ = conn.cmds.push(TlsCommand::Send {
+        handle,
+        data: fetch.request.into_bytes(),
+    });
+    if let Some(path) = fetch.request_path {
+        crate::log!(
+            "{}: request-sent host={} dev={} handle={} bytes={} path={}\n",
+            fetch.log_prefix,
+            parsed.host,
+            dev_idx,
+            handle.0,
+            req_len,
+            path
+        );
+    }
+
+    let capture_cap = max_bytes.saturating_add(64 * 1024);
+    let mut plaintext: Vec<u8> = Vec::new();
+    let mut hdr_end_cached: Option<usize> = None;
+    let mut content_len_cached: Option<Option<usize>> = None;
+    let mut saw_any_data = false;
+    let mut logged_first_data = false;
+    let mut saw_header_end = false;
+
+    loop {
+        for ev in conn.events.drain(1024) {
+            match ev {
+                TlsEvent::Data { handle: h, data } => {
+                    if h != handle || data.is_empty() {
+                        continue;
+                    }
+                    saw_any_data = true;
+                    if fetch.log_close_details && !logged_first_data {
+                        crate::log!(
+                            "{}: first-data host={} dev={} handle={} bytes={}\n",
+                            fetch.log_prefix,
+                            parsed.host,
+                            dev_idx,
+                            handle.0,
+                            data.len()
+                        );
+                        logged_first_data = true;
+                    }
+                    last_activity = Instant::now();
+
+                    let room = capture_cap.saturating_sub(plaintext.len());
+                    if room == 0 {
+                        keepalive_close_discard_and_release(conn, handle);
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+                    let take = data.len().min(room);
+                    plaintext.extend_from_slice(&data[..take]);
+                    if take < data.len() {
+                        keepalive_close_discard_and_release(conn, handle);
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+
+                    let hdr_end = match hdr_end_cached {
+                        Some(v) => v,
+                        None => {
+                            let v = find_http_header_end(&plaintext);
+                            if let Some(v) = v {
+                                hdr_end_cached = Some(v);
+                            }
+                            v.unwrap_or(0)
+                        }
+                    };
+
+                    if let Some(hdr_end) = hdr_end_cached
+                        && hdr_end != 0
+                    {
+                        saw_header_end = true;
+                        if content_len_cached.is_none() {
+                            let headers = &plaintext[..hdr_end];
+                            content_len_cached = Some(header_parse_content_length(headers));
+                        }
+
+                        if let Some(ref mut p) = fetch.progress {
+                            let now = Instant::now();
+                            if now.saturating_duration_since(last_progress)
+                                >= EmbassyDuration::from_millis(100)
+                            {
+                                let body_len = plaintext.len().saturating_sub(hdr_end);
+                                p.on_progress(body_len, content_len_cached.unwrap_or(None));
+                                last_progress = now;
+                            }
+                        }
+                    }
+
+                    if hdr_end == 0 {
+                        continue;
+                    }
+
+                    let headers = &plaintext[..hdr_end];
+                    let body = &plaintext[hdr_end..];
+                    let status = parse_http_status(&plaintext).unwrap_or(0);
+                    if status != 200 {
+                        if is_redirect_status(status)
+                            && let Some(next) = redirect_url_from_location(parsed, headers)
+                        {
+                            keepalive_close_discard_and_release(conn, handle);
+                            return Err(FetchError::Redirect { status, url: next });
+                        }
+
+                        log_http_error_response(status, headers, body);
+                        keepalive_close_discard_and_release(conn, handle);
+                        return Err(FetchError::Http(status));
+                    }
+
+                    if status == 204 {
+                        keepalive_release_connected(conn);
+                        return Ok(Vec::new());
+                    }
+
+                    let Some(decoded) = try_decode_complete_http_body(headers, body) else {
+                        continue;
+                    };
+                    ensure_body_within_limit(decoded.as_slice(), max_bytes)?;
+                    if let Some(ref mut p) = fetch.progress {
+                        p.on_progress(decoded.len(), Some(decoded.len()));
+                    }
+                    if fetch.done_log {
+                        log_keepalive_done(
+                            fetch.log_prefix,
+                            parsed,
+                            dev_idx,
+                            status,
+                            decoded.len(),
+                            reused,
+                            false,
+                        );
+                    }
+                    keepalive_release_connected(conn);
+                    return Ok(decoded);
+                }
+                TlsEvent::Closed { handle: h } => {
+                    if h != handle {
+                        continue;
+                    }
+
+                    if fetch.log_close_details && !saw_any_data {
+                        crate::log!(
+                            "{}: closed-no-data host={} dev={} handle={} reused={}\n",
+                            fetch.log_prefix,
+                            parsed.host,
+                            dev_idx,
+                            handle.0,
+                            if reused { 1 } else { 0 }
+                        );
+                    } else if fetch.log_close_details && !saw_header_end {
+                        crate::log!(
+                            "{}: closed-before-header-end host={} dev={} handle={} raw_bytes={} reused={}\n",
+                            fetch.log_prefix,
+                            parsed.host,
+                            dev_idx,
+                            handle.0,
+                            plaintext.len(),
+                            if reused { 1 } else { 0 }
+                        );
+                    }
+
+                    keepalive_mark_disconnected(conn);
+
+                    let Some(hdr_end) = find_http_header_end(&plaintext) else {
+                        keepalive_release(conn);
+                        return Err(FetchError::Http(0));
+                    };
+                    let headers = &plaintext[..hdr_end];
+                    let body = &plaintext[hdr_end..];
+                    let status = parse_http_status(&plaintext).unwrap_or(0);
+
+                    if status != 200 {
+                        if is_redirect_status(status)
+                            && let Some(next) = redirect_url_from_location(parsed, headers)
+                        {
+                            keepalive_release(conn);
+                            return Err(FetchError::Redirect { status, url: next });
+                        }
+                        keepalive_release(conn);
+                        return Err(FetchError::Http(status));
+                    }
+
+                    let decoded_body = decode_http_body_lossy(headers, body);
+                    ensure_body_within_limit(decoded_body.as_slice(), max_bytes)?;
+                    if let Some(ref mut p) = fetch.progress {
+                        p.on_progress(decoded_body.len(), Some(decoded_body.len()));
+                    }
+                    if fetch.done_log {
+                        log_keepalive_done(
+                            fetch.log_prefix,
+                            parsed,
+                            dev_idx,
+                            status,
+                            decoded_body.len(),
+                            reused,
+                            true,
+                        );
+                    }
+                    keepalive_release(conn);
+                    return Ok(decoded_body);
+                }
+                TlsEvent::TlsError { .. } => {
+                    keepalive_discard_and_release(conn);
+                    return Err(FetchError::Tls);
+                }
+                TlsEvent::Error { .. } => {}
+                _ => {}
+            }
+        }
+
+        let now = Instant::now();
+        let idle_deadline = last_activity + EmbassyDuration::from_millis(timeout_ms as u64);
+        if now >= idle_deadline || now >= deadline {
+            keepalive_close_discard_and_release(conn, handle);
+            return Err(FetchError::BodyTimeout);
+        }
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
 }
 
 // Net-fetch scheduler (used by QJS URL module cache):
@@ -613,6 +1151,64 @@ struct ParsedHttpsUrl {
     path: String,
 }
 
+#[derive(Clone, Copy)]
+enum HttpRequestMethod {
+    Get,
+    Post,
+}
+
+#[derive(Clone, Copy)]
+enum HttpConnectionMode {
+    Close,
+    KeepAlive,
+}
+
+struct HttpRequestSpec<'a> {
+    method: HttpRequestMethod,
+    host: &'a str,
+    path: &'a str,
+    connection: HttpConnectionMode,
+    accept: &'a str,
+    accept_encoding_identity: bool,
+    content_type: Option<&'a str>,
+    body: Option<&'a str>,
+    auth_bearer: Option<&'a str>,
+}
+
+fn build_http_request(spec: HttpRequestSpec<'_>) -> String {
+    let method = match spec.method {
+        HttpRequestMethod::Get => "GET",
+        HttpRequestMethod::Post => "POST",
+    };
+    let connection = match spec.connection {
+        HttpConnectionMode::Close => "close",
+        HttpConnectionMode::KeepAlive => "keep-alive",
+    };
+
+    let mut req = String::new();
+    let _ = write!(
+        &mut req,
+        "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nConnection: {}\r\n",
+        method, spec.path, spec.host, connection,
+    );
+    if let Some(content_type) = spec.content_type {
+        let _ = write!(&mut req, "Content-Type: {}\r\n", content_type);
+    }
+    let _ = write!(&mut req, "Accept: {}\r\n", spec.accept);
+    if spec.accept_encoding_identity {
+        req.push_str("Accept-Encoding: identity\r\n");
+    }
+    if let Some(token) = spec.auth_bearer {
+        let _ = write!(&mut req, "Authorization: Bearer {}\r\n", token);
+    }
+    if let Some(body) = spec.body {
+        let _ = write!(&mut req, "Content-Length: {}\r\n\r\n{}", body.len(), body);
+    } else {
+        req.push_str("\r\n");
+    }
+    req
+}
+
 fn parse_https_url(url: &str) -> Option<ParsedHttpsUrl> {
     let url = url.strip_prefix("https://")?;
 
@@ -779,6 +1375,53 @@ fn decode_http_chunked(body: &[u8]) -> Option<Vec<u8>> {
             return None;
         }
         i += 2;
+    }
+}
+
+fn decode_http_body_lossy(headers: &[u8], body: &[u8]) -> Vec<u8> {
+    if header_contains_token(headers, b"transfer-encoding", b"chunked") {
+        decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
+    } else if let Some(len) = header_parse_content_length(headers) {
+        body.get(..len).unwrap_or(body).to_vec()
+    } else {
+        body.to_vec()
+    }
+}
+
+fn try_decode_complete_http_body(headers: &[u8], body: &[u8]) -> Option<Vec<u8>> {
+    if header_contains_token(headers, b"transfer-encoding", b"chunked") {
+        decode_http_chunked(body)
+    } else if let Some(len) = header_parse_content_length(headers) {
+        if body.len() >= len {
+            Some(body[..len].to_vec())
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn log_http_error_response(status: u16, headers: &[u8], body: &[u8]) {
+    let decoded_body = decode_http_body_lossy(headers, body);
+    crate::log!(
+        "vhttps: http_error status={} body_len={}\n",
+        status,
+        decoded_body.len()
+    );
+    if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
+        log_utf8_chunks("vhttps: http_error_body: ", s);
+    } else {
+        crate::log!("vhttps: http_error_body: [non-utf8]\n");
+    }
+}
+
+#[inline]
+fn ensure_body_within_limit(decoded_body: &[u8], max_bytes: usize) -> Result<(), FetchError> {
+    if decoded_body.len() > max_bytes {
+        Err(FetchError::ResponseTooLarge)
+    } else {
+        Ok(())
     }
 }
 
@@ -974,23 +1617,21 @@ async fn fetch_on_device(
                         continue;
                     }
                     if !http_sent {
-                        let auth = if let Some(token) = auth_token {
-                            format!("Authorization: Bearer {}\r\n", token)
-                        } else {
-                            String::new()
-                        };
-                        let req = if let Some(body) = body_json {
-                            let len = body.len();
-                            format!(
-                                "POST {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nConnection: close\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nAccept: */*\r\n\r\n{}",
-                                parsed.path, parsed.host, auth, len, body
-                            )
-                        } else {
-                            format!(
-                                "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\n{}Accept: */*\r\nConnection: close\r\n\r\n",
-                                parsed.path, parsed.host, auth
-                            )
-                        };
+                        let req = build_http_request(HttpRequestSpec {
+                            method: if body_json.is_some() {
+                                HttpRequestMethod::Post
+                            } else {
+                                HttpRequestMethod::Get
+                            },
+                            host: parsed.host.as_str(),
+                            path: parsed.path.as_str(),
+                            connection: HttpConnectionMode::Close,
+                            accept: "*/*",
+                            accept_encoding_identity: false,
+                            content_type: body_json.map(|_| "application/json"),
+                            body: body_json,
+                            auth_bearer: auth_token,
+                        });
                         let _ = cmds.push(TlsCommand::Send {
                             handle,
                             data: req.into_bytes(),
@@ -1096,28 +1737,7 @@ async fn fetch_on_device(
                                 }
 
                                 // Log error bodies (often JSON) to aid debugging.
-                                let is_chunked = header_contains_token(
-                                    headers,
-                                    b"transfer-encoding",
-                                    b"chunked",
-                                );
-                                let decoded_body = if is_chunked {
-                                    decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
-                                } else if let Some(len) = header_parse_content_length(headers) {
-                                    body.get(..len).unwrap_or(body).to_vec()
-                                } else {
-                                    body.to_vec()
-                                };
-                                crate::log!(
-                                    "vhttps: http_error status={} body_len={}\n",
-                                    status,
-                                    decoded_body.len()
-                                );
-                                if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
-                                    log_utf8_chunks("vhttps: http_error_body: ", s);
-                                } else {
-                                    crate::log!("vhttps: http_error_body: [non-utf8]\n");
-                                }
+                                log_http_error_response(status, headers, body);
 
                                 if let Some(h) = tls_handle {
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
@@ -1498,16 +2118,17 @@ async fn fetch_on_device_sse(
                         continue;
                     }
                     if !http_sent {
-                        let auth = if let Some(token) = auth_token {
-                            format!("Authorization: Bearer {}\r\n", token)
-                        } else {
-                            String::new()
-                        };
-                        let len = body_json.len();
-                        let req = format!(
-                            "POST {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nConnection: close\r\nContent-Type: application/json\r\nAccept: text/event-stream\r\nAccept-Encoding: identity\r\n{}Content-Length: {}\r\n\r\n{}",
-                            parsed.path, parsed.host, auth, len, body_json
-                        );
+                        let req = build_http_request(HttpRequestSpec {
+                            method: HttpRequestMethod::Post,
+                            host: parsed.host.as_str(),
+                            path: parsed.path.as_str(),
+                            connection: HttpConnectionMode::Close,
+                            accept: "text/event-stream",
+                            accept_encoding_identity: true,
+                            content_type: Some("application/json"),
+                            body: Some(body_json),
+                            auth_bearer: auth_token,
+                        });
                         let _ = cmds.push(TlsCommand::Send {
                             handle,
                             data: req.into_bytes(),
@@ -1881,524 +2502,32 @@ async fn fetch_on_device_keepalive(
     mut progress: Option<&mut dyn FetchProgress>,
 ) -> Result<Vec<u8>, FetchError> {
     let want_done_log = progress.is_some();
-    let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
-    keepalive_acquire(conn).await;
-
-    // Best-effort drain to start from a clean request boundary while still
-    // honoring any pending close/TLS-error notifications from the pooled socket.
-    keepalive_sync_state(conn);
-
-    let mut reused = false;
-    {
-        let mut st = conn.state.lock();
-        let idle_ms = Instant::now()
-            .saturating_duration_since(st.last_used)
-            .as_millis() as u64;
-        if st.handle.is_some() && idle_ms > HttpsLimits::KEEPALIVE_IDLE_CLOSE_MS {
-            if let Some(h) = st.handle.take() {
-                let _ = conn.cmds.push(TlsCommand::Close { handle: h });
-            }
-            st.connected = false;
-        } else if st.handle.is_some() && st.connected {
-            reused = true;
-        }
-    }
-
-    let mut ip: Option<[u8; 4]> = None;
-    if !reused {
-        match dns::resolve_ipv4_for_device(
-            dev_idx,
-            parsed.host.as_str(),
-            DnsConfig::for_device(dev_idx),
-        )
-        .await
-        {
-            Ok(v) => ip = Some(v),
-            Err(dns::DnsError::Timeout) => {
-                keepalive_release(conn);
-                return Err(FetchError::DnsTimeout);
-            }
-            Err(_) => {
-                keepalive_release(conn);
-                return Err(FetchError::DnsFailed);
-            }
-        }
-    }
-
-    let roots = TlsRoots::mozilla();
-    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
-    let server_name = leak_str(parsed.host.clone());
-    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
-    let mut connect_in_flight = false;
-    let mut last_progress = Instant::now();
-    let mut last_activity = Instant::now();
-    let mut ready_handle: Option<vnet::NetHandle> = None;
-
-    'connect_wait: loop {
-        let (handle, connected) = {
-            let st = conn.state.lock();
-            (st.handle, st.connected)
-        };
-
-        if handle.is_some() && connected {
-            crate::log!(
-                "vhttps-ka: connected host={} dev={} handle={}\n",
-                parsed.host,
-                dev_idx,
-                handle.expect("checked is_some").0
-            );
-            ready_handle = handle;
-            break;
-        }
-
-        if handle.is_none() && !connect_in_flight {
-            let wait_ms = keepalive_connect_wait_ms(conn);
-            if wait_ms != 0 {
-                Timer::after(EmbassyDuration::from_millis(wait_ms.min(250))).await;
-                continue;
-            }
-            let Some(ip) = ip else {
-                keepalive_release(conn);
-                return Err(FetchError::ConnectTimeout);
-            };
-            crate::log!(
-                "vhttps-ka: connect host={} dev={} fresh=1\n",
-                parsed.host,
-                dev_idx
-            );
-            let _ = conn.cmds.push(TlsCommand::OpenTcpConnect {
-                remote: vnet::EndpointV4 {
-                    addr: ip,
-                    port: parsed.port,
-                },
-                server_name,
-                cfg: cfg.clone(),
-                roots: roots.clone(),
-                timeouts: crate::net::tls_socket::TlsTimeouts {
-                    connect_ms: (timeout_ms / 4).max(5_000),
-                    tls_ms: (timeout_ms / 4).max(5_000),
-                    idle_ms: timeout_ms,
-                },
-            });
-            connect_in_flight = true;
-        }
-
-        for ev in conn.events.drain(1024) {
-            match ev {
-                TlsEvent::Opened { handle } => {
-                    let mut st = conn.state.lock();
-                    if st.handle.is_none() {
-                        st.handle = Some(handle);
-                        crate::log!(
-                            "vhttps-ka: opened host={} dev={} handle={}\n",
-                            parsed.host,
-                            dev_idx,
-                            handle.0
-                        );
-                    }
-                    last_activity = Instant::now();
-                }
-                TlsEvent::Connected { handle } => {
-                    let matched = {
-                        let mut st = conn.state.lock();
-                        if st.handle == Some(handle) {
-                            st.connected = true;
-                            crate::log!(
-                                "vhttps-ka: tls-connected host={} dev={} handle={}\n",
-                                parsed.host,
-                                dev_idx,
-                                handle.0
-                            );
-                            ready_handle = Some(handle);
-                            true
-                        } else {
-                            false
-                        }
-                    };
-                    if matched {
-                        keepalive_record_connect_success(conn);
-                        last_activity = Instant::now();
-                        break 'connect_wait;
-                    }
-                }
-                TlsEvent::Closed { handle } => {
-                    let mut st = conn.state.lock();
-                    if st.handle == Some(handle) {
-                        let was_connected = st.connected;
-                        crate::log!(
-                            "vhttps-ka: closed-connect-phase host={} dev={} handle={} was_connected={}\n",
-                            parsed.host,
-                            dev_idx,
-                            handle.0,
-                            if was_connected { 1 } else { 0 }
-                        );
-                        st.handle = None;
-                        st.connected = false;
-                        connect_in_flight = false;
-                        if !was_connected {
-                            drop(st);
-                            keepalive_record_connect_failure(conn, parsed.host.as_str(), dev_idx);
-                        }
-                    }
-                }
-                TlsEvent::TlsError { .. } => {
-                    let mut st = conn.state.lock();
-                    st.handle = None;
-                    st.connected = false;
-                    connect_in_flight = false;
-                    drop(st);
-                    keepalive_record_connect_failure(conn, parsed.host.as_str(), dev_idx);
-                }
-                _ => {}
-            }
-        }
-
-        if Instant::now() >= deadline {
-            keepalive_record_connect_failure(conn, parsed.host.as_str(), dev_idx);
-            let (handle, connected) = {
-                let st = conn.state.lock();
-                (st.handle, st.connected)
-            };
-            crate::log!(
-                "vhttps-ka: connect-phase-timeout host={} dev={} handle={} connected={}\n",
-                parsed.host,
-                dev_idx,
-                if handle.is_some() { 1 } else { 0 },
-                if connected { 1 } else { 0 }
-            );
-            keepalive_release(conn);
-            return Err(if handle.is_none() {
-                FetchError::ConnectTimeout
-            } else {
-                FetchError::TlsTimeout
-            });
-        }
-        Timer::after(EmbassyDuration::from_millis(2)).await;
-    }
-
-    crate::log!(
-        "vhttps-ka: request host={} dev={} reused={}\n",
-        parsed.host,
-        dev_idx,
-        if reused { 1 } else { 0 }
-    );
-
-    let handle = ready_handle.expect("connected handle");
-    let req = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: keep-alive\r\n\r\n",
-        parsed.path, parsed.host
-    );
-    let req_len = req.len();
-    let _ = conn.cmds.push(TlsCommand::Send {
-        handle,
-        data: req.into_bytes(),
+    let request = build_http_request(HttpRequestSpec {
+        method: HttpRequestMethod::Get,
+        host: parsed.host.as_str(),
+        path: parsed.path.as_str(),
+        connection: HttpConnectionMode::KeepAlive,
+        accept: "*/*",
+        accept_encoding_identity: true,
+        content_type: None,
+        body: None,
+        auth_bearer: None,
     });
-    crate::log!(
-        "vhttps-ka: request-sent host={} dev={} handle={} bytes={} path={}\n",
-        parsed.host,
+    fetch_keepalive_bytes(
+        parsed,
         dev_idx,
-        handle.0,
-        req_len,
-        parsed.path
-    );
-
-    let capture_cap = max_bytes.saturating_add(64 * 1024);
-    let mut plaintext: Vec<u8> = Vec::new();
-    let mut hdr_end_cached: Option<usize> = None;
-    let mut content_len_cached: Option<Option<usize>> = None;
-    let mut saw_any_data = false;
-    let mut logged_first_data = false;
-    let mut saw_header_end = false;
-
-    loop {
-        for ev in conn.events.drain(1024) {
-            match ev {
-                TlsEvent::Data { handle: h, data } => {
-                    if h != handle || data.is_empty() {
-                        continue;
-                    }
-                    saw_any_data = true;
-                    if !logged_first_data {
-                        crate::log!(
-                            "vhttps-ka: first-data host={} dev={} handle={} bytes={}\n",
-                            parsed.host,
-                            dev_idx,
-                            handle.0,
-                            data.len()
-                        );
-                        logged_first_data = true;
-                    }
-                    last_activity = Instant::now();
-
-                    let room = capture_cap.saturating_sub(plaintext.len());
-                    if room == 0 {
-                        let _ = conn.cmds.push(TlsCommand::Close { handle });
-                        let mut st = conn.state.lock();
-                        st.handle = None;
-                        st.connected = false;
-                        keepalive_release(conn);
-                        return Err(FetchError::ResponseTooLarge);
-                    }
-                    let take = data.len().min(room);
-                    plaintext.extend_from_slice(&data[..take]);
-                    if take < data.len() {
-                        let _ = conn.cmds.push(TlsCommand::Close { handle });
-                        let mut st = conn.state.lock();
-                        st.handle = None;
-                        st.connected = false;
-                        keepalive_release(conn);
-                        return Err(FetchError::ResponseTooLarge);
-                    }
-
-                    let hdr_end = match hdr_end_cached {
-                        Some(v) => v,
-                        None => {
-                            let v = find_http_header_end(&plaintext);
-                            if let Some(v) = v {
-                                hdr_end_cached = Some(v);
-                            }
-                            v.unwrap_or(0)
-                        }
-                    };
-
-                    if let Some(hdr_end) = hdr_end_cached
-                        && hdr_end != 0
-                    {
-                        saw_header_end = true;
-                        if content_len_cached.is_none() {
-                            let headers = &plaintext[..hdr_end];
-                            content_len_cached = Some(header_parse_content_length(headers));
-                        }
-
-                        if let Some(ref mut p) = progress {
-                            let now = Instant::now();
-                            if now.saturating_duration_since(last_progress)
-                                >= EmbassyDuration::from_millis(100)
-                            {
-                                let body_len = plaintext.len().saturating_sub(hdr_end);
-                                p.on_progress(body_len, content_len_cached.unwrap_or(None));
-                                last_progress = now;
-                            }
-                        }
-                    }
-
-                    if hdr_end != 0 {
-                        let headers = &plaintext[..hdr_end];
-                        let body = &plaintext[hdr_end..];
-
-                        let status = parse_http_status(&plaintext).unwrap_or(0);
-                        if status != 200 {
-                            if is_redirect_status(status)
-                                && let Some(next) = redirect_url_from_location(parsed, headers)
-                            {
-                                let _ = conn.cmds.push(TlsCommand::Close { handle });
-                                let mut st = conn.state.lock();
-                                st.handle = None;
-                                st.connected = false;
-                                keepalive_release(conn);
-                                return Err(FetchError::Redirect { status, url: next });
-                            }
-
-                            let is_chunked =
-                                header_contains_token(headers, b"transfer-encoding", b"chunked");
-                            let decoded_body = if is_chunked {
-                                decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
-                            } else if let Some(len) = header_parse_content_length(headers) {
-                                body.get(..len).unwrap_or(body).to_vec()
-                            } else {
-                                body.to_vec()
-                            };
-                            crate::log!(
-                                "vhttps: http_error status={} body_len={}\n",
-                                status,
-                                decoded_body.len()
-                            );
-                            if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
-                                log_utf8_chunks("vhttps: http_error_body: ", s);
-                            } else {
-                                crate::log!("vhttps: http_error_body: [non-utf8]\n");
-                            }
-
-                            let _ = conn.cmds.push(TlsCommand::Close { handle });
-                            let mut st = conn.state.lock();
-                            st.handle = None;
-                            st.connected = false;
-                            keepalive_release(conn);
-                            return Err(FetchError::Http(status));
-                        }
-
-                        if status == 204 {
-                            let mut st = conn.state.lock();
-                            st.last_used = Instant::now();
-                            keepalive_release(conn);
-                            return Ok(Vec::new());
-                        }
-
-                        let is_chunked =
-                            header_contains_token(headers, b"transfer-encoding", b"chunked");
-                        if is_chunked {
-                            if let Some(decoded) = decode_http_chunked(body) {
-                                if decoded.len() > max_bytes {
-                                    let _ = conn.cmds.push(TlsCommand::Close { handle });
-                                    let mut st = conn.state.lock();
-                                    st.handle = None;
-                                    st.connected = false;
-                                    keepalive_release(conn);
-                                    return Err(FetchError::ResponseTooLarge);
-                                }
-                                if let Some(ref mut p) = progress {
-                                    p.on_progress(decoded.len(), Some(decoded.len()));
-                                }
-                                if want_done_log {
-                                    crate::log!(
-                                        "vhttps-ka: done host={} dev={} status={} bytes={} reused={}\n",
-                                        parsed.host,
-                                        dev_idx,
-                                        status,
-                                        decoded.len(),
-                                        if reused { 1 } else { 0 }
-                                    );
-                                }
-                                let mut st = conn.state.lock();
-                                st.last_used = Instant::now();
-                                keepalive_release(conn);
-                                return Ok(decoded);
-                            }
-                        } else if let Some(len) = header_parse_content_length(headers) {
-                            if body.len() >= len {
-                                let out = body[..len].to_vec();
-                                if out.len() > max_bytes {
-                                    let _ = conn.cmds.push(TlsCommand::Close { handle });
-                                    let mut st = conn.state.lock();
-                                    st.handle = None;
-                                    st.connected = false;
-                                    keepalive_release(conn);
-                                    return Err(FetchError::ResponseTooLarge);
-                                }
-                                if let Some(ref mut p) = progress {
-                                    p.on_progress(out.len(), Some(out.len()));
-                                }
-                                if want_done_log {
-                                    crate::log!(
-                                        "vhttps-ka: done host={} dev={} status={} bytes={} reused={}\n",
-                                        parsed.host,
-                                        dev_idx,
-                                        status,
-                                        out.len(),
-                                        if reused { 1 } else { 0 }
-                                    );
-                                }
-                                let mut st = conn.state.lock();
-                                st.last_used = Instant::now();
-                                keepalive_release(conn);
-                                return Ok(out);
-                            }
-                        }
-                    }
-                }
-                TlsEvent::Closed { handle: h } => {
-                    if h != handle {
-                        continue;
-                    }
-
-                    if !saw_any_data {
-                        crate::log!(
-                            "vhttps-ka: closed-no-data host={} dev={} handle={} reused={}\n",
-                            parsed.host,
-                            dev_idx,
-                            handle.0,
-                            if reused { 1 } else { 0 }
-                        );
-                    } else if !saw_header_end {
-                        crate::log!(
-                            "vhttps-ka: closed-before-header-end host={} dev={} handle={} raw_bytes={} reused={}\n",
-                            parsed.host,
-                            dev_idx,
-                            handle.0,
-                            plaintext.len(),
-                            if reused { 1 } else { 0 }
-                        );
-                    }
-
-                    {
-                        let mut st = conn.state.lock();
-                        st.handle = None;
-                        st.connected = false;
-                    }
-
-                    let Some(hdr_end) = find_http_header_end(&plaintext) else {
-                        keepalive_release(conn);
-                        return Err(FetchError::Http(0));
-                    };
-                    let headers = &plaintext[..hdr_end];
-                    let body = &plaintext[hdr_end..];
-                    let status = parse_http_status(&plaintext).unwrap_or(0);
-
-                    if status != 200 {
-                        if is_redirect_status(status)
-                            && let Some(next) = redirect_url_from_location(parsed, headers)
-                        {
-                            keepalive_release(conn);
-                            return Err(FetchError::Redirect { status, url: next });
-                        }
-                        keepalive_release(conn);
-                        return Err(FetchError::Http(status));
-                    }
-
-                    let is_chunked =
-                        header_contains_token(headers, b"transfer-encoding", b"chunked");
-                    let decoded_body = if is_chunked {
-                        decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
-                    } else if let Some(len) = header_parse_content_length(headers) {
-                        body.get(..len).unwrap_or(body).to_vec()
-                    } else {
-                        body.to_vec()
-                    };
-
-                    if decoded_body.len() > max_bytes {
-                        keepalive_release(conn);
-                        return Err(FetchError::ResponseTooLarge);
-                    }
-                    if let Some(ref mut p) = progress {
-                        p.on_progress(decoded_body.len(), Some(decoded_body.len()));
-                    }
-                    if want_done_log {
-                        crate::log!(
-                            "vhttps-ka: done host={} dev={} status={} bytes={} reused={} closed=1\n",
-                            parsed.host,
-                            dev_idx,
-                            status,
-                            decoded_body.len(),
-                            if reused { 1 } else { 0 }
-                        );
-                    }
-                    keepalive_release(conn);
-                    return Ok(decoded_body);
-                }
-                TlsEvent::TlsError { .. } => {
-                    let mut st = conn.state.lock();
-                    st.handle = None;
-                    st.connected = false;
-                    keepalive_release(conn);
-                    return Err(FetchError::Tls);
-                }
-                TlsEvent::Error { .. } => {}
-                _ => {}
-            }
-        }
-
-        let now = Instant::now();
-        let idle_deadline = last_activity + EmbassyDuration::from_millis(timeout_ms as u64);
-        if now >= idle_deadline || now >= deadline {
-            let _ = conn.cmds.push(TlsCommand::Close { handle });
-            let mut st = conn.state.lock();
-            st.handle = None;
-            st.connected = false;
-            keepalive_release(conn);
-            return Err(FetchError::BodyTimeout);
-        }
-        Timer::after(EmbassyDuration::from_millis(2)).await;
-    }
+        timeout_ms,
+        max_bytes,
+        KeepAliveByteFetch {
+            log_prefix: "vhttps-ka",
+            request,
+            request_path: Some(parsed.path.as_str()),
+            done_log: want_done_log,
+            log_close_details: true,
+            progress: progress.take(),
+        },
+    )
+    .await
 }
 
 async fn fetch_on_device_keepalive_post_json(
@@ -2409,451 +2538,32 @@ async fn fetch_on_device_keepalive_post_json(
     body_json: &str,
     auth_token: Option<&str>,
 ) -> Result<Vec<u8>, FetchError> {
-    let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
-    keepalive_acquire(conn).await;
-
-    keepalive_sync_state(conn);
-
-    let mut reused = false;
-    {
-        let mut st = conn.state.lock();
-        let idle_ms = Instant::now()
-            .saturating_duration_since(st.last_used)
-            .as_millis() as u64;
-        if st.handle.is_some() && idle_ms > HttpsLimits::KEEPALIVE_IDLE_CLOSE_MS {
-            if let Some(h) = st.handle.take() {
-                let _ = conn.cmds.push(TlsCommand::Close { handle: h });
-            }
-            st.connected = false;
-        } else if st.handle.is_some() && st.connected {
-            reused = true;
-        }
-    }
-
-    let mut ip: Option<[u8; 4]> = None;
-    if !reused {
-        match dns::resolve_ipv4_for_device(
-            dev_idx,
-            parsed.host.as_str(),
-            DnsConfig::for_device(dev_idx),
-        )
-        .await
-        {
-            Ok(v) => ip = Some(v),
-            Err(dns::DnsError::Timeout) => {
-                keepalive_release(conn);
-                return Err(FetchError::DnsTimeout);
-            }
-            Err(_) => {
-                keepalive_release(conn);
-                return Err(FetchError::DnsFailed);
-            }
-        }
-    }
-
-    let roots = TlsRoots::mozilla();
-    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
-    let server_name = leak_str(parsed.host.clone());
-    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
-    let mut connect_in_flight = false;
-    let mut last_activity = Instant::now();
-    let mut ready_handle: Option<vnet::NetHandle> = None;
-
-    'connect_wait: loop {
-        let (handle, connected) = {
-            let st = conn.state.lock();
-            (st.handle, st.connected)
-        };
-
-        if handle.is_some() && connected {
-            crate::log!(
-                "vhttps-ka-post: connected host={} dev={} handle={}\n",
-                parsed.host,
-                dev_idx,
-                handle.expect("checked is_some").0
-            );
-            ready_handle = handle;
-            break;
-        }
-
-        if handle.is_none() && !connect_in_flight {
-            let wait_ms = keepalive_connect_wait_ms(conn);
-            if wait_ms != 0 {
-                Timer::after(EmbassyDuration::from_millis(wait_ms.min(250))).await;
-                continue;
-            }
-            let Some(ip) = ip else {
-                keepalive_release(conn);
-                return Err(FetchError::ConnectTimeout);
-            };
-            crate::log!(
-                "vhttps-ka-post: connect host={} dev={} fresh=1\n",
-                parsed.host,
-                dev_idx
-            );
-            let _ = conn.cmds.push(TlsCommand::OpenTcpConnect {
-                remote: vnet::EndpointV4 {
-                    addr: ip,
-                    port: parsed.port,
-                },
-                server_name,
-                cfg: cfg.clone(),
-                roots: roots.clone(),
-                timeouts: crate::net::tls_socket::TlsTimeouts {
-                    connect_ms: (timeout_ms / 4).max(5_000),
-                    tls_ms: (timeout_ms / 4).max(5_000),
-                    idle_ms: timeout_ms,
-                },
-            });
-            connect_in_flight = true;
-        }
-
-        for ev in conn.events.drain(1024) {
-            match ev {
-                TlsEvent::Opened { handle } => {
-                    let mut st = conn.state.lock();
-                    if st.handle.is_none() {
-                        st.handle = Some(handle);
-                        crate::log!(
-                            "vhttps-ka-post: opened host={} dev={} handle={}\n",
-                            parsed.host,
-                            dev_idx,
-                            handle.0
-                        );
-                    }
-                    last_activity = Instant::now();
-                }
-                TlsEvent::Connected { handle } => {
-                    let matched = {
-                        let mut st = conn.state.lock();
-                        if st.handle == Some(handle) {
-                            st.connected = true;
-                            crate::log!(
-                                "vhttps-ka-post: tls-connected host={} dev={} handle={}\n",
-                                parsed.host,
-                                dev_idx,
-                                handle.0
-                            );
-                            ready_handle = Some(handle);
-                            true
-                        } else {
-                            false
-                        }
-                    };
-                    if matched {
-                        keepalive_record_connect_success(conn);
-                        last_activity = Instant::now();
-                        break 'connect_wait;
-                    }
-                }
-                TlsEvent::Closed { handle } => {
-                    let mut st = conn.state.lock();
-                    if st.handle == Some(handle) {
-                        let was_connected = st.connected;
-                        crate::log!(
-                            "vhttps-ka-post: closed-connect-phase host={} dev={} handle={} was_connected={}\n",
-                            parsed.host,
-                            dev_idx,
-                            handle.0,
-                            if was_connected { 1 } else { 0 }
-                        );
-                        st.handle = None;
-                        st.connected = false;
-                        connect_in_flight = false;
-                        if !was_connected {
-                            drop(st);
-                            keepalive_record_connect_failure(conn, parsed.host.as_str(), dev_idx);
-                        }
-                    }
-                }
-                TlsEvent::TlsError { .. } => {
-                    let mut st = conn.state.lock();
-                    st.handle = None;
-                    st.connected = false;
-                    connect_in_flight = false;
-                    drop(st);
-                    keepalive_record_connect_failure(conn, parsed.host.as_str(), dev_idx);
-                }
-                _ => {}
-            }
-        }
-
-        if Instant::now() >= deadline {
-            keepalive_record_connect_failure(conn, parsed.host.as_str(), dev_idx);
-            let (handle, connected) = {
-                let st = conn.state.lock();
-                (st.handle, st.connected)
-            };
-            crate::log!(
-                "vhttps-ka-post: connect-phase-timeout host={} dev={} handle={} connected={}\n",
-                parsed.host,
-                dev_idx,
-                if handle.is_some() { 1 } else { 0 },
-                if connected { 1 } else { 0 }
-            );
-            keepalive_release(conn);
-            return Err(if handle.is_none() {
-                FetchError::ConnectTimeout
-            } else {
-                FetchError::TlsTimeout
-            });
-        }
-        Timer::after(EmbassyDuration::from_millis(2)).await;
-    }
-
-    crate::log!(
-        "vhttps-ka-post: request host={} dev={} reused={}\n",
-        parsed.host,
-        dev_idx,
-        if reused { 1 } else { 0 }
-    );
-
-    let handle = ready_handle.expect("connected handle");
-    let auth = if let Some(token) = auth_token {
-        format!("Authorization: Bearer {}\r\n", token)
-    } else {
-        String::new()
-    };
-    let req = format!(
-        "POST {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nConnection: keep-alive\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nAccept: */*\r\n\r\n{}",
-        parsed.path,
-        parsed.host,
-        auth,
-        body_json.len(),
-        body_json
-    );
-    let _ = conn.cmds.push(TlsCommand::Send {
-        handle,
-        data: req.into_bytes(),
+    let request = build_http_request(HttpRequestSpec {
+        method: HttpRequestMethod::Post,
+        host: parsed.host.as_str(),
+        path: parsed.path.as_str(),
+        connection: HttpConnectionMode::KeepAlive,
+        accept: "*/*",
+        accept_encoding_identity: false,
+        content_type: Some("application/json"),
+        body: Some(body_json),
+        auth_bearer: auth_token,
     });
-
-    let capture_cap = max_bytes.saturating_add(64 * 1024);
-    let mut plaintext: Vec<u8> = Vec::new();
-    let mut hdr_end_cached: Option<usize> = None;
-
-    loop {
-        for ev in conn.events.drain(1024) {
-            match ev {
-                TlsEvent::Data { handle: h, data } => {
-                    if h != handle || data.is_empty() {
-                        continue;
-                    }
-                    last_activity = Instant::now();
-
-                    let room = capture_cap.saturating_sub(plaintext.len());
-                    if room == 0 {
-                        let _ = conn.cmds.push(TlsCommand::Close { handle });
-                        let mut st = conn.state.lock();
-                        st.handle = None;
-                        st.connected = false;
-                        keepalive_release(conn);
-                        return Err(FetchError::ResponseTooLarge);
-                    }
-                    let take = data.len().min(room);
-                    plaintext.extend_from_slice(&data[..take]);
-                    if take < data.len() {
-                        let _ = conn.cmds.push(TlsCommand::Close { handle });
-                        let mut st = conn.state.lock();
-                        st.handle = None;
-                        st.connected = false;
-                        keepalive_release(conn);
-                        return Err(FetchError::ResponseTooLarge);
-                    }
-
-                    let hdr_end = match hdr_end_cached {
-                        Some(v) => v,
-                        None => {
-                            let v = find_http_header_end(&plaintext);
-                            if let Some(v) = v {
-                                hdr_end_cached = Some(v);
-                            }
-                            v.unwrap_or(0)
-                        }
-                    };
-
-                    if hdr_end != 0 {
-                        let headers = &plaintext[..hdr_end];
-                        let body = &plaintext[hdr_end..];
-
-                        let status = parse_http_status(&plaintext).unwrap_or(0);
-                        if status != 200 {
-                            if is_redirect_status(status)
-                                && let Some(next) = redirect_url_from_location(parsed, headers)
-                            {
-                                let _ = conn.cmds.push(TlsCommand::Close { handle });
-                                let mut st = conn.state.lock();
-                                st.handle = None;
-                                st.connected = false;
-                                keepalive_release(conn);
-                                return Err(FetchError::Redirect { status, url: next });
-                            }
-
-                            let is_chunked =
-                                header_contains_token(headers, b"transfer-encoding", b"chunked");
-                            let decoded_body = if is_chunked {
-                                decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
-                            } else if let Some(len) = header_parse_content_length(headers) {
-                                body.get(..len).unwrap_or(body).to_vec()
-                            } else {
-                                body.to_vec()
-                            };
-                            crate::log!(
-                                "vhttps: http_error status={} body_len={}\n",
-                                status,
-                                decoded_body.len()
-                            );
-                            if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
-                                log_utf8_chunks("vhttps: http_error_body: ", s);
-                            } else {
-                                crate::log!("vhttps: http_error_body: [non-utf8]\n");
-                            }
-
-                            let _ = conn.cmds.push(TlsCommand::Close { handle });
-                            let mut st = conn.state.lock();
-                            st.handle = None;
-                            st.connected = false;
-                            keepalive_release(conn);
-                            return Err(FetchError::Http(status));
-                        }
-
-                        if status == 204 {
-                            let mut st = conn.state.lock();
-                            st.last_used = Instant::now();
-                            keepalive_release(conn);
-                            return Ok(Vec::new());
-                        }
-
-                        let is_chunked =
-                            header_contains_token(headers, b"transfer-encoding", b"chunked");
-                        if is_chunked {
-                            if let Some(decoded) = decode_http_chunked(body) {
-                                if decoded.len() > max_bytes {
-                                    let _ = conn.cmds.push(TlsCommand::Close { handle });
-                                    let mut st = conn.state.lock();
-                                    st.handle = None;
-                                    st.connected = false;
-                                    keepalive_release(conn);
-                                    return Err(FetchError::ResponseTooLarge);
-                                }
-                                crate::log!(
-                                    "vhttps-ka-post: done host={} dev={} status={} bytes={} reused={}\n",
-                                    parsed.host,
-                                    dev_idx,
-                                    status,
-                                    decoded.len(),
-                                    if reused { 1 } else { 0 }
-                                );
-                                let mut st = conn.state.lock();
-                                st.last_used = Instant::now();
-                                keepalive_release(conn);
-                                return Ok(decoded);
-                            }
-                        } else if let Some(len) = header_parse_content_length(headers)
-                            && body.len() >= len
-                        {
-                            let out = body[..len].to_vec();
-                            if out.len() > max_bytes {
-                                let _ = conn.cmds.push(TlsCommand::Close { handle });
-                                let mut st = conn.state.lock();
-                                st.handle = None;
-                                st.connected = false;
-                                keepalive_release(conn);
-                                return Err(FetchError::ResponseTooLarge);
-                            }
-                            crate::log!(
-                                "vhttps-ka-post: done host={} dev={} status={} bytes={} reused={}\n",
-                                parsed.host,
-                                dev_idx,
-                                status,
-                                out.len(),
-                                if reused { 1 } else { 0 }
-                            );
-                            let mut st = conn.state.lock();
-                            st.last_used = Instant::now();
-                            keepalive_release(conn);
-                            return Ok(out);
-                        }
-                    }
-                }
-                TlsEvent::Closed { handle: h } => {
-                    if h != handle {
-                        continue;
-                    }
-
-                    {
-                        let mut st = conn.state.lock();
-                        st.handle = None;
-                        st.connected = false;
-                    }
-
-                    let Some(hdr_end) = find_http_header_end(&plaintext) else {
-                        keepalive_release(conn);
-                        return Err(FetchError::Http(0));
-                    };
-                    let headers = &plaintext[..hdr_end];
-                    let body = &plaintext[hdr_end..];
-                    let status = parse_http_status(&plaintext).unwrap_or(0);
-
-                    if status != 200 {
-                        if is_redirect_status(status)
-                            && let Some(next) = redirect_url_from_location(parsed, headers)
-                        {
-                            keepalive_release(conn);
-                            return Err(FetchError::Redirect { status, url: next });
-                        }
-                        keepalive_release(conn);
-                        return Err(FetchError::Http(status));
-                    }
-
-                    let is_chunked =
-                        header_contains_token(headers, b"transfer-encoding", b"chunked");
-                    let decoded_body = if is_chunked {
-                        decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
-                    } else if let Some(len) = header_parse_content_length(headers) {
-                        body.get(..len).unwrap_or(body).to_vec()
-                    } else {
-                        body.to_vec()
-                    };
-
-                    if decoded_body.len() > max_bytes {
-                        keepalive_release(conn);
-                        return Err(FetchError::ResponseTooLarge);
-                    }
-                    crate::log!(
-                        "vhttps-ka-post: done host={} dev={} status={} bytes={} reused={} closed=1\n",
-                        parsed.host,
-                        dev_idx,
-                        status,
-                        decoded_body.len(),
-                        if reused { 1 } else { 0 }
-                    );
-                    keepalive_release(conn);
-                    return Ok(decoded_body);
-                }
-                TlsEvent::TlsError { .. } => {
-                    let mut st = conn.state.lock();
-                    st.handle = None;
-                    st.connected = false;
-                    keepalive_release(conn);
-                    return Err(FetchError::Tls);
-                }
-                TlsEvent::Error { .. } => {}
-                _ => {}
-            }
-        }
-
-        let now = Instant::now();
-        let idle_deadline = last_activity + EmbassyDuration::from_millis(timeout_ms as u64);
-        if now >= idle_deadline || now >= deadline {
-            let _ = conn.cmds.push(TlsCommand::Close { handle });
-            let mut st = conn.state.lock();
-            st.handle = None;
-            st.connected = false;
-            keepalive_release(conn);
-            return Err(FetchError::BodyTimeout);
-        }
-        Timer::after(EmbassyDuration::from_millis(2)).await;
-    }
+    fetch_keepalive_bytes(
+        parsed,
+        dev_idx,
+        timeout_ms,
+        max_bytes,
+        KeepAliveByteFetch {
+            log_prefix: "vhttps-ka-post",
+            request,
+            request_path: None,
+            done_log: true,
+            log_close_details: false,
+            progress: None,
+        },
+    )
+    .await
 }
 
 #[derive(Debug)]
@@ -2876,150 +2586,16 @@ async fn fetch_on_device_to_file_keepalive(
         dev_idx,
         parsed.path
     );
-    let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
-    keepalive_acquire(conn).await;
-
-    // Drain any stale events (best-effort) before starting a new request while
-    // keeping pooled connection state in sync.
-    keepalive_sync_state(conn);
-
-    // Close idle keep-alive connections (server may have timed out anyway).
-    {
-        let mut st = conn.state.lock();
-        let idle_ms = Instant::now()
-            .saturating_duration_since(st.last_used)
-            .as_millis() as u64;
-        if st.handle.is_some() && idle_ms > HttpsLimits::KEEPALIVE_IDLE_CLOSE_MS {
-            if let Some(h) = st.handle.take() {
-                let _ = conn.cmds.push(TlsCommand::Close { handle: h });
-            }
-            st.connected = false;
-        }
-    }
-
-    // Resolve DNS only when we need to (re)connect.
-    let mut ip: Option<[u8; 4]> = None;
-    {
-        let st = conn.state.lock();
-        if st.handle.is_none() || !st.connected {
-            drop(st);
-            match dns::resolve_ipv4_for_device(
-                dev_idx,
-                parsed.host.as_str(),
-                DnsConfig::for_device(dev_idx),
-            )
-            .await
-            {
-                Ok(v) => ip = Some(v),
-                Err(dns::DnsError::Timeout) => {
-                    keepalive_release(conn);
-                    return Err(FetchToFileError::Code(fetch_error_to_code(
-                        FetchError::DnsTimeout,
-                    )));
-                }
-                Err(_) => {
-                    keepalive_release(conn);
-                    return Err(FetchToFileError::Code(fetch_error_to_code(
-                        FetchError::DnsFailed,
-                    )));
-                }
-            }
-        }
-    }
-
-    let roots = TlsRoots::mozilla();
-    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
-    let server_name = leak_str(parsed.host.clone());
-
-    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
-
-    // Avoid flooding tls-socket with repeated connect requests while waiting for events.
-    let mut connect_in_flight = false;
-
-    // Ensure connected.
-    loop {
-        let (handle, connected) = {
-            let st = conn.state.lock();
-            (st.handle, st.connected)
-        };
-
-        if handle.is_some() && connected {
-            break;
-        }
-
-        // If no handle, initiate a connect.
-        if handle.is_none() && !connect_in_flight {
-            let Some(ip) = ip else {
-                keepalive_release(conn);
-                return Err(FetchToFileError::Code(fetch_error_to_code(
-                    FetchError::ConnectTimeout,
-                )));
-            };
-            crate::log!(
-                "vhttps-ka-file: connect host={} dev={} fresh=1\n",
-                parsed.host,
-                dev_idx
-            );
-            let _ = conn.cmds.push(TlsCommand::OpenTcpConnect {
-                remote: vnet::EndpointV4 {
-                    addr: ip,
-                    port: parsed.port,
-                },
-                server_name,
-                cfg: cfg.clone(),
-                roots: roots.clone(),
-                timeouts: crate::net::tls_socket::TlsTimeouts {
-                    connect_ms: (timeout_ms / 4).max(5_000),
-                    tls_ms: (timeout_ms / 4).max(5_000),
-                    idle_ms: timeout_ms,
-                },
-            });
-            connect_in_flight = true;
-        }
-
-        // Wait for Opened/Connected.
-        for ev in conn.events.drain(1024) {
-            match ev {
-                TlsEvent::Opened { handle } => {
-                    let mut st = conn.state.lock();
-                    if st.handle.is_none() {
-                        st.handle = Some(handle);
-                    }
-                }
-                TlsEvent::Connected { handle } => {
-                    let mut st = conn.state.lock();
-                    if st.handle == Some(handle) {
-                        st.connected = true;
-                    }
-                }
-                TlsEvent::Closed { handle } => {
-                    let mut st = conn.state.lock();
-                    if st.handle == Some(handle) {
-                        st.handle = None;
-                        st.connected = false;
-                        connect_in_flight = false;
-                    }
-                }
-                TlsEvent::TlsError { .. } => {
-                    let mut st = conn.state.lock();
-                    st.handle = None;
-                    st.connected = false;
-                    connect_in_flight = false;
-                }
-                _ => {}
-            }
-        }
-
-        if Instant::now() >= deadline {
-            keepalive_release(conn);
-            return Err(FetchToFileError::Code(fetch_error_to_code(
-                FetchError::TlsTimeout,
-            )));
-        }
-        Timer::after(EmbassyDuration::from_millis(2)).await;
-    }
-
-    let handle = conn.state.lock().handle.expect("connected handle");
+    let KeepAliveReady {
+        conn,
+        handle,
+        reused: _reused,
+        deadline,
+        last_activity: _last_activity,
+    } = keepalive_prepare_ready(parsed, dev_idx, timeout_ms, "vhttps-ka-file")
+        .await
+        .map_err(fetch_error_to_code)
+        .map_err(FetchToFileError::Code)?;
     crate::log!(
         "vhttps-ka-file: request host={} dev={} handle={}\n",
         parsed.host,
@@ -3028,10 +2604,17 @@ async fn fetch_on_device_to_file_keepalive(
     );
 
     // Send HTTP GET request. Use keep-alive; we will stop reading once body complete.
-    let req = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: keep-alive\r\n\r\n",
-        parsed.path, parsed.host
-    );
+    let req = build_http_request(HttpRequestSpec {
+        method: HttpRequestMethod::Get,
+        host: parsed.host.as_str(),
+        path: parsed.path.as_str(),
+        connection: HttpConnectionMode::KeepAlive,
+        accept: "*/*",
+        accept_encoding_identity: true,
+        content_type: None,
+        body: None,
+        auth_bearer: None,
+    });
     let _ = conn.cmds.push(TlsCommand::Send {
         handle,
         data: req.into_bytes(),
@@ -3466,10 +3049,17 @@ async fn fetch_on_device_to_file(
                         t_tls_connected = Some(Instant::now());
                     }
                     if !http_sent {
-                        let req = format!(
-                            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-                            parsed.path, parsed.host
-                        );
+                        let req = build_http_request(HttpRequestSpec {
+                            method: HttpRequestMethod::Get,
+                            host: parsed.host.as_str(),
+                            path: parsed.path.as_str(),
+                            connection: HttpConnectionMode::Close,
+                            accept: "*/*",
+                            accept_encoding_identity: false,
+                            content_type: None,
+                            body: None,
+                            auth_bearer: None,
+                        });
                         let _ = cmds.push(TlsCommand::Send {
                             handle,
                             data: req.into_bytes(),

@@ -68,7 +68,7 @@ fn clip_poly_edge(input: &[RgbVtx], edge: u8, bound: f32, out: &mut Vec<RgbVtx>)
     }
 }
 
-fn clip_rgb_triangles_to_scissor(
+pub(super) fn clip_rgb_triangles_to_scissor(
     src: &[u8],
     scissor: ScissorRect,
     vp_w: u32,
