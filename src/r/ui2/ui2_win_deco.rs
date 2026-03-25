@@ -1,6 +1,208 @@
 #![allow(dead_code)]
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use super::*;
+
+const UI2_DECOR_SHARED_ICON_TEX_BASE_ID: u32 = 4_720;
+const UI2_DECOR_WINDOW_ICON_TEX_BASE_ID: u32 = 4_800;
+const UI2_DECOR_WINDOW_ICON_TEX_STRIDE: u32 = 16;
+const UI2_DECOR_ICON_SIDE_PX: u32 = 16;
+const UI2_DECOR_ICON_SMALL_SET: u32 = 1;
+const UI2_DECOR_ICON_COLOR_ID: u32 = 0;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Ui2DecorationIconCacheScope {
+    Shared,
+    WindowLocal,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum Ui2DecorationIconKind {
+    SystemButton(Ui2SystemButtonAction),
+    ResizeHandle,
+    TitlebarWindow,
+}
+
+trait Ui2DecorationIconSource {
+    fn icon_id(self, window: &Ui2Window) -> u32;
+    fn cache_scope(self, window: &Ui2Window) -> Ui2DecorationIconCacheScope;
+    fn repaint_reason(self) -> &'static str;
+    fn shared_slot(self) -> Option<u32>;
+}
+
+impl Ui2DecorationIconSource for Ui2DecorationIconKind {
+    fn icon_id(self, window: &Ui2Window) -> u32 {
+        match self {
+            Self::SystemButton(Ui2SystemButtonAction::Fork) => UI2_SYSTEM_BUTTON_FORK_ICON_ID,
+            Self::SystemButton(Ui2SystemButtonAction::Minimize) => {
+                UI2_SYSTEM_BUTTON_MINIMIZE_ICON_ID
+            }
+            Self::SystemButton(Ui2SystemButtonAction::ToggleMaximize) => {
+                UI2_SYSTEM_BUTTON_MAXIMIZE_ICON_ID
+            }
+            Self::SystemButton(Ui2SystemButtonAction::Close) => UI2_SYSTEM_BUTTON_CLOSE_ICON_ID,
+            Self::ResizeHandle => 1,
+            Self::TitlebarWindow => window.icon_id,
+        }
+    }
+
+    fn cache_scope(self, _window: &Ui2Window) -> Ui2DecorationIconCacheScope {
+        match self {
+            Self::TitlebarWindow => Ui2DecorationIconCacheScope::WindowLocal,
+            Self::SystemButton(_) | Self::ResizeHandle => Ui2DecorationIconCacheScope::Shared,
+        }
+    }
+
+    fn repaint_reason(self) -> &'static str {
+        match self {
+            Self::SystemButton(_) => "decor-system-icon-upload",
+            Self::ResizeHandle => "decor-resize-icon-upload",
+            Self::TitlebarWindow => "decor-title-icon-upload",
+        }
+    }
+
+    fn shared_slot(self) -> Option<u32> {
+        match self {
+            Self::SystemButton(Ui2SystemButtonAction::Fork) => Some(0),
+            Self::SystemButton(Ui2SystemButtonAction::Minimize) => Some(1),
+            Self::SystemButton(Ui2SystemButtonAction::ToggleMaximize) => Some(2),
+            Self::SystemButton(Ui2SystemButtonAction::Close) => Some(3),
+            Self::ResizeHandle => Some(4),
+            Self::TitlebarWindow => None,
+        }
+    }
+}
+
+#[inline]
+fn ui2_decor_normalized_icon_id(icon_id: u32) -> u32 {
+    const ICON_SHAPE_COUNT: u32 = 12;
+    icon_id % ICON_SHAPE_COUNT
+}
+
+#[inline]
+fn ui2_decor_icon_tex_id(kind: Ui2DecorationIconKind, window: &Ui2Window) -> Option<u32> {
+    let icon_id = kind.icon_id(window);
+    if icon_id == 0 {
+        return None;
+    }
+    match kind.cache_scope(window) {
+        Ui2DecorationIconCacheScope::Shared => kind
+            .shared_slot()
+            .map(|slot| UI2_DECOR_SHARED_ICON_TEX_BASE_ID.saturating_add(slot)),
+        Ui2DecorationIconCacheScope::WindowLocal => Some(
+            UI2_DECOR_WINDOW_ICON_TEX_BASE_ID
+                .saturating_add(window.id.saturating_mul(UI2_DECOR_WINDOW_ICON_TEX_STRIDE))
+                .saturating_add(
+                    ui2_decor_normalized_icon_id(icon_id) % UI2_DECOR_WINDOW_ICON_TEX_STRIDE,
+                ),
+        ),
+    }
+}
+
+fn queue_ui2_decor_icon_upload(
+    kind: Ui2DecorationIconKind,
+    window: &Ui2Window,
+    tex_id: u32,
+) -> bool {
+    let icon_id = kind.icon_id(window);
+    if icon_id == 0 {
+        return false;
+    }
+
+    let need = unsafe {
+        crate::gfx::lyon::trueos_cabi_gfx_bake_lyon_icon_rgba(
+            icon_id,
+            UI2_DECOR_ICON_COLOR_ID,
+            UI2_DECOR_ICON_SMALL_SET,
+            core::ptr::null_mut(),
+            0,
+        )
+    };
+    if need <= 0 {
+        return false;
+    }
+    let need = need as usize;
+    let expected = (UI2_DECOR_ICON_SIDE_PX as usize)
+        .saturating_mul(UI2_DECOR_ICON_SIDE_PX as usize)
+        .saturating_mul(4);
+    if need != expected {
+        return false;
+    }
+
+    let mut baked = vec![0u8; need];
+    let wrote = unsafe {
+        crate::gfx::lyon::trueos_cabi_gfx_bake_lyon_icon_rgba(
+            icon_id,
+            UI2_DECOR_ICON_COLOR_ID,
+            UI2_DECOR_ICON_SMALL_SET,
+            baked.as_mut_ptr(),
+            baked.len(),
+        )
+    };
+    if wrote != need as i32 {
+        return false;
+    }
+
+    let mut rgba = Vec::with_capacity(need);
+    for px in baked.chunks_exact(4) {
+        rgba.extend_from_slice(&[0, 0, 0, px[0]]);
+    }
+
+    crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+        tex_id,
+        UI2_DECOR_ICON_SIDE_PX,
+        UI2_DECOR_ICON_SIDE_PX,
+        rgba.as_slice(),
+        window.id,
+        kind.repaint_reason(),
+    )
+}
+
+pub(super) fn draw_window_decoration_icon(
+    state: &Ui2State,
+    window: &Ui2Window,
+    kind: Ui2DecorationIconKind,
+    x: f32,
+    y: f32,
+    side_px: f32,
+) {
+    let Some(tex_id) = ui2_decor_icon_tex_id(kind, window) else {
+        return;
+    };
+    if texture_is_drawable(tex_id)
+        && draw_texture_rect_no_present(
+            tex_id,
+            x,
+            y,
+            side_px,
+            side_px,
+            state.view_w,
+            state.view_h,
+            true,
+            window.alpha,
+        )
+    {
+        return;
+    }
+
+    let _ = queue_ui2_decor_icon_upload(kind, window, tex_id);
+
+    let icon_id = kind.icon_id(window);
+    if icon_id != 0 {
+        let _ = crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
+            icon_id,
+            UI2_DECOR_ICON_COLOR_ID,
+            UI2_DECOR_ICON_SMALL_SET,
+            x,
+            y,
+            state.view_w,
+            state.view_h,
+            window.alpha,
+        );
+    }
+}
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

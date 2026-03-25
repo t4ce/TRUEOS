@@ -118,7 +118,7 @@ define_started_flags!(
     SURFER_FACTORY_STARTED
 );
 
-const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 2;
+const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 0;
 
 pub const fn truesurfer_factory_boot_count() -> u32 {
     if TRUESURFER_FACTORY_BOOT_COUNT > trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID {
@@ -873,7 +873,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-imba-athlas-demo",
         crate::r::readiness::UI2_READY,
         &UI2_IMBA_ATHLAS_DEMO_STARTED,
@@ -911,12 +911,12 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled("piano-drain", 0, &PIANO_DRAIN_STARTED, spawn_piano_drain),
     TaskSpec::disabled(
-        "boot-ws-smoke",
+        "boot-ws-smoke",d("smtp
         WS_BOOT_READY,
         &BOOT_WS_SMOKE_STARTED,
         spawn_boot_ws_smoke,
     ),
-    TaskSpec::enabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
+    TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
     TaskSpec::disabled(
         "boot-netbench",
         0,
