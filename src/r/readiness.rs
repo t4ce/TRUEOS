@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
@@ -39,6 +39,7 @@ pub const UI2_READY: u32 = 1 << 23;
 pub const GFX_BOOT_FRAME_READY: u32 = 1 << 24;
 
 static READY: AtomicU32 = AtomicU32::new(0);
+static LOADSCREEN_EXPIRE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 #[inline]
 pub fn mask() -> u32 {
@@ -56,9 +57,19 @@ pub fn set(flags: u32) {
     READY.fetch_or(flags, Ordering::AcqRel);
 }
 
+#[inline]
+pub fn set_loadscreen_expire_requested(requested: bool) {
+    LOADSCREEN_EXPIRE_REQUESTED.store(requested, Ordering::Release);
+}
+
+#[inline]
+pub fn loadscreen_expire_requested() -> bool {
+    LOADSCREEN_EXPIRE_REQUESTED.load(Ordering::Acquire)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_signal_loadscreen_end() {
-    set(LOADSCREEN_END);
+    set_loadscreen_expire_requested(true);
 }
 
 /// Wait until all required flags are set.

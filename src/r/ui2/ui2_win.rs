@@ -149,7 +149,11 @@ fn window_info(state: &Ui2State, window: &Ui2Window) -> TrueosUi2WindowInfo {
         icon_id: window.icon_id,
         visible: if window.visible { 1 } else { 0 },
         hit_test_visible: if window.hit_test_visible { 1 } else { 0 },
-        selected: if window.selected_cursor_slots.is_empty() { 0 } else { 1 },
+        selected: if window.selected_cursor_slots.is_empty() {
+            0
+        } else {
+            1
+        },
         x: libm::roundf(rect.x) as i32,
         y: libm::roundf(rect.y) as i32,
         width: round_to_u32(rect.w, 0),
@@ -181,7 +185,7 @@ pub(super) fn normalized_window_rect_for_view(view_w: u32, view_h: u32, rect: Ui
     )
 }
 
-fn maximize_window_rect(state: &Ui2State) -> Ui2Rect {
+pub(super) fn maximize_window_rect(state: &Ui2State) -> Ui2Rect {
     Ui2Rect::new(
         0.0,
         0.0,
@@ -190,13 +194,13 @@ fn maximize_window_rect(state: &Ui2State) -> Ui2Rect {
     )
 }
 
-fn left_half_window_rect(state: &Ui2State) -> Ui2Rect {
+pub(super) fn left_half_window_rect(state: &Ui2State) -> Ui2Rect {
     let view_w = (state.view_w as f32).max(1.0);
     let view_h = (state.view_h as f32).max(1.0);
     Ui2Rect::new(0.0, 0.0, (view_w * 0.5).max(1.0), view_h)
 }
 
-fn right_half_window_rect(state: &Ui2State) -> Ui2Rect {
+pub(super) fn right_half_window_rect(state: &Ui2State) -> Ui2Rect {
     let view_w = (state.view_w as f32).max(1.0);
     let view_h = (state.view_h as f32).max(1.0);
     let half_w = (view_w * 0.5).max(1.0);
@@ -302,7 +306,11 @@ pub(super) fn set_window_visible_in_state(state: &mut Ui2State, id: u32, visible
         return false;
     };
     window.visible = visible;
-    let reason = if visible { "show-window" } else { "hide-window" };
+    let reason = if visible {
+        "show-window"
+    } else {
+        "hide-window"
+    };
     state.compose_reason = reason;
     if !visible {
         state.hit_scene.remove_window(id);

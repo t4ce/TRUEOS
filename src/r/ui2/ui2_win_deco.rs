@@ -271,7 +271,9 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
             let scroll_range = hosted_browser_scroll_max(&snapshot) as f32;
             let avail = (vbar.h - thumb_h).max(0.0);
             if scroll_range > 0.0 {
-                vbar.y + (avail * ((normalized_hosted_browser_scroll(&snapshot) as f32) / scroll_range))
+                vbar.y
+                    + (avail
+                        * ((normalized_hosted_browser_scroll(&snapshot) as f32) / scroll_range))
             } else {
                 vbar.y
             }

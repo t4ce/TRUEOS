@@ -494,8 +494,8 @@ fn gfx_switched() -> bool {
 }
 
 fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::gfx::loadscreen::gfx_loadscreen_task())
+    spawn_on_ap1(spawner, |ap1_spawner| {
+        ap1_spawner.spawn(crate::gfx::loadscreen::gfx_loadscreen_task())
     })
 }
 
@@ -852,7 +852,7 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled(
         "ui2",
-        crate::r::readiness::LOADSCREEN_FRAME_READY,
+        crate::r::readiness::GFX_BOOT_FRAME_READY,
         &UI2_STARTED,
         spawn_ui2,
     ),

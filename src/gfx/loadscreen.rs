@@ -511,6 +511,8 @@ fn boot_probe_ms() -> u64 {
 
 #[embassy_executor::task]
 pub async fn gfx_loadscreen_task() {
+    crate::r::readiness::set_loadscreen_expire_requested(false);
+
     let (fb_w, fb_h) = crate::limine::framebuffer_response()
         .and_then(|resp| resp.framebuffers().next())
         .map(|fb| (fb.width() as f32, fb.height() as f32))
@@ -583,7 +585,9 @@ pub async fn gfx_loadscreen_task() {
 
     loop {
         let now_ms = boot_probe_ms();
-        if now_ms >= min_end_ms {
+        let min_lifetime_reached = now_ms >= min_end_ms;
+        let expire_requested = crate::r::readiness::loadscreen_expire_requested();
+        if min_lifetime_reached && expire_requested {
             crate::r::readiness::set(crate::r::readiness::LOADSCREEN_END);
             break;
         }

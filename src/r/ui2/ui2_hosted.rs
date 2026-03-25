@@ -1,3 +1,5 @@
+use super::*;
+
 pub(super) type HostedContentId = u32;
 pub(super) type UiHostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurfaceState;
 pub(super) type UiHostedInteractiveState = trueos_qjs::browser_task::HostedBrowserInteractiveState;
@@ -397,13 +399,7 @@ pub(super) fn snap_browser_content_rect(content: Ui2Rect) -> (i32, i32, u32, u32
 pub(super) fn queue_browser_window_viewport(content_id: HostedContentId, content: Ui2Rect) -> bool {
     let (content_x, content_y, viewport_w, viewport_h) = snap_browser_content_rect(content);
     hosted_set_viewport(
-        content_id,
-        viewport_w,
-        viewport_h,
-        content_x,
-        content_y,
-        viewport_w,
-        viewport_h,
+        content_id, viewport_w, viewport_h, content_x, content_y, viewport_w, viewport_h,
     )
 }
 
@@ -432,7 +428,8 @@ fn ensure_window_texture_size(
         return true;
     }
 
-    let pixels = alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
+    let pixels =
+        alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
     crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
         tex_id,
         width,
