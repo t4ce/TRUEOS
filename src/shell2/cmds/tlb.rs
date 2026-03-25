@@ -874,6 +874,12 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         } else {
             "ok"
         };
+        let diag = alloc::format!(
+            "ev={} rp={} empty={}",
+            ctrl_info.event_ready as u8,
+            ctrl_info.root_port_change_seen as u8,
+            ctrl_info.empty_probe_streak
+        );
 
         let mut emitted = false;
         for dev in snapshot
@@ -890,7 +896,7 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
             );
             let cfg_if = alloc::format!("{}/{}", dev.config_count, dev.interface_count);
             table.emit_row(
-                &[&ctrl, &bdf, probe, "descriptor", &vidpid, &class, &cfg_if],
+                &[&ctrl, &bdf, &diag, "descriptor", &vidpid, &class, &cfg_if],
                 |text| line(io, text),
             );
             emitted = true;
@@ -899,7 +905,7 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         if !emitted {
             let vidpid = alloc::format!("{:04X}:{:04X}", ctrl_info.vendor_id, ctrl_info.device_id);
             let mmio = alloc::format!("mmio=0x{:X}", ctrl_info.mmio_base.as_ptr() as usize);
-            table.emit_row(&[&ctrl, &bdf, probe, "-", &vidpid, "xhci", &mmio], |text| {
+            table.emit_row(&[&ctrl, &bdf, &diag, "-", &vidpid, "xhci", &mmio], |text| {
                 line(io, text)
             });
         }

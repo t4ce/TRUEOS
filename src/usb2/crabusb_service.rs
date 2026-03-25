@@ -4,7 +4,7 @@ use core::cmp::min;
 use core::future::Future;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::task::Poll;
 use core::time::Duration;
 
@@ -42,6 +42,8 @@ static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static HID_STREAMS_ACTIVE: Mutex<Vec<ActiveHidStream>> = Mutex::new(Vec::new());
 static BOUNCE_MAPPINGS: Mutex<Vec<BounceMapping>> = Mutex::new(Vec::new());
+static EMPTY_PROBE_STREAK: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
 
 const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
 const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
@@ -2243,6 +2245,16 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
     match host.probe_devices().await {
         Ok(devices) => {
             if devices.is_empty() {
+                let streak = EMPTY_PROBE_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
+                if streak.is_multiple_of(25) {
+                    crate::log!(
+                        "crabusb: controller {} empty probe streak={} root_port_change_seen={} event_ready={}\n",
+                        controller_id,
+                        streak,
+                        ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire),
+                        EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire),
+                    );
+                }
                 if !ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire)
                     && NO_PORT_CHANGE_HINT_LOGGED[controller_id]
                         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -2254,6 +2266,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                 }
                 false
             } else {
+                EMPTY_PROBE_STREAK[controller_id].store(0, Ordering::Release);
                 NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
                 crate::log!("crabusb: discovered {} new device(s)\n", devices.len());
                 for dev in devices.iter() {
@@ -2401,7 +2414,11 @@ pub async fn event_pump_task(controller_id: usize) {
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
             Some(Event::PortChange { port }) => {
-                crate::log!("crabusb: pump port change on root port {}\n", port);
+                crate::log!(
+                    "crabusb: pump port change on controller {} root port {}\n",
+                    controller_id,
+                    port
+                );
                 ROOT_PORT_CHANGE_SEEN[controller_id].store(true, Ordering::Release);
                 NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
                 PROBE_REQUESTED[controller_id].store(true, Ordering::Release);
@@ -2474,8 +2491,14 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             continue;
         }
 
+        crate::log!(
+            "crabusb: host init ok controller {} awaiting root-hub events\n",
+            info.index
+        );
+
         ROOT_PORT_CHANGE_SEEN[info.index].store(false, Ordering::Release);
         NO_PORT_CHANGE_HINT_LOGGED[info.index].store(false, Ordering::Release);
+        EMPTY_PROBE_STREAK[info.index].store(0, Ordering::Release);
         crab_scout_once(&mut host, info, &spawner).await;
 
         let mut idle_ticks = 0u32;
@@ -2529,4 +2552,16 @@ pub async fn truekey_task() {
             crate::log!("crabusb: truekey service streaming\n");
         }
     }
+}
+
+pub(super) fn diag_counters(controller_id: usize) -> Option<(bool, bool, u32)> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return None;
+    }
+
+    Some((
+        EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire),
+        ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire),
+        EMPTY_PROBE_STREAK[controller_id].load(Ordering::Acquire),
+    ))
 }
