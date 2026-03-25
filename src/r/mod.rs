@@ -16,4 +16,5 @@ pub mod spawn_service;
 pub mod std;
 pub mod sync;
 pub mod time;
+#[path = "../ui2/mod.rs"]
 pub mod ui2;

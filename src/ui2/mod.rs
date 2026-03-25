@@ -8,18 +8,18 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use parry2d::math::{Isometry, Vector};
-use parry2d::query;
-use parry2d::shape::{Ball, Cuboid};
 use spin::{Mutex, Once};
 
 mod ui2_hid;
+mod ui2_hit;
 mod ui2_hosted;
 mod ui2_win_deco;
 
 mod ui2_win;
 
 use self::ui2_hid::*;
+pub(crate) use self::ui2_hit::ui2_hit_task;
+use self::ui2_hit::*;
 pub(crate) use self::ui2_hosted::signal_hosted_browser_factory_mask;
 use self::ui2_hosted::*;
 pub use self::ui2_win::*;
@@ -52,6 +52,7 @@ const UI2_CLICK_SLOP_PX: f32 = 12.0;
 const UI2_CURSOR_EVENT_BATCH: usize = 32;
 const UI2_KEYBOARD_EVENT_BATCH: usize = 32;
 const UI2_CURSOR_HIT_RADIUS_PX: f32 = 8.0;
+const UI2_CURSOR_CAP: usize = 50;
 const UI2_WINDOW_EDGE_TOUCH_PX: f32 = 1.0;
 const UI2_WHEEL_SCROLL_STEP_PX: i32 = 16;
 const UI2_INPUT_DIAG_LOG_FIRST: u32 = 8;
@@ -131,16 +132,6 @@ struct Ui2CursorState {
     selected_window_id: u32,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-enum Ui2HitKind {
-    WindowBody,
-    WindowDecoration,
-    WindowResizeButton,
-    WindowVerticalScrollbar,
-    WindowHorizontalScrollbar,
-    BrowserInteractive,
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui2SystemButtonAction {
     Fork,
@@ -153,28 +144,6 @@ enum Ui2SystemButtonAction {
 enum Ui2WindowKind {
     HostedBrowser,
     HostedSurface,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct Ui2HitEntry {
-    owner_window_id: u32,
-    item_id: u32,
-    kind: Ui2HitKind,
-    rect: Ui2Rect,
-    z: i16,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct Ui2HitTarget {
-    owner_window_id: u32,
-    item_id: u32,
-    kind: Ui2HitKind,
-}
-
-#[derive(Default)]
-struct Ui2HitScene {
-    seq: u32,
-    entries: Vec<Ui2HitEntry>,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -273,8 +242,6 @@ struct Ui2State {
     non_physical_cursor_event_count: u32,
     synthetic_keyboard_event_count: u32,
     cursors: Vec<Ui2CursorState>,
-    hit_scene: Ui2HitScene,
-    last_browser_interactive_seq: u32,
     move_drags: Vec<Ui2WindowMoveDrag>,
     resize_drags: Vec<Ui2WindowResizeDrag>,
     scroll_drags: Vec<Ui2WindowScrollDrag>,
@@ -358,9 +325,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             keyboard_read_seq: 0,
             non_physical_cursor_event_count: 0,
             synthetic_keyboard_event_count: 0,
-            cursors: Vec::new(),
-            hit_scene: Ui2HitScene::default(),
-            last_browser_interactive_seq: 0,
+            cursors: Vec::with_capacity(UI2_CURSOR_CAP),
             move_drags: Vec::new(),
             resize_drags: Vec::new(),
             scroll_drags: Vec::new(),
@@ -626,240 +591,6 @@ fn hosted_browser_content_seq(state: &Ui2State) -> u32 {
 
 fn window_is_renderable(window: &Ui2Window) -> bool {
     window.visible
-}
-
-struct Ui2HitBuildContext<'a> {
-    state: &'a Ui2State,
-}
-
-trait Ui2WindowHitSource {
-    fn append_hit_entries(&self, ctx: &Ui2HitBuildContext<'_>, scene: &mut Ui2HitScene);
-}
-
-impl Ui2WindowHitSource for Ui2Window {
-    fn append_hit_entries(&self, ctx: &Ui2HitBuildContext<'_>, scene: &mut Ui2HitScene) {
-        if !window_is_renderable(self) || !self.hit_test_visible {
-            return;
-        }
-
-        let rect = effective_window_rect(ctx.state, self);
-
-        scene.append(Ui2HitEntry {
-            owner_window_id: self.id,
-            item_id: 0,
-            kind: Ui2HitKind::WindowBody,
-            rect,
-            z: self.z,
-        });
-        if let Some(rect) = window_decoration_rect(ctx.state, self) {
-            scene.append(Ui2HitEntry {
-                owner_window_id: self.id,
-                item_id: 1,
-                kind: Ui2HitKind::WindowDecoration,
-                rect,
-                z: self.z,
-            });
-        }
-        if let Some(rect) = window_bottom_resize_button_rect(ctx.state, self) {
-            scene.append(Ui2HitEntry {
-                owner_window_id: self.id,
-                item_id: 2,
-                kind: Ui2HitKind::WindowResizeButton,
-                rect,
-                z: self.z,
-            });
-        }
-        if let Some(rect) = window_vertical_scrollbar_rect(ctx.state, self) {
-            scene.append(Ui2HitEntry {
-                owner_window_id: self.id,
-                item_id: 3,
-                kind: Ui2HitKind::WindowVerticalScrollbar,
-                rect,
-                z: self.z,
-            });
-        }
-        if let Some(rect) = window_horizontal_scrollbar_rect(ctx.state, self) {
-            scene.append(Ui2HitEntry {
-                owner_window_id: self.id,
-                item_id: 4,
-                kind: Ui2HitKind::WindowHorizontalScrollbar,
-                rect,
-                z: self.z,
-            });
-        }
-
-        match self.kind {
-            Ui2WindowKind::HostedBrowser => {
-                let Some(content) = window_content_rect(ctx.state, self) else {
-                    return;
-                };
-                let browser_interactives = browser_interactive_state_for_window(self);
-                for interactive in &browser_interactives.interactives {
-                    if interactive.width == 0 || interactive.height == 0 {
-                        continue;
-                    }
-                    let rect = Ui2Rect::new(
-                        content.x + interactive.x as f32,
-                        content.y + interactive.y as f32,
-                        interactive.width as f32,
-                        interactive.height as f32,
-                    );
-                    scene.append(Ui2HitEntry {
-                        owner_window_id: self.id,
-                        item_id: interactive.item_id,
-                        kind: Ui2HitKind::BrowserInteractive,
-                        rect,
-                        z: self.z,
-                    });
-                }
-            }
-            Ui2WindowKind::HostedSurface => {}
-        }
-    }
-}
-
-impl Ui2HitScene {
-    fn clear(&mut self) {
-        self.entries.clear();
-    }
-
-    fn append(&mut self, entry: Ui2HitEntry) {
-        self.entries.push(entry);
-    }
-
-    fn remove_window(&mut self, owner_window_id: u32) {
-        self.entries
-            .retain(|entry| entry.owner_window_id != owner_window_id);
-    }
-
-    fn hit_at(&self, cursor_x: f32, cursor_y: f32) -> Option<Ui2HitTarget> {
-        let mut best: Option<(i16, Ui2HitKind, u32, u32)> = None;
-        for entry in &self.entries {
-            if !hit_entry_intersects_cursor(entry, cursor_x, cursor_y) {
-                continue;
-            }
-            let candidate = (entry.z, entry.kind, entry.owner_window_id, entry.item_id);
-            if best
-                .as_ref()
-                .map(|current| candidate > *current)
-                .unwrap_or(true)
-            {
-                best = Some(candidate);
-            }
-        }
-        best.map(|(_, kind, owner_window_id, item_id)| Ui2HitTarget {
-            owner_window_id,
-            item_id,
-            kind,
-        })
-    }
-}
-
-fn rebuild_hit_scene(state: &mut Ui2State) {
-    let next_seq = state.hit_scene.seq.wrapping_add(1);
-    state.last_browser_interactive_seq = hosted_browser_interactive_seq(state);
-    let ctx = Ui2HitBuildContext { state };
-    let mut next_scene = Ui2HitScene {
-        seq: next_seq,
-        entries: Vec::new(),
-    };
-    for idx in sorted_window_indices(state) {
-        let window = &state.windows[idx];
-        if !window_is_renderable(window) {
-            continue;
-        }
-        window.append_hit_entries(&ctx, &mut next_scene);
-    }
-    state.hit_scene = next_scene;
-}
-
-fn refresh_all_window_hit_entries(state: &mut Ui2State) {
-    rebuild_hit_scene(state);
-}
-
-fn refresh_window_hit_entries(state: &mut Ui2State, owner_window_id: u32) {
-    let Some(window) = state
-        .windows
-        .iter()
-        .find(|window| window.id == owner_window_id)
-        .cloned()
-    else {
-        state.hit_scene.remove_window(owner_window_id);
-        state.hit_scene.seq = state.hit_scene.seq.wrapping_add(1);
-        return;
-    };
-
-    if window.kind == Ui2WindowKind::HostedBrowser {
-        state.last_browser_interactive_seq =
-            hosted_interactive_seq(window_browser_instance_id(&window));
-    }
-
-    let refreshed_entries = {
-        let ctx = Ui2HitBuildContext { state };
-        let mut refreshed_scene = Ui2HitScene {
-            seq: 0,
-            entries: Vec::new(),
-        };
-        if window_is_renderable(&window) {
-            window.append_hit_entries(&ctx, &mut refreshed_scene);
-        }
-        refreshed_scene.entries
-    };
-
-    state.hit_scene.remove_window(owner_window_id);
-    state.hit_scene.entries.extend(refreshed_entries);
-    state.hit_scene.seq = state.hit_scene.seq.wrapping_add(1);
-}
-
-fn refresh_browser_hit_entries_if_needed(state: &mut Ui2State) {
-    let next_browser_interactive_seq = hosted_browser_interactive_seq(state);
-    if state.last_browser_interactive_seq == next_browser_interactive_seq {
-        return;
-    }
-    let browser_window_ids: Vec<u32> = state
-        .windows
-        .iter()
-        .filter(|window| window.kind == Ui2WindowKind::HostedBrowser)
-        .map(|window| window.id)
-        .collect();
-    if browser_window_ids.is_empty() {
-        state.last_browser_interactive_seq = next_browser_interactive_seq;
-    } else {
-        for window_id in browser_window_ids {
-            refresh_window_hit_entries(state, window_id);
-        }
-        state.last_browser_interactive_seq = next_browser_interactive_seq;
-    }
-}
-
-fn hit_entry_intersects_cursor(entry: &Ui2HitEntry, cursor_x: f32, cursor_y: f32) -> bool {
-    if !rect_contains_point(
-        Ui2Rect::new(
-            entry.rect.x - UI2_CURSOR_HIT_RADIUS_PX,
-            entry.rect.y - UI2_CURSOR_HIT_RADIUS_PX,
-            entry.rect.w + (UI2_CURSOR_HIT_RADIUS_PX * 2.0),
-            entry.rect.h + (UI2_CURSOR_HIT_RADIUS_PX * 2.0),
-        ),
-        cursor_x,
-        cursor_y,
-    ) {
-        return false;
-    }
-
-    let cursor = Ball::new(UI2_CURSOR_HIT_RADIUS_PX.max(0.5));
-    let rect = Cuboid::new(Vector::new(
-        (entry.rect.w * 0.5).max(0.5),
-        (entry.rect.h * 0.5).max(0.5),
-    ));
-    let cursor_iso = Isometry::translation(cursor_x, cursor_y);
-    let rect_iso = Isometry::translation(
-        entry.rect.x + (entry.rect.w * 0.5),
-        entry.rect.y + (entry.rect.h * 0.5),
-    );
-    matches!(
-        query::intersection_test(&cursor_iso, &cursor, &rect_iso, &rect),
-        Ok(true)
-    )
 }
 
 fn is_simple_click(press_x: f32, press_y: f32, release_x: f32, release_y: f32) -> bool {
@@ -1977,7 +1708,6 @@ pub async fn ui2_task() {
 
             pump_cursor_selection(&mut state);
             pump_keyboard_input(&mut state);
-            refresh_browser_hit_entries_if_needed(&mut state);
             log_browser_surface_updates(&mut state);
             sync_pending_window_containers(&mut state);
 

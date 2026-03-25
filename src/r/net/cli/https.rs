@@ -530,7 +530,7 @@ fn log_keepalive_done(
 struct KeepAliveByteFetch<'a> {
     log_prefix: &'static str,
     request: String,
-    request_path: Option<&'a str>,
+    request_path: Option<String>,
     done_log: bool,
     log_close_details: bool,
     progress: Option<&'a mut dyn FetchProgress>,
@@ -565,7 +565,7 @@ async fn fetch_keepalive_bytes(
         handle,
         data: fetch.request.into_bytes(),
     });
-    if let Some(path) = fetch.request_path {
+    if let Some(path) = fetch.request_path.as_deref() {
         crate::log!(
             "{}: request-sent host={} dev={} handle={} bytes={} path={}\n",
             fetch.log_prefix,
@@ -2521,7 +2521,7 @@ async fn fetch_on_device_keepalive(
         KeepAliveByteFetch {
             log_prefix: "vhttps-ka",
             request,
-            request_path: Some(parsed.path.as_str()),
+            request_path: Some(parsed.path.clone()),
             done_log: want_done_log,
             log_close_details: true,
             progress: progress.take(),

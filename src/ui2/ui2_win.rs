@@ -313,8 +313,6 @@ pub(super) fn set_window_visible_in_state(state: &mut Ui2State, id: u32, visible
     };
     state.compose_reason = reason;
     if !visible {
-        state.hit_scene.remove_window(id);
-        state.hit_scene.seq = state.hit_scene.seq.wrapping_add(1);
         clear_window_drag_claims(state, id);
     }
     let noted = note_window_dirty(state, id, reason);
