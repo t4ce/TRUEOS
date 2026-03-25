@@ -8,6 +8,7 @@ pub(super) type UiHostedLayoutState = trueos_qjs::browser_task::HostedBrowserLay
 pub(super) type UiHostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
 pub(super) const PRIMARY_HOSTED_CONTENT_ID: HostedContentId = 1;
@@ -18,6 +19,22 @@ pub(super) const HOSTED_KEYBOARD_MOD_ALT: u8 = trueos_qjs::browser_task::HOSTED_
 pub(super) const HOSTED_KEYBOARD_MOD_META: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_META;
 
 const UI2_BROWSER_ADAPTER_ENABLED: bool = true;
+pub(super) const HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
+pub(super) const HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(super) struct HostedBrowserDirtyMask {
+    pub content: u64,
+    pub interactive: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct UiHostedBrowserSnapshot {
+    pub surface: UiHostedSurfaceState,
+    pub interactive: UiHostedInteractiveState,
+    pub text: UiHostedTextState,
+    pub layout: UiHostedLayoutState,
+}
 
 #[derive(Copy, Clone, Debug, Default)]
 struct HostedBrowserFactorySignalState {
@@ -32,6 +49,8 @@ static HOSTED_BROWSER_FACTORY_SIGNAL: Mutex<HostedBrowserFactorySignalState> =
         seq: 0,
         taken_seq: 0,
     });
+static HOSTED_BROWSER_DIRTY_CONTENT_MASK: AtomicU64 = AtomicU64::new(0);
+static HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK: AtomicU64 = AtomicU64::new(0);
 
 pub(super) trait UiHostedSurfaceProvider {
     fn surface_seq(&self, content_id: HostedContentId) -> u32;
@@ -228,6 +247,22 @@ pub(super) fn hosted_layout_seq(content_id: HostedContentId) -> u32 {
     hosted_adapter().layout_seq(content_id)
 }
 
+pub(super) fn hosted_browser_snapshot(content_id: HostedContentId) -> UiHostedBrowserSnapshot {
+    let mut surface = hosted_surface_state(content_id);
+    if surface.content_width == 0 {
+        surface.content_width = surface.viewport_width.max(1);
+    }
+    if surface.content_height == 0 {
+        surface.content_height = surface.viewport_height.max(1);
+    }
+    UiHostedBrowserSnapshot {
+        surface,
+        interactive: hosted_interactive_state(content_id),
+        text: hosted_text_state(content_id),
+        layout: hosted_layout_state(content_id),
+    }
+}
+
 #[inline]
 pub(super) fn hosted_set_viewport(
     content_id: HostedContentId,
@@ -292,6 +327,33 @@ pub(crate) fn signal_hosted_browser_factory_mask(mask: u32) {
     let mut signal = HOSTED_BROWSER_FACTORY_SIGNAL.lock();
     signal.latest_mask = mask;
     signal.seq = signal.seq.wrapping_add(1).max(1);
+}
+
+#[inline]
+fn hosted_browser_bit(content_id: HostedContentId) -> Option<u64> {
+    if !(1..=64).contains(&content_id) {
+        return None;
+    }
+    Some(1u64 << content_id.saturating_sub(1))
+}
+
+pub(crate) fn signal_hosted_browser_dirty(content_id: HostedContentId, flags: u32) {
+    let Some(bit) = hosted_browser_bit(content_id) else {
+        return;
+    };
+    if (flags & HOSTED_BROWSER_DIRTY_CONTENT) != 0 {
+        HOSTED_BROWSER_DIRTY_CONTENT_MASK.fetch_or(bit, Ordering::Release);
+    }
+    if (flags & HOSTED_BROWSER_DIRTY_INTERACTIVE) != 0 {
+        HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK.fetch_or(bit, Ordering::Release);
+    }
+}
+
+pub(super) fn take_hosted_browser_dirty_mask() -> HostedBrowserDirtyMask {
+    HostedBrowserDirtyMask {
+        content: HOSTED_BROWSER_DIRTY_CONTENT_MASK.swap(0, Ordering::AcqRel),
+        interactive: HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK.swap(0, Ordering::AcqRel),
+    }
 }
 
 #[inline]

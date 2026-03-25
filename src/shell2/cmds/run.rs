@@ -104,6 +104,8 @@ fn portal_alloc_error_handler(layout: Layout) -> ! {
 
 fn portal_no_alloc_shim_is_unstable_v2() {}
 
+include!(concat!(env!("OUT_DIR"), "/generated_portal_imports.rs"));
+
 fn entry_hint_section(entry: u64) -> u32 {
     (entry >> 32) as u32
 }
@@ -565,12 +567,6 @@ fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'static str> 
 
 fn resolve_import(name: &str) -> Option<usize> {
     match name {
-        "trueos_cabi_alloc" => Some(crate::r::io::cabi::trueos_cabi_alloc as *const () as usize),
-        "trueos_cabi_free" => Some(crate::r::io::cabi::trueos_cabi_free as *const () as usize),
-        "trueos_cabi_realloc" => {
-            Some(crate::r::io::cabi::trueos_cabi_realloc as *const () as usize)
-        }
-        "trueos_cabi_write" => Some(crate::r::io::cabi::trueos_cabi_write as *const () as usize),
         "_RNvCs75cmLyI1ip2_7___rustc26___rust_alloc_error_handler" => {
             Some(portal_alloc_error_handler as *const () as usize)
         }
@@ -582,7 +578,7 @@ fn resolve_import(name: &str) -> Option<usize> {
         "memset" => Some(trueos_qjs::trueos_shims::memset as *const () as usize),
         "memcmp" => Some(trueos_qjs::trueos_shims::memcmp as *const () as usize),
         "strlen" => Some(trueos_qjs::trueos_shims::strlen as *const () as usize),
-        _ => None,
+        _ => resolve_cabi_import(name),
     }
 }
 

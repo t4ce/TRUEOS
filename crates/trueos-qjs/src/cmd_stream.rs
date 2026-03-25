@@ -8,15 +8,14 @@ use alloc::vec::Vec;
 use core::ffi::{CStr, c_char};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use libm::{ceilf, floorf, sqrtf};
-use parry2d::math::Isometry;
-use parry2d::query;
-use parry2d::shape::Ball;
 use spin::Mutex;
 
 use crate as qjs;
 
 #[path = "cmd_stream/atlas_cmd_stream.rs"]
 mod atlas_cmd_stream;
+#[path = "cmd_stream/draw_cmd_stream.rs"]
+mod draw_cmd_stream;
 #[path = "cmd_stream/lyon_cmd_stream.rs"]
 mod lyon_cmd_stream;
 
@@ -1446,307 +1445,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         qjs::JSValue::undefined()
     }
 
-    unsafe extern "C" fn qjs_cmd_stream_draw_triangles_u8(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        atlas_cmd_stream::flush_text_batches();
-        let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
-            if len > 0 {
-                let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(ptr, len);
-            }
-        });
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_fill_rect(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 5) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(rgba_f) = cmd_stream_arg_f64(ctx, args, 4) else {
-            return qjs::JSValue::undefined();
-        };
-
-        atlas_cmd_stream::flush_text_batches();
-        let rgba = (rgba_f as i64).max(0) as u32;
-        let outline = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) != 0.0;
-        let chamfer = cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) != 0.0;
-        let _ = cmd_stream_fill_rect(
-            x_f as f32,
-            y_f as f32,
-            w_f as f32,
-            h_f as f32,
-            rgba,
-            outline,
-            chamfer,
-        );
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_draw_line(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 5) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(x1_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(y1_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(x2_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(y2_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(rgba_f) = cmd_stream_arg_f64(ctx, args, 4) else {
-            return qjs::JSValue::undefined();
-        };
-
-        atlas_cmd_stream::flush_text_batches();
-        let rgba = (rgba_f as i64).max(0) as u32;
-        let thickness = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(1.0).max(0.5) as f32;
-        let _ = cmd_stream_draw_line(
-            x1_f as f32,
-            y1_f as f32,
-            x2_f as f32,
-            y2_f as f32,
-            rgba,
-            thickness,
-        );
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_draw_textured_triangles_u8(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 2) else {
-            return qjs::JSValue::undefined();
-        };
-        atlas_cmd_stream::flush_text_batches();
-        let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let tex_id = (tex_id_f as i64).max(0) as u32;
-        if tex_id == 0 {
-            return qjs::JSValue::undefined();
-        }
-        let _ = cmd_stream_with_u8_buffer(ctx, args[1], |ptr, len| {
-            if len > 0 {
-                let _ = trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, ptr, len);
-            }
-        });
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_draw_texture_rect(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 5) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(x_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(y_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(w_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(h_f) = cmd_stream_arg_f64(ctx, args, 4) else {
-            return qjs::JSValue::undefined();
-        };
-        let tex_id = (tex_id_f as i64).max(0) as u32;
-        if tex_id == 0 {
-            return qjs::JSValue::undefined();
-        }
-
-        let u0 = cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) as f32;
-        let v0 = cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) as f32;
-        let u1 = cmd_stream_arg_f64(ctx, args, 7).unwrap_or(1.0) as f32;
-        let v1 = cmd_stream_arg_f64(ctx, args, 8).unwrap_or(1.0) as f32;
-        let rgba =
-            (cmd_stream_arg_f64(ctx, args, 9).unwrap_or(0xFFFF_FFFFu32 as f64) as i64).max(0) as u32;
-
-        atlas_cmd_stream::flush_text_batches();
-        let _ = cmd_stream_draw_texture_rect(
-            tex_id,
-            x_f as f32,
-            y_f as f32,
-            w_f as f32,
-            h_f as f32,
-            u0,
-            v0,
-            u1,
-            v1,
-            rgba,
-        );
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_step_icon_collisions(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 5) else {
-            return qjs::JS_NewFloat64(ctx, 0.0);
-        };
-
-        let Some((pos_ptr, pos_len, pos_ab)) = cmd_stream_read_f32_slice_from_value(ctx, args[0]) else {
-            return qjs::JS_NewFloat64(ctx, 0.0);
-        };
-        let Some((vel_ptr, vel_len, vel_ab)) = cmd_stream_read_f32_slice_from_value(ctx, args[1]) else {
-            qjs::js_free_value(ctx, pos_ab);
-            return qjs::JS_NewFloat64(ctx, 0.0);
-        };
-
-        let Some(dt_ms_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-            qjs::js_free_value(ctx, vel_ab);
-            qjs::js_free_value(ctx, pos_ab);
-            return qjs::JS_NewFloat64(ctx, 0.0);
-        };
-        let Some(icon_size_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-            qjs::js_free_value(ctx, vel_ab);
-            qjs::js_free_value(ctx, pos_ab);
-            return qjs::JS_NewFloat64(ctx, 0.0);
-        };
-        let Some(restitution_f) = cmd_stream_arg_f64(ctx, args, 4) else {
-            qjs::js_free_value(ctx, vel_ab);
-            qjs::js_free_value(ctx, pos_ab);
-            return qjs::JS_NewFloat64(ctx, 0.0);
-        };
-
-        let icon_size = (icon_size_f as f32).max(1.0);
-        let radius = (icon_size * 0.5).max(0.5);
-        let dt = ((dt_ms_f as f32) / 1000.0).clamp(0.0, 0.05);
-        let restitution = (restitution_f as f32).clamp(0.0, 1.0);
-        let n = core::cmp::min(pos_len, vel_len) / 2;
-        if n < 2 {
-            qjs::js_free_value(ctx, vel_ab);
-            qjs::js_free_value(ctx, pos_ab);
-            return qjs::JS_NewFloat64(ctx, 0.0);
-        }
-
-        let pos = core::slice::from_raw_parts_mut(pos_ptr, n * 2);
-        let vel = core::slice::from_raw_parts_mut(vel_ptr, n * 2);
-        let view_w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
-        let view_h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
-
-        for i in 0..n {
-            let b = i * 2;
-            pos[b] += vel[b] * dt;
-            pos[b + 1] += vel[b + 1] * dt;
-
-            if pos[b] < 0.0 {
-                pos[b] = 0.0;
-                vel[b] = vel[b].abs() * restitution;
-            } else if pos[b] + icon_size > view_w {
-                pos[b] = (view_w - icon_size).max(0.0);
-                vel[b] = -vel[b].abs() * restitution;
-            }
-
-            if pos[b + 1] < 0.0 {
-                pos[b + 1] = 0.0;
-                vel[b + 1] = vel[b + 1].abs() * restitution;
-            } else if pos[b + 1] + icon_size > view_h {
-                pos[b + 1] = (view_h - icon_size).max(0.0);
-                vel[b + 1] = -vel[b + 1].abs() * restitution;
-            }
-        }
-
-        let shape = Ball::new(radius);
-        let mut contacts = 0u32;
-        for i in 0..n {
-            let ib = i * 2;
-            let ci_x = pos[ib] + radius;
-            let ci_y = pos[ib + 1] + radius;
-            let pi = Isometry::translation(ci_x, ci_y);
-
-            for j in (i + 1)..n {
-                let jb = j * 2;
-                let cj_x = pos[jb] + radius;
-                let cj_y = pos[jb + 1] + radius;
-                let pj = Isometry::translation(cj_x, cj_y);
-
-                let Ok(Some(c)) = query::contact(&pi, &shape, &pj, &shape, 0.0) else {
-                    continue;
-                };
-
-                if c.dist >= 0.0 {
-                    continue;
-                }
-                contacts = contacts.saturating_add(1);
-
-                let nrm = c.normal1.into_inner();
-                let nx = nrm.x;
-                let ny = nrm.y;
-
-                let rvx = vel[jb] - vel[ib];
-                let rvy = vel[jb + 1] - vel[ib + 1];
-                let rel = (rvx * nx) + (rvy * ny);
-                if rel < 0.0 {
-                    let impulse = -((1.0 + restitution) * rel) * 0.5;
-                    vel[ib] -= impulse * nx;
-                    vel[ib + 1] -= impulse * ny;
-                    vel[jb] += impulse * nx;
-                    vel[jb + 1] += impulse * ny;
-                }
-
-                let penetration = (-c.dist).max(0.0);
-                if penetration > 0.0 {
-                    let corr = (penetration * 0.5) + 0.01;
-                    pos[ib] -= corr * nx;
-                    pos[ib + 1] -= corr * ny;
-                    pos[jb] += corr * nx;
-                    pos[jb + 1] += corr * ny;
-                }
-            }
-        }
-
-        qjs::js_free_value(ctx, vel_ab);
-        qjs::js_free_value(ctx, pos_ab);
-        qjs::JS_NewFloat64(ctx, contacts as f64)
-    }
-
     const CMD_STREAM_MODULE_EXPORTS: &[CmdStreamModuleExport] = &[
         (b"beginFrame\0", qjs_cmd_stream_begin_frame, 0),
         (b"endFrame\0", qjs_cmd_stream_end_frame, 0),
@@ -1789,15 +1487,15 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
             atlas_cmd_stream::qjs_cmd_stream_create_atlas_texture,
             1,
         ),
-        (b"drawTrianglesU8\0", qjs_cmd_stream_draw_triangles_u8, 1),
-        (b"fillRect\0", qjs_cmd_stream_fill_rect, 5),
-        (b"drawLine\0", qjs_cmd_stream_draw_line, 5),
+        (b"drawTrianglesU8\0", draw_cmd_stream::qjs_cmd_stream_draw_triangles_u8, 1),
+        (b"fillRect\0", draw_cmd_stream::qjs_cmd_stream_fill_rect, 5),
+        (b"drawLine\0", draw_cmd_stream::qjs_cmd_stream_draw_line, 5),
         (
             b"drawTexturedTrianglesU8\0",
-            qjs_cmd_stream_draw_textured_triangles_u8,
+            draw_cmd_stream::qjs_cmd_stream_draw_textured_triangles_u8,
             2,
         ),
-        (b"drawTextureRect\0", qjs_cmd_stream_draw_texture_rect, 5),
+        (b"drawTextureRect\0", draw_cmd_stream::qjs_cmd_stream_draw_texture_rect, 5),
         (
             b"drawAtlasText\0",
             atlas_cmd_stream::qjs_cmd_stream_draw_atlas_text,
@@ -1808,7 +1506,7 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
             lyon_cmd_stream::qjs_cmd_stream_draw_lyon_icon_in_frame,
             4,
         ),
-        (b"stepIconCollisions\0", qjs_cmd_stream_step_icon_collisions, 5),
+        (b"stepIconCollisions\0", draw_cmd_stream::qjs_cmd_stream_step_icon_collisions, 5),
     ];
 
     unsafe extern "C" fn qjs_cmd_stream_module_init(

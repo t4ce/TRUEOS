@@ -19,6 +19,10 @@ use spin::{Mutex, Once};
 
 use crate as qjs;
 
+unsafe extern "C" {
+    fn trueos_cabi_ui2_signal_hosted_browser_dirty(content_id: u32, flags: u32);
+}
+
 pub const MAX_BROWSER_INSTANCE_ID: u32 = 50;
 pub const BOOT_BROWSER_INSTANCE_IDS: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
@@ -77,6 +81,8 @@ const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
 const TRUESURFER_BUSY_SLEEP_MS: u64 = 1;
 const TRUESURFER_IDLE_SLEEP_MS: u64 = 16;
+const UI2_HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
+const UI2_HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
 
 struct SpinRawMutex(Mutex<()>);
 
@@ -302,6 +308,15 @@ fn with_browser_state<R>(
 }
 
 #[inline]
+fn signal_ui2_hosted_browser_dirty(browser_instance_id: u32, flags: u32) {
+    if browser_valid(browser_instance_id) && flags != 0 {
+        unsafe {
+            trueos_cabi_ui2_signal_hosted_browser_dirty(browser_instance_id, flags);
+        }
+    }
+}
+
+#[inline]
 fn log_line(line: String) {
     qjs::trueos_shims::log_info(line.as_str());
 }
@@ -411,7 +426,8 @@ pub fn set_hosted_viewport_for_browser(
     content_width: u32,
     content_height: u32,
 ) -> bool {
-    with_browser_state_mut(browser_instance_id, |state| {
+    let mut dirty = false;
+    let ok = with_browser_state_mut(browser_instance_id, |state| {
         let next = HostedBrowserSurfaceState {
             viewport_width: viewport_width.max(1),
             viewport_height: viewport_height.max(1),
@@ -425,22 +441,33 @@ pub fn set_hosted_viewport_for_browser(
         }
         state.surface_state = next;
         state.surface_seq = state.surface_seq.wrapping_add(1);
+        dirty = true;
         true
     })
-    .unwrap_or(false)
+    .unwrap_or(false);
+    if dirty {
+        signal_ui2_hosted_browser_dirty(browser_instance_id, UI2_HOSTED_BROWSER_DIRTY_CONTENT);
+    }
+    ok
 }
 
 pub fn set_hosted_scroll_for_browser(browser_instance_id: u32, scroll_x: u32, scroll_y: u32) -> bool {
-    with_browser_state_mut(browser_instance_id, |state| {
+    let mut dirty = false;
+    let ok = with_browser_state_mut(browser_instance_id, |state| {
         if state.surface_state.scroll_x == scroll_x && state.surface_state.scroll_y == scroll_y {
             return true;
         }
         state.surface_state.scroll_x = scroll_x;
         state.surface_state.scroll_y = scroll_y;
         state.surface_seq = state.surface_seq.wrapping_add(1);
+        dirty = true;
         true
     })
-    .unwrap_or(false)
+    .unwrap_or(false);
+    if dirty {
+        signal_ui2_hosted_browser_dirty(browser_instance_id, UI2_HOSTED_BROWSER_DIRTY_CONTENT);
+    }
+    ok
 }
 
 pub fn bind_browser_window_to_instance(browser_instance_id: u32, window_id: u32) -> bool {
@@ -469,16 +496,23 @@ pub fn render_tex_id_for_browser_instance(browser_instance_id: u32) -> u32 {
 }
 
 pub fn queue_hosted_keyboard_events(browser_window_id: u32, events: &[HostedKeyboardEvent]) -> bool {
+    if events.is_empty() {
+        return true;
+    }
     let Some(browser_instance_id) = BOOT_BROWSER_INSTANCE_IDS.iter().copied().find(|candidate| {
         browser_window_id_for_instance(*candidate) == browser_window_id
     }) else {
         return false;
     };
-    with_browser_state_mut(browser_instance_id, |state| {
+    let queued = with_browser_state_mut(browser_instance_id, |state| {
         state.interactive_seq = state.interactive_seq.wrapping_add(events.len() as u32);
         true
     })
-    .unwrap_or(false)
+    .unwrap_or(false);
+    if queued {
+        signal_ui2_hosted_browser_dirty(browser_instance_id, UI2_HOSTED_BROWSER_DIRTY_INTERACTIVE);
+    }
+    queued
 }
 
 unsafe fn set_global_i32(ctx: *mut qjs::JSContext, key: &[u8], value: i32) {
@@ -832,6 +866,7 @@ unsafe fn dispatch_html(
     let text_state = read_text_rows(ctx, result);
     let layout_state = read_layout_state(ctx, result);
 
+    let mut ui2_dirty_flags = 0u32;
     let _ = with_browser_state_mut(browser_instance_id, |state| {
         let text_changed = state.text_state != text_state;
         let layout_changed = state.layout_state != layout_state;
@@ -847,10 +882,12 @@ unsafe fn dispatch_html(
         if text_changed {
             state.text_state = text_state.clone();
             state.text_seq = state.text_seq.wrapping_add(1);
+            ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
         }
         if layout_changed {
             state.layout_state = layout_state.clone();
             state.layout_seq = state.layout_seq.wrapping_add(1);
+            ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
         }
 
         let mut next_content_height = state.surface_state.content_height.max(1);
@@ -870,8 +907,13 @@ unsafe fn dispatch_html(
         if next_content_height != state.surface_state.content_height {
             state.surface_state.content_height = next_content_height;
             state.surface_seq = state.surface_seq.wrapping_add(1);
+            ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
         }
     });
+
+    if ui2_dirty_flags != 0 {
+        signal_ui2_hosted_browser_dirty(browser_instance_id, ui2_dirty_flags);
+    }
 
     if parse_result.ok {
         log_line(format!(

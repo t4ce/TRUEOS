@@ -54,6 +54,7 @@ pub(super) fn alloc_window(
         } else {
             0
         },
+        hosted_browser_snapshot: UiHostedBrowserSnapshot::default(),
         title: String::from(title),
         icon_id: 0,
         rect,
@@ -617,6 +618,7 @@ pub fn create_hosted_browser_window(
         window.browser_instance_id = browser_instance_id;
         window.content_tex_id = tex_id;
         window.content_tex_blend = true;
+        refresh_hosted_browser_snapshot(window);
     }
     let initial_content = state
         .windows
