@@ -18,6 +18,8 @@ pub(crate) use crate::widget_kind::WidgetKind;
 mod ccw;
 #[path = "calculator/graphcalc.rs"]
 mod graphcalc;
+#[path = "calculator/arithmcalc.rs"]
+mod arithmcalc;
 #[path = "calculator/harness.rs"]
 mod harness;
 #[path = "calculator/sidequest.rs"]
@@ -25,5 +27,6 @@ mod sidequest;
 
 pub use ccw::*;
 pub use graphcalc::*;
+pub use arithmcalc::*;
 pub use harness::*;
 pub use sidequest::*;

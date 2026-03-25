@@ -39,7 +39,7 @@ pub(super) struct UiHostedBrowserSnapshot {
 
 #[derive(Copy, Clone, Debug, Default)]
 struct HostedBrowserFactorySignalState {
-    latest_mask: u32,
+    latest_mask: u64,
     seq: u32,
     taken_seq: u32,
 }
@@ -326,7 +326,7 @@ pub(super) fn hosted_queue_keyboard_events(
     hosted_adapter().send_input(content_id, UiHostedInput::Keyboard { events })
 }
 
-pub(crate) fn signal_hosted_browser_factory_mask(mask: u32) {
+pub(crate) fn signal_hosted_browser_factory_mask(mask: u64) {
     let mut signal = HOSTED_BROWSER_FACTORY_SIGNAL.lock();
     signal.latest_mask = mask;
     signal.seq = signal.seq.wrapping_add(1).max(1);
@@ -365,7 +365,7 @@ pub(super) fn take_hosted_browser_dirty_mask() -> HostedBrowserDirtyMask {
 }
 
 #[inline]
-pub(super) fn take_hosted_browser_factory_mask() -> Option<u32> {
+pub(super) fn take_hosted_browser_factory_mask() -> Option<u64> {
     let mut signal = HOSTED_BROWSER_FACTORY_SIGNAL.lock();
     if signal.seq == signal.taken_seq {
         return None;
@@ -401,16 +401,14 @@ fn hosted_browser_factory_content_rect_for_view(
     )
 }
 
-pub(super) fn sync_hosted_browser_factory_windows(active_mask: u32) -> usize {
+pub(super) fn sync_hosted_browser_factory_windows(active_mask: u64) -> usize {
     if active_mask == 0 {
         return 0;
     }
 
-    let active_ids: Vec<u32> = trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
-        .iter()
-        .copied()
+    let active_ids: Vec<u32> = (1..=trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID)
         .filter(|browser_instance_id| {
-            let bit = 1u32 << browser_instance_id.saturating_sub(1);
+            let bit = 1u64 << browser_instance_id.saturating_sub(1);
             (active_mask & bit) != 0
         })
         .collect();
