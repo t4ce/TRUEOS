@@ -875,6 +875,13 @@ unsafe fn dispatch_html(
 
     if parse_result.ok {
         log_line(format!(
+            "[TrueSurfer -> UI2] browser={} handover description_entries={} text_rows={} url={}\n",
+            browser_instance_id,
+            layout_state.nodes.len(),
+            text_state.rows.len(),
+            parse_result.url,
+        ));
+        log_line(format!(
             "qjs-truesurfer[{}]: parsed bytes={} title={} ms={} shell_bytes={} body_bytes={} layout_nodes={} styles={} scripts={} url={}\n",
             browser_instance_id,
             parse_result.bytes,

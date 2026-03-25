@@ -63,7 +63,6 @@ mod tst_ws_time;
 mod turbo;
 mod usb2;
 mod wait;
-mod widget_kind;
 mod x2apic;
 mod z7;
 

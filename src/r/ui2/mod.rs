@@ -279,7 +279,17 @@ struct Ui2State {
     windows: Vec<Ui2Window>,
     compose_present_history_ms: Vec<u64>,
     compose_fps_display: u16,
+    last_compose_heartbeat_seq: u32,
     first_compose_signaled: bool,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui2ComposeWindowStats {
+    visible_windows: usize,
+    hosted_browser_windows: usize,
+    hosted_browser_drawable: usize,
+    hosted_browser_pending: usize,
+    hosted_surface_windows: usize,
 }
 
 static UI2_STATE: Once<Mutex<Ui2State>> = Once::new();
@@ -419,6 +429,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             windows: Vec::new(),
             compose_present_history_ms: Vec::new(),
             compose_fps_display: 0,
+            last_compose_heartbeat_seq: 0,
             first_compose_signaled: false,
         };
 
@@ -426,6 +437,30 @@ fn init_state() -> &'static Mutex<Ui2State> {
 
         Mutex::new(state)
     })
+}
+
+fn collect_compose_window_stats(state: &Ui2State) -> Ui2ComposeWindowStats {
+    let mut stats = Ui2ComposeWindowStats::default();
+    for window in &state.windows {
+        if !window.visible {
+            continue;
+        }
+        stats.visible_windows = stats.visible_windows.saturating_add(1);
+        match window.kind {
+            Ui2WindowKind::HostedBrowser => {
+                stats.hosted_browser_windows = stats.hosted_browser_windows.saturating_add(1);
+                if texture_is_drawable(window.content_tex_id) {
+                    stats.hosted_browser_drawable = stats.hosted_browser_drawable.saturating_add(1);
+                } else {
+                    stats.hosted_browser_pending = stats.hosted_browser_pending.saturating_add(1);
+                }
+            }
+            Ui2WindowKind::HostedSurface => {
+                stats.hosted_surface_windows = stats.hosted_surface_windows.saturating_add(1);
+            }
+        }
+    }
+    stats
 }
 
 fn alloc_window(
@@ -2390,12 +2425,12 @@ fn draw_hosted_browser_layout_preview(
         if text_top >= bottom {
             continue;
         }
-        let text = if !node.text.is_empty() {
-            node.text.as_str()
-        } else if node.kind == "text" || node.kind == "inline" {
-            node.tag.as_str()
+        let text = if !node.tag.is_empty() {
+            format!("<{}> </{}>", node.tag, node.tag)
+        } else if !node.text.is_empty() {
+            node.text.clone()
         } else {
-            ""
+            String::new()
         };
         let line_h = node
             .intrinsic_height_px
@@ -2409,7 +2444,7 @@ fn draw_hosted_browser_layout_preview(
         if !text.is_empty() {
             let left = content.x + 8.0 + node.margin_left_px as f32 + node.padding_left_px as f32;
             let max_width_px = (content.x + content.w - 8.0 - left).max(0.0);
-            let row_bytes = truncate_hosted_browser_text_preview_row(text, max_width_px, line_h);
+            let row_bytes = truncate_hosted_browser_text_preview_row(&text, max_width_px, line_h);
             if !row_bytes.is_empty() {
                 if let Some(layout) = crate::gfx::imbafont::layout_text_top_left(
                     face, &row_bytes, left, text_top, line_h,
@@ -2744,6 +2779,11 @@ fn compose_windows(state: &mut Ui2State) {
     }
 
     if presentation_allowed {
+        let compose_started_ms = boot_probe_ms();
+        let window_stats = collect_compose_window_stats(state);
+        let mut frame_begin_done_ms = compose_started_ms;
+        let mut draw_done_ms = compose_started_ms;
+        let mut end_done_ms = compose_started_ms;
         crate::gfx::with_cabi_frame_lock(|| {
             if state.compose_seq <= 2 {
                 crate::log!(
@@ -2757,18 +2797,48 @@ fn compose_windows(state: &mut Ui2State) {
             if begin_rc != 0 {
                 return;
             }
+            frame_begin_done_ms = boot_probe_ms();
             for idx in sorted_window_indices(state) {
                 let window = &state.windows[idx];
                 draw_window_frame(state, window);
             }
             draw_resize_preview_outline(state);
             draw_hud_pass(state);
+            draw_done_ms = boot_probe_ms();
             unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+            end_done_ms = boot_probe_ms();
             update_hud_pass(state, boot_probe_ms());
             if state.compose_seq <= 2 {
                 crate::log!("ui2: compose-frame seq={} end\n", state.compose_seq);
             }
         });
+        let total_ms = end_done_ms.saturating_sub(compose_started_ms);
+        let begin_ms = frame_begin_done_ms.saturating_sub(compose_started_ms);
+        let draw_ms = draw_done_ms.saturating_sub(frame_begin_done_ms);
+        let present_ms = end_done_ms.saturating_sub(draw_done_ms);
+        let since_heartbeat = state
+            .compose_seq
+            .wrapping_sub(state.last_compose_heartbeat_seq);
+        let slow_frame = total_ms >= 8 || present_ms >= 4;
+        if state.last_compose_heartbeat_seq == 0 || slow_frame || since_heartbeat >= 32 {
+            crate::log!(
+                "ui2: compose-heartbeat seq={} reason={} total_ms={} begin_ms={} draw_ms={} present_ms={} windows={} visible={} browser={} drawable={} pending={} surface={} dirty={}\n",
+                state.compose_seq,
+                state.compose_reason,
+                total_ms,
+                begin_ms,
+                draw_ms,
+                present_ms,
+                state.windows.len(),
+                window_stats.visible_windows,
+                window_stats.hosted_browser_windows,
+                window_stats.hosted_browser_drawable,
+                window_stats.hosted_browser_pending,
+                window_stats.hosted_surface_windows,
+                dirty_count,
+            );
+            state.last_compose_heartbeat_seq = state.compose_seq;
+        }
     } else if state.compose_seq <= 2 {
         crate::log!(
             "ui2: compose-frame seq={} deferred-by-loadscreen dirty={}\n",
