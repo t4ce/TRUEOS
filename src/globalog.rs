@@ -151,26 +151,85 @@ async fn persist_snapshot(
 }
 
 pub mod logtotcp {
-    use alloc::{collections::VecDeque, vec::Vec};
-    use core::fmt;
+    use alloc::vec::Vec;
+    use core::{cmp::min, fmt};
     use spin::Mutex;
 
     const MAX_BYTES: usize = 256 * 1024;
 
-    static RING: Mutex<VecDeque<u8>> = Mutex::new(VecDeque::new());
+    struct TcpLogRing {
+        buf: [u8; MAX_BYTES],
+        head: usize,
+        len: usize,
+    }
+
+    impl TcpLogRing {
+        const fn new() -> Self {
+            Self {
+                buf: [0; MAX_BYTES],
+                head: 0,
+                len: 0,
+            }
+        }
+
+        #[inline]
+        fn write_bytes(&mut self, bytes: &[u8]) {
+            if bytes.is_empty() {
+                return;
+            }
+
+            if bytes.len() >= MAX_BYTES {
+                let keep = &bytes[bytes.len() - MAX_BYTES..];
+                self.buf.copy_from_slice(keep);
+                self.head = 0;
+                self.len = MAX_BYTES;
+                return;
+            }
+
+            let first = min(bytes.len(), MAX_BYTES - self.head);
+            self.buf[self.head..self.head + first].copy_from_slice(&bytes[..first]);
+
+            let rest = bytes.len() - first;
+            if rest != 0 {
+                self.buf[..rest].copy_from_slice(&bytes[first..]);
+            }
+
+            self.head = (self.head + bytes.len()) % MAX_BYTES;
+            self.len = min(self.len + bytes.len(), MAX_BYTES);
+        }
+
+        #[inline]
+        fn oldest_index(&self) -> usize {
+            (self.head + MAX_BYTES - self.len) % MAX_BYTES
+        }
+
+        fn drain_bytes(&mut self, max: usize) -> Vec<u8> {
+            let take = self.len.min(max);
+            if take == 0 {
+                return Vec::new();
+            }
+
+            let start = self.oldest_index();
+            let first = min(take, MAX_BYTES - start);
+            let mut out = Vec::with_capacity(take);
+            out.extend_from_slice(&self.buf[start..start + first]);
+            if take > first {
+                out.extend_from_slice(&self.buf[..take - first]);
+            }
+
+            self.len -= take;
+            out
+        }
+    }
+
+    static RING: Mutex<TcpLogRing> = Mutex::new(TcpLogRing::new());
 
     pub(super) fn log(args: fmt::Arguments<'_>) {
         struct Writer;
 
         impl fmt::Write for Writer {
             fn write_str(&mut self, s: &str) -> fmt::Result {
-                let mut ring = RING.lock();
-                for &b in s.as_bytes() {
-                    if ring.len() >= MAX_BYTES {
-                        ring.pop_front();
-                    }
-                    ring.push_back(b);
-                }
+                RING.lock().write_bytes(s.as_bytes());
                 Ok(())
             }
         }
@@ -179,9 +238,7 @@ pub mod logtotcp {
     }
 
     fn drain_bytes(max: usize) -> Vec<u8> {
-        let mut ring = RING.lock();
-        let n = ring.len().min(max);
-        ring.drain(..n).collect()
+        RING.lock().drain_bytes(max)
     }
 
     #[embassy_executor::task]

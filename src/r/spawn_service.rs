@@ -134,7 +134,7 @@ pub const fn truesurfer_factory_boot_count() -> u32 {
 
 struct TruesurferFactory {
     next_instance_id: u32,
-    spawned_mask: u32,
+    spawned_mask: u64,
 }
 
 impl TruesurferFactory {
@@ -155,10 +155,10 @@ impl TruesurferFactory {
 
     fn mark_spawned(&mut self, browser_instance_id: u32) {
         self.next_instance_id = self.next_instance_id.saturating_add(1);
-        let bit = 1u32 << browser_instance_id.saturating_sub(1);
+        let bit = 1u64 << browser_instance_id.saturating_sub(1);
         self.spawned_mask |= bit;
     }
-    fn spawned_mask(&self) -> u32 {
+    fn spawned_mask(&self) -> u64 {
         self.spawned_mask
     }
 }
