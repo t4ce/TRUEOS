@@ -1499,7 +1499,11 @@ pub async fn format_blank_force_async(handle: block::DeviceHandle) -> Result<(),
         let _ = handle.flush().await;
     }
 
-    format_blank_at_async(handle, 0).await
+    format_blank_at_async(handle, 0).await?;
+    if handle.info().user_visible {
+        request_mount_root(handle);
+    }
+    Ok(())
 }
 
 fn validate_blank_format_args(

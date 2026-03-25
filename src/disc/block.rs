@@ -468,6 +468,7 @@ pub fn register_device<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHand
 where
     D: BlockDevice + 'static,
 {
+    let should_request_trueosfs_mount = descriptor.parent.is_none() && descriptor.user_visible;
     let driver: Box<dyn BlockDevice> = Box::new(device);
     let block_size = driver.block_size_bytes();
     let block_count = driver.block_count();
@@ -499,6 +500,9 @@ where
 
     let handle = node.handle();
     REGISTRY.lock().insert(node);
+    if should_request_trueosfs_mount {
+        crate::r::fs::trueosfs::request_mount_root(handle);
+    }
     handle
 }
 
