@@ -3611,24 +3611,12 @@ pub mod cabi {
             return -3;
         }
 
-        let clipped_owned;
-        let clipped = if let Some(scissor) = st.cur_scissor {
-            let (vp_w, vp_h) = frame_target_extent(&st);
-            clipped_owned = clip_rgb_triangles_to_scissor(bytes, scissor, vp_w, vp_h);
-            clipped_owned.as_slice()
-        } else {
-            bytes
-        };
-        if clipped.is_empty() {
-            return 0;
-        }
-
         st.frame_rgb_draws = st.frame_rgb_draws.saturating_add(1);
-        st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(clipped.len());
+        st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(bytes.len());
         let blend = st.cur_blend;
         let mut off = 0usize;
-        while off < clipped.len() {
-            let rem = clipped.len() - off;
+        while off < bytes.len() {
+            let rem = bytes.len() - off;
             let chunk = core::cmp::min(MAX_CMDSTREAM_DRAW_BYTES, rem);
             let chunk = chunk - (chunk % VTX_SIZE);
             if chunk == 0 {
@@ -3636,7 +3624,7 @@ pub mod cabi {
             }
             let blob_offset = st.frame_rgb_blob.len();
             st.frame_rgb_blob
-                .extend_from_slice(&clipped[off..off + chunk]);
+                .extend_from_slice(&bytes[off..off + chunk]);
             st.frame_draws.push(PendingDraw::Rgb {
                 blob_offset,
                 blob_len: chunk,
