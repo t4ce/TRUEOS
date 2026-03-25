@@ -69,6 +69,23 @@ pub fn download_once_blocking() -> Result<usize, &'static str> {
     crate::wait::spawn_and_wait_local(download_once_async())
 }
 
+pub fn download_once_detached() {
+    crate::wait::spawn_local_detached(async {
+        match download_once_async().await {
+            Ok(bytes) => crate::log!(
+                "pciids: detached download finished key={} bytes={}\n",
+                PCI_IDS_KEY,
+                bytes
+            ),
+            Err(reason) => crate::log!(
+                "pciids: detached download failed reason={} url={}\n",
+                reason,
+                PCI_IDS_URL
+            ),
+        }
+    });
+}
+
 pub fn load_raw_from_root_blocking()
 -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
     let mut last_err: Option<crate::disc::block::Error> = None;
