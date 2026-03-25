@@ -8,7 +8,8 @@ pub(super) type UiHostedLayoutState = trueos_qjs::browser_task::HostedBrowserLay
 pub(super) type UiHostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 pub(super) const PRIMARY_HOSTED_CONTENT_ID: HostedContentId = 1;
@@ -49,6 +50,8 @@ static HOSTED_BROWSER_FACTORY_SIGNAL: Mutex<HostedBrowserFactorySignalState> =
         seq: 0,
         taken_seq: 0,
     });
+static UI2_HOSTED_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
+static UI2_HOSTED_CONTAINER_SYNC_QUEUED: AtomicBool = AtomicBool::new(false);
 static HOSTED_BROWSER_DIRTY_CONTENT_MASK: AtomicU64 = AtomicU64::new(0);
 static HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK: AtomicU64 = AtomicU64::new(0);
 
@@ -330,6 +333,11 @@ pub(crate) fn signal_hosted_browser_factory_mask(mask: u32) {
 }
 
 #[inline]
+pub(super) fn queue_hosted_container_sync() {
+    UI2_HOSTED_CONTAINER_SYNC_QUEUED.store(true, Ordering::Release);
+}
+
+#[inline]
 fn hosted_browser_bit(content_id: HostedContentId) -> Option<u64> {
     if !(1..=64).contains(&content_id) {
         return None;
@@ -574,5 +582,36 @@ pub(super) fn sync_pending_window_containers(state: &mut Ui2State) {
         if let Some(window) = window_mut(state, id) {
             window.container_sync_needed = false;
         }
+    }
+}
+
+#[embassy_executor::task]
+pub async fn ui2_hosted_task() {
+    if UI2_HOSTED_SYNC_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    crate::log!("boot-probe: ui2-hosted task start ms={}\n", boot_probe_ms());
+    queue_hosted_container_sync();
+
+    loop {
+        let queued = UI2_HOSTED_CONTAINER_SYNC_QUEUED.swap(false, Ordering::AcqRel);
+        let mut pending_after = false;
+
+        if queued {
+            let state_lock = init_state();
+            let mut state = state_lock.lock();
+            sync_pending_window_containers(&mut state);
+            pending_after = state
+                .windows
+                .iter()
+                .any(|window| window.container_sync_needed);
+        }
+
+        if pending_after {
+            queue_hosted_container_sync();
+        }
+
+        Timer::after(EmbassyDuration::from_millis(if queued { 4 } else { 12 })).await;
     }
 }

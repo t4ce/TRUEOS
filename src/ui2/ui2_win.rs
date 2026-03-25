@@ -81,6 +81,7 @@ pub(super) fn alloc_window(
         last_logged_dirty_seq: 0,
         last_logged_reason: "",
     });
+    queue_hosted_container_sync();
     id
 }
 
