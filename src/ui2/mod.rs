@@ -1264,7 +1264,6 @@ fn truncate_hosted_browser_text_preview_row(text: &str, max_width_px: f32, px_h:
         return Vec::new();
     }
 
-    let face = crate::gfx::imbafont::ImbaFontFace::Regular;
     let mut out = Vec::with_capacity(text.len().min(96));
     for &byte in text.as_bytes() {
         let normalized = match byte {
@@ -1272,7 +1271,7 @@ fn truncate_hosted_browser_text_preview_row(text: &str, max_width_px: f32, px_h:
             _ => byte,
         };
         out.push(normalized);
-        let width = crate::gfx::imbafont::measure_text_width_px_tracked(face, &out, px_h, 0.0);
+        let width = crate::gfx::imba_athlas::imba_athlas_text_width_scaled_px(&out, px_h);
         if width > max_width_px {
             out.pop();
             break;
@@ -1310,7 +1309,6 @@ fn draw_hosted_browser_text_preview(
 
     let pad_x = 10.0f32;
     let pad_y = 8.0f32;
-    let face = crate::gfx::imbafont::ImbaFontFace::Regular;
     let text_px_h = 7.0f32;
     let row_step = text_px_h + 4.0;
     let visible_bottom = content.y + content.h - pad_y;
@@ -1336,21 +1334,15 @@ fn draw_hosted_browser_text_preview(
             continue;
         }
 
-        if let Some(layout) =
-            crate::gfx::imbafont::layout_text_top_left(face, &row_bytes, x, y, text_px_h)
-        {
-            if crate::gfx::imbafont::draw_text_in_frame(
-                face,
-                &row_bytes,
-                &layout,
-                state.view_w,
-                state.view_h,
-                (0x14, 0x18, 0x1D),
-                window.alpha,
-            ) {
-                drew_any = true;
-            }
-        }
+        drew_any |= crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_scaled(
+            &row_bytes,
+            x,
+            y,
+            state.view_w,
+            state.view_h,
+            text_px_h,
+            window.alpha,
+        );
     }
 
     drew_any
@@ -1378,7 +1370,6 @@ fn draw_hosted_browser_layout_preview(
         state.view_h,
     );
 
-    let face = crate::gfx::imbafont::ImbaFontFace::Regular;
     let mut y_cursor = content.y + 8.0;
     let bottom = content.y + content.h - 4.0;
     let mut drew_any = false;
@@ -1414,19 +1405,16 @@ fn draw_hosted_browser_layout_preview(
             let max_width_px = (content.x + content.w - 8.0 - left).max(0.0);
             let row_bytes = truncate_hosted_browser_text_preview_row(&text, max_width_px, line_h);
             if !row_bytes.is_empty() {
-                if let Some(layout) = crate::gfx::imbafont::layout_text_top_left(
-                    face, &row_bytes, left, text_top, line_h,
-                ) {
-                    drew_any |= crate::gfx::imbafont::draw_text_in_frame(
-                        face,
-                        &row_bytes,
-                        &layout,
-                        state.view_w,
-                        state.view_h,
-                        text_rgb,
-                        window.alpha,
-                    );
-                }
+                let _ = text_rgb;
+                drew_any |= crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_scaled(
+                    &row_bytes,
+                    left,
+                    text_top,
+                    state.view_w,
+                    state.view_h,
+                    line_h,
+                    window.alpha,
+                );
             }
         }
         y_cursor += block_h.max(8.0);
@@ -1457,6 +1445,14 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
                         texture_ms: boot_probe_ms().saturating_sub(content_started_ms),
                         placeholder_ms: 0,
                         content_path: "browser-preview",
+                    };
+                }
+                if draw_hosted_browser_text_preview(state, window, content) {
+                    return Ui2WindowDrawTiming {
+                        chrome_ms,
+                        texture_ms: boot_probe_ms().saturating_sub(content_started_ms),
+                        placeholder_ms: 0,
+                        content_path: "browser-preview-text",
                     };
                 }
                 if texture_is_drawable(window.content_tex_id)

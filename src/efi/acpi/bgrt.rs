@@ -4,9 +4,9 @@ use crate::{limine, pci::mmio}; // vga
 
 use super::ensure_tables;
 
-// Packed (valid|x|y|w|h) so BSP code can place other overlays relative to it.
-// Bits: [63]=valid, [0..15]=x, [16..31]=y, [32..47]=w, [48..62]=h
-static LAST_LOGO_RECT: AtomicU64 = AtomicU64::new(0);
+// Packed (valid|w|h) so decoded_logo_rgba can expose the image without any VGA-era side effects.
+// Bits: [63]=valid, [0..15]=w, [16..31]=h
+static BGRT_IMAGE_INFO: AtomicU64 = AtomicU64::new(0);
 
 const MAX_W: usize = 256;
 const MAX_H: usize = 256;
@@ -19,7 +19,7 @@ static mut PALETTE: [u32; MAX_PALETTE] = [0; MAX_PALETTE];
 
 pub fn log_once() {
     crate::logflag::BGRT_LOG_ONCE.call_once(|| {
-        LAST_LOGO_RECT.store(0, Ordering::Relaxed);
+        BGRT_IMAGE_INFO.store(0, Ordering::Relaxed);
 
         let Some(tables) = ensure_tables() else {
             return;
@@ -69,14 +69,8 @@ pub fn log_once() {
             }
         };
 
-        // If it is a BMP we understand, blit (cropped to 256x256) into the framebuffer.
+        // Decode the BGRT BMP directly into BGRT_PIXELS for UI2 consumption.
         if let Some(bmp) = bmp {
-            let Some((fb_w, fb_h)) = return
-            //vga::framebuffer_dimensions().map(|(w, h)| (w as usize, h as usize))
-            else {
-                return;
-            };
-
             let src_w = bmp.width as usize;
             let src_h = bmp.height as usize;
             if src_w == 0 || src_h == 0 {
@@ -85,34 +79,25 @@ pub fn log_once() {
 
             let copy_w = src_w.min(MAX_W);
             let copy_h = src_h.min(MAX_H);
-            let (ox, oy) = clamp_origin_for_image(fb_w, fb_h, copy_w, copy_h);
-
-            let ok = blit_bmp_to_vga(addr, ox, oy, &bmp);
+            let ok = decode_bmp_to_buffer(addr, &bmp, copy_w, copy_h);
             if ok {
-                set_last_logo_rect(ox, oy, copy_w, copy_h);
+                set_decoded_logo_size(copy_w, copy_h);
             }
         }
     });
 }
 
-pub fn last_logo_rect() -> Option<(usize, usize, usize, usize)> {
-    let packed = LAST_LOGO_RECT.load(Ordering::Relaxed);
+pub fn decoded_logo_rgba() -> Option<(usize, usize, &'static [u32])> {
+    log_once();
+    let packed = BGRT_IMAGE_INFO.load(Ordering::Relaxed);
     if (packed >> 63) == 0 {
         return None;
     }
-    let x = (packed & 0xFFFF) as usize;
-    let y = ((packed >> 16) & 0xFFFF) as usize;
-    let w = ((packed >> 32) & 0xFFFF) as usize;
-    let h = ((packed >> 48) & 0x7FFF) as usize;
+    let w = (packed & 0xFFFF) as usize;
+    let h = ((packed >> 16) & 0xFFFF) as usize;
     if w == 0 || h == 0 {
         return None;
     }
-    Some((x, y, w, h))
-}
-
-pub fn decoded_logo_rgba() -> Option<(usize, usize, &'static [u32])> {
-    log_once();
-    let (_, _, w, h) = last_logo_rect()?;
     let expected = w.checked_mul(h)?;
     if expected == 0 || expected > MAX_PIXELS {
         return None;
@@ -121,29 +106,11 @@ pub fn decoded_logo_rgba() -> Option<(usize, usize, &'static [u32])> {
     Some((w, h, pixels))
 }
 
-fn set_last_logo_rect(x: usize, y: usize, w: usize, h: usize) {
-    let x = (x.min(0xFFFF)) as u64;
-    let y = (y.min(0xFFFF)) as u64;
+fn set_decoded_logo_size(w: usize, h: usize) {
     let w = (w.min(0xFFFF)) as u64;
-    let h = (h.min(0x7FFF)) as u64;
-    let packed = (1u64 << 63) | x | (y << 16) | (w << 32) | (h << 48);
-    LAST_LOGO_RECT.store(packed, Ordering::Relaxed);
-}
-
-fn clamp_origin_for_image(fb_w: usize, fb_h: usize, img_w: usize, img_h: usize) -> (usize, usize) {
-    // Prefer bottom-right (by calling with origin at fb_w/fb_h) but ensure we still draw
-    // something if the image is larger than the framebuffer.
-    let ox = if img_w <= fb_w {
-        fb_w.saturating_sub(img_w)
-    } else {
-        0
-    };
-    let oy = if img_h <= fb_h {
-        fb_h.saturating_sub(img_h)
-    } else {
-        0
-    };
-    (ox, oy)
+    let h = (h.min(0xFFFF)) as u64;
+    let packed = (1u64 << 63) | w | (h << 16);
+    BGRT_IMAGE_INFO.store(packed, Ordering::Relaxed);
 }
 
 struct BmpInfo {
@@ -218,37 +185,20 @@ fn parse_bmp_header(phys_addr: u64) -> Option<BmpInfo> {
         top_down,
     })
 }
-fn blit_bmp_to_vga(phys_addr: u64, origin_x: usize, origin_y: usize, bmp: &BmpInfo) -> bool {
-    let src_w = bmp.width as usize;
-    let src_h = bmp.height as usize;
-    if src_w == 0 || src_h == 0 {
-        return false;
-    }
-
-    let copy_w = src_w.min(MAX_W);
-    let copy_h = src_h.min(MAX_H);
-
+fn decode_bmp_to_buffer(phys_addr: u64, bmp: &BmpInfo, copy_w: usize, copy_h: usize) -> bool {
     // Decide pixel reader based on bpp/compression.
     match (bmp.bpp, bmp.compression) {
-        (24, 0) => blit_bmp24(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h),
-        (32, 0) => blit_bmp32(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h, None),
+        (24, 0) => decode_bmp24(phys_addr, bmp, copy_w, copy_h),
+        (32, 0) => decode_bmp32(phys_addr, bmp, copy_w, copy_h, None),
         (32, 3) => {
             if let Some(masks) = read_masks(phys_addr, bmp) {
-                blit_bmp32(
-                    phys_addr,
-                    origin_x,
-                    origin_y,
-                    bmp,
-                    copy_w,
-                    copy_h,
-                    Some(masks),
-                )
+                decode_bmp32(phys_addr, bmp, copy_w, copy_h, Some(masks))
             } else {
                 false
             }
         }
-        (8, 0) => blit_bmp_indexed(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h, 8),
-        (4, 0) => blit_bmp_indexed(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h, 4),
+        (8, 0) => decode_bmp_indexed(phys_addr, bmp, copy_w, copy_h, 8),
+        (4, 0) => decode_bmp_indexed(phys_addr, bmp, copy_w, copy_h, 4),
         _ => false,
     }
 }
@@ -275,14 +225,7 @@ fn read_masks(phys_addr: u64, _bmp: &BmpInfo) -> Option<(u32, u32, u32)> {
     }
 }
 
-fn blit_bmp24(
-    phys_addr: u64,
-    origin_x: usize,
-    origin_y: usize,
-    bmp: &BmpInfo,
-    copy_w: usize,
-    copy_h: usize,
-) -> bool {
+fn decode_bmp24(phys_addr: u64, bmp: &BmpInfo, copy_w: usize, copy_h: usize) -> bool {
     let width = bmp.width as usize;
     let height = bmp.height as usize;
     let row_bytes = width.saturating_mul(3);
@@ -331,13 +274,11 @@ fn blit_bmp24(
         }
     }
 
-    emit_image(origin_x, origin_y, copy_w, copy_h, expected)
+    true
 }
 
-fn blit_bmp32(
+fn decode_bmp32(
     phys_addr: u64,
-    origin_x: usize,
-    origin_y: usize,
     bmp: &BmpInfo,
     copy_w: usize,
     copy_h: usize,
@@ -397,13 +338,11 @@ fn blit_bmp32(
         }
     }
 
-    emit_image(origin_x, origin_y, copy_w, copy_h, expected)
+    true
 }
 
-fn blit_bmp_indexed(
+fn decode_bmp_indexed(
     phys_addr: u64,
-    origin_x: usize,
-    origin_y: usize,
     bmp: &BmpInfo,
     copy_w: usize,
     copy_h: usize,
@@ -494,25 +433,7 @@ fn blit_bmp_indexed(
         }
     }
 
-    emit_image(origin_x, origin_y, copy_w, copy_h, expected)
-}
-
-fn emit_image(
-    origin_x: usize,
-    origin_y: usize,
-    width: usize,
-    height: usize,
-    expected: usize,
-) -> bool {
-    false
-    /* let img = unsafe {
-        vga::Image {
-            width,
-            height,
-            pixels: &BGRT_PIXELS[..expected],
-        }
-    };
-    vga::blit_image(origin_x, origin_y, &img)*/
+    true
 }
 
 fn range_fits_in_file(bmp: &BmpInfo, needed: u64) -> bool {
@@ -542,7 +463,7 @@ fn phys_range_looks_safe(base: u64, len: u64) -> bool {
         };
         if base >= e_base && end <= e_end {
             use ::limine::memory_map::EntryType as T;
-            return !matches!(e.entry_type, T::RESERVED | T::BAD_MEMORY);
+            return !matches!(e.entry_type, T::BAD_MEMORY);
         }
     }
 
