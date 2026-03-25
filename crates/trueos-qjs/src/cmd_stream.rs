@@ -458,6 +458,285 @@ unsafe fn cmd_stream_read_f32_slice_from_value(
     Some((ptr.add(byte_off) as *mut f32, f32_len, ab))
 }
 
+type CmdStreamEncodedUploadFn = unsafe extern "C" fn(u32, *const u8, usize) -> i32;
+
+#[inline]
+unsafe fn cmd_stream_create_texture_from_encoded(
+    ctx: *mut qjs::JSContext,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+    upload: CmdStreamEncodedUploadFn,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let tex_id = cmd_stream_alloc_tex_id();
+
+    let mut uploaded = false;
+    let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
+        if len > 0 && upload(tex_id, ptr, len) == 0 {
+            uploaded = true;
+        }
+    });
+    if !uploaded {
+        cmd_stream_release_tex_id(tex_id);
+        return qjs::JSValue::undefined();
+    }
+    qjs::JS_NewFloat64(ctx, tex_id as f64)
+}
+
+#[inline]
+unsafe fn cmd_stream_update_texture_from_encoded(
+    ctx: *mut qjs::JSContext,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+    upload: CmdStreamEncodedUploadFn,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 2) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let tex_id = (tex_id_f as i64).max(0) as u32;
+    if !cmd_stream_is_managed_tex(tex_id) {
+        return qjs::JSValue::undefined();
+    }
+
+    let _ = cmd_stream_with_u8_buffer(ctx, args[1], |ptr, len| {
+        if len > 0 {
+            let _ = upload(tex_id, ptr, len);
+        }
+    });
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_create_texture_rgba(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 3) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(w_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(h_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let w = (w_f as i64).max(1) as u32;
+    let h = (h_f as i64).max(1) as u32;
+    let need = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+    if need == 0 {
+        return qjs::JSValue::undefined();
+    }
+    let tex_id = cmd_stream_alloc_tex_id();
+
+    let mut uploaded = false;
+    let _ = cmd_stream_with_u8_buffer(ctx, args[2], |ptr, len| {
+        if len >= need {
+            uploaded = true;
+            let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, ptr, need);
+        }
+    });
+    if !uploaded {
+        cmd_stream_release_tex_id(tex_id);
+        return qjs::JSValue::undefined();
+    }
+    qjs::JS_NewFloat64(ctx, tex_id as f64)
+}
+
+unsafe extern "C" fn qjs_cmd_stream_create_render_target(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 2) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(w_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(h_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let w = (w_f as i64).max(1) as u32;
+    let h = (h_f as i64).max(1) as u32;
+    let need = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+    if need == 0 {
+        return qjs::JSValue::undefined();
+    }
+    let tex_id = cmd_stream_alloc_tex_id();
+    let zeros = vec![0u8; need];
+    if trueos_cabi_gfx_upload_texture_rgba_image(tex_id, w, h, zeros.as_ptr(), zeros.len()) != 0 {
+        cmd_stream_release_tex_id(tex_id);
+        return qjs::JSValue::undefined();
+    }
+    qjs::JS_NewFloat64(ctx, tex_id as f64)
+}
+
+unsafe extern "C" fn qjs_cmd_stream_create_texture_png(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    unsafe { cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_png) }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_create_texture_png_async(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    unsafe {
+        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_png_async)
+    }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    unsafe { cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_jpeg) }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg_async(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    unsafe {
+        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_jpeg_async)
+    }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_create_texture_svg(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    unsafe { cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_svg) }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_create_texture_svg_async(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    unsafe {
+        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_svg_async)
+    }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_update_texture_rgba(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 4) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(w_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(h_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+        return qjs::JSValue::undefined();
+    };
+    let tex_id = (tex_id_f as i64).max(0) as u32;
+    let w = (w_f as i64).max(1) as u32;
+    let h = (h_f as i64).max(1) as u32;
+    let need = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+    if !cmd_stream_is_managed_tex(tex_id) || need == 0 {
+        return qjs::JSValue::undefined();
+    }
+
+    let _ = cmd_stream_with_u8_buffer(ctx, args[3], |ptr, len| {
+        if len >= need {
+            let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, ptr, need);
+        }
+    });
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_update_texture_png(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    unsafe { cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_png) }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_update_texture_jpeg(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    unsafe { cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_jpeg) }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_update_texture_svg(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    unsafe { cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_svg) }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_destroy_texture(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let tex_id = (tex_id_f as i64).max(0) as u32;
+    if !cmd_stream_is_managed_tex(tex_id) {
+        return qjs::JSValue::undefined();
+    }
+    let clear = [0u8, 0, 0, 0];
+    let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, 1, 1, clear.as_ptr(), clear.len());
+    cmd_stream_release_tex_id(tex_id);
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_get_texture_status(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 1) else {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    };
+    let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    };
+    let tex_id = (tex_id_f as i64).max(0) as u32;
+    qjs::JS_NewFloat64(ctx, trueos_cabi_gfx_texture_status(tex_id) as f64)
+}
+
 #[inline]
 fn cmd_stream_push_tex_vtx(
     out: &mut Vec<u8>,
@@ -1488,367 +1767,6 @@ pub(crate) unsafe fn try_create_native_module(
                 tex_id, x_f as f32, y_f as f32, w_f as f32, h_f as f32, u0, v0, u1, v1, rgba,
             );
             qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_create_texture_rgba(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 3) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(w_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(h_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let w = (w_f as i64).max(1) as u32;
-            let h = (h_f as i64).max(1) as u32;
-            let need = (w as usize).saturating_mul(h as usize).saturating_mul(4);
-            if need == 0 {
-                return qjs::JSValue::undefined();
-            }
-            let tex_id = cmd_stream_alloc_tex_id();
-
-            let mut uploaded = false;
-            let _ = cmd_stream_with_u8_buffer(ctx, args[2], |ptr, len| {
-                if len >= need {
-                    uploaded = true;
-                    let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, ptr, need);
-                }
-            });
-            if !uploaded {
-                cmd_stream_release_tex_id(tex_id);
-                return qjs::JSValue::undefined();
-            }
-            qjs::JS_NewFloat64(ctx, tex_id as f64)
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_create_render_target(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(w_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(h_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let w = (w_f as i64).max(1) as u32;
-            let h = (h_f as i64).max(1) as u32;
-            let need = (w as usize).saturating_mul(h as usize).saturating_mul(4);
-            if need == 0 {
-                return qjs::JSValue::undefined();
-            }
-            let tex_id = cmd_stream_alloc_tex_id();
-            let zeros = vec![0u8; need];
-            if unsafe {
-                trueos_cabi_gfx_upload_texture_rgba_image(tex_id, w, h, zeros.as_ptr(), zeros.len())
-            } != 0
-            {
-                cmd_stream_release_tex_id(tex_id);
-                return qjs::JSValue::undefined();
-            }
-            qjs::JS_NewFloat64(ctx, tex_id as f64)
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_create_texture_png(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = cmd_stream_alloc_tex_id();
-
-            let mut uploaded = false;
-            let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
-                if len > 0 && trueos_cabi_gfx_upload_texture_png(tex_id, ptr, len) == 0 {
-                    uploaded = true;
-                }
-            });
-            if !uploaded {
-                cmd_stream_release_tex_id(tex_id);
-                return qjs::JSValue::undefined();
-            }
-            qjs::JS_NewFloat64(ctx, tex_id as f64)
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_create_texture_png_async(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = cmd_stream_alloc_tex_id();
-
-            let mut queued = false;
-            let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
-                if len > 0 && trueos_cabi_gfx_upload_texture_png_async(tex_id, ptr, len) == 0 {
-                    queued = true;
-                }
-            });
-            if !queued {
-                cmd_stream_release_tex_id(tex_id);
-                return qjs::JSValue::undefined();
-            }
-            qjs::JS_NewFloat64(ctx, tex_id as f64)
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = cmd_stream_alloc_tex_id();
-
-            let mut uploaded = false;
-            let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
-                if len > 0 && trueos_cabi_gfx_upload_texture_jpeg(tex_id, ptr, len) == 0 {
-                    uploaded = true;
-                }
-            });
-            if !uploaded {
-                cmd_stream_release_tex_id(tex_id);
-                return qjs::JSValue::undefined();
-            }
-            qjs::JS_NewFloat64(ctx, tex_id as f64)
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg_async(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = cmd_stream_alloc_tex_id();
-
-            let mut queued = false;
-            let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
-                if len > 0 && trueos_cabi_gfx_upload_texture_jpeg_async(tex_id, ptr, len) == 0 {
-                    queued = true;
-                }
-            });
-            if !queued {
-                cmd_stream_release_tex_id(tex_id);
-                return qjs::JSValue::undefined();
-            }
-            qjs::JS_NewFloat64(ctx, tex_id as f64)
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_create_texture_svg(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = cmd_stream_alloc_tex_id();
-
-            let mut uploaded = false;
-            let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
-                if len > 0 && trueos_cabi_gfx_upload_texture_svg(tex_id, ptr, len) == 0 {
-                    uploaded = true;
-                }
-            });
-            if !uploaded {
-                cmd_stream_release_tex_id(tex_id);
-                return qjs::JSValue::undefined();
-            }
-            qjs::JS_NewFloat64(ctx, tex_id as f64)
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_create_texture_svg_async(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = cmd_stream_alloc_tex_id();
-
-            let mut queued = false;
-            let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
-                if len > 0 && trueos_cabi_gfx_upload_texture_svg_async(tex_id, ptr, len) == 0 {
-                    queued = true;
-                }
-            });
-            if !queued {
-                cmd_stream_release_tex_id(tex_id);
-                return qjs::JSValue::undefined();
-            }
-            qjs::JS_NewFloat64(ctx, tex_id as f64)
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_update_texture_rgba(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 4) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(w_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(h_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = (tex_id_f as i64).max(0) as u32;
-            let w = (w_f as i64).max(1) as u32;
-            let h = (h_f as i64).max(1) as u32;
-            let need = (w as usize).saturating_mul(h as usize).saturating_mul(4);
-            if !cmd_stream_is_managed_tex(tex_id) || need == 0 {
-                return qjs::JSValue::undefined();
-            }
-
-            let _ = cmd_stream_with_u8_buffer(ctx, args[3], |ptr, len| {
-                if len >= need {
-                    let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, ptr, need);
-                }
-            });
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_update_texture_png(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = (tex_id_f as i64).max(0) as u32;
-            if !cmd_stream_is_managed_tex(tex_id) {
-                return qjs::JSValue::undefined();
-            }
-
-            let _ = cmd_stream_with_u8_buffer(ctx, args[1], |ptr, len| {
-                if len > 0 {
-                    let _ = trueos_cabi_gfx_upload_texture_png(tex_id, ptr, len);
-                }
-            });
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_update_texture_jpeg(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = (tex_id_f as i64).max(0) as u32;
-            if !cmd_stream_is_managed_tex(tex_id) {
-                return qjs::JSValue::undefined();
-            }
-
-            let _ = cmd_stream_with_u8_buffer(ctx, args[1], |ptr, len| {
-                if len > 0 {
-                    let _ = trueos_cabi_gfx_upload_texture_jpeg(tex_id, ptr, len);
-                }
-            });
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_update_texture_svg(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 2) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = (tex_id_f as i64).max(0) as u32;
-            if !cmd_stream_is_managed_tex(tex_id) {
-                return qjs::JSValue::undefined();
-            }
-
-            let _ = cmd_stream_with_u8_buffer(ctx, args[1], |ptr, len| {
-                if len > 0 {
-                    let _ = trueos_cabi_gfx_upload_texture_svg(tex_id, ptr, len);
-                }
-            });
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_destroy_texture(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JSValue::undefined();
-            };
-            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JSValue::undefined();
-            };
-            let tex_id = (tex_id_f as i64).max(0) as u32;
-            if !cmd_stream_is_managed_tex(tex_id) {
-                return qjs::JSValue::undefined();
-            }
-            let clear = [0u8, 0, 0, 0];
-            let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, 1, 1, clear.as_ptr(), clear.len());
-            cmd_stream_release_tex_id(tex_id);
-            qjs::JSValue::undefined()
-        }
-
-        unsafe extern "C" fn qjs_cmd_stream_get_texture_status(
-            ctx: *mut qjs::JSContext,
-            _this_val: qjs::JSValueConst,
-            argc: i32,
-            argv: *const qjs::JSValueConst,
-        ) -> qjs::JSValue {
-            let Some(args) = cmd_stream_args(argv, argc, 1) else {
-                return qjs::JS_NewFloat64(ctx, 0.0);
-            };
-            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-                return qjs::JS_NewFloat64(ctx, 0.0);
-            };
-            let tex_id = (tex_id_f as i64).max(0) as u32;
-            qjs::JS_NewFloat64(ctx, trueos_cabi_gfx_texture_status(tex_id) as f64)
         }
 
         unsafe extern "C" fn qjs_cmd_stream_draw_lyon_icon_in_frame(
