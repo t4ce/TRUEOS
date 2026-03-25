@@ -175,21 +175,40 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
     changed
 }
 
-fn cursor_event_px(value: f64, extent: u32) -> f32 {
-    let max_px = extent.saturating_sub(1) as f32;
-    (value.clamp(0.0, 1.0) as f32) * max_px
-}
-
 fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHidCursorEvent) {
     let slot_id = event.slot_id;
     if slot_id == 0 {
         return;
     }
 
-    let px = cursor_event_px(event.x, state.view_w);
-    let py = cursor_event_px(event.y, state.view_h);
-    let press_hit = ui2_hit_at(px, py);
-    let release_hit = ui2_hit_at(px, py);
+    let Some((px, py)) = ui2_cursor_px_for_source(
+        state.view_w,
+        state.view_h,
+        event.controller_id,
+        slot_id,
+        event.ep_target,
+        event.hid_kind,
+    ) else {
+        return;
+    };
+    let press_hit = ui2_hit_for_cursor_source(
+        state.view_w,
+        state.view_h,
+        event.controller_id,
+        slot_id,
+        event.ep_target,
+        event.hid_kind,
+    )
+    .map(|(_, _, hit)| hit);
+    let release_hit = ui2_hit_for_cursor_source(
+        state.view_w,
+        state.view_h,
+        event.controller_id,
+        slot_id,
+        event.ep_target,
+        event.hid_kind,
+    )
+    .map(|(_, _, hit)| hit);
     let press_system_button_action = press_hit.and_then(|target| {
         if target.kind == Ui2HitKind::WindowDecoration {
             system_button_action_at(state, target.owner_window_id, px, py)
