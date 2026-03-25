@@ -537,6 +537,7 @@ fn sync_window_container(
             queue_browser_window_viewport(content_id, content)
         }
         Ui2WindowKind::HostedSurface => true,
+        Ui2WindowKind::Hosted3d => true,
     }
 }
 
