@@ -46,6 +46,42 @@ const NVME_IO_SYNC_FALLBACK_TIMEOUT_MS: u64 = 12000;
 const IO_PENDING_SLOTS: usize = 128;
 const CID_BITMAP_WORDS: usize = 1024; // 65536 bits / 64
 
+struct DmaBuffer {
+    phys: u64,
+    virt: NonNull<u8>,
+    len: usize,
+}
+
+unsafe impl Send for DmaBuffer {}
+
+impl DmaBuffer {
+    fn alloc(size: usize, align: usize) -> core::result::Result<Self, block::Error> {
+        let (phys, virt) = dma::alloc(size, align).ok_or(block::Error::DmaUnavailable)?;
+        let virt = NonNull::new(virt).ok_or(block::Error::DmaUnavailable)?;
+        Ok(Self {
+            phys,
+            virt,
+            len: size,
+        })
+    }
+
+    fn phys(&self) -> u64 {
+        self.phys
+    }
+
+    fn as_ptr(&self) -> *mut u8 {
+        self.virt.as_ptr()
+    }
+}
+
+impl Drop for DmaBuffer {
+    fn drop(&mut self) {
+        if self.len != 0 {
+            dma::dealloc(self.virt.as_ptr(), self.len);
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct NvmeSqe {
@@ -102,6 +138,8 @@ struct NvmeQueue {
     sq_virt: *mut NvmeSqe,
     cq_phys: u64,
     cq_virt: *mut NvmeCqe,
+    _sq_mem: DmaBuffer,
+    _cq_mem: DmaBuffer,
     sq_tail: u16,
     cq_head: u16,
     cq_phase: bool,
@@ -153,28 +191,28 @@ impl NvmeQueue {
             .checked_mul(align)
             .ok_or(block::Error::InvalidParam)?;
 
-        let (sq_phys, sq_virt_u8) =
-            dma::alloc(sq_alloc_bytes, align).ok_or(block::Error::DmaUnavailable)?;
-        let (cq_phys, cq_virt_u8) =
-            dma::alloc(cq_alloc_bytes, align).ok_or(block::Error::DmaUnavailable)?;
+        let sq_mem = DmaBuffer::alloc(sq_alloc_bytes, align)?;
+        let cq_mem = DmaBuffer::alloc(cq_alloc_bytes, align)?;
         crate::log!(
             "nvme: queue alloc depth={} align=0x{:X} sq_phys=0x{:X} cq_phys=0x{:X}\n",
             depth,
             align,
-            sq_phys,
-            cq_phys
+            sq_mem.phys(),
+            cq_mem.phys()
         );
         unsafe {
-            write_bytes(sq_virt_u8, 0, sq_alloc_bytes);
-            write_bytes(cq_virt_u8, 0, cq_alloc_bytes);
+            write_bytes(sq_mem.as_ptr(), 0, sq_alloc_bytes);
+            write_bytes(cq_mem.as_ptr(), 0, cq_alloc_bytes);
         }
 
         Ok(Self {
             depth,
-            sq_phys,
-            sq_virt: sq_virt_u8 as *mut NvmeSqe,
-            cq_phys,
-            cq_virt: cq_virt_u8 as *mut NvmeCqe,
+            sq_phys: sq_mem.phys(),
+            sq_virt: sq_mem.as_ptr() as *mut NvmeSqe,
+            cq_phys: cq_mem.phys(),
+            cq_virt: cq_mem.as_ptr() as *mut NvmeCqe,
+            _sq_mem: sq_mem,
+            _cq_mem: cq_mem,
             sq_tail: 0,
             cq_head: 0,
             // CQ memory is zeroed, so the initial phase-bit in memory is 0.
@@ -962,7 +1000,7 @@ impl NvmeController {
         &self,
         buf_phys: u64,
         buf_len: usize,
-    ) -> core::result::Result<(u64, u64, Option<(u64, *mut u8, usize)>), block::Error> {
+    ) -> core::result::Result<(u64, u64, Option<DmaBuffer>), block::Error> {
         if buf_len == 0 {
             return Ok((0, 0, None));
         }
@@ -989,17 +1027,16 @@ impl NvmeController {
         let list_bytes = list_entries
             .checked_mul(mem::size_of::<u64>())
             .ok_or(block::Error::InvalidParam)?;
-        let (list_phys, list_virt) =
-            dma::alloc(list_bytes, page_size).ok_or(block::Error::DmaUnavailable)?;
+        let list_mem = DmaBuffer::alloc(list_bytes, page_size)?;
 
         unsafe {
-            let list = core::slice::from_raw_parts_mut(list_virt as *mut u64, list_entries);
+            let list = core::slice::from_raw_parts_mut(list_mem.as_ptr() as *mut u64, list_entries);
             for i in 0..list_entries {
                 list[i] = first_page + ((i + 1) * page_size) as u64;
             }
         }
 
-        Ok((prp1, list_phys, Some((list_phys, list_virt, list_bytes))))
+        Ok((prp1, list_mem.phys(), Some(list_mem)))
     }
 
     fn admin_identify(
@@ -1012,13 +1049,12 @@ impl NvmeController {
         if out.len() < page_size {
             return Err(block::Error::InvalidParam);
         }
-        let (buf_phys, buf_virt) =
-            dma::alloc(page_size, page_size).ok_or(block::Error::DmaUnavailable)?;
+        let buf = DmaBuffer::alloc(page_size, page_size)?;
         unsafe {
-            write_bytes(buf_virt, 0, page_size);
+            write_bytes(buf.as_ptr(), 0, page_size);
         }
 
-        let (prp1, prp2, prp_list) = self.make_prps(buf_phys, page_size)?;
+        let (prp1, prp2, _prp_list) = self.make_prps(buf.phys(), page_size)?;
 
         let cid = self.alloc_cid();
         let mut sqe = NvmeSqe { d: [0; 16] };
@@ -1033,10 +1069,6 @@ impl NvmeController {
         let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
         let status_ok = cpl.is_success();
 
-        if let Some((_, lv, lb)) = prp_list {
-            dma::dealloc(lv, lb);
-        }
-
         if !status_ok {
             crate::log!(
                 "nvme: {} identify failed nsid={} cns={} status=0x{:04X} (sct={} sc={})\n",
@@ -1047,14 +1079,12 @@ impl NvmeController {
                 cpl.status_type(),
                 cpl.status_code(),
             );
-            dma::dealloc(buf_virt, page_size);
             return Err(block::Error::Io);
         }
 
         unsafe {
-            out[..page_size].copy_from_slice(core::slice::from_raw_parts(buf_virt, page_size));
+            out[..page_size].copy_from_slice(core::slice::from_raw_parts(buf.as_ptr(), page_size));
         }
-        dma::dealloc(buf_virt, page_size);
         Ok(())
     }
 
@@ -1161,7 +1191,7 @@ impl NvmeController {
         buf_phys: u64,
         buf_len: usize,
     ) -> core::result::Result<(), block::Error> {
-        let (prp1, prp2, prp_list) = self.make_prps(buf_phys, buf_len)?;
+        let (prp1, prp2, _prp_list) = self.make_prps(buf_phys, buf_len)?;
         let cpl_res = {
             let cid = self.alloc_cid();
             let mut sqe = NvmeSqe { d: [0; 16] };
@@ -1231,10 +1261,6 @@ impl NvmeController {
             }
         };
 
-        if let Some((_, lv, lb)) = prp_list {
-            dma::dealloc(lv, lb);
-        }
-
         let cpl = cpl_res?;
         if !cpl.is_success() {
             crate::log!(
@@ -1287,7 +1313,7 @@ impl NvmeController {
         buf_len: usize,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
-        let (prp1, prp2, prp_list) = self.make_prps(buf_phys, buf_len)?;
+        let (prp1, prp2, _prp_list) = self.make_prps(buf_phys, buf_len)?;
         let cid = self.alloc_cid();
 
         let mut sqe = NvmeSqe { d: [0; 16] };
@@ -1303,10 +1329,6 @@ impl NvmeController {
 
         let cpl = self.io_submit_and_wait_sync(sqe, cid, timeout_ms);
 
-        if let Some((_, lv, lb)) = prp_list {
-            dma::dealloc(lv, lb);
-        }
-
         cpl
     }
 
@@ -1320,7 +1342,7 @@ impl NvmeController {
         buf_len: usize,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
-        let (prp1, prp2, prp_list) = self.make_prps(buf_phys, buf_len)?;
+        let (prp1, prp2, _prp_list) = self.make_prps(buf_phys, buf_len)?;
         let cid = self.alloc_cid();
 
         let mut sqe = NvmeSqe { d: [0; 16] };
@@ -1336,10 +1358,6 @@ impl NvmeController {
 
         let cpl = self.admin_submit_and_wait_async(sqe, cid, timeout_ms).await;
 
-        if let Some((_, lv, lb)) = prp_list {
-            dma::dealloc(lv, lb);
-        }
-
         cpl
     }
 
@@ -1353,7 +1371,7 @@ impl NvmeController {
         buf_len: usize,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
-        let (prp1, prp2, prp_list) = self.make_prps(buf_phys, buf_len)?;
+        let (prp1, prp2, _prp_list) = self.make_prps(buf_phys, buf_len)?;
         let cid = self.alloc_cid();
 
         let mut sqe = NvmeSqe { d: [0; 16] };
@@ -1368,10 +1386,6 @@ impl NvmeController {
         sqe.d[12] = (nlb as u32).wrapping_sub(1) & 0xFFFF;
 
         let cpl = self.admin_submit_and_wait_sync(sqe, cid, timeout_ms);
-
-        if let Some((_, lv, lb)) = prp_list {
-            dma::dealloc(lv, lb);
-        }
 
         cpl
     }
@@ -1439,8 +1453,9 @@ impl block::BlockDevice for NvmeBlockDevice {
             let max_io_bytes = core::cmp::max(self.max_transfer_bytes, bs as u64) as usize;
             let max_blocks =
                 core::cmp::max(1, core::cmp::min(max_io_bytes / bs, u16::MAX as usize));
-            let (dma_phys, dma_virt) = dma::alloc(max_io_bytes, self.ctrl.page_size_bytes())
-                .ok_or(block::Error::DmaUnavailable)?;
+            let dma_buf = DmaBuffer::alloc(max_io_bytes, self.ctrl.page_size_bytes())?;
+            let dma_phys = dma_buf.phys();
+            let dma_virt = dma_buf.as_ptr();
 
             let mut remaining = out.as_mut_slice();
             let mut cur_lba = lba;
@@ -1465,7 +1480,6 @@ impl block::BlockDevice for NvmeBlockDevice {
                     {
                         Ok(cpl) if cpl.is_success() => {}
                         Ok(cpl) => {
-                            dma::dealloc(dma_virt, max_io_bytes);
                             crate::log!(
                                 "nvme: {} admin-fallback read failed status=0x{:04X} (sct={} sc={})\n",
                                 self.ctrl.pci,
@@ -1476,7 +1490,6 @@ impl block::BlockDevice for NvmeBlockDevice {
                             return Err(block::Error::Io);
                         }
                         Err(e) => {
-                            dma::dealloc(dma_virt, max_io_bytes);
                             return Err(e);
                         }
                     }
@@ -1520,7 +1533,6 @@ impl block::BlockDevice for NvmeBlockDevice {
                             {
                                 Ok(cpl) if cpl.is_success() => {}
                                 Ok(_cpl) => {
-                                    dma::dealloc(dma_virt, max_io_bytes);
                                     // crate::log!(
                                     //     "nvme: {} probe-read fallback (admin) failed status=0x{:04X} (sct={} sc={})\n",
                                     //     self.ctrl.pci,
@@ -1531,13 +1543,11 @@ impl block::BlockDevice for NvmeBlockDevice {
                                     return Err(block::Error::Io);
                                 }
                                 Err(e) => {
-                                    dma::dealloc(dma_virt, max_io_bytes);
                                     return Err(e);
                                 }
                             }
                         }
                         Err(e) => {
-                            dma::dealloc(dma_virt, max_io_bytes);
                             return Err(e);
                         }
                     }
@@ -1552,7 +1562,6 @@ impl block::BlockDevice for NvmeBlockDevice {
                 cur_lba = cur_lba.saturating_add(blocks_here as u64);
             }
 
-            dma::dealloc(dma_virt, max_io_bytes);
             Ok(out)
         })
     }
@@ -1581,8 +1590,9 @@ impl block::BlockDevice for NvmeBlockDevice {
             let max_io_bytes = core::cmp::max(self.max_transfer_bytes, bs as u64) as usize;
             let max_blocks =
                 core::cmp::max(1, core::cmp::min(max_io_bytes / bs, u16::MAX as usize));
-            let (dma_phys, dma_virt) = dma::alloc(max_io_bytes, self.ctrl.page_size_bytes())
-                .ok_or(block::Error::DmaUnavailable)?;
+            let dma_buf = DmaBuffer::alloc(max_io_bytes, self.ctrl.page_size_bytes())?;
+            let dma_phys = dma_buf.phys();
+            let dma_virt = dma_buf.as_ptr();
 
             let mut remaining = buf;
             let mut cur_lba = lba;
@@ -1609,7 +1619,6 @@ impl block::BlockDevice for NvmeBlockDevice {
                     {
                         Ok(cpl) if cpl.is_success() => {}
                         Ok(cpl) => {
-                            dma::dealloc(dma_virt, max_io_bytes);
                             crate::log!(
                                 "nvme: {} admin-fallback write failed status=0x{:04X} (sct={} sc={})\n",
                                 self.ctrl.pci,
@@ -1620,7 +1629,6 @@ impl block::BlockDevice for NvmeBlockDevice {
                             return Err(block::Error::Io);
                         }
                         Err(e) => {
-                            dma::dealloc(dma_virt, max_io_bytes);
                             return Err(e);
                         }
                     }
@@ -1660,7 +1668,6 @@ impl block::BlockDevice for NvmeBlockDevice {
                             ) {
                                 Ok(cpl) if cpl.is_success() => {}
                                 Ok(cpl) => {
-                                    dma::dealloc(dma_virt, max_io_bytes);
                                     crate::log!(
                                         "nvme: {} probe-write fallback failed status=0x{:04X} (sct={} sc={})\n",
                                         self.ctrl.pci,
@@ -1671,13 +1678,11 @@ impl block::BlockDevice for NvmeBlockDevice {
                                     return Err(block::Error::Io);
                                 }
                                 Err(e) => {
-                                    dma::dealloc(dma_virt, max_io_bytes);
                                     return Err(e);
                                 }
                             }
                         }
                         Err(e) => {
-                            dma::dealloc(dma_virt, max_io_bytes);
                             return Err(e);
                         }
                     }
@@ -1687,7 +1692,6 @@ impl block::BlockDevice for NvmeBlockDevice {
                 cur_lba = cur_lba.saturating_add(blocks_here as u64);
             }
 
-            dma::dealloc(dma_virt, max_io_bytes);
             Ok(())
         })
     }
@@ -1756,10 +1760,12 @@ fn io_selftest_read(
 ) -> bool {
     let bs = block_size as usize;
     let bytes = bs.max(512);
-    let Some((dma_phys, dma_virt)) = dma::alloc(bytes, ctrl.page_size_bytes()) else {
+    let Ok(dma_buf) = DmaBuffer::alloc(bytes, ctrl.page_size_bytes()) else {
         crate::log!("nvme: {} io-selftest: DMA alloc failed\n", pci_addr);
         return false;
     };
+    let dma_phys = dma_buf.phys();
+    let dma_virt = dma_buf.as_ptr();
 
     unsafe { write_bytes(dma_virt, 0, bytes) };
 
@@ -1784,7 +1790,6 @@ fn io_selftest_read(
         }
     };
 
-    dma::dealloc(dma_virt, bytes);
     ok
 }
 

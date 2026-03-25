@@ -15,9 +15,8 @@ use x86_64::{
     },
 };
 
+use crate::dma;
 use crate::limine;
-
-use super::dma;
 
 const DEFAULT_MMIO_WINDOW: usize = 0x10_000;
 const PAGE_SIZE: u64 = Size4KiB::SIZE;
