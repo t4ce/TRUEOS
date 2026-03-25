@@ -423,14 +423,10 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
                 icon_side,
             );
         }
-        let title_face = crate::gfx::imbafont::ImbaFontFace::Loop;
-        let title_text_h = UI2_TITLE_H.max(35.0);
-        let title_tracking_px = -0.75f32;
-        let title_w = crate::gfx::imbafont::measure_text_width_px_tracked(
-            title_face,
+        let title_text_h = 24.0f32;
+        let title_w = crate::gfx::imba_athlas::imba_athlas_text_width_scaled_px(
             window.title.as_bytes(),
             title_text_h,
-            title_tracking_px,
         );
         let title_left = if window.icon_id != 0 {
             rect.x + 28.0
@@ -439,23 +435,15 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         };
         let title_x = (rect.x + ((rect.w - title_w) * 0.5)).max(title_left);
         let title_y = rect.y + ((UI2_TITLE_H - title_text_h) * 0.5);
-        if let Some(layout) = crate::gfx::imbafont::layout_text_top_left_tracked(
-            title_face,
+        let _ = crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_scaled(
             window.title.as_bytes(),
             title_x,
             title_y,
+            state.view_w,
+            state.view_h,
             title_text_h,
-            title_tracking_px,
-        ) {
-            let _ = crate::gfx::imbafont::draw_text_in_frame_negative(
-                title_face,
-                window.title.as_bytes(),
-                &layout,
-                state.view_w,
-                state.view_h,
-                title_rgba.3,
-            );
-        }
+            title_rgba.3,
+        );
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleMaximize);
