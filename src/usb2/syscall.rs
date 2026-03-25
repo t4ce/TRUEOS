@@ -1,6 +1,6 @@
 use super::control::{setup_get_descriptor, setup_get_descriptor_interface};
 use super::xhci::{self, Trb, TrbRing, XhciContext, hi, lo, trb_type};
-use crate::pci::dma;
+use crate::dma;
 use core::ptr::{write_bytes, write_volatile};
 use heapless::Vec;
 

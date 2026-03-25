@@ -240,7 +240,7 @@ unsafe impl Send for DmaRegion {}
 
 impl DmaRegion {
     fn alloc(size: usize, align: usize) -> Option<Self> {
-        let (phys, virt) = crate::pci::dma::alloc(size, align)?;
+        let (phys, virt) = crate::dma::alloc(size, align)?;
         Some(Self {
             phys,
             virt,
@@ -266,7 +266,7 @@ impl Drop for DmaRegion {
         if self.len == 0 || self.virt.is_null() {
             return;
         }
-        crate::pci::dma::dealloc(self.virt, self.len);
+        crate::dma::dealloc(self.virt, self.len);
         self.len = 0;
         self.virt = core::ptr::null_mut();
         self.phys = 0;

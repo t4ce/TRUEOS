@@ -81,6 +81,8 @@ QEMU_USB_HOST_FLAGS = -device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5  \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=5,id=usbaudio \
 	-device usb-host,hostbus=$(QEMU_USBMICE1_HOSTBUS),hostaddr=$(QEMU_USBMICE1_HOSTADDR),bus=xhci.0,port=6,id=usbmice \
 	-device usb-host,hostbus=$(QEMU_USBMICE2_HOSTBUS),hostaddr=$(QEMU_USBMICE2_HOSTADDR),bus=xhci.0,port=7,id=usbmice2 \
+	-drive file=nvme.img,if=none,id=nvme \
+	-device nvme,serial=deadbeef,drive=nvme \
 
 #	-device usb-host,vendorid=0x22d4,productid=0x1321,bus=xhci.0,port=7,id=usbmice2 \
 #	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse  \
