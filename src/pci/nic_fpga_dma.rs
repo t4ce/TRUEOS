@@ -108,7 +108,7 @@ pub fn init_with_size(size: usize, align: usize) -> Result<SharedRegion, Error> 
         return st.region.ok_or(Error::AlreadyInitialized);
     }
 
-    let (phys, virt) = crate::pci::dma::alloc(size, align).ok_or(Error::AllocationFailed)?;
+    let (phys, virt) = crate::dma::alloc(size, align).ok_or(Error::AllocationFailed)?;
     let region = SharedRegion {
         phys_base: phys,
         virt_base: virt as usize,
@@ -207,7 +207,7 @@ pub fn submit_nic_frame_copy(frame: &[u8]) -> Result<u32, Error> {
         return Err(Error::InFlightFull);
     }
 
-    let (phys, virt) = crate::pci::dma::alloc(frame.len(), 64).ok_or(Error::AllocationFailed)?;
+    let (phys, virt) = crate::dma::alloc(frame.len(), 64).ok_or(Error::AllocationFailed)?;
     unsafe {
         core::ptr::copy_nonoverlapping(frame.as_ptr(), virt, frame.len());
     }
@@ -221,7 +221,7 @@ pub fn submit_nic_frame_copy(frame: &[u8]) -> Result<u32, Error> {
     };
 
     if st.pending.push(desc).is_err() {
-        crate::pci::dma::dealloc(virt, frame.len());
+        crate::dma::dealloc(virt, frame.len());
         st.stats.dropped = st.stats.dropped.saturating_add(1);
         return Err(Error::QueueFull);
     }
@@ -235,7 +235,7 @@ pub fn submit_nic_frame_copy(frame: &[u8]) -> Result<u32, Error> {
         .is_err()
     {
         let _ = st.pending.pop();
-        crate::pci::dma::dealloc(virt, frame.len());
+        crate::dma::dealloc(virt, frame.len());
         st.stats.dropped = st.stats.dropped.saturating_add(1);
         return Err(Error::InFlightFull);
     }
@@ -308,7 +308,7 @@ pub fn take_completed() -> Result<Option<TransferDesc>, Error> {
     let desc = st.completed.remove(0);
     if let Some(idx) = st.owned.iter().position(|b| b.cookie == desc.cookie) {
         let owned = st.owned.remove(idx);
-        crate::pci::dma::dealloc(owned.virt as *mut u8, owned.len);
+        crate::dma::dealloc(owned.virt as *mut u8, owned.len);
     }
     Ok(Some(desc))
 }

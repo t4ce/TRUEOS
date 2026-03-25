@@ -1,7 +1,7 @@
 use super::super::control;
 use super::super::syscall::{control_in_sync, control_out_sync};
 use super::super::xhci::{Trb, TrbRing, XhciContext, trb_type, xhc_list};
-use crate::pci::dma;
+use crate::dma;
 use core::ptr::write_bytes;
 use heapless::Vec;
 

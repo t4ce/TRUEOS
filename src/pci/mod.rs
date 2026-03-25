@@ -5,6 +5,4 @@ pub mod nic_fpga_dma;
 mod pci;
 pub mod pciids;
 pub mod vrng;
-
-pub use crate::dma;
 pub use pci::*;
