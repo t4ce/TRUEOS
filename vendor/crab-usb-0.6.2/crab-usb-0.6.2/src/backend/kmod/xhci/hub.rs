@@ -5,6 +5,7 @@
 use alloc::{sync::Arc, vec::Vec};
 use core::{
     cell::UnsafeCell,
+    time::Duration,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -12,8 +13,15 @@ use futures::{FutureExt, future::BoxFuture, task::AtomicWaker};
 use usb_if::{err::USBError, host::hub::Speed};
 
 use crate::backend::kmod::hub::{HubInfo, HubOp, PortChangeInfo, PortState};
+use crate::backend::kmod::osal::Kernel;
 
 use super::reg::XhciRegisters;
+
+const HUB_DEBOUNCE_TIMEOUT_MS: u64 = 2000;
+const HUB_DEBOUNCE_STEP_MS: u64 = 25;
+const HUB_DEBOUNCE_STABLE_MS: u64 = 100;
+const ROOT_PORT_ENABLE_WAIT_MS: u64 = 500;
+const ROOT_PORT_ENABLE_CHECK_MS: u64 = 10;
 
 pub struct PortChangeWaker {
     ports: Arc<UnsafeCell<Vec<Port>>>,
@@ -61,6 +69,7 @@ pub struct Port {
 pub struct XhciRootHub {
     /// 寄存器访问
     reg: XhciRegisters,
+    kernel: Kernel,
 
     ports: Arc<UnsafeCell<Vec<Port>>>,
 }
@@ -80,6 +89,14 @@ impl XhciRootHub {
 impl HubOp for XhciRootHub {
     fn changed_ports(&mut self) -> BoxFuture<'_, Result<Vec<PortChangeInfo>, USBError>> {
         self._changed_ports().boxed()
+    }
+
+    fn rearm_port(&mut self, port_id: u8) {
+        let idx = (port_id.saturating_sub(1)) as usize;
+        if let Some(port) = self.ports_mut().get_mut(idx) {
+            port.state = PortState::Uninit;
+            port.changed.store(true, Ordering::Release);
+        }
     }
 
     fn init(&mut self, info: HubInfo) -> BoxFuture<'_, Result<HubInfo, USBError>> {
@@ -116,11 +133,11 @@ impl HubOp for XhciRootHub {
 
 impl XhciRootHub {
     /// 创建新的 xHCI Root Hub
-    pub fn new(reg: XhciRegisters) -> Result<Self, USBError> {
+    pub fn new(reg: XhciRegisters, kernel: Kernel) -> Result<Self, USBError> {
         let port_num = reg.port_register_set.len();
         let ports = PortChangeWaker::new(port_num as _).ports.clone();
 
-        Ok(Self { reg, ports })
+        Ok(Self { reg, kernel, ports })
     }
 
     pub fn waker(&self) -> PortChangeWaker {
@@ -136,6 +153,73 @@ impl XhciRootHub {
         let out = self.handle_reseted().await?;
         info!("crabusb/xhci/hub: changed_ports end emitted={}", out.len());
         Ok(out)
+    }
+
+    async fn debounce_port(&mut self, port_id: u8, must_be_connected: bool) -> Result<(), USBError> {
+        let required_stable = (HUB_DEBOUNCE_STABLE_MS / HUB_DEBOUNCE_STEP_MS) as u8;
+        let max_attempts = (HUB_DEBOUNCE_TIMEOUT_MS / HUB_DEBOUNCE_STEP_MS) as u8;
+        let mut stable_count = 0u8;
+
+        for _ in 0..max_attempts {
+            self.kernel.delay(Duration::from_millis(HUB_DEBOUNCE_STEP_MS));
+            let port = self.reg.port_register_set.read_volatile_at((port_id - 1) as usize).portsc;
+            if port.current_connect_status() == must_be_connected {
+                stable_count = stable_count.saturating_add(1);
+                if stable_count >= required_stable {
+                    return Ok(());
+                }
+            } else {
+                stable_count = 0;
+            }
+        }
+
+        Err(USBError::Timeout)
+    }
+
+    async fn reset_port(&mut self, port_id: u8, speed_raw: u8) -> Result<(), USBError> {
+        let idx = (port_id - 1) as usize;
+        self.reg.port_register_set.update_volatile_at(idx, |reg| {
+            reg.portsc.set_0_port_enabled_disabled();
+            reg.portsc.set_port_reset();
+        });
+
+        let reset_delay_ms = if matches!(Speed::from_xhci_portsc(speed_raw), Speed::Low) {
+            100
+        } else {
+            50
+        };
+        self.kernel.delay(Duration::from_millis(reset_delay_ms));
+
+        for _ in 0..10 {
+            let port = self.reg.port_register_set.read_volatile_at(idx).portsc;
+            if port.port_reset_change() || !port.port_reset() {
+                self.reg.port_register_set.update_volatile_at(idx, |reg| {
+                    if reg.portsc.port_reset_change() {
+                        reg.portsc.clear_port_reset_change();
+                    }
+                });
+                return Ok(());
+            }
+            self.kernel.delay(Duration::from_millis(10));
+        }
+
+        Err(USBError::Timeout)
+    }
+
+    async fn wait_for_port_enabled(&mut self, port_id: u8) -> Result<(), USBError> {
+        let attempts = ROOT_PORT_ENABLE_WAIT_MS / ROOT_PORT_ENABLE_CHECK_MS;
+        let idx = (port_id - 1) as usize;
+
+        for _ in 0..attempts {
+            let port = self.reg.port_register_set.read_volatile_at(idx).portsc;
+            if port.current_connect_status() && port.port_enabled_disabled() {
+                return Ok(());
+            }
+            self.kernel
+                .delay(Duration::from_millis(ROOT_PORT_ENABLE_CHECK_MS));
+        }
+
+        Err(USBError::Timeout)
     }
 
     async fn handle_changed(&mut self) -> Result<(), USBError> {
@@ -209,15 +293,14 @@ impl XhciRootHub {
             }
 
             if connect_changed && port.current_connect_status() && !port.port_enabled_disabled() {
+                self.debounce_port(id, true).await?;
                 info!(
                     "crabusb/xhci/hub: changed port={} issuing connect-time reset",
                     id
                 );
-                self.reg.port_register_set.update_volatile_at(i, |reg| {
-                    reg.portsc.set_0_port_enabled_disabled();
-                    reg.portsc.set_port_reset();
-                });
-                self.ports_mut()[i].state = PortState::Uninit;
+                self.reset_port(id, port.port_speed()).await?;
+                self.wait_for_port_enabled(id).await?;
+                self.ports_mut()[i].state = PortState::Reseted;
                 continue;
             }
 
@@ -226,6 +309,7 @@ impl XhciRootHub {
                     "crabusb/xhci/hub: changed port={} reset/enable complete -> ready to probe",
                     id
                 );
+                self.wait_for_port_enabled(id).await?;
                 self.ports_mut()[i].state = PortState::Reseted;
                 continue;
             }

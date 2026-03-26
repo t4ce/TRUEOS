@@ -58,6 +58,7 @@ pub struct Device {
 impl Device {
     pub(crate) async fn new(host: &mut Xhci) -> Result<Self> {
         let slot_id = host.device_slot_assignment().await?;
+        crate::debug_set_usb_probe_progress(4, 0, 0, slot_id.as_u8(), 0);
         debug!("Slot {slot_id} assigned");
         let is_64 = host.is_64bit_ctx();
         debug!(
@@ -109,21 +110,39 @@ impl Device {
 
         let ep = self.new_ep(Dci::CTRL)?;
         self.ctrl_ep = Some(EndpointControl::new(ep));
+        crate::debug_set_usb_probe_progress(5, info.root_port_id, info.port_id, self.id.as_u8(), 0);
         self.address(host, info).await?;
         // self.dump_device_out();
+        crate::debug_set_usb_probe_progress(6, info.root_port_id, info.port_id, self.id.as_u8(), 8);
         let base = self.get_device_descriptor_base().await?;
         debug!("Device Descriptor Base: {:#x?}", base);
 
+        crate::debug_set_usb_probe_progress(
+            7,
+            info.root_port_id,
+            info.port_id,
+            self.id.as_u8(),
+            u32::from(base.max_packet_size_0),
+        );
         self.setup_max_packet(base).await?;
 
         // 读取当前配置（应该返回 0，表示未配置）
+        crate::debug_set_usb_probe_progress(8, info.root_port_id, info.port_id, self.id.as_u8(), 0);
         let current_config = self.get_configuration().await?;
         debug!("Current configuration value: {}", current_config);
 
+        crate::debug_set_usb_probe_progress(9, info.root_port_id, info.port_id, self.id.as_u8(), 0);
         self.read_descriptor().await?;
 
         // 读取所有配置描述符
         for i in 0..self.desc.num_configurations {
+            crate::debug_set_usb_probe_progress(
+                10,
+                info.root_port_id,
+                info.port_id,
+                self.id.as_u8(),
+                i as u32,
+            );
             let config_desc = self.ep_ctrl().get_configuration_descriptor(i).await?;
             self.config_desc.push(config_desc);
         }
@@ -133,6 +152,13 @@ impl Device {
         if !self.config_desc.is_empty() {
             let config_value = self.config_desc[0].configuration_value;
             debug!("Setting device configuration to {}", config_value);
+            crate::debug_set_usb_probe_progress(
+                11,
+                info.root_port_id,
+                info.port_id,
+                self.id.as_u8(),
+                u32::from(config_value),
+            );
             self.set_configuration(config_value).await?;
         }
 
@@ -144,6 +170,13 @@ impl Device {
             self.desc.class,
             self.desc.subclass,
             self.desc.protocol
+        );
+        crate::debug_set_usb_probe_progress(
+            12,
+            info.root_port_id,
+            info.port_id,
+            self.id.as_u8(),
+            self.desc.num_configurations as u32,
         );
         Ok(())
     }

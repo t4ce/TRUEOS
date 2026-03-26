@@ -83,10 +83,11 @@ pub(crate) fn cmd_usb_status(io: &'static dyn ShellBackend2) {
             .filter(|dev| dev.controller_index == ctrl.index)
             .count();
         let runtime = crate::usb2::runtime_diag(ctrl.index);
+        let progress = crab_usb::debug_usb_probe_progress();
         let bdf = alloc::format!("{:02X}:{:02X}.{}", ctrl.bus, ctrl.slot, ctrl.function);
         if let Some(diag) = runtime {
             lines.push(alloc::format!(
-                "probe usb: ctrl={} bdf={} ready={} pending={} rp={} empty={} fail={} last={} last_count={} cached={} mmio=0x{:X}",
+                "probe usb: ctrl={} bdf={} ready={} pending={} rp={} empty={} fail={} last={} last_count={} cached={} stage={} root_port={} port={} slot={} detail={} mmio=0x{:X}",
                 ctrl.index,
                 bdf,
                 diag.event_handler_ready as u8,
@@ -97,14 +98,24 @@ pub(crate) fn cmd_usb_status(io: &'static dyn ShellBackend2) {
                 diag.last_probe_state,
                 diag.last_probe_device_count,
                 cached,
+                crab_usb::debug_usb_probe_stage_name(progress.stage),
+                progress.root_port,
+                progress.port,
+                progress.slot,
+                progress.detail,
                 ctrl.mmio_base.as_ptr() as usize,
             ));
         } else {
             lines.push(alloc::format!(
-                "probe usb: ctrl={} bdf={} cached={} mmio=0x{:X}",
+                "probe usb: ctrl={} bdf={} cached={} stage={} root_port={} port={} slot={} detail={} mmio=0x{:X}",
                 ctrl.index,
                 bdf,
                 cached,
+                crab_usb::debug_usb_probe_stage_name(progress.stage),
+                progress.root_port,
+                progress.port,
+                progress.slot,
+                progress.detail,
                 ctrl.mmio_base.as_ptr() as usize,
             ));
         }

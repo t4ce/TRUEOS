@@ -113,7 +113,7 @@ impl Xhci {
         let event_ring = EventRing::new(&kernel)?;
         let event_ring_info = event_ring.info();
 
-        let root_hub = XhciRootHub::new(reg.clone())?;
+        let root_hub = XhciRootHub::new(reg.clone(), kernel.clone())?;
 
         let transfer_result_handler = TransferResultHandler::new(reg_shared.clone());
         let ports = root_hub.waker();
@@ -181,6 +181,7 @@ impl Xhci {
     }
 
     async fn new_device(&mut self, info: DeviceAddressInfo) -> Result<Box<dyn DeviceOp>> {
+        crate::debug_set_usb_probe_progress(3, info.root_port_id, info.port_id, 0, 0);
         let mut device = Device::new(self).await?;
         device.init(self, &info).await?;
 
