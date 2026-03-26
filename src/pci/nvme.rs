@@ -1955,12 +1955,50 @@ pub fn probe_once() {
         }
 
         // Test gate: the IO queue should complete a no-data command (FLUSH).
-        // If IO selftest passes, we can offer full read/write; if it fails, degrade to admin.
-        let io_ready = io_selftest_flush(&mut ctrl, pci_addr, nsid);
+        // On failure, do one bounded best-effort controller reset/re-init before giving up.
+        let mut io_ready = io_selftest_flush(&mut ctrl, pci_addr, nsid);
 
         if !io_ready {
             crate::log!(
-                "nvme: {} io-selftest failed; skipping registration until IO queue is healthy\n",
+                "nvme: {} io-selftest failed; best-effort reset + re-init attempt\n",
+                pci_addr
+            );
+
+            let _ = ctrl.set_enabled(false);
+
+            match NvmeController::init(mmio_ptr, pci_addr) {
+                Ok(mut retry_ctrl) => {
+                    if let Ok(retry_info) = retry_ctrl.identify_controller_info()
+                        && let Ok(retry_nsid) =
+                            retry_ctrl.identify_first_active_namespace(retry_info.nn)
+                        && let Ok((retry_blocks, retry_block_size)) =
+                            retry_ctrl.identify_namespace(retry_nsid)
+                        && retry_blocks != 0
+                        && retry_block_size != 0
+                    {
+                        let retry_ready = io_selftest_flush(&mut retry_ctrl, pci_addr, retry_nsid);
+                        if retry_ready {
+                            crate::log!(
+                                "nvme: {} best-effort reset recovered IO queue\n",
+                                pci_addr
+                            );
+                            ctrl = retry_ctrl;
+                            nsid = retry_nsid;
+                            blocks = retry_blocks;
+                            block_size = retry_block_size;
+                            io_ready = true;
+                        }
+                    }
+                }
+                Err(e) => {
+                    crate::log!("nvme: {} best-effort re-init failed: {:?}\n", pci_addr, e);
+                }
+            }
+        }
+
+        if !io_ready {
+            crate::log!(
+                "nvme: {} io-selftest failed after best-effort reset; skipping registration\n",
                 pci_addr
             );
             continue;

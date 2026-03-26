@@ -156,66 +156,174 @@ fn static_instances() -> [WhiteHolePayload; 4] {
             ]),
             ProblemToken::ClauseN(vec![
                 Lit { var: 10, neg: true },
-                Lit { var: 11, neg: false },
+                Lit {
+                    var: 11,
+                    neg: false,
+                },
                 Lit { var: 12, neg: true },
-                Lit { var: 13, neg: false },
-                Lit { var: 14, neg: false },
+                Lit {
+                    var: 13,
+                    neg: false,
+                },
+                Lit {
+                    var: 14,
+                    neg: false,
+                },
                 Lit { var: 15, neg: true },
-                Lit { var: 16, neg: false },
+                Lit {
+                    var: 16,
+                    neg: false,
+                },
             ]),
             ProblemToken::ClauseN(vec![
-                Lit { var: 17, neg: false },
+                Lit {
+                    var: 17,
+                    neg: false,
+                },
                 Lit { var: 18, neg: true },
-                Lit { var: 17, neg: false },
-                Lit { var: 17, neg: false },
-                Lit { var: 17, neg: false },
-                Lit { var: 17, neg: false },
-                Lit { var: 17, neg: false },
+                Lit {
+                    var: 17,
+                    neg: false,
+                },
+                Lit {
+                    var: 17,
+                    neg: false,
+                },
+                Lit {
+                    var: 17,
+                    neg: false,
+                },
+                Lit {
+                    var: 17,
+                    neg: false,
+                },
+                Lit {
+                    var: 17,
+                    neg: false,
+                },
             ]),
             ProblemToken::ClauseN(vec![
                 Lit { var: 19, neg: true },
-                Lit { var: 20, neg: false },
-                Lit { var: 21, neg: false },
+                Lit {
+                    var: 20,
+                    neg: false,
+                },
+                Lit {
+                    var: 21,
+                    neg: false,
+                },
                 Lit { var: 22, neg: true },
-                Lit { var: 23, neg: false },
-                Lit { var: 24, neg: false },
-                Lit { var: 20, neg: false },
+                Lit {
+                    var: 23,
+                    neg: false,
+                },
+                Lit {
+                    var: 24,
+                    neg: false,
+                },
+                Lit {
+                    var: 20,
+                    neg: false,
+                },
             ]),
             ProblemToken::ClauseN(vec![
-                Lit { var: 25, neg: false },
-                Lit { var: 25, neg: false },
-                Lit { var: 25, neg: false },
-                Lit { var: 25, neg: false },
-                Lit { var: 25, neg: false },
-                Lit { var: 25, neg: false },
-                Lit { var: 25, neg: false },
+                Lit {
+                    var: 25,
+                    neg: false,
+                },
+                Lit {
+                    var: 25,
+                    neg: false,
+                },
+                Lit {
+                    var: 25,
+                    neg: false,
+                },
+                Lit {
+                    var: 25,
+                    neg: false,
+                },
+                Lit {
+                    var: 25,
+                    neg: false,
+                },
+                Lit {
+                    var: 25,
+                    neg: false,
+                },
+                Lit {
+                    var: 25,
+                    neg: false,
+                },
             ]),
             ProblemToken::ClauseN(vec![
                 Lit { var: 26, neg: true },
-                Lit { var: 27, neg: false },
+                Lit {
+                    var: 27,
+                    neg: false,
+                },
                 Lit { var: 28, neg: true },
-                Lit { var: 29, neg: false },
-                Lit { var: 27, neg: false },
-                Lit { var: 27, neg: false },
-                Lit { var: 27, neg: false },
+                Lit {
+                    var: 29,
+                    neg: false,
+                },
+                Lit {
+                    var: 27,
+                    neg: false,
+                },
+                Lit {
+                    var: 27,
+                    neg: false,
+                },
+                Lit {
+                    var: 27,
+                    neg: false,
+                },
             ]),
             ProblemToken::ClauseN(vec![
-                Lit { var: 30, neg: false },
+                Lit {
+                    var: 30,
+                    neg: false,
+                },
                 Lit { var: 31, neg: true },
-                Lit { var: 32, neg: false },
+                Lit {
+                    var: 32,
+                    neg: false,
+                },
                 Lit { var: 33, neg: true },
-                Lit { var: 34, neg: false },
+                Lit {
+                    var: 34,
+                    neg: false,
+                },
                 Lit { var: 35, neg: true },
-                Lit { var: 36, neg: false },
+                Lit {
+                    var: 36,
+                    neg: false,
+                },
             ]),
             ProblemToken::ClauseN(vec![
                 Lit { var: 37, neg: true },
-                Lit { var: 38, neg: false },
+                Lit {
+                    var: 38,
+                    neg: false,
+                },
                 Lit { var: 39, neg: true },
-                Lit { var: 40, neg: false },
-                Lit { var: 41, neg: false },
-                Lit { var: 38, neg: false },
-                Lit { var: 38, neg: false },
+                Lit {
+                    var: 40,
+                    neg: false,
+                },
+                Lit {
+                    var: 41,
+                    neg: false,
+                },
+                Lit {
+                    var: 38,
+                    neg: false,
+                },
+                Lit {
+                    var: 38,
+                    neg: false,
+                },
             ]),
             ProblemToken::End,
         ]),
