@@ -1,0 +1,8 @@
+[package]
+name = "trueos-esp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+embassy-time = { version = "0.5.0", default-features = false, features = ["tick-hz-1_000"] }
+v = { path = "../trueos-v" }
