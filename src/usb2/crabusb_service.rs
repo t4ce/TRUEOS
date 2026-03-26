@@ -83,6 +83,30 @@ fn probe_state_name(code: u32) -> &'static str {
     }
 }
 
+fn log_probe_progress(prefix: &str) {
+    let progress = crab_usb::debug_usb_probe_progress();
+    let submit = crab_usb::debug_last_submit();
+    let event = crab_usb::debug_last_event();
+    crate::log!(
+        "crabusb: {} stage={} root_port={} port={} slot={} detail={} submit[dci={} dir={} len={} ptr=0x{:X}] event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+        prefix,
+        crab_usb::debug_usb_probe_stage_name(progress.stage),
+        progress.root_port,
+        progress.port,
+        progress.slot,
+        progress.detail,
+        submit.dci,
+        submit.direction,
+        submit.len,
+        submit.ptr,
+        event.slot_id,
+        event.ep_id,
+        event.completion_code,
+        event.residual,
+        event.ptr,
+    );
+}
+
 #[derive(Copy, Clone)]
 struct BounceMapping {
     orig_virt: usize,
@@ -2439,6 +2463,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
             Err(err) => {
                 LAST_PROBE_STATE[controller_id].store(3, Ordering::Release);
                 LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
+                log_probe_progress("probe failed progress");
                 let fail_streak =
                     PROBE_FAIL_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
                 crate::log!(
@@ -2461,6 +2486,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
         crate::wait::Either::Second(_) => {
             LAST_PROBE_STATE[controller_id].store(4, Ordering::Release);
             LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
+            log_probe_progress("probe timeout progress");
             let fail_streak = PROBE_FAIL_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
             crate::log!(
                 "crabusb: controller {} probe timeout after {}ms (streak={})\n",
@@ -2577,6 +2603,7 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
         crate::wait::Either::Second(_) => {
             LAST_PROBE_STATE[info.index].store(4, Ordering::Release);
             LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
+            log_probe_progress("scout timeout progress");
             crate::log!(
                 "crabusb: scout probe timeout after {}ms\n",
                 CRABUSB_PROBE_TIMEOUT_MS

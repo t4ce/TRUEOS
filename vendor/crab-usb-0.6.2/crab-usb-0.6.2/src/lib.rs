@@ -53,6 +53,15 @@ pub struct DebugLastEvent {
     pub ptr: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DebugUsbProbeProgress {
+    pub stage: u32,
+    pub root_port: u8,
+    pub port: u8,
+    pub slot: u8,
+    pub detail: u32,
+}
+
 static DEBUG_LAST_SUBMIT_DCI: AtomicU32 = AtomicU32::new(0);
 static DEBUG_LAST_SUBMIT_DIR: AtomicU32 = AtomicU32::new(0);
 static DEBUG_LAST_SUBMIT_LEN: AtomicU32 = AtomicU32::new(0);
@@ -63,6 +72,12 @@ static DEBUG_LAST_EVENT_EP: AtomicU32 = AtomicU32::new(0);
 static DEBUG_LAST_EVENT_CC: AtomicU32 = AtomicU32::new(0);
 static DEBUG_LAST_EVENT_RESIDUAL: AtomicU32 = AtomicU32::new(0);
 static DEBUG_LAST_EVENT_PTR: AtomicU64 = AtomicU64::new(0);
+
+static DEBUG_USB_PROBE_STAGE: AtomicU32 = AtomicU32::new(0);
+static DEBUG_USB_PROBE_ROOT_PORT: AtomicU32 = AtomicU32::new(0);
+static DEBUG_USB_PROBE_PORT: AtomicU32 = AtomicU32::new(0);
+static DEBUG_USB_PROBE_SLOT: AtomicU32 = AtomicU32::new(0);
+static DEBUG_USB_PROBE_DETAIL: AtomicU32 = AtomicU32::new(0);
 
 pub fn debug_record_submit(dci: u8, direction: u8, len: u32, ptr: u64) {
     DEBUG_LAST_SUBMIT_DCI.store(dci as u32, Ordering::Release);
@@ -77,6 +92,43 @@ pub fn debug_record_event(slot_id: u8, ep_id: u8, completion_code: u8, residual:
     DEBUG_LAST_EVENT_CC.store(completion_code as u32, Ordering::Release);
     DEBUG_LAST_EVENT_RESIDUAL.store(residual, Ordering::Release);
     DEBUG_LAST_EVENT_PTR.store(ptr, Ordering::Release);
+}
+
+pub fn debug_set_usb_probe_progress(stage: u32, root_port: u8, port: u8, slot: u8, detail: u32) {
+    DEBUG_USB_PROBE_STAGE.store(stage, Ordering::Release);
+    DEBUG_USB_PROBE_ROOT_PORT.store(root_port as u32, Ordering::Release);
+    DEBUG_USB_PROBE_PORT.store(port as u32, Ordering::Release);
+    DEBUG_USB_PROBE_SLOT.store(slot as u32, Ordering::Release);
+    DEBUG_USB_PROBE_DETAIL.store(detail, Ordering::Release);
+}
+
+pub fn debug_usb_probe_progress() -> DebugUsbProbeProgress {
+    DebugUsbProbeProgress {
+        stage: DEBUG_USB_PROBE_STAGE.load(Ordering::Acquire),
+        root_port: DEBUG_USB_PROBE_ROOT_PORT.load(Ordering::Acquire) as u8,
+        port: DEBUG_USB_PROBE_PORT.load(Ordering::Acquire) as u8,
+        slot: DEBUG_USB_PROBE_SLOT.load(Ordering::Acquire) as u8,
+        detail: DEBUG_USB_PROBE_DETAIL.load(Ordering::Acquire),
+    }
+}
+
+pub fn debug_usb_probe_stage_name(stage: u32) -> &'static str {
+    match stage {
+        0 => "idle",
+        1 => "hub-changed-ports",
+        2 => "hub-port-enum",
+        3 => "xhci-new-device",
+        4 => "xhci-slot-assigned",
+        5 => "xhci-address-device",
+        6 => "xhci-desc8",
+        7 => "xhci-ep0-mps",
+        8 => "xhci-get-config",
+        9 => "xhci-read-device-desc",
+        10 => "xhci-read-config-desc",
+        11 => "xhci-set-config",
+        12 => "done",
+        _ => "unknown",
+    }
 }
 
 pub fn debug_last_submit() -> DebugLastSubmit {
