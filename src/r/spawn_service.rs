@@ -83,6 +83,7 @@ define_started_flags!(
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
     WS_TIME_STARTED,
+    ESP_GATE_STARTED,
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
     GFX_VIRGL_READY_TASK_STARTED,
@@ -352,6 +353,12 @@ fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         spawner.spawn(crate::tst_ws_time::ws_time_task())
+    })
+}
+
+fn spawn_esp_gate(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::r::net::esp::esp_gate_task())
     })
 }
 
@@ -866,6 +873,12 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::NET_CONFIGURED,
         &WS_TIME_STARTED,
         spawn_ws_time,
+    ),
+    TaskSpec::enabled(
+        "esp-gate",
+        crate::r::readiness::NET_CONFIGURED,
+        &ESP_GATE_STARTED,
+        spawn_esp_gate,
     ),
     TaskSpec::disabled(
         "ftp-server",

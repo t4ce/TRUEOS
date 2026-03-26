@@ -64,7 +64,7 @@ pub(super) struct UsbRuntimeDiag {
     pub last_probe_device_count: u32,
 }
 
-const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
+const DEMO_WAV_EMBEDDED: &[u8] = b""; // temporary empty audio payload
 const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
 const TRUEKEY_VENDOR_ID: u16 = 0x303A;
 const TRUEKEY_PRODUCT_ID: u16 = 0x1001;
@@ -79,8 +79,16 @@ fn probe_state_name(code: u32) -> &'static str {
         2 => "empty",
         3 => "error",
         4 => "timeout",
+        5 => "steady",
         _ => "unknown",
     }
+}
+
+fn cached_device_count(controller_id: usize) -> usize {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return 0;
+    }
+    TLB_DEVICES[controller_id].lock().len()
 }
 
 fn log_probe_progress(prefix: &str) {
@@ -2378,6 +2386,16 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
         crate::wait::Either::First(res) => match res {
             Ok(devices) => {
                 if devices.is_empty() {
+                    let cached = cached_device_count(controller_id);
+                    if cached > 0 {
+                        LAST_PROBE_STATE[controller_id].store(5, Ordering::Release);
+                        LAST_PROBE_DEVICE_COUNT[controller_id]
+                            .store(cached as u32, Ordering::Release);
+                        PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
+                        EMPTY_PROBE_STREAK[controller_id].store(0, Ordering::Release);
+                        NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
+                        return false;
+                    }
                     LAST_PROBE_STATE[controller_id].store(2, Ordering::Release);
                     LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
                     PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
@@ -2752,7 +2770,9 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             idle_ticks = idle_ticks.wrapping_add(1);
             if idle_ticks >= 300 {
                 idle_ticks = 0;
-                let _ = probe_and_log(&mut host, &spawner, info.index).await;
+                if cached_device_count(info.index) == 0 {
+                    let _ = probe_and_log(&mut host, &spawner, info.index).await;
+                }
             }
             Timer::after(EmbassyDuration::from_millis(10)).await;
         }

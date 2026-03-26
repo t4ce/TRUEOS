@@ -40,6 +40,7 @@ dependencies = [
  "smoltcp",
  "spin 0.10.0",
  "tiny-skia-path",
+ "trueos-esp",
  "trueos-fs",
  "trueos-gfx-core",
  "trueos-limloader",
@@ -2220,6 +2221,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "trueos-esp"
+version = "0.1.0"
+dependencies = [
+ "embassy-time",
+ "v",
 ]
 
 [[package]]
