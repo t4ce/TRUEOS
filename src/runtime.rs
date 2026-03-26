@@ -1,7 +1,7 @@
 use core::sync::atomic::Ordering;
 
-#[path = "marble2/apmarble_lane.rs"]
-mod apmarble_lane;
+//#[path = "marble2/apmarble_lane.rs"]
+//mod apmarble_lane;
 
 #[inline]
 fn local_cpu_ptr() -> *mut crate::percpu::PerCpu {
@@ -59,19 +59,21 @@ pub fn poll_local_executor() {
     cpu.leave_executor_poll();
 }
 
+/*
 #[inline]
 fn poll_apmarble_lane() {
     let total = crate::smp::cpu_count();
     let slot = crate::percpu::this_cpu().cpu_index();
     apmarble_lane::poll_for_current_slot(slot, total);
 }
+*/
 
 pub fn run_ap_forever() -> ! {
     let mut counter: u64 = 0;
     loop {
         crate::time::poll();
         poll_local_executor();
-        poll_apmarble_lane();
+        //poll_apmarble_lane();
         log_ap_activity_once();
 
         if counter.is_multiple_of(100_000) {
