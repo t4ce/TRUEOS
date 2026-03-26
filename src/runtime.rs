@@ -1,6 +1,6 @@
 use core::sync::atomic::Ordering;
 
-#[path = "marble/apmarble_lane.rs"]
+#[path = "marble2/apmarble_lane.rs"]
 mod apmarble_lane;
 
 #[inline]

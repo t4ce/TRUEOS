@@ -946,6 +946,9 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         if let Some(err) = snapshot.probe_error {
             out.push(alloc::format!("  probe_error={}", err));
         }
+        if let Some(n) = snapshot.probe_device_count {
+            out.push(alloc::format!("  probe_device_count={}", n));
+        }
     }
 
     for l in out.into_iter().rev() {

@@ -44,6 +44,10 @@ static HID_STREAMS_ACTIVE: Mutex<Vec<ActiveHidStream>> = Mutex::new(Vec::new());
 static BOUNCE_MAPPINGS: Mutex<Vec<BounceMapping>> = Mutex::new(Vec::new());
 static EMPTY_PROBE_STREAK: [AtomicU32; MAX_XHCI_CONTROLLERS] =
     [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
+static LAST_PROBE_STATE: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS]; // 0=init, 1=ok, 2=empty, 3=error
+static LAST_PROBE_DEVICE_COUNT: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
 static TLB_DEVICES: [Mutex<Vec<super::TlbUsbDevice>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
 
@@ -2319,6 +2323,8 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
     match host.probe_devices().await {
         Ok(devices) => {
             if devices.is_empty() {
+                LAST_PROBE_STATE[controller_id].store(2, Ordering::Release);
+                LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
                 let streak = EMPTY_PROBE_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
                 if streak.is_multiple_of(25) {
                     crate::log!(
@@ -2340,6 +2346,9 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                 }
                 false
             } else {
+                LAST_PROBE_STATE[controller_id].store(1, Ordering::Release);
+                LAST_PROBE_DEVICE_COUNT[controller_id]
+                    .store(devices.len() as u32, Ordering::Release);
                 EMPTY_PROBE_STREAK[controller_id].store(0, Ordering::Release);
                 NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
                 update_tlb_devices(controller_id, &devices);
@@ -2381,7 +2390,13 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
             }
         }
         Err(err) => {
-            crate::log!("crabusb: probe failed: {:?}\n", err);
+            LAST_PROBE_STATE[controller_id].store(3, Ordering::Release);
+            LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
+            crate::log!(
+                "crabusb: controller {} probe failed: {:?}\n",
+                controller_id,
+                err
+            );
             false
         }
     }
@@ -2575,6 +2590,8 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         ROOT_PORT_CHANGE_SEEN[info.index].store(false, Ordering::Release);
         NO_PORT_CHANGE_HINT_LOGGED[info.index].store(false, Ordering::Release);
         EMPTY_PROBE_STREAK[info.index].store(0, Ordering::Release);
+        LAST_PROBE_STATE[info.index].store(0, Ordering::Release);
+        LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
         TLB_DEVICES[info.index].lock().clear();
         crab_scout_once(&mut host, info, &spawner).await;
 
@@ -2649,4 +2666,24 @@ pub(super) fn diag_devices(controller_id: usize) -> Vec<super::TlbUsbDevice> {
     }
 
     TLB_DEVICES[controller_id].lock().clone()
+}
+
+pub(super) fn diag_probe_error(controller_id: usize) -> Option<&'static str> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return None;
+    }
+
+    match LAST_PROBE_STATE[controller_id].load(Ordering::Acquire) {
+        2 => Some("empty"),
+        3 => Some("probe_failed"),
+        _ => None,
+    }
+}
+
+pub(super) fn diag_probe_device_count(controller_id: usize) -> Option<u32> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return None;
+    }
+
+    Some(LAST_PROBE_DEVICE_COUNT[controller_id].load(Ordering::Acquire))
 }

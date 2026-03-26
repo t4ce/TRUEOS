@@ -15,6 +15,16 @@ pub struct WaverPlan {
     pub placements: Vec<WidgetPlacement>,
 }
 
+impl WaverPlan {
+    pub fn required_world_size(&self) -> usize {
+        self.placements
+            .iter()
+            .map(|p| p.tile as usize + 1)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
 pub struct Waver;
 
 impl Waver {
