@@ -9,9 +9,47 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 const MAX_DEPTH: usize = 3;
 const MAX_CHILDREN_PER_DIR: usize = 24;
 const MAX_LINES_PER_ROOT: usize = 160;
+const RAMDISK_BLOCK_SIZE: u32 = 512;
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "file: usage `file` | `file format <disk-id>`");
+    print_shell_line(
+        io,
+        "file: usage `file` | `file format <disk-id>` | `file ramdisc <size>`",
+    );
+}
+
+fn parse_size_bytes(raw: &str) -> Option<u64> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    let digits_len = text.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits_len == 0 {
+        return None;
+    }
+
+    let number = text[..digits_len].parse::<u64>().ok()?;
+    let suffix = text[digits_len..].trim();
+    let mul = if suffix.is_empty() || suffix.eq_ignore_ascii_case("B") {
+        1u64
+    } else if suffix.eq_ignore_ascii_case("KB") || suffix.eq_ignore_ascii_case("K") {
+        1_000u64
+    } else if suffix.eq_ignore_ascii_case("MB") || suffix.eq_ignore_ascii_case("M") {
+        1_000_000u64
+    } else if suffix.eq_ignore_ascii_case("GB") || suffix.eq_ignore_ascii_case("G") {
+        1_000_000_000u64
+    } else if suffix.eq_ignore_ascii_case("KIB") {
+        1_024u64
+    } else if suffix.eq_ignore_ascii_case("MIB") {
+        1_048_576u64
+    } else if suffix.eq_ignore_ascii_case("GIB") {
+        1_073_741_824u64
+    } else {
+        return None;
+    };
+
+    number.checked_mul(mul)
 }
 
 fn tree_child_names(
@@ -156,6 +194,76 @@ pub(crate) fn try_parse(
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
     match args.next() {
+        Some("ramdisc") | Some("ramdisk") => {
+            let Some(size_arg) = args.next() else {
+                print_shell_line(
+                    io,
+                    "file ramdisc: missing size (example: `file ramdisc 1GB`)",
+                );
+                return ParseOutcome::Handled;
+            };
+            if args.next().is_some() {
+                print_usage(io);
+                return ParseOutcome::Handled;
+            }
+
+            let Some(size_bytes) = parse_size_bytes(size_arg) else {
+                print_shell_line(
+                    io,
+                    "file ramdisc: invalid size (examples: 512MB, 1GB, 1024MiB)",
+                );
+                return ParseOutcome::Handled;
+            };
+
+            let label = alloc::format!("ramdisc-{}mb", size_bytes / (1024 * 1024));
+            let out = crate::wait::spawn_and_wait_local(async move {
+                let disk = crate::r::disc::ramdisk::create_trueos_public(
+                    size_bytes,
+                    RAMDISK_BLOCK_SIZE,
+                    label,
+                )
+                .await;
+                let disk = match disk {
+                    Ok(disk) => disk,
+                    Err(err) => {
+                        return Err(alloc::format!("create/format failed: {:?}", err));
+                    }
+                };
+
+                match crate::r::fs::trueosfs::mount_root_async(disk).await {
+                    Ok(Some(_)) | Ok(None) => {}
+                    Err(err) => {
+                        return Err(alloc::format!("mount failed: {:?}", err));
+                    }
+                }
+
+                Ok(disk)
+            });
+
+            match out {
+                Ok(disk) => {
+                    let info = disk.info();
+                    let ready =
+                        crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
+                    print_shell_line(
+                        io,
+                        alloc::format!(
+                            "file ramdisc: ready id={} ({}) size={} bytes trueosfs=1 root_mounted={}",
+                            info.id.raw(),
+                            info.id,
+                            size_bytes,
+                            ready as u8
+                        )
+                        .as_str(),
+                    );
+                }
+                Err(msg) => {
+                    print_shell_line(io, alloc::format!("file ramdisc: {}", msg).as_str());
+                }
+            }
+
+            ParseOutcome::Handled
+        }
         Some("format") => {
             let Some(arg) = args.next() else {
                 super::format::print_format_disk_table(io);

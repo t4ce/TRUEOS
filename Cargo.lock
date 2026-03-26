@@ -2274,7 +2274,6 @@ dependencies = [
 name = "trueos-vm"
 version = "0.1.0"
 dependencies = [
- "trueos-qjs",
  "v",
 ]
 
