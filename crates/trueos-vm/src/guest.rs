@@ -64,7 +64,7 @@ trueos_vmx_guest_entry:
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_vm_guest_run() {
-    crate::demo::start();
+    crate::runtime::start();
 }
 
 #[unsafe(no_mangle)]

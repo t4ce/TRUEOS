@@ -96,6 +96,17 @@ pub(crate) struct TlbUsbSnapshot {
     pub probe_device_count: Option<u32>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct UsbControllerRuntimeDiag {
+    pub event_handler_ready: bool,
+    pub probe_requested: bool,
+    pub root_port_change_seen: bool,
+    pub empty_probe_streak: u32,
+    pub probe_fail_streak: u32,
+    pub last_probe_state: &'static str,
+    pub last_probe_device_count: u32,
+}
+
 fn decode_mmio_bar(bar_lo: u32, bar_hi: Option<u32>) -> Option<u64> {
     if bar_lo == 0 || bar_lo == 0xFFFF_FFFF || (bar_lo & 0x1) != 0 {
         return None;
@@ -186,6 +197,42 @@ fn controller_by_index(controller_id: usize) -> Option<TlbUsbController> {
     pci_usb_controllers()
         .into_iter()
         .find(|info| info.index == controller_id)
+}
+
+pub(crate) fn request_probe(controller_id: usize) -> Result<(), &'static str> {
+    if controller_by_index(controller_id).is_none() {
+        return Err("controller not found");
+    }
+
+    if self::crabusb_service::request_probe(controller_id) {
+        Ok(())
+    } else {
+        Err("controller out of range")
+    }
+}
+
+pub(crate) fn request_rebind(controller_id: usize) -> Result<(), &'static str> {
+    if controller_by_index(controller_id).is_none() {
+        return Err("controller not found");
+    }
+
+    if self::crabusb_service::request_rebind(controller_id) {
+        Ok(())
+    } else {
+        Err("controller out of range")
+    }
+}
+
+pub(crate) fn runtime_diag(controller_id: usize) -> Option<UsbControllerRuntimeDiag> {
+    self::crabusb_service::runtime_diag(controller_id).map(|diag| UsbControllerRuntimeDiag {
+        event_handler_ready: diag.event_handler_ready,
+        probe_requested: diag.probe_requested,
+        root_port_change_seen: diag.root_port_change_seen,
+        empty_probe_streak: diag.empty_probe_streak,
+        probe_fail_streak: diag.probe_fail_streak,
+        last_probe_state: diag.last_probe_state,
+        last_probe_device_count: diag.last_probe_device_count,
+    })
 }
 
 fn classify_descriptor_kind(desc: &crab_usb::usb_if::descriptor::DeviceDescriptor) -> &'static str {

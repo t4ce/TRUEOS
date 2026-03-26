@@ -131,10 +131,112 @@ impl XhciRootHub {
 
     async fn _changed_ports(&mut self) -> Result<Vec<PortChangeInfo>, USBError> {
         info!("crabusb/xhci/hub: changed_ports begin");
+        self.handle_changed().await?;
         self.handle_uninit().await?;
         let out = self.handle_reseted().await?;
         info!("crabusb/xhci/hub: changed_ports end emitted={}", out.len());
         Ok(out)
+    }
+
+    async fn handle_changed(&mut self) -> Result<(), USBError> {
+        let changed = self
+            .ports()
+            .iter()
+            .filter(|port| port.changed.swap(false, Ordering::AcqRel))
+            .map(|port| port.port_id)
+            .collect::<Vec<_>>();
+
+        for &id in &changed {
+            let i = (id - 1) as usize;
+            let port = self.reg.port_register_set.read_volatile_at(i).portsc;
+            let connect_changed = port.connect_status_change();
+            let enabled_changed = port.port_enabled_disabled_change();
+            let warm_reset_changed = port.warm_port_reset_change();
+            let over_current_changed = port.over_current_change();
+            let reset_changed = port.port_reset_change();
+            let link_changed = port.port_link_state_change();
+            let config_error_changed = port.port_config_error_change();
+            info!(
+                "crabusb/xhci/hub: changed port={} connect={} enabled={} reset={} speed={} csc={} pedc={} wrc={} occ={} prc={} plc={} cec={} state={:?}",
+                id,
+                port.current_connect_status(),
+                port.port_enabled_disabled(),
+                port.port_reset(),
+                port.port_speed(),
+                connect_changed,
+                enabled_changed,
+                warm_reset_changed,
+                over_current_changed,
+                reset_changed,
+                link_changed,
+                config_error_changed,
+                self.ports()[i].state,
+            );
+
+            self.reg.port_register_set.update_volatile_at(i, |reg| {
+                if connect_changed {
+                    reg.portsc.clear_connect_status_change();
+                }
+                if enabled_changed {
+                    reg.portsc.clear_port_enabled_disabled_change();
+                }
+                if warm_reset_changed {
+                    reg.portsc.clear_warm_port_reset_change();
+                }
+                if over_current_changed {
+                    reg.portsc.clear_over_current_change();
+                }
+                if reset_changed {
+                    reg.portsc.clear_port_reset_change();
+                }
+                if link_changed {
+                    reg.portsc.clear_port_link_state_change();
+                }
+                if config_error_changed {
+                    reg.portsc.clear_port_config_error_change();
+                }
+            });
+
+            if port.port_reset() {
+                self.ports_mut()[i].state = PortState::Uninit;
+                continue;
+            }
+
+            if connect_changed && !port.current_connect_status() {
+                info!("crabusb/xhci/hub: changed port={} disconnect observed", id);
+                self.ports_mut()[i].state = PortState::Reseted;
+                continue;
+            }
+
+            if connect_changed && port.current_connect_status() && !port.port_enabled_disabled() {
+                info!(
+                    "crabusb/xhci/hub: changed port={} issuing connect-time reset",
+                    id
+                );
+                self.reg.port_register_set.update_volatile_at(i, |reg| {
+                    reg.portsc.set_0_port_enabled_disabled();
+                    reg.portsc.set_port_reset();
+                });
+                self.ports_mut()[i].state = PortState::Uninit;
+                continue;
+            }
+
+            if reset_changed || (enabled_changed && port.port_enabled_disabled()) {
+                info!(
+                    "crabusb/xhci/hub: changed port={} reset/enable complete -> ready to probe",
+                    id
+                );
+                self.ports_mut()[i].state = PortState::Reseted;
+                continue;
+            }
+
+            info!(
+                "crabusb/xhci/hub: changed port={} no actionable connect/reset transition",
+                id
+            );
+        }
+
+        Ok(())
     }
 
     async fn handle_uninit(&mut self) -> Result<(), USBError> {

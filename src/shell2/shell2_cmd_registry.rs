@@ -98,6 +98,11 @@ fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::net::try_parse(io, &mut args)
 }
 
+fn dispatch_probe(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    super::cmds::probe::try_parse(io, &mut args)
+}
+
 fn dispatch_run(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::run::try_parse(spawner, io, &mut args)
@@ -171,6 +176,12 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         mode: "cmd",
         color: None,
         handler: dispatch_net,
+    },
+    BuiltinShell2CmdEntry {
+        name: "probe",
+        mode: "cmd",
+        color: None,
+        handler: dispatch_probe,
     },
     BuiltinShell2CmdEntry {
         name: "run",

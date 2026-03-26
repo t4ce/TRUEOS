@@ -3,6 +3,7 @@ use core::str::SplitWhitespace;
 
 use acpi::sdt::fadt::Fadt;
 use acpi::sdt::madt::Madt;
+use acpi::sdt::mcfg::Mcfg;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -12,7 +13,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
 
-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pciids|pcibar|mem|cpu|acpi|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pciids|pcibar|mem|cpu|acpi|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb [probe]|dump]`";
 const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const TLB_MENU_ROWS: [(&str, &str); 15] = [
     ("pci", "List PCI devices"),
@@ -28,7 +29,10 @@ const TLB_MENU_ROWS: [(&str, &str); 15] = [
     ("ssdt", "Show SSDT details"),
     ("uefi", "List UEFI tables"),
     ("x2apic", "List x2APIC topology"),
-    ("usb", "List USB controllers and ports"),
+    (
+        "usb",
+        "List USB controllers and ports (`tlb usb probe` for live state)",
+    ),
     ("dump", "Write all tables to trueos/pci/tlb.txt"),
 ];
 
@@ -624,7 +628,68 @@ fn cmd_tlb_hpet(io: &'static dyn ShellBackend2) {
 }
 
 fn cmd_tlb_mcfg(io: &'static dyn ShellBackend2) {
-    line(io, "MCFG: Command disabled due to compilation error");
+    let Some(tables) = crate::efi::acpi::ensure_tables() else {
+        line(io, "tlb mcfg: no tables found");
+        return;
+    };
+
+    let Some(mcfg) = tables.find_table::<Mcfg>() else {
+        line(io, "tlb mcfg: MCFG table not found");
+        return;
+    };
+
+    line(
+        io,
+        alloc::format!("MCFG @ 0x{:X}", mcfg.physical_start).as_str(),
+    );
+
+    let cols = [
+        Column {
+            header: "Seg",
+            width: 4,
+        },
+        Column {
+            header: "Bus",
+            width: 7,
+        },
+        Column {
+            header: "ECAM Base",
+            width: 18,
+        },
+        Column {
+            header: "ECAM End",
+            width: 18,
+        },
+        Column {
+            header: "Size",
+            width: 10,
+        },
+    ];
+    emit_table_header(io, &cols);
+
+    let mut count = 0usize;
+    for entry in mcfg.entries() {
+        count += 1;
+        let segment = entry.pci_segment_group;
+        let bus_start = entry.bus_number_start;
+        let bus_end = entry.bus_number_end;
+        let base_addr = entry.base_address;
+        let bus_span = (bus_end as u64)
+            .saturating_sub(bus_start as u64)
+            .saturating_add(1);
+        let bytes = bus_span << 20;
+        let end = base_addr.saturating_add(bytes).saturating_sub(1);
+        let seg = alloc::format!("{}", segment);
+        let bus = alloc::format!("{}-{}", bus_start, bus_end);
+        let base = alloc::format!("0x{:016X}", base_addr);
+        let end_s = alloc::format!("0x{:016X}", end);
+        let size = alloc::format!("0x{:X}", bytes);
+        emit_table_row(io, &cols, &[&seg, &bus, &base, &end_s, &size]);
+    }
+
+    if count == 0 {
+        line(io, "tlb mcfg: no ECAM regions listed in MCFG");
+    }
 }
 
 fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
@@ -764,18 +829,33 @@ fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
     let entries = st.number_of_table_entries;
     let cfg_addr = st.configuration_table as u64;
 
-    if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr)
-        && let Ok((cfg_ptr, _)) =
-            crate::pci::mmio::map_limine_slice::<crate::efi::EfiConfigurationTable>(phys, entries)
-    {
-        let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
-        for (index, entry) in slice.iter().enumerate() {
-            let idx = alloc::format!("{}", index);
-            let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
-            let guid = entry.vendor_guid.fmt_canonical();
-            let ptr = alloc::format!("0x{:016X}", entry.vendor_table as u64);
-            emit_table_row(io, &cfg_cols, &[&idx, &guid, name, &ptr]);
-        }
+    if entries == 0 {
+        line(io, "No UEFI configuration tables reported.");
+        return;
+    }
+
+    let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr) else {
+        line(
+            io,
+            "Cannot translate UEFI configuration table pointer to physical address.",
+        );
+        return;
+    };
+
+    let Ok((cfg_ptr, _)) =
+        crate::pci::mmio::map_limine_slice::<crate::efi::EfiConfigurationTable>(phys, entries)
+    else {
+        line(io, "Failed to map UEFI configuration table entries.");
+        return;
+    };
+
+    let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
+    for (index, entry) in slice.iter().enumerate() {
+        let idx = alloc::format!("{}", index);
+        let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
+        let guid = entry.vendor_guid.fmt_canonical();
+        let ptr = alloc::format!("0x{:016X}", entry.vendor_table as u64);
+        emit_table_row(io, &cfg_cols, &[&idx, &guid, name, &ptr]);
     }
 }
 
@@ -1070,6 +1150,54 @@ pub(crate) fn build_dump_text() -> String {
     }
     writeln!(out).unwrap();
 
+    writeln!(out, "=== MCFG ===").unwrap();
+    if let Some(tables) = crate::efi::acpi::ensure_tables() {
+        if let Some(mcfg) = tables.find_table::<Mcfg>() {
+            writeln!(out, "MCFG @ 0x{:X}", mcfg.physical_start).unwrap();
+            writeln!(
+                out,
+                "{:4}  {:7}  {:18}  {:18}  {:10}",
+                "Seg", "Bus", "ECAM Base", "ECAM End", "Size"
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "{:-<4}  {:-<7}  {:-<18}  {:-<18}  {:-<10}",
+                "", "", "", "", ""
+            )
+            .unwrap();
+
+            let mut count = 0usize;
+            for entry in mcfg.entries() {
+                count += 1;
+                let segment = entry.pci_segment_group;
+                let bus_start = entry.bus_number_start;
+                let bus_end = entry.bus_number_end;
+                let base_addr = entry.base_address;
+                let bus_span = (bus_end as u64)
+                    .saturating_sub(bus_start as u64)
+                    .saturating_add(1);
+                let bytes = bus_span << 20;
+                let end = base_addr.saturating_add(bytes).saturating_sub(1);
+                writeln!(
+                    out,
+                    "{:4}  {:3}-{:3}  0x{:016X}  0x{:016X}  0x{:X}",
+                    segment, bus_start, bus_end, base_addr, end, bytes
+                )
+                .unwrap();
+            }
+
+            if count == 0 {
+                writeln!(out, "No ECAM regions listed in MCFG").unwrap();
+            }
+        } else {
+            writeln!(out, "MCFG table not found").unwrap();
+        }
+    } else {
+        writeln!(out, "No ACPI tables found").unwrap();
+    }
+    writeln!(out).unwrap();
+
     writeln!(out, "=== UEFI Tables ===").unwrap();
     if let Some(st) = crate::efi::system_table() {
         let st_revision = st.hdr.revision;
@@ -1094,24 +1222,35 @@ pub(crate) fn build_dump_text() -> String {
         .unwrap();
         writeln!(out, "{:-<6}  {:-<40}  {:-<24}  {:-<18}", "", "", "", "").unwrap();
 
-        if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr)
-            && let Ok((cfg_ptr, _)) = crate::pci::mmio::map_limine_slice::<
+        if entries == 0 {
+            writeln!(out, "No UEFI configuration tables reported").unwrap();
+        } else if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr) {
+            if let Ok((cfg_ptr, _)) = crate::pci::mmio::map_limine_slice::<
                 crate::efi::EfiConfigurationTable,
             >(phys, entries)
-        {
-            let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
-            for (index, entry) in slice.iter().enumerate() {
-                let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
-                writeln!(
-                    out,
-                    "{:6}  {}  {:24}  0x{:016X}",
-                    index,
-                    entry.vendor_guid.fmt_canonical(),
-                    name,
-                    entry.vendor_table as u64
-                )
-                .unwrap();
+            {
+                let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
+                for (index, entry) in slice.iter().enumerate() {
+                    let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
+                    writeln!(
+                        out,
+                        "{:6}  {}  {:24}  0x{:016X}",
+                        index,
+                        entry.vendor_guid.fmt_canonical(),
+                        name,
+                        entry.vendor_table as u64
+                    )
+                    .unwrap();
+                }
+            } else {
+                writeln!(out, "Failed to map UEFI configuration tables").unwrap();
             }
+        } else {
+            writeln!(
+                out,
+                "Cannot translate UEFI configuration table pointer to physical address"
+            )
+            .unwrap();
         }
     } else {
         writeln!(out, "No UEFI system table found").unwrap();
@@ -1399,7 +1538,11 @@ pub(crate) fn try_parse(
         Some("ssdt") if ensure_no_args(io, args, "tlb: usage `tlb ssdt`") => cmd_tlb_ssdt(io),
         Some("uefi") if ensure_no_args(io, args, "tlb: usage `tlb uefi`") => cmd_tlb_uefi(io),
         Some("x2apic") if ensure_no_args(io, args, "tlb: usage `tlb x2apic`") => cmd_tlb_x2apic(io),
-        Some("usb") if ensure_no_args(io, args, "tlb: usage `tlb usb`") => cmd_tlb_usb(io),
+        Some("usb") => match args.next() {
+            None => cmd_tlb_usb(io),
+            Some("probe") if args.next().is_none() => super::probe::cmd_usb_status(io),
+            Some(_) => line(io, "tlb: usage `tlb usb [probe]`"),
+        },
         Some("dump") if ensure_no_args(io, args, "tlb: usage `tlb dump`") => cmd_tlb_dump(io),
         Some(_) => line(io, TLB_USAGE),
     }

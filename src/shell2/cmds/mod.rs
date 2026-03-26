@@ -12,6 +12,7 @@ pub(crate) mod format;
 pub(crate) mod hv;
 pub(crate) mod install;
 pub(crate) mod net;
+pub(crate) mod probe;
 pub(crate) mod run;
 pub(crate) mod set;
 pub(crate) mod smp;

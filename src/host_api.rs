@@ -8,24 +8,6 @@ use v::{vgfx, vshell};
 
 const LED_TOOL_MAX_PAYLOAD_BYTES: usize = 2048;
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_browser_debug_logs_enabled() -> u32 {
-    if crate::logflag::BROWSER_VM_DEBUG_LOGS {
-        1
-    } else {
-        0
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_browser_html_preview_logs_enabled() -> u32 {
-    if crate::logflag::BROWSER_HTML_PREVIEW_LOGS {
-        1
-    } else {
-        0
-    }
-}
-
 #[inline]
 fn js_int32(v: i32) -> qjs::JSValue {
     qjs::JSValue {
@@ -869,7 +851,7 @@ unsafe extern "C" fn trueos_xhci_hid_set_report_js(
 ///
 /// Registered via `trueos_qjs::host_api_hook::set_context_init_hook` at boot.
 /// This is the kernel side of the QJS host API surface: uart, shell, gfx, etc.
-pub unsafe fn install(ctx: *mut qjs::JSContext) {
+pub(crate) unsafe fn install(ctx: *mut qjs::JSContext) {
     if ctx.is_null() {
         return;
     }
