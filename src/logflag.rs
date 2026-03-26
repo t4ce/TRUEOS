@@ -42,6 +42,8 @@ pub(crate) const XHCI_TRACE_EVENT_TRBS: bool = false;
 pub(crate) static USB_ENUM_ROOT_SLOT_CTX_ONCE: AtomicBool = AtomicBool::new(false);
 pub(crate) static USB_ENUM_ROOT_ADDRDEV_FAIL_ONCE: AtomicBool = AtomicBool::new(false);
 
+pub(crate) const NVME_VERBOSE: bool = true;
+
 pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();

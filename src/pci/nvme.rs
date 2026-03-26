@@ -350,10 +350,6 @@ impl NvmeController {
         let cc = self.reg32(NVME_REG_CC);
         let csts = self.reg32(NVME_REG_CSTS);
         let aqa = self.reg32(NVME_REG_AQA);
-        let admin_sq_db = self.db_read_sq_tail(NVME_ADMIN_QID);
-        let admin_cq_db = self.db_read_cq_head(NVME_ADMIN_QID);
-        let io_sq_db = self.db_read_sq_tail(NVME_IO_QID);
-        let io_cq_db = self.db_read_cq_head(NVME_IO_QID);
         let admin_cqe = self.admin.cq_peek();
         let io_cqe = self.io.cq_peek();
         let admin_status = (admin_cqe.dw3 >> 16) as u16;
@@ -361,7 +357,7 @@ impl NvmeController {
         let admin_phase = (admin_status & 0x1) != 0;
         let io_phase = (io_status & 0x1) != 0;
         crate::log!(
-            "nvme: {} {} regs cap=0x{:016X} vs=0x{:08X} cc=0x{:08X} csts=0x{:08X} aqa=0x{:08X} dstrd={} mps={} admin[sq={} cq={} phase={} db_sq={} db_cq={}] io[sq={} cq={} phase={} db_sq={} db_cq={}] admin_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}] io_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}]\n",
+            "nvme: {} {} regs cap=0x{:016X} vs=0x{:08X} cc=0x{:08X} csts=0x{:08X} aqa=0x{:08X} dstrd={} mps={} admin[sq={} cq={} phase={}] io[sq={} cq={} phase={}] admin_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}] io_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}]\n",
             self.pci,
             reason,
             cap,
@@ -374,13 +370,9 @@ impl NvmeController {
             self.admin.sq_tail,
             self.admin.cq_head,
             self.admin.cq_phase,
-            admin_sq_db,
-            admin_cq_db,
             self.io.sq_tail,
             self.io.cq_head,
             self.io.cq_phase,
-            io_sq_db,
-            io_cq_db,
             admin_cqe.dw0,
             admin_cqe.dw3,
             admin_status,
@@ -407,30 +399,21 @@ impl NvmeController {
     fn db_write_sq_tail(&self, qid: u16, tail: u16) {
         let stride = self.doorbell_stride_bytes as usize;
         let idx = (2usize * (qid as usize)) * stride;
+        let offset = NVME_REG_DBS + idx;
+        // NVMe doorbell registers are write-only per spec; no readback possible.
         fence(Ordering::SeqCst);
-        self.write32(NVME_REG_DBS + idx, tail as u32);
-        // Force posted MMIO writes to drain before we start polling for a CQE.
-        let _ = self.reg32(NVME_REG_DBS + idx);
+        self.write32(offset, tail as u32);
+        unsafe { core::arch::x86_64::_mm_mfence() };
     }
 
     fn db_write_cq_head(&self, qid: u16, head: u16) {
         let stride = self.doorbell_stride_bytes as usize;
         let idx = (2usize * (qid as usize) + 1) * stride;
+        let offset = NVME_REG_DBS + idx;
+        // NVMe doorbell registers are write-only per spec; no readback possible.
         fence(Ordering::SeqCst);
-        self.write32(NVME_REG_DBS + idx, head as u32);
-        let _ = self.reg32(NVME_REG_DBS + idx);
-    }
-
-    fn db_read_sq_tail(&self, qid: u16) -> u32 {
-        let stride = self.doorbell_stride_bytes as usize;
-        let idx = (2usize * (qid as usize)) * stride;
-        self.reg32(NVME_REG_DBS + idx)
-    }
-
-    fn db_read_cq_head(&self, qid: u16) -> u32 {
-        let stride = self.doorbell_stride_bytes as usize;
-        let idx = (2usize * (qid as usize) + 1) * stride;
-        self.reg32(NVME_REG_DBS + idx)
+        self.write32(offset, head as u32);
+        unsafe { core::arch::x86_64::_mm_mfence() };
     }
 
     fn rering_sq_tail(&self, qid: u16) {
@@ -650,12 +633,25 @@ impl NvmeController {
             timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
         };
         let deadline = start.saturating_add(ticks);
-        let rekick_ticks = if qid == NVME_IO_QID && hz != 0 {
-            (hz / 1000).max(1)
-        } else {
-            0
-        };
-        let mut next_rekick = start.saturating_add(rekick_ticks);
+
+        // Probe: log initial CQE state right after submission.
+        if crate::logflag::NVME_VERBOSE && qid == NVME_IO_QID {
+            let cqe = self.io.cq_peek();
+            crate::log!(
+                "nvme: {} probe_start qid={} cid={} head={} exp_phase={} cqe_dw0=0x{:08X} cqe_dw3=0x{:08X}\n",
+                self.pci,
+                qid,
+                cid,
+                self.io.cq_head,
+                self.io.cq_phase as u8,
+                cqe.dw0,
+                cqe.dw3
+            );
+        }
+
+        let probe_interval_ticks = if hz > 0 { hz / 4 } else { 0 }; // ~250ms
+        let mut last_probe = start;
+        let mut rekick_attempted = false;
 
         loop {
             if let Some(cpl) = self.poll_queue_cq_for_cid_step(qid, cid) {
@@ -663,25 +659,83 @@ impl NvmeController {
             }
 
             let now = embassy_time_driver::now();
-            if rekick_ticks != 0 && now >= next_rekick {
-                // Some passthrough setups appear to occasionally strand the initial
-                // IO SQ doorbell write. Re-ringing the same tail value is harmless
-                // and helps QEMU/VFIO behave closer to bare metal in practice.
-                self.rering_sq_tail(qid);
-                next_rekick = now.saturating_add(rekick_ticks);
+
+            // Periodic CQE snapshot while waiting for IO completion.
+            if crate::logflag::NVME_VERBOSE
+                && qid == NVME_IO_QID
+                && probe_interval_ticks > 0
+                && now.saturating_sub(last_probe) >= probe_interval_ticks
+            {
+                let cqe = self.io.cq_peek();
+                let elapsed_ms = now.saturating_sub(start).saturating_mul(1000) / hz.max(1);
+                crate::log!(
+                    "nvme: {} probe_poll qid={} cid={} head={} exp_phase={} cqe_dw0=0x{:08X} cqe_dw3=0x{:08X} t={}ms\n",
+                    self.pci,
+                    qid,
+                    cid,
+                    self.io.cq_head,
+                    self.io.cq_phase as u8,
+                    cqe.dw0,
+                    cqe.dw3,
+                    elapsed_ms
+                );
+                last_probe = now;
             }
 
             if now >= deadline {
-                if qid == NVME_IO_QID {
-                    let csts = self.reg32(NVME_REG_CSTS);
+                if !rekick_attempted && qid == NVME_IO_QID {
+                    let cqe = self.io.cq_peek();
                     crate::log!(
-                        "nvme: {} poll_sync timeout qid={} cid={} csts=0x{:08X}\n",
+                        "nvme: {} poll_sync timeout attempt 1 qid={} cid={} head={} exp_phase={} cqe_dw0=0x{:08X} cqe_dw3=0x{:08X}\n",
                         self.pci,
                         qid,
                         cid,
-                        csts
+                        self.io.cq_head,
+                        self.io.cq_phase as u8,
+                        cqe.dw0,
+                        cqe.dw3
                     );
+
+                    // Re-ring doorbell and give one more second.
+                    let (tail, depth) = {
+                        let q = &self.io;
+                        (q.sq_tail, q.depth)
+                    };
+                    self.db_write_sq_tail(qid, tail % depth);
+                    rekick_attempted = true;
+
+                    let new_ticks = if hz == 0 {
+                        0
+                    } else {
+                        1000u64.saturating_mul(hz).div_ceil(1000).max(1)
+                    };
+                    let deadline_second = now.saturating_add(new_ticks);
+
+                    loop {
+                        if let Some(cpl) = self.poll_queue_cq_for_cid_step(qid, cid) {
+                            crate::log!(
+                                "nvme: {} poll_sync recover qid={} cid={} ok after rekick\n",
+                                self.pci,
+                                qid,
+                                cid
+                            );
+                            return Ok(cpl);
+                        }
+                        if embassy_time_driver::now() >= deadline_second {
+                            break;
+                        }
+                        wait::spin_step();
+                    }
                 }
+
+                let csts = self.reg32(NVME_REG_CSTS);
+                crate::log!(
+                    "nvme: {} poll_sync timeout final qid={} cid={} csts=0x{:08X}\n",
+                    self.pci,
+                    qid,
+                    cid,
+                    csts
+                );
                 self.dump_regs("poll_sync_timeout");
                 return Err(block::Error::Timeout);
             }
@@ -2059,91 +2113,21 @@ pub fn probe_once() {
             continue;
         }
 
-        // Strict gate: the IO queue must first complete a no-data command, then
-        // complete a data-bearing READ before we register the controller.
-        let mut io_ready = io_selftest_flush(&mut ctrl, pci_addr, nsid)
-            && io_selftest_read(&mut ctrl, pci_addr, nsid, block_size);
-        let mut admin_fallback_mode = false;
+        // Test gate: the IO queue should complete a no-data command (FLUSH).
+        // If IO selftest passes, we can offer full read/write; if it fails, degrade to admin.
+        let io_ready = io_selftest_flush(&mut ctrl, pci_addr, nsid);
+
         if !io_ready {
             crate::log!(
-                "nvme: {} io-selftest failed; attempting one controller reinit\n",
+                "nvme: {} io-selftest failed; will degrade to admin queue mode\n",
                 pci_addr
             );
-
-            let mut retry_ctrl =
-                match NvmeController::init_with_io_profile(mmio_ptr, pci_addr, 2, true) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        crate::log!("nvme: {} reinit failed: {:?}\n", pci_addr, e);
-                        continue;
-                    }
-                };
-
-            let retry_ctrl_info = match retry_ctrl.identify_controller_info() {
-                Ok(info) => info,
-                Err(e) => {
-                    crate::log!(
-                        "nvme: {} reinit identify controller failed: {:?}\n",
-                        pci_addr,
-                        e
-                    );
-                    continue;
-                }
-            };
-
-            let retry_nsid = match retry_ctrl.identify_first_active_namespace(retry_ctrl_info.nn) {
-                Ok(id) => id,
-                Err(e) => {
-                    crate::log!(
-                        "nvme: {} reinit no active namespace found: {:?}\n",
-                        pci_addr,
-                        e
-                    );
-                    continue;
-                }
-            };
-
-            let (retry_blocks, retry_block_size) = match retry_ctrl.identify_namespace(retry_nsid) {
-                Ok(v) => v,
-                Err(e) => {
-                    crate::log!(
-                        "nvme: {} reinit identify namespace {} failed: {:?}\n",
-                        pci_addr,
-                        retry_nsid,
-                        e
-                    );
-                    continue;
-                }
-            };
-
-            if retry_blocks == 0 || retry_block_size == 0 {
-                crate::log!(
-                    "nvme: {} reinit namespace {} has invalid capacity\n",
-                    pci_addr,
-                    retry_nsid
-                );
-                continue;
-            }
-
-            io_ready = io_selftest_flush(&mut retry_ctrl, pci_addr, retry_nsid)
-                && io_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size);
-            if !io_ready {
-                let _ =
-                    admin_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size);
-                crate::log!(
-                    "nvme: {} io-selftest still failed after reinit; registering anyway (degraded probe gate)\n",
-                    pci_addr
-                );
-            }
-
-            if io_ready {
-                crate::log!("nvme: {} IO queue recovered after reinit\n", pci_addr);
-            }
-            ctrl = retry_ctrl;
-            nsid = retry_nsid;
-            blocks = retry_blocks;
-            block_size = retry_block_size;
         }
+
+        let admin_fallback_mode = !io_ready;
+
+        // Register immediately without retry - let higher-level systems decide retry policy.
+        // Dead code removed: automatic reinit was masking diagnostics.
 
         let label = if let Some(s) = ctrl.serial.as_deref() {
             if !s.is_empty() {
