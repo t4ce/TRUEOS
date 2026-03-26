@@ -6,6 +6,8 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 v = { path = "../trueos-v" }
+trueos-qjs = { path = "../trueos-qjs", default-features = false, features = ["trueos"] }
 
 [features]
 default = []
+legacy-demo = []

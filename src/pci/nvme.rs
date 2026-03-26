@@ -1409,6 +1409,18 @@ struct NvmeBlockDevice {
 
 unsafe impl Send for NvmeBlockDevice {}
 
+#[derive(Clone)]
+pub(crate) struct NvmeDiagController {
+    pub pci: block::PciAddress,
+    pub bar_base: u64,
+    pub bar_assigned: bool,
+    pub cap: Option<u64>,
+    pub vs: Option<u32>,
+    pub cc: Option<u32>,
+    pub csts: Option<u32>,
+    pub registered: bool,
+}
+
 impl NvmeBlockDevice {
     fn is_small_probe_read(lba: u64, blocks: usize) -> bool {
         blocks <= 2 && lba <= 2
@@ -1658,6 +1670,80 @@ fn is_nvme(dev: &crate::pci::PciDevice) -> bool {
     // even if firmware reports a non-standard programming interface.
     let samsung_sm961_family = dev.vendor == 0x144D && dev.device == 0xA804;
     class_match || samsung_sm961_family
+}
+
+fn pci_matches(a: &block::PciAddress, b: &block::PciAddress) -> bool {
+    a.bus == b.bus && a.slot == b.slot && a.function == b.function
+}
+
+pub(crate) fn diag_snapshot() -> Vec<NvmeDiagController> {
+    crate::pci::enumerate_impl();
+
+    let registered = crate::disc::block::devices()
+        .into_iter()
+        .filter(|info| info.kind == block::DeviceKind::Nvme)
+        .filter_map(|info| info.pci)
+        .collect::<Vec<_>>();
+
+    let mut out = Vec::new();
+    crate::pci::with_devices(|list| {
+        for dev in list {
+            if !is_nvme(dev) {
+                continue;
+            }
+
+            let (bar_lo, bar_hi) =
+                crate::pci::read_bar0_raw_legacy(dev.bus, dev.slot, dev.function);
+            let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+            let mut base = (bar_lo & 0xFFFF_FFF0) as u64;
+            if is_64 {
+                base |= (bar_hi.unwrap_or(0) as u64) << 32;
+            }
+            let bar_assigned = base != 0 && base < 0x40_0000_0000;
+
+            let (cap, vs, cc, csts) = if bar_assigned {
+                match mmio::map_mmio_region(base, 0x4000) {
+                    Ok(mmio_ptr) => unsafe {
+                        (
+                            Some(read_volatile(
+                                mmio_ptr.as_ptr().add(NVME_REG_CAP) as *const u64
+                            )),
+                            Some(read_volatile(
+                                mmio_ptr.as_ptr().add(NVME_REG_VS) as *const u32
+                            )),
+                            Some(read_volatile(
+                                mmio_ptr.as_ptr().add(NVME_REG_CC) as *const u32
+                            )),
+                            Some(read_volatile(
+                                mmio_ptr.as_ptr().add(NVME_REG_CSTS) as *const u32
+                            )),
+                        )
+                    },
+                    Err(_) => (None, None, None, None),
+                }
+            } else {
+                (None, None, None, None)
+            };
+
+            let pci = block::PciAddress::new(dev.bus, dev.slot, dev.function);
+            let registered = registered
+                .iter()
+                .any(|registered_pci| pci_matches(registered_pci, &pci));
+
+            out.push(NvmeDiagController {
+                pci,
+                bar_base: base,
+                bar_assigned,
+                cap,
+                vs,
+                cc,
+                csts,
+                registered,
+            });
+        }
+    });
+
+    out
 }
 
 fn io_selftest_read(
@@ -1960,13 +2046,18 @@ pub fn probe_once() {
 
         if !io_ready {
             crate::log!(
-                "nvme: {} io-selftest failed; best-effort reset + re-init attempt\n",
+                "nvme: {} io-selftest failed; best-effort reset + IRQ-armed IO CQ re-init attempt\n",
                 pci_addr
             );
 
             let _ = ctrl.set_enabled(false);
 
-            match NvmeController::init(mmio_ptr, pci_addr) {
+            match NvmeController::init_with_io_profile(
+                mmio_ptr,
+                pci_addr,
+                NvmeController::IO_Q_DEPTH_DEFAULT,
+                true,
+            ) {
                 Ok(mut retry_ctrl) => {
                     if let Ok(retry_info) = retry_ctrl.identify_controller_info()
                         && let Ok(retry_nsid) =
@@ -1979,7 +2070,7 @@ pub fn probe_once() {
                         let retry_ready = io_selftest_flush(&mut retry_ctrl, pci_addr, retry_nsid);
                         if retry_ready {
                             crate::log!(
-                                "nvme: {} best-effort reset recovered IO queue\n",
+                                "nvme: {} best-effort IRQ-armed retry recovered IO queue\n",
                                 pci_addr
                             );
                             ctrl = retry_ctrl;

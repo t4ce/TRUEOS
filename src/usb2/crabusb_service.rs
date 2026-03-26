@@ -28,8 +28,6 @@ static INITIAL_SNAPSHOT_LOGGED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static EVENT_HANDLER_READY: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
-static INITIAL_SCOUT_DONE: [AtomicBool; MAX_XHCI_CONTROLLERS] =
-    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static EVENT_HANDLER: [Mutex<Option<EventHandler>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
 static PROBE_REQUESTED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
@@ -55,6 +53,17 @@ static PROBE_FAIL_STREAK: [AtomicU32; MAX_XHCI_CONTROLLERS] =
 static TLB_DEVICES: [Mutex<Vec<super::TlbUsbDevice>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
 
+#[derive(Clone, Copy)]
+pub(super) struct UsbRuntimeDiag {
+    pub event_handler_ready: bool,
+    pub probe_requested: bool,
+    pub root_port_change_seen: bool,
+    pub empty_probe_streak: u32,
+    pub probe_fail_streak: u32,
+    pub last_probe_state: &'static str,
+    pub last_probe_device_count: u32,
+}
+
 const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
 const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
 const TRUEKEY_VENDOR_ID: u16 = 0x303A;
@@ -62,6 +71,17 @@ const TRUEKEY_PRODUCT_ID: u16 = 0x1001;
 const TRUEKEY_STREAM_CHUNK: usize = 512;
 const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 const CRABUSB_PROBE_TIMEOUT_MS: u64 = 2500;
+
+fn probe_state_name(code: u32) -> &'static str {
+    match code {
+        0 => "init",
+        1 => "ok",
+        2 => "empty",
+        3 => "error",
+        4 => "timeout",
+        _ => "unknown",
+    }
+}
 
 #[derive(Copy, Clone)]
 struct BounceMapping {
@@ -2439,7 +2459,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
             }
         },
         crate::wait::Either::Second(_) => {
-            LAST_PROBE_STATE[controller_id].store(3, Ordering::Release);
+            LAST_PROBE_STATE[controller_id].store(4, Ordering::Release);
             LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
             let fail_streak = PROBE_FAIL_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
             crate::log!(
@@ -2481,6 +2501,12 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
     {
         crate::wait::Either::First(res) => match res {
             Ok(devices) => {
+                LAST_PROBE_DEVICE_COUNT[info.index].store(devices.len() as u32, Ordering::Release);
+                if devices.is_empty() {
+                    LAST_PROBE_STATE[info.index].store(2, Ordering::Release);
+                } else {
+                    LAST_PROBE_STATE[info.index].store(1, Ordering::Release);
+                }
                 update_tlb_devices(info.index, &devices);
                 crate::log!("crabusb: scout devices={}\n", devices.len());
                 for (dev_idx, dev) in devices.iter().enumerate() {
@@ -2542,9 +2568,15 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                     log_opened_device_graph(host, dev_idx, dev).await;
                 }
             }
-            Err(err) => crate::log!("crabusb: scout probe failed: {:?}\n", err),
+            Err(err) => {
+                LAST_PROBE_STATE[info.index].store(3, Ordering::Release);
+                LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
+                crate::log!("crabusb: scout probe failed: {:?}\n", err);
+            }
         },
         crate::wait::Either::Second(_) => {
+            LAST_PROBE_STATE[info.index].store(4, Ordering::Release);
+            LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
             crate::log!(
                 "crabusb: scout probe timeout after {}ms\n",
                 CRABUSB_PROBE_TIMEOUT_MS
@@ -2569,13 +2601,6 @@ pub async fn event_pump_task(controller_id: usize) {
     loop {
         if !EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire) {
             Timer::after(EmbassyDuration::from_millis(10)).await;
-            continue;
-        }
-
-        // Lifecycle guard: keep early probe/snapshot deterministic by deferring
-        // event consumption until initial scout has finished.
-        if !INITIAL_SCOUT_DONE[controller_id].load(Ordering::Acquire) {
-            Timer::after(EmbassyDuration::from_millis(2)).await;
             continue;
         }
 
@@ -2677,10 +2702,8 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         LAST_PROBE_STATE[info.index].store(0, Ordering::Release);
         LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
         PROBE_FAIL_STREAK[info.index].store(0, Ordering::Release);
-        INITIAL_SCOUT_DONE[info.index].store(false, Ordering::Release);
         TLB_DEVICES[info.index].lock().clear();
         crab_scout_once(&mut host, info, &spawner).await;
-        INITIAL_SCOUT_DONE[info.index].store(true, Ordering::Release);
 
         let mut idle_ticks = 0u32;
         loop {
@@ -2763,6 +2786,7 @@ pub(super) fn diag_probe_error(controller_id: usize) -> Option<&'static str> {
     match LAST_PROBE_STATE[controller_id].load(Ordering::Acquire) {
         2 => Some("empty"),
         3 => Some("probe_failed"),
+        4 => Some("timeout"),
         _ => None,
     }
 }
@@ -2773,4 +2797,42 @@ pub(super) fn diag_probe_device_count(controller_id: usize) -> Option<u32> {
     }
 
     Some(LAST_PROBE_DEVICE_COUNT[controller_id].load(Ordering::Acquire))
+}
+
+pub(super) fn request_probe(controller_id: usize) -> bool {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return false;
+    }
+
+    PROBE_REQUESTED[controller_id].store(true, Ordering::Release);
+    true
+}
+
+pub(super) fn request_rebind(controller_id: usize) -> bool {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return false;
+    }
+
+    crate::log!(
+        "crabusb: live rebind requested on controller {}\n",
+        controller_id
+    );
+    uninstall_event_handler(controller_id);
+    true
+}
+
+pub(super) fn runtime_diag(controller_id: usize) -> Option<UsbRuntimeDiag> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return None;
+    }
+
+    Some(UsbRuntimeDiag {
+        event_handler_ready: EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire),
+        probe_requested: PROBE_REQUESTED[controller_id].load(Ordering::Acquire),
+        root_port_change_seen: ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire),
+        empty_probe_streak: EMPTY_PROBE_STREAK[controller_id].load(Ordering::Acquire),
+        probe_fail_streak: PROBE_FAIL_STREAK[controller_id].load(Ordering::Acquire),
+        last_probe_state: probe_state_name(LAST_PROBE_STATE[controller_id].load(Ordering::Acquire)),
+        last_probe_device_count: LAST_PROBE_DEVICE_COUNT[controller_id].load(Ordering::Acquire),
+    })
 }
