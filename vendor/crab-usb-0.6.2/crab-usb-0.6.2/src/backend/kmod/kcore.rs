@@ -70,6 +70,7 @@ impl Core {
         info!("crabusb/kcore: _probe_devices begin hubs={}", hub_ids.len());
 
         for id in hub_ids {
+            crate::debug_set_usb_probe_progress(1, 0, 0, 0, id.index() as u32);
             let addr_infos = self.hub_changed_ports(id).await?;
             let parent_hub_id = self.hubs.get(id).unwrap().backend.slot_id();
             info!(
@@ -90,14 +91,28 @@ impl Core {
                     port_id: addr_info.port_id,
                     infos: self.hub_infos(),
                 };
+                crate::debug_set_usb_probe_progress(
+                    2,
+                    info.root_port_id,
+                    info.port_id,
+                    0,
+                    u32::from(info.port_speed.to_xhci_slot_value()),
+                );
 
                 info!(
                     "crabusb/kcore: calling new_addressed_device root_port={} port={} speed={:?}",
                     info.root_port_id, info.port_id, info.port_speed
                 );
                 let reopen_info = info.clone();
-                let device = self.backend.new_addressed_device(info).await?;
-
+                let device = match self.backend.new_addressed_device(info).await {
+                    Ok(device) => device,
+                    Err(err) => {
+                        if let Some(hub) = self.hubs.get_mut(id) {
+                            hub.backend.rearm_port(addr_info.port_id);
+                        }
+                        return Err(err);
+                    }
+                };
                 let device_id = device.id();
                 let desc = device.descriptor();
                 info!(

@@ -91,6 +91,12 @@ impl HubOp for HubDevice {
     fn changed_ports<'a>(&'a mut self) -> BoxFuture<'a, Result<Vec<PortChangeInfo>, USBError>> {
         self.changed_ports().boxed()
     }
+
+    fn rearm_port(&mut self, port_id: u8) {
+        if let Some(port) = self.data.ports.iter_mut().find(|port| port.id == port_id) {
+            port.state = PortState::Uninit;
+        }
+    }
 }
 
 impl HubDevice {
