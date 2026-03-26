@@ -563,7 +563,15 @@ fn cmd_tlb_acpi(io: &'static dyn ShellBackend2) {
     ];
     emit_table_header(io, &cols);
 
+    let mut total_bytes: u64 = 0;
+    let mut ssdt_count: usize = 0;
+    let mut largest_sig = String::new();
+    let mut largest_addr: u64 = 0;
+    let mut largest_len: u64 = 0;
+    let mut sig_stats: Vec<(String, usize, u64)> = Vec::new();
+
     for (phys, hdr) in tables.table_headers() {
+        let sig = hdr.signature.as_str();
         let addr = alloc::format!("0x{:08X}", phys);
         let length = hdr.length;
         let revision = hdr.revision;
@@ -571,11 +579,70 @@ fn cmd_tlb_acpi(io: &'static dyn ShellBackend2) {
         let rev = alloc::format!("{}", revision);
         let oem = core::str::from_utf8(&hdr.oem_id).unwrap_or("      ");
         let table_id = core::str::from_utf8(&hdr.oem_table_id).unwrap_or("        ");
-        emit_table_row(
+        total_bytes = total_bytes.saturating_add(length as u64);
+        if sig == "SSDT" {
+            ssdt_count = ssdt_count.saturating_add(1);
+        }
+        if (length as u64) > largest_len {
+            largest_len = length as u64;
+            largest_addr = phys as u64;
+            largest_sig = sig.to_string();
+        }
+        if let Some((_, count, bytes)) = sig_stats.iter_mut().find(|(name, _, _)| name == sig) {
+            *count = count.saturating_add(1);
+            *bytes = bytes.saturating_add(length as u64);
+        } else {
+            sig_stats.push((sig.to_string(), 1, length as u64));
+        }
+        emit_table_row(io, &cols, &[sig, &addr, &len, &rev, oem, table_id]);
+    }
+
+    blank(io);
+    line(
+        io,
+        alloc::format!(
+            "ACPI summary: tables={} total_bytes=0x{:X} ssdt_count={}",
+            sig_stats
+                .iter()
+                .fold(0usize, |acc, (_, count, _)| acc.saturating_add(*count)),
+            total_bytes,
+            ssdt_count
+        )
+        .as_str(),
+    );
+    if largest_len != 0 {
+        line(
             io,
-            &cols,
-            &[hdr.signature.as_str(), &addr, &len, &rev, oem, table_id],
+            alloc::format!(
+                "ACPI largest: {} @ 0x{:08X} len=0x{:X}",
+                largest_sig,
+                largest_addr as u64,
+                largest_len
+            )
+            .as_str(),
         );
+    }
+
+    sig_stats.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    let stats_cols = [
+        Column {
+            header: "Sig",
+            width: 10,
+        },
+        Column {
+            header: "Count",
+            width: 6,
+        },
+        Column {
+            header: "Bytes",
+            width: 12,
+        },
+    ];
+    emit_table_header(io, &stats_cols);
+    for (sig, count, bytes) in sig_stats {
+        let count_s = alloc::format!("{}", count);
+        let bytes_s = alloc::format!("0x{:X}", bytes);
+        emit_table_row(io, &stats_cols, &[&sig, &count_s, &bytes_s]);
     }
 }
 
@@ -1133,16 +1200,57 @@ pub(crate) fn build_dump_text() -> String {
     if let Some(tables) = crate::efi::acpi::ensure_tables() {
         writeln!(out, "{:10}  {:18}  {:10}", "Signature", "Address", "Length").unwrap();
         writeln!(out, "{:-<10}  {:-<18}  {:-<10}", "", "", "").unwrap();
+        let mut total_bytes: u64 = 0;
+        let mut ssdt_count: usize = 0;
+        let mut largest_sig = String::new();
+        let mut largest_addr: u64 = 0;
+        let mut largest_len: u64 = 0;
+        let mut sig_stats: Vec<(String, usize, u64)> = Vec::new();
         for (phys, hdr) in tables.table_headers() {
+            let sig = hdr.signature.as_str();
             let length = hdr.length;
+            total_bytes = total_bytes.saturating_add(length as u64);
+            if sig == "SSDT" {
+                ssdt_count = ssdt_count.saturating_add(1);
+            }
+            if (length as u64) > largest_len {
+                largest_len = length as u64;
+                largest_addr = phys as u64;
+                largest_sig = sig.to_string();
+            }
+            if let Some((_, count, bytes)) = sig_stats.iter_mut().find(|(name, _, _)| name == sig) {
+                *count = count.saturating_add(1);
+                *bytes = bytes.saturating_add(length as u64);
+            } else {
+                sig_stats.push((sig.to_string(), 1, length as u64));
+            }
+            writeln!(out, "{:10}  0x{:016X}  0x{:X}", sig, phys, length).unwrap();
+        }
+        writeln!(out).unwrap();
+        writeln!(
+            out,
+            "Summary: tables={} total_bytes=0x{:X} ssdt_count={}",
+            sig_stats
+                .iter()
+                .fold(0usize, |acc, (_, count, _)| acc.saturating_add(*count)),
+            total_bytes,
+            ssdt_count
+        )
+        .unwrap();
+        if largest_len != 0 {
             writeln!(
                 out,
-                "{:10}  0x{:016X}  0x{:X}",
-                hdr.signature.as_str(),
-                phys,
-                length
+                "Largest: {} @ 0x{:016X} len=0x{:X}",
+                largest_sig, largest_addr, largest_len
             )
             .unwrap();
+        }
+
+        sig_stats.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+        writeln!(out, "{:10}  {:6}  {:12}", "Sig", "Count", "Bytes").unwrap();
+        writeln!(out, "{:-<10}  {:-<6}  {:-<12}", "", "", "").unwrap();
+        for (sig, count, bytes) in sig_stats {
+            writeln!(out, "{:10}  {:6}  0x{:X}", sig, count, bytes).unwrap();
         }
         writeln!(out).unwrap();
     } else {

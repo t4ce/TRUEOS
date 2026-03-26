@@ -198,11 +198,29 @@ pub(crate) fn select_top_level_disk(raw_id: u32) -> Option<DeviceHandle> {
 }
 
 pub(crate) fn collect_top_level_disk_choices() -> Vec<DiskChoice> {
-    let mut out = Vec::new();
+    use alloc::collections::BTreeSet;
+
+    let mut ids = BTreeSet::new();
+    let mut handles = Vec::new();
     for handle in block::device_handles().into_iter() {
-        if !is_user_visible_top_level(&handle) {
-            continue;
+        if is_user_visible_top_level(&handle) && ids.insert(handle.id().raw()) {
+            handles.push(handle);
         }
+    }
+
+    // Also include mounted TRUEOSFS roots so interactive admin flows keep seeing
+    // a just-created/mounted disk even if its visibility metadata differs.
+    for root in crate::r::fs::trueosfs::list_roots() {
+        if let Some(handle) = block::device_handle(root.disk_id)
+            && handle.info().parent.is_none()
+            && ids.insert(handle.id().raw())
+        {
+            handles.push(handle);
+        }
+    }
+
+    let mut out = Vec::new();
+    for handle in handles.into_iter() {
         let (status, err) = crate::wait::spawn_and_wait_local(async move {
             crate::r::disc::detect::detect_physical_disk_detail(handle).await
         });
@@ -212,6 +230,8 @@ pub(crate) fn collect_top_level_disk_choices() -> Vec<DiskChoice> {
             err,
         });
     }
+
+    out.sort_by_key(|c| c.raw_id());
     out
 }
 

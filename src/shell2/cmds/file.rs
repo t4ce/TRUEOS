@@ -10,6 +10,7 @@ const MAX_DEPTH: usize = 3;
 const MAX_CHILDREN_PER_DIR: usize = 24;
 const MAX_LINES_PER_ROOT: usize = 160;
 const RAMDISK_BLOCK_SIZE: u32 = 512;
+const DEFAULT_RAMDISC_BYTES: u64 = 128 * 1024 * 1024;
 
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
@@ -31,7 +32,9 @@ fn parse_size_bytes(raw: &str) -> Option<u64> {
 
     let number = text[..digits_len].parse::<u64>().ok()?;
     let suffix = text[digits_len..].trim();
-    let mul = if suffix.is_empty() || suffix.eq_ignore_ascii_case("B") {
+    let mul = if suffix.is_empty() {
+        1_048_576u64
+    } else if suffix.eq_ignore_ascii_case("B") {
         1u64
     } else if suffix.eq_ignore_ascii_case("KB") || suffix.eq_ignore_ascii_case("K") {
         1_000u64
@@ -189,31 +192,39 @@ fn print_root_tree(io: &'static dyn ShellBackend2, root: crate::r::fs::trueosfs:
     }
 }
 
+fn root_is_browsable(disk_id: crate::disc::block::DiscId) -> bool {
+    matches!(tree_child_names(disk_id, ""), Ok(_))
+}
+
 pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
     match args.next() {
         Some("ramdisc") | Some("ramdisk") => {
-            let Some(size_arg) = args.next() else {
-                print_shell_line(
-                    io,
-                    "file ramdisc: missing size (example: `file ramdisc 1GB`)",
-                );
-                return ParseOutcome::Handled;
-            };
+            let size_arg = args.next();
             if args.next().is_some() {
                 print_usage(io);
                 return ParseOutcome::Handled;
             }
 
-            let Some(size_bytes) = parse_size_bytes(size_arg) else {
-                print_shell_line(
-                    io,
-                    "file ramdisc: invalid size (examples: 512MB, 1GB, 1024MiB)",
-                );
-                return ParseOutcome::Handled;
+            let size_bytes = match size_arg {
+                Some(raw) => match parse_size_bytes(raw) {
+                    Some(v) => v,
+                    None => {
+                        print_shell_line(
+                            io,
+                            "file ramdisc: invalid size (examples: 512MB, 1GB, 1024MiB)",
+                        );
+                        return ParseOutcome::Handled;
+                    }
+                },
+                None => DEFAULT_RAMDISC_BYTES,
             };
+
+            if size_arg.is_none() {
+                print_shell_line(io, "file ramdisc: using default size 128MiB");
+            }
 
             let label = alloc::format!("ramdisc-{}mb", size_bytes / (1024 * 1024));
             let out = crate::wait::spawn_and_wait_local(async move {
@@ -302,11 +313,29 @@ pub(crate) fn try_parse(
                 return ParseOutcome::Handled;
             }
 
-            for (index, root) in roots.into_iter().enumerate() {
-                if index > 0 {
+            let mut shown = 0usize;
+            let mut skipped = 0usize;
+
+            for root in roots.into_iter() {
+                if !root_is_browsable(root.disk_id) {
+                    skipped = skipped.saturating_add(1);
+                    continue;
+                }
+
+                if shown > 0 {
                     print_shell_line(io, "");
                 }
                 print_root_tree(io, root);
+                shown = shown.saturating_add(1);
+            }
+
+            if shown == 0 {
+                print_shell_line(io, "file: no browsable TRUEOSFS roots");
+            } else if skipped > 0 {
+                print_shell_line(
+                    io,
+                    alloc::format!("file: skipped {} unavailable root(s)", skipped).as_str(),
+                );
             }
 
             ParseOutcome::Handled

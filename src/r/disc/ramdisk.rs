@@ -1,11 +1,9 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
-use core::ptr;
 
 use crate::disc::block;
-use crate::r::disc::pmm::BigMem;
 
 pub struct RamdiskDevice {
-    backing: BigMem,
+    backing: Vec<u8>,
     block_size: u32,
     block_count: u64,
 }
@@ -41,7 +39,13 @@ impl RamdiskDevice {
             .checked_mul(bs)
             .ok_or(block::Error::InvalidParam)?;
         let len_bytes = usize::try_from(bytes).map_err(|_| block::Error::InvalidParam)?;
-        let backing = BigMem::new_zeroed(len_bytes)?;
+
+        let mut backing = Vec::new();
+        backing
+            .try_reserve_exact(len_bytes)
+            .map_err(|_| block::Error::NotReady)?;
+        backing.resize(len_bytes, 0);
+
         Ok(Self {
             backing,
             block_size,
@@ -56,13 +60,7 @@ impl RamdiskDevice {
         if stop > self.backing.len() {
             return Err(block::Error::OutOfBounds);
         }
-        unsafe {
-            ptr::copy_nonoverlapping(
-                self.backing.as_ptr().add(start),
-                dst.as_mut_ptr(),
-                dst.len(),
-            )
-        };
+        dst.copy_from_slice(&self.backing[start..stop]);
         Ok(())
     }
 
@@ -73,13 +71,7 @@ impl RamdiskDevice {
         if stop > self.backing.len() {
             return Err(block::Error::OutOfBounds);
         }
-        unsafe {
-            ptr::copy_nonoverlapping(
-                src.as_ptr(),
-                self.backing.as_mut_ptr().add(start),
-                src.len(),
-            )
-        };
+        self.backing[start..stop].copy_from_slice(src);
         Ok(())
     }
 }

@@ -4,6 +4,7 @@ use alloc::{boxed::Box, collections::VecDeque, format, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 pub mod cli;
+pub mod esp;
 pub mod srv;
 
 pub use cli::{dns, ftp, html, http, https, irc, json, ntp, ping, pop3, smtp, ws};
