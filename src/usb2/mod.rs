@@ -93,6 +93,7 @@ pub(crate) struct TlbUsbSnapshot {
     pub controllers: Vec<TlbUsbController>,
     pub devices: Vec<TlbUsbDevice>,
     pub probe_error: Option<&'static str>,
+    pub probe_device_count: Option<u32>,
 }
 
 fn decode_mmio_bar(bar_lo: u32, bar_hi: Option<u32>) -> Option<u64> {
@@ -370,6 +371,7 @@ pub(crate) fn tlb_snapshot() -> TlbUsbSnapshot {
             controllers,
             devices: Vec::new(),
             probe_error: None,
+            probe_device_count: None,
         };
     }
 
@@ -377,14 +379,23 @@ pub(crate) fn tlb_snapshot() -> TlbUsbSnapshot {
     // reprobeing a live XHCI controller here races the active crabusb BSP service.
     // Keep this passive by reading the device cache populated by the running service.
     let mut devices = Vec::new();
+    let mut probe_error = None;
+    let mut probe_device_count = None;
     for ctrl in controllers.iter() {
         devices.extend(self::crabusb_service::diag_devices(ctrl.index));
+        if probe_error.is_none() {
+            probe_error = self::crabusb_service::diag_probe_error(ctrl.index);
+        }
+        if probe_device_count.is_none() {
+            probe_device_count = self::crabusb_service::diag_probe_device_count(ctrl.index);
+        }
     }
 
     TlbUsbSnapshot {
         controllers,
         devices,
-        probe_error: None,
+        probe_error,
+        probe_device_count,
     }
 }
 
