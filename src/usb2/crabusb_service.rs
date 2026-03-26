@@ -28,6 +28,8 @@ static INITIAL_SNAPSHOT_LOGGED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static EVENT_HANDLER_READY: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static INITIAL_SCOUT_DONE: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static EVENT_HANDLER: [Mutex<Option<EventHandler>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
 static PROBE_REQUESTED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
@@ -48,6 +50,8 @@ static LAST_PROBE_STATE: [AtomicU32; MAX_XHCI_CONTROLLERS] =
     [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS]; // 0=init, 1=ok, 2=empty, 3=error
 static LAST_PROBE_DEVICE_COUNT: [AtomicU32; MAX_XHCI_CONTROLLERS] =
     [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
+static PROBE_FAIL_STREAK: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
 static TLB_DEVICES: [Mutex<Vec<super::TlbUsbDevice>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
 
@@ -57,6 +61,7 @@ const TRUEKEY_VENDOR_ID: u16 = 0x303A;
 const TRUEKEY_PRODUCT_ID: u16 = 0x1001;
 const TRUEKEY_STREAM_CHUNK: usize = 512;
 const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
+const CRABUSB_PROBE_TIMEOUT_MS: u64 = 2500;
 
 #[derive(Copy, Clone)]
 struct BounceMapping {
@@ -2320,83 +2325,137 @@ async fn log_opened_device_graph(
 }
 
 async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usize) -> bool {
-    match host.probe_devices().await {
-        Ok(devices) => {
-            if devices.is_empty() {
-                LAST_PROBE_STATE[controller_id].store(2, Ordering::Release);
-                LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
-                let streak = EMPTY_PROBE_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
-                if streak.is_multiple_of(25) {
-                    crate::log!(
-                        "crabusb: controller {} empty probe streak={} root_port_change_seen={} event_ready={}\n",
-                        controller_id,
-                        streak,
-                        ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire),
-                        EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire),
-                    );
+    match crate::wait::select2(
+        host.probe_devices(),
+        Timer::after(EmbassyDuration::from_millis(CRABUSB_PROBE_TIMEOUT_MS)),
+    )
+    .await
+    {
+        crate::wait::Either::First(res) => match res {
+            Ok(devices) => {
+                if devices.is_empty() {
+                    LAST_PROBE_STATE[controller_id].store(2, Ordering::Release);
+                    LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
+                    PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
+                    let streak =
+                        EMPTY_PROBE_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
+                    if streak.is_multiple_of(25) {
+                        crate::log!(
+                            "crabusb: controller {} empty probe streak={} root_port_change_seen={} event_ready={}\n",
+                            controller_id,
+                            streak,
+                            ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire),
+                            EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire),
+                        );
+                    }
+                    if !ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire)
+                        && NO_PORT_CHANGE_HINT_LOGGED[controller_id]
+                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                            .is_ok()
+                    {
+                        crate::log!(
+                            "crabusb: no root-port change events observed; controller may be empty or downstream devices are not handed to the guest\n"
+                        );
+                    }
+
+                    if ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire)
+                        && streak.is_multiple_of(100)
+                    {
+                        crate::log!(
+                            "crabusb: controller {} forcing host rebind after persistent empty probes (streak={})\n",
+                            controller_id,
+                            streak
+                        );
+                        uninstall_event_handler(controller_id);
+                    }
+                    false
+                } else {
+                    LAST_PROBE_STATE[controller_id].store(1, Ordering::Release);
+                    LAST_PROBE_DEVICE_COUNT[controller_id]
+                        .store(devices.len() as u32, Ordering::Release);
+                    PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
+                    EMPTY_PROBE_STREAK[controller_id].store(0, Ordering::Release);
+                    NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
+                    update_tlb_devices(controller_id, &devices);
+                    crate::log!("crabusb: discovered {} new device(s)\n", devices.len());
+                    for dev in devices.iter() {
+                        let desc = dev.descriptor();
+                        crate::log!(
+                            "crabusb: dev {:04X}:{:04X} class={:02X} subclass={:02X} proto={:02X}\n",
+                            desc.vendor_id,
+                            desc.product_id,
+                            desc.class,
+                            desc.subclass,
+                            desc.protocol
+                        );
+                        maybe_start_truekey_bridge(host, dev).await;
+                        let _ = super::hid::leds::maybe_start_led_controller(
+                            host,
+                            dev,
+                            spawner,
+                            controller_id as u32,
+                        )
+                        .await;
+                        let _ =
+                            maybe_start_hid_boot_streams(host, dev, spawner, controller_id as u32)
+                                .await;
+                        if descriptor_has_audio_candidate(dev) {
+                            sound::maybe_start_target_audio(host, dev, spawner).await;
+                        }
+                        let _ =
+                            super::midi::maybe_start_midi(host, dev, spawner, controller_id as u32)
+                                .await;
+                        let _ = super::pen::maybe_start_mass_storage(
+                            host,
+                            dev,
+                            spawner,
+                            controller_id as u32,
+                        )
+                        .await;
+                    }
+                    true
                 }
-                if !ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire)
-                    && NO_PORT_CHANGE_HINT_LOGGED[controller_id]
-                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                {
+            }
+            Err(err) => {
+                LAST_PROBE_STATE[controller_id].store(3, Ordering::Release);
+                LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
+                let fail_streak =
+                    PROBE_FAIL_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
+                crate::log!(
+                    "crabusb: controller {} probe failed: {:?} (streak={})\n",
+                    controller_id,
+                    err,
+                    fail_streak
+                );
+                if fail_streak >= 2 {
                     crate::log!(
-                        "crabusb: no root-port change events observed; controller may be empty or downstream devices are not handed to the guest\n"
+                        "crabusb: controller {} forcing host rebind after repeated probe failures\n",
+                        controller_id
                     );
+                    PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
+                    uninstall_event_handler(controller_id);
                 }
                 false
-            } else {
-                LAST_PROBE_STATE[controller_id].store(1, Ordering::Release);
-                LAST_PROBE_DEVICE_COUNT[controller_id]
-                    .store(devices.len() as u32, Ordering::Release);
-                EMPTY_PROBE_STREAK[controller_id].store(0, Ordering::Release);
-                NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
-                update_tlb_devices(controller_id, &devices);
-                crate::log!("crabusb: discovered {} new device(s)\n", devices.len());
-                for dev in devices.iter() {
-                    let desc = dev.descriptor();
-                    crate::log!(
-                        "crabusb: dev {:04X}:{:04X} class={:02X} subclass={:02X} proto={:02X}\n",
-                        desc.vendor_id,
-                        desc.product_id,
-                        desc.class,
-                        desc.subclass,
-                        desc.protocol
-                    );
-                    maybe_start_truekey_bridge(host, dev).await;
-                    let _ = super::hid::leds::maybe_start_led_controller(
-                        host,
-                        dev,
-                        spawner,
-                        controller_id as u32,
-                    )
-                    .await;
-                    let _ = maybe_start_hid_boot_streams(host, dev, spawner, controller_id as u32)
-                        .await;
-                    if descriptor_has_audio_candidate(dev) {
-                        sound::maybe_start_target_audio(host, dev, spawner).await;
-                    }
-                    let _ = super::midi::maybe_start_midi(host, dev, spawner, controller_id as u32)
-                        .await;
-                    let _ = super::pen::maybe_start_mass_storage(
-                        host,
-                        dev,
-                        spawner,
-                        controller_id as u32,
-                    )
-                    .await;
-                }
-                true
             }
-        }
-        Err(err) => {
+        },
+        crate::wait::Either::Second(_) => {
             LAST_PROBE_STATE[controller_id].store(3, Ordering::Release);
             LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
+            let fail_streak = PROBE_FAIL_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
             crate::log!(
-                "crabusb: controller {} probe failed: {:?}\n",
+                "crabusb: controller {} probe timeout after {}ms (streak={})\n",
                 controller_id,
-                err
+                CRABUSB_PROBE_TIMEOUT_MS,
+                fail_streak
             );
+            if fail_streak >= 2 {
+                crate::log!(
+                    "crabusb: controller {} forcing host rebind after repeated probe timeouts\n",
+                    controller_id
+                );
+                PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
+                uninstall_event_handler(controller_id);
+            }
             false
         }
     }
@@ -2410,69 +2469,87 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
         return;
     }
 
-    crate::log!("crabusb: scout begin\n");
-    match host.probe_devices().await {
-        Ok(devices) => {
-            update_tlb_devices(info.index, &devices);
-            crate::log!("crabusb: scout devices={}\n", devices.len());
-            for (dev_idx, dev) in devices.iter().enumerate() {
-                let desc = dev.descriptor();
-                crate::log!(
-                    "crabusb: scout dev#{} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} cfgs={}\n",
-                    dev_idx,
-                    desc.vendor_id,
-                    desc.product_id,
-                    desc.class,
-                    desc.subclass,
-                    desc.protocol,
-                    dev.configurations().len()
-                );
-                for iface in dev.interface_descriptors() {
+    crate::log!(
+        "crabusb: scout begin (timeout={}ms)\n",
+        CRABUSB_PROBE_TIMEOUT_MS
+    );
+    match crate::wait::select2(
+        host.probe_devices(),
+        Timer::after(EmbassyDuration::from_millis(CRABUSB_PROBE_TIMEOUT_MS)),
+    )
+    .await
+    {
+        crate::wait::Either::First(res) => match res {
+            Ok(devices) => {
+                update_tlb_devices(info.index, &devices);
+                crate::log!("crabusb: scout devices={}\n", devices.len());
+                for (dev_idx, dev) in devices.iter().enumerate() {
+                    let desc = dev.descriptor();
                     crate::log!(
-                        "crabusb: scout dev#{} if#{} alt={} class={:02X} subclass={:02X} proto={:02X} eps={}\n",
+                        "crabusb: scout dev#{} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} cfgs={}\n",
                         dev_idx,
-                        iface.interface_number,
-                        iface.alternate_setting,
-                        iface.class,
-                        iface.subclass,
-                        iface.protocol,
-                        iface.endpoints.len()
+                        desc.vendor_id,
+                        desc.product_id,
+                        desc.class,
+                        desc.subclass,
+                        desc.protocol,
+                        dev.configurations().len()
                     );
+                    for iface in dev.interface_descriptors() {
+                        crate::log!(
+                            "crabusb: scout dev#{} if#{} alt={} class={:02X} subclass={:02X} proto={:02X} eps={}\n",
+                            dev_idx,
+                            iface.interface_number,
+                            iface.alternate_setting,
+                            iface.class,
+                            iface.subclass,
+                            iface.protocol,
+                            iface.endpoints.len()
+                        );
+                    }
+                }
+                for (dev_idx, dev) in devices.iter().enumerate() {
+                    let desc = dev.descriptor();
+                    if desc.vendor_id == TRUEKEY_VENDOR_ID && desc.product_id == TRUEKEY_PRODUCT_ID
+                    {
+                        maybe_start_truekey_bridge(host, dev).await;
+                        continue;
+                    }
+                    if super::hid::leds::maybe_start_led_controller(
+                        host,
+                        dev,
+                        spawner,
+                        info.index as u32,
+                    )
+                    .await
+                    {
+                        continue;
+                    }
+                    if maybe_start_hid_boot_streams(host, dev, spawner, info.index as u32).await {
+                        continue;
+                    }
+                    if descriptor_has_audio_candidate(dev) {
+                        sound::maybe_start_target_audio(host, dev, spawner).await;
+                    }
+                    if super::midi::maybe_start_midi(host, dev, spawner, info.index as u32).await {
+                        continue;
+                    }
+                    if super::pen::maybe_start_mass_storage(host, dev, spawner, info.index as u32)
+                        .await
+                    {
+                        continue;
+                    }
+                    log_opened_device_graph(host, dev_idx, dev).await;
                 }
             }
-            for (dev_idx, dev) in devices.iter().enumerate() {
-                let desc = dev.descriptor();
-                if desc.vendor_id == TRUEKEY_VENDOR_ID && desc.product_id == TRUEKEY_PRODUCT_ID {
-                    maybe_start_truekey_bridge(host, dev).await;
-                    continue;
-                }
-                if super::hid::leds::maybe_start_led_controller(
-                    host,
-                    dev,
-                    spawner,
-                    info.index as u32,
-                )
-                .await
-                {
-                    continue;
-                }
-                if maybe_start_hid_boot_streams(host, dev, spawner, info.index as u32).await {
-                    continue;
-                }
-                if descriptor_has_audio_candidate(dev) {
-                    sound::maybe_start_target_audio(host, dev, spawner).await;
-                }
-                if super::midi::maybe_start_midi(host, dev, spawner, info.index as u32).await {
-                    continue;
-                }
-                if super::pen::maybe_start_mass_storage(host, dev, spawner, info.index as u32).await
-                {
-                    continue;
-                }
-                log_opened_device_graph(host, dev_idx, dev).await;
-            }
+            Err(err) => crate::log!("crabusb: scout probe failed: {:?}\n", err),
+        },
+        crate::wait::Either::Second(_) => {
+            crate::log!(
+                "crabusb: scout probe timeout after {}ms\n",
+                CRABUSB_PROBE_TIMEOUT_MS
+            );
         }
-        Err(err) => crate::log!("crabusb: scout probe failed: {:?}\n", err),
     }
     crate::log!("crabusb: scout end\n");
 }
@@ -2492,6 +2569,13 @@ pub async fn event_pump_task(controller_id: usize) {
     loop {
         if !EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire) {
             Timer::after(EmbassyDuration::from_millis(10)).await;
+            continue;
+        }
+
+        // Lifecycle guard: keep early probe/snapshot deterministic by deferring
+        // event consumption until initial scout has finished.
+        if !INITIAL_SCOUT_DONE[controller_id].load(Ordering::Acquire) {
+            Timer::after(EmbassyDuration::from_millis(2)).await;
             continue;
         }
 
@@ -2592,8 +2676,11 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         EMPTY_PROBE_STREAK[info.index].store(0, Ordering::Release);
         LAST_PROBE_STATE[info.index].store(0, Ordering::Release);
         LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
+        PROBE_FAIL_STREAK[info.index].store(0, Ordering::Release);
+        INITIAL_SCOUT_DONE[info.index].store(false, Ordering::Release);
         TLB_DEVICES[info.index].lock().clear();
         crab_scout_once(&mut host, info, &spawner).await;
+        INITIAL_SCOUT_DONE[info.index].store(true, Ordering::Release);
 
         let mut idle_ticks = 0u32;
         loop {
