@@ -166,6 +166,7 @@ impl Xhci {
         // Command Ring Control Register (5.4.5) with a 64-bit address pointing to
         // the starting address of the first TRB of the Command Ring.
         self.set_cmd_ring()?;
+        self.clear_status_bits();
         self.init_irq()?;
         self.setup_scratchpads()?;
         // At this point, the host controller is up and running and the Root Hub ports
@@ -181,6 +182,15 @@ impl Xhci {
         // self.reset_ports().await;
 
         Ok(())
+    }
+
+    fn clear_status_bits(&mut self) {
+        self.reg.write().operational.usbsts.update_volatile(|r| {
+            r.clear_host_system_error();
+            r.clear_event_interrupt();
+            r.clear_port_change_detect();
+            r.clear_save_restore_error();
+        });
     }
 
     async fn new_device(&mut self, info: DeviceAddressInfo) -> Result<Box<dyn DeviceOp>> {
@@ -632,6 +642,9 @@ impl EventHandler {
 impl EventHandlerOp for EventHandler {
     fn handle_event(&self) -> Event {
         let sts = self.reg().operational.usbsts.read_volatile();
+        if sts.host_system_error() || sts.host_controller_error() {
+            return Event::Stopped;
+        }
         let irq_pending = self
             .reg()
             .interrupter_register_set

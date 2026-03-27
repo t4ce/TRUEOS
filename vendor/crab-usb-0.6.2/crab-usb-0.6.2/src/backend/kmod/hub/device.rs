@@ -97,6 +97,14 @@ impl HubOp for HubDevice {
             port.state = PortState::Uninit;
         }
     }
+
+    fn descriptor(&self) -> Option<DeviceDescriptor> {
+        Some(self.data.dev.descriptor().clone())
+    }
+
+    fn configuration_descriptors(&self) -> Vec<ConfigurationDescriptor> {
+        self.data.dev.configurations().to_vec()
+    }
 }
 
 impl HubDevice {
@@ -215,6 +223,14 @@ impl HubDevice {
         }
 
         Ok(changed_ports)
+    }
+
+    pub fn descriptor(&self) -> &DeviceDescriptor {
+        self.data.dev.descriptor()
+    }
+
+    pub fn configuration_descriptors(&self) -> &[ConfigurationDescriptor] {
+        self.data.dev.configurations()
     }
 
     pub fn is_superspeed(&self) -> bool {

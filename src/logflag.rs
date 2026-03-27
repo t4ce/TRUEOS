@@ -7,7 +7,7 @@ pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
-pub(crate) const NET_LOG_TCP_FLOW: bool = true;
+pub(crate) const NET_LOG_TCP_FLOW: bool = false;
 pub(crate) const NET_LOG_TCP_SEND_FLUSH: bool = false;
 pub(crate) const NET_LOG_ARP_RX: bool = false;
 pub(crate) const NET_LOG_DHCP_VERBOSE: bool = false;
@@ -16,11 +16,11 @@ pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
 
 pub(crate) const R8125_VERBOSE_LOGS: bool = false;
 
-pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = true;
-pub(crate) const BROWSER_VM_DEBUG_LOGS: bool = true;
-pub(crate) const BROWSER_HTML_PREVIEW_LOGS: bool = true;
+pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
+pub(crate) const BROWSER_VM_DEBUG_LOGS: bool = false;
+pub(crate) const BROWSER_HTML_PREVIEW_LOGS: bool = false;
 pub(crate) const VHTTPS_VERBOSE: bool = false;
-pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = true;
+pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = false;
 
 pub(crate) const VIRGL_DRAW_DIAGNOSTICS_LOGS: bool = false;
 pub(crate) static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
