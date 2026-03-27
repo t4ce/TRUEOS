@@ -69,6 +69,26 @@ fn pick_hid_boot_targets(
     configs: &[usb_if::descriptor::ConfigurationDescriptor],
 ) -> Vec<HidBootTarget> {
     let mut out = Vec::new();
+    let has_boot_hid = configs.iter().any(|config| {
+        config.interfaces.iter().any(|interface| {
+            interface.alt_settings.iter().any(|alt| {
+                alt.class == 0x03
+                    && alt.subclass == 0x01
+                    && matches!(alt.protocol, 0x01 | 0x02)
+            })
+        })
+    });
+    let has_audio = configs.iter().any(|config| {
+        config.interfaces.iter().any(|interface| {
+            interface.alt_settings.iter().any(|alt| {
+                alt.class == 0x01
+                    || alt.endpoints.iter().any(|ep| {
+                        ep.transfer_type == usb_if::descriptor::EndpointType::Isochronous
+                            && ep.direction == usb_if::transfer::Direction::Out
+                    })
+            })
+        })
+    });
 
     for config in configs.iter() {
         for interface in config.interfaces.iter() {
@@ -76,7 +96,10 @@ fn pick_hid_boot_targets(
                 let kind = match (alt.class, alt.subclass, alt.protocol) {
                     (0x03, 0x01, 0x01) => HidBootKind::Keyboard,
                     (0x03, 0x01, 0x02) => HidBootKind::Mouse,
-                    _ if super::tablet::matches_interface(alt.class, alt.subclass, alt.protocol) => {
+                    _ if !has_audio
+                        && !has_boot_hid
+                        && super::tablet::matches_interface(alt.class, alt.subclass, alt.protocol) =>
+                    {
                         HidBootKind::Tablet
                     }
                     _ => continue,

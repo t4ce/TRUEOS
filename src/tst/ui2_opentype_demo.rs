@@ -276,6 +276,7 @@ globalThis.__trueosOpentDemoError = "";
         let glyph_count = js_prop_u32(ctx, demo, b"glyphCount\0");
         let ascender = js_prop_u32(ctx, demo, b"ascender\0");
         let descender = js_prop_u32(ctx, demo, b"descender\0");
+        let debug_rects = js_prop_string(ctx, demo, b"debugRects\0");
 
         qjs::js_free_value(ctx, demo);
         qjs::js_free_value(ctx, global);
@@ -293,6 +294,7 @@ globalThis.__trueosOpentDemoError = "";
             ascender,
             descender
         );
+        crate::log!("ui2-opentype-demo: rects={:?}\n", debug_rects);
         Some((width, height, rgba))
     }
 }

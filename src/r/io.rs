@@ -779,9 +779,9 @@ pub mod cabi {
         BlendDesc, BlendFactor, BufferDesc, BufferId, BufferUsage, ColorFormat, Command,
         CommandBuffer, Extent2D, GfxContext, ImageDesc, ImageFormat, ImageId, ImageRegion,
         MemoryType, PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap,
-        Rgba8, ScissorRect as GfxScissorRect, ShaderId, SwapchainDesc, TexCoordFormat,
-        VertexLayout, Viewport, push_rgb_vertex_bytes, read_rgb_vertex_bytes,
-        read_tex_vertex_bytes,
+        RgbVertexF32 as RgbVtx, ScissorRect as GfxScissorRect, ShaderId, SwapchainDesc,
+        TexCoordFormat, TexVertexF32 as TexVtx, VertexLayout, Viewport, RGB_VERTEX_SIZE, TEX_VERTEX_SIZE,
+        read_rgb_vertex_f32_bytes as read_rgb_vtx, read_tex_vertex_f32_bytes as read_tex_vtx,
     };
 
     const GFX_CABI_VBUF_RING_LEN: usize = 3;
@@ -1695,14 +1695,23 @@ pub mod cabi {
             .map(|img| (img.width, img.height))
     }
 
-    #[derive(Clone, Copy)]
-    struct RgbVtx {
-        x: f32,
-        y: f32,
-        r: f32,
-        g: f32,
-        b: f32,
-        a: f32,
+    mod io_cut {
+        use super::*;
+
+        include!("io_cut.rs");
+    }
+
+    #[inline]
+    fn clear_rgba_buffer(rgba: &mut [u8], rgb: u32) {
+        let r = ((rgb >> 16) & 0xFF) as u8;
+        let g = ((rgb >> 8) & 0xFF) as u8;
+        let b = (rgb & 0xFF) as u8;
+        for px in rgba.chunks_exact_mut(4) {
+            px[0] = r;
+            px[1] = g;
+            px[2] = b;
+            px[3] = 255;
+        }
     }
 
     #[inline]
@@ -1719,96 +1728,6 @@ pub mod cabi {
     #[inline]
     fn lerp(a: f32, b: f32, t: f32) -> f32 {
         a + (b - a) * t
-    }
-
-    #[inline]
-    fn read_rgb_vtx(bytes: &[u8], off: usize) -> Option<RgbVtx> {
-        let vertex = read_rgb_vertex_bytes(bytes, off)?;
-        Some(RgbVtx {
-            x: vertex.x,
-            y: vertex.y,
-            r: (vertex.color.r as f32) / 255.0,
-            g: (vertex.color.g as f32) / 255.0,
-            b: (vertex.color.b as f32) / 255.0,
-            a: (vertex.color.a as f32) / 255.0,
-        })
-    }
-
-    #[inline]
-    fn push_rgb_vtx(out: &mut Vec<u8>, v: RgbVtx) {
-        push_rgb_vertex_bytes(
-            out,
-            trueos_gfx_core::RgbVertex {
-                x: v.x,
-                y: v.y,
-                color: Rgba8::new(
-                    (clamp01(v.r) * 255.0 + 0.5) as u8,
-                    (clamp01(v.g) * 255.0 + 0.5) as u8,
-                    (clamp01(v.b) * 255.0 + 0.5) as u8,
-                    (clamp01(v.a) * 255.0 + 0.5) as u8,
-                ),
-            },
-        );
-    }
-
-    #[inline]
-    fn interp_rgb(a: RgbVtx, b: RgbVtx, t: f32) -> RgbVtx {
-        RgbVtx {
-            x: lerp(a.x, b.x, t),
-            y: lerp(a.y, b.y, t),
-            r: lerp(a.r, b.r, t),
-            g: lerp(a.g, b.g, t),
-            b: lerp(a.b, b.b, t),
-            a: lerp(a.a, b.a, t),
-        }
-    }
-
-    mod io_cut {
-        use super::*;
-
-        include!("io_cut.rs");
-    }
-
-    use io_cut::*;
-
-    #[derive(Clone, Copy)]
-    struct TexVtx {
-        x: f32,
-        y: f32,
-        u: f32,
-        v: f32,
-        r: f32,
-        g: f32,
-        b: f32,
-        a: f32,
-    }
-
-    #[inline]
-    fn read_tex_vtx(bytes: &[u8], off: usize) -> Option<TexVtx> {
-        let vertex = read_tex_vertex_bytes(bytes, off)?;
-        Some(TexVtx {
-            x: vertex.x,
-            y: vertex.y,
-            u: vertex.u,
-            v: vertex.v,
-            r: (vertex.color.r as f32) / 255.0,
-            g: (vertex.color.g as f32) / 255.0,
-            b: (vertex.color.b as f32) / 255.0,
-            a: (vertex.color.a as f32) / 255.0,
-        })
-    }
-
-    #[inline]
-    fn clear_rgba_buffer(rgba: &mut [u8], rgb: u32) {
-        let r = ((rgb >> 16) & 0xFF) as u8;
-        let g = ((rgb >> 8) & 0xFF) as u8;
-        let b = (rgb & 0xFF) as u8;
-        for px in rgba.chunks_exact_mut(4) {
-            px[0] = r;
-            px[1] = g;
-            px[2] = b;
-            px[3] = 255;
-        }
     }
 
     #[inline]
@@ -2185,14 +2104,14 @@ pub mod cabi {
                     let verts = &rgb_src[blob_offset..blob_offset + blob_len];
                     if current_target_tex_id == 0 {
                         let mut off = 0usize;
-                        while off + 36 <= verts.len() {
+                        while off + (3 * RGB_VERTEX_SIZE) <= verts.len() {
                             let Some(v0) = read_rgb_vtx(verts, off) else {
                                 break;
                             };
-                            let Some(v1) = read_rgb_vtx(verts, off + 12) else {
+                            let Some(v1) = read_rgb_vtx(verts, off + RGB_VERTEX_SIZE) else {
                                 break;
                             };
-                            let Some(v2) = read_rgb_vtx(verts, off + 24) else {
+                            let Some(v2) = read_rgb_vtx(verts, off + (2 * RGB_VERTEX_SIZE)) else {
                                 break;
                             };
                             draw_rgb_triangle_rgba(
@@ -2205,20 +2124,20 @@ pub mod cabi {
                                 v1,
                                 v2,
                             );
-                            off += 36;
+                            off += 3 * RGB_VERTEX_SIZE;
                         }
                     } else if let Some(Some(target)) =
                         textures.get_mut(current_target_tex_id.saturating_sub(1) as usize)
                     {
                         let mut off = 0usize;
-                        while off + 36 <= verts.len() {
+                        while off + (3 * RGB_VERTEX_SIZE) <= verts.len() {
                             let Some(v0) = read_rgb_vtx(verts, off) else {
                                 break;
                             };
-                            let Some(v1) = read_rgb_vtx(verts, off + 12) else {
+                            let Some(v1) = read_rgb_vtx(verts, off + RGB_VERTEX_SIZE) else {
                                 break;
                             };
-                            let Some(v2) = read_rgb_vtx(verts, off + 24) else {
+                            let Some(v2) = read_rgb_vtx(verts, off + (2 * RGB_VERTEX_SIZE)) else {
                                 break;
                             };
                             draw_rgb_triangle_rgba(
@@ -2231,7 +2150,7 @@ pub mod cabi {
                                 v1,
                                 v2,
                             );
-                            off += 36;
+                            off += 3 * RGB_VERTEX_SIZE;
                         }
                     }
                     saw_draw = true;
@@ -2268,14 +2187,14 @@ pub mod cabi {
                     let verts = &tex_src[blob_offset..blob_offset + blob_len];
                     if current_target_tex_id == 0 {
                         let mut off = 0usize;
-                        while off + 60 <= verts.len() {
+                        while off + (3 * TEX_VERTEX_SIZE) <= verts.len() {
                             let Some(v0) = read_tex_vtx(verts, off) else {
                                 break;
                             };
-                            let Some(v1) = read_tex_vtx(verts, off + 20) else {
+                            let Some(v1) = read_tex_vtx(verts, off + TEX_VERTEX_SIZE) else {
                                 break;
                             };
-                            let Some(v2) = read_tex_vtx(verts, off + 40) else {
+                            let Some(v2) = read_tex_vtx(verts, off + (2 * TEX_VERTEX_SIZE)) else {
                                 break;
                             };
                             draw_tex_triangle_rgba(
@@ -2291,20 +2210,20 @@ pub mod cabi {
                                 v1,
                                 v2,
                             );
-                            off += 60;
+                            off += 3 * TEX_VERTEX_SIZE;
                         }
                     } else if let Some(Some(target)) =
                         textures.get_mut(current_target_tex_id.saturating_sub(1) as usize)
                     {
                         let mut off = 0usize;
-                        while off + 60 <= verts.len() {
+                        while off + (3 * TEX_VERTEX_SIZE) <= verts.len() {
                             let Some(v0) = read_tex_vtx(verts, off) else {
                                 break;
                             };
-                            let Some(v1) = read_tex_vtx(verts, off + 20) else {
+                            let Some(v1) = read_tex_vtx(verts, off + TEX_VERTEX_SIZE) else {
                                 break;
                             };
-                            let Some(v2) = read_tex_vtx(verts, off + 40) else {
+                            let Some(v2) = read_tex_vtx(verts, off + (2 * TEX_VERTEX_SIZE)) else {
                                 break;
                             };
                             draw_tex_triangle_rgba(
@@ -2320,7 +2239,7 @@ pub mod cabi {
                                 v1,
                                 v2,
                             );
-                            off += 60;
+                            off += 3 * TEX_VERTEX_SIZE;
                         }
                     }
                     saw_draw = true;
@@ -2950,14 +2869,14 @@ pub mod cabi {
                     }
                     clear_rgba_buffer(entry.rgba.as_mut_slice(), clear_rgb);
                     let mut off = 0usize;
-                    while off + 36 <= usable {
+                    while off + (3 * RGB_VERTEX_SIZE) <= usable {
                         let Some(v0) = read_rgb_vtx(&vtx[..usable], off) else {
                             break;
                         };
-                        let Some(v1) = read_rgb_vtx(&vtx[..usable], off + 12) else {
+                        let Some(v1) = read_rgb_vtx(&vtx[..usable], off + RGB_VERTEX_SIZE) else {
                             break;
                         };
-                        let Some(v2) = read_rgb_vtx(&vtx[..usable], off + 24) else {
+                        let Some(v2) = read_rgb_vtx(&vtx[..usable], off + (2 * RGB_VERTEX_SIZE)) else {
                             break;
                         };
                         draw_rgb_triangle_rgba(
@@ -2970,7 +2889,7 @@ pub mod cabi {
                             v1,
                             v2,
                         );
-                        off += 36;
+                        off += 3 * RGB_VERTEX_SIZE;
                     }
                 }
                 st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
