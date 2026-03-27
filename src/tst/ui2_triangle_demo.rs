@@ -1,4 +1,5 @@
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_gfx_core::{RgbVertex, Rgba8};
 
 const UI2_TRIANGLE_TEX_ID: u32 = 4_700;
 const UI2_TRIANGLE_RT_W: u32 = 384;
@@ -6,17 +7,6 @@ const UI2_TRIANGLE_RT_H: u32 = 240;
 const UI2_TRIANGLE_WINDOW_X: f32 = 220.0;
 const UI2_TRIANGLE_WINDOW_Y: f32 = 160.0;
 const UI2_TRIANGLE_WINDOW_Z: i16 = 30;
-
-#[repr(C, packed)]
-#[derive(Copy, Clone)]
-struct RgbVertex {
-    x: f32,
-    y: f32,
-    r: u8,
-    g: u8,
-    b: u8,
-    pad: u8,
-}
 
 fn triangle_vertices(phase: f32) -> [RgbVertex; 3] {
     let cos_p = libm::cosf(phase);
@@ -30,26 +20,17 @@ fn triangle_vertices(phase: f32) -> [RgbVertex; 3] {
         RgbVertex {
             x: x0,
             y: y0,
-            r: 0xFF,
-            g: 0x52,
-            b: 0x52,
-            pad: 0xFF,
+            color: Rgba8::new(0xFF, 0x52, 0x52, 0xFF),
         },
         RgbVertex {
             x: x1,
             y: y1,
-            r: 0x40,
-            g: 0xE3,
-            b: 0x92,
-            pad: 0xFF,
+            color: Rgba8::new(0x40, 0xE3, 0x92, 0xFF),
         },
         RgbVertex {
             x: x2,
             y: y2,
-            r: 0x5A,
-            g: 0x9C,
-            b: 0xFF,
-            pad: 0xFF,
+            color: Rgba8::new(0x5A, 0x9C, 0xFF, 0xFF),
         },
     ]
 }

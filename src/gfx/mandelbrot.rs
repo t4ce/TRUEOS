@@ -3,6 +3,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
+use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, TexVertex, push_tex_vertex_bytes};
 
 pub const MANDELBROT_PIPELINE_FS_TAG_RAW: u32 = 0x4D44_4C42;
 const FULL_CENTER_X: f32 = -0.5;
@@ -276,22 +277,55 @@ fn animated_view_uvs(ticks: u64, tick_hz: u64) -> (f32, f32, f32, f32) {
 
 pub fn fullscreen_quad_rgba_bytes_for_view(ticks: u64, tick_hz: u64) -> Vec<u8> {
     let (u0, v0, u1, v1) = animated_view_uvs(ticks, tick_hz);
-    let verts: [(f32, f32, f32, f32); 6] = [
-        (-1.0, 1.0, u0, v0),
-        (1.0, 1.0, u1, v0),
-        (1.0, -1.0, u1, v1),
-        (-1.0, 1.0, u0, v0),
-        (1.0, -1.0, u1, v1),
-        (-1.0, -1.0, u0, v1),
+    let color = Rgba8::new(0xFF, 0xFF, 0xFF, 0xFF);
+    let verts = [
+        TexVertex {
+            x: -1.0,
+            y: 1.0,
+            u: u0,
+            v: v0,
+            color,
+        },
+        TexVertex {
+            x: 1.0,
+            y: 1.0,
+            u: u1,
+            v: v0,
+            color,
+        },
+        TexVertex {
+            x: 1.0,
+            y: -1.0,
+            u: u1,
+            v: v1,
+            color,
+        },
+        TexVertex {
+            x: -1.0,
+            y: 1.0,
+            u: u0,
+            v: v0,
+            color,
+        },
+        TexVertex {
+            x: 1.0,
+            y: -1.0,
+            u: u1,
+            v: v1,
+            color,
+        },
+        TexVertex {
+            x: -1.0,
+            y: -1.0,
+            u: u0,
+            v: v1,
+            color,
+        },
     ];
 
-    let mut out = Vec::with_capacity(verts.len().saturating_mul(20));
-    for (x, y, u, v) in verts {
-        out.extend_from_slice(&x.to_le_bytes());
-        out.extend_from_slice(&y.to_le_bytes());
-        out.extend_from_slice(&u.to_le_bytes());
-        out.extend_from_slice(&v.to_le_bytes());
-        out.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    let mut out = Vec::with_capacity(verts.len().saturating_mul(TEX_VERTEX_SIZE));
+    for vertex in verts {
+        push_tex_vertex_bytes(&mut out, vertex);
     }
     out
 }

@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 use libm::{ceilf, floorf};
 use spin::Once;
+use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, TexVertex};
 
 use crate::gfx::imbafont::{
     ImbaFontFace, ImbaFontGlyphMetricsPx, ImbaFontMaskTexture, glyph_metrics_px,
@@ -45,19 +46,6 @@ pub struct ImbaAthlasView<'a> {
 
 static IMBA_ATHLAS_SMALL: Once<ImbaAthlasBuffers> = Once::new();
 static IMBA_ATHLAS_LARGE: Once<ImbaAthlasBuffers> = Once::new();
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct TexVertex {
-    x: f32,
-    y: f32,
-    u: f32,
-    v: f32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-}
 
 const IMBA_ATHLAS_SMALL_TEX_ID: u32 = 1001;
 const IMBA_ATHLAS_LARGE_TEX_ID: u32 = 1002;
@@ -504,66 +492,48 @@ fn build_vertices(
         let nx1 = (2.0 * (x1 / view_w)) - 1.0;
         let ny1 = 1.0 - (2.0 * (y1 / view_h));
 
-        let c = (16u8, 16u8, 16u8, alpha);
+        let color = Rgba8::new(16, 16, 16, alpha);
         out.push(TexVertex {
             x: nx0,
             y: ny1,
             u: u0,
             v: v1,
-            r: c.0,
-            g: c.1,
-            b: c.2,
-            a: c.3,
+            color,
         });
         out.push(TexVertex {
             x: nx1,
             y: ny1,
             u: u1,
             v: v1,
-            r: c.0,
-            g: c.1,
-            b: c.2,
-            a: c.3,
+            color,
         });
         out.push(TexVertex {
             x: nx1,
             y: ny0,
             u: u1,
             v: v0,
-            r: c.0,
-            g: c.1,
-            b: c.2,
-            a: c.3,
+            color,
         });
         out.push(TexVertex {
             x: nx0,
             y: ny1,
             u: u0,
             v: v1,
-            r: c.0,
-            g: c.1,
-            b: c.2,
-            a: c.3,
+            color,
         });
         out.push(TexVertex {
             x: nx1,
             y: ny0,
             u: u1,
             v: v0,
-            r: c.0,
-            g: c.1,
-            b: c.2,
-            a: c.3,
+            color,
         });
         out.push(TexVertex {
             x: nx0,
             y: ny0,
             u: u0,
             v: v0,
-            r: c.0,
-            g: c.1,
-            b: c.2,
-            a: c.3,
+            color,
         });
 
         pen_x += glyph_advance_px(ch) * scale;
@@ -859,9 +829,7 @@ pub fn draw_imba_athlas_text_in_frame_alpha_nearest_px(
     }
 
     let ptr = verts.as_ptr() as *const u8;
-    let len = verts
-        .len()
-        .saturating_mul(core::mem::size_of::<TexVertex>());
+    let len = verts.len().saturating_mul(TEX_VERTEX_SIZE);
     let rc = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
             imba_athlas_tex_id_for_kind(kind),
@@ -911,9 +879,7 @@ pub fn draw_imba_athlas_text_in_frame_alpha_scaled(
     }
 
     let ptr = verts.as_ptr() as *const u8;
-    let len = verts
-        .len()
-        .saturating_mul(core::mem::size_of::<TexVertex>());
+    let len = verts.len().saturating_mul(TEX_VERTEX_SIZE);
     let rc = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
             IMBA_ATHLAS_LARGE_TEX_ID,
