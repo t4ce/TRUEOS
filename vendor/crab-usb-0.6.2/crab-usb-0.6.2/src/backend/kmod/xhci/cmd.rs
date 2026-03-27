@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+use core::sync::atomic::{Ordering, fence};
 
 use mbarrier::wmb;
 use spin::{Mutex, RwLock};
@@ -9,7 +10,7 @@ use xhci::{
 };
 
 use super::{reg::XhciRegisters, ring::SendRing};
-use crate::{err::ConvertXhciError, osal::Kernel, queue::Finished};
+use crate::{debug_record_submit, err::ConvertXhciError, osal::Kernel, queue::Finished};
 
 #[derive(Clone)]
 pub struct CommandRing(Arc<Mutex<Inner>>);
@@ -47,13 +48,33 @@ impl CommandRing {
         let fur = {
             let mut inner = self.0.lock();
             let trb_addr = inner.ring.enque_command(trb);
+            debug_record_submit(0xFF, 0, 0, trb_addr.raw());
             let fur = inner.ring.take_finished_future(trb_addr);
             wmb();
+            fence(Ordering::SeqCst);
+            #[cfg(target_arch = "x86")]
+            unsafe {
+                core::arch::x86::_mm_mfence();
+            }
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                core::arch::x86_64::_mm_mfence();
+            }
             inner
                 .reg
                 .write()
                 .doorbell
                 .write_volatile_at(0, doorbell::Register::default());
+            let _ = inner.reg.read().operational.usbsts.read_volatile();
+            fence(Ordering::SeqCst);
+            #[cfg(target_arch = "x86")]
+            unsafe {
+                core::arch::x86::_mm_mfence();
+            }
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                core::arch::x86_64::_mm_mfence();
+            }
             fur
         };
 

@@ -66,7 +66,7 @@ pub extern "C" fn trueos_vm_guest_run() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_vm_guest_idle() -> ! {
-    crate::demo::idle();
+    unsafe { trueos_hv_guest_shell_run() }
 }
 
 #[unsafe(no_mangle)]
@@ -77,4 +77,8 @@ pub extern "C" fn trueos_vm_preserve() {
 unsafe extern "C" {
     #[link_name = "trueos_vmx_guest_entry"]
     pub fn entry() -> !;
+    /// Defined in `src/hv/guest_run.rs`; starts a real shell2 instance over
+    /// the vmcall I/O bridge using the already-live host heap and time driver.
+    fn trueos_hv_guest_shell_run() -> !;
 }
+

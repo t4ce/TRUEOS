@@ -48,6 +48,33 @@ struct DmaBuffer {
     len: usize,
 }
 
+#[inline]
+fn nvme_dma_cache_flush(ptr: *const u8, len: usize) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        use core::arch::x86_64::{_mm_clflush, _mm_mfence};
+
+        if ptr.is_null() || len == 0 {
+            return;
+        }
+
+        let line = 64usize;
+        let start = (ptr as usize) & !(line - 1);
+        let end = (ptr as usize).saturating_add(len);
+        let mut cur = start;
+        while cur < end {
+            _mm_clflush(cur as *const _);
+            cur = cur.saturating_add(line);
+        }
+        _mm_mfence();
+    }
+}
+
+#[inline]
+fn nvme_dma_cache_invalidate(ptr: *const u8, len: usize) {
+    nvme_dma_cache_flush(ptr, len);
+}
+
 unsafe impl Send for DmaBuffer {}
 
 impl DmaBuffer {
@@ -67,6 +94,42 @@ impl DmaBuffer {
 
     fn as_ptr(&self) -> *mut u8 {
         self.virt.as_ptr()
+    }
+
+    fn flush_range(&self, offset: usize, len: usize) {
+        if offset >= self.len || len == 0 {
+            return;
+        }
+        let span = len.min(self.len.saturating_sub(offset));
+        unsafe { nvme_dma_cache_flush(self.virt.as_ptr().add(offset), span) };
+    }
+
+    fn invalidate_range(&self, offset: usize, len: usize) {
+        if offset >= self.len || len == 0 {
+            return;
+        }
+        let span = len.min(self.len.saturating_sub(offset));
+        unsafe { nvme_dma_cache_invalidate(self.virt.as_ptr().add(offset), span) };
+    }
+
+    fn flush_all(&self) {
+        self.flush_range(0, self.len);
+    }
+
+    fn zero_range(&self, len: usize) {
+        let span = len.min(self.len);
+        unsafe {
+            write_bytes(self.virt.as_ptr(), 0, span);
+        }
+        self.flush_range(0, span);
+    }
+
+    fn copy_from_slice(&self, src: &[u8]) {
+        let span = src.len().min(self.len);
+        unsafe {
+            core::ptr::copy_nonoverlapping(src.as_ptr(), self.virt.as_ptr(), span);
+        }
+        self.flush_range(0, span);
     }
 }
 
@@ -196,10 +259,8 @@ impl NvmeQueue {
             sq_mem.phys(),
             cq_mem.phys()
         );
-        unsafe {
-            write_bytes(sq_mem.as_ptr(), 0, sq_alloc_bytes);
-            write_bytes(cq_mem.as_ptr(), 0, cq_alloc_bytes);
-        }
+        sq_mem.zero_range(sq_alloc_bytes);
+        cq_mem.zero_range(cq_alloc_bytes);
 
         Ok(Self {
             depth,
@@ -224,12 +285,16 @@ impl NvmeQueue {
         unsafe {
             write_volatile(self.sq_virt.add(idx), sqe);
         }
+        self._sq_mem
+            .flush_range(idx * Self::sq_entry_size(), Self::sq_entry_size());
         self.sq_tail = self.sq_tail.wrapping_add(1);
         Ok(tail)
     }
 
     fn cq_peek(&self) -> NvmeCqe {
         let idx = (self.cq_head as usize) % (self.depth as usize);
+        self._cq_mem
+            .invalidate_range(idx * Self::cq_entry_size(), Self::cq_entry_size());
         unsafe { read_volatile(self.cq_virt.add(idx)) }
     }
 
@@ -1101,6 +1166,7 @@ impl NvmeController {
                 list[i] = first_page + ((i + 1) * page_size) as u64;
             }
         }
+        list_mem.flush_all();
 
         Ok((prp1, list_mem.phys(), Some(list_mem)))
     }
@@ -1116,9 +1182,7 @@ impl NvmeController {
             return Err(block::Error::InvalidParam);
         }
         let buf = DmaBuffer::alloc(page_size, page_size)?;
-        unsafe {
-            write_bytes(buf.as_ptr(), 0, page_size);
-        }
+        buf.zero_range(page_size);
 
         let (prp1, prp2, _prp_list) = self.make_prps(buf.phys(), page_size)?;
 
@@ -1148,6 +1212,7 @@ impl NvmeController {
             return Err(block::Error::Io);
         }
 
+        buf.invalidate_range(0, page_size);
         unsafe {
             out[..page_size].copy_from_slice(core::slice::from_raw_parts(buf.as_ptr(), page_size));
         }
@@ -1477,7 +1542,7 @@ impl block::BlockDevice for NvmeBlockDevice {
             while !remaining.is_empty() {
                 let blocks_here = core::cmp::min(max_blocks, remaining.len() / bs);
                 let bytes_here = blocks_here * bs;
-                unsafe { write_bytes(dma_virt, 0, bytes_here) };
+                dma_buf.zero_range(bytes_here);
 
                 match self
                     .ctrl
@@ -1518,6 +1583,7 @@ impl block::BlockDevice for NvmeBlockDevice {
                     }
                 }
 
+                dma_buf.invalidate_range(0, bytes_here);
                 unsafe {
                     let src = core::slice::from_raw_parts(dma_virt, bytes_here);
                     remaining[..bytes_here].copy_from_slice(src);
@@ -1564,9 +1630,7 @@ impl block::BlockDevice for NvmeBlockDevice {
             while !remaining.is_empty() {
                 let blocks_here = core::cmp::min(max_blocks, remaining.len() / bs);
                 let bytes_here = blocks_here * bs;
-                unsafe {
-                    core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);
-                }
+                dma_buf.copy_from_slice(&remaining[..bytes_here]);
 
                 match self
                     .ctrl
@@ -1761,7 +1825,7 @@ fn io_selftest_read(
     let dma_phys = dma_buf.phys();
     let dma_virt = dma_buf.as_ptr();
 
-    unsafe { write_bytes(dma_virt, 0, bytes) };
+    dma_buf.zero_range(bytes);
 
     let ok = match ctrl.io_rw_sync(NVME_NVM_READ, nsid, 0, 1, dma_phys, bs, 2000) {
         Ok(cpl) => {

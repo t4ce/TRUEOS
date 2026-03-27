@@ -5,6 +5,7 @@ use core::fmt::Debug;
 use futures::future::BoxFuture;
 use usb_if::descriptor::{ConfigurationDescriptor, DeviceDescriptor};
 
+use crate::device::DeviceTopology;
 use crate::{backend::ty::ep::EndpointControl, err::USBError};
 
 pub mod ep;
@@ -27,6 +28,7 @@ pub(crate) trait DeviceInfoOp: Send + Sync + Any + Debug + 'static {
     fn backend_name(&self) -> &str;
     fn descriptor(&self) -> &DeviceDescriptor;
     fn configuration_descriptors(&self) -> &[ConfigurationDescriptor];
+    fn topology(&self) -> DeviceTopology;
 }
 
 /// USB 设备特征（高层抽象）

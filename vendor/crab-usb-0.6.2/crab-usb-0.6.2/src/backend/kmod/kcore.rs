@@ -18,6 +18,7 @@ use crate::{
         kmod::hub::{Hub, HubDevice, HubInfo, HubOp, PortChangeInfo},
         ty::{DeviceInfoOp, DeviceOp, EventHandlerOp},
     },
+    device::{DeviceTopology, DeviceTopologyHop},
 };
 
 pub trait CoreOp: Send + 'static {
@@ -297,5 +298,31 @@ impl DeviceInfoOp for DeviceInfo {
 
     fn configuration_descriptors(&self) -> &[ConfigurationDescriptor] {
         &self.config_desc
+    }
+
+    fn topology(&self) -> DeviceTopology {
+        let mut path = Vec::new();
+        let mut parent = self.addr_info.parent_hub;
+        while let Some(id) = parent {
+            let Some(info) = self.addr_info.infos.get(&id) else {
+                break;
+            };
+            path.push(DeviceTopologyHop {
+                slot_id: info.slot_id,
+                port_id: info.port_id,
+                hub_depth: info.hub_depth.max(0) as u8,
+                speed: info.speed,
+            });
+            parent = info.parent;
+        }
+        path.reverse();
+
+        DeviceTopology {
+            root_port_id: self.addr_info.root_port_id,
+            port_id: self.addr_info.port_id,
+            port_speed: self.addr_info.port_speed,
+            parent_hub_slot_id: path.last().map(|hop| hop.slot_id),
+            path,
+        }
     }
 }
