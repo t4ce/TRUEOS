@@ -779,8 +779,9 @@ pub mod cabi {
         BlendDesc, BlendFactor, BufferDesc, BufferId, BufferUsage, ColorFormat, Command,
         CommandBuffer, Extent2D, GfxContext, ImageDesc, ImageFormat, ImageId, ImageRegion,
         MemoryType, PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap,
-        ScissorRect as GfxScissorRect, ShaderId, SwapchainDesc, TexCoordFormat, VertexLayout,
-        Viewport,
+        Rgba8, ScissorRect as GfxScissorRect, ShaderId, SwapchainDesc, TexCoordFormat,
+        VertexLayout, Viewport, push_rgb_vertex_bytes, read_rgb_vertex_bytes,
+        read_tex_vertex_bytes,
     };
 
     const GFX_CABI_VBUF_RING_LEN: usize = 3;
@@ -1722,34 +1723,32 @@ pub mod cabi {
 
     #[inline]
     fn read_rgb_vtx(bytes: &[u8], off: usize) -> Option<RgbVtx> {
-        if off + 12 > bytes.len() {
-            return None;
-        }
-        let x = f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
-        let y = f32::from_le_bytes([
-            bytes[off + 4],
-            bytes[off + 5],
-            bytes[off + 6],
-            bytes[off + 7],
-        ]);
+        let vertex = read_rgb_vertex_bytes(bytes, off)?;
         Some(RgbVtx {
-            x,
-            y,
-            r: (bytes[off + 8] as f32) / 255.0,
-            g: (bytes[off + 9] as f32) / 255.0,
-            b: (bytes[off + 10] as f32) / 255.0,
-            a: (bytes[off + 11] as f32) / 255.0,
+            x: vertex.x,
+            y: vertex.y,
+            r: (vertex.color.r as f32) / 255.0,
+            g: (vertex.color.g as f32) / 255.0,
+            b: (vertex.color.b as f32) / 255.0,
+            a: (vertex.color.a as f32) / 255.0,
         })
     }
 
     #[inline]
     fn push_rgb_vtx(out: &mut Vec<u8>, v: RgbVtx) {
-        out.extend_from_slice(&v.x.to_le_bytes());
-        out.extend_from_slice(&v.y.to_le_bytes());
-        out.push((clamp01(v.r) * 255.0 + 0.5) as u8);
-        out.push((clamp01(v.g) * 255.0 + 0.5) as u8);
-        out.push((clamp01(v.b) * 255.0 + 0.5) as u8);
-        out.push((clamp01(v.a) * 255.0 + 0.5) as u8);
+        push_rgb_vertex_bytes(
+            out,
+            trueos_gfx_core::RgbVertex {
+                x: v.x,
+                y: v.y,
+                color: Rgba8::new(
+                    (clamp01(v.r) * 255.0 + 0.5) as u8,
+                    (clamp01(v.g) * 255.0 + 0.5) as u8,
+                    (clamp01(v.b) * 255.0 + 0.5) as u8,
+                    (clamp01(v.a) * 255.0 + 0.5) as u8,
+                ),
+            },
+        );
     }
 
     #[inline]
@@ -1786,37 +1785,16 @@ pub mod cabi {
 
     #[inline]
     fn read_tex_vtx(bytes: &[u8], off: usize) -> Option<TexVtx> {
-        if off + 20 > bytes.len() {
-            return None;
-        }
-        let x = f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
-        let y = f32::from_le_bytes([
-            bytes[off + 4],
-            bytes[off + 5],
-            bytes[off + 6],
-            bytes[off + 7],
-        ]);
-        let u = f32::from_le_bytes([
-            bytes[off + 8],
-            bytes[off + 9],
-            bytes[off + 10],
-            bytes[off + 11],
-        ]);
-        let v = f32::from_le_bytes([
-            bytes[off + 12],
-            bytes[off + 13],
-            bytes[off + 14],
-            bytes[off + 15],
-        ]);
+        let vertex = read_tex_vertex_bytes(bytes, off)?;
         Some(TexVtx {
-            x,
-            y,
-            u,
-            v,
-            r: (bytes[off + 16] as f32) / 255.0,
-            g: (bytes[off + 17] as f32) / 255.0,
-            b: (bytes[off + 18] as f32) / 255.0,
-            a: (bytes[off + 19] as f32) / 255.0,
+            x: vertex.x,
+            y: vertex.y,
+            u: vertex.u,
+            v: vertex.v,
+            r: (vertex.color.r as f32) / 255.0,
+            g: (vertex.color.g as f32) / 255.0,
+            b: (vertex.color.b as f32) / 255.0,
+            a: (vertex.color.a as f32) / 255.0,
         })
     }
 
