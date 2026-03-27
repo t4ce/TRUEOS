@@ -2228,6 +2228,7 @@ name = "trueos-esp"
 version = "0.1.0"
 dependencies = [
  "embassy-time",
+ "heapless 0.8.0",
  "v",
 ]
 
