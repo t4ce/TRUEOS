@@ -69,7 +69,7 @@ fn log_cstr_or_null(ptr: *const c_char) {
 
 #[inline]
 fn qjs_loader_trace_enabled() -> bool {
-    false
+    true
 }
 
 #[inline]
