@@ -27,6 +27,8 @@ static INITIAL_SNAPSHOT_LOGGED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static EVENT_HANDLER_READY: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static CONTROLLER_PHASE: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
 static EVENT_HANDLER: [Mutex<Option<EventHandler>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
 static PROBE_REQUESTED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
@@ -35,6 +37,8 @@ static ROOT_PORT_CHANGE_SEEN: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static NO_PORT_CHANGE_HINT_LOGGED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static ROOT_HUB_LIFECYCLE_STAGE: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
 static AUDIO_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -58,10 +62,94 @@ pub(super) struct UsbRuntimeDiag {
     pub event_handler_ready: bool,
     pub probe_requested: bool,
     pub root_port_change_seen: bool,
+    pub controller_phase: &'static str,
+    pub root_hub_lifecycle: &'static str,
     pub empty_probe_streak: u32,
     pub probe_fail_streak: u32,
     pub last_probe_state: &'static str,
     pub last_probe_device_count: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControllerPhase {
+    Startup = 0,
+    FirstContact = 1,
+    Quarantined = 2,
+    Validated = 3,
+    Recoverable = 4,
+}
+
+fn controller_phase_name(phase: ControllerPhase) -> &'static str {
+    match phase {
+        ControllerPhase::Startup => "startup",
+        ControllerPhase::FirstContact => "first-contact",
+        ControllerPhase::Quarantined => "quarantined",
+        ControllerPhase::Validated => "validated",
+        ControllerPhase::Recoverable => "recoverable",
+    }
+}
+
+fn controller_phase_from_raw(raw: u32) -> ControllerPhase {
+    match raw {
+        1 => ControllerPhase::FirstContact,
+        2 => ControllerPhase::Quarantined,
+        3 => ControllerPhase::Validated,
+        4 => ControllerPhase::Recoverable,
+        _ => ControllerPhase::Startup,
+    }
+}
+
+fn controller_phase(controller_id: usize) -> ControllerPhase {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return ControllerPhase::Startup;
+    }
+    controller_phase_from_raw(CONTROLLER_PHASE[controller_id].load(Ordering::Acquire))
+}
+
+fn set_controller_phase(controller_id: usize, phase: ControllerPhase, reason: &'static str) {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return;
+    }
+    let prev = controller_phase(controller_id);
+    if prev != phase {
+        crate::log!(
+            "crabusb: controller {} phase {} -> {} ({})\n",
+            controller_id,
+            controller_phase_name(prev),
+            controller_phase_name(phase),
+            reason
+        );
+    }
+    CONTROLLER_PHASE[controller_id].store(phase as u32, Ordering::Release);
+}
+
+fn mark_controller_validated(controller_id: usize, reason: &'static str) {
+    let phase = controller_phase(controller_id);
+    if !matches!(phase, ControllerPhase::Validated | ControllerPhase::Recoverable) {
+        set_controller_phase(controller_id, ControllerPhase::Validated, reason);
+    }
+}
+
+fn mark_controller_quarantined(controller_id: usize, reason: &'static str) {
+    set_controller_phase(controller_id, ControllerPhase::Quarantined, reason);
+}
+
+fn mark_controller_recoverable(controller_id: usize, reason: &'static str) {
+    set_controller_phase(controller_id, ControllerPhase::Recoverable, reason);
+}
+
+fn controller_can_rebind(controller_id: usize) -> bool {
+    matches!(
+        controller_phase(controller_id),
+        ControllerPhase::Validated | ControllerPhase::Recoverable
+    )
+}
+
+fn controller_needs_quarantine(controller_id: usize) -> bool {
+    matches!(
+        controller_phase(controller_id),
+        ControllerPhase::Startup | ControllerPhase::FirstContact | ControllerPhase::Quarantined
+    )
 }
 
 const DEMO_WAV_EMBEDDED: &[u8] = b""; // temporary empty audio payload
@@ -73,6 +161,15 @@ const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 const CRABUSB_PROBE_TIMEOUT_MS: u64 = 2500;
 const CRABUSB_INITIAL_SETTLE_MS: u64 = 250;
 const CRABUSB_PROBE_QUIET_MS: u64 = 150;
+const CRABUSB_QUICK_STOP_WINDOW_MS: u64 = 1000;
+const CRABUSB_QUICK_STOP_BACKOFF_MS: u64 = 2000;
+const CRABUSB_MAX_QUICK_STOP_REBINDS: u32 = 3;
+const ROOT_HUB_LIFECYCLE_INIT: u32 = 0;
+const ROOT_HUB_LIFECYCLE_BOUND: u32 = 1;
+const ROOT_HUB_LIFECYCLE_ROOT_CHANGE: u32 = 2;
+const ROOT_HUB_LIFECYCLE_SETTLING: u32 = 3;
+const ROOT_HUB_LIFECYCLE_FIRST_CONTACT: u32 = 4;
+const ROOT_HUB_LIFECYCLE_STEADY: u32 = 5;
 
 fn probe_state_name(code: u32) -> &'static str {
     match code {
@@ -91,6 +188,87 @@ fn cached_device_count(controller_id: usize) -> usize {
         return 0;
     }
     TLB_DEVICES[controller_id].lock().len()
+}
+
+fn root_hub_lifecycle_name(stage: u32) -> &'static str {
+    match stage {
+        ROOT_HUB_LIFECYCLE_INIT => "init",
+        ROOT_HUB_LIFECYCLE_BOUND => "bound",
+        ROOT_HUB_LIFECYCLE_ROOT_CHANGE => "root-change",
+        ROOT_HUB_LIFECYCLE_SETTLING => "settling",
+        ROOT_HUB_LIFECYCLE_FIRST_CONTACT => "first-contact",
+        ROOT_HUB_LIFECYCLE_STEADY => "steady",
+        _ => "unknown",
+    }
+}
+
+fn root_hub_lifecycle_bucket(stage: u32) -> &'static str {
+    match stage {
+        ROOT_HUB_LIFECYCLE_INIT | ROOT_HUB_LIFECYCLE_BOUND => "before-root-change",
+        ROOT_HUB_LIFECYCLE_ROOT_CHANGE | ROOT_HUB_LIFECYCLE_SETTLING => {
+            "during-root-progression"
+        }
+        ROOT_HUB_LIFECYCLE_FIRST_CONTACT | ROOT_HUB_LIFECYCLE_STEADY => "after-first-contact",
+        _ => "unknown",
+    }
+}
+
+fn reset_root_hub_lifecycle(controller_id: usize, stage: u32, reason: &str) {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return;
+    }
+
+    let prev = ROOT_HUB_LIFECYCLE_STAGE[controller_id].swap(stage, Ordering::AcqRel);
+    if prev != stage {
+        crate::log!(
+            "crabusb: controller {} root-hub lifecycle {} -> {} ({})\n",
+            controller_id,
+            root_hub_lifecycle_name(prev),
+            root_hub_lifecycle_name(stage),
+            reason
+        );
+    }
+}
+
+fn advance_root_hub_lifecycle(controller_id: usize, stage: u32, reason: &str) {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return;
+    }
+
+    loop {
+        let prev = ROOT_HUB_LIFECYCLE_STAGE[controller_id].load(Ordering::Acquire);
+        if stage <= prev {
+            return;
+        }
+        if ROOT_HUB_LIFECYCLE_STAGE[controller_id]
+            .compare_exchange(prev, stage, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            crate::log!(
+                "crabusb: controller {} root-hub lifecycle {} -> {} ({})\n",
+                controller_id,
+                root_hub_lifecycle_name(prev),
+                root_hub_lifecycle_name(stage),
+                reason
+            );
+            return;
+        }
+    }
+}
+
+fn root_hub_lifecycle_stage(controller_id: usize) -> u32 {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return ROOT_HUB_LIFECYCLE_INIT;
+    }
+    ROOT_HUB_LIFECYCLE_STAGE[controller_id].load(Ordering::Acquire)
+}
+
+fn root_hub_lifecycle_summary(controller_id: usize) -> &'static str {
+    root_hub_lifecycle_name(root_hub_lifecycle_stage(controller_id))
+}
+
+fn root_hub_lifecycle_bucket_for_controller(controller_id: usize) -> &'static str {
+    root_hub_lifecycle_bucket(root_hub_lifecycle_stage(controller_id))
 }
 
 fn log_probe_progress(prefix: &str) {
@@ -234,6 +412,22 @@ fn xhci_fatal_probe_state(controller_id: usize) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+fn log_xhci_status_bits(controller_id: usize, prefix: &str) {
+    let Some(status) = xhci_status_bits(controller_id) else {
+        return;
+    };
+    crate::log!(
+        "crabusb: {} xhci status ctrl={} phase={} halted={} hse={} cnr={} hce={}\n",
+        prefix,
+        controller_id,
+        controller_phase_name(controller_phase(controller_id)),
+        status.hc_halted,
+        status.host_system_error,
+        status.controller_not_ready,
+        status.host_controller_error,
+    );
 }
 
 fn is_pre_command_root_hub_wait() -> bool {
@@ -2248,6 +2442,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
     {
         crate::wait::Either::First(res) => match res {
             Ok(devices) => {
+                mark_controller_validated(controller_id, "probe completed successfully");
                 if devices.is_empty() {
                     let cached = cached_device_count(controller_id);
                     if cached > 0 {
@@ -2257,8 +2452,14 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                         PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
                         EMPTY_PROBE_STREAK[controller_id].store(0, Ordering::Release);
                         NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
+                        advance_root_hub_lifecycle(
+                            controller_id,
+                            ROOT_HUB_LIFECYCLE_STEADY,
+                            "empty probe after first device contact",
+                        );
                         return false;
                     }
+
                     LAST_PROBE_STATE[controller_id].store(2, Ordering::Release);
                     LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
                     PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
@@ -2293,6 +2494,13 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                         );
                         uninstall_event_handler(controller_id);
                     }
+                    if ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire) {
+                        advance_root_hub_lifecycle(
+                            controller_id,
+                            ROOT_HUB_LIFECYCLE_SETTLING,
+                            "empty probe while waiting for first device contact",
+                        );
+                    }
                     false
                 } else {
                     LAST_PROBE_STATE[controller_id].store(1, Ordering::Release);
@@ -2301,6 +2509,20 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                     PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
                     EMPTY_PROBE_STREAK[controller_id].store(0, Ordering::Release);
                     NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
+                    if cached_device_count(controller_id) == 0 {
+                        advance_root_hub_lifecycle(
+                            controller_id,
+                            ROOT_HUB_LIFECYCLE_FIRST_CONTACT,
+                            "probe discovered first devices",
+                        );
+                    } else {
+                        advance_root_hub_lifecycle(
+                            controller_id,
+                            ROOT_HUB_LIFECYCLE_STEADY,
+                            "probe rediscovered devices",
+                        );
+                    }
+                    mark_controller_validated(controller_id, "probe discovered devices");
                     update_tlb_devices(controller_id, &devices);
                     refresh_tlb_topology(host, controller_id).await;
                     crate::log!("crabusb: discovered {} new device(s)\n", devices.len());
@@ -2345,21 +2567,51 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                 );
                 if let Some(reason) = xhci_fatal_probe_state(controller_id) {
                     crate::log!(
-                        "crabusb: controller {} fatal xhci state during probe failure ({}); rebinding immediately\n",
+                        "crabusb: controller {} fatal xhci state during probe failure ({}); phase={} lifecycle={} bucket={}\n",
                         controller_id,
-                        reason
+                        reason,
+                        controller_phase_name(controller_phase(controller_id)),
+                        root_hub_lifecycle_summary(controller_id),
+                        root_hub_lifecycle_bucket_for_controller(controller_id)
                     );
                     PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
-                    uninstall_event_handler(controller_id);
+                    if controller_needs_quarantine(controller_id) {
+                        mark_controller_quarantined(
+                            controller_id,
+                            "fatal probe failure before validation",
+                        );
+                        crate::log!(
+                            "crabusb: controller {} quarantined after early probe failure; holding bind\n",
+                            controller_id
+                        );
+                    } else {
+                        mark_controller_recoverable(
+                            controller_id,
+                            "fatal probe failure after validation",
+                        );
+                        uninstall_event_handler(controller_id);
+                    }
                     return false;
                 }
                 if fail_streak >= 2 {
                     crate::log!(
-                        "crabusb: controller {} forcing host rebind after repeated probe failures\n",
-                        controller_id
+                        "crabusb: controller {} repeated probe failures (phase={} lifecycle={} bucket={})\n",
+                        controller_id,
+                        controller_phase_name(controller_phase(controller_id)),
+                        root_hub_lifecycle_summary(controller_id),
+                        root_hub_lifecycle_bucket_for_controller(controller_id)
                     );
                     PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
-                    uninstall_event_handler(controller_id);
+                    if controller_needs_quarantine(controller_id) {
+                        mark_controller_quarantined(controller_id, "repeated probe failures before validation");
+                        crate::log!(
+                            "crabusb: controller {} quarantined; suppressing rebind loop\n",
+                            controller_id
+                        );
+                    } else {
+                        mark_controller_recoverable(controller_id, "repeated probe failures after validation");
+                        uninstall_event_handler(controller_id);
+                    }
                 }
                 false
             }
@@ -2387,21 +2639,45 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
             );
             if let Some(reason) = xhci_fatal_probe_state(controller_id) {
                 crate::log!(
-                    "crabusb: controller {} fatal xhci state during probe timeout ({}); rebinding immediately\n",
+                    "crabusb: controller {} fatal xhci state during probe timeout ({}); phase={} lifecycle={} bucket={}\n",
                     controller_id,
-                    reason
+                    reason,
+                    controller_phase_name(controller_phase(controller_id)),
+                    root_hub_lifecycle_summary(controller_id),
+                    root_hub_lifecycle_bucket_for_controller(controller_id)
                 );
                 PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
-                uninstall_event_handler(controller_id);
+                if controller_needs_quarantine(controller_id) {
+                    mark_controller_quarantined(controller_id, "fatal probe timeout before validation");
+                    crate::log!(
+                        "crabusb: controller {} quarantined after early probe timeout; holding bind\n",
+                        controller_id
+                    );
+                } else {
+                    mark_controller_recoverable(controller_id, "fatal probe timeout after validation");
+                    uninstall_event_handler(controller_id);
+                }
                 return false;
             }
             if fail_streak >= 2 {
                 crate::log!(
-                    "crabusb: controller {} forcing host rebind after repeated probe timeouts\n",
-                    controller_id
+                    "crabusb: controller {} repeated probe timeouts (phase={} lifecycle={} bucket={})\n",
+                    controller_id,
+                    controller_phase_name(controller_phase(controller_id)),
+                    root_hub_lifecycle_summary(controller_id),
+                    root_hub_lifecycle_bucket_for_controller(controller_id)
                 );
                 PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
-                uninstall_event_handler(controller_id);
+                if controller_needs_quarantine(controller_id) {
+                    mark_controller_quarantined(controller_id, "repeated probe timeout before validation");
+                    crate::log!(
+                        "crabusb: controller {} quarantined; suppressing rebind loop\n",
+                        controller_id
+                    );
+                } else {
+                    mark_controller_recoverable(controller_id, "repeated probe timeout after validation");
+                    uninstall_event_handler(controller_id);
+                }
             }
             false
         }
@@ -2429,10 +2705,21 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
         crate::wait::Either::First(res) => match res {
             Ok(devices) => {
                 LAST_PROBE_DEVICE_COUNT[info.index].store(devices.len() as u32, Ordering::Release);
+                mark_controller_validated(info.index, "scout probe completed");
                 if devices.is_empty() {
                     LAST_PROBE_STATE[info.index].store(2, Ordering::Release);
+                    advance_root_hub_lifecycle(
+                        info.index,
+                        ROOT_HUB_LIFECYCLE_SETTLING,
+                        "scout found no devices yet",
+                    );
                 } else {
                     LAST_PROBE_STATE[info.index].store(1, Ordering::Release);
+                    advance_root_hub_lifecycle(
+                        info.index,
+                        ROOT_HUB_LIFECYCLE_FIRST_CONTACT,
+                        "scout discovered first devices",
+                    );
                 }
                 update_tlb_devices(info.index, &devices);
                 refresh_tlb_topology(host, info.index).await;
@@ -2479,11 +2766,21 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                 crate::log!("crabusb: scout probe failed: {:?}\n", err);
                 if let Some(reason) = xhci_fatal_probe_state(info.index) {
                     crate::log!(
-                        "crabusb: controller {} fatal xhci state during scout failure ({}); rebinding immediately\n",
+                        "crabusb: controller {} fatal xhci state during scout failure ({}); phase={} lifecycle={} bucket={}\n",
                         info.index,
-                        reason
+                        reason,
+                        controller_phase_name(controller_phase(info.index)),
+                        root_hub_lifecycle_summary(info.index),
+                        root_hub_lifecycle_bucket_for_controller(info.index)
                     );
-                    uninstall_event_handler(info.index);
+                    log_xhci_status_bits(info.index, "scout failure");
+                    if controller_needs_quarantine(info.index) {
+                        mark_controller_quarantined(info.index, "scout failure before validation");
+                        crate::log!(
+                            "crabusb: controller {} quarantined; keeping current bind intact\n",
+                            info.index
+                        );
+                    }
                 }
             }
         },
@@ -2498,11 +2795,21 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
             );
             if let Some(reason) = xhci_fatal_probe_state(info.index) {
                 crate::log!(
-                    "crabusb: controller {} fatal xhci state during scout timeout ({}); rebinding immediately\n",
+                    "crabusb: controller {} fatal xhci state during scout timeout ({}); phase={} lifecycle={} bucket={}\n",
                     info.index,
-                    reason
+                    reason,
+                    controller_phase_name(controller_phase(info.index)),
+                    root_hub_lifecycle_summary(info.index),
+                    root_hub_lifecycle_bucket_for_controller(info.index)
                 );
-                uninstall_event_handler(info.index);
+                log_xhci_status_bits(info.index, "scout timeout");
+                if controller_needs_quarantine(info.index) {
+                    mark_controller_quarantined(info.index, "scout timeout before validation");
+                    crate::log!(
+                        "crabusb: controller {} quarantined; keeping current bind intact\n",
+                        info.index
+                    );
+                }
             }
         }
     }
@@ -2510,12 +2817,15 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
 }
 
 fn install_event_handler(controller_id: usize, handler: EventHandler) {
+    set_controller_phase(controller_id, ControllerPhase::Startup, "event handler installed");
+    reset_root_hub_lifecycle(controller_id, ROOT_HUB_LIFECYCLE_BOUND, "event handler installed");
     *EVENT_HANDLER[controller_id].lock() = Some(handler);
     EVENT_HANDLER_READY[controller_id].store(true, Ordering::Release);
 }
 
 fn uninstall_event_handler(controller_id: usize) {
     EVENT_HANDLER_READY[controller_id].store(false, Ordering::Release);
+    reset_root_hub_lifecycle(controller_id, ROOT_HUB_LIFECYCLE_INIT, "event handler removed");
     *EVENT_HANDLER[controller_id].lock() = None;
 }
 
@@ -2545,12 +2855,36 @@ pub async fn event_pump_task(controller_id: usize) {
                 ROOT_PORT_CHANGE_SEEN[controller_id].store(true, Ordering::Release);
                 NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
                 PROBE_REQUESTED[controller_id].store(true, Ordering::Release);
+                advance_root_hub_lifecycle(
+                    controller_id,
+                    ROOT_HUB_LIFECYCLE_ROOT_CHANGE,
+                    "root-port change observed",
+                );
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
             Some(Event::Stopped) => {
                 crate::log!("crabusb: pump observed stopped event\n");
-                uninstall_event_handler(controller_id);
-                Timer::after(EmbassyDuration::from_millis(10)).await;
+                log_xhci_status_bits(controller_id, "pump stopped");
+                crate::log!(
+                    "crabusb: controller {} stopped event phase={} lifecycle={} bucket={}\n",
+                    controller_id,
+                    controller_phase_name(controller_phase(controller_id)),
+                    root_hub_lifecycle_summary(controller_id),
+                    root_hub_lifecycle_bucket_for_controller(controller_id)
+                );
+                if controller_can_rebind(controller_id) {
+                    mark_controller_recoverable(controller_id, "pump observed stopped event");
+                    uninstall_event_handler(controller_id);
+                    Timer::after(EmbassyDuration::from_millis(10)).await;
+                } else {
+                    mark_controller_quarantined(controller_id, "pump observed stopped before validation");
+                    crate::log!(
+                        "crabusb: controller {} stopped before validation; quarantining instead of rebinding\n",
+                        controller_id
+                    );
+                    Timer::after(EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_BACKOFF_MS))
+                        .await;
+                }
             }
         }
     }
@@ -2562,6 +2896,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
 
     AUDIO_STREAM_REQUESTED.store(true, Ordering::Release);
     TRUEKEY_STREAM_REQUESTED.store(true, Ordering::Release);
+    let mut quick_stop_streak = 0u32;
 
     loop {
         let Some(info) = super::controller_by_index(controller_index) else {
@@ -2612,6 +2947,8 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         }
 
         install_event_handler(info.index, host.create_event_handler());
+        set_controller_phase(info.index, ControllerPhase::FirstContact, "host init completed");
+        let bind_started_at = Instant::now();
 
         crate::log!(
             "crabusb: host init ok controller {} awaiting root-hub events\n",
@@ -2626,6 +2963,11 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         PROBE_FAIL_STREAK[info.index].store(0, Ordering::Release);
         TLB_DEVICES[info.index].lock().clear();
         TLB_TOPOLOGY[info.index].lock().clear();
+        advance_root_hub_lifecycle(
+            info.index,
+            ROOT_HUB_LIFECYCLE_SETTLING,
+            "initial settle window started",
+        );
         Timer::after(EmbassyDuration::from_millis(CRABUSB_INITIAL_SETTLE_MS)).await;
         crab_scout_once(&mut host, info, &spawner).await;
 
@@ -2633,11 +2975,40 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         let mut probe_quiet_until: Option<Instant> = None;
         loop {
             if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
-                crate::log!("crabusb: event handler stopped; rediscovering controller\n");
+                let quick_stop = bind_started_at.elapsed()
+                    < EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_WINDOW_MS);
+                if quick_stop {
+                    quick_stop_streak = quick_stop_streak.saturating_add(1);
+                } else {
+                    quick_stop_streak = 0;
+                }
+                crate::log!(
+                    "crabusb: event handler stopped; rediscovering controller (quick_stop={} streak={}) phase={} lifecycle={} bucket={}\n",
+                    quick_stop,
+                    quick_stop_streak,
+                    controller_phase_name(controller_phase(info.index)),
+                    root_hub_lifecycle_summary(info.index),
+                    root_hub_lifecycle_bucket_for_controller(info.index)
+                );
+                if quick_stop_streak > CRABUSB_MAX_QUICK_STOP_REBINDS {
+                    crate::log!(
+                        "crabusb: controller {} hit repeated immediate-stop loop; backing off {}ms before rebind\n",
+                        info.index,
+                        CRABUSB_QUICK_STOP_BACKOFF_MS
+                    );
+                    Timer::after(EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_BACKOFF_MS))
+                        .await;
+                    quick_stop_streak = 0;
+                }
                 break;
             }
 
             if PROBE_REQUESTED[info.index].swap(false, Ordering::AcqRel) {
+                advance_root_hub_lifecycle(
+                    info.index,
+                    ROOT_HUB_LIFECYCLE_SETTLING,
+                    "probe requested after root-port change",
+                );
                 probe_quiet_until =
                     Some(Instant::now() + EmbassyDuration::from_millis(CRABUSB_PROBE_QUIET_MS));
                 idle_ticks = 0;
@@ -2763,6 +3134,7 @@ pub(super) fn request_rebind(controller_id: usize) -> bool {
         "crabusb: live rebind requested on controller {}\n",
         controller_id
     );
+    mark_controller_recoverable(controller_id, "live rebind requested");
     uninstall_event_handler(controller_id);
     true
 }
@@ -2776,9 +3148,27 @@ pub(super) fn runtime_diag(controller_id: usize) -> Option<UsbRuntimeDiag> {
         event_handler_ready: EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire),
         probe_requested: PROBE_REQUESTED[controller_id].load(Ordering::Acquire),
         root_port_change_seen: ROOT_PORT_CHANGE_SEEN[controller_id].load(Ordering::Acquire),
+        controller_phase: controller_phase_name(controller_phase(controller_id)),
+        root_hub_lifecycle: root_hub_lifecycle_summary(controller_id),
         empty_probe_streak: EMPTY_PROBE_STREAK[controller_id].load(Ordering::Acquire),
         probe_fail_streak: PROBE_FAIL_STREAK[controller_id].load(Ordering::Acquire),
         last_probe_state: probe_state_name(LAST_PROBE_STATE[controller_id].load(Ordering::Acquire)),
         last_probe_device_count: LAST_PROBE_DEVICE_COUNT[controller_id].load(Ordering::Acquire),
     })
+}
+
+pub(super) fn diag_phase(controller_id: usize) -> Option<&'static str> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return None;
+    }
+
+    Some(controller_phase_name(controller_phase(controller_id)))
+}
+
+pub(super) fn diag_root_hub_lifecycle(controller_id: usize) -> Option<&'static str> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return None;
+    }
+
+    Some(root_hub_lifecycle_summary(controller_id))
 }

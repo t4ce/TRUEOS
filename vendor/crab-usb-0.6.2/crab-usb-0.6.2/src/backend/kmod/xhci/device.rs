@@ -1,6 +1,7 @@
 use alloc::collections::BTreeMap;
 
 use alloc::{sync::Arc, vec::Vec};
+use core::fmt::Debug;
 
 use futures::{FutureExt, future::BoxFuture};
 use mbarrier::mb;
@@ -51,8 +52,125 @@ pub struct Device {
     current_config_value: Option<u8>,
     config_desc: Vec<ConfigurationDescriptor>,
     port_speed: Speed,
+    root_port_id: u8,
+    port_id: u8,
     eps: BTreeMap<Dci, EndpointBase>,
     cmd: CommandRing,
+}
+
+#[derive(Clone, Copy)]
+enum CommandLifecycleStage {
+    AddressDevice,
+    EvaluateContext,
+    GetDeviceDescriptorBase,
+    GetConfiguration,
+    ReadDescriptor,
+    GetConfigurationDescriptor,
+    SetConfiguration,
+    ConfigureEndpoint,
+    ClaimInterface,
+    ResetEndpoint,
+    SetTrDequeuePointer,
+    DisableSlot,
+}
+
+impl CommandLifecycleStage {
+    fn name(self) -> &'static str {
+        match self {
+            Self::AddressDevice => "address-device",
+            Self::EvaluateContext => "evaluate-context",
+            Self::GetDeviceDescriptorBase => "get-device-descriptor-base",
+            Self::GetConfiguration => "get-configuration",
+            Self::ReadDescriptor => "read-descriptor",
+            Self::GetConfigurationDescriptor => "get-configuration-descriptor",
+            Self::SetConfiguration => "set-configuration",
+            Self::ConfigureEndpoint => "configure-endpoint",
+            Self::ClaimInterface => "claim-interface",
+            Self::ResetEndpoint => "reset-endpoint",
+            Self::SetTrDequeuePointer => "set-tr-dequeue-pointer",
+            Self::DisableSlot => "disable-slot",
+        }
+    }
+
+    fn progress(self) -> u32 {
+        match self {
+            Self::AddressDevice => 41,
+            Self::EvaluateContext => 42,
+            Self::GetDeviceDescriptorBase => 43,
+            Self::GetConfiguration => 44,
+            Self::ReadDescriptor => 45,
+            Self::GetConfigurationDescriptor => 46,
+            Self::SetConfiguration => 47,
+            Self::ConfigureEndpoint => 48,
+            Self::ClaimInterface => 49,
+            Self::ResetEndpoint => 50,
+            Self::SetTrDequeuePointer => 51,
+            Self::DisableSlot => 52,
+        }
+    }
+}
+
+struct CommandLifecycle {
+    slot_id: u8,
+    root_port_id: u8,
+    port_id: u8,
+}
+
+impl CommandLifecycle {
+    fn new(slot_id: u8, root_port_id: u8, port_id: u8) -> Self {
+        Self {
+            slot_id,
+            root_port_id,
+            port_id,
+        }
+    }
+
+    fn begin(&self, stage: CommandLifecycleStage, detail: u32) {
+        crate::debug_set_usb_probe_progress(
+            stage.progress(),
+            self.root_port_id,
+            self.port_id,
+            self.slot_id,
+            detail,
+        );
+        info!(
+            "xhci lifecycle: slot={} root_port={} port={} stage={} begin detail={}\n",
+            self.slot_id,
+            self.root_port_id,
+            self.port_id,
+            stage.name(),
+            detail,
+        );
+    }
+
+    fn ok(&self, stage: CommandLifecycleStage, detail: u32) {
+        crate::debug_set_usb_probe_progress(
+            stage.progress(),
+            self.root_port_id,
+            self.port_id,
+            self.slot_id,
+            detail,
+        );
+        info!(
+            "xhci lifecycle: slot={} root_port={} port={} stage={} ok detail={}\n",
+            self.slot_id,
+            self.root_port_id,
+            self.port_id,
+            stage.name(),
+            detail,
+        );
+    }
+
+    fn fail(&self, stage: CommandLifecycleStage, err: &(dyn Debug + Send + Sync)) {
+        info!(
+            "xhci lifecycle: slot={} root_port={} port={} stage={} failed: {:?}\n",
+            self.slot_id,
+            self.root_port_id,
+            self.port_id,
+            stage.name(),
+            err,
+        );
+    }
 }
 
 impl Device {
@@ -83,6 +201,8 @@ impl Device {
             current_config_value: None,
             config_desc: vec![],
             port_speed: Speed::Full,
+            root_port_id: 0,
+            port_id: 0,
             eps: BTreeMap::new(),
             cmd: host.cmd.clone(),
         })
@@ -96,6 +216,29 @@ impl Device {
         Ok(ep)
     }
 
+    fn lifecycle(&self) -> CommandLifecycle {
+        CommandLifecycle::new(self.id.as_u8(), self.root_port_id, self.port_id)
+    }
+
+    async fn abort_command_lifecycle(
+        &mut self,
+        lifecycle: &CommandLifecycle,
+        stage: CommandLifecycleStage,
+        err: &(dyn Debug + Send + Sync),
+    ) {
+        lifecycle.fail(stage, err);
+        if let Err(close_err) = self.debug_close_slot_inner().await {
+            info!(
+                "xhci lifecycle: slot={} root_port={} port={} cleanup after {} failed: {:?}\n",
+                lifecycle.slot_id,
+                lifecycle.root_port_id,
+                lifecycle.port_id,
+                stage.name(),
+                close_err
+            );
+        }
+    }
+
     pub(crate) async fn init(&mut self, host: &mut Xhci, info: &DeviceAddressInfo) -> Result {
         info!(
             "crabusb/xhci/device: init begin slot={} root_port={} port={} speed={:?}",
@@ -104,46 +247,33 @@ impl Device {
             info.port_id,
             info.port_speed
         );
+        self.root_port_id = info.root_port_id;
+        self.port_id = info.port_id;
         // Keep the raw PORTSC.PortSpeed encoding for interval calculations
         self.port_speed = info.port_speed;
         // let speed = info.port_speed.to_xhci_portsc_value();
 
         let ep = self.new_ep(Dci::CTRL)?;
         self.ctrl_ep = Some(EndpointControl::new(ep));
-        crate::debug_set_usb_probe_progress(5, info.root_port_id, info.port_id, self.id.as_u8(), 0);
-        self.address(host, info).await?;
+        let lifecycle = self.lifecycle();
+        self.address(host, info, &lifecycle).await?;
         // self.dump_device_out();
-        crate::debug_set_usb_probe_progress(6, info.root_port_id, info.port_id, self.id.as_u8(), 8);
-        let base = self.get_device_descriptor_base().await?;
+        let base = self.get_device_descriptor_base(info, &lifecycle).await?;
         debug!("Device Descriptor Base: {:#x?}", base);
 
-        crate::debug_set_usb_probe_progress(
-            7,
-            info.root_port_id,
-            info.port_id,
-            self.id.as_u8(),
-            u32::from(base.max_packet_size_0),
-        );
-        self.setup_max_packet(base).await?;
+        self.setup_max_packet(base, info, &lifecycle).await?;
 
         // 读取当前配置（应该返回 0，表示未配置）
-        crate::debug_set_usb_probe_progress(8, info.root_port_id, info.port_id, self.id.as_u8(), 0);
-        let current_config = self.get_configuration().await?;
+        let current_config = self.get_configuration(info, &lifecycle).await?;
         debug!("Current configuration value: {}", current_config);
 
-        crate::debug_set_usb_probe_progress(9, info.root_port_id, info.port_id, self.id.as_u8(), 0);
-        self.read_descriptor().await?;
+        self.read_descriptor(info, &lifecycle).await?;
 
         // 读取所有配置描述符
         for i in 0..self.desc.num_configurations {
-            crate::debug_set_usb_probe_progress(
-                10,
-                info.root_port_id,
-                info.port_id,
-                self.id.as_u8(),
-                i as u32,
-            );
-            let config_desc = self.ep_ctrl().get_configuration_descriptor(i).await?;
+            let config_desc = self
+                .get_configuration_descriptor(i, info, &lifecycle)
+                .await?;
             self.config_desc.push(config_desc);
         }
 
@@ -152,14 +282,8 @@ impl Device {
         if !self.config_desc.is_empty() {
             let config_value = self.config_desc[0].configuration_value;
             debug!("Setting device configuration to {}", config_value);
-            crate::debug_set_usb_probe_progress(
-                11,
-                info.root_port_id,
-                info.port_id,
-                self.id.as_u8(),
-                u32::from(config_value),
-            );
-            self.set_configuration(config_value).await?;
+            self.set_configuration_with_lifecycle(config_value, info, &lifecycle)
+                .await?;
         }
 
         info!(
@@ -171,32 +295,46 @@ impl Device {
             self.desc.subclass,
             self.desc.protocol
         );
-        crate::debug_set_usb_probe_progress(
-            12,
-            info.root_port_id,
-            info.port_id,
-            self.id.as_u8(),
+        lifecycle.ok(
+            CommandLifecycleStage::ConfigureEndpoint,
             self.desc.num_configurations as u32,
         );
         Ok(())
     }
 
     async fn evaluate(&mut self) -> Result {
+        let lifecycle = self.lifecycle();
         mb();
         debug!("Evaluating context for slot {}", self.id.as_u8());
-        let _result = self
+        lifecycle.begin(CommandLifecycleStage::EvaluateContext, self.id.as_u8() as u32);
+        let result = self
             .cmd
             .cmd_request(command::Allowed::EvaluateContext(
                 *command::EvaluateContext::default()
                     .set_slot_id(self.id.into())
                     .set_input_context_pointer(self.ctx.input_bus_addr()),
             ))
-            .await?;
+            .await;
+        match result {
+            Ok(_) => {
+                lifecycle.ok(CommandLifecycleStage::EvaluateContext, self.id.as_u8() as u32);
+            }
+            Err(err) => {
+                lifecycle.fail(CommandLifecycleStage::EvaluateContext, &err);
+                return Err(err.into());
+            }
+        }
         debug!("Evaluate context ok");
         Ok(())
     }
 
-    async fn setup_max_packet(&mut self, desc: DeviceDescriptorBase) -> Result {
+    async fn setup_max_packet(
+        &mut self,
+        desc: DeviceDescriptorBase,
+        _info: &DeviceAddressInfo,
+        _lifecycle: &CommandLifecycle,
+    ) -> Result {
+        let lifecycle = self.lifecycle();
         self.ctx.perper_change();
         // USB 设备描述符的 bMaxPacketSize0 字段（偏移 7）
         // 对于控制端点，这是直接的字节数值，不需要解码
@@ -214,12 +352,25 @@ impl Device {
             endpoint.set_max_packet_size(packet_size);
         });
 
-        self.evaluate().await?;
+        lifecycle.begin(CommandLifecycleStage::EvaluateContext, packet_size as u32);
+        if let Err(err) = self.evaluate().await {
+            lifecycle.fail(CommandLifecycleStage::EvaluateContext, &err);
+            self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::EvaluateContext, &err)
+                .await;
+            return Err(err.into());
+        }
+        lifecycle.ok(CommandLifecycleStage::EvaluateContext, packet_size as u32);
 
         Ok(())
     }
 
-    async fn address(&mut self, host: &mut Xhci, info: &DeviceAddressInfo) -> Result {
+    async fn address(
+        &mut self,
+        host: &mut Xhci,
+        info: &DeviceAddressInfo,
+        _lifecycle: &CommandLifecycle,
+    ) -> Result {
+        let lifecycle = self.lifecycle();
         // 直接使用 DeviceSpeed 枚举计算默认 max packet size
         let max_packet_size = parse_default_max_packet_size_from_port_speed(info.port_speed);
 
@@ -358,13 +509,24 @@ impl Device {
 
         let input_bus_addr = self.ctx.input_bus_addr();
         trace!("Input context bus address: {input_bus_addr:#x?}");
+        lifecycle.begin(CommandLifecycleStage::AddressDevice, max_packet_size as u32);
         let result = host
             .cmd_request(command::Allowed::AddressDevice(
                 *command::AddressDevice::new()
                     .set_slot_id(self.id.into())
                     .set_input_context_pointer(input_bus_addr),
             ))
-            .await?;
+            .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(err) => {
+                self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::AddressDevice, &err)
+                    .await;
+                return Err(err.into());
+            }
+        };
+
+        lifecycle.ok(CommandLifecycleStage::AddressDevice, result.slot_id() as u32);
 
         info!(
             "crabusb/xhci/device: address ok slot={} completion={:?}",
@@ -375,34 +537,95 @@ impl Device {
         Ok(())
     }
 
-    async fn read_descriptor(&mut self) -> Result<()> {
-        self.desc = self.ep_ctrl().get_device_descriptor().await?;
+    async fn read_descriptor(
+        &mut self,
+        _info: &DeviceAddressInfo,
+        _lifecycle: &CommandLifecycle,
+    ) -> Result<()> {
+        let lifecycle = self.lifecycle();
+        lifecycle.begin(CommandLifecycleStage::ReadDescriptor, 0);
+        match self.ep_ctrl().get_device_descriptor().await {
+            Ok(desc) => {
+                self.desc = desc;
+                lifecycle.ok(
+                    CommandLifecycleStage::ReadDescriptor,
+                    self.desc.num_configurations as u32,
+                );
+            }
+            Err(err) => {
+                self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::ReadDescriptor, &err)
+                    .await;
+                return Err(err.into());
+            }
+        }
         Ok(())
     }
-    async fn get_device_descriptor_base(&mut self) -> Result<DeviceDescriptorBase> {
+    async fn get_device_descriptor_base(
+        &mut self,
+        _info: &DeviceAddressInfo,
+        _lifecycle: &CommandLifecycle,
+    ) -> Result<DeviceDescriptorBase> {
+        let lifecycle = self.lifecycle();
         let mut data = vec![0u8; 8];
+        lifecycle.begin(CommandLifecycleStage::GetDeviceDescriptorBase, data.len() as u32);
 
         // DMA 传输
-        self.ep_ctrl()
+        if let Err(err) = self
+            .ep_ctrl()
             .get_descriptor(DescriptorType::DEVICE, 0, 0, data.as_mut_slice())
-            .await?;
+            .await
+        {
+            self.abort_command_lifecycle(
+                &lifecycle,
+                CommandLifecycleStage::GetDeviceDescriptorBase,
+                &err,
+            )
+            .await;
+            return Err(err.into());
+        }
 
         let desc = unsafe { *(data.as_mut_slice().as_ptr() as *const DeviceDescriptorBase) };
+        lifecycle.ok(
+            CommandLifecycleStage::GetDeviceDescriptorBase,
+            u32::from(desc.max_packet_size_0),
+        );
 
         Ok(desc)
     }
 
-    async fn get_configuration(&mut self) -> Result<u8> {
-        let val = self.ep_ctrl().get_configuration().await?;
+    async fn get_configuration(
+        &mut self,
+        _info: &DeviceAddressInfo,
+        _lifecycle: &CommandLifecycle,
+    ) -> Result<u8> {
+        let lifecycle = self.lifecycle();
+        lifecycle.begin(CommandLifecycleStage::GetConfiguration, 0);
+        let val = match self.ep_ctrl().get_configuration().await {
+            Ok(val) => val,
+            Err(err) => {
+                self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::GetConfiguration, &err)
+                    .await;
+                return Err(err.into());
+            }
+        };
         self.current_config_value = Some(val);
+        lifecycle.ok(CommandLifecycleStage::GetConfiguration, u32::from(val));
         Ok(val)
     }
 
     async fn _set_configuration(&mut self, configuration_value: u8) -> Result {
+        let lifecycle = self.lifecycle();
         self.ctx.perper_change();
-        self.ep_ctrl()
+        lifecycle.begin(CommandLifecycleStage::SetConfiguration, u32::from(configuration_value));
+        if let Err(err) = self
+            .ep_ctrl()
             .set_configuration(configuration_value)
-            .await?;
+            .await
+        {
+            self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::SetConfiguration, &err)
+                .await;
+            return Err(err.into());
+        }
 
         self.current_config_value = Some(configuration_value);
 
@@ -410,20 +633,78 @@ impl Device {
             let c = input.control_mut();
             c.set_configuration_value(configuration_value);
         });
-        self.evaluate().await?;
+        if let Err(err) = self.evaluate().await {
+            self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::SetConfiguration, &err)
+                .await;
+            return Err(err.into());
+        }
+        lifecycle.ok(CommandLifecycleStage::SetConfiguration, u32::from(configuration_value));
         debug!("Device configuration set to {configuration_value}");
         Ok(())
     }
 
+    async fn set_configuration_with_lifecycle(
+        &mut self,
+        configuration_value: u8,
+        _info: &DeviceAddressInfo,
+        lifecycle: &CommandLifecycle,
+    ) -> Result {
+        lifecycle.begin(CommandLifecycleStage::SetConfiguration, u32::from(configuration_value));
+        match self._set_configuration(configuration_value).await {
+            Ok(()) => {
+                lifecycle.ok(CommandLifecycleStage::SetConfiguration, u32::from(configuration_value));
+                Ok(())
+            }
+            Err(err) => {
+                self.abort_command_lifecycle(lifecycle, CommandLifecycleStage::SetConfiguration, &err)
+                    .await;
+                Err(err.into())
+            }
+        }
+    }
+
+    async fn get_configuration_descriptor(
+        &mut self,
+        index: u8,
+        _info: &DeviceAddressInfo,
+        lifecycle: &CommandLifecycle,
+    ) -> Result<ConfigurationDescriptor> {
+        lifecycle.begin(
+            CommandLifecycleStage::GetConfigurationDescriptor,
+            u32::from(index),
+        );
+        match self.ep_ctrl().get_configuration_descriptor(index).await {
+            Ok(desc) => {
+                lifecycle.ok(
+                    CommandLifecycleStage::GetConfigurationDescriptor,
+                    u32::from(desc.configuration_value),
+                );
+                Ok(desc)
+            }
+            Err(err) => {
+                self.abort_command_lifecycle(
+                    lifecycle,
+                    CommandLifecycleStage::GetConfigurationDescriptor,
+                    &err,
+                )
+                .await;
+                Err(err.into())
+            }
+        }
+    }
+
     async fn _claim_interface(&mut self, interface: u8, alternate: u8) -> Result {
+        let lifecycle = self.lifecycle();
         self.ctx.perper_change();
+        lifecycle.begin(CommandLifecycleStage::ClaimInterface, u32::from(interface));
         self.ctx.with_input(|input| {
             let c = input.control_mut();
             c.set_interface_number(interface);
             c.set_alternate_setting(alternate);
         });
 
-        self.ep_ctrl()
+        if let Err(err) = self
+            .ep_ctrl()
             .control_out(
                 ControlSetup {
                     request_type: RequestType::Standard,
@@ -434,13 +715,24 @@ impl Device {
                 },
                 &[],
             )
-            .await?;
-        self.setup_all_endpoints(interface, alternate).await?;
+            .await
+        {
+            self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::ClaimInterface, &err)
+                .await;
+            return Err(err.into());
+        }
+        if let Err(err) = self.setup_all_endpoints(interface, alternate).await {
+            self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::ClaimInterface, &err)
+                .await;
+            return Err(err.into());
+        }
+        lifecycle.ok(CommandLifecycleStage::ClaimInterface, u32::from(alternate));
         debug!("Interface {interface} set successfully");
         Ok(())
     }
 
     async fn setup_all_endpoints(&mut self, interface: u8, alternate: u8) -> Result {
+        let lifecycle = self.lifecycle();
         let mut max_dci = 1;
         self.eps.clear();
         let mut configured_eps = Vec::new();
@@ -519,14 +811,24 @@ impl Device {
         });
         mb();
 
-        let _result = self
+        lifecycle.begin(CommandLifecycleStage::ConfigureEndpoint, max_dci as u32);
+        let _result = match self
             .cmd
             .cmd_request(command::Allowed::ConfigureEndpoint(
                 *command::ConfigureEndpoint::default()
                     .set_slot_id(self.id.into())
                     .set_input_context_pointer(self.ctx.input_bus_addr()),
             ))
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::ConfigureEndpoint, &err)
+                    .await;
+                return Err(err.into());
+            }
+        };
+        lifecycle.ok(CommandLifecycleStage::ConfigureEndpoint, max_dci as u32);
 
         Ok(())
     }
@@ -675,7 +977,12 @@ impl Device {
             }
         });
 
-        self.evaluate().await?;
+        if let Err(err) = self.evaluate().await {
+            let lifecycle = self.lifecycle();
+            self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::EvaluateContext, &err)
+                .await;
+            return Err(err.into());
+        }
         Ok(())
     }
 
@@ -684,6 +991,7 @@ impl Device {
         endpoint_address: u8,
         preserve_transfer_state: bool,
     ) -> Result<()> {
+        let lifecycle = self.lifecycle();
         let endpoint_id = usb_if::descriptor::EndpointDescriptor {
             address: endpoint_address,
             max_packet_size: 0,
@@ -697,6 +1005,7 @@ impl Device {
             interval: 0,
         }
         .dci();
+        lifecycle.begin(CommandLifecycleStage::ResetEndpoint, u32::from(endpoint_id));
 
         let mut cmd = command::ResetEndpoint::default();
         if preserve_transfer_state {
@@ -706,12 +1015,14 @@ impl Device {
         }
         cmd.set_endpoint_id(endpoint_id).set_slot_id(self.id.into());
 
-        self.cmd
-            .cmd_request(command::Allowed::ResetEndpoint(cmd))
-            .await?;
+        if let Err(err) = self.cmd.cmd_request(command::Allowed::ResetEndpoint(cmd)).await {
+            lifecycle.fail(CommandLifecycleStage::ResetEndpoint, &err);
+            return Err(err.into());
+        }
 
         if let Some(ep) = self.eps.get_mut(&endpoint_id.into()) {
             let ring_addr = ep.as_raw_mut::<Endpoint>().bus_addr().raw();
+            lifecycle.begin(CommandLifecycleStage::SetTrDequeuePointer, ring_addr as u32);
             let mut set_deq = command::SetTrDequeuePointer::default();
             set_deq
                 .set_dequeue_cycle_state()
@@ -719,14 +1030,22 @@ impl Device {
                 .set_endpoint_id(endpoint_id)
                 .set_slot_id(self.id.into());
 
-            self.cmd
+            if let Err(err) = self
+                .cmd
                 .cmd_request(command::Allowed::SetTrDequeuePointer(set_deq))
-                .await?;
+                .await
+            {
+                lifecycle.fail(CommandLifecycleStage::SetTrDequeuePointer, &err);
+                return Err(err.into());
+            }
+            lifecycle.ok(CommandLifecycleStage::SetTrDequeuePointer, ring_addr as u32);
         }
+        lifecycle.ok(CommandLifecycleStage::ResetEndpoint, u32::from(endpoint_id));
         Ok(())
     }
 
     async fn debug_close_slot_inner(&mut self) -> Result<()> {
+        let lifecycle = self.lifecycle();
         self.transfer_result_handler
             .unregister_slot(self.id.as_u8());
         self.eps.clear();
@@ -734,9 +1053,14 @@ impl Device {
 
         let mut cmd = command::DisableSlot::default();
         cmd.set_slot_id(self.id.into());
-        self.cmd
-            .cmd_request(command::Allowed::DisableSlot(cmd))
-            .await?;
+        lifecycle.begin(CommandLifecycleStage::DisableSlot, self.id.as_u8() as u32);
+        match self.cmd.cmd_request(command::Allowed::DisableSlot(cmd)).await {
+            Ok(_) => lifecycle.ok(CommandLifecycleStage::DisableSlot, self.id.as_u8() as u32),
+            Err(err) => {
+                lifecycle.fail(CommandLifecycleStage::DisableSlot, &err);
+                return Err(err.into());
+            }
+        }
         Ok(())
     }
 }

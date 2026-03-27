@@ -87,9 +87,11 @@ pub(crate) fn cmd_usb_status(io: &'static dyn ShellBackend2) {
         let bdf = alloc::format!("{:02X}:{:02X}.{}", ctrl.bus, ctrl.slot, ctrl.function);
         if let Some(diag) = runtime {
             lines.push(alloc::format!(
-                "probe usb: ctrl={} bdf={} ready={} pending={} rp={} empty={} fail={} last={} last_count={} cached={} stage={} root_port={} port={} slot={} detail={} mmio=0x{:X}",
+                "probe usb: ctrl={} bdf={} phase={} life={} ready={} pending={} rp={} empty={} fail={} last={} last_count={} cached={} stage={} root_port={} port={} slot={} detail={} mmio=0x{:X}",
                 ctrl.index,
                 bdf,
+                diag.controller_phase,
+                diag.root_hub_lifecycle,
                 diag.event_handler_ready as u8,
                 diag.probe_requested as u8,
                 diag.root_port_change_seen as u8,

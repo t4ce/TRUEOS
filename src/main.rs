@@ -55,8 +55,6 @@ mod tst_net_tcp_shell;
 mod tst_smtp_smoke;
 #[path = "tst/ui2_bgrt.rs"]
 mod tst_ui2_bgrt;
-#[path = "tst/ui2_imba_athlas_demo.rs"]
-mod tst_ui2_imba_athlas_demo;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
 mod tst_ui2_mandelbrot_demo;
 #[path = "tst/ui2_triangle_demo.rs"]

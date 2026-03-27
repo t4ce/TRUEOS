@@ -345,6 +345,8 @@ pub async fn led_controller_task(mut device: Device, controller_id: u32, target:
             target.configuration_value,
             err
         );
+        unregister_active_led_stream(active_stream);
+        return;
     }
 
     let mut interface = match claim_interface(

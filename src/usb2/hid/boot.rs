@@ -179,6 +179,8 @@ async fn hid_boot_stream_task(
             target.configuration_value,
             err
         );
+        let _ = unregister_active_hid_stream(active_stream);
+        return;
     }
 
     let mut interface = match claim_interface(
@@ -231,6 +233,8 @@ async fn hid_boot_stream_task(
                     target.interface_number,
                     err
                 );
+                let _ = unregister_active_hid_stream(active_stream);
+                return;
             }
         }
 
@@ -260,6 +264,8 @@ async fn hid_boot_stream_task(
                     target.interface_number,
                     err
                 );
+                let _ = unregister_active_hid_stream(active_stream);
+                return;
             }
         }
     }
@@ -291,6 +297,8 @@ async fn hid_boot_stream_task(
                     target.interface_number,
                     err
                 );
+                let _ = unregister_active_hid_stream(active_stream);
+                return;
             }
         }
     }
@@ -470,7 +478,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                     product_id,
                     err
                 );
-                break;
+                continue;
             }
         };
 

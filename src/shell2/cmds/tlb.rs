@@ -1013,7 +1013,9 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
             ctrl_info.function
         );
         let diag = alloc::format!(
-            "ev={} rp={} empty={}",
+            "phase={} life={} ev={} rp={} empty={}",
+            ctrl_info.controller_phase,
+            ctrl_info.root_hub_lifecycle,
             ctrl_info.event_ready as u8,
             ctrl_info.root_port_change_seen as u8,
             ctrl_info.empty_probe_streak

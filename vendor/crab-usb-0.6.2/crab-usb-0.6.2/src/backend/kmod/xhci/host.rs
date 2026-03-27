@@ -29,8 +29,8 @@ use crate::{
         ty::{DeviceOp, Event, EventHandlerOp},
     },
     debug_record_event,
-    err::Result,
-    osal::{Kernel, SpinWhile},
+    err::{ConvertXhciError, Result},
+    osal::Kernel,
     queue::Finished,
 };
 
@@ -80,6 +80,148 @@ impl CoreOp for Xhci {
     fn kernel(&self) -> &Kernel {
         &self.kernel
     }
+}
+
+impl Xhci {
+    const STATUS_POLL_DELAY_MS: u64 = 1;
+    const STATUS_POLL_LIMIT: usize = 2_000;
+
+    fn status_snapshot(&self) -> XhciStatusBits {
+        let sts = self.reg.read().operational.usbsts.read_volatile();
+        let cmd = self.reg.read().operational.usbcmd.read_volatile();
+
+        XhciStatusBits {
+            halted: sts.hc_halted(),
+            cnr: sts.controller_not_ready(),
+            reset: cmd.host_controller_reset(),
+            hse: sts.host_system_error(),
+            hce: sts.host_controller_error(),
+        }
+    }
+
+    fn ensure_controller_state(
+        &mut self,
+        stage: &'static str,
+        expected_halted: bool,
+        expected_cnr: bool,
+        expected_reset: bool,
+    ) -> Result {
+        let status = self.status_snapshot();
+        if status.hse
+            || status.hce
+            || status.halted != expected_halted
+            || status.cnr != expected_cnr
+            || status.reset != expected_reset
+        {
+            return Err(USBError::Other(anyhow!(
+                "xHCI controller in unexpected state after {stage}: halted={} cnr={} reset={} hse={} hce={} expected_halted={expected_halted} expected_cnr={expected_cnr} expected_reset={expected_reset}",
+                status.halted,
+                status.cnr,
+                status.reset,
+                status.hse,
+                status.hce,
+            )));
+        }
+        Ok(())
+    }
+
+    async fn wait_for_status<F>(&self, stage: &'static str, mut ready: F) -> Result
+    where
+        F: FnMut(&XhciStatusBits) -> bool,
+    {
+        for _ in 0..Self::STATUS_POLL_LIMIT {
+            let status = self.status_snapshot();
+            if status.hse || status.hce {
+                return Err(USBError::Other(anyhow!(
+                    "xHCI controller became unhealthy while waiting for {stage}: halted={} cnr={} reset={} hse={} hce={}",
+                    status.halted,
+                    status.cnr,
+                    status.reset,
+                    status.hse,
+                    status.hce,
+                )));
+            }
+            if ready(&status) {
+                return Ok(());
+            }
+            self.kernel
+                .delay(Duration::from_millis(Self::STATUS_POLL_DELAY_MS));
+        }
+
+        let status = self.status_snapshot();
+        Err(USBError::Other(anyhow!(
+            "xHCI controller timed out while waiting for {stage}: halted={} cnr={} reset={} hse={} hce={}",
+            status.halted,
+            status.cnr,
+            status.reset,
+            status.hse,
+            status.hce,
+        )))
+    }
+
+    fn poll_command_completion(
+        &mut self,
+        stage: &'static str,
+        addr: crate::BusAddr,
+    ) -> Result<CommandCompletion> {
+        for _ in 0..Self::STATUS_POLL_LIMIT {
+            let status = self.status_snapshot();
+            if status.hse || status.hce || status.halted || status.cnr || status.reset {
+                return Err(USBError::Other(anyhow!(
+                    "xHCI controller became unhealthy during {stage}: halted={} cnr={} reset={} hse={} hce={}",
+                    status.halted,
+                    status.cnr,
+                    status.reset,
+                    status.hse,
+                    status.hce,
+                )));
+            }
+
+            if let Some(handler) = self.event_handler.as_ref() {
+                let _ = handler.handle_event();
+            }
+
+            if let Some(cpl) = self.cmd.poll_finished(addr) {
+                return Ok(cpl);
+            }
+
+            self.kernel
+                .delay(Duration::from_millis(Self::STATUS_POLL_DELAY_MS));
+        }
+
+        let status = self.status_snapshot();
+        Err(USBError::Other(anyhow!(
+            "xHCI command timed out during {stage}: halted={} cnr={} reset={} hse={} hce={}",
+            status.halted,
+            status.cnr,
+            status.reset,
+            status.hse,
+            status.hce,
+        )))
+    }
+
+    fn command_ring_self_test(&mut self) -> Result {
+        let noop = command::Allowed::Noop(command::Noop::default());
+        let addr = self.cmd.submit_for_poll(noop);
+        let completion = self.poll_command_completion("post-run noop self-test", addr)?;
+        match completion.completion_code() {
+            Ok(code) => code.to_result()?,
+            Err(err) => Err(USBError::Other(anyhow!(
+                "xHCI post-run noop self-test completion decode failed: {err:?}"
+            )))?,
+        }
+        self.ensure_controller_state("post-run noop self-test", false, false, false)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct XhciStatusBits {
+    halted: bool,
+    cnr: bool,
+    reset: bool,
+    hse: bool,
+    hce: bool,
 }
 
 impl Xhci {
@@ -148,6 +290,8 @@ impl Xhci {
         // in the USBSTS is ‘0’ before writing any xHC Operational or Runtime
         // registers.
         self.chip_hardware_reset().await?;
+        self.ensure_controller_state("reset", true, false, false)?;
+        self.clear_status_bits();
 
         self.disable_irq();
 
@@ -166,7 +310,6 @@ impl Xhci {
         // Command Ring Control Register (5.4.5) with a 64-bit address pointing to
         // the starting address of the first TRB of the Command Ring.
         self.set_cmd_ring()?;
-        self.clear_status_bits();
         self.init_irq()?;
         self.setup_scratchpads()?;
         // At this point, the host controller is up and running and the Root Hub ports
@@ -176,7 +319,10 @@ impl Xhci {
         self.start();
         mb();
 
-        self.wait_for_running().await;
+        self.wait_for_running().await?;
+        self.ensure_controller_state("run", false, false, false)?;
+        self.command_ring_self_test()?;
+        self.clear_status_bits();
 
         self.enable_irq();
         // self.reset_ports().await;
@@ -220,29 +366,14 @@ impl Xhci {
             c.clear_run_stop();
         });
 
-        SpinWhile::new(|| {
-            !self
-                .reg
-                .read()
-                .operational
-                .usbsts
-                .read_volatile()
-                .hc_halted()
-        })
-        .await;
+        self.wait_for_status("controller halt", |status| status.halted)
+            .await?;
 
         debug!("Halted");
         debug!("Wait for ready...");
 
-        SpinWhile::new(|| {
-            self.reg
-                .read()
-                .operational
-                .usbsts
-                .read_volatile()
-                .controller_not_ready()
-        })
-        .await;
+        self.wait_for_status("controller ready after stop", |status| !status.cnr)
+            .await?;
 
         debug!("Ready");
 
@@ -252,22 +383,10 @@ impl Xhci {
 
         debug!("Reset HC");
 
-        SpinWhile::new(|| {
-            self.reg
-                .read()
-                .operational
-                .usbcmd
-                .read_volatile()
-                .host_controller_reset()
-                || self
-                    .reg
-                    .read()
-                    .operational
-                    .usbsts
-                    .read_volatile()
-                    .controller_not_ready()
+        self.wait_for_status("reset completion", |status| {
+            status.halted && !status.cnr && !status.reset
         })
-        .await;
+            .await?;
 
         debug!("Reset finish");
 
@@ -397,19 +516,17 @@ impl Xhci {
             let mut reg = self.reg.write();
             let mut ir0 = reg.interrupter_register_set.interrupter_mut(0);
 
-            debug!("ERDP: {erdp:x}");
-
-            ir0.erdp.update_volatile(|r| {
-                r.set_event_ring_dequeue_pointer(erdp);
-                r.set_dequeue_erst_segment_index(0);
-                r.clear_event_handler_busy();
-            });
-
             debug!("ERSTZ: {erstz:x}");
             ir0.erstsz.update_volatile(|r| r.set(erstz as _));
             debug!("ERSTBA: {erstba:X}");
             ir0.erstba.update_volatile(|r| {
                 r.set(erstba);
+            });
+            debug!("ERDP: {erdp:x}");
+            ir0.erdp.update_volatile(|r| {
+                r.set_event_ring_dequeue_pointer(erdp);
+                r.set_dequeue_erst_segment_index(0);
+                r.clear_event_handler_busy();
             });
 
             ir0.imod.update_volatile(|im| {
@@ -417,6 +534,12 @@ impl Xhci {
                 im.set_interrupt_moderation_counter(0);
             });
         }
+
+        /* Set the HCD state before we enable the irqs */
+        self.reg.write().operational.usbcmd.update_volatile(|r| {
+            r.set_host_system_error_enable();
+            r.set_enable_wrap_event();
+        });
 
         {
             debug!("Enabling primary interrupter.");
@@ -426,16 +549,10 @@ impl Xhci {
                 .interrupter_mut(0)
                 .iman
                 .update_volatile(|im| {
-                    im.set_interrupt_enable();
                     im.clear_interrupt_pending();
+                    im.set_interrupt_enable();
                 });
         }
-
-        /* Set the HCD state before we enable the irqs */
-        self.reg.write().operational.usbcmd.update_volatile(|r| {
-            r.set_host_system_error_enable();
-            r.set_enable_wrap_event();
-        });
         Ok(())
     }
 
@@ -477,12 +594,11 @@ impl Xhci {
         debug!("Start run");
     }
 
-    async fn wait_for_running(&mut self) {
-        SpinWhile::new(|| {
-            let sts = self.reg.read().operational.usbsts.read_volatile();
-            sts.hc_halted() || sts.controller_not_ready()
+    async fn wait_for_running(&mut self) -> Result {
+        self.wait_for_status("controller run", |status| {
+            !status.halted && !status.cnr && !status.reset
         })
-        .await;
+            .await?;
 
         info!("Running");
 
@@ -493,6 +609,8 @@ impl Xhci {
             .write()
             .doorbell
             .write_volatile_at(0, doorbell::Register::default());
+
+        Ok(())
     }
 
     pub(crate) fn cmd_request(
@@ -518,12 +636,26 @@ impl Xhci {
     pub(crate) async fn device_slot_assignment(
         &mut self,
     ) -> core::result::Result<SlotId, TransferError> {
-        // enable slot
-        let result = self
+        crate::debug_set_usb_probe_progress(40, 0, 0, 0, 0);
+        info!("xhci lifecycle: slot=0 root_port=0 port=0 stage=enable-slot begin detail=0\n");
+        let result = match self
             .cmd_request(command::Allowed::EnableSlot(command::EnableSlot::default()))
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                info!("xhci lifecycle: slot=0 root_port=0 port=0 stage=enable-slot failed: {:?}\n", err);
+                return Err(err);
+            }
+        };
 
         let slot_id = result.slot_id();
+        crate::debug_set_usb_probe_progress(40, 0, 0, slot_id, u32::from(slot_id));
+        info!(
+            "xhci lifecycle: slot={} root_port=0 port=0 stage=enable-slot ok detail={}\n",
+            slot_id,
+            slot_id
+        );
         trace!("assigned slot id: {slot_id}");
         Ok(slot_id.into())
     }

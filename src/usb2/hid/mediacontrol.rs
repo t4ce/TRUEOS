@@ -149,6 +149,8 @@ async fn media_control_task(
             target.configuration_value,
             err
         );
+        unregister_active_stream(active_stream);
+        return;
     }
 
     let mut interface = match claim_interface(
