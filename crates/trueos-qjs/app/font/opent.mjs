@@ -101,6 +101,7 @@ function buildMetricImage(font, text) {
   const baselineY = Math.ceil(DEMO_PADDING + font.ascender * scale);
   const rgba = makeRgba(width, height);
   let penX = DEMO_PADDING;
+  const rects = [];
 
   for (const glyph of summaries) {
     const advancePx = Math.max(12, Math.ceil(glyph.advance * scale));
@@ -110,10 +111,30 @@ function buildMetricImage(font, text) {
     const boxH = Math.max(3, Math.ceil(glyph.boxH * scale));
     strokeRect(rgba, width, height, boxX, boxY, boxW, boxH, 2, [0, 0, 0, 255]);
     fillRect(rgba, width, height, penX, baselineY, advancePx, 2, [0, 0, 0, 255]);
+    rects.push({
+      ch: glyph.ch,
+      glyphIndex: glyph.glyphIndex,
+      penX,
+      baselineY,
+      advancePx,
+      boxX,
+      boxY,
+      boxW,
+      boxH,
+    });
     penX += advancePx + DEMO_PADDING;
   }
 
-  return { width, height, rgba, summaries };
+  return { width, height, rgba, summaries, rects, baselineY };
+}
+
+function buildDebugString(image) {
+  return image.rects
+    .map(
+      (rect) =>
+        `${rect.ch}#${rect.glyphIndex} pen=(${rect.penX},${rect.baselineY}) adv=${rect.advancePx} rect=(${rect.boxX.toFixed(1)},${rect.boxY.toFixed(1)} ${rect.boxW}x${rect.boxH})`,
+    )
+    .join(" | ");
 }
 
 async function renderTextDemoAsync() {
@@ -138,6 +159,7 @@ async function renderTextDemoAsync() {
     descender: font.descender ?? null,
     advances: image.summaries.map((glyph) => glyph.advance),
     glyphIndices: image.summaries.map((glyph) => glyph.glyphIndex),
+    debugRects: buildDebugString(image),
   };
 }
 

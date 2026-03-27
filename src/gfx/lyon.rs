@@ -9,14 +9,15 @@ use lyon_tessellation::{
 };
 use spin::Once;
 use trueos_gfx_core::{
-    RGB_VERTEX_SIZE, Rgba8, ViewTransform, push_rgb_quad_px, push_rgb_vertex_bytes,
+    RGB_VERTEX_SIZE, RgbVertexPx, Rgba8, ViewTransform, push_indexed_rgb_mesh_px,
+    push_rgb_quad_px, push_rgb_triangle_px,
 };
 use trueos_math::{cos_f32, sin_f32};
 
 #[derive(Copy, Clone, Debug)]
 struct MyVertex {
     position: [f32; 2],
-    color: [f32; 4],
+    color: Rgba8,
 }
 
 struct CachedIcon {
@@ -30,29 +31,31 @@ const ICON_SHAPE_COUNT: usize = 12;
 const ICON_PALETTE_COUNT: usize = 5;
 
 #[inline]
+fn rgb_from_f32(r: f32, g: f32, b: f32, a: f32) -> Rgba8 {
+    Rgba8::new(
+        (r.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+        (g.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+        (b.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+        (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+    )
+}
+
+#[inline]
 fn to_u8(x: f32) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 #[inline]
-fn push_rgb_vtx(out: &mut Vec<u8>, v: &MyVertex, view_w: f32, view_h: f32) {
-    push_rgb_vertex_bytes(
-        out,
-        ViewTransform {
-            width: view_w.max(1.0),
-            height: view_h.max(1.0),
-        }
-        .rgb_vertex_px(
-            v.position[0],
-            v.position[1],
-            Rgba8::new(
-                to_u8(v.color[0]),
-                to_u8(v.color[1]),
-                to_u8(v.color[2]),
-                to_u8(v.color[3]),
-            ),
-        ),
-    );
+fn icon_vertices_px(icon: &CachedIcon, x: f32, y: f32, scale: f32, alpha: u8) -> Vec<RgbVertexPx> {
+    let mut out = Vec::with_capacity(icon.vertices.len());
+    for v in &icon.vertices {
+        out.push(RgbVertexPx {
+            x: v.position[0] * scale + x,
+            y: v.position[1] * scale + y,
+            color: v.color.scale_alpha(alpha),
+        });
+    }
+    out
 }
 
 #[inline]
@@ -136,18 +139,36 @@ pub fn draw_horizontal_three_stop_rect_no_present(
         Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3),
     );
     let mid_color = Rgba8::new(mid_rgba.0, mid_rgba.1, mid_rgba.2, mid_rgba.3);
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x0, y1, Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3)));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y1, mid_color));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y0, mid_color));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x0, y1, Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3)));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y0, mid_color));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x0, y0, Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3)));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y1, mid_color));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x1, y1, Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3)));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x1, y0, Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3)));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y1, mid_color));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x1, y0, Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3)));
-    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y0, mid_color));
+    let left_color = Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3);
+    let right_color = Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3);
+    push_rgb_triangle_px(
+        &mut blob,
+        transform,
+        RgbVertexPx { x: x0, y: y1, color: left_color },
+        RgbVertexPx { x: xm, y: y1, color: mid_color },
+        RgbVertexPx { x: xm, y: y0, color: mid_color },
+    );
+    push_rgb_triangle_px(
+        &mut blob,
+        transform,
+        RgbVertexPx { x: x0, y: y1, color: left_color },
+        RgbVertexPx { x: xm, y: y0, color: mid_color },
+        RgbVertexPx { x: x0, y: y0, color: left_color },
+    );
+    push_rgb_triangle_px(
+        &mut blob,
+        transform,
+        RgbVertexPx { x: xm, y: y1, color: mid_color },
+        RgbVertexPx { x: x1, y: y1, color: right_color },
+        RgbVertexPx { x: x1, y: y0, color: right_color },
+    );
+    push_rgb_triangle_px(
+        &mut blob,
+        transform,
+        RgbVertexPx { x: xm, y: y1, color: mid_color },
+        RgbVertexPx { x: x1, y: y0, color: right_color },
+        RgbVertexPx { x: xm, y: y0, color: mid_color },
+    );
 
     submit_rgb_blob_no_present(blob.as_slice())
 }
@@ -334,7 +355,7 @@ fn build_cached_icons() -> Vec<CachedIcon> {
                 let p = vertex.position().to_array();
                 MyVertex {
                     position: [p[0], p[1]],
-                    color: [0.0, 0.0, 0.0, 1.0],
+                    color: rgb_from_f32(0.0, 0.0, 0.0, 1.0),
                 }
             }),
         );
@@ -347,7 +368,7 @@ fn build_cached_icons() -> Vec<CachedIcon> {
                 let p = vertex.position().to_array();
                 MyVertex {
                     position: [p[0], p[1]],
-                    color: [0.0, 0.0, 0.0, 1.0],
+                    color: rgb_from_f32(0.0, 0.0, 0.0, 1.0),
                 }
             }),
         );
@@ -361,7 +382,7 @@ fn build_cached_icons() -> Vec<CachedIcon> {
                     let p = vertex.position().to_array();
                     MyVertex {
                         position: [p[0], p[1]],
-                        color: [0.0, 0.0, 0.0, 1.0],
+                        color: rgb_from_f32(0.0, 0.0, 0.0, 1.0),
                     }
                 }),
             );
@@ -407,7 +428,7 @@ fn build_cached_icons() -> Vec<CachedIcon> {
     let mut out: Vec<CachedIcon> = Vec::with_capacity(paths.len() * palette.len() * 2);
     for (icon_px, scale, include_aa) in [(32.0f32, 1.0f32, true), (16.0f32, 0.5f32, true)] {
         for color in palette {
-            let aa_color = [color[0], color[1], color[2], 0.26];
+            let aa_color = rgb_from_f32(color[0], color[1], color[2], 0.26);
             for geom in &base_geometries {
                 let aa_count = if include_aa {
                     geom.aa_positions.len()
@@ -427,18 +448,23 @@ fn build_cached_icons() -> Vec<CachedIcon> {
                 }
 
                 for &p in &geom.main_positions {
-                    baked_vertices.push(MyVertex {
-                        position: [
-                            p[0] * scale + SHADOW_DX * scale,
-                            p[1] * scale + SHADOW_DY * scale,
-                        ],
-                        color: SHADOW_COLOR,
-                    });
-                }
+                        baked_vertices.push(MyVertex {
+                            position: [
+                                p[0] * scale + SHADOW_DX * scale,
+                                p[1] * scale + SHADOW_DY * scale,
+                            ],
+                            color: rgb_from_f32(
+                                SHADOW_COLOR[0],
+                                SHADOW_COLOR[1],
+                                SHADOW_COLOR[2],
+                                SHADOW_COLOR[3],
+                            ),
+                        });
+                    }
 
                 for &p in &geom.main_positions {
                     baked_vertices.push(MyVertex {
-                        color,
+                        color: rgb_from_f32(color[0], color[1], color[2], color[3]),
                         position: [p[0] * scale, p[1] * scale],
                     });
                 }
@@ -568,10 +594,19 @@ pub unsafe extern "C" fn trueos_cabi_gfx_bake_lyon_icon_rgba(
                     continue;
                 }
 
-                let mut sr = w0 * v0.color[0] + w1 * v1.color[0] + w2 * v2.color[0];
-                let mut sg = w0 * v0.color[1] + w1 * v1.color[1] + w2 * v2.color[1];
-                let mut sb = w0 * v0.color[2] + w1 * v1.color[2] + w2 * v2.color[2];
-                let sa = (w0 * v0.color[3] + w1 * v1.color[3] + w2 * v2.color[3]).clamp(0.0, 1.0);
+                let mut sr = w0 * (v0.color.r as f32 / 255.0)
+                    + w1 * (v1.color.r as f32 / 255.0)
+                    + w2 * (v2.color.r as f32 / 255.0);
+                let mut sg = w0 * (v0.color.g as f32 / 255.0)
+                    + w1 * (v1.color.g as f32 / 255.0)
+                    + w2 * (v2.color.g as f32 / 255.0);
+                let mut sb = w0 * (v0.color.b as f32 / 255.0)
+                    + w1 * (v1.color.b as f32 / 255.0)
+                    + w2 * (v2.color.b as f32 / 255.0);
+                let sa = (w0 * (v0.color.a as f32 / 255.0)
+                    + w1 * (v1.color.a as f32 / 255.0)
+                    + w2 * (v2.color.a as f32 / 255.0))
+                    .clamp(0.0, 1.0);
                 if sa <= 0.0 {
                     continue;
                 }
@@ -630,28 +665,18 @@ pub fn draw_lyon_icon_alpha_no_present(
     view_h: u32,
     alpha: u8,
 ) -> i32 {
-    let fb_w = view_w.max(1) as f32;
-    let fb_h = view_h.max(1) as f32;
     let Some(icon) = cached_icon_by_id(icon_id, color_id, small_set != 0) else {
         return -1;
     };
 
-    let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(12));
-    for &idx in &icon.indices {
-        let Some(v) = icon.vertices.get(idx as usize) else {
-            continue;
-        };
-        let vv = MyVertex {
-            position: [v.position[0] + x, v.position[1] + y],
-            color: [
-                v.color[0],
-                v.color[1],
-                v.color[2],
-                v.color[3] * (alpha as f32 / 255.0),
-            ],
-        };
-        push_rgb_vtx(&mut icon_blob, &vv, fb_w, fb_h);
-    }
+    let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(RGB_VERTEX_SIZE));
+    let vertices = icon_vertices_px(icon, x, y, 1.0, alpha);
+    push_indexed_rgb_mesh_px(
+        &mut icon_blob,
+        ViewTransform::from_extent(view_w, view_h),
+        vertices.as_slice(),
+        icon.indices.as_slice(),
+    );
 
     if icon_blob.is_empty() {
         return -2;
@@ -685,29 +710,19 @@ pub fn draw_lyon_icon_alpha_scaled_no_present(
         return 0;
     }
 
-    let fb_w = view_w.max(1) as f32;
-    let fb_h = view_h.max(1) as f32;
     let Some(icon) = cached_icon_by_id(icon_id, color_id, small_set != 0) else {
         return -1;
     };
 
     let scale = size_px / icon.cell_px.max(1.0);
-    let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(12));
-    for &idx in &icon.indices {
-        let Some(v) = icon.vertices.get(idx as usize) else {
-            continue;
-        };
-        let vv = MyVertex {
-            position: [v.position[0] * scale + x, v.position[1] * scale + y],
-            color: [
-                v.color[0],
-                v.color[1],
-                v.color[2],
-                v.color[3] * (alpha as f32 / 255.0),
-            ],
-        };
-        push_rgb_vtx(&mut icon_blob, &vv, fb_w, fb_h);
-    }
+    let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(RGB_VERTEX_SIZE));
+    let vertices = icon_vertices_px(icon, x, y, scale, alpha);
+    push_indexed_rgb_mesh_px(
+        &mut icon_blob,
+        ViewTransform::from_extent(view_w, view_h),
+        vertices.as_slice(),
+        icon.indices.as_slice(),
+    );
 
     if icon_blob.is_empty() {
         return -2;
@@ -729,6 +744,7 @@ pub fn draw_lyon_icon_alpha_scaled_no_present(
 pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
     let fb_w = view_w.max(1) as f32;
     let fb_h = view_h.max(1) as f32;
+    let transform = ViewTransform::from_extent(view_w, view_h);
     let icons = cached_icons();
     let mut total_vertices = 0usize;
     let mut total_indices = 0usize;
@@ -746,20 +762,13 @@ pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
         }
         let ox = cursor_x;
         let oy = cursor_y;
-        let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(12));
+        let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(RGB_VERTEX_SIZE));
 
         total_vertices = total_vertices.saturating_add(icon.vertices.len());
         total_indices = total_indices.saturating_add(icon.indices.len());
 
-        for &idx in &icon.indices {
-            if let Some(v) = icon.vertices.get(idx as usize) {
-                let vv = MyVertex {
-                    position: [v.position[0] + ox, v.position[1] + oy],
-                    color: v.color,
-                };
-                push_rgb_vtx(&mut icon_blob, &vv, fb_w, fb_h);
-            }
-        }
+        let vertices = icon_vertices_px(icon, ox, oy, 1.0, 255);
+        push_indexed_rgb_mesh_px(&mut icon_blob, transform, vertices.as_slice(), icon.indices.as_slice());
 
         let draw_rc = unsafe {
             crate::r::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(

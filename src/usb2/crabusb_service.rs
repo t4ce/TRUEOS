@@ -2567,51 +2567,21 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                 );
                 if let Some(reason) = xhci_fatal_probe_state(controller_id) {
                     crate::log!(
-                        "crabusb: controller {} fatal xhci state during probe failure ({}); phase={} lifecycle={} bucket={}\n",
+                        "crabusb: controller {} fatal xhci state during probe failure ({}); rebinding immediately\n",
                         controller_id,
-                        reason,
-                        controller_phase_name(controller_phase(controller_id)),
-                        root_hub_lifecycle_summary(controller_id),
-                        root_hub_lifecycle_bucket_for_controller(controller_id)
+                        reason
                     );
                     PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
-                    if controller_needs_quarantine(controller_id) {
-                        mark_controller_quarantined(
-                            controller_id,
-                            "fatal probe failure before validation",
-                        );
-                        crate::log!(
-                            "crabusb: controller {} quarantined after early probe failure; holding bind\n",
-                            controller_id
-                        );
-                    } else {
-                        mark_controller_recoverable(
-                            controller_id,
-                            "fatal probe failure after validation",
-                        );
-                        uninstall_event_handler(controller_id);
-                    }
+                    uninstall_event_handler(controller_id);
                     return false;
                 }
                 if fail_streak >= 2 {
                     crate::log!(
-                        "crabusb: controller {} repeated probe failures (phase={} lifecycle={} bucket={})\n",
-                        controller_id,
-                        controller_phase_name(controller_phase(controller_id)),
-                        root_hub_lifecycle_summary(controller_id),
-                        root_hub_lifecycle_bucket_for_controller(controller_id)
+                        "crabusb: controller {} forcing host rebind after repeated probe failures\n",
+                        controller_id
                     );
                     PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
-                    if controller_needs_quarantine(controller_id) {
-                        mark_controller_quarantined(controller_id, "repeated probe failures before validation");
-                        crate::log!(
-                            "crabusb: controller {} quarantined; suppressing rebind loop\n",
-                            controller_id
-                        );
-                    } else {
-                        mark_controller_recoverable(controller_id, "repeated probe failures after validation");
-                        uninstall_event_handler(controller_id);
-                    }
+                    uninstall_event_handler(controller_id);
                 }
                 false
             }
@@ -2639,45 +2609,21 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
             );
             if let Some(reason) = xhci_fatal_probe_state(controller_id) {
                 crate::log!(
-                    "crabusb: controller {} fatal xhci state during probe timeout ({}); phase={} lifecycle={} bucket={}\n",
+                    "crabusb: controller {} fatal xhci state during probe timeout ({}); rebinding immediately\n",
                     controller_id,
-                    reason,
-                    controller_phase_name(controller_phase(controller_id)),
-                    root_hub_lifecycle_summary(controller_id),
-                    root_hub_lifecycle_bucket_for_controller(controller_id)
+                    reason
                 );
                 PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
-                if controller_needs_quarantine(controller_id) {
-                    mark_controller_quarantined(controller_id, "fatal probe timeout before validation");
-                    crate::log!(
-                        "crabusb: controller {} quarantined after early probe timeout; holding bind\n",
-                        controller_id
-                    );
-                } else {
-                    mark_controller_recoverable(controller_id, "fatal probe timeout after validation");
-                    uninstall_event_handler(controller_id);
-                }
+                uninstall_event_handler(controller_id);
                 return false;
             }
             if fail_streak >= 2 {
                 crate::log!(
-                    "crabusb: controller {} repeated probe timeouts (phase={} lifecycle={} bucket={})\n",
-                    controller_id,
-                    controller_phase_name(controller_phase(controller_id)),
-                    root_hub_lifecycle_summary(controller_id),
-                    root_hub_lifecycle_bucket_for_controller(controller_id)
+                    "crabusb: controller {} forcing host rebind after repeated probe timeouts\n",
+                    controller_id
                 );
                 PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
-                if controller_needs_quarantine(controller_id) {
-                    mark_controller_quarantined(controller_id, "repeated probe timeout before validation");
-                    crate::log!(
-                        "crabusb: controller {} quarantined; suppressing rebind loop\n",
-                        controller_id
-                    );
-                } else {
-                    mark_controller_recoverable(controller_id, "repeated probe timeout after validation");
-                    uninstall_event_handler(controller_id);
-                }
+                uninstall_event_handler(controller_id);
             }
             false
         }
@@ -2766,21 +2712,11 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                 crate::log!("crabusb: scout probe failed: {:?}\n", err);
                 if let Some(reason) = xhci_fatal_probe_state(info.index) {
                     crate::log!(
-                        "crabusb: controller {} fatal xhci state during scout failure ({}); phase={} lifecycle={} bucket={}\n",
+                        "crabusb: controller {} fatal xhci state during scout failure ({}); rebinding immediately\n",
                         info.index,
-                        reason,
-                        controller_phase_name(controller_phase(info.index)),
-                        root_hub_lifecycle_summary(info.index),
-                        root_hub_lifecycle_bucket_for_controller(info.index)
+                        reason
                     );
-                    log_xhci_status_bits(info.index, "scout failure");
-                    if controller_needs_quarantine(info.index) {
-                        mark_controller_quarantined(info.index, "scout failure before validation");
-                        crate::log!(
-                            "crabusb: controller {} quarantined; keeping current bind intact\n",
-                            info.index
-                        );
-                    }
+                    uninstall_event_handler(info.index);
                 }
             }
         },
@@ -2795,21 +2731,11 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
             );
             if let Some(reason) = xhci_fatal_probe_state(info.index) {
                 crate::log!(
-                    "crabusb: controller {} fatal xhci state during scout timeout ({}); phase={} lifecycle={} bucket={}\n",
+                    "crabusb: controller {} fatal xhci state during scout timeout ({}); rebinding immediately\n",
                     info.index,
-                    reason,
-                    controller_phase_name(controller_phase(info.index)),
-                    root_hub_lifecycle_summary(info.index),
-                    root_hub_lifecycle_bucket_for_controller(info.index)
+                    reason
                 );
-                log_xhci_status_bits(info.index, "scout timeout");
-                if controller_needs_quarantine(info.index) {
-                    mark_controller_quarantined(info.index, "scout timeout before validation");
-                    crate::log!(
-                        "crabusb: controller {} quarantined; keeping current bind intact\n",
-                        info.index
-                    );
-                }
+                uninstall_event_handler(info.index);
             }
         }
     }

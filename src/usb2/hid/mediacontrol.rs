@@ -81,6 +81,22 @@ fn pick_media_control_targets(
     out
 }
 
+fn device_has_audio_interfaces(
+    configs: &[usb_if::descriptor::ConfigurationDescriptor],
+) -> bool {
+    configs.iter().any(|config| {
+        config.interfaces.iter().any(|interface| {
+            interface.alt_settings.iter().any(|alt| {
+                alt.class == 0x01
+                    || alt.endpoints.iter().any(|ep| {
+                        ep.transfer_type == usb_if::descriptor::EndpointType::Isochronous
+                            && ep.direction == usb_if::transfer::Direction::Out
+                    })
+            })
+        })
+    })
+}
+
 fn register_active_stream(stream: ActiveMediaControlStream) -> bool {
     let mut streams = MEDIA_CONTROL_STREAMS_ACTIVE.lock();
     if streams.iter().any(|active| *active == stream) {
@@ -285,6 +301,9 @@ pub(crate) async fn maybe_start_media_control(
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
+    if !device_has_audio_interfaces(dev_info.configurations()) {
+        return false;
+    }
     let targets = pick_media_control_targets(dev_info.configurations());
     if targets.is_empty() {
         return false;
