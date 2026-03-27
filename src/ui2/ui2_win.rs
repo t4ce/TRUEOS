@@ -73,6 +73,10 @@ pub(super) fn alloc_window(
         state: Ui2WindowStateKind::Normal,
         content_tex_id: 0,
         content_tex_blend: false,
+        title_tex_id: window_title_tex_id(id),
+        title_tex_w: 0,
+        title_tex_h: 0,
+        title_tex_alpha: alpha,
         container_sync_needed: true,
         selected_cursor_slots: Vec::new(),
         dirty: true,
@@ -81,6 +85,9 @@ pub(super) fn alloc_window(
         last_logged_dirty_seq: 0,
         last_logged_reason: "",
     });
+    if let Some(window) = state.windows.last_mut() {
+        let _ = rebuild_window_title_texture(window);
+    }
     queue_hosted_container_sync();
     id
 }
@@ -1062,6 +1069,7 @@ pub fn set_window_title(id: u32, title: &str) -> bool {
         return true;
     }
     window.title = String::from(title);
+    let _ = rebuild_window_title_texture(window);
     state.compose_reason = "title-window";
     note_window_dirty(&mut state, id, "title-window")
 }

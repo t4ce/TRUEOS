@@ -12,6 +12,7 @@ use tiny_skia_path::{
     Path as TinyPath, PathBuilder as TinyPathBuilder, PathSegment, Point as TinyPoint,
     Transform as TinyTransform,
 };
+use trueos_gfx_core::{Rgba8, ViewTransform, push_rgb_vertex_bytes, rgb_vertices_byte_len};
 use usvg::{Node, Options, Tree};
 
 #[derive(Clone, Copy)]
@@ -1047,8 +1048,8 @@ pub fn draw_run_in_frame(
         return false;
     }
 
-    let fb_w = view_w.max(1) as f32;
-    let fb_h = view_h.max(1) as f32;
+    let transform = ViewTransform::from_extent(view_w, view_h);
+    let color = Rgba8::new(rgb.0, rgb.1, rgb.2, alpha);
     let icon_count = icons.len();
     let mut pen_x = layout.origin_x;
 
@@ -1057,23 +1058,7 @@ pub fn draw_run_in_frame(
         let y = layout.baseline_y - icon.metric.baseline_y * icon_tile_h;
         let sx = icon_tile_h / icon.mesh.width.max(0.0001);
         let sy = icon_tile_h / icon.mesh.height.max(0.0001);
-        let mut blob = Vec::with_capacity(icon.mesh.indices.len().saturating_mul(12));
-
-        for &idx in &icon.mesh.indices {
-            let Some(vertex) = icon.mesh.vertices.get(idx as usize) else {
-                continue;
-            };
-            let px = pen_x + vertex[0] * sx;
-            let py = y + vertex[1] * sy;
-            let nx = (2.0 * (px / fb_w)) - 1.0;
-            let ny = 1.0 - (2.0 * (py / fb_h));
-            blob.extend_from_slice(&nx.to_le_bytes());
-            blob.extend_from_slice(&ny.to_le_bytes());
-            blob.push(rgb.0);
-            blob.push(rgb.1);
-            blob.push(rgb.2);
-            blob.push(alpha);
-        }
+        let blob = icon_mesh_rgb_bytes(&icon.mesh, pen_x, y, sx, sy, transform, color);
 
         if !blob.is_empty() {
             let _ = unsafe {
@@ -1104,8 +1089,8 @@ pub fn draw_text_in_frame(
     rgb: (u8, u8, u8),
     alpha: u8,
 ) -> bool {
-    let fb_w = view_w.max(1) as f32;
-    let fb_h = view_h.max(1) as f32;
+    let transform = ViewTransform::from_extent(view_w, view_h);
+    let color = Rgba8::new(rgb.0, rgb.1, rgb.2, alpha);
     let mut pen_x = layout.origin_x;
 
     for &byte in text {
@@ -1126,23 +1111,7 @@ pub fn draw_text_in_frame(
         let y = layout.baseline_y - metric.baseline_y * layout.tile_h;
         let sx = layout.tile_h / icon.mesh.width.max(0.0001);
         let sy = layout.tile_h / icon.mesh.height.max(0.0001);
-        let mut blob = Vec::with_capacity(icon.mesh.indices.len().saturating_mul(12));
-
-        for &idx in &icon.mesh.indices {
-            let Some(vertex) = icon.mesh.vertices.get(idx as usize) else {
-                continue;
-            };
-            let px = pen_x + vertex[0] * sx;
-            let py = y + vertex[1] * sy;
-            let nx = (2.0 * (px / fb_w)) - 1.0;
-            let ny = 1.0 - (2.0 * (py / fb_h));
-            blob.extend_from_slice(&nx.to_le_bytes());
-            blob.extend_from_slice(&ny.to_le_bytes());
-            blob.push(rgb.0);
-            blob.push(rgb.1);
-            blob.push(rgb.2);
-            blob.push(alpha);
-        }
+        let blob = icon_mesh_rgb_bytes(&icon.mesh, pen_x, y, sx, sy, transform, color);
 
         if !blob.is_empty() {
             let _ = unsafe {
@@ -1172,8 +1141,8 @@ pub fn draw_text_in_frame_negative(
     view_h: u32,
     alpha: u8,
 ) -> bool {
-    let fb_w = view_w.max(1) as f32;
-    let fb_h = view_h.max(1) as f32;
+    let transform = ViewTransform::from_extent(view_w, view_h);
+    let color = Rgba8::new(0xFF, 0xFF, 0xFF, alpha);
     let mut pen_x = layout.origin_x;
 
     for &byte in text {
@@ -1194,23 +1163,7 @@ pub fn draw_text_in_frame_negative(
         let y = layout.baseline_y - metric.baseline_y * layout.tile_h;
         let sx = layout.tile_h / icon.mesh.width.max(0.0001);
         let sy = layout.tile_h / icon.mesh.height.max(0.0001);
-        let mut blob = Vec::with_capacity(icon.mesh.indices.len().saturating_mul(12));
-
-        for &idx in &icon.mesh.indices {
-            let Some(vertex) = icon.mesh.vertices.get(idx as usize) else {
-                continue;
-            };
-            let px = pen_x + vertex[0] * sx;
-            let py = y + vertex[1] * sy;
-            let nx = (2.0 * (px / fb_w)) - 1.0;
-            let ny = 1.0 - (2.0 * (py / fb_h));
-            blob.extend_from_slice(&nx.to_le_bytes());
-            blob.extend_from_slice(&ny.to_le_bytes());
-            blob.push(0xFF);
-            blob.push(0xFF);
-            blob.push(0xFF);
-            blob.push(alpha);
-        }
+        let blob = icon_mesh_rgb_bytes(&icon.mesh, pen_x, y, sx, sy, transform, color);
 
         if !blob.is_empty() {
             let _ = unsafe {
@@ -1233,4 +1186,27 @@ pub fn draw_text_in_frame_negative(
     }
 
     true
+}
+
+#[inline]
+fn icon_mesh_rgb_bytes(
+    mesh: &ImbaFontIconMesh,
+    origin_x: f32,
+    origin_y: f32,
+    sx: f32,
+    sy: f32,
+    transform: ViewTransform,
+    color: Rgba8,
+) -> Vec<u8> {
+    let mut blob = Vec::with_capacity(rgb_vertices_byte_len(mesh.indices.len()));
+    for &idx in &mesh.indices {
+        let Some(vertex) = mesh.vertices.get(idx as usize) else {
+            continue;
+        };
+        push_rgb_vertex_bytes(
+            &mut blob,
+            transform.rgb_vertex_px(origin_x + vertex[0] * sx, origin_y + vertex[1] * sy, color),
+        );
+    }
+    blob
 }
