@@ -81,6 +81,29 @@ unsafe fn js_prop_u8_vec(
     out
 }
 
+unsafe fn js_prop_string(
+    ctx: *mut qjs::JSContext,
+    obj: qjs::JSValueConst,
+    key: &[u8],
+) -> Option<alloc::string::String> {
+    let value = qjs::JS_GetPropertyStr(ctx, obj, key.as_ptr() as *const c_char);
+    let mut len: usize = 0;
+    let c = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, value, 0);
+    let out = if c.is_null() || len == 0 {
+        None
+    } else {
+        let bytes = core::slice::from_raw_parts(c as *const u8, len);
+        core::str::from_utf8(bytes)
+            .ok()
+            .map(alloc::string::String::from)
+    };
+    if !c.is_null() {
+        qjs::JS_FreeCString(ctx, c);
+    }
+    qjs::js_free_value(ctx, value);
+    out
+}
+
 unsafe fn install_demo_font_bytes(ctx: *mut qjs::JSContext, bytes: &[u8]) -> bool {
     let global = qjs::JS_GetGlobalObject(ctx);
     if global.is_exception() {
@@ -248,6 +271,11 @@ globalThis.__trueosOpentDemoError = "";
         let width = js_prop_u32(ctx, demo, b"width\0");
         let height = js_prop_u32(ctx, demo, b"height\0");
         let rgba = js_prop_u8_vec(ctx, demo, b"rgba\0");
+        let text = js_prop_string(ctx, demo, b"text\0");
+        let units_per_em = js_prop_u32(ctx, demo, b"unitsPerEm\0");
+        let glyph_count = js_prop_u32(ctx, demo, b"glyphCount\0");
+        let command_count = js_prop_u32(ctx, demo, b"commandCount\0");
+        let contour_count = js_prop_u32(ctx, demo, b"contourCount\0");
 
         qjs::js_free_value(ctx, demo);
         qjs::js_free_value(ctx, global);
@@ -257,6 +285,14 @@ globalThis.__trueosOpentDemoError = "";
             crate::log!("ui2-opentype-demo: failed to decode JS demo buffer\n");
             return None;
         };
+        crate::log!(
+            "ui2-opentype-demo: text={:?} unitsPerEm={:?} glyphCount={:?} commands={:?} contours={:?}\n",
+            text,
+            units_per_em,
+            glyph_count,
+            command_count,
+            contour_count
+        );
         Some((width, height, rgba))
     }
 }

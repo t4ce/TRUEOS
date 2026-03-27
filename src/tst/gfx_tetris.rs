@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
+use trueos_gfx_core::{RgbVertex, Rgba8};
 use trueos_tetris::{Game, Lcg32, NoopEvents, Rotation};
 
 const UI2_TETRIS_TEX_ID: u32 = 4_701;
@@ -44,17 +45,6 @@ const UI2_TETRIS_ACTION_TOGGLE_PAUSE: u32 = 1 << 7;
 static UI2_TETRIS_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
 static UI2_TETRIS_PENDING_ACTIONS: AtomicU32 = AtomicU32::new(0);
 static UI2_TETRIS_TEXT_SCRATCH: Mutex<Vec<u8>> = Mutex::new(Vec::new());
-
-#[repr(C, packed)]
-#[derive(Copy, Clone)]
-struct RgbVertex {
-    x: f32,
-    y: f32,
-    r: u8,
-    g: u8,
-    b: u8,
-    pad: u8,
-}
 
 struct GfxTetrisApp {
     game: Game<BOARD_W, BOARD_H, BOARD_HIDDEN>,
@@ -179,10 +169,7 @@ fn push_rect(vertices: &mut Vec<RgbVertex>, x: u32, y: u32, w: u32, h: u32, colo
     let mk = |x: f32, y: f32| RgbVertex {
         x,
         y,
-        r: color[0],
-        g: color[1],
-        b: color[2],
-        pad: color[3],
+        color: Rgba8::new(color[0], color[1], color[2], color[3]),
     };
     vertices.extend_from_slice(&[
         mk(x0, y0),
