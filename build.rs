@@ -38,7 +38,7 @@ struct FontAssetGen {
 }
 
 fn generate_imbafont_registry(manifest_dir: &Path) -> Result<(), String> {
-    let font_root = manifest_dir.join("src/gfx/font");
+    let font_root = manifest_dir.join("src/gfx/loadscreen");
     println!("cargo:rerun-if-changed={}", font_root.display());
 
     let mut faces = Vec::new();

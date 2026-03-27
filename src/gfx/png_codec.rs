@@ -7,6 +7,7 @@ pub struct DecodedPng {
     pub rgba: Vec<u8>,
 }
 
+#[derive(Debug)]
 pub enum PngDecodeError {
     Invalid,
     Unsupported,
