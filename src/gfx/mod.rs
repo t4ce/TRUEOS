@@ -2,11 +2,14 @@ pub mod backends;
 pub mod cursor;
 //#[cfg(feature = "gfx_intel")]
 //pub mod intel;
-#[path = "font/imba_athlas.rs"]
-pub mod imba_athlas;
-#[path = "font/imbafont.rs"]
+// Temporary bridge: the current imbafont source is the loadscreen-only SVG font path.
+// Keep this API surface stable for callers, but do not treat it as the future general atlas/font stack.
+#[path = "loadscreen/loadscreen_font.rs"]
 pub mod imbafont;
+#[path = "althlasfont.rs/athlasfont.rs"]
+pub mod imba_athlas;
 pub mod jpeg_codec;
+#[path = "loadscreen/loadscreen.rs"]
 pub mod loadscreen;
 pub mod lyon;
 pub mod mandelbrot;

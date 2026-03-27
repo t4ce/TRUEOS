@@ -53,6 +53,7 @@ static IMBA_ATHLAS_SMALL_UPLOADED: AtomicBool = AtomicBool::new(false);
 static IMBA_ATHLAS_LARGE_UPLOADED: AtomicBool = AtomicBool::new(false);
 static IMBA_ATHLAS_SMALL_RGBA: Once<Vec<u8>> = Once::new();
 static IMBA_ATHLAS_LARGE_RGBA: Once<Vec<u8>> = Once::new();
+static IMBA_ATHLAS_PNG_BUCKETS_UPLOADED: AtomicBool = AtomicBool::new(false);
 
 const IMBA_ATHLAS_GRID: usize = 16;
 const IMBA_ATHLAS_SMALL_TILE_H: f32 = 14.0;
@@ -61,6 +62,99 @@ const IMBA_ATHLAS_SIDE_PAD_PX: f32 = 1.0;
 const IMBA_ATHLAS_TOP_PAD_PX: f32 = 1.0;
 const IMBA_ATHLAS_BOTTOM_PAD_PX: f32 = 1.0;
 const IMBA_ATHLAS_PLACEHOLDER_ADVANCE_FACTOR: f32 = 0.72;
+
+const IMBA_ATHLAS_BUCKET_TEX_IDS: [[u32; 8]; 3] = [
+    [1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107],
+    [1110, 1111, 1112, 1113, 1114, 1115, 1116, 1117],
+    [1120, 1121, 1122, 1123, 1124, 1125, 1126, 1127],
+];
+
+struct PngBucketAsset {
+    size_name: &'static str,
+    bucket: usize,
+    tex_id: u32,
+    png: &'static [u8],
+}
+
+const PNG_BUCKET_ASSETS: &[PngBucketAsset] = &[
+    PngBucketAsset { size_name: "half", bucket: 0, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][0], png: include_bytes!("lucida-half/atlas-g00.png") },
+    PngBucketAsset { size_name: "half", bucket: 1, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][1], png: include_bytes!("lucida-half/atlas-g01.png") },
+    PngBucketAsset { size_name: "half", bucket: 2, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][2], png: include_bytes!("lucida-half/atlas-g02.png") },
+    PngBucketAsset { size_name: "half", bucket: 3, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][3], png: include_bytes!("lucida-half/atlas-g03.png") },
+    PngBucketAsset { size_name: "half", bucket: 4, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][4], png: include_bytes!("lucida-half/atlas-g04.png") },
+    PngBucketAsset { size_name: "half", bucket: 5, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][5], png: include_bytes!("lucida-half/atlas-g05.png") },
+    PngBucketAsset { size_name: "half", bucket: 6, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][6], png: include_bytes!("lucida-half/atlas-g06.png") },
+    PngBucketAsset { size_name: "half", bucket: 7, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][7], png: include_bytes!("lucida-half/atlas-g07.png") },
+    PngBucketAsset { size_name: "1x", bucket: 0, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][0], png: include_bytes!("lucida-1x/atlas-g00.png") },
+    PngBucketAsset { size_name: "1x", bucket: 1, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][1], png: include_bytes!("lucida-1x/atlas-g01.png") },
+    PngBucketAsset { size_name: "1x", bucket: 2, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][2], png: include_bytes!("lucida-1x/atlas-g02.png") },
+    PngBucketAsset { size_name: "1x", bucket: 3, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][3], png: include_bytes!("lucida-1x/atlas-g03.png") },
+    PngBucketAsset { size_name: "1x", bucket: 4, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][4], png: include_bytes!("lucida-1x/atlas-g04.png") },
+    PngBucketAsset { size_name: "1x", bucket: 5, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][5], png: include_bytes!("lucida-1x/atlas-g05.png") },
+    PngBucketAsset { size_name: "1x", bucket: 6, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][6], png: include_bytes!("lucida-1x/atlas-g06.png") },
+    PngBucketAsset { size_name: "1x", bucket: 7, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][7], png: include_bytes!("lucida-1x/atlas-g07.png") },
+    PngBucketAsset { size_name: "3x", bucket: 0, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][0], png: include_bytes!("lucida-3x/atlas-g00.png") },
+    PngBucketAsset { size_name: "3x", bucket: 1, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][1], png: include_bytes!("lucida-3x/atlas-g01.png") },
+    PngBucketAsset { size_name: "3x", bucket: 2, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][2], png: include_bytes!("lucida-3x/atlas-g02.png") },
+    PngBucketAsset { size_name: "3x", bucket: 3, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][3], png: include_bytes!("lucida-3x/atlas-g03.png") },
+    PngBucketAsset { size_name: "3x", bucket: 4, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][4], png: include_bytes!("lucida-3x/atlas-g04.png") },
+    PngBucketAsset { size_name: "3x", bucket: 5, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][5], png: include_bytes!("lucida-3x/atlas-g05.png") },
+    PngBucketAsset { size_name: "3x", bucket: 6, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][6], png: include_bytes!("lucida-3x/atlas-g06.png") },
+    PngBucketAsset { size_name: "3x", bucket: 7, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][7], png: include_bytes!("lucida-3x/atlas-g07.png") },
+];
+
+#[inline]
+pub fn imba_athlas_bucket_tex_id(size_case: usize, bucket: usize) -> Option<u32> {
+    IMBA_ATHLAS_BUCKET_TEX_IDS
+        .get(size_case)
+        .and_then(|row| row.get(bucket))
+        .copied()
+}
+
+pub fn ensure_imba_athlas_png_buckets_uploaded() -> bool {
+    if IMBA_ATHLAS_PNG_BUCKETS_UPLOADED.load(Ordering::Acquire) {
+        return true;
+    }
+
+    for asset in PNG_BUCKET_ASSETS {
+        let decoded = match crate::gfx::png_codec::decode_png_rgba(asset.png) {
+            Ok(decoded) => decoded,
+            Err(err) => {
+                crate::log!(
+                    "imba-athlas-png: decode failed size={} bucket={} err={:?}\n",
+                    asset.size_name,
+                    asset.bucket,
+                    err
+                );
+                return false;
+            }
+        };
+
+        let rc = unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba(
+                asset.tex_id,
+                decoded.width,
+                decoded.height,
+                decoded.rgba.as_ptr(),
+                decoded.rgba.len(),
+            )
+        };
+        if rc != 0 {
+            crate::log!(
+                "imba-athlas-png: upload failed size={} bucket={} tex={} rc={}\n",
+                asset.size_name,
+                asset.bucket,
+                asset.tex_id,
+                rc
+            );
+            return false;
+        }
+    }
+
+    IMBA_ATHLAS_PNG_BUCKETS_UPLOADED.store(true, Ordering::Release);
+    crate::log!("imba-athlas-png: uploaded {} bucket textures\n", PNG_BUCKET_ASSETS.len());
+    true
+}
 
 struct ImbaAthlasGlyphSource {
     metrics: Option<ImbaFontGlyphMetricsPx>,
@@ -362,6 +456,8 @@ fn imba_athlas_rgba_for_kind(kind: u32) -> &'static [u8] {
 }
 
 fn ensure_imba_athlas_uploaded_kind(kind: u32) -> bool {
+    let _ = ensure_imba_athlas_png_buckets_uploaded();
+
     let uploaded = if kind == 0 {
         &IMBA_ATHLAS_SMALL_UPLOADED
     } else {

@@ -1,3 +1,8 @@
+// Only Use in Loadscreen.
+// We keep this SVG path around so we do not forget the loadscreen-specific vector route
+// while the next imba_athlas/font concept is being rebuilt.
+// It is wired through `crate::gfx::imbafont` only as a temporary compatibility bridge.
+
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
