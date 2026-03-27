@@ -185,6 +185,15 @@ struct Ui2WindowScrollPanDrag {
     last_cursor_y: f32,
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui2HostedBrowserPreviewDot {
+    x: f32,
+    y: f32,
+    size_px: f32,
+    color_id: u32,
+    alpha: u8,
+}
+
 #[derive(Clone)]
 struct Ui2Window {
     id: u32,
@@ -213,6 +222,11 @@ struct Ui2Window {
     title_tex_w: u32,
     title_tex_h: u32,
     title_tex_alpha: u8,
+    browser_preview_dots: Vec<Ui2HostedBrowserPreviewDot>,
+    browser_preview_view_w: u32,
+    browser_preview_view_h: u32,
+    browser_preview_text_seq: u32,
+    browser_preview_layout_seq: u32,
     container_sync_needed: bool,
     selected_cursor_slots: Vec<u32>,
     dirty: bool,
@@ -1301,25 +1315,24 @@ fn hosted_browser_preview_visible_char_count(text: &str, max_width_px: f32, font
     visible
 }
 
-fn draw_hosted_browser_placeholder_text_row(
-    state: &Ui2State,
+fn append_hosted_browser_placeholder_text_row_dots(
+    out: &mut Vec<Ui2HostedBrowserPreviewDot>,
     text: &str,
     x: f32,
     y: f32,
     max_width_px: f32,
     font_px: f32,
     alpha: u8,
-) -> bool {
+) {
     let visible_chars = hosted_browser_preview_visible_char_count(text, max_width_px, font_px);
     if visible_chars == 0 {
-        return false;
+        return;
     }
 
     let advance_px = hosted_browser_preview_char_advance_px(font_px);
     let circle_px = hosted_browser_preview_circle_size_px(font_px);
     let y_offset = ((font_px - circle_px) * 0.45).max(0.0);
     let mut cursor_x = x;
-    let mut drawn = false;
     let mut used = 0usize;
 
     for ch in text.chars() {
@@ -1331,23 +1344,230 @@ fn draw_hosted_browser_placeholder_text_row(
             break;
         }
         if normalized != ' ' {
-            drawn |= crate::gfx::lyon::draw_lyon_icon_alpha_scaled_no_present(
-                6,
-                0,
-                1,
-                cursor_x,
-                y + y_offset,
-                circle_px,
-                state.view_w,
-                state.view_h,
+            out.push(Ui2HostedBrowserPreviewDot {
+                x: cursor_x,
+                y: y + y_offset,
+                size_px: circle_px,
+                color_id: 0,
                 alpha,
-            ) == 0;
+            });
         }
         cursor_x += advance_px;
         used = used.saturating_add(1);
     }
+}
+
+fn draw_hosted_browser_placeholder_text_row(
+    state: &Ui2State,
+    text: &str,
+    x: f32,
+    y: f32,
+    max_width_px: f32,
+    font_px: f32,
+    alpha: u8,
+) -> bool {
+    let mut dots = Vec::new();
+    append_hosted_browser_placeholder_text_row_dots(
+        &mut dots,
+        text,
+        x,
+        y,
+        max_width_px,
+        font_px,
+        alpha,
+    );
+    let mut drawn = false;
+    for dot in &dots {
+        drawn |= crate::gfx::lyon::draw_lyon_icon_alpha_scaled_no_present(
+            6,
+            dot.color_id,
+            1,
+            dot.x,
+            dot.y,
+            dot.size_px,
+            state.view_w,
+            state.view_h,
+            dot.alpha,
+        ) == 0;
+    }
 
     drawn
+}
+
+fn rebuild_hosted_browser_preview_cache(
+    window: &mut Ui2Window,
+    viewport_w: u32,
+    viewport_h: u32,
+    text_seq: u32,
+    layout_seq: u32,
+) {
+    window.browser_preview_dots.clear();
+    window.browser_preview_view_w = viewport_w;
+    window.browser_preview_view_h = viewport_h;
+    window.browser_preview_text_seq = text_seq;
+    window.browser_preview_layout_seq = layout_seq;
+
+    let viewport_w_f = viewport_w.max(1) as f32;
+    let viewport_h_f = viewport_h.max(1) as f32;
+    let text_alpha = window.alpha;
+
+    if !window.hosted_browser_snapshot.layout.nodes.is_empty() {
+        let layout_state = &window.hosted_browser_snapshot.layout;
+        let mut y_cursor = 8.0f32;
+        let bottom = viewport_h_f - 4.0;
+
+        for node in layout_state.nodes.iter().take(24) {
+            if node.parent_id == 0 {
+                continue;
+            }
+            let margin_top = node.margin_top_px as f32;
+            let margin_bottom = node.margin_bottom_px as f32;
+            let text_top = y_cursor + margin_top;
+            if text_top >= bottom {
+                continue;
+            }
+            let text = if !node.tag.is_empty() {
+                format!("<{}> </{}>", node.tag, node.tag)
+            } else if !node.text.is_empty() {
+                node.text.clone()
+            } else {
+                String::new()
+            };
+            let fallback_line_h = node
+                .intrinsic_height_px
+                .max(node.min_height_px)
+                .clamp(12, 24) as f32;
+            let font_px = hosted_browser_preview_font_px(node.font_size_px, fallback_line_h);
+            let block_h = node.intrinsic_height_px.max(node.min_height_px).max(10) as f32
+                + margin_top
+                + margin_bottom
+                + node.padding_top_px as f32
+                + node.padding_bottom_px as f32;
+            if !text.is_empty() {
+                let left = 8.0 + node.margin_left_px as f32 + node.padding_left_px as f32;
+                let max_width_px = (viewport_w_f - 8.0 - left).max(0.0);
+                append_hosted_browser_placeholder_text_row_dots(
+                    &mut window.browser_preview_dots,
+                    &text,
+                    left,
+                    text_top,
+                    max_width_px,
+                    font_px,
+                    text_alpha,
+                );
+            }
+            y_cursor += block_h.max(8.0);
+        }
+        return;
+    }
+
+    let text_state = &window.hosted_browser_snapshot.text;
+    if text_state.rows.is_empty() {
+        return;
+    }
+
+    let pad_x = 10.0f32;
+    let pad_y = 8.0f32;
+    let default_text_px_h = 7.0f32;
+    let visible_bottom = viewport_h_f - pad_y;
+    let surface_state = browser_surface_state_for_window(window);
+    let scroll_x = surface_state.scroll_x as f32;
+    let scroll_y = surface_state.scroll_y as f32;
+    let content_right = viewport_w_f - pad_x;
+    let mut row_y = pad_y;
+
+    for row in text_state.rows.iter() {
+        let font_px = hosted_browser_preview_font_px(row.font_size_px, default_text_px_h);
+        let line_px = hosted_browser_preview_line_px(row.line_height_px, font_px, font_px + 4.0);
+        let x = pad_x + row.indent_px as f32 - scroll_x;
+        let y = row_y - scroll_y;
+        row_y += line_px;
+        if y + line_px <= 0.0 || y >= visible_bottom {
+            continue;
+        }
+        if x >= content_right {
+            continue;
+        }
+
+        let max_width_px = (content_right - x).max(0.0);
+        append_hosted_browser_placeholder_text_row_dots(
+            &mut window.browser_preview_dots,
+            &row.text,
+            x,
+            y,
+            max_width_px,
+            font_px,
+            text_alpha,
+        );
+    }
+}
+
+fn prepare_hosted_browser_preview_caches(state: &mut Ui2State) {
+    let count = state.windows.len();
+    for idx in 0..count {
+        let snapshot_window = state.windows[idx].clone();
+        if snapshot_window.kind != Ui2WindowKind::HostedBrowser || !snapshot_window.visible {
+            continue;
+        }
+        let Some(content) = window_content_rect(state, &snapshot_window) else {
+            continue;
+        };
+        let (_, _, viewport_w, viewport_h) = snap_browser_content_rect(content);
+        let instance_id = window_browser_instance_id(&snapshot_window);
+        let text_seq = hosted_text_seq(instance_id);
+        let layout_seq = hosted_layout_seq(instance_id);
+        let needs_rebuild = snapshot_window.browser_preview_view_w != viewport_w
+            || snapshot_window.browser_preview_view_h != viewport_h
+            || snapshot_window.browser_preview_text_seq != text_seq
+            || snapshot_window.browser_preview_layout_seq != layout_seq;
+        if !needs_rebuild {
+            continue;
+        }
+        if let Some(window) = state.windows.get_mut(idx) {
+            rebuild_hosted_browser_preview_cache(window, viewport_w, viewport_h, text_seq, layout_seq);
+        }
+    }
+}
+
+fn draw_hosted_browser_preview_cache(
+    state: &Ui2State,
+    window: &Ui2Window,
+    content: Ui2Rect,
+) -> bool {
+    if window.browser_preview_dots.is_empty() {
+        return false;
+    }
+
+    let panel_rgba = if window.hosted_browser_snapshot.layout.nodes.is_empty() {
+        modulate_rgba_alpha((0xFB, 0xFB, 0xF8, 0xFF), window.alpha)
+    } else {
+        modulate_rgba_alpha((0xF8, 0xF8, 0xF4, 0xFF), window.alpha)
+    };
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        content.x,
+        content.y,
+        content.w,
+        content.h,
+        panel_rgba,
+        state.view_w,
+        state.view_h,
+    );
+
+    let mut drew_any = false;
+    for dot in &window.browser_preview_dots {
+        drew_any |= crate::gfx::lyon::draw_lyon_icon_alpha_scaled_no_present(
+            6,
+            dot.color_id,
+            1,
+            content.x + dot.x,
+            content.y + dot.y,
+            dot.size_px,
+            state.view_w,
+            state.view_h,
+            dot.alpha,
+        ) == 0;
+    }
+    drew_any
 }
 
 #[inline]
@@ -1522,20 +1742,12 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
         Ui2WindowKind::HostedBrowser => {
             if let Some(content) = content_rect {
                 let content_started_ms = boot_probe_ms();
-                if draw_hosted_browser_layout_preview(state, window, content) {
+                if draw_hosted_browser_preview_cache(state, window, content) {
                     return Ui2WindowDrawTiming {
                         chrome_ms,
                         texture_ms: boot_probe_ms().saturating_sub(content_started_ms),
                         placeholder_ms: 0,
-                        content_path: "browser-preview",
-                    };
-                }
-                if draw_hosted_browser_text_preview(state, window, content) {
-                    return Ui2WindowDrawTiming {
-                        chrome_ms,
-                        texture_ms: boot_probe_ms().saturating_sub(content_started_ms),
-                        placeholder_ms: 0,
-                        content_path: "browser-preview-text",
+                        content_path: "browser-preview-cache",
                     };
                 }
                 if texture_is_drawable(window.content_tex_id)
@@ -1704,6 +1916,7 @@ fn ensure_ui2_warmup_render_target(view_w: u32, view_h: u32) -> bool {
 
 fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     let stats = collect_compose_window_stats(state);
+    prepare_hosted_browser_preview_caches(state);
     let compose_seq = state.compose_seq.wrapping_add(1);
     let compose_reason = state.compose_reason;
     let compose_started_ms = boot_probe_ms();
