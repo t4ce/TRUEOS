@@ -101,7 +101,6 @@ define_started_flags!(
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
-    UI2_OPENTYPE_DEMO_STARTED,
     GFX_INTEL_TRIANGLE_DEMO_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
     CRABUSB_EVENT_PUMP_STARTED,
@@ -675,12 +674,6 @@ fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_ui2_opentype_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_opentype_demo::ui2_opentype_demo_task())
-    })
-}
-
 // currently ofc esotheric
 fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
     #[cfg(not(feature = "gfx_intel"))]
@@ -978,12 +971,6 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::UI2_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
-    ),
-    TaskSpec::enabled(
-        "ui2-opentype-demo",
-        crate::r::readiness::UI2_READY,
-        &UI2_OPENTYPE_DEMO_STARTED,
-        spawn_ui2_opentype_demo,
     ),
     TaskSpec::enabled(
         "gfx-intel-scanout-demo",
