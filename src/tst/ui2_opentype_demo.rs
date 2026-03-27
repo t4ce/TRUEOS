@@ -122,15 +122,14 @@ async fn build_demo_surface_rgba() -> Option<(u32, u32, Vec<u8>)> {
 
     unsafe {
         crate::log!("ui2-opentype-demo: creating JS runtime\n");
-        let Some(vm) = qjs::vm::QjsVm::new_node() else {
+        let Some(vm) = qjs::vm::QjsVm::new_node_with_profile(qjs::node::RuntimeProfile::Browser)
+        else {
             crate::log!("ui2-opentype-demo: JS runtime init failed\n");
             return None;
         };
         let ctx = vm.ctx_ptr();
         let rt = vm.rt_ptr();
 
-        crate::log!("ui2-opentype-demo: installing node globals\n");
-        qjs::node::install_globals(ctx);
         crate::log!("ui2-opentype-demo: injecting font bytes into JS\n");
         if !install_demo_font_bytes(ctx, font_bytes.as_slice()) {
             crate::log!("ui2-opentype-demo: failed to inject font bytes into JS\n");

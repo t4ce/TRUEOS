@@ -2,13 +2,16 @@
 
 extern crate alloc;
 
-use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_char};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use libm::{ceilf, floorf, sqrtf};
+use libm::{ceilf, floorf};
 use spin::Mutex;
+use trueos_gfx_core::{
+    RGB_VERTEX_SIZE, Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_rgb_line_quad_px,
+    push_rgb_quad_px, push_tex_quad_px, push_tex_vertex_bytes,
+};
 
 use crate as qjs;
 
@@ -718,7 +721,7 @@ unsafe extern "C" fn qjs_cmd_stream_get_texture_status(
 }
 
 #[inline]
-fn cmd_stream_push_tex_vtx(
+pub(super) fn cmd_stream_push_tex_vtx(
     out: &mut Vec<u8>,
     x: f32,
     y: f32,
@@ -729,14 +732,16 @@ fn cmd_stream_push_tex_vtx(
     b: u8,
     a: u8,
 ) {
-    out.extend_from_slice(&x.to_le_bytes());
-    out.extend_from_slice(&y.to_le_bytes());
-    out.extend_from_slice(&u.to_le_bytes());
-    out.extend_from_slice(&v.to_le_bytes());
-    out.push(r);
-    out.push(g);
-    out.push(b);
-    out.push(a);
+    push_tex_vertex_bytes(
+        out,
+        trueos_gfx_core::TexVertex {
+            x,
+            y,
+            u,
+            v,
+            color: Rgba8::new(r, g, b, a),
+        },
+    );
 }
 
 #[inline]
@@ -764,39 +769,28 @@ fn cmd_stream_draw_texture_rect(
     let top_px = y + origin_y;
     let right_px = left_px + width;
     let bottom_px = top_px + height;
-    let vw = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
-    let vh = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
-    let left = (2.0 * (left_px / vw)) - 1.0;
-    let right = (2.0 * (right_px / vw)) - 1.0;
-    let top = 1.0 - (2.0 * (top_px / vh));
-    let bottom = 1.0 - (2.0 * (bottom_px / vh));
-    let r = ((rgba >> 24) & 0xFF) as u8;
-    let g = ((rgba >> 16) & 0xFF) as u8;
-    let b = ((rgba >> 8) & 0xFF) as u8;
-    let a = (rgba & 0xFF) as u8;
+    let transform = ViewTransform::from_extent(
+        CMD_STREAM_VIEW_W.load(Ordering::Relaxed),
+        CMD_STREAM_VIEW_H.load(Ordering::Relaxed),
+    );
+    let color = Rgba8::from_rgba_u32(rgba);
 
-    let mut verts = Vec::with_capacity(6 * 20);
-    cmd_stream_push_tex_vtx(&mut verts, left, bottom, u0, v1, r, g, b, a);
-    cmd_stream_push_tex_vtx(&mut verts, right, bottom, u1, v1, r, g, b, a);
-    cmd_stream_push_tex_vtx(&mut verts, right, top, u1, v0, r, g, b, a);
-    cmd_stream_push_tex_vtx(&mut verts, left, bottom, u0, v1, r, g, b, a);
-    cmd_stream_push_tex_vtx(&mut verts, right, top, u1, v0, r, g, b, a);
-    cmd_stream_push_tex_vtx(&mut verts, left, top, u0, v0, r, g, b, a);
+    let mut verts = Vec::with_capacity(6 * TEX_VERTEX_SIZE);
+    push_tex_quad_px(
+        &mut verts,
+        transform,
+        left_px,
+        top_px,
+        right_px,
+        bottom_px,
+        [u0, v0, u1, v1],
+        color,
+    );
 
     let rc = unsafe {
         trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, verts.as_ptr(), verts.len())
     };
     rc == 0
-}
-
-#[inline]
-fn cmd_stream_push_rgb_vtx(out: &mut Vec<u8>, x: f32, y: f32, r: u8, g: u8, b: u8, a: u8) {
-    out.extend_from_slice(&x.to_le_bytes());
-    out.extend_from_slice(&y.to_le_bytes());
-    out.push(r);
-    out.push(g);
-    out.push(b);
-    out.push(a);
 }
 
 #[inline]
@@ -820,55 +814,6 @@ fn cmd_stream_draw_rgb_triangles(verts: &[u8], a: u8) -> bool {
     }
 
     rc == 0
-}
-
-#[inline]
-fn cmd_stream_push_rgb_line_quad_px(
-    verts: &mut Vec<u8>,
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    thickness: f32,
-    vw: f32,
-    vh: f32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-) {
-    let dx = x2 - x1;
-    let dy = y2 - y1;
-    let len_sq = (dx * dx) + (dy * dy);
-    if !len_sq.is_finite() || len_sq <= f32::EPSILON {
-        return;
-    }
-
-    let half = (thickness * 0.5).max(0.5);
-    if !half.is_finite() {
-        return;
-    }
-
-    let inv_len = sqrtf(len_sq).recip();
-    let nx = -dy * inv_len;
-    let ny = dx * inv_len;
-    let ox = nx * half;
-    let oy = ny * half;
-
-    let to_ndc =
-        |px: f32, py: f32| -> (f32, f32) { ((2.0 * (px / vw)) - 1.0, 1.0 - (2.0 * (py / vh))) };
-
-    let (ax, ay) = to_ndc(x1 + ox, y1 + oy);
-    let (bx, by) = to_ndc(x2 + ox, y2 + oy);
-    let (cx, cy) = to_ndc(x2 - ox, y2 - oy);
-    let (dxn, dyn_) = to_ndc(x1 - ox, y1 - oy);
-
-    cmd_stream_push_rgb_vtx(verts, ax, ay, r, g, b, a);
-    cmd_stream_push_rgb_vtx(verts, bx, by, r, g, b, a);
-    cmd_stream_push_rgb_vtx(verts, cx, cy, r, g, b, a);
-    cmd_stream_push_rgb_vtx(verts, ax, ay, r, g, b, a);
-    cmd_stream_push_rgb_vtx(verts, cx, cy, r, g, b, a);
-    cmd_stream_push_rgb_vtx(verts, dxn, dyn_, r, g, b, a);
 }
 
 #[inline]
@@ -897,31 +842,27 @@ fn cmd_stream_fill_rect(
         return false;
     }
 
-    let vw = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
-    let vh = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
-    let r = ((rgba >> 24) & 0xFF) as u8;
-    let g = ((rgba >> 16) & 0xFF) as u8;
-    let b = ((rgba >> 8) & 0xFF) as u8;
-    let a = (rgba & 0xFF) as u8;
+    let transform = ViewTransform::from_extent(
+        CMD_STREAM_VIEW_W.load(Ordering::Relaxed),
+        CMD_STREAM_VIEW_H.load(Ordering::Relaxed),
+    );
+    let color = Rgba8::from_rgba_u32(rgba);
+    let a = color.a;
 
     let push_rect = |verts: &mut Vec<u8>,
                      rect_left_px: f32,
                      rect_top_px: f32,
                      rect_right_px: f32,
                      rect_bottom_px: f32| {
-        if !(rect_left_px < rect_right_px && rect_top_px < rect_bottom_px) {
-            return;
-        }
-        let left = (2.0 * (rect_left_px / vw)) - 1.0;
-        let right = (2.0 * (rect_right_px / vw)) - 1.0;
-        let top = 1.0 - (2.0 * (rect_top_px / vh));
-        let bottom = 1.0 - (2.0 * (rect_bottom_px / vh));
-        cmd_stream_push_rgb_vtx(verts, left, top, r, g, b, a);
-        cmd_stream_push_rgb_vtx(verts, right, top, r, g, b, a);
-        cmd_stream_push_rgb_vtx(verts, right, bottom, r, g, b, a);
-        cmd_stream_push_rgb_vtx(verts, left, top, r, g, b, a);
-        cmd_stream_push_rgb_vtx(verts, right, bottom, r, g, b, a);
-        cmd_stream_push_rgb_vtx(verts, left, bottom, r, g, b, a);
+        push_rgb_quad_px(
+            verts,
+            transform,
+            rect_left_px,
+            rect_top_px,
+            rect_right_px,
+            rect_bottom_px,
+            color,
+        );
     };
 
     let use_chamfer = chamfer && rect_w >= 10.0 && rect_h >= 10.0;
@@ -940,15 +881,21 @@ fn cmd_stream_fill_rect(
         ];
         let cx = (left_px + right_px) * 0.5;
         let cy = (top_px + bottom_px) * 0.5;
-        let center = ((2.0 * (cx / vw)) - 1.0, 1.0 - (2.0 * (cy / vh)));
         for i in 0..pts.len() {
             let (x1, y1) = pts[i];
             let (x2, y2) = pts[(i + 1) % pts.len()];
-            let p1 = ((2.0 * (x1 / vw)) - 1.0, 1.0 - (2.0 * (y1 / vh)));
-            let p2 = ((2.0 * (x2 / vw)) - 1.0, 1.0 - (2.0 * (y2 / vh)));
-            cmd_stream_push_rgb_vtx(verts, center.0, center.1, r, g, b, a);
-            cmd_stream_push_rgb_vtx(verts, p1.0, p1.1, r, g, b, a);
-            cmd_stream_push_rgb_vtx(verts, p2.0, p2.1, r, g, b, a);
+            trueos_gfx_core::push_rgb_vertex_bytes(
+                verts,
+                transform.rgb_vertex_px(cx, cy, color),
+            );
+            trueos_gfx_core::push_rgb_vertex_bytes(
+                verts,
+                transform.rgb_vertex_px(x1, y1, color),
+            );
+            trueos_gfx_core::push_rgb_vertex_bytes(
+                verts,
+                transform.rgb_vertex_px(x2, y2, color),
+            );
         }
     };
 
@@ -966,12 +913,12 @@ fn cmd_stream_fill_rect(
         for i in 0..pts.len() {
             let (x1, y1) = pts[i];
             let (x2, y2) = pts[(i + 1) % pts.len()];
-            cmd_stream_push_rgb_line_quad_px(verts, x1, y1, x2, y2, 1.0, vw, vh, r, g, b, a);
+            push_rgb_line_quad_px(verts, transform, x1, y1, x2, y2, 1.0, color);
         }
     };
 
     if use_chamfer {
-        let mut verts = Vec::with_capacity(if outline { 48 * 12 } else { 24 * 12 });
+        let mut verts = Vec::with_capacity(if outline { 48 * RGB_VERTEX_SIZE } else { 24 * RGB_VERTEX_SIZE });
         if outline {
             push_chamfer_outline(&mut verts);
         } else {
@@ -989,7 +936,7 @@ fn cmd_stream_fill_rect(
         let left_w = stroke.min(right_px - left_px);
         let right_w = stroke.min((right_px - left_px - left_w).max(0.0));
 
-        let mut verts = Vec::with_capacity(24 * 12);
+        let mut verts = Vec::with_capacity(24 * RGB_VERTEX_SIZE);
         push_rect(&mut verts, left_px, top_px, right_px, top_px + top_h);
         push_rect(
             &mut verts,
@@ -1015,7 +962,7 @@ fn cmd_stream_fill_rect(
         return cmd_stream_draw_rgb_triangles(&verts, a);
     }
 
-    let mut verts = Vec::with_capacity(6 * 12);
+    let mut verts = Vec::with_capacity(6 * RGB_VERTEX_SIZE);
 
     push_rect(&mut verts, left_px, top_px, right_px, bottom_px);
 
@@ -1029,14 +976,14 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
     let y1 = y1 + origin_y;
     let x2 = x2 + origin_x;
     let y2 = y2 + origin_y;
-    let vw = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
-    let vh = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
-    let r = ((rgba >> 24) & 0xFF) as u8;
-    let g = ((rgba >> 16) & 0xFF) as u8;
-    let b = ((rgba >> 8) & 0xFF) as u8;
-    let a = (rgba & 0xFF) as u8;
-    let mut verts = Vec::with_capacity(6 * 12);
-    cmd_stream_push_rgb_line_quad_px(&mut verts, x1, y1, x2, y2, thickness, vw, vh, r, g, b, a);
+    let transform = ViewTransform::from_extent(
+        CMD_STREAM_VIEW_W.load(Ordering::Relaxed),
+        CMD_STREAM_VIEW_H.load(Ordering::Relaxed),
+    );
+    let color = Rgba8::from_rgba_u32(rgba);
+    let a = color.a;
+    let mut verts = Vec::with_capacity(6 * RGB_VERTEX_SIZE);
+    push_rgb_line_quad_px(&mut verts, transform, x1, y1, x2, y2, thickness, color);
     cmd_stream_draw_rgb_triangles(&verts, a)
 }
 

@@ -2,13 +2,35 @@
 
 extern crate alloc;
 
-use alloc::{string::String, vec, vec::Vec};
+use alloc::{string::String, vec::Vec};
 use core::ffi::{c_char, c_int, c_void};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate as qjs;
 
 static FETCH_TMP_SEQ: AtomicU32 = AtomicU32::new(1);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeProfile {
+    Default,
+    Shell,
+    Worker,
+    Browser,
+    Ai,
+}
+
+impl RuntimeProfile {
+    #[inline]
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Shell => "shell",
+            Self::Worker => "worker",
+            Self::Browser => "browser",
+            Self::Ai => "ai",
+        }
+    }
+}
 
 unsafe extern "C" fn trueos_node_module_normalize(
     ctx: *mut qjs::JSContext,
@@ -48,6 +70,10 @@ pub unsafe fn install(rt: *mut qjs::JSRuntime) {
 
 /// Convenience wrapper: Node mode currently reuses the same globals as the base loader.
 pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
+    install_globals_with_profile(ctx, RuntimeProfile::Default);
+}
+
+pub unsafe fn install_globals_with_profile(ctx: *mut qjs::JSContext, profile: RuntimeProfile) {
     ensure_global_env(ctx);
     ensure_global_web_platform(ctx);
     ensure_global_console(ctx);
@@ -55,7 +81,25 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
     ensure_global_intl(ctx);
     ensure_global_fetch(ctx);
     ensure_global_kernel_time(ctx);
+    ensure_runtime_profile_marker(ctx, profile);
     crate::host_api_hook::call_context_init_hook(ctx);
+}
+
+unsafe fn ensure_runtime_profile_marker(ctx: *mut qjs::JSContext, profile: RuntimeProfile) {
+    if ctx.is_null() {
+        return;
+    }
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return;
+    }
+    let _ = qjs::jsbind::set_str_prop(
+        ctx,
+        global,
+        b"__trueosRuntimeProfile\0",
+        profile.as_str(),
+    );
+    qjs::js_free_value(ctx, global);
 }
 
 unsafe fn ensure_global_env(ctx: *mut qjs::JSContext) {
@@ -183,34 +227,19 @@ unsafe fn ensure_global_kernel_time(ctx: *mut qjs::JSContext) {
         return;
     }
 
-    let f = qjs::JS_NewCFunction2(
+    let _ = qjs::jsbind::install_fn(
         ctx,
+        global,
+        b"__trueosNtpUnixSeconds\0",
+        0,
         Some(trueos_ntp_unix_seconds_js),
-        b"__trueosNtpUnixSeconds\0".as_ptr() as *const c_char,
-        0,
-        qjs::JS_CFUNC_GENERIC,
-        0,
     );
-    let _ = qjs::JS_SetPropertyStr(
+    let _ = qjs::jsbind::install_fn(
         ctx,
         global,
-        b"__trueosNtpUnixSeconds\0".as_ptr() as *const c_char,
-        f,
-    );
-
-    let kernel_date = qjs::JS_NewCFunction2(
-        ctx,
+        b"kernelDateDayMonthYear\0",
+        0,
         Some(trueos_kernel_date_day_month_year_js),
-        b"kernelDateDayMonthYear\0".as_ptr() as *const c_char,
-        0,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"kernelDateDayMonthYear\0".as_ptr() as *const c_char,
-        kernel_date,
     );
 
     qjs::js_free_value(ctx, global);
@@ -662,6 +691,150 @@ unsafe extern "C" fn trueos_resolve_ready_image_texture(
     promise
 }
 
+fn read_fs_len(path: &[u8]) -> isize {
+    unsafe {
+        qjs::trueos_shims::trueos_cabi_fs_read_file(
+            path.as_ptr(),
+            path.len(),
+            core::ptr::null_mut(),
+            0,
+        )
+    }
+}
+
+unsafe extern "C" fn trueos_prefetch_module(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
+    if argv.is_null() || argc <= 0 {
+        let code = js_int32(-1);
+        let _ = qjs::JS_Call(
+            ctx,
+            reject,
+            qjs::JSValue::undefined(),
+            1,
+            &code as *const qjs::JSValue,
+        );
+        qjs::js_free_value(ctx, resolve);
+        qjs::js_free_value(ctx, reject);
+        return promise;
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut spec_len: usize = 0;
+    let spec_c = qjs::JS_ToCStringLen2(ctx, &mut spec_len as *mut usize, args[0], 0);
+    if spec_c.is_null() {
+        let code = js_int32(-1);
+        let _ = qjs::JS_Call(
+            ctx,
+            reject,
+            qjs::JSValue::undefined(),
+            1,
+            &code as *const qjs::JSValue,
+        );
+        qjs::js_free_value(ctx, resolve);
+        qjs::js_free_value(ctx, reject);
+        return promise;
+    }
+
+    let mut base_len: usize = 0;
+    let mut base_c: *const c_char = core::ptr::null();
+    if args.len() > 1 {
+        base_c = qjs::JS_ToCStringLen2(ctx, &mut base_len as *mut usize, args[1], 0);
+    }
+
+    let normalized_ptr = qjs::trueos_module_loader::normalize_with_mode(
+        ctx,
+        base_c,
+        spec_c,
+        qjs::trueos_module_loader::NormalizeMode::Node,
+    );
+
+    if !base_c.is_null() {
+        qjs::JS_FreeCString(ctx, base_c);
+    }
+    qjs::JS_FreeCString(ctx, spec_c);
+
+    if normalized_ptr.is_null() {
+        let code = js_int32(-1);
+        let _ = qjs::JS_Call(
+            ctx,
+            reject,
+            qjs::JSValue::undefined(),
+            1,
+            &code as *const qjs::JSValue,
+        );
+        qjs::js_free_value(ctx, resolve);
+        qjs::js_free_value(ctx, reject);
+        return promise;
+    }
+
+    let normalized = core::ffi::CStr::from_ptr(normalized_ptr).to_bytes().to_vec();
+    qjs::js_free(ctx, normalized_ptr as *mut c_void);
+
+    if !qjs::trueos_module_loader::is_url_specifier(&normalized) {
+        let out = qjs::JS_NewStringLen(ctx, normalized.as_ptr() as *const c_char, normalized.len());
+        let _ = qjs::JS_Call(
+            ctx,
+            resolve,
+            qjs::JSValue::undefined(),
+            1,
+            &out as *const qjs::JSValue,
+        );
+        qjs::js_free_value(ctx, out);
+        qjs::js_free_value(ctx, resolve);
+        qjs::js_free_value(ctx, reject);
+        return promise;
+    }
+
+    let cache_path = qjs::trueos_module_loader::cache_path_for_url(&normalized);
+    if qjs::trueos_module_loader::has_embedded_module(&cache_path) || read_fs_len(&cache_path) >= 0
+    {
+        let out = qjs::JS_NewStringLen(ctx, normalized.as_ptr() as *const c_char, normalized.len());
+        let _ = qjs::JS_Call(
+            ctx,
+            resolve,
+            qjs::JSValue::undefined(),
+            1,
+            &out as *const qjs::JSValue,
+        );
+        qjs::js_free_value(ctx, out);
+        qjs::js_free_value(ctx, resolve);
+        qjs::js_free_value(ctx, reject);
+        return promise;
+    }
+
+    match qjs::async_ops::start_net_fetch_to_file(&normalized, &cache_path) {
+        Ok(op_id) => {
+            qjs::async_ops::register_promise(
+                ctx,
+                op_id,
+                qjs::async_ops::OpKind::NetFetchModule,
+                resolve,
+                reject,
+                normalized,
+            );
+        }
+        Err(code) => {
+            let code_js = js_int32(code);
+            let _ = qjs::JS_Call(
+                ctx,
+                reject,
+                qjs::JSValue::undefined(),
+                1,
+                &code_js as *const qjs::JSValue,
+            );
+        }
+    }
+
+    qjs::js_free_value(ctx, resolve);
+    qjs::js_free_value(ctx, reject);
+    promise
+}
+
 unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
     if ctx.is_null() {
         return;
@@ -729,6 +902,21 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
         global,
         b"__trueosResolveReadyImageTexture\0".as_ptr() as *const c_char,
         image_helper,
+    );
+
+    let prefetch_module_helper = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_prefetch_module),
+        b"__trueosPrefetchModule\0".as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosPrefetchModule\0".as_ptr() as *const c_char,
+        prefetch_module_helper,
     );
 
     let shim_src = br#"
@@ -850,6 +1038,47 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
             });
         };
     }
+
+    if (typeof G.prefetchModule !== 'function' && typeof G.__trueosPrefetchModule === 'function') {
+        G.prefetchModule = function prefetchModule(specifier, base) {
+            const spec = String(specifier);
+            return Promise.resolve(
+                base == null
+                    ? G.__trueosPrefetchModule(spec)
+                    : G.__trueosPrefetchModule(spec, String(base)),
+            );
+        };
+    }
+
+    if (typeof G.importModule !== 'function' && typeof G.__trueosPrefetchModule === 'function') {
+        G.importModule = function importModule(specifier, base) {
+            const spec = String(specifier);
+            const prefetch = base == null
+                ? G.__trueosPrefetchModule(spec)
+                : G.__trueosPrefetchModule(spec, String(base));
+            return Promise.resolve(prefetch).then((normalized) => import(normalized));
+        };
+    }
+
+    if (typeof G.createImportHelpers !== 'function') {
+        G.createImportHelpers = function createImportHelpers(base) {
+            const baseUrl = base == null ? undefined : String(base);
+            return {
+                prefetch(specifier) {
+                    if (typeof G.prefetchModule === 'function') {
+                        return G.prefetchModule(specifier, baseUrl);
+                    }
+                    return Promise.resolve(String(specifier));
+                },
+                import(specifier) {
+                    if (typeof G.importModule === 'function') {
+                        return G.importModule(specifier, baseUrl);
+                    }
+                    return import(String(specifier));
+                },
+            };
+        };
+    }
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 "#;
 
@@ -905,15 +1134,11 @@ unsafe fn log_js_args(
             if idx > 0 {
                 log_str(" ");
             }
-            let mut len: usize = 0;
-            let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, *arg, 0);
-            if cstr.is_null() {
+            let Some(text) = qjs::jsbind::JsStringRef::new(ctx, *arg) else {
                 log_str("<toString failed>");
                 continue;
-            }
-            let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
-            log_bytes(bytes);
-            qjs::JS_FreeCString(ctx, cstr);
+            };
+            log_bytes(text.as_bytes());
         }
     }
     log_str("\n");
@@ -1053,15 +1278,7 @@ unsafe fn ensure_global_console(ctx: *mut qjs::JSContext) {
     macro_rules! set_console_fn {
         ($name:literal, $func:expr, $argc:expr) => {{
             let k = concat!($name, "\0");
-            let f = qjs::JS_NewCFunction2(
-                ctx,
-                Some($func),
-                k.as_ptr() as *const c_char,
-                $argc,
-                qjs::JS_CFUNC_GENERIC,
-                0,
-            );
-            let _ = qjs::JS_SetPropertyStr(ctx, console, k.as_ptr() as *const c_char, f);
+            let _ = qjs::jsbind::install_fn(ctx, console, k.as_bytes(), $argc, Some($func));
         }};
     }
 
@@ -1075,7 +1292,7 @@ unsafe fn ensure_global_console(ctx: *mut qjs::JSContext) {
     set_console_fn!("time", console_time, 1);
     set_console_fn!("timeEnd", console_time_end, 1);
 
-    let _ = qjs::JS_SetPropertyStr(ctx, global, b"console\0".as_ptr() as *const c_char, console);
+    let _ = qjs::jsbind::set_prop(ctx, global, b"console\0", console);
     qjs::js_free_value(ctx, global);
 }
 
@@ -1106,27 +1323,21 @@ unsafe fn locale_profile_from_arg0(
         );
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
-    let mut len: usize = 0;
-    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, args[0], 0);
-    if cstr.is_null() {
+    let Some(locale) = qjs::jsbind::JsStringRef::new(ctx, args[0]) else {
         return trueos_weather::lang::intl_locale_profile(
             trueos_weather::lang::DEFAULT_INTL_LOCALE,
         );
-    }
-    let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
-    let profile = match core::str::from_utf8(bytes) {
-        Ok(s) => trueos_weather::lang::intl_locale_profile(s),
-        Err(_) => {
+    };
+    match locale.as_str() {
+        Some(s) => trueos_weather::lang::intl_locale_profile(s),
+        None => {
             trueos_weather::lang::intl_locale_profile(trueos_weather::lang::DEFAULT_INTL_LOCALE)
         }
-    };
-    qjs::JS_FreeCString(ctx, cstr);
-    profile
+    }
 }
 
 unsafe fn set_str_prop(ctx: *mut qjs::JSContext, obj: qjs::JSValue, key: &[u8], val: &str) {
-    let js = qjs::JS_NewStringLen(ctx, val.as_ptr() as *const c_char, val.len());
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, key.as_ptr() as *const c_char, js);
+    let _ = qjs::jsbind::set_str_prop(ctx, obj, key, val);
 }
 
 unsafe fn set_char_prop(ctx: *mut qjs::JSContext, obj: qjs::JSValue, key: &[u8], val: char) {

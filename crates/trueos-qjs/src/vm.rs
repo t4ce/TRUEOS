@@ -7,6 +7,7 @@ use core::marker::PhantomData;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate as qjs;
+use crate::node::RuntimeProfile;
 
 /// Owning wrapper for a QuickJS runtime/context pair.
 ///
@@ -27,6 +28,13 @@ impl QjsVm {
     ///
     /// Safety: the returned VM must stay on a single owning task/thread for its entire lifetime.
     pub unsafe fn new_node() -> Option<Self> {
+        Self::new_node_with_profile(RuntimeProfile::Default)
+    }
+
+    /// Create a new runtime/context pair and install globals for a specific runtime profile.
+    ///
+    /// Safety: the returned VM must stay on a single owning task/thread for its entire lifetime.
+    pub unsafe fn new_node_with_profile(profile: RuntimeProfile) -> Option<Self> {
         let rt = unsafe { qjs::JS_NewRuntime() };
         if rt.is_null() {
             return None;
@@ -43,6 +51,7 @@ impl QjsVm {
         }
 
         unsafe { qjs::qjs_diag::install_context(ctx) };
+        unsafe { qjs::node::install_globals_with_profile(ctx, profile) };
 
         Some(Self {
             rt,

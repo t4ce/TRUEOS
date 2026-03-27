@@ -2,10 +2,10 @@
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::ffi::c_char;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use spin::Mutex;
@@ -53,11 +53,12 @@ pub enum OpKind {
     NetFetchText,
     /// Kernel net fetch (URL -> bytes) and resolve with bytes.
     NetFetchBytes,
+    /// Kernel net fetch (URL -> cache file) and resolve with the normalized specifier.
+    NetFetchModule,
 }
 
 #[derive(Clone)]
 struct PendingOp {
-    ctx_owner: *mut qjs::JSContext,
     op_id: u32,
     kind: OpKind,
     resolve: qjs::JSValue,
@@ -71,18 +72,8 @@ struct PendingOp {
 // QuickJS execution is expected to remain within a single owning task.
 unsafe impl Send for PendingOp {}
 
-static PENDING: Mutex<Vec<PendingOp>> = Mutex::new(Vec::new());
-
-#[derive(Clone, Copy)]
-struct CompletedOp {
-    ctx_owner: *mut qjs::JSContext,
-    op_id: u32,
-}
-
-// QuickJS execution is expected to remain within a single owning task.
-unsafe impl Send for CompletedOp {}
-
-static COMPLETED: Mutex<Vec<CompletedOp>> = Mutex::new(Vec::new());
+static PENDING: Mutex<BTreeMap<usize, Vec<PendingOp>>> = Mutex::new(BTreeMap::new());
+static COMPLETED: Mutex<BTreeMap<usize, Vec<u32>>> = Mutex::new(BTreeMap::new());
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageRequestSource {
@@ -100,7 +91,6 @@ enum PendingImageStage {
 }
 
 struct PendingImageOp {
-    ctx_owner: *mut qjs::JSContext,
     stage: PendingImageStage,
     tex_id: u32,
     width: u32,
@@ -112,7 +102,7 @@ struct PendingImageOp {
 
 unsafe impl Send for PendingImageOp {}
 
-static PENDING_IMAGES: Mutex<Vec<PendingImageOp>> = Mutex::new(Vec::new());
+static PENDING_IMAGES: Mutex<BTreeMap<usize, Vec<PendingImageOp>>> = Mutex::new(BTreeMap::new());
 static IMAGE_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
@@ -169,14 +159,13 @@ pub unsafe fn register_promise(
     aux: Vec<u8>,
 ) {
     let op = PendingOp {
-        ctx_owner: ctx,
         op_id,
         kind,
         resolve: unsafe { qjs::js_dup_value(ctx, resolve) },
         reject: unsafe { qjs::js_dup_value(ctx, reject) },
         aux,
     };
-    PENDING.lock().push(op);
+    PENDING.lock().entry(ctx as usize).or_default().push(op);
 }
 
 pub unsafe fn register_ready_image_texture_request(
@@ -198,7 +187,6 @@ pub unsafe fn register_ready_image_texture_request(
         ));
     }
     let op = PendingImageOp {
-        ctx_owner: ctx,
         stage: PendingImageStage::SourceBytes {
             op_id,
             path,
@@ -211,83 +199,86 @@ pub unsafe fn register_ready_image_texture_request(
         resolve: qjs::js_dup_value(ctx, resolve),
         reject: qjs::js_dup_value(ctx, reject),
     };
-    PENDING_IMAGES.lock().push(op);
+    PENDING_IMAGES
+        .lock()
+        .entry(ctx as usize)
+        .or_default()
+        .push(op);
 }
 
 pub unsafe fn has_pending(ctx: *mut qjs::JSContext) -> bool {
-    PENDING.lock().iter().any(|p| p.ctx_owner == ctx)
-        || PENDING_IMAGES.lock().iter().any(|p| p.ctx_owner == ctx)
+    PENDING
+        .lock()
+        .get(&(ctx as usize))
+        .is_some_and(|ops| !ops.is_empty())
+        || PENDING_IMAGES
+            .lock()
+            .get(&(ctx as usize))
+            .is_some_and(|ops| !ops.is_empty())
 }
 
 unsafe fn take_pending(ctx: *mut qjs::JSContext, op_id: u32) -> Option<PendingOp> {
     let mut pending = PENDING.lock();
-    let pos = pending
-        .iter()
-        .position(|p| p.ctx_owner == ctx && p.op_id == op_id)?;
-    Some(pending.remove(pos))
+    let ops = pending.get_mut(&(ctx as usize))?;
+    let pos = ops.iter().position(|p| p.op_id == op_id)?;
+    Some(ops.remove(pos))
 }
 
 fn find_pending_owner(op_id: u32) -> Option<*mut qjs::JSContext> {
     PENDING
         .lock()
         .iter()
-        .find(|p| p.op_id == op_id)
-        .map(|p| p.ctx_owner)
+        .find_map(|(ctx_key, ops)| ops.iter().any(|p| p.op_id == op_id).then_some(*ctx_key))
+        .map(|ctx_key| ctx_key as *mut qjs::JSContext)
 }
 
 fn find_pending_image_owner(op_id: u32) -> Option<*mut qjs::JSContext> {
-    PENDING_IMAGES.lock().iter().find_map(|p| match &p.stage {
-        PendingImageStage::SourceBytes {
-            op_id: pending_id, ..
-        } if *pending_id == op_id => Some(p.ctx_owner),
-        _ => None,
-    })
+    PENDING_IMAGES
+        .lock()
+        .iter()
+        .find_map(|(ctx_key, ops)| {
+            ops.iter().any(|p| {
+                matches!(
+                    &p.stage,
+                    PendingImageStage::SourceBytes { op_id: pending_id, .. } if *pending_id == op_id
+                )
+            })
+            .then_some(*ctx_key)
+        })
+        .map(|ctx_key| ctx_key as *mut qjs::JSContext)
 }
 
 fn push_completed(ctx: *mut qjs::JSContext, op_id: u32) {
-    COMPLETED.lock().push(CompletedOp {
-        ctx_owner: ctx,
-        op_id,
-    });
+    COMPLETED
+        .lock()
+        .entry(ctx as usize)
+        .or_default()
+        .push(op_id);
 }
 
 fn take_completed_for_ctx(ctx: *mut qjs::JSContext) -> Option<u32> {
     let mut completed = COMPLETED.lock();
-    let pos = completed.iter().position(|c| c.ctx_owner == ctx)?;
-    Some(completed.remove(pos).op_id)
+    let ops = completed.get_mut(&(ctx as usize))?;
+    if ops.is_empty() {
+        None
+    } else {
+        Some(ops.remove(0))
+    }
 }
 
 unsafe fn reject_with_code(ctx: *mut qjs::JSContext, op: &PendingOp, code: i32) {
     let arg = js_int32(code);
-    let _ = qjs::JS_Call(
-        ctx,
-        op.reject,
-        qjs::JSValue::undefined(),
-        1,
-        &arg as *const qjs::JSValue,
-    );
+    let _ = qjs::jsbind::call1(ctx, op.reject, qjs::JSValue::undefined(), arg);
 }
 
 unsafe fn resolve_with_value(ctx: *mut qjs::JSContext, op: &PendingOp, val: qjs::JSValue) {
-    let _ = qjs::JS_Call(
-        ctx,
-        op.resolve,
-        qjs::JSValue::undefined(),
-        1,
-        &val as *const qjs::JSValue,
-    );
+    let _ = qjs::jsbind::call1(ctx, op.resolve, qjs::JSValue::undefined(), val);
     qjs::js_free_value(ctx, val);
 }
 
 unsafe fn resolve_undefined(ctx: *mut qjs::JSContext, op: &PendingOp) {
     let val = qjs::JSValue::undefined();
-    let _ = qjs::JS_Call(
-        ctx,
-        op.resolve,
-        qjs::JSValue::undefined(),
-        1,
-        &val as *const qjs::JSValue,
-    );
+    let _ = qjs::jsbind::call1(ctx, op.resolve, qjs::JSValue::undefined(), val);
 }
 
 fn read_file_via_cabi(path: &[u8]) -> Result<Vec<u8>, i32> {
@@ -396,45 +387,18 @@ fn texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
 
 unsafe fn resolve_image_op(ctx: *mut qjs::JSContext, op: &PendingImageOp) {
     let obj = qjs::JS_NewObject(ctx);
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"texId\0".as_ptr() as *const c_char,
-        qjs::JS_NewFloat64(ctx, op.tex_id as f64),
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"width\0".as_ptr() as *const c_char,
-        qjs::JS_NewFloat64(ctx, op.width as f64),
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"height\0".as_ptr() as *const c_char,
-        qjs::JS_NewFloat64(ctx, op.height as f64),
-    );
-    let mime = qjs::JS_NewStringLen(ctx, op.mime.as_ptr() as *const c_char, op.mime.len());
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"mime\0".as_ptr() as *const c_char, mime);
-    let _ = qjs::JS_Call(
-        ctx,
-        op.resolve,
-        qjs::JSValue::undefined(),
-        1,
-        &obj as *const qjs::JSValue,
-    );
+    let _ = qjs::jsbind::set_prop(ctx, obj, b"texId\0", qjs::JS_NewFloat64(ctx, op.tex_id as f64));
+    let _ = qjs::jsbind::set_prop(ctx, obj, b"width\0", qjs::JS_NewFloat64(ctx, op.width as f64));
+    let _ =
+        qjs::jsbind::set_prop(ctx, obj, b"height\0", qjs::JS_NewFloat64(ctx, op.height as f64));
+    let _ = qjs::jsbind::set_str_prop(ctx, obj, b"mime\0", op.mime.as_str());
+    let _ = qjs::jsbind::call1(ctx, op.resolve, qjs::JSValue::undefined(), obj);
     qjs::js_free_value(ctx, obj);
 }
 
 unsafe fn reject_image_op(ctx: *mut qjs::JSContext, op: &PendingImageOp, code: i32) {
     let arg = js_int32(code);
-    let _ = qjs::JS_Call(
-        ctx,
-        op.reject,
-        qjs::JSValue::undefined(),
-        1,
-        &arg as *const qjs::JSValue,
-    );
+    let _ = qjs::jsbind::call1(ctx, op.reject, qjs::JSValue::undefined(), arg);
 }
 
 unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
@@ -442,13 +406,9 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
     let mut ops: Vec<PendingImageOp> = Vec::new();
     {
         let mut pending = PENDING_IMAGES.lock();
-        let mut idx = 0usize;
-        while idx < pending.len() {
-            if pending[idx].ctx_owner == ctx {
-                ops.push(pending.remove(idx));
-            } else {
-                idx += 1;
-            }
+        let key = ctx as usize;
+        if let Some(entries) = pending.get_mut(&key) {
+            core::mem::swap(entries, &mut ops);
         }
     }
 
@@ -596,7 +556,11 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
         }
 
         if keep {
-            PENDING_IMAGES.lock().push(op);
+            PENDING_IMAGES
+                .lock()
+                .entry(ctx as usize)
+                .or_default()
+                .push(op);
         } else {
             qjs::js_free_value(ctx, op.resolve);
             qjs::js_free_value(ctx, op.reject);
@@ -614,10 +578,14 @@ unsafe fn pump_net_fetch_text(ctx: *mut qjs::JSContext) -> bool {
     let op_ids: Vec<u32> = {
         let pending = PENDING.lock();
         pending
-            .iter()
-            .filter(|p| p.ctx_owner == ctx && p.kind == OpKind::NetFetchText)
-            .map(|p| p.op_id)
-            .collect()
+            .get(&(ctx as usize))
+            .map(|ops| {
+                ops.iter()
+                    .filter(|p| p.kind == OpKind::NetFetchText)
+                    .map(|p| p.op_id)
+                    .collect()
+            })
+            .unwrap_or_default()
     };
 
     for op_id in op_ids {
@@ -650,7 +618,7 @@ unsafe fn pump_net_fetch_text(ctx: *mut qjs::JSContext) -> bool {
             Ok(read_op_id) => {
                 op.op_id = read_op_id;
                 op.kind = OpKind::ReadText;
-                PENDING.lock().push(op);
+                PENDING.lock().entry(ctx as usize).or_default().push(op);
                 continue;
             }
             Err(code) => reject_with_code(ctx, &op, code),
@@ -669,10 +637,14 @@ unsafe fn pump_net_fetch_bytes(ctx: *mut qjs::JSContext) -> bool {
     let op_ids: Vec<u32> = {
         let pending = PENDING.lock();
         pending
-            .iter()
-            .filter(|p| p.ctx_owner == ctx && p.kind == OpKind::NetFetchBytes)
-            .map(|p| p.op_id)
-            .collect()
+            .get(&(ctx as usize))
+            .map(|ops| {
+                ops.iter()
+                    .filter(|p| p.kind == OpKind::NetFetchBytes)
+                    .map(|p| p.op_id)
+                    .collect()
+            })
+            .unwrap_or_default()
     };
 
     for op_id in op_ids {
@@ -712,6 +684,53 @@ unsafe fn pump_net_fetch_bytes(ctx: *mut qjs::JSContext) -> bool {
     progress
 }
 
+unsafe fn pump_net_fetch_module(ctx: *mut qjs::JSContext) -> bool {
+    let mut progress = false;
+
+    let op_ids: Vec<u32> = {
+        let pending = PENDING.lock();
+        pending
+            .get(&(ctx as usize))
+            .map(|ops| {
+                ops.iter()
+                    .filter(|p| p.kind == OpKind::NetFetchModule)
+                    .map(|p| p.op_id)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    for op_id in op_ids {
+        let rc_or_done = async_fs::result_len(op_id);
+        if rc_or_done == async_fs::FS_ERR_NOT_FOUND as isize {
+            continue;
+        }
+
+        let Some(op) = take_pending(ctx, op_id) else {
+            let _ = async_fs::discard(op_id);
+            continue;
+        };
+
+        progress = true;
+
+        if rc_or_done < 0 {
+            let _ = async_fs::discard(op_id);
+            reject_with_code(ctx, &op, rc_or_done as i32);
+            qjs::js_free_value(ctx, op.resolve);
+            qjs::js_free_value(ctx, op.reject);
+            continue;
+        }
+
+        let _ = async_fs::read_result(op_id, core::ptr::null_mut(), 0);
+        let spec = qjs::JS_NewStringLen(ctx, op.aux.as_ptr() as *const core::ffi::c_char, op.aux.len());
+        resolve_with_value(ctx, &op, spec);
+        qjs::js_free_value(ctx, op.resolve);
+        qjs::js_free_value(ctx, op.reject);
+    }
+
+    progress
+}
+
 fn read_completion_bytes(done_id: u32, len: usize) -> Result<Vec<u8>, i32> {
     let mut buf: Vec<u8> = Vec::with_capacity(len);
     buf.resize(len, 0);
@@ -738,6 +757,7 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
     progress |= pump_image_requests(ctx);
     progress |= pump_net_fetch_text(ctx);
     progress |= pump_net_fetch_bytes(ctx);
+    progress |= pump_net_fetch_module(ctx);
 
     loop {
         let done_id = match take_completed_for_ctx(ctx) {
@@ -832,6 +852,12 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                 let _ = async_fs::discard(done_id);
                 reject_with_code(ctx, &op, async_fs::FS_ERR_BAD_PARAM);
             }
+            OpKind::NetFetchModule => {
+                // Net fetches are handled by `pump_net_fetch_module`.
+                // If one ever arrives here, discard and reject to avoid leaking.
+                let _ = async_fs::discard(done_id);
+                reject_with_code(ctx, &op, async_fs::FS_ERR_BAD_PARAM);
+            }
         }
 
         unsafe { qjs::js_free_value(ctx, op.resolve) };
@@ -852,28 +878,19 @@ pub unsafe fn new_promise(ctx: *mut qjs::JSContext) -> (qjs::JSValue, qjs::JSVal
 
 pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
     // Best-effort cleanup: reject all pending promises for this context.
-    let mut pending = PENDING.lock();
-    let mut i = 0usize;
-    while i < pending.len() {
-        if pending[i].ctx_owner != ctx {
-            i += 1;
-            continue;
-        }
-        let op = pending.remove(i);
+    let pending = PENDING.lock().remove(&(ctx as usize)).unwrap_or_default();
+    for op in pending {
         reject_with_code(ctx, &op, -2);
         qjs::js_free_value(ctx, op.resolve);
         qjs::js_free_value(ctx, op.reject);
         let _ = async_fs::discard(op.op_id);
     }
 
-    let mut pending_images = PENDING_IMAGES.lock();
-    let mut image_idx = 0usize;
-    while image_idx < pending_images.len() {
-        if pending_images[image_idx].ctx_owner != ctx {
-            image_idx += 1;
-            continue;
-        }
-        let op = pending_images.remove(image_idx);
+    let pending_images = PENDING_IMAGES
+        .lock()
+        .remove(&(ctx as usize))
+        .unwrap_or_default();
+    for op in pending_images {
         reject_image_op(ctx, &op, -2);
         qjs::js_free_value(ctx, op.resolve);
         qjs::js_free_value(ctx, op.reject);
@@ -889,18 +906,10 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
         crate::cmd_stream::release_managed_tex_id(op.tex_id);
     }
 
-    let mut discard_ids: Vec<u32> = Vec::new();
-    {
-        let mut completed = COMPLETED.lock();
-        let mut j = 0usize;
-        while j < completed.len() {
-            if completed[j].ctx_owner == ctx {
-                discard_ids.push(completed.remove(j).op_id);
-            } else {
-                j += 1;
-            }
-        }
-    }
+    let discard_ids = COMPLETED
+        .lock()
+        .remove(&(ctx as usize))
+        .unwrap_or_default();
     for op_id in discard_ids {
         let _ = async_fs::discard(op_id);
     }

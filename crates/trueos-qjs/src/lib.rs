@@ -60,6 +60,9 @@ pub mod threejs;
 pub mod lightningcss_native;
 
 #[cfg(feature = "trueos")]
+pub mod jsbind;
+
+#[cfg(feature = "trueos")]
 #[derive(Clone, Copy)]
 pub struct ImbaAthlasView<'a> {
     pub alpha: &'a [u8],

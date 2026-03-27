@@ -6,6 +6,9 @@ edition = "2024"
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+libm = { version = "0.2", default-features = false }
+
 [features]
 default = []
 alloc = []
