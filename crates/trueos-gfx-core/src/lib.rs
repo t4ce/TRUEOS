@@ -606,10 +606,68 @@ impl ViewTransform {
     }
 
     #[inline]
+    pub fn rgb_vertex_ndc(self, x: f32, y: f32, color: Rgba8) -> RgbVertex {
+        let _ = self;
+        RgbVertex { x, y, color }
+    }
+
+    #[inline]
     pub fn tex_vertex_px(self, x: f32, y: f32, u: f32, v: f32, color: Rgba8) -> TexVertex {
         let (x, y) = self.px_to_ndc(x, y);
         TexVertex { x, y, u, v, color }
     }
+
+    #[inline]
+    pub fn tex_vertex_ndc(self, x: f32, y: f32, u: f32, v: f32, color: Rgba8) -> TexVertex {
+        let _ = self;
+        TexVertex { x, y, u, v, color }
+    }
+}
+
+#[inline]
+pub fn rgb_vertices_byte_len(vertex_count: usize) -> usize {
+    vertex_count.saturating_mul(RGB_VERTEX_SIZE)
+}
+
+#[inline]
+pub fn tex_vertices_byte_len(vertex_count: usize) -> usize {
+    vertex_count.saturating_mul(TEX_VERTEX_SIZE)
+}
+
+#[inline]
+pub fn read_rgb_vertex_bytes(bytes: &[u8], off: usize) -> Option<RgbVertex> {
+    if off + RGB_VERTEX_SIZE > bytes.len() {
+        return None;
+    }
+    Some(RgbVertex {
+        x: f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]),
+        y: f32::from_le_bytes([bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]]),
+        color: Rgba8::new(bytes[off + 8], bytes[off + 9], bytes[off + 10], bytes[off + 11]),
+    })
+}
+
+#[inline]
+pub fn read_tex_vertex_bytes(bytes: &[u8], off: usize) -> Option<TexVertex> {
+    if off + TEX_VERTEX_SIZE > bytes.len() {
+        return None;
+    }
+    Some(TexVertex {
+        x: f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]),
+        y: f32::from_le_bytes([bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]]),
+        u: f32::from_le_bytes([
+            bytes[off + 8],
+            bytes[off + 9],
+            bytes[off + 10],
+            bytes[off + 11],
+        ]),
+        v: f32::from_le_bytes([
+            bytes[off + 12],
+            bytes[off + 13],
+            bytes[off + 14],
+            bytes[off + 15],
+        ]),
+        color: Rgba8::new(bytes[off + 16], bytes[off + 17], bytes[off + 18], bytes[off + 19]),
+    })
 }
 
 #[cfg(any(feature = "alloc", test))]
@@ -625,6 +683,15 @@ pub fn push_rgb_vertex_bytes(out: &mut Vec<u8>, vertex: RgbVertex) {
 
 #[cfg(any(feature = "alloc", test))]
 #[inline]
+pub fn push_rgb_vertices_bytes(out: &mut Vec<u8>, vertices: &[RgbVertex]) {
+    out.reserve(rgb_vertices_byte_len(vertices.len()));
+    for &vertex in vertices {
+        push_rgb_vertex_bytes(out, vertex);
+    }
+}
+
+#[cfg(any(feature = "alloc", test))]
+#[inline]
 pub fn push_tex_vertex_bytes(out: &mut Vec<u8>, vertex: TexVertex) {
     out.extend_from_slice(&vertex.x.to_le_bytes());
     out.extend_from_slice(&vertex.y.to_le_bytes());
@@ -634,6 +701,15 @@ pub fn push_tex_vertex_bytes(out: &mut Vec<u8>, vertex: TexVertex) {
     out.push(vertex.color.g);
     out.push(vertex.color.b);
     out.push(vertex.color.a);
+}
+
+#[cfg(any(feature = "alloc", test))]
+#[inline]
+pub fn push_tex_vertices_bytes(out: &mut Vec<u8>, vertices: &[TexVertex]) {
+    out.reserve(tex_vertices_byte_len(vertices.len()));
+    for &vertex in vertices {
+        push_tex_vertex_bytes(out, vertex);
+    }
 }
 
 #[cfg(any(feature = "alloc", test))]
@@ -660,6 +736,54 @@ pub fn push_rgb_quad_px(
 
 #[cfg(any(feature = "alloc", test))]
 #[inline]
+pub fn push_rgb_quad_ndc(
+    out: &mut Vec<u8>,
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+    color: Rgba8,
+) {
+    if !(left < right && bottom < top) {
+        return;
+    }
+    let verts = [
+        RgbVertex {
+            x: left,
+            y: top,
+            color,
+        },
+        RgbVertex {
+            x: right,
+            y: top,
+            color,
+        },
+        RgbVertex {
+            x: right,
+            y: bottom,
+            color,
+        },
+        RgbVertex {
+            x: left,
+            y: top,
+            color,
+        },
+        RgbVertex {
+            x: right,
+            y: bottom,
+            color,
+        },
+        RgbVertex {
+            x: left,
+            y: bottom,
+            color,
+        },
+    ];
+    push_rgb_vertices_bytes(out, &verts);
+}
+
+#[cfg(any(feature = "alloc", test))]
+#[inline]
 pub fn push_tex_quad_px(
     out: &mut Vec<u8>,
     transform: ViewTransform,
@@ -680,6 +804,68 @@ pub fn push_tex_quad_px(
     push_tex_vertex_bytes(out, transform.tex_vertex_px(left, bottom, u0, v1, color));
     push_tex_vertex_bytes(out, transform.tex_vertex_px(right, top, u1, v0, color));
     push_tex_vertex_bytes(out, transform.tex_vertex_px(left, top, u0, v0, color));
+}
+
+#[cfg(any(feature = "alloc", test))]
+#[inline]
+pub fn push_tex_quad_ndc(
+    out: &mut Vec<u8>,
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+    uv: [f32; 4],
+    color: Rgba8,
+) {
+    if !(left < right && bottom < top) {
+        return;
+    }
+    let [u0, v0, u1, v1] = uv;
+    let verts = [
+        TexVertex {
+            x: left,
+            y: top,
+            u: u0,
+            v: v0,
+            color,
+        },
+        TexVertex {
+            x: right,
+            y: top,
+            u: u1,
+            v: v0,
+            color,
+        },
+        TexVertex {
+            x: right,
+            y: bottom,
+            u: u1,
+            v: v1,
+            color,
+        },
+        TexVertex {
+            x: left,
+            y: top,
+            u: u0,
+            v: v0,
+            color,
+        },
+        TexVertex {
+            x: right,
+            y: bottom,
+            u: u1,
+            v: v1,
+            color,
+        },
+        TexVertex {
+            x: left,
+            y: bottom,
+            u: u0,
+            v: v1,
+            color,
+        },
+    ];
+    push_tex_vertices_bytes(out, &verts);
 }
 
 #[cfg(any(feature = "alloc", test))]

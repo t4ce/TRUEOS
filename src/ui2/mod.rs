@@ -209,6 +209,10 @@ struct Ui2Window {
     state: Ui2WindowStateKind,
     content_tex_id: u32,
     content_tex_blend: bool,
+    title_tex_id: u32,
+    title_tex_w: u32,
+    title_tex_h: u32,
+    title_tex_alpha: u8,
     container_sync_needed: bool,
     selected_cursor_slots: Vec<u32>,
     dirty: bool,
@@ -252,6 +256,8 @@ struct Ui2ComposeWindowStats {
     hosted_browser_pending: usize,
     hosted_surface_windows: usize,
 }
+
+const UI2_WINDOW_TITLE_TEX_ID_BASE: u32 = 20_000;
 
 #[derive(Clone, Debug)]
 struct Ui2ComposeSurfaceTiming {
@@ -1111,6 +1117,64 @@ fn texture_is_drawable(tex_id: u32) -> bool {
     const ASYNC_TEX_STATUS_READY: i32 = 2;
     tex_id != 0
         && crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id) == ASYNC_TEX_STATUS_READY
+}
+
+#[inline]
+fn window_title_tex_id(window_id: u32) -> u32 {
+    UI2_WINDOW_TITLE_TEX_ID_BASE.saturating_add(window_id.saturating_sub(1))
+}
+
+fn rebuild_window_title_texture(window: &mut Ui2Window) -> bool {
+    const TITLE_TEXT_H: f32 = 24.0;
+
+    window.title_tex_id = window_title_tex_id(window.id);
+    window.title_tex_w = 0;
+    window.title_tex_h = 0;
+    window.title_tex_alpha = window.alpha;
+
+    if window.title.is_empty() {
+        return true;
+    }
+
+    let text = window.title.as_bytes();
+    let text_w = libm::ceilf(crate::gfx::imba_athlas::imba_athlas_text_width_scaled_px(
+        text,
+        TITLE_TEXT_H,
+    ))
+    .max(1.0) as u32;
+    let text_h = libm::ceilf(TITLE_TEXT_H).max(1.0) as u32;
+    let rgba_len = (text_w as usize)
+        .saturating_mul(text_h as usize)
+        .saturating_mul(4);
+    let mut rgba = vec![0u8; rgba_len];
+    if !crate::gfx::imba_athlas::blit_imba_athlas_text_rgba(
+        rgba.as_mut_slice(),
+        text_w,
+        text_h,
+        text,
+        0,
+        0,
+        (0xF3, 0xF4, 0xF6, window.alpha),
+    ) {
+        return false;
+    }
+
+    let rc = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba(
+            window.title_tex_id,
+            text_w,
+            text_h,
+            rgba.as_ptr(),
+            rgba.len(),
+        )
+    };
+    if rc != 0 {
+        return false;
+    }
+
+    window.title_tex_w = text_w;
+    window.title_tex_h = text_h;
+    true
 }
 
 fn draw_window_content_placeholder(

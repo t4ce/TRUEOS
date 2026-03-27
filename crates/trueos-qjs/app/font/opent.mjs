@@ -4,7 +4,7 @@ const opentype = opentypeNs.default ?? opentypeNs;
 const INJECTED_FONT_BYTES_KEY = "__trueosOpentDemoFontBytes";
 const DEMO_TEXT = "RTO";
 const DEMO_FONT_SIZE = 64;
-const DEMO_PADDING = 8;
+const DEMO_PADDING = 10;
 
 function fail(message) {
   throw new Error(`opent.mjs: ${message}`);
@@ -35,171 +35,85 @@ function makeRgba(width, height) {
   return rgba;
 }
 
-function flattenQuadratic(out, from, ctrl, to, segments) {
-  for (let step = 1; step <= segments; step += 1) {
-    const t = step / segments;
-    const mt = 1 - t;
-    out.push({
-      x: mt * mt * from.x + 2 * mt * t * ctrl.x + t * t * to.x,
-      y: mt * mt * from.y + 2 * mt * t * ctrl.y + t * t * to.y,
-    });
-  }
-}
-
-function flattenCubic(out, from, ctrl1, ctrl2, to, segments) {
-  for (let step = 1; step <= segments; step += 1) {
-    const t = step / segments;
-    const mt = 1 - t;
-    out.push({
-      x:
-        mt * mt * mt * from.x +
-        3 * mt * mt * t * ctrl1.x +
-        3 * mt * t * t * ctrl2.x +
-        t * t * t * to.x,
-      y:
-        mt * mt * mt * from.y +
-        3 * mt * mt * t * ctrl1.y +
-        3 * mt * t * t * ctrl2.y +
-        t * t * t * to.y,
-    });
-  }
-}
-
-function pathToContours(path) {
-  const contours = [];
-  let contour = [];
-  let current = null;
-  let start = null;
-
-  for (const cmd of path.commands ?? []) {
-    switch (cmd.type) {
-      case "M":
-        if (contour.length >= 3) {
-          contours.push(contour);
-        }
-        contour = [{ x: cmd.x, y: cmd.y }];
-        current = { x: cmd.x, y: cmd.y };
-        start = { x: cmd.x, y: cmd.y };
-        break;
-      case "L":
-        if (!current) {
-          break;
-        }
-        contour.push({ x: cmd.x, y: cmd.y });
-        current = { x: cmd.x, y: cmd.y };
-        break;
-      case "Q":
-        if (!current) {
-          break;
-        }
-        flattenQuadratic(
-          contour,
-          current,
-          { x: cmd.x1, y: cmd.y1 },
-          { x: cmd.x, y: cmd.y },
-          12,
-        );
-        current = { x: cmd.x, y: cmd.y };
-        break;
-      case "C":
-        if (!current) {
-          break;
-        }
-        flattenCubic(
-          contour,
-          current,
-          { x: cmd.x1, y: cmd.y1 },
-          { x: cmd.x2, y: cmd.y2 },
-          { x: cmd.x, y: cmd.y },
-          16,
-        );
-        current = { x: cmd.x, y: cmd.y };
-        break;
-      case "Z":
-        if (start && contour.length > 0) {
-          const last = contour[contour.length - 1];
-          if (last.x !== start.x || last.y !== start.y) {
-            contour.push({ x: start.x, y: start.y });
-          }
-        }
-        current = start ? { x: start.x, y: start.y } : current;
-        break;
-      default:
-        break;
+function fillRect(rgba, width, height, x, y, w, h, color) {
+  const x0 = Math.max(0, Math.floor(x));
+  const y0 = Math.max(0, Math.floor(y));
+  const x1 = Math.min(width, Math.ceil(x + w));
+  const y1 = Math.min(height, Math.ceil(y + h));
+  for (let py = y0; py < y1; py += 1) {
+    for (let px = x0; px < x1; px += 1) {
+      const base = (py * width + px) * 4;
+      rgba[base] = color[0];
+      rgba[base + 1] = color[1];
+      rgba[base + 2] = color[2];
+      rgba[base + 3] = color[3];
     }
   }
-
-  if (contour.length >= 3) {
-    contours.push(contour);
-  }
-  return contours;
 }
 
-function pointInContour(x, y, contour) {
-  let inside = false;
-  for (let i = 0, j = contour.length - 1; i < contour.length; j = i, i += 1) {
-    const a = contour[i];
-    const b = contour[j];
-    const edgeCrosses = (a.y > y) !== (b.y > y);
-    const edgeX = ((b.x - a.x) * (y - a.y)) / ((b.y - a.y) || 1e-6) + a.x;
-    if (edgeCrosses && x < edgeX) {
-      inside = !inside;
-    }
-  }
-  return inside;
+function strokeRect(rgba, width, height, x, y, w, h, thickness, color) {
+  fillRect(rgba, width, height, x, y, w, thickness, color);
+  fillRect(rgba, width, height, x, y + h - thickness, w, thickness, color);
+  fillRect(rgba, width, height, x, y, thickness, h, color);
+  fillRect(rgba, width, height, x + w - thickness, y, thickness, h, color);
 }
 
-function drawFilledContours(width, height, contours) {
-  const rgba = makeRgba(width, height);
-  for (let y = 0; y < height; y += 1) {
-    const py = y + 0.5;
-    for (let x = 0; x < width; x += 1) {
-      const px = x + 0.5;
-      let inside = false;
-      for (const contour of contours) {
-        if (pointInContour(px, py, contour)) {
-          inside = !inside;
-        }
-      }
-      if (inside) {
-        const base = (y * width + x) * 4;
-        rgba[base] = 0;
-        rgba[base + 1] = 0;
-        rgba[base + 2] = 0;
-        rgba[base + 3] = 255;
-      }
-    }
-  }
-  return rgba;
+function metricOrZero(value) {
+  return Number.isFinite(value) ? value : 0;
 }
 
-function buildTextImage(font, text) {
-  const options = {
-    kerning: true,
-    hinting: false,
-  };
-  const initialPath = font.getPath(
-    text,
-    DEMO_PADDING,
-    DEMO_FONT_SIZE,
-    DEMO_FONT_SIZE,
-    options,
-  );
-  const initialBox = initialPath.getBoundingBox();
-  const originX = DEMO_PADDING - Math.floor(initialBox.x1 || 0);
-  const originY = DEMO_PADDING - Math.floor(initialBox.y1 || 0);
-  const path = font.getPath(text, originX, originY, DEMO_FONT_SIZE, options);
-  const box = path.getBoundingBox();
-  const width = Math.max(32, Math.ceil((box.x2 || 0) + DEMO_PADDING));
-  const height = Math.max(32, Math.ceil((box.y2 || 0) + DEMO_PADDING));
-  const contours = pathToContours(path);
+function glyphSummary(font, ch) {
+  const glyph = font.charToGlyph(ch);
+  const metrics = glyph && typeof glyph.getMetrics === "function"
+    ? glyph.getMetrics()
+    : {};
+  const advance = metricOrZero(glyph?.advanceWidth);
+  const left = metricOrZero(metrics.xMin);
+  const right = metricOrZero(metrics.xMax);
+  const top = metricOrZero(metrics.yMax);
+  const bottom = metricOrZero(metrics.yMin);
+  const boxW = Math.max(1, right - left);
+  const boxH = Math.max(1, top - bottom);
   return {
-    width,
-    height,
-    rgba: drawFilledContours(width, height, contours),
-    commandCount: path.commands?.length ?? 0,
-    contourCount: contours.length,
+    ch,
+    glyphIndex: metricOrZero(glyph?.index),
+    advance,
+    left,
+    right,
+    top,
+    bottom,
+    boxW,
+    boxH,
   };
+}
+
+function buildMetricImage(font, text) {
+  const scale = DEMO_FONT_SIZE / Math.max(1, font.unitsPerEm || 1);
+  const summaries = Array.from(text, (ch) => glyphSummary(font, ch));
+  let width = DEMO_PADDING;
+  for (const glyph of summaries) {
+    width += Math.max(12, Math.ceil(glyph.advance * scale)) + DEMO_PADDING;
+  }
+  const height = Math.max(
+    48,
+    Math.ceil(DEMO_PADDING * 2 + (font.ascender - font.descender) * scale),
+  );
+  const baselineY = Math.ceil(DEMO_PADDING + font.ascender * scale);
+  const rgba = makeRgba(width, height);
+  let penX = DEMO_PADDING;
+
+  for (const glyph of summaries) {
+    const advancePx = Math.max(12, Math.ceil(glyph.advance * scale));
+    const boxX = penX + glyph.left * scale;
+    const boxY = baselineY - glyph.top * scale;
+    const boxW = Math.max(3, Math.ceil(glyph.boxW * scale));
+    const boxH = Math.max(3, Math.ceil(glyph.boxH * scale));
+    strokeRect(rgba, width, height, boxX, boxY, boxW, boxH, 2, [0, 0, 0, 255]);
+    fillRect(rgba, width, height, penX, baselineY, advancePx, 2, [0, 0, 0, 255]);
+    penX += advancePx + DEMO_PADDING;
+  }
+
+  return { width, height, rgba, summaries };
 }
 
 async function renderTextDemoAsync() {
@@ -211,7 +125,7 @@ async function renderTextDemoAsync() {
     fail("opentype.parse is not available");
   }
   const font = opentype.parse(bytes);
-  const image = buildTextImage(font, DEMO_TEXT);
+  const image = buildMetricImage(font, DEMO_TEXT);
   return {
     width: image.width,
     height: image.height,
@@ -220,8 +134,10 @@ async function renderTextDemoAsync() {
     fontBytes: bytes.byteLength,
     unitsPerEm: font.unitsPerEm ?? null,
     glyphCount: font.glyphs?.length ?? null,
-    commandCount: image.commandCount,
-    contourCount: image.contourCount,
+    ascender: font.ascender ?? null,
+    descender: font.descender ?? null,
+    advances: image.summaries.map((glyph) => glyph.advance),
+    glyphIndices: image.summaries.map((glyph) => glyph.glyphIndex),
   };
 }
 

@@ -424,26 +424,48 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
             );
         }
         let title_text_h = 24.0f32;
-        let title_w = crate::gfx::imba_athlas::imba_athlas_text_width_scaled_px(
-            window.title.as_bytes(),
-            title_text_h,
-        );
+        let title_w = if window.title_tex_w != 0 {
+            window.title_tex_w as f32
+        } else {
+            crate::gfx::imba_athlas::imba_athlas_text_width_scaled_px(
+                window.title.as_bytes(),
+                title_text_h,
+            )
+        };
         let title_left = if window.icon_id != 0 {
             rect.x + 28.0
         } else {
             rect.x + 8.0
         };
         let title_x = (rect.x + ((rect.w - title_w) * 0.5)).max(title_left);
-        let title_y = rect.y + ((UI2_TITLE_H - title_text_h) * 0.5);
-        let _ = crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_scaled(
-            window.title.as_bytes(),
-            title_x,
-            title_y,
-            state.view_w,
-            state.view_h,
-            title_text_h,
-            title_rgba.3,
-        );
+        if window.title_tex_w != 0
+            && window.title_tex_h != 0
+            && texture_is_drawable(window.title_tex_id)
+        {
+            let title_y = rect.y + ((UI2_TITLE_H - window.title_tex_h as f32) * 0.5);
+            let _ = draw_texture_rect_no_present(
+                window.title_tex_id,
+                title_x,
+                title_y,
+                window.title_tex_w as f32,
+                window.title_tex_h as f32,
+                state.view_w,
+                state.view_h,
+                true,
+                255,
+            );
+        } else {
+            let title_y = rect.y + ((UI2_TITLE_H - title_text_h) * 0.5);
+            let _ = crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_scaled(
+                window.title.as_bytes(),
+                title_x,
+                title_y,
+                state.view_w,
+                state.view_h,
+                title_text_h,
+                title_rgba.3,
+            );
+        }
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleMaximize);

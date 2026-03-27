@@ -1,63 +1,13 @@
 const CURSOR_TICK_SUPPRESS_AFTER_BASE_MS: u64 = 24;
 
 #[inline]
-fn push_rgb_quad(
-    out: &mut Vec<u8>,
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-    color: (f32, f32, f32, f32),
-) {
-    let (r, g, b, a) = color;
-    let v0 = RgbVtx {
-        x: x0,
-        y: y0,
-        r,
-        g,
-        b,
-        a,
-    };
-    let v1 = RgbVtx {
-        x: x1,
-        y: y0,
-        r,
-        g,
-        b,
-        a,
-    };
-    let v2 = RgbVtx {
-        x: x1,
-        y: y1,
-        r,
-        g,
-        b,
-        a,
-    };
-    let v3 = RgbVtx {
-        x: x0,
-        y: y1,
-        r,
-        g,
-        b,
-        a,
-    };
-    push_rgb_vtx(out, v0);
-    push_rgb_vtx(out, v1);
-    push_rgb_vtx(out, v2);
-    push_rgb_vtx(out, v0);
-    push_rgb_vtx(out, v2);
-    push_rgb_vtx(out, v3);
-}
-
-#[inline]
 fn append_cursor_cross(
     out: &mut Vec<u8>,
     ndc_x: f32,
     ndc_y: f32,
     vp_w: u32,
     vp_h: u32,
-    color: (f32, f32, f32, f32),
+    color: trueos_gfx_core::Rgba8,
 ) {
     let w = (vp_w as f32).max(1.0);
     let h = (vp_h as f32).max(1.0);
@@ -66,20 +16,20 @@ fn append_cursor_cross(
     let half_thickness_x = (1.0f32 * 2.0) / w;
     let half_thickness_y = (1.0f32 * 2.0) / h;
 
-    push_rgb_quad(
+    trueos_gfx_core::push_rgb_quad_ndc(
         out,
         ndc_x - half_span_x,
-        ndc_y - half_thickness_y,
-        ndc_x + half_span_x,
         ndc_y + half_thickness_y,
+        ndc_x + half_span_x,
+        ndc_y - half_thickness_y,
         color,
     );
-    push_rgb_quad(
+    trueos_gfx_core::push_rgb_quad_ndc(
         out,
         ndc_x - half_thickness_x,
-        ndc_y - half_span_y,
-        ndc_x + half_thickness_x,
         ndc_y + half_span_y,
+        ndc_x + half_thickness_x,
+        ndc_y - half_span_y,
         color,
     );
 }
@@ -104,11 +54,11 @@ fn collect_real_cursor_norm(out: &mut Vec<(f32, f32)>) {
     }
 }
 
-const CURSOR_COLORS: [(f32, f32, f32, f32); 4] = [
-    (0.0, 1.0, 0.2, 1.0),
-    (1.0, 0.9, 0.1, 1.0),
-    (0.2, 0.8, 1.0, 1.0),
-    (1.0, 0.4, 0.8, 1.0),
+const CURSOR_COLORS: [trueos_gfx_core::Rgba8; 4] = [
+    trueos_gfx_core::Rgba8::new(0x00, 0xFF, 0x33, 0xFF),
+    trueos_gfx_core::Rgba8::new(0xFF, 0xE6, 0x1A, 0xFF),
+    trueos_gfx_core::Rgba8::new(0x33, 0xCC, 0xFF, 0xFF),
+    trueos_gfx_core::Rgba8::new(0xFF, 0x66, 0xCC, 0xFF),
 ];
 
 fn append_kernel_cursor_overlay_rgb(rgb_blob: &mut Vec<u8>, vp_w: u32, vp_h: u32) {

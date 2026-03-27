@@ -274,8 +274,8 @@ globalThis.__trueosOpentDemoError = "";
         let text = js_prop_string(ctx, demo, b"text\0");
         let units_per_em = js_prop_u32(ctx, demo, b"unitsPerEm\0");
         let glyph_count = js_prop_u32(ctx, demo, b"glyphCount\0");
-        let command_count = js_prop_u32(ctx, demo, b"commandCount\0");
-        let contour_count = js_prop_u32(ctx, demo, b"contourCount\0");
+        let ascender = js_prop_u32(ctx, demo, b"ascender\0");
+        let descender = js_prop_u32(ctx, demo, b"descender\0");
 
         qjs::js_free_value(ctx, demo);
         qjs::js_free_value(ctx, global);
@@ -286,12 +286,12 @@ globalThis.__trueosOpentDemoError = "";
             return None;
         };
         crate::log!(
-            "ui2-opentype-demo: text={:?} unitsPerEm={:?} glyphCount={:?} commands={:?} contours={:?}\n",
+            "ui2-opentype-demo: text={:?} unitsPerEm={:?} glyphCount={:?} asc={:?} desc={:?}\n",
             text,
             units_per_em,
             glyph_count,
-            command_count,
-            contour_count
+            ascender,
+            descender
         );
         Some((width, height, rgba))
     }
