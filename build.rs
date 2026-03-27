@@ -178,6 +178,9 @@ fn build_imbafont_registry_source(faces: &[FontFaceGen]) -> String {
 
         generated.push_str("static IMBAFONT_");
         generated.push_str(&ident);
+        generated.push_str("_METRICS: Once<BTreeMap<char, SvgGlyphMetric>> = Once::new();\n");
+        generated.push_str("static IMBAFONT_");
+        generated.push_str(&ident);
         generated.push_str("_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();\n");
         generated.push_str("static IMBAFONT_");
         generated.push_str(&ident);
@@ -195,6 +198,20 @@ fn build_imbafont_registry_source(faces: &[FontFaceGen]) -> String {
     }
     generated.push_str("    }\n}\n\n");
 
+    generated.push_str(
+        "fn parsed_metrics_for_face(face: ImbaFontFace) -> &'static BTreeMap<char, SvgGlyphMetric> {\n",
+    );
+    generated.push_str("    let build = || parse_metrics(metrics_bytes_for_face(face));\n");
+    generated.push_str("    match face {\n");
+    for face in faces {
+        generated.push_str("        ImbaFontFace::");
+        generated.push_str(&face.variant);
+        generated.push_str(" => IMBAFONT_");
+        generated.push_str(&face.variant.to_ascii_uppercase());
+        generated.push_str("_METRICS.call_once(build),\n");
+    }
+    generated.push_str("    }\n}\n\n");
+
     generated.push_str("fn assets_for_face(face: ImbaFontFace) -> &'static [SvgIconAsset] {\n");
     generated.push_str("    match face {\n");
     for face in faces {
@@ -207,7 +224,7 @@ fn build_imbafont_registry_source(faces: &[FontFaceGen]) -> String {
     generated.push_str("    }\n}\n\n");
 
     generated.push_str("fn icons_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontIcon> {\n");
-    generated.push_str("    let metrics = parse_metrics(metrics_bytes_for_face(face));\n");
+    generated.push_str("    let metrics = parsed_metrics_for_face(face);\n");
     generated.push_str("    let assets = assets_for_face(face);\n\n");
     generated.push_str("    let build = || {\n");
     generated.push_str("        let mut icons = Vec::with_capacity(assets.len());\n");
@@ -239,7 +256,7 @@ fn build_imbafont_registry_source(faces: &[FontFaceGen]) -> String {
     generated.push_str(
         "fn layout_metrics_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontLayoutMetric> {\n",
     );
-    generated.push_str("    let metrics = parse_metrics(metrics_bytes_for_face(face));\n");
+    generated.push_str("    let metrics = parsed_metrics_for_face(face);\n");
     generated.push_str("    let assets = assets_for_face(face);\n\n");
     generated.push_str("    let build = || {\n");
     generated.push_str("        let mut layout_metrics = Vec::with_capacity(assets.len());\n");

@@ -13,24 +13,34 @@ struct ImbaAthlasBuffers {
     alpha: Vec<u8>,
     index: Vec<u16>,
     widths: Vec<u8>,
+    heights: Vec<u8>,
+    advances: Vec<u8>,
+    sample_xs: Vec<u8>,
+    sample_ys: Vec<u8>,
     width: u32,
     height: u32,
     cell_w: u32,
     cell_h: u32,
     grid_w: u32,
     grid_h: u32,
+    left_pad: u16,
 }
 
 pub struct ImbaAthlasView<'a> {
     pub alpha: &'a [u8],
     pub index: &'a [u16],
     pub widths: &'a [u8],
+    pub heights: &'a [u8],
+    pub advances: &'a [u8],
+    pub sample_xs: &'a [u8],
+    pub sample_ys: &'a [u8],
     pub width: u32,
     pub height: u32,
     pub cell_w: u32,
     pub cell_h: u32,
     pub grid_w: u32,
     pub grid_h: u32,
+    pub left_pad: u16,
 }
 
 static IMBA_ATHLAS_SMALL: Once<ImbaAthlasBuffers> = Once::new();
@@ -203,44 +213,68 @@ fn build_imba_athlas(face: ImbaFontFace, tile_h: f32) -> ImbaAthlasBuffers {
     let mut alpha = vec![0u8; width * height];
     let mut index = vec![u16::MAX; 256];
     let mut widths = vec![0u8; 256];
+    let mut heights = vec![0u8; 256];
+    let mut advances = vec![0u8; 256];
+    let mut sample_xs = vec![0u8; 256];
+    let mut sample_ys = vec![0u8; 256];
 
     for (slot, glyph) in glyphs.iter().enumerate() {
         let ch = slot as u8 as char;
         let mut cell = vec![0u8; cell_w * cell_h];
-        let glyph_w = match (&glyph.metrics, &glyph.mask) {
+        let (sample_x, sample_y, sample_w, sample_h, advance_w) = match (&glyph.metrics, &glyph.mask) {
             (Some(metrics), Some(mask)) => {
-                let glyph_w = ceilf(
-                    (metrics.advance + left_pad as f32 + IMBA_ATHLAS_SIDE_PAD_PX)
-                        .max(metrics.right + left_pad as f32 + IMBA_ATHLAS_SIDE_PAD_PX),
-                )
-                .max(1.0) as usize;
                 let dst_x = round_px(left_pad as f32 + mask.draw_x);
                 let dst_y = round_px(baseline_y as f32 - metrics.baseline + mask.draw_y);
                 blit_mask_alpha(&mut cell, cell_w, cell_h, mask, dst_x, dst_y);
-                glyph_w
+                let advance_w = ceilf(metrics.advance).max(1.0) as usize;
+                (
+                    dst_x.min(u8::MAX as usize) as u8,
+                    dst_y.min(u8::MAX as usize) as u8,
+                    mask.width.min(u8::MAX as u32) as u8,
+                    mask.height.min(u8::MAX as u32) as u8,
+                    advance_w,
+                )
             }
-            (Some(metrics), None) if ch == ' ' => ceilf(metrics.advance).max(1.0) as usize,
+            (Some(metrics), None) if ch == ' ' => {
+                let advance_w = ceilf(metrics.advance).max(1.0) as usize;
+                (0, 0, 0, 0, advance_w)
+            }
             _ => {
                 draw_placeholder_cell(&mut cell, cell_w, cell_h, placeholder_w);
-                placeholder_w
+                (
+                    0,
+                    0,
+                    placeholder_w.min(cell_w).min(u8::MAX as usize) as u8,
+                    cell_h.min(u8::MAX as usize) as u8,
+                    placeholder_w,
+                )
             }
         };
 
         fill_cell(&mut alpha, width, cell_w, cell_h, slot, &cell);
         index[slot] = slot as u16;
-        widths[slot] = glyph_w.min(cell_w).min(u8::MAX as usize) as u8;
+        widths[slot] = sample_w.min(cell_w.min(u8::MAX as usize) as u8);
+        heights[slot] = sample_h.min(cell_h.min(u8::MAX as usize) as u8);
+        advances[slot] = advance_w.min(cell_w).min(u8::MAX as usize) as u8;
+        sample_xs[slot] = sample_x.min(cell_w.min(u8::MAX as usize) as u8);
+        sample_ys[slot] = sample_y.min(cell_h.min(u8::MAX as usize) as u8);
     }
 
     ImbaAthlasBuffers {
         alpha,
         index,
         widths,
+        heights,
+        advances,
+        sample_xs,
+        sample_ys,
         width: width as u32,
         height: height as u32,
         cell_w: cell_w as u32,
         cell_h: cell_h as u32,
         grid_w: IMBA_ATHLAS_GRID as u32,
         grid_h: IMBA_ATHLAS_GRID as u32,
+        left_pad: left_pad.min(u16::MAX as usize) as u16,
     }
 }
 
@@ -266,12 +300,17 @@ fn imba_athlas_view_from_buffers(athlas: &'static ImbaAthlasBuffers) -> ImbaAthl
         alpha: athlas.alpha.as_slice(),
         index: athlas.index.as_slice(),
         widths: athlas.widths.as_slice(),
+        heights: athlas.heights.as_slice(),
+        advances: athlas.advances.as_slice(),
+        sample_xs: athlas.sample_xs.as_slice(),
+        sample_ys: athlas.sample_ys.as_slice(),
         width: athlas.width,
         height: athlas.height,
         cell_w: athlas.cell_w,
         cell_h: athlas.cell_h,
         grid_w: athlas.grid_w,
         grid_h: athlas.grid_h,
+        left_pad: athlas.left_pad,
     }
 }
 
@@ -389,7 +428,7 @@ fn build_vertices(
             slot = fallback;
         }
         athlas
-            .widths
+            .advances
             .get(slot as usize)
             .copied()
             .unwrap_or(athlas.cell_w as u8) as f32
@@ -425,19 +464,38 @@ fn build_vertices(
             .copied()
             .unwrap_or(athlas.cell_w as u8) as f32
             * scale;
-        let glyph_h_px = athlas.cell_h as f32 * scale;
+        let glyph_h_px = athlas
+            .heights
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(athlas.cell_h as u8) as f32
+            * scale;
+        if glyph_w_px <= 0.0 || glyph_h_px <= 0.0 {
+            pen_x += glyph_advance_px(ch) * scale;
+            continue;
+        }
 
         let sx = (slot as u32) % grid_w;
         let sy = (slot as u32) / grid_w;
-        let px0 = (sx * athlas.cell_w) as f32;
-        let py0 = (sy * athlas.cell_h) as f32;
+        let sample_x = athlas
+            .sample_xs
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(0) as f32;
+        let sample_y = athlas
+            .sample_ys
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(0) as f32;
+        let px0 = (sx * athlas.cell_w) as f32 + sample_x;
+        let py0 = (sy * athlas.cell_h) as f32 + sample_y;
         let u0 = px0 / athlas_w;
         let v0 = py0 / athlas_h;
         let u1 = (px0 + glyph_w_px) / athlas_w;
         let v1 = (py0 + glyph_h_px) / athlas_h;
 
-        let x0 = pen_x;
-        let y0 = pen_y;
+        let x0 = pen_x + (sample_x - athlas.left_pad as f32) * scale;
+        let y0 = pen_y + sample_y * scale;
         let x1 = x0 + glyph_w_px;
         let y1 = y0 + glyph_h_px;
 
@@ -508,7 +566,7 @@ fn build_vertices(
             a: c.3,
         });
 
-        pen_x += glyph_w_px;
+        pen_x += glyph_advance_px(ch) * scale;
     }
 }
 
@@ -551,7 +609,7 @@ pub fn imba_athlas_text_width_scaled_px(text: &[u8], px_h: f32) -> f32 {
             slot = fallback;
         }
         athlas
-            .widths
+            .advances
             .get(slot as usize)
             .copied()
             .unwrap_or(athlas.cell_w as u8) as f32
@@ -583,7 +641,7 @@ pub fn imba_athlas_text_width_nearest_px(text: &[u8], px_h: f32) -> f32 {
             slot = fallback;
         }
         athlas
-            .widths
+            .advances
             .get(slot as usize)
             .copied()
             .unwrap_or(athlas.cell_w as u8) as f32
@@ -667,7 +725,7 @@ pub fn blit_imba_athlas_text_rgba(
             slot = fallback;
         }
         let advance = athlas
-            .widths
+            .advances
             .get(slot as usize)
             .copied()
             .unwrap_or(athlas.cell_w as u8) as i32;
@@ -676,15 +734,41 @@ pub fn blit_imba_athlas_text_rgba(
             continue;
         }
 
-        let glyph_x = (slot as u32 % athlas.grid_w) * athlas.cell_w;
-        let glyph_y = (slot as u32 / athlas.grid_w) * athlas.cell_h;
-        for row in 0..athlas.cell_h {
-            let dst_y = pen_y + row as i32;
+        let sample_x = athlas
+            .sample_xs
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(0) as i32;
+        let sample_y = athlas
+            .sample_ys
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(0) as i32;
+        let sample_w = athlas
+            .widths
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(athlas.cell_w as u8) as i32;
+        let sample_h = athlas
+            .heights
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(athlas.cell_h as u8) as i32;
+        if sample_w <= 0 || sample_h <= 0 {
+            pen_x += advance.max(1);
+            continue;
+        }
+        let glyph_x = (slot as u32 % athlas.grid_w) as i32 * athlas.cell_w as i32 + sample_x;
+        let glyph_y = (slot as u32 / athlas.grid_w) as i32 * athlas.cell_h as i32 + sample_y;
+        let draw_x0 = pen_x + sample_x - athlas.left_pad as i32;
+        let draw_y0 = pen_y + sample_y;
+        for row in 0..sample_h {
+            let dst_y = draw_y0 + row;
             if dst_y < 0 || dst_y >= dst_h as i32 {
                 continue;
             }
-            for col in 0..athlas.cell_w {
-                let dst_x = pen_x + col as i32;
+            for col in 0..sample_w {
+                let dst_x = draw_x0 + col;
                 if dst_x < 0 || dst_x >= dst_w as i32 {
                     continue;
                 }

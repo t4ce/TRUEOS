@@ -151,7 +151,24 @@ fn rasterize_mask_triangle(
     max_x = max_x.min(width as i32);
     max_y = max_y.min(height as i32);
 
-    const SAMPLE_POINTS: [(f32, f32); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
+    const SAMPLE_POINTS: [(f32, f32); 16] = [
+        (0.125, 0.125),
+        (0.375, 0.125),
+        (0.625, 0.125),
+        (0.875, 0.125),
+        (0.125, 0.375),
+        (0.375, 0.375),
+        (0.625, 0.375),
+        (0.875, 0.375),
+        (0.125, 0.625),
+        (0.375, 0.625),
+        (0.625, 0.625),
+        (0.875, 0.625),
+        (0.125, 0.875),
+        (0.375, 0.875),
+        (0.625, 0.875),
+        (0.875, 0.875),
+    ];
 
     for py in min_y..max_y {
         for px in min_x..max_x {
@@ -181,7 +198,7 @@ fn rasterize_mask_triangle(
                 continue;
             }
 
-            let alpha = (((covered * 255) + 2) / 4) as u8;
+            let alpha = (((covered * 255) + 8) / 16) as u8;
             rgba[idx] = 0xFF;
             rgba[idx + 1] = 0xFF;
             rgba[idx + 2] = 0xFF;
