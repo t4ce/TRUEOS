@@ -49,9 +49,12 @@ struct TexVertex {
     a: u8,
 }
 
-const IMBA_ATHLAS_TEX_ID: u32 = 1001;
-static IMBA_ATHLAS_UPLOADED: AtomicBool = AtomicBool::new(false);
-static IMBA_ATHLAS_RGBA: Once<Vec<u8>> = Once::new();
+const IMBA_ATHLAS_SMALL_TEX_ID: u32 = 1001;
+const IMBA_ATHLAS_LARGE_TEX_ID: u32 = 1002;
+static IMBA_ATHLAS_SMALL_UPLOADED: AtomicBool = AtomicBool::new(false);
+static IMBA_ATHLAS_LARGE_UPLOADED: AtomicBool = AtomicBool::new(false);
+static IMBA_ATHLAS_SMALL_RGBA: Once<Vec<u8>> = Once::new();
+static IMBA_ATHLAS_LARGE_RGBA: Once<Vec<u8>> = Once::new();
 
 const IMBA_ATHLAS_GRID: usize = 16;
 const IMBA_ATHLAS_SMALL_TILE_H: f32 = 14.0;
@@ -242,11 +245,11 @@ fn build_imba_athlas(face: ImbaFontFace, tile_h: f32) -> ImbaAthlasBuffers {
 }
 
 fn build_imba_athlas_small() -> ImbaAthlasBuffers {
-    build_imba_athlas(ImbaFontFace::Loop, IMBA_ATHLAS_SMALL_TILE_H)
+    build_imba_athlas(ImbaFontFace::Lucidasansunicode, IMBA_ATHLAS_SMALL_TILE_H)
 }
 
 fn build_imba_athlas_large() -> ImbaAthlasBuffers {
-    build_imba_athlas(ImbaFontFace::Loop, IMBA_ATHLAS_LARGE_TILE_H)
+    build_imba_athlas(ImbaFontFace::Lucidasansunicode, IMBA_ATHLAS_LARGE_TILE_H)
 }
 
 fn imba_athlas_small() -> &'static ImbaAthlasBuffers {
@@ -280,9 +283,44 @@ pub fn imba_athlas_large_view() -> ImbaAthlasView<'static> {
     imba_athlas_view_from_buffers(imba_athlas_large())
 }
 
-fn imba_athlas_rgba() -> &'static [u8] {
-    IMBA_ATHLAS_RGBA.call_once(|| {
-        let athlas = imba_athlas_large_view();
+#[inline]
+fn imba_athlas_kind_for_px_h(px_h: f32) -> u32 {
+    let small_h = imba_athlas_small_view().cell_h.max(1) as f32;
+    let large_h = imba_athlas_large_view().cell_h.max(1) as f32;
+    let requested = if px_h.is_finite() && px_h > 0.0 { px_h } else { large_h };
+    if (requested - small_h).abs() <= (requested - large_h).abs() {
+        0
+    } else {
+        1
+    }
+}
+
+#[inline]
+fn imba_athlas_view_for_kind(kind: u32) -> ImbaAthlasView<'static> {
+    if kind == 0 {
+        imba_athlas_small_view()
+    } else {
+        imba_athlas_large_view()
+    }
+}
+
+#[inline]
+fn imba_athlas_tex_id_for_kind(kind: u32) -> u32 {
+    if kind == 0 {
+        IMBA_ATHLAS_SMALL_TEX_ID
+    } else {
+        IMBA_ATHLAS_LARGE_TEX_ID
+    }
+}
+
+fn imba_athlas_rgba_for_kind(kind: u32) -> &'static [u8] {
+    let rgba_once = if kind == 0 {
+        &IMBA_ATHLAS_SMALL_RGBA
+    } else {
+        &IMBA_ATHLAS_LARGE_RGBA
+    };
+    rgba_once.call_once(|| {
+        let athlas = imba_athlas_view_for_kind(kind);
         let tex_px = (athlas.width as usize).saturating_mul(athlas.height as usize);
         let mut tex_rgba = alloc::vec![0u8; tex_px.saturating_mul(4)];
         for (i, &a) in athlas.alpha.iter().enumerate() {
@@ -296,16 +334,22 @@ fn imba_athlas_rgba() -> &'static [u8] {
     })
 }
 
-fn ensure_imba_athlas_uploaded() -> bool {
-    if IMBA_ATHLAS_UPLOADED.load(Ordering::Acquire) {
+fn ensure_imba_athlas_uploaded_kind(kind: u32) -> bool {
+    let uploaded = if kind == 0 {
+        &IMBA_ATHLAS_SMALL_UPLOADED
+    } else {
+        &IMBA_ATHLAS_LARGE_UPLOADED
+    };
+    if uploaded.load(Ordering::Acquire) {
         return true;
     }
 
-    let athlas = imba_athlas_large_view();
-    let rgba = imba_athlas_rgba();
+    let athlas = imba_athlas_view_for_kind(kind);
+    let rgba = imba_athlas_rgba_for_kind(kind);
+    let tex_id = imba_athlas_tex_id_for_kind(kind);
     let rc = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba(
-            IMBA_ATHLAS_TEX_ID,
+            tex_id,
             athlas.width,
             athlas.height,
             rgba.as_ptr(),
@@ -315,11 +359,12 @@ fn ensure_imba_athlas_uploaded() -> bool {
     if rc != 0 {
         return false;
     }
-    IMBA_ATHLAS_UPLOADED.store(true, Ordering::Release);
+    uploaded.store(true, Ordering::Release);
     true
 }
 
 fn build_vertices(
+    athlas: ImbaAthlasView<'_>,
     text: &[u8],
     x: f32,
     y: f32,
@@ -333,7 +378,6 @@ fn build_vertices(
         return;
     }
 
-    let athlas = imba_athlas_large_view();
     let grid_w = athlas.grid_w.max(1);
     let athlas_w = athlas.width as f32;
     let athlas_h = athlas.height as f32;
@@ -526,6 +570,38 @@ pub fn imba_athlas_text_width_scaled_px(text: &[u8], px_h: f32) -> f32 {
     max_w.max(line_w)
 }
 
+pub fn imba_athlas_text_width_nearest_px(text: &[u8], px_h: f32) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+
+    let athlas = imba_athlas_view_for_kind(imba_athlas_kind_for_px_h(px_h));
+    let fallback = athlas.index.get(b'?' as usize).copied().unwrap_or(0);
+    let glyph_advance_px = |ch: u8| {
+        let mut slot = athlas.index.get(ch as usize).copied().unwrap_or(fallback);
+        if slot == u16::MAX {
+            slot = fallback;
+        }
+        athlas
+            .widths
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(athlas.cell_w as u8) as f32
+    };
+
+    let mut line_w = 0.0f32;
+    let mut max_w = 0.0f32;
+    for &ch in text {
+        if ch == b'\n' {
+            max_w = max_w.max(line_w);
+            line_w = 0.0;
+            continue;
+        }
+        line_w += glyph_advance_px(ch);
+    }
+    max_w.max(line_w)
+}
+
 #[inline]
 fn blend_rgba_pixel(dst: &mut [u8], dst_idx: usize, rgba: (u8, u8, u8, u8), coverage: u8) {
     if dst_idx + 3 >= dst.len() || coverage == 0 || rgba.3 == 0 {
@@ -659,6 +735,59 @@ pub fn draw_imba_athlas_text_in_frame_alpha(
     )
 }
 
+pub fn draw_imba_athlas_text_in_frame_alpha_nearest_px(
+    text: &[u8],
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+    px_h: f32,
+    alpha: u8,
+) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    let kind = imba_athlas_kind_for_px_h(px_h);
+    let athlas = imba_athlas_view_for_kind(kind);
+    if !ensure_imba_athlas_uploaded_kind(kind) {
+        return false;
+    }
+
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+    let _ = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+    };
+
+    let mut verts = Vec::with_capacity(text.len().saturating_mul(6));
+    build_vertices(
+        athlas,
+        text,
+        x,
+        y,
+        view_w.max(1) as f32,
+        view_h.max(1) as f32,
+        1.0,
+        alpha,
+        &mut verts,
+    );
+    if verts.is_empty() {
+        return false;
+    }
+
+    let ptr = verts.as_ptr() as *const u8;
+    let len = verts
+        .len()
+        .saturating_mul(core::mem::size_of::<TexVertex>());
+    let rc = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
+            imba_athlas_tex_id_for_kind(kind),
+            ptr,
+            len,
+        )
+    };
+    rc == 0
+}
+
 pub fn draw_imba_athlas_text_in_frame_alpha_scaled(
     text: &[u8],
     x: f32,
@@ -671,7 +800,8 @@ pub fn draw_imba_athlas_text_in_frame_alpha_scaled(
     if text.is_empty() {
         return false;
     }
-    if !ensure_imba_athlas_uploaded() {
+    let athlas = imba_athlas_large_view();
+    if !ensure_imba_athlas_uploaded_kind(1) {
         return false;
     }
 
@@ -682,6 +812,7 @@ pub fn draw_imba_athlas_text_in_frame_alpha_scaled(
 
     let mut verts = Vec::with_capacity(text.len().saturating_mul(6));
     build_vertices(
+        athlas,
         text,
         x,
         y,
@@ -701,7 +832,7 @@ pub fn draw_imba_athlas_text_in_frame_alpha_scaled(
         .saturating_mul(core::mem::size_of::<TexVertex>());
     let rc = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
-            IMBA_ATHLAS_TEX_ID,
+            IMBA_ATHLAS_LARGE_TEX_ID,
             ptr,
             len,
         )

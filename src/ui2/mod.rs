@@ -1276,7 +1276,7 @@ fn truncate_hosted_browser_text_preview_row(text: &str, max_width_px: f32, px_h:
             _ => byte,
         };
         out.push(normalized);
-        let width = crate::gfx::imba_athlas::imba_athlas_text_width_scaled_px(&out, px_h);
+        let width = crate::gfx::imba_athlas::imba_athlas_text_width_nearest_px(&out, px_h);
         if width > max_width_px {
             out.pop();
             break;
@@ -1288,6 +1288,26 @@ fn truncate_hosted_browser_text_preview_row(text: &str, max_width_px: f32, px_h:
     }
 
     out
+}
+
+#[inline]
+fn hosted_browser_preview_font_px(font_size_px: u32, fallback_px: f32) -> f32 {
+    let px = font_size_px as f32;
+    if px.is_finite() && px >= 1.0 {
+        px
+    } else {
+        fallback_px.max(1.0)
+    }
+}
+
+#[inline]
+fn hosted_browser_preview_line_px(line_height_px: u32, font_px: f32, fallback_px: f32) -> f32 {
+    let px = line_height_px as f32;
+    if px.is_finite() && px >= 1.0 {
+        px.max(font_px)
+    } else {
+        fallback_px.max(font_px).max(1.0)
+    }
 }
 
 fn draw_hosted_browser_text_preview(
@@ -1314,18 +1334,21 @@ fn draw_hosted_browser_text_preview(
 
     let pad_x = 10.0f32;
     let pad_y = 8.0f32;
-    let text_px_h = 7.0f32;
-    let row_step = text_px_h + 4.0;
+    let default_text_px_h = 7.0f32;
     let visible_bottom = content.y + content.h - pad_y;
     let scroll_x = surface_state.scroll_x as f32;
     let scroll_y = surface_state.scroll_y as f32;
     let content_right = content.x + content.w - pad_x;
     let mut drew_any = false;
+    let mut row_y = content.y + pad_y;
 
-    for (row_index, row) in text_state.rows.iter().enumerate() {
+    for row in text_state.rows.iter() {
+        let font_px = hosted_browser_preview_font_px(row.font_size_px, default_text_px_h);
+        let line_px = hosted_browser_preview_line_px(row.line_height_px, font_px, font_px + 4.0);
         let x = content.x + pad_x + row.indent_px as f32 - scroll_x;
-        let y = content.y + pad_y + (row_index as f32 * row_step) - scroll_y;
-        if y + text_px_h <= content.y || y >= visible_bottom {
+        let y = row_y - scroll_y;
+        row_y += line_px;
+        if y + line_px <= content.y || y >= visible_bottom {
             continue;
         }
         if x >= content_right {
@@ -1333,19 +1356,18 @@ fn draw_hosted_browser_text_preview(
         }
 
         let max_width_px = (content_right - x).max(0.0);
-        let row_bytes =
-            truncate_hosted_browser_text_preview_row(&row.text, max_width_px, text_px_h);
+        let row_bytes = truncate_hosted_browser_text_preview_row(&row.text, max_width_px, font_px);
         if row_bytes.is_empty() {
             continue;
         }
 
-        drew_any |= crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_scaled(
+        drew_any |= crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_nearest_px(
             &row_bytes,
             x,
             y,
             state.view_w,
             state.view_h,
-            text_px_h,
+            font_px,
             window.alpha,
         );
     }
@@ -1396,10 +1418,13 @@ fn draw_hosted_browser_layout_preview(
         } else {
             String::new()
         };
-        let line_h = node
+        let fallback_line_h = node
             .intrinsic_height_px
             .max(node.min_height_px)
             .clamp(12, 24) as f32;
+        let font_px = hosted_browser_preview_font_px(node.font_size_px, fallback_line_h);
+        let _line_h =
+            hosted_browser_preview_line_px(node.line_height_px, font_px, fallback_line_h);
         let block_h = node.intrinsic_height_px.max(node.min_height_px).max(10) as f32
             + margin_top
             + margin_bottom
@@ -1408,16 +1433,16 @@ fn draw_hosted_browser_layout_preview(
         if !text.is_empty() {
             let left = content.x + 8.0 + node.margin_left_px as f32 + node.padding_left_px as f32;
             let max_width_px = (content.x + content.w - 8.0 - left).max(0.0);
-            let row_bytes = truncate_hosted_browser_text_preview_row(&text, max_width_px, line_h);
+            let row_bytes = truncate_hosted_browser_text_preview_row(&text, max_width_px, font_px);
             if !row_bytes.is_empty() {
                 let _ = text_rgb;
-                drew_any |= crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_scaled(
+                drew_any |= crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_nearest_px(
                     &row_bytes,
                     left,
                     text_top,
                     state.view_w,
                     state.view_h,
-                    line_h,
+                    font_px,
                     window.alpha,
                 );
             }
