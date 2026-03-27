@@ -1,10 +1,42 @@
-import OpenAI from "openai";
-
 export const DEFAULT_RESPONSE_MODEL = "gpt-5.4";
 export const DEFAULT_REASONING_EFFORT = "low";
 export const DEFAULT_PARALLEL_TOOL_CALLS = false;
 
-export function createOpenAiClient(options = undefined) {
+let openAiCtorPromise = null;
+
+function getDynamicImporter() {
+  if (typeof globalThis.importModule === "function") {
+    return (specifier) => globalThis.importModule(specifier);
+  }
+  return (specifier) => import(specifier);
+}
+
+export function prefetchOpenAiClient() {
+  if (typeof globalThis.prefetchModule === "function") {
+    return Promise.resolve(globalThis.prefetchModule("openai"));
+  }
+  return Promise.resolve("openai");
+}
+
+async function loadOpenAiCtor() {
+  if (!openAiCtorPromise) {
+    openAiCtorPromise = Promise.resolve(getDynamicImporter()("openai")).then((mod) => {
+      const ctor = mod && typeof mod.default === "function"
+        ? mod.default
+        : mod && typeof mod.OpenAI === "function"
+          ? mod.OpenAI
+          : null;
+      if (typeof ctor !== "function") {
+        throw new Error("openai module did not expose a usable OpenAI constructor");
+      }
+      return ctor;
+    });
+  }
+  return await openAiCtorPromise;
+}
+
+export async function createOpenAiClient(options = undefined) {
+  const OpenAI = await loadOpenAiCtor();
   return new OpenAI(options);
 }
 

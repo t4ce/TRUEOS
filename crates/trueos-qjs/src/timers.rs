@@ -2,8 +2,9 @@
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use core::ffi::{c_char, c_int};
+use core::ffi::c_int;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant};
@@ -13,7 +14,6 @@ use crate as qjs;
 
 #[derive(Clone)]
 struct TimerEntry {
-    ctx_owner: *mut qjs::JSContext,
     id: u32,
     due: Instant,
     interval: EmbassyDuration,
@@ -27,7 +27,7 @@ struct TimerEntry {
 unsafe impl Send for TimerEntry {}
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
-static TIMERS: Mutex<Vec<TimerEntry>> = Mutex::new(Vec::new());
+static TIMERS: Mutex<BTreeMap<usize, Vec<TimerEntry>>> = Mutex::new(BTreeMap::new());
 
 #[inline]
 fn js_int32(v: i32) -> qjs::JSValue {
@@ -61,7 +61,6 @@ fn create_timer(
 ) -> u32 {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let entry = TimerEntry {
-        ctx_owner: ctx,
         id,
         due: Instant::now() + EmbassyDuration::from_millis(delay_ms),
         interval: EmbassyDuration::from_millis(delay_ms.max(1)),
@@ -72,25 +71,27 @@ fn create_timer(
             .map(|v| unsafe { qjs::js_dup_value(ctx, v) })
             .collect(),
     };
-    TIMERS.lock().push(entry);
+    TIMERS.lock().entry(ctx as usize).or_default().push(entry);
     id
 }
 
 fn cancel_timer(ctx: *mut qjs::JSContext, id: u32) {
     let mut timers = TIMERS.lock();
-    let mut i = 0usize;
-    while i < timers.len() {
-        if timers[i].ctx_owner == ctx && timers[i].id == id {
-            let t = timers.remove(i);
-            unsafe {
-                qjs::js_free_value(ctx, t.cb);
-                for a in t.args {
-                    qjs::js_free_value(ctx, a);
+    if let Some(entries) = timers.get_mut(&(ctx as usize)) {
+        let mut i = 0usize;
+        while i < entries.len() {
+            if entries[i].id == id {
+                let t = entries.remove(i);
+                unsafe {
+                    qjs::js_free_value(ctx, t.cb);
+                    for a in t.args {
+                        qjs::js_free_value(ctx, a);
+                    }
                 }
+                break;
             }
-            break;
+            i += 1;
         }
-        i += 1;
     }
 }
 
@@ -110,9 +111,11 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
     let mut due_ids: Vec<u32> = Vec::new();
     {
         let timers = TIMERS.lock();
-        for t in timers.iter() {
-            if t.ctx_owner == ctx && now >= t.due {
-                due_ids.push(t.id);
+        if let Some(entries) = timers.get(&(ctx as usize)) {
+            for t in entries.iter() {
+                if now >= t.due {
+                    due_ids.push(t.id);
+                }
             }
         }
     }
@@ -121,30 +124,33 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
         // Re-check and take/update under lock.
         let (cb, args, repeating, interval) = {
             let mut timers = TIMERS.lock();
-            let pos = timers.iter().position(|t| t.ctx_owner == ctx && t.id == id);
+            let Some(entries) = timers.get_mut(&(ctx as usize)) else {
+                continue;
+            };
+            let pos = entries.iter().position(|t| t.id == id);
             let Some(pos) = pos else {
                 continue;
             };
 
             // Skip if it was rescheduled into the future.
-            if now < timers[pos].due {
+            if now < entries[pos].due {
                 continue;
             }
 
             // Snapshot call data.
-            let cb = qjs::js_dup_value(ctx, timers[pos].cb);
-            let args = timers[pos]
+            let cb = qjs::js_dup_value(ctx, entries[pos].cb);
+            let args = entries[pos]
                 .args
                 .iter()
                 .map(|v| qjs::js_dup_value(ctx, *v))
                 .collect::<Vec<_>>();
-            let repeating = timers[pos].repeating;
-            let interval = timers[pos].interval;
+            let repeating = entries[pos].repeating;
+            let interval = entries[pos].interval;
 
             if repeating {
-                timers[pos].due = Instant::now() + interval;
+                entries[pos].due = Instant::now() + interval;
             } else {
-                let t = timers.remove(pos);
+                let t = entries.remove(pos);
                 qjs::js_free_value(ctx, t.cb);
                 for a in t.args {
                     qjs::js_free_value(ctx, a);
@@ -268,15 +274,7 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext, target: qjs::JSValue) {
     macro_rules! install_fn {
         ($name:literal, $func:expr, $argc:expr) => {{
             let k = concat!($name, "\0");
-            let f = qjs::JS_NewCFunction2(
-                ctx,
-                Some($func),
-                k.as_ptr() as *const c_char,
-                $argc,
-                qjs::JS_CFUNC_GENERIC,
-                0,
-            );
-            let _ = qjs::JS_SetPropertyStr(ctx, target, k.as_ptr() as *const c_char, f);
+            let _ = qjs::jsbind::install_fn(ctx, target, k.as_bytes(), $argc, Some($func));
         }};
     }
 
@@ -287,14 +285,8 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext, target: qjs::JSValue) {
 }
 
 pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
-    let mut timers = TIMERS.lock();
-    let mut i = 0usize;
-    while i < timers.len() {
-        if timers[i].ctx_owner != ctx {
-            i += 1;
-            continue;
-        }
-        let t = timers.remove(i);
+    let entries = TIMERS.lock().remove(&(ctx as usize)).unwrap_or_default();
+    for t in entries {
         qjs::js_free_value(ctx, t.cb);
         for a in t.args {
             qjs::js_free_value(ctx, a);
@@ -306,5 +298,8 @@ pub fn has_pending(ctx: *mut qjs::JSContext) -> bool {
     if ctx.is_null() {
         return false;
     }
-    TIMERS.lock().iter().any(|t| t.ctx_owner == ctx)
+    TIMERS
+        .lock()
+        .get(&(ctx as usize))
+        .is_some_and(|entries| !entries.is_empty())
 }
