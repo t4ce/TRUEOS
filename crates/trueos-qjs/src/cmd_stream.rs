@@ -10,7 +10,7 @@ use libm::{ceilf, floorf};
 use spin::Mutex;
 use trueos_gfx_core::{
     RGB_VERTEX_SIZE, Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_rgb_line_quad_px,
-    push_rgb_quad_px, push_tex_quad_px, push_tex_vertex_bytes,
+    push_rgb_quad_px, push_tex_quad_px,
 };
 
 use crate as qjs;
@@ -720,31 +720,6 @@ unsafe extern "C" fn qjs_cmd_stream_get_texture_status(
     qjs::JS_NewFloat64(ctx, trueos_cabi_gfx_texture_status(tex_id) as f64)
 }
 
-#[inline]
-pub(super) fn cmd_stream_push_tex_vtx(
-    out: &mut Vec<u8>,
-    x: f32,
-    y: f32,
-    u: f32,
-    v: f32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-) {
-    push_tex_vertex_bytes(
-        out,
-        trueos_gfx_core::TexVertex {
-            x,
-            y,
-            u,
-            v,
-            color: Rgba8::new(r, g, b, a),
-        },
-    );
-}
-
-#[inline]
 fn cmd_stream_draw_texture_rect(
     tex_id: u32,
     x: f32,

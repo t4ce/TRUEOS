@@ -32,7 +32,34 @@ pub const HOSTED_KEYBOARD_MOD_ALT: u8 = 1 << 2;
 pub const HOSTED_KEYBOARD_MOD_META: u8 = 1 << 3;
 
 const TRUESURFER_IMPORT_FILENAME: &[u8] = b"<truesurfer-init>\0";
-const TRUESURFER_IMPORT_SOURCE: &[u8] = b"import '/qjs/truesurfer/truesurfer.mjs';";
+const TRUESURFER_IMPORT_SOURCE: &[u8] = br#"
+globalThis.__trueosTruesurferReady = 0;
+globalThis.__trueosTruesurferWarmup = {
+  status: 'loading-entry',
+  baseUrl: '/qjs/truesurfer/truesurfer.mjs',
+};
+if (typeof globalThis.importModule !== 'function') {
+  globalThis.__trueosTruesurferReady = -1;
+  globalThis.__trueosTruesurferWarmup = {
+    status: 'error',
+    baseUrl: '/qjs/truesurfer/truesurfer.mjs',
+    error: 'importModule is not available',
+  };
+  throw new Error('importModule is not available');
+}
+globalThis.__trueosTruesurferEntryPromise = Promise.resolve(
+  globalThis.importModule('/qjs/truesurfer/truesurfer.mjs'),
+).catch((error) => {
+  const message = error && error.stack ? String(error.stack) : String(error || 'unknown truesurfer import error');
+  globalThis.__trueosTruesurferReady = -1;
+  globalThis.__trueosTruesurferWarmup = {
+    status: 'error',
+    baseUrl: '/qjs/truesurfer/truesurfer.mjs',
+    error: message,
+  };
+  throw error;
+});
+"#;
 const TRUESURFER_READY_PROP: &[u8] = b"__trueosTruesurferReady\0";
 const TRUESURFER_ID_PROP: &[u8] = b"__trueosTruesurferBrowserId\0";
 const TRUESURFER_OBJ_PROP: &[u8] = b"__trueosTruesurfer\0";
@@ -567,6 +594,18 @@ unsafe fn truesurfer_ready(ctx: *mut qjs::JSContext) -> bool {
     ready_flag || has_set_html
 }
 
+unsafe fn truesurfer_failed(ctx: *mut qjs::JSContext) -> bool {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let ready = qjs::JS_GetPropertyStr(ctx, global, TRUESURFER_READY_PROP.as_ptr() as *const c_char);
+    let mut ready_f = 0.0f64;
+    let failed = qjs::JS_ToFloat64(ctx, &mut ready_f as *mut f64, ready) == 0
+        && ready_f.is_finite()
+        && ready_f < 0.0;
+    qjs::js_free_value(ctx, ready);
+    qjs::js_free_value(ctx, global);
+    failed
+}
+
 unsafe fn read_result_u32(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst, key: &[u8]) -> u32 {
     let value = qjs::JS_GetPropertyStr(ctx, obj, key.as_ptr() as *const c_char);
     let mut out = 0.0f64;
@@ -1024,7 +1063,7 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
             ctx,
             TRUESURFER_IMPORT_SOURCE,
             TRUESURFER_IMPORT_FILENAME.as_ptr() as *const c_char,
-            qjs::JS_EVAL_TYPE_MODULE,
+            qjs::JS_EVAL_TYPE_GLOBAL,
         );
         if boot.is_exception() {
             qjs::qjs_diag::dump_last_exception(ctx, "truesurfer init");
@@ -1049,6 +1088,7 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                 }
 
                 let ready = truesurfer_ready(ctx);
+                let failed = truesurfer_failed(ctx);
                 if ready != last_ready {
                     log_line(format!(
                         "qjs-truesurfer[{}]: ready={}\n",
@@ -1056,6 +1096,14 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                         if ready { 1 } else { 0 }
                     ));
                     last_ready = ready;
+                }
+                if failed {
+                    log_line(format!(
+                        "qjs-truesurfer[{}]: startup failed\n",
+                        browser_instance_id
+                    ));
+                    runtime_alive = false;
+                    break;
                 }
                 let _ = with_browser_state_mut(browser_instance_id, |state| {
                     state.api_ready = ready;

@@ -8,6 +8,9 @@ use lyon_tessellation::{
     StrokeTessellator, StrokeVertex, VertexBuffers,
 };
 use spin::Once;
+use trueos_gfx_core::{
+    RGB_VERTEX_SIZE, Rgba8, ViewTransform, push_rgb_quad_px, push_rgb_vertex_bytes,
+};
 use trueos_math::{cos_f32, sin_f32};
 
 #[derive(Copy, Clone, Debug)]
@@ -33,14 +36,23 @@ fn to_u8(x: f32) -> u8 {
 
 #[inline]
 fn push_rgb_vtx(out: &mut Vec<u8>, v: &MyVertex, view_w: f32, view_h: f32) {
-    let nx = (2.0 * (v.position[0] / view_w)) - 1.0;
-    let ny = 1.0 - (2.0 * (v.position[1] / view_h));
-    out.extend_from_slice(&nx.to_le_bytes());
-    out.extend_from_slice(&ny.to_le_bytes());
-    out.push(to_u8(v.color[0]));
-    out.push(to_u8(v.color[1]));
-    out.push(to_u8(v.color[2]));
-    out.push(to_u8(v.color[3]));
+    push_rgb_vertex_bytes(
+        out,
+        ViewTransform {
+            width: view_w.max(1.0),
+            height: view_h.max(1.0),
+        }
+        .rgb_vertex_px(
+            v.position[0],
+            v.position[1],
+            Rgba8::new(
+                to_u8(v.color[0]),
+                to_u8(v.color[1]),
+                to_u8(v.color[2]),
+                to_u8(v.color[3]),
+            ),
+        ),
+    );
 }
 
 #[inline]
@@ -68,50 +80,16 @@ pub fn draw_solid_rect_no_present(
         return true;
     }
 
-    let x0 = x;
-    let y0 = y;
-    let x1 = x + w;
-    let y1 = y + h;
-    let c = [
-        rgba.0 as f32 / 255.0,
-        rgba.1 as f32 / 255.0,
-        rgba.2 as f32 / 255.0,
-        rgba.3 as f32 / 255.0,
-    ];
-
-    let tris = [
-        MyVertex {
-            position: [x0, y1],
-            color: c,
-        },
-        MyVertex {
-            position: [x1, y1],
-            color: c,
-        },
-        MyVertex {
-            position: [x1, y0],
-            color: c,
-        },
-        MyVertex {
-            position: [x0, y1],
-            color: c,
-        },
-        MyVertex {
-            position: [x1, y0],
-            color: c,
-        },
-        MyVertex {
-            position: [x0, y0],
-            color: c,
-        },
-    ];
-
-    let mut blob: Vec<u8> = Vec::with_capacity(6 * 12);
-    let fb_w = view_w.max(1) as f32;
-    let fb_h = view_h.max(1) as f32;
-    for v in &tris {
-        push_rgb_vtx(&mut blob, v, fb_w, fb_h);
-    }
+    let mut blob: Vec<u8> = Vec::with_capacity(6 * RGB_VERTEX_SIZE);
+    push_rgb_quad_px(
+        &mut blob,
+        ViewTransform::from_extent(view_w, view_h),
+        x,
+        y,
+        x + w,
+        y + h,
+        Rgba8::new(rgba.0, rgba.1, rgba.2, rgba.3),
+    );
 
     submit_rgb_blob_no_present(blob.as_slice())
 }
@@ -137,82 +115,39 @@ pub fn draw_horizontal_three_stop_rect_no_present(
     let x1 = x + w;
     let y0 = y;
     let y1 = y + h;
-    let left = [
-        left_rgba.0 as f32 / 255.0,
-        left_rgba.1 as f32 / 255.0,
-        left_rgba.2 as f32 / 255.0,
-        left_rgba.3 as f32 / 255.0,
-    ];
-    let mid = [
-        mid_rgba.0 as f32 / 255.0,
-        mid_rgba.1 as f32 / 255.0,
-        mid_rgba.2 as f32 / 255.0,
-        mid_rgba.3 as f32 / 255.0,
-    ];
-    let right = [
-        right_rgba.0 as f32 / 255.0,
-        right_rgba.1 as f32 / 255.0,
-        right_rgba.2 as f32 / 255.0,
-        right_rgba.3 as f32 / 255.0,
-    ];
-
-    let tris = [
-        MyVertex {
-            position: [x0, y1],
-            color: left,
-        },
-        MyVertex {
-            position: [xm, y1],
-            color: mid,
-        },
-        MyVertex {
-            position: [xm, y0],
-            color: mid,
-        },
-        MyVertex {
-            position: [x0, y1],
-            color: left,
-        },
-        MyVertex {
-            position: [xm, y0],
-            color: mid,
-        },
-        MyVertex {
-            position: [x0, y0],
-            color: left,
-        },
-        MyVertex {
-            position: [xm, y1],
-            color: mid,
-        },
-        MyVertex {
-            position: [x1, y1],
-            color: right,
-        },
-        MyVertex {
-            position: [x1, y0],
-            color: right,
-        },
-        MyVertex {
-            position: [xm, y1],
-            color: mid,
-        },
-        MyVertex {
-            position: [x1, y0],
-            color: right,
-        },
-        MyVertex {
-            position: [xm, y0],
-            color: mid,
-        },
-    ];
-
-    let mut blob: Vec<u8> = Vec::with_capacity(tris.len() * 12);
-    let fb_w = view_w.max(1) as f32;
-    let fb_h = view_h.max(1) as f32;
-    for v in &tris {
-        push_rgb_vtx(&mut blob, v, fb_w, fb_h);
-    }
+    let transform = ViewTransform::from_extent(view_w, view_h);
+    let mut blob: Vec<u8> = Vec::with_capacity(12 * RGB_VERTEX_SIZE);
+    push_rgb_quad_px(
+        &mut blob,
+        transform,
+        x0,
+        y0,
+        xm,
+        y1,
+        Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3),
+    );
+    push_rgb_quad_px(
+        &mut blob,
+        transform,
+        xm,
+        y0,
+        x1,
+        y1,
+        Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3),
+    );
+    let mid_color = Rgba8::new(mid_rgba.0, mid_rgba.1, mid_rgba.2, mid_rgba.3);
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x0, y1, Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3)));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y1, mid_color));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y0, mid_color));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x0, y1, Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3)));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y0, mid_color));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x0, y0, Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3)));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y1, mid_color));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x1, y1, Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3)));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x1, y0, Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3)));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y1, mid_color));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(x1, y0, Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3)));
+    push_rgb_vertex_bytes(&mut blob, transform.rgb_vertex_px(xm, y0, mid_color));
 
     submit_rgb_blob_no_present(blob.as_slice())
 }
@@ -708,6 +643,62 @@ pub fn draw_lyon_icon_alpha_no_present(
         };
         let vv = MyVertex {
             position: [v.position[0] + x, v.position[1] + y],
+            color: [
+                v.color[0],
+                v.color[1],
+                v.color[2],
+                v.color[3] * (alpha as f32 / 255.0),
+            ],
+        };
+        push_rgb_vtx(&mut icon_blob, &vv, fb_w, fb_h);
+    }
+
+    if icon_blob.is_empty() {
+        return -2;
+    }
+
+    let _ = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+    };
+    let rc = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+            icon_blob.as_ptr(),
+            icon_blob.len(),
+        )
+    };
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    rc
+}
+
+pub fn draw_lyon_icon_alpha_scaled_no_present(
+    icon_id: u32,
+    color_id: u32,
+    small_set: u32,
+    x: f32,
+    y: f32,
+    size_px: f32,
+    view_w: u32,
+    view_h: u32,
+    alpha: u8,
+) -> i32 {
+    if !size_px.is_finite() || size_px <= 0.0 {
+        return 0;
+    }
+
+    let fb_w = view_w.max(1) as f32;
+    let fb_h = view_h.max(1) as f32;
+    let Some(icon) = cached_icon_by_id(icon_id, color_id, small_set != 0) else {
+        return -1;
+    };
+
+    let scale = size_px / icon.cell_px.max(1.0);
+    let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(12));
+    for &idx in &icon.indices {
+        let Some(v) = icon.vertices.get(idx as usize) else {
+            continue;
+        };
+        let vv = MyVertex {
+            position: [v.position[0] * scale + x, v.position[1] * scale + y],
             color: [
                 v.color[0],
                 v.color[1],

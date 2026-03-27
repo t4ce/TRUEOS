@@ -1,4 +1,6 @@
+use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
 
 // Manual tuning levers for the animated loadscreen burst.
 const LOADSCREEN_BG_RGB: u32 = 0xFFFFFF;
@@ -125,19 +127,6 @@ const LOADSCREEN_SLICE_4_ALPHA_SWING: f32 = 16.0;
 const LOADSCREEN_SLICE_4_ALPHA_MIN: f32 = 64.0;
 const LOADSCREEN_SLICE_4_ALPHA_MAX: f32 = 102.0;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct LoadscreenTexVertex {
-    x: f32,
-    y: f32,
-    u: f32,
-    v: f32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-}
-
 fn draw_mask_quad_uv_no_present(
     tex_id: u32,
     x: f32,
@@ -157,74 +146,18 @@ fn draw_mask_quad_uv_no_present(
         return false;
     }
 
-    let vw = view_w.max(1) as f32;
-    let vh = view_h.max(1) as f32;
-    let left = (2.0 * (x / vw)) - 1.0;
-    let right = (2.0 * ((x + width) / vw)) - 1.0;
-    let top = 1.0 - (2.0 * (y / vh));
-    let bottom = 1.0 - (2.0 * ((y + height) / vh));
-    let verts = [
-        LoadscreenTexVertex {
-            x: left,
-            y: bottom,
-            u: u0,
-            v: v1,
-            r: rgba.0,
-            g: rgba.1,
-            b: rgba.2,
-            a: rgba.3,
-        },
-        LoadscreenTexVertex {
-            x: right,
-            y: bottom,
-            u: u1,
-            v: v1,
-            r: rgba.0,
-            g: rgba.1,
-            b: rgba.2,
-            a: rgba.3,
-        },
-        LoadscreenTexVertex {
-            x: right,
-            y: top,
-            u: u1,
-            v: v0,
-            r: rgba.0,
-            g: rgba.1,
-            b: rgba.2,
-            a: rgba.3,
-        },
-        LoadscreenTexVertex {
-            x: left,
-            y: bottom,
-            u: u0,
-            v: v1,
-            r: rgba.0,
-            g: rgba.1,
-            b: rgba.2,
-            a: rgba.3,
-        },
-        LoadscreenTexVertex {
-            x: right,
-            y: top,
-            u: u1,
-            v: v0,
-            r: rgba.0,
-            g: rgba.1,
-            b: rgba.2,
-            a: rgba.3,
-        },
-        LoadscreenTexVertex {
-            x: left,
-            y: top,
-            u: u0,
-            v: v0,
-            r: rgba.0,
-            g: rgba.1,
-            b: rgba.2,
-            a: rgba.3,
-        },
-    ];
+    let transform = ViewTransform::from_extent(view_w, view_h);
+    let mut verts = Vec::with_capacity(6 * TEX_VERTEX_SIZE);
+    push_tex_quad_px(
+        &mut verts,
+        transform,
+        x,
+        y,
+        x + width,
+        y + height,
+        [u0, v0, u1, v1],
+        Rgba8::new(rgba.0, rgba.1, rgba.2, rgba.3),
+    );
 
     let filter = if linear { 1 } else { 0 };
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, filter, filter) };
@@ -234,8 +167,8 @@ fn draw_mask_quad_uv_no_present(
     let rc = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
             tex_id,
-            verts.as_ptr() as *const u8,
-            verts.len() * core::mem::size_of::<LoadscreenTexVertex>(),
+            verts.as_ptr(),
+            verts.len(),
         )
     };
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
