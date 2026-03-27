@@ -6,6 +6,8 @@ pub const DEFAULT_CHANNELS: u16 = 2;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveAudioStream {
+    // Match the HID media-control side by stable_id so composite headset buttons
+    // can later adjust this specific UAC sink/source instead of a global volume.
     stable_id: u32,
     slot_id: u32,
     interface_number: u8,
