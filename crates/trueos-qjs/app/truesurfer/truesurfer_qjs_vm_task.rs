@@ -1004,7 +1004,8 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
     ));
 
     unsafe {
-        let Some(vm) = qjs::vm::QjsVm::new_node() else {
+        let Some(vm) = qjs::vm::QjsVm::new_node_with_profile(qjs::node::RuntimeProfile::Browser)
+        else {
             log_error(format!(
                 "qjs-truesurfer[{}]: JS runtime init failed\n",
                 browser_instance_id
@@ -1017,7 +1018,6 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
         let ctx = vm.ctx_ptr();
         let rt = vm.rt_ptr();
 
-        qjs::node::install_globals(ctx);
         set_global_i32(ctx, TRUESURFER_ID_PROP, browser_instance_id as i32);
 
         let boot = qjs::js_eval_bytes(

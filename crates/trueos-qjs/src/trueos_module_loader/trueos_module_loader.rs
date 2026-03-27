@@ -434,6 +434,23 @@ fn push_hex_u64(out: &mut Vec<u8>, v: u64) {
     }
 }
 
+pub fn is_url_specifier(spec: &[u8]) -> bool {
+    spec_is_url(spec)
+}
+
+pub fn cache_path_for_url(url: &[u8]) -> Vec<u8> {
+    let hash = fnv1a64(url);
+    let mut cache_path: Vec<u8> = Vec::new();
+    cache_path.extend_from_slice(CDN_DIR);
+    push_hex_u64(&mut cache_path, hash);
+    cache_path.extend_from_slice(b".mjs");
+    cache_path
+}
+
+pub fn has_embedded_module(path: &[u8]) -> bool {
+    embedded::find(path).is_some()
+}
+
 unsafe fn js_strdup(ctx: *mut qjs::JSContext, bytes: &[u8]) -> *mut c_char {
     let buf = qjs::js_malloc(ctx, bytes.len() + 1) as *mut u8;
     if buf.is_null() {
@@ -673,11 +690,7 @@ unsafe fn load_url_module(
     url: &[u8],
 ) -> *mut qjs::JSModuleDef {
     // Cache path: /qjs/cdn/<hash>.mjs
-    let hash = fnv1a64(url);
-    let mut cache_path: Vec<u8> = Vec::new();
-    cache_path.extend_from_slice(CDN_DIR);
-    push_hex_u64(&mut cache_path, hash);
-    cache_path.extend_from_slice(b".mjs");
+    let cache_path = cache_path_for_url(url);
     let compiled_cache_path = compiled::compiled_cache_path_for_source(&cache_path);
 
     trace_str("qjs: url cache=");

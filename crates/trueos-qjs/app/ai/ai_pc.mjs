@@ -13,6 +13,7 @@ import {
   decorateResponseTools,
   getResponseOutputItems,
   getResponseOutputText,
+  prefetchOpenAiClient,
 } from "./openai_client.mjs";
 import {
   keyboardKeyToKernelSpec,
@@ -3125,8 +3126,10 @@ export async function startAiPc() {
   try {
     aiDiag("startAiPc: ensuring default browser connection");
     await ensureDefaultBrowserConnection();
+    aiDiag("startAiPc: prefetching OpenAI module");
+    await prefetchOpenAiClient();
     aiDiag("startAiPc: creating OpenAI client");
-    const client = createOpenAiClient();
+    const client = await createOpenAiClient();
     let previousResponseId = null;
     aiDiag("startAiPc: entering input loop");
     while (true) {

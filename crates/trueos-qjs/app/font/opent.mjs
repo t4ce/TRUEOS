@@ -1,3 +1,6 @@
+import * as opentypeNs from "../vendor/opentype.mjs";
+
+const opentype = opentypeNs.default ?? opentypeNs;
 const INJECTED_FONT_BYTES_KEY = "__trueosOpentDemoFontBytes";
 
 function fail(message) {
@@ -46,12 +49,18 @@ async function renderTextDemoAsync() {
   if (!(bytes instanceof ArrayBuffer) || bytes.byteLength === 0) {
     fail("injected font bytes are empty");
   }
+  if (!opentype || typeof opentype.parse !== "function") {
+    fail("opentype.parse is not available");
+  }
+  const font = opentype.parse(bytes);
   const image = makeParseOkImage();
   return {
     width: image.width,
     height: image.height,
     rgba: image.rgba,
     fontBytes: bytes.byteLength,
+    unitsPerEm: font.unitsPerEm ?? null,
+    glyphCount: font.glyphs?.length ?? null,
   };
 }
 

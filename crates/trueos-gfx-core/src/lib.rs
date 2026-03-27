@@ -5,6 +5,10 @@ extern crate alloc;
 
 use core::fmt;
 
+#[cfg(any(feature = "alloc", test))]
+use alloc::vec::Vec;
+use libm::sqrtf;
+
 pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -524,3 +528,194 @@ pub trait GfxPresent {
 pub trait GfxContext: GfxDevice + GfxPresent {}
 
 impl<T: GfxDevice + GfxPresent + ?Sized> GfxContext for T {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct Rgba8 {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+impl Rgba8 {
+    #[inline]
+    pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
+
+    #[inline]
+    pub const fn from_rgba_u32(rgba: u32) -> Self {
+        Self {
+            r: ((rgba >> 24) & 0xFF) as u8,
+            g: ((rgba >> 16) & 0xFF) as u8,
+            b: ((rgba >> 8) & 0xFF) as u8,
+            a: (rgba & 0xFF) as u8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct RgbVertex {
+    pub x: f32,
+    pub y: f32,
+    pub color: Rgba8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct TexVertex {
+    pub x: f32,
+    pub y: f32,
+    pub u: f32,
+    pub v: f32,
+    pub color: Rgba8,
+}
+
+pub const RGB_VERTEX_SIZE: usize = core::mem::size_of::<RgbVertex>();
+pub const TEX_VERTEX_SIZE: usize = core::mem::size_of::<TexVertex>();
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewTransform {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl ViewTransform {
+    #[inline]
+    pub fn from_extent(width: u32, height: u32) -> Self {
+        Self {
+            width: width.max(1) as f32,
+            height: height.max(1) as f32,
+        }
+    }
+
+    #[inline]
+    pub fn px_to_ndc(self, x: f32, y: f32) -> (f32, f32) {
+        (
+            (2.0 * (x / self.width)) - 1.0,
+            1.0 - (2.0 * (y / self.height)),
+        )
+    }
+
+    #[inline]
+    pub fn rgb_vertex_px(self, x: f32, y: f32, color: Rgba8) -> RgbVertex {
+        let (x, y) = self.px_to_ndc(x, y);
+        RgbVertex { x, y, color }
+    }
+
+    #[inline]
+    pub fn tex_vertex_px(self, x: f32, y: f32, u: f32, v: f32, color: Rgba8) -> TexVertex {
+        let (x, y) = self.px_to_ndc(x, y);
+        TexVertex { x, y, u, v, color }
+    }
+}
+
+#[cfg(any(feature = "alloc", test))]
+#[inline]
+pub fn push_rgb_vertex_bytes(out: &mut Vec<u8>, vertex: RgbVertex) {
+    out.extend_from_slice(&vertex.x.to_le_bytes());
+    out.extend_from_slice(&vertex.y.to_le_bytes());
+    out.push(vertex.color.r);
+    out.push(vertex.color.g);
+    out.push(vertex.color.b);
+    out.push(vertex.color.a);
+}
+
+#[cfg(any(feature = "alloc", test))]
+#[inline]
+pub fn push_tex_vertex_bytes(out: &mut Vec<u8>, vertex: TexVertex) {
+    out.extend_from_slice(&vertex.x.to_le_bytes());
+    out.extend_from_slice(&vertex.y.to_le_bytes());
+    out.extend_from_slice(&vertex.u.to_le_bytes());
+    out.extend_from_slice(&vertex.v.to_le_bytes());
+    out.push(vertex.color.r);
+    out.push(vertex.color.g);
+    out.push(vertex.color.b);
+    out.push(vertex.color.a);
+}
+
+#[cfg(any(feature = "alloc", test))]
+#[inline]
+pub fn push_rgb_quad_px(
+    out: &mut Vec<u8>,
+    transform: ViewTransform,
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+    color: Rgba8,
+) {
+    if !(left < right && top < bottom) {
+        return;
+    }
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(left, top, color));
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(right, top, color));
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(right, bottom, color));
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(left, top, color));
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(right, bottom, color));
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(left, bottom, color));
+}
+
+#[cfg(any(feature = "alloc", test))]
+#[inline]
+pub fn push_tex_quad_px(
+    out: &mut Vec<u8>,
+    transform: ViewTransform,
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+    uv: [f32; 4],
+    color: Rgba8,
+) {
+    if !(left < right && top < bottom) {
+        return;
+    }
+    let [u0, v0, u1, v1] = uv;
+    push_tex_vertex_bytes(out, transform.tex_vertex_px(left, bottom, u0, v1, color));
+    push_tex_vertex_bytes(out, transform.tex_vertex_px(right, bottom, u1, v1, color));
+    push_tex_vertex_bytes(out, transform.tex_vertex_px(right, top, u1, v0, color));
+    push_tex_vertex_bytes(out, transform.tex_vertex_px(left, bottom, u0, v1, color));
+    push_tex_vertex_bytes(out, transform.tex_vertex_px(right, top, u1, v0, color));
+    push_tex_vertex_bytes(out, transform.tex_vertex_px(left, top, u0, v0, color));
+}
+
+#[cfg(any(feature = "alloc", test))]
+#[inline]
+pub fn push_rgb_line_quad_px(
+    out: &mut Vec<u8>,
+    transform: ViewTransform,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    thickness: f32,
+    color: Rgba8,
+) {
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+    let len_sq = (dx * dx) + (dy * dy);
+    if !len_sq.is_finite() || len_sq <= f32::EPSILON {
+        return;
+    }
+
+    let half = (thickness * 0.5).max(0.5);
+    if !half.is_finite() {
+        return;
+    }
+
+    let inv_len = sqrtf(len_sq).recip();
+    let nx = -dy * inv_len;
+    let ny = dx * inv_len;
+    let ox = nx * half;
+    let oy = ny * half;
+
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(x1 + ox, y1 + oy, color));
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(x2 + ox, y2 + oy, color));
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(x2 - ox, y2 - oy, color));
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(x1 + ox, y1 + oy, color));
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(x2 - ox, y2 - oy, color));
+    push_rgb_vertex_bytes(out, transform.rgb_vertex_px(x1 - ox, y1 - oy, color));
+}

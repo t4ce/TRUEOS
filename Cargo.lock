@@ -2239,6 +2239,9 @@ version = "0.0.1"
 [[package]]
 name = "trueos-gfx-core"
 version = "0.1.0"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "trueos-limloader"
@@ -2263,6 +2266,7 @@ dependencies = [
  "libm",
  "parry2d",
  "spin 0.10.0",
+ "trueos-gfx-core",
  "trueos-math",
  "trueos-weather",
  "usvg",

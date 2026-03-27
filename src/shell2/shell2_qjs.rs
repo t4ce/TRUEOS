@@ -279,7 +279,7 @@ fn create_shell_vm(slot_id: &matrix::MatrixSlotId) -> Result<Box<ShellQjsVmSlot>
     }
 
     unsafe { qjs::qjs_diag::install_context(ctx) };
-    unsafe { qjs::node::install_globals(ctx) };
+    unsafe { qjs::node::install_globals_with_profile(ctx, qjs::node::RuntimeProfile::Shell) };
 
     let mut slot = Box::new(ShellQjsVmSlot {
         slot_id: slot_id.clone(),

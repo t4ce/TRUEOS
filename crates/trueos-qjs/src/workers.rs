@@ -55,9 +55,6 @@ enum SpawnPolicy {
 
 static WORKERS: Mutex<BTreeMap<u32, WorkerState>> = Mutex::new(BTreeMap::new());
 
-// Context -> worker_id mapping (only populated for worker contexts).
-static CTX_WORKER_ID: Mutex<BTreeMap<usize, u32>> = Mutex::new(BTreeMap::new());
-
 // (ctx, worker_id) -> message callbacks
 struct JsCallback {
     val: qjs::JSValue,
@@ -67,10 +64,25 @@ struct JsCallback {
 // This matches the same "single owning task" assumption used elsewhere in TRUEOS QJS glue.
 unsafe impl Send for JsCallback {}
 
-static MAIN_ON_MESSAGE: Mutex<BTreeMap<(usize, u32), JsCallback>> = Mutex::new(BTreeMap::new());
-static WORKER_ON_MESSAGE: Mutex<BTreeMap<(usize, u32), JsCallback>> = Mutex::new(BTreeMap::new());
-// Main-context ownership of workers created from that context.
-static MAIN_CTX_WORKERS: Mutex<BTreeMap<usize, Vec<u32>>> = Mutex::new(BTreeMap::new());
+struct ContextWorkerState {
+    worker_id: Option<u32>,
+    main_on_message: BTreeMap<u32, JsCallback>,
+    worker_on_message: BTreeMap<u32, JsCallback>,
+    owned_workers: Vec<u32>,
+}
+
+impl ContextWorkerState {
+    fn new() -> Self {
+        Self {
+            worker_id: None,
+            main_on_message: BTreeMap::new(),
+            worker_on_message: BTreeMap::new(),
+            owned_workers: Vec::new(),
+        }
+    }
+}
+
+static CONTEXT_WORKERS: Mutex<BTreeMap<usize, ContextWorkerState>> = Mutex::new(BTreeMap::new());
 
 struct WorkerState {
     startup: Option<Vec<u8>>,
@@ -209,7 +221,11 @@ pub fn ctx_role(ctx: *mut qjs::JSContext) -> CtxRole {
         return CtxRole::Main;
     }
     let key = ctx as usize;
-    if let Some(id) = CTX_WORKER_ID.lock().get(&key).copied() {
+    if let Some(id) = CONTEXT_WORKERS
+        .lock()
+        .get(&key)
+        .and_then(|state| state.worker_id)
+    {
         return CtxRole::Worker(id);
     }
     CtxRole::Main
@@ -283,7 +299,11 @@ pub fn terminate_all_for_context(ctx: *mut qjs::JSContext) {
         return;
     }
     let key = ctx as usize;
-    let ids = MAIN_CTX_WORKERS.lock().remove(&key).unwrap_or_default();
+    let ids = CONTEXT_WORKERS
+        .lock()
+        .get_mut(&key)
+        .map(|state| core::mem::take(&mut state.owned_workers))
+        .unwrap_or_default();
     for worker_id in ids {
         terminate(worker_id);
     }
@@ -333,20 +353,12 @@ pub fn has_pending_for_ctx(ctx: *mut qjs::JSContext) -> bool {
 }
 
 unsafe fn js_string(ctx: *mut qjs::JSContext, bytes: &[u8]) -> qjs::JSValue {
-    qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
+    qjs::jsbind::new_string(ctx, bytes)
 }
 
 unsafe fn call_on_message(ctx: *mut qjs::JSContext, cb: qjs::JSValue, msg_bytes: &[u8]) {
     let arg = unsafe { js_string(ctx, msg_bytes) };
-    let _ = unsafe {
-        qjs::JS_Call(
-            ctx,
-            cb,
-            qjs::JSValue::undefined(),
-            1,
-            &arg as *const qjs::JSValue,
-        )
-    };
+    let _ = unsafe { qjs::jsbind::call1(ctx, cb, qjs::JSValue::undefined(), arg) };
     unsafe { qjs::js_free_value(ctx, arg) };
 }
 
@@ -378,9 +390,10 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                     let Some(msg) = msg else { break };
                     progress = true;
 
-                    let cb = MAIN_ON_MESSAGE
+                    let cb = CONTEXT_WORKERS
                         .lock()
-                        .get(&(key_ctx, worker_id))
+                        .get(&key_ctx)
+                        .and_then(|state| state.main_on_message.get(&worker_id))
                         .map(|c| c.val);
                     if let Some(cb) = cb {
                         unsafe { call_on_message(ctx, cb, msg.as_slice()) };
@@ -395,9 +408,10 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                 let Some(msg) = msg else { break };
                 progress = true;
 
-                let cb = WORKER_ON_MESSAGE
+                let cb = CONTEXT_WORKERS
                     .lock()
-                    .get(&(key_ctx, worker_id))
+                    .get(&key_ctx)
+                    .and_then(|state| state.worker_on_message.get(&worker_id))
                     .map(|c| c.val);
                 if let Some(cb) = cb {
                     unsafe { call_on_message(ctx, cb, msg.as_slice()) };
@@ -425,17 +439,18 @@ pub unsafe fn set_on_message(ctx: *mut qjs::JSContext, worker_id: u32, cb: qjs::
         return;
     }
     let key_ctx = ctx as usize;
+    let mut states = CONTEXT_WORKERS.lock();
+    let state = states.entry(key_ctx).or_insert_with(ContextWorkerState::new);
     let map = match ctx_role(ctx) {
-        CtxRole::Main => &MAIN_ON_MESSAGE,
-        CtxRole::Worker(_) => &WORKER_ON_MESSAGE,
+        CtxRole::Main => &mut state.main_on_message,
+        CtxRole::Worker(_) => &mut state.worker_on_message,
     };
 
-    let mut m = map.lock();
-    if let Some(prev) = m.remove(&(key_ctx, worker_id)) {
+    if let Some(prev) = map.remove(&worker_id) {
         unsafe { qjs::js_free_value(ctx, prev.val) };
     }
-    m.insert(
-        (key_ctx, worker_id),
+    map.insert(
+        worker_id,
         JsCallback {
             val: unsafe { qjs::js_dup_value(ctx, cb) },
         },
@@ -447,23 +462,11 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
         return;
     }
     let key_ctx = ctx as usize;
-
-    let mut main = MAIN_ON_MESSAGE.lock();
-    let main_keys: Vec<(usize, u32)> = main
-        .keys()
-        .copied()
-        .filter(|(c, _)| *c == key_ctx)
-        .collect();
-    for k in main_keys {
-        if let Some(v) = main.remove(&k) {
+    if let Some(state) = CONTEXT_WORKERS.lock().remove(&key_ctx) {
+        for (_, v) in state.main_on_message {
             qjs::js_free_value(ctx, v.val);
         }
-    }
-
-    let mut wk = WORKER_ON_MESSAGE.lock();
-    let wk_keys: Vec<(usize, u32)> = wk.keys().copied().filter(|(c, _)| *c == key_ctx).collect();
-    for k in wk_keys {
-        if let Some(v) = wk.remove(&k) {
+        for (_, v) in state.worker_on_message {
             qjs::js_free_value(ctx, v.val);
         }
     }
@@ -499,7 +502,7 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
     let _ = post_to_parent(worker_id, b"{\"ok\":1,\"dbg\":\"worker-rust-task-start\"}");
 
     // Each worker owns its own QuickJS VM.
-    let Some(vm) = (unsafe { qjs::vm::QjsVm::new_node() }) else {
+    let Some(vm) = (unsafe { qjs::vm::QjsVm::new_node_with_profile(qjs::node::RuntimeProfile::Worker) }) else {
         log_str("qjs-worker: failed to create VM\n");
         let _ = post_to_parent(worker_id, b"{\"ok\":0,\"dbg\":\"worker-vm-create-failed\"}");
         mark_exited(worker_id);
@@ -512,10 +515,11 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
     let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
-    CTX_WORKER_ID.lock().insert(ctx as usize, worker_id);
-
-    // Install per-context Node-ish globals.
-    unsafe { qjs::node::install_globals(ctx) };
+    CONTEXT_WORKERS
+        .lock()
+        .entry(ctx as usize)
+        .or_insert_with(ContextWorkerState::new)
+        .worker_id = Some(worker_id);
     log_str(&format!(
         "qjs-worker: worker#{} globals-installed slot={}\n",
         worker_id, scheduled_slot
@@ -558,7 +562,6 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
             if !drained {
                 log_str("qjs-worker: teardown drain incomplete\n");
             }
-            CTX_WORKER_ID.lock().remove(&(ctx as usize));
             drop(vm);
             mark_exited(worker_id);
             return;
@@ -617,7 +620,6 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
     if !drained {
         log_str("qjs-worker: teardown drain incomplete\n");
     }
-    CTX_WORKER_ID.lock().remove(&(ctx as usize));
     drop(vm);
     mark_exited(worker_id);
 }
@@ -653,14 +655,7 @@ fn js_null() -> qjs::JSValue {
 }
 
 unsafe fn arg_to_bytes(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option<Vec<u8>> {
-    let mut len: usize = 0;
-    let cstr = unsafe { qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, v, 0) };
-    if cstr.is_null() {
-        return None;
-    }
-    let bytes = unsafe { core::slice::from_raw_parts(cstr as *const u8, len) }.to_vec();
-    unsafe { qjs::JS_FreeCString(ctx, cstr) };
-    Some(bytes)
+    unsafe { qjs::jsbind::to_bytes(ctx, v) }
 }
 
 unsafe fn worker_id_from_this(
@@ -712,10 +707,11 @@ pub unsafe extern "C" fn js_worker_ctor(
         Ok(id) => id,
         Err(_) => return qjs::JSValue::exception(),
     };
-    MAIN_CTX_WORKERS
+    CONTEXT_WORKERS
         .lock()
         .entry(ctx as usize)
-        .or_default()
+        .or_insert_with(ContextWorkerState::new)
+        .owned_workers
         .push(worker_id);
 
     // Constructor mode (`new Worker(...)`) passes a pre-created `this` with Worker.prototype.

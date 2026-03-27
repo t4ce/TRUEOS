@@ -526,7 +526,7 @@ pub async fn run_once() {
     qjs::trueos_shims::log_info("ai-task: run_once begin\n");
     unsafe {
         qjs::trueos_shims::log_info("ai-task: creating JS runtime\n");
-        let vm = match qjs::vm::QjsVm::new_node() {
+        let vm = match qjs::vm::QjsVm::new_node_with_profile(qjs::node::RuntimeProfile::Ai) {
             Some(vm) => vm,
             None => {
                 qjs::trueos_shims::log_error("ai-task: JS runtime init failed\n");
@@ -538,8 +538,6 @@ pub async fn run_once() {
         let ctx = vm.ctx_ptr();
         let rt = vm.rt_ptr();
 
-        qjs::trueos_shims::log_info("ai-task: installing node globals\n");
-        qjs::node::install_globals(ctx);
         qjs::trueos_shims::log_info("ai-task: installing ai globals\n");
         install_ai_globals(ctx);
 

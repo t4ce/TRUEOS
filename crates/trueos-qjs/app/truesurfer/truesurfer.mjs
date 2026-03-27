@@ -16,6 +16,9 @@ In UI2:
 
 const root = globalThis;
 const browserId = Number(root.__trueosTruesurferBrowserId || 0);
+const TRUESURFER_MODULE_BASE = typeof import.meta === 'object' && import.meta && typeof import.meta.url === 'string'
+  ? String(import.meta.url)
+  : '/qjs/truesurfer/truesurfer.mjs';
 const TRUESURFER_SUBSET_PROFILE = Object.freeze({
   includeHead: true,
   includeTitle: true,
@@ -643,6 +646,84 @@ function logSyncPipeline(url, parsed) {
   );
 }
 
+function getImportHelpers(baseUrl) {
+  if (typeof root.createImportHelpers === 'function') {
+    return root.createImportHelpers(baseUrl);
+  }
+  return {
+    prefetch(specifier) {
+      return Promise.resolve(String(specifier));
+    },
+    import(specifier) {
+      return import(String(specifier));
+    },
+  };
+}
+
+async function warmBrowserPipelineModules() {
+  const helpers = getImportHelpers(TRUESURFER_MODULE_BASE);
+  const imports = [
+    './truesurfer_assets.mjs',
+    './css.mjs',
+  ];
+  for (let index = 0; index < imports.length; index += 1) {
+    await helpers.prefetch(imports[index]);
+  }
+
+  const [assetsMod, cssMod] = await Promise.all([
+    helpers.import('./truesurfer_assets.mjs'),
+    helpers.import('./css.mjs'),
+  ]);
+
+  const assetsReady = !!assetsMod && typeof assetsMod.createBrowserAssetManager === 'function';
+  const cssReady = !!cssMod && typeof cssMod.extractCssSection === 'function';
+  if (!assetsReady || !cssReady) {
+    throw new Error(
+      `browser pipeline warmup incomplete assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0}`,
+    );
+  }
+
+  root.__trueosTruesurferModules = {
+    assetsReady: 1,
+    cssReady: 1,
+  };
+}
+
+async function bootstrapTruesurfer() {
+  root.__trueosTruesurferWarmup = {
+    status: 'warming',
+    assetsReady: 0,
+    cssReady: 0,
+    baseUrl: TRUESURFER_MODULE_BASE,
+  };
+  try {
+    log(`[truesurfer bootstrap] browser=${browserId} warming modules base=${TRUESURFER_MODULE_BASE}`);
+    await warmBrowserPipelineModules();
+    const modules = root.__trueosTruesurferModules || {};
+    root.__trueosTruesurferWarmup = {
+      status: 'ready',
+      assetsReady: modules.assetsReady ? 1 : 0,
+      cssReady: modules.cssReady ? 1 : 0,
+      baseUrl: TRUESURFER_MODULE_BASE,
+    };
+    root.__trueosTruesurferReady = 1;
+    log(
+      `[truesurfer bootstrap] browser=${browserId} ready assets=${modules.assetsReady ? 1 : 0} css=${modules.cssReady ? 1 : 0}`,
+    );
+  } catch (error) {
+    const message = error && error.stack ? String(error.stack) : String(error || 'unknown bootstrap error');
+    root.__trueosTruesurferWarmup = {
+      status: 'error',
+      assetsReady: 0,
+      cssReady: 0,
+      baseUrl: TRUESURFER_MODULE_BASE,
+      error: message,
+    };
+    root.__trueosTruesurferReady = 0;
+    log(`[truesurfer bootstrap] browser=${browserId} failed error=${message}`);
+  }
+}
+
 function setHtml(nextHtml, meta) {
   const html = safeString(nextHtml);
   const url = safeString(meta && meta.url);
@@ -709,6 +790,5 @@ root.__trueosTruesurfer = {
   setHtml,
 };
 root.__trueosTruesurferSubsetProfile = TRUESURFER_SUBSET_PROFILE;
-root.__trueosTruesurferReady = 1;
-
-log(`[truesurfer bootstrap] browser=${browserId} ready`);
+root.__trueosTruesurferReady = 0;
+void bootstrapTruesurfer();
