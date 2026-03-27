@@ -267,11 +267,11 @@ fn build_imba_athlas(face: ImbaFontFace, tile_h: f32) -> ImbaAthlasBuffers {
 }
 
 fn build_imba_athlas_small() -> ImbaAthlasBuffers {
-    build_imba_athlas(ImbaFontFace::Lucidasansunicode, IMBA_ATHLAS_SMALL_TILE_H)
+    build_imba_athlas(ImbaFontFace::Font, IMBA_ATHLAS_SMALL_TILE_H)
 }
 
 fn build_imba_athlas_large() -> ImbaAthlasBuffers {
-    build_imba_athlas(ImbaFontFace::Lucidasansunicode, IMBA_ATHLAS_LARGE_TILE_H)
+    build_imba_athlas(ImbaFontFace::Font, IMBA_ATHLAS_LARGE_TILE_H)
 }
 
 fn imba_athlas_small() -> &'static ImbaAthlasBuffers {

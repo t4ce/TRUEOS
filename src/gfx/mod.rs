@@ -2,7 +2,9 @@ pub mod backends;
 pub mod cursor;
 //#[cfg(feature = "gfx_intel")]
 //pub mod intel;
+#[path = "font/imba_athlas.rs"]
 pub mod imba_athlas;
+#[path = "font/imbafont.rs"]
 pub mod imbafont;
 pub mod jpeg_codec;
 pub mod loadscreen;
