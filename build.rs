@@ -29,6 +29,7 @@ struct FontFaceGen {
     folder: String,
     variant: String,
     assets: Vec<FontAssetGen>,
+    metrics_rel_path: Option<String>,
 }
 
 struct FontAssetGen {
@@ -37,73 +38,55 @@ struct FontAssetGen {
 }
 
 fn generate_imbafont_registry(manifest_dir: &Path) -> Result<(), String> {
-    let font_root = manifest_dir.join("src/gfx/imbafont/fontnew");
+    let font_root = manifest_dir.join("src/gfx/font");
     println!("cargo:rerun-if-changed={}", font_root.display());
 
     let mut faces = Vec::new();
-    for entry in fs::read_dir(&font_root)
+    let entries: Vec<_> = fs::read_dir(&font_root)
         .map_err(|err| format!("failed to read {}: {err}", font_root.display()))?
-    {
-        let entry = entry.map_err(|err| format!("failed to walk {}: {err}", font_root.display()))?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
+        .collect();
+    let mut has_subdirs = false;
+    for entry in &entries {
+        let entry =
+            entry.as_ref().map_err(|err| format!("failed to walk {}: {err}", font_root.display()))?;
+        if entry.path().is_dir() {
+            has_subdirs = true;
+            break;
         }
+    }
 
-        let folder = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| format!("non-utf8 font directory: {}", path.display()))?;
-        let variant = font_enum_variant(&folder)?;
-        println!("cargo:rerun-if-changed={}", path.display());
-
-        let metrics_path = path.join("metrics.txt");
-        if metrics_path.exists() {
-            println!("cargo:rerun-if-changed={}", metrics_path.display());
-        }
-
-        let mut assets = Vec::new();
-        for svg_entry in
-            fs::read_dir(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?
-        {
-            let svg_entry =
-                svg_entry.map_err(|err| format!("failed to walk {}: {err}", path.display()))?;
-            let svg_path = svg_entry.path();
-            if svg_path.extension() != Some(OsStr::new("svg")) {
+    if has_subdirs {
+        for entry in entries {
+            let entry =
+                entry.map_err(|err| format!("failed to walk {}: {err}", font_root.display()))?;
+            let path = entry.path();
+            if !path.is_dir() {
                 continue;
             }
 
-            println!("cargo:rerun-if-changed={}", svg_path.display());
+            let folder = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| format!("non-utf8 font directory: {}", path.display()))?;
+            let variant = font_enum_variant(&folder)?;
+            println!("cargo:rerun-if-changed={}", path.display());
 
-            let stem = svg_path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .ok_or_else(|| format!("bad svg filename: {}", svg_path.display()))?;
-            let code = u32::from_str_radix(stem, 16)
-                .map_err(|err| format!("bad hex glyph filename {}: {err}", svg_path.display()))?;
-            let Some(ch) = char::from_u32(code) else {
-                return Err(format!(
-                    "glyph filename {} maps to invalid Rust char U+{:X}",
-                    svg_path.display(),
-                    code
-                ));
-            };
-
-            let rel_path = svg_path
-                .strip_prefix(manifest_dir)
-                .map_err(|_| format!("{} is not under {}", svg_path.display(), manifest_dir.display()))?
-                .to_str()
-                .ok_or_else(|| format!("non-utf8 svg path: {}", svg_path.display()))?
-                .replace('\\', "/");
-
-            assets.push(FontAssetGen { ch, rel_path });
+            let metrics_rel_path = optional_metrics_rel_path(manifest_dir, &path)?;
+            let assets = collect_font_assets(manifest_dir, &path)?;
+            faces.push(FontFaceGen {
+                folder,
+                variant,
+                assets,
+                metrics_rel_path,
+            });
         }
-
-        assets.sort_by_key(|asset| asset.ch as u32);
+    } else {
+        let assets = collect_font_assets(manifest_dir, &font_root)?;
         faces.push(FontFaceGen {
-            folder,
-            variant,
+            folder: String::from("font"),
+            variant: String::from("Font"),
             assets,
+            metrics_rel_path: optional_metrics_rel_path(manifest_dir, &font_root)?,
         });
     }
 
@@ -117,6 +100,68 @@ fn generate_imbafont_registry(manifest_dir: &Path) -> Result<(), String> {
     let generated = build_imbafont_registry_source(&faces);
     fs::write(&generated_path, generated)
         .map_err(|err| format!("failed to write {}: {err}", generated_path.display()))
+}
+
+fn optional_metrics_rel_path(manifest_dir: &Path, path: &Path) -> Result<Option<String>, String> {
+    let metrics_path = path.join("metrics.txt");
+    if !metrics_path.exists() {
+        return Ok(None);
+    }
+    println!("cargo:rerun-if-changed={}", metrics_path.display());
+    let rel_path = metrics_path
+        .strip_prefix(manifest_dir)
+        .map_err(|_| format!("{} is not under {}", metrics_path.display(), manifest_dir.display()))?
+        .to_str()
+        .ok_or_else(|| format!("non-utf8 metrics path: {}", metrics_path.display()))?
+        .replace('\\', "/");
+    Ok(Some(rel_path))
+}
+
+fn collect_font_assets(manifest_dir: &Path, path: &Path) -> Result<Vec<FontAssetGen>, String> {
+    let mut assets = Vec::new();
+    for svg_entry in
+        fs::read_dir(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?
+    {
+        let svg_entry =
+            svg_entry.map_err(|err| format!("failed to walk {}: {err}", path.display()))?;
+        let svg_path = svg_entry.path();
+        if svg_path.extension() != Some(OsStr::new("svg")) {
+            continue;
+        }
+
+        println!("cargo:rerun-if-changed={}", svg_path.display());
+
+        let stem = svg_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| format!("bad svg filename: {}", svg_path.display()))?;
+        let ch = if stem.chars().count() == 1 {
+            stem.chars().next().unwrap()
+        } else {
+            let code = u32::from_str_radix(stem, 16)
+                .map_err(|err| format!("bad hex glyph filename {}: {err}", svg_path.display()))?;
+            let Some(ch) = char::from_u32(code) else {
+                return Err(format!(
+                    "glyph filename {} maps to invalid Rust char U+{:X}",
+                    svg_path.display(),
+                    code
+                ));
+            };
+            ch
+        };
+
+        let rel_path = svg_path
+            .strip_prefix(manifest_dir)
+            .map_err(|_| format!("{} is not under {}", svg_path.display(), manifest_dir.display()))?
+            .to_str()
+            .ok_or_else(|| format!("non-utf8 svg path: {}", svg_path.display()))?
+            .replace('\\', "/");
+
+        assets.push(FontAssetGen { ch, rel_path });
+    }
+
+    assets.sort_by_key(|asset| asset.ch as u32);
+    Ok(assets)
 }
 
 fn font_enum_variant(folder: &str) -> Result<String, String> {
@@ -192,9 +237,14 @@ fn build_imbafont_registry_source(faces: &[FontFaceGen]) -> String {
     for face in faces {
         generated.push_str("        ImbaFontFace::");
         generated.push_str(&face.variant);
-        generated.push_str(" => include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/gfx/imbafont/fontnew/");
-        generated.push_str(&face.folder);
-        generated.push_str("/metrics.txt\")),\n");
+        generated.push_str(" => ");
+        if let Some(rel_path) = &face.metrics_rel_path {
+            generated.push_str("include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/");
+            generated.push_str(rel_path);
+            generated.push_str("\")),\n");
+        } else {
+            generated.push_str("b\"\",\n");
+        }
     }
     generated.push_str("    }\n}\n\n");
 
@@ -229,12 +279,13 @@ fn build_imbafont_registry_source(faces: &[FontFaceGen]) -> String {
     generated.push_str("    let build = || {\n");
     generated.push_str("        let mut icons = Vec::with_capacity(assets.len());\n");
     generated.push_str("        for asset in assets {\n");
-    generated.push_str("            let Some(metric) = metrics.get(&asset.ch).copied() else {\n");
-    generated.push_str("                continue;\n");
-    generated.push_str("            };\n");
     generated.push_str("            let Some(mesh) = build_svg_mesh(asset.bytes) else {\n");
     generated.push_str("                continue;\n");
     generated.push_str("            };\n");
+    generated.push_str("            let metric = metrics\n");
+    generated.push_str("                .get(&asset.ch)\n");
+    generated.push_str("                .copied()\n");
+    generated.push_str("                .unwrap_or_else(|| default_metric_from_mesh(&mesh));\n");
     generated.push_str("            icons.push(ImbaFontIcon {\n");
     generated.push_str("                ch: asset.ch,\n");
     generated.push_str("                metric,\n");
@@ -256,15 +307,11 @@ fn build_imbafont_registry_source(faces: &[FontFaceGen]) -> String {
     generated.push_str(
         "fn layout_metrics_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontLayoutMetric> {\n",
     );
-    generated.push_str("    let metrics = parsed_metrics_for_face(face);\n");
-    generated.push_str("    let assets = assets_for_face(face);\n\n");
     generated.push_str("    let build = || {\n");
-    generated.push_str("        let mut layout_metrics = Vec::with_capacity(assets.len());\n");
-    generated.push_str("        for asset in assets {\n");
-    generated.push_str("            let Some(metric) = metrics.get(&asset.ch).copied() else {\n");
-    generated.push_str("                continue;\n");
-    generated.push_str("            };\n");
-    generated.push_str("            layout_metrics.push(ImbaFontLayoutMetric { metric });\n");
+    generated.push_str("        let icons = icons_for_face(face);\n");
+    generated.push_str("        let mut layout_metrics = Vec::with_capacity(icons.len());\n");
+    generated.push_str("        for icon in icons {\n");
+    generated.push_str("            layout_metrics.push(ImbaFontLayoutMetric { metric: icon.metric });\n");
     generated.push_str("        }\n");
     generated.push_str("        layout_metrics\n");
     generated.push_str("    };\n\n");

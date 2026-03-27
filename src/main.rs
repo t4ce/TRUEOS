@@ -57,8 +57,6 @@ mod tst_smtp_smoke;
 mod tst_ui2_bgrt;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
 mod tst_ui2_mandelbrot_demo;
-#[path = "tst/ui2_opentype_demo.rs"]
-mod tst_ui2_opentype_demo;
 #[path = "tst/ui2_triangle_demo.rs"]
 mod tst_ui2_triangle_demo;
 #[path = "tst/ws_time.rs"]
