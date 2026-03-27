@@ -2,6 +2,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::ptr::NonNull;
+use spin::Mutex;
 
 pub(crate) mod xhci {
     pub const MAX_XHCI_CONTROLLERS: usize = 4;
@@ -16,6 +17,18 @@ pub(crate) mod midi;
 #[path = "device/pen.rs"]
 pub(crate) mod pen;
 pub(crate) mod scsi;
+
+#[derive(Clone, Copy)]
+struct CachedUsbControllerMmio {
+    bus: u8,
+    slot: u8,
+    function: u8,
+    phys_base: u64,
+    map_len: usize,
+    virt_base: usize,
+}
+
+static USB_CONTROLLER_MMIO_CACHE: Mutex<Vec<CachedUsbControllerMmio>> = Mutex::new(Vec::new());
 
 pub(crate) use self::hid::TrueosHidCursorEvent;
 pub(crate) use self::hid::{
@@ -179,7 +192,42 @@ fn controller_mmio_map(bus: u8, slot: u8, function: u8) -> Option<NonNull<u8>> {
         map_len = 0x10_0000;
     }
 
-    crate::pci::mmio::map_mmio_region(phys_base, map_len).ok()
+    {
+        let cache = USB_CONTROLLER_MMIO_CACHE.lock();
+        if let Some(existing) = cache.iter().find(|entry| {
+            entry.bus == bus
+                && entry.slot == slot
+                && entry.function == function
+                && entry.phys_base == phys_base
+                && entry.map_len == map_len
+        }) {
+            return NonNull::new(existing.virt_base as *mut u8);
+        }
+    }
+
+    let virt_base = crate::pci::mmio::map_mmio_region_exact(phys_base, map_len).ok()?;
+
+    let mut cache = USB_CONTROLLER_MMIO_CACHE.lock();
+    if let Some(existing) = cache.iter().find(|entry| {
+        entry.bus == bus
+            && entry.slot == slot
+            && entry.function == function
+            && entry.phys_base == phys_base
+            && entry.map_len == map_len
+    }) {
+        return NonNull::new(existing.virt_base as *mut u8);
+    }
+
+    cache.push(CachedUsbControllerMmio {
+        bus,
+        slot,
+        function,
+        phys_base,
+        map_len,
+        virt_base: virt_base.as_ptr() as usize,
+    });
+
+    Some(virt_base)
 }
 
 pub(crate) fn pci_usb_controllers() -> Vec<TlbUsbController> {

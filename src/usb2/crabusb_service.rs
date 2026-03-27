@@ -734,31 +734,35 @@ async fn handle_detected_device(
         maybe_start_truekey_bridge(host, dev).await;
         return;
     }
+    let mut handled_any = false;
+
     if super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id as u32).await
     {
-        return;
+        handled_any = true;
     }
     if super::hid::mediacontrol::maybe_start_media_control(host, dev, spawner, controller_id as u32)
         .await
     {
-        return;
+        handled_any = true;
     }
     if super::hid::boot::maybe_start_hid_boot_streams(host, dev, spawner, controller_id as u32)
         .await
     {
-        return;
+        handled_any = true;
     }
     if descriptor_has_audio_candidate(dev) {
         sound::maybe_start_target_audio(host, dev, spawner).await;
-        return;
+        handled_any = true;
     }
     if super::midi::maybe_start_midi(host, dev, spawner, controller_id as u32).await {
-        return;
+        handled_any = true;
     }
     if super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id as u32).await {
-        return;
+        handled_any = true;
     }
-    log_opened_device_graph(host, dev_idx, dev).await;
+    if !handled_any {
+        log_opened_device_graph(host, dev_idx, dev).await;
+    }
 }
 
 fn descriptor_has_audio_candidate(dev_info: &crab_usb::DeviceInfo) -> bool {

@@ -24,6 +24,9 @@ struct MediaControlTarget {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveMediaControlStream {
+    // Composite USB devices expose both UAC and HID interfaces under one stable_id.
+    // Keep that identity here so later media-button events can target this device's
+    // own audio path instead of applying headset controls globally.
     stable_id: u32,
     controller_id: u32,
     slot_id: u32,
