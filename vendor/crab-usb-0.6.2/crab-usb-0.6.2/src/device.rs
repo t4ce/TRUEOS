@@ -16,6 +16,8 @@ use usb_if::{
 
 use crate::backend::ty::ep::EndpointKind;
 use crate::backend::ty::{DeviceInfoOp, DeviceOp, ep::EndpointControl};
+use crate::topology::DeviceLocation;
+use crate::DeviceId;
 
 pub struct DeviceInfo {
     pub(crate) inner: Box<dyn DeviceInfoOp>,
@@ -72,6 +74,39 @@ impl DeviceInfo {
 
     pub fn topology(&self) -> DeviceTopology {
         self.inner.topology()
+    }
+
+    pub fn location(&self) -> DeviceLocation {
+        let topology = self.topology();
+        let mut path = Vec::new();
+        path.push(topology.root_port_id);
+        for hop in topology.path.iter() {
+            if hop.hub_depth == 0 && hop.port_id == topology.root_port_id {
+                continue;
+            }
+            path.push(hop.port_id);
+        }
+        if topology.port_id != topology.root_port_id {
+            path.push(topology.port_id);
+        }
+
+        let mut route_string = 0u32;
+        for (idx, port) in path.iter().skip(1).enumerate() {
+            if idx >= 6 {
+                break;
+            }
+            route_string |= (u32::from(*port) & 0xF) << (idx * 4);
+        }
+
+        DeviceLocation {
+            root_port: topology.root_port_id,
+            route_string,
+            path,
+        }
+    }
+
+    pub fn stable_id(&self) -> DeviceId {
+        self.location().device_id()
     }
 }
 

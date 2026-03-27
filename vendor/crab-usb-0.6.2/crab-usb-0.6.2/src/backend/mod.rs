@@ -6,6 +6,7 @@ use futures::future::{BoxFuture, LocalBoxFuture};
 use usb_if::err::USBError;
 
 use crate::backend::ty::{DeviceInfoOp, DeviceOp};
+use crate::topology::DeviceTree;
 
 #[cfg(umod)]
 pub mod umod;
@@ -39,10 +40,21 @@ pub(crate) trait BackendOp: Send + Any + 'static {
     fn device_list<'a>(&'a mut self)
     -> BoxFuture<'a, Result<Vec<Box<dyn DeviceInfoOp>>, USBError>>;
 
+    fn topology<'a>(&'a mut self) -> BoxFuture<'a, Result<DeviceTree, USBError>> {
+        Box::pin(async { Err(USBError::NotSupported) })
+    }
+
     fn open_device<'a>(
         &'a mut self,
         dev: &'a dyn DeviceInfoOp,
     ) -> LocalBoxFuture<'a, Result<Box<dyn DeviceOp>, USBError>>;
+
+    fn open_device_by_id<'a>(
+        &'a mut self,
+        _id: DeviceId,
+    ) -> LocalBoxFuture<'a, Result<Box<dyn DeviceOp>, USBError>> {
+        Box::pin(async { Err(USBError::NotSupported) })
+    }
 
     #[cfg(kmod)]
     fn create_event_handler(&mut self) -> Box<dyn crate::backend::ty::EventHandlerOp>;

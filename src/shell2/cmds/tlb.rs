@@ -1035,10 +1035,24 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
             .filter(|dev| dev.controller_index == ctrl_info.index)
         {
             emitted_any = true;
+            let stable = alloc::format!("0x{:08X}", dev.stable_id);
+            let route = alloc::format!("0x{:06X}", dev.route_string);
+            let path = if dev.path.is_empty() {
+                alloc::format!("rp{}", dev.root_port_id)
+            } else {
+                let mut out = alloc::format!("rp{}", dev.path[0]);
+                for port in dev.path.iter().skip(1) {
+                    out.push_str(&alloc::format!("->p{}", port));
+                }
+                out
+            };
             out.push(alloc::format!(
-                "  dev slot={} rp={} port={} speed={} parent={:?} vidpid={:04X}:{:04X} dev={:02X}/{:02X}/{:02X} cfgs={} ep0_mps={}",
+                "  dev stable={} slot={} rp={} route={} path={} port={} speed={} parent={:?} vidpid={:04X}:{:04X} dev={:02X}/{:02X}/{:02X} cfgs={} ep0_mps={}",
+                stable,
                 dev.slot_id,
                 dev.root_port_id,
+                route,
+                path,
                 dev.port_id,
                 dev.speed,
                 dev.parent_hub_slot_id,
@@ -1119,11 +1133,11 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                 };
                 let slot = node
                     .slot_id
-                    .map(|id| alloc::format!(" slot={}", id))
+                    .map(|id| alloc::format!(" id=0x{:08X}", id))
                     .unwrap_or_default();
                 let parent = node
                     .parent_slot_id
-                    .map(|id| alloc::format!(" parent_slot={}", id))
+                    .map(|id| alloc::format!(" parent=0x{:08X}", id))
                     .unwrap_or_default();
                 let vidpid = match (node.vendor_id, node.product_id) {
                     (Some(vid), Some(pid)) => alloc::format!(" vidpid={:04X}:{:04X}", vid, pid),

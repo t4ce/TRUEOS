@@ -4,6 +4,8 @@ use alloc::vec::Vec;
 use crate::backend::BackendOp;
 use crate::backend::ty::*;
 use crate::err::Result;
+use crate::topology::{DeviceHandle, DeviceTree};
+use crate::DeviceId;
 
 #[cfg(kmod)]
 pub use super::backend::kmod::*;
@@ -35,6 +37,14 @@ impl USBHost {
         Ok(devices)
     }
 
+    pub async fn topology(&mut self) -> Result<DeviceTree> {
+        self.backend.topology().await
+    }
+
+    pub async fn device(&mut self, id: DeviceId) -> Result<Option<DeviceHandle>> {
+        Ok(self.topology().await?.device(id))
+    }
+
     #[cfg(kmod)]
     pub fn create_event_handler(&mut self) -> EventHandler {
         let handler = self.backend.create_event_handler();
@@ -46,6 +56,17 @@ impl USBHost {
         let mut device: Device = device.into();
         device.init().await?;
         Ok(device)
+    }
+
+    pub async fn open_device_id(&mut self, id: DeviceId) -> Result<Device> {
+        let device = self.backend.open_device_by_id(id).await?;
+        let mut device: Device = device.into();
+        device.init().await?;
+        Ok(device)
+    }
+
+    pub async fn open_handle(&mut self, handle: &DeviceHandle) -> Result<Device> {
+        self.open_device_id(handle.id()).await
     }
 }
 

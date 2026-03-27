@@ -7,6 +7,7 @@ use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::vec::Vec;
 use futures::future::BoxFuture;
+use usb_if::descriptor::{ConfigurationDescriptor, DeviceDescriptor};
 use usb_if::err::USBError;
 use usb_if::host::hub::Speed;
 // 重新导出常用类型
@@ -18,6 +19,12 @@ pub trait HubOp: Send + 'static + Any {
     fn changed_ports<'a>(&'a mut self) -> BoxFuture<'a, Result<Vec<PortChangeInfo>, USBError>>;
     fn rearm_port(&mut self, port_id: u8);
     fn slot_id(&self) -> u8;
+    fn descriptor(&self) -> Option<DeviceDescriptor> {
+        None
+    }
+    fn configuration_descriptors(&self) -> Vec<ConfigurationDescriptor> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone)]

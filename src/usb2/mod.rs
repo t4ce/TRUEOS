@@ -25,8 +25,11 @@ pub(crate) use self::hid::{hut, input};
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct UsbDeviceSummary {
+    pub stable_id: u32,
     pub slot_id: u32,
     pub port: u8,
+    pub root_port_id: u8,
+    pub route_string: u32,
     pub kind: &'static str,
     pub vid: Option<u16>,
     pub pid: Option<u16>,
@@ -86,8 +89,11 @@ pub(crate) struct TlbUsbPathHop {
 #[derive(Clone)]
 pub(crate) struct TlbUsbDevice {
     pub controller_index: usize,
+    pub stable_id: u32,
     pub slot_id: u32,
     pub root_port_id: u8,
+    pub route_string: u32,
+    pub path: Vec<u8>,
     pub port_id: u8,
     pub speed: &'static str,
     pub parent_hub_slot_id: Option<u32>,
@@ -174,99 +180,6 @@ fn controller_mmio_map(bus: u8, slot: u8, function: u8) -> Option<NonNull<u8>> {
     }
 
     crate::pci::mmio::map_mmio_region(phys_base, map_len).ok()
-}
-
-fn push_topology_node(out: &mut Vec<TlbUsbTopologyNode>, node: TlbUsbTopologyNode) {
-    let exists = out.iter().any(|known| {
-        known.controller_index == node.controller_index
-            && known.kind == node.kind
-            && known.slot_id == node.slot_id
-            && known.root_port_id == node.root_port_id
-            && known.port_id == node.port_id
-            && known.parent_slot_id == node.parent_slot_id
-    });
-    if !exists {
-        out.push(node);
-    }
-}
-
-fn build_topology_nodes(devices: &[TlbUsbDevice]) -> Vec<TlbUsbTopologyNode> {
-    let mut out = Vec::new();
-
-    for dev in devices {
-        push_topology_node(
-            &mut out,
-            TlbUsbTopologyNode {
-                controller_index: dev.controller_index,
-                kind: TlbUsbTopologyNodeKind::RootPort,
-                slot_id: None,
-                root_port_id: dev.root_port_id,
-                port_id: dev.root_port_id,
-                depth: 0,
-                parent_slot_id: None,
-                vendor_id: None,
-                product_id: None,
-                class: None,
-                subclass: None,
-                protocol: None,
-                speed: dev.speed,
-            },
-        );
-
-        let mut parent_slot_id = None;
-        for hop in dev.hub_path.iter() {
-            push_topology_node(
-                &mut out,
-                TlbUsbTopologyNode {
-                    controller_index: dev.controller_index,
-                    kind: TlbUsbTopologyNodeKind::Hub,
-                    slot_id: Some(hop.slot_id),
-                    root_port_id: dev.root_port_id,
-                    port_id: hop.port_id,
-                    depth: hop.hub_depth.saturating_add(1),
-                    parent_slot_id,
-                    vendor_id: None,
-                    product_id: None,
-                    class: Some(0x09),
-                    subclass: None,
-                    protocol: None,
-                    speed: hop.speed,
-                },
-            );
-            parent_slot_id = Some(hop.slot_id);
-        }
-
-        push_topology_node(
-            &mut out,
-            TlbUsbTopologyNode {
-                controller_index: dev.controller_index,
-                kind: TlbUsbTopologyNodeKind::Device,
-                slot_id: Some(dev.slot_id),
-                root_port_id: dev.root_port_id,
-                port_id: dev.port_id,
-                depth: dev.hub_path.len() as u8 + 1,
-                parent_slot_id,
-                vendor_id: Some(dev.vendor_id),
-                product_id: Some(dev.product_id),
-                class: Some(dev.class),
-                subclass: Some(dev.subclass),
-                protocol: Some(dev.protocol),
-                speed: dev.speed,
-            },
-        );
-    }
-
-    out.sort_by_key(|node| {
-        (
-            node.controller_index,
-            node.root_port_id,
-            node.depth,
-            node.parent_slot_id.unwrap_or(0),
-            node.slot_id.unwrap_or(0),
-            node.port_id,
-        )
-    });
-    out
 }
 
 pub(crate) fn pci_usb_controllers() -> Vec<TlbUsbController> {
@@ -396,21 +309,24 @@ pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummar
             return Vec::new();
         }
 
-        let found = match host.probe_devices().await {
-            Ok(found) => found,
+        let topology = match host.topology().await {
+            Ok(tree) => tree,
             Err(_) => return Vec::new(),
         };
 
         let mut out = Vec::new();
-        for dev_info in found.iter() {
-            let desc = dev_info.descriptor();
-            let slot_id = match host.open_device(dev_info).await {
+        for handle in topology.iter().filter(|node| !node.is_hub).cloned().map(crab_usb::DeviceHandle::from) {
+            let desc = handle.descriptor();
+            let slot_id = match host.open_handle(&handle).await {
                 Ok(device) => u32::from(device.slot_id()),
                 Err(_) => 0,
             };
             out.push(UsbDeviceSummary {
+                stable_id: handle.id().raw(),
                 slot_id,
-                port: 0,
+                port: handle.port(),
+                root_port_id: handle.location().root_port,
+                route_string: handle.location().route_string,
                 kind: classify_descriptor_kind(desc),
                 vid: Some(desc.vendor_id),
                 pid: Some(desc.product_id),
@@ -426,17 +342,17 @@ pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummar
 pub(crate) mod syscall {
     use alloc::vec;
     use alloc::vec::Vec;
-    use core::ptr::NonNull;
 
+    use crab_usb::DeviceId;
     use crab_usb::usb_if::descriptor::DescriptorType;
     use crab_usb::usb_if::host::ControlSetup;
     use crab_usb::usb_if::transfer::{Recipient, Request, RequestType};
 
     const DESC_MAX: usize = 256;
 
-    fn with_device_descriptor_read(
+    fn with_device_descriptor_read_by_id(
         controller_id: usize,
-        slot_id: u32,
+        stable_id: u32,
         setup: ControlSetup,
         length: u16,
     ) -> Option<Vec<u8>> {
@@ -449,20 +365,20 @@ pub(crate) mod syscall {
             )
             .ok()?;
             host.init().await.ok()?;
-            let found = host.probe_devices().await.ok()?;
-
-            for dev_info in found.iter() {
-                let mut device = host.open_device(dev_info).await.ok()?;
-                if u32::from(device.slot_id()) != slot_id {
-                    continue;
-                }
-                let mut buf = vec![0u8; usize::from(length).min(DESC_MAX)];
-                let read = device.control_in(setup, buf.as_mut_slice()).await.ok()?;
-                buf.truncate(read.min(buf.len()));
-                return Some(buf);
-            }
-            None
+            let handle = host.device(DeviceId(stable_id)).await.ok()??;
+            let mut device = host.open_handle(&handle).await.ok()?;
+            let mut buf = vec![0u8; usize::from(length).min(DESC_MAX)];
+            let read = device.control_in(setup, buf.as_mut_slice()).await.ok()?;
+            buf.truncate(read.min(buf.len()));
+            Some(buf)
         })
+    }
+
+    fn stable_id_for_slot(controller_id: usize, slot_id: u32) -> Option<u32> {
+        super::crabusb_service::diag_devices(controller_id)
+            .into_iter()
+            .find(|dev| dev.slot_id == slot_id)
+            .map(|dev| dev.stable_id)
     }
 
     pub fn port_reset(_controller_id: usize, _port_idx: usize) -> i32 {
@@ -477,9 +393,10 @@ pub(crate) mod syscall {
         length: u16,
         _timeout_ms: u64,
     ) -> Option<Vec<u8>> {
-        with_device_descriptor_read(
+        let stable_id = stable_id_for_slot(controller_id, slot_id)?;
+        control_get_descriptor_by_id(
             controller_id,
-            slot_id,
+            stable_id,
             ControlSetup {
                 request_type: RequestType::Standard,
                 recipient: Recipient::Device,
@@ -491,6 +408,15 @@ pub(crate) mod syscall {
         )
     }
 
+    pub fn control_get_descriptor_by_id(
+        controller_id: usize,
+        stable_id: u32,
+        setup: ControlSetup,
+        length: u16,
+    ) -> Option<Vec<u8>> {
+        with_device_descriptor_read_by_id(controller_id, stable_id, setup, length)
+    }
+
     pub fn control_get_hid_descriptor(
         controller_id: usize,
         slot_id: u32,
@@ -498,9 +424,24 @@ pub(crate) mod syscall {
         length: u16,
         _timeout_ms: u64,
     ) -> Option<Vec<u8>> {
-        with_device_descriptor_read(
+        let stable_id = stable_id_for_slot(controller_id, slot_id)?;
+        control_get_hid_descriptor_by_id(
             controller_id,
-            slot_id,
+            stable_id,
+            interface_number,
+            length,
+        )
+    }
+
+    pub fn control_get_hid_descriptor_by_id(
+        controller_id: usize,
+        stable_id: u32,
+        interface_number: u16,
+        length: u16,
+    ) -> Option<Vec<u8>> {
+        with_device_descriptor_read_by_id(
+            controller_id,
+            stable_id,
             ControlSetup {
                 request_type: RequestType::Standard,
                 recipient: Recipient::Interface,
@@ -519,9 +460,24 @@ pub(crate) mod syscall {
         length: u16,
         _timeout_ms: u64,
     ) -> Option<Vec<u8>> {
-        with_device_descriptor_read(
+        let stable_id = stable_id_for_slot(controller_id, slot_id)?;
+        control_get_hid_report_descriptor_by_id(
             controller_id,
-            slot_id,
+            stable_id,
+            interface_number,
+            length,
+        )
+    }
+
+    pub fn control_get_hid_report_descriptor_by_id(
+        controller_id: usize,
+        stable_id: u32,
+        interface_number: u16,
+        length: u16,
+    ) -> Option<Vec<u8>> {
+        with_device_descriptor_read_by_id(
+            controller_id,
+            stable_id,
             ControlSetup {
                 request_type: RequestType::Standard,
                 recipient: Recipient::Interface,
@@ -558,10 +514,12 @@ pub(crate) fn tlb_snapshot() -> TlbUsbSnapshot {
     // reprobeing a live XHCI controller here races the active crabusb BSP service.
     // Keep this passive by reading the device cache populated by the running service.
     let mut devices = Vec::new();
+    let mut topology = Vec::new();
     let mut probe_error = None;
     let mut probe_device_count = None;
     for ctrl in controllers.iter() {
         devices.extend(self::crabusb_service::diag_devices(ctrl.index));
+        topology.extend(self::crabusb_service::diag_topology(ctrl.index));
         if probe_error.is_none() {
             probe_error = self::crabusb_service::diag_probe_error(ctrl.index);
         }
@@ -569,8 +527,6 @@ pub(crate) fn tlb_snapshot() -> TlbUsbSnapshot {
             probe_device_count = self::crabusb_service::diag_probe_device_count(ctrl.index);
         }
     }
-
-    let topology = build_topology_nodes(&devices);
 
     TlbUsbSnapshot {
         controllers,

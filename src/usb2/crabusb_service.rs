@@ -14,7 +14,6 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
-use super::api::{InterfaceEndpointError, claim_interface};
 #[path = "sound/mod.rs"]
 mod sound;
 
@@ -40,7 +39,6 @@ static AUDIO_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
-static HID_STREAMS_ACTIVE: Mutex<Vec<ActiveHidStream>> = Mutex::new(Vec::new());
 static BOUNCE_MAPPINGS: Mutex<Vec<BounceMapping>> = Mutex::new(Vec::new());
 static EMPTY_PROBE_STREAK: [AtomicU32; MAX_XHCI_CONTROLLERS] =
     [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
@@ -51,6 +49,8 @@ static LAST_PROBE_DEVICE_COUNT: [AtomicU32; MAX_XHCI_CONTROLLERS] =
 static PROBE_FAIL_STREAK: [AtomicU32; MAX_XHCI_CONTROLLERS] =
     [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
 static TLB_DEVICES: [Mutex<Vec<super::TlbUsbDevice>>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
+static TLB_TOPOLOGY: [Mutex<Vec<super::TlbUsbTopologyNode>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
 
 #[derive(Clone, Copy)]
@@ -194,6 +194,45 @@ fn log_xhci_runtime_snapshot(controller_id: usize, prefix: &str) {
                 portli,
             );
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct XhciStatusBits {
+    hc_halted: bool,
+    host_system_error: bool,
+    controller_not_ready: bool,
+    host_controller_error: bool,
+}
+
+fn xhci_status_bits(controller_id: usize) -> Option<XhciStatusBits> {
+    let info = super::controller_by_index(controller_id)?;
+    let mmio = info.mmio_base.as_ptr() as *const u8;
+    unsafe {
+        let caplen = (read_mmio32(mmio, 0x00) & 0xFF) as usize;
+        let usbsts = read_mmio32(mmio, caplen + 0x04);
+        Some(XhciStatusBits {
+            hc_halted: (usbsts & (1 << 0)) != 0,
+            host_system_error: (usbsts & (1 << 2)) != 0,
+            controller_not_ready: (usbsts & (1 << 11)) != 0,
+            host_controller_error: (usbsts & (1 << 12)) != 0,
+        })
+    }
+}
+
+fn xhci_fatal_probe_state(controller_id: usize) -> Option<&'static str> {
+    let status = xhci_status_bits(controller_id)?;
+    let submit = crab_usb::debug_last_submit();
+    if status.host_system_error {
+        Some("host-system-error")
+    } else if status.host_controller_error {
+        Some("host-controller-error")
+    } else if status.hc_halted && submit.ptr != 0 {
+        Some("controller-halted-after-submit")
+    } else if status.controller_not_ready && submit.ptr != 0 {
+        Some("controller-not-ready-after-submit")
+    } else {
+        None
     }
 }
 
@@ -448,65 +487,6 @@ struct TruekeyTarget {
     out_max_packet_size: u16,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum HidBootKind {
-    Keyboard,
-    Mouse,
-    Tablet,
-}
-
-impl HidBootKind {
-    #[inline]
-    fn as_str(self) -> &'static str {
-        match self {
-            HidBootKind::Keyboard => "keyboard",
-            HidBootKind::Mouse => "mouse",
-            HidBootKind::Tablet => "tablet",
-        }
-    }
-
-    #[inline]
-    fn protocol(self) -> u8 {
-        match self {
-            HidBootKind::Keyboard => 0x01,
-            HidBootKind::Mouse => 0x02,
-            HidBootKind::Tablet => 0x00,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-struct HidBootTarget {
-    configuration_value: u8,
-    interface_number: u8,
-    alternate_setting: u8,
-    protocol: u8,
-    in_endpoint: u8,
-    in_max_packet_size: u16,
-    report_len: usize,
-    kind: HidBootKind,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct ActiveHidStream {
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-    kind: HidBootKind,
-}
-
-#[inline]
-fn endpoint_target_from_address(address: u8) -> u32 {
-    let ep_num = u32::from(address & 0x0F);
-    if ep_num == 0 {
-        1
-    } else if (address & 0x80) != 0 {
-        (ep_num * 2) + 1
-    } else {
-        ep_num * 2
-    }
-}
-
 fn tlb_transfer_type_name(transfer_type: usb_if::descriptor::EndpointType) -> &'static str {
     match transfer_type {
         usb_if::descriptor::EndpointType::Control => "ctrl",
@@ -539,9 +519,99 @@ fn topology_path_string(topology: &crab_usb::device::DeviceTopology) -> alloc::s
     out
 }
 
+fn topology_location_string(location: &crab_usb::topology::DeviceLocation) -> alloc::string::String {
+    let mut out = alloc::format!("rp{}", location.root_port);
+    for port in location.path.iter().skip(1) {
+        out.push_str(&alloc::format!("->p{}", port));
+    }
+    out
+}
+
+fn push_tlb_topology_node(
+    out: &mut Vec<super::TlbUsbTopologyNode>,
+    node: super::TlbUsbTopologyNode,
+) {
+    let exists = out.iter().any(|known| {
+        known.controller_index == node.controller_index
+            && known.kind == node.kind
+            && known.slot_id == node.slot_id
+            && known.root_port_id == node.root_port_id
+            && known.port_id == node.port_id
+            && known.parent_slot_id == node.parent_slot_id
+    });
+    if !exists {
+        out.push(node);
+    }
+}
+
+fn snapshot_tlb_topology(
+    controller_id: usize,
+    topology: &crab_usb::topology::DeviceTree,
+) -> Vec<super::TlbUsbTopologyNode> {
+    let mut out = Vec::new();
+
+    for node in topology.iter() {
+        push_tlb_topology_node(
+            &mut out,
+            super::TlbUsbTopologyNode {
+                controller_index: controller_id,
+                kind: super::TlbUsbTopologyNodeKind::RootPort,
+                slot_id: None,
+                root_port_id: node.location.root_port,
+                port_id: node.location.root_port,
+                depth: 0,
+                parent_slot_id: None,
+                vendor_id: None,
+                product_id: None,
+                class: None,
+                subclass: None,
+                protocol: None,
+                speed: "unknown",
+            },
+        );
+
+        push_tlb_topology_node(
+            &mut out,
+            super::TlbUsbTopologyNode {
+                controller_index: controller_id,
+                kind: if node.is_hub {
+                    super::TlbUsbTopologyNodeKind::Hub
+                } else {
+                    super::TlbUsbTopologyNodeKind::Device
+                },
+                slot_id: Some(node.id.raw()),
+                root_port_id: node.location.root_port,
+                port_id: node.port,
+                depth: node.location.path.len().saturating_sub(1) as u8,
+                parent_slot_id: node.parent.map(|id| id.raw()),
+                vendor_id: Some(node.descriptor.vendor_id),
+                product_id: Some(node.descriptor.product_id),
+                class: Some(node.descriptor.class),
+                subclass: Some(node.descriptor.subclass),
+                protocol: Some(node.descriptor.protocol),
+                speed: "unknown",
+            },
+        );
+    }
+
+    out.sort_by_key(|node| {
+        (
+            node.controller_index,
+            node.root_port_id,
+            node.depth,
+            node.parent_slot_id.unwrap_or(0),
+            node.slot_id.unwrap_or(0),
+            node.port_id,
+        )
+    });
+
+    out
+}
+
 fn snapshot_tlb_device(controller_id: usize, dev: &crab_usb::DeviceInfo) -> super::TlbUsbDevice {
     let desc = dev.descriptor();
     let topology = dev.topology();
+    let location = dev.location();
     let mut configurations = Vec::new();
     for cfg in dev.configurations().iter() {
         let mut interfaces = Vec::new();
@@ -576,8 +646,11 @@ fn snapshot_tlb_device(controller_id: usize, dev: &crab_usb::DeviceInfo) -> supe
 
     super::TlbUsbDevice {
         controller_index: controller_id,
+        stable_id: location.device_id().raw(),
         slot_id: dev.id() as u32,
         root_port_id: topology.root_port_id,
+        route_string: location.route_string,
+        path: location.path,
         port_id: topology.port_id,
         speed: tlb_speed_name(topology.port_speed),
         parent_hub_slot_id: topology.parent_hub_slot_id.map(u32::from),
@@ -617,6 +690,24 @@ fn update_tlb_devices(controller_id: usize, devices: &[crab_usb::DeviceInfo]) {
     }
 }
 
+fn update_tlb_topology(controller_id: usize, topology: &crab_usb::topology::DeviceTree) {
+    let mut cache = TLB_TOPOLOGY[controller_id].lock();
+    *cache = snapshot_tlb_topology(controller_id, topology);
+}
+
+async fn refresh_tlb_topology(host: &mut USBHost, controller_id: usize) {
+    match host.topology().await {
+        Ok(topology) => update_tlb_topology(controller_id, &topology),
+        Err(err) => {
+            crate::log!(
+                "crabusb: topology refresh failed on controller {}: {:?}\n",
+                controller_id,
+                err
+            );
+        }
+    }
+}
+
 async fn handle_detected_device(
     host: &mut USBHost,
     spawner: &Spawner,
@@ -626,12 +717,15 @@ async fn handle_detected_device(
 ) {
     let desc = dev.descriptor();
     let topology = dev.topology();
+    let location = dev.location();
     crate::log!(
-        "crabusb: dev {:04X}:{:04X} slot={} topo={} port={} speed={}\n",
+        "crabusb: dev {:04X}:{:04X} slot={} stable=0x{:08X} topo={} route=0x{:06X} port={} speed={}\n",
         desc.vendor_id,
         desc.product_id,
         dev.id(),
-        topology_path_string(&topology),
+        dev.stable_id().raw(),
+        topology_location_string(&location),
+        location.route_string,
         topology.port_id,
         tlb_speed_name(topology.port_speed),
     );
@@ -644,7 +738,14 @@ async fn handle_detected_device(
     {
         return;
     }
-    if maybe_start_hid_boot_streams(host, dev, spawner, controller_id as u32).await {
+    if super::hid::mediacontrol::maybe_start_media_control(host, dev, spawner, controller_id as u32)
+        .await
+    {
+        return;
+    }
+    if super::hid::boot::maybe_start_hid_boot_streams(host, dev, spawner, controller_id as u32)
+        .await
+    {
         return;
     }
     if descriptor_has_audio_candidate(dev) {
@@ -660,57 +761,6 @@ async fn handle_detected_device(
     log_opened_device_graph(host, dev_idx, dev).await;
 }
 
-fn pick_hid_boot_targets(
-    configs: &[usb_if::descriptor::ConfigurationDescriptor],
-) -> Vec<HidBootTarget> {
-    let mut out = Vec::new();
-
-    for config in configs.iter() {
-        for interface in config.interfaces.iter() {
-            for alt in interface.alt_settings.iter() {
-                let kind = match (alt.class, alt.subclass, alt.protocol) {
-                    (0x03, 0x01, 0x01) => HidBootKind::Keyboard,
-                    (0x03, 0x01, 0x02) => HidBootKind::Mouse,
-                    _ if super::hid::tablet::matches_interface(
-                        alt.class,
-                        alt.subclass,
-                        alt.protocol,
-                    ) =>
-                    {
-                        HidBootKind::Tablet
-                    }
-                    _ => continue,
-                };
-
-                let Some(endpoint) = alt.endpoints.iter().find(|ep| {
-                    ep.transfer_type == usb_if::descriptor::EndpointType::Interrupt
-                        && ep.direction == usb_if::transfer::Direction::In
-                }) else {
-                    continue;
-                };
-
-                let report_len = match kind {
-                    HidBootKind::Keyboard => 8,
-                    HidBootKind::Mouse => 4,
-                    HidBootKind::Tablet => super::hid::tablet::report_len(endpoint.max_packet_size),
-                };
-                out.push(HidBootTarget {
-                    configuration_value: config.configuration_value,
-                    interface_number: alt.interface_number,
-                    alternate_setting: alt.alternate_setting,
-                    protocol: alt.protocol,
-                    in_endpoint: endpoint.address,
-                    in_max_packet_size: endpoint.max_packet_size,
-                    report_len,
-                    kind,
-                });
-            }
-        }
-    }
-
-    out
-}
-
 fn descriptor_has_audio_candidate(dev_info: &crab_usb::DeviceInfo) -> bool {
     dev_info.interface_descriptors().any(|iface| {
         iface.class == 0x01
@@ -718,25 +768,6 @@ fn descriptor_has_audio_candidate(dev_info: &crab_usb::DeviceInfo) -> bool {
                 ep.transfer_type == usb_if::descriptor::EndpointType::Isochronous
                     && ep.direction == usb_if::transfer::Direction::Out
             })
-    })
-}
-
-fn register_active_hid_stream(stream: ActiveHidStream) -> bool {
-    let mut streams = HID_STREAMS_ACTIVE.lock();
-    if streams.iter().any(|active| *active == stream) {
-        return false;
-    }
-    streams.push(stream);
-    true
-}
-
-fn unregister_active_hid_stream(stream: ActiveHidStream) -> bool {
-    let mut streams = HID_STREAMS_ACTIVE.lock();
-    if let Some(idx) = streams.iter().position(|active| *active == stream) {
-        streams.remove(idx);
-    }
-    !streams.iter().any(|active| {
-        active.controller_id == stream.controller_id && active.slot_id == stream.slot_id
     })
 }
 
@@ -756,386 +787,6 @@ async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::O
     .await
 }
 
-#[embassy_executor::task(pool_size = 8)]
-async fn hid_boot_stream_task(
-    mut device: crab_usb::Device,
-    controller_id: u32,
-    target: HidBootTarget,
-) {
-    let desc = device.descriptor();
-    let vendor_id = desc.vendor_id;
-    let product_id = desc.product_id;
-    let slot_id = u32::from(device.slot_id());
-    let ep_target = endpoint_target_from_address(target.in_endpoint);
-    let active_stream = ActiveHidStream {
-        controller_id,
-        slot_id,
-        ep_target,
-        kind: target.kind,
-    };
-    let mut boot_protocol_ok = false;
-    let mut set_idle_ok = false;
-
-    if let Err(err) = device
-        .ep_ctrl()
-        .set_configuration(target.configuration_value)
-        .await
-    {
-        crate::log!(
-            "crabusb: hid {} {:04X}:{:04X} set cfg={} failed: {:?}\n",
-            target.kind.as_str(),
-            vendor_id,
-            product_id,
-            target.configuration_value,
-            err
-        );
-    }
-
-    let mut interface = match claim_interface(
-        &mut device,
-        target.interface_number,
-        target.alternate_setting,
-    )
-    .await
-    {
-        Ok(interface) => interface,
-        Err(err) => {
-            crate::log!(
-                "crabusb: hid {} {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
-                target.kind.as_str(),
-                vendor_id,
-                product_id,
-                target.interface_number,
-                target.alternate_setting,
-                err
-            );
-            let _ = unregister_active_hid_stream(active_stream);
-            return;
-        }
-    };
-
-    if matches!(target.kind, HidBootKind::Mouse | HidBootKind::Keyboard) {
-        match interface
-            .device()
-            .control_out(
-                usb_if::host::ControlSetup {
-                    request_type: usb_if::transfer::RequestType::Class,
-                    recipient: usb_if::transfer::Recipient::Interface,
-                    request: usb_if::transfer::Request::Other(0x0B),
-                    value: 0,
-                    index: u16::from(target.interface_number),
-                },
-                &[],
-            )
-            .await
-        {
-            Ok(_) => {
-                boot_protocol_ok = true;
-            }
-            Err(err) => {
-                crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} boot protocol if#{} failed: {:?}\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    target.interface_number,
-                    err
-                );
-            }
-        }
-
-        match interface
-            .device()
-            .control_out(
-                usb_if::host::ControlSetup {
-                    request_type: usb_if::transfer::RequestType::Class,
-                    recipient: usb_if::transfer::Recipient::Interface,
-                    request: usb_if::transfer::Request::Other(0x0A),
-                    value: 1 << 8,
-                    index: u16::from(target.interface_number),
-                },
-                &[],
-            )
-            .await
-        {
-            Ok(_) => {
-                set_idle_ok = true;
-            }
-            Err(err) => {
-                crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 failed: {:?}\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    target.interface_number,
-                    err
-                );
-            }
-        }
-    }
-
-    if matches!(target.kind, HidBootKind::Tablet) {
-        match interface
-            .device()
-            .control_out(
-                usb_if::host::ControlSetup {
-                    request_type: usb_if::transfer::RequestType::Class,
-                    recipient: usb_if::transfer::Recipient::Interface,
-                    request: usb_if::transfer::Request::Other(0x0A),
-                    value: 1 << 8,
-                    index: u16::from(target.interface_number),
-                },
-                &[],
-            )
-            .await
-        {
-            Ok(_) => {
-                set_idle_ok = true;
-            }
-            Err(err) => {
-                crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 failed: {:?}\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    target.interface_number,
-                    err
-                );
-            }
-        }
-    }
-
-    let mut interrupt_in = match interface.endpoint_interrupt_in(target.in_endpoint).await {
-        Ok(endpoint) => endpoint,
-        Err(InterfaceEndpointError::WrongKind { .. }) => {
-            crate::log!(
-                "crabusb: hid {} {:04X}:{:04X} interrupt endpoint kind mismatch ep=0x{:02X}\n",
-                target.kind.as_str(),
-                vendor_id,
-                product_id,
-                target.in_endpoint
-            );
-            let _ = unregister_active_hid_stream(active_stream);
-            return;
-        }
-        Err(InterfaceEndpointError::Usb(err)) => {
-            crate::log!(
-                "crabusb: hid {} {:04X}:{:04X} interrupt open failed ep=0x{:02X}: {:?}\n",
-                target.kind.as_str(),
-                vendor_id,
-                product_id,
-                target.in_endpoint,
-                err
-            );
-            let _ = unregister_active_hid_stream(active_stream);
-            return;
-        }
-    };
-
-    crate::log!(
-        "crabusb: hid {} {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} ep_target={} proto={:02X} boot={} idle={}\n",
-        target.kind.as_str(),
-        vendor_id,
-        product_id,
-        slot_id,
-        target.interface_number,
-        target.alternate_setting,
-        target.configuration_value,
-        target.in_endpoint,
-        target.in_max_packet_size,
-        ep_target,
-        target.protocol,
-        boot_protocol_ok,
-        set_idle_ok
-    );
-
-    let mut report = Vec::from_iter(core::iter::repeat_n(
-        0u8,
-        usize::from(target.in_max_packet_size.max(target.report_len as u16)),
-    ));
-    let mut timeout_logs = 0u32;
-
-    loop {
-        match with_timeout_or_none(
-            interrupt_in.submit_and_wait(report.as_mut_slice()),
-            HID_INTERRUPT_TIMEOUT_MS,
-        )
-        .await
-        {
-            None => {
-                timeout_logs = timeout_logs.wrapping_add(1);
-                if timeout_logs <= 8 || timeout_logs.is_multiple_of(32) {
-                    crate::log!(
-                        "crabusb: hid {} {:04X}:{:04X} interrupt timeout ep=0x{:02X} count={}\n",
-                        target.kind.as_str(),
-                        vendor_id,
-                        product_id,
-                        target.in_endpoint,
-                        timeout_logs
-                    );
-                }
-                continue;
-            }
-            Some(result) => match result {
-                Ok(read) => {
-                    timeout_logs = 0;
-                    if read == 0 {
-                        Timer::after(EmbassyDuration::from_millis(1)).await;
-                        continue;
-                    }
-
-                    let sample = &report[..read.min(report.len())];
-                    match target.kind {
-                        HidBootKind::Keyboard => super::handle_keyboard_boot_report(
-                            controller_id,
-                            slot_id,
-                            ep_target,
-                            sample,
-                        ),
-                        HidBootKind::Mouse => super::handle_mouse_boot_report(
-                            controller_id,
-                            slot_id,
-                            ep_target,
-                            sample,
-                        ),
-                        HidBootKind::Tablet => {
-                            super::hid::tablet::handle_packet(
-                                vendor_id,
-                                product_id,
-                                target.in_endpoint,
-                                sample,
-                            );
-                        }
-                    }
-                }
-                Err(err) => {
-                    crate::log!(
-                        "crabusb: hid {} {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
-                        target.kind.as_str(),
-                        vendor_id,
-                        product_id,
-                        target.in_endpoint,
-                        err
-                    );
-                    break;
-                }
-            },
-        }
-    }
-
-    if unregister_active_hid_stream(active_stream) {
-        super::remove_hid_slot(controller_id, slot_id);
-    }
-}
-
-async fn maybe_start_hid_boot_streams(
-    host: &mut USBHost,
-    dev_info: &crab_usb::DeviceInfo,
-    spawner: &Spawner,
-    controller_id: u32,
-) -> bool {
-    let desc = dev_info.descriptor();
-    let vendor_id = desc.vendor_id;
-    let product_id = desc.product_id;
-    let targets = pick_hid_boot_targets(dev_info.configurations());
-    if targets.is_empty() {
-        let hid_iface_count = dev_info
-            .interface_descriptors()
-            .filter(|iface| iface.class == 0x03)
-            .count();
-        if hid_iface_count != 0 {
-            crate::log!(
-                "crabusb: hid {:04X}:{:04X} found {} HID interface(s) but no boot/tablet targets\n",
-                vendor_id,
-                product_id,
-                hid_iface_count
-            );
-        }
-        return false;
-    }
-
-    crate::log!(
-        "crabusb: hid {:04X}:{:04X} candidate targets={}\n",
-        vendor_id,
-        product_id,
-        targets.len()
-    );
-
-    let mut started_any = false;
-
-    for target in targets {
-        crate::log!(
-            "crabusb: hid {:04X}:{:04X} target kind={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} proto={:02X}\n",
-            vendor_id,
-            product_id,
-            target.kind.as_str(),
-            target.interface_number,
-            target.alternate_setting,
-            target.configuration_value,
-            target.in_endpoint,
-            target.in_max_packet_size,
-            target.protocol
-        );
-        let device = match host.open_device(dev_info).await {
-            Ok(device) => device,
-            Err(err) => {
-                crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} open failed: {:?}\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    err
-                );
-                break;
-            }
-        };
-
-        let slot_id = u32::from(device.slot_id());
-        let ep_target = endpoint_target_from_address(target.in_endpoint);
-        let active_stream = ActiveHidStream {
-            controller_id,
-            slot_id,
-            ep_target,
-            kind: target.kind,
-        };
-        if !register_active_hid_stream(active_stream) {
-            continue;
-        }
-
-        match spawner.spawn(hid_boot_stream_task(device, controller_id, target)) {
-            Ok(()) => {
-                started_any = true;
-                crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} handoff if#{} alt={} cfg={} int_in=0x{:02X} mps={} proto={:02X}\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    target.interface_number,
-                    target.alternate_setting,
-                    target.configuration_value,
-                    target.in_endpoint,
-                    target.in_max_packet_size,
-                    target.protocol
-                );
-            }
-            Err(err) => {
-                let _ = unregister_active_hid_stream(active_stream);
-                crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} spawn failed if#{} alt={} ep=0x{:02X}: {:?}\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    target.interface_number,
-                    target.alternate_setting,
-                    target.in_endpoint,
-                    err
-                );
-            }
-        }
-    }
-
-    started_any
-}
 
 fn parse_wav_pcm_s16_stereo_48k(bytes: &[u8]) -> Option<(usize, usize)> {
     fn le_u16(s: &[u8]) -> Option<u16> {
@@ -2647,6 +2298,7 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                     EMPTY_PROBE_STREAK[controller_id].store(0, Ordering::Release);
                     NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
                     update_tlb_devices(controller_id, &devices);
+                    refresh_tlb_topology(host, controller_id).await;
                     crate::log!("crabusb: discovered {} new device(s)\n", devices.len());
                     for dev in devices.iter() {
                         let desc = dev.descriptor();
@@ -2687,6 +2339,16 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                     err,
                     fail_streak
                 );
+                if let Some(reason) = xhci_fatal_probe_state(controller_id) {
+                    crate::log!(
+                        "crabusb: controller {} fatal xhci state during probe failure ({}); rebinding immediately\n",
+                        controller_id,
+                        reason
+                    );
+                    PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
+                    uninstall_event_handler(controller_id);
+                    return false;
+                }
                 if fail_streak >= 2 {
                     crate::log!(
                         "crabusb: controller {} forcing host rebind after repeated probe failures\n",
@@ -2719,6 +2381,16 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                 CRABUSB_PROBE_TIMEOUT_MS,
                 fail_streak
             );
+            if let Some(reason) = xhci_fatal_probe_state(controller_id) {
+                crate::log!(
+                    "crabusb: controller {} fatal xhci state during probe timeout ({}); rebinding immediately\n",
+                    controller_id,
+                    reason
+                );
+                PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
+                uninstall_event_handler(controller_id);
+                return false;
+            }
             if fail_streak >= 2 {
                 crate::log!(
                     "crabusb: controller {} forcing host rebind after repeated probe timeouts\n",
@@ -2759,12 +2431,14 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                     LAST_PROBE_STATE[info.index].store(1, Ordering::Release);
                 }
                 update_tlb_devices(info.index, &devices);
+                refresh_tlb_topology(host, info.index).await;
                 crate::log!("crabusb: scout devices={}\n", devices.len());
                 for (dev_idx, dev) in devices.iter().enumerate() {
                     let desc = dev.descriptor();
                     let topology = dev.topology();
+                    let location = dev.location();
                     crate::log!(
-                        "crabusb: scout dev#{} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} cfgs={} topo={} port={} speed={}\n",
+                        "crabusb: scout dev#{} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} cfgs={} stable=0x{:08X} topo={} route=0x{:06X} port={} speed={}\n",
                         dev_idx,
                         desc.vendor_id,
                         desc.product_id,
@@ -2772,7 +2446,9 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                         desc.subclass,
                         desc.protocol,
                         dev.configurations().len(),
-                        topology_path_string(&topology),
+                        dev.stable_id().raw(),
+                        topology_location_string(&location),
+                        location.route_string,
                         topology.port_id,
                         tlb_speed_name(topology.port_speed),
                     );
@@ -2797,6 +2473,14 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                 LAST_PROBE_STATE[info.index].store(3, Ordering::Release);
                 LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
                 crate::log!("crabusb: scout probe failed: {:?}\n", err);
+                if let Some(reason) = xhci_fatal_probe_state(info.index) {
+                    crate::log!(
+                        "crabusb: controller {} fatal xhci state during scout failure ({}); rebinding immediately\n",
+                        info.index,
+                        reason
+                    );
+                    uninstall_event_handler(info.index);
+                }
             }
         },
         crate::wait::Either::Second(_) => {
@@ -2808,6 +2492,14 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                 "crabusb: scout probe timeout after {}ms\n",
                 CRABUSB_PROBE_TIMEOUT_MS
             );
+            if let Some(reason) = xhci_fatal_probe_state(info.index) {
+                crate::log!(
+                    "crabusb: controller {} fatal xhci state during scout timeout ({}); rebinding immediately\n",
+                    info.index,
+                    reason
+                );
+                uninstall_event_handler(info.index);
+            }
         }
     }
     crate::log!("crabusb: scout end\n");
@@ -2929,6 +2621,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
         PROBE_FAIL_STREAK[info.index].store(0, Ordering::Release);
         TLB_DEVICES[info.index].lock().clear();
+        TLB_TOPOLOGY[info.index].lock().clear();
         Timer::after(EmbassyDuration::from_millis(CRABUSB_INITIAL_SETTLE_MS)).await;
         crab_scout_once(&mut host, info, &spawner).await;
 
@@ -3017,6 +2710,14 @@ pub(super) fn diag_devices(controller_id: usize) -> Vec<super::TlbUsbDevice> {
     }
 
     TLB_DEVICES[controller_id].lock().clone()
+}
+
+pub(super) fn diag_topology(controller_id: usize) -> Vec<super::TlbUsbTopologyNode> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return Vec::new();
+    }
+
+    TLB_TOPOLOGY[controller_id].lock().clone()
 }
 
 pub(super) fn diag_probe_error(controller_id: usize) -> Option<&'static str> {

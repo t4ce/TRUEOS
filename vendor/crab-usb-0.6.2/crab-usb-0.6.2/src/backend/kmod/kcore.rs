@@ -14,11 +14,12 @@ use super::osal::Kernel;
 use crate::{
     Device, DeviceAddressInfo,
     backend::{
-        BackendOp,
+        BackendOp, DeviceId,
         kmod::hub::{Hub, HubDevice, HubInfo, HubOp, PortChangeInfo},
         ty::{DeviceInfoOp, DeviceOp, EventHandlerOp},
     },
     device::{DeviceTopology, DeviceTopologyHop},
+    topology::{DeviceLocation, DeviceNode, DeviceTree},
 };
 
 pub trait CoreOp: Send + 'static {
@@ -42,6 +43,7 @@ pub struct Core {
     hubs: Arena<Hub>,
     root_hub: Option<Id<Hub>>,
     inited_devices: BTreeMap<usize, Box<dyn DeviceOp>>,
+    discovered_devices: BTreeMap<usize, DeviceInfo>,
 }
 
 impl Core {
@@ -51,6 +53,7 @@ impl Core {
             backend: Box::new(backend),
             hubs: Arena::new(),
             inited_devices: BTreeMap::new(),
+            discovered_devices: BTreeMap::new(),
         }
     }
 
@@ -61,6 +64,177 @@ impl Core {
             out.insert(id, info);
         }
         out
+    }
+
+    fn device_location(
+        root_port_id: u8,
+        parent_hub: Option<Id<Hub>>,
+        port_id: u8,
+        infos: &BTreeMap<Id<Hub>, HubInfo>,
+    ) -> DeviceLocation {
+        let mut hops = Vec::new();
+        let mut parent = parent_hub;
+        while let Some(id) = parent {
+            let Some(info) = infos.get(&id) else {
+                break;
+            };
+            if info.hub_depth >= 0 {
+                hops.push(info.port_id);
+            }
+            parent = info.parent;
+        }
+        hops.reverse();
+
+        let mut path = Vec::with_capacity(hops.len() + 2);
+        path.push(root_port_id);
+        path.extend(hops.iter().copied());
+        if port_id != 0 {
+            path.push(port_id);
+        }
+
+        let mut route_string = 0u32;
+        for (idx, port) in hops
+            .iter()
+            .copied()
+            .chain((port_id != 0).then_some(port_id))
+            .take(5)
+            .enumerate()
+        {
+            let nibble = u32::from(port.min(15));
+            route_string |= nibble << (idx * 4);
+        }
+
+        DeviceLocation {
+            root_port: root_port_id,
+            route_string,
+            path,
+        }
+    }
+
+    fn build_topology(&self) -> DeviceTree {
+        let infos = self.hub_infos();
+        let mut nodes = Vec::new();
+
+        for (hub_id, hub) in self.hubs.iter() {
+            if self.root_hub == Some(hub_id) {
+                continue;
+            }
+
+            let mut current = Some(hub_id);
+            let mut root_port_id = 0u8;
+            while let Some(id) = current {
+                let Some(info) = infos.get(&id) else {
+                    break;
+                };
+                if info.hub_depth == -1 {
+                    root_port_id = info.port_id;
+                    break;
+                }
+                current = info.parent;
+            }
+            if root_port_id == 0 {
+                continue;
+            }
+
+            let location =
+                Self::device_location(root_port_id, hub.info.parent, hub.info.port_id, &infos);
+            let parent = hub.info.parent.and_then(|id| {
+                infos.get(&id).and_then(|info| {
+                    (info.hub_depth >= 0).then(|| {
+                        let location =
+                            Self::device_location(root_port_id, info.parent, info.port_id, &infos);
+                        location.device_id()
+                    })
+                })
+            });
+            nodes.push(DeviceNode {
+                id: location.device_id(),
+                descriptor: hub
+                    .backend
+                    .descriptor()
+                    .expect("non-root hub should expose a descriptor"),
+                configurations: hub.backend.configuration_descriptors(),
+                location,
+                parent,
+                port: hub.info.port_id,
+                is_hub: true,
+            });
+        }
+
+        for dev in self.discovered_devices.values() {
+            let topology = dev.topology();
+            let location = Self::device_location(
+                topology.root_port_id,
+                dev.addr_info.parent_hub,
+                topology.port_id,
+                &infos,
+            );
+            let parent = dev.addr_info.parent_hub.and_then(|id| {
+                infos.get(&id).and_then(|info| {
+                    (info.hub_depth >= 0).then(|| {
+                        let parent_loc = Self::device_location(
+                            topology.root_port_id,
+                            info.parent,
+                            info.port_id,
+                            &infos,
+                        );
+                        parent_loc.device_id()
+                    })
+                })
+            });
+            nodes.push(DeviceNode {
+                id: location.device_id(),
+                descriptor: dev.desc.clone(),
+                configurations: dev.config_desc.clone(),
+                location,
+                parent,
+                port: topology.port_id,
+                is_hub: false,
+            });
+        }
+
+        nodes.sort_by_key(|node| {
+            (
+                node.location.root_port,
+                node.location.path.len(),
+                node.location.route_string,
+                u8::from(node.is_hub),
+            )
+        });
+
+        DeviceTree { nodes }
+    }
+
+    fn discovered_leaf_by_stable_id(&self, id: DeviceId) -> Option<DeviceInfo> {
+        let infos = self.hub_infos();
+        self.discovered_devices.values().find_map(|dev| {
+            let topology = dev.topology();
+            let location = Self::device_location(
+                topology.root_port_id,
+                dev.addr_info.parent_hub,
+                topology.port_id,
+                &infos,
+            );
+            (location.device_id() == id).then(|| dev.clone())
+        })
+    }
+
+    async fn open_leaf_device(&mut self, dev_info: DeviceInfo) -> Result<Box<dyn DeviceOp>, USBError> {
+        if let Some(device) = self.inited_devices.remove(&dev_info.id) {
+            return Ok(device);
+        }
+
+        info!(
+            "crabusb/kcore: reopening stable leaf device id=0x{:08x} runtime_id={} root_port={} port={} speed={:?}",
+            dev_info.stable_id().raw(),
+            dev_info.id,
+            dev_info.addr_info.root_port_id,
+            dev_info.addr_info.port_id,
+            dev_info.addr_info.port_speed
+        );
+        self.backend
+            .new_addressed_device(dev_info.addr_info.clone())
+            .await
     }
 
     async fn _probe_devices(&mut self) -> Result<(bool, Vec<Box<dyn DeviceInfoOp>>), USBError> {
@@ -165,9 +339,10 @@ impl Core {
 
                     self.inited_devices.insert(device_id, device);
 
-                    let device_info =
-                        Box::new(DeviceInfo::new(device_id, desc, &configs, reopen_info))
-                            as Box<dyn DeviceInfoOp>;
+                    let device_info = DeviceInfo::new(device_id, desc, &configs, reopen_info);
+                    self.discovered_devices
+                        .insert(device_id, device_info.clone());
+                    let device_info = Box::new(device_info) as Box<dyn DeviceInfoOp>;
 
                     info!("crabusb/kcore: device id={} kept as leaf device", device_id);
                     out.push(device_info);
@@ -226,30 +401,48 @@ impl BackendOp for Core {
         self.probe_devices().boxed()
     }
 
+    fn topology<'a>(&'a mut self) -> BoxFuture<'a, Result<DeviceTree, USBError>> {
+        async {
+            self.probe_devices().await?;
+            Ok(self.build_topology())
+        }
+        .boxed()
+    }
+
     fn open_device<'a>(
         &'a mut self,
         dev: &'a dyn crate::backend::ty::DeviceInfoOp,
     ) -> LocalBoxFuture<'a, Result<Box<dyn DeviceOp>, USBError>> {
         async {
-            let device = if let Some(device) = self.inited_devices.remove(&dev.id()) {
-                device
-            } else if let Some(dev_info) = (dev as &dyn core::any::Any).downcast_ref::<DeviceInfo>()
-            {
-                info!(
-                    "crabusb/kcore: reopening consumed leaf device id={} root_port={} port={} speed={:?}",
-                    dev_info.id,
-                    dev_info.addr_info.root_port_id,
-                    dev_info.addr_info.port_id,
-                    dev_info.addr_info.port_speed
-                );
-                self.backend
-                    .new_addressed_device(dev_info.addr_info.clone())
-                    .await?
-            } else {
-                panic!("Device id {} not found in inited_devices", dev.id());
-            };
+            if let Some(dev_info) = (dev as &dyn core::any::Any).downcast_ref::<DeviceInfo>() {
+                return self.open_leaf_device(dev_info.clone()).await;
+            }
 
-            Ok(device)
+            if let Some(device) = self.inited_devices.remove(&dev.id()) {
+                return Ok(device);
+            }
+
+            Err(USBError::Other(anyhow!(
+                "device {} not found in session cache",
+                dev.id()
+            )))
+        }
+        .boxed()
+    }
+
+    fn open_device_by_id<'a>(
+        &'a mut self,
+        id: DeviceId,
+    ) -> LocalBoxFuture<'a, Result<Box<dyn DeviceOp>, USBError>> {
+        async move {
+            self.probe_devices().await?;
+            let Some(dev_info) = self.discovered_leaf_by_stable_id(id) else {
+                return Err(USBError::Other(anyhow!(
+                    "device 0x{:08x} not found in topology",
+                    id.raw()
+                )));
+            };
+            self.open_leaf_device(dev_info).await
         }
         .boxed()
     }
@@ -281,6 +474,17 @@ impl DeviceInfo {
             addr_info,
         }
     }
+
+    fn stable_id(&self) -> DeviceId {
+        let topology = self.topology();
+        let location = Core::device_location(
+            topology.root_port_id,
+            self.addr_info.parent_hub,
+            topology.port_id,
+            &self.addr_info.infos,
+        );
+        location.device_id()
+    }
 }
 
 impl DeviceInfoOp for DeviceInfo {
@@ -307,12 +511,14 @@ impl DeviceInfoOp for DeviceInfo {
             let Some(info) = self.addr_info.infos.get(&id) else {
                 break;
             };
-            path.push(DeviceTopologyHop {
-                slot_id: info.slot_id,
-                port_id: info.port_id,
-                hub_depth: info.hub_depth.max(0) as u8,
-                speed: info.speed,
-            });
+            if info.hub_depth >= 0 {
+                path.push(DeviceTopologyHop {
+                    slot_id: info.slot_id,
+                    port_id: info.port_id,
+                    hub_depth: info.hub_depth as u8,
+                    speed: info.speed,
+                });
+            }
             parent = info.parent;
         }
         path.reverse();
