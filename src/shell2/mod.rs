@@ -1000,7 +1000,7 @@ fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: ch
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[embassy_executor::task(pool_size = 3)]
 pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     io.init();
     register_output(io);

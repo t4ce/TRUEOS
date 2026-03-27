@@ -1036,8 +1036,12 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         {
             emitted_any = true;
             out.push(alloc::format!(
-                "  dev slot={} vidpid={:04X}:{:04X} dev={:02X}/{:02X}/{:02X} cfgs={} ep0_mps={}",
+                "  dev slot={} rp={} port={} speed={} parent={:?} vidpid={:04X}:{:04X} dev={:02X}/{:02X}/{:02X} cfgs={} ep0_mps={}",
                 dev.slot_id,
+                dev.root_port_id,
+                dev.port_id,
+                dev.speed,
+                dev.parent_hub_slot_id,
                 dev.vendor_id,
                 dev.product_id,
                 dev.class,
@@ -1046,6 +1050,16 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                 dev.num_configurations,
                 dev.max_packet_size_0
             ));
+
+            if !dev.hub_path.is_empty() {
+                let path = dev
+                    .hub_path
+                    .iter()
+                    .map(|hop| alloc::format!("hub{}:p{}@{}", hop.slot_id, hop.port_id, hop.speed))
+                    .collect::<alloc::vec::Vec<_>>()
+                    .join(" -> ");
+                out.push(alloc::format!("    path {}", path));
+            }
 
             for cfg in dev.configurations.iter() {
                 out.push(alloc::format!(
@@ -1088,6 +1102,45 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
 
         if !emitted_any {
             out.push(alloc::format!("  (no leaf devices cached)"));
+        }
+
+        let topo_nodes: alloc::vec::Vec<_> = snapshot
+            .topology
+            .iter()
+            .filter(|node| node.controller_index == ctrl_info.index)
+            .collect();
+        if !topo_nodes.is_empty() {
+            out.push(alloc::format!("  topology:"));
+            for node in topo_nodes {
+                let kind = match node.kind {
+                    crate::usb2::TlbUsbTopologyNodeKind::RootPort => "root-port",
+                    crate::usb2::TlbUsbTopologyNodeKind::Hub => "hub",
+                    crate::usb2::TlbUsbTopologyNodeKind::Device => "device",
+                };
+                let slot = node
+                    .slot_id
+                    .map(|id| alloc::format!(" slot={}", id))
+                    .unwrap_or_default();
+                let parent = node
+                    .parent_slot_id
+                    .map(|id| alloc::format!(" parent_slot={}", id))
+                    .unwrap_or_default();
+                let vidpid = match (node.vendor_id, node.product_id) {
+                    (Some(vid), Some(pid)) => alloc::format!(" vidpid={:04X}:{:04X}", vid, pid),
+                    _ => alloc::string::String::new(),
+                };
+                out.push(alloc::format!(
+                    "    {} rp={} port={} depth={} speed={}{}{}{}",
+                    kind,
+                    node.root_port_id,
+                    node.port_id,
+                    node.depth,
+                    node.speed,
+                    slot,
+                    parent,
+                    vidpid
+                ));
+            }
         }
 
         if let Some(err) = snapshot.probe_error {

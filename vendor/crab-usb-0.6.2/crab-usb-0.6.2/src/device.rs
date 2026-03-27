@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, string::String};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use anyhow::anyhow;
 use core::{
     any::Any,
@@ -19,6 +19,23 @@ use crate::backend::ty::{DeviceInfoOp, DeviceOp, ep::EndpointControl};
 
 pub struct DeviceInfo {
     pub(crate) inner: Box<dyn DeviceInfoOp>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeviceTopologyHop {
+    pub slot_id: u8,
+    pub port_id: u8,
+    pub hub_depth: u8,
+    pub speed: usb_if::Speed,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeviceTopology {
+    pub root_port_id: u8,
+    pub port_id: u8,
+    pub port_speed: usb_if::Speed,
+    pub parent_hub_slot_id: Option<u8>,
+    pub path: Vec<DeviceTopologyHop>,
 }
 
 impl DeviceInfo {
@@ -51,6 +68,10 @@ impl DeviceInfo {
 
     pub fn vendor_id(&self) -> u16 {
         self.descriptor().vendor_id
+    }
+
+    pub fn topology(&self) -> DeviceTopology {
+        self.inner.topology()
     }
 }
 

@@ -11,7 +11,7 @@ use core::time::Duration;
 use crab_usb::{EndpointKind, Event, EventHandler, KernelOp, USBHost, usb_if};
 use dma_api::{DmaAddr, DmaDirection, DmaError, DmaHandle, DmaMapHandle, DmaOp};
 use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use super::api::{InterfaceEndpointError, claim_interface};
@@ -71,6 +71,8 @@ const TRUEKEY_PRODUCT_ID: u16 = 0x1001;
 const TRUEKEY_STREAM_CHUNK: usize = 512;
 const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 const CRABUSB_PROBE_TIMEOUT_MS: u64 = 2500;
+const CRABUSB_INITIAL_SETTLE_MS: u64 = 250;
+const CRABUSB_PROBE_QUIET_MS: u64 = 150;
 
 fn probe_state_name(code: u32) -> &'static str {
     match code {
@@ -115,6 +117,92 @@ fn log_probe_progress(prefix: &str) {
     );
 }
 
+#[inline]
+unsafe fn read_mmio32(base: *const u8, offset: usize) -> u32 {
+    unsafe { core::ptr::read_volatile(base.add(offset) as *const u32) }
+}
+
+#[inline]
+unsafe fn read_mmio64(base: *const u8, offset: usize) -> u64 {
+    let lo = unsafe { read_mmio32(base, offset) } as u64;
+    let hi = unsafe { read_mmio32(base, offset + 4) } as u64;
+    lo | (hi << 32)
+}
+
+fn log_xhci_runtime_snapshot(controller_id: usize, prefix: &str) {
+    let Some(info) = super::controller_by_index(controller_id) else {
+        return;
+    };
+
+    let progress = crab_usb::debug_usb_probe_progress();
+    let root_port = if progress.root_port != 0 {
+        progress.root_port
+    } else {
+        progress.port
+    };
+
+    unsafe {
+        let mmio = info.mmio_base.as_ptr() as *const u8;
+        let caplen = (read_mmio32(mmio, 0x00) & 0xFF) as usize;
+        let dboff = (read_mmio32(mmio, 0x14) & !0x3) as usize;
+        let rtsoff = (read_mmio32(mmio, 0x18) & !0x1F) as usize;
+
+        let usbcmd = read_mmio32(mmio, caplen);
+        let usbsts = read_mmio32(mmio, caplen + 0x04);
+        let crcr = read_mmio64(mmio, caplen + 0x18);
+        let dcbaap = read_mmio64(mmio, caplen + 0x30);
+        let config = read_mmio32(mmio, caplen + 0x38);
+
+        let iman = read_mmio32(mmio, rtsoff + 0x20);
+        let imod = read_mmio32(mmio, rtsoff + 0x24);
+        let erstsz = read_mmio32(mmio, rtsoff + 0x28);
+        let erstba = read_mmio64(mmio, rtsoff + 0x30);
+        let erdp = read_mmio64(mmio, rtsoff + 0x38);
+
+        crate::log!(
+            "crabusb: {} xhci regs ctrl={} mmio={:p} caplen=0x{:X} dboff=0x{:X} rtsoff=0x{:X} usbcmd=0x{:08X} usbsts=0x{:08X} crcr=0x{:016X} dcbaap=0x{:016X} config=0x{:08X} iman=0x{:08X} imod=0x{:08X} erstsz=0x{:08X} erstba=0x{:016X} erdp=0x{:016X}\n",
+            prefix,
+            controller_id,
+            info.mmio_base,
+            caplen,
+            dboff,
+            rtsoff,
+            usbcmd,
+            usbsts,
+            crcr,
+            dcbaap,
+            config,
+            iman,
+            imod,
+            erstsz,
+            erstba,
+            erdp,
+        );
+
+        if root_port != 0 {
+            let portsc_off = caplen + 0x400 + ((root_port as usize - 1) * 0x10);
+            let portsc = read_mmio32(mmio, portsc_off);
+            let portpmsc = read_mmio32(mmio, portsc_off + 0x04);
+            let portli = read_mmio32(mmio, portsc_off + 0x08);
+            crate::log!(
+                "crabusb: {} xhci port ctrl={} root_port={} portsc=0x{:08X} portpmsc=0x{:08X} portli=0x{:08X}\n",
+                prefix,
+                controller_id,
+                root_port,
+                portsc,
+                portpmsc,
+                portli,
+            );
+        }
+    }
+}
+
+fn is_pre_command_root_hub_wait() -> bool {
+    let progress = crab_usb::debug_usb_probe_progress();
+    let submit = crab_usb::debug_last_submit();
+    progress.stage == 1 && submit.ptr == 0
+}
+
 #[derive(Copy, Clone)]
 struct BounceMapping {
     orig_virt: usize,
@@ -123,9 +211,48 @@ struct BounceMapping {
     direction: DmaDirection,
 }
 
+#[inline]
+fn crabusb_dma_cache_flush(addr: NonNull<u8>, size: usize) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        use core::arch::x86_64::{_mm_clflush, _mm_mfence};
+
+        if size == 0 {
+            return;
+        }
+
+        let line = 64usize;
+        let start = (addr.as_ptr() as usize) & !(line - 1);
+        let end = (addr.as_ptr() as usize).saturating_add(size);
+        let mut ptr = start;
+        while ptr < end {
+            _mm_clflush(ptr as *const _);
+            ptr = ptr.saturating_add(line);
+        }
+        _mm_mfence();
+    }
+}
+
+#[inline]
+fn crabusb_dma_cache_invalidate(addr: NonNull<u8>, size: usize) {
+    crabusb_dma_cache_flush(addr, size);
+}
+
 impl DmaOp for TrueosCrabUsbKernel {
     fn page_size(&self) -> usize {
         4096
+    }
+
+    fn flush(&self, addr: NonNull<u8>, size: usize) {
+        crabusb_dma_cache_flush(addr, size);
+    }
+
+    fn invalidate(&self, addr: NonNull<u8>, size: usize) {
+        crabusb_dma_cache_invalidate(addr, size);
+    }
+
+    fn flush_invalidate(&self, addr: NonNull<u8>, size: usize) {
+        crabusb_dma_cache_flush(addr, size);
     }
 
     unsafe fn map_single(
@@ -389,8 +516,32 @@ fn tlb_transfer_type_name(transfer_type: usb_if::descriptor::EndpointType) -> &'
     }
 }
 
+fn tlb_speed_name(speed: usb_if::Speed) -> &'static str {
+    match speed {
+        usb_if::Speed::Low => "low",
+        usb_if::Speed::Full => "full",
+        usb_if::Speed::High => "high",
+        usb_if::Speed::Wireless => "wireless",
+        usb_if::Speed::SuperSpeed => "super",
+        usb_if::Speed::SuperSpeedPlus => "super+",
+    }
+}
+
+fn topology_path_string(topology: &crab_usb::device::DeviceTopology) -> alloc::string::String {
+    if topology.path.is_empty() {
+        return alloc::format!("rp{}", topology.root_port_id);
+    }
+
+    let mut out = alloc::format!("rp{}", topology.root_port_id);
+    for hop in topology.path.iter() {
+        out.push_str(&alloc::format!("->hub{}:p{}", hop.slot_id, hop.port_id));
+    }
+    out
+}
+
 fn snapshot_tlb_device(controller_id: usize, dev: &crab_usb::DeviceInfo) -> super::TlbUsbDevice {
     let desc = dev.descriptor();
+    let topology = dev.topology();
     let mut configurations = Vec::new();
     for cfg in dev.configurations().iter() {
         let mut interfaces = Vec::new();
@@ -426,6 +577,20 @@ fn snapshot_tlb_device(controller_id: usize, dev: &crab_usb::DeviceInfo) -> supe
     super::TlbUsbDevice {
         controller_index: controller_id,
         slot_id: dev.id() as u32,
+        root_port_id: topology.root_port_id,
+        port_id: topology.port_id,
+        speed: tlb_speed_name(topology.port_speed),
+        parent_hub_slot_id: topology.parent_hub_slot_id.map(u32::from),
+        hub_path: topology
+            .path
+            .iter()
+            .map(|hop| super::TlbUsbPathHop {
+                slot_id: u32::from(hop.slot_id),
+                port_id: hop.port_id,
+                hub_depth: hop.hub_depth,
+                speed: tlb_speed_name(hop.speed),
+            })
+            .collect(),
         vendor_id: desc.vendor_id,
         product_id: desc.product_id,
         class: desc.class,
@@ -450,6 +615,49 @@ fn update_tlb_devices(controller_id: usize, devices: &[crab_usb::DeviceInfo]) {
             cache.push(snapshot);
         }
     }
+}
+
+async fn handle_detected_device(
+    host: &mut USBHost,
+    spawner: &Spawner,
+    controller_id: usize,
+    dev_idx: usize,
+    dev: &crab_usb::DeviceInfo,
+) {
+    let desc = dev.descriptor();
+    let topology = dev.topology();
+    crate::log!(
+        "crabusb: dev {:04X}:{:04X} slot={} topo={} port={} speed={}\n",
+        desc.vendor_id,
+        desc.product_id,
+        dev.id(),
+        topology_path_string(&topology),
+        topology.port_id,
+        tlb_speed_name(topology.port_speed),
+    );
+
+    if desc.vendor_id == TRUEKEY_VENDOR_ID && desc.product_id == TRUEKEY_PRODUCT_ID {
+        maybe_start_truekey_bridge(host, dev).await;
+        return;
+    }
+    if super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id as u32).await
+    {
+        return;
+    }
+    if maybe_start_hid_boot_streams(host, dev, spawner, controller_id as u32).await {
+        return;
+    }
+    if descriptor_has_audio_candidate(dev) {
+        sound::maybe_start_target_audio(host, dev, spawner).await;
+        return;
+    }
+    if super::midi::maybe_start_midi(host, dev, spawner, controller_id as u32).await {
+        return;
+    }
+    if super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id as u32).await {
+        return;
+    }
+    log_opened_device_graph(host, dev_idx, dev).await;
 }
 
 fn pick_hid_boot_targets(
@@ -2450,30 +2658,9 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                             desc.subclass,
                             desc.protocol
                         );
-                        maybe_start_truekey_bridge(host, dev).await;
-                        let _ = super::hid::leds::maybe_start_led_controller(
-                            host,
-                            dev,
-                            spawner,
-                            controller_id as u32,
-                        )
-                        .await;
-                        let _ =
-                            maybe_start_hid_boot_streams(host, dev, spawner, controller_id as u32)
-                                .await;
-                        if descriptor_has_audio_candidate(dev) {
-                            sound::maybe_start_target_audio(host, dev, spawner).await;
-                        }
-                        let _ =
-                            super::midi::maybe_start_midi(host, dev, spawner, controller_id as u32)
-                                .await;
-                        let _ = super::pen::maybe_start_mass_storage(
-                            host,
-                            dev,
-                            spawner,
-                            controller_id as u32,
-                        )
-                        .await;
+                    }
+                    for (dev_idx, dev) in devices.iter().enumerate() {
+                        handle_detected_device(host, spawner, controller_id, dev_idx, dev).await;
                     }
                     true
                 }
@@ -2482,6 +2669,16 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
                 LAST_PROBE_STATE[controller_id].store(3, Ordering::Release);
                 LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
                 log_probe_progress("probe failed progress");
+                log_xhci_runtime_snapshot(controller_id, "probe failed");
+                if is_pre_command_root_hub_wait() {
+                    PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
+                    crate::log!(
+                        "crabusb: controller {} root-hub settle still in progress; ignoring pre-command probe error: {:?}\n",
+                        controller_id,
+                        err
+                    );
+                    return false;
+                }
                 let fail_streak =
                     PROBE_FAIL_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
                 crate::log!(
@@ -2505,6 +2702,16 @@ async fn probe_and_log(host: &mut USBHost, spawner: &Spawner, controller_id: usi
             LAST_PROBE_STATE[controller_id].store(4, Ordering::Release);
             LAST_PROBE_DEVICE_COUNT[controller_id].store(0, Ordering::Release);
             log_probe_progress("probe timeout progress");
+            log_xhci_runtime_snapshot(controller_id, "probe timeout");
+            if is_pre_command_root_hub_wait() {
+                PROBE_FAIL_STREAK[controller_id].store(0, Ordering::Release);
+                crate::log!(
+                    "crabusb: controller {} root-hub settle still in progress; ignoring pre-command probe timeout after {}ms\n",
+                    controller_id,
+                    CRABUSB_PROBE_TIMEOUT_MS
+                );
+                return false;
+            }
             let fail_streak = PROBE_FAIL_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
             crate::log!(
                 "crabusb: controller {} probe timeout after {}ms (streak={})\n",
@@ -2555,15 +2762,19 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                 crate::log!("crabusb: scout devices={}\n", devices.len());
                 for (dev_idx, dev) in devices.iter().enumerate() {
                     let desc = dev.descriptor();
+                    let topology = dev.topology();
                     crate::log!(
-                        "crabusb: scout dev#{} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} cfgs={}\n",
+                        "crabusb: scout dev#{} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} cfgs={} topo={} port={} speed={}\n",
                         dev_idx,
                         desc.vendor_id,
                         desc.product_id,
                         desc.class,
                         desc.subclass,
                         desc.protocol,
-                        dev.configurations().len()
+                        dev.configurations().len(),
+                        topology_path_string(&topology),
+                        topology.port_id,
+                        tlb_speed_name(topology.port_speed),
                     );
                     for iface in dev.interface_descriptors() {
                         crate::log!(
@@ -2579,37 +2790,7 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
                     }
                 }
                 for (dev_idx, dev) in devices.iter().enumerate() {
-                    let desc = dev.descriptor();
-                    if desc.vendor_id == TRUEKEY_VENDOR_ID && desc.product_id == TRUEKEY_PRODUCT_ID
-                    {
-                        maybe_start_truekey_bridge(host, dev).await;
-                        continue;
-                    }
-                    if super::hid::leds::maybe_start_led_controller(
-                        host,
-                        dev,
-                        spawner,
-                        info.index as u32,
-                    )
-                    .await
-                    {
-                        continue;
-                    }
-                    if maybe_start_hid_boot_streams(host, dev, spawner, info.index as u32).await {
-                        continue;
-                    }
-                    if descriptor_has_audio_candidate(dev) {
-                        sound::maybe_start_target_audio(host, dev, spawner).await;
-                    }
-                    if super::midi::maybe_start_midi(host, dev, spawner, info.index as u32).await {
-                        continue;
-                    }
-                    if super::pen::maybe_start_mass_storage(host, dev, spawner, info.index as u32)
-                        .await
-                    {
-                        continue;
-                    }
-                    log_opened_device_graph(host, dev_idx, dev).await;
+                    handle_detected_device(host, spawner, info.index, dev_idx, dev).await;
                 }
             }
             Err(err) => {
@@ -2622,6 +2803,7 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
             LAST_PROBE_STATE[info.index].store(4, Ordering::Release);
             LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
             log_probe_progress("scout timeout progress");
+            log_xhci_runtime_snapshot(info.index, "scout timeout");
             crate::log!(
                 "crabusb: scout probe timeout after {}ms\n",
                 CRABUSB_PROBE_TIMEOUT_MS
@@ -2723,18 +2905,17 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             }
         };
 
-        install_event_handler(info.index, host.create_event_handler());
-
         if let Err(err) = host.init().await {
             crate::log!(
                 "crabusb: host init failed for controller {}: {:?}\n",
                 info.index,
                 err
             );
-            uninstall_event_handler(info.index);
             Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
             continue;
         }
+
+        install_event_handler(info.index, host.create_event_handler());
 
         crate::log!(
             "crabusb: host init ok controller {} awaiting root-hub events\n",
@@ -2748,9 +2929,11 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
         PROBE_FAIL_STREAK[info.index].store(0, Ordering::Release);
         TLB_DEVICES[info.index].lock().clear();
+        Timer::after(EmbassyDuration::from_millis(CRABUSB_INITIAL_SETTLE_MS)).await;
         crab_scout_once(&mut host, info, &spawner).await;
 
         let mut idle_ticks = 0u32;
+        let mut probe_quiet_until: Option<Instant> = None;
         loop {
             if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
                 crate::log!("crabusb: event handler stopped; rediscovering controller\n");
@@ -2758,13 +2941,24 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             }
 
             if PROBE_REQUESTED[info.index].swap(false, Ordering::AcqRel) {
-                crate::log!(
-                    "crabusb: servicing pending probe on controller {}\n",
-                    info.index
-                );
+                probe_quiet_until =
+                    Some(Instant::now() + EmbassyDuration::from_millis(CRABUSB_PROBE_QUIET_MS));
                 idle_ticks = 0;
-                let _ = probe_and_log(&mut host, &spawner, info.index).await;
-                continue;
+            }
+
+            if let Some(deadline) = probe_quiet_until {
+                if Instant::now() >= deadline {
+                    crate::log!(
+                        "crabusb: servicing settled probe on controller {}\n",
+                        info.index
+                    );
+                    probe_quiet_until = None;
+                    let _ = probe_and_log(&mut host, &spawner, info.index).await;
+                    continue;
+                } else {
+                    Timer::after(EmbassyDuration::from_millis(10)).await;
+                    continue;
+                }
             }
 
             idle_ticks = idle_ticks.wrapping_add(1);

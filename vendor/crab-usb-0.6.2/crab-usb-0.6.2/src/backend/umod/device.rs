@@ -10,6 +10,7 @@ use usb_if::descriptor::{
 use super::{context::Context, endpoint::EndpointImpl};
 use crate::backend::ty::ep::{EndpointBase, EndpointControl};
 use crate::backend::ty::{DeviceInfoOp, DeviceOp};
+use crate::device::DeviceTopology;
 use crate::err::*;
 
 pub struct DeviceInfo {
@@ -66,6 +67,16 @@ impl DeviceInfoOp for DeviceInfo {
 
     fn configuration_descriptors(&self) -> &[ConfigurationDescriptor] {
         &self.configs
+    }
+
+    fn topology(&self) -> DeviceTopology {
+        DeviceTopology {
+            root_port_id: 0,
+            port_id: 0,
+            port_speed: usb_if::Speed::Full,
+            parent_hub_slot_id: None,
+            path: Vec::new(),
+        }
     }
 }
 

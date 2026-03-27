@@ -76,9 +76,22 @@ pub(crate) struct TlbUsbConfiguration {
 }
 
 #[derive(Clone)]
+pub(crate) struct TlbUsbPathHop {
+    pub slot_id: u32,
+    pub port_id: u8,
+    pub hub_depth: u8,
+    pub speed: &'static str,
+}
+
+#[derive(Clone)]
 pub(crate) struct TlbUsbDevice {
     pub controller_index: usize,
     pub slot_id: u32,
+    pub root_port_id: u8,
+    pub port_id: u8,
+    pub speed: &'static str,
+    pub parent_hub_slot_id: Option<u32>,
+    pub hub_path: Vec<TlbUsbPathHop>,
     pub vendor_id: u16,
     pub product_id: u16,
     pub class: u8,
@@ -89,9 +102,34 @@ pub(crate) struct TlbUsbDevice {
     pub configurations: Vec<TlbUsbConfiguration>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TlbUsbTopologyNodeKind {
+    RootPort,
+    Hub,
+    Device,
+}
+
+#[derive(Clone)]
+pub(crate) struct TlbUsbTopologyNode {
+    pub controller_index: usize,
+    pub kind: TlbUsbTopologyNodeKind,
+    pub slot_id: Option<u32>,
+    pub root_port_id: u8,
+    pub port_id: u8,
+    pub depth: u8,
+    pub parent_slot_id: Option<u32>,
+    pub vendor_id: Option<u16>,
+    pub product_id: Option<u16>,
+    pub class: Option<u8>,
+    pub subclass: Option<u8>,
+    pub protocol: Option<u8>,
+    pub speed: &'static str,
+}
+
 pub(crate) struct TlbUsbSnapshot {
     pub controllers: Vec<TlbUsbController>,
     pub devices: Vec<TlbUsbDevice>,
+    pub topology: Vec<TlbUsbTopologyNode>,
     pub probe_error: Option<&'static str>,
     pub probe_device_count: Option<u32>,
 }
@@ -136,6 +174,99 @@ fn controller_mmio_map(bus: u8, slot: u8, function: u8) -> Option<NonNull<u8>> {
     }
 
     crate::pci::mmio::map_mmio_region(phys_base, map_len).ok()
+}
+
+fn push_topology_node(out: &mut Vec<TlbUsbTopologyNode>, node: TlbUsbTopologyNode) {
+    let exists = out.iter().any(|known| {
+        known.controller_index == node.controller_index
+            && known.kind == node.kind
+            && known.slot_id == node.slot_id
+            && known.root_port_id == node.root_port_id
+            && known.port_id == node.port_id
+            && known.parent_slot_id == node.parent_slot_id
+    });
+    if !exists {
+        out.push(node);
+    }
+}
+
+fn build_topology_nodes(devices: &[TlbUsbDevice]) -> Vec<TlbUsbTopologyNode> {
+    let mut out = Vec::new();
+
+    for dev in devices {
+        push_topology_node(
+            &mut out,
+            TlbUsbTopologyNode {
+                controller_index: dev.controller_index,
+                kind: TlbUsbTopologyNodeKind::RootPort,
+                slot_id: None,
+                root_port_id: dev.root_port_id,
+                port_id: dev.root_port_id,
+                depth: 0,
+                parent_slot_id: None,
+                vendor_id: None,
+                product_id: None,
+                class: None,
+                subclass: None,
+                protocol: None,
+                speed: dev.speed,
+            },
+        );
+
+        let mut parent_slot_id = None;
+        for hop in dev.hub_path.iter() {
+            push_topology_node(
+                &mut out,
+                TlbUsbTopologyNode {
+                    controller_index: dev.controller_index,
+                    kind: TlbUsbTopologyNodeKind::Hub,
+                    slot_id: Some(hop.slot_id),
+                    root_port_id: dev.root_port_id,
+                    port_id: hop.port_id,
+                    depth: hop.hub_depth.saturating_add(1),
+                    parent_slot_id,
+                    vendor_id: None,
+                    product_id: None,
+                    class: Some(0x09),
+                    subclass: None,
+                    protocol: None,
+                    speed: hop.speed,
+                },
+            );
+            parent_slot_id = Some(hop.slot_id);
+        }
+
+        push_topology_node(
+            &mut out,
+            TlbUsbTopologyNode {
+                controller_index: dev.controller_index,
+                kind: TlbUsbTopologyNodeKind::Device,
+                slot_id: Some(dev.slot_id),
+                root_port_id: dev.root_port_id,
+                port_id: dev.port_id,
+                depth: dev.hub_path.len() as u8 + 1,
+                parent_slot_id,
+                vendor_id: Some(dev.vendor_id),
+                product_id: Some(dev.product_id),
+                class: Some(dev.class),
+                subclass: Some(dev.subclass),
+                protocol: Some(dev.protocol),
+                speed: dev.speed,
+            },
+        );
+    }
+
+    out.sort_by_key(|node| {
+        (
+            node.controller_index,
+            node.root_port_id,
+            node.depth,
+            node.parent_slot_id.unwrap_or(0),
+            node.slot_id.unwrap_or(0),
+            node.port_id,
+        )
+    });
+    out
 }
 
 pub(crate) fn pci_usb_controllers() -> Vec<TlbUsbController> {
@@ -417,6 +548,7 @@ pub(crate) fn tlb_snapshot() -> TlbUsbSnapshot {
         return TlbUsbSnapshot {
             controllers,
             devices: Vec::new(),
+            topology: Vec::new(),
             probe_error: None,
             probe_device_count: None,
         };
@@ -438,9 +570,12 @@ pub(crate) fn tlb_snapshot() -> TlbUsbSnapshot {
         }
     }
 
+    let topology = build_topology_nodes(&devices);
+
     TlbUsbSnapshot {
         controllers,
         devices,
+        topology,
         probe_error,
         probe_device_count,
     }
