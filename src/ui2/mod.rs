@@ -24,6 +24,7 @@ use self::ui2_hosted::*;
 pub(crate) use self::ui2_hosted::{signal_hosted_browser_factory_mask, ui2_hosted_task};
 pub use self::ui2_win::*;
 pub use self::ui2_win_deco::*;
+use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
 
 const UI2_TITLE_H: f32 = 26.0;
 const UI2_BOTTOM_BAR_H: f32 = 18.0;
@@ -68,19 +69,6 @@ const UI2_WARMUP_RENDER_TARGET_TEX_ID: u32 = 4_706;
 #[inline]
 const fn ui2_window_min_extent() -> f32 {
     UI2_BOTTOM_BAR_H
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct Ui2TexVertex {
-    x: f32,
-    y: f32,
-    u: f32,
-    v: f32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
@@ -1038,74 +1026,18 @@ fn draw_texture_rect_uv_no_present(
         return false;
     }
 
-    let vw = view_w.max(1) as f32;
-    let vh = view_h.max(1) as f32;
-    let left = (2.0 * (x / vw)) - 1.0;
-    let right = (2.0 * ((x + width) / vw)) - 1.0;
-    let top = 1.0 - (2.0 * (y / vh));
-    let bottom = 1.0 - (2.0 * ((y + height) / vh));
-    let verts = [
-        Ui2TexVertex {
-            x: left,
-            y: bottom,
-            u: u0,
-            v: v1,
-            r: 255,
-            g: 255,
-            b: 255,
-            a: alpha,
-        },
-        Ui2TexVertex {
-            x: right,
-            y: bottom,
-            u: u1,
-            v: v1,
-            r: 255,
-            g: 255,
-            b: 255,
-            a: alpha,
-        },
-        Ui2TexVertex {
-            x: right,
-            y: top,
-            u: u1,
-            v: v0,
-            r: 255,
-            g: 255,
-            b: 255,
-            a: alpha,
-        },
-        Ui2TexVertex {
-            x: left,
-            y: bottom,
-            u: u0,
-            v: v1,
-            r: 255,
-            g: 255,
-            b: 255,
-            a: alpha,
-        },
-        Ui2TexVertex {
-            x: right,
-            y: top,
-            u: u1,
-            v: v0,
-            r: 255,
-            g: 255,
-            b: 255,
-            a: alpha,
-        },
-        Ui2TexVertex {
-            x: left,
-            y: top,
-            u: u0,
-            v: v0,
-            r: 255,
-            g: 255,
-            b: 255,
-            a: alpha,
-        },
-    ];
+    let transform = ViewTransform::from_extent(view_w, view_h);
+    let mut verts = alloc::vec::Vec::with_capacity(6 * TEX_VERTEX_SIZE);
+    push_tex_quad_px(
+        &mut verts,
+        transform,
+        x,
+        y,
+        x + width,
+        y + height,
+        [u0, v0, u1, v1],
+        Rgba8::new(255, 255, 255, alpha),
+    );
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
     let _ = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_set_blend(
@@ -1121,8 +1053,8 @@ fn draw_texture_rect_uv_no_present(
     let rc = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
             tex_id,
-            verts.as_ptr() as *const u8,
-            verts.len() * core::mem::size_of::<Ui2TexVertex>(),
+            verts.as_ptr(),
+            verts.len(),
         )
     };
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
@@ -1264,30 +1196,94 @@ fn log_browser_surface_updates(state: &mut Ui2State) {
     }
 }
 
-fn truncate_hosted_browser_text_preview_row(text: &str, max_width_px: f32, px_h: f32) -> Vec<u8> {
+#[inline]
+fn hosted_browser_preview_char_advance_px(font_px: f32) -> f32 {
+    (font_px.max(1.0) * 0.72).max(4.0)
+}
+
+#[inline]
+fn hosted_browser_preview_circle_size_px(font_px: f32) -> f32 {
+    (font_px.max(1.0) * 0.58).max(2.0)
+}
+
+fn hosted_browser_preview_visible_char_count(text: &str, max_width_px: f32, font_px: f32) -> usize {
     if text.is_empty() || max_width_px <= 0.0 {
-        return Vec::new();
+        return 0;
     }
 
-    let mut out = Vec::with_capacity(text.len().min(96));
-    for &byte in text.as_bytes() {
-        let normalized = match byte {
-            b'\n' | b'\r' | b'\t' => b' ',
-            _ => byte,
+    let advance_px = hosted_browser_preview_char_advance_px(font_px);
+    if advance_px <= 0.0 {
+        return 0;
+    }
+
+    let mut visible = 0usize;
+    let mut width = 0.0f32;
+    for ch in text.chars() {
+        let normalized = match ch {
+            '\n' | '\r' | '\t' => ' ',
+            _ => ch,
         };
-        out.push(normalized);
-        let width = crate::gfx::imba_athlas::imba_athlas_text_width_nearest_px(&out, px_h);
-        if width > max_width_px {
-            out.pop();
+        if width + advance_px > max_width_px {
             break;
+        }
+        width += advance_px;
+        if normalized != ' ' {
+            visible = visible.saturating_add(1);
+        } else if visible > 0 {
+            visible = visible.saturating_add(1);
         }
     }
 
-    while out.last() == Some(&b' ') {
-        out.pop();
+    visible
+}
+
+fn draw_hosted_browser_placeholder_text_row(
+    state: &Ui2State,
+    text: &str,
+    x: f32,
+    y: f32,
+    max_width_px: f32,
+    font_px: f32,
+    alpha: u8,
+) -> bool {
+    let visible_chars = hosted_browser_preview_visible_char_count(text, max_width_px, font_px);
+    if visible_chars == 0 {
+        return false;
     }
 
-    out
+    let advance_px = hosted_browser_preview_char_advance_px(font_px);
+    let circle_px = hosted_browser_preview_circle_size_px(font_px);
+    let y_offset = ((font_px - circle_px) * 0.45).max(0.0);
+    let mut cursor_x = x;
+    let mut drawn = false;
+    let mut used = 0usize;
+
+    for ch in text.chars() {
+        let normalized = match ch {
+            '\n' | '\r' | '\t' => ' ',
+            _ => ch,
+        };
+        if used >= visible_chars {
+            break;
+        }
+        if normalized != ' ' {
+            drawn |= crate::gfx::lyon::draw_lyon_icon_alpha_scaled_no_present(
+                6,
+                0,
+                1,
+                cursor_x,
+                y + y_offset,
+                circle_px,
+                state.view_w,
+                state.view_h,
+                alpha,
+            ) == 0;
+        }
+        cursor_x += advance_px;
+        used = used.saturating_add(1);
+    }
+
+    drawn
 }
 
 #[inline]
@@ -1356,20 +1352,18 @@ fn draw_hosted_browser_text_preview(
         }
 
         let max_width_px = (content_right - x).max(0.0);
-        let row_bytes = truncate_hosted_browser_text_preview_row(&row.text, max_width_px, font_px);
-        if row_bytes.is_empty() {
-            continue;
-        }
-
-        drew_any |= crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_nearest_px(
-            &row_bytes,
+        if !draw_hosted_browser_placeholder_text_row(
+            state,
+            &row.text,
             x,
             y,
-            state.view_w,
-            state.view_h,
+            max_width_px,
             font_px,
             window.alpha,
-        );
+        ) {
+            continue;
+        }
+        drew_any = true;
     }
 
     drew_any
@@ -1386,7 +1380,6 @@ fn draw_hosted_browser_layout_preview(
     }
 
     let panel_rgba = modulate_rgba_alpha((0xF8, 0xF8, 0xF4, 0xFF), window.alpha);
-    let text_rgb = (0x14, 0x18, 0x1D);
     let _ = crate::gfx::lyon::draw_solid_rect_no_present(
         content.x,
         content.y,
@@ -1433,19 +1426,15 @@ fn draw_hosted_browser_layout_preview(
         if !text.is_empty() {
             let left = content.x + 8.0 + node.margin_left_px as f32 + node.padding_left_px as f32;
             let max_width_px = (content.x + content.w - 8.0 - left).max(0.0);
-            let row_bytes = truncate_hosted_browser_text_preview_row(&text, max_width_px, font_px);
-            if !row_bytes.is_empty() {
-                let _ = text_rgb;
-                drew_any |= crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_nearest_px(
-                    &row_bytes,
-                    left,
-                    text_top,
-                    state.view_w,
-                    state.view_h,
-                    font_px,
-                    window.alpha,
-                );
-            }
+            drew_any |= draw_hosted_browser_placeholder_text_row(
+                state,
+                &text,
+                left,
+                text_top,
+                max_width_px,
+                font_px,
+                window.alpha,
+            );
         }
         y_cursor += block_h.max(8.0);
     }
