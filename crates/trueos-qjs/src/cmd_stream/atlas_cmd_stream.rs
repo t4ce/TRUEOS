@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use libm::tanf;
 use spin::Mutex;
+use trueos_gfx_core::{Rgba8, TexVertex, push_tex_vertex_bytes};
 
 use crate as qjs;
 
@@ -94,12 +95,13 @@ fn cmd_stream_push_glyph_quad(
     let nx0_bottom = 2.0 * (bottom_x0 / w);
     let nx1_bottom = 2.0 * (bottom_x1 / w);
 
-    super::cmd_stream_push_tex_vtx(out, nx0_bottom, ny1, u0, v1, r, g, b, a);
-    super::cmd_stream_push_tex_vtx(out, nx1_bottom, ny1, u1, v1, r, g, b, a);
-    super::cmd_stream_push_tex_vtx(out, nx1_top, ny0, u1, v0, r, g, b, a);
-    super::cmd_stream_push_tex_vtx(out, nx0_bottom, ny1, u0, v1, r, g, b, a);
-    super::cmd_stream_push_tex_vtx(out, nx1_top, ny0, u1, v0, r, g, b, a);
-    super::cmd_stream_push_tex_vtx(out, nx0_top, ny0, u0, v0, r, g, b, a);
+    let color = Rgba8::new(r, g, b, a);
+    push_tex_vertex_bytes(out, TexVertex { x: nx0_bottom, y: ny1, u: u0, v: v1, color });
+    push_tex_vertex_bytes(out, TexVertex { x: nx1_bottom, y: ny1, u: u1, v: v1, color });
+    push_tex_vertex_bytes(out, TexVertex { x: nx1_top, y: ny0, u: u1, v: v0, color });
+    push_tex_vertex_bytes(out, TexVertex { x: nx0_bottom, y: ny1, u: u0, v: v1, color });
+    push_tex_vertex_bytes(out, TexVertex { x: nx1_top, y: ny0, u: u1, v: v0, color });
+    push_tex_vertex_bytes(out, TexVertex { x: nx0_top, y: ny0, u: u0, v: v0, color });
 }
 
 #[inline]
