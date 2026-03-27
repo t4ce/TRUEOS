@@ -83,13 +83,28 @@ impl SwarmService {
         V: VLayer + Sync,
         F: FnMut(SwarmSignal),
     {
+        self.run_forever_with_idle(vlayer, move |_, signal| on_signal(signal), |_| {})
+            .await
+    }
+
+    pub async fn run_forever_with_idle<V, F, I>(
+        &mut self,
+        vlayer: &V,
+        mut on_signal: F,
+        mut on_idle: I,
+    ) -> !
+    where
+        V: VLayer + Sync,
+        F: FnMut(&V, SwarmSignal),
+        I: FnMut(&V),
+    {
         let _ = vlayer.submit(self.bootstrap_command());
 
         loop {
             if let Some(ev) = vlayer.pop_event() {
                 match self.step_for_event(ev) {
                     SwarmStep::None => {}
-                    SwarmStep::Signal(signal) => on_signal(signal),
+                    SwarmStep::Signal(signal) => on_signal(vlayer, signal),
                     SwarmStep::Submit(cmd) => {
                         let _ = vlayer.submit(cmd);
                     }
@@ -97,6 +112,7 @@ impl SwarmService {
                 continue;
             }
 
+            on_idle(vlayer);
             Timer::after(EmbassyDuration::from_millis(IDLE_POLL_MS)).await;
         }
     }
