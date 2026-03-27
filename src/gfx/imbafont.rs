@@ -1,3 +1,4 @@
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use lyon_geom::point;
@@ -46,14 +47,7 @@ struct ImbaFontLayoutMetric {
     metric: SvgGlyphMetric,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ImbaFontFace {
-    Regular,
-    Loop,
-    Block,
-    Grow,
-    Impact,
-}
+include!(concat!(env!("OUT_DIR"), "/generated_imbafont_fonts.rs"));
 
 #[derive(Clone, Copy)]
 pub struct ImbaFontRunLayout {
@@ -470,101 +464,6 @@ pub fn rasterize_glyph_mask_texture(
     })
 }
 
-macro_rules! svg_icon_asset {
-    ($ch:literal, $dir:literal, $file:literal) => {
-        SvgIconAsset {
-            ch: $ch,
-            bytes: include_bytes!(concat!("imbafont/", $dir, "/", $file)),
-        }
-    };
-}
-
-macro_rules! define_font_assets {
-    ($name:ident, $dir:literal) => {
-        static $name: &[SvgIconAsset] = &[
-            svg_icon_asset!('0', $dir, "0.svg"),
-            svg_icon_asset!('1', $dir, "1.svg"),
-            svg_icon_asset!('2', $dir, "2.svg"),
-            svg_icon_asset!('3', $dir, "3.svg"),
-            svg_icon_asset!('4', $dir, "4.svg"),
-            svg_icon_asset!('5', $dir, "5.svg"),
-            svg_icon_asset!('6', $dir, "6.svg"),
-            svg_icon_asset!('7', $dir, "7.svg"),
-            svg_icon_asset!('8', $dir, "8.svg"),
-            svg_icon_asset!('9', $dir, "9.svg"),
-            svg_icon_asset!('a', $dir, "a.svg"),
-            svg_icon_asset!('b', $dir, "b.svg"),
-            svg_icon_asset!('c', $dir, "c.svg"),
-            svg_icon_asset!('d', $dir, "d.svg"),
-            svg_icon_asset!('e', $dir, "e.svg"),
-            svg_icon_asset!('f', $dir, "f.svg"),
-            svg_icon_asset!('g', $dir, "g.svg"),
-            svg_icon_asset!('h', $dir, "h.svg"),
-            svg_icon_asset!('i', $dir, "i.svg"),
-            svg_icon_asset!('j', $dir, "j.svg"),
-            svg_icon_asset!('k', $dir, "k.svg"),
-            svg_icon_asset!('l', $dir, "l.svg"),
-            svg_icon_asset!('m', $dir, "m.svg"),
-            svg_icon_asset!('n', $dir, "n.svg"),
-            svg_icon_asset!('o', $dir, "o.svg"),
-            svg_icon_asset!('p', $dir, "p.svg"),
-            svg_icon_asset!('q', $dir, "q.svg"),
-            svg_icon_asset!('r', $dir, "r.svg"),
-            svg_icon_asset!('s', $dir, "s.svg"),
-            svg_icon_asset!('t', $dir, "t.svg"),
-            svg_icon_asset!('u', $dir, "u.svg"),
-            svg_icon_asset!('v', $dir, "v.svg"),
-            svg_icon_asset!('w', $dir, "w.svg"),
-            svg_icon_asset!('x', $dir, "x.svg"),
-            svg_icon_asset!('y', $dir, "y.svg"),
-            svg_icon_asset!('z', $dir, "z.svg"),
-            svg_icon_asset!('A', $dir, "aa.svg"),
-            svg_icon_asset!('B', $dir, "bb.svg"),
-            svg_icon_asset!('C', $dir, "cc.svg"),
-            svg_icon_asset!('D', $dir, "dd.svg"),
-            svg_icon_asset!('E', $dir, "ee.svg"),
-            svg_icon_asset!('F', $dir, "ff.svg"),
-            svg_icon_asset!('G', $dir, "gg.svg"),
-            svg_icon_asset!('H', $dir, "hh.svg"),
-            svg_icon_asset!('I', $dir, "ii.svg"),
-            svg_icon_asset!('J', $dir, "jj.svg"),
-            svg_icon_asset!('K', $dir, "kk.svg"),
-            svg_icon_asset!('L', $dir, "ll.svg"),
-            svg_icon_asset!('M', $dir, "mm.svg"),
-            svg_icon_asset!('N', $dir, "nn.svg"),
-            svg_icon_asset!('O', $dir, "oo.svg"),
-            svg_icon_asset!('P', $dir, "pp.svg"),
-            svg_icon_asset!('Q', $dir, "qq.svg"),
-            svg_icon_asset!('R', $dir, "rr.svg"),
-            svg_icon_asset!('S', $dir, "ss.svg"),
-            svg_icon_asset!('T', $dir, "tt.svg"),
-            svg_icon_asset!('U', $dir, "uu.svg"),
-            svg_icon_asset!('V', $dir, "vv.svg"),
-            svg_icon_asset!('W', $dir, "ww.svg"),
-            svg_icon_asset!('X', $dir, "xx.svg"),
-            svg_icon_asset!('Y', $dir, "yy.svg"),
-            svg_icon_asset!('Z', $dir, "zz.svg"),
-        ];
-    };
-}
-
-define_font_assets!(IMBAFONT_REGULAR_ASSETS, "imbasvgs");
-define_font_assets!(IMBAFONT_LOOP_ASSETS, "imbasvg_loop");
-define_font_assets!(IMBAFONT_BLOCK_ASSETS, "imbasvgs_block");
-define_font_assets!(IMBAFONT_GROW_ASSETS, "imbasvgs_grow");
-define_font_assets!(IMBAFONT_IMPACT_ASSETS, "imbasvgs_impact");
-
-static IMBAFONT_REGULAR_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
-static IMBAFONT_LOOP_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
-static IMBAFONT_BLOCK_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
-static IMBAFONT_GROW_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
-static IMBAFONT_IMPACT_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
-static IMBAFONT_REGULAR_LAYOUT_METRICS: Once<Vec<ImbaFontLayoutMetric>> = Once::new();
-static IMBAFONT_LOOP_LAYOUT_METRICS: Once<Vec<ImbaFontLayoutMetric>> = Once::new();
-static IMBAFONT_BLOCK_LAYOUT_METRICS: Once<Vec<ImbaFontLayoutMetric>> = Once::new();
-static IMBAFONT_GROW_LAYOUT_METRICS: Once<Vec<ImbaFontLayoutMetric>> = Once::new();
-static IMBAFONT_IMPACT_LAYOUT_METRICS: Once<Vec<ImbaFontLayoutMetric>> = Once::new();
-
 #[inline]
 fn icon_scale(index: usize, total: usize, scale_start: f32, scale_end: f32) -> f32 {
     if total <= 1 {
@@ -576,28 +475,8 @@ fn icon_scale(index: usize, total: usize, scale_start: f32, scale_end: f32) -> f
     scale_start + (scale_end - scale_start) * eased
 }
 
-fn metrics_bytes_for_face(face: ImbaFontFace) -> &'static [u8] {
-    match face {
-        ImbaFontFace::Regular => include_bytes!("imbafont/imbasvgs/metrics.txt"),
-        ImbaFontFace::Loop => include_bytes!("imbafont/imbasvg_loop/metrics.txt"),
-        ImbaFontFace::Block => include_bytes!("imbafont/imbasvgs_block/metrics.txt"),
-        ImbaFontFace::Grow => include_bytes!("imbafont/imbasvgs_grow/metrics.txt"),
-        ImbaFontFace::Impact => include_bytes!("imbafont/imbasvgs_impact/metrics.txt"),
-    }
-}
-
-fn assets_for_face(face: ImbaFontFace) -> &'static [SvgIconAsset] {
-    match face {
-        ImbaFontFace::Regular => IMBAFONT_REGULAR_ASSETS,
-        ImbaFontFace::Loop => IMBAFONT_LOOP_ASSETS,
-        ImbaFontFace::Block => IMBAFONT_BLOCK_ASSETS,
-        ImbaFontFace::Grow => IMBAFONT_GROW_ASSETS,
-        ImbaFontFace::Impact => IMBAFONT_IMPACT_ASSETS,
-    }
-}
-
-fn parse_metrics(bytes: &[u8]) -> [Option<SvgGlyphMetric>; 128] {
-    let mut metrics = [None; 128];
+fn parse_metrics(bytes: &[u8]) -> BTreeMap<char, SvgGlyphMetric> {
+    let mut metrics = BTreeMap::new();
     let Ok(text) = core::str::from_utf8(bytes) else {
         return metrics;
     };
@@ -616,7 +495,7 @@ fn parse_metrics(bytes: &[u8]) -> [Option<SvgGlyphMetric>; 128] {
         let Some(ch) = chars.next() else {
             continue;
         };
-        if chars.next().is_some() || (ch as usize) >= metrics.len() {
+        if chars.next().is_some() {
             continue;
         }
 
@@ -640,7 +519,7 @@ fn parse_metrics(bytes: &[u8]) -> [Option<SvgGlyphMetric>; 128] {
             continue;
         };
 
-        metrics[ch as usize] = Some(SvgGlyphMetric {
+        metrics.insert(ch, SvgGlyphMetric {
             baseline_y,
             ink_top,
             ink_bottom,
@@ -651,61 +530,6 @@ fn parse_metrics(bytes: &[u8]) -> [Option<SvgGlyphMetric>; 128] {
     }
 
     metrics
-}
-
-fn icons_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontIcon> {
-    let metrics = parse_metrics(metrics_bytes_for_face(face));
-    let assets = assets_for_face(face);
-
-    let build = || {
-        let mut icons = Vec::with_capacity(assets.len());
-        for asset in assets {
-            let Some(metric) = metrics.get(asset.ch as usize).copied().flatten() else {
-                continue;
-            };
-            let Some(mesh) = build_svg_mesh(asset.bytes) else {
-                continue;
-            };
-            icons.push(ImbaFontIcon {
-                ch: asset.ch,
-                metric,
-                mesh,
-            });
-        }
-        icons
-    };
-
-    match face {
-        ImbaFontFace::Regular => IMBAFONT_REGULAR_ICONS.call_once(build),
-        ImbaFontFace::Loop => IMBAFONT_LOOP_ICONS.call_once(build),
-        ImbaFontFace::Block => IMBAFONT_BLOCK_ICONS.call_once(build),
-        ImbaFontFace::Grow => IMBAFONT_GROW_ICONS.call_once(build),
-        ImbaFontFace::Impact => IMBAFONT_IMPACT_ICONS.call_once(build),
-    }
-}
-
-fn layout_metrics_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontLayoutMetric> {
-    let metrics = parse_metrics(metrics_bytes_for_face(face));
-    let assets = assets_for_face(face);
-
-    let build = || {
-        let mut layout_metrics = Vec::with_capacity(assets.len());
-        for asset in assets {
-            let Some(metric) = metrics.get(asset.ch as usize).copied().flatten() else {
-                continue;
-            };
-            layout_metrics.push(ImbaFontLayoutMetric { metric });
-        }
-        layout_metrics
-    };
-
-    match face {
-        ImbaFontFace::Regular => IMBAFONT_REGULAR_LAYOUT_METRICS.call_once(build),
-        ImbaFontFace::Loop => IMBAFONT_LOOP_LAYOUT_METRICS.call_once(build),
-        ImbaFontFace::Block => IMBAFONT_BLOCK_LAYOUT_METRICS.call_once(build),
-        ImbaFontFace::Grow => IMBAFONT_GROW_LAYOUT_METRICS.call_once(build),
-        ImbaFontFace::Impact => IMBAFONT_IMPACT_LAYOUT_METRICS.call_once(build),
-    }
 }
 
 fn build_svg_mesh(bytes: &[u8]) -> Option<ImbaFontIconMesh> {

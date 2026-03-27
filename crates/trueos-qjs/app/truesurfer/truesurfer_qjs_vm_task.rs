@@ -54,6 +54,8 @@ const TRUESURFER_RESULT_SCRIPT_BYTES_PROP: &[u8] = b"scriptBytes\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
 const TRUESURFER_TEXT_ROW_TEXT_PROP: &[u8] = b"text\0";
 const TRUESURFER_TEXT_ROW_INDENT_PROP: &[u8] = b"indentPx\0";
+const TRUESURFER_TEXT_ROW_FONT_SIZE_PROP: &[u8] = b"fontSizePx\0";
+const TRUESURFER_TEXT_ROW_LINE_HEIGHT_PROP: &[u8] = b"lineHeightPx\0";
 const TRUESURFER_LAYOUT_INTENT_VERSION_PROP: &[u8] = b"version\0";
 const TRUESURFER_LAYOUT_INTENT_NODES_PROP: &[u8] = b"nodes\0";
 const TRUESURFER_LAYOUT_NODE_ID_PROP: &[u8] = b"nodeId\0";
@@ -74,6 +76,8 @@ const TRUESURFER_LAYOUT_NODE_PADDING_LEFT_PROP: &[u8] = b"paddingLeftPx\0";
 const TRUESURFER_LAYOUT_NODE_PADDING_TOP_PROP: &[u8] = b"paddingTopPx\0";
 const TRUESURFER_LAYOUT_NODE_PADDING_RIGHT_PROP: &[u8] = b"paddingRightPx\0";
 const TRUESURFER_LAYOUT_NODE_PADDING_BOTTOM_PROP: &[u8] = b"paddingBottomPx\0";
+const TRUESURFER_LAYOUT_NODE_FONT_SIZE_PROP: &[u8] = b"fontSizePx\0";
+const TRUESURFER_LAYOUT_NODE_LINE_HEIGHT_PROP: &[u8] = b"lineHeightPx\0";
 const TRUESURFER_LAYOUT_NODE_FLEX_GROW_PROP: &[u8] = b"flexGrow\0";
 const TRUESURFER_LAYOUT_NODE_FLEX_SHRINK_PROP: &[u8] = b"flexShrink\0";
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
@@ -123,6 +127,8 @@ pub struct HostedBrowserInteractiveState {
 pub struct HostedBrowserTextRow {
     pub text: String,
     pub indent_px: u32,
+    pub font_size_px: u32,
+    pub line_height_px: u32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -150,6 +156,8 @@ pub struct HostedBrowserLayoutNode {
     pub padding_top_px: u32,
     pub padding_right_px: u32,
     pub padding_bottom_px: u32,
+    pub font_size_px: u32,
+    pub line_height_px: u32,
     pub flex_grow: f32,
     pub flex_shrink: f32,
 }
@@ -226,6 +234,8 @@ fn text_row(text: &str, indent_px: u32) -> HostedBrowserTextRow {
     HostedBrowserTextRow {
         text: String::from(text),
         indent_px,
+        font_size_px: 0,
+        line_height_px: 0,
     }
 }
 
@@ -626,7 +636,14 @@ unsafe fn read_text_rows(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst) -> Ho
             continue;
         }
         let indent_px = read_result_u32(ctx, row_value, TRUESURFER_TEXT_ROW_INDENT_PROP);
-        rows.push(HostedBrowserTextRow { text, indent_px });
+        let font_size_px = read_result_u32(ctx, row_value, TRUESURFER_TEXT_ROW_FONT_SIZE_PROP);
+        let line_height_px = read_result_u32(ctx, row_value, TRUESURFER_TEXT_ROW_LINE_HEIGHT_PROP);
+        rows.push(HostedBrowserTextRow {
+            text,
+            indent_px,
+            font_size_px,
+            line_height_px,
+        });
         qjs::js_free_value(ctx, row_value);
     }
 
@@ -747,6 +764,12 @@ unsafe fn read_layout_state(
                 ctx,
                 node_value,
                 TRUESURFER_LAYOUT_NODE_PADDING_BOTTOM_PROP,
+            ),
+            font_size_px: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_FONT_SIZE_PROP),
+            line_height_px: read_result_u32(
+                ctx,
+                node_value,
+                TRUESURFER_LAYOUT_NODE_LINE_HEIGHT_PROP,
             ),
             flex_grow: read_result_f32(ctx, node_value, TRUESURFER_LAYOUT_NODE_FLEX_GROW_PROP),
             flex_shrink: read_result_f32(ctx, node_value, TRUESURFER_LAYOUT_NODE_FLEX_SHRINK_PROP),
