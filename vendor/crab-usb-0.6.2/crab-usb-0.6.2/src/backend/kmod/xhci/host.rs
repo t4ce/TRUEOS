@@ -96,13 +96,16 @@ impl Xhci {
             if ac64 { "64" } else { "32" }
         );
 
-        // 根据 AC64 位调整 DMA mask
-        let dma_mask = if ac64 {
-            u64::MAX as usize
-        } else {
-            // 控制器只支持 32 位地址，强制限制在 32 位
-            u32::MAX as usize
-        };
+        // Keep xHCI infrastructure DMA below 4 GiB on bare metal.
+        // Some controllers advertise AC64 but fail to fetch command/event rings
+        // or context structures reliably from higher addresses before the IOMMU
+        // or firmware handoff is fully settled.
+        let dma_mask = u32::MAX as usize;
+        if ac64 {
+            info!(
+                "xHCI: AC64 advertised, but forcing 32-bit DMA mask for command/event/context buffers"
+            );
+        }
 
         let kernel = Kernel::new(dma_mask as _, kernel);
 
@@ -554,14 +557,22 @@ impl EventHandler {
         unsafe { &mut *self.reg.get() }
     }
 
-    fn clean_event_ring(&self) -> Event {
+    fn clean_event_ring(&self) -> (Event, bool) {
         use xhci::ring::trb::event::Allowed;
         let mut event = Event::Nothing;
+        let mut drained = false;
 
         while let Some(allowed) = self.event_ring().next() {
+            drained = true;
             match allowed {
                 Allowed::CommandCompletion(c) => {
                     let addr = c.command_trb_pointer();
+                    let completion_code = c
+                        .completion_code()
+                        .ok()
+                        .map(|code| code as u8)
+                        .unwrap_or(0xFF);
+                    debug_record_event(c.slot_id(), 0xFF, completion_code, 0, addr);
                     // trace!("[Command] << {allowed:?} @{addr:X}");
                     self.cmd_finished.set_finished(addr.into(), c);
                 }
@@ -597,40 +608,60 @@ impl EventHandler {
                             .set_finished(slot_id, ep_id, ptr.into(), c)
                     };
                 }
-                _ => {
-                    // debug!("unhandled event {allowed:?}");
+                Allowed::HostController(c) => {
+                    info!("crabusb/xhci: host-controller event {:?}", c);
+                }
+                Allowed::Doorbell(c) => {
+                    info!("crabusb/xhci: doorbell event {:?}", c);
+                }
+                Allowed::BandwidthRequest(c) => {
+                    info!("crabusb/xhci: bandwidth-request event {:?}", c);
+                }
+                Allowed::DeviceNotification(c) => {
+                    info!("crabusb/xhci: device-notification event {:?}", c);
+                }
+                Allowed::MfindexWrap(c) => {
+                    info!("crabusb/xhci: mfindex-wrap event {:?}", c);
                 }
             }
         }
-        event
+        (event, drained)
     }
 }
 
 impl EventHandlerOp for EventHandler {
     fn handle_event(&self) -> Event {
-        let mut res = Event::Nothing;
         let sts = self.reg().operational.usbsts.read_volatile();
+        let irq_pending = self
+            .reg()
+            .interrupter_register_set
+            .interrupter_mut(0)
+            .iman
+            .read_volatile()
+            .interrupt_pending();
+        let (res, drained) = self.clean_event_ring();
 
-        if !sts.event_interrupt() {
-            return res;
+        if !sts.event_interrupt() && !irq_pending && !drained {
+            return Event::Nothing;
         }
 
-        self.reg().operational.usbsts.update_volatile(|r| {
-            r.clear_event_interrupt();
-        });
+        if sts.event_interrupt() {
+            self.reg().operational.usbsts.update_volatile(|r| {
+                r.clear_event_interrupt();
+            });
+        }
 
         // 【关键】GIC 中断模式下，需要手动清除 IMAN.IP
         // 参考: Linux xhci_irq() in xhci-ring.c:3054-3059
         let mut irq = self.reg().interrupter_register_set.interrupter_mut(0);
-        irq.iman.update_volatile(|r| {
-            r.clear_interrupt_pending();
-        });
+        if irq_pending {
+            irq.iman.update_volatile(|r| {
+                r.clear_interrupt_pending();
+            });
+        }
 
-        let erdp = {
-            res = self.clean_event_ring();
-            self.event_ring().erdp()
-        };
-        {
+        if drained || sts.event_interrupt() || irq_pending {
+            let erdp = self.event_ring().erdp();
             irq.erdp.update_volatile(|r| {
                 r.set_event_ring_dequeue_pointer(erdp);
                 r.clear_event_handler_busy();
