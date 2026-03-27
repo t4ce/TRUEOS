@@ -35,21 +35,18 @@ trueos_vmx_guest_entry:
 .Lcall_run:
     call trueos_vm_guest_run
 
-    lea rsi, [rip + .Ldone]
-.Lwrite_done:
+    lea rsi, [rip + .Lidle]
+.Lwrite_idle:
     lodsb
     test al, al
-    jz .Ldo_vmcall
+    jz .Lcall_idle
     mov dx, 0xE9
     out dx, al
-    jmp .Lwrite_done
+    jmp .Lwrite_idle
 
-.Ldo_vmcall:
-    call trueos_vm_preserve
-    cli
-.Lhalt:
-    hlt
-    jmp .Lhalt
+.Lcall_idle:
+    call trueos_vm_guest_idle
+    ud2
 
 .Lvmcr3:
     .asciz "VMCR3\n"
@@ -57,14 +54,19 @@ trueos_vmx_guest_entry:
     .asciz "VMPRESERVE\n"
 .Lrun:
     .asciz "VMRUN\n"
-.Ldone:
-    .asciz "VMRDONE\n"
+.Lidle:
+    .asciz "VMIDLE\n"
 "#
 );
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_vm_guest_run() {
     crate::demo::start();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_vm_guest_idle() -> ! {
+    crate::demo::idle();
 }
 
 #[unsafe(no_mangle)]
