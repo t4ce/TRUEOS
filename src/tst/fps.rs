@@ -279,7 +279,7 @@ fn fade_alpha_asc(elapsed_ms: u64, duration_ms: u64) -> u8 {
 fn max_digit_advance(tile_h: f32) -> f32 {
     let mut max_advance = 0.0f32;
     for ch in b'0'..=b'9' {
-        if let Some(metrics) = glyph_metrics_px(ImbaFontFace::Arcade, ch as char, tile_h) {
+        if let Some(metrics) = glyph_metrics_px(ImbaFontFace::Lucidasansunicode, ch as char, tile_h) {
             max_advance = max_advance.max(metrics.advance);
         }
     }
