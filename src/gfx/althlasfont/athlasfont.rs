@@ -133,6 +133,27 @@ pub fn imba_athlas_bucket_cell_px(size_case: usize, bucket: usize) -> Option<(u3
 }
 
 #[inline]
+pub fn imba_athlas_sprite_for_char(
+    size_case: usize,
+    ch: char,
+) -> Option<(u32, [f32; 4], u32, u32)> {
+    let glyph = imba_athlas_lookup_char(ch)?;
+    let bucket = decoded_bucket(size_case, glyph.bucket as usize)?;
+    let slot = glyph.slot as usize;
+    let sx = (slot % bucket.grid_w as usize) as f32;
+    let sy = (slot / bucket.grid_w as usize) as f32;
+    let px0 = sx * bucket.cell_w as f32;
+    let py0 = sy * bucket.cell_h as f32;
+    let uv = [
+        px0 / bucket.width as f32,
+        py0 / bucket.height as f32,
+        (px0 + bucket.cell_w as f32) / bucket.width as f32,
+        (py0 + bucket.cell_h as f32) / bucket.height as f32,
+    ];
+    Some((bucket.tex_id, uv, bucket.cell_w, bucket.cell_h))
+}
+
+#[inline]
 pub fn imba_athlas_bucket_width_stage_for_char(ch: char) -> Option<u8> {
     let glyph = imba_athlas_lookup_char(ch)?;
     athlasmetrics::athlas_bucket_width_stage(glyph.bucket as usize)

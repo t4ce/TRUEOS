@@ -1369,8 +1369,42 @@ DCL OUT[0], COLOR\n\
     1: MUL OUT[0], TEMP[0], IN[1]\n\
     2: END\n";
 
+const FS_TEX_PARTICLE: &str = "FRAG\n\
+DCL IN[0], TEXCOORD[0], LINEAR\n\
+DCL IN[1], COLOR, LINEAR\n\
+DCL SAMP[0]\n\
+DCL TEMP[0]\n\
+DCL TEMP[1]\n\
+DCL TEMP[2]\n\
+DCL TEMP[3]\n\
+DCL TEMP[4]\n\
+DCL OUT[0], COLOR\n\
+IMM[0] FLT32 { 1.000000, 0.550000, 0.350000, 0.180000 }\n\
+IMM[1] FLT32 { -0.120000, -0.220000, 0.260000, 0.000000 }\n\
+    0: TEX TEMP[0], IN[0], SAMP[0], 2D\n\
+    1: MIN TEMP[0].x, TEMP[0].xxxx, TEMP[0].wwww\n\
+    2: MOV TEMP[1], IN[0]\n\
+    3: ADD TEMP[1].x, TEMP[1].xxxx, IMM[0].wwww\n\
+    4: ADD TEMP[1].y, TEMP[1].yyyy, IMM[1].xxxx\n\
+    5: TEX TEMP[1], TEMP[1], SAMP[0], 2D\n\
+    6: MIN TEMP[1].x, TEMP[1].xxxx, TEMP[1].wwww\n\
+    7: MOV TEMP[2], IN[0]\n\
+    8: ADD TEMP[2].x, TEMP[2].xxxx, IMM[1].yyyy\n\
+    9: ADD TEMP[2].y, TEMP[2].yyyy, IMM[1].zzzz\n\
+   10: TEX TEMP[2], TEMP[2], SAMP[0], 2D\n\
+   11: MIN TEMP[2].x, TEMP[2].xxxx, TEMP[2].wwww\n\
+   12: MUL TEMP[1].x, TEMP[1].xxxx, IMM[0].yyyy\n\
+   13: MUL TEMP[2].x, TEMP[2].xxxx, IMM[0].zzzz\n\
+   14: ADD TEMP[3].x, TEMP[0].xxxx, TEMP[1].xxxx\n\
+   15: ADD TEMP[3].x, TEMP[3].xxxx, TEMP[2].xxxx\n\
+   16: MIN TEMP[3].x, TEMP[3].xxxx, IMM[0].xxxx\n\
+   17: MUL OUT[0].xyz, IN[1], TEMP[3].xxxx\n\
+   18: MUL OUT[0].w, IN[1].wwww, TEMP[3].xxxx\n\
+   19: END\n";
+
 const TEX_PIPELINE_FS_MASK_TAG_RAW: u32 = 0x4D41_534B;
 const TEX_PIPELINE_FS_RGBA_TAG_RAW: u32 = 0x5247_4241;
+const TEX_PIPELINE_FS_PARTICLE_TAG_RAW: u32 = 0x5052_5443;
 
 // --- gfx-core backend (virgl) ---
 
@@ -1567,6 +1601,7 @@ pub struct VirglGfxBackend {
     vs_tex_handle: u32,
     fs_tex_mask_handle: u32,
     fs_tex_rgba_handle: u32,
+    fs_tex_particle_handle: u32,
     fs_mandelbrot_handle: u32,
     sampler_state_nearest_handle: u32,
     sampler_state_linear_handle: u32,
@@ -1872,6 +1907,7 @@ impl VirglGfxBackend {
         let fs_tex_mask_handle = 23u32;
         let fs_tex_rgba_handle = 24u32;
         let fs_mandelbrot_handle = 25u32;
+        let fs_tex_particle_handle = 28u32;
         let sampler_state_handle = 26u32;
         let sampler_state_linear_handle = 27u32;
         let debug_tex_view = alloc_obj_handle();
@@ -1920,11 +1956,19 @@ impl VirglGfxBackend {
             PIPE_SHADER_FRAGMENT,
             FS_TEX_RGBA,
         );
+        encode_shader(
+            &mut init,
+            fs_tex_particle_handle,
+            PIPE_SHADER_FRAGMENT,
+            FS_TEX_PARTICLE,
+        );
         encode_bind_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX);
         encode_bind_shader(&mut init, fs_tex_mask_handle, PIPE_SHADER_FRAGMENT);
         encode_link_shader(&mut init, vs_tex_handle, fs_tex_mask_handle);
         encode_bind_shader(&mut init, fs_tex_rgba_handle, PIPE_SHADER_FRAGMENT);
         encode_link_shader(&mut init, vs_tex_handle, fs_tex_rgba_handle);
+        encode_bind_shader(&mut init, fs_tex_particle_handle, PIPE_SHADER_FRAGMENT);
+        encode_link_shader(&mut init, vs_tex_handle, fs_tex_particle_handle);
         encode_shader(
             &mut init,
             fs_mandelbrot_handle,
@@ -2066,6 +2110,7 @@ impl VirglGfxBackend {
             vs_tex_handle,
             fs_tex_mask_handle,
             fs_tex_rgba_handle,
+            fs_tex_particle_handle,
             fs_mandelbrot_handle,
             sampler_state_nearest_handle: sampler_state_handle,
             sampler_state_linear_handle,
@@ -2716,6 +2761,7 @@ impl GfxDevice for VirglGfxBackend {
             Color,
             TexturedMask,
             TexturedRgba,
+            Particle,
             Mandelbrot,
         }
 
@@ -2899,6 +2945,10 @@ impl GfxDevice for VirglGfxBackend {
                     } else if pipe_desc.fs.map(|id| id.raw()) == Some(TEX_PIPELINE_FS_RGBA_TAG_RAW)
                     {
                         DrawKind::TexturedRgba
+                    } else if pipe_desc.fs.map(|id| id.raw())
+                        == Some(TEX_PIPELINE_FS_PARTICLE_TAG_RAW)
+                    {
+                        DrawKind::Particle
                     } else if pipe_desc.fs.map(|id| id.raw())
                         == Some(crate::gfx::mandelbrot::MANDELBROT_PIPELINE_FS_TAG_RAW)
                     {
@@ -3332,6 +3382,8 @@ impl GfxDevice for VirglGfxBackend {
                             encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
                             let fs_handle = if draw_kind == DrawKind::TexturedRgba {
                                 self.fs_tex_rgba_handle
+                            } else if draw_kind == DrawKind::Particle {
+                                self.fs_tex_particle_handle
                             } else {
                                 self.fs_tex_mask_handle
                             };
