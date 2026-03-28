@@ -591,7 +591,7 @@ pub fn init_once() {
 
             crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
 
-            let mmio_len = (bar0_size as usize).clamp(0x20_000, 0x4_00000);
+            let mmio_len = usize::try_from(bar0_size).unwrap_or(usize::MAX);
             let Ok(mmio_base) = crate::pci::mmio::map_mmio_region_exact(bar0_phys, mmio_len) else {
                 crate::log!(
                     "intel: skip {:02X}:{:02X}.{} device=0x{:04X} (MMIO map failed)\n",
@@ -647,6 +647,9 @@ pub fn init_once() {
             "intel: intel_igpu770_present={}\n",
             intel_igpu770_present() as u8
         );
+        if intel_igpu770_present() {
+            super::intel_igpu770::warm_once(info);
+        }
     } else {
         crate::log!("intel: no Intel display-class PCI device claimed\n");
     }
@@ -673,6 +676,10 @@ pub async fn scanout_smoke_task() {
         crate::log!("intel: display discovery skipped (no claimed Intel device)\n");
         return;
     };
+
+    if intel_igpu770_present() {
+        super::intel_igpu770::warm_once(info);
+    }
 
     Timer::after(EmbassyDuration::from_millis(1200)).await;
     run_display_power_discovery(info);
