@@ -22,7 +22,6 @@ mod host_api;
 mod hv;
 #[cfg(feature = "hvv")]
 pub mod hvv;
-#[cfg(feature = "gfx_intel")]
 mod intel;
 mod iso9660;
 mod limine;
@@ -147,7 +146,6 @@ pub extern "C" fn kmain() -> ! {
     dma::init_from_limine();
     pci::enumerate_impl();
 
-    #[cfg(feature = "gfx_intel")]
     intel::init_once();
 
     //vga::cube::tick();

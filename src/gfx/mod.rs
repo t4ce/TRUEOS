@@ -1,7 +1,5 @@
 pub mod backends;
 pub mod cursor;
-//#[cfg(feature = "gfx_intel")]
-//pub mod intel;
 // Temporary bridge: the current imbafont source is the loadscreen-only SVG font path.
 // Keep this API surface stable for callers, but do not treat it as the future general atlas/font stack.
 #[path = "loadscreen/loadscreen_font.rs"]

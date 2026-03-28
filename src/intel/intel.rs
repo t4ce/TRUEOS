@@ -1,9 +1,13 @@
-use core::ptr::NonNull;
+use core::{
+    ptr::NonNull,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 const INTEL_VENDOR_ID: u16 = 0x8086;
+const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
 const PCI_CLASS_DISPLAY: u8 = 0x03;
 
 const INTEL_BXT_DE_PLL_CTL: usize = 0x6D000;
@@ -91,6 +95,7 @@ struct IntelDisplaySignatureCandidate {
 }
 
 static FIRST_DEVICE: Mutex<Option<IntelDeviceInfo>> = Mutex::new(None);
+static INTEL_IGPU770_PRESENT: AtomicBool = AtomicBool::new(false);
 
 impl IntelDisplaySignatureCandidate {
     const fn empty() -> Self {
@@ -616,6 +621,12 @@ pub fn init_once() {
 
     let mut first = FIRST_DEVICE.lock();
     *first = claimed;
+    INTEL_IGPU770_PRESENT.store(
+        claimed
+            .map(|info| info.device_id == INTEL_IGPU770_DEVICE_ID)
+            .unwrap_or(false),
+        Ordering::Release,
+    );
 
     if let Some(info) = *first {
         crate::log!(
@@ -630,6 +641,12 @@ pub fn init_once() {
             info.aperture_bar_size,
             info.mmio_base.as_ptr() as usize
         );
+        crate::r::readiness::set(crate::r::readiness::GFX_INTEL_CLAIMED);
+        crate::log!("intel: readiness=claimed\n");
+        crate::log!(
+            "intel: intel_igpu770_present={}\n",
+            intel_igpu770_present() as u8
+        );
     } else {
         crate::log!("intel: no Intel display-class PCI device claimed\n");
     }
@@ -638,6 +655,11 @@ pub fn init_once() {
 #[inline]
 pub fn has_claimed_device() -> bool {
     FIRST_DEVICE.lock().is_some()
+}
+
+#[inline]
+pub fn intel_igpu770_present() -> bool {
+    INTEL_IGPU770_PRESENT.load(Ordering::Acquire)
 }
 
 #[inline]
