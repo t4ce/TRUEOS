@@ -793,6 +793,7 @@ pub mod cabi {
     // but too noisy for normal runs.
     const TEX_PIPELINE_FS_MASK_TAG_RAW: u32 = 0x4D41_534B;
     const TEX_PIPELINE_FS_RGBA_TAG_RAW: u32 = 0x5247_4241;
+    const TEX_PIPELINE_FS_PARTICLE_TAG_RAW: u32 = 0x5052_5443;
     const ASYNC_TEX_STATUS_UNKNOWN: i32 = 0;
     const ASYNC_TEX_STATUS_PENDING: i32 = 1;
     const ASYNC_TEX_STATUS_READY: i32 = 2;
@@ -859,10 +860,21 @@ pub mod cabi {
         repaint_reason: &'static str,
     }
 
+    struct TextureDrawTexReq {
+        target_tex_id: u32,
+        source_tex_id: u32,
+        clear_rgb: u32,
+        verts: Vec<u8>,
+        particle_shader: bool,
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    }
+
     enum TextureWorkReq {
         Upload(TextureUploadReq),
         DrawRgb(TextureDrawRgbReq),
         DrawMandelbrot(TextureDrawMandelbrotReq),
+        DrawTex(TextureDrawTexReq),
     }
 
     fn set_async_tex_status(tex_id: u32, status: i32) {
@@ -927,6 +939,7 @@ pub mod cabi {
             TextureWorkReq::Upload(existing) => existing.tex_id == req.tex_id,
             TextureWorkReq::DrawRgb(_) => false,
             TextureWorkReq::DrawMandelbrot(_) => false,
+            TextureWorkReq::DrawTex(_) => false,
         }) {
             *existing = TextureWorkReq::Upload(req);
         } else {
@@ -941,6 +954,7 @@ pub mod cabi {
             TextureWorkReq::Upload(_) => false,
             TextureWorkReq::DrawRgb(existing) => existing.tex_id == req.tex_id,
             TextureWorkReq::DrawMandelbrot(_) => false,
+            TextureWorkReq::DrawTex(_) => false,
         }) {
             *existing = TextureWorkReq::DrawRgb(req);
         } else {
@@ -955,10 +969,26 @@ pub mod cabi {
             TextureWorkReq::Upload(_) => false,
             TextureWorkReq::DrawRgb(_) => false,
             TextureWorkReq::DrawMandelbrot(existing) => existing.tex_id == req.tex_id,
+            TextureWorkReq::DrawTex(_) => false,
         }) {
             *existing = TextureWorkReq::DrawMandelbrot(req);
         } else {
             queue.push_back(TextureWorkReq::DrawMandelbrot(req));
+        }
+        TEXTURE_UPLOAD_WAIT.notify_one();
+    }
+
+    fn enqueue_texture_draw_tex(req: TextureDrawTexReq) {
+        let mut queue = TEXTURE_UPLOAD_REQS.lock();
+        if let Some(existing) = queue.iter_mut().find(|entry| match entry {
+            TextureWorkReq::Upload(_) => false,
+            TextureWorkReq::DrawRgb(_) => false,
+            TextureWorkReq::DrawMandelbrot(_) => false,
+            TextureWorkReq::DrawTex(existing) => existing.target_tex_id == req.target_tex_id,
+        }) {
+            *existing = TextureWorkReq::DrawTex(req);
+        } else {
+            queue.push_back(TextureWorkReq::DrawTex(req));
         }
         TEXTURE_UPLOAD_WAIT.notify_one();
     }
@@ -1115,6 +1145,70 @@ pub mod cabi {
         true
     }
 
+    pub fn queue_render_tex_triangles_to_texture_copy(
+        target_tex_id: u32,
+        source_tex_id: u32,
+        clear_rgb: u32,
+        vtx: &[u8],
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    ) -> bool {
+        if target_tex_id == 0 || source_tex_id == 0 {
+            return false;
+        }
+        if vtx.is_empty() {
+            return true;
+        }
+        const VTX_SIZE: usize = 20;
+        let usable = vtx.len() - (vtx.len() % VTX_SIZE);
+        if usable == 0 {
+            return false;
+        }
+
+        enqueue_texture_draw_tex(TextureDrawTexReq {
+            target_tex_id,
+            source_tex_id,
+            clear_rgb,
+            verts: vtx[..usable].to_vec(),
+            particle_shader: false,
+            repaint_window_id,
+            repaint_reason,
+        });
+        true
+    }
+
+    pub fn queue_render_particle_tex_triangles_to_texture_copy(
+        target_tex_id: u32,
+        source_tex_id: u32,
+        clear_rgb: u32,
+        vtx: &[u8],
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    ) -> bool {
+        if target_tex_id == 0 || source_tex_id == 0 {
+            return false;
+        }
+        if vtx.is_empty() {
+            return true;
+        }
+        const VTX_SIZE: usize = 20;
+        let usable = vtx.len() - (vtx.len() % VTX_SIZE);
+        if usable == 0 {
+            return false;
+        }
+
+        enqueue_texture_draw_tex(TextureDrawTexReq {
+            target_tex_id,
+            source_tex_id,
+            clear_rgb,
+            verts: vtx[..usable].to_vec(),
+            particle_shader: true,
+            repaint_window_id,
+            repaint_reason,
+        });
+        true
+    }
+
     async fn texture_upload_service_inner() {
         loop {
             let Some(req) = take_texture_upload() else {
@@ -1161,6 +1255,21 @@ pub mod cabi {
                 }
                 TextureWorkReq::DrawMandelbrot(req) => {
                     let rc = render_mandelbrot_to_texture_now(req.tex_id, req.ticks, req.tick_hz);
+                    if rc == 0 && req.repaint_window_id != 0 {
+                        let _ = crate::r::ui2::request_window_content_present(
+                            req.repaint_window_id,
+                            req.repaint_reason,
+                        );
+                    }
+                }
+                TextureWorkReq::DrawTex(req) => {
+                    let rc = render_tex_triangles_to_texture_now(
+                        req.target_tex_id,
+                        req.source_tex_id,
+                        req.clear_rgb,
+                        req.verts.as_slice(),
+                        req.particle_shader,
+                    );
                     if rc == 0 && req.repaint_window_id != 0 {
                         let _ = crate::r::ui2::request_window_content_present(
                             req.repaint_window_id,
@@ -1456,6 +1565,7 @@ pub mod cabi {
         capacity: [usize; GFX_CABI_VBUF_RING_LEN],
         tex_pipeline_mask: PipelineId,
         tex_pipeline_rgba: PipelineId,
+        tex_pipeline_particle: PipelineId,
         tex_pipeline_mandelbrot: PipelineId,
         tex_vbuf: [BufferId; GFX_CABI_VBUF_RING_LEN],
         tex_capacity: [usize; GFX_CABI_VBUF_RING_LEN],
@@ -1523,6 +1633,7 @@ pub mod cabi {
     enum TexPipelineKind {
         Mask,
         Rgba,
+        Particle,
         Mandelbrot,
     }
 
@@ -1583,6 +1694,7 @@ pub mod cabi {
                 capacity: [0; GFX_CABI_VBUF_RING_LEN],
                 tex_pipeline_mask: PipelineId::invalid(),
                 tex_pipeline_rgba: PipelineId::invalid(),
+                tex_pipeline_particle: PipelineId::invalid(),
                 tex_pipeline_mandelbrot: PipelineId::invalid(),
                 tex_vbuf: [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN],
                 tex_capacity: [0; GFX_CABI_VBUF_RING_LEN],
@@ -2460,6 +2572,7 @@ pub mod cabi {
             st.capacity = [0; GFX_CABI_VBUF_RING_LEN];
             st.tex_pipeline_mask = PipelineId::invalid();
             st.tex_pipeline_rgba = PipelineId::invalid();
+            st.tex_pipeline_particle = PipelineId::invalid();
             st.tex_pipeline_mandelbrot = PipelineId::invalid();
             st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
             st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
@@ -2568,6 +2681,7 @@ pub mod cabi {
             st.capacity = [0; GFX_CABI_VBUF_RING_LEN];
             st.tex_pipeline_mask = PipelineId::invalid();
             st.tex_pipeline_rgba = PipelineId::invalid();
+            st.tex_pipeline_particle = PipelineId::invalid();
             st.tex_pipeline_mandelbrot = PipelineId::invalid();
             st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
             st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
@@ -2610,6 +2724,7 @@ pub mod cabi {
         let mut pipeline_id = match pipeline_kind {
             TexPipelineKind::Mask => st.tex_pipeline_mask,
             TexPipelineKind::Rgba => st.tex_pipeline_rgba,
+            TexPipelineKind::Particle => st.tex_pipeline_particle,
             TexPipelineKind::Mandelbrot => st.tex_pipeline_mandelbrot,
         };
 
@@ -2625,6 +2740,7 @@ pub mod cabi {
             let fs_tag = match pipeline_kind {
                 TexPipelineKind::Mask => ShaderId::from_raw(TEX_PIPELINE_FS_MASK_TAG_RAW),
                 TexPipelineKind::Rgba => ShaderId::from_raw(TEX_PIPELINE_FS_RGBA_TAG_RAW),
+                TexPipelineKind::Particle => ShaderId::from_raw(TEX_PIPELINE_FS_PARTICLE_TAG_RAW),
                 TexPipelineKind::Mandelbrot => {
                     ShaderId::from_raw(crate::gfx::mandelbrot::MANDELBROT_PIPELINE_FS_TAG_RAW)
                 }
@@ -2640,6 +2756,7 @@ pub mod cabi {
             match pipeline_kind {
                 TexPipelineKind::Mask => st.tex_pipeline_mask = p,
                 TexPipelineKind::Rgba => st.tex_pipeline_rgba = p,
+                TexPipelineKind::Particle => st.tex_pipeline_particle = p,
                 TexPipelineKind::Mandelbrot => st.tex_pipeline_mandelbrot = p,
             }
         }
@@ -2991,6 +3108,129 @@ pub mod cabi {
         })
     }
 
+    fn render_tex_triangles_to_texture_now(
+        target_tex_id: u32,
+        source_tex_id: u32,
+        clear_rgb: u32,
+        vtx: &[u8],
+        particle_shader: bool,
+    ) -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        if target_tex_id == 0 || source_tex_id == 0 {
+            return -1;
+        }
+        const VTX_SIZE: usize = 20;
+        let usable = vtx.len() - (vtx.len() % VTX_SIZE);
+        if usable == 0 {
+            return -2;
+        }
+        let vcount = (usable / VTX_SIZE) as u32;
+        if vcount == 0 {
+            return 0;
+        }
+
+        let (target_image, target_width, target_height) = {
+            let st = GFX_CABI_STATE.lock();
+            let idx = target_tex_id.saturating_sub(1) as usize;
+            let Some(entry) = st
+                .tex_images
+                .as_ref()
+                .and_then(|images| images.get(idx))
+                .and_then(|entry| entry.as_ref())
+            else {
+                return -3;
+            };
+            (entry.image, entry.width.max(1), entry.height.max(1))
+        };
+
+        let (source_image, pipeline_kind) = {
+            let st = GFX_CABI_STATE.lock();
+            let idx = source_tex_id.saturating_sub(1) as usize;
+            let Some(entry) = st
+                .tex_images
+                .as_ref()
+                .and_then(|images| images.get(idx))
+                .and_then(|entry| entry.as_ref())
+            else {
+                return -4;
+            };
+            let kind = if particle_shader {
+                TexPipelineKind::Particle
+            } else {
+                match entry.sample_kind {
+                    TexSampleKind::Mask => TexPipelineKind::Mask,
+                    TexSampleKind::Rgba => TexPipelineKind::Rgba,
+                }
+            };
+            (entry.image, kind)
+        };
+
+        if !target_image.is_valid() || !source_image.is_valid() {
+            return -5;
+        }
+
+        crate::gfx::with_cabi_frame_lock(|| {
+            let Some(ret) =
+                crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::UploadTexture, |ctx| {
+                    let (pipeline, vbuf, _) =
+                        match ensure_gfx_resources_tex(ctx, usable, pipeline_kind) {
+                            Some(v) => v,
+                            None => return -6,
+                        };
+
+                    if ctx.write_buffer(vbuf, 0, &vtx[..usable]).is_err() {
+                        return -7;
+                    }
+
+                    let cmds = [
+                        Command::SetRenderTarget(Some(target_image)),
+                        Command::SetViewport(Viewport {
+                            x: 0,
+                            y: 0,
+                            width: target_width as i32,
+                            height: target_height as i32,
+                        }),
+                        Command::SetScissor(None),
+                        Command::SetBlend(trueos_gfx_core::BlendDesc::straight_alpha()),
+                        Command::ClearColor { rgb: clear_rgb },
+                        Command::BindPipeline(pipeline),
+                        Command::SetSampler(SamplerDesc {
+                            wrap_s: SamplerWrap::ClampToEdge,
+                            wrap_t: SamplerWrap::ClampToEdge,
+                            min_filter: SamplerFilter::Nearest,
+                            mag_filter: SamplerFilter::Nearest,
+                        }),
+                        Command::BindImage(source_image),
+                        Command::BindVertexBuffer {
+                            buffer: vbuf,
+                            offset: 0,
+                        },
+                        Command::Draw {
+                            vertex_count: vcount,
+                            first_vertex: 0,
+                        },
+                    ];
+                    if !check_submit_budget(usable, cmds.len(), "draw_tex_triangles_to_texture") {
+                        return -8;
+                    }
+                    if ctx.submit(CommandBuffer { commands: &cmds }).is_err() {
+                        return -9;
+                    }
+                    0
+                })
+            else {
+                return -10;
+            };
+            if ret == 0 {
+                let mut st = GFX_CABI_STATE.lock();
+                st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                st.viewport_configured = false;
+            }
+            ret
+        })
+    }
+
     fn upload_texture_rgba_inner(
         tex_id: u32,
         width: u32,
@@ -3035,6 +3275,7 @@ pub mod cabi {
                     st.capacity = [0; GFX_CABI_VBUF_RING_LEN];
                     st.tex_pipeline_mask = PipelineId::invalid();
                     st.tex_pipeline_rgba = PipelineId::invalid();
+                    st.tex_pipeline_particle = PipelineId::invalid();
                     st.tex_pipeline_mandelbrot = PipelineId::invalid();
                     st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
                     st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
