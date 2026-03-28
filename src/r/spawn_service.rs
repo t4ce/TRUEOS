@@ -489,7 +489,7 @@ async fn gfx_althlasfont_prewarm_task() {
     crate::r::readiness::wait_for(crate::r::readiness::LOADSCREEN_COVER_READY).await;
 
     loop {
-        let ok = crate::gfx::imba_athlas::ensure_imba_athlas_png_buckets_uploaded();
+        let ok = crate::gfx::athlasfont::ensure_imba_athlas_png_buckets_uploaded();
         if ok {
             crate::r::readiness::set(crate::r::readiness::GFX_ATHLASFONT_READY);
             crate::log!(

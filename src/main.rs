@@ -72,36 +72,6 @@ pub use r::pat as pattern;
 pub use r::time;
 pub use r::{io, path};
 
-fn qjs_imba_athlas_small_provider() -> trueos_qjs::ImbaAthlasView<'static> {
-    let atlas = crate::gfx::imba_athlas::imba_athlas_small_view();
-    trueos_qjs::ImbaAthlasView {
-        alpha: atlas.alpha,
-        index: atlas.index,
-        widths: atlas.widths,
-        width: atlas.width,
-        height: atlas.height,
-        cell_w: atlas.cell_w,
-        cell_h: atlas.cell_h,
-        grid_w: atlas.grid_w,
-        grid_h: atlas.grid_h,
-    }
-}
-
-fn qjs_imba_athlas_large_provider() -> trueos_qjs::ImbaAthlasView<'static> {
-    let atlas = crate::gfx::imba_athlas::imba_athlas_large_view();
-    trueos_qjs::ImbaAthlasView {
-        alpha: atlas.alpha,
-        index: atlas.index,
-        widths: atlas.widths,
-        width: atlas.width,
-        height: atlas.height,
-        cell_w: atlas.cell_w,
-        cell_h: atlas.cell_h,
-        grid_w: atlas.grid_w,
-        grid_h: atlas.grid_h,
-    }
-}
-
 // Provide a known-good BSP stack and switch to it immediately in `_start` for bigger stack
 const BSP_BOOT_STACK_BYTES: usize = 8 * 1024 * 1024;
 
@@ -177,8 +147,6 @@ pub extern "C" fn kmain() -> ! {
     intel::init_once();
 
     //vga::cube::tick();
-    trueos_qjs::set_imba_athlas_small_provider(qjs_imba_athlas_small_provider);
-    trueos_qjs::set_imba_athlas_large_provider(qjs_imba_athlas_large_provider);
     trueos_qjs::host_api_hook::set_context_init_hook(host_api::install);
 
     pci::vrng::init_once();
