@@ -416,6 +416,13 @@ async fn gfx_virgl_ready_task() {
         return;
     }
 
+    if crate::intel::has_claimed_device() {
+        crate::log!(
+            "boot-probe: gfx-virgl-backend-ready skipped (intel soft-detect claimed)\n"
+        );
+        return;
+    }
+
     #[cfg(not(feature = "gfx_virgl"))]
     {
         return;
@@ -429,13 +436,13 @@ async fn gfx_virgl_ready_task() {
             }
             if crate::r::readiness::is_set(crate::r::readiness::GFX_VIRGL_READY) {
                 crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
-                crate::log!("boot-probe: gfx-backend-ready ms={}\n", boot_probe_ms());
+                crate::log!("boot-probe: gfx-virgl-backend-ready ms={}\n", boot_probe_ms());
                 return;
             }
             if gfx_switched() {
                 crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
                 crate::log!(
-                    "boot-probe: gfx-backend-ready(switched) ms={}\n",
+                    "boot-probe: gfx-virgl-backend-ready(switched) ms={}\n",
                     boot_probe_ms()
                 );
                 return;
@@ -443,7 +450,7 @@ async fn gfx_virgl_ready_task() {
             Timer::after(EmbassyDuration::from_millis(25)).await;
         }
         crate::log!(
-            "gfx-backend-ready: timeout virgl_active={} virgl_present_cached={} ready_mask=0x{:08X}\n",
+            "gfx-virgl-backend-ready: timeout virgl_active={} virgl_present_cached={} ready_mask=0x{:08X}\n",
             crate::gfx::is_virgl_active() as u8,
             crate::gfx::is_virgl_present_cached() as u8,
             crate::r::readiness::mask()
@@ -998,7 +1005,7 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
     TaskSpec::enabled(
-        "gfx-backend-ready",
+        "gfx-virgl-backend-ready",
         0,
         &GFX_VIRGL_READY_TASK_STARTED,
         spawn_gfx_virgl_ready_task,

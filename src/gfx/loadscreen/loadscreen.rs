@@ -3,9 +3,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 const LOADSCREEN_BG_RGB: u32 = 0xF2EEE8;
 const LOADSCREEN_TITLE_RGB: (u8, u8, u8) = (0x10, 0x10, 0x12);
 const LOADSCREEN_MSG: &[u8] = b"TRUE OS";
-const LOADSCREEN_TILE_H_FACTOR: f32 = 0.085;
-const LOADSCREEN_TILE_H_MIN: f32 = 44.0;
-const LOADSCREEN_TILE_H_MAX: f32 = 124.0;
+const LOADSCREEN_TILE_SIZE: f32 = 98.0;
 const LOADSCREEN_WAIT_POLL_MS: u64 = 100;
 const LOADSCREEN_MIN_LIFETIME_MS: u64 = 4_000;
 const LOADSCREEN_ANIM_FRAME_MS: u64 = 33;
@@ -54,8 +52,7 @@ pub async fn gfx_loadscreen_task() {
         .and_then(|resp| resp.framebuffers().next())
         .map(|fb| (fb.width() as f32, fb.height() as f32))
         .unwrap_or((1024.0, 768.0));
-    let tile_h =
-        (fb_h * LOADSCREEN_TILE_H_FACTOR).clamp(LOADSCREEN_TILE_H_MIN, LOADSCREEN_TILE_H_MAX);
+    let tile_h = LOADSCREEN_TILE_SIZE;
     let text_layout = crate::gfx::imbafont::layout_text_centered(
         crate::gfx::imbafont::ImbaFontFace::Font,
         LOADSCREEN_MSG,
