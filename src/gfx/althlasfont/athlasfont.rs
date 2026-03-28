@@ -2,7 +2,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use libm::ceilf;
+use libm::{ceilf, fabsf, floorf};
 use spin::{Mutex, Once};
 use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
 
@@ -124,6 +124,12 @@ pub fn imba_athlas_bucket_tex_for_char(size_case: usize, ch: char) -> Option<(u3
 #[inline]
 pub fn imba_athlas_bucket_width_stage(bucket: usize) -> Option<u8> {
     athlasmetrics::athlas_bucket_width_stage(bucket)
+}
+
+#[inline]
+pub fn imba_athlas_bucket_cell_px(size_case: usize, bucket: usize) -> Option<(u32, u32)> {
+    let bucket = decoded_bucket(size_case, bucket)?;
+    Some((bucket.cell_w, bucket.cell_h))
 }
 
 #[inline]
@@ -377,14 +383,48 @@ fn decoded_bucket(size_case: usize, bucket: usize) -> Option<&'static AthlasDeco
 #[inline]
 fn imba_athlas_size_case_for_px_h(px_h: f32) -> usize {
     if !px_h.is_finite() || px_h <= 0.0 {
-        2
-    } else if px_h <= 12.0 {
-        0
-    } else if px_h <= 20.0 {
-        1
-    } else {
-        2
+        return 1;
     }
+
+    let target = px_h.max(1.0);
+    let variants = [32.0f32, 64.0f32, 192.0f32];
+    let mut best_idx = 0usize;
+    let mut best_err = f32::MAX;
+    for (idx, variant_px_h) in variants.iter().copied().enumerate() {
+        let err = fabsf(variant_px_h - target);
+        if err < best_err {
+            best_err = err;
+            best_idx = idx;
+        }
+    }
+    best_idx
+}
+
+#[inline]
+fn imba_athlas_native_px_h_for_size_case(size_case: usize) -> f32 {
+    match size_case {
+        0 => 32.0,
+        1 => 64.0,
+        2 => 192.0,
+        _ => 64.0,
+    }
+}
+
+#[inline]
+pub fn imba_athlas_native_px_h(px_h: f32) -> f32 {
+    imba_athlas_native_px_h_for_size_case(imba_athlas_size_case_for_px_h(px_h))
+}
+
+#[inline]
+pub fn imba_athlas_is_native_px_h(px_h: f32) -> bool {
+    let snapped = imba_athlas_native_px_h(px_h);
+    fabsf(px_h - snapped) < 0.01
+}
+
+#[inline]
+fn bucket_scale_for_px_h(bucket: &AthlasDecodedBucket, px_h: f32) -> f32 {
+    let src_h = bucket.cell_h.max(1) as f32;
+    (px_h.max(1.0) / src_h).max(1.0 / src_h)
 }
 
 #[inline]
@@ -465,7 +505,8 @@ pub fn imba_athlas_text_width_nearest_px(text: &[u8], px_h: f32) -> f32 {
         let Some(bucket) = decoded_bucket(size_case, glyph.bucket as usize) else {
             continue;
         };
-        line_w += bucket.cell_w as f32;
+        let scale = bucket_scale_for_px_h(bucket, px_h);
+        line_w += bucket.cell_w as f32 * scale;
     }
     max_w.max(line_w)
 }
@@ -542,7 +583,10 @@ pub fn blit_imba_athlas_text_rgba_nearest_px(
         let Some(bucket) = decoded_bucket(size_case, glyph.bucket as usize) else {
             continue;
         };
-        let advance = bucket.cell_w as i32;
+        let scale = bucket_scale_for_px_h(bucket, px_h);
+        let draw_w = ceilf(bucket.cell_w as f32 * scale).max(1.0) as i32;
+        let draw_h = ceilf(bucket.cell_h as f32 * scale).max(1.0) as i32;
+        let advance = draw_w;
         if ch == b' ' {
             pen_x += advance.max(1);
             continue;
@@ -550,18 +594,20 @@ pub fn blit_imba_athlas_text_rgba_nearest_px(
         let slot = glyph.slot as usize;
         let cell_x = (slot % bucket.grid_w as usize) as i32 * bucket.cell_w as i32;
         let cell_y = (slot / bucket.grid_w as usize) as i32 * bucket.cell_h as i32;
-        for row in 0..bucket.cell_h as i32 {
+        for row in 0..draw_h {
             let dst_y_px = pen_y + row;
             if dst_y_px < 0 || dst_y_px >= dst_h as i32 {
                 continue;
             }
-            for col in 0..bucket.cell_w as i32 {
+            let src_row = (floorf((row as f32) / scale) as i32).clamp(0, bucket.cell_h as i32 - 1);
+            for col in 0..draw_w {
                 let dst_x_px = pen_x + col;
                 if dst_x_px < 0 || dst_x_px >= dst_w as i32 {
                     continue;
                 }
-                let src_x = cell_x + col;
-                let src_y = cell_y + row;
+                let src_col = (floorf((col as f32) / scale) as i32).clamp(0, bucket.cell_w as i32 - 1);
+                let src_x = cell_x + src_col;
+                let src_y = cell_y + src_row;
                 let src_idx = (src_y as usize)
                     .saturating_mul(bucket.width as usize)
                     .saturating_add(src_x as usize);
@@ -613,13 +659,64 @@ pub fn draw_imba_athlas_text_in_frame_alpha_nearest_px(
     px_h: f32,
     alpha: u8,
 ) -> bool {
+    if !imba_athlas_is_native_px_h(px_h) {
+        crate::log!(
+            "imba-athlas: refused scaled nearest draw requested_px_h={} native_px_h={}\n",
+            px_h,
+            imba_athlas_native_px_h(px_h)
+        );
+        return false;
+    }
+
+    draw_imba_athlas_text_in_frame_alpha_blend_nearest_px(
+        text,
+        x,
+        y,
+        view_w,
+        view_h,
+        px_h,
+        alpha,
+        0x0302,
+        0x0303,
+    )
+}
+
+pub fn draw_imba_athlas_text_in_frame_alpha_blend_scaled_px(
+    text: &[u8],
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+    px_h: f32,
+    alpha: u8,
+    src_blend: u32,
+    dst_blend: u32,
+) -> bool {
+    draw_imba_athlas_text_in_frame_alpha_blend_nearest_px(
+        text, x, y, view_w, view_h, px_h, alpha, src_blend, dst_blend,
+    )
+}
+
+pub fn draw_imba_athlas_text_in_frame_alpha_blend_nearest_px(
+    text: &[u8],
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+    px_h: f32,
+    alpha: u8,
+    src_blend: u32,
+    dst_blend: u32,
+) -> bool {
     if text.is_empty() || !ensure_imba_athlas_png_buckets_uploaded() {
         return false;
     }
 
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
     let _ = unsafe {
-        crate::r::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+        crate::r::io::cabi::trueos_cabi_gfx_set_blend(
+            1, src_blend, dst_blend, src_blend, dst_blend, 0, 0,
+        )
     };
 
     let size_case = imba_athlas_size_case_for_px_h(px_h);
@@ -627,7 +724,7 @@ pub fn draw_imba_athlas_text_in_frame_alpha_nearest_px(
     let mut pen_x = x;
     let mut pen_y = y;
     let base_x = x;
-    let color = Rgba8::new(16, 16, 16, alpha);
+    let color = Rgba8::new(0, 0, 0, alpha);
     let mut drew = false;
 
     for &ch in text {
@@ -642,7 +739,10 @@ pub fn draw_imba_athlas_text_in_frame_alpha_nearest_px(
         let Some(bucket) = decoded_bucket(size_case, glyph.bucket as usize) else {
             continue;
         };
-        let advance = bucket.cell_w as f32;
+        let scale = bucket_scale_for_px_h(bucket, px_h);
+        let draw_w = (bucket.cell_w as f32 * scale).max(1.0);
+        let draw_h = (bucket.cell_h as f32 * scale).max(1.0);
+        let advance = draw_w;
         if ch == b' ' {
             pen_x += advance.max(1.0);
             continue;
@@ -662,8 +762,8 @@ pub fn draw_imba_athlas_text_in_frame_alpha_nearest_px(
             bucket.tex_id,
             pen_x,
             pen_y,
-            pen_x + bucket.cell_w as f32,
-            pen_y + bucket.cell_h as f32,
+            pen_x + draw_w,
+            pen_y + draw_h,
             uv,
             color,
             view_w,
@@ -684,7 +784,17 @@ pub fn draw_imba_athlas_text_in_frame_alpha_scaled(
     px_h: f32,
     alpha: u8,
 ) -> bool {
-    draw_imba_athlas_text_in_frame_alpha_nearest_px(text, x, y, view_w, view_h, px_h, alpha)
+    draw_imba_athlas_text_in_frame_alpha_blend_scaled_px(
+        text,
+        x,
+        y,
+        view_w,
+        view_h,
+        px_h,
+        alpha,
+        0x0302,
+        0x0303,
+    )
 }
 
 pub fn draw_imba_athlas_text(text: &[u8], x: f32, y: f32) -> bool {

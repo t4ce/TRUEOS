@@ -1138,49 +1138,6 @@ fn window_title_tex_id(window_id: u32) -> u32 {
     UI2_WINDOW_TITLE_TEX_ID_BASE.saturating_add(window_id.saturating_sub(1))
 }
 
-fn rebuild_window_title_texture(window: &mut Ui2Window) -> bool {
-    const TITLE_TEXT_H: f32 = 24.0;
-
-    window.title_tex_id = window_title_tex_id(window.id);
-    window.title_tex_w = 0;
-    window.title_tex_h = 0;
-    window.title_tex_alpha = window.alpha;
-
-    if window.title.is_empty() {
-        return true;
-    }
-
-    let Some((text_w, text_h)) =
-        crate::gfx::athlasfont::imba_athlas_upload_text_texture_nearest_px(
-            window.title_tex_id,
-            window.title.as_bytes(),
-            TITLE_TEXT_H,
-            (0xF3, 0xF4, 0xF6, window.alpha),
-        )
-    else {
-        crate::log!(
-            "ui2: title-texture rebuild failed window={} tex={} title='{}' alpha={}\n",
-            window.id,
-            window.title_tex_id,
-            window.title.as_str(),
-            window.alpha
-        );
-        return false;
-    };
-
-    window.title_tex_w = text_w;
-    window.title_tex_h = text_h;
-    crate::log!(
-        "ui2: title-texture ready window={} tex={} size={}x{} title='{}'\n",
-        window.id,
-        window.title_tex_id,
-        text_w,
-        text_h,
-        window.title.as_str()
-    );
-    true
-}
-
 fn draw_window_content_placeholder(
     _state: &Ui2State,
     _window: &Ui2Window,
