@@ -8,9 +8,8 @@ use embedded_websocket::{
 };
 use v::vnet as api;
 
-use crate::r::net::VNet;
+use crate::r::net::{VNet, ports};
 
-const WS_TIME_TCP_PORT: u16 = 56_765;
 const WS_TIME_PATH: &str = "/time";
 const RX_BUF_MAX: usize = 8 * 1024;
 const TX_BUF_MAX: usize = 1024;
@@ -340,7 +339,7 @@ pub async fn ws_time_task() {
 
         if vnet
             .submit(api::Command::OpenTcpListen {
-                port: WS_TIME_TCP_PORT,
+                port: ports::WS_TIME_TCP_PORT,
             })
             .is_err()
         {
@@ -350,7 +349,7 @@ pub async fn ws_time_task() {
 
         crate::log!(
             "ws-time: listening on tcp {} path={}\n",
-            WS_TIME_TCP_PORT,
+            ports::WS_TIME_TCP_PORT,
             WS_TIME_PATH
         );
 
@@ -409,7 +408,7 @@ pub async fn ws_time_task() {
                             listener = None;
                             session = None;
                             let _ = vnet.submit(api::Command::OpenTcpListen {
-                                port: WS_TIME_TCP_PORT,
+                                port: ports::WS_TIME_TCP_PORT,
                             });
                         } else if session.as_ref().map(|s| s.handle) == Some(handle) {
                             session = None;
