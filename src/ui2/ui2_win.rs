@@ -90,9 +90,6 @@ pub(super) fn alloc_window(
         last_logged_dirty_seq: 0,
         last_logged_reason: "",
     });
-    if let Some(window) = state.windows.last_mut() {
-        let _ = rebuild_window_title_texture(window);
-    }
     queue_hosted_container_sync();
     id
 }
@@ -792,6 +789,55 @@ pub struct Ui2SurfaceWindow {
 }
 
 impl Ui2SurfaceWindow {
+    fn attach_existing_texture(
+        title: &str,
+        content_rect: Ui2Rect,
+        z: i16,
+        alpha: u8,
+        tex_id: u32,
+        blend_enabled: bool,
+    ) -> Self {
+        let width = (content_rect.w.max(1.0) + 0.5) as u32;
+        let height = (content_rect.h.max(1.0) + 0.5) as u32;
+        let window_id = create_hosted_surface_content_window(
+            title,
+            Ui2Rect {
+                x: content_rect.x,
+                y: content_rect.y,
+                w: width as f32,
+                h: height as f32,
+            },
+            z,
+            alpha,
+            tex_id,
+            blend_enabled,
+        );
+        Self {
+            window_id,
+            tex_id,
+            width,
+            height,
+        }
+    }
+
+    pub fn from_existing_texture(
+        title: &str,
+        content_rect: Ui2Rect,
+        z: i16,
+        alpha: u8,
+        tex_id: u32,
+        blend_enabled: bool,
+    ) -> Option<Self> {
+        Some(Self::attach_existing_texture(
+            title,
+            content_rect,
+            z,
+            alpha,
+            tex_id,
+            blend_enabled,
+        ))
+    }
+
     pub fn new(
         title: &str,
         content_rect: Ui2Rect,
@@ -824,25 +870,14 @@ impl Ui2SurfaceWindow {
             return None;
         }
 
-        let window_id = create_hosted_surface_content_window(
+        Some(Self::attach_existing_texture(
             title,
-            Ui2Rect {
-                x: content_rect.x,
-                y: content_rect.y,
-                w: width as f32,
-                h: height as f32,
-            },
+            content_rect,
             z,
             alpha,
             tex_id,
             blend_enabled,
-        );
-        Some(Self {
-            window_id,
-            tex_id,
-            width,
-            height,
-        })
+        ))
     }
 
     #[inline]
@@ -1074,7 +1109,6 @@ pub fn set_window_title(id: u32, title: &str) -> bool {
         return true;
     }
     window.title = String::from(title);
-    let _ = rebuild_window_title_texture(window);
     state.compose_reason = "title-window";
     note_window_dirty(&mut state, id, "title-window")
 }
