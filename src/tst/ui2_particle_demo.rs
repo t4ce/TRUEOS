@@ -13,7 +13,7 @@ const UI2_PARTICLE_DEMO_RT_H: u32 = 320;
 const UI2_PARTICLE_DEMO_WINDOW_X: f32 = 640.0;
 const UI2_PARTICLE_DEMO_WINDOW_Y: f32 = 120.0;
 const UI2_PARTICLE_DEMO_WINDOW_Z: i16 = 34;
-const UI2_PARTICLE_DEMO_MAX_PARTICLES: usize = 100;
+const UI2_PARTICLE_DEMO_MAX_PARTICLES: usize = 300;
 const UI2_PARTICLE_DEMO_FRAME_MS: u64 = 20;
 const UI2_PARTICLE_DEMO_CLEAR_RGB: u32 = 0x070B11;
 const UI2_PARTICLE_DEMO_BG_RGBA: [u8; 4] = [0x07, 0x0B, 0x11, 0xFF];
@@ -72,15 +72,6 @@ fn pack_rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
     ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | (a as u32)
 }
 
-fn unpack_rgba8(color: u32) -> Rgba8 {
-    Rgba8::new(
-        ((color >> 24) & 0xFF) as u8,
-        ((color >> 16) & 0xFF) as u8,
-        ((color >> 8) & 0xFF) as u8,
-        (color & 0xFF) as u8,
-    )
-}
-
 fn push_particle_quad(
     verts: &mut Vec<u8>,
     transform: ViewTransform,
@@ -92,7 +83,7 @@ fn push_particle_quad(
     size_px: f32,
     color: Rgba8,
 ) {
-    let scale = (size_px.max(1.0) / sprite_h.max(1) as f32).max(0.35);
+    let scale = (size_px.max(1.0) / sprite_h.max(1) as f32).max(0.35) * 2.15;
     let draw_w = (sprite_w as f32 * scale).max(1.0);
     let draw_h = (sprite_h as f32 * scale).max(1.0);
     let left = x - draw_w * 0.5;
@@ -116,12 +107,24 @@ fn build_particle_verts(
     uv: [f32; 4],
     sprite_w: u32,
     sprite_h: u32,
+    tick: u32,
 ) -> Vec<u8> {
     let transform = ViewTransform::from_extent(width, height);
     let mut verts = Vec::with_capacity(snapshot.len().saturating_mul(6 * TEX_VERTEX_SIZE));
+    let t = tick as f32 * 0.045;
 
-    for particle in snapshot.iter() {
-        let base = unpack_rgba8(particle.color_rgba);
+    for (idx, particle) in snapshot.iter().enumerate() {
+        let seed = idx as f32 * 0.618_034 + t;
+        let dx_a = libm::sinf(seed * 1.13) * 0.5 + 0.5;
+        let dy_a = libm::cosf(seed * 0.91) * 0.5 + 0.5;
+        let dx_b = libm::sinf(seed * 1.87 + 1.2) * 0.5 + 0.5;
+        let dy_b = libm::cosf(seed * 1.41 + 0.7) * 0.5 + 0.5;
+        let packed = Rgba8::new(
+            (dx_a.clamp(0.0, 1.0) * 255.0) as u8,
+            (dy_a.clamp(0.0, 1.0) * 255.0) as u8,
+            (dx_b.clamp(0.0, 1.0) * 255.0) as u8,
+            (dy_b.clamp(0.0, 1.0) * 255.0) as u8,
+        );
         push_particle_quad(
             &mut verts,
             transform,
@@ -131,7 +134,7 @@ fn build_particle_verts(
             particle.x,
             particle.y,
             particle.size_px,
-            base,
+            packed,
         );
     }
 
@@ -198,6 +201,7 @@ pub async fn ui2_particle_demo_task() {
     let mut system = ParticleSystem::new(UI2_PARTICLE_DEMO_MAX_PARTICLES);
     let mut snapshot = Vec::with_capacity(UI2_PARTICLE_DEMO_MAX_PARTICLES);
     let mut rng = DemoRng::new(0x51D3_1000);
+    let mut tick = 0u32;
     if !crate::gfx::imba_athlas::ensure_imba_athlas_png_buckets_uploaded() {
         crate::log!("ui2-particle-demo: athlas upload failed\n");
         return;
@@ -223,6 +227,7 @@ pub async fn ui2_particle_demo_task() {
             sprite_uv,
             sprite_w,
             sprite_h,
+            tick,
         );
         let _ = crate::r::io::cabi::queue_render_particle_tex_triangles_to_texture_copy(
             surface.tex_id(),
@@ -232,6 +237,7 @@ pub async fn ui2_particle_demo_task() {
             window_id,
             "ui2-particle-demo-tex",
         );
+        tick = tick.wrapping_add(1);
         Timer::after(EmbassyDuration::from_millis(UI2_PARTICLE_DEMO_FRAME_MS)).await;
     }
 }

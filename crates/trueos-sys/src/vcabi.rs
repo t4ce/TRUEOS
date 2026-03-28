@@ -133,6 +133,12 @@ unsafe extern "C" {
     pub fn trueos_cabi_shell_qjs_read(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_shell_qjs_read_byte() -> i32;
     pub fn trueos_cabi_gfx_capture_screenshot_data_url(out_ptr: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_gfx_trace_set_enabled(enabled: u32) -> u32;
+    pub fn trueos_cabi_gfx_trace_clear();
+    pub fn trueos_cabi_gfx_trace_snapshot(
+        out_ptr: *mut TrueosGfxTraceEntry,
+        out_cap: u32,
+    ) -> u32;
     pub fn trueos_cabi_gfx_upload_texture_svg(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_gfx_upload_texture_rgba_image_async(
         tex_id: u32,
@@ -179,6 +185,19 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui2_window_close(window_id: u32) -> i32;
     pub fn trueos_cabi_ui2_window_begin_move(window_id: u32) -> i32;
     pub fn trueos_cabi_ui2_window_begin_resize(window_id: u32, edge_mask: u32) -> i32;
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosGfxTraceEntry {
+    pub seq: u32,
+    pub op: u32,
+    pub frame_seq: u32,
+    pub flags: u32,
+    pub a: u32,
+    pub b: u32,
+    pub c: u32,
+    pub d: u32,
 }
 
 #[repr(C)]

@@ -414,6 +414,17 @@ fn xhci_fatal_probe_state(controller_id: usize) -> Option<&'static str> {
     }
 }
 
+fn xhci_fatal_init_state(controller_id: usize) -> Option<&'static str> {
+    let status = xhci_status_bits(controller_id)?;
+    if status.host_system_error {
+        Some("host-system-error")
+    } else if status.host_controller_error {
+        Some("host-controller-error")
+    } else {
+        None
+    }
+}
+
 fn log_xhci_status_bits(controller_id: usize, prefix: &str) {
     let Some(status) = xhci_status_bits(controller_id) else {
         return;
@@ -2755,6 +2766,23 @@ fn uninstall_event_handler(controller_id: usize) {
     *EVENT_HANDLER[controller_id].lock() = None;
 }
 
+async fn wait_for_manual_rebind(controller_id: usize) {
+    crate::log!(
+        "crabusb: controller {} quarantined; auto-rebind disabled until manual rebind request\n",
+        controller_id
+    );
+    loop {
+        if controller_can_rebind(controller_id) {
+            crate::log!(
+                "crabusb: controller {} leaving quarantine after manual rebind request\n",
+                controller_id
+            );
+            return;
+        }
+        Timer::after(EmbassyDuration::from_secs(1)).await;
+    }
+}
+
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn event_pump_task(controller_id: usize) {
     loop {
@@ -2825,6 +2853,12 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
     let mut quick_stop_streak = 0u32;
 
     loop {
+        if controller_needs_quarantine(controller_index)
+            && matches!(controller_phase(controller_index), ControllerPhase::Quarantined)
+        {
+            wait_for_manual_rebind(controller_index).await;
+        }
+
         let Some(info) = super::controller_by_index(controller_index) else {
             crate::log!(
                 "crabusb: controller {} not available yet; retrying\n",
@@ -2868,6 +2902,17 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
                 info.index,
                 err
             );
+            log_xhci_status_bits(info.index, "host init failed");
+            if let Some(reason) = xhci_fatal_init_state(info.index) {
+                mark_controller_quarantined(info.index, "fatal xhci state during host init");
+                crate::log!(
+                    "crabusb: controller {} fatal xhci state during host init ({}); auto-rebind disabled\n",
+                    info.index,
+                    reason
+                );
+                wait_for_manual_rebind(info.index).await;
+                continue;
+            }
             Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
             continue;
         }

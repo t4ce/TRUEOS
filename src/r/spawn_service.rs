@@ -131,7 +131,7 @@ define_started_flags!(
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_ATHLAS_GRID_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
-    GFX_INTEL_TRIANGLE_DEMO_STARTED,
+    GFX_INTEL_READINESS_PROBE_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
     CRABUSB_EVENT_PUMP_STARTED,
     CRABUSB_AUDIO_STARTED,
@@ -793,20 +793,10 @@ const UI2_DEMOS: &[Ui2DemoTaskSpec] = &[
     UI2_PARTICLE_DEMO,
 ];
 
-// currently ofc esotheric
-fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
-    #[cfg(not(feature = "gfx_intel"))]
-    {
-        let _ = spawner;
-        return SpawnAttempt::Skipped;
-    }
-
-    #[cfg(feature = "gfx_intel")]
-    {
-        spawn_local(spawner, |spawner| {
-            spawner.spawn(crate::intel::scanout_smoke_task())
-        })
-    }
+fn spawn_gfx_intel_readiness_probe(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::intel::scanout_smoke_task())
+    })
 }
 
 fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
@@ -1079,10 +1069,10 @@ static TASKS: &[TaskSpec] = &[
     UI2_MANDELBROT_DEMO.task_spec(),
     UI2_PARTICLE_DEMO.task_spec(),
     TaskSpec::enabled(
-        "gfx-intel-scanout-demo",
+        "gfx-intel-readiness-probe",
         crate::r::readiness::GFX_INTEL_CLAIMED,
-        &GFX_INTEL_TRIANGLE_DEMO_STARTED,
-        spawn_gfx_intel_triangle_demo,
+        &GFX_INTEL_READINESS_PROBE_STARTED,
+        spawn_gfx_intel_readiness_probe,
     ),
     TaskSpec::enabled(
         "crabusb-bsp-service",
