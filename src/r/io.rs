@@ -1677,6 +1677,133 @@ pub mod cabi {
         },
     }
 
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct TrueosGfxTraceEntry {
+        pub seq: u32,
+        pub op: u32,
+        pub frame_seq: u32,
+        pub flags: u32,
+        pub a: u32,
+        pub b: u32,
+        pub c: u32,
+        pub d: u32,
+    }
+
+    const GFX_TRACE_CAPACITY: usize = 1024;
+
+    const GFX_TRACE_OP_BEGIN_FRAME: u32 = 1;
+    const GFX_TRACE_OP_END_FRAME: u32 = 2;
+    const GFX_TRACE_OP_SET_BLEND: u32 = 3;
+    const GFX_TRACE_OP_SET_SAMPLER: u32 = 4;
+    const GFX_TRACE_OP_SET_SCISSOR: u32 = 5;
+    const GFX_TRACE_OP_CLEAR_SCISSOR: u32 = 6;
+    const GFX_TRACE_OP_SET_RENDER_TARGET: u32 = 7;
+    const GFX_TRACE_OP_CLEAR_RENDER_TARGET: u32 = 8;
+    const GFX_TRACE_OP_UPLOAD_TEXTURE_RGBA: u32 = 9;
+    const GFX_TRACE_OP_UPLOAD_TEXTURE_PNG: u32 = 10;
+    const GFX_TRACE_OP_UPLOAD_TEXTURE_JPEG: u32 = 11;
+    const GFX_TRACE_OP_UPLOAD_TEXTURE_SVG: u32 = 12;
+    const GFX_TRACE_OP_DRAW_RGB_TRIANGLES: u32 = 13;
+    const GFX_TRACE_OP_DRAW_TEX_TRIANGLES: u32 = 14;
+
+    struct GfxTraceRing {
+        enabled: bool,
+        head: usize,
+        len: usize,
+        next_seq: u32,
+        dropped: u32,
+        entries: [TrueosGfxTraceEntry; GFX_TRACE_CAPACITY],
+    }
+
+    impl GfxTraceRing {
+        const fn new() -> Self {
+            Self {
+                enabled: false,
+                head: 0,
+                len: 0,
+                next_seq: 1,
+                dropped: 0,
+                entries: [TrueosGfxTraceEntry {
+                    seq: 0,
+                    op: 0,
+                    frame_seq: 0,
+                    flags: 0,
+                    a: 0,
+                    b: 0,
+                    c: 0,
+                    d: 0,
+                }; GFX_TRACE_CAPACITY],
+            }
+        }
+    }
+
+    static GFX_TRACE_RING: spin::Mutex<GfxTraceRing> = spin::Mutex::new(GfxTraceRing::new());
+
+    #[inline]
+    fn gfx_trace_record(op: u32, frame_seq: u32, flags: u32, a: u32, b: u32, c: u32, d: u32) {
+        let mut ring = GFX_TRACE_RING.lock();
+        if !ring.enabled {
+            return;
+        }
+        let entry = TrueosGfxTraceEntry {
+            seq: ring.next_seq,
+            op,
+            frame_seq,
+            flags,
+            a,
+            b,
+            c,
+            d,
+        };
+        ring.next_seq = ring.next_seq.wrapping_add(1);
+        let head = ring.head;
+        ring.entries[head] = entry;
+        ring.head = (head + 1) % GFX_TRACE_CAPACITY;
+        if ring.len < GFX_TRACE_CAPACITY {
+            ring.len += 1;
+        } else {
+            ring.dropped = ring.dropped.saturating_add(1);
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_trace_set_enabled(enabled: u32) -> u32 {
+        let mut ring = GFX_TRACE_RING.lock();
+        let prev = ring.enabled;
+        ring.enabled = enabled != 0;
+        prev as u32
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_trace_clear() {
+        let mut ring = GFX_TRACE_RING.lock();
+        ring.head = 0;
+        ring.len = 0;
+        ring.dropped = 0;
+        ring.next_seq = 1;
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_trace_snapshot(
+        out_ptr: *mut TrueosGfxTraceEntry,
+        out_cap: u32,
+    ) -> u32 {
+        let ring = GFX_TRACE_RING.lock();
+        if out_cap == 0 || out_ptr.is_null() {
+            return ring.len.min(out_cap as usize) as u32;
+        }
+        let want = ring.len.min(out_cap as usize);
+        let start = (ring.head + GFX_TRACE_CAPACITY - want) % GFX_TRACE_CAPACITY;
+        for i in 0..want {
+            let idx = (start + i) % GFX_TRACE_CAPACITY;
+            unsafe {
+                core::ptr::write(out_ptr.add(i), ring.entries[idx]);
+            }
+        }
+        want as u32
+    }
+
     mod io_cursor {
         use super::*;
 
@@ -2404,6 +2531,17 @@ pub mod cabi {
             src: gl_blend_factor_to_core(src_rgb),
             dst: gl_blend_factor_to_core(dst_rgb),
         };
+        let frame_seq = st.frame_seq;
+        drop(st);
+        gfx_trace_record(
+            GFX_TRACE_OP_SET_BLEND,
+            frame_seq,
+            enabled,
+            src_rgb,
+            dst_rgb,
+            _src_alpha,
+            _dst_alpha,
+        );
         0
     }
 
@@ -2441,6 +2579,17 @@ pub mod cabi {
             min_filter: minf,
             mag_filter: magf,
         };
+        let frame_seq = st.frame_seq;
+        drop(st);
+        gfx_trace_record(
+            GFX_TRACE_OP_SET_SAMPLER,
+            frame_seq,
+            0,
+            wrap_s,
+            wrap_t,
+            min_filter,
+            mag_filter,
+        );
         0
     }
 
@@ -2466,6 +2615,9 @@ pub mod cabi {
             let rect = st.cur_scissor;
             st.frame_draws.push(PendingDraw::SetScissor { rect });
         }
+        let frame_seq = st.frame_seq;
+        drop(st);
+        gfx_trace_record(GFX_TRACE_OP_SET_SCISSOR, frame_seq, 0, x, y, width, height);
         0
     }
 
@@ -2476,6 +2628,9 @@ pub mod cabi {
         if st.frame_active {
             st.frame_draws.push(PendingDraw::SetScissor { rect: None });
         }
+        let frame_seq = st.frame_seq;
+        drop(st);
+        gfx_trace_record(GFX_TRACE_OP_CLEAR_SCISSOR, frame_seq, 0, 0, 0, 0, 0);
         0
     }
 
@@ -2489,6 +2644,9 @@ pub mod cabi {
                 st.frame_draws
                     .push(PendingDraw::SetRenderTarget { tex_id: 0 });
             }
+            let frame_seq = st.frame_seq;
+            drop(st);
+            gfx_trace_record(GFX_TRACE_OP_SET_RENDER_TARGET, frame_seq, 0, 0, 0, 0, 0);
             return 0;
         }
         let idx = tex_id.saturating_sub(1) as usize;
@@ -2506,6 +2664,9 @@ pub mod cabi {
         if st.frame_active {
             st.frame_draws.push(PendingDraw::SetRenderTarget { tex_id });
         }
+        let frame_seq = st.frame_seq;
+        drop(st);
+        gfx_trace_record(GFX_TRACE_OP_SET_RENDER_TARGET, frame_seq, 0, tex_id, 0, 0, 0);
         0
     }
 
@@ -2518,6 +2679,9 @@ pub mod cabi {
             st.frame_draws
                 .push(PendingDraw::SetRenderTarget { tex_id: 0 });
         }
+        let frame_seq = st.frame_seq;
+        drop(st);
+        gfx_trace_record(GFX_TRACE_OP_CLEAR_RENDER_TARGET, frame_seq, 0, 0, 0, 0, 0);
         0
     }
 
@@ -3241,6 +3405,18 @@ pub mod cabi {
         sample_kind: TexSampleKind,
     ) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
+        gfx_trace_record(
+            GFX_TRACE_OP_UPLOAD_TEXTURE_RGBA,
+            0,
+            match sample_kind {
+                TexSampleKind::Mask => 0,
+                TexSampleKind::Rgba => 1,
+            },
+            tex_id,
+            width,
+            height,
+            data_len.min(u32::MAX as usize) as u32,
+        );
 
         if tex_id == 0 || width == 0 || height == 0 {
             return -1;
@@ -3444,6 +3620,15 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
+        gfx_trace_record(
+            GFX_TRACE_OP_UPLOAD_TEXTURE_RGBA,
+            0,
+            0x8000_0001,
+            tex_id,
+            width,
+            height,
+            data_len.min(u32::MAX as usize) as u32,
+        );
 
         if tex_id == 0 || width == 0 || height == 0 {
             return -1;
@@ -3481,6 +3666,15 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
+        gfx_trace_record(
+            GFX_TRACE_OP_UPLOAD_TEXTURE_PNG,
+            0,
+            0,
+            tex_id,
+            data_len.min(u32::MAX as usize) as u32,
+            0,
+            0,
+        );
 
         if tex_id == 0 {
             return -1;
@@ -3512,6 +3706,15 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
+        gfx_trace_record(
+            GFX_TRACE_OP_UPLOAD_TEXTURE_PNG,
+            0,
+            0x8000_0000,
+            tex_id,
+            data_len.min(u32::MAX as usize) as u32,
+            0,
+            0,
+        );
 
         if tex_id == 0 {
             return -1;
@@ -3536,6 +3739,15 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
+        gfx_trace_record(
+            GFX_TRACE_OP_UPLOAD_TEXTURE_JPEG,
+            0,
+            0,
+            tex_id,
+            data_len.min(u32::MAX as usize) as u32,
+            0,
+            0,
+        );
 
         if tex_id == 0 {
             return -1;
@@ -3567,6 +3779,15 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
+        gfx_trace_record(
+            GFX_TRACE_OP_UPLOAD_TEXTURE_JPEG,
+            0,
+            0x8000_0000,
+            tex_id,
+            data_len.min(u32::MAX as usize) as u32,
+            0,
+            0,
+        );
 
         if tex_id == 0 {
             return -1;
@@ -3591,6 +3812,15 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
+        gfx_trace_record(
+            GFX_TRACE_OP_UPLOAD_TEXTURE_SVG,
+            0,
+            0,
+            tex_id,
+            data_len.min(u32::MAX as usize) as u32,
+            0,
+            0,
+        );
 
         if tex_id == 0 {
             return -1;
@@ -3612,6 +3842,15 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
+        gfx_trace_record(
+            GFX_TRACE_OP_UPLOAD_TEXTURE_SVG,
+            0,
+            0x8000_0000,
+            tex_id,
+            data_len.min(u32::MAX as usize) as u32,
+            0,
+            0,
+        );
 
         if tex_id == 0 {
             return -1;
@@ -3702,6 +3941,14 @@ pub mod cabi {
                 clear_rgb & 0x00FF_FFFF
             ));
         }
+        let mut flags = 0u32;
+        if preserve_contents {
+            flags |= 1;
+        }
+        if allow_screen_present {
+            flags |= 2;
+        }
+        gfx_trace_record(GFX_TRACE_OP_BEGIN_FRAME, seq, flags, clear_rgb & 0x00FF_FFFF, 0, 0, 0);
         0
     }
 
@@ -3753,6 +4000,7 @@ pub mod cabi {
         st.frame_rgb_draws = st.frame_rgb_draws.saturating_add(1);
         st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(bytes.len());
         let blend = st.cur_blend;
+        let frame_seq = st.frame_seq;
         let mut off = 0usize;
         while off < bytes.len() {
             let rem = bytes.len() - off;
@@ -3771,6 +4019,16 @@ pub mod cabi {
             });
             off += chunk;
         }
+        drop(st);
+        gfx_trace_record(
+            GFX_TRACE_OP_DRAW_RGB_TRIANGLES,
+            frame_seq,
+            vcount,
+            usable.min(u32::MAX as usize) as u32,
+            0,
+            0,
+            0,
+        );
         0
     }
 
@@ -3823,6 +4081,7 @@ pub mod cabi {
             ));
         let sampler = st.cur_sampler;
         let blend = st.cur_blend;
+        let frame_seq = st.frame_seq;
         let mut off = 0usize;
         while off < usable {
             let rem = usable - off;
@@ -3848,6 +4107,23 @@ pub mod cabi {
             });
             off += chunk;
         }
+        drop(st);
+        let sampler_flags = ((sampler.wrap_s as u32) & 0xFF)
+            | (((sampler.wrap_t as u32) & 0xFF) << 8)
+            | (((sampler.min_filter as u32) & 0xFF) << 16)
+            | (((sampler.mag_filter as u32) & 0xFF) << 24);
+        gfx_trace_record(
+            GFX_TRACE_OP_DRAW_TEX_TRIANGLES,
+            frame_seq,
+            vcount,
+            tex_id,
+            usable.min(u32::MAX as usize) as u32,
+            sampler_flags,
+            match sample_kind {
+                TexSampleKind::Mask => 0,
+                TexSampleKind::Rgba => 1,
+            },
+        );
         0
     }
 
@@ -3892,6 +4168,22 @@ pub mod cabi {
             crate::globalog::log(format_args!("gfx-cabi: end without active frame\n"));
             return -3;
         }
+        let mut end_flags = 0u32;
+        if allow_screen_present {
+            end_flags |= 1;
+        }
+        if preserve_contents {
+            end_flags |= 2;
+        }
+        gfx_trace_record(
+            GFX_TRACE_OP_END_FRAME,
+            seq,
+            end_flags,
+            rgb_draws,
+            tex_draws,
+            draw_bytes.min(u32::MAX as usize) as u32,
+            0,
+        );
 
         let mut final_render_target_tex_id = 0u32;
         for draw in &draws {

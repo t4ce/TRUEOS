@@ -8,7 +8,6 @@ default = ["gfx_virgl", "hvv"]
 hvv = []
 dma_nic_fpga = []
 gfx_virgl = []
-gfx_intel = []
 
 
 [dependencies]

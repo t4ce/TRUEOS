@@ -51,7 +51,7 @@ ifeq ($(GFX_MODE),virgl)
 CARGO_GFX_FLAGS = --no-default-features --features gfx_virgl
 QEMU_GFX_FLAGS = -display sdl,gl=on -vga none -device virtio-gpu-gl-pci,disable-modern=off,xres=1280,yres=800
 else ifeq ($(GFX_MODE),intel)
-CARGO_GFX_FLAGS = --no-default-features --features gfx_intel
+CARGO_GFX_FLAGS = --no-default-features
 QEMU_GFX_FLAGS = -display none -vga none -device vfio-pci,host=$(INTEL_GPU_PCI),bus=pcie.0,addr=0x2$(INTEL_GPU_VFIO_PROPS)
 else ifeq ($(GFX_MODE),none)
 CARGO_GFX_FLAGS = --no-default-features
