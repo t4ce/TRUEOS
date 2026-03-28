@@ -1150,45 +1150,34 @@ fn rebuild_window_title_texture(window: &mut Ui2Window) -> bool {
         return true;
     }
 
-    let text = window.title.as_bytes();
-    let text_w = libm::ceilf(crate::gfx::imba_athlas::imba_athlas_text_width_nearest_px(
-        text,
-        TITLE_TEXT_H,
-    ))
-    .max(1.0) as u32;
-    let text_h = libm::ceilf(TITLE_TEXT_H).max(1.0) as u32;
-    let rgba_len = (text_w as usize)
-        .saturating_mul(text_h as usize)
-        .saturating_mul(4);
-    let mut rgba = vec![0u8; rgba_len];
-    if !crate::gfx::imba_athlas::blit_imba_athlas_text_rgba_nearest_px(
-        rgba.as_mut_slice(),
-        text_w,
-        text_h,
-        text,
-        0,
-        0,
-        TITLE_TEXT_H,
-        (0xF3, 0xF4, 0xF6, window.alpha),
-    ) {
-        return false;
-    }
-
-    let rc = unsafe {
-        crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba(
+    let Some((text_w, text_h)) =
+        crate::gfx::athlasfont::imba_athlas_upload_text_texture_nearest_px(
             window.title_tex_id,
-            text_w,
-            text_h,
-            rgba.as_ptr(),
-            rgba.len(),
+            window.title.as_bytes(),
+            TITLE_TEXT_H,
+            (0xF3, 0xF4, 0xF6, window.alpha),
         )
-    };
-    if rc != 0 {
+    else {
+        crate::log!(
+            "ui2: title-texture rebuild failed window={} tex={} title='{}' alpha={}\n",
+            window.id,
+            window.title_tex_id,
+            window.title.as_str(),
+            window.alpha
+        );
         return false;
-    }
+    };
 
     window.title_tex_w = text_w;
     window.title_tex_h = text_h;
+    crate::log!(
+        "ui2: title-texture ready window={} tex={} size={}x{} title='{}'\n",
+        window.id,
+        window.title_tex_id,
+        text_w,
+        text_h,
+        window.title.as_str()
+    );
     true
 }
 

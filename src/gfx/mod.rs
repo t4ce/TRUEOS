@@ -6,8 +6,9 @@ pub mod cursor;
 // Keep this API surface stable for callers, but do not treat it as the future general atlas/font stack.
 #[path = "loadscreen/loadscreen_font.rs"]
 pub mod imbafont;
-#[path = "althlasfont.rs/athlasfont.rs"]
-pub mod imba_athlas;
+#[path = "althlasfont/athlasfont.rs"]
+pub mod athlasfont;
+pub use athlasfont as imba_athlas;
 pub mod jpeg_codec;
 #[path = "loadscreen/loadscreen.rs"]
 pub mod loadscreen;
