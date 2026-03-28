@@ -1,59 +1,25 @@
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use libm::{ceilf, floorf};
-use spin::Once;
+use spin::{Mutex, Once};
 use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
+
+pub mod athlasmetrics;
 
 use crate::gfx::imbafont::{
     ImbaFontFace, ImbaFontGlyphMetricsPx, ImbaFontMaskTexture, glyph_metrics_px,
     rasterize_glyph_mask_texture,
 };
+use self::athlasmetrics::{ATHLAS_BUCKET_COUNT, AthlasGlyphLookup};
 
-struct ImbaAthlasBuffers {
-    alpha: Vec<u8>,
-    index: Vec<u16>,
-    widths: Vec<u8>,
-    heights: Vec<u8>,
-    advances: Vec<u8>,
-    sample_xs: Vec<u8>,
-    sample_ys: Vec<u8>,
-    width: u32,
-    height: u32,
-    cell_w: u32,
-    cell_h: u32,
-    grid_w: u32,
-    grid_h: u32,
-    left_pad: u16,
-}
 
-pub struct ImbaAthlasView<'a> {
-    pub alpha: &'a [u8],
-    pub index: &'a [u16],
-    pub widths: &'a [u8],
-    pub heights: &'a [u8],
-    pub advances: &'a [u8],
-    pub sample_xs: &'a [u8],
-    pub sample_ys: &'a [u8],
-    pub width: u32,
-    pub height: u32,
-    pub cell_w: u32,
-    pub cell_h: u32,
-    pub grid_w: u32,
-    pub grid_h: u32,
-    pub left_pad: u16,
-}
-
-static IMBA_ATHLAS_SMALL: Once<ImbaAthlasBuffers> = Once::new();
-static IMBA_ATHLAS_LARGE: Once<ImbaAthlasBuffers> = Once::new();
-
-const IMBA_ATHLAS_SMALL_TEX_ID: u32 = 1001;
-const IMBA_ATHLAS_LARGE_TEX_ID: u32 = 1002;
-static IMBA_ATHLAS_SMALL_UPLOADED: AtomicBool = AtomicBool::new(false);
-static IMBA_ATHLAS_LARGE_UPLOADED: AtomicBool = AtomicBool::new(false);
-static IMBA_ATHLAS_SMALL_RGBA: Once<Vec<u8>> = Once::new();
-static IMBA_ATHLAS_LARGE_RGBA: Once<Vec<u8>> = Once::new();
 static IMBA_ATHLAS_PNG_BUCKETS_UPLOADED: AtomicBool = AtomicBool::new(false);
+static IMBA_ATHLAS_LOOKUP_INSTALL: Once<ImbaAthlasLookupInstall> = Once::new();
+static IMBA_ATHLAS_SHORT_TEXT_CACHE: Mutex<BTreeMap<u64, ImbaAthlasShortTextCacheEntry>> =
+    Mutex::new(BTreeMap::new());
+static IMBA_ATHLAS_SHORT_TEXT_NEXT_TEX_ID: AtomicU32 = AtomicU32::new(30_000);
 
 const IMBA_ATHLAS_GRID: usize = 16;
 const IMBA_ATHLAS_SMALL_TILE_H: f32 = 14.0;
@@ -74,6 +40,19 @@ struct PngBucketAsset {
     bucket: usize,
     tex_id: u32,
     png: &'static [u8],
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AthlasFontShortTextCacheEntry {
+    tex_id: u32,
+    width: u32,
+    height: u32,
+}
+
+pub struct AthlasFontLookupInstall {
+    pub buckets: [&'static [u32]; ATHLAS_BUCKET_COUNT],
+    pub bucket_metrics: [athlasmetrics::AthlasBucketMetrics; ATHLAS_BUCKET_COUNT],
+    pub max_bucket_len: usize,
 }
 
 const PNG_BUCKET_ASSETS: &[PngBucketAsset] = &[
@@ -109,6 +88,57 @@ pub fn imba_athlas_bucket_tex_id(size_case: usize, bucket: usize) -> Option<u32>
         .get(size_case)
         .and_then(|row| row.get(bucket))
         .copied()
+}
+
+pub fn imba_athlas_lookup_install() -> &'static ImbaAthlasLookupInstall {
+    IMBA_ATHLAS_LOOKUP_INSTALL.call_once(|| {
+        let buckets = athlasmetrics::ATHLAS_BUCKET_LUTS;
+        let bucket_metrics = athlasmetrics::ATHLAS_BUCKET_METRICS;
+        let mut max_bucket_len = 0usize;
+        for bucket in buckets {
+            max_bucket_len = max_bucket_len.max(bucket.len());
+        }
+        ImbaAthlasLookupInstall {
+            buckets,
+            bucket_metrics,
+            max_bucket_len,
+        }
+    })
+}
+
+#[inline]
+pub fn imba_athlas_lookup_char(ch: char) -> Option<AthlasGlyphLookup> {
+    let _ = imba_athlas_lookup_install();
+    athlasmetrics::athlas_lookup_char(ch)
+}
+
+#[inline]
+pub fn imba_athlas_lookup_codepoint(codepoint: u32) -> Option<AthlasGlyphLookup> {
+    let _ = imba_athlas_lookup_install();
+    athlasmetrics::athlas_lookup_codepoint(codepoint)
+}
+
+#[inline]
+pub fn imba_athlas_bucket_slot_for_char(ch: char) -> Option<(u8, u16)> {
+    imba_athlas_lookup_char(ch).map(|it| (it.bucket, it.slot))
+}
+
+#[inline]
+pub fn imba_athlas_bucket_tex_for_char(size_case: usize, ch: char) -> Option<(u32, u16)> {
+    let glyph = imba_athlas_lookup_char(ch)?;
+    let tex_id = imba_athlas_bucket_tex_id(size_case, glyph.bucket as usize)?;
+    Some((tex_id, glyph.slot))
+}
+
+#[inline]
+pub fn imba_athlas_bucket_width_stage(bucket: usize) -> Option<u8> {
+    athlasmetrics::athlas_bucket_width_stage(bucket)
+}
+
+#[inline]
+pub fn imba_athlas_bucket_width_stage_for_char(ch: char) -> Option<u8> {
+    let glyph = imba_athlas_lookup_char(ch)?;
+    athlasmetrics::athlas_bucket_width_stage(glyph.bucket as usize)
 }
 
 pub fn ensure_imba_athlas_png_buckets_uploaded() -> bool {
@@ -154,6 +184,79 @@ pub fn ensure_imba_athlas_png_buckets_uploaded() -> bool {
     IMBA_ATHLAS_PNG_BUCKETS_UPLOADED.store(true, Ordering::Release);
     crate::log!("imba-athlas-png: uploaded {} bucket textures\n", PNG_BUCKET_ASSETS.len());
     true
+}
+
+#[inline]
+fn pack_short_text_cache_key(text: &[u8], px_h: f32) -> Option<u64> {
+    if !(2..=3).contains(&text.len()) {
+        return None;
+    }
+    let px_h_u16 = ceilf(px_h.max(1.0)).clamp(1.0, u16::MAX as f32) as u16;
+    let mut bytes = [0u8; 3];
+    for (idx, &b) in text.iter().enumerate() {
+        if b == b'\n' || b == 0 {
+            return None;
+        }
+        bytes[idx] = b;
+    }
+    Some(
+        (bytes[0] as u64)
+            | ((bytes[1] as u64) << 8)
+            | ((bytes[2] as u64) << 16)
+            | ((text.len() as u64) << 24)
+            | ((px_h_u16 as u64) << 32),
+    )
+}
+
+pub fn imba_athlas_cached_short_text_texture_nearest_px(
+    text: &[u8],
+    px_h: f32,
+) -> Option<(u32, u32, u32)> {
+    let key = pack_short_text_cache_key(text, px_h)?;
+    if let Some(entry) = IMBA_ATHLAS_SHORT_TEXT_CACHE.lock().get(&key).copied() {
+        return Some((entry.tex_id, entry.width, entry.height));
+    }
+
+    let text_w = ceilf(imba_athlas_text_width_nearest_px(text, px_h)).max(1.0) as u32;
+    let text_h = ceilf(px_h.max(1.0)).max(1.0) as u32;
+    let rgba_len = (text_w as usize)
+        .saturating_mul(text_h as usize)
+        .saturating_mul(4);
+    let mut rgba = vec![0u8; rgba_len];
+    if !blit_imba_athlas_text_rgba_nearest_px(
+        rgba.as_mut_slice(),
+        text_w,
+        text_h,
+        text,
+        0,
+        0,
+        px_h,
+        (0xFF, 0xFF, 0xFF, 0xFF),
+    ) {
+        return None;
+    }
+
+    let tex_id = IMBA_ATHLAS_SHORT_TEXT_NEXT_TEX_ID.fetch_add(1, Ordering::AcqRel);
+    let rc = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba(
+            tex_id,
+            text_w,
+            text_h,
+            rgba.as_ptr(),
+            rgba.len(),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+
+    let entry = ImbaAthlasShortTextCacheEntry {
+        tex_id,
+        width: text_w,
+        height: text_h,
+    };
+    IMBA_ATHLAS_SHORT_TEXT_CACHE.lock().insert(key, entry);
+    Some((entry.tex_id, entry.width, entry.height))
 }
 
 struct ImbaAthlasGlyphSource {
@@ -714,20 +817,19 @@ fn blend_rgba_pixel(dst: &mut [u8], dst_idx: usize, rgba: (u8, u8, u8, u8), cove
     dst[dst_idx + 3] = (src_a + ((dst_a * inv + 127) / 255)).min(255) as u8;
 }
 
-pub fn blit_imba_athlas_text_rgba(
+fn blit_imba_athlas_text_rgba_impl(
     dst: &mut [u8],
     dst_w: u32,
     dst_h: u32,
     text: &[u8],
     x: i32,
     y: i32,
+    athlas: ImbaAthlasView<'_>,
     rgba: (u8, u8, u8, u8),
 ) -> bool {
     if text.is_empty() || dst_w == 0 || dst_h == 0 {
         return false;
     }
-
-    let athlas = imba_athlas_large_view();
     if athlas.alpha.is_empty() {
         return false;
     }
@@ -830,6 +932,32 @@ pub fn blit_imba_athlas_text_rgba(
     }
 
     touched
+}
+
+pub fn blit_imba_athlas_text_rgba(
+    dst: &mut [u8],
+    dst_w: u32,
+    dst_h: u32,
+    text: &[u8],
+    x: i32,
+    y: i32,
+    rgba: (u8, u8, u8, u8),
+) -> bool {
+    blit_imba_athlas_text_rgba_impl(dst, dst_w, dst_h, text, x, y, imba_athlas_large_view(), rgba)
+}
+
+pub fn blit_imba_athlas_text_rgba_nearest_px(
+    dst: &mut [u8],
+    dst_w: u32,
+    dst_h: u32,
+    text: &[u8],
+    x: i32,
+    y: i32,
+    px_h: f32,
+    rgba: (u8, u8, u8, u8),
+) -> bool {
+    let athlas = imba_athlas_view_for_kind(imba_athlas_kind_for_px_h(px_h));
+    blit_imba_athlas_text_rgba_impl(dst, dst_w, dst_h, text, x, y, athlas, rgba)
 }
 
 pub fn draw_imba_athlas_text_in_frame_alpha(

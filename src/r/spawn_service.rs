@@ -91,11 +91,13 @@ define_started_flags!(
     GFX_BOOT_FRAME_READY_TASK_STARTED,
     GFX_VIRGL_CURSOR_OVERLAY_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
+    GFX_ATHLASFONT_PREWARM_STARTED,
     GFX_LOADSCREEN_STARTED,
     HTML_SHACK_SERVICE_STARTED,
     UI2_HOSTED_SYNC_TASK_STARTED,
     UI2_HIT_TASK_STARTED,
     UI2_STARTED,
+    UI2_DEMO_STAGGER_STARTED,
     UI2_GFX_BROWSER_STARTED,
     UI2_GFX_TETRIS_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
@@ -482,6 +484,31 @@ fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+#[embassy_executor::task]
+async fn gfx_althlasfont_prewarm_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::LOADSCREEN_COVER_READY).await;
+
+    loop {
+        let ok = crate::gfx::imba_athlas::ensure_imba_athlas_png_buckets_uploaded();
+        if ok {
+            crate::r::readiness::set(crate::r::readiness::GFX_ATHLASFONT_READY);
+            crate::log!(
+                "boot-probe: gfx-althlasfont-ready ms={}\n",
+                boot_probe_ms()
+            );
+            return;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(50)).await;
+    }
+}
+
+fn spawn_gfx_althlasfont_prewarm(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1(spawner, |ap1_spawner| {
+        ap1_spawner.spawn(gfx_althlasfont_prewarm_task())
+    })
+}
+
 #[inline]
 fn gfx_switched() -> bool {
     #[cfg(feature = "gfx_virgl")]
@@ -519,6 +546,32 @@ fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
         ap1_spawner.spawn(crate::gfx::loadscreen::gfx_loadscreen_task())
     })
+}
+
+#[embassy_executor::task]
+async fn ui2_demo_stagger_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::UI2_READY).await;
+
+    let slots = [
+        crate::r::readiness::UI2_DEMO_SLOT_1_READY,
+        crate::r::readiness::UI2_DEMO_SLOT_2_READY,
+        crate::r::readiness::UI2_DEMO_SLOT_3_READY,
+        crate::r::readiness::UI2_DEMO_SLOT_4_READY,
+    ];
+
+    for (idx, flag) in slots.into_iter().enumerate() {
+        Timer::after(EmbassyDuration::from_millis(250)).await;
+        crate::r::readiness::set(flag);
+        crate::log!(
+            "boot-probe: ui2-demo-slot-{} ready ms={}\n",
+            idx + 1,
+            boot_probe_ms()
+        );
+    }
+}
+
+fn spawn_ui2_demo_stagger(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(ui2_demo_stagger_task()))
 }
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
@@ -925,6 +978,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_gfx_texture_upload_service,
     ),
     TaskSpec::enabled(
+        "gfx-althlasfont-prewarm",
+        crate::r::readiness::LOADSCREEN_COVER_READY,
+        &GFX_ATHLASFONT_PREWARM_STARTED,
+        spawn_gfx_althlasfont_prewarm,
+    ),
+    TaskSpec::enabled(
         "ui2",
         crate::r::readiness::GFX_BOOT_FRAME_READY,
         &UI2_STARTED,
@@ -943,6 +1002,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_hit,
     ),
     TaskSpec::enabled(
+        "ui2-demo-stagger",
+        crate::r::readiness::UI2_READY,
+        &UI2_DEMO_STAGGER_STARTED,
+        spawn_ui2_demo_stagger,
+    ),
+    TaskSpec::enabled(
         "truesurfer-factory",
         0,
         &SURFER_FACTORY_STARTED,
@@ -950,25 +1015,25 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled(
         "ui2-gfx-tetris",
-        crate::r::readiness::UI2_READY,
+        crate::r::readiness::UI2_DEMO_SLOT_1_READY,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
     ),
     TaskSpec::enabled(
         "ui2-triangle-demo",
-        crate::r::readiness::UI2_READY,
+        crate::r::readiness::UI2_DEMO_SLOT_2_READY,
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
     TaskSpec::enabled(
         "ui2-bgrt-demo",
-        crate::r::readiness::UI2_READY,
+        crate::r::readiness::UI2_DEMO_SLOT_3_READY,
         &UI2_BGRT_DEMO_STARTED,
         spawn_ui2_bgrt_demo,
     ),
     TaskSpec::enabled(
         "ui2-mandelbrot-demo",
-        crate::r::readiness::UI2_READY,
+        crate::r::readiness::UI2_DEMO_SLOT_4_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),

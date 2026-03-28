@@ -37,6 +37,13 @@ pub const GFX_INTEL_CLAIMED: u32 = 1 << 21;
 pub const GFX_BACKEND_READY: u32 = 1 << 22;
 pub const UI2_READY: u32 = 1 << 23;
 pub const GFX_BOOT_FRAME_READY: u32 = 1 << 24;
+pub const GFX_TEXTURE_UPLOAD_SERVICE_READY: u32 = 1 << 25;
+pub const GFX_ATHLASFONT_READY: u32 = 1 << 26;
+pub const LOADSCREEN_COVER_READY: u32 = 1 << 27;
+pub const UI2_DEMO_SLOT_1_READY: u32 = 1 << 28;
+pub const UI2_DEMO_SLOT_2_READY: u32 = 1 << 29;
+pub const UI2_DEMO_SLOT_3_READY: u32 = 1 << 30;
+pub const UI2_DEMO_SLOT_4_READY: u32 = 1 << 31;
 
 static READY: AtomicU32 = AtomicU32::new(0);
 static LOADSCREEN_EXPIRE_REQUESTED: AtomicBool = AtomicBool::new(false);
