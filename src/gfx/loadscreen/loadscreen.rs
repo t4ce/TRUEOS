@@ -69,16 +69,16 @@ fn draw_athlasfont_bucket_preview(fb_w: u32, fb_h: u32) {
     let mut samples = [[None; 8]; 3];
     let mut col_w = [0.0f32; 3];
     let total_h = sample_h * 8.0 + gap * 7.0;
-    let section_lookup = crate::gfx::imba_athlas::imba_athlas_lookup_char('§');
+    let section_lookup = crate::gfx::athlasfont::imba_athlas_lookup_char('§');
 
     for size_case in 0..3usize {
         for bucket in 0..8usize {
-            let Some(tex_id) = crate::gfx::imba_athlas::imba_athlas_bucket_tex_id(size_case, bucket)
+            let Some(tex_id) = crate::gfx::athlasfont::imba_athlas_bucket_tex_id(size_case, bucket)
             else {
                 continue;
             };
             let Some(codepoints) =
-                crate::gfx::imba_athlas::athlasmetrics::athlas_bucket_codepoints(bucket as u8)
+                crate::gfx::athlasfont::athlasmetrics::athlas_bucket_codepoints(bucket as u8)
             else {
                 continue;
             };
