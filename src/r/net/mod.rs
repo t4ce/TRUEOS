@@ -5,6 +5,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 pub mod cli;
 pub mod esp;
+pub mod ports;
 pub mod srv;
 
 pub use cli::{dns, ftp, html, http, https, irc, json, ntp, ping, pop3, smtp, ws};

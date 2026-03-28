@@ -9,17 +9,14 @@ use embassy_time::{Duration, Instant, Timer};
 use v::vnet::{self, ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
 
 use super::dns::{self, DnsConfig};
-use crate::r::net::{NetProfile, VNet};
+use crate::r::net::{NetProfile, VNet, ports};
 
-const FTP_SERVER_PORT: u16 = 2121;
-const FTP_SERVER_PASV_MIN: u16 = 40000;
-const FTP_SERVER_PASV_MAX: u16 = 40127;
 const FTP_SERVER_IDLE_SLEEP_MS: u64 = 2;
 const FTP_SERVER_IO_TIMEOUT_MS: u32 = 30_000;
 const FTP_SERVER_MAX_UPLOAD_BYTES: usize = 16 * 1024 * 1024;
 
 static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
-static FTP_SERVER_NEXT_PASV_PORT: AtomicU16 = AtomicU16::new(FTP_SERVER_PASV_MIN);
+static FTP_SERVER_NEXT_PASV_PORT: AtomicU16 = AtomicU16::new(ports::FTP_SERVER_PASV_MIN);
 
 #[derive(Clone, Debug)]
 struct ParsedFtpUrl {
@@ -556,7 +553,7 @@ impl FtpServerSession {
 }
 
 pub fn ftp_server_port() -> u16 {
-    FTP_SERVER_PORT
+    ports::FTP_SERVER_PORT
 }
 
 #[embassy_executor::task]
@@ -576,7 +573,7 @@ pub async fn ftp_server_task() {
 
         if vnet
             .submit(Command::OpenTcpListen {
-                port: FTP_SERVER_PORT,
+                port: ports::FTP_SERVER_PORT,
             })
             .is_err()
         {
@@ -584,7 +581,7 @@ pub async fn ftp_server_task() {
             continue;
         }
 
-        crate::log!("ftp: listening on tcp {}\n", FTP_SERVER_PORT);
+        crate::log!("ftp: listening on tcp {}\n", ports::FTP_SERVER_PORT);
 
         loop {
             while let Some(ev) = vnet.pop_event() {
@@ -641,7 +638,7 @@ pub async fn ftp_server_task() {
                         if Some(handle) == listener {
                             listener = None;
                             let _ = vnet.submit(Command::OpenTcpListen {
-                                port: FTP_SERVER_PORT,
+                                port: ports::FTP_SERVER_PORT,
                             });
                             continue;
                         }
@@ -987,8 +984,8 @@ fn ftp_close_passive(vnet: &VNet, sess: &mut FtpServerSession) {
 fn ftp_next_pasv_port() -> u16 {
     let mut current = FTP_SERVER_NEXT_PASV_PORT.load(Ordering::Relaxed);
     loop {
-        let next = if current >= FTP_SERVER_PASV_MAX {
-            FTP_SERVER_PASV_MIN
+        let next = if current >= ports::FTP_SERVER_PASV_MAX {
+            ports::FTP_SERVER_PASV_MIN
         } else {
             current + 1
         };

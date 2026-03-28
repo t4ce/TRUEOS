@@ -3,7 +3,7 @@ use alloc::{collections::VecDeque, format, string::String, vec::Vec};
 use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
-use super::VNet;
+use super::{VNet, ports};
 
 const ESP_GATE_REGISTRY_MAX_DEVICES: usize = 64;
 
@@ -190,7 +190,7 @@ pub async fn esp_gate_task() {
             continue;
         };
 
-        let mut swarm = trueos_esp::swarm::SwarmService::default();
+        let mut swarm = trueos_esp::swarm::SwarmService::new(ports::ESP_GATE_TCP_PORT);
         crate::log!(
             "esp-gate: starting tcp listener on port {}\n",
             swarm.listen_port()
@@ -205,7 +205,7 @@ pub async fn esp_gate_task() {
                         trueos_esp::swarm::SwarmSignal::ListenerBound(handle) => crate::log!(
                             "esp-gate: listening handle={} port={}\n",
                             handle.0,
-                            trueos_esp::swarm::ESP_GATE_TCP_PORT
+                            ports::ESP_GATE_TCP_PORT
                         ),
                         trueos_esp::swarm::SwarmSignal::ClientConnected(handle) => {
                             channel_a_to_b_push(SwarmToGate::Connected(handle));

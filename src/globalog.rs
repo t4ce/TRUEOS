@@ -248,8 +248,8 @@ pub mod logtotcp {
         use crate::net::adapter::{
             NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
         };
+        use crate::r::net::ports;
 
-        const PORT: u16 = 1;
         const OWNER: &str = "logtotcp";
         const DRAIN_CHUNK: usize = 4096;
 
@@ -259,8 +259,10 @@ pub mod logtotcp {
         let events = NetQueue::new_leaked("logtotcp-evt", 64);
         register_app_queues(OWNER, cmds, events);
 
-        let _ = cmds.push(NetCommand::OpenTcpListen { port: PORT });
-        crate::log!("logtotcp: listening on tcp {}\n", PORT);
+        let _ = cmds.push(NetCommand::OpenTcpListen {
+            port: ports::LOGTOTCP_TCP_PORT,
+        });
+        crate::log!("logtotcp: listening on tcp {}\n", ports::LOGTOTCP_TCP_PORT);
 
         let mut tcp_handle: Option<NetHandle> = None;
         let mut conn_handle: Option<NetHandle> = None;
@@ -288,7 +290,9 @@ pub mod logtotcp {
                         }
                         if tcp_handle == Some(handle) {
                             tcp_handle = None;
-                            let _ = cmds.push(NetCommand::OpenTcpListen { port: PORT });
+                            let _ = cmds.push(NetCommand::OpenTcpListen {
+                                port: ports::LOGTOTCP_TCP_PORT,
+                            });
                         }
                     }
                     _ => {}
