@@ -10,12 +10,12 @@ use crate::disc::block;
 use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
+use crate::r::net::ports;
 use crate::wait::WaitQueue;
 
 const VM_STORE_PROBE_PATH: &str = "vm/.probe";
 const VM_STORE_MANIFEST_PREFIX: &str = "vm/committed-";
 const VM_STORE_OBJECT_PREFIX: &str = "vm/object-";
-const VM_STORE_REPL_PORT: u16 = 32123;
 const VM_STORE_REPL_CHUNK: usize = 1200;
 const VM_STORE_MAX_VM_ID: u8 = 10;
 const VM_STORE_BLOCK_SIZE: u32 = 512;
@@ -471,11 +471,11 @@ pub async fn vm_store_replication_task() {
     let events = NetQueue::new_leaked("hv-store-net-evt", 128);
     register_app_queues(owner, cmds, events);
     let _ = cmds.push(NetCommand::OpenTcpListen {
-        port: VM_STORE_REPL_PORT,
+        port: ports::VM_STORE_REPL_PORT,
     });
     crate::log!(
         "hv-store-net: listening on tcp {} owner={}\n",
-        VM_STORE_REPL_PORT,
+        ports::VM_STORE_REPL_PORT,
         owner
     );
 
@@ -579,7 +579,7 @@ pub async fn vm_store_replication_task() {
                         tx_offset = 0;
                         pending_len = 0;
                         let _ = cmds.push(NetCommand::OpenTcpListen {
-                            port: VM_STORE_REPL_PORT,
+                            port: ports::VM_STORE_REPL_PORT,
                         });
                         crate::log!("hv-store-net: tcp closed handle={} (relisten)\n", handle.0);
                     }

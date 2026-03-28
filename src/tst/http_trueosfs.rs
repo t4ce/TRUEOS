@@ -9,7 +9,7 @@ use v::vhttp_srv;
 use v::vnet as api;
 
 use crate::disc::block::DeviceHandle;
-use crate::r::net::VNet;
+use crate::r::net::{VNet, ports};
 
 #[inline]
 fn tsc_now() -> u64 {
@@ -58,7 +58,6 @@ impl HttpPerf {
     }
 }
 
-const HTTP_TRUEOSFS_TCP_PORT: u16 = 80;
 const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 256;
 const HTTP_TRUEOSFS_MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const HTTP_OCTET_STREAM: &str = "application/octet-stream";
@@ -458,7 +457,7 @@ pub async fn http_trueosfs_task() {
 
         if vnet
             .submit(api::Command::OpenTcpListen {
-                port: HTTP_TRUEOSFS_TCP_PORT,
+                port: ports::HTTP_TRUEOSFS_TCP_PORT,
             })
             .is_err()
         {
@@ -468,11 +467,11 @@ pub async fn http_trueosfs_task() {
 
         crate::log!(
             "http-trueosfs: listening on tcp {} (hostfwd localhost:8080 -> guest:80)\n",
-            HTTP_TRUEOSFS_TCP_PORT
+            ports::HTTP_TRUEOSFS_TCP_PORT
         );
 
         let mut server = vhttp_srv::HttpServer::new(
-            HTTP_TRUEOSFS_TCP_PORT,
+            ports::HTTP_TRUEOSFS_TCP_PORT,
             HTTP_TRUEOSFS_MAX_REQUEST_BYTES,
         );
 

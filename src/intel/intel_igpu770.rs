@@ -13,6 +13,11 @@ const WARM_CONTEXT_BYTES: usize = 4096;
 const WARM_BATCH_BYTES: usize = 4096;
 const WARM_RESULT_BYTES: usize = 4096;
 const WARM_ALIGN: usize = 4096;
+const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
+const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
+const GGTT_PTE_BYTES: usize = 8;
+const GGTT_PAGE_BYTES: u64 = 4096;
+const GEN8_PAGE_PRESENT: u64 = 1;
 const SMOKE_RECT_W: usize = 64;
 const SMOKE_RECT_H: usize = 64;
 const SMOKE_COLOR_XRGB8888: u32 = 0x00FF_4A24;
@@ -54,6 +59,7 @@ unsafe impl Sync for Igpu770WarmState {}
 static WARM_STATE: Mutex<Option<Igpu770WarmState>> = Mutex::new(None);
 static GGTT_BLT_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static GGTT_RECON_RAN: AtomicBool = AtomicBool::new(false);
+static GGTT_MAPS_RAN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug)]
 struct LimineFramebufferInfo {
@@ -171,6 +177,69 @@ fn log_ggtt_map_plan(label: &str, plan: GgttMapPlan) {
     );
 }
 
+fn ggtt_alias_ptr(warm: Igpu770WarmState, byte_off: usize) -> Option<*mut u64> {
+    if byte_off.checked_add(GGTT_PTE_BYTES)? > GGTT_ALIAS_BYTES {
+        return None;
+    }
+    let base = warm.mmio_base.checked_add(GGTT_ALIAS_BASE_OFF)?;
+    let ptr = base.checked_add(byte_off)? as *mut u64;
+    Some(ptr)
+}
+
+fn ggtt_pte_byte_off(gpu_addr: u64) -> Option<usize> {
+    if gpu_addr & (GGTT_PAGE_BYTES - 1) != 0 {
+        return None;
+    }
+    let index = gpu_addr / GGTT_PAGE_BYTES;
+    usize::try_from(index).ok()?.checked_mul(GGTT_PTE_BYTES)
+}
+
+fn ggtt_pte_encode(phys: u64) -> u64 {
+    (phys & !0xFFFu64) | GEN8_PAGE_PRESENT
+}
+
+fn ggtt_write_pte(warm: Igpu770WarmState, gpu_addr: u64, phys: u64) -> Option<u64> {
+    let byte_off = ggtt_pte_byte_off(gpu_addr)?;
+    let ptr = ggtt_alias_ptr(warm, byte_off)?;
+    let pte = ggtt_pte_encode(phys);
+    unsafe {
+        core::ptr::write_volatile(ptr, pte);
+        Some(core::ptr::read_volatile(ptr))
+    }
+}
+
+fn ggtt_program_plan(label: &str, warm: Igpu770WarmState, plan: GgttMapPlan) -> bool {
+    let mut page = 0usize;
+    while page < plan.pages {
+        let gpu_addr = plan
+            .gpu_addr
+            .saturating_add((page as u64).saturating_mul(GGTT_PAGE_BYTES));
+        let phys = plan
+            .phys
+            .saturating_add((page as u64).saturating_mul(GGTT_PAGE_BYTES));
+        let Some(readback) = ggtt_write_pte(warm, gpu_addr, phys) else {
+            crate::log!(
+                "intel/igpu770: ggtt-map label={} page={} gpu=0x{:X} phys=0x{:X} status=write-failed\n",
+                label,
+                page,
+                gpu_addr,
+                phys
+            );
+            return false;
+        };
+        crate::log!(
+            "intel/igpu770: ggtt-map label={} page={} gpu=0x{:X} phys=0x{:X} pte=0x{:016X}\n",
+            label,
+            page,
+            gpu_addr,
+            phys,
+            readback
+        );
+        page += 1;
+    }
+    true
+}
+
 fn blt_fill_rect_plan(warm: Igpu770WarmState) -> Option<BltFillRectPlan> {
     let rect_w = SMOKE_RECT_W.min(warm.limine_fb_width.max(1));
     let rect_h = SMOKE_RECT_H.min(warm.limine_fb_height.max(1));
@@ -237,6 +306,56 @@ pub fn ggtt_recon_once() {
     }
     crate::log!(
         "intel/igpu770: ggtt-recon note system-ram objects need explicit GGTT PTEs; framebuffer is aperture-backed\n"
+    );
+    crate::log!(
+        "intel/igpu770: ggtt-recon gtt_alias_off=0x{:X} gtt_alias_bytes=0x{:X}\n",
+        GGTT_ALIAS_BASE_OFF,
+        GGTT_ALIAS_BYTES
+    );
+}
+
+pub fn ggtt_map_smoke_objects_once() {
+    if GGTT_MAPS_RAN.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(warm) = warm_state() else {
+        crate::log!("intel/igpu770: ggtt-map skipped reason=not-warmed\n");
+        return;
+    };
+
+    let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE) else {
+        crate::log!("intel/igpu770: ggtt-map skipped reason=ring-plan\n");
+        return;
+    };
+    let Some(context) =
+        ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
+    else {
+        crate::log!("intel/igpu770: ggtt-map skipped reason=context-plan\n");
+        return;
+    };
+    let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE) else {
+        crate::log!("intel/igpu770: ggtt-map skipped reason=batch-plan\n");
+        return;
+    };
+    let Some(result) =
+        ggtt_map_plan_system_ram(warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE)
+    else {
+        crate::log!("intel/igpu770: ggtt-map skipped reason=result-plan\n");
+        return;
+    };
+
+    crate::log!("intel/igpu770: ggtt-map begin\n");
+    let ok_ring = ggtt_program_plan("ring", warm, ring);
+    let ok_context = ggtt_program_plan("context", warm, context);
+    let ok_batch = ggtt_program_plan("batch", warm, batch);
+    let ok_result = ggtt_program_plan("result", warm, result);
+    crate::log!(
+        "intel/igpu770: ggtt-map summary ring={} context={} batch={} result={}\n",
+        ok_ring as u8,
+        ok_context as u8,
+        ok_batch as u8,
+        ok_result as u8
     );
 }
 

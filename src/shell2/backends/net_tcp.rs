@@ -10,7 +10,7 @@ use crate::net::adapter::{
 };
 use crate::shell2::{ShellBackend2, ShellIo2};
 
-pub(crate) const NET_SHELL_TCP_PORT: u16 = 4245;
+pub(crate) use crate::r::net::ports::NET_SHELL_TCP_PORT;
 
 pub(crate) struct NetTcpShellBackend;
 
