@@ -340,6 +340,10 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
 }
 
 pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2Rect) {
+    const TITLE_TEXT_H: f32 = 24.0;
+    const GL_ONE: u32 = 1;
+    const GL_ONE_MINUS_SRC_ALPHA: u32 = 0x0303;
+
     let frame_base_rgba = (0xD9, 0xDE, 0xE5, 0xFF);
     let frame_left_rgba = blend_rgba_over((0x00, 0x00, 0x00, 0x52), frame_base_rgba);
     let frame_mid_rgba = frame_base_rgba;
@@ -428,19 +432,31 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         } else {
             rect.x + 8.0
         };
-        let title_x = (rect.x + ((rect.w - title_w) * 0.5)).max(title_left);
-        if window.title_tex_w != 0 && window.title_tex_h != 0 && texture_is_drawable(window.title_tex_id) {
-            let title_y = rect.y + ((UI2_TITLE_H - window.title_tex_h as f32) * 0.5);
-            let _ = draw_texture_rect_no_present(
-                window.title_tex_id,
-                title_x,
-                title_y,
-                window.title_tex_w as f32,
-                window.title_tex_h as f32,
+        let title_text = window.title.as_bytes();
+        let title_x = title_left;
+        let title_y = rect.y + ((UI2_TITLE_H - TITLE_TEXT_H) * 0.5);
+        if !title_text.is_empty() {
+            let _ = crate::gfx::athlasfont::draw_imba_athlas_text_in_frame_alpha_blend_scaled_px(
+                title_text,
+                title_x + 1.0,
+                title_y + 1.0,
                 state.view_w,
                 state.view_h,
-                true,
-                255,
+                TITLE_TEXT_H,
+                0x70,
+                GL_ONE,
+                GL_ONE_MINUS_SRC_ALPHA,
+            );
+            let _ = crate::gfx::athlasfont::draw_imba_athlas_text_in_frame_alpha_blend_scaled_px(
+                title_text,
+                title_x,
+                title_y,
+                state.view_w,
+                state.view_h,
+                TITLE_TEXT_H,
+                window.alpha,
+                GL_ONE,
+                GL_ONE_MINUS_SRC_ALPHA,
             );
         }
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
