@@ -27,7 +27,6 @@ mod intel;
 mod iso9660;
 mod limine;
 mod logflag;
-mod marble2;
 mod net;
 mod pci;
 mod percpu;

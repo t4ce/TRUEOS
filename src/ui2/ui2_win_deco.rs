@@ -347,7 +347,6 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
     let frame_left_rgba = modulate_rgba_alpha(frame_left_rgba, window.alpha);
     let frame_mid_rgba = modulate_rgba_alpha(frame_mid_rgba, window.alpha);
     let frame_right_rgba = modulate_rgba_alpha(frame_right_rgba, window.alpha);
-    let title_rgba = modulate_rgba_alpha((0xF3, 0xF4, 0xF6, 0xFF), window.alpha);
     let body_rgba = (0xFB, 0xFB, 0xF8, window.alpha);
     let selection_rgba = window
         .selected_cursor_slots
@@ -423,25 +422,14 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
                 icon_side,
             );
         }
-        let title_text_h = 24.0f32;
-        let title_w = if window.title_tex_w != 0 {
-            window.title_tex_w as f32
-        } else {
-            crate::gfx::imba_athlas::imba_athlas_text_width_scaled_px(
-                window.title.as_bytes(),
-                title_text_h,
-            )
-        };
+        let title_w = window.title_tex_w as f32;
         let title_left = if window.icon_id != 0 {
             rect.x + 28.0
         } else {
             rect.x + 8.0
         };
         let title_x = (rect.x + ((rect.w - title_w) * 0.5)).max(title_left);
-        if window.title_tex_w != 0
-            && window.title_tex_h != 0
-            && texture_is_drawable(window.title_tex_id)
-        {
+        if window.title_tex_w != 0 && window.title_tex_h != 0 && texture_is_drawable(window.title_tex_id) {
             let title_y = rect.y + ((UI2_TITLE_H - window.title_tex_h as f32) * 0.5);
             let _ = draw_texture_rect_no_present(
                 window.title_tex_id,
@@ -453,17 +441,6 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
                 state.view_h,
                 true,
                 255,
-            );
-        } else {
-            let title_y = rect.y + ((UI2_TITLE_H - title_text_h) * 0.5);
-            let _ = crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha_scaled(
-                window.title.as_bytes(),
-                title_x,
-                title_y,
-                state.view_w,
-                state.view_h,
-                title_text_h,
-                title_rgba.3,
             );
         }
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);

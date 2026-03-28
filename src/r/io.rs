@@ -1178,6 +1178,7 @@ pub mod cabi {
         let hz = embassy_time_driver::TICK_HZ.max(1);
         let ms = embassy_time_driver::now().saturating_mul(1000) / hz;
         crate::log!("boot-probe: texture-upload task start ms={}\n", ms);
+        crate::r::readiness::set(crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY);
         texture_upload_service_inner().await;
     }
 

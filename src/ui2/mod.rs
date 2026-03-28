@@ -1151,7 +1151,7 @@ fn rebuild_window_title_texture(window: &mut Ui2Window) -> bool {
     }
 
     let text = window.title.as_bytes();
-    let text_w = libm::ceilf(crate::gfx::imba_athlas::imba_athlas_text_width_scaled_px(
+    let text_w = libm::ceilf(crate::gfx::imba_athlas::imba_athlas_text_width_nearest_px(
         text,
         TITLE_TEXT_H,
     ))
@@ -1161,13 +1161,14 @@ fn rebuild_window_title_texture(window: &mut Ui2Window) -> bool {
         .saturating_mul(text_h as usize)
         .saturating_mul(4);
     let mut rgba = vec![0u8; rgba_len];
-    if !crate::gfx::imba_athlas::blit_imba_athlas_text_rgba(
+    if !crate::gfx::imba_athlas::blit_imba_athlas_text_rgba_nearest_px(
         rgba.as_mut_slice(),
         text_w,
         text_h,
         text,
         0,
         0,
+        TITLE_TEXT_H,
         (0xF3, 0xF4, 0xF6, window.alpha),
     ) {
         return false;
@@ -1192,62 +1193,12 @@ fn rebuild_window_title_texture(window: &mut Ui2Window) -> bool {
 }
 
 fn draw_window_content_placeholder(
-    state: &Ui2State,
-    window: &Ui2Window,
-    content: Ui2Rect,
-    headline: &[u8],
-    subline: &[u8],
+    _state: &Ui2State,
+    _window: &Ui2Window,
+    _content: Ui2Rect,
+    _headline: &[u8],
+    _subline: &[u8],
 ) {
-    let panel_rgba = modulate_rgba_alpha((0xF1, 0xF4, 0xF7, 0xFF), window.alpha);
-    let stripe_rgba = modulate_rgba_alpha((0xC6, 0xD1, 0xDB, 0xFF), window.alpha);
-    let headline_alpha = modulate_alpha(0xD8, window.alpha);
-    let subline_alpha = modulate_alpha(0x9A, window.alpha);
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        content.x,
-        content.y,
-        content.w,
-        content.h,
-        panel_rgba,
-        state.view_w,
-        state.view_h,
-    );
-    let stripe_w = libm::fminf(content.w, 96.0);
-    let stripe_h = libm::fminf(content.h, 3.0);
-    let stripe_x = content.x + ((content.w - stripe_w) * 0.5);
-    let stripe_y = content.y + 28.0;
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        stripe_x,
-        stripe_y,
-        stripe_w,
-        stripe_h,
-        stripe_rgba,
-        state.view_w,
-        state.view_h,
-    );
-
-    let headline_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(headline);
-    let headline_x = content.x + ((content.w - headline_w) * 0.5).max(10.0);
-    let headline_y = content.y + 40.0;
-    crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
-        headline,
-        headline_x,
-        headline_y,
-        state.view_w,
-        state.view_h,
-        headline_alpha,
-    );
-
-    let subline_w = crate::gfx::imba_athlas::imba_athlas_text_width_px(subline);
-    let subline_x = content.x + ((content.w - subline_w) * 0.5).max(10.0);
-    let subline_y = headline_y + 20.0;
-    crate::gfx::imba_athlas::draw_imba_athlas_text_in_frame_alpha(
-        subline,
-        subline_x,
-        subline_y,
-        state.view_w,
-        state.view_h,
-        subline_alpha,
-    );
 }
 
 fn log_browser_surface_updates(state: &mut Ui2State) {

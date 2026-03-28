@@ -49,7 +49,7 @@ pub fn run_ap_forever() -> ! {
             crate::smp::poll();
         }
         if counter.is_multiple_of(500_000) {
-            crate::marble2::poll_lut_fall();
+            //crate::marble2::poll_lut_fall();
         }
         counter = counter.wrapping_add(1);
         crate::power::idle_hint();
