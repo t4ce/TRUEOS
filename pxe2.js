@@ -197,12 +197,10 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
     // Secondary match for firmwares that do send option 93.
     `--dhcp-match=set:efi64,option:client-arch,${UEFI_X86_64_ARCH}`,
 
-    // ProxyDHCP/PXE service advertisement.
-    // This often makes the difference for UEFI PXE clients on ProxyDHCP.
-    `--pxe-service=tag:efi64,X86-64_EFI,TRUEOS (UEFI),${BOOTFILE}`,
-
-    // Serve bootfile only for tagged UEFI x86_64 clients.
-    `--dhcp-boot=tag:efi64,${BOOTFILE},,${serverIp}`,
+    // In proxy-DHCP mode, advertise exactly one PXE service and let the client
+    // fetch its boot filename from that service. Mixing pxe-service and
+    // dhcp-boot causes some UEFI firmwares to bounce between discovery paths.
+    `--pxe-service=tag:efi64,x86-64_EFI,TRUEOS (UEFI),${BOOTFILE},${serverIp}`,
     "--dhcp-ignore=tag:!efi64",
 
     // Logging

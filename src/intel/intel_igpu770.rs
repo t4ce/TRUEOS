@@ -20,6 +20,8 @@ const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
 const GGTT_PTE_BYTES: usize = 8;
 const GGTT_PAGE_BYTES: u64 = 4096;
 const GEN8_PAGE_PRESENT: u64 = 1;
+const GGTT_MAP_LOG_ALL_THRESHOLD: usize = 16;
+const GGTT_MAP_LOG_EDGE_PAGES: usize = 4;
 const SMOKE_RECT_W: usize = 64;
 const SMOKE_RECT_H: usize = 64;
 const SMOKE_COLOR_XRGB8888: u32 = 0x00FF_4A24;
@@ -27,6 +29,7 @@ const GPU_VA_RING_BASE: u64 = 0x0080_0000;
 const GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
 const GPU_VA_BATCH_BASE: u64 = 0x0082_0000;
 const GPU_VA_RESULT_BASE: u64 = 0x0083_0000;
+const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
 const RCS_RING_BASE: usize = 0x0000_2000;
 const RCS_RING_TAIL: usize = RCS_RING_BASE + 0x30;
 const RCS_RING_HEAD: usize = RCS_RING_BASE + 0x34;
@@ -59,10 +62,23 @@ const CTX_CTRL_RS_CTX_ENABLE: u32 = 1 << 1;
 const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
 const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
 const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
+const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
 const GFX_FLSH_CNTL_GEN6: usize = 0x101008;
 const GFX_FLSH_CNTL_EN: u32 = 1 << 0;
 const FORCEWAKE_RENDER_GEN11: usize = 0x0A278;
+const FORCEWAKE_MEDIA_GEN11: usize = 0x0A184;
+const FORCEWAKE_GT_GEN11: usize = 0x0A188;
+const FORCEWAKE_ACK_VDBOX4: usize = 0x0D60;
+const FORCEWAKE_ACK_VDBOX5: usize = 0x0D64;
+const FORCEWAKE_ACK_VDBOX6: usize = 0x0D68;
+const FORCEWAKE_ACK_VDBOX7: usize = 0x0D6C;
+const FORCEWAKE_ACK_VEBOX0: usize = 0x0D70;
+const FORCEWAKE_ACK_VEBOX1: usize = 0x0D74;
+const FORCEWAKE_ACK_VEBOX2: usize = 0x0D78;
+const FORCEWAKE_ACK_VEBOX3: usize = 0x0D7C;
 const FORCEWAKE_ACK_RENDER: usize = 0x0D84;
+const FORCEWAKE_ACK_MEDIA: usize = 0x0D88;
+const FORCEWAKE_ACK_GT: usize = 0x130044;
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
 const FORCEWAKE_KERNEL_FALLBACK: u32 = 1 << 15;
 const GEN9_CLKGATE_DIS_5: usize = 0x046540;
@@ -101,6 +117,17 @@ const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
 const GEN12_CTX_PRIORITY_NORMAL: u32 = 1 << 9;
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
+
+const MEDIA_FORCEWAKE_ACK_REGS: [(&str, usize); 8] = [
+    ("vdbox4", FORCEWAKE_ACK_VDBOX4),
+    ("vdbox5", FORCEWAKE_ACK_VDBOX5),
+    ("vdbox6", FORCEWAKE_ACK_VDBOX6),
+    ("vdbox7", FORCEWAKE_ACK_VDBOX7),
+    ("vebox0", FORCEWAKE_ACK_VEBOX0),
+    ("vebox1", FORCEWAKE_ACK_VEBOX1),
+    ("vebox2", FORCEWAKE_ACK_VEBOX2),
+    ("vebox3", FORCEWAKE_ACK_VEBOX3),
+];
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
@@ -230,6 +257,11 @@ fn masked_bit_enable(bit: u32) -> u32 {
     bit | (bit << 16)
 }
 
+#[inline]
+fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
+    set_bits | ((set_bits | clear_bits) << 16)
+}
+
 fn wait_forcewake_ack(warm: Igpu770WarmState, mask: u32, expected: u32) -> (bool, u32, usize) {
     let mut last = mmio_read32(warm, FORCEWAKE_ACK_RENDER);
     if (last & mask) == expected {
@@ -249,17 +281,111 @@ fn wait_forcewake_ack(warm: Igpu770WarmState, mask: u32, expected: u32) -> (bool
     (false, last, FORCEWAKE_POLL_ITERS)
 }
 
-pub(super) fn forcewake_gt_acquire(warm: Igpu770WarmState) -> u32 {
-    let ack_before = mmio_read32(warm, FORCEWAKE_ACK_RENDER);
+fn wait_forcewake_domain_ack(
+    warm: Igpu770WarmState,
+    ack_reg: usize,
+    mask: u32,
+    expected: u32,
+) -> (bool, u32, usize) {
+    let mut last = mmio_read32(warm, ack_reg);
+    if (last & mask) == expected {
+        return (true, last, 0);
+    }
+
+    let mut iter = 0usize;
+    while iter < FORCEWAKE_POLL_ITERS {
+        core::hint::spin_loop();
+        last = mmio_read32(warm, ack_reg);
+        if (last & mask) == expected {
+            return (true, last, iter + 1);
+        }
+        iter += 1;
+    }
+
+    (false, last, FORCEWAKE_POLL_ITERS)
+}
+
+fn wait_forcewake_req_latched(
+    warm: Igpu770WarmState,
+    reg: usize,
+    mask: u32,
+    expected: u32,
+) -> (bool, u32, usize) {
+    let mut last = mmio_read32(warm, reg);
+    if (last & mask) == expected {
+        return (true, last, 0);
+    }
+
+    let mut iter = 0usize;
+    while iter < FORCEWAKE_POLL_ITERS {
+        core::hint::spin_loop();
+        last = mmio_read32(warm, reg);
+        if (last & mask) == expected {
+            return (true, last, iter + 1);
+        }
+        iter += 1;
+    }
+
+    (false, last, FORCEWAKE_POLL_ITERS)
+}
+
+fn log_media_forcewake_coverage(warm: Igpu770WarmState, label: &str) -> usize {
+    let mut awake = 0usize;
+    let mut raw = [0u32; MEDIA_FORCEWAKE_ACK_REGS.len()];
+
+    let mut idx = 0usize;
+    while idx < MEDIA_FORCEWAKE_ACK_REGS.len() {
+        let value = mmio_read32(warm, MEDIA_FORCEWAKE_ACK_REGS[idx].1);
+        if (value & FORCEWAKE_KERNEL) != 0 {
+            awake += 1;
+        }
+        raw[idx] = value;
+        idx += 1;
+    }
+
     crate::log!(
-        "intel/igpu770: forcewake-render pre ack=0x{:08X}\n",
-        ack_before
+        "intel/igpu770: forcewake-media-coverage label={} awake={}/{} vdbox4=0x{:08X} vdbox5=0x{:08X} vdbox6=0x{:08X} vdbox7=0x{:08X} vebox0=0x{:08X} vebox1=0x{:08X} vebox2=0x{:08X} vebox3=0x{:08X}\n",
+        label,
+        awake,
+        MEDIA_FORCEWAKE_ACK_REGS.len(),
+        raw[0],
+        raw[1],
+        raw[2],
+        raw[3],
+        raw[4],
+        raw[5],
+        raw[6],
+        raw[7]
     );
+
+    awake
+}
+
+pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
+    let ack_before = mmio_read32(warm, FORCEWAKE_ACK_RENDER);
+    let media_req_before = mmio_read32(warm, FORCEWAKE_MEDIA_GEN11);
+    let media_ack_before = mmio_read32(warm, FORCEWAKE_ACK_MEDIA);
+    let gt_req_before = mmio_read32(warm, FORCEWAKE_GT_GEN11);
+    let gt_ack_before = mmio_read32(warm, FORCEWAKE_ACK_GT);
+    crate::log!(
+        "intel/igpu770: forcewake-all pre ack=0x{:08X} media_req=0x{:08X} media_ack=0x{:08X} gt_req=0x{:08X} gt_ack=0x{:08X}\n",
+        ack_before,
+        media_req_before,
+        media_ack_before,
+        gt_req_before,
+        gt_ack_before
+    );
+    let _ = log_media_forcewake_coverage(warm, "pre");
     if FORCEWAKE_GT_HELD.load(Ordering::Acquire) {
         crate::log!(
-            "intel/igpu770: forcewake-render already-held ack=0x{:08X}\n",
-            ack_before
+            "intel/igpu770: forcewake-all already-held ack=0x{:08X} media_req=0x{:08X} media_ack=0x{:08X} gt_req=0x{:08X} gt_ack=0x{:08X}\n",
+            ack_before,
+            media_req_before,
+            media_ack_before,
+            gt_req_before,
+            gt_ack_before
         );
+        let _ = log_media_forcewake_coverage(warm, "already-held");
         return ack_before;
     }
 
@@ -311,20 +437,74 @@ pub(super) fn forcewake_gt_acquire(warm: Igpu770WarmState) -> u32 {
         let _ = wait_forcewake_ack(warm, FORCEWAKE_KERNEL_FALLBACK, 0);
     }
 
+    let _ = mmio_write32(
+        warm,
+        FORCEWAKE_MEDIA_GEN11,
+        masked_bit_enable(FORCEWAKE_KERNEL),
+    );
+    let (_, media_req, media_req_iters) = wait_forcewake_req_latched(
+        warm,
+        FORCEWAKE_MEDIA_GEN11,
+        FORCEWAKE_KERNEL,
+        FORCEWAKE_KERNEL,
+    );
+    let (media_ok, media_ack, media_ack_iters) =
+        wait_forcewake_domain_ack(warm, FORCEWAKE_ACK_MEDIA, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
+    let _ = mmio_write32(
+        warm,
+        FORCEWAKE_GT_GEN11,
+        masked_bit_enable(FORCEWAKE_KERNEL),
+    );
+    let (_, gt_req, gt_req_iters) = wait_forcewake_req_latched(
+        warm,
+        FORCEWAKE_GT_GEN11,
+        FORCEWAKE_KERNEL,
+        FORCEWAKE_KERNEL,
+    );
+    let (gt_ok, gt_ack, gt_ack_iters) =
+        wait_forcewake_domain_ack(warm, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
+
     crate::log!(
-        "intel/igpu770: forcewake-render acquire req=0x{:08X} ack=0x{:08X} cleared=0x{:08X} clear_iters={} iters={} fallback={}\n",
+        "intel/igpu770: forcewake-all acquire req=0x{:08X} ack=0x{:08X} cleared=0x{:08X} clear_iters={} iters={} fallback={} media_req=0x{:08X} media_req_iters={} media_ack=0x{:08X} media_ack_iters={} media_ok={} gt_req=0x{:08X} gt_req_iters={} gt_ack=0x{:08X} gt_ack_iters={} gt_ok={}\n",
         FORCEWAKE_KERNEL,
         ack,
         ack_after_clear,
         clear_iters,
         iter,
-        fallback_used as u8
+        fallback_used as u8,
+        media_req,
+        media_req_iters,
+        media_ack,
+        media_ack_iters,
+        media_ok as u8,
+        gt_req,
+        gt_req_iters,
+        gt_ack,
+        gt_ack_iters,
+        gt_ok as u8
+    );
+    let media_coverage_awake = log_media_forcewake_coverage(warm, "post-acquire");
+    crate::log!(
+        "intel/igpu770: forcewake-all coverage render_ack={} media_ack={} gt_ack={} media_domains_awake={}\n",
+        ((ack & FORCEWAKE_KERNEL) != 0) as u8,
+        ((media_ack & FORCEWAKE_KERNEL) != 0) as u8,
+        ((gt_ack & FORCEWAKE_KERNEL) != 0) as u8,
+        media_coverage_awake
     );
     intel_770_registers::log_engine_wakeup_table("post-forcewake", |off| mmio_read32(warm, off));
-    if set_ok {
+    if set_ok && gt_ok {
+        if !media_ok {
+            crate::log!(
+                "intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries\n"
+            );
+        }
         FORCEWAKE_GT_HELD.store(true, Ordering::Release);
     }
     ack
+}
+
+pub(super) fn forcewake_gt_acquire(warm: Igpu770WarmState) -> u32 {
+    forcewake_all_acquire(warm)
 }
 
 fn forcewake_gt_release(warm: Igpu770WarmState) -> u32 {
@@ -334,11 +514,26 @@ fn forcewake_gt_release(warm: Igpu770WarmState) -> u32 {
         masked_bit_disable(FORCEWAKE_KERNEL | FORCEWAKE_KERNEL_FALLBACK),
     );
     let (_, ack, _) = wait_forcewake_ack(warm, FORCEWAKE_KERNEL | FORCEWAKE_KERNEL_FALLBACK, 0);
+    let _ = mmio_write32(
+        warm,
+        FORCEWAKE_MEDIA_GEN11,
+        masked_bit_disable(FORCEWAKE_KERNEL),
+    );
+    let _ = wait_forcewake_domain_ack(warm, FORCEWAKE_ACK_MEDIA, FORCEWAKE_KERNEL, 0);
+    let _ = mmio_write32(
+        warm,
+        FORCEWAKE_GT_GEN11,
+        masked_bit_disable(FORCEWAKE_KERNEL),
+    );
+    let _ = wait_forcewake_domain_ack(warm, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, 0);
     FORCEWAKE_GT_HELD.store(false, Ordering::Release);
     crate::log!(
-        "intel/igpu770: forcewake-render release ack=0x{:08X}\n",
-        ack
+        "intel/igpu770: forcewake-all release ack=0x{:08X} media_ack=0x{:08X} gt_ack=0x{:08X}\n",
+        ack,
+        mmio_read32(warm, FORCEWAKE_ACK_MEDIA),
+        mmio_read32(warm, FORCEWAKE_ACK_GT)
     );
+    let _ = log_media_forcewake_coverage(warm, "release");
     ack
 }
 
@@ -383,7 +578,7 @@ fn apply_adlp_display_workarounds(warm: Igpu770WarmState) -> (u32, u32) {
 }
 
 pub(super) fn request_display_power_with_forcewake(warm: Igpu770WarmState) -> bool {
-    let _forcewake_ack = forcewake_gt_acquire(warm);
+    let _forcewake_ack = forcewake_all_acquire(warm);
     let (clk5_rb, dcpr1_rb) = apply_adlp_display_workarounds(warm);
     let orig = mmio_read32(warm, GT_DISP_PWRON);
     let req = orig | GT_DISP_PWRON_REQ_MASK;
@@ -516,6 +711,7 @@ fn build_execlist_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     let base = (context_gpu_addr as u32) & 0xFFFF_F000;
     let desc = base
         | GEN8_CTX_VALID
+        | CTX_DESC_FORCE_RESTORE
         | GEN8_CTX_PRIVILEGE
         | GEN12_CTX_PRIORITY_NORMAL
         | (INTEL_LEGACY_64B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT);
@@ -538,6 +734,8 @@ fn execlist_submit_port_push(
 
 #[derive(Copy, Clone, Debug)]
 pub struct Igpu770WarmState {
+    pub device_id: u16,
+    pub revision_id: u8,
     pub ring_phys: u64,
     pub ring_virt: *mut u8,
     pub ring_len: usize,
@@ -555,6 +753,10 @@ pub struct Igpu770WarmState {
     pub guc_fw_len: usize,
     pub guc_fw_xfer_len: usize,
     pub guc_fw_gpu_addr: u64,
+    pub guc_ads_phys: u64,
+    pub guc_ads_virt: *mut u8,
+    pub guc_ads_len: usize,
+    pub guc_ads_gpu_addr: u64,
     pub mmio_base: usize,
     pub mmio_len: usize,
     pub aperture_bar_phys: u64,
@@ -725,6 +927,8 @@ fn ggtt_write_pte(warm: Igpu770WarmState, gpu_addr: u64, phys: u64) -> Option<u6
 }
 
 fn ggtt_program_plan(label: &str, warm: Igpu770WarmState, plan: GgttMapPlan) -> bool {
+    let log_all = plan.pages <= GGTT_MAP_LOG_ALL_THRESHOLD;
+    let mut omitted_logged = false;
     let mut page = 0usize;
     while page < plan.pages {
         let gpu_addr = plan
@@ -743,14 +947,31 @@ fn ggtt_program_plan(label: &str, warm: Igpu770WarmState, plan: GgttMapPlan) -> 
             );
             return false;
         };
-        crate::log!(
-            "intel/igpu770: ggtt-map label={} page={} gpu=0x{:X} phys=0x{:X} pte=0x{:016X}\n",
-            label,
-            page,
-            gpu_addr,
-            phys,
-            readback
-        );
+        if log_all
+            || page < GGTT_MAP_LOG_EDGE_PAGES
+            || page >= plan.pages.saturating_sub(GGTT_MAP_LOG_EDGE_PAGES)
+        {
+            crate::log!(
+                "intel/igpu770: ggtt-map label={} page={} gpu=0x{:X} phys=0x{:X} pte=0x{:016X}\n",
+                label,
+                page,
+                gpu_addr,
+                phys,
+                readback
+            );
+        } else if !omitted_logged {
+            let omitted = plan
+                .pages
+                .saturating_sub(GGTT_MAP_LOG_EDGE_PAGES.saturating_mul(2));
+            crate::log!(
+                "intel/igpu770: ggtt-map label={} omitted_pages={} total_pages={} log_policy=head-tail edge_pages={}\n",
+                label,
+                omitted,
+                plan.pages,
+                GGTT_MAP_LOG_EDGE_PAGES
+            );
+            omitted_logged = true;
+        }
         page += 1;
     }
     true
@@ -795,6 +1016,7 @@ pub fn ggtt_recon_once() {
     let batch = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE);
     let result = ggtt_map_plan_system_ram(warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE);
     let guc_fw = ggtt_map_plan_system_ram(warm.guc_fw_phys, warm.guc_fw_len, warm.guc_fw_gpu_addr);
+    let guc_ads = ggtt_map_plan_system_ram(warm.guc_ads_phys, warm.guc_ads_len, warm.guc_ads_gpu_addr);
 
     crate::log!(
         "intel/igpu770: ggtt-recon aperture=0x{:X}/0x{:X} limine_fb_phys=0x{:X} limine_fb_size=0x{:X}\n",
@@ -823,6 +1045,9 @@ pub fn ggtt_recon_once() {
     }
     if let Some(plan) = guc_fw {
         log_ggtt_map_plan("guc-fw", plan);
+    }
+    if let Some(plan) = guc_ads {
+        log_ggtt_map_plan("guc-ads", plan);
     }
     crate::log!(
         "intel/igpu770: ggtt-recon note system-ram objects need explicit GGTT PTEs; framebuffer is aperture-backed\n"
@@ -865,8 +1090,9 @@ pub fn ggtt_map_smoke_objects_once() {
         return;
     };
     let guc_fw = ggtt_map_plan_system_ram(warm.guc_fw_phys, warm.guc_fw_len, warm.guc_fw_gpu_addr);
+    let guc_ads = ggtt_map_plan_system_ram(warm.guc_ads_phys, warm.guc_ads_len, warm.guc_ads_gpu_addr);
 
-    let _ = forcewake_gt_acquire(warm);
+    let _ = forcewake_all_acquire(warm);
     crate::log!("intel/igpu770: ggtt-map begin\n");
     let ok_ring = ggtt_program_plan("ring", warm, ring);
     let ok_context = ggtt_program_plan("context", warm, context);
@@ -875,14 +1101,18 @@ pub fn ggtt_map_smoke_objects_once() {
     let ok_guc_fw = guc_fw
         .map(|plan| ggtt_program_plan("guc-fw", warm, plan))
         .unwrap_or(false);
+    let ok_guc_ads = guc_ads
+        .map(|plan| ggtt_program_plan("guc-ads", warm, plan))
+        .unwrap_or(false);
     let flsh = ggtt_invalidate(warm);
     crate::log!(
-        "intel/igpu770: ggtt-map summary ring={} context={} batch={} result={} guc_fw={} gfx_flsh_cntl=0x{:08X}\n",
+        "intel/igpu770: ggtt-map summary ring={} context={} batch={} result={} guc_fw={} guc_ads={} gfx_flsh_cntl=0x{:08X}\n",
         ok_ring as u8,
         ok_context as u8,
         ok_batch as u8,
         ok_result as u8,
         ok_guc_fw as u8,
+        ok_guc_ads as u8,
         flsh
     );
 
@@ -981,7 +1211,7 @@ pub fn ggtt_blt_smoke_test_once() {
         context_desc_hi,
         warm.result_phys
     );
-    let _ = forcewake_gt_acquire(warm);
+    let _ = forcewake_all_acquire(warm);
     let _ = mmio_write32(
         warm,
         RCS_RING_MODE_GEN7,
@@ -989,14 +1219,18 @@ pub fn ggtt_blt_smoke_test_once() {
     );
     let ctx_ctl_before = mmio_read32(warm, RCS_RING_CONTEXT_CONTROL);
     let ctx_ctl_ref_before = mmio_read32(warm, RCS_RING_CONTEXT_CONTROL_REF);
-    let ctx_ctl_after = (ctx_ctl_before | CTX_CTRL_RS_CTX_ENABLE)
-        & !(CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+    let ctx_ctl_after = masked_bits_update(
+        CTX_CTRL_RS_CTX_ENABLE,
+        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
             | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH);
-    let ctx_ctl_ref_after = (ctx_ctl_ref_before | CTX_CTRL_RS_CTX_ENABLE)
-        & !(CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
+    let ctx_ctl_ref_after = masked_bits_update(
+        CTX_CTRL_RS_CTX_ENABLE,
+        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
             | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH);
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
     let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
     let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_ref_after);
 
@@ -1145,10 +1379,36 @@ pub fn warm_once(info: IntelDeviceInfo) {
     }
 
     let guc_fw = intel_guc::load_firmware_from_module(WARM_ALIGN);
+    let guc_ads_len = if guc_fw.len != 0 {
+        intel_guc::minimal_ads_size()
+    } else {
+        0
+    };
+    let (guc_ads_phys, guc_ads_virt) = if guc_ads_len != 0 {
+        match crate::dma::alloc(guc_ads_len, WARM_ALIGN) {
+            Some((phys, virt)) => {
+                unsafe {
+                    ptr::write_bytes(virt, 0, guc_ads_len);
+                }
+                (phys, virt)
+            }
+            None => {
+                crate::log!(
+                    "intel/igpu770: warm alloc failed part=guc-ads size=0x{:X}\n",
+                    guc_ads_len
+                );
+                (0, ptr::null_mut())
+            }
+        }
+    } else {
+        (0, ptr::null_mut())
+    };
 
     let fb = limine_framebuffer_info();
 
     let warm = Igpu770WarmState {
+        device_id: info.device_id,
+        revision_id: info.revision_id,
         ring_phys,
         ring_virt,
         ring_len: WARM_RING_BYTES,
@@ -1166,6 +1426,14 @@ pub fn warm_once(info: IntelDeviceInfo) {
         guc_fw_len: guc_fw.len,
         guc_fw_xfer_len: guc_fw.xfer_len,
         guc_fw_gpu_addr: guc_fw.gpu_addr,
+        guc_ads_phys,
+        guc_ads_virt,
+        guc_ads_len,
+        guc_ads_gpu_addr: if guc_ads_phys != 0 {
+            GPU_VA_GUC_ADS_BASE
+        } else {
+            0
+        },
         mmio_base: info.mmio_base.as_ptr() as usize,
         mmio_len: info.mmio_len,
         aperture_bar_phys: info.aperture_bar_phys,
@@ -1180,7 +1448,9 @@ pub fn warm_once(info: IntelDeviceInfo) {
     };
 
     crate::log!(
-        "intel/igpu770: warm ring_phys=0x{:X} ring_len=0x{:X} context_phys=0x{:X} context_len=0x{:X} batch_phys=0x{:X} batch_len=0x{:X} result_phys=0x{:X} result_len=0x{:X} guc_fw_phys=0x{:X} guc_fw_len=0x{:X} guc_fw_xfer=0x{:X} guc_fw_gpu=0x{:X} mmio_len=0x{:X} aperture=0x{:X}/0x{:X} limine_fb=0x{:X}/0x{:X} {}x{} pitch=0x{:X} bpp={}\n",
+        "intel/igpu770: warm device=0x{:04X} rev=0x{:02X} ring_phys=0x{:X} ring_len=0x{:X} context_phys=0x{:X} context_len=0x{:X} batch_phys=0x{:X} batch_len=0x{:X} result_phys=0x{:X} result_len=0x{:X} guc_fw_phys=0x{:X} guc_fw_len=0x{:X} guc_fw_xfer=0x{:X} guc_fw_gpu=0x{:X} guc_ads_phys=0x{:X} guc_ads_len=0x{:X} guc_ads_gpu=0x{:X} mmio_len=0x{:X} aperture=0x{:X}/0x{:X} limine_fb=0x{:X}/0x{:X} {}x{} pitch=0x{:X} bpp={}\n",
+        warm.device_id,
+        warm.revision_id,
         warm.ring_phys,
         warm.ring_len,
         warm.context_phys,
@@ -1193,6 +1463,9 @@ pub fn warm_once(info: IntelDeviceInfo) {
         warm.guc_fw_len,
         warm.guc_fw_xfer_len,
         warm.guc_fw_gpu_addr,
+        warm.guc_ads_phys,
+        warm.guc_ads_len,
+        warm.guc_ads_gpu_addr,
         warm.mmio_len,
         warm.aperture_bar_phys,
         warm.aperture_bar_size,
