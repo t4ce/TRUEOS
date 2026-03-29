@@ -222,6 +222,9 @@ fn log_display_window(info: IntelDeviceInfo, center_off: usize, label: &str) {
 }
 
 fn log_display_focus_windows(info: IntelDeviceInfo) {
+    if !crate::logflag::INTEL_GFX_DEBUG_LOGFLAG {
+        return;
+    }
     log_display_window(info, INTEL_BXT_DE_PLL_ENABLE, "de_pll_enable");
     log_display_window(info, INTEL_PORT_HOTPLUG_EN, "hotplug");
     log_display_window(info, INTEL_TRANS_A_DDI_FUNC_CTL, "trans_a");
@@ -230,6 +233,9 @@ fn log_display_focus_windows(info: IntelDeviceInfo) {
 }
 
 fn log_display_region_sweep(info: IntelDeviceInfo) {
+    if !crate::logflag::INTEL_GFX_DEBUG_LOGFLAG {
+        return;
+    }
     let mut logged = 0usize;
     let mut page = INTEL_DISPLAY_SWEEP_START;
     while page < INTEL_DISPLAY_SWEEP_END {
@@ -294,6 +300,9 @@ fn insert_signature_candidate(
 }
 
 fn log_signature_window(info: IntelDeviceInfo, page: usize) {
+    if !crate::logflag::INTEL_GFX_DEBUG_LOGFLAG {
+        return;
+    }
     let mut idx = 0usize;
     while idx < INTEL_DISPLAY_SIGNATURE_WINDOW_DWORDS {
         let off = page + idx.saturating_mul(4);
@@ -308,6 +317,9 @@ fn log_signature_window(info: IntelDeviceInfo, page: usize) {
 }
 
 fn log_display_signature_sweep(info: IntelDeviceInfo) {
+    if !crate::logflag::INTEL_GFX_DEBUG_LOGFLAG {
+        return;
+    }
     let mut top = [IntelDisplaySignatureCandidate::empty(); INTEL_DISPLAY_SIGNATURE_TOP_PAGES];
     let mut page = 0usize;
     while page + INTEL_DISPLAY_PAGE_STRIDE <= info.mmio_len {
@@ -413,6 +425,9 @@ fn log_display_signature_sweep(info: IntelDeviceInfo) {
 }
 
 fn log_plane_inventory(info: IntelDeviceInfo) {
+    if !crate::logflag::INTEL_GFX_DEBUG_LOGFLAG {
+        return;
+    }
     let mut nonzero_pipes = 0usize;
     let mut nonzero_planes = 0usize;
     let mut enabled_planes = 0usize;
