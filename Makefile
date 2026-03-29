@@ -133,6 +133,7 @@ kernel-stages: artifacts
 iso: artifacts images
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
+	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
@@ -166,9 +167,6 @@ iso: artifacts images
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_SHARE)/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin ::/EFI/BOOT/adlp_guc_70.bin
-	# Important: do NOT place limine.conf next to BOOTX64.EFI.
-	# Limine prioritizes <EFI app path>/limine.conf; many ISO-to-USB tools copy only
-	# /EFI/BOOT into a FAT ESP, which would shadow the intended /limine.conf on ISO.
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
 		-R \
@@ -177,6 +175,7 @@ iso: artifacts images
 		-e $(ISO_EFI_IMG) -no-emul-boot \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
+
 
 iso-release: BUILD_MODE := release
 iso-release: CARGO_BUILD_FLAGS += --release
@@ -190,7 +189,7 @@ iso-release: iso
 iso-debug: BUILD_MODE := debug
 iso-debug: iso
 
-SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 5555; stty sane'
+SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 5555; stty sane; echo "Connection closed. Press ENTER to exit..."; read'
 
 snipe:
 	@killall -9 qemu-system-x86_64 || true

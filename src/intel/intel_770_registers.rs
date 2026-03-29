@@ -63,6 +63,13 @@ const FORCEWAKE_ACK_FLAGS: &[Intel770Flag] = &[
     },
 ];
 
+const FORCEWAKE_MEDIA_ACK_FLAGS: &[Intel770Flag] = &[Intel770Flag {
+    mask: 1 << 0,
+    value: 1 << 0,
+    name: "MEDIA_AWAKE_ACK",
+    description: "media forcewake request acknowledged by hardware",
+}];
+
 const GDRST_FLAGS: &[Intel770Flag] = &[
     Intel770Flag {
         mask: 1 << 0,
@@ -150,9 +157,79 @@ pub const INTEL_770_ENGINE_WAKE_REGISTERS: &[Intel770Register] = &[
     },
     Intel770Register {
         block: "FORCEWAKE",
+        name: "FORCEWAKE_ACK_VDBOX4",
+        offset: 0x00D60,
+        description: "VDBox4 media-slice wake acknowledge register",
+        flags: FORCEWAKE_MEDIA_ACK_FLAGS,
+    },
+    Intel770Register {
+        block: "FORCEWAKE",
+        name: "FORCEWAKE_ACK_VDBOX5",
+        offset: 0x00D64,
+        description: "VDBox5 media-slice wake acknowledge register",
+        flags: FORCEWAKE_MEDIA_ACK_FLAGS,
+    },
+    Intel770Register {
+        block: "FORCEWAKE",
+        name: "FORCEWAKE_ACK_VDBOX6",
+        offset: 0x00D68,
+        description: "VDBox6 media-slice wake acknowledge register",
+        flags: FORCEWAKE_MEDIA_ACK_FLAGS,
+    },
+    Intel770Register {
+        block: "FORCEWAKE",
+        name: "FORCEWAKE_ACK_VDBOX7",
+        offset: 0x00D6C,
+        description: "VDBox7 media-slice wake acknowledge register",
+        flags: FORCEWAKE_MEDIA_ACK_FLAGS,
+    },
+    Intel770Register {
+        block: "FORCEWAKE",
+        name: "FORCEWAKE_ACK_VEBOX0",
+        offset: 0x00D70,
+        description: "VEBox0 media-slice wake acknowledge register",
+        flags: FORCEWAKE_MEDIA_ACK_FLAGS,
+    },
+    Intel770Register {
+        block: "FORCEWAKE",
+        name: "FORCEWAKE_ACK_VEBOX1",
+        offset: 0x00D74,
+        description: "VEBox1 media-slice wake acknowledge register",
+        flags: FORCEWAKE_MEDIA_ACK_FLAGS,
+    },
+    Intel770Register {
+        block: "FORCEWAKE",
+        name: "FORCEWAKE_ACK_VEBOX2",
+        offset: 0x00D78,
+        description: "VEBox2 global media wake acknowledge register",
+        flags: FORCEWAKE_MEDIA_ACK_FLAGS,
+    },
+    Intel770Register {
+        block: "FORCEWAKE",
+        name: "FORCEWAKE_ACK_VEBOX3",
+        offset: 0x00D7C,
+        description: "VEBox3 global media wake acknowledge register",
+        flags: FORCEWAKE_MEDIA_ACK_FLAGS,
+    },
+    Intel770Register {
+        block: "FORCEWAKE",
         name: "FORCEWAKE_ACK_RENDER",
         offset: 0x00D84,
         description: "render forcewake acknowledge state mirrored by hardware",
+        flags: FORCEWAKE_ACK_FLAGS,
+    },
+    Intel770Register {
+        block: "FORCEWAKE",
+        name: "FORCEWAKE_ACK_MEDIA",
+        offset: 0x00D88,
+        description: "media forcewake acknowledge register; bit 0 mirrors the driver media wake request",
+        flags: FORCEWAKE_MEDIA_ACK_FLAGS,
+    },
+    Intel770Register {
+        block: "FORCEWAKE",
+        name: "FORCEWAKE_ACK_GT",
+        offset: 0x130044,
+        description: "GT/common forcewake acknowledge register for the shared GT domain",
         flags: FORCEWAKE_ACK_FLAGS,
     },
     Intel770Register {
