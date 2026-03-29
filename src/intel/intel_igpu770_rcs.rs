@@ -1,7 +1,4 @@
-use core::{
-    ptr,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use super::intel_770_registers;
 use super::intel_igpu770::{warm_state, Igpu770WarmState};
@@ -41,27 +38,13 @@ const FORCEWAKE_RENDER_GEN11: usize = 0x0A278;
 const FORCEWAKE_ACK_RENDER: usize = 0x0D84;
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
 const FORCEWAKE_KERNEL_FALLBACK: u32 = 1 << 15;
-const RING_VALID: u32 = 0x0000_0001;
-const RING_CTL_STOP: u32 = 0;
 const RING_MI_MODE_STOP_RING: u32 = 1 << 8;
 const MODE_IDLE: u32 = 1 << 9;
 const GFX_TLB_INVALIDATE_EXPLICIT: u32 = 1 << 13;
 const GFX_PPGTT_ENABLE: u32 = 1 << 9;
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
-const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
-const MI_BATCH_GTT: u32 = 2 << 6;
-const MI_USE_GGTT: u32 = 1 << 22;
-const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
-const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
-const MI_NOOP: u32 = 0;
-const RCS_RING_DWORDS: usize = 4;
-const RCS_BATCH_DWORDS: usize = 20;
-const RCS_RING_TAIL_BYTES: u32 = (RCS_RING_DWORDS * core::mem::size_of::<u32>()) as u32;
-const RCS_POLL_ITERS: usize = 4096;
-const RCS_POLL_LOG_STEP: usize = 256;
 const FORCEWAKE_POLL_ITERS: usize = 20_000;
 
-static RCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static FORCEWAKE_RENDER_HELD: AtomicBool = AtomicBool::new(false);
 static FORCEWAKE_GT_HELD: AtomicBool = AtomicBool::new(false);
 
@@ -130,12 +113,6 @@ fn mmio_write32(warm: Igpu770WarmState, off: usize, value: u32) -> bool {
 }
 
 #[inline]
-fn ring_ctl_value(size: usize) -> Option<u32> {
-    let size = u32::try_from(size).ok()?;
-    Some(size.checked_sub(GGTT_PAGE_BYTES as u32)? | RING_VALID)
-}
-
-#[inline]
 fn masked_bit_enable(bit: u32) -> u32 {
     bit | (bit << 16)
 }
@@ -143,21 +120,6 @@ fn masked_bit_enable(bit: u32) -> u32 {
 #[inline]
 fn masked_bit_disable(bit: u32) -> u32 {
     bit << 16
-}
-
-#[inline]
-fn encode_hws_pga(phys: u64) -> u32 {
-    (phys as u32) | (((phys >> 28) as u32) & 0xF0)
-}
-
-#[inline]
-fn ring_head_addr(value: u32) -> u32 {
-    value & 0x001F_FFFC
-}
-
-#[inline]
-fn ring_tail_addr(value: u32) -> u32 {
-    value & 0x001F_FFF8
 }
 
 fn ggtt_map_plan_system_ram(phys: u64, size: usize, gpu_addr: u64) -> Option<GgttMapPlan> {
@@ -423,186 +385,3 @@ fn forcewake_render_mmio_sanity(warm: Igpu770WarmState) {
     );
 }
 
-fn build_rcs_store_pixels_batch(warm: Igpu770WarmState, plan: RcsStorePlan) {
-    let pitch = plan.pitch as u64;
-    let pixels = [
-        plan.dst_gpu_addr,
-        plan.dst_gpu_addr + 4,
-        plan.dst_gpu_addr + pitch,
-        plan.dst_gpu_addr + pitch + 4,
-    ];
-    let dwords =
-        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, RCS_BATCH_DWORDS) };
-    let mut i = 0usize;
-    for addr in pixels {
-        dwords[i] = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
-        dwords[i + 1] = addr as u32;
-        dwords[i + 2] = (addr >> 32) as u32;
-        dwords[i + 3] = plan.color;
-        i += 4;
-    }
-    dwords[i] = MI_BATCH_BUFFER_END;
-    dwords[i + 1] = MI_NOOP;
-    dma_cache_flush(warm.batch_virt as *const u8, RCS_BATCH_DWORDS * core::mem::size_of::<u32>());
-}
-
-fn build_ring_batch_start(warm: Igpu770WarmState, batch_gpu_addr: u64) -> usize {
-    let dwords =
-        unsafe { core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, RCS_RING_DWORDS) };
-    dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT;
-    dwords[1] = batch_gpu_addr as u32;
-    dwords[2] = (batch_gpu_addr >> 32) as u32;
-    dwords[3] = MI_NOOP;
-    dma_cache_flush(warm.ring_virt as *const u8, RCS_RING_TAIL_BYTES as usize);
-    RCS_RING_TAIL_BYTES as usize
-}
-
-pub fn ggtt_rcs_smoke_test_once() {
-    if RCS_SMOKE_RAN.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    let Some(warm) = warm_state() else {
-        crate::log!("intel/igpu770: ggtt-rcs-smoke skipped reason=not-warmed\n");
-        return;
-    };
-    let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE) else {
-        crate::log!("intel/igpu770: ggtt-rcs-smoke skipped reason=ring-plan\n");
-        return;
-    };
-    let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE) else {
-        crate::log!("intel/igpu770: ggtt-rcs-smoke skipped reason=batch-plan\n");
-        return;
-    };
-    let Some(result) = ggtt_map_plan_system_ram(warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE) else {
-        crate::log!("intel/igpu770: ggtt-rcs-smoke skipped reason=result-plan\n");
-        return;
-    };
-    let Some(plan) = rcs_store_plan(warm) else {
-        crate::log!("intel/igpu770: ggtt-rcs-smoke skipped reason=fb-plan\n");
-        return;
-    };
-
-    unsafe {
-        ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        ptr::write_bytes(warm.result_virt, 0, warm.result_len);
-        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
-    }
-    dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
-
-    crate::log!("intel/igpu770: ggtt-rcs-smoke begin\n");
-    log_ggtt_map_plan("ring", ring);
-    log_ggtt_map_plan("batch", batch);
-    log_ggtt_map_plan("result", result);
-    crate::log!(
-        "intel/igpu770: rcs-store-plan dst_gpu=0x{:X} dst_phys=0x{:X} rect={}x{} pitch=0x{:X} color=0x{:08X}\n",
-        plan.dst_gpu_addr,
-        plan.dst_phys,
-        plan.rect_w,
-        plan.rect_h,
-        plan.pitch,
-        plan.color
-    );
-
-    build_rcs_store_pixels_batch(warm, plan);
-    let ring_tail_bytes = build_ring_batch_start(warm, batch.gpu_addr);
-    let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
-        crate::log!(
-            "intel/igpu770: ggtt-rcs-smoke skipped reason=ring-ctl ring_len=0x{:X}\n",
-            warm.ring_len
-        );
-        return;
-    };
-    let ring_start = ring.gpu_addr as u32;
-    let hws_pga = encode_hws_pga(warm.result_phys);
-
-    crate::log!(
-        "intel/igpu770: rcs-submit prep ring_start=0x{:08X} ring_ctl=0x{:08X} tail=0x{:X} batch_gpu=0x{:X} hws_pga=0x{:08X} result_phys=0x{:X}\n",
-        ring_start,
-        ring_ctl,
-        ring_tail_bytes,
-        batch.gpu_addr,
-        hws_pga,
-        warm.result_phys
-    );
-    let _ = forcewake_render_acquire(warm);
-    forcewake_render_mmio_sanity(warm);
-    log_rcs_mode_summary(warm, "pre");
-    log_rcs_regs(warm, "pre");
-
-    let _ = mmio_write32(warm, RCS_RING_TAIL, 0);
-    let _ = mmio_write32(warm, RCS_RING_HEAD, 0);
-    let _ = mmio_write32(warm, RCS_RING_CTL, RING_CTL_STOP);
-    let _ = mmio_write32(warm, RCS_RING_IMR, 0xFFFF_FFFF);
-    let _ = mmio_write32(warm, RCS_RING_HWSTAM, 0xFFFF_FFFF);
-    let _ = mmio_write32(warm, RCS_RING_HWS_PGA, hws_pga);
-    let _ = mmio_write32(warm, RCS_RING_START, ring_start);
-    let _ = mmio_write32(warm, RCS_RING_CTL, ring_ctl);
-    let _ = mmio_write32(warm, RCS_RING_MI_MODE, masked_bit_disable(RING_MI_MODE_STOP_RING));
-    let _ = mmio_read32(warm, RCS_RING_CTL);
-    log_rcs_mode_summary(warm, "armed");
-    log_rcs_regs(warm, "armed");
-
-    let _ = mmio_write32(warm, RCS_RING_TAIL, ring_tail_bytes as u32);
-    let tail_rb = mmio_read32(warm, RCS_RING_TAIL);
-    crate::log!(
-        "intel/igpu770: rcs-submit kick tail_req=0x{:X} tail_rb=0x{:08X}\n",
-        ring_tail_bytes,
-        tail_rb
-    );
-
-    let mut completed = false;
-    let mut first_head = 0u32;
-    let mut first_tail = 0u32;
-    let mut final_head = 0u32;
-    let mut final_tail = 0u32;
-    let mut iter = 0usize;
-    while iter < RCS_POLL_ITERS {
-        let head = mmio_read32(warm, RCS_RING_HEAD);
-        let tail = mmio_read32(warm, RCS_RING_TAIL);
-        if iter == 0 {
-            first_head = head;
-            first_tail = tail;
-        }
-        final_head = head;
-        final_tail = tail;
-        if iter == 0 || (iter % RCS_POLL_LOG_STEP) == 0 {
-            crate::log!(
-                "intel/igpu770: rcs-poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} mode=0x{:08X} instdone=0x{:08X}\n",
-                iter,
-                head,
-                tail,
-                mmio_read32(warm, RCS_RING_ACTHD),
-                mmio_read32(warm, RCS_RING_IPEIR),
-                mmio_read32(warm, RCS_RING_IPEHR),
-                mmio_read32(warm, RCS_RING_EIR),
-                mmio_read32(warm, RCS_RING_MODE_GEN7),
-                mmio_read32(warm, RCS_RING_INSTDONE)
-            );
-        }
-        if ring_head_addr(head) == ring_tail_addr(tail) && ring_tail_addr(tail) == RCS_RING_TAIL_BYTES {
-            completed = true;
-            break;
-        }
-        core::hint::spin_loop();
-        iter += 1;
-    }
-
-    dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
-    let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
-    let fb0 = unsafe { core::ptr::read_volatile(warm.limine_fb_virt as *const u32) };
-    log_rcs_mode_summary(warm, if completed { "post-complete" } else { "post-timeout" });
-    log_rcs_regs(warm, if completed { "post-complete" } else { "post-timeout" });
-    crate::log!(
-        "intel/igpu770: rcs-submit result completed={} iters={} head0=0x{:08X} tail0=0x{:08X} headf=0x{:08X} tailf=0x{:08X} result0=0x{:08X} fb0=0x{:08X} forcewake_held={}\n",
-        completed as u8,
-        iter,
-        first_head,
-        first_tail,
-        final_head,
-        final_tail,
-        result0,
-        fb0,
-        (FORCEWAKE_RENDER_HELD.load(Ordering::Acquire) && FORCEWAKE_GT_HELD.load(Ordering::Acquire)) as u8
-    );
-}

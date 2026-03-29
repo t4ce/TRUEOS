@@ -49,6 +49,8 @@ const RCS_RING_MODE_GEN7: usize = RCS_RING_BASE + 0x29C;
 const RCS_RING_EXECLIST_STATUS_LO: usize = RCS_RING_BASE + 0x234;
 const RCS_RING_EXECLIST_STATUS_HI: usize = RCS_RING_BASE + 0x238;
 const RCS_RING_EXECLIST_CONTROL: usize = RCS_RING_BASE + 0x550;
+const RING_EXECLIST_SQ_LO: usize = RCS_RING_BASE + 0x510;
+const RING_EXECLIST_SQ_HI: usize = RCS_RING_BASE + 0x514;
 const GFX_FLSH_CNTL_GEN6: usize = 0x101008;
 const GFX_FLSH_CNTL_EN: u32 = 1 << 0;
 const FORCEWAKE_RENDER_GEN11: usize = 0x0A278;
@@ -729,6 +731,12 @@ pub fn ggtt_blt_smoke_test_once() {
         crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=ring-plan\n");
         return;
     };
+    let Some(context) =
+        ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
+    else {
+        crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=context-plan\n");
+        return;
+    };
     let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE) else {
         crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=batch-plan\n");
         return;
@@ -745,14 +753,17 @@ pub fn ggtt_blt_smoke_test_once() {
     };
 
     unsafe {
+        ptr::write_bytes(warm.context_virt, 0, warm.context_len);
         ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
         ptr::write_bytes(warm.result_virt, 0, warm.result_len);
         core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
     }
+    dma_cache_flush(warm.context_virt as *const u8, warm.context_len);
     dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
 
     crate::log!("intel/igpu770: ggtt-rcs-smoke begin\n");
     log_ggtt_map_plan("ring", ring);
+    log_ggtt_map_plan("context", context);
     log_ggtt_map_plan("batch", batch);
     log_ggtt_map_plan("result", result);
     crate::log!(
@@ -775,18 +786,33 @@ pub fn ggtt_blt_smoke_test_once() {
         return;
     };
     let ring_start = ring.gpu_addr as u32;
+    let context_desc = context.gpu_addr;
+    let context_desc_lo = context_desc as u32;
+    let context_desc_hi = (context_desc >> 32) as u32;
     let hws_pga = encode_hws_pga(warm.result_phys);
 
     crate::log!(
-        "intel/igpu770: rcs-submit prep ring_start=0x{:08X} ring_ctl=0x{:08X} tail=0x{:X} batch_gpu=0x{:X} hws_pga=0x{:08X} result_phys=0x{:X}\n",
+        "intel/igpu770: rcs-submit prep ring_start=0x{:08X} ring_ctl=0x{:08X} tail=0x{:X} batch_gpu=0x{:X} context_gpu=0x{:X} hws_pga=0x{:08X} result_phys=0x{:X}\n",
         ring_start,
         ring_ctl,
         ring_tail_bytes,
         batch.gpu_addr,
+        context_desc,
         hws_pga,
         warm.result_phys
     );
     let _ = forcewake_gt_acquire(warm);
+    let _ = mmio_write32(warm, RING_EXECLIST_SQ_LO, context_desc_lo);
+    let _ = mmio_write32(warm, RING_EXECLIST_SQ_HI, context_desc_hi);
+    let sq_lo_rb = mmio_read32(warm, RING_EXECLIST_SQ_LO);
+    let sq_hi_rb = mmio_read32(warm, RING_EXECLIST_SQ_HI);
+    crate::log!(
+        "intel/igpu770: execlist-submit context sq_lo_req=0x{:08X} sq_hi_req=0x{:08X} sq_lo_rb=0x{:08X} sq_hi_rb=0x{:08X}\n",
+        context_desc_lo,
+        context_desc_hi,
+        sq_lo_rb,
+        sq_hi_rb
+    );
     forcewake_gt_mmio_sanity(warm);
     log_rcs_mode_summary(warm, "pre");
     log_rcs_regs(warm, "pre");
