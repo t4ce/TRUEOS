@@ -4,7 +4,7 @@ use super::intel_igpu770::{forcewake_all_acquire, mmio_read32, mmio_write32, Igp
 
 const GUC_MODULE_STRING: &[u8] = b"trueos.fw.guc";
 const ZSTD_MAGIC: u32 = 0xFD2F_B528;
-const GPU_VA_GUC_FW_BASE: u64 = 0x0084_0000;
+const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
 
 const GUC_STATUS: usize = 0x0000_C000;
 const SOFT_SCRATCH_BASE: usize = 0x0000_C180;
