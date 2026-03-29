@@ -9,7 +9,7 @@ use spin::Mutex;
 const INTEL_VENDOR_ID: u16 = 0x8086;
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
 const PCI_CLASS_DISPLAY: u8 = 0x03;
-const INTEL_ASYNC_PROBE_DELAY_MS: u64 = 25000;
+const INTEL_ASYNC_PROBE_DELAY_MS: u64 = 5000;
 
 const INTEL_BXT_DE_PLL_CTL: usize = 0x6D000;
 const INTEL_BXT_DE_PLL_ENABLE: usize = 0x46070;
@@ -57,6 +57,7 @@ pub struct IntelDeviceInfo {
     pub slot: u8,
     pub function: u8,
     pub device_id: u16,
+    pub revision_id: u8,
     pub bar0_phys: u64,
     pub bar0_size: u64,
     pub aperture_bar_phys: u64,
@@ -635,6 +636,7 @@ pub fn init_once() {
                 slot: dev.slot,
                 function: dev.function,
                 device_id: dev.device,
+                revision_id: crate::pci::config_read_u8(dev.bus, dev.slot, dev.function, 0x08),
                 bar0_phys,
                 bar0_size,
                 aperture_bar_phys,
@@ -657,11 +659,12 @@ pub fn init_once() {
 
     if let Some(info) = *first {
         crate::log!(
-            "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} bar0=0x{:X} size=0x{:X} bar2=0x{:X} bar2_size=0x{:X} mmio=0x{:X}\n",
+            "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} rev=0x{:02X} bar0=0x{:X} size=0x{:X} bar2=0x{:X} bar2_size=0x{:X} mmio=0x{:X}\n",
             info.bus,
             info.slot,
             info.function,
             info.device_id,
+            info.revision_id,
             info.bar0_phys,
             info.bar0_size,
             info.aperture_bar_phys,
