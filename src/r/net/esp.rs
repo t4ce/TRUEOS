@@ -190,10 +190,10 @@ pub async fn esp_gate_task() {
             continue;
         };
 
-        let mut swarm = trueos_esp::swarm::SwarmService::new(ports::ESP_GATE_TCP_PORT);
+        let mut swarm = trueos_esp::swarm::SwarmService::new();
         crate::log!(
-            "esp-gate: starting tcp listener on port {}\n",
-            swarm.listen_port()
+            "esp-gate: starting udp broadcast listener on port {}\n",
+            trueos_esp::swarm::ESP_UDP_BROADCAST_PORT
         );
 
         swarm
@@ -202,10 +202,15 @@ pub async fn esp_gate_task() {
                 |vnet, signal| {
                     process_gate_to_swarm(vnet);
                     match signal {
-                        trueos_esp::swarm::SwarmSignal::ListenerBound(handle) => crate::log!(
-                            "esp-gate: listening handle={} port={}\n",
+                        trueos_esp::swarm::SwarmSignal::UdpBound(handle) => crate::log!(
+                            "esp-gate: udp listener bound handle={} port={}\n",
                             handle.0,
-                            ports::ESP_GATE_TCP_PORT
+                            trueos_esp::swarm::ESP_UDP_BROADCAST_PORT
+                        ),
+                        trueos_esp::swarm::SwarmSignal::EspDiscovered(from) => crate::log!(
+                            "esp-gate: esp discovered {}.{}.{}.{} connecting port={}\n",
+                            from.addr[0], from.addr[1], from.addr[2], from.addr[3],
+                            trueos_esp::swarm::ESP_WEBREPL_PORT
                         ),
                         trueos_esp::swarm::SwarmSignal::ClientConnected(handle) => {
                             channel_a_to_b_push(SwarmToGate::Connected(handle));
@@ -251,7 +256,7 @@ pub async fn esp_gate_registry_task() {
                             let mut registry = DEVICE_REGISTRY.lock();
                             let is_new = registry.connect(
                                 handle,
-                                trueos_esp::swarm::ESP_GATE_TCP_PORT,
+                                trueos_esp::swarm::ESP_WEBREPL_PORT,
                                 now_ms,
                             );
                             if is_new {
