@@ -4,7 +4,11 @@ use core::future::Future;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use v::vnet as api;
 
-pub const ESP_GATE_TCP_PORT: u16 = 2;
+/// Port each ESP32 WebSocket (WebREPL) server listens on.
+pub const ESP_WEBREPL_PORT: u16 = 21232;
+/// UDP port on which ESP32s broadcast their presence to the kernel.
+pub const ESP_UDP_BROADCAST_PORT: u16 = 32343;
+
 pub const RX_PREVIEW_BYTES: usize = 64;
 const IDLE_POLL_MS: u64 = 10;
 
@@ -22,7 +26,10 @@ pub struct RxNotice {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SwarmSignal {
-    ListenerBound(api::NetHandle),
+    /// UDP broadcast listener socket is open and ready.
+    UdpBound(api::NetHandle),
+    /// A UDP broadcast arrived from an ESP32; an outbound WS connection is being opened.
+    EspDiscovered(api::EndpointV4),
     ClientConnected(api::NetHandle),
     ClientClosed(api::NetHandle),
     Received(RxNotice),
@@ -34,36 +41,32 @@ enum SwarmStep {
     None,
     Signal(SwarmSignal),
     Submit(api::Command),
+    /// Emit a signal to the layer above AND submit a command to the vnet.
+    Both(SwarmSignal, api::Command),
 }
 
 pub struct SwarmService {
-    listen_port: u16,
-    listener: Option<api::NetHandle>,
+    udp_handle: Option<api::NetHandle>,
     clients: BTreeSet<u32>,
 }
 
 impl Default for SwarmService {
     fn default() -> Self {
-        Self::new(ESP_GATE_TCP_PORT)
+        Self::new()
     }
 }
 
 impl SwarmService {
-    pub fn new(listen_port: u16) -> Self {
+    pub fn new() -> Self {
         Self {
-            listen_port,
-            listener: None,
+            udp_handle: None,
             clients: BTreeSet::new(),
         }
     }
 
-    pub fn listen_port(&self) -> u16 {
-        self.listen_port
-    }
-
     pub fn bootstrap_command(&self) -> api::Command {
-        api::Command::OpenTcpListen {
-            port: self.listen_port,
+        api::Command::OpenUdp {
+            port: ESP_UDP_BROADCAST_PORT,
         }
     }
 
@@ -74,7 +77,7 @@ impl SwarmService {
     pub fn on_event(&mut self, ev: api::Event) -> Option<SwarmSignal> {
         match self.step_for_event(ev) {
             SwarmStep::None | SwarmStep::Submit(_) => None,
-            SwarmStep::Signal(signal) => Some(signal),
+            SwarmStep::Signal(signal) | SwarmStep::Both(signal, _) => Some(signal),
         }
     }
 
@@ -108,6 +111,10 @@ impl SwarmService {
                     SwarmStep::Submit(cmd) => {
                         let _ = vlayer.submit(cmd);
                     }
+                    SwarmStep::Both(signal, cmd) => {
+                        on_signal(vlayer, signal);
+                        let _ = vlayer.submit(cmd);
+                    }
                 }
                 continue;
             }
@@ -134,10 +141,23 @@ impl SwarmService {
 
     fn step_for_event(&mut self, ev: api::Event) -> SwarmStep {
         match ev {
-            api::Event::Opened { handle, kind } if kind == api::SocketKind::Tcp => {
-                self.listener = Some(handle);
-                SwarmStep::Signal(SwarmSignal::ListenerBound(handle))
+            // UDP socket opened — broadcast listener is ready.
+            api::Event::Opened { handle, kind } if kind == api::SocketKind::Udp => {
+                self.udp_handle = Some(handle);
+                SwarmStep::Signal(SwarmSignal::UdpBound(handle))
             }
+            // UDP broadcast received from an ESP32 — initiate outbound WebSocket connection.
+            api::Event::UdpPacket { from, .. } => {
+                let remote = api::EndpointV4 {
+                    addr: from.addr,
+                    port: ESP_WEBREPL_PORT,
+                };
+                SwarmStep::Both(
+                    SwarmSignal::EspDiscovered(from),
+                    api::Command::OpenTcpConnect { remote },
+                )
+            }
+            // Outbound TCP connection established — WebSocket session can begin.
             api::Event::TcpEstablished { handle } => {
                 self.clients.insert(handle.0);
                 SwarmStep::Signal(SwarmSignal::ClientConnected(handle))
@@ -154,14 +174,15 @@ impl SwarmService {
                 }))
             }
             api::Event::Closed { handle } => {
-                let had_client = self.clients.remove(&handle.0);
-                if self.listener == Some(handle) {
-                    self.listener = None;
-                    return SwarmStep::Submit(api::Command::OpenTcpListen {
-                        port: self.listen_port,
+                // If the UDP listen socket closed, reopen it.
+                if self.udp_handle == Some(handle) {
+                    self.udp_handle = None;
+                    return SwarmStep::Submit(api::Command::OpenUdp {
+                        port: ESP_UDP_BROADCAST_PORT,
                     });
                 }
 
+                let had_client = self.clients.remove(&handle.0);
                 if had_client {
                     SwarmStep::Signal(SwarmSignal::ClientClosed(handle))
                 } else {
@@ -169,8 +190,7 @@ impl SwarmService {
                 }
             }
             api::Event::Error { msg } => SwarmStep::Signal(SwarmSignal::Error(msg)),
-            api::Event::UdpPacket { .. }
-            | api::Event::UdpPacketV6 { .. }
+            api::Event::UdpPacketV6 { .. }
             | api::Event::TcpSent { .. }
             | api::Event::IcmpReply { .. }
             | api::Event::IcmpReplyV6 { .. }
@@ -194,7 +214,7 @@ mod tests {
         match signal {
             Some(SwarmSignal::Received(notice)) => {
                 assert_eq!(notice.handle, api::NetHandle(7));
-                assert_eq!(notice.len, 15);
+                assert_eq!(notice.len, 14);
                 assert_eq!(notice.preview.as_slice(), b"hello esp32-c3");
             }
             _ => panic!("expected rx signal"),
@@ -202,18 +222,42 @@ mod tests {
     }
 
     #[test]
-    fn keeps_port_open_after_listener_close() {
-        let mut service = SwarmService::new(ESP_GATE_TCP_PORT);
+    fn keeps_udp_open_after_close() {
+        let mut service = SwarmService::new();
+        // Simulate the UDP broadcast socket opening.
         let _ = service.on_event(api::Event::Opened {
             handle: api::NetHandle(1),
-            kind: api::SocketKind::Tcp,
+            kind: api::SocketKind::Udp,
         });
 
+        // When it closes unexpectedly, the service should reopen it.
         assert!(matches!(
             service.step_for_event(api::Event::Closed {
                 handle: api::NetHandle(1),
             }),
-            SwarmStep::Submit(api::Command::OpenTcpListen { port: ESP_GATE_TCP_PORT })
+            SwarmStep::Submit(api::Command::OpenUdp {
+                port: ESP_UDP_BROADCAST_PORT
+            })
         ));
+    }
+
+    #[test]
+    fn udp_broadcast_triggers_ws_connect() {
+        let mut service = SwarmService::new();
+        let from = api::EndpointV4::new([192, 168, 1, 42], 32343);
+        let step = service.step_for_event(api::Event::UdpPacket {
+            handle: api::NetHandle(2),
+            from,
+            data: api::ByteBuf::new(),
+        });
+
+        match step {
+            SwarmStep::Both(SwarmSignal::EspDiscovered(ep), api::Command::OpenTcpConnect { remote }) => {
+                assert_eq!(ep.addr, [192, 168, 1, 42]);
+                assert_eq!(remote.addr, [192, 168, 1, 42]);
+                assert_eq!(remote.port, ESP_WEBREPL_PORT);
+            }
+            _ => panic!("expected Both(EspDiscovered, OpenTcpConnect)"),
+        }
     }
 }
