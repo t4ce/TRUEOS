@@ -590,6 +590,10 @@ pub(crate) fn restore_user_input_record(entries: Vec<AllocString>) {
     matrix::restore_user_input_record(entries)
 }
 
+pub(crate) fn live_user_input_record() -> Vec<matrix::LiveUserInputEntry> {
+    matrix::live_user_input_record()
+}
+
 pub(crate) fn command_registry_json() -> AllocString {
     cmds::command_registry_json()
 }

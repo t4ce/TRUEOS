@@ -15,12 +15,15 @@ UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
 
 # Size of the EFI System Partition image that gets embedded into the ISO.
 # Keep this small: the kernel and Limine config live on the ISO9660 filesystem,
-# while the ESP only needs to contain the EFI loader.
-EFI_IMG_SIZE_KIB ?= 512
+# while the ESP only needs to contain the EFI loader and the GuC module.
+EFI_IMG_SIZE_KIB ?= 1024
 
 LIMINE_CFG := limine.conf
 LIMINE_PREFIX := bld/limine-prefix
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
+GUC_FW_HOST_PATH ?= /lib/firmware/i915/adlp_guc_70.bin.zst
+# Canonical boot path used by limine.conf for the GuC module.
+GUC_FW_ISO_REL_PATH ?= EFI/BOOT/adlp_guc_70.bin
 
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
 QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
@@ -132,18 +135,37 @@ iso: artifacts images
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
-	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/limine.conf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
+	@if [ ! -f "$(GUC_FW_HOST_PATH)" ]; then \
+		echo "error: GUC firmware not found at $(GUC_FW_HOST_PATH)"; \
+		exit 1; \
+	fi
+	@case "$(GUC_FW_HOST_PATH)" in \
+		*.zst) \
+			command -v zstd >/dev/null 2>&1 || { echo "error: zstd command not found; cannot decompress $(GUC_FW_HOST_PATH)"; exit 1; }; \
+			zstd -d -c "$(GUC_FW_HOST_PATH)" > "$(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin"; \
+			;; \
+		*) \
+			cp "$(GUC_FW_HOST_PATH)" "$(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin"; \
+			;; \
+	esac
+	mkdir -p $(ISO_BOOT_DIR)/$(dir $(GUC_FW_ISO_REL_PATH))
+	cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/$(GUC_FW_ISO_REL_PATH)
+	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \
+		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \
+		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
+	fi
+	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/limine.conf
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
 	cp $(LIMINE_CFG) $(ISO_DIR)/EFI/BOOT/limine.conf
 	cp $(ISO_BOOT_DIR)/TRUEOS.elf $(ISO_DIR)/TRUEOS.elf
-	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
 	rm -f $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1k count=$(EFI_IMG_SIZE_KIB)
 	mkfs.vfat -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_SHARE)/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
+	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin ::/EFI/BOOT/adlp_guc_70.bin
 	# Important: do NOT place limine.conf next to BOOTX64.EFI.
 	# Limine prioritizes <EFI app path>/limine.conf; many ISO-to-USB tools copy only
 	# /EFI/BOOT into a FAT ESP, which would shadow the intended /limine.conf on ISO.

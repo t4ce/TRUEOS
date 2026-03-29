@@ -9,6 +9,7 @@ use spin::Mutex;
 const INTEL_VENDOR_ID: u16 = 0x8086;
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
 const PCI_CLASS_DISPLAY: u8 = 0x03;
+const INTEL_ASYNC_PROBE_DELAY_MS: u64 = 25000;
 
 const INTEL_BXT_DE_PLL_CTL: usize = 0x6D000;
 const INTEL_BXT_DE_PLL_ENABLE: usize = 0x46070;
@@ -691,6 +692,12 @@ pub async fn scanout_smoke_task() {
         crate::log!("intel: display discovery skipped (no claimed Intel device)\n");
         return;
     };
+
+    crate::log!(
+        "intel: async probe delayed by {}ms (non-blocking)\n",
+        INTEL_ASYNC_PROBE_DELAY_MS
+    );
+    Timer::after(EmbassyDuration::from_millis(INTEL_ASYNC_PROBE_DELAY_MS)).await;
 
     if intel_igpu770_present() {
         super::intel_igpu770::warm_once(info);
