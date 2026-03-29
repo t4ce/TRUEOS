@@ -1,3 +1,4 @@
+use alloc::{string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use embassy_executor::{SendSpawner, SpawnError, Spawner};
@@ -143,6 +144,7 @@ define_started_flags!(
     VLEDS_CYCLE_STARTED,
     TRUEKEY_DRAIN_STARTED,
     PIANO_DRAIN_STARTED,
+    TRUEOSFS_READY_HOOK_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
     SMTP_SMOKE_STARTED,
@@ -850,6 +852,68 @@ fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+const USER_INPUT_RECORD_FLUSH_INTERVAL_SECS: u64 = 120;
+const USER_INPUT_RECORD_PATH: &str = "user_input_record.txt";
+
+fn user_input_record_payload(entries: &[String]) -> String {
+    let mut payload = String::new();
+    for entry in entries {
+        payload.push_str(entry.as_str());
+        payload.push('\n');
+    }
+    payload
+}
+
+async fn flush_user_input_record_once() {
+    let entries: Vec<String> = crate::shell2::take_user_input_record();
+    if entries.is_empty() {
+        return;
+    }
+
+    let appended_lines = entries.len();
+    let payload = user_input_record_payload(entries.as_slice());
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        crate::shell2::restore_user_input_record(entries);
+        crate::log!("spawn-svc: user-input-record err=no-root\n");
+        return;
+    };
+
+    match crate::r::fs::trueosfs::file_append_async(disk, USER_INPUT_RECORD_PATH, payload.as_bytes())
+        .await
+    {
+        Ok(true) => {
+            crate::log!(
+                "spawn-svc: user-input-record ok appended_lines={}\n",
+                appended_lines
+            );
+        }
+        Ok(false) => {
+            crate::shell2::restore_user_input_record(entries);
+            crate::log!("spawn-svc: user-input-record err=append-false\n");
+        }
+        Err(e) => {
+            crate::shell2::restore_user_input_record(entries);
+            crate::log!("spawn-svc: user-input-record err={:?}\n", e);
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn trueosfs_ready_hook_task() {
+    crate::log!("spawn-svc: trueosfs-ready-hook task online\n");
+    loop {
+        flush_user_input_record_once().await;
+        Timer::after(EmbassyDuration::from_secs(
+            USER_INPUT_RECORD_FLUSH_INTERVAL_SECS,
+        ))
+        .await;
+    }
+}
+
+fn spawn_trueosfs_ready_hook(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(trueosfs_ready_hook_task()))
+}
+
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
@@ -1106,6 +1170,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_crabusb_truekey,
     ),
     TaskSpec::enabled("piano-drain", 0, &PIANO_DRAIN_STARTED, spawn_piano_drain),
+    TaskSpec::enabled(
+        "trueosfs-ready-hook",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        &TRUEOSFS_READY_HOOK_STARTED,
+        spawn_trueosfs_ready_hook,
+    ),
     TaskSpec::disabled(
         "boot-ws-smoke",
         WS_BOOT_READY,

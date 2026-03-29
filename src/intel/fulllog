@@ -1,0 +1,155 @@
+intel: display discovery begin bdf=00:02.0 device=0x4680 bar0=0x60E7000000 mmio_len=0x1000000 aperture=0x10000000
+intel: display discovery step=probe scope=power+routing
+intel: display-power probe phy_misc_a=0x23000000 phy_misc_b=0x20000000 tx_bmu=0xFB0F0FF0 de_pll_ctl=0xFFFFFFFF de_pll_enable=0xC0000022 dc_state_en=0x00000000 dc_state_debug=0x00000000 hotplug=0x00000000 gt_disp_pwron=0x00000000
+intel: display-routing probe hotplug_en=0x00000000 trans_a=0xA1030100 trans_b=0x00030000 trans_c=0x00030000 trans_d=0x00000000 pipe_a=0x00000000 pipe_b=0x00000000 pipe_c=0x00000000 pipe_d=0x00000000
+intel: window label=de_pll_enable base=0x46060
+intel: window-mmio label=de_pll_enable off=0x46060 value=0x00000000
+intel: window-mmio label=de_pll_enable off=0x46064 value=0x00000000
+intel: window-mmio label=de_pll_enable off=0x46068 value=0x00000000
+intel: window-mmio label=de_pll_enable off=0x4606C value=0x00000000
+intel: window-mmio label=de_pll_enable off=0x46070 value=0xC0000022
+intel: window-mmio label=de_pll_enable off=0x46074 value=0x00000000
+intel: window-mmio label=de_pll_enable off=0x46078 value=0x00000000
+intel: window-mmio label=de_pll_enable off=0x4607C value=0x00000000
+intel: window label=hotplug base=0x61100
+intel: window-mmio label=hotplug off=0x61100 value=0x00000000
+intel: window-mmio label=hotplug off=0x61104 value=0x00000000
+intel: window-mmio label=hotplug off=0x61108 value=0x00000000
+intel: window-mmio label=hotplug off=0x6110C value=0x00000000
+intel: window-mmio label=hotplug off=0x61110 value=0x00000000
+intel: window-mmio label=hotplug off=0x61114 value=0x00000000
+intel: window-mmio label=hotplug off=0x61118 value=0x00000000
+intel: window-mmio label=hotplug off=0x6111C value=0x00000000
+intel: window label=trans_a base=0x60400
+intel: window-mmio label=trans_a off=0x60400 value=0xA1030100
+intel: window-mmio label=trans_a off=0x60404 value=0x00000000
+intel: window-mmio label=trans_a off=0x60408 value=0x00000000
+intel: window-mmio label=trans_a off=0x6040C value=0x00000000
+intel: window-mmio label=trans_a off=0x60410 value=0x00000000
+intel: window-mmio label=trans_a off=0x60414 value=0x00000000
+intel: window-mmio label=trans_a off=0x60418 value=0x00000000
+intel: window-mmio label=trans_a off=0x6041C value=0x00000000
+intel: window label=trans_b base=0x61400
+intel: window-mmio label=trans_b off=0x61400 value=0x00030000
+intel: window-mmio label=trans_b off=0x61404 value=0x00000000
+intel: window-mmio label=trans_b off=0x61408 value=0x00000000
+intel: window-mmio label=trans_b off=0x6140C value=0x00000000
+intel: window-mmio label=trans_b off=0x61410 value=0x00000000
+intel: window-mmio label=trans_b off=0x61414 value=0x00000000
+intel: window-mmio label=trans_b off=0x61418 value=0x00000000
+intel: window-mmio label=trans_b off=0x6141C value=0x00000000
+intel: window label=gt_disp_pwron base=0x138080
+intel: window-mmio label=gt_disp_pwron off=0x138080 value=0xFFFFFFFF
+intel: window-mmio label=gt_disp_pwron off=0x138084 value=0x1FFFFFFF
+intel: window-mmio label=gt_disp_pwron off=0x138088 value=0x00000000
+intel: window-mmio label=gt_disp_pwron off=0x13808C value=0x00000000
+intel: window-mmio label=gt_disp_pwron off=0x138090 value=0x00000000
+intel: window-mmio label=gt_disp_pwron off=0x138094 value=0x00000000
+intel: window-mmio label=gt_disp_pwron off=0x138098 value=0x00000000
+intel: window-mmio label=gt_disp_pwron off=0x13809C value=0x00000000
+intel: display-page page=0x60000 first=0x000 value=0x0897077F
+intel: display-page page=0x61000 first=0x058 value=0x40000000
+intel: display-page page=0x62000 first=0x058 value=0x40000000
+intel: display-page page=0x64000 first=0x000 value=0x00000080
+intel: display-page page=0x65000 first=0x000 value=0x0070FA60
+intel: display-page page=0x66000 first=0x408 value=0xF7FDFFFF
+intel: display-page page=0x67000 first=0x054 value=0xFFFFFFFF
+intel: display-page page=0x68000 first=0x174 value=0x07800438
+intel: signature-sweep begin mmio_len=0x1000000 aperture=0x10000000
+intel: signature-candidate rank=1 page=0x00000 score=30 nonzero=47 pipe_src_off=3600 pipe_src=0x01000208 size=521x257 stride_off=3100 stride=0x00001000 surf_off=3100 surf=0x00001000 ctl_off=2816 ctl=0x80054000
+intel: signature-mmio off=0x00000 value=0x00000000
+intel: signature-mmio off=0x00004 value=0x00000000
+intel: signature-mmio off=0x00008 value=0x00000000
+intel: signature-mmio off=0x0000C value=0x00000000
+intel: signature-mmio off=0x00010 value=0x00000000
+intel: signature-mmio off=0x00014 value=0x00000000
+intel: signature-mmio off=0x00018 value=0x00000000
+intel: signature-mmio off=0x0001C value=0x00000000
+intel: signature-candidate rank=2 page=0x0B000 score=30 nonzero=63 pipe_src_off=45064 pipe_src=0x03250300 size=769x806 stride_off=45396 stride=0x00000440 surf_off=45056 surf=0x03F88000 ctl_off=45312 ctl=0xB3400000
+intel: signature-mmio off=0x0B000 value=0x03F88000
+intel: signature-mmio off=0x0B004 value=0x2FC0108F
+intel: signature-mmio off=0x0B008 value=0x03250300
+intel: signature-mmio off=0x0B00C value=0x00000000
+intel: signature-mmio off=0x0B010 value=0x00000000
+intel: signature-mmio off=0x0B014 value=0x00000000
+intel: signature-mmio off=0x0B018 value=0x00000000
+intel: signature-mmio off=0x0B01C value=0x00000000
+intel: signature-candidate rank=3 page=0x45000 score=30 nonzero=45 pipe_src_off=283696 pipe_src=0x051A051A size=1307x1307 stride_off=283164 stride=0x0000FA00 surf_off=282944 surf=0x08100000 ctl_off=282624 ctl=0x8E661056
+intel: signature-candidate rank=4 page=0x60000 score=30 nonzero=23 pipe_src_off=393216 pipe_src=0x0897077F size=1920x2200 stride_off=393868 stride=0x00002000 surf_off=393868 surf=0x00002000 ctl_off=393880 ctl=0xDF9DBBFB
+intel: signature-candidate rank=5 page=0x65000 score=30 nonzero=39 pipe_src_off=413868 pipe_src=0x07070707 size=1800x1800 stride_off=415756 stride=0x00000540 surf_off=413700 surf=0x00120000 ctl_off=413728 ctl=0x80862815
+intel: signature-candidate rank=6 page=0x6B000 score=30 nonzero=20 pipe_src_off=438352 pipe_src=0x07F00FFF size=4096x2033 stride_off=438480 stride=0x00001040 surf_off=438416 surf=0x000F0000 ctl_off=438340 ctl=0xFFFF0000
+intel: pipe-live pipe=A pipe_src=0x00000000 size=1x1 ddi=0xA1030100
+intel: plane-live A1 ctl=0x84000008 stride=0x00000032 surf=0x00000000 surf_live=0x00000000 enabled=1
+intel: plane-live A2 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: plane-live A3 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: plane-live A4 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: pipe-live pipe=B pipe_src=0x00000000 size=1x1 ddi=0x00030000
+intel: plane-live B1 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: plane-live B2 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: plane-live B3 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: plane-live B4 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: pipe-live pipe=C pipe_src=0x00000000 size=1x1 ddi=0x00030000
+intel: plane-live C1 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: plane-live C2 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: plane-live C3 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: plane-live C4 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 enabled=0
+intel: pipe-live pipe=D pipe_src=0x00000000 size=1x1 ddi=0x00000000
+intel: plane-scan summary nonzero_pipes=3 nonzero_planes=12 enabled_planes=1
+intel: display discovery step=smoke action=request-display-power
+intel: display-power smoke register=GT_DISP_PWRON orig=0x00000000 req=0x00000001 rb=0x00000000 latched=0
+intel: display discovery result gt_disp_pwron_latched=0
+intel/igpu770: ggtt-recon aperture=0x4000000000/0x10000000 limine_fb_phys=0x4000000000 limine_fb_size=0x1D4C00
+intel/igpu770: ggtt-plan label=framebuffer gpu=0x0 phys=0x4000000000 size=0x1D4C00 pages=469 aperture_backed=1
+intel/igpu770: ggtt-plan label=ring gpu=0x800000 phys=0x18C000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: ggtt-plan label=context gpu=0x810000 phys=0x18D000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: ggtt-plan label=batch gpu=0x820000 phys=0x18E000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: ggtt-plan label=result gpu=0x830000 phys=0x18F000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: ggtt-recon note system-ram objects need explicit GGTT PTEs; framebuffer is aperture-backed
+intel/igpu770: ggtt-recon gtt_alias_off=0x800000 gtt_alias_bytes=0x800000
+intel/igpu770: forcewake-gt pre ack=0x00000000
+intel/igpu770: forcewake-gt acquire req=0x00000001 ack=0x00000000 iters=1024
+intel/igpu770: ggtt-map begin
+intel/igpu770: ggtt-map label=ring page=0 gpu=0x800000 phys=0x18C000 pte=0x000000000018C001
+intel/igpu770: ggtt-map label=context page=0 gpu=0x810000 phys=0x18D000 pte=0x000000000018D001
+intel/igpu770: ggtt-map label=batch page=0 gpu=0x820000 phys=0x18E000 pte=0x000000000018E001
+intel/igpu770: ggtt-map label=result page=0 gpu=0x830000 phys=0x18F000 pte=0x000000000018F001
+intel/igpu770: ggtt-map summary ring=1 context=1 batch=1 result=1 gfx_flsh_cntl=0x00000000
+intel/igpu770: ggtt-blt-smoke begin
+intel/igpu770: ggtt-plan label=ring gpu=0x800000 phys=0x18C000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: ggtt-plan label=batch gpu=0x820000 phys=0x18E000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: ggtt-plan label=result gpu=0x830000 phys=0x18F000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: blt-fill-plan dst_gpu=0x0 dst_phys=0x4000000000 rect=64x64 pitch=0xC80 color=0x00FF4A24
+intel/igpu770: bcs-submit prep ring_start=0x00800000 ring_ctl=0x00000001 tail=0x10 batch_gpu=0x820000 hws_pga=0x0018F000 result_phys=0x18F000
+intel/igpu770: forcewake-gt pre ack=0x00000000
+intel/igpu770: forcewake-gt acquire req=0x00000001 ack=0x00000000 iters=1024
+intel/igpu770: forcewake-gt sanity reg=BCS_IMR before=0x00000000 wrote=0x00000001 after=0x00000000 restored=0x00000000
+intel/igpu770: bcs-mode label=pre mi_mode=0x00000200 mode=0x00000000 ctx_ctl=0x00000000 execlist_ctl=0x00000000 mode_idle=1 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=0
+intel/igpu770: bcs-regs label=pre ctl=0x00000000 head=0x00000000 tail=0x00000000 start=0x00000000 mi_mode=0x00000200 mode=0x00000000 ctx_ctl=0x00000000 execlist_ctl=0x00000000 execlist_lo=0x00000001 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x0000000A instps=0x00000001 bbaddr=0x00000000 bbaddr_udw=0x00000000
+intel/igpu770: bcs-mode label=armed mi_mode=0x00000200 mode=0x00000000 ctx_ctl=0x00000000 execlist_ctl=0x00000000 mode_idle=1 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=0
+intel/igpu770: bcs-regs label=armed ctl=0x00000000 head=0x00000000 tail=0x00000000 start=0x00800000 mi_mode=0x00000200 mode=0x00000000 ctx_ctl=0x00000000 execlist_ctl=0x00000000 execlist_lo=0x00000001 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x0000000A instps=0x00000001 bbaddr=0x00000000 bbaddr_udw=0x00000000
+intel/igpu770: bcs-submit kick tail_req=0x10 tail_rb=0x00000010
+intel/igpu770: bcs-poll iter=0 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=256 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=512 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=768 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=1024 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=1280 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=1536 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=1792 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=2048 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=2304 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=2560 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=2816 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=3072 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=3328 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=3584 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-poll iter=3840 head=0x00000000 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 mode=0x00000000 instdone=0x0000000A
+intel/igpu770: bcs-mode label=post-timeout mi_mode=0x00000200 mode=0x00000000 ctx_ctl=0x00000000 execlist_ctl=0x00000000 mode_idle=1 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=0
+intel/igpu770: bcs-regs label=post-timeout ctl=0x00000000 head=0x00000000 tail=0x00000010 start=0x00800000 mi_mode=0x00000200 mode=0x00000000 ctx_ctl=0x00000000 execlist_ctl=0x00000000 execlist_lo=0x00000001 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x0000000A instps=0x00000001 bbaddr=0x00000000 bbaddr_udw=0x00000000
+intel/igpu770: bcs-submit result completed=0 iters=4096 head0=0x00000000 tail0=0x00000010 headf=0x00000000 tailf=0x00000010 result0=0xC0DE7700 fb0=0x00000000 forcewake_held=0
+crabusb: controller 0 quarantined; auto-rebind disabled until manual rebind request
+net: icmp ping dev=0 src=192.168.178.94 seq=2 -> 192.168.178.1
+net: icmp pong dev=0 local=192.168.178.94 seq=2 rtt=6ms
+net: icmp ok dev=0 (gateway reachable)
+intel: display discovery follow-up probe after smoke
+intel: display-power probe phy_misc_a=0x23000000 phy_misc_b=0x20000000 tx_bmu=0xFB0F0FF0 de_pll_ctl=0xFFFFFFFF de_pll_enable=0xC0000022 dc_state_en=0x00000000 dc_state_debug=0x00000000 hotplug=0x00000000 gt_disp_pwron=0x00000000
