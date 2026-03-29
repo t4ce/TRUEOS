@@ -1,5 +1,6 @@
 use alloc::collections::VecDeque;
 use alloc::string::String as AllocString;
+use alloc::vec::Vec;
 use core::cell::Cell;
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -579,6 +580,14 @@ pub(crate) fn history_total_lines() -> usize {
 
 pub(crate) fn history_lines_text(start_line: usize, max_lines: usize) -> AllocString {
     matrix::history_lines_text(start_line, max_lines)
+}
+
+pub(crate) fn take_user_input_record() -> Vec<AllocString> {
+    matrix::take_user_input_record()
+}
+
+pub(crate) fn restore_user_input_record(entries: Vec<AllocString>) {
+    matrix::restore_user_input_record(entries)
 }
 
 pub(crate) fn command_registry_json() -> AllocString {
@@ -1286,6 +1295,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         text_decode = ecma48::InputDecodeState::None;
                     }
                     let submitted_raw = line.as_str();
+                    matrix::record_user_input(submitted_raw);
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
                     let active_slot = matrix::active_slot_id(output_mask);
