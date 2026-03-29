@@ -21,6 +21,7 @@ pub(crate) const BROWSER_VM_DEBUG_LOGS: bool = false;
 pub(crate) const BROWSER_HTML_PREVIEW_LOGS: bool = false;
 pub(crate) const VHTTPS_VERBOSE: bool = false;
 pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = false;
+pub(crate) const INTEL_GFX_DEBUG_LOGFLAG: bool = false;
 
 pub(crate) const VIRGL_DRAW_DIAGNOSTICS_LOGS: bool = false;
 pub(crate) static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);

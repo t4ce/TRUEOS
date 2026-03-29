@@ -5,6 +5,7 @@ use core::{
 
 use spin::Mutex;
 
+use super::intel_770_registers;
 use super::IntelDeviceInfo;
 
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
@@ -169,6 +170,7 @@ fn log_rcs_regs(warm: Igpu770WarmState, label: &str) {
         mmio_read32(warm, RCS_RING_BBADDR),
         mmio_read32(warm, RCS_RING_BBADDR_UDW)
     );
+    intel_770_registers::log_engine_wakeup_table(label, |off| mmio_read32(warm, off));
 }
 
 fn ggtt_invalidate(warm: Igpu770WarmState) -> u32 {
@@ -291,6 +293,7 @@ fn forcewake_gt_acquire(warm: Igpu770WarmState) -> u32 {
         iter,
         fallback_used as u8
     );
+    intel_770_registers::log_engine_wakeup_table("post-forcewake", |off| mmio_read32(warm, off));
     if set_ok {
         FORCEWAKE_GT_HELD.store(true, Ordering::Release);
     }
@@ -313,6 +316,15 @@ fn forcewake_gt_release(warm: Igpu770WarmState) -> u32 {
 }
 
 fn forcewake_gt_mmio_sanity(warm: Igpu770WarmState) {
+    if let Some(reg) = intel_770_registers::describe_register(RCS_RING_IMR) {
+        crate::log!(
+            "intel/igpu770: forcewake-render sanity-target block={} reg={} off=0x{:05X} desc={}\n",
+            reg.block,
+            reg.name,
+            reg.offset,
+            reg.description
+        );
+    }
     let before = mmio_read32(warm, RCS_RING_IMR);
     let toggled = before ^ 0x0000_0001;
     let _ = mmio_write32(warm, RCS_RING_IMR, toggled);
