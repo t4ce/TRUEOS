@@ -1013,6 +1013,48 @@ fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: ch
     }
 }
 
+fn set_input_line(
+    out: &AlignedWriter<'_>,
+    output_mask: u8,
+    line: &mut HString<MAX_LINE>,
+    text: &str,
+) {
+    line.clear();
+    for ch in text.chars() {
+        if line.push(ch).is_err() {
+            break;
+        }
+    }
+    out.prompt(output_mask);
+    for ch in line.chars() {
+        out.user_char(ch);
+    }
+}
+
+fn cycle_live_history(up: bool, cursor: &mut Option<usize>) -> Option<AllocString> {
+    let history = matrix::live_user_input_record();
+    if history.is_empty() {
+        *cursor = None;
+        return None;
+    }
+
+    let len = history.len();
+    let next = match (*cursor, up) {
+        (None, true) => len - 1,
+        (None, false) => 0,
+        (Some(idx), true) => idx.checked_sub(1).unwrap_or(len - 1),
+        (Some(idx), false) => {
+            if idx + 1 >= len {
+                0
+            } else {
+                idx + 1
+            }
+        }
+    };
+    *cursor = Some(next);
+    Some(history[next].text.clone())
+}
+
 #[embassy_executor::task(pool_size = 3)]
 pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     io.init();
@@ -1054,6 +1096,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut esc = EscState::None;
     let mut csi_param: u16 = 0;
     let mut text_decode = ecma48::InputDecodeState::None;
+    let mut live_history_cursor: Option<usize> = None;
 
     loop {
         command_sessions.retain(|session| match session.kind {
@@ -1135,6 +1178,24 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 }
                 EscState::Csi => {
                     match b {
+                        b'A' => {
+                            cmd_status_text = None;
+                            if let Some(entry) =
+                                cycle_live_history(true, &mut live_history_cursor)
+                            {
+                                set_input_line(&out, output_mask, &mut line, entry.as_str());
+                            }
+                            esc = EscState::None;
+                        }
+                        b'B' => {
+                            cmd_status_text = None;
+                            if let Some(entry) =
+                                cycle_live_history(false, &mut live_history_cursor)
+                            {
+                                set_input_line(&out, output_mask, &mut line, entry.as_str());
+                            }
+                            esc = EscState::None;
+                        }
                         b'0'..=b'9' => {
                             let digit = (b - b'0') as u16;
                             csi_param = csi_param.saturating_mul(10).saturating_add(digit);
@@ -1298,6 +1359,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         push_input_char(&out, &mut line, 'Ü');
                         text_decode = ecma48::InputDecodeState::None;
                     }
+                    live_history_cursor = None;
                     let submitted_raw = line.as_str();
                     matrix::record_user_input(submitted_raw);
                     let submitted = submitted_raw.trim();
