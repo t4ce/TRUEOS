@@ -7,6 +7,7 @@ use spin::Mutex;
 
 use super::intel_guc;
 use super::intel_770_registers;
+use super::xelp_copy_ngin;
 use super::IntelDeviceInfo;
 
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
@@ -27,9 +28,35 @@ const SMOKE_RECT_H: usize = 64;
 const SMOKE_COLOR_XRGB8888: u32 = 0x00FF_4A24;
 const GPU_VA_RING_BASE: u64 = 0x0080_0000;
 const GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
-const GPU_VA_BATCH_BASE: u64 = 0x0082_0000;
-const GPU_VA_RESULT_BASE: u64 = 0x0083_0000;
+const GPU_VA_BATCH_BASE: u64 = 0x0083_0000;
+const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
+const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
 const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
+const BCS_RING_BASE: usize = 0x0002_2000;
+const BCS_RING_TAIL: usize = BCS_RING_BASE + 0x30;
+const BCS_RING_HEAD: usize = BCS_RING_BASE + 0x34;
+const BCS_RING_START: usize = BCS_RING_BASE + 0x38;
+const BCS_RING_CTL: usize = BCS_RING_BASE + 0x3C;
+const BCS_RING_ACTHD: usize = BCS_RING_BASE + 0x74;
+const BCS_RING_MI_MODE: usize = BCS_RING_BASE + 0x9C;
+const BCS_RING_IMR: usize = BCS_RING_BASE + 0xA8;
+const BCS_RING_EIR: usize = BCS_RING_BASE + 0xB0;
+const BCS_RING_EMR: usize = BCS_RING_BASE + 0xB4;
+const BCS_RING_IPEIR: usize = BCS_RING_BASE + 0x64;
+const BCS_RING_IPEHR: usize = BCS_RING_BASE + 0x68;
+const BCS_RING_INSTDONE: usize = BCS_RING_BASE + 0x6C;
+const BCS_RING_INSTPS: usize = BCS_RING_BASE + 0x70;
+const BCS_RING_BBADDR: usize = BCS_RING_BASE + 0x140;
+const BCS_RING_BBADDR_UDW: usize = BCS_RING_BASE + 0x168;
+const BCS_RING_CONTEXT_CONTROL: usize = BCS_RING_BASE + 0x244;
+const BCS_RING_CONTEXT_CONTROL_REF: usize = BCS_RING_BASE + 0x5A0;
+const BCS_RING_MODE_GEN7: usize = BCS_RING_BASE + 0x29C;
+const BCS_RING_EXECLIST_SUBMIT_PORT: usize = BCS_RING_BASE + 0x230;
+const BCS_RING_EXECLIST_STATUS_LO: usize = BCS_RING_BASE + 0x234;
+const BCS_RING_EXECLIST_STATUS_HI: usize = BCS_RING_BASE + 0x238;
+const BCS_RING_EXECLIST_CONTROL: usize = BCS_RING_BASE + 0x550;
+const BCS_RING_EXECLIST_SQ_LO: usize = BCS_RING_BASE + 0x510;
+const BCS_RING_EXECLIST_SQ_HI: usize = BCS_RING_BASE + 0x514;
 const RCS_RING_BASE: usize = 0x0000_2000;
 const RCS_RING_TAIL: usize = RCS_RING_BASE + 0x30;
 const RCS_RING_HEAD: usize = RCS_RING_BASE + 0x34;
@@ -106,12 +133,13 @@ const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
 const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_NOOP: u32 = 0;
 const BLT_RING_DWORDS: usize = 4;
-const RCS_BATCH_DWORDS: usize = 24;
 const BLT_RING_TAIL_BYTES: u32 = (BLT_RING_DWORDS * core::mem::size_of::<u32>()) as u32;
 const BLT_POLL_ITERS: usize = 4096;
 const BLT_POLL_LOG_STEP: usize = 256;
 const FORCEWAKE_POLL_ITERS: usize = 20_000;
 const RCS_EXEC_RESULT_DONE: u32 = 0xC0DE_7701;
+const BCS_EXEC_RESULT_INIT: u32 = 0x1CE0_BC50;
+const BCS_EXEC_RESULT_DONE: u32 = 0x1CE0_BC51;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
 const GEN8_CTX_VALID: u32 = 1 << 0;
 const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
@@ -229,6 +257,32 @@ fn log_rcs_regs(warm: Igpu770WarmState, label: &str) {
     intel_770_registers::log_engine_wakeup_table(label, |off| mmio_read32(warm, off));
 }
 
+fn log_bcs_regs(warm: Igpu770WarmState, label: &str) {
+    crate::log!(
+        "intel/igpu770: bcs-regs label={} ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} start=0x{:08X} mi_mode=0x{:08X} mode=0x{:08X} ctx_ctl=0x{:08X} execlist_ctl=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} emr=0x{:08X} instdone=0x{:08X} instps=0x{:08X} bbaddr=0x{:08X} bbaddr_udw=0x{:08X}\n",
+        label,
+        mmio_read32(warm, BCS_RING_CTL),
+        mmio_read32(warm, BCS_RING_HEAD),
+        mmio_read32(warm, BCS_RING_TAIL),
+        mmio_read32(warm, BCS_RING_START),
+        mmio_read32(warm, BCS_RING_MI_MODE),
+        mmio_read32(warm, BCS_RING_MODE_GEN7),
+        mmio_read32(warm, BCS_RING_CONTEXT_CONTROL),
+        mmio_read32(warm, BCS_RING_EXECLIST_CONTROL),
+        mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO),
+        mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI),
+        mmio_read32(warm, BCS_RING_ACTHD),
+        mmio_read32(warm, BCS_RING_IPEIR),
+        mmio_read32(warm, BCS_RING_IPEHR),
+        mmio_read32(warm, BCS_RING_EIR),
+        mmio_read32(warm, BCS_RING_EMR),
+        mmio_read32(warm, BCS_RING_INSTDONE),
+        mmio_read32(warm, BCS_RING_INSTPS),
+        mmio_read32(warm, BCS_RING_BBADDR),
+        mmio_read32(warm, BCS_RING_BBADDR_UDW)
+    );
+}
+
 fn ggtt_invalidate(warm: Igpu770WarmState) -> u32 {
     let _ = mmio_write32(warm, GFX_FLSH_CNTL_GEN6, GFX_FLSH_CNTL_EN);
     mmio_read32(warm, GFX_FLSH_CNTL_GEN6)
@@ -241,6 +295,26 @@ fn log_rcs_mode_summary(warm: Igpu770WarmState, label: &str) {
     let execlist_ctl = mmio_read32(warm, RCS_RING_EXECLIST_CONTROL);
     crate::log!(
         "intel/igpu770: rcs-mode label={} mi_mode=0x{:08X} mode=0x{:08X} ctx_ctl=0x{:08X} execlist_ctl=0x{:08X} mode_idle={} stop_ring={} tlb_invalidate_explicit={} ppgtt_enable={} legacy_disable={}\n",
+        label,
+        mi_mode,
+        mode,
+        ctx_ctl,
+        execlist_ctl,
+        ((mi_mode & MODE_IDLE) != 0) as u8,
+        ((mi_mode & RING_MI_MODE_STOP_RING) != 0) as u8,
+        ((mode & GFX_TLB_INVALIDATE_EXPLICIT) != 0) as u8,
+        ((mode & GFX_PPGTT_ENABLE) != 0) as u8,
+        ((mode & GEN11_GFX_DISABLE_LEGACY_MODE) != 0) as u8
+    );
+}
+
+fn log_bcs_mode_summary(warm: Igpu770WarmState, label: &str) {
+    let mi_mode = mmio_read32(warm, BCS_RING_MI_MODE);
+    let mode = mmio_read32(warm, BCS_RING_MODE_GEN7);
+    let ctx_ctl = mmio_read32(warm, BCS_RING_CONTEXT_CONTROL);
+    let execlist_ctl = mmio_read32(warm, BCS_RING_EXECLIST_CONTROL);
+    crate::log!(
+        "intel/igpu770: bcs-mode label={} mi_mode=0x{:08X} mode=0x{:08X} ctx_ctl=0x{:08X} execlist_ctl=0x{:08X} mode_idle={} stop_ring={} tlb_invalidate_explicit={} ppgtt_enable={} legacy_disable={}\n",
         label,
         mi_mode,
         mode,
@@ -607,34 +681,107 @@ pub(super) fn request_display_power_with_forcewake(warm: Igpu770WarmState) -> bo
 }
 
 fn build_rcs_store_pixels_batch(warm: Igpu770WarmState, fill: BltFillRectPlan) {
-    let pitch = fill.pitch as u64;
-    let pixels = [
-        fill.dst_gpu_addr,
-        fill.dst_gpu_addr + 4,
-        fill.dst_gpu_addr + pitch,
-        fill.dst_gpu_addr + pitch + 4,
-    ];
-    let dwords =
-        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, RCS_BATCH_DWORDS) };
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let dwords = unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    dwords.fill(0);
 
+    const RESERVED_END_DWORDS: usize = 2; // batch end + noop
     let mut i = 0usize;
-    for addr in pixels {
+    let shape_writable_limit = dwords.len().saturating_sub(4 + RESERVED_END_DWORDS);
+    let pitch = fill.pitch as u64;
+    let max_x = fill.rect_w.max(1).min(64);
+    let max_y = fill.rect_h.max(1).min(64);
+    let mut exhausted = false;
+
+    let mut emit_store = |dst_gpu: u64, value: u32, i: &mut usize| -> bool {
+        if *i + 4 > shape_writable_limit {
+            return false;
+        }
+        dwords[*i] = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
+        dwords[*i + 1] = dst_gpu as u32;
+        dwords[*i + 2] = (dst_gpu >> 32) as u32;
+        dwords[*i + 3] = value;
+        *i += 4;
+        true
+    };
+
+    // 1) Horizontal scanline demo.
+    let scanline_len = max_x.min(48);
+    for x in 0..scanline_len {
+        let dst = fill.dst_gpu_addr.saturating_add((x as u64) * 4);
+        if !emit_store(dst, 0x00FF_DA2C, &mut i) {
+            exhausted = true;
+            break;
+        }
+    }
+
+    // 2) Small filled rectangle demo, offset from top-left.
+    if !exhausted {
+        let rect_w = (max_x / 2).max(8).min(24);
+        let rect_h = (max_y / 3).max(6).min(16);
+        let rect_x_off = 6u64;
+        let rect_y_off = 6u64;
+        for y in 0..rect_h {
+            for x in 0..rect_w {
+                let dst = fill
+                    .dst_gpu_addr
+                    .saturating_add((rect_y_off + y as u64).saturating_mul(pitch))
+                    .saturating_add((rect_x_off + x as u64) * 4);
+                if !emit_store(dst, 0x002A_E6A5, &mut i) {
+                    exhausted = true;
+                    break;
+                }
+            }
+            if exhausted {
+                break;
+            }
+        }
+    }
+
+    // 3) Right-triangle via scanline fill.
+    if !exhausted {
+        let tri_h = (max_y / 2).max(8).min(20);
+        let tri_x_off = 2u64;
+        let tri_y_off = 20u64;
+        for y in 0..tri_h {
+            let run = (y + 1).min(max_x.min(24));
+            for x in 0..run {
+                let dst = fill
+                    .dst_gpu_addr
+                    .saturating_add((tri_y_off + y as u64).saturating_mul(pitch))
+                    .saturating_add((tri_x_off + x as u64) * 4);
+                if !emit_store(dst, fill.color, &mut i) {
+                    exhausted = true;
+                    break;
+                }
+            }
+            if exhausted {
+                break;
+            }
+        }
+    }
+
+    if i + 4 > dwords.len().saturating_sub(RESERVED_END_DWORDS) {
+        crate::log!(
+            "intel/igpu770: rcs-batch exhausted before result marker (used={} total={})\n",
+            i,
+            dwords.len()
+        );
+    } else {
         dwords[i] = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
-        dwords[i + 1] = addr as u32;
-        dwords[i + 2] = (addr >> 32) as u32;
-        dwords[i + 3] = fill.color;
+        dwords[i + 1] = GPU_VA_RESULT_BASE as u32;
+        dwords[i + 2] = (GPU_VA_RESULT_BASE >> 32) as u32;
+        dwords[i + 3] = RCS_EXEC_RESULT_DONE;
         i += 4;
     }
-    dwords[i] = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
-    dwords[i + 1] = GPU_VA_RESULT_BASE as u32;
-    dwords[i + 2] = (GPU_VA_RESULT_BASE >> 32) as u32;
-    dwords[i + 3] = RCS_EXEC_RESULT_DONE;
-    i += 4;
 
-    dwords[i] = MI_BATCH_BUFFER_END;
-    dwords[i + 1] = MI_NOOP;
+    if i + 2 <= dwords.len() {
+        dwords[i] = MI_BATCH_BUFFER_END;
+        dwords[i + 1] = MI_NOOP;
+        i += 2;
+    }
 
-    dma_cache_flush(warm.batch_virt as *const u8, RCS_BATCH_DWORDS * core::mem::size_of::<u32>());
+    dma_cache_flush(warm.batch_virt as *const u8, i.saturating_mul(core::mem::size_of::<u32>()));
 }
 
 fn build_ring_batch_start(warm: Igpu770WarmState, batch_gpu_addr: u64) -> usize {
@@ -883,6 +1030,101 @@ fn init_gen12_lrc_context_image(
     true
 }
 
+fn init_gen12_bcs_context_image(
+    warm: Igpu770WarmState,
+    ring_start: u32,
+    ring_tail: u32,
+    ring_ctl: u32,
+) -> bool {
+    let total_dwords = warm.context_len / core::mem::size_of::<u32>();
+    if total_dwords <= LRC_STATE_OFFSET_DWORDS {
+        return false;
+    }
+
+    let dwords = unsafe { core::slice::from_raw_parts_mut(warm.context_virt as *mut u32, total_dwords) };
+    dwords.fill(0);
+
+    let state = &mut dwords[LRC_STATE_OFFSET_DWORDS..];
+    if state.len() < 96 {
+        return false;
+    }
+
+    let mut idx = 0usize;
+    state[idx] = MI_NOOP;
+    idx += 1;
+
+    state[idx] = mi_lri_cmd(14, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = 0x22244;
+    state[idx + 1] = 0x0009_0009;
+    state[idx + 2] = 0x22034;
+    state[idx + 3] = 0;
+    state[idx + 4] = 0x22030;
+    state[idx + 5] = ring_tail;
+    state[idx + 6] = 0x22038;
+    state[idx + 7] = ring_start;
+    state[idx + 8] = 0x2203C;
+    state[idx + 9] = ring_ctl;
+    state[idx + 10] = 0x22168;
+    state[idx + 11] = 0;
+    state[idx + 12] = 0x22140;
+    state[idx + 13] = 0;
+    state[idx + 14] = 0x22110;
+    state[idx + 15] = 0;
+    state[idx + 16] = 0x2211C;
+    state[idx + 17] = 0;
+    state[idx + 18] = 0x22114;
+    state[idx + 19] = 0;
+    state[idx + 20] = 0x22118;
+    state[idx + 21] = 0;
+    state[idx + 22] = 0x221C0;
+    state[idx + 23] = 0;
+    state[idx + 24] = 0x221C4;
+    state[idx + 25] = 0;
+    state[idx + 26] = 0x221C8;
+    state[idx + 27] = 0;
+    idx += 28;
+
+    push_mi_nops(state, &mut idx, 3);
+
+    state[idx] = mi_lri_cmd(9, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = 0x223A8;
+    state[idx + 1] = 0;
+    state[idx + 2] = 0x2228C;
+    state[idx + 3] = 0;
+    state[idx + 4] = 0x22288;
+    state[idx + 5] = 0;
+    state[idx + 6] = 0x22284;
+    state[idx + 7] = 0;
+    state[idx + 8] = 0x22280;
+    state[idx + 9] = 0;
+    state[idx + 10] = 0x2227C;
+    state[idx + 11] = 0;
+    state[idx + 12] = 0x22278;
+    state[idx + 13] = 0;
+    state[idx + 14] = 0x22274;
+    state[idx + 15] = 0;
+    state[idx + 16] = 0x22270;
+    state[idx + 17] = 0;
+    idx += 18;
+
+    push_mi_nops(state, &mut idx, 13);
+
+    state[idx] = mi_lri_cmd(1, 0);
+    idx += 1;
+    state[idx] = 0x22200;
+    state[idx + 1] = 0;
+    idx += 2;
+
+    push_mi_nops(state, &mut idx, 12);
+
+    state[idx] = MI_BATCH_BUFFER_END | 1;
+
+    dma_cache_flush(warm.context_virt as *const u8, warm.context_len);
+    true
+}
+
 #[inline]
 fn build_execlist_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     let base = (context_gpu_addr as u32) & 0xFFFF_F000;
@@ -907,6 +1149,19 @@ fn execlist_submit_port_push(
     let _ = mmio_write32(warm, RCS_RING_EXECLIST_SUBMIT_PORT, context0_hi);
     let _ = mmio_write32(warm, RCS_RING_EXECLIST_SUBMIT_PORT, context1_lo);
     let _ = mmio_write32(warm, RCS_RING_EXECLIST_SUBMIT_PORT, context1_hi);
+}
+
+fn bcs_execlist_submit_port_push(
+    warm: Igpu770WarmState,
+    context0_lo: u32,
+    context0_hi: u32,
+    context1_lo: u32,
+    context1_hi: u32,
+) {
+    let _ = mmio_write32(warm, BCS_RING_EXECLIST_SUBMIT_PORT, context0_lo);
+    let _ = mmio_write32(warm, BCS_RING_EXECLIST_SUBMIT_PORT, context0_hi);
+    let _ = mmio_write32(warm, BCS_RING_EXECLIST_SUBMIT_PORT, context1_lo);
+    let _ = mmio_write32(warm, BCS_RING_EXECLIST_SUBMIT_PORT, context1_hi);
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -952,6 +1207,7 @@ unsafe impl Sync for Igpu770WarmState {}
 
 static WARM_STATE: Mutex<Option<Igpu770WarmState>> = Mutex::new(None);
 static GGTT_BLT_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
+static GGTT_BCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static GGTT_RECON_RAN: AtomicBool = AtomicBool::new(false);
 static GGTT_MAPS_RAN: AtomicBool = AtomicBool::new(false);
 static FORCEWAKE_GT_HELD: AtomicBool = AtomicBool::new(false);
@@ -1508,6 +1764,268 @@ pub fn ggtt_blt_smoke_test_once() {
         execlist_hi0,
         mmio_read32(warm, RCS_RING_EXECLIST_STATUS_LO),
         mmio_read32(warm, RCS_RING_EXECLIST_STATUS_HI),
+        FORCEWAKE_GT_HELD.load(Ordering::Acquire) as u8
+    );
+}
+
+pub fn ggtt_bcs_smoke_test_once() {
+    if GGTT_BCS_SMOKE_RAN.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(warm) = warm_state() else {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=not-warmed\n");
+        return;
+    };
+    if !intel_guc::ready() {
+        crate::log!(
+            "intel/igpu770: ggtt-bcs-smoke skipped reason=guc-not-ready guc_status=0x{:08X}\n",
+            intel_guc::status(warm)
+        );
+        return;
+    }
+
+    let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE) else {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=ring-plan\n");
+        return;
+    };
+    let Some(context) =
+        ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
+    else {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=context-plan\n");
+        return;
+    };
+    let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE) else {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=batch-plan\n");
+        return;
+    };
+    let Some(result) =
+        ggtt_map_plan_system_ram(warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE)
+    else {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=result-plan\n");
+        return;
+    };
+    let Some(fill) = blt_fill_rect_plan(warm) else {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=fb-plan\n");
+        return;
+    };
+
+    unsafe {
+        ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        core::ptr::write_volatile(warm.result_virt as *mut u32, BCS_EXEC_RESULT_INIT);
+    }
+    dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+
+    crate::log!("intel/igpu770: ggtt-bcs-smoke begin\n");
+    log_ggtt_map_plan("ring", ring);
+    log_ggtt_map_plan("context", context);
+    log_ggtt_map_plan("batch", batch);
+    log_ggtt_map_plan("result", result);
+    crate::log!(
+        "intel/igpu770: bcs-copy-plan src_gpu=0x{:X} dst_gpu=0x{:X} dst_phys=0x{:X} result_gpu=0x{:X} start=0x{:08X} done=0x{:08X}\n",
+        GPU_VA_RESULT_BASE,
+        fill.dst_gpu_addr,
+        fill.dst_phys,
+        GPU_VA_RESULT_BASE,
+        BCS_EXEC_RESULT_INIT,
+        BCS_EXEC_RESULT_DONE
+    );
+
+    let batch_dwords = unsafe {
+        core::slice::from_raw_parts_mut(
+            warm.batch_virt as *mut u32,
+            warm.batch_len / core::mem::size_of::<u32>(),
+        )
+    };
+    let batch_tail_bytes = match xelp_copy_ngin::build_copy_smoke_batch_bytes(
+        batch_dwords,
+        xelp_copy_ngin::CopySmokePlan {
+            src_gpu_addr: GPU_VA_RESULT_BASE,
+            dst_gpu_addr: fill.dst_gpu_addr,
+            result_gpu_addr: GPU_VA_RESULT_BASE,
+            start_value: BCS_EXEC_RESULT_INIT,
+            done_value: BCS_EXEC_RESULT_DONE,
+            use_force_wakeup: false,
+        },
+    ) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=batch-build err={:?}\n", err);
+            return;
+        }
+    };
+    dma_cache_flush(warm.batch_virt as *const u8, batch_tail_bytes);
+    let ring_tail_bytes = build_ring_batch_start(warm, batch.gpu_addr);
+    let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
+        crate::log!(
+            "intel/igpu770: ggtt-bcs-smoke skipped reason=ring-ctl ring_len=0x{:X}\n",
+            warm.ring_len
+        );
+        return;
+    };
+    let ring_start = ring.gpu_addr as u32;
+    let context_desc = context.gpu_addr;
+    if !init_gen12_bcs_context_image(warm, ring_start, ring_tail_bytes as u32, ring_ctl) {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=lrc-context-init\n");
+        return;
+    }
+    let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(context_desc);
+
+    crate::log!(
+        "intel/igpu770: bcs-submit prep ring_start=0x{:08X} ring_ctl=0x{:08X} ring_tail=0x{:X} batch_tail=0x{:X} batch_gpu=0x{:X} context_gpu=0x{:X} ctx_desc_lo=0x{:08X} ctx_desc_hi=0x{:08X} result_phys=0x{:X}\n",
+        ring_start,
+        ring_ctl,
+        ring_tail_bytes,
+        batch_tail_bytes,
+        batch.gpu_addr,
+        context_desc,
+        context_desc_lo,
+        context_desc_hi,
+        warm.result_phys
+    );
+
+    let _ = forcewake_all_acquire(warm);
+    let _ = mmio_write32(
+        warm,
+        BCS_RING_MODE_GEN7,
+        masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE),
+    );
+    let ctx_ctl_after = masked_bits_update(
+        CTX_CTRL_RS_CTX_ENABLE,
+        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
+    let ctx_ctl_ref_after = masked_bits_update(
+        CTX_CTRL_RS_CTX_ENABLE,
+        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
+    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
+    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_ref_after);
+
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    bcs_execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
+    let _ = mmio_write32(warm, BCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+    let sq_lo_rb = mmio_read32(warm, BCS_RING_EXECLIST_SQ_LO);
+    let sq_hi_rb = mmio_read32(warm, BCS_RING_EXECLIST_SQ_HI);
+    let mode_rb = mmio_read32(warm, BCS_RING_MODE_GEN7);
+    let ctx_ctl_rb = mmio_read32(warm, BCS_RING_CONTEXT_CONTROL);
+    let ctx_ctl_ref_rb = mmio_read32(warm, BCS_RING_CONTEXT_CONTROL_REF);
+    let el_ctl_rb = mmio_read32(warm, BCS_RING_EXECLIST_CONTROL);
+    let el_status_lo_rb = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO);
+    let el_status_hi_rb = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI);
+    crate::log!(
+        "intel/igpu770: bcs-execlist-submit context sq_lo_req=0x{:08X} sq_hi_req=0x{:08X} sq_lo_rb=0x{:08X} sq_hi_rb=0x{:08X} mode_rb=0x{:08X} ctx_ctl_rb=0x{:08X} ctx_ctl_ref_rb=0x{:08X} el_ctl_rb=0x{:08X} el_status_lo_rb=0x{:08X} el_status_hi_rb=0x{:08X}\n",
+        context_desc_lo,
+        context_desc_hi,
+        sq_lo_rb,
+        sq_hi_rb,
+        mode_rb,
+        ctx_ctl_rb,
+        ctx_ctl_ref_rb,
+        el_ctl_rb,
+        el_status_lo_rb,
+        el_status_hi_rb
+    );
+
+    if let Some(reg) = intel_770_registers::describe_register(BCS_RING_IMR) {
+        crate::log!(
+            "intel/igpu770: forcewake-bcs sanity-target block={} reg={} off=0x{:05X} desc={}\n",
+            reg.block,
+            reg.name,
+            reg.offset,
+            reg.description
+        );
+    }
+    let bcs_imr_before = mmio_read32(warm, BCS_RING_IMR);
+    let bcs_imr_toggled = bcs_imr_before ^ 0x0000_0001;
+    let _ = mmio_write32(warm, BCS_RING_IMR, bcs_imr_toggled);
+    let bcs_imr_after = mmio_read32(warm, BCS_RING_IMR);
+    let _ = mmio_write32(warm, BCS_RING_IMR, bcs_imr_before);
+    let bcs_imr_restored = mmio_read32(warm, BCS_RING_IMR);
+    crate::log!(
+        "intel/igpu770: forcewake-bcs sanity reg=BCS_IMR before=0x{:08X} wrote=0x{:08X} after=0x{:08X} restored=0x{:08X}\n",
+        bcs_imr_before,
+        bcs_imr_toggled,
+        bcs_imr_after,
+        bcs_imr_restored
+    );
+
+    log_bcs_mode_summary(warm, "pre");
+    log_bcs_regs(warm, "pre");
+
+    let mut completed = false;
+    let mut first_head = 0u32;
+    let mut first_tail = 0u32;
+    let mut final_head = 0u32;
+    let mut final_tail = 0u32;
+    let mut iter = 0usize;
+    let execlist_lo0 = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO);
+    let execlist_hi0 = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI);
+    while iter < BLT_POLL_ITERS {
+        let head = mmio_read32(warm, BCS_RING_HEAD);
+        let tail = mmio_read32(warm, BCS_RING_TAIL);
+        let execlist_lo = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO);
+        let execlist_hi = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI);
+        let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
+        if iter == 0 {
+            first_head = head;
+            first_tail = tail;
+        }
+        final_head = head;
+        final_tail = tail;
+        if iter == 0 || (iter % BLT_POLL_LOG_STEP) == 0 {
+            crate::log!(
+                "intel/igpu770: bcs-poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} mode=0x{:08X} instdone=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X}\n",
+                iter,
+                head,
+                tail,
+                mmio_read32(warm, BCS_RING_ACTHD),
+                mmio_read32(warm, BCS_RING_IPEIR),
+                mmio_read32(warm, BCS_RING_IPEHR),
+                mmio_read32(warm, BCS_RING_EIR),
+                mmio_read32(warm, BCS_RING_MODE_GEN7),
+                mmio_read32(warm, BCS_RING_INSTDONE),
+                execlist_lo,
+                execlist_hi,
+                result0
+            );
+        }
+        if result0 == BCS_EXEC_RESULT_DONE {
+            completed = true;
+            break;
+        }
+        if execlist_lo != execlist_lo0 || execlist_hi != execlist_hi0 {
+            completed = true;
+            break;
+        }
+        core::hint::spin_loop();
+        iter += 1;
+    }
+
+    dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+    let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
+    let fb0 = unsafe { core::ptr::read_volatile(warm.limine_fb_virt as *const u32) };
+    log_bcs_mode_summary(warm, if completed { "post-complete" } else { "post-timeout" });
+    log_bcs_regs(warm, if completed { "post-complete" } else { "post-timeout" });
+    crate::log!(
+        "intel/igpu770: bcs-submit result completed={} iters={} head0=0x{:08X} tail0=0x{:08X} headf=0x{:08X} tailf=0x{:08X} result0=0x{:08X} expect=0x{:08X} fb0=0x{:08X} execlist_lo0=0x{:08X} execlist_hi0=0x{:08X} execlist_lof=0x{:08X} execlist_hif=0x{:08X} forcewake_held={}\n",
+        completed as u8,
+        iter,
+        first_head,
+        first_tail,
+        final_head,
+        final_tail,
+        result0,
+        BCS_EXEC_RESULT_DONE,
+        fb0,
+        execlist_lo0,
+        execlist_hi0,
+        mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO),
+        mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI),
         FORCEWAKE_GT_HELD.load(Ordering::Acquire) as u8
     );
 }
