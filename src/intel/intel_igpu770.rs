@@ -11,7 +11,7 @@ use super::IntelDeviceInfo;
 
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
 const WARM_RING_BYTES: usize = 4096;
-const WARM_CONTEXT_BYTES: usize = 8192;
+const WARM_CONTEXT_BYTES: usize = 22 * 4096;
 const WARM_BATCH_BYTES: usize = 4096;
 const WARM_RESULT_BYTES: usize = 4096;
 const WARM_ALIGN: usize = 4096;
@@ -101,6 +101,7 @@ const MI_BATCH_GTT: u32 = 2 << 6;
 const MI_USE_GGTT: u32 = 1 << 22;
 const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
+const MI_LRI_CS_MMIO: u32 = 1 << 19;
 const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
 const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_NOOP: u32 = 0;
@@ -117,6 +118,7 @@ const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
 const GEN12_CTX_PRIORITY_NORMAL: u32 = 1 << 9;
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
+const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 
 const MEDIA_FORCEWAKE_ACK_REGS: [(&str, usize); 8] = [
     ("vdbox4", FORCEWAKE_ACK_VDBOX4),
@@ -653,6 +655,19 @@ fn mi_lri_num_regs(num_regs: u32) -> u32 {
     num_regs.saturating_mul(2).saturating_sub(1)
 }
 
+#[inline]
+fn mi_lri_cmd(num_regs: u32, flags: u32) -> u32 {
+    MI_LOAD_REGISTER_IMM | MI_LRI_CS_MMIO | flags | mi_lri_num_regs(num_regs)
+}
+
+#[inline]
+fn push_mi_nops(state: &mut [u32], idx: &mut usize, count: usize) {
+    for _ in 0..count {
+        state[*idx] = MI_NOOP;
+        *idx += 1;
+    }
+}
+
 fn init_gen12_lrc_context_image(
     warm: Igpu770WarmState,
     ring_start: u32,
@@ -668,39 +683,201 @@ fn init_gen12_lrc_context_image(
     dwords.fill(0);
 
     let state = &mut dwords[LRC_STATE_OFFSET_DWORDS..];
-    if state.len() < 32 {
+    if state.len() < 192 {
         return false;
     }
 
     state[0] = MI_NOOP;
-    state[1] = MI_LOAD_REGISTER_IMM | MI_LRI_FORCE_POSTED | mi_lri_num_regs(13);
+    let mut idx = 1usize;
 
-    state[2] = 0x244;
-    state[3] = CTX_CTRL_RS_CTX_ENABLE;
-    state[4] = 0x034;
-    state[5] = 0;
-    state[6] = 0x030;
-    state[7] = ring_tail;
-    state[8] = 0x038;
-    state[9] = ring_start;
-    state[10] = 0x03c;
-    state[11] = ring_ctl;
-    state[12] = 0x168;
-    state[13] = 0;
-    state[14] = 0x140;
-    state[15] = 0;
-    state[16] = 0x110;
-    state[17] = 0;
-    state[18] = 0x1c0;
-    state[19] = 0;
-    state[20] = 0x1c4;
-    state[21] = 0;
-    state[22] = 0x1c8;
-    state[23] = 0;
-    state[24] = 0x180;
-    state[25] = 0;
-    state[26] = 0x2b4;
-    state[27] = 0;
+    state[idx] = mi_lri_cmd(13, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = 0x2244;
+    state[idx + 1] = 0x0009_0009;
+    state[idx + 2] = 0x2034;
+    state[idx + 3] = 0;
+    state[idx + 4] = 0x2030;
+    state[idx + 5] = ring_tail;
+    state[idx + 6] = 0x2038;
+    state[idx + 7] = ring_start;
+    state[idx + 8] = 0x203C;
+    state[idx + 9] = ring_ctl;
+    state[idx + 10] = 0x2168;
+    state[idx + 11] = 0;
+    state[idx + 12] = 0x2140;
+    state[idx + 13] = 0;
+    state[idx + 14] = 0x2110;
+    state[idx + 15] = 0;
+    state[idx + 16] = 0x211C;
+    state[idx + 17] = 0;
+    state[idx + 18] = 0x2114;
+    state[idx + 19] = 0;
+    state[idx + 20] = 0x2118;
+    state[idx + 21] = 0;
+    state[idx + 22] = 0x21C0;
+    state[idx + 23] = 0;
+    state[idx + 24] = 0x21C4;
+    state[idx + 25] = 0;
+    state[idx + 26] = 0x21C8;
+    state[idx + 27] = GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT;
+    state[idx + 28] = 0x2180;
+    state[idx + 29] = 0;
+    idx += 30;
+
+    push_mi_nops(state, &mut idx, 5);
+
+    state[idx] = mi_lri_cmd(9, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = 0x23A8;
+    state[idx + 1] = 0;
+    state[idx + 2] = 0x228C;
+    state[idx + 3] = 0;
+    state[idx + 4] = 0x2288;
+    state[idx + 5] = 0;
+    state[idx + 6] = 0x2284;
+    state[idx + 7] = 0;
+    state[idx + 8] = 0x2280;
+    state[idx + 9] = 0;
+    state[idx + 10] = 0x227C;
+    state[idx + 11] = 0;
+    state[idx + 12] = 0x2278;
+    state[idx + 13] = 0;
+    state[idx + 14] = 0x2274;
+    state[idx + 15] = 0;
+    state[idx + 16] = 0x2270;
+    state[idx + 17] = 0;
+    idx += 18;
+
+    state[idx] = mi_lri_cmd(3, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = 0x21B0;
+    state[idx + 1] = 0;
+    state[idx + 2] = 0x25A8;
+    state[idx + 3] = 0;
+    state[idx + 4] = 0x25AC;
+    state[idx + 5] = 0;
+    idx += 6;
+
+    push_mi_nops(state, &mut idx, 6);
+
+    state[idx] = mi_lri_cmd(1, 0);
+    idx += 1;
+    state[idx] = 0x20C8;
+    state[idx + 1] = 0x7FFF_FFFF;
+    idx += 2;
+
+    push_mi_nops(state, &mut idx, 13);
+
+    state[idx] = mi_lri_cmd(51, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = 0x2588;
+    state[idx + 1] = 0;
+    state[idx + 2] = 0x2588;
+    state[idx + 3] = 0;
+    state[idx + 4] = 0x2588;
+    state[idx + 5] = 0;
+    state[idx + 6] = 0x2588;
+    state[idx + 7] = 0;
+    state[idx + 8] = 0x2588;
+    state[idx + 9] = 0;
+    state[idx + 10] = 0x2588;
+    state[idx + 11] = 0;
+    state[idx + 12] = 0x2028;
+    state[idx + 13] = 0;
+    state[idx + 14] = 0x209C;
+    state[idx + 15] = masked_bit_disable(RING_MI_MODE_STOP_RING);
+    state[idx + 16] = 0x20C0;
+    state[idx + 17] = 0;
+    state[idx + 18] = 0x2178;
+    state[idx + 19] = 0;
+    state[idx + 20] = 0x217C;
+    state[idx + 21] = 0;
+    state[idx + 22] = 0x2358;
+    state[idx + 23] = 0;
+    state[idx + 24] = 0x2170;
+    state[idx + 25] = 0;
+    state[idx + 26] = 0x2150;
+    state[idx + 27] = 0;
+    state[idx + 28] = 0x2154;
+    state[idx + 29] = 0;
+    state[idx + 30] = 0x2158;
+    state[idx + 31] = 0;
+    state[idx + 32] = 0x241C;
+    state[idx + 33] = 0;
+    state[idx + 34] = 0x2600;
+    state[idx + 35] = 0;
+    state[idx + 36] = 0x2604;
+    state[idx + 37] = 0;
+    state[idx + 38] = 0x2608;
+    state[idx + 39] = 0;
+    state[idx + 40] = 0x260C;
+    state[idx + 41] = 0;
+    state[idx + 42] = 0x2610;
+    state[idx + 43] = 0;
+    state[idx + 44] = 0x2614;
+    state[idx + 45] = 0;
+    state[idx + 46] = 0x2618;
+    state[idx + 47] = 0;
+    state[idx + 48] = 0x261C;
+    state[idx + 49] = 0;
+    state[idx + 50] = 0x2620;
+    state[idx + 51] = 0;
+    state[idx + 52] = 0x2624;
+    state[idx + 53] = 0;
+    state[idx + 54] = 0x2628;
+    state[idx + 55] = 0;
+    state[idx + 56] = 0x262C;
+    state[idx + 57] = 0;
+    state[idx + 58] = 0x2630;
+    state[idx + 59] = 0;
+    state[idx + 60] = 0x2634;
+    state[idx + 61] = 0;
+    state[idx + 62] = 0x2638;
+    state[idx + 63] = 0;
+    state[idx + 64] = 0x263C;
+    state[idx + 65] = 0;
+    state[idx + 66] = 0x2640;
+    state[idx + 67] = 0;
+    state[idx + 68] = 0x2644;
+    state[idx + 69] = 0;
+    state[idx + 70] = 0x2648;
+    state[idx + 71] = 0;
+    state[idx + 72] = 0x264C;
+    state[idx + 73] = 0;
+    state[idx + 74] = 0x2650;
+    state[idx + 75] = 0;
+    state[idx + 76] = 0x2654;
+    state[idx + 77] = 0;
+    state[idx + 78] = 0x2658;
+    state[idx + 79] = 0;
+    state[idx + 80] = 0x265C;
+    state[idx + 81] = 0;
+    state[idx + 82] = 0x2660;
+    state[idx + 83] = 0;
+    state[idx + 84] = 0x2664;
+    state[idx + 85] = 0;
+    state[idx + 86] = 0x2668;
+    state[idx + 87] = 0;
+    state[idx + 88] = 0x266C;
+    state[idx + 89] = 0;
+    state[idx + 90] = 0x2670;
+    state[idx + 91] = 0;
+    state[idx + 92] = 0x2674;
+    state[idx + 93] = 0;
+    state[idx + 94] = 0x2678;
+    state[idx + 95] = 0;
+    state[idx + 96] = 0x267C;
+    state[idx + 97] = 0;
+    state[idx + 98] = 0x2068;
+    state[idx + 99] = 0;
+    state[idx + 100] = 0x2084;
+    state[idx + 101] = 0;
+    idx += 102;
+
+    state[idx] = MI_NOOP;
+    idx += 1;
+
+    state[idx] = MI_BATCH_BUFFER_END | 1;
 
     dma_cache_flush(warm.context_virt as *const u8, warm.context_len);
     true
@@ -1217,8 +1394,6 @@ pub fn ggtt_blt_smoke_test_once() {
         RCS_RING_MODE_GEN7,
         masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE),
     );
-    let ctx_ctl_before = mmio_read32(warm, RCS_RING_CONTEXT_CONTROL);
-    let ctx_ctl_ref_before = mmio_read32(warm, RCS_RING_CONTEXT_CONTROL_REF);
     let ctx_ctl_after = masked_bits_update(
         CTX_CTRL_RS_CTX_ENABLE,
         CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
