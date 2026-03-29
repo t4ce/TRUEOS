@@ -570,7 +570,18 @@ fn run_display_power_discovery(info: IntelDeviceInfo) {
     log_display_signature_sweep(info);
     log_plane_inventory(info);
     crate::log!("intel: display discovery step=smoke action=request-display-power\n");
-    let latched = arm_display_power_smoke(info);
+    
+    // Request display power using igpu770 helper if available (requires forcewake)
+    let latched = if intel_igpu770_present() {
+        if let Some(warm) = super::intel_igpu770::warm_state() {
+            super::intel_igpu770::request_display_power_with_forcewake(warm)
+        } else {
+            arm_display_power_smoke(info)
+        }
+    } else {
+        arm_display_power_smoke(info)
+    };
+    
     crate::log!(
         "intel: display discovery result gt_disp_pwron_latched={}\n",
         latched as u8

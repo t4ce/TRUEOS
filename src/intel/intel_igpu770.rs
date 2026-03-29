@@ -65,6 +65,14 @@ const FORCEWAKE_RENDER_GEN11: usize = 0x0A278;
 const FORCEWAKE_ACK_RENDER: usize = 0x0D84;
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
 const FORCEWAKE_KERNEL_FALLBACK: u32 = 1 << 15;
+const GEN9_CLKGATE_DIS_5: usize = 0x046540;
+const DPCE_GATING_DIS: u32 = 1 << 17;
+const GEN8_CHICKEN_DCPR_1: usize = 0x046430;
+const DDI_CLOCK_REG_ACCESS: u32 = 1 << 7;
+const GT_DISP_PWRON: usize = 0x138090;
+const GT_DISP_PWRON_PHY_A_REQ: u32 = 1 << 0;
+const GT_DISP_PWRON_PHY_B_REQ: u32 = 1 << 1;
+const GT_DISP_PWRON_REQ_MASK: u32 = GT_DISP_PWRON_PHY_A_REQ | GT_DISP_PWRON_PHY_B_REQ;
 const RING_VALID: u32 = 0x0000_0001;
 const RING_CTL_STOP: u32 = 0;
 const RING_MI_MODE_STOP_RING: u32 = 1 << 8;
@@ -357,6 +365,48 @@ fn forcewake_gt_mmio_sanity(warm: Igpu770WarmState) {
         after,
         restored
     );
+}
+
+fn apply_adlp_display_workarounds(warm: Igpu770WarmState) -> (u32, u32) {
+    let clk5_before = mmio_read32(warm, GEN9_CLKGATE_DIS_5);
+    let clk5_after = clk5_before | DPCE_GATING_DIS;
+    let _ = mmio_write32(warm, GEN9_CLKGATE_DIS_5, clk5_after);
+
+    let dcpr1_before = mmio_read32(warm, GEN8_CHICKEN_DCPR_1);
+    let dcpr1_after = dcpr1_before & !DDI_CLOCK_REG_ACCESS;
+    let _ = mmio_write32(warm, GEN8_CHICKEN_DCPR_1, dcpr1_after);
+
+    (
+        mmio_read32(warm, GEN9_CLKGATE_DIS_5),
+        mmio_read32(warm, GEN8_CHICKEN_DCPR_1),
+    )
+}
+
+pub(super) fn request_display_power_with_forcewake(warm: Igpu770WarmState) -> bool {
+    let _forcewake_ack = forcewake_gt_acquire(warm);
+    let (clk5_rb, dcpr1_rb) = apply_adlp_display_workarounds(warm);
+    let orig = mmio_read32(warm, GT_DISP_PWRON);
+    let req = orig | GT_DISP_PWRON_REQ_MASK;
+    let wrote = mmio_write32(warm, GT_DISP_PWRON, req);
+    let mut rb = mmio_read32(warm, GT_DISP_PWRON);
+    let mut poll_iters = 0usize;
+    while poll_iters < 1024 && (rb & GT_DISP_PWRON_REQ_MASK) == 0 {
+        core::hint::spin_loop();
+        rb = mmio_read32(warm, GT_DISP_PWRON);
+        poll_iters += 1;
+    }
+    let latched = wrote && (rb & GT_DISP_PWRON_REQ_MASK) != 0;
+    crate::log!(
+        "intel/igpu770: display-power-request register=GT_DISP_PWRON orig=0x{:08X} req=0x{:08X} rb=0x{:08X} clk5_rb=0x{:08X} dcpr1_rb=0x{:08X} poll_iters={} latched={}\n",
+        orig,
+        req,
+        rb,
+        clk5_rb,
+        dcpr1_rb,
+        poll_iters,
+        latched as u8
+    );
+    latched
 }
 
 fn build_rcs_store_pixels_batch(warm: Igpu770WarmState, fill: BltFillRectPlan) {
