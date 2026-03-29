@@ -701,7 +701,7 @@ pub async fn scanout_smoke_task() {
     if intel_igpu770_present() {
         super::intel_igpu770::ggtt_recon_once();
         super::intel_igpu770::ggtt_map_smoke_objects_once();
-        super::intel_igpu770_rcs::ggtt_rcs_smoke_test_once();
+        super::intel_igpu770::ggtt_blt_smoke_test_once();
     }
     Timer::after(EmbassyDuration::from_millis(25)).await;
     crate::log!("intel: display discovery follow-up probe after smoke\n");

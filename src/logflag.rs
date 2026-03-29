@@ -29,6 +29,7 @@ pub(crate) static VIRGL_BLEND_BIND_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static VIRGL_STATE_TRANSITION_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static VIRGL_PRESENT_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
+
 pub(crate) static INTEL_RING_INIT_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static INTEL_SUBMIT_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static INTEL_PRESENT_LOGS: AtomicU32 = AtomicU32::new(0);
@@ -43,7 +44,7 @@ pub(crate) const XHCI_TRACE_EVENT_TRBS: bool = false;
 pub(crate) static USB_ENUM_ROOT_SLOT_CTX_ONCE: AtomicBool = AtomicBool::new(false);
 pub(crate) static USB_ENUM_ROOT_ADDRDEV_FAIL_ONCE: AtomicBool = AtomicBool::new(false);
 
-pub(crate) const NVME_VERBOSE: bool = true;
+pub(crate) const NVME_VERBOSE: bool = false;
 
 pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();

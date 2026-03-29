@@ -416,7 +416,7 @@ where
     while idx < INTEL_770_ENGINE_WAKE_REGISTERS.len() {
         let reg = &INTEL_770_ENGINE_WAKE_REGISTERS[idx];
         let value = read32(reg.offset);
-        crate::log!(
+       /* crate::log!(
             "intel/igpu770: reg-table label={} block={} reg={} off=0x{:05X} value=0x{:08X} desc={}\n",
             label,
             reg.block,
@@ -424,7 +424,7 @@ where
             reg.offset,
             value,
             reg.description
-        );
+        );*/
         log_active_flags(label, reg, value);
         log_bit_state(label, reg.name, value);
         idx += 1;
@@ -442,7 +442,7 @@ fn log_active_flags(label: &str, reg: &Intel770Register, value: u32) {
         let flag = &reg.flags[idx];
         if (value & flag.mask) == flag.value {
             matched = true;
-            crate::log!(
+           /* crate::log!(
                 "intel/igpu770: reg-flag label={} reg={} flag={} mask=0x{:08X} value=0x{:08X} desc={}\n",
                 label,
                 reg.name,
@@ -450,28 +450,28 @@ fn log_active_flags(label: &str, reg: &Intel770Register, value: u32) {
                 flag.mask,
                 flag.value,
                 flag.description
-            );
+            );*/
         }
         idx += 1;
     }
 
     if !matched {
-        crate::log!(
+        /*crate::log!(
             "intel/igpu770: reg-flag label={} reg={} flag=none desc=no known tracked flags active\n",
             label,
             reg.name
-        );
+        );*/
     }
 }
 
 fn log_bit_state(label: &str, reg_name: &str, value: u32) {
-    crate::log!(
+ /*   crate::log!(
         "intel/igpu770: reg-bits label={} reg={} raw=0x{:08X} set_bits={}\n",
         label,
         reg_name,
         value,
         BitSetList(value)
-    );
+    );*/
 }
 
 struct BitSetList(u32);
