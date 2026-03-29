@@ -3,6 +3,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use super::intel_770_registers;
 use super::intel_igpu770::{warm_state, Igpu770WarmState};
 
 const GGTT_PAGE_BYTES: u64 = 4096;
@@ -35,6 +36,7 @@ const RCS_RING_MODE_GEN7: usize = RCS_RING_BASE + 0x29C;
 const RCS_RING_EXECLIST_STATUS_LO: usize = RCS_RING_BASE + 0x234;
 const RCS_RING_EXECLIST_STATUS_HI: usize = RCS_RING_BASE + 0x238;
 const RCS_RING_EXECLIST_CONTROL: usize = RCS_RING_BASE + 0x550;
+const FORCEWAKE_GT: usize = 0x0A188;
 const FORCEWAKE_RENDER_GEN11: usize = 0x0A278;
 const FORCEWAKE_ACK_RENDER: usize = 0x0D84;
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
@@ -61,6 +63,7 @@ const FORCEWAKE_POLL_ITERS: usize = 20_000;
 
 static RCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static FORCEWAKE_RENDER_HELD: AtomicBool = AtomicBool::new(false);
+static FORCEWAKE_GT_HELD: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug)]
 struct GgttMapPlan {
@@ -237,6 +240,7 @@ fn log_rcs_regs(warm: Igpu770WarmState, label: &str) {
         mmio_read32(warm, RCS_RING_BBADDR),
         mmio_read32(warm, RCS_RING_BBADDR_UDW)
     );
+    intel_770_registers::log_engine_wakeup_table(label, |off| mmio_read32(warm, off));
 }
 
 fn log_rcs_mode_summary(warm: Igpu770WarmState, label: &str) {
@@ -276,16 +280,41 @@ fn wait_forcewake_ack(warm: Igpu770WarmState, mask: u32, expected: u32) -> (bool
     (false, last, FORCEWAKE_POLL_ITERS)
 }
 
+fn wait_forcewake_req_latch(
+    warm: Igpu770WarmState,
+    off: usize,
+    mask: u32,
+    expected: u32,
+) -> (bool, u32, usize) {
+    let mut last = mmio_read32(warm, off);
+    if (last & mask) == expected {
+        return (true, last, 0);
+    }
+    let mut iter = 0usize;
+    while iter < FORCEWAKE_POLL_ITERS {
+        core::hint::spin_loop();
+        last = mmio_read32(warm, off);
+        if (last & mask) == expected {
+            return (true, last, iter + 1);
+        }
+        iter += 1;
+    }
+    (false, last, FORCEWAKE_POLL_ITERS)
+}
+
 fn forcewake_render_acquire(warm: Igpu770WarmState) -> u32 {
     let ack_before = mmio_read32(warm, FORCEWAKE_ACK_RENDER);
+    let gt_before = mmio_read32(warm, FORCEWAKE_GT);
     crate::log!(
-        "intel/igpu770: forcewake-render pre ack=0x{:08X}\n",
-        ack_before
+        "intel/igpu770: forcewake-render pre ack=0x{:08X} gt_req=0x{:08X}\n",
+        ack_before,
+        gt_before
     );
-    if FORCEWAKE_RENDER_HELD.load(Ordering::Acquire) {
+    if FORCEWAKE_RENDER_HELD.load(Ordering::Acquire) && FORCEWAKE_GT_HELD.load(Ordering::Acquire) {
         crate::log!(
-            "intel/igpu770: forcewake-render already-held ack=0x{:08X}\n",
-            ack_before
+            "intel/igpu770: forcewake-render already-held ack=0x{:08X} gt_req=0x{:08X}\n",
+            ack_before,
+            gt_before
         );
         return ack_before;
     }
@@ -347,13 +376,38 @@ fn forcewake_render_acquire(warm: Igpu770WarmState) -> u32 {
         iter,
         fallback_used as u8
     );
+    let _ = mmio_write32(warm, FORCEWAKE_GT, masked_bit_disable(FORCEWAKE_KERNEL));
+    let (_, gt_clear, gt_clear_iters) = wait_forcewake_req_latch(warm, FORCEWAKE_GT, FORCEWAKE_KERNEL, 0);
+    let _ = mmio_write32(warm, FORCEWAKE_GT, masked_bit_enable(FORCEWAKE_KERNEL));
+    let (gt_ok, gt_req, gt_iters) =
+        wait_forcewake_req_latch(warm, FORCEWAKE_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
+    crate::log!(
+        "intel/igpu770: forcewake-gt acquire req=0x{:08X} reg=0x{:08X} cleared=0x{:08X} clear_iters={} iters={} held={}\n",
+        FORCEWAKE_KERNEL,
+        gt_req,
+        gt_clear,
+        gt_clear_iters,
+        gt_iters,
+        gt_ok as u8
+    );
+    intel_770_registers::log_engine_wakeup_table("post-forcewake", |off| mmio_read32(warm, off));
     if set_ok {
         FORCEWAKE_RENDER_HELD.store(true, Ordering::Release);
     }
+    FORCEWAKE_GT_HELD.store(gt_ok, Ordering::Release);
     ack
 }
 
 fn forcewake_render_mmio_sanity(warm: Igpu770WarmState) {
+    if let Some(reg) = intel_770_registers::describe_register(RCS_RING_IMR) {
+        crate::log!(
+            "intel/igpu770: forcewake-render sanity-target block={} reg={} off=0x{:05X} desc={}\n",
+            reg.block,
+            reg.name,
+            reg.offset,
+            reg.description
+        );
+    }
     let before = mmio_read32(warm, RCS_RING_IMR);
     let toggled = before ^ 1;
     let _ = mmio_write32(warm, RCS_RING_IMR, toggled);
@@ -549,6 +603,6 @@ pub fn ggtt_rcs_smoke_test_once() {
         final_tail,
         result0,
         fb0,
-        FORCEWAKE_RENDER_HELD.load(Ordering::Acquire) as u8
+        (FORCEWAKE_RENDER_HELD.load(Ordering::Acquire) && FORCEWAKE_GT_HELD.load(Ordering::Acquire)) as u8
     );
 }
