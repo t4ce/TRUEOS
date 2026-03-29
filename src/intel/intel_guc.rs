@@ -7,6 +7,7 @@ const ZSTD_MAGIC: u32 = 0xFD2F_B528;
 const GPU_VA_GUC_FW_BASE: u64 = 0x0084_0000;
 
 const GUC_STATUS: usize = 0x0000_C000;
+const GDRST: usize = 0x0000_941C;
 const GUC_SHIM_CONTROL: usize = 0x0000_C064;
 const GT_PM_CONFIG: usize = 0x0013_816C;
 const DMA_ADDR_0_LOW: usize = 0x0000_C300;
@@ -20,6 +21,7 @@ const GUC_SEND_INTERRUPT: usize = 0x0000_C4C8;
 const GUC_WOPCM_SIZE: usize = 0x0000_C050;
 const UOS_RSA_SCRATCH_BASE: usize = 0x0000_C200;
 const UOS_RSA_SCRATCH_COUNT: usize = 64;
+const GUC_BOOTSTRAP_REV: &str = "guc-bootstrap-r7";
 
 const GT_DOORBELL_ENABLE: u32 = 1 << 0;
 const GUC_ENABLE_READ_CACHE_LOGIC: u32 = 1 << 1;
@@ -28,16 +30,20 @@ const GUC_MSGCH_ENABLE: u32 = 1 << 4;
 const GUC_ENABLE_READ_CACHE_FOR_SRAM_DATA: u32 = 1 << 9;
 const GUC_ENABLE_READ_CACHE_FOR_WOPCM_DATA: u32 = 1 << 10;
 const GUC_ENABLE_MIA_CLOCK_GATING: u32 = 1 << 15;
-const DMA_ADDRESS_SPACE_WOPCM: u32 = 7 << 16;
 const DMA_ADDRESS_SPACE_GGTT: u32 = 8 << 16;
+const DMA_ADDRESS_SPACE_WOPCM: u32 = 7 << 16;
 const UOS_MOVE: u32 = 1 << 4;
 const START_DMA: u32 = 1 << 0;
 const GUC_WOPCM_OFFSET_VALID: u32 = 1 << 0;
 const GUC_WOPCM_OFFSET_SHIFT: u32 = 14;
 const GUC_WOPCM_OFFSET_MASK: u32 = 0x3FFFF << GUC_WOPCM_OFFSET_SHIFT;
+const GUC_WOPCM_SIZE_LOCKED: u32 = 1 << 0;
+const GUC_WOPCM_SIZE_MASK: u32 = 0xFFFFF << 12;
+const GUC_BOOT_WOPCM_BASE: u32 = 0x4000;
 const GUC_BOOT_DEST_WOPCM_OFFSET: u32 = 0x2000;
 const GUC_DMA_POLL_ITERS: usize = 20_000;
 const GUC_READY_POLL_ITERS: usize = 200_000;
+const GUC_RESET_POLL_ITERS: usize = 100_000;
 const GUC_STATUS_BOOT_DEFAULT: u32 = 0x0000_0001;
 const GS_BOOTROM_SHIFT: u32 = 1;
 const GS_BOOTROM_MASK: u32 = 0x7F << GS_BOOTROM_SHIFT;
@@ -46,6 +52,8 @@ const GS_UKERNEL_MASK: u32 = 0xFF << GS_UKERNEL_SHIFT;
 const GS_AUTH_STATUS_SHIFT: u32 = 30;
 const GS_AUTH_STATUS_MASK: u32 = 0x03 << GS_AUTH_STATUS_SHIFT;
 const GS_AUTH_STATUS_BAD: u32 = 0x01;
+const GS_MIA_IN_RESET: u32 = 1 << 0;
+const GRDOM_GUC: u32 = 1 << 3;
 
 const INTEL_GUC_LOAD_STATUS_ERROR_DEVID_BUILD_MISMATCH: u32 = 0x02;
 const INTEL_GUC_LOAD_STATUS_GUC_PREPROD_BUILD_MISMATCH: u32 = 0x03;
@@ -235,6 +243,42 @@ fn guc_auth(status: u32) -> u32 {
     (status & GS_AUTH_STATUS_MASK) >> GS_AUTH_STATUS_SHIFT
 }
 
+#[inline]
+fn error_name_ukernel(code: u32) -> &'static str {
+    match code {
+        INTEL_GUC_LOAD_STATUS_READY => "READY",
+        INTEL_GUC_LOAD_STATUS_ERROR_DEVID_BUILD_MISMATCH => "DEVID_MISMATCH",
+        INTEL_GUC_LOAD_STATUS_GUC_PREPROD_BUILD_MISMATCH => "PREPROD_MISMATCH",
+        INTEL_GUC_LOAD_STATUS_ERROR_DEVID_INVALID_GUCTYPE => "INVALID_GUCTYPE",
+        INTEL_GUC_LOAD_STATUS_HWCONFIG_ERROR => "HWCONFIG_ERROR",
+        INTEL_GUC_LOAD_STATUS_BOOTROM_VERSION_MISMATCH => "BOOTROM_VERSION_MISMATCH",
+        INTEL_GUC_LOAD_STATUS_DPC_ERROR => "DPC_ERROR",
+        INTEL_GUC_LOAD_STATUS_EXCEPTION => "EXCEPTION",
+        INTEL_GUC_LOAD_STATUS_INIT_DATA_INVALID => "INIT_DATA_INVALID",
+        INTEL_GUC_LOAD_STATUS_MPU_DATA_INVALID => "MPU_DATA_INVALID",
+        INTEL_GUC_LOAD_STATUS_INIT_MMIO_SAVE_RESTORE_INVALID => "MMIO_SR_INVALID",
+        INTEL_GUC_LOAD_STATUS_KLV_WORKAROUND_INIT_ERROR => "KLV_INIT_ERROR",
+        _ => "UNKNOWN",
+    }
+}
+
+#[inline]
+fn error_name_bootrom(code: u32) -> &'static str {
+    match code {
+        INTEL_BOOTROM_STATUS_NO_KEY_FOUND => "NO_KEY",
+        INTEL_BOOTROM_STATUS_RSA_FAILED => "RSA_FAILED",
+        INTEL_BOOTROM_STATUS_PAVPC_FAILED => "PAVPC_FAILED",
+        INTEL_BOOTROM_STATUS_WOPCM_FAILED => "WOPCM_FAILED",
+        INTEL_BOOTROM_STATUS_LOADLOC_FAILED => "LOADLOC_FAILED",
+        INTEL_BOOTROM_STATUS_JUMP_FAILED => "JUMP_FAILED",
+        INTEL_BOOTROM_STATUS_RC6CTXCONFIG_FAILED => "RC6CTXCONFIG_FAILED",
+        INTEL_BOOTROM_STATUS_MPUMAP_INCORRECT => "MPUMAP_INCORRECT",
+        INTEL_BOOTROM_STATUS_EXCEPTION => "EXCEPTION",
+        INTEL_BOOTROM_STATUS_PROD_KEY_CHECK_FAILURE => "PROD_KEY_CHECK",
+        _ => "OK_OR_UNKNOWN",
+    }
+}
+
 fn guc_status_terminal(status: u32) -> Option<bool> {
     let uk = guc_ukernel(status);
     match uk {
@@ -369,6 +413,26 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
 
     let _ = forcewake_gt_acquire(warm);
 
+    // Reset GuC domain and wait for reset completion before programming DMA.
+    let _ = mmio_write32(warm, GDRST, GRDOM_GUC);
+    let mut gdrst_rb = mmio_read32(warm, GDRST);
+    let mut gdrst_iters = 0usize;
+    while gdrst_iters < GUC_RESET_POLL_ITERS {
+        if (gdrst_rb & GRDOM_GUC) == 0 {
+            break;
+        }
+        core::hint::spin_loop();
+        gdrst_iters += 1;
+        gdrst_rb = mmio_read32(warm, GDRST);
+    }
+    let status_after_reset = mmio_read32(warm, GUC_STATUS);
+    crate::log!(
+        "intel/igpu770: guc-fw reset gdrst_rb=0x{:08X} gdrst_iters={} mia_in_reset={}\n",
+        gdrst_rb,
+        gdrst_iters,
+        ((status_after_reset & GS_MIA_IN_RESET) != 0) as u8
+    );
+
     let status_before = mmio_read32(warm, GUC_STATUS);
     let shim_before = mmio_read32(warm, GUC_SHIM_CONTROL);
     let pm_before = mmio_read32(warm, GT_PM_CONFIG);
@@ -403,16 +467,17 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
     }
     let max_dma = warm.guc_fw_len.saturating_sub(fw_dma_off);
     let copy_size = warm.guc_fw_xfer_len.min(max_dma).min(u32::MAX as usize) as u32;
-    // Program byte offset + valid; previous mask-only path collapsed 0x2000 to 0x0.
-    let wopcm_off = (GUC_BOOT_DEST_WOPCM_OFFSET & !GUC_WOPCM_OFFSET_VALID) | GUC_WOPCM_OFFSET_VALID;
-
-    let _ = mmio_write32(warm, DMA_GUC_WOPCM_OFFSET, wopcm_off);
+    // Program and lock uC WOPCM partition registers before GuC bootstrap DMA.
+    // DMA_GUC_WOPCM_OFFSET is the GuC WOPCM base/config register, not DMA dst.
+    let wopcm_size_cfg = (wopcm_size & GUC_WOPCM_SIZE_MASK) | GUC_WOPCM_SIZE_LOCKED;
+    let wopcm_base_only = GUC_BOOT_WOPCM_BASE & GUC_WOPCM_OFFSET_MASK;
+    let wopcm_base_cfg = wopcm_base_only | GUC_WOPCM_OFFSET_VALID;
+    let _ = mmio_write32(warm, GUC_WOPCM_SIZE, wopcm_size_cfg);
+    // Tiny register ping-pong: toggle VALID to ensure the base config write is latched.
+    let _ = mmio_write32(warm, DMA_GUC_WOPCM_OFFSET, wopcm_base_only);
+    let _ = mmio_write32(warm, DMA_GUC_WOPCM_OFFSET, wopcm_base_cfg);
     let _ = mmio_write32(warm, DMA_ADDR_0_LOW, src as u32);
-    let _ = mmio_write32(
-        warm,
-        DMA_ADDR_0_HIGH,
-        ((src >> 32) as u32) | DMA_ADDRESS_SPACE_GGTT,
-    );
+    let _ = mmio_write32(warm, DMA_ADDR_0_HIGH, (src >> 32) as u32);
     let _ = mmio_write32(warm, DMA_ADDR_1_LOW, GUC_BOOT_DEST_WOPCM_OFFSET);
     let _ = mmio_write32(warm, DMA_ADDR_1_HIGH, DMA_ADDRESS_SPACE_WOPCM);
     let _ = mmio_write32(warm, DMA_COPY_SIZE, copy_size);
@@ -431,7 +496,7 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
     let _ = mmio_write32(warm, DMA_CTRL, masked_bit_disable(UOS_MOVE));
 
     let _ = mmio_write32(warm, GUC_SEND_INTERRUPT, 1);
-    let status_after = mmio_read32(warm, GUC_STATUS);
+    let mut status_after = mmio_read32(warm, GUC_STATUS);
     let mut status_final = status_after;
     let mut status_iters = 0usize;
     let mut terminal = guc_status_terminal(status_after);
@@ -447,11 +512,13 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
         core::hint::spin_loop();
         status_iters += 1;
     }
+
     let ready = dma_done && terminal_success && guc_auth(status_final) != GS_AUTH_STATUS_BAD;
     GUC_FW_READY.store(ready, Ordering::Release);
     let shim_rb = mmio_read32(warm, GUC_SHIM_CONTROL);
     let pm_rb = mmio_read32(warm, GT_PM_CONFIG);
     let dma_ctrl_rb = mmio_read32(warm, DMA_CTRL);
+    let wopcm_size_rb = mmio_read32(warm, GUC_WOPCM_SIZE);
     let dma_wopcm_off_rb = mmio_read32(warm, DMA_GUC_WOPCM_OFFSET);
     let dma_addr0_low_rb = mmio_read32(warm, DMA_ADDR_0_LOW);
     let dma_addr0_high_rb = mmio_read32(warm, DMA_ADDR_0_HIGH);
@@ -459,12 +526,14 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
     let dma_addr1_high_rb = mmio_read32(warm, DMA_ADDR_1_HIGH);
 
     crate::log!(
-        "intel/igpu770: guc-fw bootstrap src_gpu=0x{:X} fw_phys=0x{:X} fw_len=0x{:X} xfer=0x{:X} wopcm_size=0x{:08X} wopcm_cfg=0x{:08X} status_before=0x{:08X} status_after=0x{:08X} status_final=0x{:08X} status_iters={} shim=0x{:08X} pm=0x{:08X} dma_done={} dma_iters={} dma_ctrl=0x{:08X} a0_lo=0x{:08X} a0_hi=0x{:08X} a1_lo=0x{:08X} a1_hi=0x{:08X} ready={}\n",
+        "intel/igpu770: guc-fw bootstrap rev={} src_gpu=0x{:X} fw_phys=0x{:X} fw_len=0x{:X} xfer=0x{:X} wopcm_size=0x{:08X} wopcm_size_rb=0x{:08X} wopcm_cfg=0x{:08X} status_before=0x{:08X} status_after=0x{:08X} status_final=0x{:08X} status_iters={} shim=0x{:08X} pm=0x{:08X} dma_done={} dma_iters={} dma_ctrl=0x{:08X} a0_lo=0x{:08X} a0_hi=0x{:08X} a1_lo=0x{:08X} a1_hi=0x{:08X} ready={}\n",
+        GUC_BOOTSTRAP_REV,
         warm.guc_fw_gpu_addr,
         warm.guc_fw_phys,
         warm.guc_fw_len,
         copy_size,
         wopcm_size,
+        wopcm_size_rb,
         dma_wopcm_off_rb,
         status_before,
         status_after,
@@ -481,10 +550,14 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
         dma_addr1_high_rb,
         ready as u8
     );
+    let uk_code = guc_ukernel(status_final);
+    let br_code = guc_bootrom(status_final);
     crate::log!(
-        "intel/igpu770: guc-fw status-decode bootrom=0x{:02X} ukernel=0x{:02X} auth=0x{:X} dma_off=0x{:X} rsa_off=0x{:X} rsa_size=0x{:X}\n",
-        guc_bootrom(status_final),
-        guc_ukernel(status_final),
+        "intel/igpu770: guc-fw status-decode bootrom=0x{:02X}({}) ukernel=0x{:02X}({}) auth=0x{:X} dma_off=0x{:X} rsa_off=0x{:X} rsa_size=0x{:X}\n",
+        br_code,
+        error_name_bootrom(br_code),
+        uk_code,
+        error_name_ukernel(uk_code),
         guc_auth(status_final),
         fw_dma_off,
         fw_rsa_off,
