@@ -363,7 +363,7 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
 		});
 	}
 
-	let required = if plan.use_force_wakeup { 33 } else { 31 };
+	let required = if plan.use_force_wakeup { 28 } else { 26 };
 	if batch_dwords.len() < required {
 		return Err(CopySmokeBuildError::BatchTooSmall {
 			need_dwords: required,
@@ -417,12 +417,6 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
 		&mut i,
 		copy_smoke_result_addr(plan.result_gpu_addr, COPY_SMOKE_POST_COPY_SLOT),
 		plan.post_color_value,
-	);
-	emit_flush_dw_store(
-		batch_dwords,
-		&mut i,
-		copy_smoke_result_addr(plan.result_gpu_addr, COPY_SMOKE_DONE_SLOT),
-		plan.done_value,
 	);
 
 	batch_dwords[i] = mi::BATCH_BUFFER_END;
