@@ -147,7 +147,7 @@ pub(crate) fn mmio_read32(info: IntelDeviceInfo, off: usize) -> u32 {
 }
 
 #[inline]
-fn mmio_write32(info: IntelDeviceInfo, off: usize, value: u32) -> bool {
+pub(crate) fn mmio_write32(info: IntelDeviceInfo, off: usize, value: u32) -> bool {
     if off + 4 > info.mmio_len {
         return false;
     }
@@ -527,21 +527,7 @@ fn log_display_routing_probe(info: IntelDeviceInfo) {
 }
 
 fn arm_display_power_smoke(info: IntelDeviceInfo) -> bool {
-    let snapshot = super::xelp_display_ngin::capture_early_display_snapshot(info);
-    let plan = super::xelp_display_ngin::build_display_power_request_plan(snapshot);
-    let wrote = mmio_write32(info, plan.reg.offset, plan.request);
-    let rb = mmio_read32(info, plan.reg.offset);
-    let latched = wrote && (rb & plan.request_mask) != 0;
-
-    crate::log!(
-        "intel: display-power smoke register={} orig=0x{:08X} req=0x{:08X} rb=0x{:08X} latched={}\n",
-        plan.reg.name,
-        plan.before,
-        plan.request,
-        rb,
-        latched as u8
-    );
-    latched
+    super::xelp_display_ngin::request_display_power_smoke(info).latched
 }
 
 fn run_display_power_discovery(info: IntelDeviceInfo) {
@@ -583,6 +569,7 @@ fn run_display_power_discovery(info: IntelDeviceInfo) {
     };
 
     crate::log!("intel: display discovery result gt_disp_pwron_latched={}\n", latched as u8);
+    super::xelp_display_ngin::kickoff_once(info, latched);
 }
 
 pub fn init_once() {
