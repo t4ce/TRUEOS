@@ -10,6 +10,14 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::{disc::block, dma, pci::mmio};
 
+macro_rules! nvme_verbose_log {
+    ($($arg:tt)*) => {
+        if crate::logflag::NVME_VERBOSE {
+            crate::log!($($arg)*);
+        }
+    };
+}
+
 const NVME_REG_CAP: usize = 0x00;
 const NVME_REG_VS: usize = 0x08;
 const NVME_REG_CC: usize = 0x14;
@@ -252,7 +260,7 @@ impl NvmeQueue {
 
         let sq_mem = DmaBuffer::alloc(sq_alloc_bytes, align)?;
         let cq_mem = DmaBuffer::alloc(cq_alloc_bytes, align)?;
-        crate::log!(
+        nvme_verbose_log!(
             "nvme: queue alloc depth={} align=0x{:X} sq_phys=0x{:X} cq_phys=0x{:X}\n",
             depth,
             align,
@@ -895,7 +903,7 @@ impl NvmeController {
                 }
                 let _ = crate::wait::spin_until_timeout(10, || false);
             }
-            crate::log!("nvme: {} CAP=0x{:016X} VS=0x{:08X}\n", pci, cap, vs);
+            nvme_verbose_log!("nvme: {} CAP=0x{:016X} VS=0x{:08X}\n", pci, cap, vs);
             if cap == 0 || cap == u64::MAX {
                 crate::log!(
                     "nvme: {} controller regs unreadable after settle (cap=0x{:016X})\n",
@@ -957,7 +965,7 @@ impl NvmeController {
             let s_sq = (2usize * (NVME_IO_QID as usize)) * (ctrl.doorbell_stride_bytes as usize);
             let s_cq =
                 (2usize * (NVME_IO_QID as usize) + 1) * (ctrl.doorbell_stride_bytes as usize);
-            crate::log!(
+            nvme_verbose_log!(
                 "nvme: {} io_q pair initialized. dstrd={} sq_db_off=0x{:X} cq_db_off=0x{:X}\n",
                 pci,
                 ctrl.doorbell_stride_bytes,
@@ -1016,7 +1024,7 @@ impl NvmeController {
         irq_enabled: bool,
         irq_vector: u16,
     ) -> core::result::Result<(), block::Error> {
-        crate::log!(
+        nvme_verbose_log!(
             "nvme: {} create_io_cq qid={} depth={} phys=0x{:X} ien={} iv={}\n",
             self.pci,
             qid,
@@ -1055,7 +1063,7 @@ impl NvmeController {
         sq_phys: u64,
         cqid: u16,
     ) -> core::result::Result<(), block::Error> {
-        crate::log!(
+        nvme_verbose_log!(
             "nvme: {} create_io_sq qid={} depth={} phys=0x{:X} cqid={}\n",
             self.pci,
             qid,
@@ -1116,7 +1124,7 @@ impl NvmeController {
 
         let allocated_ncqr = cpl.dw0 & 0xFFFF;
         let allocated_nsqr = (cpl.dw0 >> 16) & 0xFFFF;
-        crate::log!(
+        nvme_verbose_log!(
             "nvme: {} set_number_of_queues req sq={} cq={} -> got sq={} cq={}\n",
             self.pci,
             nsqr + 1,
@@ -1863,7 +1871,7 @@ fn io_selftest_flush(ctrl: &mut NvmeController, pci_addr: block::PciAddress, nsi
                     cpl.status_code(),
                 );
             } else {
-                crate::log!("nvme: {} io-selftest flush ok\n", pci_addr);
+                nvme_verbose_log!("nvme: {} io-selftest flush ok\n", pci_addr);
             }
             true
         }
@@ -1899,7 +1907,7 @@ pub fn probe_once() {
         let do_flr = false;
         if do_flr {
             if crate::pci::try_function_level_reset(dev.bus, dev.slot, dev.function) {
-                crate::log!(
+                nvme_verbose_log!(
                     "nvme: {:02X}:{:02X}.{} function-level reset issued\n",
                     dev.bus,
                     dev.slot,
@@ -1907,14 +1915,14 @@ pub fn probe_once() {
                 );
             }
         } else {
-            crate::log!(
+            nvme_verbose_log!(
                 "nvme: {:02X}:{:02X}.{} skipping FLR (stability quirk)\n",
                 dev.bus,
                 dev.slot,
                 dev.function
             );
         }
-        crate::log!(
+        nvme_verbose_log!(
             "nvme: {:02X}:{:02X}.{} probe step=bar-read\n",
             dev.bus,
             dev.slot,
@@ -1923,7 +1931,7 @@ pub fn probe_once() {
 
         let (mut bar_lo, mut bar_hi) =
             crate::pci::read_bar0_raw_legacy(dev.bus, dev.slot, dev.function);
-        crate::log!(
+        nvme_verbose_log!(
             "nvme: {:02X}:{:02X}.{} probe step=bar-read-done lo=0x{:08X} hi={:?}\n",
             dev.bus,
             dev.slot,
@@ -1957,7 +1965,7 @@ pub fn probe_once() {
                 size = 0x4000;
             }
             let align = size.max(0x1000);
-            crate::log!(
+            nvme_verbose_log!(
                 "nvme: {:02X}:{:02X}.{} probe step=bar-alloc size=0x{:X} align=0x{:X}\n",
                 dev.bus,
                 dev.slot,
@@ -1978,7 +1986,7 @@ pub fn probe_once() {
             };
 
             let new_lo = ((new_base as u32) & !0xFu32) | (bar_lo & 0xFu32);
-            crate::log!(
+            nvme_verbose_log!(
                 "nvme: {:02X}:{:02X}.{} probe step=bar-write new_base=0x{:X} new_lo=0x{:08X}\n",
                 dev.bus,
                 dev.slot,
@@ -1997,7 +2005,7 @@ pub fn probe_once() {
                 );
             }
 
-            crate::log!(
+            nvme_verbose_log!(
                 "nvme: {:02X}:{:02X}.{} probe step=bar-reread\n",
                 dev.bus,
                 dev.slot,
@@ -2009,7 +2017,7 @@ pub fn probe_once() {
                 base |= (bar_hi.unwrap_or(0) as u64) << 32;
             }
 
-            crate::log!(
+            nvme_verbose_log!(
                 "nvme: {:02X}:{:02X}.{} BAR0 assigned by OS base=0x{:X} size=0x{:X}\n",
                 dev.bus,
                 dev.slot,
@@ -2022,7 +2030,7 @@ pub fn probe_once() {
 
         crate::pci::enable_mem_and_bus_master_legacy(dev.bus, dev.slot, dev.function);
 
-        crate::log!(
+        nvme_verbose_log!(
             "nvme: {:02X}:{:02X}.{} BAR0 raw lo=0x{:08X} hi={:?} base=0x{:X} size=0x{:X}\n",
             dev.bus,
             dev.slot,
@@ -2040,7 +2048,7 @@ pub fn probe_once() {
         };
         map_len = map_len.clamp(0x4000, 0x10000);
 
-        crate::log!(
+        nvme_verbose_log!(
             "nvme: {:02X}:{:02X}.{} probe step=mmio-map base=0x{:X} len=0x{:X}\n",
             dev.bus,
             dev.slot,
@@ -2187,7 +2195,7 @@ pub fn probe_once() {
         };
         let handle = block::register_device(desc, dev);
         crate::r::fs::trueosfs::request_mount_root(handle);
-        crate::log!(
+        nvme_verbose_log!(
             "nvme: registered {} nsid={} id={} blocks={} bs={} max_io={}\n",
             pci_addr,
             nsid,
@@ -2196,7 +2204,7 @@ pub fn probe_once() {
             block_size,
             max_transfer_bytes,
         );
-        crate::log!("nvme: {} probe outcome: registered\n", pci_addr);
+        nvme_verbose_log!("nvme: {} probe outcome: registered\n", pci_addr);
         registered_any = true;
 
         // For now, only claim/register the first controller.

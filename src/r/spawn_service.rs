@@ -413,14 +413,6 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
 async fn gfx_virgl_ready_task() {
     crate::gfx::init(crate::limine::framebuffer_response());
 
-    #[cfg(feature = "gfx_virgl")]
-    if crate::gfx::is_virgl_active()
-        && !crate::gfx::athlasfont::imba_athlas_png_buckets_uploaded()
-        && !crate::gfx::athlasfont::ensure_imba_athlas_png_buckets_uploaded()
-    {
-        crate::log!("gfx-virgl-backend-ready: athlas bucket upload failed\n");
-    }
-
     if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
         crate::log!("boot-probe: gfx-virgl-backend-ready ms={}\n", boot_probe_ms());
         return;
@@ -534,7 +526,6 @@ async fn ui2_demo_stagger_task() {
     crate::r::readiness::wait_for(crate::r::readiness::UI2_READY).await;
 
     for (idx, demo) in UI2_DEMOS.iter().enumerate() {
-        Timer::after(EmbassyDuration::from_millis(250)).await;
         crate::r::readiness::set(demo.slot_ready);
         crate::log!(
             "boot-probe: ui2-demo-slot-{} ready name={} ms={}\n",
