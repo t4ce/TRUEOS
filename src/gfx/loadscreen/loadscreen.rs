@@ -1,39 +1,15 @@
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 const LOADSCREEN_BG_RGB: u32 = 0xF2EEE8;
-const LOADSCREEN_TITLE_RGB: (u8, u8, u8) = (0x10, 0x10, 0x12);
-const LOADSCREEN_MSG: &[u8] = b"TRUE OS";
-const LOADSCREEN_TILE_SIZE: f32 = 120.0;
 const LOADSCREEN_WAIT_POLL_MS: u64 = 250;
 const LOADSCREEN_MIN_LIFETIME_MS: u64 = 4_000;
 const LOADSCREEN_ANIM_FRAME_MS: u64 = 250;
-const LOADSCREEN_TITLE_ALPHA: u8 = 242;
-const LOADSCREEN_GLYPH_SCALE: f32 = 1.25;
 
-fn render_loadscreen_frame(
-    bg_rgb: u32,
-    msg: &[u8],
-    text_layout: Option<crate::gfx::imbafont::ImbaFontRunLayout>,
-    fb_w: u32,
-    fb_h: u32,
-) -> bool {
+fn render_loadscreen_frame(bg_rgb: u32) -> bool {
     let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(bg_rgb) };
     if begin_rc != 0 {
         crate::log!("gfx-loadscreen: begin_frame failed rc={}\n", begin_rc);
         return false;
-    }
-
-    if let Some(layout) = text_layout {
-        let _ = crate::gfx::imbafont::draw_text_in_frame_scaled(
-            crate::gfx::imbafont::ImbaFontFace::Font,
-            msg,
-            &layout,
-            fb_w,
-            fb_h,
-            LOADSCREEN_TITLE_RGB,
-            LOADSCREEN_TITLE_ALPHA,
-            LOADSCREEN_GLYPH_SCALE,
-        );
     }
 
     unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
@@ -50,31 +26,11 @@ fn boot_probe_ms() -> u64 {
 pub async fn gfx_loadscreen_task() {
     crate::r::readiness::set_loadscreen_expire_requested(false);
 
-    let (fb_w, fb_h) = crate::limine::framebuffer_response()
-        .and_then(|resp| resp.framebuffers().next())
-        .map(|fb| (fb.width() as f32, fb.height() as f32))
-        .unwrap_or((1024.0, 768.0));
-    let tile_h = LOADSCREEN_TILE_SIZE;
-    let text_layout = crate::gfx::imbafont::layout_text_centered(
-        crate::gfx::imbafont::ImbaFontFace::Font,
-        LOADSCREEN_MSG,
-        fb_w,
-        fb_h,
-        tile_h,
-    );
-
     let mut first_frame_ms = 0u64;
 
     loop {
         crate::gfx::with_cabi_frame_lock(|| {
-            if render_loadscreen_frame(
-                LOADSCREEN_BG_RGB,
-                LOADSCREEN_MSG,
-                text_layout,
-                fb_w as u32,
-                fb_h as u32,
-            ) && first_frame_ms == 0
-            {
+            if render_loadscreen_frame(LOADSCREEN_BG_RGB) && first_frame_ms == 0 {
                 first_frame_ms = boot_probe_ms();
                 crate::r::readiness::set(crate::r::readiness::LOADSCREEN_FRAME_READY);
             }
@@ -99,13 +55,7 @@ pub async fn gfx_loadscreen_task() {
         }
 
         crate::gfx::with_cabi_frame_lock(|| {
-            let _ = render_loadscreen_frame(
-                LOADSCREEN_BG_RGB,
-                LOADSCREEN_MSG,
-                text_layout,
-                fb_w as u32,
-                fb_h as u32,
-            );
+            let _ = render_loadscreen_frame(LOADSCREEN_BG_RGB);
         });
 
         Timer::after(EmbassyDuration::from_millis(LOADSCREEN_ANIM_FRAME_MS)).await;
