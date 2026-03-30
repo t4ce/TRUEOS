@@ -48,11 +48,6 @@ fn build_athlas_grid_rgba(width: u32, height: u32, cell_h: u32) -> Option<alloc:
 pub async fn ui2_athlas_grid_demo_task() {
     Timer::after(EmbassyDuration::from_millis(250)).await;
 
-    if !crate::gfx::imba_athlas::ensure_imba_athlas_png_buckets_uploaded() {
-        crate::log!("ui2-athlas-grid-demo: athlas bucket upload failed\n");
-        return;
-    }
-
     let Some(glyph) =
         crate::gfx::imba_athlas::imba_athlas_lookup_codepoint(UI2_ATHLAS_GRID_DEMO_GLYPH_BYTE as u32)
     else {
@@ -94,6 +89,13 @@ pub async fn ui2_athlas_grid_demo_task() {
         );
         return;
     };
+
+    if !crate::gfx::imba_athlas::ensure_imba_athlas_png_buckets_uploaded() {
+        crate::log!("ui2-athlas-grid-demo: athlas bucket upload failed\n");
+        loop {
+            Timer::after(EmbassyDuration::from_secs(3600)).await;
+        }
+    }
 
     let Some(rgba) = build_athlas_grid_rgba(width, height, cell_h) else {
         crate::log!(
