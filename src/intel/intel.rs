@@ -9,7 +9,7 @@ use spin::Mutex;
 const INTEL_VENDOR_ID: u16 = 0x8086;
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
 const PCI_CLASS_DISPLAY: u8 = 0x03;
-const INTEL_ASYNC_PROBE_DELAY_MS: u64 = 5000;
+const INTEL_ASYNC_PROBE_DELAY_MS: u64 = 0;
 
 const INTEL_BXT_DE_PLL_CTL: usize = 0x6D000;
 const INTEL_BXT_DE_PLL_ENABLE: usize = 0x46070;

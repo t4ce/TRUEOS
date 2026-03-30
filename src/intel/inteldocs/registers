@@ -1,0 +1,94 @@
+intel/igpu770: rcs-regs label=post-timeout ctl=0x00000000 head=0x00000000 tail=0x00000010 start=0x00800000 mi_mode=0x00000200 mode=0x00000000 ctx_ctl=0x00000000 execlist_ctl=0x00000000 execlist_lo=0x00000001 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0xFFFFFFFE instps=0x00000001 bbaddr=0x00000000 bbaddr_udw=0x00000000
+intel/igpu770: reg-table label=post-timeout block=FORCEWAKE reg=FORCEWAKE_RENDER_GEN11 off=0x0A278 value=0x80010001 desc=render forcewake request register for uncached MMIO access into GT/RCS power wells
+intel/igpu770: reg-flag label=post-timeout reg=FORCEWAKE_RENDER_GEN11 flag=FORCEWAKE_KERNEL mask=0x00000001 value=0x00000001 desc=keep render/GT power-gated slices awake for kernel MMIO access
+intel/igpu770: reg-bits label=post-timeout reg=FORCEWAKE_RENDER_GEN11 raw=0x80010001 set_bits=0,16,31
+intel/igpu770: reg-table label=post-timeout block=FORCEWAKE reg=FORCEWAKE_RENDER_REF off=0x0A180 value=0x81280000 desc=reference-file primary render forcewake definition; kept alongside the Gen11 path for comparison
+intel/igpu770: reg-flag label=post-timeout reg=FORCEWAKE_RENDER_REF flag=none desc=no known tracked flags active
+intel/igpu770: reg-bits label=post-timeout reg=FORCEWAKE_RENDER_REF raw=0x81280000 set_bits=19,21,24,31
+intel/igpu770: reg-table label=post-timeout block=FORCEWAKE reg=FORCEWAKE_MEDIA off=0x0A184 value=0x00000000 desc=media engine forcewake request register
+intel/igpu770: reg-flag label=post-timeout reg=FORCEWAKE_MEDIA flag=none desc=no known tracked flags active
+intel/igpu770: reg-bits label=post-timeout reg=FORCEWAKE_MEDIA raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=FORCEWAKE reg=FORCEWAKE_GT off=0x0A188 value=0x00010000 desc=GT/common forcewake request register for shared GT infrastructure
+intel/igpu770: reg-flag label=post-timeout reg=FORCEWAKE_GT flag=none desc=no known tracked flags active
+intel/igpu770: reg-bits label=post-timeout reg=FORCEWAKE_GT raw=0x00010000 set_bits=16
+intel/igpu770: reg-table label=post-timeout block=FORCEWAKE reg=FORCEWAKE_ACK_RENDER off=0x00D84 value=0x00000001 desc=render forcewake acknowledge state mirrored by hardware
+intel/igpu770: reg-flag label=post-timeout reg=FORCEWAKE_ACK_RENDER flag=ACK_KERNEL mask=0x00000001 value=0x00000001 desc=render forcewake request acknowledged
+intel/igpu770: reg-bits label=post-timeout reg=FORCEWAKE_ACK_RENDER raw=0x00000001 set_bits=0
+intel/igpu770: reg-table label=post-timeout block=FORCEWAKE reg=FORCEWAKE_ACK_REF off=0x130040 value=0x00000000 desc=reference-file forcewake acknowledge register alias used on some platform definitions
+intel/igpu770: reg-flag label=post-timeout reg=FORCEWAKE_ACK_REF flag=none desc=no known tracked flags active
+intel/igpu770: reg-bits label=post-timeout reg=FORCEWAKE_ACK_REF raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RESET reg=GDRST off=0x0941C value=0x00000000 desc=graphics device reset control; one of the first places to inspect if engine MMIO writes do not stick
+intel/igpu770: reg-flag label=post-timeout reg=GDRST flag=none desc=no known tracked flags active
+intel/igpu770: reg-bits label=post-timeout reg=GDRST raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RING_CTL_REF off=0x02000 value=0x00000000 desc=reference-file ring control location for comparison against the currently used RCS offsets
+intel/igpu770: reg-flag label=post-timeout reg=RING_CTL_REF flag=none desc=no known tracked flags active
+intel/igpu770: reg-bits label=post-timeout reg=RING_CTL_REF raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RING_HEAD_REF off=0x02010 value=0x0000E000 desc=reference-file ring head location
+intel/igpu770: reg-bits label=post-timeout reg=RING_HEAD_REF raw=0x0000E000 set_bits=13,14,15
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RING_START_REF off=0x02018 value=0x0000E000 desc=reference-file ring start location
+intel/igpu770: reg-bits label=post-timeout reg=RING_START_REF raw=0x0000E000 set_bits=13,14,15
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_TAIL off=0x02030 value=0x00000010 desc=submission producer pointer; writing this kicks newly queued ring commands
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_TAIL raw=0x00000010 set_bits=4
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_HEAD off=0x02034 value=0x00000000 desc=consumer pointer advanced by the engine as commands retire
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_HEAD raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_START off=0x02038 value=0x00800000 desc=GGTT base address of the ring buffer backing this engine
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_START raw=0x00800000 set_bits=23
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_CTL off=0x0203C value=0x00000000 desc=ring enable/size register; low bits indicate validity, upper bits encode ring length
+intel/igpu770: reg-flag label=post-timeout reg=RCS_RING_CTL flag=none desc=no known tracked flags active
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_CTL raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_IPEIR off=0x02064 value=0x00000000 desc=exotic but useful: internal parser error syndrome for MI/parser faults
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_IPEIR raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_IPEHR off=0x02068 value=0x00000000 desc=exotic but useful: last parser instruction dword seen near an error or stall
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_IPEHR raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_INSTDONE off=0x0206C value=0xFFFFFFFE desc=engine unit completion bitmap; helps show which blocks are still busy
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_INSTDONE raw=0xFFFFFFFE set_bits=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_INSTPS off=0x02070 value=0x00000001 desc=instruction parser state snapshot, handy when head/tail are not moving
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_INSTPS raw=0x00000001 set_bits=0
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_ACTHD off=0x02074 value=0x00000000 desc=current active head address inside the command stream
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_ACTHD raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_HWS_PGA off=0x02080 value=0x0018F000 desc=hardware status page address used by the engine for status writes
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_HWS_PGA raw=0x0018F000 set_bits=12,13,14,15,19,20
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_HWSTAM off=0x02098 value=0xFFFFFFFF desc=hardware status mask; can hide interesting interrupt/status causes if over-masked
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_HWSTAM raw=0xFFFFFFFF set_bits=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_MI_MODE off=0x0209C value=0x00000200 desc=basic engine wake register: MI parser control with stop/idle state
+intel/igpu770: reg-flag label=post-timeout reg=RCS_RING_MI_MODE flag=MODE_IDLE mask=0x00000200 value=0x00000200 desc=ring is reporting idle state
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_MI_MODE raw=0x00000200 set_bits=9
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_IMR off=0x020A8 value=0x00000000 desc=interrupt mask register for the render engine
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_IMR raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_EIR off=0x020B0 value=0x00000000 desc=engine interrupt/error identity register for sticky fault causes
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_EIR raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_EMR off=0x020B4 value=0xFFFFFFFF desc=error mask register deciding which engine faults are suppressed
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_EMR raw=0xFFFFFFFF set_bits=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RING_RESET_CTL off=0x020C0 value=0x00000000 desc=per-engine reset control relative to the RCS base, included because reset may block normal wake/submit
+intel/igpu770: reg-flag label=post-timeout reg=RING_RESET_CTL flag=none desc=no known tracked flags active
+intel/igpu770: reg-bits label=post-timeout reg=RING_RESET_CTL raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_EXECLIST_STATUS_LO off=0x02234 value=0x00000001 desc=execlist status low dword; exotic but important for modern submission debugging
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_EXECLIST_STATUS_LO raw=0x00000001 set_bits=0
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_EXECLIST_STATUS_HI off=0x02238 value=0x00000000 desc=execlist status high dword paired with the low status register
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_EXECLIST_STATUS_HI raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_CONTEXT_CONTROL off=0x02244 value=0x00000000 desc=context save/restore control; useful when ring mode and execlist mode disagree
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_CONTEXT_CONTROL raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_MODE_GEN7 off=0x0229C value=0x00000000 desc=engine mode bits covering explicit TLB invalidate, PPGTT, and legacy-mode gating
+intel/igpu770: reg-flag label=post-timeout reg=RCS_RING_MODE_GEN7 flag=none desc=no known tracked flags active
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_MODE_GEN7 raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RING_EXECLIST_SQ_LO off=0x02510 value=0x00000000 desc=execlist submission queue low dword from the reference path
+intel/igpu770: reg-bits label=post-timeout reg=RING_EXECLIST_SQ_LO raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RING_EXECLIST_SQ_HI off=0x02514 value=0x00000000 desc=execlist submission queue high dword from the reference path
+intel/igpu770: reg-bits label=post-timeout reg=RING_EXECLIST_SQ_HI raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RCS_RING_EXECLIST_CONTROL off=0x02550 value=0x00000000 desc=execlist control; another exotic register that explains whether legacy ring submit is even expected to work
+intel/igpu770: reg-bits label=post-timeout reg=RCS_RING_EXECLIST_CONTROL raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=RCS reg=RING_CONTEXT_CONTROL_REF off=0x025A0 value=0x00000000 desc=reference-file context control location for modern submission path comparison
+intel/igpu770: reg-bits label=post-timeout reg=RING_CONTEXT_CONTROL_REF raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=DISPLAY_PWR reg=PWR_WELL_CTL off=0x45400 value=0x00000055 desc=display/GT power well control, useful on integrated graphics where display and GT power are coupled
+intel/igpu770: reg-bits label=post-timeout reg=PWR_WELL_CTL raw=0x00000055 set_bits=0,2,4,6
+intel/igpu770: reg-table label=post-timeout block=DISPLAY_PWR reg=PWR_WELL_CTL2 off=0x45404 value=0x000000FF desc=secondary display/GT power well control register
+intel/igpu770: reg-bits label=post-timeout reg=PWR_WELL_CTL2 raw=0x000000FF set_bits=0,1,2,3,4,5,6,7
+intel/igpu770: reg-table label=post-timeout block=DISPLAY_PWR reg=DC_STATE_EN off=0x45504 value=0x00000000 desc=deep C-state enable register that may influence whether GT power domains are reachable
+intel/igpu770: reg-bits label=post-timeout reg=DC_STATE_EN raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=GGTT reg=GFX_FLSH_CNTL_GEN6 off=0x101008 value=0x00000000 desc=graphics flush/TLB invalidation control after GGTT PTE programming
+intel/igpu770: reg-bits label=post-timeout reg=GFX_FLSH_CNTL_GEN6 raw=0x00000000 set_bits=none
+intel/igpu770: reg-table label=post-timeout block=DISPLAY_PWR reg=GT_DISP_PWRON off=0x138090 value=0x00000000 desc=GT display power-on request/visibility register used by the current code path
+intel/igpu770: reg-bits label=post-timeout reg=GT_DISP_PWRON raw=0x00000000 set_bits=none
+intel/igpu770: rcs-submit result completed=0 iters=4096 head0=0x00000000 tail0=0x00000010 headf=0x00000000 tailf=0x00000010 result0=0xC0DE7700 fb0=0x00000000 forcewake_held=1
+intel: display discovery follow-up probe after smoke
+intel: display-power probe phy_misc_a=0x23000000 phy_misc_b=0x20000000 tx_bmu=0xFB0F0FF0 de_pll_ctl=0xFFFFFFFF de_pll_enable=0xC0000022 dc_state_en=0x00000000 dc_state_debug=0x00000000 hotplug=0x00000000 gt_disp_pwron=0x00000000
