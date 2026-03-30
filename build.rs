@@ -139,7 +139,10 @@ fn module_path_for_source(manifest_dir: &Path, path: &Path) -> Result<String, St
         .strip_prefix(manifest_dir.join("src"))
         .map_err(|_| format!("{} is not under src/", path.display()))?;
 
-    if rel == Path::new("r/io.rs") || rel == Path::new("r/io_cursor.rs") {
+    if rel == Path::new("r/io.rs")
+        || rel == Path::new("r/gfx_cabi.rs")
+        || rel == Path::new("r/io_cursor.rs")
+    {
         return Ok(String::from("crate::r::io::cabi"));
     }
 
