@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::str;
 
@@ -26,13 +27,22 @@ pub struct SvgTextureInfo {
     pub height: u32,
 }
 
-#[derive(Clone, Copy)]
-struct GradientStop {
-    offset: f32,
-    rgba: [f32; 4],
+#[derive(Clone, Copy, Debug)]
+pub struct SvgMeshInfo {
+    pub width: u32,
+    pub height: u32,
+    pub svg_width: f32,
+    pub svg_height: f32,
 }
 
-enum PaintStyle {
+#[derive(Clone, Copy, Debug)]
+pub struct SvgGradientStop {
+    pub offset: f32,
+    pub rgba: [f32; 4],
+}
+
+#[derive(Clone, Debug)]
+pub enum SvgPaintStyle {
     Solid {
         rgba: [f32; 4],
     },
@@ -40,41 +50,53 @@ enum PaintStyle {
         p0: [f32; 2],
         p1: [f32; 2],
         spread: SpreadMethod,
-        stops: Vec<GradientStop>,
+        stops: Vec<SvgGradientStop>,
     },
     Radial {
         center: [f32; 2],
         radius: f32,
         spread: SpreadMethod,
-        stops: Vec<GradientStop>,
+        stops: Vec<SvgGradientStop>,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct SvgMeshPrimitive {
+    pub vertices: Vec<[f32; 2]>,
+    pub indices: Vec<u32>,
+    pub paint: SvgPaintStyle,
+}
+
+#[derive(Clone, Debug)]
+pub struct SvgMeshDocument {
+    pub info: SvgMeshInfo,
+    pub primitives: Vec<SvgMeshPrimitive>,
+}
+
+struct SvgMeshBuilder {
+    scale_x: f32,
+    scale_y: f32,
+    primitives: Vec<SvgMeshPrimitive>,
+    fill_tess: FillTessellator,
 }
 
 struct SvgRasterizer {
     width: u32,
     height: u32,
-    scale_x: f32,
-    scale_y: f32,
     pixels: Vec<u8>,
-    fill_tess: FillTessellator,
 }
 
-impl SvgRasterizer {
+impl SvgMeshBuilder {
     fn new(width: u32, height: u32, svg_w: f32, svg_h: f32) -> Self {
-        let len = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4);
         Self {
-            width,
-            height,
             scale_x: width as f32 / svg_w.max(1.0),
             scale_y: height as f32 / svg_h.max(1.0),
-            pixels: vec![0; len],
+            primitives: Vec::new(),
             fill_tess: FillTessellator::new(),
         }
     }
 
-    fn render_group(&mut self, group: &Group, inherited_opacity: f32) {
+    fn tessellate_group(&mut self, group: &Group, inherited_opacity: f32) {
         let group_opacity = inherited_opacity * group.opacity().get();
         if group_opacity <= 0.0 {
             return;
@@ -82,7 +104,7 @@ impl SvgRasterizer {
 
         for node in group.children() {
             match node {
-                Node::Group(group) => self.render_group(group, group_opacity),
+                Node::Group(group) => self.tessellate_group(group, group_opacity),
                 Node::Path(path) => {
                     if !path.is_visible() {
                         continue;
@@ -101,7 +123,7 @@ impl SvgRasterizer {
                     match path.paint_order() {
                         usvg::PaintOrder::FillAndStroke => {
                             if let Some(fill) = path.fill() {
-                                self.render_fill_path(
+                                self.push_fill_path(
                                     &path_data,
                                     fill,
                                     path.abs_bounding_box(),
@@ -109,7 +131,7 @@ impl SvgRasterizer {
                                 );
                             }
                             if let Some(stroke) = path.stroke() {
-                                self.render_stroke_path(
+                                self.push_stroke_path(
                                     &path_data,
                                     stroke,
                                     path.abs_stroke_bounding_box(),
@@ -119,7 +141,7 @@ impl SvgRasterizer {
                         }
                         usvg::PaintOrder::StrokeAndFill => {
                             if let Some(stroke) = path.stroke() {
-                                self.render_stroke_path(
+                                self.push_stroke_path(
                                     &path_data,
                                     stroke,
                                     path.abs_stroke_bounding_box(),
@@ -127,7 +149,7 @@ impl SvgRasterizer {
                                 );
                             }
                             if let Some(fill) = path.fill() {
-                                self.render_fill_path(
+                                self.push_fill_path(
                                     &path_data,
                                     fill,
                                     path.abs_bounding_box(),
@@ -143,7 +165,7 @@ impl SvgRasterizer {
         }
     }
 
-    fn render_fill_path(
+    fn push_fill_path(
         &mut self,
         path: &TinyPath,
         fill: &usvg::Fill,
@@ -179,11 +201,15 @@ impl SvgRasterizer {
             )
             .is_ok()
         {
-            self.rasterize_mesh(&buffers.vertices, &buffers.indices, &paint);
+            self.primitives.push(SvgMeshPrimitive {
+                vertices: buffers.vertices,
+                indices: buffers.indices,
+                paint,
+            });
         }
     }
 
-    fn render_stroke_path(
+    fn push_stroke_path(
         &mut self,
         path: &TinyPath,
         stroke: &Stroke,
@@ -221,12 +247,43 @@ impl SvgRasterizer {
             )
             .is_ok()
         {
-            self.rasterize_mesh(&buffers.vertices, &buffers.indices, &paint);
+            self.primitives.push(SvgMeshPrimitive {
+                vertices: buffers.vertices,
+                indices: buffers.indices,
+                paint,
+            });
+        }
+    }
+}
+
+impl SvgRasterizer {
+    fn new(width: u32, height: u32) -> Self {
+        let len = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
+        Self {
+            width,
+            height,
+            pixels: vec![0; len],
         }
     }
 
+    fn rasterize_document(&mut self, doc: &SvgMeshDocument) {
+        for primitive in &doc.primitives {
+            self.rasterize_mesh(
+                primitive.vertices.as_slice(),
+                primitive.indices.as_slice(),
+                &primitive.paint,
+            );
+        }
+    }
 
-    fn rasterize_mesh(&mut self, vertices: &[[f32; 2]], indices: &[u32], paint: &PaintStyle) {
+    fn rasterize_mesh(
+        &mut self,
+        vertices: &[[f32; 2]],
+        indices: &[u32],
+        paint: &SvgPaintStyle,
+    ) {
         for tri in indices.chunks_exact(3) {
             let Some(p0) = vertices.get(tri[0] as usize) else {
                 continue;
@@ -241,7 +298,13 @@ impl SvgRasterizer {
         }
     }
 
-    fn rasterize_triangle(&mut self, p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], paint: &PaintStyle) {
+    fn rasterize_triangle(
+        &mut self,
+        p0: [f32; 2],
+        p1: [f32; 2],
+        p2: [f32; 2],
+        paint: &SvgPaintStyle,
+    ) {
         let min_x = floorf(p0[0].min(p1[0]).min(p2[0])).max(0.0) as i32;
         let min_y = floorf(p0[1].min(p1[1]).min(p2[1])).max(0.0) as i32;
         let max_x = p0[0].max(p1[0]).max(p2[0]);
@@ -321,17 +384,43 @@ pub fn upload_svg_bytes_to_texture(tex_id: u32, bytes: &[u8]) -> Result<SvgTextu
     upload_svg_text_to_texture(tex_id, svg_text)
 }
 
+pub fn tessellate_svg_bytes(bytes: &[u8]) -> Result<SvgMeshDocument, i32> {
+    let svg_text = str::from_utf8(bytes).map_err(|_| ERR_SVG_INVALID_UTF8)?;
+    tessellate_svg_text(svg_text)
+}
+
 pub fn rasterize_svg_bytes_rgba(bytes: &[u8]) -> Result<(SvgTextureInfo, Vec<u8>), i32> {
     let svg_text = str::from_utf8(bytes).map_err(|_| ERR_SVG_INVALID_UTF8)?;
     rasterize_svg_text_rgba(svg_text)
 }
 
-pub fn rasterize_svg_text_rgba(svg_text: &str) -> Result<(SvgTextureInfo, Vec<u8>), i32> {
+pub fn tessellate_svg_text(svg_text: &str) -> Result<SvgMeshDocument, i32> {
     let tree = Tree::from_str(svg_text, &Options::default()).map_err(|_| ERR_SVG_PARSE)?;
     let (width, height, svg_w, svg_h) = choose_output_size(&tree)?;
-    let mut raster = SvgRasterizer::new(width, height, svg_w, svg_h);
-    raster.render_group(tree.root(), 1.0);
-    Ok((SvgTextureInfo { width, height }, raster.pixels))
+    let mut builder = SvgMeshBuilder::new(width, height, svg_w, svg_h);
+    builder.tessellate_group(tree.root(), 1.0);
+    Ok(SvgMeshDocument {
+        info: SvgMeshInfo {
+            width,
+            height,
+            svg_width: svg_w,
+            svg_height: svg_h,
+        },
+        primitives: builder.primitives,
+    })
+}
+
+pub fn rasterize_svg_text_rgba(svg_text: &str) -> Result<(SvgTextureInfo, Vec<u8>), i32> {
+    let mesh = tessellate_svg_text(svg_text)?;
+    let mut raster = SvgRasterizer::new(mesh.info.width, mesh.info.height);
+    raster.rasterize_document(&mesh);
+    Ok((
+        SvgTextureInfo {
+            width: mesh.info.width,
+            height: mesh.info.height,
+        },
+        raster.pixels,
+    ))
 }
 
 pub fn upload_svg_text_to_texture(tex_id: u32, svg_text: &str) -> Result<SvgTextureInfo, i32> {
@@ -379,13 +468,13 @@ fn build_paint_style(
     scale_x: f32,
     scale_y: f32,
     opacity: f32,
-) -> Option<PaintStyle> {
+) -> Option<SvgPaintStyle> {
     if opacity <= 0.0 {
         return None;
     }
 
     match paint {
-        Paint::Color(color) => Some(PaintStyle::Solid {
+        Paint::Color(color) => Some(SvgPaintStyle::Solid {
             rgba: [
                 color.red as f32 / 255.0,
                 color.green as f32 / 255.0,
@@ -416,7 +505,7 @@ fn build_paint_style(
                 scale_x,
                 scale_y,
             );
-            Some(PaintStyle::Linear {
+            Some(SvgPaintStyle::Linear {
                 p0,
                 p1,
                 spread: gradient.spread_method(),
@@ -438,7 +527,7 @@ fn build_paint_style(
                 scale_y,
             );
             let radius = gradient.r().get() * scaled_width(scale_x, scale_y);
-            Some(PaintStyle::Radial {
+            Some(SvgPaintStyle::Radial {
                 center,
                 radius: radius.max(1.0),
                 spread: gradient.spread_method(),
@@ -449,10 +538,10 @@ fn build_paint_style(
     }
 }
 
-fn collect_gradient_stops(stops: &[usvg::Stop], opacity: f32) -> Vec<GradientStop> {
+fn collect_gradient_stops(stops: &[usvg::Stop], opacity: f32) -> Vec<SvgGradientStop> {
     let mut out = Vec::with_capacity(stops.len().max(2));
     for stop in stops {
-        out.push(GradientStop {
+        out.push(SvgGradientStop {
             offset: stop.offset().get(),
             rgba: [
                 stop.color().red as f32 / 255.0,
@@ -582,10 +671,10 @@ fn edge(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> f32 {
     (p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])
 }
 
-fn sample_paint(paint: &PaintStyle, x: f32, y: f32) -> [f32; 4] {
+fn sample_paint(paint: &SvgPaintStyle, x: f32, y: f32) -> [f32; 4] {
     match paint {
-        PaintStyle::Solid { rgba } => *rgba,
-        PaintStyle::Linear {
+        SvgPaintStyle::Solid { rgba } => *rgba,
+        SvgPaintStyle::Linear {
             p0,
             p1,
             spread,
@@ -600,7 +689,7 @@ fn sample_paint(paint: &PaintStyle, x: f32, y: f32) -> [f32; 4] {
             let t = ((x - p0[0]) * dx + (y - p0[1]) * dy) / len2;
             sample_stops(stops, spread_t(*spread, t))
         }
-        PaintStyle::Radial {
+        SvgPaintStyle::Radial {
             center,
             radius,
             spread,
@@ -628,7 +717,7 @@ fn spread_t(spread: SpreadMethod, t: f32) -> f32 {
     }
 }
 
-fn sample_stops(stops: &[GradientStop], t: f32) -> [f32; 4] {
+fn sample_stops(stops: &[SvgGradientStop], t: f32) -> [f32; 4] {
     if stops.is_empty() {
         return [0.0; 4];
     }

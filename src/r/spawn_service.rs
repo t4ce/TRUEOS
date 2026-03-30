@@ -814,7 +814,6 @@ const UI2_DEMOS: &[Ui2DemoTaskSpec] = &[
     UI2_BGRT_DEMO,
     UI2_MANDELBROT_DEMO,
     UI2_PARTICLE_DEMO,
-    UI2_SVG_DEMO,
 ];
 
 fn spawn_gfx_intel_readiness_probe(spawner: Spawner) -> SpawnAttempt {
@@ -1154,7 +1153,6 @@ static TASKS: &[TaskSpec] = &[
     UI2_BGRT_DEMO.task_spec(),
     UI2_MANDELBROT_DEMO.task_spec(),
     UI2_PARTICLE_DEMO.task_spec(),
-    UI2_SVG_DEMO.task_spec(),
     TaskSpec::enabled(
         "gfx-intel-readiness-probe",
         crate::r::readiness::GFX_INTEL_CLAIMED,
