@@ -36,8 +36,8 @@ pub(crate) static INTEL_PRESENT_LOGS: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) const GFX_CABI_FRAME_DEBUG_LOGS: bool = false;
 pub(crate) static GFX_CABI_SUBMIT_BUDGET_LOGS: AtomicU32 = AtomicU32::new(0);
-pub(crate) static GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
-pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(false);
+pub(crate) static GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS: AtomicU32 = AtomicU32::new(1);
+pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(true);
 
 pub(crate) static XHCI_LOG_PORTS_ON_INIT: AtomicBool = AtomicBool::new(false);
 pub(crate) const XHCI_TRACE_EVENT_TRBS: bool = false;
