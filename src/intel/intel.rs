@@ -731,6 +731,7 @@ pub async fn scanout_smoke_task() {
         super::intel_igpu770::ggtt_map_smoke_objects_once();
         super::intel_igpu770::ggtt_bcs_smoke_test_once();
         super::intel_igpu770::ggtt_blt_smoke_test_once();
+        super::xelp_media_ngin::kickoff_once();
     }
 
     let defer_display =
