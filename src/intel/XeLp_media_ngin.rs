@@ -3,7 +3,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
 use super::intel_guc;
-use super::intel_igpu770::{Igpu770WarmState, forcewake_all_acquire, mmio_read32, warm_state};
+use super::intel_igpu770::{
+    Igpu770WarmState, forcewake_all_acquire, forcewake_media_refresh, mmio_read32, warm_state,
+};
 
 const MAX_MEDIA_ENGINES: usize = 4;
 const MAX_MEDIA_API_ROUTES: usize = 5;
@@ -579,6 +581,11 @@ const fn preferred_transport(guc_ready: bool) -> MediaSubmissionTransport {
     }
 }
 
+#[inline]
+fn media_command_encoding_ready(guc_ready: bool, wake: MediaForcewakeSnapshot) -> bool {
+    guc_ready && (((wake.global_ack & FORCEWAKE_KERNEL) != 0) || wake.awake_count != 0)
+}
+
 fn stored_kickoff_state() -> Option<MediaKickoffState> {
     *MEDIA_KICKOFF_STATE.lock()
 }
@@ -769,7 +776,12 @@ fn observability_plan(
     }
 }
 
-fn build_engine_plan(slot: usize, desc: MediaEngineDescriptor, guc_ready: bool) -> MediaEnginePlan {
+fn build_engine_plan(
+    slot: usize,
+    desc: MediaEngineDescriptor,
+    guc_ready: bool,
+    command_encoding_ready: bool,
+) -> MediaEnginePlan {
     let resources = MediaResourcePlan {
         shared_status_gpu_addr: MEDIA_SHARED_STATUS_GPU_ADDR,
         shared_status_bytes: MEDIA_SHARED_STATUS_BYTES,
@@ -800,7 +812,7 @@ fn build_engine_plan(slot: usize, desc: MediaEngineDescriptor, guc_ready: bool) 
         preferred_transport(guc_ready)
     };
     let next_stage = match desc.provisioning {
-        MediaProvisioning::Kickoff if guc_ready => MediaKickoffStage::CommandEncoding,
+        MediaProvisioning::Kickoff if command_encoding_ready => MediaKickoffStage::CommandEncoding,
         MediaProvisioning::Kickoff => MediaKickoffStage::SubmissionWiring,
         MediaProvisioning::ScaleOutReserve => MediaKickoffStage::ResourcePlanning,
         MediaProvisioning::Disabled => MediaKickoffStage::Discovery,
@@ -921,6 +933,8 @@ fn snapshot_engine_runtime(
 fn build_kickoff_state(warm: Igpu770WarmState) -> MediaKickoffState {
     let topology = current_topology();
     let guc_ready = intel_guc::ready();
+    let wake = snapshot_forcewake(warm);
+    let command_encoding_ready = media_command_encoding_ready(guc_ready, wake);
     let transport = preferred_transport(guc_ready);
     let mut plans = [MediaEnginePlan::empty(); MAX_MEDIA_ENGINES];
     let mut runtimes = [MediaEngineRuntimeSnapshot::empty(); MAX_MEDIA_ENGINES];
@@ -928,7 +942,7 @@ fn build_kickoff_state(warm: Igpu770WarmState) -> MediaKickoffState {
     let mut idx = 0usize;
     while idx < topology.planned_engine_count {
         let desc = topology.engines[idx];
-        plans[idx] = build_engine_plan(idx, desc, guc_ready);
+        plans[idx] = build_engine_plan(idx, desc, guc_ready, command_encoding_ready);
         runtimes[idx] = snapshot_engine_runtime(warm, desc);
         idx += 1;
     }
@@ -939,13 +953,15 @@ fn build_kickoff_state(warm: Igpu770WarmState) -> MediaKickoffState {
         plans,
         runtime_count: topology.planned_engine_count,
         runtimes,
-        wake: snapshot_forcewake(warm),
+        wake,
         api: current_api_shape(transport),
         preferred_transport: transport,
         guc_ready,
         guc_status: intel_guc::status(warm),
-        stage: if guc_ready {
+        stage: if command_encoding_ready {
             MediaKickoffStage::CommandEncoding
+        } else if guc_ready {
+            MediaKickoffStage::SubmissionWiring
         } else {
             MediaKickoffStage::ResourcePlanning
         },
@@ -979,8 +995,11 @@ pub(crate) fn draft_job_for_workload(workload: MediaWorkloadKind) -> Option<Medi
     let state = stored_kickoff_state();
     let topology = state.map(|s| s.topology).unwrap_or_else(current_topology);
     let guc_ready = state.map(|s| s.guc_ready).unwrap_or_else(intel_guc::ready);
+    let command_encoding_ready = state
+        .map(|s| media_command_encoding_ready(s.guc_ready, s.wake))
+        .unwrap_or(guc_ready);
     let (slot, desc) = select_engine_for_workload(topology, workload)?;
-    let mut plan = build_engine_plan(slot, desc, guc_ready);
+    let mut plan = build_engine_plan(slot, desc, guc_ready, command_encoding_ready);
     plan.submission.workload = workload;
     Some(MediaJobDraft {
         engine: plan.descriptor,
@@ -1097,6 +1116,7 @@ pub(crate) fn kickoff_once() {
     };
 
     let forcewake_ack = forcewake_all_acquire(warm);
+    let _ = forcewake_media_refresh(warm, "media-kickoff");
     let state = build_kickoff_state(warm);
     {
         let mut slot = MEDIA_KICKOFF_STATE.lock();

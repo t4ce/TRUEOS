@@ -466,6 +466,61 @@ fn log_media_forcewake_coverage(warm: Igpu770WarmState, label: &str) -> usize {
     awake
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(super) struct MediaForcewakeRefresh {
+    pub req_before: u32,
+    pub ack_before: u32,
+    pub req_after: u32,
+    pub ack_after: u32,
+    pub req_latched: bool,
+    pub acked: bool,
+    pub req_iters: usize,
+    pub ack_iters: usize,
+    pub awake_count: usize,
+}
+
+pub(super) fn forcewake_media_refresh(
+    warm: Igpu770WarmState,
+    label: &str,
+) -> MediaForcewakeRefresh {
+    let req_before = mmio_read32(warm, FORCEWAKE_MEDIA_GEN11);
+    let ack_before = mmio_read32(warm, FORCEWAKE_ACK_MEDIA);
+
+    let _ = mmio_write32(warm, FORCEWAKE_MEDIA_GEN11, masked_bit_enable(FORCEWAKE_KERNEL));
+    let (req_latched, req_after, req_iters) =
+        wait_forcewake_req_latched(warm, FORCEWAKE_MEDIA_GEN11, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
+    let (acked, ack_after, ack_iters) =
+        wait_forcewake_domain_ack(warm, FORCEWAKE_ACK_MEDIA, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
+    let awake_count = log_media_forcewake_coverage(warm, label);
+
+    crate::log!(
+        "intel/igpu770: forcewake-media-refresh label={} req_before=0x{:08X} req_after=0x{:08X} ack_before=0x{:08X} ack_after=0x{:08X} req_latched={} acked={} req_iters={} ack_iters={} awake={}/{}\n",
+        label,
+        req_before,
+        req_after,
+        ack_before,
+        ack_after,
+        req_latched as u8,
+        acked as u8,
+        req_iters,
+        ack_iters,
+        awake_count,
+        MEDIA_FORCEWAKE_ACK_REGS.len()
+    );
+
+    MediaForcewakeRefresh {
+        req_before,
+        ack_before,
+        req_after,
+        ack_after,
+        req_latched,
+        acked,
+        req_iters,
+        ack_iters,
+        awake_count,
+    }
+}
+
 pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
     let ack_before = mmio_read32(warm, FORCEWAKE_ACK_RENDER);
     let media_req_before = mmio_read32(warm, FORCEWAKE_MEDIA_GEN11);
@@ -1938,7 +1993,6 @@ pub fn ggtt_bcs_smoke_test_once() {
         batch_dwords,
         xelp_copy_ngin::ColorFillSmokePlan {
             surface_gpu_addr,
-            dst_gpu_addr: fill.dst_gpu_addr,
             dst_x: fill.dst_x as u32,
             dst_y: fill.dst_y as u32,
             pitch_bytes: fill.pitch as u32,
@@ -2114,12 +2168,11 @@ pub fn ggtt_bcs_smoke_test_once() {
                 result[3]
             );
         }
-        if result[2] == BCS_EXEC_RESULT_POST_COPY || result[3] == BCS_EXEC_RESULT_DONE {
+        if result[3] == BCS_EXEC_RESULT_DONE {
             completed = true;
             break;
         }
         if execlist_lo != execlist_lo0 || execlist_hi != execlist_hi0 {
-            completed = true;
             break;
         }
         core::hint::spin_loop();
