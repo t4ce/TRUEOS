@@ -1929,10 +1929,25 @@ pub fn ggtt_bcs_smoke_test_once() {
             warm.batch_len / core::mem::size_of::<u32>(),
         )
     };
+    let Some(surface_byte_off) = fill
+        .dst_y
+        .checked_mul(fill.pitch)
+        .and_then(|off| off.checked_add(fill.dst_x.saturating_mul(4)))
+    else {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=surface-base-overflow\n");
+        return;
+    };
+    let Some(surface_gpu_addr) = fill.dst_gpu_addr.checked_sub(surface_byte_off as u64) else {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=surface-base-underflow\n");
+        return;
+    };
     let batch_tail_bytes = match xelp_copy_ngin::build_color_fill_smoke_batch_bytes(
         batch_dwords,
         xelp_copy_ngin::ColorFillSmokePlan {
+            surface_gpu_addr,
             dst_gpu_addr: fill.dst_gpu_addr,
+            dst_x: fill.dst_x as u32,
+            dst_y: fill.dst_y as u32,
             pitch_bytes: fill.pitch as u32,
             rect_w: fill.rect_w as u32,
             rect_h: fill.rect_h as u32,
