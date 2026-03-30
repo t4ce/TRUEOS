@@ -1,7 +1,7 @@
-pub mod backends;
-pub mod cursor;
 #[path = "althlasfont/athlasfont.rs"]
 pub mod athlasfont;
+pub mod backends;
+pub mod cursor;
 pub use athlasfont as imba_athlas;
 pub mod jpeg_codec;
 pub mod lyon;
@@ -110,8 +110,8 @@ pub struct System {
 }
 
 fn finalize_backend_init() {
-    let backend_ready = with_system(|sys| !matches!(sys.backend, backends::Backend::None(_)))
-        .unwrap_or(false);
+    let backend_ready =
+        with_system(|sys| !matches!(sys.backend, backends::Backend::None(_))).unwrap_or(false);
     if !backend_ready {
         return;
     }

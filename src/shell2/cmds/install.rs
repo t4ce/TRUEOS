@@ -50,10 +50,7 @@ pub(crate) fn submit_install(
     disk: crate::disc::block::DeviceHandle,
 ) {
     let Some(bootx64) = crate::limine::install_bootx64_bytes() else {
-        print_shell_line(
-            io,
-            "install: missing boot payload module `trueos.install.bootx64`",
-        );
+        print_shell_line(io, "install: missing boot payload module `trueos.install.bootx64`");
         return;
     };
     let Some(kernel) = crate::limine::install_kernel_bytes() else {
@@ -65,12 +62,7 @@ pub(crate) fn submit_install(
     let info = disk.info();
     print_matrix_target_line(
         &target,
-        alloc::format!(
-            "install: starting on disk id={} ({})",
-            info.id.raw(),
-            info.id
-        )
-        .as_str(),
+        alloc::format!("install: starting on disk id={} ({})", info.id.raw(), info.id).as_str(),
     );
 
     set_matrix_target_active(&target, true);

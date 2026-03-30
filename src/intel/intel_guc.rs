@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use super::intel_igpu770::{forcewake_all_acquire, mmio_read32, mmio_write32, Igpu770WarmState};
+use super::intel_igpu770::{Igpu770WarmState, forcewake_all_acquire, mmio_read32, mmio_write32};
 
 const GUC_MODULE_STRING: &[u8] = b"trueos.fw.guc";
 const ZSTD_MAGIC: u32 = 0xFD2F_B528;
@@ -124,7 +124,8 @@ static GUC_FW_BLOB_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::At
 static GUC_FW_DMA_OFFSET: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 static GUC_FW_RSA_OFFSET: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 static GUC_FW_RSA_SIZE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-static GUC_FW_PRIVATE_DATA_SIZE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static GUC_FW_PRIVATE_DATA_SIZE: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
 
 #[derive(Copy, Clone, Debug)]
 pub struct GucFirmwareInfo {
@@ -360,24 +361,38 @@ fn find_guc_css_layout(blob: &[u8]) -> Option<(usize, GucCssLayout)> {
     let key_size_0 = read_le_u32(blob, 20).unwrap_or(0);
     let modulus_0 = read_le_u32(blob, 24).unwrap_or(0);
     let exp_0 = read_le_u32(blob, 28).unwrap_or(0);
-    let fixed_calc = header_size_0.saturating_sub(key_size_0).saturating_sub(modulus_0).saturating_sub(exp_0);
+    let fixed_calc = header_size_0
+        .saturating_sub(key_size_0)
+        .saturating_sub(modulus_0)
+        .saturating_sub(exp_0);
     crate::log!(
         "intel/igpu770: guc-fw css-parse-fail off=0 module_type=0x{:X} header_size_dw=0x{:X} size_dw=0x{:X} key_dw=0x{:X} mod_dw=0x{:X} exp_dw=0x{:X} fixed_calc=0x{:X}\n",
-        module_type_0, header_size_0, size_0, key_size_0, modulus_0, exp_0, fixed_calc
+        module_type_0,
+        header_size_0,
+        size_0,
+        key_size_0,
+        modulus_0,
+        exp_0,
+        fixed_calc
     );
 
     // Search 4-byte aligned offsets
-    let end = blob.len().saturating_sub(core::mem::size_of::<UcCssHeader>());
+    let end = blob
+        .len()
+        .saturating_sub(core::mem::size_of::<UcCssHeader>());
     for off in (4..=end).step_by(4) {
         if let Some(layout) = parse_guc_css_layout_at(blob, off) {
             crate::log!(
                 "intel/igpu770: guc-fw css-found off=0x{:X} dma_bytes=0x{:X} rsa_off=0x{:X} rsa_size=0x{:X}\n",
-                off, layout.dma_bytes, layout.rsa_offset, layout.rsa_size
+                off,
+                layout.dma_bytes,
+                layout.rsa_offset,
+                layout.rsa_size
             );
             return Some((off, layout));
         }
     }
-    
+
     crate::log!("intel/igpu770: guc-fw css-search-failed no valid header found in blob\n");
     None
 }
@@ -492,11 +507,7 @@ fn build_minimal_ads(warm: Igpu770WarmState) -> bool {
         policies_off + core::mem::offset_of!(GucPolicies, dpc_promote_time),
         GLOBAL_POLICY_DEFAULT_DPC_PROMOTE_TIME_US,
     );
-    let _ = write_u32_le(
-        buf,
-        policies_off + core::mem::offset_of!(GucPolicies, is_valid),
-        1,
-    );
+    let _ = write_u32_le(buf, policies_off + core::mem::offset_of!(GucPolicies, is_valid), 1);
     let _ = write_u32_le(
         buf,
         policies_off + core::mem::offset_of!(GucPolicies, max_num_work_items),
@@ -536,16 +547,9 @@ fn build_minimal_ads(warm: Igpu770WarmState) -> bool {
         ads_off + core::mem::offset_of!(GucAds, scheduler_policies),
         scheduler_policies,
     );
-    let _ = write_u32_le(
-        buf,
-        ads_off + core::mem::offset_of!(GucAds, gt_system_info),
-        gt_system_info,
-    );
-    let _ = write_u32_le(
-        buf,
-        ads_off + core::mem::offset_of!(GucAds, private_data),
-        private_data,
-    );
+    let _ =
+        write_u32_le(buf, ads_off + core::mem::offset_of!(GucAds, gt_system_info), gt_system_info);
+    let _ = write_u32_le(buf, ads_off + core::mem::offset_of!(GucAds, private_data), private_data);
 
     dma_cache_flush(warm.guc_ads_virt as *const u8, warm.guc_ads_len);
     crate::log!(
@@ -726,22 +730,22 @@ pub fn load_firmware_from_module(warm_align: usize) -> GucFirmwareInfo {
     }
 
     let blob_magic = read_le_u32(blob, 0).unwrap_or(0);
-    
+
     // Log first 4 dwords (16 bytes) in both hex bytes and dword LE format
     let d0 = read_le_u32(blob, 0).unwrap_or(0);
     let d1 = read_le_u32(blob, 4).unwrap_or(0);
     let d2 = read_le_u32(blob, 8).unwrap_or(0);
     let d3 = read_le_u32(blob, 12).unwrap_or(0);
-    let b0  = blob.get(0).copied().unwrap_or(0);
-    let b1  = blob.get(1).copied().unwrap_or(0);
-    let b2  = blob.get(2).copied().unwrap_or(0);
-    let b3  = blob.get(3).copied().unwrap_or(0);
-    let b4  = blob.get(4).copied().unwrap_or(0);
-    let b5  = blob.get(5).copied().unwrap_or(0);
-    let b6  = blob.get(6).copied().unwrap_or(0);
-    let b7  = blob.get(7).copied().unwrap_or(0);
-    let b8  = blob.get(8).copied().unwrap_or(0);
-    let b9  = blob.get(9).copied().unwrap_or(0);
+    let b0 = blob.get(0).copied().unwrap_or(0);
+    let b1 = blob.get(1).copied().unwrap_or(0);
+    let b2 = blob.get(2).copied().unwrap_or(0);
+    let b3 = blob.get(3).copied().unwrap_or(0);
+    let b4 = blob.get(4).copied().unwrap_or(0);
+    let b5 = blob.get(5).copied().unwrap_or(0);
+    let b6 = blob.get(6).copied().unwrap_or(0);
+    let b7 = blob.get(7).copied().unwrap_or(0);
+    let b8 = blob.get(8).copied().unwrap_or(0);
+    let b9 = blob.get(9).copied().unwrap_or(0);
     let b10 = blob.get(10).copied().unwrap_or(0);
     let b11 = blob.get(11).copied().unwrap_or(0);
     let b12 = blob.get(12).copied().unwrap_or(0);
@@ -750,11 +754,29 @@ pub fn load_firmware_from_module(warm_align: usize) -> GucFirmwareInfo {
     let b15 = blob.get(15).copied().unwrap_or(0);
     crate::log!(
         "intel/igpu770: guc-fw hdr-dwords d0=0x{:08X} d1=0x{:08X} d2=0x{:08X} d3=0x{:08X}\n",
-        d0, d1, d2, d3
+        d0,
+        d1,
+        d2,
+        d3
     );
     crate::log!(
         "intel/igpu770: guc-fw hdr-bytes[0..16]={:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
-        b0,b1,b2,b3,b4,b5,b6,b7,b8,b9,b10,b11,b12,b13,b14,b15
+        b0,
+        b1,
+        b2,
+        b3,
+        b4,
+        b5,
+        b6,
+        b7,
+        b8,
+        b9,
+        b10,
+        b11,
+        b12,
+        b13,
+        b14,
+        b15
     );
     // Check if firmware is zstd-compressed (should have been decompressed, but guard against it)
     if blob_magic == ZSTD_MAGIC {
@@ -780,12 +802,12 @@ pub fn load_firmware_from_module(warm_align: usize) -> GucFirmwareInfo {
     }
     dma_cache_flush(virt as *const u8, alloc_len);
 
-    let (css_off, xfer_len, rsa_off, rsa_size) = if let Some((off, layout)) = find_guc_css_layout(blob)
-    {
-        (off, layout.dma_bytes, layout.rsa_offset, layout.rsa_size)
-    } else {
-        (0usize, blob.len(), 0usize, 0usize)
-    };
+    let (css_off, xfer_len, rsa_off, rsa_size) =
+        if let Some((off, layout)) = find_guc_css_layout(blob) {
+            (off, layout.dma_bytes, layout.rsa_offset, layout.rsa_size)
+        } else {
+            (0usize, blob.len(), 0usize, 0usize)
+        };
     let private_data_size = if css_off
         .checked_add(core::mem::size_of::<UcCssHeader>())
         .is_some_and(|end| end <= blob.len())
@@ -896,8 +918,12 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
     let fw_rsa_size = GUC_FW_RSA_SIZE.load(Ordering::Acquire);
 
     // Parse and log CSS header struct fields for deeper debugging
-    let blob = unsafe { core::slice::from_raw_parts(warm.guc_fw_virt as *const u8, warm.guc_fw_len) };
-    if fw_dma_off.checked_add(core::mem::size_of::<UcCssHeader>()).map_or(false, |e| e <= warm.guc_fw_len) {
+    let blob =
+        unsafe { core::slice::from_raw_parts(warm.guc_fw_virt as *const u8, warm.guc_fw_len) };
+    if fw_dma_off
+        .checked_add(core::mem::size_of::<UcCssHeader>())
+        .map_or(false, |e| e <= warm.guc_fw_len)
+    {
         let css_ptr = unsafe { blob.as_ptr().add(fw_dma_off) as *const UcCssHeader };
         let css = unsafe { css_ptr.read_unaligned() };
         // Extract fields from the read struct (not by reference to avoid alignment issues)
@@ -937,7 +963,12 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
                 let rsa_dwords = core::cmp::min(fw_rsa_size / 4, UOS_RSA_SCRATCH_COUNT);
                 for i in 0..rsa_dwords {
                     let off = fw_rsa_off + i * 4;
-                    let v = u32::from_le_bytes([blob[off], blob[off + 1], blob[off + 2], blob[off + 3]]);
+                    let v = u32::from_le_bytes([
+                        blob[off],
+                        blob[off + 1],
+                        blob[off + 2],
+                        blob[off + 3],
+                    ]);
                     let _ = mmio_write32(warm, UOS_RSA_SCRATCH_BASE + i * 4, v);
                 }
             }
@@ -948,7 +979,8 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
     let computed_wopcm = compute_gen11_guc_wopcm_layout(copy_size, 0);
     // Match i915 behavior: respect pre-locked WOPCM regs (common on depriv platforms).
     // Only program a fallback partition if firmware/BIOS has not already locked a valid one.
-    let wopcm_locked = (wopcm_size & GUC_WOPCM_SIZE_LOCKED) != 0 && (wopcm_base & GUC_WOPCM_OFFSET_VALID) != 0;
+    let wopcm_locked =
+        (wopcm_size & GUC_WOPCM_SIZE_LOCKED) != 0 && (wopcm_base & GUC_WOPCM_OFFSET_VALID) != 0;
     let wopcm_size_cfg = if wopcm_locked {
         wopcm_size
     } else if let Some((_, size)) = computed_wopcm {

@@ -68,48 +68,16 @@ pub fn build_fragment_shader_tgsi_unrolled(iterations: u32) -> String {
 
     // Derive constants from the incoming white vertex color so we do not need TGSI immediates.
     push("MOV TEMP[0].x, IN[1].xxxx", &mut shader, &mut line); // 1
-    push(
-        "ADD TEMP[0].y, TEMP[0].xxxx, TEMP[0].xxxx",
-        &mut shader,
-        &mut line,
-    ); // 2
-    push(
-        "ADD TEMP[0].z, TEMP[0].yyyy, TEMP[0].xxxx",
-        &mut shader,
-        &mut line,
-    ); // 3
-    push(
-        "ADD TEMP[0].w, TEMP[0].yyyy, TEMP[0].yyyy",
-        &mut shader,
-        &mut line,
-    ); // 4
-    push(
-        "SUB TEMP[1].w, TEMP[0].xxxx, TEMP[0].xxxx",
-        &mut shader,
-        &mut line,
-    ); // 0
+    push("ADD TEMP[0].y, TEMP[0].xxxx, TEMP[0].xxxx", &mut shader, &mut line); // 2
+    push("ADD TEMP[0].z, TEMP[0].yyyy, TEMP[0].xxxx", &mut shader, &mut line); // 3
+    push("ADD TEMP[0].w, TEMP[0].yyyy, TEMP[0].yyyy", &mut shader, &mut line); // 4
+    push("SUB TEMP[1].w, TEMP[0].xxxx, TEMP[0].xxxx", &mut shader, &mut line); // 0
 
     // Map uv -> complex plane: x=-2..1, y=1..-1.
-    push(
-        "MUL TEMP[1].x, IN[0].xxxx, TEMP[0].zzzz",
-        &mut shader,
-        &mut line,
-    ); // u*3
-    push(
-        "SUB TEMP[1].x, TEMP[1].xxxx, TEMP[0].yyyy",
-        &mut shader,
-        &mut line,
-    ); // -2 + u*3
-    push(
-        "MUL TEMP[1].y, IN[0].yyyy, TEMP[0].yyyy",
-        &mut shader,
-        &mut line,
-    ); // v*2
-    push(
-        "SUB TEMP[1].y, TEMP[0].xxxx, TEMP[1].yyyy",
-        &mut shader,
-        &mut line,
-    ); // 1 - v*2
+    push("MUL TEMP[1].x, IN[0].xxxx, TEMP[0].zzzz", &mut shader, &mut line); // u*3
+    push("SUB TEMP[1].x, TEMP[1].xxxx, TEMP[0].yyyy", &mut shader, &mut line); // -2 + u*3
+    push("MUL TEMP[1].y, IN[0].yyyy, TEMP[0].yyyy", &mut shader, &mut line); // v*2
+    push("SUB TEMP[1].y, TEMP[0].xxxx, TEMP[1].yyyy", &mut shader, &mut line); // 1 - v*2
 
     push("MOV TEMP[2].x, TEMP[1].wwww", &mut shader, &mut line); // zr = 0
     push("MOV TEMP[2].y, TEMP[1].wwww", &mut shader, &mut line); // zi = 0
@@ -117,96 +85,24 @@ pub fn build_fragment_shader_tgsi_unrolled(iterations: u32) -> String {
     push("MOV TEMP[2].w, TEMP[1].wwww", &mut shader, &mut line); // iter sum = 0
 
     for _ in 0..iterations {
-        push(
-            "MUL TEMP[3].x, TEMP[2].xxxx, TEMP[2].xxxx",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "MUL TEMP[3].y, TEMP[2].yyyy, TEMP[2].yyyy",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "MUL TEMP[3].z, TEMP[2].xxxx, TEMP[2].yyyy",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "ADD TEMP[3].w, TEMP[3].xxxx, TEMP[3].yyyy",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "SLT TEMP[4].x, TEMP[3].wwww, TEMP[0].wwww",
-            &mut shader,
-            &mut line,
-        ); // mag2 < 4
-        push(
-            "MUL TEMP[4].x, TEMP[4].xxxx, TEMP[2].zzzz",
-            &mut shader,
-            &mut line,
-        ); // alive mask
-        push(
-            "SUB TEMP[4].y, TEMP[0].xxxx, TEMP[4].xxxx",
-            &mut shader,
-            &mut line,
-        ); // inverse mask
-        push(
-            "SUB TEMP[4].z, TEMP[3].xxxx, TEMP[3].yyyy",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "ADD TEMP[4].z, TEMP[4].zzzz, TEMP[1].xxxx",
-            &mut shader,
-            &mut line,
-        ); // new zr
-        push(
-            "ADD TEMP[4].w, TEMP[3].zzzz, TEMP[3].zzzz",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "ADD TEMP[4].w, TEMP[4].wwww, TEMP[1].yyyy",
-            &mut shader,
-            &mut line,
-        ); // new zi
-        push(
-            "MUL TEMP[5].x, TEMP[4].zzzz, TEMP[4].xxxx",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "MUL TEMP[5].y, TEMP[4].wwww, TEMP[4].xxxx",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "MUL TEMP[5].z, TEMP[2].xxxx, TEMP[4].yyyy",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "MUL TEMP[5].w, TEMP[2].yyyy, TEMP[4].yyyy",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "ADD TEMP[2].x, TEMP[5].xxxx, TEMP[5].zzzz",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "ADD TEMP[2].y, TEMP[5].yyyy, TEMP[5].wwww",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "ADD TEMP[2].w, TEMP[2].wwww, TEMP[4].xxxx",
-            &mut shader,
-            &mut line,
-        );
+        push("MUL TEMP[3].x, TEMP[2].xxxx, TEMP[2].xxxx", &mut shader, &mut line);
+        push("MUL TEMP[3].y, TEMP[2].yyyy, TEMP[2].yyyy", &mut shader, &mut line);
+        push("MUL TEMP[3].z, TEMP[2].xxxx, TEMP[2].yyyy", &mut shader, &mut line);
+        push("ADD TEMP[3].w, TEMP[3].xxxx, TEMP[3].yyyy", &mut shader, &mut line);
+        push("SLT TEMP[4].x, TEMP[3].wwww, TEMP[0].wwww", &mut shader, &mut line); // mag2 < 4
+        push("MUL TEMP[4].x, TEMP[4].xxxx, TEMP[2].zzzz", &mut shader, &mut line); // alive mask
+        push("SUB TEMP[4].y, TEMP[0].xxxx, TEMP[4].xxxx", &mut shader, &mut line); // inverse mask
+        push("SUB TEMP[4].z, TEMP[3].xxxx, TEMP[3].yyyy", &mut shader, &mut line);
+        push("ADD TEMP[4].z, TEMP[4].zzzz, TEMP[1].xxxx", &mut shader, &mut line); // new zr
+        push("ADD TEMP[4].w, TEMP[3].zzzz, TEMP[3].zzzz", &mut shader, &mut line);
+        push("ADD TEMP[4].w, TEMP[4].wwww, TEMP[1].yyyy", &mut shader, &mut line); // new zi
+        push("MUL TEMP[5].x, TEMP[4].zzzz, TEMP[4].xxxx", &mut shader, &mut line);
+        push("MUL TEMP[5].y, TEMP[4].wwww, TEMP[4].xxxx", &mut shader, &mut line);
+        push("MUL TEMP[5].z, TEMP[2].xxxx, TEMP[4].yyyy", &mut shader, &mut line);
+        push("MUL TEMP[5].w, TEMP[2].yyyy, TEMP[4].yyyy", &mut shader, &mut line);
+        push("ADD TEMP[2].x, TEMP[5].xxxx, TEMP[5].zzzz", &mut shader, &mut line);
+        push("ADD TEMP[2].y, TEMP[5].yyyy, TEMP[5].wwww", &mut shader, &mut line);
+        push("ADD TEMP[2].w, TEMP[2].wwww, TEMP[4].xxxx", &mut shader, &mut line);
         push("MOV TEMP[2].z, TEMP[4].xxxx", &mut shader, &mut line);
     }
 
@@ -215,23 +111,11 @@ pub fn build_fragment_shader_tgsi_unrolled(iterations: u32) -> String {
     for idx in (0..14).rev() {
         let line_a = format!("SLT TEMP[4].x, TEMP[2].wwww, IMM[{}].wwww", idx);
         push(&line_a, &mut shader, &mut line);
-        push(
-            "SUB TEMP[4].y, TEMP[0].xxxx, TEMP[4].xxxx",
-            &mut shader,
-            &mut line,
-        );
-        push(
-            "MUL TEMP[5].xyz, TEMP[3].xyzx, TEMP[4].yyyy",
-            &mut shader,
-            &mut line,
-        );
+        push("SUB TEMP[4].y, TEMP[0].xxxx, TEMP[4].xxxx", &mut shader, &mut line);
+        push("MUL TEMP[5].xyz, TEMP[3].xyzx, TEMP[4].yyyy", &mut shader, &mut line);
         let line_b = format!("MUL TEMP[3].xyz, IMM[{}].xyzx, TEMP[4].xxxx", idx);
         push(&line_b, &mut shader, &mut line);
-        push(
-            "ADD TEMP[3].xyz, TEMP[5].xyzx, TEMP[3].xyzx",
-            &mut shader,
-            &mut line,
-        );
+        push("ADD TEMP[3].xyz, TEMP[5].xyzx, TEMP[3].xyzx", &mut shader, &mut line);
     }
     push("MOV OUT[0].xyz, TEMP[3].xyzx", &mut shader, &mut line);
     push("MOV OUT[0].w, TEMP[0].xxxx", &mut shader, &mut line);

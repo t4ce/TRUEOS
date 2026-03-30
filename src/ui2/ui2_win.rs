@@ -115,12 +115,7 @@ fn minimized_window_strip_rect(state: &Ui2State, window_id: u32) -> Option<Ui2Re
             let y =
                 UI2_MINIMIZED_STRIP_PAD + (row as f32 * (UI2_TITLE_H + UI2_MINIMIZED_STRIP_GAP));
             let max_w = ((state.view_w as f32) - x - UI2_MINIMIZED_STRIP_PAD).max(96.0);
-            return Some(Ui2Rect::new(
-                x,
-                y,
-                UI2_MINIMIZED_STRIP_W.min(max_w),
-                UI2_TITLE_H,
-            ));
+            return Some(Ui2Rect::new(x, y, UI2_MINIMIZED_STRIP_W.min(max_w), UI2_TITLE_H));
         }
         slot = slot.saturating_add(1);
     }
@@ -198,12 +193,7 @@ pub(super) fn normalized_window_rect_for_view(view_w: u32, view_h: u32, rect: Ui
 }
 
 pub(super) fn maximize_window_rect(state: &Ui2State) -> Ui2Rect {
-    Ui2Rect::new(
-        0.0,
-        0.0,
-        (state.view_w as f32).max(1.0),
-        (state.view_h as f32).max(1.0),
-    )
+    Ui2Rect::new(0.0, 0.0, (state.view_w as f32).max(1.0), (state.view_h as f32).max(1.0))
 }
 
 pub(super) fn left_half_window_rect(state: &Ui2State) -> Ui2Rect {
@@ -440,14 +430,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         Ui2WindowKind::Hosted3d => (0, source_window.content_tex_id, "fork-3d-window"),
     };
 
-    let id = alloc_window(
-        state,
-        next_kind,
-        next_title.as_str(),
-        next_rect,
-        next_z,
-        next_alpha,
-    );
+    let id = alloc_window(state, next_kind, next_title.as_str(), next_rect, next_z, next_alpha);
     if let Some(window) = window_mut(state, id) {
         window.browser_instance_id = next_browser_instance_id;
         window.icon_id = next_icon_id;
@@ -597,14 +580,7 @@ pub fn is_window_minimized(id: u32) -> bool {
 pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     let state_lock = init_state();
     let mut state = state_lock.lock();
-    let id = alloc_window(
-        &mut state,
-        Ui2WindowKind::HostedSurface,
-        title,
-        rect,
-        z,
-        alpha,
-    );
+    let id = alloc_window(&mut state, Ui2WindowKind::HostedSurface, title, rect, z, alpha);
     state.compose_reason = "create-window";
     refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
@@ -626,14 +602,7 @@ pub fn create_hosted_browser_window(
     };
     let state_lock = init_state();
     let mut state = state_lock.lock();
-    let id = alloc_window(
-        &mut state,
-        Ui2WindowKind::HostedBrowser,
-        title,
-        rect,
-        z,
-        alpha,
-    );
+    let id = alloc_window(&mut state, Ui2WindowKind::HostedBrowser, title, rect, z, alpha);
     if let Some(window) = window_mut(&mut state, id) {
         window.browser_instance_id = browser_instance_id;
         window.content_tex_id = tex_id;
@@ -699,14 +668,7 @@ pub fn create_hosted_surface_window(
 ) -> u32 {
     let state_lock = init_state();
     let mut state = state_lock.lock();
-    let id = alloc_window(
-        &mut state,
-        Ui2WindowKind::HostedSurface,
-        title,
-        rect,
-        z,
-        alpha,
-    );
+    let id = alloc_window(&mut state, Ui2WindowKind::HostedSurface, title, rect, z, alpha);
     if let Some(window) = window_mut(&mut state, id) {
         window.content_tex_id = tex_id;
         window.content_tex_blend = blend_enabled;
@@ -828,14 +790,7 @@ impl Ui2SurfaceWindow {
         tex_id: u32,
         blend_enabled: bool,
     ) -> Option<Self> {
-        Some(Self::attach_existing_texture(
-            title,
-            content_rect,
-            z,
-            alpha,
-            tex_id,
-            blend_enabled,
-        ))
+        Some(Self::attach_existing_texture(title, content_rect, z, alpha, tex_id, blend_enabled))
     }
 
     pub fn new(
@@ -870,14 +825,7 @@ impl Ui2SurfaceWindow {
             return None;
         }
 
-        Some(Self::attach_existing_texture(
-            title,
-            content_rect,
-            z,
-            alpha,
-            tex_id,
-            blend_enabled,
-        ))
+        Some(Self::attach_existing_texture(title, content_rect, z, alpha, tex_id, blend_enabled))
     }
 
     #[inline]

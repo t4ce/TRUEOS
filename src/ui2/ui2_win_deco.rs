@@ -28,7 +28,6 @@ impl Ui2DecorationIconSource for Ui2DecorationIconKind {
             Self::TitlebarWindow => window.icon_id,
         }
     }
-
 }
 
 pub(super) fn draw_window_decoration_icon(
@@ -734,12 +733,7 @@ pub(super) fn window_system_button_rect(
         Ui2SystemButtonAction::ToggleMaximize => maximize_x,
         Ui2SystemButtonAction::Close => close_x,
     };
-    Some(Ui2Rect::new(
-        x,
-        button_y,
-        UI2_SYSTEM_BUTTON_W,
-        UI2_SYSTEM_BUTTON_H,
-    ))
+    Some(Ui2Rect::new(x, button_y, UI2_SYSTEM_BUTTON_W, UI2_SYSTEM_BUTTON_H))
 }
 
 pub(super) fn system_button_action_at(

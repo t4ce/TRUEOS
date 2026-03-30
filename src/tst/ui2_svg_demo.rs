@@ -26,7 +26,9 @@ fn svg_demo_grid_extent(count: usize) -> (u32, u32) {
     let cols_u32 = cols as u32;
     let width = UI2_SVG_DEMO_GRID_PAD.saturating_mul(2)
         + cols_u32.saturating_mul(UI2_SVG_DEMO_ICON_SIZE)
-        + cols_u32.saturating_sub(1).saturating_mul(UI2_SVG_DEMO_GRID_GAP);
+        + cols_u32
+            .saturating_sub(1)
+            .saturating_mul(UI2_SVG_DEMO_GRID_GAP);
     let height = UI2_SVG_DEMO_GRID_PAD.saturating_mul(2)
         + rows.saturating_mul(UI2_SVG_DEMO_ICON_SIZE)
         + rows.saturating_sub(1).saturating_mul(UI2_SVG_DEMO_GRID_GAP);
@@ -43,7 +45,7 @@ fn put_rgba_pixel(rgba: &mut [u8], width: u32, x: u32, y: u32, color: [u8; 4]) {
     let idx = ((y as usize)
         .saturating_mul(width as usize)
         .saturating_add(x as usize))
-        .saturating_mul(4);
+    .saturating_mul(4);
     if idx + 4 <= rgba.len() {
         rgba[idx..idx + 4].copy_from_slice(&color);
     }
@@ -83,17 +85,11 @@ fn blend_rgba_over(dst: &mut [u8], src: [u8; 4]) {
     }
     let inv_a = 255u32.saturating_sub(src_a);
     let dst_a = dst[3] as u32;
-    dst[0] = (((src[0] as u32).saturating_mul(src_a)
-        + (dst[0] as u32).saturating_mul(inv_a)
-        + 127)
+    dst[0] = (((src[0] as u32).saturating_mul(src_a) + (dst[0] as u32).saturating_mul(inv_a) + 127)
         / 255) as u8;
-    dst[1] = (((src[1] as u32).saturating_mul(src_a)
-        + (dst[1] as u32).saturating_mul(inv_a)
-        + 127)
+    dst[1] = (((src[1] as u32).saturating_mul(src_a) + (dst[1] as u32).saturating_mul(inv_a) + 127)
         / 255) as u8;
-    dst[2] = (((src[2] as u32).saturating_mul(src_a)
-        + (dst[2] as u32).saturating_mul(inv_a)
-        + 127)
+    dst[2] = (((src[2] as u32).saturating_mul(src_a) + (dst[2] as u32).saturating_mul(inv_a) + 127)
         / 255) as u8;
     dst[3] = (src_a + ((dst_a.saturating_mul(inv_a) + 127) / 255)).min(255) as u8;
 }
@@ -158,17 +154,22 @@ fn blit_scaled_rgba_fit(
             let src_idx = ((src_y as usize)
                 .saturating_mul(src_width as usize)
                 .saturating_add(src_x as usize))
-                .saturating_mul(4);
+            .saturating_mul(4);
             let dst_idx = ((dst_y as usize)
                 .saturating_mul(dst_width as usize)
                 .saturating_add(dst_x as usize))
-                .saturating_mul(4);
+            .saturating_mul(4);
             if src_idx + 4 > src.len() || dst_idx + 4 > dst.len() {
                 continue;
             }
             blend_rgba_over(
                 &mut dst[dst_idx..dst_idx + 4],
-                [src[src_idx], src[src_idx + 1], src[src_idx + 2], src[src_idx + 3]],
+                [
+                    src[src_idx],
+                    src[src_idx + 1],
+                    src[src_idx + 2],
+                    src[src_idx + 3],
+                ],
             );
         }
     }
@@ -217,11 +218,7 @@ fn compose_svg_demo_grid_rgba(width: u32, height: u32) -> (Vec<u8>, usize) {
                 rendered = rendered.saturating_add(1);
             }
             Err(code) => {
-                crate::log!(
-                    "ui2-svg-demo: rasterize failed name={} code={}\n",
-                    asset.name,
-                    code
-                );
+                crate::log!("ui2-svg-demo: rasterize failed name={} code={}\n", asset.name, code);
             }
         }
     }
@@ -248,10 +245,7 @@ pub async fn ui2_svg_demo_task() {
         false,
         UI2_SVG_DEMO_BG_RGBA,
     ) else {
-        crate::log!(
-            "ui2-svg-demo: window creation failed tex={}\n",
-            UI2_SVG_DEMO_TEX_ID
-        );
+        crate::log!("ui2-svg-demo: window creation failed tex={}\n", UI2_SVG_DEMO_TEX_ID);
         return;
     };
 

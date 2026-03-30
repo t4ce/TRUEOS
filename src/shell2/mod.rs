@@ -414,10 +414,8 @@ impl<'a> AlignedWriter<'a> {
                 );
                 out.push_str(styled.as_str());
             } else if slot.activity == matrix::MatrixSlotActivity::Running {
-                let styled = alloc::format!(
-                    "{}",
-                    ecma48::style(label.as_str()).bold().fg(SYSTEM_TEXT_RGB)
-                );
+                let styled =
+                    alloc::format!("{}", ecma48::style(label.as_str()).bold().fg(SYSTEM_TEXT_RGB));
                 out.push_str(styled.as_str());
             } else {
                 let styled = alloc::format!(
@@ -662,16 +660,7 @@ pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
     let surf_prefix = SurfPromptPrefix::Https;
 
     out.banner(output_mask, mode, time_text.as_str());
-    out.mode_status(
-        output_mask,
-        mode,
-        ai_mode,
-        qjs_mode,
-        irc_mode,
-        surf_prefix,
-        None,
-        0,
-    );
+    out.mode_status(output_mask, mode, ai_mode, qjs_mode, irc_mode, surf_prefix, None, 0);
     out.set_scroll_region(SCROLL_TOP_ROW);
 
     let transcript = current_transcript_for_task(io);
@@ -1180,8 +1169,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     match b {
                         b'A' => {
                             cmd_status_text = None;
-                            if let Some(entry) =
-                                cycle_live_history(true, &mut live_history_cursor)
+                            if let Some(entry) = cycle_live_history(true, &mut live_history_cursor)
                             {
                                 set_input_line(&out, output_mask, &mut line, entry.as_str());
                             }
@@ -1189,8 +1177,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         }
                         b'B' => {
                             cmd_status_text = None;
-                            if let Some(entry) =
-                                cycle_live_history(false, &mut live_history_cursor)
+                            if let Some(entry) = cycle_live_history(false, &mut live_history_cursor)
                             {
                                 set_input_line(&out, output_mask, &mut line, entry.as_str());
                             }

@@ -30,23 +30,19 @@ const FORCEWAKE_RENDER_FLAGS: &[Intel770Flag] = &[
     },
 ];
 
-const FORCEWAKE_GT_FLAGS: &[Intel770Flag] = &[
-    Intel770Flag {
-        mask: 1 << 0,
-        value: 1 << 0,
-        name: "GT_AWAKE_REQ",
-        description: "request the GT/common power well stay awake for MMIO access",
-    },
-];
+const FORCEWAKE_GT_FLAGS: &[Intel770Flag] = &[Intel770Flag {
+    mask: 1 << 0,
+    value: 1 << 0,
+    name: "GT_AWAKE_REQ",
+    description: "request the GT/common power well stay awake for MMIO access",
+}];
 
-const FORCEWAKE_MEDIA_FLAGS: &[Intel770Flag] = &[
-    Intel770Flag {
-        mask: 1 << 0,
-        value: 1 << 0,
-        name: "MEDIA_AWAKE_REQ",
-        description: "request the media engine power well stay awake",
-    },
-];
+const FORCEWAKE_MEDIA_FLAGS: &[Intel770Flag] = &[Intel770Flag {
+    mask: 1 << 0,
+    value: 1 << 0,
+    name: "MEDIA_AWAKE_REQ",
+    description: "request the media engine power well stay awake",
+}];
 
 const FORCEWAKE_ACK_FLAGS: &[Intel770Flag] = &[
     Intel770Flag {
@@ -70,23 +66,19 @@ const FORCEWAKE_MEDIA_ACK_FLAGS: &[Intel770Flag] = &[Intel770Flag {
     description: "media forcewake request acknowledged by hardware",
 }];
 
-const GDRST_FLAGS: &[Intel770Flag] = &[
-    Intel770Flag {
-        mask: 1 << 0,
-        value: 1 << 0,
-        name: "RCS_RESET",
-        description: "render engine reset control bit; if held, ring MMIO may not latch normally",
-    },
-];
+const GDRST_FLAGS: &[Intel770Flag] = &[Intel770Flag {
+    mask: 1 << 0,
+    value: 1 << 0,
+    name: "RCS_RESET",
+    description: "render engine reset control bit; if held, ring MMIO may not latch normally",
+}];
 
-const RCS_RING_CTL_FLAGS: &[Intel770Flag] = &[
-    Intel770Flag {
-        mask: 1 << 0,
-        value: 1 << 0,
-        name: "RING_VALID",
-        description: "ring context is enabled and the programmed start/size should be used",
-    },
-];
+const RCS_RING_CTL_FLAGS: &[Intel770Flag] = &[Intel770Flag {
+    mask: 1 << 0,
+    value: 1 << 0,
+    name: "RING_VALID",
+    description: "ring context is enabled and the programmed start/size should be used",
+}];
 
 const RCS_MI_MODE_FLAGS: &[Intel770Flag] = &[
     Intel770Flag {
@@ -493,7 +485,7 @@ where
     while idx < INTEL_770_ENGINE_WAKE_REGISTERS.len() {
         let reg = &INTEL_770_ENGINE_WAKE_REGISTERS[idx];
         let value = read32(reg.offset);
-       /* crate::log!(
+        /* crate::log!(
             "intel/igpu770: reg-table label={} block={} reg={} off=0x{:05X} value=0x{:08X} desc={}\n",
             label,
             reg.block,
@@ -519,7 +511,7 @@ fn log_active_flags(label: &str, reg: &Intel770Register, value: u32) {
         let flag = &reg.flags[idx];
         if (value & flag.mask) == flag.value {
             matched = true;
-           /* crate::log!(
+            /* crate::log!(
                 "intel/igpu770: reg-flag label={} reg={} flag={} mask=0x{:08X} value=0x{:08X} desc={}\n",
                 label,
                 reg.name,
@@ -542,7 +534,7 @@ fn log_active_flags(label: &str, reg: &Intel770Register, value: u32) {
 }
 
 fn log_bit_state(label: &str, reg_name: &str, value: u32) {
- /*   crate::log!(
+    /*   crate::log!(
         "intel/igpu770: reg-bits label={} reg={} raw=0x{:08X} set_bits={}\n",
         label,
         reg_name,

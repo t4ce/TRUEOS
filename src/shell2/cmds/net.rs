@@ -372,10 +372,9 @@ fn cmd_net_nic(io: &'static dyn ShellBackend2, selector: Option<&str>, extra: Op
         };
         let ipv6 = ipv6_text(index);
 
-        table.emit_row(
-            &[&idx, &bdf, &vidpid, iface, &mac, &ipv4, mode, &ipv6],
-            |text| line(io, text),
-        );
+        table.emit_row(&[&idx, &bdf, &vidpid, iface, &mac, &ipv4, mode, &ipv6], |text| {
+            line(io, text)
+        });
     }
 
     table.emit_footer(|text| line(io, text));

@@ -333,9 +333,7 @@ fn log_xhci_mass_endpoint_state(
 
     let bulk_out_dci = endpoint_dci(bulk_out_ep) as usize;
     let bulk_in_dci = endpoint_dci(bulk_in_ep) as usize;
-    log_endpoint_context("bulk-out", unsafe {
-        out_ctx.add(bulk_out_dci * context_size)
-    });
+    log_endpoint_context("bulk-out", unsafe { out_ctx.add(bulk_out_dci * context_size) });
     let bulk_in_ctx = unsafe { out_ctx.add(bulk_in_dci * context_size) };
     log_endpoint_context("bulk-in", bulk_in_ctx);
     Some(unsafe { read_unaligned(bulk_in_ctx as *const u32) } & 0x7)
@@ -965,11 +963,7 @@ pub(crate) async fn probe_mass_bot(
     }
 
     let removable = (inquiry[1] & 0x80) != 0;
-    crate::log!(
-        "crabusb: mass inquiry removable={} pdt=0x{:02X}\n",
-        removable,
-        inquiry[0] & 0x1F
-    );
+    crate::log!("crabusb: mass inquiry removable={} pdt=0x{:02X}\n", removable, inquiry[0] & 0x1F);
     let _ = test_unit_ready_with_sense(bulk_out, bulk_in, lun).await;
 
     let mut read_capacity = [0u8; 8];

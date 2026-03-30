@@ -1295,10 +1295,7 @@ fn looks_like_trueos_superblock(block0: &[u8]) -> bool {
 }
 
 fn is_transient_io(e: block::Error) -> bool {
-    matches!(
-        e,
-        block::Error::NotReady | block::Error::Timeout | block::Error::Io
-    )
+    matches!(e, block::Error::NotReady | block::Error::Timeout | block::Error::Io)
 }
 
 #[inline]

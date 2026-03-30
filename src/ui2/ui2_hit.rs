@@ -229,19 +229,14 @@ fn hit_entry_intersects_cursor(entry: &Ui2HitEntry, cursor_x: f32, cursor_y: f32
     }
 
     let cursor = Ball::new(UI2_CURSOR_HIT_RADIUS_PX.max(0.5));
-    let rect = Cuboid::new(Vector::new(
-        (entry.rect.w * 0.5).max(0.5),
-        (entry.rect.h * 0.5).max(0.5),
-    ));
+    let rect =
+        Cuboid::new(Vector::new((entry.rect.w * 0.5).max(0.5), (entry.rect.h * 0.5).max(0.5)));
     let cursor_iso = Isometry::translation(cursor_x, cursor_y);
     let rect_iso = Isometry::translation(
         entry.rect.x + (entry.rect.w * 0.5),
         entry.rect.y + (entry.rect.h * 0.5),
     );
-    matches!(
-        query::intersection_test(&cursor_iso, &cursor, &rect_iso, &rect),
-        Ok(true)
-    )
+    matches!(query::intersection_test(&cursor_iso, &cursor, &rect_iso, &rect), Ok(true))
 }
 
 fn queue_ui2_hit_scene_refresh() {
@@ -262,10 +257,7 @@ fn cursor_source_snapshot_px(
         crate::r::cursor::cursor_source_pos(controller_id, slot_id, ep_target, hid_kind)?;
     let max_x = view_w.saturating_sub(1) as f32;
     let max_y = view_h.saturating_sub(1) as f32;
-    Some((
-        (nx.clamp(0.0, 1.0) as f32) * max_x,
-        (ny.clamp(0.0, 1.0) as f32) * max_y,
-    ))
+    Some(((nx.clamp(0.0, 1.0) as f32) * max_x, (ny.clamp(0.0, 1.0) as f32) * max_y))
 }
 
 fn publish_ui2_hit_scene() {
@@ -276,10 +268,7 @@ fn publish_ui2_hit_scene() {
     let (scene, browser_interactive_seq) = {
         let state_lock = init_state();
         let state = state_lock.lock();
-        (
-            build_ui2_hit_scene(&state, next_seq),
-            hosted_browser_interactive_seq(&state),
-        )
+        (build_ui2_hit_scene(&state, next_seq), hosted_browser_interactive_seq(&state))
     };
     let dropped_rectangles = scene.dropped_entries;
     let mut runtime = hit_runtime().lock();
@@ -369,11 +358,6 @@ pub async fn ui2_hit_task() {
             publish_ui2_hit_scene();
         }
 
-        Timer::after(EmbassyDuration::from_millis(if should_rebuild {
-            4
-        } else {
-            10
-        }))
-        .await;
+        Timer::after(EmbassyDuration::from_millis(if should_rebuild { 4 } else { 10 })).await;
     }
 }

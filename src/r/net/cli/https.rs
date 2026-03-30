@@ -340,12 +340,7 @@ async fn keepalive_prepare_ready(
                 keepalive_release(conn);
                 return Err(FetchError::ConnectTimeout);
             };
-            crate::log!(
-                "{}: connect host={} dev={} fresh=1\n",
-                log_prefix,
-                parsed.host,
-                dev_idx
-            );
+            crate::log!("{}: connect host={} dev={} fresh=1\n", log_prefix, parsed.host, dev_idx);
             let _ = conn.cmds.push(TlsCommand::OpenTcpConnect {
                 remote: vnet::EndpointV4 {
                     addr: ip,
@@ -954,12 +949,7 @@ async fn cabi_net_fetch_bytes_task(op_id: u32, url: String, timeout_ms: u32, max
 fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
     if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
         && spawner
-            .spawn(cabi_net_fetch_bytes_task(
-                op_id,
-                url.clone(),
-                timeout_ms,
-                max_bytes,
-            ))
+            .spawn(cabi_net_fetch_bytes_task(op_id, url.clone(), timeout_ms, max_bytes))
             .is_ok()
     {
         return;
@@ -1404,11 +1394,7 @@ fn try_decode_complete_http_body(headers: &[u8], body: &[u8]) -> Option<Vec<u8>>
 
 fn log_http_error_response(status: u16, headers: &[u8], body: &[u8]) {
     let decoded_body = decode_http_body_lossy(headers, body);
-    crate::log!(
-        "vhttps: http_error status={} body_len={}\n",
-        status,
-        decoded_body.len()
-    );
+    crate::log!("vhttps: http_error status={} body_len={}\n", status, decoded_body.len());
     if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
         log_utf8_chunks("vhttps: http_error_body: ", s);
     } else {
@@ -1487,12 +1473,7 @@ fn log_http_head(prefix: &str, host: &str, head: HttpHead) {
             );
         }
         HttpBodyKind::Chunked => {
-            crate::log!(
-                "{} host={} status={} body=chunked\n",
-                prefix,
-                host,
-                head.status
-            );
+            crate::log!("{} host={} status={} body=chunked\n", prefix, host, head.status);
         }
     }
 }
@@ -2890,9 +2871,7 @@ async fn fetch_on_device_to_file_keepalive(
                 let _ = crate::r::fs::trueosfs::file_write_abort_async(sh).await;
             }
             keepalive_release(conn);
-            return Err(FetchToFileError::Code(fetch_error_to_code(
-                FetchError::BodyTimeout,
-            )));
+            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::BodyTimeout)));
         }
         Timer::after(EmbassyDuration::from_millis(2)).await;
     }
@@ -2917,14 +2896,10 @@ async fn fetch_on_device_to_file(
     {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => {
-            return Err(FetchToFileError::Code(fetch_error_to_code(
-                FetchError::DnsTimeout,
-            )));
+            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::DnsTimeout)));
         }
         Err(_) => {
-            return Err(FetchToFileError::Code(fetch_error_to_code(
-                FetchError::DnsFailed,
-            )));
+            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::DnsFailed)));
         }
     };
 
@@ -3746,16 +3721,8 @@ pub async fn fetch_https_body_progress_with_profile_async(
         let res = if HttpsLimits::KEEPALIVE_ENABLE {
             fetch_on_device_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, Some(progress)).await
         } else {
-            fetch_on_device(
-                &parsed,
-                dev_idx,
-                timeout_ms,
-                max_bytes,
-                None,
-                None,
-                Some(progress),
-            )
-            .await
+            fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, Some(progress))
+                .await
         };
         match res {
             Ok(v) => return Ok(v),
@@ -4229,12 +4196,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
             *slot = Some(rc);
         }
 
-        crate::log!(
-            "net-fetch-post: done key={} rc={} ms={}\n",
-            key,
-            rc,
-            elapsed_ms
-        );
+        crate::log!("net-fetch-post: done key={} rc={} ms={}\n", key, rc, elapsed_ms);
 
         CABI_NET_FETCH_WAIT.notify_all();
     });

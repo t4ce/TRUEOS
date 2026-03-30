@@ -145,10 +145,7 @@ pub fn dispatch() -> bool {
             true
         }
         _ => {
-            hvlogf(format_args!(
-                "hv: vmcall unknown op=0x{:02X} seq={}",
-                op, seq
-            ));
+            hvlogf(format_args!("hv: vmcall unknown op=0x{:02X} seq={}", op, seq));
             write_response(seq, STATUS_UNKNOWN_OP, 0, 0);
             true
         }

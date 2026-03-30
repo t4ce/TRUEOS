@@ -190,14 +190,7 @@ fn build_frame_vertices(app: &GfxTetrisApp) -> Vec<RgbVertex> {
     let board_w = FRAME_PX * 2 + (BOARD_W as u32 * CELL_PX);
     let board_h = FRAME_PX * 2 + (VIEW_H as u32 * CELL_PX);
 
-    push_rect(
-        &mut vertices,
-        board_x,
-        board_y,
-        board_w,
-        board_h,
-        FRAME_COLOR,
-    );
+    push_rect(&mut vertices, board_x, board_y, board_w, board_h, FRAME_COLOR);
     push_rect(
         &mut vertices,
         board_x + FRAME_PX,
@@ -213,25 +206,11 @@ fn build_frame_vertices(app: &GfxTetrisApp) -> Vec<RgbVertex> {
 
     for y in 0..VIEW_H {
         let py = board_y + FRAME_PX + (y as u32 * CELL_PX);
-        push_rect(
-            &mut vertices,
-            board_x + FRAME_PX,
-            py,
-            BOARD_W as u32 * CELL_PX,
-            1,
-            GRID_COLOR,
-        );
+        push_rect(&mut vertices, board_x + FRAME_PX, py, BOARD_W as u32 * CELL_PX, 1, GRID_COLOR);
     }
     for x in 0..BOARD_W {
         let px = board_x + FRAME_PX + (x as u32 * CELL_PX);
-        push_rect(
-            &mut vertices,
-            px,
-            board_y + FRAME_PX,
-            1,
-            VIEW_H as u32 * CELL_PX,
-            GRID_COLOR,
-        );
+        push_rect(&mut vertices, px, board_y + FRAME_PX, 1, VIEW_H as u32 * CELL_PX, GRID_COLOR);
     }
 
     for view_y in 0..VIEW_H {

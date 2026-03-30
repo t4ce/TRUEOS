@@ -152,12 +152,7 @@ fn init_with(lapic_id: u32, cpu_index: u32, _tag: &str) {
     let mut gs_base = Msr::new(MSR_IA32_GS_BASE);
     unsafe { gs_base.write(ptr as u64) };
 
-    crate::log!(
-        "0x{:016X} lapic={} cpu={}\n",
-        ptr as u64,
-        lapic_id,
-        cpu_index
-    );
+    crate::log!("0x{:016X} lapic={} cpu={}\n", ptr as u64, lapic_id, cpu_index);
 }
 
 #[inline(always)]

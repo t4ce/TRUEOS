@@ -186,10 +186,7 @@ async fn store_ready_html(html: Html) -> usize {
 async fn html_ready_to_truesurfer(html: Html) {
     let Some(browser_instance_id) = crate::r::spawn_service::spawn_truesurfer_tab_with_html()
     else {
-        crate::log!(
-            "html_shack: browser_handoff skipped url={} reason=spawn_failed\n",
-            html.url
-        );
+        crate::log!("html_shack: browser_handoff skipped url={} reason=spawn_failed\n", html.url);
         return;
     };
 
@@ -274,10 +271,7 @@ pub async fn html_fetch_service() {
         let fetch_url = resolve_request_url(&request);
         let mut fetch_url_buf: HString<256> = HString::new();
         if fetch_url_buf.push_str(fetch_url.as_str()).is_err() {
-            crate::log!(
-                "html_shack: drop url={} reason=url too long max=256\n",
-                fetch_url
-            );
+            crate::log!("html_shack: drop url={} reason=url too long max=256\n", fetch_url);
             continue;
         }
 
@@ -288,11 +282,7 @@ pub async fn html_fetch_service() {
                 }
                 let ready = Html::new(fetch_url.as_str(), html);
                 let ready_len = store_ready_html(ready.clone()).await;
-                crate::log!(
-                    "html_shack: ready url={} ready_queue={}\n",
-                    ready.url,
-                    ready_len
-                );
+                crate::log!("html_shack: ready url={} ready_queue={}\n", ready.url, ready_len);
 
                 let _ = request.auto_handoff_callback.take();
             }

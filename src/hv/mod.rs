@@ -166,15 +166,9 @@ pub fn start(
             caps.feature_control_vmx_outside_smx
         ));
         let r0 = __cpuid(0);
-        hvlogf(format_args!(
-            "hv: cpuid0 ebx=0x{:X} ecx=0x{:X} edx=0x{:X}",
-            r0.ebx, r0.ecx, r0.edx
-        ));
+        hvlogf(format_args!("hv: cpuid0 ebx=0x{:X} ecx=0x{:X} edx=0x{:X}", r0.ebx, r0.ecx, r0.edx));
         let r1 = __cpuid(1);
-        hvlogf(format_args!(
-            "hv: cpuid1 ecx=0x{:X} edx=0x{:X}",
-            r1.ecx, r1.edx
-        ));
+        hvlogf(format_args!("hv: cpuid1 ecx=0x{:X} edx=0x{:X}", r1.ecx, r1.edx));
         return Err(StartError::VmxUnsupported);
     }
 
@@ -203,9 +197,7 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
         hvlogf(format_args!("hv: vm1 lifecycle: stop requested"));
         Ok(true)
     } else {
-        hvlogf(format_args!(
-            "hv: vm1 lifecycle: stop ignored (not running)"
-        ));
+        hvlogf(format_args!("hv: vm1 lifecycle: stop ignored (not running)"));
         Ok(false)
     }
 }
@@ -301,15 +293,13 @@ fn snapshot_on_preserve_exit() {
                 "hv: vm1 reporting: preserve snapshot saved store=hv-ramdisk path=vm/vm1.snapshot bytes={}",
                 saved
             )),
-            Err(e) => hvlogf(format_args!(
-                "hv: vm1 reporting: preserve snapshot save failed ({:?})",
-                e
-            )),
+            Err(e) => {
+                hvlogf(format_args!("hv: vm1 reporting: preserve snapshot save failed ({:?})", e))
+            }
         },
-        Err(e) => hvlogf(format_args!(
-            "hv: vm1 reporting: preserve snapshot bytes failed ({:?})",
-            e
-        )),
+        Err(e) => {
+            hvlogf(format_args!("hv: vm1 reporting: preserve snapshot bytes failed ({:?})", e))
+        }
     }
 }
 
@@ -333,10 +323,7 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
     let lineage_record = LineageRecord::new();
     VM1_STARTING.store(false, Ordering::Release);
     VM1_RUNNING.store(true, Ordering::Release);
-    hvlogf(format_args!(
-        "hv: vm1-{} lifecycle: starting",
-        lineage_record.level
-    ));
+    hvlogf(format_args!("hv: vm1-{} lifecycle: starting", lineage_record.level));
 
     let guest = crate::limine::guest_kernel_bytes();
     let guest_len = guest.map(|b| b.len()).unwrap_or(0);
@@ -355,16 +342,12 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
             ));
         }
     }
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vmx preflight ok, stage=m1"
-    ));
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vlayer policy=integrity-first"
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: vmx preflight ok, stage=m1"));
+    hvlogf(format_args!("hv: vm1 reporting: vlayer policy=integrity-first"));
     match vmx_smoke() {
-        Ok(()) => hvlogf(format_args!(
-            "hv: vm1 reporting: vmx smoke ok (vmxon/vmclear/vmptrld/vmxoff)"
-        )),
+        Ok(()) => {
+            hvlogf(format_args!("hv: vm1 reporting: vmx smoke ok (vmxon/vmclear/vmptrld/vmxoff)"))
+        }
         Err(e) => hvlogf(format_args!("hv: vm1 reporting: vmx smoke failed ({})", e)),
     }
     match vmx_launch_once_with_ept(lineage_record) {
@@ -392,9 +375,7 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
     if let Some(bytes) = guest {
         if contains_bytes(bytes, MAIN_LOOP_MARKER) {
             VM1_MARKER_SEEN.store(true, Ordering::Release);
-            hvlogf(format_args!(
-                "hv: vm1 reporting: main: entering executor loop"
-            ));
+            hvlogf(format_args!("hv: vm1 reporting: main: entering executor loop"));
         } else {
             hvlogf(format_args!(
                 "hv: vm1 reporting: guest image missing marker '{}'",
@@ -402,9 +383,7 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
             ));
         }
     } else {
-        hvlogf(format_args!(
-            "hv: vm1 reporting: guest module missing during task startup"
-        ));
+        hvlogf(format_args!("hv: vm1 reporting: guest module missing during task startup"));
     }
 
     while !VM1_STOP_REQ.load(Ordering::Acquire) {
@@ -446,13 +425,7 @@ fn vmx_caps() -> (bool, bool, bool, bool, bool) {
         feature_control_vmx_outside_smx = (val & vmx::IA32_FEATURE_CONTROL_VMX_OUTSIDE_SMX) != 0;
     }
 
-    (
-        known_compatible,
-        has_msr,
-        has_vmx,
-        feature_control_locked,
-        feature_control_vmx_outside_smx,
-    )
+    (known_compatible, has_msr, has_vmx, feature_control_locked, feature_control_vmx_outside_smx)
 }
 
 fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResult, &'static str> {
@@ -541,9 +514,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             break;
         }
         if lr.entered == 0 {
-            hvlogf(format_args!(
-                "hv: vm1 reporting: vmlaunch/vmresume: guest not entered"
-            ));
+            hvlogf(format_args!("hv: vm1 reporting: vmlaunch/vmresume: guest not entered"));
             break;
         }
 
@@ -804,10 +775,7 @@ fn setup_vmcs_for_launch(eptp: u64, lineage_record: LineageRecord) -> Result<(),
             vmwrite(VMCS_GUEST_CR0, host_cr0)?;
             vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
             vmwrite(VMCS_GUEST_CR4, host_cr4)?;
-            vmwrite(
-                VMCS_GUEST_RFLAGS,
-                (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF,
-            )?;
+            vmwrite(VMCS_GUEST_RFLAGS, (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
             vmwrite(VMCS_GUEST_RIP, guest_rip)?;
             vmwrite(VMCS_GUEST_RSP, guest_rsp)?;
             vmwrite(VMCS_GUEST_DR7, 0x400)?;
@@ -981,10 +949,7 @@ fn setup_vmcs_for_launch(eptp: u64, lineage_record: LineageRecord) -> Result<(),
     vmwrite(VMCS_GUEST_CR0, host_cr0)?;
     vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
     vmwrite(VMCS_GUEST_CR4, host_cr4)?;
-    vmwrite(
-        VMCS_GUEST_RFLAGS,
-        (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF,
-    )?;
+    vmwrite(VMCS_GUEST_RFLAGS, (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
     vmwrite(VMCS_GUEST_RIP, guest_rip)?;
     vmwrite(VMCS_GUEST_RSP, guest_rsp)?;
     vmwrite(VMCS_GUEST_DR7, 0x400)?;
@@ -1098,10 +1063,7 @@ fn vmx_smoke() -> Result<(), &'static str> {
         ));
         return Err("vmxon");
     }
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vmxon ok rip=0x{:016X}",
-        rip
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: vmxon ok rip=0x{:016X}", rip));
 
     let rip = vmx::current_rip();
     if !vmclear(vmcs_pa) {
@@ -1112,10 +1074,7 @@ fn vmx_smoke() -> Result<(), &'static str> {
         let _ = vmxoff();
         return Err("vmclear");
     }
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vmclear ok rip=0x{:016X}",
-        rip
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: vmclear ok rip=0x{:016X}", rip));
 
     let rip = vmx::current_rip();
     if !vmptrld(vmcs_pa) {
@@ -1126,19 +1085,13 @@ fn vmx_smoke() -> Result<(), &'static str> {
         let _ = vmxoff();
         return Err("vmptrld");
     }
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vmptrld ok rip=0x{:016X}",
-        rip
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: vmptrld ok rip=0x{:016X}", rip));
 
     let ptr = match vmx::vmptrst() {
         Some(v) => v,
         None => {
             let rip = vmx::current_rip();
-            hvlogf(format_args!(
-                "hv: vm1 reporting: vmptrst failed rip=0x{:016X}",
-                rip
-            ));
+            hvlogf(format_args!("hv: vm1 reporting: vmptrst failed rip=0x{:016X}", rip));
             let _ = vmxoff();
             return Err("vmptrst");
         }
@@ -1152,17 +1105,11 @@ fn vmx_smoke() -> Result<(), &'static str> {
         let _ = vmxoff();
         return Err("vmptrst mismatch");
     }
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vmptrst ok current_vmcs=0x{:016X}",
-        ptr
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: vmptrst ok current_vmcs=0x{:016X}", ptr));
 
     if !vmxoff() {
         let rip = vmx::current_rip();
-        hvlogf(format_args!(
-            "hv: vm1 reporting: vmxoff failed rip=0x{:016X}",
-            rip
-        ));
+        hvlogf(format_args!("hv: vm1 reporting: vmxoff failed rip=0x{:016X}", rip));
         return Err("vmxoff");
     }
     hvlogf(format_args!("hv: vm1 reporting: vmxoff ok"));

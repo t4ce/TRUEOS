@@ -115,13 +115,7 @@ pub async fn piano_drain_loop() {
 
             let hb = PIANO_LAST_HEARTBEAT_SECS.load(Ordering::Acquire);
             if hb == u64::MAX {
-                crate::log!(
-                    "piano: --:--:-- ~ {}.{}.{}.{}\n",
-                    pkt[0],
-                    pkt[1],
-                    pkt[2],
-                    pkt[3]
-                );
+                crate::log!("piano: --:--:-- ~ {}.{}.{}.{}\n", pkt[0], pkt[1], pkt[2], pkt[3]);
             } else {
                 let (h, m, s) = secs_to_hms(hb);
                 crate::log!(
@@ -257,27 +251,23 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
         );
     }
 
-    let mut interface = match claim_interface(
-        &mut device,
-        target.interface_number,
-        target.alternate_setting,
-    )
-    .await
-    {
-        Ok(interface) => interface,
-        Err(err) => {
-            crate::log!(
-                "crabusb: midi {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
-                vendor_id,
-                product_id,
-                target.interface_number,
-                target.alternate_setting,
-                err
-            );
-            unregister_active_midi_stream(active_stream);
-            return;
-        }
-    };
+    let mut interface =
+        match claim_interface(&mut device, target.interface_number, target.alternate_setting).await
+        {
+            Ok(interface) => interface,
+            Err(err) => {
+                crate::log!(
+                    "crabusb: midi {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
+                    vendor_id,
+                    product_id,
+                    target.interface_number,
+                    target.alternate_setting,
+                    err
+                );
+                unregister_active_midi_stream(active_stream);
+                return;
+            }
+        };
 
     let mut bulk_in = match interface.endpoint_bulk_in(target.ep_in.addr).await {
         Ok(ep) => ep,
@@ -355,11 +345,8 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
     let mut timeout_logs = 0u32;
 
     loop {
-        match with_timeout_or_none(
-            bulk_in.submit_and_wait(rx.as_mut_slice()),
-            MIDI_READ_TIMEOUT_MS,
-        )
-        .await
+        match with_timeout_or_none(bulk_in.submit_and_wait(rx.as_mut_slice()), MIDI_READ_TIMEOUT_MS)
+            .await
         {
             None => {
                 timeout_logs = timeout_logs.wrapping_add(1);

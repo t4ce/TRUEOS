@@ -205,9 +205,7 @@ fn root_hub_lifecycle_name(stage: u32) -> &'static str {
 fn root_hub_lifecycle_bucket(stage: u32) -> &'static str {
     match stage {
         ROOT_HUB_LIFECYCLE_INIT | ROOT_HUB_LIFECYCLE_BOUND => "before-root-change",
-        ROOT_HUB_LIFECYCLE_ROOT_CHANGE | ROOT_HUB_LIFECYCLE_SETTLING => {
-            "during-root-progression"
-        }
+        ROOT_HUB_LIFECYCLE_ROOT_CHANGE | ROOT_HUB_LIFECYCLE_SETTLING => "during-root-progression",
         ROOT_HUB_LIFECYCLE_FIRST_CONTACT | ROOT_HUB_LIFECYCLE_STEADY => "after-first-contact",
         _ => "unknown",
     }
@@ -532,10 +530,7 @@ impl DmaOp for TrueosCrabUsbKernel {
                 .ok_or(DmaError::NoMemory)?;
         let bounce_virt = NonNull::new(bounce_virt).ok_or(DmaError::NoMemory)?;
 
-        if matches!(
-            _direction,
-            DmaDirection::ToDevice | DmaDirection::Bidirectional
-        ) {
+        if matches!(_direction, DmaDirection::ToDevice | DmaDirection::Bidirectional) {
             unsafe {
                 core::ptr::copy_nonoverlapping(addr.as_ptr(), bounce_virt.as_ptr(), layout.size())
             };
@@ -724,7 +719,9 @@ fn topology_path_string(topology: &crab_usb::device::DeviceTopology) -> alloc::s
     out
 }
 
-fn topology_location_string(location: &crab_usb::topology::DeviceLocation) -> alloc::string::String {
+fn topology_location_string(
+    location: &crab_usb::topology::DeviceLocation,
+) -> alloc::string::String {
     let mut out = alloc::format!("rp{}", location.root_port);
     for port in location.path.iter().skip(1) {
         out.push_str(&alloc::format!("->p{}", port));
@@ -996,7 +993,6 @@ async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::O
     .await
 }
 
-
 fn parse_wav_pcm_s16_stereo_48k(bytes: &[u8]) -> Option<(usize, usize)> {
     fn le_u16(s: &[u8]) -> Option<u16> {
         if s.len() < 2 {
@@ -1183,12 +1179,8 @@ fn parse_uac_stream_target(
 
         match raw_cfg[idx + 1] {
             0x04 if len >= 9 => {
-                current_if = Some((
-                    raw_cfg[idx + 2],
-                    raw_cfg[idx + 3],
-                    raw_cfg[idx + 5],
-                    raw_cfg[idx + 6],
-                ));
+                current_if =
+                    Some((raw_cfg[idx + 2], raw_cfg[idx + 3], raw_cfg[idx + 5], raw_cfg[idx + 6]));
                 pending_out = None;
                 has_feedback_ep = false;
             }
@@ -1286,12 +1278,8 @@ fn parse_uac_stream_candidates(raw_cfg: &[u8]) -> Vec<UacStreamCandidate> {
                     pending_out,
                     has_feedback_ep,
                 );
-                current_if = Some((
-                    raw_cfg[idx + 2],
-                    raw_cfg[idx + 3],
-                    raw_cfg[idx + 5],
-                    raw_cfg[idx + 6],
-                ));
+                current_if =
+                    Some((raw_cfg[idx + 2], raw_cfg[idx + 3], raw_cfg[idx + 5], raw_cfg[idx + 6]));
                 current_terminal_link = None;
                 current_format = None;
                 pending_out = None;
@@ -1401,12 +1389,8 @@ fn log_uac_topology(raw_cfg: &[u8], vendor_id: u16, product_id: u16) {
 
         match raw_cfg[idx + 1] {
             0x04 if len >= 9 => {
-                current_if = Some((
-                    raw_cfg[idx + 2],
-                    raw_cfg[idx + 3],
-                    raw_cfg[idx + 5],
-                    raw_cfg[idx + 6],
-                ));
+                current_if =
+                    Some((raw_cfg[idx + 2], raw_cfg[idx + 3], raw_cfg[idx + 5], raw_cfg[idx + 6]));
             }
             CS_INTERFACE if len >= 3 => match raw_cfg[idx + 2] {
                 UAC_AC_INPUT_TERMINAL if len >= 8 => crate::log!(
@@ -2201,10 +2185,7 @@ async fn stream_truekey_logs(
         target.out_max_packet_size
     );
 
-    let chunk_limit = min(
-        TRUEKEY_STREAM_CHUNK,
-        usize::from(target.out_max_packet_size.max(1)),
-    );
+    let chunk_limit = min(TRUEKEY_STREAM_CHUNK, usize::from(target.out_max_packet_size.max(1)));
     let mut cursor = 0usize;
 
     loop {
@@ -2273,11 +2254,7 @@ async fn maybe_start_truekey_bridge(host: &mut USBHost, dev_info: &crab_usb::Dev
         return;
     }
 
-    crate::log!(
-        "crabusb: truekey {:04X}:{:04X} candidate found\n",
-        vendor_id,
-        product_id
-    );
+    crate::log!("crabusb: truekey {:04X}:{:04X} candidate found\n", vendor_id, product_id);
 
     let mut device = match host.open_device(dev_info).await {
         Ok(device) => device,
@@ -2649,10 +2626,7 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
         return;
     }
 
-    crate::log!(
-        "crabusb: scout begin (timeout={}ms)\n",
-        CRABUSB_PROBE_TIMEOUT_MS
-    );
+    crate::log!("crabusb: scout begin (timeout={}ms)\n", CRABUSB_PROBE_TIMEOUT_MS);
     match crate::wait::select2(
         host.probe_devices(),
         Timer::after(EmbassyDuration::from_millis(CRABUSB_PROBE_TIMEOUT_MS)),
@@ -2736,10 +2710,7 @@ async fn crab_scout_once(host: &mut USBHost, info: super::TlbUsbController, spaw
             LAST_PROBE_DEVICE_COUNT[info.index].store(0, Ordering::Release);
             log_probe_progress("scout timeout progress");
             log_xhci_runtime_snapshot(info.index, "scout timeout");
-            crate::log!(
-                "crabusb: scout probe timeout after {}ms\n",
-                CRABUSB_PROBE_TIMEOUT_MS
-            );
+            crate::log!("crabusb: scout probe timeout after {}ms\n", CRABUSB_PROBE_TIMEOUT_MS);
             if let Some(reason) = xhci_fatal_probe_state(info.index) {
                 crate::log!(
                     "crabusb: controller {} fatal xhci state during scout timeout ({}); rebinding immediately\n",
@@ -2831,13 +2802,15 @@ pub async fn event_pump_task(controller_id: usize) {
                     uninstall_event_handler(controller_id);
                     Timer::after(EmbassyDuration::from_millis(10)).await;
                 } else {
-                    mark_controller_quarantined(controller_id, "pump observed stopped before validation");
+                    mark_controller_quarantined(
+                        controller_id,
+                        "pump observed stopped before validation",
+                    );
                     crate::log!(
                         "crabusb: controller {} stopped before validation; quarantining instead of rebinding\n",
                         controller_id
                     );
-                    Timer::after(EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_BACKOFF_MS))
-                        .await;
+                    Timer::after(EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_BACKOFF_MS)).await;
                 }
             }
         }
@@ -2899,11 +2872,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         };
 
         if let Err(err) = host.init().await {
-            crate::log!(
-                "crabusb: host init failed for controller {}: {:?}\n",
-                info.index,
-                err
-            );
+            crate::log!("crabusb: host init failed for controller {}: {:?}\n", info.index, err);
             log_xhci_status_bits(info.index, "host init failed");
             if let Some(reason) = xhci_fatal_init_state(info.index) {
                 mark_controller_quarantined(info.index, "fatal xhci state during host init");
@@ -2923,10 +2892,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         set_controller_phase(info.index, ControllerPhase::FirstContact, "host init completed");
         let bind_started_at = Instant::now();
 
-        crate::log!(
-            "crabusb: host init ok controller {} awaiting root-hub events\n",
-            info.index
-        );
+        crate::log!("crabusb: host init ok controller {} awaiting root-hub events\n", info.index);
 
         ROOT_PORT_CHANGE_SEEN[info.index].store(false, Ordering::Release);
         NO_PORT_CHANGE_HINT_LOGGED[info.index].store(false, Ordering::Release);
@@ -2969,8 +2935,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
                         info.index,
                         CRABUSB_QUICK_STOP_BACKOFF_MS
                     );
-                    Timer::after(EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_BACKOFF_MS))
-                        .await;
+                    Timer::after(EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_BACKOFF_MS)).await;
                     quick_stop_streak = 0;
                 }
                 break;
@@ -2989,10 +2954,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
 
             if let Some(deadline) = probe_quiet_until {
                 if Instant::now() >= deadline {
-                    crate::log!(
-                        "crabusb: servicing settled probe on controller {}\n",
-                        info.index
-                    );
+                    crate::log!("crabusb: servicing settled probe on controller {}\n", info.index);
                     probe_quiet_until = None;
                     let _ = probe_and_log(&mut host, &spawner, info.index).await;
                     continue;
@@ -3103,10 +3065,7 @@ pub(super) fn request_rebind(controller_id: usize) -> bool {
         return false;
     }
 
-    crate::log!(
-        "crabusb: live rebind requested on controller {}\n",
-        controller_id
-    );
+    crate::log!("crabusb: live rebind requested on controller {}\n", controller_id);
     mark_controller_recoverable(controller_id, "live rebind requested");
     uninstall_event_handler(controller_id);
     true

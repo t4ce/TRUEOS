@@ -40,19 +40,12 @@ pub fn dealloc(ptr: *mut u8, size: usize) {
     }
 
     let Some(phys) = crate::phys::virt_to_phys_checked(ptr) else {
-        crate::log!(
-            "dma: dealloc ptr not translatable ptr=0x{:X}\n",
-            ptr as usize
-        );
+        crate::log!("dma: dealloc ptr not translatable ptr=0x{:X}\n", ptr as usize);
         return;
     };
 
     if !crate::phys::free_phys_range(phys, size) {
-        crate::log!(
-            "dma: failed to free PMM region phys=0x{:X} size=0x{:X}\n",
-            phys,
-            size
-        );
+        crate::log!("dma: failed to free PMM region phys=0x{:X} size=0x{:X}\n", phys, size);
     }
 }
 

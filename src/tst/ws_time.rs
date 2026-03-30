@@ -165,12 +165,7 @@ fn send_ws_text(vnet: &VNet, session: &mut TimeSession, text: &str) -> Result<()
     let mut frame_buf = [0u8; TX_BUF_MAX];
     let len = session
         .ws
-        .write(
-            WebSocketSendMessageType::Text,
-            true,
-            text.as_bytes(),
-            &mut frame_buf,
-        )
+        .write(WebSocketSendMessageType::Text, true, text.as_bytes(), &mut frame_buf)
         .map_err(|_| ())?;
     send_tcp_bytes(vnet, session.handle, &frame_buf[..len]);
     Ok(())
@@ -308,11 +303,7 @@ fn try_open_websocket(vnet: &VNet, session: &mut TimeSession) -> bool {
 
     let mut response = [0u8; TX_BUF_MAX];
     let Ok(len) = session.ws.server_accept(&key, None, &mut response) else {
-        crate::log!(
-            "ws-time: server_accept failed handle={} path={:?}\n",
-            session.handle.0,
-            path
-        );
+        crate::log!("ws-time: server_accept failed handle={} path={:?}\n", session.handle.0, path);
         close_session(vnet, session.handle);
         return true;
     };

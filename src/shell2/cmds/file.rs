@@ -13,10 +13,7 @@ const RAMDISK_BLOCK_SIZE: u32 = 512;
 const DEFAULT_RAMDISC_BYTES: u64 = 128 * 1024 * 1024;
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(
-        io,
-        "file: usage `file` | `file format <disk-id>` | `file ramdisc <size>`",
-    );
+    print_shell_line(io, "file: usage `file` | `file format <disk-id>` | `file ramdisc <size>`");
 }
 
 fn parse_size_bytes(raw: &str) -> Option<u64> {
@@ -161,13 +158,7 @@ fn push_tree_lines(
             out.push(alloc::format!("{}{}{}/", indent, branch, name));
             push_tree_lines(out, disk_id, full_path.as_str(), depth + 1);
         } else if let Some(size) = file_size_bytes(disk_id, full_path.as_str()) {
-            out.push(alloc::format!(
-                "{}{}{} ({} bytes)",
-                indent,
-                branch,
-                name,
-                size
-            ));
+            out.push(alloc::format!("{}{}{} ({} bytes)", indent, branch, name, size));
         } else {
             out.push(alloc::format!("{}{}{}", indent, branch, name));
         }

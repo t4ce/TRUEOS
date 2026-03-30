@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use super::intel_770_registers;
-use super::intel_igpu770::{warm_state, Igpu770WarmState};
+use super::intel_igpu770::{Igpu770WarmState, warm_state};
 
 const GGTT_PAGE_BYTES: u64 = 4096;
 const SMOKE_RECT_W: usize = 64;
@@ -135,7 +135,11 @@ fn ggtt_map_plan_system_ram(phys: u64, size: usize, gpu_addr: u64) -> Option<Ggt
     })
 }
 
-fn ggtt_map_plan_aperture_backed(phys: u64, size: usize, aperture_base: u64) -> Option<GgttMapPlan> {
+fn ggtt_map_plan_aperture_backed(
+    phys: u64,
+    size: usize,
+    aperture_base: u64,
+) -> Option<GgttMapPlan> {
     if phys == 0 || size == 0 || aperture_base == 0 || phys < aperture_base {
         return None;
     }
@@ -289,11 +293,7 @@ fn forcewake_render_acquire(warm: Igpu770WarmState) -> u32 {
     let (_, ack_after_clear, clear_iters) =
         wait_forcewake_ack(warm, FORCEWAKE_KERNEL | FORCEWAKE_KERNEL_FALLBACK, 0);
 
-    let _ = mmio_write32(
-        warm,
-        FORCEWAKE_RENDER_GEN11,
-        masked_bit_enable(FORCEWAKE_KERNEL),
-    );
+    let _ = mmio_write32(warm, FORCEWAKE_RENDER_GEN11, masked_bit_enable(FORCEWAKE_KERNEL));
     let (mut set_ok, mut ack, mut iter) =
         wait_forcewake_ack(warm, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
 
@@ -311,11 +311,7 @@ fn forcewake_render_acquire(warm: Igpu770WarmState) -> u32 {
             FORCEWAKE_RENDER_GEN11,
             masked_bit_enable(FORCEWAKE_KERNEL_FALLBACK),
         );
-        let _ = wait_forcewake_ack(
-            warm,
-            FORCEWAKE_KERNEL_FALLBACK,
-            FORCEWAKE_KERNEL_FALLBACK,
-        );
+        let _ = wait_forcewake_ack(warm, FORCEWAKE_KERNEL_FALLBACK, FORCEWAKE_KERNEL_FALLBACK);
         let (retry_ok, retry_ack, retry_iters) =
             wait_forcewake_ack(warm, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
         set_ok = retry_ok;
@@ -339,7 +335,8 @@ fn forcewake_render_acquire(warm: Igpu770WarmState) -> u32 {
         fallback_used as u8
     );
     let _ = mmio_write32(warm, FORCEWAKE_GT, masked_bit_disable(FORCEWAKE_KERNEL));
-    let (_, gt_clear, gt_clear_iters) = wait_forcewake_req_latch(warm, FORCEWAKE_GT, FORCEWAKE_KERNEL, 0);
+    let (_, gt_clear, gt_clear_iters) =
+        wait_forcewake_req_latch(warm, FORCEWAKE_GT, FORCEWAKE_KERNEL, 0);
     let _ = mmio_write32(warm, FORCEWAKE_GT, masked_bit_enable(FORCEWAKE_KERNEL));
     let (gt_ok, gt_req, gt_iters) =
         wait_forcewake_req_latch(warm, FORCEWAKE_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
@@ -384,4 +381,3 @@ fn forcewake_render_mmio_sanity(warm: Igpu770WarmState) {
         restored
     );
 }
-

@@ -121,31 +121,14 @@ unsafe extern "C" fn trueos_browser_navigate_status_js(
         js_int32(0),
     );
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"bytes\0".as_ptr() as *const c_char, js_int32(0));
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"delivered\0".as_ptr() as *const c_char,
-        js_bool(false),
-    );
+    let _ =
+        qjs::JS_SetPropertyStr(ctx, obj, b"delivered\0".as_ptr() as *const c_char, js_bool(false));
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"done\0".as_ptr() as *const c_char, js_bool(true));
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"loading\0".as_ptr() as *const c_char,
-        js_bool(false),
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"failed\0".as_ptr() as *const c_char,
-        js_bool(true),
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"superseded\0".as_ptr() as *const c_char,
-        js_bool(false),
-    );
+    let _ =
+        qjs::JS_SetPropertyStr(ctx, obj, b"loading\0".as_ptr() as *const c_char, js_bool(false));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"failed\0".as_ptr() as *const c_char, js_bool(true));
+    let _ =
+        qjs::JS_SetPropertyStr(ctx, obj, b"superseded\0".as_ptr() as *const c_char, js_bool(false));
     // Old browser_net status lookup is temporarily disabled while the html/net
     // pipeline is being rewired. Keep polling callers alive with a terminal stub.
     js_set_string_prop(ctx, obj, b"state\0", "failed");
@@ -438,10 +421,7 @@ unsafe extern "C" fn trueos_xhci_port_reset_js(
     let Some(port) = js_to_i32(ctx, args[1]) else {
         return js_int32(-1);
     };
-    js_int32(crate::usb2::syscall::port_reset(
-        cid as usize,
-        port as usize,
-    ))
+    js_int32(crate::usb2::syscall::port_reset(cid as usize, port as usize))
 }
 
 unsafe extern "C" fn trueos_xhci_get_descriptor_js(
@@ -525,12 +505,7 @@ unsafe extern "C" fn trueos_xhci_read_transfer_event_js(
     let cc_val = js_int32(cc as i32);
     let residual_val = js_int32(residual as i32);
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cc\0".as_ptr() as *const c_char, cc_val);
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"residual\0".as_ptr() as *const c_char,
-        residual_val,
-    );
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"residual\0".as_ptr() as *const c_char, residual_val);
     obj
 }
 
@@ -958,12 +933,8 @@ pub(crate) unsafe fn install(ctx: *mut qjs::JSContext) {
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosCpuProfile\0".as_ptr() as *const c_char,
-        f,
-    );
+    let _ =
+        qjs::JS_SetPropertyStr(ctx, global, b"__trueosCpuProfile\0".as_ptr() as *const c_char, f);
 
     let f = qjs::JS_NewCFunction2(
         ctx,
@@ -1003,12 +974,8 @@ pub(crate) unsafe fn install(ctx: *mut qjs::JSContext) {
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosPanicTest\0".as_ptr() as *const c_char,
-        f,
-    );
+    let _ =
+        qjs::JS_SetPropertyStr(ctx, global, b"__trueosPanicTest\0".as_ptr() as *const c_char, f);
 
     let f = qjs::JS_NewCFunction2(
         ctx,

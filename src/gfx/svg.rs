@@ -278,12 +278,7 @@ impl SvgRasterizer {
         }
     }
 
-    fn rasterize_mesh(
-        &mut self,
-        vertices: &[[f32; 2]],
-        indices: &[u32],
-        paint: &SvgPaintStyle,
-    ) {
+    fn rasterize_mesh(&mut self, vertices: &[[f32; 2]], indices: &[u32], paint: &SvgPaintStyle) {
         for tri in indices.chunks_exact(3) {
             let Some(p0) = vertices.get(tri[0] as usize) else {
                 continue;
@@ -389,7 +384,10 @@ pub fn tessellate_svg_bytes(bytes: &[u8]) -> Result<SvgMeshDocument, i32> {
     tessellate_svg_text(svg_text)
 }
 
-pub fn tessellate_svg_bytes_at_height(bytes: &[u8], target_height: u32) -> Result<SvgMeshDocument, i32> {
+pub fn tessellate_svg_bytes_at_height(
+    bytes: &[u8],
+    target_height: u32,
+) -> Result<SvgMeshDocument, i32> {
     let svg_text = str::from_utf8(bytes).map_err(|_| ERR_SVG_INVALID_UTF8)?;
     tessellate_svg_text_at_height(svg_text, target_height)
 }
@@ -435,7 +433,11 @@ fn tessellate_svg_tree_with_size(
     })
 }
 
-fn choose_mesh_size_for_height(svg_w: f32, svg_h: f32, target_height: u32) -> Result<(u32, u32), i32> {
+fn choose_mesh_size_for_height(
+    svg_w: f32,
+    svg_h: f32,
+    target_height: u32,
+) -> Result<(u32, u32), i32> {
     if !(svg_w > 0.0 && svg_h > 0.0) {
         return Err(ERR_SVG_SIZE);
     }
@@ -533,20 +535,12 @@ fn build_paint_style(
                 return None;
             }
             let p0 = scale_xy(
-                apply_transform_xy(
-                    [gradient.x1(), gradient.y1()],
-                    gradient.transform(),
-                    abs_bbox,
-                ),
+                apply_transform_xy([gradient.x1(), gradient.y1()], gradient.transform(), abs_bbox),
                 scale_x,
                 scale_y,
             );
             let p1 = scale_xy(
-                apply_transform_xy(
-                    [gradient.x2(), gradient.y2()],
-                    gradient.transform(),
-                    abs_bbox,
-                ),
+                apply_transform_xy([gradient.x2(), gradient.y2()], gradient.transform(), abs_bbox),
                 scale_x,
                 scale_y,
             );
@@ -563,11 +557,7 @@ fn build_paint_style(
                 return None;
             }
             let center = scale_xy(
-                apply_transform_xy(
-                    [gradient.cx(), gradient.cy()],
-                    gradient.transform(),
-                    abs_bbox,
-                ),
+                apply_transform_xy([gradient.cx(), gradient.cy()], gradient.transform(), abs_bbox),
                 scale_x,
                 scale_y,
             );
