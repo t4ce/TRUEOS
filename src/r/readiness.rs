@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
@@ -30,23 +30,17 @@ pub const NET_V6_CONFIGURED: u32 = 1 << 14;
 
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
-pub const LOADSCREEN_FRAME_READY: u32 = 1 << 18;
 pub const GFX_VIRGL_READY: u32 = 1 << 19;
-pub const LOADSCREEN_END: u32 = 1 << 20;
 pub const GFX_INTEL_CLAIMED: u32 = 1 << 21;
 pub const GFX_BACKEND_READY: u32 = 1 << 22;
 pub const UI2_READY: u32 = 1 << 23;
-pub const GFX_BOOT_FRAME_READY: u32 = 1 << 24;
 pub const GFX_TEXTURE_UPLOAD_SERVICE_READY: u32 = 1 << 25;
-pub const GFX_ATHLASFONT_READY: u32 = 1 << 26;
-pub const LOADSCREEN_COVER_READY: u32 = 1 << 27;
 pub const UI2_DEMO_SLOT_1_READY: u32 = 1 << 28;
 pub const UI2_DEMO_SLOT_2_READY: u32 = 1 << 29;
 pub const UI2_DEMO_SLOT_3_READY: u32 = 1 << 30;
 pub const UI2_DEMO_SLOT_4_READY: u32 = 1 << 31;
 
 static READY: AtomicU32 = AtomicU32::new(0);
-static LOADSCREEN_EXPIRE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 #[inline]
 pub fn mask() -> u32 {
@@ -62,21 +56,6 @@ pub fn is_set(required: u32) -> bool {
 #[inline]
 pub fn set(flags: u32) {
     READY.fetch_or(flags, Ordering::AcqRel);
-}
-
-#[inline]
-pub fn set_loadscreen_expire_requested(requested: bool) {
-    LOADSCREEN_EXPIRE_REQUESTED.store(requested, Ordering::Release);
-}
-
-#[inline]
-pub fn loadscreen_expire_requested() -> bool {
-    LOADSCREEN_EXPIRE_REQUESTED.load(Ordering::Acquire)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_signal_loadscreen_end() {
-    set_loadscreen_expire_requested(true);
 }
 
 /// Wait until all required flags are set.

@@ -116,10 +116,8 @@ define_started_flags!(
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
     GFX_VIRGL_READY_TASK_STARTED,
-    GFX_BOOT_FRAME_READY_TASK_STARTED,
     GFX_VIRGL_CURSOR_OVERLAY_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
-    GFX_LOADSCREEN_STARTED,
     HTML_SHACK_SERVICE_STARTED,
     UI2_HOSTED_SYNC_TASK_STARTED,
     UI2_HIT_TASK_STARTED,
@@ -415,7 +413,16 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
 async fn gfx_virgl_ready_task() {
     crate::gfx::init(crate::limine::framebuffer_response());
 
+    #[cfg(feature = "gfx_virgl")]
+    if crate::gfx::is_virgl_active()
+        && !crate::gfx::athlasfont::imba_athlas_png_buckets_uploaded()
+        && !crate::gfx::athlasfont::ensure_imba_athlas_png_buckets_uploaded()
+    {
+        crate::log!("gfx-virgl-backend-ready: athlas bucket upload failed\n");
+    }
+
     if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
+        crate::log!("boot-probe: gfx-virgl-backend-ready ms={}\n", boot_probe_ms());
         return;
     }
 
@@ -463,39 +470,6 @@ async fn gfx_virgl_ready_task() {
 
 fn spawn_gfx_virgl_ready_task(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(gfx_virgl_ready_task()))
-}
-
-#[embassy_executor::task]
-async fn gfx_boot_frame_ready_task() {
-    crate::log!(
-        "boot-probe: gfx-boot-frame-ready task start ms={}\n",
-        boot_probe_ms()
-    );
-
-    loop {
-        let mut ready = false;
-        crate::gfx::with_cabi_frame_lock(|| {
-            let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0x000000) };
-            if begin_rc == 0 {
-                unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
-                ready = true;
-            }
-        });
-
-        if ready {
-            crate::r::readiness::set(crate::r::readiness::GFX_BOOT_FRAME_READY);
-            crate::log!("boot-probe: gfx-boot-frame-ready ms={}\n", boot_probe_ms());
-            return;
-        }
-
-        Timer::after(EmbassyDuration::from_millis(25)).await;
-    }
-}
-
-fn spawn_gfx_boot_frame_ready_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(gfx_boot_frame_ready_task())
-    })
 }
 
 #[embassy_executor::task]
@@ -553,12 +527,6 @@ fn gfx_switched() -> bool {
     {
         false
     }
-}
-
-fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::gfx::loadscreen::gfx_loadscreen_task())
-    })
 }
 
 #[embassy_executor::task]
@@ -813,7 +781,6 @@ const UI2_DEMOS: &[Ui2DemoTaskSpec] = &[
     UI2_TRIANGLE_DEMO,
     UI2_BGRT_DEMO,
     UI2_MANDELBROT_DEMO,
-    UI2_PARTICLE_DEMO,
 ];
 
 fn spawn_gfx_intel_readiness_probe(spawner: Spawner) -> SpawnAttempt {
@@ -1089,22 +1056,10 @@ static TASKS: &[TaskSpec] = &[
         spawn_gfx_virgl_ready_task,
     ),
     TaskSpec::enabled(
-        "gfx-boot-frame-ready",
-        crate::r::readiness::GFX_BACKEND_READY,
-        &GFX_BOOT_FRAME_READY_TASK_STARTED,
-        spawn_gfx_boot_frame_ready_task,
-    ),
-    TaskSpec::enabled(
         "gfx-virgl-cursor-overlay",
-        crate::r::readiness::LOADSCREEN_END,
+        crate::r::readiness::GFX_BACKEND_READY,
         &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
         spawn_gfx_virgl_cursor_overlay_task,
-    ),
-    TaskSpec::enabled(
-        "gfx_loadscreen",
-        crate::r::readiness::GFX_BOOT_FRAME_READY,
-        &GFX_LOADSCREEN_STARTED,
-        spawn_gfx_loadscreen,
     ),
     TaskSpec::enabled(
         "html_fetch_service",
@@ -1114,25 +1069,25 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::enabled(
         "gfx-texture-upload-service",
-        crate::r::readiness::GFX_BOOT_FRAME_READY,
+        crate::r::readiness::GFX_BACKEND_READY,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
     TaskSpec::enabled(
         "ui2",
-        crate::r::readiness::GFX_BOOT_FRAME_READY,
+        crate::r::readiness::GFX_BACKEND_READY,
         &UI2_STARTED,
         spawn_ui2,
     ),
     TaskSpec::enabled(
         "ui2-hosted",
-        crate::r::readiness::GFX_BOOT_FRAME_READY,
+        crate::r::readiness::GFX_BACKEND_READY,
         &UI2_HOSTED_SYNC_TASK_STARTED,
         spawn_ui2_hosted,
     ),
     TaskSpec::enabled(
         "ui2-hit",
-        crate::r::readiness::GFX_BOOT_FRAME_READY,
+        crate::r::readiness::GFX_BACKEND_READY,
         &UI2_HIT_TASK_STARTED,
         spawn_ui2_hit,
     ),
@@ -1152,7 +1107,12 @@ static TASKS: &[TaskSpec] = &[
     UI2_TRIANGLE_DEMO.task_spec(),
     UI2_BGRT_DEMO.task_spec(),
     UI2_MANDELBROT_DEMO.task_spec(),
-    UI2_PARTICLE_DEMO.task_spec(),
+    TaskSpec::disabled(
+        "ui2-particle-demo",
+        crate::r::readiness::UI2_DEMO_SLOT_4_READY,
+        &UI2_PARTICLE_DEMO_STARTED,
+        spawn_ui2_particle_demo,
+    ),
     TaskSpec::enabled(
         "gfx-intel-readiness-probe",
         crate::r::readiness::GFX_INTEL_CLAIMED,

@@ -205,6 +205,11 @@ pub fn ensure_imba_athlas_png_buckets_uploaded() -> bool {
 }
 
 #[inline]
+pub fn imba_athlas_png_buckets_uploaded() -> bool {
+    IMBA_ATHLAS_PNG_BUCKETS_UPLOADED.load(Ordering::Acquire)
+}
+
+#[inline]
 fn pack_short_text_cache_key(text: &[u8], px_h: f32) -> Option<u64> {
     if !(2..=3).contains(&text.len()) {
         return None;
@@ -729,7 +734,7 @@ pub fn draw_imba_athlas_text_in_frame_alpha_blend_nearest_px(
     src_blend: u32,
     dst_blend: u32,
 ) -> bool {
-    if text.is_empty() || !ensure_imba_athlas_png_buckets_uploaded() {
+    if text.is_empty() || !imba_athlas_png_buckets_uploaded() {
         return false;
     }
 

@@ -23,12 +23,10 @@ mod draw_cmd_stream;
 mod lyon_cmd_stream;
 
 static FIRST_QJS_END_FRAME_SEEN: AtomicBool = AtomicBool::new(false);
-
 unsafe extern "C" {
     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
     fn trueos_cabi_gfx_begin_frame_no_present(clear_rgb: u32) -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
-    fn trueos_cabi_signal_loadscreen_end();
     fn trueos_cabi_gfx_set_blend(
         enabled: u32,
         src_rgb: u32,
@@ -1033,18 +1031,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         qjs::JSValue::undefined()
     }
 
-    unsafe extern "C" fn qjs_cmd_stream_signal_loadscreen_end(
-        _ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        _argc: i32,
-        _argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        if !FIRST_QJS_END_FRAME_SEEN.swap(true, Ordering::AcqRel) {
-            trueos_cabi_signal_loadscreen_end();
-        }
-        qjs::JSValue::undefined()
-    }
-
     unsafe extern "C" fn qjs_cmd_stream_set_clear_rgb(
         ctx: *mut qjs::JSContext,
         _this_val: qjs::JSValueConst,
@@ -1370,7 +1356,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
     const CMD_STREAM_MODULE_EXPORTS: &[CmdStreamModuleExport] = &[
         (b"beginFrame\0", qjs_cmd_stream_begin_frame, 0),
         (b"endFrame\0", qjs_cmd_stream_end_frame, 0),
-        (b"signalLoadscreenEnd\0", qjs_cmd_stream_signal_loadscreen_end, 0),
         (b"setClearRgb\0", qjs_cmd_stream_set_clear_rgb, 1),
         (b"setViewport\0", qjs_cmd_stream_set_viewport, 2),
         (b"setOrigin\0", qjs_cmd_stream_set_origin, 2),
