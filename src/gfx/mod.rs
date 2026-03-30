@@ -109,6 +109,24 @@ pub struct System {
     framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
 }
 
+fn finalize_backend_init() {
+    let backend_ready = with_system(|sys| !matches!(sys.backend, backends::Backend::None(_)))
+        .unwrap_or(false);
+    if !backend_ready {
+        return;
+    }
+
+    #[cfg(feature = "gfx_virgl")]
+    if is_virgl_active()
+        && !athlasfont::imba_athlas_png_buckets_uploaded()
+        && !athlasfont::ensure_imba_athlas_png_buckets_uploaded()
+    {
+        crate::log!("gfx: athlas bucket upload failed during init\n");
+    }
+
+    crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum SystemLockOwner {
@@ -164,11 +182,10 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
             backends::Backend::None(_) => "none",
         };
         crate::log!("gfx: backend={}\n", backend_name);
-        if !matches!(&backend, backends::Backend::None(_)) {
-            crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
-        }
         Mutex::new(System::new(backend, framebuffers))
     });
+
+    finalize_backend_init();
 }
 
 pub fn with_cabi_frame_lock<R>(f: impl FnOnce() -> R) -> R {
@@ -378,14 +395,19 @@ pub fn switch_to_virgl() -> bool {
         return false;
     };
 
-    with_system(|sys| {
+    let switched = with_system(|sys| {
         sys.backend = b;
         bump_backend_epoch();
-        crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
         crate::log!("gfx: switch_to_virgl: ok epoch={}\n", backend_epoch());
         true
     })
-    .unwrap_or(false)
+    .unwrap_or(false);
+
+    if switched {
+        finalize_backend_init();
+    }
+
+    switched
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
