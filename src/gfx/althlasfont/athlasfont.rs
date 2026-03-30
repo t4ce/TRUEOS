@@ -2,6 +2,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use embassy_time::Instant;
 use libm::{ceilf, fabsf, floorf};
 use spin::{Mutex, Once};
 use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
@@ -19,6 +20,7 @@ static IMBA_ATHLAS_SHORT_TEXT_NEXT_TEX_ID: AtomicU32 = AtomicU32::new(30_000);
 
 const IMBA_ATHLAS_GRID: usize = 16;
 const IMBA_ATHLAS_LARGE_TILE_H: f32 = 24.0;
+const IMBA_ATHLAS_EAGER_UPLOAD_COUNT: usize = PNG_BUCKET_ASSETS.len();
 
 const IMBA_ATHLAS_BUCKET_TEX_IDS: [[u32; 8]; 3] = [
     [1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107],
@@ -164,7 +166,9 @@ pub fn ensure_imba_athlas_png_buckets_uploaded() -> bool {
         return true;
     }
 
-    for asset in PNG_BUCKET_ASSETS {
+    let started_at = Instant::now();
+
+    for asset in PNG_BUCKET_ASSETS.iter().take(IMBA_ATHLAS_EAGER_UPLOAD_COUNT) {
         let decoded = match crate::gfx::png_codec::decode_png_rgba(asset.png) {
             Ok(decoded) => decoded,
             Err(err) => {
@@ -197,7 +201,14 @@ pub fn ensure_imba_athlas_png_buckets_uploaded() -> bool {
     }
 
     IMBA_ATHLAS_PNG_BUCKETS_UPLOADED.store(true, Ordering::Release);
-    crate::log!("imba-athlas-png: uploaded {} bucket textures\n", PNG_BUCKET_ASSETS.len());
+    let elapsed_ms = Instant::now()
+        .saturating_duration_since(started_at)
+        .as_millis() as u64;
+    crate::log!(
+        "imba-athlas-png: uploaded {} bucket textures ms={}\n",
+        IMBA_ATHLAS_EAGER_UPLOAD_COUNT.min(PNG_BUCKET_ASSETS.len()),
+        elapsed_ms
+    );
     true
 }
 

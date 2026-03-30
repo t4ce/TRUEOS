@@ -275,33 +275,9 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         } else {
             rect.x + 8.0
         };
-        let title_text = window.title.as_bytes();
-        let title_x = title_left;
-        let title_y = rect.y + ((UI2_TITLE_H - TITLE_TEXT_H) * 0.5);
-        if !title_text.is_empty() {
-            let _ = crate::gfx::athlasfont::draw_imba_athlas_text_in_frame_alpha_blend_scaled_px(
-                title_text,
-                title_x + 1.0,
-                title_y + 1.0,
-                state.view_w,
-                state.view_h,
-                TITLE_TEXT_H,
-                0x70,
-                GL_ONE,
-                GL_ONE_MINUS_SRC_ALPHA,
-            );
-            let _ = crate::gfx::athlasfont::draw_imba_athlas_text_in_frame_alpha_blend_scaled_px(
-                title_text,
-                title_x,
-                title_y,
-                state.view_w,
-                state.view_h,
-                TITLE_TEXT_H,
-                window.alpha,
-                GL_ONE,
-                GL_ONE_MINUS_SRC_ALPHA,
-            );
-        }
+        let _ = title_w;
+        let _ = title_left;
+        // Decoration title font rendering is temporarily disabled.
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleMaximize);

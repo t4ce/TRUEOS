@@ -7,7 +7,7 @@ use core::cmp::Ordering as CmpOrdering;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::{Mutex, Once};
 
 mod ui2_hid;
@@ -298,6 +298,11 @@ static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
 fn boot_probe_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     embassy_time_driver::now().saturating_mul(1000) / hz
+}
+
+#[inline]
+fn elapsed_ms_since(started_at: Instant) -> u64 {
+    Instant::now().saturating_duration_since(started_at).as_millis() as u64
 }
 
 #[inline]
@@ -1626,21 +1631,21 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
         return Ui2WindowDrawTiming::default();
     }
 
-    let frame_started_ms = boot_probe_ms();
+    let chrome_started_at = Instant::now();
     let rect = effective_window_rect(state, window);
     let content_rect = window_content_rect(state, window);
     draw_window_chrome(state, window, rect);
 
-    let chrome_ms = boot_probe_ms().saturating_sub(frame_started_ms);
+    let chrome_ms = elapsed_ms_since(chrome_started_at);
 
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
             if let Some(content) = content_rect {
-                let content_started_ms = boot_probe_ms();
+                let content_started_at = Instant::now();
                 if draw_hosted_browser_preview_cache(state, window, content) {
                     return Ui2WindowDrawTiming {
                         chrome_ms,
-                        texture_ms: boot_probe_ms().saturating_sub(content_started_ms),
+                        texture_ms: elapsed_ms_since(content_started_at),
                         placeholder_ms: 0,
                         content_path: "browser-preview-cache",
                     };
@@ -1660,12 +1665,12 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
                 {
                     return Ui2WindowDrawTiming {
                         chrome_ms,
-                        texture_ms: boot_probe_ms().saturating_sub(content_started_ms),
+                        texture_ms: elapsed_ms_since(content_started_at),
                         placeholder_ms: 0,
                         content_path: "browser-texture",
                     };
                 }
-                let placeholder_started_ms = boot_probe_ms();
+                let placeholder_started_at = Instant::now();
                 draw_window_content_placeholder(
                     state,
                     window,
@@ -1676,7 +1681,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
                 return Ui2WindowDrawTiming {
                     chrome_ms,
                     texture_ms: 0,
-                    placeholder_ms: boot_probe_ms().saturating_sub(placeholder_started_ms),
+                    placeholder_ms: elapsed_ms_since(placeholder_started_at),
                     content_path: "browser-placeholder",
                 };
             }
@@ -1685,7 +1690,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
             if let Some(content) = content_rect {
                 let texture_drawable = texture_is_drawable(window.content_tex_id);
                 if texture_drawable {
-                    let texture_started_ms = boot_probe_ms();
+                    let texture_started_at = Instant::now();
                     if draw_texture_rect_no_present(
                         window.content_tex_id,
                         content.x,
@@ -1699,13 +1704,13 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
                     ) {
                         return Ui2WindowDrawTiming {
                             chrome_ms,
-                            texture_ms: boot_probe_ms().saturating_sub(texture_started_ms),
+                            texture_ms: elapsed_ms_since(texture_started_at),
                             placeholder_ms: 0,
                             content_path: "surface-texture",
                         };
                     }
                 }
-                let placeholder_started_ms = boot_probe_ms();
+                let placeholder_started_at = Instant::now();
                 draw_window_content_placeholder(
                     state,
                     window,
@@ -1716,7 +1721,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
                 return Ui2WindowDrawTiming {
                     chrome_ms,
                     texture_ms: 0,
-                    placeholder_ms: boot_probe_ms().saturating_sub(placeholder_started_ms),
+                    placeholder_ms: elapsed_ms_since(placeholder_started_at),
                     content_path: if texture_drawable {
                         "surface-texture-fallback"
                     } else {
@@ -1729,7 +1734,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
             if let Some(content) = content_rect {
                 let texture_drawable = texture_is_drawable(window.content_tex_id);
                 if texture_drawable {
-                    let texture_started_ms = boot_probe_ms();
+                    let texture_started_at = Instant::now();
                     if draw_texture_rect_no_present(
                         window.content_tex_id,
                         content.x,
@@ -1743,13 +1748,13 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
                     ) {
                         return Ui2WindowDrawTiming {
                             chrome_ms,
-                            texture_ms: boot_probe_ms().saturating_sub(texture_started_ms),
+                            texture_ms: elapsed_ms_since(texture_started_at),
                             placeholder_ms: 0,
                             content_path: "3d-texture",
                         };
                     }
                 }
-                let placeholder_started_ms = boot_probe_ms();
+                let placeholder_started_at = Instant::now();
                 draw_window_content_placeholder(
                     state,
                     window,
@@ -1760,7 +1765,7 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
                 return Ui2WindowDrawTiming {
                     chrome_ms,
                     texture_ms: 0,
-                    placeholder_ms: boot_probe_ms().saturating_sub(placeholder_started_ms),
+                    placeholder_ms: elapsed_ms_since(placeholder_started_at),
                     content_path: if texture_drawable {
                         "3d-texture-fallback"
                     } else {
@@ -1815,6 +1820,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     let compose_seq = state.compose_seq.wrapping_add(1);
     let compose_reason = state.compose_reason;
     let compose_started_ms = boot_probe_ms();
+    let compose_started_at = Instant::now();
     let mut surface_timings = Vec::new();
     let mut frame_ok = false;
 
@@ -1903,7 +1909,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     }
 
     if compose_seq <= 2 || compose_seq.is_multiple_of(UI2_COMPOSE_LOG_EVERY) {
-        let present_ms = boot_probe_ms().saturating_sub(compose_started_ms);
+        let present_ms = elapsed_ms_since(compose_started_at);
         state.compose_present_history_ms.push(present_ms);
         if state.compose_present_history_ms.len() > 64 {
             let excess = state.compose_present_history_ms.len() - 64;

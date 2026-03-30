@@ -113,7 +113,10 @@ pub(crate) struct CopySmokePlan {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct ColorFillSmokePlan {
+	pub surface_gpu_addr: u64,
 	pub dst_gpu_addr: u64,
+	pub dst_x: u32,
+	pub dst_y: u32,
 	pub pitch_bytes: u32,
 	pub rect_w: u32,
 	pub rect_h: u32,
@@ -285,6 +288,12 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
 	batch_dwords: &mut [u32],
 	plan: ColorFillSmokePlan,
 ) -> Result<usize, CopySmokeBuildError> {
+	if !addr_aligned_4(plan.surface_gpu_addr) {
+		return Err(CopySmokeBuildError::UnalignedAddress {
+			field: "surface_gpu_addr",
+			addr: plan.surface_gpu_addr,
+		});
+	}
 	if !addr_aligned_4(plan.dst_gpu_addr) {
 		return Err(CopySmokeBuildError::UnalignedAddress {
 			field: "dst_gpu_addr",
@@ -341,8 +350,20 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
 			value: plan.rect_h,
 		});
 		}
+	if plan.dst_x > 0xFFFF {
+		return Err(CopySmokeBuildError::InvalidRect {
+			field: "dst_x",
+			value: plan.dst_x,
+		});
+	}
+	if plan.dst_y > 0xFFFF {
+		return Err(CopySmokeBuildError::InvalidRect {
+			field: "dst_y",
+			value: plan.dst_y,
+		});
+	}
 
-	let required = if plan.use_force_wakeup { 28 } else { 26 };
+	let required = if plan.use_force_wakeup { 33 } else { 31 };
 	if batch_dwords.len() < required {
 		return Err(CopySmokeBuildError::BatchTooSmall {
 			need_dwords: required,
@@ -382,10 +403,11 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
 
 	batch_dwords[i] = blt::XY_COLOR_BLT | blt::WRITE_RGBA | blt::xy_color_blt_len(7);
 	batch_dwords[i + 1] = blt::DEPTH_32 | blt::ROP_COLOR_COPY | plan.pitch_bytes;
-	batch_dwords[i + 2] = 0;
-	batch_dwords[i + 3] = (plan.rect_h << 16) | plan.rect_w;
-	batch_dwords[i + 4] = lo32(plan.dst_gpu_addr);
-	batch_dwords[i + 5] = hi32(plan.dst_gpu_addr);
+	batch_dwords[i + 2] = (plan.dst_y << 16) | plan.dst_x;
+	batch_dwords[i + 3] =
+		((plan.dst_y.saturating_add(plan.rect_h)) << 16) | plan.dst_x.saturating_add(plan.rect_w);
+	batch_dwords[i + 4] = lo32(plan.surface_gpu_addr);
+	batch_dwords[i + 5] = 0;
 	batch_dwords[i + 6] = plan.color;
 	batch_dwords[i + 7] = mi::NOOP;
 	i += 8;
@@ -395,6 +417,12 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
 		&mut i,
 		copy_smoke_result_addr(plan.result_gpu_addr, COPY_SMOKE_POST_COPY_SLOT),
 		plan.post_color_value,
+	);
+	emit_flush_dw_store(
+		batch_dwords,
+		&mut i,
+		copy_smoke_result_addr(plan.result_gpu_addr, COPY_SMOKE_DONE_SLOT),
+		plan.done_value,
 	);
 
 	batch_dwords[i] = mi::BATCH_BUFFER_END;
