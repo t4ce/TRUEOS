@@ -223,11 +223,7 @@ fn maybe_notify_connected(conn: &mut TlsConn) {
     if conn.tls.is_connected()
         && let Some(handle) = conn.handle
     {
-        crate::log!(
-            "tls-socket: tls connected owner={} handle={}\n",
-            conn.user_owner,
-            handle.0
-        );
+        crate::log!("tls-socket: tls connected owner={} handle={}\n", conn.user_owner, handle.0);
         // Only mark as notified once the event is successfully queued.
         // Otherwise the app may never observe `Connected` and will stall.
         if push_tls_event(conn.user_owner, TlsEvent::Connected { handle }) {

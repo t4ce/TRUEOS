@@ -39,10 +39,7 @@ pub async fn ui2_bgrt_demo_task() {
         true,
         [0x00, 0x00, 0x00, 0x00],
     ) else {
-        crate::log!(
-            "ui2-bgrt-demo: window creation failed tex={}\n",
-            UI2_BGRT_TEX_ID
-        );
+        crate::log!("ui2-bgrt-demo: window creation failed tex={}\n", UI2_BGRT_TEX_ID);
         return;
     };
 

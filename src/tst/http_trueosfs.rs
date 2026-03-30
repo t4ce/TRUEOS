@@ -470,10 +470,7 @@ pub async fn http_trueosfs_task() {
             ports::HTTP_TRUEOSFS_TCP_PORT
         );
 
-        let mut server = vhttp_srv::HttpServer::new(
-            ports::HTTP_TRUEOSFS_TCP_PORT,
-            HTTP_TRUEOSFS_MAX_REQUEST_BYTES,
-        );
+        let mut server = vhttp_srv::HttpServer::new(ports::HTTP_TRUEOSFS_TCP_PORT, HTTP_TRUEOSFS_MAX_REQUEST_BYTES);
 
         loop {
             while let Some(ev) = vnet.pop_event() {
@@ -540,27 +537,21 @@ pub async fn http_trueosfs_task() {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 400 Bad Request\r\n",
                                             "missing root/path\n",
-                                        )
+                                        );
                                     }
                                 };
 
                                 let root_raw = match root_raw_s.parse::<u32>() {
                                     Ok(v) => v,
                                     Err(_) => {
-                                        break 'resp http_plain_response(
-                                            "HTTP/1.1 400 Bad Request\r\n",
-                                            "bad root\n",
-                                        )
+                                        break 'resp http_plain_response("HTTP/1.1 400 Bad Request\r\n", "bad root\n");
                                     }
                                 };
 
                                 let root = match roots.iter().find(|r| r.disk_id.raw() == root_raw) {
                                     Some(v) => v,
                                     None => {
-                                        break 'resp http_plain_response(
-                                            "HTTP/1.1 404 Not Found\r\n",
-                                            "unknown root\n",
-                                        )
+                                        break 'resp http_plain_response("HTTP/1.1 404 Not Found\r\n", "unknown root\n");
                                     }
                                 };
 
@@ -570,25 +561,19 @@ pub async fn http_trueosfs_task() {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 503 Service Unavailable\r\n",
                                             "root unavailable\n",
-                                        )
+                                        );
                                     }
                                 };
 
                                 let path = match http_normalize_rel_path_decoded(enc_path, 240) {
                                     Some(v) => v,
                                     None => {
-                                        break 'resp http_plain_response(
-                                            "HTTP/1.1 400 Bad Request\r\n",
-                                            "bad path\n",
-                                        )
+                                        break 'resp http_plain_response("HTTP/1.1 400 Bad Request\r\n", "bad path\n");
                                     }
                                 };
 
                                 if path.is_empty() {
-                                    break 'resp http_plain_response(
-                                        "HTTP/1.1 400 Bad Request\r\n",
-                                        "bad path\n",
-                                    );
+                                    break 'resp http_plain_response("HTTP/1.1 400 Bad Request\r\n", "bad path\n");
                                 }
 
                                 http_prepare_file_response(disk, path, &req).await
@@ -597,27 +582,16 @@ pub async fn http_trueosfs_task() {
                             // Back-compat download endpoint: /dl?path=<urlencoded path> (uses primary root)
                             let disk = crate::r::fs::trueosfs::primary_root_handle();
                             match disk {
-                                None => http_plain_response(
-                                    "HTTP/1.1 503 Service Unavailable\r\n",
-                                    "no TRUEOSFS mounted\n",
-                                ),
+                                None => {
+                                    http_plain_response("HTTP/1.1 503 Service Unavailable\r\n", "no TRUEOSFS mounted\n")
+                                }
                                 Some(disk) => match vhttp_srv::query_param(target.as_str(), "path") {
-                                    None => http_plain_response(
-                                        "HTTP/1.1 400 Bad Request\r\n",
-                                        "missing path\n",
-                                    ),
-                                    Some(enc_path) => match http_normalize_rel_path_decoded(enc_path, 240)
-                                    {
-                                        None => http_plain_response(
-                                            "HTTP/1.1 400 Bad Request\r\n",
-                                            "bad path\n",
-                                        ),
+                                    None => http_plain_response("HTTP/1.1 400 Bad Request\r\n", "missing path\n"),
+                                    Some(enc_path) => match http_normalize_rel_path_decoded(enc_path, 240) {
+                                        None => http_plain_response("HTTP/1.1 400 Bad Request\r\n", "bad path\n"),
                                         Some(path) => {
                                             if path.is_empty() {
-                                                http_plain_response(
-                                                    "HTTP/1.1 400 Bad Request\r\n",
-                                                    "bad path\n",
-                                                )
+                                                http_plain_response("HTTP/1.1 400 Bad Request\r\n", "bad path\n")
                                             } else {
                                                 http_prepare_file_response(disk, path, &req).await
                                             }
@@ -634,7 +608,7 @@ pub async fn http_trueosfs_task() {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 400 Bad Request\r\n",
                                             "bad upload path\n",
-                                        )
+                                        );
                                     }
                                 };
                                 let name = match vhttp_srv::query_param(target.as_str(), "name")
@@ -646,16 +620,13 @@ pub async fn http_trueosfs_task() {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 400 Bad Request\r\n",
                                             "missing file name\n",
-                                        )
+                                        );
                                     }
                                 };
                                 let root = match roots.iter().find(|r| r.disk_id.raw() == root_raw) {
                                     Some(v) => v,
                                     None => {
-                                        break 'resp http_plain_response(
-                                            "HTTP/1.1 404 Not Found\r\n",
-                                            "unknown root\n",
-                                        )
+                                        break 'resp http_plain_response("HTTP/1.1 404 Not Found\r\n", "unknown root\n");
                                     }
                                 };
                                 let disk = match crate::disc::block::device_handle(root.disk_id) {
@@ -664,29 +635,19 @@ pub async fn http_trueosfs_task() {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 503 Service Unavailable\r\n",
                                             "root unavailable\n",
-                                        )
+                                        );
                                     }
                                 };
                                 let full_path = http_join_rel_path(dir.as_str(), name.as_str());
-                                match crate::r::fs::trueosfs::file_in_async(
-                                    disk,
-                                    full_path.as_str(),
-                                    body_bytes,
-                                )
-                                .await
+                                match crate::r::fs::trueosfs::file_in_async(disk, full_path.as_str(), body_bytes).await
                                 {
-                                    Ok(true) => http_plain_response(
-                                        "HTTP/1.1 200 OK\r\n",
-                                        "upload ok\n",
-                                    ),
-                                    Ok(false) => http_plain_response(
-                                        "HTTP/1.1 507 Insufficient Storage\r\n",
-                                        "upload failed\n",
-                                    ),
-                                    Err(_) => http_plain_response(
-                                        "HTTP/1.1 500 Internal Server Error\r\n",
-                                        "upload error\n",
-                                    ),
+                                    Ok(true) => http_plain_response("HTTP/1.1 200 OK\r\n", "upload ok\n"),
+                                    Ok(false) => {
+                                        http_plain_response("HTTP/1.1 507 Insufficient Storage\r\n", "upload failed\n")
+                                    }
+                                    Err(_) => {
+                                        http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "upload error\n")
+                                    }
                                 }
                             }
                         } else if method == "POST" && vhttp_srv::path_only(target.as_str()).starts_with("/mkdir/") {
@@ -697,7 +658,7 @@ pub async fn http_trueosfs_task() {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 400 Bad Request\r\n",
                                             "bad mkdir path\n",
-                                        )
+                                        );
                                     }
                                 };
                                 let name = match vhttp_srv::query_param(target.as_str(), "name")
@@ -708,16 +669,13 @@ pub async fn http_trueosfs_task() {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 400 Bad Request\r\n",
                                             "missing folder name\n",
-                                        )
+                                        );
                                     }
                                 };
                                 let root = match roots.iter().find(|r| r.disk_id.raw() == root_raw) {
                                     Some(v) => v,
                                     None => {
-                                        break 'resp http_plain_response(
-                                            "HTTP/1.1 404 Not Found\r\n",
-                                            "unknown root\n",
-                                        )
+                                        break 'resp http_plain_response("HTTP/1.1 404 Not Found\r\n", "unknown root\n");
                                     }
                                 };
                                 let disk = match crate::disc::block::device_handle(root.disk_id) {
@@ -726,26 +684,19 @@ pub async fn http_trueosfs_task() {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 503 Service Unavailable\r\n",
                                             "root unavailable\n",
-                                        )
+                                        );
                                     }
                                 };
                                 let folder = http_join_rel_path(dir.as_str(), name.as_str());
                                 let marker = http_join_rel_path(folder.as_str(), ".keep");
-                                match crate::r::fs::trueosfs::file_in_async(disk, marker.as_str(), &[])
-                                    .await
-                                {
-                                    Ok(true) => http_plain_response(
-                                        "HTTP/1.1 200 OK\r\n",
-                                        "mkdir ok\n",
-                                    ),
-                                    Ok(false) => http_plain_response(
-                                        "HTTP/1.1 507 Insufficient Storage\r\n",
-                                        "mkdir failed\n",
-                                    ),
-                                    Err(_) => http_plain_response(
-                                        "HTTP/1.1 500 Internal Server Error\r\n",
-                                        "mkdir error\n",
-                                    ),
+                                match crate::r::fs::trueosfs::file_in_async(disk, marker.as_str(), &[]).await {
+                                    Ok(true) => http_plain_response("HTTP/1.1 200 OK\r\n", "mkdir ok\n"),
+                                    Ok(false) => {
+                                        http_plain_response("HTTP/1.1 507 Insufficient Storage\r\n", "mkdir failed\n")
+                                    }
+                                    Err(_) => {
+                                        http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "mkdir error\n")
+                                    }
                                 }
                             }
                         } else if method == "POST" && vhttp_srv::path_only(target.as_str()).starts_with("/rm/") {
@@ -758,34 +709,23 @@ pub async fn http_trueosfs_task() {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 400 Bad Request\r\n",
                                             "missing root/path\n",
-                                        )
+                                        );
                                     }
                                 };
                                 let root_raw = match root_raw_s.parse::<u32>() {
                                     Ok(v) => v,
                                     Err(_) => {
-                                        break 'resp http_plain_response(
-                                            "HTTP/1.1 400 Bad Request\r\n",
-                                            "bad root\n",
-                                        )
+                                        break 'resp http_plain_response("HTTP/1.1 400 Bad Request\r\n", "bad root\n");
                                     }
                                 };
                                 let path = match http_normalize_rel_path_decoded(enc_path, 240) {
                                     Some(v) if !v.is_empty() => v,
-                                    _ => {
-                                        break 'resp http_plain_response(
-                                            "HTTP/1.1 400 Bad Request\r\n",
-                                            "bad path\n",
-                                        )
-                                    }
+                                    _ => break 'resp http_plain_response("HTTP/1.1 400 Bad Request\r\n", "bad path\n"),
                                 };
                                 let root = match roots.iter().find(|r| r.disk_id.raw() == root_raw) {
                                     Some(v) => v,
                                     None => {
-                                        break 'resp http_plain_response(
-                                            "HTTP/1.1 404 Not Found\r\n",
-                                            "unknown root\n",
-                                        )
+                                        break 'resp http_plain_response("HTTP/1.1 404 Not Found\r\n", "unknown root\n");
                                     }
                                 };
                                 let disk = match crate::disc::block::device_handle(root.disk_id) {
@@ -794,22 +734,15 @@ pub async fn http_trueosfs_task() {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 503 Service Unavailable\r\n",
                                             "root unavailable\n",
-                                        )
+                                        );
                                     }
                                 };
                                 match crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await {
-                                    Ok(true) => http_plain_response(
-                                        "HTTP/1.1 200 OK\r\n",
-                                        "delete ok\n",
-                                    ),
-                                    Ok(false) => http_plain_response(
-                                        "HTTP/1.1 404 Not Found\r\n",
-                                        "not found\n",
-                                    ),
-                                    Err(_) => http_plain_response(
-                                        "HTTP/1.1 500 Internal Server Error\r\n",
-                                        "delete error\n",
-                                    ),
+                                    Ok(true) => http_plain_response("HTTP/1.1 200 OK\r\n", "delete ok\n"),
+                                    Ok(false) => http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n"),
+                                    Err(_) => {
+                                        http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "delete error\n")
+                                    }
                                 }
                             }
                         } else {
@@ -820,15 +753,14 @@ pub async fn http_trueosfs_task() {
 
                                 let tree = match crate::disc::block::device_handle(r.disk_id) {
                                     None => None,
-                                    Some(disk) => match crate::r::fs::trueosfs::html_tree_async(
-                                        disk,
-                                        HTTP_TRUEOSFS_MAX_ENTRIES,
-                                    )
-                                    .await
-                                    {
-                                        Ok(v) => v,
-                                        Err(_) => None,
-                                    },
+                                    Some(disk) => {
+                                        match crate::r::fs::trueosfs::html_tree_async(disk, HTTP_TRUEOSFS_MAX_ENTRIES)
+                                            .await
+                                        {
+                                            Ok(v) => v,
+                                            Err(_) => None,
+                                        }
+                                    }
                                 };
 
                                 trees_html.push_str(
@@ -836,7 +768,7 @@ pub async fn http_trueosfs_task() {
                                         "<details><summary>{}</summary><div class=\"tree\" data-root=\"{}\">",
                                         r.disk_id, raw
                                     )
-                                        .as_str(),
+                                    .as_str(),
                                 );
                                 if let Some(t) = tree {
                                     trees_html.push_str(t.as_str());
@@ -848,85 +780,43 @@ pub async fn http_trueosfs_task() {
                             http_mount_page(trees_html.as_str(), !roots.is_empty())
                         };
 
-                    let HttpResponsePlan {
-                        status,
-                        content_type,
-                        extra_headers,
-                        body_len,
-                        body,
-                    } = response;
-                    let mut cmds = Vec::new();
-                    let pending = vhttp_srv::queue_response_head(
-                        &mut cmds,
-                        handle,
-                        status,
-                        content_type,
-                        extra_headers.as_str(),
-                        body_len,
-                        request.keep_alive(),
-                    );
-                    server.mark_response(handle, pending, request.keep_alive());
-                    http_submit_commands(&vnet, cmds);
+                        let HttpResponsePlan {
+                            status,
+                            content_type,
+                            extra_headers,
+                            body_len,
+                            body,
+                        } = response;
+                        let mut cmds = Vec::new();
+                        let pending = vhttp_srv::queue_response_head(
+                            &mut cmds,
+                            handle,
+                            status,
+                            content_type,
+                            extra_headers.as_str(),
+                            body_len,
+                            request.keep_alive(),
+                        );
+                        server.mark_response(handle, pending, request.keep_alive());
+                        http_submit_commands(&vnet, cmds);
 
-                    let mut perf = HttpPerf::default();
+                        let mut perf = HttpPerf::default();
 
-                    match body {
-                        HttpBodyPlan::Bytes(bytes) => {
-                            let mut cmds = Vec::new();
-                            vhttp_srv::queue_send_bytes(&mut cmds, handle, bytes.as_slice());
-                            http_submit_commands(&vnet, cmds);
-                        }
-                        HttpBodyPlan::File {
-                            disk,
-                            path,
-                            offset,
-                            len,
-                        } => {
-                            let mut buf = vec![0u8; http_stream_chunk_bytes(disk)];
-                            let mut remaining = len;
-                            let mut off = offset;
-                            while remaining > 0 {
-                                let want = core::cmp::min(remaining, buf.len() as u64) as usize;
-                                let t0 = tsc_now();
-                                let read = match crate::r::fs::trueosfs::file_read_range_async(
-                                    disk,
-                                    path.as_str(),
-                                    off,
-                                    &mut buf[..want],
-                                )
-                                .await
-                                {
-                                    Ok(Some(n)) => n,
-                                    _ => 0,
-                                };
-                                let t1 = tsc_now();
-                                perf.record_read(t1.wrapping_sub(t0));
-                                if read == 0 {
-                                    break;
-                                }
-                                let t2 = tsc_now();
+                        match body {
+                            HttpBodyPlan::Bytes(bytes) => {
                                 let mut cmds = Vec::new();
-                                vhttp_srv::queue_send_bytes(&mut cmds, handle, &buf[..read]);
+                                vhttp_srv::queue_send_bytes(&mut cmds, handle, bytes.as_slice());
                                 http_submit_commands(&vnet, cmds);
-                                let t3 = tsc_now();
-                                perf.record_submit(t3.wrapping_sub(t2), read);
-                                off = off.saturating_add(read as u64);
-                                remaining = remaining.saturating_sub(read as u64);
                             }
-                        }
-                        HttpBodyPlan::Multipart {
-                            disk,
-                            path,
-                            parts,
-                            boundary,
-                        } => {
-                            let mut buf = vec![0u8; http_stream_chunk_bytes(disk)];
-                            for part in parts {
-                                let mut cmds = Vec::new();
-                                vhttp_srv::queue_send_bytes(&mut cmds, handle, part.header.as_bytes());
-                                http_submit_commands(&vnet, cmds);
-                                let mut remaining = part.end.saturating_sub(part.start).saturating_add(1);
-                                let mut off = part.start;
+                            HttpBodyPlan::File {
+                                disk,
+                                path,
+                                offset,
+                                len,
+                            } => {
+                                let mut buf = vec![0u8; http_stream_chunk_bytes(disk)];
+                                let mut remaining = len;
+                                let mut off = offset;
                                 while remaining > 0 {
                                     let want = core::cmp::min(remaining, buf.len() as u64) as usize;
                                     let t0 = tsc_now();
@@ -955,17 +845,59 @@ pub async fn http_trueosfs_task() {
                                     off = off.saturating_add(read as u64);
                                     remaining = remaining.saturating_sub(read as u64);
                                 }
+                            }
+                            HttpBodyPlan::Multipart {
+                                disk,
+                                path,
+                                parts,
+                                boundary,
+                            } => {
+                                let mut buf = vec![0u8; http_stream_chunk_bytes(disk)];
+                                for part in parts {
+                                    let mut cmds = Vec::new();
+                                    vhttp_srv::queue_send_bytes(&mut cmds, handle, part.header.as_bytes());
+                                    http_submit_commands(&vnet, cmds);
+                                    let mut remaining = part.end.saturating_sub(part.start).saturating_add(1);
+                                    let mut off = part.start;
+                                    while remaining > 0 {
+                                        let want = core::cmp::min(remaining, buf.len() as u64) as usize;
+                                        let t0 = tsc_now();
+                                        let read = match crate::r::fs::trueosfs::file_read_range_async(
+                                            disk,
+                                            path.as_str(),
+                                            off,
+                                            &mut buf[..want],
+                                        )
+                                        .await
+                                        {
+                                            Ok(Some(n)) => n,
+                                            _ => 0,
+                                        };
+                                        let t1 = tsc_now();
+                                        perf.record_read(t1.wrapping_sub(t0));
+                                        if read == 0 {
+                                            break;
+                                        }
+                                        let t2 = tsc_now();
+                                        let mut cmds = Vec::new();
+                                        vhttp_srv::queue_send_bytes(&mut cmds, handle, &buf[..read]);
+                                        http_submit_commands(&vnet, cmds);
+                                        let t3 = tsc_now();
+                                        perf.record_submit(t3.wrapping_sub(t2), read);
+                                        off = off.saturating_add(read as u64);
+                                        remaining = remaining.saturating_sub(read as u64);
+                                    }
+                                    let mut cmds = Vec::new();
+                                    vhttp_srv::queue_send_bytes(&mut cmds, handle, b"\r\n");
+                                    http_submit_commands(&vnet, cmds);
+                                }
+                                let closing = format!("--{}--\r\n", boundary);
                                 let mut cmds = Vec::new();
-                                vhttp_srv::queue_send_bytes(&mut cmds, handle, b"\r\n");
+                                vhttp_srv::queue_send_bytes(&mut cmds, handle, closing.as_bytes());
                                 http_submit_commands(&vnet, cmds);
                             }
-                            let closing = format!("--{}--\r\n", boundary);
-                            let mut cmds = Vec::new();
-                            vhttp_srv::queue_send_bytes(&mut cmds, handle, closing.as_bytes());
-                            http_submit_commands(&vnet, cmds);
+                            HttpBodyPlan::None => {}
                         }
-                        HttpBodyPlan::None => {}
-                    }
 
                         perf.log();
                     }
@@ -974,5 +906,6 @@ pub async fn http_trueosfs_task() {
 
             Timer::after(EmbassyDuration::from_millis(10)).await;
         }
-    }.await;
+    }
+    .await;
 }

@@ -29,10 +29,7 @@ const TLB_MENU_ROWS: [(&str, &str); 15] = [
     ("ssdt", "Show SSDT details"),
     ("uefi", "List UEFI tables"),
     ("x2apic", "List x2APIC topology"),
-    (
-        "usb",
-        "List USB controllers and ports (`tlb usb probe` for live state)",
-    ),
+    ("usb", "List USB controllers and ports (`tlb usb probe` for live state)"),
     ("dump", "Write all tables to trueos/pci/tlb.txt"),
 ];
 
@@ -112,11 +109,7 @@ fn truncate_cell(text: &str, width: usize) -> String {
 }
 
 fn emit_table_header(io: &'static dyn ShellBackend2, cols: &[Column]) {
-    emit_table_row(
-        io,
-        cols,
-        &cols.iter().map(|col| col.header).collect::<Vec<_>>(),
-    );
+    emit_table_row(io, cols, &cols.iter().map(|col| col.header).collect::<Vec<_>>());
     let sep = cols
         .iter()
         .map(|col| "-".repeat(col.width))
@@ -317,10 +310,8 @@ fn write_pci_bar_dump(out: &mut String) {
 }
 
 fn print_menu(io: &'static dyn ShellBackend2) {
-    let table = TlbTable::with_width(
-        &TLB_MENU_HEADERS,
-        line_width_for_backend(io).saturating_sub(2),
-    );
+    let table =
+        TlbTable::with_width(&TLB_MENU_HEADERS, line_width_for_backend(io).saturating_sub(2));
 
     table.emit_header(|text| line(io, text));
     for (cmd, desc) in TLB_MENU_ROWS {
@@ -369,10 +360,7 @@ fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
 fn cmd_tlb_pciids(io: &'static dyn ShellBackend2) {
     crate::pci::pciids::download_once_detached();
     line(io, "tlb pciids: scheduled background download");
-    line(
-        io,
-        "tlb pciids: check global log for success/timeout/failure",
-    );
+    line(io, "tlb pciids: check global log for success/timeout/failure");
 }
 
 fn cmd_tlb_pci_bar(io: &'static dyn ShellBackend2) {
@@ -653,14 +641,8 @@ fn cmd_tlb_facp(io: &'static dyn ShellBackend2) {
     };
 
     if let Some(fadt) = tables.find_table::<Fadt>() {
-        line(
-            io,
-            alloc::format!("FACP/FADT Found @ 0x{:X}", fadt.physical_start).as_str(),
-        );
-        multiline(
-            io,
-            alloc::format!("{:#?}", unsafe { fadt.virtual_start.as_ref() }).as_str(),
-        );
+        line(io, alloc::format!("FACP/FADT Found @ 0x{:X}", fadt.physical_start).as_str());
+        multiline(io, alloc::format!("{:#?}", unsafe { fadt.virtual_start.as_ref() }).as_str());
     } else {
         line(io, "FACP: Not found");
     }
@@ -673,14 +655,8 @@ fn cmd_tlb_madt(io: &'static dyn ShellBackend2) {
     };
 
     if let Some(madt) = tables.find_table::<Madt>() {
-        line(
-            io,
-            alloc::format!("MADT Found @ 0x{:X}", madt.physical_start).as_str(),
-        );
-        multiline(
-            io,
-            alloc::format!("{:#?}", unsafe { madt.virtual_start.as_ref() }).as_str(),
-        );
+        line(io, alloc::format!("MADT Found @ 0x{:X}", madt.physical_start).as_str());
+        multiline(io, alloc::format!("{:#?}", unsafe { madt.virtual_start.as_ref() }).as_str());
     } else {
         line(io, "MADT: Not found");
     }
@@ -705,10 +681,7 @@ fn cmd_tlb_mcfg(io: &'static dyn ShellBackend2) {
         return;
     };
 
-    line(
-        io,
-        alloc::format!("MCFG @ 0x{:X}", mcfg.physical_start).as_str(),
-    );
+    line(io, alloc::format!("MCFG @ 0x{:X}", mcfg.physical_start).as_str());
 
     let cols = [
         Column {
@@ -765,10 +738,7 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
         return;
     };
 
-    line(
-        io,
-        "Scanning for SSDT tables (Secondary System Description Table)...",
-    );
+    line(io, "Scanning for SSDT tables (Secondary System Description Table)...");
     blank(io);
 
     let mut count = 0;
@@ -777,10 +747,7 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
             count += 1;
             let length = hdr.length;
             let revision = hdr.revision;
-            line(
-                io,
-                alloc::format!("SSDT #{} @ 0x{:08X}", count, phys).as_str(),
-            );
+            line(io, alloc::format!("SSDT #{} @ 0x{:08X}", count, phys).as_str());
             line(io, alloc::format!("  Length: {} bytes", length).as_str());
             line(io, alloc::format!("  Revision: {}", revision).as_str());
             line(
@@ -799,10 +766,7 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
                 )
                 .as_str(),
             );
-            line(
-                io,
-                "  (Raw AML content not dumped/parsed in 'best effort' mode)",
-            );
+            line(io, "  (Raw AML content not dumped/parsed in 'best effort' mode)");
             blank(io);
         }
     }
@@ -816,10 +780,7 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
 
 fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
     let Some(st) = crate::efi::system_table() else {
-        line(
-            io,
-            "tlb uefi: system table not found (not booted via UEFI?)",
-        );
+        line(io, "tlb uefi: system table not found (not booted via UEFI?)");
         return;
     };
 
@@ -837,16 +798,8 @@ fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
     let st_revision = st.hdr.revision;
     let st_header_size = st.hdr.header_size;
     emit_table_row(io, &summary_cols, &["Signature", "EFI SYSTEM TABLE"]);
-    emit_table_row(
-        io,
-        &summary_cols,
-        &["Revision", &alloc::format!("0x{:08X}", st_revision)],
-    );
-    emit_table_row(
-        io,
-        &summary_cols,
-        &["Header Size", &alloc::format!("0x{:X}", st_header_size)],
-    );
+    emit_table_row(io, &summary_cols, &["Revision", &alloc::format!("0x{:08X}", st_revision)]);
+    emit_table_row(io, &summary_cols, &["Header Size", &alloc::format!("0x{:X}", st_header_size)]);
     emit_table_row(
         io,
         &summary_cols,
@@ -902,10 +855,7 @@ fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
     }
 
     let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr) else {
-        line(
-            io,
-            "Cannot translate UEFI configuration table pointer to physical address.",
-        );
+        line(io, "Cannot translate UEFI configuration table pointer to physical address.");
         return;
     };
 
@@ -1006,12 +956,8 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
     let mut out: Vec<String> = Vec::new();
 
     for ctrl_info in snapshot.controllers.iter() {
-        let bdf = alloc::format!(
-            "{:02X}:{:02X}.{}",
-            ctrl_info.bus,
-            ctrl_info.slot,
-            ctrl_info.function
-        );
+        let bdf =
+            alloc::format!("{:02X}:{:02X}.{}", ctrl_info.bus, ctrl_info.slot, ctrl_info.function);
         let diag = alloc::format!(
             "phase={} life={} ev={} rp={} empty={}",
             ctrl_info.controller_phase,
@@ -1200,12 +1146,7 @@ pub(crate) fn build_dump_text() -> String {
     let db = crate::pci::pciids::load_sanitized_from_root_blocking()
         .ok()
         .flatten();
-    writeln!(
-        out,
-        "{:30}  {:10}  {:6}  {:6}",
-        "Name", "Address", "VID", "PID"
-    )
-    .unwrap();
+    writeln!(out, "{:30}  {:10}  {:6}  {:6}", "Name", "Address", "VID", "PID").unwrap();
     writeln!(out, "{:-<30}  {:-<10}  {:-<6}  {:-<6}", "", "", "", "").unwrap();
     for row in pci_device_rows(db.as_deref()) {
         let name_disp = if row.name.chars().count() > 30 {
@@ -1215,12 +1156,7 @@ pub(crate) fn build_dump_text() -> String {
         } else {
             row.name
         };
-        writeln!(
-            out,
-            "{:30}  {:10}  {:6}  {:6}",
-            name_disp, row.addr, row.vid, row.pid
-        )
-        .unwrap();
+        writeln!(out, "{:30}  {:10}  {:6}  {:6}", name_disp, row.addr, row.vid, row.pid).unwrap();
     }
     writeln!(out).unwrap();
 
@@ -1230,12 +1166,7 @@ pub(crate) fn build_dump_text() -> String {
     if !crate::smp::is_init() {
         writeln!(out, "SMP not initialized").unwrap();
     } else {
-        writeln!(
-            out,
-            "{:6}  {:6}  {:8}  {:10}",
-            "Slot", "APIC", "Role", "State"
-        )
-        .unwrap();
+        writeln!(out, "{:6}  {:6}  {:8}  {:10}", "Slot", "APIC", "Role", "State").unwrap();
         writeln!(out, "{:-<6}  {:-<6}  {:-<8}  {:-<10}", "", "", "", "").unwrap();
         let count = crate::smp::cpu_count();
         let slots = crate::percpu::cpu_slots();
@@ -1254,12 +1185,7 @@ pub(crate) fn build_dump_text() -> String {
                     crate::smp::STATE_DONE => "Done",
                     _ => "Unknown",
                 };
-                writeln!(
-                    out,
-                    "{:6}  {:<6}  {:<8}  {:<10}",
-                    slot, lapic_id, role, state
-                )
-                .unwrap();
+                writeln!(out, "{:6}  {:<6}  {:<8}  {:<10}", slot, lapic_id, role, state).unwrap();
             }
         }
     }
@@ -1337,12 +1263,7 @@ pub(crate) fn build_dump_text() -> String {
                 "Seg", "Bus", "ECAM Base", "ECAM End", "Size"
             )
             .unwrap();
-            writeln!(
-                out,
-                "{:-<4}  {:-<7}  {:-<18}  {:-<18}  {:-<10}",
-                "", "", "", "", ""
-            )
-            .unwrap();
+            writeln!(out, "{:-<4}  {:-<7}  {:-<18}  {:-<18}  {:-<10}", "", "", "", "", "").unwrap();
 
             let mut count = 0usize;
             for entry in mcfg.entries() {
@@ -1380,23 +1301,13 @@ pub(crate) fn build_dump_text() -> String {
         let st_revision = st.hdr.revision;
         writeln!(out, "Signature: EFI SYSTEM TABLE").unwrap();
         writeln!(out, "Revision: 0x{:08X}", st_revision).unwrap();
-        writeln!(
-            out,
-            "Runtime Services: 0x{:016X}",
-            st.runtime_services as u64
-        )
-        .unwrap();
+        writeln!(out, "Runtime Services: 0x{:016X}", st.runtime_services as u64).unwrap();
         writeln!(out, "Boot Services: 0x{:016X}", st.boot_services as u64).unwrap();
         writeln!(out).unwrap();
 
         let entries = st.number_of_table_entries;
         let cfg_addr = st.configuration_table as u64;
-        writeln!(
-            out,
-            "{:6}  {:40}  {:24}  {:18}",
-            "Index", "GUID", "Name", "Table Ptr"
-        )
-        .unwrap();
+        writeln!(out, "{:6}  {:40}  {:24}  {:18}", "Index", "GUID", "Name", "Table Ptr").unwrap();
         writeln!(out, "{:-<6}  {:-<40}  {:-<24}  {:-<18}", "", "", "", "").unwrap();
 
         if entries == 0 {
@@ -1423,11 +1334,8 @@ pub(crate) fn build_dump_text() -> String {
                 writeln!(out, "Failed to map UEFI configuration tables").unwrap();
             }
         } else {
-            writeln!(
-                out,
-                "Cannot translate UEFI configuration table pointer to physical address"
-            )
-            .unwrap();
+            writeln!(out, "Cannot translate UEFI configuration table pointer to physical address")
+                .unwrap();
         }
     } else {
         writeln!(out, "No UEFI system table found").unwrap();
@@ -1436,24 +1344,11 @@ pub(crate) fn build_dump_text() -> String {
 
     writeln!(out, "=== x2APIC Topology ===").unwrap();
     let topo = crate::x2apic::detect_x2apic_topology();
-    writeln!(
-        out,
-        "Leaf=0x{:X} SMT_Bits={} Core_Bits={}",
-        topo.leaf, topo.smt_bits, topo.core_bits
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "{:6}  {:10}  {:6}  {:6}  {:6}",
-        "Slot", "APIC ID", "Pkg", "Core", "SMT"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "{:-<6}  {:-<10}  {:-<6}  {:-<6}  {:-<6}",
-        "", "", "", "", ""
-    )
-    .unwrap();
+    writeln!(out, "Leaf=0x{:X} SMT_Bits={} Core_Bits={}", topo.leaf, topo.smt_bits, topo.core_bits)
+        .unwrap();
+    writeln!(out, "{:6}  {:10}  {:6}  {:6}  {:6}", "Slot", "APIC ID", "Pkg", "Core", "SMT")
+        .unwrap();
+    writeln!(out, "{:-<6}  {:-<10}  {:-<6}  {:-<6}  {:-<6}", "", "", "", "", "").unwrap();
     let count = crate::smp::cpu_count();
     let slots = crate::percpu::cpu_slots();
     for slot in 0..count {
@@ -1463,21 +1358,12 @@ pub(crate) fn build_dump_text() -> String {
             .map(|s| s.lapic_id)
             .unwrap_or(0xFFFF_FFFF);
         if lapic_id == 0xFFFF_FFFF {
-            writeln!(
-                out,
-                "{:6}  {:10}  {:6}  {:6}  {:6}",
-                slot, "?", "?", "?", "?"
-            )
-            .unwrap();
+            writeln!(out, "{:6}  {:10}  {:6}  {:6}  {:6}", slot, "?", "?", "?", "?").unwrap();
             continue;
         }
         let (pkg, core_id, smt) = topo.decode(lapic_id);
-        writeln!(
-            out,
-            "{:6}  0x{:<8X}  {:<6}  {:<6}  {:<6}",
-            slot, lapic_id, pkg, core_id, smt
-        )
-        .unwrap();
+        writeln!(out, "{:6}  0x{:<8X}  {:<6}  {:<6}  {:<6}", slot, lapic_id, pkg, core_id, smt)
+            .unwrap();
     }
     writeln!(out).unwrap();
 
@@ -1513,12 +1399,8 @@ pub(crate) fn build_dump_text() -> String {
                 .filter(|dev| dev.controller_index == ctrl_info.index)
             {
                 let vidpid = alloc::format!("{:04X}:{:04X}", dev.vendor_id, dev.product_id);
-                let class = alloc::format!(
-                    "{:02X}/{:02X}/{:02X}",
-                    dev.class,
-                    dev.subclass,
-                    dev.protocol
-                );
+                let class =
+                    alloc::format!("{:02X}/{:02X}/{:02X}", dev.class, dev.subclass, dev.protocol);
                 let interface_count: usize = dev
                     .configurations
                     .iter()
@@ -1570,12 +1452,8 @@ pub(crate) fn build_dump_text() -> String {
     if net_count == 0 {
         writeln!(out, "No network interfaces found").unwrap();
     } else {
-        writeln!(
-            out,
-            "{:4}  {:20}  {:17}  {:10}",
-            "Idx", "Name", "MAC Address", "Primary"
-        )
-        .unwrap();
+        writeln!(out, "{:4}  {:20}  {:17}  {:10}", "Idx", "Name", "MAC Address", "Primary")
+            .unwrap();
         writeln!(out, "{:-<4}  {:-<20}  {:-<17}  {:-<10}", "", "", "", "").unwrap();
         let primary = crate::net::primary_device_index();
         for index in 0..net_count {
@@ -1594,12 +1472,7 @@ pub(crate) fn build_dump_text() -> String {
                 String::from("??:??:??:??:??:??")
             };
             let primary_mark = if index == primary { "*" } else { "" };
-            writeln!(
-                out,
-                "{:<4}  {:<20}  {:<17}  {:<10}",
-                index, name, mac, primary_mark
-            )
-            .unwrap();
+            writeln!(out, "{:<4}  {:<20}  {:<17}  {:<10}", index, name, mac, primary_mark).unwrap();
         }
     }
     writeln!(out).unwrap();
@@ -1664,10 +1537,7 @@ pub(crate) async fn write_dump_bytes_to_default_path(
 
 fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
     let out = build_dump_text();
-    line(
-        io,
-        alloc::format!("Writing {} bytes to {}...", out.len(), DUMP_FILE_PATH).as_str(),
-    );
+    line(io, alloc::format!("Writing {} bytes to {}...", out.len(), DUMP_FILE_PATH).as_str());
 
     let out_bytes = out.into_bytes();
     let result: Result<(), crate::disc::block::Error> =

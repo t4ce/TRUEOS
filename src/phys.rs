@@ -101,11 +101,7 @@ pub fn init_pmm_from_limine() {
         }
 
         if state.add_region(start, end).is_err() {
-            crate::log!(
-                "pmm: region table full dropping 0x{:X}..0x{:X}\n",
-                start,
-                end
-            );
+            crate::log!("pmm: region table full dropping 0x{:X}..0x{:X}\n", start, end);
         }
     }
 

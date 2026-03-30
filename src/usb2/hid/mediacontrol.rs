@@ -81,9 +81,7 @@ fn pick_media_control_targets(
     out
 }
 
-fn device_has_audio_interfaces(
-    configs: &[usb_if::descriptor::ConfigurationDescriptor],
-) -> bool {
+fn device_has_audio_interfaces(configs: &[usb_if::descriptor::ConfigurationDescriptor]) -> bool {
     configs.iter().any(|config| {
         config.interfaces.iter().any(|interface| {
             interface.alt_settings.iter().any(|alt| {
@@ -169,27 +167,23 @@ async fn media_control_task(
         return;
     }
 
-    let mut interface = match claim_interface(
-        &mut device,
-        target.interface_number,
-        target.alternate_setting,
-    )
-    .await
-    {
-        Ok(interface) => interface,
-        Err(err) => {
-            crate::log!(
-                "crabusb: hid mediacontrol {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
-                vendor_id,
-                product_id,
-                target.interface_number,
-                target.alternate_setting,
-                err
-            );
-            unregister_active_stream(active_stream);
-            return;
-        }
-    };
+    let mut interface =
+        match claim_interface(&mut device, target.interface_number, target.alternate_setting).await
+        {
+            Ok(interface) => interface,
+            Err(err) => {
+                crate::log!(
+                    "crabusb: hid mediacontrol {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
+                    vendor_id,
+                    product_id,
+                    target.interface_number,
+                    target.alternate_setting,
+                    err
+                );
+                unregister_active_stream(active_stream);
+                return;
+            }
+        };
 
     let mut interrupt_in = match interface.endpoint_interrupt_in(target.in_endpoint).await {
         Ok(endpoint) => endpoint,

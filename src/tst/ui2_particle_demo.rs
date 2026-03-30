@@ -88,16 +88,7 @@ fn push_particle_quad(
     let draw_h = (sprite_h as f32 * scale).max(1.0);
     let left = x - draw_w * 0.5;
     let top = y - draw_h * 0.5;
-    push_tex_quad_px(
-        verts,
-        transform,
-        left,
-        top,
-        left + draw_w,
-        top + draw_h,
-        uv,
-        color,
-    );
+    push_tex_quad_px(verts, transform, left, top, left + draw_w, top + draw_h, uv, color);
 }
 
 fn build_particle_verts(

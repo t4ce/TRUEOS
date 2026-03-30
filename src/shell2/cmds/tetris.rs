@@ -56,10 +56,8 @@ fn tetris_status_text() -> alloc::string::String {
         if idx != 0 {
             out.push_str("  ");
         }
-        let styled = alloc::format!(
-            "{}",
-            super::super::ecma48::style(*key).bold().fg((255, 255, 255))
-        );
+        let styled =
+            alloc::format!("{}", super::super::ecma48::style(*key).bold().fg((255, 255, 255)));
         out.push_str(styled.as_str());
         out.push(' ');
         out.push_str(action);

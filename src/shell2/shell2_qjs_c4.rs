@@ -895,13 +895,7 @@ fn to_token_refs(tokens: &[Token]) -> Vec<TokenRef> {
 }
 
 pub(crate) fn format_tiny_diagnostic(diag: &Diagnostic) -> String {
-    alloc::format!(
-        "c4 {} @{}..{}: {}",
-        diag.code,
-        diag.start,
-        diag.end,
-        diag.message
-    )
+    alloc::format!("c4 {} @{}..{}: {}", diag.code, diag.start, diag.end, diag.message)
 }
 
 pub(crate) fn format_symbol_summary(analysis: &Analysis) -> Option<String> {

@@ -86,11 +86,7 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
 
     for hop in 0..=MAX_REDIRECTS {
         if !seen.insert(current_url.clone()) {
-            crate::log!(
-                "html: redirect loop detected at hop={} url={}\n",
-                hop,
-                current_url
-            );
+            crate::log!("html: redirect loop detected at hop={} url={}\n", hop, current_url);
             return Err("redirect loop");
         }
 
@@ -146,12 +142,7 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
                         );
                         return Err("too many redirects");
                     }
-                    crate::log!(
-                        "html: redirect hop={} {} -> {}\n",
-                        hop + 1,
-                        current_url,
-                        next
-                    );
+                    crate::log!("html: redirect hop={} {} -> {}\n", hop + 1, current_url, next);
                     current_url = next;
                     continue;
                 }

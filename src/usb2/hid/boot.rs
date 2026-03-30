@@ -72,9 +72,7 @@ fn pick_hid_boot_targets(
     let has_boot_hid = configs.iter().any(|config| {
         config.interfaces.iter().any(|interface| {
             interface.alt_settings.iter().any(|alt| {
-                alt.class == 0x03
-                    && alt.subclass == 0x01
-                    && matches!(alt.protocol, 0x01 | 0x02)
+                alt.class == 0x03 && alt.subclass == 0x01 && matches!(alt.protocol, 0x01 | 0x02)
             })
         })
     });
@@ -98,7 +96,11 @@ fn pick_hid_boot_targets(
                     (0x03, 0x01, 0x02) => HidBootKind::Mouse,
                     _ if !has_audio
                         && !has_boot_hid
-                        && super::tablet::matches_interface(alt.class, alt.subclass, alt.protocol) =>
+                        && super::tablet::matches_interface(
+                            alt.class,
+                            alt.subclass,
+                            alt.protocol,
+                        ) =>
                     {
                         HidBootKind::Tablet
                     }
@@ -206,28 +208,24 @@ async fn hid_boot_stream_task(
         return;
     }
 
-    let mut interface = match claim_interface(
-        &mut device,
-        target.interface_number,
-        target.alternate_setting,
-    )
-    .await
-    {
-        Ok(interface) => interface,
-        Err(err) => {
-            crate::log!(
-                "crabusb: hid {} {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
-                target.kind.as_str(),
-                vendor_id,
-                product_id,
-                target.interface_number,
-                target.alternate_setting,
-                err
-            );
-            let _ = unregister_active_hid_stream(active_stream);
-            return;
-        }
-    };
+    let mut interface =
+        match claim_interface(&mut device, target.interface_number, target.alternate_setting).await
+        {
+            Ok(interface) => interface,
+            Err(err) => {
+                crate::log!(
+                    "crabusb: hid {} {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
+                    target.kind.as_str(),
+                    vendor_id,
+                    product_id,
+                    target.interface_number,
+                    target.alternate_setting,
+                    err
+                );
+                let _ = unregister_active_hid_stream(active_stream);
+                return;
+            }
+        };
 
     if matches!(target.kind, HidBootKind::Mouse | HidBootKind::Keyboard) {
         match interface
@@ -407,12 +405,18 @@ async fn hid_boot_stream_task(
 
                     let sample = &report[..read.min(report.len())];
                     match target.kind {
-                        HidBootKind::Keyboard => {
-                            super::handle_keyboard_boot_report(controller_id, slot_id, ep_target, sample)
-                        }
-                        HidBootKind::Mouse => {
-                            super::handle_mouse_boot_report(controller_id, slot_id, ep_target, sample)
-                        }
+                        HidBootKind::Keyboard => super::handle_keyboard_boot_report(
+                            controller_id,
+                            slot_id,
+                            ep_target,
+                            sample,
+                        ),
+                        HidBootKind::Mouse => super::handle_mouse_boot_report(
+                            controller_id,
+                            slot_id,
+                            ep_target,
+                            sample,
+                        ),
                         HidBootKind::Tablet => {
                             super::tablet::handle_packet(
                                 vendor_id,

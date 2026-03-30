@@ -11,7 +11,6 @@ pub mod athlasmetrics;
 
 use self::athlasmetrics::{ATHLAS_BUCKET_COUNT, AthlasGlyphLookup};
 
-
 static IMBA_ATHLAS_PNG_BUCKETS_UPLOADED: AtomicBool = AtomicBool::new(false);
 static IMBA_ATHLAS_LOOKUP_INSTALL: Once<AthlasFontLookupInstall> = Once::new();
 static IMBA_ATHLAS_SHORT_TEXT_CACHE: Mutex<BTreeMap<u64, AthlasFontShortTextCacheEntry>> =
@@ -49,30 +48,150 @@ pub struct AthlasFontLookupInstall {
 }
 
 const PNG_BUCKET_ASSETS: &[PngBucketAsset] = &[
-    PngBucketAsset { size_name: "half", bucket: 0, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][0], png: include_bytes!("lucida-half/atlas-g00.png") },
-    PngBucketAsset { size_name: "half", bucket: 1, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][1], png: include_bytes!("lucida-half/atlas-g01.png") },
-    PngBucketAsset { size_name: "half", bucket: 2, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][2], png: include_bytes!("lucida-half/atlas-g02.png") },
-    PngBucketAsset { size_name: "half", bucket: 3, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][3], png: include_bytes!("lucida-half/atlas-g03.png") },
-    PngBucketAsset { size_name: "half", bucket: 4, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][4], png: include_bytes!("lucida-half/atlas-g04.png") },
-    PngBucketAsset { size_name: "half", bucket: 5, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][5], png: include_bytes!("lucida-half/atlas-g05.png") },
-    PngBucketAsset { size_name: "half", bucket: 6, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][6], png: include_bytes!("lucida-half/atlas-g06.png") },
-    PngBucketAsset { size_name: "half", bucket: 7, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][7], png: include_bytes!("lucida-half/atlas-g07.png") },
-    PngBucketAsset { size_name: "1x", bucket: 0, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][0], png: include_bytes!("lucida-1x/atlas-g00.png") },
-    PngBucketAsset { size_name: "1x", bucket: 1, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][1], png: include_bytes!("lucida-1x/atlas-g01.png") },
-    PngBucketAsset { size_name: "1x", bucket: 2, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][2], png: include_bytes!("lucida-1x/atlas-g02.png") },
-    PngBucketAsset { size_name: "1x", bucket: 3, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][3], png: include_bytes!("lucida-1x/atlas-g03.png") },
-    PngBucketAsset { size_name: "1x", bucket: 4, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][4], png: include_bytes!("lucida-1x/atlas-g04.png") },
-    PngBucketAsset { size_name: "1x", bucket: 5, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][5], png: include_bytes!("lucida-1x/atlas-g05.png") },
-    PngBucketAsset { size_name: "1x", bucket: 6, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][6], png: include_bytes!("lucida-1x/atlas-g06.png") },
-    PngBucketAsset { size_name: "1x", bucket: 7, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][7], png: include_bytes!("lucida-1x/atlas-g07.png") },
-    PngBucketAsset { size_name: "3x", bucket: 0, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][0], png: include_bytes!("lucida-3x/atlas-g00.png") },
-    PngBucketAsset { size_name: "3x", bucket: 1, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][1], png: include_bytes!("lucida-3x/atlas-g01.png") },
-    PngBucketAsset { size_name: "3x", bucket: 2, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][2], png: include_bytes!("lucida-3x/atlas-g02.png") },
-    PngBucketAsset { size_name: "3x", bucket: 3, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][3], png: include_bytes!("lucida-3x/atlas-g03.png") },
-    PngBucketAsset { size_name: "3x", bucket: 4, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][4], png: include_bytes!("lucida-3x/atlas-g04.png") },
-    PngBucketAsset { size_name: "3x", bucket: 5, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][5], png: include_bytes!("lucida-3x/atlas-g05.png") },
-    PngBucketAsset { size_name: "3x", bucket: 6, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][6], png: include_bytes!("lucida-3x/atlas-g06.png") },
-    PngBucketAsset { size_name: "3x", bucket: 7, tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][7], png: include_bytes!("lucida-3x/atlas-g07.png") },
+    PngBucketAsset {
+        size_name: "half",
+        bucket: 0,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][0],
+        png: include_bytes!("lucida-half/atlas-g00.png"),
+    },
+    PngBucketAsset {
+        size_name: "half",
+        bucket: 1,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][1],
+        png: include_bytes!("lucida-half/atlas-g01.png"),
+    },
+    PngBucketAsset {
+        size_name: "half",
+        bucket: 2,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][2],
+        png: include_bytes!("lucida-half/atlas-g02.png"),
+    },
+    PngBucketAsset {
+        size_name: "half",
+        bucket: 3,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][3],
+        png: include_bytes!("lucida-half/atlas-g03.png"),
+    },
+    PngBucketAsset {
+        size_name: "half",
+        bucket: 4,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][4],
+        png: include_bytes!("lucida-half/atlas-g04.png"),
+    },
+    PngBucketAsset {
+        size_name: "half",
+        bucket: 5,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][5],
+        png: include_bytes!("lucida-half/atlas-g05.png"),
+    },
+    PngBucketAsset {
+        size_name: "half",
+        bucket: 6,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][6],
+        png: include_bytes!("lucida-half/atlas-g06.png"),
+    },
+    PngBucketAsset {
+        size_name: "half",
+        bucket: 7,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[0][7],
+        png: include_bytes!("lucida-half/atlas-g07.png"),
+    },
+    PngBucketAsset {
+        size_name: "1x",
+        bucket: 0,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][0],
+        png: include_bytes!("lucida-1x/atlas-g00.png"),
+    },
+    PngBucketAsset {
+        size_name: "1x",
+        bucket: 1,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][1],
+        png: include_bytes!("lucida-1x/atlas-g01.png"),
+    },
+    PngBucketAsset {
+        size_name: "1x",
+        bucket: 2,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][2],
+        png: include_bytes!("lucida-1x/atlas-g02.png"),
+    },
+    PngBucketAsset {
+        size_name: "1x",
+        bucket: 3,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][3],
+        png: include_bytes!("lucida-1x/atlas-g03.png"),
+    },
+    PngBucketAsset {
+        size_name: "1x",
+        bucket: 4,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][4],
+        png: include_bytes!("lucida-1x/atlas-g04.png"),
+    },
+    PngBucketAsset {
+        size_name: "1x",
+        bucket: 5,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][5],
+        png: include_bytes!("lucida-1x/atlas-g05.png"),
+    },
+    PngBucketAsset {
+        size_name: "1x",
+        bucket: 6,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][6],
+        png: include_bytes!("lucida-1x/atlas-g06.png"),
+    },
+    PngBucketAsset {
+        size_name: "1x",
+        bucket: 7,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[1][7],
+        png: include_bytes!("lucida-1x/atlas-g07.png"),
+    },
+    PngBucketAsset {
+        size_name: "3x",
+        bucket: 0,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][0],
+        png: include_bytes!("lucida-3x/atlas-g00.png"),
+    },
+    PngBucketAsset {
+        size_name: "3x",
+        bucket: 1,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][1],
+        png: include_bytes!("lucida-3x/atlas-g01.png"),
+    },
+    PngBucketAsset {
+        size_name: "3x",
+        bucket: 2,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][2],
+        png: include_bytes!("lucida-3x/atlas-g02.png"),
+    },
+    PngBucketAsset {
+        size_name: "3x",
+        bucket: 3,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][3],
+        png: include_bytes!("lucida-3x/atlas-g03.png"),
+    },
+    PngBucketAsset {
+        size_name: "3x",
+        bucket: 4,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][4],
+        png: include_bytes!("lucida-3x/atlas-g04.png"),
+    },
+    PngBucketAsset {
+        size_name: "3x",
+        bucket: 5,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][5],
+        png: include_bytes!("lucida-3x/atlas-g05.png"),
+    },
+    PngBucketAsset {
+        size_name: "3x",
+        bucket: 6,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][6],
+        png: include_bytes!("lucida-3x/atlas-g06.png"),
+    },
+    PngBucketAsset {
+        size_name: "3x",
+        bucket: 7,
+        tex_id: IMBA_ATHLAS_BUCKET_TEX_IDS[2][7],
+        png: include_bytes!("lucida-3x/atlas-g07.png"),
+    },
 ];
 
 #[inline]
@@ -168,7 +287,10 @@ pub fn ensure_imba_athlas_png_buckets_uploaded() -> bool {
 
     let started_at = Instant::now();
 
-    for asset in PNG_BUCKET_ASSETS.iter().take(IMBA_ATHLAS_EAGER_UPLOAD_COUNT) {
+    for asset in PNG_BUCKET_ASSETS
+        .iter()
+        .take(IMBA_ATHLAS_EAGER_UPLOAD_COUNT)
+    {
         let decoded = match crate::gfx::png_codec::decode_png_rgba(asset.png) {
             Ok(decoded) => decoded,
             Err(err) => {
@@ -576,7 +698,16 @@ pub fn blit_imba_athlas_text_rgba(
     y: i32,
     rgba: (u8, u8, u8, u8),
 ) -> bool {
-    blit_imba_athlas_text_rgba_nearest_px(dst, dst_w, dst_h, text, x, y, IMBA_ATHLAS_LARGE_TILE_H, rgba)
+    blit_imba_athlas_text_rgba_nearest_px(
+        dst,
+        dst_w,
+        dst_h,
+        text,
+        x,
+        y,
+        IMBA_ATHLAS_LARGE_TILE_H,
+        rgba,
+    )
 }
 
 pub fn blit_imba_athlas_text_rgba_nearest_px(
@@ -639,7 +770,8 @@ pub fn blit_imba_athlas_text_rgba_nearest_px(
                 if dst_x_px < 0 || dst_x_px >= dst_w as i32 {
                     continue;
                 }
-                let src_col = (floorf((col as f32) / scale) as i32).clamp(0, bucket.cell_w as i32 - 1);
+                let src_col =
+                    (floorf((col as f32) / scale) as i32).clamp(0, bucket.cell_w as i32 - 1);
                 let src_x = cell_x + src_col;
                 let src_y = cell_y + src_row;
                 let src_idx = (src_y as usize)
@@ -703,15 +835,7 @@ pub fn draw_imba_athlas_text_in_frame_alpha_nearest_px(
     }
 
     draw_imba_athlas_text_in_frame_alpha_blend_nearest_px(
-        text,
-        x,
-        y,
-        view_w,
-        view_h,
-        px_h,
-        alpha,
-        0x0302,
-        0x0303,
+        text, x, y, view_w, view_h, px_h, alpha, 0x0302, 0x0303,
     )
 }
 
@@ -819,15 +943,7 @@ pub fn draw_imba_athlas_text_in_frame_alpha_scaled(
     alpha: u8,
 ) -> bool {
     draw_imba_athlas_text_in_frame_alpha_blend_scaled_px(
-        text,
-        x,
-        y,
-        view_w,
-        view_h,
-        px_h,
-        alpha,
-        0x0302,
-        0x0303,
+        text, x, y, view_w, view_h, px_h, alpha, 0x0302, 0x0303,
     )
 }
 

@@ -45,10 +45,9 @@ pub async fn smtp_smoke_task() {
                 )
                 .await
                 {
-                    Ok(()) => crate::log!(
-                        "smtp-smoke: sent global log mail ({} bytes)\n",
-                        log_text.len()
-                    ),
+                    Ok(()) => {
+                        crate::log!("smtp-smoke: sent global log mail ({} bytes)\n", log_text.len())
+                    }
                     Err(e) => crate::log!("smtp-smoke: global log mail failed {:?}\n", e),
                 }
 
@@ -70,10 +69,7 @@ pub async fn smtp_smoke_task() {
                 .await
                 {
                     Ok(()) => {
-                        crate::log!(
-                            "smtp-smoke: sent tlb dump mail ({} bytes)\n",
-                            tlb_text.len()
-                        )
+                        crate::log!("smtp-smoke: sent tlb dump mail ({} bytes)\n", tlb_text.len())
                     }
                     Err(e) => crate::log!("smtp-smoke: tlb dump mail failed {:?}\n", e),
                 }

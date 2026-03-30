@@ -302,7 +302,9 @@ fn boot_probe_ms() -> u64 {
 
 #[inline]
 fn elapsed_ms_since(started_at: Instant) -> u64 {
-    Instant::now().saturating_duration_since(started_at).as_millis() as u64
+    Instant::now()
+        .saturating_duration_since(started_at)
+        .as_millis() as u64
 }
 
 #[inline]
@@ -581,9 +583,7 @@ fn hosted_browser_interactive_seq(state: &Ui2State) -> u32 {
             let seq = hosted_interactive_seq(instance_id);
             instance_id.wrapping_mul(1315423911).wrapping_add(seq)
         })
-        .fold(0u32, |acc, value| {
-            acc.wrapping_mul(16777619).wrapping_add(value)
-        })
+        .fold(0u32, |acc, value| acc.wrapping_mul(16777619).wrapping_add(value))
 }
 
 fn apply_hosted_browser_dirty(state: &mut Ui2State, dirty: HostedBrowserDirtyMask) {
@@ -645,15 +645,9 @@ fn window_edge_drop_action(
     let bottom_edge = (state.view_h.saturating_sub(1)) as f32;
     let candidates = [
         (cursor_x.abs(), Ui2WindowEdgeDropAction::SnapLeft),
-        (
-            (right_edge - cursor_x).abs(),
-            Ui2WindowEdgeDropAction::SnapRight,
-        ),
+        ((right_edge - cursor_x).abs(), Ui2WindowEdgeDropAction::SnapRight),
         (cursor_y.abs(), Ui2WindowEdgeDropAction::Maximize),
-        (
-            (bottom_edge - cursor_y).abs(),
-            Ui2WindowEdgeDropAction::Minimize,
-        ),
+        ((bottom_edge - cursor_y).abs(), Ui2WindowEdgeDropAction::Minimize),
     ];
     let mut best: Option<(f32, Ui2WindowEdgeDropAction)> = None;
     for candidate in candidates {
@@ -680,12 +674,9 @@ fn apply_window_edge_drop_action(
         Ui2WindowEdgeDropAction::SnapLeft => {
             set_window_rect_in_state(state, id, left_half_window_rect(state), "window-snap-left")
         }
-        Ui2WindowEdgeDropAction::SnapRight => set_window_rect_in_state(
-            state,
-            id,
-            right_half_window_rect(state),
-            "window-snap-right",
-        ),
+        Ui2WindowEdgeDropAction::SnapRight => {
+            set_window_rect_in_state(state, id, right_half_window_rect(state), "window-snap-right")
+        }
         Ui2WindowEdgeDropAction::Maximize => maximize_window_in_state(state, id),
         Ui2WindowEdgeDropAction::Minimize => minimize_window_in_state(state, id),
     }
@@ -1424,7 +1415,9 @@ fn prepare_hosted_browser_preview_caches(state: &mut Ui2State) {
             continue;
         }
         if let Some(window) = state.windows.get_mut(idx) {
-            rebuild_hosted_browser_preview_cache(window, viewport_w, viewport_h, text_seq, layout_seq);
+            rebuild_hosted_browser_preview_cache(
+                window, viewport_w, viewport_h, text_seq, layout_seq,
+            );
         }
     }
 }
@@ -1600,8 +1593,7 @@ fn draw_hosted_browser_layout_preview(
             .max(node.min_height_px)
             .clamp(12, 24) as f32;
         let font_px = hosted_browser_preview_font_px(node.font_size_px, fallback_line_h);
-        let _line_h =
-            hosted_browser_preview_line_px(node.line_height_px, font_px, fallback_line_h);
+        let _line_h = hosted_browser_preview_line_px(node.line_height_px, font_px, fallback_line_h);
         let block_h = node.intrinsic_height_px.max(node.min_height_px).max(10) as f32
             + margin_top
             + margin_bottom
@@ -1902,10 +1894,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     if present_to_screen && !state.first_compose_signaled {
         state.first_compose_signaled = true;
         crate::r::readiness::set(crate::r::readiness::UI2_READY);
-        crate::log!(
-            "boot-probe: ui2 first compose begin ms={}\n",
-            compose_started_ms
-        );
+        crate::log!("boot-probe: ui2 first compose begin ms={}\n", compose_started_ms);
     }
 
     if compose_seq <= 2 || compose_seq.is_multiple_of(UI2_COMPOSE_LOG_EVERY) {
@@ -1981,11 +1970,6 @@ pub async fn ui2_task() {
             }
         }
 
-        Timer::after(EmbassyDuration::from_millis(if did_compose {
-            16
-        } else {
-            10
-        }))
-        .await;
+        Timer::after(EmbassyDuration::from_millis(if did_compose { 16 } else { 10 })).await;
     }
 }

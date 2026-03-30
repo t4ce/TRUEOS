@@ -245,12 +245,7 @@ fn redirect_url_from_location(current: &ParsedHttpUrl, headers: &[u8]) -> Option
         if current.port == 80 {
             return Some(alloc::format!("http://{}{}", current.host, loc));
         }
-        return Some(alloc::format!(
-            "http://{}:{}{}",
-            current.host,
-            current.port,
-            loc
-        ));
+        return Some(alloc::format!("http://{}:{}{}", current.host, current.port, loc));
     }
     None
 }
@@ -303,11 +298,7 @@ pub async fn fetch_http_body(
         Timer::after(EmbassyDuration::from_millis(1)).await;
     }
     if !open_sent {
-        crate::log!(
-            "http: open failed host={} port={}\n",
-            parsed.host,
-            parsed.port
-        );
+        crate::log!("http: open failed host={} port={}\n", parsed.host, parsed.port);
         return Err(HttpFetchError::TimedOut);
     }
 

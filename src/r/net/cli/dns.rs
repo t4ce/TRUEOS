@@ -327,10 +327,7 @@ async fn dns_fs_cache_update(dev_idx: usize, host_trimmed: &str, ip: [u8; 4]) {
         }
     }
 
-    lines.push(format!(
-        "{}|{}|{}.{}.{}.{}",
-        dev_idx, host_trimmed, ip[0], ip[1], ip[2], ip[3]
-    ));
+    lines.push(format!("{}|{}|{}.{}.{}.{}", dev_idx, host_trimmed, ip[0], ip[1], ip[2], ip[3]));
     if lines.len() > DNS_FS_CACHE_MAX_ENTRIES {
         let drop_n = lines.len().saturating_sub(DNS_FS_CACHE_MAX_ENTRIES);
         lines.drain(0..drop_n);
@@ -546,12 +543,7 @@ fn dns_parse_a_or_cname(pkt: &[u8], want_id: u16) -> Option<DnsAnswer> {
 
         if class == 1 {
             if typ == 1 && rdlen == 4 {
-                return Some(DnsAnswer::A([
-                    pkt[idx],
-                    pkt[idx + 1],
-                    pkt[idx + 2],
-                    pkt[idx + 3],
-                ]));
+                return Some(DnsAnswer::A([pkt[idx], pkt[idx + 1], pkt[idx + 2], pkt[idx + 3]]));
             }
             if typ == 5
                 && cname.is_none()

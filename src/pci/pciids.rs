@@ -54,12 +54,7 @@ pub async fn download_once_async() -> Result<usize, &'static str> {
         }
         Err(e) => {
             let _ = crate::r::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
-            crate::log!(
-                "pciids: rename failed={:?} tmp={} key={}\n",
-                e,
-                tmp,
-                PCI_IDS_KEY
-            );
+            crate::log!("pciids: rename failed={:?} tmp={} key={}\n", e, tmp, PCI_IDS_KEY);
             Err("rename failed")
         }
     }

@@ -973,21 +973,11 @@ impl NvmeController {
                 s_cq
             );
 
-            crate::log!(
-                "nvme: {} set num-queues failed (continuing): {:?}\n",
-                pci,
-                e
-            );
+            crate::log!("nvme: {} set num-queues failed (continuing): {:?}\n", pci, e);
         }
 
         // Create IO completion queue (qid=1) and submission queue (qid=1).
-        ctrl.admin_create_io_cq(
-            NVME_IO_QID,
-            ctrl.io.depth,
-            ctrl.io.cq_phys,
-            io_cq_irq_enabled,
-            0,
-        )?;
+        ctrl.admin_create_io_cq(NVME_IO_QID, ctrl.io.depth, ctrl.io.cq_phys, io_cq_irq_enabled, 0)?;
         ctrl.admin_create_io_sq(NVME_IO_QID, ctrl.io.depth, ctrl.io.sq_phys, NVME_IO_QID)?;
 
         // Initialize doorbells for IO queue pair (some emulators are picky about initial values).
@@ -1777,18 +1767,10 @@ pub(crate) fn diag_snapshot() -> Vec<NvmeDiagController> {
                 match mmio::map_mmio_region(base, 0x4000) {
                     Ok(mmio_ptr) => unsafe {
                         (
-                            Some(read_volatile(
-                                mmio_ptr.as_ptr().add(NVME_REG_CAP) as *const u64
-                            )),
-                            Some(read_volatile(
-                                mmio_ptr.as_ptr().add(NVME_REG_VS) as *const u32
-                            )),
-                            Some(read_volatile(
-                                mmio_ptr.as_ptr().add(NVME_REG_CC) as *const u32
-                            )),
-                            Some(read_volatile(
-                                mmio_ptr.as_ptr().add(NVME_REG_CSTS) as *const u32
-                            )),
+                            Some(read_volatile(mmio_ptr.as_ptr().add(NVME_REG_CAP) as *const u64)),
+                            Some(read_volatile(mmio_ptr.as_ptr().add(NVME_REG_VS) as *const u32)),
+                            Some(read_volatile(mmio_ptr.as_ptr().add(NVME_REG_CC) as *const u32)),
+                            Some(read_volatile(mmio_ptr.as_ptr().add(NVME_REG_CSTS) as *const u32)),
                         )
                     },
                     Err(_) => (None, None, None, None),
@@ -2094,21 +2076,12 @@ pub fn probe_once() {
         let (mut blocks, mut block_size) = match ctrl.identify_namespace(nsid) {
             Ok(v) => v,
             Err(e) => {
-                crate::log!(
-                    "nvme: {} identify namespace {} failed: {:?}\n",
-                    pci_addr,
-                    nsid,
-                    e
-                );
+                crate::log!("nvme: {} identify namespace {} failed: {:?}\n", pci_addr, nsid, e);
                 continue;
             }
         };
         if blocks == 0 || block_size == 0 {
-            crate::log!(
-                "nvme: {} namespace {} has invalid capacity\n",
-                pci_addr,
-                nsid
-            );
+            crate::log!("nvme: {} namespace {} has invalid capacity\n", pci_addr, nsid);
             continue;
         }
 

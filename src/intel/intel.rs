@@ -213,12 +213,7 @@ fn log_display_window(info: IntelDeviceInfo, center_off: usize, label: &str) {
     while idx < INTEL_DISPLAY_WINDOW_DWORDS {
         let off = aligned + idx.saturating_mul(4);
         let value = mmio_read32(info, off);
-        crate::log!(
-            "intel: window-mmio label={} off=0x{:05X} value=0x{:08X}\n",
-            label,
-            off,
-            value
-        );
+        crate::log!("intel: window-mmio label={} off=0x{:05X} value=0x{:08X}\n", label, off, value);
         idx += 1;
     }
 }
@@ -309,11 +304,7 @@ fn log_signature_window(info: IntelDeviceInfo, page: usize) {
     while idx < INTEL_DISPLAY_SIGNATURE_WINDOW_DWORDS {
         let off = page + idx.saturating_mul(4);
         let value = mmio_read32(info, off);
-        crate::log!(
-            "intel: signature-mmio off=0x{:05X} value=0x{:08X}\n",
-            off,
-            value
-        );
+        crate::log!("intel: signature-mmio off=0x{:05X} value=0x{:08X}\n", off, value);
         idx += 1;
     }
 }
@@ -579,7 +570,7 @@ fn run_display_power_discovery(info: IntelDeviceInfo) {
     log_display_signature_sweep(info);
     log_plane_inventory(info);
     crate::log!("intel: display discovery step=smoke action=request-display-power\n");
-    
+
     // Request display power using igpu770 helper if available (requires forcewake)
     let latched = if intel_igpu770_present() {
         if let Some(warm) = super::intel_igpu770::warm_state() {
@@ -590,11 +581,8 @@ fn run_display_power_discovery(info: IntelDeviceInfo) {
     } else {
         arm_display_power_smoke(info)
     };
-    
-    crate::log!(
-        "intel: display discovery result gt_disp_pwron_latched={}\n",
-        latched as u8
-    );
+
+    crate::log!("intel: display discovery result gt_disp_pwron_latched={}\n", latched as u8);
 }
 
 pub fn init_once() {
@@ -681,10 +669,7 @@ pub fn init_once() {
         );
         crate::r::readiness::set(crate::r::readiness::GFX_INTEL_CLAIMED);
         crate::log!("intel: readiness=claimed\n");
-        crate::log!(
-            "intel: intel_igpu770_present={}\n",
-            intel_igpu770_present() as u8
-        );
+        crate::log!("intel: intel_igpu770_present={}\n", intel_igpu770_present() as u8);
         if intel_igpu770_present() {
             super::intel_igpu770::warm_once(info);
         }
@@ -715,10 +700,7 @@ pub async fn scanout_smoke_task() {
         return;
     };
 
-    crate::log!(
-        "intel: async probe delayed by {}ms (non-blocking)\n",
-        INTEL_ASYNC_PROBE_DELAY_MS
-    );
+    crate::log!("intel: async probe delayed by {}ms (non-blocking)\n", INTEL_ASYNC_PROBE_DELAY_MS);
     Timer::after(EmbassyDuration::from_millis(INTEL_ASYNC_PROBE_DELAY_MS)).await;
 
     if intel_igpu770_present() {
