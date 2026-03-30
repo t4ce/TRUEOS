@@ -61,6 +61,8 @@ static CMD_STREAM_ATLAS_META_SMALL: Mutex<Option<CmdStreamAtlasGlyphMetaTable>> 
 static CMD_STREAM_ATLAS_META_LARGE: Mutex<Option<CmdStreamAtlasGlyphMetaTable>> = Mutex::new(None);
 static CMD_STREAM_ATLAS_TEX_RECS: Mutex<Vec<CmdStreamAtlasTexRecord>> = Mutex::new(Vec::new());
 
+const CMD_STREAM_TEX_STATUS_READY: i32 = 2;
+
 #[inline]
 fn cmd_stream_push_glyph_quad(
     out: &mut Vec<u8>,
@@ -335,6 +337,86 @@ fn cmd_stream_refresh_atlas_tex_if_needed(tex_id: u32, requested_kind: u32) {
 }
 
 #[inline]
+fn cmd_stream_atlas_tex_ready(tex_id: u32) -> bool {
+    unsafe { super::trueos_cabi_gfx_texture_status(tex_id) == CMD_STREAM_TEX_STATUS_READY }
+}
+
+fn cmd_stream_measure_text_lines(
+    atlas: qjs::ImbaAthlasView<'static>,
+    meta_table: Option<&CmdStreamAtlasGlyphMetaTable>,
+    text: &[u8],
+) -> (Vec<f32>, f32) {
+    let mut widths = Vec::new();
+    let mut line_w = 0.0f32;
+    let line_h = (atlas.cell_h.max(1)) as f32;
+    let fallback_slot = atlas.index.get(b'?' as usize).copied().unwrap_or(0) as usize;
+
+    for &ch in text.iter() {
+        if ch == b'\n' {
+            widths.push(line_w);
+            line_w = 0.0;
+            continue;
+        }
+
+        if let Some(table) = meta_table
+            && let Some(gm) = cmd_stream_atlas_meta_lookup(table, ch)
+        {
+            line_w += gm.advance_px;
+            continue;
+        }
+
+        let slot = atlas
+            .index
+            .get(ch as usize)
+            .copied()
+            .filter(|slot| *slot != u16::MAX)
+            .map(|slot| slot as usize)
+            .unwrap_or(fallback_slot);
+        let adv = atlas
+            .widths
+            .get(slot)
+            .copied()
+            .unwrap_or(atlas.cell_w as u8) as f32;
+        line_w += adv;
+    }
+
+    widths.push(line_w);
+    (widths, line_h)
+}
+
+fn cmd_stream_draw_text_placeholder(
+    atlas: qjs::ImbaAthlasView<'static>,
+    meta_table: Option<&CmdStreamAtlasGlyphMetaTable>,
+    x_f: f64,
+    y_f: f64,
+    text: &[u8],
+    rgb_f: f64,
+    alpha_f: f64,
+) -> bool {
+    let (widths, line_h) = cmd_stream_measure_text_lines(atlas, meta_table, text);
+    if widths.is_empty() {
+        return false;
+    }
+
+    let rgb = ((rgb_f as i64).max(0) as u32) & 0x00FF_FFFF;
+    let r = ((rgb >> 16) & 0xFF) as u8;
+    let g = ((rgb >> 8) & 0xFF) as u8;
+    let b = (rgb & 0xFF) as u8;
+    let a = ((alpha_f as i64).clamp(0, 255) as u8).min(96);
+    let rgba = ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | (a as u32);
+    let bar_h = (line_h * 0.65).max(4.0);
+    let y_inset = ((line_h - bar_h) * 0.5).max(0.0);
+
+    let mut drew = false;
+    for (line_idx, width) in widths.iter().enumerate() {
+        let width = (*width).max((atlas.cell_w.max(8)) as f32);
+        let y = (y_f as f32) + (line_idx as f32) * line_h + y_inset;
+        drew |= super::cmd_stream_fill_rect(x_f as f32, y, width, bar_h, rgba, false, false);
+    }
+    drew
+}
+
+#[inline]
 pub(super) fn clear_text_batches() {
     CMD_STREAM_TEXT_BATCH_RUNS.lock().clear();
 }
@@ -423,6 +505,14 @@ fn cmd_stream_draw_atlas_text_impl(
         return false;
     };
 
+    let meta_kind = cmd_stream_atlas_meta_kind(kind);
+    let meta_guard = cmd_stream_atlas_meta_get_or_build(meta_kind, atlas);
+    let meta_table = meta_guard.as_ref();
+
+    if !cmd_stream_atlas_tex_ready(tex_id) {
+        return cmd_stream_draw_text_placeholder(atlas, meta_table, x_f, y_f, text, rgb_f, alpha_f);
+    }
+
     let view_w = super::CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1);
     let view_h = super::CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1);
     let w = view_w as f32;
@@ -462,10 +552,6 @@ fn cmd_stream_draw_atlas_text_impl(
         let atlas_w_f = (atlas.width.max(1)) as f32;
         let atlas_h_f = (atlas.height.max(1)) as f32;
         let atlas_cell_h_u = atlas.cell_h as usize;
-        let meta_kind = cmd_stream_atlas_meta_kind(kind);
-        let meta_guard = cmd_stream_atlas_meta_get_or_build(meta_kind, atlas);
-        let meta_table = meta_guard.as_ref();
-
         for &ch in text.iter() {
             if ch == b'\n' {
                 pen_x = 0.0;
