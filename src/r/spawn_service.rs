@@ -777,10 +777,7 @@ const UI2_SVG_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
 );
 
 const UI2_DEMOS: &[Ui2DemoTaskSpec] = &[
-    UI2_GFX_TETRIS_DEMO,
-    UI2_TRIANGLE_DEMO,
     UI2_BGRT_DEMO,
-    UI2_MANDELBROT_DEMO,
 ];
 
 fn spawn_gfx_intel_readiness_probe(spawner: Spawner) -> SpawnAttempt {
@@ -1103,10 +1100,31 @@ static TASKS: &[TaskSpec] = &[
         &SURFER_FACTORY_STARTED,
         spawn_truesurfer_factory,
     ),
-    UI2_GFX_TETRIS_DEMO.task_spec(),
-    UI2_TRIANGLE_DEMO.task_spec(),
+    TaskSpec::disabled(
+        "ui2-gfx-tetris",
+        crate::r::readiness::UI2_DEMO_SLOT_1_READY,
+        &UI2_GFX_TETRIS_STARTED,
+        spawn_ui2_gfx_tetris,
+    ),
+    TaskSpec::disabled(
+        "ui2-triangle-demo",
+        crate::r::readiness::UI2_DEMO_SLOT_2_READY,
+        &UI2_TRIANGLE_DEMO_STARTED,
+        spawn_ui2_triangle_demo,
+    ),
     UI2_BGRT_DEMO.task_spec(),
-    UI2_MANDELBROT_DEMO.task_spec(),
+    TaskSpec::disabled(
+        "ui2-mandelbrot-demo",
+        crate::r::readiness::UI2_DEMO_SLOT_4_READY,
+        &UI2_MANDELBROT_DEMO_STARTED,
+        spawn_ui2_mandelbrot_demo,
+    ),
+    TaskSpec::disabled(
+        "ui2-svg-demo",
+        crate::r::readiness::UI2_DEMO_SLOT_4_READY,
+        &UI2_SVG_DEMO_STARTED,
+        spawn_ui2_svg_demo,
+    ),
     TaskSpec::disabled(
         "ui2-particle-demo",
         crate::r::readiness::UI2_DEMO_SLOT_4_READY,

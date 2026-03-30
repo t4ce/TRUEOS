@@ -75,16 +75,20 @@ QEMU_MOUSE1_HOSTADDR 	?= 14
 QEMU_MOUSE2_HOSTBUS 	?= 3
 QEMU_MOUSE2_HOSTADDR 	?= 15
 
-QEMU_USB_HOST_FLAGS = -device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5  \
-	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=2,id=usbpendrive \
-	-drive file=disk.img,if=none,format=raw,id=usbdisk   \
-	-device usb-storage,drive=usbdisk,bus=xhci.0,port=4,id=usbms   \
-	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd  \
-	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=5,id=usbaudio \
-	-device usb-host,hostbus=$(QEMU_MOUSE1_HOSTBUS),hostaddr=$(QEMU_MOUSE1_HOSTADDR),bus=xhci.0,port=6,id=usbmice \
-	-device usb-host,hostbus=$(QEMU_MOUSE2_HOSTBUS),hostaddr=$(QEMU_MOUSE2_HOSTADDR),bus=xhci.0,port=7,id=usbmice2 \
+QEMU_USB_HOST_FLAGS = \
 	-drive file=nvme.img,if=none,id=nvme \
 	-device nvme,serial=deadbeef,drive=nvme \
+
+
+#	-device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5  \
+#	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=2,id=usbpendrive \
+#	-drive file=disk.img,if=none,format=raw,id=usbdisk   \
+#	-device usb-storage,drive=usbdisk,bus=xhci.0,port=4,id=usbms   \
+#	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd  \
+#	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=5,id=usbaudio \
+#	-device usb-host,hostbus=$(QEMU_MOUSE1_HOSTBUS),hostaddr=$(QEMU_MOUSE1_HOSTADDR),bus=xhci.0,port=6,id=usbmice \
+#	-device usb-host,hostbus=$(QEMU_MOUSE2_HOSTBUS),hostaddr=$(QEMU_MOUSE2_HOSTADDR),bus=xhci.0,port=7,id=usbmice2 \
+
 
 #	-device usb-host,vendorid=0x22d4,productid=0x1321,bus=xhci.0,port=7,id=usbmice2 \
 #	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse  \
