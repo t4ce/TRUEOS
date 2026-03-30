@@ -590,22 +590,10 @@ pub async fn format_and_populate_esp_fat32_with_log(
         // so emit a single VFAT long filename entry + a short alias.
         let limine_short = name83("LIMINE", "CON");
         push(&lfn_entry_single("limine.conf", limine_short));
-        push(&dir_entry(
-            limine_short,
-            0x20,
-            conf_start,
-            image.limine_conf.len() as u32,
-        ));
+        push(&dir_entry(limine_short, 0x20, conf_start, image.limine_conf.len() as u32));
 
-        write_cluster(
-            &mut writer,
-            sectors_per_cluster,
-            first_data_sector,
-            cl_root,
-            &dir,
-            log,
-        )
-        .await?;
+        write_cluster(&mut writer, sectors_per_cluster, first_data_sector, cl_root, &dir, log)
+            .await?;
     }
 
     // EFI dir
@@ -620,15 +608,8 @@ pub async fn format_and_populate_esp_fat32_with_log(
             dir[off..off + 32].copy_from_slice(&e);
             off += 32;
         }
-        write_cluster(
-            &mut writer,
-            sectors_per_cluster,
-            first_data_sector,
-            cl_efi,
-            &dir,
-            log,
-        )
-        .await?;
+        write_cluster(&mut writer, sectors_per_cluster, first_data_sector, cl_efi, &dir, log)
+            .await?;
     }
 
     // BOOT dir
@@ -655,23 +636,11 @@ pub async fn format_and_populate_esp_fat32_with_log(
         let lfn = lfn_entry_single("limine.conf", limine_short);
         dir[off..off + 32].copy_from_slice(&lfn);
         off += 32;
-        let de = dir_entry(
-            limine_short,
-            0x20,
-            conf_start,
-            image.limine_conf.len() as u32,
-        );
+        let de = dir_entry(limine_short, 0x20, conf_start, image.limine_conf.len() as u32);
         dir[off..off + 32].copy_from_slice(&de);
 
-        write_cluster(
-            &mut writer,
-            sectors_per_cluster,
-            first_data_sector,
-            cl_boot,
-            &dir,
-            log,
-        )
-        .await?;
+        write_cluster(&mut writer, sectors_per_cluster, first_data_sector, cl_boot, &dir, log)
+            .await?;
     }
 
     // --- File data ---

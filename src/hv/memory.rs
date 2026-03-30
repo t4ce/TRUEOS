@@ -112,10 +112,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
     }
 
     let eptp = (pml4_pa & 0x000F_FFFF_FFFF_F000) | 6 | (3 << 3);
-    hvlogf(format_args!(
-        "hv: vm1 reporting: ept v1 identity map ready eptp=0x{:016X}",
-        eptp
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: ept v1 identity map ready eptp=0x{:016X}", eptp));
     Ok(eptp)
 }
 
@@ -201,21 +198,13 @@ pub fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static s
 
         let code_base = page_align_down(guest_rip);
         let code_pt_base = page_align_down_2m(guest_rip);
-        map_table_entry(
-            core::ptr::addr_of_mut!(GUEST_PML4.0),
-            pml4_index(code_base),
-            high_pdpt_pa,
-        );
+        map_table_entry(core::ptr::addr_of_mut!(GUEST_PML4.0), pml4_index(code_base), high_pdpt_pa);
         map_table_entry(
             core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0),
             pdpt_index(code_base),
             high_pd_pa,
         );
-        map_table_entry(
-            core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
-            pd_index(code_base),
-            code_pt_pa,
-        );
+        map_table_entry(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), pd_index(code_base), code_pt_pa);
         map_region_4k(
             core::ptr::addr_of_mut!(GUEST_CODE_PT.0),
             code_pt_base,

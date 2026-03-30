@@ -44,10 +44,7 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                     }
                 }
                 if ssdt_count != 0 {
-                    crate::log!(
-                        "ACPI TABLE SSDT count={} (see ssdt::log_once)\n",
-                        ssdt_count
-                    );
+                    crate::log!("ACPI TABLE SSDT count={} (see ssdt::log_once)\n", ssdt_count);
                 }
                 crate::log!("ACPI RSDP 0x{:X} tables={}\n", rsdp, count);
                 Some(tables)
@@ -88,10 +85,7 @@ impl AcpiIdentityHandler {
     fn split_pci_address(address: PciAddress) -> (u8, u8, u8) {
         let segment = address.segment();
         if segment != 0 {
-            panic!(
-                "PCI segment {} unsupported by legacy config access",
-                segment
-            );
+            panic!("PCI segment {} unsupported by legacy config access", segment);
         }
         (address.bus(), address.device(), address.function())
     }

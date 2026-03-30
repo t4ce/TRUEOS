@@ -155,14 +155,8 @@ pub fn upsert_mouse_state(
     virtual_device: bool,
 ) {
     let mut guard = HID_HUT.lock();
-    let binding = resolve_mouse_binding(
-        &guard,
-        controller_id,
-        slot_id,
-        ep_target,
-        source_kind,
-        source_tag,
-    );
+    let binding =
+        resolve_mouse_binding(&guard, controller_id, slot_id, ep_target, source_kind, source_tag);
     if let Some(existing) = guard.mice.iter_mut().find(|mouse| {
         mouse.controller_id == controller_id
             && mouse.slot_id == slot_id

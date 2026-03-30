@@ -778,9 +778,9 @@ pub mod cabi {
     use trueos_gfx_core::{
         BlendDesc, BlendFactor, BufferDesc, BufferId, BufferUsage, ColorFormat, Command,
         CommandBuffer, Extent2D, GfxContext, ImageDesc, ImageFormat, ImageId, ImageRegion,
-        MemoryType, PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap,
-        RgbVertexF32 as RgbVtx, ScissorRect as GfxScissorRect, ShaderId, SwapchainDesc,
-        TexCoordFormat, TexVertexF32 as TexVtx, VertexLayout, Viewport, RGB_VERTEX_SIZE, TEX_VERTEX_SIZE,
+        MemoryType, PipelineDesc, PipelineId, RGB_VERTEX_SIZE, RgbVertexF32 as RgbVtx, SamplerDesc,
+        SamplerFilter, SamplerWrap, ScissorRect as GfxScissorRect, ShaderId, SwapchainDesc,
+        TEX_VERTEX_SIZE, TexCoordFormat, TexVertexF32 as TexVtx, VertexLayout, Viewport,
         read_rgb_vertex_f32_bytes as read_rgb_vtx, read_tex_vertex_f32_bytes as read_tex_vtx,
     };
 
@@ -1915,10 +1915,7 @@ pub mod cabi {
                 return (w.max(1), h.max(1));
             }
         }
-        (
-            st.swapchain_desc.extent.width.max(1),
-            st.swapchain_desc.extent.height.max(1),
-        )
+        (st.swapchain_desc.extent.width.max(1), st.swapchain_desc.extent.height.max(1))
     }
 
     fn texture_dimensions_inner(tex_id: u32) -> Option<(u32, u32)> {
@@ -3158,7 +3155,8 @@ pub mod cabi {
                         let Some(v1) = read_rgb_vtx(&vtx[..usable], off + RGB_VERTEX_SIZE) else {
                             break;
                         };
-                        let Some(v2) = read_rgb_vtx(&vtx[..usable], off + (2 * RGB_VERTEX_SIZE)) else {
+                        let Some(v2) = read_rgb_vtx(&vtx[..usable], off + (2 * RGB_VERTEX_SIZE))
+                        else {
                             break;
                         };
                         draw_rgb_triangle_rgba(
@@ -4117,11 +4115,7 @@ pub mod cabi {
             .and_then(|images| images.get(idx))
             .and_then(|e| e.as_ref())
             .map(|e| (e.image, e.sample_kind, e.origin))
-            .unwrap_or((
-                ImageId::invalid(),
-                TexSampleKind::Mask,
-                TexCoordOrigin::TopLeft,
-            ));
+            .unwrap_or((ImageId::invalid(), TexSampleKind::Mask, TexCoordOrigin::TopLeft));
         let sampler = st.cur_sampler;
         let blend = st.cur_blend;
         let frame_seq = st.frame_seq;

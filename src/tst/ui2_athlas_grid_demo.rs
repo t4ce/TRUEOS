@@ -45,9 +45,9 @@ fn build_athlas_grid_rgba(width: u32, height: u32, cell_h: u32) -> Option<alloc:
 
 #[embassy_executor::task]
 pub async fn ui2_athlas_grid_demo_task() {
-    let Some(glyph) =
-        crate::gfx::imba_athlas::imba_athlas_lookup_codepoint(UI2_ATHLAS_GRID_DEMO_GLYPH_BYTE as u32)
-    else {
+    let Some(glyph) = crate::gfx::imba_athlas::imba_athlas_lookup_codepoint(
+        UI2_ATHLAS_GRID_DEMO_GLYPH_BYTE as u32,
+    ) else {
         crate::log!("ui2-athlas-grid-demo: glyph lookup failed byte=0xA7\n");
         return;
     };

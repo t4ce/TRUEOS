@@ -166,11 +166,7 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
             refresh_window_hit_entries(state, next_window_id);
         }
         UI2_DIRTY.store(true, Ordering::Release);
-        crate::log!(
-            "ui2: cursor-select slot={} window={}\n",
-            slot_id,
-            next_window_id
-        );
+        crate::log!("ui2: cursor-select slot={} window={}\n", slot_id, next_window_id);
     }
     changed
 }
@@ -277,10 +273,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
         if !middle_was_down
             && middle_is_down
             && let Some(target) = press_hit
-            && matches!(
-                target.kind,
-                Ui2HitKind::WindowBody | Ui2HitKind::BrowserInteractive
-            )
+            && matches!(target.kind, Ui2HitKind::WindowBody | Ui2HitKind::BrowserInteractive)
         {
             begin_scroll_pan_window_id = target.owner_window_id;
         }
@@ -325,12 +318,8 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     let _ = update_scroll_pan_for_cursor(state, slot_id, px, py, event.buttons_down);
 
     if click_candidate_window_id != 0 {
-        let press_action = system_button_action_at(
-            state,
-            click_candidate_window_id,
-            click_press_x,
-            click_press_y,
-        );
+        let press_action =
+            system_button_action_at(state, click_candidate_window_id, click_press_x, click_press_y);
         let release_action = system_button_action_at(state, click_candidate_window_id, px, py);
         if let (Some(press_action), Some(release_action)) = (press_action, release_action) {
             if press_action == release_action {
@@ -784,10 +773,8 @@ fn browser_vertical_scrollbar_metrics(
     let viewport_h = snapshot.viewport_height.max(1);
     let content_h = snapshot.content_height.max(viewport_h);
     let scroll_range = hosted_browser_scroll_max(&snapshot);
-    let thumb_h = libm::fmaxf(
-        10.0,
-        (track.h * (viewport_h as f32 / content_h as f32)).min(track.h),
-    );
+    let thumb_h =
+        libm::fmaxf(10.0, (track.h * (viewport_h as f32 / content_h as f32)).min(track.h));
     let thumb_y = if scroll_range > 0 {
         let avail = (track.h - thumb_h).max(0.0);
         track.y
@@ -993,11 +980,7 @@ fn update_scroll_pan_for_cursor(
         &snapshot,
         i64::from(normalized_hosted_browser_scroll(&snapshot)).saturating_sub(i64::from(dy_px)),
     );
-    if hosted_set_scroll(
-        window_browser_instance_id(window),
-        next_scroll_x,
-        next_scroll_y,
-    ) {
+    if hosted_set_scroll(window_browser_instance_id(window), next_scroll_x, next_scroll_y) {
         state.compose_reason = "scroll-pan";
         true
     } else {

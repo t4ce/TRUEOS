@@ -517,16 +517,7 @@ pub fn inject_text(slot_id: u32, text: &str, flags: u32) -> usize {
     let t_ms = uptime_ms_u32();
     let mut wrote = 0usize;
     for ch in text.chars() {
-        push_output_char(
-            0,
-            slot_id,
-            0,
-            t_ms,
-            0,
-            0,
-            ch,
-            flags | KEYBOARD_OUTPUT_FLAG_PRESS,
-        );
+        push_output_char(0, slot_id, 0, t_ms, 0, 0, ch, flags | KEYBOARD_OUTPUT_FLAG_PRESS);
         wrote += 1;
     }
     wrote

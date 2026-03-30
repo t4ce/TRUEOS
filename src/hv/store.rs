@@ -473,11 +473,7 @@ pub async fn vm_store_replication_task() {
     let _ = cmds.push(NetCommand::OpenTcpListen {
         port: ports::VM_STORE_REPL_PORT,
     });
-    crate::log!(
-        "hv-store-net: listening on tcp {} owner={}\n",
-        ports::VM_STORE_REPL_PORT,
-        owner
-    );
+    crate::log!("hv-store-net: listening on tcp {} owner={}\n", ports::VM_STORE_REPL_PORT, owner);
 
     let mut tcp_handle: Option<NetHandle> = None;
     let mut rx_buf = Vec::new();
@@ -646,11 +642,7 @@ async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
         boot_probe_ms().saturating_sub(t0)
     );
     let t1 = boot_probe_ms();
-    crate::log!(
-        "boot-probe: hv-store format done ms={} dt={}\n",
-        t1,
-        t1.saturating_sub(t0)
-    );
+    crate::log!("boot-probe: hv-store format done ms={} dt={}\n", t1, t1.saturating_sub(t0));
     let t2 = boot_probe_ms();
     crate::log!(
         "boot-probe: hv-store validate done ms={} dt={} step={}\n",

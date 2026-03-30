@@ -74,10 +74,7 @@ impl SPop3Message {
     }
 
     pub fn wire(&self) -> String {
-        format!(
-            "From: {}\r\nSubject: {}\r\n\r\n{}\r\n",
-            self.from, self.subject, self.body
-        )
+        format!("From: {}\r\nSubject: {}\r\n\r\n{}\r\n", self.from, self.subject, self.body)
     }
 
     pub fn top(&self, body_lines: u32) -> String {

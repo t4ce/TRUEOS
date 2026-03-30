@@ -3,10 +3,10 @@ extern crate alloc;
 use alloc::vec::Vec;
 use spin::Mutex;
 
+pub mod boot;
 pub mod hut;
 pub mod input;
 pub mod keyboard;
-pub mod boot;
 pub mod leds;
 pub mod mediacontrol;
 pub mod mouse;
@@ -343,13 +343,8 @@ pub(crate) fn handle_keyboard_boot_report(
 ) {
     let now_ms = now_ms_u32();
     let mut runtimes = HID_RUNTIMES.lock();
-    let runtime = runtime_mut_or_insert(
-        &mut runtimes,
-        controller_id,
-        slot_id,
-        ep_target,
-        HID_KIND_KEYBOARD,
-    );
+    let runtime =
+        runtime_mut_or_insert(&mut runtimes, controller_id, slot_id, ep_target, HID_KIND_KEYBOARD);
     runtime.seq = runtime.seq.wrapping_add(1);
     keyboard::handle_report(runtime, data, now_ms);
 }
@@ -362,13 +357,8 @@ pub(crate) fn handle_mouse_boot_report(
 ) {
     let now_ms = now_ms_u32();
     let mut runtimes = HID_RUNTIMES.lock();
-    let runtime = runtime_mut_or_insert(
-        &mut runtimes,
-        controller_id,
-        slot_id,
-        ep_target,
-        HID_KIND_MOUSE,
-    );
+    let runtime =
+        runtime_mut_or_insert(&mut runtimes, controller_id, slot_id, ep_target, HID_KIND_MOUSE);
     runtime.seq = runtime.seq.wrapping_add(1);
     mouse::handle_report(runtime, data, now_ms);
 }

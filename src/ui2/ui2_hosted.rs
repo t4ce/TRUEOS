@@ -542,14 +542,7 @@ fn sync_window_container(
 }
 
 pub(super) fn sync_pending_window_containers(state: &mut Ui2State) {
-    let pending: Vec<(
-        u32,
-        bool,
-        Ui2WindowKind,
-        HostedContentId,
-        u32,
-        Option<Ui2Rect>,
-    )> = state
+    let pending: Vec<(u32, bool, Ui2WindowKind, HostedContentId, u32, Option<Ui2Rect>)> = state
         .windows
         .iter()
         .filter(|window| window.container_sync_needed)

@@ -168,7 +168,9 @@ impl ParticleSystem {
         }
         let _guard = UpdateGuard;
 
-        let seq = PARTICLE_JOB_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        let seq = PARTICLE_JOB_SEQ
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         PARTICLE_JOB_SYSTEM.store(self as *mut Self, Ordering::Release);
         PARTICLE_JOB_DT_BITS.store(dt.to_bits(), Ordering::Release);
         PARTICLE_JOB_ALIVE.store(alive_before, Ordering::Release);
@@ -310,18 +312,13 @@ fn run_claim_loop(seq: u64) {
     }
 
     loop {
-        let start = PARTICLE_JOB_NEXT.fetch_add(
-            PARTICLE_JOB_CHUNK_LEN.load(Ordering::Acquire),
-            Ordering::AcqRel,
-        );
+        let start = PARTICLE_JOB_NEXT
+            .fetch_add(PARTICLE_JOB_CHUNK_LEN.load(Ordering::Acquire), Ordering::AcqRel);
         let alive = PARTICLE_JOB_ALIVE.load(Ordering::Acquire);
         if start >= alive {
             break;
         }
-        let end = core::cmp::min(
-            start + PARTICLE_JOB_CHUNK_LEN.load(Ordering::Acquire),
-            alive,
-        );
+        let end = core::cmp::min(start + PARTICLE_JOB_CHUNK_LEN.load(Ordering::Acquire), alive);
         let system = PARTICLE_JOB_SYSTEM.load(Ordering::Acquire);
         if system.is_null() {
             break;

@@ -510,11 +510,7 @@ impl R8125Adapter {
         let tx_desc = tx_desc_mem.virt() as *mut TxDesc;
 
         // Allocate buffers and initialize descriptors
-        crate::log!(
-            "net/r8125: alloc rx bufs count={} size=0x{:x}\n",
-            RX_DESC_COUNT,
-            RX_BUF_SIZE
-        );
+        crate::log!("net/r8125: alloc rx bufs count={} size=0x{:x}\n", RX_DESC_COUNT, RX_BUF_SIZE);
         let mut rx_bufs: Vec<DmaRegion> = Vec::with_capacity(RX_DESC_COUNT);
         for i in 0..RX_DESC_COUNT {
             let buf = DmaRegion::alloc(RX_BUF_SIZE, 16).ok_or(())?;
@@ -532,11 +528,7 @@ impl R8125Adapter {
             rx_bufs.push(buf);
         }
 
-        crate::log!(
-            "net/r8125: alloc tx bufs count={} size=0x{:x}\n",
-            TX_DESC_COUNT,
-            TX_BUF_SIZE
-        );
+        crate::log!("net/r8125: alloc tx bufs count={} size=0x{:x}\n", TX_DESC_COUNT, TX_BUF_SIZE);
         let mut tx_bufs: Vec<DmaRegion> = Vec::with_capacity(TX_DESC_COUNT);
         for i in 0..TX_DESC_COUNT {
             let buf = DmaRegion::alloc(TX_BUF_SIZE, 16).ok_or(())?;
@@ -620,11 +612,7 @@ impl R8125Adapter {
 
         // Confirm key registers took effect (helps diagnose write-protect / wrong offsets).
         let (rcr_rb, tcr_rb, cplus_rb) = unsafe {
-            (
-                mmio.read_u32(REG_RCR),
-                mmio.read_u32(REG_TCR),
-                mmio.read_u16(REG_CPLUS_CMD),
-            )
+            (mmio.read_u32(REG_RCR), mmio.read_u32(REG_TCR), mmio.read_u16(REG_CPLUS_CMD))
         };
         crate::log!(
             "net/r8125: cfg rb rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x}\n",
@@ -1202,11 +1190,7 @@ impl R8125Adapter {
             core::ptr::copy_nonoverlapping(frame.as_ptr(), self.tx_bufs[idx].virt(), len);
         }
 
-        Self::maybe_clflush(
-            self.tx_bufs[idx].virt() as *const u8,
-            len,
-            EXP_R8125_CLFLUSH_TX_BUF,
-        );
+        Self::maybe_clflush(self.tx_bufs[idx].virt() as *const u8, len, EXP_R8125_CLFLUSH_TX_BUF);
 
         // Ensure the packet bytes are visible before we set DESC_OWN.
         compiler_fence(Ordering::Release);

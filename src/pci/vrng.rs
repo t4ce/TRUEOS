@@ -164,13 +164,7 @@ fn enable_io_and_bus_master(dev: &crate::pci::PciDevice) {
     let mut cmd =
         crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET);
     cmd |= VIRTIO_PCI_COMMAND_IO | VIRTIO_PCI_COMMAND_BUS_MASTER;
-    crate::pci::config_write_u16(
-        dev.bus,
-        dev.slot,
-        dev.function,
-        VIRTIO_PCI_COMMAND_OFFSET,
-        cmd,
-    );
+    crate::pci::config_write_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET, cmd);
 }
 
 fn reset_device(io_base: u16) {
@@ -280,10 +274,7 @@ impl VirtioRng {
 
         // Device is fully configured at this point.
         // Per virtio init sequence, set DRIVER_OK before submitting buffers.
-        set_status(
-            io_base,
-            VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK,
-        );
+        set_status(io_base, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK);
 
         // Program a single writable descriptor (id=0) pointing at our entropy buffer.
         unsafe {

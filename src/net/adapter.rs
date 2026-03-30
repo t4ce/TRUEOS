@@ -410,17 +410,11 @@ fn dhcp_fixup_broadcast_and_udp_checksum(buf: &mut [u8]) {
         let udp_bytes = &buf[udp_off..udp_off + udp_len];
         let mut i = 0usize;
         while i + 1 < udp_bytes.len() {
-            add16(
-                &mut sum,
-                u16::from_be_bytes([udp_bytes[i], udp_bytes[i + 1]]),
-            );
+            add16(&mut sum, u16::from_be_bytes([udp_bytes[i], udp_bytes[i + 1]]));
             i += 2;
         }
         if (udp_bytes.len() & 1) != 0 {
-            add16(
-                &mut sum,
-                u16::from_be_bytes([udp_bytes[udp_bytes.len() - 1], 0]),
-            );
+            add16(&mut sum, u16::from_be_bytes([udp_bytes[udp_bytes.len() - 1], 0]));
         }
 
         while (sum >> 16) != 0 {
@@ -1568,10 +1562,7 @@ impl NetService {
         //     data: current_hostname.as_bytes(),
         // }]);
         let dhcp = sockets.add(dhcp_socket);
-        crate::log!(
-            "net: dhcp start dev={} mode=static-fallback\n",
-            device_index
-        );
+        crate::log!("net: dhcp start dev={} mode=static-fallback\n", device_index);
 
         let dhcp6_duid = crate::net::dhcpv6::duid_ll_from_mac(mac);
         let dhcp6_iaid =
@@ -2131,10 +2122,8 @@ impl NetService {
         let local = IpEndpoint::new(IpAddress::Ipv4(local_ip), local_port);
         let remote_addr = remote.addr;
         let remote_port = remote.port;
-        let remote = IpEndpoint::new(
-            IpAddress::Ipv4(Ipv4Address::from_octets(remote_addr)),
-            remote_port,
-        );
+        let remote =
+            IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::from_octets(remote_addr)), remote_port);
 
         let local_octets = local_ip.octets();
         crate::log!(
@@ -2315,10 +2304,7 @@ impl NetService {
             data: &data,
         };
         let mut out = vec![0u8; req.buffer_len()];
-        req.emit(
-            &mut Icmpv4Packet::new_unchecked(&mut out),
-            &ChecksumCapabilities::default(),
-        );
+        req.emit(&mut Icmpv4Packet::new_unchecked(&mut out), &ChecksumCapabilities::default());
 
         let [a, b, c, d] = target;
         let target = Ipv4Address::new(a, b, c, d);
@@ -2606,10 +2592,8 @@ impl NetService {
                 }
             }
 
-            let v6_ll = IpCidr::new(
-                IpAddress::Ipv6(self.local_ipv6_ll),
-                IPV6_LINK_LOCAL_PREFIX_LEN,
-            );
+            let v6_ll =
+                IpCidr::new(IpAddress::Ipv6(self.local_ipv6_ll), IPV6_LINK_LOCAL_PREFIX_LEN);
             let v6_global = IpCidr::new(IpAddress::Ipv6(chosen), 64);
             self.iface.update_ip_addrs(|addrs| {
                 addrs.clear();
@@ -2841,10 +2825,7 @@ impl NetService {
                 self.dhcp6_cooldown_until = None;
             }
             if want_stateful_addr {
-                crate::log!(
-                    "net: dhcp6 start dev={} reason=ra-managed (M=1)\n",
-                    self.device_index
-                );
+                crate::log!("net: dhcp6 start dev={} reason=ra-managed (M=1)\n", self.device_index);
                 self.dhcp6_start_solicit(timestamp);
             } else if want_dns {
                 crate::log!(
@@ -3177,10 +3158,7 @@ impl NetService {
             }
         }
 
-        let v6_ll = IpCidr::new(
-            IpAddress::Ipv6(self.local_ipv6_ll),
-            IPV6_LINK_LOCAL_PREFIX_LEN,
-        );
+        let v6_ll = IpCidr::new(IpAddress::Ipv6(self.local_ipv6_ll), IPV6_LINK_LOCAL_PREFIX_LEN);
         let v6_global = IpCidr::new(IpAddress::Ipv6(addr), 128);
         self.iface.update_ip_addrs(|addrs| {
             addrs.clear();
@@ -3191,11 +3169,7 @@ impl NetService {
             }
         });
 
-        crate::log!(
-            "net: dhcp6 acquired dev={} addr6={}\n",
-            self.device_index,
-            addr
-        );
+        crate::log!("net: dhcp6 acquired dev={} addr6={}\n", self.device_index, addr);
     }
 
     fn handle_command(&mut self, owner: &'static str, cmd: NetCommand) {
@@ -3489,11 +3463,7 @@ impl NetService {
         self.flush_tcp_tx(idx);
 
         if state == tcp::State::Established && !self.records[idx].established {
-            crate::log!(
-                "net: tcp established branch owner={} handle={}\n",
-                owner,
-                handle.0
-            );
+            crate::log!("net: tcp established branch owner={} handle={}\n", owner, handle.0);
             self.records[idx].established = true;
             let ok = push_event(owner, NetEvent::TcpEstablished { handle });
             crate::log!(
@@ -3862,10 +3832,7 @@ impl NetService {
             data: payload,
         };
         let mut out = vec![0u8; req.buffer_len()];
-        req.emit(
-            &mut Icmpv4Packet::new_unchecked(&mut out),
-            &ChecksumCapabilities::default(),
-        );
+        req.emit(&mut Icmpv4Packet::new_unchecked(&mut out), &ChecksumCapabilities::default());
 
         if socket.send_slice(&out, IpAddress::Ipv4(target)).is_ok() {
             let [a, b, c, d] = target.octets();
@@ -4208,10 +4175,7 @@ fn apply_static_fallback_ipv4(
 
     iface.update_ip_addrs(|addrs| {
         addrs.clear();
-        let _ = addrs.push(IpCidr::new(
-            IpAddress::Ipv6(ipv6_ll),
-            IPV6_LINK_LOCAL_PREFIX_LEN,
-        ));
+        let _ = addrs.push(IpCidr::new(IpAddress::Ipv6(ipv6_ll), IPV6_LINK_LOCAL_PREFIX_LEN));
         let _ = addrs.push(IpCidr::new(IpAddress::Ipv4(ip), STATIC_FALLBACK_PREFIX_LEN));
     });
     let routes = iface.routes_mut();

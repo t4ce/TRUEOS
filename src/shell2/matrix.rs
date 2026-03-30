@@ -282,7 +282,12 @@ pub(crate) fn record_user_input(text: &str) {
 }
 
 pub(crate) fn live_user_input_record() -> Vec<LiveUserInputEntry> {
-    state().lock().live_user_input_record.iter().cloned().collect()
+    state()
+        .lock()
+        .live_user_input_record
+        .iter()
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn take_user_input_record() -> Vec<AllocString> {

@@ -198,14 +198,9 @@ async fn send_output_report(
                 rt.slot_id,
                 err
             );
-            send_hid_set_report(
-                &mut rt.device,
-                rt.interface_number,
-                report_id,
-                control_payload,
-            )
-            .await
-            .map_err(|_| ())
+            send_hid_set_report(&mut rt.device, rt.interface_number, report_id, control_payload)
+                .await
+                .map_err(|_| ())
         }
     };
 
@@ -349,27 +344,23 @@ pub async fn led_controller_task(mut device: Device, controller_id: u32, target:
         return;
     }
 
-    let mut interface = match claim_interface(
-        &mut device,
-        target.interface_number,
-        target.alternate_setting,
-    )
-    .await
-    {
-        Ok(interface) => interface,
-        Err(err) => {
-            crate::log!(
-                "crabusb: leds {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
-                vendor_id,
-                product_id,
-                target.interface_number,
-                target.alternate_setting,
-                err
-            );
-            unregister_active_led_stream(active_stream);
-            return;
-        }
-    };
+    let mut interface =
+        match claim_interface(&mut device, target.interface_number, target.alternate_setting).await
+        {
+            Ok(interface) => interface,
+            Err(err) => {
+                crate::log!(
+                    "crabusb: leds {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
+                    vendor_id,
+                    product_id,
+                    target.interface_number,
+                    target.alternate_setting,
+                    err
+                );
+                unregister_active_led_stream(active_stream);
+                return;
+            }
+        };
 
     let out_endpoint = match target.out_endpoint.kind {
         LedOutEndpointKind::Interrupt => match interface

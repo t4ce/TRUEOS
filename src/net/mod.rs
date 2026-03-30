@@ -204,11 +204,8 @@ pub fn device_index_from_owner(owner: &str) -> Option<usize> {
     // BDF: bb:dd.f
     if let Some((bus_s, rest)) = suffix.split_once(':')
         && let Some((slot_s, func_s)) = rest.split_once('.')
-        && let (Some(bus), Some(slot), Some(function)) = (
-            parse_hex_u8(bus_s),
-            parse_hex_u8(slot_s),
-            parse_u8_dec_or_hex(func_s),
-        )
+        && let (Some(bus), Some(slot), Some(function)) =
+            (parse_hex_u8(bus_s), parse_hex_u8(slot_s), parse_u8_dec_or_hex(func_s))
         && let Some(idx) = find_device_by_bdf(bus, slot, function)
     {
         return Some(idx);
@@ -410,12 +407,7 @@ pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec:
         // the NIC backend is rejecting them (most commonly: TX ring full / wedged DMA).
         // When link is down, dropping TX is expected and should not spam logs.
         if err_count != 0 && link_up {
-            crate::log!(
-                "net: tx-batch dev={} ok={} err={}\n",
-                index,
-                ok_count,
-                err_count
-            );
+            crate::log!("net: tx-batch dev={} ok={} err={}\n", index, ok_count, err_count);
         }
     });
 }

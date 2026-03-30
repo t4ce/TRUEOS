@@ -40,10 +40,7 @@ pub(crate) fn start_format_session_for_disk(
     prefix: &str,
 ) -> ParseOutcome {
     print_target_summary(io, disk, prefix);
-    print_shell_line(
-        io,
-        &alloc::format!("{prefix}: DANGER: this destroys all data on the disk"),
-    );
+    print_shell_line(io, &alloc::format!("{prefix}: DANGER: this destroys all data on the disk"));
     print_shell_line(io, &alloc::format!("{prefix}: type `sure`"));
     ParseOutcome::StartSession(CommandSessionKind::FormatSure(disk.id().raw()))
 }
@@ -78,12 +75,7 @@ fn submit_format(
     let info = disk.info();
     print_matrix_target_line(
         target,
-        alloc::format!(
-            "format: starting on disk id={} ({})",
-            info.id.raw(),
-            info.id
-        )
-        .as_str(),
+        alloc::format!("format: starting on disk id={} ({})", info.id.raw(), info.id).as_str(),
     );
 
     set_matrix_target_active(target, true);

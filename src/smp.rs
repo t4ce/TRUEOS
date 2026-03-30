@@ -176,12 +176,7 @@ pub fn poll() {
     }
 
     if m.state
-        .compare_exchange(
-            STATE_PENDING,
-            STATE_RUNNING,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        )
+        .compare_exchange(STATE_PENDING, STATE_RUNNING, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
         return;

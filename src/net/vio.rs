@@ -201,10 +201,7 @@ impl VirtioNetAdapter {
         let (rx_bufs, rxq) = init_rx_buffers(io_base, rxq)?;
         let (tx_bufs, tx_free) = init_tx_buffers(&mut txq)?;
 
-        set_status(
-            io_base,
-            VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK,
-        );
+        set_status(io_base, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK);
 
         Ok(Self {
             ring: None,
@@ -277,13 +274,7 @@ fn read_io_base(dev: &pci::PciDevice) -> Result<u16, ()> {
 fn enable_io_and_bus_master(dev: &pci::PciDevice) {
     let mut cmd = pci::config_read_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET);
     cmd |= VIRTIO_PCI_COMMAND_IO | VIRTIO_PCI_COMMAND_BUS_MASTER;
-    pci::config_write_u16(
-        dev.bus,
-        dev.slot,
-        dev.function,
-        VIRTIO_PCI_COMMAND_OFFSET,
-        cmd,
-    );
+    pci::config_write_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET, cmd);
 }
 
 fn reset_device(io_base: u16) {
@@ -519,11 +510,7 @@ impl VirtioNetAdapter {
         let buf = &self.tx_bufs[desc_id as usize];
         let copy_len = frame.len().min(TX_BUF_SIZE - VIRTIO_NET_HDR_SIZE);
         if copy_len != frame.len() {
-            crate::log!(
-                "net/vio: tx trunc frame_len={} copy_len={}\n",
-                frame.len(),
-                copy_len
-            );
+            crate::log!("net/vio: tx trunc frame_len={} copy_len={}\n", frame.len(), copy_len);
         }
 
         unsafe {

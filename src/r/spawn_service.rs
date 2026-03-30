@@ -250,15 +250,11 @@ fn spawn_on_worker(
 }
 
 fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::wait::job_runner_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::wait::job_runner_task()))
 }
 
 fn spawn_globalog_persist_once(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::globalog::persist_once_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::globalog::persist_once_task()))
 }
 
 fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
@@ -280,15 +276,11 @@ fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::r::fs::trueosfs::mount_service_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::r::fs::trueosfs::mount_service_task()))
 }
 
 fn spawn_hv_vm_store(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::hv::store::vm_store_task())
-    })
+    spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(crate::hv::store::vm_store_task()))
 }
 
 fn spawn_hv_vm_store_net(spawner: Spawner) -> SpawnAttempt {
@@ -340,69 +332,47 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::net::tls_socket::tls_socket_service_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::net::tls_socket::tls_socket_service_task()))
 }
 
 fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::r::net::ntp::ntp_sync_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::r::net::ntp::ntp_sync_task()))
 }
 
 fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::r::net::sntp::sntp_service_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::r::net::sntp::sntp_service_task()))
 }
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::tst_net_tcp_shell::net_shell_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_net_tcp_shell::net_shell_task()))
 }
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::globalog::logtotcp::logtotcp_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::globalog::logtotcp::logtotcp_task()))
 }
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(trueos_qjs::ai_task::run_once())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(trueos_qjs::ai_task::run_once()))
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::tst_http_trueosfs::http_trueosfs_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_http_trueosfs::http_trueosfs_task()))
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::tst_ws_time::ws_time_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_ws_time::ws_time_task()))
 }
 
 fn spawn_esp_gate(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::r::net::esp::esp_gate_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::r::net::esp::esp_gate_task()))
 }
 
 fn spawn_esp_gate_registry(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::r::net::esp::esp_gate_registry_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::r::net::esp::esp_gate_registry_task()))
 }
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::r::net::ftp::ftp_server_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::r::net::ftp::ftp_server_task()))
 }
 
 fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
@@ -419,9 +389,7 @@ async fn gfx_virgl_ready_task() {
     }
 
     if crate::intel::has_claimed_device() {
-        crate::log!(
-            "boot-probe: gfx-virgl-backend-ready skipped (intel soft-detect claimed)\n"
-        );
+        crate::log!("boot-probe: gfx-virgl-backend-ready skipped (intel soft-detect claimed)\n");
         return;
     }
 
@@ -466,10 +434,7 @@ fn spawn_gfx_virgl_ready_task(spawner: Spawner) -> SpawnAttempt {
 
 #[embassy_executor::task]
 async fn gfx_virgl_cursor_overlay_task() {
-    crate::log!(
-        "boot-probe: gfx-cursor-overlay task start ms={}\n",
-        boot_probe_ms()
-    );
+    crate::log!("boot-probe: gfx-cursor-overlay task start ms={}\n", boot_probe_ms());
     loop {
         let _ = crate::r::io::cabi::kernel_cursor_overlay_tick();
         Timer::after(EmbassyDuration::from_millis(16)).await;
@@ -477,9 +442,7 @@ async fn gfx_virgl_cursor_overlay_task() {
 }
 
 fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(gfx_virgl_cursor_overlay_task())
-    })
+    spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(gfx_virgl_cursor_overlay_task()))
 }
 
 fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
@@ -567,9 +530,7 @@ fn spawn_truesurfer_batch(spawner: Spawner, requested: u32) -> SpawnAttempt {
         };
 
         match spawn_on_worker(spawner, |worker_spawner| {
-            worker_spawner.spawn(trueos_qjs::browser_task::truesurfer_task(
-                browser_instance_id,
-            ))
+            worker_spawner.spawn(trueos_qjs::browser_task::truesurfer_task(browser_instance_id))
         }) {
             SpawnAttempt::Spawned => {
                 factory.mark_spawned(browser_instance_id);
@@ -613,9 +574,7 @@ pub fn spawn_truesurfer_tab_with_html() -> Option<u32> {
 
     match trueos_qjs::workers::pick_background_spawner().and_then(|worker_spawner| {
         worker_spawner
-            .spawn(trueos_qjs::browser_task::truesurfer_task(
-                browser_instance_id,
-            ))
+            .spawn(trueos_qjs::browser_task::truesurfer_task(browser_instance_id))
             .ok()
     }) {
         Some(()) => {
@@ -641,10 +600,7 @@ pub fn spawn_truesurfer_tab_with_html() -> Option<u32> {
 }
 
 pub fn spawn_additional_truesurfers(spawner: Spawner, requested: u32) -> bool {
-    matches!(
-        spawn_truesurfer_batch(spawner, requested),
-        SpawnAttempt::Spawned
-    )
+    matches!(spawn_truesurfer_batch(spawner, requested), SpawnAttempt::Spawned)
 }
 
 fn spawn_truesurfer_factory(spawner: Spawner) -> SpawnAttempt {
@@ -652,21 +608,15 @@ fn spawn_truesurfer_factory(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::r::ui2::ui2_task())
-    })
+    spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(crate::r::ui2::ui2_task()))
 }
 
 fn spawn_ui2_hit(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::r::ui2::ui2_hit_task())
-    })
+    spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(crate::r::ui2::ui2_hit_task()))
 }
 
 fn spawn_ui2_hosted(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::r::ui2::ui2_hosted_task())
-    })
+    spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(crate::r::ui2::ui2_hosted_task()))
 }
 
 fn spawn_ui2_demo_on_worker<F>(spawner: Spawner, spawn: F) -> SpawnAttempt
@@ -778,15 +728,11 @@ const UI2_DEMOS: &[Ui2DemoTaskSpec] = &[
 ];
 
 fn spawn_gfx_intel_readiness_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::intel::scanout_smoke_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::intel::scanout_smoke_task()))
 }
 
 fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::usb2::crabusb_audio_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_audio_task()))
 }
 
 fn spawn_crabusb_bsp_service(spawner: Spawner) -> SpawnAttempt {
@@ -795,9 +741,7 @@ fn spawn_crabusb_bsp_service(spawner: Spawner) -> SpawnAttempt {
         .min(crate::usb2::xhci::MAX_XHCI_CONTROLLERS)
         .max(1);
     for i in 0..count {
-        spawn_local(spawner, |spawner| {
-            spawner.spawn(crate::usb2::crabusb_bsp_service(i, spawner))
-        });
+        spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_bsp_service(i, spawner)));
     }
     SpawnAttempt::Spawned
 }
@@ -808,23 +752,17 @@ fn spawn_crabusb_event_pump(spawner: Spawner) -> SpawnAttempt {
         .min(crate::usb2::xhci::MAX_XHCI_CONTROLLERS)
         .max(1);
     for i in 0..count {
-        spawn_local(spawner, |spawner| {
-            spawner.spawn(crate::usb2::crabusb_event_pump_task(i))
-        });
+        spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_event_pump_task(i)));
     }
     SpawnAttempt::Spawned
 }
 
 fn spawn_crabusb_truekey(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::usb2::crabusb_truekey_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_truekey_task()))
 }
 
 fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::usb2::midi::piano_drain_loop())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::midi::piano_drain_loop()))
 }
 
 const USER_INPUT_RECORD_FLUSH_INTERVAL_SECS: u64 = 120;
@@ -853,14 +791,15 @@ async fn flush_user_input_record_once() {
         return;
     };
 
-    match crate::r::fs::trueosfs::file_append_async(disk, USER_INPUT_RECORD_PATH, payload.as_bytes())
-        .await
+    match crate::r::fs::trueosfs::file_append_async(
+        disk,
+        USER_INPUT_RECORD_PATH,
+        payload.as_bytes(),
+    )
+    .await
     {
         Ok(true) => {
-            crate::log!(
-                "spawn-svc: user-input-record ok appended_lines={}\n",
-                appended_lines
-            );
+            crate::log!("spawn-svc: user-input-record ok appended_lines={}\n", appended_lines);
         }
         Ok(false) => {
             crate::shell2::restore_user_input_record(entries);
@@ -878,10 +817,7 @@ async fn trueosfs_ready_hook_task() {
     crate::log!("spawn-svc: trueosfs-ready-hook task online\n");
     loop {
         flush_user_input_record_once().await;
-        Timer::after(EmbassyDuration::from_secs(
-            USER_INPUT_RECORD_FLUSH_INTERVAL_SECS,
-        ))
-        .await;
+        Timer::after(EmbassyDuration::from_secs(USER_INPUT_RECORD_FLUSH_INTERVAL_SECS)).await;
     }
 }
 
@@ -900,26 +836,18 @@ fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_smtp_smoke(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::tst_smtp_smoke::smtp_smoke_task())
-    })
+    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_smtp_smoke::smtp_smoke_task()))
 }
 
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::shell2::task(
-            spawner,
-            &crate::shell2::UART1_COM1_BACKEND,
-        ))
+        spawner.spawn(crate::shell2::task(spawner, &crate::shell2::UART1_COM1_BACKEND))
     })
 }
 
 fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::shell2::task(
-            spawner,
-            &crate::shell2::NET_TCP_SHELL_BACKEND,
-        ))
+        spawner.spawn(crate::shell2::task(spawner, &crate::shell2::NET_TCP_SHELL_BACKEND))
     })
 }
 
@@ -942,9 +870,7 @@ async fn atomic_bomb_task() {
 }
 
 fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(atomic_bomb_task())
-    })
+    spawn_on_worker(spawner, |worker_spawner| worker_spawner.spawn(atomic_bomb_task()))
 }
 
 // --- registry ---
@@ -978,12 +904,7 @@ static TASKS: &[TaskSpec] = &[
         spawn_trueosfs_mount_service,
     ),
     TaskSpec::enabled("hv-vm-store", 0, &HV_VM_STORE_STARTED, spawn_hv_vm_store),
-    TaskSpec::enabled(
-        "hv-vm-store-net",
-        0,
-        &HV_VM_STORE_NET_STARTED,
-        spawn_hv_vm_store_net,
-    ),
+    TaskSpec::enabled("hv-vm-store-net", 0, &HV_VM_STORE_NET_STARTED, spawn_hv_vm_store_net),
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
     TaskSpec::enabled(
@@ -1030,12 +951,7 @@ static TASKS: &[TaskSpec] = &[
         spawn_ws_time,
     ),
     TaskSpec::enabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
-    TaskSpec::enabled(
-        "esp-gate-registry",
-        0,
-        &ESP_GATE_REGISTRY_STARTED,
-        spawn_esp_gate_registry,
-    ),
+    TaskSpec::enabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
     TaskSpec::disabled(
         "ftp-server",
         NET_CONFIGURED_AND_ROOT_READY,
@@ -1055,24 +971,14 @@ static TASKS: &[TaskSpec] = &[
         &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
         spawn_gfx_virgl_cursor_overlay_task,
     ),
-    TaskSpec::enabled(
-        "html_fetch_service",
-        0,
-        &HTML_SHACK_SERVICE_STARTED,
-        html_fetch_service,
-    ),
+    TaskSpec::enabled("html_fetch_service", 0, &HTML_SHACK_SERVICE_STARTED, html_fetch_service),
     TaskSpec::enabled(
         "gfx-texture-upload-service",
         crate::r::readiness::GFX_BACKEND_READY,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    TaskSpec::enabled(
-        "ui2",
-        crate::r::readiness::GFX_BACKEND_READY,
-        &UI2_STARTED,
-        spawn_ui2,
-    ),
+    TaskSpec::enabled("ui2", crate::r::readiness::GFX_BACKEND_READY, &UI2_STARTED, spawn_ui2),
     TaskSpec::enabled(
         "ui2-hosted",
         crate::r::readiness::GFX_BACKEND_READY,
@@ -1091,12 +997,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_DEMO_STAGGER_STARTED,
         spawn_ui2_demo_stagger,
     ),
-    TaskSpec::enabled(
-        "truesurfer-factory",
-        0,
-        &SURFER_FACTORY_STARTED,
-        spawn_truesurfer_factory,
-    ),
+    TaskSpec::enabled("truesurfer-factory", 0, &SURFER_FACTORY_STARTED, spawn_truesurfer_factory),
     TaskSpec::enabled(
         "ui2-gfx-tetris",
         crate::r::readiness::UI2_DEMO_SLOT_1_READY,
@@ -1147,18 +1048,8 @@ static TASKS: &[TaskSpec] = &[
         &CRABUSB_EVENT_PUMP_STARTED,
         spawn_crabusb_event_pump,
     ),
-    TaskSpec::enabled(
-        "crabusb-audio",
-        0,
-        &CRABUSB_AUDIO_STARTED,
-        spawn_crabusb_audio,
-    ),
-    TaskSpec::enabled(
-        "crabusb-truekey",
-        0,
-        &CRABUSB_TRUEKEY_STARTED,
-        spawn_crabusb_truekey,
-    ),
+    TaskSpec::enabled("crabusb-audio", 0, &CRABUSB_AUDIO_STARTED, spawn_crabusb_audio),
+    TaskSpec::enabled("crabusb-truekey", 0, &CRABUSB_TRUEKEY_STARTED, spawn_crabusb_truekey),
     TaskSpec::enabled("piano-drain", 0, &PIANO_DRAIN_STARTED, spawn_piano_drain),
     TaskSpec::enabled(
         "trueosfs-ready-hook",
@@ -1166,26 +1057,11 @@ static TASKS: &[TaskSpec] = &[
         &TRUEOSFS_READY_HOOK_STARTED,
         spawn_trueosfs_ready_hook,
     ),
-    TaskSpec::disabled(
-        "boot-ws-smoke",
-        WS_BOOT_READY,
-        &BOOT_WS_SMOKE_STARTED,
-        spawn_boot_ws_smoke,
-    ),
+    TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
     TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
-    TaskSpec::disabled(
-        "boot-netbench",
-        0,
-        &BOOT_NETBENCH_STARTED,
-        spawn_boot_netbench,
-    ),
+    TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
-    TaskSpec::enabled(
-        "net-tcp-shell",
-        0,
-        &NET_TCP_SHELL_STARTED,
-        spawn_net_tcp_shell,
-    ),
+    TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
     TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
 ];
 

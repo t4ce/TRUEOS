@@ -492,13 +492,7 @@ fn parse_modern_caps(dev: &pci::PciDevice) -> Option<VirtioModernCaps> {
 fn enable_mem_and_bus_master(dev: &pci::PciDevice) {
     let mut cmd = pci::config_read_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET);
     cmd |= VIRTIO_PCI_COMMAND_MEM | VIRTIO_PCI_COMMAND_BUS_MASTER;
-    pci::config_write_u16(
-        dev.bus,
-        dev.slot,
-        dev.function,
-        VIRTIO_PCI_COMMAND_OFFSET,
-        cmd,
-    );
+    pci::config_write_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET, cmd);
 }
 
 fn setup_queue_modern(
@@ -553,15 +547,7 @@ fn setup_queue_modern(
     }
 
     let notify_off = unsafe { core::ptr::read_volatile(&(*common).queue_notify_off) };
-    Ok(VirtQueue::new(
-        size,
-        mem,
-        desc,
-        avail,
-        used,
-        queue_index,
-        notify_off,
-    ))
+    Ok(VirtQueue::new(size, mem, desc, avail, used, queue_index, notify_off))
 }
 
 fn notify_queue_modern(
@@ -1265,11 +1251,7 @@ impl VirtioGpu3d {
         queue.last_used_idx = queue.last_used_idx.wrapping_add(1);
 
         if used.id != 0 {
-            crate::log!(
-                "virtio-gpu3d: {} used id={} (expected 0)\n",
-                queue_label,
-                used.id
-            );
+            crate::log!("virtio-gpu3d: {} used id={} (expected 0)\n", queue_label, used.id);
             return false;
         }
 
@@ -1463,9 +1445,7 @@ fn vertex_blob_bounds(blob: &[u8]) -> Option<(f32, f32, f32, f32, f32, f32, f32,
         max_a = max_a.max(a);
         i += stride;
     }
-    Some((
-        min_x, max_x, min_y, max_y, min_a, max_a, min_u, max_u, min_v, max_v,
-    ))
+    Some((min_x, max_x, min_y, max_y, min_a, max_a, min_u, max_u, min_v, max_v))
 }
 
 #[derive(Clone)]
@@ -1948,24 +1928,9 @@ impl VirglGfxBackend {
 
         // Textured pipeline program.
         encode_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX, VS_TEX);
-        encode_shader(
-            &mut init,
-            fs_tex_mask_handle,
-            PIPE_SHADER_FRAGMENT,
-            FS_TEX_MASK,
-        );
-        encode_shader(
-            &mut init,
-            fs_tex_rgba_handle,
-            PIPE_SHADER_FRAGMENT,
-            FS_TEX_RGBA,
-        );
-        encode_shader(
-            &mut init,
-            fs_tex_particle_handle,
-            PIPE_SHADER_FRAGMENT,
-            FS_TEX_PARTICLE,
-        );
+        encode_shader(&mut init, fs_tex_mask_handle, PIPE_SHADER_FRAGMENT, FS_TEX_MASK);
+        encode_shader(&mut init, fs_tex_rgba_handle, PIPE_SHADER_FRAGMENT, FS_TEX_RGBA);
+        encode_shader(&mut init, fs_tex_particle_handle, PIPE_SHADER_FRAGMENT, FS_TEX_PARTICLE);
         encode_bind_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX);
         encode_bind_shader(&mut init, fs_tex_mask_handle, PIPE_SHADER_FRAGMENT);
         encode_link_shader(&mut init, vs_tex_handle, fs_tex_mask_handle);
@@ -2177,11 +2142,7 @@ impl VirglGfxBackend {
             crate::log!("virgl-backend: bootstrap present failed\n");
             return None;
         }
-        crate::log!(
-            "virgl-backend: bootstrap present ok display={}x{}\n",
-            present_w,
-            present_h
-        );
+        crate::log!("virgl-backend: bootstrap present ok display={}x{}\n", present_w, present_h);
 
         Some(backend)
     }
@@ -2227,12 +2188,7 @@ impl VirglGfxBackend {
 
         // Re-bind the vertex buffer state.
         let mut cmd = VirglCmdBuf::new();
-        encode_set_vertex_buffer(
-            &mut cmd,
-            core::mem::size_of::<Vertex>() as u32,
-            0,
-            new_vbo_res,
-        );
+        encode_set_vertex_buffer(&mut cmd, core::mem::size_of::<Vertex>() as u32, 0, new_vbo_res);
         if !self.gpu.submit_3d(self.ctx_id, cmd.as_bytes(), 0) {
             return false;
         }
@@ -3620,11 +3576,7 @@ fn encode_shader(buf: &mut VirglCmdBuf, handle: u32, shader_type: u32, text: &st
 
     // Base header size=5 dwords: handle, type, offlen, num_tokens, num_outputs.
     let len_dwords = 5 + (bytes.len() as u32).div_ceil(4);
-    buf.push(virgl_cmd0(
-        VIRGL_CCMD_CREATE_OBJECT,
-        VIRGL_OBJECT_SHADER,
-        len_dwords,
-    ));
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_SHADER, len_dwords));
     buf.push(handle);
     buf.push(shader_type);
     buf.push(offlen);
@@ -3640,11 +3592,7 @@ fn encode_bind_shader(buf: &mut VirglCmdBuf, handle: u32, shader_type: u32) {
 }
 
 fn encode_link_shader(buf: &mut VirglCmdBuf, vs: u32, fs: u32) {
-    buf.push(virgl_cmd0(
-        VIRGL_CCMD_LINK_SHADER,
-        0,
-        VIRGL_LINK_SHADER_SIZE,
-    ));
+    buf.push(virgl_cmd0(VIRGL_CCMD_LINK_SHADER, 0, VIRGL_LINK_SHADER_SIZE));
     buf.push(vs);
     buf.push(fs);
     buf.push(0);
@@ -3654,11 +3602,7 @@ fn encode_link_shader(buf: &mut VirglCmdBuf, vs: u32, fs: u32) {
 }
 
 fn encode_create_surface(buf: &mut VirglCmdBuf, surf_handle: u32, res_handle: u32, format: u32) {
-    buf.push(virgl_cmd0(
-        VIRGL_CCMD_CREATE_OBJECT,
-        VIRGL_OBJECT_SURFACE,
-        VIRGL_OBJ_SURFACE_SIZE,
-    ));
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_SURFACE, VIRGL_OBJ_SURFACE_SIZE));
     buf.push(surf_handle);
     buf.push(res_handle);
     buf.push(format);
@@ -3694,11 +3638,7 @@ fn encode_create_vertex_elements(buf: &mut VirglCmdBuf, ve_handle: u32) {
     // VIRGL_OBJ_VERTEX_ELEMENTS_SIZE(num) = num*4 + 1
     let num = 3u32;
     let len = 1 + num * 4;
-    buf.push(virgl_cmd0(
-        VIRGL_CCMD_CREATE_OBJECT,
-        VIRGL_OBJECT_VERTEX_ELEMENTS,
-        len,
-    ));
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_VERTEX_ELEMENTS, len));
     buf.push(ve_handle);
 
     // element 0: position vec4 at offset 0 from vbo
@@ -3880,11 +3820,7 @@ fn encode_inline_write_buffer_at(
     // Matches virgl_encoder_inline_send_box for a PIPE_BUFFER upload.
     // cmd length is data_dwords + 11
     let data_dwords = (data.len() as u32).div_ceil(4);
-    buf.push(virgl_cmd0(
-        VIRGL_CCMD_RESOURCE_INLINE_WRITE,
-        0,
-        data_dwords + 11,
-    ));
+    buf.push(virgl_cmd0(VIRGL_CCMD_RESOURCE_INLINE_WRITE, 0, data_dwords + 11));
     buf.push(res_handle);
     buf.push(0); // level
     buf.push(0); // usage
@@ -3950,11 +3886,7 @@ fn encode_inline_write_texture_region(
         let chunk = &data[byte_off..byte_off + chunk_bytes];
         let data_dwords = (chunk.len() as u32).div_ceil(4);
 
-        buf.push(virgl_cmd0(
-            VIRGL_CCMD_RESOURCE_INLINE_WRITE,
-            0,
-            data_dwords + 11,
-        ));
+        buf.push(virgl_cmd0(VIRGL_CCMD_RESOURCE_INLINE_WRITE, 0, data_dwords + 11));
         buf.push(res_handle);
         buf.push(0); // level
         buf.push(0); // usage
@@ -4062,11 +3994,7 @@ fn encode_create_blend(
     src_factor: u32,
     dst_factor: u32,
 ) {
-    buf.push(virgl_cmd0(
-        VIRGL_CCMD_CREATE_OBJECT,
-        VIRGL_OBJECT_BLEND,
-        VIRGL_OBJ_BLEND_SIZE,
-    ));
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_BLEND, VIRGL_OBJ_BLEND_SIZE));
     // Values from Mesa pipe/p_defines.h (virgl uses the Gallium enums).
     // NOTE: We only rely on a tiny subset that we have validated with virglrenderer.
     const PIPE_BLEND_ADD: u32 = 0;
@@ -4097,11 +4025,7 @@ fn encode_create_blend(
 }
 
 fn encode_create_dsa(buf: &mut VirglCmdBuf, dsa_handle: u32) {
-    buf.push(virgl_cmd0(
-        VIRGL_CCMD_CREATE_OBJECT,
-        VIRGL_OBJECT_DSA,
-        VIRGL_OBJ_DSA_SIZE,
-    ));
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_DSA, VIRGL_OBJ_DSA_SIZE));
     buf.push(dsa_handle);
     buf.push(0);
     buf.push(0);
@@ -4110,11 +4034,7 @@ fn encode_create_dsa(buf: &mut VirglCmdBuf, dsa_handle: u32) {
 }
 
 fn encode_create_rasterizer(buf: &mut VirglCmdBuf, rs_handle: u32, scissor_enable: bool) {
-    buf.push(virgl_cmd0(
-        VIRGL_CCMD_CREATE_OBJECT,
-        VIRGL_OBJECT_RASTERIZER,
-        VIRGL_OBJ_RS_SIZE,
-    ));
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_RASTERIZER, VIRGL_OBJ_RS_SIZE));
     buf.push(rs_handle);
 
     let mut s0 = 0u32;
@@ -4191,10 +4111,7 @@ fn modern_negotiate_minimal(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> b
         }
 
         core::ptr::write_volatile(&mut (*c).driver_feature_select, 0);
-        core::ptr::write_volatile(
-            &mut (*c).driver_feature,
-            (guest_features & 0xFFFF_FFFF) as u32,
-        );
+        core::ptr::write_volatile(&mut (*c).driver_feature, (guest_features & 0xFFFF_FFFF) as u32);
         core::ptr::write_volatile(&mut (*c).driver_feature_select, 1);
         core::ptr::write_volatile(&mut (*c).driver_feature, (guest_features >> 32) as u32);
 

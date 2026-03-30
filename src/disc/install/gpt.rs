@@ -314,10 +314,7 @@ pub async fn write_gpt_layout_with_log(
         entries[off + 48..off + 56].copy_from_slice(&p.attributes.to_le_bytes());
 
         // name (UTF-16LE, fixed field)
-        write_utf16le_fixed(
-            &mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES],
-            p.name,
-        );
+        write_utf16le_fixed(&mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES], p.name);
     }
 
     let entries_crc = crc32_ieee(&entries);

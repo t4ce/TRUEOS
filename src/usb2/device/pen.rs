@@ -188,11 +188,7 @@ async fn build_mass_identity(
 ) -> MassIdentity {
     let (vendor_id, product_id, serial_index) = {
         let desc = device.descriptor();
-        (
-            desc.vendor_id,
-            desc.product_id,
-            desc.serial_number_string_index,
-        )
+        (desc.vendor_id, desc.product_id, desc.serial_number_string_index)
     };
     let serial = read_optional_string_descriptor(device, serial_index).await;
 
@@ -222,10 +218,7 @@ async fn build_mass_identity(
 
 #[inline]
 fn sense_is_transient(key: SenseKey) -> bool {
-    matches!(
-        key,
-        SenseKey::NotReady | SenseKey::UnitAttention | SenseKey::AbortedCommand
-    )
+    matches!(key, SenseKey::NotReady | SenseKey::UnitAttention | SenseKey::AbortedCommand)
 }
 
 fn map_io_error(err: mass::MassProbeError) -> block::Error {
@@ -278,13 +271,8 @@ async fn recover_runtime_transport(
             rt.bulk_out_ep,
             rt.bulk_in_ep
         );
-        mass::bot_recovery(
-            &mut rt.device,
-            rt.interface_number,
-            rt.bulk_out_ep,
-            rt.bulk_in_ep,
-        )
-        .await?;
+        mass::bot_recovery(&mut rt.device, rt.interface_number, rt.bulk_out_ep, rt.bulk_in_ep)
+            .await?;
     }
     Ok(())
 }
@@ -375,28 +363,18 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                         && attempts < MASS_IO_RETRY_LIMIT
                                     {
                                         attempts = attempts.wrapping_add(1);
-                                        Timer::after(EmbassyDuration::from_millis(
-                                            MASS_IO_RETRY_DELAY_MS,
-                                        ))
-                                        .await;
+                                        Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                         continue;
                                     }
-                                    let sense = mass::request_sense_fixed(
-                                        &mut rt.bulk_out,
-                                        &mut rt.bulk_in,
-                                        rt.bot_tag,
-                                    )
-                                    .await;
+                                    let sense =
+                                        mass::request_sense_fixed(&mut rt.bulk_out, &mut rt.bulk_in, rt.bot_tag).await;
                                     rt.bot_tag = rt.bot_tag.wrapping_add(1);
                                     if let Some(sense) = sense
                                         && sense_is_transient(sense.sense_key)
                                         && attempts < MASS_IO_RETRY_LIMIT
                                     {
                                         attempts = attempts.wrapping_add(1);
-                                        Timer::after(EmbassyDuration::from_millis(
-                                            MASS_IO_RETRY_DELAY_MS,
-                                        ))
-                                        .await;
+                                        Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                         continue;
                                     }
                                     crate::log!(
@@ -470,34 +448,22 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         match result {
                             Ok(()) => break,
                             Err(err) => {
-                                if recover_runtime_transport(&mut rt, "write-10", err)
-                                    .await
-                                    .is_ok()
+                                if recover_runtime_transport(&mut rt, "write-10", err).await.is_ok()
                                     && attempts < MASS_IO_RETRY_LIMIT
                                 {
                                     attempts = attempts.wrapping_add(1);
-                                    Timer::after(EmbassyDuration::from_millis(
-                                        MASS_IO_RETRY_DELAY_MS,
-                                    ))
-                                    .await;
+                                    Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                     continue;
                                 }
-                                let sense = mass::request_sense_fixed(
-                                    &mut rt.bulk_out,
-                                    &mut rt.bulk_in,
-                                    rt.bot_tag,
-                                )
-                                .await;
+                                let sense =
+                                    mass::request_sense_fixed(&mut rt.bulk_out, &mut rt.bulk_in, rt.bot_tag).await;
                                 rt.bot_tag = rt.bot_tag.wrapping_add(1);
                                 if let Some(sense) = sense
                                     && sense_is_transient(sense.sense_key)
                                     && attempts < MASS_IO_RETRY_LIMIT
                                 {
                                     attempts = attempts.wrapping_add(1);
-                                    Timer::after(EmbassyDuration::from_millis(
-                                        MASS_IO_RETRY_DELAY_MS,
-                                    ))
-                                    .await;
+                                    Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                     continue;
                                 }
                                 crate::log!(
@@ -545,13 +511,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         return Ok(());
                     }
 
-                    match mass::synchronize_cache_bot(
-                        &mut rt.bulk_out,
-                        &mut rt.bulk_in,
-                        rt.bot_tag,
-                    )
-                    .await
-                    {
+                    match mass::synchronize_cache_bot(&mut rt.bulk_out, &mut rt.bulk_in, rt.bot_tag).await {
                         Ok(()) => {
                             rt.bot_tag = rt.bot_tag.wrapping_add(1);
                             Ok(())
@@ -559,9 +519,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         Err(err) => {
                             let _ = recover_runtime_transport(rt, "sync-cache-10", err).await;
                             rt.bot_tag = rt.bot_tag.wrapping_add(1);
-                            let sense =
-                                mass::request_sense_fixed(&mut rt.bulk_out, &mut rt.bulk_in, rt.bot_tag)
-                                    .await;
+                            let sense = mass::request_sense_fixed(&mut rt.bulk_out, &mut rt.bulk_in, rt.bot_tag).await;
                             rt.bot_tag = rt.bot_tag.wrapping_add(1);
                             if let Some(sense) = sense
                                 && sense.sense_key == scsi::SenseKey::IllegalRequest
@@ -646,27 +604,23 @@ pub async fn mass_storage_task(mut device: Device, controller_id: u32, target: M
         );
     }
 
-    let mut interface = match claim_interface(
-        &mut device,
-        target.interface_number,
-        target.alternate_setting,
-    )
-    .await
-    {
-        Ok(interface) => interface,
-        Err(err) => {
-            crate::log!(
-                "crabusb: mass {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
-                vendor_id,
-                product_id,
-                target.interface_number,
-                target.alternate_setting,
-                err
-            );
-            unregister_active_mass_stream(active_stream);
-            return;
-        }
-    };
+    let mut interface =
+        match claim_interface(&mut device, target.interface_number, target.alternate_setting).await
+        {
+            Ok(interface) => interface,
+            Err(err) => {
+                crate::log!(
+                    "crabusb: mass {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
+                    vendor_id,
+                    product_id,
+                    target.interface_number,
+                    target.alternate_setting,
+                    err
+                );
+                unregister_active_mass_stream(active_stream);
+                return;
+            }
+        };
 
     let bulk_out = match interface.endpoint_bulk_out(target.bulk_out).await {
         Ok(ep) => ep,

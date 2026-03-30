@@ -139,9 +139,7 @@ impl rustls::time_provider::TimeProvider for TimeProviderAdapter {
     fn current_time(&self) -> Option<rustls::pki_types::UnixTime> {
         let time = unsafe { &*self.time };
         let secs = time.unix_time_seconds()?;
-        Some(rustls::pki_types::UnixTime::since_unix_epoch(
-            core::time::Duration::from_secs(secs),
-        ))
+        Some(rustls::pki_types::UnixTime::since_unix_epoch(core::time::Duration::from_secs(secs)))
     }
 }
 

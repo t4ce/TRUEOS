@@ -121,11 +121,7 @@ fn dump_stack_words(sp: usize, words: usize) {
             break;
         }
         let v = unsafe { core::ptr::read_volatile(p) };
-        dprintln!(
-            "  [rsp+0x{:02x}] = 0x{:016x}",
-            i * core::mem::size_of::<usize>(),
-            v as u64
-        );
+        dprintln!("  [rsp+0x{:02x}] = 0x{:016x}", i * core::mem::size_of::<usize>(), v as u64);
     }
 }
 
@@ -186,12 +182,7 @@ pub fn print_backtrace(max_frames: usize) {
     let frames = collect_backtrace(max_frames);
     crate::log!("stack trace ({} frames)\n", frames.len());
     for (idx, frame) in frames.iter().enumerate() {
-        crate::log!(
-            "  #{:<2} rbp=0x{:016X} rip=0x{:016X}\n",
-            idx,
-            frame.rbp,
-            frame.rip
-        );
+        crate::log!("  #{:<2} rbp=0x{:016X} rip=0x{:016X}\n", idx, frame.rbp, frame.rip);
     }
 }
 

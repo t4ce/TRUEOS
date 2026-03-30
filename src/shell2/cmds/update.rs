@@ -53,12 +53,7 @@ pub(crate) fn submit_update(
     let info = disk.info();
     print_matrix_target_line(
         &target,
-        alloc::format!(
-            "update: starting on disk id={} ({})",
-            info.id.raw(),
-            info.id
-        )
-        .as_str(),
+        alloc::format!("update: starting on disk id={} ({})", info.id.raw(), info.id).as_str(),
     );
 
     set_matrix_target_active(&target, true);

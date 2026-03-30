@@ -50,22 +50,21 @@ pub async fn net_shell_task() {
         let ip = crate::net::adapter::ipv4_at(dev_idx);
         let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
         match ip {
-            Some([a, b, c, d]) => crate::log!(
-                "net-shell: routing dev={} {} owner={} ip={}.{}.{}.{}\n",
-                dev_idx,
-                name,
-                owner,
-                a,
-                b,
-                c,
-                d
-            ),
-            None => crate::log!(
-                "net-shell: routing dev={} {} owner={} ip=none\n",
-                dev_idx,
-                name,
-                owner
-            ),
+            Some([a, b, c, d]) => {
+                crate::log!(
+                    "net-shell: routing dev={} {} owner={} ip={}.{}.{}.{}\n",
+                    dev_idx,
+                    name,
+                    owner,
+                    a,
+                    b,
+                    c,
+                    d
+                )
+            }
+            None => {
+                crate::log!("net-shell: routing dev={} {} owner={} ip=none\n", dev_idx, name, owner)
+            }
         }
 
         let cmds = NetQueue::new_leaked("net-shell-cmd", 256);
@@ -75,11 +74,7 @@ pub async fn net_shell_task() {
         let _ = cmds.push(NetCommand::OpenTcpListen {
             port: NET_SHELL_TCP_PORT,
         });
-        crate::log!(
-            "net-shell: listening on tcp {} owner={}\n",
-            NET_SHELL_TCP_PORT,
-            owner
-        );
+        crate::log!("net-shell: listening on tcp {} owner={}\n", NET_SHELL_TCP_PORT, owner);
 
         let mut ticks: u32 = 0;
         let mut logged_first_rx: bool = false;
@@ -271,10 +266,7 @@ pub async fn net_shell_task() {
             if pending.is_some() {
                 pending_ticks = pending_ticks.wrapping_add(1);
                 if pending_ticks == 250 {
-                    crate::log!(
-                        "net-shell: tx stalled (pending_len={}), retrying\n",
-                        pending_len
-                    );
+                    crate::log!("net-shell: tx stalled (pending_len={}), retrying\n", pending_len);
                     pending = None;
                     pending_ticks = 0;
                     pending_len = 0;

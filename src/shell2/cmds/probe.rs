@@ -218,10 +218,7 @@ fn cmd_nvme_status(io: &'static dyn ShellBackend2) {
 fn cmd_nvme_probe(io: &'static dyn ShellBackend2) {
     let registered = registered_nvme_pci();
     if !registered.is_empty() {
-        line(
-            io,
-            "probe nvme: refusing live reprobe while an NVMe block device is registered",
-        );
+        line(io, "probe nvme: refusing live reprobe while an NVMe block device is registered");
         return;
     }
 
@@ -230,11 +227,8 @@ fn cmd_nvme_probe(io: &'static dyn ShellBackend2) {
     let registered_after = registered_nvme_pci().len();
     line(
         io,
-        alloc::format!(
-            "probe nvme: live reprobe complete registered_devices={}",
-            registered_after
-        )
-        .as_str(),
+        alloc::format!("probe nvme: live reprobe complete registered_devices={}", registered_after)
+            .as_str(),
     );
 }
 
@@ -243,10 +237,7 @@ fn cmd_nvme_flr(io: &'static dyn ShellBackend2, pci: PciAddress) {
         .iter()
         .any(|registered| pci_matches(registered, &pci))
     {
-        line(
-            io,
-            "probe nvme: refusing FLR on a currently registered NVMe controller",
-        );
+        line(io, "probe nvme: refusing FLR on a currently registered NVMe controller");
         return;
     }
 

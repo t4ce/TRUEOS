@@ -92,11 +92,7 @@ static PORTAL_IMAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut PORTAL_IMAGE_ARENA: PortalImageArena = PortalImageArena([0; PORTAL_IMAGE_ARENA_BYTES]);
 
 fn portal_alloc_error_handler(layout: Layout) -> ! {
-    crate::log!(
-        "portal: alloc error size={} align={}\n",
-        layout.size(),
-        layout.align()
-    );
+    crate::log!("portal: alloc error size={} align={}\n", layout.size(), layout.align());
     loop {
         core::hint::spin_loop();
     }
@@ -686,10 +682,7 @@ pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_ar
     };
 
     let target = matrix_target_for_backend(io);
-    print_matrix_target_line(
-        &target,
-        alloc::format!("run: queued {}", archive.as_str()).as_str(),
-    );
+    print_matrix_target_line(&target, alloc::format!("run: queued {}", archive.as_str()).as_str());
     set_matrix_target_active(&target, true);
 
     if worker_spawner

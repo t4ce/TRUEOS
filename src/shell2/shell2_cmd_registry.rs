@@ -328,10 +328,8 @@ pub(crate) fn command_names_status_text() -> AllocString {
             out.push(' ');
         }
         if let Some(color) = entry.color {
-            let styled = alloc::format!(
-                "{}",
-                super::ecma48::style(entry.name.as_str()).bold().fg(color)
-            );
+            let styled =
+                alloc::format!("{}", super::ecma48::style(entry.name.as_str()).bold().fg(color));
             out.push_str(styled.as_str());
         } else {
             out.push_str(entry.name.as_str());

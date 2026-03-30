@@ -200,10 +200,7 @@ pub async fn sntp_service_task() {
             continue;
         };
         if udp_open_fail_count != 0 {
-            crate::log!(
-                "sntp: UDP socket open recovered after {} retries\n",
-                udp_open_fail_count
-            );
+            crate::log!("sntp: UDP socket open recovered after {} retries\n", udp_open_fail_count);
             udp_open_fail_count = 0;
         }
 

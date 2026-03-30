@@ -373,7 +373,12 @@ pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummar
         };
 
         let mut out = Vec::new();
-        for handle in topology.iter().filter(|node| !node.is_hub).cloned().map(crab_usb::DeviceHandle::from) {
+        for handle in topology
+            .iter()
+            .filter(|node| !node.is_hub)
+            .cloned()
+            .map(crab_usb::DeviceHandle::from)
+        {
             let desc = handle.descriptor();
             let slot_id = match host.open_handle(&handle).await {
                 Ok(device) => u32::from(device.slot_id()),
@@ -483,12 +488,7 @@ pub(crate) mod syscall {
         _timeout_ms: u64,
     ) -> Option<Vec<u8>> {
         let stable_id = stable_id_for_slot(controller_id, slot_id)?;
-        control_get_hid_descriptor_by_id(
-            controller_id,
-            stable_id,
-            interface_number,
-            length,
-        )
+        control_get_hid_descriptor_by_id(controller_id, stable_id, interface_number, length)
     }
 
     pub fn control_get_hid_descriptor_by_id(
@@ -519,12 +519,7 @@ pub(crate) mod syscall {
         _timeout_ms: u64,
     ) -> Option<Vec<u8>> {
         let stable_id = stable_id_for_slot(controller_id, slot_id)?;
-        control_get_hid_report_descriptor_by_id(
-            controller_id,
-            stable_id,
-            interface_number,
-            length,
-        )
+        control_get_hid_report_descriptor_by_id(controller_id, stable_id, interface_number, length)
     }
 
     pub fn control_get_hid_report_descriptor_by_id(

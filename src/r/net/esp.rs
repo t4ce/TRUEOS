@@ -21,9 +21,8 @@ enum GateToSwarm {
 
 static CHANNEL_A_TO_B: Mutex<VecDeque<SwarmToGate>> = Mutex::new(VecDeque::new());
 static CHANNEL_B_TO_A: Mutex<VecDeque<GateToSwarm>> = Mutex::new(VecDeque::new());
-static DEVICE_REGISTRY: Mutex<trueos_esp::gate::DeviceRegistry> = Mutex::new(
-    trueos_esp::gate::DeviceRegistry::new(ESP_GATE_REGISTRY_MAX_DEVICES),
-);
+static DEVICE_REGISTRY: Mutex<trueos_esp::gate::DeviceRegistry> =
+    Mutex::new(trueos_esp::gate::DeviceRegistry::new(ESP_GATE_REGISTRY_MAX_DEVICES));
 
 fn monotonic_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
@@ -95,10 +94,9 @@ pub fn device_snapshot() -> Vec<trueos_esp::gate::DeviceSnapshot> {
 
 fn device_label(snapshot: &trueos_esp::gate::DeviceSnapshot) -> String {
     match snapshot.ip {
-        Some(trueos_esp::gate::DeviceIp::V4(addr)) => format!(
-            "{}.{}.{}.{}:{}",
-            addr[0], addr[1], addr[2], addr[3], snapshot.tcp_port
-        ),
+        Some(trueos_esp::gate::DeviceIp::V4(addr)) => {
+            format!("{}.{}.{}.{}:{}", addr[0], addr[1], addr[2], addr[3], snapshot.tcp_port)
+        }
         Some(trueos_esp::gate::DeviceIp::V6(addr)) => format!(
             "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{}",
             u16::from_be_bytes([addr[0], addr[1]]),
@@ -209,7 +207,10 @@ pub async fn esp_gate_task() {
                         ),
                         trueos_esp::swarm::SwarmSignal::EspDiscovered(from) => crate::log!(
                             "esp-gate: esp discovered {}.{}.{}.{} connecting port={}\n",
-                            from.addr[0], from.addr[1], from.addr[2], from.addr[3],
+                            from.addr[0],
+                            from.addr[1],
+                            from.addr[2],
+                            from.addr[3],
                             trueos_esp::swarm::ESP_WEBREPL_PORT
                         ),
                         trueos_esp::swarm::SwarmSignal::ClientConnected(handle) => {

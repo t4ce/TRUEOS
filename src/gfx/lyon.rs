@@ -9,8 +9,8 @@ use lyon_tessellation::{
 };
 use spin::Once;
 use trueos_gfx_core::{
-    RGB_VERTEX_SIZE, RgbVertexPx, Rgba8, ViewTransform, push_indexed_rgb_mesh_px,
-    push_rgb_quad_px, push_rgb_triangle_px,
+    RGB_VERTEX_SIZE, RgbVertexPx, Rgba8, ViewTransform, push_indexed_rgb_mesh_px, push_rgb_quad_px,
+    push_rgb_triangle_px,
 };
 use trueos_math::{cos_f32, sin_f32};
 
@@ -144,30 +144,78 @@ pub fn draw_horizontal_three_stop_rect_no_present(
     push_rgb_triangle_px(
         &mut blob,
         transform,
-        RgbVertexPx { x: x0, y: y1, color: left_color },
-        RgbVertexPx { x: xm, y: y1, color: mid_color },
-        RgbVertexPx { x: xm, y: y0, color: mid_color },
+        RgbVertexPx {
+            x: x0,
+            y: y1,
+            color: left_color,
+        },
+        RgbVertexPx {
+            x: xm,
+            y: y1,
+            color: mid_color,
+        },
+        RgbVertexPx {
+            x: xm,
+            y: y0,
+            color: mid_color,
+        },
     );
     push_rgb_triangle_px(
         &mut blob,
         transform,
-        RgbVertexPx { x: x0, y: y1, color: left_color },
-        RgbVertexPx { x: xm, y: y0, color: mid_color },
-        RgbVertexPx { x: x0, y: y0, color: left_color },
+        RgbVertexPx {
+            x: x0,
+            y: y1,
+            color: left_color,
+        },
+        RgbVertexPx {
+            x: xm,
+            y: y0,
+            color: mid_color,
+        },
+        RgbVertexPx {
+            x: x0,
+            y: y0,
+            color: left_color,
+        },
     );
     push_rgb_triangle_px(
         &mut blob,
         transform,
-        RgbVertexPx { x: xm, y: y1, color: mid_color },
-        RgbVertexPx { x: x1, y: y1, color: right_color },
-        RgbVertexPx { x: x1, y: y0, color: right_color },
+        RgbVertexPx {
+            x: xm,
+            y: y1,
+            color: mid_color,
+        },
+        RgbVertexPx {
+            x: x1,
+            y: y1,
+            color: right_color,
+        },
+        RgbVertexPx {
+            x: x1,
+            y: y0,
+            color: right_color,
+        },
     );
     push_rgb_triangle_px(
         &mut blob,
         transform,
-        RgbVertexPx { x: xm, y: y1, color: mid_color },
-        RgbVertexPx { x: x1, y: y0, color: right_color },
-        RgbVertexPx { x: xm, y: y0, color: mid_color },
+        RgbVertexPx {
+            x: xm,
+            y: y1,
+            color: mid_color,
+        },
+        RgbVertexPx {
+            x: x1,
+            y: y0,
+            color: right_color,
+        },
+        RgbVertexPx {
+            x: xm,
+            y: y0,
+            color: mid_color,
+        },
     );
 
     submit_rgb_blob_no_present(blob.as_slice())
@@ -448,19 +496,19 @@ fn build_cached_icons() -> Vec<CachedIcon> {
                 }
 
                 for &p in &geom.main_positions {
-                        baked_vertices.push(MyVertex {
-                            position: [
-                                p[0] * scale + SHADOW_DX * scale,
-                                p[1] * scale + SHADOW_DY * scale,
-                            ],
-                            color: rgb_from_f32(
-                                SHADOW_COLOR[0],
-                                SHADOW_COLOR[1],
-                                SHADOW_COLOR[2],
-                                SHADOW_COLOR[3],
-                            ),
-                        });
-                    }
+                    baked_vertices.push(MyVertex {
+                        position: [
+                            p[0] * scale + SHADOW_DX * scale,
+                            p[1] * scale + SHADOW_DY * scale,
+                        ],
+                        color: rgb_from_f32(
+                            SHADOW_COLOR[0],
+                            SHADOW_COLOR[1],
+                            SHADOW_COLOR[2],
+                            SHADOW_COLOR[3],
+                        ),
+                    });
+                }
 
                 for &p in &geom.main_positions {
                     baked_vertices.push(MyVertex {
@@ -553,11 +601,9 @@ pub unsafe extern "C" fn trueos_cabi_gfx_bake_lyon_icon_rgba(
         let i2 = icon.indices[tri + 2] as usize;
         tri += 3;
 
-        let (Some(v0), Some(v1), Some(v2)) = (
-            icon.vertices.get(i0),
-            icon.vertices.get(i1),
-            icon.vertices.get(i2),
-        ) else {
+        let (Some(v0), Some(v1), Some(v2)) =
+            (icon.vertices.get(i0), icon.vertices.get(i1), icon.vertices.get(i2))
+        else {
             continue;
         };
 
@@ -669,7 +715,8 @@ pub fn draw_lyon_icon_alpha_no_present(
         return -1;
     };
 
-    let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(RGB_VERTEX_SIZE));
+    let mut icon_blob: Vec<u8> =
+        Vec::with_capacity(icon.indices.len().saturating_mul(RGB_VERTEX_SIZE));
     let vertices = icon_vertices_px(icon, x, y, 1.0, alpha);
     push_indexed_rgb_mesh_px(
         &mut icon_blob,
@@ -715,7 +762,8 @@ pub fn draw_lyon_icon_alpha_scaled_no_present(
     };
 
     let scale = size_px / icon.cell_px.max(1.0);
-    let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(RGB_VERTEX_SIZE));
+    let mut icon_blob: Vec<u8> =
+        Vec::with_capacity(icon.indices.len().saturating_mul(RGB_VERTEX_SIZE));
     let vertices = icon_vertices_px(icon, x, y, scale, alpha);
     push_indexed_rgb_mesh_px(
         &mut icon_blob,
@@ -762,13 +810,19 @@ pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
         }
         let ox = cursor_x;
         let oy = cursor_y;
-        let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(RGB_VERTEX_SIZE));
+        let mut icon_blob: Vec<u8> =
+            Vec::with_capacity(icon.indices.len().saturating_mul(RGB_VERTEX_SIZE));
 
         total_vertices = total_vertices.saturating_add(icon.vertices.len());
         total_indices = total_indices.saturating_add(icon.indices.len());
 
         let vertices = icon_vertices_px(icon, ox, oy, 1.0, 255);
-        push_indexed_rgb_mesh_px(&mut icon_blob, transform, vertices.as_slice(), icon.indices.as_slice());
+        push_indexed_rgb_mesh_px(
+            &mut icon_blob,
+            transform,
+            vertices.as_slice(),
+            icon.indices.as_slice(),
+        );
 
         let draw_rc = unsafe {
             crate::r::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(

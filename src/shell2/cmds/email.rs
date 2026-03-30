@@ -9,10 +9,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 static EMAIL_FROM: Mutex<AllocString> = Mutex::new(AllocString::new());
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(
-        io,
-        "email: usage `email <to> \"<mail text>\"` or `email set <from>`",
-    );
+    print_shell_line(io, "email: usage `email <to> \"<mail text>\"` or `email set <from>`");
 }
 
 fn parse_mail_text(args: &mut SplitWhitespace<'_>) -> Option<AllocString> {

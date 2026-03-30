@@ -391,11 +391,7 @@ async fn stop_cpubench_workers(
     if killed != 0 {
         print_matrix_target_line(
             target,
-            format!(
-                "bench cpu [{}]: terminate fallback workers={}",
-                phase.name, killed
-            )
-            .as_str(),
+            format!("bench cpu [{}]: terminate fallback workers={}", phase.name, killed).as_str(),
         );
     }
     Timer::after(EmbassyDuration::from_millis(50)).await;
@@ -702,10 +698,7 @@ fn submit_internal_netbench(
     );
 
     if submitted == 0 {
-        print_shell_line(
-            io,
-            "bench netk: submit failed (queue full or service not ready)",
-        );
+        print_shell_line(io, "bench netk: submit failed (queue full or service not ready)");
     } else {
         print_shell_line(
             io,
@@ -1289,21 +1282,13 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
         }
 
         if let Ok(ip) = ip4 {
-            log(
-                format!(
-                    "bench net: connecting to {}.{}.{}.{}:{}",
-                    ip[0], ip[1], ip[2], ip[3], port
-                )
-                .as_str(),
-            );
+            log(format!("bench net: connecting to {}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], port).as_str());
         } else if let Some(ip) = ip6 {
-            log(
-                format!(
-                    "bench net: connecting to ipv6 {:02x}{:02x}:{:02x}{:02x}:...:{}",
-                    ip[0], ip[1], ip[2], ip[3], port
-                )
-                .as_str(),
-            );
+            log(format!(
+                "bench net: connecting to ipv6 {:02x}{:02x}:{:02x}{:02x}:...:{}",
+                ip[0], ip[1], ip[2], ip[3], port
+            )
+            .as_str());
         }
 
         let Some(vnet) = crate::r::net::VNet::open_with_event_queue_depth(nic_index, 4096) else {
@@ -1427,8 +1412,7 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
                                 break;
                             }
                         }
-                        overall_deadline =
-                            Instant::now() + EmbassyDuration::from_millis(OVERALL_TIMEOUT_MS);
+                        overall_deadline = Instant::now() + EmbassyDuration::from_millis(OVERALL_TIMEOUT_MS);
                     }
                     api::Event::Closed { handle } if handle == tcp_handle => {
                         closed = true;
@@ -1450,15 +1434,13 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
             if Instant::now() >= next_progress {
                 let elapsed_ms = elapsed_ms_since(start_tick);
                 let bps = bps_from_progress(received_bytes as u64, elapsed_ms);
-                log(
-                    format!(
-                        "bench net: progress {} speed={}/s elapsed={}ms",
-                        format_bytes(received_bytes as u64),
-                        format_speed(bps),
-                        elapsed_ms
-                    )
-                    .as_str(),
-                );
+                log(format!(
+                    "bench net: progress {} speed={}/s elapsed={}ms",
+                    format_bytes(received_bytes as u64),
+                    format_speed(bps),
+                    elapsed_ms
+                )
+                .as_str());
                 next_progress = Instant::now() + EmbassyDuration::from_millis(PROGRESS_LOG_MS);
             }
 
@@ -1472,25 +1454,21 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
         let elapsed_ms = elapsed_ms_since(start_tick);
         let bps = bps_from_progress(received_bytes as u64, elapsed_ms);
         if cancelled {
-            log(
-                format!(
-                    "bench net: cancelled received={} speed={}/s elapsed={}ms",
-                    format_bytes(received_bytes as u64),
-                    format_speed(bps),
-                    elapsed_ms
-                )
-                .as_str(),
-            );
+            log(format!(
+                "bench net: cancelled received={} speed={}/s elapsed={}ms",
+                format_bytes(received_bytes as u64),
+                format_speed(bps),
+                elapsed_ms
+            )
+            .as_str());
         } else {
-            log(
-                format!(
-                    "bench net: done received={} speed={}/s elapsed={}ms",
-                    format_bytes(received_bytes as u64),
-                    format_speed(bps),
-                    elapsed_ms
-                )
-                .as_str(),
-            );
+            log(format!(
+                "bench net: done received={} speed={}/s elapsed={}ms",
+                format_bytes(received_bytes as u64),
+                format_speed(bps),
+                elapsed_ms
+            )
+            .as_str());
         }
     }
     .await;

@@ -193,15 +193,8 @@ async fn audio_stream_task(
     endpoint: IsoOutEndpoint,
     stream_target: Option<UacStreamTarget>,
 ) {
-    stream_target_audio(
-        &mut device,
-        vendor_id,
-        product_id,
-        preferred,
-        endpoint,
-        stream_target,
-    )
-    .await;
+    stream_target_audio(&mut device, vendor_id, product_id, preferred, endpoint, stream_target)
+        .await;
     *ACTIVE_AUDIO_STREAM.lock() = None;
     AUDIO_STREAM_ACTIVE.store(false, Ordering::Release);
 }

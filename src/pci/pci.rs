@@ -106,11 +106,7 @@ fn init_ecam_once() {
                 seg0_count += 1;
             }
         }
-        crate::log!(
-            "pci: MCFG present (regions={}, seg0={})\n",
-            regions.len(),
-            seg0_count
-        );
+        crate::log!("pci: MCFG present (regions={}, seg0={})\n", regions.len(), seg0_count);
         for r in regions.iter() {
             if r.segment == 0 {
                 crate::log!(
@@ -477,10 +473,7 @@ pub fn config_read_u16_legacy(bus: u8, slot: u8, function: u8, offset: u16) -> u
 /// Read config space via legacy CF8/CFC mechanism only (never ECAM).
 pub fn config_read_u32_legacy(bus: u8, slot: u8, function: u8, offset: u16) -> u32 {
     if (offset & 0x3) != 0 {
-        panic!(
-            "Unaligned PCI legacy config dword read at offset 0x{:X}",
-            offset
-        );
+        panic!("Unaligned PCI legacy config dword read at offset 0x{:X}", offset);
     }
     read_u32(bus, slot, function, normalize_offset(offset))
 }
@@ -493,10 +486,7 @@ pub fn config_write_u16_legacy(bus: u8, slot: u8, function: u8, offset: u16, val
 /// Write config space via legacy CF8/CFC mechanism only (never ECAM).
 pub fn config_write_u32_legacy(bus: u8, slot: u8, function: u8, offset: u16, value: u32) {
     if (offset & 0x3) != 0 {
-        panic!(
-            "Unaligned PCI legacy config dword write at offset 0x{:X}",
-            offset
-        );
+        panic!("Unaligned PCI legacy config dword write at offset 0x{:X}", offset);
     }
     write_u32(bus, slot, function, normalize_offset(offset), value);
 }

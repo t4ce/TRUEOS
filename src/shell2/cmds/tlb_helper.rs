@@ -244,10 +244,7 @@ pub(crate) fn print_disk_choice_table(
     print_shell_line(io, alloc::format!("{prefix}: {title}").as_str());
 
     if choices.is_empty() {
-        print_shell_line(
-            io,
-            alloc::format!("{prefix}: no top-level disk devices found").as_str(),
-        );
+        print_shell_line(io, alloc::format!("{prefix}: no top-level disk devices found").as_str());
         return;
     }
 

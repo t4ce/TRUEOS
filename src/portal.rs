@@ -76,11 +76,7 @@ fn map_spawn_error(_: SpawnError) -> LaunchError {
 
 #[embassy_executor::task(pool_size = 4)]
 async fn linked_portal_task(launch: PortalLaunch) {
-    crate::log!(
-        "portal: start name={} argc={}\n",
-        launch.name,
-        launch.args.len()
-    );
+    crate::log!("portal: start name={} argc={}\n", launch.name, launch.args.len());
 
     let argv = launch
         .args

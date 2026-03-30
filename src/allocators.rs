@@ -357,10 +357,8 @@ fn align_up(addr: usize, align: usize) -> usize {
 }
 
 fn aligned_payload(block_start: usize, layout: Layout) -> Option<usize> {
-    let payload_start = align_up(
-        block_start + size_of::<FreeBlock>() + size_of::<AllocTag>(),
-        layout.align(),
-    );
+    let payload_start =
+        align_up(block_start + size_of::<FreeBlock>() + size_of::<AllocTag>(), layout.align());
     if payload_start > usize::MAX - layout.size() {
         None
     } else {
@@ -370,11 +368,7 @@ fn aligned_payload(block_start: usize, layout: Layout) -> Option<usize> {
 
 fn alloc_error(layout: Layout) -> ! {
     let stats = heap_stats();
-    crate::log!(
-        "OOM: alloc request size={} align={}\n",
-        layout.size(),
-        layout.align()
-    );
+    crate::log!("OOM: alloc request size={} align={}\n", layout.size(), layout.align());
     crate::log!(
         "OOM: heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_start=0x{:X} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
         stats.heap_start,

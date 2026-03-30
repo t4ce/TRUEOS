@@ -41,10 +41,7 @@ pub async fn install_bootable_uefi_gpt_with_log(
             log(alloc::format!("install: trueosfs::locate failed ({:?}); continuing", e).as_str());
             // If the disk is temporarily not ready or I/O is failing, abort rather than
             // attempting a destructive repartition.
-            if matches!(
-                e,
-                block::Error::NotReady | block::Error::Timeout | block::Error::Io
-            ) {
+            if matches!(e, block::Error::NotReady | block::Error::Timeout | block::Error::Io) {
                 return Err(e);
             }
             None
