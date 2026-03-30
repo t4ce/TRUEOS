@@ -44,6 +44,7 @@ pub(crate) mod mi {
     pub const SEMAPHORE_SIGNAL: u32 = mi_instr(0x1B, 0);
     pub const SEMAPHORE_WAIT: u32 = mi_instr(0x1C, mi_num_dw(4));
     pub const FORCE_WAKEUP: u32 = mi_instr(0x1D, mi_num_dw(2));
+    pub const STORE_DATA_IMM: u32 = mi_instr(0x20, 0);
     pub const ATOMIC: u32 = mi_instr(0x2F, mi_num_dw(3));
     pub const FLUSH_DW: u32 = mi_instr(0x26, 0);
     pub const MATH_BASE: u32 = mi_instr(0x1A, 0);
@@ -54,6 +55,7 @@ pub(crate) mod mi {
 
     pub const COPY_MEM_MEM_SRC_GGTT: u32 = 1 << 22;
     pub const COPY_MEM_MEM_DST_GGTT: u32 = 1 << 21;
+    pub const SDI_GGTT: u32 = 1 << 22;
     pub const FLUSH_DW_OP_STOREDW: u32 = 1 << 14;
     pub const FLUSH_DW_USE_GTT: u32 = 1 << 2;
     pub const FLUSH_DW_LEN_DW_MASK: u32 = 0x3F;
@@ -75,6 +77,11 @@ pub(crate) mod mi {
     #[inline]
     pub const fn flush_dw_len(total_dwords: u32) -> u32 {
         total_dwords.saturating_sub(2) & FLUSH_DW_LEN_DW_MASK
+    }
+
+    #[inline]
+    pub const fn sdi_num_dw(num_dwords: u32) -> u32 {
+        num_dwords.saturating_add(1) & 0x3FF
     }
 
     #[inline]
@@ -116,7 +123,6 @@ pub(crate) struct CopySmokePlan {
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct ColorFillSmokePlan {
     pub surface_gpu_addr: u64,
-    pub dst_gpu_addr: u64,
     pub dst_x: u32,
     pub dst_y: u32,
     pub pitch_bytes: u32,
@@ -215,7 +221,7 @@ pub(crate) fn build_mi_copy_smoke_batch(
         });
     }
 
-    let required = if plan.use_force_wakeup { 30 } else { 28 };
+    let required = if plan.use_force_wakeup { 26 } else { 24 };
     if batch_dwords.len() < required {
         return Err(CopySmokeBuildError::BatchTooSmall {
             need_dwords: required,
@@ -226,13 +232,12 @@ pub(crate) fn build_mi_copy_smoke_batch(
     batch_dwords.fill(0);
     let mut i = 0usize;
 
-    let emit_flush_dw_store = |batch_dwords: &mut [u32], i: &mut usize, dst: u64, value: u32| {
-        batch_dwords[*i] = mi::FLUSH_DW | mi::FLUSH_DW_LEN_FIVE_DWORDS | mi::FLUSH_DW_OP_STOREDW;
-        batch_dwords[*i + 1] = lo32(dst) | mi::FLUSH_DW_USE_GTT;
+    let emit_store_data_imm = |batch_dwords: &mut [u32], i: &mut usize, dst: u64, value: u32| {
+        batch_dwords[*i] = mi::STORE_DATA_IMM | mi::SDI_GGTT | mi::sdi_num_dw(1);
+        batch_dwords[*i + 1] = lo32(dst);
         batch_dwords[*i + 2] = hi32(dst);
         batch_dwords[*i + 3] = value;
-        batch_dwords[*i + 4] = 0;
-        *i += 5;
+        *i += 4;
     };
 
     if plan.use_force_wakeup {
@@ -244,8 +249,8 @@ pub(crate) fn build_mi_copy_smoke_batch(
     batch_dwords[i] = mi::NOOP;
     i += 1;
 
-    emit_flush_dw_store(batch_dwords, &mut i, plan.result_gpu_addr, plan.start_value);
-    emit_flush_dw_store(
+    emit_store_data_imm(batch_dwords, &mut i, plan.result_gpu_addr, plan.start_value);
+    emit_store_data_imm(
         batch_dwords,
         &mut i,
         copy_smoke_result_addr(plan.result_gpu_addr, COPY_SMOKE_PRE_COPY_SLOT),
@@ -259,13 +264,13 @@ pub(crate) fn build_mi_copy_smoke_batch(
     batch_dwords[i + 4] = hi32(plan.src_gpu_addr);
     i += 5;
 
-    emit_flush_dw_store(
+    emit_store_data_imm(
         batch_dwords,
         &mut i,
         copy_smoke_result_addr(plan.result_gpu_addr, COPY_SMOKE_POST_COPY_SLOT),
         plan.post_copy_value,
     );
-    emit_flush_dw_store(
+    emit_store_data_imm(
         batch_dwords,
         &mut i,
         copy_smoke_result_addr(plan.result_gpu_addr, COPY_SMOKE_DONE_SLOT),
@@ -297,12 +302,6 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
         return Err(CopySmokeBuildError::UnalignedAddress {
             field: "surface_gpu_addr",
             addr: plan.surface_gpu_addr,
-        });
-    }
-    if !addr_aligned_4(plan.dst_gpu_addr) {
-        return Err(CopySmokeBuildError::UnalignedAddress {
-            field: "dst_gpu_addr",
-            addr: plan.dst_gpu_addr,
         });
     }
     if !addr_aligned_4(plan.result_gpu_addr) {
@@ -370,13 +369,12 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
     batch_dwords.fill(0);
     let mut i = 0usize;
 
-    let emit_flush_dw_store = |batch_dwords: &mut [u32], i: &mut usize, dst: u64, value: u32| {
-        batch_dwords[*i] = mi::FLUSH_DW | mi::FLUSH_DW_LEN_FIVE_DWORDS | mi::FLUSH_DW_OP_STOREDW;
-        batch_dwords[*i + 1] = lo32(dst) | mi::FLUSH_DW_USE_GTT;
+    let emit_store_data_imm = |batch_dwords: &mut [u32], i: &mut usize, dst: u64, value: u32| {
+        batch_dwords[*i] = mi::STORE_DATA_IMM | mi::SDI_GGTT | mi::sdi_num_dw(1);
+        batch_dwords[*i + 1] = lo32(dst);
         batch_dwords[*i + 2] = hi32(dst);
         batch_dwords[*i + 3] = value;
-        batch_dwords[*i + 4] = 0;
-        *i += 5;
+        *i += 4;
     };
 
     if plan.use_force_wakeup {
@@ -388,15 +386,15 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
     batch_dwords[i] = mi::NOOP;
     i += 1;
 
-    emit_flush_dw_store(batch_dwords, &mut i, plan.result_gpu_addr, plan.start_value);
-    emit_flush_dw_store(
+    emit_store_data_imm(batch_dwords, &mut i, plan.result_gpu_addr, plan.start_value);
+    emit_store_data_imm(
         batch_dwords,
         &mut i,
         copy_smoke_result_addr(plan.result_gpu_addr, COPY_SMOKE_PRE_COPY_SLOT),
         plan.pre_color_value,
     );
 
-    batch_dwords[i] = blt::XY_COLOR_BLT | blt::WRITE_RGBA | blt::xy_color_blt_len(8);
+    batch_dwords[i] = blt::XY_COLOR_BLT | blt::WRITE_RGBA | blt::xy_color_blt_len(7);
     batch_dwords[i + 1] =
         blt::TILE_LINEAR | blt::MOCS_UC | blt::DEPTH_32 | blt::ROP_COLOR_COPY | plan.pitch_bytes;
     batch_dwords[i + 2] = (plan.dst_y << 16) | plan.dst_x;
@@ -404,16 +402,22 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
         ((plan.dst_y.saturating_add(plan.rect_h)) << 16) | plan.dst_x.saturating_add(plan.rect_w);
     batch_dwords[i + 4] = lo32(plan.surface_gpu_addr);
     batch_dwords[i + 5] = hi32(plan.surface_gpu_addr);
-    batch_dwords[i + 6] = 0;
-    batch_dwords[i + 7] = plan.color;
-    batch_dwords[i + 8] = mi::NOOP;
-    i += 9;
+    batch_dwords[i + 6] = plan.color;
+    batch_dwords[i + 7] = mi::NOOP;
+    i += 8;
 
-    emit_flush_dw_store(
+    emit_store_data_imm(
         batch_dwords,
         &mut i,
         copy_smoke_result_addr(plan.result_gpu_addr, COPY_SMOKE_POST_COPY_SLOT),
         plan.post_color_value,
+    );
+
+    emit_store_data_imm(
+        batch_dwords,
+        &mut i,
+        copy_smoke_result_addr(plan.result_gpu_addr, COPY_SMOKE_DONE_SLOT),
+        plan.done_value,
     );
 
     batch_dwords[i] = mi::BATCH_BUFFER_END;

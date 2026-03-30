@@ -1,73 +1,56 @@
-use alloc::vec;
-
 const UI2_ATHLAS_GRID_DEMO_TEX_ID: u32 = 4_708;
 const UI2_ATHLAS_GRID_DEMO_WINDOW_X: f32 = 560.0;
 const UI2_ATHLAS_GRID_DEMO_WINDOW_Y: f32 = 96.0;
 const UI2_ATHLAS_GRID_DEMO_WINDOW_Z: i16 = 32;
-const UI2_ATHLAS_GRID_DEMO_COLS: usize = 30;
-const UI2_ATHLAS_GRID_DEMO_ROWS: usize = 15;
 const UI2_ATHLAS_GRID_DEMO_SIZE_CASE: usize = 0;
-const UI2_ATHLAS_GRID_DEMO_GLYPH_BYTE: u8 = 0xA7;
-const UI2_ATHLAS_GRID_DEMO_BG_RGBA: [u8; 4] = [0x09, 0x0C, 0x12, 0xFF];
-const UI2_ATHLAS_GRID_DEMO_FG_RGBA: (u8, u8, u8, u8) = (0xE8, 0xEC, 0xF2, 0xFF);
+const UI2_ATHLAS_GRID_DEMO_BG_RGBA: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+const UI2_ATHLAS_GRID_DEMO_FG_RGBA: [u8; 4] = [0x16, 0x18, 0x1E, 0xFF];
+const UI2_ATHLAS_GRID_DEMO_DEFER_MS: u64 = 16;
+const UI2_ATHLAS_GRID_DEMO_COLUMNS: usize = 4;
+const UI2_ATHLAS_GRID_DEMO_GAP_PX: u32 = 12;
 
-fn build_athlas_grid_rgba(width: u32, height: u32, cell_h: u32) -> Option<alloc::vec::Vec<u8>> {
-    let mut rgba = vec![
-        0u8;
-        (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4)
-    ];
-    for chunk in rgba.chunks_exact_mut(4) {
-        chunk.copy_from_slice(&UI2_ATHLAS_GRID_DEMO_BG_RGBA);
-    }
-
-    let row_bytes = [UI2_ATHLAS_GRID_DEMO_GLYPH_BYTE; UI2_ATHLAS_GRID_DEMO_COLS];
-    let px_h = cell_h as f32;
-    for row in 0..UI2_ATHLAS_GRID_DEMO_ROWS {
-        let y = (row as i32).saturating_mul(cell_h as i32);
-        if !crate::gfx::imba_athlas::blit_imba_athlas_text_rgba_nearest_px(
-            rgba.as_mut_slice(),
-            width,
-            height,
-            &row_bytes,
-            0,
-            y,
-            px_h,
-            UI2_ATHLAS_GRID_DEMO_FG_RGBA,
-        ) {
-            return None;
-        }
-    }
-
-    Some(rgba)
+fn bucket_cell_origin(bucket: usize, cell_w: u32, cell_h: u32) -> (u32, u32) {
+    let col = bucket % UI2_ATHLAS_GRID_DEMO_COLUMNS;
+    let row = bucket / UI2_ATHLAS_GRID_DEMO_COLUMNS;
+    (
+        UI2_ATHLAS_GRID_DEMO_GAP_PX + (col as u32) * (cell_w + UI2_ATHLAS_GRID_DEMO_GAP_PX),
+        UI2_ATHLAS_GRID_DEMO_GAP_PX + (row as u32) * (cell_h + UI2_ATHLAS_GRID_DEMO_GAP_PX),
+    )
 }
 
 #[embassy_executor::task]
 pub async fn ui2_athlas_grid_demo_task() {
-    let Some(glyph) = crate::gfx::imba_athlas::imba_athlas_lookup_codepoint(
-        UI2_ATHLAS_GRID_DEMO_GLYPH_BYTE as u32,
-    ) else {
-        crate::log!("ui2-athlas-grid-demo: glyph lookup failed byte=0xA7\n");
-        return;
-    };
+    let mut bucket_dims =
+        [(0u32, 0u32); crate::gfx::imba_athlas::athlasmetrics::ATHLAS_BUCKET_COUNT];
+    let mut cell_w = 0u32;
+    let mut cell_h = 0u32;
 
-    let Some((cell_w, cell_h)) = crate::gfx::imba_athlas::imba_athlas_bucket_cell_px(
-        UI2_ATHLAS_GRID_DEMO_SIZE_CASE,
-        glyph.bucket as usize,
-    ) else {
-        crate::log!(
-            "ui2-athlas-grid-demo: missing bucket cell size size_case={} bucket={}\n",
+    for bucket in 0..crate::gfx::imba_athlas::athlasmetrics::ATHLAS_BUCKET_COUNT {
+        let Some((bucket_w, bucket_h)) = crate::gfx::imba_athlas::imba_athlas_bucket_png_dimensions(
             UI2_ATHLAS_GRID_DEMO_SIZE_CASE,
-            glyph.bucket
-        );
-        return;
-    };
+            bucket,
+        ) else {
+            crate::log!(
+                "ui2-athlas-grid-demo: missing bucket dimensions size_case={} bucket={}\n",
+                UI2_ATHLAS_GRID_DEMO_SIZE_CASE,
+                bucket,
+            );
+            return;
+        };
+        bucket_dims[bucket] = (bucket_w, bucket_h);
+        cell_w = cell_w.max(bucket_w);
+        cell_h = cell_h.max(bucket_h);
+    }
 
-    let width = cell_w.saturating_mul(UI2_ATHLAS_GRID_DEMO_COLS as u32);
-    let height = cell_h.saturating_mul(UI2_ATHLAS_GRID_DEMO_ROWS as u32);
+    let rows = crate::gfx::imba_athlas::athlasmetrics::ATHLAS_BUCKET_COUNT
+        .div_ceil(UI2_ATHLAS_GRID_DEMO_COLUMNS);
+    let width = UI2_ATHLAS_GRID_DEMO_GAP_PX
+        + (UI2_ATHLAS_GRID_DEMO_COLUMNS as u32) * (cell_w + UI2_ATHLAS_GRID_DEMO_GAP_PX);
+    let height =
+        UI2_ATHLAS_GRID_DEMO_GAP_PX + (rows as u32) * (cell_h + UI2_ATHLAS_GRID_DEMO_GAP_PX);
+
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
-        "Athlas Grid",
+        "Athlas Buckets",
         crate::r::ui2::Ui2Rect {
             x: UI2_ATHLAS_GRID_DEMO_WINDOW_X,
             y: UI2_ATHLAS_GRID_DEMO_WINDOW_Y,
@@ -87,40 +70,83 @@ pub async fn ui2_athlas_grid_demo_task() {
         return;
     };
 
-    let Some(rgba) = build_athlas_grid_rgba(width, height, cell_h) else {
-        crate::log!(
-            "ui2-athlas-grid-demo: rgba build failed glyph=0x{:02X} bucket={} cell={}x{}\n",
-            UI2_ATHLAS_GRID_DEMO_GLYPH_BYTE,
-            glyph.bucket,
-            cell_w,
-            cell_h
-        );
-        return;
-    };
+    crate::log!(
+        "ui2-athlas-grid-demo: placeholder window={} tex={} size_case={} size={}x{} buckets={} cell={}x{}\n",
+        surface.window_id(),
+        surface.tex_id(),
+        UI2_ATHLAS_GRID_DEMO_SIZE_CASE,
+        width,
+        height,
+        crate::gfx::imba_athlas::athlasmetrics::ATHLAS_BUCKET_COUNT,
+        cell_w,
+        cell_h
+    );
 
-    if !surface.upload_rgba(rgba.as_slice(), "ui2-athlas-grid-demo-upload") {
-        crate::log!(
-            "ui2-athlas-grid-demo: upload failed window={} tex={} size={}x{}\n",
-            surface.window_id(),
-            surface.tex_id(),
-            width,
-            height
-        );
-        return;
+    embassy_time::Timer::after(embassy_time::Duration::from_millis(UI2_ATHLAS_GRID_DEMO_DEFER_MS))
+        .await;
+
+    for (bucket, (bucket_w, bucket_h)) in bucket_dims.iter().copied().enumerate() {
+        let Some((upload_w, upload_h, rgba)) =
+            crate::gfx::imba_athlas::imba_athlas_bucket_surface_rgba(
+                UI2_ATHLAS_GRID_DEMO_SIZE_CASE,
+                bucket,
+                UI2_ATHLAS_GRID_DEMO_BG_RGBA,
+                UI2_ATHLAS_GRID_DEMO_FG_RGBA,
+            )
+        else {
+            crate::log!(
+                "ui2-athlas-grid-demo: bucket surface build failed size_case={} bucket={}\n",
+                UI2_ATHLAS_GRID_DEMO_SIZE_CASE,
+                bucket,
+            );
+            return;
+        };
+
+        if upload_w != bucket_w || upload_h != bucket_h {
+            crate::log!(
+                "ui2-athlas-grid-demo: bucket size changed bucket={} expected={}x{} got={}x{}\n",
+                bucket,
+                bucket_w,
+                bucket_h,
+                upload_w,
+                upload_h
+            );
+            return;
+        }
+
+        let (cell_x, cell_y) = bucket_cell_origin(bucket, cell_w, cell_h);
+        let upload_x = cell_x + (cell_w - bucket_w) / 2;
+        let upload_y = cell_y + (cell_h - bucket_h) / 2;
+        if !surface.upload_rgba_region(
+            upload_x,
+            upload_y,
+            bucket_w,
+            bucket_h,
+            rgba.as_slice(),
+            "ui2-athlas-grid-demo-upload-region",
+        ) {
+            crate::log!(
+                "ui2-athlas-grid-demo: region upload failed window={} tex={} bucket={} rect={}x{}@{},{}\n",
+                surface.window_id(),
+                surface.tex_id(),
+                bucket,
+                bucket_w,
+                bucket_h,
+                upload_x,
+                upload_y
+            );
+            return;
+        }
     }
 
     crate::log!(
-        "ui2-athlas-grid-demo: window={} tex={} glyph=0x{:02X} bucket={} grid={}x{} cell={}x{} size={}x{}\n",
+        "ui2-athlas-grid-demo: window={} tex={} deferred_bucket_grid size_case={} size={}x{} buckets={}\n",
         surface.window_id(),
         surface.tex_id(),
-        UI2_ATHLAS_GRID_DEMO_GLYPH_BYTE,
-        glyph.bucket,
-        UI2_ATHLAS_GRID_DEMO_COLS,
-        UI2_ATHLAS_GRID_DEMO_ROWS,
-        cell_w,
-        cell_h,
+        UI2_ATHLAS_GRID_DEMO_SIZE_CASE,
         width,
-        height
+        height,
+        crate::gfx::imba_athlas::athlasmetrics::ATHLAS_BUCKET_COUNT
     );
 
     loop {
