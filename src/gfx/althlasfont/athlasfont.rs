@@ -178,15 +178,12 @@ pub fn ensure_imba_athlas_png_buckets_uploaded() -> bool {
             }
         };
 
-        let rc = unsafe {
-            crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba(
-                asset.tex_id,
-                decoded.width,
-                decoded.height,
-                decoded.rgba.as_ptr(),
-                decoded.rgba.len(),
-            )
-        };
+        let rc = crate::r::io::cabi::upload_texture_rgba_mask_no_init(
+            asset.tex_id,
+            decoded.width,
+            decoded.height,
+            decoded.rgba.as_slice(),
+        );
         if rc != 0 {
             crate::log!(
                 "imba-athlas-png: upload failed size={} bucket={} tex={} rc={}\n",

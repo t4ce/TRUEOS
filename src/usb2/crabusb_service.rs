@@ -2860,10 +2860,12 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         }
 
         let Some(info) = super::controller_by_index(controller_index) else {
-            crate::log!(
-                "crabusb: controller {} not available yet; retrying\n",
-                controller_index
-            );
+            if crate::logflag::USB_VERBOSE {
+                crate::log!(
+                    "crabusb: controller {} not available yet; retrying\n",
+                    controller_index
+                );
+            }
             Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
             continue;
         };

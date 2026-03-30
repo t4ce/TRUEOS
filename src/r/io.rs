@@ -3395,7 +3395,7 @@ pub mod cabi {
         })
     }
 
-    fn upload_texture_rgba_inner(
+    fn upload_texture_rgba_inner_impl(
         tex_id: u32,
         width: u32,
         height: u32,
@@ -3403,8 +3403,11 @@ pub mod cabi {
         data_ptr: *const u8,
         data_len: usize,
         sample_kind: TexSampleKind,
+        call_init: bool,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        if call_init {
+            crate::gfx::init(crate::limine::framebuffer_response());
+        }
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_RGBA,
             0,
@@ -3571,6 +3574,46 @@ pub mod cabi {
             return -6;
         };
         ret
+    }
+
+    #[inline]
+    fn upload_texture_rgba_inner(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        region: Option<ImageRegion>,
+        data_ptr: *const u8,
+        data_len: usize,
+        sample_kind: TexSampleKind,
+    ) -> i32 {
+        upload_texture_rgba_inner_impl(
+            tex_id,
+            width,
+            height,
+            region,
+            data_ptr,
+            data_len,
+            sample_kind,
+            true,
+        )
+    }
+
+    pub(crate) fn upload_texture_rgba_mask_no_init(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        data: &[u8],
+    ) -> i32 {
+        upload_texture_rgba_inner_impl(
+            tex_id,
+            width,
+            height,
+            None,
+            data.as_ptr(),
+            data.len(),
+            TexSampleKind::Mask,
+            false,
+        )
     }
 
     #[unsafe(no_mangle)]
