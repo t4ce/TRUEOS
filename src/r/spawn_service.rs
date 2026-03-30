@@ -132,6 +132,7 @@ define_started_flags!(
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_ATHLAS_GRID_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
+    UI2_SVG_DEMO_STARTED,
     GFX_INTEL_READINESS_PROBE_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
     CRABUSB_EVENT_PUMP_STARTED,
@@ -752,6 +753,12 @@ fn spawn_ui2_particle_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_svg_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_svg_demo::ui2_svg_demo_task())
+    })
+}
+
 const UI2_GFX_TETRIS_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
     "ui2-gfx-tetris",
     crate::r::readiness::UI2_DEMO_SLOT_1_READY,
@@ -794,12 +801,20 @@ const UI2_PARTICLE_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
     spawn_ui2_particle_demo,
 );
 
+const UI2_SVG_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
+    "ui2-svg-demo",
+    crate::r::readiness::UI2_DEMO_SLOT_4_READY,
+    &UI2_SVG_DEMO_STARTED,
+    spawn_ui2_svg_demo,
+);
+
 const UI2_DEMOS: &[Ui2DemoTaskSpec] = &[
     UI2_GFX_TETRIS_DEMO,
     UI2_TRIANGLE_DEMO,
     UI2_BGRT_DEMO,
     UI2_MANDELBROT_DEMO,
     UI2_PARTICLE_DEMO,
+    UI2_SVG_DEMO,
 ];
 
 fn spawn_gfx_intel_readiness_probe(spawner: Spawner) -> SpawnAttempt {
@@ -1139,6 +1154,7 @@ static TASKS: &[TaskSpec] = &[
     UI2_BGRT_DEMO.task_spec(),
     UI2_MANDELBROT_DEMO.task_spec(),
     UI2_PARTICLE_DEMO.task_spec(),
+    UI2_SVG_DEMO.task_spec(),
     TaskSpec::enabled(
         "gfx-intel-readiness-probe",
         crate::r::readiness::GFX_INTEL_CLAIMED,
