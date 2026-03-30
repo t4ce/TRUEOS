@@ -87,11 +87,13 @@ pub(crate) mod blt {
 	use super::{blt_instr, blt_num_dw};
 
 	pub const XY_COLOR_BLT: u32 = blt_instr(0x50, 0);
+	pub const TILE_LINEAR: u32 = 0 << 30;
 	pub const WRITE_A: u32 = 2 << 20;
 	pub const WRITE_RGB: u32 = 1 << 20;
 	pub const WRITE_RGBA: u32 = WRITE_RGB | WRITE_A;
 	pub const DEPTH_32: u32 = 3 << 24;
 	pub const ROP_COLOR_COPY: u32 = 0xF0 << 16;
+	pub const MOCS_UC: u32 = 1 << 21;
 
 	#[inline]
 	pub const fn xy_color_blt_len(total_dwords: u32) -> u32 {
@@ -363,7 +365,7 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
 		});
 	}
 
-	let required = if plan.use_force_wakeup { 28 } else { 26 };
+	let required = if plan.use_force_wakeup { 29 } else { 27 };
 	if batch_dwords.len() < required {
 		return Err(CopySmokeBuildError::BatchTooSmall {
 			need_dwords: required,
@@ -401,16 +403,18 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
 		plan.pre_color_value,
 	);
 
-	batch_dwords[i] = blt::XY_COLOR_BLT | blt::WRITE_RGBA | blt::xy_color_blt_len(7);
-	batch_dwords[i + 1] = blt::DEPTH_32 | blt::ROP_COLOR_COPY | plan.pitch_bytes;
+	batch_dwords[i] = blt::XY_COLOR_BLT | blt::WRITE_RGBA | blt::xy_color_blt_len(8);
+	batch_dwords[i + 1] =
+		blt::TILE_LINEAR | blt::MOCS_UC | blt::DEPTH_32 | blt::ROP_COLOR_COPY | plan.pitch_bytes;
 	batch_dwords[i + 2] = (plan.dst_y << 16) | plan.dst_x;
 	batch_dwords[i + 3] =
 		((plan.dst_y.saturating_add(plan.rect_h)) << 16) | plan.dst_x.saturating_add(plan.rect_w);
 	batch_dwords[i + 4] = lo32(plan.surface_gpu_addr);
-	batch_dwords[i + 5] = 0;
-	batch_dwords[i + 6] = plan.color;
-	batch_dwords[i + 7] = mi::NOOP;
-	i += 8;
+	batch_dwords[i + 5] = hi32(plan.surface_gpu_addr);
+	batch_dwords[i + 6] = 0;
+	batch_dwords[i + 7] = plan.color;
+	batch_dwords[i + 8] = mi::NOOP;
+	i += 9;
 
 	emit_flush_dw_store(
 		batch_dwords,

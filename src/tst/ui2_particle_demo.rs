@@ -202,10 +202,6 @@ pub async fn ui2_particle_demo_task() {
     let mut snapshot = Vec::with_capacity(UI2_PARTICLE_DEMO_MAX_PARTICLES);
     let mut rng = DemoRng::new(0x51D3_1000);
     let mut tick = 0u32;
-    if !crate::gfx::imba_athlas::ensure_imba_athlas_png_buckets_uploaded() {
-        crate::log!("ui2-particle-demo: athlas upload failed\n");
-        return;
-    }
     let Some((sprite_tex_id, sprite_uv, sprite_w, sprite_h)) =
         crate::gfx::imba_athlas::imba_athlas_sprite_for_char(2, UI2_PARTICLE_DEMO_GLYPH)
     else {
