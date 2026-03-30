@@ -4,8 +4,6 @@ pub mod cursor;
 pub mod athlasfont;
 pub use athlasfont as imba_athlas;
 pub mod jpeg_codec;
-#[path = "loadscreen/loadscreen.rs"]
-pub mod loadscreen;
 pub mod lyon;
 pub mod mandelbrot;
 pub mod particle;

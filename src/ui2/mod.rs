@@ -258,7 +258,6 @@ struct Ui2State {
     compose_present_history_ms: Vec<u64>,
     compose_fps_display: u16,
     last_compose_heartbeat_seq: u32,
-    loadscreen_release_requested: bool,
     first_compose_signaled: bool,
 }
 
@@ -344,7 +343,6 @@ fn init_state() -> &'static Mutex<Ui2State> {
             compose_present_history_ms: Vec::new(),
             compose_fps_display: 0,
             last_compose_heartbeat_seq: 0,
-            loadscreen_release_requested: false,
             first_compose_signaled: false,
         };
 
@@ -1970,23 +1968,10 @@ pub async fn ui2_task() {
             log_browser_surface_updates(&mut state);
             apply_hosted_browser_dirty(&mut state, hosted_browser_dirty);
 
-            let loadscreen_ended = crate::r::readiness::is_set(crate::r::readiness::LOADSCREEN_END);
-            let should_compose = if loadscreen_ended {
-                !state.first_compose_signaled || UI2_DIRTY.load(Ordering::Acquire)
-            } else {
-                !state.loadscreen_release_requested || UI2_DIRTY.load(Ordering::Acquire)
-            };
+            let should_compose = !state.first_compose_signaled || UI2_DIRTY.load(Ordering::Acquire);
 
             if should_compose {
-                did_compose = compose_ui2_frame(&mut state, loadscreen_ended);
-                if did_compose && !loadscreen_ended && !state.loadscreen_release_requested {
-                    state.loadscreen_release_requested = true;
-                    crate::r::readiness::set_loadscreen_expire_requested(true);
-                    crate::log!(
-                        "boot-probe: ui2 requested loadscreen release ms={}\n",
-                        boot_probe_ms()
-                    );
-                }
+                did_compose = compose_ui2_frame(&mut state, true);
             }
         }
 
