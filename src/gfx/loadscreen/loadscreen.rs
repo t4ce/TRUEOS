@@ -3,11 +3,12 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 const LOADSCREEN_BG_RGB: u32 = 0xF2EEE8;
 const LOADSCREEN_TITLE_RGB: (u8, u8, u8) = (0x10, 0x10, 0x12);
 const LOADSCREEN_MSG: &[u8] = b"TRUE OS";
-const LOADSCREEN_TILE_SIZE: f32 = 98.0;
-const LOADSCREEN_WAIT_POLL_MS: u64 = 100;
+const LOADSCREEN_TILE_SIZE: f32 = 120.0;
+const LOADSCREEN_WAIT_POLL_MS: u64 = 250;
 const LOADSCREEN_MIN_LIFETIME_MS: u64 = 4_000;
-const LOADSCREEN_ANIM_FRAME_MS: u64 = 33;
+const LOADSCREEN_ANIM_FRAME_MS: u64 = 250;
 const LOADSCREEN_TITLE_ALPHA: u8 = 242;
+const LOADSCREEN_GLYPH_SCALE: f32 = 1.25;
 
 fn render_loadscreen_frame(
     bg_rgb: u32,
@@ -23,7 +24,7 @@ fn render_loadscreen_frame(
     }
 
     if let Some(layout) = text_layout {
-        let _ = crate::gfx::imbafont::draw_text_in_frame(
+        let _ = crate::gfx::imbafont::draw_text_in_frame_scaled(
             crate::gfx::imbafont::ImbaFontFace::Font,
             msg,
             &layout,
@@ -31,6 +32,7 @@ fn render_loadscreen_frame(
             fb_h,
             LOADSCREEN_TITLE_RGB,
             LOADSCREEN_TITLE_ALPHA,
+            LOADSCREEN_GLYPH_SCALE,
         );
     }
 

@@ -59,6 +59,8 @@ mod tst_ui2_athlas_grid_demo;
 mod tst_ui2_mandelbrot_demo;
 #[path = "tst/ui2_particle_demo.rs"]
 mod tst_ui2_particle_demo;
+#[path = "tst/ui2_svg_demo.rs"]
+mod tst_ui2_svg_demo;
 #[path = "tst/ui2_triangle_demo.rs"]
 mod tst_ui2_triangle_demo;
 #[path = "tst/ws_time.rs"]

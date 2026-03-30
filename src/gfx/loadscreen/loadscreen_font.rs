@@ -53,7 +53,101 @@ struct ImbaFontLayoutMetric {
     metric: SvgGlyphMetric,
 }
 
-include!(concat!(env!("OUT_DIR"), "/generated_imbafont_fonts.rs"));
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImbaFontFace {
+    Font,
+}
+
+static IMBAFONT_FONT_ASSETS: &[SvgIconAsset] = &[
+    SvgIconAsset {
+        ch: 'E',
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/gfx/loadscreen/E.svg")),
+    },
+    SvgIconAsset {
+        ch: 'O',
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/gfx/loadscreen/O.svg")),
+    },
+    SvgIconAsset {
+        ch: 'R',
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/gfx/loadscreen/R.svg")),
+    },
+    SvgIconAsset {
+        ch: 'S',
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/gfx/loadscreen/S.svg")),
+    },
+    SvgIconAsset {
+        ch: 'T',
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/gfx/loadscreen/T.svg")),
+    },
+    SvgIconAsset {
+        ch: 'U',
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/gfx/loadscreen/U.svg")),
+    },
+];
+
+static IMBAFONT_FONT_METRICS: Once<BTreeMap<char, SvgGlyphMetric>> = Once::new();
+static IMBAFONT_FONT_ICONS: Once<Vec<ImbaFontIcon>> = Once::new();
+static IMBAFONT_FONT_LAYOUT_METRICS: Once<Vec<ImbaFontLayoutMetric>> = Once::new();
+
+fn metrics_bytes_for_face(_face: ImbaFontFace) -> &'static [u8] {
+    b""
+}
+
+fn parsed_metrics_for_face(face: ImbaFontFace) -> &'static BTreeMap<char, SvgGlyphMetric> {
+    let build = || parse_metrics(metrics_bytes_for_face(face));
+    match face {
+        ImbaFontFace::Font => IMBAFONT_FONT_METRICS.call_once(build),
+    }
+}
+
+fn assets_for_face(face: ImbaFontFace) -> &'static [SvgIconAsset] {
+    match face {
+        ImbaFontFace::Font => IMBAFONT_FONT_ASSETS,
+    }
+}
+
+fn icons_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontIcon> {
+    let metrics = parsed_metrics_for_face(face);
+    let assets = assets_for_face(face);
+
+    let build = || {
+        let mut icons = Vec::with_capacity(assets.len());
+        for asset in assets {
+            let Some(mesh) = build_svg_mesh(asset.bytes) else {
+                continue;
+            };
+            let metric = metrics
+                .get(&asset.ch)
+                .copied()
+                .unwrap_or_else(|| default_metric_from_mesh(&mesh));
+            icons.push(ImbaFontIcon {
+                ch: asset.ch,
+                metric,
+                mesh,
+            });
+        }
+        icons
+    };
+
+    match face {
+        ImbaFontFace::Font => IMBAFONT_FONT_ICONS.call_once(build),
+    }
+}
+
+fn layout_metrics_for_face(face: ImbaFontFace) -> &'static Vec<ImbaFontLayoutMetric> {
+    let build = || {
+        let icons = icons_for_face(face);
+        let mut layout_metrics = Vec::with_capacity(icons.len());
+        for icon in icons {
+            layout_metrics.push(ImbaFontLayoutMetric { metric: icon.metric });
+        }
+        layout_metrics
+    };
+
+    match face {
+        ImbaFontFace::Font => IMBAFONT_FONT_LAYOUT_METRICS.call_once(build),
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct ImbaFontRunLayout {
@@ -1108,9 +1202,24 @@ pub fn draw_text_in_frame(
     rgb: (u8, u8, u8),
     alpha: u8,
 ) -> bool {
+    draw_text_in_frame_scaled(face, text, layout, view_w, view_h, rgb, alpha, 1.0)
+}
+
+pub fn draw_text_in_frame_scaled(
+    face: ImbaFontFace,
+    text: &[u8],
+    layout: &ImbaFontRunLayout,
+    view_w: u32,
+    view_h: u32,
+    rgb: (u8, u8, u8),
+    alpha: u8,
+    glyph_scale: f32,
+) -> bool {
     let transform = ViewTransform::from_extent(view_w, view_h);
     let color = Rgba8::new(rgb.0, rgb.1, rgb.2, alpha);
     let mut pen_x = layout.origin_x;
+    let render_tile_h = layout.tile_h * glyph_scale.max(0.0);
+    let grow_x = (render_tile_h - layout.tile_h) * 0.5;
 
     for &byte in text {
         let ch = byte as char;
@@ -1127,10 +1236,11 @@ pub fn draw_text_in_frame(
             continue;
         };
 
-        let y = layout.baseline_y - metric.baseline_y * layout.tile_h;
-        let sx = layout.tile_h / icon.mesh.width.max(0.0001);
-        let sy = layout.tile_h / icon.mesh.height.max(0.0001);
-        let blob = icon_mesh_rgb_bytes(&icon.mesh, pen_x, y, sx, sy, transform, color);
+        let x = pen_x - grow_x;
+        let y = layout.baseline_y - metric.baseline_y * render_tile_h;
+        let sx = render_tile_h / icon.mesh.width.max(0.0001);
+        let sy = render_tile_h / icon.mesh.height.max(0.0001);
+        let blob = icon_mesh_rgb_bytes(&icon.mesh, x, y, sx, sy, transform, color);
 
         if !blob.is_empty() {
             let _ = unsafe {
