@@ -12,6 +12,13 @@ pub(super) fn log_display_deferred_for_render_first() {
 	);
 }
 
+#[inline]
+pub(super) fn log_display_render_first_complete() {
+	crate::log!(
+		"intel: display discovery render-first prerequisite complete; continuing with display-engine probe\n"
+	);
+}
+
 pub(crate) mod xelp_3dstate {
 	pub const OPCODE_GROUP_0: u8 = 0x0;
 	pub const OPCODE_GROUP_1: u8 = 0x1;

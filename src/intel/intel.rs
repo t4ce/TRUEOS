@@ -138,7 +138,7 @@ fn decode_mmio_bar(bus: u8, slot: u8, function: u8, index: u8) -> Option<(u64, u
 }
 
 #[inline]
-fn mmio_read32(info: IntelDeviceInfo, off: usize) -> u32 {
+pub(crate) fn mmio_read32(info: IntelDeviceInfo, off: usize) -> u32 {
     if off + 4 > info.mmio_len {
         return 0;
     }
@@ -536,16 +536,17 @@ fn log_display_routing_probe(info: IntelDeviceInfo) {
 }
 
 fn arm_display_power_smoke(info: IntelDeviceInfo) -> bool {
-    let orig = mmio_read32(info, INTEL_GT_DISP_PWRON);
-    let req = orig | INTEL_GT_DISP_PWRON_REQ;
-    let wrote = mmio_write32(info, INTEL_GT_DISP_PWRON, req);
-    let rb = mmio_read32(info, INTEL_GT_DISP_PWRON);
-    let latched = wrote && (rb & INTEL_GT_DISP_PWRON_REQ) != 0;
+    let snapshot = super::xelp_display_ngin::capture_early_display_snapshot(info);
+    let plan = super::xelp_display_ngin::build_display_power_request_plan(snapshot);
+    let wrote = mmio_write32(info, plan.reg.offset, plan.request);
+    let rb = mmio_read32(info, plan.reg.offset);
+    let latched = wrote && (rb & plan.request_mask) != 0;
 
     crate::log!(
-        "intel: display-power smoke register=GT_DISP_PWRON orig=0x{:08X} req=0x{:08X} rb=0x{:08X} latched={}\n",
-        orig,
-        req,
+        "intel: display-power smoke register={} orig=0x{:08X} req=0x{:08X} rb=0x{:08X} latched={}\n",
+        plan.reg.name,
+        plan.before,
+        plan.request,
         rb,
         latched as u8
     );
@@ -562,6 +563,13 @@ fn run_display_power_discovery(info: IntelDeviceInfo) {
         info.bar0_phys,
         info.mmio_len,
         info.aperture_bar_size
+    );
+    let early_stub = super::xelp_display_ngin::log_early_display_stub(info, "discovery");
+    crate::log!(
+        "intel: display-ngin stub summary power_visible={} dc_state_mask=0x{:08X} next_gt_disp_pwron=0x{:08X}\n",
+        early_stub.has_visible_display_power() as u8,
+        early_stub.dc_state_blocking_mask(),
+        early_stub.next_gt_disp_pwron_request()
     );
     crate::log!("intel: display discovery step=probe scope=power+routing\n");
     log_display_power_probe(info);
@@ -729,7 +737,7 @@ pub async fn scanout_smoke_task() {
         super::xelp_render_ngin::defer_display_discovery_for_render_first(intel_igpu770_present());
     if defer_display {
         super::xelp_render_ngin::log_display_deferred_for_render_first();
-        return;
+        super::xelp_render_ngin::log_display_render_first_complete();
     }
 
     run_display_power_discovery(info);
