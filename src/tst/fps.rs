@@ -4,7 +4,6 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use crate::gfx::imbafont::{ImbaFontFace, glyph_metrics_px};
 use crate::r::ui2::Ui2Rect;
 
 const FPS_DIGIT_COUNT: usize = 3;
@@ -277,15 +276,5 @@ fn fade_alpha_asc(elapsed_ms: u64, duration_ms: u64) -> u8 {
 }
 
 fn max_digit_advance(tile_h: f32) -> f32 {
-    let mut max_advance = 0.0f32;
-    for ch in b'0'..=b'9' {
-        if let Some(metrics) = glyph_metrics_px(ImbaFontFace::Font, ch as char, tile_h) {
-            max_advance = max_advance.max(metrics.advance);
-        }
-    }
-    if max_advance > 0.0 {
-        max_advance
-    } else {
-        tile_h * 0.75
-    }
+    tile_h * 0.75
 }
