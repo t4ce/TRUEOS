@@ -100,16 +100,14 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
             state.view_w,
             state.view_h,
         );
-        let thumb_h = if window.kind == Ui2WindowKind::HostedBrowser {
-            let snapshot = browser_surface_state_for_window(window);
+        let thumb_h = if let Some(snapshot) = window_scroll_snapshot(window) {
             let viewport_h = snapshot.viewport_height.max(1) as f32;
             let content_h = snapshot.content_height.max(snapshot.viewport_height.max(1)) as f32;
             libm::fmaxf(10.0, (vbar.h * (viewport_h / content_h)).min(vbar.h))
         } else {
             libm::fminf(vbar.h, 18.0)
         };
-        let thumb_y = if window.kind == Ui2WindowKind::HostedBrowser {
-            let snapshot = browser_surface_state_for_window(window);
+        let thumb_y = if let Some(snapshot) = window_scroll_snapshot(window) {
             let scroll_range = hosted_browser_scroll_max(&snapshot) as f32;
             let avail = (vbar.h - thumb_h).max(0.0);
             if scroll_range > 0.0 {
@@ -145,16 +143,14 @@ fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
             state.view_w,
             state.view_h,
         );
-        let thumb_w = if window.kind == Ui2WindowKind::HostedBrowser {
-            let snapshot = browser_surface_state_for_window(window);
+        let thumb_w = if let Some(snapshot) = window_scroll_snapshot(window) {
             let viewport_w = snapshot.viewport_width.max(1) as f32;
             let content_w = snapshot.content_width.max(snapshot.viewport_width.max(1)) as f32;
             libm::fmaxf(10.0, (hbar.w * (viewport_w / content_w)).min(hbar.w))
         } else {
             libm::fminf((hbar.w - 2.0).max(8.0), 18.0)
         };
-        let thumb_x = if window.kind == Ui2WindowKind::HostedBrowser {
-            let snapshot = browser_surface_state_for_window(window);
+        let thumb_x = if let Some(snapshot) = window_scroll_snapshot(window) {
             let scroll_range = hosted_browser_scroll_x_max(&snapshot) as f32;
             let avail = (hbar.w - thumb_w).max(0.0);
             if scroll_range > 0.0 {

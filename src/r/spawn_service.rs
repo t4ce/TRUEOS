@@ -1024,7 +1024,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_SVG_DEMO_STARTED,
         spawn_ui2_svg_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-particle-demo",
         crate::r::readiness::UI2_DEMO_SLOT_4_READY,
         &UI2_PARTICLE_DEMO_STARTED,
