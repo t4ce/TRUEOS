@@ -104,6 +104,7 @@ define_started_flags!(
     UI2_BGRT_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
+    UI2_SHELL_DEMO_STARTED,
     UI2_SVG_DEMO_STARTED,
     GFX_INTEL_READINESS_PROBE_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
@@ -589,19 +590,19 @@ fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ui2_athlas_half_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_athlas_bucket_demo::ui2_athlas_bucket_demo_task(0))
+        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_demo_task(0))
     })
 }
 
 fn spawn_ui2_athlas_1x_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_athlas_bucket_demo::ui2_athlas_bucket_demo_task(1))
+        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_demo_task(1))
     })
 }
 
 fn spawn_ui2_athlas_3x_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_athlas_bucket_demo::ui2_athlas_bucket_demo_task(2))
+        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_demo_task(2))
     })
 }
 
@@ -626,6 +627,15 @@ fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ui2_particle_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_particle_demo::ui2_particle_demo_task())
+    })
+}
+
+fn spawn_ui2_shell_demo(spawner: Spawner) -> SpawnAttempt {
+    if let Err(e) = spawner.spawn(crate::shell2::task(spawner, &crate::shell2::UI2_SHELL_BACKEND)) {
+        return SpawnAttempt::Failed(e);
+    }
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_shell_demo::ui2_shell_demo_task())
     })
 }
 
@@ -945,6 +955,12 @@ static TASKS: &[TaskSpec] = &[
         &UI2_PARTICLE_DEMO_STARTED,
         spawn_ui2_particle_demo,
     ),
+    TaskSpec::enabled(
+        "ui2-shell-demo",
+        UI2_DEMO_READY,
+        &UI2_SHELL_DEMO_STARTED,
+        spawn_ui2_shell_demo,
+    ),
     TaskSpec::enabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
     TaskSpec::enabled(
         "gfx-intel-readiness-probe",
@@ -1022,6 +1038,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
                                 | "ui2-gfx-tetris"
                                 | "ui2-triangle-demo"
                                 | "ui2-mandelbrot-demo"
+                                | "ui2-shell-demo"
                         ) {
                             crate::log!("boot-probe: spawn {} ms={}\n", spec.name, boot_probe_ms());
                         }

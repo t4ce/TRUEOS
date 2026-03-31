@@ -165,21 +165,23 @@ impl VNet {
         let mac = self.mac_address();
         let _ = api::EndpointV4::new([127, 0, 0, 1], 0);
 
-        match mac {
-            Some(api::MacAddr(bytes)) => {
-                crate::log!(
-                    "vnet: exercise owner={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
-                    owner,
-                    bytes[0],
-                    bytes[1],
-                    bytes[2],
-                    bytes[3],
-                    bytes[4],
-                    bytes[5]
-                );
-            }
-            None => {
-                crate::log!("vnet: exercise owner={} mac=none\n", owner);
+        if crate::logflag::VNET_EXERCISE_LOGS {
+            match mac {
+                Some(api::MacAddr(bytes)) => {
+                    crate::log!(
+                        "vnet: exercise owner={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                        owner,
+                        bytes[0],
+                        bytes[1],
+                        bytes[2],
+                        bytes[3],
+                        bytes[4],
+                        bytes[5]
+                    );
+                }
+                None => {
+                    crate::log!("vnet: exercise owner={} mac=none\n", owner);
+                }
             }
         }
     }

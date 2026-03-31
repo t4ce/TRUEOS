@@ -105,7 +105,7 @@ fn draw_window_decoration_label(
     let glyph_w = f32::from(glyph.region.src_w.max(1));
     let glyph_h = f32::from(glyph.region.src_h.max(1));
     let glyph_x = rect.x + ((rect.w - glyph_w) * 0.5);
-    let glyph_y = rect.y - (glyph_h);
+    let glyph_y = rect.y;
     let atlas_w = f32::from(glyph.region.atlas_w.max(1));
     let atlas_h = f32::from(glyph.region.atlas_h.max(1));
     let src_x = f32::from(glyph.region.src_x);
@@ -342,7 +342,7 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         if window.icon_id != 0 {
             let icon_side = 16.0f32;
             let icon_x = rect.x + 8.0;
-            let icon_y = rect.y + ((UI2_TITLE_H - icon_side) * 0.5);
+            let icon_y = rect.y;
             draw_window_decoration_icon(
                 state,
                 window,
@@ -365,7 +365,7 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         let title_px_h = 16.0f32;
         let title_tier = ui2_font_pick_tier_for_px(title_px_h);
         let title_w = ui2_font_measure_text(title_tier, window.title.as_str()).width_px as f32;
-        let title_y = rect.y + ((UI2_TITLE_H - title_px_h) * 0.5);
+        let title_y = rect.y;
         if title_w > 0.0 && title_max_w > 0.0 {
             let _ = ui2_font_draw_text_line_no_present(
                 window.title.as_str(),
@@ -805,7 +805,7 @@ pub(super) fn window_bottom_resize_button_rect(
     let button_h = UI2_BOTTOM_RESIZE_BUTTON_H.min(bar.h.max(1.0));
     Some(Ui2Rect::new(
         bar.x + bar.w - 1.0 - UI2_BOTTOM_RESIZE_BUTTON_PAD - button_w,
-        bar.y + ((bar.h - button_h) * 0.5),
+        bar.y,
         button_w,
         button_h,
     ))
@@ -820,7 +820,7 @@ pub(super) fn window_system_button_rect(
         return None;
     }
     let rect = effective_window_rect(state, window);
-    let button_y = rect.y + ((window_titlebar_height(window) - UI2_SYSTEM_BUTTON_H) * 0.5);
+    let button_y = rect.y;
     let mut right_x = rect.x + rect.w - 6.0 - UI2_SYSTEM_BUTTON_W;
     let close_x = right_x;
     right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
