@@ -58,8 +58,6 @@ static HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK: AtomicU64 = AtomicU64::new(0);
 pub(super) trait UiHostedSurfaceProvider {
     fn surface_seq(&self, content_id: HostedContentId) -> u32;
     fn interactive_seq(&self, content_id: HostedContentId) -> u32;
-    fn text_seq(&self, content_id: HostedContentId) -> u32;
-    fn layout_seq(&self, content_id: HostedContentId) -> u32;
     fn surface_state(&self, content_id: HostedContentId) -> UiHostedSurfaceState;
     fn interactive_state(&self, content_id: HostedContentId) -> UiHostedInteractiveState;
     fn text_state(&self, content_id: HostedContentId) -> UiHostedTextState;
@@ -103,14 +101,6 @@ impl UiHostedSurfaceProvider for BrowserUiHostedAdapter {
 
     fn interactive_seq(&self, content_id: HostedContentId) -> u32 {
         trueos_qjs::browser_task::hosted_interactive_seq_for_browser(content_id)
-    }
-
-    fn text_seq(&self, content_id: HostedContentId) -> u32 {
-        trueos_qjs::browser_task::hosted_text_seq_for_browser(content_id)
-    }
-
-    fn layout_seq(&self, content_id: HostedContentId) -> u32 {
-        trueos_qjs::browser_task::hosted_layout_seq_for_browser(content_id)
     }
 
     fn surface_state(&self, content_id: HostedContentId) -> UiHostedSurfaceState {
@@ -236,18 +226,8 @@ pub(super) fn hosted_text_state(content_id: HostedContentId) -> UiHostedTextStat
 }
 
 #[inline]
-pub(super) fn hosted_text_seq(content_id: HostedContentId) -> u32 {
-    hosted_adapter().text_seq(content_id)
-}
-
-#[inline]
 pub(super) fn hosted_layout_state(content_id: HostedContentId) -> UiHostedLayoutState {
     hosted_adapter().layout_state(content_id)
-}
-
-#[inline]
-pub(super) fn hosted_layout_seq(content_id: HostedContentId) -> u32 {
-    hosted_adapter().layout_seq(content_id)
 }
 
 pub(super) fn hosted_browser_snapshot(content_id: HostedContentId) -> UiHostedBrowserSnapshot {

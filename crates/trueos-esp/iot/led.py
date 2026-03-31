@@ -6,7 +6,7 @@ from neopixel import NeoPixel  # type: ignore
 
 
 LED_PIN = 8
-LED_COUNT = 1
+LED_COUNT = 64
 FADE_STEPS = 256
 FRAME_DELAY_MS = 20
 

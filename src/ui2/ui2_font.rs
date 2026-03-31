@@ -109,21 +109,19 @@ pub(crate) fn ui2_font_pick_tier_for_px(px_h: f32) -> Ui2FontTier {
     }
 
     let target = px_h.max(1.0);
-    let variants = [
-        (Ui2FontTier::Half, 32.0f32),
-        (Ui2FontTier::OneX, 64.0f32),
-        (Ui2FontTier::ThreeX, 192.0f32),
-    ];
-    let mut best_tier = Ui2FontTier::Half;
-    let mut best_err = f32::MAX;
-    for (tier, native_px_h) in variants {
-        let err = libm::fabsf(native_px_h - target);
-        if err < best_err {
-            best_err = err;
-            best_tier = tier;
-        }
+
+    // Prefer a tier whose native line height is >= target to avoid upscaling.
+    // Choose the smallest such tier to minimize downscaling. If none are
+    // large enough, fall back to the largest tier.
+    let half_h = Ui2FontTier::Half.native_line_height_px() as f32;
+    let onex_h = Ui2FontTier::OneX.native_line_height_px() as f32;
+    if target <= half_h {
+        Ui2FontTier::Half
+    } else if target <= onex_h {
+        Ui2FontTier::OneX
+    } else {
+        Ui2FontTier::ThreeX
     }
-    best_tier
 }
 
 #[inline]
