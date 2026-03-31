@@ -1,8 +1,5 @@
-#[path = "althlasfont/athlasfont.rs"]
-pub mod athlasfont;
 pub mod backends;
 pub mod cursor;
-pub use athlasfont as imba_athlas;
 pub mod jpeg_codec;
 pub mod lyon;
 pub mod mandelbrot;
@@ -115,16 +112,6 @@ fn finalize_backend_init() {
     if !backend_ready {
         return;
     }
-
-    #[cfg(feature = "gfx_virgl")]
-    if athlasfont::imba_athlas_enabled()
-        && is_virgl_active()
-        && !athlasfont::imba_athlas_png_buckets_uploaded()
-        && !athlasfont::ensure_imba_athlas_png_buckets_uploaded()
-    {
-        crate::log!("gfx: athlas bucket upload failed during init\n");
-    }
-
     crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
 }
 
