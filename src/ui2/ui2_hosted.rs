@@ -536,7 +536,25 @@ fn sync_window_container(
             }
             queue_browser_window_viewport(content_id, content)
         }
-        Ui2WindowKind::HostedSurface => true,
+        Ui2WindowKind::HostedSurface => {
+            let Some(content) = content else {
+                return true;
+            };
+            if content_id == 0 {
+                return true;
+            }
+            let (content_x, content_y, viewport_w, viewport_h) = snap_browser_content_rect(content);
+            let snapshot = hosted_surface_state(content_id);
+            hosted_set_viewport(
+                content_id,
+                viewport_w,
+                viewport_h,
+                content_x,
+                content_y,
+                snapshot.content_width.max(viewport_w),
+                snapshot.content_height.max(viewport_h),
+            )
+        }
         Ui2WindowKind::Hosted3d => true,
     }
 }
@@ -557,7 +575,7 @@ pub(super) fn sync_pending_window_containers(state: &mut Ui2State) {
                 window.id,
                 renderable,
                 window.kind,
-                window_browser_instance_id(window),
+                window_hosted_content_id(window),
                 window.content_tex_id,
                 content,
             )

@@ -24,7 +24,9 @@ use self::ui2_hosted::*;
 pub(crate) use self::ui2_hosted::{signal_hosted_browser_factory_mask, ui2_hosted_task};
 pub use self::ui2_win::*;
 pub use self::ui2_win_deco::*;
-use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
+use trueos_gfx_core::{
+    RGB_VERTEX_SIZE, Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_rgb_quad_px, push_tex_quad_px,
+};
 
 const UI2_TITLE_H: f32 = 26.0;
 const UI2_BOTTOM_BAR_H: f32 = 18.0;
@@ -194,6 +196,16 @@ struct Ui2HostedBrowserPreviewDot {
     alpha: u8,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct Ui2HostedSurfaceTile {
+    pub tex_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub blend_enabled: bool,
+}
+
 #[derive(Clone)]
 struct Ui2Window {
     id: u32,
@@ -218,6 +230,8 @@ struct Ui2Window {
     state: Ui2WindowStateKind,
     content_tex_id: u32,
     content_tex_blend: bool,
+    hosted_surface_bg_rgba: [u8; 4],
+    hosted_surface_tiles: Vec<Ui2HostedSurfaceTile>,
     title_tex_id: u32,
     title_tex_w: u32,
     title_tex_h: u32,
@@ -528,8 +542,30 @@ fn window_browser_instance_id(window: &Ui2Window) -> u32 {
     }
 }
 
+fn window_hosted_content_id(window: &Ui2Window) -> u32 {
+    if window.browser_instance_id != 0 {
+        return window.browser_instance_id;
+    }
+    if window.kind == Ui2WindowKind::HostedBrowser {
+        PRIMARY_HOSTED_CONTENT_ID
+    } else {
+        0
+    }
+}
+
 fn browser_surface_state_for_window(window: &Ui2Window) -> UiHostedSurfaceState {
     window.hosted_browser_snapshot.surface
+}
+
+fn hosted_surface_state_for_window(window: &Ui2Window) -> UiHostedSurfaceState {
+    let content_id = window_hosted_content_id(window);
+    if content_id == 0 {
+        UiHostedSurfaceState::default()
+    } else if window.kind == Ui2WindowKind::HostedBrowser {
+        browser_surface_state_for_window(window)
+    } else {
+        hosted_surface_state(content_id)
+    }
 }
 
 fn hosted_browser_scroll_max(snapshot: &UiHostedSurfaceState) -> u32 {
@@ -560,6 +596,21 @@ fn normalized_hosted_browser_scroll(snapshot: &UiHostedSurfaceState) -> u32 {
 
 fn normalized_hosted_browser_scroll_x(snapshot: &UiHostedSurfaceState) -> u32 {
     clamp_hosted_browser_scroll_x(snapshot, snapshot.scroll_x as i64)
+}
+
+fn window_scroll_snapshot(window: &Ui2Window) -> Option<UiHostedSurfaceState> {
+    match window.kind {
+        Ui2WindowKind::HostedBrowser => Some(browser_surface_state_for_window(window)),
+        Ui2WindowKind::HostedSurface => {
+            let content_id = window_hosted_content_id(window);
+            if content_id == 0 {
+                None
+            } else {
+                Some(hosted_surface_state_for_window(window))
+            }
+        }
+        Ui2WindowKind::Hosted3d => None,
+    }
 }
 
 fn browser_interactive_state_for_window(window: &Ui2Window) -> UiHostedInteractiveState {
@@ -1101,6 +1152,122 @@ fn draw_texture_rect_no_present(
         blend_enabled,
         alpha,
     )
+}
+
+fn draw_rgb_rect_no_present(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    rgba: Rgba8,
+    view_w: u32,
+    view_h: u32,
+) -> bool {
+    if !(width > 0.0 && height > 0.0) {
+        return false;
+    }
+
+    let transform = ViewTransform::from_extent(view_w, view_h);
+    let mut verts = alloc::vec::Vec::with_capacity(6 * RGB_VERTEX_SIZE);
+    push_rgb_quad_px(&mut verts, transform, x, y, x + width, y + height, rgba);
+    let rc = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+            verts.as_ptr(),
+            verts.len(),
+        )
+    };
+    rc == 0
+}
+
+fn draw_hosted_surface_tiles(
+    state: &Ui2State,
+    window: &Ui2Window,
+    content: Ui2Rect,
+    snapshot: Option<UiHostedSurfaceState>,
+) -> bool {
+    let viewport_w = snapshot
+        .map(|it| it.viewport_width.max(1))
+        .unwrap_or_else(|| round_to_u32(content.w, 1));
+    let viewport_h = snapshot
+        .map(|it| it.viewport_height.max(1))
+        .unwrap_or_else(|| round_to_u32(content.h, 1));
+    let scroll_x = snapshot
+        .as_ref()
+        .map(normalized_hosted_browser_scroll_x)
+        .unwrap_or(0);
+    let scroll_y = snapshot
+        .as_ref()
+        .map(normalized_hosted_browser_scroll)
+        .unwrap_or(0);
+    let vis_x0 = i64::from(scroll_x);
+    let vis_y0 = i64::from(scroll_y);
+    let vis_x1 = vis_x0.saturating_add(i64::from(viewport_w));
+    let vis_y1 = vis_y0.saturating_add(i64::from(viewport_h));
+    let scale_x = content.w / viewport_w.max(1) as f32;
+    let scale_y = content.h / viewport_h.max(1) as f32;
+    let mut drew_any = false;
+
+    let bg = window.hosted_surface_bg_rgba;
+    if bg[3] != 0 {
+        drew_any |= draw_rgb_rect_no_present(
+            content.x,
+            content.y,
+            content.w,
+            content.h,
+            Rgba8::new(bg[0], bg[1], bg[2], modulate_alpha(bg[3], window.alpha)),
+            state.view_w,
+            state.view_h,
+        );
+    }
+
+    for tile in &window.hosted_surface_tiles {
+        if tile.tex_id == 0 || tile.width == 0 || tile.height == 0 {
+            continue;
+        }
+        if !texture_is_drawable(tile.tex_id) {
+            continue;
+        }
+
+        let tile_x0 = i64::from(tile.x);
+        let tile_y0 = i64::from(tile.y);
+        let tile_x1 = tile_x0.saturating_add(i64::from(tile.width));
+        let tile_y1 = tile_y0.saturating_add(i64::from(tile.height));
+        let clip_x0 = tile_x0.max(vis_x0);
+        let clip_y0 = tile_y0.max(vis_y0);
+        let clip_x1 = tile_x1.min(vis_x1);
+        let clip_y1 = tile_y1.min(vis_y1);
+        if clip_x0 >= clip_x1 || clip_y0 >= clip_y1 {
+            continue;
+        }
+
+        let clipped_w = (clip_x1 - clip_x0) as f32;
+        let clipped_h = (clip_y1 - clip_y0) as f32;
+        let draw_x = content.x + (clip_x0 - vis_x0) as f32 * scale_x;
+        let draw_y = content.y + (clip_y0 - vis_y0) as f32 * scale_y;
+        let draw_w = clipped_w * scale_x;
+        let draw_h = clipped_h * scale_y;
+        let u0 = (clip_x0 - tile_x0) as f32 / tile.width as f32;
+        let v0 = (clip_y0 - tile_y0) as f32 / tile.height as f32;
+        let u1 = (clip_x1 - tile_x0) as f32 / tile.width as f32;
+        let v1 = (clip_y1 - tile_y0) as f32 / tile.height as f32;
+        drew_any |= draw_texture_rect_uv_no_present(
+            tile.tex_id,
+            draw_x,
+            draw_y,
+            draw_w,
+            draw_h,
+            u0,
+            v0,
+            u1,
+            v1,
+            state.view_w,
+            state.view_h,
+            tile.blend_enabled,
+            window.alpha,
+        );
+    }
+
+    drew_any
 }
 
 #[inline]
@@ -1680,20 +1847,64 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
         }
         Ui2WindowKind::HostedSurface => {
             if let Some(content) = content_rect {
+                if !window.hosted_surface_tiles.is_empty() {
+                    let texture_started_at = Instant::now();
+                    let drew = draw_hosted_surface_tiles(
+                        state,
+                        window,
+                        content,
+                        window_scroll_snapshot(window),
+                    );
+                    if drew {
+                        return Ui2WindowDrawTiming {
+                            chrome_ms,
+                            texture_ms: elapsed_ms_since(texture_started_at),
+                            placeholder_ms: 0,
+                            content_path: "surface-tiles",
+                        };
+                    }
+                }
                 let texture_drawable = texture_is_drawable(window.content_tex_id);
                 if texture_drawable {
                     let texture_started_at = Instant::now();
-                    if draw_texture_rect_no_present(
-                        window.content_tex_id,
-                        content.x,
-                        content.y,
-                        content.w,
-                        content.h,
-                        state.view_w,
-                        state.view_h,
-                        window.content_tex_blend,
-                        window.alpha,
-                    ) {
+                    let drew = if let Some(snapshot) = window_scroll_snapshot(window) {
+                        let content_w = snapshot.content_width.max(1);
+                        let content_h = snapshot.content_height.max(1);
+                        let viewport_w = snapshot.viewport_width.max(1);
+                        let viewport_h = snapshot.viewport_height.max(1);
+                        let scroll_x = normalized_hosted_browser_scroll_x(&snapshot);
+                        let scroll_y = normalized_hosted_browser_scroll(&snapshot);
+                        draw_texture_rect_uv_no_present(
+                            window.content_tex_id,
+                            content.x,
+                            content.y,
+                            content.w,
+                            content.h,
+                            (scroll_x as f32 / content_w as f32).clamp(0.0, 1.0),
+                            (scroll_y as f32 / content_h as f32).clamp(0.0, 1.0),
+                            ((scroll_x.saturating_add(viewport_w)) as f32 / content_w as f32)
+                                .clamp(0.0, 1.0),
+                            ((scroll_y.saturating_add(viewport_h)) as f32 / content_h as f32)
+                                .clamp(0.0, 1.0),
+                            state.view_w,
+                            state.view_h,
+                            window.content_tex_blend,
+                            window.alpha,
+                        )
+                    } else {
+                        draw_texture_rect_no_present(
+                            window.content_tex_id,
+                            content.x,
+                            content.y,
+                            content.w,
+                            content.h,
+                            state.view_w,
+                            state.view_h,
+                            window.content_tex_blend,
+                            window.alpha,
+                        )
+                    };
+                    if drew {
                         return Ui2WindowDrawTiming {
                             chrome_ms,
                             texture_ms: elapsed_ms_since(texture_started_at),

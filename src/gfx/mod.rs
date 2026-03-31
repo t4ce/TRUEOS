@@ -117,7 +117,8 @@ fn finalize_backend_init() {
     }
 
     #[cfg(feature = "gfx_virgl")]
-    if is_virgl_active()
+    if athlasfont::imba_athlas_enabled()
+        && is_virgl_active()
         && !athlasfont::imba_athlas_png_buckets_uploaded()
         && !athlasfont::ensure_imba_athlas_png_buckets_uploaded()
     {
