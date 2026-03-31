@@ -1,7 +1,7 @@
 /// UDP port ESP32s broadcast on to announce themselves.
 pub const ESP_UDP_BROADCAST_PORT: u16 = 32343;
-/// WebSocket (WebREPL) server port on each ESP32.
-pub const ESP_WEBREPL_PORT: u16 = 21232;
+/// HTTP upload server port on each ESP device.
+pub const ESP_HTTP_UPLOAD_PORT: u16 = 8080;
 pub const LOGTOTCP_TCP_PORT: u16 = 1;
 pub const FTP_SERVER_PORT: u16 = 21;
 pub const FTP_SERVER_PASV_MIN: u16 = 40000;

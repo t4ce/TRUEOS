@@ -216,7 +216,7 @@ run-with-nvme: snipe iso-debug
 	@($(QEMU_ISO_WITH_NVME) & $(SERIAL_CONSOLE_CMD))
 
 # Useful for validating GPT+ESP+Limine stage installation.
-QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
+QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=6 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
 QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
 
 run-installed: snipe iso-debug

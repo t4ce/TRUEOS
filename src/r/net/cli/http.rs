@@ -9,6 +9,19 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
 use v::vnet as api;
 
+fn parse_ipv4_literal(host: &str) -> Option<[u8; 4]> {
+    let mut out = [0u8; 4];
+    let mut parts = host.split('.');
+    for octet in &mut out {
+        let part = parts.next()?;
+        *octet = part.parse::<u8>().ok()?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(out)
+}
+
 #[derive(Clone, Debug)]
 pub struct ParsedHttpUrl {
     pub host: HString<96>,
@@ -264,14 +277,19 @@ pub async fn fetch_http_body(
     .await;
 
     let profile = NetProfile::default();
-    let Ok(ip) = dns::resolve_ipv4_with_profile(
-        parsed.host.as_str(),
-        profile,
-        DnsConfig::for_profile(profile),
-    )
-    .await
-    else {
-        return Err(HttpFetchError::DnsFailed);
+    let ip = if let Some(ip) = parse_ipv4_literal(parsed.host.as_str()) {
+        ip
+    } else {
+        let Ok(ip) = dns::resolve_ipv4_with_profile(
+            parsed.host.as_str(),
+            profile,
+            DnsConfig::for_profile(profile),
+        )
+        .await
+        else {
+            return Err(HttpFetchError::DnsFailed);
+        };
+        ip
     };
 
     let net = loop {
