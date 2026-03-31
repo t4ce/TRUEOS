@@ -200,12 +200,6 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
     let frame_mid_rgba = modulate_rgba_alpha(frame_mid_rgba, window.alpha);
     let frame_right_rgba = modulate_rgba_alpha(frame_right_rgba, window.alpha);
     let body_rgba = (0xFB, 0xFB, 0xF8, window.alpha);
-    let selection_rgba = window
-        .selected_cursor_slots
-        .first()
-        .map(|slot_id| super::ui2_hid::cursor_color(*slot_id))
-        .map(|rgba| modulate_rgba_alpha(rgba, window.alpha))
-        .unwrap_or((0, 0, 0, 0));
     let titleband_h =
         if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
             if window.state == Ui2WindowStateKind::Minimized {
@@ -218,6 +212,20 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         };
     let body_y = rect.y + titleband_h;
     let body_h = (rect.h - titleband_h).max(0.0);
+    if titleband_h > 0.0 {
+        let _ = crate::gfx::lyon::draw_horizontal_four_stop_rect_no_present(
+            rect.x,
+            rect.y,
+            rect.w,
+            titleband_h,
+            frame_mid_rgba,
+            frame_left_rgba,
+            frame_mid_rgba,
+            frame_right_rgba,
+            state.view_w,
+            state.view_h,
+        );
+    }
     if body_h > 0.0 {
         let _ = crate::gfx::lyon::draw_solid_rect_no_present(
             rect.x,
@@ -244,15 +252,36 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         );
     }
     if !window.selected_cursor_slots.is_empty() {
-        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-            rect.x + 1.0,
-            rect.y + 1.0,
-            rect.w - 2.0,
-            2.0,
-            selection_rgba,
-            state.view_w,
-            state.view_h,
-        );
+        let bar_x = rect.x + 1.0;
+        let bar_y = rect.y + 1.0;
+        let bar_w = (rect.w - 2.0).max(0.0);
+        let bar_h = 2.0;
+        let cursor_count = window.selected_cursor_slots.len() as f32;
+        if bar_w > 0.0 && cursor_count > 0.0 {
+            for (idx, slot_id) in window.selected_cursor_slots.iter().enumerate() {
+                let seg_x = bar_x + (bar_w * (idx as f32 / cursor_count));
+                let seg_right = if idx + 1 == window.selected_cursor_slots.len() {
+                    bar_x + bar_w
+                } else {
+                    bar_x + (bar_w * ((idx + 1) as f32 / cursor_count))
+                };
+                let seg_w = (seg_right - seg_x).max(0.0);
+                if seg_w <= 0.0 {
+                    continue;
+                }
+                let selection_rgba =
+                    modulate_rgba_alpha(super::ui2_hid::cursor_color(*slot_id), window.alpha);
+                let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+                    seg_x,
+                    bar_y,
+                    seg_w,
+                    bar_h,
+                    selection_rgba,
+                    state.view_w,
+                    state.view_h,
+                );
+            }
+        }
     }
 
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {

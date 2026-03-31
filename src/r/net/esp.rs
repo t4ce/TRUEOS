@@ -156,6 +156,12 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
     )
     .await
     else {
+        crate::log!(
+            "esp-gate: status fetch failed handle={} url={} timeout_ms={}\n",
+            snapshot.handle.0,
+            url.as_str(),
+            ESP_STATUS_FETCH_TIMEOUT_MS
+        );
         return;
     };
 
@@ -187,9 +193,14 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
 
     let should_upload_default = DEVICE_REGISTRY
         .lock()
-        .take_default_app_upload_request(snapshot.handle, app_exists);
+        .should_upload_default_app(snapshot.handle, app_exists);
     if should_upload_default {
         upload_default_led_app(snapshot).await;
+    } else if app_exists {
+        crate::log!(
+            "esp-gate: default upload skipped handle={} reason=app_exists\n",
+            snapshot.handle.0
+        );
     }
 }
 
@@ -216,6 +227,15 @@ async fn upload_default_led_app(snapshot: &trueos_esp::gate::DeviceSnapshot) {
     )
     .await
     .is_ok();
+
+    if !uploaded {
+        crate::log!(
+            "esp-gate: default upload http failed handle={} url={} timeout_ms={}\n",
+            snapshot.handle.0,
+            upload_url.as_str(),
+            ESP_DEFAULT_UPLOAD_TIMEOUT_MS
+        );
+    }
 
     let ran = if uploaded {
         if let Some(run_url) = iface.run_url() {
