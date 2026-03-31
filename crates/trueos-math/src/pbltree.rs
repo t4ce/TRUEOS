@@ -214,15 +214,8 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
             is_last: true,
         });
 
-        write_ascii_tree(
-            self,
-            root,
-            out,
-            max_nodes,
-            &mut stack,
-            &mut branches,
-            "nodes",
-            |id, w| match &self.nodes[id] {
+        write_ascii_tree(self, root, out, max_nodes, &mut stack, &mut branches, "nodes", |id, w| {
+            match &self.nodes[id] {
                 Node::Internal { keys, children } => {
                     w.write_str("I ")?;
                     write!(w, "keys={} children={}", keys.len(), children.len())?;
@@ -276,8 +269,8 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
                     }
                     Ok(())
                 }
-            },
-        )
+            }
+        })
     }
 
     fn seek_to_first_ge(&self, key: &K) -> (Option<NodeId>, usize) {
@@ -560,10 +553,7 @@ mod tests {
         assert_eq!(t.get(&b"b".to_vec()), Some(&2));
 
         let keys: alloc::vec::Vec<alloc::vec::Vec<u8>> = t.iter().map(|(k, _)| k.clone()).collect();
-        assert_eq!(
-            keys,
-            alloc::vec![b"a".to_vec(), b"aa".to_vec(), b"b".to_vec()]
-        );
+        assert_eq!(keys, alloc::vec![b"a".to_vec(), b"aa".to_vec(), b"b".to_vec()]);
     }
 
     #[test]

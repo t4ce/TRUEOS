@@ -29,19 +29,19 @@ pub mod vled {
 }
 
 pub mod borrow;
-pub mod ffi;
-pub mod vcabi;
 pub mod env;
-pub mod vio;
+pub mod ffi;
+pub mod sync;
+pub mod vcabi;
 pub mod vclock;
 pub mod vfetch;
 pub mod vfs;
 pub mod vgfx;
 pub mod vhttp_srv;
 pub mod vinput;
+pub mod vio;
 pub mod vnet;
 pub mod vnetfs;
-pub mod sync;
-pub mod vui2;
 pub mod vshell;
 pub mod vsys;
+pub mod vui2;

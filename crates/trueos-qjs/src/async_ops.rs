@@ -389,8 +389,7 @@ unsafe fn resolve_image_op(ctx: *mut qjs::JSContext, op: &PendingImageOp) {
     let obj = qjs::JS_NewObject(ctx);
     let _ = qjs::jsbind::set_prop(ctx, obj, b"texId\0", qjs::JS_NewFloat64(ctx, op.tex_id as f64));
     let _ = qjs::jsbind::set_prop(ctx, obj, b"width\0", qjs::JS_NewFloat64(ctx, op.width as f64));
-    let _ =
-        qjs::jsbind::set_prop(ctx, obj, b"height\0", qjs::JS_NewFloat64(ctx, op.height as f64));
+    let _ = qjs::jsbind::set_prop(ctx, obj, b"height\0", qjs::JS_NewFloat64(ctx, op.height as f64));
     let _ = qjs::jsbind::set_str_prop(ctx, obj, b"mime\0", op.mime.as_str());
     let _ = qjs::jsbind::call1(ctx, op.resolve, qjs::JSValue::undefined(), obj);
     qjs::js_free_value(ctx, obj);
@@ -653,7 +652,7 @@ unsafe fn pump_net_fetch_bytes(ctx: *mut qjs::JSContext) -> bool {
             continue;
         }
 
-        let Some( op) = take_pending(ctx, op_id) else {
+        let Some(op) = take_pending(ctx, op_id) else {
             let _ = async_fs::discard(op_id);
             continue;
         };
@@ -722,7 +721,8 @@ unsafe fn pump_net_fetch_module(ctx: *mut qjs::JSContext) -> bool {
         }
 
         let _ = async_fs::read_result(op_id, core::ptr::null_mut(), 0);
-        let spec = qjs::JS_NewStringLen(ctx, op.aux.as_ptr() as *const core::ffi::c_char, op.aux.len());
+        let spec =
+            qjs::JS_NewStringLen(ctx, op.aux.as_ptr() as *const core::ffi::c_char, op.aux.len());
         resolve_with_value(ctx, &op, spec);
         qjs::js_free_value(ctx, op.resolve);
         qjs::js_free_value(ctx, op.reject);
@@ -906,10 +906,7 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
         crate::cmd_stream::release_managed_tex_id(op.tex_id);
     }
 
-    let discard_ids = COMPLETED
-        .lock()
-        .remove(&(ctx as usize))
-        .unwrap_or_default();
+    let discard_ids = COMPLETED.lock().remove(&(ctx as usize)).unwrap_or_default();
     for op_id in discard_ids {
         let _ = async_fs::discard(op_id);
     }

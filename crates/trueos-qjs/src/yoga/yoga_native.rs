@@ -213,10 +213,7 @@ pub(crate) unsafe fn try_create_native_module(
         argc: i32,
         argv: *const qjs::JSValueConst,
     ) -> qjs::JSValue {
-        js_u32(
-            ctx,
-            backend::node_get_child_count(unsafe { arg_u32(ctx, argc, argv, 0) }),
-        )
+        js_u32(ctx, backend::node_get_child_count(unsafe { arg_u32(ctx, argc, argv, 0) }))
     }
 
     unsafe extern "C" fn yoga_node_set_i32(
@@ -423,10 +420,7 @@ pub(crate) unsafe fn try_create_native_module(
         argc: i32,
         argv: *const qjs::JSValueConst,
     ) -> qjs::JSValue {
-        js_f64(
-            ctx,
-            backend::node_get_computed_left(unsafe { arg_u32(ctx, argc, argv, 0) }) as f64,
-        )
+        js_f64(ctx, backend::node_get_computed_left(unsafe { arg_u32(ctx, argc, argv, 0) }) as f64)
     }
 
     unsafe extern "C" fn yoga_node_get_computed_top(
@@ -435,10 +429,7 @@ pub(crate) unsafe fn try_create_native_module(
         argc: i32,
         argv: *const qjs::JSValueConst,
     ) -> qjs::JSValue {
-        js_f64(
-            ctx,
-            backend::node_get_computed_top(unsafe { arg_u32(ctx, argc, argv, 0) }) as f64,
-        )
+        js_f64(ctx, backend::node_get_computed_top(unsafe { arg_u32(ctx, argc, argv, 0) }) as f64)
     }
 
     unsafe extern "C" fn yoga_node_get_computed_width(
@@ -447,10 +438,7 @@ pub(crate) unsafe fn try_create_native_module(
         argc: i32,
         argv: *const qjs::JSValueConst,
     ) -> qjs::JSValue {
-        js_f64(
-            ctx,
-            backend::node_get_computed_width(unsafe { arg_u32(ctx, argc, argv, 0) }) as f64,
-        )
+        js_f64(ctx, backend::node_get_computed_width(unsafe { arg_u32(ctx, argc, argv, 0) }) as f64)
     }
 
     unsafe extern "C" fn yoga_node_get_computed_height(
@@ -512,11 +500,7 @@ pub(crate) unsafe fn try_create_native_module(
 
         export_fn!("configCreate", yoga_config_create, 0);
         export_fn!("configFree", yoga_config_free, 1);
-        export_fn!(
-            "configSetUseWebDefaults",
-            yoga_config_set_use_web_defaults,
-            2
-        );
+        export_fn!("configSetUseWebDefaults", yoga_config_set_use_web_defaults, 2);
         export_fn!("nodeCreate", yoga_node_create, 1);
         export_fn!("nodeFreeRecursive", yoga_node_free_recursive, 1);
         export_fn!("nodeInsertChild", yoga_node_insert_child, 3);

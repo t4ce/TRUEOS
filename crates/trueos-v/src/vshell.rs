@@ -25,7 +25,9 @@ pub fn shell2_print_targeted_line(target_mask: u32, bytes: &[u8]) -> usize {
     if bytes.is_empty() {
         return 0;
     }
-    unsafe { vcabi::trueos_cabi_shell2_print_targeted_line(target_mask, bytes.as_ptr(), bytes.len()) }
+    unsafe {
+        vcabi::trueos_cabi_shell2_print_targeted_line(target_mask, bytes.as_ptr(), bytes.len())
+    }
 }
 
 #[inline]
@@ -119,4 +121,3 @@ pub fn shell_qjs_read_byte() -> Option<u8> {
         None
     }
 }
-

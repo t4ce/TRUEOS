@@ -64,10 +64,7 @@ Set TRUEOS_QJS_QUICKJS_DIR=/path/to/quickjs or run with network access."
         .arg(&checkout_dir));
 
     if !checkout_dir.join("quickjs.c").is_file() {
-        panic!(
-            "Fetched QuickJS but did not find quickjs.c at {}",
-            checkout_dir.display()
-        );
+        panic!("Fetched QuickJS but did not find quickjs.c at {}", checkout_dir.display());
     }
 
     checkout_dir
@@ -454,9 +451,7 @@ fn write_embedded_table(out_embedded: &Path, entries: &[(String, PathBuf, Option
         s.push_str(&format!("        src: include_bytes!(\"{src_lit}\"),\n"));
         if let Some(qjsc_path) = qjsc_path {
             let qjsc_lit = qjsc_path.to_string_lossy().replace('\\', "/");
-            s.push_str(&format!(
-                "        bytecode: include_bytes!(\"{qjsc_lit}\"),\n"
-            ));
+            s.push_str(&format!("        bytecode: include_bytes!(\"{qjsc_lit}\"),\n"));
         } else {
             s.push_str("        bytecode: b\"\",\n");
         }
@@ -586,18 +581,9 @@ fn main() {
     if enable_yoga_native {
         println!("cargo:rerun-if-changed={}", yoga_cabi.display());
     }
-    println!(
-        "cargo:rerun-if-changed={}",
-        quickjs_dir.join("quickjs.h").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        quickjs_dir.join("libregexp.h").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        quickjs_dir.join("libunicode.h").display()
-    );
+    println!("cargo:rerun-if-changed={}", quickjs_dir.join("quickjs.h").display());
+    println!("cargo:rerun-if-changed={}", quickjs_dir.join("libregexp.h").display());
+    println!("cargo:rerun-if-changed={}", quickjs_dir.join("libunicode.h").display());
 
     let target = env::var("TARGET").unwrap_or_default();
     let mut build = cc::Build::new();

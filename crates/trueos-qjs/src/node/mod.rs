@@ -93,12 +93,7 @@ unsafe fn ensure_runtime_profile_marker(ctx: *mut qjs::JSContext, profile: Runti
     if global.is_exception() {
         return;
     }
-    let _ = qjs::jsbind::set_str_prop(
-        ctx,
-        global,
-        b"__trueosRuntimeProfile\0",
-        profile.as_str(),
-    );
+    let _ = qjs::jsbind::set_str_prop(ctx, global, b"__trueosRuntimeProfile\0", profile.as_str());
     qjs::js_free_value(ctx, global);
 }
 
@@ -285,13 +280,8 @@ unsafe extern "C" fn trueos_fetch_text(
     let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
     if argv.is_null() || argc <= 0 {
         let code = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
         return promise;
@@ -302,13 +292,8 @@ unsafe extern "C" fn trueos_fetch_text(
     let url_c = qjs::JS_ToCStringLen2(ctx, &mut url_len as *mut usize, args[0], 0);
     if url_c.is_null() {
         let code = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
         return promise;
@@ -349,10 +334,7 @@ unsafe extern "C" fn trueos_fetch_text(
         if bearer_c.is_null() {
             None
         } else {
-            Some(core::slice::from_raw_parts(
-                bearer_c as *const u8,
-                bearer_len,
-            ))
+            Some(core::slice::from_raw_parts(bearer_c as *const u8, bearer_len))
         }
     } else {
         None
@@ -463,13 +445,8 @@ unsafe extern "C" fn trueos_fetch_bytes(
     let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
     if argv.is_null() || argc <= 0 {
         let code = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
         return promise;
@@ -480,13 +457,8 @@ unsafe extern "C" fn trueos_fetch_bytes(
     let url_c = qjs::JS_ToCStringLen2(ctx, &mut url_len as *mut usize, args[0], 0);
     if url_c.is_null() {
         let code = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
         return promise;
@@ -577,13 +549,8 @@ unsafe extern "C" fn trueos_resolve_ready_image_texture(
     let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
     if argv.is_null() || argc <= 0 {
         let code = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
         return promise;
@@ -594,13 +561,8 @@ unsafe extern "C" fn trueos_resolve_ready_image_texture(
     let url_c = qjs::JS_ToCStringLen2(ctx, &mut url_len as *mut usize, args[0], 0);
     if url_c.is_null() {
         let code = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
         return promise;
@@ -610,13 +572,8 @@ unsafe extern "C" fn trueos_resolve_ready_image_texture(
     let tex_id = qjs::cmd_stream::alloc_managed_tex_id();
     if tex_id == 0 {
         let code = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
         qjs::JS_FreeCString(ctx, url_c);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
@@ -711,13 +668,8 @@ unsafe extern "C" fn trueos_prefetch_module(
     let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
     if argv.is_null() || argc <= 0 {
         let code = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
         return promise;
@@ -728,13 +680,8 @@ unsafe extern "C" fn trueos_prefetch_module(
     let spec_c = qjs::JS_ToCStringLen2(ctx, &mut spec_len as *mut usize, args[0], 0);
     if spec_c.is_null() {
         let code = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
         return promise;
@@ -760,30 +707,22 @@ unsafe extern "C" fn trueos_prefetch_module(
 
     if normalized_ptr.is_null() {
         let code = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
         return promise;
     }
 
-    let normalized = core::ffi::CStr::from_ptr(normalized_ptr).to_bytes().to_vec();
+    let normalized = core::ffi::CStr::from_ptr(normalized_ptr)
+        .to_bytes()
+        .to_vec();
     qjs::js_free(ctx, normalized_ptr as *mut c_void);
 
     if !qjs::trueos_module_loader::is_url_specifier(&normalized) {
         let out = qjs::JS_NewStringLen(ctx, normalized.as_ptr() as *const c_char, normalized.len());
-        let _ = qjs::JS_Call(
-            ctx,
-            resolve,
-            qjs::JSValue::undefined(),
-            1,
-            &out as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, resolve, qjs::JSValue::undefined(), 1, &out as *const qjs::JSValue);
         qjs::js_free_value(ctx, out);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
@@ -794,13 +733,8 @@ unsafe extern "C" fn trueos_prefetch_module(
     if qjs::trueos_module_loader::has_embedded_module(&cache_path) || read_fs_len(&cache_path) >= 0
     {
         let out = qjs::JS_NewStringLen(ctx, normalized.as_ptr() as *const c_char, normalized.len());
-        let _ = qjs::JS_Call(
-            ctx,
-            resolve,
-            qjs::JSValue::undefined(),
-            1,
-            &out as *const qjs::JSValue,
-        );
+        let _ =
+            qjs::JS_Call(ctx, resolve, qjs::JSValue::undefined(), 1, &out as *const qjs::JSValue);
         qjs::js_free_value(ctx, out);
         qjs::js_free_value(ctx, resolve);
         qjs::js_free_value(ctx, reject);
@@ -1380,11 +1314,8 @@ unsafe extern "C" fn intl_resolved_options(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    let ro = qjs::JS_GetPropertyStr(
-        ctx,
-        this_val,
-        b"__resolvedOptions\0".as_ptr() as *const c_char,
-    );
+    let ro =
+        qjs::JS_GetPropertyStr(ctx, this_val, b"__resolvedOptions\0".as_ptr() as *const c_char);
     if ro.is_exception() || ro.tag == qjs::JS_TAG_UNDEFINED || ro.tag == qjs::JS_TAG_NULL {
         qjs::js_free_value(ctx, ro);
         return qjs::JS_NewObject(ctx);
@@ -1439,18 +1370,8 @@ unsafe fn make_formatter_object(
         0,
     );
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"format\0".as_ptr() as *const c_char, format_fn);
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"__resolvedOptions\0".as_ptr() as *const c_char,
-        ro,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"resolvedOptions\0".as_ptr() as *const c_char,
-        ro_fn,
-    );
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"__resolvedOptions\0".as_ptr() as *const c_char, ro);
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"resolvedOptions\0".as_ptr() as *const c_char, ro_fn);
     obj
 }
 
@@ -1495,11 +1416,8 @@ unsafe extern "C" fn intl_get_canonical_locales(
         return out;
     }
     let profile = locale_profile_from_arg0(ctx, argc, argv);
-    let locale = qjs::JS_NewStringLen(
-        ctx,
-        profile.code.as_ptr() as *const c_char,
-        profile.code.len(),
-    );
+    let locale =
+        qjs::JS_NewStringLen(ctx, profile.code.as_ptr() as *const c_char, profile.code.len());
     let _ = qjs::JS_SetPropertyUint32(ctx, out, 0, locale);
     out
 }
@@ -1515,11 +1433,7 @@ unsafe extern "C" fn intl_locale_ctor(
         return obj;
     }
     let profile = locale_profile_from_arg0(ctx, argc, argv);
-    let val = qjs::JS_NewStringLen(
-        ctx,
-        profile.code.as_ptr() as *const c_char,
-        profile.code.len(),
-    );
+    let val = qjs::JS_NewStringLen(ctx, profile.code.as_ptr() as *const c_char, profile.code.len());
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"baseName\0".as_ptr() as *const c_char, val);
     obj
 }
@@ -1622,54 +1536,28 @@ unsafe fn ensure_global_intl(ctx: *mut qjs::JSContext) {
         0,
     );
 
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        intl,
-        b"NumberFormat\0".as_ptr() as *const c_char,
-        number_ctor,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        intl,
-        b"DateTimeFormat\0".as_ptr() as *const c_char,
-        dt_ctor,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        intl,
-        b"Collator\0".as_ptr() as *const c_char,
-        collator_ctor,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        intl,
-        b"PluralRules\0".as_ptr() as *const c_char,
-        plural_ctor,
-    );
+    let _ =
+        qjs::JS_SetPropertyStr(ctx, intl, b"NumberFormat\0".as_ptr() as *const c_char, number_ctor);
+    let _ =
+        qjs::JS_SetPropertyStr(ctx, intl, b"DateTimeFormat\0".as_ptr() as *const c_char, dt_ctor);
+    let _ =
+        qjs::JS_SetPropertyStr(ctx, intl, b"Collator\0".as_ptr() as *const c_char, collator_ctor);
+    let _ =
+        qjs::JS_SetPropertyStr(ctx, intl, b"PluralRules\0".as_ptr() as *const c_char, plural_ctor);
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         intl,
         b"RelativeTimeFormat\0".as_ptr() as *const c_char,
         rtf_ctor,
     );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        intl,
-        b"ListFormat\0".as_ptr() as *const c_char,
-        list_ctor,
-    );
+    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"ListFormat\0".as_ptr() as *const c_char, list_ctor);
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         intl,
         b"DisplayNames\0".as_ptr() as *const c_char,
         display_ctor,
     );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        intl,
-        b"Locale\0".as_ptr() as *const c_char,
-        locale_ctor,
-    );
+    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"Locale\0".as_ptr() as *const c_char, locale_ctor);
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         intl,

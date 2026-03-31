@@ -186,14 +186,7 @@ pub fn render_mandelbrot(buffer: &mut [u8], width: usize, height: usize, max_ite
     }
 
     render_mandelbrot_bw_view_f128(
-        buffer,
-        width,
-        height,
-        max_iter,
-        -1.0f128,
-        1.0f128,
-        -1.0f128,
-        1.0f128,
+        buffer, width, height, max_iter, -1.0f128, 1.0f128, -1.0f128, 1.0f128,
     );
 }
 
@@ -210,14 +203,7 @@ pub fn render_mandelbrot_rgb32(buffer: &mut [u32], width: usize, height: usize, 
     }
 
     render_mandelbrot_rgb32_view_f128(
-        buffer,
-        width,
-        height,
-        max_iter,
-        -1.0f128,
-        1.0f128,
-        -1.0f128,
-        1.0f128,
+        buffer, width, height, max_iter, -1.0f128, 1.0f128, -1.0f128, 1.0f128,
     );
 }
 
@@ -270,13 +256,7 @@ mod tests {
         let center_index = (HEIGHT / 2) * WIDTH + (WIDTH / 2);
         let corner_index = 0;
 
-        assert_eq!(
-            buffer[center_index], 0,
-            "Center of the set should stay black"
-        );
-        assert_eq!(
-            buffer[corner_index], 0xFF,
-            "Corner should escape quickly and be white"
-        );
+        assert_eq!(buffer[center_index], 0, "Center of the set should stay black");
+        assert_eq!(buffer[corner_index], 0xFF, "Corner should escape quickly and be white");
     }
 }

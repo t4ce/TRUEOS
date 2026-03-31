@@ -81,4 +81,3 @@ unsafe extern "C" {
     /// the vmcall I/O bridge using the already-live host heap and time driver.
     fn trueos_hv_guest_shell_run() -> !;
 }
-

@@ -293,10 +293,7 @@ impl ShellApp {
                         io,
                         row,
                         col,
-                        format_args!(
-                            "\x1b[5;1;38;2;{};{};{}m██\x1b[0m",
-                            color.r, color.g, color.b
-                        ),
+                        format_args!("\x1b[5;1;38;2;{};{};{}m██\x1b[0m", color.r, color.g, color.b),
                     );
                     continue;
                 }
@@ -441,7 +438,10 @@ impl ShellApp {
 
     #[inline]
     fn write_at(&self, io: &dyn ShellIo, row: usize, col: usize, text: &str) {
-        let abs_row = self.viewport_top_row.saturating_add(row.max(1)).saturating_sub(1);
+        let abs_row = self
+            .viewport_top_row
+            .saturating_add(row.max(1))
+            .saturating_sub(1);
         io.write_fmt(format_args!("\x1b[{};{}H", abs_row, col.max(1)));
         io.write_str(text);
     }
@@ -454,7 +454,10 @@ impl ShellApp {
         col: usize,
         args: core::fmt::Arguments<'_>,
     ) {
-        let abs_row = self.viewport_top_row.saturating_add(row.max(1)).saturating_sub(1);
+        let abs_row = self
+            .viewport_top_row
+            .saturating_add(row.max(1))
+            .saturating_sub(1);
         io.write_fmt(format_args!("\x1b[{};{}H", abs_row, col.max(1)));
         io.write_fmt(args);
     }
