@@ -18,6 +18,7 @@ mod ui2_win;
 
 pub(crate) use self::ui2_font::*;
 use self::ui2_hid::*;
+pub(crate) use self::ui2_hid::{Ui2CursorColor, cursor_color, cursor_color_rgba8};
 pub(crate) use self::ui2_hit::ui2_hit_task;
 use self::ui2_hit::*;
 use self::ui2_hosted::*;
