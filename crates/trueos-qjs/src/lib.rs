@@ -62,58 +62,6 @@ pub mod lightningcss_native;
 #[cfg(feature = "trueos")]
 pub mod jsbind;
 
-#[cfg(feature = "trueos")]
-#[derive(Clone, Copy)]
-pub struct ImbaAthlasView<'a> {
-    pub alpha: &'a [u8],
-    pub index: &'a [u16],
-    pub widths: &'a [u8],
-    pub width: u32,
-    pub height: u32,
-    pub cell_w: u32,
-    pub cell_h: u32,
-    pub grid_w: u32,
-    pub grid_h: u32,
-}
-
-#[cfg(feature = "trueos")]
-pub type ImbaAthlasSmallProvider = fn() -> ImbaAthlasView<'static>;
-#[cfg(feature = "trueos")]
-pub type ImbaAthlasLargeProvider = fn() -> ImbaAthlasView<'static>;
-
-#[cfg(feature = "trueos")]
-static IMBA_ATHLAS_SMALL_PROVIDER: spin::Mutex<Option<ImbaAthlasSmallProvider>> =
-    spin::Mutex::new(None);
-#[cfg(feature = "trueos")]
-static IMBA_ATHLAS_LARGE_PROVIDER: spin::Mutex<Option<ImbaAthlasLargeProvider>> =
-    spin::Mutex::new(None);
-
-#[cfg(feature = "trueos")]
-pub fn set_imba_athlas_small_provider(provider: ImbaAthlasSmallProvider) {
-    *IMBA_ATHLAS_SMALL_PROVIDER.lock() = Some(provider);
-}
-#[cfg(feature = "trueos")]
-pub fn set_imba_athlas_large_provider(provider: ImbaAthlasLargeProvider) {
-    *IMBA_ATHLAS_LARGE_PROVIDER.lock() = Some(provider);
-}
-
-#[cfg(feature = "trueos")]
-pub fn imba_athlas_small_view() -> Option<ImbaAthlasView<'static>> {
-    IMBA_ATHLAS_SMALL_PROVIDER
-        .lock()
-        .as_ref()
-        .copied()
-        .map(|f| f())
-}
-#[cfg(feature = "trueos")]
-pub fn imba_athlas_large_view() -> Option<ImbaAthlasView<'static>> {
-    IMBA_ATHLAS_LARGE_PROVIDER
-        .lock()
-        .as_ref()
-        .copied()
-        .map(|f| f())
-}
-
 #[repr(C)]
 pub struct JSRuntime {
     _private: [u8; 0],
