@@ -400,7 +400,7 @@ fn forward_cursor_wheel_to_selected_window(
     let Some(window) = state.windows.iter().find(|window| window.id == window_id) else {
         return false;
     };
-    if !window.visible {
+    if !window_content_participates_in_composition(window) {
         return false;
     }
     match window.kind {
@@ -473,6 +473,7 @@ fn selected_window_id_for_keyboard(state: &Ui2State) -> Option<u32> {
     for idx in sorted_window_indices(state).into_iter().rev() {
         let window = &state.windows[idx];
         if !window.visible
+            || window.composition_locked
             || window.state == Ui2WindowStateKind::Minimized
             || window.selected_cursor_slots.is_empty()
         {
@@ -1011,11 +1012,9 @@ fn update_scroll_pan_for_cursor(
         return false;
     }
     let drag = state.scroll_pan_drags[drag_idx];
-    let Some(window) = state
-        .windows
-        .iter()
-        .find(|window| window.id == drag.window_id && window_is_renderable(window))
-    else {
+    let Some(window) = state.windows.iter().find(|window| {
+        window.id == drag.window_id && window_content_participates_in_composition(window)
+    }) else {
         state.scroll_pan_drags.remove(drag_idx);
         return false;
     };
