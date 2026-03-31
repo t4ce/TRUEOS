@@ -5,11 +5,11 @@ use super::*;
 #[inline]
 fn hosted_browser_scene_font_px(font_size_px: u32, fallback_px: f32) -> f32 {
     let px = font_size_px as f32;
-    if px.is_finite() && px >= 1.0 {
+    ui2_font_native_line_height_px(ui2_font_pick_tier_for_px(if px.is_finite() && px >= 1.0 {
         px
     } else {
         fallback_px.max(1.0)
-    }
+    })) as f32
 }
 
 #[inline]
@@ -42,7 +42,7 @@ fn draw_hosted_browser_text_scene(state: &Ui2State, window: &Ui2Window, content:
 
     let pad_x = 10.0f32;
     let pad_y = 8.0f32;
-    let default_text_px_h = 7.0f32;
+    let default_text_px_h = ui2_font_native_line_height_px(Ui2FontTier::OneX) as f32;
     let visible_bottom = content.y + content.h - pad_y;
     let scroll_x = surface_state.scroll_x as f32;
     let scroll_y = surface_state.scroll_y as f32;

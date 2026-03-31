@@ -1,7 +1,10 @@
 use crate::gfx::althlasfont;
 use crate::gfx::althlasfont::athlasmetrics::{self, ATHLAS_FONT_INFO};
+use trueos_gfx_core::Rgba8;
 
 use super::draw_texture_rect_uv_no_present;
+
+const UI2_FONT_DEFAULT_RGBA: Rgba8 = Rgba8::new(0, 0, 0, 255);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,7 +23,7 @@ impl Ui2FontTier {
     }
 
     #[inline]
-    pub(crate) const fn native_cell_height_px(self) -> u16 {
+    pub(crate) const fn atlas_cell_height_px(self) -> u16 {
         match self {
             Self::Half => 32,
             Self::OneX => 64,
@@ -29,8 +32,37 @@ impl Ui2FontTier {
     }
 
     #[inline]
-    pub(crate) const fn native_line_height_px(self) -> u16 {
-        self.native_cell_height_px()
+    pub(crate) const fn atlas_line_height_px(self) -> u16 {
+        self.atlas_cell_height_px()
+    }
+
+    #[inline]
+    pub(crate) const fn display_cell_height_px(self) -> u16 {
+        match self {
+            Self::Half => 8,
+            Self::OneX => 16,
+            Self::ThreeX => 48,
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn display_line_height_px(self) -> u16 {
+        self.display_cell_height_px()
+    }
+
+    #[inline]
+    pub(crate) const fn display_scale_num(self) -> u16 {
+        self.display_line_height_px()
+    }
+
+    #[inline]
+    pub(crate) const fn display_scale_den(self) -> u16 {
+        self.atlas_line_height_px()
+    }
+
+    #[inline]
+    pub(crate) fn display_scale(self) -> f32 {
+        self.display_scale_num() as f32 / self.display_scale_den() as f32
     }
 
     #[inline]
@@ -110,23 +142,22 @@ pub(crate) fn ui2_font_pick_tier_for_px(px_h: f32) -> Ui2FontTier {
 
     let target = px_h.max(1.0);
 
-    // Prefer a tier whose native line height is >= target to avoid upscaling.
-    // Choose the smallest such tier to minimize downscaling. If none are
-    // large enough, fall back to the largest tier.
-    let half_h = Ui2FontTier::Half.native_line_height_px() as f32;
-    let onex_h = Ui2FontTier::OneX.native_line_height_px() as f32;
-    if target <= half_h {
-        Ui2FontTier::Half
-    } else if target <= onex_h {
-        Ui2FontTier::OneX
-    } else {
-        Ui2FontTier::ThreeX
+    let mut best_tier = Ui2FontTier::OneX;
+    let mut best_distance = (target - Ui2FontTier::OneX.display_line_height_px() as f32).abs();
+    for tier in [Ui2FontTier::Half, Ui2FontTier::ThreeX] {
+        let distance = (target - tier.display_line_height_px() as f32).abs();
+        if distance < best_distance {
+            best_tier = tier;
+            best_distance = distance;
+        }
     }
+
+    best_tier
 }
 
 #[inline]
 pub(crate) fn ui2_font_native_line_height_px(tier: Ui2FontTier) -> u16 {
-    tier.native_line_height_px()
+    tier.display_line_height_px()
 }
 
 #[inline]
@@ -145,7 +176,7 @@ pub(crate) fn ui2_font_resolve_glyph(tier: Ui2FontTier, ch: char) -> Option<Ui2F
         ch,
         tier,
         advance_px: glyph.region.src_w.max(1),
-        line_height_px: glyph.region.src_h.max(tier.native_line_height_px()),
+        line_height_px: glyph.region.src_h.max(tier.atlas_line_height_px()),
         ready: glyph.ready,
         ready_seq: glyph.ready_seq,
         texture: glyph.texture,
@@ -160,6 +191,8 @@ fn ui2_font_resolve_glyph_or_fallback(tier: Ui2FontTier, ch: char) -> Option<Ui2
 
 pub(crate) fn ui2_font_measure_text(tier: Ui2FontTier, text: &str) -> Ui2FontTextMetrics {
     let line_height_px = ui2_font_native_line_height_px(tier);
+    let scale_num = u32::from(tier.display_scale_num());
+    let scale_den = u32::from(tier.display_scale_den());
     if text.is_empty() {
         return Ui2FontTextMetrics {
             width_px: 0,
@@ -185,7 +218,9 @@ pub(crate) fn ui2_font_measure_text(tier: Ui2FontTier, text: &str) -> Ui2FontTex
         let advance_px = ui2_font_resolve_glyph_or_fallback(tier, ch)
             .map(|glyph| glyph.advance_px)
             .unwrap_or_else(|| fallback_advance_px(tier, ch));
-        line_width = line_width.saturating_add(u32::from(advance_px));
+        let display_advance_px = ((u32::from(advance_px) * scale_num) + (scale_den / 2)) / scale_den;
+        let display_advance_px = display_advance_px.max(1);
+        line_width = line_width.saturating_add(display_advance_px);
     }
 
     max_line_width = max_line_width.max(line_width);
@@ -214,8 +249,7 @@ pub(crate) fn ui2_font_draw_text_line_no_present(
     }
 
     let tier = ui2_font_pick_tier_for_px(px_h);
-    let native_line_h = tier.native_line_height_px().max(1) as f32;
-    let scale = px_h / native_line_h;
+    let scale = tier.display_scale();
     if !(scale.is_finite() && scale > 0.0) {
         return false;
     }
@@ -247,7 +281,7 @@ pub(crate) fn ui2_font_draw_text_line_no_present(
                 let atlas_h = f32::from(glyph.region.atlas_h.max(1));
                 let src_x = f32::from(glyph.region.src_x);
                 let src_y = f32::from(glyph.region.src_y);
-                drew_any |= draw_texture_rect_uv_no_present(
+                drew_any |= ui2_font_draw_glyph_rect_no_present(
                     texture.tex_id,
                     pen_x,
                     y,
@@ -259,7 +293,6 @@ pub(crate) fn ui2_font_draw_text_line_no_present(
                     (src_y + f32::from(glyph.region.src_h)) / atlas_h,
                     view_w,
                     view_h,
-                    true,
                     alpha,
                 );
             }
@@ -271,11 +304,61 @@ pub(crate) fn ui2_font_draw_text_line_no_present(
     drew_any
 }
 
+fn ui2_font_draw_glyph_rect_no_present(
+    tex_id: u32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+    view_w: u32,
+    view_h: u32,
+    alpha: u8,
+) -> bool {
+    if tex_id == 0 || !(width > 0.0 && height > 0.0) {
+        return false;
+    }
+
+    let transform = trueos_gfx_core::ViewTransform::from_extent(view_w, view_h);
+    let mut verts = alloc::vec::Vec::with_capacity(6 * trueos_gfx_core::TEX_VERTEX_SIZE);
+    trueos_gfx_core::push_tex_quad_px(
+        &mut verts,
+        transform,
+        x,
+        y,
+        x + width,
+        y + height,
+        [u0, v0, u1, v1],
+        Rgba8::new(
+            UI2_FONT_DEFAULT_RGBA.r,
+            UI2_FONT_DEFAULT_RGBA.g,
+            UI2_FONT_DEFAULT_RGBA.b,
+            alpha,
+        ),
+    );
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+    let _ = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0)
+    };
+    let rc = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
+            tex_id,
+            verts.as_ptr(),
+            verts.len(),
+        )
+    };
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    rc == 0
+}
+
 #[inline]
 fn fallback_advance_px(tier: Ui2FontTier, ch: char) -> u16 {
     if ch == ' ' {
-        (tier.native_cell_height_px() / 3).max(1)
+        (tier.atlas_cell_height_px() / 3).max(1)
     } else {
-        tier.native_cell_height_px().saturating_div(2).max(1)
+        tier.atlas_cell_height_px().saturating_div(2).max(1)
     }
 }
