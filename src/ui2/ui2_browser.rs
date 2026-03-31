@@ -189,6 +189,28 @@ pub(super) fn draw_hosted_browser_window_content(
     content: Ui2Rect,
     chrome_ms: u64,
 ) -> Ui2WindowDrawTiming {
+    let scene_started_at = Instant::now();
+    if !window.hosted_browser_snapshot.layout.nodes.is_empty()
+        && draw_hosted_browser_layout_scene(state, window, content)
+    {
+        return Ui2WindowDrawTiming {
+            chrome_ms,
+            texture_ms: 0,
+            placeholder_ms: elapsed_ms_since(scene_started_at),
+            content_path: "browser-layout-scene",
+        };
+    }
+    if !window.hosted_browser_snapshot.text.rows.is_empty()
+        && draw_hosted_browser_text_scene(state, window, content)
+    {
+        return Ui2WindowDrawTiming {
+            chrome_ms,
+            texture_ms: 0,
+            placeholder_ms: elapsed_ms_since(scene_started_at),
+            content_path: "browser-text-scene",
+        };
+    }
+
     let content_started_at = Instant::now();
     if texture_is_drawable(window.content_tex_id)
         && draw_texture_rect_no_present(
@@ -211,39 +233,10 @@ pub(super) fn draw_hosted_browser_window_content(
         };
     }
 
-    let placeholder_started_at = Instant::now();
-    if !window.hosted_browser_snapshot.layout.nodes.is_empty()
-        && draw_hosted_browser_layout_scene(state, window, content)
-    {
-        return Ui2WindowDrawTiming {
-            chrome_ms,
-            texture_ms: 0,
-            placeholder_ms: elapsed_ms_since(placeholder_started_at),
-            content_path: "browser-layout-scene",
-        };
-    }
-    if !window.hosted_browser_snapshot.text.rows.is_empty()
-        && draw_hosted_browser_text_scene(state, window, content)
-    {
-        return Ui2WindowDrawTiming {
-            chrome_ms,
-            texture_ms: 0,
-            placeholder_ms: elapsed_ms_since(placeholder_started_at),
-            content_path: "browser-text-scene",
-        };
-    }
-
-    draw_window_content_placeholder(
-        state,
-        window,
-        content,
-        b"Starting Browser Tab",
-        b"Waiting for texture frame",
-    );
     Ui2WindowDrawTiming {
         chrome_ms,
         texture_ms: 0,
-        placeholder_ms: elapsed_ms_since(placeholder_started_at),
-        content_path: "browser-placeholder",
+        placeholder_ms: elapsed_ms_since(scene_started_at),
+        content_path: "browser-empty",
     }
 }

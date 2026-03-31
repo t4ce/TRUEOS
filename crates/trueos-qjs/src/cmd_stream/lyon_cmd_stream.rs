@@ -204,7 +204,6 @@ fn draw_lyon_in_frame(
     let origin_y_ndc = 1.0 - (2.0 * ((y + origin_y) / view_h_f));
 
     let verts = cmd_stream_get_lyon_unit_quad_verts(view_w_u, view_h_u, side_px, r, g, b);
-    super::atlas_cmd_stream::enqueue_text_batch(tex_id, verts.as_ref(), origin_x_ndc, origin_y_ndc);
     true
 }
 
