@@ -35,11 +35,11 @@ fn append_cursor_cross(
 }
 
 #[inline]
-fn collect_real_cursor_norm(out: &mut Vec<(f32, f32)>) {
+fn collect_real_cursor_norm(out: &mut Vec<(u32, f32, f32)>) {
     out.clear();
 
-    let cursors = crate::r::cursor::ordered_cursor_snapshot();
-    for (cx, cy) in cursors {
+    let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slots();
+    for (slot_id, cx, cy) in cursors {
         let nx = if cx.is_finite() {
             cx.clamp(0.0, 1.0) as f32
         } else {
@@ -50,29 +50,22 @@ fn collect_real_cursor_norm(out: &mut Vec<(f32, f32)>) {
         } else {
             0.0
         };
-        out.push((nx, ny));
+        out.push((slot_id, nx, ny));
     }
 }
-
-const CURSOR_COLORS: [trueos_gfx_core::Rgba8; 4] = [
-    trueos_gfx_core::Rgba8::new(0x00, 0xFF, 0x33, 0xFF),
-    trueos_gfx_core::Rgba8::new(0xFF, 0xE6, 0x1A, 0xFF),
-    trueos_gfx_core::Rgba8::new(0x33, 0xCC, 0xFF, 0xFF),
-    trueos_gfx_core::Rgba8::new(0xFF, 0x66, 0xCC, 0xFF),
-];
 
 fn append_kernel_cursor_overlay_rgb(rgb_blob: &mut Vec<u8>, vp_w: u32, vp_h: u32) {
     if vp_w == 0 || vp_h == 0 {
         return;
     }
 
-    let mut real: Vec<(f32, f32)> = Vec::new();
+    let mut real: Vec<(u32, f32, f32)> = Vec::new();
     collect_real_cursor_norm(&mut real);
 
-    for (i, &(nx, ny)) in real.iter().enumerate() {
+    for &(slot_id, nx, ny) in real.iter() {
         let ndc_x = nx * 2.0 - 1.0;
         let ndc_y = 1.0 - ny * 2.0;
-        let color = CURSOR_COLORS[i & 3];
+        let color = crate::r::ui2::cursor_color_rgba8(slot_id);
         append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, color);
     }
 }

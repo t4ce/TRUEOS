@@ -119,31 +119,25 @@ pub fn draw_horizontal_three_stop_rect_no_present(
     let y0 = y;
     let y1 = y + h;
     let transform = ViewTransform::from_extent(view_w, view_h);
-    let mut blob: Vec<u8> = Vec::with_capacity(12 * RGB_VERTEX_SIZE);
-    push_rgb_quad_px(
-        &mut blob,
-        transform,
-        x0,
-        y0,
-        xm,
-        y1,
-        Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3),
-    );
-    push_rgb_quad_px(
-        &mut blob,
-        transform,
-        xm,
-        y0,
-        x1,
-        y1,
-        Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3),
-    );
     let mid_color = Rgba8::new(mid_rgba.0, mid_rgba.1, mid_rgba.2, mid_rgba.3);
     let left_color = Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3);
     let right_color = Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3);
-    push_rgb_triangle_px(
-        &mut blob,
-        transform,
+    let vertices = [
+        RgbVertexPx {
+            x: x0,
+            y: y0,
+            color: left_color,
+        },
+        RgbVertexPx {
+            x: xm,
+            y: y0,
+            color: mid_color,
+        },
+        RgbVertexPx {
+            x: x1,
+            y: y0,
+            color: right_color,
+        },
         RgbVertexPx {
             x: x0,
             y: y1,
@@ -155,68 +149,91 @@ pub fn draw_horizontal_three_stop_rect_no_present(
             color: mid_color,
         },
         RgbVertexPx {
-            x: xm,
+            x: x1,
+            y: y1,
+            color: right_color,
+        },
+    ];
+    let indices: [u16; 12] = [0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4];
+    let mut blob: Vec<u8> = Vec::with_capacity(indices.len() * RGB_VERTEX_SIZE);
+    push_indexed_rgb_mesh_px(&mut blob, transform, &vertices, &indices);
+
+    submit_rgb_blob_no_present(blob.as_slice())
+}
+
+pub fn draw_horizontal_four_stop_rect_no_present(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    left_left_rgba: (u8, u8, u8, u8),
+    left_rgba: (u8, u8, u8, u8),
+    mid_rgba: (u8, u8, u8, u8),
+    right_rgba: (u8, u8, u8, u8),
+    view_w: u32,
+    view_h: u32,
+) -> bool {
+    if w <= 0.0 || h <= 0.0 {
+        return true;
+    }
+
+    let x0 = x;
+    let x1 = x + (w / 3.0);
+    let x2 = x + ((w * 2.0) / 3.0);
+    let x3 = x + w;
+    let y0 = y;
+    let y1 = y + h;
+    let transform = ViewTransform::from_extent(view_w, view_h);
+    let left_left_color =
+        Rgba8::new(left_left_rgba.0, left_left_rgba.1, left_left_rgba.2, left_left_rgba.3);
+    let left_color = Rgba8::new(left_rgba.0, left_rgba.1, left_rgba.2, left_rgba.3);
+    let mid_color = Rgba8::new(mid_rgba.0, mid_rgba.1, mid_rgba.2, mid_rgba.3);
+    let right_color = Rgba8::new(right_rgba.0, right_rgba.1, right_rgba.2, right_rgba.3);
+    let vertices = [
+        RgbVertexPx {
+            x: x0,
+            y: y0,
+            color: left_left_color,
+        },
+        RgbVertexPx {
+            x: x1,
+            y: y0,
+            color: left_color,
+        },
+        RgbVertexPx {
+            x: x2,
             y: y0,
             color: mid_color,
         },
-    );
-    push_rgb_triangle_px(
-        &mut blob,
-        transform,
+        RgbVertexPx {
+            x: x3,
+            y: y0,
+            color: right_color,
+        },
         RgbVertexPx {
             x: x0,
+            y: y1,
+            color: left_left_color,
+        },
+        RgbVertexPx {
+            x: x1,
             y: y1,
             color: left_color,
         },
         RgbVertexPx {
-            x: xm,
-            y: y0,
-            color: mid_color,
-        },
-        RgbVertexPx {
-            x: x0,
-            y: y0,
-            color: left_color,
-        },
-    );
-    push_rgb_triangle_px(
-        &mut blob,
-        transform,
-        RgbVertexPx {
-            x: xm,
+            x: x2,
             y: y1,
             color: mid_color,
         },
         RgbVertexPx {
-            x: x1,
+            x: x3,
             y: y1,
             color: right_color,
         },
-        RgbVertexPx {
-            x: x1,
-            y: y0,
-            color: right_color,
-        },
-    );
-    push_rgb_triangle_px(
-        &mut blob,
-        transform,
-        RgbVertexPx {
-            x: xm,
-            y: y1,
-            color: mid_color,
-        },
-        RgbVertexPx {
-            x: x1,
-            y: y0,
-            color: right_color,
-        },
-        RgbVertexPx {
-            x: xm,
-            y: y0,
-            color: mid_color,
-        },
-    );
+    ];
+    let indices: [u16; 18] = [0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6];
+    let mut blob: Vec<u8> = Vec::with_capacity(indices.len() * RGB_VERTEX_SIZE);
+    push_indexed_rgb_mesh_px(&mut blob, transform, &vertices, &indices);
 
     submit_rgb_blob_no_present(blob.as_slice())
 }

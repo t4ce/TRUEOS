@@ -1,18 +1,60 @@
 use super::*;
 
 use core::sync::atomic::{AtomicU32, Ordering};
+use trueos_gfx_core::Rgba8;
 
 static UI2_CURSOR_CAP_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
 
-pub(super) fn cursor_color(slot_id: u32) -> (u8, u8, u8, u8) {
-    match slot_id % 6 {
-        0 => (0x3B, 0x82, 0xF6, 0xFF),
-        1 => (0xEF, 0x44, 0x44, 0xFF),
-        2 => (0x10, 0xB9, 0x81, 0xFF),
-        3 => (0xF5, 0x9E, 0x0B, 0xFF),
-        4 => (0x8B, 0x5C, 0xF6, 0xFF),
-        _ => (0x06, 0xB6, 0xD4, 0xFF),
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Ui2CursorColor {
+    Blue,
+    Red,
+    Green,
+    Amber,
+    Violet,
+    Cyan,
+}
+
+impl Ui2CursorColor {
+    #[inline]
+    pub(crate) const fn from_slot_id(slot_id: u32) -> Self {
+        match slot_id % 6 {
+            0 => Self::Blue,
+            1 => Self::Red,
+            2 => Self::Green,
+            3 => Self::Amber,
+            4 => Self::Violet,
+            _ => Self::Cyan,
+        }
     }
+
+    #[inline]
+    pub(crate) const fn rgba(self) -> (u8, u8, u8, u8) {
+        match self {
+            Self::Blue => (0x3B, 0x82, 0xF6, 0xFF),
+            Self::Red => (0xEF, 0x44, 0x44, 0xFF),
+            Self::Green => (0x10, 0xB9, 0x81, 0xFF),
+            Self::Amber => (0xF5, 0x9E, 0x0B, 0xFF),
+            Self::Violet => (0x8B, 0x5C, 0xF6, 0xFF),
+            Self::Cyan => (0x06, 0xB6, 0xD4, 0xFF),
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn rgba8(self) -> Rgba8 {
+        let (r, g, b, a) = self.rgba();
+        Rgba8::new(r, g, b, a)
+    }
+}
+
+#[inline]
+pub(crate) fn cursor_color(slot_id: u32) -> (u8, u8, u8, u8) {
+    Ui2CursorColor::from_slot_id(slot_id).rgba()
+}
+
+#[inline]
+pub(crate) fn cursor_color_rgba8(slot_id: u32) -> Rgba8 {
+    Ui2CursorColor::from_slot_id(slot_id).rgba8()
 }
 
 #[inline]
