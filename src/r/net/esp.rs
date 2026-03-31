@@ -198,10 +198,12 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
     if should_upload_default {
         upload_default_led_app(snapshot).await;
     } else if app_exists {
-        crate::log!(
-            "esp-gate: default upload skipped handle={} reason=app_exists\n",
-            snapshot.handle.0
-        );
+        if crate::logflag::ESP_GATE_DEFAULT_UPLOAD_LOGS {
+            crate::log!(
+                "esp-gate: default upload skipped handle={} reason=app_exists\n",
+                snapshot.handle.0
+            );
+        }
     }
 }
 
@@ -211,13 +213,15 @@ async fn upload_default_led_app(snapshot: &trueos_esp::gate::DeviceSnapshot) {
         return;
     };
 
-    crate::log!(
-        "esp-gate: default upload start handle={} url={} bytes={} target={}\n",
-        snapshot.handle.0,
-        upload_url.as_str(),
-        ESP_DEFAULT_APP_BODY.len(),
-        ESP_DEFAULT_APP_FILENAME
-    );
+    if crate::logflag::ESP_GATE_DEFAULT_UPLOAD_LOGS {
+        crate::log!(
+            "esp-gate: default upload start handle={} url={} bytes={} target={}\n",
+            snapshot.handle.0,
+            upload_url.as_str(),
+            ESP_DEFAULT_APP_BODY.len(),
+            ESP_DEFAULT_APP_FILENAME
+        );
+    }
 
     let uploaded = crate::r::net::cli::http::post_http_body(
         upload_url.as_str(),
@@ -230,12 +234,14 @@ async fn upload_default_led_app(snapshot: &trueos_esp::gate::DeviceSnapshot) {
     .is_ok();
 
     if !uploaded {
-        crate::log!(
-            "esp-gate: default upload http failed handle={} url={} timeout_ms={}\n",
-            snapshot.handle.0,
-            upload_url.as_str(),
-            ESP_DEFAULT_UPLOAD_TIMEOUT_MS
-        );
+        if crate::logflag::ESP_GATE_DEFAULT_UPLOAD_LOGS {
+            crate::log!(
+                "esp-gate: default upload http failed handle={} url={} timeout_ms={}\n",
+                snapshot.handle.0,
+                upload_url.as_str(),
+                ESP_DEFAULT_UPLOAD_TIMEOUT_MS
+            );
+        }
     }
 
     let ran = if uploaded {
@@ -263,12 +269,14 @@ async fn upload_default_led_app(snapshot: &trueos_esp::gate::DeviceSnapshot) {
         uploaded_and_ran,
         now_ms,
     );
-    crate::log!(
-        "esp-gate: default upload done handle={} uploaded={} ran={}\n",
-        snapshot.handle.0,
-        if uploaded { 1 } else { 0 },
-        if ran { 1 } else { 0 }
-    );
+    if crate::logflag::ESP_GATE_DEFAULT_UPLOAD_LOGS {
+        crate::log!(
+            "esp-gate: default upload done handle={} uploaded={} ran={}\n",
+            snapshot.handle.0,
+            if uploaded { 1 } else { 0 },
+            if ran { 1 } else { 0 }
+        );
+    }
 }
 
 async fn handoff_device_to_truesurfer(snapshot: &trueos_esp::gate::DeviceSnapshot) {

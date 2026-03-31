@@ -22,7 +22,10 @@ mod shell2_qjs_c4_contract;
 mod shell2_surf;
 #[allow(unused_imports)]
 pub(crate) use crate::shell2::backends::{
-    NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND, crlf, uart1_com1,
+    NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND, UI2_SHELL_BACKEND, Ui2ShellCell,
+    Ui2ShellScreenSnapshot, crlf, queue_ui2_keyboard_event as queue_ui2_shell_keyboard_event,
+    uart1_com1, ui2_shell_attach_window, ui2_shell_dirty_seq, ui2_shell_last_rendered_seq,
+    ui2_shell_mark_rendered, ui2_shell_snapshot, ui2_shell_window_id,
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_ai::AiPromptMode;
@@ -42,6 +45,7 @@ const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const DEFAULT_LINE_WIDTH: usize = 100;
 pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
+pub(crate) const OUTPUT_UI2_MASK: u8 = 1 << 2;
 const SECTION_STATUS_TEXT: &str = "t4ce is with you";
 const SECTION_STATUS_HOLD_MS: u64 = 1000;
 const SECTION_RAINBOW_FRAME_MS: u64 = 120;
@@ -506,6 +510,11 @@ fn register_output(io: &'static dyn ShellIo2) {
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_io(io, net_io) {
         REGISTERED_OUTPUTS.fetch_or(OUTPUT_NET_TCP_MASK, Ordering::Relaxed);
+        return;
+    }
+    let ui2_io: &'static dyn ShellIo2 = &UI2_SHELL_BACKEND;
+    if same_backend_io(io, ui2_io) {
+        REGISTERED_OUTPUTS.fetch_or(OUTPUT_UI2_MASK, Ordering::Relaxed);
     }
 }
 
@@ -521,6 +530,9 @@ pub(crate) fn print_broadcast_line(text: &str) {
     if (outputs & OUTPUT_NET_TCP_MASK) != 0 {
         print_shell_line(&NET_TCP_SHELL_BACKEND, text);
     }
+    if (outputs & OUTPUT_UI2_MASK) != 0 {
+        print_shell_line(&UI2_SHELL_BACKEND, text);
+    }
 }
 
 pub(crate) fn print_targeted_line(target_mask: u8, text: &str) {
@@ -529,6 +541,9 @@ pub(crate) fn print_targeted_line(target_mask: u8, text: &str) {
     }
     if (target_mask & OUTPUT_NET_TCP_MASK) != 0 {
         print_shell_line(&NET_TCP_SHELL_BACKEND, text);
+    }
+    if (target_mask & OUTPUT_UI2_MASK) != 0 {
+        print_shell_line(&UI2_SHELL_BACKEND, text);
     }
     if target_mask == 0 {
         print_broadcast_line(text);
@@ -544,6 +559,11 @@ pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_task(io, net_io) {
         return OUTPUT_NET_TCP_MASK;
+    }
+
+    let ui2_io: &'static dyn ShellIo2 = &UI2_SHELL_BACKEND;
+    if same_backend_task(io, ui2_io) {
+        return OUTPUT_UI2_MASK;
     }
 
     0
@@ -618,6 +638,11 @@ fn output_mask_for_io(io: &dyn ShellIo2) -> u8 {
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_io(io, net_io) {
         return OUTPUT_NET_TCP_MASK;
+    }
+
+    let ui2_io: &'static dyn ShellIo2 = &UI2_SHELL_BACKEND;
+    if same_backend_io(io, ui2_io) {
+        return OUTPUT_UI2_MASK;
     }
 
     0
@@ -1044,7 +1069,7 @@ fn cycle_live_history(up: bool, cursor: &mut Option<usize>) -> Option<AllocStrin
     Some(history[next].text.clone())
 }
 
-#[embassy_executor::task(pool_size = 3)]
+#[embassy_executor::task(pool_size = 4)]
 pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     io.init();
     register_output(io);

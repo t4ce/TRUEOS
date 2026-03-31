@@ -7,7 +7,8 @@ use crate::gfx::althlasfont::athlasmetrics::{
     self, ATHLAS_BUCKET_COUNT, ATHLAS_FONT_INFO, ATHLAS_VARIANT_JSONS, AthlasVariantJson,
 };
 use crate::gfx::png_codec::DecodedPng;
-use crate::r::ui2::Ui2HostedSurfaceTile;
+
+use super::{Ui2HostedSurfaceTile, Ui2Rect, Ui2SurfaceWindow, request_window_content_present};
 
 const UI2_ATHLAS_BUCKET_DEMO_VARIANT_COUNT: usize = ATHLAS_VARIANT_JSONS.len();
 const UI2_ATHLAS_BUCKET_DEMO_WINDOW_Z: i16 = 32;
@@ -108,13 +109,13 @@ fn athlas_tier_textures_drawable(size_case: usize) -> bool {
     (0..ATHLAS_BUCKET_COUNT).all(|bucket| athlas_bucket_texture_drawable(size_case, bucket))
 }
 
-fn decode_athlas_bucket_variant(size_case: usize) -> Option<Vec<DecodedPng>> {
+pub(crate) fn ui2_font_bucketproducer_decode_variant(size_case: usize) -> Option<Vec<DecodedPng>> {
     let variant = athlas_variant(size_case)?;
     let mut decoded = Vec::with_capacity(ATHLAS_BUCKET_COUNT);
     for bucket in 0..ATHLAS_BUCKET_COUNT {
         let Some(bytes) = athlas_bucket_png_bytes(size_case, bucket) else {
             crate::log!(
-                "ui2-athlas-bucket-demo: missing variant png size_case={} variant={} bucket={}\n",
+                "ui2-font-bucketproducer: missing variant png size_case={} variant={} bucket={}\n",
                 size_case,
                 variant.name,
                 bucket
@@ -125,7 +126,7 @@ fn decode_athlas_bucket_variant(size_case: usize) -> Option<Vec<DecodedPng>> {
             Ok(image) => image,
             Err(err) => {
                 crate::log!(
-                    "ui2-athlas-bucket-demo: png decode failed size_case={} variant={} bucket={} code={}\n",
+                    "ui2-font-bucketproducer: png decode failed size_case={} variant={} bucket={} code={}\n",
                     size_case,
                     variant.name,
                     bucket,
@@ -202,14 +203,14 @@ fn athlas_window_origin(size_case: usize) -> (f32, f32) {
 async fn run_athlas_bucket_demo(size_case: usize) {
     let Some(variant) = athlas_variant(size_case) else {
         crate::log!(
-            "ui2-athlas-bucket-demo: invalid size_case={} variant_count={}\n",
+            "ui2-font-bucketproducer: invalid size_case={} variant_count={}\n",
             size_case,
             UI2_ATHLAS_BUCKET_DEMO_VARIANT_COUNT
         );
         return;
     };
     let _ = althlasfont::athlas_reset_tier_state(size_case);
-    let Some(decoded) = decode_athlas_bucket_variant(size_case) else {
+    let Some(decoded) = ui2_font_bucketproducer_decode_variant(size_case) else {
         return;
     };
 
@@ -217,9 +218,9 @@ async fn run_athlas_bucket_demo(size_case: usize) {
     let content_id = athlas_variant_content_id(size_case);
     let (window_x, window_y) = athlas_window_origin(size_case);
     let (bg_rgba, fg_rgba) = athlas_variant_colors(size_case);
-    let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::from_tiled_content(
+    let Some(surface) = Ui2SurfaceWindow::from_tiled_content(
         athlas_variant_title(size_case).unwrap_or("Athlas Buckets"),
-        crate::r::ui2::Ui2Rect {
+        Ui2Rect {
             x: window_x,
             y: window_y,
             w: UI2_ATHLAS_BUCKET_DEMO_WINDOW_SIZE_PX,
@@ -229,13 +230,13 @@ async fn run_athlas_bucket_demo(size_case: usize) {
         UI2_ATHLAS_BUCKET_DEMO_WINDOW_ALPHA,
         bg_rgba,
     ) else {
-        crate::log!("ui2-athlas-bucket-demo: window creation failed size_case={}\n", size_case);
+        crate::log!("ui2-font-bucketproducer: window creation failed size_case={}\n", size_case);
         return;
     };
 
     if !surface.bind_hosted_scroll_state(content_id, content_w, content_h) {
         crate::log!(
-            "ui2-athlas-bucket-demo: hosted scroll bind failed window={} content_id={} size_case={}\n",
+            "ui2-font-bucketproducer: hosted scroll bind failed window={} content_id={} size_case={}\n",
             surface.window_id(),
             content_id,
             size_case
@@ -257,7 +258,7 @@ async fn run_athlas_bucket_demo(size_case: usize) {
     }
     if !surface.set_tiles(bg_rgba, tiles.as_slice()) {
         crate::log!(
-            "ui2-athlas-bucket-demo: tile registration failed window={} size_case={}\n",
+            "ui2-font-bucketproducer: tile registration failed window={} size_case={}\n",
             surface.window_id(),
             size_case
         );
@@ -277,7 +278,7 @@ async fn run_athlas_bucket_demo(size_case: usize) {
             variant.dir,
         ) {
             crate::log!(
-                "ui2-athlas-bucket-demo: upload failed window={} size_case={} variant={} bucket={} tex={} size={}x{}\n",
+                "ui2-font-bucketproducer: upload failed window={} size_case={} variant={} bucket={} tex={} size={}x{}\n",
                 surface.window_id(),
                 size_case,
                 variant.name,
@@ -306,13 +307,10 @@ async fn run_athlas_bucket_demo(size_case: usize) {
     }
 
     let ready_seq = althlasfont::athlas_mark_tier_ready(size_case).unwrap_or(0);
-    let _ = crate::r::ui2::request_window_content_present(
-        surface.window_id(),
-        "ui2-athlas-bucket-ready",
-    );
+    let _ = request_window_content_present(surface.window_id(), "ui2-athlas-bucket-ready");
 
     crate::log!(
-        "ui2-athlas-bucket-demo: window={} size_case={} variant={} viewport={}x{} content={}x{} buckets={} upem={} line_height={} ready_seq={}\n",
+        "ui2-font-bucketproducer: window={} size_case={} variant={} viewport={}x{} content={}x{} buckets={} upem={} line_height={} ready_seq={}\n",
         surface.window_id(),
         size_case,
         variant.name,
@@ -332,6 +330,6 @@ async fn run_athlas_bucket_demo(size_case: usize) {
 }
 
 #[embassy_executor::task(pool_size = UI2_ATHLAS_BUCKET_DEMO_VARIANT_COUNT)]
-pub async fn ui2_athlas_bucket_demo_task(size_case: usize) {
+pub async fn ui2_font_bucketproducer_demo_task(size_case: usize) {
     run_athlas_bucket_demo(size_case).await;
 }

@@ -1,5 +1,6 @@
 use super::*;
 
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use trueos_gfx_core::Rgba8;
 
@@ -484,6 +485,23 @@ fn selected_window_id_for_keyboard(state: &Ui2State) -> Option<u32> {
     None
 }
 
+fn selected_hosted_surface_window_ids_for_keyboard(state: &Ui2State) -> Vec<u32> {
+    let mut out = Vec::new();
+    for idx in sorted_window_indices(state).into_iter().rev() {
+        let window = &state.windows[idx];
+        if !window.visible
+            || window.composition_locked
+            || window.state == Ui2WindowStateKind::Minimized
+            || window.selected_cursor_slots.is_empty()
+            || window.kind != Ui2WindowKind::HostedSurface
+        {
+            continue;
+        }
+        out.push(window.id);
+    }
+    out
+}
+
 fn keyboard_output_modifiers_to_browser_mask(modifiers: u8) -> u8 {
     let mut out = 0u8;
     if (modifiers & ((1 << 1) | (1 << 5))) != 0 {
@@ -627,9 +645,22 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
                     }
                 }
                 Some(Ui2WindowKind::HostedSurface) => {
+                    let selected_surface_window_ids =
+                        selected_hosted_surface_window_ids_for_keyboard(state);
                     for event in raw_events.iter().take(wrote).copied() {
                         note_keyboard_event_source(state, &event);
-                        let _ = crate::tst_gfx_tetris::queue_ui2_keyboard_event(window_id, event);
+                        for target_window_id in selected_surface_window_ids.iter().copied() {
+                            if crate::shell2::queue_ui2_shell_keyboard_event(
+                                target_window_id,
+                                event,
+                            ) {
+                                continue;
+                            }
+                            let _ = crate::tst_gfx_tetris::queue_ui2_keyboard_event(
+                                target_window_id,
+                                event,
+                            );
+                        }
                     }
                 }
                 Some(Ui2WindowKind::Hosted3d) => {

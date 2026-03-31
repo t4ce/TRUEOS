@@ -13,6 +13,8 @@ pub(crate) const NET_LOG_ARP_RX: bool = false;
 pub(crate) const NET_LOG_DHCP_VERBOSE: bool = false;
 pub(crate) const NET_LOG_IPV6_RA: bool = false;
 pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
+pub(crate) const VNET_EXERCISE_LOGS: bool = false;
+pub(crate) const ESP_GATE_DEFAULT_UPLOAD_LOGS: bool = false;
 
 pub(crate) const R8125_VERBOSE_LOGS: bool = false;
 
