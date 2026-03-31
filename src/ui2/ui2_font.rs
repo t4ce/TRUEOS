@@ -39,9 +39,9 @@ impl Ui2FontTier {
     #[inline]
     pub(crate) const fn display_cell_height_px(self) -> u16 {
         match self {
-            Self::Half => 8,
-            Self::OneX => 16,
-            Self::ThreeX => 48,
+            Self::Half => 32,
+            Self::OneX => 64,
+            Self::ThreeX => 192,
         }
     }
 

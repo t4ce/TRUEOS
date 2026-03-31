@@ -62,6 +62,7 @@ pub(super) fn alloc_window(
         z,
         visible: true,
         hit_test_visible: true,
+        composition_locked: false,
         alpha,
         decoration_mode: Ui2WindowDecorationMode::System,
         titlebar_visible: true,
@@ -322,12 +323,37 @@ pub(super) fn set_window_visible_in_state(state: &mut Ui2State, id: u32, visible
     noted
 }
 
+pub(super) fn toggle_window_composition_lock_in_state(state: &mut Ui2State, id: u32) -> bool {
+    let Some(window) = window_mut(state, id) else {
+        return false;
+    };
+    window.composition_locked = !window.composition_locked;
+    window.container_sync_needed = true;
+    let reason = if window.composition_locked {
+        "lock-window-composition"
+    } else {
+        "unlock-window-composition"
+    };
+    state.compose_reason = reason;
+    clear_window_drag_claims(state, id);
+    queue_hosted_container_sync();
+    let noted = note_window_dirty(state, id, reason);
+    if noted {
+        let _ = note_window_viewport_sync_needed(state, id);
+        refresh_window_hit_entries(state, id);
+    }
+    noted
+}
+
 pub(super) fn handle_system_button_action(
     state: &mut Ui2State,
     window_id: u32,
     action: Ui2SystemButtonAction,
 ) -> bool {
     match action {
+        Ui2SystemButtonAction::ToggleComposition => {
+            toggle_window_composition_lock_in_state(state, window_id)
+        }
         Ui2SystemButtonAction::Fork => fork_window_in_state(state, window_id),
         Ui2SystemButtonAction::Minimize => minimize_window_in_state(state, window_id),
         Ui2SystemButtonAction::ToggleMaximize => {
@@ -384,6 +410,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     let next_icon_id = source_window.icon_id;
     let next_alpha = source_window.alpha;
     let next_hit_test_visible = source_window.hit_test_visible;
+    let next_composition_locked = source_window.composition_locked;
     let next_decoration_mode = source_window.decoration_mode;
     let next_titlebar_visible = source_window.titlebar_visible;
     let next_bottom_bar_visible = source_window.bottom_bar_visible;
@@ -438,6 +465,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         window.hosted_surface_bg_rgba = next_hosted_surface_bg_rgba;
         window.hosted_surface_tiles = next_hosted_surface_tiles;
         window.hit_test_visible = next_hit_test_visible;
+        window.composition_locked = next_composition_locked;
         window.decoration_mode = next_decoration_mode;
         window.titlebar_visible = next_titlebar_visible;
         window.bottom_bar_visible = next_bottom_bar_visible;

@@ -9,6 +9,32 @@ pub(super) enum Ui2DecorationIconKind {
     TitlebarWindow,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum Ui2DecorationLabelKind {
+    SystemButton(Ui2SystemButtonAction),
+    ResizeHandle,
+}
+
+impl Ui2DecorationLabelKind {
+    #[inline]
+    fn text(self, window: &Ui2Window) -> &'static str {
+        match self {
+            Self::SystemButton(Ui2SystemButtonAction::ToggleComposition) => {
+                if window.composition_locked {
+                    "▣"
+                } else {
+                    "■"
+                }
+            }
+            Self::SystemButton(Ui2SystemButtonAction::Fork) => "+",
+            Self::SystemButton(Ui2SystemButtonAction::Minimize) => "⊟",
+            Self::SystemButton(Ui2SystemButtonAction::ToggleMaximize) => "□",
+            Self::SystemButton(Ui2SystemButtonAction::Close) => "⊠",
+            Self::ResizeHandle => "⊞",
+        }
+    }
+}
+
 trait Ui2DecorationIconSource {
     fn icon_id(self, window: &Ui2Window) -> u32;
 }
@@ -16,6 +42,7 @@ trait Ui2DecorationIconSource {
 impl Ui2DecorationIconSource for Ui2DecorationIconKind {
     fn icon_id(self, window: &Ui2Window) -> u32 {
         match self {
+            Self::SystemButton(Ui2SystemButtonAction::ToggleComposition) => 0,
             Self::SystemButton(Ui2SystemButtonAction::Fork) => UI2_SYSTEM_BUTTON_FORK_ICON_ID,
             Self::SystemButton(Ui2SystemButtonAction::Minimize) => {
                 UI2_SYSTEM_BUTTON_MINIMIZE_ICON_ID
@@ -56,9 +83,54 @@ pub(super) fn draw_window_decoration_icon(
     );
 }
 
+fn draw_window_decoration_label(
+    state: &Ui2State,
+    window: &Ui2Window,
+    kind: Ui2DecorationLabelKind,
+    rect: Ui2Rect,
+) {
+    let Some(ch) = kind.text(window).chars().next() else {
+        return;
+    };
+    let Some(glyph) = ui2_font_resolve_glyph(Ui2FontTier::Half, ch) else {
+        return;
+    };
+    if !glyph.ready {
+        return;
+    }
+    let Some(texture) = glyph.texture else {
+        return;
+    };
+
+    let glyph_w = f32::from(glyph.region.src_w.max(1));
+    let glyph_h = f32::from(glyph.region.src_h.max(1));
+    let glyph_x = rect.x + ((rect.w - glyph_w) * 0.5);
+    let glyph_y = rect.y - (glyph_h);
+    let atlas_w = f32::from(glyph.region.atlas_w.max(1));
+    let atlas_h = f32::from(glyph.region.atlas_h.max(1));
+    let src_x = f32::from(glyph.region.src_x);
+    let src_y = f32::from(glyph.region.src_y);
+    let _ = draw_texture_rect_uv_no_present(
+        texture.tex_id,
+        glyph_x,
+        glyph_y,
+        glyph_w,
+        glyph_h,
+        src_x / atlas_w,
+        src_y / atlas_h,
+        (src_x + glyph_w) / atlas_w,
+        (src_y + glyph_h) / atlas_h,
+        state.view_w,
+        state.view_h,
+        true,
+        window.alpha,
+    );
+}
+
 fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2SystemButtonAction) {
     if window.state == Ui2WindowStateKind::Minimized
         && action != Ui2SystemButtonAction::ToggleMaximize
+        && action != Ui2SystemButtonAction::ToggleComposition
     {
         return;
     }
@@ -66,33 +138,15 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
         return;
     };
 
-    let icon_x = rect.x + ((rect.w - 16.0) * 0.5);
-    let icon_y = rect.y + ((rect.h - 16.0) * 0.5);
-    draw_window_decoration_icon(
-        state,
-        window,
-        Ui2DecorationIconKind::SystemButton(action),
-        icon_x,
-        icon_y,
-        16.0,
-    );
+    draw_window_decoration_label(state, window, Ui2DecorationLabelKind::SystemButton(action), rect);
 }
 
 fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
     let Some(rect) = window_bottom_resize_button_rect(state, window) else {
         return;
     };
-    let icon_side = 16.0f32;
-    let icon_x = rect.x + ((rect.w - icon_side) * 0.5);
-    let icon_y = rect.y + ((rect.h - icon_side) * 0.5);
-    draw_window_decoration_icon(
-        state,
-        window,
-        Ui2DecorationIconKind::ResizeHandle,
-        icon_x,
-        icon_y,
-        icon_side,
-    );
+
+    draw_window_decoration_label(state, window, Ui2DecorationLabelKind::ResizeHandle, rect);
 }
 
 fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
@@ -303,9 +357,10 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         } else {
             rect.x + 8.0
         };
-        let title_right = window_system_button_rect(state, window, Ui2SystemButtonAction::Fork)
-            .map(|button| button.x - 8.0)
-            .unwrap_or(rect.x + rect.w - 8.0);
+        let title_right =
+            window_system_button_rect(state, window, Ui2SystemButtonAction::ToggleComposition)
+                .map(|button| button.x - 8.0)
+                .unwrap_or(rect.x + rect.w - 8.0);
         let title_max_w = (title_right - title_left).max(0.0);
         let title_px_h = 16.0f32;
         let title_tier = ui2_font_pick_tier_for_px(title_px_h);
@@ -323,6 +378,7 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
                 window.alpha,
             );
         }
+        draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleComposition);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleMaximize);
@@ -773,7 +829,10 @@ pub(super) fn window_system_button_rect(
     let minimize_x = right_x;
     right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
     let fork_x = right_x;
+    right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
+    let composition_x = right_x;
     let x = match action {
+        Ui2SystemButtonAction::ToggleComposition => composition_x,
         Ui2SystemButtonAction::Fork => fork_x,
         Ui2SystemButtonAction::Minimize => minimize_x,
         Ui2SystemButtonAction::ToggleMaximize => maximize_x,
@@ -790,6 +849,7 @@ pub(super) fn system_button_action_at(
 ) -> Option<Ui2SystemButtonAction> {
     let window = state.windows.iter().find(|window| window.id == window_id)?;
     for action in [
+        Ui2SystemButtonAction::ToggleComposition,
         Ui2SystemButtonAction::Fork,
         Ui2SystemButtonAction::Minimize,
         Ui2SystemButtonAction::ToggleMaximize,

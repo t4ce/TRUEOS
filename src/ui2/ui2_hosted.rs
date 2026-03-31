@@ -532,7 +532,7 @@ pub(super) fn sync_pending_window_containers(state: &mut Ui2State) {
         .iter()
         .filter(|window| window.container_sync_needed)
         .map(|window| {
-            let renderable = window_is_renderable(window);
+            let renderable = window_content_participates_in_composition(window);
             let content = if renderable {
                 window_content_rect(state, window)
             } else {
