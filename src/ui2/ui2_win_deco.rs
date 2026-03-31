@@ -38,12 +38,22 @@ pub(super) fn draw_window_decoration_icon(
     y: f32,
     side_px: f32,
 ) {
-    let _ = state;
-    let _ = window;
-    let _ = kind;
-    let _ = x;
-    let _ = y;
-    let _ = side_px;
+    let icon_id = kind.icon_id(window);
+    if icon_id == 0 {
+        return;
+    }
+
+    let _ = crate::gfx::lyon::draw_lyon_icon_alpha_scaled_no_present(
+        icon_id,
+        0,
+        0,
+        x,
+        y,
+        side_px,
+        state.view_w,
+        state.view_h,
+        window.alpha,
+    );
 }
 
 fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2SystemButtonAction) {
@@ -196,30 +206,25 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         .map(|slot_id| super::ui2_hid::cursor_color(*slot_id))
         .map(|rgba| modulate_rgba_alpha(rgba, window.alpha))
         .unwrap_or((0, 0, 0, 0));
-    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        body_rgba,
-        state.view_w,
-        state.view_h,
-    );
-    if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
-        let title_mid_offset = browser_title_overlay_mid_offset(window, boot_probe_ms());
-        let _ = crate::gfx::lyon::draw_horizontal_three_stop_rect_no_present(
-            rect.x,
-            rect.y,
-            rect.w,
+    let titleband_h =
+        if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
             if window.state == Ui2WindowStateKind::Minimized {
                 rect.h
             } else {
-                UI2_TITLE_H
-            },
-            frame_left_rgba,
-            frame_mid_rgba,
-            frame_right_rgba,
-            title_mid_offset,
+                UI2_TITLE_H.min(rect.h)
+            }
+        } else {
+            0.0
+        };
+    let body_y = rect.y + titleband_h;
+    let body_h = (rect.h - titleband_h).max(0.0);
+    if body_h > 0.0 {
+        let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+            rect.x,
+            body_y,
+            rect.w,
+            body_h,
+            body_rgba,
             state.view_w,
             state.view_h,
         );
@@ -264,15 +269,31 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
                 icon_side,
             );
         }
-        let title_w = window.title_tex_w as f32;
         let title_left = if window.icon_id != 0 {
             rect.x + 28.0
         } else {
             rect.x + 8.0
         };
-        let _ = title_w;
-        let _ = title_left;
-        // Decoration title font rendering is temporarily disabled.
+        let title_right = window_system_button_rect(state, window, Ui2SystemButtonAction::Fork)
+            .map(|button| button.x - 8.0)
+            .unwrap_or(rect.x + rect.w - 8.0);
+        let title_max_w = (title_right - title_left).max(0.0);
+        let title_px_h = 16.0f32;
+        let title_tier = ui2_font_pick_tier_for_px(title_px_h);
+        let title_w = ui2_font_measure_text(title_tier, window.title.as_str()).width_px as f32;
+        let title_y = rect.y + ((UI2_TITLE_H - title_px_h) * 0.5);
+        if title_w > 0.0 && title_max_w > 0.0 {
+            let _ = ui2_font_draw_text_line_no_present(
+                window.title.as_str(),
+                title_left,
+                title_y,
+                title_max_w,
+                title_px_h,
+                state.view_w,
+                state.view_h,
+                window.alpha,
+            );
+        }
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleMaximize);

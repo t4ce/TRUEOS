@@ -13,7 +13,7 @@ pub struct AthlasFontInfo {
     pub line_height: u16,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AthlasVariantJson {
     pub name: &'static str,
     pub dir: &'static str,
@@ -30,6 +30,26 @@ pub struct AthlasBucketMetrics {
 pub struct AthlasGlyphLookup {
     pub bucket: u8,
     pub slot: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AthlasBucketAtlasMetrics {
+    pub cell_w: u16,
+    pub cell_h: u16,
+    pub grid_w: u16,
+    pub grid_h: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AthlasGlyphRegion {
+    pub bucket: u8,
+    pub slot: u16,
+    pub src_x: u16,
+    pub src_y: u16,
+    pub src_w: u16,
+    pub src_h: u16,
+    pub atlas_w: u16,
+    pub atlas_h: u16,
 }
 
 pub const ATHLAS_METRICS_VERSION: u32 = 1;
@@ -93,6 +113,160 @@ pub const ATHLAS_BUCKET_METRICS: [AthlasBucketMetrics; ATHLAS_BUCKET_COUNT] = [
         width_stage_from_widest: 7,
         uniform_width: true,
     },
+];
+
+pub const ATHLAS_VARIANT_BUCKET_ATLAS_METRICS: [[AthlasBucketAtlasMetrics; ATHLAS_BUCKET_COUNT];
+    ATHLAS_VARIANT_JSONS.len()] = [
+    [
+        AthlasBucketAtlasMetrics {
+            cell_w: 8,
+            cell_h: 32,
+            grid_w: 16,
+            grid_h: 15,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 11,
+            cell_h: 32,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 13,
+            cell_h: 32,
+            grid_w: 16,
+            grid_h: 17,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 14,
+            cell_h: 32,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 17,
+            cell_h: 32,
+            grid_w: 16,
+            grid_h: 28,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 20,
+            cell_h: 32,
+            grid_w: 16,
+            grid_h: 10,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 21,
+            cell_h: 32,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 31,
+            cell_h: 32,
+            grid_w: 16,
+            grid_h: 2,
+        },
+    ],
+    [
+        AthlasBucketAtlasMetrics {
+            cell_w: 15,
+            cell_h: 64,
+            grid_w: 16,
+            grid_h: 15,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 22,
+            cell_h: 64,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 26,
+            cell_h: 64,
+            grid_w: 16,
+            grid_h: 17,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 28,
+            cell_h: 64,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 33,
+            cell_h: 64,
+            grid_w: 16,
+            grid_h: 28,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 39,
+            cell_h: 64,
+            grid_w: 16,
+            grid_h: 10,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 42,
+            cell_h: 64,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 62,
+            cell_h: 64,
+            grid_w: 16,
+            grid_h: 2,
+        },
+    ],
+    [
+        AthlasBucketAtlasMetrics {
+            cell_w: 46,
+            cell_h: 192,
+            grid_w: 16,
+            grid_h: 15,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 66,
+            cell_h: 192,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 77,
+            cell_h: 192,
+            grid_w: 16,
+            grid_h: 17,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 85,
+            cell_h: 192,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 99,
+            cell_h: 192,
+            grid_w: 16,
+            grid_h: 28,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 117,
+            cell_h: 192,
+            grid_w: 16,
+            grid_h: 10,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 125,
+            cell_h: 192,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 185,
+            cell_h: 192,
+            grid_w: 16,
+            grid_h: 2,
+        },
+    ],
 ];
 
 pub const ATHLAS_BUCKET_0_LUT: &[u32] = &[
@@ -246,6 +420,16 @@ pub fn athlas_bucket_metrics(bucket: usize) -> Option<AthlasBucketMetrics> {
 }
 
 #[inline]
+pub fn athlas_bucket_atlas_metrics(
+    size_case: usize,
+    bucket: usize,
+) -> Option<AthlasBucketAtlasMetrics> {
+    ATHLAS_VARIANT_BUCKET_ATLAS_METRICS
+        .get(size_case)
+        .and_then(|variant| variant.get(bucket).copied())
+}
+
+#[inline]
 pub fn athlas_bucket_width_stage(bucket: usize) -> Option<u8> {
     athlas_bucket_metrics(bucket).map(|it| it.width_stage_from_widest)
 }
@@ -273,4 +457,24 @@ pub fn athlas_lookup_codepoint(codepoint: u32) -> Option<AthlasGlyphLookup> {
 #[inline]
 pub fn athlas_lookup_char(ch: char) -> Option<AthlasGlyphLookup> {
     athlas_lookup_codepoint(ch as u32)
+}
+
+#[inline]
+pub fn athlas_lookup_glyph_region(size_case: usize, ch: char) -> Option<AthlasGlyphRegion> {
+    let lookup = athlas_lookup_char(ch)?;
+    let atlas = athlas_bucket_atlas_metrics(size_case, lookup.bucket as usize)?;
+    let grid_w = u32::from(atlas.grid_w.max(1));
+    let slot = u32::from(lookup.slot);
+    let src_x = (slot % grid_w).saturating_mul(u32::from(atlas.cell_w));
+    let src_y = (slot / grid_w).saturating_mul(u32::from(atlas.cell_h));
+    Some(AthlasGlyphRegion {
+        bucket: lookup.bucket,
+        slot: lookup.slot,
+        src_x: src_x.min(u32::from(u16::MAX)) as u16,
+        src_y: src_y.min(u32::from(u16::MAX)) as u16,
+        src_w: atlas.cell_w,
+        src_h: atlas.cell_h,
+        atlas_w: atlas.cell_w.saturating_mul(atlas.grid_w),
+        atlas_h: atlas.cell_h.saturating_mul(atlas.grid_h),
+    })
 }

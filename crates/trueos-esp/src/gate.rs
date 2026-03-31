@@ -93,7 +93,7 @@ pub struct DeviceSnapshot {
     pub status: Option<DeviceStatusSnapshot>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceRecord {
     pub handle: api::NetHandle,
     pub ip: Option<DeviceIp>,
@@ -101,6 +101,8 @@ pub struct DeviceRecord {
     pub connected_at_ms: u64,
     pub last_activity_ms: u64,
     pub status: Option<DeviceStatusSnapshot>,
+    default_app_decided: bool,
+    default_app_uploaded: bool,
 }
 
 pub struct DeviceRegistry {
@@ -170,7 +172,38 @@ impl DeviceRegistry {
             connected_at_ms: now_ms,
             last_activity_ms: now_ms,
             status: None,
+            default_app_decided: false,
+            default_app_uploaded: false,
         });
+        true
+    }
+
+    pub fn take_default_app_upload_request(
+        &mut self,
+        handle: api::NetHandle,
+        app_exists: bool,
+    ) -> bool {
+        let Some(existing) = self.devices.iter_mut().find(|entry| entry.handle == handle) else {
+            return false;
+        };
+        if existing.default_app_decided {
+            return false;
+        }
+        existing.default_app_decided = true;
+        !app_exists
+    }
+
+    pub fn set_default_app_upload_result(
+        &mut self,
+        handle: api::NetHandle,
+        uploaded: bool,
+        now_ms: u64,
+    ) -> bool {
+        let Some(existing) = self.devices.iter_mut().find(|entry| entry.handle == handle) else {
+            return false;
+        };
+        existing.default_app_uploaded = uploaded;
+        existing.last_activity_ms = now_ms;
         true
     }
 
@@ -336,5 +369,17 @@ mod tests {
         assert_eq!(event.handle, handle);
         assert_eq!(event.previous, None);
         assert_eq!(event.current, status);
+    }
+
+    #[test]
+    fn default_upload_is_decided_once() {
+        let mut registry = DeviceRegistry::new(8);
+        let addr = [192, 168, 1, 55];
+        let handle = device_handle_v4(addr);
+        assert!(registry.upsert_heartbeat_v4(addr, ESP_HTTP_UPLOAD_PORT, 100));
+
+        assert!(registry.take_default_app_upload_request(handle, false));
+        assert!(!registry.take_default_app_upload_request(handle, false));
+        assert!(registry.set_default_app_upload_result(handle, true, 200));
     }
 }

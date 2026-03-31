@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
+use crate::gfx::althlasfont;
 use crate::gfx::althlasfont::athlasmetrics::{
     self, ATHLAS_BUCKET_COUNT, ATHLAS_FONT_INFO, ATHLAS_VARIANT_JSONS, AthlasVariantJson,
 };
@@ -22,6 +23,7 @@ const UI2_ATHLAS_BUCKET_DEMO_DARK_FG_RGBA: [u8; 4] = [0xF4, 0xF6, 0xFA, 0xFF];
 const UI2_ATHLAS_BUCKET_DEMO_GAP_PX: u32 = 12;
 const UI2_ATHLAS_BUCKET_DEMO_DEFER_MS: u64 = 16;
 const UI2_ATHLAS_BUCKET_DEMO_UPLOAD_YIELD_MS: u64 = 1;
+const UI2_ATHLAS_BUCKET_DEMO_READY_WAIT_MS: u64 = 16;
 
 const ATHLAS_BUCKET_PNGS: [[&[u8]; ATHLAS_BUCKET_COUNT]; UI2_ATHLAS_BUCKET_DEMO_VARIANT_COUNT] = [
     [
@@ -94,6 +96,18 @@ fn athlas_bucket_png_bytes(size_case: usize, bucket: usize) -> Option<&'static [
         .and_then(|variant| variant.get(bucket).copied())
 }
 
+#[inline]
+fn athlas_bucket_texture_drawable(size_case: usize, bucket: usize) -> bool {
+    const ASYNC_TEX_STATUS_READY: i32 = 2;
+    crate::r::io::cabi::trueos_cabi_gfx_texture_status(athlas_variant_tile_tex_id(
+        size_case, bucket,
+    )) == ASYNC_TEX_STATUS_READY
+}
+
+fn athlas_tier_textures_drawable(size_case: usize) -> bool {
+    (0..ATHLAS_BUCKET_COUNT).all(|bucket| athlas_bucket_texture_drawable(size_case, bucket))
+}
+
 fn decode_athlas_bucket_variant(size_case: usize) -> Option<Vec<DecodedPng>> {
     let variant = athlas_variant(size_case)?;
     let mut decoded = Vec::with_capacity(ATHLAS_BUCKET_COUNT);
@@ -159,27 +173,19 @@ fn athlas_bucket_origin(decoded: &[DecodedPng], bucket: usize) -> (u32, u32) {
     (UI2_ATHLAS_BUCKET_DEMO_GAP_PX, UI2_ATHLAS_BUCKET_DEMO_GAP_PX)
 }
 
-fn build_athlas_bucket_surface_rgba(
-    image: &DecodedPng,
-    bg_rgba: [u8; 4],
-    fg_rgba: [u8; 4],
-) -> Vec<u8> {
+fn build_athlas_bucket_surface_rgba(image: &DecodedPng, fg_rgba: [u8; 4]) -> Vec<u8> {
     let px_count = (image.width as usize).saturating_mul(image.height as usize);
     let mut rgba = vec![0u8; px_count.saturating_mul(4)];
-    for chunk in rgba.chunks_exact_mut(4) {
-        chunk.copy_from_slice(&bg_rgba);
-    }
     for idx in 0..px_count {
         let src = idx.saturating_mul(4);
         let coverage = image.rgba.get(src).copied().unwrap_or(0) as u16;
         if coverage == 0 {
             continue;
         }
-        for chan in 0..4 {
-            let bg = rgba[src + chan] as u16;
-            let fg = fg_rgba[chan] as u16;
-            rgba[src + chan] = (((bg * (255 - coverage)) + (fg * coverage)) / 255) as u8;
-        }
+        rgba[src] = fg_rgba[0];
+        rgba[src + 1] = fg_rgba[1];
+        rgba[src + 2] = fg_rgba[2];
+        rgba[src + 3] = ((coverage * u16::from(fg_rgba[3])) / 255) as u8;
     }
     rgba
 }
@@ -202,6 +208,7 @@ async fn run_athlas_bucket_demo(size_case: usize) {
         );
         return;
     };
+    let _ = althlasfont::athlas_reset_tier_state(size_case);
     let Some(decoded) = decode_athlas_bucket_variant(size_case) else {
         return;
     };
@@ -245,7 +252,7 @@ async fn run_athlas_bucket_demo(size_case: usize) {
             y,
             width: image.width,
             height: image.height,
-            blend_enabled: false,
+            blend_enabled: true,
         });
     }
     if !surface.set_tiles(bg_rgba, tiles.as_slice()) {
@@ -260,7 +267,7 @@ async fn run_athlas_bucket_demo(size_case: usize) {
     Timer::after(EmbassyDuration::from_millis(UI2_ATHLAS_BUCKET_DEMO_DEFER_MS)).await;
 
     for (bucket, image) in decoded.into_iter().enumerate() {
-        let rgba = build_athlas_bucket_surface_rgba(&image, bg_rgba, fg_rgba);
+        let rgba = build_athlas_bucket_surface_rgba(&image, fg_rgba);
         if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
             athlas_variant_tile_tex_id(size_case, bucket),
             image.width,
@@ -281,11 +288,31 @@ async fn run_athlas_bucket_demo(size_case: usize) {
             );
             return;
         }
+        let _ = althlasfont::athlas_register_bucket_texture(
+            size_case,
+            bucket,
+            athlas_variant_tile_tex_id(size_case, bucket),
+            image.width,
+            image.height,
+        );
         Timer::after(EmbassyDuration::from_millis(UI2_ATHLAS_BUCKET_DEMO_UPLOAD_YIELD_MS)).await;
     }
 
+    loop {
+        if athlas_tier_textures_drawable(size_case) {
+            break;
+        }
+        Timer::after(EmbassyDuration::from_millis(UI2_ATHLAS_BUCKET_DEMO_READY_WAIT_MS)).await;
+    }
+
+    let ready_seq = althlasfont::athlas_mark_tier_ready(size_case).unwrap_or(0);
+    let _ = crate::r::ui2::request_window_content_present(
+        surface.window_id(),
+        "ui2-athlas-bucket-ready",
+    );
+
     crate::log!(
-        "ui2-athlas-bucket-demo: window={} size_case={} variant={} viewport={}x{} content={}x{} buckets={} upem={} line_height={}\n",
+        "ui2-athlas-bucket-demo: window={} size_case={} variant={} viewport={}x{} content={}x{} buckets={} upem={} line_height={} ready_seq={}\n",
         surface.window_id(),
         size_case,
         variant.name,
@@ -295,7 +322,8 @@ async fn run_athlas_bucket_demo(size_case: usize) {
         content_h,
         ATHLAS_BUCKET_COUNT,
         ATHLAS_FONT_INFO.units_per_em,
-        ATHLAS_FONT_INFO.line_height
+        ATHLAS_FONT_INFO.line_height,
+        ready_seq
     );
 
     loop {

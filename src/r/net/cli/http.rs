@@ -263,8 +263,11 @@ fn redirect_url_from_location(current: &ParsedHttpUrl, headers: &[u8]) -> Option
     None
 }
 
-pub async fn fetch_http_body(
+async fn request_http_body(
+    method: &[u8],
     url: &str,
+    extra_headers: &[(&str, &str)],
+    body: &[u8],
     timeout_ms: u32,
     max_rx: usize,
 ) -> Result<Vec<u8>, HttpFetchError> {
@@ -321,7 +324,7 @@ pub async fn fetch_http_body(
     }
 
     let mut tcp_handle: Option<api::NetHandle> = None;
-    let mut sent_get = false;
+    let mut sent_request = false;
     let mut rx: Vec<u8> = Vec::new();
     let mut truncated = false;
     let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
@@ -342,15 +345,30 @@ pub async fn fetch_http_body(
                     if tcp_handle != Some(handle) {
                         continue;
                     }
-                    if !sent_get {
+                    if !sent_request {
                         let mut req: Vec<u8> = Vec::new();
-                        req.extend_from_slice(b"GET ");
+                        req.extend_from_slice(method);
+                        req.extend_from_slice(b" ");
                         req.extend_from_slice(parsed.path.as_str().as_bytes());
                         req.extend_from_slice(b" HTTP/1.1\r\nHost: ");
                         req.extend_from_slice(parsed.host.as_str().as_bytes());
                         req.extend_from_slice(
-                            b"\r\nUser-Agent: TRUEOS\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+                            b"\r\nUser-Agent: TRUEOS\r\nAccept: */*\r\nConnection: close\r\n",
                         );
+                        if !body.is_empty() {
+                            req.extend_from_slice(b"Content-Length: ");
+                            req.extend_from_slice(alloc::format!("{}", body.len()).as_bytes());
+                            req.extend_from_slice(b"\r\n");
+                        }
+                        for (name, value) in extra_headers.iter().copied() {
+                            req.extend_from_slice(name.as_bytes());
+                            req.extend_from_slice(b": ");
+                            req.extend_from_slice(value.as_bytes());
+                            req.extend_from_slice(b"\r\n");
+                        }
+                        req.extend_from_slice(b"\r\n");
+                        req.extend_from_slice(body);
+
                         if let Some(h) = tcp_handle {
                             let mut send_ok = false;
                             for _ in 0..64 {
@@ -367,10 +385,10 @@ pub async fn fetch_http_body(
                                 Timer::after(EmbassyDuration::from_millis(1)).await;
                             }
                             if send_ok {
-                                sent_get = true;
+                                sent_request = true;
                             } else {
                                 crate::log!(
-                                    "http: get submit failed host={} handle={}\n",
+                                    "http: request submit failed host={} handle={}\n",
                                     parsed.host,
                                     h.0
                                 );
@@ -434,4 +452,22 @@ pub async fn fetch_http_body(
 
         Timer::after(EmbassyDuration::from_millis(50)).await;
     }
+}
+
+pub async fn fetch_http_body(
+    url: &str,
+    timeout_ms: u32,
+    max_rx: usize,
+) -> Result<Vec<u8>, HttpFetchError> {
+    request_http_body(b"GET", url, &[], &[], timeout_ms, max_rx).await
+}
+
+pub async fn post_http_body(
+    url: &str,
+    extra_headers: &[(&str, &str)],
+    body: &[u8],
+    timeout_ms: u32,
+    max_rx: usize,
+) -> Result<Vec<u8>, HttpFetchError> {
+    request_http_body(b"POST", url, extra_headers, body, timeout_ms, max_rx).await
 }

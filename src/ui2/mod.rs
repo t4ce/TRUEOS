@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -10,6 +8,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::{Mutex, Once};
 
+mod ui2_font;
 mod ui2_hid;
 mod ui2_hit;
 mod ui2_hosted;
@@ -17,6 +16,7 @@ mod ui2_win_deco;
 
 mod ui2_win;
 
+pub(crate) use self::ui2_font::*;
 use self::ui2_hid::*;
 pub(crate) use self::ui2_hit::ui2_hit_task;
 use self::ui2_hit::*;
@@ -272,6 +272,7 @@ struct Ui2State {
     compose_present_history_ms: Vec<u64>,
     compose_fps_display: u16,
     last_compose_heartbeat_seq: u32,
+    last_athlas_small_ready_seq: u32,
     first_compose_signaled: bool,
 }
 
@@ -364,6 +365,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             compose_present_history_ms: Vec::new(),
             compose_fps_display: 0,
             last_compose_heartbeat_seq: 0,
+            last_athlas_small_ready_seq: 0,
             first_compose_signaled: false,
         };
 
@@ -2167,6 +2169,15 @@ pub async fn ui2_task() {
             let mut state = state_lock.lock();
             if created_factory_windows != 0 {
                 state.compose_reason = "hosted-browser-factory";
+            }
+
+            let athlas_small_ready_seq = crate::gfx::althlasfont::athlas_tier_ready_seq(0);
+            if state.last_athlas_small_ready_seq != athlas_small_ready_seq {
+                state.last_athlas_small_ready_seq = athlas_small_ready_seq;
+                if athlas_small_ready_seq != 0 {
+                    state.compose_reason = "athlas-small-ready";
+                    UI2_DIRTY.store(true, Ordering::Release);
+                }
             }
 
             pump_cursor_selection(&mut state);

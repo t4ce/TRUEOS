@@ -9,6 +9,10 @@ const ESP_GATE_REGISTRY_MAX_DEVICES: usize = 64;
 const ESP_STATUS_FETCH_TIMEOUT_MS: u32 = 750;
 const ESP_STATUS_FETCH_MAX_RX: usize = 1024;
 const ESP_STATUS_POLL_MS: u64 = 1000;
+const ESP_DEFAULT_UPLOAD_TIMEOUT_MS: u32 = 3000;
+const ESP_DEFAULT_UPLOAD_MAX_RX: usize = 1024;
+const ESP_DEFAULT_APP_FILENAME: &str = "app.py";
+const ESP_DEFAULT_APP_BODY: &[u8] = include_bytes!("../../../crates/trueos-esp/iot/led.py");
 
 static DEVICE_REGISTRY: Mutex<trueos_esp::gate::DeviceRegistry> =
     Mutex::new(trueos_esp::gate::DeviceRegistry::new(ESP_GATE_REGISTRY_MAX_DEVICES));
@@ -165,6 +169,7 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
         return;
     };
 
+    let app_exists = status.app_exists;
     let now_ms = monotonic_ms();
     let event = DEVICE_REGISTRY
         .lock()
@@ -179,6 +184,70 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
         );
         STATUS_EVENTS.lock().push_back(event);
     }
+
+    let should_upload_default = DEVICE_REGISTRY
+        .lock()
+        .take_default_app_upload_request(snapshot.handle, app_exists);
+    if should_upload_default {
+        upload_default_led_app(snapshot).await;
+    }
+}
+
+async fn upload_default_led_app(snapshot: &trueos_esp::gate::DeviceSnapshot) {
+    let iface = trueos_esp::swarm::DeviceInterface::from_snapshot(snapshot);
+    let Some(upload_url) = iface.upload_url() else {
+        return;
+    };
+
+    crate::log!(
+        "esp-gate: default upload start handle={} url={} bytes={} target={}\n",
+        snapshot.handle.0,
+        upload_url.as_str(),
+        ESP_DEFAULT_APP_BODY.len(),
+        ESP_DEFAULT_APP_FILENAME
+    );
+
+    let uploaded = crate::r::net::cli::http::post_http_body(
+        upload_url.as_str(),
+        &[("X-Filename", ESP_DEFAULT_APP_FILENAME)],
+        ESP_DEFAULT_APP_BODY,
+        ESP_DEFAULT_UPLOAD_TIMEOUT_MS,
+        ESP_DEFAULT_UPLOAD_MAX_RX,
+    )
+    .await
+    .is_ok();
+
+    let ran = if uploaded {
+        if let Some(run_url) = iface.run_url() {
+            crate::r::net::cli::http::post_http_body(
+                run_url.as_str(),
+                &[],
+                &[],
+                ESP_DEFAULT_UPLOAD_TIMEOUT_MS,
+                ESP_DEFAULT_UPLOAD_MAX_RX,
+            )
+            .await
+            .is_ok()
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let uploaded_and_ran = uploaded && ran;
+    let now_ms = monotonic_ms();
+    let _ = DEVICE_REGISTRY.lock().set_default_app_upload_result(
+        snapshot.handle,
+        uploaded_and_ran,
+        now_ms,
+    );
+    crate::log!(
+        "esp-gate: default upload done handle={} uploaded={} ran={}\n",
+        snapshot.handle.0,
+        if uploaded { 1 } else { 0 },
+        if ran { 1 } else { 0 }
+    );
 }
 
 async fn handoff_device_to_truesurfer(snapshot: &trueos_esp::gate::DeviceSnapshot) {
