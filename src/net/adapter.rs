@@ -2126,20 +2126,22 @@ impl NetService {
             IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::from_octets(remote_addr)), remote_port);
 
         let local_octets = local_ip.octets();
-        crate::log!(
-            "net: tcp connect owner={} local={}.{}.{}.{}:{} remote={}.{}.{}.{}:{}\n",
-            owner,
-            local_octets[0],
-            local_octets[1],
-            local_octets[2],
-            local_octets[3],
-            local_port,
-            remote_addr[0],
-            remote_addr[1],
-            remote_addr[2],
-            remote_addr[3],
-            remote_port
-        );
+        if crate::logflag::NET_LOG_TCP_FLOW {
+            crate::log!(
+                "net: tcp connect owner={} local={}.{}.{}.{}:{} remote={}.{}.{}.{}:{}\n",
+                owner,
+                local_octets[0],
+                local_octets[1],
+                local_octets[2],
+                local_octets[3],
+                local_port,
+                remote_addr[0],
+                remote_addr[1],
+                remote_addr[2],
+                remote_addr[3],
+                remote_port
+            );
+        }
 
         socket
             .connect(self.iface.context(), remote, local)
@@ -3204,16 +3206,18 @@ impl NetService {
             },
             NetCommand::OpenTcpConnect { remote } => match self.open_tcp_connect(owner, remote) {
                 Ok(handle) => {
-                    crate::log!(
-                        "net: open-tcp cmd owner={} remote={}.{}.{}.{}:{} handle={}\n",
-                        owner,
-                        remote.addr[0],
-                        remote.addr[1],
-                        remote.addr[2],
-                        remote.addr[3],
-                        remote.port,
-                        handle.0
-                    );
+                    if crate::logflag::NET_LOG_TCP_FLOW {
+                        crate::log!(
+                            "net: open-tcp cmd owner={} remote={}.{}.{}.{}:{} handle={}\n",
+                            owner,
+                            remote.addr[0],
+                            remote.addr[1],
+                            remote.addr[2],
+                            remote.addr[3],
+                            remote.port,
+                            handle.0
+                        );
+                    }
                     let _ = push_event(
                         owner,
                         NetEvent::Opened {
@@ -3304,7 +3308,7 @@ impl NetService {
                         let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
                         return;
                     }
-                    if data.starts_with(b"GET ") {
+                    if crate::logflag::NET_LOG_TCP_FLOW && data.starts_with(b"GET ") {
                         crate::log!(
                             "net: sendtcp cmd owner={} handle={} bytes={}\n",
                             owner,
@@ -3404,12 +3408,14 @@ impl NetService {
             let last = self.records[idx].last_tcp_state;
             if last != Some(state) {
                 self.records[idx].last_tcp_state = Some(state);
-                crate::log!(
-                    "net: tcp state owner={} handle={} state={:?}\n",
-                    owner,
-                    handle.0,
-                    state
-                );
+                if crate::logflag::NET_LOG_TCP_FLOW {
+                    crate::log!(
+                        "net: tcp state owner={} handle={} state={:?}\n",
+                        owner,
+                        handle.0,
+                        state
+                    );
+                }
             }
 
             if socket.is_active() && socket.may_recv() {
@@ -3463,15 +3469,19 @@ impl NetService {
         self.flush_tcp_tx(idx);
 
         if state == tcp::State::Established && !self.records[idx].established {
-            crate::log!("net: tcp established branch owner={} handle={}\n", owner, handle.0);
+            if crate::logflag::NET_LOG_TCP_FLOW {
+                crate::log!("net: tcp established branch owner={} handle={}\n", owner, handle.0);
+            }
             self.records[idx].established = true;
             let ok = push_event(owner, NetEvent::TcpEstablished { handle });
-            crate::log!(
-                "net: tcp established event owner={} handle={} queued={}\n",
-                owner,
-                handle.0,
-                ok
-            );
+            if crate::logflag::NET_LOG_TCP_FLOW {
+                crate::log!(
+                    "net: tcp established event owner={} handle={} queued={}\n",
+                    owner,
+                    handle.0,
+                    ok
+                );
+            }
         }
 
         if should_remove {
