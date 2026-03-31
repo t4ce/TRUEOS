@@ -1,3 +1,4 @@
+pub mod althlasfont;
 pub mod backends;
 pub mod cursor;
 pub mod jpeg_codec;

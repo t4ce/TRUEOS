@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_FILE="${1:-$SCRIPT_DIR/app.py}"
+DEVICE_HOST="${DEVICE_HOST:-}"
+DEVICE_PORT="${DEVICE_PORT:-8080}"
+TARGET_NAME="${TARGET_NAME:-app.py}"
+AUTO_RUN="${AUTO_RUN:-1}"
+
+if [[ -z "$DEVICE_HOST" ]]; then
+  echo "Set DEVICE_HOST to the board IP address." >&2
+  exit 1
+fi
+
+if [[ ! -f "$APP_FILE" ]]; then
+  echo "App file not found: $APP_FILE" >&2
+  exit 1
+fi
+
+echo "Uploading $APP_FILE to http://$DEVICE_HOST:$DEVICE_PORT/upload as $TARGET_NAME"
+curl --fail --silent --show-error \
+  -X POST \
+  --data-binary "@$APP_FILE" \
+  -H "X-Filename: $TARGET_NAME" \
+  "http://$DEVICE_HOST:$DEVICE_PORT/upload"
+echo
+
+if [[ "$AUTO_RUN" == "1" ]]; then
+  echo "Starting uploaded app"
+  curl --fail --silent --show-error -X POST "http://$DEVICE_HOST:$DEVICE_PORT/run"
+  echo
+fi
+
+#DEVICE_HOST=192.168.178.102 bash ./upload_app.sh ./IOT/c3_led.py
