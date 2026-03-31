@@ -205,7 +205,12 @@ impl HttpServer {
         }
     }
 
-    pub fn mark_response(&mut self, handle: api::NetHandle, pending_bytes: usize, keep_alive: bool) {
+    pub fn mark_response(
+        &mut self,
+        handle: api::NetHandle,
+        pending_bytes: usize,
+        keep_alive: bool,
+    ) {
         let session = self.sessions.entry(handle.0).or_default();
         session.pending_bytes = pending_bytes;
         session.sent_bytes = 0;

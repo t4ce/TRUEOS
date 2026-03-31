@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::{Mutex, Once};
 
+mod gadget;
 mod ui2_browser;
 mod ui2_font;
 mod ui2_hid;
@@ -17,6 +18,7 @@ mod ui2_win_deco;
 
 mod ui2_win;
 
+use self::gadget::*;
 use self::ui2_browser::*;
 pub(crate) use self::ui2_font::*;
 use self::ui2_hid::*;
@@ -843,11 +845,6 @@ fn note_window_viewport_sync_needed(state: &mut Ui2State, id: u32) -> bool {
     window.container_sync_needed = true;
     queue_hosted_container_sync();
     true
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_ui2_primary_browser_window_id() -> u32 {
-    browser_window_id().unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]

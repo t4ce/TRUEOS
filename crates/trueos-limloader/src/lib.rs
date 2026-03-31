@@ -73,10 +73,7 @@ pub fn default_paths(repo_root: &Path) -> LiminePaths {
 }
 
 fn default_config_args(prefix: &Path) -> String {
-    format!(
-        "--prefix={} --enable-uefi-x86-64 --enable-uefi-cd",
-        prefix.display()
-    )
+    format!("--prefix={} --enable-uefi-x86-64 --enable-uefi-cd", prefix.display())
 }
 
 fn should_build(paths: &LiminePaths) -> bool {
@@ -151,10 +148,7 @@ Set TRUEOS_LIMINE_REF/TRUEOS_LIMINE_REPO and build with network access once.",
 
     // Bootstrap if needed.
     if !paths.src_dir.join("configure").is_file() {
-        require_tool(
-            "autoreconf",
-            "Install autoconf + automake (and likely libtool)",
-        );
+        require_tool("autoreconf", "Install autoconf + automake (and likely libtool)");
         let mut cmd = Command::new("sh");
         cmd.current_dir(&paths.src_dir)
             .arg("-lc")

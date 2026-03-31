@@ -1,7 +1,7 @@
 use core::ops::Deref;
 
-pub use spin::RwLock;
 use spin::Once;
+pub use spin::RwLock;
 
 pub struct LazyLock<T> {
     once: Once<T>,

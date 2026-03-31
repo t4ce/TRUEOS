@@ -203,12 +203,7 @@ fn read_file_via_cabi(path: &str) -> Result<Vec<u8>, i32> {
 fn write_begin_via_cabi(path: &str, total_len: u64) -> Result<u32, i32> {
     let mut handle = 0u32;
     let rc = unsafe {
-        trueos_cabi_fs_write_begin(
-            path.as_ptr(),
-            path.len(),
-            total_len,
-            &mut handle as *mut u32,
-        )
+        trueos_cabi_fs_write_begin(path.as_ptr(), path.len(), total_len, &mut handle as *mut u32)
     };
     if rc != 0 {
         return Err(rc);
@@ -516,12 +511,7 @@ pub fn start_read_file(path: &[u8]) -> Result<u32, i32> {
     };
     push_async_fs_req(req)?;
     async_fs_diag(
-        alloc::format!(
-            "qjs-async-fs: read queued id={} path_len={}\n",
-            id,
-            path.len()
-        )
-        .as_str(),
+        alloc::format!("qjs-async-fs: read queued id={} path_len={}\n", id, path.len()).as_str(),
     );
     Ok(id)
 }

@@ -255,7 +255,3 @@ impl WindowInfo {
         }
     }
 }
-
-pub fn primary_browser_window() -> Option<WindowId> {
-    WindowId::new(unsafe { vcabi::trueos_cabi_ui2_primary_browser_window_id() })
-}

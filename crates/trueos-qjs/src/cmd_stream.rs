@@ -558,7 +558,9 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_png(
     argc: i32,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    unsafe { cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_png) }
+    unsafe {
+        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_png)
+    }
 }
 
 unsafe extern "C" fn qjs_cmd_stream_create_texture_png_async(
@@ -568,7 +570,12 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_png_async(
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     unsafe {
-        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_png_async)
+        cmd_stream_create_texture_from_encoded(
+            ctx,
+            argc,
+            argv,
+            trueos_cabi_gfx_upload_texture_png_async,
+        )
     }
 }
 
@@ -578,7 +585,9 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg(
     argc: i32,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    unsafe { cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_jpeg) }
+    unsafe {
+        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_jpeg)
+    }
 }
 
 unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg_async(
@@ -588,7 +597,12 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg_async(
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     unsafe {
-        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_jpeg_async)
+        cmd_stream_create_texture_from_encoded(
+            ctx,
+            argc,
+            argv,
+            trueos_cabi_gfx_upload_texture_jpeg_async,
+        )
     }
 }
 
@@ -598,7 +612,9 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_svg(
     argc: i32,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    unsafe { cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_svg) }
+    unsafe {
+        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_svg)
+    }
 }
 
 unsafe extern "C" fn qjs_cmd_stream_create_texture_svg_async(
@@ -608,7 +624,12 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_svg_async(
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     unsafe {
-        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_svg_async)
+        cmd_stream_create_texture_from_encoded(
+            ctx,
+            argc,
+            argv,
+            trueos_cabi_gfx_upload_texture_svg_async,
+        )
     }
 }
 
@@ -652,7 +673,9 @@ unsafe extern "C" fn qjs_cmd_stream_update_texture_png(
     argc: i32,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    unsafe { cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_png) }
+    unsafe {
+        cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_png)
+    }
 }
 
 unsafe extern "C" fn qjs_cmd_stream_update_texture_jpeg(
@@ -661,7 +684,9 @@ unsafe extern "C" fn qjs_cmd_stream_update_texture_jpeg(
     argc: i32,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    unsafe { cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_jpeg) }
+    unsafe {
+        cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_jpeg)
+    }
 }
 
 unsafe extern "C" fn qjs_cmd_stream_update_texture_svg(
@@ -670,7 +695,9 @@ unsafe extern "C" fn qjs_cmd_stream_update_texture_svg(
     argc: i32,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    unsafe { cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_svg) }
+    unsafe {
+        cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_svg)
+    }
 }
 
 unsafe extern "C" fn qjs_cmd_stream_destroy_texture(
@@ -984,27 +1011,9 @@ fn cmd_stream_fill_rect(
 
         let mut verts = Vec::with_capacity(24 * 12);
         push_rect(&mut verts, left_px, top_px, right_px, top_px + top_h);
-        push_rect(
-            &mut verts,
-            left_px,
-            bottom_px - bottom_h,
-            right_px,
-            bottom_px,
-        );
-        push_rect(
-            &mut verts,
-            left_px,
-            inner_top,
-            left_px + left_w,
-            inner_bottom,
-        );
-        push_rect(
-            &mut verts,
-            right_px - right_w,
-            inner_top,
-            right_px,
-            inner_bottom,
-        );
+        push_rect(&mut verts, left_px, bottom_px - bottom_h, right_px, bottom_px);
+        push_rect(&mut verts, left_px, inner_top, left_px + left_w, inner_bottom);
+        push_rect(&mut verts, right_px - right_w, inner_top, right_px, inner_bottom);
         return cmd_stream_draw_rgb_triangles(&verts, a);
     }
 
@@ -1033,450 +1042,436 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
     cmd_stream_draw_rgb_triangles(&verts, a)
 }
 
-    type CmdStreamQjsCallback = unsafe extern "C" fn(
-        *mut qjs::JSContext,
-        qjs::JSValueConst,
-        i32,
-        *const qjs::JSValueConst,
-    ) -> qjs::JSValue;
+type CmdStreamQjsCallback = unsafe extern "C" fn(
+    *mut qjs::JSContext,
+    qjs::JSValueConst,
+    i32,
+    *const qjs::JSValueConst,
+) -> qjs::JSValue;
 
-    type CmdStreamModuleExport = (&'static [u8], CmdStreamQjsCallback, i32);
+type CmdStreamModuleExport = (&'static [u8], CmdStreamQjsCallback, i32);
 
-    #[inline]
-    unsafe fn cmd_stream_register_module_exports(
-        ctx: *mut qjs::JSContext,
-        m: *mut qjs::JSModuleDef,
-        exports: &[CmdStreamModuleExport],
-    ) {
-        for &(name, func, argc) in exports {
-            let f = qjs::JS_NewCFunction2(
-                ctx,
-                Some(func),
-                name.as_ptr() as *const c_char,
-                argc,
-                qjs::JS_CFUNC_GENERIC,
-                0,
-            );
-            let _ = qjs::JS_SetModuleExport(ctx, m, name.as_ptr() as *const c_char, f);
-        }
-    }
-
-    #[inline]
-    unsafe fn cmd_stream_add_module_exports(
-        ctx: *mut qjs::JSContext,
-        m: *mut qjs::JSModuleDef,
-        exports: &[CmdStreamModuleExport],
-    ) {
-        for &(name, _, _) in exports {
-            let _ = qjs::JS_AddModuleExport(ctx, m, name.as_ptr() as *const c_char);
-        }
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_begin_frame(
-        _ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        _argc: i32,
-        _argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
-        let rc = trueos_cabi_gfx_begin_frame_no_present(clear);
-        let opened = rc == 0;
-        CMD_STREAM_FRAME_OPEN.store(opened, Ordering::Relaxed);
-        if opened {
-            cmd_stream_reset_frame_state_defaults();
-        }
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_end_frame(
-        _ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        _argc: i32,
-        _argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        if !CMD_STREAM_FRAME_OPEN.swap(false, Ordering::Relaxed) {
-            return qjs::JSValue::undefined();
-        }
-        let _ = trueos_cabi_gfx_end_frame();
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_set_clear_rgb(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(v_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let rgb = (v_f as i64).max(0) as u32 & 0x00FF_FFFF;
-        CMD_STREAM_CLEAR_RGB.store(rgb, Ordering::Relaxed);
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_set_viewport(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 2) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(w_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(h_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let w = (w_f as i64).max(1) as u32;
-        let h = (h_f as i64).max(1) as u32;
-        CMD_STREAM_VIEW_W.store(w, Ordering::Relaxed);
-        CMD_STREAM_VIEW_H.store(h, Ordering::Relaxed);
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_set_origin(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 2) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        cmd_stream_set_origin_px(x_f as f32, y_f as f32);
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_set_clip_rect(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 4) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-            return qjs::JSValue::undefined();
-        };
-        cmd_stream_apply_clip_state(cmd_stream_clip_rect_from_local(
-            x_f as f32,
-            y_f as f32,
-            w_f as f32,
-            h_f as f32,
-        ));
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_push_clip_rect(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 4) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-            return qjs::JSValue::undefined();
-        };
-
-        let next_local = cmd_stream_clip_rect_from_local(x_f as f32, y_f as f32, w_f as f32, h_f as f32);
-        let prev = *CMD_STREAM_CUR_CLIP.lock();
-        CMD_STREAM_CLIP_STACK.lock().push(prev);
-        let (view_w, view_h) = cmd_stream_view_size();
-        let next = match (prev, next_local) {
-            (_, None) => Some(cmd_stream_empty_clip_rect(view_w, view_h)),
-            (None, Some(next_rect)) => Some(next_rect),
-            (Some(prev_rect), Some(next_rect)) => {
-                Some(cmd_stream_intersect_clip_rects(prev_rect, next_rect, view_w, view_h))
-            }
-        };
-        cmd_stream_apply_clip_state(next);
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_pop_clip_rect(
-        _ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        _argc: i32,
-        _argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let prev = CMD_STREAM_CLIP_STACK.lock().pop().flatten();
-        cmd_stream_apply_clip_state(prev);
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_clear_clip_rect(
-        _ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        _argc: i32,
-        _argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        CMD_STREAM_CLIP_STACK.lock().clear();
-        cmd_stream_apply_clip_state(None);
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_set_render_target(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
-            return qjs::JSValue::undefined();
-        }
-        let Some(args) = cmd_stream_args(argv, argc, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let tex_id = (tex_id_f as i64).max(0) as u32;
-        let _ = trueos_cabi_gfx_set_render_target(tex_id);
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_clear_render_target(
-        _ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        _argc: i32,
-        _argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
-            return qjs::JSValue::undefined();
-        }
-        let _ = trueos_cabi_gfx_clear_render_target();
-        qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn qjs_cmd_stream_push_origin(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 2) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(dx_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(dy_f) = cmd_stream_arg_f64(ctx, args, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let current = (
-            CMD_STREAM_ORIGIN_X_BITS.load(Ordering::Relaxed),
-            CMD_STREAM_ORIGIN_Y_BITS.load(Ordering::Relaxed),
+#[inline]
+unsafe fn cmd_stream_register_module_exports(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+    exports: &[CmdStreamModuleExport],
+) {
+    for &(name, func, argc) in exports {
+        let f = qjs::JS_NewCFunction2(
+            ctx,
+            Some(func),
+            name.as_ptr() as *const c_char,
+            argc,
+            qjs::JS_CFUNC_GENERIC,
+            0,
         );
-        CMD_STREAM_ORIGIN_STACK.lock().push(current);
-        let (cur_x, cur_y) = cmd_stream_origin_px();
-        cmd_stream_set_origin_px(cur_x + dx_f as f32, cur_y + dy_f as f32);
-        qjs::JSValue::undefined()
+        let _ = qjs::JS_SetModuleExport(ctx, m, name.as_ptr() as *const c_char, f);
     }
+}
 
-    unsafe extern "C" fn qjs_cmd_stream_pop_origin(
-        _ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        _argc: i32,
-        _argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let prev = CMD_STREAM_ORIGIN_STACK.lock().pop();
-        if let Some((x_bits, y_bits)) = prev {
-            CMD_STREAM_ORIGIN_X_BITS.store(x_bits, Ordering::Relaxed);
-            CMD_STREAM_ORIGIN_Y_BITS.store(y_bits, Ordering::Relaxed);
-        } else {
-            cmd_stream_set_origin_px(0.0, 0.0);
+#[inline]
+unsafe fn cmd_stream_add_module_exports(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+    exports: &[CmdStreamModuleExport],
+) {
+    for &(name, _, _) in exports {
+        let _ = qjs::JS_AddModuleExport(ctx, m, name.as_ptr() as *const c_char);
+    }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_begin_frame(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: i32,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
+    let rc = trueos_cabi_gfx_begin_frame_no_present(clear);
+    let opened = rc == 0;
+    CMD_STREAM_FRAME_OPEN.store(opened, Ordering::Relaxed);
+    if opened {
+        cmd_stream_reset_frame_state_defaults();
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_end_frame(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: i32,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if !CMD_STREAM_FRAME_OPEN.swap(false, Ordering::Relaxed) {
+        return qjs::JSValue::undefined();
+    }
+    let _ = trueos_cabi_gfx_end_frame();
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_clear_rgb(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(v_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let rgb = (v_f as i64).max(0) as u32 & 0x00FF_FFFF;
+    CMD_STREAM_CLEAR_RGB.store(rgb, Ordering::Relaxed);
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_viewport(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 2) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(w_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(h_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let w = (w_f as i64).max(1) as u32;
+    let h = (h_f as i64).max(1) as u32;
+    CMD_STREAM_VIEW_W.store(w, Ordering::Relaxed);
+    CMD_STREAM_VIEW_H.store(h, Ordering::Relaxed);
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_origin(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 2) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    cmd_stream_set_origin_px(x_f as f32, y_f as f32);
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_clip_rect(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 4) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+        return qjs::JSValue::undefined();
+    };
+    cmd_stream_apply_clip_state(cmd_stream_clip_rect_from_local(
+        x_f as f32, y_f as f32, w_f as f32, h_f as f32,
+    ));
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_push_clip_rect(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 4) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+        return qjs::JSValue::undefined();
+    };
+
+    let next_local =
+        cmd_stream_clip_rect_from_local(x_f as f32, y_f as f32, w_f as f32, h_f as f32);
+    let prev = *CMD_STREAM_CUR_CLIP.lock();
+    CMD_STREAM_CLIP_STACK.lock().push(prev);
+    let (view_w, view_h) = cmd_stream_view_size();
+    let next = match (prev, next_local) {
+        (_, None) => Some(cmd_stream_empty_clip_rect(view_w, view_h)),
+        (None, Some(next_rect)) => Some(next_rect),
+        (Some(prev_rect), Some(next_rect)) => {
+            Some(cmd_stream_intersect_clip_rects(prev_rect, next_rect, view_w, view_h))
         }
-        qjs::JSValue::undefined()
-    }
+    };
+    cmd_stream_apply_clip_state(next);
+    qjs::JSValue::undefined()
+}
 
-    unsafe extern "C" fn qjs_cmd_stream_set_blend_enabled(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(enabled_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        if enabled_f != 0.0 {
-            CMD_STREAM_BLEND_ENABLED.store(1, Ordering::Relaxed);
-            let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
-            let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
-            cmd_stream_apply_blend_mode(mode, pma);
-        } else {
-            CMD_STREAM_BLEND_ENABLED.store(0, Ordering::Relaxed);
-            let _ = trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0);
-        }
-        qjs::JSValue::undefined()
-    }
+unsafe extern "C" fn qjs_cmd_stream_pop_clip_rect(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: i32,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let prev = CMD_STREAM_CLIP_STACK.lock().pop().flatten();
+    cmd_stream_apply_clip_state(prev);
+    qjs::JSValue::undefined()
+}
 
-    unsafe extern "C" fn qjs_cmd_stream_set_sampler(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 4) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(wrap_u) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(wrap_v) = cmd_stream_arg_f64(ctx, args, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(min_f) = cmd_stream_arg_f64(ctx, args, 2) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(mag_f) = cmd_stream_arg_f64(ctx, args, 3) else {
-            return qjs::JSValue::undefined();
-        };
-        let _ = trueos_cabi_gfx_set_sampler(
-            (wrap_u as i64).max(0) as u32,
-            (wrap_v as i64).max(0) as u32,
-            (min_f as i64).max(0) as u32,
-            (mag_f as i64).max(0) as u32,
-        );
-        qjs::JSValue::undefined()
-    }
+unsafe extern "C" fn qjs_cmd_stream_clear_clip_rect(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: i32,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    CMD_STREAM_CLIP_STACK.lock().clear();
+    cmd_stream_apply_clip_state(None);
+    qjs::JSValue::undefined()
+}
 
-    unsafe extern "C" fn qjs_cmd_stream_set_blend_mode(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(mode_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        let mode = ((mode_f as i64).clamp(0, 3)) as u32;
-        CMD_STREAM_BLEND_MODE.store(mode, Ordering::Relaxed);
-        if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
-            let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
-            cmd_stream_apply_blend_mode(mode, pma);
-        }
-        qjs::JSValue::undefined()
+unsafe extern "C" fn qjs_cmd_stream_set_render_target(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
+        return qjs::JSValue::undefined();
     }
+    let Some(args) = cmd_stream_args(argv, argc, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let tex_id = (tex_id_f as i64).max(0) as u32;
+    let _ = trueos_cabi_gfx_set_render_target(tex_id);
+    qjs::JSValue::undefined()
+}
 
-    unsafe extern "C" fn qjs_cmd_stream_set_premultiplied_alpha(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        argc: i32,
-        argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        let Some(args) = cmd_stream_args(argv, argc, 1) else {
-            return qjs::JSValue::undefined();
-        };
-        let Some(pma_f) = cmd_stream_arg_f64(ctx, args, 0) else {
-            return qjs::JSValue::undefined();
-        };
-        CMD_STREAM_PMA.store(if pma_f != 0.0 { 1 } else { 0 }, Ordering::Relaxed);
-        if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
-            let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
-            cmd_stream_apply_blend_mode(mode, pma_f != 0.0);
-        }
-        qjs::JSValue::undefined()
+unsafe extern "C" fn qjs_cmd_stream_clear_render_target(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: i32,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
+        return qjs::JSValue::undefined();
     }
+    let _ = trueos_cabi_gfx_clear_render_target();
+    qjs::JSValue::undefined()
+}
 
-    const CMD_STREAM_MODULE_EXPORTS: &[CmdStreamModuleExport] = &[
-        (b"beginFrame\0", qjs_cmd_stream_begin_frame, 0),
-        (b"endFrame\0", qjs_cmd_stream_end_frame, 0),
-        (b"setClearRgb\0", qjs_cmd_stream_set_clear_rgb, 1),
-        (b"setViewport\0", qjs_cmd_stream_set_viewport, 2),
-        (b"setOrigin\0", qjs_cmd_stream_set_origin, 2),
-        (b"setClipRect\0", qjs_cmd_stream_set_clip_rect, 4),
-        (b"pushClipRect\0", qjs_cmd_stream_push_clip_rect, 4),
-        (b"popClipRect\0", qjs_cmd_stream_pop_clip_rect, 0),
-        (b"clearClipRect\0", qjs_cmd_stream_clear_clip_rect, 0),
-        (b"setRenderTarget\0", qjs_cmd_stream_set_render_target, 1),
-        (b"clearRenderTarget\0", qjs_cmd_stream_clear_render_target, 0),
-        (b"pushOrigin\0", qjs_cmd_stream_push_origin, 2),
-        (b"popOrigin\0", qjs_cmd_stream_pop_origin, 0),
-        (b"setBlendEnabled\0", qjs_cmd_stream_set_blend_enabled, 1),
-        (b"setSampler\0", qjs_cmd_stream_set_sampler, 4),
-        (b"setBlendMode\0", qjs_cmd_stream_set_blend_mode, 1),
-        (
-            b"setPremultipliedAlpha\0",
-            qjs_cmd_stream_set_premultiplied_alpha,
-            1,
-        ),
-        (b"createTextureRgba\0", qjs_cmd_stream_create_texture_rgba, 3),
-        (b"createRenderTarget\0", qjs_cmd_stream_create_render_target, 2),
-        (b"createTexturePng\0", qjs_cmd_stream_create_texture_png, 1),
-        (b"createTextureJpeg\0", qjs_cmd_stream_create_texture_jpeg, 1),
-        (b"createTextureSvg\0", qjs_cmd_stream_create_texture_svg, 1),
-        (b"createTexturePngAsync\0", qjs_cmd_stream_create_texture_png_async, 1),
-        (b"createTextureJpegAsync\0", qjs_cmd_stream_create_texture_jpeg_async, 1),
-        (b"createTextureSvgAsync\0", qjs_cmd_stream_create_texture_svg_async, 1),
-        (b"updateTextureRgba\0", qjs_cmd_stream_update_texture_rgba, 4),
-        (b"updateTexturePng\0", qjs_cmd_stream_update_texture_png, 2),
-        (b"updateTextureJpeg\0", qjs_cmd_stream_update_texture_jpeg, 2),
-        (b"updateTextureSvg\0", qjs_cmd_stream_update_texture_svg, 2),
-        (b"getTextureStatus\0", qjs_cmd_stream_get_texture_status, 1),
-        (b"destroyTexture\0", qjs_cmd_stream_destroy_texture, 1),
-        (b"drawTrianglesU8\0", draw_cmd_stream::qjs_cmd_stream_draw_triangles_u8, 1),
-        (b"fillRect\0", draw_cmd_stream::qjs_cmd_stream_fill_rect, 5),
-        (b"drawLine\0", draw_cmd_stream::qjs_cmd_stream_draw_line, 5),
-        (
-            b"drawTexturedTrianglesU8\0",
-            draw_cmd_stream::qjs_cmd_stream_draw_textured_triangles_u8,
-            2,
-        ),
-        (b"drawTextureRect\0", draw_cmd_stream::qjs_cmd_stream_draw_texture_rect, 5),
-        (
-            b"drawLyonIconInFrame\0",
-            lyon_cmd_stream::qjs_cmd_stream_draw_lyon_icon_in_frame,
-            4,
-        ),
-        (b"stepIconCollisions\0", draw_cmd_stream::qjs_cmd_stream_step_icon_collisions, 5),
-    ];
+unsafe extern "C" fn qjs_cmd_stream_push_origin(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 2) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(dx_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(dy_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let current = (
+        CMD_STREAM_ORIGIN_X_BITS.load(Ordering::Relaxed),
+        CMD_STREAM_ORIGIN_Y_BITS.load(Ordering::Relaxed),
+    );
+    CMD_STREAM_ORIGIN_STACK.lock().push(current);
+    let (cur_x, cur_y) = cmd_stream_origin_px();
+    cmd_stream_set_origin_px(cur_x + dx_f as f32, cur_y + dy_f as f32);
+    qjs::JSValue::undefined()
+}
 
-    unsafe extern "C" fn qjs_cmd_stream_module_init(
-        ctx: *mut qjs::JSContext,
-        m: *mut qjs::JSModuleDef,
-    ) -> i32 {
-        unsafe { cmd_stream_register_module_exports(ctx, m, CMD_STREAM_MODULE_EXPORTS) };
-        0
+unsafe extern "C" fn qjs_cmd_stream_pop_origin(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: i32,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let prev = CMD_STREAM_ORIGIN_STACK.lock().pop();
+    if let Some((x_bits, y_bits)) = prev {
+        CMD_STREAM_ORIGIN_X_BITS.store(x_bits, Ordering::Relaxed);
+        CMD_STREAM_ORIGIN_Y_BITS.store(y_bits, Ordering::Relaxed);
+    } else {
+        cmd_stream_set_origin_px(0.0, 0.0);
     }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_blend_enabled(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(enabled_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    if enabled_f != 0.0 {
+        CMD_STREAM_BLEND_ENABLED.store(1, Ordering::Relaxed);
+        let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
+        let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
+        cmd_stream_apply_blend_mode(mode, pma);
+    } else {
+        CMD_STREAM_BLEND_ENABLED.store(0, Ordering::Relaxed);
+        let _ = trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0);
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_sampler(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 4) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(wrap_u) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(wrap_v) = cmd_stream_arg_f64(ctx, args, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(min_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(mag_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+        return qjs::JSValue::undefined();
+    };
+    let _ = trueos_cabi_gfx_set_sampler(
+        (wrap_u as i64).max(0) as u32,
+        (wrap_v as i64).max(0) as u32,
+        (min_f as i64).max(0) as u32,
+        (mag_f as i64).max(0) as u32,
+    );
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_blend_mode(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(mode_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    let mode = ((mode_f as i64).clamp(0, 3)) as u32;
+    CMD_STREAM_BLEND_MODE.store(mode, Ordering::Relaxed);
+    if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
+        let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
+        cmd_stream_apply_blend_mode(mode, pma);
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_premultiplied_alpha(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(args) = cmd_stream_args(argv, argc, 1) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(pma_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+        return qjs::JSValue::undefined();
+    };
+    CMD_STREAM_PMA.store(if pma_f != 0.0 { 1 } else { 0 }, Ordering::Relaxed);
+    if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
+        let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
+        cmd_stream_apply_blend_mode(mode, pma_f != 0.0);
+    }
+    qjs::JSValue::undefined()
+}
+
+const CMD_STREAM_MODULE_EXPORTS: &[CmdStreamModuleExport] = &[
+    (b"beginFrame\0", qjs_cmd_stream_begin_frame, 0),
+    (b"endFrame\0", qjs_cmd_stream_end_frame, 0),
+    (b"setClearRgb\0", qjs_cmd_stream_set_clear_rgb, 1),
+    (b"setViewport\0", qjs_cmd_stream_set_viewport, 2),
+    (b"setOrigin\0", qjs_cmd_stream_set_origin, 2),
+    (b"setClipRect\0", qjs_cmd_stream_set_clip_rect, 4),
+    (b"pushClipRect\0", qjs_cmd_stream_push_clip_rect, 4),
+    (b"popClipRect\0", qjs_cmd_stream_pop_clip_rect, 0),
+    (b"clearClipRect\0", qjs_cmd_stream_clear_clip_rect, 0),
+    (b"setRenderTarget\0", qjs_cmd_stream_set_render_target, 1),
+    (b"clearRenderTarget\0", qjs_cmd_stream_clear_render_target, 0),
+    (b"pushOrigin\0", qjs_cmd_stream_push_origin, 2),
+    (b"popOrigin\0", qjs_cmd_stream_pop_origin, 0),
+    (b"setBlendEnabled\0", qjs_cmd_stream_set_blend_enabled, 1),
+    (b"setSampler\0", qjs_cmd_stream_set_sampler, 4),
+    (b"setBlendMode\0", qjs_cmd_stream_set_blend_mode, 1),
+    (b"setPremultipliedAlpha\0", qjs_cmd_stream_set_premultiplied_alpha, 1),
+    (b"createTextureRgba\0", qjs_cmd_stream_create_texture_rgba, 3),
+    (b"createRenderTarget\0", qjs_cmd_stream_create_render_target, 2),
+    (b"createTexturePng\0", qjs_cmd_stream_create_texture_png, 1),
+    (b"createTextureJpeg\0", qjs_cmd_stream_create_texture_jpeg, 1),
+    (b"createTextureSvg\0", qjs_cmd_stream_create_texture_svg, 1),
+    (b"createTexturePngAsync\0", qjs_cmd_stream_create_texture_png_async, 1),
+    (b"createTextureJpegAsync\0", qjs_cmd_stream_create_texture_jpeg_async, 1),
+    (b"createTextureSvgAsync\0", qjs_cmd_stream_create_texture_svg_async, 1),
+    (b"updateTextureRgba\0", qjs_cmd_stream_update_texture_rgba, 4),
+    (b"updateTexturePng\0", qjs_cmd_stream_update_texture_png, 2),
+    (b"updateTextureJpeg\0", qjs_cmd_stream_update_texture_jpeg, 2),
+    (b"updateTextureSvg\0", qjs_cmd_stream_update_texture_svg, 2),
+    (b"getTextureStatus\0", qjs_cmd_stream_get_texture_status, 1),
+    (b"destroyTexture\0", qjs_cmd_stream_destroy_texture, 1),
+    (b"drawTrianglesU8\0", draw_cmd_stream::qjs_cmd_stream_draw_triangles_u8, 1),
+    (b"fillRect\0", draw_cmd_stream::qjs_cmd_stream_fill_rect, 5),
+    (b"drawLine\0", draw_cmd_stream::qjs_cmd_stream_draw_line, 5),
+    (b"drawTexturedTrianglesU8\0", draw_cmd_stream::qjs_cmd_stream_draw_textured_triangles_u8, 2),
+    (b"drawTextureRect\0", draw_cmd_stream::qjs_cmd_stream_draw_texture_rect, 5),
+    (b"drawLyonIconInFrame\0", lyon_cmd_stream::qjs_cmd_stream_draw_lyon_icon_in_frame, 4),
+    (b"stepIconCollisions\0", draw_cmd_stream::qjs_cmd_stream_step_icon_collisions, 5),
+];
+
+unsafe extern "C" fn qjs_cmd_stream_module_init(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+) -> i32 {
+    unsafe { cmd_stream_register_module_exports(ctx, m, CMD_STREAM_MODULE_EXPORTS) };
+    0
+}
 
 #[inline]
 pub(crate) unsafe fn try_create_native_module(
@@ -1492,7 +1487,7 @@ pub(crate) unsafe fn try_create_native_module(
         if m.is_null() {
             return core::ptr::null_mut();
         }
-            unsafe { cmd_stream_add_module_exports(ctx, m, CMD_STREAM_MODULE_EXPORTS) };
+        unsafe { cmd_stream_add_module_exports(ctx, m, CMD_STREAM_MODULE_EXPORTS) };
         return m;
     }
 

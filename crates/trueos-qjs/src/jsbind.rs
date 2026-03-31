@@ -82,14 +82,7 @@ pub unsafe fn new_c_function(
     argc: i32,
     func: Option<qjs::JSCFunction>,
 ) -> qjs::JSValue {
-    qjs::JS_NewCFunction2(
-        ctx,
-        func,
-        name.as_ptr() as *const c_char,
-        argc,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    )
+    qjs::JS_NewCFunction2(ctx, func, name.as_ptr() as *const c_char, argc, qjs::JS_CFUNC_GENERIC, 0)
 }
 
 #[inline]

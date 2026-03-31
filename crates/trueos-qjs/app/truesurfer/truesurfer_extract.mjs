@@ -5,7 +5,6 @@ const TRUESURFER_SUBSET_PROFILE = Object.freeze({
   includeStyles: true,
   includeScripts: true,
   includeBodyHierarchy: true,
-  includeHostedTextRows: true,
   maxBodyHierarchyNodes: 10,
   maxBodyHierarchyDepth: 6,
   bodyTags: Object.freeze([
@@ -18,7 +17,9 @@ const TRUESURFER_SUBSET_PROFILE = Object.freeze({
 const COMMON_BODY_TAGS = new Set(TRUESURFER_SUBSET_PROFILE.bodyTags);
 const BODY_HIERARCHY_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyNodes;
 const BODY_HIERARCHY_DEPTH_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyDepth;
-const LAYOUT_INTENT_NODE_LIMIT = 32;
+const GADGET_SNAPSHOT_LIMIT = 48;
+const DEFAULT_GADGET_FONT_PX = 14;
+const DEFAULT_GADGET_LINE_HEIGHT_PX = 20;
 const DEFAULT_HEAD_SHELL = '<head></head>';
 const DEFAULT_BODY_SHELL = '<body></body>';
 const COMMON_BODY_TAGS_FALLBACK = new Set([
@@ -176,6 +177,7 @@ function collectBodyHierarchy(bodyHtml, limit = BODY_HIERARCHY_LIMIT) {
   const tokenRe = /<\/?([a-zA-Z0-9:-]+)\b[^>]*>|([^<]+)/g;
   const stack = ['body'];
   const out = [];
+  let nextNodeId = 1;
   let match;
 
   while ((match = tokenRe.exec(source)) && out.length < limit) {
@@ -183,7 +185,8 @@ function collectBodyHierarchy(bodyHtml, limit = BODY_HIERARCHY_LIMIT) {
     if (textChunk != null) {
       const text = collapseWhitespace(decodeBasicEntities(textChunk));
       if (text && (stack.length - 1) <= BODY_HIERARCHY_DEPTH_LIMIT) {
-        out.push({ depth: stack.length - 1, tag: '#text', text });
+        out.push({ nodeId: nextNodeId, depth: stack.length - 1, tag: '#text', text });
+        nextNodeId += 1;
       }
       continue;
     }
@@ -205,7 +208,8 @@ function collectBodyHierarchy(bodyHtml, limit = BODY_HIERARCHY_LIMIT) {
 
     const currentDepth = stack.length - 1;
     if ((COMMON_BODY_TAGS.has(tagName) || COMMON_BODY_TAGS_FALLBACK.has(tagName)) && currentDepth <= BODY_HIERARCHY_DEPTH_LIMIT) {
-      out.push({ depth: stack.length - 1, tag: tagName, text: '' });
+      out.push({ nodeId: nextNodeId, depth: stack.length - 1, tag: tagName, text: '' });
+      nextNodeId += 1;
     }
 
     if (!isSelfClosing) {
@@ -231,37 +235,6 @@ function summarizeBodyHierarchy(bodyHierarchy) {
   return parts.join(' > ');
 }
 
-function buildHostedTextRows(title, bodyHierarchy, limit = 24) {
-  const rows = [];
-  const titleText = collapseWhitespace(title);
-  if (titleText) {
-    rows.push({ text: titleText, indentPx: 0 });
-  }
-  const items = Array.isArray(bodyHierarchy) ? bodyHierarchy : [];
-  for (let index = 0; index < items.length && rows.length < limit; index += 1) {
-    const entry = items[index] || {};
-    const tag = collapseWhitespace(entry.tag);
-    const text = collapseWhitespace(entry.text);
-    if (tag === '#text' && text) {
-      const depth = Math.max(0, Number(entry.depth) || 0);
-      rows.push({
-        text,
-        indentPx: depth * 12,
-      });
-      continue;
-    }
-    if (!tag) {
-      continue;
-    }
-    const depth = Math.max(0, Number(entry.depth) || 0);
-    rows.push({
-      text: tag,
-      indentPx: depth * 12,
-    });
-  }
-  return rows;
-}
-
 function estimateTextWidthPx(text, fontPx) {
   const value = collapseWhitespace(text);
   if (!value) {
@@ -271,200 +244,99 @@ function estimateTextWidthPx(text, fontPx) {
   return Math.max(glyphPx, value.length * glyphPx);
 }
 
-function classifyLayoutTag(tag) {
-  switch (safeString(tag).toLowerCase()) {
-    case '#text':
-      return 'text';
-    case 'img':
-      return 'image';
-    case 'button':
-      return 'button';
-    case 'input':
-      return 'input';
-    case 'hr':
-      return 'rule';
-    case 'a':
-      return 'inline';
-    case 'span':
-      return 'inline';
-    default:
-      return 'block';
-  }
-}
-
-function estimateLayoutNodeMetrics(tag, depth, text = '') {
+function gadgetUsesInnerText(tag) {
   const name = safeString(tag).toLowerCase();
-  const indent = Math.max(0, Number(depth) || 0) * 12;
-  let intrinsicWidthPx = 0;
-  let intrinsicHeightPx = 20;
-  let minWidthPx = 0;
-  let minHeightPx = 20;
-  let paddingLeftPx = 0;
-  let paddingTopPx = 0;
-  let paddingRightPx = 0;
-  let paddingBottomPx = 0;
-  let marginBottomPx = 4;
-
-  if (name === '#text') {
-    intrinsicWidthPx = estimateTextWidthPx(text, 14);
-    intrinsicHeightPx = 20;
-    minWidthPx = intrinsicWidthPx;
-    minHeightPx = intrinsicHeightPx;
-    marginBottomPx = 2;
-  } else if (/^h[1-6]$/.test(name)) {
-    const level = Number(name[1] || 1);
-    intrinsicHeightPx = Math.max(20, 34 - (level * 3));
-    minHeightPx = intrinsicHeightPx;
-    marginBottomPx = 8;
-  } else if (name === 'button') {
-    intrinsicWidthPx = 120;
-    intrinsicHeightPx = 32;
-    minWidthPx = intrinsicWidthPx;
-    minHeightPx = intrinsicHeightPx;
-    paddingLeftPx = 12;
-    paddingRightPx = 12;
-    paddingTopPx = 6;
-    paddingBottomPx = 6;
-    marginBottomPx = 6;
-  } else if (name === 'input') {
-    intrinsicWidthPx = 180;
-    intrinsicHeightPx = 30;
-    minWidthPx = intrinsicWidthPx;
-    minHeightPx = intrinsicHeightPx;
-    paddingLeftPx = 10;
-    paddingRightPx = 10;
-    paddingTopPx = 6;
-    paddingBottomPx = 6;
-    marginBottomPx = 6;
-  } else if (name === 'img') {
-    intrinsicWidthPx = 160;
-    intrinsicHeightPx = 120;
-    minWidthPx = intrinsicWidthPx;
-    minHeightPx = intrinsicHeightPx;
-    marginBottomPx = 8;
-  } else if (name === 'hr') {
-    intrinsicHeightPx = 8;
-    minHeightPx = intrinsicHeightPx;
-    marginBottomPx = 8;
-  } else if (name === 'a' || name === 'span') {
-    intrinsicWidthPx = estimateTextWidthPx(name, 14);
-    intrinsicHeightPx = 20;
-    minWidthPx = intrinsicWidthPx;
-    minHeightPx = intrinsicHeightPx;
-  }
-
-  return {
-    indentPx: indent,
-    intrinsicWidthPx,
-    intrinsicHeightPx,
-    minWidthPx,
-    minHeightPx,
-    paddingLeftPx,
-    paddingTopPx,
-    paddingRightPx,
-    paddingBottomPx,
-    marginBottomPx,
-  };
+  return name === 'p' || name === 'span' || /^h[1-6]$/.test(name);
 }
 
-function buildLayoutIntent(title, bodyHierarchy, limit = LAYOUT_INTENT_NODE_LIMIT) {
-  const nodes = [{
-    nodeId: 1,
-    parentId: 0,
-    depth: 0,
-    kind: 'root',
-    tag: 'body',
-    intrinsicWidthPx: 0,
-    intrinsicHeightPx: 0,
-    minWidthPx: 0,
-    minHeightPx: 0,
-    marginLeftPx: 0,
-    marginTopPx: 0,
-    marginRightPx: 0,
-    marginBottomPx: 0,
-    paddingLeftPx: 0,
-    paddingTopPx: 0,
-    paddingRightPx: 0,
-    paddingBottomPx: 0,
-    flexGrow: 0,
-    flexShrink: 0,
-  }];
-  const stack = [1];
-  let nextNodeId = 2;
-  const titleText = collapseWhitespace(title);
-
-  if (titleText && nodes.length < limit) {
-    nodes.push({
-      nodeId: nextNodeId,
-      parentId: 1,
-      depth: 1,
-      kind: 'text',
-      tag: 'title',
-      text: titleText,
-      intrinsicWidthPx: estimateTextWidthPx(titleText, 18),
-      intrinsicHeightPx: 26,
-      minWidthPx: 0,
-      minHeightPx: 26,
-      marginLeftPx: 0,
-      marginTopPx: 0,
-      marginRightPx: 0,
-      marginBottomPx: 8,
-      paddingLeftPx: 0,
-      paddingTopPx: 0,
-      paddingRightPx: 0,
-      paddingBottomPx: 0,
-      flexGrow: 0,
-      flexShrink: 0,
-    });
-    nextNodeId += 1;
-  }
-
+function collectGadgetInnerText(bodyHierarchy, startIndex, parentDepth) {
+  const parts = [];
   const items = Array.isArray(bodyHierarchy) ? bodyHierarchy : [];
-  for (let index = 0; index < items.length && nodes.length < limit; index += 1) {
+  for (let index = startIndex + 1; index < items.length; index += 1) {
     const entry = items[index] || {};
-    const tag = collapseWhitespace(entry.tag).toLowerCase();
-    const text = collapseWhitespace(entry.text);
-    if (!tag) {
+    const depth = Math.max(0, Number(entry.depth) || 0);
+    if (depth <= parentDepth) {
+      break;
+    }
+    if (collapseWhitespace(entry.tag) !== '#text') {
       continue;
     }
-    const depth = Math.max(0, Number(entry.depth) || 0);
-    while (stack.length > depth + 1) {
-      stack.pop();
+    const text = collapseWhitespace(entry.text);
+    if (text) {
+      parts.push(text);
     }
-    const parentId = stack[stack.length - 1] || 1;
-    const metrics = estimateLayoutNodeMetrics(tag, depth, text);
-    const nodeId = nextNodeId;
-    nextNodeId += 1;
-    nodes.push({
-      nodeId,
-      parentId,
-      depth: depth + 1,
-      kind: classifyLayoutTag(tag),
+  }
+  return collapseWhitespace(parts.join(' '));
+}
+
+function gadgetFontSizePx(tag) {
+  const name = safeString(tag).toLowerCase();
+  if (!/^h[1-6]$/.test(name)) {
+    return DEFAULT_GADGET_FONT_PX;
+  }
+  const level = Number(name[1] || 1);
+  return Math.max(DEFAULT_GADGET_FONT_PX, 24 - ((level - 1) * 2));
+}
+
+function gadgetLineHeightPx(tag) {
+  const fontPx = gadgetFontSizePx(tag);
+  return Math.max(DEFAULT_GADGET_LINE_HEIGHT_PX, fontPx + 4);
+}
+
+function gadgetDisplayText(tag, innerText) {
+  const name = safeString(tag).toLowerCase();
+  const text = collapseWhitespace(innerText);
+  if (gadgetUsesInnerText(name) && text) {
+    return text;
+  }
+  if (!name || name === '#text') {
+    return text;
+  }
+  return `<${name}>`;
+}
+
+function buildGadgetSnapshot(bodyHierarchy, limit = GADGET_SNAPSHOT_LIMIT) {
+  const gadgets = [];
+  const items = Array.isArray(bodyHierarchy) ? bodyHierarchy : [];
+  let yCursor = 0;
+
+  for (let index = 0; index < items.length && gadgets.length < limit; index += 1) {
+    const entry = items[index] || {};
+    const tag = collapseWhitespace(entry.tag).toLowerCase();
+    if (!tag || tag === '#text') {
+      continue;
+    }
+
+    const depth = Math.max(0, Number(entry.depth) || 0);
+    const innerText = collectGadgetInnerText(items, index, depth);
+    const text = gadgetDisplayText(tag, innerText);
+    if (!text) {
+      continue;
+    }
+
+    const fontSizePx = gadgetFontSizePx(tag);
+    const lineHeightPx = gadgetLineHeightPx(tag);
+    const xPx = depth * 12;
+    const widthPx = estimateTextWidthPx(text, fontSizePx);
+    const heightPx = lineHeightPx;
+    gadgets.push({
+      nodeId: Math.max(1, Number(entry.nodeId) || (index + 1)),
       tag,
       text,
-      intrinsicWidthPx: metrics.intrinsicWidthPx,
-      intrinsicHeightPx: metrics.intrinsicHeightPx,
-      minWidthPx: metrics.minWidthPx,
-      minHeightPx: metrics.minHeightPx,
-      marginLeftPx: metrics.indentPx,
-      marginTopPx: 0,
-      marginRightPx: 0,
-      marginBottomPx: metrics.marginBottomPx,
-      paddingLeftPx: metrics.paddingLeftPx,
-      paddingTopPx: metrics.paddingTopPx,
-      paddingRightPx: metrics.paddingRightPx,
-      paddingBottomPx: metrics.paddingBottomPx,
-      flexGrow: 0,
-      flexShrink: 0,
+      xPx,
+      yPx: yCursor,
+      widthPx,
+      heightPx,
+      fontSizePx,
+      lineHeightPx,
+      changed: false,
     });
-    if (tag !== '#text') {
-      stack.push(nodeId);
-    }
+    yCursor += heightPx;
   }
 
   return {
     version: 1,
-    nodes,
+    gadgets,
   };
 }
 
@@ -556,10 +428,7 @@ function extractDocumentArtifacts(source) {
   const styleIndexMs = 0;
   const shellHtml = buildMinimalShell(title);
   const parseMs = Date.now() - startedAt;
-  const textRows = TRUESURFER_SUBSET_PROFILE.includeHostedTextRows
-    ? buildHostedTextRows(title, bodyHierarchy)
-    : [];
-  const layoutIntent = buildLayoutIntent(title, bodyHierarchy);
+  const gadgetSnapshot = buildGadgetSnapshot(bodyHierarchy);
 
   let styleBytes = 0;
   for (const style of styles) {
@@ -586,8 +455,7 @@ function extractDocumentArtifacts(source) {
     bodyBytes: bodyHtml.length,
     bodyHierarchy,
     bodyHierarchySummary,
-    textRows,
-    layoutIntent,
+    gadgetSnapshot,
     styleCount: styles.length,
     styleBytes,
     styleSlotCount: styleIndex.styleSlotCount,

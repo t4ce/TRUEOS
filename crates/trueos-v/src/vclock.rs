@@ -11,7 +11,8 @@ pub fn ntp_current_unix_seconds() -> u64 {
 
 #[inline]
 pub fn kernel_date_day_month_year() -> Option<String> {
-    let len = unsafe { vcabi::trueos_cabi_ntp_kernel_date_day_month_year(core::ptr::null_mut(), 0) };
+    let len =
+        unsafe { vcabi::trueos_cabi_ntp_kernel_date_day_month_year(core::ptr::null_mut(), 0) };
     if len == 0 {
         return None;
     }

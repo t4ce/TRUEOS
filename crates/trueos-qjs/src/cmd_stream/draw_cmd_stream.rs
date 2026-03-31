@@ -50,13 +50,7 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_fill_rect(
     let outline = super::cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) != 0.0;
     let chamfer = super::cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) != 0.0;
     let _ = super::cmd_stream_fill_rect(
-        x_f as f32,
-        y_f as f32,
-        w_f as f32,
-        h_f as f32,
-        rgba,
-        outline,
-        chamfer,
+        x_f as f32, y_f as f32, w_f as f32, h_f as f32, rgba, outline, chamfer,
     );
     qjs::JSValue::undefined()
 }
@@ -87,7 +81,9 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_draw_line(
     };
 
     let rgba = (rgba_f as i64).max(0) as u32;
-    let thickness = super::cmd_stream_arg_f64(ctx, args, 5).unwrap_or(1.0).max(0.5) as f32;
+    let thickness = super::cmd_stream_arg_f64(ctx, args, 5)
+        .unwrap_or(1.0)
+        .max(0.5) as f32;
     let _ = super::cmd_stream_draw_line(
         x1_f as f32,
         y1_f as f32,
@@ -156,9 +152,8 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_draw_texture_rect(
     let v0 = super::cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) as f32;
     let u1 = super::cmd_stream_arg_f64(ctx, args, 7).unwrap_or(1.0) as f32;
     let v1 = super::cmd_stream_arg_f64(ctx, args, 8).unwrap_or(1.0) as f32;
-    let rgba =
-        (super::cmd_stream_arg_f64(ctx, args, 9).unwrap_or(0xFFFF_FFFFu32 as f64) as i64).max(0)
-            as u32;
+    let rgba = (super::cmd_stream_arg_f64(ctx, args, 9).unwrap_or(0xFFFF_FFFFu32 as f64) as i64)
+        .max(0) as u32;
 
     qjs::JSValue::undefined()
 }
@@ -173,10 +168,14 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_step_icon_collisions(
         return qjs::JS_NewFloat64(ctx, 0.0);
     };
 
-    let Some((pos_ptr, pos_len, pos_ab)) = super::cmd_stream_read_f32_slice_from_value(ctx, args[0]) else {
+    let Some((pos_ptr, pos_len, pos_ab)) =
+        super::cmd_stream_read_f32_slice_from_value(ctx, args[0])
+    else {
         return qjs::JS_NewFloat64(ctx, 0.0);
     };
-    let Some((vel_ptr, vel_len, vel_ab)) = super::cmd_stream_read_f32_slice_from_value(ctx, args[1]) else {
+    let Some((vel_ptr, vel_len, vel_ab)) =
+        super::cmd_stream_read_f32_slice_from_value(ctx, args[1])
+    else {
         qjs::js_free_value(ctx, pos_ab);
         return qjs::JS_NewFloat64(ctx, 0.0);
     };
@@ -210,8 +209,12 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_step_icon_collisions(
 
     let pos = core::slice::from_raw_parts_mut(pos_ptr, n * 2);
     let vel = core::slice::from_raw_parts_mut(vel_ptr, n * 2);
-    let view_w = super::CMD_STREAM_VIEW_W.load(core::sync::atomic::Ordering::Relaxed).max(1) as f32;
-    let view_h = super::CMD_STREAM_VIEW_H.load(core::sync::atomic::Ordering::Relaxed).max(1) as f32;
+    let view_w = super::CMD_STREAM_VIEW_W
+        .load(core::sync::atomic::Ordering::Relaxed)
+        .max(1) as f32;
+    let view_h = super::CMD_STREAM_VIEW_H
+        .load(core::sync::atomic::Ordering::Relaxed)
+        .max(1) as f32;
 
     for i in 0..n {
         let b = i * 2;

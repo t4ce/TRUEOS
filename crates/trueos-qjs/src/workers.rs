@@ -144,11 +144,9 @@ fn pick_from_pool(
 }
 
 #[inline]
-fn pick_any_noncritical(pool: &[(u32, u8, embassy_executor::SendSpawner)]) -> Option<(
-    u32,
-    u8,
-    embassy_executor::SendSpawner,
-)> {
+fn pick_any_noncritical(
+    pool: &[(u32, u8, embassy_executor::SendSpawner)],
+) -> Option<(u32, u8, embassy_executor::SendSpawner)> {
     if pool.is_empty() {
         return None;
     }
@@ -440,7 +438,9 @@ pub unsafe fn set_on_message(ctx: *mut qjs::JSContext, worker_id: u32, cb: qjs::
     }
     let key_ctx = ctx as usize;
     let mut states = CONTEXT_WORKERS.lock();
-    let state = states.entry(key_ctx).or_insert_with(ContextWorkerState::new);
+    let state = states
+        .entry(key_ctx)
+        .or_insert_with(ContextWorkerState::new);
     let map = match ctx_role(ctx) {
         CtxRole::Main => &mut state.main_on_message,
         CtxRole::Worker(_) => &mut state.worker_on_message,
@@ -502,16 +502,15 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
     let _ = post_to_parent(worker_id, b"{\"ok\":1,\"dbg\":\"worker-rust-task-start\"}");
 
     // Each worker owns its own QuickJS VM.
-    let Some(vm) = (unsafe { qjs::vm::QjsVm::new_node_with_profile(qjs::node::RuntimeProfile::Worker) }) else {
+    let Some(vm) =
+        (unsafe { qjs::vm::QjsVm::new_node_with_profile(qjs::node::RuntimeProfile::Worker) })
+    else {
         log_str("qjs-worker: failed to create VM\n");
         let _ = post_to_parent(worker_id, b"{\"ok\":0,\"dbg\":\"worker-vm-create-failed\"}");
         mark_exited(worker_id);
         return;
     };
-    log_str(&format!(
-        "qjs-worker: worker#{} vm-created slot={}\n",
-        worker_id, scheduled_slot
-    ));
+    log_str(&format!("qjs-worker: worker#{} vm-created slot={}\n", worker_id, scheduled_slot));
     let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
@@ -552,10 +551,8 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
         if v.is_exception() {
             log_str("qjs-worker: startup eval exception\n");
             unsafe { qjs::qjs_diag::dump_last_exception(ctx, "worker-startup-eval") };
-            let _ = post_to_parent(
-                worker_id,
-                b"{\"ok\":0,\"dbg\":\"worker-startup-eval-exception\"}",
-            );
+            let _ =
+                post_to_parent(worker_id, b"{\"ok\":0,\"dbg\":\"worker-startup-eval-exception\"}");
             unsafe { qjs::js_free_value(ctx, v) };
             let drained =
                 unsafe { qjs::vm::teardown_worker_context(rt, ctx, WORKER_TEARDOWN_WAIT_MS).await };
@@ -616,7 +613,8 @@ async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
         }
     }
 
-    let drained = unsafe { qjs::vm::teardown_worker_context(rt, ctx, WORKER_TEARDOWN_WAIT_MS).await };
+    let drained =
+        unsafe { qjs::vm::teardown_worker_context(rt, ctx, WORKER_TEARDOWN_WAIT_MS).await };
     if !drained {
         log_str("qjs-worker: teardown drain incomplete\n");
     }

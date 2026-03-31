@@ -3,8 +3,8 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-pub use crate::vcabi::{TrueosHidCursorEvent, TrueosHidKeyboardSample, TrueosMouseState};
 use crate::vcabi;
+pub use crate::vcabi::{TrueosHidCursorEvent, TrueosHidKeyboardSample, TrueosMouseState};
 
 #[inline]
 pub fn mouse_poll() -> Option<TrueosMouseState> {
@@ -26,9 +26,8 @@ pub fn pop_mouse_delta() -> Option<(u8, i8, i8, i8)> {
     let mut dx = 0i8;
     let mut dy = 0i8;
     let mut wheel = 0i8;
-    let rc = unsafe {
-        vcabi::trueos_cabi_input_pop_mouse(&mut buttons, &mut dx, &mut dy, &mut wheel)
-    };
+    let rc =
+        unsafe { vcabi::trueos_cabi_input_pop_mouse(&mut buttons, &mut dx, &mut dy, &mut wheel) };
     if rc == 0 {
         Some((buttons, dx, dy, wheel))
     } else {
@@ -90,9 +89,8 @@ pub fn write_cursor(
     wheel: i32,
     flags: u32,
 ) -> Result<(), i32> {
-    let rc = unsafe {
-        vcabi::trueos_cabi_input_write_cursor(slot_id, x, y, buttons_down, wheel, flags)
-    };
+    let rc =
+        unsafe { vcabi::trueos_cabi_input_write_cursor(slot_id, x, y, buttons_down, wheel, flags) };
     if rc != 0 {
         return Err(rc);
     }
