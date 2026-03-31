@@ -149,47 +149,48 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
         return;
     };
 
-    let Ok(body) = crate::r::net::cli::http::fetch_http_body(
+    let app_exists = if let Ok(body) = crate::r::net::cli::http::fetch_http_body(
         url.as_str(),
         ESP_STATUS_FETCH_TIMEOUT_MS,
         ESP_STATUS_FETCH_MAX_RX,
     )
     .await
-    else {
+    {
+        if let Some(status) = trueos_esp::swarm::parse_status_snapshot(body.as_slice()) {
+            let now_ms = monotonic_ms();
+            let event =
+                DEVICE_REGISTRY
+                    .lock()
+                    .update_status(snapshot.handle, status.clone(), now_ms);
+            if let Some(event) = event {
+                crate::log!(
+                    "esp-gate: status changed handle={} running={} last_status={} last_error={}\n",
+                    event.handle.0,
+                    if event.current.running { 1 } else { 0 },
+                    event.current.last_status.as_str(),
+                    event.current.last_error.as_str()
+                );
+                STATUS_EVENTS.lock().push_back(event);
+            }
+            status.app_exists
+        } else {
+            crate::log!(
+                "esp-gate: status parse failed handle={} url={} bytes={}\n",
+                snapshot.handle.0,
+                url.as_str(),
+                body.len()
+            );
+            false
+        }
+    } else {
         crate::log!(
             "esp-gate: status fetch failed handle={} url={} timeout_ms={}\n",
             snapshot.handle.0,
             url.as_str(),
             ESP_STATUS_FETCH_TIMEOUT_MS
         );
-        return;
+        false
     };
-
-    let Some(status) = trueos_esp::swarm::parse_status_snapshot(body.as_slice()) else {
-        crate::log!(
-            "esp-gate: status parse failed handle={} url={} bytes={}\n",
-            snapshot.handle.0,
-            url.as_str(),
-            body.len()
-        );
-        return;
-    };
-
-    let app_exists = status.app_exists;
-    let now_ms = monotonic_ms();
-    let event = DEVICE_REGISTRY
-        .lock()
-        .update_status(snapshot.handle, status, now_ms);
-    if let Some(event) = event {
-        crate::log!(
-            "esp-gate: status changed handle={} running={} last_status={} last_error={}\n",
-            event.handle.0,
-            if event.current.running { 1 } else { 0 },
-            event.current.last_status.as_str(),
-            event.current.last_error.as_str()
-        );
-        STATUS_EVENTS.lock().push_back(event);
-    }
 
     let should_upload_default = DEVICE_REGISTRY
         .lock()
