@@ -13,6 +13,8 @@ pub mod athlasmetrics;
 
 use self::athlasmetrics::{ATHLAS_BUCKET_COUNT, AthlasGlyphLookup};
 
+const IMBA_ATHLAS_ENABLED: bool = false;
+
 static IMBA_ATHLAS_READY_BUCKET_MASK: AtomicU32 = AtomicU32::new(0);
 static IMBA_ATHLAS_LOOKUP_INSTALL: Once<AthlasFontLookupInstall> = Once::new();
 static IMBA_ATHLAS_SHORT_TEXT_CACHE: Mutex<BTreeMap<u64, AthlasFontShortTextCacheEntry>> =
@@ -224,6 +226,11 @@ fn athlas_bucket_asset(size_case: usize, bucket: usize) -> Option<&'static PngBu
 }
 
 #[inline]
+pub fn imba_athlas_enabled() -> bool {
+    IMBA_ATHLAS_ENABLED
+}
+
+#[inline]
 fn png_dimensions_from_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
     const PNG_SIG: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
     if bytes.len() < 24 || &bytes[..8] != PNG_SIG || &bytes[12..16] != b"IHDR" {
@@ -276,12 +283,18 @@ pub fn imba_athlas_lookup_install() -> &'static AthlasFontLookupInstall {
 
 #[inline]
 pub fn imba_athlas_lookup_char(ch: char) -> Option<AthlasGlyphLookup> {
+    if !imba_athlas_enabled() {
+        return None;
+    }
     let _ = imba_athlas_lookup_install();
     athlasmetrics::athlas_lookup_char(ch)
 }
 
 #[inline]
 pub fn imba_athlas_lookup_codepoint(codepoint: u32) -> Option<AthlasGlyphLookup> {
+    if !imba_athlas_enabled() {
+        return None;
+    }
     let _ = imba_athlas_lookup_install();
     athlasmetrics::athlas_lookup_codepoint(codepoint)
 }
@@ -374,6 +387,9 @@ pub fn imba_athlas_bucket_width_stage_for_char(ch: char) -> Option<u8> {
 }
 
 pub fn ensure_imba_athlas_png_buckets_uploaded() -> bool {
+    if !imba_athlas_enabled() {
+        return false;
+    }
     if imba_athlas_png_buckets_uploaded() {
         return true;
     }
@@ -442,6 +458,9 @@ pub fn ensure_imba_athlas_png_buckets_uploaded() -> bool {
 
 #[inline]
 pub fn imba_athlas_png_buckets_uploaded() -> bool {
+    if !imba_athlas_enabled() {
+        return false;
+    }
     IMBA_ATHLAS_READY_BUCKET_MASK.load(Ordering::Acquire) == IMBA_ATHLAS_ALL_BUCKETS_READY_MASK
 }
 
@@ -633,6 +652,9 @@ fn decode_athlas_buckets() -> Vec<AthlasDecodedBucket> {
 
 #[inline]
 fn decoded_bucket(size_case: usize, bucket: usize) -> Option<&'static AthlasDecodedBucket> {
+    if !imba_athlas_enabled() {
+        return None;
+    }
     IMBA_ATHLAS_DECODED_BUCKETS
         .call_once(decode_athlas_buckets)
         .iter()

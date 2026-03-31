@@ -73,6 +73,8 @@ pub(super) fn alloc_window(
         state: Ui2WindowStateKind::Normal,
         content_tex_id: 0,
         content_tex_blend: false,
+        hosted_surface_bg_rgba: [0, 0, 0, 0],
+        hosted_surface_tiles: Vec::new(),
         title_tex_id: window_title_tex_id(id),
         title_tex_w: 0,
         title_tex_h: 0,
@@ -395,6 +397,8 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     let next_vertical_scrollbar_side = source_window.vertical_scrollbar_side;
     let next_horizontal_scrollbar_side = source_window.horizontal_scrollbar_side;
     let next_content_tex_blend = source_window.content_tex_blend;
+    let next_hosted_surface_bg_rgba = source_window.hosted_surface_bg_rgba;
+    let next_hosted_surface_tiles = source_window.hosted_surface_tiles.clone();
     let next_kind = source_window.kind;
 
     let (next_browser_instance_id, next_tex_id, fork_reason) = match next_kind {
@@ -436,6 +440,8 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         window.icon_id = next_icon_id;
         window.content_tex_id = next_tex_id;
         window.content_tex_blend = next_content_tex_blend;
+        window.hosted_surface_bg_rgba = next_hosted_surface_bg_rgba;
+        window.hosted_surface_tiles = next_hosted_surface_tiles;
         window.hit_test_visible = next_hit_test_visible;
         window.decoration_mode = next_decoration_mode;
         window.titlebar_visible = next_titlebar_visible;
@@ -735,10 +741,80 @@ pub fn set_window_hosted_surface_content(id: u32, tex_id: u32, blend_enabled: bo
     }
     window.content_tex_id = tex_id;
     window.content_tex_blend = blend_enabled;
+    window.hosted_surface_tiles.clear();
     state.compose_reason = "texture-window";
     let noted = note_window_dirty(&mut state, id, "texture-window");
     if noted {
         let _ = note_window_viewport_sync_needed(&mut state, id);
+    }
+    noted
+}
+
+pub fn set_window_hosted_surface_tiles(
+    id: u32,
+    bg_rgba: [u8; 4],
+    tiles: &[Ui2HostedSurfaceTile],
+) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.kind != Ui2WindowKind::HostedSurface {
+        return false;
+    }
+    window.hosted_surface_bg_rgba = bg_rgba;
+    window.hosted_surface_tiles.clear();
+    window.hosted_surface_tiles.extend_from_slice(tiles);
+    state.compose_reason = "surface-tiles-window";
+    let noted = note_window_dirty(&mut state, id, "surface-tiles-window");
+    if noted {
+        let _ = note_window_viewport_sync_needed(&mut state, id);
+    }
+    noted
+}
+
+pub fn bind_window_hosted_surface_state(
+    id: u32,
+    content_id: u32,
+    content_width: u32,
+    content_height: u32,
+) -> bool {
+    if content_id == 0 {
+        return false;
+    }
+
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let content = state
+        .windows
+        .iter()
+        .find(|window| window.id == id && window.kind == Ui2WindowKind::HostedSurface)
+        .and_then(|window| window_content_rect(&state, window));
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.kind != Ui2WindowKind::HostedSurface {
+        return false;
+    }
+    window.browser_instance_id = content_id;
+    state.compose_reason = "bind-hosted-surface-state";
+    let noted = note_window_dirty(&mut state, id, "bind-hosted-surface-state");
+    let _ = note_window_viewport_sync_needed(&mut state, id);
+    drop(state);
+
+    let _ = hosted_bind_window(content_id, id);
+    if let Some(content) = content {
+        let (content_x, content_y, viewport_w, viewport_h) = snap_browser_content_rect(content);
+        let _ = hosted_set_viewport(
+            content_id,
+            viewport_w,
+            viewport_h,
+            content_x,
+            content_y,
+            content_width.max(viewport_w),
+            content_height.max(viewport_h),
+        );
     }
     noted
 }
@@ -751,24 +827,39 @@ pub struct Ui2SurfaceWindow {
 }
 
 impl Ui2SurfaceWindow {
-    fn attach_existing_texture(
+    fn attach_tiled_content(
+        title: &str,
+        content_rect: Ui2Rect,
+        z: i16,
+        alpha: u8,
+        bg_rgba: [u8; 4],
+    ) -> Option<Self> {
+        let window_id =
+            create_hosted_surface_content_window(title, content_rect, z, alpha, 0, false);
+        if !set_window_hosted_surface_tiles(window_id, bg_rgba, &[]) {
+            return None;
+        }
+        Some(Self {
+            window_id,
+            tex_id: 0,
+            width: (content_rect.w.max(1.0) + 0.5) as u32,
+            height: (content_rect.h.max(1.0) + 0.5) as u32,
+        })
+    }
+
+    fn attach_existing_texture_with_size(
         title: &str,
         content_rect: Ui2Rect,
         z: i16,
         alpha: u8,
         tex_id: u32,
         blend_enabled: bool,
+        width: u32,
+        height: u32,
     ) -> Self {
-        let width = (content_rect.w.max(1.0) + 0.5) as u32;
-        let height = (content_rect.h.max(1.0) + 0.5) as u32;
         let window_id = create_hosted_surface_content_window(
             title,
-            Ui2Rect {
-                x: content_rect.x,
-                y: content_rect.y,
-                w: width as f32,
-                h: height as f32,
-            },
+            content_rect,
             z,
             alpha,
             tex_id,
@@ -782,6 +873,28 @@ impl Ui2SurfaceWindow {
         }
     }
 
+    fn attach_existing_texture(
+        title: &str,
+        content_rect: Ui2Rect,
+        z: i16,
+        alpha: u8,
+        tex_id: u32,
+        blend_enabled: bool,
+    ) -> Self {
+        let width = (content_rect.w.max(1.0) + 0.5) as u32;
+        let height = (content_rect.h.max(1.0) + 0.5) as u32;
+        Self::attach_existing_texture_with_size(
+            title,
+            content_rect,
+            z,
+            alpha,
+            tex_id,
+            blend_enabled,
+            width,
+            height,
+        )
+    }
+
     pub fn from_existing_texture(
         title: &str,
         content_rect: Ui2Rect,
@@ -791,6 +904,38 @@ impl Ui2SurfaceWindow {
         blend_enabled: bool,
     ) -> Option<Self> {
         Some(Self::attach_existing_texture(title, content_rect, z, alpha, tex_id, blend_enabled))
+    }
+
+    pub fn from_existing_texture_with_size(
+        title: &str,
+        content_rect: Ui2Rect,
+        z: i16,
+        alpha: u8,
+        tex_id: u32,
+        blend_enabled: bool,
+        tex_width: u32,
+        tex_height: u32,
+    ) -> Option<Self> {
+        Some(Self::attach_existing_texture_with_size(
+            title,
+            content_rect,
+            z,
+            alpha,
+            tex_id,
+            blend_enabled,
+            tex_width.max(1),
+            tex_height.max(1),
+        ))
+    }
+
+    pub fn from_tiled_content(
+        title: &str,
+        content_rect: Ui2Rect,
+        z: i16,
+        alpha: u8,
+        bg_rgba: [u8; 4],
+    ) -> Option<Self> {
+        Self::attach_tiled_content(title, content_rect, z, alpha, bg_rgba)
     }
 
     pub fn new(
@@ -841,6 +986,19 @@ impl Ui2SurfaceWindow {
     #[inline]
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    pub fn bind_hosted_scroll_state(
+        &self,
+        content_id: u32,
+        content_width: u32,
+        content_height: u32,
+    ) -> bool {
+        bind_window_hosted_surface_state(self.window_id, content_id, content_width, content_height)
+    }
+
+    pub fn set_tiles(&self, bg_rgba: [u8; 4], tiles: &[Ui2HostedSurfaceTile]) -> bool {
+        set_window_hosted_surface_tiles(self.window_id, bg_rgba, tiles)
     }
 
     pub fn render_rgb_triangles(

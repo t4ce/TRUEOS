@@ -341,6 +341,8 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
 
     if event.wheel != 0 {
         let selected_window_id = state.cursors[cursor_idx].selected_window_id;
+        state.compose_reason = "wheel-input";
+        UI2_DIRTY.store(true, Ordering::Release);
         let _ = forward_cursor_wheel_to_selected_window(state, selected_window_id, event.wheel);
     }
 }
@@ -376,7 +378,25 @@ fn forward_cursor_wheel_to_selected_window(
                 false
             }
         }
-        Ui2WindowKind::HostedSurface => false,
+        Ui2WindowKind::HostedSurface => {
+            let content_id = window_hosted_content_id(window);
+            if content_id == 0 {
+                return false;
+            }
+            let snapshot = hosted_surface_state_for_window(window);
+            let scroll_delta = -(wheel as i32) * UI2_WHEEL_SCROLL_STEP_PX;
+            let next_scroll = clamp_hosted_browser_scroll(
+                &snapshot,
+                i64::from(normalized_hosted_browser_scroll(&snapshot))
+                    .saturating_add(i64::from(scroll_delta)),
+            );
+            if hosted_set_scroll_y(content_id, next_scroll) {
+                state.compose_reason = "wheel-scroll";
+                true
+            } else {
+                false
+            }
+        }
         Ui2WindowKind::Hosted3d => false,
     }
 }
@@ -765,11 +785,10 @@ fn browser_vertical_scrollbar_metrics(
     state: &Ui2State,
     window: &Ui2Window,
 ) -> Option<(Ui2Rect, f32, f32, u32)> {
-    if window.kind != Ui2WindowKind::HostedBrowser {
+    let Some(snapshot) = window_scroll_snapshot(window) else {
         return None;
-    }
+    };
     let track = window_vertical_scrollbar_rect(state, window)?;
-    let snapshot = browser_surface_state_for_window(window);
     let viewport_h = snapshot.viewport_height.max(1);
     let content_h = snapshot.content_height.max(viewport_h);
     let scroll_range = hosted_browser_scroll_max(&snapshot);
@@ -847,7 +866,7 @@ fn begin_window_scroll_pan_for_cursor(
     else {
         return false;
     };
-    if window.kind != Ui2WindowKind::HostedBrowser {
+    if window_scroll_snapshot(window).is_none() {
         return false;
     }
     clear_window_drag_claims(state, window_id);
@@ -909,10 +928,9 @@ fn update_scroll_drag_for_cursor(
     let thumb_y =
         (cursor_y - state.scroll_drags[drag_idx].grab_offset).clamp(track.y, track.y + avail);
     let ratio = ((thumb_y - track.y) / avail).clamp(0.0, 1.0);
-    let next_scroll = clamp_hosted_browser_scroll(
-        &browser_surface_state_for_window(window),
-        libm::roundf(ratio * scroll_range as f32) as i64,
-    );
+    let snapshot = hosted_surface_state_for_window(window);
+    let next_scroll =
+        clamp_hosted_browser_scroll(&snapshot, libm::roundf(ratio * scroll_range as f32) as i64);
     let Some(window) = state
         .windows
         .iter()
@@ -920,7 +938,11 @@ fn update_scroll_drag_for_cursor(
     else {
         return false;
     };
-    if hosted_set_scroll_y(window_browser_instance_id(window), next_scroll) {
+    let content_id = window_hosted_content_id(window);
+    if content_id == 0 {
+        return false;
+    }
+    if hosted_set_scroll_y(content_id, next_scroll) {
         state.compose_reason = "scrollbar-drag";
         true
     } else {
@@ -955,7 +977,7 @@ fn update_scroll_pan_for_cursor(
         state.scroll_pan_drags.remove(drag_idx);
         return false;
     };
-    if window.kind != Ui2WindowKind::HostedBrowser {
+    if window_scroll_snapshot(window).is_none() {
         state.scroll_pan_drags.remove(drag_idx);
         return false;
     }
@@ -971,7 +993,7 @@ fn update_scroll_pan_for_cursor(
         return false;
     }
 
-    let snapshot = browser_surface_state_for_window(window);
+    let snapshot = hosted_surface_state_for_window(window);
     let next_scroll_x = clamp_hosted_browser_scroll_x(
         &snapshot,
         i64::from(normalized_hosted_browser_scroll_x(&snapshot)).saturating_sub(i64::from(dx_px)),
@@ -980,7 +1002,11 @@ fn update_scroll_pan_for_cursor(
         &snapshot,
         i64::from(normalized_hosted_browser_scroll(&snapshot)).saturating_sub(i64::from(dy_px)),
     );
-    if hosted_set_scroll(window_browser_instance_id(window), next_scroll_x, next_scroll_y) {
+    let content_id = window_hosted_content_id(window);
+    if content_id == 0 {
+        return false;
+    }
+    if hosted_set_scroll(content_id, next_scroll_x, next_scroll_y) {
         state.compose_reason = "scroll-pan";
         true
     } else {
