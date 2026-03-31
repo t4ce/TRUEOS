@@ -133,6 +133,9 @@ impl Ui2WindowHitSource for Ui2Window {
 
         match self.kind {
             Ui2WindowKind::HostedBrowser => {
+                if !window_content_participates_in_composition(self) {
+                    return;
+                }
                 let Some(content) = window_content_rect(ctx.state, self) else {
                     return;
                 };

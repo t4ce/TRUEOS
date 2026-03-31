@@ -3,7 +3,9 @@ use super::*;
 pub(super) fn log_browser_surface_updates(state: &mut Ui2State) {
     let windows = state.windows.clone();
     for window in &windows {
-        if window.kind != Ui2WindowKind::HostedBrowser || !window.visible {
+        if window.kind != Ui2WindowKind::HostedBrowser
+            || !window_content_participates_in_composition(window)
+        {
             continue;
         }
         let snapshot = browser_surface_state_for_window(window);

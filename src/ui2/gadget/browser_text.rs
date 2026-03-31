@@ -26,7 +26,7 @@ pub(crate) fn draw_hosted_browser_gadget_scene(
         state.view_h,
     );
 
-    let font_px = ui2_font_native_line_height_px(Ui2FontTier::OneX) as f32;
+    let font_px = ui2_font_native_line_height_px(Ui2FontTier::Half) as f32;
     let scroll_x = surface_state.scroll_x as f32;
     let scroll_y = surface_state.scroll_y as f32;
     let visible_right = content.x + content.w - UI2_BROWSER_GADGET_PAD_X;

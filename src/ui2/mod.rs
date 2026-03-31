@@ -129,6 +129,7 @@ struct Ui2CursorState {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui2SystemButtonAction {
+    ToggleComposition,
     Fork,
     Minimize,
     ToggleMaximize,
@@ -215,6 +216,7 @@ struct Ui2Window {
     z: i16,
     visible: bool,
     hit_test_visible: bool,
+    composition_locked: bool,
     alpha: u8,
     decoration_mode: Ui2WindowDecorationMode,
     titlebar_visible: bool,
@@ -651,13 +653,13 @@ fn apply_hosted_browser_dirty(state: &mut Ui2State, dirty: HostedBrowserDirtyMas
         if content_dirty || interactive_dirty {
             refresh_hosted_browser_snapshot(window);
         }
-        if content_dirty {
+        if content_dirty && !window.composition_locked {
             window.dirty = true;
             window.last_reason = "browser-content";
             UI2_DIRTY.store(true, Ordering::Release);
             state.compose_reason = "browser-content";
         }
-        if interactive_dirty {
+        if interactive_dirty && !window.composition_locked {
             interactive_window_ids.push(window.id);
         }
     }
@@ -671,6 +673,10 @@ fn apply_hosted_browser_dirty(state: &mut Ui2State, dirty: HostedBrowserDirtyMas
 
 fn window_is_renderable(window: &Ui2Window) -> bool {
     window.visible
+}
+
+fn window_content_participates_in_composition(window: &Ui2Window) -> bool {
+    window.visible && !window.composition_locked
 }
 
 fn is_simple_click(press_x: f32, press_y: f32, release_x: f32, release_y: f32) -> bool {
@@ -1290,6 +1296,15 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
     draw_window_chrome(state, window, rect);
 
     let chrome_ms = elapsed_ms_since(chrome_started_at);
+
+    if !window_content_participates_in_composition(window) {
+        return Ui2WindowDrawTiming {
+            chrome_ms,
+            texture_ms: 0,
+            placeholder_ms: 0,
+            content_path: "locked",
+        };
+    }
 
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
