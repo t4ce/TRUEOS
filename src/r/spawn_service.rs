@@ -128,7 +128,6 @@ define_started_flags!(
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
-    UI2_ATHLAS_GRID_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
     UI2_SVG_DEMO_STARTED,
     GFX_INTEL_READINESS_PROBE_STARTED,
@@ -650,12 +649,6 @@ fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_ui2_athlas_grid_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_athlas_grid_demo::ui2_athlas_grid_demo_task())
-    })
-}
-
 fn spawn_ui2_particle_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_particle_demo::ui2_particle_demo_task())
@@ -696,13 +689,6 @@ const UI2_MANDELBROT_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
     spawn_ui2_mandelbrot_demo,
 );
 
-const UI2_ATHLAS_GRID_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
-    "ui2-athlas-grid-demo",
-    crate::r::readiness::UI2_DEMO_SLOT_4_READY,
-    &UI2_ATHLAS_GRID_DEMO_STARTED,
-    spawn_ui2_athlas_grid_demo,
-);
-
 const UI2_PARTICLE_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
     "ui2-particle-demo",
     crate::r::readiness::UI2_DEMO_SLOT_4_READY,
@@ -722,7 +708,6 @@ const UI2_DEMOS: &[Ui2DemoTaskSpec] = &[
     UI2_TRIANGLE_DEMO,
     UI2_BGRT_DEMO,
     UI2_MANDELBROT_DEMO,
-    UI2_ATHLAS_GRID_DEMO,
     UI2_PARTICLE_DEMO,
     UI2_SVG_DEMO,
 ];
@@ -1017,14 +1002,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
-    UI2_ATHLAS_GRID_DEMO.task_spec(),
     TaskSpec::enabled(
-        "ui2-svg-demo",
-        crate::r::readiness::UI2_DEMO_SLOT_4_READY,
-        &UI2_SVG_DEMO_STARTED,
-        spawn_ui2_svg_demo,
-    ),
-    TaskSpec::disabled(
         "ui2-particle-demo",
         crate::r::readiness::UI2_DEMO_SLOT_4_READY,
         &UI2_PARTICLE_DEMO_STARTED,
