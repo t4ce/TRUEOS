@@ -3,8 +3,7 @@ use super::*;
 pub(super) type HostedContentId = u32;
 pub(super) type UiHostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurfaceState;
 pub(super) type UiHostedInteractiveState = trueos_qjs::browser_task::HostedBrowserInteractiveState;
-pub(super) type UiHostedTextState = trueos_qjs::browser_task::HostedBrowserTextState;
-pub(super) type UiHostedLayoutState = trueos_qjs::browser_task::HostedBrowserLayoutState;
+pub(super) type UiHostedGadgetSnapshot = trueos_qjs::browser_task::HostedBrowserGadgetSnapshot;
 pub(super) type UiHostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 
 use alloc::vec::Vec;
@@ -33,8 +32,7 @@ pub(super) struct HostedBrowserDirtyMask {
 pub(super) struct UiHostedBrowserSnapshot {
     pub surface: UiHostedSurfaceState,
     pub interactive: UiHostedInteractiveState,
-    pub text: UiHostedTextState,
-    pub layout: UiHostedLayoutState,
+    pub gadget_snapshot: UiHostedGadgetSnapshot,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -60,8 +58,7 @@ pub(super) trait UiHostedSurfaceProvider {
     fn interactive_seq(&self, content_id: HostedContentId) -> u32;
     fn surface_state(&self, content_id: HostedContentId) -> UiHostedSurfaceState;
     fn interactive_state(&self, content_id: HostedContentId) -> UiHostedInteractiveState;
-    fn text_state(&self, content_id: HostedContentId) -> UiHostedTextState;
-    fn layout_state(&self, content_id: HostedContentId) -> UiHostedLayoutState;
+    fn gadget_snapshot(&self, content_id: HostedContentId) -> UiHostedGadgetSnapshot;
 }
 
 pub(super) trait UiHostedViewportSink {
@@ -111,12 +108,8 @@ impl UiHostedSurfaceProvider for BrowserUiHostedAdapter {
         trueos_qjs::browser_task::hosted_interactive_state_for_browser(content_id)
     }
 
-    fn text_state(&self, content_id: HostedContentId) -> UiHostedTextState {
-        trueos_qjs::browser_task::hosted_text_state_for_browser(content_id)
-    }
-
-    fn layout_state(&self, content_id: HostedContentId) -> UiHostedLayoutState {
-        trueos_qjs::browser_task::hosted_layout_state_for_browser(content_id)
+    fn gadget_snapshot(&self, content_id: HostedContentId) -> UiHostedGadgetSnapshot {
+        trueos_qjs::browser_task::hosted_gadget_snapshot_for_browser(content_id)
     }
 }
 
@@ -221,13 +214,8 @@ pub(super) fn hosted_interactive_seq(content_id: HostedContentId) -> u32 {
 }
 
 #[inline]
-pub(super) fn hosted_text_state(content_id: HostedContentId) -> UiHostedTextState {
-    hosted_adapter().text_state(content_id)
-}
-
-#[inline]
-pub(super) fn hosted_layout_state(content_id: HostedContentId) -> UiHostedLayoutState {
-    hosted_adapter().layout_state(content_id)
+pub(super) fn hosted_gadget_snapshot(content_id: HostedContentId) -> UiHostedGadgetSnapshot {
+    hosted_adapter().gadget_snapshot(content_id)
 }
 
 pub(super) fn hosted_browser_snapshot(content_id: HostedContentId) -> UiHostedBrowserSnapshot {
@@ -241,8 +229,7 @@ pub(super) fn hosted_browser_snapshot(content_id: HostedContentId) -> UiHostedBr
     UiHostedBrowserSnapshot {
         surface,
         interactive: hosted_interactive_state(content_id),
-        text: hosted_text_state(content_id),
-        layout: hosted_layout_state(content_id),
+        gadget_snapshot: hosted_gadget_snapshot(content_id),
     }
 }
 

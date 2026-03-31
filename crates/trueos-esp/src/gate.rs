@@ -58,8 +58,7 @@ impl GateDiscovery {
                 GateAction::Signal(GateSignal::UdpBound(handle))
             }
             api::Event::UdpPacket { handle, from, data }
-                if self.udp_handle == Some(handle)
-                    && data.as_slice() == ESP_SWARM_HEARTBEAT =>
+                if self.udp_handle == Some(handle) && data.as_slice() == ESP_SWARM_HEARTBEAT =>
             {
                 GateAction::Signal(GateSignal::EspDiscovered(from))
             }
@@ -183,11 +182,7 @@ impl DeviceRegistry {
         true
     }
 
-    pub fn should_upload_default_app(
-        &mut self,
-        handle: api::NetHandle,
-        app_exists: bool,
-    ) -> bool {
+    pub fn should_upload_default_app(&mut self, handle: api::NetHandle, app_exists: bool) -> bool {
         let Some(existing) = self.devices.iter_mut().find(|entry| entry.handle == handle) else {
             return false;
         };
@@ -221,7 +216,10 @@ impl DeviceRegistry {
         status: DeviceStatusSnapshot,
         now_ms: u64,
     ) -> Option<StatusChangeEvent> {
-        let existing = self.devices.iter_mut().find(|entry| entry.handle == handle)?;
+        let existing = self
+            .devices
+            .iter_mut()
+            .find(|entry| entry.handle == handle)?;
         existing.last_activity_ms = now_ms;
 
         if existing.status.as_ref() == Some(&status) {

@@ -218,7 +218,8 @@ pub(crate) fn ui2_font_measure_text(tier: Ui2FontTier, text: &str) -> Ui2FontTex
         let advance_px = ui2_font_resolve_glyph_or_fallback(tier, ch)
             .map(|glyph| glyph.advance_px)
             .unwrap_or_else(|| fallback_advance_px(tier, ch));
-        let display_advance_px = ((u32::from(advance_px) * scale_num) + (scale_den / 2)) / scale_den;
+        let display_advance_px =
+            ((u32::from(advance_px) * scale_num) + (scale_den / 2)) / scale_den;
         let display_advance_px = display_advance_px.max(1);
         line_width = line_width.saturating_add(display_advance_px);
     }

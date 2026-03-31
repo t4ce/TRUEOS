@@ -2,5 +2,5 @@
 
 extern crate alloc;
 
-pub mod swarm;
 pub mod gate;
+pub mod swarm;

@@ -426,10 +426,7 @@ mod tests {
         let a = t.add_child(root, "a").unwrap();
         let b = t.add_child(a, "b").unwrap();
 
-        assert!(
-            !t.move_node(a, b),
-            "should not allow moving a under its descendant"
-        );
+        assert!(!t.move_node(a, b), "should not allow moving a under its descendant");
         assert_eq!(t.parent(a), Some(root));
     }
 

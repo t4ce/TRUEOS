@@ -9,10 +9,7 @@ use crate::lang::{DEFAULT_GERMAN_LANGUAGE_CODE, normalized_language_code};
 use serde_json::Value;
 
 pub fn openweather_geo_url(latitude: f64, longitude: f64, api_key: &str) -> String {
-    format!(
-        "{}?lat={}&lon={}&limit=1&appid={}",
-        GEO_REVERSE_URL, latitude, longitude, api_key
-    )
+    format!("{}?lat={}&lon={}&limit=1&appid={}", GEO_REVERSE_URL, latitude, longitude, api_key)
 }
 
 pub fn openweather_onecall_url(
@@ -30,20 +27,11 @@ pub fn openweather_onecall_url(
 }
 
 pub fn openweather_onecall_metric_de_url(latitude: f64, longitude: f64, api_key: &str) -> String {
-    openweather_onecall_url(
-        latitude,
-        longitude,
-        "metric",
-        DEFAULT_GERMAN_LANGUAGE_CODE,
-        api_key,
-    )
+    openweather_onecall_url(latitude, longitude, "metric", DEFAULT_GERMAN_LANGUAGE_CODE, api_key)
 }
 
 pub fn openweather_onecall_overview_url(latitude: f64, longitude: f64, api_key: &str) -> String {
-    format!(
-        "{}?lat={}&lon={}&appid={}",
-        OVERVIEW_URL, latitude, longitude, api_key
-    )
+    format!("{}?lat={}&lon={}&appid={}", OVERVIEW_URL, latitude, longitude, api_key)
 }
 
 #[derive(Clone, Debug)]

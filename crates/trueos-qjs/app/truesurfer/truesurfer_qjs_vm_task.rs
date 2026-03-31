@@ -72,41 +72,24 @@ const TRUESURFER_RESULT_PARSE_MS_PROP: &[u8] = b"parseMs\0";
 const TRUESURFER_RESULT_TITLE_PROP: &[u8] = b"title\0";
 const TRUESURFER_RESULT_SHELL_BYTES_PROP: &[u8] = b"shellBytes\0";
 const TRUESURFER_RESULT_BODY_BYTES_PROP: &[u8] = b"bodyBytes\0";
-const TRUESURFER_RESULT_TEXT_ROWS_PROP: &[u8] = b"textRows\0";
-const TRUESURFER_RESULT_LAYOUT_INTENT_PROP: &[u8] = b"layoutIntent\0";
+const TRUESURFER_RESULT_GADGET_SNAPSHOT_PROP: &[u8] = b"gadgetSnapshot\0";
 const TRUESURFER_RESULT_STYLE_COUNT_PROP: &[u8] = b"styleCount\0";
 const TRUESURFER_RESULT_STYLE_BYTES_PROP: &[u8] = b"styleBytes\0";
 const TRUESURFER_RESULT_SCRIPT_COUNT_PROP: &[u8] = b"scriptCount\0";
 const TRUESURFER_RESULT_SCRIPT_BYTES_PROP: &[u8] = b"scriptBytes\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
-const TRUESURFER_TEXT_ROW_TEXT_PROP: &[u8] = b"text\0";
-const TRUESURFER_TEXT_ROW_INDENT_PROP: &[u8] = b"indentPx\0";
-const TRUESURFER_TEXT_ROW_FONT_SIZE_PROP: &[u8] = b"fontSizePx\0";
-const TRUESURFER_TEXT_ROW_LINE_HEIGHT_PROP: &[u8] = b"lineHeightPx\0";
-const TRUESURFER_LAYOUT_INTENT_VERSION_PROP: &[u8] = b"version\0";
-const TRUESURFER_LAYOUT_INTENT_NODES_PROP: &[u8] = b"nodes\0";
-const TRUESURFER_LAYOUT_NODE_ID_PROP: &[u8] = b"nodeId\0";
-const TRUESURFER_LAYOUT_NODE_PARENT_ID_PROP: &[u8] = b"parentId\0";
-const TRUESURFER_LAYOUT_NODE_DEPTH_PROP: &[u8] = b"depth\0";
-const TRUESURFER_LAYOUT_NODE_KIND_PROP: &[u8] = b"kind\0";
-const TRUESURFER_LAYOUT_NODE_TAG_PROP: &[u8] = b"tag\0";
-const TRUESURFER_LAYOUT_NODE_TEXT_PROP: &[u8] = b"text\0";
-const TRUESURFER_LAYOUT_NODE_INTRINSIC_WIDTH_PROP: &[u8] = b"intrinsicWidthPx\0";
-const TRUESURFER_LAYOUT_NODE_INTRINSIC_HEIGHT_PROP: &[u8] = b"intrinsicHeightPx\0";
-const TRUESURFER_LAYOUT_NODE_MIN_WIDTH_PROP: &[u8] = b"minWidthPx\0";
-const TRUESURFER_LAYOUT_NODE_MIN_HEIGHT_PROP: &[u8] = b"minHeightPx\0";
-const TRUESURFER_LAYOUT_NODE_MARGIN_LEFT_PROP: &[u8] = b"marginLeftPx\0";
-const TRUESURFER_LAYOUT_NODE_MARGIN_TOP_PROP: &[u8] = b"marginTopPx\0";
-const TRUESURFER_LAYOUT_NODE_MARGIN_RIGHT_PROP: &[u8] = b"marginRightPx\0";
-const TRUESURFER_LAYOUT_NODE_MARGIN_BOTTOM_PROP: &[u8] = b"marginBottomPx\0";
-const TRUESURFER_LAYOUT_NODE_PADDING_LEFT_PROP: &[u8] = b"paddingLeftPx\0";
-const TRUESURFER_LAYOUT_NODE_PADDING_TOP_PROP: &[u8] = b"paddingTopPx\0";
-const TRUESURFER_LAYOUT_NODE_PADDING_RIGHT_PROP: &[u8] = b"paddingRightPx\0";
-const TRUESURFER_LAYOUT_NODE_PADDING_BOTTOM_PROP: &[u8] = b"paddingBottomPx\0";
-const TRUESURFER_LAYOUT_NODE_FONT_SIZE_PROP: &[u8] = b"fontSizePx\0";
-const TRUESURFER_LAYOUT_NODE_LINE_HEIGHT_PROP: &[u8] = b"lineHeightPx\0";
-const TRUESURFER_LAYOUT_NODE_FLEX_GROW_PROP: &[u8] = b"flexGrow\0";
-const TRUESURFER_LAYOUT_NODE_FLEX_SHRINK_PROP: &[u8] = b"flexShrink\0";
+const TRUESURFER_GADGET_SNAPSHOT_VERSION_PROP: &[u8] = b"version\0";
+const TRUESURFER_GADGET_SNAPSHOT_GADGETS_PROP: &[u8] = b"gadgets\0";
+const TRUESURFER_GADGET_NODE_ID_PROP: &[u8] = b"nodeId\0";
+const TRUESURFER_GADGET_TAG_PROP: &[u8] = b"tag\0";
+const TRUESURFER_GADGET_TEXT_PROP: &[u8] = b"text\0";
+const TRUESURFER_GADGET_X_PROP: &[u8] = b"xPx\0";
+const TRUESURFER_GADGET_Y_PROP: &[u8] = b"yPx\0";
+const TRUESURFER_GADGET_WIDTH_PROP: &[u8] = b"widthPx\0";
+const TRUESURFER_GADGET_HEIGHT_PROP: &[u8] = b"heightPx\0";
+const TRUESURFER_GADGET_FONT_SIZE_PROP: &[u8] = b"fontSizePx\0";
+const TRUESURFER_GADGET_LINE_HEIGHT_PROP: &[u8] = b"lineHeightPx\0";
+const TRUESURFER_GADGET_CHANGED_PROP: &[u8] = b"changed\0";
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
@@ -151,48 +134,23 @@ pub struct HostedBrowserInteractiveState {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct HostedBrowserTextRow {
+pub struct HostedBrowserGadget {
+    pub node_id: u32,
+    pub tag: String,
     pub text: String,
-    pub indent_px: u32,
+    pub x_px: u32,
+    pub y_px: u32,
+    pub width_px: u32,
+    pub height_px: u32,
     pub font_size_px: u32,
     pub line_height_px: u32,
+    pub changed: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct HostedBrowserTextState {
-    pub rows: Vec<HostedBrowserTextRow>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct HostedBrowserLayoutNode {
-    pub node_id: u32,
-    pub parent_id: u32,
-    pub depth: u32,
-    pub kind: String,
-    pub tag: String,
-    pub text: String,
-    pub intrinsic_width_px: u32,
-    pub intrinsic_height_px: u32,
-    pub min_width_px: u32,
-    pub min_height_px: u32,
-    pub margin_left_px: u32,
-    pub margin_top_px: u32,
-    pub margin_right_px: u32,
-    pub margin_bottom_px: u32,
-    pub padding_left_px: u32,
-    pub padding_top_px: u32,
-    pub padding_right_px: u32,
-    pub padding_bottom_px: u32,
-    pub font_size_px: u32,
-    pub line_height_px: u32,
-    pub flex_grow: f32,
-    pub flex_shrink: f32,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct HostedBrowserLayoutState {
+pub struct HostedBrowserGadgetSnapshot {
     pub version: u32,
-    pub nodes: Vec<HostedBrowserLayoutNode>,
+    pub gadgets: Vec<HostedBrowserGadget>,
 }
 
 #[derive(Clone, Debug)]
@@ -240,14 +198,12 @@ struct BrowserInstanceState {
     started: bool,
     api_ready: bool,
     last_parse_result: Option<ParseResult>,
-    text_state: HostedBrowserTextState,
-    layout_state: HostedBrowserLayoutState,
+    gadget_snapshot: HostedBrowserGadgetSnapshot,
     window_id: u32,
     render_tex_id: u32,
     surface_seq: u32,
     interactive_seq: u32,
-    text_seq: u32,
-    layout_seq: u32,
+    gadget_seq: u32,
     surface_state: HostedBrowserSurfaceState,
 }
 
@@ -256,15 +212,6 @@ static BROWSER_RPC_SEQ: AtomicU32 = AtomicU32::new(1);
 static TRUESURFER_HTML_QUEUES: Once<Vec<BrowserHtmlQueue>> = Once::new();
 static TRUESURFER_HTML_READY: [Signal<SpinRawMutex, ()>; MAX_BROWSER_INSTANCE_ID as usize] =
     [const { Signal::new() }; MAX_BROWSER_INSTANCE_ID as usize];
-
-fn text_row(text: &str, indent_px: u32) -> HostedBrowserTextRow {
-    HostedBrowserTextRow {
-        text: String::from(text),
-        indent_px,
-        font_size_px: 0,
-        line_height_px: 0,
-    }
-}
 
 fn html_handoff_queues() -> &'static Vec<BrowserHtmlQueue> {
     TRUESURFER_HTML_QUEUES.call_once(|| {
@@ -317,19 +264,21 @@ fn with_browser_state_mut<R>(
         return None;
     }
     let mut guard = TRUESURFER_STATE.lock();
-    let state = guard.entry(browser_instance_id).or_insert_with(|| BrowserInstanceState {
-        text_state: HostedBrowserTextState::default(),
-        render_tex_id: default_render_tex_id(browser_instance_id),
-        surface_state: HostedBrowserSurfaceState {
-            viewport_width: 512,
-            viewport_height: 512,
-            content_width: 512,
-            content_height: 1,
-            scroll_x: 0,
-            scroll_y: 0,
-        },
-        ..BrowserInstanceState::default()
-    });
+    let state = guard
+        .entry(browser_instance_id)
+        .or_insert_with(|| BrowserInstanceState {
+            gadget_snapshot: HostedBrowserGadgetSnapshot::default(),
+            render_tex_id: default_render_tex_id(browser_instance_id),
+            surface_state: HostedBrowserSurfaceState {
+                viewport_width: 512,
+                viewport_height: 512,
+                content_width: 512,
+                content_height: 1,
+                scroll_x: 0,
+                scroll_y: 0,
+            },
+            ..BrowserInstanceState::default()
+        });
     Some(f(state))
 }
 
@@ -405,10 +354,7 @@ pub async fn queue_set_html_with_url_for_browser(
             }
         }
 
-        Timer::after(EmbassyDuration::from_millis(
-            TRUESURFER_HTML_QUEUE_WAIT_MS,
-        ))
-        .await;
+        Timer::after(EmbassyDuration::from_millis(TRUESURFER_HTML_QUEUE_WAIT_MS)).await;
     }
 }
 
@@ -428,12 +374,8 @@ pub fn hosted_interactive_seq_for_browser(browser_instance_id: u32) -> u32 {
     with_browser_state(browser_instance_id, |state| state.interactive_seq).unwrap_or(0)
 }
 
-pub fn hosted_text_seq_for_browser(browser_instance_id: u32) -> u32 {
-    with_browser_state(browser_instance_id, |state| state.text_seq).unwrap_or(0)
-}
-
-pub fn hosted_layout_seq_for_browser(browser_instance_id: u32) -> u32 {
-    with_browser_state(browser_instance_id, |state| state.layout_seq).unwrap_or(0)
+pub fn hosted_gadget_seq_for_browser(browser_instance_id: u32) -> u32 {
+    with_browser_state(browser_instance_id, |state| state.gadget_seq).unwrap_or(0)
 }
 
 pub fn hosted_surface_state_for_browser(browser_instance_id: u32) -> HostedBrowserSurfaceState {
@@ -446,12 +388,9 @@ pub fn hosted_interactive_state_for_browser(
     HostedBrowserInteractiveState::default()
 }
 
-pub fn hosted_text_state_for_browser(browser_instance_id: u32) -> HostedBrowserTextState {
-    with_browser_state(browser_instance_id, |state| state.text_state.clone()).unwrap_or_default()
-}
-
-pub fn hosted_layout_state_for_browser(browser_instance_id: u32) -> HostedBrowserLayoutState {
-    with_browser_state(browser_instance_id, |state| state.layout_state.clone()).unwrap_or_default()
+pub fn hosted_gadget_snapshot_for_browser(browser_instance_id: u32) -> HostedBrowserGadgetSnapshot {
+    with_browser_state(browser_instance_id, |state| state.gadget_snapshot.clone())
+        .unwrap_or_default()
 }
 
 pub fn set_hosted_viewport_for_browser(
@@ -488,7 +427,11 @@ pub fn set_hosted_viewport_for_browser(
     ok
 }
 
-pub fn set_hosted_scroll_for_browser(browser_instance_id: u32, scroll_x: u32, scroll_y: u32) -> bool {
+pub fn set_hosted_scroll_for_browser(
+    browser_instance_id: u32,
+    scroll_x: u32,
+    scroll_y: u32,
+) -> bool {
     let mut dirty = false;
     let ok = with_browser_state_mut(browser_instance_id, |state| {
         if state.surface_state.scroll_x == scroll_x && state.surface_state.scroll_y == scroll_y {
@@ -532,13 +475,16 @@ pub fn render_tex_id_for_browser_instance(browser_instance_id: u32) -> u32 {
         .unwrap_or_else(|| default_render_tex_id(browser_instance_id))
 }
 
-pub fn queue_hosted_keyboard_events(browser_window_id: u32, events: &[HostedKeyboardEvent]) -> bool {
+pub fn queue_hosted_keyboard_events(
+    browser_window_id: u32,
+    events: &[HostedKeyboardEvent],
+) -> bool {
     if events.is_empty() {
         return true;
     }
-    let Some(browser_instance_id) = (1..=MAX_BROWSER_INSTANCE_ID).find(|candidate| {
-        browser_window_id_for_instance(*candidate) == browser_window_id
-    }) else {
+    let Some(browser_instance_id) = (1..=MAX_BROWSER_INSTANCE_ID)
+        .find(|candidate| browser_window_id_for_instance(*candidate) == browser_window_id)
+    else {
         return false;
     };
     let queued = with_browser_state_mut(browser_instance_id, |state| {
@@ -565,7 +511,8 @@ unsafe fn set_global_i32(ctx: *mut qjs::JSContext, key: &[u8], value: i32) {
 
 unsafe fn truesurfer_ready(ctx: *mut qjs::JSContext) -> bool {
     let global = qjs::JS_GetGlobalObject(ctx);
-    let ready = qjs::JS_GetPropertyStr(ctx, global, TRUESURFER_READY_PROP.as_ptr() as *const c_char);
+    let ready =
+        qjs::JS_GetPropertyStr(ctx, global, TRUESURFER_READY_PROP.as_ptr() as *const c_char);
     let mut ready_f = 0.0f64;
     let ready_flag = qjs::JS_ToFloat64(ctx, &mut ready_f as *mut f64, ready) == 0
         && ready_f.is_finite()
@@ -596,7 +543,8 @@ unsafe fn truesurfer_ready(ctx: *mut qjs::JSContext) -> bool {
 
 unsafe fn truesurfer_failed(ctx: *mut qjs::JSContext) -> bool {
     let global = qjs::JS_GetGlobalObject(ctx);
-    let ready = qjs::JS_GetPropertyStr(ctx, global, TRUESURFER_READY_PROP.as_ptr() as *const c_char);
+    let ready =
+        qjs::JS_GetPropertyStr(ctx, global, TRUESURFER_READY_PROP.as_ptr() as *const c_char);
     let mut ready_f = 0.0f64;
     let failed = qjs::JS_ToFloat64(ctx, &mut ready_f as *mut f64, ready) == 0
         && ready_f.is_finite()
@@ -609,7 +557,8 @@ unsafe fn truesurfer_failed(ctx: *mut qjs::JSContext) -> bool {
 unsafe fn read_result_u32(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst, key: &[u8]) -> u32 {
     let value = qjs::JS_GetPropertyStr(ctx, obj, key.as_ptr() as *const c_char);
     let mut out = 0.0f64;
-    let ok = qjs::JS_ToFloat64(ctx, &mut out as *mut f64, value) == 0 && out.is_finite() && out >= 0.0;
+    let ok =
+        qjs::JS_ToFloat64(ctx, &mut out as *mut f64, value) == 0 && out.is_finite() && out >= 0.0;
     qjs::js_free_value(ctx, value);
     if ok { out as u32 } else { 0 }
 }
@@ -644,202 +593,139 @@ unsafe fn read_array_len(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst) -> u3
     read_result_u32(ctx, obj, LENGTH_PROP)
 }
 
-unsafe fn read_text_rows(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst) -> HostedBrowserTextState {
-    let rows_value = qjs::JS_GetPropertyStr(
-        ctx,
-        obj,
-        TRUESURFER_RESULT_TEXT_ROWS_PROP.as_ptr() as *const c_char,
-    );
-    if rows_value.is_exception()
-        || rows_value.tag == qjs::JS_TAG_UNDEFINED
-        || rows_value.tag == qjs::JS_TAG_NULL
-    {
-        qjs::js_free_value(ctx, rows_value);
-        return HostedBrowserTextState::default();
-    }
-
-    let row_count = read_array_len(ctx, rows_value).min(32);
-    let mut rows = Vec::with_capacity(row_count as usize);
-    for idx in 0..row_count {
-        let row_value = qjs::JS_GetPropertyUint32(ctx, rows_value, idx);
-        if row_value.is_exception()
-            || row_value.tag == qjs::JS_TAG_UNDEFINED
-            || row_value.tag == qjs::JS_TAG_NULL
-        {
-            qjs::js_free_value(ctx, row_value);
-            continue;
-        }
-        let text = read_result_string(ctx, row_value, TRUESURFER_TEXT_ROW_TEXT_PROP);
-        if text.is_empty() {
-            qjs::js_free_value(ctx, row_value);
-            continue;
-        }
-        let indent_px = read_result_u32(ctx, row_value, TRUESURFER_TEXT_ROW_INDENT_PROP);
-        let font_size_px = read_result_u32(ctx, row_value, TRUESURFER_TEXT_ROW_FONT_SIZE_PROP);
-        let line_height_px = read_result_u32(ctx, row_value, TRUESURFER_TEXT_ROW_LINE_HEIGHT_PROP);
-        rows.push(HostedBrowserTextRow {
-            text,
-            indent_px,
-            font_size_px,
-            line_height_px,
-        });
-        qjs::js_free_value(ctx, row_value);
-    }
-
-    qjs::js_free_value(ctx, rows_value);
-    HostedBrowserTextState { rows }
-}
-
-unsafe fn read_result_f32(
+unsafe fn read_gadget_snapshot(
     ctx: *mut qjs::JSContext,
     obj: qjs::JSValueConst,
-    key: &[u8],
-) -> f32 {
-    let value = qjs::JS_GetPropertyStr(ctx, obj, key.as_ptr() as *const c_char);
-    if value.is_exception() {
-        qjs::js_free_value(ctx, value);
-        return 0.0;
-    }
-    let mut out = 0.0f64;
-    let _ = qjs::JS_ToFloat64(ctx, &mut out as *mut f64, value);
-    qjs::js_free_value(ctx, value);
-    out as f32
-}
-
-unsafe fn read_layout_state(
-    ctx: *mut qjs::JSContext,
-    obj: qjs::JSValueConst,
-) -> HostedBrowserLayoutState {
-    let layout_value = qjs::JS_GetPropertyStr(
+) -> HostedBrowserGadgetSnapshot {
+    let snapshot_value = qjs::JS_GetPropertyStr(
         ctx,
         obj,
-        TRUESURFER_RESULT_LAYOUT_INTENT_PROP.as_ptr() as *const c_char,
+        TRUESURFER_RESULT_GADGET_SNAPSHOT_PROP.as_ptr() as *const c_char,
     );
-    if layout_value.is_exception()
-        || layout_value.tag == qjs::JS_TAG_UNDEFINED
-        || layout_value.tag == qjs::JS_TAG_NULL
+    if snapshot_value.is_exception()
+        || snapshot_value.tag == qjs::JS_TAG_UNDEFINED
+        || snapshot_value.tag == qjs::JS_TAG_NULL
     {
-        qjs::js_free_value(ctx, layout_value);
-        return HostedBrowserLayoutState::default();
+        qjs::js_free_value(ctx, snapshot_value);
+        return HostedBrowserGadgetSnapshot::default();
     }
 
-    let version = read_result_u32(ctx, layout_value, TRUESURFER_LAYOUT_INTENT_VERSION_PROP);
-    let nodes_value = qjs::JS_GetPropertyStr(
+    let version = read_result_u32(ctx, snapshot_value, TRUESURFER_GADGET_SNAPSHOT_VERSION_PROP);
+    let gadgets_value = qjs::JS_GetPropertyStr(
         ctx,
-        layout_value,
-        TRUESURFER_LAYOUT_INTENT_NODES_PROP.as_ptr() as *const c_char,
+        snapshot_value,
+        TRUESURFER_GADGET_SNAPSHOT_GADGETS_PROP.as_ptr() as *const c_char,
     );
-    if nodes_value.is_exception()
-        || nodes_value.tag == qjs::JS_TAG_UNDEFINED
-        || nodes_value.tag == qjs::JS_TAG_NULL
+    if gadgets_value.is_exception()
+        || gadgets_value.tag == qjs::JS_TAG_UNDEFINED
+        || gadgets_value.tag == qjs::JS_TAG_NULL
     {
-        qjs::js_free_value(ctx, nodes_value);
-        qjs::js_free_value(ctx, layout_value);
-        return HostedBrowserLayoutState {
+        qjs::js_free_value(ctx, gadgets_value);
+        qjs::js_free_value(ctx, snapshot_value);
+        return HostedBrowserGadgetSnapshot {
             version,
-            nodes: Vec::new(),
+            gadgets: Vec::new(),
         };
     }
 
-    let node_count = read_array_len(ctx, nodes_value).min(48);
-    let mut nodes = Vec::with_capacity(node_count as usize);
-    for idx in 0..node_count {
-        let node_value = qjs::JS_GetPropertyUint32(ctx, nodes_value, idx);
-        if node_value.is_exception()
-            || node_value.tag == qjs::JS_TAG_UNDEFINED
-            || node_value.tag == qjs::JS_TAG_NULL
+    let gadget_count = read_array_len(ctx, gadgets_value).min(64);
+    let mut gadgets = Vec::with_capacity(gadget_count as usize);
+    for idx in 0..gadget_count {
+        let gadget_value = qjs::JS_GetPropertyUint32(ctx, gadgets_value, idx);
+        if gadget_value.is_exception()
+            || gadget_value.tag == qjs::JS_TAG_UNDEFINED
+            || gadget_value.tag == qjs::JS_TAG_NULL
         {
-            qjs::js_free_value(ctx, node_value);
+            qjs::js_free_value(ctx, gadget_value);
             continue;
         }
 
-        nodes.push(HostedBrowserLayoutNode {
-            node_id: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_ID_PROP),
-            parent_id: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_PARENT_ID_PROP),
-            depth: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_DEPTH_PROP),
-            kind: read_result_string(ctx, node_value, TRUESURFER_LAYOUT_NODE_KIND_PROP),
-            tag: read_result_string(ctx, node_value, TRUESURFER_LAYOUT_NODE_TAG_PROP),
-            text: read_result_string(ctx, node_value, TRUESURFER_LAYOUT_NODE_TEXT_PROP),
-            intrinsic_width_px: read_result_u32(
-                ctx,
-                node_value,
-                TRUESURFER_LAYOUT_NODE_INTRINSIC_WIDTH_PROP,
-            ),
-            intrinsic_height_px: read_result_u32(
-                ctx,
-                node_value,
-                TRUESURFER_LAYOUT_NODE_INTRINSIC_HEIGHT_PROP,
-            ),
-            min_width_px: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_MIN_WIDTH_PROP),
-            min_height_px: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_MIN_HEIGHT_PROP),
-            margin_left_px: read_result_u32(
-                ctx,
-                node_value,
-                TRUESURFER_LAYOUT_NODE_MARGIN_LEFT_PROP,
-            ),
-            margin_top_px: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_MARGIN_TOP_PROP),
-            margin_right_px: read_result_u32(
-                ctx,
-                node_value,
-                TRUESURFER_LAYOUT_NODE_MARGIN_RIGHT_PROP,
-            ),
-            margin_bottom_px: read_result_u32(
-                ctx,
-                node_value,
-                TRUESURFER_LAYOUT_NODE_MARGIN_BOTTOM_PROP,
-            ),
-            padding_left_px: read_result_u32(
-                ctx,
-                node_value,
-                TRUESURFER_LAYOUT_NODE_PADDING_LEFT_PROP,
-            ),
-            padding_top_px: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_PADDING_TOP_PROP),
-            padding_right_px: read_result_u32(
-                ctx,
-                node_value,
-                TRUESURFER_LAYOUT_NODE_PADDING_RIGHT_PROP,
-            ),
-            padding_bottom_px: read_result_u32(
-                ctx,
-                node_value,
-                TRUESURFER_LAYOUT_NODE_PADDING_BOTTOM_PROP,
-            ),
-            font_size_px: read_result_u32(ctx, node_value, TRUESURFER_LAYOUT_NODE_FONT_SIZE_PROP),
-            line_height_px: read_result_u32(
-                ctx,
-                node_value,
-                TRUESURFER_LAYOUT_NODE_LINE_HEIGHT_PROP,
-            ),
-            flex_grow: read_result_f32(ctx, node_value, TRUESURFER_LAYOUT_NODE_FLEX_GROW_PROP),
-            flex_shrink: read_result_f32(ctx, node_value, TRUESURFER_LAYOUT_NODE_FLEX_SHRINK_PROP),
+        let text = read_result_string(ctx, gadget_value, TRUESURFER_GADGET_TEXT_PROP);
+        if text.is_empty() {
+            qjs::js_free_value(ctx, gadget_value);
+            continue;
+        }
+
+        gadgets.push(HostedBrowserGadget {
+            node_id: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_NODE_ID_PROP),
+            tag: read_result_string(ctx, gadget_value, TRUESURFER_GADGET_TAG_PROP),
+            text,
+            x_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_X_PROP),
+            y_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_Y_PROP),
+            width_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_WIDTH_PROP),
+            height_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_HEIGHT_PROP),
+            font_size_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_FONT_SIZE_PROP),
+            line_height_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_LINE_HEIGHT_PROP),
+            changed: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_CHANGED_PROP) != 0,
         });
-        qjs::js_free_value(ctx, node_value);
+        qjs::js_free_value(ctx, gadget_value);
     }
 
-    qjs::js_free_value(ctx, nodes_value);
-    qjs::js_free_value(ctx, layout_value);
-    HostedBrowserLayoutState { version, nodes }
+    qjs::js_free_value(ctx, gadgets_value);
+    qjs::js_free_value(ctx, snapshot_value);
+    HostedBrowserGadgetSnapshot { version, gadgets }
 }
 
-fn layout_content_height(layout_state: &HostedBrowserLayoutState) -> u32 {
-    if layout_state.nodes.is_empty() {
+fn gadget_snapshot_content_height(snapshot: &HostedBrowserGadgetSnapshot) -> u32 {
+    if snapshot.gadgets.is_empty() {
         return 0;
     }
     let mut total = 0u32;
-    for node in &layout_state.nodes {
-        if node.parent_id == 0 {
-            continue;
-        }
-        let block_h = node
-            .intrinsic_height_px
-            .max(node.min_height_px)
-            .saturating_add(node.margin_top_px)
-            .saturating_add(node.margin_bottom_px)
-            .saturating_add(node.padding_top_px)
-            .saturating_add(node.padding_bottom_px);
-        total = total.saturating_add(block_h.max(1));
+    for gadget in &snapshot.gadgets {
+        total = total.max(
+            gadget
+                .y_px
+                .saturating_add(gadget.height_px.max(gadget.line_height_px))
+                .saturating_add(16),
+        );
     }
     total
+}
+
+fn gadgets_equal_ignoring_changed(
+    prev: &HostedBrowserGadgetSnapshot,
+    next: &HostedBrowserGadgetSnapshot,
+) -> bool {
+    if prev.version != next.version || prev.gadgets.len() != next.gadgets.len() {
+        return false;
+    }
+    prev.gadgets
+        .iter()
+        .zip(next.gadgets.iter())
+        .all(|(lhs, rhs)| {
+            lhs.node_id == rhs.node_id
+                && lhs.tag == rhs.tag
+                && lhs.text == rhs.text
+                && lhs.x_px == rhs.x_px
+                && lhs.y_px == rhs.y_px
+                && lhs.width_px == rhs.width_px
+                && lhs.height_px == rhs.height_px
+                && lhs.font_size_px == rhs.font_size_px
+                && lhs.line_height_px == rhs.line_height_px
+        })
+}
+
+fn apply_gadget_changed_flags(
+    prev: &HostedBrowserGadgetSnapshot,
+    next: &mut HostedBrowserGadgetSnapshot,
+) {
+    for gadget in &mut next.gadgets {
+        gadget.changed = prev
+            .gadgets
+            .iter()
+            .find(|prev_gadget| prev_gadget.node_id == gadget.node_id)
+            .map(|prev_gadget| {
+                prev_gadget.tag != gadget.tag
+                    || prev_gadget.text != gadget.text
+                    || prev_gadget.x_px != gadget.x_px
+                    || prev_gadget.y_px != gadget.y_px
+                    || prev_gadget.width_px != gadget.width_px
+                    || prev_gadget.height_px != gadget.height_px
+                    || prev_gadget.font_size_px != gadget.font_size_px
+                    || prev_gadget.line_height_px != gadget.line_height_px
+            })
+            .unwrap_or(true);
+    }
 }
 
 fn take_queued_html_for_browser(browser_instance_id: u32) -> Option<PendingHtml> {
@@ -875,10 +761,13 @@ unsafe fn dispatch_html(
 ) -> bool {
     let global = qjs::JS_GetGlobalObject(ctx);
     let surfer = qjs::JS_GetPropertyStr(ctx, global, TRUESURFER_OBJ_PROP.as_ptr() as *const c_char);
-    let set_html = qjs::JS_GetPropertyStr(ctx, surfer, TRUESURFER_SET_HTML_PROP.as_ptr() as *const c_char);
-    let html_js = qjs::JS_NewStringLen(ctx, pending.html.as_ptr() as *const c_char, pending.html.len());
+    let set_html =
+        qjs::JS_GetPropertyStr(ctx, surfer, TRUESURFER_SET_HTML_PROP.as_ptr() as *const c_char);
+    let html_js =
+        qjs::JS_NewStringLen(ctx, pending.html.as_ptr() as *const c_char, pending.html.len());
     let meta = qjs::JS_NewObject(ctx);
-    let url_js = qjs::JS_NewStringLen(ctx, pending.url.as_ptr() as *const c_char, pending.url.len());
+    let url_js =
+        qjs::JS_NewStringLen(ctx, pending.url.as_ptr() as *const c_char, pending.url.len());
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         meta,
@@ -925,13 +814,12 @@ unsafe fn dispatch_html(
         script_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SCRIPT_BYTES_PROP),
         error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
     };
-    let text_state = read_text_rows(ctx, result);
-    let layout_state = read_layout_state(ctx, result);
+    let mut gadget_snapshot = read_gadget_snapshot(ctx, result);
 
     let mut ui2_dirty_flags = 0u32;
     let _ = with_browser_state_mut(browser_instance_id, |state| {
-        let text_changed = state.text_state != text_state;
-        let layout_changed = state.layout_state != layout_state;
+        let gadget_changed =
+            !gadgets_equal_ignoring_changed(&state.gadget_snapshot, &gadget_snapshot);
         let parse_changed = state
             .last_parse_result
             .as_ref()
@@ -941,29 +829,20 @@ unsafe fn dispatch_html(
         if parse_changed {
             state.last_parse_result = Some(parse_result.clone());
         }
-        if text_changed {
-            state.text_state = text_state.clone();
-            state.text_seq = state.text_seq.wrapping_add(1);
+        if gadget_changed {
+            apply_gadget_changed_flags(&state.gadget_snapshot, &mut gadget_snapshot);
+            state.gadget_snapshot = gadget_snapshot.clone();
+            state.gadget_seq = state.gadget_seq.wrapping_add(1);
             ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
-        }
-        if layout_changed {
-            state.layout_state = layout_state.clone();
-            state.layout_seq = state.layout_seq.wrapping_add(1);
-            ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
+        } else if state.gadget_snapshot != gadget_snapshot {
+            state.gadget_snapshot = gadget_snapshot.clone();
         }
 
         let mut next_content_height = state.surface_state.content_height.max(1);
-        if !state.text_state.rows.is_empty() {
-            next_content_height = next_content_height.max(
-                ((state.text_state.rows.len() as u32) * 18)
-                    .saturating_add(20)
-                    .max(state.surface_state.viewport_height),
-            );
-        }
-        let layout_height = layout_content_height(&state.layout_state);
-        if layout_height > 0 {
+        let gadget_height = gadget_snapshot_content_height(&state.gadget_snapshot);
+        if gadget_height > 0 {
             next_content_height = next_content_height
-                .max(layout_height)
+                .max(gadget_height)
                 .max(state.surface_state.viewport_height);
         }
         if next_content_height != state.surface_state.content_height {
@@ -979,21 +858,20 @@ unsafe fn dispatch_html(
 
     if parse_result.ok {
         log_line(format!(
-            "[TrueSurfer -> UI2] browser={} handover description_entries={} text_rows={} url={}\n",
+            "[TrueSurfer -> UI2] browser={} handover gadgets={} url={}\n",
             browser_instance_id,
-            layout_state.nodes.len(),
-            text_state.rows.len(),
+            gadget_snapshot.gadgets.len(),
             parse_result.url,
         ));
         log_line(format!(
-            "qjs-truesurfer[{}]: parsed bytes={} title={} ms={} shell_bytes={} body_bytes={} layout_nodes={} styles={} scripts={} url={}\n",
+            "qjs-truesurfer[{}]: parsed bytes={} title={} ms={} shell_bytes={} body_bytes={} gadgets={} styles={} scripts={} url={}\n",
             browser_instance_id,
             parse_result.bytes,
             parse_result.title,
             parse_result.parse_ms,
             parse_result.shell_bytes,
             parse_result.body_bytes,
-            layout_state.nodes.len(),
+            gadget_snapshot.gadgets.len(),
             parse_result.style_count,
             parse_result.script_count,
             parse_result.url
@@ -1001,9 +879,7 @@ unsafe fn dispatch_html(
     } else {
         log_error(format!(
             "qjs-truesurfer[{}]: parse failed url={} err={}\n",
-            browser_instance_id,
-            parse_result.url,
-            parse_result.error
+            browser_instance_id, parse_result.url, parse_result.error
         ));
     }
 
@@ -1026,10 +902,7 @@ unsafe fn runtime_has_pending_work(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSCon
 #[embassy_executor::task(pool_size = 100)]
 pub async fn truesurfer_task(browser_instance_id: u32) {
     if !browser_valid(browser_instance_id) {
-        log_error(format!(
-            "qjs-truesurfer[{}]: invalid browser instance\n",
-            browser_instance_id
-        ));
+        log_error(format!("qjs-truesurfer[{}]: invalid browser instance\n", browser_instance_id));
         return;
     }
 
@@ -1037,18 +910,12 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
         state.started = true;
         state.api_ready = false;
     });
-    log_line(format!(
-        "qjs-truesurfer[{}]: starting parser host\n",
-        browser_instance_id
-    ));
+    log_line(format!("qjs-truesurfer[{}]: starting parser host\n", browser_instance_id));
 
     unsafe {
         let Some(vm) = qjs::vm::QjsVm::new_node_with_profile(qjs::node::RuntimeProfile::Browser)
         else {
-            log_error(format!(
-                "qjs-truesurfer[{}]: JS runtime init failed\n",
-                browser_instance_id
-            ));
+            log_error(format!("qjs-truesurfer[{}]: JS runtime init failed\n", browser_instance_id));
             let _ = with_browser_state_mut(browser_instance_id, |state| {
                 state.started = false;
             });
@@ -1098,10 +965,7 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                     last_ready = ready;
                 }
                 if failed {
-                    log_line(format!(
-                        "qjs-truesurfer[{}]: startup failed\n",
-                        browser_instance_id
-                    ));
+                    log_line(format!("qjs-truesurfer[{}]: startup failed\n", browser_instance_id));
                     runtime_alive = false;
                     break;
                 }
@@ -1145,8 +1009,5 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
         state.started = false;
         state.api_ready = false;
     });
-    log_line(format!(
-        "qjs-truesurfer[{}]: parser host ended\n",
-        browser_instance_id
-    ));
+    log_line(format!("qjs-truesurfer[{}]: parser host ended\n", browser_instance_id));
 }

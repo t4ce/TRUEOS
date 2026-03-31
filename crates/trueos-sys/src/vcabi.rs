@@ -49,8 +49,7 @@ unsafe extern "C" {
     ) -> u32;
     pub fn trueos_cabi_net_fetch_result(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_result_len(op_id: u32) -> isize;
-    pub fn trueos_cabi_net_fetch_bytes_read(op_id: u32, out_ptr: *mut u8, out_cap: usize)
-        -> isize;
+    pub fn trueos_cabi_net_fetch_bytes_read(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_discard(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32;
@@ -135,11 +134,12 @@ unsafe extern "C" {
     pub fn trueos_cabi_gfx_capture_screenshot_data_url(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_gfx_trace_set_enabled(enabled: u32) -> u32;
     pub fn trueos_cabi_gfx_trace_clear();
-    pub fn trueos_cabi_gfx_trace_snapshot(
-        out_ptr: *mut TrueosGfxTraceEntry,
-        out_cap: u32,
-    ) -> u32;
-    pub fn trueos_cabi_gfx_upload_texture_svg(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32;
+    pub fn trueos_cabi_gfx_trace_snapshot(out_ptr: *mut TrueosGfxTraceEntry, out_cap: u32) -> u32;
+    pub fn trueos_cabi_gfx_upload_texture_svg(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_gfx_upload_texture_rgba_image_async(
         tex_id: u32,
         width: u32,
@@ -147,13 +147,14 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
-    pub fn trueos_cabi_gfx_upload_texture_svg_async(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32;
+    pub fn trueos_cabi_gfx_upload_texture_svg_async(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_gfx_texture_status(tex_id: u32) -> i32;
-
     pub fn trueos_cabi_ntp_current_unix_seconds() -> u64;
     pub fn trueos_cabi_ntp_kernel_date_day_month_year(out_ptr: *mut u8, out_cap: usize) -> usize;
-
-    pub fn trueos_cabi_ui2_primary_browser_window_id() -> u32;
     pub fn trueos_cabi_ui2_window_create(
         title_ptr: *const u8,
         title_len: usize,
@@ -176,8 +177,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui2_window_set_decorations(window_id: u32, mode: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_hit_test_visible(window_id: u32, visible: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_vertical_scrollbar_side(window_id: u32, side: u32) -> i32;
-    pub fn trueos_cabi_ui2_window_set_horizontal_scrollbar_side(window_id: u32, side: u32)
-        -> i32;
+    pub fn trueos_cabi_ui2_window_set_horizontal_scrollbar_side(window_id: u32, side: u32) -> i32;
     pub fn trueos_cabi_ui2_window_minimize(window_id: u32) -> i32;
     pub fn trueos_cabi_ui2_window_maximize(window_id: u32) -> i32;
     pub fn trueos_cabi_ui2_window_restore(window_id: u32) -> i32;

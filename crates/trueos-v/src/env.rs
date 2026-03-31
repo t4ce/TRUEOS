@@ -51,15 +51,16 @@ pub fn args() -> Args {
 
 pub fn var<K: AsRef<str>>(key: K) -> Result<String, VarError> {
     let key = key.as_ref();
-    let len = unsafe {
-        vcabi::trueos_cabi_env_var(key.as_ptr(), key.len(), core::ptr::null_mut(), 0)
-    };
+    let len =
+        unsafe { vcabi::trueos_cabi_env_var(key.as_ptr(), key.len(), core::ptr::null_mut(), 0) };
     if len < 0 {
         return Err(VarError::NotPresent);
     }
 
     let mut bytes = vec![0u8; len as usize];
-    let got = unsafe { vcabi::trueos_cabi_env_var(key.as_ptr(), key.len(), bytes.as_mut_ptr(), bytes.len()) };
+    let got = unsafe {
+        vcabi::trueos_cabi_env_var(key.as_ptr(), key.len(), bytes.as_mut_ptr(), bytes.len())
+    };
     if got < 0 {
         return Err(VarError::NotPresent);
     }

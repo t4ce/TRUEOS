@@ -488,7 +488,12 @@ pub trait GfxDevice {
     fn destroy_image(&mut self, id: ImageId);
     fn write_image(&mut self, id: ImageId, data: &[u8]) -> Result<()>;
 
-    fn write_image_region(&mut self, _id: ImageId, _region: ImageRegion, _data: &[u8]) -> Result<()> {
+    fn write_image_region(
+        &mut self,
+        _id: ImageId,
+        _region: ImageRegion,
+        _data: &[u8],
+    ) -> Result<()> {
         Err(Error::Unsupported)
     }
 
@@ -644,10 +649,7 @@ impl ViewTransform {
 
     #[inline]
     pub fn px_to_ndc(self, x: f32, y: f32) -> (f32, f32) {
-        (
-            (2.0 * (x / self.width)) - 1.0,
-            1.0 - (2.0 * (y / self.height)),
-        )
+        ((2.0 * (x / self.width)) - 1.0, 1.0 - (2.0 * (y / self.height)))
     }
 
     #[inline]
@@ -692,7 +694,12 @@ pub fn read_rgb_vertex_bytes(bytes: &[u8], off: usize) -> Option<RgbVertex> {
     }
     Some(RgbVertex {
         x: f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]),
-        y: f32::from_le_bytes([bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]]),
+        y: f32::from_le_bytes([
+            bytes[off + 4],
+            bytes[off + 5],
+            bytes[off + 6],
+            bytes[off + 7],
+        ]),
         color: Rgba8::new(bytes[off + 8], bytes[off + 9], bytes[off + 10], bytes[off + 11]),
     })
 }
@@ -717,7 +724,12 @@ pub fn read_tex_vertex_bytes(bytes: &[u8], off: usize) -> Option<TexVertex> {
     }
     Some(TexVertex {
         x: f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]),
-        y: f32::from_le_bytes([bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]]),
+        y: f32::from_le_bytes([
+            bytes[off + 4],
+            bytes[off + 5],
+            bytes[off + 6],
+            bytes[off + 7],
+        ]),
         u: f32::from_le_bytes([
             bytes[off + 8],
             bytes[off + 9],
@@ -794,12 +806,7 @@ pub fn push_rgb_vertex_bytes(out: &mut Vec<u8>, vertex: RgbVertex) {
 }
 
 #[cfg(any(feature = "alloc", test))]
-fn clip_rgb_poly_edge(
-    input: &[RgbVertexF32],
-    edge: u8,
-    bound: f32,
-    out: &mut Vec<RgbVertexF32>,
-) {
+fn clip_rgb_poly_edge(input: &[RgbVertexF32], edge: u8, bound: f32, out: &mut Vec<RgbVertexF32>) {
     out.clear();
     if input.is_empty() {
         return;

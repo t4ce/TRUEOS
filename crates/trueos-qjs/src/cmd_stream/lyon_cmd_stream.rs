@@ -151,12 +151,66 @@ fn cmd_stream_get_lyon_unit_quad_verts(
 
     let mut verts = Vec::with_capacity(6 * 20);
     let color = Rgba8::new(r, g, b, 255);
-    push_tex_vertex_bytes(&mut verts, TexVertex { x: 0.0, y: -dy, u: 0.0, v: 1.0, color });
-    push_tex_vertex_bytes(&mut verts, TexVertex { x: dx, y: -dy, u: 1.0, v: 1.0, color });
-    push_tex_vertex_bytes(&mut verts, TexVertex { x: dx, y: 0.0, u: 1.0, v: 0.0, color });
-    push_tex_vertex_bytes(&mut verts, TexVertex { x: 0.0, y: -dy, u: 0.0, v: 1.0, color });
-    push_tex_vertex_bytes(&mut verts, TexVertex { x: dx, y: 0.0, u: 1.0, v: 0.0, color });
-    push_tex_vertex_bytes(&mut verts, TexVertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, color });
+    push_tex_vertex_bytes(
+        &mut verts,
+        TexVertex {
+            x: 0.0,
+            y: -dy,
+            u: 0.0,
+            v: 1.0,
+            color,
+        },
+    );
+    push_tex_vertex_bytes(
+        &mut verts,
+        TexVertex {
+            x: dx,
+            y: -dy,
+            u: 1.0,
+            v: 1.0,
+            color,
+        },
+    );
+    push_tex_vertex_bytes(
+        &mut verts,
+        TexVertex {
+            x: dx,
+            y: 0.0,
+            u: 1.0,
+            v: 0.0,
+            color,
+        },
+    );
+    push_tex_vertex_bytes(
+        &mut verts,
+        TexVertex {
+            x: 0.0,
+            y: -dy,
+            u: 0.0,
+            v: 1.0,
+            color,
+        },
+    );
+    push_tex_vertex_bytes(
+        &mut verts,
+        TexVertex {
+            x: dx,
+            y: 0.0,
+            u: 1.0,
+            v: 0.0,
+            color,
+        },
+    );
+    push_tex_vertex_bytes(
+        &mut verts,
+        TexVertex {
+            x: 0.0,
+            y: 0.0,
+            u: 0.0,
+            v: 0.0,
+            color,
+        },
+    );
 
     let out: Arc<[u8]> = Arc::from(verts.into_boxed_slice());
     let mut recs = CMD_STREAM_LYON_UNIT_QUAD_RECS.lock();

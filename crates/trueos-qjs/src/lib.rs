@@ -389,11 +389,5 @@ pub unsafe fn js_eval_bytes(
     let mut nul_terminated = Vec::with_capacity(input.len().saturating_add(1));
     nul_terminated.extend_from_slice(input);
     nul_terminated.push(0);
-    JS_Eval(
-        ctx,
-        nul_terminated.as_ptr() as *const c_char,
-        input.len(),
-        filename,
-        eval_flags,
-    )
+    JS_Eval(ctx, nul_terminated.as_ptr() as *const c_char, input.len(), filename, eval_flags)
 }
