@@ -51,6 +51,8 @@ mod tst_http_trueosfs;
 mod tst_net_tcp_shell;
 #[path = "tst/smtp_smoke.rs"]
 mod tst_smtp_smoke;
+#[path = "tst/ui2_athlas_bucket_demo.rs"]
+mod tst_ui2_athlas_bucket_demo;
 #[path = "tst/ui2_bgrt.rs"]
 mod tst_ui2_bgrt;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
@@ -152,7 +154,7 @@ pub extern "C" fn kmain() -> ! {
     trueos_qjs::host_api_hook::set_context_init_hook(host_api::install);
 
     pci::vrng::init_once();
-    pci::vrng::smoke_test_once();
+    //pci::vrng::smoke_test_once();
     crate::rng::init();
 
     disc::probe_once();

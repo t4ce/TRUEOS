@@ -56,33 +56,6 @@ impl TaskSpec {
     }
 }
 
-struct Ui2DemoTaskSpec {
-    name: &'static str,
-    slot_ready: u32,
-    started: &'static AtomicBool,
-    spawn: fn(Spawner) -> SpawnAttempt,
-}
-
-impl Ui2DemoTaskSpec {
-    const fn new(
-        name: &'static str,
-        slot_ready: u32,
-        started: &'static AtomicBool,
-        spawn: fn(Spawner) -> SpawnAttempt,
-    ) -> Self {
-        Self {
-            name,
-            slot_ready,
-            started,
-            spawn,
-        }
-    }
-
-    const fn task_spec(&self) -> TaskSpec {
-        TaskSpec::enabled(self.name, self.slot_ready, self.started, self.spawn)
-    }
-}
-
 enum SpawnAttempt {
     Spawned,
     Skipped,
@@ -122,9 +95,11 @@ define_started_flags!(
     UI2_HOSTED_SYNC_TASK_STARTED,
     UI2_HIT_TASK_STARTED,
     UI2_STARTED,
-    UI2_DEMO_STAGGER_STARTED,
     UI2_GFX_BROWSER_STARTED,
     UI2_GFX_TETRIS_STARTED,
+    UI2_ATHLAS_HALF_DEMO_STARTED,
+    UI2_ATHLAS_1X_DEMO_STARTED,
+    UI2_ATHLAS_3X_DEMO_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
@@ -483,25 +458,6 @@ fn gfx_switched() -> bool {
     }
 }
 
-#[embassy_executor::task]
-async fn ui2_demo_stagger_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::UI2_READY).await;
-
-    for (idx, demo) in UI2_DEMOS.iter().enumerate() {
-        crate::r::readiness::set(demo.slot_ready);
-        crate::log!(
-            "boot-probe: ui2-demo-slot-{} ready name={} ms={}\n",
-            idx + 1,
-            demo.name,
-            boot_probe_ms()
-        );
-    }
-}
-
-fn spawn_ui2_demo_stagger(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(ui2_demo_stagger_task()))
-}
-
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     let mut result = SpawnAttempt::Skipped;
     for _ in 0..3 {
@@ -631,6 +587,24 @@ fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_athlas_half_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_athlas_bucket_demo::ui2_athlas_bucket_demo_task(0))
+    })
+}
+
+fn spawn_ui2_athlas_1x_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_athlas_bucket_demo::ui2_athlas_bucket_demo_task(1))
+    })
+}
+
+fn spawn_ui2_athlas_3x_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_athlas_bucket_demo::ui2_athlas_bucket_demo_task(2))
+    })
+}
+
 fn spawn_ui2_triangle_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_triangle_demo::ui2_triangle_demo_task())
@@ -660,57 +634,6 @@ fn spawn_ui2_svg_demo(spawner: Spawner) -> SpawnAttempt {
         worker_spawner.spawn(crate::tst_ui2_svg_demo::ui2_svg_demo_task())
     })
 }
-
-const UI2_GFX_TETRIS_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
-    "ui2-gfx-tetris",
-    crate::r::readiness::UI2_DEMO_SLOT_1_READY,
-    &UI2_GFX_TETRIS_STARTED,
-    spawn_ui2_gfx_tetris,
-);
-
-const UI2_TRIANGLE_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
-    "ui2-triangle-demo",
-    crate::r::readiness::UI2_DEMO_SLOT_2_READY,
-    &UI2_TRIANGLE_DEMO_STARTED,
-    spawn_ui2_triangle_demo,
-);
-
-const UI2_BGRT_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
-    "ui2-bgrt-demo",
-    crate::r::readiness::UI2_DEMO_SLOT_3_READY,
-    &UI2_BGRT_DEMO_STARTED,
-    spawn_ui2_bgrt_demo,
-);
-
-const UI2_MANDELBROT_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
-    "ui2-mandelbrot-demo",
-    crate::r::readiness::UI2_DEMO_SLOT_4_READY,
-    &UI2_MANDELBROT_DEMO_STARTED,
-    spawn_ui2_mandelbrot_demo,
-);
-
-const UI2_PARTICLE_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
-    "ui2-particle-demo",
-    crate::r::readiness::UI2_DEMO_SLOT_4_READY,
-    &UI2_PARTICLE_DEMO_STARTED,
-    spawn_ui2_particle_demo,
-);
-
-const UI2_SVG_DEMO: Ui2DemoTaskSpec = Ui2DemoTaskSpec::new(
-    "ui2-svg-demo",
-    crate::r::readiness::UI2_DEMO_SLOT_4_READY,
-    &UI2_SVG_DEMO_STARTED,
-    spawn_ui2_svg_demo,
-);
-
-const UI2_DEMOS: &[Ui2DemoTaskSpec] = &[
-    UI2_GFX_TETRIS_DEMO,
-    UI2_TRIANGLE_DEMO,
-    UI2_BGRT_DEMO,
-    UI2_MANDELBROT_DEMO,
-    UI2_PARTICLE_DEMO,
-    UI2_SVG_DEMO,
-];
 
 fn spawn_gfx_intel_readiness_probe(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(crate::intel::scanout_smoke_task()))
@@ -865,6 +788,8 @@ const NET_CONFIGURED_AND_ROOT_READY: u32 =
 const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_CONFIGURED
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::QJS_ASYNC_FS_READY;
+const UI2_DEMO_READY: u32 =
+    crate::r::readiness::UI2_READY | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
@@ -976,38 +901,51 @@ static TASKS: &[TaskSpec] = &[
         &UI2_HIT_TASK_STARTED,
         spawn_ui2_hit,
     ),
-    TaskSpec::enabled(
-        "ui2-demo-stagger",
-        crate::r::readiness::UI2_READY,
-        &UI2_DEMO_STAGGER_STARTED,
-        spawn_ui2_demo_stagger,
-    ),
     TaskSpec::enabled("truesurfer-factory", 0, &SURFER_FACTORY_STARTED, spawn_truesurfer_factory),
     TaskSpec::enabled(
         "ui2-gfx-tetris",
-        crate::r::readiness::UI2_DEMO_SLOT_1_READY,
+        UI2_DEMO_READY,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
     ),
     TaskSpec::enabled(
+        "ui2-athlas-half-demo",
+        UI2_DEMO_READY,
+        &UI2_ATHLAS_HALF_DEMO_STARTED,
+        spawn_ui2_athlas_half_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-athlas-1x-demo",
+        UI2_DEMO_READY,
+        &UI2_ATHLAS_1X_DEMO_STARTED,
+        spawn_ui2_athlas_1x_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-athlas-3x-demo",
+        UI2_DEMO_READY,
+        &UI2_ATHLAS_3X_DEMO_STARTED,
+        spawn_ui2_athlas_3x_demo,
+    ),
+    TaskSpec::enabled(
         "ui2-triangle-demo",
-        crate::r::readiness::UI2_DEMO_SLOT_2_READY,
+        UI2_DEMO_READY,
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
-    UI2_BGRT_DEMO.task_spec(),
+    TaskSpec::enabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
     TaskSpec::enabled(
         "ui2-mandelbrot-demo",
-        crate::r::readiness::UI2_DEMO_SLOT_4_READY,
+        UI2_DEMO_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
     TaskSpec::enabled(
         "ui2-particle-demo",
-        crate::r::readiness::UI2_DEMO_SLOT_4_READY,
+        UI2_DEMO_READY,
         &UI2_PARTICLE_DEMO_STARTED,
         spawn_ui2_particle_demo,
     ),
+    TaskSpec::enabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
     TaskSpec::enabled(
         "gfx-intel-readiness-probe",
         crate::r::readiness::GFX_INTEL_CLAIMED,
