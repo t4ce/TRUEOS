@@ -4,7 +4,7 @@ const UI2_BROWSER_GADGET_PAD_X: f32 = 10.0;
 const UI2_BROWSER_GADGET_PAD_Y: f32 = 8.0;
 const UI2_BROWSER_GADGET_BG_RGBA: (u8, u8, u8, u8) = (0xFB, 0xFB, 0xF8, 0xFF);
 
-pub(super) fn draw_hosted_browser_gadget_scene(
+pub(crate) fn draw_hosted_browser_gadget_scene(
     state: &Ui2State,
     window: &Ui2Window,
     content: Ui2Rect,
