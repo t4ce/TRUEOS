@@ -6,6 +6,8 @@ use v::vnet as api;
 use crate::gate::{DeviceIp, DeviceSnapshot};
 
 pub const ESP_STATUS_PATH: &str = "/status";
+pub const ESP_UPLOAD_PATH: &str = "/upload";
+pub const ESP_RUN_PATH: &str = "/run";
 pub const DEVICE_STATUS_TEXT_CAP: usize = 32;
 pub const DEVICE_STATUS_ERROR_CAP: usize = 96;
 pub const DEVICE_STATUS_URL_CAP: usize = 96;
@@ -27,6 +29,18 @@ impl DeviceInterface {
     }
 
     pub fn status_url(&self) -> Option<String<DEVICE_STATUS_URL_CAP>> {
+        self.path_url(ESP_STATUS_PATH)
+    }
+
+    pub fn upload_url(&self) -> Option<String<DEVICE_STATUS_URL_CAP>> {
+        self.path_url(ESP_UPLOAD_PATH)
+    }
+
+    pub fn run_url(&self) -> Option<String<DEVICE_STATUS_URL_CAP>> {
+        self.path_url(ESP_RUN_PATH)
+    }
+
+    fn path_url(&self, path: &str) -> Option<String<DEVICE_STATUS_URL_CAP>> {
         match self.ip {
             Some(DeviceIp::V4(addr)) => {
                 let mut out = String::new();
@@ -39,7 +53,7 @@ impl DeviceInterface {
                         addr[2],
                         addr[3],
                         self.service_port,
-                        &ESP_STATUS_PATH[1..]
+                        &path[1..]
                     ),
                 );
                 Some(out)
@@ -173,5 +187,7 @@ mod tests {
         let iface = DeviceInterface::from_snapshot(&snapshot);
         let url = iface.status_url().expect("status url");
         assert_eq!(url.as_str(), "http://192.168.178.102:8080/status");
+        let upload_url = iface.upload_url().expect("upload url");
+        assert_eq!(upload_url.as_str(), "http://192.168.178.102:8080/upload");
     }
 }
