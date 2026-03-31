@@ -13,7 +13,6 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_draw_triangles_u8(
     let Some(args) = super::cmd_stream_args(argv, argc, 1) else {
         return qjs::JSValue::undefined();
     };
-    super::atlas_cmd_stream::flush_text_batches();
     let _ = super::cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
         if len > 0 {
             let _ = super::trueos_cabi_gfx_draw_rgb_triangles_no_present(ptr, len);
@@ -47,7 +46,6 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_fill_rect(
         return qjs::JSValue::undefined();
     };
 
-    super::atlas_cmd_stream::flush_text_batches();
     let rgba = (rgba_f as i64).max(0) as u32;
     let outline = super::cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) != 0.0;
     let chamfer = super::cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) != 0.0;
@@ -88,7 +86,6 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_draw_line(
         return qjs::JSValue::undefined();
     };
 
-    super::atlas_cmd_stream::flush_text_batches();
     let rgba = (rgba_f as i64).max(0) as u32;
     let thickness = super::cmd_stream_arg_f64(ctx, args, 5).unwrap_or(1.0).max(0.5) as f32;
     let _ = super::cmd_stream_draw_line(
@@ -111,7 +108,6 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_draw_textured_triangles_u8(
     let Some(args) = super::cmd_stream_args(argv, argc, 2) else {
         return qjs::JSValue::undefined();
     };
-    super::atlas_cmd_stream::flush_text_batches();
     let Some(tex_id_f) = super::cmd_stream_arg_f64(ctx, args, 0) else {
         return qjs::JSValue::undefined();
     };
@@ -164,19 +160,6 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_draw_texture_rect(
         (super::cmd_stream_arg_f64(ctx, args, 9).unwrap_or(0xFFFF_FFFFu32 as f64) as i64).max(0)
             as u32;
 
-    super::atlas_cmd_stream::flush_text_batches();
-    let _ = super::cmd_stream_draw_texture_rect(
-        tex_id,
-        x_f as f32,
-        y_f as f32,
-        w_f as f32,
-        h_f as f32,
-        u0,
-        v0,
-        u1,
-        v1,
-        rgba,
-    );
     qjs::JSValue::undefined()
 }
 

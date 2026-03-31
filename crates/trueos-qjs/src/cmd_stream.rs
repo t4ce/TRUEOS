@@ -11,8 +11,6 @@ use spin::Mutex;
 
 use crate as qjs;
 
-#[path = "cmd_stream/atlas_cmd_stream.rs"]
-mod atlas_cmd_stream;
 #[path = "cmd_stream/draw_cmd_stream.rs"]
 mod draw_cmd_stream;
 #[path = "cmd_stream/lyon_cmd_stream.rs"]
@@ -313,7 +311,6 @@ fn cmd_stream_release_tex_id(id: u32) {
     if let Some(pos) = ids.iter().position(|v| *v == id) {
         ids.swap_remove(pos);
     }
-    atlas_cmd_stream::release_tex_id(id);
     lyon_cmd_stream::release_tex_id(id);
 }
 
@@ -1081,7 +1078,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         _argc: i32,
         _argv: *const qjs::JSValueConst,
     ) -> qjs::JSValue {
-        atlas_cmd_stream::clear_text_batches();
         let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
         let rc = trueos_cabi_gfx_begin_frame_no_present(clear);
         let opened = rc == 0;
@@ -1099,10 +1095,8 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         _argv: *const qjs::JSValueConst,
     ) -> qjs::JSValue {
         if !CMD_STREAM_FRAME_OPEN.swap(false, Ordering::Relaxed) {
-            atlas_cmd_stream::clear_text_batches();
             return qjs::JSValue::undefined();
         }
-        atlas_cmd_stream::flush_text_batches();
         let _ = trueos_cabi_gfx_end_frame();
         qjs::JSValue::undefined()
     }
@@ -1269,7 +1263,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
             return qjs::JSValue::undefined();
         };
-        atlas_cmd_stream::flush_text_batches();
         let tex_id = (tex_id_f as i64).max(0) as u32;
         let _ = trueos_cabi_gfx_set_render_target(tex_id);
         qjs::JSValue::undefined()
@@ -1284,7 +1277,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         if !CMD_STREAM_FRAME_OPEN.load(Ordering::Relaxed) {
             return qjs::JSValue::undefined();
         }
-        atlas_cmd_stream::flush_text_batches();
         let _ = trueos_cabi_gfx_clear_render_target();
         qjs::JSValue::undefined()
     }
@@ -1342,7 +1334,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         let Some(enabled_f) = cmd_stream_arg_f64(ctx, args, 0) else {
             return qjs::JSValue::undefined();
         };
-        atlas_cmd_stream::flush_text_batches();
         if enabled_f != 0.0 {
             CMD_STREAM_BLEND_ENABLED.store(1, Ordering::Relaxed);
             let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
@@ -1376,7 +1367,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         let Some(mag_f) = cmd_stream_arg_f64(ctx, args, 3) else {
             return qjs::JSValue::undefined();
         };
-        atlas_cmd_stream::flush_text_batches();
         let _ = trueos_cabi_gfx_set_sampler(
             (wrap_u as i64).max(0) as u32,
             (wrap_v as i64).max(0) as u32,
@@ -1398,7 +1388,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         let Some(mode_f) = cmd_stream_arg_f64(ctx, args, 0) else {
             return qjs::JSValue::undefined();
         };
-        atlas_cmd_stream::flush_text_batches();
         let mode = ((mode_f as i64).clamp(0, 3)) as u32;
         CMD_STREAM_BLEND_MODE.store(mode, Ordering::Relaxed);
         if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
@@ -1420,7 +1409,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         let Some(pma_f) = cmd_stream_arg_f64(ctx, args, 0) else {
             return qjs::JSValue::undefined();
         };
-        atlas_cmd_stream::flush_text_batches();
         CMD_STREAM_PMA.store(if pma_f != 0.0 { 1 } else { 0 }, Ordering::Relaxed);
         if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
             let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
@@ -1465,11 +1453,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
         (b"updateTextureSvg\0", qjs_cmd_stream_update_texture_svg, 2),
         (b"getTextureStatus\0", qjs_cmd_stream_get_texture_status, 1),
         (b"destroyTexture\0", qjs_cmd_stream_destroy_texture, 1),
-        (
-            b"createAtlasTexture\0",
-            atlas_cmd_stream::qjs_cmd_stream_create_atlas_texture,
-            1,
-        ),
         (b"drawTrianglesU8\0", draw_cmd_stream::qjs_cmd_stream_draw_triangles_u8, 1),
         (b"fillRect\0", draw_cmd_stream::qjs_cmd_stream_fill_rect, 5),
         (b"drawLine\0", draw_cmd_stream::qjs_cmd_stream_draw_line, 5),
@@ -1479,11 +1462,6 @@ fn cmd_stream_draw_line(x1: f32, y1: f32, x2: f32, y2: f32, rgba: u32, thickness
             2,
         ),
         (b"drawTextureRect\0", draw_cmd_stream::qjs_cmd_stream_draw_texture_rect, 5),
-        (
-            b"drawAtlasText\0",
-            atlas_cmd_stream::qjs_cmd_stream_draw_atlas_text,
-            10,
-        ),
         (
             b"drawLyonIconInFrame\0",
             lyon_cmd_stream::qjs_cmd_stream_draw_lyon_icon_in_frame,
