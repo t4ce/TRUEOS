@@ -111,13 +111,18 @@ pub unsafe fn pump_runtime_once(
     label: &str,
 ) -> bool {
     let mut progress = false;
+    let had_async_pending = qjs::async_ops::has_pending(ctx);
     progress |= qjs::async_ops::pump(ctx);
     progress |= qjs::workers::pump(ctx);
     progress |= qjs::timers::pump(ctx);
     if !drain_pending_jobs(rt, ctx, label) {
         return false;
     }
-    if qjs::JS_IsJobPending(rt) > 0 || qjs::workers::has_pending_for_ctx(ctx) {
+    if qjs::JS_IsJobPending(rt) > 0
+        || qjs::workers::has_pending_for_ctx(ctx)
+        || qjs::async_ops::has_pending(ctx)
+        || had_async_pending
+    {
         qjs::trueos_shims::trueos_cabi_poll_once();
         if !progress {
             qjs::trueos_shims::trueos_cabi_poll_once();

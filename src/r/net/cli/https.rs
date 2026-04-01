@@ -3774,28 +3774,19 @@ pub async fn post_https_json_with_profile_async(
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
 
-        let res = if HttpsLimits::KEEPALIVE_ENABLE {
-            fetch_on_device_keepalive_post_json(
-                &parsed,
-                dev_idx,
-                timeout_ms,
-                max_bytes,
-                body_json.as_str(),
-                auth_token,
-            )
-            .await
-        } else {
-            fetch_on_device(
-                &parsed,
-                dev_idx,
-                timeout_ms,
-                max_bytes,
-                Some(body_json.as_str()),
-                auth_token,
-                None,
-            )
-            .await
-        };
+        // Keepalive POSTs have proven fragile against some API responses. Route JSON POSTs
+        // through the close-after-response path so completion never depends on keepalive body
+        // framing or pooled-connection state.
+        let res = fetch_on_device(
+            &parsed,
+            dev_idx,
+            timeout_ms,
+            max_bytes,
+            Some(body_json.as_str()),
+            auth_token,
+            None,
+        )
+        .await;
 
         match res {
             Ok(v) => return Ok(v),
@@ -4170,6 +4161,12 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
         .await
         {
             Ok(bytes) => {
+                crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
+                if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
+                    log_utf8_chunks("net-fetch-post: response_json: ", s);
+                } else {
+                    crate::log!("net-fetch-post: response_json: [non-utf8]\n");
+                }
                 if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
                     match crate::r::fs::trueosfs::file_in_async(
                         disk,

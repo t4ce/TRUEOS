@@ -609,20 +609,37 @@ unsafe fn pump_net_fetch_text(ctx: *mut qjs::JSContext) -> bool {
             continue;
         }
 
-        // Consume the net op result (also discards the kernel op id), then schedule
-        // a separate async file read so the QJS owner task never blocks on temp-file I/O.
+        // Consume the net op result (also discards the kernel op id), then read the
+        // temp file back directly. Routing this through async_fs_service can stall on
+        // nested sync-over-async readback even though the network request already finished.
         let _ = async_fs::read_result(op_id, core::ptr::null_mut(), 0);
-
-        match async_fs::start_read_file(op.aux.as_slice()) {
-            Ok(read_op_id) => {
-                op.op_id = read_op_id;
-                op.kind = OpKind::ReadText;
-                PENDING.lock().entry(ctx as usize).or_default().push(op);
-                continue;
+        match read_file_via_cabi(op.aux.as_slice()) {
+            Ok(buf) => {
+                crate::trueos_shims::log_info(
+                    format!(
+                        "qjs fetch: readback ok tmp_len={} op={}\n",
+                        buf.len(),
+                        op_id
+                    )
+                    .as_str(),
+                );
+                let s = qjs::JS_NewStringLen(
+                    ctx,
+                    buf.as_ptr() as *const core::ffi::c_char,
+                    buf.len(),
+                );
+                resolve_with_value(ctx, &op, s);
             }
-            Err(code) => reject_with_code(ctx, &op, code),
+            Err(code) => {
+                crate::trueos_shims::log_error(
+                    format!("qjs fetch: readback failed rc={} op={}\n", code, op_id).as_str(),
+                );
+                reject_with_code(ctx, &op, code)
+            }
         }
-
+        if !op.aux.is_empty() {
+            let _ = trueos_cabi_fs_remove(op.aux.as_ptr(), op.aux.len());
+        }
         qjs::js_free_value(ctx, op.resolve);
         qjs::js_free_value(ctx, op.reject);
     }

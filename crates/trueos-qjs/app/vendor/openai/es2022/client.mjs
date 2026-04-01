@@ -10,6 +10,19 @@ import {
 	OpenAIError,
 } from "./core/error.mjs";
 
+function debugLine(message) {
+	const text = String(message ?? "");
+	try {
+		if (typeof globalThis.__trueosAiPrintLine === "function") {
+			globalThis.__trueosAiPrintLine(text);
+			return;
+		}
+		if (typeof console !== "undefined" && console && typeof console.log === "function") {
+			console.log(text);
+		}
+	} catch {}
+}
+
 function isAbsoluteURL(url) {
 	return /^https?:\/\//i.test(String(url || ""));
 }
@@ -168,6 +181,7 @@ class OpenAI {
 	}
 
 	async fetchWithTimeout(url, req, timeoutMs) {
+		debugLine(`openai-client: fetch ${String(req && req.method || "GET")} ${String(url || "")}`);
 		if (typeof AbortController !== "function") {
 			return this.fetch(url, req);
 		}
@@ -196,6 +210,7 @@ class OpenAI {
 
 	async request(options) {
 		const { req, url, timeout } = await this.buildRequest(options);
+		debugLine(`openai-client: request-built timeout=${String(timeout)} body=${req && typeof req.body === "string" ? String(req.body.length) : "0"}`);
 		const response = await this.fetchWithTimeout(url, req, timeout);
 
 		const text = await response.text();
