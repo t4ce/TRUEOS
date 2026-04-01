@@ -700,6 +700,7 @@ pub async fn scanout_smoke_task() {
         super::intel_igpu770::ggtt_map_smoke_objects_once();
         super::intel_igpu770::ggtt_bcs_smoke_test_once();
         super::intel_igpu770::ggtt_blt_smoke_test_once();
+        super::intel_igpu770::cpu_framebuffer_alive_stamp("post-gpu-smokes");
         super::xelp_media_ngin::kickoff_once();
     }
 
@@ -711,6 +712,9 @@ pub async fn scanout_smoke_task() {
     }
 
     run_display_power_discovery(info);
+    if intel_igpu770_present() {
+        super::intel_igpu770::cpu_framebuffer_alive_stamp("post-display-discovery");
+    }
     Timer::after(EmbassyDuration::from_millis(25)).await;
     crate::log!("intel: display discovery follow-up probe after smoke\n");
     log_display_power_probe(info);

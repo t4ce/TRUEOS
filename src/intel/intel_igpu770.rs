@@ -30,8 +30,8 @@ const GGTT_MAP_LOG_EDGE_PAGES: usize = 4;
 const SMOKE_RECT_W: usize = 64;
 const SMOKE_RECT_H: usize = 64;
 const SMOKE_COLOR_XRGB8888: u32 = 0x00FF_4A24;
-const BCS_RECT_W: usize = 512;
-const BCS_RECT_H: usize = 512;
+const BCS_RECT_W: usize = 768;
+const BCS_RECT_H: usize = 544;
 const BCS_COLOR_XRGB8888: u32 = 0x00FF_FFFF;
 const GPU_VA_RING_BASE: u64 = 0x0080_0000;
 const GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
@@ -1532,6 +1532,137 @@ fn fb_fill_rect_plan(
     })
 }
 
+#[inline]
+fn framebuffer_byte_offset(warm: Igpu770WarmState, x: usize, y: usize) -> Option<usize> {
+    let bytes_per_pixel = warm.limine_fb_bpp.checked_div(8)?;
+    if bytes_per_pixel < core::mem::size_of::<u32>()
+        || x >= warm.limine_fb_width
+        || y >= warm.limine_fb_height
+    {
+        return None;
+    }
+
+    y.checked_mul(warm.limine_fb_pitch)?
+        .checked_add(x.checked_mul(bytes_per_pixel)?)
+        .filter(|off| off.saturating_add(core::mem::size_of::<u32>()) <= warm.limine_fb_size)
+}
+
+#[inline]
+fn framebuffer_word_at(warm: Igpu770WarmState, x: usize, y: usize) -> Option<u32> {
+    let off = framebuffer_byte_offset(warm, x, y)?;
+    let ptr = warm.limine_fb_virt.checked_add(off)? as *const u32;
+    Some(unsafe { core::ptr::read_volatile(ptr) })
+}
+
+fn log_framebuffer_probe(warm: Igpu770WarmState, label: &str, x: usize, y: usize) {
+    let Some(off) = framebuffer_byte_offset(warm, x, y) else {
+        crate::log!(
+            "intel/igpu770: fb-probe label={} xy={}x{} status=out-of-range\n",
+            label,
+            x,
+            y
+        );
+        return;
+    };
+    let Some(value) = framebuffer_word_at(warm, x, y) else {
+        crate::log!(
+            "intel/igpu770: fb-probe label={} xy={}x{} off=0x{:X} status=unreadable\n",
+            label,
+            x,
+            y,
+            off
+        );
+        return;
+    };
+
+    crate::log!(
+        "intel/igpu770: fb-probe label={} xy={}x{} off=0x{:X} phys=0x{:X} value=0x{:08X}\n",
+        label,
+        x,
+        y,
+        off,
+        warm.limine_fb_phys.saturating_add(off as u64),
+        value
+    );
+}
+
+fn cpu_framebuffer_fill_rect(
+    warm: Igpu770WarmState,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    color: u32,
+) -> bool {
+    if warm.limine_fb_virt == 0 || warm.limine_fb_pitch == 0 || warm.limine_fb_bpp < 32 {
+        return false;
+    }
+
+    let max_w = warm.limine_fb_width.saturating_sub(x);
+    let max_h = warm.limine_fb_height.saturating_sub(y);
+    let width = width.min(max_w);
+    let height = height.min(max_h);
+    if width == 0 || height == 0 {
+        return false;
+    }
+
+    let mut row = 0usize;
+    while row < height {
+        let Some(row_off) = framebuffer_byte_offset(warm, x, y.saturating_add(row)) else {
+            return false;
+        };
+        let row_ptr = warm.limine_fb_virt.saturating_add(row_off) as *mut u32;
+        let mut col = 0usize;
+        while col < width {
+            unsafe { core::ptr::write_volatile(row_ptr.add(col), color) };
+            col += 1;
+        }
+        row += 1;
+    }
+
+    dma_cache_flush(warm.limine_fb_virt as *const u8, warm.limine_fb_size);
+    true
+}
+
+pub fn cpu_framebuffer_alive_stamp(label: &str) {
+    let Some(warm) = warm_state() else {
+        crate::log!("intel/igpu770: cpu-fb-stamp label={} status=not-warmed\n", label);
+        return;
+    };
+
+    let marker_w = 96usize.min(warm.limine_fb_width.max(1));
+    let marker_h = 96usize.min(warm.limine_fb_height.max(1));
+    let center_x = warm.limine_fb_width.saturating_sub(marker_w) / 2;
+    let center_y = warm.limine_fb_height.saturating_sub(marker_h) / 2;
+    let br_x = warm.limine_fb_width.saturating_sub(marker_w);
+    let br_y = warm.limine_fb_height.saturating_sub(marker_h);
+
+    let tl_ok = cpu_framebuffer_fill_rect(warm, 0, 0, marker_w, marker_h, 0x00FF_2A00);
+    let center_ok = cpu_framebuffer_fill_rect(
+        warm,
+        center_x,
+        center_y,
+        marker_w,
+        marker_h,
+        0x0000_EEFF,
+    );
+    let br_ok = cpu_framebuffer_fill_rect(warm, br_x, br_y, marker_w, marker_h, 0x00FF_FFFF);
+
+    crate::log!(
+        "intel/igpu770: cpu-fb-stamp label={} tl={} center={} br={} dims={}x{} pitch=0x{:X}\n",
+        label,
+        tl_ok as u8,
+        center_ok as u8,
+        br_ok as u8,
+        warm.limine_fb_width,
+        warm.limine_fb_height,
+        warm.limine_fb_pitch
+    );
+    log_framebuffer_probe(warm, "cpu-stamp-tl", 0, 0);
+    log_framebuffer_probe(warm, "cpu-stamp-center", center_x, center_y);
+    log_framebuffer_probe(warm, "cpu-stamp-br", br_x, br_y);
+}
+
 fn blt_fill_rect_plan(warm: Igpu770WarmState) -> Option<BltFillRectPlan> {
     fb_fill_rect_plan(warm, SMOKE_RECT_W, SMOKE_RECT_H, SMOKE_COLOR_XRGB8888, false)
 }
@@ -1735,6 +1866,13 @@ pub fn ggtt_blt_smoke_test_once() {
         fill.pitch,
         fill.color
     );
+    log_framebuffer_probe(warm, "rcs-pre-origin", fill.dst_x, fill.dst_y);
+    log_framebuffer_probe(
+        warm,
+        "rcs-pre-tail",
+        fill.dst_x.saturating_add(fill.rect_w.saturating_sub(1)),
+        fill.dst_y.saturating_add(fill.rect_h.saturating_sub(1)),
+    );
 
     build_rcs_store_pixels_batch(warm, fill);
     let ring_tail_bytes = build_ring_batch_start(warm, batch.gpu_addr);
@@ -1864,6 +2002,13 @@ pub fn ggtt_blt_smoke_test_once() {
     dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
     let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
     let fb0 = unsafe { core::ptr::read_volatile(warm.limine_fb_virt as *const u32) };
+    log_framebuffer_probe(warm, "rcs-post-origin", fill.dst_x, fill.dst_y);
+    log_framebuffer_probe(
+        warm,
+        "rcs-post-tail",
+        fill.dst_x.saturating_add(fill.rect_w.saturating_sub(1)),
+        fill.dst_y.saturating_add(fill.rect_h.saturating_sub(1)),
+    );
     log_rcs_mode_summary(
         warm,
         if completed {
@@ -1969,6 +2114,13 @@ pub fn ggtt_bcs_smoke_test_once() {
         BCS_EXEC_RESULT_PRE_COPY,
         BCS_EXEC_RESULT_POST_COPY,
         BCS_EXEC_RESULT_DONE
+    );
+    log_framebuffer_probe(warm, "bcs-pre-origin", fill.dst_x, fill.dst_y);
+    log_framebuffer_probe(
+        warm,
+        "bcs-pre-center",
+        fill.dst_x.saturating_add(fill.rect_w / 2),
+        fill.dst_y.saturating_add(fill.rect_h / 2),
     );
 
     let batch_dwords = unsafe {
@@ -2182,6 +2334,13 @@ pub fn ggtt_bcs_smoke_test_once() {
     dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
     let result = read_bcs_result_markers(warm);
     let fb0 = unsafe { core::ptr::read_volatile(warm.limine_fb_virt as *const u32) };
+    log_framebuffer_probe(warm, "bcs-post-origin", fill.dst_x, fill.dst_y);
+    log_framebuffer_probe(
+        warm,
+        "bcs-post-center",
+        fill.dst_x.saturating_add(fill.rect_w / 2),
+        fill.dst_y.saturating_add(fill.rect_h / 2),
+    );
     log_bcs_mode_summary(
         warm,
         if completed {
