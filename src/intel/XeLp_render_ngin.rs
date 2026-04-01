@@ -1,4 +1,10 @@
+use super::xelp_copy_ngin;
+
 const XELP_RENDER_FIRST_DEFER_DISPLAY_DISCOVERY: bool = true;
+
+const TRIANGLE_MIN_DIM: usize = 8;
+const TRIANGLE_MAX_W: usize = 20;
+const TRIANGLE_MAX_H: usize = 18;
 
 #[inline]
 pub(super) fn defer_display_discovery_for_render_first(intel_igpu770_present: bool) -> bool {
@@ -122,4 +128,131 @@ pub(crate) mod xelp_3dstate {
     pub const SAMPLE_PATTERN: u32 = opcode_key(OPCODE_GROUP_1, 0x1C);
     pub const URB_CLEAR: u32 = opcode_key(OPCODE_GROUP_1, 0x1D);
     pub const MODE_3D: u32 = opcode_key(OPCODE_GROUP_1, 0x1E);
+}
+
+#[inline]
+fn edge_fn(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
+    (px - ax) * (by - ay) - (py - ay) * (bx - ax)
+}
+
+#[inline]
+fn clamp_color(v: f32) -> u32 {
+    if v <= 0.0 {
+        0
+    } else if v >= 1.0 {
+        255
+    } else {
+        (v * 255.0 + 0.5) as u32
+    }
+}
+
+#[inline]
+fn pack_xrgb8888(r: u32, g: u32, b: u32) -> u32 {
+    (r << 16) | (g << 8) | b
+}
+
+pub(crate) fn submit_rgb_triangle_smoke_once() {
+    crate::log!(
+        "intel/render-ngin: api route=render.rgb-triangle.submit workload=rgb-triangle class=render transport=rcs-execlist summary=submit an RGB triangle proof through the Xe-LP render ngin\n"
+    );
+    super::intel_igpu770::ggtt_blt_smoke_test_once();
+}
+
+pub(crate) fn encode_rgb_triangle_store_batch(
+    batch_dwords: &mut [u32],
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    result_gpu_addr: u64,
+    done_value: u32,
+) -> Result<usize, &'static str> {
+    const RESERVED_END_DWORDS: usize = 2;
+    const STORE_DWORDS: usize = 4;
+
+    if batch_dwords.len() <= RESERVED_END_DWORDS + STORE_DWORDS {
+        return Err("batch-too-small");
+    }
+    if rect_w < TRIANGLE_MIN_DIM || rect_h < TRIANGLE_MIN_DIM {
+        return Err("triangle-too-small");
+    }
+
+    let tri_w = rect_w.min(TRIANGLE_MAX_W).max(TRIANGLE_MIN_DIM);
+    let tri_h = rect_h.min(TRIANGLE_MAX_H).max(TRIANGLE_MIN_DIM);
+    let origin_x = rect_w.saturating_sub(tri_w) / 2;
+    let origin_y = rect_h.saturating_sub(tri_h) / 2;
+
+    let v0x = origin_x as f32 + tri_w as f32 * 0.5;
+    let v0y = origin_y as f32;
+    let v1x = origin_x as f32;
+    let v1y = origin_y as f32 + (tri_h.saturating_sub(1)) as f32;
+    let v2x = origin_x as f32 + (tri_w.saturating_sub(1)) as f32;
+    let v2y = v1y;
+    let area = edge_fn(v0x, v0y, v1x, v1y, v2x, v2y);
+    if area == 0.0 {
+        return Err("triangle-degenerate");
+    }
+
+    batch_dwords.fill(0);
+    let writable_limit = batch_dwords
+        .len()
+        .saturating_sub(RESERVED_END_DWORDS + STORE_DWORDS);
+    let mut idx = 0usize;
+
+    for y in origin_y..origin_y.saturating_add(tri_h) {
+        for x in origin_x..origin_x.saturating_add(tri_w) {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let w0 = edge_fn(v1x, v1y, v2x, v2y, px, py) / area;
+            let w1 = edge_fn(v2x, v2y, v0x, v0y, px, py) / area;
+            let w2 = edge_fn(v0x, v0y, v1x, v1y, px, py) / area;
+            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                continue;
+            }
+            if idx + STORE_DWORDS > writable_limit {
+                return Err("batch-exhausted");
+            }
+
+            let r = clamp_color(w0);
+            let g = clamp_color(w1);
+            let b = clamp_color(w2);
+            let color = pack_xrgb8888(r, g, b);
+            let dst = dst_gpu_addr
+                .saturating_add((y.saturating_sub(origin_y) as u64).saturating_mul(pitch as u64))
+                .saturating_add((x.saturating_sub(origin_x) as u64).saturating_mul(4));
+
+            batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+                | xelp_copy_ngin::mi::SDI_GGTT
+                | xelp_copy_ngin::mi::sdi_num_dw(1);
+            batch_dwords[idx + 1] = dst as u32;
+            batch_dwords[idx + 2] = (dst >> 32) as u32;
+            batch_dwords[idx + 3] = color;
+            idx += STORE_DWORDS;
+        }
+    }
+
+    if idx == 0 {
+        return Err("triangle-empty");
+    }
+    if idx + STORE_DWORDS > batch_dwords.len().saturating_sub(RESERVED_END_DWORDS) {
+        return Err("batch-no-result-slot");
+    }
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+        | xelp_copy_ngin::mi::SDI_GGTT
+        | xelp_copy_ngin::mi::sdi_num_dw(1);
+    batch_dwords[idx + 1] = result_gpu_addr as u32;
+    batch_dwords[idx + 2] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[idx + 3] = done_value;
+    idx += STORE_DWORDS;
+
+    if idx + RESERVED_END_DWORDS > batch_dwords.len() {
+        return Err("batch-no-end");
+    }
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::BATCH_BUFFER_END;
+    batch_dwords[idx + 1] = xelp_copy_ngin::mi::NOOP;
+    idx += RESERVED_END_DWORDS;
+
+    Ok(idx * core::mem::size_of::<u32>())
 }
