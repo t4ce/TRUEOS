@@ -14,8 +14,7 @@ use super::intel_igpu770::{
     cpu_framebuffer_media_status_card_center, cpu_framebuffer_visualize_bytes_center,
     cpu_framebuffer_visualize_nv12_center, dma_cache_flush_range, forcewake_all_acquire,
     forcewake_media_refresh, gen12_lrc_context_control_seed, ggtt_map_system_ram_range,
-    init_gen12_video_context_image, mmio_read32, mmio_write32, ring_ctl_value_for_size,
-    warm_state,
+    init_gen12_video_context_image, mmio_read32, mmio_write32, ring_ctl_value_for_size, warm_state,
 };
 use super::xelp_media_mp4::{
     build_annex_b_access_unit, first_sample_nal_types, parse_h264_mp4_summary,
@@ -151,6 +150,7 @@ const MI_NOOP: u32 = 0;
 
 const EL_CTRL_LOAD: u32 = 1 << 0;
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
+const STOP_RING: u32 = 1 << 8;
 const PSMI_SLEEP_MSG_DISABLE: u32 = 1 << 0;
 const BSD_SLEEP_INDICATOR: u32 = 1 << 3;
 const SW_CTX_ID_SHIFT: u32 = 37;
@@ -1473,6 +1473,46 @@ fn log_media_submission_words(
     );
 }
 
+fn seed_media_ring_live_state(
+    warm: Igpu770WarmState,
+    desc: MediaEngineDescriptor,
+    pphwsp_gpu: u32,
+    ring_head: u32,
+    ring_start: u32,
+    ring_ctl: u32,
+    ring_tail: u32,
+) {
+    let base = desc.ring_base;
+    let mi_mode_req = masked_bits_update(0, STOP_RING);
+
+    let _ = mmio_write32(warm, base + RING_MI_MODE, mi_mode_req);
+    let _ = mmio_write32(warm, base + RING_HWS_PGA, pphwsp_gpu);
+    let _ = mmio_write32(warm, base + RING_HWSTAM, !0u32);
+    let _ = mmio_write32(warm, base + RING_HEAD, ring_head);
+    let _ = mmio_write32(warm, base + RING_START, ring_start);
+    let _ = mmio_write32(warm, base + RING_CTL, ring_ctl);
+    let _ = mmio_write32(warm, base + RING_TAIL, ring_tail);
+
+    crate::log!(
+        "intel/media-demo: live-ring-seed engine={} mi_mode_req=0x{:08X} hws_req=0x{:08X} hwstam_req=0x{:08X} head_req=0x{:08X} start_req=0x{:08X} ctl_req=0x{:08X} tail_req=0x{:08X} mi_mode_rb=0x{:08X} hws_rb=0x{:08X} hwstam_rb=0x{:08X} head_rb=0x{:08X} start_rb=0x{:08X} ctl_rb=0x{:08X} tail_rb=0x{:08X}\n",
+        desc.name,
+        mi_mode_req,
+        pphwsp_gpu,
+        !0u32,
+        ring_head,
+        ring_start,
+        ring_ctl,
+        ring_tail,
+        mmio_read32(warm, base + RING_MI_MODE),
+        mmio_read32(warm, base + RING_HWS_PGA),
+        mmio_read32(warm, base + RING_HWSTAM),
+        mmio_read32(warm, base + RING_HEAD),
+        mmio_read32(warm, base + RING_START),
+        mmio_read32(warm, base + RING_CTL),
+        mmio_read32(warm, base + RING_TAIL)
+    );
+}
+
 fn build_kickoff_state(warm: Igpu770WarmState) -> MediaKickoffState {
     let topology = current_topology();
     let guc_ready = intel_guc::ready();
@@ -1697,6 +1737,11 @@ fn log_nal_summary(nal_types: &[u8]) {
 #[inline]
 fn masked_bit_enable(bit: u32) -> u32 {
     bit | (bit << 16)
+}
+
+#[inline]
+fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
+    set_bits | ((set_bits | clear_bits) << 16)
 }
 
 #[inline]
@@ -2270,6 +2315,15 @@ fn prepare_decode_bitstream_demo(
         "intel/media-demo: vcs-submit ctx-ctl engine={} lrc_seed=0x{:08X} live_ctx_mmio=0\n",
         draft.engine.name,
         ctx_ctl_lrc_seed
+    );
+    seed_media_ring_live_state(
+        warm,
+        draft.engine,
+        pphwsp_gpu,
+        0,
+        ring_start,
+        ring_ctl,
+        ring_tail_bytes as u32,
     );
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     execlist_submit_port_push(warm, draft.engine, ctx_desc_lo, ctx_desc_hi, 0, 0);

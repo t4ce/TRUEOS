@@ -80,7 +80,5 @@ pub(crate) fn submit(
         return SubmitResult::Queued;
     }
 
-    let msg = alloc::format!("ai: queued ({})", mode.label());
-    print_shell_line(io, msg.as_str());
     SubmitResult::Queued
 }
