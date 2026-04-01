@@ -463,14 +463,20 @@ unsafe extern "C" fn trueos_xhci_list_devices_js(
             }
             first = false;
             json.push_str(&alloc::format!(
-                r#"{{"handle":{},"controller_id":{},"slot_id":{},"port":{},"kind":"{}","vid":"{}","pid":"{}"}}"#,
+                r#"{{"handle":{},"controller_id":{},"slot_id":{},"stable_id":{},"port":{},"root_port_id":{},"route_string":{},"kind":"{}","vid":"{}","pid":"{}","class":{},"subclass":{},"protocol":{}}}"#,
                 handle,
                 cid,
                 dev.slot_id,
+                dev.stable_id,
                 dev.port,
+                dev.root_port_id,
+                dev.route_string,
                 dev.kind,
                 dev.vid.map(|v| alloc::format!("{:04x}", v)).unwrap_or_default(),
                 dev.pid.map(|v| alloc::format!("{:04x}", v)).unwrap_or_default(),
+                dev.class.map(|v| alloc::format!("{}", v)).unwrap_or_else(|| String::from("null")),
+                dev.subclass.map(|v| alloc::format!("{}", v)).unwrap_or_else(|| String::from("null")),
+                dev.protocol.map(|v| alloc::format!("{}", v)).unwrap_or_else(|| String::from("null")),
             ));
         }
     }

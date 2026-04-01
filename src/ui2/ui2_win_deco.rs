@@ -372,23 +372,23 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
             window_system_button_rect(state, window, Ui2SystemButtonAction::ToggleComposition)
                 .map(|button| button.x - 8.0)
                 .unwrap_or(rect.x + rect.w - 8.0);
-        let title_max_w = (title_right - title_left).max(0.0);
+        let title_rect = Ui2Rect::new(
+            title_left,
+            rect.y,
+            (title_right - title_left).max(0.0),
+            titleband_h.max(1.0),
+        );
         let title_px_h = 16.0f32;
-        let title_tier = ui2_font_pick_tier_for_px(title_px_h);
-        let title_w = ui2_font_measure_text(title_tier, window.title.as_str()).width_px as f32;
-        let title_y = rect.y;
-        if title_w > 0.0 && title_max_w > 0.0 {
-            let _ = ui2_font_draw_text_line_no_present(
-                window.title.as_str(),
-                title_left,
-                title_y,
-                title_max_w,
-                title_px_h,
-                state.view_w,
-                state.view_h,
-                window.alpha,
-            );
-        }
+        let _ = ui2_font_draw_text_line_in_rect_no_present(
+            window.title.as_str(),
+            title_rect,
+            title_px_h,
+            Ui2FontTextAlign::Left,
+            Ui2FontVerticalAlign::Center,
+            state.view_w,
+            state.view_h,
+            window.alpha,
+        );
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleComposition);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
