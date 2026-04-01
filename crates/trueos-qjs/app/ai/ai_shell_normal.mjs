@@ -1,12 +1,12 @@
 import OpenAI from 'openai';
 
 const MODEL = 'gpt-5.4';
+const FILE_TREE_MAX_CHARS = 12_000;
 
 const SYSTEM_PROMPT = [
   'You are the TRUEOS shell AI mode.',
   'Reply for a terminal context.',
   'Be concise, concrete, and technically useful.',
-  'Do not assume tools are available.',
   'Do not mention browser integration.',
 ].join(' ');
 
@@ -45,27 +45,157 @@ function normalizeOutput(response) {
   return chunks.join('\n').trim();
 }
 
-export async function runNormalPrompt(promptText) {
-  const prompt = String(promptText || '').trim();
+function collapseWhitespace(text) {
+  return String(text ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeJsonFileTree(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return '';
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    const entries = Array.isArray(parsed && parsed.entries) ? parsed.entries : [];
+    const compact = {
+      version: Number(parsed && parsed.version || 1) || 1,
+      root: String(parsed && parsed.root || '/'),
+      max_entries: Number(parsed && parsed.max_entries || entries.length || 0) || 0,
+      truncated: !!(parsed && parsed.truncated),
+      entries: entries.map((entry) => ({
+        path: String(entry && entry.path || ''),
+        kind: String(entry && entry.kind || ''),
+        depth: Number(entry && entry.depth || 0) || 0,
+      })),
+    };
+    return JSON.stringify(compact).slice(0, FILE_TREE_MAX_CHARS);
+  } catch {
+    return String(raw).slice(0, FILE_TREE_MAX_CHARS);
+  }
+}
+
+function readEnv(name) {
+  const env = globalThis.__env__;
+  if (!env || typeof env !== 'object') {
+    return '';
+  }
+  const value = env[name];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function readVectorStoreIds() {
+  return readEnv('OPENAI_VECTOR_STORE_IDS')
+    .split(/[\s,;]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function buildInput(prompt, localFileContext) {
+  const input = [];
+  if (localFileContext) {
+    input.push({
+      role: 'system',
+      content: [{
+        type: 'input_text',
+        text: [
+          'Local TRUEOS file tree JSON follows.',
+          'It is a compact broad-first listing capped by the runtime, not a full recursive dump.',
+          'Use it when relevant and ask for deeper layered folders or specific file contents when needed.',
+          '',
+          localFileContext,
+        ].join('\n'),
+      }],
+    });
+  }
+  input.push({
+    role: 'user',
+    content: [{ type: 'input_text', text: prompt }],
+  });
+  return input;
+}
+
+function buildRequest(prompt, options) {
+  const request = {
+    model: MODEL,
+    instructions: SYSTEM_PROMPT,
+    input: buildInput(prompt, options.localFileContext),
+    text: {
+      format: { type: 'text' },
+      verbosity: 'low',
+    },
+    truncation: 'auto',
+  };
+
+  if (options.conversationId) {
+    request.conversation = options.conversationId;
+  }
+
+  if (options.webSearch) {
+    request.tools = [{ type: 'web_search' }];
+    request.tool_choice = 'auto';
+    request.include = ['web_search_call.action.sources'];
+  } else if (options.fileSearch && options.vectorStoreIds.length > 0) {
+    request.tools = [{
+      type: 'file_search',
+      vector_store_ids: options.vectorStoreIds,
+    }];
+    request.tool_choice = 'auto';
+    request.include = ['file_search_call.results'];
+  }
+
+  return request;
+}
+
+function maybeReadLocalFileContext(fileSearch) {
+  if (!fileSearch || typeof globalThis.__trueosAiReadPrimaryFsTreeJsonAll !== 'function') {
+    return '';
+  }
+  const json = globalThis.__trueosAiReadPrimaryFsTreeJsonAll(100);
+  if (typeof json !== 'string' || !json.trim()) {
+    return '';
+  }
+  return normalizeJsonFileTree(json);
+}
+
+function maybePersistConversationId(response) {
+  const conversationId = response && response.conversation && typeof response.conversation.id === 'string'
+    ? response.conversation.id.trim()
+    : '';
+  if (conversationId && typeof globalThis.__trueosAiSetConversationId === 'function') {
+    globalThis.__trueosAiSetConversationId(conversationId);
+  }
+}
+
+export async function runShellPrompt(config = null) {
+  const source = config && typeof config === 'object' ? config : {};
+  const prompt = String(source.prompt || '').trim();
   if (!prompt) {
     printLine('ai: empty prompt');
     return;
   }
 
+  const webSearch = !!source.webSearch;
+  const fileSearch = !!source.fileSearch;
+  const conversationId = String(source.conversationId || '').trim();
+  const vectorStoreIds = readVectorStoreIds();
+  const localFileContext = fileSearch && vectorStoreIds.length <= 0
+    ? maybeReadLocalFileContext(true)
+    : '';
+
+  if (fileSearch && vectorStoreIds.length <= 0 && localFileContext) {
+    printLine('ai: file mode using local TRUEOS file tree json');
+  }
+
   const client = new OpenAI();
-  const response = await client.responses.create({
-    model: MODEL,
-    input: [
-      {
-        role: 'system',
-        content: [{ type: 'input_text', text: SYSTEM_PROMPT }],
-      },
-      {
-        role: 'user',
-        content: [{ type: 'input_text', text: prompt }],
-      },
-    ],
-  });
+  const response = await client.responses.create(buildRequest(prompt, {
+    webSearch,
+    fileSearch,
+    conversationId,
+    vectorStoreIds,
+    localFileContext,
+  }));
+
+  maybePersistConversationId(response);
 
   const text = normalizeOutput(response);
   if (!text) {
@@ -74,4 +204,8 @@ export async function runNormalPrompt(promptText) {
   }
 
   printMultiline(text);
+}
+
+export async function runNormalPrompt(promptText) {
+  return runShellPrompt({ prompt: promptText });
 }

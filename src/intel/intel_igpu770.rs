@@ -1305,6 +1305,7 @@ pub(super) fn init_gen12_video_context_image(
     ring_start: u32,
     ring_tail: u32,
     ring_ctl: u32,
+    hws_pga: u32,
 ) -> bool {
     if context_virt.is_null() {
         return false;
@@ -1328,7 +1329,7 @@ pub(super) fn init_gen12_video_context_image(
     state[idx] = MI_NOOP;
     idx += 1;
 
-    state[idx] = mi_lri_cmd(13, MI_LRI_FORCE_POSTED);
+    state[idx] = mi_lri_cmd(14, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = ring_base + 0x244;
     state[idx + 1] = 0x0009_0009;
@@ -1340,23 +1341,25 @@ pub(super) fn init_gen12_video_context_image(
     state[idx + 7] = ring_start;
     state[idx + 8] = ring_base + 0x3C;
     state[idx + 9] = ring_ctl;
-    state[idx + 10] = ring_base + 0x168;
-    state[idx + 11] = 0;
-    state[idx + 12] = ring_base + 0x140;
+    state[idx + 10] = ring_base + 0x80;
+    state[idx + 11] = hws_pga;
+    state[idx + 12] = ring_base + 0x168;
     state[idx + 13] = 0;
-    state[idx + 14] = ring_base + 0x110;
+    state[idx + 14] = ring_base + 0x140;
     state[idx + 15] = 0;
-    state[idx + 16] = ring_base + 0x1C0;
+    state[idx + 16] = ring_base + 0x110;
     state[idx + 17] = 0;
-    state[idx + 18] = ring_base + 0x1C4;
+    state[idx + 18] = ring_base + 0x1C0;
     state[idx + 19] = 0;
-    state[idx + 20] = ring_base + 0x1C8;
+    state[idx + 20] = ring_base + 0x1C4;
     state[idx + 21] = 0;
-    state[idx + 22] = ring_base + 0x180;
+    state[idx + 22] = ring_base + 0x1C8;
     state[idx + 23] = 0;
-    state[idx + 24] = ring_base + 0x2B4;
+    state[idx + 24] = ring_base + 0x180;
     state[idx + 25] = 0;
-    idx += 26;
+    state[idx + 26] = ring_base + 0x2B4;
+    state[idx + 27] = 0;
+    idx += 28;
 
     push_mi_nops(state, &mut idx, 5);
 
