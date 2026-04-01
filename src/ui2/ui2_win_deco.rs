@@ -2,6 +2,16 @@
 
 use super::*;
 
+fn decoration_label_draw_rect(
+    window: &Ui2Window,
+    kind: Ui2DecorationLabelKind,
+    anchor: Ui2Rect,
+) -> Option<Ui2Rect> {
+    let ch = kind.text(window).chars().next()?;
+    let glyph = ui2_font_resolve_glyph(Ui2FontTier::Half, ch)?;
+    Some(ui2_font_place_glyph_top_center(&glyph, anchor))
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum Ui2DecorationIconKind {
     SystemButton(Ui2SystemButtonAction),
@@ -102,10 +112,11 @@ fn draw_window_decoration_label(
         return;
     };
 
-    let glyph_w = f32::from(glyph.region.src_w.max(1));
-    let glyph_h = f32::from(glyph.region.src_h.max(1));
-    let glyph_x = rect.x + ((rect.w - glyph_w) * 0.5);
-    let glyph_y = rect.y;
+    let draw_rect = decoration_label_draw_rect(window, kind, rect).unwrap_or(rect);
+    let glyph_w = draw_rect.w;
+    let glyph_h = draw_rect.h;
+    let glyph_x = draw_rect.x;
+    let glyph_y = draw_rect.y;
     let atlas_w = f32::from(glyph.region.atlas_w.max(1));
     let atlas_h = f32::from(glyph.region.atlas_h.max(1));
     let src_x = f32::from(glyph.region.src_x);
@@ -794,6 +805,14 @@ pub(super) fn window_bottom_resize_button_rect(
     state: &Ui2State,
     window: &Ui2Window,
 ) -> Option<Ui2Rect> {
+    let anchor = window_bottom_resize_button_anchor_rect(state, window)?;
+    decoration_label_draw_rect(window, Ui2DecorationLabelKind::ResizeHandle, anchor)
+}
+
+fn window_bottom_resize_button_anchor_rect(
+    state: &Ui2State,
+    window: &Ui2Window,
+) -> Option<Ui2Rect> {
     if window.decoration_mode != Ui2WindowDecorationMode::System || !window.bottom_bar_visible {
         return None;
     }
@@ -812,6 +831,15 @@ pub(super) fn window_bottom_resize_button_rect(
 }
 
 pub(super) fn window_system_button_rect(
+    state: &Ui2State,
+    window: &Ui2Window,
+    action: Ui2SystemButtonAction,
+) -> Option<Ui2Rect> {
+    let anchor = window_system_button_anchor_rect(state, window, action)?;
+    decoration_label_draw_rect(window, Ui2DecorationLabelKind::SystemButton(action), anchor)
+}
+
+fn window_system_button_anchor_rect(
     state: &Ui2State,
     window: &Ui2Window,
     action: Ui2SystemButtonAction,

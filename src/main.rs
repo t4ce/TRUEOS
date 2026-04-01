@@ -20,7 +20,6 @@ mod gfx;
 mod globalog;
 mod host_api;
 mod hv;
-#[cfg(feature = "hvv")]
 pub mod hvv;
 mod intel;
 mod iso9660;
@@ -177,19 +176,16 @@ pub extern "C" fn kmain() -> ! {
     tga::init_once();
     net::init();
 
-    #[cfg(feature = "dma_nic_fpga")]
-    {
-        match pci::nic_fpga_dma::init_default_once() {
-            Ok(region) => {
-                crate::log!(
-                    "dma_nic_fpga: region phys=0x{:X} virt=0x{:X} size=0x{:X}\n",
-                    region.phys_base,
-                    region.virt_base,
-                    region.size
-                );
-            }
-            Err(e) => crate::log!("dma_nic_fpga: init failed: {:?}\n", e),
+    match pci::nic_fpga_dma::init_default_once() {
+        Ok(region) => {
+            crate::log!(
+                "dma_nic_fpga: region phys=0x{:X} virt=0x{:X} size=0x{:X}\n",
+                region.phys_base,
+                region.virt_base,
+                region.size
+            );
         }
+        Err(e) => crate::log!("dma_nic_fpga: init failed: {:?}\n", e),
     }
     _loop(executor, spawner, smp_resp)
 }
