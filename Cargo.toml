@@ -58,6 +58,8 @@ kurbo = { version = "=0.11.3", default-features = false }
 tiny-skia-path = { version = "0.11.4", default-features = false, features = ["no-std-float"] }
 parry2d = { version = "0.25", default-features = false, features = ["dim2", "f32"] }
 petgraph = { version = "0.8.3", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 
 [profile.dev]
 panic = "abort"
