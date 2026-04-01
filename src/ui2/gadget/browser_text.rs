@@ -50,7 +50,9 @@ pub(crate) fn draw_hosted_browser_gadget_scene(
         let text_rect = Ui2Rect::new(
             x,
             y,
-            (visible_right - x).min(gadget.width_px.max(1) as f32).max(0.0),
+            (visible_right - x)
+                .min(gadget.width_px.max(1) as f32)
+                .max(0.0),
             h.max(font_px),
         );
         if text_rect.w <= 0.0 {

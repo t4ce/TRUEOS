@@ -759,6 +759,18 @@ pub(crate) struct MediaBitstreamDemoState {
     pub submit_iters: usize,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct MediaSurfaceWindow {
+    pub name: &'static str,
+    pub gpu_addr: u64,
+    pub phys: u64,
+    pub virt: *mut u8,
+    pub bytes: usize,
+}
+
+unsafe impl Send for MediaSurfaceWindow {}
+unsafe impl Sync for MediaSurfaceWindow {}
+
 struct MediaBitstreamBacking {
     ring_phys: u64,
     ring_virt: *mut u8,
@@ -811,6 +823,63 @@ fn media_command_encoding_ready(guc_ready: bool, wake: MediaForcewakeSnapshot) -
 
 fn stored_kickoff_state() -> Option<MediaKickoffState> {
     *MEDIA_KICKOFF_STATE.lock()
+}
+
+pub(crate) fn kickoff_state() -> Option<MediaKickoffState> {
+    stored_kickoff_state()
+}
+
+pub(crate) fn demo_surface_window(name: &str) -> Option<MediaSurfaceWindow> {
+    let state = stored_kickoff_state()?;
+    let demo = state.decode_bitstream_demo?;
+    let backing_slot = MEDIA_BITSTREAM_BACKING.lock();
+    let backing = backing_slot.as_ref()?;
+
+    match name {
+        "media.ring" => Some(MediaSurfaceWindow {
+            name: "media.ring",
+            gpu_addr: demo.ring_gpu_addr,
+            phys: backing.ring_phys,
+            virt: backing.ring_virt,
+            bytes: backing.ring_bytes,
+        }),
+        "media.context" => Some(MediaSurfaceWindow {
+            name: "media.context",
+            gpu_addr: demo.context_gpu_addr,
+            phys: backing.context_phys,
+            virt: backing.context_virt,
+            bytes: backing.context_bytes,
+        }),
+        "media.batch" => Some(MediaSurfaceWindow {
+            name: "media.batch",
+            gpu_addr: demo.batch_gpu_addr,
+            phys: backing.batch_phys,
+            virt: backing.batch_virt,
+            bytes: backing.batch_bytes,
+        }),
+        "media.result" => Some(MediaSurfaceWindow {
+            name: "media.result",
+            gpu_addr: demo.result_gpu_addr,
+            phys: backing.result_phys,
+            virt: backing.result_virt,
+            bytes: backing.result_bytes,
+        }),
+        "media.bitstream" => Some(MediaSurfaceWindow {
+            name: "media.bitstream",
+            gpu_addr: demo.bitstream_gpu_addr,
+            phys: backing.bitstream_phys,
+            virt: backing.bitstream_virt,
+            bytes: backing.bitstream_bytes,
+        }),
+        "media.output" => Some(MediaSurfaceWindow {
+            name: "media.output",
+            gpu_addr: demo.output_surface_gpu_addr,
+            phys: backing.output_surface_phys,
+            virt: backing.output_surface_virt,
+            bytes: backing.output_surface_bytes,
+        }),
+        _ => None,
+    }
 }
 
 fn current_topology() -> MediaTopology {
