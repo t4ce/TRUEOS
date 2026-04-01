@@ -8,7 +8,6 @@ pub mod particle;
 pub mod png_codec;
 pub mod screenshot;
 pub mod svg;
-#[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
 
 use spin::{Mutex, Once};
@@ -166,7 +165,6 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
         // that takes our eyeballs
         let backend = backends::Backend::init_auto(framebuffers);
         let backend_name = match &backend {
-            #[cfg(feature = "gfx_virgl")]
             backends::Backend::Virgl(_) => "virgl",
             backends::Backend::None(_) => "none",
         };
@@ -294,6 +292,9 @@ pub fn with_system_tag<R>(owner: SystemLockOwner, f: impl FnOnce(&mut System) ->
                         x if x == SystemLockOwner::CursorEndFrame as u32 => {
                             SystemLockOwner::CursorEndFrame.as_str()
                         }
+                        x if x == SystemLockOwner::DrawMandelbrot as u32 => {
+                            SystemLockOwner::DrawMandelbrot.as_str()
+                        }
                         _ => SystemLockOwner::Unknown.as_str(),
                     };
                     crate::log!(
@@ -346,14 +347,8 @@ pub fn with_framebuffers<R>(
     with_system(|sys| f(sys.framebuffers))
 }
 
-#[cfg(feature = "gfx_virgl")]
 pub fn is_virgl_active() -> bool {
     with_system(|sys| matches!(sys.backend, backends::Backend::Virgl(_))).unwrap_or(false)
-}
-
-#[cfg(not(feature = "gfx_virgl"))]
-pub fn is_virgl_active() -> bool {
-    false
 }
 
 /// Returns whether a virgl-capable virtio-gpu device is currently visible.
@@ -361,18 +356,9 @@ pub fn is_virgl_active() -> bool {
 /// This keeps virgl probing behind the `gfx` API so non-gfx modules do not
 /// reach into backend implementation modules directly.
 pub fn is_virgl_present_cached() -> bool {
-    #[cfg(feature = "gfx_virgl")]
-    {
-        return virtio_gpu_3d::is_present_cached();
-    }
-
-    #[cfg(not(feature = "gfx_virgl"))]
-    {
-        false
-    }
+    virtio_gpu_3d::is_present_cached()
 }
 
-#[cfg(feature = "gfx_virgl")]
 #[allow(dead_code)]
 pub fn switch_to_virgl() -> bool {
     crate::log!("gfx: switch_to_virgl: begin\n");
@@ -401,14 +387,12 @@ pub fn switch_to_virgl() -> bool {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BackendKind {
-    #[cfg(feature = "gfx_virgl")]
     Virgl,
     None,
 }
 
 pub fn backend_kind() -> Option<BackendKind> {
     with_system(|sys| match &sys.backend {
-        #[cfg(feature = "gfx_virgl")]
         backends::Backend::Virgl(_) => BackendKind::Virgl,
         backends::Backend::None(_) => BackendKind::None,
     })
@@ -423,10 +407,8 @@ pub fn toggle_backend() -> BackendKind {
     };
 
     match kind {
-        #[cfg(feature = "gfx_virgl")]
         BackendKind::Virgl => BackendKind::Virgl,
         BackendKind::None => {
-            #[cfg(feature = "gfx_virgl")]
             if switch_to_virgl() {
                 return BackendKind::Virgl;
             }

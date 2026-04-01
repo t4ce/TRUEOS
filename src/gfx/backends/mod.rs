@@ -6,13 +6,11 @@ use trueos_gfx_core::{
 
 //mod intel;
 //mod intel_execlists;
-#[cfg(feature = "gfx_virgl")]
 use crate::gfx::virtio_gpu_3d;
 //use intel::IntelGfxBackend;
 //mod intel_cmd;
 
 pub enum Backend {
-    #[cfg(feature = "gfx_virgl")]
     Virgl(virtio_gpu_3d::VirglGfxBackend),
 
     // Intel(IntelGfxBackend),
@@ -113,20 +111,16 @@ impl Backend {
     pub fn init_auto(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Self {
-        #[cfg(feature = "gfx_virgl")]
-        {
-            if let Some(v) = Self::init_virgl(framebuffers) {
-                crate::log!("gfx: using virgl backend (auto)\n");
-                return v;
-            }
-            crate::log!("gfx: virgl auto init failed\n");
+        if let Some(v) = Self::init_virgl(framebuffers) {
+            crate::log!("gfx: using virgl backend (auto)\n");
+            return v;
         }
+        crate::log!("gfx: virgl auto init failed\n");
 
         crate::log!("gfx: no accelerated backend available; gfx backend inactive\n");
         Backend::None(NullBackend)
     }
 
-    #[cfg(feature = "gfx_virgl")]
     pub fn init_virgl(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
@@ -146,7 +140,6 @@ impl Backend {
     */
     pub fn context_mut(&mut self) -> &mut dyn GfxContext {
         match self {
-            #[cfg(feature = "gfx_virgl")]
             Backend::Virgl(b) => b,
 
             //   Backend::Intel(b) => b,

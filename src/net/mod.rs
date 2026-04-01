@@ -225,7 +225,6 @@ pub fn device_index_from_owner(owner: &str) -> Option<usize> {
 static DEVICES: Mutex<alloc::vec::Vec<ActiveDevice>> = Mutex::new(alloc::vec::Vec::new());
 static PRIMARY_DEVICE_INDEX: AtomicUsize = AtomicUsize::new(0);
 
-#[cfg(feature = "dma_nic_fpga")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DmaFpgaStreamStatus {
     pub active: bool,
@@ -236,14 +235,12 @@ pub struct DmaFpgaStreamStatus {
     pub queue_failures: u64,
 }
 
-#[cfg(feature = "dma_nic_fpga")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DmaFpgaIpProto {
     Tcp,
     Udp,
 }
 
-#[cfg(feature = "dma_nic_fpga")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DmaFpgaFlowFilter {
     pub proto: DmaFpgaIpProto,
@@ -253,7 +250,6 @@ pub struct DmaFpgaFlowFilter {
     pub dst_port: Option<u16>,
 }
 
-#[cfg(feature = "dma_nic_fpga")]
 #[derive(Clone, Copy)]
 struct DmaFpgaStreamState {
     active: bool,
@@ -264,7 +260,6 @@ struct DmaFpgaStreamState {
     queue_failures: u64,
 }
 
-#[cfg(feature = "dma_nic_fpga")]
 static DMA_FPGA_STREAM_STATE: Mutex<DmaFpgaStreamState> = Mutex::new(DmaFpgaStreamState {
     active: false,
     filter: None,
@@ -453,7 +448,6 @@ fn with_device_at<R>(index: usize, f: impl FnOnce(&mut dyn NetDevice) -> R) -> O
     Some(f(dev))
 }
 
-#[cfg(feature = "dma_nic_fpga")]
 pub fn dma_fpga_stream_begin() -> Result<(), &'static str> {
     let mut st = DMA_FPGA_STREAM_STATE.lock();
     if st.active {
@@ -468,7 +462,6 @@ pub fn dma_fpga_stream_begin() -> Result<(), &'static str> {
     Ok(())
 }
 
-#[cfg(feature = "dma_nic_fpga")]
 fn rx_packet_matches_filter(packet: &[u8], filter: DmaFpgaFlowFilter) -> bool {
     if packet.len() < 14 {
         return false;
@@ -550,7 +543,6 @@ fn rx_packet_matches_filter(packet: &[u8], filter: DmaFpgaFlowFilter) -> bool {
     true
 }
 
-#[cfg(feature = "dma_nic_fpga")]
 pub(crate) fn dma_fpga_stream_on_rx_packet(packet: &[u8]) {
     let mut st = DMA_FPGA_STREAM_STATE.lock();
     if !st.active {

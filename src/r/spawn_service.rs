@@ -368,39 +368,29 @@ async fn gfx_virgl_ready_task() {
         return;
     }
 
-    #[cfg(not(feature = "gfx_virgl"))]
-    {
-        return;
+    for _ in 0..400 {
+        if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
+            return;
+        }
+        if crate::r::readiness::is_set(crate::r::readiness::GFX_VIRGL_READY) {
+            crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
+            crate::log!("boot-probe: gfx-virgl-backend-ready ms={}\n", boot_probe_ms());
+            return;
+        }
+        if gfx_switched() {
+            crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
+            crate::log!("boot-probe: gfx-virgl-backend-ready(switched) ms={}\n", boot_probe_ms());
+            return;
+        }
+        Timer::after(EmbassyDuration::from_millis(25)).await;
     }
 
-    #[cfg(feature = "gfx_virgl")]
-    {
-        for _ in 0..400 {
-            if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
-                return;
-            }
-            if crate::r::readiness::is_set(crate::r::readiness::GFX_VIRGL_READY) {
-                crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
-                crate::log!("boot-probe: gfx-virgl-backend-ready ms={}\n", boot_probe_ms());
-                return;
-            }
-            if gfx_switched() {
-                crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
-                crate::log!(
-                    "boot-probe: gfx-virgl-backend-ready(switched) ms={}\n",
-                    boot_probe_ms()
-                );
-                return;
-            }
-            Timer::after(EmbassyDuration::from_millis(25)).await;
-        }
-        crate::log!(
-            "gfx-virgl-backend-ready: timeout virgl_active={} virgl_present_cached={} ready_mask=0x{:08X}\n",
-            crate::gfx::is_virgl_active() as u8,
-            crate::gfx::is_virgl_present_cached() as u8,
-            crate::r::readiness::mask()
-        );
-    }
+    crate::log!(
+        "gfx-virgl-backend-ready: timeout virgl_active={} virgl_present_cached={} ready_mask=0x{:08X}\n",
+        crate::gfx::is_virgl_active() as u8,
+        crate::gfx::is_virgl_present_cached() as u8,
+        crate::r::readiness::mask()
+    );
 }
 
 fn spawn_gfx_virgl_ready_task(spawner: Spawner) -> SpawnAttempt {
@@ -428,35 +418,27 @@ fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
 
 #[inline]
 fn gfx_switched() -> bool {
-    #[cfg(feature = "gfx_virgl")]
-    {
-        let now_ms = boot_probe_ms();
-        if crate::gfx::is_virgl_active() {
+    let now_ms = boot_probe_ms();
+    if crate::gfx::is_virgl_active() {
+        GFX_VIRGL_RETRY_AFTER_MS.store(0, Ordering::Release);
+        return true;
+    }
+    let retry_after_ms = GFX_VIRGL_RETRY_AFTER_MS.load(Ordering::Acquire);
+    if retry_after_ms != 0 && now_ms < retry_after_ms {
+        return false;
+    }
+    if crate::gfx::is_virgl_present_cached() {
+        if crate::gfx::switch_to_virgl() {
             GFX_VIRGL_RETRY_AFTER_MS.store(0, Ordering::Release);
             return true;
         }
-        let retry_after_ms = GFX_VIRGL_RETRY_AFTER_MS.load(Ordering::Acquire);
-        if retry_after_ms != 0 && now_ms < retry_after_ms {
-            return false;
-        }
-        if crate::gfx::is_virgl_present_cached() {
-            if crate::gfx::switch_to_virgl() {
-                GFX_VIRGL_RETRY_AFTER_MS.store(0, Ordering::Release);
-                return true;
-            }
 
-            // A failed virgl init is usually not recoverable within the next
-            // scheduler tick. Back off to avoid log storms and repeated heavy
-            // re-initialization while the rest of boot continues.
-            GFX_VIRGL_RETRY_AFTER_MS.store(now_ms.saturating_add(1000), Ordering::Release);
-        }
-        false
+        // A failed virgl init is usually not recoverable within the next
+        // scheduler tick. Back off to avoid log storms and repeated heavy
+        // re-initialization while the rest of boot continues.
+        GFX_VIRGL_RETRY_AFTER_MS.store(now_ms.saturating_add(1000), Ordering::Release);
     }
-
-    #[cfg(not(feature = "gfx_virgl"))]
-    {
-        false
-    }
+    false
 }
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
