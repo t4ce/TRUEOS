@@ -862,8 +862,12 @@ fn handle_submit(
             HandleSubmitResult::None
         }
         ShellMode2::Ai => {
-            shell2_ai::submit(spawner, io, ai_mode, submitted);
-            HandleSubmitResult::None
+            match shell2_ai::submit(spawner, io, ai_mode, submitted) {
+                shell2_ai::SubmitResult::Queued => HandleSubmitResult::None,
+                shell2_ai::SubmitResult::ResetToNormal => {
+                    HandleSubmitResult::SetAiMode(AiPromptMode::Normal)
+                }
+            }
         }
         ShellMode2::Irc => {
             shell2_irc::submit(io, irc_mode, submitted);
@@ -874,6 +878,7 @@ fn handle_submit(
 
 enum HandleSubmitResult {
     None,
+    SetAiMode(AiPromptMode),
     SetLineWidth(usize),
     LaunchTetris,
     StartSession(shell2_cmd::CommandSessionKind),
@@ -1527,6 +1532,19 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 surf_prefix,
                                 submitted,
                             ) {
+                                HandleSubmitResult::SetAiMode(next_ai_mode) => {
+                                    ai_mode = next_ai_mode;
+                                    out.mode_status(
+                                        output_mask,
+                                        mode,
+                                        ai_mode,
+                                        qjs_mode,
+                                        irc_mode,
+                                        surf_prefix,
+                                        cmd_status_text.as_deref(),
+                                        running_go2_phase,
+                                    );
+                                }
                                 HandleSubmitResult::SetLineWidth(width) => {
                                     out.set_line_width(width);
                                     matrix::set_active_line_width(output_mask, width);
