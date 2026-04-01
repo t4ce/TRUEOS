@@ -2261,7 +2261,11 @@ fn build_mi_only_probe_batch(
         )
     };
     let mut idx = 0usize;
-    let frame_dims = (frame_width as u32) | ((frame_height as u32) << 16);
+    let _ = frame_width;
+    let _ = frame_height;
+    let _ = annexb_bytes;
+    let _ = sample_nal_count;
+    let _ = has_idr;
 
     let mut noop_idx = 0usize;
     while noop_idx < MEDIA_MI_ONLY_PROBE_PREFIX_NOOPS {
@@ -2273,83 +2277,14 @@ fn build_mi_only_probe_batch(
         noop_idx += 1;
     }
 
-    if !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.observability.result_slots[0].gpu_addr,
-        draft.observability.result_slots[0].expected_marker,
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT,
-        draft.resources.windows.bitstream_gpu_addr as u32,
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT,
-        (draft.resources.windows.bitstream_gpu_addr >> 32) as u32,
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_BITSTREAM_BYTES_SLOT,
-        annexb_bytes as u32,
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_SAMPLE_NALS_SLOT,
-        sample_nal_count as u32,
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_STAGE_FLAGS_SLOT,
-        stage_flags(has_idr, MediaVcsBatchMode::MiOnlyProbe),
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT,
-        draft.resources.windows.output_surface_gpu_addr as u32,
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT,
-        (draft.resources.windows.output_surface_gpu_addr >> 32) as u32,
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT,
-        draft.resources.output_surface_bytes as u32,
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_FRAME_DIMS_SLOT,
-        frame_dims,
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.observability.result_slots[1].gpu_addr,
-        draft.observability.result_slots[1].expected_marker,
-    ) {
+    if idx.saturating_add(4) > batch.len() {
         return None;
     }
-
-    let flush = begin_batch_packet(
-        batch,
-        &mut idx,
-        5,
-        MI_FLUSH_DW | MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE | MI_FLUSH_DW_USE_GTT,
-    )?;
-    batch[flush + 1] = draft.observability.result_slots[2].gpu_addr as u32;
-    batch[flush + 2] = (draft.observability.result_slots[2].gpu_addr >> 32) as u32;
-    batch[flush + 3] = draft.observability.result_slots[2].expected_marker;
-
-    if !emit_store_dword(
-        batch,
-        &mut idx,
-        draft.observability.result_slots[3].gpu_addr,
-        draft.observability.result_slots[3].expected_marker,
-    ) {
-        return None;
-    }
+    batch[idx] = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
+    batch[idx + 1] = draft.observability.result_slots[0].gpu_addr as u32;
+    batch[idx + 2] = (draft.observability.result_slots[0].gpu_addr >> 32) as u32;
+    batch[idx + 3] = draft.observability.result_slots[0].expected_marker;
+    idx += 4;
 
     if idx.saturating_add(2) > batch.len() {
         return None;

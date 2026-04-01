@@ -17,8 +17,6 @@ impl From<USBError> for InterfaceEndpointError {
 
 pub(crate) struct ClaimedInterface<'a> {
     device: &'a mut Device,
-    interface_number: u8,
-    alternate_setting: u8,
 }
 
 pub(crate) async fn claim_interface(
@@ -29,22 +27,10 @@ pub(crate) async fn claim_interface(
     device
         .claim_interface(interface_number, alternate_setting)
         .await?;
-    Ok(ClaimedInterface {
-        device,
-        interface_number,
-        alternate_setting,
-    })
+    Ok(ClaimedInterface { device })
 }
 
 impl ClaimedInterface<'_> {
-    pub(crate) fn interface_number(&self) -> u8 {
-        self.interface_number
-    }
-
-    pub(crate) fn alternate_setting(&self) -> u8 {
-        self.alternate_setting
-    }
-
     pub(crate) fn device(&mut self) -> &mut Device {
         self.device
     }

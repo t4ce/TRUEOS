@@ -2,8 +2,6 @@ use alloc::{vec, vec::Vec};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
-use crate::gfx::althlasfont::athlasmetrics;
-use crate::gfx::png_codec::DecodedPng;
 use crate::r::ui2::{self, Ui2FontTier, Ui2Rect};
 
 const UI2_SHELL_TEX_ID: u32 = 4_705;
@@ -45,10 +43,6 @@ fn ui2_shell_cell_advance_px(ch: char) -> usize {
         .unwrap_or(1)
 }
 
-fn decode_half_bucket_textures() -> Option<Vec<DecodedPng>> {
-    crate::r::ui2::ui2_font_bucketproducer_decode_variant(UI2_SHELL_HALF_SIZE_CASE)
-}
-
 fn fill_rect_rgba(
     dst: &mut [u8],
     dst_width: usize,
@@ -72,58 +66,6 @@ fn fill_rect_rgba(
     }
 }
 
-fn blit_half_glyph_rgba(
-    dst: &mut [u8],
-    dst_width: usize,
-    dst_height: usize,
-    atlas: &DecodedPng,
-    region: &athlasmetrics::AthlasGlyphRegion,
-    dst_x: usize,
-    dst_y: usize,
-    fg_rgba: [u8; 4],
-) {
-    let glyph_w = region.src_w as usize;
-    let glyph_h = region.src_h as usize;
-    let src_x = region.src_x as usize;
-    let src_y = region.src_y as usize;
-    let atlas_width = atlas.width as usize;
-
-    for row in 0..glyph_h {
-        let target_y = dst_y + row;
-        if target_y >= dst_height {
-            break;
-        }
-        for col in 0..glyph_w {
-            let target_x = dst_x + col;
-            if target_x >= dst_width {
-                break;
-            }
-
-            let atlas_idx = ((src_y + row) * atlas_width + (src_x + col)) * 4;
-            let coverage = atlas.rgba.get(atlas_idx).copied().unwrap_or(0) as u16;
-            if coverage == 0 {
-                continue;
-            }
-
-            let dst_idx = (target_y * dst_width + target_x) * 4;
-            let alpha = (coverage * u16::from(fg_rgba[3])) / 255;
-            let inv_alpha = 255u16.saturating_sub(alpha);
-            dst[dst_idx] =
-                (((u16::from(fg_rgba[0]) * alpha) + (u16::from(dst[dst_idx]) * inv_alpha) + 127)
-                    / 255) as u8;
-            dst[dst_idx + 1] = (((u16::from(fg_rgba[1]) * alpha)
-                + (u16::from(dst[dst_idx + 1]) * inv_alpha)
-                + 127)
-                / 255) as u8;
-            dst[dst_idx + 2] = (((u16::from(fg_rgba[2]) * alpha)
-                + (u16::from(dst[dst_idx + 2]) * inv_alpha)
-                + 127)
-                / 255) as u8;
-            dst[dst_idx + 3] = 0xFF;
-        }
-    }
-}
-
 fn cell_bg_rgba(cell: &crate::shell2::Ui2ShellCell) -> [u8; 4] {
     [cell.bg.0, cell.bg.1, cell.bg.2, 0xFF]
 }
@@ -136,7 +78,7 @@ fn render_cell_glyph(
     rgba: &mut [u8],
     dst_width: usize,
     dst_height: usize,
-    decoded: &[DecodedPng],
+    atlases: &ui2::Ui2FontCpuAtlases,
     pen_x: usize,
     row_y: usize,
     advance_px: usize,
@@ -145,10 +87,11 @@ fn render_cell_glyph(
     let Some(glyph) = ui2_shell_resolve_glyph(cell.ch) else {
         return;
     };
-    let Some(atlas) = decoded.get(glyph.region.bucket as usize) else {
-        return;
-    };
-    let draw_rect = ui2::ui2_font_place_glyph_top_center(
+    let _ = ui2::ui2_font_blit_glyph_rgba(
+        rgba,
+        dst_width,
+        dst_height,
+        atlases,
         &glyph,
         Ui2Rect {
             x: pen_x as f32,
@@ -156,15 +99,6 @@ fn render_cell_glyph(
             w: advance_px as f32,
             h: ui2_shell_line_height() as f32,
         },
-    );
-    blit_half_glyph_rgba(
-        rgba,
-        dst_width,
-        dst_height,
-        atlas,
-        &glyph.region,
-        draw_rect.x.max(0.0) as usize,
-        draw_rect.y.max(0.0) as usize,
         cell_fg_rgba(cell),
     );
 }
@@ -173,7 +107,7 @@ fn render_cursor(
     rgba: &mut [u8],
     dst_width: usize,
     dst_height: usize,
-    decoded: &[DecodedPng],
+    atlases: &ui2::Ui2FontCpuAtlases,
     snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
     blink_on: bool,
 ) {
@@ -226,7 +160,7 @@ fn render_cursor(
         rgba,
         dst_width,
         dst_height,
-        decoded,
+        atlases,
         x,
         row_y,
         cursor_w.max(1),
@@ -235,7 +169,7 @@ fn render_cursor(
 }
 
 fn render_shell_snapshot_rgba(
-    decoded: &[DecodedPng],
+    atlases: &ui2::Ui2FontCpuAtlases,
     snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
     blink_on: bool,
 ) -> Vec<u8> {
@@ -287,7 +221,7 @@ fn render_shell_snapshot_rgba(
                     rgba.as_mut_slice(),
                     content_w,
                     content_h,
-                    decoded,
+                    atlases,
                     pen_x,
                     row_y,
                     advance_px,
@@ -301,13 +235,13 @@ fn render_shell_snapshot_rgba(
         }
     }
 
-    render_cursor(rgba.as_mut_slice(), content_w, content_h, decoded, snapshot, blink_on);
+    render_cursor(rgba.as_mut_slice(), content_w, content_h, atlases, snapshot, blink_on);
     rgba
 }
 
 #[embassy_executor::task]
 pub async fn ui2_shell_demo_task() {
-    let Some(decoded) = decode_half_bucket_textures() else {
+    let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_SHELL_HALF_SIZE_CASE) else {
         return;
     };
 
@@ -379,7 +313,7 @@ pub async fn ui2_shell_demo_task() {
                 && dirty_seq != crate::shell2::ui2_shell_last_rendered_seq())
                 || blink_on != last_blink_on)
         {
-            let rgba = render_shell_snapshot_rgba(decoded.as_slice(), &snapshot, blink_on);
+            let rgba = render_shell_snapshot_rgba(&atlases, &snapshot, blink_on);
             if surface.upload_rgba(rgba.as_slice(), "ui2-shell-demo-present") {
                 if dirty_seq != last_rendered_seq {
                     crate::shell2::ui2_shell_mark_rendered(dirty_seq);
