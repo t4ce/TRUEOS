@@ -57,40 +57,49 @@ struct AiUsageTotals {
     output_tokens: u64,
 }
 
-const AI_IMPORT_FILENAME: &[u8] = b"<ai-task-import>\0";
-const AI_IMPORT_SOURCE: &[u8] = br#"
+const AI_BOOTSTRAP_NORMAL_FILENAME: &[u8] = b"<ai-task-bootstrap-normal>\0";
+const AI_BOOTSTRAP_NORMAL_SOURCE: &[u8] = br#"
+import { runShellPrompt } from '/qjs/ai/ai_shell_normal.mjs';
 globalThis.__trueosAiTaskDone = 0;
 globalThis.__trueosAiTaskError = '';
 globalThis.__trueosAiTaskStage = 'loading-entry';
-const __trueosAiTaskEntryModule =
-  Number(globalThis.__trueosAiTaskComputerUse || 0) > 0
-    ? '/qjs/ai/ai_pc_runner.mjs'
-    : '/qjs/ai/ai_shell_normal.mjs';
-if (typeof globalThis.importModule !== 'function') {
-  globalThis.__trueosAiTaskError = 'importModule is not available';
-  globalThis.__trueosAiTaskDone = -1;
-  throw new Error('importModule is not available');
-}
-const __trueosAiImportTimeoutMs = Math.max(
-  1,
-  Number(globalThis.__trueosAiTaskImportTimeoutMs || 0) || 8000,
-);
-const __trueosAiImportTimeoutPromise = new Promise((_, reject) => {
-  setTimeout(() => {
-    reject(new Error(`ai module import timed out after ${__trueosAiImportTimeoutMs}ms`));
-  }, __trueosAiImportTimeoutMs);
-});
-globalThis.__trueosAiTaskPromise = Promise.race([
-  Promise.resolve(globalThis.importModule(__trueosAiTaskEntryModule)),
-  __trueosAiImportTimeoutPromise,
-])
-  .then((entry) => {
+globalThis.__trueosAiTaskPromise = Promise.resolve()
+  .then(() => {
         globalThis.__trueosAiTaskStage = 'starting-prompt';
-        if (!entry || typeof entry.runShellPrompt !== 'function') {
-            throw new Error(`${__trueosAiTaskEntryModule} does not export runShellPrompt()`);
-    }
         globalThis.__trueosAiTaskStage = 'running-prompt';
-        return entry.runShellPrompt({
+        return runShellPrompt({
+            prompt: String(globalThis.__trueosAiTaskPrompt || ''),
+            webSearch: Number(globalThis.__trueosAiTaskWebSearch || 0) > 0,
+            fileSearch: Number(globalThis.__trueosAiTaskFileSearch || 0) > 0,
+            conversationId: String(globalThis.__trueosAiTaskConversationId || ''),
+            targetMask: Number(globalThis.__trueosAiTaskTargetMask || 0) || 0,
+        });
+  })
+  .then(
+    () => {
+      globalThis.__trueosAiTaskStage = 'done';
+      globalThis.__trueosAiTaskDone = 1;
+    },
+    (error) => {
+      const stage = String(globalThis.__trueosAiTaskStage || 'unknown');
+      const message = error && error.stack ? String(error.stack) : String(error || 'unknown ai task error');
+      globalThis.__trueosAiTaskError = `[stage=${stage}] ${message}`;
+      globalThis.__trueosAiTaskStage = 'error';
+      globalThis.__trueosAiTaskDone = -1;
+    },
+  );
+"#;
+const AI_BOOTSTRAP_PC_FILENAME: &[u8] = b"<ai-task-bootstrap-pc>\0";
+const AI_BOOTSTRAP_PC_SOURCE: &[u8] = br#"
+import { runShellPrompt } from '/qjs/ai/ai_pc_runner.mjs';
+globalThis.__trueosAiTaskDone = 0;
+globalThis.__trueosAiTaskError = '';
+globalThis.__trueosAiTaskStage = 'loading-entry';
+globalThis.__trueosAiTaskPromise = Promise.resolve()
+  .then(() => {
+        globalThis.__trueosAiTaskStage = 'starting-prompt';
+        globalThis.__trueosAiTaskStage = 'running-prompt';
+        return runShellPrompt({
             prompt: String(globalThis.__trueosAiTaskPrompt || ''),
             webSearch: Number(globalThis.__trueosAiTaskWebSearch || 0) > 0,
             fileSearch: Number(globalThis.__trueosAiTaskFileSearch || 0) > 0,
@@ -122,13 +131,11 @@ const AI_FILE_SEARCH_PROP: &[u8] = b"__trueosAiTaskFileSearch\0";
 const AI_CONVERSATION_ID_PROP: &[u8] = b"__trueosAiTaskConversationId\0";
 const AI_COMPUTER_USE_PROP: &[u8] = b"__trueosAiTaskComputerUse\0";
 const AI_TARGET_MASK_PROP: &[u8] = b"__trueosAiTaskTargetMask\0";
-const AI_IMPORT_TIMEOUT_PROP: &[u8] = b"__trueosAiTaskImportTimeoutMs\0";
 const AI_PRINT_FN_PROP: &[u8] = b"__trueosAiPrintLine\0";
 const AI_SET_CONVERSATION_FN_PROP: &[u8] = b"__trueosAiSetConversationId\0";
 const AI_ADD_USAGE_TOTALS_FN_PROP: &[u8] = b"__trueosAiAddUsageTotals\0";
 const AI_READ_PRIMARY_FS_TREE_FN_PROP: &[u8] = b"__trueosAiReadPrimaryFsTreeJsonAll\0";
 const AI_PROMPT_TIMEOUT_MS: u64 = 90_000;
-const AI_IMPORT_TIMEOUT_MS: u64 = 8_000;
 const AI_MODE_NOT_IMPLEMENTED: &str = "ai: mode not implemented yet; use normal, web, file, or newchat";
 const AI_PRIMARY_FS_TREE_MAX_ENTRIES: u32 = 96;
 
@@ -487,19 +494,18 @@ async unsafe fn run_prompt_in_vm(entry: &AiInputEntry) -> bool {
         AI_TARGET_MASK_PROP,
         qjs::JS_NewFloat64(ctx, entry.shell_target_mask as f64),
     );
-    let _ = qjs::jsbind::set_prop(
-        ctx,
-        global,
-        AI_IMPORT_TIMEOUT_PROP,
-        qjs::JS_NewFloat64(ctx, AI_IMPORT_TIMEOUT_MS as f64),
-    );
     qjs::js_free_value(ctx, global);
 
+    let (bootstrap_source, bootstrap_filename) = if entry.computer_use {
+        (AI_BOOTSTRAP_PC_SOURCE, AI_BOOTSTRAP_PC_FILENAME)
+    } else {
+        (AI_BOOTSTRAP_NORMAL_SOURCE, AI_BOOTSTRAP_NORMAL_FILENAME)
+    };
     let import = qjs::js_eval_bytes(
         ctx,
-        AI_IMPORT_SOURCE,
-        AI_IMPORT_FILENAME.as_ptr() as *const c_char,
-        qjs::JS_EVAL_TYPE_GLOBAL,
+        bootstrap_source,
+        bootstrap_filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_MODULE,
     );
     if import.is_exception() {
         qjs::qjs_diag::dump_last_exception(ctx, "ai-task-import");

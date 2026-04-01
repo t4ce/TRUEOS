@@ -1737,7 +1737,7 @@ pub(super) fn ggtt_map_system_ram_range(
 }
 
 #[inline]
-pub(super) fn dma_cache_flush_range(ptr: *const u8, len: usize) {
+pub(crate) fn dma_cache_flush_range(ptr: *const u8, len: usize) {
     dma_cache_flush(ptr, len);
 }
 
