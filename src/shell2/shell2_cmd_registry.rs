@@ -15,6 +15,8 @@ struct BuiltinShell2CmdEntry {
     mode: &'static str,
     color: Option<(u8, u8, u8)>,
     handler: Shell2CmdHandler,
+    tool_description: Option<&'static str>,
+    tool_parameters_json: Option<&'static str>,
 }
 
 struct ApiShell2CmdEntry {
@@ -30,6 +32,17 @@ pub enum RegisterCommandError {
 }
 
 static API_CMD_REGISTRY: spin::Mutex<Vec<ApiShell2CmdEntry>> = spin::Mutex::new(Vec::new());
+
+const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_EMAIL: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["send","set_from"],"description":"Choose whether to send a mail log entry or set the default from address."},"to":{"type":"string","description":"Recipient address when mode=send."},"mail_text":{"type":"string","description":"Mail body text when mode=send."},"from":{"type":"string","description":"Sender address when mode=set_from."}},"required":["mode"],"additionalProperties":false}"#;
+const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane","ecma"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
+const TOOL_JSON_FILE: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"file action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
+const TOOL_JSON_PROBE: &str = r#"{"type":"object","properties":{"domain":{"type":"string","enum":["usb","nvme"],"description":"Probe domain."},"action":{"type":"string","enum":["status","kick","rebind","probe","flr"],"description":"Action inside the selected domain."},"controller":{"type":"integer","minimum":0,"description":"Optional controller index for usb kick/rebind."},"pci":{"type":"string","description":"PCI BDF like 00:1f.0 for nvme flr."}},"required":["domain","action"],"additionalProperties":false}"#;
+const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
+const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pciids","pcibar","mem","cpu","acpi","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."}},"required":["target"],"additionalProperties":false}"#;
+const TOOL_JSON_TURBO: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["status","arm","disarm","on","off","verify"],"description":"turbo action to run."},"spins":{"type":"integer","minimum":0,"description":"Optional spin count for action=verify."}},"required":["action"],"additionalProperties":false}"#;
 
 fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
@@ -134,102 +147,136 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         mode: "cmd",
         color: None,
         handler: dispatch_acpi,
+        tool_description: Some("Run ACPI power actions."),
+        tool_parameters_json: Some(TOOL_JSON_ACPI),
     },
     BuiltinShell2CmdEntry {
         name: "bench",
         mode: "cmd",
         color: None,
         handler: dispatch_bench,
+        tool_description: None,
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "etc",
         mode: "cmd",
         color: None,
         handler: dispatch_etc,
+        tool_description: Some("Run small shell demo and utility subcommands."),
+        tool_parameters_json: Some(TOOL_JSON_ETC),
     },
     BuiltinShell2CmdEntry {
         name: "email",
         mode: "cmd",
         color: None,
         handler: dispatch_email,
+        tool_description: Some("Send a shell email log entry or set the default from address."),
+        tool_parameters_json: Some(TOOL_JSON_EMAIL),
     },
     BuiltinShell2CmdEntry {
         name: "file",
         mode: "cmd",
         color: None,
         handler: dispatch_file,
+        tool_description: Some("List mounted TRUEOSFS roots, format a disk, or create a ramdisc."),
+        tool_parameters_json: Some(TOOL_JSON_FILE),
     },
     BuiltinShell2CmdEntry {
         name: "hv",
         mode: "cmd",
         color: None,
         handler: dispatch_hv,
+        tool_description: None,
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "install",
         mode: "cmd",
         color: Some((255, 55, 255)),
         handler: dispatch_install,
+        tool_description: None,
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "net",
         mode: "cmd",
         color: None,
         handler: dispatch_net,
+        tool_description: Some("Inspect network state, run ICMP, use IRC, or get/set the hostname."),
+        tool_parameters_json: Some(TOOL_JSON_NET),
     },
     BuiltinShell2CmdEntry {
         name: "probe",
         mode: "cmd",
         color: None,
         handler: dispatch_probe,
+        tool_description: Some("Inspect or trigger USB and NVMe probe actions."),
+        tool_parameters_json: Some(TOOL_JSON_PROBE),
     },
     BuiltinShell2CmdEntry {
         name: "run",
         mode: "cmd",
         color: Some((60, 183, 161)),
         handler: dispatch_run,
+        tool_description: None,
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "tlb",
         mode: "cmd",
         color: None,
         handler: dispatch_tlb,
+        tool_description: Some("Print one of the table and hardware inspection views."),
+        tool_parameters_json: Some(TOOL_JSON_TLB),
     },
     BuiltinShell2CmdEntry {
         name: "tetris",
         mode: "cmd",
         color: None,
         handler: dispatch_tetris,
+        tool_description: None,
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "turbo",
         mode: "cmd",
         color: None,
         handler: dispatch_turbo,
+        tool_description: Some("Inspect or change CPU turbo state."),
+        tool_parameters_json: Some(TOOL_JSON_TURBO),
     },
     BuiltinShell2CmdEntry {
         name: "txt",
         mode: "cmd",
         color: None,
         handler: dispatch_txt,
+        tool_description: None,
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "update",
         mode: "cmd",
         color: Some((255, 55, 255)),
         handler: dispatch_update,
+        tool_description: None,
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "set",
         mode: "cmd",
         color: None,
         handler: dispatch_set,
+        tool_description: Some("Set the shell line width."),
+        tool_parameters_json: Some(TOOL_JSON_SET),
     },
     BuiltinShell2CmdEntry {
         name: "smp",
         mode: "cmd",
         color: None,
         handler: dispatch_smp,
+        tool_description: Some("Inspect SMP slot state."),
+        tool_parameters_json: Some(TOOL_JSON_SMP),
     },
 ];
 
@@ -352,7 +399,17 @@ pub(crate) fn command_registry_json() -> AllocString {
         out.push_str(entry.name);
         out.push_str("\",\"mode\":\"");
         out.push_str(entry.mode);
-        out.push_str("\"}");
+        out.push('"');
+        if let (Some(description), Some(parameters_json)) =
+            (entry.tool_description, entry.tool_parameters_json)
+        {
+            out.push_str(",\"tool\":{\"description\":\"");
+            out.push_str(description);
+            out.push_str("\",\"parameters\":");
+            out.push_str(parameters_json);
+            out.push('}');
+        }
+        out.push('}');
     }
 
     let api_registry = API_CMD_REGISTRY.lock();

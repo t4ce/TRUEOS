@@ -1,6 +1,9 @@
+use alloc::vec::Vec;
+
 use crate::gfx::althlasfont;
 use crate::gfx::althlasfont::athlasmetrics::{self, ATHLAS_FONT_INFO};
 use crate::gfx::althlasfont::twemoji;
+use crate::gfx::png_codec::DecodedPng;
 use trueos_gfx_core::Rgba8;
 
 use super::{Ui2Rect, draw_texture_rect_uv_no_present};
@@ -136,6 +139,25 @@ pub(crate) struct Ui2FontCellMetrics {
     pub glyph_h_px: u16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Ui2FontTextAlign {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Ui2FontVerticalAlign {
+    Top,
+    Center,
+    Bottom,
+}
+
+pub(crate) struct Ui2FontCpuAtlases {
+    variant_buckets: Vec<DecodedPng>,
+    twemoji: DecodedPng,
+}
+
 #[inline]
 pub(crate) fn ui2_font_ready_snapshot() -> Ui2FontReadySnapshot {
     Ui2FontReadySnapshot::capture()
@@ -190,6 +212,85 @@ pub(crate) fn ui2_font_place_glyph_top_center(glyph: &Ui2FontGlyph, rect: Ui2Rec
     let glyph_w = f32::from(metrics.glyph_w_px.max(1));
     let glyph_h = f32::from(metrics.glyph_h_px.max(1));
     Ui2Rect::new(rect.x + ((rect.w - cell_w) * 0.5), rect.y, glyph_w, glyph_h)
+}
+
+pub(crate) fn ui2_font_decode_cpu_atlases(size_case: usize) -> Option<Ui2FontCpuAtlases> {
+    let variant_buckets = crate::r::ui2::ui2_font_bucketproducer_decode_variant(size_case)?;
+    let twemoji = crate::gfx::png_codec::decode_png_rgba(twemoji::TWEMOJI_ATLAS_PNG).ok()?;
+    Some(Ui2FontCpuAtlases {
+        variant_buckets,
+        twemoji,
+    })
+}
+
+fn ui2_font_cpu_atlas_for_glyph<'a>(
+    atlases: &'a Ui2FontCpuAtlases,
+    glyph: &Ui2FontGlyph,
+) -> Option<&'a DecodedPng> {
+    let texture = glyph.texture?;
+    if texture.tex_id == twemoji::TWEMOJI_TEX_ID {
+        return Some(&atlases.twemoji);
+    }
+    atlases.variant_buckets.get(glyph.region.bucket as usize)
+}
+
+pub(crate) fn ui2_font_blit_glyph_rgba(
+    dst: &mut [u8],
+    dst_width: usize,
+    dst_height: usize,
+    atlases: &Ui2FontCpuAtlases,
+    glyph: &Ui2FontGlyph,
+    cell_rect: Ui2Rect,
+    fg_rgba: [u8; 4],
+) -> bool {
+    let Some(atlas) = ui2_font_cpu_atlas_for_glyph(atlases, glyph) else {
+        return false;
+    };
+    let draw_rect = ui2_font_place_glyph_top_center(glyph, cell_rect);
+    let glyph_w = glyph.region.src_w as usize;
+    let glyph_h = glyph.region.src_h as usize;
+    let src_x = glyph.region.src_x as usize;
+    let src_y = glyph.region.src_y as usize;
+    let atlas_width = atlas.width as usize;
+    let dst_x = draw_rect.x.max(0.0) as usize;
+    let dst_y = draw_rect.y.max(0.0) as usize;
+
+    for row in 0..glyph_h {
+        let target_y = dst_y + row;
+        if target_y >= dst_height {
+            break;
+        }
+        for col in 0..glyph_w {
+            let target_x = dst_x + col;
+            if target_x >= dst_width {
+                break;
+            }
+
+            let atlas_idx = ((src_y + row) * atlas_width + (src_x + col)) * 4;
+            let coverage = atlas.rgba.get(atlas_idx).copied().unwrap_or(0) as u16;
+            if coverage == 0 {
+                continue;
+            }
+
+            let dst_idx = (target_y * dst_width + target_x) * 4;
+            let alpha = (coverage * u16::from(fg_rgba[3])) / 255;
+            let inv_alpha = 255u16.saturating_sub(alpha);
+            dst[dst_idx] =
+                (((u16::from(fg_rgba[0]) * alpha) + (u16::from(dst[dst_idx]) * inv_alpha) + 127)
+                    / 255) as u8;
+            dst[dst_idx + 1] = (((u16::from(fg_rgba[1]) * alpha)
+                + (u16::from(dst[dst_idx + 1]) * inv_alpha)
+                + 127)
+                / 255) as u8;
+            dst[dst_idx + 2] = (((u16::from(fg_rgba[2]) * alpha)
+                + (u16::from(dst[dst_idx + 2]) * inv_alpha)
+                + 127)
+                / 255) as u8;
+            dst[dst_idx + 3] = 0xFF;
+        }
+    }
+
+    true
 }
 
 #[inline]
@@ -374,6 +475,41 @@ pub(crate) fn ui2_font_draw_text_line_no_present(
     }
 
     drew_any
+}
+
+pub(crate) fn ui2_font_draw_text_line_in_rect_no_present(
+    text: &str,
+    rect: Ui2Rect,
+    px_h: f32,
+    align: Ui2FontTextAlign,
+    vertical_align: Ui2FontVerticalAlign,
+    view_w: u32,
+    view_h: u32,
+    alpha: u8,
+) -> bool {
+    if text.is_empty() || !(px_h.is_finite() && px_h > 0.0) || rect.w <= 0.0 || rect.h <= 0.0 {
+        return false;
+    }
+
+    let tier = ui2_font_pick_tier_for_px(px_h);
+    let text_w = ui2_font_measure_text(tier, text).width_px as f32;
+    let draw_w = text_w.min(rect.w).max(0.0);
+    if draw_w <= 0.0 {
+        return false;
+    }
+
+    let draw_x = match align {
+        Ui2FontTextAlign::Left => rect.x,
+        Ui2FontTextAlign::Center => rect.x + ((rect.w - draw_w) * 0.5).max(0.0),
+        Ui2FontTextAlign::Right => rect.x + (rect.w - draw_w).max(0.0),
+    };
+    let draw_y = match vertical_align {
+        Ui2FontVerticalAlign::Top => rect.y,
+        Ui2FontVerticalAlign::Center => rect.y + ((rect.h - px_h) * 0.5).max(0.0),
+        Ui2FontVerticalAlign::Bottom => rect.y + (rect.h - px_h).max(0.0),
+    };
+
+    ui2_font_draw_text_line_no_present(text, draw_x, draw_y, rect.w, px_h, view_w, view_h, alpha)
 }
 
 fn ui2_font_draw_glyph_rect_no_present(

@@ -47,19 +47,22 @@ pub(crate) fn draw_hosted_browser_gadget_scene(
             continue;
         }
 
-        let max_width_px = (visible_right - x)
-            .min(gadget.width_px.max(1) as f32)
-            .max(0.0);
-        if max_width_px <= 0.0 {
+        let text_rect = Ui2Rect::new(
+            x,
+            y,
+            (visible_right - x).min(gadget.width_px.max(1) as f32).max(0.0),
+            h.max(font_px),
+        );
+        if text_rect.w <= 0.0 {
             continue;
         }
 
-        drew_any |= ui2_font_draw_text_line_no_present(
+        drew_any |= ui2_font_draw_text_line_in_rect_no_present(
             gadget.text.as_str(),
-            x,
-            y,
-            max_width_px,
+            text_rect,
             font_px,
+            Ui2FontTextAlign::Left,
+            Ui2FontVerticalAlign::Top,
             state.view_w,
             state.view_h,
             window.alpha,
