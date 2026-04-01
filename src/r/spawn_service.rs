@@ -103,6 +103,7 @@ define_started_flags!(
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
+    UI2_PETERSEN_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
     UI2_SHELL_DEMO_STARTED,
     UI2_SVG_DEMO_STARTED,
@@ -606,6 +607,12 @@ fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_petersen_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_petersen_demo::ui2_petersen_demo_task())
+    })
+}
+
 fn spawn_ui2_particle_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_particle_demo::ui2_particle_demo_task())
@@ -932,6 +939,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_mandelbrot_demo,
     ),
     TaskSpec::enabled(
+        "ui2-petersen-demo",
+        UI2_DEMO_READY,
+        &UI2_PETERSEN_DEMO_STARTED,
+        spawn_ui2_petersen_demo,
+    ),
+    TaskSpec::enabled(
         "ui2-particle-demo",
         UI2_DEMO_READY,
         &UI2_PARTICLE_DEMO_STARTED,
@@ -1020,6 +1033,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
                                 | "ui2-gfx-tetris"
                                 | "ui2-triangle-demo"
                                 | "ui2-mandelbrot-demo"
+                                | "ui2-petersen-demo"
                                 | "ui2-shell-demo"
                         ) {
                             crate::log!("boot-probe: spawn {} ms={}\n", spec.name, boot_probe_ms());

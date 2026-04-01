@@ -4163,6 +4163,9 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
             Ok(bytes) => {
                 crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
                 if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
+                    if let Some(summary) = super::json::summarize_openai_response_json(s) {
+                        crate::log!("net-fetch-post: summary {}\n", summary);
+                    }
                     log_utf8_chunks("net-fetch-post: response_json: ", s);
                 } else {
                     crate::log!("net-fetch-post: response_json: [non-utf8]\n");
@@ -4199,6 +4202,106 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
     });
 
     op_id
+}
+
+/// TRUEOS C ABI: start async HTTPS POST(JSON) to in-memory bytes.
+///
+/// `bearer_ptr/bearer_len` are optional (pass null/0 for no Authorization header).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start(
+    url_ptr: *const u8,
+    url_len: usize,
+    body_ptr: *const u8,
+    body_len: usize,
+    bearer_ptr: *const u8,
+    bearer_len: usize,
+) -> u32 {
+    if url_ptr.is_null() || url_len == 0 || body_ptr.is_null() || body_len == 0 {
+        return 0;
+    }
+
+    let url_bytes = core::slice::from_raw_parts(url_ptr, url_len);
+    let body_bytes = core::slice::from_raw_parts(body_ptr, body_len);
+
+    let Ok(url_s) = core::str::from_utf8(url_bytes) else {
+        return 0;
+    };
+    let Ok(body_s) = core::str::from_utf8(body_bytes) else {
+        return 0;
+    };
+
+    let bearer = if bearer_ptr.is_null() || bearer_len == 0 {
+        None
+    } else {
+        let bearer_bytes = core::slice::from_raw_parts(bearer_ptr, bearer_len);
+        let Ok(v) = core::str::from_utf8(bearer_bytes) else {
+            return 0;
+        };
+        Some(String::from(v))
+    };
+
+    let url = String::from(url_s);
+    let body_json = String::from(body_s);
+    let request_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    CABI_NET_FETCH_BYTES_RESULTS
+        .lock()
+        .insert(request_id, CabiNetFetchBytesResult::default());
+
+    crate::wait::spawn_local_detached(async move {
+        const TIMEOUT_MS: u32 = 20_000;
+        const MAX_BYTES: usize = 4 * 1024 * 1024;
+
+        let t0 = Instant::now();
+        net_fetch_acquire_slot().await;
+
+        let (rc, bytes) = match post_https_json_async(
+            url.as_str(),
+            body_json,
+            bearer.as_deref(),
+            TIMEOUT_MS,
+            MAX_BYTES,
+        )
+        .await
+        {
+            Ok(bytes) => {
+                crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
+                if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
+                    if let Some(summary) = super::json::summarize_openai_response_json(s) {
+                        crate::log!("net-fetch-post: summary {}\n", summary);
+                    }
+                    log_utf8_chunks("net-fetch-post: response_json: ", s);
+                } else {
+                    crate::log!("net-fetch-post: response_json: [non-utf8]\n");
+                }
+                (0, bytes)
+            }
+            Err(e) => (fetch_error_to_code(e), Vec::new()),
+        };
+
+        net_fetch_release_slot();
+
+        if let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&request_id) {
+            slot.rc = Some(rc);
+            slot.body = bytes;
+        }
+
+        let elapsed_ms = t0.elapsed().as_millis();
+        crate::log!(
+            "net-fetch-post: done request_id={} rc={} ms={} len={}\n",
+            request_id,
+            rc,
+            elapsed_ms,
+            CABI_NET_FETCH_BYTES_RESULTS
+                .lock()
+                .get(&request_id)
+                .map(|v| v.body.len())
+                .unwrap_or(0)
+        );
+
+        CABI_NET_FETCH_WAIT.notify_all();
+    });
+
+    request_id
 }
 
 /// TRUEOS C ABI: query async HTTPS fetch result.

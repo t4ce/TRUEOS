@@ -60,6 +60,32 @@ pub fn fetch_post_json_to_file(
 }
 
 #[inline]
+pub fn fetch_post_json_bytes(
+    url: &[u8],
+    body: &[u8],
+    bearer: Option<&[u8]>,
+) -> Result<u32, i32> {
+    let (bearer_ptr, bearer_len) = match bearer {
+        Some(token) => (token.as_ptr(), token.len()),
+        None => (core::ptr::null(), 0),
+    };
+    let op_id = unsafe {
+        vcabi::trueos_cabi_net_fetch_post_json_bytes_start(
+            url.as_ptr(),
+            url.len(),
+            body.as_ptr(),
+            body.len(),
+            bearer_ptr,
+            bearer_len,
+        )
+    };
+    if op_id == 0 {
+        return Err(-1);
+    }
+    Ok(op_id)
+}
+
+#[inline]
 pub fn fetch_result(op_id: u32) -> i32 {
     unsafe { vcabi::trueos_cabi_net_fetch_result(op_id) }
 }

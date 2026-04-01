@@ -56,6 +56,8 @@ mod tst_ui2_bgrt;
 mod tst_ui2_mandelbrot_demo;
 #[path = "tst/ui2_particle_demo.rs"]
 mod tst_ui2_particle_demo;
+#[path = "tst/ui2_petersen_demo.rs"]
+mod tst_ui2_petersen_demo;
 #[path = "tst/ui2_shell_demo.rs"]
 mod tst_ui2_shell_demo;
 #[path = "tst/ui2_svg_demo.rs"]

@@ -15,7 +15,8 @@ use crate::trueos_shims::{
     trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish, trueos_cabi_net_fetch_bytes_discard,
     trueos_cabi_net_fetch_bytes_read, trueos_cabi_net_fetch_bytes_result_len,
     trueos_cabi_net_fetch_bytes_start, trueos_cabi_net_fetch_bytes_wait,
-    trueos_cabi_net_fetch_discard, trueos_cabi_net_fetch_post_json_start,
+    trueos_cabi_net_fetch_discard, trueos_cabi_net_fetch_post_json_bytes_start,
+    trueos_cabi_net_fetch_post_json_start,
     trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait,
     trueos_cabi_poll_once,
 };
@@ -274,6 +275,33 @@ fn start_net_post_json_to_file_via_cabi(
     Ok(id)
 }
 
+fn start_net_post_json_bytes_via_cabi(
+    url: &str,
+    body_json: &str,
+    bearer: Option<&str>,
+) -> Result<u32, i32> {
+    let (bearer_ptr, bearer_len) = if let Some(v) = bearer {
+        (v.as_ptr(), v.len())
+    } else {
+        (core::ptr::null(), 0)
+    };
+
+    let id = unsafe {
+        trueos_cabi_net_fetch_post_json_bytes_start(
+            url.as_ptr(),
+            url.len(),
+            body_json.as_ptr(),
+            body_json.len(),
+            bearer_ptr,
+            bearer_len,
+        )
+    };
+    if id == 0 {
+        return Err(FS_ERR_BAD_PARAM);
+    }
+    Ok(id)
+}
+
 pub fn claim_service_start() -> bool {
     SERVICE_STARTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -491,6 +519,29 @@ pub fn start_net_post_json_to_file(
 
     let id = start_net_post_json_to_file_via_cabi(url_str, path_str, body_str, bearer_str)?;
     ASYNC_NET_FILE_OPS.lock().insert(id);
+    Ok(id)
+}
+
+pub fn start_net_post_json_bytes(
+    url: &[u8],
+    body_json: &[u8],
+    bearer: Option<&[u8]>,
+) -> Result<u32, i32> {
+    if url.is_empty() || body_json.is_empty() {
+        return Err(FS_ERR_BAD_PARAM);
+    }
+    let Ok(url_str) = core::str::from_utf8(url) else {
+        return Err(FS_ERR_BAD_UTF8);
+    };
+    let Ok(body_str) = core::str::from_utf8(body_json) else {
+        return Err(FS_ERR_BAD_UTF8);
+    };
+    let bearer_str = match bearer {
+        Some(v) => Some(core::str::from_utf8(v).map_err(|_| FS_ERR_BAD_UTF8)?),
+        None => None,
+    };
+    let id = start_net_post_json_bytes_via_cabi(url_str, body_str, bearer_str)?;
+    ASYNC_NET_BYTES_OPS.lock().insert(id);
     Ok(id)
 }
 
