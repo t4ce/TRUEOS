@@ -47,6 +47,22 @@ function collapseWhitespace(text) {
   return String(text ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function clipText(text, maxChars) {
+  const value = collapseWhitespace(text);
+  if (!value) {
+    return '';
+  }
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+function quoteInline(text) {
+  const value = String(text ?? '');
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 function normalizeJsonFileTree(raw) {
   if (typeof raw !== 'string' || !raw.trim()) {
     return '';
@@ -217,6 +233,97 @@ function maybePersistConversationId(response) {
   }
 }
 
+function collectUsedToolNames(response) {
+  const names = [];
+  const seen = new Set();
+  const output = Array.isArray(response && response.output) ? response.output : [];
+  for (const item of output) {
+    const type = typeof item?.type === 'string' ? item.type.trim() : '';
+    if (!type || type === 'message' || type === 'reasoning') {
+      continue;
+    }
+    const name = type.endsWith('_call') ? type.slice(0, -5) : type;
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
+function reasoningSummaryText(summary) {
+  if (typeof summary === 'string') {
+    return collapseWhitespace(summary);
+  }
+  if (Array.isArray(summary)) {
+    const parts = [];
+    for (const item of summary) {
+      if (typeof item === 'string') {
+        const next = collapseWhitespace(item);
+        if (next) {
+          parts.push(next);
+        }
+        continue;
+      }
+      const text = typeof item?.text === 'string' ? collapseWhitespace(item.text) : '';
+      if (text) {
+        parts.push(text);
+      }
+    }
+    return collapseWhitespace(parts.join(' '));
+  }
+  return '';
+}
+
+function printResponseSummary(response, text) {
+  const model = collapseWhitespace(response && response.model);
+  const answer = clipText(text, 160);
+  if (model || answer) {
+    const parts = [];
+    if (model) {
+      parts.push(`model=${model}`);
+    }
+    if (answer) {
+      parts.push(`answer=${quoteInline(answer)}`);
+    }
+    printLine(`ai: ${parts.join(' ')}`);
+  }
+
+  const usage = response && typeof response === 'object' ? response.usage : null;
+  const inputTokens = Number(usage && usage.input_tokens || 0) || 0;
+  const outputTokens = Number(usage && usage.output_tokens || 0) || 0;
+  if ((inputTokens > 0 || outputTokens > 0) && typeof globalThis.__trueosAiAddUsageTotals === 'function') {
+    const totalsRaw = globalThis.__trueosAiAddUsageTotals(inputTokens, outputTokens);
+    if (typeof totalsRaw === 'string' && totalsRaw) {
+      printLine(`ai: usage in=${inputTokens} out=${outputTokens} ${totalsRaw}`);
+    } else {
+      printLine(`ai: usage in=${inputTokens} out=${outputTokens}`);
+    }
+  } else if (inputTokens > 0 || outputTokens > 0) {
+    printLine(`ai: usage in=${inputTokens} out=${outputTokens}`);
+  }
+
+  const reasoning = response && typeof response === 'object' ? response.reasoning : null;
+  const effort = collapseWhitespace(reasoning && reasoning.effort);
+  const summary = clipText(reasoningSummaryText(reasoning && reasoning.summary), 200);
+  if ((effort && effort !== 'none') || summary) {
+    const parts = [];
+    if (effort && effort !== 'none') {
+      parts.push(`effort=${effort}`);
+    }
+    if (summary) {
+      parts.push(`summary=${quoteInline(summary)}`);
+    }
+    printLine(`ai: reasoning ${parts.join(' ')}`);
+  }
+
+  const tools = collectUsedToolNames(response);
+  if (tools.length > 0) {
+    printLine(`ai: tools ${tools.join(', ')}`);
+  }
+}
+
 export async function runShellPrompt(config = null) {
   const source = config && typeof config === 'object' ? config : {};
   const prompt = String(source.prompt || '').trim();
@@ -262,6 +369,7 @@ export async function runShellPrompt(config = null) {
     return;
   }
 
+  printResponseSummary(response, text);
   printMultiline(text);
 }
 

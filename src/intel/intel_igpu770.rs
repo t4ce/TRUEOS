@@ -380,6 +380,11 @@ fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
     set_bits | ((set_bits | clear_bits) << 16)
 }
 
+#[inline]
+pub(super) fn gen12_lrc_context_control_seed() -> u32 {
+    masked_bit_enable(CTX_CTRL_INHIBIT_SYN_CTX_SWITCH | CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT)
+}
+
 fn wait_forcewake_ack(warm: Igpu770WarmState, mask: u32, expected: u32) -> (bool, u32, usize) {
     let mut last = mmio_read32(warm, FORCEWAKE_ACK_RENDER);
     if (last & mask) == expected {
@@ -1333,8 +1338,9 @@ pub(super) fn init_gen12_video_context_image(
 
     state[idx] = mi_lri_cmd(15, MI_LRI_FORCE_POSTED);
     idx += 1;
+    let ctx_ctl_seed = gen12_lrc_context_control_seed();
     state[idx] = ring_base + 0x244;
-    state[idx + 1] = 0x0009_0009;
+    state[idx + 1] = ctx_ctl_seed;
     state[idx + 2] = ring_base + 0x34;
     state[idx + 3] = 0;
     state[idx + 4] = ring_base + 0x30;
@@ -1399,7 +1405,7 @@ pub(super) fn init_gen12_video_context_image(
 
     push_mi_nops(state, &mut idx, 12);
 
-    state[CTX_CONTEXT_CONTROL_DW] = 0x0009_0009;
+    state[CTX_CONTEXT_CONTROL_DW] = ctx_ctl_seed;
     state[CTX_RING_HEAD_DW] = 0;
     state[CTX_RING_TAIL_DW] = ring_tail;
     state[CTX_RING_START_DW] = ring_start;
@@ -2073,8 +2079,12 @@ pub fn cpu_framebuffer_visualize_nv12_center(
     let scale_x = frame_width.div_ceil(warm.limine_fb_width.max(1));
     let scale_y = frame_height.div_ceil(warm.limine_fb_height.max(1));
     let scale = scale_x.max(scale_y).max(1);
-    let outer_w = (frame_width / scale).max(4).min(warm.limine_fb_width.max(1));
-    let outer_h = (frame_height / scale).max(4).min(warm.limine_fb_height.max(1));
+    let outer_w = (frame_width / scale)
+        .max(4)
+        .min(warm.limine_fb_width.max(1));
+    let outer_h = (frame_height / scale)
+        .max(4)
+        .min(warm.limine_fb_height.max(1));
     let origin_x = warm.limine_fb_width.saturating_sub(outer_w) / 2;
     let origin_y = warm.limine_fb_height.saturating_sub(outer_h) / 2;
 
