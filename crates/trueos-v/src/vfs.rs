@@ -95,3 +95,20 @@ pub fn trueosfs_primary_html_tree(max_entries: u32) -> Result<Vec<u8>, i32> {
     bytes.truncate(got as usize);
     Ok(bytes)
 }
+
+#[inline]
+pub fn trueosfs_json_all(max_entries: u32) -> Result<Vec<u8>, i32> {
+    let len = unsafe { vcabi::trueos_cabi_trueosfs_json_all(max_entries, core::ptr::null_mut(), 0) };
+    if len < 0 {
+        return Err(len as i32);
+    }
+    let mut bytes = vec![0u8; len as usize];
+    let got = unsafe {
+        vcabi::trueos_cabi_trueosfs_json_all(max_entries, bytes.as_mut_ptr(), bytes.len())
+    };
+    if got < 0 {
+        return Err(got as i32);
+    }
+    bytes.truncate(got as usize);
+    Ok(bytes)
+}

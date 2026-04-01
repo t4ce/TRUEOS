@@ -70,6 +70,7 @@ const RING_CONTEXT_CONTROL: usize = 0x244;
 const RING_CONTEXT_CONTROL_REF: usize = 0x5A0;
 const RING_MODE_GEN7: usize = 0x29C;
 const RING_RNCID: usize = 0x198;
+const RING_EXECLIST_SUBMIT_PORT: usize = 0x230;
 const RING_EXECLIST_STATUS_LO: usize = 0x234;
 const RING_EXECLIST_STATUS_HI: usize = 0x238;
 const RING_EXECLIST_CONTROL: usize = 0x550;
@@ -1240,6 +1241,21 @@ fn wake_media_ring_for_submit(
     (psmi & BSD_SLEEP_INDICATOR) == 0
 }
 
+fn execlist_submit_port_push(
+    warm: Igpu770WarmState,
+    desc: MediaEngineDescriptor,
+    context0_lo: u32,
+    context0_hi: u32,
+    context1_lo: u32,
+    context1_hi: u32,
+) {
+    let submit_port = desc.ring_base + RING_EXECLIST_SUBMIT_PORT;
+    let _ = mmio_write32(warm, submit_port, context0_lo);
+    let _ = mmio_write32(warm, submit_port, context0_hi);
+    let _ = mmio_write32(warm, submit_port, context1_lo);
+    let _ = mmio_write32(warm, submit_port, context1_hi);
+}
+
 fn log_media_submit_diag(
     warm: Igpu770WarmState,
     desc: MediaEngineDescriptor,
@@ -2061,6 +2077,7 @@ fn prepare_decode_bitstream_demo(
     )?;
     let ring_ctl = ring_ctl_value_for_size(backing.ring_bytes)?;
     let ring_start = draft.resources.windows.ring_gpu_addr as u32;
+    let pphwsp_gpu = (draft.resources.windows.context_gpu_addr & !0xFFF) as u32;
     if !init_gen12_video_context_image(
         backing.context_virt,
         backing.context_bytes,
@@ -2068,6 +2085,7 @@ fn prepare_decode_bitstream_demo(
         ring_start,
         ring_tail_bytes as u32,
         ring_ctl,
+        pphwsp_gpu,
     ) {
         crate::log!("intel/media-demo: bitstream staging skipped reason=context-init\n");
         return None;
@@ -2116,7 +2134,6 @@ fn prepare_decode_bitstream_demo(
     let _ = wake_media_engine_forcewake(warm, draft.engine, "media-bitstream-submit");
     let _ = forcewake_media_refresh(warm, "media-bitstream-submit");
     let _ = wake_media_ring_for_submit(warm, draft.engine, "media-bitstream-submit");
-    let pphwsp_gpu = (draft.resources.windows.context_gpu_addr & !0xFFF) as u32;
     let _ = mmio_write32(warm, draft.engine.ring_base + RING_HWS_PGA, pphwsp_gpu);
     let _ = mmio_read32(warm, draft.engine.ring_base + RING_HWS_PGA);
     let _ = mmio_write32(
@@ -2133,8 +2150,7 @@ fn prepare_decode_bitstream_demo(
     let _ = mmio_write32(warm, draft.engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl);
     let _ = mmio_write32(warm, draft.engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-    let _ = mmio_write32(warm, draft.engine.ring_base + RING_EXECLIST_SQ_LO, ctx_desc_lo);
-    let _ = mmio_write32(warm, draft.engine.ring_base + RING_EXECLIST_SQ_HI, ctx_desc_hi);
+    execlist_submit_port_push(warm, draft.engine, ctx_desc_lo, ctx_desc_hi, 0, 0);
     let _ = mmio_write32(warm, draft.engine.ring_base + RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
     log_media_submit_diag(warm, draft.engine, "vcs-submit", 0, 0);
 

@@ -35,38 +35,52 @@ impl AiPromptMode {
     }
 }
 
+pub(crate) enum SubmitResult {
+    Queued,
+    ResetToNormal,
+}
+
 pub(crate) fn submit(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     mode: AiPromptMode,
     submitted: &str,
-) {
+) -> SubmitResult {
+    let shell_target_mask = super::output_target_for_backend(io);
+
+    if mode == AiPromptMode::NewChat {
+        trueos_qjs::ai_task::forget_conversation(shell_target_mask);
+        print_shell_line(io, "ai: conversation reset");
+        return SubmitResult::ResetToNormal;
+    }
+
     let entry = trueos_qjs::ai_task::AiInputEntry {
         text: String::from(submitted.trim()),
         web_search: mode == AiPromptMode::WebSearch,
         file_search: mode == AiPromptMode::FileSearch,
-        new_conversation: mode == AiPromptMode::NewChat,
+        new_conversation: false,
         computer_use: mode == AiPromptMode::AiPc,
-        shell_target_mask: super::output_target_for_backend(io),
+        shell_target_mask,
     };
 
     match trueos_qjs::ai_task::ensure_started(spawner) {
         trueos_qjs::ai_task::EnsureStartedResult::Ready => {}
         trueos_qjs::ai_task::EnsureStartedResult::BrowserNotReady => {
             print_shell_line(io, "ai: browser not ready yet");
-            return;
+            return SubmitResult::Queued;
         }
         trueos_qjs::ai_task::EnsureStartedResult::SpawnFailed => {
             print_shell_line(io, "ai: ai-task start failed");
-            return;
+            return SubmitResult::Queued;
         }
     }
 
     if !trueos_qjs::ai_task::queue_ai_input(entry) {
         print_shell_line(io, "ai: ai-task not running");
-        return;
+        return SubmitResult::Queued;
     }
 
     let msg = alloc::format!("ai: queued ({})", mode.label());
     print_shell_line(io, msg.as_str());
+    SubmitResult::Queued
 }

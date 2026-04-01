@@ -140,6 +140,17 @@ pub mod kfs {
     }
 
     #[inline]
+    pub fn json_all(max_entries: usize) -> Result<String> {
+        let disk = root_disk()?;
+        crate::wait::spawn_and_wait_local(async move {
+            match crate::r::fs::trueosfs::json_all_async(disk, max_entries).await? {
+                Some(v) => Ok(v),
+                None => Err(FsError::NoRoot),
+            }
+        })
+    }
+
+    #[inline]
     pub fn remove(path: &str) -> Result<()> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
@@ -756,6 +767,34 @@ pub mod cabi {
         match super::kfs::html_tree(limit) {
             Ok(html) => {
                 let bytes = html.as_bytes();
+                if out_ptr.is_null() || out_cap == 0 {
+                    return bytes.len() as isize;
+                }
+                if bytes.len() > out_cap {
+                    return FS_ERR_NO_SPACE as isize;
+                }
+                core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
+                bytes.len() as isize
+            }
+            Err(e) => fs_error_to_code(e) as isize,
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_trueosfs_json_all(
+        max_entries: u32,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize {
+        let limit = if max_entries == 0 {
+            100usize
+        } else {
+            core::cmp::min(max_entries as usize, 100usize)
+        };
+
+        match super::kfs::json_all(limit) {
+            Ok(json) => {
+                let bytes = json.as_bytes();
                 if out_ptr.is_null() || out_cap == 0 {
                     return bytes.len() as isize;
                 }

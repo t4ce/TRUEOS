@@ -1171,6 +1171,151 @@ pub async fn html_tree_async(
     })))
 }
 
+fn push_json_string_escaped(out: &mut String, value: &str) {
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c <= '\u{1f}' => {
+                let code = c as u32;
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                out.push_str("\\u00");
+                out.push(HEX[((code >> 4) & 0x0f) as usize] as char);
+                out.push(HEX[(code & 0x0f) as usize] as char);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// Async TRUEOSFS: return a compact broad-first JSON listing of the primary tree.
+///
+/// Returns `Ok(None)` if the disk does not contain TRUEOSFS.
+pub async fn json_all_async(
+    disk: block::DeviceHandle,
+    max_entries: usize,
+) -> Result<Option<String>, block::Error> {
+    use alloc::collections::{BTreeMap, BTreeSet};
+    use alloc::vec::Vec;
+
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    ensure_index_async(disk, &placement).await?;
+    let disk_id = disk.id();
+    let effective_limit = if max_entries == 0 {
+        100usize
+    } else {
+        core::cmp::min(max_entries, 100usize)
+    };
+
+    #[derive(Clone)]
+    struct JsonEntry {
+        depth: usize,
+        path: String,
+        kind: &'static str,
+        name: String,
+    }
+
+    let mut by_depth: BTreeMap<usize, Vec<JsonEntry>> = BTreeMap::new();
+    let mut seen: BTreeSet<Vec<u8>> = BTreeSet::new();
+
+    {
+        let roots = ROOTS.lock();
+        let Some(mount) = roots.iter().find(|m| m.disk_id == disk_id) else {
+            return Err(block::Error::NotReady);
+        };
+        let Some(index) = &mount.index else {
+            return Err(block::Error::Corrupted);
+        };
+
+        'scan: for key in index.keys() {
+            let Ok(path) = core::str::from_utf8(key.as_slice()) else {
+                continue;
+            };
+            if path.is_empty() {
+                continue;
+            }
+
+            let segments: Vec<&str> = path.split('/').filter(|seg| !seg.is_empty()).collect();
+            if segments.is_empty() {
+                continue;
+            }
+
+            for depth in 0..segments.len() {
+                let rel_path = segments[..=depth].join("/");
+                let rel_path_bytes = rel_path.as_bytes().to_vec();
+                if !seen.insert(rel_path_bytes) {
+                    continue;
+                }
+
+                by_depth.entry(depth).or_default().push(JsonEntry {
+                    depth,
+                    path: rel_path,
+                    name: String::from(segments[depth]),
+                    kind: if depth + 1 == segments.len() {
+                        "file"
+                    } else {
+                        "dir"
+                    },
+                });
+
+                let count = by_depth.values().map(|items| items.len()).sum::<usize>();
+                if count >= effective_limit {
+                    break 'scan;
+                }
+            }
+        }
+    }
+
+    let total = by_depth.values().map(|items| items.len()).sum::<usize>();
+    let truncated = total >= effective_limit;
+    let mut written = 0usize;
+    let mut out = String::new();
+    out.push_str("{\"version\":1,\"root\":\"/\",\"max_entries\":");
+    out.push_str(effective_limit.to_string().as_str());
+    out.push_str(",\"truncated\":");
+    out.push_str(if truncated { "true" } else { "false" });
+    out.push_str(",\"entries\":[");
+
+    let mut first = true;
+    'write: for entries in by_depth.values() {
+        for entry in entries.iter() {
+            if written >= effective_limit {
+                break 'write;
+            }
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            out.push('{');
+            out.push_str("\"path\":");
+            push_json_string_escaped(&mut out, entry.path.as_str());
+            out.push_str(",\"name\":");
+            push_json_string_escaped(&mut out, entry.name.as_str());
+            out.push_str(",\"kind\":");
+            push_json_string_escaped(&mut out, entry.kind);
+            out.push_str(",\"depth\":");
+            out.push_str(entry.depth.to_string().as_str());
+            out.push('}');
+            written += 1;
+        }
+    }
+
+    out.push_str("]}");
+    Ok(Some(out))
+}
+
 /// Async TRUEOSFS: append bytes by performing a full new write.
 pub async fn file_append_async(
     disk: block::DeviceHandle,

@@ -4,6 +4,7 @@ extern crate alloc;
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::ffi::{c_char, c_void};
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -45,6 +46,7 @@ unsafe impl RawMutex for SpinRawMutex {
 
 struct AiTaskJsContextOpaque {
     target_mask: u32,
+    next_conversation_id: Option<String>,
 }
 
 const AI_IMPORT_FILENAME: &[u8] = b"<ai-task-import>\0";
@@ -55,10 +57,15 @@ globalThis.__trueosAiTaskPromise = Promise.resolve(
   globalThis.importModule('/qjs/ai/ai_shell_normal.mjs'),
 )
   .then((entry) => {
-    if (!entry || typeof entry.runNormalPrompt !== 'function') {
-      throw new Error('ai_shell_normal.mjs does not export runNormalPrompt()');
+        if (!entry || typeof entry.runShellPrompt !== 'function') {
+            throw new Error('ai_shell_normal.mjs does not export runShellPrompt()');
     }
-    return entry.runNormalPrompt(String(globalThis.__trueosAiTaskPrompt || ''));
+        return entry.runShellPrompt({
+            prompt: String(globalThis.__trueosAiTaskPrompt || ''),
+            webSearch: Number(globalThis.__trueosAiTaskWebSearch || 0) > 0,
+            fileSearch: Number(globalThis.__trueosAiTaskFileSearch || 0) > 0,
+            conversationId: String(globalThis.__trueosAiTaskConversationId || ''),
+        });
   })
   .then(
     () => {
@@ -74,13 +81,19 @@ globalThis.__trueosAiTaskPromise = Promise.resolve(
 const AI_DONE_PROP: &[u8] = b"__trueosAiTaskDone\0";
 const AI_ERROR_PROP: &[u8] = b"__trueosAiTaskError\0";
 const AI_PROMPT_PROP: &[u8] = b"__trueosAiTaskPrompt\0";
+const AI_WEB_SEARCH_PROP: &[u8] = b"__trueosAiTaskWebSearch\0";
+const AI_FILE_SEARCH_PROP: &[u8] = b"__trueosAiTaskFileSearch\0";
+const AI_CONVERSATION_ID_PROP: &[u8] = b"__trueosAiTaskConversationId\0";
 const AI_PRINT_FN_PROP: &[u8] = b"__trueosAiPrintLine\0";
+const AI_SET_CONVERSATION_FN_PROP: &[u8] = b"__trueosAiSetConversationId\0";
+const AI_READ_PRIMARY_FS_TREE_FN_PROP: &[u8] = b"__trueosAiReadPrimaryFsTreeJsonAll\0";
 const AI_PROMPT_TIMEOUT_MS: u64 = 90_000;
-const AI_MODE_NOT_IMPLEMENTED: &str =
-    "ai: mode not implemented yet; use normal mode for now";
+const AI_MODE_NOT_IMPLEMENTED: &str = "ai: mode not implemented yet; use normal, web, file, or newchat";
+const AI_PRIMARY_FS_TREE_MAX_ENTRIES: u32 = 96;
 
 static AI_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static AI_TASK_QUEUE: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::new());
+static AI_TASK_CONVERSATIONS: Mutex<Vec<(u8, String)>> = Mutex::new(Vec::new());
 static AI_TASK_SIGNAL: Signal<SpinRawMutex, ()> = Signal::new();
 
 fn print_targeted_line(target_mask: u8, text: &str) {
@@ -100,7 +113,39 @@ fn print_targeted_multiline(target_mask: u8, text: &str) {
 }
 
 fn prompt_mode_supported(entry: &AiInputEntry) -> bool {
-    !entry.web_search && !entry.file_search && !entry.new_conversation && !entry.computer_use
+    !entry.computer_use
+}
+
+fn read_primary_fs_tree_json_all(max_entries: u32) -> Option<String> {
+    let bytes = v::vfs::trueosfs_json_all(max_entries).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+fn get_conversation_id(target_mask: u8) -> Option<String> {
+    AI_TASK_CONVERSATIONS
+        .lock()
+        .iter()
+        .find_map(|(mask, conversation_id)| (*mask == target_mask).then(|| conversation_id.clone()))
+}
+
+fn set_conversation_id(target_mask: u8, conversation_id: String) {
+    let mut state = AI_TASK_CONVERSATIONS.lock();
+    if let Some((_, current)) = state.iter_mut().find(|(mask, _)| *mask == target_mask) {
+        *current = conversation_id;
+        return;
+    }
+    state.push((target_mask, conversation_id));
+}
+
+fn clear_conversation_id(target_mask: u8) {
+    let mut state = AI_TASK_CONVERSATIONS.lock();
+    if let Some(index) = state.iter().position(|(mask, _)| *mask == target_mask) {
+        state.swap_remove(index);
+    }
+}
+
+pub fn forget_conversation(target_mask: u8) {
+    clear_conversation_id(target_mask);
 }
 
 unsafe extern "C" fn qjs_ai_print_line(
@@ -127,21 +172,76 @@ unsafe extern "C" fn qjs_ai_print_line(
     qjs::JS_NewFloat64(ctx, text.len() as f64)
 }
 
+unsafe extern "C" fn qjs_ai_set_conversation_id(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 1 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(conversation_id) = qjs::jsbind::to_string(ctx, args[0]) else {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    };
+
+    let opaque = qjs::JS_GetContextOpaque(ctx) as *mut AiTaskJsContextOpaque;
+    if opaque.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+
+    (*opaque).next_conversation_id = (!conversation_id.trim().is_empty()).then_some(conversation_id);
+    qjs::JS_NewFloat64(ctx, 1.0)
+}
+
+unsafe extern "C" fn qjs_ai_read_primary_fs_tree_json_all(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let mut max_entries = AI_PRIMARY_FS_TREE_MAX_ENTRIES;
+    if argc >= 1 && !argv.is_null() {
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut next = 0.0f64;
+        if qjs::JS_ToFloat64(ctx, &mut next as *mut f64, args[0]) == 0 {
+            let next = next as i32;
+            if next > 0 {
+                max_entries = next as u32;
+            }
+        }
+    }
+
+    let Some(json) = read_primary_fs_tree_json_all(max_entries) else {
+        return qjs::JSValue::undefined();
+    };
+
+    qjs::jsbind::new_string(ctx, json.as_bytes())
+}
+
 unsafe fn install_ai_globals(ctx: *mut qjs::JSContext) {
     if ctx.is_null() {
         return;
     }
 
     let global = qjs::JS_GetGlobalObject(ctx);
-    let print_fn = qjs::JS_NewCFunction2(
+    let _ = qjs::jsbind::install_fn(ctx, global, AI_PRINT_FN_PROP, 1, Some(qjs_ai_print_line));
+    let _ = qjs::jsbind::install_fn(
         ctx,
-        Some(qjs_ai_print_line),
-        AI_PRINT_FN_PROP.as_ptr() as *const c_char,
+        global,
+        AI_SET_CONVERSATION_FN_PROP,
         1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
+        Some(qjs_ai_set_conversation_id),
     );
-    let _ = qjs::JS_SetPropertyStr(ctx, global, AI_PRINT_FN_PROP.as_ptr() as *const c_char, print_fn);
+    let _ = qjs::jsbind::install_fn(
+        ctx,
+        global,
+        AI_READ_PRIMARY_FS_TREE_FN_PROP,
+        1,
+        Some(qjs_ai_read_primary_fs_tree_json_all),
+    );
     qjs::js_free_value(ctx, global);
 }
 
@@ -183,14 +283,34 @@ async unsafe fn run_prompt_in_vm(entry: &AiInputEntry) -> bool {
 
     let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
+    let existing_conversation_id = get_conversation_id(entry.shell_target_mask);
     let mut opaque = AiTaskJsContextOpaque {
         target_mask: entry.shell_target_mask as u32,
+        next_conversation_id: existing_conversation_id.clone(),
     };
     qjs::JS_SetContextOpaque(ctx, (&mut opaque as *mut AiTaskJsContextOpaque).cast::<c_void>());
     install_ai_globals(ctx);
 
     let global = qjs::JS_GetGlobalObject(ctx);
     let _ = qjs::jsbind::set_str_prop(ctx, global, AI_PROMPT_PROP, entry.text.as_str());
+    let _ = qjs::jsbind::set_prop(
+        ctx,
+        global,
+        AI_WEB_SEARCH_PROP,
+        qjs::JS_NewFloat64(ctx, if entry.web_search { 1.0 } else { 0.0 }),
+    );
+    let _ = qjs::jsbind::set_prop(
+        ctx,
+        global,
+        AI_FILE_SEARCH_PROP,
+        qjs::JS_NewFloat64(ctx, if entry.file_search { 1.0 } else { 0.0 }),
+    );
+    let _ = qjs::jsbind::set_str_prop(
+        ctx,
+        global,
+        AI_CONVERSATION_ID_PROP,
+        existing_conversation_id.as_deref().unwrap_or(""),
+    );
     qjs::js_free_value(ctx, global);
 
     let import = qjs::js_eval_bytes(
@@ -222,6 +342,11 @@ async unsafe fn run_prompt_in_vm(entry: &AiInputEntry) -> bool {
         let global = qjs::JS_GetGlobalObject(ctx);
         let done = read_f64_prop(ctx, global, AI_DONE_PROP).unwrap_or(0.0) as i32;
         if done > 0 {
+            if let Some(conversation_id) = opaque.next_conversation_id.take() {
+                set_conversation_id(entry.shell_target_mask, conversation_id);
+            } else {
+                clear_conversation_id(entry.shell_target_mask);
+            }
             qjs::js_free_value(ctx, global);
             let drained = qjs::vm::teardown_main_context(rt, ctx, 2_000).await;
             if !drained {
@@ -300,6 +425,10 @@ pub async fn run_once() {
             }
             AI_TASK_SIGNAL.wait().await;
         };
+
+        if next.new_conversation {
+            clear_conversation_id(next.shell_target_mask);
+        }
 
         if next.text.trim().is_empty() {
             print_targeted_line(next.shell_target_mask, "ai: empty prompt");
