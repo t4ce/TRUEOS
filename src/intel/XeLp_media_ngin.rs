@@ -13,8 +13,9 @@ use super::intel_igpu770::{
     Igpu770WarmState, build_execlist_context_descriptor_for_gpu_addr, build_ring_batch_start_words,
     cpu_framebuffer_media_status_card_center, cpu_framebuffer_visualize_bytes_center,
     cpu_framebuffer_visualize_nv12_center, dma_cache_flush_range, forcewake_all_acquire,
-    forcewake_media_refresh, ggtt_map_system_ram_range, init_gen12_video_context_image, mmio_read32,
-    mmio_write32, ring_ctl_value_for_size, warm_state,
+    forcewake_media_refresh, gen12_lrc_context_control_seed, ggtt_map_system_ram_range,
+    init_gen12_video_context_image, mmio_read32, mmio_write32, ring_ctl_value_for_size,
+    warm_state,
 };
 use super::xelp_media_mp4::{
     build_annex_b_access_unit, first_sample_nal_types, parse_h264_mp4_summary,
@@ -113,7 +114,7 @@ const MEDIA_HTTPS_DEMO_TIMEOUT_MS: u32 = 45_000;
 const MEDIA_HTTPS_DEMO_MAX_BYTES: usize = 2 * 1024 * 1024;
 const MEDIA_HTTPS_DEMO_VIS_W: usize = 128;
 const MEDIA_HTTPS_DEMO_VIS_H: usize = 72;
-const MEDIA_SUBMIT_POLL_LOG_STEP: usize = 256;
+const MEDIA_SUBMIT_POLL_LOG_STEP: usize = 10_000;
 
 const MEDIA_RESULT_SLOT_BYTES: u64 = 8;
 const MEDIA_RESULT_KICKOFF_SLOT: u64 = 0;
@@ -149,12 +150,7 @@ const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_NOOP: u32 = 0;
 
 const EL_CTRL_LOAD: u32 = 1 << 0;
-const CTX_CTRL_RS_CTX_ENABLE: u32 = 1 << 1;
-const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
-const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
-const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
-const STOP_RING: u32 = 1 << 8;
 const PSMI_SLEEP_MSG_DISABLE: u32 = 1 << 0;
 const BSD_SLEEP_INDICATOR: u32 = 1 << 3;
 const SW_CTX_ID_SHIFT: u32 = 37;
@@ -1431,6 +1427,52 @@ fn log_video_context_image(
     );
 }
 
+fn log_media_submission_words(
+    desc: MediaEngineDescriptor,
+    ring_virt: *mut u8,
+    ring_bytes: usize,
+    batch_virt: *mut u8,
+    batch_bytes: usize,
+) {
+    if ring_virt.is_null() || batch_virt.is_null() {
+        return;
+    }
+
+    let ring_dwords = unsafe {
+        core::slice::from_raw_parts(
+            ring_virt as *const u32,
+            (ring_bytes / core::mem::size_of::<u32>()).min(4),
+        )
+    };
+    let batch_dwords = unsafe {
+        core::slice::from_raw_parts(
+            batch_virt as *const u32,
+            (batch_bytes / core::mem::size_of::<u32>()).min(8),
+        )
+    };
+
+    crate::log!(
+        "intel/media-demo: ring-dwords engine={} d0=0x{:08X} d1=0x{:08X} d2=0x{:08X} d3=0x{:08X}\n",
+        desc.name,
+        ring_dwords.first().copied().unwrap_or(0),
+        ring_dwords.get(1).copied().unwrap_or(0),
+        ring_dwords.get(2).copied().unwrap_or(0),
+        ring_dwords.get(3).copied().unwrap_or(0)
+    );
+    crate::log!(
+        "intel/media-demo: batch-dwords engine={} d0=0x{:08X} d1=0x{:08X} d2=0x{:08X} d3=0x{:08X} d4=0x{:08X} d5=0x{:08X} d6=0x{:08X} d7=0x{:08X}\n",
+        desc.name,
+        batch_dwords.first().copied().unwrap_or(0),
+        batch_dwords.get(1).copied().unwrap_or(0),
+        batch_dwords.get(2).copied().unwrap_or(0),
+        batch_dwords.get(3).copied().unwrap_or(0),
+        batch_dwords.get(4).copied().unwrap_or(0),
+        batch_dwords.get(5).copied().unwrap_or(0),
+        batch_dwords.get(6).copied().unwrap_or(0),
+        batch_dwords.get(7).copied().unwrap_or(0)
+    );
+}
+
 fn build_kickoff_state(warm: Igpu770WarmState) -> MediaKickoffState {
     let topology = current_topology();
     let guc_ready = intel_guc::ready();
@@ -1655,11 +1697,6 @@ fn log_nal_summary(nal_types: &[u8]) {
 #[inline]
 fn masked_bit_enable(bit: u32) -> u32 {
     bit | (bit << 16)
-}
-
-#[inline]
-fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
-    set_bits | ((set_bits | clear_bits) << 16)
 }
 
 #[inline]
@@ -2206,34 +2243,34 @@ fn prepare_decode_bitstream_demo(
         ctx_desc_hi,
         media_sw_ctx_id(draft.engine)
     );
+    log_media_submission_words(
+        draft.engine,
+        backing.ring_virt,
+        backing.ring_bytes,
+        backing.batch_virt,
+        backing.batch_bytes,
+    );
 
     let _ = forcewake_all_acquire(warm);
     let _ = wake_media_engine_forcewake(warm, draft.engine, "media-bitstream-submit");
     let _ = forcewake_media_refresh(warm, "media-bitstream-submit");
     let _ = wake_media_ring_for_submit(warm, draft.engine, "media-bitstream-submit");
-    let _ = mmio_write32(warm, draft.engine.ring_base + RING_HWS_PGA, pphwsp_gpu);
-    let _ = mmio_read32(warm, draft.engine.ring_base + RING_HWS_PGA);
-    let _ = mmio_write32(warm, draft.engine.ring_base + RING_HWSTAM, !0u32);
-    let _ = mmio_read32(warm, draft.engine.ring_base + RING_HWSTAM);
     let _ = mmio_write32(
         warm,
         draft.engine.ring_base + RING_MODE_GEN7,
         masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE),
     );
-    let _ = mmio_write32(
-        warm,
-        draft.engine.ring_base + RING_MI_MODE,
-        masked_bits_update(0, STOP_RING),
+    crate::log!(
+        "intel/media-demo: vcs-submit lrc-seed engine={} pphwsp_gpu=0x{:08X} direct_ring_state_writes=0\n",
+        draft.engine.name,
+        pphwsp_gpu
     );
-    let _ = mmio_read32(warm, draft.engine.ring_base + RING_MI_MODE);
-    let ctx_ctl = masked_bits_update(
-        CTX_CTRL_RS_CTX_ENABLE,
-        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
-            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    let ctx_ctl_lrc_seed = gen12_lrc_context_control_seed();
+    crate::log!(
+        "intel/media-demo: vcs-submit ctx-ctl engine={} lrc_seed=0x{:08X} live_ctx_mmio=0\n",
+        draft.engine.name,
+        ctx_ctl_lrc_seed
     );
-    let _ = mmio_write32(warm, draft.engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl);
-    let _ = mmio_write32(warm, draft.engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     execlist_submit_port_push(warm, draft.engine, ctx_desc_lo, ctx_desc_hi, 0, 0);
     let _ = mmio_write32(warm, draft.engine.ring_base + RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
@@ -2305,7 +2342,10 @@ fn prepare_decode_bitstream_demo(
         read_result_dword(backing.result_virt, MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT);
     let frame_dims = read_result_dword(backing.result_virt, MEDIA_RESULT_FRAME_DIMS_SLOT);
     let output_surface = unsafe {
-        core::slice::from_raw_parts(backing.output_surface_virt as *const u8, backing.output_surface_bytes)
+        core::slice::from_raw_parts(
+            backing.output_surface_virt as *const u8,
+            backing.output_surface_bytes,
+        )
     };
     let output_pitch = align_up_u32(frame_width as u32, 64) as usize;
     let (present_ready, output_surface_signature, output_surface_nonzero_samples) =
