@@ -37,6 +37,7 @@ const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":
 const TOOL_JSON_EMAIL: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["send","set_from"],"description":"Choose whether to send a mail log entry or set the default from address."},"to":{"type":"string","description":"Recipient address when mode=send."},"mail_text":{"type":"string","description":"Mail body text when mode=send."},"from":{"type":"string","description":"Sender address when mode=set_from."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane","ecma"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_FILE: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"file action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_INTELDEV: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["session_state","mmio_read32","mmio_read64","mmio_write32","mmio_write64","mmio_read_block","wait_mmio_bits","engine_dump_state","gpu_buffer_read","gpu_buffer_write","submit_test_batch","poll_engine_once","snapshot_diff","ring_decode","context_image_decode","batch_disasm","batch_annotate","fault_status_decode","guc_state_view","huc_state_view","media_state_view"],"description":"Structured Intel device action."},"scope":{"type":"string","enum":["render","blitter","media","guc","ring","context","batch","result","guc_fw","guc_ads","framebuffer","media.ring","media.context","media.batch","media.result","media.bitstream","media.output"],"description":"Explicit hardware or buffer scope."},"engine":{"type":"string","enum":["render","blitter","media","media.vcs0","media.vcs1","media.vecs0","media.vecs1","guc"],"description":"Engine target for state, decode, and polling actions."},"addr":{"type":"string","description":"MMIO byte offset in hex or decimal."},"value":{"type":"string","description":"Value to write or optional width selector in hex or decimal."},"mask":{"type":"string","description":"Bit mask in hex or decimal."},"expected":{"type":"string","description":"Expected masked value in hex or decimal."},"count":{"type":"integer","minimum":1,"maximum":256,"description":"Number of MMIO words to read."},"len":{"type":"integer","minimum":1,"maximum":4096,"description":"Byte length for buffer reads, disassembly windows, or snapshots."},"offset":{"type":"integer","minimum":0,"description":"Byte offset inside the selected buffer."},"timeout_iters":{"type":"integer","minimum":1,"maximum":1000000,"description":"Polling budget for wait_mmio_bits."},"data_hex":{"type":"string","description":"Even-length hex payload for gpu_buffer_write, without separators."},"guard":{"type":"string","enum":["write-ok"],"description":"Required for write actions."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_PROBE: &str = r#"{"type":"object","properties":{"domain":{"type":"string","enum":["usb","nvme"],"description":"Probe domain."},"action":{"type":"string","enum":["status","kick","rebind","probe","flr"],"description":"Action inside the selected domain."},"controller":{"type":"integer","minimum":0,"description":"Optional controller index for usb kick/rebind."},"pci":{"type":"string","description":"PCI BDF like 00:1f.0 for nvme flr."}},"required":["domain","action"],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
@@ -62,6 +63,11 @@ fn dispatch_email(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pa
 fn dispatch_hv(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::hv::try_parse(spawner, io, &mut args)
+}
+
+fn dispatch_inteldev(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    super::cmds::inteldev::try_parse(io, &mut args)
 }
 
 fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -191,6 +197,16 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
+        name: "inteldev",
+        mode: "cmd",
+        color: Some((120, 210, 255)),
+        handler: dispatch_inteldev,
+        tool_description: Some(
+            "Structured Intel iGPU debug and bring-up tools with JSON-only results.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_INTELDEV),
+    },
+    BuiltinShell2CmdEntry {
         name: "install",
         mode: "cmd",
         color: Some((255, 55, 255)),
@@ -203,7 +219,9 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         mode: "cmd",
         color: None,
         handler: dispatch_net,
-        tool_description: Some("Inspect network state, run ICMP, use IRC, or get/set the hostname."),
+        tool_description: Some(
+            "Inspect network state, run ICMP, use IRC, or get/set the hostname.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_NET),
     },
     BuiltinShell2CmdEntry {
