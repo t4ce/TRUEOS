@@ -1,11 +1,16 @@
+extern crate alloc;
+
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use alloc::format;
 use spin::Mutex;
 
 use super::intel_guc;
 use super::intel_igpu770::{
-    Igpu770WarmState, forcewake_all_acquire, forcewake_media_refresh, mmio_read32, warm_state,
+    Igpu770WarmState, cpu_framebuffer_visualize_bytes_center, forcewake_all_acquire,
+    forcewake_media_refresh, mmio_read32, warm_state,
 };
+use super::xelp_media_mp4::{first_sample_nal_types, parse_h264_mp4_summary};
 
 const MAX_MEDIA_ENGINES: usize = 4;
 const MAX_MEDIA_API_ROUTES: usize = 5;
@@ -58,6 +63,12 @@ const MEDIA_DEFAULT_SCRATCH_BYTES: usize = 64 * 1024;
 const MEDIA_DEFAULT_RESULT_BYTES: usize = 4 * 4096;
 const MEDIA_DEFAULT_WATCHDOG_ITERS: usize = 100_000;
 const MEDIA_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
+const MEDIA_HTTPS_DEMO_URL: &str =
+    "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_1MB.mp4";
+const MEDIA_HTTPS_DEMO_TIMEOUT_MS: u32 = 45_000;
+const MEDIA_HTTPS_DEMO_MAX_BYTES: usize = 2 * 1024 * 1024;
+const MEDIA_HTTPS_DEMO_VIS_W: usize = 128;
+const MEDIA_HTTPS_DEMO_VIS_H: usize = 72;
 
 const MEDIA_RESULT_SLOT_BYTES: u64 = 8;
 const MEDIA_RESULT_KICKOFF_SLOT: u64 = 0;
@@ -88,6 +99,8 @@ const MEDIA_OBSERVE_REG_OFFSETS: [usize; MAX_MEDIA_OBSERVE_REGS] = [
     RING_EXECLIST_STATUS_LO,
     RING_EXECLIST_STATUS_HI,
 ];
+
+static MEDIA_HTTPS_DEMO_RAN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MediaEngineClass {
@@ -1130,5 +1143,119 @@ pub(crate) fn kickoff_once() {
     }
     if let Some(draft) = draft_job_for_workload(MediaWorkloadKind::EnhanceFrame) {
         log_job_draft("draft-enhance", draft);
+    }
+}
+
+fn find_fourcc(bytes: &[u8], tag: &[u8; 4]) -> Option<usize> {
+    bytes.windows(4).position(|window| window == tag)
+}
+
+fn log_nal_summary(nal_types: &[u8]) {
+    let mut idx = 0usize;
+    while idx < nal_types.len() {
+        crate::log!("intel/media-demo: first-sample nal[{}]=0x{:02X}\n", idx, nal_types[idx]);
+        idx += 1;
+    }
+}
+
+pub(crate) async fn run_https_media_demo_once_async() {
+    if MEDIA_HTTPS_DEMO_RAN.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    crate::log!(
+        "intel/media-demo: begin url={} timeout_ms={} max_bytes={}\n",
+        MEDIA_HTTPS_DEMO_URL,
+        MEDIA_HTTPS_DEMO_TIMEOUT_MS,
+        MEDIA_HTTPS_DEMO_MAX_BYTES
+    );
+
+    let body = match crate::r::net::https::fetch_https_body_async(
+        MEDIA_HTTPS_DEMO_URL,
+        MEDIA_HTTPS_DEMO_TIMEOUT_MS,
+        MEDIA_HTTPS_DEMO_MAX_BYTES,
+    )
+    .await
+    {
+        Ok(body) => body,
+        Err(err) => {
+            let msg = format!("media-demo-fetch-error:{:?}", err);
+            crate::log!("intel/media-demo: fetch failed err={:?}\n", err);
+            cpu_framebuffer_visualize_bytes_center(
+                "media-demo-fetch-error",
+                msg.as_bytes(),
+                MEDIA_HTTPS_DEMO_VIS_W,
+                MEDIA_HTTPS_DEMO_VIS_H,
+            );
+            return;
+        }
+    };
+
+    let has_ftyp = find_fourcc(&body, b"ftyp");
+    let has_moov = find_fourcc(&body, b"moov");
+    let has_mdat = find_fourcc(&body, b"mdat");
+    let first_box_size = body
+        .get(0..4)
+        .map(|bytes| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        .unwrap_or(0);
+
+    crate::log!(
+        "intel/media-demo: fetched bytes={} mp4_ftyp={} mp4_moov={} mp4_mdat={} first_box_size=0x{:08X}\n",
+        body.len(),
+        has_ftyp.is_some() as u8,
+        has_moov.is_some() as u8,
+        has_mdat.is_some() as u8,
+        first_box_size
+    );
+    crate::log!(
+        "intel/media-demo: forged-ingress stage=fetch->stage->visualize decode_ready={} decode_impl={}\n",
+        (has_ftyp.is_some() && has_mdat.is_some()) as u8,
+        0
+    );
+
+    match parse_h264_mp4_summary(body.as_slice()) {
+        Ok(summary) => {
+            let nal_types =
+                first_sample_nal_types(summary.first_sample, summary.avcc.nal_length_size, 4);
+            crate::log!(
+                "intel/media-demo: h264 track=1 dims={}x{} timescale={} duration={} samples={} first_chunk=0x{:X} first_sample={} nal_len={} sps={} pps={} profile=0x{:02X} level=0x{:02X}\n",
+                summary.width,
+                summary.height,
+                summary.timescale,
+                summary.duration,
+                summary.sample_count,
+                summary.first_chunk_offset,
+                summary.first_sample_size,
+                summary.avcc.nal_length_size,
+                summary.avcc.sps.len(),
+                summary.avcc.pps.len(),
+                summary.avcc.profile_idc,
+                summary.avcc.level_idc
+            );
+            log_nal_summary(&nal_types);
+            crate::log!(
+                "intel/media-demo: forged-ingress stage=fetch->parse->sample-vis decode_ready={} decode_impl={}\n",
+                1,
+                0
+            );
+            cpu_framebuffer_visualize_bytes_center(
+                "media-demo-h264-sample0",
+                summary.first_sample,
+                MEDIA_HTTPS_DEMO_VIS_W,
+                MEDIA_HTTPS_DEMO_VIS_H,
+            );
+        }
+        Err(err) => {
+            crate::log!(
+                "intel/media-demo: h264 parse failed err={:?} fallback=whole-file-vis\n",
+                err
+            );
+            cpu_framebuffer_visualize_bytes_center(
+                "media-demo-mp4-bytes",
+                body.as_slice(),
+                MEDIA_HTTPS_DEMO_VIS_W,
+                MEDIA_HTTPS_DEMO_VIS_H,
+            );
+        }
     }
 }

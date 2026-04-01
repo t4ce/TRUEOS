@@ -100,7 +100,6 @@ pub(crate) mod blt {
     pub const WRITE_RGBA: u32 = WRITE_RGB | WRITE_A;
     pub const DEPTH_32: u32 = 3 << 24;
     pub const ROP_COLOR_COPY: u32 = 0xF0 << 16;
-    pub const MOCS_UC: u32 = 1 << 21;
 
     #[inline]
     pub const fn xy_color_blt_len(total_dwords: u32) -> u32 {
@@ -395,8 +394,7 @@ pub(crate) fn build_color_fill_smoke_batch_bytes(
     );
 
     batch_dwords[i] = blt::XY_COLOR_BLT | blt::WRITE_RGBA | blt::xy_color_blt_len(7);
-    batch_dwords[i + 1] =
-        blt::TILE_LINEAR | blt::MOCS_UC | blt::DEPTH_32 | blt::ROP_COLOR_COPY | plan.pitch_bytes;
+    batch_dwords[i + 1] = blt::TILE_LINEAR | blt::DEPTH_32 | blt::ROP_COLOR_COPY | plan.pitch_bytes;
     batch_dwords[i + 2] = (plan.dst_y << 16) | plan.dst_x;
     batch_dwords[i + 3] =
         ((plan.dst_y.saturating_add(plan.rect_h)) << 16) | plan.dst_x.saturating_add(plan.rect_w);
