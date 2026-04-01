@@ -1,14 +1,19 @@
 extern crate alloc;
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::{
+    ptr,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use alloc::format;
 use spin::Mutex;
 
 use super::intel_guc;
 use super::intel_igpu770::{
-    Igpu770WarmState, cpu_framebuffer_visualize_bytes_center, forcewake_all_acquire,
-    forcewake_media_refresh, mmio_read32, warm_state,
+    Igpu770WarmState, build_execlist_context_descriptor_for_gpu_addr, build_ring_batch_start_words,
+    cpu_framebuffer_media_status_card_center, dma_cache_flush_range, forcewake_all_acquire,
+    forcewake_media_refresh, ggtt_map_system_ram_range, init_gen12_video_context_image,
+    mmio_read32, mmio_write32, ring_ctl_value_for_size, warm_state,
 };
 use super::xelp_media_mp4::{
     build_annex_b_access_unit, first_sample_nal_types, parse_h264_mp4_summary,
@@ -20,13 +25,21 @@ const MAX_MEDIA_RESULT_SLOTS: usize = 4;
 const MAX_MEDIA_OBSERVE_REGS: usize = 10;
 
 const FORCEWAKE_MEDIA_GEN11: usize = 0x0A184;
+const FORCEWAKE_MEDIA_VDBOX0: usize = 0x0A540;
+const FORCEWAKE_MEDIA_VDBOX1: usize = 0x0A544;
+const FORCEWAKE_MEDIA_VDBOX2: usize = 0x0A548;
+const FORCEWAKE_MEDIA_VDBOX3: usize = 0x0A54C;
+const FORCEWAKE_MEDIA_VEBOX0: usize = 0x0A560;
+const FORCEWAKE_MEDIA_VEBOX1: usize = 0x0A564;
+const FORCEWAKE_MEDIA_VEBOX2: usize = 0x0A568;
+const FORCEWAKE_MEDIA_VEBOX3: usize = 0x0A56C;
 const FORCEWAKE_ACK_MEDIA: usize = 0x0D88;
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
 
-const FORCEWAKE_ACK_VDBOX4: usize = 0x0D60;
-const FORCEWAKE_ACK_VDBOX5: usize = 0x0D64;
-const FORCEWAKE_ACK_VDBOX6: usize = 0x0D68;
-const FORCEWAKE_ACK_VDBOX7: usize = 0x0D6C;
+const FORCEWAKE_ACK_VDBOX0: usize = 0x0D50;
+const FORCEWAKE_ACK_VDBOX1: usize = 0x0D54;
+const FORCEWAKE_ACK_VDBOX2: usize = 0x0D58;
+const FORCEWAKE_ACK_VDBOX3: usize = 0x0D5C;
 const FORCEWAKE_ACK_VEBOX0: usize = 0x0D70;
 const FORCEWAKE_ACK_VEBOX1: usize = 0x0D74;
 const FORCEWAKE_ACK_VEBOX2: usize = 0x0D78;
@@ -41,48 +54,131 @@ const RING_TAIL: usize = 0x30;
 const RING_HEAD: usize = 0x34;
 const RING_START: usize = 0x38;
 const RING_CTL: usize = 0x3C;
+const RING_PSMI_CTL: usize = 0x50;
 const RING_ACTHD: usize = 0x74;
+const RING_HWS_PGA: usize = 0x80;
+const RING_HWSTAM: usize = 0x98;
 const RING_MI_MODE: usize = 0x9C;
+const RING_IMR: usize = 0xA8;
+const RING_EIR: usize = 0xB0;
+const RING_EMR: usize = 0xB4;
 const RING_IPEIR: usize = 0x64;
 const RING_IPEHR: usize = 0x68;
 const RING_INSTDONE: usize = 0x6C;
 const RING_INSTPS: usize = 0x70;
 const RING_CONTEXT_CONTROL: usize = 0x244;
+const RING_CONTEXT_CONTROL_REF: usize = 0x5A0;
 const RING_MODE_GEN7: usize = 0x29C;
+const RING_RNCID: usize = 0x198;
 const RING_EXECLIST_STATUS_LO: usize = 0x234;
 const RING_EXECLIST_STATUS_HI: usize = 0x238;
 const RING_EXECLIST_CONTROL: usize = 0x550;
+const RING_EXECLIST_SQ_LO: usize = 0x510;
+const RING_EXECLIST_SQ_HI: usize = 0x514;
+const RING_BBADDR: usize = 0x140;
+const RING_BBADDR_UDW: usize = 0x168;
+
+const MSG_IDLE_VCS0: usize = 0x8004;
+const MSG_IDLE_VCS1: usize = 0x8008;
+const MSG_IDLE_VECS0: usize = 0x8010;
+const MSG_IDLE_VECS1: usize = 0x80D8;
+const GEN8_RING_FAULT_REG_VCS: usize = 0x4194;
+const GEN8_RING_FAULT_REG_VECS: usize = 0x4394;
+const GEN12_FAULT_TLB_DATA0: usize = 0xCEB8;
+const GEN12_FAULT_TLB_DATA1: usize = 0xCEBC;
+const GEN12_RING_FAULT_REG: usize = 0xCEC4;
+const GDRST: usize = 0x941C;
 
 const MEDIA_SHARED_STATUS_GPU_ADDR: u64 = 0x0110_0000;
 const MEDIA_SHARED_STATUS_BYTES: usize = 0x1000;
 const MEDIA_ENGINE_GPU_ADDR_BASE: u64 = 0x0120_0000;
-const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0020_0000;
+const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0040_0000;
 
 const MEDIA_DEFAULT_RING_BYTES: usize = 16 * 1024;
 const MEDIA_DEFAULT_CONTEXT_BYTES: usize = 22 * 4096;
 const MEDIA_DEFAULT_BATCH_BYTES: usize = 32 * 1024;
 const MEDIA_DEFAULT_SCRATCH_BYTES: usize = 64 * 1024;
+const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 256 * 1024;
+const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 4 * 1024 * 1024;
 const MEDIA_DEFAULT_RESULT_BYTES: usize = 4 * 4096;
 const MEDIA_DEFAULT_WATCHDOG_ITERS: usize = 100_000;
 const MEDIA_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
+const MEDIA_EXECLIST_TRANSPORT_WIRED: bool = true;
+const MEDIA_GUC_TRANSPORT_WIRED: bool = false;
 const MEDIA_HTTPS_DEMO_URL: &str =
     "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_1MB.mp4";
 const MEDIA_HTTPS_DEMO_TIMEOUT_MS: u32 = 45_000;
 const MEDIA_HTTPS_DEMO_MAX_BYTES: usize = 2 * 1024 * 1024;
 const MEDIA_HTTPS_DEMO_VIS_W: usize = 128;
 const MEDIA_HTTPS_DEMO_VIS_H: usize = 72;
+const MEDIA_SUBMIT_POLL_LOG_STEP: usize = 256;
 
 const MEDIA_RESULT_SLOT_BYTES: u64 = 8;
 const MEDIA_RESULT_KICKOFF_SLOT: u64 = 0;
 const MEDIA_RESULT_PRESUBMIT_SLOT: u64 = MEDIA_RESULT_KICKOFF_SLOT + MEDIA_RESULT_SLOT_BYTES;
 const MEDIA_RESULT_POSTSUBMIT_SLOT: u64 = MEDIA_RESULT_PRESUBMIT_SLOT + MEDIA_RESULT_SLOT_BYTES;
 const MEDIA_RESULT_COMPLETE_SLOT: u64 = MEDIA_RESULT_POSTSUBMIT_SLOT + MEDIA_RESULT_SLOT_BYTES;
+const MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT: u64 =
+    MEDIA_RESULT_COMPLETE_SLOT + MEDIA_RESULT_SLOT_BYTES;
+const MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT: u64 =
+    MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT + MEDIA_RESULT_SLOT_BYTES;
+const MEDIA_RESULT_BITSTREAM_BYTES_SLOT: u64 =
+    MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT + MEDIA_RESULT_SLOT_BYTES;
+const MEDIA_RESULT_SAMPLE_NALS_SLOT: u64 =
+    MEDIA_RESULT_BITSTREAM_BYTES_SLOT + MEDIA_RESULT_SLOT_BYTES;
+const MEDIA_RESULT_STAGE_FLAGS_SLOT: u64 = MEDIA_RESULT_SAMPLE_NALS_SLOT + MEDIA_RESULT_SLOT_BYTES;
+const MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT: u64 =
+    MEDIA_RESULT_STAGE_FLAGS_SLOT + MEDIA_RESULT_SLOT_BYTES;
+const MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT: u64 =
+    MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT + MEDIA_RESULT_SLOT_BYTES;
+const MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT: u64 =
+    MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT + MEDIA_RESULT_SLOT_BYTES;
+const MEDIA_RESULT_FRAME_DIMS_SLOT: u64 =
+    MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT + MEDIA_RESULT_SLOT_BYTES;
+
+const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
+const MI_USE_GGTT: u32 = 1 << 22;
+const MI_STORE_DWORD_IMM_GEN4_LEN_DW4: u32 = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT | (4 - 2);
+const MI_FLUSH_DW: u32 = (0x26 << 23) | 1;
+const MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE: u32 = 1 << 16;
+const MI_FLUSH_DW_USE_GTT: u32 = 1 << 2;
+const MI_ARB_CHECK: u32 = 0x0280_0000;
+const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
+const MI_NOOP: u32 = 0;
+
+const EL_CTRL_LOAD: u32 = 1 << 0;
+const CTX_CTRL_RS_CTX_ENABLE: u32 = 1 << 1;
+const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
+const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
+const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
+const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
+const PSMI_SLEEP_MSG_DISABLE: u32 = 1 << 0;
+const BSD_SLEEP_INDICATOR: u32 = 1 << 3;
+const SW_CTX_ID_SHIFT: u32 = 37;
+
+const MEDIA_PIPELINE_MFX: u32 = 2;
+const MEDIA_CMD_OPCODE_MFX_COMMON: u32 = 0;
+const MEDIA_CMD_OPCODE_MFX_AVC: u32 = 1;
+const MFX_PIPE_MODE_SELECT: u32 = 0;
+const MFX_SURFACE_STATE: u32 = 1;
+const MFX_PIPE_BUF_ADDR_STATE: u32 = 2;
+const MFX_IND_OBJ_BASE_ADDR_STATE: u32 = 3;
+const MFX_BSP_BUF_BASE_ADDR_STATE: u32 = 4;
+const MFX_AVC_IMG_STATE: u32 = 0;
+const MFD_AVC_BSD_OBJECT: u32 = 8;
+const MFX_CMD_LEN_PIPE_MODE_SELECT: u32 = 3;
+const MFX_CMD_LEN_SURFACE_STATE: u32 = 4;
+const MFX_CMD_LEN_PIPE_BUF_ADDR_STATE: u32 = 63;
+const MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE: u32 = 24;
+const MFX_CMD_LEN_BSP_BUF_BASE_ADDR_STATE: u32 = 8;
+const MFX_CMD_LEN_AVC_IMG_STATE: u32 = 19;
+const MFX_CMD_LEN_AVC_BSD_OBJECT: u32 = 5;
 
 const MEDIA_SLICE_ACK_REGS: [(&str, usize); 8] = [
-    ("vdbox4", FORCEWAKE_ACK_VDBOX4),
-    ("vdbox5", FORCEWAKE_ACK_VDBOX5),
-    ("vdbox6", FORCEWAKE_ACK_VDBOX6),
-    ("vdbox7", FORCEWAKE_ACK_VDBOX7),
+    ("vdbox0", FORCEWAKE_ACK_VDBOX0),
+    ("vdbox1", FORCEWAKE_ACK_VDBOX1),
+    ("vdbox2", FORCEWAKE_ACK_VDBOX2),
+    ("vdbox3", FORCEWAKE_ACK_VDBOX3),
     ("vebox0", FORCEWAKE_ACK_VEBOX0),
     ("vebox1", FORCEWAKE_ACK_VEBOX1),
     ("vebox2", FORCEWAKE_ACK_VEBOX2),
@@ -290,6 +386,8 @@ pub(crate) struct MediaGpuWindowLayout {
     pub context_gpu_addr: u64,
     pub batch_gpu_addr: u64,
     pub scratch_gpu_addr: u64,
+    pub bitstream_gpu_addr: u64,
+    pub output_surface_gpu_addr: u64,
     pub result_gpu_addr: u64,
 }
 
@@ -301,6 +399,8 @@ pub(crate) struct MediaResourcePlan {
     pub context_bytes: usize,
     pub batch_bytes: usize,
     pub scratch_bytes: usize,
+    pub bitstream_bytes: usize,
+    pub output_surface_bytes: usize,
     pub result_bytes: usize,
     pub windows: MediaGpuWindowLayout,
 }
@@ -380,12 +480,16 @@ impl MediaEnginePlan {
                 context_bytes: 0,
                 batch_bytes: 0,
                 scratch_bytes: 0,
+                bitstream_bytes: 0,
+                output_surface_bytes: 0,
                 result_bytes: 0,
                 windows: MediaGpuWindowLayout {
                     ring_gpu_addr: 0,
                     context_gpu_addr: 0,
                     batch_gpu_addr: 0,
                     scratch_gpu_addr: 0,
+                    bitstream_gpu_addr: 0,
+                    output_surface_gpu_addr: 0,
                     result_gpu_addr: 0,
                 },
             },
@@ -567,6 +671,7 @@ pub(crate) struct MediaKickoffState {
     pub guc_ready: bool,
     pub guc_status: u32,
     pub stage: MediaKickoffStage,
+    pub decode_bitstream_demo: Option<MediaBitstreamDemoState>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -576,11 +681,59 @@ pub(crate) struct MediaJobDraft {
     pub context: MediaContextPlan,
     pub batch: MediaBatchTemplate,
     pub submission: MediaSubmissionPlan,
+    pub observability: MediaObservabilityPlan,
     pub next_stage: MediaKickoffStage,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct MediaBitstreamDemoState {
+    pub ready: bool,
+    pub engine_name: &'static str,
+    pub ring_gpu_addr: u64,
+    pub context_gpu_addr: u64,
+    pub batch_gpu_addr: u64,
+    pub result_gpu_addr: u64,
+    pub bitstream_gpu_addr: u64,
+    pub output_surface_gpu_addr: u64,
+    pub bitstream_phys: u64,
+    pub output_surface_phys: u64,
+    pub bitstream_bytes: usize,
+    pub output_surface_bytes: usize,
+    pub sample_nal_count: usize,
+    pub has_idr: bool,
+    pub kickoff_marker: u32,
+    pub complete_marker: u32,
+    pub submit_completed: bool,
+    pub submit_iters: usize,
+}
+
+struct MediaBitstreamBacking {
+    ring_phys: u64,
+    ring_virt: *mut u8,
+    ring_bytes: usize,
+    context_phys: u64,
+    context_virt: *mut u8,
+    context_bytes: usize,
+    batch_phys: u64,
+    batch_virt: *mut u8,
+    batch_bytes: usize,
+    result_phys: u64,
+    result_virt: *mut u8,
+    result_bytes: usize,
+    bitstream_phys: u64,
+    bitstream_virt: *mut u8,
+    bitstream_bytes: usize,
+    output_surface_phys: u64,
+    output_surface_virt: *mut u8,
+    output_surface_bytes: usize,
+}
+
+unsafe impl Send for MediaBitstreamBacking {}
+unsafe impl Sync for MediaBitstreamBacking {}
+
 static MEDIA_KICKOFF_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_KICKOFF_STATE: Mutex<Option<MediaKickoffState>> = Mutex::new(None);
+static MEDIA_BITSTREAM_BACKING: Mutex<Option<MediaBitstreamBacking>> = Mutex::new(None);
 
 #[inline]
 const fn media_completion_slot_addr(base: u64, slot_off: u64) -> u64 {
@@ -589,16 +742,19 @@ const fn media_completion_slot_addr(base: u64, slot_off: u64) -> u64 {
 
 #[inline]
 const fn preferred_transport(guc_ready: bool) -> MediaSubmissionTransport {
-    if guc_ready {
+    if MEDIA_GUC_TRANSPORT_WIRED && guc_ready {
         MediaSubmissionTransport::GuC
-    } else {
+    } else if MEDIA_EXECLIST_TRANSPORT_WIRED {
         MediaSubmissionTransport::Execlists
+    } else {
+        MediaSubmissionTransport::Disabled
     }
 }
 
 #[inline]
 fn media_command_encoding_ready(guc_ready: bool, wake: MediaForcewakeSnapshot) -> bool {
-    guc_ready && (((wake.global_ack & FORCEWAKE_KERNEL) != 0) || wake.awake_count != 0)
+    let wake_ready = ((wake.global_ack & FORCEWAKE_KERNEL) != 0) || wake.awake_count != 0;
+    wake_ready && ((MEDIA_EXECLIST_TRANSPORT_WIRED) || (MEDIA_GUC_TRANSPORT_WIRED && guc_ready))
 }
 
 fn stored_kickoff_state() -> Option<MediaKickoffState> {
@@ -733,7 +889,9 @@ fn engine_window(slot: usize) -> MediaGpuWindowLayout {
         context_gpu_addr: base + 0x0001_0000,
         batch_gpu_addr: base + 0x0008_0000,
         scratch_gpu_addr: base + 0x0010_0000,
-        result_gpu_addr: base + 0x0018_0000,
+        bitstream_gpu_addr: base + 0x0014_0000,
+        output_surface_gpu_addr: base + 0x0020_0000,
+        result_gpu_addr: base + 0x0030_0000,
     }
 }
 
@@ -804,6 +962,8 @@ fn build_engine_plan(
         context_bytes: MEDIA_DEFAULT_CONTEXT_BYTES,
         batch_bytes: MEDIA_DEFAULT_BATCH_BYTES,
         scratch_bytes: MEDIA_DEFAULT_SCRATCH_BYTES,
+        bitstream_bytes: MEDIA_DEFAULT_BITSTREAM_BYTES,
+        output_surface_bytes: MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES,
         result_bytes: MEDIA_DEFAULT_RESULT_BYTES,
         windows: engine_window(slot),
     };
@@ -945,6 +1105,307 @@ fn snapshot_engine_runtime(
     }
 }
 
+#[inline]
+fn media_msg_idle_reg(desc: MediaEngineDescriptor) -> Option<usize> {
+    match (desc.id.class, desc.id.instance) {
+        (MediaEngineClass::VideoDecode, 0) => Some(MSG_IDLE_VCS0),
+        (MediaEngineClass::VideoDecode, 1) => Some(MSG_IDLE_VCS1),
+        (MediaEngineClass::VideoEnhancement, 0) => Some(MSG_IDLE_VECS0),
+        (MediaEngineClass::VideoEnhancement, 1) => Some(MSG_IDLE_VECS1),
+        _ => None,
+    }
+}
+
+#[inline]
+fn media_legacy_ring_fault_reg(desc: MediaEngineDescriptor) -> usize {
+    match desc.id.class {
+        MediaEngineClass::VideoDecode => GEN8_RING_FAULT_REG_VCS,
+        MediaEngineClass::VideoEnhancement => GEN8_RING_FAULT_REG_VECS,
+    }
+}
+
+#[inline]
+fn media_forcewake_regs(desc: MediaEngineDescriptor) -> Option<(&'static str, usize, usize)> {
+    match (desc.id.class, desc.id.instance) {
+        (MediaEngineClass::VideoDecode, 0) => {
+            Some(("vdbox0", FORCEWAKE_MEDIA_VDBOX0, FORCEWAKE_ACK_VDBOX0))
+        }
+        (MediaEngineClass::VideoDecode, 1) => {
+            Some(("vdbox1", FORCEWAKE_MEDIA_VDBOX1, FORCEWAKE_ACK_VDBOX1))
+        }
+        (MediaEngineClass::VideoDecode, 2) => {
+            Some(("vdbox2", FORCEWAKE_MEDIA_VDBOX2, FORCEWAKE_ACK_VDBOX2))
+        }
+        (MediaEngineClass::VideoDecode, 3) => {
+            Some(("vdbox3", FORCEWAKE_MEDIA_VDBOX3, FORCEWAKE_ACK_VDBOX3))
+        }
+        (MediaEngineClass::VideoEnhancement, 0) => {
+            Some(("vebox0", FORCEWAKE_MEDIA_VEBOX0, FORCEWAKE_ACK_VEBOX0))
+        }
+        (MediaEngineClass::VideoEnhancement, 1) => {
+            Some(("vebox1", FORCEWAKE_MEDIA_VEBOX1, FORCEWAKE_ACK_VEBOX1))
+        }
+        (MediaEngineClass::VideoEnhancement, 2) => {
+            Some(("vebox2", FORCEWAKE_MEDIA_VEBOX2, FORCEWAKE_ACK_VEBOX2))
+        }
+        (MediaEngineClass::VideoEnhancement, 3) => {
+            Some(("vebox3", FORCEWAKE_MEDIA_VEBOX3, FORCEWAKE_ACK_VEBOX3))
+        }
+        _ => None,
+    }
+}
+
+fn wake_media_engine_forcewake(
+    warm: Igpu770WarmState,
+    desc: MediaEngineDescriptor,
+    label: &str,
+) -> bool {
+    let Some((domain, req_reg, ack_reg)) = media_forcewake_regs(desc) else {
+        crate::log!(
+            "intel/media-demo: engine-forcewake label={} engine={} domain=unmapped\n",
+            label,
+            desc.name
+        );
+        return false;
+    };
+
+    let _ = mmio_write32(warm, req_reg, masked_bit_enable(FORCEWAKE_KERNEL));
+
+    let mut req = mmio_read32(warm, req_reg);
+    let mut req_iters = 0usize;
+    while req_iters < MEDIA_DEFAULT_WATCHDOG_ITERS / 10 {
+        if (req & FORCEWAKE_KERNEL) != 0 {
+            break;
+        }
+        core::hint::spin_loop();
+        req_iters += 1;
+        req = mmio_read32(warm, req_reg);
+    }
+
+    let mut ack = mmio_read32(warm, ack_reg);
+    let mut ack_iters = 0usize;
+    while ack_iters < MEDIA_DEFAULT_WATCHDOG_ITERS / 10 {
+        if (ack & FORCEWAKE_KERNEL) != 0 {
+            break;
+        }
+        core::hint::spin_loop();
+        ack_iters += 1;
+        ack = mmio_read32(warm, ack_reg);
+    }
+
+    crate::log!(
+        "intel/media-demo: engine-forcewake label={} engine={} domain={} req=0x{:08X} ack=0x{:08X} req_latched={} acked={} req_iters={} ack_iters={}\n",
+        label,
+        desc.name,
+        domain,
+        req,
+        ack,
+        ((req & FORCEWAKE_KERNEL) != 0) as u8,
+        ((ack & FORCEWAKE_KERNEL) != 0) as u8,
+        req_iters,
+        ack_iters
+    );
+
+    (ack & FORCEWAKE_KERNEL) != 0
+}
+
+fn wake_media_ring_for_submit(
+    warm: Igpu770WarmState,
+    desc: MediaEngineDescriptor,
+    label: &str,
+) -> bool {
+    let psmi_reg = desc.ring_base + RING_PSMI_CTL;
+    let _ = mmio_write32(warm, psmi_reg, masked_bit_enable(PSMI_SLEEP_MSG_DISABLE));
+    let _ = mmio_write32(warm, desc.ring_base + RING_RNCID, 0);
+
+    let mut iter = 0usize;
+    let mut psmi = mmio_read32(warm, psmi_reg);
+    while iter < MEDIA_DEFAULT_WATCHDOG_ITERS / 10 {
+        if (psmi & BSD_SLEEP_INDICATOR) == 0 {
+            break;
+        }
+        core::hint::spin_loop();
+        iter += 1;
+        psmi = mmio_read32(warm, psmi_reg);
+    }
+
+    crate::log!(
+        "intel/media-demo: ring-wake label={} engine={} psmi=0x{:08X} slept={} iters={}\n",
+        label,
+        desc.name,
+        psmi,
+        ((psmi & BSD_SLEEP_INDICATOR) != 0) as u8,
+        iter
+    );
+    (psmi & BSD_SLEEP_INDICATOR) == 0
+}
+
+fn log_media_submit_diag(
+    warm: Igpu770WarmState,
+    desc: MediaEngineDescriptor,
+    phase: &str,
+    kickoff: u32,
+    complete: u32,
+) {
+    let base = desc.ring_base;
+    let msg_idle = media_msg_idle_reg(desc)
+        .map(|off| mmio_read32(warm, off))
+        .unwrap_or(0);
+    let legacy_fault = mmio_read32(warm, media_legacy_ring_fault_reg(desc));
+    let ring_fault = mmio_read32(warm, GEN12_RING_FAULT_REG);
+    let fault_tlb0 = mmio_read32(warm, GEN12_FAULT_TLB_DATA0);
+    let fault_tlb1 = mmio_read32(warm, GEN12_FAULT_TLB_DATA1);
+    let forcewake = snapshot_forcewake(warm);
+    let (engine_forcewake_req, engine_forcewake_ack) =
+        if let Some((_, req_reg, ack_reg)) = media_forcewake_regs(desc) {
+            (mmio_read32(warm, req_reg), mmio_read32(warm, ack_reg))
+        } else {
+            (0, 0)
+        };
+    crate::log!(
+        "intel/media-demo: {} diag engine={} msg_idle=0x{:08X} head=0x{:08X} tail=0x{:08X} start=0x{:08X} ctl=0x{:08X} acthd=0x{:08X} hws=0x{:08X} hwstam=0x{:08X} bbaddr=0x{:08X} bbaddr_udw=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} instdone=0x{:08X} instps=0x{:08X} imr=0x{:08X} eir=0x{:08X} emr=0x{:08X} mi_mode=0x{:08X} mode=0x{:08X} ctx_ctl=0x{:08X} ctx_ref=0x{:08X} el_ctl=0x{:08X} el_sq_lo=0x{:08X} el_sq_hi=0x{:08X} el_status_lo=0x{:08X} el_status_hi=0x{:08X} gdrst=0x{:08X} legacy_fault=0x{:08X} ring_fault=0x{:08X} tlb0=0x{:08X} tlb1=0x{:08X} media_req=0x{:08X} media_ack=0x{:08X} engine_req=0x{:08X} engine_ack=0x{:08X} awake={}/{} kickoff=0x{:08X} complete=0x{:08X}\n",
+        phase,
+        desc.name,
+        msg_idle,
+        mmio_read32(warm, base + RING_HEAD),
+        mmio_read32(warm, base + RING_TAIL),
+        mmio_read32(warm, base + RING_START),
+        mmio_read32(warm, base + RING_CTL),
+        mmio_read32(warm, base + RING_ACTHD),
+        mmio_read32(warm, base + RING_HWS_PGA),
+        mmio_read32(warm, base + RING_HWSTAM),
+        mmio_read32(warm, base + RING_BBADDR),
+        mmio_read32(warm, base + RING_BBADDR_UDW),
+        mmio_read32(warm, base + RING_IPEIR),
+        mmio_read32(warm, base + RING_IPEHR),
+        mmio_read32(warm, base + RING_INSTDONE),
+        mmio_read32(warm, base + RING_INSTPS),
+        mmio_read32(warm, base + RING_IMR),
+        mmio_read32(warm, base + RING_EIR),
+        mmio_read32(warm, base + RING_EMR),
+        mmio_read32(warm, base + RING_MI_MODE),
+        mmio_read32(warm, base + RING_MODE_GEN7),
+        mmio_read32(warm, base + RING_CONTEXT_CONTROL),
+        mmio_read32(warm, base + RING_CONTEXT_CONTROL_REF),
+        mmio_read32(warm, base + RING_EXECLIST_CONTROL),
+        mmio_read32(warm, base + RING_EXECLIST_SQ_LO),
+        mmio_read32(warm, base + RING_EXECLIST_SQ_HI),
+        mmio_read32(warm, base + RING_EXECLIST_STATUS_LO),
+        mmio_read32(warm, base + RING_EXECLIST_STATUS_HI),
+        mmio_read32(warm, GDRST),
+        legacy_fault,
+        ring_fault,
+        fault_tlb0,
+        fault_tlb1,
+        forcewake.global_req,
+        forcewake.global_ack,
+        engine_forcewake_req,
+        engine_forcewake_ack,
+        forcewake.awake_count,
+        forcewake.slice_count,
+        kickoff,
+        complete
+    );
+}
+
+fn find_context_lri_value(state: &[u32], reg: u32) -> Option<u32> {
+    let mut idx = 0usize;
+    while idx + 1 < state.len() {
+        if state[idx] == reg {
+            return Some(state[idx + 1]);
+        }
+        idx += 1;
+    }
+    None
+}
+
+#[inline]
+fn media_sw_ctx_id(desc: MediaEngineDescriptor) -> u32 {
+    match desc.id.class {
+        MediaEngineClass::VideoDecode => 1 + desc.id.instance as u32,
+        MediaEngineClass::VideoEnhancement => 3 + desc.id.instance as u32,
+    }
+}
+
+#[inline]
+fn with_sw_context_id(desc_lo: u32, desc_hi: u32, sw_ctx_id: u32) -> (u32, u32) {
+    let hi_shift = SW_CTX_ID_SHIFT - 32;
+    (desc_lo, desc_hi | (sw_ctx_id << hi_shift))
+}
+
+fn log_video_context_image(
+    desc: MediaEngineDescriptor,
+    context_virt: *mut u8,
+    context_bytes: usize,
+    context_gpu_addr: u64,
+) {
+    if context_virt.is_null() || context_bytes < (MEDIA_LRC_STATE_OFFSET_DWORDS + 32) * 4 {
+        crate::log!(
+            "intel/media-demo: lrc-image engine={} unavailable context_gpu=0x{:X} bytes=0x{:X}\n",
+            desc.name,
+            context_gpu_addr,
+            context_bytes
+        );
+        return;
+    }
+
+    let dwords = unsafe {
+        core::slice::from_raw_parts(
+            context_virt as *const u32,
+            context_bytes / core::mem::size_of::<u32>(),
+        )
+    };
+    let state = &dwords[MEDIA_LRC_STATE_OFFSET_DWORDS..];
+    let ring_base = desc.ring_base as u32;
+    let lri_ctx =
+        find_context_lri_value(state, ring_base + RING_CONTEXT_CONTROL as u32).unwrap_or(0);
+    let lri_head = find_context_lri_value(state, ring_base + RING_HEAD as u32).unwrap_or(0);
+    let lri_tail = find_context_lri_value(state, ring_base + RING_TAIL as u32).unwrap_or(0);
+    let lri_start = find_context_lri_value(state, ring_base + RING_START as u32).unwrap_or(0);
+    let lri_ctl = find_context_lri_value(state, ring_base + RING_CTL as u32).unwrap_or(0);
+    let lri_hws = find_context_lri_value(state, ring_base + RING_HWS_PGA as u32).unwrap_or(0);
+    let lri_bbaddr = find_context_lri_value(state, ring_base + RING_BBADDR as u32).unwrap_or(0);
+    let lri_bbaddr_udw =
+        find_context_lri_value(state, ring_base + RING_BBADDR_UDW as u32).unwrap_or(0);
+    let pphwsp_gpu = context_gpu_addr & !0xFFFu64;
+
+    crate::log!(
+        "intel/media-demo: lrc-image engine={} context_gpu=0x{:X} pphwsp_gpu=0x{:X} lrc_off_dw={} ctx=0x{:08X} head=0x{:08X} tail=0x{:08X} start=0x{:08X} ctl=0x{:08X} hws=0x{:08X} bbaddr=0x{:08X} bbaddr_udw=0x{:08X}\n",
+        desc.name,
+        context_gpu_addr,
+        pphwsp_gpu,
+        MEDIA_LRC_STATE_OFFSET_DWORDS,
+        lri_ctx,
+        lri_head,
+        lri_tail,
+        lri_start,
+        lri_ctl,
+        lri_hws,
+        lri_bbaddr,
+        lri_bbaddr_udw
+    );
+    crate::log!(
+        "intel/media-demo: lrc-dwords engine={} d0=0x{:08X} d1=0x{:08X} d2=0x{:08X} d3=0x{:08X} d4=0x{:08X} d5=0x{:08X} d6=0x{:08X} d7=0x{:08X} d8=0x{:08X} d9=0x{:08X} d10=0x{:08X} d11=0x{:08X} d12=0x{:08X} d13=0x{:08X} d14=0x{:08X} d15=0x{:08X}\n",
+        desc.name,
+        state.get(0).copied().unwrap_or(0),
+        state.get(1).copied().unwrap_or(0),
+        state.get(2).copied().unwrap_or(0),
+        state.get(3).copied().unwrap_or(0),
+        state.get(4).copied().unwrap_or(0),
+        state.get(5).copied().unwrap_or(0),
+        state.get(6).copied().unwrap_or(0),
+        state.get(7).copied().unwrap_or(0),
+        state.get(8).copied().unwrap_or(0),
+        state.get(9).copied().unwrap_or(0),
+        state.get(10).copied().unwrap_or(0),
+        state.get(11).copied().unwrap_or(0),
+        state.get(12).copied().unwrap_or(0),
+        state.get(13).copied().unwrap_or(0),
+        state.get(14).copied().unwrap_or(0),
+        state.get(15).copied().unwrap_or(0)
+    );
+}
+
 fn build_kickoff_state(warm: Igpu770WarmState) -> MediaKickoffState {
     let topology = current_topology();
     let guc_ready = intel_guc::ready();
@@ -980,6 +1441,7 @@ fn build_kickoff_state(warm: Igpu770WarmState) -> MediaKickoffState {
         } else {
             MediaKickoffStage::ResourcePlanning
         },
+        decode_bitstream_demo: None,
     }
 }
 
@@ -1022,13 +1484,14 @@ pub(crate) fn draft_job_for_workload(workload: MediaWorkloadKind) -> Option<Medi
         context: plan.context,
         batch: plan.batch,
         submission: plan.submission,
+        observability: plan.observability,
         next_stage: plan.next_stage,
     })
 }
 
 fn log_job_draft(label: &str, draft: MediaJobDraft) {
     crate::log!(
-        "intel/media: {} engine={} class={} provisioning={} transport={} workload={} ring=0x{:X} ctx=0x{:X} batch=0x{:X} scratch=0x{:X} result=0x{:X} next_stage={} completion_addr=0x{:X}\n",
+        "intel/media: {} engine={} class={} provisioning={} transport={} workload={} ring=0x{:X} ctx=0x{:X} batch=0x{:X} scratch=0x{:X} bitstream=0x{:X} output=0x{:X} result=0x{:X} next_stage={} completion_addr=0x{:X}\n",
         label,
         draft.engine.name,
         draft.engine.id.class.as_str(),
@@ -1039,6 +1502,8 @@ fn log_job_draft(label: &str, draft: MediaJobDraft) {
         draft.resources.windows.context_gpu_addr,
         draft.resources.windows.batch_gpu_addr,
         draft.resources.windows.scratch_gpu_addr,
+        draft.resources.windows.bitstream_gpu_addr,
+        draft.resources.windows.output_surface_gpu_addr,
         draft.resources.windows.result_gpu_addr,
         draft.next_stage.as_str(),
         draft.batch.completion_slot_gpu_addr
@@ -1084,7 +1549,7 @@ fn log_kickoff_state(state: MediaKickoffState, forcewake_ack: u32) {
         let plan = state.plans[idx];
         let runtime = state.runtimes[idx];
         crate::log!(
-            "intel/media: plan engine={} class={} provisioning={} ring_base=0x{:X} ring=0x{:X} ctx=0x{:X} batch=0x{:X} scratch=0x{:X} result=0x{:X} queue_depth={} completion={} next_stage={} observed={} ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X}\n",
+            "intel/media: plan engine={} class={} provisioning={} ring_base=0x{:X} ring=0x{:X} ctx=0x{:X} batch=0x{:X} scratch=0x{:X} bitstream=0x{:X} output=0x{:X} result=0x{:X} queue_depth={} completion={} next_stage={} observed={} ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X}\n",
             plan.descriptor.name,
             plan.descriptor.id.class.as_str(),
             plan.descriptor.provisioning.as_str(),
@@ -1093,6 +1558,8 @@ fn log_kickoff_state(state: MediaKickoffState, forcewake_ack: u32) {
             plan.resources.windows.context_gpu_addr,
             plan.resources.windows.batch_gpu_addr,
             plan.resources.windows.scratch_gpu_addr,
+            plan.resources.windows.bitstream_gpu_addr,
+            plan.resources.windows.output_surface_gpu_addr,
             plan.resources.windows.result_gpu_addr,
             plan.submission.queue_depth,
             plan.submission.completion.as_str(),
@@ -1160,6 +1627,604 @@ fn log_nal_summary(nal_types: &[u8]) {
     }
 }
 
+#[inline]
+fn masked_bit_enable(bit: u32) -> u32 {
+    bit | (bit << 16)
+}
+
+#[inline]
+fn masked_bits_update(mask: u32, value: u32) -> u32 {
+    (mask << 16) | value
+}
+
+#[inline]
+fn read_result_dword(base_virt: *mut u8, slot_off: u64) -> u32 {
+    let ptr = (base_virt as usize).saturating_add(slot_off as usize) as *const u32;
+    unsafe { core::ptr::read_volatile(ptr) }
+}
+
+fn emit_store_dword(batch: &mut [u32], idx: &mut usize, gpu_addr: u64, value: u32) -> bool {
+    if idx.saturating_add(4) > batch.len() {
+        return false;
+    }
+    batch[*idx] = MI_STORE_DWORD_IMM_GEN4_LEN_DW4;
+    batch[*idx + 1] = gpu_addr as u32;
+    batch[*idx + 2] = (gpu_addr >> 32) as u32;
+    batch[*idx + 3] = value;
+    *idx += 4;
+    true
+}
+
+#[inline]
+fn stage_flags(has_idr: bool) -> u32 {
+    (has_idr as u32) | (1 << 1)
+}
+
+#[inline]
+fn align_up_u32(value: u32, align: u32) -> u32 {
+    if align == 0 {
+        value
+    } else {
+        value.saturating_add(align.saturating_sub(1)) & !align.saturating_sub(1)
+    }
+}
+
+#[inline]
+fn media_cmd_header(
+    media_opcode: u32,
+    subopcode_a: u32,
+    subopcode_b: u32,
+    dword_length: u32,
+) -> u32 {
+    (3 << 29)
+        | (MEDIA_PIPELINE_MFX << 27)
+        | (media_opcode << 24)
+        | (subopcode_a << 21)
+        | (subopcode_b << 16)
+        | dword_length
+}
+
+fn begin_batch_packet(
+    batch: &mut [u32],
+    idx: &mut usize,
+    dword_count: usize,
+    header: u32,
+) -> Option<usize> {
+    if idx.saturating_add(dword_count) > batch.len() {
+        return None;
+    }
+    let start = *idx;
+    let end = start + dword_count;
+    batch[start..end].fill(0);
+    batch[start] = header;
+    *idx = end;
+    Some(start)
+}
+
+#[inline]
+fn packet_write_addr64(batch: &mut [u32], packet_start: usize, dword_index: usize, gpu_addr: u64) {
+    batch[packet_start + dword_index] = gpu_addr as u32;
+    batch[packet_start + dword_index + 1] = (gpu_addr >> 32) as u32;
+}
+
+fn store_decode_bitstream_demo_state(next: MediaBitstreamDemoState) {
+    let mut slot = MEDIA_KICKOFF_STATE.lock();
+    if let Some(mut state) = *slot {
+        state.decode_bitstream_demo = Some(next);
+        *slot = Some(state);
+    }
+}
+
+fn ensure_demo_backing(resources: MediaResourcePlan) -> Option<&'static mut MediaBitstreamBacking> {
+    let mut slot = MEDIA_BITSTREAM_BACKING.lock();
+    if slot.is_none() {
+        let (ring_phys, ring_virt) = crate::dma::alloc(resources.ring_bytes, 4096)?;
+        let (context_phys, context_virt) = crate::dma::alloc(resources.context_bytes, 4096)?;
+        let (batch_phys, batch_virt) = crate::dma::alloc(resources.batch_bytes, 4096)?;
+        let (result_phys, result_virt) = crate::dma::alloc(resources.result_bytes, 4096)?;
+        let (bitstream_phys, bitstream_virt) = crate::dma::alloc(resources.bitstream_bytes, 4096)?;
+        let (output_surface_phys, output_surface_virt) =
+            crate::dma::alloc(resources.output_surface_bytes, 4096)?;
+        *slot = Some(MediaBitstreamBacking {
+            ring_phys,
+            ring_virt,
+            ring_bytes: resources.ring_bytes,
+            context_phys,
+            context_virt,
+            context_bytes: resources.context_bytes,
+            batch_phys,
+            batch_virt,
+            batch_bytes: resources.batch_bytes,
+            result_phys,
+            result_virt,
+            result_bytes: resources.result_bytes,
+            bitstream_phys,
+            bitstream_virt,
+            bitstream_bytes: resources.bitstream_bytes,
+            output_surface_phys,
+            output_surface_virt,
+            output_surface_bytes: resources.output_surface_bytes,
+        });
+    }
+
+    let backing = slot.as_mut()?;
+    Some(unsafe { &mut *(backing as *mut MediaBitstreamBacking) })
+}
+
+fn build_h264_decode_batch_skeleton(
+    batch_virt: *mut u8,
+    batch_bytes: usize,
+    draft: MediaJobDraft,
+    frame_width: u16,
+    frame_height: u16,
+    annexb_bytes: usize,
+    sample_nal_count: usize,
+    has_idr: bool,
+) -> Option<usize> {
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            batch_virt as *mut u32,
+            batch_bytes / core::mem::size_of::<u32>(),
+        )
+    };
+    let mut idx = 0usize;
+    let width = frame_width as u32;
+    let height = frame_height as u32;
+    let width_mbs = width.saturating_add(15) / 16;
+    let height_mbs = height.saturating_add(15) / 16;
+    let frame_dims = width | (height << 16);
+    let output_pitch = align_up_u32(width.max(64), 64);
+    let chroma_y_offset = output_pitch.saturating_mul(height);
+
+    if !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.observability.result_slots[0].gpu_addr,
+        draft.observability.result_slots[0].expected_marker,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT,
+        draft.resources.windows.bitstream_gpu_addr as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT,
+        (draft.resources.windows.bitstream_gpu_addr >> 32) as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_BITSTREAM_BYTES_SLOT,
+        annexb_bytes as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_SAMPLE_NALS_SLOT,
+        sample_nal_count as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_STAGE_FLAGS_SLOT,
+        stage_flags(has_idr),
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT,
+        draft.resources.windows.output_surface_gpu_addr as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT,
+        (draft.resources.windows.output_surface_gpu_addr >> 32) as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT,
+        draft.resources.output_surface_bytes as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_FRAME_DIMS_SLOT,
+        frame_dims,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.observability.result_slots[1].gpu_addr,
+        draft.observability.result_slots[1].expected_marker,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.observability.result_slots[2].gpu_addr,
+        draft.observability.result_slots[2].expected_marker,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.observability.result_slots[3].gpu_addr,
+        draft.observability.result_slots[3].expected_marker,
+    ) {
+        return None;
+    }
+
+    let flush = begin_batch_packet(
+        batch,
+        &mut idx,
+        5,
+        MI_FLUSH_DW | MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE | MI_FLUSH_DW_USE_GTT,
+    )?;
+    batch[flush + 1] = draft.observability.result_slots[2].gpu_addr as u32;
+    batch[flush + 2] = (draft.observability.result_slots[2].gpu_addr >> 32) as u32;
+    batch[flush + 3] = draft.observability.result_slots[2].expected_marker;
+
+    let pipe_mode = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_PIPE_MODE_SELECT + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            MFX_PIPE_MODE_SELECT,
+            MFX_CMD_LEN_PIPE_MODE_SELECT,
+        ),
+    )?;
+    batch[pipe_mode + 1] = 2 | (1 << 9) | (1 << 11);
+
+    let surface = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_SURFACE_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            MFX_SURFACE_STATE,
+            MFX_CMD_LEN_SURFACE_STATE,
+        ),
+    )?;
+    batch[surface + 2] = ((width.saturating_sub(1)) << 4) | ((height.saturating_sub(1)) << 18);
+    batch[surface + 3] = 1 | ((output_pitch.saturating_sub(1)) << 3) | (1 << 27) | (4 << 28);
+    batch[surface + 4] = chroma_y_offset;
+
+    let pipe_buf = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_PIPE_BUF_ADDR_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            MFX_PIPE_BUF_ADDR_STATE,
+            MFX_CMD_LEN_PIPE_BUF_ADDR_STATE,
+        ),
+    )?;
+    packet_write_addr64(batch, pipe_buf, 4, draft.resources.windows.output_surface_gpu_addr);
+    packet_write_addr64(batch, pipe_buf, 13, draft.resources.windows.scratch_gpu_addr);
+    packet_write_addr64(batch, pipe_buf, 16, draft.resources.windows.scratch_gpu_addr + 0x4000);
+    packet_write_addr64(batch, pipe_buf, 52, draft.resources.windows.result_gpu_addr + 0x100);
+    packet_write_addr64(batch, pipe_buf, 55, draft.resources.windows.result_gpu_addr + 0x200);
+    packet_write_addr64(batch, pipe_buf, 58, draft.resources.windows.result_gpu_addr + 0x300);
+
+    let ind_obj = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            MFX_IND_OBJ_BASE_ADDR_STATE,
+            MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE,
+        ),
+    )?;
+    packet_write_addr64(batch, ind_obj, 1, draft.resources.windows.bitstream_gpu_addr);
+    packet_write_addr64(
+        batch,
+        ind_obj,
+        4,
+        draft.resources.windows.bitstream_gpu_addr + annexb_bytes as u64,
+    );
+
+    let bsp = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_BSP_BUF_BASE_ADDR_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            MFX_BSP_BUF_BASE_ADDR_STATE,
+            MFX_CMD_LEN_BSP_BUF_BASE_ADDR_STATE,
+        ),
+    )?;
+    packet_write_addr64(batch, bsp, 1, draft.resources.windows.scratch_gpu_addr + 0x8000);
+    packet_write_addr64(batch, bsp, 4, draft.resources.windows.scratch_gpu_addr + 0xC000);
+
+    let avc_img = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_IMG_STATE + 2) as usize,
+        media_cmd_header(MEDIA_CMD_OPCODE_MFX_AVC, 0, MFX_AVC_IMG_STATE, MFX_CMD_LEN_AVC_IMG_STATE),
+    )?;
+    batch[avc_img + 1] = ((width_mbs.saturating_mul(height_mbs)) & 0xFFFF) as u32;
+    batch[avc_img + 2] =
+        (width_mbs.saturating_sub(1) & 0xFF) | ((height_mbs.saturating_sub(1) & 0xFF) << 16);
+    batch[avc_img + 3] = 0;
+
+    let avc_bsd = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_BSD_OBJECT + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC,
+            1,
+            MFD_AVC_BSD_OBJECT,
+            MFX_CMD_LEN_AVC_BSD_OBJECT,
+        ),
+    )?;
+    batch[avc_bsd + 1] = annexb_bytes as u32;
+    batch[avc_bsd + 2] = 0;
+    batch[avc_bsd + 4] = 1 << 3;
+    batch[avc_bsd + 5] = 1 | (1 << 1) | (1 << 15);
+
+    if idx.saturating_add(2) > batch.len() {
+        return None;
+    }
+    batch[idx] = MI_ARB_CHECK;
+    batch[idx + 1] = MI_BATCH_BUFFER_END;
+    Some((idx + 2).saturating_mul(core::mem::size_of::<u32>()))
+}
+
+fn prepare_decode_bitstream_demo(
+    warm: Igpu770WarmState,
+    draft: MediaJobDraft,
+    frame_width: u16,
+    frame_height: u16,
+    annexb: &[u8],
+    sample_nal_count: usize,
+    has_idr: bool,
+) -> Option<MediaBitstreamDemoState> {
+    if annexb.len() > draft.resources.bitstream_bytes {
+        crate::log!(
+            "intel/media-demo: bitstream staging skipped reason=window-too-small bytes={} window={}\n",
+            annexb.len(),
+            draft.resources.bitstream_bytes
+        );
+        return None;
+    }
+
+    let backing = ensure_demo_backing(draft.resources)?;
+    if !ggtt_map_system_ram_range(
+        "media-ring",
+        warm,
+        backing.ring_phys,
+        backing.ring_bytes,
+        draft.resources.windows.ring_gpu_addr,
+    ) || !ggtt_map_system_ram_range(
+        "media-context",
+        warm,
+        backing.context_phys,
+        backing.context_bytes,
+        draft.resources.windows.context_gpu_addr,
+    ) || !ggtt_map_system_ram_range(
+        "media-batch",
+        warm,
+        backing.batch_phys,
+        backing.batch_bytes,
+        draft.resources.windows.batch_gpu_addr,
+    ) || !ggtt_map_system_ram_range(
+        "media-result",
+        warm,
+        backing.result_phys,
+        backing.result_bytes,
+        draft.resources.windows.result_gpu_addr,
+    ) || !ggtt_map_system_ram_range(
+        "media-bitstream",
+        warm,
+        backing.bitstream_phys,
+        backing.bitstream_bytes,
+        draft.resources.windows.bitstream_gpu_addr,
+    ) || !ggtt_map_system_ram_range(
+        "media-output-surface",
+        warm,
+        backing.output_surface_phys,
+        backing.output_surface_bytes,
+        draft.resources.windows.output_surface_gpu_addr,
+    ) {
+        crate::log!("intel/media-demo: bitstream staging skipped reason=ggtt-map\n");
+        return None;
+    }
+
+    unsafe {
+        ptr::write_bytes(backing.ring_virt, 0, backing.ring_bytes);
+        ptr::write_bytes(backing.context_virt, 0, backing.context_bytes);
+        ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
+        ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
+        ptr::write_bytes(backing.bitstream_virt, 0, backing.bitstream_bytes);
+        ptr::write_bytes(backing.output_surface_virt, 0, backing.output_surface_bytes);
+        ptr::copy_nonoverlapping(annexb.as_ptr(), backing.bitstream_virt, annexb.len());
+    }
+    dma_cache_flush_range(backing.bitstream_virt as *const u8, annexb.len());
+    dma_cache_flush_range(backing.result_virt as *const u8, backing.result_bytes);
+    dma_cache_flush_range(backing.output_surface_virt as *const u8, backing.output_surface_bytes);
+
+    let batch_tail_bytes = build_h264_decode_batch_skeleton(
+        backing.batch_virt,
+        backing.batch_bytes,
+        draft,
+        frame_width,
+        frame_height,
+        annexb.len(),
+        sample_nal_count,
+        has_idr,
+    )?;
+    dma_cache_flush_range(backing.batch_virt as *const u8, batch_tail_bytes);
+
+    let ring_tail_bytes = build_ring_batch_start_words(
+        backing.ring_virt,
+        backing.ring_bytes,
+        draft.resources.windows.batch_gpu_addr,
+    )?;
+    let ring_ctl = ring_ctl_value_for_size(backing.ring_bytes)?;
+    let ring_start = draft.resources.windows.ring_gpu_addr as u32;
+    if !init_gen12_video_context_image(
+        backing.context_virt,
+        backing.context_bytes,
+        draft.engine.ring_base,
+        ring_start,
+        ring_tail_bytes as u32,
+        ring_ctl,
+    ) {
+        crate::log!("intel/media-demo: bitstream staging skipped reason=context-init\n");
+        return None;
+    }
+    log_video_context_image(
+        draft.engine,
+        backing.context_virt,
+        backing.context_bytes,
+        draft.resources.windows.context_gpu_addr,
+    );
+
+    let (ctx_desc_lo, ctx_desc_hi_base) =
+        build_execlist_context_descriptor_for_gpu_addr(draft.resources.windows.context_gpu_addr);
+    let (ctx_desc_lo, ctx_desc_hi) =
+        with_sw_context_id(ctx_desc_lo, ctx_desc_hi_base, media_sw_ctx_id(draft.engine));
+    crate::log!(
+        "intel/media-demo: bitstream-plan engine={} ring=0x{:X} ctx=0x{:X} batch=0x{:X} bitstream=0x{:X}/phys=0x{:X} bytes={} output=0x{:X}/phys=0x{:X}/bytes={} result=0x{:X} kickoff=0x{:08X} complete=0x{:08X}\n",
+        draft.engine.name,
+        draft.resources.windows.ring_gpu_addr,
+        draft.resources.windows.context_gpu_addr,
+        draft.resources.windows.batch_gpu_addr,
+        draft.resources.windows.bitstream_gpu_addr,
+        backing.bitstream_phys,
+        annexb.len(),
+        draft.resources.windows.output_surface_gpu_addr,
+        backing.output_surface_phys,
+        backing.output_surface_bytes,
+        draft.resources.windows.result_gpu_addr,
+        draft.observability.result_slots[0].expected_marker,
+        draft.observability.result_slots[3].expected_marker
+    );
+    crate::log!(
+        "intel/media-demo: vcs-submit prep ring_start=0x{:08X} ring_ctl=0x{:08X} ring_tail=0x{:X} batch_tail=0x{:X} batch_gpu=0x{:X} context_gpu=0x{:X} ctx_desc_lo=0x{:08X} ctx_desc_hi=0x{:08X} ctx_id={}\n",
+        ring_start,
+        ring_ctl,
+        ring_tail_bytes,
+        batch_tail_bytes,
+        draft.resources.windows.batch_gpu_addr,
+        draft.resources.windows.context_gpu_addr,
+        ctx_desc_lo,
+        ctx_desc_hi,
+        media_sw_ctx_id(draft.engine)
+    );
+
+    let _ = forcewake_all_acquire(warm);
+    let _ = wake_media_engine_forcewake(warm, draft.engine, "media-bitstream-submit");
+    let _ = forcewake_media_refresh(warm, "media-bitstream-submit");
+    let _ = wake_media_ring_for_submit(warm, draft.engine, "media-bitstream-submit");
+    let pphwsp_gpu = (draft.resources.windows.context_gpu_addr & !0xFFF) as u32;
+    let _ = mmio_write32(warm, draft.engine.ring_base + RING_HWS_PGA, pphwsp_gpu);
+    let _ = mmio_read32(warm, draft.engine.ring_base + RING_HWS_PGA);
+    let _ = mmio_write32(
+        warm,
+        draft.engine.ring_base + RING_MODE_GEN7,
+        masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE),
+    );
+    let ctx_ctl = masked_bits_update(
+        CTX_CTRL_RS_CTX_ENABLE,
+        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
+    let _ = mmio_write32(warm, draft.engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl);
+    let _ = mmio_write32(warm, draft.engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl);
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = mmio_write32(warm, draft.engine.ring_base + RING_EXECLIST_SQ_LO, ctx_desc_lo);
+    let _ = mmio_write32(warm, draft.engine.ring_base + RING_EXECLIST_SQ_HI, ctx_desc_hi);
+    let _ = mmio_write32(warm, draft.engine.ring_base + RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+    log_media_submit_diag(warm, draft.engine, "vcs-submit", 0, 0);
+
+    let mut completed = false;
+    let mut iter = 0usize;
+    while iter < draft.submission.watchdog_iters {
+        let kickoff = read_result_dword(backing.result_virt, MEDIA_RESULT_KICKOFF_SLOT);
+        let complete = read_result_dword(backing.result_virt, MEDIA_RESULT_COMPLETE_SLOT);
+        if iter == 0 || (iter % MEDIA_SUBMIT_POLL_LOG_STEP) == 0 {
+            crate::log!(
+                "intel/media-demo: vcs-poll iter={} head=0x{:08X} tail=0x{:08X} execlist_lo=0x{:08X} kickoff=0x{:08X} complete=0x{:08X}\n",
+                iter,
+                mmio_read32(warm, draft.engine.ring_base + RING_HEAD),
+                mmio_read32(warm, draft.engine.ring_base + RING_TAIL),
+                mmio_read32(warm, draft.engine.ring_base + RING_EXECLIST_STATUS_LO),
+                kickoff,
+                complete
+            );
+            if iter == 0 {
+                log_media_submit_diag(warm, draft.engine, "vcs-poll", kickoff, complete);
+            }
+        }
+        if complete == draft.observability.result_slots[3].expected_marker {
+            completed = true;
+            break;
+        }
+        core::hint::spin_loop();
+        iter += 1;
+    }
+
+    let kickoff = read_result_dword(backing.result_virt, MEDIA_RESULT_KICKOFF_SLOT);
+    let pre = read_result_dword(backing.result_virt, MEDIA_RESULT_PRESUBMIT_SLOT);
+    let post = read_result_dword(backing.result_virt, MEDIA_RESULT_POSTSUBMIT_SLOT);
+    let complete = read_result_dword(backing.result_virt, MEDIA_RESULT_COMPLETE_SLOT);
+    let bitstream_lo = read_result_dword(backing.result_virt, MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT);
+    let bitstream_hi = read_result_dword(backing.result_virt, MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT);
+    let bytes = read_result_dword(backing.result_virt, MEDIA_RESULT_BITSTREAM_BYTES_SLOT);
+    let nals = read_result_dword(backing.result_virt, MEDIA_RESULT_SAMPLE_NALS_SLOT);
+    let flags = read_result_dword(backing.result_virt, MEDIA_RESULT_STAGE_FLAGS_SLOT);
+    let output_lo =
+        read_result_dword(backing.result_virt, MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT);
+    let output_hi =
+        read_result_dword(backing.result_virt, MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT);
+    let output_bytes =
+        read_result_dword(backing.result_virt, MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT);
+    let frame_dims = read_result_dword(backing.result_virt, MEDIA_RESULT_FRAME_DIMS_SLOT);
+    if !completed {
+        log_media_submit_diag(warm, draft.engine, "vcs-timeout", kickoff, complete);
+    }
+    crate::log!(
+        "intel/media-demo: vcs-submit result completed={} iters={} kickoff=0x{:08X} pre=0x{:08X} post=0x{:08X} done=0x{:08X} bitstream_lo=0x{:08X} bitstream_hi=0x{:08X} bytes={} nals={} flags=0x{:08X} output_lo=0x{:08X} output_hi=0x{:08X} output_bytes={} frame_dims=0x{:08X}\n",
+        completed as u8,
+        iter,
+        kickoff,
+        pre,
+        post,
+        complete,
+        bitstream_lo,
+        bitstream_hi,
+        bytes,
+        nals,
+        flags,
+        output_lo,
+        output_hi,
+        output_bytes,
+        frame_dims
+    );
+
+    Some(MediaBitstreamDemoState {
+        ready: true,
+        engine_name: draft.engine.name,
+        ring_gpu_addr: draft.resources.windows.ring_gpu_addr,
+        context_gpu_addr: draft.resources.windows.context_gpu_addr,
+        batch_gpu_addr: draft.resources.windows.batch_gpu_addr,
+        result_gpu_addr: draft.resources.windows.result_gpu_addr,
+        bitstream_gpu_addr: draft.resources.windows.bitstream_gpu_addr,
+        output_surface_gpu_addr: draft.resources.windows.output_surface_gpu_addr,
+        bitstream_phys: backing.bitstream_phys,
+        output_surface_phys: backing.output_surface_phys,
+        bitstream_bytes: annexb.len(),
+        output_surface_bytes: backing.output_surface_bytes,
+        sample_nal_count,
+        has_idr,
+        kickoff_marker: draft.observability.result_slots[0].expected_marker,
+        complete_marker: draft.observability.result_slots[3].expected_marker,
+        submit_completed: completed,
+        submit_iters: iter,
+    })
+}
+
 pub(crate) async fn run_https_media_demo_once_async() {
     if MEDIA_HTTPS_DEMO_RAN.swap(true, Ordering::AcqRel) {
         return;
@@ -1183,11 +2248,14 @@ pub(crate) async fn run_https_media_demo_once_async() {
         Err(err) => {
             let msg = format!("media-demo-fetch-error:{:?}", err);
             crate::log!("intel/media-demo: fetch failed err={:?}\n", err);
-            cpu_framebuffer_visualize_bytes_center(
+            cpu_framebuffer_media_status_card_center(
                 "media-demo-fetch-error",
-                msg.as_bytes(),
                 MEDIA_HTTPS_DEMO_VIS_W,
                 MEDIA_HTTPS_DEMO_VIS_H,
+                0x00D8_4A3A,
+                msg.len(),
+                MEDIA_HTTPS_DEMO_TIMEOUT_MS as usize,
+                false,
             );
             return;
         }
@@ -1226,11 +2294,14 @@ pub(crate) async fn run_https_media_demo_once_async() {
                         "intel/media-demo: annexb staging failed err={:?} fallback=raw-sample-vis\n",
                         err
                     );
-                    cpu_framebuffer_visualize_bytes_center(
+                    cpu_framebuffer_media_status_card_center(
                         "media-demo-h264-sample0",
-                        summary.first_sample,
                         MEDIA_HTTPS_DEMO_VIS_W,
                         MEDIA_HTTPS_DEMO_VIS_H,
+                        0x00E2_B64A,
+                        summary.first_sample_size as usize,
+                        usize::from(summary.width).saturating_mul(usize::from(summary.height)),
+                        false,
                     );
                     return;
                 }
@@ -1257,16 +2328,34 @@ pub(crate) async fn run_https_media_demo_once_async() {
                 annex_b.sample_nal_count,
                 annex_b.has_idr as u8
             );
+            if let Some(draft) = draft_job_for_workload(MediaWorkloadKind::DecodeBitstream) {
+                if let Some(warm) = warm_state() {
+                    if let Some(staged) = prepare_decode_bitstream_demo(
+                        warm,
+                        draft,
+                        summary.width,
+                        summary.height,
+                        annex_b.bytes.as_slice(),
+                        annex_b.sample_nal_count,
+                        annex_b.has_idr,
+                    ) {
+                        store_decode_bitstream_demo_state(staged);
+                    }
+                }
+            }
             crate::log!(
                 "intel/media-demo: forged-ingress stage=fetch->parse->annexb-vis decode_ready={} decode_impl={}\n",
                 1,
-                0
+                1
             );
-            cpu_framebuffer_visualize_bytes_center(
+            cpu_framebuffer_media_status_card_center(
                 "media-demo-h264-annexb-au0",
-                annex_b.bytes.as_slice(),
                 MEDIA_HTTPS_DEMO_VIS_W,
                 MEDIA_HTTPS_DEMO_VIS_H,
+                0x003D_B7FF,
+                annex_b.bytes.len(),
+                annex_b.sample_nal_count,
+                true,
             );
         }
         Err(err) => {
@@ -1274,11 +2363,14 @@ pub(crate) async fn run_https_media_demo_once_async() {
                 "intel/media-demo: h264 parse failed err={:?} fallback=whole-file-vis\n",
                 err
             );
-            cpu_framebuffer_visualize_bytes_center(
+            cpu_framebuffer_media_status_card_center(
                 "media-demo-mp4-bytes",
-                body.as_slice(),
                 MEDIA_HTTPS_DEMO_VIS_W,
                 MEDIA_HTTPS_DEMO_VIS_H,
+                0x00C9_5A22,
+                body.len(),
+                first_box_size as usize,
+                false,
             );
         }
     }

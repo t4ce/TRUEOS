@@ -1,11 +1,15 @@
+use libm::{ceilf, cosf, floorf, sinf};
+
 use super::xelp_copy_ngin;
 
 const XELP_RENDER_FIRST_DEFER_DISPLAY_DISCOVERY: bool = true;
-const XELP_RENDER_FIRST_ISOLATE_RGB_TRIANGLE: bool = true;
+const XELP_RENDER_FIRST_ISOLATE_RGB_TRIANGLE: bool = false;
 
 const TRIANGLE_MIN_DIM: usize = 8;
-const TRIANGLE_MAX_W: usize = 20;
-const TRIANGLE_MAX_H: usize = 18;
+const TRIANGLE_MAX_W: usize = 240;
+const TRIANGLE_MAX_H: usize = 200;
+const TRIANGLE_ROTATION_RAD: f32 = 0.62;
+const TRIANGLE_ANGLE_STEP_RAD: f32 = 2.0943952;
 
 #[inline]
 pub(super) fn defer_display_discovery_for_render_first(intel_igpu770_present: bool) -> bool {
@@ -192,19 +196,35 @@ pub(crate) fn encode_rgb_triangle_store_batch(
 
     let tri_w = rect_w.min(TRIANGLE_MAX_W).max(TRIANGLE_MIN_DIM);
     let tri_h = rect_h.min(TRIANGLE_MAX_H).max(TRIANGLE_MIN_DIM);
-    let origin_x = rect_w.saturating_sub(tri_w) / 2;
-    let origin_y = rect_h.saturating_sub(tri_h) / 2;
+    let center_x = rect_w as f32 * 0.5;
+    let center_y = rect_h as f32 * 0.5;
+    let radius = tri_w.min(tri_h) as f32 * 0.46;
+    let a0 = TRIANGLE_ROTATION_RAD;
+    let a1 = TRIANGLE_ROTATION_RAD + TRIANGLE_ANGLE_STEP_RAD;
+    let a2 = TRIANGLE_ROTATION_RAD + (TRIANGLE_ANGLE_STEP_RAD * 2.0);
 
-    let v0x = origin_x as f32 + tri_w as f32 * 0.5;
-    let v0y = origin_y as f32;
-    let v1x = origin_x as f32;
-    let v1y = origin_y as f32 + (tri_h.saturating_sub(1)) as f32;
-    let v2x = origin_x as f32 + (tri_w.saturating_sub(1)) as f32;
-    let v2y = v1y;
+    let p0x = cosf(a0) * radius;
+    let p0y = sinf(a0) * radius;
+    let p1x = cosf(a1) * radius;
+    let p1y = sinf(a1) * radius;
+    let p2x = cosf(a2) * radius;
+    let p2y = sinf(a2) * radius;
+
+    let v0x = center_x + p0x;
+    let v0y = center_y + p0y;
+    let v1x = center_x + p1x;
+    let v1y = center_y + p1y;
+    let v2x = center_x + p2x;
+    let v2y = center_y + p2y;
     let area = edge_fn(v0x, v0y, v1x, v1y, v2x, v2y);
     if area == 0.0 {
         return Err("triangle-degenerate");
     }
+
+    let min_x = floorf(v0x.min(v1x).min(v2x)).max(0.0) as usize;
+    let max_x = ceilf(v0x.max(v1x).max(v2x)).min(rect_w as f32) as usize;
+    let min_y = floorf(v0y.min(v1y).min(v2y)).max(0.0) as usize;
+    let max_y = ceilf(v0y.max(v1y).max(v2y)).min(rect_h as f32) as usize;
 
     batch_dwords.fill(0);
     let writable_limit = batch_dwords
@@ -212,8 +232,8 @@ pub(crate) fn encode_rgb_triangle_store_batch(
         .saturating_sub(RESERVED_END_DWORDS + STORE_DWORDS);
     let mut idx = 0usize;
 
-    for y in origin_y..origin_y.saturating_add(tri_h) {
-        for x in origin_x..origin_x.saturating_add(tri_w) {
+    for y in min_y..max_y {
+        for x in min_x..max_x {
             let px = x as f32 + 0.5;
             let py = y as f32 + 0.5;
             let w0 = edge_fn(v1x, v1y, v2x, v2y, px, py) / area;
@@ -231,8 +251,8 @@ pub(crate) fn encode_rgb_triangle_store_batch(
             let b = clamp_color(w2);
             let color = pack_xrgb8888(r, g, b);
             let dst = dst_gpu_addr
-                .saturating_add((y.saturating_sub(origin_y) as u64).saturating_mul(pitch as u64))
-                .saturating_add((x.saturating_sub(origin_x) as u64).saturating_mul(4));
+                .saturating_add((y as u64).saturating_mul(pitch as u64))
+                .saturating_add((x as u64).saturating_mul(4));
 
             batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
                 | xelp_copy_ngin::mi::SDI_GGTT
