@@ -52,6 +52,14 @@ unsafe extern "C" {
         bearer_ptr: *const u8,
         bearer_len: usize,
     ) -> u32;
+    pub fn trueos_cabi_net_fetch_post_json_bytes_start(
+        url_ptr: *const u8,
+        url_len: usize,
+        body_ptr: *const u8,
+        body_len: usize,
+        bearer_ptr: *const u8,
+        bearer_len: usize,
+    ) -> u32;
     pub fn trueos_cabi_net_fetch_result(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_result_len(op_id: u32) -> isize;
     pub fn trueos_cabi_net_fetch_bytes_read(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;

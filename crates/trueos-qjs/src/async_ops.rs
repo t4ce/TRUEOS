@@ -50,7 +50,9 @@ pub enum OpKind {
     ReadBytes,
     WriteText,
     /// Kernel net fetch (URL -> file) then read file and resolve with text.
-    NetFetchText,
+    NetFetchTextFile,
+    /// Kernel net POST(JSON) -> bytes and resolve with text.
+    NetPostJsonTextBytes,
     /// Kernel net fetch (URL -> bytes) and resolve with bytes.
     NetFetchBytes,
     /// Kernel net fetch (URL -> cache file) and resolve with the normalized specifier.
@@ -148,6 +150,14 @@ pub unsafe fn start_net_post_json_to_file(
     bearer: Option<&[u8]>,
 ) -> Result<u32, i32> {
     async_fs::start_net_post_json_to_file(url, path, body_json, bearer)
+}
+
+pub unsafe fn start_net_post_json_bytes(
+    url: &[u8],
+    body_json: &[u8],
+    bearer: Option<&[u8]>,
+) -> Result<u32, i32> {
+    async_fs::start_net_post_json_bytes(url, body_json, bearer)
 }
 
 pub unsafe fn register_promise(
@@ -580,7 +590,10 @@ unsafe fn pump_net_fetch_text(ctx: *mut qjs::JSContext) -> bool {
             .get(&(ctx as usize))
             .map(|ops| {
                 ops.iter()
-                    .filter(|p| p.kind == OpKind::NetFetchText)
+                    .filter(|p| {
+                        p.kind == OpKind::NetFetchTextFile
+                            || p.kind == OpKind::NetPostJsonTextBytes
+                    })
                     .map(|p| p.op_id)
                     .collect()
             })
@@ -609,33 +622,73 @@ unsafe fn pump_net_fetch_text(ctx: *mut qjs::JSContext) -> bool {
             continue;
         }
 
-        // Consume the net op result (also discards the kernel op id), then read the
-        // temp file back directly. Routing this through async_fs_service can stall on
-        // nested sync-over-async readback even though the network request already finished.
-        let _ = async_fs::read_result(op_id, core::ptr::null_mut(), 0);
-        match read_file_via_cabi(op.aux.as_slice()) {
-            Ok(buf) => {
-                crate::trueos_shims::log_info(
-                    format!(
-                        "qjs fetch: readback ok tmp_len={} op={}\n",
-                        buf.len(),
-                        op_id
-                    )
-                    .as_str(),
-                );
-                let s = qjs::JS_NewStringLen(
-                    ctx,
-                    buf.as_ptr() as *const core::ffi::c_char,
-                    buf.len(),
-                );
-                resolve_with_value(ctx, &op, s);
+        match op.kind {
+            OpKind::NetFetchTextFile => {
+                // Consume the net op result (also discards the kernel op id), then read the
+                // cache file back directly. Routing this through async_fs_service can stall on
+                // nested sync-over-async readback even though the network request already finished.
+                let _ = async_fs::read_result(op_id, core::ptr::null_mut(), 0);
+                match read_file_via_cabi(op.aux.as_slice()) {
+                    Ok(buf) => {
+                        crate::trueos_shims::log_info(
+                            format!(
+                                "qjs fetch: readback ok bytes={} request_id={}\n",
+                                buf.len(),
+                                op_id
+                            )
+                            .as_str(),
+                        );
+                        let s = qjs::JS_NewStringLen(
+                            ctx,
+                            buf.as_ptr() as *const core::ffi::c_char,
+                            buf.len(),
+                        );
+                        resolve_with_value(ctx, &op, s);
+                    }
+                    Err(code) => {
+                        crate::trueos_shims::log_error(
+                            format!(
+                                "qjs fetch: readback failed rc={} request_id={}\n",
+                                code, op_id
+                            )
+                            .as_str(),
+                        );
+                        reject_with_code(ctx, &op, code)
+                    }
+                }
             }
-            Err(code) => {
-                crate::trueos_shims::log_error(
-                    format!("qjs fetch: readback failed rc={} op={}\n", code, op_id).as_str(),
-                );
-                reject_with_code(ctx, &op, code)
+            OpKind::NetPostJsonTextBytes => {
+                let n = rc_or_done as usize;
+                match read_completion_bytes(op_id, n) {
+                    Ok(buf) => {
+                        crate::trueos_shims::log_info(
+                            format!(
+                                "qjs fetch: body ready bytes={} request_id={}\n",
+                                buf.len(),
+                                op_id
+                            )
+                            .as_str(),
+                        );
+                        let s = qjs::JS_NewStringLen(
+                            ctx,
+                            buf.as_ptr() as *const core::ffi::c_char,
+                            buf.len(),
+                        );
+                        resolve_with_value(ctx, &op, s);
+                    }
+                    Err(code) => {
+                        crate::trueos_shims::log_error(
+                            format!(
+                                "qjs fetch: body read failed rc={} request_id={}\n",
+                                code, op_id
+                            )
+                            .as_str(),
+                        );
+                        reject_with_code(ctx, &op, code)
+                    }
+                }
             }
+            _ => {}
         }
         if !op.aux.is_empty() {
             let _ = trueos_cabi_fs_remove(op.aux.as_ptr(), op.aux.len());
@@ -857,7 +910,7 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                     let _ = unsafe { trueos_cabi_fs_remove(op.aux.as_ptr(), op.aux.len()) };
                 }
             }
-            OpKind::NetFetchText => {
+            OpKind::NetFetchTextFile | OpKind::NetPostJsonTextBytes => {
                 // Net fetches are handled by `pump_net_fetch_text`.
                 // If one ever arrives here, discard and reject to avoid leaking.
                 let _ = async_fs::discard(done_id);

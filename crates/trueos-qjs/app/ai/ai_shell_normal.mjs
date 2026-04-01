@@ -278,49 +278,19 @@ function reasoningSummaryText(summary) {
 
 function printResponseSummary(response, text) {
   const model = collapseWhitespace(response && response.model);
-  const answer = clipText(text, 160);
-  if (model || answer) {
-    const parts = [];
-    if (model) {
-      parts.push(`model=${model}`);
-    }
-    if (answer) {
-      parts.push(`answer=${quoteInline(answer)}`);
-    }
-    printLine(`ai: ${parts.join(' ')}`);
+  const answer = String(text ?? '').trim();
+  if (answer) {
+    printLine(model ? `${answer} [${model}]` : answer);
   }
 
   const usage = response && typeof response === 'object' ? response.usage : null;
   const inputTokens = Number(usage && usage.input_tokens || 0) || 0;
   const outputTokens = Number(usage && usage.output_tokens || 0) || 0;
   if ((inputTokens > 0 || outputTokens > 0) && typeof globalThis.__trueosAiAddUsageTotals === 'function') {
-    const totalsRaw = globalThis.__trueosAiAddUsageTotals(inputTokens, outputTokens);
-    if (typeof totalsRaw === 'string' && totalsRaw) {
-      printLine(`ai: usage in=${inputTokens} out=${outputTokens} ${totalsRaw}`);
-    } else {
-      printLine(`ai: usage in=${inputTokens} out=${outputTokens}`);
-    }
+    globalThis.__trueosAiAddUsageTotals(inputTokens, outputTokens);
+    printLine(`{Usage in ${inputTokens} out ${outputTokens}}`);
   } else if (inputTokens > 0 || outputTokens > 0) {
-    printLine(`ai: usage in=${inputTokens} out=${outputTokens}`);
-  }
-
-  const reasoning = response && typeof response === 'object' ? response.reasoning : null;
-  const effort = collapseWhitespace(reasoning && reasoning.effort);
-  const summary = clipText(reasoningSummaryText(reasoning && reasoning.summary), 200);
-  if ((effort && effort !== 'none') || summary) {
-    const parts = [];
-    if (effort && effort !== 'none') {
-      parts.push(`effort=${effort}`);
-    }
-    if (summary) {
-      parts.push(`summary=${quoteInline(summary)}`);
-    }
-    printLine(`ai: reasoning ${parts.join(' ')}`);
-  }
-
-  const tools = collectUsedToolNames(response);
-  if (tools.length > 0) {
-    printLine(`ai: tools ${tools.join(', ')}`);
+    printLine(`{Usage in ${inputTokens} out ${outputTokens}}`);
   }
 }
 
@@ -343,8 +313,6 @@ export async function runShellPrompt(config = null) {
   if (fileSearch && vectorStoreIds.length <= 0 && localFileContext) {
     printLine('ai: file mode using local TRUEOS file tree json');
   }
-
-  printLine('ai: sending request');
 
   const request = buildRequest(prompt, {
     webSearch,
@@ -370,7 +338,6 @@ export async function runShellPrompt(config = null) {
   }
 
   printResponseSummary(response, text);
-  printMultiline(text);
 }
 
 export async function runNormalPrompt(promptText) {

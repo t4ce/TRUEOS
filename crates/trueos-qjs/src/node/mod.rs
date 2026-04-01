@@ -241,9 +241,9 @@ unsafe fn ensure_global_kernel_time(ctx: *mut qjs::JSContext) {
 }
 
 #[inline]
-fn next_fetch_tmp_path() -> String {
+fn next_fetch_cache_path() -> String {
     let id = FETCH_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let mut path = String::from("/qjs/cdn/__fetch_");
+    let mut path = String::from("/qjs/cdn/__net_cache_");
     push_u32_hex(&mut path, id);
     path.push_str(".txt");
     path
@@ -387,10 +387,6 @@ unsafe extern "C" fn trueos_fetch_text(
             }
         }
     } else {
-        let tmp_path = next_fetch_tmp_path();
-        let tmp_path_bytes = tmp_path.as_bytes();
-        let _ = v::vfs::remove(tmp_path_bytes);
-
         if let Ok(url_str) = core::str::from_utf8(url) {
             if is_post {
                 qjs::trueos_shims::log_info(alloc::format!("qjs fetch: POST {}\n", url_str).as_str());
@@ -399,24 +395,53 @@ unsafe extern "C" fn trueos_fetch_text(
             }
         }
 
-        let start_res = if is_post {
-            qjs::async_ops::start_net_post_json_to_file(url, tmp_path_bytes, body, bearer)
+        let cache_path = if is_post {
+            None
         } else {
-            qjs::async_ops::start_net_fetch_to_file(url, tmp_path_bytes)
+            let path = next_fetch_cache_path();
+            let _ = v::vfs::remove(path.as_bytes());
+            Some(path)
+        };
+        let start_res = if is_post {
+            qjs::async_ops::start_net_post_json_bytes(url, body, bearer)
+        } else {
+            qjs::async_ops::start_net_fetch_to_file(
+                url,
+                cache_path.as_deref().unwrap_or_default().as_bytes(),
+            )
         };
 
         match start_res {
             Ok(op_id) => {
-                qjs::trueos_shims::log_info(
-                    alloc::format!("qjs fetch: queued op={} tmp={}\n", op_id, tmp_path).as_str(),
-                );
+                if is_post {
+                    qjs::trueos_shims::log_info(
+                        alloc::format!("qjs fetch: queued request_id={} mode=memory\n", op_id)
+                            .as_str(),
+                    );
+                } else {
+                    qjs::trueos_shims::log_info(
+                        alloc::format!(
+                            "qjs fetch: queued request_id={} cache_path={}\n",
+                            op_id,
+                            cache_path.as_deref().unwrap_or_default()
+                        )
+                        .as_str(),
+                    );
+                }
                 qjs::async_ops::register_promise(
                     ctx,
                     op_id,
-                    qjs::async_ops::OpKind::NetFetchText,
+                    if is_post {
+                        qjs::async_ops::OpKind::NetPostJsonTextBytes
+                    } else {
+                        qjs::async_ops::OpKind::NetFetchTextFile
+                    },
                     resolve,
                     reject,
-                    tmp_path_bytes.to_vec(),
+                    cache_path
+                        .as_deref()
+                        .map(|v| v.as_bytes().to_vec())
+                        .unwrap_or_default(),
                 );
             }
             Err(code) => {
