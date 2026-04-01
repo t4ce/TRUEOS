@@ -115,6 +115,39 @@ export function listDevices() {
   }
 }
 
+export function listControllers() {
+  const raw = typeof __trueosXhciListControllers === "function"
+    ? __trueosXhciListControllers()
+    : null;
+  if (typeof raw !== "string" || raw.length === 0) return [];
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return [];
+  }
+}
+
+export function getControllerSnapshot(controllerId) {
+  if (typeof __trueosXhciGetControllerSnapshot !== "function") return null;
+  const raw = __trueosXhciGetControllerSnapshot(controllerId | 0);
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
+export function requestProbe(controllerId) {
+  if (typeof __trueosXhciRequestProbe !== "function") return -1;
+  return __trueosXhciRequestProbe(controllerId | 0);
+}
+
+export function requestRebind(controllerId) {
+  if (typeof __trueosXhciRequestRebind !== "function") return -1;
+  return __trueosXhciRequestRebind(controllerId | 0);
+}
+
 // ---------------------------------------------------------------------------
 // portReset(controllerId, portIdx)  → 0 | -1
 // ---------------------------------------------------------------------------
@@ -385,7 +418,11 @@ export default {
   makeHandle,
   handleControllerId,
   handleSlotId,
+  listControllers,
   listDevices,
+  getControllerSnapshot,
+  requestProbe,
+  requestRebind,
   portReset,
   getDescriptor,
   readTransferEvent,

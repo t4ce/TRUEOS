@@ -342,11 +342,7 @@ impl<'a> AlignedWriter<'a> {
         self.push_plain(&mut text, " - ");
         self.push_ai_token(&mut text, "web", ai_mode == AiPromptMode::WebSearch);
         self.push_plain(&mut text, " - ");
-        self.push_ai_token(&mut text, "file", ai_mode == AiPromptMode::FileSearch);
-        self.push_plain(&mut text, " - ");
         self.push_ai_token(&mut text, "newchat", ai_mode == AiPromptMode::NewChat);
-        self.push_plain(&mut text, " - ");
-        self.push_ai_token(&mut text, "ai-pc", ai_mode == AiPromptMode::AiPc);
         self.right_text(STATUS_ROW, text.as_str());
     }
 
@@ -748,6 +744,10 @@ pub(crate) fn execute_ai_pc_shell_command(
         "file" => {
             let mut args = trimmed_args.split_whitespace();
             cmds::file::try_parse(io, &mut args)
+        }
+        "inteldev" => {
+            let mut args = trimmed_args.split_whitespace();
+            cmds::inteldev::try_parse(io, &mut args)
         }
         "net" => {
             let mut args = trimmed_args.split_whitespace();
