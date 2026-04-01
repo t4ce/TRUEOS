@@ -1,10 +1,12 @@
 import * as driverdev from '/qjs/dd/driverdev.mjs';
+import { normalizeJsonFileTree } from './ai_file_adapter.mjs';
 
 const SUPPORTED_SHELL_COMMANDS = Object.freeze(new Set([
   'acpi',
   'email',
   'etc',
   'file',
+  'inteldev',
   'net',
   'probe',
   'set',
@@ -14,19 +16,66 @@ const SUPPORTED_SHELL_COMMANDS = Object.freeze(new Set([
 ]));
 
 const SHELL_COMMAND_DESCRIPTION_OVERRIDES = Object.freeze({
-  acpi: 'Run the shell1 acpi command. Use raw_args like `shutdown`, `reboot`, or `sleep`.',
-  email: 'Run the shell1 email command. Use raw_args exactly as shell1 expects.',
-  etc: 'Run the shell1 etc command. Use raw_args exactly as shell1 expects.',
-  file: 'Run the shell1 file command for filesystem listing and file-related tasks. Use raw_args exactly as shell1 expects.',
-  net: 'Run the shell1 net command for network status and probes. Use raw_args exactly as shell1 expects.',
-  probe: 'Run the shell1 probe command for hardware and bus inspection. Use raw_args exactly as shell1 expects.',
-  set: 'Run the shell1 set command for terminal sizing. Use raw_args exactly as shell1 expects.',
-  smp: 'Run the shell1 smp command. Use raw_args exactly as shell1 expects.',
-  tlb: 'Run the shell1 tlb table inspection command. Use raw_args like `pci`, `usb`, `acpi`, or `dump`.',
-  turbo: 'Run the shell1 turbo command. Use raw_args exactly as shell1 expects.',
+  acpi: 'Run the shell1 acpi command for power actions like shutdown, reboot, or sleep.',
+  email: 'Run the shell1 email command.',
+  etc: 'Run the shell1 etc command.',
+  file: 'Run the shell1 file command for filesystem listing and file-related tasks.',
+  inteldev: 'Run the shell1 inteldev command for live Intel GPU debug and bring-up control.',
+  net: 'Run the shell1 net command for network status and probes.',
+  probe: 'Run the shell1 probe command for hardware and bus inspection.',
+  set: 'Run the shell1 set command for terminal sizing.',
+  smp: 'Run the shell1 smp command.',
+  tlb: 'Run the shell1 tlb table inspection command.',
+  turbo: 'Run the shell1 turbo command.',
 });
 
 const DRIVERDEV_TOOLS = Object.freeze([
+  Object.freeze({
+    toolName: 'driverdev_list_xhci_controllers',
+    description: 'List visible TRUEOS xHCI controllers with live runtime status.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({}),
+      required: Object.freeze([]),
+      additionalProperties: false,
+    }),
+  }),
+  Object.freeze({
+    toolName: 'driverdev_get_xhci_controller_snapshot',
+    description: 'Inspect one xHCI controller: runtime state, MMIO registers, per-port state, cached devices, and topology.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({
+        controller_id: Object.freeze({ type: 'integer', description: 'xHCI controller id.' }),
+      }),
+      required: Object.freeze(['controller_id']),
+      additionalProperties: false,
+    }),
+  }),
+  Object.freeze({
+    toolName: 'driverdev_request_xhci_probe',
+    description: 'Ask the running crabusb service to reprobe one xHCI controller.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({
+        controller_id: Object.freeze({ type: 'integer', description: 'xHCI controller id.' }),
+      }),
+      required: Object.freeze(['controller_id']),
+      additionalProperties: false,
+    }),
+  }),
+  Object.freeze({
+    toolName: 'driverdev_request_xhci_rebind',
+    description: 'Force the running crabusb service to rebind one xHCI controller.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({
+        controller_id: Object.freeze({ type: 'integer', description: 'xHCI controller id.' }),
+      }),
+      required: Object.freeze(['controller_id']),
+      additionalProperties: false,
+    }),
+  }),
   Object.freeze({
     toolName: 'driverdev_list_devices',
     description: 'List visible TRUEOS xHCI devices.',
@@ -94,6 +143,37 @@ const DRIVERDEV_TOOLS = Object.freeze([
       additionalProperties: false,
     }),
   }),
+  Object.freeze({
+    toolName: 'driverdev_read_transfer_event',
+    description: 'Read one buffered xHCI transfer completion event for a device handle and endpoint target.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({
+        handle: Object.freeze({ type: 'integer', description: 'Encoded TRUEOS xHCI device handle.' }),
+        ep_target: Object.freeze({ type: 'integer', description: 'xHCI endpoint target / DCI.' }),
+      }),
+      required: Object.freeze(['handle', 'ep_target']),
+      additionalProperties: false,
+    }),
+  }),
+]);
+
+const FILE_ADAPTER_TOOLS = Object.freeze([
+  Object.freeze({
+    toolName: 'file_adapter_get_primary_tree',
+    description: 'Read the custom TRUEOS primary filesystem tree adapter as compact JSON for live file inspection.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({
+        max_entries: Object.freeze({
+          type: 'integer',
+          description: 'Maximum number of filesystem entries to include. Defaults to 100.',
+        }),
+      }),
+      required: Object.freeze([]),
+      additionalProperties: false,
+    }),
+  }),
 ]);
 
 function rawArgSchema(command) {
@@ -102,12 +182,46 @@ function rawArgSchema(command) {
     properties: Object.freeze({
       raw_args: Object.freeze({
         type: 'string',
-        description: `Optional raw shell argument string appended after \`${command}\`. Use exactly the tokens shell1 expects.`,
+        description: `Optional fallback raw shell argument string appended after \`${command}\`. Prefer the structured tool parameters when available.`,
       }),
     }),
     required: Object.freeze([]),
     additionalProperties: false,
   });
+}
+
+function cloneToolParameters(parameters) {
+  if (!parameters || typeof parameters !== 'object') {
+    return null;
+  }
+  try {
+    return Object.freeze(JSON.parse(JSON.stringify(parameters)));
+  } catch {
+    return null;
+  }
+}
+
+function quoteArg(value) {
+  const text = String(value ?? '');
+  return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function appendToken(tokens, value) {
+  const text = String(value ?? '').trim();
+  if (text) {
+    tokens.push(text);
+  }
+}
+
+function appendKeyValue(tokens, key, value) {
+  if (value === null || value === undefined) {
+    return;
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return;
+  }
+  tokens.push(`${key}=${text}`);
 }
 
 function readShellRuntimeCommands() {
@@ -124,12 +238,20 @@ function readShellRuntimeCommands() {
       continue;
     }
     seen.add(command);
+    const tool = entry?.tool && typeof entry.tool === 'object'
+      ? Object.freeze({
+        description: String(entry.tool.description || '').trim(),
+        parameters: cloneToolParameters(entry.tool.parameters),
+      })
+      : null;
     out.push(Object.freeze({
       command,
-      toolName: `shell1_${command.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'command'}`,
+      toolName: `shell_${command.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'command'}`,
       mode: String(entry?.mode || 'cmd').trim() || 'cmd',
-      description: SHELL_COMMAND_DESCRIPTION_OVERRIDES[command]
-        || `Run the shell1 ${command} command. Use raw_args exactly as shell1 expects.`,
+      description: tool?.description
+        || SHELL_COMMAND_DESCRIPTION_OVERRIDES[command]
+        || `Run the shell1 ${command} command. Prefer the structured tool parameters when available.`,
+      parameters: tool?.parameters || null,
     }));
   }
   return out;
@@ -139,17 +261,40 @@ function getShellCommands() {
   return Object.freeze(readShellRuntimeCommands());
 }
 
+function getInteldevShellCommand() {
+  return getShellCommands().find((entry) => entry.command === 'inteldev') || null;
+}
+
 function shellToolBundle() {
-  return getShellCommands().map((entry) => ({
+  return getShellCommands()
+    .filter((entry) => entry.command !== 'inteldev')
+    .map((entry) => ({
     type: 'function',
     name: entry.toolName,
     description: entry.description,
-    parameters: rawArgSchema(entry.command),
+    parameters: entry.parameters || rawArgSchema(entry.command),
   }));
+}
+
+function intelToolBundle() {
+  const inteldev = getInteldevShellCommand();
+  if (!inteldev) {
+    return [];
+  }
+  return [{
+    type: 'function',
+    name: 'intel_adapter',
+    description: 'Live Intel GPU adapter for MMIO, ring, GuC, HuC, render, and media bring-up actions. Prefer this for Intel hardware work.',
+    parameters: inteldev.parameters || rawArgSchema('inteldev'),
+  }];
 }
 
 export function buildAiPcShellToolBundle() {
   return Object.freeze(shellToolBundle());
+}
+
+export function buildAiPcIntelToolBundle() {
+  return Object.freeze(intelToolBundle());
 }
 
 export function buildAiPcDriverdevToolBundle() {
@@ -163,8 +308,21 @@ export function buildAiPcDriverdevToolBundle() {
   );
 }
 
+export function buildAiPcFileToolBundle() {
+  return Object.freeze(
+    FILE_ADAPTER_TOOLS.map((entry) => ({
+      type: 'function',
+      name: entry.toolName,
+      description: entry.description,
+      parameters: entry.parameters,
+    })),
+  );
+}
+
 export function buildAiPcToolBundle() {
   return Object.freeze([
+    ...buildAiPcIntelToolBundle(),
+    ...buildAiPcFileToolBundle(),
     ...buildAiPcShellToolBundle(),
     ...buildAiPcDriverdevToolBundle(),
   ]);
@@ -174,13 +332,124 @@ export function findAiPcShellCommandByToolName(toolName) {
   return getShellCommands().find((entry) => entry.toolName === toolName) || null;
 }
 
+export function isAiPcIntelToolName(toolName) {
+  return toolName === 'intel_adapter';
+}
+
+export function isAiPcFileToolName(toolName) {
+  return toolName === 'file_adapter_get_primary_tree';
+}
+
 export function buildAiPcShellCommandLine(toolName, args = {}) {
   const entry = findAiPcShellCommandByToolName(toolName);
   if (!entry) {
     throw new Error(`unknown ai-pc shell tool: ${String(toolName || '')}`);
   }
   const rawArgs = typeof args?.raw_args === 'string' ? args.raw_args.trim() : '';
-  return rawArgs ? `${entry.command} ${rawArgs}` : entry.command;
+  if (rawArgs) {
+    return `${entry.command} ${rawArgs}`;
+  }
+
+  const tokens = [];
+  switch (entry.command) {
+    case 'acpi':
+      appendToken(tokens, args?.action);
+      break;
+    case 'email':
+      if (args?.mode === 'set_from') {
+        appendToken(tokens, 'set');
+        appendToken(tokens, args?.from);
+      } else {
+        appendToken(tokens, args?.to);
+        if (args?.mail_text !== undefined) {
+          appendToken(tokens, quoteArg(args.mail_text));
+        }
+      }
+      break;
+    case 'etc':
+      appendToken(tokens, args?.subcommand);
+      break;
+    case 'file':
+      if (args?.action && args.action !== 'list') {
+        appendToken(tokens, args.action);
+      }
+      if (args?.action === 'format') {
+        appendToken(tokens, args?.disk_id);
+      } else if (args?.action === 'ramdisc') {
+        appendToken(tokens, args?.size);
+      }
+      break;
+    case 'inteldev':
+      appendToken(tokens, args?.action);
+      appendKeyValue(tokens, 'scope', args?.scope);
+      appendKeyValue(tokens, 'engine', args?.engine);
+      appendKeyValue(tokens, 'addr', args?.addr);
+      appendKeyValue(tokens, 'value', args?.value);
+      appendKeyValue(tokens, 'mask', args?.mask);
+      appendKeyValue(tokens, 'expected', args?.expected);
+      appendKeyValue(tokens, 'count', args?.count);
+      appendKeyValue(tokens, 'len', args?.len);
+      appendKeyValue(tokens, 'offset', args?.offset);
+      appendKeyValue(tokens, 'timeout_iters', args?.timeout_iters);
+      appendKeyValue(tokens, 'data_hex', args?.data_hex);
+      appendKeyValue(tokens, 'guard', args?.guard);
+      break;
+    case 'net':
+      appendToken(tokens, args?.subcommand);
+      if (args?.subcommand === 'icmp') {
+        appendToken(tokens, args?.target);
+        appendToken(tokens, args?.selector);
+      } else if (args?.subcommand === 'irc') {
+        appendToken(tokens, args?.host);
+        appendToken(tokens, args?.channel);
+      } else if (args?.subcommand === 'nic') {
+        appendToken(tokens, args?.selector);
+      } else if (args?.subcommand === 'hostname' && args?.name) {
+        appendToken(tokens, args.name);
+      }
+      break;
+    case 'probe':
+      appendToken(tokens, args?.domain);
+      appendToken(tokens, args?.action);
+      if (args?.domain === 'usb' && (args?.action === 'kick' || args?.action === 'rebind')) {
+        appendToken(tokens, args?.controller);
+      } else if (args?.domain === 'nvme' && args?.action === 'flr') {
+        appendToken(tokens, args?.pci);
+      }
+      break;
+    case 'set':
+      appendToken(tokens, args?.width);
+      break;
+    case 'smp':
+      appendToken(tokens, args?.slot);
+      break;
+    case 'tlb':
+      if (args?.target === 'usb_probe') {
+        appendToken(tokens, 'usb');
+        appendToken(tokens, 'probe');
+      } else {
+        appendToken(tokens, args?.target);
+      }
+      break;
+    case 'turbo':
+      appendToken(tokens, args?.action);
+      if (args?.action === 'verify') {
+        appendToken(tokens, args?.spins);
+      }
+      break;
+    default:
+      break;
+  }
+
+  return tokens.length > 0 ? `${entry.command} ${tokens.join(' ')}` : entry.command;
+}
+
+export function buildAiPcIntelCommandLine(args = {}) {
+  const inteldev = getInteldevShellCommand();
+  if (!inteldev) {
+    throw new Error('inteldev shell command is unavailable');
+  }
+  return buildAiPcShellCommandLine(inteldev.toolName, args);
 }
 
 function bytesToHex(bytesLike) {
@@ -194,8 +463,107 @@ function bytesToHex(bytesLike) {
   return out;
 }
 
+function readPrimaryFsTree(maxEntries) {
+  if (typeof globalThis.__trueosAiReadPrimaryFsTreeJsonAll !== 'function') {
+    throw new Error('TRUEOS primary filesystem adapter is unavailable');
+  }
+  const raw = globalThis.__trueosAiReadPrimaryFsTreeJsonAll(maxEntries);
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return null;
+  }
+  const compact = normalizeJsonFileTree(raw);
+  try {
+    return JSON.parse(compact);
+  } catch {
+    return compact;
+  }
+}
+
+function summarizePrimaryFsTree(result) {
+  if (!result || typeof result !== 'object' || !Array.isArray(result.entries)) {
+    return result;
+  }
+
+  const root = String(result.root || '/');
+  const topLevel = [];
+  for (const entry of result.entries) {
+    const path = String(entry?.path || '');
+    const kind = String(entry?.kind || '');
+    const depth = Number(entry?.depth || 0) | 0;
+    if (!path || depth > 1) {
+      continue;
+    }
+    topLevel.push({ path, kind, depth });
+    if (topLevel.length >= 24) {
+      break;
+    }
+  }
+
+  return {
+    version: Number(result.version || 1) || 1,
+    root,
+    max_entries: Number(result.max_entries || 0) || 0,
+    truncated: !!result.truncated,
+    entry_count: Array.isArray(result.entries) ? result.entries.length : 0,
+    top_level: topLevel,
+  };
+}
+
+export function executeAiPcFileTool(toolName, args = {}) {
+  switch (toolName) {
+    case 'file_adapter_get_primary_tree': {
+      const maxEntries = Math.max(1, Number(args?.max_entries || 100) | 0);
+      const result = readPrimaryFsTree(maxEntries);
+      return {
+        ok: !!result,
+        tool_name: toolName,
+        max_entries: maxEntries,
+        result: summarizePrimaryFsTree(result),
+      };
+    }
+    default:
+      throw new Error(`unknown ai-pc file tool: ${String(toolName || '')}`);
+  }
+}
+
 export function executeAiPcDriverdevTool(toolName, args = {}) {
   switch (toolName) {
+    case 'driverdev_list_xhci_controllers':
+      return {
+        ok: true,
+        tool_name: toolName,
+        result: driverdev.listControllers(),
+      };
+    case 'driverdev_get_xhci_controller_snapshot': {
+      const controllerId = Number(args?.controller_id || 0) | 0;
+      const result = driverdev.getControllerSnapshot(controllerId);
+      return {
+        ok: !!result,
+        tool_name: toolName,
+        controller_id: controllerId,
+        result,
+      };
+    }
+    case 'driverdev_request_xhci_probe': {
+      const controllerId = Number(args?.controller_id || 0) | 0;
+      const rc = driverdev.requestProbe(controllerId);
+      return {
+        ok: rc === 0,
+        tool_name: toolName,
+        controller_id: controllerId,
+        rc,
+      };
+    }
+    case 'driverdev_request_xhci_rebind': {
+      const controllerId = Number(args?.controller_id || 0) | 0;
+      const rc = driverdev.requestRebind(controllerId);
+      return {
+        ok: rc === 0,
+        tool_name: toolName,
+        controller_id: controllerId,
+        rc,
+      };
+    }
     case 'driverdev_list_devices':
       return {
         ok: true,
@@ -251,6 +619,18 @@ export function executeAiPcDriverdevTool(toolName, args = {}) {
         controller_id: controllerId,
         port_idx: portIdx,
         rc,
+      };
+    }
+    case 'driverdev_read_transfer_event': {
+      const handle = Number(args?.handle || 0) | 0;
+      const epTarget = Number(args?.ep_target || 0) | 0;
+      const result = driverdev.readTransferEvent(handle, epTarget);
+      return {
+        ok: !!result,
+        tool_name: toolName,
+        handle,
+        ep_target: epTarget,
+        result,
       };
     }
     default:

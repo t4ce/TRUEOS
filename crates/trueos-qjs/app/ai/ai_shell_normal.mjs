@@ -1,13 +1,26 @@
+import { normalizeJsonFileTree } from './ai_file_adapter.mjs';
+import {
+  buildAiPcIntelCommandLine,
+  buildAiPcShellCommandLine,
+  buildAiPcToolBundle,
+  executeAiPcDriverdevTool,
+  executeAiPcFileTool,
+  findAiPcShellCommandByToolName,
+  isAiPcFileToolName,
+  isAiPcIntelToolName,
+} from './ai_pc_cmd.mjs';
+
 const MODEL = 'gpt-5.4';
-const FILE_TREE_MAX_CHARS = 12_000;
 const MODEL_TAG_COLOR = '\x1b[38;2;60;183;161m';
 const ANSI_RESET = '\x1b[0m';
+const LOCAL_TOOL_MAX_ROUNDS = 8;
 
 const SYSTEM_PROMPT = [
   'You are the TRUEOS shell AI mode.',
   'Reply for a terminal context.',
   'Be concise, concrete, and technically useful.',
   'Do not mention browser integration.',
+  'Use the provided TRUEOS-native tools when they help.',
 ].join(' ');
 
 export function printLine(text) {
@@ -63,31 +76,6 @@ function clipText(text, maxChars) {
 function quoteInline(text) {
   const value = String(text ?? '');
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}
-
-function normalizeJsonFileTree(raw) {
-  if (typeof raw !== 'string' || !raw.trim()) {
-    return '';
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    const entries = Array.isArray(parsed && parsed.entries) ? parsed.entries : [];
-    const compact = {
-      version: Number(parsed && parsed.version || 1) || 1,
-      root: String(parsed && parsed.root || '/'),
-      max_entries: Number(parsed && parsed.max_entries || entries.length || 0) || 0,
-      truncated: !!(parsed && parsed.truncated),
-      entries: entries.map((entry) => ({
-        path: String(entry && entry.path || ''),
-        kind: String(entry && entry.kind || ''),
-        depth: Number(entry && entry.depth || 0) || 0,
-      })),
-    };
-    return JSON.stringify(compact).slice(0, FILE_TREE_MAX_CHARS);
-  } catch {
-    return String(raw).slice(0, FILE_TREE_MAX_CHARS);
-  }
 }
 
 export function readEnv(name) {
@@ -271,10 +259,16 @@ function buildInput(prompt, localFileContext) {
 }
 
 function buildRequest(prompt, options) {
+  const localTools = buildAiPcToolBundle();
   const request = {
     model: MODEL,
     instructions: SYSTEM_PROMPT,
     input: buildInput(prompt, options.localFileContext),
+    tools: options.webSearch
+      ? [...localTools, { type: 'web_search' }]
+      : localTools,
+    tool_choice: 'auto',
+    parallel_tool_calls: false,
     text: {
       format: { type: 'text' },
       verbosity: 'low',
@@ -287,19 +281,87 @@ function buildRequest(prompt, options) {
   }
 
   if (options.webSearch) {
-    request.tools = [{ type: 'web_search' }];
-    request.tool_choice = 'auto';
     request.include = ['web_search_call.action.sources'];
   } else if (options.fileSearch && options.vectorStoreIds.length > 0) {
-    request.tools = [{
+    request.tools = [...localTools, {
       type: 'file_search',
       vector_store_ids: options.vectorStoreIds,
     }];
-    request.tool_choice = 'auto';
     request.include = ['file_search_call.results'];
   }
 
   return request;
+}
+
+function collectFunctionCalls(response) {
+  const out = [];
+  const output = Array.isArray(response?.output) ? response.output : [];
+  for (const item of output) {
+    if (item && item.type === 'function_call' && typeof item.call_id === 'string') {
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+function parseToolArguments(call) {
+  const raw = typeof call?.arguments === 'string' ? call.arguments : '{}';
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    throw new Error(`tool arguments json parse failed for ${String(call?.name || '')}: ${String(error?.message || error)}`);
+  }
+}
+
+function executeLocalShellTool(call, parsedArgs, targetMask) {
+  const command = findAiPcShellCommandByToolName(call.name);
+  if (!command) {
+    throw new Error(`unknown shell tool: ${String(call.name || '')}`);
+  }
+  if (typeof globalThis.__trueosAiPcExecuteShellCommand !== 'function') {
+    throw new Error('TRUEOS shell bridge is unavailable');
+  }
+  const commandLine = buildAiPcShellCommandLine(call.name, parsedArgs);
+  const rawArgs = commandLine.startsWith(`${command.command} `)
+    ? commandLine.slice(command.command.length + 1)
+    : (commandLine === command.command ? '' : commandLine);
+  const result = globalThis.__trueosAiPcExecuteShellCommand(command.command, rawArgs, Number(targetMask || 0));
+  return {
+    ...(result && typeof result === 'object' ? result : {}),
+    tool_name: String(call.name || ''),
+    command_line: commandLine,
+  };
+}
+
+function executeLocalIntelTool(call, parsedArgs, targetMask) {
+  if (typeof globalThis.__trueosAiPcExecuteShellCommand !== 'function') {
+    throw new Error('TRUEOS shell bridge is unavailable');
+  }
+  const commandLine = buildAiPcIntelCommandLine(parsedArgs);
+  const rawArgs = commandLine.startsWith('inteldev ')
+    ? commandLine.slice('inteldev'.length + 1)
+    : (commandLine === 'inteldev' ? '' : commandLine);
+  const result = globalThis.__trueosAiPcExecuteShellCommand('inteldev', rawArgs, Number(targetMask || 0));
+  return {
+    ...(result && typeof result === 'object' ? result : {}),
+    tool_name: 'intel_adapter',
+    command_line: commandLine,
+  };
+}
+
+function executeLocalToolCall(call, targetMask) {
+  const parsedArgs = parseToolArguments(call);
+  if (isAiPcIntelToolName(call.name)) {
+    return executeLocalIntelTool(call, parsedArgs, targetMask);
+  }
+  if (isAiPcFileToolName(call.name)) {
+    return executeAiPcFileTool(call.name, parsedArgs);
+  }
+  if (findAiPcShellCommandByToolName(call.name)) {
+    return executeLocalShellTool(call, parsedArgs, targetMask);
+  }
+  return executeAiPcDriverdevTool(call.name, parsedArgs);
 }
 
 function maybeReadLocalFileContext(fileSearch) {
@@ -394,6 +456,7 @@ export async function runShellPrompt(config = null) {
   const webSearch = !!source.webSearch;
   const fileSearch = !!source.fileSearch;
   const conversationId = String(source.conversationId || '').trim();
+  const targetMask = Number(source.targetMask || 0) || 0;
   const vectorStoreIds = readVectorStoreIds();
   const localFileContext = fileSearch && vectorStoreIds.length <= 0
     ? maybeReadLocalFileContext(true)
@@ -403,31 +466,65 @@ export async function runShellPrompt(config = null) {
     printLine('ai: file mode using local TRUEOS file tree json');
   }
 
-  const request = buildRequest(prompt, {
-    webSearch,
-    fileSearch,
-    conversationId,
-    vectorStoreIds,
-    localFileContext,
-  });
-  let response;
-  try {
-    response = await callOpenAiResponsesWithRetry(request, 2);
-  } catch (error) {
-    const normalized = normalizeRequestError(error);
-    printLine(`ai: request failed: ${String(normalized && normalized.stack ? normalized.stack : normalized)}`);
-    throw error;
+  let previousResponseId = conversationId;
+  let nextInput = buildInput(prompt, localFileContext);
+
+  for (let round = 0; round < LOCAL_TOOL_MAX_ROUNDS; round += 1) {
+    let response;
+    try {
+      response = await callOpenAiResponsesWithRetry({
+        ...buildRequest(prompt, {
+          webSearch,
+          fileSearch,
+          conversationId: previousResponseId,
+          vectorStoreIds,
+          localFileContext: '',
+        }),
+        input: nextInput,
+      }, 2);
+    } catch (error) {
+      const normalized = normalizeRequestError(error);
+      printLine(`ai: request failed: ${String(normalized && normalized.stack ? normalized.stack : normalized)}`);
+      throw error;
+    }
+
+    maybePersistConversationId(response);
+    previousResponseId = typeof response?.id === 'string' ? response.id.trim() : previousResponseId;
+
+    const functionCalls = collectFunctionCalls(response);
+    if (functionCalls.length === 0) {
+      const text = normalizeOutput(response);
+      if (!text) {
+        printLine('ai: empty response');
+        return;
+      }
+      printResponseSummary(response, text);
+      return;
+    }
+
+    nextInput = [];
+    for (const call of functionCalls) {
+      let toolResult;
+      try {
+        toolResult = executeLocalToolCall(call, targetMask);
+      } catch (error) {
+        toolResult = {
+          ok: false,
+          tool_name: String(call?.name || ''),
+          stderr: String(error?.stack || error),
+          exit_code: 1,
+        };
+      }
+      nextInput.push({
+        type: 'function_call_output',
+        call_id: String(call.call_id),
+        output: JSON.stringify(toolResult),
+      });
+    }
+    printLine(`ai: tool round ${round + 1} ok`);
   }
 
-  maybePersistConversationId(response);
-
-  const text = normalizeOutput(response);
-  if (!text) {
-    printLine('ai: empty response');
-    return;
-  }
-
-  printResponseSummary(response, text);
+  printLine('ai: tool loop exceeded round limit');
 }
 
 export async function runNormalPrompt(promptText) {

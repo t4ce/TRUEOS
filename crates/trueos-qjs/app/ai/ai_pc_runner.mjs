@@ -7,23 +7,41 @@ import {
   printResponseSummary,
 } from './ai_shell_normal.mjs';
 import {
+  executeAiPcFileTool,
+  buildAiPcIntelCommandLine,
   buildAiPcShellCommandLine,
   buildAiPcToolBundle,
   executeAiPcDriverdevTool,
   findAiPcShellCommandByToolName,
+  isAiPcFileToolName,
+  isAiPcIntelToolName,
 } from './ai_pc_cmd.mjs';
 
 const MODEL = 'gpt-5.4';
 const AI_PC_MAX_TOOL_ROUNDS = 8;
 
-const AI_PC_SYSTEM_PROMPT = [
-  'You are the TRUEOS ai-pc mode.',
-  'Use the provided TRUEOS-native shell and driverdev tools when they help.',
-  'Prefer inspecting state before making changes.',
-  'For shell tools, pass exact shell tokens in raw_args.',
-  'Do not claim to have used browser automation in this mode.',
-  'Finish with a concise terminal-style answer after tool use is complete.',
-].join(' ');
+function buildAiPcSystemPrompt() {
+  const shellToolNames = buildAiPcToolBundle()
+    .map((tool) => String(tool?.name || '').trim())
+    .filter((name) => name.startsWith('shell_'))
+    .join(', ');
+
+  return [
+    'You are the TRUEOS ai-pc mode.',
+    'The provided tools are real callable tools in this session, not text examples.',
+    shellToolNames
+      ? `Callable shell tools in this session are: ${shellToolNames}.`
+      : 'Callable shell tools may be available in this session.',
+    'Use the provided TRUEOS-native shell, Intel adapter, custom file adapter, and driverdev tools when they help.',
+    'Use shell_file for shell file actions like list, ramdisc, or format.',
+    'Use file_adapter_get_primary_tree for read-only TRUEOS filesystem tree visibility.',
+    'For Intel GPU work, prefer the dedicated intel_adapter tool over generic shell tools.',
+    'Prefer inspecting state before making changes.',
+    'For shell tools, follow each tool parameter schema. Use raw_args only as a fallback escape hatch when a tool explicitly needs it.',
+    'Do not claim to have used browser automation in this mode.',
+    'Finish with a concise terminal-style answer after tool use is complete.',
+  ].join(' ');
+}
 
 function buildInitialInput(prompt) {
   return [{
@@ -35,7 +53,7 @@ function buildInitialInput(prompt) {
 function buildToolLoopRequest(input, previousResponseId) {
   const request = {
     model: MODEL,
-    instructions: AI_PC_SYSTEM_PROMPT,
+    instructions: buildAiPcSystemPrompt(),
     input,
     tools: buildAiPcToolBundle(),
     tool_choice: 'auto',
@@ -81,8 +99,10 @@ function executeAiPcShellTool(call, parsedArgs, targetMask) {
     throw new Error('TRUEOS ai-pc shell bridge is unavailable');
   }
 
-  const rawArgs = typeof parsedArgs?.raw_args === 'string' ? parsedArgs.raw_args : '';
   const commandLine = buildAiPcShellCommandLine(call.name, parsedArgs);
+  const rawArgs = commandLine.startsWith(`${command.command} `)
+    ? commandLine.slice(command.command.length + 1)
+    : (commandLine === command.command ? '' : commandLine);
   const result = globalThis.__trueosAiPcExecuteShellCommand(command.command, rawArgs, Number(targetMask || 0));
   return {
     ...(result && typeof result === 'object' ? result : {}),
@@ -91,8 +111,30 @@ function executeAiPcShellTool(call, parsedArgs, targetMask) {
   };
 }
 
+function executeAiPcIntelTool(call, parsedArgs, targetMask) {
+  if (typeof globalThis.__trueosAiPcExecuteShellCommand !== 'function') {
+    throw new Error('TRUEOS ai-pc shell bridge is unavailable');
+  }
+  const commandLine = buildAiPcIntelCommandLine(parsedArgs);
+  const rawArgs = commandLine.startsWith('inteldev ')
+    ? commandLine.slice('inteldev'.length + 1)
+    : (commandLine === 'inteldev' ? '' : commandLine);
+  const result = globalThis.__trueosAiPcExecuteShellCommand('inteldev', rawArgs, Number(targetMask || 0));
+  return {
+    ...(result && typeof result === 'object' ? result : {}),
+    tool_name: 'intel_adapter',
+    command_line: commandLine,
+  };
+}
+
 function executeAiPcToolCall(call, targetMask) {
   const parsedArgs = parseToolArguments(call);
+  if (isAiPcIntelToolName(call.name)) {
+    return executeAiPcIntelTool(call, parsedArgs, targetMask);
+  }
+  if (isAiPcFileToolName(call.name)) {
+    return executeAiPcFileTool(call.name, parsedArgs);
+  }
   if (findAiPcShellCommandByToolName(call.name)) {
     return executeAiPcShellTool(call, parsedArgs, targetMask);
   }

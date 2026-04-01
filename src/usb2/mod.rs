@@ -168,6 +168,34 @@ pub(crate) struct UsbControllerRuntimeDiag {
     pub last_probe_device_count: u32,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct UsbPortRuntimeDiag {
+    pub port_id: u8,
+    pub portsc: u32,
+    pub portpmsc: u32,
+    pub portli: u32,
+}
+
+#[derive(Clone)]
+pub(crate) struct UsbControllerMmioDiag {
+    pub caplen: u8,
+    pub hcsparams1: u32,
+    pub hccparams1: u32,
+    pub dboff: u32,
+    pub rtsoff: u32,
+    pub usbcmd: u32,
+    pub usbsts: u32,
+    pub crcr: u64,
+    pub dcbaap: u64,
+    pub config: u32,
+    pub iman: u32,
+    pub imod: u32,
+    pub erstsz: u32,
+    pub erstba: u64,
+    pub erdp: u64,
+    pub ports: Vec<UsbPortRuntimeDiag>,
+}
+
 fn decode_mmio_bar(bar_lo: u32, bar_hi: Option<u32>) -> Option<u64> {
     if bar_lo == 0 || bar_lo == 0xFFFF_FFFF || (bar_lo & 0x1) != 0 {
         return None;
@@ -335,6 +363,75 @@ pub(crate) fn runtime_diag(controller_id: usize) -> Option<UsbControllerRuntimeD
         last_probe_state: diag.last_probe_state,
         last_probe_device_count: diag.last_probe_device_count,
     })
+}
+
+#[inline]
+unsafe fn read_mmio32(base: *const u8, offset: usize) -> u32 {
+    unsafe { core::ptr::read_volatile(base.add(offset) as *const u32) }
+}
+
+#[inline]
+unsafe fn read_mmio64(base: *const u8, offset: usize) -> u64 {
+    let lo = unsafe { read_mmio32(base, offset) } as u64;
+    let hi = unsafe { read_mmio32(base, offset + 4) } as u64;
+    lo | (hi << 32)
+}
+
+pub(crate) fn controller_mmio_diag(controller_id: usize) -> Option<UsbControllerMmioDiag> {
+    let info = controller_by_index(controller_id)?;
+    crate::pci::enable_mem_and_bus_master(info.bus, info.slot, info.function);
+    let mmio = info.mmio_base.as_ptr() as *const u8;
+
+    unsafe {
+        let caplen = (read_mmio32(mmio, 0x00) & 0xFF) as u8;
+        let hcsparams1 = read_mmio32(mmio, 0x04);
+        let hccparams1 = read_mmio32(mmio, 0x10);
+        let dboff = read_mmio32(mmio, 0x14) & !0x3;
+        let rtsoff = read_mmio32(mmio, 0x18) & !0x1F;
+        let op_base = usize::from(caplen);
+        let usbcmd = read_mmio32(mmio, op_base);
+        let usbsts = read_mmio32(mmio, op_base + 0x04);
+        let crcr = read_mmio64(mmio, op_base + 0x18);
+        let dcbaap = read_mmio64(mmio, op_base + 0x30);
+        let config = read_mmio32(mmio, op_base + 0x38);
+        let runtime_base = rtsoff as usize;
+        let iman = read_mmio32(mmio, runtime_base + 0x20);
+        let imod = read_mmio32(mmio, runtime_base + 0x24);
+        let erstsz = read_mmio32(mmio, runtime_base + 0x28);
+        let erstba = read_mmio64(mmio, runtime_base + 0x30);
+        let erdp = read_mmio64(mmio, runtime_base + 0x38);
+
+        let max_ports = ((hcsparams1 >> 24) & 0xFF) as usize;
+        let mut ports = Vec::with_capacity(max_ports);
+        for index in 0..max_ports {
+            let port_base = op_base + 0x400 + (index * 0x10);
+            ports.push(UsbPortRuntimeDiag {
+                port_id: (index + 1) as u8,
+                portsc: read_mmio32(mmio, port_base),
+                portpmsc: read_mmio32(mmio, port_base + 0x04),
+                portli: read_mmio32(mmio, port_base + 0x08),
+            });
+        }
+
+        Some(UsbControllerMmioDiag {
+            caplen,
+            hcsparams1,
+            hccparams1,
+            dboff,
+            rtsoff,
+            usbcmd,
+            usbsts,
+            crcr,
+            dcbaap,
+            config,
+            iman,
+            imod,
+            erstsz,
+            erstba,
+            erdp,
+            ports,
+        })
+    }
 }
 
 fn classify_descriptor_kind(desc: &crab_usb::usb_if::descriptor::DeviceDescriptor) -> &'static str {
