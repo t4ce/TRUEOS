@@ -861,14 +861,12 @@ fn handle_submit(
             shell2_qjs::submit(spawner, io, &target, qjs_mode, submitted);
             HandleSubmitResult::None
         }
-        ShellMode2::Ai => {
-            match shell2_ai::submit(spawner, io, ai_mode, submitted) {
-                shell2_ai::SubmitResult::Queued => HandleSubmitResult::None,
-                shell2_ai::SubmitResult::ResetToNormal => {
-                    HandleSubmitResult::SetAiMode(AiPromptMode::Normal)
-                }
+        ShellMode2::Ai => match shell2_ai::submit(spawner, io, ai_mode, submitted) {
+            shell2_ai::SubmitResult::Queued => HandleSubmitResult::None,
+            shell2_ai::SubmitResult::ResetToNormal => {
+                HandleSubmitResult::SetAiMode(AiPromptMode::Normal)
             }
-        }
+        },
         ShellMode2::Irc => {
             shell2_irc::submit(io, irc_mode, submitted);
             HandleSubmitResult::None
