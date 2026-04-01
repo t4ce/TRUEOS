@@ -101,7 +101,9 @@ const CTX_RING_HEAD_DW: usize = 0x04 + 1;
 const CTX_RING_TAIL_DW: usize = 0x06 + 1;
 const CTX_RING_START_DW: usize = 0x08 + 1;
 const CTX_RING_CTL_DW: usize = 0x0A + 1;
+const CTX_RING_MI_MODE_DW: usize = 0x54 + 1;
 const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
+const STOP_RING: u32 = 1 << 8;
 const GFX_FLSH_CNTL_GEN6: usize = 0x101008;
 const GFX_FLSH_CNTL_EN: u32 = 1 << 0;
 const FORCEWAKE_RENDER_GEN11: usize = 0x0A278;
@@ -1218,7 +1220,7 @@ fn init_gen12_bcs_context_image(
     dwords.fill(0);
 
     let state = &mut dwords[LRC_STATE_OFFSET_DWORDS..];
-    if state.len() < 96 {
+    if state.len() < 112 {
         return false;
     }
 
@@ -1329,7 +1331,7 @@ pub(super) fn init_gen12_video_context_image(
     state[idx] = MI_NOOP;
     idx += 1;
 
-    state[idx] = mi_lri_cmd(14, MI_LRI_FORCE_POSTED);
+    state[idx] = mi_lri_cmd(15, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = ring_base + 0x244;
     state[idx + 1] = 0x0009_0009;
@@ -1341,25 +1343,27 @@ pub(super) fn init_gen12_video_context_image(
     state[idx + 7] = ring_start;
     state[idx + 8] = ring_base + 0x3C;
     state[idx + 9] = ring_ctl;
-    state[idx + 10] = ring_base + 0x80;
-    state[idx + 11] = hws_pga;
-    state[idx + 12] = ring_base + 0x168;
-    state[idx + 13] = 0;
-    state[idx + 14] = ring_base + 0x140;
+    state[idx + 10] = ring_base + 0x9C;
+    state[idx + 11] = STOP_RING << 16;
+    state[idx + 12] = ring_base + 0x80;
+    state[idx + 13] = hws_pga;
+    state[idx + 14] = ring_base + 0x168;
     state[idx + 15] = 0;
-    state[idx + 16] = ring_base + 0x110;
+    state[idx + 16] = ring_base + 0x140;
     state[idx + 17] = 0;
-    state[idx + 18] = ring_base + 0x1C0;
+    state[idx + 18] = ring_base + 0x110;
     state[idx + 19] = 0;
-    state[idx + 20] = ring_base + 0x1C4;
+    state[idx + 20] = ring_base + 0x1C0;
     state[idx + 21] = 0;
-    state[idx + 22] = ring_base + 0x1C8;
+    state[idx + 22] = ring_base + 0x1C4;
     state[idx + 23] = 0;
-    state[idx + 24] = ring_base + 0x180;
+    state[idx + 24] = ring_base + 0x1C8;
     state[idx + 25] = 0;
-    state[idx + 26] = ring_base + 0x2B4;
+    state[idx + 26] = ring_base + 0x180;
     state[idx + 27] = 0;
-    idx += 28;
+    state[idx + 28] = ring_base + 0x2B4;
+    state[idx + 29] = 0;
+    idx += 30;
 
     push_mi_nops(state, &mut idx, 5);
 
@@ -1385,11 +1389,22 @@ pub(super) fn init_gen12_video_context_image(
     state[idx + 17] = 0;
     idx += 18;
 
+    push_mi_nops(state, &mut idx, 13);
+
+    state[idx] = mi_lri_cmd(1, 0);
+    idx += 1;
+    state[idx] = ring_base + 0x200;
+    state[idx + 1] = 0;
+    idx += 2;
+
+    push_mi_nops(state, &mut idx, 12);
+
     state[CTX_CONTEXT_CONTROL_DW] = 0x0009_0009;
     state[CTX_RING_HEAD_DW] = 0;
     state[CTX_RING_TAIL_DW] = ring_tail;
     state[CTX_RING_START_DW] = ring_start;
     state[CTX_RING_CTL_DW] = ring_ctl;
+    state[CTX_RING_MI_MODE_DW] = STOP_RING << 16;
 
     state[idx] = MI_BATCH_BUFFER_END | 1;
     dma_cache_flush(context_virt as *const u8, context_len);
@@ -2008,6 +2023,123 @@ pub fn cpu_framebuffer_visualize_bytes_center(
     log_framebuffer_probe(
         warm,
         "cpu-visualize-center",
+        origin_x.saturating_add(outer_w / 2),
+        origin_y.saturating_add(outer_h / 2),
+    );
+}
+
+#[inline]
+fn clamp_u8_i32(value: i32) -> u8 {
+    value.clamp(0, 255) as u8
+}
+
+pub fn cpu_framebuffer_visualize_nv12_center(
+    label: &str,
+    bytes: &[u8],
+    frame_width: usize,
+    frame_height: usize,
+    pitch: usize,
+) {
+    let Some(warm) = warm_state() else {
+        crate::log!("intel/igpu770: cpu-fb-nv12 label={} status=not-warmed\n", label);
+        return;
+    };
+    if frame_width == 0 || frame_height == 0 || pitch < frame_width {
+        crate::log!(
+            "intel/igpu770: cpu-fb-nv12 label={} status=bad-dims dims={}x{} pitch={}\n",
+            label,
+            frame_width,
+            frame_height,
+            pitch
+        );
+        return;
+    }
+    let uv_plane_off = pitch.saturating_mul(frame_height);
+    let needed = uv_plane_off.saturating_add((pitch.saturating_mul(frame_height)) / 2);
+    if bytes.len() < needed {
+        crate::log!(
+            "intel/igpu770: cpu-fb-nv12 label={} status=short-surface bytes={} need={}\n",
+            label,
+            bytes.len(),
+            needed
+        );
+        return;
+    }
+    if warm.limine_fb_virt == 0 || warm.limine_fb_pitch == 0 || warm.limine_fb_bpp < 32 {
+        crate::log!("intel/igpu770: cpu-fb-nv12 label={} status=fb-unavailable\n", label);
+        return;
+    }
+
+    let scale_x = frame_width.div_ceil(warm.limine_fb_width.max(1));
+    let scale_y = frame_height.div_ceil(warm.limine_fb_height.max(1));
+    let scale = scale_x.max(scale_y).max(1);
+    let outer_w = (frame_width / scale).max(4).min(warm.limine_fb_width.max(1));
+    let outer_h = (frame_height / scale).max(4).min(warm.limine_fb_height.max(1));
+    let origin_x = warm.limine_fb_width.saturating_sub(outer_w) / 2;
+    let origin_y = warm.limine_fb_height.saturating_sub(outer_h) / 2;
+
+    if !cpu_framebuffer_fill_rect(warm, origin_x, origin_y, outer_w, outer_h, 0x0000_0000) {
+        crate::log!("intel/igpu770: cpu-fb-nv12 label={} status=outer-fill-failed\n", label);
+        return;
+    }
+
+    let y_plane = &bytes[..uv_plane_off];
+    let uv_plane = &bytes[uv_plane_off..];
+    let mut y = 0usize;
+    while y < outer_h {
+        let Some(row_off) = framebuffer_byte_offset(warm, origin_x, origin_y.saturating_add(y))
+        else {
+            crate::log!(
+                "intel/igpu770: cpu-fb-nv12 label={} status=row-off-failed row={}\n",
+                label,
+                y
+            );
+            return;
+        };
+        let row_ptr = warm.limine_fb_virt.saturating_add(row_off) as *mut u32;
+        let src_y = (y.saturating_mul(scale)).min(frame_height.saturating_sub(1));
+        let mut x = 0usize;
+        while x < outer_w {
+            let src_x = (x.saturating_mul(scale)).min(frame_width.saturating_sub(1));
+            let y_idx = src_y.saturating_mul(pitch).saturating_add(src_x);
+            let uv_x = src_x & !1usize;
+            let uv_idx = (src_y / 2).saturating_mul(pitch).saturating_add(uv_x);
+            let y_sample = y_plane.get(y_idx).copied().unwrap_or(16) as i32;
+            let u_sample = uv_plane.get(uv_idx).copied().unwrap_or(128) as i32;
+            let v_sample = uv_plane
+                .get(uv_idx.saturating_add(1))
+                .copied()
+                .unwrap_or(128) as i32;
+
+            let c = (y_sample - 16).max(0);
+            let d = u_sample - 128;
+            let e = v_sample - 128;
+            let r = clamp_u8_i32((298 * c + 409 * e + 128) >> 8);
+            let g = clamp_u8_i32((298 * c - 100 * d - 208 * e + 128) >> 8);
+            let b = clamp_u8_i32((298 * c + 516 * d + 128) >> 8);
+            let rgb = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+            unsafe { core::ptr::write_volatile(row_ptr.add(x), rgb) };
+            x += 1;
+        }
+        y += 1;
+    }
+
+    dma_cache_flush(warm.limine_fb_virt as *const u8, warm.limine_fb_size);
+    crate::log!(
+        "intel/igpu770: cpu-fb-nv12 label={} origin={}x{} dims={}x{} src={}x{} pitch={} bytes={}\n",
+        label,
+        origin_x,
+        origin_y,
+        outer_w,
+        outer_h,
+        frame_width,
+        frame_height,
+        pitch,
+        bytes.len()
+    );
+    log_framebuffer_probe(
+        warm,
+        "cpu-nv12-center",
         origin_x.saturating_add(outer_w / 2),
         origin_y.saturating_add(outer_h / 2),
     );

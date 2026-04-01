@@ -391,6 +391,14 @@ unsafe extern "C" fn trueos_fetch_text(
         let tmp_path_bytes = tmp_path.as_bytes();
         let _ = v::vfs::remove(tmp_path_bytes);
 
+        if let Ok(url_str) = core::str::from_utf8(url) {
+            if is_post {
+                qjs::trueos_shims::log_info(alloc::format!("qjs fetch: POST {}\n", url_str).as_str());
+            } else {
+                qjs::trueos_shims::log_info(alloc::format!("qjs fetch: GET {}\n", url_str).as_str());
+            }
+        }
+
         let start_res = if is_post {
             qjs::async_ops::start_net_post_json_to_file(url, tmp_path_bytes, body, bearer)
         } else {
@@ -399,6 +407,9 @@ unsafe extern "C" fn trueos_fetch_text(
 
         match start_res {
             Ok(op_id) => {
+                qjs::trueos_shims::log_info(
+                    alloc::format!("qjs fetch: queued op={} tmp={}\n", op_id, tmp_path).as_str(),
+                );
                 qjs::async_ops::register_promise(
                     ctx,
                     op_id,
@@ -409,6 +420,9 @@ unsafe extern "C" fn trueos_fetch_text(
                 );
             }
             Err(code) => {
+                qjs::trueos_shims::log_error(
+                    alloc::format!("qjs fetch: start failed rc={}\n", code).as_str(),
+                );
                 let code_js = js_int32(code);
                 let _ = qjs::JS_Call(
                     ctx,
@@ -964,8 +978,18 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
                 }
             }
             const fetchPromise = wantBinary
-                ? Promise.resolve(G.__trueosFetchBytes(req.url))
-                : Promise.resolve(G.__trueosFetchText(req.url, method, bodyArg, bearer));
+                ? Promise.resolve((function () {
+                    if (typeof G.__trueosAiPrintLine === 'function') {
+                        G.__trueosAiPrintLine('qjs: fetch shim GET(bytes) ' + String(req.url || ''));
+                    }
+                    return G.__trueosFetchBytes(req.url);
+                })())
+                : Promise.resolve((function () {
+                    if (typeof G.__trueosAiPrintLine === 'function') {
+                        G.__trueosAiPrintLine('qjs: fetch shim ' + method + ' ' + String(req.url || ''));
+                    }
+                    return G.__trueosFetchText(req.url, method, bodyArg, bearer);
+                })());
             return fetchPromise.then((body) => {
                 const headers = new G.Headers();
                 return new G.Response(body, { status: 200, statusText: 'OK', headers, __trueosBinary: wantBinary });

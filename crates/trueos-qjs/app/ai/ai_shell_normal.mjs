@@ -1,5 +1,3 @@
-import OpenAI from 'openai';
-
 const MODEL = 'gpt-5.4';
 const FILE_TREE_MAX_CHARS = 12_000;
 
@@ -81,6 +79,59 @@ function readEnv(name) {
   }
   const value = env[name];
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function getOpenAiBaseUrl() {
+  const raw = readEnv('OPENAI_BASE_URL') || 'https://api.openai.com/v1';
+  return String(raw).replace(/\/+$/, '');
+}
+
+function getOpenAiApiKey() {
+  return readEnv('OPENAI_API_KEY');
+}
+
+async function callOpenAiResponses(request) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is missing');
+  }
+
+  const url = `${getOpenAiBaseUrl()}/responses`;
+  const body = JSON.stringify(request);
+
+  function parseJsonResponse(text) {
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch (error) {
+      const preview = String(text || '').slice(0, 240).replace(/\s+/g, ' ');
+      throw new Error(`openai response json parse failed: ${String(error && error.message ? error.message : error)} preview=${preview}`);
+    }
+  }
+
+  if (typeof globalThis.__trueosFetchText === 'function') {
+    const text = await globalThis.__trueosFetchText(url, 'POST', body, apiKey);
+    return parseJsonResponse(text);
+  }
+
+  if (typeof globalThis.fetch !== 'function') {
+    throw new Error('TRUEOS fetch bridge is unavailable');
+  }
+
+  const response = await globalThis.fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body,
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text || `HTTP ${String(response.status || 0)}`);
+  }
+  return parseJsonResponse(text);
 }
 
 function readVectorStoreIds() {
@@ -186,14 +237,22 @@ export async function runShellPrompt(config = null) {
     printLine('ai: file mode using local TRUEOS file tree json');
   }
 
-  const client = new OpenAI();
-  const response = await client.responses.create(buildRequest(prompt, {
+  printLine('ai: sending request');
+
+  const request = buildRequest(prompt, {
     webSearch,
     fileSearch,
     conversationId,
     vectorStoreIds,
     localFileContext,
-  }));
+  });
+  let response;
+  try {
+    response = await callOpenAiResponses(request);
+  } catch (error) {
+    printLine(`ai: request failed: ${String(error && error.stack ? error.stack : error)}`);
+    throw error;
+  }
 
   maybePersistConversationId(response);
 
