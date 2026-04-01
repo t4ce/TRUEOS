@@ -97,9 +97,10 @@ define_started_flags!(
     UI2_STARTED,
     UI2_GFX_BROWSER_STARTED,
     UI2_GFX_TETRIS_STARTED,
+    UI2_ATHLAS_THIRD_DEMO_STARTED,
     UI2_ATHLAS_HALF_DEMO_STARTED,
     UI2_ATHLAS_1X_DEMO_STARTED,
-    UI2_ATHLAS_3X_DEMO_STARTED,
+    UI2_ATHLAS_2X_DEMO_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
@@ -577,13 +578,19 @@ fn spawn_ui2_athlas_half_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_athlas_third_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_demo_task(3))
+    })
+}
+
 fn spawn_ui2_athlas_1x_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_demo_task(1))
     })
 }
 
-fn spawn_ui2_athlas_3x_demo(spawner: Spawner) -> SpawnAttempt {
+fn spawn_ui2_athlas_2x_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_demo_task(2))
     })
@@ -908,6 +915,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_gfx_tetris,
     ),
     TaskSpec::enabled(
+        "ui2-athlas-third-demo",
+        UI2_DEMO_READY,
+        &UI2_ATHLAS_THIRD_DEMO_STARTED,
+        spawn_ui2_athlas_third_demo,
+    ),
+    TaskSpec::enabled(
         "ui2-athlas-half-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_HALF_DEMO_STARTED,
@@ -920,10 +933,10 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_athlas_1x_demo,
     ),
     TaskSpec::enabled(
-        "ui2-athlas-3x-demo",
+        "ui2-athlas-2x-demo",
         UI2_DEMO_READY,
-        &UI2_ATHLAS_3X_DEMO_STARTED,
-        spawn_ui2_athlas_3x_demo,
+        &UI2_ATHLAS_2X_DEMO_STARTED,
+        spawn_ui2_athlas_2x_demo,
     ),
     TaskSpec::enabled(
         "ui2-triangle-demo",

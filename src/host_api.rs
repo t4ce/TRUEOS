@@ -1,7 +1,9 @@
 extern crate alloc;
 
+use alloc::string::String;
 use core::ffi::c_char;
 use core::ffi::c_int;
+use embassy_time::Instant;
 
 use trueos_qjs as qjs;
 use v::{vgfx, vshell};
@@ -50,6 +52,19 @@ unsafe fn js_to_i32(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option<i3
 unsafe fn js_set_string_prop(ctx: *mut qjs::JSContext, obj: qjs::JSValue, key: &[u8], value: &str) {
     let js = qjs::JS_NewStringLen(ctx, value.as_ptr() as *const c_char, value.len());
     let _ = qjs::JS_SetPropertyStr(ctx, obj, key.as_ptr() as *const c_char, js);
+}
+
+#[inline]
+unsafe fn js_to_string(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option<String> {
+    let mut len: usize = 0;
+    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, v, 0);
+    if cstr.is_null() {
+        return None;
+    }
+    let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
+    let out = core::str::from_utf8(bytes).ok().map(String::from);
+    qjs::JS_FreeCString(ctx, cstr);
+    out
 }
 
 unsafe extern "C" fn trueos_browser_navigate_submit_js(
@@ -286,6 +301,64 @@ unsafe extern "C" fn trueos_shell1_history_text_since_js(
         .map(|text| text.into_bytes())
         .unwrap_or_default();
     qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
+}
+
+unsafe extern "C" fn trueos_ai_pc_execute_shell_command_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return js_null();
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(command_name) = js_to_string(ctx, args[0]) else {
+        return js_null();
+    };
+    let raw_args = if argc >= 2 {
+        js_to_string(ctx, args[1]).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let target_mask = if argc >= 3 {
+        js_to_i32(ctx, args[2]).unwrap_or(0).max(0) as u8
+    } else {
+        0u8
+    };
+
+    let started = Instant::now();
+    let result = crate::shell2::execute_ai_pc_shell_command(
+        target_mask,
+        command_name.as_str(),
+        raw_args.as_str(),
+    );
+    let duration_ms = started.elapsed().as_millis() as i32;
+
+    let obj = qjs::JS_NewObject(ctx);
+    if obj.is_exception() {
+        return js_null();
+    }
+
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"ok\0".as_ptr() as *const c_char, js_bool(result.ok));
+    js_set_string_prop(ctx, obj, b"tool_name\0", command_name.as_str());
+    js_set_string_prop(ctx, obj, b"command_line\0", result.command_line.as_str());
+    js_set_string_prop(ctx, obj, b"stdout\0", result.stdout.as_str());
+    js_set_string_prop(ctx, obj, b"stderr\0", result.stderr.as_str());
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"exit_code\0".as_ptr() as *const c_char,
+        js_int32(result.exit_code),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"duration_ms\0".as_ptr() as *const c_char,
+        js_int32(duration_ms),
+    );
+    obj
 }
 
 unsafe extern "C" fn trueos_capture_screenshot_js(
@@ -912,6 +985,21 @@ pub(crate) unsafe fn install(ctx: *mut qjs::JSContext) {
 
     let f = qjs::JS_NewCFunction2(
         ctx,
+        Some(trueos_ai_pc_execute_shell_command_js),
+        b"__trueosAiPcExecuteShellCommand\0".as_ptr() as *const c_char,
+        3,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosAiPcExecuteShellCommand\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
         Some(trueos_capture_screenshot_js),
         b"__trueosCaptureScreenshot\0".as_ptr() as *const c_char,
         0,
@@ -1194,7 +1282,13 @@ unsafe fn install_shell1_runtime(ctx: *mut qjs::JSContext) {
             }))
             : [];
         return Object.freeze({
-            command: String(entry && entry.command ? entry.command : ''),
+            command: String(
+                entry && (entry.command || entry.name)
+                    ? (entry.command || entry.name)
+                    : ''
+            ),
+            name: String(entry && entry.name ? entry.name : ''),
+            mode: String(entry && entry.mode ? entry.mode : ''),
             args: Object.freeze(args),
         });
     }) : [];

@@ -61,6 +61,7 @@ pub(crate) fn submit(
         new_conversation: false,
         computer_use: mode == AiPromptMode::AiPc,
         shell_target_mask,
+        request_id: 0,
     };
 
     match trueos_qjs::ai_task::ensure_started(spawner) {

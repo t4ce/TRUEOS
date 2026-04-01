@@ -1576,7 +1576,9 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
         crate::log!("boot-probe: ui2 first compose begin ms={}\n", compose_started_ms);
     }
 
-    if compose_seq <= 2 || compose_seq.is_multiple_of(UI2_COMPOSE_LOG_EVERY) {
+    if crate::logflag::UI2_ENABLE_VERBOSE_COMPOSE_LOGS
+        && (compose_seq <= 2 || compose_seq.is_multiple_of(UI2_COMPOSE_LOG_EVERY))
+    {
         let present_ms = elapsed_ms_since(compose_started_at);
         state.compose_present_history_ms.push(present_ms);
         if state.compose_present_history_ms.len() > 64 {

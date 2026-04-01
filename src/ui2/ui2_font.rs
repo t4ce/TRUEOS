@@ -11,11 +11,12 @@ const UI2_FONT_DEFAULT_RGBA: Rgba8 = Rgba8::new(0, 0, 0, 255);
 pub(crate) enum Ui2FontTier {
     Half = 0,
     OneX = 1,
-    ThreeX = 2,
+    TwoX = 2,
+    Third = 3,
 }
 
 impl Ui2FontTier {
-    pub(crate) const ALL: [Self; 3] = [Self::Half, Self::OneX, Self::ThreeX];
+    pub(crate) const ALL: [Self; 4] = [Self::Third, Self::Half, Self::OneX, Self::TwoX];
 
     #[inline]
     pub(crate) const fn size_case(self) -> usize {
@@ -23,40 +24,32 @@ impl Ui2FontTier {
     }
 
     #[inline]
-    pub(crate) const fn atlas_cell_height_px(self) -> u16 {
-        match self {
-            Self::Half => 32,
-            Self::OneX => 64,
-            Self::ThreeX => 192,
-        }
+    pub(crate) fn atlas_cell_height_px(self) -> u16 {
+        athlasmetrics::athlas_variant_line_height_px(self.size_case()).unwrap_or(1)
     }
 
     #[inline]
-    pub(crate) const fn atlas_line_height_px(self) -> u16 {
+    pub(crate) fn atlas_line_height_px(self) -> u16 {
         self.atlas_cell_height_px()
     }
 
     #[inline]
-    pub(crate) const fn display_cell_height_px(self) -> u16 {
-        match self {
-            Self::Half => 32,
-            Self::OneX => 64,
-            Self::ThreeX => 192,
-        }
+    pub(crate) fn display_cell_height_px(self) -> u16 {
+        self.atlas_cell_height_px()
     }
 
     #[inline]
-    pub(crate) const fn display_line_height_px(self) -> u16 {
+    pub(crate) fn display_line_height_px(self) -> u16 {
         self.display_cell_height_px()
     }
 
     #[inline]
-    pub(crate) const fn display_scale_num(self) -> u16 {
+    pub(crate) fn display_scale_num(self) -> u16 {
         self.display_line_height_px()
     }
 
     #[inline]
-    pub(crate) const fn display_scale_den(self) -> u16 {
+    pub(crate) fn display_scale_den(self) -> u16 {
         self.atlas_line_height_px()
     }
 
@@ -78,27 +71,30 @@ impl Ui2FontTier {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Ui2FontReadySnapshot {
+    pub third_ready_seq: u32,
     pub half_ready_seq: u32,
     pub one_x_ready_seq: u32,
-    pub three_x_ready_seq: u32,
+    pub two_x_ready_seq: u32,
 }
 
 impl Ui2FontReadySnapshot {
     #[inline]
     pub(crate) fn capture() -> Self {
         Self {
+            third_ready_seq: Ui2FontTier::Third.ready_seq(),
             half_ready_seq: Ui2FontTier::Half.ready_seq(),
             one_x_ready_seq: Ui2FontTier::OneX.ready_seq(),
-            three_x_ready_seq: Ui2FontTier::ThreeX.ready_seq(),
+            two_x_ready_seq: Ui2FontTier::TwoX.ready_seq(),
         }
     }
 
     #[inline]
     pub(crate) fn tier_ready_seq(self, tier: Ui2FontTier) -> u32 {
         match tier {
+            Ui2FontTier::Third => self.third_ready_seq,
             Ui2FontTier::Half => self.half_ready_seq,
             Ui2FontTier::OneX => self.one_x_ready_seq,
-            Ui2FontTier::ThreeX => self.three_x_ready_seq,
+            Ui2FontTier::TwoX => self.two_x_ready_seq,
         }
     }
 
@@ -152,7 +148,7 @@ pub(crate) fn ui2_font_pick_tier_for_px(px_h: f32) -> Ui2FontTier {
 
     let mut best_tier = Ui2FontTier::OneX;
     let mut best_distance = (target - Ui2FontTier::OneX.display_line_height_px() as f32).abs();
-    for tier in [Ui2FontTier::Half, Ui2FontTier::ThreeX] {
+    for tier in [Ui2FontTier::Third, Ui2FontTier::Half, Ui2FontTier::TwoX] {
         let distance = (target - tier.display_line_height_px() as f32).abs();
         if distance < best_distance {
             best_tier = tier;
