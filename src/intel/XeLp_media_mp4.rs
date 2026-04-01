@@ -12,6 +12,9 @@ pub(crate) enum Mp4ParseError {
     NoSamples,
     NoChunkOffsets,
     BadSampleRange,
+    BadNalLengthSize,
+    BadNalRange,
+    EmptyAccessUnit,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -34,6 +37,12 @@ pub(crate) struct Mp4H264Summary<'a> {
     pub first_sample_size: u32,
     pub first_sample: &'a [u8],
     pub avcc: AvccSummary<'a>,
+}
+
+pub(crate) struct AnnexBAccessUnit {
+    pub bytes: Vec<u8>,
+    pub sample_nal_count: usize,
+    pub has_idr: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -379,4 +388,56 @@ pub(crate) fn first_sample_nal_types(
         off = off.saturating_add(nal_len);
     }
     out
+}
+
+fn push_annex_b_nal(out: &mut Vec<u8>, nal: &[u8]) {
+    out.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+    out.extend_from_slice(nal);
+}
+
+pub(crate) fn build_annex_b_access_unit(
+    summary: &Mp4H264Summary<'_>,
+) -> Result<AnnexBAccessUnit, Mp4ParseError> {
+    let nal_length_size = summary.avcc.nal_length_size;
+    if !(1..=4).contains(&nal_length_size) {
+        return Err(Mp4ParseError::BadNalLengthSize);
+    }
+
+    let mut bytes = Vec::new();
+    push_annex_b_nal(&mut bytes, summary.avcc.sps);
+    push_annex_b_nal(&mut bytes, summary.avcc.pps);
+
+    let mut off = 0usize;
+    let mut sample_nal_count = 0usize;
+    let mut has_idr = false;
+    while off.saturating_add(nal_length_size) <= summary.first_sample.len() {
+        let mut nal_len = 0usize;
+        let mut idx = 0usize;
+        while idx < nal_length_size {
+            nal_len = (nal_len << 8) | summary.first_sample[off + idx] as usize;
+            idx += 1;
+        }
+        off = off.saturating_add(nal_length_size);
+        if nal_len == 0 {
+            return Err(Mp4ParseError::BadNalRange);
+        }
+        let nal = summary
+            .first_sample
+            .get(off..off.saturating_add(nal_len))
+            .ok_or(Mp4ParseError::BadNalRange)?;
+        has_idr |= (nal[0] & 0x1F) == 5;
+        push_annex_b_nal(&mut bytes, nal);
+        off = off.saturating_add(nal_len);
+        sample_nal_count += 1;
+    }
+
+    if sample_nal_count == 0 {
+        return Err(Mp4ParseError::EmptyAccessUnit);
+    }
+
+    Ok(AnnexBAccessUnit {
+        bytes,
+        sample_nal_count,
+        has_idr,
+    })
 }
