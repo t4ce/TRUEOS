@@ -1283,7 +1283,7 @@ pub async fn json_all_async(
     let mut written = 0usize;
     let mut out = String::new();
     out.push_str("{\"version\":1,\"root\":\"/\",\"max_entries\":");
-    out.push_str(effective_limit.to_string().as_str());
+    out.push_str(alloc::format!("{}", effective_limit).as_str());
     out.push_str(",\"truncated\":");
     out.push_str(if truncated { "true" } else { "false" });
     out.push_str(",\"entries\":[");
@@ -1306,7 +1306,7 @@ pub async fn json_all_async(
             out.push_str(",\"kind\":");
             push_json_string_escaped(&mut out, entry.kind);
             out.push_str(",\"depth\":");
-            out.push_str(entry.depth.to_string().as_str());
+            out.push_str(alloc::format!("{}", entry.depth).as_str());
             out.push('}');
             written += 1;
         }
