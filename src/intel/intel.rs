@@ -695,17 +695,22 @@ pub async fn scanout_smoke_task() {
     }
 
     Timer::after(EmbassyDuration::from_millis(1200)).await;
+    let isolate_render_proof = super::xelp_render_ngin::isolate_rgb_triangle_proof();
     if intel_igpu770_present() {
         super::intel_igpu770::ggtt_recon_once();
         super::intel_igpu770::ggtt_map_smoke_objects_once();
         crate::log!("intel: smoke dispatch engine=rcs stage=begin\n");
         super::xelp_render_ngin::submit_rgb_triangle_smoke_once();
         crate::log!("intel: smoke dispatch engine=rcs stage=end\n");
-        crate::log!("intel: smoke dispatch engine=bcs stage=begin\n");
-        super::intel_igpu770::ggtt_bcs_smoke_test_once();
-        crate::log!("intel: smoke dispatch engine=bcs stage=end\n");
-        super::intel_igpu770::cpu_framebuffer_alive_stamp("post-gpu-smokes");
-        super::xelp_media_ngin::kickoff_once();
+        if isolate_render_proof {
+            super::xelp_render_ngin::log_rgb_triangle_isolation();
+        } else {
+            crate::log!("intel: smoke dispatch engine=bcs stage=begin\n");
+            super::intel_igpu770::ggtt_bcs_smoke_test_once();
+            crate::log!("intel: smoke dispatch engine=bcs stage=end\n");
+            super::intel_igpu770::cpu_framebuffer_alive_stamp("post-gpu-smokes");
+            super::xelp_media_ngin::kickoff_once();
+        }
     }
 
     let defer_display =
@@ -717,8 +722,10 @@ pub async fn scanout_smoke_task() {
 
     run_display_power_discovery(info);
     if intel_igpu770_present() {
-        super::intel_igpu770::cpu_framebuffer_alive_stamp("post-display-discovery");
-        super::xelp_media_ngin::run_https_media_demo_once_async().await;
+        if !isolate_render_proof {
+            super::intel_igpu770::cpu_framebuffer_alive_stamp("post-display-discovery");
+            super::xelp_media_ngin::run_https_media_demo_once_async().await;
+        }
     }
     Timer::after(EmbassyDuration::from_millis(25)).await;
     crate::log!("intel: display discovery follow-up probe after smoke\n");

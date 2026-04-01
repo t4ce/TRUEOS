@@ -1,6 +1,7 @@
 use super::xelp_copy_ngin;
 
 const XELP_RENDER_FIRST_DEFER_DISPLAY_DISCOVERY: bool = true;
+const XELP_RENDER_FIRST_ISOLATE_RGB_TRIANGLE: bool = true;
 
 const TRIANGLE_MIN_DIM: usize = 8;
 const TRIANGLE_MAX_W: usize = 20;
@@ -22,6 +23,18 @@ pub(super) fn log_display_deferred_for_render_first() {
 pub(super) fn log_display_render_first_complete() {
     crate::log!(
         "intel: display discovery render-first prerequisite complete; continuing with display-engine probe\n"
+    );
+}
+
+#[inline]
+pub(super) fn isolate_rgb_triangle_proof() -> bool {
+    XELP_RENDER_FIRST_ISOLATE_RGB_TRIANGLE
+}
+
+#[inline]
+pub(super) fn log_rgb_triangle_isolation() {
+    crate::log!(
+        "intel/render-ngin: isolation mode active; skipping later framebuffer writers after RCS proof\n"
     );
 }
 
