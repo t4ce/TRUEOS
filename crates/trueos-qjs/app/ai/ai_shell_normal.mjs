@@ -1,5 +1,7 @@
 const MODEL = 'gpt-5.4';
 const FILE_TREE_MAX_CHARS = 12_000;
+const MODEL_TAG_COLOR = '\x1b[38;2;60;183;161m';
+const ANSI_RESET = '\x1b[0m';
 
 const SYSTEM_PROMPT = [
   'You are the TRUEOS shell AI mode.',
@@ -8,7 +10,7 @@ const SYSTEM_PROMPT = [
   'Do not mention browser integration.',
 ].join(' ');
 
-function printLine(text) {
+export function printLine(text) {
   const value = String(text ?? '');
   if (typeof globalThis.__trueosAiPrintLine === 'function') {
     globalThis.__trueosAiPrintLine(value);
@@ -23,7 +25,7 @@ function printMultiline(text) {
   }
 }
 
-function normalizeOutput(response) {
+export function normalizeOutput(response) {
   if (response && typeof response.output_text === 'string' && response.output_text.trim()) {
     return response.output_text.trim();
   }
@@ -43,7 +45,7 @@ function normalizeOutput(response) {
   return chunks.join('\n').trim();
 }
 
-function collapseWhitespace(text) {
+export function collapseWhitespace(text) {
   return String(text ?? '').replace(/\s+/g, ' ').trim();
 }
 
@@ -88,7 +90,7 @@ function normalizeJsonFileTree(raw) {
   }
 }
 
-function readEnv(name) {
+export function readEnv(name) {
   const env = globalThis.__env__;
   if (!env || typeof env !== 'object') {
     return '';
@@ -97,16 +99,81 @@ function readEnv(name) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function getOpenAiBaseUrl() {
+export function getOpenAiBaseUrl() {
   const raw = readEnv('OPENAI_BASE_URL') || 'https://api.openai.com/v1';
   return String(raw).replace(/\/+$/, '');
 }
 
-function getOpenAiApiKey() {
+export function getOpenAiApiKey() {
   return readEnv('OPENAI_API_KEY');
 }
 
-async function callOpenAiResponses(request) {
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, Number(ms) || 0));
+  });
+}
+
+export function decodeTrueOsFetchRc(error) {
+  const code = typeof error === 'number'
+    ? error
+    : (typeof error === 'string' && /^-?\d+$/.test(error.trim()) ? Number(error.trim()) : NaN);
+  if (!Number.isFinite(code)) {
+    return '';
+  }
+
+  switch (code) {
+    case -1: return 'FS_ERR_BAD_UTF8';
+    case -2: return 'FS_ERR_IO';
+    case -3: return 'FS_ERR_NO_SPACE';
+    case -4: return 'FS_ERR_BAD_PARAM';
+    case -5: return 'FS_ERR_USBMS_NOT_FOUND';
+    case -6: return 'FS_ERR_BAD_PATH';
+    case -7: return 'FS_ERR_TOO_LARGE';
+    case -8: return 'FS_ERR_NOT_FOUND';
+    case -9: return 'FS_ERR_ALREADY_EXISTS';
+    case -10: return 'NET_ERR_BAD_URL';
+    case -11: return 'NET_ERR_TIMEOUT';
+    case -12: return 'NET_ERR_HTTP';
+    case -13: return 'NET_ERR_TLS';
+    case -14: return 'FS_ERR_TIMEOUT';
+    case -111: return 'NET_ERR_TIMEOUT_DNS';
+    case -112: return 'NET_ERR_TIMEOUT_CONNECT';
+    case -113: return 'NET_ERR_TIMEOUT_TLS';
+    case -114: return 'NET_ERR_TIMEOUT_BODY';
+    default: return `UNKNOWN_RC_${code}`;
+  }
+}
+
+export function normalizeRequestError(error) {
+  if (error instanceof Error) {
+    return error;
+  }
+  const rcName = decodeTrueOsFetchRc(error);
+  if (rcName) {
+    return new Error(`${rcName} (${String(error)})`);
+  }
+  return new Error(String(error ?? 'unknown ai request error'));
+}
+
+function shouldRetryRequestError(error) {
+  const message = String(error && error.message ? error.message : error || '');
+  if (!message) {
+    return true;
+  }
+  if (message.includes('OPENAI_API_KEY is missing')) {
+    return false;
+  }
+  if (message.includes('TRUEOS fetch bridge is unavailable')) {
+    return false;
+  }
+  if (/\bHTTP (400|401|403|404)\b/.test(message)) {
+    return false;
+  }
+  return true;
+}
+
+export async function callOpenAiResponses(request) {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) {
     throw new Error('OPENAI_API_KEY is missing');
@@ -125,7 +192,12 @@ async function callOpenAiResponses(request) {
   }
 
   if (typeof globalThis.__trueosFetchText === 'function') {
-    const text = await globalThis.__trueosFetchText(url, 'POST', body, apiKey);
+    let text;
+    try {
+      text = await globalThis.__trueosFetchText(url, 'POST', body, apiKey);
+    } catch (error) {
+      throw normalizeRequestError(error);
+    }
     return parseJsonResponse(text);
   }
 
@@ -148,6 +220,23 @@ async function callOpenAiResponses(request) {
     throw new Error(text || `HTTP ${String(response.status || 0)}`);
   }
   return parseJsonResponse(text);
+}
+
+export async function callOpenAiResponsesWithRetry(request, maxRetries = 2) {
+  let lastError = null;
+  const totalAttempts = Math.max(1, (Number(maxRetries) || 0) + 1);
+  for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
+    try {
+      return await callOpenAiResponses(request);
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 >= totalAttempts || !shouldRetryRequestError(error)) {
+        throw error;
+      }
+      await sleep(250 + (attempt * 500));
+    }
+  }
+  throw lastError || new Error('openai request failed');
 }
 
 function readVectorStoreIds() {
@@ -194,7 +283,7 @@ function buildRequest(prompt, options) {
   };
 
   if (options.conversationId) {
-    request.conversation = options.conversationId;
+    request.previous_response_id = options.conversationId;
   }
 
   if (options.webSearch) {
@@ -224,9 +313,9 @@ function maybeReadLocalFileContext(fileSearch) {
   return normalizeJsonFileTree(json);
 }
 
-function maybePersistConversationId(response) {
-  const conversationId = response && response.conversation && typeof response.conversation.id === 'string'
-    ? response.conversation.id.trim()
+export function maybePersistConversationId(response) {
+  const conversationId = response && typeof response.id === 'string'
+    ? response.id.trim()
     : '';
   if (conversationId && typeof globalThis.__trueosAiSetConversationId === 'function') {
     globalThis.__trueosAiSetConversationId(conversationId);
@@ -276,11 +365,11 @@ function reasoningSummaryText(summary) {
   return '';
 }
 
-function printResponseSummary(response, text) {
+export function printResponseSummary(response, text) {
   const model = collapseWhitespace(response && response.model);
   const answer = String(text ?? '').trim();
   if (answer) {
-    printLine(model ? `${answer} [${model}]` : answer);
+    printLine(model ? `${answer} ${MODEL_TAG_COLOR}[${model}]${ANSI_RESET}` : answer);
   }
 
   const usage = response && typeof response === 'object' ? response.usage : null;
@@ -323,9 +412,10 @@ export async function runShellPrompt(config = null) {
   });
   let response;
   try {
-    response = await callOpenAiResponses(request);
+    response = await callOpenAiResponsesWithRetry(request, 2);
   } catch (error) {
-    printLine(`ai: request failed: ${String(error && error.stack ? error.stack : error)}`);
+    const normalized = normalizeRequestError(error);
+    printLine(`ai: request failed: ${String(normalized && normalized.stack ? normalized.stack : normalized)}`);
     throw error;
   }
 

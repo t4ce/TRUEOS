@@ -1,0 +1,81 @@
+1 Folder means 1 Fontsize
+1 Folder has 8 Buckets
+
+Each Bucket has Glyphs of identical cell width.
+In 1 Folder, all Buckets have the same glyph cell height.
+
+Root files:
+- metrics.json: normalized shared font metrics, bucket slot order, and tier-specific bucket geometry.
+- howtopng.txt: minimal reconstruction notes.
+
+Per-tier folder contents:
+- atlas-g00.png .. atlas-g07.png only.
+
+Static tiers:
+- palatino-third
+- palatino-half
+- palatino-1x
+- palatino-2x
+
+What is stored here:
+- palatino/ contains the original SVG export and metrics.tsv.
+- palatino-third, palatino-half, palatino-1x, palatino-2x each contain 8 atlas PNGs.
+- The shared metrics file contains font-wide metrics plus bucket slot ordering.
+- Variant tables contain per-tier cell_w, cell_h, grid_w, grid_h.
+- Some variant buckets may override slots[] and unplaced[] when empty-cell trimming differs by tier.
+
+How bucket coordinates work:
+- Bucket attributes cell_w, cell_h, grid_w, grid_h describe the atlas grid.
+- Shared tables[] carries the default ordered slots[] and unplaced[] lists.
+- A variant table may optionally override slots[] and unplaced[] for a bucket if that tier trimmed more dead cells.
+- x = (slot_index % grid_w) * cell_w
+- y = (slot_index / grid_w) * cell_h
+- unplaced[] lists codepoints with no packed atlas cell.
+
+How to place text:
+- Pick one tier folder, for example palatino-1x.
+- Decode the string to Unicode codepoints.
+- Example string: J²€@Hello+Font_World=§
+- For each codepoint, search the 8 buckets.
+- For a bucket, first use variant slots[]/unplaced[] if present; otherwise use the shared table slots[]/unplaced[].
+- If the codepoint is in unplaced[], there is no bitmap cell for that bucket.
+- If the codepoint is in slots[], its index in that array is the slot index.
+- Compute source position from slot index:
+  src_x = (slot_index % grid_w) * cell_w
+  src_y = (slot_index // grid_w) * cell_h
+- Blit the whole cell_w x cell_h rectangle from the bucket PNG to your destination at the current line-top position.
+- Advance pen_x using the exact advance metric from palatino/metrics.tsv.
+- Start the line at line_top. If you want baseline-based layout, compute:
+  scale = cell_h / font.line_height
+  ascent_px = round(font.ascent * scale)
+  line_top = baseline_y - ascent_px
+
+Important limitation:
+- The shared JSON is a bitmap lookup manifest, not a full shaping manifest.
+- Exact advances are not stored per glyph in the shared JSON.
+- Kerning is not stored here.
+- For simple text placement, use advance_width from palatino/metrics.tsv.
+- For complex shaping, use a proper text shaper and then map shaped codepoints/glyphs to these atlases.
+
+PNG reconstruction notes (16 colors):
+- PNGs are written as indexed palette PNGs.
+- Bit depth is 4.
+- Palette is 16 grayscale values.
+- Reconstruct grayscale by palette index i in 0..15:
+  value = round(i * 255 / 15)
+- RGB is grayscale; use that value as coverage/alpha in the renderer.
+
+Font metrics do not change with scale.
+Only bucket geometry and PNG filenames vary per tier.
+
+Prefix:
+- palatino
+
+Key points from this work:
+- We reduced the exported runtime set to 4 static tiers: third, half, 1x, 2x.
+- Each tier keeps 8 PNG buckets.
+- The atlas PNGs are true PNG Type 3 files: indexed color, 4-bit, grayscale palette only.
+- PNG wrapper overhead is tiny; it is not where meaningful savings come from.
+- Bucket 00 was trimmed for dead cells, with per-tier overrides only where needed.
+- The shared manifest stays normalized and small.
+- If more compression is needed later, the next real option is raw 4bpp indices plus zlib, not more PNG tweaking.

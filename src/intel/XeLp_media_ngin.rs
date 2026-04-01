@@ -114,6 +114,8 @@ const MEDIA_HTTPS_DEMO_MAX_BYTES: usize = 2 * 1024 * 1024;
 const MEDIA_HTTPS_DEMO_VIS_W: usize = 128;
 const MEDIA_HTTPS_DEMO_VIS_H: usize = 72;
 const MEDIA_SUBMIT_POLL_LOG_STEP: usize = 10_000;
+const MEDIA_VCS_BATCH_MODE_MI_ONLY_PROBE: u32 = 1 << 2;
+const MEDIA_MI_ONLY_PROBE_PREFIX_NOOPS: usize = 8;
 
 const MEDIA_RESULT_SLOT_BYTES: u64 = 8;
 const MEDIA_RESULT_KICKOFF_SLOT: u64 = 0;
@@ -149,6 +151,16 @@ const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_NOOP: u32 = 0;
 
 const EL_CTRL_LOAD: u32 = 1 << 0;
+const CTX_DESC_VALID: u32 = 1 << 0;
+const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
+const CTX_CTRL_RS_CTX_ENABLE: u32 = 1 << 1;
+const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
+const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
+const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
+const CTX_DESC_PRIVILEGE: u32 = 1 << 8;
+const CTX_DESC_PRIORITY_NORMAL: u32 = 1 << 9;
+const CTX_DESC_ADDRESSING_MODE_SHIFT: u32 = 3;
+const CTX_DESC_ADDRESSING_MODE_MASK: u32 = 0x7;
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
 const STOP_RING: u32 = 1 << 8;
 const PSMI_SLEEP_MSG_DISABLE: u32 = 1 << 0;
@@ -270,6 +282,40 @@ impl MediaSubmissionTransport {
         }
     }
 }
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum MediaVcsBatchMode {
+    MiOnlyProbe,
+    H264Decode,
+}
+
+impl MediaVcsBatchMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::MiOnlyProbe => "mi-only-probe",
+            Self::H264Decode => "h264-decode",
+        }
+    }
+}
+
+const ACTIVE_MEDIA_VCS_BATCH_MODE: MediaVcsBatchMode = MediaVcsBatchMode::MiOnlyProbe;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum MediaVcsSubmitMode {
+    RingInline,
+    BatchStart,
+}
+
+impl MediaVcsSubmitMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::RingInline => "ring-inline",
+            Self::BatchStart => "batch-start",
+        }
+    }
+}
+
+const ACTIVE_MEDIA_VCS_SUBMIT_MODE: MediaVcsSubmitMode = MediaVcsSubmitMode::RingInline;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MediaCompletionMode {
@@ -1484,7 +1530,15 @@ fn seed_media_ring_live_state(
 ) {
     let base = desc.ring_base;
     let mi_mode_req = masked_bits_update(0, STOP_RING);
+    let ctx_ctl_req = masked_bits_update(
+        CTX_CTRL_RS_CTX_ENABLE,
+        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
 
+    let _ = mmio_write32(warm, base + RING_CONTEXT_CONTROL, ctx_ctl_req);
+    let _ = mmio_write32(warm, base + RING_CONTEXT_CONTROL_REF, ctx_ctl_req);
     let _ = mmio_write32(warm, base + RING_MI_MODE, mi_mode_req);
     let _ = mmio_write32(warm, base + RING_HWS_PGA, pphwsp_gpu);
     let _ = mmio_write32(warm, base + RING_HWSTAM, !0u32);
@@ -1494,8 +1548,10 @@ fn seed_media_ring_live_state(
     let _ = mmio_write32(warm, base + RING_TAIL, ring_tail);
 
     crate::log!(
-        "intel/media-demo: live-ring-seed engine={} mi_mode_req=0x{:08X} hws_req=0x{:08X} hwstam_req=0x{:08X} head_req=0x{:08X} start_req=0x{:08X} ctl_req=0x{:08X} tail_req=0x{:08X} mi_mode_rb=0x{:08X} hws_rb=0x{:08X} hwstam_rb=0x{:08X} head_rb=0x{:08X} start_rb=0x{:08X} ctl_rb=0x{:08X} tail_rb=0x{:08X}\n",
+        "intel/media-demo: live-ring-seed engine={} ctx_ctl_req=0x{:08X} ctx_ctl_ref_req=0x{:08X} mi_mode_req=0x{:08X} hws_req=0x{:08X} hwstam_req=0x{:08X} head_req=0x{:08X} start_req=0x{:08X} ctl_req=0x{:08X} tail_req=0x{:08X} ctx_ctl_rb=0x{:08X} ctx_ctl_ref_rb=0x{:08X} mi_mode_rb=0x{:08X} hws_rb=0x{:08X} hwstam_rb=0x{:08X} head_rb=0x{:08X} start_rb=0x{:08X} ctl_rb=0x{:08X} tail_rb=0x{:08X}\n",
         desc.name,
+        ctx_ctl_req,
+        ctx_ctl_req,
         mi_mode_req,
         pphwsp_gpu,
         !0u32,
@@ -1503,6 +1559,8 @@ fn seed_media_ring_live_state(
         ring_start,
         ring_ctl,
         ring_tail,
+        mmio_read32(warm, base + RING_CONTEXT_CONTROL),
+        mmio_read32(warm, base + RING_CONTEXT_CONTROL_REF),
         mmio_read32(warm, base + RING_MI_MODE),
         mmio_read32(warm, base + RING_HWS_PGA),
         mmio_read32(warm, base + RING_HWSTAM),
@@ -1831,8 +1889,12 @@ fn emit_store_dword(batch: &mut [u32], idx: &mut usize, gpu_addr: u64, value: u3
 }
 
 #[inline]
-fn stage_flags(has_idr: bool) -> u32 {
-    (has_idr as u32) | (1 << 1)
+fn stage_flags(has_idr: bool, batch_mode: MediaVcsBatchMode) -> u32 {
+    let mut flags = (has_idr as u32) | (1 << 1);
+    if batch_mode == MediaVcsBatchMode::MiOnlyProbe {
+        flags |= MEDIA_VCS_BATCH_MODE_MI_ONLY_PROBE;
+    }
+    flags
 }
 
 #[inline]
@@ -1880,6 +1942,43 @@ fn begin_batch_packet(
 fn packet_write_addr64(batch: &mut [u32], packet_start: usize, dword_index: usize, gpu_addr: u64) {
     batch[packet_start + dword_index] = gpu_addr as u32;
     batch[packet_start + dword_index + 1] = (gpu_addr >> 32) as u32;
+}
+
+#[inline]
+fn execlist_desc_gpu_addr(desc_lo: u32, desc_hi: u32) -> u64 {
+    let hi_addr_mask = (1u64 << (SW_CTX_ID_SHIFT - 32)) - 1;
+    (((desc_hi as u64) & hi_addr_mask) << 32) | ((desc_lo & 0xFFFF_F000) as u64)
+}
+
+fn log_context_descriptor_audit(
+    desc: MediaEngineDescriptor,
+    phase: &str,
+    desc_lo: u32,
+    desc_hi: u32,
+    expected_gpu_addr: u64,
+    expected_sw_ctx_id: u32,
+) {
+    let decoded_gpu_addr = execlist_desc_gpu_addr(desc_lo, desc_hi);
+    let addr_mode = (desc_lo >> CTX_DESC_ADDRESSING_MODE_SHIFT) & CTX_DESC_ADDRESSING_MODE_MASK;
+    let sw_ctx_id = desc_hi >> (SW_CTX_ID_SHIFT - 32);
+    crate::log!(
+        "intel/media-demo: execlist-desc phase={} engine={} lo=0x{:08X} hi=0x{:08X} gpu=0x{:X} gpu_expect=0x{:X} gpu_match={} valid={} force_restore={} privilege={} priority_normal={} addr_mode={} sw_ctx_id={} sw_ctx_expect={} sw_ctx_match={}\n",
+        phase,
+        desc.name,
+        desc_lo,
+        desc_hi,
+        decoded_gpu_addr,
+        expected_gpu_addr,
+        (decoded_gpu_addr == expected_gpu_addr) as u8,
+        ((desc_lo & CTX_DESC_VALID) != 0) as u8,
+        ((desc_lo & CTX_DESC_FORCE_RESTORE) != 0) as u8,
+        ((desc_lo & CTX_DESC_PRIVILEGE) != 0) as u8,
+        ((desc_lo & CTX_DESC_PRIORITY_NORMAL) != 0) as u8,
+        addr_mode,
+        sw_ctx_id,
+        expected_sw_ctx_id,
+        (sw_ctx_id == expected_sw_ctx_id) as u8
+    );
 }
 
 fn store_decode_bitstream_demo_state(next: MediaBitstreamDemoState) {
@@ -1980,7 +2079,7 @@ fn build_h264_decode_batch_skeleton(
         batch,
         &mut idx,
         draft.resources.windows.result_gpu_addr + MEDIA_RESULT_STAGE_FLAGS_SLOT,
-        stage_flags(has_idr),
+        stage_flags(has_idr, MediaVcsBatchMode::H264Decode),
     ) || !emit_store_dword(
         batch,
         &mut idx,
@@ -2144,6 +2243,184 @@ fn build_h264_decode_batch_skeleton(
     Some((idx + 2).saturating_mul(core::mem::size_of::<u32>()))
 }
 
+fn build_mi_only_probe_batch(
+    batch_virt: *mut u8,
+    batch_bytes: usize,
+    draft: MediaJobDraft,
+    frame_width: u16,
+    frame_height: u16,
+    annexb_bytes: usize,
+    sample_nal_count: usize,
+    has_idr: bool,
+) -> Option<usize> {
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            batch_virt as *mut u32,
+            batch_bytes / core::mem::size_of::<u32>(),
+        )
+    };
+    let mut idx = 0usize;
+    let frame_dims = (frame_width as u32) | ((frame_height as u32) << 16);
+
+    let mut noop_idx = 0usize;
+    while noop_idx < MEDIA_MI_ONLY_PROBE_PREFIX_NOOPS {
+        if idx >= batch.len() {
+            return None;
+        }
+        batch[idx] = MI_NOOP;
+        idx += 1;
+        noop_idx += 1;
+    }
+
+    if !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.observability.result_slots[0].gpu_addr,
+        draft.observability.result_slots[0].expected_marker,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT,
+        draft.resources.windows.bitstream_gpu_addr as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT,
+        (draft.resources.windows.bitstream_gpu_addr >> 32) as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_BITSTREAM_BYTES_SLOT,
+        annexb_bytes as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_SAMPLE_NALS_SLOT,
+        sample_nal_count as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_STAGE_FLAGS_SLOT,
+        stage_flags(has_idr, MediaVcsBatchMode::MiOnlyProbe),
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT,
+        draft.resources.windows.output_surface_gpu_addr as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT,
+        (draft.resources.windows.output_surface_gpu_addr >> 32) as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT,
+        draft.resources.output_surface_bytes as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.resources.windows.result_gpu_addr + MEDIA_RESULT_FRAME_DIMS_SLOT,
+        frame_dims,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.observability.result_slots[1].gpu_addr,
+        draft.observability.result_slots[1].expected_marker,
+    ) {
+        return None;
+    }
+
+    let flush = begin_batch_packet(
+        batch,
+        &mut idx,
+        5,
+        MI_FLUSH_DW | MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE | MI_FLUSH_DW_USE_GTT,
+    )?;
+    batch[flush + 1] = draft.observability.result_slots[2].gpu_addr as u32;
+    batch[flush + 2] = (draft.observability.result_slots[2].gpu_addr >> 32) as u32;
+    batch[flush + 3] = draft.observability.result_slots[2].expected_marker;
+
+    if !emit_store_dword(
+        batch,
+        &mut idx,
+        draft.observability.result_slots[3].gpu_addr,
+        draft.observability.result_slots[3].expected_marker,
+    ) {
+        return None;
+    }
+
+    if idx.saturating_add(2) > batch.len() {
+        return None;
+    }
+    batch[idx] = MI_ARB_CHECK;
+    batch[idx + 1] = MI_BATCH_BUFFER_END;
+    Some((idx + 2).saturating_mul(core::mem::size_of::<u32>()))
+}
+
+fn build_vcs_demo_batch(
+    batch_virt: *mut u8,
+    batch_bytes: usize,
+    draft: MediaJobDraft,
+    frame_width: u16,
+    frame_height: u16,
+    annexb_bytes: usize,
+    sample_nal_count: usize,
+    has_idr: bool,
+) -> Option<usize> {
+    match ACTIVE_MEDIA_VCS_BATCH_MODE {
+        MediaVcsBatchMode::MiOnlyProbe => build_mi_only_probe_batch(
+            batch_virt,
+            batch_bytes,
+            draft,
+            frame_width,
+            frame_height,
+            annexb_bytes,
+            sample_nal_count,
+            has_idr,
+        ),
+        MediaVcsBatchMode::H264Decode => build_h264_decode_batch_skeleton(
+            batch_virt,
+            batch_bytes,
+            draft,
+            frame_width,
+            frame_height,
+            annexb_bytes,
+            sample_nal_count,
+            has_idr,
+        ),
+    }
+}
+
+fn build_vcs_demo_ring(
+    ring_virt: *mut u8,
+    ring_bytes: usize,
+    draft: MediaJobDraft,
+    frame_width: u16,
+    frame_height: u16,
+    annexb_bytes: usize,
+    sample_nal_count: usize,
+    has_idr: bool,
+) -> Option<usize> {
+    match ACTIVE_MEDIA_VCS_SUBMIT_MODE {
+        MediaVcsSubmitMode::RingInline => build_mi_only_probe_batch(
+            ring_virt,
+            ring_bytes,
+            draft,
+            frame_width,
+            frame_height,
+            annexb_bytes,
+            sample_nal_count,
+            has_idr,
+        ),
+        MediaVcsSubmitMode::BatchStart => build_ring_batch_start_words(
+            ring_virt,
+            ring_bytes,
+            draft.resources.windows.batch_gpu_addr,
+        ),
+    }
+}
+
 fn prepare_decode_bitstream_demo(
     warm: Igpu770WarmState,
     draft: MediaJobDraft,
@@ -2217,9 +2494,26 @@ fn prepare_decode_bitstream_demo(
     dma_cache_flush_range(backing.result_virt as *const u8, backing.result_bytes);
     dma_cache_flush_range(backing.output_surface_virt as *const u8, backing.output_surface_bytes);
 
-    let batch_tail_bytes = build_h264_decode_batch_skeleton(
-        backing.batch_virt,
-        backing.batch_bytes,
+    let batch_tail_bytes = if ACTIVE_MEDIA_VCS_SUBMIT_MODE == MediaVcsSubmitMode::BatchStart {
+        let tail = build_vcs_demo_batch(
+            backing.batch_virt,
+            backing.batch_bytes,
+            draft,
+            frame_width,
+            frame_height,
+            annexb.len(),
+            sample_nal_count,
+            has_idr,
+        )?;
+        dma_cache_flush_range(backing.batch_virt as *const u8, tail);
+        tail
+    } else {
+        0
+    };
+
+    let ring_tail_bytes = build_vcs_demo_ring(
+        backing.ring_virt,
+        backing.ring_bytes,
         draft,
         frame_width,
         frame_height,
@@ -2227,13 +2521,7 @@ fn prepare_decode_bitstream_demo(
         sample_nal_count,
         has_idr,
     )?;
-    dma_cache_flush_range(backing.batch_virt as *const u8, batch_tail_bytes);
-
-    let ring_tail_bytes = build_ring_batch_start_words(
-        backing.ring_virt,
-        backing.ring_bytes,
-        draft.resources.windows.batch_gpu_addr,
-    )?;
+    dma_cache_flush_range(backing.ring_virt as *const u8, ring_tail_bytes);
     let ring_ctl = ring_ctl_value_for_size(backing.ring_bytes)?;
     let ring_start = draft.resources.windows.ring_gpu_addr as u32;
     let pphwsp_gpu = (draft.resources.windows.context_gpu_addr & !0xFFF) as u32;
@@ -2258,11 +2546,14 @@ fn prepare_decode_bitstream_demo(
 
     let (ctx_desc_lo, ctx_desc_hi_base) =
         build_execlist_context_descriptor_for_gpu_addr(draft.resources.windows.context_gpu_addr);
+    let expected_sw_ctx_id = media_sw_ctx_id(draft.engine);
     let (ctx_desc_lo, ctx_desc_hi) =
-        with_sw_context_id(ctx_desc_lo, ctx_desc_hi_base, media_sw_ctx_id(draft.engine));
+        with_sw_context_id(ctx_desc_lo, ctx_desc_hi_base, expected_sw_ctx_id);
     crate::log!(
-        "intel/media-demo: bitstream-plan engine={} ring=0x{:X} ctx=0x{:X} batch=0x{:X} bitstream=0x{:X}/phys=0x{:X} bytes={} output=0x{:X}/phys=0x{:X}/bytes={} result=0x{:X} kickoff=0x{:08X} complete=0x{:08X}\n",
+        "intel/media-demo: bitstream-plan engine={} batch_mode={} submit_mode={} ring=0x{:X} ctx=0x{:X} batch=0x{:X} bitstream=0x{:X}/phys=0x{:X} bytes={} output=0x{:X}/phys=0x{:X}/bytes={} result=0x{:X} kickoff=0x{:08X} complete=0x{:08X}\n",
         draft.engine.name,
+        ACTIVE_MEDIA_VCS_BATCH_MODE.as_str(),
+        ACTIVE_MEDIA_VCS_SUBMIT_MODE.as_str(),
         draft.resources.windows.ring_gpu_addr,
         draft.resources.windows.context_gpu_addr,
         draft.resources.windows.batch_gpu_addr,
@@ -2276,8 +2567,18 @@ fn prepare_decode_bitstream_demo(
         draft.observability.result_slots[0].expected_marker,
         draft.observability.result_slots[3].expected_marker
     );
+    log_context_descriptor_audit(
+        draft.engine,
+        "request",
+        ctx_desc_lo,
+        ctx_desc_hi,
+        draft.resources.windows.context_gpu_addr,
+        expected_sw_ctx_id,
+    );
     crate::log!(
-        "intel/media-demo: vcs-submit prep ring_start=0x{:08X} ring_ctl=0x{:08X} ring_tail=0x{:X} batch_tail=0x{:X} batch_gpu=0x{:X} context_gpu=0x{:X} ctx_desc_lo=0x{:08X} ctx_desc_hi=0x{:08X} ctx_id={}\n",
+        "intel/media-demo: vcs-submit prep batch_mode={} submit_mode={} ring_start=0x{:08X} ring_ctl=0x{:08X} ring_tail=0x{:X} batch_tail=0x{:X} batch_gpu=0x{:X} context_gpu=0x{:X} ctx_desc_lo=0x{:08X} ctx_desc_hi=0x{:08X} ctx_id={}\n",
+        ACTIVE_MEDIA_VCS_BATCH_MODE.as_str(),
+        ACTIVE_MEDIA_VCS_SUBMIT_MODE.as_str(),
         ring_start,
         ring_ctl,
         ring_tail_bytes,
@@ -2306,13 +2607,13 @@ fn prepare_decode_bitstream_demo(
         masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE),
     );
     crate::log!(
-        "intel/media-demo: vcs-submit lrc-seed engine={} pphwsp_gpu=0x{:08X} direct_ring_state_writes=0\n",
+        "intel/media-demo: vcs-submit lrc-seed engine={} pphwsp_gpu=0x{:08X} direct_ring_state_writes=1\n",
         draft.engine.name,
         pphwsp_gpu
     );
     let ctx_ctl_lrc_seed = gen12_lrc_context_control_seed();
     crate::log!(
-        "intel/media-demo: vcs-submit ctx-ctl engine={} lrc_seed=0x{:08X} live_ctx_mmio=0\n",
+        "intel/media-demo: vcs-submit ctx-ctl engine={} lrc_seed=0x{:08X} live_ctx_mmio=1\n",
         draft.engine.name,
         ctx_ctl_lrc_seed
     );
@@ -2336,9 +2637,19 @@ fn prepare_decode_bitstream_demo(
     let el_ctl_rb = mmio_read32(warm, draft.engine.ring_base + RING_EXECLIST_CONTROL);
     let el_status_lo_rb = mmio_read32(warm, draft.engine.ring_base + RING_EXECLIST_STATUS_LO);
     let el_status_hi_rb = mmio_read32(warm, draft.engine.ring_base + RING_EXECLIST_STATUS_HI);
+    log_context_descriptor_audit(
+        draft.engine,
+        "sq-readback",
+        sq_lo_rb,
+        sq_hi_rb,
+        draft.resources.windows.context_gpu_addr,
+        expected_sw_ctx_id,
+    );
     crate::log!(
-        "intel/media-demo: execlist-submit context engine={} sq_lo_req=0x{:08X} sq_hi_req=0x{:08X} sq_lo_rb=0x{:08X} sq_hi_rb=0x{:08X} mode_rb=0x{:08X} ctx_ctl_rb=0x{:08X} ctx_ctl_ref_rb=0x{:08X} el_ctl_rb=0x{:08X} el_status_lo_rb=0x{:08X} el_status_hi_rb=0x{:08X}\n",
+        "intel/media-demo: execlist-submit context engine={} batch_mode={} submit_mode={} sq_lo_req=0x{:08X} sq_hi_req=0x{:08X} sq_lo_rb=0x{:08X} sq_hi_rb=0x{:08X} mode_rb=0x{:08X} ctx_ctl_rb=0x{:08X} ctx_ctl_ref_rb=0x{:08X} el_ctl_rb=0x{:08X} el_status_lo_rb=0x{:08X} el_status_hi_rb=0x{:08X}\n",
         draft.engine.name,
+        ACTIVE_MEDIA_VCS_BATCH_MODE.as_str(),
+        ACTIVE_MEDIA_VCS_SUBMIT_MODE.as_str(),
         ctx_desc_lo,
         ctx_desc_hi,
         sq_lo_rb,
@@ -2359,10 +2670,12 @@ fn prepare_decode_bitstream_demo(
         let complete = read_result_dword(backing.result_virt, MEDIA_RESULT_COMPLETE_SLOT);
         if iter == 0 || (iter % MEDIA_SUBMIT_POLL_LOG_STEP) == 0 {
             crate::log!(
-                "intel/media-demo: vcs-poll iter={} head=0x{:08X} tail=0x{:08X} execlist_lo=0x{:08X} kickoff=0x{:08X} complete=0x{:08X}\n",
+                "intel/media-demo: vcs-poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} bbaddr=0x{:08X} execlist_lo=0x{:08X} kickoff=0x{:08X} complete=0x{:08X}\n",
                 iter,
                 mmio_read32(warm, draft.engine.ring_base + RING_HEAD),
                 mmio_read32(warm, draft.engine.ring_base + RING_TAIL),
+                mmio_read32(warm, draft.engine.ring_base + RING_ACTHD),
+                mmio_read32(warm, draft.engine.ring_base + RING_BBADDR),
                 mmio_read32(warm, draft.engine.ring_base + RING_EXECLIST_STATUS_LO),
                 kickoff,
                 complete
