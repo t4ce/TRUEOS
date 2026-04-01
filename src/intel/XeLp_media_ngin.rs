@@ -10,7 +10,9 @@ use super::intel_igpu770::{
     Igpu770WarmState, cpu_framebuffer_visualize_bytes_center, forcewake_all_acquire,
     forcewake_media_refresh, mmio_read32, warm_state,
 };
-use super::xelp_media_mp4::{first_sample_nal_types, parse_h264_mp4_summary};
+use super::xelp_media_mp4::{
+    build_annex_b_access_unit, first_sample_nal_types, parse_h264_mp4_summary,
+};
 
 const MAX_MEDIA_ENGINES: usize = 4;
 const MAX_MEDIA_API_ROUTES: usize = 5;
@@ -1217,6 +1219,22 @@ pub(crate) async fn run_https_media_demo_once_async() {
         Ok(summary) => {
             let nal_types =
                 first_sample_nal_types(summary.first_sample, summary.avcc.nal_length_size, 4);
+            let annex_b = match build_annex_b_access_unit(&summary) {
+                Ok(annex_b) => annex_b,
+                Err(err) => {
+                    crate::log!(
+                        "intel/media-demo: annexb staging failed err={:?} fallback=raw-sample-vis\n",
+                        err
+                    );
+                    cpu_framebuffer_visualize_bytes_center(
+                        "media-demo-h264-sample0",
+                        summary.first_sample,
+                        MEDIA_HTTPS_DEMO_VIS_W,
+                        MEDIA_HTTPS_DEMO_VIS_H,
+                    );
+                    return;
+                }
+            };
             crate::log!(
                 "intel/media-demo: h264 track=1 dims={}x{} timescale={} duration={} samples={} first_chunk=0x{:X} first_sample={} nal_len={} sps={} pps={} profile=0x{:02X} level=0x{:02X}\n",
                 summary.width,
@@ -1234,13 +1252,19 @@ pub(crate) async fn run_https_media_demo_once_async() {
             );
             log_nal_summary(&nal_types);
             crate::log!(
-                "intel/media-demo: forged-ingress stage=fetch->parse->sample-vis decode_ready={} decode_impl={}\n",
+                "intel/media-demo: annexb au0 bytes={} sample_nals={} idr={} stage=bitstream-ready\n",
+                annex_b.bytes.len(),
+                annex_b.sample_nal_count,
+                annex_b.has_idr as u8
+            );
+            crate::log!(
+                "intel/media-demo: forged-ingress stage=fetch->parse->annexb-vis decode_ready={} decode_impl={}\n",
                 1,
                 0
             );
             cpu_framebuffer_visualize_bytes_center(
-                "media-demo-h264-sample0",
-                summary.first_sample,
+                "media-demo-h264-annexb-au0",
+                annex_b.bytes.as_slice(),
                 MEDIA_HTTPS_DEMO_VIS_W,
                 MEDIA_HTTPS_DEMO_VIS_H,
             );
