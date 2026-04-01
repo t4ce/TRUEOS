@@ -49,6 +49,12 @@ struct AiTaskJsContextOpaque {
     next_conversation_id: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct AiUsageTotals {
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
 const AI_IMPORT_FILENAME: &[u8] = b"<ai-task-import>\0";
 const AI_IMPORT_SOURCE: &[u8] = br#"
 globalThis.__trueosAiTaskDone = 0;
@@ -86,6 +92,7 @@ const AI_FILE_SEARCH_PROP: &[u8] = b"__trueosAiTaskFileSearch\0";
 const AI_CONVERSATION_ID_PROP: &[u8] = b"__trueosAiTaskConversationId\0";
 const AI_PRINT_FN_PROP: &[u8] = b"__trueosAiPrintLine\0";
 const AI_SET_CONVERSATION_FN_PROP: &[u8] = b"__trueosAiSetConversationId\0";
+const AI_ADD_USAGE_TOTALS_FN_PROP: &[u8] = b"__trueosAiAddUsageTotals\0";
 const AI_READ_PRIMARY_FS_TREE_FN_PROP: &[u8] = b"__trueosAiReadPrimaryFsTreeJsonAll\0";
 const AI_PROMPT_TIMEOUT_MS: u64 = 90_000;
 const AI_MODE_NOT_IMPLEMENTED: &str = "ai: mode not implemented yet; use normal, web, file, or newchat";
@@ -94,6 +101,7 @@ const AI_PRIMARY_FS_TREE_MAX_ENTRIES: u32 = 96;
 static AI_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static AI_TASK_QUEUE: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::new());
 static AI_TASK_CONVERSATIONS: Mutex<Vec<(u8, String)>> = Mutex::new(Vec::new());
+static AI_TASK_USAGE_TOTALS: Mutex<Vec<(u8, AiUsageTotals)>> = Mutex::new(Vec::new());
 static AI_TASK_SIGNAL: Signal<SpinRawMutex, ()> = Signal::new();
 
 fn print_targeted_line(target_mask: u8, text: &str) {
@@ -146,6 +154,30 @@ fn clear_conversation_id(target_mask: u8) {
 
 pub fn forget_conversation(target_mask: u8) {
     clear_conversation_id(target_mask);
+    clear_usage_totals(target_mask);
+}
+
+fn clear_usage_totals(target_mask: u8) {
+    let mut state = AI_TASK_USAGE_TOTALS.lock();
+    if let Some(index) = state.iter().position(|(mask, _)| *mask == target_mask) {
+        state.swap_remove(index);
+    }
+}
+
+fn add_usage_totals(target_mask: u8, input_tokens: u64, output_tokens: u64) -> AiUsageTotals {
+    let mut state = AI_TASK_USAGE_TOTALS.lock();
+    if let Some((_, totals)) = state.iter_mut().find(|(mask, _)| *mask == target_mask) {
+        totals.input_tokens = totals.input_tokens.saturating_add(input_tokens);
+        totals.output_tokens = totals.output_tokens.saturating_add(output_tokens);
+        return *totals;
+    }
+
+    let totals = AiUsageTotals {
+        input_tokens,
+        output_tokens,
+    };
+    state.push((target_mask, totals));
+    totals
 }
 
 unsafe extern "C" fn qjs_ai_print_line(
@@ -196,6 +228,50 @@ unsafe extern "C" fn qjs_ai_set_conversation_id(
     qjs::JS_NewFloat64(ctx, 1.0)
 }
 
+unsafe extern "C" fn qjs_ai_add_usage_totals(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 2 || argv.is_null() {
+        return qjs::JSValue::undefined();
+    }
+
+    let opaque = qjs::JS_GetContextOpaque(ctx) as *mut AiTaskJsContextOpaque;
+    if opaque.is_null() {
+        return qjs::JSValue::undefined();
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut input_tokens_f64 = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut input_tokens_f64 as *mut f64, args[0]) != 0 {
+        return qjs::JSValue::undefined();
+    }
+    let mut output_tokens_f64 = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut output_tokens_f64 as *mut f64, args[1]) != 0 {
+        return qjs::JSValue::undefined();
+    }
+
+    let input_tokens = if input_tokens_f64.is_sign_negative() {
+        0
+    } else {
+        input_tokens_f64 as u64
+    };
+    let output_tokens = if output_tokens_f64.is_sign_negative() {
+        0
+    } else {
+        output_tokens_f64 as u64
+    };
+    let totals = add_usage_totals((*opaque).target_mask as u8, input_tokens, output_tokens);
+    let summary = alloc::format!(
+        "sum_in={} sum_out={}",
+        totals.input_tokens,
+        totals.output_tokens
+    );
+    qjs::jsbind::new_string(ctx, summary.as_bytes())
+}
+
 unsafe extern "C" fn qjs_ai_read_primary_fs_tree_json_all(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -234,6 +310,13 @@ unsafe fn install_ai_globals(ctx: *mut qjs::JSContext) {
         AI_SET_CONVERSATION_FN_PROP,
         1,
         Some(qjs_ai_set_conversation_id),
+    );
+    let _ = qjs::jsbind::install_fn(
+        ctx,
+        global,
+        AI_ADD_USAGE_TOTALS_FN_PROP,
+        2,
+        Some(qjs_ai_add_usage_totals),
     );
     let _ = qjs::jsbind::install_fn(
         ctx,
@@ -428,6 +511,7 @@ pub async fn run_once() {
 
         if next.new_conversation {
             clear_conversation_id(next.shell_target_mask);
+            clear_usage_totals(next.shell_target_mask);
         }
 
         if next.text.trim().is_empty() {
