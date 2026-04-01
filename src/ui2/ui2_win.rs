@@ -36,6 +36,13 @@ pub struct TrueosUi2WindowInfo {
     pub decoration_height: u32,
 }
 
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct Ui2WindowCursorSample {
+    pub slot_id: u32,
+    pub x: f32,
+    pub y: f32,
+}
+
 pub(super) fn alloc_window(
     state: &mut Ui2State,
     kind: Ui2WindowKind,
@@ -1179,6 +1186,34 @@ pub fn window_content_rect_by_id(id: u32) -> Option<Ui2Rect> {
         .iter()
         .find(|window| window.id == id)
         .and_then(|window| window_content_rect(&state, window))
+}
+
+pub fn window_content_cursor_positions(id: u32) -> Vec<Ui2WindowCursorSample> {
+    let state_lock = init_state();
+    let state = state_lock.lock();
+    let Some(window) = state.windows.iter().find(|window| window.id == id) else {
+        return Vec::new();
+    };
+    let Some(content) = window_content_rect(&state, window) else {
+        return Vec::new();
+    };
+
+    let mut cursors = Vec::new();
+    for cursor in &state.cursors {
+        if cursor.x < content.x
+            || cursor.y < content.y
+            || cursor.x >= content.x + content.w
+            || cursor.y >= content.y + content.h
+        {
+            continue;
+        }
+        cursors.push(Ui2WindowCursorSample {
+            slot_id: cursor.slot_id,
+            x: cursor.x - content.x,
+            y: cursor.y - content.y,
+        });
+    }
+    cursors
 }
 
 pub fn move_window(id: u32, x: f32, y: f32) -> bool {

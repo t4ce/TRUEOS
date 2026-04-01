@@ -1,10 +1,9 @@
 pub mod athlasmetrics;
+pub mod twemoji;
 
 use spin::Mutex;
 
-use self::athlasmetrics::{
-    ATHLAS_BUCKET_COUNT, ATHLAS_VARIANT_JSONS, AthlasGlyphRegion, AthlasVariantJson,
-};
+use self::athlasmetrics::{ATHLAS_BUCKET_COUNT, ATHLAS_VARIANT_JSONS, AthlasGlyphRegion};
 
 const ATHLAS_VARIANT_COUNT: usize = ATHLAS_VARIANT_JSONS.len();
 
@@ -17,7 +16,6 @@ pub struct AthlasBucketTexture {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AthlasResolvedGlyph {
-    pub variant: &'static AthlasVariantJson,
     pub region: AthlasGlyphRegion,
     pub texture: Option<AthlasBucketTexture>,
     pub ready: bool,
@@ -42,11 +40,6 @@ static ATHLAS_RUNTIME: Mutex<[AthlasTierRuntime; ATHLAS_VARIANT_COUNT]> = Mutex:
         }; ATHLAS_BUCKET_COUNT],
     }; ATHLAS_VARIANT_COUNT],
 );
-
-#[inline]
-pub fn athlas_variant(size_case: usize) -> Option<&'static AthlasVariantJson> {
-    ATHLAS_VARIANT_JSONS.get(size_case)
-}
 
 pub fn athlas_reset_tier_state(size_case: usize) -> bool {
     let mut runtime = ATHLAS_RUNTIME.lock();
@@ -118,7 +111,7 @@ pub fn athlas_bucket_texture(size_case: usize, bucket: usize) -> Option<AthlasBu
 }
 
 pub fn athlas_resolve_glyph(size_case: usize, ch: char) -> Option<AthlasResolvedGlyph> {
-    let variant = athlas_variant(size_case)?;
+    ATHLAS_VARIANT_JSONS.get(size_case)?;
     let region = athlasmetrics::athlas_lookup_glyph_region(size_case, ch)?;
     let runtime = ATHLAS_RUNTIME.lock();
     let tier = runtime.get(size_case)?;
@@ -128,7 +121,6 @@ pub fn athlas_resolve_glyph(size_case: usize, ch: char) -> Option<AthlasResolved
         .copied()
         .filter(|bucket_tex| bucket_tex.tex_id != 0);
     Some(AthlasResolvedGlyph {
-        variant,
         region,
         texture,
         ready: tier.ready,

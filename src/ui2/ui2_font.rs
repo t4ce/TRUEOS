@@ -1,10 +1,11 @@
 use crate::gfx::althlasfont;
 use crate::gfx::althlasfont::athlasmetrics::{self, ATHLAS_FONT_INFO};
+use crate::gfx::althlasfont::twemoji;
 use trueos_gfx_core::Rgba8;
 
 use super::{Ui2Rect, draw_texture_rect_uv_no_present};
 
-const UI2_FONT_DEFAULT_RGBA: Rgba8 = Rgba8::new(0, 0, 0, 255);
+const UI2_FONT_DEFAULT_RGBA: Rgba8 = Rgba8::new(255, 255, 255, 255);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,6 +111,8 @@ pub(crate) struct Ui2FontGlyph {
     pub tier: Ui2FontTier,
     pub advance_px: u16,
     pub line_height_px: u16,
+    pub draw_w_px: u16,
+    pub draw_h_px: u16,
     pub ready: bool,
     pub ready_seq: u32,
     pub texture: Option<althlasfont::AthlasBucketTexture>,
@@ -175,8 +178,8 @@ pub(crate) fn ui2_font_glyph_cell_metrics(glyph: &Ui2FontGlyph) -> Ui2FontCellMe
     Ui2FontCellMetrics {
         cell_w_px: glyph.advance_px.max(1),
         cell_h_px: glyph.line_height_px.max(1),
-        glyph_w_px: glyph.region.src_w.max(1),
-        glyph_h_px: glyph.region.src_h.max(1),
+        glyph_w_px: glyph.draw_w_px.max(1),
+        glyph_h_px: glyph.draw_h_px.max(1),
     }
 }
 
@@ -200,22 +203,61 @@ pub(crate) fn ui2_font_line_height_units() -> u16 {
 }
 
 pub(crate) fn ui2_font_resolve_glyph(tier: Ui2FontTier, ch: char) -> Option<Ui2FontGlyph> {
-    let glyph = althlasfont::athlas_resolve_glyph(tier.size_case(), ch)?;
-    Some(Ui2FontGlyph {
-        ch,
-        tier,
-        advance_px: glyph.region.src_w.max(1),
-        line_height_px: glyph.region.src_h.max(tier.atlas_line_height_px()),
-        ready: glyph.ready,
-        ready_seq: glyph.ready_seq,
-        texture: glyph.texture,
-        region: glyph.region,
-    })
+    if let Some(glyph) = althlasfont::athlas_resolve_glyph(tier.size_case(), ch) {
+        return Some(Ui2FontGlyph {
+            ch,
+            tier,
+            advance_px: glyph.region.src_w.max(1),
+            line_height_px: glyph.region.src_h.max(tier.atlas_line_height_px()),
+            draw_w_px: glyph.region.src_w.max(1),
+            draw_h_px: glyph.region.src_h.max(1),
+            ready: glyph.ready,
+            ready_seq: glyph.ready_seq,
+            texture: glyph.texture,
+            region: glyph.region,
+        });
+    }
+    ui2_font_resolve_twemoji_glyph(tier, ch)
 }
 
 #[inline]
 fn ui2_font_resolve_glyph_or_fallback(tier: Ui2FontTier, ch: char) -> Option<Ui2FontGlyph> {
     ui2_font_resolve_glyph(tier, ch).or_else(|| ui2_font_resolve_glyph(tier, '?'))
+}
+
+#[inline]
+fn scale_px_round(value: u16, scale_num: u16, scale_den: u16) -> u16 {
+    if scale_den == 0 {
+        return value.max(1);
+    }
+    ((((u32::from(value) * u32::from(scale_num)) + (u32::from(scale_den) / 2))
+        / u32::from(scale_den)) as u16)
+        .max(1)
+}
+
+fn ui2_font_resolve_twemoji_glyph(tier: Ui2FontTier, ch: char) -> Option<Ui2FontGlyph> {
+    if tier == Ui2FontTier::TwoX {
+        return None;
+    }
+    let glyph = twemoji::twemoji_resolve_glyph(ch)?;
+    let source_h = twemoji::twemoji_cell_height_px()
+        .max(glyph.region.src_h)
+        .max(1);
+    let target_h = tier.display_line_height_px().max(1);
+    let draw_w_px = scale_px_round(glyph.region.src_w.max(1), target_h, source_h);
+    let draw_h_px = scale_px_round(glyph.region.src_h.max(1), target_h, source_h);
+    Some(Ui2FontGlyph {
+        ch,
+        tier,
+        advance_px: draw_w_px,
+        line_height_px: target_h,
+        draw_w_px,
+        draw_h_px,
+        ready: glyph.ready,
+        ready_seq: glyph.ready_seq,
+        texture: glyph.texture,
+        region: glyph.region,
+    })
 }
 
 pub(crate) fn ui2_font_measure_text(tier: Ui2FontTier, text: &str) -> Ui2FontTextMetrics {
@@ -305,8 +347,8 @@ pub(crate) fn ui2_font_draw_text_line_no_present(
 
         if glyph.ready {
             if let Some(texture) = glyph.texture {
-                let draw_w = f32::from(glyph.region.src_w) * scale;
-                let draw_h = f32::from(glyph.region.src_h) * scale;
+                let draw_w = f32::from(glyph.draw_w_px) * scale;
+                let draw_h = f32::from(glyph.draw_h_px) * scale;
                 let atlas_w = f32::from(glyph.region.atlas_w.max(1));
                 let atlas_h = f32::from(glyph.region.atlas_h.max(1));
                 let src_x = f32::from(glyph.region.src_x);

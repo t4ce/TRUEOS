@@ -2235,12 +2235,13 @@ fn build_h264_decode_batch_skeleton(
     batch[avc_bsd + 4] = 1 << 3;
     batch[avc_bsd + 5] = 1 | (1 << 1) | (1 << 15);
 
-    if idx.saturating_add(2) > batch.len() {
+    if idx.saturating_add(3) > batch.len() {
         return None;
     }
     batch[idx] = MI_ARB_CHECK;
     batch[idx + 1] = MI_BATCH_BUFFER_END;
-    Some((idx + 2).saturating_mul(core::mem::size_of::<u32>()))
+    batch[idx + 2] = MI_NOOP;
+    Some((idx + 3).saturating_mul(core::mem::size_of::<u32>()))
 }
 
 fn build_mi_only_probe_batch(

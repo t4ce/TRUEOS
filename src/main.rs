@@ -60,6 +60,8 @@ mod tst_ui2_particle_demo;
 mod tst_ui2_petersen_demo;
 #[path = "tst/ui2_shell_demo.rs"]
 mod tst_ui2_shell_demo;
+#[path = "tst/ui2_smiley_fountain_demo.rs"]
+mod tst_ui2_smiley_fountain_demo;
 #[path = "tst/ui2_svg_demo.rs"]
 mod tst_ui2_svg_demo;
 #[path = "tst/ui2_triangle_demo.rs"]

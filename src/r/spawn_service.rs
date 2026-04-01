@@ -101,11 +101,14 @@ define_started_flags!(
     UI2_ATHLAS_HALF_DEMO_STARTED,
     UI2_ATHLAS_1X_DEMO_STARTED,
     UI2_ATHLAS_2X_DEMO_STARTED,
+    UI2_PALATINO_1X_DEMO_STARTED,
+    UI2_TWEMOJI_1X_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_PETERSEN_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
+    UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
     UI2_SHELL_DEMO_STARTED,
     UI2_SVG_DEMO_STARTED,
     GFX_INTEL_READINESS_PROBE_STARTED,
@@ -596,6 +599,18 @@ fn spawn_ui2_athlas_2x_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_palatino_1x_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_palatino_demo_task())
+    })
+}
+
+fn spawn_ui2_twemoji_1x(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::r::ui2::ui2_font_twemoji_loader_task())
+    })
+}
+
 fn spawn_ui2_triangle_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_triangle_demo::ui2_triangle_demo_task())
@@ -623,6 +638,12 @@ fn spawn_ui2_petersen_demo(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ui2_particle_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_particle_demo::ui2_particle_demo_task())
+    })
+}
+
+fn spawn_ui2_smiley_fountain_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_smiley_fountain_demo::ui2_smiley_fountain_demo_task())
     })
 }
 
@@ -939,6 +960,18 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_athlas_2x_demo,
     ),
     TaskSpec::enabled(
+        "ui2-palatino-1x-demo",
+        UI2_DEMO_READY,
+        &UI2_PALATINO_1X_DEMO_STARTED,
+        spawn_ui2_palatino_1x_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-twemoji-1x",
+        crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY,
+        &UI2_TWEMOJI_1X_STARTED,
+        spawn_ui2_twemoji_1x,
+    ),
+    TaskSpec::enabled(
         "ui2-triangle-demo",
         UI2_DEMO_READY,
         &UI2_TRIANGLE_DEMO_STARTED,
@@ -962,6 +995,12 @@ static TASKS: &[TaskSpec] = &[
         UI2_DEMO_READY,
         &UI2_PARTICLE_DEMO_STARTED,
         spawn_ui2_particle_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-smiley-fountain-demo",
+        UI2_DEMO_READY,
+        &UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
+        spawn_ui2_smiley_fountain_demo,
     ),
     TaskSpec::enabled(
         "ui2-shell-demo",
