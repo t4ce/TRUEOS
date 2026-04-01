@@ -134,6 +134,7 @@ const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 const MI_BATCH_GTT: u32 = 2 << 6;
 const MI_USE_GGTT: u32 = 1 << 22;
 const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
+const MI_STORE_DWORD_IMM_GEN4_LEN_DW4: u32 = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT | (4 - 2);
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
 const MI_LRI_CS_MMIO: u32 = 1 << 19;
 const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
@@ -733,105 +734,169 @@ fn build_rcs_store_pixels_batch(warm: Igpu770WarmState, fill: BltFillRectPlan) {
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let dwords =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
-    dwords.fill(0);
+    let batch_tail_bytes = match super::xelp_render_ngin::encode_rgb_triangle_store_batch(
+        dwords,
+        fill.dst_gpu_addr,
+        fill.pitch,
+        fill.rect_w,
+        fill.rect_h,
+        GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_DONE,
+    ) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            crate::log!(
+                "intel/igpu770: rcs-triangle-batch build-failed err={} rect={}x{} pitch=0x{:X}\n",
+                err,
+                fill.rect_w,
+                fill.rect_h,
+                fill.pitch
+            );
+            0
+        }
+    };
+    dma_cache_flush(warm.batch_virt as *const u8, batch_tail_bytes);
+}
 
-    const RESERVED_END_DWORDS: usize = 2; // batch end + noop
+fn build_bcs_store_pixels_batch(
+    batch_dwords: &mut [u32],
+    fill: BltFillRectPlan,
+) -> Result<usize, &'static str> {
+    const RESERVED_END_DWORDS: usize = 2;
+    const STORE_DWORDS: usize = 4;
+    const RESULT_MARKER_STORES: usize = 4;
+    const RECT_W: usize = 80;
+    const RECT_H: usize = 40;
+
+    if batch_dwords.len() <= RESERVED_END_DWORDS + 12 {
+        return Err("batch-too-small");
+    }
+    if fill.rect_w < RECT_W || fill.rect_h < RECT_H {
+        return Err("shape-too-small");
+    }
+
+    batch_dwords.fill(0);
     let mut i = 0usize;
-    let shape_writable_limit = dwords.len().saturating_sub(4 + RESERVED_END_DWORDS);
+    let writable_limit = batch_dwords.len().saturating_sub(RESERVED_END_DWORDS);
     let pitch = fill.pitch as u64;
-    let max_x = fill.rect_w.max(1).min(64);
-    let max_y = fill.rect_h.max(1).min(64);
-    let mut exhausted = false;
+    let cmd = xelp_copy_ngin::mi::STORE_DATA_IMM
+        | xelp_copy_ngin::mi::SDI_GGTT
+        | xelp_copy_ngin::mi::sdi_num_dw(1);
 
-    let mut emit_store = |dst_gpu: u64, value: u32, i: &mut usize| -> bool {
-        if *i + 4 > shape_writable_limit {
+    let emit_store = |batch_dwords: &mut [u32], i: &mut usize, dst_gpu: u64, value: u32| {
+        if *i + STORE_DWORDS > writable_limit {
             return false;
         }
-        dwords[*i] = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
-        dwords[*i + 1] = dst_gpu as u32;
-        dwords[*i + 2] = (dst_gpu >> 32) as u32;
-        dwords[*i + 3] = value;
-        *i += 4;
+        batch_dwords[*i] = cmd;
+        batch_dwords[*i + 1] = dst_gpu as u32;
+        batch_dwords[*i + 2] = (dst_gpu >> 32) as u32;
+        batch_dwords[*i + 3] = value;
+        *i += STORE_DWORDS;
         true
     };
 
-    // 1) Horizontal scanline demo.
-    let scanline_len = max_x.min(48);
-    for x in 0..scanline_len {
-        let dst = fill.dst_gpu_addr.saturating_add((x as u64) * 4);
-        if !emit_store(dst, 0x00FF_DA2C, &mut i) {
-            exhausted = true;
-            break;
+    batch_dwords[i] = MI_NOOP;
+    i += 1;
+
+    if !emit_store(batch_dwords, &mut i, GPU_VA_RESULT_BASE, BCS_EXEC_RESULT_START) {
+        return Err("result-start");
+    }
+    if !emit_store(
+        batch_dwords,
+        &mut i,
+        GPU_VA_RESULT_BASE + COPY_SMOKE_PRE_COPY_SLOT,
+        BCS_EXEC_RESULT_PRE_COPY,
+    ) {
+        return Err("result-pre");
+    }
+
+    let remaining_store_slots = writable_limit
+        .saturating_sub(i)
+        .saturating_sub(RESULT_MARKER_STORES * STORE_DWORDS)
+        / STORE_DWORDS;
+    let border_pixels = (RECT_W * 2).saturating_add(RECT_H.saturating_sub(2) * 2);
+    let center_dot_pixels = 4usize;
+    if remaining_store_slots < border_pixels.saturating_add(center_dot_pixels) {
+        return Err("shape-capacity");
+    }
+
+    let center_x = fill.rect_w / 2;
+    let center_y = fill.rect_h / 2;
+    let rect_x0 = center_x.saturating_sub(RECT_W / 2);
+    let rect_y0 = center_y.saturating_sub(RECT_H / 2);
+    let rect_x1 = rect_x0.saturating_add(RECT_W.saturating_sub(1));
+    let rect_y1 = rect_y0.saturating_add(RECT_H.saturating_sub(1));
+
+    for x in rect_x0..=rect_x1 {
+        let top_dst = fill
+            .dst_gpu_addr
+            .saturating_add((rect_y0 as u64).saturating_mul(pitch))
+            .saturating_add((x as u64) * 4);
+        if !emit_store(batch_dwords, &mut i, top_dst, fill.color) {
+            return Err("rect-top");
+        }
+
+        let bot_dst = fill
+            .dst_gpu_addr
+            .saturating_add((rect_y1 as u64).saturating_mul(pitch))
+            .saturating_add((x as u64) * 4);
+        if !emit_store(batch_dwords, &mut i, bot_dst, 0x0000_FFFF) {
+            return Err("rect-bottom");
         }
     }
 
-    // 2) Small filled rectangle demo, offset from top-left.
-    if !exhausted {
-        let rect_w = (max_x / 2).max(8).min(24);
-        let rect_h = (max_y / 3).max(6).min(16);
-        let rect_x_off = 6u64;
-        let rect_y_off = 6u64;
-        for y in 0..rect_h {
-            for x in 0..rect_w {
-                let dst = fill
-                    .dst_gpu_addr
-                    .saturating_add((rect_y_off + y as u64).saturating_mul(pitch))
-                    .saturating_add((rect_x_off + x as u64) * 4);
-                if !emit_store(dst, 0x002A_E6A5, &mut i) {
-                    exhausted = true;
-                    break;
-                }
-            }
-            if exhausted {
-                break;
+    for y in rect_y0.saturating_add(1)..rect_y1 {
+        let left_dst = fill
+            .dst_gpu_addr
+            .saturating_add((y as u64).saturating_mul(pitch))
+            .saturating_add((rect_x0 as u64) * 4);
+        if !emit_store(batch_dwords, &mut i, left_dst, fill.color) {
+            return Err("rect-left");
+        }
+
+        let right_dst = fill
+            .dst_gpu_addr
+            .saturating_add((y as u64).saturating_mul(pitch))
+            .saturating_add((rect_x1 as u64) * 4);
+        if !emit_store(batch_dwords, &mut i, right_dst, 0x0000_FFFF) {
+            return Err("rect-right");
+        }
+    }
+
+    for dy in 0..2usize {
+        for dx in 0..2usize {
+            let dot_dst = fill
+                .dst_gpu_addr
+                .saturating_add(((center_y.saturating_add(dy)) as u64).saturating_mul(pitch))
+                .saturating_add(((center_x.saturating_add(dx)) as u64) * 4);
+            if !emit_store(batch_dwords, &mut i, dot_dst, 0x0000_FFFF) {
+                return Err("rect-center-dot");
             }
         }
     }
 
-    // 3) Right-triangle via scanline fill.
-    if !exhausted {
-        let tri_h = (max_y / 2).max(8).min(20);
-        let tri_x_off = 2u64;
-        let tri_y_off = 20u64;
-        for y in 0..tri_h {
-            let run = (y + 1).min(max_x.min(24));
-            for x in 0..run {
-                let dst = fill
-                    .dst_gpu_addr
-                    .saturating_add((tri_y_off + y as u64).saturating_mul(pitch))
-                    .saturating_add((tri_x_off + x as u64) * 4);
-                if !emit_store(dst, fill.color, &mut i) {
-                    exhausted = true;
-                    break;
-                }
-            }
-            if exhausted {
-                break;
-            }
-        }
+    if !emit_store(
+        batch_dwords,
+        &mut i,
+        GPU_VA_RESULT_BASE + COPY_SMOKE_POST_COPY_SLOT,
+        BCS_EXEC_RESULT_POST_COPY,
+    ) {
+        return Err("result-post");
+    }
+    if !emit_store(
+        batch_dwords,
+        &mut i,
+        GPU_VA_RESULT_BASE + COPY_SMOKE_DONE_SLOT,
+        BCS_EXEC_RESULT_DONE,
+    ) {
+        return Err("result-done");
     }
 
-    if i + 4 > dwords.len().saturating_sub(RESERVED_END_DWORDS) {
-        crate::log!(
-            "intel/igpu770: rcs-batch exhausted before result marker (used={} total={})\n",
-            i,
-            dwords.len()
-        );
-    } else {
-        dwords[i] = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
-        dwords[i + 1] = GPU_VA_RESULT_BASE as u32;
-        dwords[i + 2] = (GPU_VA_RESULT_BASE >> 32) as u32;
-        dwords[i + 3] = RCS_EXEC_RESULT_DONE;
-        i += 4;
-    }
+    batch_dwords[i] = MI_BATCH_BUFFER_END;
+    batch_dwords[i + 1] = MI_NOOP;
+    i += 2;
 
-    if i + 2 <= dwords.len() {
-        dwords[i] = MI_BATCH_BUFFER_END;
-        dwords[i + 1] = MI_NOOP;
-        i += 2;
-    }
-
-    dma_cache_flush(warm.batch_virt as *const u8, i.saturating_mul(core::mem::size_of::<u32>()));
+    Ok(i.saturating_mul(core::mem::size_of::<u32>()))
 }
 
 fn build_ring_batch_start(warm: Igpu770WarmState, batch_gpu_addr: u64) -> usize {
@@ -852,7 +917,7 @@ fn build_bcs_ring_batch_start(warm: Igpu770WarmState, batch_gpu_addr: u64) -> us
         core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, BCS_RING_MARKER_DWORDS)
     };
 
-    dwords[0] = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
+    dwords[0] = MI_STORE_DWORD_IMM_GEN4_LEN_DW4;
     dwords[1] = GPU_VA_RESULT_BASE as u32;
     dwords[2] = (GPU_VA_RESULT_BASE >> 32) as u32;
     dwords[3] = BCS_EXEC_RESULT_START;
@@ -1556,12 +1621,7 @@ fn framebuffer_word_at(warm: Igpu770WarmState, x: usize, y: usize) -> Option<u32
 
 fn log_framebuffer_probe(warm: Igpu770WarmState, label: &str, x: usize, y: usize) {
     let Some(off) = framebuffer_byte_offset(warm, x, y) else {
-        crate::log!(
-            "intel/igpu770: fb-probe label={} xy={}x{} status=out-of-range\n",
-            label,
-            x,
-            y
-        );
+        crate::log!("intel/igpu770: fb-probe label={} xy={}x{} status=out-of-range\n", label, x, y);
         return;
     };
     let Some(value) = framebuffer_word_at(warm, x, y) else {
@@ -1584,6 +1644,64 @@ fn log_framebuffer_probe(warm: Igpu770WarmState, label: &str, x: usize, y: usize
         warm.limine_fb_phys.saturating_add(off as u64),
         value
     );
+}
+
+fn log_rcs_triangle_probe_set(warm: Igpu770WarmState, prefix: &str, fill: BltFillRectPlan) {
+    let center_x = fill.dst_x.saturating_add(fill.rect_w / 2);
+    let center_y = fill.dst_y.saturating_add(fill.rect_h / 2);
+    let apex_x = center_x;
+    let apex_y = fill.dst_y.saturating_add(fill.rect_h / 2).saturating_sub(9);
+    let left_x = center_x.saturating_sub(10);
+    let left_y = center_y.saturating_add(6);
+    let right_x = center_x
+        .saturating_add(10)
+        .min(warm.limine_fb_width.saturating_sub(1));
+    let right_y = left_y.min(warm.limine_fb_height.saturating_sub(1));
+
+    let mut label = [0u8; 32];
+
+    let apex = format_probe_label(&mut label, prefix, "apex");
+    log_framebuffer_probe(warm, apex, apex_x, apex_y);
+
+    let left = format_probe_label(&mut label, prefix, "left");
+    log_framebuffer_probe(warm, left, left_x, left_y);
+
+    let right = format_probe_label(&mut label, prefix, "right");
+    log_framebuffer_probe(warm, right, right_x, right_y);
+
+    let center = format_probe_label(&mut label, prefix, "center");
+    log_framebuffer_probe(warm, center, center_x, center_y);
+}
+
+fn format_probe_label<'a>(buf: &'a mut [u8; 32], prefix: &str, suffix: &str) -> &'a str {
+    let mut idx = 0usize;
+    for b in prefix.as_bytes().iter().copied() {
+        if idx >= buf.len() {
+            break;
+        }
+        buf[idx] = b;
+        idx += 1;
+    }
+    if idx < buf.len() {
+        buf[idx] = b'-';
+        idx += 1;
+    }
+    for b in suffix.as_bytes().iter().copied() {
+        if idx >= buf.len() {
+            break;
+        }
+        buf[idx] = b;
+        idx += 1;
+    }
+    core::str::from_utf8(&buf[..idx]).unwrap_or("probe")
+}
+
+fn invalidate_framebuffer_probe(warm: Igpu770WarmState, x: usize, y: usize) {
+    let Some(off) = framebuffer_byte_offset(warm, x, y) else {
+        return;
+    };
+    let ptr = warm.limine_fb_virt.saturating_add(off) as *const u8;
+    dma_cache_flush(ptr, core::mem::size_of::<u32>());
 }
 
 fn cpu_framebuffer_fill_rect(
@@ -1632,35 +1750,100 @@ pub fn cpu_framebuffer_alive_stamp(label: &str) {
 
     let marker_w = 96usize.min(warm.limine_fb_width.max(1));
     let marker_h = 96usize.min(warm.limine_fb_height.max(1));
-    let center_x = warm.limine_fb_width.saturating_sub(marker_w) / 2;
-    let center_y = warm.limine_fb_height.saturating_sub(marker_h) / 2;
     let br_x = warm.limine_fb_width.saturating_sub(marker_w);
     let br_y = warm.limine_fb_height.saturating_sub(marker_h);
 
     let tl_ok = cpu_framebuffer_fill_rect(warm, 0, 0, marker_w, marker_h, 0x00FF_2A00);
-    let center_ok = cpu_framebuffer_fill_rect(
-        warm,
-        center_x,
-        center_y,
-        marker_w,
-        marker_h,
-        0x0000_EEFF,
-    );
     let br_ok = cpu_framebuffer_fill_rect(warm, br_x, br_y, marker_w, marker_h, 0x00FF_FFFF);
 
     crate::log!(
-        "intel/igpu770: cpu-fb-stamp label={} tl={} center={} br={} dims={}x{} pitch=0x{:X}\n",
+        "intel/igpu770: cpu-fb-stamp label={} tl={} br={} dims={}x{} pitch=0x{:X}\n",
         label,
         tl_ok as u8,
-        center_ok as u8,
         br_ok as u8,
         warm.limine_fb_width,
         warm.limine_fb_height,
         warm.limine_fb_pitch
     );
     log_framebuffer_probe(warm, "cpu-stamp-tl", 0, 0);
-    log_framebuffer_probe(warm, "cpu-stamp-center", center_x, center_y);
     log_framebuffer_probe(warm, "cpu-stamp-br", br_x, br_y);
+}
+
+pub fn cpu_framebuffer_visualize_bytes_center(
+    label: &str,
+    bytes: &[u8],
+    width: usize,
+    height: usize,
+) {
+    let Some(warm) = warm_state() else {
+        crate::log!("intel/igpu770: cpu-fb-visualize label={} status=not-warmed\n", label);
+        return;
+    };
+    if bytes.is_empty() {
+        crate::log!("intel/igpu770: cpu-fb-visualize label={} status=empty-bytes\n", label);
+        return;
+    }
+    if warm.limine_fb_virt == 0 || warm.limine_fb_pitch == 0 || warm.limine_fb_bpp < 32 {
+        crate::log!("intel/igpu770: cpu-fb-visualize label={} status=fb-unavailable\n", label);
+        return;
+    }
+
+    let outer_w = width.min(warm.limine_fb_width.max(1)).max(4);
+    let outer_h = height.min(warm.limine_fb_height.max(1)).max(4);
+    let origin_x = warm.limine_fb_width.saturating_sub(outer_w) / 2;
+    let origin_y = warm.limine_fb_height.saturating_sub(outer_h) / 2;
+    let inner_x = origin_x.saturating_add(1);
+    let inner_y = origin_y.saturating_add(1);
+    let inner_w = outer_w.saturating_sub(2).max(1);
+    let inner_h = outer_h.saturating_sub(2).max(1);
+
+    if !cpu_framebuffer_fill_rect(warm, origin_x, origin_y, outer_w, outer_h, 0x00F4_F8FF) {
+        crate::log!("intel/igpu770: cpu-fb-visualize label={} status=outer-fill-failed\n", label);
+        return;
+    }
+    let _ = cpu_framebuffer_fill_rect(warm, inner_x, inner_y, inner_w, inner_h, 0x0000_0000);
+
+    let mut y = 0usize;
+    while y < inner_h {
+        let Some(row_off) = framebuffer_byte_offset(warm, inner_x, inner_y.saturating_add(y))
+        else {
+            crate::log!(
+                "intel/igpu770: cpu-fb-visualize label={} status=row-off-failed row={}\n",
+                label,
+                y
+            );
+            return;
+        };
+        let row_ptr = warm.limine_fb_virt.saturating_add(row_off) as *mut u32;
+        let mut x = 0usize;
+        while x < inner_w {
+            let idx = y.saturating_mul(inner_w).saturating_add(x);
+            let src0 = bytes[idx % bytes.len()];
+            let src1 = bytes[(idx.saturating_mul(17).saturating_add(src0 as usize)) % bytes.len()];
+            let lum = src0 ^ src1.rotate_left(1);
+            let rgb = ((lum as u32) << 16) | ((lum as u32) << 8) | (lum as u32);
+            unsafe { core::ptr::write_volatile(row_ptr.add(x), rgb) };
+            x += 1;
+        }
+        y += 1;
+    }
+
+    dma_cache_flush(warm.limine_fb_virt as *const u8, warm.limine_fb_size);
+    crate::log!(
+        "intel/igpu770: cpu-fb-visualize label={} origin={}x{} dims={}x{} bytes={}\n",
+        label,
+        origin_x,
+        origin_y,
+        outer_w,
+        outer_h,
+        bytes.len()
+    );
+    log_framebuffer_probe(
+        warm,
+        "cpu-visualize-center",
+        origin_x.saturating_add(outer_w / 2),
+        origin_y.saturating_add(outer_h / 2),
+    );
 }
 
 fn blt_fill_rect_plan(warm: Igpu770WarmState) -> Option<BltFillRectPlan> {
@@ -1856,7 +2039,7 @@ pub fn ggtt_blt_smoke_test_once() {
     log_ggtt_map_plan("batch", batch);
     log_ggtt_map_plan("result", result);
     crate::log!(
-        "intel/igpu770: rcs-store-plan dst_gpu=0x{:X} dst_phys=0x{:X} dst_xy={}x{} rect={}x{} pitch=0x{:X} color=0x{:08X}\n",
+        "intel/igpu770: rcs-triangle-plan dst_gpu=0x{:X} dst_phys=0x{:X} dst_xy={}x{} rect={}x{} pitch=0x{:X} marker=0x{:08X}\n",
         fill.dst_gpu_addr,
         fill.dst_phys,
         fill.dst_x,
@@ -1864,7 +2047,7 @@ pub fn ggtt_blt_smoke_test_once() {
         fill.rect_w,
         fill.rect_h,
         fill.pitch,
-        fill.color
+        RCS_EXEC_RESULT_DONE
     );
     log_framebuffer_probe(warm, "rcs-pre-origin", fill.dst_x, fill.dst_y);
     log_framebuffer_probe(
@@ -1873,6 +2056,7 @@ pub fn ggtt_blt_smoke_test_once() {
         fill.dst_x.saturating_add(fill.rect_w.saturating_sub(1)),
         fill.dst_y.saturating_add(fill.rect_h.saturating_sub(1)),
     );
+    log_rcs_triangle_probe_set(warm, "rcs-pre", fill);
 
     build_rcs_store_pixels_batch(warm, fill);
     let ring_tail_bytes = build_ring_batch_start(warm, batch.gpu_addr);
@@ -2000,6 +2184,13 @@ pub fn ggtt_blt_smoke_test_once() {
     }
 
     dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+    invalidate_framebuffer_probe(warm, fill.dst_x, fill.dst_y);
+    invalidate_framebuffer_probe(
+        warm,
+        fill.dst_x.saturating_add(fill.rect_w.saturating_sub(1)),
+        fill.dst_y.saturating_add(fill.rect_h.saturating_sub(1)),
+    );
+    dma_cache_flush(warm.limine_fb_virt as *const u8, core::mem::size_of::<u32>());
     let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
     let fb0 = unsafe { core::ptr::read_volatile(warm.limine_fb_virt as *const u32) };
     log_framebuffer_probe(warm, "rcs-post-origin", fill.dst_x, fill.dst_y);
@@ -2009,6 +2200,7 @@ pub fn ggtt_blt_smoke_test_once() {
         fill.dst_x.saturating_add(fill.rect_w.saturating_sub(1)),
         fill.dst_y.saturating_add(fill.rect_h.saturating_sub(1)),
     );
+    log_rcs_triangle_probe_set(warm, "rcs-post", fill);
     log_rcs_mode_summary(
         warm,
         if completed {
@@ -2045,7 +2237,10 @@ pub fn ggtt_blt_smoke_test_once() {
 }
 
 pub fn ggtt_bcs_smoke_test_once() {
+    let ran_before = GGTT_BCS_SMOKE_RAN.load(Ordering::Acquire);
+    crate::log!("intel/igpu770: ggtt-bcs-smoke entry ran_before={}\n", ran_before as u8);
     if GGTT_BCS_SMOKE_RAN.swap(true, Ordering::AcqRel) {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=already-ran\n");
         return;
     }
 
@@ -2137,31 +2332,14 @@ pub fn ggtt_bcs_smoke_test_once() {
         crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=surface-base-overflow\n");
         return;
     };
-    let Some(surface_gpu_addr) = fill.dst_gpu_addr.checked_sub(surface_byte_off as u64) else {
+    let Some(_surface_gpu_addr) = fill.dst_gpu_addr.checked_sub(surface_byte_off as u64) else {
         crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=surface-base-underflow\n");
         return;
     };
-    let batch_tail_bytes = match xelp_copy_ngin::build_color_fill_smoke_batch_bytes(
-        batch_dwords,
-        xelp_copy_ngin::ColorFillSmokePlan {
-            surface_gpu_addr,
-            dst_x: fill.dst_x as u32,
-            dst_y: fill.dst_y as u32,
-            pitch_bytes: fill.pitch as u32,
-            rect_w: fill.rect_w as u32,
-            rect_h: fill.rect_h as u32,
-            color: fill.color,
-            result_gpu_addr: GPU_VA_RESULT_BASE,
-            start_value: BCS_EXEC_RESULT_START,
-            pre_color_value: BCS_EXEC_RESULT_PRE_COPY,
-            post_color_value: BCS_EXEC_RESULT_POST_COPY,
-            done_value: BCS_EXEC_RESULT_DONE,
-            use_force_wakeup: false,
-        },
-    ) {
+    let batch_tail_bytes = match build_bcs_store_pixels_batch(batch_dwords, fill) {
         Ok(bytes) => bytes,
         Err(err) => {
-            crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=batch-build err={:?}\n", err);
+            crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=batch-build err={}\n", err);
             return;
         }
     };
@@ -2332,6 +2510,13 @@ pub fn ggtt_bcs_smoke_test_once() {
     }
 
     dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+    invalidate_framebuffer_probe(warm, fill.dst_x, fill.dst_y);
+    invalidate_framebuffer_probe(
+        warm,
+        fill.dst_x.saturating_add(fill.rect_w / 2),
+        fill.dst_y.saturating_add(fill.rect_h / 2),
+    );
+    dma_cache_flush(warm.limine_fb_virt as *const u8, core::mem::size_of::<u32>());
     let result = read_bcs_result_markers(warm);
     let fb0 = unsafe { core::ptr::read_volatile(warm.limine_fb_virt as *const u32) };
     log_framebuffer_probe(warm, "bcs-post-origin", fill.dst_x, fill.dst_y);
