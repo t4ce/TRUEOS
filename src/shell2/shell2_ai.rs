@@ -8,29 +8,15 @@ use super::{ShellBackend2, print_shell_line};
 pub(crate) enum AiPromptMode {
     Normal,
     WebSearch,
-    FileSearch,
     NewChat,
-    AiPc,
 }
 
 impl AiPromptMode {
     pub(crate) const fn next(self) -> Self {
         match self {
             Self::Normal => Self::WebSearch,
-            Self::WebSearch => Self::FileSearch,
-            Self::FileSearch => Self::NewChat,
-            Self::NewChat => Self::AiPc,
-            Self::AiPc => Self::Normal,
-        }
-    }
-
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Normal => "normal",
-            Self::WebSearch => "web",
-            Self::FileSearch => "file",
-            Self::NewChat => "newchat",
-            Self::AiPc => "ai-pc",
+            Self::WebSearch => Self::NewChat,
+            Self::NewChat => Self::Normal,
         }
     }
 }
@@ -57,9 +43,9 @@ pub(crate) fn submit(
     let entry = trueos_qjs::ai_task::AiInputEntry {
         text: String::from(submitted.trim()),
         web_search: mode == AiPromptMode::WebSearch,
-        file_search: mode == AiPromptMode::FileSearch,
+        file_search: false,
         new_conversation: false,
-        computer_use: mode == AiPromptMode::AiPc,
+        computer_use: false,
         shell_target_mask,
         request_id: 0,
     };

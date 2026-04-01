@@ -484,6 +484,269 @@ unsafe extern "C" fn trueos_xhci_list_devices_js(
     qjs::JS_NewStringLen(ctx, json.as_ptr() as *const c_char, json.len())
 }
 
+unsafe extern "C" fn trueos_xhci_list_controllers_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let controllers = crate::usb2::pci_usb_controllers();
+    let mut json = String::from("[");
+    let mut first = true;
+    for ctrl in controllers {
+        if !first {
+            json.push(',');
+        }
+        first = false;
+        json.push_str(&alloc::format!(
+            r#"{{"controller_id":{},"bus":{},"slot":{},"function":{},"bdf":"{:02X}:{:02X}.{}","vendor_id":"{:04x}","device_id":"{:04x}","mmio_base":{},"controller_phase":"{}","root_hub_lifecycle":"{}","event_ready":{},"root_port_change_seen":{},"empty_probe_streak":{}}}"#,
+            ctrl.index,
+            ctrl.bus,
+            ctrl.slot,
+            ctrl.function,
+            ctrl.bus,
+            ctrl.slot,
+            ctrl.function,
+            ctrl.vendor_id,
+            ctrl.device_id,
+            ctrl.mmio_base.as_ptr() as usize,
+            ctrl.controller_phase,
+            ctrl.root_hub_lifecycle,
+            if ctrl.event_ready { "true" } else { "false" },
+            if ctrl.root_port_change_seen { "true" } else { "false" },
+            ctrl.empty_probe_streak,
+        ));
+    }
+    json.push(']');
+    qjs::JS_NewStringLen(ctx, json.as_ptr() as *const c_char, json.len())
+}
+
+unsafe extern "C" fn trueos_xhci_get_controller_snapshot_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return js_null();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(controller_id) = js_to_i32(ctx, args[0]) else {
+        return js_null();
+    };
+    let controller_id = controller_id.max(0) as usize;
+    let controller = crate::usb2::pci_usb_controllers()
+        .into_iter()
+        .find(|ctrl| ctrl.index == controller_id);
+    let Some(ctrl) = controller else {
+        return js_null();
+    };
+
+    let runtime = crate::usb2::runtime_diag(controller_id);
+    let mmio = crate::usb2::controller_mmio_diag(controller_id);
+    let snapshot = crate::usb2::tlb_snapshot();
+    let progress = crab_usb::debug_usb_probe_progress();
+
+    let mut json = String::from("{");
+    json.push_str(&alloc::format!(
+        r#""controller":{{"controller_id":{},"bus":{},"slot":{},"function":{},"bdf":"{:02X}:{:02X}.{}","vendor_id":"{:04x}","device_id":"{:04x}","mmio_base":{},"controller_phase":"{}","root_hub_lifecycle":"{}","event_ready":{},"root_port_change_seen":{},"empty_probe_streak":{}}},"#,
+        ctrl.index,
+        ctrl.bus,
+        ctrl.slot,
+        ctrl.function,
+        ctrl.bus,
+        ctrl.slot,
+        ctrl.function,
+        ctrl.vendor_id,
+        ctrl.device_id,
+        ctrl.mmio_base.as_ptr() as usize,
+        ctrl.controller_phase,
+        ctrl.root_hub_lifecycle,
+        if ctrl.event_ready { "true" } else { "false" },
+        if ctrl.root_port_change_seen { "true" } else { "false" },
+        ctrl.empty_probe_streak,
+    ));
+
+    if let Some(diag) = runtime {
+        json.push_str(&alloc::format!(
+            r#""runtime":{{"event_handler_ready":{},"probe_requested":{},"root_port_change_seen":{},"controller_phase":"{}","root_hub_lifecycle":"{}","empty_probe_streak":{},"probe_fail_streak":{},"last_probe_state":"{}","last_probe_device_count":{}}},"#,
+            if diag.event_handler_ready { "true" } else { "false" },
+            if diag.probe_requested { "true" } else { "false" },
+            if diag.root_port_change_seen { "true" } else { "false" },
+            diag.controller_phase,
+            diag.root_hub_lifecycle,
+            diag.empty_probe_streak,
+            diag.probe_fail_streak,
+            diag.last_probe_state,
+            diag.last_probe_device_count,
+        ));
+    } else {
+        json.push_str(r#""runtime":null,"#);
+    }
+
+    if let Some(mmio_diag) = mmio {
+        json.push_str(&alloc::format!(
+            r#""mmio":{{"caplen":{},"hcsparams1":"0x{:08X}","hccparams1":"0x{:08X}","dboff":"0x{:08X}","rtsoff":"0x{:08X}","usbcmd":"0x{:08X}","usbsts":"0x{:08X}","crcr":"0x{:016X}","dcbaap":"0x{:016X}","config":"0x{:08X}","iman":"0x{:08X}","imod":"0x{:08X}","erstsz":"0x{:08X}","erstba":"0x{:016X}","erdp":"0x{:016X}","ports":["#,
+            mmio_diag.caplen,
+            mmio_diag.hcsparams1,
+            mmio_diag.hccparams1,
+            mmio_diag.dboff,
+            mmio_diag.rtsoff,
+            mmio_diag.usbcmd,
+            mmio_diag.usbsts,
+            mmio_diag.crcr,
+            mmio_diag.dcbaap,
+            mmio_diag.config,
+            mmio_diag.iman,
+            mmio_diag.imod,
+            mmio_diag.erstsz,
+            mmio_diag.erstba,
+            mmio_diag.erdp,
+        ));
+        for (index, port) in mmio_diag.ports.iter().enumerate() {
+            if index != 0 {
+                json.push(',');
+            }
+            json.push_str(&alloc::format!(
+                r#"{{"port_id":{},"portsc":"0x{:08X}","portpmsc":"0x{:08X}","portli":"0x{:08X}"}}"#,
+                port.port_id,
+                port.portsc,
+                port.portpmsc,
+                port.portli,
+            ));
+        }
+        json.push_str("]},");
+    } else {
+        json.push_str(r#""mmio":null,"#);
+    }
+
+    json.push_str(&alloc::format!(
+        r#""progress":{{"stage":"{}","root_port":{},"port":{},"slot":{},"detail":"{}"}},"#,
+        crab_usb::debug_usb_probe_stage_name(progress.stage),
+        progress.root_port,
+        progress.port,
+        progress.slot,
+        progress.detail,
+    ));
+
+    json.push_str(r#""devices":["#);
+    let mut first = true;
+    for dev in snapshot
+        .devices
+        .iter()
+        .filter(|dev| dev.controller_index == controller_id)
+    {
+        if !first {
+            json.push(',');
+        }
+        first = false;
+        json.push_str(&alloc::format!(
+            r#"{{"controller_index":{},"stable_id":{},"slot_id":{},"root_port_id":{},"route_string":{},"path":[{}],"port_id":{},"speed":"{}","parent_hub_slot_id":{},"vendor_id":"{:04x}","product_id":"{:04x}","class":{},"subclass":{},"protocol":{},"num_configurations":{},"max_packet_size_0":{}}}"#,
+            dev.controller_index,
+            dev.stable_id,
+            dev.slot_id,
+            dev.root_port_id,
+            dev.route_string,
+            dev.path.iter().map(|v| alloc::format!("{}", v)).collect::<alloc::vec::Vec<_>>().join(","),
+            dev.port_id,
+            dev.speed,
+            dev.parent_hub_slot_id.map(|v| alloc::format!("{}", v)).unwrap_or_else(|| String::from("null")),
+            dev.vendor_id,
+            dev.product_id,
+            dev.class,
+            dev.subclass,
+            dev.protocol,
+            dev.num_configurations,
+            dev.max_packet_size_0,
+        ));
+    }
+    json.push_str("],");
+
+    json.push_str(r#""topology":["#);
+    let mut first = true;
+    for node in snapshot
+        .topology
+        .iter()
+        .filter(|node| node.controller_index == controller_id)
+    {
+        if !first {
+            json.push(',');
+        }
+        first = false;
+        let kind = match node.kind {
+            crate::usb2::TlbUsbTopologyNodeKind::RootPort => "root_port",
+            crate::usb2::TlbUsbTopologyNodeKind::Hub => "hub",
+            crate::usb2::TlbUsbTopologyNodeKind::Device => "device",
+        };
+        json.push_str(&alloc::format!(
+            r#"{{"controller_index":{},"kind":"{}","slot_id":{},"root_port_id":{},"port_id":{},"depth":{},"parent_slot_id":{},"vendor_id":{},"product_id":{},"class":{},"subclass":{},"protocol":{},"speed":"{}"}}"#,
+            node.controller_index,
+            kind,
+            node.slot_id.map(|v| alloc::format!("{}", v)).unwrap_or_else(|| String::from("null")),
+            node.root_port_id,
+            node.port_id,
+            node.depth,
+            node.parent_slot_id.map(|v| alloc::format!("{}", v)).unwrap_or_else(|| String::from("null")),
+            node.vendor_id.map(|v| alloc::format!("\"{:04x}\"", v)).unwrap_or_else(|| String::from("null")),
+            node.product_id.map(|v| alloc::format!("\"{:04x}\"", v)).unwrap_or_else(|| String::from("null")),
+            node.class.map(|v| alloc::format!("{}", v)).unwrap_or_else(|| String::from("null")),
+            node.subclass.map(|v| alloc::format!("{}", v)).unwrap_or_else(|| String::from("null")),
+            node.protocol.map(|v| alloc::format!("{}", v)).unwrap_or_else(|| String::from("null")),
+            node.speed,
+        ));
+    }
+    json.push_str("],");
+
+    json.push_str(&alloc::format!(
+        r#""probe_error":{},"probe_device_count":{}}}"#,
+        snapshot
+            .probe_error
+            .map(|value| alloc::format!("\"{}\"", value))
+            .unwrap_or_else(|| String::from("null")),
+        snapshot.probe_device_count.unwrap_or(0),
+    ));
+
+    qjs::JS_NewStringLen(ctx, json.as_ptr() as *const c_char, json.len())
+}
+
+unsafe extern "C" fn trueos_xhci_request_probe_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return js_int32(-1);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(controller_id) = js_to_i32(ctx, args[0]) else {
+        return js_int32(-1);
+    };
+    match crate::usb2::request_probe(controller_id.max(0) as usize) {
+        Ok(()) => js_int32(0),
+        Err(_) => js_int32(-1),
+    }
+}
+
+unsafe extern "C" fn trueos_xhci_request_rebind_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return js_int32(-1);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(controller_id) = js_to_i32(ctx, args[0]) else {
+        return js_int32(-1);
+    };
+    match crate::usb2::request_rebind(controller_id.max(0) as usize) {
+        Ok(()) => js_int32(0),
+        Err(_) => js_int32(-1),
+    }
+}
+
 unsafe extern "C" fn trueos_xhci_port_reset_js(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -1088,6 +1351,66 @@ pub(crate) unsafe fn install(ctx: *mut qjs::JSContext) {
 
     let f = qjs::JS_NewCFunction2(
         ctx,
+        Some(trueos_xhci_list_controllers_js),
+        b"__trueosXhciListControllers\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciListControllers\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_get_controller_snapshot_js),
+        b"__trueosXhciGetControllerSnapshot\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciGetControllerSnapshot\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_request_probe_js),
+        b"__trueosXhciRequestProbe\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciRequestProbe\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_request_rebind_js),
+        b"__trueosXhciRequestRebind\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciRequestRebind\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
         Some(trueos_xhci_port_reset_js),
         b"__trueosXhciPortReset\0".as_ptr() as *const c_char,
         2,
@@ -1287,6 +1610,14 @@ unsafe fn install_shell1_runtime(ctx: *mut qjs::JSContext) {
                 required: !!(arg && arg.required),
             }))
             : [];
+        const tool = entry && entry.tool && typeof entry.tool === 'object'
+            ? Object.freeze({
+                description: String(entry.tool.description || ''),
+                parameters: entry.tool.parameters && typeof entry.tool.parameters === 'object'
+                    ? Object.freeze(JSON.parse(JSON.stringify(entry.tool.parameters)))
+                    : null,
+            })
+            : null;
         return Object.freeze({
             command: String(
                 entry && (entry.command || entry.name)
@@ -1296,6 +1627,7 @@ unsafe fn install_shell1_runtime(ctx: *mut qjs::JSContext) {
             name: String(entry && entry.name ? entry.name : ''),
             mode: String(entry && entry.mode ? entry.mode : ''),
             args: Object.freeze(args),
+            tool,
         });
     }) : [];
     G.__trueosShell1Runtime = Object.freeze({
