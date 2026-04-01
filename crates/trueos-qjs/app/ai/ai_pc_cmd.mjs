@@ -1,210 +1,259 @@
-function getShell1RuntimeSource() {
-  const runtime = globalThis.__trueosShell1Runtime;
-  if (!runtime || typeof runtime !== "object" || !Array.isArray(runtime.commands)) {
-    throw new Error("shell1 runtime registry is unavailable on globalThis.__trueosShell1Runtime");
-  }
-  return Object.freeze(runtime.commands.map((entry) => Object.freeze({
-    command: String(entry && entry.command ? entry.command : ""),
-    args: Object.freeze(Array.isArray(entry && entry.args)
-      ? entry.args.map((arg) => Object.freeze({
-        name: String(arg && arg.name ? arg.name : ""),
-        type: String(arg && arg.type ? arg.type : "str"),
-        required: !!(arg && arg.required),
-      }))
-      : []),
-  })));
-}
+import * as driverdev from '/qjs/dd/driverdev.mjs';
 
-function getShell1Commands() {
-  return getShell1RuntimeSource().map(enrichCommand);
-}
+const SUPPORTED_SHELL_COMMANDS = Object.freeze(new Set([
+  'acpi',
+  'email',
+  'etc',
+  'file',
+  'net',
+  'probe',
+  'set',
+  'smp',
+  'tlb',
+  'turbo',
+]));
 
-const COMMAND_DESCRIPTION_OVERRIDES = Object.freeze({
-  "§": "Select a shell1 status section slot and optionally print its current contents.",
-  cmd: "List the available top-level shell1 terminal commands.",
-  ecma48: "Send raw ECMA-48 control text through the shell1 terminal renderer.",
-  net: "Show shell1 network status and related network information.",
-  "net.icmp": "Run the shell1 ICMP probe command against a target host or address.",
-  "net.nic": "Inspect or select shell1 network interface information by NIC index.",
-  "net.hostname": "Read or update the shell1 network hostname.",
-  surf: "Open a URL through the shell1 browser or surf pipeline.",
-  frog: "Run the shell1 frog command with the API key it expects.",
-  dmafpga: "Run the shell1 DMA FPGA command when the dma_nic_fpga feature is enabled.",
-  update: "Run the shell1 update workflow.",
-  install: "Run the shell1 install workflow.",
-  format: "Run the shell1 format workflow.",
-  bench: "Run the shell1 benchmark workflow.",
-  "bench.net": "Run the shell1 network benchmark workflow.",
-  file: "Open the interactive shell1 file wizard for manual mount selection. Avoid this for simple AI-side filesystem listing when the dedicated TRUEOSFS tree tool is available.",
-  ai: "Start the shell1 AI command and optionally seed it with the first prompt text.",
-  acpi: "Run the shell1 ACPI control command for the requested state.",
-  hv: "Run the shell1 hypervisor command for the requested operation.",
-  go: "Switch shell1 into the primary GO mode.",
-  "go.two": "Switch shell1 into the alternate GO mode.",
-  tlb: "Show shell1 table views. Use one argument like `pci`, `pcibar`, `acpi`, `madt`, `usb`, or `dump`.",
-  mandel: "Render the shell1 Mandelbrot demo.",
-  set: "Resize or reconfigure the shell1 terminal grid.",
-  turbo: "Run the shell1 turbo control command.",
-  smp: "Inspect or switch shell1 SMP state for a slot.",
-  cube: "Start the shell1 cube demo.",
-  "cube.ico": "Start the shell1 cube icon demo.",
-  txt: "Show the shell1 text mode demo.",
-  tetris: "Start the shell1 tetris demo.",
-  rain: "Start the shell1 rain effect demo.",
-  insane: "Start the shell1 insane demo.",
+const SHELL_COMMAND_DESCRIPTION_OVERRIDES = Object.freeze({
+  acpi: 'Run the shell1 acpi command. Use raw_args like `shutdown`, `reboot`, or `sleep`.',
+  email: 'Run the shell1 email command. Use raw_args exactly as shell1 expects.',
+  etc: 'Run the shell1 etc command. Use raw_args exactly as shell1 expects.',
+  file: 'Run the shell1 file command for filesystem listing and file-related tasks. Use raw_args exactly as shell1 expects.',
+  net: 'Run the shell1 net command for network status and probes. Use raw_args exactly as shell1 expects.',
+  probe: 'Run the shell1 probe command for hardware and bus inspection. Use raw_args exactly as shell1 expects.',
+  set: 'Run the shell1 set command for terminal sizing. Use raw_args exactly as shell1 expects.',
+  smp: 'Run the shell1 smp command. Use raw_args exactly as shell1 expects.',
+  tlb: 'Run the shell1 tlb table inspection command. Use raw_args like `pci`, `usb`, `acpi`, or `dump`.',
+  turbo: 'Run the shell1 turbo command. Use raw_args exactly as shell1 expects.',
 });
 
-function sanitizeToolStem(command) {
-  if (command === "§") {
-    return "section";
-  }
-  return command
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/_+/g, "_");
-}
-
-function makeToolName(command) {
-  const stem = sanitizeToolStem(command) || "command";
-  return `shell1_${stem}`;
-}
-
-function fallbackCommandDescription(command) {
-  if (command.includes(".")) {
-    return `Run the shell1 \`${command}\` subcommand.`;
-  }
-  return `Run the shell1 \`${command}\` command.`;
-}
-
-function getCommandDescription(command) {
-  return COMMAND_DESCRIPTION_OVERRIDES[command] || fallbackCommandDescription(command);
-}
-
-function schemaTypeForArg(argType) {
-  if (argType === "u8" || argType === "usize") {
-    return "integer";
-  }
-  return "string";
-}
-
-function buildTypeSentence(arg) {
-  if (arg.type === "rest") {
-    return "This property captures the remainder of the shell line, so it may contain spaces exactly as the command should receive them.";
-  }
-  if (arg.type === "u8") {
-    return "Use a whole number in the 0 to 255 range so it matches the shell's `u8` parser.";
-  }
-  if (arg.type === "usize") {
-    return "Use a non-negative whole number so it matches the shell's `usize` parser.";
-  }
-  return "Pass the exact string token that the shell command expects for this position.";
-}
-
-function buildNameSentence(command, arg) {
-  const requirement = arg.required ? "required" : "optional";
-  if (arg.name === "url") {
-    return `Provide the ${requirement} URL value for the shell1 \`${command}\` command.`;
-  }
-  if (arg.name === "api_key") {
-    return `Provide the ${requirement} API key string for the shell1 \`${command}\` command.`;
-  }
-  if (arg.name === "target") {
-    return `Provide the ${requirement} target host or address for the shell1 \`${command}\` command.`;
-  }
-  if (arg.name === "nic") {
-    return `Provide the ${requirement} NIC selector for the shell1 \`${command}\` command.`;
-  }
-  if (arg.name === "src") {
-    return `Provide the ${requirement} inline source text for the shell1 \`${command}\` command.`;
-  }
-  return `Provide the ${requirement} \`${arg.name}\` value for the shell1 \`${command}\` command.`;
-}
-
-function buildParamDescription(command, arg) {
-  return `${buildNameSentence(command, arg)} ${buildTypeSentence(arg)}`;
-}
-
-function buildPropertySchema(command, arg) {
-  const schema = {
-    type: schemaTypeForArg(arg.type),
-    description: buildParamDescription(command, arg),
-  };
-  if (arg.type === "u8") {
-    schema.minimum = 0;
-    schema.maximum = 255;
-  } else if (arg.type === "usize") {
-    schema.minimum = 0;
-  }
-  return schema;
-}
-
-function enrichCommand(entry) {
-  const args = Array.isArray(entry.args) ? entry.args.map((arg) => ({ ...arg })) : [];
-  const properties = {};
-  const required = [];
-
-  for (const arg of args) {
-    properties[arg.name] = buildPropertySchema(entry.command, arg);
-    if (arg.required) {
-      required.push(arg.name);
-    }
-  }
-
-  return Object.freeze({
-    command: entry.command,
-    toolName: makeToolName(entry.command),
-    description: getCommandDescription(entry.command),
-    args: Object.freeze(args),
+const DRIVERDEV_TOOLS = Object.freeze([
+  Object.freeze({
+    toolName: 'driverdev_list_devices',
+    description: 'List visible TRUEOS xHCI devices.',
     parameters: Object.freeze({
-      type: "object",
-      properties: Object.freeze(properties),
-      required: Object.freeze(required),
+      type: 'object',
+      properties: Object.freeze({}),
+      required: Object.freeze([]),
       additionalProperties: false,
     }),
+  }),
+  Object.freeze({
+    toolName: 'driverdev_get_device_descriptor',
+    description: 'Read and decode the USB device descriptor for a device handle.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({
+        handle: Object.freeze({
+          type: 'integer',
+          description: 'Encoded TRUEOS xHCI device handle.',
+        }),
+      }),
+      required: Object.freeze(['handle']),
+      additionalProperties: false,
+    }),
+  }),
+  Object.freeze({
+    toolName: 'driverdev_get_descriptor',
+    description: 'Read a raw USB descriptor from a device handle.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({
+        handle: Object.freeze({ type: 'integer', description: 'Encoded TRUEOS xHCI device handle.' }),
+        desc_type: Object.freeze({ type: 'integer', description: 'USB descriptor type number.' }),
+        desc_index: Object.freeze({ type: 'integer', description: 'Descriptor index. Defaults to 0.' }),
+        length: Object.freeze({ type: 'integer', description: 'Maximum read length. Defaults to 255.' }),
+      }),
+      required: Object.freeze(['handle', 'desc_type']),
+      additionalProperties: false,
+    }),
+  }),
+  Object.freeze({
+    toolName: 'driverdev_get_hid_report_descriptor',
+    description: 'Read the HID report descriptor for a device handle.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({
+        handle: Object.freeze({ type: 'integer', description: 'Encoded TRUEOS xHCI device handle.' }),
+        interface_number: Object.freeze({ type: 'integer', description: 'HID interface number. Defaults to 0.' }),
+        length: Object.freeze({ type: 'integer', description: 'Maximum read length. Defaults to 512.' }),
+      }),
+      required: Object.freeze(['handle']),
+      additionalProperties: false,
+    }),
+  }),
+  Object.freeze({
+    toolName: 'driverdev_port_reset',
+    description: 'Request an xHCI port reset.',
+    parameters: Object.freeze({
+      type: 'object',
+      properties: Object.freeze({
+        controller_id: Object.freeze({ type: 'integer', description: 'xHCI controller id.' }),
+        port_idx: Object.freeze({ type: 'integer', description: 'Port index to reset.' }),
+      }),
+      required: Object.freeze(['controller_id', 'port_idx']),
+      additionalProperties: false,
+    }),
+  }),
+]);
+
+function rawArgSchema(command) {
+  return Object.freeze({
+    type: 'object',
+    properties: Object.freeze({
+      raw_args: Object.freeze({
+        type: 'string',
+        description: `Optional raw shell argument string appended after \`${command}\`. Use exactly the tokens shell1 expects.`,
+      }),
+    }),
+    required: Object.freeze([]),
+    additionalProperties: false,
   });
 }
 
-export function getAiPcShellCommands() {
-  return Object.freeze(getShell1Commands());
-}
-
-export function buildAiPcShellToolBundle(options = {}) {
-  void options;
-  const bundle = [];
-
-  for (const command of getShell1Commands()) {
-    bundle.push({
-      type: "function",
-      name: command.toolName,
-      description: command.description,
-      parameters: command.parameters,
-    });
+function readShellRuntimeCommands() {
+  const runtime = globalThis.__trueosShell1Runtime;
+  if (!runtime || typeof runtime !== 'object' || !Array.isArray(runtime.commands)) {
+    return [];
   }
 
-  return bundle;
+  const seen = new Set();
+  const out = [];
+  for (const entry of runtime.commands) {
+    const command = String(entry?.command || entry?.name || '').trim();
+    if (!command || seen.has(command) || !SUPPORTED_SHELL_COMMANDS.has(command)) {
+      continue;
+    }
+    seen.add(command);
+    out.push(Object.freeze({
+      command,
+      toolName: `shell1_${command.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'command'}`,
+      mode: String(entry?.mode || 'cmd').trim() || 'cmd',
+      description: SHELL_COMMAND_DESCRIPTION_OVERRIDES[command]
+        || `Run the shell1 ${command} command. Use raw_args exactly as shell1 expects.`,
+    }));
+  }
+  return out;
+}
+
+function getShellCommands() {
+  return Object.freeze(readShellRuntimeCommands());
+}
+
+function shellToolBundle() {
+  return getShellCommands().map((entry) => ({
+    type: 'function',
+    name: entry.toolName,
+    description: entry.description,
+    parameters: rawArgSchema(entry.command),
+  }));
+}
+
+export function buildAiPcShellToolBundle() {
+  return Object.freeze(shellToolBundle());
+}
+
+export function buildAiPcDriverdevToolBundle() {
+  return Object.freeze(
+    DRIVERDEV_TOOLS.map((entry) => ({
+      type: 'function',
+      name: entry.toolName,
+      description: entry.description,
+      parameters: entry.parameters,
+    })),
+  );
+}
+
+export function buildAiPcToolBundle() {
+  return Object.freeze([
+    ...buildAiPcShellToolBundle(),
+    ...buildAiPcDriverdevToolBundle(),
+  ]);
 }
 
 export function findAiPcShellCommandByToolName(toolName) {
-  if (typeof toolName !== "string" || !toolName) {
-    return null;
-  }
-  for (const command of getShell1Commands()) {
-    if (command.toolName === toolName) {
-      return command;
-    }
-  }
-  return null;
+  return getShellCommands().find((entry) => entry.toolName === toolName) || null;
 }
 
-export function findAiPcShellCommand(commandName) {
-  if (typeof commandName !== "string" || !commandName) {
+export function buildAiPcShellCommandLine(toolName, args = {}) {
+  const entry = findAiPcShellCommandByToolName(toolName);
+  if (!entry) {
+    throw new Error(`unknown ai-pc shell tool: ${String(toolName || '')}`);
+  }
+  const rawArgs = typeof args?.raw_args === 'string' ? args.raw_args.trim() : '';
+  return rawArgs ? `${entry.command} ${rawArgs}` : entry.command;
+}
+
+function bytesToHex(bytesLike) {
+  if (!(bytesLike instanceof Uint8Array)) {
     return null;
   }
-  for (const command of getShell1Commands()) {
-    if (command.command === commandName) {
-      return command;
-    }
+  let out = '';
+  for (const value of bytesLike) {
+    out += value.toString(16).padStart(2, '0');
   }
-  return null;
+  return out;
+}
+
+export function executeAiPcDriverdevTool(toolName, args = {}) {
+  switch (toolName) {
+    case 'driverdev_list_devices':
+      return {
+        ok: true,
+        tool_name: toolName,
+        result: driverdev.listDevices(),
+      };
+    case 'driverdev_get_device_descriptor': {
+      const handle = Number(args?.handle || 0) | 0;
+      return {
+        ok: true,
+        tool_name: toolName,
+        handle,
+        result: driverdev.getDeviceDescriptor(handle),
+      };
+    }
+    case 'driverdev_get_descriptor': {
+      const handle = Number(args?.handle || 0) | 0;
+      const descType = Number(args?.desc_type || 0) | 0;
+      const descIndex = Number(args?.desc_index || 0) | 0;
+      const length = Number(args?.length || 255) | 0;
+      const bytes = driverdev.getDescriptor(handle, descType, descIndex, length);
+      return {
+        ok: !!bytes,
+        tool_name: toolName,
+        handle,
+        desc_type: descType,
+        desc_index: descIndex,
+        length,
+        bytes_hex: bytesToHex(bytes),
+      };
+    }
+    case 'driverdev_get_hid_report_descriptor': {
+      const handle = Number(args?.handle || 0) | 0;
+      const interfaceNumber = Number(args?.interface_number || 0) | 0;
+      const length = Number(args?.length || 512) | 0;
+      const bytes = driverdev.getHidReportDescriptor(handle, interfaceNumber, length);
+      return {
+        ok: !!bytes,
+        tool_name: toolName,
+        handle,
+        interface_number: interfaceNumber,
+        length,
+        bytes_hex: bytesToHex(bytes),
+      };
+    }
+    case 'driverdev_port_reset': {
+      const controllerId = Number(args?.controller_id || 0) | 0;
+      const portIdx = Number(args?.port_idx || 0) | 0;
+      const rc = driverdev.portReset(controllerId, portIdx);
+      return {
+        ok: rc === 0 || rc === 1,
+        tool_name: toolName,
+        controller_id: controllerId,
+        port_idx: portIdx,
+        rc,
+      };
+    }
+    default:
+      throw new Error(`unknown ai-pc driverdev tool: ${String(toolName || '')}`);
+  }
 }

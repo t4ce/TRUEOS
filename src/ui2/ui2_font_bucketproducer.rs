@@ -48,14 +48,24 @@ const ATHLAS_BUCKET_PNGS: [[&[u8]; ATHLAS_BUCKET_COUNT]; UI2_ATHLAS_BUCKET_DEMO_
         include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g07.png"),
     ],
     [
-        include_bytes!("../gfx/althlasfont/lucida-3x/atlas-g00.png"),
-        include_bytes!("../gfx/althlasfont/lucida-3x/atlas-g01.png"),
-        include_bytes!("../gfx/althlasfont/lucida-3x/atlas-g02.png"),
-        include_bytes!("../gfx/althlasfont/lucida-3x/atlas-g03.png"),
-        include_bytes!("../gfx/althlasfont/lucida-3x/atlas-g04.png"),
-        include_bytes!("../gfx/althlasfont/lucida-3x/atlas-g05.png"),
-        include_bytes!("../gfx/althlasfont/lucida-3x/atlas-g06.png"),
-        include_bytes!("../gfx/althlasfont/lucida-3x/atlas-g07.png"),
+        include_bytes!("../gfx/althlasfont/lucida-2x/atlas-g00.png"),
+        include_bytes!("../gfx/althlasfont/lucida-2x/atlas-g01.png"),
+        include_bytes!("../gfx/althlasfont/lucida-2x/atlas-g02.png"),
+        include_bytes!("../gfx/althlasfont/lucida-2x/atlas-g03.png"),
+        include_bytes!("../gfx/althlasfont/lucida-2x/atlas-g04.png"),
+        include_bytes!("../gfx/althlasfont/lucida-2x/atlas-g05.png"),
+        include_bytes!("../gfx/althlasfont/lucida-2x/atlas-g06.png"),
+        include_bytes!("../gfx/althlasfont/lucida-2x/atlas-g07.png"),
+    ],
+    [
+        include_bytes!("../gfx/althlasfont/lucida-third/atlas-g00.png"),
+        include_bytes!("../gfx/althlasfont/lucida-third/atlas-g01.png"),
+        include_bytes!("../gfx/althlasfont/lucida-third/atlas-g02.png"),
+        include_bytes!("../gfx/althlasfont/lucida-third/atlas-g03.png"),
+        include_bytes!("../gfx/althlasfont/lucida-third/atlas-g04.png"),
+        include_bytes!("../gfx/althlasfont/lucida-third/atlas-g05.png"),
+        include_bytes!("../gfx/althlasfont/lucida-third/atlas-g06.png"),
+        include_bytes!("../gfx/althlasfont/lucida-third/atlas-g07.png"),
     ],
 ];
 
@@ -68,7 +78,8 @@ fn athlas_variant_title(size_case: usize) -> Option<&'static str> {
     Some(match variant.name {
         "half" => "Athlas Buckets 1/2x",
         "1x" => "Athlas Buckets 1x",
-        "3x" => "Athlas Buckets 3x",
+        "2x" => "Athlas Buckets 2x",
+        "third" => "Athlas Buckets 1/3x",
         _ => "Athlas Buckets",
     })
 }

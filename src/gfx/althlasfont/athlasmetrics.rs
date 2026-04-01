@@ -52,8 +52,19 @@ pub struct AthlasGlyphRegion {
     pub atlas_h: u16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AthlasLineMetrics {
+    pub line_height_px: u16,
+    pub ascent_px: u16,
+    pub descent_px: i16,
+}
+
 pub const ATHLAS_METRICS_VERSION: u32 = 1;
 pub const ATHLAS_BUCKET_COUNT: usize = 8;
+pub const ATHLAS_VARIANT_HALF: usize = 0;
+pub const ATHLAS_VARIANT_1X: usize = 1;
+pub const ATHLAS_VARIANT_2X: usize = 2;
+pub const ATHLAS_VARIANT_THIRD: usize = 3;
 
 pub const ATHLAS_FONT_INFO: AthlasFontInfo = AthlasFontInfo {
     units_per_em: 2048,
@@ -66,17 +77,22 @@ pub const ATHLAS_VARIANT_JSONS: &[AthlasVariantJson] = &[
     AthlasVariantJson {
         name: "half",
         dir: "lucida-half",
-        json: include_str!("lucida-half/atlas-set.json"),
+        json: include_str!("lucida-metrics.json"),
     },
     AthlasVariantJson {
         name: "1x",
         dir: "lucida-1x",
-        json: include_str!("lucida-1x/atlas-set.json"),
+        json: include_str!("lucida-metrics.json"),
     },
     AthlasVariantJson {
-        name: "3x",
-        dir: "lucida-3x",
-        json: include_str!("lucida-3x/atlas-set.json"),
+        name: "2x",
+        dir: "lucida-2x",
+        json: include_str!("lucida-metrics.json"),
+    },
+    AthlasVariantJson {
+        name: "third",
+        dir: "lucida-third",
+        json: include_str!("lucida-metrics.json"),
     },
 ];
 
@@ -122,7 +138,7 @@ pub const ATHLAS_VARIANT_BUCKET_ATLAS_METRICS: [[AthlasBucketAtlasMetrics; ATHLA
             cell_w: 8,
             cell_h: 32,
             grid_w: 16,
-            grid_h: 15,
+            grid_h: 9,
         },
         AthlasBucketAtlasMetrics {
             cell_w: 11,
@@ -172,7 +188,7 @@ pub const ATHLAS_VARIANT_BUCKET_ATLAS_METRICS: [[AthlasBucketAtlasMetrics; ATHLA
             cell_w: 15,
             cell_h: 64,
             grid_w: 16,
-            grid_h: 15,
+            grid_h: 9,
         },
         AthlasBucketAtlasMetrics {
             cell_w: 22,
@@ -219,50 +235,100 @@ pub const ATHLAS_VARIANT_BUCKET_ATLAS_METRICS: [[AthlasBucketAtlasMetrics; ATHLA
     ],
     [
         AthlasBucketAtlasMetrics {
-            cell_w: 46,
-            cell_h: 192,
+            cell_w: 31,
+            cell_h: 128,
             grid_w: 16,
-            grid_h: 15,
+            grid_h: 9,
         },
         AthlasBucketAtlasMetrics {
-            cell_w: 66,
-            cell_h: 192,
+            cell_w: 44,
+            cell_h: 128,
             grid_w: 16,
             grid_h: 14,
         },
         AthlasBucketAtlasMetrics {
-            cell_w: 77,
-            cell_h: 192,
+            cell_w: 51,
+            cell_h: 128,
             grid_w: 16,
             grid_h: 17,
         },
         AthlasBucketAtlasMetrics {
-            cell_w: 85,
-            cell_h: 192,
+            cell_w: 56,
+            cell_h: 128,
             grid_w: 16,
             grid_h: 14,
         },
         AthlasBucketAtlasMetrics {
-            cell_w: 99,
-            cell_h: 192,
+            cell_w: 66,
+            cell_h: 128,
             grid_w: 16,
             grid_h: 28,
         },
         AthlasBucketAtlasMetrics {
-            cell_w: 117,
-            cell_h: 192,
+            cell_w: 78,
+            cell_h: 128,
             grid_w: 16,
             grid_h: 10,
         },
         AthlasBucketAtlasMetrics {
-            cell_w: 125,
-            cell_h: 192,
+            cell_w: 83,
+            cell_h: 128,
             grid_w: 16,
             grid_h: 14,
         },
         AthlasBucketAtlasMetrics {
-            cell_w: 185,
-            cell_h: 192,
+            cell_w: 123,
+            cell_h: 128,
+            grid_w: 16,
+            grid_h: 2,
+        },
+    ],
+    [
+        AthlasBucketAtlasMetrics {
+            cell_w: 5,
+            cell_h: 21,
+            grid_w: 16,
+            grid_h: 9,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 7,
+            cell_h: 21,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 8,
+            cell_h: 21,
+            grid_w: 16,
+            grid_h: 17,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 9,
+            cell_h: 21,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 11,
+            cell_h: 21,
+            grid_w: 16,
+            grid_h: 28,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 13,
+            cell_h: 21,
+            grid_w: 16,
+            grid_h: 10,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 14,
+            cell_h: 21,
+            grid_w: 16,
+            grid_h: 14,
+        },
+        AthlasBucketAtlasMetrics {
+            cell_w: 20,
+            cell_h: 21,
             grid_w: 16,
             grid_h: 2,
         },
@@ -410,13 +476,90 @@ pub const ATHLAS_BUCKET_LUTS: [&[u32]; ATHLAS_BUCKET_COUNT] = [
     ATHLAS_BUCKET_7_LUT,
 ];
 
+pub const ATHLAS_BUCKET_0_UNPLACED: &[u32] = &[
+    32, 160, 768, 769, 770, 771, 772, 774, 775, 776, 777, 778, 779, 780, 781, 782, 783, 784, 785,
+    786, 787, 788, 790, 791, 792, 793, 796, 797, 798, 799, 800, 803, 804, 805, 806, 807, 808, 809,
+    810, 811, 812, 813, 814, 815, 816, 817, 820, 821, 824, 825, 826, 827, 828, 829, 830, 832, 836,
+    837, 1456, 1457, 1458, 1459, 1460, 1461, 1462, 1463, 1464, 1467, 1468, 1469, 1471, 1472, 1473,
+    1474, 8196, 8197, 8198, 8200, 8201, 8202, 8203, 8204, 8205, 8206, 8207, 8232, 8233, 8234, 8235,
+    8236, 8237, 8238, 64286, 65279,
+];
+
+pub const ATHLAS_BUCKET_0_UNPLACED_THIRD: &[u32] = &[
+    32, 160, 768, 769, 770, 771, 772, 774, 775, 776, 777, 778, 779, 780, 781, 782, 783, 784, 785,
+    786, 787, 788, 790, 791, 792, 793, 796, 797, 798, 799, 800, 803, 804, 805, 806, 807, 808, 809,
+    810, 811, 812, 813, 814, 815, 816, 817, 820, 821, 824, 825, 826, 827, 828, 829, 830, 832, 836,
+    837, 1456, 1457, 1458, 1459, 1460, 1461, 1462, 1463, 1464, 1467, 1468, 1469, 1471, 1473, 8196,
+    8197, 8198, 8200, 8201, 8202, 8203, 8204, 8205, 8206, 8207, 8232, 8233, 8234, 8235, 8236, 8237,
+    8238, 64286, 65279,
+];
+
+pub const ATHLAS_BUCKET_1_UNPLACED: &[u32] = &[8192, 8194];
+pub const ATHLAS_BUCKET_2_UNPLACED: &[u32] = &[];
+pub const ATHLAS_BUCKET_3_UNPLACED: &[u32] = &[8199];
+pub const ATHLAS_BUCKET_4_UNPLACED: &[u32] = &[];
+pub const ATHLAS_BUCKET_5_UNPLACED: &[u32] = &[];
+pub const ATHLAS_BUCKET_6_UNPLACED: &[u32] = &[8193, 8195];
+pub const ATHLAS_BUCKET_7_UNPLACED: &[u32] = &[];
+
+pub const ATHLAS_BUCKET_UNPLACED: [&[u32]; ATHLAS_BUCKET_COUNT] = [
+    ATHLAS_BUCKET_0_UNPLACED,
+    ATHLAS_BUCKET_1_UNPLACED,
+    ATHLAS_BUCKET_2_UNPLACED,
+    ATHLAS_BUCKET_3_UNPLACED,
+    ATHLAS_BUCKET_4_UNPLACED,
+    ATHLAS_BUCKET_5_UNPLACED,
+    ATHLAS_BUCKET_6_UNPLACED,
+    ATHLAS_BUCKET_7_UNPLACED,
+];
+
 #[inline]
 pub fn athlas_bucket_codepoints(bucket: u8) -> Option<&'static [u32]> {
     ATHLAS_BUCKET_LUTS.get(bucket as usize).copied()
 }
 
+#[inline]
+pub fn athlas_bucket_unplaced_codepoints(size_case: usize, bucket: u8) -> Option<&'static [u32]> {
+    if size_case == ATHLAS_VARIANT_THIRD && bucket == 0 {
+        return Some(ATHLAS_BUCKET_0_UNPLACED_THIRD);
+    }
+    ATHLAS_BUCKET_UNPLACED.get(bucket as usize).copied()
+}
+
 pub fn athlas_bucket_metrics(bucket: usize) -> Option<AthlasBucketMetrics> {
     ATHLAS_BUCKET_METRICS.get(bucket).copied()
+}
+
+#[inline]
+pub fn athlas_variant_line_height_px(size_case: usize) -> Option<u16> {
+    athlas_bucket_atlas_metrics(size_case, 0).map(|metrics| metrics.cell_h)
+}
+
+#[inline]
+pub fn athlas_variant_line_metrics(size_case: usize) -> Option<AthlasLineMetrics> {
+    let line_height_px = athlas_variant_line_height_px(size_case)?;
+    let font_line_height = i32::from(ATHLAS_FONT_INFO.line_height.max(1));
+    let ascent = i32::from(ATHLAS_FONT_INFO.ascent);
+    let descent = i32::from(ATHLAS_FONT_INFO.descent);
+    let line_height_px_i32 = i32::from(line_height_px);
+    let ascent_px = ((ascent * line_height_px_i32) + (font_line_height / 2)) / font_line_height;
+    let descent_px = ((descent * line_height_px_i32) - (font_line_height / 2)) / font_line_height;
+    Some(AthlasLineMetrics {
+        line_height_px,
+        ascent_px: ascent_px.clamp(0, i32::from(u16::MAX)) as u16,
+        descent_px: descent_px.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+    })
+}
+
+#[inline]
+pub fn athlas_variant_ascent_px(size_case: usize) -> Option<u16> {
+    athlas_variant_line_metrics(size_case).map(|metrics| metrics.ascent_px)
+}
+
+#[inline]
+pub fn athlas_line_top_from_baseline_px(size_case: usize, baseline_y: i32) -> Option<i32> {
+    let metrics = athlas_variant_line_metrics(size_case)?;
+    Some(baseline_y.saturating_sub(i32::from(metrics.ascent_px)))
 }
 
 #[inline]
@@ -453,12 +596,37 @@ pub fn athlas_bucket_has_uniform_width(bucket: usize) -> bool {
 }
 
 #[inline]
+fn athlas_lookup_bucket_slot(size_case: usize, bucket: usize, codepoint: u32) -> Option<u16> {
+    let lut = ATHLAS_BUCKET_LUTS.get(bucket)?;
+    let raw_index = lut.binary_search(&codepoint).ok()?;
+    let unplaced = athlas_bucket_unplaced_codepoints(size_case, bucket as u8).unwrap_or(&[]);
+    let skipped = match unplaced.binary_search(&codepoint) {
+        Ok(_) => return None,
+        Err(insert_index) => insert_index,
+    };
+    raw_index
+        .checked_sub(skipped)
+        .and_then(|slot| u16::try_from(slot).ok())
+}
+
+#[inline]
 pub fn athlas_lookup_codepoint(codepoint: u32) -> Option<AthlasGlyphLookup> {
+    athlas_lookup_codepoint_in_size_case(ATHLAS_VARIANT_HALF, codepoint)
+}
+
+#[inline]
+pub fn athlas_lookup_codepoint_in_size_case(
+    size_case: usize,
+    codepoint: u32,
+) -> Option<AthlasGlyphLookup> {
     for (bucket, lut) in ATHLAS_BUCKET_LUTS.iter().enumerate() {
-        if let Ok(slot) = lut.binary_search(&codepoint) {
+        if lut.binary_search(&codepoint).is_ok() {
+            let Some(slot) = athlas_lookup_bucket_slot(size_case, bucket, codepoint) else {
+                continue;
+            };
             return Some(AthlasGlyphLookup {
                 bucket: bucket as u8,
-                slot: slot as u16,
+                slot,
             });
         }
     }
@@ -467,12 +635,17 @@ pub fn athlas_lookup_codepoint(codepoint: u32) -> Option<AthlasGlyphLookup> {
 
 #[inline]
 pub fn athlas_lookup_char(ch: char) -> Option<AthlasGlyphLookup> {
-    athlas_lookup_codepoint(ch as u32)
+    athlas_lookup_char_in_size_case(ATHLAS_VARIANT_HALF, ch)
+}
+
+#[inline]
+pub fn athlas_lookup_char_in_size_case(size_case: usize, ch: char) -> Option<AthlasGlyphLookup> {
+    athlas_lookup_codepoint_in_size_case(size_case, ch as u32)
 }
 
 #[inline]
 pub fn athlas_lookup_glyph_region(size_case: usize, ch: char) -> Option<AthlasGlyphRegion> {
-    let lookup = athlas_lookup_char(ch)?;
+    let lookup = athlas_lookup_char_in_size_case(size_case, ch)?;
     let atlas = athlas_bucket_atlas_metrics(size_case, lookup.bucket as usize)?;
     let grid_w = u32::from(atlas.grid_w.max(1));
     let slot = u32::from(lookup.slot);
