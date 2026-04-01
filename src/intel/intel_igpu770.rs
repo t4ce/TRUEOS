@@ -17,7 +17,7 @@ use super::xelp_copy_ngin::{
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
 const WARM_RING_BYTES: usize = 4096;
 const WARM_CONTEXT_BYTES: usize = 22 * 4096;
-const WARM_BATCH_BYTES: usize = 4096;
+const WARM_BATCH_BYTES: usize = 512 * 1024;
 const WARM_RESULT_BYTES: usize = 4096;
 const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
@@ -27,8 +27,8 @@ const GGTT_PAGE_BYTES: u64 = 4096;
 const GEN8_PAGE_PRESENT: u64 = 1;
 const GGTT_MAP_LOG_ALL_THRESHOLD: usize = 16;
 const GGTT_MAP_LOG_EDGE_PAGES: usize = 4;
-const SMOKE_RECT_W: usize = 64;
-const SMOKE_RECT_H: usize = 64;
+const SMOKE_RECT_W: usize = 320;
+const SMOKE_RECT_H: usize = 256;
 const SMOKE_COLOR_XRGB8888: u32 = 0x00FF_4A24;
 const BCS_RECT_W: usize = 768;
 const BCS_RECT_H: usize = 544;
@@ -96,16 +96,21 @@ const CTX_CTRL_RS_CTX_ENABLE: u32 = 1 << 1;
 const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
 const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
 const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
+const CTX_CONTEXT_CONTROL_DW: usize = 0x02 + 1;
+const CTX_RING_HEAD_DW: usize = 0x04 + 1;
+const CTX_RING_TAIL_DW: usize = 0x06 + 1;
+const CTX_RING_START_DW: usize = 0x08 + 1;
+const CTX_RING_CTL_DW: usize = 0x0A + 1;
 const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
 const GFX_FLSH_CNTL_GEN6: usize = 0x101008;
 const GFX_FLSH_CNTL_EN: u32 = 1 << 0;
 const FORCEWAKE_RENDER_GEN11: usize = 0x0A278;
 const FORCEWAKE_MEDIA_GEN11: usize = 0x0A184;
 const FORCEWAKE_GT_GEN11: usize = 0x0A188;
-const FORCEWAKE_ACK_VDBOX4: usize = 0x0D60;
-const FORCEWAKE_ACK_VDBOX5: usize = 0x0D64;
-const FORCEWAKE_ACK_VDBOX6: usize = 0x0D68;
-const FORCEWAKE_ACK_VDBOX7: usize = 0x0D6C;
+const FORCEWAKE_ACK_VDBOX0: usize = 0x0D50;
+const FORCEWAKE_ACK_VDBOX1: usize = 0x0D54;
+const FORCEWAKE_ACK_VDBOX2: usize = 0x0D58;
+const FORCEWAKE_ACK_VDBOX3: usize = 0x0D5C;
 const FORCEWAKE_ACK_VEBOX0: usize = 0x0D70;
 const FORCEWAKE_ACK_VEBOX1: usize = 0x0D74;
 const FORCEWAKE_ACK_VEBOX2: usize = 0x0D78;
@@ -162,10 +167,10 @@ const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 
 const MEDIA_FORCEWAKE_ACK_REGS: [(&str, usize); 8] = [
-    ("vdbox4", FORCEWAKE_ACK_VDBOX4),
-    ("vdbox5", FORCEWAKE_ACK_VDBOX5),
-    ("vdbox6", FORCEWAKE_ACK_VDBOX6),
-    ("vdbox7", FORCEWAKE_ACK_VDBOX7),
+    ("vdbox0", FORCEWAKE_ACK_VDBOX0),
+    ("vdbox1", FORCEWAKE_ACK_VDBOX1),
+    ("vdbox2", FORCEWAKE_ACK_VDBOX2),
+    ("vdbox3", FORCEWAKE_ACK_VDBOX3),
     ("vebox0", FORCEWAKE_ACK_VEBOX0),
     ("vebox1", FORCEWAKE_ACK_VEBOX1),
     ("vebox2", FORCEWAKE_ACK_VEBOX2),
@@ -221,6 +226,11 @@ pub(super) fn mmio_write32(warm: Igpu770WarmState, off: usize, value: u32) -> bo
 fn ring_ctl_value(size: usize) -> Option<u32> {
     let size = u32::try_from(size).ok()?;
     Some(size.checked_sub(GGTT_PAGE_BYTES as u32)? | RING_VALID)
+}
+
+#[inline]
+pub(super) fn ring_ctl_value_for_size(size: usize) -> Option<u32> {
+    ring_ctl_value(size)
 }
 
 #[inline]
@@ -450,7 +460,7 @@ fn log_media_forcewake_coverage(warm: Igpu770WarmState, label: &str) -> usize {
     }
 
     crate::log!(
-        "intel/igpu770: forcewake-media-coverage label={} awake={}/{} vdbox4=0x{:08X} vdbox5=0x{:08X} vdbox6=0x{:08X} vdbox7=0x{:08X} vebox0=0x{:08X} vebox1=0x{:08X} vebox2=0x{:08X} vebox3=0x{:08X}\n",
+        "intel/igpu770: forcewake-media-coverage label={} awake={}/{} vdbox0=0x{:08X} vdbox1=0x{:08X} vdbox2=0x{:08X} vdbox3=0x{:08X} vebox0=0x{:08X} vebox1=0x{:08X} vebox2=0x{:08X} vebox3=0x{:08X}\n",
         label,
         awake,
         MEDIA_FORCEWAKE_ACK_REGS.len(),
@@ -537,7 +547,10 @@ pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
         gt_ack_before
     );
     let _ = log_media_forcewake_coverage(warm, "pre");
-    if FORCEWAKE_GT_HELD.load(Ordering::Acquire) {
+    let render_awake = (ack_before & FORCEWAKE_KERNEL) != 0;
+    let media_awake = (media_ack_before & FORCEWAKE_KERNEL) != 0;
+    let gt_awake = (gt_ack_before & FORCEWAKE_KERNEL) != 0;
+    if FORCEWAKE_GT_HELD.load(Ordering::Acquire) && render_awake && media_awake && gt_awake {
         crate::log!(
             "intel/igpu770: forcewake-all already-held ack=0x{:08X} media_req=0x{:08X} media_ack=0x{:08X} gt_req=0x{:08X} gt_ack=0x{:08X}\n",
             ack_before,
@@ -548,6 +561,13 @@ pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
         );
         let _ = log_media_forcewake_coverage(warm, "already-held");
         return ack_before;
+    } else if FORCEWAKE_GT_HELD.load(Ordering::Acquire) {
+        crate::log!(
+            "intel/igpu770: forcewake-all stale-held-state render_awake={} media_awake={} gt_awake={} reissuing-acquire\n",
+            render_awake as u8,
+            media_awake as u8,
+            gt_awake as u8
+        );
     }
 
     let _ = mmio_write32(
@@ -912,6 +932,24 @@ fn build_ring_batch_start(warm: Igpu770WarmState, batch_gpu_addr: u64) -> usize 
     BLT_RING_TAIL_BYTES as usize
 }
 
+pub(super) fn build_ring_batch_start_words(
+    ring_virt: *mut u8,
+    ring_len: usize,
+    batch_gpu_addr: u64,
+) -> Option<usize> {
+    if ring_virt.is_null() || ring_len < BLT_RING_DWORDS * core::mem::size_of::<u32>() {
+        return None;
+    }
+
+    let dwords = unsafe { core::slice::from_raw_parts_mut(ring_virt as *mut u32, BLT_RING_DWORDS) };
+    dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT;
+    dwords[1] = batch_gpu_addr as u32;
+    dwords[2] = (batch_gpu_addr >> 32) as u32;
+    dwords[3] = MI_NOOP;
+    dma_cache_flush(ring_virt as *const u8, BLT_RING_TAIL_BYTES as usize);
+    Some(BLT_RING_TAIL_BYTES as usize)
+}
+
 fn build_bcs_ring_batch_start(warm: Igpu770WarmState, batch_gpu_addr: u64) -> usize {
     let dwords = unsafe {
         core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, BCS_RING_MARKER_DWORDS)
@@ -1260,6 +1298,101 @@ fn init_gen12_bcs_context_image(
     true
 }
 
+pub(super) fn init_gen12_video_context_image(
+    context_virt: *mut u8,
+    context_len: usize,
+    ring_base: usize,
+    ring_start: u32,
+    ring_tail: u32,
+    ring_ctl: u32,
+) -> bool {
+    if context_virt.is_null() {
+        return false;
+    }
+
+    let total_dwords = context_len / core::mem::size_of::<u32>();
+    if total_dwords <= LRC_STATE_OFFSET_DWORDS {
+        return false;
+    }
+
+    let dwords = unsafe { core::slice::from_raw_parts_mut(context_virt as *mut u32, total_dwords) };
+    dwords.fill(0);
+
+    let state = &mut dwords[LRC_STATE_OFFSET_DWORDS..];
+    if state.len() < 96 {
+        return false;
+    }
+
+    let ring_base = ring_base as u32;
+    let mut idx = 0usize;
+    state[idx] = MI_NOOP;
+    idx += 1;
+
+    state[idx] = mi_lri_cmd(13, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = ring_base + 0x244;
+    state[idx + 1] = 0x0009_0009;
+    state[idx + 2] = ring_base + 0x34;
+    state[idx + 3] = 0;
+    state[idx + 4] = ring_base + 0x30;
+    state[idx + 5] = ring_tail;
+    state[idx + 6] = ring_base + 0x38;
+    state[idx + 7] = ring_start;
+    state[idx + 8] = ring_base + 0x3C;
+    state[idx + 9] = ring_ctl;
+    state[idx + 10] = ring_base + 0x168;
+    state[idx + 11] = 0;
+    state[idx + 12] = ring_base + 0x140;
+    state[idx + 13] = 0;
+    state[idx + 14] = ring_base + 0x110;
+    state[idx + 15] = 0;
+    state[idx + 16] = ring_base + 0x1C0;
+    state[idx + 17] = 0;
+    state[idx + 18] = ring_base + 0x1C4;
+    state[idx + 19] = 0;
+    state[idx + 20] = ring_base + 0x1C8;
+    state[idx + 21] = 0;
+    state[idx + 22] = ring_base + 0x180;
+    state[idx + 23] = 0;
+    state[idx + 24] = ring_base + 0x2B4;
+    state[idx + 25] = 0;
+    idx += 26;
+
+    push_mi_nops(state, &mut idx, 5);
+
+    state[idx] = mi_lri_cmd(9, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = ring_base + 0x3A8;
+    state[idx + 1] = 0;
+    state[idx + 2] = ring_base + 0x28C;
+    state[idx + 3] = 0;
+    state[idx + 4] = ring_base + 0x288;
+    state[idx + 5] = 0;
+    state[idx + 6] = ring_base + 0x284;
+    state[idx + 7] = 0;
+    state[idx + 8] = ring_base + 0x280;
+    state[idx + 9] = 0;
+    state[idx + 10] = ring_base + 0x27C;
+    state[idx + 11] = 0;
+    state[idx + 12] = ring_base + 0x278;
+    state[idx + 13] = 0;
+    state[idx + 14] = ring_base + 0x274;
+    state[idx + 15] = 0;
+    state[idx + 16] = ring_base + 0x270;
+    state[idx + 17] = 0;
+    idx += 18;
+
+    state[CTX_CONTEXT_CONTROL_DW] = 0x0009_0009;
+    state[CTX_RING_HEAD_DW] = 0;
+    state[CTX_RING_TAIL_DW] = ring_tail;
+    state[CTX_RING_START_DW] = ring_start;
+    state[CTX_RING_CTL_DW] = ring_ctl;
+
+    state[idx] = MI_BATCH_BUFFER_END | 1;
+    dma_cache_flush(context_virt as *const u8, context_len);
+    true
+}
+
 #[inline]
 fn build_execlist_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     let base = (context_gpu_addr as u32) & 0xFFFF_F000;
@@ -1270,6 +1403,11 @@ fn build_execlist_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
         | GEN12_CTX_PRIORITY_NORMAL
         | (INTEL_LEGACY_64B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT);
     (desc, (context_gpu_addr >> 32) as u32)
+}
+
+#[inline]
+pub(super) fn build_execlist_context_descriptor_for_gpu_addr(context_gpu_addr: u64) -> (u32, u32) {
+    build_execlist_context_descriptor(context_gpu_addr)
 }
 
 fn execlist_submit_port_push(
@@ -1551,6 +1689,32 @@ fn ggtt_program_plan(label: &str, warm: Igpu770WarmState, plan: GgttMapPlan) -> 
         page += 1;
     }
     true
+}
+
+pub(super) fn ggtt_map_system_ram_range(
+    label: &str,
+    warm: Igpu770WarmState,
+    phys: u64,
+    size: usize,
+    gpu_addr: u64,
+) -> bool {
+    let Some(plan) = ggtt_map_plan_system_ram(phys, size, gpu_addr) else {
+        crate::log!(
+            "intel/igpu770: ggtt-map label={} status=plan-failed gpu=0x{:X} phys=0x{:X} size=0x{:X}\n",
+            label,
+            gpu_addr,
+            phys,
+            size
+        );
+        return false;
+    };
+    log_ggtt_map_plan(label, plan);
+    ggtt_program_plan(label, warm, plan)
+}
+
+#[inline]
+pub(super) fn dma_cache_flush_range(ptr: *const u8, len: usize) {
+    dma_cache_flush(ptr, len);
 }
 
 fn fb_fill_rect_plan(
@@ -1846,8 +2010,123 @@ pub fn cpu_framebuffer_visualize_bytes_center(
     );
 }
 
+pub fn cpu_framebuffer_media_status_card_center(
+    label: &str,
+    width: usize,
+    height: usize,
+    accent_color: u32,
+    metric_a: usize,
+    metric_b: usize,
+    ready: bool,
+) {
+    let Some(warm) = warm_state() else {
+        crate::log!("intel/igpu770: cpu-fb-media-card label={} status=not-warmed\n", label);
+        return;
+    };
+    if warm.limine_fb_virt == 0 || warm.limine_fb_pitch == 0 || warm.limine_fb_bpp < 32 {
+        crate::log!("intel/igpu770: cpu-fb-media-card label={} status=fb-unavailable\n", label);
+        return;
+    }
+
+    let outer_w = width.min(warm.limine_fb_width.max(1)).max(24);
+    let outer_h = height.min(warm.limine_fb_height.max(1)).max(24);
+    let origin_x = warm.limine_fb_width.saturating_sub(outer_w) / 2;
+    let origin_y = warm.limine_fb_height.saturating_sub(outer_h) / 2;
+    let inner_x = origin_x.saturating_add(2);
+    let inner_y = origin_y.saturating_add(2);
+    let inner_w = outer_w.saturating_sub(4).max(1);
+    let inner_h = outer_h.saturating_sub(4).max(1);
+
+    if !cpu_framebuffer_fill_rect(warm, origin_x, origin_y, outer_w, outer_h, 0x00F4_F8FF) {
+        crate::log!("intel/igpu770: cpu-fb-media-card label={} status=outer-fill-failed\n", label);
+        return;
+    }
+
+    let bg_color = if ready { 0x000B_1220 } else { 0x0022_1408 };
+    let panel_color = if ready { 0x0011_2238 } else { 0x0030_1D10 };
+    let meter_bg = 0x0016_1A20;
+    let ok_color = if ready { 0x0032_D17C } else { 0x00E0_A12B };
+
+    let _ = cpu_framebuffer_fill_rect(warm, inner_x, inner_y, inner_w, inner_h, bg_color);
+
+    let header_h = (inner_h / 7).max(3).min(inner_h);
+    let _ = cpu_framebuffer_fill_rect(warm, inner_x, inner_y, inner_w, header_h, accent_color);
+
+    let poster_w = (inner_w / 3).max(6).min(inner_w);
+    let poster_h = inner_h.saturating_sub(header_h).saturating_sub(4).max(4);
+    let poster_y = inner_y.saturating_add(header_h).saturating_add(2);
+    let _ = cpu_framebuffer_fill_rect(
+        warm,
+        inner_x.saturating_add(2),
+        poster_y,
+        poster_w,
+        poster_h,
+        panel_color,
+    );
+
+    let status_size = (header_h.saturating_sub(1)).max(2);
+    let status_x = inner_x.saturating_add(inner_w.saturating_sub(status_size).saturating_sub(1));
+    let status_y = inner_y.saturating_add((header_h.saturating_sub(status_size)) / 2);
+    let _ = cpu_framebuffer_fill_rect(warm, status_x, status_y, status_size, status_size, ok_color);
+
+    let bars_x = inner_x
+        .saturating_add(poster_w)
+        .saturating_add(6)
+        .min(inner_x.saturating_add(inner_w.saturating_sub(1)));
+    let bars_w = inner_x
+        .saturating_add(inner_w)
+        .saturating_sub(bars_x)
+        .saturating_sub(3)
+        .max(6);
+    let bar_h = (inner_h / 10).max(3);
+    let gap_h = (bar_h / 2).max(2);
+    let base_y = poster_y.saturating_add(2);
+
+    let mut bar_idx = 0usize;
+    while bar_idx < 3 {
+        let y = base_y.saturating_add(bar_idx.saturating_mul(bar_h.saturating_add(gap_h)));
+        if y.saturating_add(bar_h) > inner_y.saturating_add(inner_h) {
+            break;
+        }
+        let _ = cpu_framebuffer_fill_rect(warm, bars_x, y, bars_w, bar_h, meter_bg);
+        let selector = match bar_idx {
+            0 => metric_a,
+            1 => metric_b,
+            _ => metric_a ^ metric_b,
+        };
+        let fill_w = (selector % bars_w.max(1)).max(bar_h).min(bars_w);
+        let fill_color = match bar_idx {
+            0 => accent_color,
+            1 => ok_color,
+            _ => 0x00FF_F4D6,
+        };
+        let _ = cpu_framebuffer_fill_rect(warm, bars_x, y, fill_w, bar_h, fill_color);
+        bar_idx += 1;
+    }
+
+    dma_cache_flush(warm.limine_fb_virt as *const u8, warm.limine_fb_size);
+    crate::log!(
+        "intel/igpu770: cpu-fb-media-card label={} origin={}x{} dims={}x{} metric_a={} metric_b={} ready={} accent=0x{:08X}\n",
+        label,
+        origin_x,
+        origin_y,
+        outer_w,
+        outer_h,
+        metric_a,
+        metric_b,
+        ready as u8,
+        accent_color
+    );
+    log_framebuffer_probe(
+        warm,
+        "cpu-media-card-center",
+        origin_x.saturating_add(outer_w / 2),
+        origin_y.saturating_add(outer_h / 2),
+    );
+}
+
 fn blt_fill_rect_plan(warm: Igpu770WarmState) -> Option<BltFillRectPlan> {
-    fb_fill_rect_plan(warm, SMOKE_RECT_W, SMOKE_RECT_H, SMOKE_COLOR_XRGB8888, false)
+    fb_fill_rect_plan(warm, SMOKE_RECT_W, SMOKE_RECT_H, SMOKE_COLOR_XRGB8888, true)
 }
 
 fn bcs_fill_rect_plan(warm: Igpu770WarmState) -> Option<BltFillRectPlan> {
