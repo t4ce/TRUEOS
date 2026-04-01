@@ -430,6 +430,17 @@ pub fn athlas_bucket_atlas_metrics(
 }
 
 #[inline]
+pub fn athlas_variant_max_cell_width(size_case: usize) -> Option<u16> {
+    ATHLAS_VARIANT_BUCKET_ATLAS_METRICS
+        .get(size_case)
+        .map(|variant| {
+            variant
+                .iter()
+                .fold(0u16, |widest, metrics| widest.max(metrics.cell_w))
+        })
+}
+
+#[inline]
 pub fn athlas_bucket_width_stage(bucket: usize) -> Option<u8> {
     athlas_bucket_metrics(bucket).map(|it| it.width_stage_from_widest)
 }

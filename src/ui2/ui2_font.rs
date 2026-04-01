@@ -2,7 +2,7 @@ use crate::gfx::althlasfont;
 use crate::gfx::althlasfont::athlasmetrics::{self, ATHLAS_FONT_INFO};
 use trueos_gfx_core::Rgba8;
 
-use super::draw_texture_rect_uv_no_present;
+use super::{Ui2Rect, draw_texture_rect_uv_no_present};
 
 const UI2_FONT_DEFAULT_RGBA: Rgba8 = Rgba8::new(0, 0, 0, 255);
 
@@ -129,6 +129,14 @@ pub(crate) struct Ui2FontTextMetrics {
     pub line_height_px: u16,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Ui2FontCellMetrics {
+    pub cell_w_px: u16,
+    pub cell_h_px: u16,
+    pub glyph_w_px: u16,
+    pub glyph_h_px: u16,
+}
+
 #[inline]
 pub(crate) fn ui2_font_ready_snapshot() -> Ui2FontReadySnapshot {
     Ui2FontReadySnapshot::capture()
@@ -158,6 +166,31 @@ pub(crate) fn ui2_font_pick_tier_for_px(px_h: f32) -> Ui2FontTier {
 #[inline]
 pub(crate) fn ui2_font_native_line_height_px(tier: Ui2FontTier) -> u16 {
     tier.display_line_height_px()
+}
+
+#[inline]
+pub(crate) fn ui2_font_tier_max_cell_width_px(tier: Ui2FontTier) -> u16 {
+    athlasmetrics::athlas_variant_max_cell_width(tier.size_case())
+        .unwrap_or_else(|| tier.atlas_cell_height_px().saturating_div(2).max(1))
+}
+
+#[inline]
+pub(crate) fn ui2_font_glyph_cell_metrics(glyph: &Ui2FontGlyph) -> Ui2FontCellMetrics {
+    Ui2FontCellMetrics {
+        cell_w_px: glyph.advance_px.max(1),
+        cell_h_px: glyph.line_height_px.max(1),
+        glyph_w_px: glyph.region.src_w.max(1),
+        glyph_h_px: glyph.region.src_h.max(1),
+    }
+}
+
+#[inline]
+pub(crate) fn ui2_font_place_glyph_top_center(glyph: &Ui2FontGlyph, rect: Ui2Rect) -> Ui2Rect {
+    let metrics = ui2_font_glyph_cell_metrics(glyph);
+    let cell_w = f32::from(metrics.cell_w_px.max(metrics.glyph_w_px).max(1));
+    let glyph_w = f32::from(metrics.glyph_w_px.max(1));
+    let glyph_h = f32::from(metrics.glyph_h_px.max(1));
+    Ui2Rect::new(rect.x + ((rect.w - cell_w) * 0.5), rect.y, glyph_w, glyph_h)
 }
 
 #[inline]
