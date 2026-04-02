@@ -138,7 +138,6 @@ const GFX_TLB_INVALIDATE_EXPLICIT: u32 = 1 << 13;
 const GFX_PPGTT_ENABLE: u32 = 1 << 9;
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
-const MI_BATCH_NON_SECURE_I965: u32 = 1 << 8;
 const MI_USE_GGTT: u32 = 1 << 22;
 const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
 const MI_STORE_DWORD_IMM_GEN4_LEN_DW4: u32 = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT | (4 - 2);
@@ -933,7 +932,7 @@ fn build_ring_batch_start(warm: Igpu770WarmState, batch_gpu_addr: u64) -> usize 
     let dwords =
         unsafe { core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, BLT_RING_DWORDS) };
 
-    dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_NON_SECURE_I965;
+    dwords[0] = MI_BATCH_BUFFER_START_GEN8;
     dwords[1] = batch_gpu_addr as u32;
     dwords[2] = (batch_gpu_addr >> 32) as u32;
     dwords[3] = MI_NOOP;
@@ -952,7 +951,7 @@ pub(super) fn build_ring_batch_start_words(
     }
 
     let dwords = unsafe { core::slice::from_raw_parts_mut(ring_virt as *mut u32, BLT_RING_DWORDS) };
-    dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_NON_SECURE_I965;
+    dwords[0] = MI_BATCH_BUFFER_START_GEN8;
     dwords[1] = batch_gpu_addr as u32;
     dwords[2] = (batch_gpu_addr >> 32) as u32;
     dwords[3] = MI_NOOP;

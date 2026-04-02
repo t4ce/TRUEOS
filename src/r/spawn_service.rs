@@ -112,6 +112,7 @@ define_started_flags!(
     UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
     UI2_SHELL_DEMO_STARTED,
     UI2_SVG_DEMO_STARTED,
+    UI2_USB_AUDIO_DEMO_STARTED,
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
     GFX_INTEL_READINESS_PROBE_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
@@ -670,6 +671,12 @@ fn spawn_ui2_svg_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_usb_audio_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_usb_audio_demo::ui2_usb_audio_demo_task())
+    })
+}
+
 fn spawn_ui2_trueosfs_explorer_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_trueosfs_explorer_demo::ui2_trueosfs_explorer_demo_task())
@@ -1034,6 +1041,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_shell_demo,
     ),
     TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
+    TaskSpec::disabled(
+        "ui2-usb-audio-demo",
+        UI2_DEMO_READY,
+        &UI2_USB_AUDIO_DEMO_STARTED,
+        spawn_ui2_usb_audio_demo,
+    ),
     TaskSpec::disabled(
         "ui2-trueosfs-explorer-demo",
         UI2_DEMO_READY | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
