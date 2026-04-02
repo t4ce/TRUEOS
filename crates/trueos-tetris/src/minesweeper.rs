@@ -419,8 +419,10 @@ where
                         for neighbor_x in scan_x.saturating_sub(1)
                             ..=min(scan_x.saturating_add(1), W.saturating_sub(1))
                         {
-                            revealed_cells += self.reveal_safe_cell(neighbor_x, neighbor_y, events);
-                            if self.board[neighbor_x][neighbor_y].is_revealed {
+                            let newly_revealed =
+                                self.reveal_safe_cell(neighbor_x, neighbor_y, events);
+                            revealed_cells += newly_revealed;
+                            if newly_revealed != 0 {
                                 expanded = true;
                             }
                         }
