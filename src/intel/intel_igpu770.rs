@@ -547,6 +547,24 @@ pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
     let media_ack_before = mmio_read32(warm, FORCEWAKE_ACK_MEDIA);
     let gt_req_before = mmio_read32(warm, FORCEWAKE_GT_GEN11);
     let gt_ack_before = mmio_read32(warm, FORCEWAKE_ACK_GT);
+    let render_awake = (ack_before & FORCEWAKE_KERNEL) != 0;
+    let media_awake = (media_ack_before & FORCEWAKE_KERNEL) != 0;
+    let gt_awake = (gt_ack_before & FORCEWAKE_KERNEL) != 0;
+    if FORCEWAKE_GT_HELD.load(Ordering::Acquire) && render_awake && media_awake && gt_awake {
+        FORCEWAKE_PARTIAL_HOLD_LOGGED.store(false, Ordering::Release);
+        return ack_before;
+    }
+
+    if FORCEWAKE_GT_HELD.load(Ordering::Acquire) && render_awake && gt_awake && !media_awake {
+        if !FORCEWAKE_PARTIAL_HOLD_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log!(
+                "intel/igpu770: forcewake-all partial-hold-reuse render_gt=1 media=0; skipping repeated media wake retries on render path\n"
+            );
+        }
+        return ack_before;
+    }
+
+    FORCEWAKE_PARTIAL_HOLD_LOGGED.store(false, Ordering::Release);
     crate::log!(
         "intel/igpu770: forcewake-all pre ack=0x{:08X} media_req=0x{:08X} media_ack=0x{:08X} gt_req=0x{:08X} gt_ack=0x{:08X}\n",
         ack_before,
@@ -556,21 +574,7 @@ pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
         gt_ack_before
     );
     let _ = log_media_forcewake_coverage(warm, "pre");
-    let render_awake = (ack_before & FORCEWAKE_KERNEL) != 0;
-    let media_awake = (media_ack_before & FORCEWAKE_KERNEL) != 0;
-    let gt_awake = (gt_ack_before & FORCEWAKE_KERNEL) != 0;
-    if FORCEWAKE_GT_HELD.load(Ordering::Acquire) && render_awake && media_awake && gt_awake {
-        crate::log!(
-            "intel/igpu770: forcewake-all already-held ack=0x{:08X} media_req=0x{:08X} media_ack=0x{:08X} gt_req=0x{:08X} gt_ack=0x{:08X}\n",
-            ack_before,
-            media_req_before,
-            media_ack_before,
-            gt_req_before,
-            gt_ack_before
-        );
-        let _ = log_media_forcewake_coverage(warm, "already-held");
-        return ack_before;
-    } else if FORCEWAKE_GT_HELD.load(Ordering::Acquire) {
+    if FORCEWAKE_GT_HELD.load(Ordering::Acquire) {
         crate::log!(
             "intel/igpu770: forcewake-all stale-held-state render_awake={} media_awake={} gt_awake={} reissuing-acquire\n",
             render_awake as u8,
@@ -663,6 +667,9 @@ pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
             crate::log!(
                 "intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries\n"
             );
+            FORCEWAKE_PARTIAL_HOLD_LOGGED.store(true, Ordering::Release);
+        } else {
+            FORCEWAKE_PARTIAL_HOLD_LOGGED.store(false, Ordering::Release);
         }
         FORCEWAKE_GT_HELD.store(true, Ordering::Release);
     }
@@ -685,6 +692,7 @@ fn forcewake_gt_release(warm: Igpu770WarmState) -> u32 {
     let _ = mmio_write32(warm, FORCEWAKE_GT_GEN11, masked_bit_disable(FORCEWAKE_KERNEL));
     let _ = wait_forcewake_domain_ack(warm, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, 0);
     FORCEWAKE_GT_HELD.store(false, Ordering::Release);
+    FORCEWAKE_PARTIAL_HOLD_LOGGED.store(false, Ordering::Release);
     crate::log!(
         "intel/igpu770: forcewake-all release ack=0x{:08X} media_ack=0x{:08X} gt_ack=0x{:08X}\n",
         ack,
@@ -1510,6 +1518,7 @@ static GGTT_BCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static GGTT_RECON_RAN: AtomicBool = AtomicBool::new(false);
 static GGTT_MAPS_RAN: AtomicBool = AtomicBool::new(false);
 static FORCEWAKE_GT_HELD: AtomicBool = AtomicBool::new(false);
+static FORCEWAKE_PARTIAL_HOLD_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug)]
 struct LimineFramebufferInfo {
