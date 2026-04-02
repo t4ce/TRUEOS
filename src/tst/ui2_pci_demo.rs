@@ -215,12 +215,7 @@ fn usb_demo_snapshot() -> UsbDemoSnapshot {
     for ctrl in snapshot.controllers.iter() {
         let title = format!(
             "host {}  {:02X}:{:02X}.{}  {:04X}:{:04X}",
-            ctrl.index,
-            ctrl.bus,
-            ctrl.slot,
-            ctrl.function,
-            ctrl.vendor_id,
-            ctrl.device_id
+            ctrl.index, ctrl.bus, ctrl.slot, ctrl.function, ctrl.vendor_id, ctrl.device_id
         );
         let detail = format!(
             "phase={} life={} ev={} rpchg={} empty={} mmio=0x{:X}",
@@ -859,13 +854,14 @@ pub async fn ui2_pci_demo_task() {
         return;
     };
 
-    let interactives = toggle_rects().map(|(item_id, rect, _)| crate::r::ui2::Ui2HostedInteractiveRect {
-        item_id,
-        x: rect.x.max(0.0) as u32,
-        y: rect.y.max(0.0) as u32,
-        width: rect.w.max(1.0) as u32,
-        height: rect.h.max(1.0) as u32,
-    });
+    let interactives =
+        toggle_rects().map(|(item_id, rect, _)| crate::r::ui2::Ui2HostedInteractiveRect {
+            item_id,
+            x: rect.x.max(0.0) as u32,
+            y: rect.y.max(0.0) as u32,
+            width: rect.w.max(1.0) as u32,
+            height: rect.h.max(1.0) as u32,
+        });
     let _ = surface.set_interactives(&interactives);
 
     let mut view = DeviceManagerView::Pci;
@@ -883,11 +879,7 @@ pub async fn ui2_pci_demo_task() {
         return;
     }
 
-    let _ = surface.bind_hosted_scroll_state(
-        UI2_PCI_DEMO_CONTENT_ID,
-        pci_content_w,
-        pci_content_h,
-    );
+    let _ = surface.bind_hosted_scroll_state(UI2_PCI_DEMO_CONTENT_ID, pci_content_w, pci_content_h);
     let _ = crate::r::ui2::set_window_icon(surface.window_id(), 11);
     update_window_title(surface.window_id(), view);
     crate::log!(
@@ -904,7 +896,8 @@ pub async fn ui2_pci_demo_task() {
     );
 
     loop {
-        if let Some((seq, item_id)) = crate::r::ui2::take_window_last_clicked_item(surface.window_id())
+        if let Some((seq, item_id)) =
+            crate::r::ui2::take_window_last_clicked_item(surface.window_id())
             && seq != last_click_seq
         {
             last_click_seq = seq;

@@ -152,14 +152,13 @@ fn status_text() -> String {
     }
 }
 
-fn render_frame(
-    atlases: &ui2::Ui2FontCpuAtlases,
-    asset_name: &str,
-    requested: bool,
-) -> Vec<u8> {
-    let mut rgba = vec![0u8; (UI2_USB_AUDIO_W as usize)
-        .saturating_mul(UI2_USB_AUDIO_H as usize)
-        .saturating_mul(4)];
+fn render_frame(atlases: &ui2::Ui2FontCpuAtlases, asset_name: &str, requested: bool) -> Vec<u8> {
+    let mut rgba = vec![
+        0u8;
+        (UI2_USB_AUDIO_W as usize)
+            .saturating_mul(UI2_USB_AUDIO_H as usize)
+            .saturating_mul(4)
+    ];
     fill_rect_rgba(
         rgba.as_mut_slice(),
         UI2_USB_AUDIO_W as usize,
@@ -304,7 +303,8 @@ pub async fn ui2_usb_audio_demo_task() {
     let mut last_click_seq = 0u32;
 
     loop {
-        if let Some((seq, item_id)) = crate::r::ui2::take_window_last_clicked_item(surface.window_id())
+        if let Some((seq, item_id)) =
+            crate::r::ui2::take_window_last_clicked_item(surface.window_id())
             && seq != last_click_seq
             && item_id == UI2_USB_AUDIO_BUTTON_ID
         {
@@ -315,7 +315,8 @@ pub async fn ui2_usb_audio_demo_task() {
         let requested = crate::usb2::audio_demo_requested();
         let active = crate::usb2::audio_demo_active();
         let uac_attached = crate::r::readiness::is_set(crate::r::readiness::UAC_ATTACHED);
-        if requested != last_requested || active != last_active || uac_attached != last_uac_attached {
+        if requested != last_requested || active != last_active || uac_attached != last_uac_attached
+        {
             let frame = render_frame(&atlases, asset_name, requested);
             if !surface.upload_rgba(frame.as_slice(), "ui2-usb-audio-demo") {
                 return;

@@ -1,4 +1,8 @@
+extern crate alloc;
+
+use alloc::vec::Vec;
 use libm::{ceilf, cosf, floorf, sinf};
+use trueos_gfx_core::{ScissorRect, read_rgb_vertex_f32_bytes};
 
 use super::xelp_copy_ngin;
 
@@ -10,6 +14,25 @@ const TRIANGLE_MAX_W: usize = 240;
 const TRIANGLE_MAX_H: usize = 200;
 const TRIANGLE_ROTATION_RAD: f32 = 0.62;
 const TRIANGLE_ANGLE_STEP_RAD: f32 = 2.0943952;
+
+#[derive(Clone)]
+pub(crate) struct MinimalScreenRgbDraw {
+    pub vertices: Vec<u8>,
+    pub scissor: Option<ScissorRect>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct MinimalScreenRgbFrame {
+    pub clear_rgb: Option<u32>,
+    pub draws: Vec<MinimalScreenRgbDraw>,
+}
+
+impl MinimalScreenRgbFrame {
+    #[inline]
+    pub(crate) fn has_work(&self) -> bool {
+        self.clear_rgb.is_some() || !self.draws.is_empty()
+    }
+}
 
 #[inline]
 pub(super) fn defer_display_discovery_for_render_first(intel_igpu770_present: bool) -> bool {
@@ -166,6 +189,105 @@ fn clamp_color(v: f32) -> u32 {
 #[inline]
 fn pack_xrgb8888(r: u32, g: u32, b: u32) -> u32 {
     (r << 16) | (g << 8) | b
+}
+
+#[inline]
+fn ndc_to_target_x(x: f32, width: usize) -> f32 {
+    ((x + 1.0) * 0.5) * width as f32
+}
+
+#[inline]
+fn ndc_to_target_y(y: f32, height: usize) -> f32 {
+    ((1.0 - y) * 0.5) * height as f32
+}
+
+#[inline]
+fn pixel_in_scissor(
+    scissor: Option<ScissorRect>,
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+) -> bool {
+    let Some(scissor) = scissor else {
+        return true;
+    };
+    let min_x = scissor.x.min(width as u32) as usize;
+    let max_x = scissor.x.saturating_add(scissor.width).min(width as u32) as usize;
+    let min_y = scissor.y.min(height as u32) as usize;
+    let max_y = scissor.y.saturating_add(scissor.height).min(height as u32) as usize;
+    x >= min_x && x < max_x && y >= min_y && y < max_y
+}
+
+#[inline]
+fn shade_rgb_triangle_pixel(
+    px: f32,
+    py: f32,
+    width: usize,
+    height: usize,
+    v0: trueos_gfx_core::RgbVertexF32,
+    v1: trueos_gfx_core::RgbVertexF32,
+    v2: trueos_gfx_core::RgbVertexF32,
+) -> Option<u32> {
+    let p0 = (ndc_to_target_x(v0.x, width), ndc_to_target_y(v0.y, height));
+    let p1 = (ndc_to_target_x(v1.x, width), ndc_to_target_y(v1.y, height));
+    let p2 = (ndc_to_target_x(v2.x, width), ndc_to_target_y(v2.y, height));
+    let area = edge_fn(p0.0, p0.1, p1.0, p1.1, p2.0, p2.1);
+    if area.abs() <= 1e-6 {
+        return None;
+    }
+
+    let w0 = edge_fn(p1.0, p1.1, p2.0, p2.1, px, py);
+    let w1 = edge_fn(p2.0, p2.1, p0.0, p0.1, px, py);
+    let w2 = edge_fn(p0.0, p0.1, p1.0, p1.1, px, py);
+    if (area > 0.0 && (w0 < 0.0 || w1 < 0.0 || w2 < 0.0))
+        || (area < 0.0 && (w0 > 0.0 || w1 > 0.0 || w2 > 0.0))
+    {
+        return None;
+    }
+
+    let inv_area = 1.0 / area;
+    let r = clamp_color((v0.r * w0 + v1.r * w1 + v2.r * w2) * inv_area);
+    let g = clamp_color((v0.g * w0 + v1.g * w1 + v2.g * w2) * inv_area);
+    let b = clamp_color((v0.b * w0 + v1.b * w1 + v2.b * w2) * inv_area);
+    Some(pack_xrgb8888(r, g, b))
+}
+
+fn shade_rgb_draw_pixel(
+    draw: &MinimalScreenRgbDraw,
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+) -> Option<u32> {
+    if !pixel_in_scissor(draw.scissor, width, height, x, y) {
+        return None;
+    }
+
+    let mut color = None;
+    let px = x as f32 + 0.5;
+    let py = y as f32 + 0.5;
+    let mut off = 0usize;
+    while off + (3 * trueos_gfx_core::RGB_VERTEX_SIZE) <= draw.vertices.len() {
+        let Some(v0) = read_rgb_vertex_f32_bytes(&draw.vertices, off) else {
+            break;
+        };
+        let Some(v1) =
+            read_rgb_vertex_f32_bytes(&draw.vertices, off + trueos_gfx_core::RGB_VERTEX_SIZE)
+        else {
+            break;
+        };
+        let Some(v2) =
+            read_rgb_vertex_f32_bytes(&draw.vertices, off + (2 * trueos_gfx_core::RGB_VERTEX_SIZE))
+        else {
+            break;
+        };
+        if let Some(next) = shade_rgb_triangle_pixel(px, py, width, height, v0, v1, v2) {
+            color = Some(next);
+        }
+        off += 3 * trueos_gfx_core::RGB_VERTEX_SIZE;
+    }
+    color
 }
 
 pub(crate) fn submit_rgb_triangle_smoke_once() {
@@ -368,6 +490,115 @@ pub(crate) fn encode_rgba_store_batch_chunk(
 
     if written == 0 {
         return Err("rgba-no-pixels");
+    }
+    if idx + STORE_DWORDS > batch_dwords.len().saturating_sub(RESERVED_END_DWORDS) {
+        return Err("batch-no-result-slot");
+    }
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+        | xelp_copy_ngin::mi::SDI_GGTT
+        | xelp_copy_ngin::mi::sdi_num_dw(1);
+    batch_dwords[idx + 1] = result_gpu_addr as u32;
+    batch_dwords[idx + 2] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[idx + 3] = done_value;
+    idx += STORE_DWORDS;
+
+    if idx + RESERVED_END_DWORDS > batch_dwords.len() {
+        return Err("batch-no-end");
+    }
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::BATCH_BUFFER_END;
+    batch_dwords[idx + 1] = xelp_copy_ngin::mi::NOOP;
+    idx += RESERVED_END_DWORDS;
+
+    Ok((idx * core::mem::size_of::<u32>(), written))
+}
+
+pub(crate) fn encode_minimal_rgb_frame_batch_chunk(
+    batch_dwords: &mut [u32],
+    frame: &MinimalScreenRgbFrame,
+    width: usize,
+    height: usize,
+    max_chunk_pixels: usize,
+    dst_gpu_addr: u64,
+    dst_pitch: usize,
+    start_pixel: usize,
+    result_gpu_addr: u64,
+    start_value: u32,
+    done_value: u32,
+) -> Result<(usize, usize), &'static str> {
+    const RESERVED_END_DWORDS: usize = 2;
+    const STORE_DWORDS: usize = 4;
+
+    if width == 0 || height == 0 {
+        return Err("rgb-frame-empty");
+    }
+    if !frame.has_work() {
+        return Err("rgb-frame-no-work");
+    }
+
+    let total_pixels = width.saturating_mul(height);
+    if start_pixel >= total_pixels {
+        return Err("rgb-frame-start-oob");
+    }
+    if batch_dwords.len() <= RESERVED_END_DWORDS + STORE_DWORDS {
+        return Err("batch-too-small");
+    }
+
+    batch_dwords.fill(0);
+    let writable_limit = batch_dwords
+        .len()
+        .saturating_sub(RESERVED_END_DWORDS + (STORE_DWORDS * 2));
+    let max_pixels = (writable_limit / STORE_DWORDS).min(max_chunk_pixels.max(1));
+    if max_pixels == 0 {
+        return Err("batch-no-payload");
+    }
+
+    let mut idx = 0usize;
+    let mut written = 0usize;
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+        | xelp_copy_ngin::mi::SDI_GGTT
+        | xelp_copy_ngin::mi::sdi_num_dw(1);
+    batch_dwords[idx + 1] = result_gpu_addr as u32;
+    batch_dwords[idx + 2] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[idx + 3] = start_value;
+    idx += STORE_DWORDS;
+
+    let end_pixel = total_pixels.min(start_pixel.saturating_add(max_pixels));
+    let clear_color = frame
+        .clear_rgb
+        .map(|rgb| pack_xrgb8888((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF));
+    let mut pixel = start_pixel;
+    while pixel < end_pixel {
+        let y = pixel / width;
+        let x = pixel % width;
+        let mut color = clear_color;
+        for draw in frame.draws.iter() {
+            if let Some(next) = shade_rgb_draw_pixel(draw, width, height, x, y) {
+                color = Some(next);
+            }
+        }
+
+        if let Some(color) = color {
+            let dst = dst_gpu_addr
+                .saturating_add((y as u64).saturating_mul(dst_pitch as u64))
+                .saturating_add((x as u64).saturating_mul(4));
+
+            batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+                | xelp_copy_ngin::mi::SDI_GGTT
+                | xelp_copy_ngin::mi::sdi_num_dw(1);
+            batch_dwords[idx + 1] = dst as u32;
+            batch_dwords[idx + 2] = (dst >> 32) as u32;
+            batch_dwords[idx + 3] = color;
+            idx += STORE_DWORDS;
+            written += 1;
+        }
+        pixel += 1;
+    }
+
+    if written == 0 {
+        return Err("rgb-frame-no-stores");
     }
     if idx + STORE_DWORDS > batch_dwords.len().saturating_sub(RESERVED_END_DWORDS) {
         return Err("batch-no-result-slot");

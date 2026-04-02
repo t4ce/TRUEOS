@@ -1,5 +1,8 @@
+extern crate alloc;
+
+use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use trueos_gfx_core::{RgbVertex, Rgba8};
+use trueos_gfx_core::{RgbVertex, Rgba8, push_rgb_quad_ndc, push_rgb_vertices_bytes};
 
 const UI2_TRIANGLE_TEX_ID: u32 = 4_700;
 const UI2_TRIANGLE_RT_W: u32 = 384;
@@ -7,6 +10,105 @@ const UI2_TRIANGLE_RT_H: u32 = 240;
 const UI2_TRIANGLE_WINDOW_X: f32 = 220.0;
 const UI2_TRIANGLE_WINDOW_Y: f32 = 160.0;
 const UI2_TRIANGLE_WINDOW_Z: i16 = 30;
+const UI2_TRIANGLE_BG_RGBA: [u8; 4] = [0x10, 0x14, 0x1A, 0xFF];
+
+#[inline]
+fn screen_extent() -> Option<(u32, u32)> {
+    crate::limine::framebuffer_response()
+        .and_then(|resp| resp.framebuffers().next())
+        .map(|fb| (fb.width() as u32, fb.height() as u32))
+}
+
+#[inline]
+fn px_to_screen_ndc(x: f32, y: f32, screen_w: u32, screen_h: u32) -> (f32, f32) {
+    let w = screen_w.max(1) as f32;
+    let h = screen_h.max(1) as f32;
+    (((2.0 * x) / w) - 1.0, 1.0 - ((2.0 * y) / h))
+}
+
+#[inline]
+fn map_window_vertex_to_screen(vertex: RgbVertex, screen_w: u32, screen_h: u32) -> RgbVertex {
+    let local_x = ((vertex.x + 1.0) * 0.5) * UI2_TRIANGLE_RT_W as f32;
+    let local_y = ((1.0 - vertex.y) * 0.5) * UI2_TRIANGLE_RT_H as f32;
+    let px = UI2_TRIANGLE_WINDOW_X + local_x;
+    let py = UI2_TRIANGLE_WINDOW_Y + local_y;
+    let (x, y) = px_to_screen_ndc(px, py, screen_w, screen_h);
+    RgbVertex {
+        x,
+        y,
+        color: vertex.color,
+    }
+}
+
+fn build_direct_screen_frame(phase: f32, screen_w: u32, screen_h: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let bg = Rgba8::new(
+        UI2_TRIANGLE_BG_RGBA[0],
+        UI2_TRIANGLE_BG_RGBA[1],
+        UI2_TRIANGLE_BG_RGBA[2],
+        UI2_TRIANGLE_BG_RGBA[3],
+    );
+
+    let (left, top) =
+        px_to_screen_ndc(UI2_TRIANGLE_WINDOW_X, UI2_TRIANGLE_WINDOW_Y, screen_w, screen_h);
+    let (right, bottom) = px_to_screen_ndc(
+        UI2_TRIANGLE_WINDOW_X + UI2_TRIANGLE_RT_W as f32,
+        UI2_TRIANGLE_WINDOW_Y + UI2_TRIANGLE_RT_H as f32,
+        screen_w,
+        screen_h,
+    );
+    push_rgb_quad_ndc(&mut out, left, top, right, bottom, bg);
+
+    let verts = triangle_vertices(phase);
+    let mapped = [
+        map_window_vertex_to_screen(verts[0], screen_w, screen_h),
+        map_window_vertex_to_screen(verts[1], screen_w, screen_h),
+        map_window_vertex_to_screen(verts[2], screen_w, screen_h),
+    ];
+    push_rgb_vertices_bytes(&mut out, &mapped);
+    out
+}
+
+fn render_triangle_frame_direct_screen(phase: f32) -> bool {
+    let Some((screen_w, screen_h)) = screen_extent() else {
+        return false;
+    };
+
+    let blob = build_direct_screen_frame(phase, screen_w, screen_h);
+    if blob.is_empty() {
+        return false;
+    }
+
+    let rc_begin = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0) };
+    if rc_begin != 0 {
+        return false;
+    }
+
+    let rc_scissor = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_set_scissor(
+            UI2_TRIANGLE_WINDOW_X.max(0.0) as u32,
+            UI2_TRIANGLE_WINDOW_Y.max(0.0) as u32,
+            UI2_TRIANGLE_RT_W,
+            UI2_TRIANGLE_RT_H,
+        )
+    };
+    if rc_scissor != 0 {
+        let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+        return false;
+    }
+
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+
+    let rc_draw = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(blob.as_ptr(), blob.len())
+    };
+    if rc_draw != 0 {
+        let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+        return false;
+    }
+
+    unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() == 0 }
+}
 
 fn triangle_vertices(phase: f32) -> [RgbVertex; 3] {
     let cos_p = libm::cosf(phase);
@@ -45,6 +147,26 @@ fn render_triangle_frame(surface: &crate::r::ui2::Ui2SurfaceWindow, phase: f32) 
 
 #[embassy_executor::task]
 pub async fn ui2_triangle_demo_task() {
+    if crate::gfx::is_intel_active() {
+        crate::log!(
+            "ui2-triangle-demo: mode=direct-screen rect={}x{}+{},{}\n",
+            UI2_TRIANGLE_RT_W,
+            UI2_TRIANGLE_RT_H,
+            UI2_TRIANGLE_WINDOW_X as i32,
+            UI2_TRIANGLE_WINDOW_Y as i32
+        );
+
+        let mut phase = 0.0f32;
+        loop {
+            let _ = render_triangle_frame_direct_screen(phase);
+            phase += 0.04;
+            if phase > core::f32::consts::TAU {
+                phase -= core::f32::consts::TAU;
+            }
+            Timer::after(EmbassyDuration::from_millis(66)).await;
+        }
+    }
+
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
         "Demo Triangle",
         crate::r::ui2::Ui2Rect {
@@ -57,7 +179,7 @@ pub async fn ui2_triangle_demo_task() {
         128,
         UI2_TRIANGLE_TEX_ID,
         false,
-        [0x10, 0x14, 0x1A, 0xFF],
+        UI2_TRIANGLE_BG_RGBA,
     ) else {
         return;
     };
