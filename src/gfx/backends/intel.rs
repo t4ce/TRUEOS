@@ -327,6 +327,145 @@ impl IntelGfxBackend {
         Ok(())
     }
 
+    fn copy_rgb_draw_bytes(
+        &self,
+        buffer: BufferId,
+        byte_offset: u64,
+        vertex_count: u32,
+        first_vertex: u32,
+    ) -> Option<Vec<u8>> {
+        let buffer = self.buffer(buffer)?;
+        if buffer.memory != MemoryType::HostVisible {
+            return None;
+        }
+        let start = byte_offset as usize + first_vertex as usize * trueos_gfx_core::RGB_VERTEX_SIZE;
+        let need = vertex_count as usize * trueos_gfx_core::RGB_VERTEX_SIZE;
+        if start > buffer.bytes.len() || start.saturating_add(need) > buffer.bytes.len() {
+            return None;
+        }
+        Some(buffer.bytes[start..start + need].to_vec())
+    }
+
+    fn try_submit_minimal_screen_rgb(&self, cmds: CommandBuffer<'_>) -> bool {
+        let swap_w = self.swapchain_desc.extent.width;
+        let swap_h = self.swapchain_desc.extent.height;
+        if swap_w == 0 || swap_h == 0 {
+            return false;
+        }
+
+        let mut target = RenderTarget::Screen;
+        let mut scissor: Option<ScissorRect> = None;
+        let mut blend = BlendDesc::disabled();
+        let mut pipeline = PipelineKind::Rgb;
+        let mut bound_buffer = BufferId::invalid();
+        let mut bound_offset = 0u64;
+        let mut bound_image = ImageId::invalid();
+        let mut frame = crate::intel::MinimalScreenRgbFrame::default();
+        let mut saw_draw = false;
+        let mut saw_present = false;
+
+        for (idx, cmd) in cmds.commands.iter().enumerate() {
+            match *cmd {
+                Command::ClearColor { rgb } => {
+                    if !matches!(target, RenderTarget::Screen)
+                        || saw_draw
+                        || frame.clear_rgb.is_some()
+                    {
+                        return false;
+                    }
+                    frame.clear_rgb = Some(rgb);
+                }
+                Command::ClearRect { .. } => return false,
+                Command::BindPipeline(id) => {
+                    let Some(entry) = self.pipeline(id) else {
+                        return false;
+                    };
+                    if entry.kind != PipelineKind::Rgb {
+                        return false;
+                    }
+                    pipeline = entry.kind;
+                }
+                Command::BindVertexBuffer { buffer, offset } => {
+                    let Some(entry) = self.buffer(buffer) else {
+                        return false;
+                    };
+                    if entry.memory != MemoryType::HostVisible {
+                        return false;
+                    }
+                    bound_buffer = buffer;
+                    bound_offset = offset;
+                }
+                Command::BindImage(_) => return false,
+                Command::SetRenderTarget(render_target) => {
+                    if render_target.is_some() {
+                        return false;
+                    }
+                    target = RenderTarget::Screen;
+                }
+                Command::SetSampler(_) => return false,
+                Command::SetBlend(next) => {
+                    if next.enabled {
+                        return false;
+                    }
+                    blend = next;
+                }
+                Command::SetViewport(viewport) => {
+                    if viewport.x != 0
+                        || viewport.y != 0
+                        || viewport.width != swap_w as i32
+                        || viewport.height != swap_h as i32
+                    {
+                        return false;
+                    }
+                }
+                Command::SetScissor(next) => scissor = next,
+                Command::Draw {
+                    vertex_count,
+                    first_vertex,
+                } => {
+                    if saw_present
+                        || !matches!(target, RenderTarget::Screen)
+                        || pipeline != PipelineKind::Rgb
+                        || bound_image.is_valid()
+                        || blend.enabled
+                        || !bound_buffer.is_valid()
+                        || vertex_count == 0
+                        || !vertex_count.is_multiple_of(3)
+                    {
+                        return false;
+                    }
+                    let Some(vertices) = self.copy_rgb_draw_bytes(
+                        bound_buffer,
+                        bound_offset,
+                        vertex_count,
+                        first_vertex,
+                    ) else {
+                        return false;
+                    };
+                    frame
+                        .draws
+                        .push(crate::intel::MinimalScreenRgbDraw { vertices, scissor });
+                    saw_draw = true;
+                }
+                Command::Present => {
+                    if idx + 1 != cmds.commands.len()
+                        || !matches!(target, RenderTarget::Screen)
+                        || !saw_draw
+                    {
+                        return false;
+                    }
+                    saw_present = true;
+                }
+            }
+        }
+
+        if !saw_present {
+            return false;
+        }
+
+        crate::intel::rcs_render_minimal_rgb_frame(&frame, swap_w as usize, swap_h as usize)
+    }
+
     fn draw_tex(
         &mut self,
         target: RenderTarget,
@@ -540,6 +679,18 @@ impl GfxDevice for IntelGfxBackend {
 
     fn submit(&mut self, cmds: CommandBuffer<'_>) -> Result<FenceId> {
         self.ensure_screen_rgba()?;
+
+        if self.try_submit_minimal_screen_rgb(cmds) {
+            self.submit_seq = self.submit_seq.wrapping_add(1);
+            crate::log!(
+                "intel/gfx-backend: submit seq={} cmds={} mode=render-ngin-minimal-screen-rgb\n",
+                self.submit_seq,
+                cmds.commands.len()
+            );
+            let fence = FenceId::from_raw(self.next_fence_raw);
+            self.next_fence_raw = self.next_fence_raw.wrapping_add(1).max(1);
+            return Ok(fence);
+        }
 
         let mut target = RenderTarget::Screen;
         let mut scissor: Option<ScissorRect> = None;

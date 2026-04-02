@@ -679,7 +679,8 @@ fn spawn_ui2_usb_audio_demo(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ui2_trueosfs_explorer_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_trueosfs_explorer_demo::ui2_trueosfs_explorer_demo_task())
+        worker_spawner
+            .spawn(crate::tst_ui2_trueosfs_explorer_demo::ui2_trueosfs_explorer_demo_task())
     })
 }
 

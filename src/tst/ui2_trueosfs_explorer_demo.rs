@@ -163,7 +163,12 @@ fn draw_text_line_clipped(
         let advance = u32::from(glyph.advance_px.max(1));
         let remaining = chars.len().saturating_sub(idx + 1);
         let reserve = if remaining > 0 { ellipsis } else { 0 };
-        if pen_x.saturating_sub(x).saturating_add(advance).saturating_add(reserve) > max_width {
+        if pen_x
+            .saturating_sub(x)
+            .saturating_add(advance)
+            .saturating_add(reserve)
+            > max_width
+        {
             if remaining > 0 {
                 draw_text_line_clipped(
                     dst,
@@ -210,7 +215,8 @@ fn draw_icon_centered(
     let Some(glyph) = ui2::ui2_font_resolve_glyph(UI2_TRUEOSFS_EXPLORER_FONT_TIER, icon) else {
         return;
     };
-    let _ = ui2::ui2_font_blit_glyph_rgba(dst, dst_width, dst_height, atlases, &glyph, rect, fg_rgba);
+    let _ =
+        ui2::ui2_font_blit_glyph_rgba(dst, dst_width, dst_height, atlases, &glyph, rect, fg_rgba);
 }
 
 fn child_path(parent: &str, name: &str) -> String {
@@ -239,7 +245,11 @@ fn root_label(root: crate::r::fs::trueosfs::RootInfo) -> String {
         return format!("root {}", root.disk_id.raw());
     };
     let info = handle.info();
-    let label = info.label.as_deref().filter(|s| !s.is_empty()).unwrap_or("TRUEOSFS");
+    let label = info
+        .label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("TRUEOSFS");
     format!("{} [{}]", label, root.disk_id.raw())
 }
 
@@ -252,7 +262,11 @@ async fn directory_entries(disk_id: DiscId, path: &str) -> Vec<ExplorerEntry> {
     };
 
     let mut out = Vec::new();
-    for line in listing.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         let child = child_path(path, line);
         let kind = match crate::r::fs::trueosfs::file_info_async(disk, child.as_str()).await {
             Ok(Some(_)) => ExplorerEntryKind::File,
@@ -273,7 +287,9 @@ async fn directory_entries(disk_id: DiscId, path: &str) -> Vec<ExplorerEntry> {
             ExplorerEntryKind::File => (
                 '📄',
                 UI2_TRUEOSFS_FILE_RGBA,
-                ExplorerAction::SelectFile { path: child.clone() },
+                ExplorerAction::SelectFile {
+                    path: child.clone(),
+                },
             ),
             ExplorerEntryKind::Parent | ExplorerEntryKind::Root => continue,
         };
@@ -425,7 +441,11 @@ fn render_scene(
     let layout_w = UI2_TRUEOSFS_PAD_X * 2
         + cols * UI2_TRUEOSFS_ITEM_W
         + cols.saturating_sub(1) * UI2_TRUEOSFS_GRID_GAP_X;
-    let rows = ((scene.entries.len() as u32).saturating_add(cols).saturating_sub(1) / cols).max(1);
+    let rows = ((scene.entries.len() as u32)
+        .saturating_add(cols)
+        .saturating_sub(1)
+        / cols)
+        .max(1);
     let grid_h = rows * UI2_TRUEOSFS_ITEM_H + rows.saturating_sub(1) * UI2_TRUEOSFS_GRID_GAP_Y;
     let content_w = layout_w.max(viewport_w).min(tex_w);
     let content_h = (UI2_TRUEOSFS_HEADER_H
@@ -437,12 +457,15 @@ fn render_scene(
         .min(tex_h);
 
     let mut interactives = Vec::with_capacity(scene.entries.len());
-    let icon_line_h = u32::from(ui2::ui2_font_native_line_height_px(UI2_TRUEOSFS_EXPLORER_FONT_TIER));
+    let icon_line_h =
+        u32::from(ui2::ui2_font_native_line_height_px(UI2_TRUEOSFS_EXPLORER_FONT_TIER));
     for (idx, entry) in scene.entries.iter_mut().enumerate() {
         let col = (idx as u32) % cols;
         let row = (idx as u32) / cols;
         let x = UI2_TRUEOSFS_PAD_X + col * (UI2_TRUEOSFS_ITEM_W + UI2_TRUEOSFS_GRID_GAP_X);
-        let y = UI2_TRUEOSFS_HEADER_H + UI2_TRUEOSFS_PAD_Y + row * (UI2_TRUEOSFS_ITEM_H + UI2_TRUEOSFS_GRID_GAP_Y);
+        let y = UI2_TRUEOSFS_HEADER_H
+            + UI2_TRUEOSFS_PAD_Y
+            + row * (UI2_TRUEOSFS_ITEM_H + UI2_TRUEOSFS_GRID_GAP_Y);
         if y >= tex_h {
             break;
         }
@@ -530,7 +553,9 @@ fn render_scene(
         dst_height,
         atlases,
         UI2_TRUEOSFS_PAD_X,
-        content_h.saturating_sub(UI2_TRUEOSFS_STATUS_H).saturating_add(6),
+        content_h
+            .saturating_sub(UI2_TRUEOSFS_STATUS_H)
+            .saturating_add(6),
         tex_w.saturating_sub(UI2_TRUEOSFS_PAD_X * 2),
         scene.status.as_str(),
         UI2_TRUEOSFS_MUTED_RGBA,
@@ -585,7 +610,8 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
         return;
     }
 
-    let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_TRUEOSFS_EXPLORER_FONT_SIZE_CASE) else {
+    let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_TRUEOSFS_EXPLORER_FONT_SIZE_CASE)
+    else {
         return;
     };
 
@@ -593,11 +619,14 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
         UI2_TRUEOSFS_BG_RGBA[0],
         UI2_TRUEOSFS_BG_RGBA[1],
         UI2_TRUEOSFS_BG_RGBA[2],
-        UI2_TRUEOSFS_BG_RGBA[3]
+        UI2_TRUEOSFS_BG_RGBA[3],
     ];
-    let mut clear_pixels = vec![0u8; (UI2_TRUEOSFS_EXPLORER_TEX_W as usize)
-        .saturating_mul(UI2_TRUEOSFS_EXPLORER_TEX_H as usize)
-        .saturating_mul(4)];
+    let mut clear_pixels = vec![
+        0u8;
+        (UI2_TRUEOSFS_EXPLORER_TEX_W as usize)
+            .saturating_mul(UI2_TRUEOSFS_EXPLORER_TEX_H as usize)
+            .saturating_mul(4)
+    ];
     for px in clear_pixels.chunks_exact_mut(4) {
         px.copy_from_slice(clear_rgba.as_slice());
     }
@@ -661,7 +690,8 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
             None
         };
 
-        if let Some((seq, item_id)) = crate::r::ui2::take_window_last_clicked_item(surface.window_id())
+        if let Some((seq, item_id)) =
+            crate::r::ui2::take_window_last_clicked_item(surface.window_id())
             && seq != last_click_seq
         {
             last_click_seq = seq;
@@ -684,13 +714,8 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
                 status: String::new(),
                 entries: Vec::new(),
             });
-            let (pixels, interactives, content_w, content_h) = render_scene(
-                &surface,
-                last_viewport.0,
-                last_viewport.1,
-                &atlases,
-                &mut scene,
-            );
+            let (pixels, interactives, content_w, content_h) =
+                render_scene(&surface, last_viewport.0, last_viewport.1, &atlases, &mut scene);
             let _ = crate::r::ui2::set_window_title(surface.window_id(), scene.title.as_str());
             let _ = surface.bind_hosted_scroll_state(
                 UI2_TRUEOSFS_EXPLORER_CONTENT_ID,
