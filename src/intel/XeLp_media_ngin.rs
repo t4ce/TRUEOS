@@ -116,6 +116,7 @@ const MEDIA_HTTPS_DEMO_VIS_H: usize = 72;
 const MEDIA_SUBMIT_POLL_LOG_STEP: usize = 10_000;
 const MEDIA_VCS_BATCH_MODE_MI_ONLY_PROBE: u32 = 1 << 2;
 const MEDIA_MI_ONLY_PROBE_PREFIX_NOOPS: usize = 8;
+const MEDIA_NGIN_ENABLED: bool = false;
 
 const MEDIA_RESULT_SLOT_BYTES: u64 = 8;
 const MEDIA_RESULT_KICKOFF_SLOT: u64 = 0;
@@ -1281,6 +1282,15 @@ fn wake_media_engine_forcewake(
     desc: MediaEngineDescriptor,
     label: &str,
 ) -> bool {
+    if !MEDIA_NGIN_ENABLED {
+        crate::log!(
+            "intel/media-demo: engine-forcewake label={} engine={} skipped=disabled\n",
+            label,
+            desc.name
+        );
+        return false;
+    }
+
     let Some((domain, req_reg, ack_reg)) = media_forcewake_regs(desc) else {
         crate::log!(
             "intel/media-demo: engine-forcewake label={} engine={} domain=unmapped\n",
@@ -1703,6 +1713,10 @@ fn select_engine_for_workload(
 }
 
 pub(crate) fn draft_job_for_workload(workload: MediaWorkloadKind) -> Option<MediaJobDraft> {
+    if !MEDIA_NGIN_ENABLED {
+        return None;
+    }
+
     let state = stored_kickoff_state();
     let topology = state.map(|s| s.topology).unwrap_or_else(current_topology);
     let guc_ready = state.map(|s| s.guc_ready).unwrap_or_else(intel_guc::ready);
@@ -1822,6 +1836,11 @@ fn log_kickoff_state(state: MediaKickoffState, forcewake_ack: u32) {
 }
 
 pub(crate) fn kickoff_once() {
+    if !MEDIA_NGIN_ENABLED {
+        crate::log!("intel/media: kickoff skipped reason=disabled\n");
+        return;
+    }
+
     if MEDIA_KICKOFF_RAN.swap(true, Ordering::AcqRel) {
         return;
     }
@@ -2784,6 +2803,11 @@ fn prepare_decode_bitstream_demo(
 }
 
 pub(crate) async fn run_https_media_demo_once_async() {
+    if !MEDIA_NGIN_ENABLED {
+        crate::log!("intel/media-demo: skipped reason=disabled\n");
+        return;
+    }
+
     if MEDIA_HTTPS_DEMO_RAN.swap(true, Ordering::AcqRel) {
         return;
     }

@@ -1,5 +1,12 @@
 // Xe-LP copy-engine helpers for minimal MI command-stream smoke tests.
 
+const COPY_NGIN_ENABLED: bool = false;
+
+#[inline]
+pub(crate) const fn copy_ngin_enabled() -> bool {
+    COPY_NGIN_ENABLED
+}
+
 #[inline]
 const fn mi_instr(opcode: u32, flags: u32) -> u32 {
     (opcode << 23) | flags
