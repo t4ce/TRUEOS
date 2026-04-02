@@ -1,25 +1,17 @@
-intel: claimed 00:02.0 device=0x4680 rev=0x0C bar0=0x60E7000000 size=0x1000000 bar2=0x4000000000 bar2_size=0x10000000 mmio=0xFFFFFF0010293000
-intel: readiness=claimed
-intel: intel_igpu770_present=1
-intel/igpu770: guc-fw hdr-dwords d0=0x00000006 d1=0x000000A1 d2=0x00010000 d3=0x00000000
-intel/igpu770: guc-fw hdr-bytes[0..16]=06 00 00 00 A1 00 00 00 00 00 01 00 00 00 00 00
-intel/igpu770: guc-fw module found size=0x536C0 alloc=0x54000 phys=0x1A5000 gpu=0x850000 css_off=0x0 xfer=0x535C0 rsa_off=0x535C0 rsa_size=0x100 priv_data=0x801000 zstd_magic=0
-intel/igpu770: warm device=0x4680 rev=0x0C ring_phys=0x18C000 ring_len=0x1000 context_phys=0x18D000 context_len=0x16000 batch_phys=0x1A3000 batch_len=0x1000 result_phys=0x1A4000 result_len=0x1000 guc_fw_phys=0x1A5000 guc_fw_len=0x54000 guc_fw_xfer=0x535C0 guc_fw_gpu=0x850000 guc_ads_phys=0x1F9000 guc_ads_len=0x807000 guc_ads_gpu=0x1000000 mmio_len=0x1000000 aperture=0x4000000000/0x10000000 limine_fb=0x4000000000/0x1D4C00 800x600 pitch=0xC80 bpp=32
-...
 intel/igpu770: ggtt-recon aperture=0x4000000000/0x10000000 limine_fb_phys=0x4000000000 limine_fb_size=0x1D4C00
 intel/igpu770: ggtt-plan label=framebuffer gpu=0x0 phys=0x4000000000 size=0x1D4C00 pages=469 aperture_backed=1
 intel/igpu770: ggtt-plan label=ring gpu=0x800000 phys=0x18C000 size=0x1000 pages=1 aperture_backed=0
 intel/igpu770: ggtt-plan label=context gpu=0x810000 phys=0x18D000 size=0x16000 pages=22 aperture_backed=0
-intel/igpu770: ggtt-plan label=batch gpu=0x830000 phys=0x1A3000 size=0x1000 pages=1 aperture_backed=0
-intel/igpu770: ggtt-plan label=result gpu=0x840000 phys=0x1A4000 size=0x1000 pages=1 aperture_backed=0
-intel/igpu770: ggtt-plan label=guc-fw gpu=0x850000 phys=0x1A5000 size=0x54000 pages=84 aperture_backed=0
-intel/igpu770: ggtt-plan label=guc-ads gpu=0x1000000 phys=0x1F9000 size=0x807000 pages=2055 aperture_backed=0
+intel/igpu770: ggtt-plan label=batch gpu=0x830000 phys=0x1A3000 size=0x80000 pages=128 aperture_backed=0
+intel/igpu770: ggtt-plan label=result gpu=0x840000 phys=0x223000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: ggtt-plan label=guc-fw gpu=0x850000 phys=0x224000 size=0x54000 pages=84 aperture_backed=0
+intel/igpu770: ggtt-plan label=guc-ads gpu=0x1000000 phys=0x278000 size=0x807000 pages=2055 aperture_backed=0
 intel/igpu770: ggtt-recon note system-ram objects need explicit GGTT PTEs; framebuffer is aperture-backed
 intel/igpu770: ggtt-recon gtt_alias_off=0x800000 gtt_alias_bytes=0x800000
 intel/igpu770: forcewake-all pre ack=0x00000000 media_req=0x00000000 media_ack=0x00000000 gt_req=0x00010000 gt_ack=0x00000000
-intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
 intel/igpu770: forcewake-all acquire req=0x00000001 ack=0x00000001 cleared=0x00000000 clear_iters=0 iters=0 fallback=0 media_req=0x00010001 media_req_iters=0 media_ack=0x00000000 media_ack_iters=20000 media_ok=0 gt_req=0x00010001 gt_req_iters=0 gt_ack=0x00000001 gt_ack_iters=0 gt_ok=1
-intel/igpu770: forcewake-media-coverage label=post-acquire awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-media-coverage label=post-acquire awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
 intel/igpu770: forcewake-all coverage render_ack=1 media_ack=0 gt_ack=1 media_domains_awake=0
 intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries
 intel/igpu770: ggtt-map begin
@@ -34,118 +26,181 @@ intel/igpu770: ggtt-map label=context page=19 gpu=0x823000 phys=0x1A0000 pte=0x0
 intel/igpu770: ggtt-map label=context page=20 gpu=0x824000 phys=0x1A1000 pte=0x00000000001A1001
 intel/igpu770: ggtt-map label=context page=21 gpu=0x825000 phys=0x1A2000 pte=0x00000000001A2001
 intel/igpu770: ggtt-map label=batch page=0 gpu=0x830000 phys=0x1A3000 pte=0x00000000001A3001
-intel/igpu770: ggtt-map label=result page=0 gpu=0x840000 phys=0x1A4000 pte=0x00000000001A4001
-intel/igpu770: ggtt-map label=guc-fw page=0 gpu=0x850000 phys=0x1A5000 pte=0x00000000001A5001
-intel/igpu770: ggtt-map label=guc-fw page=1 gpu=0x851000 phys=0x1A6000 pte=0x00000000001A6001
-intel/igpu770: ggtt-map label=guc-fw page=2 gpu=0x852000 phys=0x1A7000 pte=0x00000000001A7001
-intel/igpu770: ggtt-map label=guc-fw page=3 gpu=0x853000 phys=0x1A8000 pte=0x00000000001A8001
+intel/igpu770: ggtt-map label=batch page=1 gpu=0x831000 phys=0x1A4000 pte=0x00000000001A4001
+intel/igpu770: ggtt-map label=batch page=2 gpu=0x832000 phys=0x1A5000 pte=0x00000000001A5001
+intel/igpu770: ggtt-map label=batch page=3 gpu=0x833000 phys=0x1A6000 pte=0x00000000001A6001
+intel/igpu770: ggtt-map label=batch omitted_pages=120 total_pages=128 log_policy=head-tail edge_pages=4
+intel/igpu770: ggtt-map label=batch page=124 gpu=0x8AC000 phys=0x21F000 pte=0x000000000021F001
+intel/igpu770: ggtt-map label=batch page=125 gpu=0x8AD000 phys=0x220000 pte=0x0000000000220001
+intel/igpu770: ggtt-map label=batch page=126 gpu=0x8AE000 phys=0x221000 pte=0x0000000000221001
+intel/igpu770: ggtt-map label=batch page=127 gpu=0x8AF000 phys=0x222000 pte=0x0000000000222001
+intel/igpu770: ggtt-map label=result page=0 gpu=0x840000 phys=0x223000 pte=0x0000000000223001
+intel/igpu770: ggtt-map label=guc-fw page=0 gpu=0x850000 phys=0x224000 pte=0x0000000000224001
+intel/igpu770: ggtt-map label=guc-fw page=1 gpu=0x851000 phys=0x225000 pte=0x0000000000225001
+intel/igpu770: ggtt-map label=guc-fw page=2 gpu=0x852000 phys=0x226000 pte=0x0000000000226001
+intel/igpu770: ggtt-map label=guc-fw page=3 gpu=0x853000 phys=0x227000 pte=0x0000000000227001
 intel/igpu770: ggtt-map label=guc-fw omitted_pages=76 total_pages=84 log_policy=head-tail edge_pages=4
-intel/igpu770: ggtt-map label=guc-fw page=80 gpu=0x8A0000 phys=0x1F5000 pte=0x00000000001F5001
-intel/igpu770: ggtt-map label=guc-fw page=81 gpu=0x8A1000 phys=0x1F6000 pte=0x00000000001F6001
-intel/igpu770: ggtt-map label=guc-fw page=82 gpu=0x8A2000 phys=0x1F7000 pte=0x00000000001F7001
-intel/igpu770: ggtt-map label=guc-fw page=83 gpu=0x8A3000 phys=0x1F8000 pte=0x00000000001F8001
-intel/igpu770: ggtt-map label=guc-ads page=0 gpu=0x1000000 phys=0x1F9000 pte=0x00000000001F9001
-intel/igpu770: ggtt-map label=guc-ads page=1 gpu=0x1001000 phys=0x1FA000 pte=0x00000000001FA001
-intel/igpu770: ggtt-map label=guc-ads page=2 gpu=0x1002000 phys=0x1FB000 pte=0x00000000001FB001
-intel/igpu770: ggtt-map label=guc-ads page=3 gpu=0x1003000 phys=0x1FC000 pte=0x00000000001FC001
+intel/igpu770: ggtt-map label=guc-fw page=80 gpu=0x8A0000 phys=0x274000 pte=0x0000000000274001
+intel/igpu770: ggtt-map label=guc-fw page=81 gpu=0x8A1000 phys=0x275000 pte=0x0000000000275001
+intel/igpu770: ggtt-map label=guc-fw page=82 gpu=0x8A2000 phys=0x276000 pte=0x0000000000276001
+intel/igpu770: ggtt-map label=guc-fw page=83 gpu=0x8A3000 phys=0x277000 pte=0x0000000000277001
+intel/igpu770: ggtt-map label=guc-ads page=0 gpu=0x1000000 phys=0x278000 pte=0x0000000000278001
+intel/igpu770: ggtt-map label=guc-ads page=1 gpu=0x1001000 phys=0x279000 pte=0x0000000000279001
+intel/igpu770: ggtt-map label=guc-ads page=2 gpu=0x1002000 phys=0x27A000 pte=0x000000000027A001
+intel/igpu770: ggtt-map label=guc-ads page=3 gpu=0x1003000 phys=0x27B000 pte=0x000000000027B001
 intel/igpu770: ggtt-map label=guc-ads omitted_pages=2047 total_pages=2055 log_policy=head-tail edge_pages=4
-intel/igpu770: ggtt-map label=guc-ads page=2051 gpu=0x1803000 phys=0x9FC000 pte=0x00000000009FC001
-intel/igpu770: ggtt-map label=guc-ads page=2052 gpu=0x1804000 phys=0x9FD000 pte=0x00000000009FD001
-intel/igpu770: ggtt-map label=guc-ads page=2053 gpu=0x1805000 phys=0x9FE000 pte=0x00000000009FE001
-intel/igpu770: ggtt-map label=guc-ads page=2054 gpu=0x1806000 phys=0x9FF000 pte=0x00000000009FF001
+intel/igpu770: ggtt-map label=guc-ads page=2051 gpu=0x1803000 phys=0xA7B000 pte=0x0000000000A7B001
+intel/igpu770: ggtt-map label=guc-ads page=2052 gpu=0x1804000 phys=0xA7C000 pte=0x0000000000A7C001
+intel/igpu770: ggtt-map label=guc-ads page=2053 gpu=0x1805000 phys=0xA7D000 pte=0x0000000000A7D001
+intel/igpu770: ggtt-map label=guc-ads page=2054 gpu=0x1806000 phys=0xA7E000 pte=0x0000000000A7E001
 intel/igpu770: ggtt-map summary ring=1 context=1 batch=1 result=1 guc_fw=1 guc_ads=1 gfx_flsh_cntl=0x00000000
 intel/igpu770: forcewake-all pre ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
-intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
-intel/igpu770: forcewake-all already-held ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
-intel/igpu770: forcewake-media-coverage label=already-held awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all stale-held-state render_awake=1 media_awake=0 gt_awake=1 reissuing-acquire
+intel/igpu770: forcewake-all acquire req=0x00000001 ack=0x00000001 cleared=0x00000000 clear_iters=0 iters=0 fallback=0 media_req=0x00010001 media_req_iters=0 media_ack=0x00000000 media_ack_iters=20000 media_ok=0 gt_req=0x00010001 gt_req_iters=0 gt_ack=0x00000001 gt_ack_iters=0 gt_ok=1
+intel/igpu770: forcewake-media-coverage label=post-acquire awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all coverage render_ack=1 media_ack=0 gt_ack=1 media_domains_awake=0
+intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries
 intel/igpu770: guc-fw reset gdrst_rb=0x00000000 gdrst_iters=4 mia_in_reset=1
-intel/igpu770: guc-fw ads minimal gpu=0x1000000 phys=0x1F9000 len=0x807000 policies=0x10011DC sysinfo=0x100123C private=0x1006000 doorbells=128
+intel/igpu770: guc-fw ads minimal gpu=0x1000000 phys=0x278000 len=0x807000 policies=0x10011DC sysinfo=0x100123C private=0x1006000 doorbells=128
 intel/igpu770: guc-fw params log=0x00000000 wa=0x00000000 feature=0x00000000 debug=0x00000040 ads=0x00002000 devid=0x4680000C scratch1=0x00000000 scratch5=0x00002000 scratch6=0x4680000C
 intel/igpu770: guc-fw css-parsed rev=r10 module_type=0x6 header_size_dw=0xA1 size_dw=0x14DF1 key_size_dw=0x40 modulus_size_dw=0x40 exponent_size_dw=0x1 sw_version=0x462C01 vf_version=0x11401 priv_data_sz=0x801000
-intel/igpu770: guc-fw bootstrap rev=guc-bootstrap-r14 src_gpu=0x850000 fw_phys=0x1A5000 fw_len=0x54000 xfer=0x535C0 ads_gpu=0x1000000 ads_len=0x807000 ads_ready=1 ads_param=0x00002000 wopcm_size=0x00100000 wopcm_size_rb=0x001F3001 wopcm_cfg=0x00004001 wopcm_locked=0 wopcm_calc_base=0x00004000 wopcm_calc_size=0x001F3000 status_before=0x00000001 status_after=0x00000072 status_final=0x8000F0EC status_iters=51783 shim=0x00008607 shim2=0x00000900 pm=0x00000001 pmintrmsk=0x00000000 dma_done=1 dma_iters=658 dma_ctrl=0x00000000 a0_lo=0x00850000 a0_hi=0x00080000 a1_lo=0x00002000 a1_hi=0x00070000 ready=1
+intel/igpu770: guc-fw bootstrap rev=guc-bootstrap-r14 src_gpu=0x850000 fw_phys=0x224000 fw_len=0x54000 xfer=0x535C0 ads_gpu=0x1000000 ads_len=0x807000 ads_ready=1 ads_param=0x00002000 wopcm_size=0x00100000 wopcm_size_rb=0x001F3001 wopcm_cfg=0x00004001 wopcm_locked=0 wopcm_calc_base=0x00004000 wopcm_calc_size=0x001F3000 status_before=0x00000001 status_after=0x00000072 status_final=0x8000F0EC status_iters=46218 shim=0x00008607 shim2=0x00000900 pm=0x00000001 pmintrmsk=0x00000000 dma_done=1 dma_iters=584 dma_ctrl=0x00000000 a0_lo=0x00850000 a0_hi=0x00080000 a1_lo=0x00002000 a1_hi=0x00070000 ready=1
 intel/igpu770: guc-fw status-decode bootrom=0x76(JUMP_PASSED) ukernel=0xF0(READY) auth=0x2 dma_off=0x0 rsa_off=0x535C0 rsa_size=0x100
-intel/igpu770: ggtt-bcs-smoke begin
-intel/igpu770: ggtt-plan label=ring gpu=0x800000 phys=0x18C000 size=0x1000 pages=1 aperture_backed=0
-intel/igpu770: ggtt-plan label=context gpu=0x810000 phys=0x18D000 size=0x16000 pages=22 aperture_backed=0
-intel/igpu770: ggtt-plan label=batch gpu=0x830000 phys=0x1A3000 size=0x1000 pages=1 aperture_backed=0
-intel/igpu770: ggtt-plan label=result gpu=0x840000 phys=0x1A4000 size=0x1000 pages=1 aperture_backed=0
-intel/igpu770: bcs-fill-plan dst_gpu=0x22840 dst_phys=0x4000022840 dst_xy=144x44 rect=512x512 pitch=0xC80 color=0x00FFFFFF result_gpu=0x840000 start=0x1CE0BC50 pre=0x1CE0BC51 post=0x1CE0BC52 done=0x1CE0BC53
-intel/igpu770: bcs-submit prep ring_start=0x00800000 ring_ctl=0x00000001 ring_tail=0x20 batch_tail=0x6C batch_gpu=0x830000 context_gpu=0x810000 ctx_desc_lo=0x0081031D ctx_desc_hi=0x00000000 result_phys=0x1A4000
-intel/igpu770: bcs-batch-dwords d0=0x00000000 d1=0x10400002 d2=0x00840000 d3=0x00000000 d4=0x1CE0BC50 d5=0x10400002 d6=0x00840008 d7=0x00000000
-intel/igpu770: forcewake-all pre ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
-intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
-intel/igpu770: forcewake-all already-held ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
-intel/igpu770: forcewake-media-coverage label=already-held awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
-intel/igpu770: bcs-execlist-submit context sq_lo_req=0x0081031D sq_hi_req=0x00000000 sq_lo_rb=0x0081031D sq_hi_rb=0x00000000 mode_rb=0x00000008 ctx_ctl_rb=0x0000000B ctx_ctl_ref_rb=0x00000000 el_ctl_rb=0x00000000 el_status_lo_rb=0x00003098 el_status_hi_rb=0x00000000
-intel/igpu770: forcewake-bcs sanity reg=BCS_IMR before=0x00000000 wrote=0x00000001 after=0x00000000 restored=0x00000000
-intel/igpu770: bcs-mode label=pre mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=0 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
-intel/igpu770: bcs-regs label=pre ctl=0x00000001 head=0x00000020 tail=0x00000020 start=0x00800000 mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00018098 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x00000002 instps=0x00002801 bbaddr=0x00830068 bbaddr_udw=0x00000000
-intel/igpu770: bcs-poll iter=0 head=0x00000020 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x00018098 execlist_hi=0x00000000 result0=0x1CE0BC50
-intel/igpu770: bcs-markers iter=0 start=0x1CE0BC50 pre=0x1CE0BC51 post=0x1CE0BC52 done=0x1CE0BC53
-intel/igpu770: bcs-mode label=post-complete mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=0 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
-intel/igpu770: bcs-regs label=post-complete ctl=0x00000001 head=0x00000020 tail=0x00000020 start=0x00800000 mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00018098 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x00000002 instps=0x00002801 bbaddr=0x00830068 bbaddr_udw=0x00000000
-intel/igpu770: bcs-submit result completed=1 iters=0 head0=0x00000020 tail0=0x00000020 headf=0x00000020 tailf=0x00000020 start=0x1CE0BC50 pre=0x1CE0BC51 post=0x1CE0BC52 done=0x1CE0BC53 expect_done=0x1CE0BC53 fb0=0x00038000 execlist_lo0=0x00018098 execlist_hi0=0x00000000 execlist_lof=0x00018098 execlist_hif=0x00000000 forcewake_held=1
+intel: smoke dispatch engine=rcs stage=begin
+intel/render-ngin: api route=render.rgb-triangle.submit workload=rgb-triangle class=render transport=rcs-execlist summary=submit an RGB triangle proof through the Xe-LP render ngin
 intel/igpu770: ggtt-rcs-smoke begin
 intel/igpu770: ggtt-plan label=ring gpu=0x800000 phys=0x18C000 size=0x1000 pages=1 aperture_backed=0
 intel/igpu770: ggtt-plan label=context gpu=0x810000 phys=0x18D000 size=0x16000 pages=22 aperture_backed=0
-intel/igpu770: ggtt-plan label=batch gpu=0x830000 phys=0x1A3000 size=0x1000 pages=1 aperture_backed=0
-intel/igpu770: ggtt-plan label=result gpu=0x840000 phys=0x1A4000 size=0x1000 pages=1 aperture_backed=0
-intel/igpu770: rcs-store-plan dst_gpu=0x0 dst_phys=0x4000000000 dst_xy=0x0 rect=64x64 pitch=0xC80 color=0x00FF4A24
-intel/igpu770: rcs-submit prep ring_start=0x00800000 ring_ctl=0x00000001 tail=0x10 batch_gpu=0x830000 context_gpu=0x810000 ctx_desc_lo=0x0081031D ctx_desc_hi=0x00000000 result_phys=0x1A4000
+intel/igpu770: ggtt-plan label=batch gpu=0x830000 phys=0x1A3000 size=0x80000 pages=128 aperture_backed=0
+intel/igpu770: ggtt-plan label=result gpu=0x840000 phys=0x223000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: rcs-triangle-plan dst_gpu=0x869C0 dst_phys=0x40000869C0 dst_xy=240x172 rect=320x256 pitch=0xC80 marker=0xC0DE7701
+intel/igpu770: fb-probe label=rcs-pre-origin xy=240x172 off=0x869C0 phys=0x40000869C0 value=0x00000000
+intel/igpu770: fb-probe label=rcs-pre-tail xy=559x427 off=0x14E23C phys=0x400014E23C value=0x00000000
+intel/igpu770: fb-probe label=rcs-pre-apex xy=400x291 off=0xE3BC0 phys=0x40000E3BC0 value=0x00000000
+intel/igpu770: fb-probe label=rcs-pre-left xy=390x306 off=0xEF718 phys=0x40000EF718 value=0x00000000
+intel/igpu770: fb-probe label=rcs-pre-right xy=410x306 off=0xEF768 phys=0x40000EF768 value=0x00000000
+intel/igpu770: fb-probe label=rcs-pre-center xy=400x300 off=0xEAC40 phys=0x40000EAC40 value=0x00000000
+intel/igpu770: rcs-submit prep ring_start=0x00800000 ring_ctl=0x00000001 tail=0x10 batch_gpu=0x830000 context_gpu=0x810000 ctx_desc_lo=0x0081031D ctx_desc_hi=0x00000000 result_phys=0x223000
 intel/igpu770: forcewake-all pre ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
-intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
-intel/igpu770: forcewake-all already-held ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
-intel/igpu770: forcewake-media-coverage label=already-held awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all stale-held-state render_awake=1 media_awake=0 gt_awake=1 reissuing-acquire
+intel/igpu770: forcewake-all acquire req=0x00000001 ack=0x00000001 cleared=0x00000000 clear_iters=0 iters=0 fallback=0 media_req=0x00010001 media_req_iters=0 media_ack=0x00000000 media_ack_iters=20000 media_ok=0 gt_req=0x00010001 gt_req_iters=0 gt_ack=0x00000001 gt_ack_iters=0 gt_ok=1
+intel/igpu770: forcewake-media-coverage label=post-acquire awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all coverage render_ack=1 media_ack=0 gt_ack=1 media_domains_awake=0
+intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries
 intel/igpu770: execlist-submit context sq_lo_req=0x0081031D sq_hi_req=0x00000000 sq_lo_rb=0x0081031D sq_hi_rb=0x00000000 mode_rb=0x00000008 ctx_ctl_rb=0x0000000B ctx_ctl_ref_rb=0x00000000 el_ctl_rb=0x00000000 el_status_lo_rb=0x00003098 el_status_hi_rb=0x00000000
 intel/igpu770: forcewake-render sanity-target block=RCS reg=RCS_RING_IMR off=0x020A8 desc=interrupt mask register for the render engine
 intel/igpu770: forcewake-render sanity reg=RCS_IMR before=0x00000000 wrote=0x00000001 after=0x00000000 restored=0x00000000
-intel/igpu770: rcs-mode label=pre mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=1 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
-intel/igpu770: rcs-regs label=pre ctl=0x00000000 head=0x00000010 tail=0x00000010 start=0x00800000 mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00018001 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0xFFFFFFFE instps=0x00000001 bbaddr=0x00830FF4 bbaddr_udw=0x00000000
-intel/igpu770: rcs-mode label=submitted mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=1 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
-intel/igpu770: rcs-regs label=submitted ctl=0x00000000 head=0x00000010 tail=0x00000010 start=0x00800000 mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00018001 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0xFFFFFFFE instps=0x00000001 bbaddr=0x00830FF4 bbaddr_udw=0x00000000
-intel/igpu770: rcs-poll iter=0 head=0x00000010 tail=0x00000010 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0xFFFFFFFE execlist_lo=0x00018001 execlist_hi=0x00000000 result0=0xC0DE7701
-intel/igpu770: rcs-mode label=post-complete mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=1 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
-intel/igpu770: rcs-regs label=post-complete ctl=0x00000000 head=0x00000010 tail=0x00000010 start=0x00800000 mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00018001 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0xFFFFFFFE instps=0x00000001 bbaddr=0x00830FF4 bbaddr_udw=0x00000000
-intel/igpu770: rcs-submit result completed=1 iters=0 head0=0x00000010 tail0=0x00000010 headf=0x00000010 tailf=0x00000010 result0=0xC0DE7701 expect=0xC0DE7701 fb0=0x00000100 execlist_lo0=0x00018001 execlist_hi0=0x00000000 execlist_lof=0x00018001 execlist_hif=0x00000000 forcewake_held=1
+intel/igpu770: rcs-mode label=pre mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=0 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
+intel/igpu770: rcs-regs label=pre ctl=0x00000001 head=0x0000000C tail=0x00000010 start=0x00800000 mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00003098 execlist_hi=0x00000000 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 emr=0xFFFFFFFF instdone=0xFFDFFFFF instps=0x00009001 bbaddr=0x00830001 bbaddr_udw=0x00000000
+intel/igpu770: rcs-mode label=submitted mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=0 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
+intel/igpu770: rcs-regs label=submitted ctl=0x00000001 head=0x0000000C tail=0x00000010 start=0x00800000 mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00003098 execlist_hi=0x00000000 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 emr=0xFFFFFFFF instdone=0xFFDFFFFF instps=0x00009001 bbaddr=0x00830001 bbaddr_udw=0x00000000
+intel/igpu770: rcs-poll iter=0 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=256 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=512 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=768 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=1024 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=1280 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=1536 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=1792 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=2048 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=2304 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=2560 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=2816 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=3072 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=3328 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=3584 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: rcs-poll iter=3840 head=0x0000000C tail=0x00000010 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 mode=0x00000008 instdone=0xFFDFFFFF execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0xC0DE7700
+intel/igpu770: fb-probe label=rcs-post-origin xy=240x172 off=0x869C0 phys=0x40000869C0 value=0x00000000
+intel/igpu770: fb-probe label=rcs-post-tail xy=559x427 off=0x14E23C phys=0x400014E23C value=0x00000000
+intel/igpu770: fb-probe label=rcs-post-apex xy=400x291 off=0xE3BC0 phys=0x40000E3BC0 value=0x00000000
+intel/igpu770: fb-probe label=rcs-post-left xy=390x306 off=0xEF718 phys=0x40000EF718 value=0x00000000
+intel/igpu770: fb-probe label=rcs-post-right xy=410x306 off=0xEF768 phys=0x40000EF768 value=0x00000000
+intel/igpu770: fb-probe label=rcs-post-center xy=400x300 off=0xEAC40 phys=0x40000EAC40 value=0x00000000
+intel/igpu770: rcs-mode label=post-timeout mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=0 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
+intel/igpu770: rcs-regs label=post-timeout ctl=0x00000001 head=0x0000000C tail=0x00000010 start=0x00800000 mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00003098 execlist_hi=0x00000000 acthd=0x00830000 ipeir=0x00000000 ipehr=0x18800101 eir=0x00000000 emr=0xFFFFFFFF instdone=0xFFDFFFFF instps=0x00009001 bbaddr=0x00830001 bbaddr_udw=0x00000000
+intel/igpu770: rcs-submit result completed=0 iters=4096 head0=0x0000000C tail0=0x00000010 headf=0x0000000C tailf=0x00000010 result0=0xC0DE7700 expect=0xC0DE7701 fb0=0x00008000 execlist_lo0=0x00003098 execlist_hi0=0x00000000 execlist_lof=0x00003098 execlist_hif=0x00000000 forcewake_held=1
+intel: smoke dispatch engine=rcs stage=end
+intel: smoke dispatch engine=bcs stage=begin
+intel/igpu770: ggtt-bcs-smoke entry ran_before=0
+intel/igpu770: ggtt-bcs-smoke begin
+intel/igpu770: ggtt-plan label=ring gpu=0x800000 phys=0x18C000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: ggtt-plan label=context gpu=0x810000 phys=0x18D000 size=0x16000 pages=22 aperture_backed=0
+intel/igpu770: ggtt-plan label=batch gpu=0x830000 phys=0x1A3000 size=0x80000 pages=128 aperture_backed=0
+intel/igpu770: ggtt-plan label=result gpu=0x840000 phys=0x223000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: bcs-fill-plan dst_gpu=0x15E40 dst_phys=0x4000015E40 dst_xy=16x28 rect=768x544 pitch=0xC80 color=0x00FFFFFF result_gpu=0x840000 start=0x1CE0BC50 pre=0x1CE0BC51 post=0x1CE0BC52 done=0x1CE0BC53
+intel/igpu770: fb-probe label=bcs-pre-origin xy=16x28 off=0x15E40 phys=0x4000015E40 value=0x00000000
+intel/igpu770: fb-probe label=bcs-pre-center xy=400x300 off=0xEAC40 phys=0x40000EAC40 value=0x00000000
+intel/igpu770: bcs-submit prep ring_start=0x00800000 ring_ctl=0x00000001 ring_tail=0x20 batch_tail=0xF4C batch_gpu=0x830000 context_gpu=0x810000 ctx_desc_lo=0x0081031D ctx_desc_hi=0x00000000 result_phys=0x223000
+intel/igpu770: bcs-batch-dwords d0=0x00000000 d1=0x10400002 d2=0x00840000 d3=0x00000000 d4=0x1CE0BC50 d5=0x10400002 d6=0x00840008 d7=0x00000000
 intel/igpu770: forcewake-all pre ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
-intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
-intel/igpu770: forcewake-all already-held ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
-intel/igpu770: forcewake-media-coverage label=already-held awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
-intel/igpu770: forcewake-media-coverage label=media-kickoff awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all stale-held-state render_awake=1 media_awake=0 gt_awake=1 reissuing-acquire
+intel/igpu770: forcewake-all acquire req=0x00000001 ack=0x00000001 cleared=0x00000000 clear_iters=0 iters=0 fallback=0 media_req=0x00010001 media_req_iters=0 media_ack=0x00000000 media_ack_iters=20000 media_ok=0 gt_req=0x00010001 gt_req_iters=0 gt_ack=0x00000001 gt_ack_iters=0 gt_ok=1
+intel/igpu770: forcewake-media-coverage label=post-acquire awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all coverage render_ack=1 media_ack=0 gt_ack=1 media_domains_awake=0
+intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries
+intel/igpu770: bcs-execlist-submit context sq_lo_req=0x0081031D sq_hi_req=0x00000000 sq_lo_rb=0x0081031D sq_hi_rb=0x00000000 mode_rb=0x00000008 ctx_ctl_rb=0x0000000B ctx_ctl_ref_rb=0x00000000 el_ctl_rb=0x00000000 el_status_lo_rb=0x00003098 el_status_hi_rb=0x00000000
+intel/igpu770: forcewake-bcs sanity reg=BCS_IMR before=0x00000000 wrote=0x00000001 after=0x00000000 restored=0x00000000
+intel/igpu770: bcs-mode label=pre mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=1 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
+intel/igpu770: bcs-regs label=pre ctl=0x00000000 head=0x00000020 tail=0x00000020 start=0x00800000 mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00018001 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x0000000A instps=0x00000001 bbaddr=0x00830F48 bbaddr_udw=0x00000000
+intel/igpu770: bcs-poll iter=0 head=0x00000020 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x0000000A execlist_lo=0x00018001 execlist_hi=0x00000000 result0=0x1CE0BC50
+intel/igpu770: bcs-markers iter=0 start=0x1CE0BC50 pre=0x1CE0BC51 post=0x1CE0BC52 done=0x1CE0BC53
+intel/igpu770: fb-probe label=bcs-post-origin xy=16x28 off=0x15E40 phys=0x4000015E40 value=0x00000000
+intel/igpu770: fb-probe label=bcs-post-center xy=400x300 off=0xEAC40 phys=0x40000EAC40 value=0x0000FFFF
+intel/igpu770: bcs-mode label=post-complete mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=1 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
+intel/igpu770: bcs-regs label=post-complete ctl=0x00000000 head=0x00000020 tail=0x00000020 start=0x00800000 mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00018001 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x0000000A instps=0x00000001 bbaddr=0x00830F48 bbaddr_udw=0x00000000
+intel/igpu770: bcs-submit result completed=1 iters=0 head0=0x00000020 tail0=0x00000020 headf=0x00000020 tailf=0x00000020 start=0x1CE0BC50 pre=0x1CE0BC51 post=0x1CE0BC52 done=0x1CE0BC53 expect_done=0x1CE0BC53 fb0=0x00030100 execlist_lo0=0x00018001 execlist_hi0=0x00000000 execlist_lof=0x00018001 execlist_hif=0x00000000 forcewake_held=1
+intel: smoke dispatch engine=bcs stage=end
+intel/igpu770: cpu-fb-stamp label=post-gpu-smokes tl=1 br=1 dims=800x600 pitch=0xC80
+intel/igpu770: fb-probe label=cpu-stamp-tl xy=0x0 off=0x0 phys=0x4000000000 value=0x00FF2A00
+intel/igpu770: fb-probe label=cpu-stamp-br xy=704x504 off=0x18A700 phys=0x400018A700 value=0x00FFFFFF
+intel/igpu770: forcewake-all pre ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
+intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all stale-held-state render_awake=1 media_awake=0 gt_awake=1 reissuing-acquire
+intel/igpu770: forcewake-all acquire req=0x00000001 ack=0x00000001 cleared=0x00000000 clear_iters=0 iters=0 fallback=0 media_req=0x00010001 media_req_iters=0 media_ack=0x00000000 media_ack_iters=20000 media_ok=0 gt_req=0x00010001 gt_req_iters=0 gt_ack=0x00000001 gt_ack_iters=0 gt_ok=1
+intel/igpu770: forcewake-media-coverage label=post-acquire awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all coverage render_ack=1 media_ack=0 gt_ack=1 media_domains_awake=0
+intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries
+intel/igpu770: forcewake-media-coverage label=media-kickoff awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
 intel/igpu770: forcewake-media-refresh label=media-kickoff req_before=0x00010001 req_after=0x00010001 ack_before=0x00000000 ack_after=0x00000000 req_latched=1 acked=0 req_iters=0 ack_iters=20000 awake=0/8
-intel/media: kickoff summary sku=xelp-media-kickoff active=2 planned=4 transport=guc stage=submission-wiring guc_ready=1 guc_status=0x8002F0EC render_forcewake_ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 media_domains_awake=0/8
-intel/media: api route=media.decode.submit workload=decode-frame class=video-decode transport=guc summary=submit a decode-oriented session through the planned VCS path
-intel/media: api route=media.decode.bitstream workload=decode-bitstream class=video-decode transport=guc summary=reserve decode staging, patch buffers, and queue a bitstream-style workload
-intel/media: api route=media.enhance.submit workload=enhance-frame class=video-enhancement transport=guc summary=submit a VEBox-style enhancement workload through the kickoff API
-intel/media: api route=media.observe.snapshot workload=session-snapshot class=any transport=guc summary=snapshot the planned media rings, result slots, and forcewake coverage
-intel/media: api route=media.engine.smoke workload=smoke class=any transport=guc summary=run a future media-engine smoke path with the same kickoff resource layout
-intel/media: plan engine=vcs0 class=video-decode provisioning=kickoff ring_base=0x1C0000 ring=0x1200000 ctx=0x1210000 batch=0x1280000 scratch=0x1300000 result=0x1380000 queue_depth=2 completion=result-memory-poll next_stage=submission-wiring observed=1 ctl=0x00000000 head=0x00000000 tail=0x00000000 execlist_lo=0x00000001 execlist_hi=0x00000000
-intel/media: plan engine=vecs0 class=video-enhancement provisioning=kickoff ring_base=0x1C8000 ring=0x1400000 ctx=0x1410000 batch=0x1480000 scratch=0x1500000 result=0x1580000 queue_depth=1 completion=result-memory-poll next_stage=submission-wiring observed=1 ctl=0x00000000 head=0x00000000 tail=0x00000000 execlist_lo=0x00000001 execlist_hi=0x00000000
-intel/media: plan engine=vcs1 class=video-decode provisioning=scaleout-reserve ring_base=0x1C4000 ring=0x1600000 ctx=0x1610000 batch=0x1680000 scratch=0x1700000 result=0x1780000 queue_depth=2 completion=result-memory-poll next_stage=resource-planning observed=0 ctl=0x00000000 head=0x00000000 tail=0x00000000 execlist_lo=0x00000000 execlist_hi=0x00000000
-intel/media: plan engine=vecs1 class=video-enhancement provisioning=scaleout-reserve ring_base=0x1D8000 ring=0x1800000 ctx=0x1810000 batch=0x1880000 scratch=0x1900000 result=0x1980000 queue_depth=1 completion=result-memory-poll next_stage=resource-planning observed=0 ctl=0x00000000 head=0x00000000 tail=0x00000000 execlist_lo=0x00000000 execlist_hi=0x00000000
-intel/media: forcewake slice=vdbox4 awake=0 raw=0x00000000
-intel/media: forcewake slice=vdbox5 awake=0 raw=0x00000000
-intel/media: forcewake slice=vdbox6 awake=0 raw=0x00000000
-intel/media: forcewake slice=vdbox7 awake=0 raw=0x00000000
+intel/media: kickoff summary sku=xelp-media-kickoff active=2 planned=4 transport=execlists stage=submission-wiring guc_ready=1 guc_status=0x8002F0EC render_forcewake_ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 media_domains_awake=0/8
+intel/media: api route=media.decode.submit workload=decode-frame class=video-decode transport=execlists summary=submit a decode-oriented session through the planned VCS path
+intel/media: api route=media.decode.bitstream workload=decode-bitstream class=video-decode transport=execlists summary=reserve decode staging, patch buffers, and queue a bitstream-style workload
+intel/media: api route=media.enhance.submit workload=enhance-frame class=video-enhancement transport=execlists summary=submit a VEBox-style enhancement workload through the kickoff API
+intel/media: api route=media.observe.snapshot workload=session-snapshot class=any transport=execlists summary=snapshot the planned media rings, result slots, and forcewake coverage
+intel/media: api route=media.engine.smoke workload=smoke class=any transport=execlists summary=run a future media-engine smoke path with the same kickoff resource layout
+intel/media: plan engine=vcs0 class=video-decode provisioning=kickoff ring_base=0x1C0000 ring=0x1200000 ctx=0x1210000 batch=0x1280000 scratch=0x1300000 bitstream=0x1340000 output=0x1400000 result=0x1500000 queue_depth=2 completion=result-memory-poll next_stage=submission-wiring observed=1 ctl=0x00000000 head=0x00000000 tail=0x00000000 execlist_lo=0x00000001 execlist_hi=0x00000000
+intel/media: plan engine=vecs0 class=video-enhancement provisioning=kickoff ring_base=0x1C8000 ring=0x1600000 ctx=0x1610000 batch=0x1680000 scratch=0x1700000 bitstream=0x1740000 output=0x1800000 result=0x1900000 queue_depth=1 completion=result-memory-poll next_stage=submission-wiring observed=1 ctl=0x00000000 head=0x00000000 tail=0x00000000 execlist_lo=0x00000001 execlist_hi=0x00000000
+intel/media: plan engine=vcs1 class=video-decode provisioning=scaleout-reserve ring_base=0x1C4000 ring=0x1A00000 ctx=0x1A10000 batch=0x1A80000 scratch=0x1B00000 bitstream=0x1B40000 output=0x1C00000 result=0x1D00000 queue_depth=2 completion=result-memory-poll next_stage=resource-planning observed=0 ctl=0x00000000 head=0x00000000 tail=0x00000000 execlist_lo=0x00000000 execlist_hi=0x00000000
+intel/media: plan engine=vecs1 class=video-enhancement provisioning=scaleout-reserve ring_base=0x1D8000 ring=0x1E00000 ctx=0x1E10000 batch=0x1E80000 scratch=0x1F00000 bitstream=0x1F40000 output=0x2000000 result=0x2100000 queue_depth=1 completion=result-memory-poll next_stage=resource-planning observed=0 ctl=0x00000000 head=0x00000000 tail=0x00000000 execlist_lo=0x00000000 execlist_hi=0x00000000
+intel/media: forcewake slice=vdbox0 awake=0 raw=0x00000000
+intel/media: forcewake slice=vdbox1 awake=0 raw=0x00000000
+intel/media: forcewake slice=vdbox2 awake=0 raw=0x00000000
+intel/media: forcewake slice=vdbox3 awake=0 raw=0x00000000
 intel/media: forcewake slice=vebox0 awake=0 raw=0x00000000
 intel/media: forcewake slice=vebox1 awake=0 raw=0x00000000
 intel/media: forcewake slice=vebox2 awake=0 raw=0x00000000
 intel/media: forcewake slice=vebox3 awake=0 raw=0x00000000
-intel/media: draft-decode engine=vcs0 class=video-decode provisioning=kickoff transport=guc workload=decode-frame ring=0x1200000 ctx=0x1210000 batch=0x1280000 scratch=0x1300000 result=0x1380000 next_stage=submission-wiring completion_addr=0x1380018
-intel/media: draft-enhance engine=vecs0 class=video-enhancement provisioning=kickoff transport=guc workload=enhance-frame ring=0x1400000 ctx=0x1410000 batch=0x1480000 scratch=0x1500000 result=0x1580000 next_stage=submission-wiring completion_addr=0x1580018
+intel/media: draft-decode engine=vcs0 class=video-decode provisioning=kickoff transport=execlists workload=decode-frame ring=0x1200000 ctx=0x1210000 batch=0x1280000 scratch=0x1300000 bitstream=0x1340000 output=0x1400000 result=0x1500000 next_stage=submission-wiring completion_addr=0x1500018
+intel/media: draft-enhance engine=vecs0 class=video-enhancement provisioning=kickoff transport=execlists workload=enhance-frame ring=0x1600000 ctx=0x1610000 batch=0x1680000 scratch=0x1700000 bitstream=0x1740000 output=0x1800000 result=0x1900000 next_stage=submission-wiring completion_addr=0x1900018
 intel: display discovery deferred (render-first mode; run display-engine probe later)
 intel: display discovery render-first prerequisite complete; continuing with display-engine probe
 intel: display discovery begin bdf=00:02.0 device=0x4680 bar0=0x60E7000000 mmio_len=0x1000000 aperture=0x10000000
 intel/display-ngin: early label=discovery power_mask=0x000000FF dc_state_en=0x00000000 dc_state_debug=0x00000000 pll=0xC0000022 hotplug=0x00000000 gt_disp_pwron=0x00000000 power_visible=1 pll_seeded=1 hotplug_configured=0 next_gt_disp_pwron=0x00000001
 intel: display-ngin stub summary power_visible=1 dc_state_mask=0x00000000 next_gt_disp_pwron=0x00000001
 intel: display discovery step=probe scope=power+routing
-intel: display-power probe phy_misc_a=0x23000000 phy_misc_b=0x20000000 tx_bmu=0xFB0E0FF0 de_pll_ctl=0xFFFFFFFF de_pll_enable=0xC0000022 dc_state_en=0x00000000 dc_state_debug=0x00000000 hotplug=0x00000000 gt_disp_pwron=0x00000000
+intel: display-power probe phy_misc_a=0x23000000 phy_misc_b=0x20000000 tx_bmu=0xFB0F0FF0 de_pll_ctl=0xFFFFFFFF de_pll_enable=0xC0000022 dc_state_en=0x00000000 dc_state_debug=0x00000000 hotplug=0x00000000 gt_disp_pwron=0x00000000
 intel: display-routing probe hotplug_en=0x00000000 trans_a=0xA1030100 trans_b=0x00030000 trans_c=0x00030000 trans_d=0x00000000 pipe_a=0x00000000 pipe_b=0x00000000 pipe_c=0x00000000 pipe_d=0x00000000
 intel: display discovery step=smoke action=request-display-power
 intel/igpu770: forcewake-all pre ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
-intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
-intel/igpu770: forcewake-all already-held ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
-intel/igpu770: forcewake-media-coverage label=already-held awake=0/8 vdbox4=0x00000000 vdbox5=0x00000000 vdbox6=0x00000000 vdbox7=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all stale-held-state render_awake=1 media_awake=0 gt_awake=1 reissuing-acquire
+intel/igpu770: forcewake-all acquire req=0x00000001 ack=0x00000001 cleared=0x00000000 clear_iters=0 iters=0 fallback=0 media_req=0x00010001 media_req_iters=0 media_ack=0x00000000 media_ack_iters=20000 media_ok=0 gt_req=0x00010001 gt_req_iters=0 gt_ack=0x00000001 gt_ack_iters=0 gt_ok=1
+intel/igpu770: forcewake-media-coverage label=post-acquire awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all coverage render_ack=1 media_ack=0 gt_ack=1 media_domains_awake=0
+intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries
 intel/igpu770: display-power-request register=GT_DISP_PWRON orig=0x00000000 req=0x00000003 rb=0x00000000 clk5_rb=0x00020000 dcpr1_rb=0x00002008 poll_iters=1024 latched=0
 intel: display discovery result gt_disp_pwron_latched=0
 intel/display-ngin: kickoff summary sku=xelp-display-kickoff stage=present-api guc_ready=1 active=1 planned=4 routed=1 default_pipe=pipe-a power_visible=1 power_latched=0 pll_seeded=1 hotplug_configured=0 next_gt_disp_pwron=0x00000001
@@ -160,5 +215,120 @@ intel/display-ngin: plan pipe=pipe-c provisioning=reserve next_stage=power-armed
 intel/display-ngin: plan pipe=pipe-d provisioning=reserve next_stage=power-armed observed=0 active=0 trans_enabled=0 plane_enabled=0 pipe_src=0x00000000 size=0x0 trans=0x00000000 ctl=0x00000000 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 staging_gpu=0x2300000 shadow_gpu=0x2380000 cursor_gpu=0x23C0000 surface_bytes=0x1D4C00 staging=copy commit=full-modeset async=guc-reserved
 intel/display-ngin: draft-present pipe=pipe-a workload=primary-present staging=copy commit=fastset-flip async=guc-reserved surface=800x600 pitch=0xC80 format=xrgb8888 layout=linear next_stage=present-api staging_gpu=0x2000000
 intel/display-ngin: draft-modeset pipe=pipe-b workload=modeset-bootstrap staging=none commit=full-modeset async=inline surface=800x600 pitch=0xC80 format=xrgb8888 layout=linear next_stage=modeset-skeleton staging_gpu=0x2100000
+intel/igpu770: cpu-fb-stamp label=post-display-discovery tl=1 br=1 dims=800x600 pitch=0xC80
+intel/igpu770: fb-probe label=cpu-stamp-tl xy=0x0 off=0x0 phys=0x4000000000 value=0x00FF2A00
+intel/igpu770: fb-probe label=cpu-stamp-br xy=704x504 off=0x18A700 phys=0x400018A700 value=0x00FFFFFF
+intel/media-demo: begin url=https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_1MB.mp4 timeout_ms=45000 max_bytes=2097152
+dns: resolved host=test-videos.co.uk dev=0 ip=172.67.192.184
+vhttps-ka: connect host=test-videos.co.uk dev=0 fresh=1
+tls-socket: net via vnet owner=vhttps-ka-1@02:00.0 conn=1 device=0
+vhttps-ka: opened host=test-videos.co.uk dev=0 handle=10
+crabusb: controller 0 quarantined; auto-rebind disabled until manual rebind request
+net: icmp ping dev=0 src=192.168.178.94 seq=2 -> 192.168.178.1
+net: icmp pong dev=0 local=192.168.178.94 seq=2 rtt=83ms
+net: icmp ok dev=0 (gateway reachable)
+tls-socket: tcp established owner=vhttps-ka-1@02:00.0 handle=10
+tls-socket: tls connected owner=vhttps-ka-1@02:00.0 handle=10
+vhttps-ka: tls-connected host=test-videos.co.uk dev=0 handle=10
+vhttps-ka: request host=test-videos.co.uk dev=0 reused=0
+vhttps-ka: request-sent host=test-videos.co.uk dev=0 handle=10 bytes=195 path=/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_1MB.mp4
+vhttps-ka: first-data host=test-videos.co.uk dev=0 handle=10 bytes=4806
+logtotcp: client connected handle=5
+intel/media-demo: fetched bytes=969201 mp4_ftyp=1 mp4_moov=1 mp4_mdat=1 first_box_size=0x00000020
+intel/media-demo: forged-ingress stage=fetch->stage->visualize decode_ready=1 decode_impl=0
+intel/media-demo: h264 track=1 dims=1280x720 timescale=15360 duration=153600 samples=300 first_chunk=0xFA2 first_sample=77331 nal_len=4 sps=27 pps=7 profile=0x64 level=0x32
+intel/media-demo: first-sample nal[0]=0x06
+intel/media-demo: first-sample nal[1]=0x05
+intel/media-demo: annexb au0 bytes=77373 sample_nals=2 idr=1 stage=bitstream-ready
+intel/igpu770: ggtt-plan label=media-ring gpu=0x1200000 phys=0x1AC0000 size=0x4000 pages=4 aperture_backed=0
+intel/igpu770: ggtt-map label=media-ring page=0 gpu=0x1200000 phys=0x1AC0000 pte=0x0000000001AC0001
+intel/igpu770: ggtt-map label=media-ring page=1 gpu=0x1201000 phys=0x1AC1000 pte=0x0000000001AC1001
+intel/igpu770: ggtt-map label=media-ring page=2 gpu=0x1202000 phys=0x1AC2000 pte=0x0000000001AC2001
+intel/igpu770: ggtt-map label=media-ring page=3 gpu=0x1203000 phys=0x1AC3000 pte=0x0000000001AC3001
+intel/igpu770: ggtt-plan label=media-context gpu=0x1210000 phys=0x1AC4000 size=0x16000 pages=22 aperture_backed=0
+intel/igpu770: ggtt-map label=media-context page=0 gpu=0x1210000 phys=0x1AC4000 pte=0x0000000001AC4001
+intel/igpu770: ggtt-map label=media-context page=1 gpu=0x1211000 phys=0x1AC5000 pte=0x0000000001AC5001
+intel/igpu770: ggtt-map label=media-context page=2 gpu=0x1212000 phys=0x1AC6000 pte=0x0000000001AC6001
+intel/igpu770: ggtt-map label=media-context page=3 gpu=0x1213000 phys=0x1AC7000 pte=0x0000000001AC7001
+intel/igpu770: ggtt-map label=media-context omitted_pages=14 total_pages=22 log_policy=head-tail edge_pages=4
+intel/igpu770: ggtt-map label=media-context page=18 gpu=0x1222000 phys=0x1AD6000 pte=0x0000000001AD6001
+intel/igpu770: ggtt-map label=media-context page=19 gpu=0x1223000 phys=0x1AD7000 pte=0x0000000001AD7001
+intel/igpu770: ggtt-map label=media-context page=20 gpu=0x1224000 phys=0x1AD8000 pte=0x0000000001AD8001
+intel/igpu770: ggtt-map label=media-context page=21 gpu=0x1225000 phys=0x1AD9000 pte=0x0000000001AD9001
+intel/igpu770: ggtt-plan label=media-batch gpu=0x1280000 phys=0x1ADA000 size=0x8000 pages=8 aperture_backed=0
+intel/igpu770: ggtt-map label=media-batch page=0 gpu=0x1280000 phys=0x1ADA000 pte=0x0000000001ADA001
+intel/igpu770: ggtt-map label=media-batch page=1 gpu=0x1281000 phys=0x1ADB000 pte=0x0000000001ADB001
+intel/igpu770: ggtt-map label=media-batch page=2 gpu=0x1282000 phys=0x1ADC000 pte=0x0000000001ADC001
+intel/igpu770: ggtt-map label=media-batch page=3 gpu=0x1283000 phys=0x1ADD000 pte=0x0000000001ADD001
+intel/igpu770: ggtt-map label=media-batch page=4 gpu=0x1284000 phys=0x1ADE000 pte=0x0000000001ADE001
+intel/igpu770: ggtt-map label=media-batch page=5 gpu=0x1285000 phys=0x1ADF000 pte=0x0000000001ADF001
+intel/igpu770: ggtt-map label=media-batch page=6 gpu=0x1286000 phys=0x1AE0000 pte=0x0000000001AE0001
+intel/igpu770: ggtt-map label=media-batch page=7 gpu=0x1287000 phys=0x1AE1000 pte=0x0000000001AE1001
+intel/igpu770: ggtt-plan label=media-result gpu=0x1500000 phys=0x1AE2000 size=0x4000 pages=4 aperture_backed=0
+intel/igpu770: ggtt-map label=media-result page=0 gpu=0x1500000 phys=0x1AE2000 pte=0x0000000001AE2001
+intel/igpu770: ggtt-map label=media-result page=1 gpu=0x1501000 phys=0x1AE3000 pte=0x0000000001AE3001
+intel/igpu770: ggtt-map label=media-result page=2 gpu=0x1502000 phys=0x1AE4000 pte=0x0000000001AE4001
+intel/igpu770: ggtt-map label=media-result page=3 gpu=0x1503000 phys=0x1AE5000 pte=0x0000000001AE5001
+intel/igpu770: ggtt-plan label=media-bitstream gpu=0x1340000 phys=0x1AE6000 size=0x40000 pages=64 aperture_backed=0
+intel/igpu770: ggtt-map label=media-bitstream page=0 gpu=0x1340000 phys=0x1AE6000 pte=0x0000000001AE6001
+intel/igpu770: ggtt-map label=media-bitstream page=1 gpu=0x1341000 phys=0x1AE7000 pte=0x0000000001AE7001
+intel/igpu770: ggtt-map label=media-bitstream page=2 gpu=0x1342000 phys=0x1AE8000 pte=0x0000000001AE8001
+intel/igpu770: ggtt-map label=media-bitstream page=3 gpu=0x1343000 phys=0x1AE9000 pte=0x0000000001AE9001
+intel/igpu770: ggtt-map label=media-bitstream omitted_pages=56 total_pages=64 log_policy=head-tail edge_pages=4
+intel/igpu770: ggtt-map label=media-bitstream page=60 gpu=0x137C000 phys=0x1B22000 pte=0x0000000001B22001
+intel/igpu770: ggtt-map label=media-bitstream page=61 gpu=0x137D000 phys=0x1B23000 pte=0x0000000001B23001
+intel/igpu770: ggtt-map label=media-bitstream page=62 gpu=0x137E000 phys=0x1B24000 pte=0x0000000001B24001
+intel/igpu770: ggtt-map label=media-bitstream page=63 gpu=0x137F000 phys=0x1B25000 pte=0x0000000001B25001
+intel/igpu770: ggtt-plan label=media-output-surface gpu=0x1400000 phys=0x1B26000 size=0x400000 pages=1024 aperture_backed=0
+intel/igpu770: ggtt-map label=media-output-surface page=0 gpu=0x1400000 phys=0x1B26000 pte=0x0000000001B26001
+intel/igpu770: ggtt-map label=media-output-surface page=1 gpu=0x1401000 phys=0x1B27000 pte=0x0000000001B27001
+intel/igpu770: ggtt-map label=media-output-surface page=2 gpu=0x1402000 phys=0x1B28000 pte=0x0000000001B28001
+intel/igpu770: ggtt-map label=media-output-surface page=3 gpu=0x1403000 phys=0x1B29000 pte=0x0000000001B29001
+intel/igpu770: ggtt-map label=media-output-surface omitted_pages=1016 total_pages=1024 log_policy=head-tail edge_pages=4
+intel/igpu770: ggtt-map label=media-output-surface page=1020 gpu=0x17FC000 phys=0x1F22000 pte=0x0000000001F22001
+intel/igpu770: ggtt-map label=media-output-surface page=1021 gpu=0x17FD000 phys=0x1F23000 pte=0x0000000001F23001
+intel/igpu770: ggtt-map label=media-output-surface page=1022 gpu=0x17FE000 phys=0x1F24000 pte=0x0000000001F24001
+intel/igpu770: ggtt-map label=media-output-surface page=1023 gpu=0x17FF000 phys=0x1F25000 pte=0x0000000001F25001
+intel/media-demo: lrc-image engine=vcs0 context_gpu=0x1210000 pphwsp_gpu=0x1210000 lrc_off_dw=1024 ctx=0x00090009 head=0x00000000 tail=0x00000038 start=0x01200000 ctl=0x00003001 hws=0x01210000 bbaddr=0x00000000 bbaddr_udw=0x00000000
+intel/media-demo: lrc-dwords engine=vcs0 d0=0x00000000 d1=0x1108101D d2=0x001C0244 d3=0x00090009 d4=0x001C0034 d5=0x00000000 d6=0x001C0030 d7=0x00000038 d8=0x001C0038 d9=0x01200000 d10=0x001C003C d11=0x00003001 d12=0x001C009C d13=0x01000000 d14=0x001C0080 d15=0x01210000
+intel/media-demo: bitstream-plan engine=vcs0 batch_mode=mi-only-probe submit_mode=ring-inline ring=0x1200000 ctx=0x1210000 batch=0x1280000 bitstream=0x1340000/phys=0x1AE6000 bytes=77373 output=0x1400000/phys=0x1B26000/bytes=4194304 result=0x1500000 kickoff=0x4D441000 complete=0x4D441003
+intel/media-demo: execlist-desc phase=request engine=vcs0 lo=0x0121031D hi=0x00000020 gpu=0x1210000 gpu_expect=0x1210000 gpu_match=1 valid=1 force_restore=1 privilege=1 priority_normal=1 addr_mode=3 sw_ctx_id=1 sw_ctx_expect=1 sw_ctx_match=1
+intel/media-demo: vcs-submit prep batch_mode=mi-only-probe submit_mode=ring-inline ring_start=0x01200000 ring_ctl=0x00003001 ring_tail=0x38 batch_tail=0x0 batch_gpu=0x1280000 context_gpu=0x1210000 ctx_desc_lo=0x0121031D ctx_desc_hi=0x00000020 ctx_id=1
+intel/media-demo: ring-dwords engine=vcs0 d0=0x00000000 d1=0x00000000 d2=0x00000000 d3=0x00000000
+intel/media-demo: batch-dwords engine=vcs0 d0=0x00000000 d1=0x00000000 d2=0x00000000 d3=0x00000000 d4=0x00000000 d5=0x00000000 d6=0x00000000 d7=0x00000000
+intel/igpu770: forcewake-all pre ack=0x00000001 media_req=0x00010001 media_ack=0x00000000 gt_req=0x00010001 gt_ack=0x00000001
+intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all stale-held-state render_awake=1 media_awake=0 gt_awake=1 reissuing-acquire
+intel/igpu770: forcewake-all acquire req=0x00000001 ack=0x00000001 cleared=0x00000000 clear_iters=0 iters=0 fallback=0 media_req=0x00010001 media_req_iters=0 media_ack=0x00000000 media_ack_iters=20000 media_ok=0 gt_req=0x00010001 gt_req_iters=0 gt_ack=0x00000001 gt_ack_iters=0 gt_ok=1
+intel/igpu770: forcewake-media-coverage label=post-acquire awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all coverage render_ack=1 media_ack=0 gt_ack=1 media_domains_awake=0
+intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries
+intel/media-demo: engine-forcewake label=media-bitstream-submit engine=vcs0 domain=vdbox0 req=0x00010001 ack=0x00000001 req_latched=1 acked=1 req_iters=0 ack_iters=0
+intel/igpu770: forcewake-media-coverage label=media-bitstream-submit awake=1/8 vdbox0=0x00000001 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-media-refresh label=media-bitstream-submit req_before=0x00010001 req_after=0x00010001 ack_before=0x00000000 ack_after=0x00000000 req_latched=1 acked=0 req_iters=0 ack_iters=20000 awake=1/8
+intel/media-demo: ring-wake label=media-bitstream-submit engine=vcs0 psmi=0x00000011 slept=0 iters=0
+intel/media-demo: vcs-submit lrc-seed engine=vcs0 pphwsp_gpu=0x01210000 direct_ring_state_writes=1
+intel/media-demo: vcs-submit ctx-ctl engine=vcs0 lrc_seed=0x00090009 live_ctx_mmio=1
+intel/media-demo: live-ring-seed engine=vcs0 ctx_ctl_req=0x000F0002 ctx_ctl_ref_req=0x000F0002 mi_mode_req=0x01000000 hws_req=0x01210000 hwstam_req=0xFFFFFFFF head_req=0x00000000 start_req=0x01200000 ctl_req=0x00003001 tail_req=0x00000038 ctx_ctl_rb=0x00000002 ctx_ctl_ref_rb=0x00000000 mi_mode_rb=0x00000200 hws_rb=0x01210000 hwstam_rb=0xFFFFFFFF head_rb=0x00000000 start_rb=0x01200000 ctl_rb=0x00003000 tail_rb=0x00000038
+intel/media-demo: execlist-desc phase=sq-readback engine=vcs0 lo=0x0121031D hi=0x00000020 gpu=0x1210000 gpu_expect=0x1210000 gpu_match=1 valid=1 force_restore=1 privilege=1 priority_normal=1 addr_mode=3 sw_ctx_id=1 sw_ctx_expect=1 sw_ctx_match=1
+intel/media-demo: execlist-submit context engine=vcs0 batch_mode=mi-only-probe submit_mode=ring-inline sq_lo_req=0x0121031D sq_hi_req=0x00000020 sq_lo_rb=0x0121031D sq_hi_rb=0x00000020 mode_rb=0x00000008 ctx_ctl_rb=0x0000000B ctx_ctl_ref_rb=0x00000000 el_ctl_rb=0x00000000 el_status_lo_rb=0x00003098 el_status_hi_rb=0x00000020
+intel/media-demo: vcs-submit diag engine=vcs0 msg_idle=0x00000010 head=0x00000038 tail=0x00000038 start=0x01200000 ctl=0x00003000 acthd=0x00000000 hws=0x01210000 hwstam=0xFFFFFFFF bbaddr=0x00000000 bbaddr_udw=0x00000000 ipeir=0x00000000 ipehr=0x05000000 instdone=0x7FFFFFFE instps=0x00000001 imr=0x00000000 eir=0x00000000 emr=0xFFFFFFFF mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A ctx_ref=0x00000000 el_ctl=0x00000000 el_sq_lo=0x0121031D el_sq_hi=0x00000020 el_status_lo=0x00018001 el_status_hi=0x00000020 gdrst=0x00000000 legacy_fault=0x00000000 ring_fault=0x00000000 tlb0=0x00000830 tlb1=0x00000000 media_req=0x00010001 media_ack=0x00000000 engine_req=0x00010001 engine_ack=0x00000001 awake=1/8 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll iter=0 head=0x00000038 tail=0x00000038 acthd=0x00000000 bbaddr=0x00000000 execlist_lo=0x00018001 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll diag engine=vcs0 msg_idle=0x00000010 head=0x00000038 tail=0x00000038 start=0x01200000 ctl=0x00003000 acthd=0x00000000 hws=0x01210000 hwstam=0xFFFFFFFF bbaddr=0x00000000 bbaddr_udw=0x00000000 ipeir=0x00000000 ipehr=0x05000000 instdone=0x7FFFFFFE instps=0x00000001 imr=0x00000000 eir=0x00000000 emr=0xFFFFFFFF mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A ctx_ref=0x00000000 el_ctl=0x00000000 el_sq_lo=0x0121031D el_sq_hi=0x00000020 el_status_lo=0x00018001 el_status_hi=0x00000020 gdrst=0x00000000 legacy_fault=0x00000000 ring_fault=0x00000000 tlb0=0x00000830 tlb1=0x00000000 media_req=0x00010001 media_ack=0x00000000 engine_req=0x00010001 engine_ack=0x00000001 awake=1/8 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll iter=10000 head=0x00000038 tail=0x00000038 acthd=0x00000000 bbaddr=0x00000000 execlist_lo=0x00018001 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll iter=20000 head=0x00000038 tail=0x00000038 acthd=0x00000000 bbaddr=0x00000000 execlist_lo=0x00018001 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll iter=30000 head=0x00000038 tail=0x00000038 acthd=0x00000000 bbaddr=0x00000000 execlist_lo=0x00018001 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll iter=40000 head=0x00000038 tail=0x00000038 acthd=0x00000000 bbaddr=0x00000000 execlist_lo=0x00018001 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll iter=50000 head=0x00000038 tail=0x00000038 acthd=0x00000000 bbaddr=0x00000000 execlist_lo=0x00018001 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll iter=60000 head=0x00000038 tail=0x00000038 acthd=0x00000000 bbaddr=0x00000000 execlist_lo=0x00018001 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll iter=70000 head=0x00000038 tail=0x00000038 acthd=0x00000000 bbaddr=0x00000000 execlist_lo=0x00018001 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll iter=80000 head=0x00000038 tail=0x00000038 acthd=0x00000000 bbaddr=0x00000000 execlist_lo=0x00018001 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-poll iter=90000 head=0x00000038 tail=0x00000038 acthd=0x00000000 bbaddr=0x00000000 execlist_lo=0x00018001 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-timeout diag engine=vcs0 msg_idle=0x00000010 head=0x00000038 tail=0x00000038 start=0x01200000 ctl=0x00003000 acthd=0x00000000 hws=0x01210000 hwstam=0xFFFFFFFF bbaddr=0x00000000 bbaddr_udw=0x00000000 ipeir=0x00000000 ipehr=0x05000000 instdone=0x7FFFFFFE instps=0x00000001 imr=0x00000000 eir=0x00000000 emr=0xFFFFFFFF mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x0000000A ctx_ref=0x00000000 el_ctl=0x00000000 el_sq_lo=0x0121031D el_sq_hi=0x00000020 el_status_lo=0x00018001 el_status_hi=0x00000020 gdrst=0x00000000 legacy_fault=0x00000000 ring_fault=0x00000000 tlb0=0x00000830 tlb1=0x00000000 media_req=0x00010001 media_ack=0x00000000 engine_req=0x00010001 engine_ack=0x00000001 awake=1/8 kickoff=0x00000000 complete=0x00000000
+intel/media-demo: vcs-submit result completed=0 iters=100000 kickoff=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000 bitstream_lo=0x00000000 bitstream_hi=0x00000000 bytes=0 nals=0 flags=0x00000000 output_lo=0x00000000 output_hi=0x00000000 output_bytes=0 frame_dims=0x00000000 surface_sig=0x1316F38D surface_nonzero_samples=0 present_ready=0
+intel/media-demo: forged-ingress stage=fetch->parse->annexb-vis decode_ready=1 decode_impl=1
+intel/igpu770: cpu-fb-media-card label=media-demo-h264-annexb-au0 origin=336x264 dims=128x72 metric_a=77373 metric_b=2 ready=1 accent=0x003DB7FF
+intel/igpu770: fb-probe label=cpu-media-card-center xy=400x300 off=0xEAC40 phys=0x40000EAC40 value=0x00FFF4D6
 intel: display discovery follow-up probe after smoke
 intel: display-power probe phy_misc_a=0x23000000 phy_misc_b=0x20000000 tx_bmu=0xFB0E0FF0 de_pll_ctl=0xFFFFFFFF de_pll_enable=0xC0000022 dc_state_en=0x00000000 dc_state_debug=0x00000000 hotplug=0x00000000 gt_disp_pwron=0x00000000
+net: dhcp6 cooldown dev=0 stage=Info ra_managed=0 ra_other=1
