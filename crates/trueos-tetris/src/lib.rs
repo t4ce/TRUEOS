@@ -3,6 +3,7 @@
 use core::cmp::{max, min};
 use v::vled::Rgb8;
 
+pub mod minesweeper;
 pub mod shell;
 
 pub const MAX_PIECE_CELLS: usize = 8;
