@@ -112,6 +112,7 @@ define_started_flags!(
     UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
     UI2_SHELL_DEMO_STARTED,
     UI2_SVG_DEMO_STARTED,
+    UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
     GFX_INTEL_READINESS_PROBE_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
     CRABUSB_EVENT_PUMP_STARTED,
@@ -669,6 +670,12 @@ fn spawn_ui2_svg_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_trueosfs_explorer_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_trueosfs_explorer_demo::ui2_trueosfs_explorer_demo_task())
+    })
+}
+
 fn spawn_gfx_intel_readiness_probe(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(crate::intel::scanout_smoke_task()))
 }
@@ -1027,6 +1034,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_shell_demo,
     ),
     TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
+    TaskSpec::disabled(
+        "ui2-trueosfs-explorer-demo",
+        UI2_DEMO_READY | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        &UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
+        spawn_ui2_trueosfs_explorer_demo,
+    ),
     TaskSpec::enabled(
         "gfx-intel-readiness-probe",
         crate::r::readiness::GFX_INTEL_CLAIMED,
