@@ -1,0 +1,313 @@
+long_mode_active: true
+pmm: regions=6 span=0x100000..0x6ADC00000 total=23849 MiB
+heap: arena virt=0xFFFF800100000000 phys=0x100000000 size=1024 MiB
+Boot Performance: reset=0_usec init=14932615_usec exec=25077987_usec
+0xFFFF800100000020 lapic=0 cpu=0
+dma: pmm-backed DMA allocator active
+ACPI TABLE SSDT count=11 (see ssdt::log_once)
+ACPI RSDP 0x47561014 tables=27
+pci: MCFG present (regions=1, seg0=1)
+pci: ECAM seg0 base=0xC0000000 bus=0-255
+intel: claimed 00:02.0 device=0x4680 rev=0x0C bar0=0x60E7000000 size=0x1000000 bar2=0x4000000000 bar2_size=0x10000000 mmio=0xFFFFFF0010293000
+intel: readiness=claimed
+intel: intel_igpu770_present=1
+intel/igpu770: guc-fw hdr-dwords d0=0x00000006 d1=0x000000A1 d2=0x00010000 d3=0x00000000
+intel/igpu770: guc-fw hdr-bytes[0..16]=06 00 00 00 A1 00 00 00 00 00 01 00 00 00 00 00
+intel/igpu770: guc-fw module found size=0x536C0 alloc=0x54000 phys=0x224000 gpu=0x850000 css_off=0x0 xfer=0x535C0 rsa_off=0x535C0 rsa_size=0x100 priv_data=0x801000 zstd_magic=0
+intel/igpu770: warm device=0x4680 rev=0x0C ring_phys=0x18C000 ring_len=0x1000 context_phys=0x18D000 context_len=0x16000 batch_phys=0x1A3000 batch_len=0x80000 result_phys=0x223000 result_len=0x1000 guc_fw_phys=0x224000 guc_fw_len=0x54000 guc_fw_xfer=0x535C0 guc_fw_gpu=0x850000 guc_ads_phys=0x278000 guc_ads_len=0x807000 guc_ads_gpu=0x1000000 mmio_len=0x1000000 aperture=0x4000000000/0x10000000 limine_fb=0x4000000000/0x1D4C00 800x600 pitch=0xC80 bpp=32
+pci/vrng: not present
+HPET @0xFED00000 freq=19200000Hz comps=2 counter_64bit legacy_capable=true
+time: tsc_hz calibrated via HPET: 1689740080
+time: tsc_hz=1689740080
+nvme: 01:00.0 poll_sync timeout attempt 1 qid=1 cid=8 head=0 exp_phase=1 cqe_dw0=0x00000000 cqe_dw3=0x00000000
+nvme: 01:00.0 poll_sync timeout final qid=1 cid=8 csts=0x00000001
+nvme: 01:00.0 poll_sync_timeout regs cap=0x00F000203C033FFF vs=0x00010200 cc=0x00460001 csts=0x00000001 aqa=0x003F003F dstrd=4 mps=4096 admin[sq=7 cq=7 phase=true] io[sq=1 cq=0 phase=true] admin_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false] io_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false]
+nvme: 01:00.0 io-selftest flush failed: Timeout
+nvme: 01:00.0 io-selftest failed; best-effort reset + IRQ-armed IO CQ re-init attempt
+nvme: 01:00.0 poll_sync timeout attempt 1 qid=1 cid=8 head=0 exp_phase=1 cqe_dw0=0x00000000 cqe_dw3=0x00000000
+nvme: 01:00.0 poll_sync timeout final qid=1 cid=8 csts=0x00000001
+nvme: 01:00.0 poll_sync_timeout regs cap=0x00F000203C033FFF vs=0x00010200 cc=0x00460001 csts=0x00000001 aqa=0x003F003F dstrd=4 mps=4096 admin[sq=7 cq=7 phase=true] io[sq=1 cq=0 phase=true] admin_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false] io_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false]
+nvme: 01:00.0 io-selftest flush failed: Timeout
+nvme: 01:00.0 io-selftest failed after best-effort reset; skipping registration
+nvme: found controller(s) but none registered
+POWER: intel=true msr=true eist=true hwp=true msr_armed=false idle=hlt
+tga: device not found (vid=0x22C2 did=0x1100, scanned 25 devices)
+net/r8125: pci cmd=0x0007
+net/r8125: bar0 is IO (raw=0x00004001)
+net/r8125: bar2 mmio raw=0x52510004 (64) => 0x52510000
+net/r8125: bar2 size=0x10000
+net/r8125: found 02:00.0 vid=10ec did=8125 bar2=0x52510000
+net/r8125: alloc rx_desc bytes=0x400
+net/r8125: alloc tx_desc bytes=0x400
+net/r8125: rx_desc phys=0xa7f000 align256_ok=1 tx_desc phys=0xa7f400 align256_ok=1
+net/r8125: alloc rx bufs count=64 size=0x800
+net/r8125: alloc tx bufs count=64 size=0x800
+net/r8125: mcu oob mcu0=0x12 mcu1=0x12 llrdy=1
+net/r8125: cfg rb rcr=0x0002e70f tcr=0x67100f00 cplus=0x2021
+net/r8125: mac=00:e0:25:cd:e0:3b
+net/r8125: caps speeds=10/100/1000/2500 duplex=full/half flow=tx/rx ring=rx64 tx64 mtu=1500
+net/r8125: cplus=0x2021 force_off=0
+net/r8125: tx start idx=0 skip_desc0=0
+net/r8125: phystat=0xf3 (raw)
+net: primary=0 (link-up preference)
+net: detected 1 NIC(s)
+net: dev0 Realtek RTL8125 bdf=02:00.0 link_up=1
+net: hint: prefer virtio-net in QEMU (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0)
+dma_nic_fpga: region phys=0xAC0000 virt=0xFFFF800000AC0000 size=0x1000000
+0xFFFF800100001A00 lapic=56 cpu=16
+0xFFFF800100001B40 lapic=60 cpu=18
+0xFFFF800100001B80 lapic=54 cpu=15
+0x0xFFFF800100001C00 lapic=FFFF800100001C40 lapic=52 cpu=48 cpu=0x14
+FFFF800100001CC012
+ lapic=0x58FFFF800100001D00 lapic= cpu=50 cpu=1713
+
+0xFFFF800100001D80 lapic=62 cpu=19
+0xFFFF800100000CF8 lapic=1 cpu=1
+0x0xFFFF8001000019C0 lapic=33 cpu=9
+FFFF800100001980 lapic=17 cpu=5
+0x0x0x0xFFFF800100001C80 lapic=FFFF800100001DC0 lapic=FFFF800100001B000x lapic=FFFF800100001AC00x9 lapic= cpu=83 cpu=
+216 cpu=FFFF800100001A40 lapic=FFFF800100001A8025 lapic= cpu=247 cpu=
+
+6
+0x0xFFFF800100001BC0 lapic=FFFF800100001D4041 lapic=40 cpu=3210 cpu= cpu=
+11
+8
+4
+spawn-svc: started job-runner (mask=0x00000000)
+spawn-svc: started globalog-persist-once (mask=0x00000000)
+spawn-svc: started qjs-async-fs-service (mask=0x00000000)
+spawn-svc: started trueosfs-mount-service (mask=0x00000000)
+boot-probe: hv-store task start ms=6105
+spawn-svc: started hv-vm-store (mask=0x00000000)
+hv-store: start slot=1 lapic=1 kind=perf
+spawn-svc: started hv-vm-store-net (mask=0x00000000)
+boot-probe: hv-store ensure begin ms=6106
+spawn-svc: started net-poll-tasks (mask=0x00000000)
+spawn-svc: started net-service (mask=0x00000000)
+spawn-svc: started net-shell (mask=0x00000000)
+boot-probe: hv-store ramdisk create done ms=6106 dt=0
+spawn-svc: started esp-gate (mask=0xboot-probe: hv-store format done ms=06106 dt=000
+00000)
+boot-probe: hv-store validate done ms=6107 dt=1 step=1
+spawn-svc: started esp-gate-registry (mask=0x00000000)
+spawn-svc: started gfx-virgl-backend-ready (mask=0x00000000)
+boot-probe: hv-store probe write done ms=6107 dt=1 step=0
+spawn-svc: started html_fetch_service (mask=0x00000000)
+boot-probe: hv-store probe read done ms=6108 dt=2 step=1
+spawn-svc: started gfx-intel-readiness-probe (mask=0x00200000)
+boot-probe: hv-store ensure done ms=6108 dt=2 tail=0
+hv-store: ramdisk ready disk=1 bytes=67108864
+hv-store-net: listening on tcp 32123 owner=hv-store-net@02:00.0
+spawn-svc: started crabusb-bsp-service (mask=0x00000000)
+spawn-svc: started crabusb-event-pump (mask=0x00000000)
+spawn-svc: started crabusb-audio (mask=0x00000000)
+spawn-svc: started crabusb-truekey (mask=0x00000000)
+spawn-svc: started piano-drain (mask=0x00000000)
+spawn-svc: started uart-shell (mask=0x00000000)
+spawn-svc: started net-tcp-shell (mask=0x00000000)
+crabusb: truekey service armed
+crabusb: audio service armed
+crabusb: BSP service binding controller 0 at 00:14.0 vid=8086 pid=7A60 mmio=0xffffff0011344000
+crabusb: controller 0 root-hub lifecycle init -> bound (event handler installed)
+crabusb: controller 0 phase startup -> first-contact (host init completed)
+crabusb: host init ok controller 0 awaiting root-hub events
+crabusb: controller 0 root-hub lifecycle bound -> settling (initial settle window started)
+intel: async probe delayed by 0ms (non-blocking)
+gfx: virgl auto init failed
+gfx: no accelerated backend available; gfx backend inactive
+gfx: backend=none
+boot-probe: gfx-virgl-backend-ready skipped (intel soft-detect claimed)
+net: dev=0 mac=00:e0:25:cd:e0:3b
+net: static fallback dev=0 ipv4=192.168.178.111 mask=255.255.255.0 gw=192.168.178.1
+net: dhcp start dev=0 mode=static-fallback
+net/r8125: tx clflush idx=0 len=90 buf=0 desc=1 reclaim_inv=1
+net/r8125: tx submit dbg idx=0 len=90 opts1=0xb000005a rd[o1=0x00000000 o2=0x00000000 a=0x0000000000a9f800] cmd=0x0c isr=0x00000085 tnpds=0x0000000000a7f400
+net/r8125: first tx len=90 head=0 tail=1
+net/r8125: first tx reclaim
+net/r8125: tx clflush idx=1 len=90 buf=0 desc=1 reclaim_inv=1
+net/r8125: tx submit dbg idx=1 len=90 opts1=0xb000005a rd[o1=0x00000000 o2=0x00000000 a=0x0000000000aa0000] cmd=0x0c isr=0x00000085 tnpds=0x0000000000a7f400
+net/r8125: tx clflush idx=2 len=90 buf=0 desc=1 reclaim_inv=1
+net/r8125: tx submit dbg idx=2 len=90 opts1=0xb000005a rd[o1=0x00000000 o2=0x00000000 a=0x0000000000aa0800] cmd=0x0c isr=0x00000085 tnpds=0x0000000000a7f400
+net/r8125: tx clflush idx=3 len=304 buf=0 desc=1 reclaim_inv=1
+net/r8125: tx submit dbg idx=3 len=304 opts1=0xb0000130 rd[o1=0x00000000 o2=0x00000000 a=0x0000000000aa1000] cmd=0x0c isr=0x00000085 tnpds=0x0000000000a7f400
+net: dhcp6 start dev=0 reason=dns-needed ra_other=0 ra_dns6=0 dhcp6_dns6=0
+net: dhcp6 info-request dev=0 xid=92920e
+net: icmp ping dev=0 src=192.168.178.111 seq=1 -> 192.168.178.1
+net/r8125: first rx len=64 raw_len=64 opts1=0x32044040
+gfx: switch_to_intel: begin
+gfx: switch_to_intel: ok epoch=2
+intel: gfx backend switch_to_intel=1
+crabusb: pump observed stopped event
+crabusb: pump stopped xhci status ctrl=0 phase=first-contact halted=true hse=true cnr=false hce=false
+crabusb: controller 0 stopped event phase=first-contact lifecycle=settling bucket=during-root-progression
+crabusb: controller 0 phase first-contact -> quarantined (pump observed stopped before validation)
+crabusb: controller 0 stopped before validation; quarantining instead of rebinding
+boot-probe: gfx-cursor-overlay task start ms=6550
+spawn-svc: started gfx-virgl-cursor-overlay (mask=0x00400000)
+boot-probe: texture-upload task start ms=6551
+spawn-svc: started gfx-texture-upload-service (mask=0x00400000)
+boot-probe: ui2 task start ms=6551
+spawn-svc: started ui2 (mask=0x00400000)
+boot-probe: spawn ui2 ms=6551
+spawn-svc: started ui2-hosted (mask=0x00400000)
+spawn-svc: started ui2-hit (mask=0x00400000)
+net: ipv6 ra-flags dev=0 M=0 O=1
+net: dhcp acquired dev=0 ipv4=192.168.178.94 gw=192.168.178.1 ipv6=ra
+net: route v4 default dev=0 gw=192.168.178.1 ok
+net: dhcp dns-count dev=0 count=1
+net: dhcp dns dev=0 idx=0 server=192.168.178.1
+net: icmp6 ping dev=0 seq=1 -> fe80:0000:...
+spawn-svc: started tls-socket-service (mask=0x00001000)
+spawn-svc: started ntp-sync (mask=0x00001000)
+spawn-svc: started sntp-service (mask=0x00002000)
+spawn-svc: started logtotcp (mask=0x00001000)
+spawn-svc: started ws-time (mask=0x00001000)
+ws-time: listening on tcp 2 path=/time
+logtotcp: listening on tcp 1
+sntp: waiting for NET_V4_CONFIGURED
+sntp: readiness reached, starting service loop
+tls-socket: service running
+sntp: udp opened on port=123 handle=NetHandle(4)
+esp-gate: starting udp swarm listener on port 32343 payload=swarm
+net-shell: routing dev=0 Realtek RTL8125 owner=net-shell ip=192.168.178.94
+net-shell: listening on tcp 4245 owner=net-shell
+net-shell: opened tcp handle=7
+esp-gate: udp listener bound handle=6 port=32343
+crabusb: scout begin (timeout=2500ms)
+intel/gfx-backend: present seq=1 waiting-for-guc status=0x00000001 size=800x600
+intel/gfx-backend: present seq=1 fallback=cpu-scanout guc_ready=0 rcs_retry_ready=0 size=800x600
+intel/gfx-backend: submit seq=1 cmds=4 unsupported=0 target=screen
+boot-probe: ui2 first compose begin ms=6551
+boot-probe: ui2-hit task start ms=6939
+boot-probe: ui2-hosted task start ms=6939
+spawn-svc: started ui2-triangle-demo (mask=0x02800000)
+boot-probe: spawn ui2-triangle-demo ms=6973
+ui2-triangle-demo: window=1 tex=4700 size=384x240
+crabusb: scout probe failed: Timeout
+crabusb: controller 0 fatal xhci state during scout failure (host-system-error); rebinding immediately
+crabusb: controller 0 root-hub lifecycle settling -> init (event handler removed)
+crabusb: scout end
+crabusb: event handler stopped; rediscovering controller (quick_stop=true streak=1) phase=quarantined lifecycle=init bucket=before-root-change
+intel/gfx-backend: submit seq=2 cmds=25 unsupported=0 target=screen
+intel/gfx-backend: present seq=2 waiting-for-guc status=0x00000001 size=800x600
+net: icmp6 pong dev=0 seq=1 rtt=1009ms from=fe80:0000:...
+net: icmp6 ok dev=0 (v6 gateway reachable)
+dns: resolved host=time.google.com dev=0 ip=216.239.35.0
+intel/igpu770: ggtt-recon aperture=0x4000000000/0x10000000 limine_fb_phys=0x4000000000 limine_fb_size=0x1D4C00
+intel/igpu770: ggtt-plan label=framebuffer gpu=0x0 phys=0x4000000000 size=0x1D4C00 pages=469 aperture_backed=1
+intel/igpu770: ggtt-plan label=ring gpu=0x800000 phys=0x18C000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: ggtt-plan label=context gpu=0x810000 phys=0x18D000 size=0x16000 pages=22 aperture_backed=0
+intel/igpu770: ggtt-plan label=batch gpu=0x830000 phys=0x1A3000 size=0x80000 pages=128 aperture_backed=0
+intel/igpu770: ggtt-plan label=result gpu=0x840000 phys=0x223000 size=0x1000 pages=1 aperture_backed=0
+intel/igpu770: ggtt-plan label=guc-fw gpu=0x850000 phys=0x224000 size=0x54000 pages=84 aperture_backed=0
+intel/igpu770: ggtt-plan label=guc-ads gpu=0x1000000 phys=0x278000 size=0x807000 pages=2055 aperture_backed=0
+intel/igpu770: ggtt-recon note system-ram objects need explicit GGTT PTEs; framebuffer is aperture-backed
+intel/igpu770: ggtt-recon gtt_alias_off=0x800000 gtt_alias_bytes=0x800000
+intel/igpu770: forcewake-all pre ack=0x00000000 media_req=0x00000000 media_ack=0x00000000 gt_req=0x00010000 gt_ack=0x00000000
+intel/igpu770: forcewake-media-coverage label=pre awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/gfx-backend: present seq=2 fallback=cpu-scanout guc_ready=0 rcs_retry_ready=0 size=800x600
+intel/gfx-backend: submit seq=3 cmds=8 unsupported=0 target=screen
+intel/igpu770: forcewake-all acquire req=0x00000001 ack=0x00000001 cleared=0x00000000 clear_iters=0 iters=0 fallback=0 media_req=0x00010001 media_req_iters=0 media_ack=0x00000000 media_ack_iters=20000 media_ok=0 gt_req=0x00010001 gt_req_iters=0 gt_ack=0x00000001 gt_ack_iters=0 gt_ok=1
+intel/igpu770: forcewake-media-coverage label=post-acquire awake=0/8 vdbox0=0x00000000 vdbox1=0x00000000 vdbox2=0x00000000 vdbox3=0x00000000 vebox0=0x00000000 vebox1=0x00000000 vebox2=0x00000000 vebox3=0x00000000
+intel/igpu770: forcewake-all coverage render_ack=1 media_ack=0 gt_ack=1 media_domains_awake=0
+intel/gfx-backend: submit seq=4 cmds=8 unsupported=0 target=image
+intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries
+intel/igpu770: ggtt-map begin
+intel/igpu770: ggtt-map label=ring page=0 gpu=0x800000 phys=0x18C000 pte=0x000000000018C001
+intel/igpu770: ggtt-map label=context page=0 gpu=0x810000 phys=0x18D000 pte=0x000000000018D001
+intel/igpu770: ggtt-map label=context page=1 gpu=0x811000 phys=0x18E000 pte=0x000000000018E001
+intel/igpu770: ggtt-map label=context page=2 gpu=0x812000 phys=0x18F000 pte=0x000000000018F001
+intel/igpu770: ggtt-map label=context page=3 gpu=0x813000 phys=0x190000 pte=0x0000000000190001
+intel/igpu770: ggtt-map label=context omitted_pages=14 total_pages=22 log_policy=head-tail edge_pages=4
+intel/igpu770: ggtt-map label=context page=18 gpu=0x822000 phys=0x19F000 pte=0x000000000019F001
+intel/igpu770: ggtt-map label=context page=19 gpu=0x823000 phys=0x1A0000 pte=0x00000000001A0001
+intel/igpu770: ggtt-map label=context page=20 gpu=0x824000 phys=0x1A1000 pte=0x00000000001A1001
+intel/igpu770: ggtt-map label=context page=21 gpu=0x825000 phys=0x1A2000 pte=0x00000000001A2001
+intel/igpu770: ggtt-map label=batch page=0 gpu=0x830000 phys=0x1A3000 pte=0x00000000001A3001
+intel/igpu770: ggtt-map label=batch page=1 gpu=0x831000 phys=0x1A4000 pte=0x00000000001A4001
+intel/igpu770: ggtt-map label=batch page=2 gpu=0x832000 phys=0x1A5000 pte=0x00000000001A5001
+intel/igpu770: ggtt-map label=batch page=3 gpu=0x833000 phys=0x1A6000 pte=0x00000000001A6001
+intel/igpu770: ggtt-map label=batch omitted_pages=120 total_pages=128 log_policy=head-tail edge_pages=4
+intel/igpu770: ggtt-map label=batch page=124 gpu=0x8AC000 phys=0x21F000 pte=0x000000000021F001
+intel/igpu770: ggtt-map label=batch page=125 gpu=0x8AD000 phys=0x220000 pte=0x0000000000220001
+intel/igpu770: ggtt-map label=batch page=126 gpu=0x8AE000 phys=0x221000 pte=0x0000000000221001
+intel/igpu770: ggtt-map label=batch page=127 gpu=0x8AF000 phys=0x222000 pte=0x0000000000222001
+intel/igpu770: ggtt-map label=result page=0 gpu=0x840000 phys=0x223000 pte=0x0000000000223001
+intel/igpu770: ggtt-map label=guc-fw page=0 gpu=0x850000 phys=0x224000 pte=0x0000000000224001
+intel/igpu770: ggtt-map label=guc-fw page=1 gpu=0x851000 phys=0x225000 pte=0x0000000000225001
+intel/igpu770: ggtt-map label=guc-fw page=2 gpu=0x852000 phys=0x226000 pte=0x0000000000226001
+intel/igpu770: ggtt-map label=guc-fw page=3 gpu=0x853000 phys=0x227000 pte=0x0000000000227001
+intel/igpu770: ggtt-map label=guc-fw omitted_pages=76 total_pages=84 log_policy=head-tail edge_pages=4
+intel/igpu770: ggtt-map label=guc-fw page=80 gpu=0x8A0000 phys=0x274000 pte=0x0000000000274001
+intel/igpu770: ggtt-map label=guc-fw page=81 gpu=0x8A1000 phys=0x275000 pte=0x0000000000275001
+intel/igpu770: ggtt-map label=guc-fw page=82 gpu=0x8A2000 phys=0x276000 pte=0x0000000000276001
+intel/igpu770: ggtt-map label=guc-fw page=83 gpu=0x8A3000 phys=0x277000 pte=0x0000000000277001
+intel/igpu770: ggtt-map label=guc-ads page=0 gpu=0x1000000 phys=0x278000 pte=0x0000000000278001
+intel/igpu770: ggtt-map label=guc-ads page=1 gpu=0x1001000 phys=0x279000 pte=0x0000000000279001
+intel/igpu770: ggtt-map label=guc-ads page=2 gpu=0x1002000 phys=0x27A000 pte=0x000000000027A001
+intel/igpu770: ggtt-map label=guc-ads page=3 gpu=0x1003000 phys=0x27B000 pte=0x000000000027B001
+intel/igpu770: ggtt-map label=guc-ads omitted_pages=2047 total_pages=2055 log_policy=head-tail edge_pages=4
+intel/igpu770: ggtt-map label=guc-ads page=2051 gpu=0x1803000 phys=0xA7B000 pte=0x0000000000A7B001
+intel/igpu770: ggtt-map label=guc-ads page=2052 gpu=0x1804000 phys=0xA7C000 pte=0x0000000000A7C001
+intel/igpu770: ggtt-map label=guc-ads page=2053 gpu=0x1805000 phys=0xA7D000 pte=0x0000000000A7D001
+intel/igpu770: ggtt-map label=guc-ads page=2054 gpu=0x1806000 phys=0xA7E000 pte=0x0000000000A7E001
+intel/igpu770: ggtt-map summary ring=1 context=1 batch=1 result=1 guc_fw=1 guc_ads=1 gfx_flsh_cntl=0x00000000
+intel/igpu770: guc-fw reset gdrst_rb=0x00000000 gdrst_iters=4 mia_in_reset=1
+intel/igpu770: guc-fw ads minimal gpu=0x1000000 phys=0x278000 len=0x807000 policies=0x10011DC sysinfo=0x100123C private=0x1006000 doorbells=128
+intel/igpu770: guc-fw params log=0x00000000 wa=0x00000000 feature=0x00000000 debug=0x00000040 ads=0x00002000 devid=0x4680000C scratch1=0x00000000 scratch5=0x00002000 scratch6=0x4680000C
+intel/igpu770: guc-fw css-parsed rev=r10 module_type=0x6 header_size_dw=0xA1 size_dw=0x14DF1 key_size_dw=0x40 modulus_size_dw=0x40 exponent_size_dw=0x1 sw_version=0x462C01 vf_version=0x11401 priv_data_sz=0x801000
+intel/igpu770: guc-fw bootstrap rev=guc-bootstrap-r14 src_gpu=0x850000 fw_phys=0x224000 fw_len=0x54000 xfer=0x535C0 ads_gpu=0x1000000 ads_len=0x807000 ads_ready=1 ads_param=0x00002000 wopcm_size=0x00100000 wopcm_size_rb=0x001F3001 wopcm_cfg=0x00004001 wopcm_locked=0 wopcm_calc_base=0x00004000 wopcm_calc_size=0x001F3000 status_before=0x00000001 status_after=0x00000072 status_final=0x8000F0EC status_iters=51652 shim=0x00008607 shim2=0x00000900 pm=0x00000001 pmintrmsk=0x00000000 dma_done=1 dma_iters=655 dma_ctrl=0x00000000 a0_lo=0x00850000 a0_hi=0x00080000 a1_lo=0x00002000 a1_hi=0x00070000 ready=1
+intel/igpu770: guc-fw status-decode bootrom=0x76(JUMP_PASSED) ukernel=0xF0(READY) auth=0x2 dma_off=0x0 rsa_off=0x535C0 rsa_size=0x100
+intel: legacy direct smoke paths skipped (gfx-backend mode)
+intel: display discovery deferred (render-first mode; run display-engine probe later)
+intel: display discovery render-first prerequisite complete; continuing with display-engine probe
+intel: display discovery begin bdf=00:02.0 device=0x4680 bar0=0x60E7000000 mmio_len=0x1000000 aperture=0x10000000
+intel/display-ngin: early label=discovery power_mask=0x000000FF dc_state_en=0x00000000 dc_state_debug=0x00000000 pll=0xC0000022 hotplug=0x00000000 gt_disp_pwron=0x00000000 power_visible=1 pll_seeded=1 hotplug_configured=0 next_gt_disp_pwron=0x00000001
+intel: display-ngin stub summary power_visible=1 dc_state_mask=0x00000000 next_gt_disp_pwron=0x00000001
+intel: display discovery step=probe scope=power+routing
+intel: display-power probe phy_misc_a=0x23000000 phy_misc_b=0x20000000 tx_bmu=0xFB0F0FF0 de_pll_ctl=0xFFFFFFFF de_pll_enable=0xC0000022 dc_state_en=0x00000000 dc_state_debug=0x00000000 hotplug=0x00000000 gt_disp_pwron=0x00000000
+intel: display-routing probe hotplug_en=0x00000000 trans_a=0xA1030100 trans_b=0x00030000 trans_c=0x00030000 trans_d=0x00000000 pipe_a=0x00000000 pipe_b=0x00000000 pipe_c=0x00000000 pipe_d=0x00000000
+intel: display discovery step=smoke action=request-display-power
+intel/igpu770: display-power-request register=GT_DISP_PWRON orig=0x00000000 req=0x00000003 rb=0x00000000 clk5_rb=0x00020000 dcpr1_rb=0x00002008 poll_iters=1024 latched=0
+intel: display discovery result gt_disp_pwron_latched=0
+intel/display-ngin: kickoff summary sku=xelp-display-kickoff stage=present-api guc_ready=1 active=1 planned=4 routed=1 default_pipe=pipe-a power_visible=1 power_latched=0 pll_seeded=1 hotplug_configured=0 next_gt_disp_pwron=0x00000001
+intel/display-ngin: api route=display.present.primary workload=primary-present pipe=pipe-a staging=copy commit=fastset-flip async=guc-reserved summary=stage a boot-time scanout surface through the proven BCS path and arm a primary-plane flip
+intel/display-ngin: api route=display.plane.rebind workload=plane-rebind pipe=pipe-a staging=copy commit=primary-plane-mmio async=guc-reserved summary=reuse a powered pipe/transcoder pair and only retarget the primary plane surface
+intel/display-ngin: api route=display.modeset.bootstrap workload=modeset-bootstrap pipe=pipe-a staging=none commit=full-modeset async=inline summary=seed a cold pipe/transcoder/plane sequence once link training is modeled
+intel/display-ngin: api route=display.connector.observe workload=hotplug-sense pipe=any staging=none commit=observe-only async=inline summary=keep connector bring-up read-only while harvesting hotplug and routing state
+intel/display-ngin: api route=display.debug.snapshot workload=snapshot pipe=any staging=none commit=observe-only async=inline summary=snapshot the planned display planes, MMIO touchpoints, and present defaults
+intel/display-ngin: plan pipe=pipe-a provisioning=kickoff next_stage=present-api observed=1 active=1 trans_enabled=1 plane_enabled=1 pipe_src=0x00000000 size=0x0 trans=0xA1030100 ctl=0x84000008 stride=0x00000032 surf=0x00000000 surf_live=0x00000000 staging_gpu=0x2000000 shadow_gpu=0x2080000 cursor_gpu=0x20C0000 surface_bytes=0x1D4C00 staging=copy commit=fastset-flip async=guc-reserved
+intel/display-ngin: plan pipe=pipe-b provisioning=reserve next_stage=power-armed observed=1 active=0 trans_enabled=0 plane_enabled=0 pipe_src=0x00000000 size=0x0 trans=0x00030000 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 staging_gpu=0x2100000 shadow_gpu=0x2180000 cursor_gpu=0x21C0000 surface_bytes=0x1D4C00 staging=copy commit=full-modeset async=guc-reserved
+intel/gfx-backend: submit seq=5 cmds=25 unsupported=0 target=screen
+intel/display-ngin: plan pipe=pipe-c provisioning=reserve next_stage=power-armed observed=1 active=0 trans_enabled=0 plane_enabled=0 pipe_src=0x00000000 size=0x0 trans=0x00030000 ctl=0x00000008 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 staging_gpu=0x2200000 shadow_gpu=0x2280000 cursor_gpu=0x22C0000 surface_bytes=0x1D4C00 staging=copy commit=full-modeset async=guc-reserved
+intel/display-ngin: plan pipe=pipe-d provisioning=reserve next_stage=power-armed observed=0 active=0 trans_enabled=0 plane_enabled=0 pipe_src=0x00000000 size=0x0 trans=0x00000000 ctl=0x00000000 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 staging_gpu=0x2300000 shadow_gpu=0x2380000 cursor_gpu=0x23C0000 surface_bytes=0x1D4C00 staging=copy commit=full-modeset async=guc-reserved
+intel/display-ngin: draft-present pipe=pipe-a workload=primary-present staging=copy commit=fastset-flip async=guc-reserved surface=800x600 pitch=0xC80 format=xrgb8888 layout=linear next_stage=present-api staging_gpu=0x2000000
+intel/display-ngin: draft-modeset pipe=pipe-b workload=modeset-bootstrap staging=none commit=full-modeset async=inline surface=800x600 pitch=0xC80 format=xrgb8888 layout=linear next_stage=modeset-skeleton staging_gpu=0x2100000
+intel: display discovery follow-up probe after smoke
+intel: display-power probe phy_misc_a=0x23000000 phy_misc_b=0x20000000 tx_bmu=0xFB0E0FF0 de_pll_ctl=0xFFFFFFFF de_pll_enable=0xC0000022 dc_state_en=0x00000000 dc_state_debug=0x00000000 hotplug=0x00000000 gt_disp_pwron=0x00000000
+intel/igpu770: rcs-present chunk=0 pixels=256 completed_pixels=256 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present chunk=1 pixels=256 completed_pixels=512 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present chunk=2 pixels=256 completed_pixels=768 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present chunk=3 pixels=256 completed_pixels=1024 total_pixels=480000 batch_tail=0x1028
+crabusb: controller 0 quarantined; auto-rebind disabled until manual rebind request
+net: icmp ping dev=0 src=192.168.178.94 seq=2 -> 192.168.178.1
+net: icmp pong dev=0 local=192.168.178.94 seq=2 rtt=88ms
+net: icmp ok dev=0 (gateway reachable)
+intel/igpu770: rcs-present chunk=1874 pixels=256 completed_pixels=480000 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present summary success=1 size=800x600 chunks=1875 completed_pixels=480000 total_pixels=480000 dst_gpu=0x0 pitch=0xC80
+intel/gfx-backend: present seq=3 mode=rcs-execlist-store size=800x600
+intel/gfx-backend: submit seq=6 cmds=8 unsupported=0 target=screen
+intel/gfx-backend: submit seq=7 cmds=8 unsupported=0 target=image
+intel/gfx-backend: submit seq=8 cmds=25 unsupported=0 target=screen
+intel/igpu770: rcs-present chunk=0 pixels=256 completed_pixels=256 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present chunk=1 pixels=256 completed_pixels=512 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present chunk=2 pixels=256 completed_pixels=768 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present chunk=3 pixels=256 completed_pixels=1024 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present chunk=1874 pixels=256 completed_pixels=480000 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present summary success=1 size=800x600 chunks=1875 completed_pixels=480000 total_pixels=480000 dst_gpu=0x0 pitch=0xC80
+intel/gfx-backend: present seq=4 mode=rcs-execlist-store size=800x600
+intel/igpu770: rcs-present chunk=0 pixels=256 completed_pixels=256 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present chunk=1 pixels=256 completed_pixels=512 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present chunk=2 pixels=256 completed_pixels=768 total_pixels=480000 batch_tail=0x1028
+intel/igpu770: rcs-present chunk=3 pixels=256 completed_pixels=1024 total_pixels=480000 batch_tail=0x1028
+logtotcp: client connected handle=3
