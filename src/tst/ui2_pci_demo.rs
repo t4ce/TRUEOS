@@ -5,7 +5,7 @@ use alloc::{
     vec::Vec,
 };
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2Rect};
 
@@ -58,6 +58,7 @@ struct PciDemoSnapshot {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct UsbDemoControllerRow {
+    index: usize,
     title: String,
     detail: String,
 }
@@ -230,7 +231,11 @@ fn usb_demo_snapshot() -> UsbDemoSnapshot {
             ctrl.empty_probe_streak,
             ctrl.mmio_base.as_ptr() as usize
         );
-        controllers.push(UsbDemoControllerRow { title, detail });
+        controllers.push(UsbDemoControllerRow {
+            index: ctrl.index,
+            title,
+            detail,
+        });
     }
 
     let mut devices = Vec::with_capacity(snapshot.devices.len());
@@ -449,7 +454,8 @@ fn pci_demo_content_size(icon: char, snapshot: &PciDemoSnapshot) -> (u32, u32) {
     let total_lines = lines
         .len()
         .saturating_add(snapshot.rows.len())
-        .saturating_add(usize::from(snapshot.rows.is_empty()));
+        .saturating_add(usize::from(snapshot.rows.is_empty()))
+        .saturating_add(2);
     let content_w = max_width
         .saturating_add(UI2_PCI_DEMO_PAD_X * 2)
         .max(UI2_PCI_DEMO_VIEW_W as usize);
@@ -477,13 +483,14 @@ fn usb_demo_content_size(icon: char, snapshot: &UsbDemoSnapshot) -> (u32, u32) {
         let count = snapshot
             .devices
             .iter()
-            .filter(|dev| dev.controller_index == ctrl.title[5..6].parse::<usize>().unwrap_or(usize::MAX))
+            .filter(|dev| dev.controller_index == ctrl.index)
             .count();
         total_lines = total_lines.saturating_add(count.max(1));
     }
     if snapshot.controllers.is_empty() {
         total_lines = total_lines.saturating_add(1);
     }
+    total_lines = total_lines.saturating_add(2);
     for row in snapshot.devices.iter() {
         max_width = max_width.max(pci_demo_measure_width(usb_demo_device_line(row).as_str()));
     }
@@ -769,7 +776,7 @@ fn compose_usb_demo_rgba(
         for dev in snapshot
             .devices
             .iter()
-            .filter(|dev| dev.controller_index == ctrl_index)
+            .filter(|dev| dev.controller_index == ctrl_row.index)
         {
             emitted = true;
             let line = usb_demo_device_line(dev);
@@ -828,7 +835,11 @@ pub async fn ui2_pci_demo_task() {
 
     let icon = pci_demo_icon_char();
     let initial_snapshot = pci_demo_snapshot();
-    let (content_w, content_h) = pci_demo_content_size(icon, &initial_snapshot);
+    let initial_usb_snapshot = usb_demo_snapshot();
+    let (pci_content_w, pci_content_h) = pci_demo_content_size(icon, &initial_snapshot);
+    let (usb_content_w, usb_content_h) = usb_demo_content_size(icon, &initial_usb_snapshot);
+    let content_w = pci_content_w.max(usb_content_w);
+    let content_h = pci_content_h.max(usb_content_h);
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
         UI2_PCI_DEMO_WINDOW_TITLE,
         crate::r::ui2::Ui2Rect {
@@ -859,6 +870,7 @@ pub async fn ui2_pci_demo_task() {
 
     let mut view = DeviceManagerView::Pci;
     let mut last_click_seq = 0u32;
+    let mut last_refresh = Instant::now();
     let rgba = compose_pci_demo_rgba(&atlases, icon, &initial_snapshot, content_w, content_h);
     if !surface.upload_rgba(rgba.as_slice(), "ui2-pci-demo-upload") {
         crate::log!(
@@ -871,7 +883,11 @@ pub async fn ui2_pci_demo_task() {
         return;
     }
 
-    let _ = surface.bind_hosted_scroll_state(UI2_PCI_DEMO_CONTENT_ID, content_w, content_h);
+    let _ = surface.bind_hosted_scroll_state(
+        UI2_PCI_DEMO_CONTENT_ID,
+        pci_content_w,
+        pci_content_h,
+    );
     let _ = crate::r::ui2::set_window_icon(surface.window_id(), 11);
     update_window_title(surface.window_id(), view);
     crate::log!(
@@ -902,18 +918,62 @@ pub async fn ui2_pci_demo_task() {
                 match view {
                     DeviceManagerView::Pci => {
                         let snapshot = pci_demo_snapshot();
-                        let rgba = compose_pci_demo_rgba(&atlases, icon, &snapshot, content_w, content_h);
+                        let (active_w, active_h) = pci_demo_content_size(icon, &snapshot);
+                        let rgba =
+                            compose_pci_demo_rgba(&atlases, icon, &snapshot, content_w, content_h);
                         let _ = surface.upload_rgba(rgba.as_slice(), "ui2-pci-demo-toggle-pci");
+                        let _ = surface.bind_hosted_scroll_state(
+                            UI2_PCI_DEMO_CONTENT_ID,
+                            active_w,
+                            active_h,
+                        );
                         update_window_title(surface.window_id(), view);
                     }
                     DeviceManagerView::Usb => {
                         let snapshot = usb_demo_snapshot();
-                        let rgba = compose_usb_demo_rgba(&atlases, icon, &snapshot, content_w, content_h);
+                        let (active_w, active_h) = usb_demo_content_size(icon, &snapshot);
+                        let rgba =
+                            compose_usb_demo_rgba(&atlases, icon, &snapshot, content_w, content_h);
                         let _ = surface.upload_rgba(rgba.as_slice(), "ui2-pci-demo-toggle-usb");
+                        let _ = surface.bind_hosted_scroll_state(
+                            UI2_PCI_DEMO_CONTENT_ID,
+                            active_w,
+                            active_h,
+                        );
                         update_window_title(surface.window_id(), view);
                     }
                 }
+                last_refresh = Instant::now();
             }
+        }
+        if Instant::now().duration_since(last_refresh) >= EmbassyDuration::from_millis(1000) {
+            match view {
+                DeviceManagerView::Pci => {
+                    let snapshot = pci_demo_snapshot();
+                    let (active_w, active_h) = pci_demo_content_size(icon, &snapshot);
+                    let rgba =
+                        compose_pci_demo_rgba(&atlases, icon, &snapshot, content_w, content_h);
+                    let _ = surface.upload_rgba(rgba.as_slice(), "ui2-pci-demo-refresh-pci");
+                    let _ = surface.bind_hosted_scroll_state(
+                        UI2_PCI_DEMO_CONTENT_ID,
+                        active_w,
+                        active_h,
+                    );
+                }
+                DeviceManagerView::Usb => {
+                    let snapshot = usb_demo_snapshot();
+                    let (active_w, active_h) = usb_demo_content_size(icon, &snapshot);
+                    let rgba =
+                        compose_usb_demo_rgba(&atlases, icon, &snapshot, content_w, content_h);
+                    let _ = surface.upload_rgba(rgba.as_slice(), "ui2-pci-demo-refresh-usb");
+                    let _ = surface.bind_hosted_scroll_state(
+                        UI2_PCI_DEMO_CONTENT_ID,
+                        active_w,
+                        active_h,
+                    );
+                }
+            }
+            last_refresh = Instant::now();
         }
         Timer::after(EmbassyDuration::from_millis(33)).await;
     }

@@ -351,6 +351,26 @@ pub(crate) fn request_rebind(controller_id: usize) -> Result<(), &'static str> {
     }
 }
 
+#[inline]
+pub(crate) fn audio_demo_asset_name() -> &'static str {
+    self::crabusb_service::sound::demo_loop_asset_name()
+}
+
+#[inline]
+pub(crate) fn audio_demo_requested() -> bool {
+    self::crabusb_service::sound::demo_loop_requested()
+}
+
+#[inline]
+pub(crate) fn audio_demo_active() -> bool {
+    self::crabusb_service::sound::demo_loop_active()
+}
+
+#[inline]
+pub(crate) fn set_audio_demo_requested(enabled: bool) {
+    self::crabusb_service::sound::set_demo_loop_requested(enabled)
+}
+
 pub(crate) fn runtime_diag(controller_id: usize) -> Option<UsbControllerRuntimeDiag> {
     self::crabusb_service::runtime_diag(controller_id).map(|diag| UsbControllerRuntimeDiag {
         event_handler_ready: diag.event_handler_ready,

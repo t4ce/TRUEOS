@@ -15,7 +15,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 #[path = "sound/mod.rs"]
-mod sound;
+pub(crate) mod sound;
 
 pub(super) struct TrueosCrabUsbKernel;
 
@@ -2821,7 +2821,6 @@ pub async fn event_pump_task(controller_id: usize) {
 pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
     const OFFLINE_RETRY_MS: u64 = 1000;
 
-    AUDIO_STREAM_REQUESTED.store(true, Ordering::Release);
     TRUEKEY_STREAM_REQUESTED.store(true, Ordering::Release);
     let mut quick_stop_streak = 0u32;
 
@@ -2980,7 +2979,6 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
 
 #[embassy_executor::task]
 pub async fn audio_task() {
-    AUDIO_STREAM_REQUESTED.store(true, Ordering::Release);
     crate::log!("crabusb: audio service armed\n");
     loop {
         Timer::after(EmbassyDuration::from_secs(5)).await;

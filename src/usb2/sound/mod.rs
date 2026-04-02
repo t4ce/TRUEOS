@@ -3,6 +3,7 @@ use spin::Mutex;
 
 pub const DEFAULT_RATE_HZ: u32 = 48_000;
 pub const DEFAULT_CHANNELS: u16 = 2;
+pub const DEMO_ASSET_NAME: &str = "demo.wav";
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveAudioStream {
@@ -22,6 +23,26 @@ pub struct PcmFormat {
     pub rate_hz: u32,
     pub channels: u8,
     pub bits_per_sample: u8,
+}
+
+#[inline]
+pub fn demo_loop_asset_name() -> &'static str {
+    DEMO_ASSET_NAME
+}
+
+#[inline]
+pub fn demo_loop_requested() -> bool {
+    AUDIO_STREAM_REQUESTED.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn demo_loop_active() -> bool {
+    AUDIO_STREAM_ACTIVE.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn set_demo_loop_requested(enabled: bool) {
+    AUDIO_STREAM_REQUESTED.store(enabled, Ordering::Release);
 }
 
 async fn stream_target_audio(
@@ -112,6 +133,16 @@ async fn stream_target_audio(
     );
 
     loop {
+        if !AUDIO_STREAM_REQUESTED.load(Ordering::Acquire) {
+            crate::log!(
+                "crabusb: audio streaming stop-request {:04X}:{:04X} ep=0x{:02X}\n",
+                vendor_id,
+                product_id,
+                endpoint.address
+            );
+            break;
+        }
+
         for packet in packet_batch.chunks_exact_mut(packet_bytes) {
             if silent_packets_remaining > 0 {
                 packet.fill(0);
