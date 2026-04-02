@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::ffi::c_char;
 use core::ffi::c_int;
 use embassy_time::Instant;
@@ -317,10 +318,10 @@ unsafe extern "C" fn trueos_ai_pc_execute_shell_command_js(
     let Some(command_name) = js_to_string(ctx, args[0]) else {
         return js_null();
     };
-    let raw_args = if argc >= 2 {
+    let argv_json = if argc >= 2 {
         js_to_string(ctx, args[1]).unwrap_or_default()
     } else {
-        String::new()
+        String::from("[]")
     };
     let target_mask = if argc >= 3 {
         js_to_i32(ctx, args[2]).unwrap_or(0).max(0) as u8
@@ -328,11 +329,42 @@ unsafe extern "C" fn trueos_ai_pc_execute_shell_command_js(
         0u8
     };
 
+    let argv = match serde_json::from_str::<Vec<String>>(argv_json.as_str()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let obj = qjs::JS_NewObject(ctx);
+            if obj.is_exception() {
+                return js_null();
+            }
+
+            let stderr = alloc::format!("ai-pc: invalid argv json: {}", error);
+            let _ =
+                qjs::JS_SetPropertyStr(ctx, obj, b"ok\0".as_ptr() as *const c_char, js_bool(false));
+            js_set_string_prop(ctx, obj, b"tool_name\0", command_name.as_str());
+            js_set_string_prop(ctx, obj, b"command_line\0", command_name.as_str());
+            js_set_string_prop(ctx, obj, b"stdout\0", "");
+            js_set_string_prop(ctx, obj, b"stderr\0", stderr.as_str());
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                obj,
+                b"exit_code\0".as_ptr() as *const c_char,
+                js_int32(1),
+            );
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                obj,
+                b"duration_ms\0".as_ptr() as *const c_char,
+                js_int32(0),
+            );
+            return obj;
+        }
+    };
+
     let started = Instant::now();
     let result = crate::shell2::execute_ai_pc_shell_command(
         target_mask,
         command_name.as_str(),
-        raw_args.as_str(),
+        argv.as_slice(),
     );
     let duration_ms = started.elapsed().as_millis() as i32;
 
@@ -1601,8 +1633,11 @@ unsafe fn install_shell1_runtime(ctx: *mut qjs::JSContext) {
 (function (G) {
     if (!G) return;
     const raw = G.__trueosShell1CommandRegistryJson;
-    const parsed = typeof raw === 'string' && raw ? JSON.parse(raw) : [];
-    const commands = Array.isArray(parsed) ? parsed.map((entry) => {
+    const parsed = typeof raw === 'string' && raw ? JSON.parse(raw) : null;
+    const entries = parsed && typeof parsed === 'object' && Array.isArray(parsed.commands)
+        ? parsed.commands
+        : [];
+    const commands = entries.map((entry) => {
         const args = Array.isArray(entry && entry.args)
             ? entry.args.map((arg) => Object.freeze({
                 name: String(arg && arg.name ? arg.name : ''),
@@ -1629,7 +1664,7 @@ unsafe fn install_shell1_runtime(ctx: *mut qjs::JSContext) {
             args: Object.freeze(args),
             tool,
         });
-    }) : [];
+    });
     G.__trueosShell1Runtime = Object.freeze({
         commands: Object.freeze(commands),
         historyTotalLines: () => (typeof G.__trueosShell1HistoryTotalLines === 'function'

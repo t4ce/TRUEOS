@@ -389,9 +389,13 @@ unsafe extern "C" fn trueos_fetch_text(
     } else {
         if let Ok(url_str) = core::str::from_utf8(url) {
             if is_post {
-                qjs::trueos_shims::log_info(alloc::format!("qjs fetch: POST {}\n", url_str).as_str());
+                qjs::trueos_shims::log_info(
+                    alloc::format!("qjs fetch: POST {}\n", url_str).as_str(),
+                );
             } else {
-                qjs::trueos_shims::log_info(alloc::format!("qjs fetch: GET {}\n", url_str).as_str());
+                qjs::trueos_shims::log_info(
+                    alloc::format!("qjs fetch: GET {}\n", url_str).as_str(),
+                );
             }
         }
 

@@ -23,6 +23,7 @@ pub struct AiInputEntry {
     pub file_search: bool,
     pub new_conversation: bool,
     pub computer_use: bool,
+    pub mode_profile: &'static str,
     pub shell_target_mask: u8,
     pub request_id: u64,
 }
@@ -71,6 +72,7 @@ globalThis.__trueosAiTaskPromise = Promise.resolve()
             prompt: String(globalThis.__trueosAiTaskPrompt || ''),
             webSearch: Number(globalThis.__trueosAiTaskWebSearch || 0) > 0,
             fileSearch: Number(globalThis.__trueosAiTaskFileSearch || 0) > 0,
+            modeProfile: String(globalThis.__trueosAiTaskModeProfile || 'normal'),
             conversationId: String(globalThis.__trueosAiTaskConversationId || ''),
             targetMask: Number(globalThis.__trueosAiTaskTargetMask || 0) || 0,
         });
@@ -103,6 +105,7 @@ globalThis.__trueosAiTaskPromise = Promise.resolve()
             prompt: String(globalThis.__trueosAiTaskPrompt || ''),
             webSearch: Number(globalThis.__trueosAiTaskWebSearch || 0) > 0,
             fileSearch: Number(globalThis.__trueosAiTaskFileSearch || 0) > 0,
+            modeProfile: String(globalThis.__trueosAiTaskModeProfile || 'normal'),
             conversationId: String(globalThis.__trueosAiTaskConversationId || ''),
             computerUse: Number(globalThis.__trueosAiTaskComputerUse || 0) > 0,
             targetMask: Number(globalThis.__trueosAiTaskTargetMask || 0) || 0,
@@ -130,13 +133,15 @@ const AI_WEB_SEARCH_PROP: &[u8] = b"__trueosAiTaskWebSearch\0";
 const AI_FILE_SEARCH_PROP: &[u8] = b"__trueosAiTaskFileSearch\0";
 const AI_CONVERSATION_ID_PROP: &[u8] = b"__trueosAiTaskConversationId\0";
 const AI_COMPUTER_USE_PROP: &[u8] = b"__trueosAiTaskComputerUse\0";
+const AI_MODE_PROFILE_PROP: &[u8] = b"__trueosAiTaskModeProfile\0";
 const AI_TARGET_MASK_PROP: &[u8] = b"__trueosAiTaskTargetMask\0";
 const AI_PRINT_FN_PROP: &[u8] = b"__trueosAiPrintLine\0";
 const AI_SET_CONVERSATION_FN_PROP: &[u8] = b"__trueosAiSetConversationId\0";
 const AI_ADD_USAGE_TOTALS_FN_PROP: &[u8] = b"__trueosAiAddUsageTotals\0";
 const AI_READ_PRIMARY_FS_TREE_FN_PROP: &[u8] = b"__trueosAiReadPrimaryFsTreeJsonAll\0";
 const AI_PROMPT_TIMEOUT_MS: u64 = 90_000;
-const AI_MODE_NOT_IMPLEMENTED: &str = "ai: mode not implemented yet; use normal, web, file, or newchat";
+const AI_MODE_NOT_IMPLEMENTED: &str =
+    "ai: mode not implemented yet; use normal, inteldev, driverdev, or newchat";
 const AI_PRIMARY_FS_TREE_MAX_ENTRIES: u32 = 96;
 
 static AI_TASK_STARTED: AtomicBool = AtomicBool::new(false);
@@ -196,7 +201,9 @@ fn print_targeted_multiline_if_current(target_mask: u8, request_id: u64, text: &
     }
 }
 
-fn prompt_mode_supported(_entry: &AiInputEntry) -> bool { true }
+fn prompt_mode_supported(_entry: &AiInputEntry) -> bool {
+    true
+}
 
 fn read_primary_fs_tree_json_all(max_entries: u32) -> Option<String> {
     let bytes = v::vfs::trueosfs_json_all(max_entries).ok()?;
@@ -306,7 +313,8 @@ unsafe extern "C" fn qjs_ai_set_conversation_id(
         return qjs::JS_NewFloat64(ctx, 0.0);
     }
 
-    (*opaque).next_conversation_id = (!conversation_id.trim().is_empty()).then_some(conversation_id);
+    (*opaque).next_conversation_id =
+        (!conversation_id.trim().is_empty()).then_some(conversation_id);
     qjs::JS_NewFloat64(ctx, 1.0)
 }
 
@@ -351,11 +359,7 @@ unsafe extern "C" fn qjs_ai_add_usage_totals(
     }
 
     let totals = add_usage_totals((*opaque).target_mask as u8, input_tokens, output_tokens);
-    let summary = alloc::format!(
-        "sum_in={} sum_out={}",
-        totals.input_tokens,
-        totals.output_tokens
-    );
+    let summary = alloc::format!("sum_in={} sum_out={}", totals.input_tokens, totals.output_tokens);
     qjs::jsbind::new_string(ctx, summary.as_bytes())
 }
 
@@ -488,6 +492,7 @@ async unsafe fn run_prompt_in_vm(entry: &AiInputEntry) -> bool {
         AI_COMPUTER_USE_PROP,
         qjs::JS_NewFloat64(ctx, if entry.computer_use { 1.0 } else { 0.0 }),
     );
+    let _ = qjs::jsbind::set_str_prop(ctx, global, AI_MODE_PROFILE_PROP, entry.mode_profile);
     let _ = qjs::jsbind::set_prop(
         ctx,
         global,
@@ -517,7 +522,9 @@ async unsafe fn run_prompt_in_vm(entry: &AiInputEntry) -> bool {
         );
         let drained = qjs::vm::teardown_main_context(rt, ctx, 500).await;
         if !drained {
-            qjs::trueos_shims::log_error("ai-task: teardown drain incomplete after import failure\n");
+            qjs::trueos_shims::log_error(
+                "ai-task: teardown drain incomplete after import failure\n",
+            );
         }
         drop(vm);
         return false;

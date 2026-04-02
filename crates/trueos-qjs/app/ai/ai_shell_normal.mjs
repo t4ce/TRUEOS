@@ -1,6 +1,10 @@
 import { normalizeJsonFileTree } from './ai_file_adapter.mjs';
 import {
+  AI_TOOL_PROFILE_DRIVERDEV,
+  AI_TOOL_PROFILE_INTELDEV,
+  AI_TOOL_PROFILE_NORMAL,
   buildAiPcIntelCommandLine,
+  buildAiPcShellCommandArgs,
   buildAiPcShellCommandLine,
   buildAiPcToolBundle,
   executeAiPcDriverdevTool,
@@ -13,7 +17,7 @@ import {
 const MODEL = 'gpt-5.4';
 const MODEL_TAG_COLOR = '\x1b[38;2;60;183;161m';
 const ANSI_RESET = '\x1b[0m';
-const LOCAL_TOOL_MAX_ROUNDS = 8;
+const LOCAL_TOOL_MAX_ROUNDS = 10;
 
 const SYSTEM_PROMPT = [
   'You are the TRUEOS shell AI mode.',
@@ -22,6 +26,43 @@ const SYSTEM_PROMPT = [
   'Do not mention browser integration.',
   'Use the provided TRUEOS-native tools when they help.',
 ].join(' ');
+
+function normalizeToolProfile(profile) {
+  switch (String(profile || AI_TOOL_PROFILE_NORMAL).trim()) {
+    case AI_TOOL_PROFILE_INTELDEV:
+      return AI_TOOL_PROFILE_INTELDEV;
+    case AI_TOOL_PROFILE_DRIVERDEV:
+      return AI_TOOL_PROFILE_DRIVERDEV;
+    default:
+      return AI_TOOL_PROFILE_NORMAL;
+  }
+}
+
+function buildSystemPrompt(toolProfile) {
+  switch (toolProfile) {
+    case AI_TOOL_PROFILE_INTELDEV:
+      return [
+        SYSTEM_PROMPT,
+        'This session is in inteldev mode.',
+        'Use the Intel adapter for Intel GPU bring-up and debugging.',
+        'Generic shell tools are also available.',
+      ].join(' ');
+    case AI_TOOL_PROFILE_DRIVERDEV:
+      return [
+        SYSTEM_PROMPT,
+        'This session is in driverdev mode.',
+        'Use the driverdev tools for live xHCI and USB inspection.',
+        'Generic shell tools are also available.',
+      ].join(' ');
+    default:
+      return [
+        SYSTEM_PROMPT,
+        'This session is in normal mode.',
+        'Web search and local TRUEOS filesystem context are available when useful.',
+        'Keep the interaction lightweight unless the prompt requires deeper inspection.',
+      ].join(' ');
+  }
+}
 
 export function printLine(text) {
   const value = String(text ?? '');
@@ -259,10 +300,10 @@ function buildInput(prompt, localFileContext) {
 }
 
 function buildRequest(prompt, options) {
-  const localTools = buildAiPcToolBundle();
+  const localTools = buildAiPcToolBundle(options.toolProfile);
   const request = {
     model: MODEL,
-    instructions: SYSTEM_PROMPT,
+    instructions: buildSystemPrompt(options.toolProfile),
     input: buildInput(prompt, options.localFileContext),
     tools: options.webSearch
       ? [...localTools, { type: 'web_search' }]
@@ -323,10 +364,12 @@ function executeLocalShellTool(call, parsedArgs, targetMask) {
     throw new Error('TRUEOS shell bridge is unavailable');
   }
   const commandLine = buildAiPcShellCommandLine(call.name, parsedArgs);
-  const rawArgs = commandLine.startsWith(`${command.command} `)
-    ? commandLine.slice(command.command.length + 1)
-    : (commandLine === command.command ? '' : commandLine);
-  const result = globalThis.__trueosAiPcExecuteShellCommand(command.command, rawArgs, Number(targetMask || 0));
+  const commandArgs = buildAiPcShellCommandArgs(call.name, parsedArgs);
+  const result = globalThis.__trueosAiPcExecuteShellCommand(
+    command.command,
+    JSON.stringify(commandArgs),
+    Number(targetMask || 0),
+  );
   return {
     ...(result && typeof result === 'object' ? result : {}),
     tool_name: String(call.name || ''),
@@ -339,10 +382,12 @@ function executeLocalIntelTool(call, parsedArgs, targetMask) {
     throw new Error('TRUEOS shell bridge is unavailable');
   }
   const commandLine = buildAiPcIntelCommandLine(parsedArgs);
-  const rawArgs = commandLine.startsWith('inteldev ')
-    ? commandLine.slice('inteldev'.length + 1)
-    : (commandLine === 'inteldev' ? '' : commandLine);
-  const result = globalThis.__trueosAiPcExecuteShellCommand('inteldev', rawArgs, Number(targetMask || 0));
+  const commandArgs = buildAiPcShellCommandArgs('shell_inteldev', parsedArgs);
+  const result = globalThis.__trueosAiPcExecuteShellCommand(
+    'inteldev',
+    JSON.stringify(commandArgs),
+    Number(targetMask || 0),
+  );
   return {
     ...(result && typeof result === 'object' ? result : {}),
     tool_name: 'intel_adapter',
@@ -350,18 +395,21 @@ function executeLocalIntelTool(call, parsedArgs, targetMask) {
   };
 }
 
-function executeLocalToolCall(call, targetMask) {
+function executeLocalToolCall(call, targetMask, toolProfile) {
   const parsedArgs = parseToolArguments(call);
-  if (isAiPcIntelToolName(call.name)) {
+  if (toolProfile === AI_TOOL_PROFILE_INTELDEV && isAiPcIntelToolName(call.name)) {
     return executeLocalIntelTool(call, parsedArgs, targetMask);
   }
-  if (isAiPcFileToolName(call.name)) {
+  if (toolProfile === AI_TOOL_PROFILE_NORMAL && isAiPcFileToolName(call.name)) {
     return executeAiPcFileTool(call.name, parsedArgs);
   }
   if (findAiPcShellCommandByToolName(call.name)) {
     return executeLocalShellTool(call, parsedArgs, targetMask);
   }
-  return executeAiPcDriverdevTool(call.name, parsedArgs);
+  if (toolProfile === AI_TOOL_PROFILE_DRIVERDEV) {
+    return executeAiPcDriverdevTool(call.name, parsedArgs);
+  }
+  throw new Error(`tool unavailable in ${toolProfile} mode: ${String(call?.name || '')}`);
 }
 
 function maybeReadLocalFileContext(fileSearch) {
@@ -455,14 +503,15 @@ export async function runShellPrompt(config = null) {
 
   const webSearch = !!source.webSearch;
   const fileSearch = !!source.fileSearch;
+  const toolProfile = normalizeToolProfile(source.modeProfile);
   const conversationId = String(source.conversationId || '').trim();
   const targetMask = Number(source.targetMask || 0) || 0;
   const vectorStoreIds = readVectorStoreIds();
-  const localFileContext = fileSearch && vectorStoreIds.length <= 0
+  const localFileContext = fileSearch
     ? maybeReadLocalFileContext(true)
     : '';
 
-  if (fileSearch && vectorStoreIds.length <= 0 && localFileContext) {
+  if (fileSearch && localFileContext) {
     printLine('ai: file mode using local TRUEOS file tree json');
   }
 
@@ -476,6 +525,7 @@ export async function runShellPrompt(config = null) {
         ...buildRequest(prompt, {
           webSearch,
           fileSearch,
+          toolProfile,
           conversationId: previousResponseId,
           vectorStoreIds,
           localFileContext: '',
@@ -506,7 +556,7 @@ export async function runShellPrompt(config = null) {
     for (const call of functionCalls) {
       let toolResult;
       try {
-        toolResult = executeLocalToolCall(call, targetMask);
+        toolResult = executeLocalToolCall(call, targetMask, toolProfile);
       } catch (error) {
         toolResult = {
           ok: false,

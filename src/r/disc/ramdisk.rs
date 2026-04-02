@@ -1,9 +1,12 @@
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
 use crate::disc::block;
 
+const RAMDISK_CHUNK_BYTES: usize = 64 * 1024;
+
 pub struct RamdiskDevice {
-    backing: Vec<u8>,
+    len_bytes: usize,
+    chunks: BTreeMap<u64, Box<[u8]>>,
     block_size: u32,
     block_count: u64,
 }
@@ -40,14 +43,9 @@ impl RamdiskDevice {
             .ok_or(block::Error::InvalidParam)?;
         let len_bytes = usize::try_from(bytes).map_err(|_| block::Error::InvalidParam)?;
 
-        let mut backing = Vec::new();
-        backing
-            .try_reserve_exact(len_bytes)
-            .map_err(|_| block::Error::NotReady)?;
-        backing.resize(len_bytes, 0);
-
         Ok(Self {
-            backing,
+            len_bytes,
+            chunks: BTreeMap::new(),
             block_size,
             block_count,
         })
@@ -57,10 +55,23 @@ impl RamdiskDevice {
         let stop = start
             .checked_add(dst.len())
             .ok_or(block::Error::InvalidParam)?;
-        if stop > self.backing.len() {
+        if stop > self.len_bytes {
             return Err(block::Error::OutOfBounds);
         }
-        dst.copy_from_slice(&self.backing[start..stop]);
+        dst.fill(0);
+
+        let mut src_off = start;
+        let mut dst_off = 0usize;
+        while dst_off < dst.len() {
+            let chunk_idx = (src_off / RAMDISK_CHUNK_BYTES) as u64;
+            let chunk_off = src_off % RAMDISK_CHUNK_BYTES;
+            let take = core::cmp::min(RAMDISK_CHUNK_BYTES - chunk_off, dst.len() - dst_off);
+            if let Some(chunk) = self.chunks.get(&chunk_idx) {
+                dst[dst_off..dst_off + take].copy_from_slice(&chunk[chunk_off..chunk_off + take]);
+            }
+            src_off = src_off.saturating_add(take);
+            dst_off = dst_off.saturating_add(take);
+        }
         Ok(())
     }
 
@@ -68,10 +79,24 @@ impl RamdiskDevice {
         let stop = start
             .checked_add(src.len())
             .ok_or(block::Error::InvalidParam)?;
-        if stop > self.backing.len() {
+        if stop > self.len_bytes {
             return Err(block::Error::OutOfBounds);
         }
-        self.backing[start..stop].copy_from_slice(src);
+
+        let mut src_off = 0usize;
+        let mut dst_off = start;
+        while src_off < src.len() {
+            let chunk_idx = (dst_off / RAMDISK_CHUNK_BYTES) as u64;
+            let chunk_off = dst_off % RAMDISK_CHUNK_BYTES;
+            let take = core::cmp::min(RAMDISK_CHUNK_BYTES - chunk_off, src.len() - src_off);
+            let chunk = self
+                .chunks
+                .entry(chunk_idx)
+                .or_insert_with(|| vec![0u8; RAMDISK_CHUNK_BYTES].into_boxed_slice());
+            chunk[chunk_off..chunk_off + take].copy_from_slice(&src[src_off..src_off + take]);
+            src_off = src_off.saturating_add(take);
+            dst_off = dst_off.saturating_add(take);
+        }
         Ok(())
     }
 }
@@ -199,4 +224,30 @@ pub async fn create_trueos_public(
         .await
         .map_err(TrueosPublicError::Validate)?;
     Ok(disk)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RamdiskDevice;
+
+    #[test]
+    fn fresh_ramdisk_reads_as_zero_without_backing_allocation() {
+        let disk = RamdiskDevice::new(128 * 1024, 512).unwrap();
+        let mut out = [0xAAu8; 4096];
+        disk.read_range(0, &mut out).unwrap();
+        assert!(out.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn sparse_writes_preserve_zero_fill_outside_written_ranges() {
+        let mut disk = RamdiskDevice::new(256 * 1024, 512).unwrap();
+        disk.write_range(1024, b"hello world").unwrap();
+
+        let mut out = [0u8; 32];
+        disk.read_range(1018, &mut out).unwrap();
+
+        assert_eq!(&out[..6], &[0u8; 6]);
+        assert_eq!(&out[6..17], b"hello world");
+        assert!(out[17..].iter().all(|&b| b == 0));
+    }
 }

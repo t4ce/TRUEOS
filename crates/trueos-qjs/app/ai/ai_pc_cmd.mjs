@@ -176,19 +176,10 @@ const FILE_ADAPTER_TOOLS = Object.freeze([
   }),
 ]);
 
-function rawArgSchema(command) {
-  return Object.freeze({
-    type: 'object',
-    properties: Object.freeze({
-      raw_args: Object.freeze({
-        type: 'string',
-        description: `Optional fallback raw shell argument string appended after \`${command}\`. Prefer the structured tool parameters when available.`,
-      }),
-    }),
-    required: Object.freeze([]),
-    additionalProperties: false,
-  });
-}
+export const AI_TOOL_PROFILE_ALL = 'all';
+export const AI_TOOL_PROFILE_NORMAL = 'normal';
+export const AI_TOOL_PROFILE_INTELDEV = 'inteldev';
+export const AI_TOOL_PROFILE_DRIVERDEV = 'driverdev';
 
 function cloneToolParameters(parameters) {
   if (!parameters || typeof parameters !== 'object') {
@@ -244,6 +235,9 @@ function readShellRuntimeCommands() {
         parameters: cloneToolParameters(entry.tool.parameters),
       })
       : null;
+    if (!tool?.parameters) {
+      continue;
+    }
     out.push(Object.freeze({
       command,
       toolName: `shell_${command.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'command'}`,
@@ -251,7 +245,7 @@ function readShellRuntimeCommands() {
       description: tool?.description
         || SHELL_COMMAND_DESCRIPTION_OVERRIDES[command]
         || `Run the shell1 ${command} command. Prefer the structured tool parameters when available.`,
-      parameters: tool?.parameters || null,
+      parameters: tool.parameters,
     }));
   }
   return out;
@@ -272,7 +266,7 @@ function shellToolBundle() {
     type: 'function',
     name: entry.toolName,
     description: entry.description,
-    parameters: entry.parameters || rawArgSchema(entry.command),
+    parameters: entry.parameters,
   }));
 }
 
@@ -285,7 +279,7 @@ function intelToolBundle() {
     type: 'function',
     name: 'intel_adapter',
     description: 'Live Intel GPU adapter for MMIO, ring, GuC, HuC, render, and media bring-up actions. Prefer this for Intel hardware work.',
-    parameters: inteldev.parameters || rawArgSchema('inteldev'),
+    parameters: inteldev.parameters,
   }];
 }
 
@@ -319,13 +313,31 @@ export function buildAiPcFileToolBundle() {
   );
 }
 
-export function buildAiPcToolBundle() {
-  return Object.freeze([
-    ...buildAiPcIntelToolBundle(),
-    ...buildAiPcFileToolBundle(),
-    ...buildAiPcShellToolBundle(),
-    ...buildAiPcDriverdevToolBundle(),
-  ]);
+export function buildAiPcToolBundle(profile = AI_TOOL_PROFILE_ALL) {
+  switch (String(profile || AI_TOOL_PROFILE_ALL)) {
+    case AI_TOOL_PROFILE_NORMAL:
+      return Object.freeze([
+        ...buildAiPcFileToolBundle(),
+        ...buildAiPcShellToolBundle(),
+      ]);
+    case AI_TOOL_PROFILE_INTELDEV:
+      return Object.freeze([
+        ...buildAiPcIntelToolBundle(),
+        ...buildAiPcShellToolBundle(),
+      ]);
+    case AI_TOOL_PROFILE_DRIVERDEV:
+      return Object.freeze([
+        ...buildAiPcShellToolBundle(),
+        ...buildAiPcDriverdevToolBundle(),
+      ]);
+    default:
+      return Object.freeze([
+        ...buildAiPcIntelToolBundle(),
+        ...buildAiPcFileToolBundle(),
+        ...buildAiPcShellToolBundle(),
+        ...buildAiPcDriverdevToolBundle(),
+      ]);
+  }
 }
 
 export function findAiPcShellCommandByToolName(toolName) {
@@ -340,108 +352,143 @@ export function isAiPcFileToolName(toolName) {
   return toolName === 'file_adapter_get_primary_tree';
 }
 
-export function buildAiPcShellCommandLine(toolName, args = {}) {
+function pushArg(argv, value) {
+  if (value === null || value === undefined) {
+    return;
+  }
+  const text = String(value).trim();
+  if (text) {
+    argv.push(text);
+  }
+}
+
+function pushKeyValueArg(argv, key, value) {
+  if (value === null || value === undefined) {
+    return;
+  }
+  const text = String(value).trim();
+  if (text) {
+    argv.push(`${key}=${text}`);
+  }
+}
+
+function quoteDisplayArg(value) {
+  const text = String(value ?? '');
+  if (!/[\s"\\]/.test(text)) {
+    return text;
+  }
+  return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+export function buildAiPcShellCommandArgs(toolName, args = {}) {
   const entry = findAiPcShellCommandByToolName(toolName);
   if (!entry) {
     throw new Error(`unknown ai-pc shell tool: ${String(toolName || '')}`);
   }
-  const rawArgs = typeof args?.raw_args === 'string' ? args.raw_args.trim() : '';
-  if (rawArgs) {
-    return `${entry.command} ${rawArgs}`;
-  }
 
-  const tokens = [];
+  const argv = [];
   switch (entry.command) {
     case 'acpi':
-      appendToken(tokens, args?.action);
+      pushArg(argv, args?.action);
       break;
     case 'email':
       if (args?.mode === 'set_from') {
-        appendToken(tokens, 'set');
-        appendToken(tokens, args?.from);
+        pushArg(argv, 'set');
+        pushArg(argv, args?.from);
       } else {
-        appendToken(tokens, args?.to);
+        pushArg(argv, args?.to);
         if (args?.mail_text !== undefined) {
-          appendToken(tokens, quoteArg(args.mail_text));
+          pushArg(argv, args.mail_text);
         }
       }
       break;
     case 'etc':
-      appendToken(tokens, args?.subcommand);
+      pushArg(argv, args?.subcommand);
       break;
     case 'file':
       if (args?.action && args.action !== 'list') {
-        appendToken(tokens, args.action);
+        pushArg(argv, args.action);
       }
       if (args?.action === 'format') {
-        appendToken(tokens, args?.disk_id);
+        pushArg(argv, args?.disk_id);
       } else if (args?.action === 'ramdisc') {
-        appendToken(tokens, args?.size);
+        pushArg(argv, args?.size);
       }
       break;
     case 'inteldev':
-      appendToken(tokens, args?.action);
-      appendKeyValue(tokens, 'scope', args?.scope);
-      appendKeyValue(tokens, 'engine', args?.engine);
-      appendKeyValue(tokens, 'addr', args?.addr);
-      appendKeyValue(tokens, 'value', args?.value);
-      appendKeyValue(tokens, 'mask', args?.mask);
-      appendKeyValue(tokens, 'expected', args?.expected);
-      appendKeyValue(tokens, 'count', args?.count);
-      appendKeyValue(tokens, 'len', args?.len);
-      appendKeyValue(tokens, 'offset', args?.offset);
-      appendKeyValue(tokens, 'timeout_iters', args?.timeout_iters);
-      appendKeyValue(tokens, 'data_hex', args?.data_hex);
-      appendKeyValue(tokens, 'guard', args?.guard);
+      pushArg(argv, args?.action);
+      pushKeyValueArg(argv, 'scope', args?.scope);
+      pushKeyValueArg(argv, 'engine', args?.engine);
+      pushKeyValueArg(argv, 'addr', args?.addr);
+      pushKeyValueArg(argv, 'value', args?.value);
+      pushKeyValueArg(argv, 'mask', args?.mask);
+      pushKeyValueArg(argv, 'expected', args?.expected);
+      pushKeyValueArg(argv, 'count', args?.count);
+      pushKeyValueArg(argv, 'len', args?.len);
+      pushKeyValueArg(argv, 'offset', args?.offset);
+      pushKeyValueArg(argv, 'timeout_iters', args?.timeout_iters);
+      pushKeyValueArg(argv, 'data_hex', args?.data_hex);
+      pushKeyValueArg(argv, 'guard', args?.guard);
       break;
     case 'net':
-      appendToken(tokens, args?.subcommand);
+      pushArg(argv, args?.subcommand);
       if (args?.subcommand === 'icmp') {
-        appendToken(tokens, args?.target);
-        appendToken(tokens, args?.selector);
+        pushArg(argv, args?.target);
+        pushArg(argv, args?.selector);
       } else if (args?.subcommand === 'irc') {
-        appendToken(tokens, args?.host);
-        appendToken(tokens, args?.channel);
+        pushArg(argv, args?.host);
+        pushArg(argv, args?.channel);
       } else if (args?.subcommand === 'nic') {
-        appendToken(tokens, args?.selector);
+        pushArg(argv, args?.selector);
       } else if (args?.subcommand === 'hostname' && args?.name) {
-        appendToken(tokens, args.name);
+        pushArg(argv, args.name);
       }
       break;
     case 'probe':
-      appendToken(tokens, args?.domain);
-      appendToken(tokens, args?.action);
+      pushArg(argv, args?.domain);
+      pushArg(argv, args?.action);
       if (args?.domain === 'usb' && (args?.action === 'kick' || args?.action === 'rebind')) {
-        appendToken(tokens, args?.controller);
+        pushArg(argv, args?.controller);
       } else if (args?.domain === 'nvme' && args?.action === 'flr') {
-        appendToken(tokens, args?.pci);
+        pushArg(argv, args?.pci);
       }
       break;
     case 'set':
-      appendToken(tokens, args?.width);
+      pushArg(argv, args?.width);
       break;
     case 'smp':
-      appendToken(tokens, args?.slot);
+      pushArg(argv, args?.slot);
       break;
     case 'tlb':
       if (args?.target === 'usb_probe') {
-        appendToken(tokens, 'usb');
-        appendToken(tokens, 'probe');
+        pushArg(argv, 'usb');
+        pushArg(argv, 'probe');
       } else {
-        appendToken(tokens, args?.target);
+        pushArg(argv, args?.target);
       }
       break;
     case 'turbo':
-      appendToken(tokens, args?.action);
+      pushArg(argv, args?.action);
       if (args?.action === 'verify') {
-        appendToken(tokens, args?.spins);
+        pushArg(argv, args?.spins);
       }
       break;
     default:
       break;
   }
 
-  return tokens.length > 0 ? `${entry.command} ${tokens.join(' ')}` : entry.command;
+  return Object.freeze(argv);
+}
+
+export function buildAiPcShellCommandLine(toolName, args = {}) {
+  const entry = findAiPcShellCommandByToolName(toolName);
+  if (!entry) {
+    throw new Error(`unknown ai-pc shell tool: ${String(toolName || '')}`);
+  }
+  const argv = buildAiPcShellCommandArgs(toolName, args);
+  return argv.length > 0
+    ? `${entry.command} ${argv.map((value) => quoteDisplayArg(value)).join(' ')}`
+    : entry.command;
 }
 
 export function buildAiPcIntelCommandLine(args = {}) {

@@ -1256,13 +1256,12 @@ pub mod cabi {
             };
             match req {
                 TextureWorkReq::Upload(req) => {
-                    let rc = upload_texture_rgba_inner(
+                    let rc = upload_texture_rgba_inner_owned(
                         req.tex_id,
                         req.width,
                         req.height,
                         req.region,
-                        req.rgba.as_ptr(),
-                        req.rgba.len(),
+                        req.rgba,
                         req.sample_kind,
                     );
                     if req.update_async_status {
@@ -3439,6 +3438,7 @@ pub mod cabi {
         region: Option<ImageRegion>,
         data_ptr: *const u8,
         data_len: usize,
+        mut owned_rgba: Option<Vec<u8>>,
         sample_kind: TexSampleKind,
         call_init: bool,
     ) -> i32 {
@@ -3552,7 +3552,31 @@ pub mod cabi {
                     };
                     image_id = img;
                 }
-                let mut cached_rgba = if recreate {
+                let mut cached_rgba = if region.is_none() {
+                    if let Some(mut rgba) = owned_rgba.take() {
+                        rgba.truncate(expected);
+                        rgba
+                    } else if recreate {
+                        vec![
+                            0;
+                            (width as usize)
+                                .saturating_mul(height as usize)
+                                .saturating_mul(4)
+                        ]
+                    } else {
+                        images[idx]
+                            .as_ref()
+                            .map(|entry| entry.rgba.clone())
+                            .unwrap_or_else(|| {
+                                vec![
+                                    0;
+                                    (width as usize)
+                                        .saturating_mul(height as usize)
+                                        .saturating_mul(4)
+                                ]
+                            })
+                    }
+                } else if recreate {
                     vec![
                         0;
                         (width as usize)
@@ -3630,6 +3654,29 @@ pub mod cabi {
             region,
             data_ptr,
             data_len,
+            None,
+            sample_kind,
+            true,
+        )
+    }
+
+    #[inline]
+    fn upload_texture_rgba_inner_owned(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        region: Option<ImageRegion>,
+        rgba: Vec<u8>,
+        sample_kind: TexSampleKind,
+    ) -> i32 {
+        upload_texture_rgba_inner_impl(
+            tex_id,
+            width,
+            height,
+            region,
+            rgba.as_ptr(),
+            rgba.len(),
+            Some(rgba),
             sample_kind,
             true,
         )
@@ -3648,6 +3695,7 @@ pub mod cabi {
             None,
             data.as_ptr(),
             data.len(),
+            None,
             TexSampleKind::Mask,
             false,
         )

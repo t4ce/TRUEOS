@@ -332,10 +332,18 @@ fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
         None
     };
 
+    let shell_width = line_width_for_backend(io);
+    let fixed_width = 10 + 6 + 6;
+    let separator_width = 2 * 3;
+    let min_name_width = 16usize.max("Name".chars().count());
+    let name_width = shell_width
+        .saturating_sub(fixed_width + separator_width)
+        .max(min_name_width);
+
     let cols = [
         Column {
             header: "Name",
-            width: 40,
+            width: name_width,
         },
         Column {
             header: "Address",
