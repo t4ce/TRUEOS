@@ -3552,6 +3552,7 @@ pub mod cabi {
                     };
                     image_id = img;
                 }
+                let used_owned_full_rgba = region.is_none() && owned_rgba.is_some();
                 let mut cached_rgba = if region.is_none() {
                     if let Some(mut rgba) = owned_rgba.take() {
                         rgba.truncate(expected);
@@ -3611,7 +3612,9 @@ pub mod cabi {
                         }
                     }
                     None => {
-                        cached_rgba[..expected].copy_from_slice(&data[..expected]);
+                        if !used_owned_full_rgba {
+                            cached_rgba[..expected].copy_from_slice(&data[..expected]);
+                        }
                     }
                 }
                 images[idx] = Some(TexImage {
