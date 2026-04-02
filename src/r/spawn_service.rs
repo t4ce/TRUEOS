@@ -929,43 +929,43 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_hit,
     ),
     TaskSpec::enabled("truesurfer-factory", 0, &SURFER_FACTORY_STARTED, spawn_truesurfer_factory),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-gfx-tetris",
         UI2_DEMO_READY,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-athlas-third-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_THIRD_DEMO_STARTED,
         spawn_ui2_athlas_third_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-athlas-half-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_HALF_DEMO_STARTED,
         spawn_ui2_athlas_half_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-athlas-1x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_1X_DEMO_STARTED,
         spawn_ui2_athlas_1x_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-athlas-2x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_2X_DEMO_STARTED,
         spawn_ui2_athlas_2x_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-palatino-1x-demo",
         UI2_DEMO_READY,
         &UI2_PALATINO_1X_DEMO_STARTED,
         spawn_ui2_palatino_1x_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-twemoji-1x",
         crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY,
         &UI2_TWEMOJI_1X_STARTED,
@@ -977,38 +977,38 @@ static TASKS: &[TaskSpec] = &[
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
-    TaskSpec::enabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
-    TaskSpec::enabled(
+    TaskSpec::disabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
+    TaskSpec::disabled(
         "ui2-mandelbrot-demo",
         UI2_DEMO_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-petersen-demo",
         UI2_DEMO_READY,
         &UI2_PETERSEN_DEMO_STARTED,
         spawn_ui2_petersen_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-particle-demo",
         UI2_DEMO_READY,
         &UI2_PARTICLE_DEMO_STARTED,
         spawn_ui2_particle_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-smiley-fountain-demo",
         UI2_DEMO_READY,
         &UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
         spawn_ui2_smiley_fountain_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-shell-demo",
         UI2_DEMO_READY,
         &UI2_SHELL_DEMO_STARTED,
         spawn_ui2_shell_demo,
     ),
-    TaskSpec::enabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
+    TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
     TaskSpec::enabled(
         "gfx-intel-readiness-probe",
         crate::r::readiness::GFX_INTEL_CLAIMED,

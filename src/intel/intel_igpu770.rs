@@ -2808,6 +2808,11 @@ pub fn ggtt_bcs_smoke_test_once() {
         batch_dwords.get(7).copied().unwrap_or(0)
     );
 
+    if !xelp_copy_ngin::copy_ngin_enabled() {
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=copy-ngin-disabled\n");
+        return;
+    }
+
     let _ = forcewake_all_acquire(warm);
     let _ =
         mmio_write32(warm, BCS_RING_MODE_GEN7, masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE));
