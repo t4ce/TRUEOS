@@ -159,7 +159,36 @@ impl Ui2WindowHitSource for Ui2Window {
                     });
                 }
             }
-            Ui2WindowKind::HostedSurface => {}
+            Ui2WindowKind::HostedSurface => {
+                if !window_content_participates_in_composition(self) {
+                    return;
+                }
+                let Some(content) = window_content_rect(ctx.state, self) else {
+                    return;
+                };
+                let surface_state = hosted_surface_state_for_window(self);
+                let scroll_x = surface_state.scroll_x as f32;
+                let scroll_y = surface_state.scroll_y as f32;
+                for interactive in &self.hosted_surface_interactives {
+                    if interactive.item_id == 0 || interactive.width == 0 || interactive.height == 0
+                    {
+                        continue;
+                    }
+                    let rect = Ui2Rect::new(
+                        content.x + interactive.x as f32 - scroll_x,
+                        content.y + interactive.y as f32 - scroll_y,
+                        interactive.width as f32,
+                        interactive.height as f32,
+                    );
+                    scene.append(Ui2HitEntry {
+                        owner_window_id: self.id,
+                        item_id: interactive.item_id,
+                        kind: Ui2HitKind::BrowserInteractive,
+                        rect,
+                        z: self.z,
+                    });
+                }
+            }
             Ui2WindowKind::Hosted3d => {}
         }
     }

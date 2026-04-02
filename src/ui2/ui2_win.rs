@@ -83,6 +83,9 @@ pub(super) fn alloc_window(
         content_tex_blend: false,
         hosted_surface_bg_rgba: [0, 0, 0, 0],
         hosted_surface_tiles: Vec::new(),
+        hosted_surface_interactives: Vec::new(),
+        last_clicked_item_id: 0,
+        last_clicked_item_seq: 0,
         title_tex_id: window_title_tex_id(id),
         title_tex_w: 0,
         title_tex_h: 0,
@@ -428,6 +431,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     let next_content_tex_blend = source_window.content_tex_blend;
     let next_hosted_surface_bg_rgba = source_window.hosted_surface_bg_rgba;
     let next_hosted_surface_tiles = source_window.hosted_surface_tiles.clone();
+    let next_hosted_surface_interactives = source_window.hosted_surface_interactives.clone();
     let next_kind = source_window.kind;
 
     let (next_browser_instance_id, next_tex_id, fork_reason) = match next_kind {
@@ -471,6 +475,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         window.content_tex_blend = next_content_tex_blend;
         window.hosted_surface_bg_rgba = next_hosted_surface_bg_rgba;
         window.hosted_surface_tiles = next_hosted_surface_tiles;
+        window.hosted_surface_interactives = next_hosted_surface_interactives;
         window.hit_test_visible = next_hit_test_visible;
         window.composition_locked = next_composition_locked;
         window.decoration_mode = next_decoration_mode;
@@ -772,10 +777,12 @@ pub fn set_window_hosted_surface_content(id: u32, tex_id: u32, blend_enabled: bo
     window.content_tex_id = tex_id;
     window.content_tex_blend = blend_enabled;
     window.hosted_surface_tiles.clear();
+    window.hosted_surface_interactives.clear();
     state.compose_reason = "texture-window";
     let noted = note_window_dirty(&mut state, id, "texture-window");
     if noted {
         let _ = note_window_viewport_sync_needed(&mut state, id);
+        refresh_window_hit_entries(&mut state, id);
     }
     noted
 }
@@ -802,6 +809,37 @@ pub fn set_window_hosted_surface_tiles(
         let _ = note_window_viewport_sync_needed(&mut state, id);
     }
     noted
+}
+
+pub fn set_window_hosted_surface_interactives(
+    id: u32,
+    interactives: &[Ui2HostedInteractiveRect],
+) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.kind != Ui2WindowKind::HostedSurface {
+        return false;
+    }
+    window.hosted_surface_interactives.clear();
+    window
+        .hosted_surface_interactives
+        .extend_from_slice(interactives);
+    state.compose_reason = "surface-hit-window";
+    let noted = note_window_dirty(&mut state, id, "surface-hit-window");
+    refresh_window_hit_entries(&mut state, id);
+    noted
+}
+
+pub(super) fn note_window_item_click(state: &mut Ui2State, id: u32, item_id: u32) -> bool {
+    let Some(window) = window_mut(state, id) else {
+        return false;
+    };
+    window.last_clicked_item_id = item_id;
+    window.last_clicked_item_seq = window.last_clicked_item_seq.wrapping_add(1).max(1);
+    true
 }
 
 pub fn bind_window_hosted_surface_state(
@@ -1031,6 +1069,10 @@ impl Ui2SurfaceWindow {
         set_window_hosted_surface_tiles(self.window_id, bg_rgba, tiles)
     }
 
+    pub fn set_interactives(&self, interactives: &[Ui2HostedInteractiveRect]) -> bool {
+        set_window_hosted_surface_interactives(self.window_id, interactives)
+    }
+
     pub fn render_rgb_triangles(
         &self,
         clear_rgb: u32,
@@ -1214,6 +1256,19 @@ pub fn window_content_cursor_positions(id: u32) -> Vec<Ui2WindowCursorSample> {
         });
     }
     cursors
+}
+
+pub fn take_window_last_clicked_item(id: u32) -> Option<(u32, u32)> {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let window = window_mut(&mut state, id)?;
+    if window.last_clicked_item_seq == 0 || window.last_clicked_item_id == 0 {
+        return None;
+    }
+    let item_id = window.last_clicked_item_id;
+    let seq = window.last_clicked_item_seq;
+    window.last_clicked_item_id = 0;
+    Some((seq, item_id))
 }
 
 pub fn move_window(id: u32, x: f32, y: f32) -> bool {

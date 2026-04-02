@@ -4,16 +4,15 @@ use trueos_gfx_core::{
     Result, ShaderDesc, ShaderId, SwapchainDesc,
 };
 
-//mod intel;
+mod intel;
 //mod intel_execlists;
 use crate::gfx::virtio_gpu_3d;
-//use intel::IntelGfxBackend;
+use intel::IntelGfxBackend;
 //mod intel_cmd;
 
 pub enum Backend {
     Virgl(virtio_gpu_3d::VirglGfxBackend),
-
-    // Intel(IntelGfxBackend),
+    Intel(IntelGfxBackend),
     None(NullBackend),
 }
 
@@ -127,22 +126,19 @@ impl Backend {
         ensure_pci_enumerated_if_empty();
         virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(Backend::Virgl)
     }
-    /*
     pub fn init_intel(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
         ensure_pci_enumerated_if_empty();
-        if !crate::gfx::intel::has_claimed_device() {
-            crate::gfx::intel::init_once();
+        if !crate::intel::has_claimed_device() {
+            crate::intel::init_once();
         }
         IntelGfxBackend::init(framebuffers).map(Backend::Intel)
     }
-    */
     pub fn context_mut(&mut self) -> &mut dyn GfxContext {
         match self {
             Backend::Virgl(b) => b,
-
-            //   Backend::Intel(b) => b,
+            Backend::Intel(b) => b,
             Backend::None(b) => b,
         }
     }

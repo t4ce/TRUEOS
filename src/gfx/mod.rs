@@ -166,6 +166,7 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
         let backend = backends::Backend::init_auto(framebuffers);
         let backend_name = match &backend {
             backends::Backend::Virgl(_) => "virgl",
+            backends::Backend::Intel(_) => "intel",
             backends::Backend::None(_) => "none",
         };
         crate::log!("gfx: backend={}\n", backend_name);
@@ -351,6 +352,10 @@ pub fn is_virgl_active() -> bool {
     with_system(|sys| matches!(sys.backend, backends::Backend::Virgl(_))).unwrap_or(false)
 }
 
+pub fn is_intel_active() -> bool {
+    with_system(|sys| matches!(sys.backend, backends::Backend::Intel(_))).unwrap_or(false)
+}
+
 /// Returns whether a virgl-capable virtio-gpu device is currently visible.
 ///
 /// This keeps virgl probing behind the `gfx` API so non-gfx modules do not
@@ -385,15 +390,41 @@ pub fn switch_to_virgl() -> bool {
     switched
 }
 
+pub fn switch_to_intel() -> bool {
+    crate::log!("gfx: switch_to_intel: begin\n");
+
+    let fbs = with_framebuffers(|f| f).flatten();
+    let Some(b) = backends::Backend::init_intel(fbs) else {
+        crate::log!("gfx: switch_to_intel: init_intel failed\n");
+        return false;
+    };
+
+    let switched = with_system(|sys| {
+        sys.backend = b;
+        bump_backend_epoch();
+        crate::log!("gfx: switch_to_intel: ok epoch={}\n", backend_epoch());
+        true
+    })
+    .unwrap_or(false);
+
+    if switched {
+        finalize_backend_init();
+    }
+
+    switched
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BackendKind {
     Virgl,
+    Intel,
     None,
 }
 
 pub fn backend_kind() -> Option<BackendKind> {
     with_system(|sys| match &sys.backend {
         backends::Backend::Virgl(_) => BackendKind::Virgl,
+        backends::Backend::Intel(_) => BackendKind::Intel,
         backends::Backend::None(_) => BackendKind::None,
     })
 }
@@ -408,7 +439,11 @@ pub fn toggle_backend() -> BackendKind {
 
     match kind {
         BackendKind::Virgl => BackendKind::Virgl,
+        BackendKind::Intel => BackendKind::Intel,
         BackendKind::None => {
+            if switch_to_intel() {
+                return BackendKind::Intel;
+            }
             if switch_to_virgl() {
                 return BackendKind::Virgl;
             }

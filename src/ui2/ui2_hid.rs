@@ -274,6 +274,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     let mut begin_scroll_drag = false;
     let mut begin_scroll_pan_window_id = 0u32;
     let mut click_candidate_window_id = 0u32;
+    let mut click_candidate_item_id = 0u32;
     let mut click_press_x = 0.0f32;
     let mut click_press_y = 0.0f32;
     {
@@ -292,6 +293,10 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
             cursor.press_x = px;
             cursor.press_y = py;
             cursor.press_window_id = press_window_id;
+            cursor.press_item_id = press_hit
+                .filter(|target| target.kind == Ui2HitKind::BrowserInteractive)
+                .map(|target| target.item_id)
+                .unwrap_or(0);
             cursor.press_armed = press_window_id != 0;
             begin_move_drag = true;
         } else if primary_was_down && !primary_is_down {
@@ -301,6 +306,14 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
                 && is_simple_click(cursor.press_x, cursor.press_y, px, py)
             {
                 click_candidate_window_id = release_window_id;
+                click_candidate_item_id = release_hit
+                    .filter(|target| {
+                        target.kind == Ui2HitKind::BrowserInteractive
+                            && target.item_id != 0
+                            && target.item_id == cursor.press_item_id
+                    })
+                    .map(|target| target.item_id)
+                    .unwrap_or(0);
                 click_press_x = cursor.press_x;
                 click_press_y = cursor.press_y;
             } else if cursor.press_window_id == 0
@@ -311,6 +324,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
             }
             cursor.press_armed = false;
             cursor.press_window_id = 0;
+            cursor.press_item_id = 0;
         }
 
         if !middle_was_down
@@ -372,6 +386,10 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
             }
         } else {
             select_window_id = Some(click_candidate_window_id);
+        }
+        if click_candidate_item_id != 0 {
+            let _ =
+                note_window_item_click(state, click_candidate_window_id, click_candidate_item_id);
         }
     }
 
