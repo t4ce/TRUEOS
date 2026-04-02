@@ -16,9 +16,8 @@ use crate::trueos_shims::{
     trueos_cabi_net_fetch_bytes_read, trueos_cabi_net_fetch_bytes_result_len,
     trueos_cabi_net_fetch_bytes_start, trueos_cabi_net_fetch_bytes_wait,
     trueos_cabi_net_fetch_discard, trueos_cabi_net_fetch_post_json_bytes_start,
-    trueos_cabi_net_fetch_post_json_start,
-    trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait,
-    trueos_cabi_poll_once,
+    trueos_cabi_net_fetch_post_json_start, trueos_cabi_net_fetch_result,
+    trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait, trueos_cabi_poll_once,
 };
 
 include!("../../../src/r/cabi_codes.rs");

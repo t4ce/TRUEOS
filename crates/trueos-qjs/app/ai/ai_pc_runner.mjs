@@ -9,6 +9,7 @@ import {
 import {
   executeAiPcFileTool,
   buildAiPcIntelCommandLine,
+  buildAiPcShellCommandArgs,
   buildAiPcShellCommandLine,
   buildAiPcToolBundle,
   executeAiPcDriverdevTool,
@@ -18,7 +19,7 @@ import {
 } from './ai_pc_cmd.mjs';
 
 const MODEL = 'gpt-5.4';
-const AI_PC_MAX_TOOL_ROUNDS = 8;
+const AI_PC_MAX_TOOL_ROUNDS = 10;
 
 function buildAiPcSystemPrompt() {
   const shellToolNames = buildAiPcToolBundle()
@@ -37,7 +38,7 @@ function buildAiPcSystemPrompt() {
     'Use file_adapter_get_primary_tree for read-only TRUEOS filesystem tree visibility.',
     'For Intel GPU work, prefer the dedicated intel_adapter tool over generic shell tools.',
     'Prefer inspecting state before making changes.',
-    'For shell tools, follow each tool parameter schema. Use raw_args only as a fallback escape hatch when a tool explicitly needs it.',
+    'For shell tools, follow each tool parameter schema exactly.',
     'Do not claim to have used browser automation in this mode.',
     'Finish with a concise terminal-style answer after tool use is complete.',
   ].join(' ');
@@ -100,10 +101,12 @@ function executeAiPcShellTool(call, parsedArgs, targetMask) {
   }
 
   const commandLine = buildAiPcShellCommandLine(call.name, parsedArgs);
-  const rawArgs = commandLine.startsWith(`${command.command} `)
-    ? commandLine.slice(command.command.length + 1)
-    : (commandLine === command.command ? '' : commandLine);
-  const result = globalThis.__trueosAiPcExecuteShellCommand(command.command, rawArgs, Number(targetMask || 0));
+  const commandArgs = buildAiPcShellCommandArgs(call.name, parsedArgs);
+  const result = globalThis.__trueosAiPcExecuteShellCommand(
+    command.command,
+    JSON.stringify(commandArgs),
+    Number(targetMask || 0),
+  );
   return {
     ...(result && typeof result === 'object' ? result : {}),
     tool_name: String(call.name || ''),
@@ -116,10 +119,12 @@ function executeAiPcIntelTool(call, parsedArgs, targetMask) {
     throw new Error('TRUEOS ai-pc shell bridge is unavailable');
   }
   const commandLine = buildAiPcIntelCommandLine(parsedArgs);
-  const rawArgs = commandLine.startsWith('inteldev ')
-    ? commandLine.slice('inteldev'.length + 1)
-    : (commandLine === 'inteldev' ? '' : commandLine);
-  const result = globalThis.__trueosAiPcExecuteShellCommand('inteldev', rawArgs, Number(targetMask || 0));
+  const commandArgs = buildAiPcShellCommandArgs('shell_inteldev', parsedArgs);
+  const result = globalThis.__trueosAiPcExecuteShellCommand(
+    'inteldev',
+    JSON.stringify(commandArgs),
+    Number(targetMask || 0),
+  );
   return {
     ...(result && typeof result === 'object' ? result : {}),
     tool_name: 'intel_adapter',

@@ -591,8 +591,7 @@ unsafe fn pump_net_fetch_text(ctx: *mut qjs::JSContext) -> bool {
             .map(|ops| {
                 ops.iter()
                     .filter(|p| {
-                        p.kind == OpKind::NetFetchTextFile
-                            || p.kind == OpKind::NetPostJsonTextBytes
+                        p.kind == OpKind::NetFetchTextFile || p.kind == OpKind::NetPostJsonTextBytes
                     })
                     .map(|p| p.op_id)
                     .collect()

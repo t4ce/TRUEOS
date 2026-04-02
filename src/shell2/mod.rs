@@ -340,7 +340,9 @@ impl<'a> AlignedWriter<'a> {
         self.push_plain(&mut text, " ");
         self.push_ai_token(&mut text, "normal", ai_mode == AiPromptMode::Normal);
         self.push_plain(&mut text, " - ");
-        self.push_ai_token(&mut text, "web", ai_mode == AiPromptMode::WebSearch);
+        self.push_ai_token(&mut text, "inteldev", ai_mode == AiPromptMode::Inteldev);
+        self.push_plain(&mut text, " - ");
+        self.push_ai_token(&mut text, "driverdev", ai_mode == AiPromptMode::Driverdev);
         self.push_plain(&mut text, " - ");
         self.push_ai_token(&mut text, "newchat", ai_mode == AiPromptMode::NewChat);
         self.right_text(STATUS_ROW, text.as_str());
@@ -713,64 +715,88 @@ fn transcript_delta_text(
     out
 }
 
+fn quote_ai_pc_arg(value: &str) -> AllocString {
+    let needs_quotes = value
+        .bytes()
+        .any(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | b'"' | b'\\'));
+    if !needs_quotes {
+        return AllocString::from(value);
+    }
+
+    let mut out = AllocString::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
 pub(crate) fn execute_ai_pc_shell_command(
     output_mask: u8,
     command_name: &str,
-    raw_args: &str,
+    argv: &[AllocString],
 ) -> AiPcCommandExecResult {
     let io = backend_for_output_mask(output_mask);
     let trimmed_name = command_name.trim();
-    let trimmed_args = raw_args.trim();
-    let command_line = if trimmed_args.is_empty() {
+    let rendered_args = argv
+        .iter()
+        .map(|arg| quote_ai_pc_arg(arg.as_str()))
+        .collect::<alloc::vec::Vec<_>>()
+        .join(" ");
+    let command_line = if rendered_args.is_empty() {
         AllocString::from(trimmed_name)
     } else {
-        alloc::format!("{trimmed_name} {trimmed_args}")
+        alloc::format!("{trimmed_name} {rendered_args}")
     };
 
     let before = current_transcript_for_task(io);
     let outcome = match trimmed_name {
         "acpi" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::acpi::try_parse(io, &mut args)
         }
         "email" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::email::try_parse(io, &mut args)
         }
         "etc" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::etc::try_parse(io, &mut args)
         }
         "file" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::file::try_parse(io, &mut args)
         }
         "inteldev" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::inteldev::try_parse(io, &mut args)
         }
         "net" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::net::try_parse(io, &mut args)
         }
         "probe" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::probe::try_parse(io, &mut args)
         }
         "set" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::set::try_parse(io, &mut args)
         }
         "smp" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::smp::try_parse(io, &mut args)
         }
         "tlb" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::tlb::try_parse(io, &mut args)
         }
         "turbo" => {
-            let mut args = trimmed_args.split_whitespace();
+            let mut args = rendered_args.split_whitespace();
             cmds::turbo::try_parse(io, &mut args)
         }
         _ => shell2_cmd::ParseOutcome::NotCommand,

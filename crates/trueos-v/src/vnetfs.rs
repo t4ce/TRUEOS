@@ -60,11 +60,7 @@ pub fn fetch_post_json_to_file(
 }
 
 #[inline]
-pub fn fetch_post_json_bytes(
-    url: &[u8],
-    body: &[u8],
-    bearer: Option<&[u8]>,
-) -> Result<u32, i32> {
+pub fn fetch_post_json_bytes(url: &[u8], body: &[u8], bearer: Option<&[u8]>) -> Result<u32, i32> {
     let (bearer_ptr, bearer_len) = match bearer {
         Some(token) => (token.as_ptr(), token.len()),
         None => (core::ptr::null(), 0),

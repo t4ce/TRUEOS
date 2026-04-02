@@ -98,7 +98,8 @@ pub fn trueosfs_primary_html_tree(max_entries: u32) -> Result<Vec<u8>, i32> {
 
 #[inline]
 pub fn trueosfs_json_all(max_entries: u32) -> Result<Vec<u8>, i32> {
-    let len = unsafe { vcabi::trueos_cabi_trueosfs_json_all(max_entries, core::ptr::null_mut(), 0) };
+    let len =
+        unsafe { vcabi::trueos_cabi_trueosfs_json_all(max_entries, core::ptr::null_mut(), 0) };
     if len < 0 {
         return Err(len as i32);
     }
