@@ -295,10 +295,12 @@ pub(crate) fn encode_rgba_store_batch_chunk(
     src_rgba: &[u8],
     src_width: usize,
     src_height: usize,
+    max_chunk_pixels: usize,
     dst_gpu_addr: u64,
     dst_pitch: usize,
     start_pixel: usize,
     result_gpu_addr: u64,
+    start_value: u32,
     done_value: u32,
 ) -> Result<(usize, usize), &'static str> {
     const RESERVED_END_DWORDS: usize = 2;
@@ -321,14 +323,23 @@ pub(crate) fn encode_rgba_store_batch_chunk(
     batch_dwords.fill(0);
     let writable_limit = batch_dwords
         .len()
-        .saturating_sub(RESERVED_END_DWORDS + STORE_DWORDS);
-    let max_pixels = writable_limit / STORE_DWORDS;
+        .saturating_sub(RESERVED_END_DWORDS + (STORE_DWORDS * 2));
+    let max_pixels = (writable_limit / STORE_DWORDS).min(max_chunk_pixels.max(1));
     if max_pixels == 0 {
         return Err("batch-no-payload");
     }
 
     let mut idx = 0usize;
     let mut written = 0usize;
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+        | xelp_copy_ngin::mi::SDI_GGTT
+        | xelp_copy_ngin::mi::sdi_num_dw(1);
+    batch_dwords[idx + 1] = result_gpu_addr as u32;
+    batch_dwords[idx + 2] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[idx + 3] = start_value;
+    idx += STORE_DWORDS;
+
     let end_pixel = total_pixels.min(start_pixel.saturating_add(max_pixels));
     let mut pixel = start_pixel;
     while pixel < end_pixel {

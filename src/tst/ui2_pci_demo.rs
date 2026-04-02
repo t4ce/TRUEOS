@@ -26,12 +26,22 @@ const UI2_PCI_DEMO_TEXT_RGBA: [u8; 4] = [0xEE, 0xF3, 0xF9, 0xFF];
 const UI2_PCI_DEMO_DIM_RGBA: [u8; 4] = [0x96, 0xA4, 0xB6, 0xFF];
 const UI2_PCI_DEMO_ACCENT_RGBA: [u8; 4] = [0x7F, 0xD1, 0xAE, 0xFF];
 const UI2_PCI_DEMO_ERROR_RGBA: [u8; 4] = [0xF4, 0x9B, 0x9B, 0xFF];
+const UI2_PCI_DEMO_TOGGLE_ACTIVE_BG_RGBA: [u8; 4] = [0x1A, 0x27, 0x34, 0xFF];
+const UI2_PCI_DEMO_TOGGLE_IDLE_BG_RGBA: [u8; 4] = [0x12, 0x19, 0x22, 0xFF];
 const UI2_PCI_DEMO_ICON_FALLBACK: char = '>';
 const UI2_PCI_DEMO_FONT_TIER: Ui2FontTier = Ui2FontTier::OneX;
 const UI2_PCI_DEMO_ONE_X_SIZE_CASE: usize = UI2_PCI_DEMO_FONT_TIER.size_case();
 const UI2_PCI_DEMO_PAD_X: usize = 10;
 const UI2_PCI_DEMO_PAD_Y: usize = 10;
 const UI2_PCI_DEMO_ROW_GAP_Y: usize = 2;
+const UI2_PCI_DEMO_TOGGLE_ITEM_PCI: u32 = 100;
+const UI2_PCI_DEMO_TOGGLE_ITEM_USB: u32 = 101;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeviceManagerView {
+    Pci,
+    Usb,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PciDemoRow {
@@ -44,6 +54,28 @@ struct PciDemoRow {
 struct PciDemoSnapshot {
     db_loaded: bool,
     rows: Vec<PciDemoRow>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UsbDemoControllerRow {
+    title: String,
+    detail: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UsbDemoDeviceRow {
+    controller_index: usize,
+    port_label: String,
+    name: String,
+    stats: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UsbDemoSnapshot {
+    controllers: Vec<UsbDemoControllerRow>,
+    devices: Vec<UsbDemoDeviceRow>,
+    probe_error: Option<&'static str>,
+    probe_device_count: Option<u32>,
 }
 
 fn ensure_pci_devices_enumerated() {
@@ -123,6 +155,119 @@ fn pci_demo_snapshot() -> PciDemoSnapshot {
     }
 }
 
+fn usb_device_kind_name(dev: &crate::usb2::TlbUsbDevice) -> &'static str {
+    for cfg in dev.configurations.iter() {
+        for interface in cfg.interfaces.iter() {
+            match (interface.class, interface.subclass, interface.protocol) {
+                (0x08, _, _) => return "Mass Storage",
+                (0x01, _, _) => return "Audio",
+                (0x03, 0x01, 0x01) => return "HID Keyboard",
+                (0x03, 0x01, 0x02) => return "HID Mouse",
+                (0x03, _, _) => return "HID",
+                (0x09, _, _) => return "Hub",
+                (0x01, 0x03, _) => return "MIDI",
+                _ => {}
+            }
+        }
+    }
+
+    match (dev.class, dev.subclass, dev.protocol) {
+        (0x09, _, _) => "Hub",
+        (0x08, _, _) => "Mass Storage",
+        (0x03, 0x01, 0x01) => "HID Keyboard",
+        (0x03, 0x01, 0x02) => "HID Mouse",
+        (0x03, _, _) => "HID",
+        (0x01, _, _) => "Audio",
+        _ => "USB Device",
+    }
+}
+
+fn usb_device_stats(dev: &crate::usb2::TlbUsbDevice) -> String {
+    let interface_count: usize = dev
+        .configurations
+        .iter()
+        .map(|cfg| cfg.interfaces.len())
+        .sum();
+    let endpoint_count: usize = dev
+        .configurations
+        .iter()
+        .flat_map(|cfg| cfg.interfaces.iter())
+        .map(|interface| interface.endpoints.len())
+        .sum();
+    format!(
+        "slot={} speed={} cfgs={} ifs={} eps={} mps0={} vidpid={:04X}:{:04X}",
+        dev.slot_id,
+        dev.speed,
+        dev.num_configurations,
+        interface_count,
+        endpoint_count,
+        dev.max_packet_size_0,
+        dev.vendor_id,
+        dev.product_id
+    )
+}
+
+fn usb_demo_snapshot() -> UsbDemoSnapshot {
+    let snapshot = crate::usb2::tlb_snapshot();
+
+    let mut controllers = Vec::with_capacity(snapshot.controllers.len());
+    for ctrl in snapshot.controllers.iter() {
+        let title = format!(
+            "host {}  {:02X}:{:02X}.{}  {:04X}:{:04X}",
+            ctrl.index,
+            ctrl.bus,
+            ctrl.slot,
+            ctrl.function,
+            ctrl.vendor_id,
+            ctrl.device_id
+        );
+        let detail = format!(
+            "phase={} life={} ev={} rpchg={} empty={} mmio=0x{:X}",
+            ctrl.controller_phase,
+            ctrl.root_hub_lifecycle,
+            ctrl.event_ready as u8,
+            ctrl.root_port_change_seen as u8,
+            ctrl.empty_probe_streak,
+            ctrl.mmio_base.as_ptr() as usize
+        );
+        controllers.push(UsbDemoControllerRow { title, detail });
+    }
+
+    let mut devices = Vec::with_capacity(snapshot.devices.len());
+    for dev in snapshot.devices.iter() {
+        let path = if dev.path.is_empty() {
+            format!("rp{}", dev.root_port_id)
+        } else {
+            let mut out = format!("rp{}", dev.root_port_id);
+            for hop in dev.path.iter() {
+                out.push_str(format!("->p{}", hop).as_str());
+            }
+            out
+        };
+        devices.push(UsbDemoDeviceRow {
+            controller_index: dev.controller_index,
+            port_label: path,
+            name: usb_device_kind_name(dev).to_string(),
+            stats: usb_device_stats(dev),
+        });
+    }
+
+    devices.sort_by(|left, right| {
+        (left.controller_index, left.port_label.as_str(), left.name.as_str()).cmp(&(
+            right.controller_index,
+            right.port_label.as_str(),
+            right.name.as_str(),
+        ))
+    });
+
+    UsbDemoSnapshot {
+        controllers,
+        devices,
+        probe_error: snapshot.probe_error,
+        probe_device_count: snapshot.probe_device_count,
+    }
+}
+
 fn fill_rect_rgba(
     dst: &mut [u8],
     dst_width: usize,
@@ -186,6 +331,66 @@ fn render_text_rgba(
     }
 }
 
+fn render_padded_label_rgba(
+    dst: &mut [u8],
+    dst_width: usize,
+    dst_height: usize,
+    atlases: &ui2::Ui2FontCpuAtlases,
+    rect: Ui2Rect,
+    bg_rgba: [u8; 4],
+    fg_rgba: [u8; 4],
+    text: &str,
+) {
+    fill_rect_rgba(
+        dst,
+        dst_width,
+        dst_height,
+        rect.x.max(0.0) as usize,
+        rect.y.max(0.0) as usize,
+        rect.w.max(0.0) as usize,
+        rect.h.max(0.0) as usize,
+        bg_rgba,
+    );
+    render_text_rgba(
+        dst,
+        dst_width,
+        dst_height,
+        atlases,
+        rect.x.max(0.0) as usize + 6,
+        rect.y.max(0.0) as usize + 2,
+        text,
+        fg_rgba,
+    );
+}
+
+fn toggle_rects() -> [(u32, Ui2Rect, &'static str); 2] {
+    let line_h = pci_demo_line_height() as f32;
+    [
+        (
+            UI2_PCI_DEMO_TOGGLE_ITEM_PCI,
+            Ui2Rect {
+                x: UI2_PCI_DEMO_PAD_X as f32,
+                y: (UI2_PCI_DEMO_PAD_Y + pci_demo_line_height() + UI2_PCI_DEMO_ROW_GAP_Y + 4)
+                    as f32,
+                w: 64.0,
+                h: line_h + 6.0,
+            },
+            "PCI",
+        ),
+        (
+            UI2_PCI_DEMO_TOGGLE_ITEM_USB,
+            Ui2Rect {
+                x: (UI2_PCI_DEMO_PAD_X + 72) as f32,
+                y: (UI2_PCI_DEMO_PAD_Y + pci_demo_line_height() + UI2_PCI_DEMO_ROW_GAP_Y + 4)
+                    as f32,
+                w: 96.0,
+                h: line_h + 6.0,
+            },
+            "USB hosts",
+        ),
+    ]
+}
+
 fn pci_demo_header_lines(icon: char, snapshot: &PciDemoSnapshot) -> Vec<String> {
     let mut lines = Vec::with_capacity(4);
     lines.push(format!("{} PCI device manager", icon));
@@ -203,8 +408,31 @@ fn pci_demo_header_lines(icon: char, snapshot: &PciDemoSnapshot) -> Vec<String> 
     lines
 }
 
+fn usb_demo_header_lines(icon: char, snapshot: &UsbDemoSnapshot) -> Vec<String> {
+    let mut lines = Vec::with_capacity(4);
+    lines.push(format!("{} USB host manager", icon));
+    lines.push(format!(
+        "view only  |  hosts: {}  |  devices: {}  |  probe={:?}/count={:?}  |  font: 1x",
+        snapshot.controllers.len(),
+        snapshot.devices.len(),
+        snapshot.probe_error,
+        snapshot.probe_device_count
+    ));
+    lines.push(String::from("Port path        Name           Stats"));
+    lines.push(String::from("---------------  -------------  -----"));
+    lines
+}
+
 fn pci_demo_row_line(icon: char, row: &PciDemoRow) -> String {
     format!("{}  {:8}  {:8}  {}", icon, row.addr, row.vid_pid, row.detail)
+}
+
+fn usb_demo_controller_lines(row: &UsbDemoControllerRow) -> [String; 2] {
+    [format!("HOST {}", row.title), format!("  {}", row.detail)]
+}
+
+fn usb_demo_device_line(row: &UsbDemoDeviceRow) -> String {
+    format!("{:15}  {:13}  {}", row.port_label, row.name, row.stats)
 }
 
 fn pci_demo_content_size(icon: char, snapshot: &PciDemoSnapshot) -> (u32, u32) {
@@ -222,6 +450,43 @@ fn pci_demo_content_size(icon: char, snapshot: &PciDemoSnapshot) -> (u32, u32) {
         .len()
         .saturating_add(snapshot.rows.len())
         .saturating_add(usize::from(snapshot.rows.is_empty()));
+    let content_w = max_width
+        .saturating_add(UI2_PCI_DEMO_PAD_X * 2)
+        .max(UI2_PCI_DEMO_VIEW_W as usize);
+    let content_h = total_lines
+        .saturating_mul(line_height.saturating_add(UI2_PCI_DEMO_ROW_GAP_Y))
+        .saturating_add(UI2_PCI_DEMO_PAD_Y * 2)
+        .max(UI2_PCI_DEMO_VIEW_H as usize);
+    (content_w as u32, content_h as u32)
+}
+
+fn usb_demo_content_size(icon: char, snapshot: &UsbDemoSnapshot) -> (u32, u32) {
+    let line_height = pci_demo_line_height();
+    let lines = usb_demo_header_lines(icon, snapshot);
+    let mut max_width = lines
+        .iter()
+        .map(|line| pci_demo_measure_width(line.as_str()))
+        .max()
+        .unwrap_or(1);
+    let mut total_lines = lines.len();
+    for ctrl in snapshot.controllers.iter() {
+        for line in usb_demo_controller_lines(ctrl) {
+            max_width = max_width.max(pci_demo_measure_width(line.as_str()));
+            total_lines = total_lines.saturating_add(1);
+        }
+        let count = snapshot
+            .devices
+            .iter()
+            .filter(|dev| dev.controller_index == ctrl.title[5..6].parse::<usize>().unwrap_or(usize::MAX))
+            .count();
+        total_lines = total_lines.saturating_add(count.max(1));
+    }
+    if snapshot.controllers.is_empty() {
+        total_lines = total_lines.saturating_add(1);
+    }
+    for row in snapshot.devices.iter() {
+        max_width = max_width.max(pci_demo_measure_width(usb_demo_device_line(row).as_str()));
+    }
     let content_w = max_width
         .saturating_add(UI2_PCI_DEMO_PAD_X * 2)
         .max(UI2_PCI_DEMO_VIEW_W as usize);
@@ -291,6 +556,30 @@ fn compose_pci_demo_rgba(
         y = y.saturating_add(line_step);
     }
 
+    for (item_id, rect, label) in toggle_rects() {
+        let active = item_id == UI2_PCI_DEMO_TOGGLE_ITEM_PCI;
+        render_padded_label_rgba(
+            rgba.as_mut_slice(),
+            dst_width,
+            dst_height,
+            atlases,
+            rect,
+            if active {
+                UI2_PCI_DEMO_TOGGLE_ACTIVE_BG_RGBA
+            } else {
+                UI2_PCI_DEMO_TOGGLE_IDLE_BG_RGBA
+            },
+            if active {
+                UI2_PCI_DEMO_ACCENT_RGBA
+            } else {
+                UI2_PCI_DEMO_DIM_RGBA
+            },
+            label,
+        );
+    }
+
+    y = y.saturating_add(line_step + 6);
+
     if snapshot.rows.is_empty() {
         render_text_rgba(
             rgba.as_mut_slice(),
@@ -339,6 +628,192 @@ fn compose_pci_demo_rgba(
     rgba
 }
 
+fn compose_usb_demo_rgba(
+    atlases: &ui2::Ui2FontCpuAtlases,
+    icon: char,
+    snapshot: &UsbDemoSnapshot,
+    content_w: u32,
+    content_h: u32,
+) -> Vec<u8> {
+    let dst_width = content_w as usize;
+    let dst_height = content_h as usize;
+    let mut rgba = vec![0u8; dst_width.saturating_mul(dst_height).saturating_mul(4)];
+    fill_rect_rgba(
+        rgba.as_mut_slice(),
+        dst_width,
+        dst_height,
+        0,
+        0,
+        dst_width,
+        dst_height,
+        UI2_PCI_DEMO_BG_RGBA,
+    );
+
+    let line_height = pci_demo_line_height();
+    let line_step = line_height.saturating_add(UI2_PCI_DEMO_ROW_GAP_Y);
+    let header_lines = usb_demo_header_lines(icon, snapshot);
+    let header_block_h = header_lines
+        .len()
+        .saturating_mul(line_step)
+        .saturating_add(UI2_PCI_DEMO_PAD_Y)
+        .saturating_add(line_step + 8);
+    fill_rect_rgba(
+        rgba.as_mut_slice(),
+        dst_width,
+        dst_height,
+        0,
+        0,
+        dst_width,
+        header_block_h.min(dst_height),
+        UI2_PCI_DEMO_HEADER_BG_RGBA,
+    );
+
+    let mut y = UI2_PCI_DEMO_PAD_Y;
+    for (idx, line) in header_lines.iter().enumerate() {
+        render_text_rgba(
+            rgba.as_mut_slice(),
+            dst_width,
+            dst_height,
+            atlases,
+            UI2_PCI_DEMO_PAD_X,
+            y,
+            line.as_str(),
+            if idx == 0 {
+                UI2_PCI_DEMO_ACCENT_RGBA
+            } else {
+                UI2_PCI_DEMO_DIM_RGBA
+            },
+        );
+        y = y.saturating_add(line_step);
+    }
+
+    for (item_id, rect, label) in toggle_rects() {
+        let active = item_id == UI2_PCI_DEMO_TOGGLE_ITEM_USB;
+        render_padded_label_rgba(
+            rgba.as_mut_slice(),
+            dst_width,
+            dst_height,
+            atlases,
+            rect,
+            if active {
+                UI2_PCI_DEMO_TOGGLE_ACTIVE_BG_RGBA
+            } else {
+                UI2_PCI_DEMO_TOGGLE_IDLE_BG_RGBA
+            },
+            if active {
+                UI2_PCI_DEMO_ACCENT_RGBA
+            } else {
+                UI2_PCI_DEMO_DIM_RGBA
+            },
+            label,
+        );
+    }
+
+    y = y.saturating_add(line_step + 6);
+    if snapshot.controllers.is_empty() {
+        render_text_rgba(
+            rgba.as_mut_slice(),
+            dst_width,
+            dst_height,
+            atlases,
+            UI2_PCI_DEMO_PAD_X,
+            y,
+            "No USB hosts detected.",
+            UI2_PCI_DEMO_ERROR_RGBA,
+        );
+        return rgba;
+    }
+
+    for ctrl in snapshot.controllers.iter().enumerate() {
+        let (ctrl_index, ctrl_row) = ctrl;
+        let row_bg = if (ctrl_index & 1) == 0 {
+            UI2_PCI_DEMO_ROW_EVEN_BG_RGBA
+        } else {
+            UI2_PCI_DEMO_ROW_ODD_BG_RGBA
+        };
+        let ctrl_lines = usb_demo_controller_lines(ctrl_row);
+        fill_rect_rgba(
+            rgba.as_mut_slice(),
+            dst_width,
+            dst_height,
+            0,
+            y.saturating_sub(1),
+            dst_width,
+            line_step.saturating_mul(ctrl_lines.len()).saturating_add(2),
+            row_bg,
+        );
+        render_text_rgba(
+            rgba.as_mut_slice(),
+            dst_width,
+            dst_height,
+            atlases,
+            UI2_PCI_DEMO_PAD_X,
+            y,
+            ctrl_lines[0].as_str(),
+            UI2_PCI_DEMO_ACCENT_RGBA,
+        );
+        y = y.saturating_add(line_step);
+        render_text_rgba(
+            rgba.as_mut_slice(),
+            dst_width,
+            dst_height,
+            atlases,
+            UI2_PCI_DEMO_PAD_X,
+            y,
+            ctrl_lines[1].as_str(),
+            UI2_PCI_DEMO_DIM_RGBA,
+        );
+        y = y.saturating_add(line_step);
+
+        let mut emitted = false;
+        for dev in snapshot
+            .devices
+            .iter()
+            .filter(|dev| dev.controller_index == ctrl_index)
+        {
+            emitted = true;
+            let line = usb_demo_device_line(dev);
+            render_text_rgba(
+                rgba.as_mut_slice(),
+                dst_width,
+                dst_height,
+                atlases,
+                UI2_PCI_DEMO_PAD_X + 8,
+                y,
+                line.as_str(),
+                UI2_PCI_DEMO_TEXT_RGBA,
+            );
+            y = y.saturating_add(line_step);
+        }
+        if !emitted {
+            render_text_rgba(
+                rgba.as_mut_slice(),
+                dst_width,
+                dst_height,
+                atlases,
+                UI2_PCI_DEMO_PAD_X + 8,
+                y,
+                "no cached devices on this host",
+                UI2_PCI_DEMO_DIM_RGBA,
+            );
+            y = y.saturating_add(line_step);
+        }
+    }
+
+    rgba
+}
+
+fn update_window_title(window_id: u32, view: DeviceManagerView) {
+    let suffix = match view {
+        DeviceManagerView::Pci => "PCI",
+        DeviceManagerView::Usb => "USB hosts",
+    };
+    let _ = crate::r::ui2::set_window_title(
+        window_id,
+        format!("{} [{}]", UI2_PCI_DEMO_WINDOW_TITLE, suffix).as_str(),
+    );
+}
+
 #[embassy_executor::task]
 pub async fn ui2_pci_demo_task() {
     Timer::after(EmbassyDuration::from_millis(250)).await;
@@ -352,8 +827,8 @@ pub async fn ui2_pci_demo_task() {
     };
 
     let icon = pci_demo_icon_char();
-    let snapshot = pci_demo_snapshot();
-    let (content_w, content_h) = pci_demo_content_size(icon, &snapshot);
+    let initial_snapshot = pci_demo_snapshot();
+    let (content_w, content_h) = pci_demo_content_size(icon, &initial_snapshot);
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
         UI2_PCI_DEMO_WINDOW_TITLE,
         crate::r::ui2::Ui2Rect {
@@ -373,7 +848,18 @@ pub async fn ui2_pci_demo_task() {
         return;
     };
 
-    let rgba = compose_pci_demo_rgba(&atlases, icon, &snapshot, content_w, content_h);
+    let interactives = toggle_rects().map(|(item_id, rect, _)| crate::r::ui2::Ui2HostedInteractiveRect {
+        item_id,
+        x: rect.x.max(0.0) as u32,
+        y: rect.y.max(0.0) as u32,
+        width: rect.w.max(1.0) as u32,
+        height: rect.h.max(1.0) as u32,
+    });
+    let _ = surface.set_interactives(&interactives);
+
+    let mut view = DeviceManagerView::Pci;
+    let mut last_click_seq = 0u32;
+    let rgba = compose_pci_demo_rgba(&atlases, icon, &initial_snapshot, content_w, content_h);
     if !surface.upload_rgba(rgba.as_slice(), "ui2-pci-demo-upload") {
         crate::log!(
             "ui2-pci-demo: upload failed window={} tex={} size={}x{}\n",
@@ -387,6 +873,7 @@ pub async fn ui2_pci_demo_task() {
 
     let _ = surface.bind_hosted_scroll_state(UI2_PCI_DEMO_CONTENT_ID, content_w, content_h);
     let _ = crate::r::ui2::set_window_icon(surface.window_id(), 11);
+    update_window_title(surface.window_id(), view);
     crate::log!(
         "ui2-pci-demo: window={} tex={} viewport={}x{} content={}x{} devices={} names={} icon=U+{:04X}\n",
         surface.window_id(),
@@ -395,12 +882,39 @@ pub async fn ui2_pci_demo_task() {
         UI2_PCI_DEMO_VIEW_H,
         content_w,
         content_h,
-        snapshot.rows.len(),
-        snapshot.db_loaded as u8,
+        initial_snapshot.rows.len(),
+        initial_snapshot.db_loaded as u8,
         icon as u32
     );
 
     loop {
-        Timer::after(EmbassyDuration::from_secs(3600)).await;
+        if let Some((seq, item_id)) = crate::r::ui2::take_window_last_clicked_item(surface.window_id())
+            && seq != last_click_seq
+        {
+            last_click_seq = seq;
+            let next_view = match item_id {
+                UI2_PCI_DEMO_TOGGLE_ITEM_PCI => DeviceManagerView::Pci,
+                UI2_PCI_DEMO_TOGGLE_ITEM_USB => DeviceManagerView::Usb,
+                _ => view,
+            };
+            if next_view != view {
+                view = next_view;
+                match view {
+                    DeviceManagerView::Pci => {
+                        let snapshot = pci_demo_snapshot();
+                        let rgba = compose_pci_demo_rgba(&atlases, icon, &snapshot, content_w, content_h);
+                        let _ = surface.upload_rgba(rgba.as_slice(), "ui2-pci-demo-toggle-pci");
+                        update_window_title(surface.window_id(), view);
+                    }
+                    DeviceManagerView::Usb => {
+                        let snapshot = usb_demo_snapshot();
+                        let rgba = compose_usb_demo_rgba(&atlases, icon, &snapshot, content_w, content_h);
+                        let _ = surface.upload_rgba(rgba.as_slice(), "ui2-pci-demo-toggle-usb");
+                        update_window_title(surface.window_id(), view);
+                    }
+                }
+            }
+        }
+        Timer::after(EmbassyDuration::from_millis(33)).await;
     }
 }

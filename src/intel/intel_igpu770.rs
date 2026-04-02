@@ -160,7 +160,9 @@ const BCS_EXEC_RESULT_START: u32 = 0x1CE0_BC50;
 const BCS_EXEC_RESULT_PRE_COPY: u32 = 0x1CE0_BC51;
 const BCS_EXEC_RESULT_POST_COPY: u32 = 0x1CE0_BC52;
 const BCS_EXEC_RESULT_DONE: u32 = 0x1CE0_BC53;
+const RCS_PRESENT_RESULT_START_BASE: u32 = 0xC0DE_8F00;
 const RCS_PRESENT_RESULT_BASE: u32 = 0xC0DE_9000;
+const RCS_PRESENT_MAX_CHUNK_PIXELS: usize = 256;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
 const GEN8_CTX_VALID: u32 = 1 << 0;
 const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
@@ -3082,6 +3084,9 @@ pub(crate) fn rcs_present_rgba_frame(rgba: &[u8], width: usize, height: usize) -
                 warm.batch_len / core::mem::size_of::<u32>(),
             )
         };
+        let start_value = RCS_PRESENT_RESULT_START_BASE
+            .wrapping_add(chunk_idx as u32)
+            .wrapping_add(1);
         let done_value = RCS_PRESENT_RESULT_BASE
             .wrapping_add(chunk_idx as u32)
             .wrapping_add(1);
@@ -3091,10 +3096,12 @@ pub(crate) fn rcs_present_rgba_frame(rgba: &[u8], width: usize, height: usize) -
                 rgba,
                 copy_w,
                 copy_h,
+                RCS_PRESENT_MAX_CHUNK_PIXELS,
                 dst_gpu_addr,
                 warm.limine_fb_pitch,
                 completed_pixels,
                 GPU_VA_RESULT_BASE,
+                start_value,
                 done_value,
             ) {
                 Ok(v) => v,
@@ -3164,12 +3171,24 @@ pub(crate) fn rcs_present_rgba_frame(rgba: &[u8], width: usize, height: usize) -
         dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
         let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
         if !completed {
+            let phase = if result0 == start_value {
+                "start-only"
+            } else if result0 == done_value {
+                "done"
+            } else if result0 == 0 {
+                "none"
+            } else {
+                "other"
+            };
             crate::log!(
-                "intel/igpu770: rcs-present chunk={} timeout iters={} result0=0x{:08X} expect=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
+                "intel/igpu770: rcs-present chunk={} timeout iters={} result0=0x{:08X} start=0x{:08X} expect=0x{:08X} phase={} batch_tail=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
                 chunk_idx,
                 iter,
                 result0,
+                start_value,
                 done_value,
+                phase,
+                batch_tail_bytes,
                 mmio_read32(warm, RCS_RING_HEAD),
                 mmio_read32(warm, RCS_RING_TAIL),
                 mmio_read32(warm, RCS_RING_ACTHD),
