@@ -106,6 +106,7 @@ define_started_flags!(
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
+    UI2_PCI_DEMO_STARTED,
     UI2_PETERSEN_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
     UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
@@ -629,6 +630,12 @@ fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_pci_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_pci_demo::ui2_pci_demo_task())
+    })
+}
+
 fn spawn_ui2_petersen_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_petersen_demo::ui2_petersen_demo_task())
@@ -977,12 +984,23 @@ static TASKS: &[TaskSpec] = &[
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
-    TaskSpec::disabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
+    TaskSpec::disabled(
+        "ui2-bgrt-demo",
+        UI2_DEMO_READY,
+        &UI2_BGRT_DEMO_STARTED,
+        spawn_ui2_bgrt_demo,
+    ),
     TaskSpec::disabled(
         "ui2-mandelbrot-demo",
         UI2_DEMO_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
+    ),
+    TaskSpec::disabled(
+        "ui2-device-manager-demo",
+        UI2_DEMO_READY,
+        &UI2_PCI_DEMO_STARTED,
+        spawn_ui2_pci_demo,
     ),
     TaskSpec::disabled(
         "ui2-petersen-demo",

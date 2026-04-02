@@ -694,17 +694,31 @@ pub async fn scanout_smoke_task() {
         super::intel_igpu770::warm_once(info);
     }
 
+    crate::gfx::init(crate::limine::framebuffer_response());
+    let intel_backend_active = if crate::gfx::is_intel_active() {
+        crate::log!("intel: gfx backend already active=Intel\n");
+        true
+    } else {
+        let switched = crate::gfx::switch_to_intel();
+        crate::log!("intel: gfx backend switch_to_intel={}\n", switched as u8);
+        switched && crate::gfx::is_intel_active()
+    };
+
     Timer::after(EmbassyDuration::from_millis(1200)).await;
     let isolate_render_proof = super::xelp_render_ngin::isolate_rgb_triangle_proof();
     if intel_igpu770_present() {
         super::intel_igpu770::ggtt_recon_once();
         super::intel_igpu770::ggtt_map_smoke_objects_once();
-        crate::log!("intel: smoke dispatch engine=rcs stage=begin\n");
-        super::xelp_render_ngin::submit_rgb_triangle_smoke_once();
-        crate::log!("intel: smoke dispatch engine=rcs stage=end\n");
-        if isolate_render_proof {
-            super::xelp_render_ngin::log_rgb_triangle_isolation();
+        if intel_backend_active {
+            crate::log!("intel: legacy direct smoke paths skipped (gfx-backend mode)\n");
         } else {
+            crate::log!("intel: smoke dispatch engine=rcs stage=begin\n");
+            super::xelp_render_ngin::submit_rgb_triangle_smoke_once();
+            crate::log!("intel: smoke dispatch engine=rcs stage=end\n");
+        }
+        if isolate_render_proof && !intel_backend_active {
+            super::xelp_render_ngin::log_rgb_triangle_isolation();
+        } else if !intel_backend_active {
             crate::log!("intel: smoke dispatch engine=bcs stage=begin\n");
             super::intel_igpu770::ggtt_bcs_smoke_test_once();
             crate::log!("intel: smoke dispatch engine=bcs stage=end\n");
@@ -722,7 +736,7 @@ pub async fn scanout_smoke_task() {
 
     run_display_power_discovery(info);
     if intel_igpu770_present() {
-        if !isolate_render_proof {
+        if !isolate_render_proof && !intel_backend_active {
             super::intel_igpu770::cpu_framebuffer_alive_stamp("post-display-discovery");
             super::xelp_media_ngin::run_https_media_demo_once_async().await;
         }
