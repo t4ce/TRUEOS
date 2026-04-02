@@ -7,7 +7,7 @@ use acpi::sdt::mcfg::Mcfg;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use super::super::{line_width_for_backend, print_shell_line, ShellBackend2};
+use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
 use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
 

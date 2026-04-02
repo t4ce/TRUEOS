@@ -125,6 +125,7 @@ struct Ui2CursorState {
     press_x: f32,
     press_y: f32,
     press_window_id: u32,
+    press_item_id: u32,
     press_armed: bool,
     selected_window_id: u32,
 }
@@ -205,6 +206,15 @@ pub struct Ui2HostedSurfaceTile {
     pub blend_enabled: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Ui2HostedInteractiveRect {
+    pub item_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Clone)]
 struct Ui2Window {
     id: u32,
@@ -232,6 +242,9 @@ struct Ui2Window {
     content_tex_blend: bool,
     hosted_surface_bg_rgba: [u8; 4],
     hosted_surface_tiles: Vec<Ui2HostedSurfaceTile>,
+    hosted_surface_interactives: Vec<Ui2HostedInteractiveRect>,
+    last_clicked_item_id: u32,
+    last_clicked_item_seq: u32,
     title_tex_id: u32,
     title_tex_w: u32,
     title_tex_h: u32,

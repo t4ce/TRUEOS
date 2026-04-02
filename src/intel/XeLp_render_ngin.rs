@@ -289,3 +289,94 @@ pub(crate) fn encode_rgb_triangle_store_batch(
 
     Ok(idx * core::mem::size_of::<u32>())
 }
+
+pub(crate) fn encode_rgba_store_batch_chunk(
+    batch_dwords: &mut [u32],
+    src_rgba: &[u8],
+    src_width: usize,
+    src_height: usize,
+    dst_gpu_addr: u64,
+    dst_pitch: usize,
+    start_pixel: usize,
+    result_gpu_addr: u64,
+    done_value: u32,
+) -> Result<(usize, usize), &'static str> {
+    const RESERVED_END_DWORDS: usize = 2;
+    const STORE_DWORDS: usize = 4;
+
+    if src_width == 0 || src_height == 0 {
+        return Err("rgba-empty");
+    }
+    let total_pixels = src_width.saturating_mul(src_height);
+    if start_pixel >= total_pixels {
+        return Err("rgba-start-oob");
+    }
+    if src_rgba.len() < total_pixels.saturating_mul(4) {
+        return Err("rgba-buffer-too-small");
+    }
+    if batch_dwords.len() <= RESERVED_END_DWORDS + STORE_DWORDS {
+        return Err("batch-too-small");
+    }
+
+    batch_dwords.fill(0);
+    let writable_limit = batch_dwords
+        .len()
+        .saturating_sub(RESERVED_END_DWORDS + STORE_DWORDS);
+    let max_pixels = writable_limit / STORE_DWORDS;
+    if max_pixels == 0 {
+        return Err("batch-no-payload");
+    }
+
+    let mut idx = 0usize;
+    let mut written = 0usize;
+    let end_pixel = total_pixels.min(start_pixel.saturating_add(max_pixels));
+    let mut pixel = start_pixel;
+    while pixel < end_pixel {
+        let y = pixel / src_width;
+        let x = pixel % src_width;
+        let src_off = pixel.saturating_mul(4);
+        let color = pack_xrgb8888(
+            src_rgba[src_off] as u32,
+            src_rgba[src_off + 1] as u32,
+            src_rgba[src_off + 2] as u32,
+        );
+        let dst = dst_gpu_addr
+            .saturating_add((y as u64).saturating_mul(dst_pitch as u64))
+            .saturating_add((x as u64).saturating_mul(4));
+
+        batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+            | xelp_copy_ngin::mi::SDI_GGTT
+            | xelp_copy_ngin::mi::sdi_num_dw(1);
+        batch_dwords[idx + 1] = dst as u32;
+        batch_dwords[idx + 2] = (dst >> 32) as u32;
+        batch_dwords[idx + 3] = color;
+        idx += STORE_DWORDS;
+        written += 1;
+        pixel += 1;
+    }
+
+    if written == 0 {
+        return Err("rgba-no-pixels");
+    }
+    if idx + STORE_DWORDS > batch_dwords.len().saturating_sub(RESERVED_END_DWORDS) {
+        return Err("batch-no-result-slot");
+    }
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+        | xelp_copy_ngin::mi::SDI_GGTT
+        | xelp_copy_ngin::mi::sdi_num_dw(1);
+    batch_dwords[idx + 1] = result_gpu_addr as u32;
+    batch_dwords[idx + 2] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[idx + 3] = done_value;
+    idx += STORE_DWORDS;
+
+    if idx + RESERVED_END_DWORDS > batch_dwords.len() {
+        return Err("batch-no-end");
+    }
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::BATCH_BUFFER_END;
+    batch_dwords[idx + 1] = xelp_copy_ngin::mi::NOOP;
+    idx += RESERVED_END_DWORDS;
+
+    Ok((idx * core::mem::size_of::<u32>(), written))
+}
