@@ -7,7 +7,7 @@ use acpi::sdt::mcfg::Mcfg;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
+use super::super::{line_width_for_backend, print_shell_line, ShellBackend2};
 use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -127,6 +127,99 @@ fn emit_table_row(io: &'static dyn ShellBackend2, cols: &[Column], cells: &[&str
         out.push_str(truncate_cell(cells.get(index).copied().unwrap_or(""), col.width).as_str());
     }
     line(io, out.as_str());
+}
+
+fn format_fixed_table_row(cols: &[Column], cells: &[&str]) -> String {
+    let mut out = String::new();
+    for (index, col) in cols.iter().enumerate() {
+        if index > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(truncate_cell(cells.get(index).copied().unwrap_or(""), col.width).as_str());
+    }
+    out
+}
+
+fn push_fixed_table_header(out: &mut Vec<String>, cols: &[Column]) {
+    let headers = cols.iter().map(|col| col.header).collect::<Vec<_>>();
+    out.push(format_fixed_table_row(cols, &headers));
+    let sep = cols
+        .iter()
+        .map(|col| "-".repeat(col.width))
+        .collect::<Vec<_>>();
+    let sep_refs = sep.iter().map(String::as_str).collect::<Vec<_>>();
+    out.push(format_fixed_table_row(cols, &sep_refs));
+}
+
+fn push_fixed_table_row(out: &mut Vec<String>, cols: &[Column], cells: &[&str]) {
+    out.push(format_fixed_table_row(cols, cells));
+}
+
+fn usb_port_link_state_name(raw: u32) -> &'static str {
+    match raw & 0xF {
+        0 => "u0",
+        1 => "u1",
+        2 => "u2",
+        3 => "u3",
+        4 => "disabled",
+        5 => "rxdetect",
+        6 => "inactive",
+        7 => "polling",
+        8 => "recovery",
+        9 => "hotreset",
+        10 => "compliance",
+        11 => "test",
+        15 => "resume",
+        _ => "?",
+    }
+}
+
+fn usb_port_speed_text(portsc: u32) -> String {
+    match (portsc >> 10) & 0xF {
+        0 => String::from("-"),
+        1 => String::from("full"),
+        2 => String::from("low"),
+        3 => String::from("high"),
+        4 => String::from("super"),
+        5 => String::from("super+"),
+        n => alloc::format!("sp{}", n),
+    }
+}
+
+fn usb_port_state_text(portsc: u32) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if (portsc & (1 << 0)) != 0 {
+        parts.push("conn");
+    } else {
+        parts.push("empty");
+    }
+    if (portsc & (1 << 1)) != 0 {
+        parts.push("ena");
+    }
+    if (portsc & (1 << 9)) != 0 {
+        parts.push("pow");
+    }
+    if (portsc & (1 << 4)) != 0 {
+        parts.push("rst");
+    }
+    if (portsc & (1 << 3)) != 0 {
+        parts.push("oc");
+    }
+    parts.push(usb_port_link_state_name((portsc >> 5) & 0xF));
+    parts.join("/")
+}
+
+fn usb_path_string(root_port_id: u8, path: &[u8]) -> String {
+    let mut out = alloc::format!("rp{}", root_port_id);
+    let hops = if path.first().copied() == Some(root_port_id) {
+        &path[1..]
+    } else {
+        path
+    };
+    for port in hops {
+        out.push_str(&alloc::format!("->p{}", port));
+    }
+    out
 }
 
 #[inline]
@@ -962,6 +1055,36 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
     // area). Collect all output first, then emit in reverse so the first logical line
     // ends up being the last thing written → lands at the top of the screen.
     let mut out: Vec<String> = Vec::new();
+    let port_cols = [
+        Column {
+            header: "Port",
+            width: 4,
+        },
+        Column {
+            header: "State",
+            width: 17,
+        },
+        Column {
+            header: "Path",
+            width: 18,
+        },
+        Column {
+            header: "Speed",
+            width: 7,
+        },
+        Column {
+            header: "VID:PID",
+            width: 11,
+        },
+        Column {
+            header: "Class",
+            width: 10,
+        },
+        Column {
+            header: "Slot/Stable",
+            width: 18,
+        },
+    ];
 
     for ctrl_info in snapshot.controllers.iter() {
         let bdf =
@@ -984,24 +1107,112 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
             ctrl_info.mmio_base.as_ptr() as usize
         ));
 
-        let mut emitted_any = false;
-        for dev in snapshot
+        let ctrl_mmio = crate::usb2::controller_mmio_diag(ctrl_info.index);
+        if let Some(mmio) = ctrl_mmio.as_ref() {
+            out.push(alloc::format!(
+                "  regs usbcmd=0x{:08X} usbsts=0x{:08X} config=0x{:08X} ports={}",
+                mmio.usbcmd,
+                mmio.usbsts,
+                mmio.config,
+                mmio.ports.len()
+            ));
+        }
+
+        let mut ctrl_devices: Vec<_> = snapshot
             .devices
             .iter()
             .filter(|dev| dev.controller_index == ctrl_info.index)
-        {
+            .collect();
+        ctrl_devices.sort_by_key(|dev| {
+            (
+                dev.root_port_id,
+                dev.path.len(),
+                dev.path.clone(),
+                dev.port_id,
+                dev.slot_id,
+                dev.stable_id,
+            )
+        });
+
+        let mut port_ids: Vec<u8> = if let Some(mmio) = ctrl_mmio.as_ref() {
+            mmio.ports.iter().map(|port| port.port_id).collect()
+        } else {
+            let mut ids: Vec<u8> = ctrl_devices.iter().map(|dev| dev.root_port_id).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
+        port_ids.sort_unstable();
+        port_ids.dedup();
+
+        if !port_ids.is_empty() {
+            out.push(alloc::format!("  ports:"));
+            push_fixed_table_header(&mut out, &port_cols);
+            for port_id in port_ids {
+                let port_diag = ctrl_mmio
+                    .as_ref()
+                    .and_then(|mmio| mmio.ports.iter().find(|port| port.port_id == port_id));
+                let attached: Vec<_> = ctrl_devices
+                    .iter()
+                    .copied()
+                    .filter(|dev| dev.root_port_id == port_id)
+                    .collect();
+
+                if attached.is_empty() {
+                    let port = alloc::format!("{}", port_id);
+                    let state = port_diag
+                        .map(|port| usb_port_state_text(port.portsc))
+                        .unwrap_or_else(|| String::from("-"));
+                    let path = alloc::format!("rp{}", port_id);
+                    let speed = port_diag
+                        .map(|port| usb_port_speed_text(port.portsc))
+                        .unwrap_or_else(|| String::from("-"));
+                    let slot_stable = port_diag
+                        .map(|port| alloc::format!("psc=0x{:08X}", port.portsc))
+                        .unwrap_or_else(|| String::from("-"));
+                    push_fixed_table_row(
+                        &mut out,
+                        &port_cols,
+                        &[&port, &state, &path, &speed, "-", "-", &slot_stable],
+                    );
+                    continue;
+                }
+
+                for (row_idx, dev) in attached.iter().enumerate() {
+                    let port = alloc::format!("{}", port_id);
+                    let state = if row_idx == 0 {
+                        port_diag
+                            .map(|port| usb_port_state_text(port.portsc))
+                            .unwrap_or_else(|| String::from("-"))
+                    } else {
+                        String::new()
+                    };
+                    let path = usb_path_string(dev.root_port_id, dev.path.as_slice());
+                    let speed = String::from(dev.speed);
+                    let vidpid = alloc::format!("{:04X}:{:04X}", dev.vendor_id, dev.product_id);
+                    let class = alloc::format!(
+                        "{:02X}/{:02X}/{:02X}",
+                        dev.class,
+                        dev.subclass,
+                        dev.protocol
+                    );
+                    let slot_stable =
+                        alloc::format!("slot={} 0x{:08X}", dev.slot_id, dev.stable_id);
+                    push_fixed_table_row(
+                        &mut out,
+                        &port_cols,
+                        &[&port, &state, &path, &speed, &vidpid, &class, &slot_stable],
+                    );
+                }
+            }
+        }
+
+        let mut emitted_any = false;
+        for dev in ctrl_devices.iter().copied() {
             emitted_any = true;
             let stable = alloc::format!("0x{:08X}", dev.stable_id);
             let route = alloc::format!("0x{:06X}", dev.route_string);
-            let path = if dev.path.is_empty() {
-                alloc::format!("rp{}", dev.root_port_id)
-            } else {
-                let mut out = alloc::format!("rp{}", dev.path[0]);
-                for port in dev.path.iter().skip(1) {
-                    out.push_str(&alloc::format!("->p{}", port));
-                }
-                out
-            };
+            let path = usb_path_string(dev.root_port_id, dev.path.as_slice());
             out.push(alloc::format!(
                 "  dev stable={} slot={} rp={} route={} path={} port={} speed={} parent={:?} vidpid={:04X}:{:04X} dev={:02X}/{:02X}/{:02X} cfgs={} ep0_mps={}",
                 stable,
