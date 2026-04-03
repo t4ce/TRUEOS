@@ -161,8 +161,8 @@ const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 const CRABUSB_PROBE_TIMEOUT_MS: u64 = 2500;
 const CRABUSB_INITIAL_SETTLE_MS: u64 = 250;
 const CRABUSB_PROBE_QUIET_MS: u64 = 150;
-const CRABUSB_INTEL_INITIAL_SETTLE_MS: u64 = 1000;
-const CRABUSB_INTEL_PROBE_QUIET_MS: u64 = 750;
+const CRABUSB_INTEL_INITIAL_SETTLE_MS: u64 = 2000;
+const CRABUSB_INTEL_PROBE_QUIET_MS: u64 = 1500;
 const CRABUSB_INTEL_SKIP_PROBE_EXPERIMENT: bool = false;
 const CRABUSB_INTEL_SKIP_PROBE_REARM_MS: u64 = 1000;
 const CRABUSB_INTEL_SKIP_EVENT_HANDLER_EXPERIMENT: bool = false;
@@ -172,6 +172,8 @@ const CRABUSB_MAX_QUICK_STOP_REBINDS: u32 = 3;
 const CRABUSB_INTEL_QUIESCENT_EXPERIMENT: bool = false;
 const CRABUSB_INTEL_QUIESCENT_EXPERIMENT_MS: u64 = 1500;
 const CRABUSB_INTEL_QUIESCENT_POLL_MS: u64 = 25;
+const CRABUSB_INTEL_SETTLE_POLL_MS: u64 = 25;
+const CRABUSB_INTEL_SETTLE_SNAPSHOT_MS: u64 = 250;
 const ROOT_HUB_LIFECYCLE_INIT: u32 = 0;
 const ROOT_HUB_LIFECYCLE_BOUND: u32 = 1;
 const ROOT_HUB_LIFECYCLE_ROOT_CHANGE: u32 = 2;
@@ -400,6 +402,16 @@ struct XhciStatusBits {
     host_controller_error: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct XhciSettleSnapshot {
+    usbcmd: u32,
+    usbsts: u32,
+    crcr: u64,
+    iman: u32,
+    imod: u32,
+    root_portsc: u32,
+}
+
 fn xhci_status_bits(controller_id: usize) -> Option<XhciStatusBits> {
     let info = super::controller_by_index(controller_id)?;
     let mmio = info.mmio_base.as_ptr() as *const u8;
@@ -411,6 +423,33 @@ fn xhci_status_bits(controller_id: usize) -> Option<XhciStatusBits> {
             host_system_error: (usbsts & (1 << 2)) != 0,
             controller_not_ready: (usbsts & (1 << 11)) != 0,
             host_controller_error: (usbsts & (1 << 12)) != 0,
+        })
+    }
+}
+
+fn xhci_settle_snapshot(controller_id: usize) -> Option<XhciSettleSnapshot> {
+    let info = super::controller_by_index(controller_id)?;
+    let mmio = info.mmio_base.as_ptr() as *const u8;
+    unsafe {
+        let caplen = (read_mmio32(mmio, 0x00) & 0xFF) as usize;
+        let hcsparams1 = read_mmio32(mmio, 0x04);
+        let rtsoff = (read_mmio32(mmio, 0x18) & !0x1F) as usize;
+        let max_ports = ((hcsparams1 >> 24) & 0xFF) as usize;
+        let mut root_portsc = 0x0000_02A0;
+        for index in 0..max_ports {
+            let portsc = read_mmio32(mmio, caplen + 0x400 + (index * 0x10));
+            if portsc != 0x0000_02A0 {
+                root_portsc = portsc;
+                break;
+            }
+        }
+        Some(XhciSettleSnapshot {
+            usbcmd: read_mmio32(mmio, caplen),
+            usbsts: read_mmio32(mmio, caplen + 0x04),
+            crcr: read_mmio64(mmio, caplen + 0x18),
+            iman: read_mmio32(mmio, rtsoff + 0x20),
+            imod: read_mmio32(mmio, rtsoff + 0x24),
+            root_portsc,
         })
     }
 }
@@ -456,6 +495,76 @@ fn log_xhci_status_bits(controller_id: usize, prefix: &str) {
         status.controller_not_ready,
         status.host_controller_error,
     );
+}
+
+fn log_xhci_settle_snapshot(
+    controller_id: usize,
+    prefix: &str,
+    elapsed_ms: u64,
+    snapshot: XhciSettleSnapshot,
+) {
+    crate::log!(
+        "crabusb: {} ctrl={} t={}ms usbcmd=0x{:08X} usbsts=0x{:08X} crcr=0x{:016X} iman=0x{:08X} imod=0x{:08X} root_portsc=0x{:08X}\n",
+        prefix,
+        controller_id,
+        elapsed_ms,
+        snapshot.usbcmd,
+        snapshot.usbsts,
+        snapshot.crcr,
+        snapshot.iman,
+        snapshot.imod,
+        snapshot.root_portsc,
+    );
+}
+
+async fn monitor_intel_settle_window(controller_id: usize, duration_ms: u64) -> Option<&'static str> {
+    let started_at = Instant::now();
+    let mut last_snapshot = match xhci_settle_snapshot(controller_id) {
+        Some(snapshot) => {
+            log_xhci_settle_snapshot(controller_id, "intel settle start", 0, snapshot);
+            snapshot
+        }
+        None => return None,
+    };
+    let mut next_periodic_ms = CRABUSB_INTEL_SETTLE_SNAPSHOT_MS;
+
+    loop {
+        let elapsed = started_at.elapsed();
+        let elapsed_ms = elapsed.as_millis() as u64;
+        let snapshot = match xhci_settle_snapshot(controller_id) {
+            Some(snapshot) => snapshot,
+            None => return None,
+        };
+        let changed = snapshot != last_snapshot;
+        let fatal_reason = xhci_fatal_init_state(controller_id);
+
+        if changed {
+            log_xhci_settle_snapshot(controller_id, "intel settle changed", elapsed_ms, snapshot);
+        } else if elapsed_ms >= next_periodic_ms {
+            log_xhci_settle_snapshot(controller_id, "intel settle idle", elapsed_ms, snapshot);
+            next_periodic_ms = next_periodic_ms.saturating_add(CRABUSB_INTEL_SETTLE_SNAPSHOT_MS);
+        }
+
+        if let Some(reason) = fatal_reason {
+            log_xhci_status_bits(controller_id, "intel settle fatal");
+            log_xhci_runtime_snapshot(controller_id, "intel settle fatal");
+            crate::log!(
+                "crabusb: controller {} intel settle observed fatal xhci state ({}) at {}ms\n",
+                controller_id,
+                reason,
+                elapsed_ms
+            );
+            return Some(reason);
+        }
+
+        last_snapshot = snapshot;
+        if elapsed >= EmbassyDuration::from_millis(duration_ms) {
+            log_xhci_settle_snapshot(controller_id, "intel settle survived", elapsed_ms, snapshot);
+            return None;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(CRABUSB_INTEL_SETTLE_POLL_MS)).await;
+    }
 }
 
 fn xhci_set_interrupter_enable(controller_id: usize, enabled: bool) -> bool {
@@ -2865,7 +2974,19 @@ pub async fn event_pump_task(controller_id: usize) {
                     root_hub_lifecycle_summary(controller_id),
                     root_hub_lifecycle_bucket_for_controller(controller_id)
                 );
-                if controller_can_rebind(controller_id) {
+                if let Some(reason) = xhci_fatal_init_state(controller_id) {
+                    mark_controller_quarantined(
+                        controller_id,
+                        "pump observed fatal xhci stopped event",
+                    );
+                    uninstall_event_handler(controller_id);
+                    crate::log!(
+                        "crabusb: controller {} stopped with fatal xhci state ({}); quarantining instead of rebinding\n",
+                        controller_id,
+                        reason
+                    );
+                    Timer::after(EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_BACKOFF_MS)).await;
+                } else if controller_can_rebind(controller_id) {
                     mark_controller_recoverable(controller_id, "pump observed stopped event");
                     uninstall_event_handler(controller_id);
                     Timer::after(EmbassyDuration::from_millis(10)).await;
@@ -2926,6 +3047,16 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
                 log_xhci_status_bits(info.index, "pre-bind");
                 log_xhci_runtime_snapshot(info.index, "pre-bind");
             }
+        }
+        if let Some(reason) = xhci_fatal_init_state(info.index) {
+            mark_controller_quarantined(info.index, "fatal xhci state before host init");
+            crate::log!(
+                "crabusb: controller {} pre-bind fatal xhci state ({}); waiting for manual rebind\n",
+                info.index,
+                reason
+            );
+            wait_for_manual_rebind(info.index).await;
+            continue;
         }
 
         if info.vendor_id == 0x8086 {
@@ -3039,6 +3170,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         }
 
         let skip_event_handler = intel_skip_event_handler_experiment(info.vendor_id);
+        let delay_event_handler = info.vendor_id == 0x8086 && !skip_event_handler;
         if skip_event_handler {
             crate::log!(
                 "crabusb: controller {} intel skip-event-handler experiment active\n",
@@ -3049,14 +3181,55 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
                 ROOT_HUB_LIFECYCLE_BOUND,
                 "event handler intentionally skipped",
             );
-        } else {
+        } else if !delay_event_handler {
             install_event_handler(info.index, host.create_event_handler());
             log_xhci_runtime_snapshot(info.index, "event handler installed");
         }
         let bind_started_at = Instant::now();
         let initial_settle_ms = controller_initial_settle_ms(info.vendor_id);
         let probe_quiet_ms = controller_probe_quiet_ms(info.vendor_id);
-        Timer::after(EmbassyDuration::from_millis(initial_settle_ms)).await;
+        let mut interrupts_masked_for_settle = false;
+        if delay_event_handler {
+            interrupts_masked_for_settle = xhci_set_interrupter_enable(info.index, false);
+            crate::log!(
+                "crabusb: controller {} delaying event handler install for gentle intel settle {}ms masked={}\n",
+                info.index,
+                initial_settle_ms,
+                interrupts_masked_for_settle
+            );
+            reset_root_hub_lifecycle(
+                info.index,
+                ROOT_HUB_LIFECYCLE_BOUND,
+                "waiting before event handler install",
+            );
+        }
+        if delay_event_handler {
+            if let Some(reason) = monitor_intel_settle_window(info.index, initial_settle_ms).await {
+                mark_controller_quarantined(
+                    info.index,
+                    "fatal xhci state before delayed event handler install",
+                );
+                crate::log!(
+                    "crabusb: controller {} fatal xhci state ({}) before delayed event handler install; waiting for manual rebind\n",
+                    info.index,
+                    reason
+                );
+                wait_for_manual_rebind(info.index).await;
+                continue;
+            }
+            install_event_handler(info.index, host.create_event_handler());
+            if interrupts_masked_for_settle {
+                let reenabled = xhci_set_interrupter_enable(info.index, true);
+                crate::log!(
+                    "crabusb: controller {} re-enabled xhci interrupts after gentle settle ok={}\n",
+                    info.index,
+                    reenabled
+                );
+            }
+            log_xhci_runtime_snapshot(info.index, "event handler installed after gentle settle");
+        } else {
+            Timer::after(EmbassyDuration::from_millis(initial_settle_ms)).await;
+        }
         if info.vendor_id != 0x8086 {
             crab_scout_once(&mut host, info, &spawner).await;
         } else {
