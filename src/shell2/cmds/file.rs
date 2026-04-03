@@ -52,20 +52,15 @@ fn parse_size_bytes(raw: &str) -> Option<u64> {
     number.checked_mul(mul)
 }
 
-fn tree_child_names(
+async fn tree_child_names_async(
     disk_id: crate::disc::block::DiscId,
     path: &str,
 ) -> Result<Vec<String>, &'static str> {
     let Some(disk) = crate::disc::block::device_handle(disk_id) else {
         return Err("root handle missing");
     };
-    let path_owned = String::from(path);
 
-    let listing = crate::wait::spawn_and_wait_local(async move {
-        crate::r::fs::trueosfs::list_dir_async(disk, path_owned.as_str()).await
-    });
-
-    match listing {
+    match crate::r::fs::trueosfs::list_dir_async(disk, path).await {
         Ok(Some(text)) => Ok(text
             .lines()
             .map(str::trim)
@@ -77,12 +72,9 @@ fn tree_child_names(
     }
 }
 
-fn file_size_bytes(disk_id: crate::disc::block::DiscId, path: &str) -> Option<u64> {
+async fn file_size_bytes_async(disk_id: crate::disc::block::DiscId, path: &str) -> Option<u64> {
     let disk = crate::disc::block::device_handle(disk_id)?;
-    let path_owned = String::from(path);
-    match crate::wait::spawn_and_wait_local(async move {
-        crate::r::fs::trueosfs::file_info_async(disk, path_owned.as_str()).await
-    }) {
+    match crate::r::fs::trueosfs::file_info_async(disk, path).await {
         Ok(Some(info)) => Some(info.data_len),
         _ => None,
     }
@@ -117,74 +109,158 @@ fn format_root_header(root: crate::r::fs::trueosfs::RootInfo) -> String {
     )
 }
 
-fn push_tree_lines(
-    out: &mut Vec<String>,
-    disk_id: crate::disc::block::DiscId,
-    path: &str,
-    depth: usize,
-) {
-    if depth >= MAX_DEPTH || out.len() >= MAX_LINES_PER_ROOT {
-        return;
-    }
+struct TreeEntry {
+    name: String,
+    full_path: String,
+    is_dir: bool,
+    size_bytes: Option<u64>,
+}
 
-    let children = match tree_child_names(disk_id, path) {
-        Ok(children) => children,
-        Err(err) => {
-            let indent = "  ".repeat(depth + 1);
-            out.push(alloc::format!("{}[{}]", indent, err));
-            return;
-        }
+enum TreeWorkItem {
+    PrintLine(String),
+    VisitDir { path: String, depth: usize },
+}
+
+struct RootRender {
+    root: crate::r::fs::trueosfs::RootInfo,
+    lines: Result<Vec<String>, &'static str>,
+}
+
+async fn describe_tree_entry_async(
+    disk_id: crate::disc::block::DiscId,
+    parent: &str,
+    name: &str,
+) -> TreeEntry {
+    let full_path = child_path(parent, name);
+    let nested = tree_child_names_async(disk_id, full_path.as_str()).await.ok();
+    let is_dir = nested.as_ref().is_some_and(|entries| !entries.is_empty());
+    let size_bytes = if is_dir {
+        None
+    } else {
+        file_size_bytes_async(disk_id, full_path.as_str()).await
     };
 
-    if children.is_empty() {
-        if depth == 0 {
-            out.push(String::from("  (empty)"));
-        }
-        return;
+    TreeEntry {
+        name: String::from(name),
+        full_path,
+        is_dir,
+        size_bytes,
+    }
+}
+
+async fn build_root_tree_lines_async(
+    root: crate::r::fs::trueosfs::RootInfo,
+) -> Result<Vec<String>, &'static str> {
+    if crate::disc::block::device_handle(root.disk_id).is_none() {
+        return Err("root handle missing");
     }
 
-    for (index, name) in children.iter().take(MAX_CHILDREN_PER_DIR).enumerate() {
+    let mut out = Vec::new();
+    let mut work = Vec::new();
+    work.push(TreeWorkItem::VisitDir {
+        path: String::new(),
+        depth: 0,
+    });
+
+    while let Some(item) = work.pop() {
         if out.len() >= MAX_LINES_PER_ROOT {
             break;
         }
 
-        let full_path = child_path(path, name);
-        let nested = tree_child_names(disk_id, full_path.as_str()).ok();
-        let is_dir = nested.as_ref().is_some_and(|entries| !entries.is_empty());
-        let indent = "  ".repeat(depth + 1);
-        let branch = if is_dir { "+ " } else { "- " };
+        match item {
+            TreeWorkItem::PrintLine(line) => out.push(line),
+            TreeWorkItem::VisitDir { path, depth } => {
+                if depth >= MAX_DEPTH {
+                    continue;
+                }
 
-        if is_dir {
-            out.push(alloc::format!("{}{}{}/", indent, branch, name));
-            push_tree_lines(out, disk_id, full_path.as_str(), depth + 1);
-        } else if let Some(size) = file_size_bytes(disk_id, full_path.as_str()) {
-            out.push(alloc::format!("{}{}{} ({} bytes)", indent, branch, name, size));
-        } else {
-            out.push(alloc::format!("{}{}{}", indent, branch, name));
-        }
+                let children = match tree_child_names_async(root.disk_id, path.as_str()).await {
+                    Ok(children) => children,
+                    Err(err) => {
+                        if depth == 0 {
+                            return Err(err);
+                        }
+                        let indent = "  ".repeat(depth + 1);
+                        work.push(TreeWorkItem::PrintLine(alloc::format!(
+                            "{}[{}]",
+                            indent,
+                            err
+                        )));
+                        continue;
+                    }
+                };
 
-        if index + 1 == MAX_CHILDREN_PER_DIR && children.len() > MAX_CHILDREN_PER_DIR {
-            out.push(alloc::format!(
-                "{}  ... {} more entries",
-                indent,
-                children.len() - MAX_CHILDREN_PER_DIR
-            ));
+                if children.is_empty() {
+                    if depth == 0 {
+                        out.push(String::from("  (empty)"));
+                    }
+                    continue;
+                }
+
+                let mut entries = Vec::new();
+                for name in children.iter().take(MAX_CHILDREN_PER_DIR) {
+                    if out.len().saturating_add(entries.len()) >= MAX_LINES_PER_ROOT {
+                        break;
+                    }
+                    entries.push(describe_tree_entry_async(root.disk_id, path.as_str(), name).await);
+                }
+
+                let indent = "  ".repeat(depth + 1);
+                if children.len() > MAX_CHILDREN_PER_DIR {
+                    work.push(TreeWorkItem::PrintLine(alloc::format!(
+                        "{}  ... {} more entries",
+                        indent,
+                        children.len() - MAX_CHILDREN_PER_DIR
+                    )));
+                }
+
+                for entry in entries.into_iter().rev() {
+                    let line = if entry.is_dir {
+                        alloc::format!("{}+ {}/", indent, entry.name)
+                    } else if let Some(size) = entry.size_bytes {
+                        alloc::format!("{}- {} ({} bytes)", indent, entry.name, size)
+                    } else {
+                        alloc::format!("{}- {}", indent, entry.name)
+                    };
+
+                    if entry.is_dir {
+                        work.push(TreeWorkItem::VisitDir {
+                            path: entry.full_path,
+                            depth: depth + 1,
+                        });
+                    }
+                    work.push(TreeWorkItem::PrintLine(line));
+                }
+            }
         }
     }
+
+    Ok(out)
 }
 
-fn print_root_tree(io: &'static dyn ShellBackend2, root: crate::r::fs::trueosfs::RootInfo) {
+async fn collect_root_renders_async(
+    roots: Vec<crate::r::fs::trueosfs::RootInfo>,
+) -> Vec<RootRender> {
+    let mut out = Vec::with_capacity(roots.len());
+    for root in roots {
+        out.push(RootRender {
+            root,
+            lines: build_root_tree_lines_async(root).await,
+        });
+    }
+    out
+}
+
+fn print_root_tree(
+    io: &'static dyn ShellBackend2,
+    root: crate::r::fs::trueosfs::RootInfo,
+    lines: &[String],
+) {
     print_shell_line(io, format_root_header(root).as_str());
 
-    let mut lines = Vec::new();
-    push_tree_lines(&mut lines, root.disk_id, "", 0);
     for line in lines {
         print_shell_line(io, line.as_str());
     }
-}
-
-fn root_is_browsable(disk_id: crate::disc::block::DiscId) -> bool {
-    matches!(tree_child_names(disk_id, ""), Ok(_))
 }
 
 pub(crate) fn try_parse(
@@ -304,19 +380,23 @@ pub(crate) fn try_parse(
                 return ParseOutcome::Handled;
             }
 
+            let renders = crate::wait::spawn_and_wait_local(async move {
+                collect_root_renders_async(roots).await
+            });
+
             let mut shown = 0usize;
             let mut skipped = 0usize;
 
-            for root in roots.into_iter() {
-                if !root_is_browsable(root.disk_id) {
+            for render in renders.into_iter() {
+                let Ok(lines) = render.lines else {
                     skipped = skipped.saturating_add(1);
                     continue;
-                }
+                };
 
                 if shown > 0 {
                     print_shell_line(io, "");
                 }
-                print_root_tree(io, root);
+                print_root_tree(io, render.root, lines.as_slice());
                 shown = shown.saturating_add(1);
             }
 
