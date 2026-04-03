@@ -3,8 +3,13 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
+use trueos_gfx_core::{
+    BufferDesc, BufferId, BufferUsage, Command, CommandBuffer, FenceId, GfxContext, ImageDesc,
+    ImageFormat, ImageId, MemoryType, PipelineDesc, PipelineId, RGB_VERTEX_SIZE, RgbVertex, Rgba8,
+    TexCoordFormat, VertexLayout, Viewport,
+};
 
 const INTEL_VENDOR_ID: u16 = 0x8086;
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
@@ -26,6 +31,11 @@ const INTEL_GT_DISP_PWRON: usize = 0x138090;
 const INTEL_GT_DISP_PWRON_REQ: u32 = 0x0000_0001;
 const INTEL_ICL_PHY_MISC_A: usize = 0x64C00;
 const INTEL_ICL_PHY_MISC_B: usize = 0x64C04;
+const INTEL_OWNED_TRIANGLE_CLEAR_RGB: u32 = 0x10141A;
+const INTEL_OWNED_TRIANGLE_FRAME_MS: u64 = 16;
+const INTEL_OWNED_TRIANGLE_PHASE_STEP_RAD: f32 = 0.18;
+const INTEL_OWNED_TRIANGLE_PROOF_ENABLED: bool = true;
+const INTEL_OWNED_TRIANGLE_PROOF_TIMEOUT_MS: u64 = 750;
 const INTEL_PLANE_ENABLE: u32 = 1 << 31;
 const INTEL_PORT_HOTPLUG_EN: usize = 0x61110;
 const INTEL_PIPE_A_SRC: usize = 0x7001C;
@@ -98,6 +108,29 @@ struct IntelDisplaySignatureCandidate {
 
 static FIRST_DEVICE: Mutex<Option<IntelDeviceInfo>> = Mutex::new(None);
 static INTEL_IGPU770_PRESENT: AtomicBool = AtomicBool::new(false);
+static INTEL_OWNED_TRIANGLE_PROOF_DISABLED: AtomicBool = AtomicBool::new(false);
+static INTEL_OWNED_TRIANGLE_PROOF_LATCH_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy)]
+struct OwnedTriangleProofResources {
+    render_target: ImageId,
+    rgb_pipeline: PipelineId,
+    rgb_buffer: BufferId,
+    screen_w: u32,
+    screen_h: u32,
+}
+
+impl OwnedTriangleProofResources {
+    const fn invalid() -> Self {
+        Self {
+            render_target: ImageId::invalid(),
+            rgb_pipeline: PipelineId::invalid(),
+            rgb_buffer: BufferId::invalid(),
+            screen_w: 0,
+            screen_h: 0,
+        }
+    }
+}
 
 impl IntelDisplaySignatureCandidate {
     const fn empty() -> Self {
@@ -679,8 +712,237 @@ pub fn intel_igpu770_present() -> bool {
     INTEL_IGPU770_PRESENT.load(Ordering::Acquire)
 }
 
+#[inline]
+fn owned_triangle_proof_mode_active() -> bool {
+    INTEL_OWNED_TRIANGLE_PROOF_ENABLED
+        && intel_igpu770_present()
+        && !INTEL_OWNED_TRIANGLE_PROOF_DISABLED.load(Ordering::Acquire)
+}
+
+fn disable_owned_triangle_proof_once(reason: &'static str) {
+    INTEL_OWNED_TRIANGLE_PROOF_DISABLED.store(true, Ordering::Release);
+    if !INTEL_OWNED_TRIANGLE_PROOF_LATCH_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log!("intel: owned-triangle-proof disabled reason={} timeout_latched=1\n", reason);
+    }
+}
+
 pub fn isolated_triangle_mode_active() -> bool {
-    false
+    owned_triangle_proof_mode_active()
+}
+
+fn owned_triangle_vertices(phase: f32) -> [RgbVertex; 3] {
+    let cos_p = libm::cosf(phase);
+    let sin_p = libm::sinf(phase);
+    let rotate =
+        |x: f32, y: f32| -> (f32, f32) { ((x * cos_p) - (y * sin_p), (x * sin_p) + (y * cos_p)) };
+    let (x0, y0) = rotate(0.0, -0.65);
+    let (x1, y1) = rotate(-0.7, 0.55);
+    let (x2, y2) = rotate(0.7, 0.55);
+    [
+        RgbVertex {
+            x: x0,
+            y: y0,
+            color: Rgba8::new(0xFF, 0x52, 0x52, 0xFF),
+        },
+        RgbVertex {
+            x: x1,
+            y: y1,
+            color: Rgba8::new(0x40, 0xE3, 0x92, 0xFF),
+        },
+        RgbVertex {
+            x: x2,
+            y: y2,
+            color: Rgba8::new(0x5A, 0x9C, 0xFF, 0xFF),
+        },
+    ]
+}
+
+#[inline]
+fn rgb_vertex_bytes(vertices: &[RgbVertex; 3]) -> &[u8] {
+    unsafe {
+        core::slice::from_raw_parts(
+            vertices.as_ptr() as *const u8,
+            core::mem::size_of_val(vertices),
+        )
+    }
+}
+
+fn destroy_owned_triangle_proof_resources(
+    ctx: &mut dyn GfxContext,
+    resources: OwnedTriangleProofResources,
+) {
+    if resources.rgb_buffer.is_valid() {
+        ctx.destroy_buffer(resources.rgb_buffer);
+    }
+    if resources.rgb_pipeline.is_valid() {
+        ctx.destroy_pipeline(resources.rgb_pipeline);
+    }
+    if resources.render_target.is_valid() {
+        ctx.destroy_image(resources.render_target);
+    }
+}
+
+fn ensure_owned_triangle_proof_resources(
+    ctx: &mut dyn GfxContext,
+    resources: &mut OwnedTriangleProofResources,
+) -> Option<OwnedTriangleProofResources> {
+    let swap = ctx.swapchain_desc();
+    let screen_w = swap.extent.width.max(1);
+    let screen_h = swap.extent.height.max(1);
+    if resources.render_target.is_valid()
+        && resources.screen_w == screen_w
+        && resources.screen_h == screen_h
+    {
+        return Some(*resources);
+    }
+
+    if resources.render_target.is_valid() {
+        destroy_owned_triangle_proof_resources(ctx, *resources);
+        *resources = OwnedTriangleProofResources::invalid();
+    }
+
+    let rgb_pipeline = ctx
+        .create_pipeline(PipelineDesc {
+            vertex_layout: VertexLayout {
+                stride: RGB_VERTEX_SIZE as u16,
+                pos_offset: 0,
+                color_offset: 8,
+                color_format: trueos_gfx_core::ColorFormat::RgbaU8,
+                texcoord_offset: 0,
+                texcoord_format: TexCoordFormat::None,
+            },
+            vs: None,
+            fs: None,
+        })
+        .ok()?;
+    let rgb_buffer = ctx
+        .create_buffer(BufferDesc {
+            size: core::mem::size_of::<RgbVertex>() as u64 * 3,
+            usage: BufferUsage::Vertex,
+            memory: MemoryType::HostVisible,
+        })
+        .ok()?;
+    let render_target = ctx
+        .create_image(ImageDesc {
+            width: screen_w,
+            height: screen_h,
+            format: ImageFormat::Rgba8888,
+        })
+        .ok()?;
+
+    *resources = OwnedTriangleProofResources {
+        render_target,
+        rgb_pipeline,
+        rgb_buffer,
+        screen_w,
+        screen_h,
+    };
+    Some(*resources)
+}
+
+fn submit_owned_triangle_proof_frame(
+    ctx: &mut dyn GfxContext,
+    resources: &mut OwnedTriangleProofResources,
+    phase: f32,
+) -> Option<FenceId> {
+    let resources = ensure_owned_triangle_proof_resources(ctx, resources)?;
+    let vertices = owned_triangle_vertices(phase);
+    if ctx
+        .write_buffer(resources.rgb_buffer, 0, rgb_vertex_bytes(&vertices))
+        .is_err()
+    {
+        return None;
+    }
+    let viewport = Viewport {
+        x: 0,
+        y: 0,
+        width: resources.screen_w as i32,
+        height: resources.screen_h as i32,
+    };
+    let cmds = [
+        Command::SetViewport(viewport),
+        Command::SetRenderTarget(Some(resources.render_target)),
+        Command::ClearColor {
+            rgb: INTEL_OWNED_TRIANGLE_CLEAR_RGB,
+        },
+        Command::BindPipeline(resources.rgb_pipeline),
+        Command::BindVertexBuffer {
+            buffer: resources.rgb_buffer,
+            offset: 0,
+        },
+        Command::Draw {
+            vertex_count: 3,
+            first_vertex: 0,
+        },
+        Command::Present,
+    ];
+    ctx.submit(CommandBuffer { commands: &cmds }).ok()
+}
+
+async fn wait_owned_triangle_fence(fence: FenceId) -> bool {
+    if !fence.is_valid() {
+        return false;
+    }
+    let deadline =
+        Instant::now() + EmbassyDuration::from_millis(INTEL_OWNED_TRIANGLE_PROOF_TIMEOUT_MS);
+    loop {
+        let ready = crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::Unknown, |ctx| {
+            ctx.poll(fence)
+        })
+        .unwrap_or(false);
+        if ready {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+}
+
+async fn run_owned_triangle_proof_loop() {
+    let mut resources = OwnedTriangleProofResources::invalid();
+    let mut phase = super::xelp_render_ngin::default_rgb_triangle_rotation();
+    let mut frame_seq = 0u32;
+
+    crate::log!(
+        "intel: owned-triangle-proof start frame_ms={} timeout_ms={} clear=0x{:06X}\n",
+        INTEL_OWNED_TRIANGLE_FRAME_MS,
+        INTEL_OWNED_TRIANGLE_PROOF_TIMEOUT_MS,
+        INTEL_OWNED_TRIANGLE_CLEAR_RGB & 0x00FF_FFFF
+    );
+
+    loop {
+        let fence = crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::Unknown, |ctx| {
+            submit_owned_triangle_proof_frame(ctx, &mut resources, phase)
+        })
+        .flatten();
+        let Some(fence) = fence else {
+            disable_owned_triangle_proof_once("submit");
+            break;
+        };
+        if !wait_owned_triangle_fence(fence).await {
+            disable_owned_triangle_proof_once("poll-timeout");
+            break;
+        }
+        frame_seq = frame_seq.wrapping_add(1);
+        if frame_seq <= 8 || frame_seq.is_multiple_of(240) {
+            crate::log!(
+                "intel: owned-triangle-proof frame={} phase_millirad={}\n",
+                frame_seq,
+                (phase * 1000.0) as i32
+            );
+        }
+        phase += INTEL_OWNED_TRIANGLE_PHASE_STEP_RAD;
+        if phase > core::f32::consts::TAU {
+            phase -= core::f32::consts::TAU;
+        }
+        Timer::after(EmbassyDuration::from_millis(INTEL_OWNED_TRIANGLE_FRAME_MS)).await;
+    }
+
+    let _ = crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::Unknown, |ctx| {
+        destroy_owned_triangle_proof_resources(ctx, resources);
+    });
 }
 
 #[inline]
@@ -737,24 +999,15 @@ pub async fn scanout_smoke_task() {
         switched && crate::gfx::is_intel_active()
     };
 
+    if !intel_backend_active {
+        disable_owned_triangle_proof_once("backend-switch");
+        crate::log!("intel: owned-triangle-proof skipped reason=backend-inactive\n");
+        return;
+    }
+
     Timer::after(EmbassyDuration::from_millis(1200)).await;
     if intel_igpu770_present() {
-        super::intel_igpu770::ggtt_recon_once();
-        super::intel_igpu770::ggtt_map_smoke_objects_once();
-        if intel_backend_active {
-            crate::log!("intel: legacy direct smoke paths skipped (gfx-backend mode)\n");
-        } else {
-            crate::log!(
-                "intel: legacy direct rcs smoke removed; keeping bcs-only bring-up outside gfx-backend mode\n"
-            );
-        }
-        if !intel_backend_active {
-            crate::log!("intel: smoke dispatch engine=bcs stage=begin\n");
-            super::intel_igpu770::ggtt_bcs_smoke_test_once();
-            crate::log!("intel: smoke dispatch engine=bcs stage=end\n");
-            super::intel_igpu770::cpu_framebuffer_alive_stamp("post-gpu-smokes");
-            super::xelp_media_ngin::kickoff_once();
-        }
+        crate::log!("intel: owned-triangle-proof selected; legacy smoke branches disabled\n");
     }
 
     let defer_display =
@@ -765,13 +1018,11 @@ pub async fn scanout_smoke_task() {
     }
 
     run_display_power_discovery(info);
-    if intel_igpu770_present() {
-        if !intel_backend_active {
-            super::intel_igpu770::cpu_framebuffer_alive_stamp("post-display-discovery");
-            super::xelp_media_ngin::run_https_media_demo_once_async().await;
-        }
-    }
     Timer::after(EmbassyDuration::from_millis(25)).await;
-    crate::log!("intel: display discovery follow-up probe after smoke\n");
+    crate::log!("intel: display discovery follow-up probe after proof-bringup\n");
     log_display_power_probe(info);
+
+    if owned_triangle_proof_mode_active() {
+        run_owned_triangle_proof_loop().await;
+    }
 }

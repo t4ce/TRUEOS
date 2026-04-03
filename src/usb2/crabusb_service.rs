@@ -2853,6 +2853,11 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             info.mmio_base
         );
 
+        if info.vendor_id == 0x8086 {
+            let flr = crate::pci::try_function_level_reset(info.bus, info.slot, info.function);
+            crate::log!("crabusb: controller {} intel pre-init flr={}\n", info.index, flr);
+        }
+
         crate::pci::enable_mem_and_bus_master(info.bus, info.slot, info.function);
 
         let mmio = info.mmio_base;
