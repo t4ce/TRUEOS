@@ -951,7 +951,7 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_hit,
     ),
     TaskSpec::enabled("truesurfer-factory", 0, &SURFER_FACTORY_STARTED, spawn_truesurfer_factory),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-gfx-tetris",
         UI2_DEMO_READY,
         &UI2_GFX_TETRIS_STARTED,
@@ -999,7 +999,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-bgrt-demo",
         UI2_DEMO_READY,
         &UI2_BGRT_DEMO_STARTED,
