@@ -2,6 +2,8 @@
 
 use super::*;
 
+const UI2_CHROME_TEXT_RGBA: (u8, u8, u8, u8) = (0x00, 0x00, 0x00, 0xFF);
+
 fn decoration_label_draw_rect(
     window: &Ui2Window,
     kind: Ui2DecorationLabelKind,
@@ -121,7 +123,7 @@ fn draw_window_decoration_label(
     let atlas_h = f32::from(glyph.region.atlas_h.max(1));
     let src_x = f32::from(glyph.region.src_x);
     let src_y = f32::from(glyph.region.src_y);
-    let _ = draw_texture_rect_uv_no_present(
+    let _ = draw_texture_rect_uv_rgba_no_present(
         texture.tex_id,
         glyph_x,
         glyph_y,
@@ -134,7 +136,7 @@ fn draw_window_decoration_label(
         state.view_w,
         state.view_h,
         true,
-        window.alpha,
+        modulate_rgba_alpha(UI2_CHROME_TEXT_RGBA, window.alpha),
     );
 }
 
@@ -379,7 +381,7 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
             titleband_h.max(1.0),
         );
         let title_px_h = 16.0f32;
-        let _ = ui2_font_draw_text_line_in_rect_no_present(
+        let _ = ui2_font_draw_text_line_in_rect_rgba_no_present(
             window.title.as_str(),
             title_rect,
             title_px_h,
@@ -387,7 +389,7 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
             Ui2FontVerticalAlign::Center,
             state.view_w,
             state.view_h,
-            window.alpha,
+            modulate_rgba_alpha(UI2_CHROME_TEXT_RGBA, window.alpha),
         );
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleComposition);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);

@@ -1116,6 +1116,38 @@ fn draw_texture_rect_uv_no_present(
     blend_enabled: bool,
     alpha: u8,
 ) -> bool {
+    draw_texture_rect_uv_rgba_no_present(
+        tex_id,
+        x,
+        y,
+        width,
+        height,
+        u0,
+        v0,
+        u1,
+        v1,
+        view_w,
+        view_h,
+        blend_enabled,
+        (255, 255, 255, alpha),
+    )
+}
+
+fn draw_texture_rect_uv_rgba_no_present(
+    tex_id: u32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+    view_w: u32,
+    view_h: u32,
+    blend_enabled: bool,
+    rgba: (u8, u8, u8, u8),
+) -> bool {
     if tex_id == 0 || !(width > 0.0 && height > 0.0) {
         return false;
     }
@@ -1130,12 +1162,12 @@ fn draw_texture_rect_uv_no_present(
         x + width,
         y + height,
         [u0, v0, u1, v1],
-        Rgba8::new(255, 255, 255, alpha),
+        Rgba8::new(rgba.0, rgba.1, rgba.2, rgba.3),
     );
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
     let _ = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_set_blend(
-            if blend_enabled || alpha < 255 { 1 } else { 0 },
+            if blend_enabled || rgba.3 < 255 { 1 } else { 0 },
             0x0302,
             0x0303,
             0x0302,

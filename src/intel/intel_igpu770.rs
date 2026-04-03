@@ -1,6 +1,6 @@
 use core::{
     ptr,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use spin::Mutex;
@@ -18,6 +18,7 @@ use super::xelp_copy_ngin::{
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
 const WARM_RING_BYTES: usize = 4096;
 const WARM_CONTEXT_BYTES: usize = 22 * 4096;
+const WARM_BCS_CONTEXT_BYTES: usize = WARM_CONTEXT_BYTES;
 const WARM_BATCH_BYTES: usize = 512 * 1024;
 const WARM_RESULT_BYTES: usize = 4096;
 const WARM_ALIGN: usize = 4096;
@@ -41,6 +42,8 @@ const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
 const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
 const GPU_VA_SCREEN_SURFACE_BASE: u64 = 0x0200_0000;
+const GPU_VA_BCS_CONTEXT0_BASE: u64 = 0x0090_0000;
+const GPU_VA_BCS_CONTEXT1_BASE: u64 = 0x0092_0000;
 const BCS_RING_BASE: usize = 0x0002_2000;
 const BCS_RING_TAIL: usize = BCS_RING_BASE + 0x30;
 const BCS_RING_HEAD: usize = BCS_RING_BASE + 0x34;
@@ -413,6 +416,15 @@ fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
 #[inline]
 pub(super) fn gen12_lrc_context_control_seed() -> u32 {
     masked_bit_enable(CTX_CTRL_INHIBIT_SYN_CTX_SWITCH | CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT)
+}
+
+#[inline]
+fn gen12_bcs_context_control_seed() -> u32 {
+    masked_bit_enable(
+        CTX_CTRL_RS_CTX_ENABLE
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH
+            | CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT,
+    )
 }
 
 fn wait_forcewake_ack(warm: Igpu770WarmState, mask: u32, expected: u32) -> (bool, u32, usize) {
@@ -1460,18 +1472,22 @@ fn init_gen12_lrc_context_image(
 }
 
 fn init_gen12_bcs_context_image(
-    warm: Igpu770WarmState,
+    context_virt: *mut u8,
+    context_len: usize,
     ring_start: u32,
     ring_tail: u32,
     ring_ctl: u32,
 ) -> bool {
-    let total_dwords = warm.context_len / core::mem::size_of::<u32>();
+    if context_virt.is_null() {
+        return false;
+    }
+
+    let total_dwords = context_len / core::mem::size_of::<u32>();
     if total_dwords <= LRC_STATE_OFFSET_DWORDS {
         return false;
     }
 
-    let dwords =
-        unsafe { core::slice::from_raw_parts_mut(warm.context_virt as *mut u32, total_dwords) };
+    let dwords = unsafe { core::slice::from_raw_parts_mut(context_virt as *mut u32, total_dwords) };
     dwords.fill(0);
 
     let state = &mut dwords[LRC_STATE_OFFSET_DWORDS..];
@@ -1549,7 +1565,7 @@ fn init_gen12_bcs_context_image(
 
     push_mi_nops(state, &mut idx, 12);
 
-    state[CTX_CONTEXT_CONTROL_DW] = gen12_lrc_context_control_seed();
+    state[CTX_CONTEXT_CONTROL_DW] = gen12_bcs_context_control_seed();
     state[CTX_RING_HEAD_DW] = 0;
     state[CTX_RING_TAIL_DW] = ring_tail;
     state[CTX_RING_START_DW] = ring_start;
@@ -1558,7 +1574,7 @@ fn init_gen12_bcs_context_image(
 
     state[idx] = MI_BATCH_BUFFER_END | 1;
 
-    dma_cache_flush(warm.context_virt as *const u8, warm.context_len);
+    dma_cache_flush(context_virt as *const u8, context_len);
     true
 }
 
@@ -1719,38 +1735,8 @@ fn bcs_execlist_submit_port_push(
 }
 
 fn prime_bcs_context_submit_state(warm: Igpu770WarmState) {
-    let ctx_ctl_clear = masked_bits_update(
-        0,
-        CTX_CTRL_RS_CTX_ENABLE
-            | CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
-            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
-    );
-    let ctx_ctl_req = masked_bits_update(
-        CTX_CTRL_RS_CTX_ENABLE,
-        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
-            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
-    );
-
-    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL, ctx_ctl_clear);
-    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_clear);
+    let ctx_ctl_req = gen12_bcs_context_control_seed();
     let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL, ctx_ctl_req);
-    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_req);
-}
-
-fn rearm_bcs_live_ring_state(
-    warm: Igpu770WarmState,
-    ring_start: u32,
-    ring_ctl: u32,
-    ring_tail: u32,
-) {
-    let _ = mmio_write32(warm, BCS_RING_MI_MODE, masked_bit_disable(RING_MI_MODE_STOP_RING));
-    let _ = mmio_write32(warm, BCS_RING_HEAD, 0);
-    let _ = mmio_write32(warm, BCS_RING_TAIL, 0);
-    let _ = mmio_write32(warm, BCS_RING_START, ring_start);
-    let _ = mmio_write32(warm, BCS_RING_CTL, ring_ctl);
-    let _ = mmio_write32(warm, BCS_RING_TAIL, ring_tail);
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1763,6 +1749,12 @@ pub struct Igpu770WarmState {
     pub context_phys: u64,
     pub context_virt: *mut u8,
     pub context_len: usize,
+    pub bcs_context0_phys: u64,
+    pub bcs_context0_virt: *mut u8,
+    pub bcs_context0_len: usize,
+    pub bcs_context1_phys: u64,
+    pub bcs_context1_virt: *mut u8,
+    pub bcs_context1_len: usize,
     pub batch_phys: u64,
     pub batch_virt: *mut u8,
     pub batch_len: usize,
@@ -1803,6 +1795,7 @@ static GGTT_BLT_SMOKE_DISABLED: AtomicBool = AtomicBool::new(false);
 static GGTT_BLT_SMOKE_DISABLED_LOGGED: AtomicBool = AtomicBool::new(false);
 static FORCEWAKE_GT_HELD: AtomicBool = AtomicBool::new(false);
 static FORCEWAKE_PARTIAL_HOLD_LOGGED: AtomicBool = AtomicBool::new(false);
+static NEXT_BCS_CONTEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
 
 #[inline]
 pub fn ggtt_blt_smoke_disabled() -> bool {
@@ -1937,6 +1930,36 @@ fn ggtt_map_plan_heap_target(
     ggtt_map_plan_system_ram(phys, size, gpu_addr)
 }
 
+fn next_bcs_context_slot() -> usize {
+    NEXT_BCS_CONTEXT_SLOT.fetch_add(1, Ordering::AcqRel) & 1
+}
+
+fn bcs_context_plan_for_slot(
+    warm: Igpu770WarmState,
+    slot: usize,
+) -> Option<(GgttMapPlan, *mut u8, usize)> {
+    match slot & 1 {
+        0 => Some((
+            ggtt_map_plan_system_ram(
+                warm.bcs_context0_phys,
+                warm.bcs_context0_len,
+                GPU_VA_BCS_CONTEXT0_BASE,
+            )?,
+            warm.bcs_context0_virt,
+            warm.bcs_context0_len,
+        )),
+        _ => Some((
+            ggtt_map_plan_system_ram(
+                warm.bcs_context1_phys,
+                warm.bcs_context1_len,
+                GPU_VA_BCS_CONTEXT1_BASE,
+            )?,
+            warm.bcs_context1_virt,
+            warm.bcs_context1_len,
+        )),
+    }
+}
+
 fn log_ggtt_map_plan(label: &str, plan: GgttMapPlan) {
     crate::log!(
         "intel/igpu770: ggtt-plan label={} gpu=0x{:X} phys=0x{:X} size=0x{:X} pages={} aperture_backed={}\n",
@@ -1968,6 +1991,12 @@ fn ggtt_pte_byte_off(gpu_addr: u64) -> Option<usize> {
 
 fn ggtt_pte_encode(phys: u64) -> u64 {
     (phys & !0xFFFu64) | GEN8_PAGE_PRESENT
+}
+
+fn ggtt_read_pte(warm: Igpu770WarmState, gpu_addr: u64) -> Option<u64> {
+    let byte_off = ggtt_pte_byte_off(gpu_addr)?;
+    let ptr = ggtt_alias_ptr(warm, byte_off)?;
+    Some(unsafe { core::ptr::read_volatile(ptr) })
 }
 
 fn ggtt_write_pte(warm: Igpu770WarmState, gpu_addr: u64, phys: u64) -> Option<u64> {
@@ -2029,6 +2058,51 @@ fn ggtt_program_plan(label: &str, warm: Igpu770WarmState, plan: GgttMapPlan) -> 
         page += 1;
     }
     true
+}
+
+fn log_ggtt_window_state(warm: Igpu770WarmState, label: &str, start_gpu_addr: u64, pages: usize) {
+    let mut page = 0usize;
+    while page < pages {
+        let gpu_addr = start_gpu_addr.saturating_add((page as u64).saturating_mul(GGTT_PAGE_BYTES));
+        match ggtt_read_pte(warm, gpu_addr) {
+            Some(pte) => crate::log!(
+                "intel/igpu770: ggtt-window label={} page={} gpu=0x{:X} pte=0x{:016X} present={} phys=0x{:X}\n",
+                label,
+                page,
+                gpu_addr,
+                pte,
+                ((pte & GEN8_PAGE_PRESENT) != 0) as u8,
+                pte & !0xFFFu64
+            ),
+            None => crate::log!(
+                "intel/igpu770: ggtt-window label={} page={} gpu=0x{:X} status=unreadable\n",
+                label,
+                page,
+                gpu_addr
+            ),
+        }
+        page += 1;
+    }
+}
+
+fn log_bcs_batch_result_ggtt_state(warm: Igpu770WarmState, label: &str) {
+    let bbaddr = mmio_read32(warm, BCS_RING_BBADDR) as u64;
+    let bbaddr_page = bbaddr & !(GGTT_PAGE_BYTES - 1);
+    crate::log!(
+        "intel/igpu770: ggtt-bcs-focus label={} bbaddr=0x{:X} bbaddr_page=0x{:X} batch_base=0x{:X} result_base=0x{:X}\n",
+        label,
+        bbaddr,
+        bbaddr_page,
+        GPU_VA_BATCH_BASE,
+        GPU_VA_RESULT_BASE
+    );
+    log_ggtt_window_state(warm, label, GPU_VA_BATCH_BASE, 3);
+    log_ggtt_window_state(warm, label, GPU_VA_RESULT_BASE, 1);
+    if bbaddr_page >= GPU_VA_BATCH_BASE
+        && bbaddr_page < GPU_VA_BATCH_BASE.saturating_add(WARM_BATCH_BYTES as u64)
+    {
+        log_ggtt_window_state(warm, label, bbaddr_page, 1);
+    }
 }
 
 fn ggtt_program_plan_silent(warm: Igpu770WarmState, plan: GgttMapPlan) -> bool {
@@ -2671,6 +2745,16 @@ pub fn ggtt_recon_once() {
     let ring = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE);
     let context =
         ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE);
+    let bcs_context0 = ggtt_map_plan_system_ram(
+        warm.bcs_context0_phys,
+        warm.bcs_context0_len,
+        GPU_VA_BCS_CONTEXT0_BASE,
+    );
+    let bcs_context1 = ggtt_map_plan_system_ram(
+        warm.bcs_context1_phys,
+        warm.bcs_context1_len,
+        GPU_VA_BCS_CONTEXT1_BASE,
+    );
     let batch = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE);
     let result = ggtt_map_plan_system_ram(warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE);
     let guc_fw = ggtt_map_plan_system_ram(warm.guc_fw_phys, warm.guc_fw_len, warm.guc_fw_gpu_addr);
@@ -2695,6 +2779,12 @@ pub fn ggtt_recon_once() {
     }
     if let Some(plan) = context {
         log_ggtt_map_plan("context", plan);
+    }
+    if let Some(plan) = bcs_context0 {
+        log_ggtt_map_plan("bcs-context0", plan);
+    }
+    if let Some(plan) = bcs_context1 {
+        log_ggtt_map_plan("bcs-context1", plan);
     }
     if let Some(plan) = batch {
         log_ggtt_map_plan("batch", plan);
@@ -2739,6 +2829,22 @@ pub fn ggtt_map_smoke_objects_once() {
         crate::log!("intel/igpu770: ggtt-map skipped reason=context-plan\n");
         return;
     };
+    let Some(bcs_context0) = ggtt_map_plan_system_ram(
+        warm.bcs_context0_phys,
+        warm.bcs_context0_len,
+        GPU_VA_BCS_CONTEXT0_BASE,
+    ) else {
+        crate::log!("intel/igpu770: ggtt-map skipped reason=bcs-context0-plan\n");
+        return;
+    };
+    let Some(bcs_context1) = ggtt_map_plan_system_ram(
+        warm.bcs_context1_phys,
+        warm.bcs_context1_len,
+        GPU_VA_BCS_CONTEXT1_BASE,
+    ) else {
+        crate::log!("intel/igpu770: ggtt-map skipped reason=bcs-context1-plan\n");
+        return;
+    };
     let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE)
     else {
         crate::log!("intel/igpu770: ggtt-map skipped reason=batch-plan\n");
@@ -2758,6 +2864,8 @@ pub fn ggtt_map_smoke_objects_once() {
     crate::log!("intel/igpu770: ggtt-map begin\n");
     let ok_ring = ggtt_program_plan("ring", warm, ring);
     let ok_context = ggtt_program_plan("context", warm, context);
+    let ok_bcs_context0 = ggtt_program_plan("bcs-context0", warm, bcs_context0);
+    let ok_bcs_context1 = ggtt_program_plan("bcs-context1", warm, bcs_context1);
     let ok_batch = ggtt_program_plan("batch", warm, batch);
     let ok_result = ggtt_program_plan("result", warm, result);
     let ok_guc_fw = guc_fw
@@ -2768,9 +2876,11 @@ pub fn ggtt_map_smoke_objects_once() {
         .unwrap_or(false);
     let flsh = ggtt_invalidate(warm);
     crate::log!(
-        "intel/igpu770: ggtt-map summary ring={} context={} batch={} result={} guc_fw={} guc_ads={} gfx_flsh_cntl=0x{:08X}\n",
+        "intel/igpu770: ggtt-map summary ring={} context={} bcs_context0={} bcs_context1={} batch={} result={} guc_fw={} guc_ads={} gfx_flsh_cntl=0x{:08X}\n",
         ok_ring as u8,
         ok_context as u8,
+        ok_bcs_context0 as u8,
+        ok_bcs_context1 as u8,
         ok_batch as u8,
         ok_result as u8,
         ok_guc_fw as u8,
@@ -3070,10 +3180,13 @@ pub fn ggtt_bcs_smoke_test_once() {
         crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=ring-plan\n");
         return;
     };
-    let Some(context) =
-        ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
+    let bcs_context_slot = next_bcs_context_slot();
+    let Some((context, context_virt, context_len)) = bcs_context_plan_for_slot(warm, bcs_context_slot)
     else {
-        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=context-plan\n");
+        crate::log!(
+            "intel/igpu770: ggtt-bcs-smoke skipped reason=context-plan slot={}\n",
+            bcs_context_slot
+        );
         return;
     };
     let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE)
@@ -3163,14 +3276,15 @@ pub fn ggtt_bcs_smoke_test_once() {
     };
     let ring_start = ring.gpu_addr as u32;
     let context_desc = context.gpu_addr;
-    if !init_gen12_bcs_context_image(warm, ring_start, ring_tail_bytes as u32, ring_ctl) {
+    if !init_gen12_bcs_context_image(context_virt, context_len, ring_start, ring_tail_bytes as u32, ring_ctl) {
         crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=lrc-context-init\n");
         return;
     }
     let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(context_desc);
 
     crate::log!(
-        "intel/igpu770: bcs-submit prep ring_start=0x{:08X} ring_ctl=0x{:08X} ring_tail=0x{:X} batch_tail=0x{:X} batch_gpu=0x{:X} context_gpu=0x{:X} ctx_desc_lo=0x{:08X} ctx_desc_hi=0x{:08X} result_phys=0x{:X}\n",
+        "intel/igpu770: bcs-submit prep slot={} ring_start=0x{:08X} ring_ctl=0x{:08X} ring_tail=0x{:X} batch_tail=0x{:X} batch_gpu=0x{:X} context_gpu=0x{:X} ctx_desc_lo=0x{:08X} ctx_desc_hi=0x{:08X} result_phys=0x{:X}\n",
+        bcs_context_slot,
         ring_start,
         ring_ctl,
         ring_tail_bytes,
@@ -3202,7 +3316,7 @@ pub fn ggtt_bcs_smoke_test_once() {
     let _ =
         mmio_write32(warm, BCS_RING_MODE_GEN7, masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE));
     prime_bcs_context_submit_state(warm);
-    rearm_bcs_live_ring_state(warm, ring_start, ring_ctl, ring_tail_bytes as u32);
+    log_bcs_batch_result_ggtt_state(warm, "smoke-pre-submit");
 
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     bcs_execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
@@ -3344,6 +3458,14 @@ pub fn ggtt_bcs_smoke_test_once() {
             "post-timeout"
         },
     );
+    log_bcs_batch_result_ggtt_state(
+        warm,
+        if completed {
+            "smoke-post-complete"
+        } else {
+            "smoke-post-timeout"
+        },
+    );
     crate::log!(
         "intel/igpu770: bcs-submit result completed={} iters={} head0=0x{:08X} tail0=0x{:08X} headf=0x{:08X} tailf=0x{:08X} start=0x{:08X} pre=0x{:08X} post=0x{:08X} done=0x{:08X} expect_done=0x{:08X} fb0=0x{:08X} execlist_lo0=0x{:08X} execlist_hi0=0x{:08X} execlist_lof=0x{:08X} execlist_hif=0x{:08X} forcewake_held={}\n",
         completed as u8,
@@ -3401,10 +3523,13 @@ pub(crate) fn bcs_composite_rgba_surface(
         crate::log!("intel/igpu770: bcs-composite skipped reason=ring-plan\n");
         return false;
     };
-    let Some(context) =
-        ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
+    let bcs_context_slot = next_bcs_context_slot();
+    let Some((context, context_virt, context_len)) = bcs_context_plan_for_slot(warm, bcs_context_slot)
     else {
-        crate::log!("intel/igpu770: bcs-composite skipped reason=context-plan\n");
+        crate::log!(
+            "intel/igpu770: bcs-composite skipped reason=context-plan slot={}\n",
+            bcs_context_slot
+        );
         return false;
     };
     let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE)
@@ -3467,7 +3592,13 @@ pub(crate) fn bcs_composite_rgba_surface(
         crate::log!("intel/igpu770: bcs-composite skipped reason=ring-ctl\n");
         return false;
     };
-    if !init_gen12_bcs_context_image(warm, ring.gpu_addr as u32, ring_tail_bytes as u32, ring_ctl) {
+    if !init_gen12_bcs_context_image(
+        context_virt,
+        context_len,
+        ring.gpu_addr as u32,
+        ring_tail_bytes as u32,
+        ring_ctl,
+    ) {
         crate::log!("intel/igpu770: bcs-composite skipped reason=lrc-context-init\n");
         return false;
     }
@@ -3477,7 +3608,7 @@ pub(crate) fn bcs_composite_rgba_surface(
     let _ =
         mmio_write32(warm, BCS_RING_MODE_GEN7, masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE));
     prime_bcs_context_submit_state(warm);
-    rearm_bcs_live_ring_state(warm, ring.gpu_addr as u32, ring_ctl, ring_tail_bytes as u32);
+    log_bcs_batch_result_ggtt_state(warm, "composite-pre-submit");
 
     let sq_lo_before = mmio_read32(warm, BCS_RING_EXECLIST_SQ_LO);
     let sq_hi_before = mmio_read32(warm, BCS_RING_EXECLIST_SQ_HI);
@@ -3499,7 +3630,8 @@ pub(crate) fn bcs_composite_rgba_surface(
     let el_status_lo_rb = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO);
     let el_status_hi_rb = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI);
     crate::log!(
-        "intel/igpu770: bcs-composite-submit context sq_lo_before=0x{:08X} sq_hi_before=0x{:08X} sq_lo_req=0x{:08X} sq_hi_req=0x{:08X} sq_lo_after=0x{:08X} sq_hi_after=0x{:08X} mode_rb=0x{:08X} ctx_ctl_rb=0x{:08X} ctx_ctl_ref_rb=0x{:08X} el_ctl_rb=0x{:08X} el_status_lo0=0x{:08X} el_status_hi0=0x{:08X} el_status_lo_rb=0x{:08X} el_status_hi_rb=0x{:08X}\n",
+        "intel/igpu770: bcs-composite-submit slot={} context sq_lo_before=0x{:08X} sq_hi_before=0x{:08X} sq_lo_req=0x{:08X} sq_hi_req=0x{:08X} sq_lo_after=0x{:08X} sq_hi_after=0x{:08X} mode_rb=0x{:08X} ctx_ctl_rb=0x{:08X} ctx_ctl_ref_rb=0x{:08X} el_ctl_rb=0x{:08X} el_status_lo0=0x{:08X} el_status_hi0=0x{:08X} el_status_lo_rb=0x{:08X} el_status_hi_rb=0x{:08X}\n",
+        bcs_context_slot,
         sq_lo_before,
         sq_hi_before,
         context_desc_lo,
@@ -3578,6 +3710,14 @@ pub(crate) fn bcs_composite_rgba_surface(
         },
     );
     log_bcs_regs(
+        warm,
+        if completed {
+            "composite-post-complete"
+        } else {
+            "composite-post-timeout"
+        },
+    );
+    log_bcs_batch_result_ggtt_state(
         warm,
         if completed {
             "composite-post-complete"
@@ -4524,6 +4664,24 @@ pub fn warm_once(info: IntelDeviceInfo) {
         );
         return;
     };
+    let Some((bcs_context0_phys, bcs_context0_virt)) =
+        crate::dma::alloc(WARM_BCS_CONTEXT_BYTES, WARM_ALIGN)
+    else {
+        crate::log!(
+            "intel/igpu770: warm alloc failed part=bcs-context0 size=0x{:X}\n",
+            WARM_BCS_CONTEXT_BYTES
+        );
+        return;
+    };
+    let Some((bcs_context1_phys, bcs_context1_virt)) =
+        crate::dma::alloc(WARM_BCS_CONTEXT_BYTES, WARM_ALIGN)
+    else {
+        crate::log!(
+            "intel/igpu770: warm alloc failed part=bcs-context1 size=0x{:X}\n",
+            WARM_BCS_CONTEXT_BYTES
+        );
+        return;
+    };
     let Some((batch_phys, batch_virt)) = crate::dma::alloc(WARM_BATCH_BYTES, WARM_ALIGN) else {
         crate::log!("intel/igpu770: warm alloc failed part=batch size=0x{:X}\n", WARM_BATCH_BYTES);
         return;
@@ -4539,6 +4697,8 @@ pub fn warm_once(info: IntelDeviceInfo) {
     unsafe {
         ptr::write_bytes(ring_virt, 0, WARM_RING_BYTES);
         ptr::write_bytes(context_virt, 0, WARM_CONTEXT_BYTES);
+        ptr::write_bytes(bcs_context0_virt, 0, WARM_BCS_CONTEXT_BYTES);
+        ptr::write_bytes(bcs_context1_virt, 0, WARM_BCS_CONTEXT_BYTES);
         ptr::write_bytes(batch_virt, 0, WARM_BATCH_BYTES);
         ptr::write_bytes(result_virt, 0, WARM_RESULT_BYTES);
     }
@@ -4580,6 +4740,12 @@ pub fn warm_once(info: IntelDeviceInfo) {
         context_phys,
         context_virt,
         context_len: WARM_CONTEXT_BYTES,
+        bcs_context0_phys,
+        bcs_context0_virt,
+        bcs_context0_len: WARM_BCS_CONTEXT_BYTES,
+        bcs_context1_phys,
+        bcs_context1_virt,
+        bcs_context1_len: WARM_BCS_CONTEXT_BYTES,
         batch_phys,
         batch_virt,
         batch_len: WARM_BATCH_BYTES,
@@ -4613,13 +4779,15 @@ pub fn warm_once(info: IntelDeviceInfo) {
     };
 
     crate::log!(
-        "intel/igpu770: warm device=0x{:04X} rev=0x{:02X} ring_phys=0x{:X} ring_len=0x{:X} context_phys=0x{:X} context_len=0x{:X} batch_phys=0x{:X} batch_len=0x{:X} result_phys=0x{:X} result_len=0x{:X} guc_fw_phys=0x{:X} guc_fw_len=0x{:X} guc_fw_xfer=0x{:X} guc_fw_gpu=0x{:X} guc_ads_phys=0x{:X} guc_ads_len=0x{:X} guc_ads_gpu=0x{:X} mmio_len=0x{:X} aperture=0x{:X}/0x{:X} limine_fb=0x{:X}/0x{:X} {}x{} pitch=0x{:X} bpp={}\n",
+        "intel/igpu770: warm device=0x{:04X} rev=0x{:02X} ring_phys=0x{:X} ring_len=0x{:X} context_phys=0x{:X} context_len=0x{:X} bcs_context0_phys=0x{:X} bcs_context1_phys=0x{:X} batch_phys=0x{:X} batch_len=0x{:X} result_phys=0x{:X} result_len=0x{:X} guc_fw_phys=0x{:X} guc_fw_len=0x{:X} guc_fw_xfer=0x{:X} guc_fw_gpu=0x{:X} guc_ads_phys=0x{:X} guc_ads_len=0x{:X} guc_ads_gpu=0x{:X} mmio_len=0x{:X} aperture=0x{:X}/0x{:X} limine_fb=0x{:X}/0x{:X} {}x{} pitch=0x{:X} bpp={}\n",
         warm.device_id,
         warm.revision_id,
         warm.ring_phys,
         warm.ring_len,
         warm.context_phys,
         warm.context_len,
+        warm.bcs_context0_phys,
+        warm.bcs_context1_phys,
         warm.batch_phys,
         warm.batch_len,
         warm.result_phys,
