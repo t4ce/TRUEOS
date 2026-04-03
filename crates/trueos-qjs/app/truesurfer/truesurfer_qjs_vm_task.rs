@@ -89,6 +89,8 @@ const TRUESURFER_GADGET_WIDTH_PROP: &[u8] = b"widthPx\0";
 const TRUESURFER_GADGET_HEIGHT_PROP: &[u8] = b"heightPx\0";
 const TRUESURFER_GADGET_FONT_SIZE_PROP: &[u8] = b"fontSizePx\0";
 const TRUESURFER_GADGET_LINE_HEIGHT_PROP: &[u8] = b"lineHeightPx\0";
+const TRUESURFER_GADGET_TEXT_COLOR_RGB_PROP: &[u8] = b"textColorRgb\0";
+const TRUESURFER_GADGET_BUTTON_LIKE_PROP: &[u8] = b"buttonLike\0";
 const TRUESURFER_GADGET_CHANGED_PROP: &[u8] = b"changed\0";
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
@@ -144,6 +146,8 @@ pub struct HostedBrowserGadget {
     pub height_px: u32,
     pub font_size_px: u32,
     pub line_height_px: u32,
+    pub text_color_rgb: u32,
+    pub button_like: bool,
     pub changed: bool,
 }
 
@@ -656,6 +660,13 @@ unsafe fn read_gadget_snapshot(
             height_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_HEIGHT_PROP),
             font_size_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_FONT_SIZE_PROP),
             line_height_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_LINE_HEIGHT_PROP),
+            text_color_rgb: read_result_u32(
+                ctx,
+                gadget_value,
+                TRUESURFER_GADGET_TEXT_COLOR_RGB_PROP,
+            ),
+            button_like: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_BUTTON_LIKE_PROP)
+                != 0,
             changed: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_CHANGED_PROP) != 0,
         });
         qjs::js_free_value(ctx, gadget_value);
@@ -702,6 +713,8 @@ fn gadgets_equal_ignoring_changed(
                 && lhs.height_px == rhs.height_px
                 && lhs.font_size_px == rhs.font_size_px
                 && lhs.line_height_px == rhs.line_height_px
+                && lhs.text_color_rgb == rhs.text_color_rgb
+                && lhs.button_like == rhs.button_like
         })
 }
 
@@ -723,6 +736,8 @@ fn apply_gadget_changed_flags(
                     || prev_gadget.height_px != gadget.height_px
                     || prev_gadget.font_size_px != gadget.font_size_px
                     || prev_gadget.line_height_px != gadget.line_height_px
+                        || prev_gadget.text_color_rgb != gadget.text_color_rgb
+                        || prev_gadget.button_like != gadget.button_like
             })
             .unwrap_or(true);
     }
