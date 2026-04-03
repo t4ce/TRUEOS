@@ -174,6 +174,21 @@ pub fn ordered_cursor_snapshot_with_slots() -> Vec<(u32, f64, f64), MAX_CURSOR_S
     out
 }
 
+pub fn ordered_cursor_snapshot_with_slot_buttons() -> Vec<(u32, f64, f64, u32), MAX_CURSOR_SNAPSHOTS>
+{
+    let guard = CURSOR_SNAPSHOTS.lock();
+    let mut out = Vec::new();
+    for phase in 0..=2u8 {
+        for snapshot in guard.iter() {
+            if !snapshot_order_match(snapshot, phase) {
+                continue;
+            }
+            let _ = out.push((snapshot.slot_id, snapshot.x, snapshot.y, snapshot.buttons_down));
+        }
+    }
+    out
+}
+
 pub fn cursor_pos(cursor_id: u32) -> Option<(f64, f64)> {
     if cursor_id == 0 {
         return None;
