@@ -161,6 +161,11 @@ const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 const CRABUSB_PROBE_TIMEOUT_MS: u64 = 2500;
 const CRABUSB_INITIAL_SETTLE_MS: u64 = 250;
 const CRABUSB_PROBE_QUIET_MS: u64 = 150;
+const CRABUSB_INTEL_INITIAL_SETTLE_MS: u64 = 1000;
+const CRABUSB_INTEL_PROBE_QUIET_MS: u64 = 750;
+const CRABUSB_INTEL_SKIP_PROBE_EXPERIMENT: bool = true;
+const CRABUSB_INTEL_SKIP_PROBE_REARM_MS: u64 = 1000;
+const CRABUSB_INTEL_SKIP_EVENT_HANDLER_EXPERIMENT: bool = true;
 const CRABUSB_QUICK_STOP_WINDOW_MS: u64 = 1000;
 const CRABUSB_QUICK_STOP_BACKOFF_MS: u64 = 2000;
 const CRABUSB_MAX_QUICK_STOP_REBINDS: u32 = 3;
@@ -184,6 +189,11 @@ fn probe_state_name(code: u32) -> &'static str {
         5 => "steady",
         _ => "unknown",
     }
+}
+
+#[inline]
+fn intel_quiescent_experiment_enabled(device_id: u16) -> bool {
+    CRABUSB_INTEL_QUIESCENT_EXPERIMENT && device_id != 0x7A60
 }
 
 fn cached_device_count(controller_id: usize) -> usize {
@@ -462,6 +472,44 @@ fn xhci_set_interrupter_enable(controller_id: usize, enabled: bool) -> bool {
         let _ = read_mmio32(mmio.cast_const(), usbcmd_off);
     }
     true
+}
+
+fn controller_initial_settle_ms(vendor_id: u16) -> u64 {
+    if vendor_id == 0x8086 {
+        CRABUSB_INTEL_INITIAL_SETTLE_MS
+    } else {
+        CRABUSB_INITIAL_SETTLE_MS
+    }
+}
+
+fn controller_probe_quiet_ms(vendor_id: u16) -> u64 {
+    if vendor_id == 0x8086 {
+        CRABUSB_INTEL_PROBE_QUIET_MS
+    } else {
+        CRABUSB_PROBE_QUIET_MS
+    }
+}
+
+fn intel_skip_event_handler_experiment(vendor_id: u16) -> bool {
+    vendor_id == 0x8086 && CRABUSB_INTEL_SKIP_EVENT_HANDLER_EXPERIMENT
+}
+
+fn xhci_any_connected_root_port(controller_id: usize) -> Option<u8> {
+    let info = super::controller_by_index(controller_id)?;
+    let mmio = info.mmio_base.as_ptr() as *const u8;
+    unsafe {
+        let caplen = (read_mmio32(mmio, 0x00) & 0xFF) as usize;
+        let hcsparams1 = read_mmio32(mmio, 0x04);
+        let port_count = ((hcsparams1 >> 24) & 0xff) as usize;
+        for port_idx in 0..port_count {
+            let portsc_off = caplen + 0x400 + (port_idx * 0x10);
+            let portsc = read_mmio32(mmio, portsc_off);
+            if (portsc & 0x1) != 0 {
+                return Some((port_idx + 1) as u8);
+            }
+        }
+    }
+    None
 }
 
 #[inline]
@@ -2802,14 +2850,20 @@ pub async fn event_pump_task(controller_id: usize) {
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
             Some(Event::PortChange { port }) => {
-                crate::log!(
-                    "crabusb: pump port change on controller {} root port {}\n",
-                    controller_id,
-                    port
-                );
-                ROOT_PORT_CHANGE_SEEN[controller_id].store(true, Ordering::Release);
+                let first_change =
+                    !ROOT_PORT_CHANGE_SEEN[controller_id].swap(true, Ordering::AcqRel);
+                let queued_probe =
+                    !PROBE_REQUESTED[controller_id].swap(true, Ordering::AcqRel);
+                if first_change || queued_probe {
+                    crate::log!(
+                        "crabusb: pump port change on controller {} root port {} first_change={} queued_probe={}\n",
+                        controller_id,
+                        port,
+                        first_change,
+                        queued_probe
+                    );
+                }
                 NO_PORT_CHANGE_HINT_LOGGED[controller_id].store(false, Ordering::Release);
-                PROBE_REQUESTED[controller_id].store(true, Ordering::Release);
                 advance_root_hub_lifecycle(
                     controller_id,
                     ROOT_HUB_LIFECYCLE_ROOT_CHANGE,
@@ -2939,7 +2993,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             "initial settle window started",
         );
 
-        if CRABUSB_INTEL_QUIESCENT_EXPERIMENT && info.vendor_id == 0x8086 {
+        if info.vendor_id == 0x8086 && intel_quiescent_experiment_enabled(info.device_id) {
             let masked = xhci_set_interrupter_enable(info.index, false);
             crate::log!(
                 "crabusb: controller {} intel quiescent experiment begin masked={} duration={}ms\n",
@@ -2987,42 +3041,114 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
                 quiet_started_at.elapsed().as_millis()
             );
             let _ = xhci_set_interrupter_enable(info.index, true);
+        } else if info.vendor_id == 0x8086 && CRABUSB_INTEL_QUIESCENT_EXPERIMENT {
+            crate::log!(
+                "crabusb: controller {} intel quiescent experiment skipped for device {:04X}\n",
+                info.index,
+                info.device_id
+            );
         }
 
-        install_event_handler(info.index, host.create_event_handler());
+        let skip_event_handler = intel_skip_event_handler_experiment(info.vendor_id);
+        if skip_event_handler {
+            crate::log!(
+                "crabusb: controller {} intel skip-event-handler experiment active\n",
+                info.index
+            );
+            reset_root_hub_lifecycle(
+                info.index,
+                ROOT_HUB_LIFECYCLE_BOUND,
+                "event handler intentionally skipped",
+            );
+        } else {
+            install_event_handler(info.index, host.create_event_handler());
+        }
         let bind_started_at = Instant::now();
-        Timer::after(EmbassyDuration::from_millis(CRABUSB_INITIAL_SETTLE_MS)).await;
-        crab_scout_once(&mut host, info, &spawner).await;
+        let initial_settle_ms = controller_initial_settle_ms(info.vendor_id);
+        let probe_quiet_ms = controller_probe_quiet_ms(info.vendor_id);
+        Timer::after(EmbassyDuration::from_millis(initial_settle_ms)).await;
+        if info.vendor_id != 0x8086 {
+            crab_scout_once(&mut host, info, &spawner).await;
+        } else {
+            PROBE_REQUESTED[info.index].store(true, Ordering::Release);
+            crate::log!(
+                "crabusb: controller {} intel deferred scout; waiting for quiet root-port settle {}ms\n",
+                info.index,
+                probe_quiet_ms
+            );
+        }
 
         let mut idle_ticks = 0u32;
         let mut probe_quiet_until: Option<Instant> = None;
         loop {
-            if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
-                let quick_stop = bind_started_at.elapsed()
-                    < EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_WINDOW_MS);
-                if quick_stop {
-                    quick_stop_streak = quick_stop_streak.saturating_add(1);
-                } else {
-                    quick_stop_streak = 0;
-                }
-                crate::log!(
-                    "crabusb: event handler stopped; rediscovering controller (quick_stop={} streak={}) phase={} lifecycle={} bucket={}\n",
-                    quick_stop,
-                    quick_stop_streak,
-                    controller_phase_name(controller_phase(info.index)),
-                    root_hub_lifecycle_summary(info.index),
-                    root_hub_lifecycle_bucket_for_controller(info.index)
-                );
-                if quick_stop_streak > CRABUSB_MAX_QUICK_STOP_REBINDS {
-                    crate::log!(
-                        "crabusb: controller {} hit repeated immediate-stop loop; backing off {}ms before rebind\n",
+            if skip_event_handler {
+                if let Some(reason) = xhci_fatal_init_state(info.index) {
+                    log_xhci_status_bits(info.index, "manual poll stopped");
+                    mark_controller_quarantined(
                         info.index,
-                        CRABUSB_QUICK_STOP_BACKOFF_MS
+                        "manual poll observed stopped without event handler",
                     );
-                    Timer::after(EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_BACKOFF_MS)).await;
-                    quick_stop_streak = 0;
+                    crate::log!(
+                        "crabusb: controller {} manual poll observed fatal xhci state ({}); stopping without event handler\n",
+                        info.index,
+                        reason
+                    );
+                    break;
                 }
-                break;
+
+                if let Some(port) = xhci_any_connected_root_port(info.index) {
+                    let first_change =
+                        !ROOT_PORT_CHANGE_SEEN[info.index].swap(true, Ordering::AcqRel);
+                    let queued_probe =
+                        !PROBE_REQUESTED[info.index].swap(true, Ordering::AcqRel);
+                    if first_change || queued_probe {
+                        crate::log!(
+                            "crabusb: manual root-port poll on controller {} root port {} first_change={} queued_probe={}\n",
+                            info.index,
+                            port,
+                            first_change,
+                            queued_probe
+                        );
+                    }
+                    advance_root_hub_lifecycle(
+                        info.index,
+                        ROOT_HUB_LIFECYCLE_ROOT_CHANGE,
+                        "manual root-port poll observed connection",
+                    );
+                }
+            }
+
+            if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
+                if skip_event_handler {
+                    Timer::after(EmbassyDuration::from_millis(50)).await;
+                } else {
+                    let quick_stop = bind_started_at.elapsed()
+                        < EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_WINDOW_MS);
+                    if quick_stop {
+                        quick_stop_streak = quick_stop_streak.saturating_add(1);
+                    } else {
+                        quick_stop_streak = 0;
+                    }
+                    crate::log!(
+                        "crabusb: event handler stopped; rediscovering controller (quick_stop={} streak={}) phase={} lifecycle={} bucket={}\n",
+                        quick_stop,
+                        quick_stop_streak,
+                        controller_phase_name(controller_phase(info.index)),
+                        root_hub_lifecycle_summary(info.index),
+                        root_hub_lifecycle_bucket_for_controller(info.index)
+                    );
+                    if quick_stop_streak > CRABUSB_MAX_QUICK_STOP_REBINDS {
+                        crate::log!(
+                            "crabusb: controller {} hit repeated immediate-stop loop; backing off {}ms before rebind\n",
+                            info.index,
+                            CRABUSB_QUICK_STOP_BACKOFF_MS
+                        );
+                        Timer::after(EmbassyDuration::from_millis(CRABUSB_QUICK_STOP_BACKOFF_MS))
+                            .await;
+                        quick_stop_streak = 0;
+                    }
+                    break;
+                }
             }
 
             if PROBE_REQUESTED[info.index].swap(false, Ordering::AcqRel) {
@@ -3032,12 +3158,27 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
                     "probe requested after root-port change",
                 );
                 probe_quiet_until =
-                    Some(Instant::now() + EmbassyDuration::from_millis(CRABUSB_PROBE_QUIET_MS));
+                    Some(Instant::now() + EmbassyDuration::from_millis(probe_quiet_ms));
                 idle_ticks = 0;
             }
 
             if let Some(deadline) = probe_quiet_until {
                 if Instant::now() >= deadline {
+                    if info.vendor_id == 0x8086
+                        && CRABUSB_INTEL_SKIP_PROBE_EXPERIMENT
+                        && !matches!(controller_phase(info.index), ControllerPhase::Validated)
+                    {
+                        crate::log!(
+                            "crabusb: controller {} intel skip-probe experiment rearming quiet window {}ms\n",
+                            info.index,
+                            CRABUSB_INTEL_SKIP_PROBE_REARM_MS
+                        );
+                        probe_quiet_until = Some(
+                            Instant::now()
+                                + EmbassyDuration::from_millis(CRABUSB_INTEL_SKIP_PROBE_REARM_MS),
+                        );
+                        continue;
+                    }
                     crate::log!("crabusb: servicing settled probe on controller {}\n", info.index);
                     probe_quiet_until = None;
                     let _ = probe_and_log(&mut host, &spawner, info.index).await;

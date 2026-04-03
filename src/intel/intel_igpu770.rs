@@ -3881,14 +3881,23 @@ pub(crate) fn rcs_clear_rgba_surface(
     rgb: u32,
 ) -> bool {
     let Some(warm) = warm_state() else {
+        crate::log!("intel/igpu770: rcs-clear skipped reason=warm-missing\n");
         return false;
     };
     if !intel_guc::ready() {
+        crate::log!("intel/igpu770: rcs-clear skipped reason=guc-not-ready\n");
         return false;
     }
 
     let target_len = rgba_len(width, height).unwrap_or(0);
     if target_len == 0 || target_rgba.len() < target_len {
+        crate::log!(
+            "intel/igpu770: rcs-clear skipped reason=rgba-len-invalid size={}x{} len=0x{:X} need=0x{:X}\n",
+            width,
+            height,
+            target_rgba.len(),
+            target_len
+        );
         return false;
     }
 
@@ -3909,10 +3918,22 @@ pub(crate) fn rcs_clear_rgba_surface(
     };
     let Some(dst) = ggtt_map_plan_heap_target(target_rgba.as_ptr(), target_len, target_gpu_addr)
     else {
+        crate::log!(
+            "intel/igpu770: rcs-clear skipped reason=dst-plan-failed gpu=0x{:X} len=0x{:X} ptr=0x{:X}\n",
+            target_gpu_addr,
+            target_len,
+            target_rgba.as_ptr() as usize
+        );
         return false;
     };
     let _ = forcewake_all_acquire(warm);
     if !ggtt_program_plan_silent(warm, dst) {
+        crate::log!(
+            "intel/igpu770: rcs-clear skipped reason=ggtt-program-failed gpu=0x{:X} phys=0x{:X} size=0x{:X}\n",
+            dst.gpu_addr,
+            dst.phys,
+            dst.size
+        );
         return false;
     }
     let _ = ggtt_invalidate(warm);
@@ -3922,6 +3943,11 @@ pub(crate) fn rcs_clear_rgba_surface(
     };
     let ring_start = ring.gpu_addr as u32;
     if !init_gen12_lrc_context_image(warm, ring_start, BLT_RING_TAIL_BYTES, ring_ctl) {
+        crate::log!(
+            "intel/igpu770: rcs-clear skipped reason=context-init-failed ring_start=0x{:08X} ring_ctl=0x{:08X}\n",
+            ring_start,
+            ring_ctl
+        );
         return false;
     }
     let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(context.gpu_addr);
@@ -3991,6 +4017,12 @@ pub(crate) fn rcs_clear_rgba_surface(
         let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_ref_after);
 
         if !init_gen12_lrc_context_image(warm, ring_start, ring_tail_bytes as u32, ring_ctl) {
+            crate::log!(
+                "intel/igpu770: rcs-clear skipped reason=context-init-failed-live ring_start=0x{:08X} ring_tail=0x{:X} ring_ctl=0x{:08X}\n",
+                ring_start,
+                ring_tail_bytes,
+                ring_ctl
+            );
             return false;
         }
 
@@ -4014,6 +4046,21 @@ pub(crate) fn rcs_clear_rgba_surface(
         dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
         let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
         if !completed || result0 != done_value {
+            crate::log!(
+                "intel/igpu770: rcs-clear chunk={} timeout iters={} budget={} pixels={} result0=0x{:08X} start=0x{:08X} expect=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
+                chunk_idx,
+                iter,
+                poll_iters_budget,
+                chunk_pixels,
+                result0,
+                start_value,
+                done_value,
+                mmio_read32(warm, RCS_RING_HEAD),
+                mmio_read32(warm, RCS_RING_TAIL),
+                mmio_read32(warm, RCS_RING_ACTHD),
+                mmio_read32(warm, RCS_RING_IPEIR),
+                mmio_read32(warm, RCS_RING_IPEHR)
+            );
             return false;
         }
 

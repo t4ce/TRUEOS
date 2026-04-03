@@ -4,7 +4,6 @@ use core::{cell::UnsafeCell, time::Duration};
 use ::xhci::{
     ExtendedCapability,
     extended_capabilities::{List, usb_legacy_support_capability::UsbLegacySupport},
-    registers::doorbell,
     ring::trb::{command, event::CommandCompletion},
 };
 use dma_api::DmaDirection;
@@ -40,6 +39,7 @@ pub struct Xhci {
     pub(crate) cmd: CommandRing,
     dev_ctx: Option<DeviceContextList>,
     event_handler: Option<EventHandler>,
+    irq_ready: bool,
     event_ring_info: EventRingInfo,
     scratchpad_buf_arr: Option<ScratchpadBufferArray>,
     pub(crate) transfer_result_handler: TransferResultHandler,
@@ -70,6 +70,11 @@ impl CoreOp for Xhci {
     }
 
     fn create_event_handler(&mut self) -> Box<dyn EventHandlerOp> {
+        if !self.irq_ready {
+            self.arm_irq();
+            self.enable_irq();
+            self.irq_ready = true;
+        }
         Box::new(
             self.event_handler
                 .take()
@@ -85,6 +90,7 @@ impl CoreOp for Xhci {
 impl Xhci {
     const STATUS_POLL_DELAY_MS: u64 = 1;
     const STATUS_POLL_LIMIT: usize = 2_000;
+    const SKIP_SCRATCHPADS_EXPERIMENT: bool = true;
 
     fn flush_controller_write(&self) {
         let _ = self.reg.read().operational.usbsts.read_volatile();
@@ -290,6 +296,7 @@ impl Xhci {
                 transfer_result_handler,
                 ports,
             )),
+            irq_ready: false,
             root_hub: Some(root_hub),
             event_ring_info,
             scratchpad_buf_arr: None,
@@ -324,7 +331,7 @@ impl Xhci {
         // Command Ring Control Register (5.4.5) with a 64-bit address pointing to
         // the starting address of the first TRB of the Command Ring.
         self.set_cmd_ring()?;
-        self.init_irq()?;
+        self.setup_runtime_ring();
         self.setup_scratchpads()?;
         // At this point, the host controller is up and running and the Root Hub ports
         // (5.4.8) will begin reporting device connects, etc., and system software may begin
@@ -336,7 +343,6 @@ impl Xhci {
         self.ensure_controller_state("run", false, false, false)?;
         self.clear_status_bits();
 
-        self.enable_irq();
         // self.reset_ports().await;
 
         Ok(())
@@ -528,7 +534,7 @@ impl Xhci {
         Ok(())
     }
 
-    fn init_irq(&mut self) -> Result {
+    fn setup_runtime_ring(&mut self) {
         let erstz = self.event_ring_info.erstz;
         let erdp = self.event_ring_info.erdp;
         let erstba = self.event_ring_info.erstba;
@@ -556,8 +562,11 @@ impl Xhci {
             });
         }
         self.flush_controller_write();
+    }
 
-        /* Set the HCD state before we enable the irqs */
+    fn arm_irq(&mut self) {
+        /* Keep the runtime ring programmed before RUN, but only arm signaling when
+         * software is ready to consume events. */
         self.reg.write().operational.usbcmd.update_volatile(|r| {
             r.set_host_system_error_enable();
             r.set_enable_wrap_event();
@@ -577,10 +586,17 @@ impl Xhci {
                 });
         }
         self.flush_controller_write();
-        Ok(())
     }
 
     fn setup_scratchpads(&mut self) -> Result {
+        if Self::SKIP_SCRATCHPADS_EXPERIMENT {
+            info!("xHCI: scratchpad setup skipped by experiment");
+            self.dev_mut()?.dcbaa.set(0, 0u64);
+            self.flush_controller_write();
+            self.scratchpad_buf_arr = None;
+            return Ok(());
+        }
+
         let scratchpad_buf_arr = {
             let buf_count = {
                 let count = self
@@ -601,6 +617,7 @@ impl Xhci {
             let bus_addr = scratchpad_buf_arr.bus_addr();
 
             self.dev_mut()?.dcbaa.set(0, bus_addr);
+            self.flush_controller_write();
 
             debug!("Setting up {buf_count} scratchpads, at {bus_addr:#0x}");
             scratchpad_buf_arr
