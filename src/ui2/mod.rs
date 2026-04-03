@@ -1351,8 +1351,12 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
             if let Some(content) = content_rect {
                 if !window.hosted_surface_tiles.is_empty() {
                     let texture_started_at = Instant::now();
-                    let drew =
-                        draw_hosted_surface_tiles(state, window, content, window_scroll_snapshot(window));
+                    let drew = draw_hosted_surface_tiles(
+                        state,
+                        window,
+                        content,
+                        window_scroll_snapshot(window),
+                    );
                     if drew {
                         return Ui2WindowDrawTiming {
                             chrome_ms,
@@ -1481,11 +1485,7 @@ fn ensure_ui2_warmup_render_target(view_w: u32, view_h: u32) -> bool {
         .checked_mul(height as usize)
         .and_then(|pixels| pixels.checked_mul(4))
     else {
-        crate::log!(
-            "ui2: invalid warmup render-target size={}x{}\n",
-            width,
-            height
-        );
+        crate::log!("ui2: invalid warmup render-target size={}x{}\n", width, height);
         return false;
     };
 

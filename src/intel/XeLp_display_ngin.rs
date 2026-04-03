@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use spin::Mutex;
 
@@ -764,6 +764,10 @@ pub(crate) struct DisplayWorkloadDraft {
 
 static DISPLAY_KICKOFF_RAN: AtomicBool = AtomicBool::new(false);
 static DISPLAY_KICKOFF_STATE: Mutex<Option<DisplayKickoffState>> = Mutex::new(None);
+static PRIMARY_PRESENT_VISIBLE_SURFACE_SLOT: AtomicU8 = AtomicU8::new(0);
+
+const PRIMARY_PRESENT_SLOT_STAGING: u8 = 0;
+const PRIMARY_PRESENT_SLOT_SHADOW: u8 = 1;
 
 fn pipe_layout(pipe: DisplayPipeId) -> PipeRegisterLayout {
     let pipe_slot = match pipe {
@@ -1347,8 +1351,26 @@ fn plane_stride_reg_value(pitch_bytes: u32) -> Option<u32> {
 }
 
 pub(crate) fn primary_present_surface_gpu_addr() -> Option<u64> {
-    draft_workload(DisplayWorkloadKind::PrimaryPresent)
-        .map(|draft| draft.surface.windows.staging_gpu_addr)
+    let draft = draft_workload(DisplayWorkloadKind::PrimaryPresent)?;
+    let windows = draft.surface.windows;
+    let visible_slot = PRIMARY_PRESENT_VISIBLE_SURFACE_SLOT.load(Ordering::Acquire);
+    Some(if visible_slot == PRIMARY_PRESENT_SLOT_SHADOW {
+        windows.staging_gpu_addr
+    } else {
+        windows.shadow_state_gpu_addr
+    })
+}
+
+fn record_primary_present_visible_surface(surface_gpu_addr: u64) {
+    let Some(draft) = draft_workload(DisplayWorkloadKind::PrimaryPresent) else {
+        return;
+    };
+    let windows = draft.surface.windows;
+    if surface_gpu_addr == windows.staging_gpu_addr {
+        PRIMARY_PRESENT_VISIBLE_SURFACE_SLOT.store(PRIMARY_PRESENT_SLOT_STAGING, Ordering::Release);
+    } else if surface_gpu_addr == windows.shadow_state_gpu_addr {
+        PRIMARY_PRESENT_VISIBLE_SURFACE_SLOT.store(PRIMARY_PRESENT_SLOT_SHADOW, Ordering::Release);
+    }
 }
 
 pub(crate) fn plane_rebind_present_surface(
@@ -1383,6 +1405,7 @@ pub(crate) fn plane_rebind_present_surface(
     let mut live = mmio_read32(info, draft.descriptor.plane_surf_live_off);
     while iter < 4096 {
         if live == surface_reg {
+            record_primary_present_visible_surface(surface_gpu_addr);
             return true;
         }
         core::hint::spin_loop();
@@ -1391,7 +1414,11 @@ pub(crate) fn plane_rebind_present_surface(
     }
 
     let armed = mmio_read32(info, draft.descriptor.plane_surf_off);
-    live == surface_reg || armed == surface_reg
+    let success = live == surface_reg || armed == surface_reg;
+    if success {
+        record_primary_present_visible_surface(surface_gpu_addr);
+    }
+    success
 }
 
 fn log_workload_draft(label: &str, draft: DisplayWorkloadDraft) {
