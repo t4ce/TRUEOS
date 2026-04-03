@@ -401,15 +401,20 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
 
 #[embassy_executor::task]
 async fn gfx_virgl_ready_task() {
-    crate::gfx::init(crate::limine::framebuffer_response());
-
-    if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
-        crate::log!("boot-probe: gfx-virgl-backend-ready ms={}\n", boot_probe_ms());
+    if crate::intel::isolated_triangle_mode_active() {
+        crate::log!("boot-probe: gfx-virgl-backend-ready skipped (intel render-demo active)\n");
         return;
     }
 
     if crate::intel::has_claimed_device() {
         crate::log!("boot-probe: gfx-virgl-backend-ready skipped (intel soft-detect claimed)\n");
+        return;
+    }
+
+    crate::gfx::init(crate::limine::framebuffer_response());
+
+    if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
+        crate::log!("boot-probe: gfx-virgl-backend-ready ms={}\n", boot_probe_ms());
         return;
     }
 
@@ -611,6 +616,11 @@ fn task_gate_always() -> bool {
 }
 
 #[inline]
+fn gfx_backend_boot_gate() -> bool {
+    !crate::intel::isolated_triangle_mode_active() && !crate::intel::has_claimed_device()
+}
+
+#[inline]
 fn ui2_core_task_gate() -> bool {
     !crate::intel::isolated_triangle_mode_active()
 }
@@ -744,7 +754,11 @@ fn spawn_ui2_trueosfs_explorer_demo(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_gfx_intel_readiness_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::intel::scanout_smoke_task()))
+    if crate::intel::render_demo_mode_active() {
+        spawn_local(spawner, |spawner| spawner.spawn(crate::intel::intel_render_demo_task()))
+    } else {
+        spawn_local(spawner, |spawner| spawner.spawn(crate::intel::scanout_smoke_task()))
+    }
 }
 
 fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
@@ -977,9 +991,10 @@ static TASKS: &[TaskSpec] = &[
         spawn_ftp_server,
     ),
     TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "gfx-virgl-backend-ready",
         0,
+        gfx_backend_boot_gate,
         &GFX_VIRGL_READY_TASK_STARTED,
         spawn_gfx_virgl_ready_task,
     ),
@@ -1036,7 +1051,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_ATHLAS_HALF_DEMO_STARTED,
         spawn_ui2_athlas_half_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-athlas-1x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_1X_DEMO_STARTED,
@@ -1054,7 +1069,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_PALATINO_1X_DEMO_STARTED,
         spawn_ui2_palatino_1x_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-twemoji-1x",
         crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY,
         &UI2_TWEMOJI_1X_STARTED,
@@ -1097,7 +1112,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_PARTICLE_DEMO_STARTED,
         spawn_ui2_particle_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-smiley-fountain-demo",
         UI2_DEMO_READY,
         &UI2_SMILEY_FOUNTAIN_DEMO_STARTED,

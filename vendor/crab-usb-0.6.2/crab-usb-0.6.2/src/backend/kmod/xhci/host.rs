@@ -86,6 +86,20 @@ impl Xhci {
     const STATUS_POLL_DELAY_MS: u64 = 1;
     const STATUS_POLL_LIMIT: usize = 2_000;
 
+    fn flush_controller_write(&self) {
+        let _ = self.reg.read().operational.usbsts.read_volatile();
+        mb();
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(target_arch = "x86")]
+        unsafe {
+            core::arch::x86::_mm_mfence();
+        }
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            core::arch::x86_64::_mm_mfence();
+        }
+    }
+
     fn status_snapshot(&self) -> XhciStatusBits {
         let sts = self.reg.read().operational.usbsts.read_volatile();
         let cmd = self.reg.read().operational.usbcmd.read_volatile();
@@ -317,11 +331,9 @@ impl Xhci {
         // enumerating devices. System software may follow the procedures described in
         // section 4.3, to enumerate attached devices.
         self.start();
-        mb();
 
         self.wait_for_running().await?;
         self.ensure_controller_state("run", false, false, false)?;
-        self.command_ring_self_test()?;
         self.clear_status_bits();
 
         self.enable_irq();
@@ -337,6 +349,7 @@ impl Xhci {
             r.clear_port_change_detect();
             r.clear_save_restore_error();
         });
+        self.flush_controller_write();
     }
 
     async fn new_device(&mut self, info: DeviceAddressInfo) -> Result<Box<dyn DeviceOp>> {
@@ -439,6 +452,8 @@ impl Xhci {
             r.clear_smi_on_os_ownership_change();
         });
 
+        self.kernel.delay(Duration::from_millis(10));
+
         Ok(())
     }
 
@@ -453,6 +468,8 @@ impl Xhci {
         regs.operational.config.update_volatile(|r| {
             r.set_max_device_slots_enabled(max_slots);
         });
+        drop(regs);
+        self.flush_controller_write();
 
         debug!("Max device slots: {max_slots}");
 
@@ -472,6 +489,7 @@ impl Xhci {
         self.reg.write().operational.usbcmd.update_volatile(|r| {
             r.clear_interrupter_enable();
         });
+        self.flush_controller_write();
     }
 
     pub fn enable_irq(&mut self) {
@@ -479,6 +497,7 @@ impl Xhci {
         self.reg.write().operational.usbcmd.update_volatile(|r| {
             r.set_interrupter_enable();
         });
+        self.flush_controller_write();
     }
 
     fn setup_dcbaap(&mut self) -> Result {
@@ -487,6 +506,7 @@ impl Xhci {
         self.reg.write().operational.dcbaap.update_volatile(|r| {
             r.set(dcbaa_addr.as_u64());
         });
+        self.flush_controller_write();
         Ok(())
     }
 
@@ -503,6 +523,7 @@ impl Xhci {
                 r.clear_ring_cycle_state();
             }
         });
+        self.flush_controller_write();
 
         Ok(())
     }
@@ -534,12 +555,14 @@ impl Xhci {
                 im.set_interrupt_moderation_counter(0);
             });
         }
+        self.flush_controller_write();
 
         /* Set the HCD state before we enable the irqs */
         self.reg.write().operational.usbcmd.update_volatile(|r| {
             r.set_host_system_error_enable();
             r.set_enable_wrap_event();
         });
+        self.flush_controller_write();
 
         {
             debug!("Enabling primary interrupter.");
@@ -553,6 +576,7 @@ impl Xhci {
                     im.set_interrupt_enable();
                 });
         }
+        self.flush_controller_write();
         Ok(())
     }
 
@@ -591,6 +615,7 @@ impl Xhci {
         self.reg.write().operational.usbcmd.update_volatile(|r| {
             r.set_run_stop();
         });
+        self.flush_controller_write();
         debug!("Start run");
     }
 
@@ -604,11 +629,6 @@ impl Xhci {
 
         // 必须等待至少200ms，否则 port enable = false
         self.kernel.delay(Duration::from_millis(200));
-
-        self.reg
-            .write()
-            .doorbell
-            .write_volatile_at(0, doorbell::Register::default());
 
         Ok(())
     }

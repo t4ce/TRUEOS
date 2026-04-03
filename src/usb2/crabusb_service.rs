@@ -164,6 +164,9 @@ const CRABUSB_PROBE_QUIET_MS: u64 = 150;
 const CRABUSB_QUICK_STOP_WINDOW_MS: u64 = 1000;
 const CRABUSB_QUICK_STOP_BACKOFF_MS: u64 = 2000;
 const CRABUSB_MAX_QUICK_STOP_REBINDS: u32 = 3;
+const CRABUSB_INTEL_QUIESCENT_EXPERIMENT: bool = true;
+const CRABUSB_INTEL_QUIESCENT_EXPERIMENT_MS: u64 = 1500;
+const CRABUSB_INTEL_QUIESCENT_POLL_MS: u64 = 25;
 const ROOT_HUB_LIFECYCLE_INIT: u32 = 0;
 const ROOT_HUB_LIFECYCLE_BOUND: u32 = 1;
 const ROOT_HUB_LIFECYCLE_ROOT_CHANGE: u32 = 2;
@@ -437,6 +440,33 @@ fn log_xhci_status_bits(controller_id: usize, prefix: &str) {
         status.controller_not_ready,
         status.host_controller_error,
     );
+}
+
+fn xhci_set_interrupter_enable(controller_id: usize, enabled: bool) -> bool {
+    let info = match super::controller_by_index(controller_id) {
+        Some(info) => info,
+        None => return false,
+    };
+    let mmio = info.mmio_base.as_ptr() as *mut u8;
+    unsafe {
+        let caplen = (read_mmio32(mmio.cast_const(), 0x00) & 0xFF) as usize;
+        let usbcmd_off = caplen;
+        let mut usbcmd = read_mmio32(mmio.cast_const(), usbcmd_off);
+        const XHCI_USBCMD_INTE: u32 = 1 << 2;
+        if enabled {
+            usbcmd |= XHCI_USBCMD_INTE;
+        } else {
+            usbcmd &= !XHCI_USBCMD_INTE;
+        }
+        write_mmio32(mmio, usbcmd_off, usbcmd);
+        let _ = read_mmio32(mmio.cast_const(), usbcmd_off);
+    }
+    true
+}
+
+#[inline]
+unsafe fn write_mmio32(base: *mut u8, offset: usize, value: u32) {
+    unsafe { core::ptr::write_volatile(base.add(offset) as *mut u32, value) };
 }
 
 fn is_pre_command_root_hub_wait() -> bool {
@@ -2892,10 +2922,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             continue;
         }
 
-        install_event_handler(info.index, host.create_event_handler());
         set_controller_phase(info.index, ControllerPhase::FirstContact, "host init completed");
-        let bind_started_at = Instant::now();
-
         crate::log!("crabusb: host init ok controller {} awaiting root-hub events\n", info.index);
 
         ROOT_PORT_CHANGE_SEEN[info.index].store(false, Ordering::Release);
@@ -2911,6 +2938,59 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             ROOT_HUB_LIFECYCLE_SETTLING,
             "initial settle window started",
         );
+
+        if CRABUSB_INTEL_QUIESCENT_EXPERIMENT && info.vendor_id == 0x8086 {
+            let masked = xhci_set_interrupter_enable(info.index, false);
+            crate::log!(
+                "crabusb: controller {} intel quiescent experiment begin masked={} duration={}ms\n",
+                info.index,
+                masked,
+                CRABUSB_INTEL_QUIESCENT_EXPERIMENT_MS
+            );
+
+            let quiet_started_at = Instant::now();
+            let mut quiet_failed = false;
+            while quiet_started_at.elapsed()
+                < EmbassyDuration::from_millis(CRABUSB_INTEL_QUIESCENT_EXPERIMENT_MS)
+            {
+                if let Some(status) = xhci_status_bits(info.index) {
+                    if status.host_system_error || status.host_controller_error || status.hc_halted
+                    {
+                        log_xhci_status_bits(info.index, "intel quiescent failed");
+                        crate::log!(
+                            "crabusb: controller {} intel quiescent experiment failed after {}ms\n",
+                            info.index,
+                            quiet_started_at.elapsed().as_millis()
+                        );
+                        mark_controller_quarantined(
+                            info.index,
+                            "intel quiescent experiment observed controller stop",
+                        );
+                        quiet_failed = true;
+                        break;
+                    }
+                }
+                Timer::after(EmbassyDuration::from_millis(
+                    CRABUSB_INTEL_QUIESCENT_POLL_MS,
+                ))
+                .await;
+            }
+
+            if quiet_failed {
+                wait_for_manual_rebind(info.index).await;
+                continue;
+            }
+
+            crate::log!(
+                "crabusb: controller {} intel quiescent experiment survived {}ms\n",
+                info.index,
+                quiet_started_at.elapsed().as_millis()
+            );
+            let _ = xhci_set_interrupter_enable(info.index, true);
+        }
+
+        install_event_handler(info.index, host.create_event_handler());
+        let bind_started_at = Instant::now();
         Timer::after(EmbassyDuration::from_millis(CRABUSB_INITIAL_SETTLE_MS)).await;
         crab_scout_once(&mut host, info, &spawner).await;
 

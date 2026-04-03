@@ -3,6 +3,7 @@ mod intel_770_registers;
 mod intel_guc;
 mod intel_igpu770;
 mod intel_igpu770_rcs;
+pub(crate) mod render_demo;
 #[path = "XeLp_copy_ngin.rs"]
 pub(crate) mod xelp_copy_ngin;
 #[path = "XeLp_display_ngin.rs"]
@@ -22,6 +23,9 @@ pub(crate) use intel_igpu770::{
     ggtt_blt_smoke_test_once, ggtt_map_screen_rgba_surface, rcs_clear_rgba_surface,
     rcs_clear_screen_rgba, rcs_draw_rgba_rgb_triangles, rcs_draw_screen_rgb_triangles,
     rcs_draw_screen_tex_triangles, rcs_present_rgba_frame, warm_state,
+};
+pub use render_demo::{
+    intel_render_demo_task, isolated_triangle_mode_active, render_demo_mode_active,
 };
 pub(crate) use xelp_display_ngin::{
     owned_triangle_disable_non_primary_planes_pipe_a, plane_rebind_present_surface,
