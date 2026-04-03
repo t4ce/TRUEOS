@@ -3455,8 +3455,7 @@ pub mod cabi {
                     .and_then(|images| images.get_mut(tex_id.saturating_sub(1) as usize))
                     .and_then(|entry| entry.as_mut())
                 {
-                    let Some(need) = checked_reasonable_rgba_len(entry.width, entry.height)
-                    else {
+                    let Some(need) = checked_reasonable_rgba_len(entry.width, entry.height) else {
                         crate::log!(
                             "gfx-cabi: invalid rgba len for rgb-to-texture tex={} size={}x{}\n",
                             tex_id,
@@ -3775,8 +3774,7 @@ pub mod cabi {
                     let Some(v1) = read_tex_vtx(&vtx[..usable], off + TEX_VERTEX_SIZE) else {
                         break;
                     };
-                    let Some(v2) = read_tex_vtx(&vtx[..usable], off + (2 * TEX_VERTEX_SIZE))
-                    else {
+                    let Some(v2) = read_tex_vtx(&vtx[..usable], off + (2 * TEX_VERTEX_SIZE)) else {
                         break;
                     };
                     draw_tex_triangle_rgba(
@@ -3852,8 +3850,9 @@ pub mod cabi {
         }
         let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
 
-        let Some(ret) =
-            crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::UploadTexture, |ctx| {
+        let Some(ret) = crate::gfx::with_context_tag(
+            crate::gfx::SystemLockOwner::UploadTexture,
+            |ctx| {
                 let epoch = crate::gfx::backend_epoch();
                 let mut st = GFX_CABI_STATE.lock();
                 if st.epoch != epoch {
@@ -4007,8 +4006,8 @@ pub mod cabi {
                     return -5;
                 }
                 0
-            })
-        else {
+            },
+        ) else {
             return -6;
         };
         ret
