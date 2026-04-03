@@ -5,17 +5,30 @@ use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use core::time::Duration;
 
-use crab_usb::{KernelOp, USBHost};
+use crab_usb::{Event, EventHandler, KernelOp, USBHost};
 use dma_api::{DmaAddr, DmaDirection, DmaError, DmaHandle, DmaMapHandle, DmaOp};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) struct TrueosCrabUsbKernel;
 
 pub(super) static CRABUSB_KERNEL: TrueosCrabUsbKernel = TrueosCrabUsbKernel;
 
 use super::xhci::MAX_XHCI_CONTROLLERS;
+
+static EVENT_HANDLER_READY: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static PROBE_REQUESTED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static EVENT_HANDLER: [Mutex<Option<EventHandler>>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
+
+#[inline]
+fn usb_log_all_enabled() -> bool {
+    crate::logflag::USB_LOG_ALL.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy)]
 struct BounceMapping {
@@ -198,6 +211,142 @@ fn connected_ports_summary(controller_id: usize) -> String {
     out
 }
 
+fn install_event_handler(controller_id: usize, handler: EventHandler) {
+    *EVENT_HANDLER[controller_id].lock() = Some(handler);
+    EVENT_HANDLER_READY[controller_id].store(true, Ordering::Release);
+}
+
+fn uninstall_event_handler(controller_id: usize) {
+    EVENT_HANDLER_READY[controller_id].store(false, Ordering::Release);
+    *EVENT_HANDLER[controller_id].lock() = None;
+}
+
+async fn probe_and_bind(
+    host: &mut USBHost,
+    info: super::TlbUsbController,
+    spawner: &Spawner,
+) {
+    if let Ok(devices) = host.probe_devices().await {
+        if usb_log_all_enabled() {
+            crate::log!(
+                "crabusb: probe ctrl={} devices={}\n",
+                info.index,
+                devices.len()
+            );
+        }
+
+        if devices.is_empty() && usb_log_all_enabled() {
+            crate::log!("crabusb: descriptor check ctrl={} none\n", info.index);
+        }
+
+        for dev in devices.iter() {
+            let desc = dev.descriptor();
+            let topo = dev.topology();
+            let if_count: usize = dev
+                .configurations()
+                .iter()
+                .map(|cfg| cfg.interfaces.len())
+                .sum();
+            let ep_count: usize = dev
+                .configurations()
+                .iter()
+                .flat_map(|cfg| cfg.interfaces.iter())
+                .flat_map(|interface| interface.alt_settings.iter())
+                .map(|alt| alt.endpoints.len())
+                .sum();
+
+            if usb_log_all_enabled() {
+                crate::log!(
+                    "crabusb: dev ctrl={} root_port={} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} ifs={} eps={}\n",
+                    info.index,
+                    topo.root_port_id,
+                    desc.vendor_id,
+                    desc.product_id,
+                    desc.class,
+                    desc.subclass,
+                    desc.protocol,
+                    if_count,
+                    ep_count
+                );
+                crate::log!(
+                    "crabusb: descriptor check ctrl={} root_port={} ok cfgs={}\n",
+                    info.index,
+                    topo.root_port_id,
+                    dev.configurations().len()
+                );
+            }
+
+            let controller_id = info.index as u32;
+            let mut bound_any = false;
+            if super::hid::boot::maybe_start_hid_boot_streams(host, dev, spawner, controller_id).await
+            {
+                bound_any = true;
+            }
+            if super::hid::mediacontrol::maybe_start_media_control(host, dev, spawner, controller_id)
+                .await
+            {
+                bound_any = true;
+            }
+            if super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id).await
+            {
+                bound_any = true;
+            }
+            if super::midi::maybe_start_midi(host, dev, spawner, controller_id).await {
+                bound_any = true;
+            }
+            if super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id).await {
+                bound_any = true;
+            }
+            if bound_any && usb_log_all_enabled() {
+                crate::log!(
+                    "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} handoff=true\n",
+                    info.index,
+                    topo.root_port_id,
+                    desc.vendor_id,
+                    desc.product_id
+                );
+            }
+        }
+    }
+}
+
+#[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
+pub async fn event_pump_task(controller_id: usize) {
+    loop {
+        if !EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire) {
+            Timer::after(EmbassyDuration::from_millis(10)).await;
+            continue;
+        }
+
+        let event = {
+            let guard = EVENT_HANDLER[controller_id].lock();
+            guard.as_ref().map(|handler| handler.handle_event())
+        };
+
+        match event {
+            Some(Event::Nothing) | None => {
+                Timer::after(EmbassyDuration::from_millis(1)).await;
+            }
+            Some(Event::PortChange { port }) => {
+                PROBE_REQUESTED[controller_id].store(true, Ordering::Release);
+                if usb_log_all_enabled() {
+                    crate::log!(
+                        "crabusb: pump port change ctrl={} root_port={}\n",
+                        controller_id,
+                        port
+                    );
+                }
+            }
+            Some(Event::Stopped) => {
+                if usb_log_all_enabled() {
+                    crate::log!("crabusb: pump stopped ctrl={}\n", controller_id);
+                }
+                uninstall_event_handler(controller_id);
+            }
+        }
+    }
+}
+
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn bsp_service(controller_index: usize) {
     const RETRY_MS: u64 = 1000;
@@ -233,112 +382,19 @@ pub async fn bsp_service(controller_index: usize) {
                 connected_ports
             );
 
-            if let Ok(devices) = host.probe_devices().await {
-                crate::log!(
-                    "crabusb: probe ctrl={} devices={}\n",
-                    info.index,
-                    devices.len()
-                );
-
-                if devices.is_empty() {
-                    crate::log!("crabusb: descriptor check ctrl={} none\n", info.index);
-                }
-
-                for dev in devices.iter() {
-                    let desc = dev.descriptor();
-                    let topo = dev.topology();
-                    let if_count: usize = dev
-                        .configurations()
-                        .iter()
-                        .map(|cfg| cfg.interfaces.len())
-                        .sum();
-                    let ep_count: usize = dev
-                        .configurations()
-                        .iter()
-                        .flat_map(|cfg| cfg.interfaces.iter())
-                        .flat_map(|interface| interface.alt_settings.iter())
-                        .map(|alt| alt.endpoints.len())
-                        .sum();
-
-                    crate::log!(
-                        "crabusb: dev ctrl={} root_port={} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} ifs={} eps={}\n",
-                        info.index,
-                        topo.root_port_id,
-                        desc.vendor_id,
-                        desc.product_id,
-                        desc.class,
-                        desc.subclass,
-                        desc.protocol,
-                        if_count,
-                        ep_count
-                    );
-                    crate::log!(
-                        "crabusb: descriptor check ctrl={} root_port={} ok cfgs={}\n",
-                        info.index,
-                        topo.root_port_id,
-                        dev.configurations().len()
-                    );
-
-                    let controller_id = info.index as u32;
-                    let mut bound_any = false;
-                    if super::hid::boot::maybe_start_hid_boot_streams(
-                        &mut host,
-                        dev,
-                        &spawner,
-                        controller_id,
-                    )
-                    .await
-                    {
-                        bound_any = true;
-                    }
-                    if super::hid::mediacontrol::maybe_start_media_control(
-                        &mut host,
-                        dev,
-                        &spawner,
-                        controller_id,
-                    )
-                    .await
-                    {
-                        bound_any = true;
-                    }
-                    if super::hid::leds::maybe_start_led_controller(
-                        &mut host,
-                        dev,
-                        &spawner,
-                        controller_id,
-                    )
-                    .await
-                    {
-                        bound_any = true;
-                    }
-                    if super::midi::maybe_start_midi(&mut host, dev, &spawner, controller_id).await
-                    {
-                        bound_any = true;
-                    }
-                    if super::pen::maybe_start_mass_storage(
-                        &mut host,
-                        dev,
-                        &spawner,
-                        controller_id,
-                    )
-                    .await
-                    {
-                        bound_any = true;
-                    }
-                    if bound_any {
-                        crate::log!(
-                            "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} handoff=true\n",
-                            info.index,
-                            topo.root_port_id,
-                            desc.vendor_id,
-                            desc.product_id
-                        );
-                    }
-                }
-            }
+            PROBE_REQUESTED[info.index].store(false, Ordering::Release);
+            install_event_handler(info.index, host.create_event_handler());
+            let _ = spawner.spawn(event_pump_task(info.index));
+            probe_and_bind(&mut host, info, &spawner).await;
 
             loop {
-                Timer::after(EmbassyDuration::from_secs(3600)).await;
+                if PROBE_REQUESTED[info.index].swap(false, Ordering::AcqRel) {
+                    probe_and_bind(&mut host, info, &spawner).await;
+                }
+                if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
+                    break;
+                }
+                Timer::after(EmbassyDuration::from_millis(20)).await;
             }
         }
 

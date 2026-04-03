@@ -236,7 +236,9 @@ async fn media_control_task(
         {
             None => {
                 timeout_logs = timeout_logs.wrapping_add(1);
-                if timeout_logs <= 8 || timeout_logs.is_multiple_of(32) {
+                if crate::logflag::USB_LOG_ALL.load(core::sync::atomic::Ordering::Relaxed)
+                    && (timeout_logs <= 8 || timeout_logs.is_multiple_of(32))
+                {
                     crate::log!(
                         "crabusb: hid mediacontrol {:04X}:{:04X} interrupt timeout ep=0x{:02X} count={}\n",
                         vendor_id,
