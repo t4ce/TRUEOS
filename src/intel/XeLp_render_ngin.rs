@@ -7,7 +7,7 @@ use trueos_gfx_core::{
 use super::xelp_copy_ngin;
 
 const XELP_RENDER_FIRST_DEFER_DISPLAY_DISCOVERY: bool = true;
-const XELP_RENDER_FIRST_ISOLATE_RGB_TRIANGLE: bool = false;
+const XELP_RENDER_FIRST_ISOLATE_RGB_TRIANGLE: bool = true;
 
 const TRIANGLE_MIN_DIM: usize = 8;
 const TRIANGLE_MAX_W: usize = 240;
@@ -44,6 +44,11 @@ pub(super) fn log_rgb_triangle_isolation() {
     crate::log!(
         "intel/render-ngin: isolation mode active; skipping later framebuffer writers after RCS proof\n"
     );
+}
+
+#[inline]
+pub(crate) const fn default_rgb_triangle_rotation() -> f32 {
+    TRIANGLE_ROTATION_RAD
 }
 
 pub(crate) mod xelp_3dstate {
@@ -321,11 +326,8 @@ fn ndc_to_target_y(y: f32, height: u32) -> f32 {
     ((1.0 - y) * 0.5) * height as f32
 }
 
-pub(crate) fn submit_rgb_triangle_smoke_once() {
-    crate::log!(
-        "intel/render-ngin: api route=render.rgb-triangle.submit workload=rgb-triangle class=render transport=rcs-execlist summary=submit an RGB triangle proof through the Xe-LP render ngin\n"
-    );
-    super::intel_igpu770::ggtt_blt_smoke_test_once();
+pub(crate) fn submit_rgb_triangle_smoke(rotation_rad: f32) -> bool {
+    super::intel_igpu770::ggtt_blt_smoke_frame(rotation_rad)
 }
 
 pub(crate) fn encode_rgb_triangle_store_batch(
@@ -336,6 +338,7 @@ pub(crate) fn encode_rgb_triangle_store_batch(
     rect_h: usize,
     result_gpu_addr: u64,
     done_value: u32,
+    rotation_rad: f32,
 ) -> Result<usize, &'static str> {
     const RESERVED_END_DWORDS: usize = 2;
     const STORE_DWORDS: usize = 4;
@@ -352,9 +355,9 @@ pub(crate) fn encode_rgb_triangle_store_batch(
     let center_x = rect_w as f32 * 0.5;
     let center_y = rect_h as f32 * 0.5;
     let radius = tri_w.min(tri_h) as f32 * 0.46;
-    let a0 = TRIANGLE_ROTATION_RAD;
-    let a1 = TRIANGLE_ROTATION_RAD + TRIANGLE_ANGLE_STEP_RAD;
-    let a2 = TRIANGLE_ROTATION_RAD + (TRIANGLE_ANGLE_STEP_RAD * 2.0);
+    let a0 = rotation_rad;
+    let a1 = rotation_rad + TRIANGLE_ANGLE_STEP_RAD;
+    let a2 = rotation_rad + (TRIANGLE_ANGLE_STEP_RAD * 2.0);
 
     let p0x = cosf(a0) * radius;
     let p0y = sinf(a0) * radius;

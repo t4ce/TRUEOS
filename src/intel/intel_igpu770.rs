@@ -880,7 +880,7 @@ pub(super) fn request_display_power_with_forcewake(
     power_state
 }
 
-fn build_rcs_store_pixels_batch(warm: Igpu770WarmState, fill: BltFillRectPlan) {
+fn build_rcs_store_pixels_batch(warm: Igpu770WarmState, fill: BltFillRectPlan, rotation_rad: f32) {
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let dwords =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
@@ -892,6 +892,7 @@ fn build_rcs_store_pixels_batch(warm: Igpu770WarmState, fill: BltFillRectPlan) {
         fill.rect_h,
         GPU_VA_RESULT_BASE,
         RCS_EXEC_RESULT_DONE,
+        rotation_rad,
     ) {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -2585,44 +2586,47 @@ pub fn ggtt_blt_smoke_test_once() {
     if GGTT_BLT_SMOKE_RAN.swap(true, Ordering::AcqRel) {
         return;
     }
+    let _ = ggtt_blt_smoke_frame(0.62);
+}
 
+pub fn ggtt_blt_smoke_frame(rotation_rad: f32) -> bool {
     let Some(warm) = warm_state() else {
         crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=not-warmed\n");
-        return;
+        return false;
     };
     if !intel_guc::ready() {
         crate::log!(
             "intel/igpu770: ggtt-blt-smoke skipped reason=guc-not-ready guc_status=0x{:08X}\n",
             intel_guc::status(warm)
         );
-        return;
+        return false;
     }
 
     let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE)
     else {
         crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=ring-plan\n");
-        return;
+        return false;
     };
     let Some(context) =
         ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
     else {
         crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=context-plan\n");
-        return;
+        return false;
     };
     let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE)
     else {
         crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=batch-plan\n");
-        return;
+        return false;
     };
     let Some(result) =
         ggtt_map_plan_system_ram(warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE)
     else {
         crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=result-plan\n");
-        return;
+        return false;
     };
     let Some(fill) = blt_fill_rect_plan(warm) else {
         crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=fb-plan\n");
-        return;
+        return false;
     };
 
     unsafe {
@@ -2657,20 +2661,20 @@ pub fn ggtt_blt_smoke_test_once() {
     );
     log_rcs_triangle_probe_set(warm, "rcs-pre", fill);
 
-    build_rcs_store_pixels_batch(warm, fill);
+    build_rcs_store_pixels_batch(warm, fill, rotation_rad);
     let ring_tail_bytes = build_ring_batch_start(warm, batch.gpu_addr);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
         crate::log!(
             "intel/igpu770: ggtt-blt-smoke skipped reason=ring-ctl ring_len=0x{:X}\n",
             warm.ring_len
         );
-        return;
+        return false;
     };
     let ring_start = ring.gpu_addr as u32;
     let context_desc = context.gpu_addr;
     if !init_gen12_lrc_context_image(warm, ring_start, ring_tail_bytes as u32, ring_ctl) {
         crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=lrc-context-init\n");
-        return;
+        return false;
     }
     let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(context_desc);
 
@@ -2833,6 +2837,7 @@ pub fn ggtt_blt_smoke_test_once() {
         mmio_read32(warm, RCS_RING_EXECLIST_STATUS_HI),
         FORCEWAKE_GT_HELD.load(Ordering::Acquire) as u8
     );
+    completed
 }
 
 pub fn ggtt_bcs_smoke_test_once() {
