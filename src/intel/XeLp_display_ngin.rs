@@ -27,6 +27,10 @@ pub(crate) mod regs {
     pub const UNI_PLANE_STRIDE_OFF: usize = 0x08;
     pub const UNI_PLANE_SURF_OFF: usize = 0x1C;
     pub const UNI_PLANE_SURFLIVE_OFF: usize = 0x2C;
+    pub const CURSOR_BASE: usize = 0x70080;
+    pub const CURSOR_PIPE_STRIDE: usize = 0x1000;
+    pub const CURSOR_CTL_OFF: usize = 0x00;
+    pub const CURSOR_SURF_OFF: usize = 0x04;
 
     pub const GT_DISP_PWRON_REQ: u32 = 1 << 0;
     pub const TRANS_DDI_FUNC_ENABLE: u32 = 1 << 31;
@@ -1359,6 +1363,68 @@ pub(crate) fn primary_present_surface_gpu_addr() -> Option<u64> {
     } else {
         windows.shadow_state_gpu_addr
     })
+}
+
+pub(crate) fn primary_present_shadow_surface_gpu_addr() -> Option<u64> {
+    let draft = draft_workload(DisplayWorkloadKind::PrimaryPresent)?;
+    Some(draft.surface.windows.shadow_state_gpu_addr)
+}
+
+pub(crate) fn owned_triangle_disable_non_primary_planes_pipe_a() -> bool {
+    let info = match super::intel::first_claimed_device() {
+        Some(v) => v,
+        None => return false,
+    };
+
+    let mut changed = false;
+    let pipe_slot = 0usize;
+    let mut plane_slot = 1usize;
+    while plane_slot < 4 {
+        let plane_base = regs::UNI_PLANE_BASE
+            + pipe_slot.saturating_mul(regs::UNI_PLANE_PIPE_STRIDE)
+            + plane_slot.saturating_mul(regs::UNI_PLANE_SLOT_STRIDE);
+        let plane_ctl_off = plane_base;
+        let plane_surf_off = plane_base + regs::UNI_PLANE_SURF_OFF;
+        let plane_ctl = mmio_read32(info, plane_ctl_off);
+        let plane_surf = mmio_read32(info, plane_surf_off);
+        if plane_ctl != 0 || plane_surf != 0 {
+            let _ = mmio_write32(info, plane_ctl_off, plane_ctl & !regs::PLANE_CTL_ENABLE);
+            let _ = mmio_write32(info, plane_surf_off, 0);
+            changed = true;
+            crate::log!(
+                "intel/display-ngin: owned-proof clamp pipe=pipe-a plane={} ctl=0x{:08X}->0x{:08X} surf=0x{:08X}->0x00000000\n",
+                plane_slot + 1,
+                plane_ctl,
+                plane_ctl & !regs::PLANE_CTL_ENABLE,
+                plane_surf
+            );
+        }
+        plane_slot += 1;
+    }
+
+    let cursor_base = regs::CURSOR_BASE + pipe_slot.saturating_mul(regs::CURSOR_PIPE_STRIDE);
+    let cursor_ctl_off = cursor_base + regs::CURSOR_CTL_OFF;
+    let cursor_surf_off = cursor_base + regs::CURSOR_SURF_OFF;
+    let cursor_ctl = mmio_read32(info, cursor_ctl_off);
+    let cursor_surf = mmio_read32(info, cursor_surf_off);
+    if cursor_ctl != 0 || cursor_surf != 0 {
+        let _ = mmio_write32(info, cursor_ctl_off, 0);
+        let _ = mmio_write32(info, cursor_surf_off, 0);
+        changed = true;
+        crate::log!(
+            "intel/display-ngin: owned-proof clamp pipe=pipe-a cursor ctl=0x{:08X}->0x00000000 surf=0x{:08X}->0x00000000\n",
+            cursor_ctl,
+            cursor_surf
+        );
+    }
+
+    if !changed {
+        crate::log!(
+            "intel/display-ngin: owned-proof clamp pipe=pipe-a status=already-primary-only\n"
+        );
+    }
+
+    true
 }
 
 fn record_primary_present_visible_surface(surface_gpu_addr: u64) {

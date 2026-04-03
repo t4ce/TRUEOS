@@ -24,7 +24,8 @@ pub(crate) use intel_igpu770::{
     rcs_draw_screen_tex_triangles, rcs_present_rgba_frame, warm_state,
 };
 pub(crate) use xelp_display_ngin::{
-    plane_rebind_present_surface, primary_present_surface_gpu_addr,
+    owned_triangle_disable_non_primary_planes_pipe_a, plane_rebind_present_surface,
+    primary_present_shadow_surface_gpu_addr, primary_present_surface_gpu_addr,
 };
 pub(crate) use xelp_media_ngin::{
     MediaKickoffState, MediaSurfaceWindow, demo_surface_window as media_demo_surface_window,
