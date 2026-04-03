@@ -1,6 +1,6 @@
 // Xe-LP copy-engine helpers for minimal MI command-stream smoke tests.
 
-const COPY_NGIN_ENABLED: bool = false;
+const COPY_NGIN_ENABLED: bool = true;
 
 #[inline]
 pub(crate) const fn copy_ngin_enabled() -> bool {
@@ -101,15 +101,24 @@ pub(crate) mod blt {
     use super::{blt_instr, blt_num_dw};
 
     pub const XY_COLOR_BLT: u32 = blt_instr(0x50, 0);
+    pub const XY_SRC_COPY_BLT: u32 = blt_instr(0x53, 0);
     pub const TILE_LINEAR: u32 = 0 << 30;
     pub const WRITE_A: u32 = 2 << 20;
     pub const WRITE_RGB: u32 = 1 << 20;
     pub const WRITE_RGBA: u32 = WRITE_RGB | WRITE_A;
     pub const DEPTH_32: u32 = 3 << 24;
+    pub const ROP_SRC_COPY: u32 = 0xCC << 16;
     pub const ROP_COLOR_COPY: u32 = 0xF0 << 16;
+    pub const XY_SRC_COPY_SRC_TILED: u32 = 1 << 15;
+    pub const XY_SRC_COPY_DST_TILED: u32 = 1 << 11;
 
     #[inline]
     pub const fn xy_color_blt_len(total_dwords: u32) -> u32 {
+        blt_num_dw(total_dwords)
+    }
+
+    #[inline]
+    pub const fn xy_src_copy_blt_len(total_dwords: u32) -> u32 {
         blt_num_dw(total_dwords)
     }
 }

@@ -161,6 +161,10 @@ const BCS_EXEC_RESULT_START: u32 = 0x1CE0_BC50;
 const BCS_EXEC_RESULT_PRE_COPY: u32 = 0x1CE0_BC51;
 const BCS_EXEC_RESULT_POST_COPY: u32 = 0x1CE0_BC52;
 const BCS_EXEC_RESULT_DONE: u32 = 0x1CE0_BC53;
+const BCS_COMPOSITE_RESULT_START: u32 = 0x1CE0_C100;
+const BCS_COMPOSITE_RESULT_PRE_CLEAR: u32 = 0x1CE0_C101;
+const BCS_COMPOSITE_RESULT_POST_COPY: u32 = 0x1CE0_C102;
+const BCS_COMPOSITE_RESULT_DONE: u32 = 0x1CE0_C103;
 const RCS_PRESENT_RESULT_START_BASE: u32 = 0xC0DE_8F00;
 const RCS_PRESENT_RESULT_BASE: u32 = 0xC0DE_9000;
 const RCS_CLEAR_RESULT_START_BASE: u32 = 0xC0DE_9800;
@@ -1099,6 +1103,128 @@ fn build_bcs_ring_batch_start(warm: Igpu770WarmState, batch_gpu_addr: u64) -> us
     BCS_RING_MARKER_TAIL_BYTES as usize
 }
 
+fn build_bcs_rgba_clear_copy_batch(
+    batch_dwords: &mut [u32],
+    src_gpu_addr: u64,
+    src_width: u32,
+    src_height: u32,
+    src_pitch: u32,
+    dst_gpu_addr: u64,
+    dst_width: u32,
+    dst_height: u32,
+    dst_pitch: u32,
+    dst_x: u32,
+    dst_y: u32,
+    clear_rgb: u32,
+    clear_before_copy: bool,
+) -> Result<usize, &'static str> {
+    if src_gpu_addr == 0 || dst_gpu_addr == 0 {
+        return Err("gpu-addr-zero");
+    }
+    if (src_gpu_addr & 0x3) != 0 || (dst_gpu_addr & 0x3) != 0 {
+        return Err("gpu-addr-unaligned");
+    }
+    if src_width == 0 || src_height == 0 || dst_width == 0 || dst_height == 0 {
+        return Err("empty-surface");
+    }
+    if src_pitch < src_width.saturating_mul(4) || dst_pitch < dst_width.saturating_mul(4) {
+        return Err("pitch-too-small");
+    }
+    if src_pitch > 0xFFFF || dst_pitch > 0xFFFF {
+        return Err("pitch-too-large");
+    }
+
+    let copy_width = src_width.min(dst_width);
+    let copy_height = src_height.min(dst_height);
+    if copy_width == 0 || copy_height == 0 {
+        return Err("copy-empty");
+    }
+    if dst_x > dst_width.saturating_sub(copy_width)
+        || dst_y > dst_height.saturating_sub(copy_height)
+    {
+        return Err("copy-out-of-bounds");
+    }
+
+    let required = if clear_before_copy { 27usize } else { 19usize };
+    if batch_dwords.len() < required {
+        return Err("batch-too-small");
+    }
+
+    batch_dwords.fill(0);
+    let mut i = 0usize;
+    let emit_store_data_imm = |batch_dwords: &mut [u32], i: &mut usize, dst: u64, value: u32| {
+        batch_dwords[*i] = xelp_copy_ngin::mi::STORE_DATA_IMM
+            | xelp_copy_ngin::mi::SDI_GGTT
+            | xelp_copy_ngin::mi::sdi_num_dw(1);
+        batch_dwords[*i + 1] = dst as u32;
+        batch_dwords[*i + 2] = (dst >> 32) as u32;
+        batch_dwords[*i + 3] = value;
+        *i += 4;
+    };
+
+    batch_dwords[i] = MI_NOOP;
+    i += 1;
+
+    emit_store_data_imm(batch_dwords, &mut i, GPU_VA_RESULT_BASE, BCS_COMPOSITE_RESULT_START);
+    emit_store_data_imm(
+        batch_dwords,
+        &mut i,
+        GPU_VA_RESULT_BASE + COPY_SMOKE_PRE_COPY_SLOT,
+        BCS_COMPOSITE_RESULT_PRE_CLEAR,
+    );
+
+    if clear_before_copy {
+        let clear_color = 0xFF00_0000u32 | (clear_rgb & 0x00FF_FFFF);
+        batch_dwords[i] = xelp_copy_ngin::blt::XY_COLOR_BLT
+            | xelp_copy_ngin::blt::WRITE_RGBA
+            | xelp_copy_ngin::blt::xy_color_blt_len(7);
+        batch_dwords[i + 1] = xelp_copy_ngin::blt::TILE_LINEAR
+            | xelp_copy_ngin::blt::DEPTH_32
+            | xelp_copy_ngin::blt::ROP_COLOR_COPY
+            | dst_pitch;
+        batch_dwords[i + 2] = 0;
+        batch_dwords[i + 3] = (dst_height << 16) | dst_width;
+        batch_dwords[i + 4] = dst_gpu_addr as u32;
+        batch_dwords[i + 5] = (dst_gpu_addr >> 32) as u32;
+        batch_dwords[i + 6] = clear_color;
+        i += 7;
+    }
+
+    batch_dwords[i] = xelp_copy_ngin::blt::XY_SRC_COPY_BLT
+        | xelp_copy_ngin::blt::WRITE_RGBA
+        | xelp_copy_ngin::blt::xy_src_copy_blt_len(10);
+    batch_dwords[i + 1] =
+        xelp_copy_ngin::blt::DEPTH_32 | xelp_copy_ngin::blt::ROP_SRC_COPY | dst_pitch;
+    batch_dwords[i + 2] = (dst_y << 16) | dst_x;
+    batch_dwords[i + 3] =
+        ((dst_y.saturating_add(copy_height)) << 16) | dst_x.saturating_add(copy_width);
+    batch_dwords[i + 4] = dst_gpu_addr as u32;
+    batch_dwords[i + 5] = (dst_gpu_addr >> 32) as u32;
+    batch_dwords[i + 6] = 0;
+    batch_dwords[i + 7] = src_pitch;
+    batch_dwords[i + 8] = src_gpu_addr as u32;
+    batch_dwords[i + 9] = (src_gpu_addr >> 32) as u32;
+    i += 10;
+
+    emit_store_data_imm(
+        batch_dwords,
+        &mut i,
+        GPU_VA_RESULT_BASE + COPY_SMOKE_POST_COPY_SLOT,
+        BCS_COMPOSITE_RESULT_POST_COPY,
+    );
+    emit_store_data_imm(
+        batch_dwords,
+        &mut i,
+        GPU_VA_RESULT_BASE + COPY_SMOKE_DONE_SLOT,
+        BCS_COMPOSITE_RESULT_DONE,
+    );
+
+    batch_dwords[i] = MI_BATCH_BUFFER_END;
+    batch_dwords[i + 1] = MI_NOOP;
+    i += 2;
+    Ok(i.saturating_mul(core::mem::size_of::<u32>()))
+}
+
 #[inline]
 fn mi_lri_num_regs(num_regs: u32) -> u32 {
     num_regs.saturating_mul(2).saturating_sub(1)
@@ -1912,7 +2038,9 @@ pub(crate) fn ggtt_map_rgba_surface_pitch(
         return false;
     };
     let min_len = rgba_len(width, height).unwrap_or(0);
-    let target_len = (pitch_bytes as usize).checked_mul(height as usize).unwrap_or(0);
+    let target_len = (pitch_bytes as usize)
+        .checked_mul(height as usize)
+        .unwrap_or(0);
     if target_len == 0
         || target_len < min_len
         || target_rgba.len() < target_len
@@ -3206,6 +3334,170 @@ pub fn ggtt_bcs_smoke_test_once() {
         mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI),
         FORCEWAKE_GT_HELD.load(Ordering::Acquire) as u8
     );
+}
+
+pub(crate) fn bcs_composite_rgba_surface(
+    src_gpu_addr: u64,
+    src_width: u32,
+    src_height: u32,
+    src_pitch: u32,
+    dst_gpu_addr: u64,
+    dst_width: u32,
+    dst_height: u32,
+    dst_pitch: u32,
+    clear_rgb: u32,
+    clear_before_copy: bool,
+) -> bool {
+    let Some(warm) = warm_state() else {
+        crate::log!("intel/igpu770: bcs-composite skipped reason=not-warmed\n");
+        return false;
+    };
+    if !intel_guc::ready() {
+        crate::log!(
+            "intel/igpu770: bcs-composite skipped reason=guc-not-ready guc_status=0x{:08X}\n",
+            intel_guc::status(warm)
+        );
+        return false;
+    }
+    if !xelp_copy_ngin::copy_ngin_enabled() {
+        crate::log!("intel/igpu770: bcs-composite skipped reason=copy-ngin-disabled\n");
+        return false;
+    }
+
+    ggtt_map_smoke_objects_once();
+
+    let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE)
+    else {
+        crate::log!("intel/igpu770: bcs-composite skipped reason=ring-plan\n");
+        return false;
+    };
+    let Some(context) =
+        ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
+    else {
+        crate::log!("intel/igpu770: bcs-composite skipped reason=context-plan\n");
+        return false;
+    };
+    let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE)
+    else {
+        crate::log!("intel/igpu770: bcs-composite skipped reason=batch-plan\n");
+        return false;
+    };
+
+    let dst_x = dst_width.saturating_sub(src_width.min(dst_width)) / 2;
+    let dst_y = dst_height.saturating_sub(src_height.min(dst_height)) / 2;
+
+    unsafe {
+        ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+    }
+    dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+
+    let batch_dwords = unsafe {
+        core::slice::from_raw_parts_mut(
+            warm.batch_virt as *mut u32,
+            warm.batch_len / core::mem::size_of::<u32>(),
+        )
+    };
+    let batch_tail_bytes = match build_bcs_rgba_clear_copy_batch(
+        batch_dwords,
+        src_gpu_addr,
+        src_width,
+        src_height,
+        src_pitch,
+        dst_gpu_addr,
+        dst_width,
+        dst_height,
+        dst_pitch,
+        dst_x,
+        dst_y,
+        clear_rgb,
+        clear_before_copy,
+    ) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            crate::log!(
+                "intel/igpu770: bcs-composite skipped reason=batch-build-failed detail={} src_gpu=0x{:X} dst_gpu=0x{:X} src={}x{} dst={}x{} src_pitch=0x{:X} dst_pitch=0x{:X}\n",
+                reason,
+                src_gpu_addr,
+                dst_gpu_addr,
+                src_width,
+                src_height,
+                dst_width,
+                dst_height,
+                src_pitch,
+                dst_pitch
+            );
+            return false;
+        }
+    };
+    dma_cache_flush(warm.batch_virt as *const u8, batch_tail_bytes);
+
+    let ring_tail_bytes = build_bcs_ring_batch_start(warm, batch.gpu_addr);
+    let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
+        crate::log!("intel/igpu770: bcs-composite skipped reason=ring-ctl\n");
+        return false;
+    };
+    if !init_gen12_bcs_context_image(warm, ring.gpu_addr as u32, ring_tail_bytes as u32, ring_ctl) {
+        crate::log!("intel/igpu770: bcs-composite skipped reason=lrc-context-init\n");
+        return false;
+    }
+    let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(context.gpu_addr);
+
+    let _ = forcewake_all_acquire(warm);
+    let _ =
+        mmio_write32(warm, BCS_RING_MODE_GEN7, masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE));
+    let ctx_ctl_after = masked_bits_update(
+        CTX_CTRL_RS_CTX_ENABLE,
+        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
+    let ctx_ctl_ref_after = masked_bits_update(
+        CTX_CTRL_RS_CTX_ENABLE,
+        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
+    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
+    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_ref_after);
+
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    bcs_execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
+    let _ = mmio_write32(warm, BCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+
+    let mut completed = false;
+    let mut iter = 0usize;
+    while iter < BLT_POLL_ITERS {
+        let result = read_bcs_result_markers(warm);
+        if result[3] == BCS_COMPOSITE_RESULT_DONE {
+            completed = true;
+            break;
+        }
+        core::hint::spin_loop();
+        iter += 1;
+    }
+
+    dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+    let result = read_bcs_result_markers(warm);
+    crate::log!(
+        "intel/igpu770: bcs-composite completed={} iters={} src_gpu=0x{:X} dst_gpu=0x{:X} dst_xy={}x{} src={}x{} dst={}x{} clear_before_copy={} start=0x{:08X} pre=0x{:08X} post=0x{:08X} done=0x{:08X}\n",
+        completed as u8,
+        iter,
+        src_gpu_addr,
+        dst_gpu_addr,
+        dst_x,
+        dst_y,
+        src_width,
+        src_height,
+        dst_width,
+        dst_height,
+        clear_before_copy as u8,
+        result[0],
+        result[1],
+        result[2],
+        result[3]
+    );
+    completed && result[3] == BCS_COMPOSITE_RESULT_DONE
 }
 
 pub(crate) fn rcs_present_rgba_frame(rgba: &[u8], width: usize, height: usize) -> bool {

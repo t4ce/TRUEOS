@@ -425,12 +425,7 @@ pub(crate) fn ui2_font_draw_text_line_no_present(
         px_h,
         view_w,
         view_h,
-        (
-            UI2_FONT_DEFAULT_RGBA.r,
-            UI2_FONT_DEFAULT_RGBA.g,
-            UI2_FONT_DEFAULT_RGBA.b,
-            alpha,
-        ),
+        (UI2_FONT_DEFAULT_RGBA.r, UI2_FONT_DEFAULT_RGBA.g, UI2_FONT_DEFAULT_RGBA.b, alpha),
     )
 }
 
@@ -522,12 +517,7 @@ pub(crate) fn ui2_font_draw_text_line_in_rect_no_present(
         vertical_align,
         view_w,
         view_h,
-        (
-            UI2_FONT_DEFAULT_RGBA.r,
-            UI2_FONT_DEFAULT_RGBA.g,
-            UI2_FONT_DEFAULT_RGBA.b,
-            alpha,
-        ),
+        (UI2_FONT_DEFAULT_RGBA.r, UI2_FONT_DEFAULT_RGBA.g, UI2_FONT_DEFAULT_RGBA.b, alpha),
     )
 }
 
@@ -564,14 +554,7 @@ pub(crate) fn ui2_font_draw_text_line_in_rect_rgba_no_present(
     };
 
     ui2_font_draw_text_line_rgba_no_present(
-        text,
-        draw_x,
-        draw_y,
-        rect.w,
-        px_h,
-        view_w,
-        view_h,
-        rgba,
+        text, draw_x, draw_y, rect.w, px_h, view_w, view_h, rgba,
     )
 }
 

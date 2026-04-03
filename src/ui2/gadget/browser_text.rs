@@ -9,12 +9,7 @@ const UI2_BROWSER_BUTTON_BORDER_PX: f32 = 1.0;
 
 #[inline]
 fn ui2_browser_text_rgba(rgb: u32) -> (u8, u8, u8, u8) {
-    (
-        ((rgb >> 16) & 0xFF) as u8,
-        ((rgb >> 8) & 0xFF) as u8,
-        (rgb & 0xFF) as u8,
-        0xFF,
-    )
+    (((rgb >> 16) & 0xFF) as u8, ((rgb >> 8) & 0xFF) as u8, (rgb & 0xFF) as u8, 0xFF)
 }
 
 fn draw_browser_button_outline(rect: Ui2Rect, rgba: (u8, u8, u8, u8), view_w: u32, view_h: u32) {
@@ -110,7 +105,8 @@ pub(crate) fn draw_hosted_browser_gadget_scene(
             continue;
         }
 
-        let text_rgba = modulate_rgba_alpha(ui2_browser_text_rgba(gadget.text_color_rgb), window.alpha);
+        let text_rgba =
+            modulate_rgba_alpha(ui2_browser_text_rgba(gadget.text_color_rgb), window.alpha);
 
         if gadget.button_like {
             let button_w = (gadget.width_px.max(text_metrics.width_px) as f32
@@ -119,12 +115,8 @@ pub(crate) fn draw_hosted_browser_gadget_scene(
             let button_h = (gadget.height_px.max(text_metrics.height_px) as f32
                 + (UI2_BROWSER_BUTTON_PAD_Y * 2.0))
                 .max(line_height_px + (UI2_BROWSER_BUTTON_PAD_Y * 2.0));
-            let button_rect = Ui2Rect::new(
-                x,
-                y,
-                (visible_right - x).min(button_w).max(0.0),
-                button_h,
-            );
+            let button_rect =
+                Ui2Rect::new(x, y, (visible_right - x).min(button_w).max(0.0), button_h);
             if button_rect.w <= 0.0 || button_rect.y >= visible_bottom {
                 continue;
             }
