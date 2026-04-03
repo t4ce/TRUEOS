@@ -11,6 +11,14 @@ const UI2_TRIANGLE_WINDOW_X: f32 = 220.0;
 const UI2_TRIANGLE_WINDOW_Y: f32 = 160.0;
 const UI2_TRIANGLE_WINDOW_Z: i16 = 30;
 const UI2_TRIANGLE_BG_RGBA: [u8; 4] = [0x10, 0x14, 0x1A, 0xFF];
+const UI2_TRIANGLE_PHASE_SPEED_RAD_PER_SEC: f32 = 1.2;
+const UI2_TRIANGLE_DIRECT_FRAME_MS: u64 = 16;
+const UI2_TRIANGLE_WINDOW_FRAME_MS: u64 = 66;
+
+#[inline]
+fn phase_step_for_frame_ms(frame_ms: u64) -> f32 {
+    UI2_TRIANGLE_PHASE_SPEED_RAD_PER_SEC * (frame_ms as f32 / 1000.0)
+}
 
 #[inline]
 fn screen_extent() -> Option<(u32, u32)> {
@@ -159,11 +167,11 @@ pub async fn ui2_triangle_demo_task() {
         let mut phase = 0.0f32;
         loop {
             let _ = render_triangle_frame_direct_screen(phase);
-            phase += 0.04;
+            phase += phase_step_for_frame_ms(UI2_TRIANGLE_DIRECT_FRAME_MS);
             if phase > core::f32::consts::TAU {
                 phase -= core::f32::consts::TAU;
             }
-            Timer::after(EmbassyDuration::from_millis(66)).await;
+            Timer::after(EmbassyDuration::from_millis(UI2_TRIANGLE_DIRECT_FRAME_MS)).await;
         }
     }
 
@@ -196,10 +204,10 @@ pub async fn ui2_triangle_demo_task() {
     let mut phase = 0.0f32;
     loop {
         let _ = render_triangle_frame(&surface, phase);
-        phase += 0.04;
+        phase += phase_step_for_frame_ms(UI2_TRIANGLE_WINDOW_FRAME_MS);
         if phase > core::f32::consts::TAU {
             phase -= core::f32::consts::TAU;
         }
-        Timer::after(EmbassyDuration::from_millis(66)).await;
+        Timer::after(EmbassyDuration::from_millis(UI2_TRIANGLE_WINDOW_FRAME_MS)).await;
     }
 }

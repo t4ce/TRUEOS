@@ -52,7 +52,7 @@ CARGO_BUILD_FLAGS ?=
 
 ifeq ($(GFX_MODE),virgl)
 CARGO_GFX_FLAGS =
-QEMU_GFX_FLAGS = -display sdl,gl=on -vga none -device virtio-gpu-gl-pci,disable-modern=off,xres=1280,yres=800
+QEMU_GFX_FLAGS = -display sdl,gl=on -vga none -device virtio-gpu-gl-pci,disable-modern=off,xres=1600,yres=1000
 else ifeq ($(GFX_MODE),intel)
 CARGO_GFX_FLAGS =
 QEMU_GFX_FLAGS = -display none -vga none -device vfio-pci,host=$(INTEL_GPU_PCI),bus=pcie.0,addr=0x2$(INTEL_GPU_VFIO_PROPS)

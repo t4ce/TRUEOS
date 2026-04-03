@@ -58,6 +58,7 @@ pub struct IntelGfxBackend {
     framebuffer_width: u32,
     framebuffer_height: u32,
     screen_rgba: Vec<u8>,
+    screen_rgba_gpu_dirty: bool,
     buffers: Vec<Option<BufferEntry>>,
     images: Vec<Option<ImageEntry>>,
     pipelines: Vec<Option<PipelineEntry>>,
@@ -105,6 +106,7 @@ impl IntelGfxBackend {
             framebuffer_width: width,
             framebuffer_height: height,
             screen_rgba: alloc::vec![0; screen_len],
+            screen_rgba_gpu_dirty: false,
             buffers: Vec::new(),
             images: Vec::new(),
             pipelines: Vec::new(),
@@ -122,8 +124,17 @@ impl IntelGfxBackend {
             .ok_or(Error::Invalid)?;
         if self.screen_rgba.len() != len {
             self.screen_rgba.resize(len, 0);
+            self.screen_rgba_gpu_dirty = false;
         }
         Ok(())
+    }
+
+    fn sync_screen_rgba_from_gpu(&mut self) {
+        if !self.screen_rgba_gpu_dirty || self.screen_rgba.is_empty() {
+            return;
+        }
+        crate::intel::dma_cache_flush_range(self.screen_rgba.as_ptr(), self.screen_rgba.len());
+        self.screen_rgba_gpu_dirty = false;
     }
 
     fn alloc_slot<T>(slots: &mut Vec<Option<T>>, value: T) -> u32 {
@@ -221,6 +232,7 @@ impl IntelGfxBackend {
 
     fn present_screen(&mut self) -> Result<()> {
         self.ensure_screen_rgba()?;
+        self.sync_screen_rgba_from_gpu();
         let copy_w = self.swapchain_desc.extent.width.min(self.framebuffer_width) as usize;
         let copy_h = self
             .swapchain_desc
@@ -228,6 +240,35 @@ impl IntelGfxBackend {
             .height
             .min(self.framebuffer_height) as usize;
         self.present_seq = self.present_seq.wrapping_add(1);
+
+        if let Some(surface_gpu_addr) = crate::intel::primary_present_surface_gpu_addr() {
+            crate::intel::dma_cache_flush_range(self.screen_rgba.as_ptr(), self.screen_rgba.len());
+            let mapped = crate::intel::ggtt_map_screen_rgba_surface(
+                self.screen_rgba.as_slice(),
+                self.swapchain_desc.extent.width,
+                self.swapchain_desc.extent.height,
+                surface_gpu_addr,
+            );
+            if mapped
+                && crate::intel::plane_rebind_present_surface(
+                    surface_gpu_addr,
+                    self.swapchain_desc.extent.width,
+                    self.swapchain_desc.extent.height,
+                    self.swapchain_desc.extent.width.saturating_mul(4),
+                )
+            {
+                if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
+                    crate::log!(
+                        "intel/gfx-backend: present seq={} mode=plane-rebind size={}x{} gpu=0x{:X}\n",
+                        self.present_seq,
+                        copy_w,
+                        copy_h,
+                        surface_gpu_addr
+                    );
+                }
+                return Ok(());
+            }
+        }
 
         let guc_ready = crate::intel::guc_ready();
         let allow_rcs_retry = guc_ready && self.present_seq >= self.rcs_retry_after_present_seq;
@@ -304,6 +345,35 @@ impl IntelGfxBackend {
             return Err(Error::Invalid);
         }
         let verts = buffer.bytes[start..start + need].to_vec();
+        let screen_surface_gpu =
+            crate::intel::primary_present_surface_gpu_addr().unwrap_or(0x0200_0000);
+        if matches!(target, RenderTarget::Screen)
+            && crate::intel::rcs_draw_screen_rgb_triangles(
+                self.screen_rgba.as_slice(),
+                verts.as_slice(),
+                self.swapchain_desc.extent.width,
+                self.swapchain_desc.extent.height,
+                screen_surface_gpu,
+                scissor,
+                blend,
+            )
+        {
+            self.screen_rgba_gpu_dirty = true;
+            if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                crate::log!(
+                    "intel/gfx-backend: draw-rgb mode=rcs-store triangles={} size={}x{} gpu=0x{:X}\n",
+                    verts.len() / (3 * trueos_gfx_core::RGB_VERTEX_SIZE),
+                    self.swapchain_desc.extent.width,
+                    self.swapchain_desc.extent.height,
+                    screen_surface_gpu
+                );
+            }
+            return Ok(());
+        }
+
+        if matches!(target, RenderTarget::Screen) {
+            self.sync_screen_rgba_from_gpu();
+        }
         self.with_target_mut(target, |rgba, width, height| {
             let mut off = 0usize;
             while off + (3 * trueos_gfx_core::RGB_VERTEX_SIZE) <= verts.len() {
@@ -340,6 +410,9 @@ impl IntelGfxBackend {
         scissor: Option<ScissorRect>,
         blend: BlendDesc,
     ) -> Result<()> {
+        if matches!(target, RenderTarget::Screen) {
+            self.sync_screen_rgba_from_gpu();
+        }
         let buffer = self.buffer(buffer).ok_or(Error::NotFound)?;
         let source = self.image(source).ok_or(Error::NotFound)?.clone();
         let start = byte_offset as usize + first_vertex as usize * trueos_gfx_core::TEX_VERTEX_SIZE;
@@ -554,9 +627,35 @@ impl GfxDevice for IntelGfxBackend {
         for cmd in cmds.commands {
             match *cmd {
                 Command::ClearColor { rgb } => {
-                    self.with_target_mut(target, |rgba, width, height| {
-                        clear_rgba_buffer(rgba, width, height, rgb);
-                    })?;
+                    let screen_surface_gpu =
+                        crate::intel::primary_present_surface_gpu_addr().unwrap_or(0x0200_0000);
+                    if matches!(target, RenderTarget::Screen)
+                        && crate::intel::rcs_clear_screen_rgba(
+                            self.screen_rgba.as_slice(),
+                            self.swapchain_desc.extent.width,
+                            self.swapchain_desc.extent.height,
+                            screen_surface_gpu,
+                            rgb,
+                        )
+                    {
+                        self.screen_rgba_gpu_dirty = true;
+                        if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                            crate::log!(
+                                "intel/gfx-backend: clear mode=rcs-store size={}x{} rgb=0x{:06X} gpu=0x{:X}\n",
+                                self.swapchain_desc.extent.width,
+                                self.swapchain_desc.extent.height,
+                                rgb & 0x00FF_FFFF,
+                                screen_surface_gpu
+                            );
+                        }
+                    } else {
+                        if matches!(target, RenderTarget::Screen) {
+                            self.sync_screen_rgba_from_gpu();
+                        }
+                        self.with_target_mut(target, |rgba, width, height| {
+                            clear_rgba_buffer(rgba, width, height, rgb);
+                        })?;
+                    }
                 }
                 Command::ClearRect {
                     rgb,
@@ -565,6 +664,9 @@ impl GfxDevice for IntelGfxBackend {
                     width,
                     height,
                 } => {
+                    if matches!(target, RenderTarget::Screen) {
+                        self.sync_screen_rgba_from_gpu();
+                    }
                     self.with_target_mut(target, |rgba, target_w, target_h| {
                         clear_rgba_rect(rgba, target_w, target_h, x, y, width, height, rgb);
                     })?;
