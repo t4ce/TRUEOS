@@ -1,15 +1,11 @@
 use core::{
+    ptr,
     ptr::NonNull,
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
-use trueos_gfx_core::{
-    BufferDesc, BufferId, BufferUsage, Command, CommandBuffer, FenceId, GfxContext, ImageDesc,
-    ImageFormat, ImageId, MemoryType, PipelineDesc, PipelineId, RGB_VERTEX_SIZE, RgbVertex, Rgba8,
-    TexCoordFormat, VertexLayout, Viewport,
-};
 
 const INTEL_VENDOR_ID: u16 = 0x8086;
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
@@ -33,16 +29,6 @@ const INTEL_GT_DISP_PWRON: usize = 0x138090;
 const INTEL_GT_DISP_PWRON_REQ: u32 = 0x0000_0001;
 const INTEL_ICL_PHY_MISC_A: usize = 0x64C00;
 const INTEL_ICL_PHY_MISC_B: usize = 0x64C04;
-const INTEL_OWNED_TRIANGLE_CLEAR_RGB: u32 = 0x10141A;
-const INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_MODE_ENABLED: bool = false;
-const INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_RGB_A: u32 = 0x00FF00;
-const INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_RGB_B: u32 = 0xFF00FF;
-const INTEL_OWNED_TRIANGLE_FRAME_MS: u64 = 16;
-const INTEL_OWNED_TRIANGLE_PHASE_STEP_RAD: f32 = 0.18;
-const INTEL_OWNED_TRIANGLE_PROOF_ENABLED: bool = true;
-const INTEL_OWNED_TRIANGLE_PROOF_TIMEOUT_MS: u64 = 750;
-const INTEL_OWNED_TRIANGLE_CLUSTER_COUNT: usize = 15;
-const INTEL_OWNED_TRIANGLE_VERTEX_COUNT: usize = INTEL_OWNED_TRIANGLE_CLUSTER_COUNT * 3;
 const INTEL_PLANE_ENABLE: u32 = 1 << 31;
 const INTEL_PORT_HOTPLUG_EN: usize = 0x61110;
 const INTEL_PIPE_A_SRC: usize = 0x7001C;
@@ -115,29 +101,6 @@ struct IntelDisplaySignatureCandidate {
 
 static FIRST_DEVICE: Mutex<Option<IntelDeviceInfo>> = Mutex::new(None);
 static INTEL_IGPU770_PRESENT: AtomicBool = AtomicBool::new(false);
-static INTEL_OWNED_TRIANGLE_PROOF_DISABLED: AtomicBool = AtomicBool::new(false);
-static INTEL_OWNED_TRIANGLE_PROOF_LATCH_LOGGED: AtomicBool = AtomicBool::new(false);
-
-#[derive(Clone, Copy)]
-struct OwnedTriangleProofResources {
-    render_target: ImageId,
-    rgb_pipeline: PipelineId,
-    rgb_buffer: BufferId,
-    screen_w: u32,
-    screen_h: u32,
-}
-
-impl OwnedTriangleProofResources {
-    const fn invalid() -> Self {
-        Self {
-            render_target: ImageId::invalid(),
-            rgb_pipeline: PipelineId::invalid(),
-            rgb_buffer: BufferId::invalid(),
-            screen_w: 0,
-            screen_h: 0,
-        }
-    }
-}
 
 impl IntelDisplaySignatureCandidate {
     const fn empty() -> Self {
@@ -236,76 +199,13 @@ fn scanout_plane(pipe: usize, plane_slot: usize) -> IntelScanoutPlane {
     let (pipe_name, pipe_src_off, trans_ddi_func_ctl_off) = INTEL_SCANOUT_PIPES[pipe];
     IntelScanoutPlane {
         pipe_name,
-        plane_slot: plane_slot + 1,
+        plane_slot,
         ctl_off: plane_base,
         stride_off: plane_base + INTEL_UNI_PLANE_STRIDE_OFF,
         surf_off: plane_base + INTEL_UNI_PLANE_SURF_OFF,
         surf_live_off: plane_base + INTEL_UNI_PLANE_SURFLIVE_OFF,
         pipe_src_off,
         trans_ddi_func_ctl_off,
-    }
-}
-
-fn log_display_window(info: IntelDeviceInfo, center_off: usize, label: &str) {
-    let aligned = center_off & !0x1Fusize;
-    crate::log!("intel: window label={} base=0x{:05X}\n", label, aligned);
-    let mut idx = 0usize;
-    while idx < INTEL_DISPLAY_WINDOW_DWORDS {
-        let off = aligned + idx.saturating_mul(4);
-        let value = mmio_read32(info, off);
-        crate::log!("intel: window-mmio label={} off=0x{:05X} value=0x{:08X}\n", label, off, value);
-        idx += 1;
-    }
-}
-
-fn log_display_focus_windows(info: IntelDeviceInfo) {
-    if !crate::logflag::INTEL_GFX_DEBUG_LOGFLAG {
-        return;
-    }
-    log_display_window(info, INTEL_BXT_DE_PLL_ENABLE, "de_pll_enable");
-    log_display_window(info, INTEL_PORT_HOTPLUG_EN, "hotplug");
-    log_display_window(info, INTEL_TRANS_A_DDI_FUNC_CTL, "trans_a");
-    log_display_window(info, INTEL_TRANS_B_DDI_FUNC_CTL, "trans_b");
-    log_display_window(info, INTEL_GT_DISP_PWRON, "gt_disp_pwron");
-}
-
-fn log_display_region_sweep(info: IntelDeviceInfo) {
-    if !crate::logflag::INTEL_GFX_DEBUG_LOGFLAG {
-        return;
-    }
-    let mut logged = 0usize;
-    let mut page = INTEL_DISPLAY_SWEEP_START;
-    while page < INTEL_DISPLAY_SWEEP_END {
-        let mut found = None;
-        let mut off = 0usize;
-        while off < INTEL_DISPLAY_PAGE_STRIDE {
-            let value = mmio_read32(info, page + off);
-            if value != 0 {
-                found = Some((off, value));
-                break;
-            }
-            off += 4;
-        }
-        if let Some((first_off, value)) = found {
-            crate::log!(
-                "intel: display-page page=0x{:05X} first=0x{:03X} value=0x{:08X}\n",
-                page,
-                first_off,
-                value
-            );
-            logged += 1;
-            if logged >= INTEL_DISPLAY_SWEEP_LOG_LIMIT {
-                break;
-            }
-        }
-        page += INTEL_DISPLAY_PAGE_STRIDE;
-    }
-    if logged == 0 {
-        crate::log!(
-            "intel: display-page sweep 0x{:05X}..0x{:05X} found no nonzero registers\n",
-            INTEL_DISPLAY_SWEEP_START,
-            INTEL_DISPLAY_SWEEP_END
-        );
     }
 }
 
@@ -316,87 +216,168 @@ fn insert_signature_candidate(
     if cand.score == 0 {
         return;
     }
-    let mut slot = None;
+
+    let mut insert_at = None;
     let mut idx = 0usize;
     while idx < top.len() {
         if cand.score > top[idx].score {
-            slot = Some(idx);
+            insert_at = Some(idx);
             break;
         }
         idx += 1;
     }
-    let Some(slot_idx) = slot else {
+
+    let Some(insert_at) = insert_at else {
         return;
     };
-    let mut move_idx = top.len() - 1;
-    while move_idx > slot_idx {
-        top[move_idx] = top[move_idx - 1];
-        move_idx -= 1;
+    let mut shift = top.len().saturating_sub(1);
+    while shift > insert_at {
+        top[shift] = top[shift - 1];
+        shift -= 1;
     }
-    top[slot_idx] = cand;
+    top[insert_at] = cand;
+}
+
+fn log_display_focus_windows(info: IntelDeviceInfo) {
+    for pipe in 0..INTEL_SCANOUT_PIPES.len() {
+        let plane0 = scanout_plane(pipe, 0);
+        crate::log!(
+            "intel: focus-window pipe={} pipe_src=0x{:08X} ctl=0x{:08X} stride=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ddi=0x{:08X}\n",
+            plane0.pipe_name,
+            mmio_read32(info, plane0.pipe_src_off),
+            mmio_read32(info, plane0.ctl_off),
+            mmio_read32(info, plane0.stride_off),
+            mmio_read32(info, plane0.surf_off),
+            mmio_read32(info, plane0.surf_live_off),
+            mmio_read32(info, plane0.trans_ddi_func_ctl_off)
+        );
+    }
+}
+
+fn log_display_region_sweep(info: IntelDeviceInfo) {
+    let mut logged = 0usize;
+    let mut page = INTEL_DISPLAY_SWEEP_START;
+
+    crate::log!(
+        "intel: region-sweep begin start=0x{:05X} end=0x{:05X}\n",
+        INTEL_DISPLAY_SWEEP_START,
+        INTEL_DISPLAY_SWEEP_END
+    );
+    while page < INTEL_DISPLAY_SWEEP_END && logged < INTEL_DISPLAY_SWEEP_LOG_LIMIT {
+        let mut nonzero_dwords = 0usize;
+        let mut first_value = 0u32;
+        let mut first_off = usize::MAX;
+        let mut dword = 0usize;
+        while dword < INTEL_DISPLAY_WINDOW_DWORDS {
+            let off = page + dword * 4;
+            let value = mmio_read32(info, off);
+            if value != 0 && value != u32::MAX {
+                nonzero_dwords += 1;
+                if first_off == usize::MAX {
+                    first_off = off;
+                    first_value = value;
+                }
+            }
+            dword += 1;
+        }
+        if nonzero_dwords != 0 {
+            crate::log!(
+                "intel: region-live page=0x{:05X} nonzero_dwords={} first_off=0x{:05X} first_value=0x{:08X}\n",
+                page,
+                nonzero_dwords,
+                first_off,
+                first_value
+            );
+            logged += 1;
+        }
+        page += INTEL_DISPLAY_PAGE_STRIDE;
+    }
 }
 
 fn log_signature_window(info: IntelDeviceInfo, page: usize) {
-    if !crate::logflag::INTEL_GFX_DEBUG_LOGFLAG {
-        return;
-    }
-    let mut idx = 0usize;
-    while idx < INTEL_DISPLAY_SIGNATURE_WINDOW_DWORDS {
-        let off = page + idx.saturating_mul(4);
-        let value = mmio_read32(info, off);
-        crate::log!("intel: signature-mmio off=0x{:05X} value=0x{:08X}\n", off, value);
-        idx += 1;
-    }
+    let words = [
+        mmio_read32(info, page),
+        mmio_read32(info, page + 0x04),
+        mmio_read32(info, page + 0x08),
+        mmio_read32(info, page + 0x0C),
+        mmio_read32(info, page + 0x10),
+        mmio_read32(info, page + 0x14),
+        mmio_read32(info, page + 0x18),
+        mmio_read32(info, page + 0x1C),
+    ];
+    crate::log!(
+        "intel: signature-window page=0x{:05X} dwords=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+        page,
+        words[0],
+        words[1],
+        words[2],
+        words[3],
+        words[4],
+        words[5],
+        words[6],
+        words[7]
+    );
 }
 
 fn log_display_signature_sweep(info: IntelDeviceInfo) {
-    if !crate::logflag::INTEL_GFX_DEBUG_LOGFLAG {
-        return;
-    }
     let mut top = [IntelDisplaySignatureCandidate::empty(); INTEL_DISPLAY_SIGNATURE_TOP_PAGES];
-    let mut page = 0usize;
-    while page + INTEL_DISPLAY_PAGE_STRIDE <= info.mmio_len {
-        let mut cand = IntelDisplaySignatureCandidate {
-            page,
-            ..IntelDisplaySignatureCandidate::empty()
-        };
-        let mut off = 0usize;
-        while off < INTEL_DISPLAY_PAGE_STRIDE {
-            let mmio_off = page + off;
-            let value = mmio_read32(info, mmio_off);
-            if value != 0 {
+    let mut page = INTEL_DISPLAY_SWEEP_START;
+    while page < INTEL_DISPLAY_SWEEP_END {
+        let mut cand = IntelDisplaySignatureCandidate::empty();
+        cand.page = page;
+
+        let mut dword = 0usize;
+        while dword < INTEL_DISPLAY_SIGNATURE_WINDOW_DWORDS {
+            let value = mmio_read32(info, page + dword * 4);
+            if value != 0 && value != u32::MAX {
                 cand.nonzero_dwords = cand.nonzero_dwords.saturating_add(1);
             }
-            if cand.pipe_src_off == usize::MAX && plausible_pipe_src(value).is_some() {
-                cand.pipe_src_off = mmio_off;
-                cand.pipe_src_value = value;
-                cand.score = cand.score.saturating_add(7);
-            }
-            if cand.stride_off == usize::MAX && plausible_scanout_stride(value) {
-                cand.stride_off = mmio_off;
-                cand.stride_value = value;
-                cand.score = cand.score.saturating_add(5);
-            }
-            if cand.surf_off == usize::MAX
-                && plausible_scanout_surface(value, info.aperture_bar_size)
-            {
-                cand.surf_off = mmio_off;
-                cand.surf_value = value;
-                cand.score = cand.score.saturating_add(6);
-            }
-            if cand.ctl_off == usize::MAX && (value & INTEL_PLANE_ENABLE) != 0 && value != u32::MAX
-            {
-                cand.ctl_off = mmio_off;
-                cand.ctl_value = value;
-                cand.score = cand.score.saturating_add(3);
-            }
-            off += 4;
+            dword += 1;
         }
+        if cand.nonzero_dwords != 0 {
+            cand.score = cand.score.saturating_add(1);
+        }
+
+        for pipe in 0..INTEL_SCANOUT_PIPES.len() {
+            for plane_slot in 0..4 {
+                let plane = scanout_plane(pipe, plane_slot);
+                if plane.stride_off & !(INTEL_DISPLAY_PAGE_STRIDE - 1) == page {
+                    let value = mmio_read32(info, plane.stride_off);
+                    cand.stride_off = plane.stride_off;
+                    cand.stride_value = value;
+                    if plausible_scanout_stride(value) {
+                        cand.score = cand.score.saturating_add(2);
+                    }
+                }
+                if plane.surf_off & !(INTEL_DISPLAY_PAGE_STRIDE - 1) == page {
+                    let value = mmio_read32(info, plane.surf_off);
+                    cand.surf_off = plane.surf_off;
+                    cand.surf_value = value;
+                    if plausible_scanout_surface(value, info.aperture_bar_size) {
+                        cand.score = cand.score.saturating_add(2);
+                    }
+                }
+                if plane.ctl_off & !(INTEL_DISPLAY_PAGE_STRIDE - 1) == page {
+                    let value = mmio_read32(info, plane.ctl_off);
+                    cand.ctl_off = plane.ctl_off;
+                    cand.ctl_value = value;
+                    if value != 0 && value != u32::MAX {
+                        cand.score = cand.score.saturating_add(1);
+                    }
+                }
+                if plane.pipe_src_off & !(INTEL_DISPLAY_PAGE_STRIDE - 1) == page {
+                    let value = mmio_read32(info, plane.pipe_src_off);
+                    cand.pipe_src_off = plane.pipe_src_off;
+                    cand.pipe_src_value = value;
+                    if plausible_pipe_src(value).is_some() {
+                        cand.score = cand.score.saturating_add(2);
+                    }
+                }
+            }
+        }
+
         if cand.pipe_src_off != usize::MAX && cand.stride_off != usize::MAX {
-            cand.score = cand.score.saturating_add(4);
-        }
-        if cand.surf_off != usize::MAX && cand.stride_off != usize::MAX {
-            cand.score = cand.score.saturating_add(3);
+            cand.score = cand.score.saturating_add(1);
         }
         if cand.surf_off != usize::MAX && cand.ctl_off != usize::MAX {
             cand.score = cand.score.saturating_add(2);
@@ -720,317 +701,6 @@ pub fn intel_igpu770_present() -> bool {
 }
 
 #[inline]
-fn owned_triangle_proof_mode_active() -> bool {
-    INTEL_OWNED_TRIANGLE_PROOF_ENABLED
-        && intel_igpu770_present()
-        && !INTEL_OWNED_TRIANGLE_PROOF_DISABLED.load(Ordering::Acquire)
-}
-
-fn disable_owned_triangle_proof_once(reason: &'static str) {
-    INTEL_OWNED_TRIANGLE_PROOF_DISABLED.store(true, Ordering::Release);
-    if !INTEL_OWNED_TRIANGLE_PROOF_LATCH_LOGGED.swap(true, Ordering::AcqRel) {
-        crate::log!("intel: owned-triangle-proof disabled reason={} timeout_latched=1\n", reason);
-    }
-}
-
-pub fn isolated_triangle_mode_active() -> bool {
-    owned_triangle_proof_mode_active()
-}
-
-fn owned_triangle_vertices(phase: f32) -> [RgbVertex; INTEL_OWNED_TRIANGLE_VERTEX_COUNT] {
-    const BASE_TRIANGLE: [(f32, f32); 3] = [(0.0, -0.0325), (-0.035, 0.0275), (0.035, 0.0275)];
-    const COLORS: [Rgba8; 3] = [
-        Rgba8::new(0xFF, 0x52, 0x52, 0xFF),
-        Rgba8::new(0x40, 0xE3, 0x92, 0xFF),
-        Rgba8::new(0x5A, 0x9C, 0xFF, 0xFF),
-    ];
-    const CENTERS: [(f32, f32); INTEL_OWNED_TRIANGLE_CLUSTER_COUNT] = [
-        (-0.32, 0.00),
-        (-0.16, 0.00),
-        (0.00, 0.00),
-        (0.16, 0.00),
-        (0.32, 0.00),
-        (-0.48, -0.24),
-        (-0.48, 0.00),
-        (-0.48, 0.24),
-        (0.48, -0.24),
-        (0.48, 0.00),
-        (0.48, 0.24),
-        (-0.70, -0.18),
-        (-0.70, 0.18),
-        (0.70, -0.18),
-        (0.70, 0.18),
-    ];
-
-    let frames = phase / INTEL_OWNED_TRIANGLE_PHASE_STEP_RAD.max(0.0001);
-    let frame_dt = INTEL_OWNED_TRIANGLE_FRAME_MS as f32 / 1000.0;
-    let mut vertices = [RgbVertex {
-        x: 0.0,
-        y: 0.0,
-        color: Rgba8::new(0, 0, 0, 0xFF),
-    }; INTEL_OWNED_TRIANGLE_VERTEX_COUNT];
-
-    let mut tri_idx = 0usize;
-    while tri_idx < INTEL_OWNED_TRIANGLE_CLUSTER_COUNT {
-        let (center_x, center_y) = CENTERS[tri_idx];
-        let rpm = 1.0 + (179.0 * tri_idx as f32 / (INTEL_OWNED_TRIANGLE_CLUSTER_COUNT - 1) as f32);
-        let radians_per_frame = (rpm * core::f32::consts::TAU / 60.0) * frame_dt;
-        let signed_angle = if tri_idx.is_multiple_of(2) {
-            frames * radians_per_frame
-        } else {
-            -(frames * radians_per_frame)
-        };
-        let cos_p = libm::cosf(signed_angle);
-        let sin_p = libm::sinf(signed_angle);
-
-        let mut vtx_idx = 0usize;
-        while vtx_idx < 3 {
-            let (base_x, base_y) = BASE_TRIANGLE[vtx_idx];
-            let rot_x = (base_x * cos_p) - (base_y * sin_p);
-            let rot_y = (base_x * sin_p) + (base_y * cos_p);
-            vertices[tri_idx * 3 + vtx_idx] = RgbVertex {
-                x: center_x + rot_x,
-                y: center_y + rot_y,
-                color: COLORS[vtx_idx],
-            };
-            vtx_idx += 1;
-        }
-
-        tri_idx += 1;
-    }
-
-    vertices
-}
-
-#[inline]
-fn owned_triangle_clear_rgb(frame_seq: u32) -> u32 {
-    if INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_MODE_ENABLED {
-        if frame_seq & 1 == 0 {
-            INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_RGB_A
-        } else {
-            INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_RGB_B
-        }
-    } else {
-        INTEL_OWNED_TRIANGLE_CLEAR_RGB
-    }
-}
-
-#[inline]
-fn rgb_vertex_bytes(vertices: &[RgbVertex; INTEL_OWNED_TRIANGLE_VERTEX_COUNT]) -> &[u8] {
-    unsafe {
-        core::slice::from_raw_parts(
-            vertices.as_ptr() as *const u8,
-            core::mem::size_of_val(vertices),
-        )
-    }
-}
-
-fn destroy_owned_triangle_proof_resources(
-    ctx: &mut dyn GfxContext,
-    resources: OwnedTriangleProofResources,
-) {
-    if resources.rgb_buffer.is_valid() {
-        ctx.destroy_buffer(resources.rgb_buffer);
-    }
-    if resources.rgb_pipeline.is_valid() {
-        ctx.destroy_pipeline(resources.rgb_pipeline);
-    }
-    if resources.render_target.is_valid() {
-        ctx.destroy_image(resources.render_target);
-    }
-}
-
-fn ensure_owned_triangle_proof_resources(
-    ctx: &mut dyn GfxContext,
-    resources: &mut OwnedTriangleProofResources,
-) -> Option<OwnedTriangleProofResources> {
-    let swap = ctx.swapchain_desc();
-    let screen_w = swap.extent.width.max(1);
-    let screen_h = swap.extent.height.max(1);
-    if resources.render_target.is_valid()
-        && resources.screen_w == screen_w
-        && resources.screen_h == screen_h
-    {
-        return Some(*resources);
-    }
-
-    if resources.render_target.is_valid() {
-        destroy_owned_triangle_proof_resources(ctx, *resources);
-        *resources = OwnedTriangleProofResources::invalid();
-    }
-
-    let rgb_pipeline = ctx
-        .create_pipeline(PipelineDesc {
-            vertex_layout: VertexLayout {
-                stride: RGB_VERTEX_SIZE as u16,
-                pos_offset: 0,
-                color_offset: 8,
-                color_format: trueos_gfx_core::ColorFormat::RgbaU8,
-                texcoord_offset: 0,
-                texcoord_format: TexCoordFormat::None,
-            },
-            vs: None,
-            fs: None,
-        })
-        .ok()?;
-    let rgb_buffer = ctx
-        .create_buffer(BufferDesc {
-            size: core::mem::size_of::<RgbVertex>() as u64
-                * INTEL_OWNED_TRIANGLE_VERTEX_COUNT as u64,
-            usage: BufferUsage::Vertex,
-            memory: MemoryType::HostVisible,
-        })
-        .ok()?;
-    let render_target = ctx
-        .create_image(ImageDesc {
-            width: screen_w,
-            height: screen_h,
-            format: ImageFormat::Rgba8888,
-        })
-        .ok()?;
-
-    *resources = OwnedTriangleProofResources {
-        render_target,
-        rgb_pipeline,
-        rgb_buffer,
-        screen_w,
-        screen_h,
-    };
-    Some(*resources)
-}
-
-fn submit_owned_triangle_proof_frame(
-    ctx: &mut dyn GfxContext,
-    resources: &mut OwnedTriangleProofResources,
-    phase: f32,
-    clear_rgb: u32,
-) -> Option<FenceId> {
-    let resources = ensure_owned_triangle_proof_resources(ctx, resources)?;
-    let vertices = owned_triangle_vertices(phase);
-    if ctx
-        .write_buffer(resources.rgb_buffer, 0, rgb_vertex_bytes(&vertices))
-        .is_err()
-    {
-        return None;
-    }
-    let viewport = Viewport {
-        x: 0,
-        y: 0,
-        width: resources.screen_w as i32,
-        height: resources.screen_h as i32,
-    };
-    let cmds = [
-        Command::SetViewport(viewport),
-        Command::SetRenderTarget(Some(resources.render_target)),
-        Command::ClearColor { rgb: clear_rgb },
-        Command::BindPipeline(resources.rgb_pipeline),
-        Command::BindVertexBuffer {
-            buffer: resources.rgb_buffer,
-            offset: 0,
-        },
-        Command::Draw {
-            vertex_count: INTEL_OWNED_TRIANGLE_VERTEX_COUNT as u32,
-            first_vertex: 0,
-        },
-        Command::Present,
-    ];
-    ctx.submit(CommandBuffer { commands: &cmds }).ok()
-}
-
-async fn wait_owned_triangle_fence(fence: FenceId) -> bool {
-    if !fence.is_valid() {
-        return false;
-    }
-    let deadline =
-        Instant::now() + EmbassyDuration::from_millis(INTEL_OWNED_TRIANGLE_PROOF_TIMEOUT_MS);
-    loop {
-        let ready = crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::Unknown, |ctx| {
-            ctx.poll(fence)
-        })
-        .unwrap_or(false);
-        if ready {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-    }
-}
-
-async fn wait_owned_triangle_present_complete(prev_seq: u32) -> bool {
-    let deadline =
-        Instant::now() + EmbassyDuration::from_millis(INTEL_OWNED_TRIANGLE_PROOF_TIMEOUT_MS);
-    loop {
-        let completed = crate::gfx::intel_present_completed_seq();
-        if completed != prev_seq {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-    }
-}
-
-async fn run_owned_triangle_proof_loop() {
-    let mut resources = OwnedTriangleProofResources::invalid();
-    let mut phase = super::xelp_render_ngin::default_rgb_triangle_rotation();
-    let mut frame_seq = 0u32;
-
-    crate::log!(
-        "intel: owned-triangle-proof start frame_ms={} timeout_ms={} clear=0x{:06X} debug_clear={}\n",
-        INTEL_OWNED_TRIANGLE_FRAME_MS,
-        INTEL_OWNED_TRIANGLE_PROOF_TIMEOUT_MS,
-        INTEL_OWNED_TRIANGLE_CLEAR_RGB & 0x00FF_FFFF,
-        INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_MODE_ENABLED as u8
-    );
-
-    let clamped = crate::intel::owned_triangle_disable_non_primary_planes_pipe_a();
-    crate::log!("intel: owned-triangle-proof plane-clamp pipe=pipe-a ok={}\n", clamped as u8);
-
-    loop {
-        let clear_rgb = owned_triangle_clear_rgb(frame_seq);
-        let present_complete_before = crate::gfx::intel_present_completed_seq();
-        let fence = crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::Unknown, |ctx| {
-            submit_owned_triangle_proof_frame(ctx, &mut resources, phase, clear_rgb)
-        })
-        .flatten();
-        let Some(fence) = fence else {
-            disable_owned_triangle_proof_once("submit");
-            break;
-        };
-        if !wait_owned_triangle_fence(fence).await {
-            disable_owned_triangle_proof_once("poll-timeout");
-            break;
-        }
-        if !wait_owned_triangle_present_complete(present_complete_before).await {
-            disable_owned_triangle_proof_once("present-complete-timeout");
-            break;
-        }
-        frame_seq = frame_seq.wrapping_add(1);
-        if frame_seq <= 8 || frame_seq.is_multiple_of(240) {
-            crate::log!(
-                "intel: owned-triangle-proof frame={} phase_millirad={} clear=0x{:06X} present_complete_seq={}\n",
-                frame_seq,
-                (phase * 1000.0) as i32,
-                clear_rgb & 0x00FF_FFFF,
-                crate::gfx::intel_present_completed_seq()
-            );
-        }
-        phase += INTEL_OWNED_TRIANGLE_PHASE_STEP_RAD;
-        if phase > core::f32::consts::TAU {
-            phase -= core::f32::consts::TAU;
-        }
-        Timer::after(EmbassyDuration::from_millis(INTEL_OWNED_TRIANGLE_FRAME_MS)).await;
-    }
-
-    let _ = crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::Unknown, |ctx| {
-        destroy_owned_triangle_proof_resources(ctx, resources);
-    });
-}
-
-#[inline]
 pub fn first_claimed_device() -> Option<IntelDeviceInfo> {
     *FIRST_DEVICE.lock()
 }
@@ -1067,6 +737,8 @@ pub async fn scanout_smoke_task() {
         return;
     };
 
+    crate::log!("intel: scanout-smoke task start path=display-discovery\n");
+
     crate::log!("intel: async probe delayed by {}ms (non-blocking)\n", INTEL_ASYNC_PROBE_DELAY_MS);
     Timer::after(EmbassyDuration::from_millis(INTEL_ASYNC_PROBE_DELAY_MS)).await;
 
@@ -1074,6 +746,7 @@ pub async fn scanout_smoke_task() {
         super::intel_igpu770::warm_once(info);
     }
 
+    Timer::after(EmbassyDuration::from_millis(1200)).await;
     crate::gfx::init(crate::limine::framebuffer_response());
     let mut usb_gfx_guard_waited_ms = 0u64;
     while usb_gfx_guard_waited_ms < INTEL_USB_GFX_SWITCH_GUARD_TIMEOUT_MS {
@@ -1108,29 +781,12 @@ pub async fn scanout_smoke_task() {
     };
 
     if !intel_backend_active {
-        disable_owned_triangle_proof_once("backend-switch");
-        crate::log!("intel: owned-triangle-proof skipped reason=backend-inactive\n");
+        crate::log!("intel: scanout-smoke skipped reason=backend-inactive\n");
         return;
-    }
-
-    Timer::after(EmbassyDuration::from_millis(1200)).await;
-    if intel_igpu770_present() {
-        crate::log!("intel: owned-triangle-proof selected; legacy smoke branches disabled\n");
-    }
-
-    let defer_display =
-        super::xelp_render_ngin::defer_display_discovery_for_render_first(intel_igpu770_present());
-    if defer_display {
-        super::xelp_render_ngin::log_display_deferred_for_render_first();
-        super::xelp_render_ngin::log_display_render_first_complete();
     }
 
     run_display_power_discovery(info);
     Timer::after(EmbassyDuration::from_millis(25)).await;
-    crate::log!("intel: display discovery follow-up probe after proof-bringup\n");
+    crate::log!("intel: display discovery follow-up probe after initial bring-up\n");
     log_display_power_probe(info);
-
-    if owned_triangle_proof_mode_active() {
-        run_owned_triangle_proof_loop().await;
-    }
 }
