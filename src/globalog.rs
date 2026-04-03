@@ -1,4 +1,5 @@
 use core::fmt;
+use log::{LevelFilter, Metadata, Record};
 
 extern crate alloc;
 
@@ -36,6 +37,30 @@ pub fn log(args: fmt::Arguments<'_>) {
     debugcon::log(args);
     logtotcp::log(args);
     placeholder::log(args);
+}
+
+struct KernelLogFacade;
+
+impl log::Log for KernelLogFacade {
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        true
+    }
+
+    fn log(&self, record: &Record<'_>) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        log(format_args!("crabusb: {}\n", record.args()));
+    }
+
+    fn flush(&self) {}
+}
+
+static KERNEL_LOG_FACADE: KernelLogFacade = KernelLogFacade;
+
+pub fn init_log_facade() {
+    let _ = log::set_logger(&KERNEL_LOG_FACADE);
+    log::set_max_level(LevelFilter::Trace);
 }
 
 pub fn log_excerpt(src: &str, range: LogRange, amount: LogAmount, count: usize) {
