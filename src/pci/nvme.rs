@@ -941,6 +941,44 @@ impl NvmeController {
         Ok(())
     }
 
+    fn disable_for_reconfig(&self) -> core::result::Result<(), block::Error> {
+        let cc_before = self.reg32(NVME_REG_CC);
+        let csts_before = self.reg32(NVME_REG_CSTS);
+        nvme_verbose_log!(
+            "nvme: {} disable_for_reconfig begin cc=0x{:08X} csts=0x{:08X}\n",
+            self.pci,
+            cc_before,
+            csts_before
+        );
+
+        if (cc_before & 0x1) == 0 && (csts_before & 0x1) == 0 {
+            return Ok(());
+        }
+
+        self.set_enabled(false)?;
+
+        let cc_after = self.reg32(NVME_REG_CC);
+        let csts_after = self.reg32(NVME_REG_CSTS);
+        nvme_verbose_log!(
+            "nvme: {} disable_for_reconfig done cc=0x{:08X} csts=0x{:08X}\n",
+            self.pci,
+            cc_after,
+            csts_after
+        );
+
+        if (csts_after & 0x1) != 0 {
+            crate::log!(
+                "nvme: {} disable_for_reconfig left controller ready cc=0x{:08X} csts=0x{:08X}\n",
+                self.pci,
+                cc_after,
+                csts_after
+            );
+            return Err(block::Error::Timeout);
+        }
+
+        Ok(())
+    }
+
     fn init_with_io_depth(
         mmio: NonNull<u8>,
         pci: block::PciAddress,
@@ -1007,10 +1045,8 @@ impl NvmeController {
             serial: None,
         };
 
-        // Disable before reconfiguration.
-        if let Err(e) = ctrl.set_enabled(false) {
-            nvme_verbose_log!("nvme: {} disable before reconfig returned {:?}\n", pci, e);
-        }
+        // Disable before reconfiguration and require a clean not-ready state.
+        ctrl.disable_for_reconfig()?;
 
         ctrl.admin.reset_state();
         ctrl.io.reset_state();
