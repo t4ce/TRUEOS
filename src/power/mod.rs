@@ -67,17 +67,19 @@ pub fn init() {
     CAPS.call_once(detect_caps_cpuid_only);
 
     if let Some(caps) = caps() {
-        crate::log!(
-            "POWER: intel={} msr={} eist={} hwp={} msr_armed={} idle={}\n",
-            caps.vendor_intel,
-            caps.has_msr,
-            caps.has_eist,
-            caps.has_hwp,
-            msr_armed(),
-            idle_policy().as_str(),
-        );
+        if crate::logflag::BOOT_INFO_LOGS {
+            crate::log!(
+                "POWER: intel={} msr={} eist={} hwp={} msr_armed={} idle={}\n",
+                caps.vendor_intel,
+                caps.has_msr,
+                caps.has_eist,
+                caps.has_hwp,
+                msr_armed(),
+                idle_policy().as_str(),
+            );
+        }
 
-        if let Some(d) = msr_details() {
+        if crate::logflag::BOOT_INFO_LOGS && let Some(d) = msr_details() {
             crate::log!(
                 "POWER: msr_details min={} max={} hwp_lowest={} hwp_highest={}\n",
                 opt_u8(d.min_ratio),

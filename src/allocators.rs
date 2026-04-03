@@ -338,12 +338,14 @@ pub fn install_heap_arena(arena: HeapArena) -> bool {
 
     guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
     phys::register_heap(arena.virt_start, arena.phys_start as usize, arena.length);
-    crate::log!(
-        "heap: arena virt=0x{:X} phys=0x{:X} size={} MiB\n",
-        arena.virt_start,
-        arena.phys_start,
-        arena.length / (1024 * 1024)
-    );
+    if crate::logflag::BOOT_INFO_LOGS {
+        crate::log!(
+            "heap: arena virt=0x{:X} phys=0x{:X} size={} MiB\n",
+            arena.virt_start,
+            arena.phys_start,
+            arena.length / (1024 * 1024)
+        );
+    }
     true
 }
 

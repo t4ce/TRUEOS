@@ -21,6 +21,7 @@ mod globalog;
 mod host_api;
 mod hv;
 pub mod hvv;
+mod intel;
 mod iso9660;
 mod limine;
 mod logflag;
@@ -132,7 +133,9 @@ pub extern "C" fn kmain() -> ! {
         cpu::enable_sse();
     }
     exceptions::init();
-    crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
+    if crate::logflag::BOOT_INFO_LOGS {
+        crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
+    }
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
 
@@ -140,7 +143,7 @@ pub extern "C" fn kmain() -> ! {
         crate::log!("heap: failed to reserve/install any heap arena\n");
     }
 
-    if let Some(perf) = limine::bootloader_performance() {
+    if crate::logflag::BOOT_INFO_LOGS && let Some(perf) = limine::bootloader_performance() {
         crate::log!(
             "Boot Performance: reset={}_usec init={}_usec exec={}_usec\n",
             perf.reset_usec(),
@@ -155,6 +158,7 @@ pub extern "C" fn kmain() -> ! {
     percpu::init_bsp();
     dma::init_from_limine();
     pci::enumerate_impl();
+    intel::init_once();
 
     //vga::cube::tick();
     trueos_qjs::host_api_hook::set_context_init_hook(host_api::install);

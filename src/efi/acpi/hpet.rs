@@ -122,18 +122,20 @@ fn init_hpet() -> Option<Hpet> {
         hpet.configure(true, false);
     }
 
-    crate::log!(
-        "HPET @0x{:X} freq={}Hz comps={} counter_{}bit legacy_capable={}\n",
-        hpet.info.base_address,
-        hpet.frequency_hz,
-        hpet.info.num_comparators,
-        if hpet.info.main_counter_is_64bits {
-            64
-        } else {
-            32
-        },
-        hpet.info.legacy_irq_capable,
-    );
+    if crate::logflag::BOOT_INFO_LOGS {
+        crate::log!(
+            "HPET @0x{:X} freq={}Hz comps={} counter_{}bit legacy_capable={}\n",
+            hpet.info.base_address,
+            hpet.frequency_hz,
+            hpet.info.num_comparators,
+            if hpet.info.main_counter_is_64bits {
+                64
+            } else {
+                32
+            },
+            hpet.info.legacy_irq_capable,
+        );
+    }
 
     Some(hpet)
 }

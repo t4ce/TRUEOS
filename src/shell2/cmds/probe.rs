@@ -9,10 +9,14 @@ use crate::disc::block::{DeviceKind, PciAddress};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const PROBE_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const PROBE_MENU_ROWS: [[&str; 2]; 6] = [
+const PROBE_MENU_ROWS: [[&str; 2]; 10] = [
     ["usb", "Show live USB controller runtime state"],
+    ["usb snapshot [controller]", "Show richer USB runtime and recovery state"],
     ["usb kick [controller]", "Request a live USB reprobe"],
     ["usb rebind [controller]", "Force a live USB host rebind"],
+    ["usb recover [controller]", "Run a prebaked USB recovery flow"],
+    ["usb fix [controller]", "Run an aggressive USB fix flow"],
+    ["usb mysterybox [controller]", "Run the garlic-to-the-witch USB fix flow"],
     ["nvme", "Show live NVMe controller state"],
     [
         "nvme probe",
@@ -87,7 +91,7 @@ pub(crate) fn cmd_usb_status(io: &'static dyn ShellBackend2) {
         let bdf = alloc::format!("{:02X}:{:02X}.{}", ctrl.bus, ctrl.slot, ctrl.function);
         if let Some(diag) = runtime {
             lines.push(alloc::format!(
-                "probe usb: ctrl={} bdf={} phase={} life={} ready={} pending={} rp={} empty={} fail={} last={} last_count={} cached={} stage={} root_port={} port={} slot={} detail={} mmio=0x{:X}",
+                "probe usb: ctrl={} bdf={} phase={} life={} ready={} pending={} rp={} empty={} fail={} early={} last={} last_count={} q={} qms={} skip={} settle={} quiet={} cached={} stage={} root_port={} port={} slot={} detail={} mmio=0x{:X}",
                 ctrl.index,
                 bdf,
                 diag.controller_phase,
@@ -97,8 +101,14 @@ pub(crate) fn cmd_usb_status(io: &'static dyn ShellBackend2) {
                 diag.root_port_change_seen as u8,
                 diag.empty_probe_streak,
                 diag.probe_fail_streak,
+                diag.early_fatal_rebind_streak,
                 diag.last_probe_state,
                 diag.last_probe_device_count,
+                diag.recovery_quiescent_before_bind as u8,
+                diag.recovery_quiescent_ms,
+                diag.recovery_skip_delayed_event_handler as u8,
+                diag.recovery_initial_settle_ms,
+                diag.recovery_probe_quiet_ms,
                 cached,
                 crab_usb::debug_usb_probe_stage_name(progress.stage),
                 progress.root_port,
@@ -123,6 +133,52 @@ pub(crate) fn cmd_usb_status(io: &'static dyn ShellBackend2) {
         }
     }
 
+    emit_lines(io, lines);
+}
+
+fn cmd_usb_snapshot(io: &'static dyn ShellBackend2, controller: Option<usize>) {
+    let snapshot = crate::usb2::tlb_snapshot();
+    if snapshot.controllers.is_empty() {
+        line(io, "probe usb: no xhci controllers found");
+        return;
+    }
+
+    let mut lines = Vec::new();
+    for ctrl in snapshot.controllers.iter() {
+        if controller.is_some() && controller != Some(ctrl.index) {
+            continue;
+        }
+        let Some(diag) = crate::usb2::runtime_diag(ctrl.index) else {
+            continue;
+        };
+        let bdf = alloc::format!("{:02X}:{:02X}.{}", ctrl.bus, ctrl.slot, ctrl.function);
+        lines.push(alloc::format!(
+            "probe usb snapshot: ctrl={} bdf={} phase={} life={} ready={} pending={} rp={} empty={} fail={} last={} count={} early={} q={} qms={} skip={} settle={} quiet={} mmio=0x{:X}",
+            ctrl.index,
+            bdf,
+            diag.controller_phase,
+            diag.root_hub_lifecycle,
+            diag.event_handler_ready as u8,
+            diag.probe_requested as u8,
+            diag.root_port_change_seen as u8,
+            diag.empty_probe_streak,
+            diag.probe_fail_streak,
+            diag.last_probe_state,
+            diag.last_probe_device_count,
+            diag.early_fatal_rebind_streak,
+            diag.recovery_quiescent_before_bind as u8,
+            diag.recovery_quiescent_ms,
+            diag.recovery_skip_delayed_event_handler as u8,
+            diag.recovery_initial_settle_ms,
+            diag.recovery_probe_quiet_ms,
+            ctrl.mmio_base.as_ptr() as usize,
+        ));
+    }
+
+    if lines.is_empty() {
+        line(io, "probe usb: no matching controller found");
+        return;
+    }
     emit_lines(io, lines);
 }
 
@@ -179,6 +235,163 @@ fn cmd_usb_request(io: &'static dyn ShellBackend2, controller: Option<usize>, re
 
     if !did_any {
         line(io, "probe usb: no controller accepted the request");
+    }
+}
+
+fn cmd_usb_recover(io: &'static dyn ShellBackend2, controller: Option<usize>) {
+    let controllers = crate::usb2::pci_usb_controllers();
+    if controllers.is_empty() {
+        line(io, "probe usb: no xhci controllers found");
+        return;
+    }
+
+    let target_ids: Vec<usize> = if let Some(controller_id) = controller {
+        alloc::vec![controller_id]
+    } else {
+        controllers.iter().map(|ctrl| ctrl.index).collect()
+    };
+
+    let mut did_any = false;
+    for controller_id in target_ids {
+        let Some(diag) = crate::usb2::runtime_diag(controller_id) else {
+            line(
+                io,
+                alloc::format!("probe usb recover: controller {} diag unavailable", controller_id)
+                    .as_str(),
+            );
+            continue;
+        };
+
+        let use_rebind = diag.early_fatal_rebind_streak > 0
+            || diag.probe_fail_streak > 0
+            || matches!(diag.last_probe_state, "error" | "timeout")
+            || matches!(diag.controller_phase, "quarantined" | "recoverable")
+            || !diag.event_handler_ready;
+
+        let result = if use_rebind {
+            crate::usb2::request_rebind(controller_id)
+        } else {
+            crate::usb2::request_probe(controller_id)
+        };
+
+        match result {
+            Ok(()) => {
+                did_any = true;
+                line(
+                    io,
+                    alloc::format!(
+                        "probe usb recover: controller {} action={} phase={} life={} early={} fail={} last={} q={} skip={} settle={} quiet={}",
+                        controller_id,
+                        if use_rebind { "rebind" } else { "kick" },
+                        diag.controller_phase,
+                        diag.root_hub_lifecycle,
+                        diag.early_fatal_rebind_streak,
+                        diag.probe_fail_streak,
+                        diag.last_probe_state,
+                        diag.recovery_quiescent_before_bind as u8,
+                        diag.recovery_skip_delayed_event_handler as u8,
+                        diag.recovery_initial_settle_ms,
+                        diag.recovery_probe_quiet_ms
+                    )
+                    .as_str(),
+                );
+            }
+            Err(err) => line(
+                io,
+                alloc::format!(
+                    "probe usb recover: controller {} action={} failed ({})",
+                    controller_id,
+                    if use_rebind { "rebind" } else { "kick" },
+                    err
+                )
+                .as_str(),
+            ),
+        }
+    }
+
+    if !did_any {
+        line(io, "probe usb recover: no controller accepted the request");
+    }
+}
+
+fn cmd_usb_fix(io: &'static dyn ShellBackend2, controller: Option<usize>, mystery_box: bool) {
+    let controllers = crate::usb2::pci_usb_controllers();
+    if controllers.is_empty() {
+        line(io, "probe usb: no xhci controllers found");
+        return;
+    }
+
+    let target_ids: Vec<usize> = if let Some(controller_id) = controller {
+        alloc::vec![controller_id]
+    } else {
+        controllers.iter().map(|ctrl| ctrl.index).collect()
+    };
+
+    let mut did_any = false;
+    for controller_id in target_ids {
+        let diag = crate::usb2::runtime_diag(controller_id);
+        let rebind_res = crate::usb2::request_rebind(controller_id);
+        let probe_res = crate::usb2::request_probe(controller_id);
+
+        match (rebind_res, probe_res) {
+            (Ok(()), Ok(())) => {
+                did_any = true;
+                if let Some(diag) = diag {
+                    line(
+                        io,
+                        alloc::format!(
+                            "probe usb {}: controller {} chained rebind+kick phase={} life={} early={} fail={} last={} q={} skip={} settle={} quiet={}",
+                            if mystery_box { "mysterybox" } else { "fix" },
+                            controller_id,
+                            diag.controller_phase,
+                            diag.root_hub_lifecycle,
+                            diag.early_fatal_rebind_streak,
+                            diag.probe_fail_streak,
+                            diag.last_probe_state,
+                            diag.recovery_quiescent_before_bind as u8,
+                            diag.recovery_skip_delayed_event_handler as u8,
+                            diag.recovery_initial_settle_ms,
+                            diag.recovery_probe_quiet_ms
+                        )
+                        .as_str(),
+                    );
+                } else {
+                    line(
+                        io,
+                        alloc::format!(
+                            "probe usb {}: controller {} chained rebind+kick",
+                            if mystery_box { "mysterybox" } else { "fix" },
+                            controller_id
+                        )
+                        .as_str(),
+                    );
+                }
+            }
+            (rebind_err, probe_err) => {
+                line(
+                    io,
+                    alloc::format!(
+                        "probe usb {}: controller {} failed rebind={:?} kick={:?}",
+                        if mystery_box { "mysterybox" } else { "fix" },
+                        controller_id,
+                        rebind_err.err(),
+                        probe_err.err()
+                    )
+                    .as_str(),
+                );
+            }
+        }
+    }
+
+    if !did_any {
+        line(
+            io,
+            alloc::format!(
+                "probe usb {}: no controller accepted the fix flow",
+                if mystery_box { "mysterybox" } else { "fix" }
+            )
+            .as_str(),
+        );
     }
 }
 
@@ -272,6 +485,23 @@ pub(crate) fn try_parse(
                 }
                 cmd_usb_status(io);
             }
+            Some("snapshot") => {
+                let controller = match args.next() {
+                    Some(raw) => {
+                        let Some(controller_id) = parse_controller_id(raw) else {
+                            print_usage(io);
+                            return ParseOutcome::Handled;
+                        };
+                        if args.next().is_some() {
+                            print_usage(io);
+                            return ParseOutcome::Handled;
+                        }
+                        Some(controller_id)
+                    }
+                    None => None,
+                };
+                cmd_usb_snapshot(io, controller);
+            }
             Some("kick") => {
                 let controller = match args.next() {
                     Some(raw) => {
@@ -305,6 +535,57 @@ pub(crate) fn try_parse(
                     None => None,
                 };
                 cmd_usb_request(io, controller, true);
+            }
+            Some("recover") => {
+                let controller = match args.next() {
+                    Some(raw) => {
+                        let Some(controller_id) = parse_controller_id(raw) else {
+                            print_usage(io);
+                            return ParseOutcome::Handled;
+                        };
+                        if args.next().is_some() {
+                            print_usage(io);
+                            return ParseOutcome::Handled;
+                        }
+                        Some(controller_id)
+                    }
+                    None => None,
+                };
+                cmd_usb_recover(io, controller);
+            }
+            Some("fix") => {
+                let controller = match args.next() {
+                    Some(raw) => {
+                        let Some(controller_id) = parse_controller_id(raw) else {
+                            print_usage(io);
+                            return ParseOutcome::Handled;
+                        };
+                        if args.next().is_some() {
+                            print_usage(io);
+                            return ParseOutcome::Handled;
+                        }
+                        Some(controller_id)
+                    }
+                    None => None,
+                };
+                cmd_usb_fix(io, controller, false);
+            }
+            Some("mysterybox") => {
+                let controller = match args.next() {
+                    Some(raw) => {
+                        let Some(controller_id) = parse_controller_id(raw) else {
+                            print_usage(io);
+                            return ParseOutcome::Handled;
+                        };
+                        if args.next().is_some() {
+                            print_usage(io);
+                            return ParseOutcome::Handled;
+                        }
+                        Some(controller_id)
+                    }
+                    None => None,
+                };
+                cmd_usb_fix(io, controller, true);
             }
             Some(_) => print_usage(io),
         },
