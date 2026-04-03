@@ -199,6 +199,12 @@ struct IdentifyControllerInfo {
     nn: u32,
 }
 
+struct QueueBringUpInfo {
+    nsid: u32,
+    blocks: u64,
+    block_size: u32,
+}
+
 struct NvmeQueue {
     depth: u16,
     sq_phys: u64,
@@ -312,6 +318,16 @@ impl NvmeQueue {
             self.cq_phase = !self.cq_phase;
         }
         self.cq_head = next;
+    }
+
+    fn reset_state(&mut self) {
+        let sq_bytes = (self.depth as usize) * Self::sq_entry_size();
+        let cq_bytes = (self.depth as usize) * Self::cq_entry_size();
+        self._sq_mem.zero_range(sq_bytes);
+        self._cq_mem.zero_range(cq_bytes);
+        self.sq_tail = 0;
+        self.cq_head = 0;
+        self.cq_phase = true;
     }
 }
 
@@ -874,7 +890,20 @@ impl NvmeController {
             cc &= !1;
         }
         self.write32(NVME_REG_CC, cc);
-        self.spin_wait_ready(enable, 2000)
+        self.spin_wait_ready(enable, 2000)?;
+
+        let csts = self.reg32(NVME_REG_CSTS);
+        if enable && (csts & 0x2) != 0 {
+            crate::log!(
+                "nvme: {} controller entered fatal status during enable csts=0x{:08X}\n",
+                self.pci,
+                csts
+            );
+            self.dump_regs("enable_fatal_status");
+            return Err(block::Error::Io);
+        }
+
+        Ok(())
     }
 
     fn init_with_io_depth(
@@ -944,7 +973,12 @@ impl NvmeController {
         };
 
         // Disable before reconfiguration.
-        let _ = ctrl.set_enabled(false);
+        if let Err(e) = ctrl.set_enabled(false) {
+            nvme_verbose_log!("nvme: {} disable before reconfig returned {:?}\n", pci, e);
+        }
+
+        ctrl.admin.reset_state();
+        ctrl.io.reset_state();
 
         // Program admin queues.
         let aqa = ((ctrl.admin.depth as u32 - 1) << 16) | ((ctrl.admin.depth as u32 - 1) & 0xFFFF);
@@ -957,6 +991,8 @@ impl NvmeController {
         let cc = (mps << 7) | (6u32 << 16) | (4u32 << 20) | 1;
         ctrl.write32(NVME_REG_CC, cc);
         ctrl.spin_wait_ready(true, 2000)?;
+        ctrl.db_write_cq_head(NVME_ADMIN_QID, 0);
+        ctrl.db_write_sq_tail(NVME_ADMIN_QID, 0);
 
         // Request at least one IO submission/completion queue pair.
         // Some controllers/emulators require Set Features (Number of Queues) before IO queues work.
@@ -988,15 +1024,6 @@ impl NvmeController {
             // Some physical controllers seem to need a moment after a fresh IO queue
             // pair is created with IRQ delivery armed, even when we poll for completions.
             let _ = crate::wait::spin_until_timeout(20, || false);
-        }
-
-        // Identify controller once to grab a serial string (optional).
-        if let Ok(ctrl_info) = ctrl.identify_controller_info() {
-            ctrl.max_transfer_bytes =
-                Self::mdts_to_max_transfer_bytes(ctrl.page_size_bytes(), ctrl_info.mdts);
-            if !ctrl_info.serial.is_empty() {
-                ctrl.serial = Some(ctrl_info.serial);
-            }
         }
 
         Ok(ctrl)
@@ -1841,7 +1868,11 @@ fn io_selftest_read(
     ok
 }
 
-fn io_selftest_flush(ctrl: &mut NvmeController, pci_addr: block::PciAddress, nsid: u32) -> bool {
+fn io_selftest_flush(
+    ctrl: &mut NvmeController,
+    pci_addr: block::PciAddress,
+    nsid: u32,
+) -> core::result::Result<(), block::Error> {
     match ctrl.io_flush_sync(nsid, 2000) {
         Ok(cpl) => {
             if !cpl.is_success() {
@@ -1855,13 +1886,53 @@ fn io_selftest_flush(ctrl: &mut NvmeController, pci_addr: block::PciAddress, nsi
             } else {
                 nvme_verbose_log!("nvme: {} io-selftest flush ok\n", pci_addr);
             }
-            true
+            Ok(())
         }
         Err(e) => {
             crate::log!("nvme: {} io-selftest flush failed: {:?}\n", pci_addr, e);
-            false
+            Err(e)
         }
     }
+}
+
+fn verify_queue_bringup(
+    ctrl: &mut NvmeController,
+    pci_addr: block::PciAddress,
+) -> core::result::Result<QueueBringUpInfo, block::Error> {
+    let ctrl_info = ctrl.identify_controller_info()?;
+    ctrl.max_transfer_bytes =
+        NvmeController::mdts_to_max_transfer_bytes(ctrl.page_size_bytes(), ctrl_info.mdts);
+    if !ctrl_info.serial.is_empty() {
+        ctrl.serial = Some(ctrl_info.serial);
+    }
+
+    let nsid = ctrl.identify_first_active_namespace(ctrl_info.nn)?;
+    let (blocks, block_size) = ctrl.identify_namespace(nsid)?;
+    if blocks == 0 || block_size == 0 {
+        crate::log!(
+            "nvme: {} bring-up verify found invalid namespace nsid={} blocks={} block_size={}\n",
+            pci_addr,
+            nsid,
+            blocks,
+            block_size
+        );
+        return Err(block::Error::Corrupted);
+    }
+
+    io_selftest_flush(ctrl, pci_addr, nsid)?;
+    nvme_verbose_log!(
+        "nvme: {} queue bring-up verified admin=identify io=flush nsid={} blocks={} block_size={}\n",
+        pci_addr,
+        nsid,
+        blocks,
+        block_size
+    );
+
+    Ok(QueueBringUpInfo {
+        nsid,
+        blocks,
+        block_size,
+    })
 }
 
 pub fn probe_once() {
@@ -2056,42 +2127,13 @@ pub fn probe_once() {
             }
         };
 
-        let ctrl_info = match ctrl.identify_controller_info() {
-            Ok(info) => info,
-            Err(e) => {
-                crate::log!("nvme: {} identify controller failed: {:?}\n", pci_addr, e);
-                continue;
-            }
-        };
+        let mut bringup = verify_queue_bringup(&mut ctrl, pci_addr);
 
-        let mut nsid = match ctrl.identify_first_active_namespace(ctrl_info.nn) {
-            Ok(id) => id,
-            Err(e) => {
-                crate::log!("nvme: {} no active namespace found: {:?}\n", pci_addr, e);
-                continue;
-            }
-        };
-
-        // Register the first active namespace.
-        let (mut blocks, mut block_size) = match ctrl.identify_namespace(nsid) {
-            Ok(v) => v,
-            Err(e) => {
-                crate::log!("nvme: {} identify namespace {} failed: {:?}\n", pci_addr, nsid, e);
-                continue;
-            }
-        };
-        if blocks == 0 || block_size == 0 {
-            crate::log!("nvme: {} namespace {} has invalid capacity\n", pci_addr, nsid);
-            continue;
-        }
-
-        // Test gate: the IO queue should complete a no-data command (FLUSH).
-        // On failure, do one bounded best-effort controller reset/re-init before giving up.
-        let mut io_ready = io_selftest_flush(&mut ctrl, pci_addr, nsid);
-
-        if !io_ready {
+        if let Err(e) = &bringup {
+            crate::log!("nvme: {} queue bring-up verify failed: {:?}\n", pci_addr, e);
+            ctrl.dump_regs("queue_bringup_verify_failed");
             crate::log!(
-                "nvme: {} io-selftest failed; best-effort reset + IRQ-armed IO CQ re-init attempt\n",
+                "nvme: {} queue bring-up verify failed; best-effort reset + polled IO CQ re-init attempt\n",
                 pci_addr
             );
 
@@ -2101,28 +2143,25 @@ pub fn probe_once() {
                 mmio_ptr,
                 pci_addr,
                 NvmeController::IO_Q_DEPTH_DEFAULT,
-                true,
+                false,
             ) {
                 Ok(mut retry_ctrl) => {
-                    if let Ok(retry_info) = retry_ctrl.identify_controller_info()
-                        && let Ok(retry_nsid) =
-                            retry_ctrl.identify_first_active_namespace(retry_info.nn)
-                        && let Ok((retry_blocks, retry_block_size)) =
-                            retry_ctrl.identify_namespace(retry_nsid)
-                        && retry_blocks != 0
-                        && retry_block_size != 0
-                    {
-                        let retry_ready = io_selftest_flush(&mut retry_ctrl, pci_addr, retry_nsid);
-                        if retry_ready {
+                    match verify_queue_bringup(&mut retry_ctrl, pci_addr) {
+                        Ok(retry_bringup) => {
                             crate::log!(
-                                "nvme: {} best-effort IRQ-armed retry recovered IO queue\n",
+                                "nvme: {} best-effort polled retry recovered queue bring-up\n",
                                 pci_addr
                             );
                             ctrl = retry_ctrl;
-                            nsid = retry_nsid;
-                            blocks = retry_blocks;
-                            block_size = retry_block_size;
-                            io_ready = true;
+                            bringup = Ok(retry_bringup);
+                        }
+                        Err(e) => {
+                            crate::log!(
+                                "nvme: {} best-effort re-verify failed: {:?}\n",
+                                pci_addr,
+                                e
+                            );
+                            retry_ctrl.dump_regs("queue_bringup_retry_failed");
                         }
                     }
                 }
@@ -2132,10 +2171,26 @@ pub fn probe_once() {
             }
         }
 
-        if !io_ready {
+        let bringup = match bringup {
+            Ok(info) => info,
+            Err(_) => {
+                crate::log!(
+                    "nvme: {} queue bring-up failed after best-effort reset; skipping registration\n",
+                    pci_addr
+                );
+                continue;
+            }
+        };
+
+        let nsid = bringup.nsid;
+        let blocks = bringup.blocks;
+        let block_size = bringup.block_size;
+
+        if blocks == 0 || block_size == 0 {
             crate::log!(
-                "nvme: {} io-selftest failed after best-effort reset; skipping registration\n",
-                pci_addr
+                "nvme: {} namespace {} has invalid capacity after queue bring-up verify\n",
+                pci_addr,
+                nsid
             );
             continue;
         }
