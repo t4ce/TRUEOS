@@ -19,7 +19,8 @@ pub(crate) use intel_guc::ready as guc_ready;
 pub(crate) use intel_guc::status as guc_status;
 pub(crate) use intel_igpu770::{
     Igpu770WarmState, dma_cache_flush_range, ggtt_bcs_smoke_test_once, ggtt_blt_smoke_test_once,
-    ggtt_map_screen_rgba_surface, rcs_clear_screen_rgba, rcs_draw_screen_rgb_triangles,
+    ggtt_map_screen_rgba_surface, rcs_clear_rgba_surface, rcs_clear_screen_rgba,
+    rcs_draw_rgba_rgb_triangles, rcs_draw_screen_rgb_triangles, rcs_draw_screen_tex_triangles,
     rcs_present_rgba_frame, warm_state,
 };
 pub(crate) use xelp_display_ngin::{
@@ -29,3 +30,4 @@ pub(crate) use xelp_media_ngin::{
     MediaKickoffState, MediaSurfaceWindow, demo_surface_window as media_demo_surface_window,
     kickoff_once as media_kickoff_once, kickoff_state as media_kickoff_state,
 };
+pub(crate) use xelp_render_ngin::TextureStoreSampleKind;
