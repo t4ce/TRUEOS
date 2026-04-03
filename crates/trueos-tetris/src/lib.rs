@@ -4,6 +4,7 @@ use core::cmp::{max, min};
 use v::vled::Rgb8;
 
 pub mod bejewled;
+pub mod chess;
 pub mod minesweeper;
 pub mod snake;
 pub mod shell;
