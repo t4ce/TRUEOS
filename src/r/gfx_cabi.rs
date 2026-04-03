@@ -1634,6 +1634,8 @@ pub mod cabi {
         cursor_tex_blob: Vec<u8>,
         base_cache_valid: bool,
         base_cache_updated_at_ticks: u64,
+        base_cache_screen_width: u32,
+        base_cache_screen_height: u32,
         base_cache_clear_rgb: u32,
         base_cache_draws: Vec<PendingDraw>,
         base_cache_rgb_blob: Vec<u8>,
@@ -1940,6 +1942,8 @@ pub mod cabi {
                 cursor_tex_blob: Vec::new(),
                 base_cache_valid: false,
                 base_cache_updated_at_ticks: 0,
+                base_cache_screen_width: 0,
+                base_cache_screen_height: 0,
                 base_cache_clear_rgb: 0x00ff_ffff,
                 base_cache_draws: Vec::new(),
                 base_cache_rgb_blob: Vec::new(),
@@ -2846,6 +2850,8 @@ pub mod cabi {
             st.cursor_rgb_blob.clear();
             st.cursor_tex_blob.clear();
             st.base_cache_valid = false;
+            st.base_cache_screen_width = 0;
+            st.base_cache_screen_height = 0;
             st.base_cache_draws.clear();
             st.base_cache_rgb_blob.clear();
             st.base_cache_tex_blob.clear();
@@ -2954,6 +2960,8 @@ pub mod cabi {
             st.cursor_rgb_blob.clear();
             st.cursor_tex_blob.clear();
             st.base_cache_valid = false;
+            st.base_cache_screen_width = 0;
+            st.base_cache_screen_height = 0;
             st.base_cache_draws.clear();
             st.base_cache_rgb_blob.clear();
             st.base_cache_tex_blob.clear();
@@ -3565,6 +3573,8 @@ pub mod cabi {
                     st.cursor_rgb_blob.clear();
                     st.cursor_tex_blob.clear();
                     st.base_cache_valid = false;
+                    st.base_cache_screen_width = 0;
+                    st.base_cache_screen_height = 0;
                     st.base_cache_draws.clear();
                     st.base_cache_rgb_blob.clear();
                     st.base_cache_tex_blob.clear();
@@ -4398,10 +4408,9 @@ pub mod cabi {
         let mut submitted_passes = 0usize;
         let mut screenshot_overlay_extent: Option<(u32, u32)> = None;
 
-        let end_frame_guard = EndFrameProgressGuard::new();
-        let Some(ret) = crate::gfx::with_context_tag(
-            crate::gfx::SystemLockOwner::EndFrame,
-            |ctx| {
+        let Some(ret) = ({
+            let _end_frame_guard = EndFrameProgressGuard::new();
+            crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::EndFrame, |ctx| {
                 let (_p, _v, need_set_viewport) = match ensure_gfx_resources(ctx, 0) {
                     Some(v) => v,
                     None => return -1,
@@ -4824,11 +4833,10 @@ pub mod cabi {
                     return -11;
                 }
                 0
-            },
-        ) else {
+            })
+        }) else {
             return -13;
         };
-        drop(end_frame_guard);
 
         if ret == 0 {
             let mut st = GFX_CABI_STATE.lock();
@@ -4838,6 +4846,10 @@ pub mod cabi {
             if is_screen_present_frame {
                 st.base_cache_valid = true;
                 st.base_cache_updated_at_ticks = embassy_time_driver::now();
+                let (screen_w, screen_h) = screenshot_overlay_extent
+                    .unwrap_or((st.swapchain_desc.extent.width, st.swapchain_desc.extent.height));
+                st.base_cache_screen_width = screen_w;
+                st.base_cache_screen_height = screen_h;
                 st.base_cache_clear_rgb = clear_rgb;
                 st.base_cache_draws = draws.clone();
                 st.base_cache_rgb_blob = rgb_src.clone();
