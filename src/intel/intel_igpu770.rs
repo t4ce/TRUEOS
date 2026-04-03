@@ -4,6 +4,7 @@ use core::{
 };
 
 use spin::Mutex;
+use trueos_gfx_core::{BlendDesc, RGB_VERTEX_SIZE, ScissorRect};
 
 use super::IntelDeviceInfo;
 use super::intel_770_registers;
@@ -39,6 +40,7 @@ const GPU_VA_BATCH_BASE: u64 = 0x0083_0000;
 const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
 const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
+const GPU_VA_SCREEN_SURFACE_BASE: u64 = 0x0200_0000;
 const BCS_RING_BASE: usize = 0x0002_2000;
 const BCS_RING_TAIL: usize = BCS_RING_BASE + 0x30;
 const BCS_RING_HEAD: usize = BCS_RING_BASE + 0x34;
@@ -161,7 +163,14 @@ const BCS_EXEC_RESULT_POST_COPY: u32 = 0x1CE0_BC52;
 const BCS_EXEC_RESULT_DONE: u32 = 0x1CE0_BC53;
 const RCS_PRESENT_RESULT_START_BASE: u32 = 0xC0DE_8F00;
 const RCS_PRESENT_RESULT_BASE: u32 = 0xC0DE_9000;
-const RCS_PRESENT_MAX_CHUNK_PIXELS: usize = 256;
+const RCS_CLEAR_RESULT_START_BASE: u32 = 0xC0DE_9800;
+const RCS_CLEAR_RESULT_BASE: u32 = 0xC0DE_9C00;
+const RCS_RGB_DRAW_RESULT_START_BASE: u32 = 0xC0DE_A000;
+const RCS_RGB_DRAW_RESULT_BASE: u32 = 0xC0DE_A800;
+const RCS_PRESENT_MAX_CHUNK_PIXELS: usize = 2048;
+const RCS_PRESENT_POLL_ITERS_MIN: usize = BLT_POLL_ITERS;
+const RCS_PRESENT_POLL_ITERS_MAX: usize = BLT_POLL_ITERS * 8;
+const RCS_PRESENT_POLL_ITERS_PER_PIXEL: usize = 2;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
 const GEN8_CTX_VALID: u32 = 1 << 0;
 const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
@@ -255,6 +264,21 @@ fn ring_head_addr(value: u32) -> u32 {
 #[inline]
 fn ring_tail_addr(value: u32) -> u32 {
     value & 0x001F_FFF8
+}
+
+#[inline]
+fn rgba_len(width: u32, height: u32) -> Option<usize> {
+    (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)
+}
+
+#[inline]
+fn rcs_present_poll_iters(chunk_pixels: usize) -> usize {
+    let scaled = chunk_pixels
+        .saturating_mul(RCS_PRESENT_POLL_ITERS_PER_PIXEL)
+        .max(RCS_PRESENT_POLL_ITERS_MIN);
+    scaled.min(RCS_PRESENT_POLL_ITERS_MAX)
 }
 
 fn log_rcs_regs(warm: Igpu770WarmState, label: &str) {
@@ -1721,6 +1745,15 @@ fn ggtt_map_plan_aperture_backed(
     })
 }
 
+fn ggtt_map_plan_heap_target(
+    target_ptr: *const u8,
+    size: usize,
+    gpu_addr: u64,
+) -> Option<GgttMapPlan> {
+    let phys = crate::phys::virt_to_phys_checked(target_ptr)?;
+    ggtt_map_plan_system_ram(phys, size, gpu_addr)
+}
+
 fn log_ggtt_map_plan(label: &str, plan: GgttMapPlan) {
     crate::log!(
         "intel/igpu770: ggtt-plan label={} gpu=0x{:X} phys=0x{:X} size=0x{:X} pages={} aperture_backed={}\n",
@@ -1815,6 +1848,23 @@ fn ggtt_program_plan(label: &str, warm: Igpu770WarmState, plan: GgttMapPlan) -> 
     true
 }
 
+fn ggtt_program_plan_silent(warm: Igpu770WarmState, plan: GgttMapPlan) -> bool {
+    let mut page = 0usize;
+    while page < plan.pages {
+        let gpu_addr = plan
+            .gpu_addr
+            .saturating_add((page as u64).saturating_mul(GGTT_PAGE_BYTES));
+        let phys = plan
+            .phys
+            .saturating_add((page as u64).saturating_mul(GGTT_PAGE_BYTES));
+        if ggtt_write_pte(warm, gpu_addr, phys).is_none() {
+            return false;
+        }
+        page += 1;
+    }
+    true
+}
+
 pub(super) fn ggtt_map_system_ram_range(
     label: &str,
     warm: Igpu770WarmState,
@@ -1834,6 +1884,31 @@ pub(super) fn ggtt_map_system_ram_range(
     };
     log_ggtt_map_plan(label, plan);
     ggtt_program_plan(label, warm, plan)
+}
+
+pub(crate) fn ggtt_map_screen_rgba_surface(
+    target_rgba: &[u8],
+    width: u32,
+    height: u32,
+    gpu_addr: u64,
+) -> bool {
+    let Some(warm) = warm_state() else {
+        return false;
+    };
+    let target_len = rgba_len(width, height).unwrap_or(0);
+    if target_len == 0 || target_rgba.len() < target_len {
+        return false;
+    }
+    let Some(plan) = ggtt_map_plan_heap_target(target_rgba.as_ptr(), target_len, gpu_addr) else {
+        return false;
+    };
+
+    let _ = forcewake_all_acquire(warm);
+    if !ggtt_program_plan_silent(warm, plan) {
+        return false;
+    }
+    let _ = ggtt_invalidate(warm);
+    true
 }
 
 #[inline]
@@ -3253,9 +3328,10 @@ pub(crate) fn rcs_present_rgba_frame(rgba: &[u8], width: usize, height: usize) -
         execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
         let _ = mmio_write32(warm, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
 
+        let poll_iters_budget = rcs_present_poll_iters(chunk_pixels);
         let mut completed = false;
         let mut iter = 0usize;
-        while iter < BLT_POLL_ITERS {
+        while iter < poll_iters_budget {
             let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
             if result0 == done_value {
                 completed = true;
@@ -3273,14 +3349,16 @@ pub(crate) fn rcs_present_rgba_frame(rgba: &[u8], width: usize, height: usize) -
             } else if result0 == done_value {
                 "done"
             } else if result0 == 0 {
-                "none"
+                "never-started"
             } else {
                 "other"
             };
             crate::log!(
-                "intel/igpu770: rcs-present chunk={} timeout iters={} result0=0x{:08X} start=0x{:08X} expect=0x{:08X} phase={} batch_tail=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
+                "intel/igpu770: rcs-present chunk={} timeout iters={} budget={} pixels={} result0=0x{:08X} start=0x{:08X} expect=0x{:08X} phase={} batch_tail=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
                 chunk_idx,
                 iter,
+                poll_iters_budget,
+                chunk_pixels,
                 result0,
                 start_value,
                 done_value,
@@ -3312,17 +3390,366 @@ pub(crate) fn rcs_present_rgba_frame(rgba: &[u8], width: usize, height: usize) -
 
     let success = !chunk_fail && completed_pixels >= frame_pixels;
     crate::log!(
-        "intel/igpu770: rcs-present summary success={} size={}x{} chunks={} completed_pixels={} total_pixels={} dst_gpu=0x{:X} pitch=0x{:X}\n",
+        "intel/igpu770: rcs-present summary success={} size={}x{} chunks={} completed_pixels={} total_pixels={} chunk_budget_pixels={} dst_gpu=0x{:X} pitch=0x{:X}\n",
         success as u8,
         copy_w,
         copy_h,
         chunk_idx,
         completed_pixels,
         frame_pixels,
+        RCS_PRESENT_MAX_CHUNK_PIXELS,
         dst_gpu_addr,
         warm.limine_fb_pitch
     );
     success
+}
+
+pub(crate) fn rcs_draw_screen_rgb_triangles(
+    target_rgba: &[u8],
+    vertices: &[u8],
+    width: u32,
+    height: u32,
+    target_gpu_addr: u64,
+    scissor: Option<ScissorRect>,
+    blend: BlendDesc,
+) -> bool {
+    if blend.enabled {
+        return false;
+    }
+    if vertices.is_empty() || !vertices.len().is_multiple_of(3 * RGB_VERTEX_SIZE) {
+        return false;
+    }
+
+    let Some(warm) = warm_state() else {
+        return false;
+    };
+    if !intel_guc::ready() {
+        return false;
+    }
+
+    ggtt_map_smoke_objects_once();
+
+    let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE)
+    else {
+        return false;
+    };
+    let Some(context) =
+        ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
+    else {
+        return false;
+    };
+    let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE)
+    else {
+        return false;
+    };
+    let target_len = rgba_len(width, height).unwrap_or(0);
+    if target_len == 0 || target_rgba.len() < target_len {
+        return false;
+    }
+    let Some(dst) = ggtt_map_plan_heap_target(target_rgba.as_ptr(), target_len, target_gpu_addr)
+    else {
+        return false;
+    };
+    let _ = forcewake_all_acquire(warm);
+    if !ggtt_program_plan_silent(warm, dst) {
+        return false;
+    }
+    let _ = ggtt_invalidate(warm);
+
+    let copy_w = width;
+    let copy_h = height;
+    if copy_w == 0 || copy_h == 0 {
+        return false;
+    }
+
+    let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
+        return false;
+    };
+    let ring_start = ring.gpu_addr as u32;
+    if !init_gen12_lrc_context_image(warm, ring_start, BLT_RING_TAIL_BYTES, ring_ctl) {
+        return false;
+    }
+    let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(context.gpu_addr);
+    let triangle_count = vertices.len() / (3 * RGB_VERTEX_SIZE);
+
+    let mut triangle_idx = 0usize;
+    while triangle_idx < triangle_count {
+        unsafe {
+            ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+            ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        }
+
+        let batch_dwords = unsafe {
+            core::slice::from_raw_parts_mut(
+                warm.batch_virt as *mut u32,
+                warm.batch_len / core::mem::size_of::<u32>(),
+            )
+        };
+        let start_value = RCS_RGB_DRAW_RESULT_START_BASE
+            .wrapping_add(triangle_idx as u32)
+            .wrapping_add(1);
+        let done_value = RCS_RGB_DRAW_RESULT_BASE
+            .wrapping_add(triangle_idx as u32)
+            .wrapping_add(1);
+        let (batch_tail_bytes, triangle_pixels) =
+            match super::xelp_render_ngin::encode_rgb_triangle_vertices_store_batch(
+                batch_dwords,
+                vertices,
+                triangle_idx,
+                copy_w,
+                copy_h,
+                scissor,
+                dst.gpu_addr,
+                copy_w as usize * 4,
+                GPU_VA_RESULT_BASE,
+                start_value,
+                done_value,
+            ) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+
+        dma_cache_flush(warm.batch_virt as *const u8, batch_tail_bytes);
+        dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+        let ring_tail_bytes = build_ring_batch_start(warm, batch.gpu_addr);
+
+        let _ = forcewake_all_acquire(warm);
+        let _ = mmio_write32(
+            warm,
+            RCS_RING_MODE_GEN7,
+            masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE),
+        );
+        let ctx_ctl_after = masked_bits_update(
+            CTX_CTRL_RS_CTX_ENABLE,
+            CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+                | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+                | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+        );
+        let ctx_ctl_ref_after = masked_bits_update(
+            CTX_CTRL_RS_CTX_ENABLE,
+            CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+                | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+                | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+        );
+        let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
+        let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_ref_after);
+
+        if !init_gen12_lrc_context_image(warm, ring_start, ring_tail_bytes as u32, ring_ctl) {
+            return false;
+        }
+
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
+        let _ = mmio_write32(warm, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+
+        let poll_iters_budget = rcs_present_poll_iters(triangle_pixels);
+        let mut completed = false;
+        let mut iter = 0usize;
+        while iter < poll_iters_budget {
+            let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
+            if result0 == done_value {
+                completed = true;
+                break;
+            }
+            core::hint::spin_loop();
+            iter += 1;
+        }
+
+        dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+        let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
+        if !completed || result0 != done_value {
+            crate::log!(
+                "intel/igpu770: rcs-rgb-draw triangle={} timeout iters={} budget={} pixels={} result0=0x{:08X} start=0x{:08X} expect=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
+                triangle_idx,
+                iter,
+                poll_iters_budget,
+                triangle_pixels,
+                result0,
+                start_value,
+                done_value,
+                mmio_read32(warm, RCS_RING_HEAD),
+                mmio_read32(warm, RCS_RING_TAIL),
+                mmio_read32(warm, RCS_RING_ACTHD),
+                mmio_read32(warm, RCS_RING_IPEIR),
+                mmio_read32(warm, RCS_RING_IPEHR)
+            );
+            return false;
+        }
+
+        triangle_idx = triangle_idx.saturating_add(1);
+    }
+
+    if triangle_count <= 4 || triangle_count.is_multiple_of(64) {
+        crate::log!(
+            "intel/igpu770: rcs-rgb-draw summary success=1 triangles={} size={}x{} dst_gpu=0x{:X}\n",
+            triangle_count,
+            copy_w,
+            copy_h,
+            dst.gpu_addr
+        );
+    }
+
+    true
+}
+
+pub(crate) fn rcs_clear_screen_rgba(
+    target_rgba: &[u8],
+    width: u32,
+    height: u32,
+    target_gpu_addr: u64,
+    rgb: u32,
+) -> bool {
+    let Some(warm) = warm_state() else {
+        return false;
+    };
+    if !intel_guc::ready() {
+        return false;
+    }
+
+    let target_len = rgba_len(width, height).unwrap_or(0);
+    if target_len == 0 || target_rgba.len() < target_len {
+        return false;
+    }
+
+    ggtt_map_smoke_objects_once();
+
+    let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE)
+    else {
+        return false;
+    };
+    let Some(context) =
+        ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
+    else {
+        return false;
+    };
+    let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE)
+    else {
+        return false;
+    };
+    let Some(dst) = ggtt_map_plan_heap_target(target_rgba.as_ptr(), target_len, target_gpu_addr)
+    else {
+        return false;
+    };
+    let _ = forcewake_all_acquire(warm);
+    if !ggtt_program_plan_silent(warm, dst) {
+        return false;
+    }
+    let _ = ggtt_invalidate(warm);
+
+    let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
+        return false;
+    };
+    let ring_start = ring.gpu_addr as u32;
+    if !init_gen12_lrc_context_image(warm, ring_start, BLT_RING_TAIL_BYTES, ring_ctl) {
+        return false;
+    }
+    let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(context.gpu_addr);
+
+    let total_pixels = width as usize * height as usize;
+    let mut completed_pixels = 0usize;
+    let mut chunk_idx = 0usize;
+    while completed_pixels < total_pixels {
+        unsafe {
+            ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+            ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        }
+
+        let batch_dwords = unsafe {
+            core::slice::from_raw_parts_mut(
+                warm.batch_virt as *mut u32,
+                warm.batch_len / core::mem::size_of::<u32>(),
+            )
+        };
+        let start_value = RCS_CLEAR_RESULT_START_BASE
+            .wrapping_add(chunk_idx as u32)
+            .wrapping_add(1);
+        let done_value = RCS_CLEAR_RESULT_BASE
+            .wrapping_add(chunk_idx as u32)
+            .wrapping_add(1);
+        let (batch_tail_bytes, chunk_pixels) =
+            match super::xelp_render_ngin::encode_solid_rgb_store_batch_chunk(
+                batch_dwords,
+                width as usize,
+                height as usize,
+                RCS_PRESENT_MAX_CHUNK_PIXELS,
+                dst.gpu_addr,
+                width as usize * 4,
+                completed_pixels,
+                GPU_VA_RESULT_BASE,
+                start_value,
+                done_value,
+                rgb,
+            ) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+
+        dma_cache_flush(warm.batch_virt as *const u8, batch_tail_bytes);
+        dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+        let ring_tail_bytes = build_ring_batch_start(warm, batch.gpu_addr);
+
+        let _ = forcewake_all_acquire(warm);
+        let _ = mmio_write32(
+            warm,
+            RCS_RING_MODE_GEN7,
+            masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE),
+        );
+        let ctx_ctl_after = masked_bits_update(
+            CTX_CTRL_RS_CTX_ENABLE,
+            CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+                | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+                | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+        );
+        let ctx_ctl_ref_after = masked_bits_update(
+            CTX_CTRL_RS_CTX_ENABLE,
+            CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+                | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+                | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+        );
+        let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
+        let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_ref_after);
+
+        if !init_gen12_lrc_context_image(warm, ring_start, ring_tail_bytes as u32, ring_ctl) {
+            return false;
+        }
+
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
+        let _ = mmio_write32(warm, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+
+        let poll_iters_budget = rcs_present_poll_iters(chunk_pixels);
+        let mut completed = false;
+        let mut iter = 0usize;
+        while iter < poll_iters_budget {
+            let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
+            if result0 == done_value {
+                completed = true;
+                break;
+            }
+            core::hint::spin_loop();
+            iter += 1;
+        }
+
+        dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+        let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
+        if !completed || result0 != done_value {
+            return false;
+        }
+
+        completed_pixels = completed_pixels.saturating_add(chunk_pixels);
+        chunk_idx = chunk_idx.saturating_add(1);
+    }
+
+    crate::log!(
+        "intel/igpu770: rcs-clear summary success=1 size={}x{} chunks={} rgb=0x{:06X} dst_gpu=0x{:X}\n",
+        width,
+        height,
+        chunk_idx,
+        rgb & 0x00FF_FFFF,
+        dst.gpu_addr
+    );
+
+    true
 }
 
 pub fn warm_once(info: IntelDeviceInfo) {

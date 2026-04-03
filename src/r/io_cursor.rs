@@ -201,14 +201,13 @@ pub fn kernel_cursor_overlay_tick() -> i32 {
         return 0;
     }
 
-    let Some((vp_w, vp_h)) =
-        crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::CursorQueryViewport, |ctx| {
-            let e = ctx.swapchain_desc().extent;
-            (e.width, e.height)
-        })
-    else {
-        return -12;
+    let (vp_w, vp_h) = {
+        let st = GFX_CABI_STATE.lock();
+        (st.base_cache_screen_width, st.base_cache_screen_height)
     };
+    if vp_w == 0 || vp_h == 0 {
+        return 0;
+    }
 
     let mut draws: Vec<PendingDraw> = Vec::new();
     let mut rgb_blob: Vec<u8> = Vec::new();
