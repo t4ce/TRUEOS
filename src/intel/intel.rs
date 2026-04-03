@@ -684,6 +684,30 @@ pub fn first_claimed_device() -> Option<IntelDeviceInfo> {
     *FIRST_DEVICE.lock()
 }
 
+pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
+    let info = first_claimed_device()?;
+    let mut fallback = None;
+
+    for pipe in 0..INTEL_SCANOUT_PIPES.len() {
+        let plane0 = scanout_plane(pipe, 0);
+        let pipe_src = mmio_read32(info, plane0.pipe_src_off);
+        let trans_ddi = mmio_read32(info, plane0.trans_ddi_func_ctl_off);
+        let dims = plausible_pipe_src(pipe_src)
+            .and_then(|(width, height)| Some((u32::try_from(width).ok()?, u32::try_from(height).ok()?)));
+        let Some((width, height)) = dims else {
+            continue;
+        };
+        if fallback.is_none() {
+            fallback = Some((width, height));
+        }
+        if trans_ddi != 0 {
+            return Some((width, height));
+        }
+    }
+
+    fallback
+}
+
 #[embassy_executor::task]
 pub async fn scanout_smoke_task() {
     let Some(info) = first_claimed_device() else {

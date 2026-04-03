@@ -23,27 +23,75 @@ pub async fn ui2_bgrt_demo_task() {
         crate::log!("ui2-bgrt-demo: no BGRT logo available\n");
         return;
     };
+    let width_u32: u32 = width.try_into().expect("BGRT width exceeds u32");
+    let height_u32: u32 = height.try_into().expect("BGRT height exceeds u32");
 
+    let intel_direct = crate::gfx::is_intel_active();
     let rgba = bgrt_pixels_to_rgba(pixels);
-    let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
-        "Demo BGRT",
-        crate::r::ui2::Ui2Rect {
-            x: UI2_BGRT_WINDOW_X,
-            y: UI2_BGRT_WINDOW_Y,
-            w: width as f32,
-            h: height as f32,
-        },
-        UI2_BGRT_WINDOW_Z,
-        128,
-        UI2_BGRT_TEX_ID,
-        true,
-        [0x00, 0x00, 0x00, 0x00],
-    ) else {
+    let content_rect = crate::r::ui2::Ui2Rect {
+        x: UI2_BGRT_WINDOW_X,
+        y: UI2_BGRT_WINDOW_Y,
+        w: width as f32,
+        h: height as f32,
+    };
+
+    if intel_direct {
+        let rc = unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
+                UI2_BGRT_TEX_ID,
+                width_u32,
+                height_u32,
+                rgba.as_ptr(),
+                rgba.len(),
+            )
+        };
+        if rc != 0 {
+            crate::log!(
+                "ui2-bgrt-demo: direct upload failed tex={} size={}x{} rc={}\n",
+                UI2_BGRT_TEX_ID,
+                width,
+                height,
+                rc
+            );
+            return;
+        }
+    }
+
+    let surface = if intel_direct {
+        crate::r::ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
+            "Demo BGRT",
+            content_rect,
+            UI2_BGRT_WINDOW_Z,
+            128,
+            UI2_BGRT_TEX_ID,
+            true,
+            width_u32,
+            height_u32,
+        )
+    } else {
+        crate::r::ui2::Ui2SurfaceWindow::new(
+            "Demo BGRT",
+            content_rect,
+            UI2_BGRT_WINDOW_Z,
+            128,
+            UI2_BGRT_TEX_ID,
+            true,
+            [0x00, 0x00, 0x00, 0x00],
+        )
+    };
+
+    let Some(surface) = surface else {
         crate::log!("ui2-bgrt-demo: window creation failed tex={}\n", UI2_BGRT_TEX_ID);
         return;
     };
 
-    if !surface.upload_rgba(rgba.as_slice(), "ui2-bgrt-demo-upload") {
+    let upload_ok = if intel_direct {
+        true
+    } else {
+        surface.upload_rgba(rgba.as_slice(), "ui2-bgrt-demo-upload")
+    };
+
+    if !upload_ok {
         crate::log!(
             "ui2-bgrt-demo: upload failed window={} tex={} size={}x{}\n",
             surface.window_id(),
@@ -55,11 +103,12 @@ pub async fn ui2_bgrt_demo_task() {
     }
 
     crate::log!(
-        "ui2-bgrt-demo: window={} tex={} size={}x{}\n",
+        "ui2-bgrt-demo: window={} tex={} size={}x{} mode={}\n",
         surface.window_id(),
         surface.tex_id(),
         width,
-        height
+        height,
+        if intel_direct { "direct" } else { "queued" }
     );
 
     loop {

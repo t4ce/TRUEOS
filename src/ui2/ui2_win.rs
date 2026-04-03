@@ -1079,6 +1079,47 @@ impl Ui2SurfaceWindow {
         verts: &[u8],
         repaint_reason: &'static str,
     ) -> bool {
+        let mut existing_w = 0u32;
+        let mut existing_h = 0u32;
+        let tex_dims_ok = unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_texture_dimensions(
+                self.tex_id,
+                &mut existing_w as *mut u32,
+                &mut existing_h as *mut u32,
+            ) == 0
+        } && existing_w == self.width
+            && existing_h == self.height;
+        if !tex_dims_ok {
+            let fill = [
+                ((clear_rgb >> 16) & 0xFF) as u8,
+                ((clear_rgb >> 8) & 0xFF) as u8,
+                (clear_rgb & 0xFF) as u8,
+                0xFF,
+            ];
+            let pixels = alloc::vec![fill; (self.width as usize).saturating_mul(self.height as usize)]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<u8>>();
+            if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+                self.tex_id,
+                self.width.max(1),
+                self.height.max(1),
+                pixels.as_slice(),
+                0,
+                "ui2-surface-rgb-render-target-repair",
+            ) {
+                crate::log!(
+                    "ui2-surface-window: rgb render target repair failed window={} tex={} size={}x{} have={}x{}\n",
+                    self.window_id,
+                    self.tex_id,
+                    self.width,
+                    self.height,
+                    existing_w,
+                    existing_h
+                );
+                return false;
+            }
+        }
         let repaint_window_id = if is_window_minimized(self.window_id) {
             0
         } else {
@@ -1160,6 +1201,42 @@ impl Ui2SurfaceWindow {
                 self.tex_id
             );
             return false;
+        }
+        true
+    }
+
+    #[allow(dead_code)]
+    pub fn upload_rgba_now(&self, pixels: &[u8], repaint_reason: &'static str) -> bool {
+        let expected = self.width as usize * self.height as usize * 4;
+        if pixels.len() != expected {
+            crate::log!(
+                "ui2-surface-window: upload size mismatch tex={} got={} expected={}\n",
+                self.tex_id,
+                pixels.len(),
+                expected
+            );
+            return false;
+        }
+        let rc = unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
+                self.tex_id,
+                self.width,
+                self.height,
+                pixels.as_ptr(),
+                pixels.len(),
+            )
+        };
+        if rc != 0 {
+            crate::log!(
+                "ui2-surface-window: direct rgba upload failed window={} tex={} rc={}\n",
+                self.window_id,
+                self.tex_id,
+                rc
+            );
+            return false;
+        }
+        if !is_window_minimized(self.window_id) {
+            request_window_repaint(self.window_id, repaint_reason);
         }
         true
     }
