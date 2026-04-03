@@ -103,7 +103,7 @@ impl HubOp for XhciRootHub {
         async {
             let mut info = info;
             info.speed = Speed::SuperSpeedPlus;
-            debug!("Resetting all ports of xHCI Root Hub");
+            debug!("Powering xHCI Root Hub ports without blanket reset");
 
             for idx in 0..self.reg.port_register_set.len() {
                 self.reg.port_register_set.update_volatile_at(idx, |reg| {
@@ -111,13 +111,6 @@ impl HubOp for XhciRootHub {
                         trace!("Powering on port {}", idx + 1);
                         reg.portsc.set_port_power();
                     }
-                });
-            }
-
-            for idx in 0..self.reg.port_register_set.len() {
-                self.reg.port_register_set.update_volatile_at(idx, |reg| {
-                    reg.portsc.set_0_port_enabled_disabled();
-                    reg.portsc.set_port_reset();
                 });
             }
 
@@ -332,7 +325,7 @@ impl XhciRootHub {
             .collect::<Vec<_>>();
 
         for &id in &uninited {
-            info!("crabusb/xhci/hub: uninit port={} waiting for reset", id);
+            info!("crabusb/xhci/hub: uninit port={} evaluating bring-up", id);
             let i = (id - 1) as usize;
 
             let port = self.reg.port_register_set.read_volatile_at(i).portsc;
@@ -348,12 +341,36 @@ impl XhciRootHub {
                 continue;
             }
 
+            if !port.current_connect_status() {
+                info!("crabusb/xhci/hub: uninit port={} idle (not connected)", id);
+                continue;
+            }
+
+            if !port.port_enabled_disabled() {
+                info!(
+                    "crabusb/xhci/hub: uninit port={} connected but disabled; issuing targeted reset speed={}",
+                    id,
+                    port.port_speed()
+                );
+                self.debounce_port(id, true).await?;
+                self.reset_port(id, port.port_speed()).await?;
+                self.wait_for_port_enabled(id).await?;
+            }
+
             info!(
-                "crabusb/xhci/hub: uninit port={} reset complete enable={} connect={} speed={}",
+                "crabusb/xhci/hub: uninit port={} ready enable={} connect={} speed={}",
                 id,
-                port.port_enabled_disabled(),
-                port.current_connect_status(),
-                port.port_speed()
+                self.reg
+                    .port_register_set
+                    .read_volatile_at(i)
+                    .portsc
+                    .port_enabled_disabled(),
+                self.reg
+                    .port_register_set
+                    .read_volatile_at(i)
+                    .portsc
+                    .current_connect_status(),
+                self.reg.port_register_set.read_volatile_at(i).portsc.port_speed()
             );
 
             self.ports_mut()[i].state = PortState::Reseted;

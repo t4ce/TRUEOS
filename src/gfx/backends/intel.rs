@@ -370,6 +370,48 @@ impl IntelGfxBackend {
         fallback
     }
 
+    fn present_image_target(&mut self, id: ImageId) -> Result<()> {
+        self.sync_image_rgba_from_gpu(id);
+        let image = self.image(id).ok_or(Error::NotFound)?.clone();
+        if image.width == 0 || image.height == 0 {
+            return Err(Error::Invalid);
+        }
+
+        self.present_seq = self.present_seq.wrapping_add(1);
+        crate::intel::dma_cache_flush_range(image.rgba.as_ptr(), image.rgba.len());
+
+        if let Some(surface_gpu_addr) = crate::intel::primary_present_surface_gpu_addr() {
+            let mapped = crate::intel::ggtt_map_screen_rgba_surface(
+                image.rgba.as_slice(),
+                image.width,
+                image.height,
+                surface_gpu_addr,
+            );
+            if mapped
+                && crate::intel::plane_rebind_present_surface(
+                    surface_gpu_addr,
+                    image.width,
+                    image.height,
+                    image.width.saturating_mul(4),
+                )
+            {
+                if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
+                    crate::log!(
+                        "intel/gfx-backend: present seq={} mode=plane-rebind-image-target size={}x{} src_gpu=0x{:X} gpu=0x{:X}\n",
+                        self.present_seq,
+                        image.width,
+                        image.height,
+                        image.gpu_addr,
+                        surface_gpu_addr
+                    );
+                }
+                return Ok(());
+            }
+        }
+
+        Err(Error::Unsupported)
+    }
+
     fn draw_rgb(
         &mut self,
         target: RenderTarget,
@@ -424,9 +466,7 @@ impl IntelGfxBackend {
                 RenderTarget::Screen => self.screen_rgba_gpu_dirty = true,
                 RenderTarget::Image(id) => {
                     if let Some(image) = self.image_mut(id) {
-                        crate::intel::dma_cache_flush_range(image.rgba.as_ptr(), image.rgba.len());
-                        force_opaque_alpha(image.rgba.as_mut_slice());
-                        image.gpu_dirty = false;
+                        image.gpu_dirty = true;
                     }
                 }
             }
@@ -795,12 +835,7 @@ impl GfxDevice for IntelGfxBackend {
                             RenderTarget::Screen => self.screen_rgba_gpu_dirty = true,
                             RenderTarget::Image(id) => {
                                 if let Some(image) = self.image_mut(id) {
-                                    crate::intel::dma_cache_flush_range(
-                                        image.rgba.as_ptr(),
-                                        image.rgba.len(),
-                                    );
-                                    force_opaque_alpha(image.rgba.as_mut_slice());
-                                    image.gpu_dirty = false;
+                                    image.gpu_dirty = true;
                                 }
                             }
                         }
@@ -905,7 +940,11 @@ impl GfxDevice for IntelGfxBackend {
                     }
                 }
                 Command::Present => {
-                    if !matches!(target, RenderTarget::Screen) || self.present_screen().is_err() {
+                    let present_res = match target {
+                        RenderTarget::Screen => self.present_screen(),
+                        RenderTarget::Image(id) => self.present_image_target(id),
+                    };
+                    if present_res.is_err() {
                         unsupported = unsupported.saturating_add(1);
                     }
                 }
