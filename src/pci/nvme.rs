@@ -329,6 +329,13 @@ impl NvmeQueue {
         self.cq_head = 0;
         self.cq_phase = true;
     }
+
+    fn sq_entry(&self, idx: usize) -> NvmeSqe {
+        let sq_idx = idx % (self.depth as usize);
+        self._sq_mem
+            .invalidate_range(sq_idx * Self::sq_entry_size(), Self::sq_entry_size());
+        unsafe { read_volatile(self.sq_virt.add(sq_idx)) }
+    }
 }
 
 struct NvmeController {
@@ -438,14 +445,23 @@ impl NvmeController {
         let cc = self.reg32(NVME_REG_CC);
         let csts = self.reg32(NVME_REG_CSTS);
         let aqa = self.reg32(NVME_REG_AQA);
+        let asq_lo = self.reg32(NVME_REG_ASQ);
+        let asq_hi = self.reg32(NVME_REG_ASQ + 4);
+        let acq_lo = self.reg32(NVME_REG_ACQ);
+        let acq_hi = self.reg32(NVME_REG_ACQ + 4);
+        let pci_cmd =
+            crate::pci::config_read_u16_legacy(self.pci.bus, self.pci.slot, self.pci.function, 0x04);
+        let pci_sts =
+            crate::pci::config_read_u16_legacy(self.pci.bus, self.pci.slot, self.pci.function, 0x06);
         let admin_cqe = self.admin.cq_peek();
         let io_cqe = self.io.cq_peek();
+        let admin_sqe0 = self.admin.sq_entry(0);
         let admin_status = (admin_cqe.dw3 >> 16) as u16;
         let io_status = (io_cqe.dw3 >> 16) as u16;
         let admin_phase = (admin_status & 0x1) != 0;
         let io_phase = (io_status & 0x1) != 0;
         crate::log!(
-            "nvme: {} {} regs cap=0x{:016X} vs=0x{:08X} cc=0x{:08X} csts=0x{:08X} aqa=0x{:08X} dstrd={} mps={} admin[sq={} cq={} phase={}] io[sq={} cq={} phase={}] admin_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}] io_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}]\n",
+            "nvme: {} {} regs cap=0x{:016X} vs=0x{:08X} cc=0x{:08X} csts=0x{:08X} aqa=0x{:08X} asq=0x{:08X}{:08X} acq=0x{:08X}{:08X} pci_cmd=0x{:04X} pci_sts=0x{:04X} dstrd={} mps={} admin[sq={} cq={} phase={}] io[sq={} cq={} phase={}] admin_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}] io_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}] admin_sqe0=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
             self.pci,
             reason,
             cap,
@@ -453,6 +469,12 @@ impl NvmeController {
             cc,
             csts,
             aqa,
+            asq_hi,
+            asq_lo,
+            acq_hi,
+            acq_lo,
+            pci_cmd,
+            pci_sts,
             self.doorbell_stride_bytes,
             self.page_size_bytes(),
             self.admin.sq_tail,
@@ -469,6 +491,12 @@ impl NvmeController {
             io_cqe.dw3,
             io_status,
             io_phase,
+            admin_sqe0.d[0],
+            admin_sqe0.d[1],
+            admin_sqe0.d[6],
+            admin_sqe0.d[7],
+            admin_sqe0.d[10],
+            admin_sqe0.d[11],
         );
     }
 
@@ -481,7 +509,13 @@ impl NvmeController {
     }
 
     fn write64(&self, off: usize, val: u64) {
-        unsafe { write_volatile(self.mmio.as_ptr().add(off) as *mut u64, val) }
+        self.write32(off, (val & 0xFFFF_FFFF) as u32);
+        self.write32(off + 4, (val >> 32) as u32);
+    }
+
+    fn flush_posted_writes(&self) {
+        let _ = self.reg32(NVME_REG_CSTS);
+        unsafe { core::arch::x86_64::_mm_mfence() };
     }
 
     fn db_write_sq_tail(&self, qid: u16, tail: u16) {
@@ -491,7 +525,7 @@ impl NvmeController {
         // NVMe doorbell registers are write-only per spec; no readback possible.
         fence(Ordering::SeqCst);
         self.write32(offset, tail as u32);
-        unsafe { core::arch::x86_64::_mm_mfence() };
+        self.flush_posted_writes();
     }
 
     fn db_write_cq_head(&self, qid: u16, head: u16) {
@@ -501,7 +535,7 @@ impl NvmeController {
         // NVMe doorbell registers are write-only per spec; no readback possible.
         fence(Ordering::SeqCst);
         self.write32(offset, head as u32);
-        unsafe { core::arch::x86_64::_mm_mfence() };
+        self.flush_posted_writes();
     }
 
     fn rering_sq_tail(&self, qid: u16) {
@@ -890,6 +924,7 @@ impl NvmeController {
             cc &= !1;
         }
         self.write32(NVME_REG_CC, cc);
+        self.flush_posted_writes();
         self.spin_wait_ready(enable, 2000)?;
 
         let csts = self.reg32(NVME_REG_CSTS);
@@ -985,11 +1020,13 @@ impl NvmeController {
         ctrl.write32(NVME_REG_AQA, aqa);
         ctrl.write64(NVME_REG_ASQ, ctrl.admin.sq_phys);
         ctrl.write64(NVME_REG_ACQ, ctrl.admin.cq_phys);
+        ctrl.flush_posted_writes();
 
         // Set CC: enable, IO SQ/CQ entry sizes, memory page size.
         // IOSQES=6 (64B), IOCQES=4 (16B).
         let cc = (mps << 7) | (6u32 << 16) | (4u32 << 20) | 1;
         ctrl.write32(NVME_REG_CC, cc);
+        ctrl.flush_posted_writes();
         ctrl.spin_wait_ready(true, 2000)?;
         ctrl.db_write_cq_head(NVME_ADMIN_QID, 0);
         ctrl.db_write_sq_tail(NVME_ADMIN_QID, 0);
