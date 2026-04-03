@@ -462,6 +462,19 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
             PendingDraw::SetScissor { rect } => {
                 draws.push(PendingDraw::SetScissor { rect });
             }
+            PendingDraw::ClearRect {
+                rgb,
+                x,
+                y,
+                width,
+                height,
+            } => draws.push(PendingDraw::ClearRect {
+                rgb,
+                x,
+                y,
+                width,
+                height,
+            }),
             PendingDraw::Rgb {
                 blob_offset,
                 blob_len,
@@ -509,6 +522,13 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                 SetScissor {
                     rect: Option<ScissorRect>,
                 },
+                ClearRect {
+                    rgb: u32,
+                    x: u32,
+                    y: u32,
+                    width: u32,
+                    height: u32,
+                },
                 Rgb {
                     offset: u64,
                     vcount: u32,
@@ -546,6 +566,13 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                             break;
                         }
                         PendingDraw::SetScissor { .. } => {
+                            if pass_kind == 0 {
+                                draw_idx += 1;
+                                continue;
+                            }
+                            break;
+                        }
+                        PendingDraw::ClearRect { .. } => {
                             if pass_kind == 0 {
                                 draw_idx += 1;
                                 continue;
@@ -614,6 +641,21 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                         }
                         PendingDraw::SetScissor { rect } => {
                             plans.push(Plan::SetScissor { rect: *rect });
+                        }
+                        PendingDraw::ClearRect {
+                            rgb,
+                            x,
+                            y,
+                            width,
+                            height,
+                        } => {
+                            plans.push(Plan::ClearRect {
+                                rgb: *rgb,
+                                x: *x,
+                                y: *y,
+                                width: *width,
+                                height: *height,
+                            });
                         }
                         PendingDraw::Rgb {
                             blob_offset,
@@ -754,6 +796,21 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
                                 width: scissor.width,
                                 height: scissor.height,
                             })));
+                        }
+                        Plan::ClearRect {
+                            rgb,
+                            x,
+                            y,
+                            width,
+                            height,
+                        } => {
+                            cmds.push(Command::ClearRect {
+                                rgb,
+                                x,
+                                y,
+                                width,
+                                height,
+                            });
                         }
                         Plan::Rgb {
                             offset,

@@ -447,7 +447,10 @@ const MAX_DISPLAY_API_ROUTES: usize = 5;
 const MAX_DISPLAY_OBSERVE_REGS: usize = 6;
 
 const DISPLAY_PIPE_GPU_ADDR_BASE: u64 = 0x0200_0000;
-const DISPLAY_PIPE_GPU_ADDR_STRIDE: u64 = 0x0010_0000;
+const DISPLAY_PIPE_GPU_ADDR_STRIDE: u64 = 0x0080_0000;
+const DISPLAY_PIPE_STAGING_GPU_OFFSET: u64 = 0x0000_0000;
+const DISPLAY_PIPE_SHADOW_GPU_OFFSET: u64 = 0x0040_0000;
+const DISPLAY_PIPE_CURSOR_GPU_OFFSET: u64 = 0x0060_0000;
 const DISPLAY_DEFAULT_WIDTH: u32 = 1280;
 const DISPLAY_DEFAULT_HEIGHT: u32 = 720;
 const DISPLAY_DEFAULT_BPP: u32 = 32;
@@ -965,9 +968,9 @@ fn pipe_gpu_window(slot: usize) -> DisplayGpuWindowLayout {
     let base =
         DISPLAY_PIPE_GPU_ADDR_BASE + (slot as u64).saturating_mul(DISPLAY_PIPE_GPU_ADDR_STRIDE);
     DisplayGpuWindowLayout {
-        staging_gpu_addr: base,
-        shadow_state_gpu_addr: base + 0x0008_0000,
-        cursor_gpu_addr: base + 0x000C_0000,
+        staging_gpu_addr: base + DISPLAY_PIPE_STAGING_GPU_OFFSET,
+        shadow_state_gpu_addr: base + DISPLAY_PIPE_SHADOW_GPU_OFFSET,
+        cursor_gpu_addr: base + DISPLAY_PIPE_CURSOR_GPU_OFFSET,
     }
 }
 
