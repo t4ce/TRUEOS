@@ -163,14 +163,13 @@ const CRABUSB_INITIAL_SETTLE_MS: u64 = 250;
 const CRABUSB_PROBE_QUIET_MS: u64 = 150;
 const CRABUSB_INTEL_INITIAL_SETTLE_MS: u64 = 1000;
 const CRABUSB_INTEL_PROBE_QUIET_MS: u64 = 750;
-const CRABUSB_INTEL_SKIP_PROBE_EXPERIMENT: bool = true;
+const CRABUSB_INTEL_SKIP_PROBE_EXPERIMENT: bool = false;
 const CRABUSB_INTEL_SKIP_PROBE_REARM_MS: u64 = 1000;
-const CRABUSB_INTEL_SKIP_EVENT_HANDLER_EXPERIMENT: bool = true;
-const CRABUSB_INTEL_PORT_POWER_HOLDOFF_EXPERIMENT: bool = true;
+const CRABUSB_INTEL_SKIP_EVENT_HANDLER_EXPERIMENT: bool = false;
 const CRABUSB_QUICK_STOP_WINDOW_MS: u64 = 1000;
 const CRABUSB_QUICK_STOP_BACKOFF_MS: u64 = 2000;
 const CRABUSB_MAX_QUICK_STOP_REBINDS: u32 = 3;
-const CRABUSB_INTEL_QUIESCENT_EXPERIMENT: bool = true;
+const CRABUSB_INTEL_QUIESCENT_EXPERIMENT: bool = false;
 const CRABUSB_INTEL_QUIESCENT_EXPERIMENT_MS: u64 = 1500;
 const CRABUSB_INTEL_QUIESCENT_POLL_MS: u64 = 25;
 const ROOT_HUB_LIFECYCLE_INIT: u32 = 0;
@@ -194,7 +193,13 @@ fn probe_state_name(code: u32) -> &'static str {
 
 #[inline]
 fn intel_quiescent_experiment_enabled(device_id: u16) -> bool {
-    CRABUSB_INTEL_QUIESCENT_EXPERIMENT && device_id != 0x7A60
+    let _ = device_id;
+    CRABUSB_INTEL_QUIESCENT_EXPERIMENT
+}
+
+#[inline]
+fn intel_skip_event_handler_experiment(vendor_id: u16) -> bool {
+    vendor_id == 0x8086 && CRABUSB_INTEL_SKIP_EVENT_HANDLER_EXPERIMENT
 }
 
 fn cached_device_count(controller_id: usize) -> usize {
@@ -489,57 +494,6 @@ fn controller_probe_quiet_ms(vendor_id: u16) -> u64 {
     } else {
         CRABUSB_PROBE_QUIET_MS
     }
-}
-
-fn intel_skip_event_handler_experiment(vendor_id: u16) -> bool {
-    vendor_id == 0x8086 && CRABUSB_INTEL_SKIP_EVENT_HANDLER_EXPERIMENT
-}
-
-fn xhci_any_connected_root_port(controller_id: usize) -> Option<u8> {
-    let info = super::controller_by_index(controller_id)?;
-    let mmio = info.mmio_base.as_ptr() as *const u8;
-    unsafe {
-        let caplen = (read_mmio32(mmio, 0x00) & 0xFF) as usize;
-        let hcsparams1 = read_mmio32(mmio, 0x04);
-        let port_count = ((hcsparams1 >> 24) & 0xff) as usize;
-        for port_idx in 0..port_count {
-            let portsc_off = caplen + 0x400 + (port_idx * 0x10);
-            let portsc = read_mmio32(mmio, portsc_off);
-            if (portsc & 0x1) != 0 {
-                return Some((port_idx + 1) as u8);
-            }
-        }
-    }
-    None
-}
-
-fn xhci_set_all_root_port_power(controller_id: usize, enabled: bool) -> Option<usize> {
-    let info = super::controller_by_index(controller_id)?;
-    let mmio = info.mmio_base.as_ptr() as *mut u8;
-    let mut changed = 0usize;
-    unsafe {
-        let caplen = (read_mmio32(mmio.cast_const(), 0x00) & 0xFF) as usize;
-        let hcsparams1 = read_mmio32(mmio.cast_const(), 0x04);
-        let port_count = ((hcsparams1 >> 24) & 0xff) as usize;
-        const PORTSC_PP: u32 = 1 << 9;
-        for port_idx in 0..port_count {
-            let portsc_off = caplen + 0x400 + (port_idx * 0x10);
-            let mut portsc = read_mmio32(mmio.cast_const(), portsc_off);
-            let before = (portsc & PORTSC_PP) != 0;
-            if enabled {
-                portsc |= PORTSC_PP;
-            } else {
-                portsc &= !PORTSC_PP;
-            }
-            let after = (portsc & PORTSC_PP) != 0;
-            if before != after {
-                write_mmio32(mmio, portsc_off, portsc);
-                let _ = read_mmio32(mmio.cast_const(), portsc_off);
-                changed += 1;
-            }
-        }
-    }
-    Some(changed)
 }
 
 #[inline]
@@ -2882,8 +2836,7 @@ pub async fn event_pump_task(controller_id: usize) {
             Some(Event::PortChange { port }) => {
                 let first_change =
                     !ROOT_PORT_CHANGE_SEEN[controller_id].swap(true, Ordering::AcqRel);
-                let queued_probe =
-                    !PROBE_REQUESTED[controller_id].swap(true, Ordering::AcqRel);
+                let queued_probe = !PROBE_REQUESTED[controller_id].swap(true, Ordering::AcqRel);
                 if first_change || queued_probe {
                     crate::log!(
                         "crabusb: pump port change on controller {} root port {} first_change={} queued_probe={}\n",
@@ -3023,15 +2976,6 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             "initial settle window started",
         );
 
-        if info.vendor_id == 0x8086 && CRABUSB_INTEL_PORT_POWER_HOLDOFF_EXPERIMENT {
-            let changed = xhci_set_all_root_port_power(info.index, false).unwrap_or(0);
-            crate::log!(
-                "crabusb: controller {} intel port-power holdoff active changed_ports={}\n",
-                info.index,
-                changed
-            );
-        }
-
         if info.vendor_id == 0x8086 && intel_quiescent_experiment_enabled(info.device_id) {
             let masked = xhci_set_interrupter_enable(info.index, false);
             crate::log!(
@@ -3063,10 +3007,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
                         break;
                     }
                 }
-                Timer::after(EmbassyDuration::from_millis(
-                    CRABUSB_INTEL_QUIESCENT_POLL_MS,
-                ))
-                .await;
+                Timer::after(EmbassyDuration::from_millis(CRABUSB_INTEL_QUIESCENT_POLL_MS)).await;
             }
 
             if quiet_failed {
@@ -3120,45 +3061,21 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         let mut idle_ticks = 0u32;
         let mut probe_quiet_until: Option<Instant> = None;
         loop {
-            if skip_event_handler {
-                if let Some(reason) = xhci_fatal_init_state(info.index) {
-                    log_xhci_status_bits(info.index, "manual poll stopped");
-                    mark_controller_quarantined(
-                        info.index,
-                        "manual poll observed stopped without event handler",
-                    );
-                    crate::log!(
-                        "crabusb: controller {} manual poll observed fatal xhci state ({}); stopping without event handler\n",
-                        info.index,
-                        reason
-                    );
-                    break;
-                }
-
-                if let Some(port) = xhci_any_connected_root_port(info.index) {
-                    let first_change =
-                        !ROOT_PORT_CHANGE_SEEN[info.index].swap(true, Ordering::AcqRel);
-                    let queued_probe =
-                        !PROBE_REQUESTED[info.index].swap(true, Ordering::AcqRel);
-                    if first_change || queued_probe {
-                        crate::log!(
-                            "crabusb: manual root-port poll on controller {} root port {} first_change={} queued_probe={}\n",
-                            info.index,
-                            port,
-                            first_change,
-                            queued_probe
-                        );
-                    }
-                    advance_root_hub_lifecycle(
-                        info.index,
-                        ROOT_HUB_LIFECYCLE_ROOT_CHANGE,
-                        "manual root-port poll observed connection",
-                    );
-                }
-            }
-
             if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
                 if skip_event_handler {
+                    if let Some(reason) = xhci_fatal_init_state(info.index) {
+                        log_xhci_status_bits(info.index, "manual poll stopped");
+                        mark_controller_quarantined(
+                            info.index,
+                            "manual poll observed stopped without event handler",
+                        );
+                        crate::log!(
+                            "crabusb: controller {} manual poll observed fatal xhci state ({}); stopping without event handler\n",
+                            info.index,
+                            reason
+                        );
+                        break;
+                    }
                     Timer::after(EmbassyDuration::from_millis(50)).await;
                 } else {
                     let quick_stop = bind_started_at.elapsed()
