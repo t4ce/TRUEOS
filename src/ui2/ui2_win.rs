@@ -1096,10 +1096,11 @@ impl Ui2SurfaceWindow {
                 (clear_rgb & 0xFF) as u8,
                 0xFF,
             ];
-            let pixels = alloc::vec![fill; (self.width as usize).saturating_mul(self.height as usize)]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<u8>>();
+            let pixels =
+                alloc::vec![fill; (self.width as usize).saturating_mul(self.height as usize)]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<u8>>();
             if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
                 self.tex_id,
                 self.width.max(1),
