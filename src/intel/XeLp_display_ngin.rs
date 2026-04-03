@@ -1370,6 +1370,61 @@ pub(crate) fn primary_present_shadow_surface_gpu_addr() -> Option<u64> {
     Some(draft.surface.windows.shadow_state_gpu_addr)
 }
 
+pub(crate) fn primary_present_surface(
+    surface_gpu_addr: u64,
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+) -> bool {
+    let draft = match draft_workload(DisplayWorkloadKind::PrimaryPresent) {
+        Some(v) => v,
+        None => return false,
+    };
+    let info = match super::intel::first_claimed_device() {
+        Some(v) => v,
+        None => return false,
+    };
+    if width != draft.surface.width || height != draft.surface.height {
+        return false;
+    }
+
+    let windows = draft.surface.windows;
+    if surface_gpu_addr != windows.staging_gpu_addr && surface_gpu_addr != windows.shadow_state_gpu_addr
+    {
+        return false;
+    }
+
+    let Some(stride_reg) = plane_stride_reg_value(pitch_bytes) else {
+        return false;
+    };
+    let surface_reg = match u32::try_from(surface_gpu_addr) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let _ = mmio_write32(info, draft.descriptor.plane_stride_off, stride_reg);
+    let _ = mmio_write32(info, draft.descriptor.plane_surf_off, surface_reg);
+
+    let mut iter = 0usize;
+    let mut live = mmio_read32(info, draft.descriptor.plane_surf_live_off);
+    while iter < 4096 {
+        if live == surface_reg {
+            record_primary_present_visible_surface(surface_gpu_addr);
+            return true;
+        }
+        core::hint::spin_loop();
+        live = mmio_read32(info, draft.descriptor.plane_surf_live_off);
+        iter += 1;
+    }
+
+    let armed = mmio_read32(info, draft.descriptor.plane_surf_off);
+    let success = live == surface_reg || armed == surface_reg;
+    if success {
+        record_primary_present_visible_surface(surface_gpu_addr);
+    }
+    success
+}
+
 pub(crate) fn owned_triangle_disable_non_primary_planes_pipe_a() -> bool {
     let info = match super::intel::first_claimed_device() {
         Some(v) => v,

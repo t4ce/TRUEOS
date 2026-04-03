@@ -2857,6 +2857,7 @@ pub async fn event_pump_task(controller_id: usize) {
             Some(Event::Stopped) => {
                 crate::log!("crabusb: pump observed stopped event\n");
                 log_xhci_status_bits(controller_id, "pump stopped");
+                log_xhci_runtime_snapshot(controller_id, "pump stopped");
                 crate::log!(
                     "crabusb: controller {} stopped event phase={} lifecycle={} bucket={}\n",
                     controller_id,
@@ -2920,6 +2921,13 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             info.mmio_base
         );
 
+        if let Some(status) = xhci_status_bits(info.index) {
+            if status.host_system_error || status.host_controller_error || status.hc_halted {
+                log_xhci_status_bits(info.index, "pre-bind");
+                log_xhci_runtime_snapshot(info.index, "pre-bind");
+            }
+        }
+
         if info.vendor_id == 0x8086 {
             let flr = crate::pci::try_function_level_reset(info.bus, info.slot, info.function);
             crate::log!("crabusb: controller {} intel pre-init flr={}\n", info.index, flr);
@@ -2945,6 +2953,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         if let Err(err) = host.init().await {
             crate::log!("crabusb: host init failed for controller {}: {:?}\n", info.index, err);
             log_xhci_status_bits(info.index, "host init failed");
+            log_xhci_runtime_snapshot(info.index, "host init failed");
             if let Some(reason) = xhci_fatal_init_state(info.index) {
                 mark_controller_quarantined(info.index, "fatal xhci state during host init");
                 crate::log!(
@@ -3042,6 +3051,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             );
         } else {
             install_event_handler(info.index, host.create_event_handler());
+            log_xhci_runtime_snapshot(info.index, "event handler installed");
         }
         let bind_started_at = Instant::now();
         let initial_settle_ms = controller_initial_settle_ms(info.vendor_id);
