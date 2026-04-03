@@ -417,6 +417,33 @@ pub(crate) fn ui2_font_draw_text_line_no_present(
     view_h: u32,
     alpha: u8,
 ) -> bool {
+    ui2_font_draw_text_line_rgba_no_present(
+        text,
+        x,
+        y,
+        max_width_px,
+        px_h,
+        view_w,
+        view_h,
+        (
+            UI2_FONT_DEFAULT_RGBA.r,
+            UI2_FONT_DEFAULT_RGBA.g,
+            UI2_FONT_DEFAULT_RGBA.b,
+            alpha,
+        ),
+    )
+}
+
+pub(crate) fn ui2_font_draw_text_line_rgba_no_present(
+    text: &str,
+    x: f32,
+    y: f32,
+    max_width_px: f32,
+    px_h: f32,
+    view_w: u32,
+    view_h: u32,
+    rgba: (u8, u8, u8, u8),
+) -> bool {
     if text.is_empty() || !(px_h.is_finite() && px_h > 0.0) || max_width_px <= 0.0 {
         return false;
     }
@@ -466,7 +493,7 @@ pub(crate) fn ui2_font_draw_text_line_no_present(
                     (src_y + f32::from(glyph.region.src_h)) / atlas_h,
                     view_w,
                     view_h,
-                    alpha,
+                    rgba,
                 );
             }
         }
@@ -486,6 +513,33 @@ pub(crate) fn ui2_font_draw_text_line_in_rect_no_present(
     view_w: u32,
     view_h: u32,
     alpha: u8,
+) -> bool {
+    ui2_font_draw_text_line_in_rect_rgba_no_present(
+        text,
+        rect,
+        px_h,
+        align,
+        vertical_align,
+        view_w,
+        view_h,
+        (
+            UI2_FONT_DEFAULT_RGBA.r,
+            UI2_FONT_DEFAULT_RGBA.g,
+            UI2_FONT_DEFAULT_RGBA.b,
+            alpha,
+        ),
+    )
+}
+
+pub(crate) fn ui2_font_draw_text_line_in_rect_rgba_no_present(
+    text: &str,
+    rect: Ui2Rect,
+    px_h: f32,
+    align: Ui2FontTextAlign,
+    vertical_align: Ui2FontVerticalAlign,
+    view_w: u32,
+    view_h: u32,
+    rgba: (u8, u8, u8, u8),
 ) -> bool {
     if text.is_empty() || !(px_h.is_finite() && px_h > 0.0) || rect.w <= 0.0 || rect.h <= 0.0 {
         return false;
@@ -509,7 +563,16 @@ pub(crate) fn ui2_font_draw_text_line_in_rect_no_present(
         Ui2FontVerticalAlign::Bottom => rect.y + (rect.h - px_h).max(0.0),
     };
 
-    ui2_font_draw_text_line_no_present(text, draw_x, draw_y, rect.w, px_h, view_w, view_h, alpha)
+    ui2_font_draw_text_line_rgba_no_present(
+        text,
+        draw_x,
+        draw_y,
+        rect.w,
+        px_h,
+        view_w,
+        view_h,
+        rgba,
+    )
 }
 
 fn ui2_font_draw_glyph_rect_no_present(
@@ -524,7 +587,7 @@ fn ui2_font_draw_glyph_rect_no_present(
     v1: f32,
     view_w: u32,
     view_h: u32,
-    alpha: u8,
+    rgba: (u8, u8, u8, u8),
 ) -> bool {
     if tex_id == 0 || !(width > 0.0 && height > 0.0) {
         return false;
@@ -540,12 +603,7 @@ fn ui2_font_draw_glyph_rect_no_present(
         x + width,
         y + height,
         [u0, v0, u1, v1],
-        Rgba8::new(
-            UI2_FONT_DEFAULT_RGBA.r,
-            UI2_FONT_DEFAULT_RGBA.g,
-            UI2_FONT_DEFAULT_RGBA.b,
-            alpha,
-        ),
+        Rgba8::new(rgba.0, rgba.1, rgba.2, rgba.3),
     );
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
     let _ = unsafe {

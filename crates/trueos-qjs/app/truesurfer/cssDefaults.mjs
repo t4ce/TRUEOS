@@ -34,6 +34,7 @@ const TAG_THEME_DEFAULTS = {
 export const INHERITED_STYLE_FIELDS = [
   'color',
   'fontSizePx',
+  'lineHeightPx',
   'fontWeight',
   'fontStyle',
   'textAlign',
@@ -61,13 +62,15 @@ export function defaultDisplayForTag(tagName) {
 
 export function createComputedStyle(tagName = '', path = '', parentStyle = null) {
   const tag = String(tagName || '').toLowerCase();
+  const fontSizePx = Number(FONT_PX || 16);
   const style = {
     path: String(path || ''),
     tag,
     display: defaultDisplayForTag(tag),
     color: rgbIntToCss(FONT_RGB),
     backgroundColor: 'transparent',
-    fontSizePx: Number(FONT_PX || 16),
+    fontSizePx,
+    lineHeightPx: Math.max(20, fontSizePx + 4),
     fontWeight: 'normal',
     fontStyle: 'normal',
     textAlign: 'left',

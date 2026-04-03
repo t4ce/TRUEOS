@@ -10,6 +10,7 @@ const COMPACT_STYLE_FIELDS = [
   'color',
   'backgroundColor',
   'fontSizePx',
+  'lineHeightPx',
   'fontWeight',
   'fontStyle',
   'textAlign',
@@ -286,6 +287,17 @@ function parsePx(value) {
   return Number(match[1]);
 }
 
+function parseLineHeightPx(value, fontSizePx) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw || raw === 'normal') return null;
+  const px = parsePx(raw);
+  if (px != null) return px;
+  const match = raw.match(/^(-?\d+(?:\.\d+)?)$/);
+  if (!match) return null;
+  const fontPx = Math.max(1, Number(fontSizePx || 0));
+  return Number(match[1]) * fontPx;
+}
+
 function rgbByteToHex(v) {
   const n = Math.max(0, Math.min(255, Math.round(Number(v || 0))));
   return n.toString(16).padStart(2, '0');
@@ -326,6 +338,7 @@ function applyDeclaration(style, name, value) {
   if (prop === 'background-color') return applyNormalizedField(style, 'backgroundColor', normalizeColor(raw));
   if (prop === 'background') return applyNormalizedField(style, 'backgroundColor', normalizeColor(raw));
   if (prop === 'font-size') return applyNormalizedField(style, 'fontSizePx', parsePx(raw));
+  if (prop === 'line-height') return applyNormalizedField(style, 'lineHeightPx', parseLineHeightPx(raw, style && style.fontSizePx));
   if (prop === 'font-weight') return applyNormalizedField(style, 'fontWeight', raw.toLowerCase());
   if (prop === 'font-style') return applyNormalizedField(style, 'fontStyle', raw.toLowerCase());
   if (prop === 'text-align') return applyNormalizedField(style, 'textAlign', raw.toLowerCase());
@@ -802,6 +815,42 @@ export function resolveNodeStyle(node, path, cssSection, ancestors, parentStyle 
     inline: inlineEntries.length > 0,
   };
   return style;
+}
+
+export function resolveInlineStyle(tagName, path, styleText, parentStyle = null) {
+  const style = createComputedStyle(tagName, path, parentStyle);
+  const parsed = parseInlineStyleToKernelObject(styleText);
+  let explicitLineHeight = false;
+  if (parsed && Array.isArray(parsed.declarations)) {
+    const declarations = normalizeDeclarationList(parsed.declarations);
+    for (let i = 0; i < declarations.length; i++) {
+      const declaration = declarations[i];
+      if (String(declaration && declaration.name || '').toLowerCase() === 'line-height') {
+        explicitLineHeight = true;
+      }
+      applyDeclaration(style, declaration && declaration.name, declaration && declaration.value);
+    }
+    style.source = {
+      matchedRules: [],
+      inline: declarations.length > 0,
+    };
+  }
+  if (!explicitLineHeight) {
+    style.lineHeightPx = Math.max(20, Math.round(Number(style.fontSizePx || 15)) + 4);
+  }
+  return style;
+}
+
+export function cssColorToRgbInt(value) {
+  const normalized = normalizeColor(value);
+  if (!normalized || normalized === 'transparent') {
+    return 0;
+  }
+  const match = /^#([0-9a-f]{6})$/i.exec(normalized);
+  if (!match) {
+    return 0;
+  }
+  return Number.parseInt(match[1], 16) >>> 0;
 }
 
 export function extractCssObjects(doc) {
