@@ -1056,6 +1056,17 @@ pub mod cabi {
         if tex_id == 0 || width == 0 || height == 0 {
             return false;
         }
+        if checked_reasonable_rgba_len(width, height).is_none() {
+            crate::log!(
+                "gfx-cabi: reject texture-upload queue tex={} size={}x{} repaint={} window={}\n",
+                tex_id,
+                width,
+                height,
+                repaint_reason,
+                repaint_window_id
+            );
+            return false;
+        }
         let expected = match region {
             Some(region) => {
                 if region.width == 0
@@ -1268,6 +1279,39 @@ pub mod cabi {
             }
             match req {
                 TextureWorkReq::Upload(req) => {
+                    let rgba_len = req.rgba.len();
+                    match req.region {
+                        Some(region) => crate::log!(
+                            "gfx-cabi: texture-upload tex={} size={}x{} region={}x{}@{},{} rgba_len={} kind={} repaint={} window={}\n",
+                            req.tex_id,
+                            req.width,
+                            req.height,
+                            region.width,
+                            region.height,
+                            region.x,
+                            region.y,
+                            rgba_len,
+                            match req.sample_kind {
+                                TexSampleKind::Mask => "mask",
+                                TexSampleKind::Rgba => "rgba",
+                            },
+                            req.repaint_reason,
+                            req.repaint_window_id
+                        ),
+                        None => crate::log!(
+                            "gfx-cabi: texture-upload tex={} size={}x{} region=full rgba_len={} kind={} repaint={} window={}\n",
+                            req.tex_id,
+                            req.width,
+                            req.height,
+                            rgba_len,
+                            match req.sample_kind {
+                                TexSampleKind::Mask => "mask",
+                                TexSampleKind::Rgba => "rgba",
+                            },
+                            req.repaint_reason,
+                            req.repaint_window_id
+                        ),
+                    }
                     let rc = upload_texture_rgba_inner_owned(
                         req.tex_id,
                         req.width,
@@ -2066,6 +2110,27 @@ pub mod cabi {
             px[2] = b;
             px[3] = 255;
         }
+    }
+
+    #[inline]
+    fn checked_rgba_len(width: u32, height: u32) -> Option<usize> {
+        let pixels = (width as usize).checked_mul(height as usize)?;
+        pixels.checked_mul(4)
+    }
+
+    const MAX_SHARED_TEXTURE_DIM: u32 = 8192;
+    const MAX_SHARED_TEXTURE_BYTES: usize = 256 * 1024 * 1024;
+
+    #[inline]
+    fn checked_reasonable_rgba_len(width: u32, height: u32) -> Option<usize> {
+        let len = checked_rgba_len(width, height)?;
+        if width > MAX_SHARED_TEXTURE_DIM
+            || height > MAX_SHARED_TEXTURE_DIM
+            || len > MAX_SHARED_TEXTURE_BYTES
+        {
+            return None;
+        }
+        Some(len)
     }
 
     #[inline]
@@ -3390,9 +3455,16 @@ pub mod cabi {
                     .and_then(|images| images.get_mut(tex_id.saturating_sub(1) as usize))
                     .and_then(|entry| entry.as_mut())
                 {
-                    let need = (entry.width as usize)
-                        .saturating_mul(entry.height as usize)
-                        .saturating_mul(4);
+                    let Some(need) = checked_reasonable_rgba_len(entry.width, entry.height)
+                    else {
+                        crate::log!(
+                            "gfx-cabi: invalid rgba len for rgb-to-texture tex={} size={}x{}\n",
+                            tex_id,
+                            entry.width,
+                            entry.height
+                        );
+                        return -10;
+                    };
                     if entry.rgba.len() != need {
                         entry.rgba.resize(need, 0);
                     }
@@ -3644,58 +3716,88 @@ pub mod cabi {
             };
             if ret == 0 {
                 let mut st = GFX_CABI_STATE.lock();
-                let source_tex = st
-                    .tex_images
-                    .as_ref()
-                    .and_then(|images| images.get(source_tex_id.saturating_sub(1) as usize))
-                    .and_then(|entry| entry.as_ref())
-                    .cloned();
-                if let (Some(source_tex), Some(target)) = (
-                    source_tex,
-                    st.tex_images
-                        .as_mut()
-                        .and_then(|images| images.get_mut(target_tex_id.saturating_sub(1) as usize))
-                        .and_then(|entry| entry.as_mut()),
-                ) {
-                    let need = (target.width as usize)
-                        .saturating_mul(target.height as usize)
-                        .saturating_mul(4);
-                    if target.rgba.len() != need {
-                        target.rgba.resize(need, 0);
-                    }
-                    clear_rgba_buffer(target.rgba.as_mut_slice(), clear_rgb);
-                    let mut off = 0usize;
-                    while off + (3 * TEX_VERTEX_SIZE) <= usable {
-                        let Some(v0) = read_tex_vtx(&vtx[..usable], off) else {
-                            break;
-                        };
-                        let Some(v1) = read_tex_vtx(&vtx[..usable], off + TEX_VERTEX_SIZE) else {
-                            break;
-                        };
-                        let Some(v2) = read_tex_vtx(&vtx[..usable], off + (2 * TEX_VERTEX_SIZE))
-                        else {
-                            break;
-                        };
-                        draw_tex_triangle_rgba(
-                            target.rgba.as_mut_slice(),
-                            target.width,
-                            target.height,
-                            None,
-                            trueos_gfx_core::BlendDesc::straight_alpha(),
-                            SamplerDesc {
-                                wrap_s: SamplerWrap::ClampToEdge,
-                                wrap_t: SamplerWrap::ClampToEdge,
-                                min_filter: SamplerFilter::Nearest,
-                                mag_filter: SamplerFilter::Nearest,
-                            },
-                            source_sample_kind,
-                            &source_tex,
-                            v0,
-                            v1,
-                            v2,
-                        );
-                        off += 3 * TEX_VERTEX_SIZE;
-                    }
+                let target_idx = target_tex_id.saturating_sub(1) as usize;
+                let source_idx = source_tex_id.saturating_sub(1) as usize;
+                let Some(images) = st.tex_images.as_mut() else {
+                    return ret;
+                };
+                if target_idx >= images.len() || source_idx >= images.len() {
+                    return ret;
+                }
+                if target_idx == source_idx {
+                    crate::log!(
+                        "gfx-cabi: tex-to-texture mirror skipped target==source tex={} src={}\n",
+                        target_tex_id,
+                        source_tex_id
+                    );
+                    return ret;
+                }
+                let (source_tex, target) = if source_idx < target_idx {
+                    let (left, right) = images.split_at_mut(target_idx);
+                    let Some(source_tex) = left.get(source_idx).and_then(|entry| entry.as_ref())
+                    else {
+                        return ret;
+                    };
+                    let Some(target) = right.get_mut(0).and_then(|entry| entry.as_mut()) else {
+                        return ret;
+                    };
+                    (source_tex, target)
+                } else {
+                    let (left, right) = images.split_at_mut(source_idx);
+                    let Some(target) = left.get_mut(target_idx).and_then(|entry| entry.as_mut())
+                    else {
+                        return ret;
+                    };
+                    let Some(source_tex) = right.get(0).and_then(|entry| entry.as_ref()) else {
+                        return ret;
+                    };
+                    (source_tex, target)
+                };
+                let Some(need) = checked_reasonable_rgba_len(target.width, target.height) else {
+                    crate::log!(
+                        "gfx-cabi: invalid rgba len for tex-to-texture tex={} size={}x{} src={}\n",
+                        target_tex_id,
+                        target.width,
+                        target.height,
+                        source_tex_id
+                    );
+                    return -11;
+                };
+                if target.rgba.len() != need {
+                    target.rgba.resize(need, 0);
+                }
+                clear_rgba_buffer(target.rgba.as_mut_slice(), clear_rgb);
+                let mut off = 0usize;
+                while off + (3 * TEX_VERTEX_SIZE) <= usable {
+                    let Some(v0) = read_tex_vtx(&vtx[..usable], off) else {
+                        break;
+                    };
+                    let Some(v1) = read_tex_vtx(&vtx[..usable], off + TEX_VERTEX_SIZE) else {
+                        break;
+                    };
+                    let Some(v2) = read_tex_vtx(&vtx[..usable], off + (2 * TEX_VERTEX_SIZE))
+                    else {
+                        break;
+                    };
+                    draw_tex_triangle_rgba(
+                        target.rgba.as_mut_slice(),
+                        target.width,
+                        target.height,
+                        None,
+                        trueos_gfx_core::BlendDesc::straight_alpha(),
+                        SamplerDesc {
+                            wrap_s: SamplerWrap::ClampToEdge,
+                            wrap_t: SamplerWrap::ClampToEdge,
+                            min_filter: SamplerFilter::Nearest,
+                            mag_filter: SamplerFilter::Nearest,
+                        },
+                        source_sample_kind,
+                        source_tex,
+                        v0,
+                        v1,
+                        v2,
+                    );
+                    off += 3 * TEX_VERTEX_SIZE;
                 }
                 st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
                 st.viewport_configured = false;
@@ -3823,54 +3925,51 @@ pub mod cabi {
                         format: ImageFormat::Rgba8888,
                     };
                     let Ok(img) = ctx.create_image(desc) else {
+                        crate::log!(
+                            "gfx-cabi: create_image failed for upload tex={} size={}x{} region={} kind={}\n",
+                            tex_id,
+                            width,
+                            height,
+                            region.is_some() as u8,
+                            match sample_kind {
+                                TexSampleKind::Mask => "mask",
+                                TexSampleKind::Rgba => "rgba",
+                            }
+                        );
                         return -4;
                     };
                     image_id = img;
                 }
                 let used_owned_full_rgba = region.is_none() && owned_rgba.is_some();
+                let Some(full_rgba_len) = checked_reasonable_rgba_len(width, height) else {
+                    crate::log!(
+                        "gfx-cabi: invalid rgba len for upload tex={} size={}x{} region={}\n",
+                        tex_id,
+                        width,
+                        height,
+                        region.is_some() as u8
+                    );
+                    return -7;
+                };
                 let mut cached_rgba = if region.is_none() {
                     if let Some(mut rgba) = owned_rgba.take() {
                         rgba.truncate(expected);
                         rgba
                     } else if recreate {
-                        vec![
-                            0;
-                            (width as usize)
-                                .saturating_mul(height as usize)
-                                .saturating_mul(4)
-                        ]
+                        vec![0; full_rgba_len]
                     } else {
                         images[idx]
                             .as_ref()
                             .map(|entry| entry.rgba.clone())
-                            .unwrap_or_else(|| {
-                                vec![
-                                    0;
-                                    (width as usize)
-                                        .saturating_mul(height as usize)
-                                        .saturating_mul(4)
-                                ]
-                            })
+                            .unwrap_or_else(|| vec![0; full_rgba_len])
                     }
                 } else if recreate {
-                    vec![
-                        0;
-                        (width as usize)
-                            .saturating_mul(height as usize)
-                            .saturating_mul(4)
-                    ]
+                    vec![0; full_rgba_len]
                 } else {
                     images[idx]
                         .as_ref()
                         .map(|entry| entry.rgba.clone())
-                        .unwrap_or_else(|| {
-                            vec![
-                                0;
-                                (width as usize)
-                                    .saturating_mul(height as usize)
-                                    .saturating_mul(4)
-                            ]
-                        })
+                        .unwrap_or_else(|| vec![0; full_rgba_len])
                 };
                 match region {
                     Some(region) => {
