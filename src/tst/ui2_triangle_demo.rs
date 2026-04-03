@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use trueos_gfx_core::{RgbVertex, Rgba8, push_rgb_quad_ndc, push_rgb_vertices_bytes};
+use trueos_gfx_core::{RgbVertex, Rgba8, push_rgb_vertices_bytes};
 
 const UI2_TRIANGLE_TEX_ID: u32 = 4_700;
 const UI2_TRIANGLE_RT_W: u32 = 384;
@@ -48,25 +48,8 @@ fn map_window_vertex_to_screen(vertex: RgbVertex, screen_w: u32, screen_h: u32) 
     }
 }
 
-fn build_direct_screen_frame(phase: f32, screen_w: u32, screen_h: u32) -> Vec<u8> {
+fn build_direct_screen_triangle(phase: f32, screen_w: u32, screen_h: u32) -> Vec<u8> {
     let mut out = Vec::new();
-    let bg = Rgba8::new(
-        UI2_TRIANGLE_BG_RGBA[0],
-        UI2_TRIANGLE_BG_RGBA[1],
-        UI2_TRIANGLE_BG_RGBA[2],
-        UI2_TRIANGLE_BG_RGBA[3],
-    );
-
-    let (left, top) =
-        px_to_screen_ndc(UI2_TRIANGLE_WINDOW_X, UI2_TRIANGLE_WINDOW_Y, screen_w, screen_h);
-    let (right, bottom) = px_to_screen_ndc(
-        UI2_TRIANGLE_WINDOW_X + UI2_TRIANGLE_RT_W as f32,
-        UI2_TRIANGLE_WINDOW_Y + UI2_TRIANGLE_RT_H as f32,
-        screen_w,
-        screen_h,
-    );
-    push_rgb_quad_ndc(&mut out, left, top, right, bottom, bg);
-
     let verts = triangle_vertices(phase);
     let mapped = [
         map_window_vertex_to_screen(verts[0], screen_w, screen_h),
@@ -82,13 +65,27 @@ fn render_triangle_frame_direct_screen(phase: f32) -> bool {
         return false;
     };
 
-    let blob = build_direct_screen_frame(phase, screen_w, screen_h);
+    let blob = build_direct_screen_triangle(phase, screen_w, screen_h);
     if blob.is_empty() {
         return false;
     }
 
     let rc_begin = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0) };
     if rc_begin != 0 {
+        return false;
+    }
+
+    let rc_clear = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_clear_rect_no_present(
+            0x0010_141A,
+            UI2_TRIANGLE_WINDOW_X.max(0.0) as u32,
+            UI2_TRIANGLE_WINDOW_Y.max(0.0) as u32,
+            UI2_TRIANGLE_RT_W,
+            UI2_TRIANGLE_RT_H,
+        )
+    };
+    if rc_clear != 0 {
+        let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
         return false;
     }
 

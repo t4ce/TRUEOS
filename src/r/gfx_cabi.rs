@@ -1702,6 +1702,13 @@ pub mod cabi {
         SetScissor {
             rect: Option<ScissorRect>,
         },
+        ClearRect {
+            rgb: u32,
+            x: u32,
+            y: u32,
+            width: u32,
+            height: u32,
+        },
         Rgb {
             blob_offset: usize,
             blob_len: usize,
@@ -1747,6 +1754,7 @@ pub mod cabi {
     const GFX_TRACE_OP_UPLOAD_TEXTURE_SVG: u32 = 12;
     const GFX_TRACE_OP_DRAW_RGB_TRIANGLES: u32 = 13;
     const GFX_TRACE_OP_DRAW_TEX_TRIANGLES: u32 = 14;
+    const GFX_TRACE_OP_CLEAR_RECT: u32 = 15;
 
     struct GfxTraceRing {
         enabled: bool,
@@ -2035,6 +2043,48 @@ pub mod cabi {
             px[1] = g;
             px[2] = b;
             px[3] = 255;
+        }
+    }
+
+    #[inline]
+    fn clear_rgba_rect(
+        rgba: &mut [u8],
+        width: u32,
+        height: u32,
+        x: u32,
+        y: u32,
+        rect_w: u32,
+        rect_h: u32,
+        rgb: u32,
+    ) {
+        if width == 0 || height == 0 || rect_w == 0 || rect_h == 0 {
+            return;
+        }
+
+        let x0 = x.min(width) as usize;
+        let y0 = y.min(height) as usize;
+        let x1 = x.saturating_add(rect_w).min(width) as usize;
+        let y1 = y.saturating_add(rect_h).min(height) as usize;
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+
+        let r = ((rgb >> 16) & 0xFF) as u8;
+        let g = ((rgb >> 8) & 0xFF) as u8;
+        let b = (rgb & 0xFF) as u8;
+        let stride = width as usize * 4;
+        for py in y0..y1 {
+            let row = py.saturating_mul(stride);
+            for px in x0..x1 {
+                let off = row + px.saturating_mul(4);
+                if off + 4 > rgba.len() {
+                    break;
+                }
+                rgba[off] = r;
+                rgba[off + 1] = g;
+                rgba[off + 2] = b;
+                rgba[off + 3] = 255;
+            }
         }
     }
 
@@ -2412,6 +2462,40 @@ pub mod cabi {
                 PendingDraw::SetScissor { rect } => {
                     current_scissor = rect;
                 }
+                PendingDraw::ClearRect {
+                    rgb,
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    if current_target_tex_id == 0 {
+                        clear_rgba_rect(
+                            screen.as_mut_slice(),
+                            screen_w,
+                            screen_h,
+                            x,
+                            y,
+                            width,
+                            height,
+                            rgb,
+                        );
+                    } else if let Some(Some(target)) =
+                        textures.get_mut(current_target_tex_id.saturating_sub(1) as usize)
+                    {
+                        clear_rgba_rect(
+                            target.rgba.as_mut_slice(),
+                            target.width,
+                            target.height,
+                            x,
+                            y,
+                            width,
+                            height,
+                            rgb,
+                        );
+                    }
+                    saw_draw = true;
+                }
                 PendingDraw::Rgb {
                     blob_offset,
                     blob_len,
@@ -2720,6 +2804,42 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_CLEAR_SCISSOR, frame_seq, 0, 0, 0, 0, 0);
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_clear_rect_no_present(
+        rgb: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> i32 {
+        let mut st = GFX_CABI_STATE.lock();
+        if !st.frame_active {
+            return -1;
+        }
+        if width == 0 || height == 0 {
+            return 0;
+        }
+        st.frame_draws.push(PendingDraw::ClearRect {
+            rgb,
+            x,
+            y,
+            width,
+            height,
+        });
+        let frame_seq = st.frame_seq;
+        drop(st);
+        gfx_trace_record(
+            GFX_TRACE_OP_CLEAR_RECT,
+            frame_seq,
+            rgb & 0x00FF_FFFF,
+            x,
+            y,
+            width,
+            height,
+        );
         0
     }
 
@@ -4443,6 +4563,13 @@ pub mod cabi {
                     SetScissor {
                         rect: Option<ScissorRect>,
                     },
+                    ClearRect {
+                        rgb: u32,
+                        x: u32,
+                        y: u32,
+                        width: u32,
+                        height: u32,
+                    },
                     Rgb {
                         offset: u64,
                         vcount: u32,
@@ -4480,6 +4607,13 @@ pub mod cabi {
                                 break;
                             }
                             PendingDraw::SetScissor { .. } => {
+                                if pass_kind == 0 {
+                                    draw_idx += 1;
+                                    continue;
+                                }
+                                break;
+                            }
+                            PendingDraw::ClearRect { .. } => {
                                 if pass_kind == 0 {
                                     draw_idx += 1;
                                     continue;
@@ -4546,6 +4680,21 @@ pub mod cabi {
                             }
                             PendingDraw::SetScissor { rect } => {
                                 plans.push(Plan::SetScissor { rect: *rect });
+                            }
+                            PendingDraw::ClearRect {
+                                rgb,
+                                x,
+                                y,
+                                width,
+                                height,
+                            } => {
+                                plans.push(Plan::ClearRect {
+                                    rgb: *rgb,
+                                    x: *x,
+                                    y: *y,
+                                    width: *width,
+                                    height: *height,
+                                });
                             }
                             PendingDraw::Rgb {
                                 blob_offset,
@@ -4700,6 +4849,21 @@ pub mod cabi {
                                         height: scissor.height,
                                     }
                                 })));
+                            }
+                            Plan::ClearRect {
+                                rgb,
+                                x,
+                                y,
+                                width,
+                                height,
+                            } => {
+                                cmds.push(Command::ClearRect {
+                                    rgb,
+                                    x,
+                                    y,
+                                    width,
+                                    height,
+                                });
                             }
                             Plan::Rgb {
                                 offset,
