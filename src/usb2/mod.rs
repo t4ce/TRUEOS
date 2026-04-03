@@ -166,6 +166,12 @@ pub(crate) struct UsbControllerRuntimeDiag {
     pub probe_fail_streak: u32,
     pub last_probe_state: &'static str,
     pub last_probe_device_count: u32,
+    pub early_fatal_rebind_streak: u32,
+    pub recovery_quiescent_before_bind: bool,
+    pub recovery_quiescent_ms: u64,
+    pub recovery_skip_delayed_event_handler: bool,
+    pub recovery_initial_settle_ms: u64,
+    pub recovery_probe_quiet_ms: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -382,6 +388,12 @@ pub(crate) fn runtime_diag(controller_id: usize) -> Option<UsbControllerRuntimeD
         probe_fail_streak: diag.probe_fail_streak,
         last_probe_state: diag.last_probe_state,
         last_probe_device_count: diag.last_probe_device_count,
+        early_fatal_rebind_streak: diag.early_fatal_rebind_streak,
+        recovery_quiescent_before_bind: diag.recovery_quiescent_before_bind,
+        recovery_quiescent_ms: diag.recovery_quiescent_ms,
+        recovery_skip_delayed_event_handler: diag.recovery_skip_delayed_event_handler,
+        recovery_initial_settle_ms: diag.recovery_initial_settle_ms,
+        recovery_probe_quiet_ms: diag.recovery_probe_quiet_ms,
     })
 }
 

@@ -320,39 +320,47 @@ pub fn init() {
             }
         }
         PRIMARY_DEVICE_INDEX.store(chosen, Ordering::Relaxed);
-        crate::log!("net: primary={} (link-up preference)\n", chosen);
+        if crate::logflag::BOOT_INFO_LOGS {
+            crate::log!("net: primary={} (link-up preference)\n", chosen);
+        }
     }
 
     if added == 0 {
-        crate::log!("net: no supported NIC detected.\n");
+        if crate::logflag::BOOT_INFO_LOGS {
+            crate::log!("net: no supported NIC detected.\n");
+        }
     } else {
-        crate::log!("net: detected {} NIC(s)\n", added);
+        if crate::logflag::BOOT_INFO_LOGS {
+            crate::log!("net: detected {} NIC(s)\n", added);
 
-        // Device inventory helps interpret logs like "tx-batch dev=0".
-        let count = device_count();
-        for idx in 0..count {
-            let name = device_name_at(idx).unwrap_or("?");
-            let link_up = link_state_at(idx).map(|ls| ls.up as u8).unwrap_or(0);
-            let bdf = bdf_at(idx);
-            if let Some((bus, slot, func)) = bdf {
-                crate::log!(
-                    "net: dev{} {} bdf={:02x}:{:02x}.{} link_up={}\n",
-                    idx,
-                    name,
-                    bus,
-                    slot,
-                    func,
-                    link_up
-                );
-            } else {
-                crate::log!("net: dev{} {} bdf=? link_up={}\n", idx, name, link_up);
+            // Device inventory helps interpret logs like "tx-batch dev=0".
+            let count = device_count();
+            for idx in 0..count {
+                let name = device_name_at(idx).unwrap_or("?");
+                let link_up = link_state_at(idx).map(|ls| ls.up as u8).unwrap_or(0);
+                let bdf = bdf_at(idx);
+                if let Some((bus, slot, func)) = bdf {
+                    crate::log!(
+                        "net: dev{} {} bdf={:02x}:{:02x}.{} link_up={}\n",
+                        idx,
+                        name,
+                        bus,
+                        slot,
+                        func,
+                        link_up
+                    );
+                } else {
+                    crate::log!("net: dev{} {} bdf=? link_up={}\n", idx, name, link_up);
+                }
             }
         }
     }
 
-    crate::log!(
-        "net: hint: prefer virtio-net in QEMU (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0)\n"
-    );
+    if crate::logflag::BOOT_INFO_LOGS {
+        crate::log!(
+            "net: hint: prefer virtio-net in QEMU (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0)\n"
+        );
+    }
 }
 
 pub fn poll_at(index: usize) -> bool {

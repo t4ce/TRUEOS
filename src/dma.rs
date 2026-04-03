@@ -13,7 +13,9 @@ pub fn init_from_limine() {
     }
 
     DMA_READY.store(true, Ordering::Release);
-    crate::log!("dma: pmm-backed DMA allocator active\n");
+    if crate::logflag::BOOT_INFO_LOGS {
+        crate::log!("dma: pmm-backed DMA allocator active\n");
+    }
 }
 
 pub fn alloc(size: usize, align: usize) -> Option<(u64, *mut u8)> {

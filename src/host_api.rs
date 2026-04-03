@@ -601,7 +601,7 @@ unsafe extern "C" fn trueos_xhci_get_controller_snapshot_js(
 
     if let Some(diag) = runtime {
         json.push_str(&alloc::format!(
-            r#""runtime":{{"event_handler_ready":{},"probe_requested":{},"root_port_change_seen":{},"controller_phase":"{}","root_hub_lifecycle":"{}","empty_probe_streak":{},"probe_fail_streak":{},"last_probe_state":"{}","last_probe_device_count":{}}},"#,
+            r#""runtime":{{"event_handler_ready":{},"probe_requested":{},"root_port_change_seen":{},"controller_phase":"{}","root_hub_lifecycle":"{}","empty_probe_streak":{},"probe_fail_streak":{},"last_probe_state":"{}","last_probe_device_count":{},"early_fatal_rebind_streak":{},"recovery_quiescent_before_bind":{},"recovery_quiescent_ms":{},"recovery_skip_delayed_event_handler":{},"recovery_initial_settle_ms":{},"recovery_probe_quiet_ms":{}}},"#,
             if diag.event_handler_ready { "true" } else { "false" },
             if diag.probe_requested { "true" } else { "false" },
             if diag.root_port_change_seen { "true" } else { "false" },
@@ -611,6 +611,12 @@ unsafe extern "C" fn trueos_xhci_get_controller_snapshot_js(
             diag.probe_fail_streak,
             diag.last_probe_state,
             diag.last_probe_device_count,
+            diag.early_fatal_rebind_streak,
+            if diag.recovery_quiescent_before_bind { "true" } else { "false" },
+            diag.recovery_quiescent_ms,
+            if diag.recovery_skip_delayed_event_handler { "true" } else { "false" },
+            diag.recovery_initial_settle_ms,
+            diag.recovery_probe_quiet_ms,
         ));
     } else {
         json.push_str(r#""runtime":null,"#);

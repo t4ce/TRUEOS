@@ -116,13 +116,15 @@ pub fn init_pmm_from_limine() {
         let first = state.regions.first().copied().unwrap();
         let last = state.regions.last().copied().unwrap();
         *guard = Some(state);
-        crate::log!(
-            "pmm: regions={} span=0x{:X}..0x{:X} total={} MiB\n",
-            region_count,
-            first.start,
-            last.end,
-            total_bytes / (1024 * 1024)
-        );
+        if crate::logflag::BOOT_INFO_LOGS {
+            crate::log!(
+                "pmm: regions={} span=0x{:X}..0x{:X} total={} MiB\n",
+                region_count,
+                first.start,
+                last.end,
+                total_bytes / (1024 * 1024)
+            );
+        }
     }
 }
 

@@ -17,6 +17,7 @@ pub(crate) const VNET_EXERCISE_LOGS: bool = false;
 pub(crate) const ESP_GATE_DEFAULT_UPLOAD_LOGS: bool = false;
 
 pub(crate) const R8125_VERBOSE_LOGS: bool = false;
+pub(crate) const BOOT_INFO_LOGS: bool = false;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
 pub(crate) const BROWSER_VM_DEBUG_LOGS: bool = false;

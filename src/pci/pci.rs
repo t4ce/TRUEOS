@@ -106,15 +106,17 @@ fn init_ecam_once() {
                 seg0_count += 1;
             }
         }
-        crate::log!("pci: MCFG present (regions={}, seg0={})\n", regions.len(), seg0_count);
-        for r in regions.iter() {
-            if r.segment == 0 {
-                crate::log!(
-                    "pci: ECAM seg0 base=0x{:X} bus={}-{}\n",
-                    r.phys_base,
-                    r.bus_start,
-                    r.bus_end
-                );
+        if crate::logflag::BOOT_INFO_LOGS {
+            crate::log!("pci: MCFG present (regions={}, seg0={})\n", regions.len(), seg0_count);
+            for r in regions.iter() {
+                if r.segment == 0 {
+                    crate::log!(
+                        "pci: ECAM seg0 base=0x{:X} bus={}-{}\n",
+                        r.phys_base,
+                        r.bus_start,
+                        r.bus_end
+                    );
+                }
             }
         }
 

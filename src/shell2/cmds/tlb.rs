@@ -1090,12 +1090,27 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         let bdf =
             alloc::format!("{:02X}:{:02X}.{}", ctrl_info.bus, ctrl_info.slot, ctrl_info.function);
         let diag = alloc::format!(
-            "phase={} life={} ev={} rp={} empty={}",
+            "phase={} life={} ev={} rp={} empty={} early={} q={} skip={} settle={} quiet={}",
             ctrl_info.controller_phase,
             ctrl_info.root_hub_lifecycle,
             ctrl_info.event_ready as u8,
             ctrl_info.root_port_change_seen as u8,
-            ctrl_info.empty_probe_streak
+            ctrl_info.empty_probe_streak,
+            crate::usb2::runtime_diag(ctrl_info.index)
+                .map(|diag| diag.early_fatal_rebind_streak)
+                .unwrap_or(0),
+            crate::usb2::runtime_diag(ctrl_info.index)
+                .map(|diag| diag.recovery_quiescent_before_bind as u8)
+                .unwrap_or(0),
+            crate::usb2::runtime_diag(ctrl_info.index)
+                .map(|diag| diag.recovery_skip_delayed_event_handler as u8)
+                .unwrap_or(0),
+            crate::usb2::runtime_diag(ctrl_info.index)
+                .map(|diag| diag.recovery_initial_settle_ms)
+                .unwrap_or(0),
+            crate::usb2::runtime_diag(ctrl_info.index)
+                .map(|diag| diag.recovery_probe_quiet_ms)
+                .unwrap_or(0),
         );
         out.push(alloc::format!(
             "xhci ctrl={} bdf={} diag={} vidpid={:04X}:{:04X} mmio=0x{:X}",
