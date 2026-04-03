@@ -15,6 +15,8 @@ const INTEL_RENDER_DEMO_DEBUG_CLEAR_RGB_A: u32 = 0x00FF00;
 const INTEL_RENDER_DEMO_DEBUG_CLEAR_RGB_B: u32 = 0xFF00FF;
 const INTEL_RENDER_DEMO_ENABLED: bool = true;
 const INTEL_RENDER_DEMO_FRAME_MS: u64 = 16;
+const INTEL_RENDER_DEMO_GUC_READY_POLL_MS: u64 = 10;
+const INTEL_RENDER_DEMO_GUC_READY_TIMEOUT_MS: u64 = 3000;
 const INTEL_RENDER_DEMO_PHASE_STEP_RAD: f32 = 0.18;
 const INTEL_RENDER_DEMO_CLUSTER_COUNT: usize = 15;
 const INTEL_RENDER_DEMO_VERTEX_COUNT: usize = INTEL_RENDER_DEMO_CLUSTER_COUNT * 3;
@@ -677,6 +679,37 @@ fn log_task_start(desc: RenderDemoSurfaceDesc) {
     }
 }
 
+async fn wait_for_guc_ready() -> bool {
+    if super::guc_ready() {
+        crate::log!("intel/render-demo: guc-ready wait skipped status=ready\n");
+        return true;
+    }
+
+    crate::log!(
+        "intel/render-demo: waiting for guc-ready timeout_ms={} poll_ms={}\n",
+        INTEL_RENDER_DEMO_GUC_READY_TIMEOUT_MS,
+        INTEL_RENDER_DEMO_GUC_READY_POLL_MS
+    );
+    let mut waited_ms = 0u64;
+    while waited_ms < INTEL_RENDER_DEMO_GUC_READY_TIMEOUT_MS {
+        Timer::after(EmbassyDuration::from_millis(
+            INTEL_RENDER_DEMO_GUC_READY_POLL_MS,
+        ))
+        .await;
+        waited_ms = waited_ms.saturating_add(INTEL_RENDER_DEMO_GUC_READY_POLL_MS);
+        if super::guc_ready() {
+            crate::log!("intel/render-demo: guc-ready after {}ms\n", waited_ms);
+            return true;
+        }
+    }
+
+    crate::log!(
+        "intel/render-demo: guc-ready timeout after {}ms\n",
+        waited_ms
+    );
+    false
+}
+
 #[embassy_executor::task]
 pub async fn intel_render_demo_task() {
     let Some(info) = super::intel::first_claimed_device() else {
@@ -699,6 +732,11 @@ pub async fn intel_render_demo_task() {
 
     super::intel_igpu770::warm_once(info);
     super::xelp_render_ngin::log_rgb_triangle_isolation();
+    if !wait_for_guc_ready().await {
+        disable_render_demo_once("guc-not-ready-timeout");
+        crate::log!("intel/render-demo: task aborted reason=guc-not-ready-timeout\n");
+        return;
+    }
 
     let mut state = match RenderDemoState::new(DEFAULT_RENDER_DEMO_SCENE_SURFACE_DESC) {
         Ok(state) => state,
