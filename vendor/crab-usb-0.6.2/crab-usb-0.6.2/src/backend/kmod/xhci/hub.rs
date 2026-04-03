@@ -11,15 +11,18 @@ use core::{
 
 use futures::{FutureExt, future::BoxFuture, task::AtomicWaker};
 use usb_if::{err::USBError, host::hub::Speed};
+use xhci::accessor::single;
+use xhci::registers::{PortRegisterSet, operational::PortStatusAndControlRegister};
 
 use crate::backend::kmod::hub::{HubInfo, HubOp, PortChangeInfo, PortState};
 use crate::backend::kmod::osal::Kernel;
 
-use super::reg::XhciRegisters;
+use super::reg::{MemMapper, XhciRegisters};
 
 const HUB_DEBOUNCE_TIMEOUT_MS: u64 = 2000;
 const HUB_DEBOUNCE_STEP_MS: u64 = 25;
 const HUB_DEBOUNCE_STABLE_MS: u64 = 100;
+const ROOT_PORT_BOOTSTRAP_SETTLE_MS: u64 = 150;
 const ROOT_PORT_ENABLE_WAIT_MS: u64 = 1500;
 const ROOT_PORT_ENABLE_CHECK_MS: u64 = 10;
 
@@ -77,6 +80,25 @@ pub struct XhciRootHub {
 unsafe impl Send for XhciRootHub {}
 
 impl XhciRootHub {
+    fn portsc_accessor(
+        &mut self,
+        port_id: u8,
+    ) -> single::ReadWrite<PortStatusAndControlRegister, MemMapper> {
+        let caplength = self.reg.capability.caplength.read_volatile().get();
+        let base = self.reg.mmio_base + usize::from(caplength) + 0x400;
+        let stride = core::mem::size_of::<PortRegisterSet>();
+        let offset = (usize::from(port_id) - 1) * stride;
+        unsafe { single::ReadWrite::new(base + offset, MemMapper) }
+    }
+
+    fn update_portsc<U>(&mut self, port_id: u8, f: U)
+    where
+        U: FnOnce(&mut PortStatusAndControlRegister),
+    {
+        let mut portsc = self.portsc_accessor(port_id);
+        portsc.update_volatile(f);
+    }
+
     fn ports(&self) -> &[Port] {
         unsafe { &*self.ports.get() }
     }
@@ -103,15 +125,63 @@ impl HubOp for XhciRootHub {
         async {
             let mut info = info;
             info.speed = Speed::SuperSpeedPlus;
-            debug!("Powering xHCI Root Hub ports without blanket reset");
+            debug!("Resetting all ports of xHCI Root Hub");
 
             for idx in 0..self.reg.port_register_set.len() {
-                self.reg.port_register_set.update_volatile_at(idx, |reg| {
-                    if !reg.portsc.port_power() {
+                let port_id = (idx + 1) as u8;
+                self.update_portsc(port_id, |portsc| {
+                    if !portsc.port_power() {
                         trace!("Powering on port {}", idx + 1);
-                        reg.portsc.set_port_power();
+                        portsc.set_port_power();
                     }
                 });
+            }
+
+            self.kernel
+                .delay(Duration::from_millis(ROOT_PORT_BOOTSTRAP_SETTLE_MS));
+
+            for idx in 0..self.reg.port_register_set.len() {
+                let port_id = (idx + 1) as u8;
+                let status = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                if !status.current_connect_status() {
+                    continue;
+                }
+
+                self.update_portsc(port_id, |portsc| {
+                    portsc.set_0_port_enabled_disabled();
+                    portsc.set_port_reset();
+                });
+            }
+
+            for idx in 0..self.reg.port_register_set.len() {
+                let port_id = (idx + 1) as u8;
+                let status = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                if !status.current_connect_status() {
+                    continue;
+                }
+
+                let mut elapsed_ms = 0;
+                while elapsed_ms < ROOT_PORT_ENABLE_WAIT_MS {
+                    let poll = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                    let reset_cleared = !poll.port_reset();
+                    let enabled = poll.port_enabled_disabled();
+                    if enabled || reset_cleared {
+                        break;
+                    }
+                    self.kernel
+                        .delay(Duration::from_millis(ROOT_PORT_ENABLE_CHECK_MS));
+                    elapsed_ms += ROOT_PORT_ENABLE_CHECK_MS;
+                }
+
+                let final_port = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                info!(
+                    "crabusb/xhci/hub: bootstrap port={} connect={} enabled={} reset={} speed={}",
+                    port_id,
+                    final_port.current_connect_status(),
+                    final_port.port_enabled_disabled(),
+                    final_port.port_reset(),
+                    final_port.port_speed()
+                );
             }
 
             Ok(info)
@@ -141,7 +211,6 @@ impl XhciRootHub {
 
     async fn _changed_ports(&mut self) -> Result<Vec<PortChangeInfo>, USBError> {
         info!("crabusb/xhci/hub: changed_ports begin");
-        self.handle_changed().await?;
         self.handle_uninit().await?;
         let out = self.handle_reseted().await?;
         info!("crabusb/xhci/hub: changed_ports end emitted={}", out.len());
@@ -171,9 +240,9 @@ impl XhciRootHub {
 
     async fn reset_port(&mut self, port_id: u8, speed_raw: u8) -> Result<(), USBError> {
         let idx = (port_id - 1) as usize;
-        self.reg.port_register_set.update_volatile_at(idx, |reg| {
-            reg.portsc.set_0_port_enabled_disabled();
-            reg.portsc.set_port_reset();
+        self.update_portsc(port_id, |portsc| {
+            portsc.set_0_port_enabled_disabled();
+            portsc.set_port_reset();
         });
 
         let reset_delay_ms = if matches!(Speed::from_xhci_portsc(speed_raw), Speed::Low) {
@@ -186,9 +255,9 @@ impl XhciRootHub {
         for _ in 0..10 {
             let port = self.reg.port_register_set.read_volatile_at(idx).portsc;
             if port.port_reset_change() || !port.port_reset() {
-                self.reg.port_register_set.update_volatile_at(idx, |reg| {
-                    if reg.portsc.port_reset_change() {
-                        reg.portsc.clear_port_reset_change();
+                self.update_portsc(port_id, |portsc| {
+                    if portsc.port_reset_change() {
+                        portsc.clear_port_reset_change();
                     }
                 });
                 return Ok(());
@@ -277,27 +346,27 @@ impl XhciRootHub {
                 self.ports()[i].state,
             );
 
-            self.reg.port_register_set.update_volatile_at(i, |reg| {
+            self.update_portsc(id, |portsc| {
                 if connect_changed {
-                    reg.portsc.clear_connect_status_change();
+                    portsc.clear_connect_status_change();
                 }
                 if enabled_changed {
-                    reg.portsc.clear_port_enabled_disabled_change();
+                    portsc.clear_port_enabled_disabled_change();
                 }
                 if warm_reset_changed {
-                    reg.portsc.clear_warm_port_reset_change();
+                    portsc.clear_warm_port_reset_change();
                 }
                 if over_current_changed {
-                    reg.portsc.clear_over_current_change();
+                    portsc.clear_over_current_change();
                 }
                 if reset_changed {
-                    reg.portsc.clear_port_reset_change();
+                    portsc.clear_port_reset_change();
                 }
                 if link_changed {
-                    reg.portsc.clear_port_link_state_change();
+                    portsc.clear_port_link_state_change();
                 }
                 if config_error_changed {
-                    reg.portsc.clear_port_config_error_change();
+                    portsc.clear_port_config_error_change();
                 }
             });
 
@@ -364,7 +433,7 @@ impl XhciRootHub {
             .collect::<Vec<_>>();
 
         for &id in &uninited {
-            info!("crabusb/xhci/hub: uninit port={} evaluating bring-up", id);
+            info!("crabusb/xhci/hub: uninit port={} waiting for reset", id);
             let i = (id - 1) as usize;
 
             let port = self.reg.port_register_set.read_volatile_at(i).portsc;
@@ -380,41 +449,12 @@ impl XhciRootHub {
                 continue;
             }
 
-            if !port.current_connect_status() {
-                info!("crabusb/xhci/hub: uninit port={} idle (not connected)", id);
-                continue;
-            }
-
-            if !port.port_enabled_disabled() {
-                info!(
-                    "crabusb/xhci/hub: uninit port={} connected but disabled; issuing targeted reset speed={}",
-                    id,
-                    port.port_speed()
-                );
-                self.debounce_port(id, true).await?;
-                self.reset_port(id, port.port_speed()).await?;
-                if !self
-                    .settle_port_enabled(id, "targeted reset")
-                    .await
-                {
-                    continue;
-                }
-            }
-
             info!(
-                "crabusb/xhci/hub: uninit port={} ready enable={} connect={} speed={}",
+                "crabusb/xhci/hub: uninit port={} reset complete enable={} connect={} speed={}",
                 id,
-                self.reg
-                    .port_register_set
-                    .read_volatile_at(i)
-                    .portsc
-                    .port_enabled_disabled(),
-                self.reg
-                    .port_register_set
-                    .read_volatile_at(i)
-                    .portsc
-                    .current_connect_status(),
-                self.reg.port_register_set.read_volatile_at(i).portsc.port_speed()
+                port.port_enabled_disabled(),
+                port.current_connect_status(),
+                port.port_speed()
             );
 
             self.ports_mut()[i].state = PortState::Reseted;

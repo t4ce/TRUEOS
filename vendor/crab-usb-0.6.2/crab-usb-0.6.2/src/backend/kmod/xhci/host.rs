@@ -71,8 +71,12 @@ impl CoreOp for Xhci {
 
     fn create_event_handler(&mut self) -> Box<dyn EventHandlerOp> {
         if !self.irq_ready {
-            self.arm_irq();
-            self.enable_irq();
+            if Self::POLL_ONLY_EVENT_HANDLER_SMOKE_VALID {
+                info!("crabusb/xhci: polling-only event handler mode (interrupt signaling disabled)");
+            } else {
+                self.arm_irq();
+                self.enable_irq();
+            }
             self.irq_ready = true;
         }
         Box::new(
@@ -95,6 +99,7 @@ impl Xhci {
     const PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT: bool = true;
     const PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT: bool = true;
     const ARM_WRAP_EVENT_EXPERIMENT: bool = false;
+    const POLL_ONLY_EVENT_HANDLER_SMOKE_VALID: bool = true;
 
     fn flush_controller_write(&self) {
         let _ = self.reg.read().operational.usbsts.read_volatile();
@@ -831,6 +836,15 @@ impl EventHandlerOp for EventHandler {
     fn handle_event(&self) -> Event {
         let sts = self.reg().operational.usbsts.read_volatile();
         if sts.host_system_error() || sts.host_controller_error() {
+            info!(
+                "crabusb/xhci: stopping event pump hse={} hce={} halted={} cnr={} pcd={} eint={}",
+                sts.host_system_error(),
+                sts.host_controller_error(),
+                sts.hc_halted(),
+                sts.controller_not_ready(),
+                sts.port_change_detect(),
+                sts.event_interrupt(),
+            );
             return Event::Stopped;
         }
         let irq_pending = self

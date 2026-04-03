@@ -8,7 +8,7 @@ use core::time::Duration;
 use crab_usb::{Event, EventHandler, KernelOp, USBHost};
 use dma_api::{DmaAddr, DmaDirection, DmaError, DmaHandle, DmaMapHandle, DmaOp};
 use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -350,6 +350,8 @@ pub async fn event_pump_task(controller_id: usize) {
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn bsp_service(controller_index: usize) {
     const RETRY_MS: u64 = 1000;
+    const INTEL_PROBE_SETTLE_MS: u64 = 1500;
+    const INTEL_REPROBE_MS: u64 = 1500;
     let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
 
     loop {
@@ -370,6 +372,7 @@ pub async fn bsp_service(controller_index: usize) {
 
         if host.init().await.is_ok() {
             let connected_ports = connected_ports_summary(info.index);
+            let intel_settle_probe = info.vendor_id == 0x8086;
             crate::log!(
                 "crabusb: init successful ctrl={} bdf={:02X}:{:02X}.{} vid={:04X} pid={:04X} mmio={:p} ports={}\n",
                 info.index,
@@ -383,15 +386,79 @@ pub async fn bsp_service(controller_index: usize) {
             );
 
             PROBE_REQUESTED[info.index].store(false, Ordering::Release);
-            install_event_handler(info.index, host.create_event_handler());
-            let _ = spawner.spawn(event_pump_task(info.index));
-            probe_and_bind(&mut host, info, &spawner).await;
+            let mut quiet_probe_until = None;
+            let mut reprobe_until = None;
+            if intel_settle_probe {
+                if usb_log_all_enabled() {
+                    crate::log!(
+                        "crabusb: controller {} intel deferred probe before event pump; waiting {}ms\n",
+                        info.index,
+                        INTEL_PROBE_SETTLE_MS
+                    );
+                }
+                quiet_probe_until =
+                    Some(Instant::now() + EmbassyDuration::from_millis(INTEL_PROBE_SETTLE_MS));
+            } else {
+                install_event_handler(info.index, host.create_event_handler());
+                let _ = spawner.spawn(event_pump_task(info.index));
+                probe_and_bind(&mut host, info, &spawner).await;
+            }
 
             loop {
                 if PROBE_REQUESTED[info.index].swap(false, Ordering::AcqRel) {
-                    probe_and_bind(&mut host, info, &spawner).await;
+                    if intel_settle_probe {
+                        quiet_probe_until =
+                            Some(Instant::now() + EmbassyDuration::from_millis(INTEL_PROBE_SETTLE_MS));
+                    } else {
+                        probe_and_bind(&mut host, info, &spawner).await;
+                    }
+                }
+                if let Some(deadline) = quiet_probe_until {
+                    if Instant::now() >= deadline {
+                        if usb_log_all_enabled() {
+                            crate::log!(
+                                "crabusb: servicing settled probe on controller {}\n",
+                                info.index
+                            );
+                        }
+                        if intel_settle_probe
+                            && !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire)
+                        {
+                            if usb_log_all_enabled() {
+                                crate::log!(
+                                    "crabusb: controller {} installing event pump before settled probe\n",
+                                    info.index
+                                );
+                            }
+                            install_event_handler(info.index, host.create_event_handler());
+                            let _ = spawner.spawn(event_pump_task(info.index));
+                        }
+                        probe_and_bind(&mut host, info, &spawner).await;
+                        if !intel_settle_probe {
+                            install_event_handler(info.index, host.create_event_handler());
+                            let _ = spawner.spawn(event_pump_task(info.index));
+                        }
+                        quiet_probe_until = None;
+                    }
+                }
+                if let Some(deadline) = reprobe_until {
+                    if Instant::now() >= deadline {
+                        if usb_log_all_enabled() {
+                            crate::log!(
+                                "crabusb: controller {} intel periodic reprobe\n",
+                                info.index
+                            );
+                        }
+                        probe_and_bind(&mut host, info, &spawner).await;
+                        reprobe_until =
+                            Some(Instant::now() + EmbassyDuration::from_millis(INTEL_REPROBE_MS));
+                    }
                 }
                 if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
+                    if intel_settle_probe {
+                        Timer::after(EmbassyDuration::from_millis(20)).await;
+                        continue;
+                    }
                     break;
                 }
                 Timer::after(EmbassyDuration::from_millis(20)).await;
