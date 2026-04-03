@@ -94,6 +94,7 @@ impl Xhci {
     const PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT: bool = true;
     const PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT: bool = true;
     const PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT: bool = true;
+    const ARM_WRAP_EVENT_EXPERIMENT: bool = false;
 
     fn flush_controller_write(&self) {
         let _ = self.reg.read().operational.usbsts.read_volatile();
@@ -581,9 +582,13 @@ impl Xhci {
     fn arm_irq(&mut self) {
         /* Keep the runtime ring programmed before RUN, but only arm signaling when
          * software is ready to consume events. */
+        self.clear_status_bits();
         self.reg.write().operational.usbcmd.update_volatile(|r| {
-            r.set_host_system_error_enable();
-            r.set_enable_wrap_event();
+            if Self::ARM_WRAP_EVENT_EXPERIMENT {
+                r.set_enable_wrap_event();
+            } else {
+                r.clear_enable_wrap_event();
+            }
         });
         self.flush_controller_write();
 

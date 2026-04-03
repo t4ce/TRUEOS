@@ -1549,6 +1549,13 @@ fn init_gen12_bcs_context_image(
 
     push_mi_nops(state, &mut idx, 12);
 
+    state[CTX_CONTEXT_CONTROL_DW] = gen12_lrc_context_control_seed();
+    state[CTX_RING_HEAD_DW] = 0;
+    state[CTX_RING_TAIL_DW] = ring_tail;
+    state[CTX_RING_START_DW] = ring_start;
+    state[CTX_RING_CTL_DW] = ring_ctl;
+    state[CTX_RING_MI_MODE_DW] = STOP_RING << 16;
+
     state[idx] = MI_BATCH_BUFFER_END | 1;
 
     dma_cache_flush(warm.context_virt as *const u8, warm.context_len);
@@ -1709,6 +1716,30 @@ fn bcs_execlist_submit_port_push(
     let _ = mmio_write32(warm, BCS_RING_EXECLIST_SUBMIT_PORT, context0_hi);
     let _ = mmio_write32(warm, BCS_RING_EXECLIST_SUBMIT_PORT, context1_lo);
     let _ = mmio_write32(warm, BCS_RING_EXECLIST_SUBMIT_PORT, context1_hi);
+}
+
+fn seed_bcs_ring_live_state(
+    warm: Igpu770WarmState,
+    ring_head: u32,
+    ring_start: u32,
+    ring_ctl: u32,
+    ring_tail: u32,
+) {
+    let mi_mode_req = masked_bits_update(0, STOP_RING);
+    let ctx_ctl_req = masked_bits_update(
+        CTX_CTRL_RS_CTX_ENABLE,
+        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
+
+    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL, ctx_ctl_req);
+    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_req);
+    let _ = mmio_write32(warm, BCS_RING_MI_MODE, mi_mode_req);
+    let _ = mmio_write32(warm, BCS_RING_HEAD, ring_head);
+    let _ = mmio_write32(warm, BCS_RING_START, ring_start);
+    let _ = mmio_write32(warm, BCS_RING_CTL, ring_ctl);
+    let _ = mmio_write32(warm, BCS_RING_TAIL, ring_tail);
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -3159,20 +3190,7 @@ pub fn ggtt_bcs_smoke_test_once() {
     let _ = forcewake_all_acquire(warm);
     let _ =
         mmio_write32(warm, BCS_RING_MODE_GEN7, masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE));
-    let ctx_ctl_after = masked_bits_update(
-        CTX_CTRL_RS_CTX_ENABLE,
-        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
-            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
-    );
-    let ctx_ctl_ref_after = masked_bits_update(
-        CTX_CTRL_RS_CTX_ENABLE,
-        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
-            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
-    );
-    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
-    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_ref_after);
+    seed_bcs_ring_live_state(warm, 0, ring_start, ring_ctl, ring_tail_bytes as u32);
 
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     bcs_execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
@@ -3446,29 +3464,88 @@ pub(crate) fn bcs_composite_rgba_surface(
     let _ = forcewake_all_acquire(warm);
     let _ =
         mmio_write32(warm, BCS_RING_MODE_GEN7, masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE));
-    let ctx_ctl_after = masked_bits_update(
-        CTX_CTRL_RS_CTX_ENABLE,
-        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
-            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
-    );
-    let ctx_ctl_ref_after = masked_bits_update(
-        CTX_CTRL_RS_CTX_ENABLE,
-        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
-            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
-    );
-    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
-    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_ref_after);
+    seed_bcs_ring_live_state(warm, 0, ring.gpu_addr as u32, ring_ctl, ring_tail_bytes as u32);
+
+    let sq_lo_before = mmio_read32(warm, BCS_RING_EXECLIST_SQ_LO);
+    let sq_hi_before = mmio_read32(warm, BCS_RING_EXECLIST_SQ_HI);
+    let execlist_lo0 = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO);
+    let execlist_hi0 = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI);
+    log_bcs_mode_summary(warm, "composite-pre");
+    log_bcs_regs(warm, "composite-pre");
 
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     bcs_execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
     let _ = mmio_write32(warm, BCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
 
+    let sq_lo_after = mmio_read32(warm, BCS_RING_EXECLIST_SQ_LO);
+    let sq_hi_after = mmio_read32(warm, BCS_RING_EXECLIST_SQ_HI);
+    let mode_rb = mmio_read32(warm, BCS_RING_MODE_GEN7);
+    let ctx_ctl_rb = mmio_read32(warm, BCS_RING_CONTEXT_CONTROL);
+    let ctx_ctl_ref_rb = mmio_read32(warm, BCS_RING_CONTEXT_CONTROL_REF);
+    let el_ctl_rb = mmio_read32(warm, BCS_RING_EXECLIST_CONTROL);
+    let el_status_lo_rb = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO);
+    let el_status_hi_rb = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI);
+    crate::log!(
+        "intel/igpu770: bcs-composite-submit context sq_lo_before=0x{:08X} sq_hi_before=0x{:08X} sq_lo_req=0x{:08X} sq_hi_req=0x{:08X} sq_lo_after=0x{:08X} sq_hi_after=0x{:08X} mode_rb=0x{:08X} ctx_ctl_rb=0x{:08X} ctx_ctl_ref_rb=0x{:08X} el_ctl_rb=0x{:08X} el_status_lo0=0x{:08X} el_status_hi0=0x{:08X} el_status_lo_rb=0x{:08X} el_status_hi_rb=0x{:08X}\n",
+        sq_lo_before,
+        sq_hi_before,
+        context_desc_lo,
+        context_desc_hi,
+        sq_lo_after,
+        sq_hi_after,
+        mode_rb,
+        ctx_ctl_rb,
+        ctx_ctl_ref_rb,
+        el_ctl_rb,
+        execlist_lo0,
+        execlist_hi0,
+        el_status_lo_rb,
+        el_status_hi_rb
+    );
+
     let mut completed = false;
+    let mut first_head = 0u32;
+    let mut first_tail = 0u32;
+    let mut final_head = 0u32;
+    let mut final_tail = 0u32;
     let mut iter = 0usize;
     while iter < BLT_POLL_ITERS {
+        let head = mmio_read32(warm, BCS_RING_HEAD);
+        let tail = mmio_read32(warm, BCS_RING_TAIL);
+        let execlist_lo = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO);
+        let execlist_hi = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI);
         let result = read_bcs_result_markers(warm);
+        if iter == 0 {
+            first_head = head;
+            first_tail = tail;
+        }
+        final_head = head;
+        final_tail = tail;
+        if iter == 0 || (iter % BLT_POLL_LOG_STEP) == 0 {
+            crate::log!(
+                "intel/igpu770: bcs-composite-poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} mode=0x{:08X} instdone=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X}\n",
+                iter,
+                head,
+                tail,
+                mmio_read32(warm, BCS_RING_ACTHD),
+                mmio_read32(warm, BCS_RING_IPEIR),
+                mmio_read32(warm, BCS_RING_IPEHR),
+                mmio_read32(warm, BCS_RING_EIR),
+                mmio_read32(warm, BCS_RING_MODE_GEN7),
+                mmio_read32(warm, BCS_RING_INSTDONE),
+                execlist_lo,
+                execlist_hi,
+                result[0]
+            );
+            crate::log!(
+                "intel/igpu770: bcs-composite-markers iter={} start=0x{:08X} pre=0x{:08X} post=0x{:08X} done=0x{:08X}\n",
+                iter,
+                result[0],
+                result[1],
+                result[2],
+                result[3]
+            );
+        }
         if result[3] == BCS_COMPOSITE_RESULT_DONE {
             completed = true;
             break;
@@ -3479,8 +3556,24 @@ pub(crate) fn bcs_composite_rgba_surface(
 
     dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
     let result = read_bcs_result_markers(warm);
+    log_bcs_mode_summary(
+        warm,
+        if completed {
+            "composite-post-complete"
+        } else {
+            "composite-post-timeout"
+        },
+    );
+    log_bcs_regs(
+        warm,
+        if completed {
+            "composite-post-complete"
+        } else {
+            "composite-post-timeout"
+        },
+    );
     crate::log!(
-        "intel/igpu770: bcs-composite completed={} iters={} src_gpu=0x{:X} dst_gpu=0x{:X} dst_xy={}x{} src={}x{} dst={}x{} clear_before_copy={} start=0x{:08X} pre=0x{:08X} post=0x{:08X} done=0x{:08X}\n",
+        "intel/igpu770: bcs-composite completed={} iters={} src_gpu=0x{:X} dst_gpu=0x{:X} dst_xy={}x{} src={}x{} dst={}x{} clear_before_copy={} head0=0x{:08X} tail0=0x{:08X} headf=0x{:08X} tailf=0x{:08X} start=0x{:08X} pre=0x{:08X} post=0x{:08X} done=0x{:08X} execlist_lo0=0x{:08X} execlist_hi0=0x{:08X} execlist_lof=0x{:08X} execlist_hif=0x{:08X}\n",
         completed as u8,
         iter,
         src_gpu_addr,
@@ -3492,10 +3585,18 @@ pub(crate) fn bcs_composite_rgba_surface(
         dst_width,
         dst_height,
         clear_before_copy as u8,
+        first_head,
+        first_tail,
+        final_head,
+        final_tail,
         result[0],
         result[1],
         result[2],
-        result[3]
+        result[3],
+        execlist_lo0,
+        execlist_hi0,
+        mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO),
+        mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI)
     );
     completed && result[3] == BCS_COMPOSITE_RESULT_DONE
 }

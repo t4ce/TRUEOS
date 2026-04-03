@@ -823,31 +823,48 @@ pub(crate) fn run_demo_frame(state: &mut RenderDemoState) -> RenderDemoFrameRepo
 
     let vertices = render_demo_rgb_vertices(state.phase);
     let rgb_start = Instant::now();
-    let Some(scene_surface) = state.scene_surface.as_ref() else {
+    {
+        let Some(scene_surface) = state.scene_surface.as_ref() else {
+            report.failure = Some(RenderDemoFailureKind::Alloc);
+            return report.finish(start);
+        };
+        match draw_rgb_triangles(scene_surface, rgb_vertex_bytes(&vertices)) {
+            Ok(()) => {
+                report.rgb = RenderDemoPassStatus::Completed;
+                report.rgb_ms = rgb_start.elapsed().as_millis() as u64;
+                report.probe_after_rgb = render_demo_surface_probe(scene_surface);
+            }
+            Err(reason) => {
+                report.rgb = RenderDemoPassStatus::Failed(reason);
+                report.rgb_ms = rgb_start.elapsed().as_millis() as u64;
+                report.probe_after_rgb = render_demo_surface_probe(scene_surface);
+                report.failure = Some(reason);
+                return report.finish(start);
+            }
+        }
+    }
+
+    let Some(scene_surface_ref) = state.scene_surface.as_ref() else {
         report.failure = Some(RenderDemoFailureKind::Alloc);
         return report.finish(start);
     };
-    match draw_rgb_triangles(scene_surface, rgb_vertex_bytes(&vertices)) {
-        Ok(()) => {
-            report.rgb = RenderDemoPassStatus::Completed;
-            report.rgb_ms = rgb_start.elapsed().as_millis() as u64;
-            report.probe_after_rgb = render_demo_surface_probe(scene_surface);
-        }
-        Err(reason) => {
-            report.rgb = RenderDemoPassStatus::Failed(reason);
-            report.rgb_ms = rgb_start.elapsed().as_millis() as u64;
-            report.probe_after_rgb = render_demo_surface_probe(scene_surface);
-            report.failure = Some(reason);
-            return report.finish(start);
-        }
-    }
+    let scene_surface = RenderDemoOwnedSurface {
+        surface_phys: scene_surface_ref.surface_phys,
+        surface_virt: scene_surface_ref.surface_virt,
+        surface_bytes: scene_surface_ref.surface_bytes,
+        desc: scene_surface_ref.desc,
+        pitch_bytes: scene_surface_ref.pitch_bytes,
+        gpu_addr: scene_surface_ref.gpu_addr,
+        mapped_gpu_addr: scene_surface_ref.mapped_gpu_addr,
+        gpu_va_slot: scene_surface_ref.gpu_va_slot,
+    };
 
     report.texture = RenderDemoPassStatus::Skipped;
     match next_output_surface_mut(state) {
         Some(output_surface) => {
             let composite_start = Instant::now();
             match bridge_scene_to_scanout_surface(
-                scene_surface,
+                &scene_surface,
                 output_surface,
                 clear_rgb,
                 !render_demo_skip_clear_enabled(),
