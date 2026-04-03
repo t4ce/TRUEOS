@@ -517,7 +517,10 @@ fn log_xhci_settle_snapshot(
     );
 }
 
-async fn monitor_intel_settle_window(controller_id: usize, duration_ms: u64) -> Option<&'static str> {
+async fn monitor_intel_settle_window(
+    controller_id: usize,
+    duration_ms: u64,
+) -> Option<&'static str> {
     let started_at = Instant::now();
     let mut last_snapshot = match xhci_settle_snapshot(controller_id) {
         Some(snapshot) => {

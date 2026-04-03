@@ -11,7 +11,6 @@ pub(crate) mod file;
 pub(crate) mod format;
 pub(crate) mod hv;
 pub(crate) mod install;
-pub(crate) mod inteldev;
 pub(crate) mod net;
 pub(crate) mod probe;
 pub(crate) mod run;
