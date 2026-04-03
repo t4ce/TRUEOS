@@ -1631,8 +1631,22 @@ static GGTT_BLT_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static GGTT_BCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static GGTT_RECON_RAN: AtomicBool = AtomicBool::new(false);
 static GGTT_MAPS_RAN: AtomicBool = AtomicBool::new(false);
+static GGTT_BLT_SMOKE_DISABLED: AtomicBool = AtomicBool::new(false);
+static GGTT_BLT_SMOKE_DISABLED_LOGGED: AtomicBool = AtomicBool::new(false);
 static FORCEWAKE_GT_HELD: AtomicBool = AtomicBool::new(false);
 static FORCEWAKE_PARTIAL_HOLD_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[inline]
+pub fn ggtt_blt_smoke_disabled() -> bool {
+    GGTT_BLT_SMOKE_DISABLED.load(Ordering::Acquire)
+}
+
+fn disable_ggtt_blt_smoke_once() {
+    GGTT_BLT_SMOKE_DISABLED.store(true, Ordering::Release);
+    if !GGTT_BLT_SMOKE_DISABLED_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log!("intel: smoke disabled after first RCS timeout\n");
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 struct LimineFramebufferInfo {
@@ -2590,6 +2604,9 @@ pub fn ggtt_blt_smoke_test_once() {
 }
 
 pub fn ggtt_blt_smoke_frame(rotation_rad: f32) -> bool {
+    if ggtt_blt_smoke_disabled() {
+        return false;
+    }
     let Some(warm) = warm_state() else {
         crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=not-warmed\n");
         return false;
@@ -2837,6 +2854,9 @@ pub fn ggtt_blt_smoke_frame(rotation_rad: f32) -> bool {
         mmio_read32(warm, RCS_RING_EXECLIST_STATUS_HI),
         FORCEWAKE_GT_HELD.load(Ordering::Acquire) as u8
     );
+    if !completed {
+        disable_ggtt_blt_smoke_once();
+    }
     completed
 }
 

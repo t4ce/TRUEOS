@@ -1067,7 +1067,12 @@ static TASKS: &[TaskSpec] = &[
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
-    TaskSpec::disabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
+    TaskSpec::disabled(
+        "ui2-bgrt-demo",
+        UI2_DEMO_READY,
+        &UI2_BGRT_DEMO_STARTED,
+        spawn_ui2_bgrt_demo,
+    ),
     TaskSpec::disabled(
         "ui2-mandelbrot-demo",
         UI2_DEMO_READY,
