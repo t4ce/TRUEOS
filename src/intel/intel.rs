@@ -526,8 +526,8 @@ fn log_display_routing_probe(info: IntelDeviceInfo) {
     );
 }
 
-fn arm_display_power_smoke(info: IntelDeviceInfo) -> bool {
-    super::xelp_display_ngin::request_display_power_smoke(info).latched
+fn arm_display_power_smoke(info: IntelDeviceInfo) -> super::xelp_display_ngin::DisplayPowerState {
+    super::xelp_display_ngin::request_display_power_smoke(info).power_state
 }
 
 fn run_display_power_discovery(info: IntelDeviceInfo) {
@@ -558,7 +558,7 @@ fn run_display_power_discovery(info: IntelDeviceInfo) {
     crate::log!("intel: display discovery step=smoke action=request-display-power\n");
 
     // Request display power using igpu770 helper if available (requires forcewake)
-    let latched = if intel_igpu770_present() {
+    let power_state = if intel_igpu770_present() {
         if let Some(warm) = super::intel_igpu770::warm_state() {
             super::intel_igpu770::request_display_power_with_forcewake(warm)
         } else {
@@ -568,8 +568,12 @@ fn run_display_power_discovery(info: IntelDeviceInfo) {
         arm_display_power_smoke(info)
     };
 
-    crate::log!("intel: display discovery result gt_disp_pwron_latched={}\n", latched as u8);
-    super::xelp_display_ngin::kickoff_once(info, latched);
+    crate::log!(
+        "intel: display discovery result gt_disp_pwron_latched={} power_state={}\n",
+        power_state.is_software_latched() as u8,
+        power_state.as_str()
+    );
+    super::xelp_display_ngin::kickoff_once(info, power_state);
 }
 
 pub fn init_once() {

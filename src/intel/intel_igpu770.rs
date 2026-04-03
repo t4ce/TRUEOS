@@ -728,6 +728,48 @@ fn forcewake_gt_mmio_sanity(warm: Igpu770WarmState) {
     );
 }
 
+#[derive(Copy, Clone)]
+struct DisplayPowerProbe {
+    pwr_well_ctl: u32,
+    pwr_well_ctl2: u32,
+    dc_state_en: u32,
+    dc_state_debug: u32,
+    de_pll_enable: u32,
+    hotplug_en: u32,
+    gt_disp_pwron: u32,
+    render_ack: u32,
+    media_ack: u32,
+    gt_ack: u32,
+}
+
+impl DisplayPowerProbe {
+    #[inline]
+    fn power_mask(self) -> u32 {
+        self.pwr_well_ctl | self.pwr_well_ctl2
+    }
+
+    #[inline]
+    fn power_visible(self) -> bool {
+        self.power_mask() != 0 || self.gt_disp_pwron != 0
+    }
+}
+
+#[inline]
+fn capture_display_power_probe(warm: Igpu770WarmState) -> DisplayPowerProbe {
+    DisplayPowerProbe {
+        pwr_well_ctl: mmio_read32(warm, super::xelp_display_ngin::regs::PWR_WELL_CTL),
+        pwr_well_ctl2: mmio_read32(warm, super::xelp_display_ngin::regs::PWR_WELL_CTL2),
+        dc_state_en: mmio_read32(warm, super::xelp_display_ngin::regs::DC_STATE_EN),
+        dc_state_debug: mmio_read32(warm, super::xelp_display_ngin::regs::DC_STATE_DEBUG),
+        de_pll_enable: mmio_read32(warm, super::xelp_display_ngin::regs::BXT_DE_PLL_ENABLE),
+        hotplug_en: mmio_read32(warm, super::xelp_display_ngin::regs::PORT_HOTPLUG_EN),
+        gt_disp_pwron: mmio_read32(warm, GT_DISP_PWRON),
+        render_ack: mmio_read32(warm, FORCEWAKE_ACK_RENDER),
+        media_ack: mmio_read32(warm, FORCEWAKE_ACK_MEDIA),
+        gt_ack: mmio_read32(warm, FORCEWAKE_ACK_GT),
+    }
+}
+
 fn apply_adlp_display_workarounds(warm: Igpu770WarmState) -> (u32, u32) {
     let clk5_before = mmio_read32(warm, GEN9_CLKGATE_DIS_5);
     let clk5_after = clk5_before | DPCE_GATING_DIS;
@@ -740,31 +782,78 @@ fn apply_adlp_display_workarounds(warm: Igpu770WarmState) -> (u32, u32) {
     (mmio_read32(warm, GEN9_CLKGATE_DIS_5), mmio_read32(warm, GEN8_CHICKEN_DCPR_1))
 }
 
-pub(super) fn request_display_power_with_forcewake(warm: Igpu770WarmState) -> bool {
+pub(super) fn request_display_power_with_forcewake(
+    warm: Igpu770WarmState,
+) -> super::xelp_display_ngin::DisplayPowerState {
     let _forcewake_ack = forcewake_all_acquire(warm);
+    let pre = capture_display_power_probe(warm);
     let (clk5_rb, dcpr1_rb) = apply_adlp_display_workarounds(warm);
+    let armed = capture_display_power_probe(warm);
     let orig = mmio_read32(warm, GT_DISP_PWRON);
     let req = orig | GT_DISP_PWRON_REQ_MASK;
     let wrote = mmio_write32(warm, GT_DISP_PWRON, req);
-    let mut rb = mmio_read32(warm, GT_DISP_PWRON);
+    let rb_immediate = mmio_read32(warm, GT_DISP_PWRON);
+    let mut rb = rb_immediate;
     let mut poll_iters = 0usize;
     while poll_iters < 1024 && (rb & GT_DISP_PWRON_REQ_MASK) == 0 {
         core::hint::spin_loop();
         rb = mmio_read32(warm, GT_DISP_PWRON);
         poll_iters += 1;
     }
+    let post = capture_display_power_probe(warm);
     let latched = wrote && (rb & GT_DISP_PWRON_REQ_MASK) != 0;
+    let classification = if !wrote {
+        "write-failed"
+    } else if rb_immediate == orig && rb == orig {
+        "ignored"
+    } else if (rb_immediate & GT_DISP_PWRON_REQ_MASK) == 0 && (rb ^ orig) != 0 {
+        "masked"
+    } else if (rb_immediate & GT_DISP_PWRON_REQ_MASK) != 0 && (rb & GT_DISP_PWRON_REQ_MASK) == 0 {
+        "dropped"
+    } else if latched {
+        "latched"
+    } else {
+        "pending"
+    };
+    let power_state = super::xelp_display_ngin::DisplayPowerState::classify(
+        post.power_visible(),
+        latched,
+        classification,
+    );
     crate::log!(
-        "intel/igpu770: display-power-request register=GT_DISP_PWRON orig=0x{:08X} req=0x{:08X} rb=0x{:08X} clk5_rb=0x{:08X} dcpr1_rb=0x{:08X} poll_iters={} latched={}\n",
+        "intel/igpu770: display-power-probe pre power_mask=0x{:08X} dc_state_en=0x{:08X} dc_state_debug=0x{:08X} pll=0x{:08X} hotplug=0x{:08X} gt_disp_pwron=0x{:08X} forcewake_render=0x{:08X} forcewake_media=0x{:08X} forcewake_gt=0x{:08X} visible={}\n",
+        pre.power_mask(),
+        pre.dc_state_en,
+        pre.dc_state_debug,
+        pre.de_pll_enable,
+        pre.hotplug_en,
+        pre.gt_disp_pwron,
+        pre.render_ack,
+        pre.media_ack,
+        pre.gt_ack,
+        pre.power_visible() as u8
+    );
+    crate::log!(
+        "intel/igpu770: display-power-request register=GT_DISP_PWRON orig=0x{:08X} req=0x{:08X} rb_immediate=0x{:08X} rb_final=0x{:08X} clk5_rb=0x{:08X} dcpr1_rb=0x{:08X} armed_power_mask=0x{:08X} armed_dc_state_en=0x{:08X} armed_gt_disp_pwron=0x{:08X} post_power_mask=0x{:08X} post_dc_state_en=0x{:08X} post_gt_disp_pwron=0x{:08X} post_forcewake_gt=0x{:08X} poll_iters={} latched={} class={} state={}\n",
         orig,
         req,
+        rb_immediate,
         rb,
         clk5_rb,
         dcpr1_rb,
+        armed.power_mask(),
+        armed.dc_state_en,
+        armed.gt_disp_pwron,
+        post.power_mask(),
+        post.dc_state_en,
+        post.gt_disp_pwron,
+        post.gt_ack,
         poll_iters,
-        latched as u8
+        latched as u8,
+        classification,
+        power_state.as_str()
     );
-    latched
+    power_state
 }
 
 fn build_rcs_store_pixels_batch(warm: Igpu770WarmState, fill: BltFillRectPlan) {
@@ -3235,7 +3324,6 @@ pub(crate) fn rcs_present_rgba_frame(rgba: &[u8], width: usize, height: usize) -
     );
     success
 }
-
 
 pub fn warm_once(info: IntelDeviceInfo) {
     if info.device_id != INTEL_IGPU770_DEVICE_ID {

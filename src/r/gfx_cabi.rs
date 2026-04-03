@@ -250,6 +250,7 @@ pub mod cabi {
     include!("cabi_codes.rs");
 
     use super::VecDeque;
+    use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     #[repr(u32)]
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1777,6 +1778,9 @@ pub mod cabi {
     }
 
     static GFX_TRACE_RING: spin::Mutex<GfxTraceRing> = spin::Mutex::new(GfxTraceRing::new());
+    static END_FRAME_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+    static CURSOR_HELPER_SKIP_LOGS: AtomicU32 = AtomicU32::new(0);
+    static SCREENSHOT_HELPER_SKIP_LOGS: AtomicU32 = AtomicU32::new(0);
 
     #[inline]
     fn gfx_trace_record(op: u32, frame_seq: u32, flags: u32, a: u32, b: u32, c: u32, d: u32) {
@@ -1802,6 +1806,47 @@ pub mod cabi {
             ring.len += 1;
         } else {
             ring.dropped = ring.dropped.saturating_add(1);
+        }
+    }
+
+    struct EndFrameProgressGuard;
+
+    impl EndFrameProgressGuard {
+        #[inline]
+        fn new() -> Self {
+            END_FRAME_IN_PROGRESS.store(true, Ordering::Release);
+            Self
+        }
+    }
+
+    impl Drop for EndFrameProgressGuard {
+        fn drop(&mut self) {
+            END_FRAME_IN_PROGRESS.store(false, Ordering::Release);
+        }
+    }
+
+    #[inline]
+    fn end_frame_in_progress() -> bool {
+        END_FRAME_IN_PROGRESS.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    fn log_cursor_helper_skipped_end_frame_active() {
+        let n = CURSOR_HELPER_SKIP_LOGS.fetch_add(1, Ordering::Relaxed);
+        if n < 32 {
+            crate::globalog::log(format_args!(
+                "gfx-cabi: cursor overlay tick skipped because end_frame is active\n"
+            ));
+        }
+    }
+
+    #[inline]
+    fn log_screenshot_helper_skipped_end_frame_active() {
+        let n = SCREENSHOT_HELPER_SKIP_LOGS.fetch_add(1, Ordering::Relaxed);
+        if n < 32 {
+            crate::globalog::log(format_args!(
+                "gfx-cabi: composed screenshot helper skipped because end_frame is active\n"
+            ));
         }
     }
 
@@ -2319,6 +2364,11 @@ pub mod cabi {
         rgb_src: &[u8],
         tex_src: &[u8],
     ) {
+        if end_frame_in_progress() {
+            log_screenshot_helper_skipped_end_frame_active();
+            return;
+        }
+
         if !crate::gfx::screenshot_capture_armed() {
             return;
         }
@@ -4346,7 +4396,9 @@ pub mod cabi {
                 .unwrap_or_default()
         };
         let mut submitted_passes = 0usize;
+        let mut screenshot_overlay_extent: Option<(u32, u32)> = None;
 
+        let end_frame_guard = EndFrameProgressGuard::new();
         let Some(ret) = crate::gfx::with_context_tag(
             crate::gfx::SystemLockOwner::EndFrame,
             |ctx| {
@@ -4355,6 +4407,9 @@ pub mod cabi {
                     None => return -1,
                 };
                 let swap = ctx.swapchain_desc();
+                if is_screen_present_frame {
+                    screenshot_overlay_extent = Some((swap.extent.width, swap.extent.height));
+                }
                 // Compose cursor into app-driven presents to avoid one-frame cursor blink
                 // between end_frame and the async cursor overlay tick.
                 let mut submit_draws = draws.clone();
@@ -4773,6 +4828,7 @@ pub mod cabi {
         ) else {
             return -13;
         };
+        drop(end_frame_guard);
 
         if ret == 0 {
             let mut st = GFX_CABI_STATE.lock();
@@ -4812,13 +4868,7 @@ pub mod cabi {
             if is_screen_present_frame {
                 let mut screenshot_draws = draws.clone();
                 let mut screenshot_rgb = rgb_src.clone();
-                if let Some((vp_w, vp_h)) = crate::gfx::with_context_tag(
-                    crate::gfx::SystemLockOwner::CursorQueryViewport,
-                    |ctx| {
-                        let extent = ctx.swapchain_desc().extent;
-                        (extent.width, extent.height)
-                    },
-                ) {
+                if let Some((vp_w, vp_h)) = screenshot_overlay_extent {
                     append_kernel_cursor_overlay_draws(
                         &mut screenshot_draws,
                         &mut screenshot_rgb,

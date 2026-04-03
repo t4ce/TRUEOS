@@ -121,12 +121,57 @@ pub(crate) struct DisplayPowerRequestPlan {
     pub request_mask: u32,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DisplayPowerState {
+    Absent,
+    Visible,
+    VisibleIgnoredRequest,
+    SoftwareLatched,
+}
+
+impl DisplayPowerState {
+    #[inline]
+    pub(crate) fn classify(visible: bool, latched: bool, request_class: &str) -> Self {
+        if latched {
+            Self::SoftwareLatched
+        } else if visible && matches!(request_class, "ignored") {
+            Self::VisibleIgnoredRequest
+        } else if visible {
+            Self::Visible
+        } else {
+            Self::Absent
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn has_effective_power(self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+
+    #[inline]
+    pub(crate) const fn is_software_latched(self) -> bool {
+        matches!(self, Self::SoftwareLatched)
+    }
+
+    #[inline]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Visible => "visible",
+            Self::VisibleIgnoredRequest => "visible-ignored-request",
+            Self::SoftwareLatched => "software-latched",
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct DisplayPowerSmokeResult {
     pub plan: DisplayPowerRequestPlan,
     pub wrote: bool,
     pub readback: u32,
     pub latched: bool,
+    pub request_class: &'static str,
+    pub power_state: DisplayPowerState,
 }
 
 #[inline]
@@ -163,14 +208,27 @@ pub(crate) fn request_display_power_smoke(info: IntelDeviceInfo) -> DisplayPower
     let wrote = mmio_write32(info, plan.reg.offset, plan.request);
     let readback = mmio_read32(info, plan.reg.offset);
     let latched = wrote && (readback & plan.request_mask) != 0;
+    let request_class = if !wrote {
+        "write-failed"
+    } else if readback == plan.before {
+        "ignored"
+    } else if latched {
+        "latched"
+    } else {
+        "pending"
+    };
+    let power_state =
+        DisplayPowerState::classify(snapshot.has_visible_display_power(), latched, request_class);
 
     crate::log!(
-        "intel/display-ngin: power-smoke register={} orig=0x{:08X} req=0x{:08X} rb=0x{:08X} latched={}\n",
+        "intel/display-ngin: power-smoke register={} orig=0x{:08X} req=0x{:08X} rb=0x{:08X} latched={} class={} state={}\n",
         plan.reg.name,
         plan.before,
         plan.request,
         readback,
-        latched as u8
+        latched as u8,
+        request_class,
+        power_state.as_str()
     );
 
     DisplayPowerSmokeResult {
@@ -178,6 +236,8 @@ pub(crate) fn request_display_power_smoke(info: IntelDeviceInfo) -> DisplayPower
         wrote,
         readback,
         latched,
+        request_class,
+        power_state,
     }
 }
 
@@ -677,6 +737,7 @@ impl DisplayApiShape {
 pub(crate) struct DisplayKickoffState {
     pub early: EarlyDisplaySnapshot,
     pub power_request: DisplayPowerRequestPlan,
+    pub power_state: DisplayPowerState,
     pub power_latched: bool,
     pub topology: DisplayTopology,
     pub runtime_count: usize,
@@ -1026,11 +1087,11 @@ fn build_pipe_plan(
     runtime: DisplayRuntimeSnapshot,
     fb: Option<BootFramebufferHint>,
     guc_ready: bool,
-    power_latched: bool,
+    power_available: bool,
 ) -> DisplayPipePlan {
     let surface = build_surface_plan(slot, runtime, fb);
     let programming = build_programming_plan(descriptor, runtime, guc_ready);
-    let next_stage = if !power_latched && !runtime.active_scanout {
+    let next_stage = if !power_available && !runtime.active_scanout {
         DisplayKickoffStage::PowerArmed
     } else if runtime.active_scanout && runtime.plane_enabled {
         DisplayKickoffStage::PresentApi
@@ -1106,9 +1167,14 @@ fn current_api_shape(topology: DisplayTopology, guc_ready: bool) -> DisplayApiSh
     api
 }
 
-fn build_kickoff_state(info: IntelDeviceInfo, power_latched: bool) -> DisplayKickoffState {
+fn build_kickoff_state(
+    info: IntelDeviceInfo,
+    power_state: DisplayPowerState,
+) -> DisplayKickoffState {
     let early = capture_early_display_snapshot(info);
     let power_request = build_display_power_request_plan(early);
+    let power_latched = power_state.is_software_latched();
+    let power_available = power_state.has_effective_power() || early.has_visible_display_power();
     let guc_ready = intel_guc::ready();
     let fb = boot_framebuffer_hint();
     let mut runtimes = [DisplayRuntimeSnapshot::empty(); MAX_DISPLAY_PIPES];
@@ -1145,14 +1211,14 @@ fn build_kickoff_state(info: IntelDeviceInfo, power_latched: bool) -> DisplayKic
             default_present_pipe.map(|v| v == pipe).unwrap_or(false),
         );
         topology.pipes[idx] = descriptor;
-        plans[idx] = build_pipe_plan(idx, descriptor, runtime, fb, guc_ready, power_latched);
+        plans[idx] = build_pipe_plan(idx, descriptor, runtime, fb, guc_ready, power_available);
         idx += 1;
     }
 
     topology.active_pipe_count = active_pipe_count;
     topology.routed_pipe_count = routed_pipe_count;
 
-    let stage = if !power_latched && !early.has_visible_display_power() {
+    let stage = if !power_available {
         DisplayKickoffStage::PowerArmed
     } else if active_pipe_count != 0 {
         DisplayKickoffStage::PresentApi
@@ -1165,6 +1231,7 @@ fn build_kickoff_state(info: IntelDeviceInfo, power_latched: bool) -> DisplayKic
     DisplayKickoffState {
         early,
         power_request,
+        power_state,
         power_latched,
         topology,
         runtime_count: MAX_DISPLAY_PIPES,
@@ -1289,7 +1356,7 @@ fn log_workload_draft(label: &str, draft: DisplayWorkloadDraft) {
 
 fn log_kickoff_state(info: IntelDeviceInfo, state: DisplayKickoffState) {
     crate::log!(
-        "intel/display-ngin: kickoff summary sku={} stage={} guc_ready={} active={} planned={} routed={} default_pipe={} power_visible={} power_latched={} pll_seeded={} hotplug_configured={} next_gt_disp_pwron=0x{:08X}\n",
+        "intel/display-ngin: kickoff summary sku={} stage={} guc_ready={} active={} planned={} routed={} default_pipe={} power_visible={} power_state={} power_latched={} pll_seeded={} hotplug_configured={} next_gt_disp_pwron=0x{:08X}\n",
         state.topology.sku_name,
         state.stage.as_str(),
         state.guc_ready as u8,
@@ -1302,6 +1369,7 @@ fn log_kickoff_state(info: IntelDeviceInfo, state: DisplayKickoffState) {
             .map(DisplayPipeId::as_str)
             .unwrap_or("none"),
         state.early.has_visible_display_power() as u8,
+        state.power_state.as_str(),
         state.power_latched as u8,
         state.early.pll_seeded() as u8,
         state.early.hotplug_configured() as u8,
@@ -1375,12 +1443,12 @@ fn log_kickoff_state(info: IntelDeviceInfo, state: DisplayKickoffState) {
     }
 }
 
-pub(crate) fn kickoff_once(info: IntelDeviceInfo, power_latched: bool) {
+pub(crate) fn kickoff_once(info: IntelDeviceInfo, power_state: DisplayPowerState) {
     if DISPLAY_KICKOFF_RAN.swap(true, Ordering::AcqRel) {
         return;
     }
 
-    let state = build_kickoff_state(info, power_latched);
+    let state = build_kickoff_state(info, power_state);
     {
         let mut slot = DISPLAY_KICKOFF_STATE.lock();
         *slot = Some(state);
