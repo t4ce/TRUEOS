@@ -91,8 +91,7 @@ pub(crate) fn draw_hosted_browser_gadget_scene(
         let x = content.x + UI2_BROWSER_GADGET_PAD_X + gadget.x_px as f32 - scroll_x;
         let y = content.y + UI2_BROWSER_GADGET_PAD_Y + gadget.y_px as f32 - scroll_y;
         let font_px = gadget.font_size_px.max(1) as f32;
-        let tier = ui2_font_pick_tier_for_px(font_px);
-        let text_metrics = ui2_font_measure_text(tier, gadget.text.as_str());
+        let text_metrics = ui2_font_measure_text_for_px(gadget.text.as_str(), font_px);
         let line_height_px = gadget
             .line_height_px
             .max(u32::from(text_metrics.line_height_px))

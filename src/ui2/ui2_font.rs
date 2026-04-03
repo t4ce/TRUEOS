@@ -362,9 +362,29 @@ fn ui2_font_resolve_twemoji_glyph(tier: Ui2FontTier, ch: char) -> Option<Ui2Font
 }
 
 pub(crate) fn ui2_font_measure_text(tier: Ui2FontTier, text: &str) -> Ui2FontTextMetrics {
-    let line_height_px = ui2_font_native_line_height_px(tier);
-    let scale_num = u32::from(tier.display_scale_num());
-    let scale_den = u32::from(tier.display_scale_den());
+    ui2_font_measure_text_with_scale(tier, text, tier.display_scale())
+}
+
+#[inline]
+fn ui2_font_scale_for_px(tier: Ui2FontTier, px_h: f32) -> f32 {
+    let native_line_h = ui2_font_native_line_height_px(tier).max(1) as f32;
+    px_h.max(1.0) / native_line_h
+}
+
+fn ui2_font_measure_text_with_scale(
+    tier: Ui2FontTier,
+    text: &str,
+    scale: f32,
+) -> Ui2FontTextMetrics {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let line_height_px = (libm::roundf(f32::from(ui2_font_native_line_height_px(tier).max(1)) * scale)
+        as u32)
+        .max(1)
+        .min(u32::from(u16::MAX)) as u16;
     if text.is_empty() {
         return Ui2FontTextMetrics {
             width_px: 0,
@@ -390,10 +410,8 @@ pub(crate) fn ui2_font_measure_text(tier: Ui2FontTier, text: &str) -> Ui2FontTex
         let advance_px = ui2_font_resolve_glyph_or_fallback(tier, ch)
             .map(|glyph| glyph.advance_px)
             .unwrap_or_else(|| fallback_advance_px(tier, ch));
-        let display_advance_px =
-            ((u32::from(advance_px) * scale_num) + (scale_den / 2)) / scale_den;
-        let display_advance_px = display_advance_px.max(1);
-        line_width = line_width.saturating_add(display_advance_px);
+        let scaled_advance_px = (libm::roundf(f32::from(advance_px) * scale) as u32).max(1);
+        line_width = line_width.saturating_add(scaled_advance_px);
     }
 
     max_line_width = max_line_width.max(line_width);
@@ -405,6 +423,12 @@ pub(crate) fn ui2_font_measure_text(tier: Ui2FontTier, text: &str) -> Ui2FontTex
         line_count,
         line_height_px,
     }
+}
+
+pub(crate) fn ui2_font_measure_text_for_px(text: &str, px_h: f32) -> Ui2FontTextMetrics {
+    let tier = ui2_font_pick_tier_for_px(px_h);
+    let scale = ui2_font_scale_for_px(tier, px_h);
+    ui2_font_measure_text_with_scale(tier, text, scale)
 }
 
 pub(crate) fn ui2_font_draw_text_line_no_present(
@@ -444,7 +468,7 @@ pub(crate) fn ui2_font_draw_text_line_rgba_no_present(
     }
 
     let tier = ui2_font_pick_tier_for_px(px_h);
-    let scale = tier.display_scale();
+    let scale = ui2_font_scale_for_px(tier, px_h);
     if !(scale.is_finite() && scale > 0.0) {
         return false;
     }
@@ -535,8 +559,7 @@ pub(crate) fn ui2_font_draw_text_line_in_rect_rgba_no_present(
         return false;
     }
 
-    let tier = ui2_font_pick_tier_for_px(px_h);
-    let text_w = ui2_font_measure_text(tier, text).width_px as f32;
+    let text_w = ui2_font_measure_text_for_px(text, px_h).width_px as f32;
     let draw_w = text_w.min(rect.w).max(0.0);
     if draw_w <= 0.0 {
         return false;
