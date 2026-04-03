@@ -401,16 +401,6 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
 
 #[embassy_executor::task]
 async fn gfx_virgl_ready_task() {
-    if crate::intel::isolated_triangle_mode_active() {
-        crate::log!("boot-probe: gfx-virgl-backend-ready skipped (intel render-demo active)\n");
-        return;
-    }
-
-    if crate::intel::has_claimed_device() {
-        crate::log!("boot-probe: gfx-virgl-backend-ready skipped (intel soft-detect claimed)\n");
-        return;
-    }
-
     crate::gfx::init(crate::limine::framebuffer_response());
 
     if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
@@ -617,21 +607,18 @@ fn task_gate_always() -> bool {
 
 #[inline]
 fn gfx_backend_boot_gate() -> bool {
-    !crate::intel::isolated_triangle_mode_active() && !crate::intel::has_claimed_device()
+    true
 }
 
 #[inline]
 fn ui2_core_task_gate() -> bool {
-    !crate::intel::isolated_triangle_mode_active()
+    true
 }
 
 #[inline]
 fn ui2_demo_task_gate() -> bool {
-    if crate::gfx::is_intel_active() || crate::intel::intel_igpu770_present() {
-        UI2_DEMOS_ON_INTEL_ENABLED
-    } else {
-        UI2_DEMOS_OFF_INTEL_ENABLED
-    }
+    let _ = UI2_DEMOS_ON_INTEL_ENABLED;
+    UI2_DEMOS_OFF_INTEL_ENABLED
 }
 
 fn spawn_ui2_demo_on_worker<F>(spawner: Spawner, spawn: F) -> SpawnAttempt
@@ -751,14 +738,6 @@ fn spawn_ui2_trueosfs_explorer_demo(spawner: Spawner) -> SpawnAttempt {
         worker_spawner
             .spawn(crate::tst_ui2_trueosfs_explorer_demo::ui2_trueosfs_explorer_demo_task())
     })
-}
-
-fn spawn_gfx_intel_readiness_probe(spawner: Spawner) -> SpawnAttempt {
-    if crate::intel::render_demo_mode_active() {
-        spawn_local(spawner, |spawner| spawner.spawn(crate::intel::intel_render_demo_task()))
-    } else {
-        spawn_local(spawner, |spawner| spawner.spawn(crate::intel::scanout_smoke_task()))
-    }
 }
 
 fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {

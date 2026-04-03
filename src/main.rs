@@ -21,7 +21,6 @@ mod globalog;
 mod host_api;
 mod hv;
 pub mod hvv;
-mod intel;
 mod iso9660;
 mod limine;
 mod logflag;
@@ -156,8 +155,6 @@ pub extern "C" fn kmain() -> ! {
     percpu::init_bsp();
     dma::init_from_limine();
     pci::enumerate_impl();
-
-    intel::init_once();
 
     //vga::cube::tick();
     trueos_qjs::host_api_hook::set_context_init_hook(host_api::install);

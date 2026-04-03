@@ -16,7 +16,6 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use embassy_time_driver::{TICK_HZ, now};
 use trueos_gfx_core::GfxContext;
 
-pub(crate) use backends::intel_present_completed_seq;
 pub(crate) use screenshot::{publish_screenshot_rgba_buffer, screenshot_capture_armed};
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
@@ -131,8 +130,7 @@ pub enum SystemLockOwner {
     IsVirglActive = 9,
     IsIntelActive = 10,
     SwitchToVirgl = 11,
-    SwitchToIntel = 12,
-    BackendKind = 13,
+    BackendKind = 12,
 }
 
 impl SystemLockOwner {
@@ -151,7 +149,6 @@ impl SystemLockOwner {
             Self::IsVirglActive => "is_virgl_active",
             Self::IsIntelActive => "is_intel_active",
             Self::SwitchToVirgl => "switch_to_virgl",
-            Self::SwitchToIntel => "switch_to_intel",
             Self::BackendKind => "backend_kind",
         }
     }
@@ -170,7 +167,6 @@ impl SystemLockOwner {
             x if x == Self::IsVirglActive as u32 => Self::IsVirglActive,
             x if x == Self::IsIntelActive as u32 => Self::IsIntelActive,
             x if x == Self::SwitchToVirgl as u32 => Self::SwitchToVirgl,
-            x if x == Self::SwitchToIntel as u32 => Self::SwitchToIntel,
             x if x == Self::BackendKind as u32 => Self::BackendKind,
             _ => Self::Unknown,
         }
@@ -197,8 +193,7 @@ impl System {
 fn backend_kind_raw(backend: &backends::Backend) -> u8 {
     match backend {
         backends::Backend::Virgl(_) => 1,
-        backends::Backend::Intel(_) => 2,
-        backends::Backend::None(_) => 3,
+        backends::Backend::None(_) => 2,
     }
 }
 
@@ -211,8 +206,7 @@ fn publish_backend_kind(backend: &backends::Backend) {
 fn backend_kind_cached() -> Option<BackendKind> {
     match BACKEND_KIND_ATOMIC.load(Ordering::Acquire) {
         1 => Some(BackendKind::Virgl),
-        2 => Some(BackendKind::Intel),
-        3 => Some(BackendKind::None),
+        2 => Some(BackendKind::None),
         _ => None,
     }
 }
@@ -225,7 +219,6 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
         let backend = backends::Backend::init_auto(framebuffers);
         let backend_name = match &backend {
             backends::Backend::Virgl(_) => "virgl",
-            backends::Backend::Intel(_) => "intel",
             backends::Backend::None(_) => "none",
         };
         crate::log!("gfx: backend={}\n", backend_name);
@@ -377,7 +370,7 @@ pub fn is_virgl_active() -> bool {
 }
 
 pub fn is_intel_active() -> bool {
-    matches!(backend_kind_cached(), Some(BackendKind::Intel))
+    false
 }
 
 /// Returns whether a virgl-capable virtio-gpu device is currently visible.
@@ -415,35 +408,9 @@ pub fn switch_to_virgl() -> bool {
     switched
 }
 
-pub fn switch_to_intel() -> bool {
-    crate::log!("gfx: switch_to_intel: begin\n");
-
-    let fbs = with_framebuffers(|f| f).flatten();
-    let Some(b) = backends::Backend::init_intel(fbs) else {
-        crate::log!("gfx: switch_to_intel: init_intel failed\n");
-        return false;
-    };
-
-    let switched = with_system_tag(SystemLockOwner::SwitchToIntel, |sys| {
-        sys.backend = b;
-        publish_backend_kind(&sys.backend);
-        bump_backend_epoch();
-        crate::log!("gfx: switch_to_intel: ok epoch={}\n", backend_epoch());
-        true
-    })
-    .unwrap_or(false);
-
-    if switched {
-        finalize_backend_init();
-    }
-
-    switched
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BackendKind {
     Virgl,
-    Intel,
     None,
 }
 
@@ -451,9 +418,6 @@ pub fn backend_kind() -> Option<BackendKind> {
     backend_kind_cached()
 }
 
-/// Toggle the gfx backend.
-///
-/// A/B cycle between accelerated backends when available.
 pub fn toggle_backend() -> BackendKind {
     let Some(kind) = backend_kind() else {
         return BackendKind::None;
@@ -461,11 +425,7 @@ pub fn toggle_backend() -> BackendKind {
 
     match kind {
         BackendKind::Virgl => BackendKind::Virgl,
-        BackendKind::Intel => BackendKind::Intel,
         BackendKind::None => {
-            if switch_to_intel() {
-                return BackendKind::Intel;
-            }
             if switch_to_virgl() {
                 return BackendKind::Virgl;
             }
