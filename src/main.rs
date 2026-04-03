@@ -70,8 +70,6 @@ mod tst_ui2_svg_demo;
 mod tst_ui2_triangle_demo;
 #[path = "tst/ui2_trueosfs_explorer_demo.rs"]
 mod tst_ui2_trueosfs_explorer_demo;
-#[path = "tst/ui2_usb_audio_demo.rs"]
-mod tst_ui2_usb_audio_demo;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
