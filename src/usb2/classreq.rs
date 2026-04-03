@@ -34,7 +34,7 @@ impl UsbDmaBuf {
 }
 
 fn usb_dma() -> DeviceDma {
-    DeviceDma::new(USB_DMA_MASK, &super::super::crabusb_service::CRABUSB_KERNEL)
+    DeviceDma::new(USB_DMA_MASK, &super::crabusb_service::CRABUSB_KERNEL)
 }
 
 #[repr(u8)]

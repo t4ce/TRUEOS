@@ -256,7 +256,7 @@ impl Xhci {
         let hccparams1 = reg.capability.hccparams1.read_volatile();
         let ac64 = hccparams1.addressing_capability(); // Bit[0]: 64-bit Addressing Capability
 
-        info!(
+        debug!(
             "xHCI: Addressing Capability (AC64) = {} ({}-bit addressing)",
             ac64,
             if ac64 { "64" } else { "32" }
@@ -268,7 +268,7 @@ impl Xhci {
         // or firmware handoff is fully settled.
         let dma_mask = u32::MAX as usize;
         if ac64 {
-            info!(
+            debug!(
                 "xHCI: AC64 advertised, but forcing 32-bit DMA mask for command/event/context buffers"
             );
         }
@@ -327,24 +327,24 @@ impl Xhci {
         self.dev_ctx = Some(DeviceContextList::new(max_slots as _, self.kernel())?);
 
         if Self::PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT {
-            info!("xHCI: staged-run experiment programming dcbaap before RUN");
+            debug!("xHCI: staged-run experiment programming dcbaap before RUN");
             self.setup_dcbaap()?;
         } else {
-            info!("xHCI: staged-run experiment skipping dcbaap before RUN");
+            debug!("xHCI: staged-run experiment skipping dcbaap before RUN");
         }
 
         if Self::PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT {
-            info!("xHCI: staged-run experiment programming crcr before RUN");
+            debug!("xHCI: staged-run experiment programming crcr before RUN");
             self.set_cmd_ring()?;
         } else {
-            info!("xHCI: staged-run experiment skipping crcr before RUN");
+            debug!("xHCI: staged-run experiment skipping crcr before RUN");
         }
 
         if Self::PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT {
-            info!("xHCI: staged-run experiment programming runtime ring before RUN");
+            debug!("xHCI: staged-run experiment programming runtime ring before RUN");
             self.setup_runtime_ring();
         } else {
-            info!("xHCI: staged-run experiment skipping runtime ring before RUN");
+            debug!("xHCI: staged-run experiment skipping runtime ring before RUN");
         }
 
         self.setup_scratchpads()?;
@@ -609,7 +609,7 @@ impl Xhci {
 
     fn setup_scratchpads(&mut self) -> Result {
         if Self::SKIP_SCRATCHPADS_EXPERIMENT {
-            info!("xHCI: scratchpad setup skipped by experiment");
+            debug!("xHCI: scratchpad setup skipped by experiment");
             self.dev_mut()?.dcbaa.set(0, 0u64);
             self.flush_controller_write();
             self.scratchpad_buf_arr = None;
@@ -661,7 +661,7 @@ impl Xhci {
         })
             .await?;
 
-        info!("Running");
+        debug!("Running");
 
         // 必须等待至少200ms，否则 port enable = false
         self.kernel.delay(Duration::from_millis(200));

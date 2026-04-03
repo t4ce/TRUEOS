@@ -9,6 +9,7 @@ pub(crate) mod xhci {
 }
 
 pub(crate) mod api;
+mod crabusb_service;
 pub(crate) mod hid;
 mod mass;
 #[path = "device/midi.rs"]
@@ -267,12 +268,131 @@ fn controller_mmio_map(bus: u8, slot: u8, function: u8) -> Option<NonNull<u8>> {
     Some(virt_base)
 }
 
+pub(crate) fn pci_usb_controllers() -> Vec<TlbUsbController> {
+    const PCI_CLASS_SERIAL_BUS: u8 = 0x0C;
+    const PCI_SUBCLASS_USB: u8 = 0x03;
+    const PCI_PROGIF_XHCI: u8 = 0x30;
+
+    crate::pci::enumerate_impl();
+
+    let mut ctrls = Vec::new();
+    crate::pci::with_devices(|list| {
+        for dev in list.iter() {
+            if dev.class != PCI_CLASS_SERIAL_BUS
+                || dev.subclass != PCI_SUBCLASS_USB
+                || dev.prog_if != PCI_PROGIF_XHCI
+            {
+                continue;
+            }
+
+            let Some(mmio_base) = controller_mmio_map(dev.bus, dev.slot, dev.function) else {
+                continue;
+            };
+
+            ctrls.push(TlbUsbController {
+                index: ctrls.len(),
+                bus: dev.bus,
+                slot: dev.slot,
+                function: dev.function,
+                vendor_id: dev.vendor,
+                device_id: dev.device,
+                mmio_base,
+                controller_phase: "init",
+                root_hub_lifecycle: "init",
+                event_ready: false,
+                root_port_change_seen: false,
+                empty_probe_streak: 0,
+            });
+        }
+    });
+
+    ctrls
+}
+
+#[inline]
+pub(crate) fn discover_first_controller() -> Option<TlbUsbController> {
+    pci_usb_controllers().into_iter().next()
+}
+
+#[inline]
+pub(crate) fn controller_by_index(controller_id: usize) -> Option<TlbUsbController> {
+    pci_usb_controllers()
+        .into_iter()
+        .find(|info| info.index == controller_id)
+}
+
 #[inline]
 unsafe fn read_mmio32(base: *const u8, offset: usize) -> u32 {
     unsafe { core::ptr::read_volatile(base.add(offset) as *const u32) }
+}
+
+#[inline]
+unsafe fn read_mmio64(base: *const u8, offset: usize) -> u64 {
+    let lo = unsafe { read_mmio32(base, offset) } as u64;
+    let hi = unsafe { read_mmio32(base, offset + 4) } as u64;
+    lo | (hi << 32)
+}
+
+pub(crate) fn controller_mmio_diag(controller_id: usize) -> Option<UsbControllerMmioDiag> {
+    let info = controller_by_index(controller_id)?;
+    crate::pci::enable_mem_and_bus_master(info.bus, info.slot, info.function);
+    let mmio = info.mmio_base.as_ptr() as *const u8;
+
+    unsafe {
+        let caplen = (read_mmio32(mmio, 0x00) & 0xFF) as u8;
+        let hcsparams1 = read_mmio32(mmio, 0x04);
+        let hccparams1 = read_mmio32(mmio, 0x10);
+        let dboff = read_mmio32(mmio, 0x14) & !0x3;
+        let rtsoff = read_mmio32(mmio, 0x18) & !0x1F;
+        let op_base = usize::from(caplen);
+        let usbcmd = read_mmio32(mmio, op_base);
+        let usbsts = read_mmio32(mmio, op_base + 0x04);
+        let crcr = read_mmio64(mmio, op_base + 0x18);
+        let dcbaap = read_mmio64(mmio, op_base + 0x30);
+        let config = read_mmio32(mmio, op_base + 0x38);
+        let runtime_base = rtsoff as usize;
+        let iman = read_mmio32(mmio, runtime_base + 0x20);
+        let imod = read_mmio32(mmio, runtime_base + 0x24);
+        let erstsz = read_mmio32(mmio, runtime_base + 0x28);
+        let erstba = read_mmio64(mmio, runtime_base + 0x30);
+        let erdp = read_mmio64(mmio, runtime_base + 0x38);
+
+        let max_ports = ((hcsparams1 >> 24) & 0xFF) as usize;
+        let mut ports = Vec::with_capacity(max_ports);
+        for index in 0..max_ports {
+            let port_base = op_base + 0x400 + (index * 0x10);
+            ports.push(UsbPortRuntimeDiag {
+                port_id: (index + 1) as u8,
+                portsc: read_mmio32(mmio, port_base),
+                portpmsc: read_mmio32(mmio, port_base + 0x04),
+                portli: read_mmio32(mmio, port_base + 0x08),
+            });
+        }
+
+        Some(UsbControllerMmioDiag {
+            caplen,
+            hcsparams1,
+            hccparams1,
+            dboff,
+            rtsoff,
+            usbcmd,
+            usbsts,
+            crcr,
+            dcbaap,
+            config,
+            iman,
+            imod,
+            erstsz,
+            erstba,
+            erdp,
+            ports,
+        })
+    }
 }
 
 pub(crate) mod syscall {
     use alloc::vec;
     use alloc::vec::Vec;
 }
+
+pub(crate) use self::crabusb_service::bsp_service as crabusb_bsp_service;
