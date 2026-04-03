@@ -55,7 +55,7 @@ function countLines(source) {
 function logSyncPipeline(url, parsed) {
   const profile = truesurferSubsetProfile || {};
   log(
-    `[truesurfer pipeline] browser=${browserId} mode=minimal_subset entry=signal stages=subset_scan>head+title>body_outline shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} body_nodes=${parsed.bodyHierarchy.length} max_nodes=${Number(profile.maxBodyHierarchyNodes || 0)} max_depth=${Number(profile.maxBodyHierarchyDepth || 0)} url=${url}`,
+    `[truesurfer pipeline] browser=${browserId} mode=minimal_subset entry=signal stages=subset_scan>head+title>body_outline shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} body_nodes=${parsed.bodyHierarchy.length} max_roots=${Number(profile.maxBodyHierarchyRoots || 0)} max_children=${Number(profile.maxBodyHierarchyChildrenPerNode || 0)} max_depth=${Number(profile.maxBodyHierarchyDepth || 0)} url=${url}`,
   );
 }
 
