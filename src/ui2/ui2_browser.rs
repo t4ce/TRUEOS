@@ -1,8 +1,8 @@
 use super::*;
 
 pub(super) fn log_browser_surface_updates(state: &mut Ui2State) {
-    let windows = state.windows.clone();
-    for window in &windows {
+    let mut mismatches = Vec::new();
+    for window in &state.windows {
         if window.kind != Ui2WindowKind::HostedBrowser
             || !window_content_participates_in_composition(window)
         {
@@ -12,17 +12,27 @@ pub(super) fn log_browser_surface_updates(state: &mut Ui2State) {
         if let Some(content) = window_content_rect(state, window) {
             let (_, _, want_w, want_h) = snap_browser_content_rect(content);
             if snapshot.viewport_width != want_w || snapshot.viewport_height != want_h {
-                let _ = note_window_viewport_sync_needed(state, window.id);
-                crate::log!(
-                    "ui2: browser-viewport-mismatch window={} have={}x{} want={}x{}\n",
+                mismatches.push((
                     window.id,
                     snapshot.viewport_width,
                     snapshot.viewport_height,
                     want_w,
-                    want_h
-                );
+                    want_h,
+                ));
             }
         }
+    }
+
+    for (window_id, have_w, have_h, want_w, want_h) in mismatches {
+        let _ = note_window_viewport_sync_needed(state, window_id);
+        crate::log!(
+            "ui2: browser-viewport-mismatch window={} have={}x{} want={}x{}\n",
+            window_id,
+            have_w,
+            have_h,
+            want_w,
+            want_h
+        );
     }
 }
 

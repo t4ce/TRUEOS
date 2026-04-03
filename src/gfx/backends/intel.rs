@@ -16,6 +16,8 @@ const TEX_PIPELINE_FS_PARTICLE_TAG_RAW: u32 = 0x5052_5443;
 const RCS_PRESENT_RETRY_COOLDOWN_PRESENTS: u32 = 600;
 const IMAGE_GPU_VA_BASE: u64 = 0x0400_0000;
 const IMAGE_GPU_VA_ALIGN: u64 = 0x0040_0000;
+const MAX_BACKEND_IMAGE_DIM: u32 = 8192;
+const MAX_BACKEND_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone)]
 struct BufferEntry {
@@ -399,7 +401,9 @@ impl IntelGfxBackend {
                 RenderTarget::Screen => self.screen_rgba_gpu_dirty = true,
                 RenderTarget::Image(id) => {
                     if let Some(image) = self.image_mut(id) {
-                        image.gpu_dirty = true;
+                        crate::intel::dma_cache_flush_range(image.rgba.as_ptr(), image.rgba.len());
+                        force_opaque_alpha(image.rgba.as_mut_slice());
+                        image.gpu_dirty = false;
                     }
                 }
             }
@@ -611,6 +615,19 @@ impl GfxDevice for IntelGfxBackend {
 
     fn create_image(&mut self, desc: ImageDesc) -> Result<ImageId> {
         let len = rgba_len(desc.width, desc.height).ok_or(Error::Invalid)?;
+        if desc.width > MAX_BACKEND_IMAGE_DIM
+            || desc.height > MAX_BACKEND_IMAGE_DIM
+            || len > MAX_BACKEND_IMAGE_BYTES
+        {
+            crate::log!(
+                "intel/gfx-backend: reject image create size={}x{} bytes={} format={:?}\n",
+                desc.width,
+                desc.height,
+                len,
+                desc.format
+            );
+            return Err(Error::Invalid);
+        }
         let gpu_addr = self.next_image_gpu_addr;
         let alloc_span = u64::try_from(len).map_err(|_| Error::Invalid)?;
         self.next_image_gpu_addr = align_up_u64(
@@ -755,7 +772,12 @@ impl GfxDevice for IntelGfxBackend {
                             RenderTarget::Screen => self.screen_rgba_gpu_dirty = true,
                             RenderTarget::Image(id) => {
                                 if let Some(image) = self.image_mut(id) {
-                                    image.gpu_dirty = true;
+                                    crate::intel::dma_cache_flush_range(
+                                        image.rgba.as_ptr(),
+                                        image.rgba.len(),
+                                    );
+                                    force_opaque_alpha(image.rgba.as_mut_slice());
+                                    image.gpu_dirty = false;
                                 }
                             }
                         }

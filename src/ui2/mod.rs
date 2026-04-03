@@ -1344,145 +1344,109 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
     match window.kind {
         Ui2WindowKind::HostedBrowser => {
             if let Some(content) = content_rect {
-                return with_window_content_scissor(state, content, || {
-                    draw_hosted_browser_window_content(state, window, content, chrome_ms)
-                });
+                return draw_hosted_browser_window_content(state, window, content, chrome_ms);
             }
         }
         Ui2WindowKind::HostedSurface => {
             if let Some(content) = content_rect {
-                return with_window_content_scissor(state, content, || {
-                    if !window.hosted_surface_tiles.is_empty() {
-                        let texture_started_at = Instant::now();
-                        let drew = draw_hosted_surface_tiles(
-                            state,
-                            window,
-                            content,
-                            window_scroll_snapshot(window),
-                        );
-                        if drew {
-                            return Ui2WindowDrawTiming {
-                                chrome_ms,
-                                texture_ms: elapsed_ms_since(texture_started_at),
-                                placeholder_ms: 0,
-                                content_path: "surface-tiles",
-                            };
-                        }
-                    }
-                    let texture_drawable = texture_is_drawable(window.content_tex_id);
-                    if texture_drawable {
-                        let texture_started_at = Instant::now();
-                        let drew = if let Some(snapshot) = window_scroll_snapshot(window) {
-                            let content_w = snapshot.content_width.max(1);
-                            let content_h = snapshot.content_height.max(1);
-                            let viewport_w = snapshot.viewport_width.max(1);
-                            let viewport_h = snapshot.viewport_height.max(1);
-                            let scroll_x = normalized_hosted_browser_scroll_x(&snapshot);
-                            let scroll_y = normalized_hosted_browser_scroll(&snapshot);
-                            draw_texture_rect_uv_no_present(
-                                window.content_tex_id,
-                                content.x,
-                                content.y,
-                                content.w,
-                                content.h,
-                                (scroll_x as f32 / content_w as f32).clamp(0.0, 1.0),
-                                (scroll_y as f32 / content_h as f32).clamp(0.0, 1.0),
-                                ((scroll_x.saturating_add(viewport_w)) as f32 / content_w as f32)
-                                    .clamp(0.0, 1.0),
-                                ((scroll_y.saturating_add(viewport_h)) as f32 / content_h as f32)
-                                    .clamp(0.0, 1.0),
-                                state.view_w,
-                                state.view_h,
-                                window.content_tex_blend,
-                                window.alpha,
-                            )
-                        } else {
-                            draw_texture_rect_no_present(
-                                window.content_tex_id,
-                                content.x,
-                                content.y,
-                                content.w,
-                                content.h,
-                                state.view_w,
-                                state.view_h,
-                                window.content_tex_blend,
-                                window.alpha,
-                            )
+                if !window.hosted_surface_tiles.is_empty() {
+                    let texture_started_at = Instant::now();
+                    let drew =
+                        draw_hosted_surface_tiles(state, window, content, window_scroll_snapshot(window));
+                    if drew {
+                        return Ui2WindowDrawTiming {
+                            chrome_ms,
+                            texture_ms: elapsed_ms_since(texture_started_at),
+                            placeholder_ms: 0,
+                            content_path: "surface-tiles",
                         };
-                        if drew {
-                            return Ui2WindowDrawTiming {
-                                chrome_ms,
-                                texture_ms: elapsed_ms_since(texture_started_at),
-                                placeholder_ms: 0,
-                                content_path: "surface-texture",
-                            };
-                        }
                     }
-                    let placeholder_started_at = Instant::now();
-                    draw_window_content_placeholder(
-                        state,
-                        window,
-                        content,
-                        b"Preparing Window",
-                        b"Waiting for texture upload",
+                }
+                let texture_drawable = texture_is_drawable(window.content_tex_id);
+                if texture_drawable {
+                    let texture_started_at = Instant::now();
+                    let drew = draw_texture_rect_no_present(
+                        window.content_tex_id,
+                        content.x,
+                        content.y,
+                        content.w,
+                        content.h,
+                        state.view_w,
+                        state.view_h,
+                        window.content_tex_blend,
+                        window.alpha,
                     );
-                    Ui2WindowDrawTiming {
-                        chrome_ms,
-                        texture_ms: 0,
-                        placeholder_ms: elapsed_ms_since(placeholder_started_at),
-                        content_path: if texture_drawable {
-                            "surface-texture-fallback"
-                        } else {
-                            "surface-placeholder"
-                        },
+                    if drew {
+                        return Ui2WindowDrawTiming {
+                            chrome_ms,
+                            texture_ms: elapsed_ms_since(texture_started_at),
+                            placeholder_ms: 0,
+                            content_path: "surface-texture",
+                        };
                     }
-                });
+                }
+                let placeholder_started_at = Instant::now();
+                draw_window_content_placeholder(
+                    state,
+                    window,
+                    content,
+                    b"Preparing Window",
+                    b"Waiting for texture upload",
+                );
+                return Ui2WindowDrawTiming {
+                    chrome_ms,
+                    texture_ms: 0,
+                    placeholder_ms: elapsed_ms_since(placeholder_started_at),
+                    content_path: if texture_drawable {
+                        "surface-texture-fallback"
+                    } else {
+                        "surface-placeholder"
+                    },
+                };
             }
         }
         Ui2WindowKind::Hosted3d => {
             if let Some(content) = content_rect {
-                return with_window_content_scissor(state, content, || {
-                    let texture_drawable = texture_is_drawable(window.content_tex_id);
-                    if texture_drawable {
-                        let texture_started_at = Instant::now();
-                        if draw_texture_rect_no_present(
-                            window.content_tex_id,
-                            content.x,
-                            content.y,
-                            content.w,
-                            content.h,
-                            state.view_w,
-                            state.view_h,
-                            window.content_tex_blend,
-                            window.alpha,
-                        ) {
-                            return Ui2WindowDrawTiming {
-                                chrome_ms,
-                                texture_ms: elapsed_ms_since(texture_started_at),
-                                placeholder_ms: 0,
-                                content_path: "3d-texture",
-                            };
-                        }
+                let texture_drawable = texture_is_drawable(window.content_tex_id);
+                if texture_drawable {
+                    let texture_started_at = Instant::now();
+                    if draw_texture_rect_no_present(
+                        window.content_tex_id,
+                        content.x,
+                        content.y,
+                        content.w,
+                        content.h,
+                        state.view_w,
+                        state.view_h,
+                        window.content_tex_blend,
+                        window.alpha,
+                    ) {
+                        return Ui2WindowDrawTiming {
+                            chrome_ms,
+                            texture_ms: elapsed_ms_since(texture_started_at),
+                            placeholder_ms: 0,
+                            content_path: "3d-texture",
+                        };
                     }
-                    let placeholder_started_at = Instant::now();
-                    draw_window_content_placeholder(
-                        state,
-                        window,
-                        content,
-                        b"Starting 3D Scene",
-                        b"Waiting for scene frame",
-                    );
-                    Ui2WindowDrawTiming {
-                        chrome_ms,
-                        texture_ms: 0,
-                        placeholder_ms: elapsed_ms_since(placeholder_started_at),
-                        content_path: if texture_drawable {
-                            "3d-texture-fallback"
-                        } else {
-                            "3d-placeholder"
-                        },
-                    }
-                });
+                }
+                let placeholder_started_at = Instant::now();
+                draw_window_content_placeholder(
+                    state,
+                    window,
+                    content,
+                    b"Starting 3D Scene",
+                    b"Waiting for scene frame",
+                );
+                return Ui2WindowDrawTiming {
+                    chrome_ms,
+                    texture_ms: 0,
+                    placeholder_ms: elapsed_ms_since(placeholder_started_at),
+                    content_path: if texture_drawable {
+                        "3d-texture-fallback"
+                    } else {
+                        "3d-placeholder"
+                    },
+                };
             }
         }
     }
@@ -1513,8 +1477,19 @@ fn ensure_ui2_warmup_render_target(view_w: u32, view_h: u32) -> bool {
         return true;
     }
 
-    let pixels =
-        alloc::vec![0u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
+    let Some(pixel_bytes) = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        crate::log!(
+            "ui2: invalid warmup render-target size={}x{}\n",
+            width,
+            height
+        );
+        return false;
+    };
+
+    let pixels = alloc::vec![0u8; pixel_bytes];
     crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
         UI2_WARMUP_RENDER_TARGET_TEX_ID,
         width,
