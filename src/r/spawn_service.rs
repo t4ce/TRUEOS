@@ -722,6 +722,19 @@ fn spawn_ui2_svg_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
+    let count = crate::usb2::pci_usb_controllers()
+        .len()
+        .min(crate::usb2::xhci::MAX_XHCI_CONTROLLERS);
+    if count == 0 {
+        return SpawnAttempt::Skipped;
+    }
+
+    for i in 0..count {
+        spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_bsp_service(i)));
+    }
+    SpawnAttempt::Spawned
+}
 
 fn spawn_ui2_trueosfs_explorer_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
@@ -916,6 +929,12 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::NET_CONFIGURED,
         &WS_TIME_STARTED,
         spawn_ws_time,
+    ),
+    TaskSpec::enabled(
+        "usb-controller-tasks",
+        0,
+        &USB_CONTROLLER_TASKS_STARTED,
+        spawn_usb_controller_tasks,
     ),
     TaskSpec::enabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
     TaskSpec::enabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),

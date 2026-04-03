@@ -130,6 +130,7 @@ pub extern "C" fn kmain() -> ! {
     unsafe {
         cpu::enable_sse();
     }
+    globalog::init_log_facade();
     exceptions::init();
     if crate::logflag::BOOT_INFO_LOGS {
         crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
