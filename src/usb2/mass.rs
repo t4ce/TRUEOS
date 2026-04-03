@@ -280,65 +280,6 @@ fn log_slot_context(ctx_ptr: *const u8) {
     );
 }
 
-fn log_xhci_mass_endpoint_state(
-    slot_id: u8,
-    bulk_out_ep: u8,
-    bulk_in_ep: u8,
-    reason: &'static str,
-) -> Option<u32> {
-    let Some(ctrl) = super::discover_first_controller() else {
-        crate::log!("crabusb: xhci {} no controller\n", reason);
-        return None;
-    };
-
-    let mmio = ctrl.mmio_base.as_ptr() as *const u8;
-    let cap_len = unsafe { read_volatile(mmio) } as usize;
-    let hccparams1 = read_mmio_u32(mmio, 0x10);
-    let context_size = if (hccparams1 & (1 << 2)) != 0 {
-        64usize
-    } else {
-        32usize
-    };
-    let operational = unsafe { mmio.add(cap_len) };
-    let dcbaap = read_mmio_u64(operational, 0x30) & !0x3Fu64;
-    if dcbaap == 0 {
-        crate::log!("crabusb: xhci {} dcbaap=0\n", reason);
-        return None;
-    }
-
-    let dcbaa_virt = crate::phys::phys_to_virt(dcbaap as usize) as *const u64;
-    let slot_ctx_phys = unsafe { read_unaligned(dcbaa_virt.add(slot_id as usize)) };
-    if slot_ctx_phys == 0 {
-        crate::log!(
-            "crabusb: xhci {} slot={} dcbaa entry empty dcbaap=0x{:X}\n",
-            reason,
-            slot_id,
-            dcbaap
-        );
-        return None;
-    }
-
-    let out_ctx = crate::phys::phys_to_virt(slot_ctx_phys as usize) as *const u8;
-    crate::log!(
-        "crabusb: xhci {} slot={} caplen=0x{:X} hccparams1=0x{:08X} csz={} dcbaap=0x{:X} out_ctx=0x{:X}\n",
-        reason,
-        slot_id,
-        cap_len,
-        hccparams1,
-        context_size,
-        dcbaap,
-        slot_ctx_phys
-    );
-    log_slot_context(out_ctx);
-
-    let bulk_out_dci = endpoint_dci(bulk_out_ep) as usize;
-    let bulk_in_dci = endpoint_dci(bulk_in_ep) as usize;
-    log_endpoint_context("bulk-out", unsafe { out_ctx.add(bulk_out_dci * context_size) });
-    let bulk_in_ctx = unsafe { out_ctx.add(bulk_in_dci * context_size) };
-    log_endpoint_context("bulk-in", bulk_in_ctx);
-    Some(unsafe { read_unaligned(bulk_in_ctx as *const u32) } & 0x7)
-}
-
 async fn read_and_validate_csw(
     bulk_in: &mut EndpointBulkIn,
     cmd: &'static str,
