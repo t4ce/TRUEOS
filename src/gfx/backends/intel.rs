@@ -96,10 +96,15 @@ impl IntelGfxBackend {
             return None;
         }
 
-        let width = fb.width() as u32;
-        let height = fb.height() as u32;
+        let framebuffer_width = fb.width() as u32;
+        let framebuffer_height = fb.height() as u32;
+        let (width, height) =
+            crate::intel::active_scanout_dimensions().unwrap_or((framebuffer_width, framebuffer_height));
         let pitch = fb.pitch() as usize;
-        if width == 0 || height == 0 || pitch < width as usize * 4 {
+        if framebuffer_width == 0
+            || framebuffer_height == 0
+            || pitch < framebuffer_width as usize * 4
+        {
             return None;
         }
 
@@ -112,8 +117,8 @@ impl IntelGfxBackend {
             swapchain_desc,
             framebuffer_ptr: fb.addr() as *mut u8,
             framebuffer_pitch: pitch,
-            framebuffer_width: width,
-            framebuffer_height: height,
+            framebuffer_width,
+            framebuffer_height,
             screen_rgba: alloc::vec![0; screen_len],
             screen_rgba_gpu_dirty: false,
             screen_scanout_rgba: alloc::vec![0; screen_len],
