@@ -1037,6 +1037,11 @@ pub mod cabi {
         TEXTURE_UPLOAD_REQS.lock().pop_front()
     }
 
+    fn requeue_texture_work_front(req: TextureWorkReq) {
+        TEXTURE_UPLOAD_REQS.lock().push_front(req);
+        TEXTURE_UPLOAD_WAIT.notify_one();
+    }
+
     fn queue_texture_rgba_upload_owned(
         tex_id: u32,
         width: u32,
@@ -1255,6 +1260,12 @@ pub mod cabi {
                 TEXTURE_UPLOAD_WAIT.wait_for_event().await;
                 continue;
             };
+            if end_frame_in_progress() {
+                log_texture_worker_skipped_end_frame_active();
+                requeue_texture_work_front(req);
+                Timer::after_millis(1).await;
+                continue;
+            }
             match req {
                 TextureWorkReq::Upload(req) => {
                     let rc = upload_texture_rgba_inner_owned(
@@ -1791,6 +1802,7 @@ pub mod cabi {
     static END_FRAME_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
     static CURSOR_HELPER_SKIP_LOGS: AtomicU32 = AtomicU32::new(0);
     static SCREENSHOT_HELPER_SKIP_LOGS: AtomicU32 = AtomicU32::new(0);
+    static TEXTURE_WORKER_SKIP_LOGS: AtomicU32 = AtomicU32::new(0);
 
     #[inline]
     fn gfx_trace_record(op: u32, frame_seq: u32, flags: u32, a: u32, b: u32, c: u32, d: u32) {
@@ -1856,6 +1868,16 @@ pub mod cabi {
         if n < 32 {
             crate::globalog::log(format_args!(
                 "gfx-cabi: composed screenshot helper skipped because end_frame is active\n"
+            ));
+        }
+    }
+
+    #[inline]
+    fn log_texture_worker_skipped_end_frame_active() {
+        let n = TEXTURE_WORKER_SKIP_LOGS.fetch_add(1, Ordering::Relaxed);
+        if n < 32 {
+            crate::globalog::log(format_args!(
+                "gfx-cabi: texture worker deferred because end_frame is active\n"
             ));
         }
     }
@@ -2847,9 +2869,13 @@ pub mod cabi {
     pub unsafe extern "C" fn trueos_cabi_gfx_set_render_target(tex_id: u32) -> i32 {
         let mut st = GFX_CABI_STATE.lock();
         if tex_id == 0 {
+            let had_scissor = st.cur_scissor.take().is_some();
             st.frame_render_target_tex_id = 0;
             st.viewport_configured = false;
             if st.frame_active {
+                if had_scissor {
+                    st.frame_draws.push(PendingDraw::SetScissor { rect: None });
+                }
                 st.frame_draws
                     .push(PendingDraw::SetRenderTarget { tex_id: 0 });
             }
@@ -2868,9 +2894,13 @@ pub mod cabi {
             return -1;
         };
         entry.origin = TexCoordOrigin::BottomLeft;
+        let had_scissor = st.cur_scissor.take().is_some();
         st.frame_render_target_tex_id = tex_id;
         st.viewport_configured = false;
         if st.frame_active {
+            if had_scissor {
+                st.frame_draws.push(PendingDraw::SetScissor { rect: None });
+            }
             st.frame_draws.push(PendingDraw::SetRenderTarget { tex_id });
         }
         let frame_seq = st.frame_seq;
@@ -2882,9 +2912,13 @@ pub mod cabi {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_clear_render_target() -> i32 {
         let mut st = GFX_CABI_STATE.lock();
+        let had_scissor = st.cur_scissor.take().is_some();
         st.frame_render_target_tex_id = 0;
         st.viewport_configured = false;
         if st.frame_active {
+            if had_scissor {
+                st.frame_draws.push(PendingDraw::SetScissor { rect: None });
+            }
             st.frame_draws
                 .push(PendingDraw::SetRenderTarget { tex_id: 0 });
         }
@@ -3522,7 +3556,7 @@ pub mod cabi {
             (entry.image, entry.width.max(1), entry.height.max(1))
         };
 
-        let (source_image, pipeline_kind) = {
+        let (source_image, pipeline_kind, source_sample_kind) = {
             let st = GFX_CABI_STATE.lock();
             let idx = source_tex_id.saturating_sub(1) as usize;
             let Some(entry) = st
@@ -3541,7 +3575,15 @@ pub mod cabi {
                     TexSampleKind::Rgba => TexPipelineKind::Rgba,
                 }
             };
-            (entry.image, kind)
+            (
+                entry.image,
+                kind,
+                if particle_shader {
+                    TexSampleKind::Rgba
+                } else {
+                    entry.sample_kind
+                },
+            )
         };
 
         if !target_image.is_valid() || !source_image.is_valid() {
@@ -3602,6 +3644,59 @@ pub mod cabi {
             };
             if ret == 0 {
                 let mut st = GFX_CABI_STATE.lock();
+                let source_tex = st
+                    .tex_images
+                    .as_ref()
+                    .and_then(|images| images.get(source_tex_id.saturating_sub(1) as usize))
+                    .and_then(|entry| entry.as_ref())
+                    .cloned();
+                if let (Some(source_tex), Some(target)) = (
+                    source_tex,
+                    st.tex_images
+                        .as_mut()
+                        .and_then(|images| images.get_mut(target_tex_id.saturating_sub(1) as usize))
+                        .and_then(|entry| entry.as_mut()),
+                ) {
+                    let need = (target.width as usize)
+                        .saturating_mul(target.height as usize)
+                        .saturating_mul(4);
+                    if target.rgba.len() != need {
+                        target.rgba.resize(need, 0);
+                    }
+                    clear_rgba_buffer(target.rgba.as_mut_slice(), clear_rgb);
+                    let mut off = 0usize;
+                    while off + (3 * TEX_VERTEX_SIZE) <= usable {
+                        let Some(v0) = read_tex_vtx(&vtx[..usable], off) else {
+                            break;
+                        };
+                        let Some(v1) = read_tex_vtx(&vtx[..usable], off + TEX_VERTEX_SIZE) else {
+                            break;
+                        };
+                        let Some(v2) = read_tex_vtx(&vtx[..usable], off + (2 * TEX_VERTEX_SIZE))
+                        else {
+                            break;
+                        };
+                        draw_tex_triangle_rgba(
+                            target.rgba.as_mut_slice(),
+                            target.width,
+                            target.height,
+                            None,
+                            trueos_gfx_core::BlendDesc::straight_alpha(),
+                            SamplerDesc {
+                                wrap_s: SamplerWrap::ClampToEdge,
+                                wrap_t: SamplerWrap::ClampToEdge,
+                                min_filter: SamplerFilter::Nearest,
+                                mag_filter: SamplerFilter::Nearest,
+                            },
+                            source_sample_kind,
+                            &source_tex,
+                            v0,
+                            v1,
+                            v2,
+                        );
+                        off += 3 * TEX_VERTEX_SIZE;
+                    }
+                }
                 st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
                 st.viewport_configured = false;
             }

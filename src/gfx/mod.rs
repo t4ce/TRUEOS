@@ -25,6 +25,8 @@ static PRESENT_OWNER: AtomicU8 = AtomicU8::new(0);
 static SYSTEM_LOCK_OWNER: AtomicU32 = AtomicU32::new(SystemLockOwner::Unknown as u32);
 static SYSTEM_LOCK_OWNER_CPU: AtomicU32 = AtomicU32::new(u32::MAX);
 static SYSTEM_LOCK_OWNER_SINCE: AtomicU64 = AtomicU64::new(0);
+static BACKEND_READY_PUBLISHED: AtomicBool = AtomicBool::new(false);
+static BACKEND_KIND_ATOMIC: AtomicU8 = AtomicU8::new(0);
 
 // Frame completion register.
 //
@@ -107,11 +109,7 @@ pub struct System {
 }
 
 fn finalize_backend_init() {
-    let backend_ready = with_system_tag(SystemLockOwner::FinalizeBackendInit, |sys| {
-        !matches!(sys.backend, backends::Backend::None(_))
-    })
-    .unwrap_or(false);
-    if !backend_ready {
+    if BACKEND_READY_PUBLISHED.swap(true, Ordering::AcqRel) {
         return;
     }
     crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
@@ -194,6 +192,30 @@ impl System {
     }
 }
 
+#[inline]
+fn backend_kind_raw(backend: &backends::Backend) -> u8 {
+    match backend {
+        backends::Backend::Virgl(_) => 1,
+        backends::Backend::Intel(_) => 2,
+        backends::Backend::None(_) => 3,
+    }
+}
+
+#[inline]
+fn publish_backend_kind(backend: &backends::Backend) {
+    BACKEND_KIND_ATOMIC.store(backend_kind_raw(backend), Ordering::Release);
+}
+
+#[inline]
+fn backend_kind_cached() -> Option<BackendKind> {
+    match BACKEND_KIND_ATOMIC.load(Ordering::Acquire) {
+        1 => Some(BackendKind::Virgl),
+        2 => Some(BackendKind::Intel),
+        3 => Some(BackendKind::None),
+        _ => None,
+    }
+}
+
 pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) {
     let _ = SYSTEM.call_once(|| {
         // if we use this qemu will do whatever it wants. that hurts particularly much
@@ -206,10 +228,13 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
             backends::Backend::None(_) => "none",
         };
         crate::log!("gfx: backend={}\n", backend_name);
+        publish_backend_kind(&backend);
+        if !matches!(backend, backends::Backend::None(_)) {
+            BACKEND_READY_PUBLISHED.store(true, Ordering::Release);
+            crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
+        }
         Mutex::new(System::new(backend, framebuffers))
     });
-
-    finalize_backend_init();
 }
 
 pub fn with_cabi_frame_lock<R>(f: impl FnOnce() -> R) -> R {
@@ -347,17 +372,11 @@ pub fn with_framebuffers<R>(
 }
 
 pub fn is_virgl_active() -> bool {
-    with_system_tag(SystemLockOwner::IsVirglActive, |sys| {
-        matches!(sys.backend, backends::Backend::Virgl(_))
-    })
-    .unwrap_or(false)
+    matches!(backend_kind_cached(), Some(BackendKind::Virgl))
 }
 
 pub fn is_intel_active() -> bool {
-    with_system_tag(SystemLockOwner::IsIntelActive, |sys| {
-        matches!(sys.backend, backends::Backend::Intel(_))
-    })
-    .unwrap_or(false)
+    matches!(backend_kind_cached(), Some(BackendKind::Intel))
 }
 
 /// Returns whether a virgl-capable virtio-gpu device is currently visible.
@@ -381,6 +400,7 @@ pub fn switch_to_virgl() -> bool {
 
     let switched = with_system_tag(SystemLockOwner::SwitchToVirgl, |sys| {
         sys.backend = b;
+        publish_backend_kind(&sys.backend);
         bump_backend_epoch();
         crate::log!("gfx: switch_to_virgl: ok epoch={}\n", backend_epoch());
         true
@@ -405,6 +425,7 @@ pub fn switch_to_intel() -> bool {
 
     let switched = with_system_tag(SystemLockOwner::SwitchToIntel, |sys| {
         sys.backend = b;
+        publish_backend_kind(&sys.backend);
         bump_backend_epoch();
         crate::log!("gfx: switch_to_intel: ok epoch={}\n", backend_epoch());
         true
@@ -426,11 +447,7 @@ pub enum BackendKind {
 }
 
 pub fn backend_kind() -> Option<BackendKind> {
-    with_system_tag(SystemLockOwner::BackendKind, |sys| match &sys.backend {
-        backends::Backend::Virgl(_) => BackendKind::Virgl,
-        backends::Backend::Intel(_) => BackendKind::Intel,
-        backends::Backend::None(_) => BackendKind::None,
-    })
+    backend_kind_cached()
 }
 
 /// Toggle the gfx backend.
