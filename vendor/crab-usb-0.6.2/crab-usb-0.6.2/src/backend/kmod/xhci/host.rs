@@ -91,6 +91,9 @@ impl Xhci {
     const STATUS_POLL_DELAY_MS: u64 = 1;
     const STATUS_POLL_LIMIT: usize = 2_000;
     const SKIP_SCRATCHPADS_EXPERIMENT: bool = true;
+    const PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT: bool = true;
+    const PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT: bool = true;
+    const PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT: bool = false;
 
     fn flush_controller_write(&self) {
         let _ = self.reg.read().operational.usbsts.read_volatile();
@@ -322,16 +325,27 @@ impl Xhci {
         let max_slots = self.setup_max_device_slots();
         self.dev_ctx = Some(DeviceContextList::new(max_slots as _, self.kernel())?);
 
-        // Program the Device Context Base Address Array Pointer (DCBAAP)
-        // register (5.4.6) with a 64-bit address pointing to where the Device
-        // Context Base Address Array is located.
-        self.setup_dcbaap()?;
+        if Self::PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT {
+            info!("xHCI: staged-run experiment programming dcbaap before RUN");
+            self.setup_dcbaap()?;
+        } else {
+            info!("xHCI: staged-run experiment skipping dcbaap before RUN");
+        }
 
-        // Define the Command Ring Dequeue Pointer by programming the
-        // Command Ring Control Register (5.4.5) with a 64-bit address pointing to
-        // the starting address of the first TRB of the Command Ring.
-        self.set_cmd_ring()?;
-        self.setup_runtime_ring();
+        if Self::PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT {
+            info!("xHCI: staged-run experiment programming crcr before RUN");
+            self.set_cmd_ring()?;
+        } else {
+            info!("xHCI: staged-run experiment skipping crcr before RUN");
+        }
+
+        if Self::PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT {
+            info!("xHCI: staged-run experiment programming runtime ring before RUN");
+            self.setup_runtime_ring();
+        } else {
+            info!("xHCI: staged-run experiment skipping runtime ring before RUN");
+        }
+
         self.setup_scratchpads()?;
         // At this point, the host controller is up and running and the Root Hub ports
         // (5.4.8) will begin reporting device connects, etc., and system software may begin
