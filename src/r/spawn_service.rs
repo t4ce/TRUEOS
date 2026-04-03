@@ -688,11 +688,6 @@ fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_ui2_pci_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_pci_demo::ui2_pci_demo_task())
-    })
-}
 
 fn spawn_ui2_petersen_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
@@ -727,51 +722,12 @@ fn spawn_ui2_svg_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_ui2_usb_audio_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_usb_audio_demo::ui2_usb_audio_demo_task())
-    })
-}
 
 fn spawn_ui2_trueosfs_explorer_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner
             .spawn(crate::tst_ui2_trueosfs_explorer_demo::ui2_trueosfs_explorer_demo_task())
     })
-}
-
-fn spawn_crabusb_audio(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_audio_task()))
-}
-
-fn spawn_crabusb_bsp_service(spawner: Spawner) -> SpawnAttempt {
-    let count = crate::usb2::pci_usb_controllers()
-        .len()
-        .min(crate::usb2::xhci::MAX_XHCI_CONTROLLERS)
-        .max(1);
-    for i in 0..count {
-        spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_bsp_service(i, spawner)));
-    }
-    SpawnAttempt::Spawned
-}
-
-fn spawn_crabusb_event_pump(spawner: Spawner) -> SpawnAttempt {
-    let count = crate::usb2::pci_usb_controllers()
-        .len()
-        .min(crate::usb2::xhci::MAX_XHCI_CONTROLLERS)
-        .max(1);
-    for i in 0..count {
-        spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_event_pump_task(i)));
-    }
-    SpawnAttempt::Spawned
-}
-
-fn spawn_crabusb_truekey(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_truekey_task()))
-}
-
-fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::midi::piano_drain_loop()))
 }
 
 const USER_INPUT_RECORD_FLUSH_INTERVAL_SECS: u64 = 120;
@@ -1074,12 +1030,6 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_mandelbrot_demo,
     ),
     TaskSpec::disabled(
-        "ui2-device-manager-demo",
-        UI2_DEMO_READY,
-        &UI2_PCI_DEMO_STARTED,
-        spawn_ui2_pci_demo,
-    ),
-    TaskSpec::disabled(
         "ui2-petersen-demo",
         UI2_DEMO_READY,
         &UI2_PETERSEN_DEMO_STARTED,
@@ -1105,32 +1055,11 @@ static TASKS: &[TaskSpec] = &[
     ),
     TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
     TaskSpec::disabled(
-        "ui2-usb-audio-demo",
-        UI2_DEMO_READY,
-        &UI2_USB_AUDIO_DEMO_STARTED,
-        spawn_ui2_usb_audio_demo,
-    ),
-    TaskSpec::disabled(
         "ui2-trueosfs-explorer-demo",
         UI2_DEMO_READY | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
         spawn_ui2_trueosfs_explorer_demo,
     ),
-    TaskSpec::enabled(
-        "crabusb-bsp-service",
-        0,
-        &CRABUSB_BSP_SERVICE_STARTED,
-        spawn_crabusb_bsp_service,
-    ),
-    TaskSpec::enabled(
-        "crabusb-event-pump",
-        0,
-        &CRABUSB_EVENT_PUMP_STARTED,
-        spawn_crabusb_event_pump,
-    ),
-    TaskSpec::enabled("crabusb-audio", 0, &CRABUSB_AUDIO_STARTED, spawn_crabusb_audio),
-    TaskSpec::enabled("crabusb-truekey", 0, &CRABUSB_TRUEKEY_STARTED, spawn_crabusb_truekey),
-    TaskSpec::enabled("piano-drain", 0, &PIANO_DRAIN_STARTED, spawn_piano_drain),
     TaskSpec::enabled(
         "trueosfs-ready-hook",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,

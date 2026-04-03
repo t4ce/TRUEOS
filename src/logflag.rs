@@ -42,10 +42,10 @@ pub(crate) static GFX_CABI_SUBMIT_BUDGET_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS: AtomicU32 = AtomicU32::new(1);
 pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(true);
 
-pub(crate) static XHCI_LOG_PORTS_ON_INIT: AtomicBool = AtomicBool::new(false);
-pub(crate) const XHCI_TRACE_EVENT_TRBS: bool = false;
-pub(crate) static USB_ENUM_ROOT_SLOT_CTX_ONCE: AtomicBool = AtomicBool::new(false);
-pub(crate) static USB_ENUM_ROOT_ADDRDEV_FAIL_ONCE: AtomicBool = AtomicBool::new(false);
+pub(crate) static XHCI_LOG_PORTS_ON_INIT: AtomicBool = AtomicBool::new(true);
+pub(crate) const XHCI_TRACE_EVENT_TRBS: bool = true;
+pub(crate) static USB_ENUM_ROOT_SLOT_CTX_ONCE: AtomicBool = AtomicBool::new(true);
+pub(crate) static USB_ENUM_ROOT_ADDRDEV_FAIL_ONCE: AtomicBool = AtomicBool::new(true);
 
 pub(crate) const NVME_VERBOSE: bool = false;
 

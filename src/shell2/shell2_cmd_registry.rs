@@ -111,11 +111,6 @@ fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::net::try_parse(io, &mut args)
 }
 
-fn dispatch_probe(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::probe::try_parse(io, &mut args)
-}
-
 fn dispatch_run(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::run::try_parse(spawner, io, &mut args)
@@ -207,14 +202,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
             "Inspect network state, run ICMP, use IRC, or get/set the hostname.",
         ),
         tool_parameters_json: Some(TOOL_JSON_NET),
-    },
-    BuiltinShell2CmdEntry {
-        name: "probe",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_probe,
-        tool_description: Some("Inspect or trigger USB and NVMe probe actions."),
-        tool_parameters_json: Some(TOOL_JSON_PROBE),
     },
     BuiltinShell2CmdEntry {
         name: "run",

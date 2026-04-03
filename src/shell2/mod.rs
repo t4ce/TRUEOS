@@ -775,10 +775,6 @@ pub(crate) fn execute_ai_pc_shell_command(
             let mut args = rendered_args.split_whitespace();
             cmds::net::try_parse(io, &mut args)
         }
-        "probe" => {
-            let mut args = rendered_args.split_whitespace();
-            cmds::probe::try_parse(io, &mut args)
-        }
         "set" => {
             let mut args = rendered_args.split_whitespace();
             cmds::set::try_parse(io, &mut args)
