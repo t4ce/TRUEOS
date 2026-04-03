@@ -98,8 +98,8 @@ impl IntelGfxBackend {
 
         let framebuffer_width = fb.width() as u32;
         let framebuffer_height = fb.height() as u32;
-        let (width, height) =
-            crate::intel::active_scanout_dimensions().unwrap_or((framebuffer_width, framebuffer_height));
+        let (width, height) = crate::intel::active_scanout_dimensions()
+            .unwrap_or((framebuffer_width, framebuffer_height));
         let pitch = fb.pitch() as usize;
         if framebuffer_width == 0
             || framebuffer_height == 0

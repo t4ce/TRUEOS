@@ -680,7 +680,7 @@ pub fn intel_igpu770_present() -> bool {
 }
 
 pub fn isolated_triangle_mode_active() -> bool {
-    intel_igpu770_present() && super::xelp_render_ngin::isolate_rgb_triangle_proof()
+    false
 }
 
 #[inline]
@@ -696,8 +696,9 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
         let plane0 = scanout_plane(pipe, 0);
         let pipe_src = mmio_read32(info, plane0.pipe_src_off);
         let trans_ddi = mmio_read32(info, plane0.trans_ddi_func_ctl_off);
-        let dims = plausible_pipe_src(pipe_src)
-            .and_then(|(width, height)| Some((u32::try_from(width).ok()?, u32::try_from(height).ok()?)));
+        let dims = plausible_pipe_src(pipe_src).and_then(|(width, height)| {
+            Some((u32::try_from(width).ok()?, u32::try_from(height).ok()?))
+        });
         let Some((width, height)) = dims else {
             continue;
         };
@@ -737,40 +738,15 @@ pub async fn scanout_smoke_task() {
     };
 
     Timer::after(EmbassyDuration::from_millis(1200)).await;
-    let isolate_render_proof = super::xelp_render_ngin::isolate_rgb_triangle_proof();
     if intel_igpu770_present() {
         super::intel_igpu770::ggtt_recon_once();
         super::intel_igpu770::ggtt_map_smoke_objects_once();
-        if isolate_render_proof {
-            crate::log!(
-                "intel: smoke dispatch engine=rcs stage=loop begin mode=isolated-animated-triangle\n"
-            );
-            super::xelp_render_ngin::log_rgb_triangle_isolation();
-            crate::log!(
-                "intel/render-ngin: api route=render.rgb-triangle.submit workload=rgb-triangle class=render transport=rcs-execlist summary=submit an isolated animated RGB triangle proof through the Xe-LP render ngin\n"
-            );
-            let mut rotation = super::xelp_render_ngin::default_rgb_triangle_rotation();
-            loop {
-                if !super::xelp_render_ngin::submit_rgb_triangle_smoke(rotation) {
-                    crate::log!(
-                        "intel: smoke dispatch engine=rcs stage=loop halt reason=submit-timeout target=limine-fb\n"
-                    );
-                    break;
-                }
-                rotation += 0.18;
-                if rotation > core::f32::consts::TAU {
-                    rotation -= core::f32::consts::TAU;
-                }
-                Timer::after(EmbassyDuration::from_millis(16)).await;
-            }
-        } else if intel_backend_active {
+        if intel_backend_active {
             crate::log!("intel: legacy direct smoke paths skipped (gfx-backend mode)\n");
         } else {
-            crate::log!("intel: smoke dispatch engine=rcs stage=begin\n");
-            super::xelp_render_ngin::submit_rgb_triangle_smoke(
-                super::xelp_render_ngin::default_rgb_triangle_rotation(),
+            crate::log!(
+                "intel: legacy direct rcs smoke removed; keeping bcs-only bring-up outside gfx-backend mode\n"
             );
-            crate::log!("intel: smoke dispatch engine=rcs stage=end\n");
         }
         if !intel_backend_active {
             crate::log!("intel: smoke dispatch engine=bcs stage=begin\n");
