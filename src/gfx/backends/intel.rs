@@ -65,6 +65,8 @@ pub struct IntelGfxBackend {
     framebuffer_height: u32,
     screen_rgba: Vec<u8>,
     screen_rgba_gpu_dirty: bool,
+    screen_scanout_rgba: Vec<u8>,
+    screen_scanout_gpu_dirty: bool,
     buffers: Vec<Option<BufferEntry>>,
     images: Vec<Option<ImageEntry>>,
     pipelines: Vec<Option<PipelineEntry>>,
@@ -114,6 +116,8 @@ impl IntelGfxBackend {
             framebuffer_height: height,
             screen_rgba: alloc::vec![0; screen_len],
             screen_rgba_gpu_dirty: false,
+            screen_scanout_rgba: alloc::vec![0; screen_len],
+            screen_scanout_gpu_dirty: false,
             buffers: Vec::new(),
             images: Vec::new(),
             pipelines: Vec::new(),
@@ -133,6 +137,8 @@ impl IntelGfxBackend {
         if self.screen_rgba.len() != len {
             self.screen_rgba.resize(len, 0);
             self.screen_rgba_gpu_dirty = false;
+            self.screen_scanout_rgba.resize(len, 0);
+            self.screen_scanout_gpu_dirty = false;
         }
         Ok(())
     }
@@ -143,6 +149,17 @@ impl IntelGfxBackend {
         }
         crate::intel::dma_cache_flush_range(self.screen_rgba.as_ptr(), self.screen_rgba.len());
         self.screen_rgba_gpu_dirty = false;
+    }
+
+    fn rotate_screen_present_buffers(&mut self) {
+        core::mem::swap(&mut self.screen_rgba, &mut self.screen_scanout_rgba);
+        core::mem::swap(&mut self.screen_rgba_gpu_dirty, &mut self.screen_scanout_gpu_dirty);
+        if self.screen_rgba.len() == self.screen_scanout_rgba.len() {
+            self.screen_rgba
+                .copy_from_slice(self.screen_scanout_rgba.as_slice());
+        }
+        self.screen_rgba_gpu_dirty = false;
+        self.screen_scanout_gpu_dirty = false;
     }
 
     fn sync_image_rgba_from_gpu(&mut self, id: ImageId) {
@@ -276,9 +293,10 @@ impl IntelGfxBackend {
                     self.swapchain_desc.extent.width.saturating_mul(4),
                 )
             {
+                self.rotate_screen_present_buffers();
                 if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
                     crate::log!(
-                        "intel/gfx-backend: present seq={} mode=plane-rebind size={}x{} gpu=0x{:X}\n",
+                        "intel/gfx-backend: present seq={} mode=plane-rebind-backbuffer size={}x{} gpu=0x{:X}\n",
                         self.present_seq,
                         copy_w,
                         copy_h,
