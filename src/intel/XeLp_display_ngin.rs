@@ -1354,6 +1354,196 @@ fn plane_stride_reg_value(pitch_bytes: u32) -> Option<u32> {
     Some(pitch_bytes / 64)
 }
 
+#[inline]
+fn display_pipe_slot(pipe: DisplayPipeId) -> usize {
+    match pipe {
+        DisplayPipeId::PipeA => 0,
+        DisplayPipeId::PipeB => 1,
+        DisplayPipeId::PipeC => 2,
+        DisplayPipeId::PipeD => 3,
+    }
+}
+
+#[inline]
+fn primary_present_slot_label(
+    windows: DisplayGpuWindowLayout,
+    surface_gpu_addr: u64,
+) -> &'static str {
+    if surface_gpu_addr == windows.staging_gpu_addr {
+        "staging"
+    } else if surface_gpu_addr == windows.shadow_state_gpu_addr {
+        "shadow"
+    } else {
+        "external"
+    }
+}
+
+fn primary_plane_only_owned(info: IntelDeviceInfo, pipe: DisplayPipeId) -> bool {
+    let pipe_slot = display_pipe_slot(pipe);
+    let mut plane_slot = 1usize;
+    while plane_slot < 4 {
+        let plane_base = regs::UNI_PLANE_BASE
+            + pipe_slot.saturating_mul(regs::UNI_PLANE_PIPE_STRIDE)
+            + plane_slot.saturating_mul(regs::UNI_PLANE_SLOT_STRIDE);
+        let plane_ctl = mmio_read32(info, plane_base);
+        let plane_surf = mmio_read32(info, plane_base + regs::UNI_PLANE_SURF_OFF);
+        if (plane_ctl & regs::PLANE_CTL_ENABLE) != 0 || plane_surf != 0 {
+            return false;
+        }
+        plane_slot += 1;
+    }
+
+    let cursor_base = regs::CURSOR_BASE + pipe_slot.saturating_mul(regs::CURSOR_PIPE_STRIDE);
+    let cursor_ctl = mmio_read32(info, cursor_base + regs::CURSOR_CTL_OFF);
+    let cursor_surf = mmio_read32(info, cursor_base + regs::CURSOR_SURF_OFF);
+    cursor_ctl == 0 && cursor_surf == 0
+}
+
+fn primary_present_visible_slot_label() -> &'static str {
+    if PRIMARY_PRESENT_VISIBLE_SURFACE_SLOT.load(Ordering::Acquire) == PRIMARY_PRESENT_SLOT_SHADOW {
+        "shadow"
+    } else {
+        "staging"
+    }
+}
+
+fn stored_runtime_for_pipe(pipe: DisplayPipeId) -> Option<DisplayRuntimeSnapshot> {
+    let state = stored_kickoff_state()?;
+    let mut idx = 0usize;
+    while idx < state.runtime_count {
+        let runtime = state.runtimes[idx];
+        if runtime.pipe == pipe {
+            return Some(runtime);
+        }
+        idx += 1;
+    }
+    None
+}
+
+#[inline]
+fn pipe_src_reg_value(width: u32, height: u32) -> Option<u32> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(((height.saturating_sub(1)) << 16) | width.saturating_sub(1))
+}
+
+fn bootstrap_plane_ctl_value(
+    runtime: DisplayRuntimeSnapshot,
+    format: DisplayPixelFormat,
+) -> Option<u32> {
+    if runtime.plane_ctl != 0 && runtime.plane_ctl != u32::MAX {
+        return Some(runtime.plane_ctl | regs::PLANE_CTL_ENABLE);
+    }
+
+    match format {
+        DisplayPixelFormat::Xrgb8888 | DisplayPixelFormat::Argb8888 => {
+            Some(regs::PLANE_CTL_ENABLE | 0x0000_0008)
+        }
+        DisplayPixelFormat::Unknown => None,
+    }
+}
+
+fn log_primary_present_proof(
+    label: &str,
+    info: IntelDeviceInfo,
+    draft: DisplayWorkloadDraft,
+    surface_gpu_addr: u64,
+    stride_reg: u32,
+    poll_iters: usize,
+    success: bool,
+) {
+    let pipe_src = mmio_read32(info, draft.descriptor.pipe_src_off);
+    let trans = mmio_read32(info, draft.descriptor.trans_ddi_func_ctl_off);
+    let plane_ctl = mmio_read32(info, draft.descriptor.plane_ctl_off);
+    let armed = mmio_read32(info, draft.descriptor.plane_surf_off);
+    let live = mmio_read32(info, draft.descriptor.plane_surf_live_off);
+    crate::log!(
+        "intel/display-ngin: {} pipe={} workload={} slot={} surface=0x{:X} pipe_src=0x{:08X} trans=0x{:08X} stride=0x{:X} ctl=0x{:08X} armed=0x{:08X} live=0x{:08X} armed_match={} live_match={} success={} poll_iters={} primary_only={} visible_slot={}\n",
+        label,
+        draft.descriptor.id.as_str(),
+        draft.workload.as_str(),
+        primary_present_slot_label(draft.surface.windows, surface_gpu_addr),
+        surface_gpu_addr,
+        pipe_src,
+        trans,
+        stride_reg,
+        plane_ctl,
+        armed,
+        live,
+        (armed == surface_gpu_addr as u32) as u8,
+        (live == surface_gpu_addr as u32) as u8,
+        success as u8,
+        poll_iters,
+        primary_plane_only_owned(info, draft.descriptor.id) as u8,
+        primary_present_visible_slot_label(),
+    );
+}
+
+fn commit_plane_surface(
+    label: &str,
+    info: IntelDeviceInfo,
+    draft: DisplayWorkloadDraft,
+    surface_gpu_addr: u64,
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+    program_pipe_src: Option<u32>,
+    program_plane_ctl: Option<u32>,
+) -> bool {
+    if width != draft.surface.width || height != draft.surface.height {
+        return false;
+    }
+
+    let windows = draft.surface.windows;
+    if surface_gpu_addr != windows.staging_gpu_addr
+        && surface_gpu_addr != windows.shadow_state_gpu_addr
+    {
+        return false;
+    }
+
+    let Some(stride_reg) = plane_stride_reg_value(pitch_bytes) else {
+        return false;
+    };
+    let surface_reg = match u32::try_from(surface_gpu_addr) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    if let Some(pipe_src) = program_pipe_src {
+        let _ = mmio_write32(info, draft.descriptor.pipe_src_off, pipe_src);
+    }
+    if let Some(plane_ctl) = program_plane_ctl {
+        let _ = mmio_write32(info, draft.descriptor.plane_ctl_off, plane_ctl);
+    }
+    let _ = mmio_write32(info, draft.descriptor.plane_stride_off, stride_reg);
+    let _ = mmio_write32(info, draft.descriptor.plane_surf_off, surface_reg);
+
+    let mut success = false;
+    let mut iter = 0usize;
+    let mut live = mmio_read32(info, draft.descriptor.plane_surf_live_off);
+    while iter < 4096 {
+        if live == surface_reg {
+            record_primary_present_visible_surface(surface_gpu_addr);
+            success = true;
+            break;
+        }
+        core::hint::spin_loop();
+        live = mmio_read32(info, draft.descriptor.plane_surf_live_off);
+        iter += 1;
+    }
+
+    if !success {
+        let armed = mmio_read32(info, draft.descriptor.plane_surf_off);
+        success = live == surface_reg || armed == surface_reg;
+    }
+    if success {
+        record_primary_present_visible_surface(surface_gpu_addr);
+    }
+    log_primary_present_proof(label, info, draft, surface_gpu_addr, stride_reg, iter, success);
+    success
+}
+
 pub(crate) fn primary_present_surface_gpu_addr() -> Option<u64> {
     let draft = draft_workload(DisplayWorkloadKind::PrimaryPresent)?;
     let windows = draft.surface.windows;
@@ -1362,6 +1552,17 @@ pub(crate) fn primary_present_surface_gpu_addr() -> Option<u64> {
         windows.staging_gpu_addr
     } else {
         windows.shadow_state_gpu_addr
+    })
+}
+
+pub(crate) fn primary_present_visible_surface_gpu_addr() -> Option<u64> {
+    let draft = draft_workload(DisplayWorkloadKind::PrimaryPresent)?;
+    let windows = draft.surface.windows;
+    let visible_slot = PRIMARY_PRESENT_VISIBLE_SURFACE_SLOT.load(Ordering::Acquire);
+    Some(if visible_slot == PRIMARY_PRESENT_SLOT_SHADOW {
+        windows.shadow_state_gpu_addr
+    } else {
+        windows.staging_gpu_addr
     })
 }
 
@@ -1384,45 +1585,65 @@ pub(crate) fn primary_present_surface(
         Some(v) => v,
         None => return false,
     };
-    if width != draft.surface.width || height != draft.surface.height {
-        return false;
-    }
+    commit_plane_surface(
+        "flip-proof",
+        info,
+        draft,
+        surface_gpu_addr,
+        width,
+        height,
+        pitch_bytes,
+        None,
+        None,
+    )
+}
 
-    let windows = draft.surface.windows;
-    if surface_gpu_addr != windows.staging_gpu_addr && surface_gpu_addr != windows.shadow_state_gpu_addr
-    {
-        return false;
-    }
-
-    let Some(stride_reg) = plane_stride_reg_value(pitch_bytes) else {
-        return false;
+pub(crate) fn bootstrap_primary_present_surface(
+    surface_gpu_addr: u64,
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+) -> bool {
+    let draft = match draft_workload(DisplayWorkloadKind::PrimaryPresent) {
+        Some(v) => v,
+        None => return false,
     };
-    let surface_reg = match u32::try_from(surface_gpu_addr) {
-        Ok(v) => v,
-        Err(_) => return false,
+    let info = match super::intel::first_claimed_device() {
+        Some(v) => v,
+        None => return false,
     };
-
-    let _ = mmio_write32(info, draft.descriptor.plane_stride_off, stride_reg);
-    let _ = mmio_write32(info, draft.descriptor.plane_surf_off, surface_reg);
-
-    let mut iter = 0usize;
-    let mut live = mmio_read32(info, draft.descriptor.plane_surf_live_off);
-    while iter < 4096 {
-        if live == surface_reg {
-            record_primary_present_visible_surface(surface_gpu_addr);
-            return true;
-        }
-        core::hint::spin_loop();
-        live = mmio_read32(info, draft.descriptor.plane_surf_live_off);
-        iter += 1;
+    let runtime = match stored_runtime_for_pipe(draft.descriptor.id) {
+        Some(v) => v,
+        None => return false,
+    };
+    if !runtime.transcoder_enabled {
+        crate::log!(
+            "intel/display-ngin: bootstrap-proof pipe={} workload={} success=0 reason=transcoder-disabled trans=0x{:08X}\n",
+            draft.descriptor.id.as_str(),
+            draft.workload.as_str(),
+            runtime.trans_ddi_func_ctl,
+        );
+        return false;
     }
-
-    let armed = mmio_read32(info, draft.descriptor.plane_surf_off);
-    let success = live == surface_reg || armed == surface_reg;
-    if success {
-        record_primary_present_visible_surface(surface_gpu_addr);
-    }
-    success
+    let pipe_src = match pipe_src_reg_value(width, height) {
+        Some(v) => v,
+        None => return false,
+    };
+    let plane_ctl = match bootstrap_plane_ctl_value(runtime, draft.surface.format) {
+        Some(v) => v,
+        None => return false,
+    };
+    commit_plane_surface(
+        "bootstrap-proof",
+        info,
+        draft,
+        surface_gpu_addr,
+        width,
+        height,
+        pitch_bytes,
+        Some(pipe_src),
+        Some(plane_ctl),
+    )
 }
 
 pub(crate) fn owned_triangle_disable_non_primary_planes_pipe_a() -> bool {
@@ -1508,38 +1729,17 @@ pub(crate) fn plane_rebind_present_surface(
         Some(v) => v,
         None => return false,
     };
-    if width != draft.surface.width || height != draft.surface.height {
-        return false;
-    }
-    let Some(stride_reg) = plane_stride_reg_value(pitch_bytes) else {
-        return false;
-    };
-    let surface_reg = match u32::try_from(surface_gpu_addr) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-
-    let _ = mmio_write32(info, draft.descriptor.plane_stride_off, stride_reg);
-    let _ = mmio_write32(info, draft.descriptor.plane_surf_off, surface_reg);
-
-    let mut iter = 0usize;
-    let mut live = mmio_read32(info, draft.descriptor.plane_surf_live_off);
-    while iter < 4096 {
-        if live == surface_reg {
-            record_primary_present_visible_surface(surface_gpu_addr);
-            return true;
-        }
-        core::hint::spin_loop();
-        live = mmio_read32(info, draft.descriptor.plane_surf_live_off);
-        iter += 1;
-    }
-
-    let armed = mmio_read32(info, draft.descriptor.plane_surf_off);
-    let success = live == surface_reg || armed == surface_reg;
-    if success {
-        record_primary_present_visible_surface(surface_gpu_addr);
-    }
-    success
+    commit_plane_surface(
+        "flip-proof",
+        info,
+        draft,
+        surface_gpu_addr,
+        width,
+        height,
+        pitch_bytes,
+        None,
+        None,
+    )
 }
 
 fn log_workload_draft(label: &str, draft: DisplayWorkloadDraft) {

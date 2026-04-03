@@ -449,10 +449,18 @@ impl NvmeController {
         let asq_hi = self.reg32(NVME_REG_ASQ + 4);
         let acq_lo = self.reg32(NVME_REG_ACQ);
         let acq_hi = self.reg32(NVME_REG_ACQ + 4);
-        let pci_cmd =
-            crate::pci::config_read_u16_legacy(self.pci.bus, self.pci.slot, self.pci.function, 0x04);
-        let pci_sts =
-            crate::pci::config_read_u16_legacy(self.pci.bus, self.pci.slot, self.pci.function, 0x06);
+        let pci_cmd = crate::pci::config_read_u16_legacy(
+            self.pci.bus,
+            self.pci.slot,
+            self.pci.function,
+            0x04,
+        );
+        let pci_sts = crate::pci::config_read_u16_legacy(
+            self.pci.bus,
+            self.pci.slot,
+            self.pci.function,
+            0x06,
+        );
         let admin_cqe = self.admin.cq_peek();
         let io_cqe = self.io.cq_peek();
         let admin_sqe0 = self.admin.sq_entry(0);
@@ -2218,26 +2226,20 @@ pub fn probe_once() {
                 NvmeController::IO_Q_DEPTH_DEFAULT,
                 false,
             ) {
-                Ok(mut retry_ctrl) => {
-                    match verify_queue_bringup(&mut retry_ctrl, pci_addr) {
-                        Ok(retry_bringup) => {
-                            crate::log!(
-                                "nvme: {} best-effort polled retry recovered queue bring-up\n",
-                                pci_addr
-                            );
-                            ctrl = retry_ctrl;
-                            bringup = Ok(retry_bringup);
-                        }
-                        Err(e) => {
-                            crate::log!(
-                                "nvme: {} best-effort re-verify failed: {:?}\n",
-                                pci_addr,
-                                e
-                            );
-                            retry_ctrl.dump_regs("queue_bringup_retry_failed");
-                        }
+                Ok(mut retry_ctrl) => match verify_queue_bringup(&mut retry_ctrl, pci_addr) {
+                    Ok(retry_bringup) => {
+                        crate::log!(
+                            "nvme: {} best-effort polled retry recovered queue bring-up\n",
+                            pci_addr
+                        );
+                        ctrl = retry_ctrl;
+                        bringup = Ok(retry_bringup);
                     }
-                }
+                    Err(e) => {
+                        crate::log!("nvme: {} best-effort re-verify failed: {:?}\n", pci_addr, e);
+                        retry_ctrl.dump_regs("queue_bringup_retry_failed");
+                    }
+                },
                 Err(e) => {
                     crate::log!("nvme: {} best-effort re-init failed: {:?}\n", pci_addr, e);
                 }
