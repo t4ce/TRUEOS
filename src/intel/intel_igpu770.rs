@@ -1718,14 +1718,14 @@ fn bcs_execlist_submit_port_push(
     let _ = mmio_write32(warm, BCS_RING_EXECLIST_SUBMIT_PORT, context1_hi);
 }
 
-fn seed_bcs_ring_live_state(
-    warm: Igpu770WarmState,
-    ring_head: u32,
-    ring_start: u32,
-    ring_ctl: u32,
-    ring_tail: u32,
-) {
-    let mi_mode_req = masked_bits_update(0, STOP_RING);
+fn prime_bcs_context_submit_state(warm: Igpu770WarmState) {
+    let ctx_ctl_clear = masked_bits_update(
+        0,
+        CTX_CTRL_RS_CTX_ENABLE
+            | CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
     let ctx_ctl_req = masked_bits_update(
         CTX_CTRL_RS_CTX_ENABLE,
         CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
@@ -1733,10 +1733,21 @@ fn seed_bcs_ring_live_state(
             | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
     );
 
+    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL, ctx_ctl_clear);
+    let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_clear);
     let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL, ctx_ctl_req);
     let _ = mmio_write32(warm, BCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_req);
-    let _ = mmio_write32(warm, BCS_RING_MI_MODE, mi_mode_req);
-    let _ = mmio_write32(warm, BCS_RING_HEAD, ring_head);
+}
+
+fn rearm_bcs_live_ring_state(
+    warm: Igpu770WarmState,
+    ring_start: u32,
+    ring_ctl: u32,
+    ring_tail: u32,
+) {
+    let _ = mmio_write32(warm, BCS_RING_MI_MODE, masked_bit_disable(RING_MI_MODE_STOP_RING));
+    let _ = mmio_write32(warm, BCS_RING_HEAD, 0);
+    let _ = mmio_write32(warm, BCS_RING_TAIL, 0);
     let _ = mmio_write32(warm, BCS_RING_START, ring_start);
     let _ = mmio_write32(warm, BCS_RING_CTL, ring_ctl);
     let _ = mmio_write32(warm, BCS_RING_TAIL, ring_tail);
@@ -3190,7 +3201,8 @@ pub fn ggtt_bcs_smoke_test_once() {
     let _ = forcewake_all_acquire(warm);
     let _ =
         mmio_write32(warm, BCS_RING_MODE_GEN7, masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE));
-    seed_bcs_ring_live_state(warm, 0, ring_start, ring_ctl, ring_tail_bytes as u32);
+    prime_bcs_context_submit_state(warm);
+    rearm_bcs_live_ring_state(warm, ring_start, ring_ctl, ring_tail_bytes as u32);
 
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     bcs_execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
@@ -3464,7 +3476,8 @@ pub(crate) fn bcs_composite_rgba_surface(
     let _ = forcewake_all_acquire(warm);
     let _ =
         mmio_write32(warm, BCS_RING_MODE_GEN7, masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE));
-    seed_bcs_ring_live_state(warm, 0, ring.gpu_addr as u32, ring_ctl, ring_tail_bytes as u32);
+    prime_bcs_context_submit_state(warm);
+    rearm_bcs_live_ring_state(warm, ring.gpu_addr as u32, ring_ctl, ring_tail_bytes as u32);
 
     let sq_lo_before = mmio_read32(warm, BCS_RING_EXECLIST_SQ_LO);
     let sq_hi_before = mmio_read32(warm, BCS_RING_EXECLIST_SQ_HI);
