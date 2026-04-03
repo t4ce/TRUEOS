@@ -177,6 +177,11 @@ pub(super) fn append_kernel_cursor_overlay_draws(
 }
 
 pub fn kernel_cursor_overlay_tick() -> i32 {
+    if end_frame_in_progress() {
+        log_cursor_helper_skipped_end_frame_active();
+        return 0;
+    }
+
     crate::gfx::init(crate::limine::framebuffer_response());
 
     let now_ticks = embassy_time_driver::now();
@@ -212,6 +217,11 @@ pub fn kernel_cursor_overlay_tick() -> i32 {
         return 0;
     }
 
+    if end_frame_in_progress() {
+        log_cursor_helper_skipped_end_frame_active();
+        return 0;
+    }
+
     let rc_begin = unsafe { trueos_cabi_gfx_cursor_begin_frame() };
     if rc_begin != 0 {
         return rc_begin;
@@ -227,11 +237,29 @@ pub fn kernel_cursor_overlay_tick() -> i32 {
         return rc_draw;
     }
 
+    if end_frame_in_progress() {
+        log_cursor_helper_skipped_end_frame_active();
+        let mut st = GFX_CABI_STATE.lock();
+        st.cursor_frame_active = false;
+        st.cursor_rgb_draws = 0;
+        st.cursor_tex_draws = 0;
+        st.cursor_draw_bytes = 0;
+        st.cursor_draws.clear();
+        st.cursor_rgb_blob.clear();
+        st.cursor_tex_blob.clear();
+        return 0;
+    }
+
     unsafe { trueos_cabi_gfx_cursor_end_frame() }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_gfx_cursor_begin_frame() -> i32 {
+    if end_frame_in_progress() {
+        log_cursor_helper_skipped_end_frame_active();
+        return 0;
+    }
+
     crate::gfx::init(crate::limine::framebuffer_response());
 
     let mut st = GFX_CABI_STATE.lock();
@@ -366,6 +394,19 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_draw_tex_triangles_no_present(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
+    if end_frame_in_progress() {
+        log_cursor_helper_skipped_end_frame_active();
+        let mut st = GFX_CABI_STATE.lock();
+        st.cursor_frame_active = false;
+        st.cursor_rgb_draws = 0;
+        st.cursor_tex_draws = 0;
+        st.cursor_draw_bytes = 0;
+        st.cursor_draws.clear();
+        st.cursor_rgb_blob.clear();
+        st.cursor_tex_blob.clear();
+        return 0;
+    }
+
     crate::gfx::init(crate::limine::framebuffer_response());
 
     let (
