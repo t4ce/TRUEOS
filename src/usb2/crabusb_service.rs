@@ -166,6 +166,7 @@ const CRABUSB_INTEL_PROBE_QUIET_MS: u64 = 750;
 const CRABUSB_INTEL_SKIP_PROBE_EXPERIMENT: bool = true;
 const CRABUSB_INTEL_SKIP_PROBE_REARM_MS: u64 = 1000;
 const CRABUSB_INTEL_SKIP_EVENT_HANDLER_EXPERIMENT: bool = true;
+const CRABUSB_INTEL_PORT_POWER_HOLDOFF_EXPERIMENT: bool = true;
 const CRABUSB_QUICK_STOP_WINDOW_MS: u64 = 1000;
 const CRABUSB_QUICK_STOP_BACKOFF_MS: u64 = 2000;
 const CRABUSB_MAX_QUICK_STOP_REBINDS: u32 = 3;
@@ -510,6 +511,35 @@ fn xhci_any_connected_root_port(controller_id: usize) -> Option<u8> {
         }
     }
     None
+}
+
+fn xhci_set_all_root_port_power(controller_id: usize, enabled: bool) -> Option<usize> {
+    let info = super::controller_by_index(controller_id)?;
+    let mmio = info.mmio_base.as_ptr() as *mut u8;
+    let mut changed = 0usize;
+    unsafe {
+        let caplen = (read_mmio32(mmio.cast_const(), 0x00) & 0xFF) as usize;
+        let hcsparams1 = read_mmio32(mmio.cast_const(), 0x04);
+        let port_count = ((hcsparams1 >> 24) & 0xff) as usize;
+        const PORTSC_PP: u32 = 1 << 9;
+        for port_idx in 0..port_count {
+            let portsc_off = caplen + 0x400 + (port_idx * 0x10);
+            let mut portsc = read_mmio32(mmio.cast_const(), portsc_off);
+            let before = (portsc & PORTSC_PP) != 0;
+            if enabled {
+                portsc |= PORTSC_PP;
+            } else {
+                portsc &= !PORTSC_PP;
+            }
+            let after = (portsc & PORTSC_PP) != 0;
+            if before != after {
+                write_mmio32(mmio, portsc_off, portsc);
+                let _ = read_mmio32(mmio.cast_const(), portsc_off);
+                changed += 1;
+            }
+        }
+    }
+    Some(changed)
 }
 
 #[inline]
@@ -2992,6 +3022,15 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             ROOT_HUB_LIFECYCLE_SETTLING,
             "initial settle window started",
         );
+
+        if info.vendor_id == 0x8086 && CRABUSB_INTEL_PORT_POWER_HOLDOFF_EXPERIMENT {
+            let changed = xhci_set_all_root_port_power(info.index, false).unwrap_or(0);
+            crate::log!(
+                "crabusb: controller {} intel port-power holdoff active changed_ports={}\n",
+                info.index,
+                changed
+            );
+        }
 
         if info.vendor_id == 0x8086 && intel_quiescent_experiment_enabled(info.device_id) {
             let masked = xhci_set_interrupter_enable(info.index, false);
