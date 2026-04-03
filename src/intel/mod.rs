@@ -29,7 +29,8 @@ pub use render_demo::{
 };
 pub(crate) use xelp_display_ngin::{
     owned_triangle_disable_non_primary_planes_pipe_a, plane_rebind_present_surface,
-    primary_present_shadow_surface_gpu_addr, primary_present_surface_gpu_addr,
+    primary_present_shadow_surface_gpu_addr, primary_present_surface,
+    primary_present_surface_gpu_addr,
 };
 pub(crate) use xelp_media_ngin::{
     MediaKickoffState, MediaSurfaceWindow, demo_surface_window as media_demo_surface_window,

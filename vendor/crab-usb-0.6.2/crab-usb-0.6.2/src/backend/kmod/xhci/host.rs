@@ -93,7 +93,7 @@ impl Xhci {
     const SKIP_SCRATCHPADS_EXPERIMENT: bool = true;
     const PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT: bool = true;
     const PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT: bool = true;
-    const PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT: bool = false;
+    const PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT: bool = true;
 
     fn flush_controller_write(&self) {
         let _ = self.reg.read().operational.usbsts.read_volatile();

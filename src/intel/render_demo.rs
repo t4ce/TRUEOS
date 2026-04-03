@@ -136,6 +136,7 @@ struct RenderDemoState {
     scene_surface: Option<RenderDemoOwnedSurface>,
     texture_surface: Option<RenderDemoOwnedSurface>,
     output_surface: Option<RenderDemoOwnedSurface>,
+    output_shadow_surface: Option<RenderDemoOwnedSurface>,
     phase: f32,
     frame_seq: u32,
     stats: RenderDemoStats,
@@ -289,6 +290,7 @@ impl RenderDemoState {
             scene_surface: Some(create_surface(scene_desc)?),
             texture_surface: None,
             output_surface: None,
+            output_shadow_surface: None,
             phase: super::xelp_render_ngin::default_rgb_triangle_rotation(),
             frame_seq: 0,
             stats: RenderDemoStats::new(),
@@ -296,6 +298,9 @@ impl RenderDemoState {
     }
 
     fn shutdown(&mut self) {
+        if let Some(surface) = self.output_shadow_surface.take() {
+            destroy_surface(surface);
+        }
         if let Some(surface) = self.output_surface.take() {
             destroy_surface(surface);
         }
@@ -643,45 +648,20 @@ pub(crate) fn clear_surface(
     surface: &mut RenderDemoOwnedSurface,
     rgb: u32,
 ) -> Result<(), RenderDemoFailureKind> {
-    let width = surface.desc.width as usize;
-    let height = surface.desc.height as usize;
-    let pitch = surface.pitch_bytes as usize;
-    let Some(target_rgba) = surface.rgba_bytes_mut() else {
+    let Some(target_rgba) = surface.rgba_bytes() else {
         return Err(RenderDemoFailureKind::Alloc);
     };
-
-    // Clear only the triangle cluster footprint instead of the full scene surface.
-    let left_ndc = -0.80f32;
-    let right_ndc = 0.80f32;
-    let top_ndc = 0.36f32;
-    let bottom_ndc = -0.36f32;
-
-    let mut x0 = (((left_ndc * 0.5) + 0.5) * width as f32) as isize;
-    let mut x1 = (((right_ndc * 0.5) + 0.5) * width as f32) as isize;
-    let mut y0 = (((1.0 - top_ndc) * 0.5) * height as f32) as isize;
-    let mut y1 = (((1.0 - bottom_ndc) * 0.5) * height as f32) as isize;
-    x0 = x0.saturating_sub(12).clamp(0, width as isize);
-    x1 = (x1 + 12).clamp(0, width as isize);
-    y0 = y0.saturating_sub(12).clamp(0, height as isize);
-    y1 = (y1 + 12).clamp(0, height as isize);
-
-    let px = (0xFF00_0000u32 | (rgb & 0x00FF_FFFF)).to_le_bytes();
-    let mut y = y0 as usize;
-    while y < y1 as usize {
-        let row_off = y.saturating_mul(pitch);
-        let mut x = x0 as usize;
-        while x < x1 as usize {
-            let off = row_off.saturating_add(x.saturating_mul(4));
-            if off.saturating_add(4) <= target_rgba.len() {
-                target_rgba[off..off + 4].copy_from_slice(&px);
-            }
-            x += 1;
-        }
-        y += 1;
+    if super::intel_igpu770::rcs_clear_rgba_surface(
+        target_rgba,
+        surface.desc.width,
+        surface.desc.height,
+        surface.gpu_addr,
+        rgb,
+    ) {
+        Ok(())
+    } else {
+        Err(RenderDemoFailureKind::Clear)
     }
-
-    super::dma_cache_flush_range(surface.surface_virt as *const u8, surface.surface_bytes);
-    Ok(())
 }
 
 pub(crate) fn draw_rgb_triangles(
@@ -755,25 +735,6 @@ fn map_surface_to_gpu(surface: &mut RenderDemoOwnedSurface) -> bool {
     }
 }
 
-fn fill_surface_rgb(
-    surface: &mut RenderDemoOwnedSurface,
-    rgb: u32,
-) -> Result<(), RenderDemoFailureKind> {
-    let Some(bytes) = surface.rgba_bytes_mut() else {
-        return Err(RenderDemoFailureKind::Alloc);
-    };
-    let blue = (rgb & 0xFF) as u8;
-    let green = ((rgb >> 8) & 0xFF) as u8;
-    let red = ((rgb >> 16) & 0xFF) as u8;
-    for px in bytes.chunks_exact_mut(4) {
-        px[0] = blue;
-        px[1] = green;
-        px[2] = red;
-        px[3] = 0xFF;
-    }
-    Ok(())
-}
-
 fn bridge_scene_to_scanout_surface(
     scene_surface: &RenderDemoOwnedSurface,
     output_surface: &mut RenderDemoOwnedSurface,
@@ -804,7 +765,7 @@ fn bridge_scene_to_scanout_surface(
         return Err(RenderDemoFailureKind::Composite);
     }
 
-    if super::plane_rebind_present_surface(
+    if super::primary_present_surface(
         output_surface.gpu_addr,
         output_surface.desc.width,
         output_surface.desc.height,
@@ -882,7 +843,7 @@ pub(crate) fn run_demo_frame(state: &mut RenderDemoState) -> RenderDemoFrameRepo
     }
 
     report.texture = RenderDemoPassStatus::Skipped;
-    match state.output_surface.as_mut() {
+    match next_output_surface_mut(state) {
         Some(output_surface) => {
             let composite_start = Instant::now();
             match bridge_scene_to_scanout_surface(
@@ -942,6 +903,37 @@ fn log_task_start(desc: RenderDemoSurfaceDesc) {
     }
 }
 
+fn active_display_surface_gpu_addr(state: &RenderDemoState) -> u64 {
+    super::primary_present_surface_gpu_addr()
+        .or_else(|| state.output_surface.as_ref().map(|surface| surface.gpu_addr))
+        .or_else(|| state.output_shadow_surface.as_ref().map(|surface| surface.gpu_addr))
+        .unwrap_or(0)
+}
+
+fn next_output_surface_mut(state: &mut RenderDemoState) -> Option<&mut RenderDemoOwnedSurface> {
+    let target_gpu_addr = super::primary_present_surface_gpu_addr();
+    match target_gpu_addr {
+        Some(addr) => {
+            if matches!(state.output_surface.as_ref(), Some(surface) if surface.gpu_addr == addr) {
+                return state.output_surface.as_mut();
+            }
+            if matches!(
+                state.output_shadow_surface.as_ref(),
+                Some(surface) if surface.gpu_addr == addr
+            ) {
+                return state.output_shadow_surface.as_mut();
+            }
+            state.output_surface
+                .as_mut()
+                .or(state.output_shadow_surface.as_mut())
+        }
+        None => state
+            .output_surface
+            .as_mut()
+            .or(state.output_shadow_surface.as_mut()),
+    }
+}
+
 fn map_scene_surface(surface: &RenderDemoOwnedSurface) -> Result<(), RenderDemoStartupFailure> {
     let mut mapped_surface = RenderDemoOwnedSurface {
         surface_phys: surface.surface_phys,
@@ -986,10 +978,10 @@ async fn try_prepare_scanout_bridge(
     }
 
     let Some(draft) = super::xelp_display_ngin::draft_workload(
-        super::xelp_display_ngin::DisplayWorkloadKind::PlaneRebind,
+        super::xelp_display_ngin::DisplayWorkloadKind::PrimaryPresent,
     ) else {
         crate::log!(
-            "intel/render-demo: startup phase=scanout-bridge skipped reason=plane-rebind-draft-unavailable\n"
+            "intel/render-demo: startup phase=scanout-bridge skipped reason=primary-present-draft-unavailable\n"
         );
         return;
     };
@@ -1000,14 +992,17 @@ async fn try_prepare_scanout_bridge(
         return;
     };
     let output_gpu = draft.surface.windows.staging_gpu_addr;
+    let output_shadow_gpu = draft.surface.windows.shadow_state_gpu_addr;
     if output_gpu == 0
+        || output_shadow_gpu == 0
         || draft.surface.width == 0
         || draft.surface.height == 0
         || draft.surface.pitch_bytes == 0
     {
         crate::log!(
-            "intel/render-demo: startup phase=scanout-bridge skipped reason=invalid-display-surface gpu=0x{:X} size={}x{} pitch=0x{:X}\n",
+            "intel/render-demo: startup phase=scanout-bridge skipped reason=invalid-display-surface staging_gpu=0x{:X} shadow_gpu=0x{:X} size={}x{} pitch=0x{:X}\n",
             output_gpu,
+            output_shadow_gpu,
             draft.surface.width,
             draft.surface.height,
             draft.surface.pitch_bytes
@@ -1030,7 +1025,7 @@ async fn try_prepare_scanout_bridge(
         Ok(surface) => surface,
         Err(reason) => {
             crate::log!(
-                "intel/render-demo: startup phase=scanout-bridge skipped reason={} scene_gpu=0x{:X} display_gpu=0x{:X}\n",
+                "intel/render-demo: startup phase=scanout-bridge skipped reason={} scene_gpu=0x{:X} staging_gpu=0x{:X}\n",
                 reason.label(),
                 scene_surface.gpu_addr,
                 output_gpu
@@ -1038,12 +1033,40 @@ async fn try_prepare_scanout_bridge(
             return;
         }
     };
+    let shadow_desc = RenderDemoSurfaceDesc {
+        gpu_addr_policy: RenderDemoSurfaceGpuAddrPolicy::Fixed(output_shadow_gpu),
+        ..output_desc
+    };
+    let mut output_shadow_surface = match create_surface_with_pitch(shadow_desc, draft.surface.pitch_bytes)
+    {
+        Ok(surface) => surface,
+        Err(reason) => {
+            crate::log!(
+                "intel/render-demo: startup phase=scanout-bridge skipped reason={} scene_gpu=0x{:X} shadow_gpu=0x{:X}\n",
+                reason.label(),
+                scene_surface.gpu_addr,
+                output_shadow_gpu
+            );
+            destroy_surface(output_surface);
+            return;
+        }
+    };
     if !map_surface_to_gpu(&mut output_surface) {
         crate::log!(
-            "intel/render-demo: startup phase=scanout-bridge skipped reason=display-surface-map-failed scene_gpu=0x{:X} display_gpu=0x{:X}\n",
+            "intel/render-demo: startup phase=scanout-bridge skipped reason=display-surface-map-failed scene_gpu=0x{:X} staging_gpu=0x{:X}\n",
             scene_surface.gpu_addr,
             output_surface.gpu_addr
         );
+        destroy_surface(output_surface);
+        return;
+    }
+    if !map_surface_to_gpu(&mut output_shadow_surface) {
+        crate::log!(
+            "intel/render-demo: startup phase=scanout-bridge skipped reason=display-surface-map-failed scene_gpu=0x{:X} shadow_gpu=0x{:X}\n",
+            scene_surface.gpu_addr,
+            output_shadow_surface.gpu_addr
+        );
+        destroy_surface(output_shadow_surface);
         destroy_surface(output_surface);
         return;
     }
@@ -1051,10 +1074,11 @@ async fn try_prepare_scanout_bridge(
         let _ = super::owned_triangle_disable_non_primary_planes_pipe_a();
     }
     crate::log!(
-        "intel/render-demo: startup phase=scanout-bridge armed route=display.plane.rebind pipe={} scene_gpu=0x{:X} display_gpu=0x{:X} scene_size={}x{} display_size={}x{} display_pitch=0x{:X}\n",
+        "intel/render-demo: startup phase=scanout-bridge armed route=display.present.primary pipe={} scene_gpu=0x{:X} staging_gpu=0x{:X} shadow_gpu=0x{:X} scene_size={}x{} display_size={}x{} display_pitch=0x{:X}\n",
         draft.descriptor.name,
         scene_surface.gpu_addr,
         output_surface.gpu_addr,
+        output_shadow_surface.gpu_addr,
         scene_surface.desc.width,
         scene_surface.desc.height,
         output_surface.desc.width,
@@ -1062,6 +1086,7 @@ async fn try_prepare_scanout_bridge(
         output_surface.pitch_bytes
     );
     state.output_surface = Some(output_surface);
+    state.output_shadow_surface = Some(output_shadow_surface);
 }
 
 async fn run_render_demo_startup(
@@ -1160,11 +1185,7 @@ pub async fn intel_render_demo_task() {
             .as_ref()
             .map(|surface| surface.gpu_addr)
             .unwrap_or(0);
-        let display_gpu = state
-            .output_surface
-            .as_ref()
-            .map(|surface| surface.gpu_addr)
-            .unwrap_or(0);
+        let display_gpu = active_display_surface_gpu_addr(&state);
 
         if report.frame_seq <= 8 || report.frame_seq.is_multiple_of(240) || report.failure.is_some()
         {
@@ -1192,7 +1213,7 @@ pub async fn intel_render_demo_task() {
                 state.stats.success_rate_milli(),
                 scene_gpu,
                 display_gpu,
-                state.output_surface.is_some() as u8,
+                (state.output_surface.is_some() || state.output_shadow_surface.is_some()) as u8,
                 render_demo_skip_clear_enabled() as u8
             );
         }
