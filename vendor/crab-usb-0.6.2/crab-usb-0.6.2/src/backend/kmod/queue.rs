@@ -130,11 +130,11 @@ impl<C> Future for TWaiter<C> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        if let Some(res) = this.finished.get_finished() {
-            return Poll::Ready(res);
-        }
         this.finished.register(cx.waker());
-        Poll::Pending
+        match this.finished.get_finished() {
+            Some(res) => Poll::Ready(res),
+            None => Poll::Pending,
+        }
     }
 }
 
