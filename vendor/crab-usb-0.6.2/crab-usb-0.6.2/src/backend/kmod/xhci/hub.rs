@@ -20,7 +20,7 @@ use super::reg::XhciRegisters;
 const HUB_DEBOUNCE_TIMEOUT_MS: u64 = 2000;
 const HUB_DEBOUNCE_STEP_MS: u64 = 25;
 const HUB_DEBOUNCE_STABLE_MS: u64 = 100;
-const ROOT_PORT_ENABLE_WAIT_MS: u64 = 500;
+const ROOT_PORT_ENABLE_WAIT_MS: u64 = 1500;
 const ROOT_PORT_ENABLE_CHECK_MS: u64 = 10;
 
 pub struct PortChangeWaker {
@@ -215,6 +215,33 @@ impl XhciRootHub {
         Err(USBError::Timeout)
     }
 
+    async fn settle_port_enabled(&mut self, port_id: u8, reason: &'static str) -> bool {
+        match self.wait_for_port_enabled(port_id).await {
+            Ok(()) => true,
+            Err(USBError::Timeout) => {
+                let idx = (port_id - 1) as usize;
+                let port = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                info!(
+                    "crabusb/xhci/hub: port={} {} still settling connect={} enabled={} reset={} speed={}",
+                    port_id,
+                    reason,
+                    port.current_connect_status(),
+                    port.port_enabled_disabled(),
+                    port.port_reset(),
+                    port.port_speed()
+                );
+                false
+            }
+            Err(err) => {
+                info!(
+                    "crabusb/xhci/hub: port={} {} failed while waiting for enable: {:?}",
+                    port_id, reason, err
+                );
+                false
+            }
+        }
+    }
+
     async fn handle_changed(&mut self) -> Result<(), USBError> {
         let changed = self
             .ports()
@@ -292,8 +319,14 @@ impl XhciRootHub {
                     id
                 );
                 self.reset_port(id, port.port_speed()).await?;
-                self.wait_for_port_enabled(id).await?;
-                self.ports_mut()[i].state = PortState::Reseted;
+                if self
+                    .settle_port_enabled(id, "connect-time reset")
+                    .await
+                {
+                    self.ports_mut()[i].state = PortState::Reseted;
+                } else {
+                    self.ports_mut()[i].state = PortState::Uninit;
+                }
                 continue;
             }
 
@@ -302,8 +335,14 @@ impl XhciRootHub {
                     "crabusb/xhci/hub: changed port={} reset/enable complete -> ready to probe",
                     id
                 );
-                self.wait_for_port_enabled(id).await?;
-                self.ports_mut()[i].state = PortState::Reseted;
+                if self
+                    .settle_port_enabled(id, "post-reset change")
+                    .await
+                {
+                    self.ports_mut()[i].state = PortState::Reseted;
+                } else {
+                    self.ports_mut()[i].state = PortState::Uninit;
+                }
                 continue;
             }
 
@@ -354,7 +393,12 @@ impl XhciRootHub {
                 );
                 self.debounce_port(id, true).await?;
                 self.reset_port(id, port.port_speed()).await?;
-                self.wait_for_port_enabled(id).await?;
+                if !self
+                    .settle_port_enabled(id, "targeted reset")
+                    .await
+                {
+                    continue;
+                }
             }
 
             info!(
