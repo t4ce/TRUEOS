@@ -374,10 +374,14 @@ pub fn init_once() {
     match VirtioRng::init() {
         Ok(dev) => {
             *guard = Some(dev);
-            crate::log!("pci/vrng: attached\n");
+            if crate::logflag::BOOT_INFO_LOGS {
+                crate::log!("pci/vrng: attached\n");
+            }
         }
         Err(Error::NotFound) => {
-            crate::log!("pci/vrng: not present\n");
+            if crate::logflag::BOOT_INFO_LOGS {
+                crate::log!("pci/vrng: not present\n");
+            }
         }
         Err(e) => {
             crate::log!("pci/vrng: init failed: {:?}\n", e);
@@ -398,7 +402,9 @@ pub fn smoke_test_once() {
                 crate::log!("pci/vrng: smoke ok (fnv1a64=0x{:016x})\n", h);
             }
             Err(Error::NotFound) => {
-                crate::log!("pci/vrng: smoke skipped (not present)\n");
+                if crate::logflag::BOOT_INFO_LOGS {
+                    crate::log!("pci/vrng: smoke skipped (not present)\n");
+                }
             }
             Err(e) => {
                 crate::log!("pci/vrng: smoke failed: {:?}\n", e);

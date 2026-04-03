@@ -52,6 +52,8 @@ static LAST_PROBE_DEVICE_COUNT: [AtomicU32; MAX_XHCI_CONTROLLERS] =
     [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
 static PROBE_FAIL_STREAK: [AtomicU32; MAX_XHCI_CONTROLLERS] =
     [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
+static EARLY_FATAL_REBIND_STREAK: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
 static TLB_DEVICES: [Mutex<Vec<super::TlbUsbDevice>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
 static TLB_TOPOLOGY: [Mutex<Vec<super::TlbUsbTopologyNode>>; MAX_XHCI_CONTROLLERS] =
@@ -68,6 +70,12 @@ pub(super) struct UsbRuntimeDiag {
     pub probe_fail_streak: u32,
     pub last_probe_state: &'static str,
     pub last_probe_device_count: u32,
+    pub early_fatal_rebind_streak: u32,
+    pub recovery_quiescent_before_bind: bool,
+    pub recovery_quiescent_ms: u64,
+    pub recovery_skip_delayed_event_handler: bool,
+    pub recovery_initial_settle_ms: u64,
+    pub recovery_probe_quiet_ms: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -152,6 +160,43 @@ fn controller_needs_quarantine(controller_id: usize) -> bool {
     )
 }
 
+async fn maybe_retry_early_fatal_rebind(
+    controller_id: usize,
+    stage: &'static str,
+    reason: &'static str,
+) -> bool {
+    let streak = EARLY_FATAL_REBIND_STREAK[controller_id].fetch_add(1, Ordering::AcqRel) + 1;
+    if streak > CRABUSB_MAX_EARLY_FATAL_REBINDS {
+        mark_controller_quarantined(controller_id, stage);
+        crate::log!(
+            "crabusb: controller {} fatal xhci state ({}) during {}; retry budget exhausted at streak={} so waiting for manual rebind\n",
+            controller_id,
+            reason,
+            stage,
+            streak
+        );
+        return false;
+    }
+
+    let backoff_ms = if streak > CRABUSB_MAX_QUICK_STOP_REBINDS {
+        CRABUSB_EARLY_FATAL_REBIND_SLOW_BACKOFF_MS
+    } else {
+        CRABUSB_EARLY_FATAL_REBIND_BACKOFF_MS
+    };
+    uninstall_event_handler(controller_id);
+    crate::log!(
+        "crabusb: controller {} fatal xhci state ({}) during {}; auto-rebinding after {}ms (streak={}/{})\n",
+        controller_id,
+        reason,
+        stage,
+        backoff_ms,
+        streak,
+        CRABUSB_MAX_EARLY_FATAL_REBINDS
+    );
+    Timer::after(EmbassyDuration::from_millis(backoff_ms)).await;
+    true
+}
+
 const DEMO_WAV_EMBEDDED: &[u8] = b""; // temporary empty audio payload
 const AUDIO_FRAME_BYTES: usize = 4; // s16le stereo
 const TRUEKEY_VENDOR_ID: u16 = 0x303A;
@@ -169,11 +214,17 @@ const CRABUSB_INTEL_SKIP_EVENT_HANDLER_EXPERIMENT: bool = false;
 const CRABUSB_QUICK_STOP_WINDOW_MS: u64 = 1000;
 const CRABUSB_QUICK_STOP_BACKOFF_MS: u64 = 2000;
 const CRABUSB_MAX_QUICK_STOP_REBINDS: u32 = 3;
+const CRABUSB_EARLY_FATAL_REBIND_BACKOFF_MS: u64 = 250;
+const CRABUSB_EARLY_FATAL_REBIND_SLOW_BACKOFF_MS: u64 = 2000;
+const CRABUSB_MAX_EARLY_FATAL_REBINDS: u32 = 8;
 const CRABUSB_INTEL_QUIESCENT_EXPERIMENT: bool = false;
 const CRABUSB_INTEL_QUIESCENT_EXPERIMENT_MS: u64 = 1500;
 const CRABUSB_INTEL_QUIESCENT_POLL_MS: u64 = 25;
 const CRABUSB_INTEL_SETTLE_POLL_MS: u64 = 25;
 const CRABUSB_INTEL_SETTLE_SNAPSHOT_MS: u64 = 250;
+const CRABUSB_INTEL_RECOVERY_LONG_SETTLE_MS: u64 = 4000;
+const CRABUSB_INTEL_RECOVERY_LONG_QUIET_MS: u64 = 3000;
+const CRABUSB_INTEL_RECOVERY_QUIESCENT_MS: u64 = 2000;
 const ROOT_HUB_LIFECYCLE_INIT: u32 = 0;
 const ROOT_HUB_LIFECYCLE_BOUND: u32 = 1;
 const ROOT_HUB_LIFECYCLE_ROOT_CHANGE: u32 = 2;
@@ -202,6 +253,57 @@ fn intel_quiescent_experiment_enabled(device_id: u16) -> bool {
 #[inline]
 fn intel_skip_event_handler_experiment(vendor_id: u16) -> bool {
     vendor_id == 0x8086 && CRABUSB_INTEL_SKIP_EVENT_HANDLER_EXPERIMENT
+}
+
+#[derive(Clone, Copy)]
+struct IntelRecoveryStrategy {
+    streak: u32,
+    quiescent_before_bind: bool,
+    quiescent_ms: u64,
+    skip_delayed_event_handler: bool,
+    initial_settle_ms: u64,
+    probe_quiet_ms: u64,
+}
+
+fn intel_recovery_strategy(vendor_id: u16, device_id: u16, controller_id: usize) -> IntelRecoveryStrategy {
+    let streak = EARLY_FATAL_REBIND_STREAK[controller_id].load(Ordering::Acquire);
+    if vendor_id != 0x8086 {
+        return IntelRecoveryStrategy {
+            streak,
+            quiescent_before_bind: false,
+            quiescent_ms: CRABUSB_INTEL_QUIESCENT_EXPERIMENT_MS,
+            skip_delayed_event_handler: false,
+            initial_settle_ms: controller_initial_settle_ms(vendor_id),
+            probe_quiet_ms: controller_probe_quiet_ms(vendor_id),
+        };
+    }
+
+    let forced_quiescent = streak >= 2;
+    let skip_delayed_event_handler = streak >= 4;
+    let long_settle = streak >= 6;
+    let _ = device_id;
+
+    IntelRecoveryStrategy {
+        streak,
+        quiescent_before_bind: intel_quiescent_experiment_enabled(device_id) || forced_quiescent,
+        quiescent_ms: if long_settle {
+            CRABUSB_INTEL_RECOVERY_LONG_QUIET_MS
+        } else {
+            CRABUSB_INTEL_RECOVERY_QUIESCENT_MS
+        },
+        skip_delayed_event_handler: intel_skip_event_handler_experiment(vendor_id)
+            || skip_delayed_event_handler,
+        initial_settle_ms: if long_settle {
+            CRABUSB_INTEL_RECOVERY_LONG_SETTLE_MS
+        } else {
+            CRABUSB_INTEL_INITIAL_SETTLE_MS
+        },
+        probe_quiet_ms: if long_settle {
+            CRABUSB_INTEL_RECOVERY_LONG_QUIET_MS
+        } else {
+            CRABUSB_INTEL_PROBE_QUIET_MS
+        },
+    }
 }
 
 fn cached_device_count(controller_id: usize) -> usize {
@@ -3052,13 +3154,9 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             }
         }
         if let Some(reason) = xhci_fatal_init_state(info.index) {
-            mark_controller_quarantined(info.index, "fatal xhci state before host init");
-            crate::log!(
-                "crabusb: controller {} pre-bind fatal xhci state ({}); waiting for manual rebind\n",
-                info.index,
-                reason
-            );
-            wait_for_manual_rebind(info.index).await;
+            if !maybe_retry_early_fatal_rebind(info.index, "pre-bind", reason).await {
+                wait_for_manual_rebind(info.index).await;
+            }
             continue;
         }
 
@@ -3089,13 +3187,9 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             log_xhci_status_bits(info.index, "host init failed");
             log_xhci_runtime_snapshot(info.index, "host init failed");
             if let Some(reason) = xhci_fatal_init_state(info.index) {
-                mark_controller_quarantined(info.index, "fatal xhci state during host init");
-                crate::log!(
-                    "crabusb: controller {} fatal xhci state during host init ({}); auto-rebind disabled\n",
-                    info.index,
-                    reason
-                );
-                wait_for_manual_rebind(info.index).await;
+                if !maybe_retry_early_fatal_rebind(info.index, "host init", reason).await {
+                    wait_for_manual_rebind(info.index).await;
+                }
                 continue;
             }
             Timer::after(EmbassyDuration::from_millis(OFFLINE_RETRY_MS)).await;
@@ -3119,19 +3213,33 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             "initial settle window started",
         );
 
-        if info.vendor_id == 0x8086 && intel_quiescent_experiment_enabled(info.device_id) {
+        let intel_strategy = intel_recovery_strategy(info.vendor_id, info.device_id, info.index);
+        if info.vendor_id == 0x8086 && intel_strategy.streak > 0 {
+            crate::log!(
+                "crabusb: controller {} intel recovery strategy streak={} quiescent={} quiescent_ms={} skip_delayed_handler={} settle_ms={} probe_quiet_ms={}\n",
+                info.index,
+                intel_strategy.streak,
+                intel_strategy.quiescent_before_bind,
+                intel_strategy.quiescent_ms,
+                intel_strategy.skip_delayed_event_handler,
+                intel_strategy.initial_settle_ms,
+                intel_strategy.probe_quiet_ms
+            );
+        }
+
+        if info.vendor_id == 0x8086 && intel_strategy.quiescent_before_bind {
             let masked = xhci_set_interrupter_enable(info.index, false);
             crate::log!(
                 "crabusb: controller {} intel quiescent experiment begin masked={} duration={}ms\n",
                 info.index,
                 masked,
-                CRABUSB_INTEL_QUIESCENT_EXPERIMENT_MS
+                intel_strategy.quiescent_ms
             );
 
             let quiet_started_at = Instant::now();
             let mut quiet_failed = false;
             while quiet_started_at.elapsed()
-                < EmbassyDuration::from_millis(CRABUSB_INTEL_QUIESCENT_EXPERIMENT_MS)
+                < EmbassyDuration::from_millis(intel_strategy.quiescent_ms)
             {
                 if let Some(status) = xhci_status_bits(info.index) {
                     if status.host_system_error || status.host_controller_error || status.hc_halted
@@ -3172,7 +3280,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             );
         }
 
-        let skip_event_handler = intel_skip_event_handler_experiment(info.vendor_id);
+        let skip_event_handler = intel_strategy.skip_delayed_event_handler;
         let delay_event_handler = info.vendor_id == 0x8086 && !skip_event_handler;
         if skip_event_handler {
             crate::log!(
@@ -3189,8 +3297,8 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             log_xhci_runtime_snapshot(info.index, "event handler installed");
         }
         let bind_started_at = Instant::now();
-        let initial_settle_ms = controller_initial_settle_ms(info.vendor_id);
-        let probe_quiet_ms = controller_probe_quiet_ms(info.vendor_id);
+        let initial_settle_ms = intel_strategy.initial_settle_ms;
+        let probe_quiet_ms = intel_strategy.probe_quiet_ms;
         let mut interrupts_masked_for_settle = false;
         if delay_event_handler {
             interrupts_masked_for_settle = xhci_set_interrupter_enable(info.index, false);
@@ -3208,18 +3316,18 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
         }
         if delay_event_handler {
             if let Some(reason) = monitor_intel_settle_window(info.index, initial_settle_ms).await {
-                mark_controller_quarantined(
+                if !maybe_retry_early_fatal_rebind(
                     info.index,
-                    "fatal xhci state before delayed event handler install",
-                );
-                crate::log!(
-                    "crabusb: controller {} fatal xhci state ({}) before delayed event handler install; waiting for manual rebind\n",
-                    info.index,
-                    reason
-                );
-                wait_for_manual_rebind(info.index).await;
+                    "delayed event handler install",
+                    reason,
+                )
+                .await
+                {
+                    wait_for_manual_rebind(info.index).await;
+                }
                 continue;
             }
+            EARLY_FATAL_REBIND_STREAK[info.index].store(0, Ordering::Release);
             install_event_handler(info.index, host.create_event_handler());
             if interrupts_masked_for_settle {
                 let reenabled = xhci_set_interrupter_enable(info.index, true);
@@ -3232,6 +3340,7 @@ pub async fn bsp_service(controller_index: usize, spawner: Spawner) {
             log_xhci_runtime_snapshot(info.index, "event handler installed after gentle settle");
         } else {
             Timer::after(EmbassyDuration::from_millis(initial_settle_ms)).await;
+            EARLY_FATAL_REBIND_STREAK[info.index].store(0, Ordering::Release);
         }
         if info.vendor_id != 0x8086 {
             crab_scout_once(&mut host, info, &spawner).await;
@@ -3441,6 +3550,8 @@ pub(super) fn runtime_diag(controller_id: usize) -> Option<UsbRuntimeDiag> {
     if controller_id >= MAX_XHCI_CONTROLLERS {
         return None;
     }
+    let info = super::controller_by_index(controller_id);
+    let strategy = info.map(|info| intel_recovery_strategy(info.vendor_id, info.device_id, controller_id));
 
     Some(UsbRuntimeDiag {
         event_handler_ready: EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire),
@@ -3452,6 +3563,14 @@ pub(super) fn runtime_diag(controller_id: usize) -> Option<UsbRuntimeDiag> {
         probe_fail_streak: PROBE_FAIL_STREAK[controller_id].load(Ordering::Acquire),
         last_probe_state: probe_state_name(LAST_PROBE_STATE[controller_id].load(Ordering::Acquire)),
         last_probe_device_count: LAST_PROBE_DEVICE_COUNT[controller_id].load(Ordering::Acquire),
+        early_fatal_rebind_streak: EARLY_FATAL_REBIND_STREAK[controller_id].load(Ordering::Acquire),
+        recovery_quiescent_before_bind: strategy.map(|s| s.quiescent_before_bind).unwrap_or(false),
+        recovery_quiescent_ms: strategy.map(|s| s.quiescent_ms).unwrap_or(0),
+        recovery_skip_delayed_event_handler: strategy
+            .map(|s| s.skip_delayed_event_handler)
+            .unwrap_or(false),
+        recovery_initial_settle_ms: strategy.map(|s| s.initial_settle_ms).unwrap_or(0),
+        recovery_probe_quiet_ms: strategy.map(|s| s.probe_quiet_ms).unwrap_or(0),
     })
 }
 

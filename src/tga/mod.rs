@@ -275,14 +275,16 @@ pub fn try_init() -> bool {
         found = devices.iter().copied().find(is_tga);
     });
     let Some(dev) = found else {
-        crate::logflag::TGA_MISSING_LOG_ONCE.call_once(|| {
-            crate::log!(
-                "tga: device not found (vid=0x{:04X} did=0x{:04X}, scanned {} devices)\n",
-                TGA_VENDOR_ID,
-                TGA_DEVICE_ID,
-                device_count
-            );
-        });
+        if crate::logflag::BOOT_INFO_LOGS {
+            crate::logflag::TGA_MISSING_LOG_ONCE.call_once(|| {
+                crate::log!(
+                    "tga: device not found (vid=0x{:04X} did=0x{:04X}, scanned {} devices)\n",
+                    TGA_VENDOR_ID,
+                    TGA_DEVICE_ID,
+                    device_count
+                );
+            });
+        }
         return false;
     };
 
