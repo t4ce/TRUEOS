@@ -1117,12 +1117,6 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_trueosfs_explorer_demo,
     ),
     TaskSpec::enabled(
-        "gfx-intel-readiness-probe",
-        crate::r::readiness::GFX_INTEL_CLAIMED,
-        &GFX_INTEL_READINESS_PROBE_STARTED,
-        spawn_gfx_intel_readiness_probe,
-    ),
-    TaskSpec::enabled(
         "crabusb-bsp-service",
         0,
         &CRABUSB_BSP_SERVICE_STARTED,
