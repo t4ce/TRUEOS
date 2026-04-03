@@ -1,5 +1,7 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use embassy_time::{Duration as EmbassyDuration, Timer};
+
 use super::intel_igpu770::{Igpu770WarmState, forcewake_all_acquire, mmio_read32, mmio_write32};
 
 const GUC_MODULE_STRING: &[u8] = b"trueos.fw.guc";
@@ -126,6 +128,25 @@ static GUC_FW_RSA_OFFSET: core::sync::atomic::AtomicUsize = core::sync::atomic::
 static GUC_FW_RSA_SIZE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 static GUC_FW_PRIVATE_DATA_SIZE: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RenderDemoGucStartupFailure {
+    MissingFirmware,
+    MissingAds,
+    TerminalFailure,
+    ReadyTimeout,
+}
+
+impl RenderDemoGucStartupFailure {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::MissingFirmware => "guc-missing-firmware",
+            Self::MissingAds => "guc-missing-ads",
+            Self::TerminalFailure => "guc-terminal-failure",
+            Self::ReadyTimeout => "guc-ready-timeout",
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 pub struct GucFirmwareInfo {
@@ -718,6 +739,19 @@ fn guc_status_terminal(status: u32) -> Option<bool> {
     }
 }
 
+fn log_render_demo_guc_status(status: u32, waited_ms: u64) {
+    crate::log!(
+        "intel/render-demo: guc-status waited_ms={} raw=0x{:08X} bootrom=0x{:02X}({}) ukernel=0x{:02X}({}) auth=0x{:X}\n",
+        waited_ms,
+        status,
+        guc_bootrom(status),
+        error_name_bootrom(guc_bootrom(status)),
+        guc_ukernel(status),
+        error_name_ukernel(guc_ukernel(status)),
+        guc_auth(status)
+    );
+}
+
 pub fn load_firmware_from_module(warm_align: usize) -> GucFirmwareInfo {
     let Some(blob) = crate::limine::module_bytes_by_string(GUC_MODULE_STRING) else {
         crate::log!("intel/igpu770: guc-fw module not found string=trueos.fw.guc\n");
@@ -1100,5 +1134,45 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
     );
     if !ready {
         crate::log!("intel/igpu770: guc-fw readiness=not-ready; rcs smoke submit gated\n");
+    }
+}
+
+pub(crate) async fn ensure_ready_for_render_demo(
+    warm: Igpu770WarmState,
+    poll_ms: u64,
+    timeout_ms: u64,
+) -> Result<(), RenderDemoGucStartupFailure> {
+    if warm.guc_fw_len == 0 || warm.guc_fw_phys == 0 || warm.guc_fw_gpu_addr == 0 {
+        return Err(RenderDemoGucStartupFailure::MissingFirmware);
+    }
+    if warm.guc_ads_len == 0 || warm.guc_ads_phys == 0 || warm.guc_ads_gpu_addr == 0 {
+        return Err(RenderDemoGucStartupFailure::MissingAds);
+    }
+
+    bootstrap_once(warm);
+    let mut waited_ms = 0u64;
+    let poll_ms = poll_ms.max(1);
+    let mut next_log_ms = 0u64;
+    loop {
+        let raw = status(warm);
+        if waited_ms >= next_log_ms {
+            log_render_demo_guc_status(raw, waited_ms);
+            next_log_ms = next_log_ms.saturating_add(100);
+        }
+
+        if ready() {
+            return Ok(());
+        }
+        if matches!(guc_status_terminal(raw), Some(false)) || guc_auth(raw) == GS_AUTH_STATUS_BAD {
+            log_render_demo_guc_status(raw, waited_ms);
+            return Err(RenderDemoGucStartupFailure::TerminalFailure);
+        }
+        if waited_ms >= timeout_ms {
+            log_render_demo_guc_status(raw, waited_ms);
+            return Err(RenderDemoGucStartupFailure::ReadyTimeout);
+        }
+
+        Timer::after(EmbassyDuration::from_millis(poll_ms)).await;
+        waited_ms = waited_ms.saturating_add(poll_ms);
     }
 }

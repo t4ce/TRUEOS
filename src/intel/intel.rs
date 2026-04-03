@@ -730,6 +730,25 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     fallback
 }
 
+pub(crate) async fn ensure_display_kickoff(caller: &'static str) -> bool {
+    if super::xelp_display_ngin::kickoff_state().is_some() {
+        crate::log!("intel: display kickoff already available path={}\n", caller);
+        return true;
+    }
+
+    let Some(info) = first_claimed_device() else {
+        crate::log!("intel: display kickoff skipped path={} reason=no-claimed-device\n", caller);
+        return false;
+    };
+
+    crate::log!("intel: display kickoff requested path={}\n", caller);
+    run_display_power_discovery(info);
+    Timer::after(EmbassyDuration::from_millis(25)).await;
+    crate::log!("intel: display kickoff follow-up probe path={}\n", caller);
+    log_display_power_probe(info);
+    super::xelp_display_ngin::kickoff_state().is_some()
+}
+
 #[embassy_executor::task]
 pub async fn scanout_smoke_task() {
     let Some(info) = first_claimed_device() else {
@@ -785,8 +804,6 @@ pub async fn scanout_smoke_task() {
         return;
     }
 
-    run_display_power_discovery(info);
-    Timer::after(EmbassyDuration::from_millis(25)).await;
-    crate::log!("intel: display discovery follow-up probe after initial bring-up\n");
-    log_display_power_probe(info);
+    let _ = info;
+    let _ = ensure_display_kickoff("scanout-smoke").await;
 }

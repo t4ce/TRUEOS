@@ -1901,17 +1901,23 @@ pub(super) fn ggtt_map_system_ram_range(
     ggtt_program_plan(label, warm, plan)
 }
 
-pub(crate) fn ggtt_map_screen_rgba_surface(
+pub(crate) fn ggtt_map_rgba_surface_pitch(
     target_rgba: &[u8],
     width: u32,
     height: u32,
+    pitch_bytes: u32,
     gpu_addr: u64,
 ) -> bool {
     let Some(warm) = warm_state() else {
         return false;
     };
-    let target_len = rgba_len(width, height).unwrap_or(0);
-    if target_len == 0 || target_rgba.len() < target_len {
+    let min_len = rgba_len(width, height).unwrap_or(0);
+    let target_len = (pitch_bytes as usize).checked_mul(height as usize).unwrap_or(0);
+    if target_len == 0
+        || target_len < min_len
+        || target_rgba.len() < target_len
+        || (pitch_bytes as usize) < width as usize * 4
+    {
         return false;
     }
     let Some(plan) = ggtt_map_plan_heap_target(target_rgba.as_ptr(), target_len, gpu_addr) else {
@@ -1924,6 +1930,15 @@ pub(crate) fn ggtt_map_screen_rgba_surface(
     }
     let _ = ggtt_invalidate(warm);
     true
+}
+
+pub(crate) fn ggtt_map_screen_rgba_surface(
+    target_rgba: &[u8],
+    width: u32,
+    height: u32,
+    gpu_addr: u64,
+) -> bool {
+    ggtt_map_rgba_surface_pitch(target_rgba, width, height, width.saturating_mul(4), gpu_addr)
 }
 
 #[inline]
@@ -3442,14 +3457,14 @@ pub(crate) fn rcs_draw_rgba_rgb_triangles(
         return false;
     }
 
+    ggtt_map_smoke_objects_once();
+
     let Some(warm) = warm_state() else {
         return false;
     };
     if !intel_guc::ready() {
         return false;
     }
-
-    ggtt_map_smoke_objects_once();
 
     let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE)
     else {
@@ -3673,14 +3688,14 @@ pub(crate) fn rcs_draw_screen_tex_triangles(
         return false;
     }
 
+    ggtt_map_smoke_objects_once();
+
     let Some(warm) = warm_state() else {
         return false;
     };
     if !intel_guc::ready() {
         return false;
     }
-
-    ggtt_map_smoke_objects_once();
 
     let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE)
     else {
@@ -3880,6 +3895,8 @@ pub(crate) fn rcs_clear_rgba_surface(
     target_gpu_addr: u64,
     rgb: u32,
 ) -> bool {
+    ggtt_map_smoke_objects_once();
+
     let Some(warm) = warm_state() else {
         crate::log!("intel/igpu770: rcs-clear skipped reason=warm-missing\n");
         return false;
@@ -3900,8 +3917,6 @@ pub(crate) fn rcs_clear_rgba_surface(
         );
         return false;
     }
-
-    ggtt_map_smoke_objects_once();
 
     let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE)
     else {
@@ -4067,15 +4082,6 @@ pub(crate) fn rcs_clear_rgba_surface(
         completed_pixels = completed_pixels.saturating_add(chunk_pixels);
         chunk_idx = chunk_idx.saturating_add(1);
     }
-
-    crate::log!(
-        "intel/igpu770: rcs-clear summary success=1 size={}x{} chunks={} rgb=0x{:06X} dst_gpu=0x{:X}\n",
-        width,
-        height,
-        chunk_idx,
-        rgb & 0x00FF_FFFF,
-        dst.gpu_addr
-    );
 
     true
 }
