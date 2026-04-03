@@ -16,6 +16,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use embassy_time_driver::{TICK_HZ, now};
 use trueos_gfx_core::GfxContext;
 
+pub(crate) use backends::intel_present_completed_seq;
 pub(crate) use screenshot::{publish_screenshot_rgba_buffer, screenshot_capture_armed};
 
 static SYSTEM: Once<Mutex<System>> = Once::new();

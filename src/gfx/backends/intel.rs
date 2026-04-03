@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 use libm::{ceilf, floorf};
 use trueos_gfx_core::{
     BlendDesc, BlendFactor, BufferDesc, BufferId, BufferUsage, Command, CommandBuffer, DeviceCaps,
@@ -18,6 +19,18 @@ const IMAGE_GPU_VA_BASE: u64 = 0x0400_0000;
 const IMAGE_GPU_VA_ALIGN: u64 = 0x0040_0000;
 const MAX_BACKEND_IMAGE_DIM: u32 = 8192;
 const MAX_BACKEND_IMAGE_BYTES: usize = 256 * 1024 * 1024;
+
+static PRESENT_COMPLETED_SEQ: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+pub(crate) fn present_completed_seq() -> u32 {
+    PRESENT_COMPLETED_SEQ.load(Ordering::Acquire)
+}
+
+#[inline]
+fn mark_present_completed(seq: u32) {
+    PRESENT_COMPLETED_SEQ.store(seq, Ordering::Release);
+}
 
 #[derive(Clone)]
 struct BufferEntry {
@@ -298,6 +311,7 @@ impl IntelGfxBackend {
                     self.swapchain_desc.extent.width.saturating_mul(4),
                 )
             {
+                mark_present_completed(self.present_seq);
                 self.rotate_screen_present_buffers();
                 if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
                     crate::log!(
@@ -318,6 +332,7 @@ impl IntelGfxBackend {
             if crate::intel::rcs_present_rgba_frame(self.screen_rgba.as_slice(), copy_w, copy_h) {
                 self.rcs_retry_after_present_seq = 0;
                 self.rcs_present_failures = 0;
+                mark_present_completed(self.present_seq);
                 if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
                     crate::log!(
                         "intel/gfx-backend: present seq={} mode=rcs-execlist-store size={}x{}\n",
@@ -357,6 +372,9 @@ impl IntelGfxBackend {
         }
 
         let fallback = self.present_screen_cpu_fallback();
+        if fallback.is_ok() {
+            mark_present_completed(self.present_seq);
+        }
         if fallback.is_ok() && (self.present_seq <= 8 || self.present_seq.is_multiple_of(120)) {
             crate::log!(
                 "intel/gfx-backend: present seq={} fallback=cpu-scanout guc_ready={} rcs_retry_ready={} size={}x{}\n",
@@ -380,7 +398,7 @@ impl IntelGfxBackend {
         self.present_seq = self.present_seq.wrapping_add(1);
         crate::intel::dma_cache_flush_range(image.rgba.as_ptr(), image.rgba.len());
 
-        if let Some(surface_gpu_addr) = crate::intel::primary_present_surface_gpu_addr() {
+        if let Some(surface_gpu_addr) = crate::intel::primary_present_shadow_surface_gpu_addr() {
             let mapped = crate::intel::ggtt_map_screen_rgba_surface(
                 image.rgba.as_slice(),
                 image.width,
@@ -395,10 +413,12 @@ impl IntelGfxBackend {
                     image.width.saturating_mul(4),
                 )
             {
+                mark_present_completed(self.present_seq);
                 if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
                     crate::log!(
-                        "intel/gfx-backend: present seq={} mode=plane-rebind-image-target size={}x{} src_gpu=0x{:X} gpu=0x{:X}\n",
+                        "intel/gfx-backend: present seq={} complete_seq={} mode=plane-rebind-image-target-fixed-surface size={}x{} src_gpu=0x{:X} gpu=0x{:X}\n",
                         self.present_seq,
+                        present_completed_seq(),
                         image.width,
                         image.height,
                         image.gpu_addr,

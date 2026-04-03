@@ -4,10 +4,11 @@ use trueos_gfx_core::{
     Result, ShaderDesc, ShaderId, SwapchainDesc,
 };
 
-mod intel;
+pub(crate) mod intel;
 //mod intel_execlists;
 use crate::gfx::virtio_gpu_3d;
 use intel::IntelGfxBackend;
+pub(crate) use intel::present_completed_seq as intel_present_completed_seq;
 //mod intel_cmd;
 
 pub enum Backend {

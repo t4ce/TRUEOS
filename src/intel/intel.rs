@@ -15,6 +15,8 @@ const INTEL_VENDOR_ID: u16 = 0x8086;
 const INTEL_IGPU770_DEVICE_ID: u16 = 0x4680;
 const PCI_CLASS_DISPLAY: u8 = 0x03;
 const INTEL_ASYNC_PROBE_DELAY_MS: u64 = 0;
+const INTEL_USB_GFX_SWITCH_GUARD_TIMEOUT_MS: u64 = 3000;
+const INTEL_USB_GFX_SWITCH_GUARD_POLL_MS: u64 = 25;
 
 const INTEL_BXT_DE_PLL_CTL: usize = 0x6D000;
 const INTEL_BXT_DE_PLL_ENABLE: usize = 0x46070;
@@ -32,10 +34,15 @@ const INTEL_GT_DISP_PWRON_REQ: u32 = 0x0000_0001;
 const INTEL_ICL_PHY_MISC_A: usize = 0x64C00;
 const INTEL_ICL_PHY_MISC_B: usize = 0x64C04;
 const INTEL_OWNED_TRIANGLE_CLEAR_RGB: u32 = 0x10141A;
+const INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_MODE_ENABLED: bool = false;
+const INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_RGB_A: u32 = 0x00FF00;
+const INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_RGB_B: u32 = 0xFF00FF;
 const INTEL_OWNED_TRIANGLE_FRAME_MS: u64 = 16;
 const INTEL_OWNED_TRIANGLE_PHASE_STEP_RAD: f32 = 0.18;
 const INTEL_OWNED_TRIANGLE_PROOF_ENABLED: bool = true;
 const INTEL_OWNED_TRIANGLE_PROOF_TIMEOUT_MS: u64 = 750;
+const INTEL_OWNED_TRIANGLE_CLUSTER_COUNT: usize = 15;
+const INTEL_OWNED_TRIANGLE_VERTEX_COUNT: usize = INTEL_OWNED_TRIANGLE_CLUSTER_COUNT * 3;
 const INTEL_PLANE_ENABLE: u32 = 1 << 31;
 const INTEL_PORT_HOTPLUG_EN: usize = 0x61110;
 const INTEL_PIPE_A_SRC: usize = 0x7001C;
@@ -730,35 +737,86 @@ pub fn isolated_triangle_mode_active() -> bool {
     owned_triangle_proof_mode_active()
 }
 
-fn owned_triangle_vertices(phase: f32) -> [RgbVertex; 3] {
-    let cos_p = libm::cosf(phase);
-    let sin_p = libm::sinf(phase);
-    let rotate =
-        |x: f32, y: f32| -> (f32, f32) { ((x * cos_p) - (y * sin_p), (x * sin_p) + (y * cos_p)) };
-    let (x0, y0) = rotate(0.0, -0.65);
-    let (x1, y1) = rotate(-0.7, 0.55);
-    let (x2, y2) = rotate(0.7, 0.55);
-    [
-        RgbVertex {
-            x: x0,
-            y: y0,
-            color: Rgba8::new(0xFF, 0x52, 0x52, 0xFF),
-        },
-        RgbVertex {
-            x: x1,
-            y: y1,
-            color: Rgba8::new(0x40, 0xE3, 0x92, 0xFF),
-        },
-        RgbVertex {
-            x: x2,
-            y: y2,
-            color: Rgba8::new(0x5A, 0x9C, 0xFF, 0xFF),
-        },
-    ]
+fn owned_triangle_vertices(phase: f32) -> [RgbVertex; INTEL_OWNED_TRIANGLE_VERTEX_COUNT] {
+    const BASE_TRIANGLE: [(f32, f32); 3] = [(0.0, -0.0325), (-0.035, 0.0275), (0.035, 0.0275)];
+    const COLORS: [Rgba8; 3] = [
+        Rgba8::new(0xFF, 0x52, 0x52, 0xFF),
+        Rgba8::new(0x40, 0xE3, 0x92, 0xFF),
+        Rgba8::new(0x5A, 0x9C, 0xFF, 0xFF),
+    ];
+    const CENTERS: [(f32, f32); INTEL_OWNED_TRIANGLE_CLUSTER_COUNT] = [
+        (-0.32, 0.00),
+        (-0.16, 0.00),
+        (0.00, 0.00),
+        (0.16, 0.00),
+        (0.32, 0.00),
+        (-0.48, -0.24),
+        (-0.48, 0.00),
+        (-0.48, 0.24),
+        (0.48, -0.24),
+        (0.48, 0.00),
+        (0.48, 0.24),
+        (-0.70, -0.18),
+        (-0.70, 0.18),
+        (0.70, -0.18),
+        (0.70, 0.18),
+    ];
+
+    let frames = phase / INTEL_OWNED_TRIANGLE_PHASE_STEP_RAD.max(0.0001);
+    let frame_dt = INTEL_OWNED_TRIANGLE_FRAME_MS as f32 / 1000.0;
+    let mut vertices = [RgbVertex {
+        x: 0.0,
+        y: 0.0,
+        color: Rgba8::new(0, 0, 0, 0xFF),
+    }; INTEL_OWNED_TRIANGLE_VERTEX_COUNT];
+
+    let mut tri_idx = 0usize;
+    while tri_idx < INTEL_OWNED_TRIANGLE_CLUSTER_COUNT {
+        let (center_x, center_y) = CENTERS[tri_idx];
+        let rpm = 1.0 + (179.0 * tri_idx as f32 / (INTEL_OWNED_TRIANGLE_CLUSTER_COUNT - 1) as f32);
+        let radians_per_frame = (rpm * core::f32::consts::TAU / 60.0) * frame_dt;
+        let signed_angle = if tri_idx.is_multiple_of(2) {
+            frames * radians_per_frame
+        } else {
+            -(frames * radians_per_frame)
+        };
+        let cos_p = libm::cosf(signed_angle);
+        let sin_p = libm::sinf(signed_angle);
+
+        let mut vtx_idx = 0usize;
+        while vtx_idx < 3 {
+            let (base_x, base_y) = BASE_TRIANGLE[vtx_idx];
+            let rot_x = (base_x * cos_p) - (base_y * sin_p);
+            let rot_y = (base_x * sin_p) + (base_y * cos_p);
+            vertices[tri_idx * 3 + vtx_idx] = RgbVertex {
+                x: center_x + rot_x,
+                y: center_y + rot_y,
+                color: COLORS[vtx_idx],
+            };
+            vtx_idx += 1;
+        }
+
+        tri_idx += 1;
+    }
+
+    vertices
 }
 
 #[inline]
-fn rgb_vertex_bytes(vertices: &[RgbVertex; 3]) -> &[u8] {
+fn owned_triangle_clear_rgb(frame_seq: u32) -> u32 {
+    if INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_MODE_ENABLED {
+        if frame_seq & 1 == 0 {
+            INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_RGB_A
+        } else {
+            INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_RGB_B
+        }
+    } else {
+        INTEL_OWNED_TRIANGLE_CLEAR_RGB
+    }
+}
+
+#[inline]
+fn rgb_vertex_bytes(vertices: &[RgbVertex; INTEL_OWNED_TRIANGLE_VERTEX_COUNT]) -> &[u8] {
     unsafe {
         core::slice::from_raw_parts(
             vertices.as_ptr() as *const u8,
@@ -817,7 +875,8 @@ fn ensure_owned_triangle_proof_resources(
         .ok()?;
     let rgb_buffer = ctx
         .create_buffer(BufferDesc {
-            size: core::mem::size_of::<RgbVertex>() as u64 * 3,
+            size: core::mem::size_of::<RgbVertex>() as u64
+                * INTEL_OWNED_TRIANGLE_VERTEX_COUNT as u64,
             usage: BufferUsage::Vertex,
             memory: MemoryType::HostVisible,
         })
@@ -844,6 +903,7 @@ fn submit_owned_triangle_proof_frame(
     ctx: &mut dyn GfxContext,
     resources: &mut OwnedTriangleProofResources,
     phase: f32,
+    clear_rgb: u32,
 ) -> Option<FenceId> {
     let resources = ensure_owned_triangle_proof_resources(ctx, resources)?;
     let vertices = owned_triangle_vertices(phase);
@@ -862,16 +922,14 @@ fn submit_owned_triangle_proof_frame(
     let cmds = [
         Command::SetViewport(viewport),
         Command::SetRenderTarget(Some(resources.render_target)),
-        Command::ClearColor {
-            rgb: INTEL_OWNED_TRIANGLE_CLEAR_RGB,
-        },
+        Command::ClearColor { rgb: clear_rgb },
         Command::BindPipeline(resources.rgb_pipeline),
         Command::BindVertexBuffer {
             buffer: resources.rgb_buffer,
             offset: 0,
         },
         Command::Draw {
-            vertex_count: 3,
+            vertex_count: INTEL_OWNED_TRIANGLE_VERTEX_COUNT as u32,
             first_vertex: 0,
         },
         Command::Present,
@@ -900,21 +958,42 @@ async fn wait_owned_triangle_fence(fence: FenceId) -> bool {
     }
 }
 
+async fn wait_owned_triangle_present_complete(prev_seq: u32) -> bool {
+    let deadline =
+        Instant::now() + EmbassyDuration::from_millis(INTEL_OWNED_TRIANGLE_PROOF_TIMEOUT_MS);
+    loop {
+        let completed = crate::gfx::intel_present_completed_seq();
+        if completed != prev_seq {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+}
+
 async fn run_owned_triangle_proof_loop() {
     let mut resources = OwnedTriangleProofResources::invalid();
     let mut phase = super::xelp_render_ngin::default_rgb_triangle_rotation();
     let mut frame_seq = 0u32;
 
     crate::log!(
-        "intel: owned-triangle-proof start frame_ms={} timeout_ms={} clear=0x{:06X}\n",
+        "intel: owned-triangle-proof start frame_ms={} timeout_ms={} clear=0x{:06X} debug_clear={}\n",
         INTEL_OWNED_TRIANGLE_FRAME_MS,
         INTEL_OWNED_TRIANGLE_PROOF_TIMEOUT_MS,
-        INTEL_OWNED_TRIANGLE_CLEAR_RGB & 0x00FF_FFFF
+        INTEL_OWNED_TRIANGLE_CLEAR_RGB & 0x00FF_FFFF,
+        INTEL_OWNED_TRIANGLE_DEBUG_CLEAR_MODE_ENABLED as u8
     );
 
+    let clamped = crate::intel::owned_triangle_disable_non_primary_planes_pipe_a();
+    crate::log!("intel: owned-triangle-proof plane-clamp pipe=pipe-a ok={}\n", clamped as u8);
+
     loop {
+        let clear_rgb = owned_triangle_clear_rgb(frame_seq);
+        let present_complete_before = crate::gfx::intel_present_completed_seq();
         let fence = crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::Unknown, |ctx| {
-            submit_owned_triangle_proof_frame(ctx, &mut resources, phase)
+            submit_owned_triangle_proof_frame(ctx, &mut resources, phase, clear_rgb)
         })
         .flatten();
         let Some(fence) = fence else {
@@ -925,12 +1004,18 @@ async fn run_owned_triangle_proof_loop() {
             disable_owned_triangle_proof_once("poll-timeout");
             break;
         }
+        if !wait_owned_triangle_present_complete(present_complete_before).await {
+            disable_owned_triangle_proof_once("present-complete-timeout");
+            break;
+        }
         frame_seq = frame_seq.wrapping_add(1);
         if frame_seq <= 8 || frame_seq.is_multiple_of(240) {
             crate::log!(
-                "intel: owned-triangle-proof frame={} phase_millirad={}\n",
+                "intel: owned-triangle-proof frame={} phase_millirad={} clear=0x{:06X} present_complete_seq={}\n",
                 frame_seq,
-                (phase * 1000.0) as i32
+                (phase * 1000.0) as i32,
+                clear_rgb & 0x00FF_FFFF,
+                crate::gfx::intel_present_completed_seq()
             );
         }
         phase += INTEL_OWNED_TRIANGLE_PHASE_STEP_RAD;
@@ -990,6 +1075,29 @@ pub async fn scanout_smoke_task() {
     }
 
     crate::gfx::init(crate::limine::framebuffer_response());
+    let mut usb_gfx_guard_waited_ms = 0u64;
+    while usb_gfx_guard_waited_ms < INTEL_USB_GFX_SWITCH_GUARD_TIMEOUT_MS {
+        let Some(diag) = crate::usb2::runtime_diag(0) else {
+            break;
+        };
+        if diag.controller_phase != "first-contact" || diag.root_hub_lifecycle != "settling" {
+            break;
+        }
+        if usb_gfx_guard_waited_ms == 0 {
+            crate::log!(
+                "intel: delaying gfx switch while usb ctrl0 is phase={} lifecycle={}\n",
+                diag.controller_phase,
+                diag.root_hub_lifecycle
+            );
+        }
+        Timer::after(EmbassyDuration::from_millis(INTEL_USB_GFX_SWITCH_GUARD_POLL_MS)).await;
+        usb_gfx_guard_waited_ms =
+            usb_gfx_guard_waited_ms.saturating_add(INTEL_USB_GFX_SWITCH_GUARD_POLL_MS);
+    }
+    if usb_gfx_guard_waited_ms != 0 {
+        crate::log!("intel: gfx switch guard released after {}ms\n", usb_gfx_guard_waited_ms);
+    }
+
     let intel_backend_active = if crate::gfx::is_intel_active() {
         crate::log!("intel: gfx backend already active=Intel\n");
         true
