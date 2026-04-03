@@ -1,7 +1,7 @@
 long_mode_active: true
 pmm: regions=6 span=0x100000..0x6ADC00000 total=23848 MiB
 heap: arena virt=0xFFFF800100000000 phys=0x100000000 size=1024 MiB
-Boot Performance: reset=0_usec init=14749301_usec exec=24957975_usec
+Boot Performance: reset=0_usec init=14751397_usec exec=26528814_usec
 0xFFFF800100000020 lapic=0 cpu=0
 dma: pmm-backed DMA allocator active
 ACPI TABLE SSDT count=11 (see ssdt::log_once)
@@ -17,13 +17,13 @@ intel/igpu770: guc-fw module found size=0x536C0 alloc=0x54000 phys=0x224000 gpu=
 intel/igpu770: warm device=0x4680 rev=0x0C ring_phys=0x18C000 ring_len=0x1000 context_phys=0x18D000 context_len=0x16000 batch_phys=0x1A3000 batch_len=0x80000 result_phys=0x223000 result_len=0x1000 guc_fw_phys=0x224000 guc_fw_len=0x54000 guc_fw_xfer=0x535C0 guc_fw_gpu=0x850000 guc_ads_phys=0x278000 guc_ads_len=0x807000 guc_ads_gpu=0x1000000 mmio_len=0x1000000 aperture=0x4000000000/0x10000000 limine_fb=0x4000000000/0x1D4C00 800x600 pitch=0xC80 bpp=32
 pci/vrng: not present
 HPET @0xFED00000 freq=19200000Hz comps=2 counter_64bit legacy_capable=true
-time: tsc_hz calibrated via HPET: 1689674760
-time: tsc_hz=1689674760
+time: tsc_hz calibrated via HPET: 1689740560
+time: tsc_hz=1689740560
 nvme: 01:00.0 poll_sync timeout final qid=0 cid=1 csts=0x00000001
-nvme: 01:00.0 poll_sync_timeout regs cap=0x00F000203C033FFF vs=0x00010200 cc=0x00460001 csts=0x00000001 aqa=0x003F003F dstrd=4 mps=4096 admin[sq=1 cq=0 phase=true] io[sq=0 cq=0 phase=true] admin_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false] io_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false]
+nvme: 01:00.0 poll_sync_timeout regs cap=0x00F000203C033FFF vs=0x00010200 cc=0x00460001 csts=0x00000001 aqa=0x003F003F asq=0x0000000000A7F000 acq=0x0000000000A80000 pci_cmd=0x0006 pci_sts=0x0010 dstrd=4 mps=4096 admin[sq=1 cq=0 phase=true] io[sq=0 cq=0 phase=true] admin_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false] io_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false] admin_sqe0=[0x00010009 0x00000000 0x00000000 0x00000000 0x00000007 0x00000000]
 nvme: 01:00.0 set num-queues failed (continuing): Timeout
 nvme: 01:00.0 poll_sync timeout final qid=0 cid=2 csts=0x00000001
-nvme: 01:00.0 poll_sync_timeout regs cap=0x00F000203C033FFF vs=0x00010200 cc=0x00460001 csts=0x00000001 aqa=0x003F003F dstrd=4 mps=4096 admin[sq=2 cq=0 phase=true] io[sq=0 cq=0 phase=true] admin_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false] io_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false]
+nvme: 01:00.0 poll_sync_timeout regs cap=0x00F000203C033FFF vs=0x00010200 cc=0x00460001 csts=0x00000001 aqa=0x003F003F asq=0x0000000000A7F000 acq=0x0000000000A80000 pci_cmd=0x0006 pci_sts=0x0010 dstrd=4 mps=4096 admin[sq=2 cq=0 phase=true] io[sq=0 cq=0 phase=true] admin_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false] io_cqe[dw0=0x00000000 dw3=0x00000000 st=0x0000 p=false] admin_sqe0=[0x00010009 0x00000000 0x00000000 0x00000000 0x00000007 0x00000000]
 nvme: 01:00.0 init failed: Timeout
 nvme: found controller(s) but none registered
 POWER: intel=true msr=true eist=true hwp=true msr_armed=false idle=hlt
@@ -50,47 +50,47 @@ net: detected 1 NIC(s)
 net: dev0 Realtek RTL8125 bdf=02:00.0 link_up=1
 net: hint: prefer virtio-net in QEMU (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0)
 dma_nic_fpga: region phys=0xAC0000 virt=0xFFFF800000AC0000 size=0x1000000
-0xFFFF800100001A80 lapic=50 cpu=13
-0x0xFFFF800100001AC0FFFF800100001B40 lapic= lapic=620x cpu=FFFF800100001B8019 lapic=
-54 cpu=60150x
-FFFF800100001C00 lapic= cpu=580x0x0x cpu=FFFF800100001C80FFFF800100001C40FFFF800100001D00 lapic=17 lapic=1852 lapic= cpu=
-14
-4856 cpu= cpu=16
-12
-
+0xFFFF8001000019C0 lapic=60 cpu=18
+0xFFFF800100001B40 lapic=58 cpu=17
+0xFFFF800100001B800x lapic=FFFF800100001C40 lapic=50 cpu=5613
+ cpu=16
+0x0x0xFFFF800100001D00 lapic=FFFF800100001D8062 cpu= lapic=19
+48 cpu=0x12
+FFFF800100001D40 lapic=FFFF800100001DC0 lapic=52 cpu=54 cpu=14
+15
 0xFFFF800100000CF8 lapic=1 cpu=1
-0xFFFF8001000019C0 lapic=25 cpu=7
-0xFFFF800100001980 lapic=8 cpu=2
-0xFFFF800100001B00 lapic=9 cpu=3
-0x0xFFFF800100001A00FFFF800100001A40 lapic= lapic=32330x cpu=0x9FFFF800100001BC0 lapic= cpu=16 cpu=FFFF800100001DC0 lapic=80x
-FFFF800100001D404 lapic=
-17 cpu=245
-0x0x cpu=FFFF800100001D80 lapic=
-FFFF800100001CC041 lapic= cpu=4011 cpu=
+0x0xFFFF800100001AC00xFFFF800100001B00 lapic=0x0x0xFFFF800100001980FFFF800100001A400x lapic= lapic=9 lapic=3316 cpu= cpu=FFFF800100001C00 cpu=0xFFFF800100001A008 cpu= lapic=2
+39417
+ cpu=
+
+FFFF800100001A80FFFF800100001BC00x0xFFFF800100001CC0 lapic=FFFF800100001C805
+ lapic= lapic= lapic=242541 cpu=4011 lapic= cpu=327 cpu=
+ cpu= cpu=6
+8
+
 10
-6
 spawn-svc: started job-runner (mask=0x00000000)
 spawn-svc: started globalog-persist-once (mask=0x00000000)
 spawn-svc: started qjs-async-fs-service (mask=0x00000000)
 spawn-svc: started trueosfs-mount-service (mask=0x00000000)
-boot-probe: hv-store task start ms=2058
+boot-probe: hv-store task start ms=2060
 spawn-svc: started hv-vm-store (mask=0x00000000)
 hv-store: start slot=1 lapic=1 kind=perf
 spawn-svc: started hv-vm-store-net (mask=0x00000000)
-boot-probe: hv-store ensure begin ms=2058
+boot-probe: hv-store ensure begin ms=2060
 spawn-svc: started net-poll-tasks (mask=0x00000000)
 spawn-svc: started net-service (mask=0x00000000)
 spawn-svc: started net-shell (mask=0x00000000)
-boot-probe: hv-store ramdisk create done ms=2059 dt=1
+boot-probe: hv-store ramdisk create done ms=2060 dt=0
+boot-probe: hv-store format done ms=2061 dt=1
 spawn-svc: started esp-gate (mask=0x00000000)
-boot-probe: hv-store format done ms=2059 dt=1
-boot-probe: hv-store validate done ms=spawn-svc: started 2059 dt=esp-gate-registry (mask=0x1 step=00
-0000000)
-boot-probe: hv-store probe write done ms=2060 dt=2 step=1
+boot-probe: hv-store validate done ms=2061 dt=1 step=0
+spawn-svc: started esp-gate-registry (mask=0x00000000)
+boot-probe: hv-store probe write done ms=2062 dt=2 step=1
 spawn-svc: started html_fetch_service (mask=0x00000000)
 spawn-svc: started gfx-intel-readiness-probe (mask=0x00200000)
-boot-probe: hv-store probe read done ms=2060 dt=2 step=0
-boot-probe: hv-store ensure done ms=2061 dt=3 tail=1
+boot-probe: hv-store probe read done ms=2062 dt=2 step=0
+boot-probe: hv-store ensure done ms=2062 dt=2 tail=0
 hv-store: ramdisk ready disk=1 bytes=67108864
 hv-store-net: listening on tcp 32123 owner=hv-store-net@02:00.0
 spawn-svc: started crabusb-bsp-service (mask=0x00000000)
@@ -111,7 +111,7 @@ crabusb: host init ok controller 0 awaiting root-hub events
 crabusb: controller 0 root-hub lifecycle init -> settling (initial settle window started)
 crabusb: controller 0 phase first-contact -> startup (event handler installed)
 crabusb: controller 0 root-hub lifecycle settling -> bound (event handler installed)
-crabusb: event handler installed xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x0000040C usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x00000FA0 erstsz=0x00000000 erstba=0x0000000000000000 erdp=0x0000000000000000
+crabusb: event handler installed xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x00000004 usbsts=0x00000009 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000003 imod=0x0000001F erstsz=0x00000001 erstba=0x0000000000ABF800 erdp=0x0000000001AC1008
 intel/render-demo: task start mode=headless-rcs-dma size=800x600 align=4096 format=rgba8888 frame_ms=16 gpu_policy=reserve-next base=0x4000000 stride=0x1000000
 net: dev=0 mac=00:e0:25:cd:e0:3b
 net: static fallback dev=0 ipv4=192.168.178.111 mask=255.255.255.0 gw=192.168.178.1
@@ -127,7 +127,7 @@ net/r8125: tx submit dbg idx=2 len=90 opts1=0xb000005a rd[o1=0x00000000 o2=0x000
 net/r8125: tx clflush idx=3 len=304 buf=0 desc=1 reclaim_inv=1
 net/r8125: tx submit dbg idx=3 len=304 opts1=0xb0000130 rd[o1=0x00000000 o2=0x00000000 a=0x0000000000aa1000] cmd=0x0c isr=0x00000085 tnpds=0x0000000000a7f400
 net: dhcp6 start dev=0 reason=dns-needed ra_other=0 ra_dns6=0 dhcp6_dns6=0
-net: dhcp6 info-request dev=0 xid=a61bfb
+net: dhcp6 info-request dev=0 xid=18530d
 net: icmp ping dev=0 src=192.168.178.111 seq=1 -> 192.168.178.1
 net/r8125: first rx len=64 raw_len=64 opts1=0x32044040
 intel/render-demo: startup phase=warm ok
@@ -183,7 +183,7 @@ intel/igpu770: guc-fw reset gdrst_rb=0x00000000 gdrst_iters=3 mia_in_reset=1
 intel/igpu770: guc-fw ads minimal gpu=0x1000000 phys=0x278000 len=0x807000 policies=0x10011DC sysinfo=0x100123C private=0x1006000 doorbells=128
 intel/igpu770: guc-fw params log=0x00000000 wa=0x00000000 feature=0x00000000 debug=0x00000040 ads=0x00002000 devid=0x4680000C scratch1=0x00000000 scratch5=0x00002000 scratch6=0x4680000C
 intel/igpu770: guc-fw css-parsed rev=r10 module_type=0x6 header_size_dw=0xA1 size_dw=0x14DF1 key_size_dw=0x40 modulus_size_dw=0x40 exponent_size_dw=0x1 sw_version=0x462C01 vf_version=0x11401 priv_data_sz=0x801000
-intel/igpu770: guc-fw bootstrap rev=guc-bootstrap-r14 src_gpu=0x850000 fw_phys=0x224000 fw_len=0x54000 xfer=0x535C0 ads_gpu=0x1000000 ads_len=0x807000 ads_ready=1 ads_param=0x00002000 wopcm_size=0x00100000 wopcm_size_rb=0x001F3001 wopcm_cfg=0x00004001 wopcm_locked=0 wopcm_calc_base=0x00004000 wopcm_calc_size=0x001F3000 status_before=0x00000001 status_after=0x00000072 status_final=0x8000F0EC status_iters=46439 shim=0x00008607 shim2=0x00000900 pm=0x00000001 pmintrmsk=0x00000000 dma_done=1 dma_iters=585 dma_ctrl=0x00000000 a0_lo=0x00850000 a0_hi=0x00080000 a1_lo=0x00002000 a1_hi=0x00070000 ready=1
+intel/igpu770: guc-fw bootstrap rev=guc-bootstrap-r14 src_gpu=0x850000 fw_phys=0x224000 fw_len=0x54000 xfer=0x535C0 ads_gpu=0x1000000 ads_len=0x807000 ads_ready=1 ads_param=0x00002000 wopcm_size=0x00100000 wopcm_size_rb=0x001F3001 wopcm_cfg=0x00004001 wopcm_locked=0 wopcm_calc_base=0x00004000 wopcm_calc_size=0x001F3000 status_before=0x00000001 status_after=0x00000072 status_final=0x8000F0EC status_iters=46649 shim=0x00008607 shim2=0x00000900 pm=0x00000001 pmintrmsk=0x00000000 dma_done=1 dma_iters=587 dma_ctrl=0x00000000 a0_lo=0x00850000 a0_hi=0x00080000 a1_lo=0x00002000 a1_hi=0x00070000 ready=1
 intel/igpu770: guc-fw status-decode bootrom=0x76(JUMP_PASSED) ukernel=0xF0(READY) auth=0x2 dma_off=0x0 rsa_off=0x535C0 rsa_size=0x100
 intel/render-demo: startup phase=ggtt-bootstrap-objects issued
 intel/render-demo: startup phase=guc-bootstrap begin
@@ -209,12 +209,12 @@ intel: region-live page=0x60000 nonzero_dwords=7 first_off=0x60000 first_value=0
 intel: region-live page=0x64000 nonzero_dwords=2 first_off=0x64000 first_value=0x00000080
 intel: region-live page=0x65000 nonzero_dwords=3 first_off=0x65000 first_value=0x0070FA60
 intel: region-live page=0x6C000 nonzero_dwords=4 first_off=0x6C00C first_value=0xFB0F0FF0
-intel: region-live page=0x70000 nonzero_dwords=2 first_off=0x70000 first_value=0x00000239
+intel: region-live page=0x70000 nonzero_dwords=2 first_off=0x70000 first_value=0x00000280
 intel: region-live page=0x71000 nonzero_dwords=1 first_off=0x71008 first_value=0x00000024
 intel: region-live page=0x72000 nonzero_dwords=1 first_off=0x72008 first_value=0x00000024
 intel: signature-sweep begin mmio_len=0x1000000 aperture=0x10000000
 intel: signature-candidate rank=1 page=0x70000 score=8 nonzero=2 pipe_src_off=458780 pipe_src=0x00000000 size=0x0 stride_off=459912 stride=0x00000000 surf_off=459932 surf=0x00000000 ctl_off=459904 ctl=0x00000008
-intel: signature-window page=0x70000 dwords=[0x000002E3,0x00000000,0xC0000024,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000]
+intel: signature-window page=0x70000 dwords=[0x00000329,0x00000000,0xC0000024,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000]
 intel: signature-candidate rank=2 page=0x71000 score=8 nonzero=1 pipe_src_off=462876 pipe_src=0x00000000 size=0x0 stride_off=464008 stride=0x00000000 surf_off=464028 surf=0x00000000 ctl_off=464000 ctl=0x00000008
 intel: signature-window page=0x71000 dwords=[0x00000000,0x00000000,0x00000024,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000]
 intel: signature-candidate rank=3 page=0x72000 score=8 nonzero=1 pipe_src_off=466972 pipe_src=0x00000000 size=0x0 stride_off=468104 stride=0x00000000 surf_off=468124 surf=0x00000000 ctl_off=468096 ctl=0x00000008
@@ -237,12 +237,14 @@ intel/display-ngin: plan pipe=pipe-c provisioning=reserve next_stage=modeset-ske
 intel/display-ngin: plan pipe=pipe-d provisioning=reserve next_stage=modeset-skeleton observed=0 active=0 trans_enabled=0 plane_enabled=0 pipe_src=0x00000000 size=0x0 trans=0x00000000 ctl=0x00000000 stride=0x00000000 surf=0x00000000 surf_live=0x00000000 staging_gpu=0x3800000 shadow_gpu=0x3C00000 cursor_gpu=0x3E00000 surface_bytes=0x1D4C00 staging=copy commit=full-modeset async=guc-reserved
 intel/display-ngin: draft-present pipe=pipe-a workload=primary-present staging=copy commit=fastset-flip async=guc-reserved surface=800x600 pitch=0xC80 format=xrgb8888 layout=linear next_stage=present-api staging_gpu=0x2000000
 intel/display-ngin: draft-modeset pipe=pipe-b workload=modeset-bootstrap staging=none commit=full-modeset async=inline surface=800x600 pitch=0xC80 format=xrgb8888 layout=linear next_stage=modeset-skeleton staging_gpu=0x2800000
-crabusb: pump observed stopped event
-crabusb: pump stopped xhci status ctrl=0 phase=startup halted=true hse=true cnr=false hce=false
-crabusb: pump stopped xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x0000040C usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x00000FA0 erstsz=0x00000000 erstba=0x0000000000000000 erdp=0x0000000000000000
-crabusb: controller 0 stopped event phase=startup lifecycle=bound bucket=before-root-change
-crabusb: controller 0 phase startup -> quarantined (pump observed stopped before validation)
-crabusb: controller 0 stopped before validation; quarantining instead of rebinding
+crabusb: pump port change on controller 0 root port 11 first_change=true queued_probe=true
+crabusb: controller 0 root-hub lifecycle bound -> root-change (root-port change observed)
+net: ipv6 ra-flags dev=0 M=0 O=1
+net: dhcp acquired dev=0 ipv4=192.168.178.94 gw=192.168.178.1 ipv6=ra
+net: route v4 default dev=0 gw=192.168.178.1 ok
+net: dhcp dns-count dev=0 count=1
+net: dhcp dns dev=0 idx=0 server=192.168.178.1
+net: icmp6 ping dev=0 seq=1 -> fe80:0000:...
 intel: display kickoff follow-up probe path=render-demo-scanout-bridge
 intel: display-power probe phy_misc_a=0x23000000 phy_misc_b=0x20000000 tx_bmu=0xFB0F0FF0 de_pll_ctl=0xFFFFFFFF de_pll_enable=0xC0000022 dc_state_en=0x00000000 dc_state_debug=0x00000000 hotplug=0x00000000 gt_disp_pwron=0x00000000
 intel/render-demo: create-surface size=800x600 pitch=0xC80 align=4096 format=rgba8888 bytes=0x1D4C00 phys=0x1C98000 gpu=0x2000000 gpu_policy=fixed
@@ -251,79 +253,101 @@ intel/display-ngin: owned-proof clamp pipe=pipe-a plane=2 ctl=0x00000008->0x0000
 intel/display-ngin: owned-proof clamp pipe=pipe-a plane=3 ctl=0x00000008->0x00000008 surf=0x00000000->0x00000000
 intel/display-ngin: owned-proof clamp pipe=pipe-a plane=4 ctl=0x00000008->0x00000008 surf=0x00000000->0x00000000
 intel/render-demo: startup phase=scanout-bridge armed route=display.present.primary pipe=pipe-a scene_gpu=0x4000000 staging_gpu=0x2000000 shadow_gpu=0x2400000 scene_size=800x600 display_size=800x600 display_pitch=0xC80
-intel/igpu770: bcs-composite completed=1 iters=13 src_gpu=0x4000000 dst_gpu=0x2000000 dst_xy=0x0 src=800x600 dst=800x600 clear_before_copy=1 start=0x1CE0C100 pre=0x1CE0C101 post=0x1CE0C102 done=0x1CE0C103
-intel/render-demo: frame=1 clear=done rgb=done texture=skipped composite=done fail=none clear_rgb=0x10141A clear_ms=1734 rgb_ms=108 composite_ms=10 elapsed_ms=1852 probe_before=0x00000000 probe_after_clear=0x8E5C9B1C probe_after_rgb=0x8EE80696 avg_frame_ms=1852 avg_passes_milli=3000 success_milli=1000 scene_gpu=0x4000000 display_gpu=0x2400000 scanout_bridge=1 skip_clear=0
-net: icmp ping dev=0 src=192.168.178.111 seq=2 -> 192.168.178.1
-net: ipv6 ra-flags dev=0 M=0 O=1
-net: dhcp acquired dev=0 ipv4=192.168.178.94 gw=192.168.178.1 ipv6=ra
-net: route v4 default dev=0 gw=192.168.178.1 ok
-net: dhcp dns-count dev=0 count=1
-net: dhcp dns dev=0 idx=0 server=192.168.178.1
-net: icmp6 ping dev=0 seq=1 -> fe80:0000:...
+intel/igpu770: bcs-mode label=composite-pre mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x00000002 execlist_ctl=0x00000000 mode_idle=1 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
+intel/igpu770: bcs-regs label=composite-pre ctl=0x00000000 head=0x00000000 tail=0x00000020 start=0x00800000 mi_mode=0x00000200 mode=0x00000008 ctx_ctl=0x00000002 execlist_ctl=0x00000000 execlist_lo=0x00000001 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x00000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x0000000A instps=0x00000001 bbaddr=0x00000000 bbaddr_udw=0x00000000
+intel/igpu770: bcs-composite-submit context sq_lo_before=0x00000000 sq_hi_before=0x00000000 sq_lo_req=0x0081031D sq_hi_req=0x00000000 sq_lo_after=0x0081031D sq_hi_after=0x00000000 mode_rb=0x00000008 ctx_ctl_rb=0x0000000B ctx_ctl_ref_rb=0x00000000 el_ctl_rb=0x00000000 el_status_lo0=0x00000001 el_status_hi0=0x00000000 el_status_lo_rb=0x00003098 el_status_hi_rb=0x00000000
+intel/igpu770: bcs-composite-poll iter=0 head=0x00000020 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000000 execlist_lo=0x00003098 execlist_hi=0x00000000 result0=0x1CE0C100
+intel/igpu770: bcs-composite-markers iter=0 start=0x1CE0C100 pre=0x1CE0C101 post=0x1CE0C102 done=0x1CE0C103
+intel/igpu770: bcs-mode label=composite-post-complete mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 mode_idle=0 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
+intel/igpu770: bcs-regs label=composite-post-complete ctl=0x00000001 head=0x00000020 tail=0x00000020 start=0x00800000 mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x0000000A execlist_ctl=0x00000000 execlist_lo=0x00003098 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x00000000 instps=0x00002801 bbaddr=0x0083008C bbaddr_udw=0x00000000
+intel/igpu770: bcs-composite completed=1 iters=0 src_gpu=0x4000000 dst_gpu=0x2400000 dst_xy=0x0 src=800x600 dst=800x600 clear_before_copy=1 head0=0x00000020 tail0=0x00000020 headf=0x00000020 tailf=0x00000020 start=0x1CE0C100 pre=0x1CE0C101 post=0x1CE0C102 done=0x1CE0C103 execlist_lo0=0x00000001 execlist_hi0=0x00000000 execlist_lof=0x00003098 execlist_hif=0x00000000
+intel/render-demo: frame=1 clear=done rgb=done texture=skipped composite=done fail=none clear_rgb=0x10141A clear_ms=1730 rgb_ms=108 composite_ms=19 elapsed_ms=1857 probe_before=0x00000000 probe_after_clear=0x8E5C9B1C probe_after_rgb=0x8EE80696 avg_frame_ms=1857 avg_passes_milli=3000 success_milli=1000 scene_gpu=0x4000000 display_gpu=0x2000000 scanout_bridge=1 skip_clear=0
 crabusb: controller 0 intel deferred scout; waiting for quiet root-port settle 750ms
-crabusb: controller 0 root-hub lifecycle bound -> settling (probe requested after root-port change)
+crabusb: controller 0 root-hub lifecycle root-change -> settling (probe requested after root-port change)
 spawn-svc: started tls-socket-service (mask=0x00001000)
 spawn-svc: started ntp-sync (mask=0x00001000)
 spawn-svc: started sntp-service (mask=0x00002000)
 spawn-svc: started logtotcp (mask=0x00001000)
 spawn-svc: started ws-time (mask=0x00001000)
+net: icmp ping dev=0 src=192.168.178.94 seq=2 -> 192.168.178.1
+esp-gate: starting udp swarm listener on port 32343 payload=swarm
+net-shell: routing dev=0 Realtek RTL8125 owner=net-shell ip=192.168.178.94
+net-shell: listening on tcp 4245 owner=net-shell
 ws-time: listening on tcp 2 path=/time
 logtotcp: listening on tcp 1
 sntp: waiting for NET_V4_CONFIGURED
 sntp: readiness reached, starting service loop
 tls-socket: service running
-esp-gate: starting udp swarm listener on port 32343 payload=swarm
-net-shell: routing dev=0 Realtek RTL8125 owner=net-shell ip=192.168.178.94
-net-shell: listening on tcp 4245 owner=net-shell
-intel/igpu770: bcs-composite completed=0 iters=4096 src_gpu=0x4000000 dst_gpu=0x2000000 dst_xy=0x0 src=800x600 dst=800x600 clear_before_copy=1 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
-intel/render-demo: frame=2 clear=done rgb=done texture=skipped composite=composite fail=composite clear_rgb=0x10141A clear_ms=1735 rgb_ms=107 composite_ms=11 elapsed_ms=1853 probe_before=0x8EE80696 probe_after_clear=0x8E5C9B1C probe_after_rgb=0x8EE80696 avg_frame_ms=1852 avg_passes_milli=2875 success_milli=500 scene_gpu=0x4000000 display_gpu=0x2400000 scanout_bridge=1 skip_clear=0
+net-shell: opened tcp handle=3
+esp-gate: udp listener bound handle=2 port=32343
+intel/igpu770: bcs-mode label=composite-pre mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x00000002 execlist_ctl=0x00000000 mode_idle=0 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
+intel/igpu770: bcs-regs label=composite-pre ctl=0x00000001 head=0x00000000 tail=0x00000020 start=0x00800000 mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x00000002 execlist_ctl=0x00000000 execlist_lo=0x00018098 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x00000002 instps=0x00002801 bbaddr=0x0083008C bbaddr_udw=0x00000000
+intel/igpu770: bcs-composite-submit context sq_lo_before=0x0081031D sq_hi_before=0x00000000 sq_lo_req=0x0081031D sq_hi_req=0x00000000 sq_lo_after=0x0081031D sq_hi_after=0x00000000 mode_rb=0x00000008 ctx_ctl_rb=0x00000002 ctx_ctl_ref_rb=0x00000000 el_ctl_rb=0x00000000 el_status_lo0=0x00018098 el_status_hi0=0x00000000 el_status_lo_rb=0x40018098 el_status_hi_rb=0x00000000
+intel/igpu770: bcs-composite-poll iter=0 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=0 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=256 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=256 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=512 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=512 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=768 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=768 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=1024 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=1024 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=1280 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=1280 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=1536 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=1536 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=1792 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=1792 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=2048 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=2048 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=2304 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=2304 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=2560 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=2560 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=2816 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=2816 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=3072 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=3072 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=3328 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=3328 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=3584 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=3584 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-composite-poll iter=3840 head=0x00000000 tail=0x00000020 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 mode=0x00000008 instdone=0x00000002 execlist_lo=0x40018098 execlist_hi=0x00000000 result0=0x00000000
+intel/igpu770: bcs-composite-markers iter=3840 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000
+intel/igpu770: bcs-mode label=composite-post-timeout mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x00000002 execlist_ctl=0x00000000 mode_idle=0 stop_ring=0 tlb_invalidate_explicit=0 ppgtt_enable=0 legacy_disable=1
+intel/igpu770: bcs-regs label=composite-post-timeout ctl=0x00000001 head=0x00000000 tail=0x00000020 start=0x00800000 mi_mode=0x00000000 mode=0x00000008 ctx_ctl=0x00000002 execlist_ctl=0x00000000 execlist_lo=0x40018098 execlist_hi=0x00000000 acthd=0x00000000 ipeir=0x00000000 ipehr=0x05000000 eir=0x00000000 emr=0xFFFFFFFF instdone=0x00000002 instps=0x00002801 bbaddr=0x0083008C bbaddr_udw=0x00000000
+intel/igpu770: bcs-composite completed=0 iters=4096 src_gpu=0x4000000 dst_gpu=0x2000000 dst_xy=0x0 src=800x600 dst=800x600 clear_before_copy=1 head0=0x00000000 tail0=0x00000020 headf=0x00000000 tailf=0x00000020 start=0x00000000 pre=0x00000000 post=0x00000000 done=0x00000000 execlist_lo0=0x00018098 execlist_hi0=0x00000000 execlist_lof=0x40018098 execlist_hif=0x00000000
+intel/render-demo: frame=2 clear=done rgb=done texture=skipped composite=composite fail=composite clear_rgb=0x10141A clear_ms=1729 rgb_ms=108 composite_ms=68 elapsed_ms=1905 probe_before=0x8EE80696 probe_after_clear=0x8E5C9B1C probe_after_rgb=0x8EE80696 avg_frame_ms=1863 avg_passes_milli=2875 success_milli=500 scene_gpu=0x4000000 display_gpu=0x2000000 scanout_bridge=1 skip_clear=0
 intel/render-demo: disabled reason=composite timeout_latched=1
-intel/render-demo: stop frames=2 ok=1 failed=1 alloc=0 clear=0 draw=0 texture=0 composite=1 avg_frame_ms=1852 avg_passes_milli=2875
+intel/render-demo: stop frames=2 ok=1 failed=1 alloc=0 clear=0 draw=0 texture=0 composite=1 avg_frame_ms=1863 avg_passes_milli=2875
 intel/render-demo: destroy-surface size=800x600 pitch=0xC80 bytes=0x1D4C00 phys=0x1E6D000 gpu=0x2400000
 intel/render-demo: destroy-surface size=800x600 pitch=0xC80 bytes=0x1D4C00 phys=0x1C98000 gpu=0x2000000
 intel/render-demo: destroy-surface size=800x600 pitch=0xC80 bytes=0x1D4C00 phys=0x1AC3000 gpu=0x4000000
-crabusb: pump observed stopped event
-crabusb: pump stopped xhci status ctrl=0 phase=quarantined halted=true hse=true cnr=false hce=false
-crabusb: pump stopped xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x0000040C usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x00000FA0 erstsz=0x00000000 erstba=0x0000000000000000 erdp=0x0000000000000000
-crabusb: controller 0 stopped event phase=quarantined lifecycle=settling bucket=during-root-progression
-crabusb: controller 0 stopped before validation; quarantining instead of rebinding
 crabusb: servicing settled probe on controller 0
-crabusb: pump observed stopped event
-crabusb: pump stopped xhci status ctrl=0 phase=quarantined halted=true hse=true cnr=false hce=false
-crabusb: pump stopped xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x0000040C usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x00000FA0 erstsz=0x00000000 erstba=0x0000000000000000 erdp=0x0000000000000000
-crabusb: controller 0 stopped event phase=quarantined lifecycle=settling bucket=during-root-progression
-crabusb: controller 0 stopped before validation; quarantining instead of rebinding
-crabusb: pump observed stopped event
-crabusb: pump stopped xhci status ctrl=0 phase=quarantined halted=true hse=true cnr=false hce=false
-crabusb: pump stopped xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x0000040C usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x00000FA0 erstsz=0x00000000 erstba=0x0000000000000000 erdp=0x0000000000000000
-crabusb: controller 0 stopped event phase=quarantined lifecycle=settling bucket=during-root-progression
-crabusb: controller 0 stopped before validation; quarantining instead of rebinding
-crabusb: controller 0 phase quarantined -> validated (probe completed successfully)
-crabusb: no root-port change events observed; controller may be empty or downstream devices are not handed to the guest
-sntp: udp opened on port=123 handle=NetHandle(4)
+crabusb: controller 0 phase startup -> validated (probe completed successfully)
+sntp: udp opened on port=123 handle=NetHandle(6)
+net: icmp6 pong dev=0 seq=1 rtt=13775ms from=fe80:0000:...
+net: icmp6 ok dev=0 (v6 gateway reachable)
 net: icmp ping dev=0 src=192.168.178.94 seq=3 -> 192.168.178.1
-net: icmp6 ping dev=0 seq=2 -> fe80:0000:...
-net-shell: opened tcp handle=7
-esp-gate: udp listener bound handle=6 port=32343
 crabusb: pump observed stopped event
 crabusb: pump stopped xhci status ctrl=0 phase=validated halted=true hse=true cnr=false hce=false
-crabusb: pump stopped xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x0000040C usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x00000FA0 erstsz=0x00000000 erstba=0x0000000000000000 erdp=0x0000000000000000
+crabusb: pump stopped xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x00000004 usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x0000001F erstsz=0x00000001 erstba=0x0000000000ABF800 erdp=0x0000000001AC1030
 crabusb: controller 0 stopped event phase=validated lifecycle=settling bucket=during-root-progression
 crabusb: controller 0 phase validated -> recoverable (pump observed stopped event)
 crabusb: controller 0 root-hub lifecycle settling -> init (event handler removed)
 crabusb: event handler stopped; rediscovering controller (quick_stop=false streak=0) phase=recoverable lifecycle=init bucket=before-root-change
-net: icmp pong dev=0 local=192.168.178.94 seq=3 rtt=1151ms
+dns: resolved host=time.google.com dev=0 ip=216.239.35.4
+net: icmp pong dev=0 local=192.168.178.94 seq=3 rtt=305ms
 net: icmp ok dev=0 (gateway reachable)
-net: icmp6 pong dev=0 seq=2 rtt=1151ms from=fe80:0000:...
-net: icmp6 ok dev=0 (v6 gateway reachable)
 crabusb: BSP service binding controller 0 at 00:14.0 vid=8086 pid=7A60 mmio=0xffffff0011344000
 crabusb: pre-bind xhci status ctrl=0 phase=recoverable halted=true hse=true cnr=false hce=false
-crabusb: pre-bind xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x0000040C usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x00000FA0 erstsz=0x00000000 erstba=0x0000000000000000 erdp=0x0000000000000000
+crabusb: pre-bind xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x00000004 usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x0000001F erstsz=0x00000001 erstba=0x0000000000ABF800 erdp=0x0000000001AC1030
 crabusb: controller 0 intel pre-init flr=false
 crabusb: host init failed for controller 0: Other(xHCI controller became unhealthy while waiting for controller halt: halted=true cnr=false reset=false hse=true hce=false)
 crabusb: host init failed xhci status ctrl=0 phase=recoverable halted=true hse=true cnr=false hce=false
-crabusb: host init failed xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x00000408 usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x00000FA0 erstsz=0x00000000 erstba=0x0000000000000000 erdp=0x0000000000000000
+crabusb: host init failed xhci regs ctrl=0 mmio=0xffffff0011344000 caplen=0x80 dboff=0x3000 rtsoff=0x2000 usbcmd=0x00000000 usbsts=0x00000005 crcr=0x0000000000000000 dcbaap=0x0000000001AC2000 config=0x00000040 iman=0x00000002 imod=0x0000001F erstsz=0x00000001 erstba=0x0000000000ABF800 erdp=0x0000000001AC1030
 crabusb: controller 0 phase recoverable -> quarantined (fatal xhci state during host init)
 crabusb: controller 0 fatal xhci state during host init (host-system-error); auto-rebind disabled
 crabusb: controller 0 quarantined; auto-rebind disabled until manual rebind request
-logtotcp: client connected handle=3
+logtotcp: client connected handle=5
