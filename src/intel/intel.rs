@@ -679,6 +679,10 @@ pub fn intel_igpu770_present() -> bool {
     INTEL_IGPU770_PRESENT.load(Ordering::Acquire)
 }
 
+pub fn isolated_triangle_mode_active() -> bool {
+    intel_igpu770_present() && super::xelp_render_ngin::isolate_rgb_triangle_proof()
+}
+
 #[inline]
 pub fn first_claimed_device() -> Option<IntelDeviceInfo> {
     *FIRST_DEVICE.lock()
@@ -737,16 +741,38 @@ pub async fn scanout_smoke_task() {
     if intel_igpu770_present() {
         super::intel_igpu770::ggtt_recon_once();
         super::intel_igpu770::ggtt_map_smoke_objects_once();
-        if intel_backend_active {
+        if isolate_render_proof {
+            crate::log!(
+                "intel: smoke dispatch engine=rcs stage=loop begin mode=isolated-animated-triangle\n"
+            );
+            super::xelp_render_ngin::log_rgb_triangle_isolation();
+            crate::log!(
+                "intel/render-ngin: api route=render.rgb-triangle.submit workload=rgb-triangle class=render transport=rcs-execlist summary=submit an isolated animated RGB triangle proof through the Xe-LP render ngin\n"
+            );
+            let mut rotation = super::xelp_render_ngin::default_rgb_triangle_rotation();
+            loop {
+                if !super::xelp_render_ngin::submit_rgb_triangle_smoke(rotation) {
+                    crate::log!(
+                        "intel: smoke dispatch engine=rcs stage=loop halt reason=submit-timeout target=limine-fb\n"
+                    );
+                    break;
+                }
+                rotation += 0.18;
+                if rotation > core::f32::consts::TAU {
+                    rotation -= core::f32::consts::TAU;
+                }
+                Timer::after(EmbassyDuration::from_millis(16)).await;
+            }
+        } else if intel_backend_active {
             crate::log!("intel: legacy direct smoke paths skipped (gfx-backend mode)\n");
         } else {
             crate::log!("intel: smoke dispatch engine=rcs stage=begin\n");
-            super::xelp_render_ngin::submit_rgb_triangle_smoke_once();
+            super::xelp_render_ngin::submit_rgb_triangle_smoke(
+                super::xelp_render_ngin::default_rgb_triangle_rotation(),
+            );
             crate::log!("intel: smoke dispatch engine=rcs stage=end\n");
         }
-        if isolate_render_proof && !intel_backend_active {
-            super::xelp_render_ngin::log_rgb_triangle_isolation();
-        } else if !intel_backend_active {
+        if !intel_backend_active {
             crate::log!("intel: smoke dispatch engine=bcs stage=begin\n");
             super::intel_igpu770::ggtt_bcs_smoke_test_once();
             crate::log!("intel: smoke dispatch engine=bcs stage=end\n");
@@ -764,7 +790,7 @@ pub async fn scanout_smoke_task() {
 
     run_display_power_discovery(info);
     if intel_igpu770_present() {
-        if !isolate_render_proof && !intel_backend_active {
+        if !intel_backend_active {
             super::intel_igpu770::cpu_framebuffer_alive_stamp("post-display-discovery");
             super::xelp_media_ngin::run_https_media_demo_once_async().await;
         }

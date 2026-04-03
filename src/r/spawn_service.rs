@@ -20,6 +20,7 @@ struct TaskSpec {
     name: &'static str,
     disabled: bool,
     required: u32,
+    gate: fn() -> bool,
     started: &'static AtomicBool,
     spawn: fn(Spawner) -> SpawnAttempt,
 }
@@ -35,6 +36,24 @@ impl TaskSpec {
             name,
             disabled: false,
             required,
+            gate: task_gate_always,
+            started,
+            spawn,
+        }
+    }
+
+    const fn enabled_gated(
+        name: &'static str,
+        required: u32,
+        gate: fn() -> bool,
+        started: &'static AtomicBool,
+        spawn: fn(Spawner) -> SpawnAttempt,
+    ) -> Self {
+        Self {
+            name,
+            disabled: false,
+            required,
+            gate,
             started,
             spawn,
         }
@@ -50,6 +69,24 @@ impl TaskSpec {
             name,
             disabled: true,
             required,
+            gate: task_gate_always,
+            started,
+            spawn,
+        }
+    }
+
+    const fn disabled_gated(
+        name: &'static str,
+        required: u32,
+        gate: fn() -> bool,
+        started: &'static AtomicBool,
+        spawn: fn(Spawner) -> SpawnAttempt,
+    ) -> Self {
+        Self {
+            name,
+            disabled: true,
+            required,
+            gate,
             started,
             spawn,
         }
@@ -565,6 +602,28 @@ fn spawn_ui2_hosted(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(crate::r::ui2::ui2_hosted_task()))
 }
 
+const UI2_DEMOS_ON_INTEL_ENABLED: bool = false;
+const UI2_DEMOS_OFF_INTEL_ENABLED: bool = true;
+
+#[inline]
+fn task_gate_always() -> bool {
+    true
+}
+
+#[inline]
+fn ui2_core_task_gate() -> bool {
+    !crate::intel::isolated_triangle_mode_active()
+}
+
+#[inline]
+fn ui2_demo_task_gate() -> bool {
+    if crate::gfx::is_intel_active() || crate::intel::intel_igpu770_present() {
+        UI2_DEMOS_ON_INTEL_ENABLED
+    } else {
+        UI2_DEMOS_OFF_INTEL_ENABLED
+    }
+}
+
 fn spawn_ui2_demo_on_worker<F>(spawner: Spawner, spawn: F) -> SpawnAttempt
 where
     F: FnOnce(SendSpawner) -> Result<(), SpawnError>,
@@ -937,16 +996,24 @@ static TASKS: &[TaskSpec] = &[
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    TaskSpec::enabled("ui2", crate::r::readiness::GFX_BACKEND_READY, &UI2_STARTED, spawn_ui2),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
+        "ui2",
+        crate::r::readiness::GFX_BACKEND_READY,
+        ui2_core_task_gate,
+        &UI2_STARTED,
+        spawn_ui2,
+    ),
+    TaskSpec::enabled_gated(
         "ui2-hosted",
         crate::r::readiness::GFX_BACKEND_READY,
+        ui2_core_task_gate,
         &UI2_HOSTED_SYNC_TASK_STARTED,
         spawn_ui2_hosted,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "ui2-hit",
         crate::r::readiness::GFX_BACKEND_READY,
+        ui2_core_task_gate,
         &UI2_HIT_TASK_STARTED,
         spawn_ui2_hit,
     ),
@@ -993,9 +1060,10 @@ static TASKS: &[TaskSpec] = &[
         &UI2_TWEMOJI_1X_STARTED,
         spawn_ui2_twemoji_1x,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "ui2-triangle-demo",
         UI2_DEMO_READY,
+        ui2_demo_task_gate,
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
@@ -1094,6 +1162,9 @@ pub async fn spawn_service_task(spawner: Spawner) {
 
             for spec in TASKS {
                 if spec.disabled {
+                    continue;
+                }
+                if !(spec.gate)() {
                     continue;
                 }
                 if (ready & spec.required) != spec.required {
