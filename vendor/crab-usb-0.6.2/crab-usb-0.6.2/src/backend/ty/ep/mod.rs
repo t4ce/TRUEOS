@@ -105,12 +105,10 @@ impl<'a> Future for TransferHandle<'a> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let id = self.id;
+        self.endpoint.register_cx(id, cx);
         match self.endpoint.query_transfer(id) {
             Some(res) => Poll::Ready(res),
-            None => {
-                self.endpoint.register_cx(id, cx);
-                Poll::Pending
-            }
+            None => Poll::Pending,
         }
     }
 }

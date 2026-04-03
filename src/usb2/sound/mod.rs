@@ -1,4 +1,5 @@
 use super::*;
+use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
 pub const DEFAULT_RATE_HZ: u32 = 48_000;
@@ -16,6 +17,8 @@ struct ActiveAudioStream {
 }
 
 static ACTIVE_AUDIO_STREAM: Mutex<Option<ActiveAudioStream>> = Mutex::new(None);
+static AUDIO_STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
+static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Simple PCM format descriptor for sinks.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
