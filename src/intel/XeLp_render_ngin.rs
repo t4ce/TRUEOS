@@ -512,16 +512,43 @@ pub(crate) fn encode_rgb_triangle_vertices_store_batch(
     start_value: u32,
     done_value: u32,
 ) -> Result<(usize, usize), &'static str> {
-    const RESERVED_END_DWORDS: usize = 2;
+    let (batch_tail_bytes, written, triangles_consumed, triangles_emitted) =
+        encode_rgb_triangle_vertices_store_batch_range(
+            batch_dwords,
+            vertices,
+            triangle_index,
+            1,
+            target_width,
+            target_height,
+            scissor,
+            dst_gpu_addr,
+            dst_pitch,
+            result_gpu_addr,
+            start_value,
+            done_value,
+        )?;
+    if triangles_consumed == 0 || triangles_emitted == 0 {
+        return Err("triangle-empty");
+    }
+    Ok((batch_tail_bytes, written))
+}
+
+fn append_rgb_triangle_vertices_store_commands(
+    batch_dwords: &mut [u32],
+    idx: &mut usize,
+    vertices: &[u8],
+    triangle_index: usize,
+    covered_pixel_offset: usize,
+    max_store_pixels: usize,
+    target_width: u32,
+    target_height: u32,
+    scissor: Option<ScissorRect>,
+    dst_gpu_addr: u64,
+    dst_pitch: usize,
+    writable_limit: usize,
+) -> Result<(usize, bool), &'static str> {
     const STORE_DWORDS: usize = 4;
     const TRIANGLE_BYTES: usize = 3 * RGB_VERTEX_SIZE;
-
-    if target_width == 0 || target_height == 0 {
-        return Err("triangle-empty-target");
-    }
-    if batch_dwords.len() <= RESERVED_END_DWORDS + (STORE_DWORDS * 2) {
-        return Err("batch-too-small");
-    }
 
     let tri_off = triangle_index.saturating_mul(TRIANGLE_BYTES);
     if tri_off > vertices.len() || tri_off.saturating_add(TRIANGLE_BYTES) > vertices.len() {
@@ -543,7 +570,7 @@ pub(crate) fn encode_rgb_triangle_vertices_store_batch(
     let p2 = (ndc_to_target_x(v2.x, target_width), ndc_to_target_y(v2.y, target_height));
     let area = edge_fn(p0.0, p0.1, p1.0, p1.1, p2.0, p2.1);
     if area.abs() <= 1e-6 {
-        return Err("triangle-degenerate");
+        return Ok((0, true));
     }
 
     let mut min_x = floorf(p0.0.min(p1.0).min(p2.0)).max(0.0) as i32;
@@ -557,25 +584,14 @@ pub(crate) fn encode_rgb_triangle_vertices_store_batch(
         max_y = max_y.min(scissor.y.saturating_add(scissor.height).min(target_height) as i32);
     }
     if min_x >= max_x || min_y >= max_y {
-        return Err("triangle-clipped");
+        return Ok((0, true));
     }
 
-    batch_dwords.fill(0);
-    let writable_limit = batch_dwords
-        .len()
-        .saturating_sub(RESERVED_END_DWORDS + STORE_DWORDS);
-    let mut idx = 0usize;
-    let mut written = 0usize;
-
-    batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
-        | xelp_copy_ngin::mi::SDI_GGTT
-        | xelp_copy_ngin::mi::sdi_num_dw(1);
-    batch_dwords[idx + 1] = result_gpu_addr as u32;
-    batch_dwords[idx + 2] = (result_gpu_addr >> 32) as u32;
-    batch_dwords[idx + 3] = start_value;
-    idx += STORE_DWORDS;
-
     let inv_area = 1.0 / area;
+    let store_budget = max_store_pixels.max(1);
+    let mut covered_seen = 0usize;
+    let mut written = 0usize;
+    let mut complete = true;
     for y in min_y..max_y {
         for x in min_x..max_x {
             let px = x as f32 + 0.5;
@@ -589,7 +605,16 @@ pub(crate) fn encode_rgb_triangle_vertices_store_batch(
                 continue;
             }
 
-            if idx + STORE_DWORDS > writable_limit {
+            if covered_seen < covered_pixel_offset {
+                covered_seen = covered_seen.saturating_add(1);
+                continue;
+            }
+            if written >= store_budget {
+                complete = false;
+                break;
+            }
+
+            if *idx + STORE_DWORDS > writable_limit {
                 return Err("triangle-batch-exhausted");
             }
 
@@ -605,19 +630,80 @@ pub(crate) fn encode_rgb_triangle_vertices_store_batch(
                 .saturating_add((y as u64).saturating_mul(dst_pitch as u64))
                 .saturating_add((x as u64).saturating_mul(4));
 
-            batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+            batch_dwords[*idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
                 | xelp_copy_ngin::mi::SDI_GGTT
                 | xelp_copy_ngin::mi::sdi_num_dw(1);
-            batch_dwords[idx + 1] = dst as u32;
-            batch_dwords[idx + 2] = (dst >> 32) as u32;
-            batch_dwords[idx + 3] = color;
-            idx += STORE_DWORDS;
+            batch_dwords[*idx + 1] = dst as u32;
+            batch_dwords[*idx + 2] = (dst >> 32) as u32;
+            batch_dwords[*idx + 3] = color;
+            *idx += STORE_DWORDS;
             written += 1;
+            covered_seen = covered_seen.saturating_add(1);
+        }
+        if !complete {
+            break;
         }
     }
 
+    Ok((written, complete))
+}
+
+pub(crate) fn encode_rgb_triangle_vertices_store_batch_chunk(
+    batch_dwords: &mut [u32],
+    vertices: &[u8],
+    triangle_index: usize,
+    covered_pixel_offset: usize,
+    max_store_pixels: usize,
+    target_width: u32,
+    target_height: u32,
+    scissor: Option<ScissorRect>,
+    dst_gpu_addr: u64,
+    dst_pitch: usize,
+    result_gpu_addr: u64,
+    start_value: u32,
+    done_value: u32,
+) -> Result<(usize, usize, bool), &'static str> {
+    const RESERVED_END_DWORDS: usize = 2;
+    const STORE_DWORDS: usize = 4;
+
+    if target_width == 0 || target_height == 0 {
+        return Err("triangle-empty-target");
+    }
+    if batch_dwords.len() <= RESERVED_END_DWORDS + (STORE_DWORDS * 2) {
+        return Err("batch-too-small");
+    }
+
+    batch_dwords.fill(0);
+    let writable_limit = batch_dwords
+        .len()
+        .saturating_sub(RESERVED_END_DWORDS + STORE_DWORDS);
+    let mut idx = 0usize;
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+        | xelp_copy_ngin::mi::SDI_GGTT
+        | xelp_copy_ngin::mi::sdi_num_dw(1);
+    batch_dwords[idx + 1] = result_gpu_addr as u32;
+    batch_dwords[idx + 2] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[idx + 3] = start_value;
+    idx += STORE_DWORDS;
+
+    let (written, complete) = append_rgb_triangle_vertices_store_commands(
+        batch_dwords,
+        &mut idx,
+        vertices,
+        triangle_index,
+        covered_pixel_offset,
+        max_store_pixels,
+        target_width,
+        target_height,
+        scissor,
+        dst_gpu_addr,
+        dst_pitch,
+        writable_limit,
+    )?;
+
     if written == 0 {
-        return Err("triangle-empty");
+        return Ok((0, 0, true));
     }
     if idx + STORE_DWORDS > batch_dwords.len().saturating_sub(RESERVED_END_DWORDS) {
         return Err("batch-no-result-slot");
@@ -639,5 +725,112 @@ pub(crate) fn encode_rgb_triangle_vertices_store_batch(
     batch_dwords[idx + 1] = xelp_copy_ngin::mi::NOOP;
     idx += RESERVED_END_DWORDS;
 
-    Ok((idx * core::mem::size_of::<u32>(), written))
+    Ok((idx * core::mem::size_of::<u32>(), written, complete))
+}
+
+pub(crate) fn encode_rgb_triangle_vertices_store_batch_range(
+    batch_dwords: &mut [u32],
+    vertices: &[u8],
+    start_triangle_index: usize,
+    max_triangles: usize,
+    target_width: u32,
+    target_height: u32,
+    scissor: Option<ScissorRect>,
+    dst_gpu_addr: u64,
+    dst_pitch: usize,
+    result_gpu_addr: u64,
+    start_value: u32,
+    done_value: u32,
+) -> Result<(usize, usize, usize, usize), &'static str> {
+    const RESERVED_END_DWORDS: usize = 2;
+    const STORE_DWORDS: usize = 4;
+    const TRIANGLE_BYTES: usize = 3 * RGB_VERTEX_SIZE;
+
+    if target_width == 0 || target_height == 0 {
+        return Err("triangle-empty-target");
+    }
+    if batch_dwords.len() <= RESERVED_END_DWORDS + (STORE_DWORDS * 2) {
+        return Err("batch-too-small");
+    }
+
+    batch_dwords.fill(0);
+    let writable_limit = batch_dwords
+        .len()
+        .saturating_sub(RESERVED_END_DWORDS + STORE_DWORDS);
+    let mut idx = 0usize;
+    let mut written = 0usize;
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+        | xelp_copy_ngin::mi::SDI_GGTT
+        | xelp_copy_ngin::mi::sdi_num_dw(1);
+    batch_dwords[idx + 1] = result_gpu_addr as u32;
+    batch_dwords[idx + 2] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[idx + 3] = start_value;
+    idx += STORE_DWORDS;
+
+    let triangle_count = vertices.len() / TRIANGLE_BYTES;
+    let triangle_limit = max_triangles.max(1);
+    let mut triangle_idx = start_triangle_index;
+    let triangle_end = start_triangle_index
+        .saturating_add(triangle_limit)
+        .min(triangle_count);
+    let mut emitted = 0usize;
+    while triangle_idx < triangle_end {
+        match append_rgb_triangle_vertices_store_commands(
+            batch_dwords,
+            &mut idx,
+            vertices,
+            triangle_idx,
+            0,
+            usize::MAX,
+            target_width,
+            target_height,
+            scissor,
+            dst_gpu_addr,
+            dst_pitch,
+            writable_limit,
+        ) {
+            Ok((0, _)) => {
+                triangle_idx = triangle_idx.saturating_add(1);
+            }
+            Ok((pixels, true)) => {
+                written = written.saturating_add(pixels);
+                emitted = emitted.saturating_add(1);
+                triangle_idx = triangle_idx.saturating_add(1);
+            }
+            Ok((pixels, false)) => {
+                written = written.saturating_add(pixels);
+                emitted = emitted.saturating_add(1);
+                triangle_idx = triangle_idx.saturating_add(1);
+            }
+            Err("triangle-batch-exhausted") if emitted > 0 => break,
+            Err(err) => return Err(err),
+        }
+    }
+
+    let triangles_consumed = triangle_idx.saturating_sub(start_triangle_index);
+    if written == 0 {
+        return Ok((0, 0, triangles_consumed, 0));
+    }
+    if idx + STORE_DWORDS > batch_dwords.len().saturating_sub(RESERVED_END_DWORDS) {
+        return Err("batch-no-result-slot");
+    }
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::STORE_DATA_IMM
+        | xelp_copy_ngin::mi::SDI_GGTT
+        | xelp_copy_ngin::mi::sdi_num_dw(1);
+    batch_dwords[idx + 1] = result_gpu_addr as u32;
+    batch_dwords[idx + 2] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[idx + 3] = done_value;
+    idx += STORE_DWORDS;
+
+    if idx + RESERVED_END_DWORDS > batch_dwords.len() {
+        return Err("batch-no-end");
+    }
+
+    batch_dwords[idx] = xelp_copy_ngin::mi::BATCH_BUFFER_END;
+    batch_dwords[idx + 1] = xelp_copy_ngin::mi::NOOP;
+    idx += RESERVED_END_DWORDS;
+
+    Ok((idx * core::mem::size_of::<u32>(), written, triangles_consumed, emitted))
 }

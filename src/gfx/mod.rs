@@ -107,8 +107,10 @@ pub struct System {
 }
 
 fn finalize_backend_init() {
-    let backend_ready =
-        with_system(|sys| !matches!(sys.backend, backends::Backend::None(_))).unwrap_or(false);
+    let backend_ready = with_system_tag(SystemLockOwner::FinalizeBackendInit, |sys| {
+        !matches!(sys.backend, backends::Backend::None(_))
+    })
+    .unwrap_or(false);
     if !backend_ready {
         return;
     }
@@ -125,6 +127,13 @@ pub enum SystemLockOwner {
     CursorQueryViewport = 4,
     CursorEndFrame = 5,
     DrawMandelbrot = 6,
+    FinalizeBackendInit = 7,
+    WithFramebuffers = 8,
+    IsVirglActive = 9,
+    IsIntelActive = 10,
+    SwitchToVirgl = 11,
+    SwitchToIntel = 12,
+    BackendKind = 13,
 }
 
 impl SystemLockOwner {
@@ -138,6 +147,33 @@ impl SystemLockOwner {
             Self::CursorQueryViewport => "cursor_query_viewport",
             Self::CursorEndFrame => "cursor_end_frame",
             Self::DrawMandelbrot => "draw_mandelbrot",
+            Self::FinalizeBackendInit => "finalize_backend_init",
+            Self::WithFramebuffers => "with_framebuffers",
+            Self::IsVirglActive => "is_virgl_active",
+            Self::IsIntelActive => "is_intel_active",
+            Self::SwitchToVirgl => "switch_to_virgl",
+            Self::SwitchToIntel => "switch_to_intel",
+            Self::BackendKind => "backend_kind",
+        }
+    }
+
+    #[inline]
+    fn from_raw(raw: u32) -> Self {
+        match raw {
+            x if x == Self::DrawRgbTriangles as u32 => Self::DrawRgbTriangles,
+            x if x == Self::UploadTexture as u32 => Self::UploadTexture,
+            x if x == Self::EndFrame as u32 => Self::EndFrame,
+            x if x == Self::CursorQueryViewport as u32 => Self::CursorQueryViewport,
+            x if x == Self::CursorEndFrame as u32 => Self::CursorEndFrame,
+            x if x == Self::DrawMandelbrot as u32 => Self::DrawMandelbrot,
+            x if x == Self::FinalizeBackendInit as u32 => Self::FinalizeBackendInit,
+            x if x == Self::WithFramebuffers as u32 => Self::WithFramebuffers,
+            x if x == Self::IsVirglActive as u32 => Self::IsVirglActive,
+            x if x == Self::IsIntelActive as u32 => Self::IsIntelActive,
+            x if x == Self::SwitchToVirgl as u32 => Self::SwitchToVirgl,
+            x if x == Self::SwitchToIntel as u32 => Self::SwitchToIntel,
+            x if x == Self::BackendKind as u32 => Self::BackendKind,
+            _ => Self::Unknown,
         }
     }
 }
@@ -231,25 +267,7 @@ pub fn with_system_tag<R>(owner: SystemLockOwner, f: impl FnOnce(&mut System) ->
             let holder_cpu = SYSTEM_LOCK_OWNER_CPU.load(Ordering::Acquire);
             let holder_since = SYSTEM_LOCK_OWNER_SINCE.load(Ordering::Acquire);
             let held_ticks = now().saturating_sub(holder_since);
-            let holder_name = match holder {
-                x if x == SystemLockOwner::DrawRgbTriangles as u32 => {
-                    SystemLockOwner::DrawRgbTriangles.as_str()
-                }
-                x if x == SystemLockOwner::UploadTexture as u32 => {
-                    SystemLockOwner::UploadTexture.as_str()
-                }
-                x if x == SystemLockOwner::EndFrame as u32 => SystemLockOwner::EndFrame.as_str(),
-                x if x == SystemLockOwner::CursorQueryViewport as u32 => {
-                    SystemLockOwner::CursorQueryViewport.as_str()
-                }
-                x if x == SystemLockOwner::CursorEndFrame as u32 => {
-                    SystemLockOwner::CursorEndFrame.as_str()
-                }
-                x if x == SystemLockOwner::DrawMandelbrot as u32 => {
-                    SystemLockOwner::DrawMandelbrot.as_str()
-                }
-                _ => SystemLockOwner::Unknown.as_str(),
-            };
+            let holder_name = SystemLockOwner::from_raw(holder).as_str();
             crate::log!(
                 "gfx: waiting for SYSTEM lock requester={} cpu={} holder={} holder_cpu={} held_ticks={}\n",
                 owner.as_str(),
@@ -277,27 +295,7 @@ pub fn with_system_tag<R>(owner: SystemLockOwner, f: impl FnOnce(&mut System) ->
                     let holder_cpu = SYSTEM_LOCK_OWNER_CPU.load(Ordering::Acquire);
                     let holder_since = SYSTEM_LOCK_OWNER_SINCE.load(Ordering::Acquire);
                     let held_ticks = now().saturating_sub(holder_since);
-                    let holder_name = match holder {
-                        x if x == SystemLockOwner::DrawRgbTriangles as u32 => {
-                            SystemLockOwner::DrawRgbTriangles.as_str()
-                        }
-                        x if x == SystemLockOwner::UploadTexture as u32 => {
-                            SystemLockOwner::UploadTexture.as_str()
-                        }
-                        x if x == SystemLockOwner::EndFrame as u32 => {
-                            SystemLockOwner::EndFrame.as_str()
-                        }
-                        x if x == SystemLockOwner::CursorQueryViewport as u32 => {
-                            SystemLockOwner::CursorQueryViewport.as_str()
-                        }
-                        x if x == SystemLockOwner::CursorEndFrame as u32 => {
-                            SystemLockOwner::CursorEndFrame.as_str()
-                        }
-                        x if x == SystemLockOwner::DrawMandelbrot as u32 => {
-                            SystemLockOwner::DrawMandelbrot.as_str()
-                        }
-                        _ => SystemLockOwner::Unknown.as_str(),
-                    };
+                    let holder_name = SystemLockOwner::from_raw(holder).as_str();
                     crate::log!(
                         "gfx: SYSTEM lock timeout requester={} cpu={} holder={} holder_cpu={} held_ticks={} (possible re-entrancy/deadlock)\n",
                         owner.as_str(),
@@ -345,15 +343,21 @@ pub fn with_context_tag<R>(
 pub fn with_framebuffers<R>(
     f: impl FnOnce(Option<&'static ::limine::response::FramebufferResponse>) -> R,
 ) -> Option<R> {
-    with_system(|sys| f(sys.framebuffers))
+    with_system_tag(SystemLockOwner::WithFramebuffers, |sys| f(sys.framebuffers))
 }
 
 pub fn is_virgl_active() -> bool {
-    with_system(|sys| matches!(sys.backend, backends::Backend::Virgl(_))).unwrap_or(false)
+    with_system_tag(SystemLockOwner::IsVirglActive, |sys| {
+        matches!(sys.backend, backends::Backend::Virgl(_))
+    })
+    .unwrap_or(false)
 }
 
 pub fn is_intel_active() -> bool {
-    with_system(|sys| matches!(sys.backend, backends::Backend::Intel(_))).unwrap_or(false)
+    with_system_tag(SystemLockOwner::IsIntelActive, |sys| {
+        matches!(sys.backend, backends::Backend::Intel(_))
+    })
+    .unwrap_or(false)
 }
 
 /// Returns whether a virgl-capable virtio-gpu device is currently visible.
@@ -375,7 +379,7 @@ pub fn switch_to_virgl() -> bool {
         return false;
     };
 
-    let switched = with_system(|sys| {
+    let switched = with_system_tag(SystemLockOwner::SwitchToVirgl, |sys| {
         sys.backend = b;
         bump_backend_epoch();
         crate::log!("gfx: switch_to_virgl: ok epoch={}\n", backend_epoch());
@@ -399,7 +403,7 @@ pub fn switch_to_intel() -> bool {
         return false;
     };
 
-    let switched = with_system(|sys| {
+    let switched = with_system_tag(SystemLockOwner::SwitchToIntel, |sys| {
         sys.backend = b;
         bump_backend_epoch();
         crate::log!("gfx: switch_to_intel: ok epoch={}\n", backend_epoch());
@@ -422,7 +426,7 @@ pub enum BackendKind {
 }
 
 pub fn backend_kind() -> Option<BackendKind> {
-    with_system(|sys| match &sys.backend {
+    with_system_tag(SystemLockOwner::BackendKind, |sys| match &sys.backend {
         backends::Backend::Virgl(_) => BackendKind::Virgl,
         backends::Backend::Intel(_) => BackendKind::Intel,
         backends::Backend::None(_) => BackendKind::None,

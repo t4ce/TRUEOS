@@ -3473,116 +3473,137 @@ pub(crate) fn rcs_draw_screen_rgb_triangles(
     let triangle_count = vertices.len() / (3 * RGB_VERTEX_SIZE);
 
     let mut triangle_idx = 0usize;
+    let mut submission_count = 0usize;
+    let mut emitted_triangles = 0usize;
     while triangle_idx < triangle_count {
-        unsafe {
-            ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-            ptr::write_bytes(warm.result_virt, 0, warm.result_len);
-        }
+        let mut triangle_pixel_offset = 0usize;
+        loop {
+            unsafe {
+                ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+                ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+            }
 
-        let batch_dwords = unsafe {
-            core::slice::from_raw_parts_mut(
-                warm.batch_virt as *mut u32,
-                warm.batch_len / core::mem::size_of::<u32>(),
-            )
-        };
-        let start_value = RCS_RGB_DRAW_RESULT_START_BASE
-            .wrapping_add(triangle_idx as u32)
-            .wrapping_add(1);
-        let done_value = RCS_RGB_DRAW_RESULT_BASE
-            .wrapping_add(triangle_idx as u32)
-            .wrapping_add(1);
-        let (batch_tail_bytes, triangle_pixels) =
-            match super::xelp_render_ngin::encode_rgb_triangle_vertices_store_batch(
-                batch_dwords,
-                vertices,
-                triangle_idx,
-                copy_w,
-                copy_h,
-                scissor,
-                dst.gpu_addr,
-                copy_w as usize * 4,
-                GPU_VA_RESULT_BASE,
-                start_value,
-                done_value,
-            ) {
-                Ok(v) => v,
-                Err(_) => return false,
+            let batch_dwords = unsafe {
+                core::slice::from_raw_parts_mut(
+                    warm.batch_virt as *mut u32,
+                    warm.batch_len / core::mem::size_of::<u32>(),
+                )
             };
-
-        dma_cache_flush(warm.batch_virt as *const u8, batch_tail_bytes);
-        dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
-        let ring_tail_bytes = build_ring_batch_start(warm, batch.gpu_addr);
-
-        let _ = forcewake_all_acquire(warm);
-        let _ = mmio_write32(
-            warm,
-            RCS_RING_MODE_GEN7,
-            masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE),
-        );
-        let ctx_ctl_after = masked_bits_update(
-            CTX_CTRL_RS_CTX_ENABLE,
-            CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
-                | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-                | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
-        );
-        let ctx_ctl_ref_after = masked_bits_update(
-            CTX_CTRL_RS_CTX_ENABLE,
-            CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
-                | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-                | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
-        );
-        let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
-        let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_ref_after);
-
-        if !init_gen12_lrc_context_image(warm, ring_start, ring_tail_bytes as u32, ring_ctl) {
-            return false;
-        }
-
-        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
-        let _ = mmio_write32(warm, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
-
-        let poll_iters_budget = rcs_present_poll_iters(triangle_pixels);
-        let mut completed = false;
-        let mut iter = 0usize;
-        while iter < poll_iters_budget {
-            let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
-            if result0 == done_value {
-                completed = true;
+            let start_value = RCS_RGB_DRAW_RESULT_START_BASE
+                .wrapping_add(submission_count as u32)
+                .wrapping_add(1);
+            let done_value = RCS_RGB_DRAW_RESULT_BASE
+                .wrapping_add(submission_count as u32)
+                .wrapping_add(1);
+            let (batch_tail_bytes, triangle_pixels, triangle_complete) =
+                match super::xelp_render_ngin::encode_rgb_triangle_vertices_store_batch_chunk(
+                    batch_dwords,
+                    vertices,
+                    triangle_idx,
+                    triangle_pixel_offset,
+                    RCS_PRESENT_MAX_CHUNK_PIXELS,
+                    copy_w,
+                    copy_h,
+                    scissor,
+                    dst.gpu_addr,
+                    copy_w as usize * 4,
+                    GPU_VA_RESULT_BASE,
+                    start_value,
+                    done_value,
+                ) {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                };
+            if batch_tail_bytes == 0 {
+                triangle_idx = triangle_idx.saturating_add(1);
                 break;
             }
-            core::hint::spin_loop();
-            iter += 1;
-        }
 
-        dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
-        let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
-        if !completed || result0 != done_value {
-            crate::log!(
-                "intel/igpu770: rcs-rgb-draw triangle={} timeout iters={} budget={} pixels={} result0=0x{:08X} start=0x{:08X} expect=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
-                triangle_idx,
-                iter,
-                poll_iters_budget,
-                triangle_pixels,
-                result0,
-                start_value,
-                done_value,
-                mmio_read32(warm, RCS_RING_HEAD),
-                mmio_read32(warm, RCS_RING_TAIL),
-                mmio_read32(warm, RCS_RING_ACTHD),
-                mmio_read32(warm, RCS_RING_IPEIR),
-                mmio_read32(warm, RCS_RING_IPEHR)
+            dma_cache_flush(warm.batch_virt as *const u8, batch_tail_bytes);
+            dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+            let ring_tail_bytes = build_ring_batch_start(warm, batch.gpu_addr);
+
+            let _ = forcewake_all_acquire(warm);
+            let _ = mmio_write32(
+                warm,
+                RCS_RING_MODE_GEN7,
+                masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE),
             );
-            return false;
-        }
+            let ctx_ctl_after = masked_bits_update(
+                CTX_CTRL_RS_CTX_ENABLE,
+                CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+                    | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+                    | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+            );
+            let ctx_ctl_ref_after = masked_bits_update(
+                CTX_CTRL_RS_CTX_ENABLE,
+                CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+                    | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+                    | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+            );
+            let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
+            let _ = mmio_write32(warm, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_ref_after);
 
-        triangle_idx = triangle_idx.saturating_add(1);
+            if !init_gen12_lrc_context_image(warm, ring_start, ring_tail_bytes as u32, ring_ctl) {
+                return false;
+            }
+
+            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+            execlist_submit_port_push(warm, context_desc_lo, context_desc_hi, 0, 0);
+            let _ = mmio_write32(warm, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+
+            let poll_iters_budget = rcs_present_poll_iters(triangle_pixels);
+            let mut completed = false;
+            let mut iter = 0usize;
+            while iter < poll_iters_budget {
+                let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
+                if result0 == done_value {
+                    completed = true;
+                    break;
+                }
+                core::hint::spin_loop();
+                iter += 1;
+            }
+
+            dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
+            let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
+            if !completed || result0 != done_value {
+                crate::log!(
+                    "intel/igpu770: rcs-rgb-draw triangle={} pixel_off={} complete={} timeout iters={} budget={} pixels={} result0=0x{:08X} start=0x{:08X} expect=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
+                    triangle_idx,
+                    triangle_pixel_offset,
+                    triangle_complete as u8,
+                    iter,
+                    poll_iters_budget,
+                    triangle_pixels,
+                    result0,
+                    start_value,
+                    done_value,
+                    mmio_read32(warm, RCS_RING_HEAD),
+                    mmio_read32(warm, RCS_RING_TAIL),
+                    mmio_read32(warm, RCS_RING_ACTHD),
+                    mmio_read32(warm, RCS_RING_IPEIR),
+                    mmio_read32(warm, RCS_RING_IPEHR)
+                );
+                return false;
+            }
+
+            triangle_pixel_offset = triangle_pixel_offset.saturating_add(triangle_pixels);
+            submission_count = submission_count.saturating_add(1);
+            if triangle_complete {
+                emitted_triangles = emitted_triangles.saturating_add(1);
+                triangle_idx = triangle_idx.saturating_add(1);
+                break;
+            }
+        }
     }
 
     if triangle_count <= 4 || triangle_count.is_multiple_of(64) {
         crate::log!(
-            "intel/igpu770: rcs-rgb-draw summary success=1 triangles={} size={}x{} dst_gpu=0x{:X}\n",
+            "intel/igpu770: rcs-rgb-draw summary success=1 triangles={} submitted={} batches={} size={}x{} dst_gpu=0x{:X}\n",
             triangle_count,
+            emitted_triangles,
+            submission_count,
             copy_w,
             copy_h,
             dst.gpu_addr
