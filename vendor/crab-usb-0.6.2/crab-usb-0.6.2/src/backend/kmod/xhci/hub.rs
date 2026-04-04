@@ -433,7 +433,6 @@ impl XhciRootHub {
             .collect::<Vec<_>>();
 
         for &id in &uninited {
-            info!("crabusb/xhci/hub: uninit port={} waiting for reset", id);
             let i = (id - 1) as usize;
 
             let port = self.reg.port_register_set.read_volatile_at(i).portsc;
@@ -449,13 +448,15 @@ impl XhciRootHub {
                 continue;
             }
 
-            info!(
-                "crabusb/xhci/hub: uninit port={} reset complete enable={} connect={} speed={}",
-                id,
-                port.port_enabled_disabled(),
-                port.current_connect_status(),
-                port.port_speed()
-            );
+            if port.current_connect_status() || port.port_enabled_disabled() {
+                info!(
+                    "crabusb/xhci/hub: uninit port={} reset complete enable={} connect={} speed={}",
+                    id,
+                    port.port_enabled_disabled(),
+                    port.current_connect_status(),
+                    port.port_speed()
+                );
+            }
 
             self.ports_mut()[i].state = PortState::Reseted;
         }
@@ -476,19 +477,17 @@ impl XhciRootHub {
         for &id in &reseted {
             let i = (id - 1) as usize;
             let port_reg = self.reg.port_register_set.read_volatile_at(i);
-            info!(
-                "crabusb/xhci/hub: reseted port={} connect={} enabled={} speed={}",
-                id,
-                port_reg.portsc.current_connect_status(),
-                port_reg.portsc.port_enabled_disabled(),
-                port_reg.portsc.port_speed()
-            );
+            if port_reg.portsc.current_connect_status() || port_reg.portsc.port_enabled_disabled() {
+                info!(
+                    "crabusb/xhci/hub: reseted port={} connect={} enabled={} speed={}",
+                    id,
+                    port_reg.portsc.current_connect_status(),
+                    port_reg.portsc.port_enabled_disabled(),
+                    port_reg.portsc.port_speed()
+                );
+            }
             if !port_reg.portsc.current_connect_status() || !port_reg.portsc.port_enabled_disabled()
             {
-                info!(
-                    "crabusb/xhci/hub: reseted port={} skipped (not connect+enabled)",
-                    id
-                );
                 continue;
             }
             let speed_raw = port_reg.portsc.port_speed();
