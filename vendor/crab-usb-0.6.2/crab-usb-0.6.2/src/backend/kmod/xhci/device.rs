@@ -2,6 +2,7 @@ use alloc::collections::BTreeMap;
 
 use alloc::{sync::Arc, vec::Vec};
 use core::fmt::Debug;
+use core::time::Duration;
 
 use futures::{FutureExt, future::BoxFuture};
 use mbarrier::mb;
@@ -174,6 +175,9 @@ impl CommandLifecycle {
 }
 
 impl Device {
+    const LS_FS_ADDRESS_DEVICE_SETTLE_MS: u64 = 10;
+    const LS_FS_EP0_REEVALUATE_SETTLE_MS: u64 = 2;
+
     pub(crate) async fn new(host: &mut Xhci) -> Result<Self> {
         let slot_id = host.device_slot_assignment().await?;
         crate::debug_set_usb_probe_progress(4, 0, 0, slot_id.as_u8(), 0);
@@ -218,6 +222,14 @@ impl Device {
 
     fn lifecycle(&self) -> CommandLifecycle {
         CommandLifecycle::new(self.id.as_u8(), self.root_port_id, self.port_id)
+    }
+
+    fn control_recovery_delay_ms(&self, short_ms: u64) -> u64 {
+        if matches!(self.port_speed, Speed::Low | Speed::Full) {
+            short_ms
+        } else {
+            0
+        }
     }
 
     async fn abort_command_lifecycle(
@@ -331,11 +343,10 @@ impl Device {
     async fn setup_max_packet(
         &mut self,
         desc: DeviceDescriptorBase,
-        _info: &DeviceAddressInfo,
+        info: &DeviceAddressInfo,
         _lifecycle: &CommandLifecycle,
     ) -> Result {
         let lifecycle = self.lifecycle();
-        self.ctx.perper_change();
         // USB 设备描述符的 bMaxPacketSize0 字段（偏移 7）
         // 对于控制端点，这是直接的字节数值，不需要解码
         let packet_size = if desc.max_packet_size_0 == 0 {
@@ -344,9 +355,25 @@ impl Device {
             desc.max_packet_size_0
         } as u16;
 
+        let current_packet_size = parse_default_max_packet_size_from_port_speed(info.port_speed);
+
+        if packet_size == current_packet_size {
+            info!(
+                "crabusb/xhci/device: slot={} root_port={} port={} skipping evaluate-context for ep0 mps {} (already programmed)",
+                self.id.as_u8(),
+                self.root_port_id,
+                self.port_id,
+                packet_size
+            );
+            return Ok(());
+        }
+
+        self.ctx.perper_change();
+
         let dci = Dci::CTRL;
         self.ctx.with_input(|input| {
-            let _ = input.control_mut().add_context_flag(1); // Endpoint 0 Context
+            input.control_mut().clear_add_context_flag(0);
+            input.control_mut().set_add_context_flag(1);
 
             let endpoint = input.device_mut().endpoint_mut(dci.as_usize());
             endpoint.set_max_packet_size(packet_size);
@@ -360,6 +387,18 @@ impl Device {
             return Err(err.into());
         }
         lifecycle.ok(CommandLifecycleStage::EvaluateContext, packet_size as u32);
+
+        let settle_ms = self.control_recovery_delay_ms(Self::LS_FS_EP0_REEVALUATE_SETTLE_MS);
+        if settle_ms != 0 {
+            info!(
+                "crabusb/xhci/device: slot={} root_port={} port={} settling {}ms after ep0 mps update",
+                self.id.as_u8(),
+                self.root_port_id,
+                self.port_id,
+                settle_ms
+            );
+            self.kernel.delay(Duration::from_millis(settle_ms));
+        }
 
         Ok(())
     }
@@ -534,6 +573,22 @@ impl Device {
             result.completion_code()
         );
 
+        let settle_ms = if matches!(info.port_speed, Speed::Low | Speed::Full) {
+            Self::LS_FS_ADDRESS_DEVICE_SETTLE_MS
+        } else {
+            0
+        };
+        if settle_ms != 0 {
+            info!(
+                "crabusb/xhci/device: slot={} root_port={} port={} settling {}ms after address-device",
+                self.id.as_u8(),
+                info.root_port_id,
+                info.port_id,
+                settle_ms
+            );
+            self.kernel.delay(Duration::from_millis(settle_ms));
+        }
+
         Ok(())
     }
 
@@ -615,6 +670,18 @@ impl Device {
 
     async fn _set_configuration(&mut self, configuration_value: u8) -> Result {
         let lifecycle = self.lifecycle();
+        if self.current_config_value == Some(configuration_value) {
+            info!(
+                "crabusb/xhci/device: slot={} root_port={} port={} skipping set-configuration {} (already active)",
+                self.id.as_u8(),
+                self.root_port_id,
+                self.port_id,
+                configuration_value
+            );
+            lifecycle.ok(CommandLifecycleStage::SetConfiguration, u32::from(configuration_value));
+            return Ok(());
+        }
+
         self.ctx.perper_change();
         lifecycle.begin(CommandLifecycleStage::SetConfiguration, u32::from(configuration_value));
         if let Err(err) = self
