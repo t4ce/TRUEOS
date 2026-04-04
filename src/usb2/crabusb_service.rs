@@ -22,6 +22,8 @@ static EVENT_HANDLER_READY: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static PROBE_REQUESTED: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static BOOT_DEFER_DONE: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static EVENT_HANDLER: [Mutex<Option<EventHandler>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
 
@@ -278,7 +280,31 @@ async fn probe_and_bind(
 
             let controller_id = info.index as u32;
             let mut bound_any = false;
-            if super::hid::boot::maybe_start_hid_boot_streams(host, dev, spawner, controller_id).await
+            let mut shared_led_device = None;
+            if super::hid::leds::should_share_probe_device(dev) {
+                match host.open_device(dev).await {
+                    Ok(mut device) => {
+                        super::hid::boot::log_hid_report_descriptors_on_device(&mut device, dev).await;
+                        shared_led_device = Some(device);
+                    }
+                    Err(err) => {
+                        crate::log!(
+                            "crabusb: hid+led {:04X}:{:04X} shared open failed: {:?}\n",
+                            desc.vendor_id,
+                            desc.product_id,
+                            err
+                        );
+                    }
+                }
+            }
+            if super::hid::boot::maybe_start_hid_boot_streams(
+                host,
+                dev,
+                spawner,
+                controller_id,
+                shared_led_device.is_none(),
+            )
+            .await
             {
                 bound_any = true;
             }
@@ -287,8 +313,11 @@ async fn probe_and_bind(
             {
                 bound_any = true;
             }
-            if super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id).await
-            {
+            if let Some(device) = shared_led_device {
+                if super::hid::leds::maybe_start_led_controller_with_device(device, dev, spawner, controller_id).await {
+                    bound_any = true;
+                }
+            } else if super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id).await {
                 bound_any = true;
             }
             if super::midi::maybe_start_midi(host, dev, spawner, controller_id).await {
@@ -349,12 +378,22 @@ pub async fn event_pump_task(controller_id: usize) {
 
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn bsp_service(controller_index: usize) {
+    const BOOT_USB_DEFER_MS: u64 = 15_000;
     const RETRY_MS: u64 = 1000;
     const INTEL_PROBE_SETTLE_MS: u64 = 1500;
     const INTEL_REPROBE_MS: u64 = 1500;
     let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
 
     loop {
+        if !BOOT_DEFER_DONE[controller_index].swap(true, Ordering::AcqRel) {
+            crate::log!(
+                "crabusb: controller {} boot defer before USB bring-up; waiting {}ms\n",
+                controller_index,
+                BOOT_USB_DEFER_MS
+            );
+            Timer::after(EmbassyDuration::from_millis(BOOT_USB_DEFER_MS)).await;
+        }
+
         let Some(info) = super::controller_by_index(controller_index) else {
             Timer::after(EmbassyDuration::from_millis(RETRY_MS)).await;
             continue;
