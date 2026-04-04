@@ -544,6 +544,57 @@ Working hypothesis now:
   - the right write granularity (`PORTSC` only)
   - the right port-state-machine shape (bootstrap reset first, not newer targeted-reset progression)
 
+Latest observed frontier after restoring the combo baseline:
+
+- ports `1/3/11` now bootstrap to `enabled=true`
+- root-hub emits three changes
+- two devices enumerate successfully
+- the next failure moved later:
+  - third `EnableSlot` trips `USBSTS.HSE`
+  - stop log shows `pcd=true`
+
+New working suspicion:
+
+- stale root-port change bits/events from bootstrap reset may still be alive during live enumeration
+- with `handle_changed()` out of the active path, those bits are not being acked by the old-flow baseline
+- so the next discriminating step is to clear bootstrap-generated `PORTSC` change bits once, using the now-safe `PORTSC`-only write path
+
+Regression result:
+
+- clearing bootstrap-generated change bits immediately in `init()` was not safe
+- logs showed:
+  - bootstrap still reached `enabled=true`
+  - but by the first settled probe the same ports had fallen back to:
+    - `enable=false connect=true speed=1`
+- this regressed us back to zero enumerated devices
+
+Updated rule:
+
+- do not clear bootstrap `PRC`/change bits in `init()` on Intel for now
+- preserve the previously working combo baseline and search later in the flow
+
+Current next measurement:
+
+- when the late third-`EnableSlot` `HSE` happens, dump `PORTSC` state for all connected or changed ports from the xHCI stop path
+- this should tell us whether the live trigger is:
+  - port 11 changing underneath the command
+  - a stale `PRC/CSC/PEDC` pattern on one of the root ports
+  - or no meaningful root-port transition at all
+
+Measurement result:
+
+- stop dump showed all three connected root ports were still:
+  - `connect=true enabled=true reset=false`
+- and all three still carried:
+  - `prc=true`
+- so the late failure does not currently look like a live disconnect/reset on port 11
+- it looks more like stale bootstrap `PRC` state surviving into later enumeration
+
+Next edit from that measurement:
+
+- clear only `PRC`, and only later in `handle_uninit()` after the settled probe sees reset-complete state
+- avoid clearing in `init()` itself, since that earlier regressed port enable
+
 Rule for next edits:
 
 - preserve the combo baseline first

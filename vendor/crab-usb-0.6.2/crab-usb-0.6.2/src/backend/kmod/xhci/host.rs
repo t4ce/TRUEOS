@@ -94,8 +94,8 @@ impl CoreOp for Xhci {
 impl Xhci {
     const STATUS_POLL_DELAY_MS: u64 = 1;
     const STATUS_POLL_LIMIT: usize = 2_000;
-    const SKIP_SCRATCHPADS_EXPERIMENT: bool = true;
-    const PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT: bool = true;
+    const SKIP_SCRATCHPADS_EXPERIMENT: bool = false;
+    const PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT: bool = false;
     const PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT: bool = true;
     const PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT: bool = true;
     const ARM_WRAP_EVENT_EXPERIMENT: bool = false;
@@ -267,16 +267,12 @@ impl Xhci {
             if ac64 { "64" } else { "32" }
         );
 
-        // Keep xHCI infrastructure DMA below 4 GiB on bare metal.
-        // Some controllers advertise AC64 but fail to fetch command/event rings
-        // or context structures reliably from higher addresses before the IOMMU
-        // or firmware handoff is fully settled.
-        let dma_mask = u32::MAX as usize;
-        if ac64 {
-            debug!(
-                "xHCI: AC64 advertised, but forcing 32-bit DMA mask for command/event/context buffers"
-            );
-        }
+        // Follow the controller's advertised addressing capability.
+        let dma_mask = if ac64 {
+            u64::MAX as usize
+        } else {
+            u32::MAX as usize
+        };
 
         let kernel = Kernel::new(dma_mask as _, kernel);
 
@@ -760,6 +756,42 @@ impl EventHandler {
         unsafe { &mut *self.reg.get() }
     }
 
+    fn log_stop_port_snapshot(&self) {
+        let reg = self.reg();
+        for idx in 0..reg.port_register_set.len() {
+            let port_id = (idx + 1) as u8;
+            let port = reg.port_register_set.read_volatile_at(idx).portsc;
+            let interesting = port.current_connect_status()
+                || port.connect_status_change()
+                || port.port_enabled_disabled_change()
+                || port.warm_port_reset_change()
+                || port.over_current_change()
+                || port.port_reset_change()
+                || port.port_link_state_change()
+                || port.port_config_error_change();
+            if !interesting {
+                continue;
+            }
+
+            info!(
+                "crabusb/xhci: stop-port port={} connect={} enabled={} reset={} speed={} pls={} csc={} pedc={} wrc={} occ={} prc={} plc={} cec={}",
+                port_id,
+                port.current_connect_status(),
+                port.port_enabled_disabled(),
+                port.port_reset(),
+                port.port_speed(),
+                port.port_link_state(),
+                port.connect_status_change(),
+                port.port_enabled_disabled_change(),
+                port.warm_port_reset_change(),
+                port.over_current_change(),
+                port.port_reset_change(),
+                port.port_link_state_change(),
+                port.port_config_error_change(),
+            );
+        }
+    }
+
     fn clean_event_ring(&self) -> (Event, bool) {
         use xhci::ring::trb::event::Allowed;
         let mut event = Event::Nothing;
@@ -845,6 +877,7 @@ impl EventHandlerOp for EventHandler {
                 sts.port_change_detect(),
                 sts.event_interrupt(),
             );
+            self.log_stop_port_snapshot();
             return Event::Stopped;
         }
         let irq_pending = self
