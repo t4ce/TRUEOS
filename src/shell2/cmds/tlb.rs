@@ -1,9 +1,12 @@
 use core::fmt::Write;
+use core::str::FromStr;
 use core::str::SplitWhitespace;
 
 use acpi::sdt::fadt::Fadt;
 use acpi::sdt::madt::Madt;
 use acpi::sdt::mcfg::Mcfg;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -13,15 +16,21 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
 
-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pciids|pcibar|mem|cpu|acpi|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb [probe]|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pciids|pcibar|mem|cpu|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb [probe]|dump]`";
+const TLB_ACPI_USAGE: &str = "tlb: usage `tlb acpi [sig [index]]`";
+const TLB_AML_USAGE: &str = "tlb: usage `tlb aml [ec|symbol <path>|prefix <path>]`";
+const ACPI_HEXDUMP_MAX_BYTES: usize = 512;
+const ACPI_HEXDUMP_ROW_BYTES: usize = 16;
+const ACPI_AML_DUMP_MAX_BYTES: usize = 1024;
 const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const TLB_MENU_ROWS: [(&str, &str); 15] = [
+const TLB_MENU_ROWS: [(&str, &str); 16] = [
     ("pci", "List PCI devices"),
     ("pciids", "Download pci.ids once"),
     ("pcibar", "List PCI BAR windows"),
     ("mem", "List memory map"),
     ("cpu", "List CPU cores"),
-    ("acpi", "List ACPI tables"),
+    ("acpi", "List ACPI tables or dump one (`tlb acpi SSDT 3`)"),
+    ("aml", "Inspect parsed AML namespace (`tlb aml ec|symbol|prefix`)"),
     ("facp", "Show FACP/FADT details"),
     ("madt", "Show MADT details"),
     ("hpet", "Show HPET details"),
@@ -68,6 +77,28 @@ struct PciDeviceRow {
     pid: String,
 }
 
+struct AmlTableRecord {
+    label: String,
+    phys: usize,
+    bytes: &'static [u8],
+}
+
+struct AmlNamespaceEntry {
+    path: String,
+    handle: aml::AmlHandle,
+}
+
+struct AmlDefinitionHit {
+    table_label: String,
+    table_phys: usize,
+    aml_offset: usize,
+}
+
+struct AmlMethodReferenceHit {
+    method_path: String,
+    offsets: Vec<usize>,
+}
+
 fn line(io: &'static dyn ShellBackend2, text: &str) {
     print_shell_line(io, text);
 }
@@ -79,6 +110,636 @@ fn blank(io: &'static dyn ShellBackend2) {
 fn multiline(io: &'static dyn ShellBackend2, text: &str) {
     for line_text in text.lines() {
         line(io, line_text.trim_end_matches('\r'));
+    }
+}
+
+fn parse_acpi_signature(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() != 4 {
+        return None;
+    }
+
+    let upper = trimmed.to_ascii_uppercase();
+    if !upper
+        .as_bytes()
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+    {
+        return None;
+    }
+
+    Some(upper)
+}
+
+fn format_acpi_text_field(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for &byte in bytes {
+        let ch = if byte.is_ascii_graphic() || byte == b' ' {
+            byte as char
+        } else {
+            '.'
+        };
+        out.push(ch);
+    }
+
+    while out.ends_with(' ') {
+        out.pop();
+    }
+
+    if out.is_empty() {
+        out.push('-');
+    }
+
+    out
+}
+
+fn emit_hex_dump(io: &'static dyn ShellBackend2, bytes: &[u8]) {
+    for (row, chunk) in bytes.chunks(ACPI_HEXDUMP_ROW_BYTES).enumerate() {
+        let offset = row.saturating_mul(ACPI_HEXDUMP_ROW_BYTES);
+        let mut hex = String::new();
+        let mut ascii = String::new();
+        for index in 0..ACPI_HEXDUMP_ROW_BYTES {
+            if index < chunk.len() {
+                let byte = chunk[index];
+                if index != 0 {
+                    hex.push(' ');
+                }
+                hex.push_str(alloc::format!("{:02X}", byte).as_str());
+                ascii.push(if byte.is_ascii_graphic() || byte == b' ' {
+                    byte as char
+                } else {
+                    '.'
+                });
+            } else {
+                if index != 0 {
+                    hex.push(' ');
+                }
+                hex.push_str("  ");
+                ascii.push(' ');
+            }
+        }
+        line(
+            io,
+            alloc::format!("0x{:04X}  {}  |{}|", offset, hex, ascii).as_str(),
+        );
+    }
+}
+
+fn emit_table_header_details(io: &'static dyn ShellBackend2, bytes: &[u8]) {
+    if bytes.len() < crate::efi::acpi::SDT_HEADER_LEN {
+        line(io, "  Header: unavailable (short table)");
+        return;
+    }
+
+    let signature_text = format_acpi_text_field(&bytes[0..4]);
+    let length = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    let revision = bytes[8];
+    let checksum = bytes[9];
+    let oem_id = format_acpi_text_field(&bytes[10..16]);
+    let table_id = format_acpi_text_field(&bytes[16..24]);
+    let oem_revision = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
+    let creator_id = format_acpi_text_field(&bytes[28..32]);
+    let creator_revision = u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]);
+
+    line(io, alloc::format!("  Signature: {}", signature_text).as_str());
+    line(io, alloc::format!("  Length: {} bytes (0x{:X})", length, length).as_str());
+    line(io, alloc::format!("  Revision: {}", revision).as_str());
+    line(io, alloc::format!("  Checksum: 0x{:02X}", checksum).as_str());
+    line(io, alloc::format!("  OEM ID: {}", oem_id).as_str());
+    line(io, alloc::format!("  Table ID: {}", table_id).as_str());
+    line(
+        io,
+        alloc::format!("  OEM Revision: 0x{:08X}", oem_revision).as_str(),
+    );
+    line(io, alloc::format!("  Creator ID: {}", creator_id).as_str());
+    line(
+        io,
+        alloc::format!("  Creator Revision: 0x{:08X}", creator_revision).as_str(),
+    );
+}
+
+fn emit_aml_dump(io: &'static dyn ShellBackend2, bytes: &[u8], max_bytes: usize) {
+    if bytes.len() <= crate::efi::acpi::SDT_HEADER_LEN {
+        line(io, "  AML payload: empty");
+        return;
+    }
+
+    let aml = &bytes[crate::efi::acpi::SDT_HEADER_LEN..];
+    let shown = aml.len().min(max_bytes);
+    line(
+        io,
+        alloc::format!("  AML dump: showing {} of {} bytes", shown, aml.len()).as_str(),
+    );
+    emit_hex_dump(io, &aml[..shown]);
+    if shown < aml.len() {
+        line(
+            io,
+            alloc::format!("  ... truncated, {} AML bytes not shown", aml.len() - shown).as_str(),
+        );
+    }
+}
+
+fn emit_acpi_table_dump(
+    io: &'static dyn ShellBackend2,
+    label: &str,
+    phys: usize,
+    bytes: &[u8],
+    dump_aml: bool,
+    max_bytes: usize,
+) {
+    line(io, alloc::format!("{} @ 0x{:016X}", label, phys).as_str());
+    emit_table_header_details(io, bytes);
+    if dump_aml {
+        emit_aml_dump(io, bytes, max_bytes);
+    } else {
+        let shown = bytes.len().min(max_bytes);
+        line(
+            io,
+            alloc::format!("  Raw dump: showing {} of {} bytes", shown, bytes.len()).as_str(),
+        );
+        emit_hex_dump(io, &bytes[..shown]);
+        if shown < bytes.len() {
+            line(
+                io,
+                alloc::format!("  ... truncated, {} bytes not shown", bytes.len() - shown).as_str(),
+            );
+        }
+    }
+    blank(io);
+}
+
+#[derive(Clone, Copy)]
+struct TlbAmlRuntimeHandler;
+
+impl TlbAmlRuntimeHandler {
+    #[inline(always)]
+    fn map_ptr(&self, phys_addr: usize, size: usize) -> core::ptr::NonNull<u8> {
+        crate::pci::mmio::map_mmio_region(phys_addr as u64, size)
+            .unwrap_or_else(|err| panic!("AML map {:x} size {} failed: {:?}", phys_addr, size, err))
+    }
+
+    #[inline(always)]
+    unsafe fn read_phys<T: Copy>(&self, phys_addr: usize) -> T {
+        let ptr = self.map_ptr(phys_addr, core::mem::size_of::<T>());
+        core::ptr::read_unaligned(ptr.as_ptr() as *const T)
+    }
+
+    #[inline(always)]
+    unsafe fn write_phys<T>(&self, phys_addr: usize, value: T) {
+        let ptr = self.map_ptr(phys_addr, core::mem::size_of::<T>());
+        core::ptr::write_volatile(ptr.as_ptr() as *mut T, value);
+    }
+
+    #[inline(always)]
+    fn spin_delay_us(&self, microseconds: u64) {
+        let target = embassy_time_driver::now().saturating_add(microseconds);
+        while embassy_time_driver::now() < target {
+            crate::wait::spin_step();
+        }
+    }
+}
+
+impl aml::Handler for TlbAmlRuntimeHandler {
+    fn read_u8(&self, address: usize) -> u8 {
+        unsafe { self.read_phys::<u8>(address) }
+    }
+
+    fn read_u16(&self, address: usize) -> u16 {
+        unsafe { self.read_phys::<u16>(address) }
+    }
+
+    fn read_u32(&self, address: usize) -> u32 {
+        unsafe { self.read_phys::<u32>(address) }
+    }
+
+    fn read_u64(&self, address: usize) -> u64 {
+        unsafe { self.read_phys::<u64>(address) }
+    }
+
+    fn write_u8(&mut self, address: usize, value: u8) {
+        unsafe { self.write_phys(address, value) };
+    }
+
+    fn write_u16(&mut self, address: usize, value: u16) {
+        unsafe { self.write_phys(address, value) };
+    }
+
+    fn write_u32(&mut self, address: usize, value: u32) {
+        unsafe { self.write_phys(address, value) };
+    }
+
+    fn write_u64(&mut self, address: usize, value: u64) {
+        unsafe { self.write_phys(address, value) };
+    }
+
+    fn read_io_u8(&self, port: u16) -> u8 {
+        unsafe { crate::inb(port) }
+    }
+
+    fn read_io_u16(&self, port: u16) -> u16 {
+        unsafe { crate::inw(port) }
+    }
+
+    fn read_io_u32(&self, port: u16) -> u32 {
+        unsafe { crate::inl(port) }
+    }
+
+    fn write_io_u8(&self, port: u16, value: u8) {
+        unsafe { crate::outb(port, value) };
+    }
+
+    fn write_io_u16(&self, port: u16, value: u16) {
+        unsafe { crate::outw(port, value) };
+    }
+
+    fn write_io_u32(&self, port: u16, value: u32) {
+        unsafe { crate::outl(port, value) };
+    }
+
+    fn read_pci_u8(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u8 {
+        if segment != 0 {
+            return 0xFF;
+        }
+        crate::pci::config_read_u8(bus, device, function, offset)
+    }
+
+    fn read_pci_u16(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u16 {
+        if segment != 0 {
+            return 0xFFFF;
+        }
+        crate::pci::config_read_u16(bus, device, function, offset)
+    }
+
+    fn read_pci_u32(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u32 {
+        if segment != 0 {
+            return 0xFFFF_FFFF;
+        }
+        crate::pci::config_read_u32(bus, device, function, offset)
+    }
+
+    fn write_pci_u8(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16, value: u8) {
+        if segment == 0 {
+            crate::pci::config_write_u8(bus, device, function, offset, value);
+        }
+    }
+
+    fn write_pci_u16(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16, value: u16) {
+        if segment == 0 {
+            crate::pci::config_write_u16(bus, device, function, offset, value);
+        }
+    }
+
+    fn write_pci_u32(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16, value: u32) {
+        if segment == 0 {
+            crate::pci::config_write_u32(bus, device, function, offset, value);
+        }
+    }
+
+}
+
+fn build_aml_context() -> Result<(aml::AmlContext, Vec<AmlTableRecord>), &'static str> {
+    let tables = crate::efi::acpi::ensure_tables().ok_or("ACPI tables not found")?;
+    let fadt = tables.find_table::<Fadt>().ok_or("FADT/FACP not found")?;
+    let fadt_ref = unsafe { fadt.virtual_start.as_ref() };
+    let dsdt_phys = fadt_ref.dsdt_address().map_err(|_| "DSDT address unavailable from FADT")?;
+    let dsdt_bytes = crate::efi::acpi::map_table_bytes(dsdt_phys).ok_or("Failed to map DSDT")?;
+
+    let mut records = Vec::new();
+    records.push(AmlTableRecord {
+        label: String::from("DSDT"),
+        phys: dsdt_phys,
+        bytes: dsdt_bytes,
+    });
+
+    for (index, (phys, hdr)) in tables
+        .table_headers()
+        .filter(|(_, hdr)| hdr.signature.as_str() == "SSDT")
+        .enumerate()
+    {
+        if let Some(bytes) = crate::efi::acpi::map_table_bytes(phys) {
+            records.push(AmlTableRecord {
+                label: alloc::format!("SSDT#{}", index + 1),
+                phys,
+                bytes,
+            });
+        }
+    }
+
+    let mut ctx = aml::AmlContext::new(Box::new(TlbAmlRuntimeHandler), aml::DebugVerbosity::None);
+    for record in &records {
+        if record.bytes.len() < crate::efi::acpi::SDT_HEADER_LEN {
+            return Err("ACPI table shorter than SDT header");
+        }
+        ctx.parse_table(&record.bytes[crate::efi::acpi::SDT_HEADER_LEN..])
+            .map_err(|_| "AML parse failed")?;
+    }
+
+    Ok((ctx, records))
+}
+
+fn collect_aml_namespace_entries(ctx: &mut aml::AmlContext) -> Result<Vec<AmlNamespaceEntry>, aml::AmlError> {
+    let mut entries = Vec::new();
+    ctx.namespace.traverse(|scope, level| {
+        for (seg, handle) in &level.values {
+            let path = aml::AmlName::from_name_seg(*seg).resolve(scope)?;
+            entries.push(AmlNamespaceEntry {
+                path: path.as_string(),
+                handle: *handle,
+            });
+        }
+        Ok(true)
+    })?;
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(entries)
+}
+
+fn simplify_aml_lookup(text: &str) -> String {
+    text.trim().to_ascii_uppercase().replace('.', "")
+}
+
+fn find_aml_entries<'a>(entries: &'a [AmlNamespaceEntry], query: &str) -> Vec<&'a AmlNamespaceEntry> {
+    let query_key = simplify_aml_lookup(query);
+    let query_key_no_root = query_key.trim_start_matches('\\');
+
+    let mut exact = Vec::new();
+    for entry in entries {
+        let entry_key = simplify_aml_lookup(&entry.path);
+        if entry_key == query_key || entry_key.trim_start_matches('\\') == query_key_no_root {
+            exact.push(entry);
+        }
+    }
+    if !exact.is_empty() {
+        return exact;
+    }
+
+    entries
+        .iter()
+        .filter(|entry| {
+            let entry_key = simplify_aml_lookup(&entry.path);
+            entry_key.ends_with(&query_key) || entry_key.trim_start_matches('\\').ends_with(query_key_no_root)
+        })
+        .collect()
+}
+
+fn aml_handle_paths(entries: &[AmlNamespaceEntry]) -> BTreeMap<aml::AmlHandle, Vec<String>> {
+    let mut out: BTreeMap<aml::AmlHandle, Vec<String>> = BTreeMap::new();
+    for entry in entries {
+        out.entry(entry.handle).or_default().push(entry.path.clone());
+    }
+    out
+}
+
+fn aml_object_kind(value: &aml::value::AmlValue, alias: bool) -> &'static str {
+    if alias {
+        return "Alias";
+    }
+
+    match value {
+        aml::value::AmlValue::Method { .. } => "Method",
+        aml::value::AmlValue::Field { .. } => "OperationRegion field",
+        aml::value::AmlValue::BufferField { .. } => "Field",
+        _ => "Name",
+    }
+}
+
+fn find_all_subslice_offsets(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return Vec::new();
+    }
+
+    let mut offsets = Vec::new();
+    for offset in 0..=haystack.len() - needle.len() {
+        if &haystack[offset..offset + needle.len()] == needle {
+            offsets.push(offset);
+        }
+    }
+    offsets
+}
+
+fn aml_leaf_bytes(path: &str) -> Option<[u8; 4]> {
+    let leaf = path.rsplit('.').next()?.trim_start_matches('\\');
+    if leaf.len() != 4 {
+        return None;
+    }
+    let bytes = leaf.as_bytes();
+    Some([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+fn find_aml_definition_hits(path: &str, tables: &[AmlTableRecord]) -> Vec<AmlDefinitionHit> {
+    let Some(leaf) = aml_leaf_bytes(path) else {
+        return Vec::new();
+    };
+
+    let mut hits = Vec::new();
+    for table in tables {
+        if table.bytes.len() <= crate::efi::acpi::SDT_HEADER_LEN {
+            continue;
+        }
+
+        let aml = &table.bytes[crate::efi::acpi::SDT_HEADER_LEN..];
+        for aml_offset in find_all_subslice_offsets(aml, &leaf) {
+            hits.push(AmlDefinitionHit {
+                table_label: table.label.clone(),
+                table_phys: table.phys,
+                aml_offset,
+            });
+        }
+    }
+    hits
+}
+
+fn find_aml_method_refs(
+    ctx: &aml::AmlContext,
+    entries: &[AmlNamespaceEntry],
+    path: &str,
+) -> Vec<AmlMethodReferenceHit> {
+    let Some(leaf) = aml_leaf_bytes(path) else {
+        return Vec::new();
+    };
+
+    let mut refs = Vec::new();
+    for entry in entries {
+        let Ok(value) = ctx.namespace.get(entry.handle) else {
+            continue;
+        };
+        let aml::value::AmlValue::Method { code, .. } = value else {
+            continue;
+        };
+        let aml::value::MethodCode::Aml(code) = code else {
+            continue;
+        };
+        let offsets = find_all_subslice_offsets(code, &leaf);
+        if !offsets.is_empty() {
+            refs.push(AmlMethodReferenceHit {
+                method_path: entry.path.clone(),
+                offsets,
+            });
+        }
+    }
+    refs
+}
+
+fn append_hex_dump(out: &mut String, bytes: &[u8]) {
+    for (row, chunk) in bytes.chunks(ACPI_HEXDUMP_ROW_BYTES).enumerate() {
+        let offset = row.saturating_mul(ACPI_HEXDUMP_ROW_BYTES);
+        let mut hex = String::new();
+        let mut ascii = String::new();
+        for index in 0..ACPI_HEXDUMP_ROW_BYTES {
+            if index < chunk.len() {
+                let byte = chunk[index];
+                if index != 0 {
+                    hex.push(' ');
+                }
+                write!(hex, "{:02X}", byte).unwrap();
+                ascii.push(if byte.is_ascii_graphic() || byte == b' ' {
+                    byte as char
+                } else {
+                    '.'
+                });
+            } else {
+                if index != 0 {
+                    hex.push(' ');
+                }
+                hex.push_str("  ");
+                ascii.push(' ');
+            }
+        }
+        writeln!(out, "0x{:04X}  {}  |{}|", offset, hex, ascii).unwrap();
+    }
+}
+
+fn append_table_header_details(out: &mut String, bytes: &[u8]) {
+    if bytes.len() < crate::efi::acpi::SDT_HEADER_LEN {
+        writeln!(out, "  Header: unavailable (short table)").unwrap();
+        return;
+    }
+
+    let signature_text = format_acpi_text_field(&bytes[0..4]);
+    let length = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    let revision = bytes[8];
+    let checksum = bytes[9];
+    let oem_id = format_acpi_text_field(&bytes[10..16]);
+    let table_id = format_acpi_text_field(&bytes[16..24]);
+    let oem_revision = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
+    let creator_id = format_acpi_text_field(&bytes[28..32]);
+    let creator_revision = u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]);
+
+    writeln!(out, "  Signature: {}", signature_text).unwrap();
+    writeln!(out, "  Length: {} bytes (0x{:X})", length, length).unwrap();
+    writeln!(out, "  Revision: {}", revision).unwrap();
+    writeln!(out, "  Checksum: 0x{:02X}", checksum).unwrap();
+    writeln!(out, "  OEM ID: {}", oem_id).unwrap();
+    writeln!(out, "  Table ID: {}", table_id).unwrap();
+    writeln!(out, "  OEM Revision: 0x{:08X}", oem_revision).unwrap();
+    writeln!(out, "  Creator ID: {}", creator_id).unwrap();
+    writeln!(out, "  Creator Revision: 0x{:08X}", creator_revision).unwrap();
+}
+
+fn append_aml_dump(out: &mut String, bytes: &[u8], max_bytes: usize) {
+    if bytes.len() <= crate::efi::acpi::SDT_HEADER_LEN {
+        writeln!(out, "  AML payload: empty").unwrap();
+        return;
+    }
+
+    let aml = &bytes[crate::efi::acpi::SDT_HEADER_LEN..];
+    let shown = aml.len().min(max_bytes);
+    writeln!(out, "  AML dump: showing {} of {} bytes", shown, aml.len()).unwrap();
+    append_hex_dump(out, &aml[..shown]);
+    if shown < aml.len() {
+        writeln!(out, "  ... truncated, {} AML bytes not shown", aml.len() - shown).unwrap();
+    }
+}
+
+fn append_acpi_table_dump(
+    out: &mut String,
+    label: &str,
+    phys: usize,
+    bytes: &[u8],
+    dump_aml: bool,
+    max_bytes: usize,
+) {
+    writeln!(out, "{} @ 0x{:016X}", label, phys).unwrap();
+    append_table_header_details(out, bytes);
+    if dump_aml {
+        append_aml_dump(out, bytes, max_bytes);
+    } else {
+        let shown = bytes.len().min(max_bytes);
+        writeln!(out, "  Raw dump: showing {} of {} bytes", shown, bytes.len()).unwrap();
+        append_hex_dump(out, &bytes[..shown]);
+        if shown < bytes.len() {
+            writeln!(out, "  ... truncated, {} bytes not shown", bytes.len() - shown).unwrap();
+        }
+    }
+    writeln!(out).unwrap();
+}
+
+fn append_ssdt_dump_text(out: &mut String) {
+    let Some(tables) = crate::efi::acpi::ensure_tables() else {
+        writeln!(out, "tlb ssdt: no tables found").unwrap();
+        return;
+    };
+
+    if let Some(fadt_mapping) = tables.find_table::<Fadt>() {
+        let fadt_ref = unsafe { fadt_mapping.virtual_start.as_ref() };
+        writeln!(out, "FADT/FACP @ 0x{:016X}", fadt_mapping.physical_start).unwrap();
+        match fadt_ref.dsdt_address() {
+            Ok(dsdt_phys) => {
+                writeln!(out, "  DSDT address: 0x{:016X}", dsdt_phys).unwrap();
+                if let Some(bytes) = crate::efi::acpi::map_table_bytes(dsdt_phys) {
+                    writeln!(out).unwrap();
+                    append_acpi_table_dump(
+                        out,
+                        "DSDT (from FADT)",
+                        dsdt_phys,
+                        bytes,
+                        true,
+                        ACPI_AML_DUMP_MAX_BYTES,
+                    );
+                } else {
+                    writeln!(out, "  DSDT map failed").unwrap();
+                    writeln!(out).unwrap();
+                }
+            }
+            Err(err) => {
+                writeln!(out, "  DSDT address unavailable: {:?}", err).unwrap();
+                writeln!(out).unwrap();
+            }
+        }
+    } else {
+        writeln!(out, "FADT/FACP not found; cannot resolve DSDT from FADT").unwrap();
+        writeln!(out).unwrap();
+    }
+
+    writeln!(out, "Scanning for SSDT tables (Secondary System Description Table)...").unwrap();
+    writeln!(out).unwrap();
+
+    let mut count = 0usize;
+    for (phys, hdr) in tables.table_headers() {
+        if hdr.signature.as_str() != "SSDT" {
+            continue;
+        }
+
+        count = count.saturating_add(1);
+        if let Some(bytes) = crate::efi::acpi::map_table_bytes(phys) {
+            append_acpi_table_dump(
+                out,
+                alloc::format!("SSDT #{}", count).as_str(),
+                phys,
+                bytes,
+                true,
+                ACPI_AML_DUMP_MAX_BYTES,
+            );
+        } else {
+            writeln!(out, "SSDT #{} @ 0x{:016X}", count, phys).unwrap();
+            writeln!(out, "  Map failed").unwrap();
+            writeln!(out).unwrap();
+        }
+    }
+
+    if count == 0 {
+        writeln!(out, "No SSDT tables found.").unwrap();
+    } else {
+        writeln!(out, "Found {} SSDT tables.", count).unwrap();
     }
 }
 
@@ -618,7 +1279,7 @@ fn cmd_tlb_cpu(io: &'static dyn ShellBackend2) {
     }
 }
 
-fn cmd_tlb_acpi(io: &'static dyn ShellBackend2) {
+fn cmd_tlb_acpi_list(io: &'static dyn ShellBackend2) {
     let Some(tables) = crate::efi::acpi::ensure_tables() else {
         line(io, "tlb acpi: no tables found");
         return;
@@ -735,6 +1396,111 @@ fn cmd_tlb_acpi(io: &'static dyn ShellBackend2) {
     }
 }
 
+fn cmd_tlb_acpi_dump(io: &'static dyn ShellBackend2, signature: &str, index: usize) {
+    let Some(tables) = crate::efi::acpi::ensure_tables() else {
+        line(io, "tlb acpi: no tables found");
+        return;
+    };
+
+    let mut seen = 0usize;
+    for (phys, hdr) in tables.table_headers() {
+        if hdr.signature.as_str() != signature {
+            continue;
+        }
+
+        seen = seen.saturating_add(1);
+        if seen != index {
+            continue;
+        }
+
+        let Some(bytes) = crate::efi::acpi::map_table_bytes(phys) else {
+            line(
+                io,
+                alloc::format!(
+                    "tlb acpi: failed to map {} #{} @ 0x{:016X}",
+                    signature,
+                    index,
+                    phys
+                )
+                .as_str(),
+            );
+            return;
+        };
+
+        if bytes.len() < crate::efi::acpi::SDT_HEADER_LEN {
+            line(
+                io,
+                alloc::format!(
+                    "tlb acpi: {} #{} @ 0x{:016X} is shorter than an SDT header",
+                    signature,
+                    index,
+                    phys
+                )
+                .as_str(),
+            );
+            return;
+        }
+
+        emit_acpi_table_dump(
+            io,
+            alloc::format!("ACPI {} #{}", signature, index).as_str(),
+            phys,
+            bytes,
+            false,
+            ACPI_HEXDUMP_MAX_BYTES,
+        );
+        return;
+    }
+
+    if seen == 0 {
+        line(
+            io,
+            alloc::format!("tlb acpi: no {} tables found", signature).as_str(),
+        );
+    } else {
+        line(
+            io,
+            alloc::format!(
+                "tlb acpi: {} #{} not found (only {} table(s) matched)",
+                signature,
+                index,
+                seen
+            )
+            .as_str(),
+        );
+    }
+}
+
+fn cmd_tlb_acpi(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(raw_signature) = args.next() else {
+        cmd_tlb_acpi_list(io);
+        return;
+    };
+
+    let Some(signature) = parse_acpi_signature(raw_signature) else {
+        line(io, TLB_ACPI_USAGE);
+        return;
+    };
+
+    let index = match args.next() {
+        None => 1usize,
+        Some(raw_index) => match raw_index.parse::<usize>() {
+            Ok(value) if value != 0 => value,
+            _ => {
+                line(io, TLB_ACPI_USAGE);
+                return;
+            }
+        },
+    };
+
+    if args.next().is_some() {
+        line(io, TLB_ACPI_USAGE);
+        return;
+    }
+
+    cmd_tlb_acpi_dump(io, signature.as_str(), index);
+}
+
 fn cmd_tlb_facp(io: &'static dyn ShellBackend2) {
     let Some(tables) = crate::efi::acpi::ensure_tables() else {
         line(io, "tlb facp: no tables found");
@@ -839,36 +1605,60 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
         return;
     };
 
+    let fadt = tables.find_table::<Fadt>();
+    if let Some(fadt_mapping) = fadt {
+        let fadt_ref = unsafe { fadt_mapping.virtual_start.as_ref() };
+        line(
+            io,
+            alloc::format!("FADT/FACP @ 0x{:016X}", fadt_mapping.physical_start).as_str(),
+        );
+        match fadt_ref.dsdt_address() {
+            Ok(dsdt_phys) => {
+                line(io, alloc::format!("  DSDT address: 0x{:016X}", dsdt_phys).as_str());
+                if let Some(bytes) = crate::efi::acpi::map_table_bytes(dsdt_phys) {
+                    blank(io);
+                    emit_acpi_table_dump(io, "DSDT (from FADT)", dsdt_phys, bytes, true, ACPI_AML_DUMP_MAX_BYTES);
+                } else {
+                    line(io, "  DSDT map failed");
+                    blank(io);
+                }
+            }
+            Err(err) => {
+                line(io, alloc::format!("  DSDT address unavailable: {:?}", err).as_str());
+                blank(io);
+            }
+        }
+    } else {
+        line(io, "FADT/FACP not found; cannot resolve DSDT from FADT");
+        blank(io);
+    }
+
     line(io, "Scanning for SSDT tables (Secondary System Description Table)...");
     blank(io);
 
-    let mut count = 0;
+    let mut count = 0usize;
     for (phys, hdr) in tables.table_headers() {
         if hdr.signature.as_str() == "SSDT" {
-            count += 1;
-            let length = hdr.length;
-            let revision = hdr.revision;
-            line(io, alloc::format!("SSDT #{} @ 0x{:08X}", count, phys).as_str());
-            line(io, alloc::format!("  Length: {} bytes", length).as_str());
-            line(io, alloc::format!("  Revision: {}", revision).as_str());
-            line(
+            count = count.saturating_add(1);
+            let Some(bytes) = crate::efi::acpi::map_table_bytes(phys) else {
+                line(
+                    io,
+                    alloc::format!("SSDT #{} @ 0x{:016X}", count, phys).as_str(),
+                );
+                line(io, "  Map failed");
+                blank(io);
+                continue;
+            };
+
+            let _ = hdr;
+            emit_acpi_table_dump(
                 io,
-                alloc::format!(
-                    "  OEM ID: {}",
-                    core::str::from_utf8(&hdr.oem_id).unwrap_or("      ")
-                )
-                .as_str(),
+                alloc::format!("SSDT #{}", count).as_str(),
+                phys,
+                bytes,
+                true,
+                ACPI_AML_DUMP_MAX_BYTES,
             );
-            line(
-                io,
-                alloc::format!(
-                    "  Table ID: {}",
-                    core::str::from_utf8(&hdr.oem_table_id).unwrap_or("        ")
-                )
-                .as_str(),
-            );
-            line(io, "  (Raw AML content not dumped/parsed in 'best effort' mode)");
-            blank(io);
         }
     }
 
@@ -876,6 +1666,180 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
         line(io, "No SSDT tables found.");
     } else {
         line(io, alloc::format!("Found {} SSDT tables.", count).as_str());
+    }
+}
+
+fn cmd_tlb_aml_prefix(io: &'static dyn ShellBackend2, prefix: &str) {
+    let Ok((mut ctx, _tables)) = build_aml_context() else {
+        line(io, "tlb aml: failed to build AML namespace");
+        return;
+    };
+    let Ok(entries) = collect_aml_namespace_entries(&mut ctx) else {
+        line(io, "tlb aml: failed to traverse AML namespace");
+        return;
+    };
+
+    let prefix_key = simplify_aml_lookup(prefix);
+    let matches: Vec<_> = entries
+        .iter()
+        .filter(|entry| simplify_aml_lookup(&entry.path).starts_with(&prefix_key))
+        .collect();
+
+    if matches.is_empty() {
+        line(io, alloc::format!("tlb aml prefix: no symbols matched {}", prefix).as_str());
+        return;
+    }
+
+    let handle_paths = aml_handle_paths(&entries);
+    for entry in matches {
+        let alias = handle_paths
+            .get(&entry.handle)
+            .map(|paths| paths.len() > 1 && paths.first().map(String::as_str) != Some(entry.path.as_str()))
+            .unwrap_or(false);
+        let kind = ctx
+            .namespace
+            .get(entry.handle)
+            .map(|value| aml_object_kind(value, alias))
+            .unwrap_or("Name");
+        line(io, alloc::format!("{} [{}]", entry.path, kind).as_str());
+    }
+}
+
+fn cmd_tlb_aml_symbol(io: &'static dyn ShellBackend2, query: &str) {
+    let Ok((mut ctx, tables)) = build_aml_context() else {
+        line(io, "tlb aml: failed to build AML namespace");
+        return;
+    };
+    let Ok(entries) = collect_aml_namespace_entries(&mut ctx) else {
+        line(io, "tlb aml: failed to traverse AML namespace");
+        return;
+    };
+
+    let matches = find_aml_entries(&entries, query);
+    if matches.is_empty() {
+        line(io, alloc::format!("tlb aml symbol: no symbol matched {}", query).as_str());
+        return;
+    }
+    if matches.len() > 1 {
+        line(io, alloc::format!("tlb aml symbol: {} was ambiguous", query).as_str());
+        for entry in matches {
+            line(io, alloc::format!("  {}", entry.path).as_str());
+        }
+        return;
+    }
+
+    let entry = matches[0];
+    let handle_paths = aml_handle_paths(&entries);
+    let alias_paths = handle_paths.get(&entry.handle).cloned().unwrap_or_default();
+    let alias = alias_paths.len() > 1 && alias_paths.first().map(String::as_str) != Some(entry.path.as_str());
+    let Ok(value) = ctx.namespace.get(entry.handle) else {
+        line(io, "tlb aml symbol: failed to read AML object");
+        return;
+    };
+
+    let kind = aml_object_kind(value, alias);
+    let enclosing_scope = aml::AmlName::from_str(&entry.path)
+        .ok()
+        .and_then(|path| path.parent().ok())
+        .map(|path| path.as_string())
+        .unwrap_or_else(|| String::from("\\"));
+
+    line(io, alloc::format!("Symbol: {}", entry.path).as_str());
+    line(io, alloc::format!("  Object type: {}", kind).as_str());
+    line(io, alloc::format!("  Enclosing scope: {}", enclosing_scope).as_str());
+
+    let def_hits = find_aml_definition_hits(&entry.path, &tables);
+    if def_hits.is_empty() {
+        line(io, "  AML offset: no obvious definition hit found");
+    } else {
+        for hit in def_hits.iter().take(8) {
+            line(
+                io,
+                alloc::format!(
+                    "  AML offset candidate: {} @ 0x{:016X} + 0x{:X}",
+                    hit.table_label,
+                    hit.table_phys,
+                    hit.aml_offset
+                )
+                .as_str(),
+            );
+        }
+        if def_hits.len() > 8 {
+            line(io, alloc::format!("  ... {} more candidate hits", def_hits.len() - 8).as_str());
+        }
+    }
+
+    if alias_paths.len() > 1 {
+        line(io, "  Aliases / shared handle:");
+        for path in alias_paths {
+            line(io, alloc::format!("    {}", path).as_str());
+        }
+    }
+
+    let refs = find_aml_method_refs(&ctx, &entries, &entry.path);
+    if refs.is_empty() {
+        line(io, "  Methods that reference it: none found by raw-byte scan");
+    } else {
+        line(io, "  Methods that reference it:");
+        for method_ref in refs {
+            let offsets = method_ref
+                .offsets
+                .iter()
+                .map(|offset| alloc::format!("0x{:X}", offset))
+                .collect::<Vec<_>>()
+                .join(", ");
+            line(
+                io,
+                alloc::format!("    {} @ {}", method_ref.method_path, offsets).as_str(),
+            );
+        }
+    }
+}
+
+fn cmd_tlb_aml_ec(io: &'static dyn ShellBackend2) {
+    const PREFIX: &str = "\\_SB.PC00.LPCBH_EC";
+    const TARGETS: [&str; 4] = [
+        "\\_SB.PC00.LPCBH_ECECAV",
+        "\\_SB.PC00.LPCBH_ECECMD",
+        "\\_SB.PC00.LPCBH_ECECWT",
+        "\\_SB.PC00.LPCBH_ECECRD",
+    ];
+
+    line(io, alloc::format!("AML prefix scan for {}", PREFIX).as_str());
+    cmd_tlb_aml_prefix(io, PREFIX);
+    blank(io);
+    for target in TARGETS {
+        cmd_tlb_aml_symbol(io, target);
+        blank(io);
+    }
+}
+
+fn cmd_tlb_aml(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    match args.next() {
+        Some("ec") if ensure_no_args(io, args, "tlb: usage `tlb aml ec`") => cmd_tlb_aml_ec(io),
+        Some("symbol") => {
+            let Some(path) = args.next() else {
+                line(io, TLB_AML_USAGE);
+                return;
+            };
+            if args.next().is_some() {
+                line(io, TLB_AML_USAGE);
+                return;
+            }
+            cmd_tlb_aml_symbol(io, path);
+        }
+        Some("prefix") => {
+            let Some(prefix) = args.next() else {
+                line(io, TLB_AML_USAGE);
+                return;
+            };
+            if args.next().is_some() {
+                line(io, TLB_AML_USAGE);
+                return;
+            }
+            cmd_tlb_aml_prefix(io, prefix);
+        }
+        _ => line(io, TLB_AML_USAGE),
     }
 }
 
@@ -1179,6 +2143,10 @@ pub(crate) fn build_dump_text() -> String {
     }
     writeln!(out).unwrap();
 
+    writeln!(out, "=== ACPI AML ===").unwrap();
+    append_ssdt_dump_text(&mut out);
+    writeln!(out).unwrap();
+
     writeln!(out, "=== MCFG ===").unwrap();
     if let Some(tables) = crate::efi::acpi::ensure_tables() {
         if let Some(mcfg) = tables.find_table::<Mcfg>() {
@@ -1422,7 +2390,8 @@ pub(crate) fn try_parse(
         }
         Some("mem") if ensure_no_args(io, args, "tlb: usage `tlb mem`") => cmd_tlb_mem(io),
         Some("cpu") if ensure_no_args(io, args, "tlb: usage `tlb cpu`") => cmd_tlb_cpu(io),
-        Some("acpi") if ensure_no_args(io, args, "tlb: usage `tlb acpi`") => cmd_tlb_acpi(io),
+        Some("acpi") => cmd_tlb_acpi(io, args),
+        Some("aml") => cmd_tlb_aml(io, args),
         Some("facp") if ensure_no_args(io, args, "tlb: usage `tlb facp`") => cmd_tlb_facp(io),
         Some("madt") if ensure_no_args(io, args, "tlb: usage `tlb madt`") => cmd_tlb_madt(io),
         Some("hpet") if ensure_no_args(io, args, "tlb: usage `tlb hpet`") => cmd_tlb_hpet(io),
