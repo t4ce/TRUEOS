@@ -26,6 +26,12 @@ pub fn uptime_seconds() -> u64 {
     if hz == 0 { 0 } else { ticks / hz }
 }
 
+#[inline]
+pub fn tsc_hz() -> u64 {
+    init_once();
+    TSC_HZ.load(Ordering::Relaxed).max(1)
+}
+
 /// Best-effort Unix time (seconds since epoch).
 ///
 /// Uses Limine's boot timestamp (wall clock at boot) plus monotonic uptime.

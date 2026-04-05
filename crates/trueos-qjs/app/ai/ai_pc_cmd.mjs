@@ -465,6 +465,13 @@ export function buildAiPcShellCommandArgs(toolName, args = {}) {
         pushArg(argv, 'probe');
       } else {
         pushArg(argv, args?.target);
+        if (args?.target === 'acpi') {
+          pushArg(argv, args?.signature);
+          pushArg(argv, args?.index);
+        } else if (args?.target === 'aml') {
+          pushArg(argv, args?.subcommand);
+          pushArg(argv, args?.path);
+        }
       }
       break;
     case 'turbo':

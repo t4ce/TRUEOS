@@ -20,6 +20,9 @@ pub mod sleep;
 // pub mod ssdt;
 // pub mod tpm2;
 // pub mod dmar;
+
+pub(crate) const SDT_HEADER_LEN: usize = 36;
+
 static ACPI_TABLES: Once<Option<AcpiTables<AcpiIdentityHandler>>> = Once::new();
 
 pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>> {
@@ -59,6 +62,17 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
     });
 
     ACPI_TABLES.get().and_then(|tables| tables.as_ref())
+}
+
+pub(crate) fn map_table_bytes(phys: usize) -> Option<&'static [u8]> {
+    let hdr_ptr = mmio::map_mmio_region_exact(phys as u64, SDT_HEADER_LEN).ok()?;
+    let hdr = unsafe { core::slice::from_raw_parts(hdr_ptr.as_ptr(), SDT_HEADER_LEN) };
+    let len = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
+    if len < SDT_HEADER_LEN {
+        return None;
+    }
+    let ptr = mmio::map_mmio_region_exact(phys as u64, len).ok()?;
+    Some(unsafe { core::slice::from_raw_parts(ptr.as_ptr(), len) })
 }
 
 #[derive(Clone, Copy)]
