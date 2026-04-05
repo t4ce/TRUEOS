@@ -167,6 +167,7 @@ define_started_flags!(
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
     SMTP_SMOKE_STARTED,
+    MMIO_ONESHOT_PROBE_STARTED,
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
@@ -817,6 +818,10 @@ fn spawn_smtp_smoke(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(crate::tst_smtp_smoke::smtp_smoke_task()))
 }
 
+fn spawn_mmio_oneshot_probe(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(crate::r::mmio_probe::oneshot_mmio_probe_task()))
+}
+
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         spawner.spawn(crate::shell2::task(spawner, &crate::shell2::UART1_COM1_BACKEND))
@@ -1088,6 +1093,12 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
     TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
     TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
+    TaskSpec::enabled(
+        "mmio-oneshot-probe",
+        0,
+        &MMIO_ONESHOT_PROBE_STARTED,
+        spawn_mmio_oneshot_probe,
+    ),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
     TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),

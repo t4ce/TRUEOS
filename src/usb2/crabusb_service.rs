@@ -378,6 +378,7 @@ pub async fn event_pump_task(controller_id: usize) {
 
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn bsp_service(controller_index: usize) {
+    const USB_BRINGUP_ENABLED: bool = false;
     const BOOT_USB_DEFER_MS: u64 = 15_000;
     const RETRY_MS: u64 = 1000;
     const INTEL_PROBE_SETTLE_MS: u64 = 1500;
@@ -385,6 +386,17 @@ pub async fn bsp_service(controller_index: usize) {
     let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
 
     loop {
+        if !USB_BRINGUP_ENABLED {
+            if !BOOT_DEFER_DONE[controller_index].swap(true, Ordering::AcqRel) {
+                crate::log!(
+                    "crabusb: controller {} USB bring-up disabled; skipping host init\n",
+                    controller_index
+                );
+            }
+            Timer::after(EmbassyDuration::from_millis(RETRY_MS)).await;
+            continue;
+        }
+
         if !BOOT_DEFER_DONE[controller_index].swap(true, Ordering::AcqRel) {
             crate::log!(
                 "crabusb: controller {} boot defer before USB bring-up; waiting {}ms\n",

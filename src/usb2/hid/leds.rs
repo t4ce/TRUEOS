@@ -12,7 +12,7 @@ const LED_TEST_RED: u8 = 0xFF;
 const LED_TEST_GREEN: u8 = 0x37;
 const LED_TEST_BLUE: u8 = 0xFF;
 const LED_COMMIT_REPORT: [u8; 7] = [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-const LED_STEP_PAUSE_MS: u64 = 1200;
+const LED_SWEEP_PERIOD_MS: u64 = 250;
 const LED_FEATURE_REPORT_ID: u8 = 4;
 const LED_FEATURE_REPORT_LEN: usize = 301;
 const LED_FEATURE_BACKING_LEN: usize = 512;
@@ -22,14 +22,6 @@ const LED_ENABLE_EARLY_FEATURE_GET_REPORT: bool = false;
 struct LedProbeTarget {
 	configuration_value: u8,
 	interface_number: u8,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct LedExperimentStep {
-	label: &'static str,
-	id5: [u8; 7],
-	id6: [u8; 7],
-	pause_ms: u64,
 }
 
 #[inline]
@@ -70,9 +62,8 @@ fn pick_led_probe_target(configs: &[usb_if::descriptor::ConfigurationDescriptor]
 
 #[inline]
 pub(crate) fn should_share_probe_device(dev_info: &DeviceInfo) -> bool {
-	let desc = dev_info.descriptor();
-	is_supported_led_controller(desc.vendor_id, desc.product_id)
-		&& pick_led_probe_target(dev_info.configurations()).is_some()
+	let _ = dev_info;
+	false
 }
 
 async fn send_hid_set_report(
@@ -275,127 +266,76 @@ async fn log_led_live_state(device: &mut Device, target: LedProbeTarget) -> bool
 }
 
 #[inline]
-const fn led_payload(zone: u8, red: u8, green: u8, blue: u8, field_64: u8) -> [u8; 7] {
-	[zone, red, green, blue, field_64, 0x01, 0x00]
+const fn bit01(phase: u8, bit: u8) -> u8 {
+	(phase >> bit) & 0x01
 }
 
-const LED_EXPERIMENT_STEPS: [LedExperimentStep; 10] = [
-	LedExperimentStep {
-		label: "baseline-zero-both",
-		id5: led_payload(0xFF, 0x00, 0x00, 0x00, 0x64),
-		id6: led_payload(0xFF, 0x00, 0x00, 0x00, 0x64),
-		pause_ms: LED_STEP_PAUSE_MS,
-	},
-	LedExperimentStep {
-		label: "id5-red-id6-zero",
-		id5: led_payload(0xFF, 0xFF, 0x00, 0x00, 0x64),
-		id6: led_payload(0xFF, 0x00, 0x00, 0x00, 0x64),
-		pause_ms: LED_STEP_PAUSE_MS,
-	},
-	LedExperimentStep {
-		label: "id5-green-id6-zero",
-		id5: led_payload(0xFF, 0x00, 0xFF, 0x00, 0x64),
-		id6: led_payload(0xFF, 0x00, 0x00, 0x00, 0x64),
-		pause_ms: LED_STEP_PAUSE_MS,
-	},
-	LedExperimentStep {
-		label: "id5-blue-id6-zero",
-		id5: led_payload(0xFF, 0x00, 0x00, 0xFF, 0x64),
-		id6: led_payload(0xFF, 0x00, 0x00, 0x00, 0x64),
-		pause_ms: LED_STEP_PAUSE_MS,
-	},
-	LedExperimentStep {
-		label: "id5-red-field00-id6-zero",
-		id5: led_payload(0xFF, 0xFF, 0x00, 0x00, 0x00),
-		id6: led_payload(0xFF, 0x00, 0x00, 0x00, 0x64),
-		pause_ms: LED_STEP_PAUSE_MS,
-	},
-	LedExperimentStep {
-		label: "id6-red-id5-zero",
-		id5: led_payload(0xFF, 0x00, 0x00, 0x00, 0x64),
-		id6: led_payload(0xFF, 0xFF, 0x00, 0x00, 0x64),
-		pause_ms: LED_STEP_PAUSE_MS,
-	},
-	LedExperimentStep {
-		label: "id6-green-id5-zero",
-		id5: led_payload(0xFF, 0x00, 0x00, 0x00, 0x64),
-		id6: led_payload(0xFF, 0x00, 0xFF, 0x00, 0x64),
-		pause_ms: LED_STEP_PAUSE_MS,
-	},
-	LedExperimentStep {
-		label: "id6-blue-id5-zero",
-		id5: led_payload(0xFF, 0x00, 0x00, 0x00, 0x64),
-		id6: led_payload(0xFF, 0x00, 0x00, 0xFF, 0x64),
-		pause_ms: LED_STEP_PAUSE_MS,
-	},
-	LedExperimentStep {
-		label: "id6-red-field00-id5-zero",
-		id5: led_payload(0xFF, 0x00, 0x00, 0x00, 0x64),
-		id6: led_payload(0xFF, 0xFF, 0x00, 0x00, 0x00),
-		pause_ms: LED_STEP_PAUSE_MS,
-	},
-	LedExperimentStep {
-		label: "magenta-both",
-		id5: led_payload(0xFF, LED_TEST_RED, LED_TEST_GREEN, LED_TEST_BLUE, 0x64),
-		id6: led_payload(0xFF, LED_TEST_RED, LED_TEST_GREEN, LED_TEST_BLUE, 0x64),
-		pause_ms: 0,
-	},
-];
+#[inline]
+fn led_binary_payload(phase: u8) -> [u8; 7] {
+	[
+		bit01(phase, 0),
+		bit01(phase, 1),
+		bit01(phase, 2),
+		bit01(phase, 3),
+		bit01(phase, 4),
+		bit01(phase, 5),
+		bit01(phase, 6),
+	]
+}
 
-async fn submit_led_step(
+async fn submit_led_phase(
 	device: &mut Device,
 	target: LedProbeTarget,
-	step_index: usize,
-	step: LedExperimentStep,
+	phase: u8,
 ) -> bool {
 	let desc = device.descriptor();
 	let vendor_id = desc.vendor_id;
 	let product_id = desc.product_id;
+	let payload = led_binary_payload(phase);
 
 	crate::log!(
-		"crabusb: leds {:04X}:{:04X} step={} label={} if#{} id5={:02X?} id6={:02X?} id1={:02X?}\n",
+		"crabusb: leds {:04X}:{:04X} phase={} binary-sweep if#{} id5={:02X?} id6={:02X?} id1={:02X?}\n",
 		vendor_id,
 		product_id,
-		step_index,
-		step.label,
+		phase,
 		target.interface_number,
-		step.id5,
-		step.id6,
+		payload,
+		payload,
 		LED_COMMIT_REPORT
 	);
 
-	match send_hid_set_report(device, target.interface_number, 5, &step.id5).await {
+	match send_hid_set_report(device, target.interface_number, 5, &payload).await {
 		Ok(()) => crate::log!(
-			"crabusb: leds {:04X}:{:04X} step={} id=5 submitted\n",
+			"crabusb: leds {:04X}:{:04X} phase={} id=5 submitted\n",
 			vendor_id,
 			product_id,
-			step_index
+			phase
 		),
 		Err(err) => {
 			crate::log!(
-				"crabusb: leds {:04X}:{:04X} step={} id=5 failed: {:?}\n",
+				"crabusb: leds {:04X}:{:04X} phase={} id=5 failed: {:?}\n",
 				vendor_id,
 				product_id,
-				step_index,
+				phase,
 				err
 			);
 			return false;
 		}
 	}
 
-	match send_hid_set_report(device, target.interface_number, 6, &step.id6).await {
+	match send_hid_set_report(device, target.interface_number, 6, &payload).await {
 		Ok(()) => crate::log!(
-			"crabusb: leds {:04X}:{:04X} step={} id=6 submitted\n",
+			"crabusb: leds {:04X}:{:04X} phase={} id=6 submitted\n",
 			vendor_id,
 			product_id,
-			step_index
+			phase
 		),
 		Err(err) => {
 			crate::log!(
-				"crabusb: leds {:04X}:{:04X} step={} id=6 failed: {:?}\n",
+				"crabusb: leds {:04X}:{:04X} phase={} id=6 failed: {:?}\n",
 				vendor_id,
 				product_id,
-				step_index,
+				phase,
 				err
 			);
 			return false;
@@ -404,17 +344,17 @@ async fn submit_led_step(
 
 	match send_hid_set_report(device, target.interface_number, 1, &LED_COMMIT_REPORT).await {
 		Ok(()) => crate::log!(
-			"crabusb: leds {:04X}:{:04X} step={} id=1 commit submitted\n",
+			"crabusb: leds {:04X}:{:04X} phase={} id=1 commit submitted\n",
 			vendor_id,
 			product_id,
-			step_index
+			phase
 		),
 		Err(err) => {
 			crate::log!(
-				"crabusb: leds {:04X}:{:04X} step={} id=1 commit failed: {:?}\n",
+				"crabusb: leds {:04X}:{:04X} phase={} id=1 commit failed: {:?}\n",
 				vendor_id,
 				product_id,
-				step_index,
+				phase,
 				err
 			);
 			return false;
@@ -422,12 +362,11 @@ async fn submit_led_step(
 	}
 
 	crate::log!(
-		"crabusb: leds {:04X}:{:04X} step={} label={} observe now pause_ms={}\n",
+		"crabusb: leds {:04X}:{:04X} phase={} observe now pause_ms={}\n",
 		vendor_id,
 		product_id,
-		step_index,
-		step.label,
-		step.pause_ms
+		phase,
+		LED_SWEEP_PERIOD_MS
 	);
 	true
 }
@@ -444,25 +383,25 @@ async fn led_probe_task(mut device: Device, target: LedProbeTarget) {
 	}
 
 	crate::log!(
-		"crabusb: leds {:04X}:{:04X} shared probe slot={} if#{} cfg={} matrix_steps={} commit={:02X?}\n",
+		"crabusb: leds {:04X}:{:04X} shared probe slot={} if#{} cfg={} binary_sweep=0..255 period_ms={} commit={:02X?}\n",
 		vendor_id,
 		product_id,
 		slot_id,
 		target.interface_number,
 		target.configuration_value,
-		LED_EXPERIMENT_STEPS.len(),
+		LED_SWEEP_PERIOD_MS,
 		LED_COMMIT_REPORT
 	);
 
 	read_led_feature_report_early(&mut device, target).await;
 
-	for (step_index, step) in LED_EXPERIMENT_STEPS.iter().copied().enumerate() {
-		if !submit_led_step(&mut device, target, step_index, step).await {
+	let mut phase = 0u8;
+	loop {
+		if !submit_led_phase(&mut device, target, phase).await {
 			return;
 		}
-		if step.pause_ms != 0 {
-			Timer::after(EmbassyDuration::from_millis(step.pause_ms)).await;
-		}
+		Timer::after(EmbassyDuration::from_millis(LED_SWEEP_PERIOD_MS)).await;
+		phase = phase.wrapping_add(1);
 	}
 }
 
@@ -472,47 +411,11 @@ pub(crate) async fn maybe_start_led_controller_with_device(
 	spawner: &Spawner,
 	controller_id: u32,
 ) -> bool {
+	let _ = device;
+	let _ = dev_info;
+	let _ = spawner;
 	let _ = controller_id;
-
-	let desc = dev_info.descriptor();
-	if !is_supported_led_controller(desc.vendor_id, desc.product_id) {
-		return false;
-	}
-
-	let Some(target) = pick_led_probe_target(dev_info.configurations()) else {
-		crate::log!(
-			"crabusb: leds {:04X}:{:04X} no HID out interface for shared probe\n",
-			desc.vendor_id,
-			desc.product_id
-		);
-		return true;
-	};
-
-	match spawner.spawn(led_probe_task(device, target)) {
-		Ok(()) => {
-			crate::log!(
-				"crabusb: leds {:04X}:{:04X} shared probe armed if#{} cfg={} matrix_steps={} final_rgb={},{},{}\n",
-				desc.vendor_id,
-				desc.product_id,
-				target.interface_number,
-				target.configuration_value,
-				LED_EXPERIMENT_STEPS.len(),
-				LED_TEST_RED,
-				LED_TEST_GREEN,
-				LED_TEST_BLUE
-			);
-		}
-		Err(err) => {
-			crate::log!(
-				"crabusb: leds {:04X}:{:04X} shared probe spawn failed: {:?}\n",
-				desc.vendor_id,
-				desc.product_id,
-				err
-			);
-		}
-	}
-
-	true
+	false
 }
 
 pub(crate) async fn maybe_start_led_controller(
@@ -521,34 +424,9 @@ pub(crate) async fn maybe_start_led_controller(
 	spawner: &Spawner,
 	controller_id: u32,
 ) -> bool {
-	let _ = controller_id;
 	let _ = host;
+	let _ = dev_info;
 	let _ = spawner;
-
-	let desc = dev_info.descriptor();
-	if !is_supported_led_controller(desc.vendor_id, desc.product_id) {
-		return false;
-	}
-
-	let Some(target) = pick_led_probe_target(dev_info.configurations()) else {
-		crate::log!(
-			"crabusb: leds {:04X}:{:04X} no HID out interface for minimal probe\n",
-			desc.vendor_id,
-			desc.product_id
-		);
-		return true;
-	};
-
-	crate::log!(
-		"crabusb: leds {:04X}:{:04X} candidate if#{} cfg={} rgb={},{},{} deferred: no probe-time reopen of stable HID leaf\n",
-		desc.vendor_id,
-		desc.product_id,
-		target.interface_number,
-		target.configuration_value,
-		LED_TEST_RED,
-		LED_TEST_GREEN,
-		LED_TEST_BLUE
-	);
-
-	true
+	let _ = controller_id;
+	false
 }
