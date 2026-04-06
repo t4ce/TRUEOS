@@ -6,13 +6,14 @@ use spin::Mutex;
 use super::VNet;
 
 const ESP_GATE_REGISTRY_MAX_DEVICES: usize = 64;
-const ESP_STATUS_FETCH_TIMEOUT_MS: u32 = 750;
+const ESP_STATUS_FETCH_TIMEOUT_MS: u32 = 3000;
 const ESP_STATUS_FETCH_MAX_RX: usize = 1024;
 const ESP_STATUS_POLL_MS: u64 = 1000;
 const ESP_DEFAULT_UPLOAD_TIMEOUT_MS: u32 = 3000;
 const ESP_DEFAULT_UPLOAD_MAX_RX: usize = 1024;
 const ESP_DEFAULT_APP_FILENAME: &str = "app.py";
-const ESP_DEFAULT_APP_BODY: &[u8] = include_bytes!("../../../crates/trueos-esp/iot/led.py");
+const ESP_DEFAULT_APP_BODY: &[u8] =
+    include_bytes!("../../../crates/trueos-esp/iot/1OktavePianoLed.py");
 
 static DEVICE_REGISTRY: Mutex<trueos_esp::gate::DeviceRegistry> =
     Mutex::new(trueos_esp::gate::DeviceRegistry::new(ESP_GATE_REGISTRY_MAX_DEVICES));

@@ -16,15 +16,14 @@ const TABLE_PAGE_MIN_NONZERO: usize = 6;
 const TABLE_PAGE_MIN_RUN: usize = 4;
 const VENDOR_TOGGLE_LOW: u32 = 0x8400_0200;
 const VENDOR_TOGGLE_HIGH: u32 = 0x8400_0201;
-const BLUE_LED_COUNT: usize = 32;
-const BLUE_WINDOW_STEPS: [u8; 7] = [0x08, 0x20, 0x60, 0xFF, 0x60, 0x20, 0x08];
-const BLUE_WINDOW_SWEEPS: usize = 4;
-const BLUE_FRAME_INTERVAL_MS: u64 = 100;
-const WS2812_T0H_NS: u64 = 350;
-const WS2812_T0L_NS: u64 = 900;
-const WS2812_T1H_NS: u64 = 700;
-const WS2812_T1L_NS: u64 = 600;
-const WS2812_RESET_NS: u64 = 80_000;
+const WAVE_LED_COUNT: usize = 32;
+const WAVE_STEPS: [u8; 9] = [0x00, 0x08, 0x20, 0x60, 0xFF, 0x60, 0x20, 0x08, 0x00];
+const WAVE_SWEEPS: usize = 6;
+const WAVE_FRAME_INTERVAL_MS: u64 = 100;
+const WS2812_BIT_TOTAL_NS: u64 = 1_250;
+const WS2812_T0H_NS: u64 = 400;
+const WS2812_T1H_NS: u64 = 800;
+const WS2812_RESET_NS: u64 = 300_000;
 
 #[derive(Clone, Copy)]
 struct PadEntry {
@@ -33,6 +32,13 @@ struct PadEntry {
     dw1: u32,
     dw2: u32,
     dw3: u32,
+}
+
+#[derive(Clone, Copy)]
+struct Rgb {
+    r: u8,
+    g: u8,
+    b: u8,
 }
 
 fn read_u32(base: *mut u8, offset: usize) -> u32 {
@@ -73,6 +79,10 @@ fn cycles_from_ns(tsc_hz: u64, ns: u64) -> u64 {
     (((tsc_hz as u128) * (ns as u128)) / 1_000_000_000u128) as u64
 }
 
+fn low_ns_from_high(high_ns: u64) -> u64 {
+    WS2812_BIT_TOTAL_NS.saturating_sub(high_ns).max(1)
+}
+
 fn busy_wait_cycles(cycles: u64) {
     if cycles == 0 {
         return;
@@ -94,9 +104,9 @@ fn send_ws2812_bit(mmio: *mut u8, low_value: u32, high_value: u32, tsc_hz: u64, 
         cycles_from_ns(tsc_hz, WS2812_T0H_NS)
     };
     let low_cycles = if bit_is_one {
-        cycles_from_ns(tsc_hz, WS2812_T1L_NS)
+        cycles_from_ns(tsc_hz, low_ns_from_high(WS2812_T1H_NS))
     } else {
-        cycles_from_ns(tsc_hz, WS2812_T0L_NS)
+        cycles_from_ns(tsc_hz, low_ns_from_high(WS2812_T0H_NS))
     };
 
     write_u32(mmio, 0, high_value);
@@ -118,33 +128,43 @@ fn send_ws2812_grb(mmio: *mut u8, low_value: u32, high_value: u32, tsc_hz: u64, 
     send_ws2812_byte(mmio, low_value, high_value, tsc_hz, b);
 }
 
-fn blue_window_level(led_idx: usize, frame_idx: usize) -> u8 {
-    let span = BLUE_LED_COUNT;
+fn build_wave_frame(frame_idx: usize) -> [Rgb; WAVE_LED_COUNT] {
+    let mut pixels = [
+        Rgb {
+            r: 0,
+            g: 0,
+            b: 0,
+        };
+        WAVE_LED_COUNT
+    ];
+    let span = WAVE_LED_COUNT;
     if span == 0 {
-        return 0;
+        return pixels;
     }
 
     let center = frame_idx % span;
-    let half = BLUE_WINDOW_STEPS.len() / 2;
-    for (step_idx, level) in BLUE_WINDOW_STEPS.iter().copied().enumerate() {
+    let half = WAVE_STEPS.len() / 2;
+    for (step_idx, level) in WAVE_STEPS.iter().copied().enumerate() {
         let pos = (center + span + step_idx - half) % span;
-        if pos == led_idx {
-            return level;
-        }
+        pixels[pos] = Rgb {
+            r: level / 6,
+            g: level / 8,
+            b: level,
+        };
     }
-    0
+    pixels
 }
 
-fn send_blue_window_frame(mmio: *mut u8, low_value: u32, high_value: u32, tsc_hz: u64, frame_idx: usize) {
+fn send_wave_frame(mmio: *mut u8, low_value: u32, high_value: u32, tsc_hz: u64, frame_idx: usize) {
     let reset_cycles = cycles_from_ns(tsc_hz, WS2812_RESET_NS).max(1);
+    let pixels = build_wave_frame(frame_idx);
 
     interrupts::without_interrupts(|| {
         write_u32(mmio, 0, low_value);
         busy_wait_cycles(reset_cycles);
 
-        for led_idx in 0..BLUE_LED_COUNT {
-            let blue = blue_window_level(led_idx, frame_idx);
-            send_ws2812_grb(mmio, low_value, high_value, tsc_hz, 0x00, 0x00, blue);
+        for pixel in pixels {
+            send_ws2812_grb(mmio, low_value, high_value, tsc_hz, pixel.g, pixel.r, pixel.b);
         }
 
         write_u32(mmio, 0, low_value);
@@ -152,9 +172,9 @@ fn send_blue_window_frame(mmio: *mut u8, low_value: u32, high_value: u32, tsc_hz
     });
 }
 
-async fn run_sliding_blue_window() {
+async fn run_wave_sender() {
     let Ok(mapped) = crate::pci::mmio::map_mmio_region_exact(TARGET_PHYS_ADDR, 4) else {
-        crate::log!("boot-probe:mmio: blue-window map failed target=0x{:016X}\n", TARGET_PHYS_ADDR);
+        crate::log!("boot-probe:mmio: wave map failed target=0x{:016X}\n", TARGET_PHYS_ADDR);
         return;
     };
 
@@ -162,14 +182,18 @@ async fn run_sliding_blue_window() {
     let low_value = live_dw0 & !1;
     let high_value = low_value | 1;
     let tsc_hz = crate::r::time::tsc_hz();
-    let total_frames = BLUE_LED_COUNT.saturating_mul(BLUE_WINDOW_SWEEPS);
+    let total_frames = WAVE_LED_COUNT.saturating_mul(WAVE_SWEEPS);
 
     crate::log!(
-        "boot-probe:mmio: blue-window start target=0x{:016X} led_count={} frames={} interval_ms={} low=0x{:08X} high=0x{:08X} live=0x{:08X} vendor_surface_match={} tsc_hz={}\n",
+        "boot-probe:mmio: wave start target=0x{:016X} led_count={} frames={} interval_ms={} bit_total_ns={} t0h_ns={} t1h_ns={} latch_low_us={} low=0x{:08X} high=0x{:08X} live=0x{:08X} vendor_surface_match={} tsc_hz={}\n",
         TARGET_PHYS_ADDR,
-        BLUE_LED_COUNT,
+        WAVE_LED_COUNT,
         total_frames,
-        BLUE_FRAME_INTERVAL_MS,
+        WAVE_FRAME_INTERVAL_MS,
+        WS2812_BIT_TOTAL_NS,
+        WS2812_T0H_NS,
+        WS2812_T1H_NS,
+        WS2812_RESET_NS / 1000,
         low_value,
         high_value,
         live_dw0,
@@ -178,14 +202,14 @@ async fn run_sliding_blue_window() {
     );
 
     for frame_idx in 0..total_frames {
-        send_blue_window_frame(mapped.as_ptr(), low_value, high_value, tsc_hz, frame_idx);
-        Timer::after(EmbassyDuration::from_millis(BLUE_FRAME_INTERVAL_MS)).await;
+        send_wave_frame(mapped.as_ptr(), low_value, high_value, tsc_hz, frame_idx);
+        Timer::after(EmbassyDuration::from_millis(WAVE_FRAME_INTERVAL_MS)).await;
     }
 
     crate::log!(
-        "boot-probe:mmio: blue-window done target=0x{:016X} led_count={} frames={} order=GRB pattern=sliding-blue-window\n",
+        "boot-probe:mmio: wave done target=0x{:016X} led_count={} frames={} order=GRB pattern=moving-wave\n",
         TARGET_PHYS_ADDR,
-        BLUE_LED_COUNT,
+        WAVE_LED_COUNT,
         total_frames
     );
 }
@@ -435,7 +459,7 @@ pub async fn oneshot_mmio_probe_task() {
         );
     }
 
-    run_sliding_blue_window().await;
+    run_wave_sender().await;
 
     crate::log!("boot-probe:mmio: structured probe done\n");
 }
