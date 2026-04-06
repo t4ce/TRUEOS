@@ -71,9 +71,9 @@ QEMU_UPDATE_TARGET_PCI ?= 0000:08:00.0
 QEMU_UPDATE_TARGET_FLAGS = -device vfio-pci,host=$(QEMU_UPDATE_TARGET_PCI),bus=pcie.0,addr=0x6
 
 QEMU_MOUSE1_HOSTBUS 	?= 3
-QEMU_MOUSE1_HOSTADDR 	?= 3
+QEMU_MOUSE1_HOSTADDR 	?= 5
 QEMU_MOUSE2_HOSTBUS 	?= 3
-QEMU_MOUSE2_HOSTADDR 	?= 4
+QEMU_MOUSE2_HOSTADDR 	?= 6
 
 QEMU_USB_HOST_FLAGS = \
 	-drive file=nvme.img,if=none,id=nvme \
@@ -85,8 +85,8 @@ QEMU_USB_HOST_FLAGS = \
 	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd  \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=5,id=usbaudio \
 	-device usb-host,hostbus=$(QEMU_MOUSE1_HOSTBUS),hostaddr=$(QEMU_MOUSE1_HOSTADDR),bus=xhci.0,port=6,id=usbmice \
-	-device usb-host,hostbus=$(QEMU_MOUSE2_HOSTBUS),hostaddr=$(QEMU_MOUSE2_HOSTADDR),bus=xhci.0,port=7,id=usbmice2 \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
+   -device usb-host,hostbus=$(QEMU_MOUSE2_HOSTBUS),hostaddr=$(QEMU_MOUSE2_HOSTADDR),bus=xhci.0,port=7,id=usbmice2 \
 
 #	-device usb-host,vendorid=0x22d4,productid=0x1321,bus=xhci.0,port=7,id=usbmice2 \
 #	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse  \
