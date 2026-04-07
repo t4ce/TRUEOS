@@ -1,4 +1,20 @@
 const CURSOR_TICK_SUPPRESS_AFTER_BASE_MS: u64 = 24;
+const CURSOR_HALF_SPAN_VIEWPORT_RATIO: f32 = 0.0065;
+const CURSOR_HALF_SPAN_MIN_PX: f32 = 6.0;
+const CURSOR_HALF_SPAN_MAX_PX: f32 = 12.0;
+const CURSOR_THICKNESS_RATIO: f32 = 0.22;
+const CURSOR_THICKNESS_MIN_PX: f32 = 1.0;
+const CURSOR_THICKNESS_MAX_PX: f32 = 3.0;
+
+#[inline]
+fn cursor_cross_metrics_px(vp_h: u32) -> (f32, f32) {
+    let viewport_h = (vp_h as f32).max(1.0);
+    let half_span_px = (viewport_h * CURSOR_HALF_SPAN_VIEWPORT_RATIO)
+        .clamp(CURSOR_HALF_SPAN_MIN_PX, CURSOR_HALF_SPAN_MAX_PX);
+    let half_thickness_px = (half_span_px * CURSOR_THICKNESS_RATIO)
+        .clamp(CURSOR_THICKNESS_MIN_PX, CURSOR_THICKNESS_MAX_PX);
+    (half_span_px, half_thickness_px)
+}
 
 #[inline]
 fn append_cursor_cross(
@@ -11,10 +27,11 @@ fn append_cursor_cross(
 ) {
     let w = (vp_w as f32).max(1.0);
     let h = (vp_h as f32).max(1.0);
-    let half_span_x = (5.0f32 * 2.0) / w;
-    let half_span_y = (5.0f32 * 2.0) / h;
-    let half_thickness_x = (1.0f32 * 2.0) / w;
-    let half_thickness_y = (1.0f32 * 2.0) / h;
+    let (half_span_px, half_thickness_px) = cursor_cross_metrics_px(vp_h);
+    let half_span_x = (half_span_px * 2.0) / w;
+    let half_span_y = (half_span_px * 2.0) / h;
+    let half_thickness_x = (half_thickness_px * 2.0) / w;
+    let half_thickness_y = (half_thickness_px * 2.0) / h;
 
     trueos_gfx_core::push_rgb_quad_ndc(
         out,

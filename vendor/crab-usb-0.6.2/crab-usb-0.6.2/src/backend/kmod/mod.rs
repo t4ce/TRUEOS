@@ -31,6 +31,17 @@ impl USBHost {
         Ok(USBHost::new(Xhci::new(mmio, kernel)?))
     }
 
+    pub fn new_xhci_with_pci_ids(
+        mmio: Mmio,
+        kernel: &'static dyn KernelOp,
+        vendor_id: u16,
+        device_id: u16,
+    ) -> Result<USBHost> {
+        Ok(USBHost::new(Xhci::new_with_pci_ids(
+            mmio, kernel, vendor_id, device_id,
+        )?))
+    }
+
     pub fn new_dwc(params: DwcNewParams<'_, impl CruOp>) -> Result<USBHost> {
         Ok(USBHost::new(Dwc::new(params)?))
     }

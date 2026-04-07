@@ -70,6 +70,7 @@ const TRUESURFER_RESULT_BYTES_PROP: &[u8] = b"bytes\0";
 const TRUESURFER_RESULT_LINES_PROP: &[u8] = b"lines\0";
 const TRUESURFER_RESULT_PARSE_MS_PROP: &[u8] = b"parseMs\0";
 const TRUESURFER_RESULT_TITLE_PROP: &[u8] = b"title\0";
+const TRUESURFER_RESULT_FAVICON_URL_PROP: &[u8] = b"faviconUrl\0";
 const TRUESURFER_RESULT_SHELL_BYTES_PROP: &[u8] = b"shellBytes\0";
 const TRUESURFER_RESULT_BODY_BYTES_PROP: &[u8] = b"bodyBytes\0";
 const TRUESURFER_RESULT_GADGET_SNAPSHOT_PROP: &[u8] = b"gadgetSnapshot\0";
@@ -171,6 +172,7 @@ pub struct ParseResult {
     pub lines: u32,
     pub parse_ms: u32,
     pub title: String,
+    pub favicon_url: String,
     pub shell_bytes: u32,
     pub body_bytes: u32,
     pub style_count: u32,
@@ -821,6 +823,7 @@ unsafe fn dispatch_html(
         lines: read_result_u32(ctx, result, TRUESURFER_RESULT_LINES_PROP),
         parse_ms: read_result_u32(ctx, result, TRUESURFER_RESULT_PARSE_MS_PROP),
         title: read_result_string(ctx, result, TRUESURFER_RESULT_TITLE_PROP),
+        favicon_url: read_result_string(ctx, result, TRUESURFER_RESULT_FAVICON_URL_PROP),
         shell_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SHELL_BYTES_PROP),
         body_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_BODY_BYTES_PROP),
         style_count: read_result_u32(ctx, result, TRUESURFER_RESULT_STYLE_COUNT_PROP),

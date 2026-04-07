@@ -95,6 +95,23 @@ pub(super) fn draw_window_decoration_icon(
     );
 }
 
+fn draw_window_title_texture_icon(state: &Ui2State, window: &Ui2Window, x: f32, y: f32, side_px: f32) {
+    if !texture_is_drawable(window.title_icon_tex_id) {
+        return;
+    }
+    let _ = draw_texture_rect_no_present(
+        window.title_icon_tex_id,
+        x,
+        y,
+        side_px,
+        side_px,
+        state.view_w,
+        state.view_h,
+        true,
+        window.alpha,
+    );
+}
+
 fn draw_window_decoration_label(
     state: &Ui2State,
     window: &Ui2Window,
@@ -352,20 +369,25 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
     }
 
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
-        if window.icon_id != 0 {
+        let has_title_texture_icon = texture_is_drawable(window.title_icon_tex_id);
+        if has_title_texture_icon || window.icon_id != 0 {
             let icon_side = 16.0f32;
             let icon_x = rect.x + 8.0;
-            let icon_y = rect.y;
-            draw_window_decoration_icon(
-                state,
-                window,
-                Ui2DecorationIconKind::TitlebarWindow,
-                icon_x,
-                icon_y,
-                icon_side,
-            );
+            let icon_y = rect.y + ((titleband_h - icon_side) * 0.5).max(0.0);
+            if has_title_texture_icon {
+                draw_window_title_texture_icon(state, window, icon_x, icon_y, icon_side);
+            } else {
+                draw_window_decoration_icon(
+                    state,
+                    window,
+                    Ui2DecorationIconKind::TitlebarWindow,
+                    icon_x,
+                    icon_y,
+                    icon_side,
+                );
+            }
         }
-        let title_left = if window.icon_id != 0 {
+        let title_left = if has_title_texture_icon || window.icon_id != 0 {
             rect.x + 28.0
         } else {
             rect.x + 8.0
@@ -380,7 +402,7 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
             (title_right - title_left).max(0.0),
             titleband_h.max(1.0),
         );
-        let title_px_h = 16.0f32;
+        let title_px_h = 18.0f32;
         let _ = ui2_font_draw_text_line_in_rect_rgba_no_present(
             window.title.as_str(),
             title_rect,

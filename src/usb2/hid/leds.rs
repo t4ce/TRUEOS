@@ -1,12 +1,14 @@
 extern crate alloc;
 
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 use crab_usb::{Device, DeviceInfo, USBHost, usb_if};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use spin::Mutex;
 
 const LED_VID_JGINYUE: u16 = 0x0416;
 const LED_PID_JGINYUE: u16 = 0xA125;
+const LED_PROBE_ENABLED: bool = false;
 
 const LED_TEST_RED: u8 = 0xFF;
 const LED_TEST_GREEN: u8 = 0x37;
@@ -24,9 +26,18 @@ struct LedProbeTarget {
 	interface_number: u8,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct ActiveLedProbe {
+	controller_id: u32,
+	slot_id: u32,
+	interface_number: u8,
+}
+
+static LED_PROBES_ACTIVE: Mutex<Vec<ActiveLedProbe>> = Mutex::new(Vec::new());
+
 #[inline]
 fn is_supported_led_controller(vid: u16, pid: u16) -> bool {
-	vid == LED_VID_JGINYUE && pid == LED_PID_JGINYUE
+	LED_PROBE_ENABLED && vid == LED_VID_JGINYUE && pid == LED_PID_JGINYUE
 }
 
 fn pick_led_probe_target(configs: &[usb_if::descriptor::ConfigurationDescriptor]) -> Option<LedProbeTarget> {
@@ -62,8 +73,24 @@ fn pick_led_probe_target(configs: &[usb_if::descriptor::ConfigurationDescriptor]
 
 #[inline]
 pub(crate) fn should_share_probe_device(dev_info: &DeviceInfo) -> bool {
-	let _ = dev_info;
-	false
+	let desc = dev_info.descriptor();
+	is_supported_led_controller(desc.vendor_id, desc.product_id)
+}
+
+fn register_active_probe(probe: ActiveLedProbe) -> bool {
+	let mut probes = LED_PROBES_ACTIVE.lock();
+	if probes.iter().any(|active| *active == probe) {
+		return false;
+	}
+	probes.push(probe);
+	true
+}
+
+fn unregister_active_probe(probe: ActiveLedProbe) {
+	let mut probes = LED_PROBES_ACTIVE.lock();
+	if let Some(idx) = probes.iter().position(|active| *active == probe) {
+		probes.remove(idx);
+	}
 }
 
 async fn send_hid_set_report(
@@ -372,23 +399,30 @@ async fn submit_led_phase(
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn led_probe_task(mut device: Device, target: LedProbeTarget) {
+async fn led_probe_task(mut device: Device, controller_id: u32, target: LedProbeTarget) {
 	let desc = device.descriptor();
 	let vendor_id = desc.vendor_id;
 	let product_id = desc.product_id;
 	let slot_id = device.slot_id();
+	let active_probe = ActiveLedProbe {
+		controller_id,
+		slot_id: u32::from(slot_id),
+		interface_number: target.interface_number,
+	};
 
 	if !log_led_live_state(&mut device, target).await {
+		unregister_active_probe(active_probe);
 		return;
 	}
 
 	crate::log!(
-		"crabusb: leds {:04X}:{:04X} shared probe slot={} if#{} cfg={} binary_sweep=0..255 period_ms={} commit={:02X?}\n",
+		"crabusb: leds {:04X}:{:04X} shared probe slot={} if#{} cfg={} ctrl={} binary_sweep=0..255 period_ms={} commit={:02X?}\n",
 		vendor_id,
 		product_id,
 		slot_id,
 		target.interface_number,
 		target.configuration_value,
+		controller_id,
 		LED_SWEEP_PERIOD_MS,
 		LED_COMMIT_REPORT
 	);
@@ -398,6 +432,7 @@ async fn led_probe_task(mut device: Device, target: LedProbeTarget) {
 	let mut phase = 0u8;
 	loop {
 		if !submit_led_phase(&mut device, target, phase).await {
+			unregister_active_probe(active_probe);
 			return;
 		}
 		Timer::after(EmbassyDuration::from_millis(LED_SWEEP_PERIOD_MS)).await;
@@ -411,11 +446,57 @@ pub(crate) async fn maybe_start_led_controller_with_device(
 	spawner: &Spawner,
 	controller_id: u32,
 ) -> bool {
-	let _ = device;
-	let _ = dev_info;
-	let _ = spawner;
-	let _ = controller_id;
-	false
+	let desc = dev_info.descriptor();
+	let vendor_id = desc.vendor_id;
+	let product_id = desc.product_id;
+	if !is_supported_led_controller(vendor_id, product_id) {
+		return false;
+	}
+
+	let Some(target) = pick_led_probe_target(dev_info.configurations()) else {
+		crate::log!(
+			"crabusb: leds {:04X}:{:04X} supported controller found but no HID out target\n",
+			vendor_id,
+			product_id
+		);
+		return false;
+	};
+
+	let active_probe = ActiveLedProbe {
+		controller_id,
+		slot_id: u32::from(device.slot_id()),
+		interface_number: target.interface_number,
+	};
+	if !register_active_probe(active_probe) {
+		return true;
+	}
+
+	match spawner.spawn(led_probe_task(device, controller_id, target)) {
+		Ok(()) => {
+			crate::log!(
+				"crabusb: leds {:04X}:{:04X} handoff shared if#{} cfg={} ctrl={}\n",
+				vendor_id,
+				product_id,
+				target.interface_number,
+				target.configuration_value,
+				controller_id
+			);
+			true
+		}
+		Err(err) => {
+			unregister_active_probe(active_probe);
+			crate::log!(
+				"crabusb: leds {:04X}:{:04X} spawn failed shared if#{} cfg={} ctrl={}: {:?}\n",
+				vendor_id,
+				product_id,
+				target.interface_number,
+				target.configuration_value,
+				controller_id,
+				err
+			);
+			false
+		}
+	}
 }
 
 pub(crate) async fn maybe_start_led_controller(
@@ -424,9 +505,68 @@ pub(crate) async fn maybe_start_led_controller(
 	spawner: &Spawner,
 	controller_id: u32,
 ) -> bool {
-	let _ = host;
-	let _ = dev_info;
-	let _ = spawner;
-	let _ = controller_id;
-	false
+	let desc = dev_info.descriptor();
+	let vendor_id = desc.vendor_id;
+	let product_id = desc.product_id;
+	if !is_supported_led_controller(vendor_id, product_id) {
+		return false;
+	}
+
+	let Some(target) = pick_led_probe_target(dev_info.configurations()) else {
+		crate::log!(
+			"crabusb: leds {:04X}:{:04X} supported controller found but no HID out target\n",
+			vendor_id,
+			product_id
+		);
+		return false;
+	};
+
+	let device = match host.open_device(dev_info).await {
+		Ok(device) => device,
+		Err(err) => {
+			crate::log!(
+				"crabusb: leds {:04X}:{:04X} open failed: {:?}\n",
+				vendor_id,
+				product_id,
+				err
+			);
+			return false;
+		}
+	};
+
+	let active_probe = ActiveLedProbe {
+		controller_id,
+		slot_id: u32::from(device.slot_id()),
+		interface_number: target.interface_number,
+	};
+	if !register_active_probe(active_probe) {
+		return true;
+	}
+
+	match spawner.spawn(led_probe_task(device, controller_id, target)) {
+		Ok(()) => {
+			crate::log!(
+				"crabusb: leds {:04X}:{:04X} handoff if#{} cfg={} ctrl={}\n",
+				vendor_id,
+				product_id,
+				target.interface_number,
+				target.configuration_value,
+				controller_id
+			);
+			true
+		}
+		Err(err) => {
+			unregister_active_probe(active_probe);
+			crate::log!(
+				"crabusb: leds {:04X}:{:04X} spawn failed if#{} cfg={} ctrl={}: {:?}\n",
+				vendor_id,
+				product_id,
+				target.interface_number,
+				target.configuration_value,
+				controller_id,
+				err
+			);
+			false
+		}
+	}
 }
