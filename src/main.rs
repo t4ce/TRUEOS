@@ -18,6 +18,7 @@ mod efi;
 mod exceptions;
 mod gfx;
 mod globalog;
+mod guc;
 mod host_api;
 mod hv;
 pub mod hvv;

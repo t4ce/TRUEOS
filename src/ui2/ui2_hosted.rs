@@ -6,8 +6,10 @@ pub(super) type UiHostedInteractiveState = trueos_qjs::browser_task::HostedBrows
 pub(super) type UiHostedGadgetSnapshot = trueos_qjs::browser_task::HostedBrowserGadgetSnapshot;
 pub(super) type UiHostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
@@ -21,6 +23,7 @@ pub(super) const HOSTED_KEYBOARD_MOD_META: u8 = trueos_qjs::browser_task::HOSTED
 const UI2_BROWSER_ADAPTER_ENABLED: bool = true;
 pub(super) const HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
 pub(super) const HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
+const TITLE_ICON_FETCH_POLL_MS: u64 = 8;
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(super) struct HostedBrowserDirtyMask {
@@ -475,6 +478,284 @@ fn ensure_window_texture_size(
     )
 }
 
+fn bytes_look_like_png(bytes: &[u8]) -> bool {
+    bytes.len() >= 8 && bytes[0..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+}
+
+fn bytes_look_like_jpeg(bytes: &[u8]) -> bool {
+    bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
+}
+
+fn bytes_look_like_svg(bytes: &[u8]) -> bool {
+    let mut start = 0usize;
+    while start < bytes.len() && matches!(bytes[start], b' ' | b'\t' | b'\r' | b'\n') {
+        start += 1;
+    }
+    let trimmed = &bytes[start..];
+    trimmed.starts_with(b"<svg")
+        || trimmed.starts_with(b"<?xml")
+        || trimmed.windows(4).any(|window| window == b"<svg")
+}
+
+fn bytes_look_like_ico(bytes: &[u8]) -> bool {
+    bytes.len() >= 6
+        && bytes[0] == 0
+        && bytes[1] == 0
+        && bytes[2] == 1
+        && bytes[3] == 0
+        && (u16::from_le_bytes([bytes[4], bytes[5]]) as usize) > 0
+}
+
+fn ico_dir_dim(byte: u8) -> u32 {
+    if byte == 0 { 256 } else { byte as u32 }
+}
+
+fn ico_best_png_payload(bytes: &[u8]) -> Option<&[u8]> {
+    if !bytes_look_like_ico(bytes) {
+        return None;
+    }
+    let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+    let dir_bytes = count.checked_mul(16)?;
+    let table_end = 6usize.checked_add(dir_bytes)?;
+    if bytes.len() < table_end {
+        return None;
+    }
+
+    let mut best: Option<(u32, u32, usize, usize)> = None;
+    for index in 0..count {
+        let entry = 6 + (index * 16);
+        let width = ico_dir_dim(bytes[entry]);
+        let height = ico_dir_dim(bytes[entry + 1]);
+        let size = u32::from_le_bytes([
+            bytes[entry + 8],
+            bytes[entry + 9],
+            bytes[entry + 10],
+            bytes[entry + 11],
+        ]) as usize;
+        let offset = u32::from_le_bytes([
+            bytes[entry + 12],
+            bytes[entry + 13],
+            bytes[entry + 14],
+            bytes[entry + 15],
+        ]) as usize;
+        let end = offset.checked_add(size)?;
+        if size < 8 || end > bytes.len() {
+            continue;
+        }
+        let payload = &bytes[offset..end];
+        if !bytes_look_like_png(payload) {
+            continue;
+        }
+
+        let side = width.max(height);
+        let side_delta = side.abs_diff(16);
+        match best {
+            Some((best_delta, best_side, _, _))
+                if side_delta > best_delta || (side_delta == best_delta && side >= best_side) =>
+            {
+                continue;
+            }
+            _ => {
+                best = Some((side_delta, side, offset, end));
+            }
+        }
+    }
+
+    best.map(|(_, _, offset, end)| &bytes[offset..end])
+}
+
+fn fetch_url_bytes_started(url: &str) -> Result<u32, i32> {
+    if url.starts_with('/') {
+        trueos_qjs::async_fs::start_read_file(url.as_bytes())
+    } else {
+        trueos_qjs::async_fs::start_net_fetch_bytes(url.as_bytes())
+    }
+}
+
+async fn wait_for_fetch_bytes(op_id: u32) -> Result<Vec<u8>, i32> {
+    loop {
+        let rc_or_done = trueos_qjs::async_fs::result_len(op_id);
+        if rc_or_done == trueos_qjs::async_fs::FS_ERR_NOT_FOUND as isize {
+            Timer::after(EmbassyDuration::from_millis(TITLE_ICON_FETCH_POLL_MS)).await;
+            continue;
+        }
+        if rc_or_done < 0 {
+            let _ = trueos_qjs::async_fs::discard(op_id);
+            return Err(rc_or_done as i32);
+        }
+        let mut bytes = vec![0u8; rc_or_done as usize];
+        let got = trueos_qjs::async_fs::read_result(op_id, bytes.as_mut_ptr(), bytes.len());
+        if got < 0 {
+            let _ = trueos_qjs::async_fs::discard(op_id);
+            return Err(got as i32);
+        }
+        bytes.truncate(got as usize);
+        return Ok(bytes);
+    }
+}
+
+async fn wait_for_texture_ready(tex_id: u32) -> Result<(), i32> {
+    loop {
+        let status = crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id);
+        if status == 2 {
+            return Ok(());
+        }
+        if status < 0 {
+            return Err(status);
+        }
+        Timer::after(EmbassyDuration::from_millis(TITLE_ICON_FETCH_POLL_MS)).await;
+    }
+}
+
+fn sync_browser_title_metadata(state: &mut Ui2State, window_id: u32, title: &str) {
+    let title = title.trim();
+    if title.is_empty() {
+        return;
+    }
+    let changed = {
+        let Some(window) = window_mut(state, window_id) else {
+            return;
+        };
+        if window.title == title {
+            false
+        } else {
+            window.title = String::from(title);
+            true
+        }
+    };
+    if !changed {
+        return;
+    }
+    state.compose_reason = "browser-title";
+    let _ = note_window_dirty(state, window_id, "browser-title");
+}
+
+fn schedule_browser_title_icon_fetch(
+    state: &mut Ui2State,
+    spawner: &Spawner,
+    window_id: u32,
+    favicon_url: &str,
+) {
+    let favicon_url = favicon_url.trim();
+    let (changed, load_seq, url) = {
+        let Some(window) = window_mut(state, window_id) else {
+            return;
+        };
+        if window.title_icon_url == favicon_url {
+            (false, 0, String::new())
+        } else {
+            window.title_icon_url = String::from(favicon_url);
+            window.title_icon_tex_id = 0;
+            window.title_icon_load_seq = window.title_icon_load_seq.wrapping_add(1).max(1);
+            (
+                true,
+                window.title_icon_load_seq,
+                window.title_icon_url.clone(),
+            )
+        }
+    };
+    if !changed {
+        return;
+    }
+    state.compose_reason = "browser-title-icon";
+    let _ = note_window_dirty(state, window_id, "browser-title-icon");
+    if favicon_url.is_empty() {
+        return;
+    }
+    let tex_id = window_title_icon_tex_id(window_id);
+    let _ = spawner.spawn(browser_title_icon_fetch_task(window_id, load_seq, tex_id, url));
+}
+
+fn sync_hosted_browser_window_metadata(state: &mut Ui2State, spawner: &Spawner) {
+    let browser_windows: Vec<(u32, u32)> = state
+        .windows
+        .iter()
+        .filter(|window| window.kind == Ui2WindowKind::HostedBrowser)
+        .map(|window| (window.id, window_browser_instance_id(window)))
+        .collect();
+    for (window_id, browser_instance_id) in browser_windows {
+        let Some(parse_result) =
+            trueos_qjs::browser_task::latest_parse_result_for_browser(browser_instance_id)
+        else {
+            continue;
+        };
+        if !parse_result.ok {
+            continue;
+        }
+        sync_browser_title_metadata(state, window_id, parse_result.title.as_str());
+        schedule_browser_title_icon_fetch(
+            state,
+            spawner,
+            window_id,
+            parse_result.favicon_url.as_str(),
+        );
+    }
+}
+
+#[embassy_executor::task(pool_size = 8)]
+async fn browser_title_icon_fetch_task(window_id: u32, load_seq: u32, tex_id: u32, url: String) {
+    let op_id = match fetch_url_bytes_started(url.as_str()) {
+        Ok(op_id) => op_id,
+        Err(_) => return,
+    };
+    let bytes = match wait_for_fetch_bytes(op_id).await {
+        Ok(bytes) => bytes,
+        Err(_) => return,
+    };
+    let ico_png = ico_best_png_payload(bytes.as_slice());
+    let upload_bytes = ico_png.unwrap_or(bytes.as_slice());
+
+    let upload_rc = if bytes_look_like_svg(upload_bytes) {
+        unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_upload_texture_svg_async(
+                tex_id,
+                upload_bytes.as_ptr(),
+                upload_bytes.len(),
+            )
+        }
+    } else if bytes_look_like_jpeg(upload_bytes) {
+        unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_upload_texture_jpeg_async(
+                tex_id,
+                upload_bytes.as_ptr(),
+                upload_bytes.len(),
+            )
+        }
+    } else if bytes_look_like_png(upload_bytes) {
+        unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_upload_texture_png_async(
+                tex_id,
+                upload_bytes.as_ptr(),
+                upload_bytes.len(),
+            )
+        }
+    } else {
+        return;
+    };
+    if upload_rc != 0 || wait_for_texture_ready(tex_id).await.is_err() {
+        return;
+    }
+
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let applied = {
+        let Some(window) = window_mut(&mut state, window_id) else {
+            return;
+        };
+        if window.title_icon_load_seq != load_seq || window.title_icon_url != url {
+            false
+        } else {
+            window.title_icon_tex_id = tex_id;
+            true
+        }
+    };
+    if !applied {
+        return;
+    }
+    state.compose_reason = "browser-title-icon-ready";
+    let _ = note_window_dirty(&mut state, window_id, "browser-title-icon-ready");
+}
+
 fn sync_window_container(
     window_id: u32,
     renderable: bool,
@@ -568,17 +849,21 @@ pub async fn ui2_hosted_task() {
         return;
     }
 
+    let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
     crate::log!("boot-probe: ui2-hosted task start ms={}\n", boot_probe_ms());
     queue_hosted_container_sync();
 
     loop {
         let queued = UI2_HOSTED_CONTAINER_SYNC_QUEUED.swap(false, Ordering::AcqRel);
-        let mut pending_after = false;
+        let pending_after;
 
-        if queued {
+        {
             let state_lock = init_state();
             let mut state = state_lock.lock();
-            sync_pending_window_containers(&mut state);
+            sync_hosted_browser_window_metadata(&mut state, &spawner);
+            if queued {
+                sync_pending_window_containers(&mut state);
+            }
             pending_after = state
                 .windows
                 .iter()

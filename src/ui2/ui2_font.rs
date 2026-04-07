@@ -322,6 +322,21 @@ pub(crate) fn ui2_font_resolve_glyph(tier: Ui2FontTier, ch: char) -> Option<Ui2F
 }
 
 #[inline]
+fn ui2_font_is_virtual_spacing_char(ch: char) -> bool {
+    matches!(ch, ' ' | '\t') || (ch.is_whitespace() && ch != '\n')
+}
+
+#[inline]
+fn ui2_font_char_advance_px(tier: Ui2FontTier, ch: char) -> u16 {
+    if ui2_font_is_virtual_spacing_char(ch) {
+        return whitespace_advance_px(tier, ch);
+    }
+    ui2_font_resolve_glyph_or_fallback(tier, ch)
+        .map(|glyph| glyph.advance_px)
+        .unwrap_or_else(|| fallback_advance_px(tier, ch))
+}
+
+#[inline]
 fn ui2_font_resolve_glyph_or_fallback(tier: Ui2FontTier, ch: char) -> Option<Ui2FontGlyph> {
     ui2_font_resolve_glyph(tier, ch).or_else(|| ui2_font_resolve_glyph(tier, '?'))
 }
@@ -407,9 +422,7 @@ fn ui2_font_measure_text_with_scale(
             continue;
         }
 
-        let advance_px = ui2_font_resolve_glyph_or_fallback(tier, ch)
-            .map(|glyph| glyph.advance_px)
-            .unwrap_or_else(|| fallback_advance_px(tier, ch));
+        let advance_px = ui2_font_char_advance_px(tier, ch);
         let scaled_advance_px = (libm::roundf(f32::from(advance_px) * scale) as u32).max(1);
         line_width = line_width.saturating_add(scaled_advance_px);
     }
@@ -473,13 +486,24 @@ pub(crate) fn ui2_font_draw_text_line_rgba_no_present(
         return false;
     }
 
-    let mut pen_x = x;
-    let right = x + max_width_px;
+    let start_x = libm::roundf(x);
+    let start_y = libm::roundf(y);
+    let mut pen_x = start_x;
+    let right = start_x + max_width_px;
     let mut drew_any = false;
 
     for ch in text.chars() {
         if ch == '\n' || pen_x >= right {
             break;
+        }
+
+        if ui2_font_is_virtual_spacing_char(ch) {
+            let advance_px = f32::from(whitespace_advance_px(tier, ch)) * scale;
+            if pen_x + advance_px > right {
+                break;
+            }
+            pen_x += advance_px;
+            continue;
         }
 
         let Some(glyph) = ui2_font_resolve_glyph_or_fallback(tier, ch) else {
@@ -494,16 +518,16 @@ pub(crate) fn ui2_font_draw_text_line_rgba_no_present(
 
         if glyph.ready {
             if let Some(texture) = glyph.texture {
-                let draw_w = f32::from(glyph.draw_w_px) * scale;
-                let draw_h = f32::from(glyph.draw_h_px) * scale;
+                let draw_w = libm::roundf(f32::from(glyph.draw_w_px) * scale).max(1.0);
+                let draw_h = libm::roundf(f32::from(glyph.draw_h_px) * scale).max(1.0);
                 let atlas_w = f32::from(glyph.region.atlas_w.max(1));
                 let atlas_h = f32::from(glyph.region.atlas_h.max(1));
                 let src_x = f32::from(glyph.region.src_x);
                 let src_y = f32::from(glyph.region.src_y);
                 drew_any |= ui2_font_draw_glyph_rect_no_present(
                     texture.tex_id,
-                    pen_x,
-                    y,
+                    libm::roundf(pen_x),
+                    start_y,
                     draw_w,
                     draw_h,
                     src_x / atlas_w,
@@ -570,11 +594,11 @@ pub(crate) fn ui2_font_draw_text_line_in_rect_rgba_no_present(
         Ui2FontTextAlign::Center => rect.x + ((rect.w - draw_w) * 0.5).max(0.0),
         Ui2FontTextAlign::Right => rect.x + (rect.w - draw_w).max(0.0),
     };
-    let draw_y = match vertical_align {
-        Ui2FontVerticalAlign::Top => rect.y,
-        Ui2FontVerticalAlign::Center => rect.y + ((rect.h - px_h) * 0.5).max(0.0),
-        Ui2FontVerticalAlign::Bottom => rect.y + (rect.h - px_h).max(0.0),
-    };
+    // We do not have baseline-aware top/bottom placement yet, so keep rect
+    // text vertically centered for all requested modes.
+    let _ = vertical_align;
+    let draw_y = libm::roundf(rect.y + ((rect.h - px_h) * 0.5).max(0.0));
+    let draw_x = libm::roundf(draw_x);
 
     ui2_font_draw_text_line_rgba_no_present(
         text, draw_x, draw_y, rect.w, px_h, view_w, view_h, rgba,
@@ -627,9 +651,20 @@ fn ui2_font_draw_glyph_rect_no_present(
 }
 
 #[inline]
+fn whitespace_advance_px(tier: Ui2FontTier, ch: char) -> u16 {
+    let space_px = athlasmetrics::athlas_bucket_atlas_metrics(tier.size_case(), 2)
+        .map(|metrics| metrics.cell_w.max(1))
+        .unwrap_or_else(|| (tier.atlas_cell_height_px() / 3).max(1));
+    match ch {
+        '\t' => space_px.saturating_mul(4).max(1),
+        _ => space_px,
+    }
+}
+
+#[inline]
 fn fallback_advance_px(tier: Ui2FontTier, ch: char) -> u16 {
-    if ch == ' ' {
-        (tier.atlas_cell_height_px() / 3).max(1)
+    if ui2_font_is_virtual_spacing_char(ch) {
+        whitespace_advance_px(tier, ch)
     } else {
         tier.atlas_cell_height_px().saturating_div(2).max(1)
     }

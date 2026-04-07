@@ -223,6 +223,9 @@ struct Ui2Window {
     hosted_browser_snapshot: UiHostedBrowserSnapshot,
     title: String,
     icon_id: u32,
+    title_icon_tex_id: u32,
+    title_icon_load_seq: u32,
+    title_icon_url: String,
     rect: Ui2Rect,
     restore_rect: Ui2Rect,
     z: i16,
@@ -294,6 +297,7 @@ struct Ui2ComposeWindowStats {
 }
 
 const UI2_WINDOW_TITLE_TEX_ID_BASE: u32 = 20_000;
+const UI2_WINDOW_TITLE_ICON_TEX_ID_BASE: u32 = 21_000;
 
 #[derive(Clone, Debug)]
 struct Ui2ComposeSurfaceTiming {
@@ -1341,6 +1345,11 @@ fn texture_is_drawable(tex_id: u32) -> bool {
 #[inline]
 fn window_title_tex_id(window_id: u32) -> u32 {
     UI2_WINDOW_TITLE_TEX_ID_BASE.saturating_add(window_id.saturating_sub(1))
+}
+
+#[inline]
+fn window_title_icon_tex_id(window_id: u32) -> u32 {
+    UI2_WINDOW_TITLE_ICON_TEX_ID_BASE.saturating_add(window_id.saturating_sub(1))
 }
 
 fn draw_window_content_placeholder(
