@@ -42,6 +42,11 @@ pub struct Xhci {
     irq_ready: bool,
     event_ring_info: EventRingInfo,
     scratchpad_buf_arr: Option<ScratchpadBufferArray>,
+    pci_vendor_id: Option<u16>,
+    pci_device_id: Option<u16>,
+    disable_staged_run_experiments: bool,
+    log_first_command_diagnostics: bool,
+    first_command_logged: bool,
     pub(crate) transfer_result_handler: TransferResultHandler,
     root_hub: Option<XhciRootHub>,
 }
@@ -100,6 +105,8 @@ impl Xhci {
     const PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT: bool = true;
     const ARM_WRAP_EVENT_EXPERIMENT: bool = false;
     const POLL_ONLY_EVENT_HANDLER_SMOKE_VALID: bool = true;
+    const INTEL_VENDOR_ID: u16 = 0x8086;
+    const INTEL_RPL_PCH_XHCI_DEVICE_ID: u16 = 0x7A60;
 
     fn flush_controller_write(&self) {
         let _ = self.reg.read().operational.usbsts.read_volatile();
@@ -255,6 +262,15 @@ struct XhciStatusBits {
 
 impl Xhci {
     pub fn new(mmio: Mmio, kernel: &'static dyn KernelOp) -> Result<Self> {
+        Self::new_with_pci_ids(mmio, kernel, 0, 0)
+    }
+
+    pub fn new_with_pci_ids(
+        mmio: Mmio,
+        kernel: &'static dyn KernelOp,
+        vendor_id: u16,
+        device_id: u16,
+    ) -> Result<Self> {
         let reg = XhciRegisters::new(mmio);
 
         // 检查 xHCI 控制器的寻址能力（HCCPARAMS1 寄存器）
@@ -284,6 +300,17 @@ impl Xhci {
         let event_ring_info = event_ring.info();
 
         let root_hub = XhciRootHub::new(reg.clone(), kernel.clone())?;
+        let disable_staged_run_experiments =
+            vendor_id == Self::INTEL_VENDOR_ID && device_id == Self::INTEL_RPL_PCH_XHCI_DEVICE_ID;
+        let log_first_command_diagnostics = disable_staged_run_experiments;
+
+        if disable_staged_run_experiments {
+            info!(
+                "xHCI: conservative pre-RUN quirk enabled for pci {:04X}:{:04X}",
+                vendor_id,
+                device_id
+            );
+        }
 
         let transfer_result_handler = TransferResultHandler::new(reg_shared.clone());
         let ports = root_hub.waker();
@@ -305,6 +332,11 @@ impl Xhci {
             root_hub: Some(root_hub),
             event_ring_info,
             scratchpad_buf_arr: None,
+            pci_vendor_id: (vendor_id != 0).then_some(vendor_id),
+            pci_device_id: (device_id != 0).then_some(device_id),
+            disable_staged_run_experiments,
+            log_first_command_diagnostics,
+            first_command_logged: false,
         })
     }
 
@@ -327,21 +359,21 @@ impl Xhci {
         let max_slots = self.setup_max_device_slots();
         self.dev_ctx = Some(DeviceContextList::new(max_slots as _, self.kernel())?);
 
-        if Self::PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT {
+        if self.disable_staged_run_experiments || Self::PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT {
             debug!("xHCI: staged-run experiment programming dcbaap before RUN");
             self.setup_dcbaap()?;
         } else {
             debug!("xHCI: staged-run experiment skipping dcbaap before RUN");
         }
 
-        if Self::PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT {
+        if self.disable_staged_run_experiments || Self::PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT {
             debug!("xHCI: staged-run experiment programming crcr before RUN");
             self.set_cmd_ring()?;
         } else {
             debug!("xHCI: staged-run experiment skipping crcr before RUN");
         }
 
-        if Self::PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT {
+        if self.disable_staged_run_experiments || Self::PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT {
             debug!("xHCI: staged-run experiment programming runtime ring before RUN");
             self.setup_runtime_ring();
         } else {
@@ -349,6 +381,7 @@ impl Xhci {
         }
 
         self.setup_scratchpads()?;
+        self.log_pre_run_diagnostics("pre-run");
         // At this point, the host controller is up and running and the Root Hub ports
         // (5.4.8) will begin reporting device connects, etc., and system software may begin
         // enumerating devices. System software may follow the procedures described in
@@ -640,6 +673,18 @@ impl Xhci {
             self.flush_controller_write();
 
             debug!("Setting up {buf_count} scratchpads, at {bus_addr:#0x}");
+            let preview_len = scratchpad_buf_arr.entries.len().min(4);
+            if preview_len != 0 {
+                let mut preview = Vec::with_capacity(preview_len);
+                for idx in 0..preview_len {
+                    preview.push(scratchpad_buf_arr.entries.read(idx).unwrap_or(0));
+                }
+                debug!(
+                    "xHCI: scratchpad pointer preview count={} first={:X?}",
+                    scratchpad_buf_arr.entries.len(),
+                    preview
+                );
+            }
             scratchpad_buf_arr
         };
 
@@ -674,6 +719,16 @@ impl Xhci {
         &mut self,
         trb: command::Allowed,
     ) -> impl Future<Output = core::result::Result<CommandCompletion, TransferError>> {
+        if self.log_first_command_diagnostics && !self.first_command_logged {
+            self.first_command_logged = true;
+            self.log_pre_run_diagnostics("pre-first-command");
+            debug!(
+                "xHCI: first command submission trb={:?} pci={:04X?}:{:04X?}",
+                trb,
+                self.pci_vendor_id,
+                self.pci_device_id
+            );
+        }
         self.cmd.cmd_request(trb)
     }
 
@@ -715,6 +770,50 @@ impl Xhci {
         );
         trace!("assigned slot id: {slot_id}");
         Ok(slot_id.into())
+    }
+
+    fn log_pre_run_diagnostics(&self, stage: &'static str) {
+        let status = self.status_snapshot();
+        let crcr = self.cmd.bus_addr();
+        let dcbaap = self
+            .reg
+            .read()
+            .operational
+            .dcbaap
+            .read_volatile()
+            .get();
+        let config = self
+            .reg
+            .read()
+            .operational
+            .config
+            .read_volatile()
+            .max_device_slots_enabled();
+        let caplen = self.reg.read().capability.caplength.read_volatile();
+        let hcsparams2 = self.reg.read().capability.hcsparams2.read_volatile();
+        let scratch_count = hcsparams2.max_scratchpad_buffers();
+        let scratch_array = self
+            .scratchpad_buf_arr
+            .as_ref()
+            .map(|arr| arr.bus_addr())
+            .unwrap_or(0);
+        debug!(
+            "xHCI: diag stage={} pci={:04X?}:{:04X?} caplen={:?} max_slots_enabled={} dcbaap=0x{:X} crcr=0x{:X} scratch_count={} scratch_array=0x{:X} halted={} cnr={} reset={} hse={} hce={}",
+            stage,
+            self.pci_vendor_id,
+            self.pci_device_id,
+            caplen,
+            config,
+            dcbaap,
+            crcr.raw(),
+            scratch_count,
+            scratch_array,
+            status.halted,
+            status.cnr,
+            status.reset,
+            status.hse,
+            status.hce
+        );
     }
 }
 

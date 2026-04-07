@@ -169,6 +169,35 @@ function extractTitleFromHead(headHtml) {
   return collapseWhitespace(decodeBasicEntities(stripTags(match[1])));
 }
 
+function extractFaviconHref(sourceHtml) {
+  const html = safeString(sourceHtml);
+  if (!html) {
+    return '';
+  }
+  const linkTagRe = /<link\b[^>]*>/gi;
+  let match;
+  while ((match = linkTagRe.exec(html))) {
+    const tagHtml = safeString(match[0]);
+    const rel = safeString(extractAttrValue(tagHtml, 'rel'))
+      .toLowerCase()
+      .split(/\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (
+      !rel.includes('icon')
+      && !rel.includes('shortcut')
+      && !rel.includes('apple-touch-icon')
+    ) {
+      continue;
+    }
+    const href = collapseWhitespace(decodeBasicEntities(extractAttrValue(tagHtml, 'href')));
+    if (href) {
+      return href;
+    }
+  }
+  return '';
+}
+
 function stripCommentAndRawTextNoise(html) {
   return safeString(html)
     .replace(/<!--[\s\S]*?-->/g, '')
@@ -494,11 +523,12 @@ function extractDocumentArtifacts(source) {
   const title = TRUESURFER_SUBSET_PROFILE.includeTitle
     ? extractTitleFromHead(headBlock ? headBlock.inner : html)
     : '';
+  const faviconHref = extractFaviconHref(headBlock ? headBlock.inner : html);
   const bodyHtml = TRUESURFER_SUBSET_PROFILE.includeBody
     ? (bodyBlock ? bodyBlock.inner : html)
     : '';
   const bodyHierarchy = TRUESURFER_SUBSET_PROFILE.includeBodyHierarchy
-    ? collectBodyHierarchy(bodyHtml, BODY_HIERARCHY_LIMIT)
+    ? collectBodyHierarchy(bodyHtml, BODY_HIERARCHY_ROOT_LIMIT)
     : [];
   const bodyHierarchySummary = summarizeBodyHierarchy(bodyHierarchy);
   const styles = TRUESURFER_SUBSET_PROFILE.includeStyles ? collectStyleArtifacts(html) : [];
@@ -526,6 +556,7 @@ function extractDocumentArtifacts(source) {
 
   return {
     title,
+    faviconHref,
     parseMs,
     domParseMs,
     styleIndexMs,

@@ -23,6 +23,41 @@ const TRUESURFER_MODULE_BASE = typeof import.meta === 'object' && import.meta &&
 let truesurferSubsetProfile = null;
 let extractDocumentArtifactsFn = null;
 
+function getUrlOrigin(url) {
+  const value = typeof url === 'string' ? url.trim() : '';
+  const match = value.match(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]+/i);
+  return match ? match[0] : '';
+}
+
+function getUrlDirectory(url) {
+  const value = typeof url === 'string' ? url.trim() : '';
+  const origin = getUrlOrigin(value);
+  if (!origin) return '';
+  const rest = value.slice(origin.length);
+  const qIndex = rest.search(/[?#]/);
+  const pathOnly = qIndex >= 0 ? rest.slice(0, qIndex) : rest;
+  const slash = pathOnly.lastIndexOf('/');
+  if (slash < 0) return `${origin}/`;
+  return `${origin}${pathOnly.slice(0, slash + 1)}`;
+}
+
+function resolveNavigationUrl(baseUrl, href) {
+  const value = safeString(href).trim();
+  if (!value) return '';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return value;
+  const base = safeString(baseUrl).trim();
+  const origin = getUrlOrigin(base);
+  if (value.startsWith('//')) {
+    const schemeMatch = base.match(/^([a-z][a-z0-9+.-]*:)/i);
+    return schemeMatch ? `${schemeMatch[1]}${value}` : `https:${value}`;
+  }
+  if (value.startsWith('/')) {
+    return origin ? `${origin}${value}` : value;
+  }
+  const dir = getUrlDirectory(base);
+  return dir ? `${dir}${value}` : value;
+}
+
 function log(line) {
   if (typeof console !== 'undefined' && console && typeof console.log === 'function') {
     console.log(line);
@@ -168,6 +203,7 @@ function setHtml(nextHtml, meta) {
     root.__trueosTruesurferLastArtifacts = {
       url,
       title: parsed.title,
+      faviconUrl: resolveNavigationUrl(url, parsed.faviconHref),
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
       bodyHierarchy: parsed.bodyHierarchy,
@@ -192,6 +228,7 @@ function setHtml(nextHtml, meta) {
       domParseMs: parsed.domParseMs,
       styleIndexMs: parsed.styleIndexMs,
       title: parsed.title,
+      faviconUrl: resolveNavigationUrl(url, parsed.faviconHref),
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
       gadgetSnapshot: parsed.gadgetSnapshot,

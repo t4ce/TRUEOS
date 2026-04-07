@@ -17,10 +17,11 @@ const MAX_ACTIVE_STREAMS: usize = 8;
 const MASS_KEEPALIVE_MS: u64 = 2_000;
 const MASS_IO_RETRY_LIMIT: u8 = 8;
 const MASS_IO_RETRY_DELAY_MS: u64 = 25;
-// Physical USB flash media is noticeably less tolerant than the QEMU disk path to
-// larger BOT transfers. Keep the public block-device hint conservative so upper
-// layers naturally batch into smaller chunks during install/format workloads.
-const MAX_IO_BYTES: usize = 8 * 1024;
+const MASS_RUNTIME_WAIT_LIMIT: u8 = 20;
+const MASS_RUNTIME_WAIT_DELAY_MS: u64 = 10;
+const MIN_IO_BYTES: usize = 8 * 1024;
+const MAX_IO_BYTES: usize = 128 * 1024;
+const MASS_IO_GROW_SUCCESS_TARGET: u16 = 16;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveMassStream {
@@ -42,6 +43,8 @@ struct UsbMassRuntime {
     bulk_out: EndpointBulkOut,
     bot_tag: u32,
     sync_cache_unsupported: bool,
+    current_max_io_bytes: usize,
+    io_success_streak: u16,
 }
 
 unsafe impl Send for UsbMassRuntime {}
@@ -92,6 +95,16 @@ fn take_runtime(runtime_key: u64) -> Option<UsbMassRuntime> {
         .iter()
         .position(|rt| rt.runtime_key == runtime_key)?;
     Some(runtimes.remove(idx))
+}
+
+async fn take_runtime_wait(runtime_key: u64) -> Option<UsbMassRuntime> {
+    for _ in 0..=MASS_RUNTIME_WAIT_LIMIT {
+        if let Some(rt) = take_runtime(runtime_key) {
+            return Some(rt);
+        }
+        Timer::after(EmbassyDuration::from_millis(MASS_RUNTIME_WAIT_DELAY_MS)).await;
+    }
+    None
 }
 
 fn registered_disk(runtime_key: u64) -> Option<block::DeviceHandle> {
@@ -229,6 +242,33 @@ fn map_io_error(err: mass::MassProbeError) -> block::Error {
     }
 }
 
+fn clamp_mass_io_bytes(block_size: usize, bytes: usize) -> usize {
+    let bs = block_size.max(1);
+    let floor = core::cmp::max(bs, MIN_IO_BYTES.div_ceil(bs) * bs);
+    let ceil = core::cmp::max(floor, (MAX_IO_BYTES / bs).max(1) * bs);
+    let rounded = core::cmp::max(bs, (bytes / bs).max(1) * bs);
+    rounded.clamp(floor, ceil)
+}
+
+fn current_mass_io_bytes(rt: &UsbMassRuntime, block_size: usize) -> usize {
+    clamp_mass_io_bytes(block_size, rt.current_max_io_bytes)
+}
+
+fn mass_io_note_success(rt: &mut UsbMassRuntime, block_size: usize) {
+    rt.io_success_streak = rt.io_success_streak.saturating_add(1);
+    let cur = current_mass_io_bytes(rt, block_size);
+    if rt.io_success_streak >= MASS_IO_GROW_SUCCESS_TARGET && cur < MAX_IO_BYTES {
+        rt.current_max_io_bytes = clamp_mass_io_bytes(block_size, cur.saturating_mul(2));
+        rt.io_success_streak = 0;
+    }
+}
+
+fn mass_io_backoff(rt: &mut UsbMassRuntime, block_size: usize) {
+    let cur = current_mass_io_bytes(rt, block_size);
+    rt.current_max_io_bytes = clamp_mass_io_bytes(block_size, core::cmp::max(block_size, cur / 2));
+    rt.io_success_streak = 0;
+}
+
 fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
@@ -292,7 +332,9 @@ impl UsbMassBlockDevice {
             Box<dyn core::future::Future<Output = block::Result<R>> + 'a>,
         >,
     ) -> block::Result<R> {
-        let mut rt = take_runtime(self.runtime_key).ok_or(block::Error::NotReady)?;
+        let mut rt = take_runtime_wait(self.runtime_key)
+            .await
+            .ok_or(block::Error::NotReady)?;
         let result = f(&mut rt).await;
         register_runtime(rt);
         result
@@ -339,7 +381,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                     let mut cur_lba = lba;
                     let mut remaining = out.as_mut_slice();
                     while !remaining.is_empty() {
-                        let max_blocks = (MAX_IO_BYTES / block_size).max(1);
+                        let max_blocks = (current_mass_io_bytes(rt, block_size) / block_size).max(1);
                         let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
                         let bytes_here = blocks_here * block_size;
 
@@ -357,8 +399,12 @@ impl block::BlockDevice for UsbMassBlockDevice {
                             rt.bot_tag = rt.bot_tag.wrapping_add(1);
 
                             match result {
-                                Ok(()) => break,
+                                Ok(()) => {
+                                    mass_io_note_success(rt, block_size);
+                                    break;
+                                }
                                 Err(err) => {
+                                    mass_io_backoff(rt, block_size);
                                     if recover_runtime_transport(rt, "read-10", err).await.is_ok()
                                         && attempts < MASS_IO_RETRY_LIMIT
                                     {
@@ -423,12 +469,14 @@ impl block::BlockDevice for UsbMassBlockDevice {
                 return Err(block::Error::OutOfBounds);
             }
 
-            let mut rt = take_runtime(self.runtime_key).ok_or(block::Error::NotReady)?;
+            let mut rt = take_runtime_wait(self.runtime_key)
+                .await
+                .ok_or(block::Error::NotReady)?;
             let result = async {
                 let mut cur_lba = lba;
                 let mut remaining = buf;
                 while !remaining.is_empty() {
-                    let max_blocks = (MAX_IO_BYTES / block_size).max(1);
+                    let max_blocks = (current_mass_io_bytes(&rt, block_size) / block_size).max(1);
                     let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
                     let bytes_here = blocks_here * block_size;
 
@@ -446,8 +494,12 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         rt.bot_tag = rt.bot_tag.wrapping_add(1);
 
                         match result {
-                            Ok(()) => break,
+                            Ok(()) => {
+                                mass_io_note_success(&mut rt, block_size);
+                                break;
+                            }
                             Err(err) => {
+                                mass_io_backoff(&mut rt, block_size);
                                 if recover_runtime_transport(&mut rt, "write-10", err).await.is_ok()
                                     && attempts < MASS_IO_RETRY_LIMIT
                                 {
@@ -722,6 +774,8 @@ pub async fn mass_storage_task(mut device: Device, controller_id: u32, target: M
         bulk_out,
         bot_tag: 0x544F_0000 | u32::from(slot),
         sync_cache_unsupported: false,
+        current_max_io_bytes: MIN_IO_BYTES,
+        io_success_streak: 0,
     });
 
     loop {

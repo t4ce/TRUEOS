@@ -16,8 +16,8 @@ const USB_CLASS_MASS_STORAGE: u8 = 0x08;
 const USB_SUBCLASS_SCSI: u8 = 0x06;
 const USB_PROTO_BULK_ONLY: u8 = 0x50;
 const BOT_IO_RETRIES: usize = 8;
-const BOT_IO_TIMEOUT_MS: u64 = 1500;
-const BOT_RECOVERY_SETTLE_MS: u64 = 25;
+const BOT_IO_TIMEOUT_MS: u64 = 5000;
+const BOT_RECOVERY_SETTLE_MS: u64 = 250;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MassTarget {

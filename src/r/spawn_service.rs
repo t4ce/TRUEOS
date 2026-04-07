@@ -598,8 +598,7 @@ fn spawn_ui2_hosted(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(crate::r::ui2::ui2_hosted_task()))
 }
 
-const UI2_DEMOS_ON_INTEL_ENABLED: bool = false;
-const UI2_DEMOS_OFF_INTEL_ENABLED: bool = true;
+const UI2_DEMOS_ENABLED: bool = true;
 
 #[inline]
 fn task_gate_always() -> bool {
@@ -618,8 +617,7 @@ fn ui2_core_task_gate() -> bool {
 
 #[inline]
 fn ui2_demo_task_gate() -> bool {
-    let _ = UI2_DEMOS_ON_INTEL_ENABLED;
-    UI2_DEMOS_OFF_INTEL_ENABLED
+    UI2_DEMOS_ENABLED
 }
 
 fn spawn_ui2_demo_on_worker<F>(spawner: Spawner, spawn: F) -> SpawnAttempt
@@ -816,10 +814,6 @@ fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_smtp_smoke(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(crate::tst_smtp_smoke::smtp_smoke_task()))
-}
-
-fn spawn_mmio_oneshot_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::r::mmio_probe::oneshot_mmio_probe_task()))
 }
 
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
@@ -1071,7 +1065,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
         spawn_ui2_smiley_fountain_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-shell-demo",
         UI2_DEMO_READY,
         &UI2_SHELL_DEMO_STARTED,
@@ -1093,12 +1087,6 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
     TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
     TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
-    TaskSpec::enabled(
-        "mmio-oneshot-probe",
-        0,
-        &MMIO_ONESHOT_PROBE_STARTED,
-        spawn_mmio_oneshot_probe,
-    ),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
     TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),

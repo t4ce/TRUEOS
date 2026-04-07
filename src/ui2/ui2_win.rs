@@ -64,6 +64,9 @@ pub(super) fn alloc_window(
         hosted_browser_snapshot: UiHostedBrowserSnapshot::default(),
         title: String::from(title),
         icon_id: 0,
+        title_icon_tex_id: 0,
+        title_icon_load_seq: 0,
+        title_icon_url: String::new(),
         rect,
         restore_rect: rect,
         z,
@@ -418,6 +421,9 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         .saturating_add(1);
     let next_title = source_window.title.clone();
     let next_icon_id = source_window.icon_id;
+    let next_title_icon_tex_id = source_window.title_icon_tex_id;
+    let next_title_icon_load_seq = source_window.title_icon_load_seq;
+    let next_title_icon_url = source_window.title_icon_url.clone();
     let next_alpha = source_window.alpha;
     let next_hit_test_visible = source_window.hit_test_visible;
     let next_composition_locked = source_window.composition_locked;
@@ -471,6 +477,9 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     if let Some(window) = window_mut(state, id) {
         window.browser_instance_id = next_browser_instance_id;
         window.icon_id = next_icon_id;
+        window.title_icon_tex_id = next_title_icon_tex_id;
+        window.title_icon_load_seq = next_title_icon_load_seq;
+        window.title_icon_url = next_title_icon_url;
         window.content_tex_id = next_tex_id;
         window.content_tex_blend = next_content_tex_blend;
         window.hosted_surface_bg_rgba = next_hosted_surface_bg_rgba;
