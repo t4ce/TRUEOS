@@ -1,4 +1,8 @@
+mod guc;
+mod render;
+
 use core::sync::atomic::{AtomicBool, Ordering};
+use spin::Mutex;
 
 pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
 pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
@@ -33,6 +37,7 @@ pub(crate) const GS_UKERNEL_MASK: u32 = 0xFF << 8;
 pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
 
 static INIT: AtomicBool = AtomicBool::new(false);
+static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
 
 #[derive(Copy, Clone)]
 pub(crate) struct Dev {
@@ -44,6 +49,8 @@ pub(crate) struct Dev {
     pub(crate) mmio: *mut u8,
     pub(crate) mmio_len: usize,
 }
+unsafe impl Send for Dev {}
+unsafe impl Sync for Dev {}
 #[derive(Copy, Clone)]
 pub(crate) struct Buf {
     pub(crate) phys: u64,
@@ -74,7 +81,8 @@ pub fn init_once() {
         dev.revision_id,
         dev.mmio_len
     );
-    let fw = crate::guc::load_fw();
+    *CLAIMED_DEVICE.lock() = Some(dev);
+    let fw = self::guc::load_fw();
     if fw.len == 0 {
         crate::log!("intel/guc: firmware module missing or invalid\n");
         return;
@@ -86,7 +94,7 @@ pub fn init_once() {
         fw.len,
         fw.xfer_len
     );
-    let ads = crate::guc::alloc_ads(fw.private_data_size);
+    let ads = self::guc::alloc_ads(fw.private_data_size);
     if ads.len == 0 {
         crate::log!("intel/guc: ads alloc failed private_data=0x{:X}\n", fw.private_data_size);
         return;
@@ -97,9 +105,9 @@ pub fn init_once() {
     }
     ggtt_invalidate(dev);
     forcewake(dev);
-    let ready = crate::guc::bootstrap(dev, fw, ads);
-    let status = crate::guc::status(dev);
-    let (bootrom, ukernel, auth) = crate::guc::describe_status(status);
+    let ready = self::guc::bootstrap(dev, fw, ads);
+    let status = self::guc::status(dev);
+    let (bootrom, ukernel, auth) = self::guc::describe_status(status);
     crate::log!(
         "intel/guc: bootstrap ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X}\n",
         ready as u8,
@@ -108,10 +116,24 @@ pub fn init_once() {
         ukernel,
         auth
     );
+    let warm = self::render::warm_once(dev);
+    self::render::log_cursor_plane_info(warm);
+    self::render::log_sprite_plane_info(warm);
+    if self::render::forcewake_render_acquire(warm) {
+        self::render::forcewake_render_sanity(warm);
+    }
 }
 
 pub fn guc_ready() -> bool {
-    crate::guc::ready()
+    self::guc::ready()
+}
+
+pub fn has_claimed_device() -> bool {
+    CLAIMED_DEVICE.lock().is_some()
+}
+
+pub fn warm_state() -> Option<self::render::RenderWarmState> {
+    self::render::warm_state()
 }
 
 fn find_dev() -> Option<Dev> {
