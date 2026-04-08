@@ -5,6 +5,8 @@ const PIPE_A_SRC: usize = 0x7001C;
 const PIPE_B_SRC: usize = 0x7101C;
 const PIPE_C_SRC: usize = 0x7201C;
 const PIPE_D_SRC: usize = 0x7301C;
+const SKL_BOTTOM_COLOR_A: usize = 0x70034;
+const SKL_BOTTOM_COLOR_PIPE_STRIDE: usize = 0x1000;
 const UNI_PLANE_BASE: usize = 0x70180;
 const UNI_PLANE_PIPE_STRIDE: usize = 0x1000;
 const UNI_PLANE_SLOT_STRIDE: usize = 0x100;
@@ -12,20 +14,38 @@ const UNI_PLANE_CTL_OFF: usize = 0x00;
 const UNI_PLANE_STRIDE_OFF: usize = 0x08;
 const UNI_PLANE_POS_OFF: usize = 0x0C;
 const UNI_PLANE_SIZE_OFF: usize = 0x10;
+const UNI_PLANE_KEYVAL_OFF: usize = 0x14;
+const UNI_PLANE_KEYMSK_OFF: usize = 0x18;
 const UNI_PLANE_SURF_OFF: usize = 0x1C;
+const UNI_PLANE_KEYMAX_OFF: usize = 0x20;
 const UNI_PLANE_OFFSET_OFF: usize = 0x24;
 const UNI_PLANE_SURFLIVE_OFF: usize = 0x2C;
+const UNI_PLANE_AUX_DIST_OFF: usize = 0x40;
+const UNI_PLANE_AUX_OFFSET_OFF: usize = 0x44;
+const UNI_PLANE_COLOR_CTL_OFF: usize = 0x4C;
+const UNI_PLANE_BUF_CFG_OFF: usize = 0xFC;
 const PLANE_CTL_ENABLE: u32 = 1 << 31;
+const PLANE_CTL_FORMAT_MASK_SKL: u32 = 0x0F << 24;
+const PLANE_CTL_ORDER_RGBX: u32 = 1 << 20;
+const PLANE_CTL_TILED_MASK: u32 = 0x07 << 10;
+const PLANE_CTL_ALPHA_MASK: u32 = 0x03 << 4;
+const PLANE_CTL_ROTATE_MASK: u32 = 0x03;
 const PLANE_CTL_FORMAT_XRGB_8888: u32 = 4 << 24;
-const PLANE_CTL_ALPHA_HW_PREMULTIPLY: u32 = 3 << 4;
 const PLANE_CTL_TILED_LINEAR: u32 = 0 << 10;
-const CURSOR_GLYPH_DIM_PX: u32 = 256;
-const CURSOR_GLYPH_RADIUS_PX: i32 = 116;
+const PLANE_COLOR_ALPHA_MASK: u32 = 0x03 << 4;
+const PLANE_COLOR_ALPHA_SW_PREMULTIPLY: u32 = 2 << 4;
+const PLANE_COLOR_ALPHA_HW_PREMULTIPLY: u32 = 3 << 4;
+const PLANE_COLOR_PLANE_GAMMA_DISABLE: u32 = 1 << 13;
+const CURSOR_GLYPH_DIM_PX: u32 = 32;
+const CURSOR_GLYPH_RADIUS_PX: i32 = 14;
 const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0240_0000;
+const CURSOR_OVERLAY_PLANE_INDEX: usize = 3;
+const PIPE_BOTTOM_COLOR_RGB: u32 = 0x00FF_37FF;
 
 static PRIMARY_GRADIENT_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
 static CURSOR_OVERLAY: Mutex<Option<CursorOverlaySurface>> = Mutex::new(None);
+static CURSOR_OVERLAY_PROBE_STATE: Mutex<Option<CursorOverlayProbeState>> = Mutex::new(None);
 
 #[derive(Copy, Clone)]
 struct PipeInfo {
@@ -61,6 +81,22 @@ struct CursorOverlaySurface {
 
 unsafe impl Send for CursorOverlaySurface {}
 unsafe impl Sync for CursorOverlaySurface {}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+struct CursorOverlayProbeState {
+    stride_reg: u32,
+    width: u32,
+    height: u32,
+    bbox_min_x: u32,
+    bbox_min_y: u32,
+    bbox_max_x: u32,
+    bbox_max_y: u32,
+    nonzero_pixels: u32,
+    alpha_pixels: u32,
+    bg_sample: u32,
+    center_sample: u32,
+    right_edge_sample: u32,
+}
 
 const PIPES: [PipeInfo; 4] = [
     PipeInfo {
@@ -148,6 +184,7 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         return;
     };
     log_primary_dimensions_probe(pipe.name, pipe_src_raw, pipe_src_dims, fb_dims, chosen_from);
+    program_pipe_bottom_color(dev, pipe, PIPE_BOTTOM_COLOR_RGB);
 
     let Some(pitch_bytes) = aligned_pitch_bytes(width) else {
         crate::log!(
@@ -219,6 +256,8 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         height,
         pipe,
     });
+    log_primary_plane_probe(dev, pipe, "primary-live");
+    log_overlay_plane_probe(dev, pipe, CURSOR_OVERLAY_PLANE_INDEX, "boot-baseline");
 
     crate::log!(
         "intel/display: primary-gradient pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={}\n",
@@ -235,6 +274,19 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         surf_armed,
         surf_live,
         ok as u8
+    );
+}
+
+fn program_pipe_bottom_color(dev: crate::intel::Dev, pipe: PipeInfo, rgb: u32) {
+    let reg = SKL_BOTTOM_COLOR_A + pipe.slot * SKL_BOTTOM_COLOR_PIPE_STRIDE;
+    crate::intel::mmio_write(dev, reg, rgb);
+    let readback = crate::intel::mmio_read(dev, reg);
+    crate::log!(
+        "intel/display: bottom-color pipe={} reg=0x{:05X} rgb=0x{:06X} readback=0x{:08X}\n",
+        pipe.name,
+        reg,
+        rgb & 0x00FF_FFFF,
+        readback
     );
 }
 
@@ -266,27 +318,47 @@ pub(crate) fn update_cursor_overlay(entries: &[(u32, u32, u32, u32)]) -> bool {
     fill_cursor_overlay_surface(surface, entries);
     crate::intel::dma_flush(surface.virt, surface.len);
 
-    let plane = overlay_plane_registers(primary.pipe, 0);
+    let plane = overlay_plane_registers(primary.pipe, CURSOR_OVERLAY_PLANE_INDEX);
     let stride_reg = match plane_stride_reg_value(surface.pitch_bytes) {
         Some(v) => v,
         None => return false,
     };
     let pos_reg = plane_pos_reg_value(0, 0);
     let size_reg = plane_size_reg_value(surface.width, surface.height);
-    let ctl_reg = PLANE_CTL_ENABLE
-        | PLANE_CTL_FORMAT_XRGB_8888
-        | PLANE_CTL_ALPHA_HW_PREMULTIPLY
-        | PLANE_CTL_TILED_LINEAR;
+    let ctl_reg = PLANE_CTL_ENABLE | PLANE_CTL_FORMAT_XRGB_8888 | PLANE_CTL_TILED_LINEAR;
+    let color_ctl_reg = PLANE_COLOR_PLANE_GAMMA_DISABLE | PLANE_COLOR_ALPHA_SW_PREMULTIPLY;
     let Some(surf_reg) = u32::try_from(surface.gpu_addr).ok() else {
         return false;
     };
+    log_cursor_overlay_probe(surface, stride_reg, entries);
 
+    crate::log!(
+        "intel/display: overlay-arm pipe={} plane={} hw_plane={} ctl=0x{:08X} format={} tiled={} color_ctl=0x{:08X} color_alpha={}\n",
+        primary.pipe.name,
+        CURSOR_OVERLAY_PLANE_INDEX,
+        overlay_hw_plane_slot(CURSOR_OVERLAY_PLANE_INDEX),
+        ctl_reg,
+        decode_plane_format(ctl_reg),
+        decode_plane_tiling(ctl_reg),
+        color_ctl_reg,
+        decode_plane_color_alpha(color_ctl_reg)
+    );
+    crate::intel::mmio_write(dev, plane.keyval_off, 0);
+    crate::intel::mmio_write(dev, plane.keymsk_off, 0);
+    crate::intel::mmio_write(dev, plane.keymax_off, 0);
     crate::intel::mmio_write(dev, plane.offset_off, 0);
     crate::intel::mmio_write(dev, plane.pos_off, pos_reg);
     crate::intel::mmio_write(dev, plane.size_off, size_reg);
     crate::intel::mmio_write(dev, plane.stride_off, stride_reg);
+    crate::intel::mmio_write(dev, plane.color_ctl_off, color_ctl_reg);
     crate::intel::mmio_write(dev, plane.ctl_off, ctl_reg);
     crate::intel::mmio_write(dev, plane.surf_off, surf_reg);
+    log_overlay_plane_probe(
+        dev,
+        primary.pipe,
+        CURSOR_OVERLAY_PLANE_INDEX,
+        "cursor-overlay-armed",
+    );
     true
 }
 
@@ -297,9 +369,16 @@ pub(crate) fn disable_cursor_overlay() -> bool {
     let Some(primary) = *PRIMARY_SURFACE.lock() else {
         return false;
     };
-    let plane = overlay_plane_registers(primary.pipe, 0);
+    let plane = overlay_plane_registers(primary.pipe, CURSOR_OVERLAY_PLANE_INDEX);
+    crate::intel::mmio_write(dev, plane.color_ctl_off, 0);
     crate::intel::mmio_write(dev, plane.ctl_off, 0);
     crate::intel::mmio_write(dev, plane.surf_off, 0);
+    log_overlay_plane_probe(
+        dev,
+        primary.pipe,
+        CURSOR_OVERLAY_PLANE_INDEX,
+        "cursor-overlay-disabled",
+    );
     true
 }
 
@@ -326,12 +405,19 @@ struct OverlayPlaneRegs {
     stride_off: usize,
     pos_off: usize,
     size_off: usize,
+    keyval_off: usize,
+    keymsk_off: usize,
     surf_off: usize,
+    keymax_off: usize,
     offset_off: usize,
+    aux_dist_off: usize,
+    aux_offset_off: usize,
+    color_ctl_off: usize,
+    buf_cfg_off: usize,
 }
 
 fn overlay_plane_registers(pipe: PipeInfo, overlay_index: usize) -> OverlayPlaneRegs {
-    let hw_plane_slot = overlay_index + 1;
+    let hw_plane_slot = overlay_hw_plane_slot(overlay_index);
     let base =
         UNI_PLANE_BASE + pipe.slot * UNI_PLANE_PIPE_STRIDE + hw_plane_slot * UNI_PLANE_SLOT_STRIDE;
     OverlayPlaneRegs {
@@ -339,9 +425,167 @@ fn overlay_plane_registers(pipe: PipeInfo, overlay_index: usize) -> OverlayPlane
         stride_off: base + UNI_PLANE_STRIDE_OFF,
         pos_off: base + UNI_PLANE_POS_OFF,
         size_off: base + UNI_PLANE_SIZE_OFF,
+        keyval_off: base + UNI_PLANE_KEYVAL_OFF,
+        keymsk_off: base + UNI_PLANE_KEYMSK_OFF,
         surf_off: base + UNI_PLANE_SURF_OFF,
+        keymax_off: base + UNI_PLANE_KEYMAX_OFF,
         offset_off: base + UNI_PLANE_OFFSET_OFF,
+        aux_dist_off: base + UNI_PLANE_AUX_DIST_OFF,
+        aux_offset_off: base + UNI_PLANE_AUX_OFFSET_OFF,
+        color_ctl_off: base + UNI_PLANE_COLOR_CTL_OFF,
+        buf_cfg_off: base + UNI_PLANE_BUF_CFG_OFF,
     }
+}
+
+#[inline]
+fn overlay_hw_plane_slot(overlay_index: usize) -> usize {
+    overlay_index + 1
+}
+
+fn log_primary_plane_probe(dev: crate::intel::Dev, pipe: PipeInfo, label: &str) {
+    let ctl = crate::intel::mmio_read(dev, pipe.plane_ctl_off);
+    let stride = crate::intel::mmio_read(dev, pipe.plane_stride_off);
+    let surf = crate::intel::mmio_read(dev, pipe.plane_surf_off);
+    let surf_live = crate::intel::mmio_read(dev, pipe.plane_surf_live_off);
+    let color_ctl = crate::intel::mmio_read(dev, pipe.plane_ctl_off + UNI_PLANE_COLOR_CTL_OFF);
+    let buf_cfg = crate::intel::mmio_read(dev, pipe.plane_ctl_off + UNI_PLANE_BUF_CFG_OFF);
+
+    crate::log!(
+        "intel/display: primary-probe label={} pipe={} ctl=0x{:08X} enabled={} format={} tiled={} rot={} rgbx={} stride=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} color_ctl=0x{:08X} color_alpha={} buf_cfg=0x{:08X}\n",
+        label,
+        pipe.name,
+        ctl,
+        ((ctl & PLANE_CTL_ENABLE) != 0) as u8,
+        decode_plane_format(ctl),
+        decode_plane_tiling(ctl),
+        decode_plane_rotation(ctl),
+        ((ctl & PLANE_CTL_ORDER_RGBX) != 0) as u8,
+        stride,
+        surf,
+        surf_live,
+        color_ctl,
+        decode_plane_color_alpha(color_ctl),
+        buf_cfg
+    );
+}
+
+fn log_overlay_plane_probe(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    overlay_index: usize,
+    label: &str,
+) {
+    let plane = overlay_plane_registers(pipe, overlay_index);
+    let ctl = crate::intel::mmio_read(dev, plane.ctl_off);
+    let stride = crate::intel::mmio_read(dev, plane.stride_off);
+    let pos = crate::intel::mmio_read(dev, plane.pos_off);
+    let size = crate::intel::mmio_read(dev, plane.size_off);
+    let keyval = crate::intel::mmio_read(dev, plane.keyval_off);
+    let keymsk = crate::intel::mmio_read(dev, plane.keymsk_off);
+    let offset = crate::intel::mmio_read(dev, plane.offset_off);
+    let surf = crate::intel::mmio_read(dev, plane.surf_off);
+    let surf_live = crate::intel::mmio_read(dev, plane.surf_off + (UNI_PLANE_SURFLIVE_OFF - UNI_PLANE_SURF_OFF));
+    let keymax = crate::intel::mmio_read(dev, plane.keymax_off);
+    let aux_dist = crate::intel::mmio_read(dev, plane.aux_dist_off);
+    let aux_offset = crate::intel::mmio_read(dev, plane.aux_offset_off);
+    let color_ctl = crate::intel::mmio_read(dev, plane.color_ctl_off);
+    let buf_cfg = crate::intel::mmio_read(dev, plane.buf_cfg_off);
+
+    crate::log!(
+        "intel/display: overlay-probe label={} pipe={} plane={} hw_plane={} ctl=0x{:08X} enabled={} format={} tiled={} rot={} rgbx={} stride=0x{:08X} pos={}x{} size={}x{} offset={}x{} surf=0x{:08X} surf_live=0x{:08X} color_ctl=0x{:08X} color_alpha={} key=0x{:08X}/0x{:08X}/0x{:08X} aux=0x{:08X}/0x{:08X} buf_cfg=0x{:08X}\n",
+        label,
+        pipe.name,
+        overlay_index,
+        overlay_hw_plane_slot(overlay_index),
+        ctl,
+        ((ctl & PLANE_CTL_ENABLE) != 0) as u8,
+        decode_plane_format(ctl),
+        decode_plane_tiling(ctl),
+        decode_plane_rotation(ctl),
+        ((ctl & PLANE_CTL_ORDER_RGBX) != 0) as u8,
+        stride,
+        decode_xy_x(pos),
+        decode_xy_y(pos),
+        decode_xy_x(size).saturating_add(1),
+        decode_xy_y(size).saturating_add(1),
+        decode_xy_x(offset),
+        decode_xy_y(offset),
+        surf,
+        surf_live,
+        color_ctl,
+        decode_plane_color_alpha(color_ctl),
+        keyval,
+        keymsk,
+        keymax,
+        aux_dist,
+        aux_offset,
+        buf_cfg
+    );
+}
+
+fn decode_plane_format(ctl: u32) -> &'static str {
+    match ctl & PLANE_CTL_FORMAT_MASK_SKL {
+        0x0000_0000 => "YUV422",
+        0x0100_0000 => "NV12",
+        0x0200_0000 => "XRGB2101010",
+        0x0300_0000 => "P010",
+        0x0400_0000 => "XRGB8888/ARGB8888",
+        0x0500_0000 => "P012",
+        0x0600_0000 => "XRGB16161616F",
+        0x0700_0000 => "P016",
+        0x0800_0000 => "XYUV",
+        0x0C00_0000 => "INDEXED",
+        0x0E00_0000 => "RGB565",
+        _ => "unknown",
+    }
+}
+
+fn decode_plane_alpha(ctl: u32) -> &'static str {
+    match ctl & PLANE_CTL_ALPHA_MASK {
+        0x00 => "disable",
+        0x20 => "sw-premul",
+        0x30 => "hw-premul",
+        _ => "unknown",
+    }
+}
+
+fn decode_plane_color_alpha(color_ctl: u32) -> &'static str {
+    match color_ctl & PLANE_COLOR_ALPHA_MASK {
+        0x00 => "disable",
+        0x20 => "sw-premul",
+        0x30 => "hw-premul",
+        _ => "unknown",
+    }
+}
+
+fn decode_plane_tiling(ctl: u32) -> &'static str {
+    match ctl & PLANE_CTL_TILED_MASK {
+        0x0000 => "linear",
+        0x0400 => "x",
+        0x1000 => "y",
+        0x1400 => "yf/4",
+        _ => "unknown",
+    }
+}
+
+fn decode_plane_rotation(ctl: u32) -> &'static str {
+    match ctl & PLANE_CTL_ROTATE_MASK {
+        0 => "0",
+        1 => "90",
+        2 => "180",
+        3 => "270",
+        _ => "unknown",
+    }
+}
+
+#[inline]
+fn decode_xy_x(v: u32) -> u32 {
+    v & 0xFFFF
+}
+
+#[inline]
+fn decode_xy_y(v: u32) -> u32 {
+    (v >> 16) & 0xFFFF
 }
 
 fn ensure_cursor_overlay_surface(
@@ -504,6 +748,127 @@ fn fill_cursor_overlay_surface(surface: CursorOverlaySurface, entries: &[(u32, u
             buttons_down,
         );
     }
+}
+
+fn log_cursor_overlay_probe(
+    surface: CursorOverlaySurface,
+    stride_reg: u32,
+    entries: &[(u32, u32, u32, u32)],
+) {
+    let summary = summarize_cursor_overlay(surface, stride_reg, entries);
+    let mut guard = CURSOR_OVERLAY_PROBE_STATE.lock();
+    if guard.as_ref().copied() == Some(summary) {
+        return;
+    }
+    *guard = Some(summary);
+
+    let bytes_per_row_from_reg = stride_reg.saturating_mul(64);
+    let last_row_end = (surface.height.saturating_sub(1))
+        .saturating_mul(surface.pitch_bytes)
+        .saturating_add(surface.width.saturating_mul(4));
+    crate::log!(
+        "intel/display: overlay-geom width={} height={} pitch_bytes=0x{:X} stride_reg=0x{:X} stride_bytes=0x{:X} last_row_end=0x{:X} surface_len=0x{:X} fits={}\n",
+        surface.width,
+        surface.height,
+        surface.pitch_bytes,
+        stride_reg,
+        bytes_per_row_from_reg,
+        last_row_end,
+        surface.len,
+        (usize::try_from(last_row_end).ok().is_some_and(|end| end <= surface.len)) as u8
+    );
+    crate::log!(
+        "intel/display: overlay-coverage entries={} nonzero={} alpha_pixels={} bbox={}x{}..{}x{}\n",
+        entries.len(),
+        summary.nonzero_pixels,
+        summary.alpha_pixels,
+        summary.bbox_min_x,
+        summary.bbox_min_y,
+        summary.bbox_max_x,
+        summary.bbox_max_y
+    );
+    crate::log!(
+        "intel/display: overlay-pixels bg=0x{:08X} center=0x{:08X} right=0x{:08X}\n",
+        summary.bg_sample,
+        summary.center_sample,
+        summary.right_edge_sample
+    );
+}
+
+fn summarize_cursor_overlay(
+    surface: CursorOverlaySurface,
+    stride_reg: u32,
+    entries: &[(u32, u32, u32, u32)],
+) -> CursorOverlayProbeState {
+    let mut nonzero_pixels = 0u32;
+    let mut alpha_pixels = 0u32;
+    let mut bbox_min_x = surface.width;
+    let mut bbox_min_y = surface.height;
+    let mut bbox_max_x = 0u32;
+    let mut bbox_max_y = 0u32;
+
+    for y in 0..surface.height {
+        for x in 0..surface.width {
+            let px = read_overlay_pixel(surface, x, y);
+            if px == 0 {
+                continue;
+            }
+            nonzero_pixels = nonzero_pixels.saturating_add(1);
+            if (px >> 24) != 0 {
+                alpha_pixels = alpha_pixels.saturating_add(1);
+            }
+            bbox_min_x = bbox_min_x.min(x);
+            bbox_min_y = bbox_min_y.min(y);
+            bbox_max_x = bbox_max_x.max(x);
+            bbox_max_y = bbox_max_y.max(y);
+        }
+    }
+
+    if nonzero_pixels == 0 {
+        bbox_min_x = 0;
+        bbox_min_y = 0;
+    }
+
+    let (_, sample_x, sample_y, _) = entries.first().copied().unwrap_or((0, 0, 0, 0));
+    let center_sample = read_overlay_pixel(
+        surface,
+        sample_x.min(surface.width.saturating_sub(1)),
+        sample_y.min(surface.height.saturating_sub(1)),
+    );
+    let right_edge_sample = read_overlay_pixel(
+        surface,
+        surface.width.saturating_sub(1),
+        sample_y.min(surface.height.saturating_sub(1)),
+    );
+
+    CursorOverlayProbeState {
+        stride_reg,
+        width: surface.width,
+        height: surface.height,
+        bbox_min_x,
+        bbox_min_y,
+        bbox_max_x,
+        bbox_max_y,
+        nonzero_pixels,
+        alpha_pixels,
+        bg_sample: read_overlay_pixel(surface, 0, 0),
+        center_sample,
+        right_edge_sample,
+    }
+}
+
+#[inline]
+fn read_overlay_pixel(surface: CursorOverlaySurface, x: u32, y: u32) -> u32 {
+    if x >= surface.width || y >= surface.height {
+        return 0;
+    }
+    let off = (y as usize)
+        .saturating_mul(surface.pitch_bytes as usize)
+        .saturating_add((x as usize).saturating_mul(4));
+    if off + 4 > surface.len {
+        return 0;
+    }
+    unsafe { core::ptr::read_volatile(surface.virt.add(off) as *const u32) }
 }
 
 fn paint_cursor_glyph(
