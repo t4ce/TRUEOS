@@ -152,6 +152,7 @@ define_started_flags!(
     UI2_USB_AUDIO_DEMO_STARTED,
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
     GFX_INTEL_READINESS_PROBE_STARTED,
+    INTEL_DISPLAY_SERVICE_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
     CRABUSB_EVENT_PUMP_STARTED,
     CRABUSB_AUDIO_STARTED,
@@ -454,6 +455,17 @@ fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
 fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
         ap1_spawner.spawn(crate::r::io::cabi::texture_upload_service_task())
+    })
+}
+
+#[inline]
+fn intel_display_task_gate() -> bool {
+    crate::intel::has_claimed_device()
+}
+
+fn spawn_intel_display_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| {
+        spawner.spawn(crate::intel::services::intel_display_service_task())
     })
 }
 
@@ -956,6 +968,13 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::GFX_BACKEND_READY,
         &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
         spawn_gfx_virgl_cursor_overlay_task,
+    ),
+    TaskSpec::enabled_gated(
+        "intel-display-service",
+        0,
+        intel_display_task_gate,
+        &INTEL_DISPLAY_SERVICE_STARTED,
+        spawn_intel_display_service,
     ),
     TaskSpec::enabled("html_fetch_service", 0, &HTML_SHACK_SERVICE_STARTED, html_fetch_service),
     TaskSpec::enabled(

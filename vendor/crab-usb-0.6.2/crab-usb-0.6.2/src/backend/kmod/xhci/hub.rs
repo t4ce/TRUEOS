@@ -53,7 +53,6 @@ impl PortChangeWaker {
     pub fn set_port_changed(&self, port_id: u8) {
         let ports = unsafe { &*self.ports.get() };
         let idx = (port_id - 1) as usize;
-        debug!("Setting port {} changed", port_id);
         ports[idx].changed.store(true, Ordering::Release);
         ports[idx].change_waker.wake();
     }

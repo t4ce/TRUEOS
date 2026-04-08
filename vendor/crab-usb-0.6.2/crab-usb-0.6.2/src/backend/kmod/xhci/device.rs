@@ -669,7 +669,6 @@ impl Device {
     }
 
     async fn _set_configuration(&mut self, configuration_value: u8) -> Result {
-        let lifecycle = self.lifecycle();
         if self.current_config_value == Some(configuration_value) {
             info!(
                 "crabusb/xhci/device: slot={} root_port={} port={} skipping set-configuration {} (already active)",
@@ -678,19 +677,15 @@ impl Device {
                 self.port_id,
                 configuration_value
             );
-            lifecycle.ok(CommandLifecycleStage::SetConfiguration, u32::from(configuration_value));
             return Ok(());
         }
 
         self.ctx.perper_change();
-        lifecycle.begin(CommandLifecycleStage::SetConfiguration, u32::from(configuration_value));
         if let Err(err) = self
             .ep_ctrl()
             .set_configuration(configuration_value)
             .await
         {
-            self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::SetConfiguration, &err)
-                .await;
             return Err(err.into());
         }
 
@@ -701,11 +696,8 @@ impl Device {
             c.set_configuration_value(configuration_value);
         });
         if let Err(err) = self.evaluate().await {
-            self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::SetConfiguration, &err)
-                .await;
             return Err(err.into());
         }
-        lifecycle.ok(CommandLifecycleStage::SetConfiguration, u32::from(configuration_value));
         debug!("Device configuration set to {configuration_value}");
         Ok(())
     }

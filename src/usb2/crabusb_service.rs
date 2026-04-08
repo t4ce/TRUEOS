@@ -216,6 +216,7 @@ fn connected_ports_summary(controller_id: usize) -> String {
 fn install_event_handler(controller_id: usize, handler: EventHandler) {
     *EVENT_HANDLER[controller_id].lock() = Some(handler);
     EVENT_HANDLER_READY[controller_id].store(true, Ordering::Release);
+    PROBE_REQUESTED[controller_id].store(false, Ordering::Release);
 }
 
 fn uninstall_event_handler(controller_id: usize) {
@@ -357,8 +358,8 @@ pub async fn event_pump_task(controller_id: usize) {
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
             Some(Event::PortChange { port }) => {
-                PROBE_REQUESTED[controller_id].store(true, Ordering::Release);
-                if usb_log_all_enabled() {
+                let already_pending = PROBE_REQUESTED[controller_id].swap(true, Ordering::AcqRel);
+                if usb_log_all_enabled() && !already_pending {
                     crate::log!(
                         "crabusb: pump port change ctrl={} root_port={}\n",
                         controller_id,

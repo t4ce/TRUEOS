@@ -48,8 +48,9 @@ struct HidBootTarget {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveHidStream {
     controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
+    stable_id: u32,
+    interface_number: u8,
+    in_endpoint: u8,
     kind: HidBootKind,
 }
 
@@ -403,9 +404,7 @@ fn unregister_active_hid_stream(stream: ActiveHidStream) -> bool {
     if let Some(idx) = streams.iter().position(|active| *active == stream) {
         streams.remove(idx);
     }
-    !streams.iter().any(|active| {
-        active.controller_id == stream.controller_id && active.slot_id == stream.slot_id
-    })
+    !streams.iter().any(|active| active.controller_id == stream.controller_id)
 }
 
 async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {
@@ -429,18 +428,13 @@ async fn hid_boot_stream_task(
     mut device: crab_usb::Device,
     controller_id: u32,
     target: HidBootTarget,
+    active_stream: ActiveHidStream,
 ) {
     let desc = device.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
     let slot_id = u32::from(device.slot_id());
     let ep_target = endpoint_target_from_address(target.in_endpoint);
-    let active_stream = ActiveHidStream {
-        controller_id,
-        slot_id,
-        ep_target,
-        kind: target.kind,
-    };
     let mut boot_protocol_ok = false;
     let mut set_idle_ok = false;
 
@@ -712,9 +706,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
-    if log_descriptors {
-        log_hid_report_descriptors(host, dev_info).await;
-    }
+    let stable_id = dev_info.stable_id().raw();
     let targets = pick_hid_boot_targets(dev_info.configurations());
     if targets.is_empty() {
         let hid_iface_count = dev_info
@@ -740,8 +732,20 @@ pub(crate) async fn maybe_start_hid_boot_streams(
     );
 
     let mut started_any = false;
+    let mut descriptors_pending = log_descriptors;
 
     for target in targets {
+        let active_stream = ActiveHidStream {
+            controller_id,
+            stable_id,
+            interface_number: target.interface_number,
+            in_endpoint: target.in_endpoint,
+            kind: target.kind,
+        };
+        if !register_active_hid_stream(active_stream) {
+            continue;
+        }
+
         crate::log!(
             "crabusb: hid {:04X}:{:04X} target kind={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} proto={:02X}\n",
             vendor_id,
@@ -757,6 +761,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
         let device = match host.open_device(dev_info).await {
             Ok(device) => device,
             Err(err) => {
+                let _ = unregister_active_hid_stream(active_stream);
                 crate::log!(
                     "crabusb: hid {} {:04X}:{:04X} open failed: {:?}\n",
                     target.kind.as_str(),
@@ -767,20 +772,14 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                 continue;
             }
         };
+        let mut device = device;
 
-        let slot_id = u32::from(device.slot_id());
-        let ep_target = endpoint_target_from_address(target.in_endpoint);
-        let active_stream = ActiveHidStream {
-            controller_id,
-            slot_id,
-            ep_target,
-            kind: target.kind,
-        };
-        if !register_active_hid_stream(active_stream) {
-            continue;
+        if descriptors_pending {
+            log_hid_report_descriptors_on_device(&mut device, dev_info).await;
+            descriptors_pending = false;
         }
 
-        match spawner.spawn(hid_boot_stream_task(device, controller_id, target)) {
+        match spawner.spawn(hid_boot_stream_task(device, controller_id, target, active_stream)) {
             Ok(()) => {
                 started_any = true;
                 crate::log!(

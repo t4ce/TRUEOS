@@ -1,5 +1,7 @@
+mod display;
 mod guc;
 mod render;
+pub(crate) mod services;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
@@ -8,6 +10,7 @@ pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
 pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
 pub(crate) const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
 pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
+pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
 pub(crate) const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
 const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
@@ -119,6 +122,7 @@ pub fn init_once() {
     let warm = self::render::warm_once(dev);
     self::render::log_cursor_plane_info(warm);
     self::render::log_sprite_plane_info(warm);
+    self::display::init_primary_gradient(dev);
     if self::render::forcewake_render_acquire(warm) {
         self::render::forcewake_render_sanity(warm);
     }
@@ -130,6 +134,10 @@ pub fn guc_ready() -> bool {
 
 pub fn has_claimed_device() -> bool {
     CLAIMED_DEVICE.lock().is_some()
+}
+
+pub(crate) fn claimed_device() -> Option<Dev> {
+    *CLAIMED_DEVICE.lock()
 }
 
 pub fn warm_state() -> Option<self::render::RenderWarmState> {
