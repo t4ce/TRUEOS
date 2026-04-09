@@ -1,7 +1,6 @@
 mod display;
 mod guc;
 mod render;
-pub(crate) mod services;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
