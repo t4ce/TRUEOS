@@ -53,7 +53,9 @@ impl log::Log for KernelLogFacade {
         let module_path = record.module_path().unwrap_or("");
         let target = record.target();
         let is_usb_vendor_log = module_path.contains("crab_usb") || target.contains("crab_usb");
-        if is_usb_vendor_log && !crate::logflag::USB_LOG_ALL.load(core::sync::atomic::Ordering::Relaxed) {
+        if is_usb_vendor_log
+            && !crate::logflag::USB_LOG_ALL.load(core::sync::atomic::Ordering::Relaxed)
+        {
             return;
         }
         log(format_args!("crabusb: {}\n", record.args()));

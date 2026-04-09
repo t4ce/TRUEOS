@@ -647,11 +647,7 @@ fn schedule_browser_title_icon_fetch(
             window.title_icon_url = String::from(favicon_url);
             window.title_icon_tex_id = 0;
             window.title_icon_load_seq = window.title_icon_load_seq.wrapping_add(1).max(1);
-            (
-                true,
-                window.title_icon_load_seq,
-                window.title_icon_url.clone(),
-            )
+            (true, window.title_icon_load_seq, window.title_icon_url.clone())
         }
     };
     if !changed {

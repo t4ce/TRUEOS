@@ -76,12 +76,8 @@ const TRIANGLE_MIN_DIM: usize = 8;
 const TRIANGLE_MAX_W: usize = 20;
 const TRIANGLE_MAX_H: usize = 18;
 const TRIANGLE_DRAW_VERTICES: usize = 3;
-const TRIANGLE_DRAW_POSITION_COMPONENTS: usize = 4;
-const TRIANGLE_DRAW_COLOR_COMPONENTS: usize = 4;
-const TRIANGLE_DRAW_VERTEX_DWORDS: usize =
-    TRIANGLE_DRAW_POSITION_COMPONENTS + TRIANGLE_DRAW_COLOR_COMPONENTS;
-const TRIANGLE_DRAW_VERTEX_STRIDE: usize =
-    TRIANGLE_DRAW_VERTEX_DWORDS * core::mem::size_of::<u32>();
+const TRIANGLE_DRAW_VERTEX_DWORDS: usize = crate::intel::shader::TRIANGLE_VERTEX_COMPONENTS;
+const TRIANGLE_DRAW_VERTEX_STRIDE: usize = crate::intel::shader::TRIANGLE_VERTEX_STRIDE_BYTES;
 
 #[derive(Copy, Clone, Debug)]
 pub struct RenderWarmState {
@@ -159,10 +155,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             result_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!(
-            "intel/render: warm alloc failed part=ring size=0x{:X}\n",
-            WARM_RING_BYTES
-        );
+        crate::log!("intel/render: warm alloc failed part=ring size=0x{:X}\n", WARM_RING_BYTES);
         return warm;
     };
     let Some((context_phys, context_virt)) =
@@ -227,10 +220,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             result_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!(
-            "intel/render: warm alloc failed part=batch size=0x{:X}\n",
-            WARM_BATCH_BYTES
-        );
+        crate::log!("intel/render: warm alloc failed part=batch size=0x{:X}\n", WARM_BATCH_BYTES);
         return warm;
     };
     let Some((draw_state_phys, draw_state_virt)) =
@@ -295,10 +285,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             result_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!(
-            "intel/render: warm alloc failed part=vertex size=0x{:X}\n",
-            WARM_VERTEX_BYTES
-        );
+        crate::log!("intel/render: warm alloc failed part=vertex size=0x{:X}\n", WARM_VERTEX_BYTES);
         return warm;
     };
     let Some((result_phys, result_virt)) =
@@ -329,10 +316,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             result_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!(
-            "intel/render: warm alloc failed part=result size=0x{:X}\n",
-            WARM_RESULT_BYTES
-        );
+        crate::log!("intel/render: warm alloc failed part=result size=0x{:X}\n", WARM_RESULT_BYTES);
         return warm;
     };
 
@@ -444,13 +428,8 @@ pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
     );
 
     crate::intel::mmio_write(dev, FORCEWAKE_GT, crate::intel::mask_en(FORCEWAKE_KERNEL));
-    let gt_ok = wait_eq(
-        dev,
-        FORCEWAKE_ACK_GT,
-        FORCEWAKE_KERNEL,
-        FORCEWAKE_KERNEL,
-        FORCEWAKE_POLL_ITERS,
-    );
+    let gt_ok =
+        wait_eq(dev, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
 
     crate::log!(
         "intel/render: forcewake render_cleared={} render_ack=0x{:08X} gt_ack=0x{:08X} ok={}\n",
@@ -505,12 +484,11 @@ pub(crate) fn submit_primary_triangle_once() {
         crate::log!("intel/render: primary-triangle skipped reason=no-dimensions\n");
         return;
     };
-    let Some(pitch_bytes) = width.checked_mul(4).and_then(|v| crate::intel::align_up(v as usize, 64))
+    let Some(pitch_bytes) = width
+        .checked_mul(4)
+        .and_then(|v| crate::intel::align_up(v as usize, 64))
     else {
-        crate::log!(
-            "intel/render: primary-triangle skipped reason=bad-pitch width={}\n",
-            width
-        );
+        crate::log!("intel/render: primary-triangle skipped reason=bad-pitch width={}\n", width);
         return;
     };
 
@@ -600,8 +578,26 @@ fn submit_triangle_draw_to_surface(
         return false;
     };
 
+    let Some(pipeline) = crate::intel::shader::triangle_pipeline() else {
+        crate::log!(
+            "intel/render: draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-baked-shaders vs_src={} ps_src={} note={}\n",
+            draw.rt_gpu_addr,
+            draw.vertex_gpu_addr,
+            draw.state_gpu_addr,
+            draw.target_w,
+            draw.target_h,
+            draw.rt_pitch,
+            draw.vertex_count,
+            draw.vertex_stride,
+            crate::intel::shader::TRIANGLE_VERTEX_SOURCE_PATH,
+            crate::intel::shader::TRIANGLE_FRAGMENT_SOURCE_PATH,
+            crate::intel::shader::triangle_pipeline_note()
+        );
+        return false;
+    };
+
     crate::log!(
-        "intel/render: draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-shader-kernels\n",
+        "intel/render: draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_dwords={} ps_dwords={} varyings={} ps_dispatch={:?}\n",
         draw.rt_gpu_addr,
         draw.vertex_gpu_addr,
         draw.state_gpu_addr,
@@ -609,7 +605,11 @@ fn submit_triangle_draw_to_surface(
         draw.target_h,
         draw.rt_pitch,
         draw.vertex_count,
-        draw.vertex_stride
+        draw.vertex_stride,
+        pipeline.vs.code.len(),
+        pipeline.ps.code.len(),
+        pipeline.ps.meta.num_varying_inputs,
+        pipeline.ps.meta.kernel.dispatch_mode
     );
     false
 }
@@ -634,18 +634,15 @@ fn prepare_triangle_draw_resources(
     let vertices = unsafe {
         core::slice::from_raw_parts_mut(
             warm.vertex_virt as *mut f32,
-            (warm.vertex_len / core::mem::size_of::<f32>()).max(TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_DWORDS),
+            (warm.vertex_len / core::mem::size_of::<f32>())
+                .max(TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_DWORDS),
         )
     };
     vertices.fill(0.0);
 
-    // Keep this orthographic and centered in clip space: three colored vertices,
-    // ready for a future VS/PS pair to consume directly.
-    let tri = [
-        [0.0f32, 0.72, 0.0, 1.0, 1.0, 0.18, 0.12, 1.0],
-        [-0.72, -0.58, 0.0, 1.0, 0.12, 0.92, 0.22, 1.0],
-        [0.72, -0.58, 0.0, 1.0, 0.12, 0.34, 0.98, 1.0],
-    ];
+    // Keep this orthographic and centered in clip space so the first baked VS
+    // only needs to pass through position.
+    let tri = [[0.0f32, 0.72, 0.0], [-0.72, -0.58, 0.0], [0.72, -0.58, 0.0]];
     for (dst, src) in vertices
         .chunks_exact_mut(TRIANGLE_DRAW_VERTEX_DWORDS)
         .take(TRIANGLE_DRAW_VERTICES)
@@ -689,7 +686,8 @@ fn submit_triangle_to_surface(
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
-    let batch = unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
     let Ok(batch_tail_bytes) = encode_rgb_triangle_store_batch(
         batch,
         dst_gpu_addr,
@@ -713,8 +711,12 @@ fn submit_triangle_to_surface(
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
         return false;
     };
-    if !init_gen12_lrc_context_image(warm, GPU_VA_RING_BASE as u32, ring_tail_bytes as u32, ring_ctl)
-    {
+    if !init_gen12_lrc_context_image(
+        warm,
+        GPU_VA_RING_BASE as u32,
+        ring_tail_bytes as u32,
+        ring_ctl,
+    ) {
         return false;
     }
     let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE);
@@ -777,7 +779,8 @@ fn submit_triangle_to_surface(
 }
 
 fn build_ring_batch_start(warm: RenderWarmState, batch_gpu_addr: u64) -> usize {
-    let dwords = unsafe { core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, BLT_RING_DWORDS) };
+    let dwords =
+        unsafe { core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, BLT_RING_DWORDS) };
     dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT;
     dwords[1] = batch_gpu_addr as u32;
     dwords[2] = (batch_gpu_addr >> 32) as u32;
@@ -1110,7 +1113,10 @@ fn encode_rgb_triangle_store_batch(
             let w0 = edge_fn2(v1x, v1y, v2x, v2y, px, py);
             let w1 = edge_fn2(v2x, v2y, v0x, v0y, px, py);
             let w2 = edge_fn2(v0x, v0y, v1x, v1y, px, py);
-            if !same_sign_or_zero(area, w0) || !same_sign_or_zero(area, w1) || !same_sign_or_zero(area, w2) {
+            if !same_sign_or_zero(area, w0)
+                || !same_sign_or_zero(area, w1)
+                || !same_sign_or_zero(area, w2)
+            {
                 continue;
             }
             if idx + STORE_DWORDS > writable_limit {
@@ -1173,11 +1179,7 @@ fn edge_fn2(ax: i32, ay: i32, bx: i32, by: i32, px2: i32, py2: i32) -> i64 {
 }
 
 fn same_sign_or_zero(area: i64, value: i64) -> bool {
-    if area >= 0 {
-        value >= 0
-    } else {
-        value <= 0
-    }
+    if area >= 0 { value >= 0 } else { value <= 0 }
 }
 
 fn bary_to_u8(weight: i64, area: i64) -> u32 {
@@ -1212,17 +1214,15 @@ struct SpritePlaneCaps {
 
 fn cursor_plane_caps(device_id: u16) -> CursorPlaneCaps {
     match device_id {
-        0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693 => {
-            CursorPlaneCaps {
-                platform: "ADL-S",
-                layout: "TGL/XE_D",
-                max_width: 256,
-                max_height: 256,
-                pipe_count: 4,
-            }
-        }
-        0x46A0 | 0x46A1 | 0x46A2 | 0x46A3 | 0x46A6 | 0x46A8 | 0x46AA | 0x462A
-        | 0x4626 | 0x4628 | 0x46B0 | 0x46B1 | 0x46B2 | 0x46B3 => CursorPlaneCaps {
+        0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693 => CursorPlaneCaps {
+            platform: "ADL-S",
+            layout: "TGL/XE_D",
+            max_width: 256,
+            max_height: 256,
+            pipe_count: 4,
+        },
+        0x46A0 | 0x46A1 | 0x46A2 | 0x46A3 | 0x46A6 | 0x46A8 | 0x46AA | 0x462A | 0x4626 | 0x4628
+        | 0x46B0 | 0x46B1 | 0x46B2 | 0x46B3 => CursorPlaneCaps {
             platform: "ADL-P/N",
             layout: "TGL/XE_LPD",
             max_width: 256,
@@ -1241,21 +1241,19 @@ fn cursor_plane_caps(device_id: u16) -> CursorPlaneCaps {
 
 fn sprite_plane_caps(device_id: u16) -> SpritePlaneCaps {
     match device_id {
-        0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693 => {
-            SpritePlaneCaps {
-                platform: "ADL-S",
-                display_ver: 13,
-                pipe_count: 4,
-                overlays_per_pipe: 4,
-                rotation: "0|180",
-                reflect_x: true,
-                csc: "BT601|BT709|BT2020",
-                scaling_filter: "default|nearest",
-                damage_clips: true,
-            }
-        }
-        0x46A0 | 0x46A1 | 0x46A2 | 0x46A3 | 0x46A6 | 0x46A8 | 0x46AA | 0x462A
-        | 0x4626 | 0x4628 | 0x46B0 | 0x46B1 | 0x46B2 | 0x46B3 => SpritePlaneCaps {
+        0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693 => SpritePlaneCaps {
+            platform: "ADL-S",
+            display_ver: 13,
+            pipe_count: 4,
+            overlays_per_pipe: 4,
+            rotation: "0|180",
+            reflect_x: true,
+            csc: "BT601|BT709|BT2020",
+            scaling_filter: "default|nearest",
+            damage_clips: true,
+        },
+        0x46A0 | 0x46A1 | 0x46A2 | 0x46A3 | 0x46A6 | 0x46A8 | 0x46AA | 0x462A | 0x4626 | 0x4628
+        | 0x46B0 | 0x46B1 | 0x46B2 | 0x46B3 => SpritePlaneCaps {
             platform: "ADL-P/N",
             display_ver: 13,
             pipe_count: 4,

@@ -404,7 +404,9 @@ fn unregister_active_hid_stream(stream: ActiveHidStream) -> bool {
     if let Some(idx) = streams.iter().position(|active| *active == stream) {
         streams.remove(idx);
     }
-    !streams.iter().any(|active| active.controller_id == stream.controller_id)
+    !streams
+        .iter()
+        .any(|active| active.controller_id == stream.controller_id)
 }
 
 async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {

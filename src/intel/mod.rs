@@ -1,6 +1,7 @@
 mod display;
 mod guc;
 mod render;
+pub(crate) mod shader;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
@@ -263,11 +264,7 @@ pub(crate) fn compute_wopcm(fw: u32) -> Option<(u32, u32)> {
         return None;
     }
     let size = (usable - base) & GUC_WOPCM_SIZE_MASK;
-    if size < min {
-        None
-    } else {
-        Some((base, size))
-    }
+    if size < min { None } else { Some((base, size)) }
 }
 pub(crate) fn align_up(v: usize, a: usize) -> Option<usize> {
     let m = a.checked_sub(1)?;

@@ -64,12 +64,18 @@ const PIPES: [PipeInfo; 4] = [
         name: "pipe-a",
         slot: 0,
         pipe_src_off: PIPE_A_SRC,
-        plane_ctl_off: UNI_PLANE_BASE + 0 * UNI_PLANE_PIPE_STRIDE + 0 * UNI_PLANE_SLOT_STRIDE + UNI_PLANE_CTL_OFF,
+        plane_ctl_off: UNI_PLANE_BASE
+            + 0 * UNI_PLANE_PIPE_STRIDE
+            + 0 * UNI_PLANE_SLOT_STRIDE
+            + UNI_PLANE_CTL_OFF,
         plane_stride_off: UNI_PLANE_BASE
             + 0 * UNI_PLANE_PIPE_STRIDE
             + 0 * UNI_PLANE_SLOT_STRIDE
             + UNI_PLANE_STRIDE_OFF,
-        plane_surf_off: UNI_PLANE_BASE + 0 * UNI_PLANE_PIPE_STRIDE + 0 * UNI_PLANE_SLOT_STRIDE + UNI_PLANE_SURF_OFF,
+        plane_surf_off: UNI_PLANE_BASE
+            + 0 * UNI_PLANE_PIPE_STRIDE
+            + 0 * UNI_PLANE_SLOT_STRIDE
+            + UNI_PLANE_SURF_OFF,
         plane_surf_live_off: UNI_PLANE_BASE
             + 0 * UNI_PLANE_PIPE_STRIDE
             + 0 * UNI_PLANE_SLOT_STRIDE
@@ -79,12 +85,18 @@ const PIPES: [PipeInfo; 4] = [
         name: "pipe-b",
         slot: 1,
         pipe_src_off: PIPE_B_SRC,
-        plane_ctl_off: UNI_PLANE_BASE + 1 * UNI_PLANE_PIPE_STRIDE + 0 * UNI_PLANE_SLOT_STRIDE + UNI_PLANE_CTL_OFF,
+        plane_ctl_off: UNI_PLANE_BASE
+            + 1 * UNI_PLANE_PIPE_STRIDE
+            + 0 * UNI_PLANE_SLOT_STRIDE
+            + UNI_PLANE_CTL_OFF,
         plane_stride_off: UNI_PLANE_BASE
             + 1 * UNI_PLANE_PIPE_STRIDE
             + 0 * UNI_PLANE_SLOT_STRIDE
             + UNI_PLANE_STRIDE_OFF,
-        plane_surf_off: UNI_PLANE_BASE + 1 * UNI_PLANE_PIPE_STRIDE + 0 * UNI_PLANE_SLOT_STRIDE + UNI_PLANE_SURF_OFF,
+        plane_surf_off: UNI_PLANE_BASE
+            + 1 * UNI_PLANE_PIPE_STRIDE
+            + 0 * UNI_PLANE_SLOT_STRIDE
+            + UNI_PLANE_SURF_OFF,
         plane_surf_live_off: UNI_PLANE_BASE
             + 1 * UNI_PLANE_PIPE_STRIDE
             + 0 * UNI_PLANE_SLOT_STRIDE
@@ -94,12 +106,18 @@ const PIPES: [PipeInfo; 4] = [
         name: "pipe-c",
         slot: 2,
         pipe_src_off: PIPE_C_SRC,
-        plane_ctl_off: UNI_PLANE_BASE + 2 * UNI_PLANE_PIPE_STRIDE + 0 * UNI_PLANE_SLOT_STRIDE + UNI_PLANE_CTL_OFF,
+        plane_ctl_off: UNI_PLANE_BASE
+            + 2 * UNI_PLANE_PIPE_STRIDE
+            + 0 * UNI_PLANE_SLOT_STRIDE
+            + UNI_PLANE_CTL_OFF,
         plane_stride_off: UNI_PLANE_BASE
             + 2 * UNI_PLANE_PIPE_STRIDE
             + 0 * UNI_PLANE_SLOT_STRIDE
             + UNI_PLANE_STRIDE_OFF,
-        plane_surf_off: UNI_PLANE_BASE + 2 * UNI_PLANE_PIPE_STRIDE + 0 * UNI_PLANE_SLOT_STRIDE + UNI_PLANE_SURF_OFF,
+        plane_surf_off: UNI_PLANE_BASE
+            + 2 * UNI_PLANE_PIPE_STRIDE
+            + 0 * UNI_PLANE_SLOT_STRIDE
+            + UNI_PLANE_SURF_OFF,
         plane_surf_live_off: UNI_PLANE_BASE
             + 2 * UNI_PLANE_PIPE_STRIDE
             + 0 * UNI_PLANE_SLOT_STRIDE
@@ -109,12 +127,18 @@ const PIPES: [PipeInfo; 4] = [
         name: "pipe-d",
         slot: 3,
         pipe_src_off: PIPE_D_SRC,
-        plane_ctl_off: UNI_PLANE_BASE + 3 * UNI_PLANE_PIPE_STRIDE + 0 * UNI_PLANE_SLOT_STRIDE + UNI_PLANE_CTL_OFF,
+        plane_ctl_off: UNI_PLANE_BASE
+            + 3 * UNI_PLANE_PIPE_STRIDE
+            + 0 * UNI_PLANE_SLOT_STRIDE
+            + UNI_PLANE_CTL_OFF,
         plane_stride_off: UNI_PLANE_BASE
             + 3 * UNI_PLANE_PIPE_STRIDE
             + 0 * UNI_PLANE_SLOT_STRIDE
             + UNI_PLANE_STRIDE_OFF,
-        plane_surf_off: UNI_PLANE_BASE + 3 * UNI_PLANE_PIPE_STRIDE + 0 * UNI_PLANE_SLOT_STRIDE + UNI_PLANE_SURF_OFF,
+        plane_surf_off: UNI_PLANE_BASE
+            + 3 * UNI_PLANE_PIPE_STRIDE
+            + 0 * UNI_PLANE_SLOT_STRIDE
+            + UNI_PLANE_SURF_OFF,
         plane_surf_live_off: UNI_PLANE_BASE
             + 3 * UNI_PLANE_PIPE_STRIDE
             + 0 * UNI_PLANE_SLOT_STRIDE
@@ -138,20 +162,14 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         .map(|(width, height)| (width, height, "pipe-src"))
         .or_else(|| fb_dims.map(|(width, height)| (width, height, "fb-hint")));
     let Some((width, height, chosen_from)) = chosen else {
-        crate::log!(
-            "intel/display: primary-gradient skipped no dimensions pipe={}\n",
-            pipe.name
-        );
+        crate::log!("intel/display: primary-gradient skipped no dimensions pipe={}\n", pipe.name);
         return;
     };
     log_primary_dimensions_probe(pipe.name, pipe_src_raw, pipe_src_dims, fb_dims, chosen_from);
     program_pipe_bottom_color(dev, pipe, PIPE_BOTTOM_COLOR_RGB);
 
     let Some(pitch_bytes) = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL) else {
-        crate::log!(
-            "intel/display: primary-gradient skipped bad pitch width={}\n",
-            width
-        );
+        crate::log!("intel/display: primary-gradient skipped bad pitch width={}\n", width);
         return;
     };
     let Some(byte_len) = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok() else {
@@ -159,22 +177,14 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         return;
     };
     let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
-        crate::log!(
-            "intel/display: primary-gradient alloc failed bytes=0x{:X}\n",
-            byte_len
-        );
+        crate::log!("intel/display: primary-gradient alloc failed bytes=0x{:X}\n", byte_len);
         return;
     };
 
     clear_surface_black(virt, pitch_bytes as usize, height);
     crate::intel::dma_flush(virt, byte_len);
 
-    if !crate::intel::map_ggtt(
-        dev,
-        phys,
-        byte_len,
-        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
-    ) {
+    if !crate::intel::map_ggtt(dev, phys, byte_len, crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE) {
         crate::log!(
             "intel/display: primary-gradient ggtt map failed bytes=0x{:X} gpu=0x{:X}\n",
             byte_len,
@@ -402,7 +412,9 @@ fn decode_pipe_src(value: u32) -> Option<(u32, u32)> {
 }
 
 fn framebuffer_hint() -> Option<(u32, u32)> {
-    let fb = crate::limine::framebuffer_response()?.framebuffers().next()?;
+    let fb = crate::limine::framebuffer_response()?
+        .framebuffers()
+        .next()?;
     Some((fb.width() as u32, fb.height() as u32))
 }
 

@@ -643,8 +643,6 @@ pub(crate) unsafe fn install(ctx: *mut qjs::JSContext) {
     let _ =
         qjs::JS_SetPropertyStr(ctx, global, b"__trueosPanicTest\0".as_ptr() as *const c_char, f);
 
- 
-
     qjs::js_free_value(ctx, global);
 
     install_shell1_runtime(ctx);

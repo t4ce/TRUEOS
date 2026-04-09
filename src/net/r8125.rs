@@ -523,7 +523,11 @@ impl R8125Adapter {
 
         // Allocate buffers and initialize descriptors
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!("net/r8125: alloc rx bufs count={} size=0x{:x}\n", RX_DESC_COUNT, RX_BUF_SIZE);
+            crate::log!(
+                "net/r8125: alloc rx bufs count={} size=0x{:x}\n",
+                RX_DESC_COUNT,
+                RX_BUF_SIZE
+            );
         }
         let mut rx_bufs: Vec<DmaRegion> = Vec::with_capacity(RX_DESC_COUNT);
         for i in 0..RX_DESC_COUNT {
@@ -543,7 +547,11 @@ impl R8125Adapter {
         }
 
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!("net/r8125: alloc tx bufs count={} size=0x{:x}\n", TX_DESC_COUNT, TX_BUF_SIZE);
+            crate::log!(
+                "net/r8125: alloc tx bufs count={} size=0x{:x}\n",
+                TX_DESC_COUNT,
+                TX_BUF_SIZE
+            );
         }
         let mut tx_bufs: Vec<DmaRegion> = Vec::with_capacity(TX_DESC_COUNT);
         for i in 0..TX_DESC_COUNT {
