@@ -122,21 +122,22 @@ fn send_ws2812_byte(mmio: *mut u8, low_value: u32, high_value: u32, tsc_hz: u64,
     }
 }
 
-fn send_ws2812_grb(mmio: *mut u8, low_value: u32, high_value: u32, tsc_hz: u64, g: u8, r: u8, b: u8) {
+fn send_ws2812_grb(
+    mmio: *mut u8,
+    low_value: u32,
+    high_value: u32,
+    tsc_hz: u64,
+    g: u8,
+    r: u8,
+    b: u8,
+) {
     send_ws2812_byte(mmio, low_value, high_value, tsc_hz, g);
     send_ws2812_byte(mmio, low_value, high_value, tsc_hz, r);
     send_ws2812_byte(mmio, low_value, high_value, tsc_hz, b);
 }
 
 fn build_wave_frame(frame_idx: usize) -> [Rgb; WAVE_LED_COUNT] {
-    let mut pixels = [
-        Rgb {
-            r: 0,
-            g: 0,
-            b: 0,
-        };
-        WAVE_LED_COUNT
-    ];
+    let mut pixels = [Rgb { r: 0, g: 0, b: 0 }; WAVE_LED_COUNT];
     let span = WAVE_LED_COUNT;
     if span == 0 {
         return pixels;
@@ -400,7 +401,10 @@ fn score_table_like_page(page_phys: u64) {
         }
     }
 
-    if nonzero_entries < TABLE_PAGE_MIN_NONZERO || longest_run < TABLE_PAGE_MIN_RUN || zero_tail_entries < TABLE_PAGE_MIN_NONZERO {
+    if nonzero_entries < TABLE_PAGE_MIN_NONZERO
+        || longest_run < TABLE_PAGE_MIN_RUN
+        || zero_tail_entries < TABLE_PAGE_MIN_NONZERO
+    {
         return;
     }
 
@@ -443,7 +447,9 @@ pub async fn oneshot_mmio_probe_task() {
         for entry in entries.iter().take(count) {
             match classify_dw0(entry.dw0) {
                 "gpio-like" => gpio_like = gpio_like.saturating_add(1),
-                "vendor-bitbang-gpio" => vendor_bitbang_like = vendor_bitbang_like.saturating_add(1),
+                "vendor-bitbang-gpio" => {
+                    vendor_bitbang_like = vendor_bitbang_like.saturating_add(1)
+                }
                 "native-function-like" => native_like = native_like.saturating_add(1),
                 "locked-ish" => locked_like = locked_like.saturating_add(1),
                 _ => {}

@@ -396,10 +396,10 @@ fn ui2_font_measure_text_with_scale(
     } else {
         1.0
     };
-    let line_height_px = (libm::roundf(f32::from(ui2_font_native_line_height_px(tier).max(1)) * scale)
-        as u32)
-        .max(1)
-        .min(u32::from(u16::MAX)) as u16;
+    let line_height_px =
+        (libm::roundf(f32::from(ui2_font_native_line_height_px(tier).max(1)) * scale) as u32)
+            .max(1)
+            .min(u32::from(u16::MAX)) as u16;
     if text.is_empty() {
         return Ui2FontTextMetrics {
             width_px: 0,

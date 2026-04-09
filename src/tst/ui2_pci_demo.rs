@@ -755,4 +755,3 @@ fn update_window_title(window_id: u32, view: DeviceManagerView) {
         format!("{} [{}]", UI2_PCI_DEMO_WINDOW_TITLE, suffix).as_str(),
     );
 }
-
