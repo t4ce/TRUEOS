@@ -3,6 +3,7 @@ use heapless::Vec;
 
 const MAX_CURSOR_SOURCES: usize = 8;
 const CURSOR_SERVICE_TICK_MS: u64 = 33;
+const CURSOR_OVERLAY_REFRESH_TICKS: u32 = 30;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct CursorOverlayEntry {
@@ -31,6 +32,9 @@ pub async fn intel_display_service_task() {
             }
         } else if !entries.is_empty() {
             stable_idle_ticks = stable_idle_ticks.saturating_add(1);
+            if stable_idle_ticks.is_multiple_of(CURSOR_OVERLAY_REFRESH_TICKS) {
+                apply_cursor_overlay(entries.as_slice());
+            }
             if stable_idle_ticks == 1 || stable_idle_ticks.is_multiple_of(300) {
                 crate::log!(
                     "intel/display-svc: cursor overlay stable active={} ticks={}\n",

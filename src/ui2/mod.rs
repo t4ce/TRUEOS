@@ -350,9 +350,12 @@ fn browser_title_overlay_mid_offset(window: &Ui2Window, now_ms: u64) -> f32 {
 
 fn init_state() -> &'static Mutex<Ui2State> {
     UI2_STATE.call_once(|| {
-        let (view_w, view_h) = crate::limine::framebuffer_response()
-            .and_then(|resp| resp.framebuffers().next())
-            .map(|fb| (fb.width() as u32, fb.height() as u32))
+        let (view_w, view_h) = crate::intel::active_scanout_dimensions()
+            .or_else(|| {
+                crate::limine::framebuffer_response()
+                    .and_then(|resp| resp.framebuffers().next())
+                    .map(|fb| (fb.width() as u32, fb.height() as u32))
+            })
             .unwrap_or((1280, 800));
 
         let mut state = Ui2State {

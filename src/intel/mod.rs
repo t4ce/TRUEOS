@@ -144,6 +144,10 @@ pub fn warm_state() -> Option<self::render::RenderWarmState> {
     self::render::warm_state()
 }
 
+pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
+    self::display::active_scanout_dimensions()
+}
+
 fn find_dev() -> Option<Dev> {
     let mut out = None;
     crate::pci::with_devices(|list| {

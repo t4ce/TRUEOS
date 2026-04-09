@@ -403,7 +403,7 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
 
 #[embassy_executor::task]
 async fn gfx_virgl_ready_task() {
-    crate::gfx::init(crate::limine::framebuffer_response());
+    crate::gfx::init(None);
 
     if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
         crate::log!("boot-probe: gfx-virgl-backend-ready ms={}\n", boot_probe_ms());
