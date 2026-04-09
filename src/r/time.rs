@@ -76,7 +76,12 @@ fn detect_tsc_hz_from_cpuid() -> u64 {
     let numer = r15.ebx as u64;
     let crystal_hz = r15.ecx as u64;
     if crate::logflag::BOOT_INFO_LOGS {
-        crate::log!("time: cpuid 0x15: denom={} numer={} crystal_hz={}\n", denom, numer, crystal_hz);
+        crate::log!(
+            "time: cpuid 0x15: denom={} numer={} crystal_hz={}\n",
+            denom,
+            numer,
+            crystal_hz
+        );
     }
 
     if denom != 0 && numer != 0 && crystal_hz != 0 {

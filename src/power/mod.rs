@@ -79,7 +79,9 @@ pub fn init() {
             );
         }
 
-        if crate::logflag::BOOT_INFO_LOGS && let Some(d) = msr_details() {
+        if crate::logflag::BOOT_INFO_LOGS
+            && let Some(d) = msr_details()
+        {
             crate::log!(
                 "POWER: msr_details min={} max={} hwp_lowest={} hwp_highest={}\n",
                 opt_u8(d.min_ratio),

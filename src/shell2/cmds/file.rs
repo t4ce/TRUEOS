@@ -132,7 +132,9 @@ async fn describe_tree_entry_async(
     name: &str,
 ) -> TreeEntry {
     let full_path = child_path(parent, name);
-    let nested = tree_child_names_async(disk_id, full_path.as_str()).await.ok();
+    let nested = tree_child_names_async(disk_id, full_path.as_str())
+        .await
+        .ok();
     let is_dir = nested.as_ref().is_some_and(|entries| !entries.is_empty());
     let size_bytes = if is_dir {
         None
@@ -181,11 +183,7 @@ async fn build_root_tree_lines_async(
                             return Err(err);
                         }
                         let indent = "  ".repeat(depth + 1);
-                        work.push(TreeWorkItem::PrintLine(alloc::format!(
-                            "{}[{}]",
-                            indent,
-                            err
-                        )));
+                        work.push(TreeWorkItem::PrintLine(alloc::format!("{}[{}]", indent, err)));
                         continue;
                     }
                 };
@@ -202,7 +200,8 @@ async fn build_root_tree_lines_async(
                     if out.len().saturating_add(entries.len()) >= MAX_LINES_PER_ROOT {
                         break;
                     }
-                    entries.push(describe_tree_entry_async(root.disk_id, path.as_str(), name).await);
+                    entries
+                        .push(describe_tree_entry_async(root.disk_id, path.as_str(), name).await);
                 }
 
                 let indent = "  ".repeat(depth + 1);

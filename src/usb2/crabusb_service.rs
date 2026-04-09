@@ -1,16 +1,16 @@
 use alloc::string::String;
-use core::fmt::Write;
 use core::alloc::Layout;
+use core::fmt::Write;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use core::time::Duration;
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use crab_usb::{Event, EventHandler, KernelOp, USBHost};
 use dma_api::{DmaAddr, DmaDirection, DmaError, DmaHandle, DmaMapHandle, DmaOp};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) struct TrueosCrabUsbKernel;
 
@@ -224,18 +224,10 @@ fn uninstall_event_handler(controller_id: usize) {
     *EVENT_HANDLER[controller_id].lock() = None;
 }
 
-async fn probe_and_bind(
-    host: &mut USBHost,
-    info: super::TlbUsbController,
-    spawner: &Spawner,
-) {
+async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawner: &Spawner) {
     if let Ok(devices) = host.probe_devices().await {
         if usb_log_all_enabled() {
-            crate::log!(
-                "crabusb: probe ctrl={} devices={}\n",
-                info.index,
-                devices.len()
-            );
+            crate::log!("crabusb: probe ctrl={} devices={}\n", info.index, devices.len());
         }
 
         if devices.is_empty() && usb_log_all_enabled() {
@@ -285,7 +277,8 @@ async fn probe_and_bind(
             if super::hid::leds::should_share_probe_device(dev) {
                 match host.open_device(dev).await {
                     Ok(mut device) => {
-                        super::hid::boot::log_hid_report_descriptors_on_device(&mut device, dev).await;
+                        super::hid::boot::log_hid_report_descriptors_on_device(&mut device, dev)
+                            .await;
                         shared_led_device = Some(device);
                     }
                     Err(err) => {
@@ -309,16 +302,35 @@ async fn probe_and_bind(
             {
                 bound_any = true;
             }
-            if super::hid::mediacontrol::maybe_start_media_control(host, dev, spawner, controller_id)
-                .await
+            if super::hid::mediacontrol::maybe_start_media_control(
+                host,
+                dev,
+                spawner,
+                controller_id,
+            )
+            .await
             {
                 bound_any = true;
             }
             if let Some(device) = shared_led_device {
-                if super::hid::leds::maybe_start_led_controller_with_device(device, dev, spawner, controller_id).await {
+                if super::hid::leds::maybe_start_led_controller_with_device(
+                    device,
+                    dev,
+                    spawner,
+                    controller_id,
+                )
+                .await
+                {
                     bound_any = true;
                 }
-            } else if super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id).await {
+            } else if super::hid::leds::maybe_start_led_controller(
+                host,
+                dev,
+                spawner,
+                controller_id,
+            )
+            .await
+            {
                 bound_any = true;
             }
             if super::midi::maybe_start_midi(host, dev, spawner, controller_id).await {
@@ -464,8 +476,9 @@ pub async fn bsp_service(controller_index: usize) {
             loop {
                 if PROBE_REQUESTED[info.index].swap(false, Ordering::AcqRel) {
                     if intel_settle_probe {
-                        quiet_probe_until =
-                            Some(Instant::now() + EmbassyDuration::from_millis(INTEL_PROBE_SETTLE_MS));
+                        quiet_probe_until = Some(
+                            Instant::now() + EmbassyDuration::from_millis(INTEL_PROBE_SETTLE_MS),
+                        );
                     } else {
                         probe_and_bind(&mut host, info, &spawner).await;
                     }

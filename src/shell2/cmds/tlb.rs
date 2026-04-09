@@ -178,10 +178,7 @@ fn emit_hex_dump(io: &'static dyn ShellBackend2, bytes: &[u8]) {
                 ascii.push(' ');
             }
         }
-        line(
-            io,
-            alloc::format!("0x{:04X}  {}  |{}|", offset, hex, ascii).as_str(),
-        );
+        line(io, alloc::format!("0x{:04X}  {}  |{}|", offset, hex, ascii).as_str());
     }
 }
 
@@ -207,15 +204,9 @@ fn emit_table_header_details(io: &'static dyn ShellBackend2, bytes: &[u8]) {
     line(io, alloc::format!("  Checksum: 0x{:02X}", checksum).as_str());
     line(io, alloc::format!("  OEM ID: {}", oem_id).as_str());
     line(io, alloc::format!("  Table ID: {}", table_id).as_str());
-    line(
-        io,
-        alloc::format!("  OEM Revision: 0x{:08X}", oem_revision).as_str(),
-    );
+    line(io, alloc::format!("  OEM Revision: 0x{:08X}", oem_revision).as_str());
     line(io, alloc::format!("  Creator ID: {}", creator_id).as_str());
-    line(
-        io,
-        alloc::format!("  Creator Revision: 0x{:08X}", creator_revision).as_str(),
-    );
+    line(io, alloc::format!("  Creator Revision: 0x{:08X}", creator_revision).as_str());
 }
 
 fn emit_aml_dump(io: &'static dyn ShellBackend2, bytes: &[u8], max_bytes: usize) {
@@ -226,10 +217,7 @@ fn emit_aml_dump(io: &'static dyn ShellBackend2, bytes: &[u8], max_bytes: usize)
 
     let aml = &bytes[crate::efi::acpi::SDT_HEADER_LEN..];
     let shown = aml.len().min(max_bytes);
-    line(
-        io,
-        alloc::format!("  AML dump: showing {} of {} bytes", shown, aml.len()).as_str(),
-    );
+    line(io, alloc::format!("  AML dump: showing {} of {} bytes", shown, aml.len()).as_str());
     emit_hex_dump(io, &aml[..shown]);
     if shown < aml.len() {
         line(
@@ -253,10 +241,7 @@ fn emit_acpi_table_dump(
         emit_aml_dump(io, bytes, max_bytes);
     } else {
         let shown = bytes.len().min(max_bytes);
-        line(
-            io,
-            alloc::format!("  Raw dump: showing {} of {} bytes", shown, bytes.len()).as_str(),
-        );
+        line(io, alloc::format!("  Raw dump: showing {} of {} bytes", shown, bytes.len()).as_str());
         emit_hex_dump(io, &bytes[..shown]);
         if shown < bytes.len() {
             line(
@@ -377,31 +362,56 @@ impl aml::Handler for TlbAmlRuntimeHandler {
         crate::pci::config_read_u32(bus, device, function, offset)
     }
 
-    fn write_pci_u8(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16, value: u8) {
+    fn write_pci_u8(
+        &self,
+        segment: u16,
+        bus: u8,
+        device: u8,
+        function: u8,
+        offset: u16,
+        value: u8,
+    ) {
         if segment == 0 {
             crate::pci::config_write_u8(bus, device, function, offset, value);
         }
     }
 
-    fn write_pci_u16(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16, value: u16) {
+    fn write_pci_u16(
+        &self,
+        segment: u16,
+        bus: u8,
+        device: u8,
+        function: u8,
+        offset: u16,
+        value: u16,
+    ) {
         if segment == 0 {
             crate::pci::config_write_u16(bus, device, function, offset, value);
         }
     }
 
-    fn write_pci_u32(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16, value: u32) {
+    fn write_pci_u32(
+        &self,
+        segment: u16,
+        bus: u8,
+        device: u8,
+        function: u8,
+        offset: u16,
+        value: u32,
+    ) {
         if segment == 0 {
             crate::pci::config_write_u32(bus, device, function, offset, value);
         }
     }
-
 }
 
 fn build_aml_context() -> Result<(aml::AmlContext, Vec<AmlTableRecord>), &'static str> {
     let tables = crate::efi::acpi::ensure_tables().ok_or("ACPI tables not found")?;
     let fadt = tables.find_table::<Fadt>().ok_or("FADT/FACP not found")?;
     let fadt_ref = unsafe { fadt.virtual_start.as_ref() };
-    let dsdt_phys = fadt_ref.dsdt_address().map_err(|_| "DSDT address unavailable from FADT")?;
+    let dsdt_phys = fadt_ref
+        .dsdt_address()
+        .map_err(|_| "DSDT address unavailable from FADT")?;
     let dsdt_bytes = crate::efi::acpi::map_table_bytes(dsdt_phys).ok_or("Failed to map DSDT")?;
 
     let mut records = Vec::new();
@@ -437,7 +447,9 @@ fn build_aml_context() -> Result<(aml::AmlContext, Vec<AmlTableRecord>), &'stati
     Ok((ctx, records))
 }
 
-fn collect_aml_namespace_entries(ctx: &mut aml::AmlContext) -> Result<Vec<AmlNamespaceEntry>, aml::AmlError> {
+fn collect_aml_namespace_entries(
+    ctx: &mut aml::AmlContext,
+) -> Result<Vec<AmlNamespaceEntry>, aml::AmlError> {
     let mut entries = Vec::new();
     ctx.namespace.traverse(|scope, level| {
         for (seg, handle) in &level.values {
@@ -457,7 +469,10 @@ fn simplify_aml_lookup(text: &str) -> String {
     text.trim().to_ascii_uppercase().replace('.', "")
 }
 
-fn find_aml_entries<'a>(entries: &'a [AmlNamespaceEntry], query: &str) -> Vec<&'a AmlNamespaceEntry> {
+fn find_aml_entries<'a>(
+    entries: &'a [AmlNamespaceEntry],
+    query: &str,
+) -> Vec<&'a AmlNamespaceEntry> {
     let query_key = simplify_aml_lookup(query);
     let query_key_no_root = query_key.trim_start_matches('\\');
 
@@ -476,7 +491,10 @@ fn find_aml_entries<'a>(entries: &'a [AmlNamespaceEntry], query: &str) -> Vec<&'
         .iter()
         .filter(|entry| {
             let entry_key = simplify_aml_lookup(&entry.path);
-            entry_key.ends_with(&query_key) || entry_key.trim_start_matches('\\').ends_with(query_key_no_root)
+            entry_key.ends_with(&query_key)
+                || entry_key
+                    .trim_start_matches('\\')
+                    .ends_with(query_key_no_root)
         })
         .collect()
 }
@@ -484,7 +502,9 @@ fn find_aml_entries<'a>(entries: &'a [AmlNamespaceEntry], query: &str) -> Vec<&'
 fn aml_handle_paths(entries: &[AmlNamespaceEntry]) -> BTreeMap<aml::AmlHandle, Vec<String>> {
     let mut out: BTreeMap<aml::AmlHandle, Vec<String>> = BTreeMap::new();
     for entry in entries {
-        out.entry(entry.handle).or_default().push(entry.path.clone());
+        out.entry(entry.handle)
+            .or_default()
+            .push(entry.path.clone());
     }
     out
 }
@@ -1453,10 +1473,7 @@ fn cmd_tlb_acpi_dump(io: &'static dyn ShellBackend2, signature: &str, index: usi
     }
 
     if seen == 0 {
-        line(
-            io,
-            alloc::format!("tlb acpi: no {} tables found", signature).as_str(),
-        );
+        line(io, alloc::format!("tlb acpi: no {} tables found", signature).as_str());
     } else {
         line(
             io,
@@ -1608,16 +1625,20 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
     let fadt = tables.find_table::<Fadt>();
     if let Some(fadt_mapping) = fadt {
         let fadt_ref = unsafe { fadt_mapping.virtual_start.as_ref() };
-        line(
-            io,
-            alloc::format!("FADT/FACP @ 0x{:016X}", fadt_mapping.physical_start).as_str(),
-        );
+        line(io, alloc::format!("FADT/FACP @ 0x{:016X}", fadt_mapping.physical_start).as_str());
         match fadt_ref.dsdt_address() {
             Ok(dsdt_phys) => {
                 line(io, alloc::format!("  DSDT address: 0x{:016X}", dsdt_phys).as_str());
                 if let Some(bytes) = crate::efi::acpi::map_table_bytes(dsdt_phys) {
                     blank(io);
-                    emit_acpi_table_dump(io, "DSDT (from FADT)", dsdt_phys, bytes, true, ACPI_AML_DUMP_MAX_BYTES);
+                    emit_acpi_table_dump(
+                        io,
+                        "DSDT (from FADT)",
+                        dsdt_phys,
+                        bytes,
+                        true,
+                        ACPI_AML_DUMP_MAX_BYTES,
+                    );
                 } else {
                     line(io, "  DSDT map failed");
                     blank(io);
@@ -1641,10 +1662,7 @@ fn cmd_tlb_ssdt(io: &'static dyn ShellBackend2) {
         if hdr.signature.as_str() == "SSDT" {
             count = count.saturating_add(1);
             let Some(bytes) = crate::efi::acpi::map_table_bytes(phys) else {
-                line(
-                    io,
-                    alloc::format!("SSDT #{} @ 0x{:016X}", count, phys).as_str(),
-                );
+                line(io, alloc::format!("SSDT #{} @ 0x{:016X}", count, phys).as_str());
                 line(io, "  Map failed");
                 blank(io);
                 continue;
@@ -1694,7 +1712,9 @@ fn cmd_tlb_aml_prefix(io: &'static dyn ShellBackend2, prefix: &str) {
     for entry in matches {
         let alias = handle_paths
             .get(&entry.handle)
-            .map(|paths| paths.len() > 1 && paths.first().map(String::as_str) != Some(entry.path.as_str()))
+            .map(|paths| {
+                paths.len() > 1 && paths.first().map(String::as_str) != Some(entry.path.as_str())
+            })
             .unwrap_or(false);
         let kind = ctx
             .namespace
@@ -1731,7 +1751,8 @@ fn cmd_tlb_aml_symbol(io: &'static dyn ShellBackend2, query: &str) {
     let entry = matches[0];
     let handle_paths = aml_handle_paths(&entries);
     let alias_paths = handle_paths.get(&entry.handle).cloned().unwrap_or_default();
-    let alias = alias_paths.len() > 1 && alias_paths.first().map(String::as_str) != Some(entry.path.as_str());
+    let alias = alias_paths.len() > 1
+        && alias_paths.first().map(String::as_str) != Some(entry.path.as_str());
     let Ok(value) = ctx.namespace.get(entry.handle) else {
         line(io, "tlb aml symbol: failed to read AML object");
         return;
@@ -1788,10 +1809,7 @@ fn cmd_tlb_aml_symbol(io: &'static dyn ShellBackend2, query: &str) {
                 .map(|offset| alloc::format!("0x{:X}", offset))
                 .collect::<Vec<_>>()
                 .join(", ");
-            line(
-                io,
-                alloc::format!("    {} @ {}", method_ref.method_path, offsets).as_str(),
-            );
+            line(io, alloc::format!("    {} @ {}", method_ref.method_path, offsets).as_str());
         }
     }
 }

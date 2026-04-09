@@ -142,7 +142,9 @@ pub extern "C" fn kmain() -> ! {
         crate::log!("heap: failed to reserve/install any heap arena\n");
     }
 
-    if crate::logflag::BOOT_INFO_LOGS && let Some(perf) = limine::bootloader_performance() {
+    if crate::logflag::BOOT_INFO_LOGS
+        && let Some(perf) = limine::bootloader_performance()
+    {
         crate::log!(
             "Boot Performance: reset={}_usec init={}_usec exec={}_usec\n",
             perf.reset_usec(),

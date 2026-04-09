@@ -95,7 +95,13 @@ pub(super) fn draw_window_decoration_icon(
     );
 }
 
-fn draw_window_title_texture_icon(state: &Ui2State, window: &Ui2Window, x: f32, y: f32, side_px: f32) {
+fn draw_window_title_texture_icon(
+    state: &Ui2State,
+    window: &Ui2Window,
+    x: f32,
+    y: f32,
+    side_px: f32,
+) {
     if !texture_is_drawable(window.title_icon_tex_id) {
         return;
     }
