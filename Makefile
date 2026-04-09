@@ -84,10 +84,10 @@ QEMU_USB_HOST_FLAGS = \
 	-device usb-storage,drive=usbdisk,bus=xhci.0,port=4,id=usbms   \
 	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd  \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=5,id=usbaudio \
-	-device usb-host,hostbus=$(QEMU_MOUSE1_HOSTBUS),hostaddr=$(QEMU_MOUSE1_HOSTADDR),bus=xhci.0,port=6,id=usbmice \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
-   -device usb-host,hostbus=$(QEMU_MOUSE2_HOSTBUS),hostaddr=$(QEMU_MOUSE2_HOSTADDR),bus=xhci.0,port=7,id=usbmice2 \
-
+	
+# 	-device usb-host,hostbus=$(QEMU_MOUSE1_HOSTBUS),hostaddr=$(QEMU_MOUSE1_HOSTADDR),bus=xhci.0,port=6,id=usbmice \
+#   -device usb-host,hostbus=$(QEMU_MOUSE2_HOSTBUS),hostaddr=$(QEMU_MOUSE2_HOSTADDR),bus=xhci.0,port=7,id=usbmice2 \
 #	-device usb-host,vendorid=0x22d4,productid=0x1321,bus=xhci.0,port=7,id=usbmice2 \
 #	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse  \
 #	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=1,id=usbtruekey \

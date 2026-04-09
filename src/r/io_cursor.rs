@@ -142,6 +142,18 @@ unsafe fn input_read_cursor_events_since(
     wrote as u32
 }
 
+#[inline]
+fn cursor_viewport_dimensions() -> (usize, usize) {
+    crate::intel::active_scanout_dimensions()
+        .map(|(w, h)| (w as usize, h as usize))
+        .or_else(|| {
+            crate::limine::framebuffer_response()
+                .and_then(|resp| resp.framebuffers().next())
+                .map(|fb| (fb.width() as usize, fb.height() as usize))
+        })
+        .unwrap_or((320, 200))
+}
+
 fn input_write_cursor_event(
     slot_id: u32,
     x_px: i32,
@@ -154,10 +166,7 @@ fn input_write_cursor_event(
         return -1;
     }
 
-    let (w, h) = crate::limine::framebuffer_response()
-        .and_then(|resp| resp.framebuffers().next())
-        .map(|fb| (fb.width() as usize, fb.height() as usize))
-        .unwrap_or((320, 200));
+    let (w, h) = cursor_viewport_dimensions();
     let max_x = w.saturating_sub(1) as i32;
     let max_y = h.saturating_sub(1) as i32;
     let clamped_x = x_px.clamp(0, max_x.max(0));
@@ -199,7 +208,7 @@ pub fn kernel_cursor_overlay_tick() -> i32 {
         return 0;
     }
 
-    crate::gfx::init(crate::limine::framebuffer_response());
+    crate::gfx::init(None);
 
     let now_ticks = embassy_time_driver::now();
     let suppress_ticks = ((embassy_time_driver::TICK_HZ as u64)
@@ -276,7 +285,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_begin_frame() -> i32 {
         return 0;
     }
 
-    crate::gfx::init(crate::limine::framebuffer_response());
+    crate::gfx::init(None);
 
     let mut st = GFX_CABI_STATE.lock();
     st.cursor_frame_seq = st.cursor_frame_seq.wrapping_add(1);
@@ -423,7 +432,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
         return 0;
     }
 
-    crate::gfx::init(crate::limine::framebuffer_response());
+    crate::gfx::init(None);
 
     let (
         _seq,
@@ -1003,10 +1012,7 @@ pub unsafe extern "C" fn trueos_cabi_input_cursor_pos(
         return 1;
     };
 
-    let (w, h) = crate::limine::framebuffer_response()
-        .and_then(|resp| resp.framebuffers().next())
-        .map(|fb| (fb.width() as usize, fb.height() as usize))
-        .unwrap_or((320, 200));
+    let (w, h) = cursor_viewport_dimensions();
     let w1 = w.saturating_sub(1) as f64;
     let h1 = h.saturating_sub(1) as f64;
 

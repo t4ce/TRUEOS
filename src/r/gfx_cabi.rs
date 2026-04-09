@@ -3272,7 +3272,7 @@ pub mod cabi {
         vtx_ptr: *const u8,
         vtx_len: usize,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
 
         if vtx_ptr.is_null() {
             return if vtx_len == 0 { 0 } else { -1 };
@@ -3366,7 +3366,7 @@ pub mod cabi {
     }
 
     fn render_rgb_triangles_to_texture_now(tex_id: u32, clear_rgb: u32, vtx: &[u8]) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
 
         if tex_id == 0 {
             return -1;
@@ -3505,7 +3505,7 @@ pub mod cabi {
     }
 
     fn render_mandelbrot_to_texture_now(tex_id: u32, ticks: u64, tick_hz: u64) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
 
         if tex_id == 0 {
             return -1;
@@ -3598,7 +3598,7 @@ pub mod cabi {
         vtx: &[u8],
         particle_shader: bool,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
 
         if target_tex_id == 0 || source_tex_id == 0 {
             return -1;
@@ -3816,7 +3816,7 @@ pub mod cabi {
         call_init: bool,
     ) -> i32 {
         if call_init {
-            crate::gfx::init(crate::limine::framebuffer_response());
+            crate::gfx::init(None);
         }
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_RGBA,
@@ -4123,7 +4123,7 @@ pub mod cabi {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_RGBA,
             0,
@@ -4169,7 +4169,7 @@ pub mod cabi {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_PNG,
             0,
@@ -4209,7 +4209,7 @@ pub mod cabi {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_PNG,
             0,
@@ -4242,7 +4242,7 @@ pub mod cabi {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_JPEG,
             0,
@@ -4282,7 +4282,7 @@ pub mod cabi {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_JPEG,
             0,
@@ -4315,7 +4315,7 @@ pub mod cabi {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_SVG,
             0,
@@ -4345,7 +4345,7 @@ pub mod cabi {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_SVG,
             0,
@@ -4414,7 +4414,7 @@ pub mod cabi {
         preserve_contents: bool,
         allow_screen_present: bool,
     ) -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
 
         let mut st = GFX_CABI_STATE.lock();
         if st.frame_active {
@@ -4629,7 +4629,7 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_end_frame() -> i32 {
-        crate::gfx::init(crate::limine::framebuffer_response());
+        crate::gfx::init(None);
 
         let (
             seq,
