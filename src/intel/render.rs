@@ -70,6 +70,82 @@ const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
 const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 const RCS_EXEC_RESULT_DONE: u32 = 0xC0DE_7701;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
+const RENDER_MOCS: u32 = 1;
+const SURFTYPE_2D: u32 = 1;
+const SURFACE_FORMAT_R8G8B8A8_UNORM: u32 = 9;
+const SURFACE_FORMAT_R32G32B32_FLOAT: u32 = 64;
+const SURFACE_HALIGN_4: u32 = 1;
+const SURFACE_VALIGN_4: u32 = 1;
+const SHADER_CHANNEL_RED: u32 = 4;
+const SHADER_CHANNEL_GREEN: u32 = 5;
+const SHADER_CHANNEL_BLUE: u32 = 6;
+const SHADER_CHANNEL_ALPHA: u32 = 7;
+const SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD: u32 = 0xFFFF_FFFF;
+const CLIP_PERSPECTIVE_DIVIDE_DISABLE: u32 = 1 << 9;
+const WM_FORCE_KILL_PIXEL_OFF: u32 = 1;
+const PS_VECTOR_MASK_ENABLE: u32 = 1 << 30;
+const PS_SINGLE_PROGRAM_FLOW: u32 = 1 << 31;
+const PS_PUSH_CONSTANT_ENABLE: u32 = 1 << 11;
+const PS_MAX_THREADS_SHIFT: u32 = 23;
+const PS_EXTRA_PIXEL_SHADER_COMPUTES_STENCIL: u32 = 1 << 5;
+const PS_EXTRA_PIXEL_SHADER_IS_PER_SAMPLE: u32 = 1 << 6;
+const PS_EXTRA_ATTRIBUTE_ENABLE: u32 = 1 << 8;
+const PS_EXTRA_PIXEL_SHADER_VALID: u32 = 1 << 31;
+const VFCOMP_STORE_SRC: u32 = 1;
+const VFCOMP_STORE_0: u32 = 2;
+const VFCOMP_STORE_1_FP: u32 = 3;
+const PIPELINE_SELECT_3D: u32 = (4 << 16) | (1 << 24) | (1 << 27) | (3 << 29);
+const PIPE_CONTROL_CMD: u32 = 4 | (2 << 24) | (3 << 27) | (3 << 29);
+const STATE_BASE_ADDRESS_CMD: u32 = 20 | (1 << 16) | (1 << 24) | (3 << 29);
+const CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC: u32 =
+    2 | (25 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VS: u32 = 7 | (16 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_GS: u32 = 8 | (17 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_CLIP: u32 = 2 | (18 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_SF: u32 = 2 | (19 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_WM: u32 = 0 | (20 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_HS: u32 = 7 | (27 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_TE: u32 = 3 | (28 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_DS: u32 = 9 | (29 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_STREAMOUT: u32 = 3 | (30 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_SBE: u32 = 4 | (31 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PS: u32 = 10 | (32 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP: u32 = (33 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VIEWPORT_STATE_POINTERS_CC: u32 = (35 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_BLEND_STATE_POINTERS: u32 = (36 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_BINDING_TABLE_POINTERS_VS: u32 = (38 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_BINDING_TABLE_POINTERS_PS: u32 = (42 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_CC_STATE_POINTERS: u32 = (14 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_SAMPLER_STATE_POINTERS_VS: u32 = (43 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_SAMPLER_STATE_POINTERS_PS: u32 = (47 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VF_STATISTICS: u32 = (11 << 16) | (1 << 27) | (3 << 29);
+const CMD_3DSTATE_VF: u32 = (12 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_MULTISAMPLE: u32 = (13 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_DRAWING_RECTANGLE: u32 = 2 | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_SAMPLE_MASK: u32 = (24 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PS_BLEND: u32 = (77 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_WM_DEPTH_STENCIL: u32 = 2 | (78 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PS_EXTRA: u32 = (79 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_RASTER: u32 = 3 | (80 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_SBE_SWIZ: u32 = 9 | (81 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_URB_ALLOC_HS: u32 = 1 | (89 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_URB_ALLOC_DS: u32 = 1 | (90 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_URB_ALLOC_GS: u32 = 1 | (91 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_URB_ALLOC_VS: u32 = 1 | (88 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VF_INSTANCING: u32 = 1 | (73 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VF_SGVS: u32 = (74 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VF_TOPOLOGY: u32 = (75 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VF_SGVS_2: u32 = 1 | (86 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VERTEX_BUFFERS_1: u32 = 3 | (8 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VERTEX_ELEMENTS_1: u32 = 1 | (9 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DPRIMITIVE: u32 = 5 | (3 << 24) | (3 << 27) | (3 << 29);
+const PIPE_CONTROL_FLUSH_BITS: u32 = (1 << 5) | (1 << 7) | (1 << 12) | (1 << 20) | (1 << 26);
+const PIPE_CONTROL_INVALIDATE_BITS: u32 =
+    (1 << 2) | (1 << 3) | (1 << 4) | (1 << 10) | (1 << 11) | (1 << 18) | (1 << 20);
+const TRIANGLE_TOPOLOGY_TRILIST: u32 = 4;
+const TRIANGLE_PS_MAX_THREADS: u32 = 63;
+const TRIANGLE_VS_URB_START: u32 = 4;
+const TRIANGLE_VS_URB_ENTRIES: u32 = 192;
 const TRIANGLE_MIN_DIM: usize = 8;
 // This proof path emits one MI_STORE_DATA_IMM per covered pixel, so keep the
 // triangle intentionally small until we switch to an actual draw pipeline.
@@ -115,6 +191,35 @@ struct TriangleDrawPrep {
     rt_pitch: u32,
     target_w: u32,
     target_h: u32,
+}
+
+#[derive(Copy, Clone)]
+struct TriangleShaderStageLayout {
+    code_offset_bytes: u32,
+    code_gpu_addr: u64,
+    ksp_offset_bytes: u32,
+    ksp_gpu_addr: u64,
+    code_size_bytes: u32,
+}
+
+#[derive(Copy, Clone)]
+struct TriangleShaderLayout {
+    vs: TriangleShaderStageLayout,
+    ps: TriangleShaderStageLayout,
+    state_region_gpu_addr: u64,
+    state_region_offset_bytes: u32,
+    used_bytes: u32,
+}
+
+#[derive(Copy, Clone)]
+struct TriangleProbeStateLayout {
+    binding_table_offset_bytes: u32,
+    surface_state_offset_bytes: u32,
+    sampler_state_offset_bytes: u32,
+    blend_state_offset_bytes: u32,
+    color_calc_state_offset_bytes: u32,
+    cc_viewport_offset_bytes: u32,
+    sf_clip_viewport_offset_bytes: u32,
 }
 
 unsafe impl Send for RenderWarmState {}
@@ -560,7 +665,7 @@ fn map_smoke_buffers(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
 }
 
 fn submit_triangle_draw_to_surface(
-    _dev: crate::intel::Dev,
+    dev: crate::intel::Dev,
     warm: RenderWarmState,
     dst_gpu_addr: u64,
     pitch: usize,
@@ -578,7 +683,8 @@ fn submit_triangle_draw_to_surface(
         return false;
     };
 
-    let Some(pipeline) = crate::intel::shader::triangle_pipeline() else {
+    let pipeline = crate::intel::shader::triangle_pipeline();
+    if crate::intel::shader::triangle_pipeline_is_placeholder() {
         crate::log!(
             "intel/render: draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-baked-shaders vs_src={} ps_src={} note={}\n",
             draw.rt_gpu_addr,
@@ -594,24 +700,940 @@ fn submit_triangle_draw_to_surface(
             crate::intel::shader::triangle_pipeline_note()
         );
         return false;
+    }
+
+    crate::log!(
+        "intel/render: ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} note={}\n",
+        pipeline.ps.meta.kernel.dispatch_mode,
+        pipeline.ps.meta.kernel.grf_start_register,
+        pipeline.ps.meta.kernel.grf_used,
+        pipeline.ps.meta.kernel.ksp_offset_bytes,
+        pipeline.ps.meta.kernel.code_size_bytes,
+        crate::intel::shader::triangle_pipeline_note()
+    );
+
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: draw-path staging skipped reason=shader-layout-error detail={} note={}\n",
+                reason,
+                crate::intel::shader::triangle_pipeline_note()
+            );
+            return false;
+        }
     };
 
     crate::log!(
-        "intel/render: draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_dwords={} ps_dwords={} varyings={} ps_dispatch={:?}\n",
+        "intel/render: draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
         draw.rt_gpu_addr,
         draw.vertex_gpu_addr,
         draw.state_gpu_addr,
+        shader_layout.used_bytes,
+        shader_layout.state_region_offset_bytes,
+        shader_layout.state_region_gpu_addr,
+        warm.draw_state_len
+            .saturating_sub(shader_layout.state_region_offset_bytes as usize),
         draw.target_w,
         draw.target_h,
         draw.rt_pitch,
         draw.vertex_count,
         draw.vertex_stride,
-        pipeline.vs.code.len(),
-        pipeline.ps.code.len(),
+        shader_layout.vs.code_size_bytes,
+        shader_layout.vs.code_offset_bytes,
+        shader_layout.vs.code_gpu_addr,
+        shader_layout.vs.ksp_offset_bytes,
+        shader_layout.vs.ksp_gpu_addr,
+        shader_layout.ps.code_size_bytes,
+        shader_layout.ps.code_offset_bytes,
+        shader_layout.ps.code_gpu_addr,
+        shader_layout.ps.ksp_offset_bytes,
+        shader_layout.ps.ksp_gpu_addr,
         pipeline.ps.meta.num_varying_inputs,
         pipeline.ps.meta.kernel.dispatch_mode
     );
-    false
+
+    let probe_state = match write_triangle_probe_state(warm, draw, shader_layout) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: draw-path staging skipped reason=probe-state-error detail={}\n",
+                reason
+            );
+            return false;
+        }
+    };
+
+    unsafe {
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
+        core::ptr::write_volatile((warm.result_virt as *mut u32).add(2), 0xC0DE_7703);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let batch_tail_bytes = match encode_triangle_probe_batch(
+        batch,
+        warm,
+        draw,
+        pipeline,
+        shader_layout,
+        probe_state,
+        GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_DONE,
+    ) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: draw-path staging skipped reason=probe-batch-error detail={}\n",
+                reason
+            );
+            return false;
+        }
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
+
+    crate::log!(
+        "intel/render: draw-path batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X}\n",
+        batch_tail_bytes,
+        probe_state.binding_table_offset_bytes,
+        probe_state.sampler_state_offset_bytes,
+        probe_state.blend_state_offset_bytes,
+        probe_state.color_calc_state_offset_bytes,
+        probe_state.cc_viewport_offset_bytes,
+        probe_state.sf_clip_viewport_offset_bytes
+    );
+    log_triangle_probe_state(warm, shader_layout, probe_state);
+
+    submit_warm_render_batch(dev, warm)
+}
+
+fn log_triangle_probe_state(
+    warm: RenderWarmState,
+    shader_layout: TriangleShaderLayout,
+    probe_state: TriangleProbeStateLayout,
+) {
+    let dwords = unsafe {
+        core::slice::from_raw_parts(warm.draw_state_virt as *const u32, warm.draw_state_len / 4)
+    };
+    let bt_ptr = probe_state
+        .binding_table_offset_bytes
+        .saturating_sub(shader_layout.state_region_offset_bytes);
+    let bt_entry = dwords[probe_state.binding_table_offset_bytes as usize / 4];
+    let surface = &dwords[probe_state.surface_state_offset_bytes as usize / 4
+        ..probe_state.surface_state_offset_bytes as usize / 4 + 16];
+    let blend = &dwords[probe_state.blend_state_offset_bytes as usize / 4
+        ..probe_state.blend_state_offset_bytes as usize / 4 + 16];
+    let color_calc = &dwords[probe_state.color_calc_state_offset_bytes as usize / 4
+        ..probe_state.color_calc_state_offset_bytes as usize / 4 + 16];
+    crate::log!(
+        "intel/render: probe-state bt_off=0x{:X} bt_entry0=0x{:08X} surf_off=0x{:X} ps_ptr=bt:0x{:X} blend_ptr=0x{:X} cc_ptr=0x{:X}\n",
+        probe_state.binding_table_offset_bytes,
+        bt_entry,
+        probe_state.surface_state_offset_bytes,
+        bt_ptr,
+        probe_state.blend_state_offset_bytes | 1,
+        probe_state.color_calc_state_offset_bytes | 1
+    );
+    crate::log!(
+        "intel/render: probe-surface d0=0x{:08X} d1=0x{:08X} d2=0x{:08X} d3=0x{:08X} d4=0x{:08X} d5=0x{:08X} d6=0x{:08X} d7=0x{:08X}\n",
+        surface[0],
+        surface[1],
+        surface[2],
+        surface[3],
+        surface[4],
+        surface[5],
+        surface[6],
+        surface[7]
+    );
+    crate::log!(
+        "intel/render: probe-surface d8=0x{:08X} d9=0x{:08X} d10=0x{:08X} d11=0x{:08X} d12=0x{:08X} d13=0x{:08X} d14=0x{:08X} d15=0x{:08X}\n",
+        surface[8],
+        surface[9],
+        surface[10],
+        surface[11],
+        surface[12],
+        surface[13],
+        surface[14],
+        surface[15]
+    );
+    crate::log!(
+        "intel/render: probe-blend d0=0x{:08X} d1=0x{:08X} d2=0x{:08X} d3=0x{:08X} d4=0x{:08X} d5=0x{:08X} d6=0x{:08X} d7=0x{:08X}\n",
+        blend[0],
+        blend[1],
+        blend[2],
+        blend[3],
+        blend[4],
+        blend[5],
+        blend[6],
+        blend[7]
+    );
+    crate::log!(
+        "intel/render: probe-blend d8=0x{:08X} d9=0x{:08X} d10=0x{:08X} d11=0x{:08X} d12=0x{:08X} d13=0x{:08X} d14=0x{:08X} d15=0x{:08X}\n",
+        blend[8],
+        blend[9],
+        blend[10],
+        blend[11],
+        blend[12],
+        blend[13],
+        blend[14],
+        blend[15]
+    );
+    crate::log!(
+        "intel/render: probe-cc d0=0x{:08X} d1=0x{:08X} d2=0x{:08X} d3=0x{:08X} d4=0x{:08X} d5=0x{:08X} d6=0x{:08X} d7=0x{:08X}\n",
+        color_calc[0],
+        color_calc[1],
+        color_calc[2],
+        color_calc[3],
+        color_calc[4],
+        color_calc[5],
+        color_calc[6],
+        color_calc[7]
+    );
+    crate::log!(
+        "intel/render: probe-cc d8=0x{:08X} d9=0x{:08X} d10=0x{:08X} d11=0x{:08X} d12=0x{:08X} d13=0x{:08X} d14=0x{:08X} d15=0x{:08X}\n",
+        color_calc[8],
+        color_calc[9],
+        color_calc[10],
+        color_calc[11],
+        color_calc[12],
+        color_calc[13],
+        color_calc[14],
+        color_calc[15]
+    );
+}
+
+fn write_triangle_probe_state(
+    warm: RenderWarmState,
+    draw: TriangleDrawPrep,
+    shader_layout: TriangleShaderLayout,
+) -> Result<TriangleProbeStateLayout, &'static str> {
+    let mut cursor = shader_layout.state_region_offset_bytes as usize;
+    let binding_table_offset = cursor;
+    cursor = crate::intel::align_up(binding_table_offset + 4, 64).ok_or("probe-state-align")?;
+    let surface_state_offset = cursor;
+    cursor = crate::intel::align_up(surface_state_offset + 64, 32).ok_or("probe-state-align")?;
+    let sampler_state_offset = cursor;
+    cursor = crate::intel::align_up(sampler_state_offset + 16, 64).ok_or("probe-state-align")?;
+    let blend_state_offset = cursor;
+    cursor = crate::intel::align_up(blend_state_offset + 64, 64).ok_or("probe-state-align")?;
+    let color_calc_state_offset = cursor;
+    cursor = crate::intel::align_up(color_calc_state_offset + 64, 64).ok_or("probe-state-align")?;
+    let cc_viewport_offset = cursor;
+    cursor = crate::intel::align_up(cc_viewport_offset + 8, 64).ok_or("probe-state-align")?;
+    let sf_clip_viewport_offset = cursor;
+    let end_offset = sf_clip_viewport_offset
+        .checked_add(64)
+        .ok_or("probe-state-overflow")?;
+    if end_offset > warm.draw_state_len {
+        return Err("probe-state-exceeds-state-bo");
+    }
+
+    let dwords = unsafe {
+        core::slice::from_raw_parts_mut(warm.draw_state_virt as *mut u32, warm.draw_state_len / 4)
+    };
+    dwords[binding_table_offset / 4] = surface_state_offset as u32;
+
+    let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
+    surface.fill(0);
+    surface[0] = (SURFTYPE_2D << 29)
+        | (SURFACE_FORMAT_R8G8B8A8_UNORM << 18)
+        | (SURFACE_HALIGN_4 << 14)
+        | (SURFACE_VALIGN_4 << 16);
+    surface[1] = RENDER_MOCS << 24;
+    surface[2] = draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16);
+    surface[3] = draw.rt_pitch.saturating_sub(1);
+    surface[7] = (SHADER_CHANNEL_ALPHA << 16)
+        | (SHADER_CHANNEL_BLUE << 19)
+        | (SHADER_CHANNEL_GREEN << 22)
+        | (SHADER_CHANNEL_RED << 25);
+    surface[8] = draw.rt_gpu_addr as u32;
+    surface[9] = (draw.rt_gpu_addr >> 32) as u32;
+
+    let sampler = &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + 4];
+    sampler.fill(0);
+
+    let blend = &mut dwords[blend_state_offset / 4..blend_state_offset / 4 + 16];
+    blend.fill(0);
+
+    let color_calc = &mut dwords[color_calc_state_offset / 4..color_calc_state_offset / 4 + 16];
+    color_calc.fill(0);
+
+    let cc_viewport = &mut dwords[cc_viewport_offset / 4..cc_viewport_offset / 4 + 2];
+    cc_viewport[0] = 0.0f32.to_bits();
+    cc_viewport[1] = 1.0f32.to_bits();
+
+    let sf_clip_viewport =
+        &mut dwords[sf_clip_viewport_offset / 4..sf_clip_viewport_offset / 4 + 16];
+    sf_clip_viewport.fill(0);
+    sf_clip_viewport[0] = (draw.target_w as f32 * 0.5).to_bits();
+    sf_clip_viewport[1] = (-(draw.target_h as f32) * 0.5).to_bits();
+    sf_clip_viewport[2] = 1.0f32.to_bits();
+    sf_clip_viewport[3] = (draw.target_w as f32 * 0.5).to_bits();
+    sf_clip_viewport[4] = (draw.target_h as f32 * 0.5).to_bits();
+    sf_clip_viewport[5] = 0.0f32.to_bits();
+    sf_clip_viewport[8] = (-32768.0f32).to_bits();
+    sf_clip_viewport[9] = 32768.0f32.to_bits();
+    sf_clip_viewport[10] = (-32768.0f32).to_bits();
+    sf_clip_viewport[11] = 32768.0f32.to_bits();
+
+    let flush_ptr = unsafe {
+        warm.draw_state_virt
+            .add(shader_layout.state_region_offset_bytes as usize)
+    };
+    crate::intel::dma_flush(
+        flush_ptr,
+        end_offset - shader_layout.state_region_offset_bytes as usize,
+    );
+
+    Ok(TriangleProbeStateLayout {
+        binding_table_offset_bytes: binding_table_offset as u32,
+        surface_state_offset_bytes: surface_state_offset as u32,
+        sampler_state_offset_bytes: sampler_state_offset as u32,
+        blend_state_offset_bytes: blend_state_offset as u32,
+        color_calc_state_offset_bytes: color_calc_state_offset as u32,
+        cc_viewport_offset_bytes: cc_viewport_offset as u32,
+        sf_clip_viewport_offset_bytes: sf_clip_viewport_offset as u32,
+    })
+}
+
+fn encode_triangle_probe_batch(
+    batch_dwords: &mut [u32],
+    warm: RenderWarmState,
+    draw: TriangleDrawPrep,
+    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    shader_layout: TriangleShaderLayout,
+    probe_state: TriangleProbeStateLayout,
+    result_gpu_addr: u64,
+    done_value: u32,
+) -> Result<usize, &'static str> {
+    let mut cursor = 0usize;
+
+    fn log_batch_offset(cursor: usize, label: &str) {
+        crate::log!(
+            "intel/render: batch-off 0x{:03X} {}\n",
+            cursor * core::mem::size_of::<u32>(),
+            label
+        );
+    }
+
+    fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
+        if *cursor >= batch_dwords.len() {
+            return Err("probe-batch-exhausted");
+        }
+        batch_dwords[*cursor] = value;
+        *cursor += 1;
+        Ok(())
+    }
+
+    fn push_addr(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        value: u64,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, value as u32)?;
+        push(batch_dwords, cursor, (value >> 32) as u32)
+    }
+
+    fn sampler_count_encoding(count: u8) -> u32 {
+        match count {
+            0 => 0,
+            1..=4 => 1,
+            5..=8 => 2,
+            9..=12 => 3,
+            _ => 4,
+        }
+    }
+
+    fn binding_table_entry_count_encoding(count: u8) -> u32 {
+        count.saturating_sub(1) as u32
+    }
+
+    fn stage_dispatch_bits(mode: crate::intel::shader::DispatchMode) -> (u32, u32, u32) {
+        match mode {
+            crate::intel::shader::DispatchMode::Simd8 => (1, 0, 0),
+            crate::intel::shader::DispatchMode::Simd16 => (0, 1, 0),
+            crate::intel::shader::DispatchMode::Simd32 => (0, 0, 1),
+        }
+    }
+
+    fn push_pipe_control(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        flags: u32,
+    ) -> Result<(), &'static str> {
+        push_pipe_control_full(batch_dwords, cursor, 0, flags)
+    }
+
+    fn push_pipe_control_full(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        flags_dw0: u32,
+        flags_dw1: u32,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
+        push(batch_dwords, cursor, flags_dw1)?;
+        if let Some(slot) = batch_dwords.get_mut(cursor.saturating_sub(2)) {
+            *slot |= flags_dw0;
+        } else {
+            return Err("probe-pipe-control-header");
+        }
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)
+    }
+
+    fn push_sba_address(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        enable: bool,
+        mocs: u32,
+        address: u64,
+    ) -> Result<(), &'static str> {
+        let low = ((address as u32) & 0xFFFF_F000) | (mocs << 4) | u32::from(enable);
+        push(batch_dwords, cursor, low)?;
+        push(batch_dwords, cursor, (address >> 32) as u32)
+    }
+
+    fn push_sba_size(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        enable: bool,
+        size_bytes: usize,
+    ) -> Result<(), &'static str> {
+        let size_bytes = crate::intel::align_up(size_bytes, 4096).ok_or("probe-sba-size-align")?;
+        let size_bytes = u32::try_from(size_bytes).map_err(|_| "probe-sba-size-convert")?;
+        push(batch_dwords, cursor, (size_bytes & 0xFFFF_F000) | u32::from(enable))
+    }
+
+    let binding_table_pool_size = warm
+        .draw_state_len
+        .saturating_sub(shader_layout.state_region_offset_bytes as usize);
+    let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
+    let ps_ksp_offset = shader_layout.ps.code_offset_bytes + shader_layout.ps.ksp_offset_bytes;
+    let sbe_vertex_read_length = (((pipeline.ps.meta.num_varying_inputs as u32) + 1) / 2).max(1);
+    let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) =
+        stage_dispatch_bits(pipeline.ps.meta.kernel.dispatch_mode);
+    let clip_dw1 = 0;
+    let clip_dw2 = CLIP_PERSPECTIVE_DIVIDE_DISABLE;
+    let clip_dw3 = 0;
+    let wm_dw1 = WM_FORCE_KILL_PIXEL_OFF;
+    let ps_dw3 =
+        (binding_table_entry_count_encoding(pipeline.ps.meta.kernel.binding_table_entry_count)
+            << 18)
+            | (sampler_count_encoding(pipeline.ps.meta.kernel.sampler_count) << 27)
+            | (u32::from(pipeline.ps.meta.uses_vmask) * PS_VECTOR_MASK_ENABLE)
+            | PS_SINGLE_PROGRAM_FLOW;
+    let ps_dw6 = ps_dispatch_8
+        | (ps_dispatch_16 << 1)
+        | (ps_dispatch_32 << 2)
+        | (u32::from(pipeline.ps.meta.kernel.push_constant_bytes > 0) * PS_PUSH_CONSTANT_ENABLE)
+        | ((TRIANGLE_PS_MAX_THREADS as u32) << PS_MAX_THREADS_SHIFT);
+    let ps_dw7 = (pipeline.ps.meta.kernel.grf_start_register as u32)
+        | ((pipeline.ps.meta.kernel.grf_start_register as u32) << 8)
+        | ((pipeline.ps.meta.kernel.grf_start_register as u32) << 16);
+    let ps_extra_dw1 = (u32::from(pipeline.ps.meta.computed_stencil)
+        * PS_EXTRA_PIXEL_SHADER_COMPUTES_STENCIL)
+        | (u32::from(pipeline.ps.meta.persample_dispatch) * PS_EXTRA_PIXEL_SHADER_IS_PER_SAMPLE)
+        | (u32::from(pipeline.ps.meta.num_varying_inputs > 0) * PS_EXTRA_ATTRIBUTE_ENABLE)
+        | ((pipeline.ps.meta.computed_depth_mode as u32) << 26)
+        | PS_EXTRA_PIXEL_SHADER_VALID;
+
+    batch_dwords.fill(0);
+
+    log_batch_offset(cursor, "PIPE_CONTROL flush");
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
+    log_batch_offset(cursor, "PIPE_CONTROL invalidate");
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
+
+    log_batch_offset(cursor, "PIPELINE_SELECT");
+    push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
+
+    log_batch_offset(cursor, "STATE_BASE_ADDRESS");
+    push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_VERTEX_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
+    push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
+    push_sba_size(batch_dwords, &mut cursor, true, warm.vertex_len)?;
+    push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+
+    log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POOL_ALLOC");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC)?;
+    push_addr(batch_dwords, &mut cursor, shader_layout.state_region_gpu_addr)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        (u32::try_from(
+            crate::intel::align_up(binding_table_pool_size, 4096)
+                .ok_or("probe-binding-pool-align")?,
+        )
+        .map_err(|_| "probe-binding-pool-convert")?
+            & 0xFFFF_F000),
+    )?;
+
+    log_batch_offset(cursor, "3DSTATE_SAMPLER_STATE_POINTERS_VS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLER_STATE_POINTERS_VS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_SAMPLER_STATE_POINTERS_PS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLER_STATE_POINTERS_PS)?;
+    push(batch_dwords, &mut cursor, probe_state.sampler_state_offset_bytes)?;
+
+    let binding_table_pool_base_offset = shader_layout.state_region_offset_bytes;
+    let binding_table_pointer_offset = probe_state
+        .binding_table_offset_bytes
+        .saturating_sub(binding_table_pool_base_offset);
+
+    log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_VS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_VS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_PS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
+    push(batch_dwords, &mut cursor, binding_table_pointer_offset)?;
+
+    log_batch_offset(cursor, "3DSTATE_VIEWPORT_STATE_POINTERS_CC");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS_CC)?;
+    push(batch_dwords, &mut cursor, probe_state.cc_viewport_offset_bytes)?;
+    log_batch_offset(cursor, "3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP)?;
+    push(batch_dwords, &mut cursor, probe_state.sf_clip_viewport_offset_bytes)?;
+
+    log_batch_offset(cursor, "3DSTATE_VERTEX_BUFFERS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VERTEX_BUFFERS_1)?;
+    push(batch_dwords, &mut cursor, draw.vertex_stride | (1 << 14) | (RENDER_MOCS << 16))?;
+    push_addr(batch_dwords, &mut cursor, draw.vertex_gpu_addr)?;
+    push(batch_dwords, &mut cursor, draw.vertex_count.saturating_mul(draw.vertex_stride))?;
+
+    log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VERTEX_ELEMENTS_1)?;
+    push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25))?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        (VFCOMP_STORE_SRC << 28)
+            | (VFCOMP_STORE_SRC << 24)
+            | (VFCOMP_STORE_SRC << 20)
+            | (VFCOMP_STORE_1_FP << 16),
+    )?;
+
+    log_batch_offset(cursor, "3DSTATE_VF_STATISTICS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_STATISTICS)?;
+    log_batch_offset(cursor, "3DSTATE_VF");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_VF_SGVS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_SGVS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_VF_SGVS_2");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_SGVS_2)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_VF_INSTANCING");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_INSTANCING)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_VF_TOPOLOGY");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_TOPOLOGY)?;
+    push(batch_dwords, &mut cursor, TRIANGLE_TOPOLOGY_TRILIST)?;
+
+    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_HS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_HS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_DS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_DS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_GS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_GS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_VS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_VS)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        pipeline.vs.meta.urb_entry_output_length as u32
+            | (TRIANGLE_VS_URB_START << 10)
+            | (TRIANGLE_VS_URB_START << 21),
+    )?;
+    push(batch_dwords, &mut cursor, TRIANGLE_VS_URB_ENTRIES | (TRIANGLE_VS_URB_ENTRIES << 16))?;
+
+    log_batch_offset(cursor, "3DSTATE_VS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
+    push(batch_dwords, &mut cursor, vs_ksp_offset & !0x3F)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
+            | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27),
+    )?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        (1 << 11) | ((pipeline.vs.meta.kernel.grf_start_register as u32) << 20),
+    )?;
+    push(batch_dwords, &mut cursor, 1 | (1 << 2) | ((pipeline.vs.meta.max_threads as u32) << 22))?;
+    push(batch_dwords, &mut cursor, ((pipeline.vs.meta.urb_entry_output_length as u32) << 16))?;
+
+    log_batch_offset(cursor, "3DSTATE_HS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_HS)?;
+    for _ in 0..8 {
+        push(batch_dwords, &mut cursor, 0)?;
+    }
+    log_batch_offset(cursor, "3DSTATE_TE");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_TE)?;
+    for _ in 0..4 {
+        push(batch_dwords, &mut cursor, 0)?;
+    }
+    log_batch_offset(cursor, "3DSTATE_DS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_DS)?;
+    for _ in 0..10 {
+        push(batch_dwords, &mut cursor, 0)?;
+    }
+    log_batch_offset(cursor, "3DSTATE_STREAMOUT");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_STREAMOUT)?;
+    for _ in 0..4 {
+        push(batch_dwords, &mut cursor, 0)?;
+    }
+    log_batch_offset(cursor, "3DSTATE_GS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_GS)?;
+    for _ in 0..9 {
+        push(batch_dwords, &mut cursor, 0)?;
+    }
+
+    log_batch_offset(cursor, "3DSTATE_CLIP");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_CLIP)?;
+    push(batch_dwords, &mut cursor, clip_dw1)?;
+    push(batch_dwords, &mut cursor, clip_dw2)?;
+    push(batch_dwords, &mut cursor, clip_dw3)?;
+
+    log_batch_offset(cursor, "3DSTATE_SF");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_SF)?;
+    push(batch_dwords, &mut cursor, (1 << 1) | (128 << 12))?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+
+    log_batch_offset(cursor, "3DSTATE_RASTER");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_RASTER)?;
+    push(batch_dwords, &mut cursor, (1 << 16) | (1 << 18) | (1 << 21) | (2 << 22))?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+
+    log_batch_offset(cursor, "3DSTATE_SBE");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        (1 << 5)
+            | (sbe_vertex_read_length << 11)
+            | ((pipeline.ps.meta.num_varying_inputs as u32) << 22)
+            | (1 << 28)
+            | (1 << 29),
+    )?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, pipeline.ps.meta.flat_inputs)?;
+    push(batch_dwords, &mut cursor, SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD)?;
+    push(batch_dwords, &mut cursor, SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD)?;
+
+    // Gen12/Xe-LP keeps attribute swizzle state in a separate packet.
+    log_batch_offset(cursor, "3DSTATE_SBE_SWIZ");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
+    for _ in 0..10 {
+        push(batch_dwords, &mut cursor, 0)?;
+    }
+
+    log_batch_offset(cursor, "3DSTATE_WM");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_WM)?;
+    push(batch_dwords, &mut cursor, wm_dw1)?;
+
+    log_batch_offset(cursor, "3DSTATE_WM_DEPTH_STENCIL");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_WM_DEPTH_STENCIL)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+
+    log_batch_offset(cursor, "3DSTATE_CC_STATE_POINTERS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_CC_STATE_POINTERS)?;
+    push(batch_dwords, &mut cursor, probe_state.color_calc_state_offset_bytes | 1)?;
+
+    log_batch_offset(cursor, "3DSTATE_BLEND_STATE_POINTERS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_BLEND_STATE_POINTERS)?;
+    push(batch_dwords, &mut cursor, probe_state.blend_state_offset_bytes | 1)?;
+
+    log_batch_offset(cursor, "3DSTATE_PS_BLEND");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_BLEND)?;
+    push(batch_dwords, &mut cursor, 1 << 30)?;
+
+    log_batch_offset(cursor, "3DSTATE_MULTISAMPLE");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_MULTISAMPLE)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
+    push(batch_dwords, &mut cursor, 1)?;
+
+    log_batch_offset(cursor, "3DSTATE_PS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_PS)?;
+    push(batch_dwords, &mut cursor, ps_ksp_offset & !0x3F)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, ps_dw3)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, ps_dw6)?;
+    push(batch_dwords, &mut cursor, ps_dw7)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+
+    log_batch_offset(cursor, "3DSTATE_PS_EXTRA");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
+    push(batch_dwords, &mut cursor, ps_extra_dw1)?;
+
+    log_batch_offset(cursor, "3DSTATE_DRAWING_RECTANGLE");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_DRAWING_RECTANGLE)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16),
+    )?;
+    push(batch_dwords, &mut cursor, 0)?;
+
+    log_batch_offset(cursor, "3DPRIMITIVE");
+    push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
+    push(batch_dwords, &mut cursor, TRIANGLE_TOPOLOGY_TRILIST)?;
+    push(batch_dwords, &mut cursor, draw.vertex_count)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 1)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+
+    log_batch_offset(cursor, "PIPE_CONTROL post-draw flush");
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
+
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM done");
+    push(batch_dwords, &mut cursor, MI_STORE_DATA_IMM_GGTT_DW1)?;
+    push(batch_dwords, &mut cursor, result_gpu_addr as u32)?;
+    push(batch_dwords, &mut cursor, (result_gpu_addr >> 32) as u32)?;
+    push(batch_dwords, &mut cursor, done_value)?;
+    log_batch_offset(cursor, "MI_BATCH_BUFFER_END");
+    push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
+    push(batch_dwords, &mut cursor, MI_NOOP)?;
+
+    crate::log!(
+        "intel/render: probe-ps clip=[0x{:08X},0x{:08X},0x{:08X}] wm=0x{:08X} ps3=0x{:08X} ps6=0x{:08X} ps7=0x{:08X} ps_extra=0x{:08X}\n",
+        clip_dw1,
+        clip_dw2,
+        clip_dw3,
+        wm_dw1,
+        ps_dw3,
+        ps_dw6,
+        ps_dw7,
+        ps_extra_dw1
+    );
+
+    Ok(cursor * core::mem::size_of::<u32>())
+}
+
+fn upload_triangle_shader_pipeline(
+    warm: RenderWarmState,
+    pipeline: &'static crate::intel::shader::TrianglePipeline,
+) -> Result<TriangleShaderLayout, &'static str> {
+    let vs = stage_range("vs", pipeline.vs.meta.kernel, pipeline.vs.code)?;
+    let ps = stage_range("ps", pipeline.ps.meta.kernel, pipeline.ps.code)?;
+
+    if pipeline.vs.meta.kernel.grf_used == 0 {
+        return Err("vs-shader-grf-used-zero");
+    }
+    if pipeline.ps.meta.kernel.grf_used == 0 {
+        return Err("ps-shader-grf-used-zero");
+    }
+    if pipeline.vs.meta.max_threads == 0 {
+        return Err("vs-max-threads-zero");
+    }
+
+    if ranges_overlap(
+        vs.code_offset_bytes,
+        vs.code_size_bytes,
+        ps.code_offset_bytes,
+        ps.code_size_bytes,
+    ) {
+        return Err("shader-code-overlap");
+    }
+
+    let used_end = core::cmp::max(
+        stage_end(vs.code_offset_bytes, vs.code_size_bytes).ok_or("shader-code-overflow")?,
+        stage_end(ps.code_offset_bytes, ps.code_size_bytes).ok_or("shader-code-overflow")?,
+    );
+    if used_end > warm.draw_state_len {
+        return Err("shader-code-exceeds-state-bo");
+    }
+
+    upload_stage_code(warm.draw_state_virt, vs.code_offset_bytes, pipeline.vs.code)?;
+    upload_stage_code(warm.draw_state_virt, ps.code_offset_bytes, pipeline.ps.code)?;
+
+    crate::intel::dma_flush(warm.draw_state_virt, used_end);
+
+    let state_region_offset_bytes =
+        crate::intel::align_up(used_end, crate::intel::WARM_ALIGN).ok_or("state-region-align")?;
+    if state_region_offset_bytes > warm.draw_state_len {
+        return Err("state-region-exceeds-state-bo");
+    }
+
+    let bo_gpu_base = GPU_VA_DRAW_STATE_BASE;
+    let vs_gpu = bo_gpu_base + vs.code_offset_bytes as u64;
+    let ps_gpu = bo_gpu_base + ps.code_offset_bytes as u64;
+
+    Ok(TriangleShaderLayout {
+        vs: TriangleShaderStageLayout {
+            code_offset_bytes: vs.code_offset_bytes as u32,
+            code_gpu_addr: vs_gpu,
+            ksp_offset_bytes: pipeline.vs.meta.kernel.ksp_offset_bytes,
+            ksp_gpu_addr: vs_gpu + pipeline.vs.meta.kernel.ksp_offset_bytes as u64,
+            code_size_bytes: vs.code_size_bytes as u32,
+        },
+        ps: TriangleShaderStageLayout {
+            code_offset_bytes: ps.code_offset_bytes as u32,
+            code_gpu_addr: ps_gpu,
+            ksp_offset_bytes: pipeline.ps.meta.kernel.ksp_offset_bytes,
+            ksp_gpu_addr: ps_gpu + pipeline.ps.meta.kernel.ksp_offset_bytes as u64,
+            code_size_bytes: ps.code_size_bytes as u32,
+        },
+        state_region_gpu_addr: bo_gpu_base + state_region_offset_bytes as u64,
+        state_region_offset_bytes: state_region_offset_bytes as u32,
+        used_bytes: used_end as u32,
+    })
+}
+
+#[derive(Copy, Clone)]
+struct StageUploadRange {
+    code_offset_bytes: usize,
+    code_size_bytes: usize,
+}
+
+fn stage_range(
+    stage_name: &'static str,
+    meta: crate::intel::shader::ShaderKernelMetadata,
+    code: &'static [u32],
+) -> Result<StageUploadRange, &'static str> {
+    if meta.code_size_bytes == 0 || code.is_empty() {
+        return Err(stage_error(stage_name, "shader-empty"));
+    }
+
+    let code_len_bytes = code
+        .len()
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or(stage_error(stage_name, "shader-code-len-overflow"))?;
+    let declared_size = usize::try_from(meta.code_size_bytes)
+        .map_err(|_| stage_error(stage_name, "shader-size-convert"))?;
+    if declared_size != code_len_bytes {
+        return Err(stage_error(stage_name, "shader-size-mismatch"));
+    }
+
+    let code_offset = usize::try_from(meta.code_offset_bytes)
+        .map_err(|_| stage_error(stage_name, "shader-offset-convert"))?;
+    let code_alignment = usize::try_from(meta.code_alignment_bytes)
+        .map_err(|_| stage_error(stage_name, "shader-align-convert"))?;
+    if code_alignment == 0 || code_offset % code_alignment != 0 {
+        return Err(stage_error(stage_name, "shader-offset-alignment"));
+    }
+
+    let ksp_offset = usize::try_from(meta.ksp_offset_bytes)
+        .map_err(|_| stage_error(stage_name, "shader-ksp-convert"))?;
+    if ksp_offset % 64 != 0 {
+        return Err(stage_error(stage_name, "shader-ksp-alignment"));
+    }
+    if ksp_offset >= declared_size {
+        return Err(stage_error(stage_name, "shader-ksp-range"));
+    }
+
+    Ok(StageUploadRange {
+        code_offset_bytes: code_offset,
+        code_size_bytes: declared_size,
+    })
+}
+
+fn upload_stage_code(
+    dst_base: *mut u8,
+    offset_bytes: usize,
+    code: &'static [u32],
+) -> Result<(), &'static str> {
+    let len_bytes = code
+        .len()
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or("shader-copy-len-overflow")?;
+    if len_bytes == 0 {
+        return Ok(());
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            code.as_ptr() as *const u8,
+            dst_base.add(offset_bytes),
+            len_bytes,
+        );
+    }
+    Ok(())
+}
+
+fn stage_end(offset_bytes: usize, size_bytes: usize) -> Option<usize> {
+    offset_bytes.checked_add(size_bytes)
+}
+
+fn ranges_overlap(a_offset: usize, a_size: usize, b_offset: usize, b_size: usize) -> bool {
+    let Some(a_end) = stage_end(a_offset, a_size) else {
+        return true;
+    };
+    let Some(b_end) = stage_end(b_offset, b_size) else {
+        return true;
+    };
+    a_offset < b_end && b_offset < a_end
+}
+
+fn stage_error(stage_name: &'static str, reason: &'static str) -> &'static str {
+    match (stage_name, reason) {
+        ("vs", "shader-empty") => "vs-shader-empty",
+        ("vs", "shader-code-len-overflow") => "vs-shader-code-len-overflow",
+        ("vs", "shader-size-convert") => "vs-shader-size-convert",
+        ("vs", "shader-size-mismatch") => "vs-shader-size-mismatch",
+        ("vs", "shader-offset-convert") => "vs-shader-offset-convert",
+        ("vs", "shader-align-convert") => "vs-shader-align-convert",
+        ("vs", "shader-offset-alignment") => "vs-shader-offset-alignment",
+        ("vs", "shader-ksp-convert") => "vs-shader-ksp-convert",
+        ("vs", "shader-ksp-alignment") => "vs-shader-ksp-alignment",
+        ("vs", "shader-ksp-range") => "vs-shader-ksp-range",
+        ("ps", "shader-empty") => "ps-shader-empty",
+        ("ps", "shader-code-len-overflow") => "ps-shader-code-len-overflow",
+        ("ps", "shader-size-convert") => "ps-shader-size-convert",
+        ("ps", "shader-size-mismatch") => "ps-shader-size-mismatch",
+        ("ps", "shader-offset-convert") => "ps-shader-offset-convert",
+        ("ps", "shader-align-convert") => "ps-shader-align-convert",
+        ("ps", "shader-offset-alignment") => "ps-shader-offset-alignment",
+        ("ps", "shader-ksp-convert") => "ps-shader-ksp-convert",
+        ("ps", "shader-ksp-alignment") => "ps-shader-ksp-alignment",
+        ("ps", "shader-ksp-range") => "ps-shader-ksp-range",
+        _ => "shader-stage-error",
+    }
 }
 
 fn prepare_triangle_draw_resources(
@@ -707,6 +1729,10 @@ fn submit_triangle_to_surface(
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
 
+    submit_warm_render_batch(dev, warm)
+}
+
+fn submit_warm_render_batch(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
         return false;
@@ -775,6 +1801,7 @@ fn submit_triangle_to_surface(
         crate::intel::mmio_read(dev, RCS_RING_CTL),
         crate::intel::mmio_read(dev, RCS_RING_INSTDONE)
     );
+    crate::intel::display::log_primary_surface_samples("post-render");
     completed
 }
 

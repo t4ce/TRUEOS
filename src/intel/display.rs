@@ -34,6 +34,7 @@ const PLANE_CTL_TILED_LINEAR: u32 = 0 << 10;
 const PLANE_COLOR_ALPHA_MASK: u32 = 0x03 << 4;
 const PIPE_BOTTOM_COLOR_RGB: u32 = 0x00FF_37FF;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
+const PRIMARY_BASELINE_COLOR: u32 = 0x0030_2080;
 
 static PRIMARY_GRADIENT_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
@@ -53,6 +54,9 @@ struct PipeInfo {
 struct PrimarySurface {
     width: u32,
     height: u32,
+    pitch_bytes: u32,
+    phys: u64,
+    virt: *mut u8,
     pipe: PipeInfo,
 }
 
@@ -181,7 +185,7 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         return;
     };
 
-    clear_surface_black(virt, pitch_bytes as usize, height);
+    fill_surface_color(virt, pitch_bytes as usize, width, height, PRIMARY_BASELINE_COLOR);
     crate::intel::dma_flush(virt, byte_len);
 
     if !crate::intel::map_ggtt(dev, phys, byte_len, crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE) {
@@ -229,8 +233,12 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
     *PRIMARY_SURFACE.lock() = Some(PrimarySurface {
         width,
         height,
+        pitch_bytes,
+        phys,
+        virt,
         pipe,
     });
+    log_primary_surface_samples("pre-render");
     crate::intel::render::submit_primary_triangle_once();
     log_primary_plane_probe(dev, pipe, "primary-live");
 
@@ -278,6 +286,207 @@ pub(crate) fn primary_surface_gpu_addr() -> Option<u64> {
         .lock()
         .as_ref()
         .map(|_| crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE)
+}
+
+pub(crate) fn present_rgba_surface_center(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null() || src_width == 0 || src_height == 0 {
+        return false;
+    }
+
+    let dst_width = surface.width as usize;
+    let dst_height = surface.height as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    let src_width = src_width as usize;
+    let src_height = src_height as usize;
+    if src_pitch_bytes < src_width.saturating_mul(4) || dst_pitch < dst_width.saturating_mul(4) {
+        return false;
+    }
+
+    fill_surface_color(
+        surface.virt,
+        dst_pitch,
+        surface.width,
+        surface.height,
+        PRIMARY_BASELINE_COLOR,
+    );
+
+    let copy_w = core::cmp::min(dst_width, src_width);
+    let copy_h = core::cmp::min(dst_height, src_height);
+    let dst_x = dst_width.saturating_sub(copy_w) / 2;
+    let dst_y = dst_height.saturating_sub(copy_h) / 2;
+    let src_x = src_width.saturating_sub(copy_w) / 2;
+    let src_y = src_height.saturating_sub(copy_h) / 2;
+
+    for row_idx in 0..copy_h {
+        let src_row_off = (src_y + row_idx)
+            .saturating_mul(src_pitch_bytes)
+            .saturating_add(src_x.saturating_mul(4));
+        let Some(src_row) = src.get(src_row_off..src_row_off + copy_w.saturating_mul(4)) else {
+            return false;
+        };
+        let dst_row_off = (dst_y + row_idx)
+            .saturating_mul(dst_pitch)
+            .saturating_add(dst_x.saturating_mul(4));
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col_idx in 0..copy_w {
+            let src_off = col_idx.saturating_mul(4);
+            let pixel = u32::from_le_bytes([
+                src_row[src_off],
+                src_row[src_off + 1],
+                src_row[src_off + 2],
+                src_row[src_off + 3],
+            ]) & 0x00FF_FFFF;
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
+            }
+        }
+    }
+
+    crate::intel::dma_flush(surface.virt, dst_pitch.saturating_mul(dst_height));
+    true
+}
+
+#[inline]
+fn clamp_u8_i32(value: i32) -> u8 {
+    value.clamp(0, 255) as u8
+}
+
+pub(crate) fn present_nv12_surface_center(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null() || src_width == 0 || src_height == 0 {
+        return false;
+    }
+
+    let src_width = src_width as usize;
+    let src_height = src_height as usize;
+    if src_pitch_bytes < src_width {
+        return false;
+    }
+
+    let uv_plane_off = src_pitch_bytes.saturating_mul(src_height);
+    let needed = uv_plane_off.saturating_add((src_pitch_bytes.saturating_mul(src_height)) / 2);
+    if src.len() < needed {
+        return false;
+    }
+
+    let dst_width = surface.width as usize;
+    let dst_height = surface.height as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    if dst_pitch < dst_width.saturating_mul(4) {
+        return false;
+    }
+
+    fill_surface_color(
+        surface.virt,
+        dst_pitch,
+        surface.width,
+        surface.height,
+        PRIMARY_BASELINE_COLOR,
+    );
+
+    let scale_x = src_width.div_ceil(dst_width.max(1));
+    let scale_y = src_height.div_ceil(dst_height.max(1));
+    let scale = scale_x.max(scale_y).max(1);
+    let copy_w = (src_width / scale).max(1).min(dst_width);
+    let copy_h = (src_height / scale).max(1).min(dst_height);
+    let dst_x = dst_width.saturating_sub(copy_w) / 2;
+    let dst_y = dst_height.saturating_sub(copy_h) / 2;
+    let y_plane = &src[..uv_plane_off];
+    let uv_plane = &src[uv_plane_off..needed];
+
+    for row_idx in 0..copy_h {
+        let src_y = (row_idx.saturating_mul(scale)).min(src_height.saturating_sub(1));
+        let dst_row_off = (dst_y + row_idx)
+            .saturating_mul(dst_pitch)
+            .saturating_add(dst_x.saturating_mul(4));
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col_idx in 0..copy_w {
+            let src_x = (col_idx.saturating_mul(scale)).min(src_width.saturating_sub(1));
+            let y_idx = src_y.saturating_mul(src_pitch_bytes).saturating_add(src_x);
+            let uv_x = (src_x & !1).min(src_pitch_bytes.saturating_sub(2));
+            let uv_y = (src_y / 2).min(src_height.saturating_sub(1) / 2);
+            let uv_idx = uv_y.saturating_mul(src_pitch_bytes).saturating_add(uv_x);
+            let y = i32::from(*y_plane.get(y_idx).unwrap_or(&0));
+            let u = i32::from(*uv_plane.get(uv_idx).unwrap_or(&128)) - 128;
+            let v = i32::from(*uv_plane.get(uv_idx + 1).unwrap_or(&128)) - 128;
+            let c = (y - 16).max(0);
+            let r = clamp_u8_i32((298 * c + 409 * v + 128) >> 8);
+            let g = clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8);
+            let b = clamp_u8_i32((298 * c + 516 * u + 128) >> 8);
+            let pixel = u32::from_le_bytes([b, g, r, 0]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
+            }
+        }
+    }
+
+    crate::intel::dma_flush(surface.virt, dst_pitch.saturating_mul(dst_height));
+    true
+}
+
+pub(crate) fn log_primary_surface_samples(label: &str) {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return;
+    };
+    let width = surface.width as usize;
+    let height = surface.height as usize;
+    let pitch_bytes = surface.pitch_bytes as usize;
+    if width == 0 || height == 0 || pitch_bytes < 4 || surface.virt.is_null() {
+        return;
+    }
+
+    let sample = |x: usize, y: usize| -> u32 {
+        let clamped_x = x.min(width.saturating_sub(1));
+        let clamped_y = y.min(height.saturating_sub(1));
+        let byte_offset = clamped_y
+            .saturating_mul(pitch_bytes)
+            .saturating_add(clamped_x.saturating_mul(4));
+        let sample_ptr = unsafe { surface.virt.add(byte_offset) };
+        crate::intel::dma_flush(sample_ptr, core::mem::size_of::<u32>());
+        unsafe { core::ptr::read_volatile(sample_ptr as *const u32) }
+    };
+
+    let clip_to_screen = |clip_x: f32, clip_y: f32| -> (usize, usize) {
+        let sx = ((clip_x + 1.0) * 0.5 * width as f32).clamp(0.0, width.saturating_sub(1) as f32)
+            as usize;
+        let sy = ((1.0 - (clip_y + 1.0) * 0.5) * height as f32)
+            .clamp(0.0, height.saturating_sub(1) as f32) as usize;
+        (sx, sy)
+    };
+    let (apex_x, apex_y) = clip_to_screen(0.0, 0.72);
+    let (left_x, left_y) = clip_to_screen(-0.72, -0.58);
+    let (right_x, right_y) = clip_to_screen(0.72, -0.58);
+    let (centroid_x, centroid_y) = clip_to_screen(0.0, -0.15);
+
+    crate::log!(
+        "intel/display: primary-samples label={} gpu=0x{:X} phys=0x{:X} pitch=0x{:X} tl=0x{:08X} center=0x{:08X} br=0x{:08X} apex=0x{:08X} centroid=0x{:08X} left=0x{:08X} right=0x{:08X}\n",
+        label,
+        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
+        surface.phys,
+        surface.pitch_bytes,
+        sample(0, 0),
+        sample(width / 2, height / 2),
+        sample(width.saturating_sub(1), height.saturating_sub(1)),
+        sample(apex_x, apex_y),
+        sample(centroid_x, centroid_y),
+        sample(left_x, left_y),
+        sample(right_x, right_y)
+    );
 }
 
 fn active_pipe(dev: crate::intel::Dev) -> Option<PipeInfo> {
@@ -463,8 +672,15 @@ fn plane_stride_reg_value(pitch_bytes: u32) -> Option<u32> {
     }
 }
 
-fn clear_surface_black(ptr: *mut u8, pitch_bytes: usize, height: u32) {
+fn fill_surface_color(ptr: *mut u8, pitch_bytes: usize, width: u32, height: u32, color: u32) {
+    let width = width as usize;
+    let height = height as usize;
     unsafe {
-        core::ptr::write_bytes(ptr, 0, pitch_bytes.saturating_mul(height as usize));
+        for y in 0..height {
+            let row = ptr.add(y.saturating_mul(pitch_bytes)) as *mut u32;
+            for x in 0..width {
+                core::ptr::write_volatile(row.add(x), color);
+            }
+        }
     }
 }
