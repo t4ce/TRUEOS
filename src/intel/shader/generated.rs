@@ -1,8 +1,3 @@
-use super::TrianglePipeline;
-
-pub(crate) const TRIANGLE_PIPELINE_NOTE: &str =
-    "offline-baked Xe-LP VS/PS blobs have not been imported yet";
-
-pub(crate) fn triangle_pipeline() -> Option<&'static TrianglePipeline> {
-    None
-}
+// Experimental wiring for the first runtime load test. The committed
+// placeholder can be restored by regenerating this file from a real bake.
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/.codex_tmp/generated_simple.rs"));
