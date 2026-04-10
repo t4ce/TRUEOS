@@ -78,6 +78,8 @@ ConWhite 	FF_FF_FF
 sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
 sudo udevadm control --reload-rules
 
+# Castor mouse stays on the Linux host now; the rules file no longer auto-unbinds it.
+
 sudo usermod -aG kvm "$USER"
 newgrp kvm
 id

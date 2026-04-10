@@ -1,0 +1,13 @@
+{
+  "ksp_offset_bytes": 0,
+  "code_offset_bytes": 0,
+  "code_alignment_bytes": 64,
+  "grf_start_register": 0,
+  "dispatch_mode": "Simd8",
+  "sampler_count": 0,
+  "binding_table_entry_count": 0,
+  "push_constant_bytes": 0,
+  "grf_used": 0,
+  "urb_entry_output_length": 1,
+  "max_threads": 0
+}
