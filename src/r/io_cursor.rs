@@ -52,11 +52,14 @@ fn append_cursor_cross(
 }
 
 #[inline]
-fn collect_real_cursor_norm(out: &mut Vec<(u32, f32, f32)>) {
+fn collect_real_cursor_norm(out: &mut Vec<(u32, f32, f32)>, skip_slot_id: Option<u32>) {
     out.clear();
 
     let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slots();
     for (slot_id, cx, cy) in cursors {
+        if skip_slot_id == Some(slot_id) {
+            continue;
+        }
         let nx = if cx.is_finite() {
             cx.clamp(0.0, 1.0) as f32
         } else {
@@ -71,13 +74,18 @@ fn collect_real_cursor_norm(out: &mut Vec<(u32, f32, f32)>) {
     }
 }
 
-fn append_kernel_cursor_overlay_rgb(rgb_blob: &mut Vec<u8>, vp_w: u32, vp_h: u32) {
+fn append_kernel_cursor_overlay_rgb(
+    rgb_blob: &mut Vec<u8>,
+    vp_w: u32,
+    vp_h: u32,
+    skip_slot_id: Option<u32>,
+) {
     if vp_w == 0 || vp_h == 0 {
         return;
     }
 
     let mut real: Vec<(u32, f32, f32)> = Vec::new();
-    collect_real_cursor_norm(&mut real);
+    collect_real_cursor_norm(&mut real, skip_slot_id);
 
     for &(slot_id, nx, ny) in real.iter() {
         let ndc_x = nx * 2.0 - 1.0;
@@ -186,9 +194,10 @@ pub(super) fn append_kernel_cursor_overlay_draws(
     rgb_blob: &mut Vec<u8>,
     vp_w: u32,
     vp_h: u32,
+    skip_slot_id: Option<u32>,
 ) {
     let blob_offset = rgb_blob.len();
-    append_kernel_cursor_overlay_rgb(rgb_blob, vp_w, vp_h);
+    append_kernel_cursor_overlay_rgb(rgb_blob, vp_w, vp_h, skip_slot_id);
 
     let blob_len = rgb_blob.len().saturating_sub(blob_offset);
     if blob_len == 0 {
@@ -235,9 +244,11 @@ pub fn kernel_cursor_overlay_tick() -> i32 {
         return 0;
     }
 
+    let hw_cursor_slot = crate::intel::kernel_hw_cursor_slot();
+
     let mut draws: Vec<PendingDraw> = Vec::new();
     let mut rgb_blob: Vec<u8> = Vec::new();
-    append_kernel_cursor_overlay_draws(&mut draws, &mut rgb_blob, vp_w, vp_h);
+    append_kernel_cursor_overlay_draws(&mut draws, &mut rgb_blob, vp_w, vp_h, hw_cursor_slot);
     if draws.is_empty() || rgb_blob.is_empty() {
         return 0;
     }

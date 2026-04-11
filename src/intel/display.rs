@@ -40,14 +40,14 @@ static PRIMARY_GRADIENT_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
 
 #[derive(Copy, Clone)]
-struct PipeInfo {
-    name: &'static str,
-    slot: usize,
-    pipe_src_off: usize,
-    plane_ctl_off: usize,
-    plane_stride_off: usize,
-    plane_surf_off: usize,
-    plane_surf_live_off: usize,
+pub(super) struct PipeInfo {
+    pub(super) name: &'static str,
+    pub(super) slot: usize,
+    pub(super) pipe_src_off: usize,
+    pub(super) plane_ctl_off: usize,
+    pub(super) plane_stride_off: usize,
+    pub(super) plane_surf_off: usize,
+    pub(super) plane_surf_live_off: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -63,7 +63,7 @@ struct PrimarySurface {
 unsafe impl Send for PrimarySurface {}
 unsafe impl Sync for PrimarySurface {}
 
-const PIPES: [PipeInfo; 4] = [
+pub(super) const PIPES: [PipeInfo; 4] = [
     PipeInfo {
         name: "pipe-a",
         slot: 0,
@@ -241,6 +241,7 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
     log_primary_surface_samples("pre-render");
     crate::intel::render::submit_primary_triangle_once();
     log_primary_plane_probe(dev, pipe, "primary-live");
+    crate::intel::hw_cursor::log_cursor_ddb_map_once(dev);
 
     crate::log!(
         "intel/display: primary-gradient pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={}\n",
@@ -489,7 +490,7 @@ pub(crate) fn log_primary_surface_samples(label: &str) {
     );
 }
 
-fn active_pipe(dev: crate::intel::Dev) -> Option<PipeInfo> {
+pub(super) fn active_pipe(dev: crate::intel::Dev) -> Option<PipeInfo> {
     let mut observed = None;
     for pipe in PIPES {
         let pipe_src = crate::intel::mmio_read(dev, pipe.pipe_src_off);
@@ -598,6 +599,19 @@ fn decode_plane_rotation(ctl: u32) -> &'static str {
     }
 }
 
+pub(super) fn plane_buf_cfg_for_pipe_slot(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    plane_slot: usize,
+) -> u32 {
+    crate::intel::mmio_read(
+        dev,
+        pipe.plane_ctl_off
+            + plane_slot.saturating_mul(UNI_PLANE_SLOT_STRIDE)
+            + UNI_PLANE_BUF_CFG_OFF,
+    )
+}
+
 #[inline]
 fn decode_xy_x(v: u32) -> u32 {
     v & 0xFFFF
@@ -608,7 +622,7 @@ fn decode_xy_y(v: u32) -> u32 {
     (v >> 16) & 0xFFFF
 }
 
-fn decode_pipe_src(value: u32) -> Option<(u32, u32)> {
+pub(super) fn decode_pipe_src(value: u32) -> Option<(u32, u32)> {
     if value == 0 || value == u32::MAX {
         return None;
     }
@@ -620,7 +634,7 @@ fn decode_pipe_src(value: u32) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
-fn framebuffer_hint() -> Option<(u32, u32)> {
+pub(super) fn framebuffer_hint() -> Option<(u32, u32)> {
     let fb = crate::limine::framebuffer_response()?
         .framebuffers()
         .next()?;
@@ -648,7 +662,7 @@ fn log_primary_dimensions_probe(
     );
 }
 
-fn aligned_pitch_bytes(width: u32, bytes_per_pixel: u32) -> Option<u32> {
+pub(super) fn aligned_pitch_bytes(width: u32, bytes_per_pixel: u32) -> Option<u32> {
     let bytes = width.checked_mul(bytes_per_pixel)?;
     let aligned = crate::intel::align_up(bytes as usize, 64)?;
     u32::try_from(aligned).ok()
@@ -672,7 +686,13 @@ fn plane_stride_reg_value(pitch_bytes: u32) -> Option<u32> {
     }
 }
 
-fn fill_surface_color(ptr: *mut u8, pitch_bytes: usize, width: u32, height: u32, color: u32) {
+pub(super) fn fill_surface_color(
+    ptr: *mut u8,
+    pitch_bytes: usize,
+    width: u32,
+    height: u32,
+    color: u32,
+) {
     let width = width as usize;
     let height = height as usize;
     unsafe {

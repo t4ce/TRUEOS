@@ -1,5 +1,6 @@
 mod display;
 mod guc;
+mod hw_cursor;
 mod render;
 pub(crate) mod shader;
 pub(crate) mod xelp_media_mp4;
@@ -41,6 +42,7 @@ const GUC_WOPCM_OFFSET_ALIGNMENT: u32 = 1 << GUC_WOPCM_OFFSET_SHIFT;
 pub(crate) const GS_BOOTROM_MASK: u32 = 0x7F << 1;
 pub(crate) const GS_UKERNEL_MASK: u32 = 0xFF << 8;
 pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
+const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 
 static INIT: AtomicBool = AtomicBool::new(false);
@@ -130,12 +132,16 @@ pub fn init_once() {
     if self::render::forcewake_render_acquire(warm) {
         self::render::forcewake_render_sanity(warm);
     }
-    crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
-    crate::wait::spawn_local_detached(async move {
-        Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
-        crate::log!("intel/media: boot demo begin\n");
-        self::run_https_media_demo_once_async().await;
-    });
+    if MEDIA_BOOT_DEMO_ENABLED {
+        crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
+        crate::wait::spawn_local_detached(async move {
+            Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
+            crate::log!("intel/media: boot demo begin\n");
+            self::run_https_media_demo_once_async().await;
+        });
+    } else {
+        crate::log!("intel/media: boot demo disabled\n");
+    }
 }
 
 pub fn guc_ready() -> bool {
@@ -156,6 +162,14 @@ pub fn warm_state() -> Option<self::render::RenderWarmState> {
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
+}
+
+pub fn update_kernel_hw_cursor() -> Option<u32> {
+    self::hw_cursor::update_kernel_hw_cursor()
+}
+
+pub fn kernel_hw_cursor_slot() -> Option<u32> {
+    self::hw_cursor::kernel_hw_cursor_slot()
 }
 
 pub fn media_kickoff_once() {
