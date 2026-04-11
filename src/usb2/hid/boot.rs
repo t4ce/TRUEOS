@@ -35,6 +35,13 @@ impl HidBootKind {
     }
 }
 
+#[inline]
+fn should_skip_descriptor_logging(vendor_id: u16, product_id: u16, kind: HidBootKind) -> bool {
+    // Narrow workaround for QEMU's simple emulated USB boot mouse, which can
+    // wedge on the optional HID descriptor dump path.
+    vendor_id == 0x0627 && product_id == 0x0001 && matches!(kind, HidBootKind::Mouse)
+}
+
 #[derive(Copy, Clone, Debug)]
 struct HidBootTarget {
     configuration_value: u8,
@@ -509,15 +516,13 @@ async fn hid_boot_stream_task(
             }
             Err(err) => {
                 crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} boot protocol if#{} failed: {:?}\n",
+                    "crabusb: hid {} {:04X}:{:04X} boot protocol if#{} failed (continuing): {:?}\n",
                     target.kind.as_str(),
                     vendor_id,
                     product_id,
                     target.interface_number,
                     err
                 );
-                let _ = unregister_active_hid_stream(active_stream);
-                return;
             }
         }
 
@@ -540,15 +545,13 @@ async fn hid_boot_stream_task(
             }
             Err(err) => {
                 crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 failed: {:?}\n",
+                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 failed (continuing): {:?}\n",
                     target.kind.as_str(),
                     vendor_id,
                     product_id,
                     target.interface_number,
                     err
                 );
-                let _ = unregister_active_hid_stream(active_stream);
-                return;
             }
         }
     }
@@ -573,15 +576,13 @@ async fn hid_boot_stream_task(
             }
             Err(err) => {
                 crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 failed: {:?}\n",
+                    "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 failed (continuing): {:?}\n",
                     target.kind.as_str(),
                     vendor_id,
                     product_id,
                     target.interface_number,
                     err
                 );
-                let _ = unregister_active_hid_stream(active_stream);
-                return;
             }
         }
     }
@@ -798,7 +799,16 @@ pub(crate) async fn maybe_start_hid_boot_streams(
         let mut device = device;
 
         if descriptors_pending {
-            log_hid_report_descriptors_on_device(&mut device, dev_info).await;
+            if should_skip_descriptor_logging(vendor_id, product_id, target.kind) {
+                crate::log!(
+                    "crabusb: hid {} {:04X}:{:04X} skipping descriptor log for qemu boot mouse\n",
+                    target.kind.as_str(),
+                    vendor_id,
+                    product_id
+                );
+            } else {
+                log_hid_report_descriptors_on_device(&mut device, dev_info).await;
+            }
             descriptors_pending = false;
         }
 
