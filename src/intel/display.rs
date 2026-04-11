@@ -156,6 +156,8 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         return;
     }
 
+    log_pipe_scanout_probe(dev, "before-primary-init");
+
     let Some(pipe) = active_pipe(dev) else {
         crate::log!("intel/display: primary-gradient skipped no active pipe discovered\n");
         return;
@@ -211,12 +213,30 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         return;
     };
 
+    log_primary_plane_probe(dev, pipe, "before-arm");
     let ctl_before = crate::intel::mmio_read(dev, pipe.plane_ctl_off);
-    let ctl_programmed = (ctl_before & !(PLANE_CTL_FORMAT_MASK_SKL | PLANE_CTL_TILED_MASK))
+    let ctl_programmed = (ctl_before
+        & !(PLANE_CTL_ENABLE | PLANE_CTL_FORMAT_MASK_SKL | PLANE_CTL_TILED_MASK))
+        | PLANE_CTL_ENABLE
         | PLANE_CTL_FORMAT_XRGB_8888
         | PLANE_CTL_TILED_LINEAR;
     let surf_before = crate::intel::mmio_read(dev, pipe.plane_surf_off);
     crate::intel::mmio_write(dev, pipe.plane_stride_off, stride_reg);
+    crate::intel::mmio_write(
+        dev,
+        pipe.plane_ctl_off + UNI_PLANE_POS_OFF,
+        plane_pos_reg_value(0, 0),
+    );
+    crate::intel::mmio_write(
+        dev,
+        pipe.plane_ctl_off + UNI_PLANE_SIZE_OFF,
+        plane_size_reg_value(width, height),
+    );
+    crate::intel::mmio_write(
+        dev,
+        pipe.plane_ctl_off + UNI_PLANE_OFFSET_OFF,
+        plane_pos_reg_value(0, 0),
+    );
     crate::intel::mmio_write(dev, pipe.plane_ctl_off, ctl_programmed);
     crate::intel::mmio_write(dev, pipe.plane_surf_off, surface_reg);
 
@@ -227,6 +247,8 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         surf_live = crate::intel::mmio_read(dev, pipe.plane_surf_live_off);
         iter += 1;
     }
+    log_primary_plane_probe(dev, pipe, "after-arm");
+    log_pipe_scanout_probe(dev, "after-primary-init");
     let surf_armed = crate::intel::mmio_read(dev, pipe.plane_surf_off);
     let ctl_after = crate::intel::mmio_read(dev, pipe.plane_ctl_off);
     let ok = surf_live == surface_reg || surf_armed == surface_reg;
@@ -506,6 +528,7 @@ pub(crate) fn log_primary_surface_samples(label: &str) {
 }
 
 pub(super) fn active_pipe(dev: crate::intel::Dev) -> Option<PipeInfo> {
+    let mut enabled_plane = None;
     let mut observed = None;
     for pipe in PIPES {
         let pipe_src = crate::intel::mmio_read(dev, pipe.pipe_src_off);
@@ -515,11 +538,39 @@ pub(super) fn active_pipe(dev: crate::intel::Dev) -> Option<PipeInfo> {
         let plane_ctl = crate::intel::mmio_read(dev, pipe.plane_ctl_off);
         let plane_surf = crate::intel::mmio_read(dev, pipe.plane_surf_off);
         let plane_surf_live = crate::intel::mmio_read(dev, pipe.plane_surf_live_off);
+        if enabled_plane.is_none()
+            && (plane_ctl & PLANE_CTL_ENABLE) != 0
+            && (plane_surf != 0 || plane_surf_live != 0)
+        {
+            enabled_plane = Some(pipe);
+        }
         if observed.is_none() && (plane_ctl != 0 || plane_surf != 0 || plane_surf_live != 0) {
             observed = Some(pipe);
         }
     }
-    observed
+    enabled_plane.or(observed)
+}
+
+fn log_pipe_scanout_probe(dev: crate::intel::Dev, label: &str) {
+    for pipe in PIPES {
+        let pipe_src_raw = crate::intel::mmio_read(dev, pipe.pipe_src_off);
+        let pipe_src_dims = decode_pipe_src(pipe_src_raw);
+        let plane_ctl = crate::intel::mmio_read(dev, pipe.plane_ctl_off);
+        let plane_surf = crate::intel::mmio_read(dev, pipe.plane_surf_off);
+        let plane_surf_live = crate::intel::mmio_read(dev, pipe.plane_surf_live_off);
+        let (width, height) = pipe_src_dims.unwrap_or((0, 0));
+        crate::log!(
+            "intel/display: pipe-probe label={} pipe={} pipe_src=0x{:08X} dims={}x{} plane_enabled={} surf=0x{:08X} surf_live=0x{:08X}\n",
+            label,
+            pipe.name,
+            pipe_src_raw,
+            width,
+            height,
+            ((plane_ctl & PLANE_CTL_ENABLE) != 0) as u8,
+            plane_surf,
+            plane_surf_live
+        );
+    }
 }
 
 fn log_primary_plane_probe(dev: crate::intel::Dev, pipe: PipeInfo, label: &str) {

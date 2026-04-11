@@ -762,23 +762,30 @@ impl Device {
             c.set_alternate_setting(alternate);
         });
 
-        if let Err(err) = self
-            .ep_ctrl()
-            .control_out(
-                ControlSetup {
-                    request_type: RequestType::Standard,
-                    recipient: Recipient::Interface,
-                    request: usb_if::transfer::Request::SetInterface,
-                    value: alternate as _, // alternate setting goes in value
-                    index: interface as _, // interface number goes in index
-                },
-                &[],
-            )
-            .await
-        {
-            self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::ClaimInterface, &err)
-                .await;
-            return Err(err.into());
+        // Alternate setting 0 is already the interface default. Some simple HID
+        // devices, including emulated ones, may STALL an explicit SET_INTERFACE 0
+        // even though the interface is otherwise usable. The userspace backend
+        // already skips this request for alt 0, so keep the kernel xHCI path
+        // consistent and only issue SET_INTERFACE for nonzero alternates.
+        if alternate != 0 {
+            if let Err(err) = self
+                .ep_ctrl()
+                .control_out(
+                    ControlSetup {
+                        request_type: RequestType::Standard,
+                        recipient: Recipient::Interface,
+                        request: usb_if::transfer::Request::SetInterface,
+                        value: alternate as _, // alternate setting goes in value
+                        index: interface as _, // interface number goes in index
+                    },
+                    &[],
+                )
+                .await
+            {
+                self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::ClaimInterface, &err)
+                    .await;
+                return Err(err.into());
+            }
         }
         if let Err(err) = self.setup_all_endpoints(interface, alternate).await {
             self.abort_command_lifecycle(&lifecycle, CommandLifecycleStage::ClaimInterface, &err)

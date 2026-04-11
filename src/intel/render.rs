@@ -1644,6 +1644,17 @@ fn encode_3d_no_draw_probe_batch(
         push(batch_dwords, cursor, (value >> 32) as u32)
     }
 
+    fn push_store_data_imm(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        address: u64,
+        value: u32,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, MI_STORE_DATA_IMM_GGTT_DW1)?;
+        push_addr(batch_dwords, cursor, address)?;
+        push(batch_dwords, cursor, value)
+    }
+
     fn push_pipe_control_full(
         batch_dwords: &mut [u32],
         cursor: &mut usize,
@@ -1704,15 +1715,7 @@ fn encode_3d_no_draw_probe_batch(
     for _ in 0..6 {
         push(batch_dwords, &mut cursor, 0)?;
     }
-    push(batch_dwords, &mut cursor, PIPE_CONTROL_CMD)?;
-    push(
-        batch_dwords,
-        &mut cursor,
-        PIPE_CONTROL_FLUSH_BITS | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT,
-    )?;
-    push_addr(batch_dwords, &mut cursor, result_gpu_addr)?;
-    push(batch_dwords, &mut cursor, done_value)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push_store_data_imm(batch_dwords, &mut cursor, result_gpu_addr, done_value)?;
     push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
     push(batch_dwords, &mut cursor, MI_NOOP)?;
     Ok(cursor * core::mem::size_of::<u32>())
@@ -1925,9 +1928,9 @@ fn prepare_triangle_draw_resources(
     };
     vertices.fill(0.0);
 
-    // Keep this orthographic and centered in clip space so the first baked VS
-    // only needs to pass through position.
-    let tri = [[0.0f32, 0.72, 0.0], [-0.72, -0.58, 0.0], [0.72, -0.58, 0.0]];
+    // Use a large clip-space triangle so visibility doesn't depend on fine
+    // viewport math or on our sample points landing inside a small primitive.
+    let tri = [[-1.0f32, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]];
     for (dst, src) in vertices
         .chunks_exact_mut(TRIANGLE_DRAW_VERTEX_DWORDS)
         .take(TRIANGLE_DRAW_VERTICES)
