@@ -628,14 +628,6 @@ pub(crate) fn submit_primary_triangle_once() {
         crate::log!("intel/render: primary-triangle skipped reason=ggtt-map\n");
         return;
     }
-    if !submit_result_store_probe(dev, warm) {
-        crate::log!("intel/render: primary-triangle skipped reason=mi-store-probe\n");
-        return;
-    }
-    if !submit_3d_no_draw_probe(dev, warm) {
-        crate::log!("intel/render: primary-triangle skipped reason=3d-no-draw-probe\n");
-        return;
-    }
     if submit_triangle_draw_to_surface(
         dev,
         warm,
@@ -888,12 +880,6 @@ fn submit_3d_no_draw_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> boo
         crate::log!("intel/render: 3d-no-draw-probe batch build failed\n");
         return false;
     };
-    crate::log!(
-        "intel/render: 3d-no-draw-probe batch_tail=0x{:X} result_gpu=0x{:X} expect=0x{:08X}\n",
-        batch_tail_bytes,
-        GPU_VA_RESULT_BASE + (RESULT_SLOT_POST3D_DWORD as u64) * 4,
-        RCS_EXEC_RESULT_3D_NO_DRAW_DONE
-    );
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
     submit_warm_render_batch(
         dev,
@@ -1598,16 +1584,12 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
 
-    log_batch_offset(cursor, "PIPE_CONTROL post-draw flush");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
-
-    log_batch_offset(cursor, "PIPE_CONTROL post-sync marker");
-    push_pipe_control_post_sync_write(
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM post-3d");
+    push_store_data_imm(
         batch_dwords,
         &mut cursor,
         result_gpu_addr + (RESULT_SLOT_POST3D_DWORD as u64) * 4,
         post3d_value,
-        PIPE_CONTROL_FLUSH_BITS,
     )?;
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM final");
@@ -2028,11 +2010,6 @@ fn submit_warm_render_batch(
 ) -> bool {
     let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
-        crate::log!(
-            "intel/render: {} setup-fail stage=ring-ctl ring_len=0x{:X}\n",
-            submit_name,
-            warm.ring_len
-        );
         return false;
     };
     if !init_gen12_lrc_context_image(
@@ -2041,13 +2018,6 @@ fn submit_warm_render_batch(
         ring_tail_bytes as u32,
         ring_ctl,
     ) {
-        crate::log!(
-            "intel/render: {} setup-fail stage=context-image ring_start=0x{:X} ring_tail=0x{:X} ring_ctl=0x{:08X}\n",
-            submit_name,
-            GPU_VA_RING_BASE as u32,
-            ring_tail_bytes as u32,
-            ring_ctl
-        );
         return false;
     }
     let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE);
@@ -2069,15 +2039,6 @@ fn submit_warm_render_batch(
     crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
     crate::intel::mmio_write(dev, RCS_RING_HWS_PGA, pphwsp_gpu);
     let hws_after = crate::intel::mmio_read(dev, RCS_RING_HWS_PGA);
-    crate::log!(
-        "intel/render: {} submit-prep ring_tail=0x{:X} ring_ctl=0x{:08X} pphwsp=0x{:08X} expect_slot={} expect=0x{:08X}\n",
-        submit_name,
-        ring_tail_bytes,
-        ring_ctl,
-        hws_after,
-        expected_result_slot_dword,
-        expected_result
-    );
 
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     execlist_submit_port_push(dev, context_desc_lo, context_desc_hi, 0, 0);
