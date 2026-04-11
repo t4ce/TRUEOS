@@ -4,8 +4,43 @@ use heapless::Vec;
 use spin::Mutex;
 
 const MAX_CURSOR_SNAPSHOTS: usize = 32;
-const HID_KIND_MOUSE: u8 = 2;
-const HID_KIND_TABLET: u8 = 3;
+pub const HID_KIND_VIRTUAL_CURSOR: u8 = 0;
+pub const HID_KIND_MOUSE: u8 = 2;
+pub const HID_KIND_TABLET: u8 = 3;
+pub const HID_KIND_EYETRACKER: u8 = 4;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum KernelHwCursorSourceKind {
+    Tablet,
+    Mouse,
+    VirtualService,
+    EyeTracker,
+}
+
+impl KernelHwCursorSourceKind {
+    pub const fn from_hid_kind(hid_kind: u8) -> Option<Self> {
+        match hid_kind {
+            HID_KIND_TABLET => Some(Self::Tablet),
+            HID_KIND_MOUSE => Some(Self::Mouse),
+            HID_KIND_VIRTUAL_CURSOR => Some(Self::VirtualService),
+            HID_KIND_EYETRACKER => Some(Self::EyeTracker),
+            _ => None,
+        }
+    }
+
+    pub const fn kernel_hw_cursor_priority(self) -> u8 {
+        // Contract for kernel-hw-cursor source promotion:
+        // service/virtual provides the baseline authority today,
+        // physical mouse may supersede lower-fidelity sources,
+        // and eyetracker is reserved as the final/highest-priority source.
+        match self {
+            Self::Tablet => 1,
+            Self::Mouse => 2,
+            Self::VirtualService => 3,
+            Self::EyeTracker => 4,
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 struct CursorSnapshot {
@@ -52,6 +87,13 @@ fn snapshot_source_match(
         && snapshot.slot_id == slot_id
         && snapshot.ep_target == ep_target
         && snapshot.hid_kind == hid_kind
+}
+
+#[inline]
+fn snapshot_kernel_hw_cursor_priority(snapshot: &CursorSnapshot) -> u8 {
+    KernelHwCursorSourceKind::from_hid_kind(snapshot.hid_kind)
+        .map(|kind| kind.kernel_hw_cursor_priority())
+        .unwrap_or(0)
 }
 
 pub fn upsert_snapshot(
@@ -187,6 +229,27 @@ pub fn ordered_cursor_snapshot_with_slot_buttons() -> Vec<(u32, f64, f64, u32), 
         }
     }
     out
+}
+
+pub fn preferred_kernel_hw_cursor_snapshot_with_slot_buttons() -> Option<(u32, f64, f64, u32)> {
+    let guard = CURSOR_SNAPSHOTS.lock();
+    let mut best: Option<(u8, usize, &CursorSnapshot)> = None;
+
+    for (idx, snapshot) in guard.iter().enumerate() {
+        let priority = snapshot_kernel_hw_cursor_priority(snapshot);
+        if priority == 0 {
+            continue;
+        }
+        match best {
+            Some((best_priority, best_idx, _))
+                if priority < best_priority || (priority == best_priority && idx >= best_idx) => {}
+            _ => {
+                best = Some((priority, idx, snapshot));
+            }
+        }
+    }
+
+    best.map(|(_, _, snapshot)| (snapshot.slot_id, snapshot.x, snapshot.y, snapshot.buttons_down))
 }
 
 pub fn cursor_pos(cursor_id: u32) -> Option<(f64, f64)> {

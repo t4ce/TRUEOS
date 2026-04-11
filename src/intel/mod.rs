@@ -15,6 +15,7 @@ pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
 pub(crate) const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
 pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
+pub(crate) const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0600_0000;
 pub(crate) const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
 const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
@@ -132,6 +133,7 @@ pub fn init_once() {
     if self::render::forcewake_render_acquire(warm) {
         self::render::forcewake_render_sanity(warm);
     }
+    self::render::submit_primary_triangle_once();
     if MEDIA_BOOT_DEMO_ENABLED {
         crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
         crate::wait::spawn_local_detached(async move {

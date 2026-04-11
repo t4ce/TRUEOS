@@ -38,9 +38,12 @@ const CURSOR_POS_X_SIGN: u32 = 1 << 15;
 const CURSOR_POS_Y_MASK: u32 = 0x7FFF << 16;
 const CURSOR_POS_X_MASK: u32 = 0x7FFF;
 const KERNEL_CURSOR_DIM: u32 = 64;
-const KERNEL_CURSOR_RECT_DIM: u32 = 32;
+const KERNEL_CURSOR_RECT_MIN_DIM: u32 = 8;
+const KERNEL_CURSOR_RECT_MAX_DIM: u32 = 32;
+const KERNEL_CURSOR_RECT_MIN_SCANOUT_H: u32 = 720;
+const KERNEL_CURSOR_RECT_MAX_SCANOUT_H: u32 = 2160;
 const KERNEL_CURSOR_BYTES_PER_PIXEL: u32 = 4;
-const KERNEL_CURSOR_GPU_ADDR: u64 = 0x0201_0000;
+const KERNEL_CURSOR_GPU_ADDR: u64 = crate::intel::GPU_VA_DISPLAY_CURSOR_BASE;
 const KERNEL_CURSOR_HOTSPOT_X: i32 = (KERNEL_CURSOR_DIM / 2) as i32;
 const KERNEL_CURSOR_HOTSPOT_Y: i32 = (KERNEL_CURSOR_DIM / 2) as i32;
 const KERNEL_CURSOR_SPLIT_ALPHA: u8 = 0x40;
@@ -134,9 +137,11 @@ struct KernelCursorState {
     armed_pipe_slot: Option<usize>,
     visible: bool,
     probe_logged: bool,
+    saw_real_cursor: bool,
     last_slot_id: u32,
     last_buttons_down: u32,
     last_color: u32,
+    last_rect_dim: u32,
     last_x: i32,
     last_y: i32,
     last_probe_log_tick: u64,
@@ -150,9 +155,11 @@ impl KernelCursorState {
             armed_pipe_slot: None,
             visible: false,
             probe_logged: false,
+            saw_real_cursor: false,
             last_slot_id: 0,
             last_buttons_down: 0,
             last_color: 0,
+            last_rect_dim: 0,
             last_x: i32::MIN,
             last_y: i32::MIN,
             last_probe_log_tick: 0,
@@ -168,24 +175,36 @@ pub(crate) fn update_kernel_hw_cursor() -> Option<u32> {
     let fb_dims = framebuffer_hint();
     let (scanout_w, scanout_h) = pipe_src_dims.or(fb_dims)?;
 
-    let first_cursor = crate::r::cursor::ordered_cursor_snapshot_with_slot_buttons()
-        .into_iter()
-        .next();
-    let Some((slot_id, nx, ny, buttons_down)) = first_cursor else {
-        disable_kernel_hw_cursor(dev, None);
-        return None;
+    let first_cursor = crate::r::cursor::preferred_kernel_hw_cursor_snapshot_with_slot_buttons();
+    let allow_center_probe_fallback = if KERNEL_CURSOR_PROBE_ONLY {
+        let state = KERNEL_CURSOR_STATE.lock();
+        !state.saw_real_cursor
+    } else {
+        false
+    };
+    let (slot_id, nx, ny, buttons_down, centered_fallback) = match first_cursor {
+        Some((slot_id, nx, ny, buttons_down)) => (slot_id, nx, ny, buttons_down, false),
+        None if allow_center_probe_fallback => (0, 0.5, 0.5, 0, true),
+        None => {
+            disable_kernel_hw_cursor(dev, None);
+            return None;
+        }
     };
 
+    let rect_dim = kernel_cursor_visible_rect_dim(scanout_h);
     let mut x_px = normalized_cursor_to_px(nx, scanout_w, KERNEL_CURSOR_HOTSPOT_X);
     let mut y_px = normalized_cursor_to_px(ny, scanout_h, KERNEL_CURSOR_HOTSPOT_Y);
     if KERNEL_CURSOR_PROBE_ONLY && KERNEL_CURSOR_PROBE_KIND.forces_visible_probe_position() {
-        (x_px, y_px) = clamp_cursor_probe_position(x_px, y_px, scanout_w, scanout_h);
+        (x_px, y_px) = clamp_cursor_probe_position(x_px, y_px, scanout_w, scanout_h, rect_dim);
     }
     let pressed = buttons_down != 0;
     let texture_variant = pressed as u32;
 
     let regs = cursor_regs_for_pipe(pipe.slot)?;
     let mut state = KERNEL_CURSOR_STATE.lock();
+    if !centered_fallback {
+        state.saw_real_cursor = true;
+    }
     let surface = ensure_kernel_cursor_surface(dev, &mut state)?;
 
     let pipe_changed = state.armed_pipe_slot != Some(pipe.slot);
@@ -197,8 +216,9 @@ pub(crate) fn update_kernel_hw_cursor() -> Option<u32> {
         || state.last_slot_id != slot_id
         || state.last_buttons_down != buttons_down
         || state.last_color != texture_variant
+        || state.last_rect_dim != rect_dim
     {
-        draw_kernel_cursor_surface(surface, pressed);
+        draw_kernel_cursor_surface(surface, rect_dim, pressed);
         crate::intel::dma_flush(
             surface.virt,
             (surface.pitch_bytes as usize).saturating_mul(surface.height as usize),
@@ -238,17 +258,19 @@ pub(crate) fn update_kernel_hw_cursor() -> Option<u32> {
                 base,
                 pos,
             );
-            crate::log!(
-                "intel/display: kernel-hw-cursor probe-only pipe={} slot={} kind={} pos={}x{} ctl_target=0x{:08X} base_target=0x{:08X} buf_cfg_target=0x{:08X} reason=cursor-enable-wedges-display\n",
-                pipe.name,
-                slot_id,
-                KERNEL_CURSOR_PROBE_KIND.label(),
-                x_px,
-                y_px,
-                probe_ctl,
-                base,
-                buf_cfg_target
-            );
+            if kernel_cursor_probe_logs_enabled() {
+                crate::log!(
+                    "intel/display: kernel-hw-cursor probe-only pipe={} slot={} kind={} pos={}x{} ctl_target=0x{:08X} base_target=0x{:08X} buf_cfg_target=0x{:08X} reason=cursor-enable-wedges-display\n",
+                    pipe.name,
+                    slot_id,
+                    KERNEL_CURSOR_PROBE_KIND.label(),
+                    x_px,
+                    y_px,
+                    probe_ctl,
+                    base,
+                    buf_cfg_target
+                );
+            }
         }
         if probe_changed {
             match KERNEL_CURSOR_PROBE_KIND {
@@ -351,6 +373,7 @@ pub(crate) fn update_kernel_hw_cursor() -> Option<u32> {
         state.last_slot_id = slot_id;
         state.last_buttons_down = buttons_down;
         state.last_color = texture_variant;
+        state.last_rect_dim = rect_dim;
         state.last_x = x_px;
         state.last_y = y_px;
         return None;
@@ -406,6 +429,7 @@ pub(crate) fn update_kernel_hw_cursor() -> Option<u32> {
     state.last_slot_id = slot_id;
     state.last_buttons_down = buttons_down;
     state.last_color = texture_variant;
+    state.last_rect_dim = rect_dim;
     state.last_x = x_px;
     state.last_y = y_px;
 
@@ -617,6 +641,11 @@ fn disable_kernel_hw_cursor(dev: crate::intel::Dev, preferred_pipe: Option<PipeI
     state.last_y = i32::MIN;
 }
 
+#[inline]
+fn kernel_cursor_probe_logs_enabled() -> bool {
+    crate::logflag::INTEL_CURSOR_PROBE_LOGS
+}
+
 fn log_kernel_cursor_probe(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
@@ -632,6 +661,10 @@ fn log_kernel_cursor_probe(
     base_target: u32,
     pos_target: u32,
 ) {
+    if !kernel_cursor_probe_logs_enabled() {
+        return;
+    }
+
     log_cursor_ddb_map_once(dev);
 
     let aux = cursor_aux_regs_for_pipe(pipe.slot);
@@ -750,21 +783,23 @@ fn probe_cursor_pos_write(
     let base_after = crate::intel::mmio_read(dev, regs.base_off);
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
-        "intel/display: kernel-hw-cursor probe-curpos pipe={} slot={} target={}x{} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
-        pipe.name,
-        slot_id,
-        x_px,
-        y_px,
-        pos_before,
-        pos_after,
-        ctl_before,
-        ctl_after,
-        base_before,
-        base_after,
-        live_before,
-        live_after
-    );
+    if kernel_cursor_probe_logs_enabled() {
+        crate::log!(
+            "intel/display: kernel-hw-cursor probe-curpos pipe={} slot={} target={}x{} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
+            pipe.name,
+            slot_id,
+            x_px,
+            y_px,
+            pos_before,
+            pos_after,
+            ctl_before,
+            ctl_after,
+            base_before,
+            base_after,
+            live_before,
+            live_after
+        );
+    }
 }
 
 fn probe_cursor_buf_cfg_write(
@@ -787,17 +822,19 @@ fn probe_cursor_buf_cfg_write(
     let wm0_after = crate::intel::mmio_read(dev, aux.wm0_off);
     let wm_trans_after = crate::intel::mmio_read(dev, aux.wm_trans_off);
 
-    crate::log!(
-        "intel/display: kernel-hw-cursor probe-curbufcfg pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} wm0_before=0x{:08X} wm0_after=0x{:08X} wm_trans_before=0x{:08X} wm_trans_after=0x{:08X}\n",
-        pipe.name,
-        slot_id,
-        buf_cfg_before,
-        buf_cfg_after,
-        wm0_before,
-        wm0_after,
-        wm_trans_before,
-        wm_trans_after
-    );
+    if kernel_cursor_probe_logs_enabled() {
+        crate::log!(
+            "intel/display: kernel-hw-cursor probe-curbufcfg pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} wm0_before=0x{:08X} wm0_after=0x{:08X} wm_trans_before=0x{:08X} wm_trans_after=0x{:08X}\n",
+            pipe.name,
+            slot_id,
+            buf_cfg_before,
+            buf_cfg_after,
+            wm0_before,
+            wm0_after,
+            wm_trans_before,
+            wm_trans_after
+        );
+    }
 }
 
 fn probe_cursor_buf_cfg_base_write(
@@ -825,19 +862,21 @@ fn probe_cursor_buf_cfg_base_write(
     let ctl_after = crate::intel::mmio_read(dev, regs.ctl_off);
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
-        "intel/display: kernel-hw-cursor probe-curbufcfg-base pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
-        pipe.name,
-        slot_id,
-        buf_cfg_before,
-        buf_cfg_after,
-        base_before,
-        base_after,
-        ctl_before,
-        ctl_after,
-        live_before,
-        live_after
-    );
+    if kernel_cursor_probe_logs_enabled() {
+        crate::log!(
+            "intel/display: kernel-hw-cursor probe-curbufcfg-base pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
+            pipe.name,
+            slot_id,
+            buf_cfg_before,
+            buf_cfg_after,
+            base_before,
+            base_after,
+            ctl_before,
+            ctl_after,
+            live_before,
+            live_after
+        );
+    }
 }
 
 fn probe_cursor_buf_cfg_base_pos_write(
@@ -869,21 +908,23 @@ fn probe_cursor_buf_cfg_base_pos_write(
     let ctl_after = crate::intel::mmio_read(dev, regs.ctl_off);
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
-        "intel/display: kernel-hw-cursor probe-curbufcfg-base-pos pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
-        pipe.name,
-        slot_id,
-        buf_cfg_before,
-        buf_cfg_after,
-        base_before,
-        base_after,
-        pos_before,
-        pos_after,
-        ctl_before,
-        ctl_after,
-        live_before,
-        live_after
-    );
+    if kernel_cursor_probe_logs_enabled() {
+        crate::log!(
+            "intel/display: kernel-hw-cursor probe-curbufcfg-base-pos pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
+            pipe.name,
+            slot_id,
+            buf_cfg_before,
+            buf_cfg_after,
+            base_before,
+            base_after,
+            pos_before,
+            pos_after,
+            ctl_before,
+            ctl_after,
+            live_before,
+            live_after
+        );
+    }
 }
 
 fn probe_cursor_buf_cfg_base_pos_ctl_mode_write(
@@ -917,21 +958,23 @@ fn probe_cursor_buf_cfg_base_pos_ctl_mode_write(
     let ctl_after = crate::intel::mmio_read(dev, regs.ctl_off);
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
-        "intel/display: kernel-hw-cursor probe-curbufcfg-base-pos-ctlmode pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
-        pipe.name,
-        slot_id,
-        buf_cfg_before,
-        buf_cfg_after,
-        base_before,
-        base_after,
-        pos_before,
-        pos_after,
-        ctl_before,
-        ctl_after,
-        live_before,
-        live_after
-    );
+    if kernel_cursor_probe_logs_enabled() {
+        crate::log!(
+            "intel/display: kernel-hw-cursor probe-curbufcfg-base-pos-ctlmode pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
+            pipe.name,
+            slot_id,
+            buf_cfg_before,
+            buf_cfg_after,
+            base_before,
+            base_after,
+            pos_before,
+            pos_after,
+            ctl_before,
+            ctl_after,
+            live_before,
+            live_after
+        );
+    }
 }
 
 fn probe_cursor_buf_cfg_base_pos_ctl_enable_write(
@@ -1138,31 +1181,33 @@ fn probe_cursor_wm_enable_buf_cfg_ctl_enable_pos_base_write(
     let ctl_after = crate::intel::mmio_read(dev, regs.ctl_off);
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
-        "intel/display: kernel-hw-cursor probe-curwm-bufcfg-ctlenable-pos-base pipe={} slot={} wm0_before=0x{:08X} wm0_after_wm=0x{:08X} wm_trans_before=0x{:08X} wm_trans_after_wm=0x{:08X} wm_sagv_before=0x{:08X} wm_sagv_after_wm=0x{:08X} wm_sagv_trans_before=0x{:08X} wm_sagv_trans_after_wm=0x{:08X} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after_ctl=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after_ctl=0x{:08X} live_after=0x{:08X}\n",
-        pipe.name,
-        slot_id,
-        wm0_before,
-        wm0_after_wm,
-        wm_trans_before,
-        wm_trans_after_wm,
-        wm_sagv_before,
-        wm_sagv_after_wm,
-        wm_sagv_trans_before,
-        wm_sagv_trans_after_wm,
-        buf_cfg_before,
-        buf_cfg_after,
-        base_before,
-        base_after,
-        pos_before,
-        pos_after,
-        ctl_before,
-        ctl_after_ctl,
-        ctl_after,
-        live_before,
-        live_after_ctl,
-        live_after
-    );
+    if kernel_cursor_probe_logs_enabled() {
+        crate::log!(
+            "intel/display: kernel-hw-cursor probe-curwm-bufcfg-ctlenable-pos-base pipe={} slot={} wm0_before=0x{:08X} wm0_after_wm=0x{:08X} wm_trans_before=0x{:08X} wm_trans_after_wm=0x{:08X} wm_sagv_before=0x{:08X} wm_sagv_after_wm=0x{:08X} wm_sagv_trans_before=0x{:08X} wm_sagv_trans_after_wm=0x{:08X} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after_ctl=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after_ctl=0x{:08X} live_after=0x{:08X}\n",
+            pipe.name,
+            slot_id,
+            wm0_before,
+            wm0_after_wm,
+            wm_trans_before,
+            wm_trans_after_wm,
+            wm_sagv_before,
+            wm_sagv_after_wm,
+            wm_sagv_trans_before,
+            wm_sagv_trans_after_wm,
+            buf_cfg_before,
+            buf_cfg_after,
+            base_before,
+            base_after,
+            pos_before,
+            pos_after,
+            ctl_before,
+            ctl_after_ctl,
+            ctl_after,
+            live_before,
+            live_after_ctl,
+            live_after
+        );
+    }
 }
 
 fn probe_cursor_base_write(
@@ -1395,24 +1440,44 @@ fn cursor_pos_reg_value(x: i32, y: i32) -> u32 {
     value
 }
 
-fn clamp_cursor_probe_position(x: i32, y: i32, scanout_w: u32, scanout_h: u32) -> (i32, i32) {
-    let visible_inset = KERNEL_CURSOR_DIM.saturating_sub(KERNEL_CURSOR_RECT_DIM) / 2;
-    let min_x = -(visible_inset as i32);
-    let min_y = -(visible_inset as i32);
-    let max_x = scanout_w
-        .saturating_sub(visible_inset.saturating_add(KERNEL_CURSOR_RECT_DIM))
-        as i32;
-    let max_y = scanout_h
-        .saturating_sub(visible_inset.saturating_add(KERNEL_CURSOR_RECT_DIM))
-        as i32;
+fn clamp_cursor_probe_position(
+    x: i32,
+    y: i32,
+    scanout_w: u32,
+    scanout_h: u32,
+    rect_dim: u32,
+) -> (i32, i32) {
+    let inset = KERNEL_CURSOR_DIM.saturating_sub(rect_dim) / 2;
+    let min_x = -(inset as i32);
+    let min_y = -(inset as i32);
+    let max_x = scanout_w.saturating_sub(inset.saturating_add(rect_dim)) as i32;
+    let max_y = scanout_h.saturating_sub(inset.saturating_add(rect_dim)) as i32;
     (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
 }
 
-fn pack_bgra8888(r: u8, g: u8, b: u8, a: u8) -> u32 {
-    u32::from_le_bytes([b, g, r, a])
+fn kernel_cursor_visible_rect_dim(scanout_h: u32) -> u32 {
+    let clamped_h =
+        scanout_h.clamp(KERNEL_CURSOR_RECT_MIN_SCANOUT_H, KERNEL_CURSOR_RECT_MAX_SCANOUT_H);
+    let range_h = KERNEL_CURSOR_RECT_MAX_SCANOUT_H - KERNEL_CURSOR_RECT_MIN_SCANOUT_H;
+    let range_dim = KERNEL_CURSOR_RECT_MAX_DIM - KERNEL_CURSOR_RECT_MIN_DIM;
+    let scaled = if range_h == 0 {
+        KERNEL_CURSOR_RECT_MAX_DIM
+    } else {
+        KERNEL_CURSOR_RECT_MIN_DIM
+            + ((clamped_h - KERNEL_CURSOR_RECT_MIN_SCANOUT_H) * range_dim + (range_h / 2)) / range_h
+    };
+    scaled.clamp(KERNEL_CURSOR_RECT_MIN_DIM, KERNEL_CURSOR_RECT_MAX_DIM)
 }
 
-fn draw_kernel_cursor_surface(surface: KernelCursorSurface, pressed: bool) {
+fn pack_bgra8888(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    let alpha = u16::from(a);
+    let premul_r = ((u16::from(r) * alpha) / 0xFF) as u8;
+    let premul_g = ((u16::from(g) * alpha) / 0xFF) as u8;
+    let premul_b = ((u16::from(b) * alpha) / 0xFF) as u8;
+    u32::from_le_bytes([premul_b, premul_g, premul_r, a])
+}
+
+fn draw_kernel_cursor_surface(surface: KernelCursorSurface, rect_dim: u32, pressed: bool) {
     fill_surface_color(
         surface.virt,
         surface.pitch_bytes as usize,
@@ -1424,9 +1489,7 @@ fn draw_kernel_cursor_surface(surface: KernelCursorSurface, pressed: bool) {
     let width = surface.width as usize;
     let height = surface.height as usize;
     let pitch_pixels = (surface.pitch_bytes as usize) / 4;
-    let rect_dim = KERNEL_CURSOR_RECT_DIM
-        .min(surface.width)
-        .min(surface.height) as usize;
+    let rect_dim = rect_dim.min(surface.width).min(surface.height) as usize;
     let rect_x0 = (width.saturating_sub(rect_dim)) / 2;
     let rect_y0 = (height.saturating_sub(rect_dim)) / 2;
     let rect_x1 = rect_x0.saturating_add(rect_dim);
