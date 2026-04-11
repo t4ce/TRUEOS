@@ -127,6 +127,7 @@ define_started_flags!(
     TGA_TASK_STARTED,
     GFX_VIRGL_READY_TASK_STARTED,
     GFX_VIRGL_CURSOR_OVERLAY_STARTED,
+    INTEL_CURSOR_SERVICE_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
     UI2_HOSTED_SYNC_TASK_STARTED,
@@ -451,6 +452,19 @@ fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(gfx_virgl_cursor_overlay_task()))
 }
 
+#[embassy_executor::task]
+async fn intel_cursor_service_task() {
+    crate::log!("boot-probe: intel-cursor-service task start ms={}\n", boot_probe_ms());
+    loop {
+        let _ = crate::intel::update_kernel_hw_cursor();
+        Timer::after(EmbassyDuration::from_millis(16)).await;
+    }
+}
+
+fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(intel_cursor_service_task()))
+}
+
 fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
         ap1_spawner.spawn(crate::r::io::cabi::texture_upload_service_task())
@@ -608,6 +622,11 @@ fn task_gate_always() -> bool {
 #[inline]
 fn gfx_backend_boot_gate() -> bool {
     true
+}
+
+#[inline]
+fn intel_cursor_service_gate() -> bool {
+    crate::intel::has_claimed_device()
 }
 
 #[inline]
@@ -955,6 +974,13 @@ static TASKS: &[TaskSpec] = &[
         crate::r::readiness::GFX_BACKEND_READY,
         &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
         spawn_gfx_virgl_cursor_overlay_task,
+    ),
+    TaskSpec::enabled_gated(
+        "intel-cursor-service",
+        0,
+        intel_cursor_service_gate,
+        &INTEL_CURSOR_SERVICE_STARTED,
+        spawn_intel_cursor_service_task,
     ),
     TaskSpec::enabled("html_fetch_service", 0, &HTML_SHACK_SERVICE_STARTED, html_fetch_service),
     TaskSpec::enabled(
