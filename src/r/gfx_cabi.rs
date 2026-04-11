@@ -4743,6 +4743,7 @@ pub mod cabi {
                         &mut submit_rgb_src,
                         swap.extent.width,
                         swap.extent.height,
+                        None,
                     );
                 }
                 const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
@@ -5243,6 +5244,7 @@ pub mod cabi {
                         &mut screenshot_rgb,
                         vp_w,
                         vp_h,
+                        None,
                     );
                 }
                 maybe_publish_composed_screenshot(

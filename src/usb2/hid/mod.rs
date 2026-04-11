@@ -218,6 +218,21 @@ fn runtime_mut_or_insert(
 
     runtimes.push(HidRuntime::new(controller_id, slot_id, ep_target, hid_kind));
     let idx = runtimes.len() - 1;
+    if hid_kind == HID_KIND_MOUSE {
+        let runtime = &runtimes[idx];
+        sync_runtime_cursor_snapshot(runtime);
+        self::hut::upsert_mouse_state(
+            runtime.controller_id,
+            runtime.slot_id,
+            runtime.ep_target,
+            runtime.mouse_x,
+            runtime.mouse_y,
+            runtime.mouse_buttons_down,
+            self::hut::HidSourceKind::Human,
+            "human",
+            false,
+        );
+    }
     &mut runtimes[idx]
 }
 

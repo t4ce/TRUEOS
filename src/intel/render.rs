@@ -27,9 +27,12 @@ const RCS_RING_EXECLIST_SUBMIT_PORT: usize = RCS_RING_BASE + 0x230;
 const RCS_RING_EXECLIST_STATUS_LO: usize = RCS_RING_BASE + 0x234;
 const RCS_RING_EXECLIST_STATUS_HI: usize = RCS_RING_BASE + 0x238;
 const RCS_RING_EXECLIST_CONTROL: usize = RCS_RING_BASE + 0x550;
+const RCS_RING_EXECLIST_SQ_LO: usize = RCS_RING_BASE + 0x510;
+const RCS_RING_EXECLIST_SQ_HI: usize = RCS_RING_BASE + 0x514;
+const RCS_RING_HWS_PGA: usize = RCS_RING_BASE + 0x80;
 const CURSOR_A_OFFSET: usize = 0x70080;
-const CURSOR_B_OFFSET: usize = 0x700C0;
-const CURSOR_C_OFFSET: usize = 0x700E0;
+const CURSOR_B_OFFSET: usize = 0x71080;
+const CURSOR_C_OFFSET: usize = 0x72080;
 const CURSOR_D_OFFSET: usize = 0x73080;
 const WARM_RING_BYTES: usize = 4096;
 const WARM_CONTEXT_BYTES: usize = 22 * 4096;
@@ -69,6 +72,10 @@ const GEN12_CTX_PRIORITY_NORMAL: u32 = 1 << 9;
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
 const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 const RCS_EXEC_RESULT_DONE: u32 = 0xC0DE_7701;
+const RCS_EXEC_RESULT_MI_PROBE_DONE: u32 = 0xC0DE_7711;
+const RCS_EXEC_RESULT_3D_NO_DRAW_DONE: u32 = 0xC0DE_7712;
+const RCS_EXEC_RESULT_DRAW_PRE3D: u32 = 0xC0DE_7721;
+const RCS_EXEC_RESULT_DRAW_POST3D: u32 = 0xC0DE_7722;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
 const RENDER_MOCS: u32 = 1;
 const SURFTYPE_2D: u32 = 1;
@@ -142,6 +149,11 @@ const CMD_3DPRIMITIVE: u32 = 5 | (3 << 24) | (3 << 27) | (3 << 29);
 const PIPE_CONTROL_FLUSH_BITS: u32 = (1 << 5) | (1 << 7) | (1 << 12) | (1 << 20) | (1 << 26);
 const PIPE_CONTROL_INVALIDATE_BITS: u32 =
     (1 << 2) | (1 << 3) | (1 << 4) | (1 << 10) | (1 << 11) | (1 << 18) | (1 << 20);
+const PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
+const PIPE_CONTROL_DEST_GGTT: u32 = 1 << 24;
+const RESULT_SLOT_PRE3D_DWORD: usize = 0;
+const RESULT_SLOT_POST3D_DWORD: usize = 1;
+const RESULT_SLOT_FINAL_DWORD: usize = 2;
 const TRIANGLE_TOPOLOGY_TRILIST: u32 = 4;
 const TRIANGLE_PS_MAX_THREADS: u32 = 63;
 const TRIANGLE_VS_URB_START: u32 = 4;
@@ -616,6 +628,14 @@ pub(crate) fn submit_primary_triangle_once() {
         crate::log!("intel/render: primary-triangle skipped reason=ggtt-map\n");
         return;
     }
+    if !submit_result_store_probe(dev, warm) {
+        crate::log!("intel/render: primary-triangle skipped reason=mi-store-probe\n");
+        return;
+    }
+    if !submit_3d_no_draw_probe(dev, warm) {
+        crate::log!("intel/render: primary-triangle skipped reason=3d-no-draw-probe\n");
+        return;
+    }
     if submit_triangle_draw_to_surface(
         dev,
         warm,
@@ -684,6 +704,8 @@ fn submit_triangle_draw_to_surface(
     };
 
     let pipeline = crate::intel::shader::triangle_pipeline();
+    log_render_buffer_layout(warm, Some(dst_gpu_addr));
+    log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
         crate::log!(
             "intel/render: draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-baked-shaders vs_src={} ps_src={} note={}\n",
@@ -769,7 +791,8 @@ fn submit_triangle_draw_to_surface(
         core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
         core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
-        core::ptr::write_volatile((warm.result_virt as *mut u32).add(2), 0xC0DE_7703);
+        core::ptr::write_volatile((warm.result_virt as *mut u32).add(1), 0xC0DE_7700);
+        core::ptr::write_volatile((warm.result_virt as *mut u32).add(2), 0xC0DE_7700);
     }
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
@@ -784,6 +807,8 @@ fn submit_triangle_draw_to_surface(
         shader_layout,
         probe_state,
         GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_DRAW_PRE3D,
+        RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
     ) {
         Ok(bytes) => bytes,
@@ -809,9 +834,109 @@ fn submit_triangle_draw_to_surface(
     );
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
-    submit_warm_render_batch(dev, warm)
+    submit_warm_render_batch(dev, warm, RCS_EXEC_RESULT_DONE, RESULT_SLOT_FINAL_DWORD, "draw-path")
 }
 
+fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
+    unsafe {
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let Ok(batch_tail_bytes) =
+        encode_result_store_probe_batch(batch, GPU_VA_RESULT_BASE, RCS_EXEC_RESULT_MI_PROBE_DONE)
+    else {
+        crate::log!("intel/render: mi-store-probe batch build failed\n");
+        return false;
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
+    submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_MI_PROBE_DONE,
+        RESULT_SLOT_PRE3D_DWORD,
+        "mi-store-probe",
+    )
+}
+
+fn submit_3d_no_draw_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
+    unsafe {
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
+        core::ptr::write_volatile((warm.result_virt as *mut u32).add(1), 0xC0DE_7700);
+        core::ptr::write_volatile((warm.result_virt as *mut u32).add(2), 0xC0DE_7700);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let Ok(batch_tail_bytes) = encode_3d_no_draw_probe_batch(
+        batch,
+        warm,
+        GPU_VA_RESULT_BASE + (RESULT_SLOT_POST3D_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_3D_NO_DRAW_DONE,
+    ) else {
+        crate::log!("intel/render: 3d-no-draw-probe batch build failed\n");
+        return false;
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
+    submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_3D_NO_DRAW_DONE,
+        RESULT_SLOT_POST3D_DWORD,
+        "3d-no-draw",
+    )
+}
+
+fn log_render_buffer_layout(warm: RenderWarmState, rt_gpu_addr: Option<u64>) {
+    let rt_gpu_addr = rt_gpu_addr.unwrap_or(0);
+    crate::log!(
+        "intel/render: buffers ring phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} context phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} batch phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} result phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} state phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} vertex phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rt_ggtt=0x{:X}\n",
+        warm.ring_phys,
+        GPU_VA_RING_BASE,
+        warm.ring_len,
+        warm.context_phys,
+        GPU_VA_CONTEXT_BASE,
+        warm.context_len,
+        warm.batch_phys,
+        GPU_VA_BATCH_BASE,
+        warm.batch_len,
+        warm.result_phys,
+        GPU_VA_RESULT_BASE,
+        warm.result_len,
+        warm.draw_state_phys,
+        GPU_VA_DRAW_STATE_BASE,
+        warm.draw_state_len,
+        warm.vertex_phys,
+        GPU_VA_VERTEX_BASE,
+        warm.vertex_len,
+        rt_gpu_addr
+    );
+}
+
+fn log_render_packet_encodings() {
+    let (ctx_desc_lo, ctx_desc_hi) = build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE);
+    crate::log!(
+        "intel/render: encodings mi_store_data_imm=0x{:08X} ctx_desc=0x{:08X}:0x{:08X} state_base_address=0x{:08X} pipe_control=0x{:08X} pc_post_sync_immediate=0x{:08X} pc_dest_ggtt=0x{:08X}\n",
+        MI_STORE_DATA_IMM_GGTT_DW1,
+        ctx_desc_hi,
+        ctx_desc_lo,
+        STATE_BASE_ADDRESS_CMD,
+        PIPE_CONTROL_CMD,
+        PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE,
+        PIPE_CONTROL_DEST_GGTT
+    );
+}
 fn log_triangle_probe_state(
     warm: RenderWarmState,
     shader_layout: TriangleShaderLayout,
@@ -1009,6 +1134,8 @@ fn encode_triangle_probe_batch(
     shader_layout: TriangleShaderLayout,
     probe_state: TriangleProbeStateLayout,
     result_gpu_addr: u64,
+    pre3d_value: u32,
+    post3d_value: u32,
     done_value: u32,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
@@ -1086,6 +1213,35 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, cursor, 0)?;
         push(batch_dwords, cursor, 0)?;
         push(batch_dwords, cursor, 0)
+    }
+
+    fn push_pipe_control_post_sync_write(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        address: u64,
+        immediate_data: u32,
+        flags_dw1: u32,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
+        push(
+            batch_dwords,
+            cursor,
+            flags_dw1 | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT,
+        )?;
+        push_addr(batch_dwords, cursor, address)?;
+        push(batch_dwords, cursor, immediate_data)?;
+        push(batch_dwords, cursor, 0)
+    }
+
+    fn push_store_data_imm(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        address: u64,
+        value: u32,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, MI_STORE_DATA_IMM_GGTT_DW1)?;
+        push_addr(batch_dwords, cursor, address)?;
+        push(batch_dwords, cursor, value)
     }
 
     fn push_sba_address(
@@ -1419,6 +1575,14 @@ fn encode_triangle_probe_batch(
     )?;
     push(batch_dwords, &mut cursor, 0)?;
 
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM pre-3d");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_PRE3D_DWORD as u64) * 4,
+        pre3d_value,
+    )?;
+
     log_batch_offset(cursor, "3DPRIMITIVE");
     push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
     push(batch_dwords, &mut cursor, TRIANGLE_TOPOLOGY_TRILIST)?;
@@ -1431,11 +1595,22 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "PIPE_CONTROL post-draw flush");
     push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
 
-    log_batch_offset(cursor, "MI_STORE_DATA_IMM done");
-    push(batch_dwords, &mut cursor, MI_STORE_DATA_IMM_GGTT_DW1)?;
-    push(batch_dwords, &mut cursor, result_gpu_addr as u32)?;
-    push(batch_dwords, &mut cursor, (result_gpu_addr >> 32) as u32)?;
-    push(batch_dwords, &mut cursor, done_value)?;
+    log_batch_offset(cursor, "PIPE_CONTROL post-sync marker");
+    push_pipe_control_post_sync_write(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_POST3D_DWORD as u64) * 4,
+        post3d_value,
+        PIPE_CONTROL_FLUSH_BITS,
+    )?;
+
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM final");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_FINAL_DWORD as u64) * 4,
+        done_value,
+    )?;
     log_batch_offset(cursor, "MI_BATCH_BUFFER_END");
     push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
     push(batch_dwords, &mut cursor, MI_NOOP)?;
@@ -1452,6 +1627,106 @@ fn encode_triangle_probe_batch(
         ps_extra_dw1
     );
 
+    Ok(cursor * core::mem::size_of::<u32>())
+}
+
+fn encode_3d_no_draw_probe_batch(
+    batch_dwords: &mut [u32],
+    warm: RenderWarmState,
+    result_gpu_addr: u64,
+    done_value: u32,
+) -> Result<usize, &'static str> {
+    let mut cursor = 0usize;
+
+    fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
+        if *cursor >= batch_dwords.len() {
+            return Err("3d-no-draw-batch-exhausted");
+        }
+        batch_dwords[*cursor] = value;
+        *cursor += 1;
+        Ok(())
+    }
+
+    fn push_addr(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        value: u64,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, value as u32)?;
+        push(batch_dwords, cursor, (value >> 32) as u32)
+    }
+
+    fn push_pipe_control_full(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        flags_dw0: u32,
+        flags_dw1: u32,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
+        push(batch_dwords, cursor, flags_dw1)?;
+        if let Some(slot) = batch_dwords.get_mut(cursor.saturating_sub(2)) {
+            *slot |= flags_dw0;
+        } else {
+            return Err("3d-no-draw-pipe-control-header");
+        }
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)
+    }
+
+    fn push_sba_address(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        enable: bool,
+        mocs: u32,
+        address: u64,
+    ) -> Result<(), &'static str> {
+        let low = ((address as u32) & 0xFFFF_F000) | (mocs << 4) | u32::from(enable);
+        push(batch_dwords, cursor, low)?;
+        push(batch_dwords, cursor, (address >> 32) as u32)
+    }
+
+    fn push_sba_size(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        enable: bool,
+        size_bytes: usize,
+    ) -> Result<(), &'static str> {
+        let size_bytes = crate::intel::align_up(size_bytes, 4096).ok_or("3d-no-draw-sba-align")?;
+        let size_bytes = u32::try_from(size_bytes).map_err(|_| "3d-no-draw-sba-convert")?;
+        push(batch_dwords, cursor, (size_bytes & 0xFFFF_F000) | u32::from(enable))
+    }
+
+    batch_dwords.fill(0);
+    push_pipe_control_full(batch_dwords, &mut cursor, 0, PIPE_CONTROL_FLUSH_BITS)?;
+    push_pipe_control_full(batch_dwords, &mut cursor, 0, PIPE_CONTROL_INVALIDATE_BITS)?;
+    push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
+    push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_VERTEX_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
+    push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
+    push_sba_size(batch_dwords, &mut cursor, true, warm.vertex_len)?;
+    push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
+    for _ in 0..6 {
+        push(batch_dwords, &mut cursor, 0)?;
+    }
+    push(batch_dwords, &mut cursor, PIPE_CONTROL_CMD)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        PIPE_CONTROL_FLUSH_BITS | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT,
+    )?;
+    push_addr(batch_dwords, &mut cursor, result_gpu_addr)?;
+    push(batch_dwords, &mut cursor, done_value)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
+    push(batch_dwords, &mut cursor, MI_NOOP)?;
     Ok(cursor * core::mem::size_of::<u32>())
 }
 
@@ -1729,10 +2004,22 @@ fn submit_triangle_to_surface(
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
 
-    submit_warm_render_batch(dev, warm)
+    submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_DONE,
+        RESULT_SLOT_PRE3D_DWORD,
+        "mi-triangle",
+    )
 }
 
-fn submit_warm_render_batch(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
+fn submit_warm_render_batch(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    expected_result: u32,
+    expected_result_slot_dword: usize,
+    submit_name: &'static str,
+) -> bool {
     let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
         return false;
@@ -1746,6 +2033,8 @@ fn submit_warm_render_batch(dev: crate::intel::Dev, warm: RenderWarmState) -> bo
         return false;
     }
     let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE);
+    write_lrc_ring_tail(warm, ring_tail_bytes as u32);
+    let pphwsp_gpu = (GPU_VA_CONTEXT_BASE & !0xFFF) as u32;
 
     crate::intel::mmio_write(
         dev,
@@ -1760,22 +2049,44 @@ fn submit_warm_render_batch(dev: crate::intel::Dev, warm: RenderWarmState) -> bo
     );
     crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
     crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
+    crate::intel::mmio_write(dev, RCS_RING_HWS_PGA, pphwsp_gpu);
+    let hws_after = crate::intel::mmio_read(dev, RCS_RING_HWS_PGA);
 
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     execlist_submit_port_push(dev, context_desc_lo, context_desc_hi, 0, 0);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
 
+    crate::log!(
+        "intel/render: {} execlist-start desc=0x{:08X}:0x{:08X} hws=0x{:08X} sq=0x{:08X}:0x{:08X} ctx_ctl=0x{:08X}\n",
+        submit_name,
+        context_desc_hi,
+        context_desc_lo,
+        hws_after,
+        crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_HI),
+        crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_LO),
+        crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL)
+    );
+
     let mut completed = false;
     let mut iter = 0usize;
     while iter < 4096 {
-        let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
-        if result0 == RCS_EXEC_RESULT_DONE {
+        let result0 = read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD);
+        let result1 = read_result_dword(warm, RESULT_SLOT_POST3D_DWORD);
+        let result2 = read_result_dword(warm, RESULT_SLOT_FINAL_DWORD);
+        let observed = match expected_result_slot_dword {
+            RESULT_SLOT_PRE3D_DWORD => result0,
+            RESULT_SLOT_POST3D_DWORD => result1,
+            RESULT_SLOT_FINAL_DWORD => result2,
+            _ => result0,
+        };
+        if observed == expected_result {
             completed = true;
             break;
         }
         if iter == 0 || iter == 256 || iter == 1024 || iter == 4095 {
             crate::log!(
-                "intel/render: primary-triangle poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X}\n",
+                "intel/render: {} poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X}\n",
+                submit_name,
                 iter,
                 crate::intel::mmio_read(dev, RCS_RING_HEAD),
                 crate::intel::mmio_read(dev, RCS_RING_TAIL),
@@ -1785,7 +2096,9 @@ fn submit_warm_render_batch(dev: crate::intel::Dev, warm: RenderWarmState) -> bo
                 crate::intel::mmio_read(dev, RCS_RING_EIR),
                 crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO),
                 crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_HI),
-                result0
+                result0,
+                result1,
+                result2
             );
         }
         core::hint::spin_loop();
@@ -1793,16 +2106,25 @@ fn submit_warm_render_batch(dev: crate::intel::Dev, warm: RenderWarmState) -> bo
     }
 
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    let result0 = unsafe { core::ptr::read_volatile(warm.result_virt as *const u32) };
+    let result0 = read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD);
+    let result1 = read_result_dword(warm, RESULT_SLOT_POST3D_DWORD);
+    let result2 = read_result_dword(warm, RESULT_SLOT_FINAL_DWORD);
     crate::log!(
-        "intel/render: primary-triangle complete={} result0=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
+        "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
+        submit_name,
         completed as u8,
         result0,
+        result1,
+        result2,
         crate::intel::mmio_read(dev, RCS_RING_CTL),
         crate::intel::mmio_read(dev, RCS_RING_INSTDONE)
     );
     crate::intel::display::log_primary_surface_samples("post-render");
     completed
+}
+
+fn read_result_dword(warm: RenderWarmState, index: usize) -> u32 {
+    unsafe { core::ptr::read_volatile((warm.result_virt as *const u32).add(index)) }
 }
 
 fn build_ring_batch_start(warm: RenderWarmState, batch_gpu_addr: u64) -> usize {
@@ -1852,10 +2174,24 @@ fn execlist_submit_port_push(
     context1_lo: u32,
     context1_hi: u32,
 ) {
+    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_LO, context0_lo);
+    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_HI, context0_hi);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SUBMIT_PORT, context0_lo);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SUBMIT_PORT, context0_hi);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SUBMIT_PORT, context1_lo);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SUBMIT_PORT, context1_hi);
+}
+
+fn write_lrc_ring_tail(warm: RenderWarmState, ring_tail: u32) {
+    let total_dwords = warm.context_len / core::mem::size_of::<u32>();
+    if total_dwords <= LRC_STATE_OFFSET_DWORDS + 3 {
+        return;
+    }
+
+    let dwords =
+        unsafe { core::slice::from_raw_parts_mut(warm.context_virt as *mut u32, total_dwords) };
+    dwords[LRC_STATE_OFFSET_DWORDS + 3] = ring_tail;
+    crate::intel::dma_flush(warm.context_virt, warm.context_len);
 }
 
 fn mi_lri_num_regs(num_regs: u32) -> u32 {
@@ -2183,6 +2519,25 @@ fn encode_rgb_triangle_store_batch(
     batch_dwords[idx + 1] = MI_NOOP;
     idx += RESERVED_END_DWORDS;
     Ok(idx * core::mem::size_of::<u32>())
+}
+
+fn encode_result_store_probe_batch(
+    batch_dwords: &mut [u32],
+    result_gpu_addr: u64,
+    done_value: u32,
+) -> Result<usize, &'static str> {
+    if batch_dwords.len() < 6 {
+        return Err("batch-too-small");
+    }
+
+    batch_dwords.fill(0);
+    batch_dwords[0] = MI_STORE_DATA_IMM_GGTT_DW1;
+    batch_dwords[1] = result_gpu_addr as u32;
+    batch_dwords[2] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[3] = done_value;
+    batch_dwords[4] = MI_BATCH_BUFFER_END;
+    batch_dwords[5] = MI_NOOP;
+    Ok(6 * core::mem::size_of::<u32>())
 }
 
 fn edge_fn(ax: i32, ay: i32, bx: i32, by: i32, px: i32, py: i32) -> i64 {
