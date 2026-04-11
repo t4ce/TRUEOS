@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 pub mod boot;
+pub mod eyetracker;
 pub mod hut;
 pub mod input;
 pub mod keyboard;
@@ -100,8 +101,8 @@ pub(crate) use crate::logflag::HID_DEBUG_REPORT_LOGS;
 
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 1024.0;
 const HID_KIND_KEYBOARD: u8 = 1;
-const HID_KIND_MOUSE: u8 = 2;
-const HID_KIND_VIRTUAL_CURSOR: u8 = 0;
+const HID_KIND_MOUSE: u8 = crate::r::cursor::HID_KIND_MOUSE;
+const HID_KIND_VIRTUAL_CURSOR: u8 = crate::r::cursor::HID_KIND_VIRTUAL_CURSOR;
 const CURSOR_EVENT_RING_CAP: usize = 2048;
 
 const ZERO_CURSOR_EVENT: TrueosHidCursorEvent = TrueosHidCursorEvent {

@@ -34,7 +34,8 @@ const PLANE_CTL_TILED_LINEAR: u32 = 0 << 10;
 const PLANE_COLOR_ALPHA_MASK: u32 = 0x03 << 4;
 const PIPE_BOTTOM_COLOR_RGB: u32 = 0x00FF_37FF;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
-const PRIMARY_BASELINE_COLOR: u32 = 0x0030_2080;
+const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
+const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
 
 static PRIMARY_GRADIENT_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
@@ -238,13 +239,26 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         virt,
         pipe,
     });
-    log_primary_surface_samples("pre-render");
-    crate::intel::render::submit_primary_triangle_once();
-    log_primary_plane_probe(dev, pipe, "primary-live");
-    crate::intel::hw_cursor::log_cursor_ddb_map_once(dev);
+
+    let logo_ok = match crate::gfx::jpeg_codec::decode_jpeg_rgba(PRIMARY_BOOT_LOGO_JPEG) {
+        Ok(decoded) => present_rgba_surface_center(
+            decoded.rgba.as_slice(),
+            decoded.width,
+            decoded.height,
+            (decoded.width as usize).saturating_mul(4),
+        ),
+        Err(err) => {
+            crate::log!(
+                "intel/display: primary-logo decode failed code={} bytes=0x{:X}\n",
+                err.code(),
+                PRIMARY_BOOT_LOGO_JPEG.len()
+            );
+            false
+        }
+    };
 
     crate::log!(
-        "intel/display: primary-gradient pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={}\n",
+        "intel/display: primary-gradient pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={}\n",
         pipe.name,
         width,
         height,
@@ -257,7 +271,8 @@ pub(crate) fn init_primary_gradient(dev: crate::intel::Dev) {
         surf_before,
         surf_armed,
         surf_live,
-        ok as u8
+        ok as u8,
+        logo_ok as u8
     );
 }
 

@@ -20,6 +20,7 @@ enum HidBootKind {
     Keyboard,
     Mouse,
     Tablet,
+    EyeTracker,
 }
 
 impl HidBootKind {
@@ -29,6 +30,7 @@ impl HidBootKind {
             HidBootKind::Keyboard => "keyboard",
             HidBootKind::Mouse => "mouse",
             HidBootKind::Tablet => "tablet",
+            HidBootKind::EyeTracker => "eyetracker",
         }
     }
 }
@@ -79,6 +81,14 @@ fn pick_hid_boot_targets(
                 let kind = match (alt.class, alt.subclass, alt.protocol) {
                     (0x03, 0x01, 0x01) => HidBootKind::Keyboard,
                     (0x03, 0x01, 0x02) => HidBootKind::Mouse,
+                    _ if super::eyetracker::matches_interface(
+                        alt.class,
+                        alt.subclass,
+                        alt.protocol,
+                    ) =>
+                    {
+                        HidBootKind::EyeTracker
+                    }
                     _ => continue,
                 };
 
@@ -93,6 +103,9 @@ fn pick_hid_boot_targets(
                     HidBootKind::Keyboard => 8,
                     HidBootKind::Mouse => 4,
                     HidBootKind::Tablet => super::tablet::report_len(endpoint.max_packet_size),
+                    HidBootKind::EyeTracker => {
+                        super::eyetracker::report_len(endpoint.max_packet_size)
+                    }
                 };
                 out.push(HidBootTarget {
                     configuration_value: config.configuration_value,
@@ -540,7 +553,7 @@ async fn hid_boot_stream_task(
         }
     }
 
-    if matches!(target.kind, HidBootKind::Tablet) {
+    if matches!(target.kind, HidBootKind::Tablet | HidBootKind::EyeTracker) {
         match interface
             .device()
             .control_out(
@@ -670,6 +683,14 @@ async fn hid_boot_stream_task(
                         ),
                         HidBootKind::Tablet => {
                             super::tablet::handle_packet(
+                                vendor_id,
+                                product_id,
+                                target.in_endpoint,
+                                sample,
+                            );
+                        }
+                        HidBootKind::EyeTracker => {
+                            super::eyetracker::handle_packet(
                                 vendor_id,
                                 product_id,
                                 target.in_endpoint,
