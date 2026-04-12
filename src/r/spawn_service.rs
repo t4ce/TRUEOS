@@ -149,6 +149,7 @@ define_started_flags!(
     UI2_PARTICLE_DEMO_STARTED,
     UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
     UI2_SHELL_DEMO_STARTED,
+    UI2_SWARM_DEMO_STARTED,
     UI2_SVG_DEMO_STARTED,
     UI2_USB_AUDIO_DEMO_STARTED,
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
@@ -739,6 +740,12 @@ fn spawn_ui2_svg_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_swarm_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_swarm::ui2_swarm_demo_task())
+    })
+}
+
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     let count = crate::usb2::pci_usb_controllers()
         .len()
@@ -1095,6 +1102,12 @@ static TASKS: &[TaskSpec] = &[
         UI2_DEMO_READY,
         &UI2_SHELL_DEMO_STARTED,
         spawn_ui2_shell_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-swarm-demo",
+        UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
+        &UI2_SWARM_DEMO_STARTED,
+        spawn_ui2_swarm_demo,
     ),
     TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
     TaskSpec::disabled(

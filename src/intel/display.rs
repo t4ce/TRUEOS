@@ -59,6 +59,36 @@ static PRIMARY_BOOT_SURFACE_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
 
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct PrimarySurfaceSampleSet {
+    pub(crate) tl: u32,
+    pub(crate) center: u32,
+    pub(crate) br: u32,
+    pub(crate) apex: u32,
+    pub(crate) centroid: u32,
+    pub(crate) left: u32,
+    pub(crate) right: u32,
+}
+
+impl PrimarySurfaceSampleSet {
+    pub(crate) fn any_changed_since(self, before: Self) -> bool {
+        self.tl != before.tl
+            || self.center != before.center
+            || self.br != before.br
+            || self.apex != before.apex
+            || self.centroid != before.centroid
+            || self.left != before.left
+            || self.right != before.right
+    }
+
+    pub(crate) fn triangle_points_changed_since(self, before: Self) -> bool {
+        self.apex != before.apex
+            || self.centroid != before.centroid
+            || self.left != before.left
+            || self.right != before.right
+    }
+}
+
 #[derive(Copy, Clone)]
 pub(super) struct PipeInfo {
     pub(super) name: &'static str,
@@ -572,12 +602,38 @@ pub(crate) fn log_primary_surface_samples(label: &str) {
     log_surface_samples(surface, label);
 }
 
+pub(crate) fn capture_primary_surface_samples() -> Option<PrimarySurfaceSampleSet> {
+    let surface = (*PRIMARY_SURFACE.lock())?;
+    capture_surface_samples(surface)
+}
+
 fn log_surface_samples(surface: PrimarySurface, label: &str) {
+    let Some(samples) = capture_surface_samples(surface) else {
+        return;
+    };
+
+    crate::log!(
+        "intel/display: primary-samples label={} gpu=0x{:X} phys=0x{:X} pitch=0x{:X} tl=0x{:08X} center=0x{:08X} br=0x{:08X} apex=0x{:08X} centroid=0x{:08X} left=0x{:08X} right=0x{:08X}\n",
+        label,
+        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
+        surface.phys,
+        surface.pitch_bytes,
+        samples.tl,
+        samples.center,
+        samples.br,
+        samples.apex,
+        samples.centroid,
+        samples.left,
+        samples.right
+    );
+}
+
+fn capture_surface_samples(surface: PrimarySurface) -> Option<PrimarySurfaceSampleSet> {
     let width = surface.width as usize;
     let height = surface.height as usize;
     let pitch_bytes = surface.pitch_bytes as usize;
     if width == 0 || height == 0 || pitch_bytes < 4 || surface.virt.is_null() {
-        return;
+        return None;
     }
 
     let sample = |x: usize, y: usize| -> u32 {
@@ -603,20 +659,15 @@ fn log_surface_samples(surface: PrimarySurface, label: &str) {
     let (right_x, right_y) = clip_to_screen(0.72, -0.58);
     let (centroid_x, centroid_y) = clip_to_screen(0.0, -0.15);
 
-    crate::log!(
-        "intel/display: primary-samples label={} gpu=0x{:X} phys=0x{:X} pitch=0x{:X} tl=0x{:08X} center=0x{:08X} br=0x{:08X} apex=0x{:08X} centroid=0x{:08X} left=0x{:08X} right=0x{:08X}\n",
-        label,
-        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
-        surface.phys,
-        surface.pitch_bytes,
-        sample(0, 0),
-        sample(width / 2, height / 2),
-        sample(width.saturating_sub(1), height.saturating_sub(1)),
-        sample(apex_x, apex_y),
-        sample(centroid_x, centroid_y),
-        sample(left_x, left_y),
-        sample(right_x, right_y)
-    );
+    Some(PrimarySurfaceSampleSet {
+        tl: sample(0, 0),
+        center: sample(width / 2, height / 2),
+        br: sample(width.saturating_sub(1), height.saturating_sub(1)),
+        apex: sample(apex_x, apex_y),
+        centroid: sample(centroid_x, centroid_y),
+        left: sample(left_x, left_y),
+        right: sample(right_x, right_y),
+    })
 }
 
 fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_len: usize) -> bool {

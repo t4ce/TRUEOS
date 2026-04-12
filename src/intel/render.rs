@@ -7,6 +7,7 @@ const FORCEWAKE_ACK_RENDER: usize = 0x0D84;
 const FORCEWAKE_ACK_GT: usize = 0x130044;
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
 const FORCEWAKE_FALLBACK: u32 = 1 << 15;
+const FF_DOP_CLOCK_GATE_DISABLE: u32 = 1 << 1;
 const FORCEWAKE_POLL_ITERS: usize = 20_000;
 const RCS_RING_BASE: usize = 0x0000_2000;
 const RCS_RING_TAIL: usize = RCS_RING_BASE + 0x30;
@@ -16,6 +17,7 @@ const RCS_RING_CTL: usize = RCS_RING_BASE + 0x3C;
 const RCS_RING_ACTHD: usize = RCS_RING_BASE + 0x74;
 const RCS_RING_MI_MODE: usize = RCS_RING_BASE + 0x9C;
 const RCS_RING_IMR: usize = RCS_RING_BASE + 0xA8;
+const RCS_CS_DEBUG_MODE1: usize = RCS_RING_BASE + 0xEC;
 const RCS_RING_EIR: usize = RCS_RING_BASE + 0xB0;
 const RCS_RING_IPEIR: usize = RCS_RING_BASE + 0x64;
 const RCS_RING_IPEHR: usize = RCS_RING_BASE + 0x68;
@@ -181,6 +183,7 @@ const PIPE_CONTROL_INVALIDATE_BITS: u32 =
 const PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
 const PIPE_CONTROL_DEST_GGTT: u32 = 1 << 24;
 const PIPE_CONTROL_CS_STALL: u32 = 1 << 20;
+const PIPE_CONTROL_POST_DRAW_PROBE_BITS: u32 = PIPE_CONTROL_CS_STALL;
 const RESULT_SLOT_PRE3D_DWORD: usize = 0;
 const RESULT_SLOT_POST3D_DWORD: usize = 1;
 const RESULT_SLOT_FINAL_DWORD: usize = 2;
@@ -193,12 +196,13 @@ const RESULT_STREAMOUT_PROOF_OFFSET: usize = 0x100;
 const RESULT_STREAMOUT_PROOF_GPU_ADDR: u64 =
     GPU_VA_RESULT_BASE + RESULT_STREAMOUT_PROOF_OFFSET as u64;
 const SO_NUM_PRIMS_WRITTEN_0: usize = 0x5200;
+const SO_WRITE_OFFSET_0: usize = 0x5280;
 const TRIANGLE_TOPOLOGY_POINTLIST: u32 = 1;
 const TRIANGLE_TOPOLOGY_TRILIST: u32 = 4;
 const TRIANGLE_PS_MAX_THREADS: u32 = 63;
 const TRIANGLE_VS_URB_START: u32 = 4;
 const TRIANGLE_VS_URB_ENTRIES: u32 = 192;
-const TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE: Option<u8> = Some(2);
+const TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE: Option<u8> = None;
 const TRIANGLE_MIN_DIM: usize = 8;
 // This proof path emits one MI_STORE_DATA_IMM per covered pixel, so keep the
 // triangle intentionally small until we switch to an actual draw pipeline.
@@ -222,6 +226,7 @@ struct TriangleStageStats {
     ps_invocations: u64,
     ps_depth: u64,
     so_prims_written_0: u64,
+    so_write_offset_0: u64,
 }
 
 impl TriangleStageStats {
@@ -236,6 +241,9 @@ impl TriangleStageStats {
             so_prims_written_0: self
                 .so_prims_written_0
                 .saturating_sub(before.so_prims_written_0),
+            so_write_offset_0: self
+                .so_write_offset_0
+                .saturating_sub(before.so_write_offset_0),
         }
     }
 }
@@ -318,9 +326,10 @@ enum TriangleBlendProbeMode {
 impl TriangleBlendProbeMode {
     fn for_attempt(attempt: usize) -> Self {
         match attempt {
-            2 => Self::MesaZeroedState,
+            1 => Self::MesaZeroedState,
+            2 => Self::ExplicitRt0,
             3 => Self::MesaZeroedNoBlendPointer,
-            _ => Self::ExplicitRt0,
+            _ => Self::MesaZeroedState,
         }
     }
 
@@ -357,6 +366,13 @@ impl StreamoutProofExperiment {
         match self {
             Self::PositionSlot1 => "pos-slot1",
             Self::HeaderAndPositionSlots01 => "header+pos-slots01",
+        }
+    }
+
+    fn alternate(self) -> Self {
+        match self {
+            Self::PositionSlot1 => Self::HeaderAndPositionSlots01,
+            Self::HeaderAndPositionSlots01 => Self::PositionSlot1,
         }
     }
 
@@ -739,13 +755,21 @@ pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
     crate::intel::mmio_write(dev, FORCEWAKE_GT, crate::intel::mask_en(FORCEWAKE_KERNEL));
     let gt_ok =
         wait_eq(dev, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
+    crate::intel::mmio_write(
+        dev,
+        RCS_CS_DEBUG_MODE1,
+        crate::intel::mask_en(FF_DOP_CLOCK_GATE_DISABLE),
+    );
+    let cs_debug_mode1 = crate::intel::mmio_read(dev, RCS_CS_DEBUG_MODE1);
 
     if should_log_primary_probe_detail() {
         crate::log!(
-            "intel/render: forcewake render_cleared={} render_ack=0x{:08X} gt_ack=0x{:08X} ok={}\n",
+            "intel/render: forcewake render_cleared={} render_ack=0x{:08X} gt_ack=0x{:08X} cs_debug_mode1=0x{:08X} ff_dop_cg_disable={} ok={}\n",
             render_cleared as u8,
             crate::intel::mmio_read(dev, FORCEWAKE_ACK_RENDER),
             crate::intel::mmio_read(dev, FORCEWAKE_ACK_GT),
+            cs_debug_mode1,
+            ((cs_debug_mode1 & FF_DOP_CLOCK_GATE_DISABLE) != 0) as u8,
             (render_ok && gt_ok) as u8
         );
     }
@@ -847,42 +871,21 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         return false;
     }
     let completed = if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
-        let streamout_experiment = select_streamout_proof_experiment(probe_seq);
-        let so_completed = submit_triangle_streamout_proof(
+        let completed = submit_primary_triangle_with_retries(
             dev,
             warm,
             surface_gpu,
             pitch_bytes,
             width as usize,
             height as usize,
-            streamout_experiment,
         );
-        crate::log!(
-            "intel/render: primary-streamout-proof trigger={} experiment={} completed={}\n",
-            reason,
-            streamout_experiment.label(),
-            so_completed as u8
-        );
-        if !so_completed {
+        if !completed {
             crate::log!(
-                "intel/render: primary-draw-path skipped reason=streamout-proof-failed trigger={}\n",
+                "intel/render: primary-draw-path submit failed trigger={} mode=clean-boot-once\n",
                 reason
             );
-            false
-        } else {
-            let completed = submit_primary_triangle_with_retries(
-                dev,
-                warm,
-                surface_gpu,
-                pitch_bytes,
-                width as usize,
-                height as usize,
-            );
-            if !completed {
-                crate::log!("intel/render: primary-draw-path submit failed trigger={}\n", reason);
-            }
-            completed
         }
+        completed
     } else if PRIMARY_USE_MI_STRIPE_PROBE {
         let completed = submit_vertical_stripes_to_surface(
             dev,
@@ -1754,7 +1757,8 @@ fn encode_triangle_probe_batch(
     // proof path. The more aggressive force-clip/accept-all experiment moved
     // the failure window but did not produce clipper progress on ADL-S.
     let clip_dw1 = (1 << 17) | (1 << 18);
-    let clip_dw2 = (2 << 0) | (1 << 2) | (2 << 4) | (1 << 26) | (1 << 31);
+    let clip_dw2 =
+        (2 << 0) | (1 << 2) | (2 << 4) | CLIP_PERSPECTIVE_DIVIDE_DISABLE | (1 << 26) | (1 << 31);
     let clip_dw3 = (2047 << 6) | (1 << 17);
     // Keep SF close to the trivial host path: no statistics, no custom line
     // width programming, just enable the normal viewport transform.
@@ -1930,7 +1934,10 @@ fn encode_triangle_probe_batch(
     push(
         batch_dwords,
         &mut cursor,
-        programmed_vs_urb_output_length as u32
+        // Gfx12 encodes URB allocation size as "size in 64B units minus 1".
+        // A position-only VUE is one 64B slot, so the programmed value must
+        // be 0 rather than 1 or clipper sees the wrong VS allocation contract.
+        (programmed_vs_urb_output_length.saturating_sub(1) as u32)
             | (TRIANGLE_VS_URB_START << 10)
             | (TRIANGLE_VS_URB_START << 21),
     )?;
@@ -2248,8 +2255,8 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
 
-    log_batch_offset(cursor, "PIPE_CONTROL post-3d-flush");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
+    log_batch_offset(cursor, "PIPE_CONTROL post-3d-probe");
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_POST_DRAW_PROBE_BITS)?;
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM post-3d");
     push_store_data_imm(
@@ -2289,16 +2296,54 @@ fn encode_triangle_probe_batch(
         ps_dw7,
         ps_extra_dw1
     );
+    let clip_mode = (clip_dw2 >> 13) & 0x7;
+    let api_mode = (clip_dw2 >> 30) & 0x1;
+    let provoking_tri_fan = clip_dw2 & 0x3;
+    let provoking_line = (clip_dw2 >> 2) & 0x3;
+    let provoking_tri_strip = (clip_dw2 >> 4) & 0x3;
+    let guardband_enable = (clip_dw2 >> 26) & 0x1;
+    let viewport_xy_clip_enable = (clip_dw2 >> 28) & 0x1;
+    let clip_enable = (clip_dw2 >> 31) & 0x1;
+    let force_clip_mode = ((clip_dw1 & CLIP_FORCE_CLIP_MODE) != 0) as u8;
+    let early_cull_enable = (clip_dw1 >> 18) & 0x1;
+    let statistics_enable = (clip_dw1 >> 10) & 0x1;
+    let vertex_subpixel_precision = (clip_dw1 >> 19) & 0x1;
+    let max_vp_idx = clip_dw3 & 0xF;
+    let force_zero_rta_index = (clip_dw3 >> 5) & 0x1;
     crate::log!(
-        "intel/render: probe-clip-decoded topo={} patchlist=0 gs_active=0 clip_mode_field={} force_clip_mode={} api_mode_field={} guardband={} provoking=last-vertex persp_div_disable={} dw2_misc_bits_3_12=0x{:03X} max_vp_idx={}\n",
+        "intel/render: probe-clip-decoded topo={} patchlist=0 gs_active=0 ClipMode={}({}) APIMode={}({}) GuardbandClipTestEnable={} ViewportXYClipTestEnable={} ClipEnable={} PerspectiveDivideDisable={} ForceClipMode={} EarlyCullEnable={} StatisticsEnable={} VertexSubPixelPrecisionSelect={} TriangleFanProvokingVertexSelect={} LineStripListProvokingVertexSelect={} TriangleStripListProvokingVertexSelect={} MaximumVPIndex={} ForceZeroRTAIndexEnable={}\n",
         primitive_topology_label(batch_mode.topology()),
-        (clip_dw2 >> 13) & 0x7,
-        ((clip_dw1 & CLIP_FORCE_CLIP_MODE) != 0) as u8,
-        clip_dw2 & 0x3,
-        (clip_dw2 >> 26) & 0x1,
+        clip_mode,
+        decode_clip_mode_name(clip_mode),
+        api_mode,
+        decode_api_mode_name(api_mode),
+        guardband_enable,
+        viewport_xy_clip_enable,
+        clip_enable,
         ((clip_dw2 & CLIP_PERSPECTIVE_DIVIDE_DISABLE) != 0) as u8,
-        (clip_dw2 >> 3) & 0x3FF,
-        (clip_dw3 >> 17) & 0x7,
+        force_clip_mode,
+        early_cull_enable,
+        statistics_enable,
+        decode_vertex_subpixel_precision_name(vertex_subpixel_precision),
+        provoking_tri_fan,
+        provoking_line,
+        provoking_tri_strip,
+        max_vp_idx,
+        force_zero_rta_index,
+    );
+    crate::log!(
+        "intel/render: probe-sf-decoded ViewportTransformEnable={} StatisticsEnable={} LegacyGlobalDepthBiasEnable={} DerefBlockSize={}({}) LineWidth=0x{:X} PointWidth=0x{:X} LastPixelEnable={} TriangleStripListProvokingVertexSelect={} LineStripListProvokingVertexSelect={} TriangleFanProvokingVertexSelect={}\n",
+        (sf_dw1 >> 1) & 0x1,
+        (sf_dw1 >> 10) & 0x1,
+        (sf_dw1 >> 11) & 0x1,
+        (sf_dw2 >> 29) & 0x3,
+        decode_deref_block_size_name((sf_dw2 >> 29) & 0x3),
+        (sf_dw1 >> 12) & 0x3FFFF,
+        sf_dw3 & 0x7FF,
+        (sf_dw3 >> 31) & 0x1,
+        (sf_dw3 >> 29) & 0x3,
+        (sf_dw3 >> 27) & 0x3,
+        (sf_dw3 >> 25) & 0x3,
     );
     crate::log!(
         "intel/render: probe-raster-decoded sf_viewport=0x{:X} cc_viewport=0x{:X} scissor_ptr=0x{:X} cull=none fill=solid front=ccw multisample=1 sample_mask=0x1\n",
@@ -2307,8 +2352,9 @@ fn encode_triangle_probe_batch(
         probe_state.scissor_rect_offset_bytes,
     );
     crate::log!(
-        "intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 vs_urb_out_len={} sbe_read_len={} ps_varyings={} streamout={}\n",
-        pipeline.vs.meta.urb_entry_output_length,
+        "intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe_read_len={} ps_varyings={} streamout={}\n",
+        baked_vs_urb_output_length,
+        programmed_vs_urb_output_length,
         sbe_vertex_read_length,
         pipeline.ps.meta.num_varying_inputs,
         batch_mode.streamout_enabled() as u8,
@@ -2797,6 +2843,11 @@ fn submit_warm_render_batch(
     submit_name: &'static str,
 ) -> bool {
     let stats_before = capture_triangle_stage_stats(dev);
+    let surface_samples_before = if submit_name == "draw-path" {
+        crate::intel::display::capture_primary_surface_samples()
+    } else {
+        None
+    };
     if submit_name == "draw-path" || submit_name == "streamout-proof" {
         log_triangle_stage_stats(submit_name, "before-submit", true, stats_before, None);
     }
@@ -2978,6 +3029,28 @@ fn submit_warm_render_batch(
         log_triangle_stage_diagnosis(submit_name, completed, stats_before, stats_after);
     }
     if submit_name == "draw-path" {
+        if let (Some(before), Some(after)) =
+            (surface_samples_before, crate::intel::display::capture_primary_surface_samples())
+        {
+            crate::log!(
+                "intel/render: draw-path render-target completed={} any_change={} triangle_change={} apex={}=>{} centroid={}=>{} left={}=>{} right={}=>{} center={}=>{}\n",
+                completed as u8,
+                after.any_changed_since(before) as u8,
+                after.triangle_points_changed_since(before) as u8,
+                before.apex,
+                after.apex,
+                before.centroid,
+                after.centroid,
+                before.left,
+                after.left,
+                before.right,
+                after.right,
+                before.center,
+                after.center,
+            );
+        }
+    }
+    if submit_name == "draw-path" {
         log_triangle_demo_stats(dev, completed);
     }
     if completed && submit_name == "draw-path" {
@@ -3015,6 +3088,40 @@ fn triangle_vs_max_threads_field(device_id: u16, baked_max_threads: u16) -> u32 
         // packet with max_vs_threads - 1.
         0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693 => 545,
         _ => baked_max_threads.saturating_sub(1) as u32,
+    }
+}
+
+fn decode_clip_mode_name(mode: u32) -> &'static str {
+    match mode {
+        0 => "CLIPMODE_NORMAL",
+        3 => "CLIPMODE_REJECT_ALL",
+        4 => "CLIPMODE_ACCEPT_ALL",
+        _ => "unknown",
+    }
+}
+
+fn decode_api_mode_name(mode: u32) -> &'static str {
+    match mode {
+        0 => "APIMODE_OGL",
+        1 => "APIMODE_D3D",
+        _ => "unknown",
+    }
+}
+
+fn decode_vertex_subpixel_precision_name(bit: u32) -> &'static str {
+    match bit {
+        0 => "_8Bit",
+        1 => "_4Bit",
+        _ => "unknown",
+    }
+}
+
+fn decode_deref_block_size_name(mode: u32) -> &'static str {
+    match mode {
+        0 => "Block32",
+        1 => "PerPoly",
+        2 => "Block8",
+        _ => "unknown",
     }
 }
 
@@ -3063,6 +3170,7 @@ fn capture_triangle_stage_stats(dev: crate::intel::Dev) -> TriangleStageStats {
                 .unwrap_or(0),
         ),
         so_prims_written_0: read_stat_counter64(dev, SO_NUM_PRIMS_WRITTEN_0),
+        so_write_offset_0: crate::intel::mmio_read(dev, SO_WRITE_OFFSET_0) as u64,
     }
 }
 
@@ -3076,7 +3184,7 @@ fn log_triangle_stage_stats(
     if let Some(before) = before {
         let delta = stats.delta_since(before);
         crate::log!(
-            "intel/render: {} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} cl={} ps={} ps_depth={} so0={} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_cl={} delta_ps={} delta_ps_depth={} delta_so0={}\n",
+            "intel/render: {} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} cl={} ps={} ps_depth={} so0={} so_write0={} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_cl={} delta_ps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
             submit_name,
             label,
             completed as u8,
@@ -3087,17 +3195,19 @@ fn log_triangle_stage_stats(
             stats.ps_invocations,
             stats.ps_depth,
             stats.so_prims_written_0,
+            stats.so_write_offset_0,
             delta.ia_vertices,
             delta.ia_primitives,
             delta.vs_invocations,
             delta.cl_invocations,
             delta.ps_invocations,
             delta.ps_depth,
-            delta.so_prims_written_0
+            delta.so_prims_written_0,
+            delta.so_write_offset_0
         );
     } else {
         crate::log!(
-            "intel/render: {} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} cl={} ps={} ps_depth={} so0={}\n",
+            "intel/render: {} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} cl={} ps={} ps_depth={} so0={} so_write0={}\n",
             submit_name,
             label,
             completed as u8,
@@ -3107,7 +3217,8 @@ fn log_triangle_stage_stats(
             stats.cl_invocations,
             stats.ps_invocations,
             stats.ps_depth,
-            stats.so_prims_written_0
+            stats.so_prims_written_0,
+            stats.so_write_offset_0
         );
     }
 }
@@ -3125,9 +3236,16 @@ fn log_triangle_stage_diagnosis(
         "stops-before-clipper"
     } else if delta.cl_invocations > 0 && delta.ps_invocations == 0 {
         "stops-between-clipper-and-ps"
+    } else if delta.ps_invocations > 0
+        && delta.ps_depth > 0
+        && delta.so_prims_written_0 == 0
+        && delta.so_write_offset_0 == 0
+        && !completed
+    {
+        "ps-depth-ran-no-streamout-or-retire"
     } else if delta.ps_invocations > 0 && delta.so_prims_written_0 == 0 && !completed {
         "ps-ran-no-retire-or-export"
-    } else if delta.so_prims_written_0 > 0 && !completed {
+    } else if (delta.so_prims_written_0 > 0 || delta.so_write_offset_0 > 0) && !completed {
         "streamout-wrote-no-retire"
     } else if completed {
         "completed"
@@ -3135,14 +3253,15 @@ fn log_triangle_stage_diagnosis(
         "late-backend-stall"
     };
     crate::log!(
-        "intel/render: {} stage-diagnosis completed={} verdict={} delta_cl={} delta_ps={} delta_ps_depth={} delta_so0={}\n",
+        "intel/render: {} stage-diagnosis completed={} verdict={} delta_cl={} delta_ps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
         submit_name,
         completed as u8,
         verdict,
         delta.cl_invocations,
         delta.ps_invocations,
         delta.ps_depth,
-        delta.so_prims_written_0
+        delta.so_prims_written_0,
+        delta.so_write_offset_0
     );
 }
 

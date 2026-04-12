@@ -5,8 +5,8 @@ from machine import Pin  # type: ignore
 from neopixel import NeoPixel  # type: ignore
 
 
-LED_PIN = 8
-LED_COUNT = 64
+LED_PIN = 48
+LED_COUNT = 1
 FADE_STEPS = 256
 FRAME_DELAY_MS = 20
 
