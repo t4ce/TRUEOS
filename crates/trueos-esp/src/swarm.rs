@@ -8,6 +8,9 @@ use crate::gate::{DeviceIp, DeviceSnapshot};
 pub const ESP_STATUS_PATH: &str = "/status";
 pub const ESP_UPLOAD_PATH: &str = "/upload";
 pub const ESP_RUN_PATH: &str = "/run";
+pub const ESP_RESTART_PATH: &str = "/restart";
+pub const ESP_ROOT_PATH: &str = "/";
+pub const ESP_FILES_PATH: &str = "/files";
 pub const DEVICE_STATUS_TEXT_CAP: usize = 32;
 pub const DEVICE_STATUS_ERROR_CAP: usize = 96;
 pub const DEVICE_STATUS_URL_CAP: usize = 96;
@@ -32,12 +35,24 @@ impl DeviceInterface {
         self.path_url(ESP_STATUS_PATH)
     }
 
+    pub fn root_url(&self) -> Option<String<DEVICE_STATUS_URL_CAP>> {
+        self.path_url(ESP_ROOT_PATH)
+    }
+
+    pub fn files_url(&self) -> Option<String<DEVICE_STATUS_URL_CAP>> {
+        self.path_url(ESP_FILES_PATH)
+    }
+
     pub fn upload_url(&self) -> Option<String<DEVICE_STATUS_URL_CAP>> {
         self.path_url(ESP_UPLOAD_PATH)
     }
 
     pub fn run_url(&self) -> Option<String<DEVICE_STATUS_URL_CAP>> {
         self.path_url(ESP_RUN_PATH)
+    }
+
+    pub fn restart_url(&self) -> Option<String<DEVICE_STATUS_URL_CAP>> {
+        self.path_url(ESP_RESTART_PATH)
     }
 
     fn path_url(&self, path: &str) -> Option<String<DEVICE_STATUS_URL_CAP>> {
@@ -72,6 +87,8 @@ pub struct DeviceStatusSnapshot {
     pub last_error: String<DEVICE_STATUS_ERROR_CAP>,
     pub last_started_ms: Option<u64>,
     pub last_finished_ms: Option<u64>,
+    pub last_heartbeat_ms: Option<u64>,
+    pub heartbeat_count: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,6 +109,8 @@ pub fn parse_status_snapshot(body: &[u8]) -> Option<DeviceStatusSnapshot> {
         last_error: String::new(),
         last_started_ms: None,
         last_finished_ms: None,
+        last_heartbeat_ms: None,
+        heartbeat_count: 0,
     };
 
     let mut saw_any = false;
@@ -114,6 +133,8 @@ pub fn parse_status_snapshot(body: &[u8]) -> Option<DeviceStatusSnapshot> {
             "last_error" => assign_string(&mut snapshot.last_error, value),
             "last_started_ms" => snapshot.last_started_ms = parse_optional_u64(value)?,
             "last_finished_ms" => snapshot.last_finished_ms = parse_optional_u64(value)?,
+            "last_heartbeat_ms" => snapshot.last_heartbeat_ms = parse_optional_u64(value)?,
+            "heartbeat_count" => snapshot.heartbeat_count = value.parse::<u64>().ok()?,
             _ => {}
         }
     }
@@ -159,7 +180,7 @@ mod tests {
     #[test]
     fn parses_status_snapshot() {
         let snapshot = parse_status_snapshot(
-            b"threading_available=True\napp_exists=True\nrunning=True\nlast_status=running\nlast_error=none\nlast_started_ms=174778\nlast_finished_ms=None\n",
+            b"threading_available=True\napp_exists=True\nrunning=True\nlast_status=running\nlast_error=none\nlast_started_ms=174778\nlast_finished_ms=None\nlast_heartbeat_ms=23095\nheartbeat_count=1\n",
         )
         .expect("status snapshot");
 
@@ -170,6 +191,8 @@ mod tests {
         assert_eq!(snapshot.last_error.as_str(), "none");
         assert_eq!(snapshot.last_started_ms, Some(174_778));
         assert_eq!(snapshot.last_finished_ms, None);
+        assert_eq!(snapshot.last_heartbeat_ms, Some(23_095));
+        assert_eq!(snapshot.heartbeat_count, 1);
     }
 
     #[test]

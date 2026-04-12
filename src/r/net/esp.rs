@@ -1,4 +1,5 @@
 use alloc::{collections::VecDeque, format, string::String, vec::Vec};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration, Timer};
 use spin::Mutex;
@@ -9,16 +10,14 @@ const ESP_GATE_REGISTRY_MAX_DEVICES: usize = 64;
 const ESP_STATUS_FETCH_TIMEOUT_MS: u32 = 3000;
 const ESP_STATUS_FETCH_MAX_RX: usize = 1024;
 const ESP_STATUS_POLL_MS: u64 = 1000;
-const ESP_DEFAULT_UPLOAD_TIMEOUT_MS: u32 = 3000;
-const ESP_DEFAULT_UPLOAD_MAX_RX: usize = 1024;
-const ESP_DEFAULT_APP_FILENAME: &str = "app.py";
-const ESP_DEFAULT_APP_BODY: &[u8] =
-    include_bytes!("../../../crates/trueos-esp/iot/1OktavePianoLed.py");
+const ESP_CONTROL_TIMEOUT_MS: u32 = 3000;
+const ESP_CONTROL_MAX_RX: usize = 1024;
 
 static DEVICE_REGISTRY: Mutex<trueos_esp::gate::DeviceRegistry> =
     Mutex::new(trueos_esp::gate::DeviceRegistry::new(ESP_GATE_REGISTRY_MAX_DEVICES));
 static STATUS_EVENTS: Mutex<VecDeque<trueos_esp::swarm::StatusChangeEvent>> =
     Mutex::new(VecDeque::new());
+static REGISTRY_CHANGE_SEQ: AtomicU32 = AtomicU32::new(1);
 
 fn monotonic_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
@@ -27,7 +26,11 @@ fn monotonic_ms() -> u64 {
 
 #[allow(dead_code)]
 pub fn remove_device(handle: v::vnet::NetHandle) -> bool {
-    DEVICE_REGISTRY.lock().remove_device(handle)
+    let removed = DEVICE_REGISTRY.lock().remove_device(handle);
+    if removed {
+        note_registry_change();
+    }
+    removed
 }
 
 #[allow(dead_code)]
@@ -58,90 +61,127 @@ pub fn drain_status_events(max_events: usize) -> Vec<trueos_esp::swarm::StatusCh
     out
 }
 
-fn device_label(snapshot: &trueos_esp::gate::DeviceSnapshot) -> String {
+#[allow(dead_code)]
+pub fn registry_change_seq() -> u32 {
+    REGISTRY_CHANGE_SEQ.load(Ordering::Acquire)
+}
+
+fn note_registry_change() {
+    REGISTRY_CHANGE_SEQ.fetch_add(1, Ordering::AcqRel);
+}
+
+fn snapshot_for_handle(handle: v::vnet::NetHandle) -> Option<trueos_esp::gate::DeviceSnapshot> {
+    DEVICE_REGISTRY.lock().snapshot_for(handle)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EspControlError {
+    DeviceMissing,
+    DeviceUnreachable,
+    UploadFailed,
+    RunFailed,
+    RestartFailed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EspRestartResult {
+    pub restart_requested: bool,
+    pub removed_from_registry: bool,
+}
+
+fn manual_endpoint_url(snapshot: &trueos_esp::gate::DeviceSnapshot, path: &str) -> Option<String> {
+    let path = path.strip_prefix('/').unwrap_or(path);
     match snapshot.ip {
-        Some(trueos_esp::gate::DeviceIp::V4(addr)) => {
-            format!("{}.{}.{}.{}:{}", addr[0], addr[1], addr[2], addr[3], snapshot.service_port)
-        }
-        Some(trueos_esp::gate::DeviceIp::V6(addr)) => format!(
-            "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{}",
-            u16::from_be_bytes([addr[0], addr[1]]),
-            u16::from_be_bytes([addr[2], addr[3]]),
-            u16::from_be_bytes([addr[4], addr[5]]),
-            u16::from_be_bytes([addr[6], addr[7]]),
-            u16::from_be_bytes([addr[8], addr[9]]),
-            u16::from_be_bytes([addr[10], addr[11]]),
-            u16::from_be_bytes([addr[12], addr[13]]),
-            u16::from_be_bytes([addr[14], addr[15]]),
-            snapshot.service_port
-        ),
-        None => format!("pending:{}", snapshot.service_port),
+        Some(trueos_esp::gate::DeviceIp::V4(addr)) => Some(format!(
+            "http://{}.{}.{}.{}:{}/{}",
+            addr[0], addr[1], addr[2], addr[3], snapshot.service_port, path
+        )),
+        Some(trueos_esp::gate::DeviceIp::V6(_)) | None => None,
     }
 }
 
-fn device_html(snapshot: &trueos_esp::gate::DeviceSnapshot) -> String {
-    let endpoint = device_label(snapshot);
-    let status_rows = if let Some(status) = snapshot.status.as_ref() {
-        format!(
-            concat!(
-                "<dt>threading</dt><dd>{threading}</dd>",
-                "<dt>app_exists</dt><dd>{app_exists}</dd>",
-                "<dt>running</dt><dd>{running}</dd>",
-                "<dt>last_status</dt><dd>{last_status}</dd>",
-                "<dt>last_error</dt><dd>{last_error}</dd>",
-                "<dt>last_started_ms</dt><dd>{last_started_ms}</dd>",
-                "<dt>last_finished_ms</dt><dd>{last_finished_ms}</dd>"
-            ),
-            threading = if status.threading_available {
-                "true"
-            } else {
-                "false"
-            },
-            app_exists = if status.app_exists { "true" } else { "false" },
-            running = if status.running { "true" } else { "false" },
-            last_status = status.last_status.as_str(),
-            last_error = status.last_error.as_str(),
-            last_started_ms = status
-                .last_started_ms
-                .map(|value| format!("{}", value))
-                .unwrap_or_else(|| String::from("None")),
-            last_finished_ms = status
-                .last_finished_ms
-                .map(|value| format!("{}", value))
-                .unwrap_or_else(|| String::from("None")),
-        )
-    } else {
-        String::from("<dt>status</dt><dd>pending</dd>")
+#[allow(dead_code)]
+pub async fn upload_app_to_device(
+    handle: v::vnet::NetHandle,
+    source_name: &str,
+    body: &[u8],
+    target_name: &str,
+) -> Result<(), EspControlError> {
+    let Some(snapshot) = snapshot_for_handle(handle) else {
+        return Err(EspControlError::DeviceMissing);
     };
-    format!(
-        concat!(
-            "<!doctype html><html><head><meta charset=\"utf-8\">",
-            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
-            "<title>ESP Device {handle}</title>",
-            "<style>",
-            "body{{font-family:monospace;background:#f4f1e8;color:#171412;padding:24px;}}",
-            ".card{{max-width:560px;background:#fffaf0;border:1px solid #171412;padding:18px;}}",
-            "h1{{margin:0 0 14px;font-size:24px;}}",
-            "dl{{display:grid;grid-template-columns:120px 1fr;gap:8px 12px;margin:0;}}",
-            "dt{{font-weight:700;}}dd{{margin:0;word-break:break-word;}}",
-            "</style></head><body><div class=\"card\">",
-            "<h1>ESP Device</h1><dl>",
-            "<dt>tag</dt><dd>{tag}</dd>",
-            "<dt>handle</dt><dd>{handle}</dd>",
-            "<dt>endpoint</dt><dd>{endpoint}</dd>",
-            "<dt>upload</dt><dd>POST /upload, POST /run</dd>",
-            "<dt>connected_ms</dt><dd>{connected_at_ms}</dd>",
-            "<dt>last_activity_ms</dt><dd>{last_activity_ms}</dd>",
-            "{status_rows}",
-            "</dl></div></body></html>"
-        ),
-        tag = snapshot.tag.as_str(),
-        handle = snapshot.handle.0,
-        endpoint = endpoint,
-        connected_at_ms = snapshot.connected_at_ms,
-        last_activity_ms = snapshot.last_activity_ms,
-        status_rows = status_rows,
+    let iface = trueos_esp::swarm::DeviceInterface::from_snapshot(&snapshot);
+    let Some(upload_url) = iface.upload_url() else {
+        return Err(EspControlError::DeviceUnreachable);
+    };
+    crate::log!(
+        "esp-gate: manual upload handle={} source={} target={} bytes={}\n",
+        handle.0,
+        source_name,
+        target_name,
+        body.len()
+    );
+    crate::r::net::cli::http::post_http_body(
+        upload_url.as_str(),
+        &[("X-Filename", target_name)],
+        body,
+        ESP_CONTROL_TIMEOUT_MS,
+        ESP_CONTROL_MAX_RX,
     )
+    .await
+    .map_err(|_| EspControlError::UploadFailed)?;
+
+    let Some(run_url) = iface.run_url() else {
+        return Err(EspControlError::DeviceUnreachable);
+    };
+    crate::r::net::cli::http::post_http_body(
+        run_url.as_str(),
+        &[],
+        &[],
+        ESP_CONTROL_TIMEOUT_MS,
+        ESP_CONTROL_MAX_RX,
+    )
+    .await
+    .map_err(|_| EspControlError::RunFailed)?;
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub async fn restart_device(
+    handle: v::vnet::NetHandle,
+) -> Result<EspRestartResult, EspControlError> {
+    let Some(snapshot) = snapshot_for_handle(handle) else {
+        return Err(EspControlError::DeviceMissing);
+    };
+
+    let Some(url) = manual_endpoint_url(&snapshot, trueos_esp::swarm::ESP_RESTART_PATH) else {
+        return Err(EspControlError::DeviceUnreachable);
+    };
+    let restart_requested = crate::r::net::cli::http::post_http_body(
+        url.as_str(),
+        &[],
+        &[],
+        ESP_CONTROL_TIMEOUT_MS,
+        ESP_CONTROL_MAX_RX,
+    )
+    .await
+    .is_ok();
+
+    let removed_from_registry = remove_device(handle);
+    if restart_requested {
+        Ok(EspRestartResult {
+            restart_requested,
+            removed_from_registry,
+        })
+    } else if removed_from_registry {
+        Ok(EspRestartResult {
+            restart_requested,
+            removed_from_registry,
+        })
+    } else {
+        Err(EspControlError::RestartFailed)
+    }
 }
 
 async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
@@ -150,7 +190,7 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
         return;
     };
 
-    let app_exists = if let Ok(body) = crate::r::net::cli::http::fetch_http_body(
+    if let Ok(body) = crate::r::net::cli::http::fetch_http_body(
         url.as_str(),
         ESP_STATUS_FETCH_TIMEOUT_MS,
         ESP_STATUS_FETCH_MAX_RX,
@@ -171,9 +211,9 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
                     event.current.last_status.as_str(),
                     event.current.last_error.as_str()
                 );
+                note_registry_change();
                 STATUS_EVENTS.lock().push_back(event);
             }
-            status.app_exists
         } else {
             crate::log!(
                 "esp-gate: status parse failed handle={} url={} bytes={}\n",
@@ -181,7 +221,6 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
                 url.as_str(),
                 body.len()
             );
-            false
         }
     } else {
         crate::log!(
@@ -190,119 +229,7 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
             url.as_str(),
             ESP_STATUS_FETCH_TIMEOUT_MS
         );
-        false
-    };
-
-    let should_upload_default = DEVICE_REGISTRY
-        .lock()
-        .should_upload_default_app(snapshot.handle, app_exists);
-    if should_upload_default {
-        upload_default_led_app(snapshot).await;
-    } else if app_exists {
-        if crate::logflag::ESP_GATE_DEFAULT_UPLOAD_LOGS {
-            crate::log!(
-                "esp-gate: default upload skipped handle={} reason=app_exists\n",
-                snapshot.handle.0
-            );
-        }
     }
-}
-
-async fn upload_default_led_app(snapshot: &trueos_esp::gate::DeviceSnapshot) {
-    let iface = trueos_esp::swarm::DeviceInterface::from_snapshot(snapshot);
-    let Some(upload_url) = iface.upload_url() else {
-        return;
-    };
-
-    if crate::logflag::ESP_GATE_DEFAULT_UPLOAD_LOGS {
-        crate::log!(
-            "esp-gate: default upload start handle={} url={} bytes={} target={}\n",
-            snapshot.handle.0,
-            upload_url.as_str(),
-            ESP_DEFAULT_APP_BODY.len(),
-            ESP_DEFAULT_APP_FILENAME
-        );
-    }
-
-    let uploaded = crate::r::net::cli::http::post_http_body(
-        upload_url.as_str(),
-        &[("X-Filename", ESP_DEFAULT_APP_FILENAME)],
-        ESP_DEFAULT_APP_BODY,
-        ESP_DEFAULT_UPLOAD_TIMEOUT_MS,
-        ESP_DEFAULT_UPLOAD_MAX_RX,
-    )
-    .await
-    .is_ok();
-
-    if !uploaded {
-        if crate::logflag::ESP_GATE_DEFAULT_UPLOAD_LOGS {
-            crate::log!(
-                "esp-gate: default upload http failed handle={} url={} timeout_ms={}\n",
-                snapshot.handle.0,
-                upload_url.as_str(),
-                ESP_DEFAULT_UPLOAD_TIMEOUT_MS
-            );
-        }
-    }
-
-    let ran = if uploaded {
-        if let Some(run_url) = iface.run_url() {
-            crate::r::net::cli::http::post_http_body(
-                run_url.as_str(),
-                &[],
-                &[],
-                ESP_DEFAULT_UPLOAD_TIMEOUT_MS,
-                ESP_DEFAULT_UPLOAD_MAX_RX,
-            )
-            .await
-            .is_ok()
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    let uploaded_and_ran = uploaded && ran;
-    let now_ms = monotonic_ms();
-    let _ = DEVICE_REGISTRY.lock().set_default_app_upload_result(
-        snapshot.handle,
-        uploaded_and_ran,
-        now_ms,
-    );
-    if crate::logflag::ESP_GATE_DEFAULT_UPLOAD_LOGS {
-        crate::log!(
-            "esp-gate: default upload done handle={} uploaded={} ran={}\n",
-            snapshot.handle.0,
-            if uploaded { 1 } else { 0 },
-            if ran { 1 } else { 0 }
-        );
-    }
-}
-
-async fn handoff_device_to_truesurfer(snapshot: &trueos_esp::gate::DeviceSnapshot) {
-    let Some(browser_instance_id) = crate::r::spawn_service::spawn_truesurfer_tab_with_html()
-    else {
-        crate::log!(
-            "esp-gate: browser handoff skipped handle={} reason=spawn_failed\n",
-            snapshot.handle.0
-        );
-        return;
-    };
-
-    let url = format!("html://esp-device/{}", snapshot.handle.0);
-    let handed_off = trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
-        browser_instance_id,
-        device_html(snapshot),
-        Some(url),
-    )
-    .await;
-    crate::log!(
-        "esp-gate: browser handoff handle={} browser={} ok={}\n",
-        snapshot.handle.0,
-        browser_instance_id,
-        if handed_off { 1 } else { 0 }
-    );
 }
 
 #[embassy_executor::task]
@@ -347,22 +274,16 @@ pub async fn esp_gate_task() {
                             );
 
                             let now_ms = monotonic_ms();
-                            let snapshot = {
+                            let is_new = {
                                 let mut registry = DEVICE_REGISTRY.lock();
-                                let is_new = registry.upsert_heartbeat_v4(
+                                registry.upsert_heartbeat_v4(
                                     from.addr,
                                     trueos_esp::gate::ESP_HTTP_UPLOAD_PORT,
                                     now_ms,
-                                );
-                                if is_new {
-                                    registry
-                                        .snapshot_for(trueos_esp::gate::device_handle_v4(from.addr))
-                                } else {
-                                    None
-                                }
+                                )
                             };
-                            if let Some(snapshot) = snapshot.as_ref() {
-                                handoff_device_to_truesurfer(snapshot).await;
+                            if is_new {
+                                note_registry_change();
                             }
                         }
                     },
