@@ -3,6 +3,8 @@ mod guc;
 mod hw_cursor;
 mod render;
 pub(crate) mod shader;
+pub(crate) mod state;
+pub(crate) mod stats;
 pub(crate) mod xelp_media_mp4;
 pub(crate) mod xelp_media_ngin;
 
@@ -345,7 +347,11 @@ pub(crate) fn compute_wopcm(fw: u32) -> Option<(u32, u32)> {
         return None;
     }
     let size = (usable - base) & GUC_WOPCM_SIZE_MASK;
-    if size < min { None } else { Some((base, size)) }
+    if size < min {
+        None
+    } else {
+        Some((base, size))
+    }
 }
 pub(crate) fn align_up(v: usize, a: usize) -> Option<usize> {
     let m = a.checked_sub(1)?;

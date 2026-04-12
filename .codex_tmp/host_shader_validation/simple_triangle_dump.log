@@ -1,3 +1,12 @@
+host-state summary: path=mesa genX_simple_shader trivial-triangle target=gfx125
+host-state cc_viewport min_depth=0.0 max_depth=1.0
+host-state clip perspective_divide_disable=1
+host-state raster cull_mode=none sample_mask=0x1
+host-state sbe read_offset=1 read_length=1 num_sf_attrs=0 force_read_offset=1 force_read_length=1 flat_inputs=0 active_components=xyzw
+host-state ps vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63
+host-state ps_extra valid=1 attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0
+host-state ps_blend has_writeable_rt=1
+host-state target format=VK_FORMAT_R8G8B8A8_UNORM extent=64x64 samples=1 topology=triangle_list front_face=ccw polygon=fill cull=none
 simple_triangle_dump: pipeline_cache_size=3608
 simple_triangle_dump: executable_count=3
 simple_triangle_dump: executable[0] stage=vertex name="vertex" desc="SIMD8 vertex shader" subgroup=8
