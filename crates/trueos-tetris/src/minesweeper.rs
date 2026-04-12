@@ -376,8 +376,12 @@ where
         for y in 0..H {
             for x in 0..W {
                 let mut adjacent_mines = 0_u8;
-                for neighbor_y in y.saturating_sub(1)..=min(y.saturating_add(1), H.saturating_sub(1)) {
-                    for neighbor_x in x.saturating_sub(1)..=min(x.saturating_add(1), W.saturating_sub(1)) {
+                for neighbor_y in
+                    y.saturating_sub(1)..=min(y.saturating_add(1), H.saturating_sub(1))
+                {
+                    for neighbor_x in
+                        x.saturating_sub(1)..=min(x.saturating_add(1), W.saturating_sub(1))
+                    {
                         if neighbor_x == x && neighbor_y == y {
                             continue;
                         }
@@ -413,8 +417,8 @@ where
                         continue;
                     }
 
-                    for neighbor_y in
-                        scan_y.saturating_sub(1)..=min(scan_y.saturating_add(1), H.saturating_sub(1))
+                    for neighbor_y in scan_y.saturating_sub(1)
+                        ..=min(scan_y.saturating_add(1), H.saturating_sub(1))
                     {
                         for neighbor_x in scan_x.saturating_sub(1)
                             ..=min(scan_x.saturating_add(1), W.saturating_sub(1))

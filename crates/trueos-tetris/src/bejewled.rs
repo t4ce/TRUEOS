@@ -120,8 +120,7 @@ where
         if x >= W || y >= H {
             return None;
         }
-        Some(self.board[x][y])
-            .flatten()
+        Some(self.board[x][y]).flatten()
     }
 
     pub fn has_any_valid_move(&self) -> bool {
@@ -171,9 +170,7 @@ where
             }
 
             combo += 1;
-            let score_delta = (cleared as u32)
-                .saturating_mul(10)
-                .saturating_mul(combo);
+            let score_delta = (cleared as u32).saturating_mul(10).saturating_mul(combo);
             total_cleared += cleared;
             total_score_delta = total_score_delta.saturating_add(score_delta);
 
@@ -441,7 +438,17 @@ mod tests {
         let mut events = TestEvents::default();
         let game = Game::<4, 4>::new(&mut rng, &mut events);
 
-        assert!(matches!(game.gem_at(0, 0), Some(GemKind::Ruby | GemKind::Sapphire | GemKind::Emerald | GemKind::Topaz | GemKind::Diamond | GemKind::Amethyst)));
+        assert!(matches!(
+            game.gem_at(0, 0),
+            Some(
+                GemKind::Ruby
+                    | GemKind::Sapphire
+                    | GemKind::Emerald
+                    | GemKind::Topaz
+                    | GemKind::Diamond
+                    | GemKind::Amethyst
+            )
+        ));
         assert_eq!(game.gem_at(10, 10), None);
     }
 }

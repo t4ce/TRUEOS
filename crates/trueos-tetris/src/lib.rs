@@ -6,8 +6,8 @@ use v::vled::Rgb8;
 pub mod bejewled;
 pub mod chess;
 pub mod minesweeper;
-pub mod snake;
 pub mod shell;
+pub mod snake;
 
 pub const MAX_PIECE_CELLS: usize = 8;
 
