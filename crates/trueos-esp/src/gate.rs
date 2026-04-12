@@ -11,13 +11,6 @@ pub const ESP_UDP_BROADCAST_PORT: u16 = 32343;
 pub const ESP_SWARM_HEARTBEAT: &[u8; 5] = b"swarm";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DefaultAppState {
-    Pending,
-    SkippedExistingApp,
-    Uploaded,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GateSignal {
     UdpBound(api::NetHandle),
     EspDiscovered(api::EndpointV4),
@@ -107,7 +100,6 @@ pub struct DeviceRecord {
     pub connected_at_ms: u64,
     pub last_activity_ms: u64,
     pub status: Option<DeviceStatusSnapshot>,
-    default_app_state: DefaultAppState,
 }
 
 pub struct DeviceRegistry {
@@ -177,36 +169,7 @@ impl DeviceRegistry {
             connected_at_ms: now_ms,
             last_activity_ms: now_ms,
             status: None,
-            default_app_state: DefaultAppState::Pending,
         });
-        true
-    }
-
-    pub fn should_upload_default_app(&mut self, handle: api::NetHandle, app_exists: bool) -> bool {
-        let Some(existing) = self.devices.iter_mut().find(|entry| entry.handle == handle) else {
-            return false;
-        };
-        if app_exists {
-            existing.default_app_state = DefaultAppState::SkippedExistingApp;
-            return false;
-        }
-
-        matches!(existing.default_app_state, DefaultAppState::Pending)
-    }
-
-    pub fn set_default_app_upload_result(
-        &mut self,
-        handle: api::NetHandle,
-        uploaded: bool,
-        now_ms: u64,
-    ) -> bool {
-        let Some(existing) = self.devices.iter_mut().find(|entry| entry.handle == handle) else {
-            return false;
-        };
-        if uploaded {
-            existing.default_app_state = DefaultAppState::Uploaded;
-        }
-        existing.last_activity_ms = now_ms;
         true
     }
 
@@ -375,29 +338,5 @@ mod tests {
         assert_eq!(event.handle, handle);
         assert_eq!(event.previous, None);
         assert_eq!(event.current, status);
-    }
-
-    #[test]
-    fn default_upload_is_decided_once() {
-        let mut registry = DeviceRegistry::new(8);
-        let addr = [192, 168, 1, 55];
-        let handle = device_handle_v4(addr);
-        assert!(registry.upsert_heartbeat_v4(addr, ESP_HTTP_UPLOAD_PORT, 100));
-
-        assert!(registry.should_upload_default_app(handle, false));
-        assert!(registry.should_upload_default_app(handle, false));
-        assert!(registry.set_default_app_upload_result(handle, true, 200));
-        assert!(!registry.should_upload_default_app(handle, false));
-    }
-
-    #[test]
-    fn existing_app_skips_default_upload() {
-        let mut registry = DeviceRegistry::new(8);
-        let addr = [192, 168, 1, 56];
-        let handle = device_handle_v4(addr);
-        assert!(registry.upsert_heartbeat_v4(addr, ESP_HTTP_UPLOAD_PORT, 100));
-
-        assert!(!registry.should_upload_default_app(handle, true));
-        assert!(!registry.should_upload_default_app(handle, false));
     }
 }
