@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use spin::Mutex;
 
 const FORCEWAKE_RENDER: usize = 0x0A278;
@@ -36,7 +36,7 @@ const CURSOR_C_OFFSET: usize = 0x72080;
 const CURSOR_D_OFFSET: usize = 0x73080;
 const WARM_RING_BYTES: usize = 4096;
 const WARM_CONTEXT_BYTES: usize = 22 * 4096;
-const WARM_BATCH_BYTES: usize = 4096;
+const WARM_BATCH_BYTES: usize = 512 * 4096;
 const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
 const WARM_VERTEX_BYTES: usize = 4096;
 const WARM_RESULT_BYTES: usize = 4096;
@@ -45,7 +45,7 @@ const BLT_RING_TAIL_BYTES: usize = BLT_RING_DWORDS * core::mem::size_of::<u32>()
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const GPU_VA_RING_BASE: u64 = 0x0080_0000;
 const GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
-const GPU_VA_BATCH_BASE: u64 = 0x0083_0000;
+const GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
 const GPU_VA_VERTEX_BASE: u64 = 0x0087_0000;
@@ -75,11 +75,24 @@ const RCS_EXEC_RESULT_DONE: u32 = 0xC0DE_7701;
 const RCS_EXEC_RESULT_MI_PROBE_DONE: u32 = 0xC0DE_7711;
 const RCS_EXEC_RESULT_3D_NO_DRAW_DONE: u32 = 0xC0DE_7712;
 const RCS_EXEC_RESULT_DRAW_PRE3D: u32 = 0xC0DE_7721;
+const RCS_EXEC_RESULT_DRAW_POST_VF: u32 = 0xC0DE_7723;
+const RCS_EXEC_RESULT_DRAW_POST_VS: u32 = 0xC0DE_7724;
+const RCS_EXEC_RESULT_DRAW_POST_PS_STATE: u32 = 0xC0DE_7725;
+const RCS_EXEC_RESULT_DRAW_POST_CLIP: u32 = 0xC0DE_7726;
+const RCS_EXEC_RESULT_DRAW_POST_RASTER: u32 = 0xC0DE_7727;
 const RCS_EXEC_RESULT_DRAW_POST3D: u32 = 0xC0DE_7722;
+const PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS: usize = 1;
+const PRIMARY_USE_MI_STRIPE_PROBE: bool = false;
+const PRIMARY_USE_3D_NO_DRAW_PROBE: bool = false;
+const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = true;
+const MI_STRIPE_COUNT: usize = 12;
+const MI_STRIPE_WIDTH_PX: usize = 4;
+const MI_STRIPE_X_STEP_PX: u32 = 1;
+const PRIMARY_PERIODIC_LOG_EVERY: u32 = 30;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
 const RENDER_MOCS: u32 = 1;
 const SURFTYPE_2D: u32 = 1;
-const SURFACE_FORMAT_R8G8B8A8_UNORM: u32 = 9;
+const SURFACE_FORMAT_B8G8R8A8_UNORM: u32 = 10;
 const SURFACE_FORMAT_R32G32B32_FLOAT: u32 = 64;
 const SURFACE_HALIGN_4: u32 = 1;
 const SURFACE_VALIGN_4: u32 = 1;
@@ -154,6 +167,11 @@ const PIPE_CONTROL_DEST_GGTT: u32 = 1 << 24;
 const RESULT_SLOT_PRE3D_DWORD: usize = 0;
 const RESULT_SLOT_POST3D_DWORD: usize = 1;
 const RESULT_SLOT_FINAL_DWORD: usize = 2;
+const RESULT_SLOT_POST_VF_DWORD: usize = 3;
+const RESULT_SLOT_POST_VS_DWORD: usize = 4;
+const RESULT_SLOT_POST_PS_STATE_DWORD: usize = 5;
+const RESULT_SLOT_POST_CLIP_DWORD: usize = 6;
+const RESULT_SLOT_POST_RASTER_DWORD: usize = 7;
 const TRIANGLE_TOPOLOGY_TRILIST: u32 = 4;
 const TRIANGLE_PS_MAX_THREADS: u32 = 63;
 const TRIANGLE_VS_URB_START: u32 = 4;
@@ -239,6 +257,10 @@ unsafe impl Sync for RenderWarmState {}
 
 static WARM_STATE: Mutex<Option<RenderWarmState>> = Mutex::new(None);
 static PRIMARY_TRIANGLE_SUBMITTED: AtomicBool = AtomicBool::new(false);
+static PRIMARY_PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static WARM_BUFFERS_MAPPED: AtomicBool = AtomicBool::new(false);
+static PRIMARY_STRIPE_X_PHASE: AtomicU32 = AtomicU32::new(0);
+static PRIMARY_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
     if let Some(warm) = *WARM_STATE.lock() {
@@ -548,13 +570,15 @@ pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
     let gt_ok =
         wait_eq(dev, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
 
-    crate::log!(
-        "intel/render: forcewake render_cleared={} render_ack=0x{:08X} gt_ack=0x{:08X} ok={}\n",
-        render_cleared as u8,
-        crate::intel::mmio_read(dev, FORCEWAKE_ACK_RENDER),
-        crate::intel::mmio_read(dev, FORCEWAKE_ACK_GT),
-        (render_ok && gt_ok) as u8
-    );
+    if should_log_primary_probe_detail() {
+        crate::log!(
+            "intel/render: forcewake render_cleared={} render_ack=0x{:08X} gt_ack=0x{:08X} ok={}\n",
+            render_cleared as u8,
+            crate::intel::mmio_read(dev, FORCEWAKE_ACK_RENDER),
+            crate::intel::mmio_read(dev, FORCEWAKE_ACK_GT),
+            (render_ok && gt_ok) as u8
+        );
+    }
 
     render_ok && gt_ok
 }
@@ -589,24 +613,45 @@ pub(crate) fn submit_primary_triangle_once() {
         return;
     }
 
+    let _ = submit_primary_probe_now("boot-once");
+}
+
+pub(crate) fn submit_primary_probe_periodic() {
+    let _ = submit_primary_probe_now("periodic");
+}
+
+fn submit_primary_probe_now(reason: &'static str) -> bool {
+    let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        crate::log!("intel/render: primary-probe skipped reason=in-flight trigger={}\n", reason);
+        return false;
+    }
+
     let Some(dev) = crate::intel::claimed_device() else {
         crate::log!("intel/render: primary-triangle skipped reason=no-device\n");
-        return;
+        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+        return false;
     };
     let Some(surface_gpu) = crate::intel::display::primary_surface_gpu_addr() else {
         crate::log!("intel/render: primary-triangle skipped reason=no-surface\n");
-        return;
+        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+        return false;
     };
     let Some((width, height)) = crate::intel::display::active_scanout_dimensions() else {
         crate::log!("intel/render: primary-triangle skipped reason=no-dimensions\n");
-        return;
+        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+        return false;
     };
     let Some(pitch_bytes) = width
         .checked_mul(4)
         .and_then(|v| crate::intel::align_up(v as usize, 64))
     else {
         crate::log!("intel/render: primary-triangle skipped reason=bad-pitch width={}\n", width);
-        return;
+        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+        return false;
     };
 
     let warm = warm_once(dev);
@@ -618,17 +663,52 @@ pub(crate) fn submit_primary_triangle_once() {
         || warm.result_len == 0
     {
         crate::log!("intel/render: primary-triangle skipped reason=warm-buffers\n");
-        return;
+        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+        return false;
     }
     if !forcewake_render_acquire(warm) {
         crate::log!("intel/render: primary-triangle skipped reason=forcewake\n");
-        return;
+        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+        return false;
     }
-    if !map_smoke_buffers(dev, warm) {
+    if !ensure_smoke_buffers_mapped(dev, warm) {
         crate::log!("intel/render: primary-triangle skipped reason=ggtt-map\n");
-        return;
+        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+        return false;
     }
-    if submit_triangle_draw_to_surface(
+    let completed = if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
+        let completed = submit_primary_triangle_with_retries(
+            dev,
+            warm,
+            surface_gpu,
+            pitch_bytes,
+            width as usize,
+            height as usize,
+        );
+        if !completed {
+            crate::log!("intel/render: primary-draw-path submit failed trigger={}\n", reason);
+        }
+        completed
+    } else if PRIMARY_USE_MI_STRIPE_PROBE {
+        let completed = submit_vertical_stripes_to_surface(
+            dev,
+            warm,
+            surface_gpu,
+            pitch_bytes,
+            width as usize,
+            height as usize,
+        );
+        if !completed {
+            crate::log!("intel/render: primary-mi-stripes submit failed trigger={}\n", reason);
+        }
+        completed
+    } else if PRIMARY_USE_3D_NO_DRAW_PROBE {
+        let completed = submit_3d_no_draw_probe(dev, warm);
+        if !completed {
+            crate::log!("intel/render: primary-3d-no-draw submit failed trigger={}\n", reason);
+        }
+        completed
+    } else if submit_primary_triangle_with_retries(
         dev,
         warm,
         surface_gpu,
@@ -636,18 +716,67 @@ pub(crate) fn submit_primary_triangle_once() {
         width as usize,
         height as usize,
     ) {
-        return;
+        true
+    } else {
+        let completed = submit_triangle_to_surface(
+            dev,
+            warm,
+            surface_gpu,
+            pitch_bytes,
+            width as usize,
+            height as usize,
+        );
+        if !completed {
+            crate::log!("intel/render: primary-triangle submit failed trigger={}\n", reason);
+        }
+        completed
+    };
+    if should_log_primary_probe(reason, probe_seq) {
+        crate::log!(
+            "intel/render: primary-probe seq={} trigger={} completed={} mode={}\n",
+            probe_seq,
+            reason,
+            completed as u8,
+            if PRIMARY_USE_MI_STRIPE_PROBE {
+                "mi-stripes"
+            } else if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
+                "draw-path"
+            } else if PRIMARY_USE_3D_NO_DRAW_PROBE {
+                "3d-no-draw"
+            } else {
+                "3d"
+            }
+        );
     }
-    if !submit_triangle_to_surface(
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width as usize,
-        height as usize,
-    ) {
-        crate::log!("intel/render: primary-triangle submit failed\n");
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    completed
+}
+
+fn submit_primary_triangle_with_retries(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    surface_gpu: u64,
+    pitch_bytes: usize,
+    width: usize,
+    height: usize,
+) -> bool {
+    let mut completed_any = false;
+    for attempt in 1..=PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS {
+        let completed =
+            submit_triangle_draw_to_surface(dev, warm, surface_gpu, pitch_bytes, width, height);
+        crate::log!(
+            "intel/render: primary-triangle attempt={}/{} target=0x{:X} completed={}\n",
+            attempt,
+            PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS,
+            surface_gpu,
+            completed as u8
+        );
+        completed_any |= completed;
+        if !completed {
+            break;
+        }
     }
+    completed_any
 }
 
 fn wait_eq(dev: crate::intel::Dev, reg: usize, mask: u32, want: u32, n: usize) -> bool {
@@ -674,6 +803,26 @@ fn map_smoke_buffers(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     } else {
         false
     }
+}
+
+fn ensure_smoke_buffers_mapped(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
+    if WARM_BUFFERS_MAPPED.load(Ordering::Acquire) {
+        return true;
+    }
+    if !map_smoke_buffers(dev, warm) {
+        return false;
+    }
+    WARM_BUFFERS_MAPPED.store(true, Ordering::Release);
+    true
+}
+
+fn should_log_primary_probe(reason: &str, seq: u32) -> bool {
+    reason == "boot-once" || seq <= 3 || seq.is_multiple_of(PRIMARY_PERIODIC_LOG_EVERY)
+}
+
+fn should_log_primary_probe_detail() -> bool {
+    let seq = PRIMARY_PROBE_SEQ.load(Ordering::Acquire);
+    seq <= 3 || seq.is_multiple_of(PRIMARY_PERIODIC_LOG_EVERY)
 }
 
 fn submit_triangle_draw_to_surface(
@@ -785,6 +934,11 @@ fn submit_triangle_draw_to_surface(
         core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
         core::ptr::write_volatile((warm.result_virt as *mut u32).add(1), 0xC0DE_7700);
         core::ptr::write_volatile((warm.result_virt as *mut u32).add(2), 0xC0DE_7700);
+        core::ptr::write_volatile((warm.result_virt as *mut u32).add(3), 0xC0DE_7700);
+        core::ptr::write_volatile((warm.result_virt as *mut u32).add(4), 0xC0DE_7700);
+        core::ptr::write_volatile((warm.result_virt as *mut u32).add(5), 0xC0DE_7700);
+        core::ptr::write_volatile((warm.result_virt as *mut u32).add(6), 0xC0DE_7700);
+        core::ptr::write_volatile((warm.result_virt as *mut u32).add(7), 0xC0DE_7700);
     }
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
@@ -1058,7 +1212,7 @@ fn write_triangle_probe_state(
     let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
     surface.fill(0);
     surface[0] = (SURFTYPE_2D << 29)
-        | (SURFACE_FORMAT_R8G8B8A8_UNORM << 18)
+        | (SURFACE_FORMAT_B8G8R8A8_UNORM << 18)
         | (SURFACE_HALIGN_4 << 14)
         | (SURFACE_VALIGN_4 << 16);
     surface[1] = RENDER_MOCS << 24;
@@ -1076,6 +1230,10 @@ fn write_triangle_probe_state(
 
     let blend = &mut dwords[blend_state_offset / 4..blend_state_offset / 4 + 16];
     blend.fill(0);
+    // Program RT0 as an explicit no-blend, write-enabled target rather than
+    // relying on "all zeros probably means fine".
+    blend[0] = 0;
+    blend[1] = (1 << 0) | (1 << 1) | (2 << 2);
 
     let color_calc = &mut dwords[color_calc_state_offset / 4..color_calc_state_offset / 4 + 16];
     color_calc.fill(0);
@@ -1133,11 +1291,13 @@ fn encode_triangle_probe_batch(
     let mut cursor = 0usize;
 
     fn log_batch_offset(cursor: usize, label: &str) {
-        crate::log!(
-            "intel/render: batch-off 0x{:03X} {}\n",
-            cursor * core::mem::size_of::<u32>(),
-            label
-        );
+        if crate::logflag::INTEL_RENDER_NGIN_BATCH_LOGS {
+            crate::log!(
+                "intel/render: batch-off 0x{:03X} {}\n",
+                cursor * core::mem::size_of::<u32>(),
+                label
+            );
+        }
     }
 
     fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
@@ -1264,13 +1424,28 @@ fn encode_triangle_probe_batch(
         .saturating_sub(shader_layout.state_region_offset_bytes as usize);
     let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
     let ps_ksp_offset = shader_layout.ps.code_offset_bytes + shader_layout.ps.ksp_offset_bytes;
-    let sbe_vertex_read_length = (((pipeline.ps.meta.num_varying_inputs as u32) + 1) / 2).max(1);
+    let sbe_vertex_read_length = (pipeline.ps.meta.num_varying_inputs as u32).div_ceil(2);
+    let sbe_dw1 = (1 << 21)
+        | ((pipeline.ps.meta.num_varying_inputs as u32) << 22)
+        | (1 << 28)
+        | (1 << 29)
+        | (sbe_vertex_read_length << 11);
     let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) =
         stage_dispatch_bits(pipeline.ps.meta.kernel.dispatch_mode);
-    let clip_dw1 = 0;
-    let clip_dw2 = CLIP_PERSPECTIVE_DIVIDE_DISABLE;
-    let clip_dw3 = 0;
-    let wm_dw1 = WM_FORCE_KILL_PIXEL_OFF;
+    // Match Mesa's boring fixed-function defaults for a plain OGL triangle:
+    // clip enabled, guardband enabled, OGL API mode, provoking vertices set,
+    // no cull, solid fill, CCW front winding.
+    let clip_dw1 = (1 << 17) | (1 << 18);
+    let clip_dw2 = (2 << 0) | (1 << 2) | (2 << 4) | (1 << 26) | (1 << 31);
+    let clip_dw3 = (2047 << 6) | (1 << 17);
+    let sf_dw1 = (1 << 1) | (1 << 10) | (128 << 12);
+    let sf_dw2 = 0;
+    let sf_dw3 = 8 | (1 << 11) | (1 << 14) | (2 << 25) | (1 << 27) | (2 << 29);
+    let raster_dw1 = (1 << 0) | (1 << 16) | (1 << 21) | (1 << 26);
+    let raster_dw2 = 0;
+    let raster_dw3 = 0;
+    let raster_dw4 = 0;
+    let wm_dw1 = WM_FORCE_KILL_PIXEL_OFF | (1 << 2) | (1 << 6);
     let ps_dw3 =
         (binding_table_entry_count_encoding(pipeline.ps.meta.kernel.binding_table_entry_count)
             << 18)
@@ -1398,6 +1573,13 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "3DSTATE_VF_TOPOLOGY");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_TOPOLOGY)?;
     push(batch_dwords, &mut cursor, TRIANGLE_TOPOLOGY_TRILIST)?;
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM post-vf");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_POST_VF_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_POST_VF,
+    )?;
 
     log_batch_offset(cursor, "3DSTATE_URB_ALLOC_HS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_HS)?;
@@ -1441,6 +1623,13 @@ fn encode_triangle_probe_batch(
     )?;
     push(batch_dwords, &mut cursor, 1 | (1 << 2) | ((pipeline.vs.meta.max_threads as u32) << 22))?;
     push(batch_dwords, &mut cursor, ((pipeline.vs.meta.urb_entry_output_length as u32) << 16))?;
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM post-vs");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_POST_VS_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_POST_VS,
+    )?;
 
     log_batch_offset(cursor, "3DSTATE_HS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_HS)?;
@@ -1473,31 +1662,37 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, clip_dw1)?;
     push(batch_dwords, &mut cursor, clip_dw2)?;
     push(batch_dwords, &mut cursor, clip_dw3)?;
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM post-clip");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_POST_CLIP_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_POST_CLIP,
+    )?;
 
     log_batch_offset(cursor, "3DSTATE_SF");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SF)?;
-    push(batch_dwords, &mut cursor, (1 << 1) | (128 << 12))?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, sf_dw1)?;
+    push(batch_dwords, &mut cursor, sf_dw2)?;
+    push(batch_dwords, &mut cursor, sf_dw3)?;
 
     log_batch_offset(cursor, "3DSTATE_RASTER");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_RASTER)?;
-    push(batch_dwords, &mut cursor, (1 << 16) | (1 << 18) | (1 << 21) | (2 << 22))?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, raster_dw1)?;
+    push(batch_dwords, &mut cursor, raster_dw2)?;
+    push(batch_dwords, &mut cursor, raster_dw3)?;
+    push(batch_dwords, &mut cursor, raster_dw4)?;
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM post-raster");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_POST_RASTER_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_POST_RASTER,
+    )?;
 
     log_batch_offset(cursor, "3DSTATE_SBE");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE)?;
-    push(
-        batch_dwords,
-        &mut cursor,
-        (1 << 5)
-            | (sbe_vertex_read_length << 11)
-            | ((pipeline.ps.meta.num_varying_inputs as u32) << 22)
-            | (1 << 28)
-            | (1 << 29),
-    )?;
+    push(batch_dwords, &mut cursor, sbe_dw1)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, pipeline.ps.meta.flat_inputs)?;
     push(batch_dwords, &mut cursor, SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD)?;
@@ -1556,6 +1751,13 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "3DSTATE_PS_EXTRA");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
     push(batch_dwords, &mut cursor, ps_extra_dw1)?;
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM post-ps-state");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_POST_PS_STATE_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_POST_PS_STATE,
+    )?;
 
     log_batch_offset(cursor, "3DSTATE_DRAWING_RECTANGLE");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_DRAWING_RECTANGLE)?;
@@ -1604,10 +1806,17 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, MI_NOOP)?;
 
     crate::log!(
-        "intel/render: probe-ps clip=[0x{:08X},0x{:08X},0x{:08X}] wm=0x{:08X} ps3=0x{:08X} ps6=0x{:08X} ps7=0x{:08X} ps_extra=0x{:08X}\n",
+        "intel/render: probe-3d clip=[0x{:08X},0x{:08X},0x{:08X}] sf=[0x{:08X},0x{:08X},0x{:08X}] raster=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] wm=0x{:08X} ps3=0x{:08X} ps6=0x{:08X} ps7=0x{:08X} ps_extra=0x{:08X}\n",
         clip_dw1,
         clip_dw2,
         clip_dw3,
+        sf_dw1,
+        sf_dw2,
+        sf_dw3,
+        raster_dw1,
+        raster_dw2,
+        raster_dw3,
+        raster_dw4,
         wm_dw1,
         ps_dw3,
         ps_dw6,
@@ -1928,9 +2137,11 @@ fn prepare_triangle_draw_resources(
     };
     vertices.fill(0.0);
 
-    // Use a large clip-space triangle so visibility doesn't depend on fine
-    // viewport math or on our sample points landing inside a small primitive.
-    let tri = [[-1.0f32, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]];
+    // Keep the geometry entirely inside canonical clip space so this proof
+    // path does not depend on oversized fullscreen-triangle conventions.
+    let tri = [[-0.5f32, -0.5, 0.0], [0.5, -0.5, 0.0], [0.0, 0.5, 0.0]];
+    let signed_area_2x = (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1])
+        - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1]);
     for (dst, src) in vertices
         .chunks_exact_mut(TRIANGLE_DRAW_VERTEX_DWORDS)
         .take(TRIANGLE_DRAW_VERTICES)
@@ -1939,6 +2150,22 @@ fn prepare_triangle_draw_resources(
         dst.copy_from_slice(src);
     }
     crate::intel::dma_flush(warm.vertex_virt, TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_STRIDE);
+    crate::log!(
+        "intel/render: draw-verts v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] stride={} gpu=0x{:X} signed_area2={:.3} winding={}\n",
+        tri[0][0],
+        tri[0][1],
+        tri[0][2],
+        tri[1][0],
+        tri[1][1],
+        tri[1][2],
+        tri[2][0],
+        tri[2][1],
+        tri[2][2],
+        TRIANGLE_DRAW_VERTEX_STRIDE,
+        GPU_VA_VERTEX_BASE,
+        signed_area_2x,
+        if signed_area_2x >= 0.0 { "ccw" } else { "cw" }
+    );
 
     unsafe {
         core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
@@ -1966,12 +2193,9 @@ fn submit_triangle_to_surface(
     rect_h: usize,
 ) -> bool {
     unsafe {
-        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
-        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
         core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
     }
-    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(warm.result_virt, core::mem::size_of::<u32>());
 
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
@@ -2002,6 +2226,59 @@ fn submit_triangle_to_surface(
         RESULT_SLOT_PRE3D_DWORD,
         "mi-triangle",
     )
+}
+
+fn submit_vertical_stripes_to_surface(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+) -> bool {
+    let stripe_x_phase = PRIMARY_STRIPE_X_PHASE.fetch_add(MI_STRIPE_X_STEP_PX, Ordering::AcqRel);
+
+    unsafe {
+        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
+    }
+    crate::intel::dma_flush(warm.result_virt, core::mem::size_of::<u32>());
+
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let Ok(batch_tail_bytes) = encode_vertical_stripe_store_batch(
+        batch,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        stripe_x_phase,
+        GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_DONE,
+    ) else {
+        crate::log!(
+            "intel/render: primary-mi-stripes batch build failed size={}x{} pitch=0x{:X} batch=0x{:X} phase={}\n",
+            rect_w,
+            rect_h,
+            pitch,
+            warm.batch_len,
+            stripe_x_phase
+        );
+        return false;
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
+
+    if should_log_primary_probe("periodic", PRIMARY_PROBE_SEQ.load(Ordering::Acquire)) {
+        crate::log!(
+            "intel/render: primary-mi-stripes phase={} step={} stripes={} width={}\n",
+            stripe_x_phase,
+            MI_STRIPE_X_STEP_PX,
+            MI_STRIPE_COUNT,
+            MI_STRIPE_WIDTH_PX
+        );
+    }
+
+    submit_warm_render_batch(dev, warm, RCS_EXEC_RESULT_DONE, RESULT_SLOT_PRE3D_DWORD, "mi-stripes")
 }
 
 fn submit_warm_render_batch(
@@ -2047,16 +2324,18 @@ fn submit_warm_render_batch(
     execlist_submit_port_push(dev, context_desc_lo, context_desc_hi, 0, 0);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
 
-    crate::log!(
-        "intel/render: {} execlist-start desc=0x{:08X}:0x{:08X} hws=0x{:08X} sq=0x{:08X}:0x{:08X} ctx_ctl=0x{:08X}\n",
-        submit_name,
-        context_desc_hi,
-        context_desc_lo,
-        hws_after,
-        crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_HI),
-        crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_LO),
-        crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL)
-    );
+    if should_log_primary_probe_detail() {
+        crate::log!(
+            "intel/render: {} execlist-start desc=0x{:08X}:0x{:08X} hws=0x{:08X} sq=0x{:08X}:0x{:08X} ctx_ctl=0x{:08X}\n",
+            submit_name,
+            context_desc_hi,
+            context_desc_lo,
+            hws_after,
+            crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_HI),
+            crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_LO),
+            crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL)
+        );
+    }
 
     let mut completed = false;
     let mut iter = 0usize;
@@ -2064,17 +2343,29 @@ fn submit_warm_render_batch(
         let result0 = read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD);
         let result1 = read_result_dword(warm, RESULT_SLOT_POST3D_DWORD);
         let result2 = read_result_dword(warm, RESULT_SLOT_FINAL_DWORD);
+        let result3 = read_result_dword(warm, RESULT_SLOT_POST_VF_DWORD);
+        let result4 = read_result_dword(warm, RESULT_SLOT_POST_VS_DWORD);
+        let result5 = read_result_dword(warm, RESULT_SLOT_POST_PS_STATE_DWORD);
+        let result6 = read_result_dword(warm, RESULT_SLOT_POST_CLIP_DWORD);
+        let result7 = read_result_dword(warm, RESULT_SLOT_POST_RASTER_DWORD);
         let observed = match expected_result_slot_dword {
             RESULT_SLOT_PRE3D_DWORD => result0,
             RESULT_SLOT_POST3D_DWORD => result1,
             RESULT_SLOT_FINAL_DWORD => result2,
+            RESULT_SLOT_POST_VF_DWORD => result3,
+            RESULT_SLOT_POST_VS_DWORD => result4,
+            RESULT_SLOT_POST_PS_STATE_DWORD => result5,
+            RESULT_SLOT_POST_CLIP_DWORD => result6,
+            RESULT_SLOT_POST_RASTER_DWORD => result7,
             _ => result0,
         };
         if observed == expected_result {
             completed = true;
             break;
         }
-        if iter == 0 || iter == 256 || iter == 1024 || iter == 4095 {
+        if should_log_primary_probe_detail()
+            && (iter == 0 || iter == 256 || iter == 1024 || iter == 4095)
+        {
             crate::log!(
                 "intel/render: {} poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X}\n",
                 submit_name,
@@ -2091,6 +2382,16 @@ fn submit_warm_render_batch(
                 result1,
                 result2
             );
+            crate::log!(
+                "intel/render: {} poll-stage iter={} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X}\n",
+                submit_name,
+                iter,
+                result3,
+                result4,
+                result5,
+                result6,
+                result7
+            );
         }
         core::hint::spin_loop();
         iter += 1;
@@ -2100,17 +2401,34 @@ fn submit_warm_render_batch(
     let result0 = read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD);
     let result1 = read_result_dword(warm, RESULT_SLOT_POST3D_DWORD);
     let result2 = read_result_dword(warm, RESULT_SLOT_FINAL_DWORD);
-    crate::log!(
-        "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
-        submit_name,
-        completed as u8,
-        result0,
-        result1,
-        result2,
-        crate::intel::mmio_read(dev, RCS_RING_CTL),
-        crate::intel::mmio_read(dev, RCS_RING_INSTDONE)
-    );
-    crate::intel::display::log_primary_surface_samples("post-render");
+    let result3 = read_result_dword(warm, RESULT_SLOT_POST_VF_DWORD);
+    let result4 = read_result_dword(warm, RESULT_SLOT_POST_VS_DWORD);
+    let result5 = read_result_dword(warm, RESULT_SLOT_POST_PS_STATE_DWORD);
+    let result6 = read_result_dword(warm, RESULT_SLOT_POST_CLIP_DWORD);
+    let result7 = read_result_dword(warm, RESULT_SLOT_POST_RASTER_DWORD);
+    if should_log_primary_probe_detail() {
+        crate::log!(
+            "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
+            submit_name,
+            completed as u8,
+            result0,
+            result1,
+            result2,
+            result3,
+            result4,
+            result5,
+            result6,
+            result7,
+            crate::intel::mmio_read(dev, RCS_RING_CTL),
+            crate::intel::mmio_read(dev, RCS_RING_INSTDONE)
+        );
+        crate::intel::display::log_primary_surface_samples("post-render");
+    }
+    if completed && submit_name == "draw-path" {
+        let kicked = crate::intel::display::kick_primary_surface_scanout("post-draw-path");
+        crate::log!("intel/render: draw-path scanout-kick={}\n", kicked as u8);
+        crate::intel::display::log_pipe_live_scanout_state("post-draw-path");
+    }
     completed
 }
 
@@ -2454,7 +2772,6 @@ fn encode_rgb_triangle_store_batch(
     let min_y = v0y.min(v1y).min(v2y).max(0) as usize;
     let max_y = (v0y.max(v1y).max(v2y) + 1).min(rect_h as i32) as usize;
 
-    batch_dwords.fill(0);
     let writable_limit = batch_dwords
         .len()
         .saturating_sub(RESERVED_END_DWORDS + STORE_DWORDS);
@@ -2521,7 +2838,6 @@ fn encode_result_store_probe_batch(
         return Err("batch-too-small");
     }
 
-    batch_dwords.fill(0);
     batch_dwords[0] = MI_STORE_DATA_IMM_GGTT_DW1;
     batch_dwords[1] = result_gpu_addr as u32;
     batch_dwords[2] = (result_gpu_addr >> 32) as u32;
@@ -2529,6 +2845,85 @@ fn encode_result_store_probe_batch(
     batch_dwords[4] = MI_BATCH_BUFFER_END;
     batch_dwords[5] = MI_NOOP;
     Ok(6 * core::mem::size_of::<u32>())
+}
+
+fn encode_vertical_stripe_store_batch(
+    batch_dwords: &mut [u32],
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    x_phase: u32,
+    result_gpu_addr: u64,
+    done_value: u32,
+) -> Result<usize, &'static str> {
+    const RESERVED_END_DWORDS: usize = 2;
+    const STORE_DWORDS: usize = 4;
+
+    if batch_dwords.len() <= RESERVED_END_DWORDS + STORE_DWORDS {
+        return Err("batch-too-small");
+    }
+    if rect_w == 0 || rect_h == 0 {
+        return Err("stripe-empty-target");
+    }
+
+    let writable_limit = batch_dwords
+        .len()
+        .saturating_sub(RESERVED_END_DWORDS + STORE_DWORDS);
+    let colors = [
+        pack_xrgb8888(0xFF, 0x00, 0x00),
+        pack_xrgb8888(0xFF, 0x80, 0x00),
+        pack_xrgb8888(0xFF, 0xFF, 0x00),
+        pack_xrgb8888(0x00, 0xFF, 0x00),
+        pack_xrgb8888(0x00, 0xA0, 0xFF),
+        pack_xrgb8888(0xFF, 0x00, 0xFF),
+    ];
+    let mut idx = 0usize;
+    let phase = if rect_w == 0 {
+        0
+    } else {
+        (x_phase as usize) % rect_w
+    };
+
+    for stripe_idx in 0..MI_STRIPE_COUNT {
+        let center = ((((stripe_idx + 1) * rect_w) / (MI_STRIPE_COUNT + 1)) + phase) % rect_w;
+        let x0 = center + rect_w - (MI_STRIPE_WIDTH_PX / 2);
+        let color = colors[stripe_idx % colors.len()];
+        for y in 0..rect_h {
+            for stripe_dx in 0..MI_STRIPE_WIDTH_PX {
+                let x = (x0 + stripe_dx) % rect_w;
+                if idx + STORE_DWORDS > writable_limit {
+                    return Err("stripe-batch-exhausted");
+                }
+                let dst = dst_gpu_addr
+                    .saturating_add((y as u64).saturating_mul(pitch as u64))
+                    .saturating_add((x as u64).saturating_mul(4));
+                batch_dwords[idx] = MI_STORE_DATA_IMM_GGTT_DW1;
+                batch_dwords[idx + 1] = dst as u32;
+                batch_dwords[idx + 2] = (dst >> 32) as u32;
+                batch_dwords[idx + 3] = color;
+                idx += STORE_DWORDS;
+            }
+        }
+    }
+
+    if idx == 0 {
+        return Err("stripe-empty");
+    }
+    if idx + STORE_DWORDS > batch_dwords.len().saturating_sub(RESERVED_END_DWORDS) {
+        return Err("stripe-no-result-slot");
+    }
+
+    batch_dwords[idx] = MI_STORE_DATA_IMM_GGTT_DW1;
+    batch_dwords[idx + 1] = result_gpu_addr as u32;
+    batch_dwords[idx + 2] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[idx + 3] = done_value;
+    idx += STORE_DWORDS;
+
+    batch_dwords[idx] = MI_BATCH_BUFFER_END;
+    batch_dwords[idx + 1] = MI_NOOP;
+    idx += RESERVED_END_DWORDS;
+    Ok(idx * core::mem::size_of::<u32>())
 }
 
 fn edge_fn(ax: i32, ay: i32, bx: i32, by: i32, px: i32, py: i32) -> i64 {

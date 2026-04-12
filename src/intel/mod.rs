@@ -43,6 +43,9 @@ const GUC_WOPCM_OFFSET_ALIGNMENT: u32 = 1 << GUC_WOPCM_OFFSET_SHIFT;
 pub(crate) const GS_BOOTROM_MASK: u32 = 0x7F << 1;
 pub(crate) const GS_UKERNEL_MASK: u32 = 0xFF << 8;
 pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
+const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
+const RENDER_BOOT_PROBE_LOOP_ENABLED: bool = false;
+const RENDER_BOOT_PROBE_INTERVAL_MS: u64 = 16;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 
@@ -129,11 +132,27 @@ pub fn init_once() {
     let warm = self::render::warm_once(dev);
     self::render::log_cursor_plane_info(warm);
     self::render::log_sprite_plane_info(warm);
-    self::display::init_primary_gradient(dev);
+    if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
+        self::display::init_primary_boot_surface(dev);
+    } else {
+        crate::log!("intel/display: plane1 boot demo disabled\n");
+    }
     if self::render::forcewake_render_acquire(warm) {
         self::render::forcewake_render_sanity(warm);
     }
     self::render::submit_primary_triangle_once();
+    if RENDER_BOOT_PROBE_LOOP_ENABLED {
+        crate::log!(
+            "intel/render: scheduled periodic probe interval_ms={}\n",
+            RENDER_BOOT_PROBE_INTERVAL_MS
+        );
+        crate::wait::spawn_local_detached(async move {
+            loop {
+                Timer::after(EmbassyDuration::from_millis(RENDER_BOOT_PROBE_INTERVAL_MS)).await;
+                self::render::submit_primary_probe_periodic();
+            }
+        });
+    }
     if MEDIA_BOOT_DEMO_ENABLED {
         crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
         crate::wait::spawn_local_detached(async move {
@@ -246,7 +265,7 @@ fn forcewake(dev: Dev) {
     wait_eq(dev, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
 }
 
-fn map_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
+fn map_ggtt_pages(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
     for page in 0..len.div_ceil(WARM_ALIGN) {
         let g = gpu + (page as u64) * GGTT_PAGE_BYTES;
         let p = (phys + (page as u64) * GGTT_PAGE_BYTES) & !0xFFF;
@@ -265,6 +284,26 @@ fn map_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
         }
     }
     true
+}
+
+fn ggtt_offset_index(gpu: u64) -> Option<usize> {
+    usize::try_from(gpu / GGTT_PAGE_BYTES)
+        .ok()
+        .and_then(|v| v.checked_mul(8))
+        .filter(|v| *v + 8 <= GGTT_ALIAS_BYTES)
+}
+
+pub(crate) fn map_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
+    map_ggtt_pages(dev, phys, len, gpu)
+}
+
+pub(crate) fn map_display_scanout_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
+    map_ggtt_pages(dev, phys, len, gpu)
+}
+
+pub(crate) fn read_ggtt_pte(dev: Dev, gpu: u64) -> Option<u64> {
+    let idx = ggtt_offset_index(gpu)?;
+    Some(unsafe { core::ptr::read_volatile(dev.mmio.add(GGTT_ALIAS_BASE_OFF + idx) as *const u64) })
 }
 
 fn ggtt_invalidate(dev: Dev) {

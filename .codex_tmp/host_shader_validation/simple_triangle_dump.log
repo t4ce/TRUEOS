@@ -1,0 +1,54 @@
+simple_triangle_dump: pipeline_cache_size=3608
+simple_triangle_dump: executable_count=3
+simple_triangle_dump: executable[0] stage=vertex name="vertex" desc="SIMD8 vertex shader" subgroup=8
+simple_triangle_dump: stat[0][0] name="Instruction Count" value=10
+simple_triangle_dump: stat[0][1] name="SEND Count" value=1
+simple_triangle_dump: stat[0][2] name="Loop Count" value=0
+simple_triangle_dump: stat[0][3] name="Cycle Count" value=30
+simple_triangle_dump: stat[0][4] name="Spill Count" value=0
+simple_triangle_dump: stat[0][5] name="Fill Count" value=0
+simple_triangle_dump: stat[0][6] name="Scratch Memory Size" value=0
+simple_triangle_dump: stat[0][7] name="Max dispatch width" value=8
+simple_triangle_dump: stat[0][8] name="Max live registers" value=13
+simple_triangle_dump: stat[0][9] name="Workgroup Memory Size" value=0
+simple_triangle_dump: stat[0][10] name="Source hash" value=3931601465
+simple_triangle_dump: stat[0][11] name="Non SSA regs after NIR" value=1
+simple_triangle_dump: rep[0][0] name="Final NIR" isText=1 size=980
+simple_triangle_dump: rep[0][1] name="GEN Assembly" isText=1 size=1178
+simple_triangle_dump: executable[1] stage=fragment name="SIMD8 fragment" desc="SIMD8 fragment shader" subgroup=8
+simple_triangle_dump: stat[1][0] name="Instruction Count" value=5
+simple_triangle_dump: stat[1][1] name="SEND Count" value=1
+simple_triangle_dump: stat[1][2] name="Loop Count" value=0
+simple_triangle_dump: stat[1][3] name="Cycle Count" value=20
+simple_triangle_dump: stat[1][4] name="Spill Count" value=0
+simple_triangle_dump: stat[1][5] name="Fill Count" value=0
+simple_triangle_dump: stat[1][6] name="Scratch Memory Size" value=0
+simple_triangle_dump: stat[1][7] name="Max dispatch width" value=16
+simple_triangle_dump: stat[1][8] name="Max live registers" value=5
+simple_triangle_dump: stat[1][9] name="Workgroup Memory Size" value=0
+simple_triangle_dump: stat[1][10] name="Source hash" value=2635955422
+simple_triangle_dump: stat[1][11] name="Non SSA regs after NIR" value=1
+simple_triangle_dump: rep[1][0] name="Final NIR" isText=1 size=787
+simple_triangle_dump: rep[1][1] name="GEN Assembly" isText=1 size=631
+simple_triangle_dump: executable[2] stage=fragment name="SIMD16 fragment" desc="SIMD16 fragment shader" subgroup=16
+simple_triangle_dump: stat[2][0] name="Instruction Count" value=5
+simple_triangle_dump: stat[2][1] name="SEND Count" value=1
+simple_triangle_dump: stat[2][2] name="Loop Count" value=0
+simple_triangle_dump: stat[2][3] name="Cycle Count" value=28
+simple_triangle_dump: stat[2][4] name="Spill Count" value=0
+simple_triangle_dump: stat[2][5] name="Fill Count" value=0
+simple_triangle_dump: stat[2][6] name="Scratch Memory Size" value=0
+simple_triangle_dump: stat[2][7] name="Max dispatch width" value=0
+simple_triangle_dump: stat[2][8] name="Max live registers" value=9
+simple_triangle_dump: stat[2][9] name="Workgroup Memory Size" value=0
+simple_triangle_dump: stat[2][10] name="Source hash" value=2635955422
+simple_triangle_dump: stat[2][11] name="Non SSA regs after NIR" value=1
+simple_triangle_dump: rep[2][0] name="Final NIR" isText=1 size=787
+simple_triangle_dump: rep[2][1] name="GEN Assembly" isText=1 size=632
+simple_triangle_dump: center=0xFFFF4000 bytes=[00 40 FF FF]
+simple_triangle_dump: up=0xFFFF4000 bytes=[00 40 FF FF]
+simple_triangle_dump: down=0xFFFF4000 bytes=[00 40 FF FF]
+simple_triangle_dump: left=0xFFFF4000 bytes=[00 40 FF FF]
+simple_triangle_dump: right=0xFFFF4000 bytes=[00 40 FF FF]
+simple_triangle_dump: corner=0xFF000000 bytes=[00 00 00 FF]
+simple_triangle_dump: verified=1
