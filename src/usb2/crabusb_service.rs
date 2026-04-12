@@ -392,7 +392,7 @@ pub async fn event_pump_task(controller_id: usize) {
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn bsp_service(controller_index: usize) {
     const USB_BRINGUP_ENABLED: bool = true;
-    const BOOT_USB_DEFER_MS: u64 = 5_000;
+    const BOOT_USB_DEFER_MS: u64 = 500;
     const RETRY_MS: u64 = 1000;
     const INTEL_PROBE_SETTLE_MS: u64 = 1500;
     const INTEL_REPROBE_MS: u64 = 1500;
