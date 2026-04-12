@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 #include <vulkan/vulkan.h>
 
@@ -65,12 +67,7 @@ static uint32_t find_memory_type(
     exit(1);
 }
 
-static int is_expected_green(uint32_t pixel) {
-    const uint8_t r = (uint8_t)((pixel >> 16) & 0xFF);
-    const uint8_t g = (uint8_t)((pixel >> 8) & 0xFF);
-    const uint8_t b = (uint8_t)(pixel & 0xFF);
-    return r <= 8 && g >= 0xF0 && b <= 8;
-}
+static int is_expected_triangle_color(uint32_t pixel) { return pixel == 0xFFFF4000; }
 
 static void dump_pixel(const char *label, uint32_t pixel) {
     const uint8_t b0 = (uint8_t)(pixel & 0xFF);
@@ -86,6 +83,234 @@ static void dump_pixel(const char *label, uint32_t pixel) {
         b2,
         b3
     );
+}
+
+static const char *stage_name(VkShaderStageFlags stage) {
+    switch (stage) {
+        case VK_SHADER_STAGE_VERTEX_BIT:
+            return "vertex";
+        case VK_SHADER_STAGE_FRAGMENT_BIT:
+            return "fragment";
+        default:
+            return "unknown";
+    }
+}
+
+static void sanitize_name(const char *src, char *dst, size_t dst_size) {
+    size_t j = 0;
+    if (dst_size == 0) {
+        return;
+    }
+    for (size_t i = 0; src[i] != '\0' && j + 1 < dst_size; ++i) {
+        const char c = src[i];
+        if ((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9')) {
+            dst[j++] = c;
+        } else {
+            dst[j++] = '_';
+        }
+    }
+    dst[j] = '\0';
+}
+
+static void ensure_dir(const char *path) {
+    if (!path || !path[0]) {
+        return;
+    }
+    if (mkdir(path, 0755) == 0 || errno == EEXIST) {
+        return;
+    }
+    fprintf(stderr, "failed to mkdir %s: %s\n", path, strerror(errno));
+    exit(1);
+}
+
+static void write_blob_file(const char *dir, const char *name, const void *data, size_t size) {
+    if (!dir || !dir[0]) {
+        return;
+    }
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    FILE *file = fopen(path, "wb");
+    if (!file) {
+        fprintf(stderr, "failed to open %s: %s\n", path, strerror(errno));
+        exit(1);
+    }
+    if (size > 0 && fwrite(data, 1, size, file) != size) {
+        fprintf(stderr, "failed to write %s\n", path);
+        fclose(file);
+        exit(1);
+    }
+    fclose(file);
+}
+
+static void dump_pipeline_cache_blob(VkDevice device, VkPipelineCache cache) {
+    const char *out_dir = getenv("TRUEOS_EXECUTABLE_DUMP_DIR");
+    if (!out_dir || !out_dir[0]) {
+        return;
+    }
+
+    size_t cache_size = 0;
+    CHECK_VK(vkGetPipelineCacheData(device, cache, &cache_size, NULL));
+    if (cache_size == 0) {
+        printf("simple_triangle_dump: pipeline_cache_size=0\n");
+        return;
+    }
+
+    void *cache_data = malloc(cache_size);
+    if (!cache_data) {
+        fprintf(stderr, "oom allocating pipeline cache buffer (%zu bytes)\n", cache_size);
+        exit(1);
+    }
+    CHECK_VK(vkGetPipelineCacheData(device, cache, &cache_size, cache_data));
+    printf("simple_triangle_dump: pipeline_cache_size=%zu\n", cache_size);
+    write_blob_file(out_dir, "pipeline_cache.bin", cache_data, cache_size);
+    free(cache_data);
+}
+
+static void dump_pipeline_executables(VkDevice device, VkPipeline pipeline) {
+    PFN_vkGetPipelineExecutablePropertiesKHR get_props =
+        (PFN_vkGetPipelineExecutablePropertiesKHR)vkGetDeviceProcAddr(
+            device, "vkGetPipelineExecutablePropertiesKHR"
+        );
+    PFN_vkGetPipelineExecutableStatisticsKHR get_stats =
+        (PFN_vkGetPipelineExecutableStatisticsKHR)vkGetDeviceProcAddr(
+            device, "vkGetPipelineExecutableStatisticsKHR"
+        );
+    PFN_vkGetPipelineExecutableInternalRepresentationsKHR get_reps =
+        (PFN_vkGetPipelineExecutableInternalRepresentationsKHR)vkGetDeviceProcAddr(
+            device, "vkGetPipelineExecutableInternalRepresentationsKHR"
+        );
+    if (!get_props || !get_stats || !get_reps) {
+        printf("simple_triangle_dump: pipeline executable introspection unavailable\n");
+        return;
+    }
+
+    const char *out_dir = getenv("TRUEOS_EXECUTABLE_DUMP_DIR");
+    ensure_dir(out_dir);
+
+    const VkPipelineInfoKHR pipeline_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR,
+        .pipeline = pipeline,
+    };
+    uint32_t executable_count = 0;
+    CHECK_VK(get_props(device, &pipeline_info, &executable_count, NULL));
+    if (executable_count == 0) {
+        printf("simple_triangle_dump: executable_count=0\n");
+        return;
+    }
+
+    VkPipelineExecutablePropertiesKHR *props =
+        calloc(executable_count, sizeof(*props));
+    for (uint32_t i = 0; i < executable_count; ++i) {
+        props[i].sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR;
+    }
+    CHECK_VK(get_props(device, &pipeline_info, &executable_count, props));
+    printf("simple_triangle_dump: executable_count=%u\n", executable_count);
+
+    for (uint32_t exec = 0; exec < executable_count; ++exec) {
+        const VkPipelineExecutableInfoKHR exec_info = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR,
+            .pipeline = pipeline,
+            .executableIndex = exec,
+        };
+        char stage_tag[64];
+        sanitize_name(stage_name(props[exec].stages), stage_tag, sizeof(stage_tag));
+        printf(
+            "simple_triangle_dump: executable[%u] stage=%s name=\"%s\" desc=\"%s\" subgroup=%u\n",
+            exec,
+            stage_name(props[exec].stages),
+            props[exec].name,
+            props[exec].description,
+            props[exec].subgroupSize
+        );
+
+        uint32_t stat_count = 0;
+        CHECK_VK(get_stats(device, &exec_info, &stat_count, NULL));
+        if (stat_count > 0) {
+            VkPipelineExecutableStatisticKHR *stats =
+                calloc(stat_count, sizeof(*stats));
+            for (uint32_t i = 0; i < stat_count; ++i) {
+                stats[i].sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR;
+            }
+            CHECK_VK(get_stats(device, &exec_info, &stat_count, stats));
+            for (uint32_t i = 0; i < stat_count; ++i) {
+                char value_text[128];
+                switch (stats[i].format) {
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
+                        snprintf(value_text, sizeof(value_text), "%u", stats[i].value.b32);
+                        break;
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
+                        snprintf(value_text, sizeof(value_text), "%lld", (long long)stats[i].value.i64);
+                        break;
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
+                        snprintf(value_text, sizeof(value_text), "%llu", (unsigned long long)stats[i].value.u64);
+                        break;
+                    case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_FLOAT64_KHR:
+                        snprintf(value_text, sizeof(value_text), "%.3f", stats[i].value.f64);
+                        break;
+                    default:
+                        snprintf(value_text, sizeof(value_text), "unknown");
+                        break;
+                }
+                printf(
+                    "simple_triangle_dump: stat[%u][%u] name=\"%s\" value=%s\n",
+                    exec,
+                    i,
+                    stats[i].name,
+                    value_text
+                );
+            }
+            free(stats);
+        }
+
+        uint32_t rep_count = 0;
+        CHECK_VK(get_reps(device, &exec_info, &rep_count, NULL));
+        if (rep_count > 0) {
+            VkPipelineExecutableInternalRepresentationKHR *reps =
+                calloc(rep_count, sizeof(*reps));
+            for (uint32_t i = 0; i < rep_count; ++i) {
+                reps[i].sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INTERNAL_REPRESENTATION_KHR;
+            }
+            CHECK_VK(get_reps(device, &exec_info, &rep_count, reps));
+            for (uint32_t i = 0; i < rep_count; ++i) {
+                if (reps[i].dataSize > 0) {
+                    reps[i].pData = malloc(reps[i].dataSize);
+                }
+            }
+            CHECK_VK(get_reps(device, &exec_info, &rep_count, reps));
+            for (uint32_t i = 0; i < rep_count; ++i) {
+                char rep_tag[128];
+                sanitize_name(reps[i].name, rep_tag, sizeof(rep_tag));
+                printf(
+                    "simple_triangle_dump: rep[%u][%u] name=\"%s\" isText=%u size=%zu\n",
+                    exec,
+                    i,
+                    reps[i].name,
+                    reps[i].isText,
+                    reps[i].dataSize
+                );
+                if (out_dir && out_dir[0] && reps[i].pData && reps[i].dataSize > 0) {
+                    char file_name[256];
+                    snprintf(
+                        file_name,
+                        sizeof(file_name),
+                        "%02u_%s_%02u_%s.%s",
+                        exec,
+                        stage_tag,
+                        i,
+                        rep_tag,
+                        reps[i].isText ? "txt" : "bin"
+                    );
+                    write_blob_file(out_dir, file_name, reps[i].pData, reps[i].dataSize);
+                }
+                free(reps[i].pData);
+            }
+            free(reps);
+        }
+    }
+
+    free(props);
 }
 
 int main(int argc, char **argv) {
@@ -156,10 +381,20 @@ int main(int argc, char **argv) {
         .queueCount = 1,
         .pQueuePriorities = &queue_priority,
     };
+    const char *device_extensions[] = {
+        VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME,
+    };
     const VkDeviceCreateInfo device_info = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .pNext = &(VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR) {
+            .sType =
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR,
+            .pipelineExecutableInfo = VK_TRUE,
+        },
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &queue_info,
+        .enabledExtensionCount = 1,
+        .ppEnabledExtensionNames = device_extensions,
     };
 
     VkDevice device;
@@ -373,8 +608,16 @@ int main(int argc, char **argv) {
     VkPipelineLayout pipeline_layout;
     CHECK_VK(vkCreatePipelineLayout(device, &pipeline_layout_info, NULL, &pipeline_layout));
 
+    const VkPipelineCacheCreateInfo pipeline_cache_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+    };
+    VkPipelineCache pipeline_cache;
+    CHECK_VK(vkCreatePipelineCache(device, &pipeline_cache_info, NULL, &pipeline_cache));
+
     const VkGraphicsPipelineCreateInfo pipeline_info = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .flags = VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR |
+                 VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR,
         .stageCount = 2,
         .pStages = stages,
         .pVertexInputState = &vertex_input,
@@ -388,7 +631,9 @@ int main(int argc, char **argv) {
         .subpass = 0,
     };
     VkPipeline pipeline;
-    CHECK_VK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &pipeline));
+    CHECK_VK(vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, NULL, &pipeline));
+    dump_pipeline_cache_blob(device, pipeline_cache);
+    dump_pipeline_executables(device, pipeline);
 
     const float vertices[9] = {
         0.0f, 0.72f, 0.0f,
@@ -568,13 +813,13 @@ int main(int argc, char **argv) {
     dump_pixel("left", left);
     dump_pixel("right", right);
     dump_pixel("corner", corner);
-    printf("simple_triangle_dump: verified=%d\n", is_expected_green(center));
+    printf("simple_triangle_dump: verified=%d\n", is_expected_triangle_color(center));
     vkUnmapMemory(device, readback_memory);
 
-    if (!is_expected_green(center)) {
+    if (!is_expected_triangle_color(center)) {
         fprintf(
             stderr,
-            "simple_triangle_dump: verification failed, expected center pixel to be green\n"
+            "simple_triangle_dump: verification failed, expected center pixel to match the trivial triangle color\n"
         );
         return 2;
     }
@@ -584,6 +829,7 @@ int main(int argc, char **argv) {
     vkDestroyBuffer(device, readback_buffer, NULL);
     vkFreeMemory(device, readback_memory, NULL);
     vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyPipelineCache(device, pipeline_cache, NULL);
     vkDestroyPipelineLayout(device, pipeline_layout, NULL);
     vkDestroyShaderModule(device, vs_module, NULL);
     vkDestroyShaderModule(device, fs_module, NULL);
