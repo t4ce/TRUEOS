@@ -81,7 +81,7 @@ const RCS_EXEC_RESULT_DRAW_POST_PS_STATE: u32 = 0xC0DE_7725;
 const RCS_EXEC_RESULT_DRAW_POST_CLIP: u32 = 0xC0DE_7726;
 const RCS_EXEC_RESULT_DRAW_POST_RASTER: u32 = 0xC0DE_7727;
 const RCS_EXEC_RESULT_DRAW_POST3D: u32 = 0xC0DE_7722;
-const PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS: usize = 1;
+const PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS: usize = 3;
 const PRIMARY_USE_MI_STRIPE_PROBE: bool = false;
 const PRIMARY_USE_3D_NO_DRAW_PROBE: bool = false;
 const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = true;
@@ -128,6 +128,8 @@ const CMD_3DSTATE_HS: u32 = 7 | (27 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_TE: u32 = 3 | (28 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_DS: u32 = 9 | (29 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_STREAMOUT: u32 = 3 | (30 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_SO_BUFFER_INDEX_0: u32 = 6 | (0x60 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_SO_DECL_LIST_1: u32 = 3 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SBE: u32 = 4 | (31 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_PS: u32 = 10 | (32 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP: u32 = (33 << 16) | (3 << 27) | (3 << 29);
@@ -146,6 +148,7 @@ const CMD_3DSTATE_SAMPLE_MASK: u32 = (24 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_PS_BLEND: u32 = (77 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_WM_DEPTH_STENCIL: u32 = 2 | (78 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_PS_EXTRA: u32 = (79 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_DEPTH_BOUNDS: u32 = 2 | (113 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_RASTER: u32 = 3 | (80 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SBE_SWIZ: u32 = 9 | (81 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_URB_ALLOC_HS: u32 = 1 | (89 << 16) | (3 << 27) | (3 << 29);
@@ -164,6 +167,7 @@ const PIPE_CONTROL_INVALIDATE_BITS: u32 =
     (1 << 2) | (1 << 3) | (1 << 4) | (1 << 10) | (1 << 11) | (1 << 18) | (1 << 20);
 const PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
 const PIPE_CONTROL_DEST_GGTT: u32 = 1 << 24;
+const PIPE_CONTROL_CS_STALL: u32 = 1 << 20;
 const RESULT_SLOT_PRE3D_DWORD: usize = 0;
 const RESULT_SLOT_POST3D_DWORD: usize = 1;
 const RESULT_SLOT_FINAL_DWORD: usize = 2;
@@ -172,6 +176,11 @@ const RESULT_SLOT_POST_VS_DWORD: usize = 4;
 const RESULT_SLOT_POST_PS_STATE_DWORD: usize = 5;
 const RESULT_SLOT_POST_CLIP_DWORD: usize = 6;
 const RESULT_SLOT_POST_RASTER_DWORD: usize = 7;
+const RESULT_STREAMOUT_PROOF_OFFSET: usize = 0x100;
+const RESULT_STREAMOUT_PROOF_GPU_ADDR: u64 =
+    GPU_VA_RESULT_BASE + RESULT_STREAMOUT_PROOF_OFFSET as u64;
+const STREAMOUT_PROOF_VERTEX_BYTES: usize = 16;
+const TRIANGLE_TOPOLOGY_POINTLIST: u32 = 1;
 const TRIANGLE_TOPOLOGY_TRILIST: u32 = 4;
 const TRIANGLE_PS_MAX_THREADS: u32 = 63;
 const TRIANGLE_VS_URB_START: u32 = 4;
@@ -184,6 +193,11 @@ const TRIANGLE_MAX_H: usize = 18;
 const TRIANGLE_DRAW_VERTICES: usize = 3;
 const TRIANGLE_DRAW_VERTEX_DWORDS: usize = crate::intel::shader::TRIANGLE_VERTEX_COMPONENTS;
 const TRIANGLE_DRAW_VERTEX_STRIDE: usize = crate::intel::shader::TRIANGLE_VERTEX_STRIDE_BYTES;
+const TRIANGLE_STATS_LOG: [crate::intel::stats::RenderStat; 3] = [
+    crate::intel::stats::RenderStat::IaVerticesCount,
+    crate::intel::stats::RenderStat::IaPrimitivesCount,
+    crate::intel::stats::RenderStat::VsInvocationCount,
+];
 
 #[derive(Copy, Clone, Debug)]
 pub struct RenderWarmState {
@@ -250,6 +264,57 @@ struct TriangleProbeStateLayout {
     color_calc_state_offset_bytes: u32,
     cc_viewport_offset_bytes: u32,
     sf_clip_viewport_offset_bytes: u32,
+}
+
+#[derive(Copy, Clone)]
+enum TriangleBlendProbeMode {
+    ExplicitRt0,
+    MesaZeroedState,
+    MesaZeroedNoBlendPointer,
+}
+
+impl TriangleBlendProbeMode {
+    fn for_attempt(attempt: usize) -> Self {
+        match attempt {
+            2 => Self::MesaZeroedState,
+            3 => Self::MesaZeroedNoBlendPointer,
+            _ => Self::ExplicitRt0,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::ExplicitRt0 => "explicit-rt0",
+            Self::MesaZeroedState => "mesa-zeroed",
+            Self::MesaZeroedNoBlendPointer => "mesa-zeroed-no-blend-ptr",
+        }
+    }
+
+    fn blend_state_pointer_dword(self, offset_bytes: u32) -> u32 {
+        match self {
+            Self::MesaZeroedNoBlendPointer => 0,
+            _ => offset_bytes | 1,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum TriangleBatchMode {
+    Draw,
+    StreamoutProof,
+}
+
+impl TriangleBatchMode {
+    fn topology(self) -> u32 {
+        match self {
+            Self::Draw => TRIANGLE_TOPOLOGY_TRILIST,
+            Self::StreamoutProof => TRIANGLE_TOPOLOGY_POINTLIST,
+        }
+    }
+
+    fn streamout_enabled(self) -> bool {
+        matches!(self, Self::StreamoutProof)
+    }
 }
 
 unsafe impl Send for RenderWarmState {}
@@ -687,6 +752,19 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         );
         if !completed {
             crate::log!("intel/render: primary-draw-path submit failed trigger={}\n", reason);
+            let so_completed = submit_triangle_streamout_proof(
+                dev,
+                warm,
+                surface_gpu,
+                pitch_bytes,
+                width as usize,
+                height as usize,
+            );
+            crate::log!(
+                "intel/render: primary-streamout-proof trigger={} completed={}\n",
+                reason,
+                so_completed as u8
+            );
         }
         completed
     } else if PRIMARY_USE_MI_STRIPE_PROBE {
@@ -762,13 +840,22 @@ fn submit_primary_triangle_with_retries(
 ) -> bool {
     let mut completed_any = false;
     for attempt in 1..=PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS {
-        let completed =
-            submit_triangle_draw_to_surface(dev, warm, surface_gpu, pitch_bytes, width, height);
+        let blend_mode = TriangleBlendProbeMode::for_attempt(attempt);
+        let completed = submit_triangle_draw_to_surface(
+            dev,
+            warm,
+            surface_gpu,
+            pitch_bytes,
+            width,
+            height,
+            blend_mode,
+        );
         crate::log!(
-            "intel/render: primary-triangle attempt={}/{} target=0x{:X} completed={}\n",
+            "intel/render: primary-triangle attempt={}/{} target=0x{:X} blend_probe={} completed={}\n",
             attempt,
             PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS,
             surface_gpu,
+            blend_mode.label(),
             completed as u8
         );
         completed_any |= completed;
@@ -777,6 +864,109 @@ fn submit_primary_triangle_with_retries(
         }
     }
     completed_any
+}
+
+fn submit_triangle_streamout_proof(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+) -> bool {
+    let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
+    else {
+        crate::log!(
+            "intel/render: streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
+            rect_w,
+            rect_h,
+            pitch
+        );
+        return false;
+    };
+    let pipeline = crate::intel::shader::triangle_pipeline();
+    if crate::intel::shader::triangle_pipeline_is_placeholder() {
+        crate::log!("intel/render: streamout-proof skipped reason=placeholder-pipeline\n");
+        return false;
+    }
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: streamout-proof skipped reason=shader-layout detail={}\n",
+                reason
+            );
+            return false;
+        }
+    };
+    let probe_state = match write_triangle_probe_state(
+        warm,
+        draw,
+        shader_layout,
+        TriangleBlendProbeMode::ExplicitRt0,
+    ) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: streamout-proof skipped reason=probe-state detail={}\n",
+                reason
+            );
+            return false;
+        }
+    };
+
+    unsafe {
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        for i in 0..8 {
+            core::ptr::write_volatile((warm.result_virt as *mut u32).add(i), 0xC0DE_7700);
+        }
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let batch_tail_bytes = match encode_triangle_probe_batch(
+        batch,
+        warm,
+        draw,
+        TriangleBlendProbeMode::ExplicitRt0,
+        pipeline,
+        shader_layout,
+        probe_state,
+        GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_DRAW_PRE3D,
+        RCS_EXEC_RESULT_DRAW_POST3D,
+        RCS_EXEC_RESULT_DONE,
+        TriangleBatchMode::StreamoutProof,
+    ) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            crate::log!("intel/render: streamout-proof batch build failed detail={}\n", reason);
+            return false;
+        }
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
+
+    crate::log!(
+        "intel/render: streamout-proof batch-ready bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
+        batch_tail_bytes,
+        RESULT_STREAMOUT_PROOF_GPU_ADDR,
+        STREAMOUT_PROOF_VERTEX_BYTES,
+        draw.vertex_count
+    );
+
+    let completed = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_DONE,
+        RESULT_SLOT_FINAL_DWORD,
+        "streamout-proof",
+    );
+    log_streamout_proof_result(warm, completed, draw.vertex_count as usize);
+    completed
 }
 
 fn wait_eq(dev: crate::intel::Dev, reg: usize, mask: u32, want: u32, n: usize) -> bool {
@@ -832,6 +1022,7 @@ fn submit_triangle_draw_to_surface(
     pitch: usize,
     rect_w: usize,
     rect_h: usize,
+    blend_mode: TriangleBlendProbeMode,
 ) -> bool {
     let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
     else {
@@ -916,7 +1107,7 @@ fn submit_triangle_draw_to_surface(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state = match write_triangle_probe_state(warm, draw, shader_layout) {
+    let probe_state = match write_triangle_probe_state(warm, draw, shader_layout, blend_mode) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -949,6 +1140,7 @@ fn submit_triangle_draw_to_surface(
         batch,
         warm,
         draw,
+        blend_mode,
         pipeline,
         shader_layout,
         probe_state,
@@ -956,6 +1148,7 @@ fn submit_triangle_draw_to_surface(
         RCS_EXEC_RESULT_DRAW_PRE3D,
         RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
+        TriangleBatchMode::Draw,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
@@ -978,6 +1171,7 @@ fn submit_triangle_draw_to_surface(
         probe_state.cc_viewport_offset_bytes,
         probe_state.sf_clip_viewport_offset_bytes
     );
+    crate::log!("intel/render: draw-path blend-probe={}\n", blend_mode.label());
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
     submit_warm_render_batch(dev, warm, RCS_EXEC_RESULT_DONE, RESULT_SLOT_FINAL_DWORD, "draw-path")
@@ -1182,6 +1376,7 @@ fn write_triangle_probe_state(
     warm: RenderWarmState,
     draw: TriangleDrawPrep,
     shader_layout: TriangleShaderLayout,
+    blend_mode: TriangleBlendProbeMode,
 ) -> Result<TriangleProbeStateLayout, &'static str> {
     let mut cursor = shader_layout.state_region_offset_bytes as usize;
     let binding_table_offset = cursor;
@@ -1230,10 +1425,17 @@ fn write_triangle_probe_state(
 
     let blend = &mut dwords[blend_state_offset / 4..blend_state_offset / 4 + 16];
     blend.fill(0);
-    // Program RT0 as an explicit no-blend, write-enabled target rather than
-    // relying on "all zeros probably means fine".
-    blend[0] = 0;
-    blend[1] = (1 << 0) | (1 << 1) | (2 << 2);
+    match blend_mode {
+        // Keep the existing explicit RT0 setup as the baseline attempt.
+        TriangleBlendProbeMode::ExplicitRt0 => {
+            blend[0] = 0;
+            blend[1] = (1 << 0) | (1 << 1) | (2 << 2);
+        }
+        // Mesa's trivial path mainly relies on PS_BLEND HasWriteableRT with a
+        // boring zeroed blend-state payload.
+        TriangleBlendProbeMode::MesaZeroedState
+        | TriangleBlendProbeMode::MesaZeroedNoBlendPointer => {}
+    }
 
     let color_calc = &mut dwords[color_calc_state_offset / 4..color_calc_state_offset / 4 + 16];
     color_calc.fill(0);
@@ -1280,6 +1482,7 @@ fn encode_triangle_probe_batch(
     batch_dwords: &mut [u32],
     warm: RenderWarmState,
     draw: TriangleDrawPrep,
+    blend_mode: TriangleBlendProbeMode,
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     shader_layout: TriangleShaderLayout,
     probe_state: TriangleProbeStateLayout,
@@ -1287,6 +1490,7 @@ fn encode_triangle_probe_batch(
     pre3d_value: u32,
     post3d_value: u32,
     done_value: u32,
+    batch_mode: TriangleBatchMode,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
 
@@ -1424,8 +1628,13 @@ fn encode_triangle_probe_batch(
         .saturating_sub(shader_layout.state_region_offset_bytes as usize);
     let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
     let ps_ksp_offset = shader_layout.ps.code_offset_bytes + shader_layout.ps.ksp_offset_bytes;
-    let sbe_vertex_read_length = (pipeline.ps.meta.num_varying_inputs as u32).div_ceil(2);
-    let sbe_dw1 = (1 << 21)
+    // Mesa still forces a one-slot URB read even when the PS consumes no
+    // varyings. A zero read length appears legal on paper but is a strong
+    // suspect for our "batch completes, no color writes" failure mode.
+    let sbe_vertex_read_length =
+        core::cmp::max((pipeline.ps.meta.num_varying_inputs as u32).div_ceil(2), 1);
+    let sbe_dw1 = (1 << 5)
+        | (1 << 21)
         | ((pipeline.ps.meta.num_varying_inputs as u32) << 22)
         | (1 << 28)
         | (1 << 29)
@@ -1438,20 +1647,26 @@ fn encode_triangle_probe_batch(
     let clip_dw1 = (1 << 17) | (1 << 18);
     let clip_dw2 = (2 << 0) | (1 << 2) | (2 << 4) | (1 << 26) | (1 << 31);
     let clip_dw3 = (2047 << 6) | (1 << 17);
-    let sf_dw1 = (1 << 1) | (1 << 10) | (128 << 12);
+    // Keep SF close to the trivial host path: no statistics, no custom line
+    // width programming, just enable the normal viewport transform.
+    let sf_dw1 = (1 << 1) | (1 << 10);
     let sf_dw2 = 0;
-    let sf_dw3 = 8 | (1 << 11) | (1 << 14) | (2 << 25) | (1 << 27) | (2 << 29);
-    let raster_dw1 = (1 << 0) | (1 << 16) | (1 << 21) | (1 << 26);
+    let sf_dw3 = 0;
+    // Match the host trivial-path intent as directly as possible: no AA, no
+    // scissor, solid fill, cull none, and CCW front winding.
+    let raster_dw1 = (1 << 16) | (1 << 21);
     let raster_dw2 = 0;
     let raster_dw3 = 0;
     let raster_dw4 = 0;
-    let wm_dw1 = WM_FORCE_KILL_PIXEL_OFF | (1 << 2) | (1 << 6);
+    // Mesa's simple-shader path emits a nearly all-default WM packet here.
+    // Keep this dedicated triangle path equally boring rather than forcing
+    // point-rule / line-AA bits that the host reference never asked for.
+    let wm_dw1 = 1 << 31;
     let ps_dw3 =
         (binding_table_entry_count_encoding(pipeline.ps.meta.kernel.binding_table_entry_count)
             << 18)
             | (sampler_count_encoding(pipeline.ps.meta.kernel.sampler_count) << 27)
-            | (u32::from(pipeline.ps.meta.uses_vmask) * PS_VECTOR_MASK_ENABLE)
-            | PS_SINGLE_PROGRAM_FLOW;
+            | (u32::from(pipeline.ps.meta.uses_vmask) * PS_VECTOR_MASK_ENABLE);
     let ps_dw6 = ps_dispatch_8
         | (ps_dispatch_16 << 1)
         | (ps_dispatch_32 << 2)
@@ -1555,7 +1770,7 @@ fn encode_triangle_probe_batch(
     )?;
 
     log_batch_offset(cursor, "3DSTATE_VF_STATISTICS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_STATISTICS)?;
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_STATISTICS | 1)?;
     log_batch_offset(cursor, "3DSTATE_VF");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -1572,7 +1787,7 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_VF_TOPOLOGY");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_TOPOLOGY)?;
-    push(batch_dwords, &mut cursor, TRIANGLE_TOPOLOGY_TRILIST)?;
+    push(batch_dwords, &mut cursor, batch_mode.topology())?;
     log_batch_offset(cursor, "MI_STORE_DATA_IMM post-vf");
     push_store_data_imm(
         batch_dwords,
@@ -1621,7 +1836,11 @@ fn encode_triangle_probe_batch(
         &mut cursor,
         (1 << 11) | ((pipeline.vs.meta.kernel.grf_start_register as u32) << 20),
     )?;
-    push(batch_dwords, &mut cursor, 1 | (1 << 2) | ((pipeline.vs.meta.max_threads as u32) << 22))?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        1 | (1 << 2) | (1 << 10) | ((pipeline.vs.meta.max_threads as u32) << 22),
+    )?;
     push(batch_dwords, &mut cursor, ((pipeline.vs.meta.urb_entry_output_length as u32) << 16))?;
     log_batch_offset(cursor, "MI_STORE_DATA_IMM post-vs");
     push_store_data_imm(
@@ -1648,8 +1867,44 @@ fn encode_triangle_probe_batch(
     }
     log_batch_offset(cursor, "3DSTATE_STREAMOUT");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_STREAMOUT)?;
-    for _ in 0..4 {
+    if batch_mode.streamout_enabled() {
+        push(batch_dwords, &mut cursor, (1 << 25) | (1 << 30) | (1 << 31))?;
         push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, STREAMOUT_PROOF_VERTEX_BYTES as u32)?;
+        push(batch_dwords, &mut cursor, 0)?;
+
+        log_batch_offset(cursor, "PIPE_CONTROL pre-so-buffer");
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+        log_batch_offset(cursor, "3DSTATE_SO_BUFFER_INDEX_0");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_SO_BUFFER_INDEX_0)?;
+        push(batch_dwords, &mut cursor, (RENDER_MOCS << 22) | (1 << 21) | (1 << 31))?;
+        push_addr(batch_dwords, &mut cursor, RESULT_STREAMOUT_PROOF_GPU_ADDR)?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            (warm
+                .result_len
+                .saturating_sub(RESULT_STREAMOUT_PROOF_OFFSET)
+                / 4)
+            .saturating_sub(1) as u32,
+        )?;
+        push_addr(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        log_batch_offset(cursor, "PIPE_CONTROL post-so-buffer");
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+
+        log_batch_offset(cursor, "3DSTATE_SO_DECL_LIST");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_SO_DECL_LIST_1)?;
+        push(batch_dwords, &mut cursor, 1)?;
+        push(batch_dwords, &mut cursor, 1)?;
+        push(batch_dwords, &mut cursor, 0x0000_000F)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        log_batch_offset(cursor, "PIPE_CONTROL post-so-decl");
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+    } else {
+        for _ in 0..4 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
     }
     log_batch_offset(cursor, "3DSTATE_GS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_GS)?;
@@ -1715,13 +1970,25 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
 
+    // Match Mesa's gfx12 trivial path and avoid relying on inherited depth
+    // bounds state from earlier firmware or display bring-up.
+    log_batch_offset(cursor, "3DSTATE_DEPTH_BOUNDS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_DEPTH_BOUNDS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0.0f32.to_bits())?;
+    push(batch_dwords, &mut cursor, 1.0f32.to_bits())?;
+
     log_batch_offset(cursor, "3DSTATE_CC_STATE_POINTERS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_CC_STATE_POINTERS)?;
     push(batch_dwords, &mut cursor, probe_state.color_calc_state_offset_bytes | 1)?;
 
     log_batch_offset(cursor, "3DSTATE_BLEND_STATE_POINTERS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BLEND_STATE_POINTERS)?;
-    push(batch_dwords, &mut cursor, probe_state.blend_state_offset_bytes | 1)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        blend_mode.blend_state_pointer_dword(probe_state.blend_state_offset_bytes),
+    )?;
 
     log_batch_offset(cursor, "3DSTATE_PS_BLEND");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_BLEND)?;
@@ -1779,19 +2046,20 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DPRIMITIVE");
     push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
-    push(batch_dwords, &mut cursor, TRIANGLE_TOPOLOGY_TRILIST)?;
+    push(batch_dwords, &mut cursor, batch_mode.topology())?;
     push(batch_dwords, &mut cursor, draw.vertex_count)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 1)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
 
-    log_batch_offset(cursor, "MI_STORE_DATA_IMM post-3d");
-    push_store_data_imm(
+    log_batch_offset(cursor, "PIPE_CONTROL post-3d-eop-flush");
+    push_pipe_control_post_sync_write(
         batch_dwords,
         &mut cursor,
         result_gpu_addr + (RESULT_SLOT_POST3D_DWORD as u64) * 4,
         post3d_value,
+        PIPE_CONTROL_FLUSH_BITS,
     )?;
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM final");
@@ -1806,7 +2074,8 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, MI_NOOP)?;
 
     crate::log!(
-        "intel/render: probe-3d clip=[0x{:08X},0x{:08X},0x{:08X}] sf=[0x{:08X},0x{:08X},0x{:08X}] raster=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] wm=0x{:08X} ps3=0x{:08X} ps6=0x{:08X} ps7=0x{:08X} ps_extra=0x{:08X}\n",
+        "intel/render: probe-3d sbe=0x{:08X} clip=[0x{:08X},0x{:08X},0x{:08X}] sf=[0x{:08X},0x{:08X},0x{:08X}] raster=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] wm=0x{:08X} ps3=0x{:08X} ps6=0x{:08X} ps7=0x{:08X} ps_extra=0x{:08X}\n",
+        sbe_dw1,
         clip_dw1,
         clip_dw2,
         clip_dw3,
@@ -1822,6 +2091,19 @@ fn encode_triangle_probe_batch(
         ps_dw6,
         ps_dw7,
         ps_extra_dw1
+    );
+    crate::log!(
+        "intel/render: 3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances={} start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{}\n",
+        batch_mode,
+        primitive_topology_label(batch_mode.topology()),
+        draw.vertex_count,
+        1,
+        draw.vertex_gpu_addr,
+        draw.vertex_stride,
+        draw.rt_gpu_addr,
+        draw.rt_pitch,
+        draw.target_w,
+        draw.target_h
     );
 
     Ok(cursor * core::mem::size_of::<u32>())
@@ -2424,12 +2706,87 @@ fn submit_warm_render_batch(
         );
         crate::intel::display::log_primary_surface_samples("post-render");
     }
+    if submit_name == "draw-path" {
+        crate::log!(
+            "intel/render: 3dprimitive-result completed={} pre3d={} post3d={} final={} vf={} vs={} ps={} clip={} raster={} acthd=0x{:08X} ipehr=0x{:08X}\n",
+            completed as u8,
+            result0 == RCS_EXEC_RESULT_DRAW_PRE3D,
+            result1 == RCS_EXEC_RESULT_DRAW_POST3D,
+            result2 == RCS_EXEC_RESULT_DONE,
+            result3 == RCS_EXEC_RESULT_DRAW_POST_VF,
+            result4 == RCS_EXEC_RESULT_DRAW_POST_VS,
+            result5 == RCS_EXEC_RESULT_DRAW_POST_PS_STATE,
+            result6 == RCS_EXEC_RESULT_DRAW_POST_CLIP,
+            result7 == RCS_EXEC_RESULT_DRAW_POST_RASTER,
+            crate::intel::mmio_read(dev, RCS_RING_ACTHD),
+            crate::intel::mmio_read(dev, RCS_RING_IPEHR)
+        );
+    }
+    if submit_name == "draw-path" {
+        log_triangle_demo_stats(dev, completed);
+    }
     if completed && submit_name == "draw-path" {
         let kicked = crate::intel::display::kick_primary_surface_scanout("post-draw-path");
         crate::log!("intel/render: draw-path scanout-kick={}\n", kicked as u8);
         crate::intel::display::log_pipe_live_scanout_state("post-draw-path");
     }
     completed
+}
+
+fn log_triangle_demo_stats(dev: crate::intel::Dev, completed: bool) {
+    let mut values = [0u32; TRIANGLE_STATS_LOG.len()];
+    for (idx, stat) in TRIANGLE_STATS_LOG.iter().copied().enumerate() {
+        let Some(offset) = stat.mmio_offset() else {
+            continue;
+        };
+        values[idx] = crate::intel::mmio_read(dev, offset);
+    }
+
+    crate::log!(
+        "intel/render: triangle-stats completed={} {}={} {}={} {}={}\n",
+        completed as u8,
+        TRIANGLE_STATS_LOG[0].symbol(),
+        values[0],
+        TRIANGLE_STATS_LOG[1].symbol(),
+        values[1],
+        TRIANGLE_STATS_LOG[2].symbol(),
+        values[2]
+    );
+}
+
+fn log_streamout_proof_result(warm: RenderWarmState, completed: bool, vertex_count: usize) {
+    let base =
+        unsafe { (warm.result_virt as *const u8).add(RESULT_STREAMOUT_PROOF_OFFSET) as *const u32 };
+    let count = core::cmp::min(vertex_count, 3);
+    for idx in 0..count {
+        let words = unsafe { core::slice::from_raw_parts(base.add(idx * 4), 4) };
+        crate::log!(
+            "intel/render: streamout-proof v{} completed={} raw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[{:.3},{:.3},{:.3},{:.3}]\n",
+            idx,
+            completed as u8,
+            words[0],
+            words[1],
+            words[2],
+            words[3],
+            f32::from_bits(words[0]),
+            f32::from_bits(words[1]),
+            f32::from_bits(words[2]),
+            f32::from_bits(words[3])
+        );
+    }
+}
+
+fn primitive_topology_label(topology: u32) -> &'static str {
+    match topology {
+        0x01 => "pointlist",
+        0x02 => "linelist",
+        0x03 => "linestrip",
+        0x04 => "trilist",
+        0x05 => "tristrip",
+        0x06 => "trifan",
+        0x09 => "linelist_adj",
+        _ => "unknown",
+    }
 }
 
 fn read_result_dword(warm: RenderWarmState, index: usize) -> u32 {
@@ -2947,7 +3304,11 @@ fn edge_fn2(ax: i32, ay: i32, bx: i32, by: i32, px2: i32, py2: i32) -> i64 {
 }
 
 fn same_sign_or_zero(area: i64, value: i64) -> bool {
-    if area >= 0 { value >= 0 } else { value <= 0 }
+    if area >= 0 {
+        value >= 0
+    } else {
+        value <= 0
+    }
 }
 
 fn bary_to_u8(weight: i64, area: i64) -> u32 {
