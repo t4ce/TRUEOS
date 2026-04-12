@@ -738,8 +738,8 @@ fn apply_gadget_changed_flags(
                     || prev_gadget.height_px != gadget.height_px
                     || prev_gadget.font_size_px != gadget.font_size_px
                     || prev_gadget.line_height_px != gadget.line_height_px
-                        || prev_gadget.text_color_rgb != gadget.text_color_rgb
-                        || prev_gadget.button_like != gadget.button_like
+                    || prev_gadget.text_color_rgb != gadget.text_color_rgb
+                    || prev_gadget.button_like != gadget.button_like
             })
             .unwrap_or(true);
     }

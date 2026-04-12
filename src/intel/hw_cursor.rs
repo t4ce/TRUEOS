@@ -3,8 +3,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
 use super::display::{
-    active_pipe, aligned_pitch_bytes, decode_pipe_src, fill_surface_color, framebuffer_hint,
-    plane_buf_cfg_for_pipe_slot, PipeInfo, PIPES,
+    PIPES, PipeInfo, active_pipe, aligned_pitch_bytes, decode_pipe_src, fill_surface_color,
+    framebuffer_hint, plane_buf_cfg_for_pipe_slot,
 };
 
 const CURSOR_A_BASE: usize = 0x70080;
@@ -433,11 +433,7 @@ pub(crate) fn update_kernel_hw_cursor() -> Option<u32> {
     state.last_x = x_px;
     state.last_y = y_px;
 
-    if visible {
-        Some(slot_id)
-    } else {
-        None
-    }
+    if visible { Some(slot_id) } else { None }
 }
 
 pub(crate) fn kernel_hw_cursor_slot() -> Option<u32> {

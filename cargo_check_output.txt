@@ -1,0 +1,1139 @@
+warning: extern crate `compiler_builtins` is unused in crate `kurbo`
+  --> vendor/kurbo-0.11.3/src/lib.rs:4:1
+   |
+ 4 | //! 2D geometry, with a focus on curves.
+   | ^
+   |
+   = help: remove the dependency or add `use compiler_builtins as _;` to the crate root
+note: the lint level is defined here
+  --> vendor/kurbo-0.11.3/src/lib.rs:73:9
+   |
+73 | #![warn(unused_crate_dependencies)]
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Err`, `Ok`, and `self`
+ --> vendor/kurbo-0.11.3/src/stroke.rs:8:28
+  |
+8 | use core::result::Result::{self, Err, Ok};
+  |                            ^^^^  ^^^  ^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `alloc::string::String`
+ --> vendor/kurbo-0.11.3/src/svg.rs:7:5
+  |
+7 | use alloc::string::String;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `kurbo` (lib) generated 3 warnings (run `cargo fix --lib -p kurbo` to apply 2 suggestions)
+warning: unused import: `hash::*`
+  --> vendor/simd-adler32-0.3.8/src/lib.rs:98:9
+   |
+98 | pub use hash::*;
+   |         ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `simd-adler32` (lib) generated 1 warning (run `cargo fix --lib -p simd-adler32` to apply 1 suggestion)
+warning: unused imports: `cos` and `floor`
+ --> crates/trueos-weather/src/helper.rs:4:18
+  |
+4 | use libm::{acos, cos, floor, sin, tan};
+  |                  ^^^  ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `boxed::Box` and `string::String`
+ --> vendor/usvg-0.45.1/src/parser/mod.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |             ^^^^^^^^^^  ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `boxed::Box`
+ --> vendor/usvg-0.45.1/src/parser/filter.rs:6:13
+  |
+6 | use alloc::{boxed::Box, format, string::{String, ToString}, vec, vec::Vec};
+  |             ^^^^^^^^^^
+
+warning: unused import: `string::String`
+ --> vendor/usvg-0.45.1/src/parser/marker.rs:4:25
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |                         ^^^^^^^^^^^^^^
+
+warning: unused imports: `String` and `vec::Vec`
+ --> vendor/usvg-0.45.1/src/parser/mask.rs:4:34
+  |
+4 | use alloc::{boxed::Box, string::{String, ToString}, vec::Vec};
+  |                                  ^^^^^^             ^^^^^^^^
+
+warning: unused import: `boxed::Box`
+ --> vendor/usvg-0.45.1/src/parser/options.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::{String, ToString}, vec, vec::Vec};
+  |             ^^^^^^^^^^
+
+warning: unused import: `String`
+ --> vendor/usvg-0.45.1/src/parser/paint_server.rs:4:34
+  |
+4 | use alloc::{boxed::Box, string::{String, ToString}, vec::Vec};
+  |                                  ^^^^^^
+
+warning: unused imports: `boxed::Box` and `string::String`
+ --> vendor/usvg-0.45.1/src/parser/style.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |             ^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused import: `boxed::Box`
+ --> vendor/usvg-0.45.1/src/parser/svgtree/mod.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |             ^^^^^^^^^^
+
+warning: unused imports: `String` and `boxed::Box`
+ --> vendor/usvg-0.45.1/src/parser/svgtree/parse.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::{String, ToString}, vec::Vec};
+  |             ^^^^^^^^^^           ^^^^^^
+
+warning: unused import: `boxed::Box`
+ --> vendor/usvg-0.45.1/src/parser/svgtree/text.rs:6:13
+  |
+6 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |             ^^^^^^^^^^
+
+warning: unused imports: `string::String` and `vec::Vec`
+ --> vendor/usvg-0.45.1/src/parser/switch.rs:4:25
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |                         ^^^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused imports: `boxed::Box` and `string::String`
+ --> vendor/usvg-0.45.1/src/parser/units.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |             ^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused import: `vec::Vec`
+ --> vendor/usvg-0.45.1/src/parser/use_node.rs:4:53
+  |
+4 | use alloc::{boxed::Box, string::{String, ToString}, vec::Vec};
+  |                                                     ^^^^^^^^
+
+warning: unused imports: `AId` and `EId`
+  --> vendor/usvg-0.45.1/src/parser/mod.rs:25:26
+   |
+25 | pub(crate) use svgtree::{AId, EId};
+   |                          ^^^  ^^^
+
+warning: unused import: `boxed::Box`
+ --> vendor/usvg-0.45.1/src/tree/filter.rs:6:13
+  |
+6 | use alloc::{boxed::Box, string::String, vec, vec::Vec};
+  |             ^^^^^^^^^^
+
+warning: variant `SVG` is never constructed
+   --> vendor/usvg-0.45.1/src/parser/image.rs:107:5
+    |
+102 | enum ImageFormat {
+    |      ----------- variant in this enum
+...
+107 |     SVG,
+    |     ^^^
+    |
+    = note: `ImageFormat` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: missing documentation for a trait
+  --> vendor/usvg-0.45.1/src/tree/mod.rs:13:1
+   |
+13 | pub trait ApproxEqUlps {
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> vendor/usvg-0.45.1/src/lib.rs:50:9
+   |
+50 | #![warn(missing_docs)]
+   |         ^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> vendor/usvg-0.45.1/src/tree/mod.rs:14:5
+   |
+14 |     fn approx_eq_ulps(&self, other: &Self, ulps: i32) -> bool;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> vendor/usvg-0.45.1/src/tree/mod.rs:17:5
+   |
+17 |     fn approx_ne_ulps(&self, other: &Self, ulps: i32) -> bool {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `compute_codes` is never used
+   --> vendor/fdeflate-0.3.7/src/lib.rs:106:10
+    |
+106 | const fn compute_codes<const NSYMS: usize>(lengths: &[u8; NSYMS]) -> Option<[u16; NSYMS]> {
+    |          ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `HUFFMAN_LENGTHS` is never used
+ --> vendor/fdeflate-0.3.7/src/tables.rs:7:18
+  |
+7 | pub(crate) const HUFFMAN_LENGTHS: [u8; 286] = [
+  |                  ^^^^^^^^^^^^^^^
+
+warning: constant `HUFFMAN_CODES` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:22:18
+   |
+22 | pub(crate) const HUFFMAN_CODES: [u16; 286] = match crate::compute_codes(&HUFFMAN_LENGTHS) {
+   |                  ^^^^^^^^^^^^^
+
+warning: constant `LENGTH_TO_SYMBOL` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:28:18
+   |
+28 | pub(crate) const LENGTH_TO_SYMBOL: [u16; 256] = [
+   |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `LENGTH_TO_LEN_EXTRA` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:46:18
+   |
+46 | pub(crate) const LENGTH_TO_LEN_EXTRA: [u8; 256] = [
+   |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `BITMASKS` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:57:18
+   |
+57 | pub(crate) const BITMASKS: [u32; 17] = [
+   |                  ^^^^^^^^
+
+warning: `trueos-weather` (lib) generated 1 warning (run `cargo fix --lib -p trueos-weather` to apply 1 suggestion)
+warning: `usvg` (lib) generated 19 warnings (run `cargo fix --lib -p usvg` to apply 15 suggestions)
+warning: `fdeflate` (lib) generated 6 warnings
+   Compiling TRUEOS v0.0.2 (/home/t4ce/REPOS/TRUEOS)
+warning: unused import: `io`
+ --> vendor/png-0.18.1/src/common.rs:6:47
+  |
+6 | use std::{borrow::Cow, convert::TryFrom, fmt, io};
+  |                                               ^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `chunk`
+   --> vendor/png-0.18.1/src/text_metadata.rs:104:13
+    |
+104 | use crate::{chunk, DecodingError};
+    |             ^^^^^
+
+warning: unused import: `std::convert::TryFrom`
+   --> vendor/png-0.18.1/src/text_metadata.rs:106:5
+    |
+106 | use std::convert::TryFrom;
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::string::ToString`
+ --> vendor/png-0.18.1/src/decoder/stream.rs:1:5
+  |
+1 | use alloc::string::ToString;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `into_raw` is never used
+   --> vendor/png-0.18.1/src/common.rs:547:19
+    |
+546 | impl SrgbRenderingIntent {
+    | ------------------------ method in this implementation
+547 |     pub(crate) fn into_raw(self) -> u8 {
+    |                   ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `set_source_srgb` is never used
+   --> vendor/png-0.18.1/src/common.rs:842:19
+    |
+744 | impl Info<'_> {
+    | ------------- method in this implementation
+...
+842 |     pub(crate) fn set_source_srgb(&mut self, rendering_intent: SrgbRenderingIntent) {
+    |                   ^^^^^^^^^^^^^^^
+
+warning: method `into_usize` is never used
+   --> vendor/png-0.18.1/src/common.rs:861:19
+    |
+848 | impl BytesPerPixel {
+    | ------------------ method in this implementation
+...
+861 |     pub(crate) fn into_usize(self) -> usize {
+    |                   ^^^^^^^^^^
+
+warning: associated function `from_simple` is never used
+  --> vendor/png-0.18.1/src/filter/mod.rs:50:19
+   |
+49 | impl Filter {
+   | ----------- associated function in this implementation
+50 |     pub(crate) fn from_simple(compression: Compression) -> Self {
+   |                   ^^^^^^^^^^^
+
+warning: associated function `from_method` is never used
+  --> vendor/png-0.18.1/src/filter/mod.rs:90:12
+   |
+78 | impl RowFilter {
+   | -------------- associated function in this implementation
+...
+90 |     pub fn from_method(strat: Filter) -> Option<Self> {
+   |            ^^^^^^^^^^^
+
+warning: function `filter_internal` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:361:4
+    |
+361 | fn filter_internal(
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `adaptive_filter` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:500:4
+    |
+500 | fn adaptive_filter(
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `filter` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:530:15
+    |
+530 | pub(crate) fn filter(
+    |               ^^^^^^
+
+warning: function `ilog2i` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:552:4
+    |
+552 | fn ilog2i(i: u32) -> u32 {
+    |    ^^^^^^
+
+warning: function `entropy` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:557:4
+    |
+557 | fn entropy(buf: &[u8]) -> u64 {
+    |    ^^^^^^^
+
+warning: function `sum_buffer` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:608:4
+    |
+608 | fn sum_buffer(buf: &[u8]) -> u64 {
+    |    ^^^^^^^^^^
+
+warning: function `filter_paeth_fpnge` is never used
+  --> vendor/png-0.18.1/src/filter/paeth.rs:45:15
+   |
+45 | pub(super) fn filter_paeth_fpnge(a: u8, b: u8, c: u8) -> u8 {
+   |               ^^^^^^^^^^^^^^^^^^
+
+warning: trait `WriteBytesExt` is never used
+  --> vendor/png-0.18.1/src/traits.rs:34:11
+   |
+34 | pub trait WriteBytesExt<T>: io::Write {
+   |           ^^^^^^^^^^^^^
+
+warning: methods `descriptor` and `configuration_descriptors` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/hub/device.rs:228:12
+    |
+110 | impl HubDevice {
+    | -------------- methods in this implementation
+...
+228 |     pub fn descriptor(&self) -> &DeviceDescriptor {
+    |            ^^^^^^^^^^
+...
+232 |     pub fn configuration_descriptors(&self) -> &[ConfigurationDescriptor] {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `submit_for_poll` and `poll_finished` are never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/cmd.rs:78:12
+   |
+20 | impl CommandRing {
+   | ---------------- methods in this implementation
+...
+78 |     pub fn submit_for_poll(&mut self, trb: command::Allowed) -> BusAddr {
+   |            ^^^^^^^^^^^^^^^
+...
+82 |     pub fn poll_finished(&self, addr: BusAddr) -> Option<CommandCompletion> {
+   |            ^^^^^^^^^^^^^
+
+warning: methods `poll_command_completion` and `command_ring_self_test` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/host.rs:198:8
+    |
+ 99 | impl Xhci {
+    | --------- methods in this implementation
+...
+198 |     fn poll_command_completion(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+239 |     fn command_ring_self_test(&mut self) -> Result {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_TIMEOUT_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:22:7
+   |
+22 | const HUB_DEBOUNCE_TIMEOUT_MS: u64 = 2000;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_STEP_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:23:7
+   |
+23 | const HUB_DEBOUNCE_STEP_MS: u64 = 25;
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_STABLE_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:24:7
+   |
+24 | const HUB_DEBOUNCE_STABLE_MS: u64 = 100;
+   |       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `debounce_port`, `reset_port`, `wait_for_port_enabled`, `settle_port_enabled`, and `handle_changed` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:219:14
+    |
+196 | impl XhciRootHub {
+    | ---------------- methods in this implementation
+...
+219 |     async fn debounce_port(&mut self, port_id: u8, must_be_connected: bool) -> Result<(), USBError> {
+    |              ^^^^^^^^^^^^^
+...
+240 |     async fn reset_port(&mut self, port_id: u8, speed_raw: u8) -> Result<(), USBError> {
+    |              ^^^^^^^^^^
+...
+270 |     async fn wait_for_port_enabled(&mut self, port_id: u8) -> Result<(), USBError> {
+    |              ^^^^^^^^^^^^^^^^^^^^^
+...
+286 |     async fn settle_port_enabled(&mut self, port_id: u8, reason: &'static str) -> bool {
+    |              ^^^^^^^^^^^^^^^^^^^
+...
+313 |     async fn handle_changed(&mut self) -> Result<(), USBError> {
+    |              ^^^^^^^^^^^^^^
+
+warning: feature `iterator_try_collect` is declared but not used
+ --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/lib.rs:2:12
+  |
+2 | #![feature(iterator_try_collect)]
+  |            ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_features)]` (part of `#[warn(unused)]`) on by default
+
+warning: `png` (lib) generated 17 warnings (run `cargo fix --lib -p png` to apply 2 suggestions)
+warning: `crab-usb` (lib) generated 8 warnings
+warning: variable does not need to be mutable
+   --> crates/trueos-qjs/src/async_ops.rs:609:18
+    |
+609 |         let Some(mut op) = take_pending(ctx, op_id) else {
+    |                  ----^^
+    |                  |
+    |                  help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `x_f`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:134:14
+    |
+134 |     let Some(x_f) = super::cmd_stream_arg_f64(ctx, args, 1) else {
+    |              ^^^ help: if this is intentional, prefix it with an underscore: `_x_f`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `y_f`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:137:14
+    |
+137 |     let Some(y_f) = super::cmd_stream_arg_f64(ctx, args, 2) else {
+    |              ^^^ help: if this is intentional, prefix it with an underscore: `_y_f`
+
+warning: unused variable: `w_f`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:140:14
+    |
+140 |     let Some(w_f) = super::cmd_stream_arg_f64(ctx, args, 3) else {
+    |              ^^^ help: if this is intentional, prefix it with an underscore: `_w_f`
+
+warning: unused variable: `h_f`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:143:14
+    |
+143 |     let Some(h_f) = super::cmd_stream_arg_f64(ctx, args, 4) else {
+    |              ^^^ help: if this is intentional, prefix it with an underscore: `_h_f`
+
+warning: unused variable: `u0`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:151:9
+    |
+151 |     let u0 = super::cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) as f32;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_u0`
+
+warning: unused variable: `v0`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:152:9
+    |
+152 |     let v0 = super::cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) as f32;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_v0`
+
+warning: unused variable: `u1`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:153:9
+    |
+153 |     let u1 = super::cmd_stream_arg_f64(ctx, args, 7).unwrap_or(1.0) as f32;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_u1`
+
+warning: unused variable: `v1`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:154:9
+    |
+154 |     let v1 = super::cmd_stream_arg_f64(ctx, args, 8).unwrap_or(1.0) as f32;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_v1`
+
+warning: unused variable: `rgba`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:155:9
+    |
+155 |     let rgba = (super::cmd_stream_arg_f64(ctx, args, 9).unwrap_or(0xFFFF_FFFFu32 as f64) as i64)
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_rgba`
+
+warning: unused variable: `tex_id`
+   --> crates/trueos-qjs/src/cmd_stream/lyon_cmd_stream.rs:247:15
+    |
+247 |     let Some((tex_id, side_px)) = cmd_stream_ensure_lyon_icon_tex(icon_id, 0, 1) else {
+    |               ^^^^^^ help: if this is intentional, prefix it with an underscore: `_tex_id`
+
+warning: unused variable: `origin_x_ndc`
+   --> crates/trueos-qjs/src/cmd_stream/lyon_cmd_stream.rs:257:9
+    |
+257 |     let origin_x_ndc = (2.0 * ((x + origin_x) / view_w_f)) - 1.0;
+    |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_origin_x_ndc`
+
+warning: unused variable: `origin_y_ndc`
+   --> crates/trueos-qjs/src/cmd_stream/lyon_cmd_stream.rs:258:9
+    |
+258 |     let origin_y_ndc = 1.0 - (2.0 * ((y + origin_y) / view_h_f));
+    |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_origin_y_ndc`
+
+warning: unused variable: `verts`
+   --> crates/trueos-qjs/src/cmd_stream/lyon_cmd_stream.rs:260:9
+    |
+260 |     let verts = cmd_stream_get_lyon_unit_quad_verts(view_w_u, view_h_u, side_px, r, g, b);
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_verts`
+
+warning: function `push_i32_dec` is never used
+ --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:8:4
+  |
+8 | fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
+  |    ^^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `trace_str` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:29:4
+   |
+29 | fn trace_str(s: &str) {
+   |    ^^^^^^^^^
+
+warning: function `trace_bytes` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:34:4
+   |
+34 | fn trace_bytes(bytes: &[u8]) {
+   |    ^^^^^^^^^^^
+
+warning: function `trace_nl` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:39:4
+   |
+39 | fn trace_nl() {
+   |    ^^^^^^^^
+
+warning: function `trace_usize_dec` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:44:4
+   |
+44 | fn trace_usize_dec(v: usize) {
+   |    ^^^^^^^^^^^^^^^
+
+warning: function `read_file_sync` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:48:4
+   |
+48 | fn read_file_sync(path: &[u8]) -> Result<Vec<u8>, i32> {
+   |    ^^^^^^^^^^^^^^
+
+warning: function `write_file_sync` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:52:4
+   |
+52 | fn write_file_sync(path: &[u8], data: &[u8]) -> Result<(), i32> {
+   |    ^^^^^^^^^^^^^^^
+
+warning: function `compiled_cache_path_for_source` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:65:15
+   |
+65 | pub(super) fn compiled_cache_path_for_source(source_cache_path: &[u8]) -> Vec<u8> {
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `try_load_compiled_module` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:74:22
+   |
+74 | pub(super) unsafe fn try_load_compiled_module(
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `persist_compiled_module` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:96:22
+   |
+96 | pub(super) unsafe fn persist_compiled_module(
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `EmbeddedModule` is never constructed
+ --> crates/trueos-qjs/src/trueos_module_loader/embedded.rs:3:19
+  |
+3 | pub(crate) struct EmbeddedModule {
+  |                   ^^^^^^^^^^^^^^
+
+warning: static `EMBEDDED` is never used
+ --> /home/t4ce/REPOS/TRUEOS/tgt/86_64/debug/build/trueos-qjs-c1934866cefff922/out/embedded_qjs/embedded_modules.rs:4:8
+  |
+4 | static EMBEDDED: &[EmbeddedModule] = &[
+  |        ^^^^^^^^
+
+warning: function `find` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/embedded.rs:14:15
+   |
+14 | pub(crate) fn find(path: &[u8]) -> Option<&'static EmbeddedModule> {
+   |               ^^^^
+
+warning: constant `TRUESURFER_IDLE_SLEEP_MS` is never used
+   --> crates/trueos-qjs/src/../app/truesurfer/truesurfer_qjs_vm_task.rs:100:7
+    |
+100 | const TRUESURFER_IDLE_SLEEP_MS: u64 = 16;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: static `FIRST_QJS_END_FRAME_SEEN` is never used
+  --> crates/trueos-qjs/src/cmd_stream.rs:19:8
+   |
+19 | static FIRST_QJS_END_FRAME_SEEN: AtomicBool = AtomicBool::new(false);
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `cmd_stream_draw_texture_rect` is never used
+   --> crates/trueos-qjs/src/cmd_stream.rs:741:4
+    |
+741 | fn cmd_stream_draw_texture_rect(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `cmd_stream_push_tex_vtx` is never used
+   --> crates/trueos-qjs/src/cmd_stream.rs:791:4
+    |
+791 | fn cmd_stream_push_tex_vtx(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `trueos_cabi_gfx_begin_frame` is never used
+  --> crates/trueos-qjs/src/cmd_stream.rs:21:8
+   |
+21 |     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `js_null` is never used
+    --> crates/trueos-qjs/src/node/mod.rs:1295:4
+     |
+1295 | fn js_null() -> qjs::JSValue {
+     |    ^^^^^^^
+
+warning: `extern` fn uses type `fn(u32, i32)`, which is not FFI-safe
+   --> crates/trueos-qjs/src/yoga/yoga_native.rs:223:12
+    |
+223 |         f: fn(u32, i32),
+    |            ^^^^^^^^^^^^ not FFI-safe
+    |
+    = help: consider using an `extern fn(...) -> ...` function pointer instead
+    = note: this function pointer has Rust-specific calling convention
+    = note: `#[warn(improper_ctypes_definitions)]` on by default
+
+warning: `extern` fn uses type `fn(u32, f32)`, which is not FFI-safe
+   --> crates/trueos-qjs/src/yoga/yoga_native.rs:234:12
+    |
+234 |         f: fn(u32, f32),
+    |            ^^^^^^^^^^^^ not FFI-safe
+    |
+    = help: consider using an `extern fn(...) -> ...` function pointer instead
+    = note: this function pointer has Rust-specific calling convention
+
+warning: `extern` fn uses type `fn(u32, i32, f32)`, which is not FFI-safe
+   --> crates/trueos-qjs/src/yoga/yoga_native.rs:245:12
+    |
+245 |         f: fn(u32, i32, f32),
+    |            ^^^^^^^^^^^^^^^^^ not FFI-safe
+    |
+    = help: consider using an `extern fn(...) -> ...` function pointer instead
+    = note: this function pointer has Rust-specific calling convention
+
+warning: `trueos-qjs` (lib) generated 36 warnings (run `cargo fix --lib -p trueos-qjs` to apply 14 suggestions)
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_init has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read_byte has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write_byte has no kernel export and will stay unresolved
+warning: unused import: `push_rgb_triangle_px`
+  --> src/gfx/lyon.rs:13:5
+   |
+13 |     push_rgb_triangle_px,
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `core::mem::size_of`
+ --> src/hv/memory.rs:1:5
+  |
+1 | use core::mem::size_of;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `HV_LOG_CAP` and `HvLogEntry`
+ --> src/hv/vmm.rs:1:13
+  |
+1 | use super::{HV_LOG_CAP, HvLogEntry, StartError};
+  |             ^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `ShellIo2`
+ --> src/hv/vmm.rs:2:36
+  |
+2 | use crate::shell2::{ShellBackend2, ShellIo2};
+  |                                    ^^^^^^^^
+
+warning: unused imports: `AtomicU64` and `Ordering`
+ --> src/hv/vmm.rs:3:38
+  |
+3 | use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+  |                                      ^^^^^^^^^  ^^^^^^^^
+
+warning: unused imports: `Deque` and `String`
+ --> src/hv/vmm.rs:5:16
+  |
+5 | use heapless::{Deque, String};
+  |                ^^^^^  ^^^^^^
+
+warning: unused import: `core::arch::x86_64::__cpuid`
+ --> src/hv/vmx.rs:1:5
+  |
+1 | use core::arch::x86_64::__cpuid;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `sgdt` and `sidt`
+ --> src/hv/vmx.rs:2:36
+  |
+2 | use x86_64::instructions::tables::{sgdt, sidt};
+  |                                    ^^^^  ^^^^
+
+warning: unused imports: `Cr0Flags`, `Cr0`, `Cr4Flags`, and `Cr4`
+ --> src/hv/vmx.rs:3:34
+  |
+3 | use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
+  |                                  ^^^  ^^^^^^^^  ^^^  ^^^^^^^^
+
+warning: unused imports: `CS`, `DS`, `ES`, `FS`, `GS`, `SS`, and `Segment`
+ --> src/hv/vmx.rs:5:39
+  |
+5 | use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
+  |                                       ^^  ^^  ^^  ^^  ^^  ^^  ^^^^^^^
+
+warning: unused import: `crate::hv::guest`
+ --> src/hv/vmx.rs:7:5
+  |
+7 | use crate::hv::guest;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `trueos_vm::stream`
+  --> src/hv/mod.rs:12:9
+   |
+12 | pub use trueos_vm::stream;
+   |         ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+  --> src/hv/mod.rs:14:5
+   |
+14 | use alloc::vec::Vec;
+   |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `guest::*`
+  --> src/hv/mod.rs:31:5
+   |
+31 | use guest::*;
+   |     ^^^^^^^^
+
+warning: unnecessary parentheses around function argument
+    --> src/intel/render.rs:1854:9
+     |
+1854 |         (u32::try_from(
+     |         ^
+...
+1859 |             & 0xFFFF_F000),
+     |                          ^
+     |
+     = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+     |
+1854 ~         u32::try_from(
+1855 |             crate::intel::align_up(binding_table_pool_size, 4096)
+ ...
+1858 |         .map_err(|_| "probe-binding-pool-convert")?
+1859 ~             & 0xFFFF_F000 ,
+     |
+
+warning: unused import: `alloc::format`
+ --> src/intel/xelp_media_ngin.rs:3:5
+  |
+3 | use alloc::format;
+  |     ^^^^^^^^^^^^^
+
+warning: unused imports: `Duration as EmbassyDuration` and `Timer`
+ --> src/r/net/cli/html.rs:8:20
+  |
+8 | use embassy_time::{Duration as EmbassyDuration, Timer};
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^
+
+warning: unused imports: `http`, `irc`, `json`, `ping`, `pop3`, and `ws`
+  --> src/r/net/mod.rs:11:31
+   |
+11 | ...tp, html, http, https, irc, json, ntp, ping, pop3, smtp, ws};
+   |              ^^^^         ^^^  ^^^^       ^^^^  ^^^^        ^^
+
+warning: unused imports: `spop3`, `ssmtp`, and `wss`
+  --> src/r/net/mod.rs:12:21
+   |
+12 | pub use srv::{sntp, spop3, ssmtp, wss};
+   |                     ^^^^^  ^^^^^  ^^^
+
+warning: unused imports: `LazyLock` and `RwLock`
+ --> src/r/sync.rs:1:19
+  |
+1 | pub use v::sync::{LazyLock, RwLock};
+  |                   ^^^^^^^^  ^^^^^^
+
+warning: unused import: `draw_texture_rect_uv_no_present`
+ --> src/r/../ui2/ui2_font.rs:9:22
+  |
+9 | use super::{Ui2Rect, draw_texture_rect_uv_no_present};
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary parentheses around function argument
+   --> src/r/../ui2/ui2_win.rs:118:17
+    |
+118 |                 (((state.view_w as f32) - (UI2_MINIMIZED_STRIP_PAD * 2.0)
+    |                 ^
+119 |                     + UI2_MINIMIZED_STRIP_GAP)
+120 |                     / total_w),
+    |                              ^
+    |
+help: remove these parentheses
+    |
+118 ~                 ((state.view_w as f32) - (UI2_MINIMIZED_STRIP_PAD * 2.0)
+119 |                     + UI2_MINIMIZED_STRIP_GAP)
+120 ~                     / total_w,
+    |
+
+warning: unused imports: `Ui2CursorColor` and `cursor_color`
+  --> src/r/../ui2/mod.rs:27:32
+   |
+27 | pub(crate) use self::ui2_hid::{Ui2CursorColor, cursor_color, cursor_colo...
+   |                                ^^^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused import: `core::sync::atomic::Ordering`
+ --> src/runtime.rs:1:5
+  |
+1 | use core::sync::atomic::Ordering;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Instant`
+ --> src/shell2/mod.rs:8:49
+  |
+8 | use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+  |                                                 ^^^^^^^
+
+warning: unused imports: `boxed::Box`, `format`, and `vec::Vec`
+ --> src/shell2/backends/net_tcp.rs:1:13
+  |
+1 | use alloc::{boxed::Box, collections::VecDeque, format, vec::Vec};
+  |             ^^^^^^^^^^                         ^^^^^^  ^^^^^^^^
+
+warning: unused import: `Ordering`
+ --> src/shell2/backends/net_tcp.rs:3:38
+  |
+3 | use core::sync::atomic::{AtomicBool, Ordering};
+  |                                      ^^^^^^^^
+
+warning: unused import: `embassy_executor::task`
+ --> src/shell2/backends/net_tcp.rs:5:5
+  |
+5 | use embassy_executor::task;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Duration as EmbassyDuration` and `Timer`
+ --> src/shell2/backends/net_tcp.rs:6:20
+  |
+6 | use embassy_time::{Duration as EmbassyDuration, Timer};
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^
+
+warning: unused imports: `NetCommand`, `NetEvent`, `NetQueue`, `SocketKind`, and `register_app_queues`
+ --> src/shell2/backends/net_tcp.rs:9:5
+  |
+9 |     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
+  |     ^^^^^^^^^^  ^^^^^^^^             ^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `IrcError`
+   --> src/shell2/cmds/net.rs:243:57
+    |
+243 | ...   use crate::r::net::cli::irc::{IRC_DEFAULT_PORT, IrcError, IrcSess...
+    |                                                       ^^^^^^^^
+
+warning: unused imports: `Duration as EmbassyDuration`, `Instant`, and `Timer`
+ --> src/tst/ui2_pci_demo.rs:8:20
+  |
+8 | use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^  ^^^^^
+
+warning: unused import: `self::keyboard::TrueosHidKeyboardSample`
+  --> src/usb2/hid/mod.rs:96:9
+   |
+96 | pub use self::keyboard::TrueosHidKeyboardSample;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `self::mouse::TrueosHidMouseSample`
+  --> src/usb2/hid/mod.rs:97:9
+   |
+97 | pub use self::mouse::TrueosHidMouseSample;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `self::hid::TrueosHidCursorEvent`
+  --> src/usb2/mod.rs:33:16
+   |
+33 | pub(crate) use self::hid::TrueosHidCursorEvent;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `handle_keyboard_boot_report`, `handle_mouse_boot_report`, and `remove_hid_slot`
+  --> src/usb2/mod.rs:35:5
+   |
+35 |     handle_keyboard_boot_report, handle_mouse_boot_report, remove_hid_slot,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::vec`
+   --> src/usb2/mod.rs:394:9
+    |
+394 |     use alloc::vec;
+    |         ^^^^^^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+   --> src/usb2/mod.rs:395:9
+    |
+395 |     use alloc::vec::Vec;
+    |         ^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+    --> src/shell2/mod.rs:1253:9
+     |
+1253 |     let mut running_go2_phase = 0usize;
+     |         ----^^^^^^^^^^^^^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+error[E0061]: this function takes 13 arguments but 12 arguments were supplied
+    --> src/intel/render.rs:1257:34
+     |
+1257 |       let batch_tail_bytes = match encode_triangle_probe_batch(
+     |  __________________________________^^^^^^^^^^^^^^^^^^^^^^^^^^^-
+1258 | |         batch,
+1259 | |         warm,
+1260 | |         draw,
+...    |
+1269 | |         TriangleBatchMode::Draw,
+1270 | |     ) {
+     | |_____- argument #13 of type `StreamoutProofExperiment` is missing
+     |
+note: function defined here
+    --> src/intel/render.rs:1606:4
+     |
+1606 | fn encode_triangle_probe_batch(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1619 |     streamout_experiment: StreamoutProofExperiment,
+     |     ----------------------------------------------
+help: provide the argument
+     |
+1257 |     let batch_tail_bytes = match encode_triangle_probe_batch(
+ ...
+1269 |         TriangleBatchMode::Draw,
+1270 ~         /* StreamoutProofExperiment */,
+1271 ~     ) {
+     |
+
+warning: unused import: `core::fmt::Write`
+ --> src/r/../ui2/mod.rs:5:5
+  |
+5 | use core::fmt::Write;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `core::str::FromStr`
+ --> src/shell2/cmds/tlb.rs:2:5
+  |
+2 | use core::str::FromStr;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `profile`
+   --> src/cpu.rs:163:9
+    |
+163 |     let profile = register_current_worker_spawner(spawner)
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_profile`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `did_work` is never read
+    --> src/gfx/virtio_gpu_3d.rs:2882:25
+     |
+2882 |                         did_work = true;
+     |                         ^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+  --> src/hv/guest_run.rs:89:19
+   |
+89 |     let spawner = unsafe { executor.spawner() };
+   |                   ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> src/hv/memory.rs:300:5
+    |
+300 |     unsafe { core::ptr::addr_of!(kernel_end) as u64 }
+    |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unused variable: `spawner`
+  --> src/hv/vmm.rs:47:9
+   |
+47 |         spawner: &Spawner,
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_spawner`
+
+warning: unused variable: `io`
+  --> src/hv/vmm.rs:48:9
+   |
+48 |         io: &'static dyn ShellBackend2,
+   |         ^^ help: if this is intentional, prefix it with an underscore: `_io`
+
+warning: unnecessary `unsafe` block
+   --> src/hv/vmx.rs:451:15
+    |
+451 |     let gdt = unsafe { core::ptr::addr_of_mut!(super::HV_HOST_GDT) };
+    |               ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> src/hv/vmx.rs:452:15
+    |
+452 |     let tss = unsafe { core::ptr::addr_of_mut!(super::HV_HOST_TSS) };
+    |               ^^^^^^ unnecessary `unsafe` block
+
+warning: unused variable: `stride_reg`
+   --> src/intel/display.rs:232:14
+    |
+232 |     let Some(stride_reg) = plane_stride_reg_value(pitch_bytes) else {
+    |              ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_stride_reg`
+
+warning: value assigned to `output_surface_virt` is never read
+    --> src/intel/xelp_media_ngin.rs:1706:35
+     |
+1706 |     let mut output_surface_virt = backing.output_surface_virt;
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: value assigned to `rekick_attempted` is never read
+   --> src/pci/nvme.rs:835:21
+    |
+835 |                     rekick_attempted = true;
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unused variable: `dma_virt`
+    --> src/pci/nvme.rs:1732:17
+     |
+1732 |             let dma_virt = dma_buf.as_ptr();
+     |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_dma_virt`
+
+warning: unused variable: `dma_virt`
+    --> src/pci/nvme.rs:1924:9
+     |
+1924 |     let dma_virt = dma_buf.as_ptr();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_dma_virt`
+
+warning: unused variable: `sample_kind`
+    --> src/r/gfx_cabi.rs:5087:33
+     |
+5087 | ...                   sample_kind,
+     |                       ^^^^^^^^^^^ help: try ignoring the field: `sample_kind: _`
+
+warning: unreachable pattern
+   --> src/r/net/cli/ws.rs:301:21
+    |
+301 |                     _ => None,
+    |                     ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> src/r/net/cli/ws.rs:301:21
+    |
+255 |                     WebSocketReceiveMessageType::Text => {
+    |                     --------------------------------- matches some of the same values
+...
+259 |                     WebSocketReceiveMessageType::Binary => None,
+    |                     ----------------------------------- matches some of the same values
+260 |                     WebSocketReceiveMessageType::Ping => {
+    |                     --------------------------------- matches some of the same values
+...
+278 |                     WebSocketReceiveMessageType::Pong => None,
+    |                     --------------------------------- matches some of the same values
+...
+301 |                     _ => None,
+    |                     ^ ...and 2 other patterns collectively make this unreachable
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `rx_buf` is never read
+   --> src/r/net/srv/wss.rs:192:26
+    |
+192 |         let mut rx_buf = Vec::new();
+    |                          ^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unreachable pattern
+   --> src/r/net/srv/wss.rs:367:21
+    |
+367 |                     _ => None,
+    |                     ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> src/r/net/srv/wss.rs:367:21
+    |
+322 |                     WebSocketReceiveMessageType::Text => {
+    |                     --------------------------------- matches some of the same values
+...
+326 |                     WebSocketReceiveMessageType::Binary => None,
+    |                     ----------------------------------- matches some of the same values
+327 |                     WebSocketReceiveMessageType::Ping => {
+    |                     --------------------------------- matches some of the same values
+...
+345 |                     WebSocketReceiveMessageType::Pong => None,
+    |                     --------------------------------- matches some of the same values
+...
+367 |                     _ => None,
+    |                     ^ ...and 2 other patterns collectively make this unreachable
+
+warning: unused variable: `hdr`
+   --> src/shell2/cmds/tlb.rs:424:24
+    |
+424 |     for (index, (phys, hdr)) in tables
+    |                        ^^^ help: if this is intentional, prefix it with an underscore: `_hdr`
+
+warning: unreachable pattern
+   --> src/tst/ui2_pci_demo.rs:169:17
+    |
+164 |                 (0x01, _, _) => return "Audio",
+    |                 ------------ matches all the relevant values
+...
+169 |                 (0x01, 0x03, _) => return "MIDI",
+    |                 ^^^^^^^^^^^^^^^ no value can reach this
+
+For more information about this error, try `rustc --explain E0061`.
+warning: `TRUEOS` (bin "TRUEOS") generated 60 warnings
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_init has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read_byte has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write_byte has no kernel export and will stay unresolved
+error: could not compile `TRUEOS` (bin "TRUEOS") due to 1 previous error; 60 warnings emitted

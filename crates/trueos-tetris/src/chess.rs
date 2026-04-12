@@ -48,11 +48,7 @@ impl Square {
     }
 
     pub const fn from_index(index: u8) -> Option<Self> {
-        if index < 64 {
-            Some(Self(index))
-        } else {
-            None
-        }
+        if index < 64 { Some(Self(index)) } else { None }
     }
 
     pub const fn file(self) -> u8 {
@@ -298,7 +294,8 @@ impl Game {
     }
 
     pub fn is_legal_move(&self, chess_move: Move) -> bool {
-        self.validate_move_for_side(self.side_to_move, chess_move).is_ok()
+        self.validate_move_for_side(self.side_to_move, chess_move)
+            .is_ok()
     }
 
     pub fn apply_move(&mut self, chess_move: Move) -> Result<MoveOutcome, MoveError> {
@@ -357,7 +354,8 @@ impl Game {
             file += 1;
         }
 
-        self.castling_rights.set_castle(color, CastleSide::Kingside, true);
+        self.castling_rights
+            .set_castle(color, CastleSide::Kingside, true);
         self.castling_rights
             .set_castle(color, CastleSide::Queenside, true);
     }
@@ -399,16 +397,16 @@ impl Game {
                         PieceKind::Knight,
                     ] {
                         if self
-                            .validate_move_for_side(
-                                side,
-                                Move::with_promotion(from, to, promotion),
-                            )
+                            .validate_move_for_side(side, Move::with_promotion(from, to, promotion))
                             .is_ok()
                         {
                             return true;
                         }
                     }
-                } else if self.validate_move_for_side(side, Move::new(from, to)).is_ok() {
+                } else if self
+                    .validate_move_for_side(side, Move::new(from, to))
+                    .is_ok()
+                {
                     return true;
                 }
 
@@ -422,7 +420,9 @@ impl Game {
     }
 
     fn validate_move_for_side(&self, side: Color, chess_move: Move) -> Result<MoveMeta, MoveError> {
-        let piece = self.piece_at(chess_move.from).ok_or(MoveError::EmptySource)?;
+        let piece = self
+            .piece_at(chess_move.from)
+            .ok_or(MoveError::EmptySource)?;
         if piece.color != side {
             return Err(MoveError::WrongSideToMove);
         }
@@ -486,7 +486,8 @@ impl Game {
 
         let is_promotion = self.is_promotion_rank(piece.color, chess_move.to.rank());
         match chess_move.promotion {
-            Some(PieceKind::Queen | PieceKind::Rook | PieceKind::Bishop | PieceKind::Knight) if is_promotion => {}
+            Some(PieceKind::Queen | PieceKind::Rook | PieceKind::Bishop | PieceKind::Knight)
+                if is_promotion => {}
             Some(PieceKind::Pawn | PieceKind::King) => return Err(MoveError::InvalidPromotion),
             Some(_) => return Err(MoveError::IllegalMove),
             None if is_promotion => return Err(MoveError::MissingPromotion),
@@ -566,7 +567,9 @@ impl Game {
     fn validate_queen_move(&self, chess_move: Move) -> Result<MoveMeta, MoveError> {
         let dx = (chess_move.to.file() as i8 - chess_move.from.file() as i8).abs();
         let dy = (chess_move.to.rank() as i8 - chess_move.from.rank() as i8).abs();
-        let valid = dx == dy || chess_move.from.file() == chess_move.to.file() || chess_move.from.rank() == chess_move.to.rank();
+        let valid = dx == dy
+            || chess_move.from.file() == chess_move.to.file()
+            || chess_move.from.rank() == chess_move.to.rank();
         if !valid || !self.is_path_clear(chess_move.from, chess_move.to) {
             return Err(MoveError::IllegalMove);
         }
@@ -623,7 +626,10 @@ impl Game {
             if file == 0 {
                 continue;
             }
-            if self.piece_at(Square::new(file, home_rank).unwrap()).is_some() {
+            if self
+                .piece_at(Square::new(file, home_rank).unwrap())
+                .is_some()
+            {
                 return Err(MoveError::IllegalMove);
             }
         }
@@ -683,7 +689,12 @@ impl Game {
             self.board[rook_to.index()] = rook;
         }
 
-        self.update_castling_rights_after_move(chess_move, moving_piece, captured_piece, meta.captured_square);
+        self.update_castling_rights_after_move(
+            chess_move,
+            moving_piece,
+            captured_piece,
+            meta.captured_square,
+        );
         self.en_passant_target = meta.next_en_passant_target;
 
         if meta.resets_halfmove_clock || moving_piece.kind == PieceKind::Pawn {
@@ -726,18 +737,22 @@ impl Game {
 
     fn clear_rook_right_for_square(&mut self, square: Square, color: Color) {
         match (color, square.file(), square.rank()) {
-            (Color::White, 0, 0) => self
-                .castling_rights
-                .set_castle(Color::White, CastleSide::Queenside, false),
-            (Color::White, 7, 0) => self
-                .castling_rights
-                .set_castle(Color::White, CastleSide::Kingside, false),
-            (Color::Black, 0, 7) => self
-                .castling_rights
-                .set_castle(Color::Black, CastleSide::Queenside, false),
-            (Color::Black, 7, 7) => self
-                .castling_rights
-                .set_castle(Color::Black, CastleSide::Kingside, false),
+            (Color::White, 0, 0) => {
+                self.castling_rights
+                    .set_castle(Color::White, CastleSide::Queenside, false)
+            }
+            (Color::White, 7, 0) => {
+                self.castling_rights
+                    .set_castle(Color::White, CastleSide::Kingside, false)
+            }
+            (Color::Black, 0, 7) => {
+                self.castling_rights
+                    .set_castle(Color::Black, CastleSide::Queenside, false)
+            }
+            (Color::Black, 7, 7) => {
+                self.castling_rights
+                    .set_castle(Color::Black, CastleSide::Kingside, false)
+            }
             _ => {}
         }
     }
@@ -924,7 +939,10 @@ impl Game {
 
 #[cfg(test)]
 mod tests {
-    use super::{CastleSide, CastlingRights, Color, Game, GameState, Move, MoveError, Piece, PieceKind, Square};
+    use super::{
+        CastleSide, CastlingRights, Color, Game, GameState, Move, MoveError, Piece, PieceKind,
+        Square,
+    };
 
     fn sq(file: u8, rank: u8) -> Square {
         Square::new(file, rank).unwrap()
@@ -938,8 +956,14 @@ mod tests {
         assert_eq!(game.state(), GameState::Active);
         assert_eq!(game.piece_at(sq(4, 0)), Some(Piece::new(Color::White, PieceKind::King)));
         assert_eq!(game.piece_at(sq(4, 7)), Some(Piece::new(Color::Black, PieceKind::King)));
-        assert!(game.castling_rights().can_castle(Color::White, CastleSide::Kingside));
-        assert!(game.castling_rights().can_castle(Color::Black, CastleSide::Queenside));
+        assert!(
+            game.castling_rights()
+                .can_castle(Color::White, CastleSide::Kingside)
+        );
+        assert!(
+            game.castling_rights()
+                .can_castle(Color::Black, CastleSide::Queenside)
+        );
     }
 
     #[test]
@@ -993,7 +1017,11 @@ mod tests {
         assert_eq!(outcome.castle, Some(CastleSide::Kingside));
         assert_eq!(game.piece_at(sq(6, 0)), Some(Piece::new(Color::White, PieceKind::King)));
         assert_eq!(game.piece_at(sq(5, 0)), Some(Piece::new(Color::White, PieceKind::Rook)));
-        assert!(!game.castling_rights().can_castle(Color::White, CastleSide::Kingside));
+        assert!(
+            !game
+                .castling_rights()
+                .can_castle(Color::White, CastleSide::Kingside)
+        );
     }
 
     #[test]
@@ -1006,8 +1034,18 @@ mod tests {
         let outcome = game.apply_move(Move::new(sq(3, 7), sq(7, 3))).unwrap();
 
         assert!(outcome.check);
-        assert_eq!(outcome.state, GameState::Checkmate { winner: Color::Black });
-        assert_eq!(game.state(), GameState::Checkmate { winner: Color::Black });
+        assert_eq!(
+            outcome.state,
+            GameState::Checkmate {
+                winner: Color::Black
+            }
+        );
+        assert_eq!(
+            game.state(),
+            GameState::Checkmate {
+                winner: Color::Black
+            }
+        );
     }
 
     #[test]

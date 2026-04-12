@@ -274,12 +274,18 @@ where
 
     fn next_head_position(&self) -> Option<(usize, usize)> {
         match self.direction {
-            Direction::Up => self.head_y.checked_sub(1).map(|next_y| (self.head_x, next_y)),
+            Direction::Up => self
+                .head_y
+                .checked_sub(1)
+                .map(|next_y| (self.head_x, next_y)),
             Direction::Down => {
                 let next_y = self.head_y + 1;
                 (next_y < H).then_some((self.head_x, next_y))
             }
-            Direction::Left => self.head_x.checked_sub(1).map(|next_x| (next_x, self.head_y)),
+            Direction::Left => self
+                .head_x
+                .checked_sub(1)
+                .map(|next_x| (next_x, self.head_y)),
             Direction::Right => {
                 let next_x = self.head_x + 1;
                 (next_x < W).then_some((next_x, self.head_y))
