@@ -313,6 +313,63 @@ static void dump_pipeline_executables(VkDevice device, VkPipeline pipeline) {
     free(props);
 }
 
+static void dump_host_state_reference(uint32_t max_threads_per_psd) {
+    const char *out_dir = getenv("TRUEOS_EXECUTABLE_DUMP_DIR");
+    FILE *file = NULL;
+    char path[1024];
+
+    if (out_dir && out_dir[0]) {
+        ensure_dir(out_dir);
+        snprintf(path, sizeof(path), "%s/%s", out_dir, "host_state_reference.txt");
+        file = fopen(path, "w");
+        if (!file) {
+            fprintf(stderr, "failed to open %s: %s\n", path, strerror(errno));
+            exit(1);
+        }
+    }
+
+#define HOST_STATE_LINE(...)                    \
+    do {                                        \
+        printf(__VA_ARGS__);                    \
+        if (file)                               \
+            fprintf(file, __VA_ARGS__);         \
+    } while (0)
+
+    HOST_STATE_LINE(
+        "host-state summary: path=mesa genX_simple_shader trivial-triangle target=gfx125\n"
+    );
+    HOST_STATE_LINE(
+        "host-state cc_viewport min_depth=0.0 max_depth=1.0\n"
+    );
+    HOST_STATE_LINE(
+        "host-state clip perspective_divide_disable=1\n"
+    );
+    HOST_STATE_LINE(
+        "host-state raster cull_mode=none sample_mask=0x1\n"
+    );
+    HOST_STATE_LINE(
+        "host-state sbe read_offset=1 read_length=1 num_sf_attrs=0 force_read_offset=1 force_read_length=1 flat_inputs=0 active_components=xyzw\n"
+    );
+    HOST_STATE_LINE(
+        "host-state ps vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=%u\n",
+        max_threads_per_psd
+    );
+    HOST_STATE_LINE(
+        "host-state ps_extra valid=1 attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0\n"
+    );
+    HOST_STATE_LINE(
+        "host-state ps_blend has_writeable_rt=1\n"
+    );
+    HOST_STATE_LINE(
+        "host-state target format=VK_FORMAT_R8G8B8A8_UNORM extent=64x64 samples=1 topology=triangle_list front_face=ccw polygon=fill cull=none\n"
+    );
+
+#undef HOST_STATE_LINE
+
+    if (file)
+        fclose(file);
+}
+
 int main(int argc, char **argv) {
     if (argc != 3) {
         fprintf(stderr, "usage: %s simple_triangle.vert.spv simple_triangle.frag.spv\n", argv[0]);
@@ -399,6 +456,7 @@ int main(int argc, char **argv) {
 
     VkDevice device;
     CHECK_VK(vkCreateDevice(physical_device, &device_info, NULL, &device));
+    dump_host_state_reference(63);
 
     VkQueue queue;
     vkGetDeviceQueue(device, graphics_family, 0, &queue);
