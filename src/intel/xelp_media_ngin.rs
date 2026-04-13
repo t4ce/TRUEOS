@@ -97,6 +97,8 @@ const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 const MI_BATCH_GTT: u32 = 2 << 6;
 const MI_NOOP: u32 = 0;
+const MI_FORCE_WAKEUP: u32 = 29 << 23;
+const MI_FORCE_WAKEUP_MFX_WELL: u32 = (1 << 9) | (0x300 << 16);
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
 const MI_LRI_CS_MMIO: u32 = 1 << 19;
 const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
@@ -111,7 +113,7 @@ const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
 const CTX_DESC_PRIVILEGE: u32 = 1 << 8;
 const CTX_DESC_PRIORITY_NORMAL: u32 = 1 << 9;
 const CTX_DESC_ADDRESSING_MODE_SHIFT: u32 = 3;
-const INTEL_LEGACY_64B_CONTEXT: u32 = 1;
+const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
 const STOP_RING: u32 = 1 << 8;
 
@@ -920,7 +922,8 @@ fn push_mi_nops(state: &mut [u32], idx: &mut usize, count: usize) {
 fn build_ppgtt_for_ranges(ranges: &[(u64, u64, usize)]) -> Option<u64> {
     const PAGE: usize = 4096;
     const ENTRIES: usize = 512;
-    const PTE_PRESENT_RW: u64 = 0x3; // Present + Read/Write
+    const PTE_PRESENT_RW: u64 = 0x3; // Present + Read/Write (leaf PTEs)
+    const PDE_PRESENT_RW_UC: u64 = 0x3 | (1 << 3) | (1 << 4); // Present + RW + PWT + PCD (directory entries)
 
     // Determine which 2MB-aligned PD indices we need PT pages for
     let mut pd_min = usize::MAX;
@@ -960,15 +963,15 @@ fn build_ppgtt_for_ranges(ranges: &[(u64, u64, usize)]) -> Option<u64> {
     let pdp_phys = base_phys + PAGE as u64;
     let pd_phys = base_phys + 2 * PAGE as u64;
 
-    // PML4[0] → PDP
-    tables[pml4_off] = pdp_phys | PTE_PRESENT_RW;
+    // PML4[0] → PDP (directory entries need PPAT_UNCACHED = PWT+PCD)
+    tables[pml4_off] = pdp_phys | PDE_PRESENT_RW_UC;
     // PDP[0] → PD
-    tables[pdp_off] = pd_phys | PTE_PRESENT_RW;
+    tables[pdp_off] = pd_phys | PDE_PRESENT_RW_UC;
 
     // PD[pd_min..=pd_max] → PT pages
     for i in 0..pt_count {
         let pt_phys = base_phys + (3 + i) as u64 * PAGE as u64;
-        tables[pd_off + pd_min + i] = pt_phys | PTE_PRESENT_RW;
+        tables[pd_off + pd_min + i] = pt_phys | PDE_PRESENT_RW_UC;
     }
 
     // Fill PT entries for each range
@@ -1320,6 +1323,14 @@ fn build_h264_decode_batch_skeleton(
     batch[flush + 3] = postsubmit_marker;
     batch[flush + 4] = 0;
 
+    // --- MI_FORCE_WAKEUP (Gen12: power on MFX decode well) ---
+    if idx.saturating_add(2) > batch.len() {
+        return None;
+    }
+    batch[idx] = MI_FORCE_WAKEUP;
+    batch[idx + 1] = MI_FORCE_WAKEUP_MFX_WELL;
+    idx += 2;
+
     // --- MFX_WAIT (Gen12+: required before PIPE_MODE_SELECT) ---
     if !emit_mfx_wait(batch, &mut idx) {
         return None;
@@ -1360,6 +1371,7 @@ fn build_h264_decode_batch_skeleton(
     batch[surface + 2] = ((width.saturating_sub(1)) << 4) | ((height.saturating_sub(1)) << 18);
     batch[surface + 3] = 1 | ((output_pitch.saturating_sub(1)) << 3) | (1 << 27) | (4 << 28);
     batch[surface + 4] = chroma_y_offset;
+    batch[surface + 5] = chroma_y_offset; // Y Offset for V(Cr) = same as U(Cb)
 
     // --- MFX_PIPE_BUF_ADDR_STATE ---
     let pipe_buf = begin_batch_packet(
@@ -1373,15 +1385,31 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_PIPE_BUF_ADDR_STATE,
         ),
     )?;
+    // DW3: Pre Deblocking Attributes (unused but needs valid MOCS)
+    batch[pipe_buf + 3] = MFX_MOCS_UC;
     // DW4-5: Post Deblocking Destination = output surface
     packet_write_addr64(batch, pipe_buf, 4, output_surface_gpu_addr);
     batch[pipe_buf + 6] = MFX_MOCS_UC; // Post Deblocking Attributes
+    // DW9: Original Uncompressed Picture Source Attributes
+    batch[pipe_buf + 9] = MFX_MOCS_UC;
+    // DW12: Stream-Out Data Destination Attributes
+    batch[pipe_buf + 12] = MFX_MOCS_UC;
     // DW13-14: Intra Row Store Scratch Buffer
     packet_write_addr64(batch, pipe_buf, 13, scratch_gpu_addr);
     batch[pipe_buf + 15] = MFX_MOCS_UC; // Intra Row Store Attributes
     // DW16-17: Deblocking Filter Row Store Scratch Buffer
     packet_write_addr64(batch, pipe_buf, 16, scratch_gpu_addr + 0x4000);
     batch[pipe_buf + 18] = MFX_MOCS_UC; // Deblocking Filter Row Store Attributes
+    // DW51: Reference Picture Attributes
+    batch[pipe_buf + 51] = MFX_MOCS_UC;
+    // DW54: MB Status Buffer Attributes
+    batch[pipe_buf + 54] = MFX_MOCS_UC;
+    // DW57: MB ILDB Stream-Out Buffer Attributes
+    batch[pipe_buf + 57] = MFX_MOCS_UC;
+    // DW60: Second MB ILDB Stream-Out Buffer Attributes
+    batch[pipe_buf + 60] = MFX_MOCS_UC;
+    // DW64: Scaled Reference Surface Attributes
+    batch[pipe_buf + 64] = MFX_MOCS_UC;
 
     // --- MFX_IND_OBJ_BASE_ADDR_STATE ---
     let ind_obj = begin_batch_packet(
@@ -1398,6 +1426,10 @@ fn build_h264_decode_batch_skeleton(
     packet_write_addr64(batch, ind_obj, 1, bitstream_gpu_addr);
     batch[ind_obj + 3] = MFX_MOCS_UC; // Bitstream Attributes
     packet_write_addr64(batch, ind_obj, 4, bitstream_gpu_addr + annexb_bytes as u64);
+    batch[ind_obj + 8] = MFX_MOCS_UC; // MV Object Attributes
+    batch[ind_obj + 13] = MFX_MOCS_UC; // IT-COEFF Attributes
+    batch[ind_obj + 18] = MFX_MOCS_UC; // IT-DBLK Attributes
+    batch[ind_obj + 23] = MFX_MOCS_UC; // PAK-BSE Attributes
 
     // --- MFX_BSP_BUF_BASE_ADDR_STATE ---
     let bsp = begin_batch_packet(
@@ -1415,6 +1447,7 @@ fn build_h264_decode_batch_skeleton(
     batch[bsp + 3] = MFX_MOCS_UC; // BSD Row Store Attributes
     packet_write_addr64(batch, bsp, 4, scratch_gpu_addr + 0xC000);
     batch[bsp + 6] = MFX_MOCS_UC; // MPR Row Store Attributes
+    batch[bsp + 9] = MFX_MOCS_UC; // Bitplane Read Buffer Attributes
 
     // --- MFD_AVC_DPB_STATE (27 DWords, all zeros for IDR) ---
     let _dpb = begin_batch_packet(

@@ -1122,6 +1122,27 @@ pub mod cabi {
         )
     }
 
+    pub fn queue_texture_mask_image_upload_copy(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    ) -> bool {
+        queue_texture_rgba_upload_owned(
+            tex_id,
+            width,
+            height,
+            None,
+            rgba.to_vec(),
+            TexSampleKind::Mask,
+            repaint_window_id,
+            repaint_reason,
+            false,
+        )
+    }
+
     pub fn queue_texture_rgba_image_region_upload_copy(
         tex_id: u32,
         texture_width: u32,
@@ -2302,19 +2323,19 @@ pub mod cabi {
 
         let u = wrap_tex_coord(u, sampler.wrap_s);
         let v = wrap_tex_coord(v, sampler.wrap_t);
-        let max_x = tex.width.saturating_sub(1) as f32;
-        let max_y = tex.height.saturating_sub(1) as f32;
+        let width_f = tex.width as f32;
+        let height_f = tex.height as f32;
 
         if sampler.min_filter == SamplerFilter::Nearest
             && sampler.mag_filter == SamplerFilter::Nearest
         {
-            let x = libm::floorf(u * max_x + 0.5) as i32;
-            let y = libm::floorf(v * max_y + 0.5) as i32;
+            let x = libm::floorf((u * width_f).min(width_f - 1.0)) as i32;
+            let y = libm::floorf((v * height_f).min(height_f - 1.0)) as i32;
             return sample_texel_clamped(&tex.rgba, tex.width, tex.height, x, y);
         }
 
-        let fx = u * max_x;
-        let fy = v * max_y;
+        let fx = u * width_f - 0.5;
+        let fy = v * height_f - 0.5;
         let x0 = libm::floorf(fx) as i32;
         let y0 = libm::floorf(fy) as i32;
         let x1 = x0 + 1;
@@ -2471,7 +2492,7 @@ pub mod cabi {
                     v0.a * b0 + v1.a * b1 + v2.a * b2,
                 ];
                 let tex = sample_texture_rgba(texture, sampler, u, v);
-                let mask = if tex[3] > 0.0 { tex[3] } else { tex[0] };
+                let mask = if tex[3] < 1.0 { tex[3] } else { tex[0] };
                 let src = match sample_kind {
                     TexSampleKind::Mask => [
                         vert[0] * mask,
