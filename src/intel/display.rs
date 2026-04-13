@@ -594,12 +594,13 @@ pub(crate) fn present_nv12_surface_center(
             let src_x = (col_idx.saturating_mul(scale)).min(src_width.saturating_sub(1));
             let y_off = ytile_offset(src_x, src_y, tiles_per_row);
             let y = i32::from(*src.get(y_off).unwrap_or(&0));
-            // UV plane is in the same tiled surface, starting at row chroma_y_offset
+            // UV plane is in the same tiled surface, starting at row chroma_y_offset.
+            // Intel MFX NV12 chroma: byte 0 = Cr (V), byte 1 = Cb (U).
             let uv_x = src_x & !1;
             let uv_row = chroma_y_offset + src_y / 2;
-            let u_off = ytile_offset(uv_x, uv_row, tiles_per_row);
-            let u = i32::from(*src.get(u_off).unwrap_or(&128)) - 128;
-            let v = i32::from(*src.get(u_off + 1).unwrap_or(&128)) - 128;
+            let uv_off = ytile_offset(uv_x, uv_row, tiles_per_row);
+            let v = i32::from(*src.get(uv_off).unwrap_or(&128)) - 128;
+            let u = i32::from(*src.get(uv_off + 1).unwrap_or(&128)) - 128;
             let c = (y - 16).max(0);
             let r = clamp_u8_i32((298 * c + 409 * v + 128) >> 8);
             let g = clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8);
