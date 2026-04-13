@@ -85,6 +85,7 @@ pub(super) fn alloc_window(
         content_tex_id: 0,
         content_tex_blend: false,
         hosted_surface_bg_rgba: [0, 0, 0, 0],
+        hosted_surface_fg_rgba: [0xFF, 0xFF, 0xFF, 0xFF],
         hosted_surface_tiles: Vec::new(),
         hosted_surface_interactives: Vec::new(),
         last_clicked_item_id: 0,
@@ -436,6 +437,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     let next_horizontal_scrollbar_side = source_window.horizontal_scrollbar_side;
     let next_content_tex_blend = source_window.content_tex_blend;
     let next_hosted_surface_bg_rgba = source_window.hosted_surface_bg_rgba;
+    let next_hosted_surface_fg_rgba = source_window.hosted_surface_fg_rgba;
     let next_hosted_surface_tiles = source_window.hosted_surface_tiles.clone();
     let next_hosted_surface_interactives = source_window.hosted_surface_interactives.clone();
     let next_kind = source_window.kind;
@@ -483,6 +485,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         window.content_tex_id = next_tex_id;
         window.content_tex_blend = next_content_tex_blend;
         window.hosted_surface_bg_rgba = next_hosted_surface_bg_rgba;
+        window.hosted_surface_fg_rgba = next_hosted_surface_fg_rgba;
         window.hosted_surface_tiles = next_hosted_surface_tiles;
         window.hosted_surface_interactives = next_hosted_surface_interactives;
         window.hit_test_visible = next_hit_test_visible;
@@ -799,6 +802,7 @@ pub fn set_window_hosted_surface_content(id: u32, tex_id: u32, blend_enabled: bo
 pub fn set_window_hosted_surface_tiles(
     id: u32,
     bg_rgba: [u8; 4],
+    fg_rgba: [u8; 4],
     tiles: &[Ui2HostedSurfaceTile],
 ) -> bool {
     let state_lock = init_state();
@@ -810,6 +814,7 @@ pub fn set_window_hosted_surface_tiles(
         return false;
     }
     window.hosted_surface_bg_rgba = bg_rgba;
+    window.hosted_surface_fg_rgba = fg_rgba;
     window.hosted_surface_tiles.clear();
     window.hosted_surface_tiles.extend_from_slice(tiles);
     state.compose_reason = "surface-tiles-window";
@@ -913,7 +918,7 @@ impl Ui2SurfaceWindow {
     ) -> Option<Self> {
         let window_id =
             create_hosted_surface_content_window(title, content_rect, z, alpha, 0, false);
-        if !set_window_hosted_surface_tiles(window_id, bg_rgba, &[]) {
+        if !set_window_hosted_surface_tiles(window_id, bg_rgba, [0xFF, 0xFF, 0xFF, 0xFF], &[]) {
             return None;
         }
         Some(Self {
@@ -1074,8 +1079,13 @@ impl Ui2SurfaceWindow {
         bind_window_hosted_surface_state(self.window_id, content_id, content_width, content_height)
     }
 
-    pub fn set_tiles(&self, bg_rgba: [u8; 4], tiles: &[Ui2HostedSurfaceTile]) -> bool {
-        set_window_hosted_surface_tiles(self.window_id, bg_rgba, tiles)
+    pub fn set_tiles(
+        &self,
+        bg_rgba: [u8; 4],
+        fg_rgba: [u8; 4],
+        tiles: &[Ui2HostedSurfaceTile],
+    ) -> bool {
+        set_window_hosted_surface_tiles(self.window_id, bg_rgba, fg_rgba, tiles)
     }
 
     pub fn set_interactives(&self, interactives: &[Ui2HostedInteractiveRect]) -> bool {

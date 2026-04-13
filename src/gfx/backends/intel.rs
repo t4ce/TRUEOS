@@ -1210,18 +1210,18 @@ fn sample_texel_clamped(rgba: &[u8], width: u32, height: u32, x: i32, y: i32) ->
 fn sample_texture_rgba(texture: &ImageEntry, sampler: SamplerDesc, u: f32, v: f32) -> [f32; 4] {
     let u = wrap_tex_coord(u, sampler.wrap_s);
     let v = wrap_tex_coord(v, sampler.wrap_t);
-    let max_x = texture.width.saturating_sub(1) as f32;
-    let max_y = texture.height.saturating_sub(1) as f32;
+    let width_f = texture.width as f32;
+    let height_f = texture.height as f32;
 
     if sampler.min_filter == SamplerFilter::Nearest && sampler.mag_filter == SamplerFilter::Nearest
     {
-        let x = floorf(u * max_x + 0.5) as i32;
-        let y = floorf(v * max_y + 0.5) as i32;
+        let x = floorf((u * width_f).min(width_f - 1.0)) as i32;
+        let y = floorf((v * height_f).min(height_f - 1.0)) as i32;
         return sample_texel_clamped(&texture.rgba, texture.width, texture.height, x, y);
     }
 
-    let fx = u * max_x;
-    let fy = v * max_y;
+    let fx = u * width_f - 0.5;
+    let fy = v * height_f - 0.5;
     let x0 = floorf(fx) as i32;
     let y0 = floorf(fy) as i32;
     let x1 = x0 + 1;
@@ -1382,7 +1382,7 @@ fn draw_tex_triangle_rgba(
                 v0.a * b0 + v1.a * b1 + v2.a * b2,
             ];
             let tex = sample_texture_rgba(texture, sampler, u, v);
-            let mask = if tex[3] > 0.0 { tex[3] } else { tex[0] };
+            let mask = if tex[3] < 1.0 { tex[3] } else { tex[0] };
             let src = match sample_kind {
                 SampleKind::Mask => [
                     vert[0] * mask,

@@ -11,7 +11,19 @@ fn decoration_label_draw_rect(
 ) -> Option<Ui2Rect> {
     let ch = kind.text(window).chars().next()?;
     let glyph = ui2_font_resolve_glyph(Ui2FontTier::Half, ch)?;
-    Some(ui2_font_place_glyph_top_center(&glyph, anchor))
+    Some(ui2_font_place_glyph_center(&glyph, anchor))
+}
+
+#[inline]
+fn decoration_icon_draw_rect(anchor: Ui2Rect, right_align: bool) -> Ui2Rect {
+    let side = anchor.w.min(anchor.h).max(1.0);
+    let x = if right_align {
+        anchor.x + (anchor.w - side).max(0.0)
+    } else {
+        anchor.x + ((anchor.w - side) * 0.5).max(0.0)
+    };
+    let y = anchor.y + ((anchor.h - side) * 0.5).max(0.0);
+    Ui2Rect::new(x, y, side, side)
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -173,16 +185,33 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
     let Some(rect) = window_system_button_rect(state, window, action) else {
         return;
     };
-
-    draw_window_decoration_label(state, window, Ui2DecorationLabelKind::SystemButton(action), rect);
+    let kind = Ui2DecorationIconKind::SystemButton(action);
+    if kind.icon_id(window) != 0 {
+        let draw = decoration_icon_draw_rect(rect, false);
+        draw_window_decoration_icon(state, window, kind, draw.x, draw.y, draw.w);
+    } else {
+        draw_window_decoration_label(
+            state,
+            window,
+            Ui2DecorationLabelKind::SystemButton(action),
+            rect,
+        );
+    }
 }
 
 fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
     let Some(rect) = window_bottom_resize_button_rect(state, window) else {
         return;
     };
-
-    draw_window_decoration_label(state, window, Ui2DecorationLabelKind::ResizeHandle, rect);
+    let draw = decoration_icon_draw_rect(rect, true);
+    draw_window_decoration_icon(
+        state,
+        window,
+        Ui2DecorationIconKind::ResizeHandle,
+        draw.x,
+        draw.y,
+        draw.w,
+    );
 }
 
 fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
@@ -835,8 +864,7 @@ pub(super) fn window_bottom_resize_button_rect(
     state: &Ui2State,
     window: &Ui2Window,
 ) -> Option<Ui2Rect> {
-    let anchor = window_bottom_resize_button_anchor_rect(state, window)?;
-    decoration_label_draw_rect(window, Ui2DecorationLabelKind::ResizeHandle, anchor)
+    window_bottom_resize_button_anchor_rect(state, window)
 }
 
 fn window_bottom_resize_button_anchor_rect(
@@ -852,12 +880,9 @@ fn window_bottom_resize_button_anchor_rect(
     let bar = window_bottom_bar_rect(state, window)?;
     let button_w = UI2_BOTTOM_RESIZE_BUTTON_W.min(bar.w.max(1.0));
     let button_h = UI2_BOTTOM_RESIZE_BUTTON_H.min(bar.h.max(1.0));
-    Some(Ui2Rect::new(
-        bar.x + bar.w - 1.0 - UI2_BOTTOM_RESIZE_BUTTON_PAD - button_w,
-        bar.y,
-        button_w,
-        button_h,
-    ))
+    let button_x = bar.x + (bar.w - UI2_BOTTOM_RESIZE_BUTTON_PAD - button_w).max(0.0);
+    let button_y = bar.y + ((bar.h - button_h) * 0.5).max(0.0);
+    Some(Ui2Rect::new(button_x, button_y, button_w, button_h))
 }
 
 pub(super) fn window_system_button_rect(
@@ -865,8 +890,7 @@ pub(super) fn window_system_button_rect(
     window: &Ui2Window,
     action: Ui2SystemButtonAction,
 ) -> Option<Ui2Rect> {
-    let anchor = window_system_button_anchor_rect(state, window, action)?;
-    decoration_label_draw_rect(window, Ui2DecorationLabelKind::SystemButton(action), anchor)
+    window_system_button_anchor_rect(state, window, action)
 }
 
 fn window_system_button_anchor_rect(
@@ -877,9 +901,9 @@ fn window_system_button_anchor_rect(
     if window.decoration_mode != Ui2WindowDecorationMode::System || !window.titlebar_visible {
         return None;
     }
-    let rect = effective_window_rect(state, window);
-    let button_y = rect.y;
-    let mut right_x = rect.x + rect.w - 6.0 - UI2_SYSTEM_BUTTON_W;
+    let titlebar = window_decoration_rect(state, window)?;
+    let button_y = titlebar.y + ((titlebar.h - UI2_SYSTEM_BUTTON_H) * 0.5).max(0.0);
+    let mut right_x = titlebar.x + titlebar.w - 6.0 - UI2_SYSTEM_BUTTON_W;
     let close_x = right_x;
     right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
     let maximize_x = right_x;
