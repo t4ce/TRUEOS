@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use alloc::format;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use spin::Mutex;
@@ -49,6 +50,7 @@ const RING_IPEHR: usize = 0x68;
 const RING_INSTDONE: usize = 0x6C;
 const RING_INSTPS: usize = 0x70;
 const RING_CONTEXT_CONTROL: usize = 0x244;
+const RING_CONTEXT_CONTROL_REF: usize = 0x5A0;
 const RING_MODE_GEN7: usize = 0x29C;
 const RING_EXECLIST_STATUS_LO: usize = 0x234;
 const RING_EXECLIST_STATUS_HI: usize = 0x238;
@@ -66,9 +68,12 @@ const MEDIA_DEFAULT_SCRATCH_BYTES: usize = 64 * 1024;
 const MEDIA_SCRATCH_OFFSET_BYTES: usize = MEDIA_DEFAULT_SCRATCH_BYTES;
 const MEDIA_SUBMIT_POLL_ITERS: usize = 100_000;
 
-const MEDIA_HTTPS_DEMO_URL: &str = "https://filesamples.com/samples/video/mp4/sample_640x360.mp4";
-const MEDIA_HTTPS_DEMO_TIMEOUT_MS: u32 = 45_000;
-const MEDIA_HTTPS_DEMO_MAX_BYTES: usize = 1024 * 1024 * 1024;
+const MEDIA_HTTP_LOCAL_DEMO_URLS: [&str; 2] = [
+    "http://192.168.178.112:8080/tools/vid/demo_yelly.mp4",
+    "http://pcjb:8080/tools/vid/demo_yelly.mp4",
+];
+const MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS: u32 = 90_000;
+const MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES: usize = 1024 * 1024 * 1024;
 
 const RING_HWS_PGA: usize = 0x80;
 const RING_HWSTAM: usize = 0x98;
@@ -77,6 +82,7 @@ const RING_EXECLIST_SQ_LO: usize = 0x510;
 const RING_EXECLIST_SQ_HI: usize = 0x514;
 const RING_BBADDR: usize = 0x140;
 const RING_BBADDR_UDW: usize = 0x168;
+const GEN12_RING_FAULT_REG: usize = 0x0000_CEC4;
 
 const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
 const MI_USE_GGTT: u32 = 1 << 22;
@@ -94,12 +100,17 @@ const MI_LRI_CS_MMIO: u32 = 1 << 19;
 const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
 
 const EL_CTRL_LOAD: u32 = 1 << 0;
+const CTX_CTRL_RS_CTX_ENABLE: u32 = 1 << 1;
+const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
+const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
+const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
 const CTX_DESC_VALID: u32 = 1 << 0;
 const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
 const CTX_DESC_PRIVILEGE: u32 = 1 << 8;
 const CTX_DESC_PRIORITY_NORMAL: u32 = 1 << 9;
 const CTX_DESC_ADDRESSING_MODE_SHIFT: u32 = 3;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
+const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
 const STOP_RING: u32 = 1 << 8;
 
 const MEDIA_PIPELINE_MFX: u32 = 2;
@@ -396,6 +407,7 @@ pub(crate) struct MediaBitstreamDemoState {
     pub submit_completed: bool,
     pub present_attempted: bool,
     pub present_ready: bool,
+    pub synthetic_preview: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -551,7 +563,7 @@ fn current_api_shape(transport: MediaSubmissionTransport) -> MediaApiShape {
         workload: MediaWorkloadKind::DecodeBitstream,
         preferred_engine_class: Some(MediaEngineClass::VideoDecode),
         transport,
-        summary: "download an MP4 sample, parse H.264 AU0, and preview it on the primary surface",
+        summary: "fetch a local HTTP MP4, parse H.264 AU0, and preview it on the primary surface",
     };
     api.routes[1] = MediaApiRoute {
         name: "media.decode.submit",
@@ -699,6 +711,62 @@ fn store_kickoff_state(stage: MediaKickoffStage, demo: Option<MediaBitstreamDemo
     *MEDIA_KICKOFF_STATE.lock() = rebuild_kickoff_state(stage, demo);
 }
 
+fn log_kickoff_overview(state: &MediaKickoffState) {
+    let default_decode = state
+        .topology
+        .default_decode
+        .and_then(|id| {
+            state
+                .topology
+                .engines
+                .iter()
+                .take(state.topology.planned_engine_count)
+                .find(|engine| engine.id == id)
+                .copied()
+        })
+        .unwrap_or(state.topology.engines[0]);
+    let active_route = state
+        .api
+        .routes
+        .iter()
+        .take(state.api.route_count)
+        .find(|route| route.workload == MediaWorkloadKind::DecodeBitstream)
+        .copied()
+        .unwrap_or(MediaApiRoute::empty());
+    let runtime = state
+        .runtimes
+        .iter()
+        .take(state.runtime_count)
+        .find(|runtime| runtime.name == default_decode.name)
+        .copied()
+        .unwrap_or(MediaEngineRuntimeSnapshot::unused());
+
+    crate::log!(
+        "intel/media: gather sku={} route={} engine={} class={:?} caps=decode:{} huc:{} sfc:{} rel_lrc:{} transport={:?}\n",
+        state.topology.sku_name,
+        active_route.name,
+        default_decode.name,
+        default_decode.id.class,
+        default_decode.capabilities.decode as u8,
+        default_decode.capabilities.huc_assist as u8,
+        default_decode.capabilities.sfc as u8,
+        default_decode.capabilities.relative_mmio_lrc as u8,
+        state.preferred_transport,
+    );
+    crate::log!(
+        "intel/media: probe wake={}/{} engine={} observed={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} instdone=0x{:08X}\n",
+        state.wake.awake_count,
+        state.wake.slice_count,
+        runtime.name,
+        runtime.observed as u8,
+        runtime.head,
+        runtime.tail,
+        runtime.acthd,
+        runtime.ipehr,
+        runtime.instdone,
+    );
+}
+
 fn find_fourcc(bytes: &[u8], fourcc: &[u8; 4]) -> Option<usize> {
     bytes.windows(4).position(|window| window == fourcc)
 }
@@ -820,17 +888,23 @@ fn push_mi_nops(state: &mut [u32], idx: &mut usize, count: usize) {
 fn build_ring_batch_start_words(
     ring_virt: *mut u8,
     ring_bytes: usize,
+    result_gpu_addr: u64,
+    prelaunch_marker: u32,
     batch_gpu_addr: u64,
 ) -> Option<usize> {
-    if ring_virt.is_null() || ring_bytes < 16 {
+    if ring_virt.is_null() || ring_bytes < 32 {
         return None;
     }
-    let dwords = unsafe { core::slice::from_raw_parts_mut(ring_virt as *mut u32, 4) };
-    dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT;
-    dwords[1] = batch_gpu_addr as u32;
-    dwords[2] = (batch_gpu_addr >> 32) as u32;
-    dwords[3] = MI_NOOP;
-    Some(16)
+    let dwords = unsafe { core::slice::from_raw_parts_mut(ring_virt as *mut u32, 8) };
+    dwords[0] = MI_STORE_DWORD_IMM_GEN4_LEN_DW4;
+    dwords[1] = (result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT) as u32;
+    dwords[2] = ((result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT) >> 32) as u32;
+    dwords[3] = prelaunch_marker;
+    dwords[4] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT;
+    dwords[5] = batch_gpu_addr as u32;
+    dwords[6] = (batch_gpu_addr >> 32) as u32;
+    dwords[7] = MI_NOOP;
+    Some(32)
 }
 
 fn ring_ctl_value_for_size(size: usize) -> Option<u32> {
@@ -850,6 +924,23 @@ fn build_execlist_context_descriptor_for_gpu_addr(context_gpu_addr: u64) -> (u32
     )
 }
 
+fn write_video_lrc_ring_tail(context_virt: *mut u8, context_len: usize, ring_tail: u32) {
+    const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
+    const CTX_RING_TAIL_DW: usize = 3;
+
+    if context_virt.is_null() {
+        return;
+    }
+    let total_dwords = context_len / core::mem::size_of::<u32>();
+    if total_dwords <= LRC_STATE_OFFSET_DWORDS + CTX_RING_TAIL_DW {
+        return;
+    }
+
+    let dwords = unsafe { core::slice::from_raw_parts_mut(context_virt as *mut u32, total_dwords) };
+    dwords[LRC_STATE_OFFSET_DWORDS + CTX_RING_TAIL_DW] = ring_tail;
+    super::dma_flush(context_virt, context_len);
+}
+
 fn init_gen12_video_context_image(
     context_virt: *mut u8,
     context_len: usize,
@@ -860,12 +951,10 @@ fn init_gen12_video_context_image(
     hws_pga: u32,
 ) -> bool {
     const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
-    const CTX_CONTEXT_CONTROL_DW: usize = 1;
     const CTX_RING_HEAD_DW: usize = 2;
     const CTX_RING_TAIL_DW: usize = 3;
     const CTX_RING_START_DW: usize = 4;
     const CTX_RING_CTL_DW: usize = 5;
-    const CTX_RING_MI_MODE_DW: usize = 6;
 
     if context_virt.is_null() {
         return false;
@@ -884,11 +973,10 @@ fn init_gen12_video_context_image(
     let mut idx = 0usize;
     state[idx] = MI_NOOP;
     idx += 1;
-    state[idx] = mi_lri_cmd(15, MI_LRI_FORCE_POSTED);
+    state[idx] = mi_lri_cmd(11, MI_LRI_FORCE_POSTED);
     idx += 1;
-    let ctx_ctl_seed = masked_bits_update(2, 1 | 4 | 8);
     state[idx] = ring_base + 0x244;
-    state[idx + 1] = ctx_ctl_seed;
+    state[idx + 1] = 0x0009_0009;
     state[idx + 2] = ring_base + 0x34;
     state[idx + 3] = 0;
     state[idx + 4] = ring_base + 0x30;
@@ -897,28 +985,20 @@ fn init_gen12_video_context_image(
     state[idx + 7] = ring_start;
     state[idx + 8] = ring_base + 0x3C;
     state[idx + 9] = ring_ctl;
-    state[idx + 10] = ring_base + 0x9C;
-    state[idx + 11] = STOP_RING << 16;
-    state[idx + 12] = ring_base + 0x80;
-    state[idx + 13] = hws_pga;
-    state[idx + 14] = ring_base + 0x168;
+    state[idx + 10] = ring_base + 0x168;
+    state[idx + 11] = 0;
+    state[idx + 12] = ring_base + 0x140;
+    state[idx + 13] = 0;
+    state[idx + 14] = ring_base + 0x110;
     state[idx + 15] = 0;
-    state[idx + 16] = ring_base + 0x140;
+    state[idx + 16] = ring_base + 0x11C;
     state[idx + 17] = 0;
-    state[idx + 18] = ring_base + 0x110;
+    state[idx + 18] = ring_base + 0x114;
     state[idx + 19] = 0;
-    state[idx + 20] = ring_base + 0x1C0;
+    state[idx + 20] = ring_base + 0x118;
     state[idx + 21] = 0;
-    state[idx + 22] = ring_base + 0x1C4;
-    state[idx + 23] = 0;
-    state[idx + 24] = ring_base + 0x1C8;
-    state[idx + 25] = 0;
-    state[idx + 26] = ring_base + 0x180;
-    state[idx + 27] = 0;
-    state[idx + 28] = ring_base + 0x2B4;
-    state[idx + 29] = 0;
-    idx += 30;
-    push_mi_nops(state, &mut idx, 5);
+    idx += 22;
+    push_mi_nops(state, &mut idx, 9);
     state[idx] = mi_lri_cmd(9, MI_LRI_FORCE_POSTED);
     idx += 1;
     for offset in [
@@ -928,19 +1008,11 @@ fn init_gen12_video_context_image(
         state[idx + 1] = 0;
         idx += 2;
     }
-    push_mi_nops(state, &mut idx, 13);
-    state[idx] = mi_lri_cmd(1, 0);
-    idx += 1;
-    state[idx] = ring_base + 0x200;
-    state[idx + 1] = 0;
-    idx += 2;
     push_mi_nops(state, &mut idx, 12);
-    state[CTX_CONTEXT_CONTROL_DW] = ctx_ctl_seed;
     state[CTX_RING_HEAD_DW] = 0;
     state[CTX_RING_TAIL_DW] = ring_tail;
     state[CTX_RING_START_DW] = ring_start;
     state[CTX_RING_CTL_DW] = ring_ctl;
-    state[CTX_RING_MI_MODE_DW] = STOP_RING << 16;
     state[idx] = MI_BATCH_BUFFER_END | 1;
     true
 }
@@ -1232,6 +1304,8 @@ fn execlist_submit_port_push(
     context1_hi: u32,
 ) {
     let submit_port = ring_base + RING_EXECLIST_SUBMIT_PORT;
+    super::mmio_write(dev, ring_base + RING_EXECLIST_SQ_LO, context0_lo);
+    super::mmio_write(dev, ring_base + RING_EXECLIST_SQ_HI, context0_hi);
     super::mmio_write(dev, submit_port, context0_lo);
     super::mmio_write(dev, submit_port, context0_hi);
     super::mmio_write(dev, submit_port, context1_lo);
@@ -1321,6 +1395,7 @@ fn submit_decode_bitstream_demo(
     }
 
     let kickoff_marker = marker_base(engine);
+    let ring_prelaunch_marker = kickoff_marker.wrapping_sub(1);
     let presubmit_marker = kickoff_marker + 1;
     let postsubmit_marker = kickoff_marker + 2;
     let complete_marker = kickoff_marker + 3;
@@ -1345,6 +1420,8 @@ fn submit_decode_bitstream_demo(
     let ring_tail_bytes = build_ring_batch_start_words(
         backing.ring_virt,
         backing.ring_bytes,
+        windows.result_gpu_addr,
+        ring_prelaunch_marker,
         windows.batch_gpu_addr,
     )?;
     let ring_ctl = ring_ctl_value_for_size(backing.ring_bytes)?;
@@ -1361,6 +1438,7 @@ fn submit_decode_bitstream_demo(
     ) {
         return None;
     }
+    write_video_lrc_ring_tail(backing.context_virt, backing.context_bytes, ring_tail_bytes as u32);
 
     super::dma_flush(backing.bitstream_virt, annex_b.len());
     super::dma_flush(backing.batch_virt, batch_tail_bytes);
@@ -1380,6 +1458,21 @@ fn submit_decode_bitstream_demo(
     );
     let (ctx_desc_lo, ctx_desc_hi) =
         build_execlist_context_descriptor_for_gpu_addr(windows.context_gpu_addr);
+    super::mmio_write(
+        dev,
+        engine.ring_base + RING_MODE_GEN7,
+        GEN11_GFX_DISABLE_LEGACY_MODE | (GEN11_GFX_DISABLE_LEGACY_MODE << 16),
+    );
+    let ctx_ctl_after = masked_bits_update(
+        CTX_CTRL_RS_CTX_ENABLE,
+        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
+            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
+            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
+    );
+    super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl_after);
+    super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
+    super::mmio_write(dev, engine.ring_base + RING_HWS_PGA, pphwsp_gpu);
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     execlist_submit_port_push(dev, engine.ring_base, ctx_desc_lo, ctx_desc_hi, 0, 0);
     super::mmio_write(dev, engine.ring_base + RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
 
@@ -1397,6 +1490,52 @@ fn submit_decode_bitstream_demo(
     super::dma_flush(output_surface_virt, output_bytes);
     super::dma_flush(backing.result_virt, backing.result_bytes);
 
+    if !completed {
+        let kickoff = read_result_dword(backing.result_virt, MEDIA_RESULT_KICKOFF_SLOT);
+        let presubmit = read_result_dword(backing.result_virt, MEDIA_RESULT_PRESUBMIT_SLOT);
+        let postsubmit = read_result_dword(backing.result_virt, MEDIA_RESULT_POSTSUBMIT_SLOT);
+        let complete = read_result_dword(backing.result_virt, MEDIA_RESULT_COMPLETE_SLOT);
+        let head = super::mmio_read(dev, engine.ring_base + RING_HEAD);
+        let tail = super::mmio_read(dev, engine.ring_base + RING_TAIL);
+        let acthd = super::mmio_read(dev, engine.ring_base + RING_ACTHD);
+        let ipehr = super::mmio_read(dev, engine.ring_base + RING_IPEHR);
+        let ipeir = super::mmio_read(dev, engine.ring_base + RING_IPEIR);
+        let instdone = super::mmio_read(dev, engine.ring_base + RING_INSTDONE);
+        let el_status_lo = super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO);
+        let el_status_hi = super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_HI);
+        let bbaddr_lo = super::mmio_read(dev, engine.ring_base + RING_BBADDR);
+        let bbaddr_hi = super::mmio_read(dev, engine.ring_base + RING_BBADDR_UDW);
+        let fault = super::mmio_read(dev, GEN12_RING_FAULT_REG);
+
+        crate::log!(
+            "intel/media: submit diag engine={} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X}\n",
+            engine.name,
+            kickoff,
+            kickoff_marker,
+            presubmit,
+            presubmit_marker,
+            postsubmit,
+            postsubmit_marker,
+            complete,
+            complete_marker,
+        );
+        crate::log!(
+            "intel/media: submit probe engine={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} ipeir=0x{:08X} instdone=0x{:08X} bbaddr=0x{:08X}{:08X} fault=0x{:08X} el_lo=0x{:08X} el_hi=0x{:08X}\n",
+            engine.name,
+            head,
+            tail,
+            acthd,
+            ipehr,
+            ipeir,
+            instdone,
+            bbaddr_hi,
+            bbaddr_lo,
+            fault,
+            el_status_lo,
+            el_status_hi,
+        );
+    }
+
     Some((
         completed,
         output_pitch,
@@ -1407,7 +1546,7 @@ fn submit_decode_bitstream_demo(
     ))
 }
 
-fn render_preview_into_output(
+fn render_whitenoise_preview_into_output(
     ptr: *mut u8,
     pitch_bytes: usize,
     width: usize,
@@ -1425,21 +1564,22 @@ fn render_preview_into_output(
             for x in 0..width {
                 let pixel = row.add(x.saturating_mul(4));
                 let idx = (y.saturating_mul(width) + x) % len;
-                let a = source[idx % len];
+                let a = source[idx];
                 let b = source[(idx.saturating_mul(5) + 17) % len];
                 let c = source[(idx.saturating_mul(11) + 31) % len];
-                let grad_x = ((x * 255) / width.max(1)) as u8;
-                let grad_y = ((y * 255) / height.max(1)) as u8;
-                let blue = a ^ grad_x;
-                let green = b ^ grad_y;
-                let red = if highlight_idr {
-                    c ^ grad_x ^ grad_y
-                } else {
-                    c ^ grad_y
-                };
-                core::ptr::write_volatile(pixel, blue);
-                core::ptr::write_volatile(pixel.add(1), green);
-                core::ptr::write_volatile(pixel.add(2), red);
+                let pos = ((x as u32).wrapping_mul(0x45D9F3B) ^ (y as u32).wrapping_mul(0x119D_E1F3))
+                    .rotate_left(7);
+                let mut noise = a
+                    ^ b.rotate_left((x & 7) as u32)
+                    ^ c.rotate_right((y & 7) as u32)
+                    ^ pos as u8
+                    ^ (pos >> 8) as u8;
+                if highlight_idr {
+                    noise ^= 0x3C;
+                }
+                core::ptr::write_volatile(pixel, noise);
+                core::ptr::write_volatile(pixel.add(1), noise);
+                core::ptr::write_volatile(pixel.add(2), noise);
                 core::ptr::write_volatile(pixel.add(3), 0);
             }
         }
@@ -1534,6 +1674,7 @@ pub(crate) fn kickoff_once() {
             state.topology.planned_engine_count,
             state.preferred_transport
         );
+        log_kickoff_overview(&state);
     }
 }
 
@@ -1584,12 +1725,55 @@ pub(crate) fn demo_surface_window(name: &str) -> Option<MediaSurfaceWindow> {
         "media.output" => Some(MediaSurfaceWindow {
             name: "media.output",
             gpu_addr: demo.output_surface_gpu_addr,
-            phys: backing.output_surface_phys,
-            virt: backing.output_surface_virt,
-            bytes: backing.output_surface_bytes,
+            phys: demo.output_surface_phys,
+            virt: {
+                let offset = usize::try_from(
+                    demo.output_surface_phys
+                        .checked_sub(backing.output_surface_phys)?,
+                )
+                .ok()?;
+                if offset > backing.output_surface_bytes {
+                    return None;
+                }
+                unsafe { backing.output_surface_virt.add(offset) }
+            },
+            bytes: demo
+                .output_surface_bytes
+                .min(backing.output_surface_bytes.saturating_sub(
+                    usize::try_from(
+                        demo.output_surface_phys
+                            .checked_sub(backing.output_surface_phys)?,
+                    )
+                    .ok()?,
+                )),
         }),
         _ => None,
     }
+}
+
+async fn fetch_media_demo_body_async() -> Option<(&'static str, Vec<u8>)> {
+    for url in MEDIA_HTTP_LOCAL_DEMO_URLS {
+        crate::log!(
+            "intel/media: try local url={} timeout_ms={} max_bytes={}\n",
+            url,
+            MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
+            MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES,
+        );
+        match crate::r::net::http::fetch_http_body(
+            url,
+            MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
+            MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES,
+        )
+        .await
+        {
+            Ok(body) => return Some((url, body)),
+            Err(err) => {
+                crate::log!("intel/media: local fetch failed url={} err={:?}\n", url, err);
+            }
+        }
+    }
+
+    None
 }
 
 pub(crate) async fn run_https_media_demo_once_async() {
@@ -1612,30 +1796,23 @@ pub(crate) async fn run_https_media_demo_once_async() {
     let windows = engine_window(0);
 
     crate::log!(
-        "intel/media: begin url={} timeout_ms={} max_bytes={} engine={}\n",
-        MEDIA_HTTPS_DEMO_URL,
-        MEDIA_HTTPS_DEMO_TIMEOUT_MS,
-        MEDIA_HTTPS_DEMO_MAX_BYTES,
+        "intel/media: begin local_urls={:?} engine={}\n",
+        MEDIA_HTTP_LOCAL_DEMO_URLS,
         engine.name
     );
 
-    let body = match crate::r::net::https::fetch_https_body_async(
-        MEDIA_HTTPS_DEMO_URL,
-        MEDIA_HTTPS_DEMO_TIMEOUT_MS,
-        MEDIA_HTTPS_DEMO_MAX_BYTES,
-    )
-    .await
-    {
-        Ok(body) => body,
-        Err(err) => {
-            crate::log!("intel/media: fetch failed err={:?}\n", err);
+    let (source_url, body) = match fetch_media_demo_body_async().await {
+        Some(payload) => payload,
+        None => {
+            crate::log!("intel/media: fetch failed local_http_candidates_exhausted=1\n");
             store_kickoff_state(MediaKickoffStage::SubmissionWiring, None);
             return;
         }
     };
 
     crate::log!(
-        "intel/media: fetched bytes={} mp4_ftyp={} mp4_moov={} mp4_mdat={}\n",
+        "intel/media: fetched url={} bytes={} mp4_ftyp={} mp4_moov={} mp4_mdat={}\n",
+        source_url,
         body.len(),
         find_fourcc(body.as_slice(), b"ftyp").is_some() as u8,
         find_fourcc(body.as_slice(), b"moov").is_some() as u8,
@@ -1677,6 +1854,17 @@ pub(crate) async fn run_https_media_demo_once_async() {
         annex_b.has_idr as u8,
         nal_types
     );
+    crate::log!(
+        "intel/media: codec codec=h264 profile=0x{:02X} level=0x{:02X} frame={}x{} avcc_nal={} sample_nals={} idr={} annexb=0x{:X}\n",
+        summary.avcc.profile_idc,
+        summary.avcc.level_idc,
+        summary.width,
+        summary.height,
+        summary.avcc.nal_length_size,
+        annex_b.sample_nal_count,
+        annex_b.has_idr as u8,
+        annex_b.bytes.len(),
+    );
 
     let Some(backing) = ensure_demo_backing(dev, windows) else {
         crate::log!("intel/media: backing alloc/map failed\n");
@@ -1700,20 +1888,15 @@ pub(crate) async fn run_https_media_demo_once_async() {
 
     let kickoff_marker = marker_base(engine);
     let complete_marker = kickoff_marker + 3;
-    let mut used_output_bytes = preview_pitch.saturating_mul(preview_h);
+    let preview_output_bytes = preview_pitch.saturating_mul(preview_h);
+    let mut used_output_bytes = preview_output_bytes;
     let mut output_surface_gpu_addr = windows.output_surface_gpu_addr;
     let mut output_surface_phys = backing.output_surface_phys;
     let mut output_surface_virt = backing.output_surface_virt;
     let mut submit_completed = false;
+    let mut synthetic_preview = false;
 
-    if let Some((
-        completed,
-        decoded_pitch,
-        decoded_bytes,
-        decoded_gpu_addr,
-        decoded_phys,
-        decoded_virt,
-    )) = submit_decode_bitstream_demo(
+    match submit_decode_bitstream_demo(
         dev,
         engine,
         windows,
@@ -1724,77 +1907,113 @@ pub(crate) async fn run_https_media_demo_once_async() {
         annex_b.sample_nal_count,
         annex_b.has_idr,
     ) {
-        used_output_bytes = decoded_bytes;
-        output_surface_gpu_addr = decoded_gpu_addr;
-        output_surface_phys = decoded_phys;
-        output_surface_virt = decoded_virt;
-        submit_completed = completed;
-        let output_surface = unsafe {
-            core::slice::from_raw_parts(output_surface_virt as *const u8, used_output_bytes)
-        };
-        let (ready, signature, nonzero) = progressive_present_output_surface(
-            output_surface,
-            summary.width,
-            summary.height,
+        Some((
+            completed,
             decoded_pitch,
-            submit_completed,
-        );
-        if ready {
-            let demo = MediaBitstreamDemoState {
-                ready: true,
-                engine_name: engine.name,
-                ring_gpu_addr: windows.ring_gpu_addr,
-                context_gpu_addr: windows.context_gpu_addr,
-                batch_gpu_addr: windows.batch_gpu_addr,
-                result_gpu_addr: windows.result_gpu_addr,
-                bitstream_gpu_addr: windows.bitstream_gpu_addr,
-                output_surface_gpu_addr,
-                bitstream_phys: backing.bitstream_phys,
-                output_surface_phys,
-                bitstream_bytes: annex_b.bytes.len(),
-                output_surface_bytes: used_output_bytes,
-                frame_width: summary.width,
-                frame_height: summary.height,
-                output_surface_pitch: decoded_pitch,
-                sample_nal_count: annex_b.sample_nal_count,
-                has_idr: annex_b.has_idr,
-                kickoff_marker,
-                complete_marker,
-                output_surface_signature: signature,
-                output_surface_nonzero_samples: nonzero,
-                submit_completed,
-                present_attempted: true,
-                present_ready: ready,
+            decoded_bytes,
+            decoded_gpu_addr,
+            decoded_phys,
+            decoded_virt,
+        )) => {
+            used_output_bytes = decoded_bytes;
+            output_surface_gpu_addr = decoded_gpu_addr;
+            output_surface_phys = decoded_phys;
+            output_surface_virt = decoded_virt;
+            submit_completed = completed;
+            let output_surface = unsafe {
+                core::slice::from_raw_parts(output_surface_virt as *const u8, used_output_bytes)
             };
-            crate::log!(
-                "intel/media: decoded output ready engine={} frame={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} present_ready={} submit_completed={} transport={:?}\n",
-                demo.engine_name,
-                demo.frame_width,
-                demo.frame_height,
-                demo.output_surface_pitch,
-                demo.bitstream_bytes,
-                demo.output_surface_signature,
-                demo.output_surface_nonzero_samples,
-                demo.present_ready as u8,
-                demo.submit_completed as u8,
-                preferred_transport()
+            let (ready, signature, nonzero) = progressive_present_output_surface(
+                output_surface,
+                summary.width,
+                summary.height,
+                decoded_pitch,
+                submit_completed,
             );
-            store_kickoff_state(MediaKickoffStage::Smoke, Some(demo));
-            return;
+            if ready {
+                let demo = MediaBitstreamDemoState {
+                    ready,
+                    engine_name: engine.name,
+                    ring_gpu_addr: windows.ring_gpu_addr,
+                    context_gpu_addr: windows.context_gpu_addr,
+                    batch_gpu_addr: windows.batch_gpu_addr,
+                    result_gpu_addr: windows.result_gpu_addr,
+                    bitstream_gpu_addr: windows.bitstream_gpu_addr,
+                    output_surface_gpu_addr,
+                    bitstream_phys: backing.bitstream_phys,
+                    output_surface_phys,
+                    bitstream_bytes: annex_b.bytes.len(),
+                    output_surface_bytes: used_output_bytes,
+                    frame_width: summary.width,
+                    frame_height: summary.height,
+                    output_surface_pitch: decoded_pitch,
+                    sample_nal_count: annex_b.sample_nal_count,
+                    has_idr: annex_b.has_idr,
+                    kickoff_marker,
+                    complete_marker,
+                    output_surface_signature: signature,
+                    output_surface_nonzero_samples: nonzero,
+                    submit_completed,
+                    present_attempted: true,
+                    present_ready: ready,
+                    synthetic_preview: false,
+                };
+                crate::log!(
+                    "intel/media: decoded output ready engine={} frame={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} present_ready={} submit_completed={} synthetic_preview=0 transport={:?}\n",
+                    demo.engine_name,
+                    demo.frame_width,
+                    demo.frame_height,
+                    demo.output_surface_pitch,
+                    demo.bitstream_bytes,
+                    demo.output_surface_signature,
+                    demo.output_surface_nonzero_samples,
+                    demo.present_ready as u8,
+                    demo.submit_completed as u8,
+                    preferred_transport()
+                );
+                store_kickoff_state(MediaKickoffStage::Smoke, Some(demo));
+                return;
+            }
+
+            crate::log!(
+                "intel/media: decoded output rejected engine={} frame={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} present_ready={} submit_completed={} fallback=white-noise-preview\n",
+                engine.name,
+                summary.width,
+                summary.height,
+                decoded_pitch,
+                annex_b.bytes.len(),
+                signature,
+                nonzero,
+                ready as u8,
+                submit_completed as u8,
+            );
+        }
+        None => {
+            crate::log!(
+                "intel/media: decode submit unavailable engine={} fallback=white-noise-preview\n",
+                engine.name,
+            );
         }
     }
 
-    render_preview_into_output(
-        backing.output_surface_virt,
+    synthetic_preview = true;
+    used_output_bytes = preview_output_bytes;
+    output_surface_gpu_addr = windows.output_surface_gpu_addr;
+    output_surface_phys = backing.output_surface_phys;
+    output_surface_virt = backing.output_surface_virt;
+
+    render_whitenoise_preview_into_output(
+        output_surface_virt,
         preview_pitch,
         preview_w,
         preview_h,
         annex_b.bytes.as_slice(),
         annex_b.has_idr,
     );
+    super::dma_flush(output_surface_virt, used_output_bytes);
 
     let output_surface = unsafe {
-        core::slice::from_raw_parts(backing.output_surface_virt as *const u8, used_output_bytes)
+        core::slice::from_raw_parts(output_surface_virt as *const u8, used_output_bytes)
     };
     let present_ready = super::display::present_rgba_surface_center(
         output_surface,
@@ -1806,7 +2025,7 @@ pub(crate) async fn run_https_media_demo_once_async() {
         sample_surface_signature(output_surface);
 
     let demo = MediaBitstreamDemoState {
-        ready: true,
+        ready: present_ready,
         engine_name: engine.name,
         ring_gpu_addr: windows.ring_gpu_addr,
         context_gpu_addr: windows.context_gpu_addr,
@@ -1830,10 +2049,11 @@ pub(crate) async fn run_https_media_demo_once_async() {
         submit_completed,
         present_attempted: true,
         present_ready,
+        synthetic_preview,
     };
 
     crate::log!(
-        "intel/media: preview ready engine={} preview={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} present_ready={} transport={:?}\n",
+        "intel/media: white-noise preview fallback engine={} preview={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} present_ready={} submit_completed={} synthetic_preview=1 transport={:?}\n",
         demo.engine_name,
         demo.frame_width,
         demo.frame_height,
@@ -1842,6 +2062,7 @@ pub(crate) async fn run_https_media_demo_once_async() {
         demo.output_surface_signature,
         demo.output_surface_nonzero_samples,
         demo.present_ready as u8,
+        demo.submit_completed as u8,
         preferred_transport()
     );
 

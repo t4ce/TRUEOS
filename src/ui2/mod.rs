@@ -21,7 +21,13 @@ mod ui2_win;
 
 use self::gadget::*;
 use self::ui2_browser::*;
-pub(crate) use self::ui2_font::*;
+use self::ui2_font::*;
+pub(crate) use self::ui2_font::{
+    Ui2FontCpuAtlases, Ui2FontTextAlign, Ui2FontTier, Ui2FontVerticalAlign,
+    ui2_font_blit_char_rgba, ui2_font_blit_text_rgba, ui2_font_char_advance_px,
+    ui2_font_decode_cpu_atlases, ui2_font_has_glyph, ui2_font_measure_text,
+    ui2_font_measure_text_for_px, ui2_font_native_line_height_px,
+};
 pub(crate) use self::ui2_font_bucketproducer::*;
 use self::ui2_hid::*;
 pub(crate) use self::ui2_hid::{Ui2CursorColor, cursor_color, cursor_color_rgba8};

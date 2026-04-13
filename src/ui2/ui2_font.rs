@@ -109,7 +109,7 @@ impl Ui2FontReadySnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Ui2FontGlyph {
+pub(super) struct Ui2FontGlyph {
     pub ch: char,
     pub tier: Ui2FontTier,
     pub advance_px: u16,
@@ -132,7 +132,7 @@ pub(crate) struct Ui2FontTextMetrics {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Ui2FontCellMetrics {
+struct Ui2FontCellMetrics {
     pub cell_w_px: u16,
     pub cell_h_px: u16,
     pub glyph_w_px: u16,
@@ -196,7 +196,7 @@ pub(crate) fn ui2_font_tier_max_cell_width_px(tier: Ui2FontTier) -> u16 {
 }
 
 #[inline]
-pub(crate) fn ui2_font_glyph_cell_metrics(glyph: &Ui2FontGlyph) -> Ui2FontCellMetrics {
+fn ui2_font_glyph_cell_metrics(glyph: &Ui2FontGlyph) -> Ui2FontCellMetrics {
     Ui2FontCellMetrics {
         cell_w_px: glyph.advance_px.max(1),
         cell_h_px: glyph.line_height_px.max(1),
@@ -206,7 +206,7 @@ pub(crate) fn ui2_font_glyph_cell_metrics(glyph: &Ui2FontGlyph) -> Ui2FontCellMe
 }
 
 #[inline]
-pub(crate) fn ui2_font_place_glyph_top_center(glyph: &Ui2FontGlyph, rect: Ui2Rect) -> Ui2Rect {
+pub(super) fn ui2_font_place_glyph_top_center(glyph: &Ui2FontGlyph, rect: Ui2Rect) -> Ui2Rect {
     let metrics = ui2_font_glyph_cell_metrics(glyph);
     let cell_w = f32::from(metrics.cell_w_px.max(metrics.glyph_w_px).max(1));
     let glyph_w = f32::from(metrics.glyph_w_px.max(1));
@@ -234,7 +234,7 @@ fn ui2_font_cpu_atlas_for_glyph<'a>(
     atlases.variant_buckets.get(glyph.region.bucket as usize)
 }
 
-pub(crate) fn ui2_font_blit_glyph_rgba(
+fn ui2_font_blit_glyph_rgba(
     dst: &mut [u8],
     dst_width: usize,
     dst_height: usize,
@@ -303,7 +303,7 @@ pub(crate) fn ui2_font_line_height_units() -> u16 {
     ATHLAS_FONT_INFO.line_height
 }
 
-pub(crate) fn ui2_font_resolve_glyph(tier: Ui2FontTier, ch: char) -> Option<Ui2FontGlyph> {
+pub(super) fn ui2_font_resolve_glyph(tier: Ui2FontTier, ch: char) -> Option<Ui2FontGlyph> {
     if let Some(glyph) = althlasfont::athlas_resolve_glyph(tier.size_case(), ch) {
         return Some(Ui2FontGlyph {
             ch,
@@ -327,13 +327,88 @@ fn ui2_font_is_virtual_spacing_char(ch: char) -> bool {
 }
 
 #[inline]
-fn ui2_font_char_advance_px(tier: Ui2FontTier, ch: char) -> u16 {
+pub(crate) fn ui2_font_char_advance_px(tier: Ui2FontTier, ch: char) -> u16 {
     if ui2_font_is_virtual_spacing_char(ch) {
         return whitespace_advance_px(tier, ch);
     }
     ui2_font_resolve_glyph_or_fallback(tier, ch)
         .map(|glyph| glyph.advance_px)
         .unwrap_or_else(|| fallback_advance_px(tier, ch))
+}
+
+#[inline]
+pub(crate) fn ui2_font_has_glyph(tier: Ui2FontTier, ch: char) -> bool {
+    ui2_font_is_virtual_spacing_char(ch) || ui2_font_resolve_glyph(tier, ch).is_some()
+}
+
+pub(crate) fn ui2_font_blit_char_rgba(
+    dst: &mut [u8],
+    dst_width: usize,
+    dst_height: usize,
+    atlases: &Ui2FontCpuAtlases,
+    tier: Ui2FontTier,
+    ch: char,
+    cell_rect: Ui2Rect,
+    fg_rgba: [u8; 4],
+) -> bool {
+    if ui2_font_is_virtual_spacing_char(ch) {
+        return false;
+    }
+    let Some(glyph) = ui2_font_resolve_glyph_or_fallback(tier, ch) else {
+        return false;
+    };
+    ui2_font_blit_glyph_rgba(dst, dst_width, dst_height, atlases, &glyph, cell_rect, fg_rgba)
+}
+
+pub(crate) fn ui2_font_blit_text_rgba(
+    dst: &mut [u8],
+    dst_width: usize,
+    dst_height: usize,
+    atlases: &Ui2FontCpuAtlases,
+    tier: Ui2FontTier,
+    x: usize,
+    y: usize,
+    max_width_px: usize,
+    text: &str,
+    fg_rgba: [u8; 4],
+) -> usize {
+    if max_width_px == 0 || text.is_empty() {
+        return 0;
+    }
+
+    let line_height = usize::from(ui2_font_native_line_height_px(tier).max(1));
+    let mut pen_x = x;
+    let right = x.saturating_add(max_width_px);
+
+    for ch in text.chars() {
+        if ch == '\n' || pen_x >= right {
+            break;
+        }
+
+        let advance_px = usize::from(ui2_font_char_advance_px(tier, ch).max(1));
+        if pen_x.saturating_add(advance_px) > right {
+            break;
+        }
+
+        let _ = ui2_font_blit_char_rgba(
+            dst,
+            dst_width,
+            dst_height,
+            atlases,
+            tier,
+            ch,
+            Ui2Rect {
+                x: pen_x as f32,
+                y: y as f32,
+                w: advance_px as f32,
+                h: line_height as f32,
+            },
+            fg_rgba,
+        );
+        pen_x = pen_x.saturating_add(advance_px);
+    }
+
+    pen_x.saturating_sub(x)
 }
 
 #[inline]
