@@ -91,6 +91,7 @@ const PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS: usize = 3;
 const PRIMARY_USE_MI_STRIPE_PROBE: bool = false;
 const PRIMARY_USE_3D_NO_DRAW_PROBE: bool = false;
 const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = true;
+const PRIMARY_DISABLE_RENDER_BRINGUP: bool = true;
 const MI_STRIPE_COUNT: usize = 12;
 const MI_STRIPE_WIDTH_PX: usize = 4;
 const MI_STRIPE_X_STEP_PX: u32 = 1;
@@ -821,6 +822,16 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         .is_err()
     {
         crate::log!("intel/render: primary-probe skipped reason=in-flight trigger={}\n", reason);
+        return false;
+    }
+
+    if PRIMARY_DISABLE_RENDER_BRINGUP {
+        crate::log!(
+            "intel/render: primary-probe skipped reason=disabled trigger={} seq={}\n",
+            reason,
+            probe_seq
+        );
+        PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     }
 
@@ -1757,13 +1768,19 @@ fn encode_triangle_probe_batch(
     // proof path. The more aggressive force-clip/accept-all experiment moved
     // the failure window but did not produce clipper progress on ADL-S.
     let clip_dw1 = (1 << 17) | (1 << 18);
-    let clip_dw2 =
-        (2 << 0) | (1 << 2) | (2 << 4) | CLIP_PERSPECTIVE_DIVIDE_DISABLE | (1 << 26) | (1 << 31);
-    let clip_dw3 = (2047 << 6) | (1 << 17);
-    // Keep SF close to the trivial host path: no statistics, no custom line
-    // width programming, just enable the normal viewport transform.
-    let sf_dw1 = (1 << 1) | (1 << 10);
-    let sf_dw2 = 0;
+    let clip_dw2 = (2 << 0)
+        | (1 << 2)
+        | (2 << 4)
+        | CLIP_PERSPECTIVE_DIVIDE_DISABLE
+        | (1 << 26)
+        | (1 << 30)
+        | (1 << 31);
+    let clip_dw3 = (1 << 5) | (2047 << 6) | (1 << 17);
+    // Keep SF close to the trivial host path: viewport transform enabled,
+    // statistics disabled, and gfx125 per-poly deref mode for this VS-only
+    // trivial path.
+    let sf_dw1 = 1 << 1;
+    let sf_dw2 = 1 << 29;
     let sf_dw3 = 0;
     // Match the host trivial-path intent as directly as possible: no AA,
     // explicit full-target scissor, solid fill, cull none, and CCW front

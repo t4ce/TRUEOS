@@ -17,12 +17,15 @@
 */
 
 const fs = require("fs");
+const http = require("http");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 
 const BOOTFILE = "EFI/BOOT/BOOTX64.EFI";
 const LEASES = "/tmp/trueos-pxe2.leases";
-
+const DEFAULT_HTTP_PORT = 8080;
+const HARDCODED_MEDIA_PATH = "tools/vid/demo_yelly.mp4";
+ 
 // (UEFI x86_64 client arch code is 7 per RFC 4578.)
 const UEFI_X86_64_ARCH = 7;
 
@@ -35,6 +38,8 @@ function parseArgs(argv) {
   const out = {
     iface: null,
     tftpRoot: path.resolve(__dirname, "bld"),
+    httpPort: DEFAULT_HTTP_PORT,
+    enableHttp: true,
     dryRun: false,
     verbose: false,
   };
@@ -45,13 +50,17 @@ function parseArgs(argv) {
       out.iface = argv[++i];
     } else if (a === "--tftp-root" && i + 1 < argv.length) {
       out.tftpRoot = path.resolve(process.cwd(), argv[++i]);
+    } else if (a === "--http-port" && i + 1 < argv.length) {
+      out.httpPort = Number(argv[++i]);
+    } else if (a === "--no-http") {
+      out.enableHttp = false;
     } else if (a === "--dry-run") {
       out.dryRun = true;
     } else if (a === "--verbose") {
       out.verbose = true;
     } else if (a === "-h" || a === "--help") {
       process.stdout.write(
-        "Usage: sudo node pxe2.js [--iface <dev>] [--tftp-root <path>] [--dry-run] [--verbose]\n"
+        "Usage: sudo node pxe2.js [--iface <dev>] [--tftp-root <path>] [--http-port <port>] [--no-http] [--dry-run] [--verbose]\n"
       );
       process.exit(0);
     } else {
@@ -59,6 +68,78 @@ function parseArgs(argv) {
     }
   }
   return out;
+}
+
+function ensureMediaFile() {
+  const mediaFile = path.resolve(__dirname, HARDCODED_MEDIA_PATH);
+  if (!fs.existsSync(mediaFile)) {
+    process.stdout.write(`Warning: HTTP media file missing: ${mediaFile}\n`);
+    return false;
+  }
+  const stat = fs.statSync(mediaFile);
+  if (!stat.isFile()) {
+    process.stdout.write(`Warning: HTTP media path is not a file: ${mediaFile}\n`);
+    return false;
+  }
+  return true;
+}
+
+function startHttpServer({ httpPort, serverIp }) {
+  const mediaFile = path.resolve(__dirname, HARDCODED_MEDIA_PATH);
+  const mediaUrlPath = `/${HARDCODED_MEDIA_PATH}`;
+  const server = http.createServer((req, res) => {
+    const method = req.method || "GET";
+    if (method !== "GET" && method !== "HEAD") {
+      res.writeHead(405, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("method not allowed\n");
+      return;
+    }
+
+    const target = req.url || "/";
+    const requestPath = target.split("?")[0].split("#")[0];
+    if (requestPath !== mediaUrlPath) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("not found\n");
+      return;
+    }
+
+    fs.stat(mediaFile, (statErr, stat) => {
+      if (statErr || !stat.isFile()) {
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(`missing media file: ${mediaFile}\n`);
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "video/mp4",
+        "Content-Length": stat.size,
+        "Cache-Control": "no-store",
+      });
+      if (method === "HEAD") {
+        res.end();
+        return;
+      }
+
+      const stream = fs.createReadStream(mediaFile);
+      stream.on("error", () => {
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+        }
+        res.end("stream error\n");
+      });
+      stream.pipe(res);
+    });
+  });
+
+  server.listen(httpPort, serverIp, () => {
+    process.stdout.write(
+      `HTTP media host file=${mediaFile} url=http://${serverIp}:${httpPort}${mediaUrlPath}\n`
+    );
+  });
+  server.on("error", (err) => {
+    die(`HTTP server failed: ${err.message}`);
+  });
+  return server;
 }
 
 function runJson(cmd, args, label) {
@@ -222,6 +303,13 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
     const tftpRoot = opts.tftpRoot;
 
     ensureTftpFiles(tftpRoot);
+    let mediaFileReady = false;
+    if (opts.enableHttp) {
+      mediaFileReady = ensureMediaFile();
+      if (!Number.isInteger(opts.httpPort) || opts.httpPort < 1 || opts.httpPort > 65535) {
+        die(`Invalid --http-port: ${opts.httpPort}`);
+      }
+    }
 
     const { ip: serverIp, prefix } = detectInterfaceIPv4(iface);
     const lanNetmask = prefixToNetmask(prefix);
@@ -238,12 +326,20 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
     process.stdout.write(
       `TRUEOS PXE ProxyDHCP iface=${iface} ip=${serverIp}/${prefix} tftp=${tftpRoot} boot=${BOOTFILE}\n`
     );
+    if (opts.enableHttp) {
+      const mediaFile = path.resolve(__dirname, HARDCODED_MEDIA_PATH);
+      const mediaUrlPath = `/${HARDCODED_MEDIA_PATH}`;
+      process.stdout.write(
+        `TRUEOS HTTP media host file=${mediaFile} media=http://${serverIp}:${opts.httpPort}${mediaUrlPath} ready=${mediaFileReady ? 1 : 0}\n`
+      );
+    }
 
     if (opts.verbose) {
       process.stdout.write(
         [
           `lan-network=${lanNetwork} netmask=${lanNetmask}`,
           "Firewall (typical): allow UDP 67, 69, 4011 (+ TFTP data high UDP ports)",
+          opts.enableHttp ? `Firewall (HTTP): allow TCP ${opts.httpPort}` : "HTTP media host disabled.",
           "Note: ProxyDHCP usually requires same L2/VLAN broadcast domain.",
           "",
           "dnsmasq argv:",
@@ -255,7 +351,21 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
 
     if (opts.dryRun) {
       process.stdout.write("Dry-run: dnsmasq argv:\n" + args.map((a) => "  " + a).join("\n") + "\n");
+      if (opts.enableHttp) {
+        const mediaFile = path.resolve(__dirname, HARDCODED_MEDIA_PATH);
+        const mediaUrlPath = `/${HARDCODED_MEDIA_PATH}`;
+        process.stdout.write(
+          `Dry-run: HTTP file=${mediaFile} url=http://${serverIp}:${opts.httpPort}${mediaUrlPath} ready=${mediaFileReady ? 1 : 0}\n`
+        );
+      }
       process.exit(0);
+    }
+
+    if (opts.enableHttp) {
+      startHttpServer({
+        httpPort: opts.httpPort,
+        serverIp,
+      });
     }
 
     const child = spawn("dnsmasq", args, { stdio: "inherit" });

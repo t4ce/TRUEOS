@@ -156,34 +156,19 @@ fn render_text_rgba(
     text: &str,
     rgba: [u8; 4],
 ) {
-    let line_height = swarm_line_height(tier) as f32;
-    let mut pen_x = x;
-    for ch in text.chars() {
-        let Some(glyph) = ui2::ui2_font_resolve_glyph(tier, ch)
-            .or_else(|| ui2::ui2_font_resolve_glyph(tier, '?'))
-        else {
-            continue;
-        };
-        let advance_px = usize::from(glyph.advance_px.max(1));
-        let _ = ui2::ui2_font_blit_glyph_rgba(
-            dst,
-            dst_width,
-            dst_height,
-            atlases,
-            &glyph,
-            Ui2Rect {
-                x: pen_x as f32,
-                y: y as f32,
-                w: advance_px as f32,
-                h: line_height,
-            },
-            rgba,
-        );
-        pen_x = pen_x.saturating_add(advance_px);
-        if pen_x >= dst_width {
-            break;
-        }
-    }
+    let max_width_px = dst_width.saturating_sub(x);
+    let _ = ui2::ui2_font_blit_text_rgba(
+        dst,
+        dst_width,
+        dst_height,
+        atlases,
+        tier,
+        x,
+        y,
+        max_width_px,
+        text,
+        rgba,
+    );
 }
 
 fn elide_text_to_width(tier: Ui2FontTier, max_width_px: usize, text: &str) -> String {

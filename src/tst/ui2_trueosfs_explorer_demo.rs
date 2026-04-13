@@ -149,58 +149,45 @@ fn draw_text_line_clipped(
         return;
     }
 
-    let mut pen_x = x;
     let ellipsis = ui2::ui2_font_measure_text(UI2_TRUEOSFS_EXPLORER_FONT_TIER, "...").width_px;
-    let chars: Vec<char> = text.chars().collect();
-
-    for (idx, ch) in chars.iter().copied().enumerate() {
-        let Some(glyph) = ui2::ui2_font_resolve_glyph(UI2_TRUEOSFS_EXPLORER_FONT_TIER, ch)
-            .or_else(|| ui2::ui2_font_resolve_glyph(UI2_TRUEOSFS_EXPLORER_FONT_TIER, '?'))
-        else {
-            continue;
-        };
-
-        let advance = u32::from(glyph.advance_px.max(1));
-        let remaining = chars.len().saturating_sub(idx + 1);
-        let reserve = if remaining > 0 { ellipsis } else { 0 };
-        if pen_x
-            .saturating_sub(x)
-            .saturating_add(advance)
-            .saturating_add(reserve)
-            > max_width
-        {
-            if remaining > 0 {
-                draw_text_line_clipped(
-                    dst,
-                    dst_width,
-                    dst_height,
-                    atlases,
-                    pen_x,
-                    y,
-                    max_width.saturating_sub(pen_x.saturating_sub(x)),
-                    "...",
-                    fg_rgba,
-                );
+    let mut clipped = String::new();
+    if ui2::ui2_font_measure_text(UI2_TRUEOSFS_EXPLORER_FONT_TIER, text).width_px <= max_width {
+        clipped.push_str(text);
+    } else {
+        for ch in text.chars() {
+            let mut candidate = clipped.clone();
+            candidate.push(ch);
+            let reserve = if candidate.len() < text.len() {
+                ellipsis
+            } else {
+                0
+            };
+            if ui2::ui2_font_measure_text(UI2_TRUEOSFS_EXPLORER_FONT_TIER, candidate.as_str())
+                .width_px
+                .saturating_add(reserve)
+                > max_width
+            {
+                break;
             }
-            break;
+            clipped.push(ch);
         }
-
-        let _ = ui2::ui2_font_blit_glyph_rgba(
-            dst,
-            dst_width,
-            dst_height,
-            atlases,
-            &glyph,
-            Ui2Rect {
-                x: pen_x as f32,
-                y: y as f32,
-                w: advance as f32,
-                h: f32::from(ui2::ui2_font_native_line_height_px(UI2_TRUEOSFS_EXPLORER_FONT_TIER)),
-            },
-            fg_rgba,
-        );
-        pen_x = pen_x.saturating_add(advance);
+        if clipped != text {
+            clipped.push_str("...");
+        }
     }
+
+    let _ = ui2::ui2_font_blit_text_rgba(
+        dst,
+        dst_width,
+        dst_height,
+        atlases,
+        UI2_TRUEOSFS_EXPLORER_FONT_TIER,
+        x as usize,
+        y as usize,
+        max_width as usize,
+        clipped.as_str(),
+        fg_rgba,
+    );
 }
 
 fn draw_icon_centered(
@@ -212,11 +199,16 @@ fn draw_icon_centered(
     rect: Ui2Rect,
     fg_rgba: [u8; 4],
 ) {
-    let Some(glyph) = ui2::ui2_font_resolve_glyph(UI2_TRUEOSFS_EXPLORER_FONT_TIER, icon) else {
-        return;
-    };
-    let _ =
-        ui2::ui2_font_blit_glyph_rgba(dst, dst_width, dst_height, atlases, &glyph, rect, fg_rgba);
+    let _ = ui2::ui2_font_blit_char_rgba(
+        dst,
+        dst_width,
+        dst_height,
+        atlases,
+        UI2_TRUEOSFS_EXPLORER_FONT_TIER,
+        icon,
+        rect,
+        fg_rgba,
+    );
 }
 
 fn child_path(parent: &str, name: &str) -> String {

@@ -95,7 +95,7 @@ fn pci_demo_icon_char() -> char {
     CANDIDATES
         .iter()
         .copied()
-        .find(|ch| ui2::ui2_font_resolve_glyph(UI2_PCI_DEMO_FONT_TIER, *ch).is_some())
+        .find(|ch| ui2::ui2_font_has_glyph(UI2_PCI_DEMO_FONT_TIER, *ch))
         .unwrap_or(UI2_PCI_DEMO_ICON_FALLBACK)
 }
 
@@ -241,34 +241,19 @@ fn render_text_rgba(
     text: &str,
     rgba: [u8; 4],
 ) {
-    let line_height = pci_demo_line_height() as f32;
-    let mut pen_x = x;
-    for ch in text.chars() {
-        let Some(glyph) = ui2::ui2_font_resolve_glyph(UI2_PCI_DEMO_FONT_TIER, ch)
-            .or_else(|| ui2::ui2_font_resolve_glyph(UI2_PCI_DEMO_FONT_TIER, '?'))
-        else {
-            continue;
-        };
-        let advance_px = usize::from(glyph.advance_px.max(1));
-        let _ = ui2::ui2_font_blit_glyph_rgba(
-            dst,
-            dst_width,
-            dst_height,
-            atlases,
-            &glyph,
-            Ui2Rect {
-                x: pen_x as f32,
-                y: y as f32,
-                w: advance_px as f32,
-                h: line_height,
-            },
-            rgba,
-        );
-        pen_x = pen_x.saturating_add(advance_px);
-        if pen_x >= dst_width {
-            break;
-        }
-    }
+    let max_width_px = dst_width.saturating_sub(x);
+    let _ = ui2::ui2_font_blit_text_rgba(
+        dst,
+        dst_width,
+        dst_height,
+        atlases,
+        UI2_PCI_DEMO_FONT_TIER,
+        x,
+        y,
+        max_width_px,
+        text,
+        rgba,
+    );
 }
 
 fn render_padded_label_rgba(
