@@ -532,8 +532,16 @@ pub(crate) fn present_nv12_surface_center(
         return false;
     }
 
-    let uv_plane_off = src_pitch_bytes.saturating_mul(src_height);
-    let needed = uv_plane_off.saturating_add((src_pitch_bytes.saturating_mul(src_height)) / 2);
+    // Y-tile: 128 bytes wide × 32 rows tall = 4096 bytes per tile.
+    // In NV12 tiled, both Y and UV planes share the same tiled surface.
+    // UV plane starts at row chroma_y_offset (= src_height for NV12).
+    const YTILE_W: usize = 128;
+    const YTILE_H: usize = 32;
+    let tiles_per_row = src_pitch_bytes / YTILE_W;
+    let chroma_y_offset = src_height;
+    let total_height = chroma_y_offset + (src_height + 1) / 2;
+    let total_tile_rows = (total_height + YTILE_H - 1) / YTILE_H;
+    let needed = total_tile_rows * tiles_per_row * 4096;
     if src.len() < needed {
         return false;
     }
@@ -560,8 +568,21 @@ pub(crate) fn present_nv12_surface_center(
     let copy_h = (src_height / scale).max(1).min(dst_height);
     let dst_x = dst_width.saturating_sub(copy_w) / 2;
     let dst_y = dst_height.saturating_sub(copy_h) / 2;
-    let y_plane = &src[..uv_plane_off];
-    let uv_plane = &src[uv_plane_off..needed];
+
+    // Detile helper: given (byte_x, row_y) return byte offset in the tiled surface.
+    // Y-tile internal layout is OWord-column-major: 8 columns of 16 bytes,
+    // each column stored for all 32 rows before the next column.
+    #[inline(always)]
+    fn ytile_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+        let tile_col = byte_x / YTILE_W;
+        let tile_row = row_y / YTILE_H;
+        let in_x = byte_x % YTILE_W;
+        let in_y = row_y % YTILE_H;
+        let oword_col = in_x / 16;
+        let byte_in_oword = in_x % 16;
+        let within_tile = oword_col * 512 + in_y * 16 + byte_in_oword;
+        (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
+    }
 
     for row_idx in 0..copy_h {
         let src_y = (row_idx.saturating_mul(scale)).min(src_height.saturating_sub(1));
@@ -571,13 +592,14 @@ pub(crate) fn present_nv12_surface_center(
         let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
         for col_idx in 0..copy_w {
             let src_x = (col_idx.saturating_mul(scale)).min(src_width.saturating_sub(1));
-            let y_idx = src_y.saturating_mul(src_pitch_bytes).saturating_add(src_x);
-            let uv_x = (src_x & !1).min(src_pitch_bytes.saturating_sub(2));
-            let uv_y = (src_y / 2).min(src_height.saturating_sub(1) / 2);
-            let uv_idx = uv_y.saturating_mul(src_pitch_bytes).saturating_add(uv_x);
-            let y = i32::from(*y_plane.get(y_idx).unwrap_or(&0));
-            let u = i32::from(*uv_plane.get(uv_idx).unwrap_or(&128)) - 128;
-            let v = i32::from(*uv_plane.get(uv_idx + 1).unwrap_or(&128)) - 128;
+            let y_off = ytile_offset(src_x, src_y, tiles_per_row);
+            let y = i32::from(*src.get(y_off).unwrap_or(&0));
+            // UV plane is in the same tiled surface, starting at row chroma_y_offset
+            let uv_x = src_x & !1;
+            let uv_row = chroma_y_offset + src_y / 2;
+            let u_off = ytile_offset(uv_x, uv_row, tiles_per_row);
+            let u = i32::from(*src.get(u_off).unwrap_or(&128)) - 128;
+            let v = i32::from(*src.get(u_off + 1).unwrap_or(&128)) - 128;
             let c = (y - 16).max(0);
             let r = clamp_u8_i32((298 * c + 409 * v + 128) >> 8);
             let g = clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8);

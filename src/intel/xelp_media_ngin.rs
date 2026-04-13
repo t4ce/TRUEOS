@@ -859,13 +859,13 @@ fn progressive_present_output_surface(
 ) -> (bool, u32, usize) {
     let (signature, nonzero_samples) = sample_surface_signature(output_surface);
 
+    // Y-tile: NV12 tiled surface = Y rows + UV rows, aligned to 32-row tiles
+    let total_height = (frame_height as usize) + ((frame_height as usize) + 1) / 2;
+    let total_tile_rows = (total_height + 31) & !31;
     if frame_width != 0
         && frame_height != 0
         && output_pitch >= frame_width as usize
-        && output_surface.len()
-            >= output_pitch
-                .saturating_mul(frame_height as usize)
-                .saturating_add((output_pitch.saturating_mul(frame_height as usize)) / 2)
+        && output_surface.len() >= output_pitch.saturating_mul(total_tile_rows)
         && submit_completed
     {
         let ready = super::display::present_nv12_surface_center(
@@ -1242,7 +1242,7 @@ fn build_h264_decode_batch_skeleton(
     let width_mbs = width.saturating_add(15) / 16;
     let height_mbs = height.saturating_add(15) / 16;
     let frame_dims = width | (height << 16);
-    let output_pitch = align_up_u32(width.max(64), 64);
+    let output_pitch = align_up_u32(width.max(128), 128); // Y-tile: 128-byte tile width
     let chroma_y_offset = height;
     let stage_flags = (has_idr as u32) | (1 << 1);
 
@@ -1369,7 +1369,10 @@ fn build_h264_decode_batch_skeleton(
         ),
     )?;
     batch[surface + 2] = ((width.saturating_sub(1)) << 4) | ((height.saturating_sub(1)) << 18);
-    batch[surface + 3] = 1 | ((output_pitch.saturating_sub(1)) << 3) | (1 << 27) | (4 << 28);
+    // DW3: SurfaceFormat(31:28)=4(PLANAR_420_8/NV12), TiledSurface(27)=1,
+    //       TileWalk(26)=1(Y-major), SurfacePitch-1(17:3), HalfPitchForChroma(0)=1
+    batch[surface + 3] =
+        1 | ((output_pitch.saturating_sub(1)) << 3) | (1 << 26) | (1 << 27) | (4 << 28);
     batch[surface + 4] = chroma_y_offset;
     batch[surface + 5] = chroma_y_offset; // Y Offset for V(Cr) = same as U(Cb)
 
@@ -1681,10 +1684,11 @@ fn submit_decode_bitstream_demo(
     sps: &ParsedSps,
     pps: &ParsedPps,
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
-    let output_pitch = align_up_u32((frame_width as u32).max(64), 64) as usize;
-    let output_bytes = output_pitch
-        .checked_mul(frame_height as usize)?
-        .checked_add((output_pitch.checked_mul(frame_height as usize)?) / 2)?;
+    let output_pitch = align_up_u32((frame_width as u32).max(128), 128) as usize; // Y-tile: 128-byte tile width
+    // Y-tile: NV12 tiled surface = Y rows + UV rows, aligned to 32-row tiles
+    let total_height = (frame_height as usize) + ((frame_height as usize) + 1) / 2;
+    let total_tile_rows = (total_height + 31) & !31;
+    let output_bytes = output_pitch.checked_mul(total_tile_rows)?;
     let output_budget = backing
         .output_surface_bytes
         .checked_sub(MEDIA_SCRATCH_OFFSET_BYTES)?;
