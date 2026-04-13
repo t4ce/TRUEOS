@@ -250,6 +250,7 @@ struct Ui2Window {
     content_tex_id: u32,
     content_tex_blend: bool,
     hosted_surface_bg_rgba: [u8; 4],
+    hosted_surface_fg_rgba: [u8; 4],
     hosted_surface_tiles: Vec<Ui2HostedSurfaceTile>,
     hosted_surface_interactives: Vec<Ui2HostedInteractiveRect>,
     last_clicked_item_id: u32,
@@ -1324,7 +1325,8 @@ fn draw_hosted_surface_tiles(
         let v0 = (clip_y0 - tile_y0) as f32 / tile.height as f32;
         let u1 = (clip_x1 - tile_x0) as f32 / tile.width as f32;
         let v1 = (clip_y1 - tile_y0) as f32 / tile.height as f32;
-        drew_any |= draw_texture_rect_uv_no_present(
+        let fg = window.hosted_surface_fg_rgba;
+        drew_any |= draw_texture_rect_uv_rgba_no_present(
             tile.tex_id,
             draw_x,
             draw_y,
@@ -1337,7 +1339,7 @@ fn draw_hosted_surface_tiles(
             state.view_w,
             state.view_h,
             tile.blend_enabled,
-            window.alpha,
+            (fg[0], fg[1], fg[2], modulate_alpha(fg[3], window.alpha)),
         );
     }
 

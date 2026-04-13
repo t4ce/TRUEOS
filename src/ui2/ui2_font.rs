@@ -214,6 +214,21 @@ pub(super) fn ui2_font_place_glyph_top_center(glyph: &Ui2FontGlyph, rect: Ui2Rec
     Ui2Rect::new(rect.x + ((rect.w - cell_w) * 0.5), rect.y, glyph_w, glyph_h)
 }
 
+#[inline]
+pub(super) fn ui2_font_place_glyph_center(glyph: &Ui2FontGlyph, rect: Ui2Rect) -> Ui2Rect {
+    let metrics = ui2_font_glyph_cell_metrics(glyph);
+    let cell_w = f32::from(metrics.cell_w_px.max(metrics.glyph_w_px).max(1));
+    let cell_h = f32::from(metrics.cell_h_px.max(metrics.glyph_h_px).max(1));
+    let glyph_w = f32::from(metrics.glyph_w_px.max(1));
+    let glyph_h = f32::from(metrics.glyph_h_px.max(1));
+    Ui2Rect::new(
+        rect.x + ((rect.w - cell_w) * 0.5),
+        rect.y + ((rect.h - cell_h) * 0.5),
+        glyph_w,
+        glyph_h,
+    )
+}
+
 pub(crate) fn ui2_font_decode_cpu_atlases(size_case: usize) -> Option<Ui2FontCpuAtlases> {
     let variant_buckets = crate::r::ui2::ui2_font_bucketproducer_decode_variant(size_case)?;
     let twemoji = crate::gfx::png_codec::decode_png_rgba(twemoji::TWEMOJI_ATLAS_PNG).ok()?;

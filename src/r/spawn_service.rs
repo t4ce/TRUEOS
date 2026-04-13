@@ -679,7 +679,8 @@ fn spawn_ui2_athlas_2x_demo(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ui2_palatino_1x_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_palatino_demo_task())
+        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_palatino_demo_task())?;
+        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_palatino_bw_demo_task())
     })
 }
 

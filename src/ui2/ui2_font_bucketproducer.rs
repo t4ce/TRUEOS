@@ -31,6 +31,13 @@ const UI2_ATHLAS_BUCKET_DEMO_DEFER_MS: u64 = 16;
 const UI2_ATHLAS_BUCKET_DEMO_UPLOAD_YIELD_MS: u64 = 1;
 const UI2_ATHLAS_BUCKET_DEMO_READY_WAIT_MS: u64 = 16;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BucketDemoUploadMode {
+    Mask,
+    RawRgba,
+    InvertedRgba,
+}
+
 const ATHLAS_BUCKET_PNGS: [[&[u8]; ATHLAS_BUCKET_COUNT]; UI2_ATHLAS_BUCKET_DEMO_VARIANT_COUNT] = [
     [
         include_bytes!("../gfx/althlasfont/lucida-half/atlas-g00.png"),
@@ -96,6 +103,7 @@ struct BucketDemoSpec {
     window_origin: (f32, f32),
     start_minimized: bool,
     ready_size_case: Option<usize>,
+    upload_mode: BucketDemoUploadMode,
 }
 
 fn athlas_variant(size_case: usize) -> Option<&'static AthlasVariantJson> {
@@ -229,23 +237,6 @@ fn athlas_bucket_origin(decoded: &[DecodedPng], bucket: usize) -> (u32, u32) {
     (UI2_ATHLAS_BUCKET_DEMO_GAP_PX, UI2_ATHLAS_BUCKET_DEMO_GAP_PX)
 }
 
-fn build_athlas_bucket_surface_rgba(image: &DecodedPng, fg_rgba: [u8; 4]) -> Vec<u8> {
-    let px_count = (image.width as usize).saturating_mul(image.height as usize);
-    let mut rgba = vec![0u8; px_count.saturating_mul(4)];
-    for idx in 0..px_count {
-        let src = idx.saturating_mul(4);
-        let coverage = image.rgba.get(src).copied().unwrap_or(0) as u16;
-        if coverage == 0 {
-            continue;
-        }
-        rgba[src] = fg_rgba[0];
-        rgba[src + 1] = fg_rgba[1];
-        rgba[src + 2] = fg_rgba[2];
-        rgba[src + 3] = ((coverage * u16::from(fg_rgba[3])) / 255) as u8;
-    }
-    rgba
-}
-
 fn athlas_window_origin(size_case: usize) -> (f32, f32) {
     match size_case {
         0 => (50.0, 50.0),
@@ -260,21 +251,33 @@ fn palatino_window_origin() -> (f32, f32) {
     (200.0, 32.0)
 }
 
-fn palatino_demo_spec() -> BucketDemoSpec {
+fn palatino_bw_window_origin() -> (f32, f32) {
+    (620.0, 32.0)
+}
+
+fn palatino_demo_spec(
+    title: &'static str,
+    window_origin: (f32, f32),
+    slot: u32,
+    upload_mode: BucketDemoUploadMode,
+) -> BucketDemoSpec {
     BucketDemoSpec {
-        title: "Palatino Buckets 1x",
+        title,
         family_name: "palatino",
         variant_name: "1x",
         variant_dir: "palatino-1x",
         content_id: UI2_ATHLAS_BUCKET_DEMO_CONTENT_ID_BASE
-            .saturating_add(UI2_ATHLAS_BUCKET_DEMO_VARIANT_COUNT as u32),
+            .saturating_add(UI2_ATHLAS_BUCKET_DEMO_VARIANT_COUNT as u32)
+            .saturating_add(slot),
         tile_tex_id_base: UI2_ATHLAS_BUCKET_DEMO_TILE_TEX_ID_BASE.saturating_add(
             (UI2_ATHLAS_BUCKET_DEMO_VARIANT_COUNT as u32)
+                .saturating_add(slot)
                 .saturating_mul(ATHLAS_BUCKET_COUNT as u32),
         ),
-        window_origin: palatino_window_origin(),
+        window_origin,
         start_minimized: false,
         ready_size_case: None,
+        upload_mode,
     }
 }
 
@@ -290,7 +293,18 @@ fn lucida_demo_spec(size_case: usize, variant: &'static AthlasVariantJson) -> Bu
         window_origin: athlas_window_origin(size_case),
         start_minimized: true,
         ready_size_case: Some(size_case),
+        upload_mode: BucketDemoUploadMode::Mask,
     }
+}
+
+fn invert_rgba_rgb(image: &DecodedPng) -> Vec<u8> {
+    let mut rgba = image.rgba.clone();
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = 0xFFu8.saturating_sub(px[0]);
+        px[1] = 0xFFu8.saturating_sub(px[1]);
+        px[2] = 0xFFu8.saturating_sub(px[2]);
+    }
+    rgba
 }
 
 fn bucket_demo_textures_drawable(spec: &BucketDemoSpec) -> bool {
@@ -355,7 +369,7 @@ async fn run_bucket_demo(
             blend_enabled: true,
         });
     }
-    if !surface.set_tiles(bg_rgba, tiles.as_slice()) {
+    if !surface.set_tiles(bg_rgba, fg_rgba, tiles.as_slice()) {
         crate::log!(
             "ui2-font-bucketproducer: tile registration failed window={} family={} variant={}\n",
             surface.window_id(),
@@ -375,15 +389,38 @@ async fn run_bucket_demo(
     Timer::after(EmbassyDuration::from_millis(UI2_ATHLAS_BUCKET_DEMO_DEFER_MS)).await;
 
     for (bucket, image) in decoded.into_iter().enumerate() {
-        let rgba = build_athlas_bucket_surface_rgba(&image, fg_rgba);
-        if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
-            bucket_demo_tile_tex_id(&spec, bucket),
-            image.width,
-            image.height,
-            rgba.as_slice(),
-            repaint_window_id,
-            spec.variant_dir,
-        ) {
+        let upload_ok = match spec.upload_mode {
+            BucketDemoUploadMode::Mask => crate::r::io::cabi::queue_texture_mask_image_upload_copy(
+                bucket_demo_tile_tex_id(&spec, bucket),
+                image.width,
+                image.height,
+                image.rgba.as_slice(),
+                repaint_window_id,
+                spec.variant_dir,
+            ),
+            BucketDemoUploadMode::RawRgba => {
+                crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+                    bucket_demo_tile_tex_id(&spec, bucket),
+                    image.width,
+                    image.height,
+                    image.rgba.as_slice(),
+                    repaint_window_id,
+                    spec.variant_dir,
+                )
+            }
+            BucketDemoUploadMode::InvertedRgba => {
+                let rgba = invert_rgba_rgb(&image);
+                crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+                    bucket_demo_tile_tex_id(&spec, bucket),
+                    image.width,
+                    image.height,
+                    rgba.as_slice(),
+                    repaint_window_id,
+                    spec.variant_dir,
+                )
+            }
+        };
+        if !upload_ok {
             crate::log!(
                 "ui2-font-bucketproducer: upload failed window={} family={} variant={} bucket={} tex={} size={}x{}\n",
                 surface.window_id(),
@@ -462,7 +499,12 @@ async fn run_athlas_bucket_demo(size_case: usize) {
 }
 
 fn decode_palatino_bucket_variant() -> Option<Vec<DecodedPng>> {
-    let spec = palatino_demo_spec();
+    let spec = palatino_demo_spec(
+        "Palatino Buckets 1x",
+        palatino_window_origin(),
+        0,
+        BucketDemoUploadMode::RawRgba,
+    );
     let mut decoded = Vec::with_capacity(ATHLAS_BUCKET_COUNT);
     for bucket in 0..ATHLAS_BUCKET_COUNT {
         let Some(bytes) = palatino_bucket_png_bytes(bucket) else {
@@ -501,9 +543,37 @@ pub async fn ui2_font_bucketproducer_palatino_demo_task() {
     let Some(decoded) = decode_palatino_bucket_variant() else {
         return;
     };
-    let (bg_rgba, fg_rgba) =
-        (UI2_ATHLAS_BUCKET_DEMO_LIGHT_BG_RGBA, UI2_ATHLAS_BUCKET_DEMO_LIGHT_FG_RGBA);
-    run_bucket_demo(palatino_demo_spec(), decoded, bg_rgba, fg_rgba).await;
+    run_bucket_demo(
+        palatino_demo_spec(
+            "Palatino Buckets 1x",
+            palatino_window_origin(),
+            0,
+            BucketDemoUploadMode::RawRgba,
+        ),
+        decoded,
+        UI2_ATHLAS_BUCKET_DEMO_BG_RGBA,
+        [0xFF, 0xFF, 0xFF, 0xFF],
+    )
+    .await;
+}
+
+#[embassy_executor::task(pool_size = UI2_PALATINO_BUCKET_DEMO_VARIANT_COUNT)]
+pub async fn ui2_font_bucketproducer_palatino_bw_demo_task() {
+    let Some(decoded) = decode_palatino_bucket_variant() else {
+        return;
+    };
+    run_bucket_demo(
+        palatino_demo_spec(
+            "Palatino Buckets 1x B/W",
+            palatino_bw_window_origin(),
+            1,
+            BucketDemoUploadMode::InvertedRgba,
+        ),
+        decoded,
+        UI2_ATHLAS_BUCKET_DEMO_LIGHT_BG_RGBA,
+        [0xFF, 0xFF, 0xFF, 0xFF],
+    )
+    .await;
 }
 
 #[embassy_executor::task]
