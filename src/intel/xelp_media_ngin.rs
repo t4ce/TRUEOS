@@ -7,7 +7,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
 use super::xelp_media_mp4::{
-    build_annex_b_access_unit, first_sample_nal_types, parse_h264_mp4_summary,
+    ParsedPps, ParsedSps, build_annex_b_access_unit, first_sample_nal_types,
+    parse_h264_mp4_summary, parse_pps, parse_sps,
 };
 
 const MAX_MEDIA_ENGINES: usize = 4;
@@ -57,7 +58,7 @@ const RING_EXECLIST_STATUS_HI: usize = 0x238;
 const RING_EXECLIST_CONTROL: usize = 0x550;
 
 const MEDIA_ENGINE_GPU_ADDR_BASE: u64 = 0x0120_0000;
-const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0040_0000;
+const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0080_0000;
 const MEDIA_DEFAULT_RING_BYTES: usize = 16 * 1024;
 const MEDIA_DEFAULT_CONTEXT_BYTES: usize = 22 * 4096;
 const MEDIA_DEFAULT_BATCH_BYTES: usize = 32 * 1024;
@@ -87,9 +88,10 @@ const GEN12_RING_FAULT_REG: usize = 0x0000_CEC4;
 const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
 const MI_USE_GGTT: u32 = 1 << 22;
 const MI_STORE_DWORD_IMM_GEN4_LEN_DW4: u32 = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT | (4 - 2);
-const MI_FLUSH_DW: u32 = (0x26 << 23) | 1;
-const MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE: u32 = 1 << 16;
-const MI_FLUSH_DW_USE_GTT: u32 = 1 << 2;
+const MI_FLUSH_DW: u32 = (0x26 << 23) | 3;
+const MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE: u32 = 1 << 7;
+const MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
+const MI_FLUSH_DW_ADDR_GTT: u32 = 1 << 2;
 const MI_ARB_CHECK: u32 = 0x0280_0000;
 const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
@@ -109,7 +111,7 @@ const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
 const CTX_DESC_PRIVILEGE: u32 = 1 << 8;
 const CTX_DESC_PRIORITY_NORMAL: u32 = 1 << 9;
 const CTX_DESC_ADDRESSING_MODE_SHIFT: u32 = 3;
-const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
+const INTEL_LEGACY_64B_CONTEXT: u32 = 1;
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
 const STOP_RING: u32 = 1 << 8;
 
@@ -130,6 +132,32 @@ const MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE: u32 = 24;
 const MFX_CMD_LEN_BSP_BUF_BASE_ADDR_STATE: u32 = 8;
 const MFX_CMD_LEN_AVC_IMG_STATE: u32 = 19;
 const MFX_CMD_LEN_AVC_BSD_OBJECT: u32 = 5;
+
+const MFX_QM_STATE: u32 = 7;
+const MFX_CMD_LEN_QM_STATE: u32 = 16;
+const MFX_AVC_DIRECTMODE_STATE: u32 = 2;
+const MFX_CMD_LEN_AVC_DIRECTMODE_STATE: u32 = 69;
+const QM_AVC_4X4_INTRA: u32 = 0;
+const QM_AVC_4X4_INTER: u32 = 1;
+const QM_AVC_8X8_INTRA: u32 = 2;
+const QM_AVC_8X8_INTER: u32 = 3;
+const QM_FLAT_VALUE: u32 = 0x10101010;
+
+// MFX_WAIT: 1-DWord command, CommandType=3(GFX), CommandSubtype=1, MFXSyncControlFlag=1
+const MFX_WAIT_SYNC: u32 = (3 << 29) | (1 << 27) | (1 << 8);
+
+// MFD_AVC_DPB_STATE: SubOpcodeA=1, SubOpcodeB=6, MediaCmdOpcode=1, length=27 (bias 2)
+const MFD_AVC_DPB_STATE: u32 = 6;
+const MFD_AVC_DPB_STATE_SUBOPCODE_A: u32 = 1;
+const MFX_CMD_LEN_AVC_DPB_STATE: u32 = 25;
+
+// MFD_AVC_PICID_STATE: SubOpcodeA=1, SubOpcodeB=5, MediaCmdOpcode=1, length=10 (bias 2)
+const MFD_AVC_PICID_STATE: u32 = 5;
+const MFD_AVC_PICID_STATE_SUBOPCODE_A: u32 = 1;
+const MFX_CMD_LEN_AVC_PICID_STATE: u32 = 8;
+
+// TGL MOCS index 1 = pagetable-controlled (UC). Index 0 = error/invalid.
+const MFX_MOCS_UC: u32 = 1;
 
 const MEDIA_RESULT_SLOT_BYTES: u64 = 8;
 const MEDIA_RESULT_KICKOFF_SLOT: u64 = 0;
@@ -456,6 +484,7 @@ struct MediaBitstreamBacking {
     output_surface_phys: u64,
     output_surface_virt: *mut u8,
     output_surface_bytes: usize,
+    ppgtt_pml4_phys: u64,
 }
 
 unsafe impl Send for MediaBitstreamBacking {}
@@ -597,7 +626,7 @@ fn engine_window(slot: usize) -> MediaGpuWindowLayout {
         batch_gpu_addr: base + 0x0008_0000,
         bitstream_gpu_addr: base + 0x0014_0000,
         output_surface_gpu_addr: base + 0x0020_0000,
-        result_gpu_addr: base + 0x0030_0000,
+        result_gpu_addr: base + 0x0060_0000,
     }
 }
 
@@ -885,6 +914,85 @@ fn push_mi_nops(state: &mut [u32], idx: &mut usize, count: usize) {
     }
 }
 
+/// Build a minimal 4-level PPGTT (PML4→PDP→PD→PT) that identity-maps
+/// the given (gpu_addr, phys, size) ranges so the MFX pipe can reach them.
+/// Returns (pml4_phys, total_allocated_bytes) or None on failure.
+fn build_ppgtt_for_ranges(ranges: &[(u64, u64, usize)]) -> Option<u64> {
+    const PAGE: usize = 4096;
+    const ENTRIES: usize = 512;
+    const PTE_PRESENT_RW: u64 = 0x3; // Present + Read/Write
+
+    // Determine which 2MB-aligned PD indices we need PT pages for
+    let mut pd_min = usize::MAX;
+    let mut pd_max = 0usize;
+    for &(gpu, _phys, size) in ranges {
+        if size == 0 {
+            continue;
+        }
+        let first_pd = (gpu as usize) >> 21;
+        let last_pd = (gpu as usize + size - 1) >> 21;
+        if first_pd < pd_min {
+            pd_min = first_pd;
+        }
+        if last_pd > pd_max {
+            pd_max = last_pd;
+        }
+    }
+    if pd_min > pd_max {
+        return None;
+    }
+    let pt_count = pd_max - pd_min + 1;
+    // Allocate: 1 PML4 + 1 PDP + 1 PD + pt_count PT pages
+    let total_pages = 3 + pt_count;
+    let alloc_bytes = total_pages * PAGE;
+    let (base_phys, base_virt) = crate::dma::alloc(alloc_bytes, PAGE)?;
+
+    let tables = unsafe { core::slice::from_raw_parts_mut(base_virt as *mut u64, alloc_bytes / 8) };
+    // Zero all pages
+    tables.fill(0);
+
+    let pml4_off = 0; // page 0
+    let pdp_off = ENTRIES; // page 1
+    let pd_off = 2 * ENTRIES; // page 2
+    let pt_base_off = 3 * ENTRIES; // pages 3..3+pt_count
+
+    let pml4_phys = base_phys;
+    let pdp_phys = base_phys + PAGE as u64;
+    let pd_phys = base_phys + 2 * PAGE as u64;
+
+    // PML4[0] → PDP
+    tables[pml4_off] = pdp_phys | PTE_PRESENT_RW;
+    // PDP[0] → PD
+    tables[pdp_off] = pd_phys | PTE_PRESENT_RW;
+
+    // PD[pd_min..=pd_max] → PT pages
+    for i in 0..pt_count {
+        let pt_phys = base_phys + (3 + i) as u64 * PAGE as u64;
+        tables[pd_off + pd_min + i] = pt_phys | PTE_PRESENT_RW;
+    }
+
+    // Fill PT entries for each range
+    for &(gpu, phys, size) in ranges {
+        if size == 0 {
+            continue;
+        }
+        let mut offset = 0usize;
+        while offset < size {
+            let va = gpu as usize + offset;
+            let pa = phys + offset as u64;
+            let pd_idx = va >> 21;
+            let pt_idx = (va >> 12) & 0x1FF;
+            let pt_page = pd_idx - pd_min;
+            let slot = pt_base_off + pt_page * ENTRIES + pt_idx;
+            tables[slot] = (pa & !0xFFF) | PTE_PRESENT_RW;
+            offset += PAGE;
+        }
+    }
+
+    crate::intel::dma_flush(base_virt, alloc_bytes);
+    Some(pml4_phys)
+}
+
 fn build_ring_batch_start_words(
     ring_virt: *mut u8,
     ring_bytes: usize,
@@ -900,7 +1008,7 @@ fn build_ring_batch_start_words(
     dwords[1] = (result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT) as u32;
     dwords[2] = ((result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT) >> 32) as u32;
     dwords[3] = prelaunch_marker;
-    dwords[4] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT;
+    dwords[4] = MI_BATCH_BUFFER_START_GEN8;
     dwords[5] = batch_gpu_addr as u32;
     dwords[6] = (batch_gpu_addr >> 32) as u32;
     dwords[7] = MI_NOOP;
@@ -926,7 +1034,7 @@ fn build_execlist_context_descriptor_for_gpu_addr(context_gpu_addr: u64) -> (u32
 
 fn write_video_lrc_ring_tail(context_virt: *mut u8, context_len: usize, ring_tail: u32) {
     const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
-    const CTX_RING_TAIL_DW: usize = 3;
+    const CTX_RING_TAIL_DW: usize = 7;
 
     if context_virt.is_null() {
         return;
@@ -948,13 +1056,14 @@ fn init_gen12_video_context_image(
     ring_start: u32,
     ring_tail: u32,
     ring_ctl: u32,
-    hws_pga: u32,
+    _hws_pga: u32,
+    pml4_phys: u64,
 ) -> bool {
     const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
-    const CTX_RING_HEAD_DW: usize = 2;
-    const CTX_RING_TAIL_DW: usize = 3;
-    const CTX_RING_START_DW: usize = 4;
-    const CTX_RING_CTL_DW: usize = 5;
+    const CTX_RING_HEAD_DW: usize = 5;
+    const CTX_RING_TAIL_DW: usize = 7;
+    const CTX_RING_START_DW: usize = 9;
+    const CTX_RING_CTL_DW: usize = 11;
 
     if context_virt.is_null() {
         return false;
@@ -973,7 +1082,7 @@ fn init_gen12_video_context_image(
     let mut idx = 0usize;
     state[idx] = MI_NOOP;
     idx += 1;
-    state[idx] = mi_lri_cmd(11, MI_LRI_FORCE_POSTED);
+    state[idx] = mi_lri_cmd(13, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = ring_base + 0x244;
     state[idx + 1] = 0x0009_0009;
@@ -991,21 +1100,35 @@ fn init_gen12_video_context_image(
     state[idx + 13] = 0;
     state[idx + 14] = ring_base + 0x110;
     state[idx + 15] = 0;
-    state[idx + 16] = ring_base + 0x11C;
+    state[idx + 16] = ring_base + 0x1C0;
     state[idx + 17] = 0;
-    state[idx + 18] = ring_base + 0x114;
+    state[idx + 18] = ring_base + 0x1C4;
     state[idx + 19] = 0;
-    state[idx + 20] = ring_base + 0x118;
+    state[idx + 20] = ring_base + 0x1C8;
     state[idx + 21] = 0;
-    idx += 22;
-    push_mi_nops(state, &mut idx, 9);
+    state[idx + 22] = ring_base + 0x180;
+    state[idx + 23] = 0;
+    state[idx + 24] = ring_base + 0x2B4;
+    state[idx + 25] = 0;
+    idx += 26;
+    push_mi_nops(state, &mut idx, 5);
     state[idx] = mi_lri_cmd(9, MI_LRI_FORCE_POSTED);
     idx += 1;
-    for offset in [
-        0x3A8u32, 0x28C, 0x288, 0x284, 0x280, 0x27C, 0x278, 0x274, 0x270,
-    ] {
+    // CTX_TIMESTAMP, PDP3..PDP1 (unused=0), PDP0 = PML4 phys
+    let pdp_values: [(u32, u32); 9] = [
+        (0x3A8, 0),                        // CTX_TIMESTAMP
+        (0x28C, 0),                        // PDP3_UDW
+        (0x288, 0),                        // PDP3_LDW
+        (0x284, 0),                        // PDP2_UDW
+        (0x280, 0),                        // PDP2_LDW
+        (0x27C, 0),                        // PDP1_UDW
+        (0x278, 0),                        // PDP1_LDW
+        (0x274, (pml4_phys >> 32) as u32), // PDP0_UDW
+        (0x270, pml4_phys as u32),         // PDP0_LDW
+    ];
+    for (offset, value) in pdp_values {
         state[idx] = ring_base + offset;
-        state[idx + 1] = 0;
+        state[idx + 1] = value;
         idx += 2;
     }
     push_mi_nops(state, &mut idx, 12);
@@ -1067,6 +1190,15 @@ fn packet_write_addr64(batch: &mut [u32], packet_start: usize, dword_index: usiz
     batch[packet_start + dword_index + 1] = (gpu_addr >> 32) as u32;
 }
 
+fn emit_mfx_wait(batch: &mut [u32], idx: &mut usize) -> bool {
+    if *idx >= batch.len() {
+        return false;
+    }
+    batch[*idx] = MFX_WAIT_SYNC;
+    *idx += 1;
+    true
+}
+
 #[inline]
 fn read_result_dword(base_virt: *mut u8, slot_off: u64) -> u32 {
     let ptr = (base_virt as usize).saturating_add(slot_off as usize) as *const u32;
@@ -1086,6 +1218,10 @@ fn build_h264_decode_batch_skeleton(
     annexb_bytes: usize,
     sample_nal_count: usize,
     has_idr: bool,
+    idr_nal_offset: usize,
+    idr_nal_length: usize,
+    sps: &ParsedSps,
+    pps: &ParsedPps,
     kickoff_marker: u32,
     presubmit_marker: u32,
     postsubmit_marker: u32,
@@ -1104,7 +1240,7 @@ fn build_h264_decode_batch_skeleton(
     let height_mbs = height.saturating_add(15) / 16;
     let frame_dims = width | (height << 16);
     let output_pitch = align_up_u32(width.max(64), 64);
-    let chroma_y_offset = output_pitch.saturating_mul(height);
+    let chroma_y_offset = height;
     let stage_flags = (has_idr as u32) | (1 << 1);
 
     if !emit_store_dword(
@@ -1167,11 +1303,6 @@ fn build_h264_decode_batch_skeleton(
         &mut idx,
         result_gpu_addr + MEDIA_RESULT_POSTSUBMIT_SLOT,
         postsubmit_marker,
-    ) || !emit_store_dword(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_COMPLETE_SLOT,
-        complete_marker,
     ) {
         return None;
     }
@@ -1180,12 +1311,22 @@ fn build_h264_decode_batch_skeleton(
         batch,
         &mut idx,
         5,
-        MI_FLUSH_DW | MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE | MI_FLUSH_DW_USE_GTT,
+        MI_FLUSH_DW
+            | MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
+            | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
     )?;
-    batch[flush + 1] = result_gpu_addr as u32;
+    batch[flush + 1] = (result_gpu_addr as u32) | MI_FLUSH_DW_ADDR_GTT;
     batch[flush + 2] = (result_gpu_addr >> 32) as u32;
     batch[flush + 3] = postsubmit_marker;
+    batch[flush + 4] = 0;
 
+    // --- MFX_WAIT (Gen12+: required before PIPE_MODE_SELECT) ---
+    if !emit_mfx_wait(batch, &mut idx) {
+        return None;
+    }
+
+    // --- MFX_PIPE_MODE_SELECT ---
+    // StandardSelect=2(AVC), PostDeblockingOutputEnable(bit9), Short Format (bit17=0 default)
     let pipe_mode = begin_batch_packet(
         batch,
         &mut idx,
@@ -1197,8 +1338,14 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_PIPE_MODE_SELECT,
         ),
     )?;
-    batch[pipe_mode + 1] = 2 | (1 << 9) | (1 << 11);
+    batch[pipe_mode + 1] = 2 | (1 << 9);
 
+    // --- MFX_WAIT (Gen12+: required before SURFACE_STATE) ---
+    if !emit_mfx_wait(batch, &mut idx) {
+        return None;
+    }
+
+    // --- MFX_SURFACE_STATE ---
     let surface = begin_batch_packet(
         batch,
         &mut idx,
@@ -1214,6 +1361,7 @@ fn build_h264_decode_batch_skeleton(
     batch[surface + 3] = 1 | ((output_pitch.saturating_sub(1)) << 3) | (1 << 27) | (4 << 28);
     batch[surface + 4] = chroma_y_offset;
 
+    // --- MFX_PIPE_BUF_ADDR_STATE ---
     let pipe_buf = begin_batch_packet(
         batch,
         &mut idx,
@@ -1225,13 +1373,17 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_PIPE_BUF_ADDR_STATE,
         ),
     )?;
+    // DW4-5: Post Deblocking Destination = output surface
     packet_write_addr64(batch, pipe_buf, 4, output_surface_gpu_addr);
+    batch[pipe_buf + 6] = MFX_MOCS_UC; // Post Deblocking Attributes
+    // DW13-14: Intra Row Store Scratch Buffer
     packet_write_addr64(batch, pipe_buf, 13, scratch_gpu_addr);
+    batch[pipe_buf + 15] = MFX_MOCS_UC; // Intra Row Store Attributes
+    // DW16-17: Deblocking Filter Row Store Scratch Buffer
     packet_write_addr64(batch, pipe_buf, 16, scratch_gpu_addr + 0x4000);
-    packet_write_addr64(batch, pipe_buf, 52, result_gpu_addr + 0x100);
-    packet_write_addr64(batch, pipe_buf, 55, result_gpu_addr + 0x200);
-    packet_write_addr64(batch, pipe_buf, 58, result_gpu_addr + 0x300);
+    batch[pipe_buf + 18] = MFX_MOCS_UC; // Deblocking Filter Row Store Attributes
 
+    // --- MFX_IND_OBJ_BASE_ADDR_STATE ---
     let ind_obj = begin_batch_packet(
         batch,
         &mut idx,
@@ -1244,8 +1396,10 @@ fn build_h264_decode_batch_skeleton(
         ),
     )?;
     packet_write_addr64(batch, ind_obj, 1, bitstream_gpu_addr);
+    batch[ind_obj + 3] = MFX_MOCS_UC; // Bitstream Attributes
     packet_write_addr64(batch, ind_obj, 4, bitstream_gpu_addr + annexb_bytes as u64);
 
+    // --- MFX_BSP_BUF_BASE_ADDR_STATE ---
     let bsp = begin_batch_packet(
         batch,
         &mut idx,
@@ -1258,18 +1412,126 @@ fn build_h264_decode_batch_skeleton(
         ),
     )?;
     packet_write_addr64(batch, bsp, 1, scratch_gpu_addr + 0x8000);
+    batch[bsp + 3] = MFX_MOCS_UC; // BSD Row Store Attributes
     packet_write_addr64(batch, bsp, 4, scratch_gpu_addr + 0xC000);
+    batch[bsp + 6] = MFX_MOCS_UC; // MPR Row Store Attributes
 
+    // --- MFD_AVC_DPB_STATE (27 DWords, all zeros for IDR) ---
+    let _dpb = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_DPB_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC,
+            MFD_AVC_DPB_STATE_SUBOPCODE_A,
+            MFD_AVC_DPB_STATE,
+            MFX_CMD_LEN_AVC_DPB_STATE,
+        ),
+    )?;
+
+    // --- MFD_AVC_PICID_STATE (10 DWords) ---
+    let picid = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_PICID_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC,
+            MFD_AVC_PICID_STATE_SUBOPCODE_A,
+            MFD_AVC_PICID_STATE,
+            MFX_CMD_LEN_AVC_PICID_STATE,
+        ),
+    )?;
+    // DW1: PictureIDRemappingDisable = 0 (enable remapping)
+    batch[picid + 1] = 0;
+    // DW2-9: 16 PictureIDs packed as 16-bit values, all 0xFFFF (no references)
+    for dw in 2..10 {
+        batch[picid + dw] = 0xFFFF_FFFF;
+    }
+
+    // --- MFX_AVC_IMG_STATE (21 DWords) ---
+    let pic_height = if sps.frame_mbs_only_flag {
+        sps.pic_height_in_map_units_minus1 + 1
+    } else {
+        (sps.pic_height_in_map_units_minus1 + 1) * 2
+    };
     let avc_img = begin_batch_packet(
         batch,
         &mut idx,
         (MFX_CMD_LEN_AVC_IMG_STATE + 2) as usize,
         media_cmd_header(MEDIA_CMD_OPCODE_MFX_AVC, 0, MFX_AVC_IMG_STATE, MFX_CMD_LEN_AVC_IMG_STATE),
     )?;
-    batch[avc_img + 1] = (width_mbs.saturating_mul(height_mbs)) & 0xFFFF;
+    // DW1: FrameSize
+    batch[avc_img + 1] = (width_mbs * pic_height) & 0xFFFF;
+    // DW2: FrameWidth(7:0), FrameHeight(23:16)
     batch[avc_img + 2] =
-        (width_mbs.saturating_sub(1) & 0xFF) | ((height_mbs.saturating_sub(1) & 0xFF) << 16);
+        (width_mbs.saturating_sub(1) & 0xFF) | ((pic_height.saturating_sub(1) & 0xFF) << 16);
+    // DW3: ImageStructure(9:8)=0(frame), WeightedBiPredIDC(11:10), WeightedPredEnable(12),
+    //       FirstChromaQPOffset(20:16), SecondChromaQPOffset(28:24)
+    batch[avc_img + 3] = ((pps.weighted_bipred_idc & 3) << 10)
+        | ((pps.weighted_pred_flag as u32) << 12)
+        | (((pps.chroma_qp_index_offset as u32) & 0x1F) << 16)
+        | (((pps.second_chroma_qp_index_offset as u32) & 0x1F) << 24);
+    // DW4: FieldPic(0), MBAFF(1), FrameMBOnly(2), 8x8IDCT(3), Direct8x8Inf(4),
+    //       ConstrainedIntra(5), NonRefPic(6), EntropyCodingSync(7),
+    //       ChromaFormatIDC(11:10)
+    batch[avc_img + 4] = ((sps.frame_mbs_only_flag as u32) << 2)
+        | ((pps.transform_8x8_mode_flag as u32) << 3)
+        | ((sps.direct_8x8_inference_flag as u32) << 4)
+        | ((pps.constrained_intra_pred_flag as u32) << 5)
+        | ((pps.entropy_coding_mode_flag as u32) << 7)
+        | ((sps.chroma_format_idc & 3) << 10);
+    // DW5: TrellisQuantizationChromaDisable(27)
+    batch[avc_img + 5] = 1 << 27;
+    // DW13: InitialQP(7:0), NumActiveRefL0(13:8), NumActiveRefL1(21:16),
+    //        NumRefFrames(28:24)
+    batch[avc_img + 13] = ((pps.pic_init_qp_minus26 as u32) & 0xFF)
+        | (((pps.num_ref_idx_l0_default_active_minus1 + 1) & 0x3F) << 8)
+        | (((pps.num_ref_idx_l1_default_active_minus1 + 1) & 0x3F) << 16)
+        | ((sps.max_num_ref_frames & 0x1F) << 24);
+    // DW14: PicOrderPresent(0), DeltaPicOrderAlwaysZero(1), PicOrderCntType(3:2),
+    //        RedundantPicCntPresent(11), DeblockingFilterCtrlPresent(15),
+    //        Log2MaxFrameNum(23:16), Log2MaxPicOrderCountLSB(31:24)
+    batch[avc_img + 14] = (pps.bottom_field_pic_order_in_frame_present_flag as u32)
+        | ((sps.delta_pic_order_always_zero_flag as u32) << 1)
+        | ((sps.pic_order_cnt_type & 3) << 2)
+        | ((pps.redundant_pic_cnt_present_flag as u32) << 11)
+        | ((pps.deblocking_filter_control_present_flag as u32) << 15)
+        | ((sps.log2_max_frame_num_minus4 & 0xFF) << 16)
+        | ((sps.log2_max_pic_order_cnt_lsb_minus4 & 0xFF) << 24);
 
+    // --- MFX_QM_STATE (flat quantization matrices) ---
+    for &qm_type in &[
+        QM_AVC_4X4_INTRA,
+        QM_AVC_4X4_INTER,
+        QM_AVC_8X8_INTRA,
+        QM_AVC_8X8_INTER,
+    ] {
+        let qm = begin_batch_packet(
+            batch,
+            &mut idx,
+            (MFX_CMD_LEN_QM_STATE + 2) as usize,
+            media_cmd_header(MEDIA_CMD_OPCODE_MFX_COMMON, 0, MFX_QM_STATE, MFX_CMD_LEN_QM_STATE),
+        )?;
+        batch[qm + 1] = qm_type;
+        for dw in 2..18 {
+            batch[qm + dw] = QM_FLAT_VALUE;
+        }
+    }
+
+    // --- MFX_AVC_DIRECTMODE_STATE (71 DWords, zeroed for IDR) ---
+    let _directmode = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_DIRECTMODE_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC,
+            0,
+            MFX_AVC_DIRECTMODE_STATE,
+            MFX_CMD_LEN_AVC_DIRECTMODE_STATE,
+        ),
+    )?;
+
+    // --- MFD_AVC_BSD_OBJECT (7 DWords) ---
     let avc_bsd = begin_batch_packet(
         batch,
         &mut idx,
@@ -1281,10 +1543,31 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_AVC_BSD_OBJECT,
         ),
     )?;
-    batch[avc_bsd + 1] = annexb_bytes as u32;
-    batch[avc_bsd + 2] = 0;
-    batch[avc_bsd + 4] = 1 << 3;
-    batch[avc_bsd + 5] = 1 | (1 << 1) | (1 << 15);
+    // DW1: IndirectBSDDataLength = IDR NAL bytes
+    batch[avc_bsd + 1] = idr_nal_length as u32;
+    // DW2: IndirectBSDDataStartAddress = offset of IDR NAL within bitstream buffer
+    batch[avc_bsd + 2] = (idr_nal_offset as u32) & 0x1FFF_FFFF;
+    // DW3: InlineData DW0 — ConcealmentMethod=1(bit31), ISliceConcealmentMode
+    batch[avc_bsd + 3] = 1 << 31;
+    // DW4: InlineData DW1 — LastSlice(3), EmulationPreventionBytePresent(4), FixPrevMBSkipped(7)
+    batch[avc_bsd + 4] = (1 << 3) | (1 << 4) | (1 << 7);
+    // DW5: InlineData DW2 — IntraPredictionErrorControl(0), Intra8x84x4(1)
+    batch[avc_bsd + 5] = 1 | (1 << 1);
+
+    // --- Post-decode: drain MFX pipeline, then write completion marker ---
+    let done_flush = begin_batch_packet(
+        batch,
+        &mut idx,
+        5,
+        MI_FLUSH_DW
+            | MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
+            | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
+    )?;
+    batch[done_flush + 1] =
+        ((result_gpu_addr + MEDIA_RESULT_COMPLETE_SLOT) as u32) | MI_FLUSH_DW_ADDR_GTT;
+    batch[done_flush + 2] = ((result_gpu_addr + MEDIA_RESULT_COMPLETE_SLOT) >> 32) as u32;
+    batch[done_flush + 3] = complete_marker;
+    batch[done_flush + 4] = 0;
 
     if idx.saturating_add(3) > batch.len() {
         return None;
@@ -1300,16 +1583,11 @@ fn execlist_submit_port_push(
     ring_base: usize,
     context0_lo: u32,
     context0_hi: u32,
-    context1_lo: u32,
-    context1_hi: u32,
+    _context1_lo: u32,
+    _context1_hi: u32,
 ) {
-    let submit_port = ring_base + RING_EXECLIST_SUBMIT_PORT;
     super::mmio_write(dev, ring_base + RING_EXECLIST_SQ_LO, context0_lo);
     super::mmio_write(dev, ring_base + RING_EXECLIST_SQ_HI, context0_hi);
-    super::mmio_write(dev, submit_port, context0_lo);
-    super::mmio_write(dev, submit_port, context0_hi);
-    super::mmio_write(dev, submit_port, context1_lo);
-    super::mmio_write(dev, submit_port, context1_hi);
 }
 
 fn wake_media_engine_forcewake(dev: crate::intel::Dev, engine: MediaEngineDescriptor) {
@@ -1365,6 +1643,10 @@ fn submit_decode_bitstream_demo(
     annex_b: &[u8],
     sample_nal_count: usize,
     has_idr: bool,
+    idr_nal_offset: usize,
+    idr_nal_length: usize,
+    sps: &ParsedSps,
+    pps: &ParsedPps,
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
     let output_pitch = align_up_u32((frame_width as u32).max(64), 64) as usize;
     let output_bytes = output_pitch
@@ -1412,11 +1694,37 @@ fn submit_decode_bitstream_demo(
         annex_b.len(),
         sample_nal_count,
         has_idr,
+        idr_nal_offset,
+        idr_nal_length,
+        sps,
+        pps,
         kickoff_marker,
         presubmit_marker,
         postsubmit_marker,
         complete_marker,
     )?;
+
+    // Decisive diagnostics: addresses, bitstream NAL header, batch size
+    let bs_hdr = if idr_nal_offset + 4 <= annex_b.len() {
+        u32::from_be_bytes([
+            annex_b[idr_nal_offset],
+            annex_b[idr_nal_offset + 1],
+            annex_b[idr_nal_offset + 2],
+            annex_b[idr_nal_offset + 3],
+        ])
+    } else {
+        0xDEAD
+    };
+    crate::log!(
+        "intel/media: addrs output_gpu=0x{:08X} scratch_gpu=0x{:08X} bitstream_gpu=0x{:08X} result_gpu=0x{:08X} batch_dwords={} idr_nal_hdr=0x{:08X}\n",
+        output_surface_gpu_addr,
+        scratch_gpu_addr,
+        windows.bitstream_gpu_addr,
+        windows.result_gpu_addr,
+        batch_tail_bytes / 4,
+        bs_hdr,
+    );
+
     let ring_tail_bytes = build_ring_batch_start_words(
         backing.ring_virt,
         backing.ring_bytes,
@@ -1435,6 +1743,7 @@ fn submit_decode_bitstream_demo(
         ring_tail_bytes as u32,
         ring_ctl,
         pphwsp_gpu,
+        backing.ppgtt_pml4_phys,
     ) {
         return None;
     }
@@ -1479,6 +1788,10 @@ fn submit_decode_bitstream_demo(
     let mut completed = false;
     let mut iter = 0usize;
     while iter < MEDIA_SUBMIT_POLL_ITERS {
+        super::dma_flush(
+            unsafe { backing.result_virt.add(MEDIA_RESULT_COMPLETE_SLOT as usize) },
+            8,
+        );
         let complete = read_result_dword(backing.result_virt, MEDIA_RESULT_COMPLETE_SLOT);
         if complete == complete_marker {
             completed = true;
@@ -1489,6 +1802,41 @@ fn submit_decode_bitstream_demo(
     }
     super::dma_flush(output_surface_virt, output_bytes);
     super::dma_flush(backing.result_virt, backing.result_bytes);
+
+    // Decisive: scan output surface for first nonzero dword, report engine post-state
+    {
+        let out_dwords = unsafe {
+            core::slice::from_raw_parts(output_surface_virt as *const u32, output_bytes / 4)
+        };
+        let mut first_nz_off: u32 = 0xFFFF_FFFF;
+        let mut first_nz_val: u32 = 0;
+        let mut nz_count: u32 = 0;
+        for (i, &dw) in out_dwords.iter().enumerate() {
+            if dw != 0 {
+                if first_nz_off == 0xFFFF_FFFF {
+                    first_nz_off = (i * 4) as u32;
+                    first_nz_val = dw;
+                }
+                nz_count += 1;
+            }
+        }
+        let head_post = super::mmio_read(dev, engine.ring_base + RING_HEAD);
+        let tail_post = super::mmio_read(dev, engine.ring_base + RING_TAIL);
+        let acthd_post = super::mmio_read(dev, engine.ring_base + RING_ACTHD);
+        let fault_post = super::mmio_read(dev, GEN12_RING_FAULT_REG);
+        crate::log!(
+            "intel/media: scanout completed={} iters={} nz_dwords={} first_nz_off=0x{:08X} first_nz_val=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} fault=0x{:08X}\n",
+            completed as u8,
+            iter,
+            nz_count,
+            first_nz_off,
+            first_nz_val,
+            head_post,
+            tail_post,
+            acthd_post,
+            fault_post,
+        );
+    }
 
     if !completed {
         let kickoff = read_result_dword(backing.result_virt, MEDIA_RESULT_KICKOFF_SLOT);
@@ -1567,8 +1915,9 @@ fn render_whitenoise_preview_into_output(
                 let a = source[idx];
                 let b = source[(idx.saturating_mul(5) + 17) % len];
                 let c = source[(idx.saturating_mul(11) + 31) % len];
-                let pos = ((x as u32).wrapping_mul(0x45D9F3B) ^ (y as u32).wrapping_mul(0x119D_E1F3))
-                    .rotate_left(7);
+                let pos = ((x as u32).wrapping_mul(0x45D9F3B)
+                    ^ (y as u32).wrapping_mul(0x119D_E1F3))
+                .rotate_left(7);
                 let mut noise = a
                     ^ b.rotate_left((x & 7) as u32)
                     ^ c.rotate_right((y & 7) as u32)
@@ -1633,6 +1982,15 @@ fn ensure_demo_backing(
     }
     super::ggtt_invalidate(dev);
 
+    // Build PPGTT page tables so MFX pipe data addresses resolve
+    let ppgtt_pml4_phys = build_ppgtt_for_ranges(&[
+        (windows.bitstream_gpu_addr, bitstream_phys, MEDIA_DEFAULT_BITSTREAM_BYTES),
+        (windows.output_surface_gpu_addr, output_surface_phys, MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES),
+        (windows.result_gpu_addr, result_phys, MEDIA_DEFAULT_RESULT_BYTES),
+    ])?;
+
+    crate::log!("intel/media: ppgtt pml4_phys=0x{:08X}\n", ppgtt_pml4_phys,);
+
     let backing = MediaBitstreamBacking {
         ring_phys,
         ring_virt,
@@ -1652,6 +2010,7 @@ fn ensure_demo_backing(
         output_surface_phys,
         output_surface_virt,
         output_surface_bytes: MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES,
+        ppgtt_pml4_phys,
     };
     *MEDIA_BACKING.lock() = Some(backing);
     Some(backing)
@@ -1737,15 +2096,15 @@ pub(crate) fn demo_surface_window(name: &str) -> Option<MediaSurfaceWindow> {
                 }
                 unsafe { backing.output_surface_virt.add(offset) }
             },
-            bytes: demo
-                .output_surface_bytes
-                .min(backing.output_surface_bytes.saturating_sub(
+            bytes: demo.output_surface_bytes.min(
+                backing.output_surface_bytes.saturating_sub(
                     usize::try_from(
                         demo.output_surface_phys
                             .checked_sub(backing.output_surface_phys)?,
                     )
                     .ok()?,
-                )),
+                ),
+            ),
         }),
         _ => None,
     }
@@ -1866,6 +2225,51 @@ pub(crate) async fn run_https_media_demo_once_async() {
         annex_b.bytes.len(),
     );
 
+    let Some(sps) = parse_sps(summary.avcc.sps) else {
+        crate::log!("intel/media: sps parse failed\n");
+        store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
+        return;
+    };
+    let Some(pps) = parse_pps(summary.avcc.pps, &sps) else {
+        crate::log!("intel/media: pps parse failed\n");
+        store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
+        return;
+    };
+    crate::log!(
+        "intel/media: sps chroma={} depth_y={} depth_c={} log2_frame={} poc_type={} log2_poc={} refs={} mbs={}x{} frame_only={} direct8x8={}\n",
+        sps.chroma_format_idc,
+        sps.bit_depth_luma_minus8,
+        sps.bit_depth_chroma_minus8,
+        sps.log2_max_frame_num_minus4,
+        sps.pic_order_cnt_type,
+        sps.log2_max_pic_order_cnt_lsb_minus4,
+        sps.max_num_ref_frames,
+        sps.pic_width_in_mbs_minus1 + 1,
+        sps.pic_height_in_map_units_minus1 + 1,
+        sps.frame_mbs_only_flag as u8,
+        sps.direct_8x8_inference_flag as u8,
+    );
+    crate::log!(
+        "intel/media: pps cabac={} pic_order_present={} l0={} l1={} wpred={} wbipred={} qp={} cqp={} cqp2={} deblock={} constrained={} t8x8={}\n",
+        pps.entropy_coding_mode_flag as u8,
+        pps.bottom_field_pic_order_in_frame_present_flag as u8,
+        pps.num_ref_idx_l0_default_active_minus1,
+        pps.num_ref_idx_l1_default_active_minus1,
+        pps.weighted_pred_flag as u8,
+        pps.weighted_bipred_idc,
+        pps.pic_init_qp_minus26,
+        pps.chroma_qp_index_offset,
+        pps.second_chroma_qp_index_offset,
+        pps.deblocking_filter_control_present_flag as u8,
+        pps.constrained_intra_pred_flag as u8,
+        pps.transform_8x8_mode_flag as u8,
+    );
+    crate::log!(
+        "intel/media: idr_nal offset={} length={}\n",
+        annex_b.idr_nal_offset,
+        annex_b.idr_nal_length,
+    );
+
     let Some(backing) = ensure_demo_backing(dev, windows) else {
         crate::log!("intel/media: backing alloc/map failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
@@ -1906,6 +2310,10 @@ pub(crate) async fn run_https_media_demo_once_async() {
         annex_b.bytes.as_slice(),
         annex_b.sample_nal_count,
         annex_b.has_idr,
+        annex_b.idr_nal_offset,
+        annex_b.idr_nal_length,
+        &sps,
+        &pps,
     ) {
         Some((
             completed,
@@ -2012,9 +2420,8 @@ pub(crate) async fn run_https_media_demo_once_async() {
     );
     super::dma_flush(output_surface_virt, used_output_bytes);
 
-    let output_surface = unsafe {
-        core::slice::from_raw_parts(output_surface_virt as *const u8, used_output_bytes)
-    };
+    let output_surface =
+        unsafe { core::slice::from_raw_parts(output_surface_virt as *const u8, used_output_bytes) };
     let present_ready = super::display::present_rgba_surface_center(
         output_surface,
         preview_w as u32,

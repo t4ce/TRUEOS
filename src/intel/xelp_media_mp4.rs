@@ -43,6 +43,8 @@ pub(crate) struct AnnexBAccessUnit {
     pub bytes: Vec<u8>,
     pub sample_nal_count: usize,
     pub has_idr: bool,
+    pub idr_nal_offset: usize,
+    pub idr_nal_length: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -410,6 +412,8 @@ pub(crate) fn build_annex_b_access_unit(
     let mut off = 0usize;
     let mut sample_nal_count = 0usize;
     let mut has_idr = false;
+    let mut idr_nal_offset = 0usize;
+    let mut idr_nal_length = 0usize;
     while off.saturating_add(nal_length_size) <= summary.first_sample.len() {
         let mut nal_len = 0usize;
         let mut idx = 0usize;
@@ -425,7 +429,12 @@ pub(crate) fn build_annex_b_access_unit(
             .first_sample
             .get(off..off.saturating_add(nal_len))
             .ok_or(Mp4ParseError::BadNalRange)?;
-        has_idr |= (nal[0] & 0x1F) == 5;
+        let nal_type = nal[0] & 0x1F;
+        if nal_type == 5 {
+            idr_nal_offset = bytes.len() + 4;
+            idr_nal_length = nal_len;
+        }
+        has_idr |= nal_type == 5;
         push_annex_b_nal(&mut bytes, nal);
         off = off.saturating_add(nal_len);
         sample_nal_count += 1;
@@ -439,5 +448,279 @@ pub(crate) fn build_annex_b_access_unit(
         bytes,
         sample_nal_count,
         has_idr,
+        idr_nal_offset,
+        idr_nal_length,
+    })
+}
+
+// --- H.264 SPS/PPS Exp-Golomb parsing ---
+
+struct BitReader<'a> {
+    data: &'a [u8],
+    byte_off: usize,
+    bit_off: u8,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            byte_off: 0,
+            bit_off: 0,
+        }
+    }
+
+    fn read_bit(&mut self) -> Option<u8> {
+        let byte = *self.data.get(self.byte_off)?;
+        let bit = (byte >> (7 - self.bit_off)) & 1;
+        self.bit_off += 1;
+        if self.bit_off >= 8 {
+            self.bit_off = 0;
+            self.byte_off += 1;
+        }
+        Some(bit)
+    }
+
+    fn read_bits(&mut self, n: u8) -> Option<u32> {
+        let mut val = 0u32;
+        for _ in 0..n {
+            val = (val << 1) | u32::from(self.read_bit()?);
+        }
+        Some(val)
+    }
+
+    fn read_ue(&mut self) -> Option<u32> {
+        let mut leading = 0u32;
+        while self.read_bit()? == 0 {
+            leading += 1;
+            if leading > 31 {
+                return None;
+            }
+        }
+        if leading == 0 {
+            return Some(0);
+        }
+        let suffix = self.read_bits(leading as u8)?;
+        Some((1u32 << leading).wrapping_sub(1).wrapping_add(suffix))
+    }
+
+    fn read_se(&mut self) -> Option<i32> {
+        let ue = self.read_ue()?;
+        let val = ((ue + 1) / 2) as i32;
+        if ue & 1 == 0 { Some(-val) } else { Some(val) }
+    }
+}
+
+fn remove_emulation_prevention(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0usize;
+    while i < data.len() {
+        if i + 2 < data.len() && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 3 {
+            out.push(0);
+            out.push(0);
+            i += 3;
+        } else {
+            out.push(data[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn skip_scaling_list(br: &mut BitReader, size: usize) -> Option<()> {
+    let mut last_scale = 8i32;
+    let mut next_scale = 8i32;
+    for _j in 0..size {
+        if next_scale != 0 {
+            let delta = br.read_se()?;
+            next_scale = (last_scale + delta + 256) % 256;
+        }
+        if next_scale != 0 {
+            last_scale = next_scale;
+        }
+    }
+    Some(())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ParsedSps {
+    pub profile_idc: u8,
+    pub level_idc: u8,
+    pub chroma_format_idc: u32,
+    pub bit_depth_luma_minus8: u32,
+    pub bit_depth_chroma_minus8: u32,
+    pub log2_max_frame_num_minus4: u32,
+    pub pic_order_cnt_type: u32,
+    pub log2_max_pic_order_cnt_lsb_minus4: u32,
+    pub delta_pic_order_always_zero_flag: bool,
+    pub max_num_ref_frames: u32,
+    pub pic_width_in_mbs_minus1: u32,
+    pub pic_height_in_map_units_minus1: u32,
+    pub frame_mbs_only_flag: bool,
+    pub mb_adaptive_frame_field_flag: bool,
+    pub direct_8x8_inference_flag: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ParsedPps {
+    pub entropy_coding_mode_flag: bool,
+    pub bottom_field_pic_order_in_frame_present_flag: bool,
+    pub num_ref_idx_l0_default_active_minus1: u32,
+    pub num_ref_idx_l1_default_active_minus1: u32,
+    pub weighted_pred_flag: bool,
+    pub weighted_bipred_idc: u32,
+    pub pic_init_qp_minus26: i32,
+    pub chroma_qp_index_offset: i32,
+    pub deblocking_filter_control_present_flag: bool,
+    pub constrained_intra_pred_flag: bool,
+    pub redundant_pic_cnt_present_flag: bool,
+    pub transform_8x8_mode_flag: bool,
+    pub second_chroma_qp_index_offset: i32,
+}
+
+pub(crate) fn parse_sps(sps_nal: &[u8]) -> Option<ParsedSps> {
+    if sps_nal.len() < 4 {
+        return None;
+    }
+    let clean = remove_emulation_prevention(sps_nal);
+    let profile_idc = *clean.get(1)?;
+    let level_idc = *clean.get(3)?;
+    let mut br = BitReader::new(clean.get(4..)?);
+    let _seq_parameter_set_id = br.read_ue()?;
+
+    let mut chroma_format_idc = 1u32;
+    let mut bit_depth_luma_minus8 = 0u32;
+    let mut bit_depth_chroma_minus8 = 0u32;
+    let high_profiles: &[u8] = &[100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134];
+    if high_profiles.contains(&profile_idc) {
+        chroma_format_idc = br.read_ue()?;
+        if chroma_format_idc == 3 {
+            let _separate_colour_plane = br.read_bit()?;
+        }
+        bit_depth_luma_minus8 = br.read_ue()?;
+        bit_depth_chroma_minus8 = br.read_ue()?;
+        let _qpprime_y_zero_transform_bypass = br.read_bit()?;
+        let seq_scaling_matrix_present = br.read_bit()?;
+        if seq_scaling_matrix_present == 1 {
+            let num_lists = if chroma_format_idc != 3 { 8 } else { 12 };
+            for i in 0..num_lists {
+                let present = br.read_bit()?;
+                if present == 1 {
+                    let size = if i < 6 { 16 } else { 64 };
+                    skip_scaling_list(&mut br, size)?;
+                }
+            }
+        }
+    }
+
+    let log2_max_frame_num_minus4 = br.read_ue()?;
+    let pic_order_cnt_type = br.read_ue()?;
+    let mut log2_max_pic_order_cnt_lsb_minus4 = 0u32;
+    let mut delta_pic_order_always_zero_flag = false;
+    if pic_order_cnt_type == 0 {
+        log2_max_pic_order_cnt_lsb_minus4 = br.read_ue()?;
+    } else if pic_order_cnt_type == 1 {
+        delta_pic_order_always_zero_flag = br.read_bit()? != 0;
+        let _offset_for_non_ref_pic = br.read_se()?;
+        let _offset_for_top_to_bottom_field = br.read_se()?;
+        let num_ref_in_poc_cycle = br.read_ue()?;
+        for _ in 0..num_ref_in_poc_cycle {
+            let _offset = br.read_se()?;
+        }
+    }
+
+    let max_num_ref_frames = br.read_ue()?;
+    let _gaps_in_frame_num = br.read_bit()?;
+    let pic_width_in_mbs_minus1 = br.read_ue()?;
+    let pic_height_in_map_units_minus1 = br.read_ue()?;
+    let frame_mbs_only_flag = br.read_bit()? != 0;
+    let mut mb_adaptive_frame_field_flag = false;
+    if !frame_mbs_only_flag {
+        mb_adaptive_frame_field_flag = br.read_bit()? != 0;
+    }
+    let direct_8x8_inference_flag = br.read_bit()? != 0;
+
+    Some(ParsedSps {
+        profile_idc,
+        level_idc,
+        chroma_format_idc,
+        bit_depth_luma_minus8,
+        bit_depth_chroma_minus8,
+        log2_max_frame_num_minus4,
+        pic_order_cnt_type,
+        log2_max_pic_order_cnt_lsb_minus4,
+        delta_pic_order_always_zero_flag,
+        max_num_ref_frames,
+        pic_width_in_mbs_minus1,
+        pic_height_in_map_units_minus1,
+        frame_mbs_only_flag,
+        mb_adaptive_frame_field_flag,
+        direct_8x8_inference_flag,
+    })
+}
+
+pub(crate) fn parse_pps(pps_nal: &[u8], sps: &ParsedSps) -> Option<ParsedPps> {
+    if pps_nal.len() < 2 {
+        return None;
+    }
+    let clean = remove_emulation_prevention(pps_nal);
+    let mut br = BitReader::new(clean.get(1..)?);
+    let _pic_parameter_set_id = br.read_ue()?;
+    let _seq_parameter_set_id = br.read_ue()?;
+    let entropy_coding_mode_flag = br.read_bit()? != 0;
+    let bottom_field_pic_order_in_frame_present_flag = br.read_bit()? != 0;
+    let num_slice_groups_minus1 = br.read_ue()?;
+    if num_slice_groups_minus1 > 0 {
+        return None;
+    }
+    let num_ref_idx_l0_default_active_minus1 = br.read_ue()?;
+    let num_ref_idx_l1_default_active_minus1 = br.read_ue()?;
+    let weighted_pred_flag = br.read_bit()? != 0;
+    let weighted_bipred_idc = br.read_bits(2)?;
+    let pic_init_qp_minus26 = br.read_se()?;
+    let _pic_init_qs_minus26 = br.read_se()?;
+    let chroma_qp_index_offset = br.read_se()?;
+    let deblocking_filter_control_present_flag = br.read_bit()? != 0;
+    let constrained_intra_pred_flag = br.read_bit()? != 0;
+    let redundant_pic_cnt_present_flag = br.read_bit()? != 0;
+
+    let mut transform_8x8_mode_flag = false;
+    let mut second_chroma_qp_index_offset = chroma_qp_index_offset;
+    if let Some(t8x8) = br.read_bit() {
+        transform_8x8_mode_flag = t8x8 != 0;
+        if let Some(scaling_present) = br.read_bit() {
+            if scaling_present == 1 {
+                let num_lists = if transform_8x8_mode_flag {
+                    if sps.chroma_format_idc != 3 { 8 } else { 12 }
+                } else {
+                    6
+                };
+                for i in 0..num_lists {
+                    if br.read_bit()? == 1 {
+                        let size = if i < 6 { 16 } else { 64 };
+                        skip_scaling_list(&mut br, size)?;
+                    }
+                }
+            }
+            if let Some(offset) = br.read_se() {
+                second_chroma_qp_index_offset = offset;
+            }
+        }
+    }
+
+    Some(ParsedPps {
+        entropy_coding_mode_flag,
+        bottom_field_pic_order_in_frame_present_flag,
+        num_ref_idx_l0_default_active_minus1,
+        num_ref_idx_l1_default_active_minus1,
+        weighted_pred_flag,
+        weighted_bipred_idc,
+        pic_init_qp_minus26,
+        chroma_qp_index_offset,
+        deblocking_filter_control_present_flag,
+        constrained_intra_pred_flag,
+        redundant_pic_cnt_present_flag,
+        transform_8x8_mode_flag,
+        second_chroma_qp_index_offset,
     })
 }
