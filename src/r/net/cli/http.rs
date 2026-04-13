@@ -411,6 +411,52 @@ async fn request_http_body(
                     } else {
                         truncated = true;
                     }
+
+                    if let Some(hdr_end) = find_http_header_end(&rx) {
+                        let headers = &rx[..hdr_end];
+                        let status = parse_http_status(headers).unwrap_or(0);
+                        if is_redirect_status(status) {
+                            if let Some(next) = redirect_url_from_location(&parsed, headers) {
+                                if let Some(h) = tcp_handle {
+                                    let _ = net.submit(api::Command::Close { handle: h });
+                                }
+                                return Err(HttpFetchError::Redirect(next));
+                            }
+                        }
+                        if status >= 400 {
+                            if let Some(h) = tcp_handle {
+                                let _ = net.submit(api::Command::Close { handle: h });
+                            }
+                            return Err(HttpFetchError::HttpStatus(status));
+                        }
+                        if let Some(head) = parse_http_head(headers) {
+                            match head.body {
+                                HttpBodyKind::ContentLength(len) => {
+                                    let body_len = rx.len().saturating_sub(hdr_end);
+                                    if body_len >= len {
+                                        if let Some(h) = tcp_handle {
+                                            let _ = net.submit(api::Command::Close { handle: h });
+                                        }
+                                        if truncated {
+                                            return Err(HttpFetchError::ResponseTooLarge);
+                                        }
+                                        return Ok(rx[hdr_end..hdr_end + len].to_vec());
+                                    }
+                                }
+                                HttpBodyKind::Chunked => {
+                                    if let Some(body) = decode_http_chunked(&rx[hdr_end..]) {
+                                        if let Some(h) = tcp_handle {
+                                            let _ = net.submit(api::Command::Close { handle: h });
+                                        }
+                                        if truncated {
+                                            return Err(HttpFetchError::ResponseTooLarge);
+                                        }
+                                        return Ok(body);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 api::Event::Closed { handle } => {
                     if tcp_handle == Some(handle) {
@@ -447,6 +493,19 @@ async fn request_http_body(
             if let Some(h) = tcp_handle {
                 let _ = net.submit(api::Command::Close { handle: h });
             }
+            crate::log!(
+                "http: timeout host={} ip={}.{}.{}.{} port={} handle={} sent_request={} rx_bytes={} hdr_end={}\n",
+                parsed.host,
+                ip[0],
+                ip[1],
+                ip[2],
+                ip[3],
+                parsed.port,
+                tcp_handle.map(|h| h.0).unwrap_or(0),
+                sent_request as u8,
+                rx.len(),
+                find_http_header_end(&rx).is_some() as u8,
+            );
             return Err(HttpFetchError::TimedOut);
         }
 

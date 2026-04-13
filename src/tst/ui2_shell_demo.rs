@@ -49,15 +49,8 @@ fn ui2_shell_line_height() -> u32 {
     u32::from(ui2::ui2_font_native_line_height_px(UI2_SHELL_FONT_TIER))
 }
 
-fn ui2_shell_resolve_glyph(ch: char) -> Option<ui2::Ui2FontGlyph> {
-    ui2::ui2_font_resolve_glyph(UI2_SHELL_FONT_TIER, ch)
-        .or_else(|| ui2::ui2_font_resolve_glyph(UI2_SHELL_FONT_TIER, '?'))
-}
-
 fn ui2_shell_cell_advance_px(ch: char) -> usize {
-    ui2_shell_resolve_glyph(ch)
-        .map(|glyph| glyph.advance_px.max(1) as usize)
-        .unwrap_or(1)
+    usize::from(ui2::ui2_font_char_advance_px(UI2_SHELL_FONT_TIER, ch).max(1))
 }
 
 fn fill_rect_rgba(
@@ -266,15 +259,13 @@ fn render_cell_glyph(
     advance_px: usize,
     cell: &crate::shell2::Ui2ShellCell,
 ) {
-    let Some(glyph) = ui2_shell_resolve_glyph(cell.ch) else {
-        return;
-    };
-    let _ = ui2::ui2_font_blit_glyph_rgba(
+    let _ = ui2::ui2_font_blit_char_rgba(
         rgba,
         dst_width,
         dst_height,
         atlases,
-        &glyph,
+        UI2_SHELL_FONT_TIER,
+        cell.ch,
         Ui2Rect {
             x: pen_x as f32,
             y: row_y as f32,
