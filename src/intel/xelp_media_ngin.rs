@@ -3,17 +3,21 @@ extern crate alloc;
 use alloc::format;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use spin::Mutex;
 
 use super::xelp_media_mp4::{
-    ParsedPps, ParsedSps, build_annex_b_access_unit, first_sample_nal_types,
-    parse_h264_mp4_summary, parse_pps, parse_sps,
+    H264VclInfo, ParsedPps, ParsedSps, build_annex_b_access_unit, build_annex_b_for_sample,
+    first_sample_nal_types, get_sample_data, parse_h264_mp4_summary, parse_pps,
+    parse_sample_vcl_info, parse_sps,
 };
 
 const MAX_MEDIA_ENGINES: usize = 4;
 const MAX_MEDIA_API_ROUTES: usize = 4;
 const MAX_MEDIA_RESULT_SLOTS: usize = 4;
+const MEDIA_PLAYBACK_PROBE_MAX_SAMPLES: u32 = 24;
+const MEDIA_PLAYBACK_FRAME_DELAY_MS: u64 = 33;
 
 const FORCEWAKE_MEDIA_GEN11: usize = 0x0A184;
 const FORCEWAKE_MEDIA_VDBOX0: usize = 0x0A540;
@@ -884,6 +888,91 @@ fn progressive_present_output_surface(
     (false, signature, nonzero_samples)
 }
 
+fn decode_access_unit_demo(
+    dev: crate::intel::Dev,
+    engine: MediaEngineDescriptor,
+    windows: MediaGpuWindowLayout,
+    backing: MediaBitstreamBacking,
+    frame_width: u16,
+    frame_height: u16,
+    annex_b: &[u8],
+    sample_nal_count: usize,
+    has_idr: bool,
+    idr_nal_offset: usize,
+    idr_nal_length: usize,
+    vcl_info: Option<H264VclInfo>,
+    sps: &ParsedSps,
+    pps: &ParsedPps,
+    sample_idx: u32,
+) -> Option<MediaBitstreamDemoState> {
+    let kickoff_marker = marker_base(engine);
+    let complete_marker = kickoff_marker + 3;
+    let (
+        submit_completed,
+        output_surface_pitch,
+        output_surface_bytes,
+        output_surface_gpu_addr,
+        output_surface_phys,
+        output_surface_virt,
+    ) = submit_decode_bitstream_demo(
+        dev,
+        engine,
+        windows,
+        backing,
+        frame_width,
+        frame_height,
+        annex_b,
+        sample_nal_count,
+        has_idr,
+        idr_nal_offset,
+        idr_nal_length,
+        vcl_info,
+        sps,
+        pps,
+        sample_idx,
+    )?;
+
+    let output_surface = unsafe {
+        core::slice::from_raw_parts(output_surface_virt as *const u8, output_surface_bytes)
+    };
+    let (present_ready, output_surface_signature, output_surface_nonzero_samples) =
+        progressive_present_output_surface(
+            output_surface,
+            frame_width,
+            frame_height,
+            output_surface_pitch,
+            submit_completed,
+        );
+
+    Some(MediaBitstreamDemoState {
+        ready: present_ready,
+        engine_name: engine.name,
+        ring_gpu_addr: windows.ring_gpu_addr,
+        context_gpu_addr: windows.context_gpu_addr,
+        batch_gpu_addr: windows.batch_gpu_addr,
+        result_gpu_addr: windows.result_gpu_addr,
+        bitstream_gpu_addr: windows.bitstream_gpu_addr,
+        output_surface_gpu_addr,
+        bitstream_phys: backing.bitstream_phys,
+        output_surface_phys,
+        bitstream_bytes: annex_b.len(),
+        output_surface_bytes,
+        frame_width,
+        frame_height,
+        output_surface_pitch,
+        sample_nal_count,
+        has_idr,
+        kickoff_marker,
+        complete_marker,
+        output_surface_signature,
+        output_surface_nonzero_samples,
+        submit_completed,
+        present_attempted: true,
+        present_ready,
+        synthetic_preview: false,
+    })
+}
+
 #[inline]
 fn align_up_u32(value: u32, align: u32) -> u32 {
     if align == 0 {
@@ -1223,6 +1312,7 @@ fn build_h264_decode_batch_skeleton(
     has_idr: bool,
     idr_nal_offset: usize,
     idr_nal_length: usize,
+    vcl_info: Option<H264VclInfo>,
     sps: &ParsedSps,
     pps: &ParsedPps,
     kickoff_marker: u32,
@@ -1514,6 +1604,7 @@ fn build_h264_decode_batch_skeleton(
         | ((pps.transform_8x8_mode_flag as u32) << 3)
         | ((sps.direct_8x8_inference_flag as u32) << 4)
         | ((pps.constrained_intra_pred_flag as u32) << 5)
+        | ((vcl_info.map(|info| info.nal_ref_idc == 0).unwrap_or(false) as u32) << 6)
         | ((pps.entropy_coding_mode_flag as u32) << 7)
         | ((sps.chroma_format_idc & 3) << 10);
     // DW5: TrellisQuantizationChromaDisable(27)
@@ -1534,6 +1625,9 @@ fn build_h264_decode_batch_skeleton(
         | ((pps.deblocking_filter_control_present_flag as u32) << 15)
         | ((sps.log2_max_frame_num_minus4 & 0xFF) << 16)
         | ((sps.log2_max_pic_order_cnt_lsb_minus4 & 0xFF) << 24);
+    batch[avc_img + 15] = vcl_info
+        .map(|info| (info.frame_num & 0xFFFF) << 16)
+        .unwrap_or(0);
 
     // --- MFX_QM_STATE (flat quantization matrices) ---
     for &qm_type in &[
@@ -1650,6 +1744,74 @@ fn wake_media_engine_forcewake(dev: crate::intel::Dev, engine: MediaEngineDescri
     }
 }
 
+const GDRST: usize = 0x0000_941C;
+const GRDOM_MEDIA_VCS0: u32 = 1 << 2;
+const MODE_IDLE: u32 = 1 << 9;
+
+/// Acknowledge all pending CSB events so the ELSP scheduler releases the context.
+/// On Gen12 Execlists, the hardware writes CSB entries and the write pointer to
+/// HWSP memory (not MMIO). Software must read the write pointer from HWSP dword 47
+/// (offset 0xBC) and write the read pointer back via MMIO masked write.
+fn drain_csb(dev: crate::intel::Dev, engine: MediaEngineDescriptor, hwsp_virt: *mut u8) {
+    let ring_base = engine.ring_base;
+    // Gen11+: HW writes CSB write pointer to HWSP dword 47 (offset 0xBC)
+    const HWSP_CSB_WRITE_INDEX: usize = 0xBC; // dword 47
+    super::dma_flush(hwsp_virt, 0x100); // flush at least the CSB region
+    let hwsp_write_raw =
+        unsafe { core::ptr::read_volatile((hwsp_virt.add(HWSP_CSB_WRITE_INDEX)) as *const u32) };
+    let write_ptr = hwsp_write_raw & 0x7; // 12-entry CSB, 3-bit index (0..11 but typically wraps at 7)
+    // Gen11+ masked MMIO write: set read pointer = write pointer
+    // RING_CONTEXT_STATUS_PTR (0x3A0): bits[10:8] = read pointer, masked register
+    const CSB_READ_PTR_MASK: u32 = 0x7 << 8;
+    let masked_write = (CSB_READ_PTR_MASK << 16) | (write_ptr << 8);
+    super::mmio_write(dev, ring_base + 0x3A0, masked_write);
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    for _ in 0..2_000u32 {
+        core::hint::spin_loop();
+    }
+}
+
+/// Wait for engine idle after CSB drain, prepare for fresh submission.
+fn reset_media_engine(
+    dev: crate::intel::Dev,
+    engine: MediaEngineDescriptor,
+    _context_virt: *mut u8,
+) {
+    let ring_base = engine.ring_base;
+
+    // Wait for ELSP idle: bits 31:30 indicate valid contexts in execution ports.
+    // Bits 15:0 contain the stale LRCA pointer and must be ignored.
+    for _ in 0..200_000u32 {
+        let el = super::mmio_read(dev, ring_base + RING_EXECLIST_STATUS_LO);
+        if (el >> 30) == 0 {
+            // No valid contexts in ELSP — engine is idle, safe to resubmit
+            return;
+        }
+        core::hint::spin_loop();
+    }
+
+    // Fallback: force stop + GDRST + CSB reset (should rarely be needed now)
+    super::mmio_write(dev, ring_base + RING_MI_MODE, STOP_RING | (STOP_RING << 16));
+    for _ in 0..50_000u32 {
+        if super::mmio_read(dev, ring_base + RING_MI_MODE) & MODE_IDLE != 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    super::mmio_write(dev, GDRST, GRDOM_MEDIA_VCS0);
+    for _ in 0..500_000u32 {
+        if super::mmio_read(dev, GDRST) & GRDOM_MEDIA_VCS0 == 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    super::mmio_write(dev, ring_base + RING_MI_MODE, STOP_RING << 16);
+
+    // Reset CSB pointers after GDRST
+    const CSB_RESET: u32 = 11;
+    super::mmio_write(dev, ring_base + 0x3A0, 0xFFFF_0000 | (CSB_RESET << 8) | CSB_RESET);
+}
+
 fn seed_media_ring_live_state(
     dev: crate::intel::Dev,
     ring_base: usize,
@@ -1681,8 +1843,10 @@ fn submit_decode_bitstream_demo(
     has_idr: bool,
     idr_nal_offset: usize,
     idr_nal_length: usize,
+    vcl_info: Option<H264VclInfo>,
     sps: &ParsedSps,
     pps: &ParsedPps,
+    sample_idx: u32,
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
     let output_pitch = align_up_u32((frame_width as u32).max(128), 128) as usize; // Y-tile: 128-byte tile width
     // Y-tile: NV12 tiled surface = Y rows + UV rows, aligned to 32-row tiles
@@ -1702,6 +1866,9 @@ fn submit_decode_bitstream_demo(
     let output_surface_phys = backing.output_surface_phys + MEDIA_SCRATCH_OFFSET_BYTES as u64;
     let output_surface_virt =
         unsafe { backing.output_surface_virt.add(MEDIA_SCRATCH_OFFSET_BYTES) };
+
+    // Wait for previous context to fully retire BEFORE touching shared buffers
+    reset_media_engine(dev, engine, backing.context_virt);
 
     unsafe {
         core::ptr::write_bytes(backing.ring_virt, 0, backing.ring_bytes);
@@ -1733,6 +1900,7 @@ fn submit_decode_bitstream_demo(
         has_idr,
         idr_nal_offset,
         idr_nal_length,
+        vcl_info,
         sps,
         pps,
         kickoff_marker,
@@ -1742,25 +1910,27 @@ fn submit_decode_bitstream_demo(
     )?;
 
     // Decisive diagnostics: addresses, bitstream NAL header, batch size
-    let bs_hdr = if idr_nal_offset + 4 <= annex_b.len() {
-        u32::from_be_bytes([
-            annex_b[idr_nal_offset],
-            annex_b[idr_nal_offset + 1],
-            annex_b[idr_nal_offset + 2],
-            annex_b[idr_nal_offset + 3],
-        ])
-    } else {
-        0xDEAD
-    };
-    crate::log!(
-        "intel/media: addrs output_gpu=0x{:08X} scratch_gpu=0x{:08X} bitstream_gpu=0x{:08X} result_gpu=0x{:08X} batch_dwords={} idr_nal_hdr=0x{:08X}\n",
-        output_surface_gpu_addr,
-        scratch_gpu_addr,
-        windows.bitstream_gpu_addr,
-        windows.result_gpu_addr,
-        batch_tail_bytes / 4,
-        bs_hdr,
-    );
+    if sample_idx < 2 {
+        let bs_hdr = if idr_nal_offset + 4 <= annex_b.len() {
+            u32::from_be_bytes([
+                annex_b[idr_nal_offset],
+                annex_b[idr_nal_offset + 1],
+                annex_b[idr_nal_offset + 2],
+                annex_b[idr_nal_offset + 3],
+            ])
+        } else {
+            0xDEAD
+        };
+        crate::log!(
+            "intel/media: addrs output_gpu=0x{:08X} scratch_gpu=0x{:08X} bitstream_gpu=0x{:08X} result_gpu=0x{:08X} batch_dwords={} idr_nal_hdr=0x{:08X}\n",
+            output_surface_gpu_addr,
+            scratch_gpu_addr,
+            windows.bitstream_gpu_addr,
+            windows.result_gpu_addr,
+            batch_tail_bytes / 4,
+            bs_hdr,
+        );
+    }
 
     let ring_tail_bytes = build_ring_batch_start_words(
         backing.ring_virt,
@@ -1837,6 +2007,14 @@ fn submit_decode_bitstream_demo(
         core::hint::spin_loop();
         iter += 1;
     }
+
+    // After completion, drain CSB to acknowledge the context-complete event.
+    // Without this, the ELSP scheduler keeps the context as "active" and
+    // refuses to accept any new submissions.
+    if completed {
+        drain_csb(dev, engine, backing.context_virt);
+    }
+
     super::dma_flush(output_surface_virt, output_bytes);
     super::dma_flush(backing.result_virt, backing.result_bytes);
 
@@ -1861,8 +2039,14 @@ fn submit_decode_bitstream_demo(
         let tail_post = super::mmio_read(dev, engine.ring_base + RING_TAIL);
         let acthd_post = super::mmio_read(dev, engine.ring_base + RING_ACTHD);
         let fault_post = super::mmio_read(dev, GEN12_RING_FAULT_REG);
+        let el_post = super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO);
+        let csb_post = super::mmio_read(dev, engine.ring_base + 0x3A0);
+        // Also read the HWSP CSB write pointer for ground truth
+        super::dma_flush(backing.context_virt, 0x100);
+        let hwsp_csb_w =
+            unsafe { core::ptr::read_volatile((backing.context_virt.add(0xBC)) as *const u32) };
         crate::log!(
-            "intel/media: scanout completed={} iters={} nz_dwords={} first_nz_off=0x{:08X} first_nz_val=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} fault=0x{:08X}\n",
+            "intel/media: scanout completed={} iters={} nz_dwords={} first_nz_off=0x{:08X} first_nz_val=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} fault=0x{:08X} el=0x{:08X} csb=0x{:08X} hwsp_csb=0x{:08X}\n",
             completed as u8,
             iter,
             nz_count,
@@ -1872,10 +2056,13 @@ fn submit_decode_bitstream_demo(
             tail_post,
             acthd_post,
             fault_post,
+            el_post,
+            csb_post,
+            hwsp_csb_w,
         );
     }
 
-    if !completed {
+    if !completed && sample_idx < 3 {
         let kickoff = read_result_dword(backing.result_virt, MEDIA_RESULT_KICKOFF_SLOT);
         let presubmit = read_result_dword(backing.result_virt, MEDIA_RESULT_PRESUBMIT_SLOT);
         let postsubmit = read_result_dword(backing.result_virt, MEDIA_RESULT_POSTSUBMIT_SLOT);
@@ -1929,47 +2116,6 @@ fn submit_decode_bitstream_demo(
         output_surface_phys,
         output_surface_virt,
     ))
-}
-
-fn render_whitenoise_preview_into_output(
-    ptr: *mut u8,
-    pitch_bytes: usize,
-    width: usize,
-    height: usize,
-    source: &[u8],
-    highlight_idr: bool,
-) {
-    if ptr.is_null() || width == 0 || height == 0 || pitch_bytes < width.saturating_mul(4) {
-        return;
-    }
-    let len = source.len().max(1);
-    unsafe {
-        for y in 0..height {
-            let row = ptr.add(y.saturating_mul(pitch_bytes));
-            for x in 0..width {
-                let pixel = row.add(x.saturating_mul(4));
-                let idx = (y.saturating_mul(width) + x) % len;
-                let a = source[idx];
-                let b = source[(idx.saturating_mul(5) + 17) % len];
-                let c = source[(idx.saturating_mul(11) + 31) % len];
-                let pos = ((x as u32).wrapping_mul(0x45D9F3B)
-                    ^ (y as u32).wrapping_mul(0x119D_E1F3))
-                .rotate_left(7);
-                let mut noise = a
-                    ^ b.rotate_left((x & 7) as u32)
-                    ^ c.rotate_right((y & 7) as u32)
-                    ^ pos as u8
-                    ^ (pos >> 8) as u8;
-                if highlight_idr {
-                    noise ^= 0x3C;
-                }
-                core::ptr::write_volatile(pixel, noise);
-                core::ptr::write_volatile(pixel.add(1), noise);
-                core::ptr::write_volatile(pixel.add(2), noise);
-                core::ptr::write_volatile(pixel.add(3), 0);
-            }
-        }
-    }
 }
 
 fn ensure_demo_backing(
@@ -2313,202 +2459,180 @@ pub(crate) async fn run_https_media_demo_once_async() {
         return;
     };
 
-    let Some((preview_w, preview_h, preview_pitch)) = fit_output_dims(
-        summary.width as usize,
-        summary.height as usize,
-        backing.output_surface_bytes,
-    ) else {
-        crate::log!(
-            "intel/media: preview sizing failed dims={}x{}\n",
-            summary.width,
-            summary.height
-        );
-        store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
-        return;
-    };
+    let playback_probe_samples = summary
+        .sample_count
+        .min(MEDIA_PLAYBACK_PROBE_MAX_SAMPLES)
+        .max(1);
+    let mut playback_attempted = 0u32;
+    let mut playback_presented = 0u32;
+    let mut playback_completed = 0u32;
+    let mut playback_idr = 0u32;
+    let mut playback_non_idr = 0u32;
+    let mut last_attempted_demo = None;
+    let mut last_presented_demo = None;
 
-    let kickoff_marker = marker_base(engine);
-    let complete_marker = kickoff_marker + 3;
-    let preview_output_bytes = preview_pitch.saturating_mul(preview_h);
-    let mut used_output_bytes = preview_output_bytes;
-    let mut output_surface_gpu_addr = windows.output_surface_gpu_addr;
-    let mut output_surface_phys = backing.output_surface_phys;
-    let mut output_surface_virt = backing.output_surface_virt;
-    let mut submit_completed = false;
-    let mut synthetic_preview = false;
-
-    match submit_decode_bitstream_demo(
-        dev,
-        engine,
-        windows,
-        backing,
-        summary.width,
-        summary.height,
-        annex_b.bytes.as_slice(),
-        annex_b.sample_nal_count,
-        annex_b.has_idr,
-        annex_b.idr_nal_offset,
-        annex_b.idr_nal_length,
-        &sps,
-        &pps,
-    ) {
-        Some((
-            completed,
-            decoded_pitch,
-            decoded_bytes,
-            decoded_gpu_addr,
-            decoded_phys,
-            decoded_virt,
-        )) => {
-            used_output_bytes = decoded_bytes;
-            output_surface_gpu_addr = decoded_gpu_addr;
-            output_surface_phys = decoded_phys;
-            output_surface_virt = decoded_virt;
-            submit_completed = completed;
-            let output_surface = unsafe {
-                core::slice::from_raw_parts(output_surface_virt as *const u8, used_output_bytes)
-            };
-            let (ready, signature, nonzero) = progressive_present_output_surface(
-                output_surface,
-                summary.width,
-                summary.height,
-                decoded_pitch,
-                submit_completed,
-            );
-            if ready {
-                let demo = MediaBitstreamDemoState {
-                    ready,
-                    engine_name: engine.name,
-                    ring_gpu_addr: windows.ring_gpu_addr,
-                    context_gpu_addr: windows.context_gpu_addr,
-                    batch_gpu_addr: windows.batch_gpu_addr,
-                    result_gpu_addr: windows.result_gpu_addr,
-                    bitstream_gpu_addr: windows.bitstream_gpu_addr,
-                    output_surface_gpu_addr,
-                    bitstream_phys: backing.bitstream_phys,
-                    output_surface_phys,
-                    bitstream_bytes: annex_b.bytes.len(),
-                    output_surface_bytes: used_output_bytes,
-                    frame_width: summary.width,
-                    frame_height: summary.height,
-                    output_surface_pitch: decoded_pitch,
-                    sample_nal_count: annex_b.sample_nal_count,
-                    has_idr: annex_b.has_idr,
-                    kickoff_marker,
-                    complete_marker,
-                    output_surface_signature: signature,
-                    output_surface_nonzero_samples: nonzero,
-                    submit_completed,
-                    present_attempted: true,
-                    present_ready: ready,
-                    synthetic_preview: false,
-                };
+    for sample_idx in 0..playback_probe_samples {
+        let sample = if sample_idx == 0 {
+            summary.first_sample
+        } else {
+            let Some(sample) = get_sample_data(&summary, sample_idx) else {
                 crate::log!(
-                    "intel/media: decoded output ready engine={} frame={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} present_ready={} submit_completed={} synthetic_preview=0 transport={:?}\n",
-                    demo.engine_name,
-                    demo.frame_width,
-                    demo.frame_height,
-                    demo.output_surface_pitch,
-                    demo.bitstream_bytes,
-                    demo.output_surface_signature,
-                    demo.output_surface_nonzero_samples,
-                    demo.present_ready as u8,
-                    demo.submit_completed as u8,
-                    preferred_transport()
+                    "intel/media: playback sample unavailable index={} of={}\n",
+                    sample_idx,
+                    summary.sample_count,
                 );
-                store_kickoff_state(MediaKickoffStage::Smoke, Some(demo));
-                return;
-            }
+                break;
+            };
+            sample
+        };
 
-            crate::log!(
-                "intel/media: decoded output rejected engine={} frame={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} present_ready={} submit_completed={} fallback=white-noise-preview\n",
-                engine.name,
-                summary.width,
-                summary.height,
-                decoded_pitch,
-                annex_b.bytes.len(),
-                signature,
-                nonzero,
-                ready as u8,
-                submit_completed as u8,
-            );
+        let sample_nals = first_sample_nal_types(sample, summary.avcc.nal_length_size, 6);
+        let vcl_info = parse_sample_vcl_info(sample, summary.avcc.nal_length_size, &sps);
+        let built_sample_annex_b = if sample_idx == 0 {
+            None
+        } else {
+            match build_annex_b_for_sample(sample, &summary.avcc) {
+                Ok(access_unit) => Some(access_unit),
+                Err(err) => {
+                    crate::log!(
+                        "intel/media: playback annexb build failed index={} err={:?}\n",
+                        sample_idx,
+                        err,
+                    );
+                    continue;
+                }
+            }
+        };
+        let sample_bytes = built_sample_annex_b
+            .as_ref()
+            .map(|access_unit| access_unit.bytes.as_slice())
+            .unwrap_or(annex_b.bytes.as_slice());
+        let sample_nal_count = built_sample_annex_b
+            .as_ref()
+            .map(|access_unit| access_unit.sample_nal_count)
+            .unwrap_or(annex_b.sample_nal_count);
+        let sample_has_idr = built_sample_annex_b
+            .as_ref()
+            .map(|access_unit| access_unit.has_idr)
+            .unwrap_or(annex_b.has_idr);
+        let sample_idr_nal_offset = built_sample_annex_b
+            .as_ref()
+            .map(|access_unit| access_unit.idr_nal_offset)
+            .unwrap_or(annex_b.idr_nal_offset);
+        let sample_idr_nal_length = built_sample_annex_b
+            .as_ref()
+            .map(|access_unit| access_unit.idr_nal_length)
+            .unwrap_or(annex_b.idr_nal_length);
+
+        playback_attempted += 1;
+        if sample_has_idr {
+            playback_idr += 1;
+        } else {
+            playback_non_idr += 1;
         }
-        None => {
+
+        crate::log!(
+            "intel/media: playback probe index={} of={} bytes={} sample_nals={} idr={} frame_num={} nal_ref_idc={} nal_type={} slice_type={} first_nals={:?}\n",
+            sample_idx,
+            summary.sample_count,
+            sample_bytes.len(),
+            sample_nal_count,
+            sample_has_idr as u8,
+            vcl_info.map(|info| info.frame_num).unwrap_or(u32::MAX),
+            vcl_info.map(|info| info.nal_ref_idc).unwrap_or(0),
+            vcl_info.map(|info| info.nal_type).unwrap_or(0),
+            vcl_info.map(|info| info.slice_type).unwrap_or(u32::MAX),
+            sample_nals,
+        );
+
+        let Some(demo) = decode_access_unit_demo(
+            dev,
+            engine,
+            windows,
+            backing,
+            summary.width,
+            summary.height,
+            sample_bytes,
+            sample_nal_count,
+            sample_has_idr,
+            sample_idr_nal_offset,
+            sample_idr_nal_length,
+            vcl_info,
+            &sps,
+            &pps,
+            sample_idx,
+        ) else {
             crate::log!(
-                "intel/media: decode submit unavailable engine={} fallback=white-noise-preview\n",
+                "intel/media: playback submit unavailable index={} engine={}\n",
+                sample_idx,
                 engine.name,
+            );
+            continue;
+        };
+
+        last_attempted_demo = Some(demo);
+
+        if demo.submit_completed {
+            playback_completed += 1;
+        }
+
+        if demo.present_ready {
+            playback_presented += 1;
+            crate::log!(
+                "intel/media: playback frame ready index={} frame={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} submit_completed={} transport={:?}\n",
+                sample_idx,
+                demo.frame_width,
+                demo.frame_height,
+                demo.output_surface_pitch,
+                demo.bitstream_bytes,
+                demo.output_surface_signature,
+                demo.output_surface_nonzero_samples,
+                demo.submit_completed as u8,
+                preferred_transport(),
+            );
+            last_presented_demo = Some(demo);
+            if sample_idx + 1 < playback_probe_samples {
+                Timer::after(EmbassyDuration::from_millis(MEDIA_PLAYBACK_FRAME_DELAY_MS)).await;
+            }
+        } else {
+            crate::log!(
+                "intel/media: playback frame rejected index={} frame={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} present_ready={} submit_completed={}\n",
+                sample_idx,
+                demo.frame_width,
+                demo.frame_height,
+                demo.output_surface_pitch,
+                demo.bitstream_bytes,
+                demo.output_surface_signature,
+                demo.output_surface_nonzero_samples,
+                demo.present_ready as u8,
+                demo.submit_completed as u8,
             );
         }
     }
 
-    synthetic_preview = true;
-    used_output_bytes = preview_output_bytes;
-    output_surface_gpu_addr = windows.output_surface_gpu_addr;
-    output_surface_phys = backing.output_surface_phys;
-    output_surface_virt = backing.output_surface_virt;
-
-    render_whitenoise_preview_into_output(
-        output_surface_virt,
-        preview_pitch,
-        preview_w,
-        preview_h,
-        annex_b.bytes.as_slice(),
-        annex_b.has_idr,
+    crate::log!(
+        "intel/media: playback summary attempted={} presented={} completed={} idr={} non_idr={} probe_limit={} total_samples={}\n",
+        playback_attempted,
+        playback_presented,
+        playback_completed,
+        playback_idr,
+        playback_non_idr,
+        playback_probe_samples,
+        summary.sample_count,
     );
-    super::dma_flush(output_surface_virt, used_output_bytes);
 
-    let output_surface =
-        unsafe { core::slice::from_raw_parts(output_surface_virt as *const u8, used_output_bytes) };
-    let present_ready = super::display::present_rgba_surface_center(
-        output_surface,
-        preview_w as u32,
-        preview_h as u32,
-        preview_pitch,
-    );
-    let (output_surface_signature, output_surface_nonzero_samples) =
-        sample_surface_signature(output_surface);
-
-    let demo = MediaBitstreamDemoState {
-        ready: present_ready,
-        engine_name: engine.name,
-        ring_gpu_addr: windows.ring_gpu_addr,
-        context_gpu_addr: windows.context_gpu_addr,
-        batch_gpu_addr: windows.batch_gpu_addr,
-        result_gpu_addr: windows.result_gpu_addr,
-        bitstream_gpu_addr: windows.bitstream_gpu_addr,
-        output_surface_gpu_addr,
-        bitstream_phys: backing.bitstream_phys,
-        output_surface_phys,
-        bitstream_bytes: annex_b.bytes.len(),
-        output_surface_bytes: used_output_bytes,
-        frame_width: preview_w as u16,
-        frame_height: preview_h as u16,
-        output_surface_pitch: preview_pitch,
-        sample_nal_count: annex_b.sample_nal_count,
-        has_idr: annex_b.has_idr,
-        kickoff_marker,
-        complete_marker,
-        output_surface_signature,
-        output_surface_nonzero_samples,
-        submit_completed,
-        present_attempted: true,
-        present_ready,
-        synthetic_preview,
-    };
+    if let Some(demo) = last_presented_demo {
+        store_kickoff_state(MediaKickoffStage::Smoke, Some(demo));
+        return;
+    }
 
     crate::log!(
-        "intel/media: white-noise preview fallback engine={} preview={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} present_ready={} submit_completed={} synthetic_preview=1 transport={:?}\n",
-        demo.engine_name,
-        demo.frame_width,
-        demo.frame_height,
-        demo.output_surface_pitch,
-        demo.bitstream_bytes,
-        demo.output_surface_signature,
-        demo.output_surface_nonzero_samples,
-        demo.present_ready as u8,
-        demo.submit_completed as u8,
-        preferred_transport()
+        "intel/media: playback produced no presentable frames engine={} attempted={} completed={} total_samples={}\n",
+        engine.name,
+        playback_attempted,
+        playback_completed,
+        summary.sample_count,
     );
 
-    store_kickoff_state(MediaKickoffStage::Smoke, Some(demo));
+    store_kickoff_state(MediaKickoffStage::Smoke, last_attempted_demo);
 }

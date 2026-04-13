@@ -39,6 +39,7 @@ pub(crate) struct Mp4H264Summary<'a> {
     pub avcc: AvccSummary<'a>,
     pub mp4_body: &'a [u8],
     pub stsz_data: &'a [u8],
+    pub stsc_data: Option<&'a [u8]>,
     pub stco_data: Option<&'a [u8]>,
     pub co64_data: Option<&'a [u8]>,
 }
@@ -49,6 +50,14 @@ pub(crate) struct AnnexBAccessUnit {
     pub has_idr: bool,
     pub idr_nal_offset: usize,
     pub idr_nal_length: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct H264VclInfo {
+    pub nal_type: u8,
+    pub nal_ref_idc: u8,
+    pub slice_type: u32,
+    pub frame_num: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -69,6 +78,7 @@ struct TrackCandidate<'a> {
     first_sample_size: Option<u32>,
     first_chunk_offset: Option<u64>,
     stsz_data: Option<&'a [u8]>,
+    stsc_data: Option<&'a [u8]>,
     stco_data: Option<&'a [u8]>,
     co64_data: Option<&'a [u8]>,
 }
@@ -169,6 +179,124 @@ fn parse_co64(bytes: &[u8]) -> Option<u64> {
     be_u64(bytes, 8)
 }
 
+fn table_entry_count(bytes: &[u8]) -> Option<u32> {
+    be_u32(bytes, 4)
+}
+
+fn parse_stsc_entry(bytes: &[u8], index: u32) -> Option<(u32, u32, u32)> {
+    let entry_count = table_entry_count(bytes)?;
+    if index >= entry_count {
+        return None;
+    }
+    let off = 8usize.checked_add(index as usize * 12)?;
+    Some((be_u32(bytes, off)?, be_u32(bytes, off + 4)?, be_u32(bytes, off + 8)?))
+}
+
+fn sample_size_at(stsz: &[u8], index: u32) -> Option<usize> {
+    let sample_count = be_u32(stsz, 8)?;
+    if index >= sample_count {
+        return None;
+    }
+    let uniform_size = be_u32(stsz, 4)?;
+    if uniform_size != 0 {
+        Some(uniform_size as usize)
+    } else {
+        Some(be_u32(stsz, 12 + index as usize * 4)? as usize)
+    }
+}
+
+fn chunk_offset_at(summary: &Mp4H264Summary<'_>, chunk_index: u32) -> Option<u64> {
+    if let Some(stco) = summary.stco_data {
+        let entry_count = table_entry_count(stco)?;
+        if chunk_index >= entry_count {
+            return None;
+        }
+        return Some(be_u32(stco, 8 + chunk_index as usize * 4)? as u64);
+    }
+    if let Some(co64) = summary.co64_data {
+        let entry_count = table_entry_count(co64)?;
+        if chunk_index >= entry_count {
+            return None;
+        }
+        return be_u64(co64, 8 + chunk_index as usize * 8);
+    }
+    None
+}
+
+fn sample_file_range(summary: &Mp4H264Summary<'_>, index: u32) -> Option<(usize, usize)> {
+    if index >= summary.sample_count {
+        return None;
+    }
+
+    let Some(stsc) = summary.stsc_data else {
+        let mut file_off = summary.first_chunk_offset as usize;
+        let mut i = 0u32;
+        while i < index {
+            file_off = file_off.checked_add(sample_size_at(summary.stsz_data, i)?)?;
+            i += 1;
+        }
+        let sample_size = sample_size_at(summary.stsz_data, index)?;
+        return Some((file_off, sample_size));
+    };
+
+    let entry_count = table_entry_count(stsc)?;
+    if entry_count == 0 {
+        return None;
+    }
+
+    let chunk_count = if let Some(stco) = summary.stco_data {
+        table_entry_count(stco)?
+    } else if let Some(co64) = summary.co64_data {
+        table_entry_count(co64)?
+    } else {
+        return None;
+    };
+
+    let mut sample_base = 0u32;
+    let mut entry_index = 0u32;
+    while entry_index < entry_count {
+        let (first_chunk, samples_per_chunk, _sample_desc) = parse_stsc_entry(stsc, entry_index)?;
+        if first_chunk == 0 || samples_per_chunk == 0 {
+            return None;
+        }
+        let next_first_chunk = if entry_index + 1 < entry_count {
+            parse_stsc_entry(stsc, entry_index + 1)?.0
+        } else {
+            chunk_count.checked_add(1)?
+        };
+        if next_first_chunk <= first_chunk {
+            return None;
+        }
+
+        let chunk_span = next_first_chunk.checked_sub(first_chunk)?;
+        let sample_span = chunk_span.checked_mul(samples_per_chunk)?;
+        if index < sample_base.checked_add(sample_span)? {
+            let rel_sample = index.checked_sub(sample_base)?;
+            let chunk_in_run = rel_sample / samples_per_chunk;
+            let sample_in_chunk = rel_sample % samples_per_chunk;
+            let chunk_index = first_chunk.checked_sub(1)?.checked_add(chunk_in_run)?;
+            let mut file_off = usize::try_from(chunk_offset_at(summary, chunk_index)?).ok()?;
+            let chunk_sample_start =
+                sample_base.checked_add(chunk_in_run.checked_mul(samples_per_chunk)?)?;
+            let mut in_chunk = 0u32;
+            while in_chunk < sample_in_chunk {
+                file_off = file_off.checked_add(sample_size_at(
+                    summary.stsz_data,
+                    chunk_sample_start + in_chunk,
+                )?)?;
+                in_chunk += 1;
+            }
+            let sample_size = sample_size_at(summary.stsz_data, index)?;
+            return Some((file_off, sample_size));
+        }
+
+        sample_base = sample_base.checked_add(sample_span)?;
+        entry_index += 1;
+    }
+
+    None
+}
+
 fn parse_avcc<'a>(bytes: &'a [u8]) -> Option<AvccSummary<'a>> {
     if bytes.len() < 7 {
         return None;
@@ -260,6 +388,9 @@ fn parse_stbl<'a>(bytes: &'a [u8], track: &mut TrackCandidate<'a>) -> Result<(),
                     track.first_sample_size = Some(first_sample_size);
                 }
                 track.stsz_data = Some(child.data);
+            }
+            b"stsc" => {
+                track.stsc_data = Some(child.data);
             }
             b"stco" => {
                 track.first_chunk_offset = parse_stco(child.data);
@@ -375,36 +506,15 @@ pub(crate) fn parse_h264_mp4_summary<'a>(
         avcc,
         mp4_body: bytes,
         stsz_data,
+        stsc_data: track.stsc_data,
         stco_data: track.stco_data,
         co64_data: track.co64_data,
     })
 }
 
 /// Return the byte slice for sample `index` (0-based) in the MP4 body.
-/// Assumes all samples are contiguous starting at first_chunk_offset (simple single-chunk layout).
 pub(crate) fn get_sample_data<'a>(summary: &Mp4H264Summary<'a>, index: u32) -> Option<&'a [u8]> {
-    if index >= summary.sample_count {
-        return None;
-    }
-    let stsz = summary.stsz_data;
-    let uniform_size = be_u32(stsz, 4)?;
-    // Compute offset of this sample from first_chunk_offset by summing prior sample sizes
-    let mut file_off = summary.first_chunk_offset as usize;
-    let mut i = 0u32;
-    while i < index {
-        let sz = if uniform_size != 0 {
-            uniform_size as usize
-        } else {
-            be_u32(stsz, 12 + i as usize * 4)? as usize
-        };
-        file_off = file_off.checked_add(sz)?;
-        i += 1;
-    }
-    let sample_size = if uniform_size != 0 {
-        uniform_size as usize
-    } else {
-        be_u32(stsz, 12 + index as usize * 4)? as usize
-    };
+    let (file_off, sample_size) = sample_file_range(summary, index)?;
     summary
         .mp4_body
         .get(file_off..file_off.checked_add(sample_size)?)
@@ -630,6 +740,51 @@ fn remove_emulation_prevention(data: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+pub(crate) fn parse_sample_vcl_info(
+    sample: &[u8],
+    nal_length_size: usize,
+    sps: &ParsedSps,
+) -> Option<H264VclInfo> {
+    if !(1..=4).contains(&nal_length_size) {
+        return None;
+    }
+
+    let mut off = 0usize;
+    while off.saturating_add(nal_length_size) <= sample.len() {
+        let mut nal_len = 0usize;
+        let mut idx = 0usize;
+        while idx < nal_length_size {
+            nal_len = (nal_len << 8) | sample[off + idx] as usize;
+            idx += 1;
+        }
+        off = off.saturating_add(nal_length_size);
+        if nal_len == 0 || off.saturating_add(nal_len) > sample.len() {
+            return None;
+        }
+        let nal = sample.get(off..off.saturating_add(nal_len))?;
+        let nal_type = nal[0] & 0x1F;
+        let nal_ref_idc = (nal[0] >> 5) & 0x03;
+        if nal_type == 1 || nal_type == 5 {
+            let clean = remove_emulation_prevention(nal);
+            let mut br = BitReader::new(clean.get(1..)?);
+            let _first_mb_in_slice = br.read_ue()?;
+            let slice_type = br.read_ue()?;
+            let _pic_parameter_set_id = br.read_ue()?;
+            let frame_num_bits = (sps.log2_max_frame_num_minus4 + 4).min(16) as u8;
+            let frame_num = br.read_bits(frame_num_bits)?;
+            return Some(H264VclInfo {
+                nal_type,
+                nal_ref_idc,
+                slice_type,
+                frame_num,
+            });
+        }
+        off = off.saturating_add(nal_len);
+    }
+
+    None
 }
 
 fn skip_scaling_list(br: &mut BitReader, size: usize) -> Option<()> {
