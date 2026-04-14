@@ -131,6 +131,52 @@ impl TerminalState {
         self.utf8_expected = 0;
     }
 
+    fn resize_preserving_contents(&mut self, cols: usize, rows: usize) {
+        let next_cols = cols.max(1);
+        let next_rows = rows.max(1);
+        if self.cols == next_cols && self.rows == next_rows {
+            return;
+        }
+
+        let old_cols = self.cols;
+        let old_rows = self.rows;
+        let old_cells = core::mem::take(&mut self.cells);
+        let mut next_cells = vec![Self::blank_cell(); next_cols.saturating_mul(next_rows)];
+        let copy_rows = old_rows.min(next_rows);
+        let copy_cols = old_cols.min(next_cols);
+        for row in 0..copy_rows {
+            let old_start = row.saturating_mul(old_cols);
+            let next_start = row.saturating_mul(next_cols);
+            let old_end = old_start.saturating_add(copy_cols).min(old_cells.len());
+            let next_end = next_start.saturating_add(copy_cols).min(next_cells.len());
+            if old_end <= old_start || next_end <= next_start {
+                continue;
+            }
+            next_cells[next_start..next_end].copy_from_slice(&old_cells[old_start..old_end]);
+        }
+
+        let had_full_scroll_region =
+            self.scroll_top == 0 && self.scroll_bottom >= old_rows.saturating_sub(1);
+
+        self.cols = next_cols;
+        self.rows = next_rows;
+        self.cells = next_cells;
+        self.cursor_col = self.cursor_col.min(self.cols.saturating_sub(1));
+        self.cursor_row = self.cursor_row.min(self.rows.saturating_sub(1));
+        self.saved_col = self.saved_col.min(self.cols.saturating_sub(1));
+        self.saved_row = self.saved_row.min(self.rows.saturating_sub(1));
+        if had_full_scroll_region {
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows.saturating_sub(1);
+        } else {
+            self.scroll_top = self.scroll_top.min(self.rows.saturating_sub(1));
+            self.scroll_bottom = self.scroll_bottom.min(self.rows.saturating_sub(1));
+            if self.scroll_bottom < self.scroll_top {
+                self.scroll_bottom = self.scroll_top;
+            }
+        }
+    }
+
     fn snapshot(&self) -> Ui2ShellScreenSnapshot {
         Ui2ShellScreenSnapshot {
             cols: self.cols as u32,
@@ -588,10 +634,17 @@ fn push_bytes(bytes: &[u8]) {
 pub(crate) fn ui2_shell_attach_window(window_id: u32, cols: usize, rows: usize) {
     {
         let mut runtime = runtime().lock();
+        let is_new_window = runtime.window_id != window_id;
         runtime.window_id = window_id;
-        runtime.input_rx.clear();
+        if is_new_window {
+            runtime.input_rx.clear();
+        }
         if runtime.screen.cols != cols.max(1) || runtime.screen.rows != rows.max(1) {
-            runtime.screen.resize(cols, rows);
+            if is_new_window {
+                runtime.screen.resize(cols, rows);
+            } else {
+                runtime.screen.resize_preserving_contents(cols, rows);
+            }
         }
         runtime.bump_dirty();
     }

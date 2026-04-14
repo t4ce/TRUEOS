@@ -61,6 +61,7 @@ globalThis.__trueosTruesurferEntryPromise = Promise.resolve(
 });
 "#;
 const TRUESURFER_READY_PROP: &[u8] = b"__trueosTruesurferReady\0";
+const TRUESURFER_LAST_ARTIFACTS_PROP: &[u8] = b"__trueosTruesurferLastArtifacts\0";
 const TRUESURFER_ID_PROP: &[u8] = b"__trueosTruesurferBrowserId\0";
 const TRUESURFER_OBJ_PROP: &[u8] = b"__trueosTruesurfer\0";
 const TRUESURFER_SET_HTML_PROP: &[u8] = b"setHtml\0";
@@ -92,6 +93,7 @@ const TRUESURFER_GADGET_FONT_SIZE_PROP: &[u8] = b"fontSizePx\0";
 const TRUESURFER_GADGET_LINE_HEIGHT_PROP: &[u8] = b"lineHeightPx\0";
 const TRUESURFER_GADGET_TEXT_COLOR_RGB_PROP: &[u8] = b"textColorRgb\0";
 const TRUESURFER_GADGET_BUTTON_LIKE_PROP: &[u8] = b"buttonLike\0";
+const TRUESURFER_GADGET_TEX_ID_PROP: &[u8] = b"texId\0";
 const TRUESURFER_GADGET_CHANGED_PROP: &[u8] = b"changed\0";
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
@@ -149,6 +151,7 @@ pub struct HostedBrowserGadget {
     pub line_height_px: u32,
     pub text_color_rgb: u32,
     pub button_like: bool,
+    pub tex_id: u32,
     pub changed: bool,
 }
 
@@ -646,8 +649,9 @@ unsafe fn read_gadget_snapshot(
             continue;
         }
 
+        let tex_id = read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_TEX_ID_PROP);
         let text = read_result_string(ctx, gadget_value, TRUESURFER_GADGET_TEXT_PROP);
-        if text.is_empty() {
+        if text.is_empty() && tex_id == 0 {
             qjs::js_free_value(ctx, gadget_value);
             continue;
         }
@@ -669,6 +673,7 @@ unsafe fn read_gadget_snapshot(
             ),
             button_like: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_BUTTON_LIKE_PROP)
                 != 0,
+            tex_id,
             changed: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_CHANGED_PROP) != 0,
         });
         qjs::js_free_value(ctx, gadget_value);
@@ -717,6 +722,7 @@ fn gadgets_equal_ignoring_changed(
                 && lhs.line_height_px == rhs.line_height_px
                 && lhs.text_color_rgb == rhs.text_color_rgb
                 && lhs.button_like == rhs.button_like
+                && lhs.tex_id == rhs.tex_id
         })
 }
 
@@ -740,9 +746,67 @@ fn apply_gadget_changed_flags(
                     || prev_gadget.line_height_px != gadget.line_height_px
                     || prev_gadget.text_color_rgb != gadget.text_color_rgb
                     || prev_gadget.button_like != gadget.button_like
+                    || prev_gadget.tex_id != gadget.tex_id
             })
             .unwrap_or(true);
     }
+}
+
+fn apply_browser_gadget_snapshot(
+    browser_instance_id: u32,
+    mut gadget_snapshot: HostedBrowserGadgetSnapshot,
+) -> u32 {
+    let mut ui2_dirty_flags = 0u32;
+    let _ = with_browser_state_mut(browser_instance_id, |state| {
+        let gadget_changed =
+            !gadgets_equal_ignoring_changed(&state.gadget_snapshot, &gadget_snapshot);
+        if gadget_changed {
+            apply_gadget_changed_flags(&state.gadget_snapshot, &mut gadget_snapshot);
+            state.gadget_snapshot = gadget_snapshot.clone();
+            state.gadget_seq = state.gadget_seq.wrapping_add(1);
+            ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
+        } else if state.gadget_snapshot != gadget_snapshot {
+            state.gadget_snapshot = gadget_snapshot.clone();
+        }
+
+        let gadget_height = gadget_snapshot_content_height(&state.gadget_snapshot);
+        let next_content_height = state.surface_state.viewport_height.max(1).max(gadget_height);
+        if next_content_height != state.surface_state.content_height {
+            state.surface_state.content_height = next_content_height;
+            state.surface_seq = state.surface_seq.wrapping_add(1);
+            ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
+        }
+    });
+    ui2_dirty_flags
+}
+
+unsafe fn sync_latest_browser_artifacts(
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+) -> bool {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let artifacts = qjs::JS_GetPropertyStr(
+        ctx,
+        global,
+        TRUESURFER_LAST_ARTIFACTS_PROP.as_ptr() as *const c_char,
+    );
+    if artifacts.is_exception() || artifacts.tag == qjs::JS_TAG_UNDEFINED || artifacts.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, artifacts);
+        qjs::js_free_value(ctx, global);
+        return false;
+    }
+
+    let gadget_snapshot = read_gadget_snapshot(ctx, artifacts);
+    let ui2_dirty_flags = apply_browser_gadget_snapshot(browser_instance_id, gadget_snapshot);
+
+    qjs::js_free_value(ctx, artifacts);
+    qjs::js_free_value(ctx, global);
+
+    if ui2_dirty_flags != 0 {
+        signal_ui2_hosted_browser_dirty(browser_instance_id, ui2_dirty_flags);
+        return true;
+    }
+    false
 }
 
 fn take_queued_html_for_browser(browser_instance_id: u32) -> Option<PendingHtml> {
@@ -832,12 +896,10 @@ unsafe fn dispatch_html(
         script_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SCRIPT_BYTES_PROP),
         error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
     };
-    let mut gadget_snapshot = read_gadget_snapshot(ctx, result);
+    let gadget_snapshot = read_gadget_snapshot(ctx, result);
 
     let mut ui2_dirty_flags = 0u32;
     let _ = with_browser_state_mut(browser_instance_id, |state| {
-        let gadget_changed =
-            !gadgets_equal_ignoring_changed(&state.gadget_snapshot, &gadget_snapshot);
         let parse_changed = state
             .last_parse_result
             .as_ref()
@@ -847,28 +909,8 @@ unsafe fn dispatch_html(
         if parse_changed {
             state.last_parse_result = Some(parse_result.clone());
         }
-        if gadget_changed {
-            apply_gadget_changed_flags(&state.gadget_snapshot, &mut gadget_snapshot);
-            state.gadget_snapshot = gadget_snapshot.clone();
-            state.gadget_seq = state.gadget_seq.wrapping_add(1);
-            ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
-        } else if state.gadget_snapshot != gadget_snapshot {
-            state.gadget_snapshot = gadget_snapshot.clone();
-        }
-
-        let mut next_content_height = state.surface_state.content_height.max(1);
-        let gadget_height = gadget_snapshot_content_height(&state.gadget_snapshot);
-        if gadget_height > 0 {
-            next_content_height = next_content_height
-                .max(gadget_height)
-                .max(state.surface_state.viewport_height);
-        }
-        if next_content_height != state.surface_state.content_height {
-            state.surface_state.content_height = next_content_height;
-            state.surface_seq = state.surface_seq.wrapping_add(1);
-            ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
-        }
     });
+    ui2_dirty_flags |= apply_browser_gadget_snapshot(browser_instance_id, gadget_snapshot.clone());
 
     if ui2_dirty_flags != 0 {
         signal_ui2_hosted_browser_dirty(browser_instance_id, ui2_dirty_flags);
@@ -996,6 +1038,7 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                         let _ = dispatch_html(rt, ctx, browser_instance_id, pending);
                         dispatched_html = true;
                     }
+                    let _ = sync_latest_browser_artifacts(ctx, browser_instance_id);
                 }
 
                 busy = !ready || dispatched_html || runtime_has_pending_work(rt, ctx);
