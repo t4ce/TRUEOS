@@ -114,18 +114,9 @@ fn minimized_window_strip_rect(state: &Ui2State, window_id: u32) -> Option<Ui2Re
             continue;
         }
         if window.id == window_id {
-            let total_w = UI2_MINIMIZED_STRIP_W + UI2_MINIMIZED_STRIP_GAP;
-            let cols_f = libm::floorf(
-                (((state.view_w as f32) - (UI2_MINIMIZED_STRIP_PAD * 2.0)
-                    + UI2_MINIMIZED_STRIP_GAP)
-                    / total_w),
-            );
-            let cols = cols_f.max(1.0) as usize;
-            let col = slot % cols;
-            let row = slot / cols;
-            let x = UI2_MINIMIZED_STRIP_PAD + (col as f32 * total_w);
+            let x = UI2_MINIMIZED_STRIP_PAD;
             let y =
-                UI2_MINIMIZED_STRIP_PAD + (row as f32 * (UI2_TITLE_H + UI2_MINIMIZED_STRIP_GAP));
+                UI2_MINIMIZED_STRIP_PAD + (slot as f32 * (UI2_TITLE_H + UI2_MINIMIZED_STRIP_GAP));
             let max_w = ((state.view_w as f32) - x - UI2_MINIMIZED_STRIP_PAD).max(96.0);
             return Some(Ui2Rect::new(x, y, UI2_MINIMIZED_STRIP_W.min(max_w), UI2_TITLE_H));
         }
@@ -1575,6 +1566,26 @@ pub fn begin_window_move(id: u32) -> bool {
         return false;
     }
     let edge_actions_armed = window_edge_drop_action(&state, cursor.x, cursor.y).is_none();
+    let mut grab_dx = cursor.x - window.rect.x;
+    let mut grab_dy = cursor.y - window.rect.y;
+    if window.state == Ui2WindowStateKind::Minimized {
+        let strip_rect = effective_window_rect(&state, &window);
+        let restored_rect = if window.restore_rect.w > 0.0 && window.restore_rect.h > 0.0 {
+            normalized_window_rect_for_view(state.view_w, state.view_h, window.restore_rect)
+        } else {
+            normalized_window_rect_for_view(state.view_w, state.view_h, window.rect)
+        };
+        let rel_x = (cursor.x - strip_rect.x).clamp(0.0, strip_rect.w.max(1.0));
+        let rel_y = (cursor.y - strip_rect.y).clamp(0.0, strip_rect.h.max(1.0));
+        if let Some(window_mut) = window_mut(&mut state, id) {
+            window_mut.rect =
+                Ui2Rect::new(cursor.x - rel_x, cursor.y - rel_y, restored_rect.w, restored_rect.h);
+            window_mut.restore_rect = restored_rect;
+            window_mut.state = Ui2WindowStateKind::Normal;
+            grab_dx = rel_x.min(window_mut.rect.w.max(1.0));
+            grab_dy = rel_y.min(window_mut.rect.h.max(1.0));
+        }
+    }
     clear_window_drag_claims(&mut state, id);
     clear_other_drag_modes_for_slot(&mut state, cursor_slot_id);
     upsert_move_drag(
@@ -1583,8 +1594,8 @@ pub fn begin_window_move(id: u32) -> bool {
             active: true,
             window_id: id,
             cursor_slot_id,
-            grab_dx: cursor.x - window.rect.x,
-            grab_dy: cursor.y - window.rect.y,
+            grab_dx,
+            grab_dy,
             edge_actions_armed,
         },
     );

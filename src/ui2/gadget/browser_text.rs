@@ -85,11 +85,44 @@ pub(crate) fn draw_hosted_browser_gadget_scene(
     let mut drew_any = false;
 
     for gadget in &snapshot.gadgets {
-        if gadget.text.is_empty() {
+        let is_image = gadget.tex_id != 0;
+        if gadget.text.is_empty() && !is_image {
             continue;
         }
         let x = content.x + UI2_BROWSER_GADGET_PAD_X + gadget.x_px as f32 - scroll_x;
         let y = content.y + UI2_BROWSER_GADGET_PAD_Y + gadget.y_px as f32 - scroll_y;
+        if is_image {
+            let mut draw_w = gadget.width_px.max(1) as f32;
+            let mut draw_h = gadget.height_px.max(1) as f32;
+            if y + draw_h <= content.y || y >= visible_bottom {
+                continue;
+            }
+            if x >= visible_right {
+                continue;
+            }
+            let max_w = (visible_right - x).max(0.0);
+            if max_w <= 0.0 {
+                continue;
+            }
+            if draw_w > max_w {
+                let scale = max_w / draw_w;
+                draw_w = max_w;
+                draw_h = (draw_h * scale).max(1.0);
+            }
+            drew_any |= texture_is_drawable(gadget.tex_id)
+                && draw_texture_rect_no_present(
+                    gadget.tex_id,
+                    x,
+                    y,
+                    draw_w,
+                    draw_h,
+                    state.view_w,
+                    state.view_h,
+                    true,
+                    window.alpha,
+                );
+            continue;
+        }
         let font_px = gadget.font_size_px.max(1) as f32;
         let text_metrics = ui2_font_measure_text_for_px(gadget.text.as_str(), font_px);
         let line_height_px = gadget

@@ -18,6 +18,7 @@ pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
 pub(crate) const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
 pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
+pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
 pub(crate) const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0600_0000;
 pub(crate) const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
@@ -186,6 +187,15 @@ pub fn warm_state() -> Option<self::render::RenderWarmState> {
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
+}
+
+pub fn present_rgba_overlay_top_right(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+) -> bool {
+    self::display::present_rgba_overlay_top_right(src, src_width, src_height, src_pitch_bytes)
 }
 
 pub fn update_kernel_hw_cursor() -> Option<u32> {

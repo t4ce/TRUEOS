@@ -19,9 +19,20 @@ const browserId = Number(root.__trueosTruesurferBrowserId || 0);
 const TRUESURFER_MODULE_BASE = typeof import.meta === 'object' && import.meta && typeof import.meta.url === 'string'
   ? String(import.meta.url)
   : '/qjs/truesurfer/truesurfer.mjs';
+const TRUESURFER_MAX_SCENE_IMAGES = 5;
+const TRUESURFER_IMAGE_VERTICAL_GAP_PX = 12;
+const TRUESURFER_IMAGE_NODE_ID_BASE = 0x01000000;
+const TRUESURFER_FALLBACK_IMAGE_SIZE_PX = 96;
 
 let truesurferSubsetProfile = null;
 let extractDocumentArtifactsFn = null;
+let createBrowserAssetManagerFn = null;
+let browserAssetManager = null;
+let currentNavigationUrl = '';
+let currentBaseGadgetSnapshot = { version: 1, gadgets: [] };
+let currentSceneImageUrls = [];
+let currentArtifactsState = null;
+let currentGadgetSnapshotVersion = 1;
 
 function getUrlOrigin(url) {
   const value = typeof url === 'string' ? url.trim() : '';
@@ -87,6 +98,124 @@ function countLines(source) {
   return lines;
 }
 
+function cloneGadgetSnapshot(snapshot) {
+  const source = snapshot && typeof snapshot === 'object' ? snapshot : null;
+  const gadgets = source && Array.isArray(source.gadgets)
+    ? source.gadgets.map((gadget) => Object.assign({}, gadget || {}))
+    : [];
+  const version = Math.max(1, Number(source && source.version || 0) | 0);
+  return { version, gadgets };
+}
+
+function nextGadgetSnapshotVersion() {
+  currentGadgetSnapshotVersion = (currentGadgetSnapshotVersion + 1) >>> 0;
+  if (currentGadgetSnapshotVersion <= 0) {
+    currentGadgetSnapshotVersion = 1;
+  }
+  return currentGadgetSnapshotVersion;
+}
+
+function gadgetBottomPx(gadget) {
+  const item = gadget && typeof gadget === 'object' ? gadget : null;
+  if (!item) return 0;
+  const yPx = Math.max(0, Number(item.yPx || 0) | 0);
+  const heightPx = Math.max(
+    Number(item.heightPx || 0) | 0,
+    Number(item.lineHeightPx || 0) | 0,
+    0,
+  );
+  return yPx + heightPx;
+}
+
+function snapshotBottomPx(snapshot) {
+  const items = snapshot && Array.isArray(snapshot.gadgets) ? snapshot.gadgets : [];
+  let bottom = 0;
+  for (let index = 0; index < items.length; index += 1) {
+    bottom = Math.max(bottom, gadgetBottomPx(items[index]));
+  }
+  return bottom;
+}
+
+function ensureBrowserAssetManager() {
+  if (browserAssetManager || typeof createBrowserAssetManagerFn !== 'function') {
+    return browserAssetManager;
+  }
+  const publish = () => {
+    try {
+      publishLatestArtifactsSnapshot();
+    } catch (_) {}
+  };
+  browserAssetManager = createBrowserAssetManagerFn({
+    host: root,
+    paint: publish,
+    resolveNavigationUrl: (href) => resolveNavigationUrl(currentNavigationUrl, href),
+    onAssetStateChanged: publish,
+  });
+  return browserAssetManager;
+}
+
+function buildSceneImageGadgets(imageUrls) {
+  const urls = Array.isArray(imageUrls) ? imageUrls : [];
+  const manager = ensureBrowserAssetManager();
+  if (!manager) return [];
+
+  const out = [];
+  let yCursor = snapshotBottomPx(currentBaseGadgetSnapshot);
+  for (let index = 0; index < urls.length && out.length < TRUESURFER_MAX_SCENE_IMAGES; index += 1) {
+    const resolvedUrl = String(urls[index] || '').trim();
+    if (!resolvedUrl) continue;
+    const cached = manager.getCachedImageTexture(resolvedUrl);
+    if (!cached || String(cached.state || '') !== 'ready') continue;
+    const texId = Math.max(0, Number(cached.texId || 0) | 0);
+    if (texId <= 0) continue;
+
+    const widthPx = Math.max(1, Number(cached.pixelWidth || 0) | 0 || TRUESURFER_FALLBACK_IMAGE_SIZE_PX);
+    const heightPx = Math.max(1, Number(cached.pixelHeight || 0) | 0 || TRUESURFER_FALLBACK_IMAGE_SIZE_PX);
+    if (yCursor > 0) {
+      yCursor += TRUESURFER_IMAGE_VERTICAL_GAP_PX;
+    }
+    out.push({
+      nodeId: TRUESURFER_IMAGE_NODE_ID_BASE + out.length + 1,
+      tag: 'img',
+      text: '',
+      xPx: 0,
+      yPx: yCursor,
+      widthPx,
+      heightPx,
+      fontSizePx: 0,
+      lineHeightPx: heightPx,
+      textColorRgb: 0,
+      buttonLike: false,
+      changed: false,
+      texId,
+    });
+    yCursor += heightPx;
+  }
+  return out;
+}
+
+function composeCurrentGadgetSnapshot() {
+  const snapshot = cloneGadgetSnapshot(currentBaseGadgetSnapshot);
+  const imageGadgets = buildSceneImageGadgets(currentSceneImageUrls);
+  if (imageGadgets.length > 0) {
+    snapshot.gadgets = snapshot.gadgets.concat(imageGadgets);
+  }
+  snapshot.version = nextGadgetSnapshotVersion();
+  return snapshot;
+}
+
+function publishLatestArtifactsSnapshot() {
+  if (!currentArtifactsState) return null;
+  const nextArtifacts = Object.assign({}, currentArtifactsState);
+  nextArtifacts.gadgetSnapshot = composeCurrentGadgetSnapshot();
+  if (browserAssetManager) {
+    nextArtifacts.imageSummary = browserAssetManager.summarizeImageUrls(currentSceneImageUrls);
+  }
+  root.__trueosTruesurferLastArtifacts = nextArtifacts;
+  currentArtifactsState = nextArtifacts;
+  return nextArtifacts.gadgetSnapshot;
+}
+
 function logSyncPipeline(url, parsed) {
   const profile = truesurferSubsetProfile || {};
   log(
@@ -136,6 +265,7 @@ async function warmBrowserPipelineModules() {
 
   truesurferSubsetProfile = extractMod.TRUESURFER_SUBSET_PROFILE || null;
   extractDocumentArtifactsFn = extractMod.extractDocumentArtifacts;
+  createBrowserAssetManagerFn = assetsMod.createBrowserAssetManager;
   root.__trueosTruesurferModules = {
     extractReady: 1,
     assetsReady: 1,
@@ -186,6 +316,13 @@ function setHtml(nextHtml, meta) {
   const html = safeString(nextHtml);
   const url = safeString(meta && meta.url);
   const lines = countLines(html);
+  const assetManager = ensureBrowserAssetManager();
+
+  currentNavigationUrl = url;
+  currentSceneImageUrls = [];
+  if (assetManager && typeof assetManager.beginPageLoad === 'function') {
+    assetManager.beginPageLoad();
+  }
 
   if (typeof extractDocumentArtifactsFn !== 'function') {
     return {
@@ -198,9 +335,11 @@ function setHtml(nextHtml, meta) {
 
   try {
     const parsed = extractDocumentArtifactsFn(html);
-    logSyncPipeline(url, parsed);
-    root.__trueosTruesurferLastStyleIndex = parsed.styleIndex;
-    root.__trueosTruesurferLastArtifacts = {
+    currentBaseGadgetSnapshot = cloneGadgetSnapshot(parsed.gadgetSnapshot);
+    currentSceneImageUrls = assetManager
+      ? assetManager.primeHtmlImageUrls(html, { maxCount: TRUESURFER_MAX_SCENE_IMAGES })
+      : [];
+    currentArtifactsState = {
       url,
       title: parsed.title,
       faviconUrl: resolveNavigationUrl(url, parsed.faviconHref),
@@ -208,7 +347,7 @@ function setHtml(nextHtml, meta) {
       bodyBytes: parsed.bodyBytes,
       bodyHierarchy: parsed.bodyHierarchy,
       bodyHierarchySummary: parsed.bodyHierarchySummary,
-      gadgetSnapshot: parsed.gadgetSnapshot,
+      gadgetSnapshot: currentBaseGadgetSnapshot,
       styleCount: parsed.styleCount,
       styleBytes: parsed.styleBytes,
       styleSlotCount: parsed.styleSlotCount,
@@ -217,8 +356,14 @@ function setHtml(nextHtml, meta) {
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
     };
+    const composedGadgetSnapshot = publishLatestArtifactsSnapshot() || composeCurrentGadgetSnapshot();
+    const imageSummary = assetManager
+      ? assetManager.summarizeImageUrls(currentSceneImageUrls)
+      : { total: 0, pending: 0, ready: 0, error: 0 };
+    logSyncPipeline(url, parsed);
+    root.__trueosTruesurferLastStyleIndex = parsed.styleIndex;
     log(
-      `[truesurfer extract] browser=${browserId} title=${parsed.title} shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} body_nodes=${parsed.bodyHierarchy.length} body_outline=${parsed.bodyHierarchySummary} style_count=${parsed.styleCount} style_slots=${parsed.styleSlotCount} styled_nodes=${parsed.styledNodeCount} style_rules=${parsed.styleRuleCount} script_count=${parsed.scriptCount} dom_ms=${parsed.domParseMs} css_ms=${parsed.styleIndexMs} ms=${parsed.parseMs} url=${url}`,
+      `[truesurfer extract] browser=${browserId} title=${parsed.title} shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} body_nodes=${parsed.bodyHierarchy.length} body_outline=${parsed.bodyHierarchySummary} style_count=${parsed.styleCount} style_slots=${parsed.styleSlotCount} styled_nodes=${parsed.styledNodeCount} style_rules=${parsed.styleRuleCount} script_count=${parsed.scriptCount} images=${imageSummary.total} image_pending=${imageSummary.pending} image_ready=${imageSummary.ready} dom_ms=${parsed.domParseMs} css_ms=${parsed.styleIndexMs} ms=${parsed.parseMs} url=${url}`,
     );
     return {
       ok: 1,
@@ -231,7 +376,7 @@ function setHtml(nextHtml, meta) {
       faviconUrl: resolveNavigationUrl(url, parsed.faviconHref),
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
-      gadgetSnapshot: parsed.gadgetSnapshot,
+      gadgetSnapshot: composedGadgetSnapshot,
       styleCount: parsed.styleCount,
       styleBytes: parsed.styleBytes,
       styleSlotCount: parsed.styleSlotCount,
