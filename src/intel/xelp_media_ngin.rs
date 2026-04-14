@@ -1141,6 +1141,23 @@ fn write_video_lrc_ring_tail(context_virt: *mut u8, context_len: usize, ring_tai
     super::dma_flush(context_virt, context_len);
 }
 
+fn write_video_lrc_ring_head(context_virt: *mut u8, context_len: usize, ring_head: u32) {
+    const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
+    const CTX_RING_HEAD_DW: usize = 5;
+
+    if context_virt.is_null() {
+        return;
+    }
+    let total_dwords = context_len / core::mem::size_of::<u32>();
+    if total_dwords <= LRC_STATE_OFFSET_DWORDS + CTX_RING_HEAD_DW {
+        return;
+    }
+
+    let dwords = unsafe { core::slice::from_raw_parts_mut(context_virt as *mut u32, total_dwords) };
+    dwords[LRC_STATE_OFFSET_DWORDS + CTX_RING_HEAD_DW] = ring_head;
+    super::dma_flush(context_virt, context_len);
+}
+
 fn init_gen12_video_context_image(
     context_virt: *mut u8,
     context_len: usize,
@@ -1177,7 +1194,12 @@ fn init_gen12_video_context_image(
     state[idx] = mi_lri_cmd(13, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = ring_base + 0x244;
-    state[idx + 1] = 0x0009_0009;
+    // Masked write: mask bits 3,1,0 → set RS_CTX_ENABLE(1) only,
+    // clear INHIBIT_SYN_CTX_SWITCH(3) so the engine performs a proper
+    // context-switch-out when the ring drains (generating CSB events the
+    // scheduler needs to cycle contexts), and clear RESTORE_INHIBIT(0)
+    // so the engine loads ring state from this LRC image.
+    state[idx + 1] = 0x000B_0002;
     state[idx + 2] = ring_base + 0x34;
     state[idx + 3] = 0;
     state[idx + 4] = ring_base + 0x30;
@@ -1713,11 +1735,15 @@ fn execlist_submit_port_push(
     ring_base: usize,
     context0_lo: u32,
     context0_hi: u32,
-    _context1_lo: u32,
-    _context1_hi: u32,
+    context1_lo: u32,
+    context1_hi: u32,
 ) {
+    // Gen12 ELSP: must write ALL 4 SQ dwords (both context entries).
+    // Leaving slot 1 unwritten can cause the scheduler to read stale data.
     super::mmio_write(dev, ring_base + RING_EXECLIST_SQ_LO, context0_lo);
     super::mmio_write(dev, ring_base + RING_EXECLIST_SQ_HI, context0_hi);
+    super::mmio_write(dev, ring_base + RING_EXECLIST_SQ_LO + 8, context1_lo);
+    super::mmio_write(dev, ring_base + RING_EXECLIST_SQ_HI + 8, context1_hi);
 }
 
 fn wake_media_engine_forcewake(dev: crate::intel::Dev, engine: MediaEngineDescriptor) {
@@ -1748,22 +1774,27 @@ const GDRST: usize = 0x0000_941C;
 const GRDOM_MEDIA_VCS0: u32 = 1 << 2;
 const MODE_IDLE: u32 = 1 << 9;
 
+/// Gen12 HWSP CSB write pointer: dword 0x2F = byte offset 0xBC.
+/// On Gen11+ hardware updates the write pointer ONLY in HWSP memory, NOT in MMIO.
+const GEN12_HWSP_CSB_WRITE_OFFSET: usize = 0xBC;
+/// Gen12 has 12 CSB entries; initial reset value = csb_size - 1 = 11.
+const GEN12_CSB_RESET_VALUE: u32 = 11;
+/// Gen11+ CSB pointer fields are 4 bits wide (0-15).
+const GEN11_CSB_READ_PTR_MASK: u32 = 0xF << 8;
+const GEN11_CSB_WRITE_PTR_MASK: u32 = 0xF;
+
 /// Acknowledge all pending CSB events so the ELSP scheduler releases the context.
-/// On Gen12 Execlists, the hardware writes CSB entries and the write pointer to
-/// HWSP memory (not MMIO). Software must read the write pointer from HWSP dword 47
-/// (offset 0xBC) and write the read pointer back via MMIO masked write.
+/// Reads the write pointer from HWSP (the only place Gen12 HW updates it) and
+/// sets the MMIO read pointer equal so the scheduler knows all events are consumed.
 fn drain_csb(dev: crate::intel::Dev, engine: MediaEngineDescriptor, hwsp_virt: *mut u8) {
     let ring_base = engine.ring_base;
-    // Gen11+: HW writes CSB write pointer to HWSP dword 47 (offset 0xBC)
-    const HWSP_CSB_WRITE_INDEX: usize = 0xBC; // dword 47
-    super::dma_flush(hwsp_virt, 0x100); // flush at least the CSB region
-    let hwsp_write_raw =
-        unsafe { core::ptr::read_volatile((hwsp_virt.add(HWSP_CSB_WRITE_INDEX)) as *const u32) };
-    let write_ptr = hwsp_write_raw & 0x7; // 12-entry CSB, 3-bit index (0..11 but typically wraps at 7)
-    // Gen11+ masked MMIO write: set read pointer = write pointer
-    // RING_CONTEXT_STATUS_PTR (0x3A0): bits[10:8] = read pointer, masked register
-    const CSB_READ_PTR_MASK: u32 = 0x7 << 8;
-    let masked_write = (CSB_READ_PTR_MASK << 16) | (write_ptr << 8);
+    super::dma_flush(hwsp_virt, GEN12_HWSP_CSB_WRITE_OFFSET + 8);
+    let write_ptr = unsafe {
+        core::ptr::read_volatile(hwsp_virt.add(GEN12_HWSP_CSB_WRITE_OFFSET) as *const u32)
+    } & 0xF;
+    // Masked MMIO write: set read pointer = write pointer, echo write pointer back
+    let masked_write =
+        ((GEN11_CSB_READ_PTR_MASK | GEN11_CSB_WRITE_PTR_MASK) << 16) | (write_ptr << 8) | write_ptr;
     super::mmio_write(dev, ring_base + 0x3A0, masked_write);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     for _ in 0..2_000u32 {
@@ -1771,11 +1802,26 @@ fn drain_csb(dev: crate::intel::Dev, engine: MediaEngineDescriptor, hwsp_virt: *
     }
 }
 
+/// Seed HWSP and MMIO CSB pointers to the Gen12 reset state (both = 11).
+/// Must be called after zeroing the context and before the ELSP push.
+fn init_csb_pointers(dev: crate::intel::Dev, ring_base: usize, hwsp_virt: *mut u8) {
+    unsafe {
+        core::ptr::write_volatile(
+            hwsp_virt.add(GEN12_HWSP_CSB_WRITE_OFFSET) as *mut u32,
+            GEN12_CSB_RESET_VALUE,
+        );
+    }
+    let csb_init = ((GEN11_CSB_READ_PTR_MASK | GEN11_CSB_WRITE_PTR_MASK) << 16)
+        | (GEN12_CSB_RESET_VALUE << 8)
+        | GEN12_CSB_RESET_VALUE;
+    super::mmio_write(dev, ring_base + 0x3A0, csb_init);
+}
+
 /// Wait for engine idle after CSB drain, prepare for fresh submission.
 fn reset_media_engine(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
-    _context_virt: *mut u8,
+    context_virt: *mut u8,
 ) {
     let ring_base = engine.ring_base;
 
@@ -1784,7 +1830,11 @@ fn reset_media_engine(
     for _ in 0..200_000u32 {
         let el = super::mmio_read(dev, ring_base + RING_EXECLIST_STATUS_LO);
         if (el >> 30) == 0 {
-            // No valid contexts in ELSP — engine is idle, safe to resubmit
+            // No valid contexts in ELSP — engine is idle, safe to resubmit.
+            // Drain any pending CSB events NOW — the context has fully retired
+            // so HWSP CSB write pointer is valid. Without this, the ELSP
+            // scheduler refuses to dispatch subsequent contexts.
+            drain_csb(dev, engine, context_virt);
             return;
         }
         core::hint::spin_loop();
@@ -1816,19 +1866,15 @@ fn seed_media_ring_live_state(
     dev: crate::intel::Dev,
     ring_base: usize,
     pphwsp_gpu: u32,
-    ring_start: u32,
-    ring_ctl: u32,
-    ring_tail: u32,
+    _ring_start: u32,
+    _ring_ctl: u32,
+    _ring_tail: u32,
 ) {
-    let ctx_ctl_req = masked_bits_update(2, 1 | 4 | 8);
-    super::mmio_write(dev, ring_base + RING_CONTEXT_CONTROL, ctx_ctl_req);
+    // Gen12 Execlists: ring registers are loaded from LRC, NOT from MMIO.
+    // Only set engine-level config here.
     super::mmio_write(dev, ring_base + RING_MI_MODE, STOP_RING << 16);
     super::mmio_write(dev, ring_base + RING_HWS_PGA, pphwsp_gpu);
     super::mmio_write(dev, ring_base + RING_HWSTAM, !0u32);
-    super::mmio_write(dev, ring_base + RING_HEAD, 0);
-    super::mmio_write(dev, ring_base + RING_START, ring_start);
-    super::mmio_write(dev, ring_base + RING_CTL, ring_ctl);
-    super::mmio_write(dev, ring_base + RING_TAIL, ring_tail);
 }
 
 fn submit_decode_bitstream_demo(
@@ -1870,13 +1916,16 @@ fn submit_decode_bitstream_demo(
     // Wait for previous context to fully retire BEFORE touching shared buffers
     reset_media_engine(dev, engine, backing.context_virt);
 
+    let is_first_frame = sample_idx == 0;
     unsafe {
         core::ptr::write_bytes(backing.ring_virt, 0, backing.ring_bytes);
         core::ptr::write_bytes(backing.context_virt, 0, backing.context_bytes);
         core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
         core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
         core::ptr::write_bytes(backing.bitstream_virt, 0, backing.bitstream_bytes);
-        core::ptr::write_bytes(backing.output_surface_virt, 0, backing.output_surface_bytes);
+        if is_first_frame {
+            core::ptr::write_bytes(backing.output_surface_virt, 0, backing.output_surface_bytes);
+        }
         core::ptr::copy_nonoverlapping(annex_b.as_ptr(), backing.bitstream_virt, annex_b.len());
     }
 
@@ -1942,6 +1991,8 @@ fn submit_decode_bitstream_demo(
     let ring_ctl = ring_ctl_value_for_size(backing.ring_bytes)?;
     let ring_start = windows.ring_gpu_addr as u32;
     let pphwsp_gpu = (windows.context_gpu_addr & !0xFFF) as u32;
+    // Always rebuild full LRC from scratch — the context image is the sole source
+    // of ring configuration for Gen12 Execlists.
     if !init_gen12_video_context_image(
         backing.context_virt,
         backing.context_bytes,
@@ -1956,6 +2007,9 @@ fn submit_decode_bitstream_demo(
     }
     write_video_lrc_ring_tail(backing.context_virt, backing.context_bytes, ring_tail_bytes as u32);
 
+    // Seed Gen12 CSB pointers in HWSP and MMIO before flushing/submitting.
+    init_csb_pointers(dev, engine.ring_base, backing.context_virt);
+
     super::dma_flush(backing.bitstream_virt, annex_b.len());
     super::dma_flush(backing.batch_virt, batch_tail_bytes);
     super::dma_flush(backing.ring_virt, ring_tail_bytes);
@@ -1964,6 +2018,12 @@ fn submit_decode_bitstream_demo(
     super::dma_flush(backing.output_surface_virt, backing.output_surface_bytes);
 
     wake_media_engine_forcewake(dev, engine);
+    // FIRST: disable legacy ring mode — must happen before any ring config
+    super::mmio_write(
+        dev,
+        engine.ring_base + RING_MODE_GEN7,
+        GEN11_GFX_DISABLE_LEGACY_MODE | (GEN11_GFX_DISABLE_LEGACY_MODE << 16),
+    );
     seed_media_ring_live_state(
         dev,
         engine.ring_base,
@@ -1974,11 +2034,6 @@ fn submit_decode_bitstream_demo(
     );
     let (ctx_desc_lo, ctx_desc_hi) =
         build_execlist_context_descriptor_for_gpu_addr(windows.context_gpu_addr);
-    super::mmio_write(
-        dev,
-        engine.ring_base + RING_MODE_GEN7,
-        GEN11_GFX_DISABLE_LEGACY_MODE | (GEN11_GFX_DISABLE_LEGACY_MODE << 16),
-    );
     let ctx_ctl_after = masked_bits_update(
         CTX_CTRL_RS_CTX_ENABLE,
         CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
@@ -2011,7 +2066,16 @@ fn submit_decode_bitstream_demo(
     // After completion, drain CSB to acknowledge the context-complete event.
     // Without this, the ELSP scheduler keeps the context as "active" and
     // refuses to accept any new submissions.
+    // The batch completion marker fires BEFORE the hardware generates the
+    // context-complete CSB event, so we must wait for ELSP to go idle first.
     if completed {
+        for _ in 0..200_000u32 {
+            let el = super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO);
+            if (el >> 30) == 0 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
         drain_csb(dev, engine, backing.context_virt);
     }
 
@@ -2041,10 +2105,13 @@ fn submit_decode_bitstream_demo(
         let fault_post = super::mmio_read(dev, GEN12_RING_FAULT_REG);
         let el_post = super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO);
         let csb_post = super::mmio_read(dev, engine.ring_base + 0x3A0);
-        // Also read the HWSP CSB write pointer for ground truth
-        super::dma_flush(backing.context_virt, 0x100);
-        let hwsp_csb_w =
-            unsafe { core::ptr::read_volatile((backing.context_virt.add(0xBC)) as *const u32) };
+        // Read the HWSP CSB write pointer (Gen12: dword 0x2F / offset 0xBC)
+        super::dma_flush(backing.context_virt, GEN12_HWSP_CSB_WRITE_OFFSET + 8);
+        let hwsp_csb_w = unsafe {
+            core::ptr::read_volatile(
+                backing.context_virt.add(GEN12_HWSP_CSB_WRITE_OFFSET) as *const u32
+            )
+        };
         crate::log!(
             "intel/media: scanout completed={} iters={} nz_dwords={} first_nz_off=0x{:08X} first_nz_val=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} fault=0x{:08X} el=0x{:08X} csb=0x{:08X} hwsp_csb=0x{:08X}\n",
             completed as u8,
