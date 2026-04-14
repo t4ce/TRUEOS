@@ -586,14 +586,17 @@ fn push_bytes(bytes: &[u8]) {
 }
 
 pub(crate) fn ui2_shell_attach_window(window_id: u32, cols: usize, rows: usize) {
-    let mut runtime = runtime().lock();
-    runtime.window_id = window_id;
-    runtime.input_rx.clear();
-    if runtime.screen.cols != cols.max(1) || runtime.screen.rows != rows.max(1) {
-        runtime.screen.resize(cols, rows);
+    {
+        let mut runtime = runtime().lock();
+        runtime.window_id = window_id;
+        runtime.input_rx.clear();
+        if runtime.screen.cols != cols.max(1) || runtime.screen.rows != rows.max(1) {
+            runtime.screen.resize(cols, rows);
+        }
+        runtime.bump_dirty();
     }
-    runtime.bump_dirty();
     UI2_SHELL_RENDERED_SEQ.store(0, Ordering::Release);
+    crate::shell2::repaint_backend_screen(&UI2_SHELL_BACKEND);
 }
 
 pub(crate) fn ui2_shell_window_id() -> u32 {

@@ -576,6 +576,57 @@ pub(crate) fn ui2_font_draw_text_line_rgba_no_present(
         return false;
     }
 
+    ui2_font_draw_text_line_with_tier_scale_rgba_no_present(
+        text,
+        x,
+        y,
+        max_width_px,
+        tier,
+        scale,
+        view_w,
+        view_h,
+        rgba,
+    )
+}
+
+pub(crate) fn ui2_font_draw_text_line_with_tier_rgba_no_present(
+    text: &str,
+    x: f32,
+    y: f32,
+    max_width_px: f32,
+    tier: Ui2FontTier,
+    view_w: u32,
+    view_h: u32,
+    rgba: (u8, u8, u8, u8),
+) -> bool {
+    ui2_font_draw_text_line_with_tier_scale_rgba_no_present(
+        text,
+        x,
+        y,
+        max_width_px,
+        tier,
+        tier.display_scale(),
+        view_w,
+        view_h,
+        rgba,
+    )
+}
+
+fn ui2_font_draw_text_line_with_tier_scale_rgba_no_present(
+    text: &str,
+    x: f32,
+    y: f32,
+    max_width_px: f32,
+    tier: Ui2FontTier,
+    scale: f32,
+    view_w: u32,
+    view_h: u32,
+    rgba: (u8, u8, u8, u8),
+) -> bool {
+    if text.is_empty() || max_width_px <= 0.0 || !(scale.is_finite() && scale > 0.0) {
+        return false;
+    }
+
     let start_x = libm::roundf(x);
     let start_y = libm::roundf(y);
     let mut pen_x = start_x;
@@ -692,6 +743,41 @@ pub(crate) fn ui2_font_draw_text_line_in_rect_rgba_no_present(
 
     ui2_font_draw_text_line_rgba_no_present(
         text, draw_x, draw_y, rect.w, px_h, view_w, view_h, rgba,
+    )
+}
+
+pub(crate) fn ui2_font_draw_text_line_in_rect_with_tier_rgba_no_present(
+    text: &str,
+    rect: Ui2Rect,
+    tier: Ui2FontTier,
+    align: Ui2FontTextAlign,
+    vertical_align: Ui2FontVerticalAlign,
+    view_w: u32,
+    view_h: u32,
+    rgba: (u8, u8, u8, u8),
+) -> bool {
+    if text.is_empty() || rect.w <= 0.0 || rect.h <= 0.0 {
+        return false;
+    }
+
+    let line_height_px = f32::from(ui2_font_native_line_height_px(tier).max(1));
+    let text_w = ui2_font_measure_text(tier, text).width_px as f32;
+    let draw_w = text_w.min(rect.w).max(0.0);
+    if draw_w <= 0.0 {
+        return false;
+    }
+
+    let draw_x = match align {
+        Ui2FontTextAlign::Left => rect.x,
+        Ui2FontTextAlign::Center => rect.x + ((rect.w - draw_w) * 0.5).max(0.0),
+        Ui2FontTextAlign::Right => rect.x + (rect.w - draw_w).max(0.0),
+    };
+    let _ = vertical_align;
+    let draw_y = libm::roundf(rect.y + ((rect.h - line_height_px) * 0.5).max(0.0));
+    let draw_x = libm::roundf(draw_x);
+
+    ui2_font_draw_text_line_with_tier_rgba_no_present(
+        text, draw_x, draw_y, rect.w, tier, view_w, view_h, rgba,
     )
 }
 

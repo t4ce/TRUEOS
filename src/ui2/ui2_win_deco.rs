@@ -3,6 +3,7 @@
 use super::*;
 
 const UI2_CHROME_TEXT_RGBA: (u8, u8, u8, u8) = (0x00, 0x00, 0x00, 0xFF);
+const UI2_CHROME_TITLE_FONT_TIER: Ui2FontTier = Ui2FontTier::Third;
 
 fn decoration_label_draw_rect(
     window: &Ui2Window,
@@ -437,11 +438,10 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
             (title_right - title_left).max(0.0),
             titleband_h.max(1.0),
         );
-        let title_px_h = 18.0f32;
-        let _ = ui2_font_draw_text_line_in_rect_rgba_no_present(
+        let _ = ui2_font_draw_text_line_in_rect_with_tier_rgba_no_present(
             window.title.as_str(),
             title_rect,
-            title_px_h,
+            UI2_CHROME_TITLE_FONT_TIER,
             Ui2FontTextAlign::Left,
             Ui2FontVerticalAlign::Center,
             state.view_w,

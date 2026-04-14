@@ -11,6 +11,7 @@ const UI2_SHELL_VIEW_H: u32 = 400;
 const UI2_SHELL_WINDOW_X: f32 = 300.0;
 const UI2_SHELL_WINDOW_Y: f32 = 140.0;
 const UI2_SHELL_WINDOW_Z: i16 = 31;
+const UI2_SHELL_WINDOW_ALPHA: u8 = 0xFF;
 const UI2_SHELL_BG_RGBA: [u8; 4] = [0x0C, 0x10, 0x16, 0xFF];
 const UI2_SHELL_CURSOR_RGBA: [u8; 4] = [0xF1, 0xF4, 0xF8, 0xFF];
 const UI2_SHELL_CURSOR_CH: char = '▏';
@@ -18,10 +19,10 @@ const UI2_SHELL_CURSOR_BLINK_MS: u64 = 1_000;
 const UI2_SHELL_SELECTION_BG_RGBA: [u8; 4] = [0x1E, 0x5A, 0x96, 0xFF];
 const UI2_SHELL_SELECTION_FG_RGBA: [u8; 4] = [0xF8, 0xFB, 0xFF, 0xFF];
 const UI2_SHELL_PRIMARY_BUTTON_MASK: u32 = 1;
-const UI2_SHELL_TEXT_COLS: usize = 100;
-const UI2_SHELL_TEXT_ROWS: usize = 12;
-const UI2_SHELL_FONT_TIER: Ui2FontTier = Ui2FontTier::Half;
-const UI2_SHELL_HALF_SIZE_CASE: usize = UI2_SHELL_FONT_TIER.size_case();
+const UI2_SHELL_BASE_TEXT_COLS: usize = 100;
+const UI2_SHELL_BASE_TEXT_ROWS: usize = 12;
+const UI2_SHELL_FONT_TIER: Ui2FontTier = Ui2FontTier::Third;
+const UI2_SHELL_FONT_SIZE_CASE: usize = UI2_SHELL_FONT_TIER.size_case();
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Ui2ShellSelectionCell {
@@ -43,6 +44,18 @@ fn ui2_shell_surface_width() -> u32 {
 
 fn ui2_shell_surface_height() -> u32 {
     UI2_SHELL_VIEW_H
+}
+
+fn ui2_shell_layout_for_viewport(viewport_w: u32, viewport_h: u32) -> (usize, usize) {
+    let cols = ((viewport_w as usize).saturating_mul(UI2_SHELL_BASE_TEXT_COLS))
+        .checked_div(UI2_SHELL_VIEW_W as usize)
+        .unwrap_or(UI2_SHELL_BASE_TEXT_COLS)
+        .max(1);
+    let rows = ((viewport_h as usize).saturating_mul(UI2_SHELL_BASE_TEXT_ROWS))
+        .checked_div(UI2_SHELL_VIEW_H as usize)
+        .unwrap_or(UI2_SHELL_BASE_TEXT_ROWS)
+        .max(1);
+    (cols, rows)
 }
 
 fn ui2_shell_line_height() -> u32 {
@@ -337,9 +350,11 @@ fn render_shell_snapshot_rgba(
     snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
     selection: &Ui2ShellSelectionState,
     blink_on: bool,
+    content_w: u32,
+    content_h: u32,
 ) -> Vec<u8> {
-    let content_w = ui2_shell_surface_width() as usize;
-    let content_h = ui2_shell_surface_height() as usize;
+    let content_w = content_w as usize;
+    let content_h = content_h as usize;
     let cols = (snapshot.cols as usize).max(1);
     let rows = (snapshot.rows as usize).max(1);
     let mut rgba = vec![0u8; content_w.saturating_mul(content_h).saturating_mul(4)];
@@ -355,13 +370,13 @@ fn render_shell_snapshot_rgba(
         UI2_SHELL_BG_RGBA,
     );
 
-    for row in 0..rows.min(UI2_SHELL_TEXT_ROWS) {
+    for row in 0..rows {
         let row_y = row.saturating_mul(ui2_shell_line_height() as usize);
         if row_y >= content_h {
             break;
         }
         let mut pen_x = 0usize;
-        for col in 0..cols.min(UI2_SHELL_TEXT_COLS) {
+        for col in 0..cols {
             let cell = effective_cell_for_render(
                 snapshot_cell(snapshot, row, col),
                 selection,
@@ -413,7 +428,7 @@ fn render_shell_snapshot_rgba(
 
 #[embassy_executor::task]
 pub async fn ui2_shell_demo_task() {
-    let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_SHELL_HALF_SIZE_CASE) else {
+    let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_SHELL_FONT_SIZE_CASE) else {
         return;
     };
 
@@ -428,7 +443,7 @@ pub async fn ui2_shell_demo_task() {
             h: UI2_SHELL_VIEW_H as f32,
         },
         UI2_SHELL_WINDOW_Z,
-        128,
+        UI2_SHELL_WINDOW_ALPHA,
         UI2_SHELL_TEX_ID,
         true,
         content_w,
@@ -455,12 +470,12 @@ pub async fn ui2_shell_demo_task() {
         crate::log!("ui2-shell-demo: initial texture upload failed tex={}\n", UI2_SHELL_TEX_ID);
         return;
     }
-    let _ = surface.bind_hosted_scroll_state(UI2_SHELL_CONTENT_ID, content_w, content_h);
-    crate::shell2::ui2_shell_attach_window(
-        surface.window_id(),
-        UI2_SHELL_TEXT_COLS,
-        UI2_SHELL_TEXT_ROWS,
-    );
+    if !crate::r::ui2::maximize_window(surface.window_id()) {
+        crate::log!("ui2-shell-demo: maximize failed window={}\n", surface.window_id());
+    }
+    if !crate::r::ui2::focus_window(surface.window_id()) {
+        crate::log!("ui2-shell-demo: front-push failed window={}\n", surface.window_id());
+    }
 
     crate::log!(
         "ui2-shell-demo: window={} tex={} viewport={}x{} content={}x{} cols={} rows={}\n",
@@ -470,16 +485,33 @@ pub async fn ui2_shell_demo_task() {
         UI2_SHELL_VIEW_H,
         content_w,
         content_h,
-        UI2_SHELL_TEXT_COLS,
-        UI2_SHELL_TEXT_ROWS
+        UI2_SHELL_BASE_TEXT_COLS,
+        UI2_SHELL_BASE_TEXT_ROWS
     );
 
     let mut last_rendered_seq = 0u32;
     let mut last_blink_on = false;
     let mut selection = Ui2ShellSelectionState::default();
+    let mut last_viewport = (0u32, 0u32);
+    let mut attached_layout = None;
     loop {
         let blink_on =
             ((Instant::now().as_millis() as u64) / (UI2_SHELL_CURSOR_BLINK_MS / 2)) % 2 == 0;
+        let viewport = crate::r::ui2::window_content_rect_by_id(surface.window_id())
+            .map(|rect| (rect.w.max(1.0) as u32, rect.h.max(1.0) as u32))
+            .unwrap_or((content_w, content_h));
+        if viewport != last_viewport {
+            last_viewport = viewport;
+            let _ = surface.bind_hosted_scroll_state(UI2_SHELL_CONTENT_ID, viewport.0, viewport.1);
+        }
+        if attached_layout.is_none() {
+            let (cols, rows) = ui2_shell_layout_for_viewport(viewport.0, viewport.1);
+            crate::shell2::ui2_shell_attach_window(surface.window_id(), cols, rows);
+            attached_layout = Some((cols, rows));
+            last_rendered_seq = 0;
+            last_blink_on = false;
+            selection = Ui2ShellSelectionState::default();
+        }
         if let Some((dirty_seq, snapshot)) = crate::shell2::ui2_shell_snapshot(surface.window_id())
         {
             let selection_changed =
@@ -490,8 +522,22 @@ pub async fn ui2_shell_demo_task() {
                     || blink_on != last_blink_on)
                     || selection_changed)
             {
-                let rgba = render_shell_snapshot_rgba(&atlases, &snapshot, &selection, blink_on);
-                if surface.upload_rgba(rgba.as_slice(), "ui2-shell-demo-present") {
+                let rgba = render_shell_snapshot_rgba(
+                    &atlases,
+                    &snapshot,
+                    &selection,
+                    blink_on,
+                    last_viewport.0.max(1),
+                    last_viewport.1.max(1),
+                );
+                if crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+                    surface.tex_id(),
+                    last_viewport.0.max(1),
+                    last_viewport.1.max(1),
+                    rgba.as_slice(),
+                    surface.window_id(),
+                    "ui2-shell-demo-present",
+                ) {
                     if dirty_seq != last_rendered_seq {
                         crate::shell2::ui2_shell_mark_rendered(dirty_seq);
                     }

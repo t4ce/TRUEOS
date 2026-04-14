@@ -52,7 +52,7 @@ CARGO_BUILD_FLAGS ?=
 
 ifeq ($(GFX_MODE),virgl)
 CARGO_GFX_FLAGS =
-QEMU_GFX_FLAGS = -display sdl,gl=on -vga none -device virtio-gpu-gl-pci,disable-modern=off,xres=1600,yres=1000
+QEMU_GFX_FLAGS = -display sdl,gl=on -vga none -device virtio-gpu-gl-pci,disable-modern=off,xres=1440,yres=900
 else ifeq ($(GFX_MODE),intel)
 CARGO_GFX_FLAGS =
 QEMU_GFX_FLAGS = -display none -vga none -device vfio-pci,host=$(INTEL_GPU_PCI),bus=pcie.0,addr=0x2$(INTEL_GPU_VFIO_PROPS)
@@ -81,6 +81,7 @@ QEMU_USB_HOST_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5  \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-tablet,bus=xhci.0,port=2,id=usbtablet \
+	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd \
 
 #	-drive file=disk.img,if=none,format=raw,id=usbdisk   \
 #	-device usb-storage,drive=usbdisk,bus=xhci.0,port=4,id=usbms   \	

@@ -37,9 +37,11 @@ impl HidBootKind {
 
 #[inline]
 fn should_skip_descriptor_logging(vendor_id: u16, product_id: u16, kind: HidBootKind) -> bool {
-    // Narrow workaround for QEMU's simple emulated USB boot mouse, which can
-    // wedge on the optional HID descriptor dump path.
-    vendor_id == 0x0627 && product_id == 0x0001 && matches!(kind, HidBootKind::Mouse)
+    // Narrow workaround for QEMU's simple emulated USB boot HID devices, which can
+    // wedge on the optional HID descriptor dump path before the interrupt stream starts.
+    vendor_id == 0x0627
+        && product_id == 0x0001
+        && matches!(kind, HidBootKind::Mouse | HidBootKind::Keyboard)
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -801,7 +803,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
         if descriptors_pending {
             if should_skip_descriptor_logging(vendor_id, product_id, target.kind) {
                 crate::log!(
-                    "crabusb: hid {} {:04X}:{:04X} skipping descriptor log for qemu boot mouse\n",
+                    "crabusb: hid {} {:04X}:{:04X} skipping descriptor log for qemu boot hid\n",
                     target.kind.as_str(),
                     vendor_id,
                     product_id
