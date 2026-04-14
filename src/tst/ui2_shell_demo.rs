@@ -51,8 +51,8 @@ fn ui2_shell_layout_for_viewport(viewport_w: u32, viewport_h: u32) -> (usize, us
         .checked_div(UI2_SHELL_VIEW_W as usize)
         .unwrap_or(UI2_SHELL_BASE_TEXT_COLS)
         .max(1);
-    let rows = ((viewport_h as usize).saturating_mul(UI2_SHELL_BASE_TEXT_ROWS))
-        .checked_div(UI2_SHELL_VIEW_H as usize)
+    let rows = (viewport_h as usize)
+        .checked_div(ui2_shell_line_height() as usize)
         .unwrap_or(UI2_SHELL_BASE_TEXT_ROWS)
         .max(1);
     (cols, rows)
@@ -500,26 +500,31 @@ pub async fn ui2_shell_demo_task() {
         let viewport = crate::r::ui2::window_content_rect_by_id(surface.window_id())
             .map(|rect| (rect.w.max(1.0) as u32, rect.h.max(1.0) as u32))
             .unwrap_or((content_w, content_h));
+        let mut viewport_needs_present = false;
         if viewport != last_viewport {
             last_viewport = viewport;
+            viewport_needs_present = true;
             let _ = surface.bind_hosted_scroll_state(UI2_SHELL_CONTENT_ID, viewport.0, viewport.1);
         }
-        if attached_layout.is_none() {
-            let (cols, rows) = ui2_shell_layout_for_viewport(viewport.0, viewport.1);
+        let layout = ui2_shell_layout_for_viewport(viewport.0, viewport.1);
+        if attached_layout != Some(layout) {
+            let (cols, rows) = layout;
             crate::shell2::ui2_shell_attach_window(surface.window_id(), cols, rows);
-            attached_layout = Some((cols, rows));
+            attached_layout = Some(layout);
             last_rendered_seq = 0;
             last_blink_on = false;
             selection = Ui2ShellSelectionState::default();
+            viewport_needs_present = true;
         }
         if let Some((dirty_seq, snapshot)) = crate::shell2::ui2_shell_snapshot(surface.window_id())
         {
             let selection_changed =
                 update_selection_from_mouse(&mut selection, surface.window_id(), &snapshot);
             if dirty_seq != 0
-                && (((dirty_seq != last_rendered_seq
-                    && dirty_seq != crate::shell2::ui2_shell_last_rendered_seq())
-                    || blink_on != last_blink_on)
+                && (viewport_needs_present
+                    || ((dirty_seq != last_rendered_seq
+                        && dirty_seq != crate::shell2::ui2_shell_last_rendered_seq())
+                        || blink_on != last_blink_on)
                     || selection_changed)
             {
                 let rgba = render_shell_snapshot_rgba(

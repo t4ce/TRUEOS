@@ -12,14 +12,6 @@ use spin::Mutex;
 
 use crate::usb2::api::{InterfaceEndpointError, claim_interface};
 
-const CAMERA_PREVIEW_READY: u32 =
-    crate::r::readiness::UI2_READY | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
-const CAMERA_PREVIEW_TEX_ID: u32 = 4_721;
-const CAMERA_PREVIEW_X: f32 = 960.0;
-const CAMERA_PREVIEW_Y: f32 = 40.0;
-const CAMERA_PREVIEW_Z: i16 = 36;
-const CAMERA_PREVIEW_W: u32 = 320;
-const CAMERA_PREVIEW_H: u32 = 240;
 const CAMERA_FRAME_W: usize = 640;
 const CAMERA_FRAME_H: usize = 480;
 const CAMERA_FRAME_BYTES: usize = CAMERA_FRAME_W * CAMERA_FRAME_H;
@@ -56,6 +48,7 @@ struct UvcFrameAssembler {
     frame_id: Option<u8>,
     bytes: Vec<u8>,
     oversize_logged: bool,
+    packet_logs: u8,
 }
 
 static ACTIVE_CAMERA_STREAMS: Mutex<Vec<ActiveCameraStream>> = Mutex::new(Vec::new());
@@ -153,49 +146,25 @@ async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::O
     .await
 }
 
-fn create_preview_surface() -> Option<crate::r::ui2::Ui2SurfaceWindow> {
-    let surface = crate::r::ui2::Ui2SurfaceWindow::new(
-        "USB Camera",
-        crate::r::ui2::Ui2Rect {
-            x: CAMERA_PREVIEW_X,
-            y: CAMERA_PREVIEW_Y,
-            w: CAMERA_PREVIEW_W as f32,
-            h: CAMERA_PREVIEW_H as f32,
-        },
-        CAMERA_PREVIEW_Z,
-        224,
-        CAMERA_PREVIEW_TEX_ID,
-        true,
-        [0x08, 0x0C, 0x10, 0xE0],
-    )?;
-
-    let _ = crate::r::ui2::set_window_titlebar_visible(surface.window_id(), false);
-    let _ = crate::r::ui2::set_window_bottom_bar_visible(surface.window_id(), false);
-    let _ = crate::r::ui2::set_window_hit_test_visible(surface.window_id(), false);
-    Some(surface)
-}
-
-fn grayscale_frame_to_preview_rgba(frame: &[u8]) -> Vec<u8> {
+fn grayscale_frame_to_rgba(frame: &[u8]) -> Vec<u8> {
     let mut rgba = alloc::vec![
         0u8;
-        (CAMERA_PREVIEW_W as usize)
-            .saturating_mul(CAMERA_PREVIEW_H as usize)
+        CAMERA_FRAME_W
+            .saturating_mul(CAMERA_FRAME_H)
             .saturating_mul(4)
     ];
 
-    for dst_y in 0..(CAMERA_PREVIEW_H as usize) {
-        let src_y = dst_y.saturating_mul(CAMERA_FRAME_H) / (CAMERA_PREVIEW_H as usize);
-        for dst_x in 0..(CAMERA_PREVIEW_W as usize) {
-            let src_x = dst_x.saturating_mul(CAMERA_FRAME_W) / (CAMERA_PREVIEW_W as usize);
+    for dst_y in 0..CAMERA_FRAME_H {
+        let src_y = dst_y;
+        for dst_x in 0..CAMERA_FRAME_W {
+            let src_x = dst_x;
             let src_idx = src_y.saturating_mul(CAMERA_FRAME_W).saturating_add(src_x);
             if src_idx >= frame.len() {
                 continue;
             }
             let luma = frame[src_idx];
-            let dst_idx = (dst_y
-                .saturating_mul(CAMERA_PREVIEW_W as usize)
-                .saturating_add(dst_x))
-            .saturating_mul(4);
+            let dst_idx =
+                (dst_y.saturating_mul(CAMERA_FRAME_W).saturating_add(dst_x)).saturating_mul(4);
             if dst_idx + 4 > rgba.len() {
                 continue;
             }
@@ -209,13 +178,7 @@ fn grayscale_frame_to_preview_rgba(frame: &[u8]) -> Vec<u8> {
     rgba
 }
 
-fn try_present_frame(
-    surface: Option<&crate::r::ui2::Ui2SurfaceWindow>,
-    frame: &[u8],
-    frame_count: u64,
-    vendor_id: u16,
-    product_id: u16,
-) {
+fn try_present_frame(frame: &[u8], frame_count: u64, vendor_id: u16, product_id: u16) {
     if frame.len() != CAMERA_FRAME_BYTES {
         if frame_count <= 8 || frame_count.is_multiple_of(120) {
             crate::log!(
@@ -230,20 +193,20 @@ fn try_present_frame(
         return;
     }
 
-    let Some(surface) = surface else {
-        return;
-    };
-
-    let rgba = grayscale_frame_to_preview_rgba(frame);
-    if !surface.upload_rgba(rgba.as_slice(), "usb-camera-preview") {
+    let rgba = grayscale_frame_to_rgba(frame);
+    if !crate::intel::present_rgba_overlay_top_right(
+        rgba.as_slice(),
+        CAMERA_FRAME_W as u32,
+        CAMERA_FRAME_H as u32,
+        CAMERA_FRAME_W.saturating_mul(4),
+    ) {
         crate::log!(
-            "crabusb: camera {:04X}:{:04X} preview upload failed frame={} tex={} size={}x{}\n",
+            "crabusb: camera {:04X}:{:04X} overlay present failed frame={} size={}x{}\n",
             vendor_id,
             product_id,
             frame_count,
-            surface.tex_id(),
-            CAMERA_PREVIEW_W,
-            CAMERA_PREVIEW_H
+            CAMERA_FRAME_W,
+            CAMERA_FRAME_H
         );
     }
 }
@@ -252,7 +215,6 @@ fn ingest_uvc_payload(
     assembler: &mut UvcFrameAssembler,
     packet: &[u8],
     frame_count: &mut u64,
-    surface: Option<&crate::r::ui2::Ui2SurfaceWindow>,
     vendor_id: u16,
     product_id: u16,
 ) {
@@ -266,6 +228,21 @@ fn ingest_uvc_payload(
     }
 
     let header_flags = packet[1];
+    assembler.packet_logs = assembler.packet_logs.saturating_add(1);
+    if assembler.packet_logs <= 8 {
+        crate::log!(
+            "crabusb: camera {:04X}:{:04X} uvc-packet idx={} hdr_len={} flags=0x{:02X} eof={} fid={} err={} payload={}\n",
+            vendor_id,
+            product_id,
+            assembler.packet_logs,
+            header_len,
+            header_flags,
+            ((header_flags & 0x02) != 0) as u8,
+            header_flags & 0x01,
+            ((header_flags & 0x40) != 0) as u8,
+            packet.len().saturating_sub(header_len)
+        );
+    }
     if (header_flags & 0x40) != 0 {
         return;
     }
@@ -302,7 +279,16 @@ fn ingest_uvc_payload(
 
     if end_of_frame {
         *frame_count = frame_count.wrapping_add(1);
-        try_present_frame(surface, assembler.bytes.as_slice(), *frame_count, vendor_id, product_id);
+        if *frame_count <= 8 || frame_count.is_multiple_of(60) {
+            crate::log!(
+                "crabusb: camera {:04X}:{:04X} frame-complete frame={} bytes={}\n",
+                vendor_id,
+                product_id,
+                *frame_count,
+                assembler.bytes.len()
+            );
+        }
+        try_present_frame(assembler.bytes.as_slice(), *frame_count, vendor_id, product_id);
         assembler.bytes.clear();
         assembler.oversize_logged = false;
     }
@@ -311,7 +297,6 @@ fn ingest_uvc_payload(
 async fn stream_bulk_camera(
     bulk_in: &mut crab_usb::EndpointBulkIn,
     target: CameraTarget,
-    surface: Option<&crate::r::ui2::Ui2SurfaceWindow>,
     vendor_id: u16,
     product_id: u16,
 ) {
@@ -321,9 +306,11 @@ async fn stream_bulk_camera(
         frame_id: None,
         bytes: Vec::with_capacity(CAMERA_FRAME_BYTES),
         oversize_logged: false,
+        packet_logs: 0,
     };
     let mut frame_count = 0u64;
     let mut timeout_logs = 0u32;
+    let mut first_payload_logged = false;
 
     loop {
         match with_timeout_or_none(
@@ -350,11 +337,20 @@ async fn stream_bulk_camera(
                     Timer::after(EmbassyDuration::from_millis(1)).await;
                     continue;
                 }
+                if !first_payload_logged {
+                    first_payload_logged = true;
+                    crate::log!(
+                        "crabusb: camera {:04X}:{:04X} bulk first-payload ep=0x{:02X} bytes={}\n",
+                        vendor_id,
+                        product_id,
+                        target.endpoint_address,
+                        read
+                    );
+                }
                 ingest_uvc_payload(
                     &mut assembler,
                     &rx[..read.min(rx.len())],
                     &mut frame_count,
-                    surface,
                     vendor_id,
                     product_id,
                 );
@@ -376,7 +372,6 @@ async fn stream_bulk_camera(
 async fn stream_iso_camera(
     iso_in: &mut crab_usb::EndpointIsoIn,
     target: CameraTarget,
-    surface: Option<&crate::r::ui2::Ui2SurfaceWindow>,
     vendor_id: u16,
     product_id: u16,
 ) {
@@ -386,8 +381,10 @@ async fn stream_iso_camera(
         frame_id: None,
         bytes: Vec::with_capacity(CAMERA_FRAME_BYTES),
         oversize_logged: false,
+        packet_logs: 0,
     };
     let mut frame_count = 0u64;
+    let mut first_payload_logged = false;
 
     loop {
         match iso_in
@@ -399,12 +396,22 @@ async fn stream_iso_camera(
                     Timer::after(EmbassyDuration::from_millis(1)).await;
                     continue;
                 }
+                if !first_payload_logged {
+                    first_payload_logged = true;
+                    crate::log!(
+                        "crabusb: camera {:04X}:{:04X} iso first-payload ep=0x{:02X} bytes={} packets={}\n",
+                        vendor_id,
+                        product_id,
+                        target.endpoint_address,
+                        read,
+                        CAMERA_ISO_PACKETS_PER_URB
+                    );
+                }
                 for packet in rx[..read.min(rx.len())].chunks(packet_bytes.max(1)) {
                     ingest_uvc_payload(
                         &mut assembler,
                         packet,
                         &mut frame_count,
-                        surface,
                         vendor_id,
                         product_id,
                     );
@@ -412,11 +419,13 @@ async fn stream_iso_camera(
             }
             Err(err) => {
                 crate::log!(
-                    "crabusb: camera {:04X}:{:04X} iso stop ep=0x{:02X} err={:?}\n",
+                    "crabusb: camera {:04X}:{:04X} iso stop ep=0x{:02X} err={:?} buffered={} packets_logged={}\n",
                     vendor_id,
                     product_id,
                     target.endpoint_address,
-                    err
+                    err,
+                    assembler.bytes.len(),
+                    assembler.packet_logs
                 );
                 break;
             }
@@ -434,6 +443,18 @@ async fn camera_stream_task(
     let desc = device.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
+
+    crate::log!(
+        "crabusb: camera {:04X}:{:04X} stream task ctrl={} if#{} alt={} ep=0x{:02X} transport={:?} packet={}\n",
+        vendor_id,
+        product_id,
+        controller_id,
+        target.interface_number,
+        target.alternate_setting,
+        target.endpoint_address,
+        target.transport,
+        target.max_packet_size
+    );
 
     if let Err(err) = device
         .ep_ctrl()
@@ -469,21 +490,8 @@ async fn camera_stream_task(
             }
         };
 
-    crate::r::readiness::wait_for(CAMERA_PREVIEW_READY).await;
-    let surface = create_preview_surface();
-    if let Some(surface) = surface.as_ref() {
-        let _ = crate::r::ui2::set_window_title(
-            surface.window_id(),
-            if matches!(target.transport, CameraTransport::BulkIn) {
-                "USB Camera Bulk"
-            } else {
-                "USB Camera Iso"
-            },
-        );
-    }
-
     crate::log!(
-        "crabusb: camera {:04X}:{:04X} stream start ctrl={} if#{} alt={} ep=0x{:02X} transport={:?} packet={} preview={}x{}\n",
+        "crabusb: camera {:04X}:{:04X} stream start ctrl={} if#{} alt={} ep=0x{:02X} transport={:?} packet={} output=intel-overlay-top-right\n",
         vendor_id,
         product_id,
         controller_id,
@@ -491,9 +499,7 @@ async fn camera_stream_task(
         target.alternate_setting,
         target.endpoint_address,
         target.transport,
-        target.max_packet_size,
-        CAMERA_PREVIEW_W,
-        CAMERA_PREVIEW_H
+        target.max_packet_size
     );
 
     match target.transport {
@@ -522,7 +528,7 @@ async fn camera_stream_task(
                     return;
                 }
             };
-            stream_bulk_camera(&mut bulk_in, target, surface.as_ref(), vendor_id, product_id).await;
+            stream_bulk_camera(&mut bulk_in, target, vendor_id, product_id).await;
         }
         CameraTransport::IsoIn => {
             let mut iso_in = match interface
@@ -552,7 +558,7 @@ async fn camera_stream_task(
                     return;
                 }
             };
-            stream_iso_camera(&mut iso_in, target, surface.as_ref(), vendor_id, product_id).await;
+            stream_iso_camera(&mut iso_in, target, vendor_id, product_id).await;
         }
     }
 

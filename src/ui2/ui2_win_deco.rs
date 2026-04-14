@@ -4,6 +4,42 @@ use super::*;
 
 const UI2_CHROME_TEXT_RGBA: (u8, u8, u8, u8) = (0x00, 0x00, 0x00, 0xFF);
 const UI2_CHROME_TITLE_FONT_TIER: Ui2FontTier = Ui2FontTier::Third;
+const UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_UNLOCKED_TWEMOJI: char = '\u{25FC}';
+const UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_LOCKED_TWEMOJI: char = '\u{25FB}';
+const UI2_SYSTEM_BUTTON_FORK_TWEMOJI: char = '\u{2795}';
+const UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI: char = '\u{2796}';
+const UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI: char = '\u{23F9}';
+const UI2_SYSTEM_BUTTON_CLOSE_TWEMOJI: char = '\u{274E}';
+const UI2_BOTTOM_RESIZE_TWEMOJI: char = '\u{1F52F}';
+
+fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::String {
+    if text.is_empty() || max_width_px <= 0.0 {
+        return alloc::string::String::new();
+    }
+
+    if (ui2_font_measure_text(UI2_CHROME_TITLE_FONT_TIER, text).width_px as f32) <= max_width_px {
+        return alloc::string::String::from(text);
+    }
+
+    const ELLIPSIS: &str = "...";
+    let ellipsis_w = ui2_font_measure_text(UI2_CHROME_TITLE_FONT_TIER, ELLIPSIS).width_px as f32;
+    if ellipsis_w > max_width_px {
+        return alloc::string::String::new();
+    }
+
+    let mut out = alloc::string::String::new();
+    let mut used_w = 0.0f32;
+    for ch in text.chars() {
+        let ch_w = f32::from(ui2_font_char_advance_px(UI2_CHROME_TITLE_FONT_TIER, ch).max(1));
+        if used_w + ch_w + ellipsis_w > max_width_px {
+            break;
+        }
+        out.push(ch);
+        used_w += ch_w;
+    }
+    out.push_str(ELLIPSIS);
+    out
+}
 
 fn decoration_label_draw_rect(
     window: &Ui2Window,
@@ -179,13 +215,18 @@ fn draw_window_decoration_label(
 fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2SystemButtonAction) {
     if window.state == Ui2WindowStateKind::Minimized
         && action != Ui2SystemButtonAction::ToggleMaximize
-        && action != Ui2SystemButtonAction::ToggleComposition
+        && action != Ui2SystemButtonAction::Close
     {
         return;
     }
     let Some(rect) = window_system_button_rect(state, window, action) else {
         return;
     };
+    if let Some(ch) = window_system_button_twemoji(window, action) {
+        if draw_window_twemoji_button(state, window, rect, ch) {
+            return;
+        }
+    }
     let kind = Ui2DecorationIconKind::SystemButton(action);
     if kind.icon_id(window) != 0 {
         let draw = decoration_icon_draw_rect(rect, false);
@@ -200,10 +241,79 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
     }
 }
 
+fn draw_window_twemoji_button(
+    state: &Ui2State,
+    window: &Ui2Window,
+    rect: Ui2Rect,
+    ch: char,
+) -> bool {
+    let Some(glyph) = ui2_font_resolve_glyph(Ui2FontTier::OneX, ch) else {
+        return false;
+    };
+    if !glyph.ready {
+        return false;
+    }
+    let Some(texture) = glyph.texture else {
+        return false;
+    };
+
+    let inset_rect =
+        Ui2Rect::new(rect.x + 1.0, rect.y + 1.0, (rect.w - 2.0).max(1.0), (rect.h - 2.0).max(1.0));
+    let crop_px = 1.0f32;
+    let src_x = f32::from(glyph.region.src_x) + crop_px;
+    let src_y = f32::from(glyph.region.src_y) + crop_px;
+    let src_w = f32::from(glyph.region.src_w.max(3)) - (crop_px * 2.0);
+    let src_h = f32::from(glyph.region.src_h.max(3)) - (crop_px * 2.0);
+    let scale = libm::fminf(inset_rect.w / src_w, inset_rect.h / src_h);
+    let draw_w = libm::fmaxf(1.0, src_w * scale);
+    let draw_h = libm::fmaxf(1.0, src_h * scale);
+    let draw_x = inset_rect.x + ((inset_rect.w - draw_w) * 0.5).max(0.0);
+    let draw_y = inset_rect.y + ((inset_rect.h - draw_h) * 0.5).max(0.0);
+    let atlas_w = f32::from(glyph.region.atlas_w.max(1));
+    let atlas_h = f32::from(glyph.region.atlas_h.max(1));
+
+    draw_texture_rect_uv_rgba_no_present(
+        texture.tex_id,
+        draw_x,
+        draw_y,
+        draw_w,
+        draw_h,
+        src_x / atlas_w,
+        src_y / atlas_h,
+        (src_x + src_w) / atlas_w,
+        (src_y + src_h) / atlas_h,
+        state.view_w,
+        state.view_h,
+        true,
+        (255, 255, 255, window.alpha),
+    )
+}
+
+#[inline]
+fn window_system_button_twemoji(
+    window: &Ui2Window,
+    action: Ui2SystemButtonAction,
+) -> Option<char> {
+    match action {
+        Ui2SystemButtonAction::ToggleComposition => Some(if window.composition_locked {
+            UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_LOCKED_TWEMOJI
+        } else {
+            UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_UNLOCKED_TWEMOJI
+        }),
+        Ui2SystemButtonAction::Fork => Some(UI2_SYSTEM_BUTTON_FORK_TWEMOJI),
+        Ui2SystemButtonAction::Minimize => Some(UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI),
+        Ui2SystemButtonAction::ToggleMaximize => Some(UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI),
+        Ui2SystemButtonAction::Close => Some(UI2_SYSTEM_BUTTON_CLOSE_TWEMOJI),
+    }
+}
+
 fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
     let Some(rect) = window_bottom_resize_button_rect(state, window) else {
         return;
     };
+    if draw_window_twemoji_button(state, window, rect, UI2_BOTTOM_RESIZE_TWEMOJI) {
+        return;
+    }
     let draw = decoration_icon_draw_rect(rect, true);
     draw_window_decoration_icon(
         state,
@@ -372,9 +482,16 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         );
     }
     if !window.selected_cursor_slots.is_empty() {
-        let bar_x = rect.x + 1.0;
-        let bar_y = rect.y + 1.0;
-        let bar_w = (rect.w - 2.0).max(0.0);
+        let bar_span = if window.decoration_mode == Ui2WindowDecorationMode::System
+            && window.titlebar_visible
+        {
+            window_decoration_rect(state, window).unwrap_or(rect)
+        } else {
+            rect
+        };
+        let bar_x = bar_span.x;
+        let bar_y = bar_span.y - 2.0;
+        let bar_w = bar_span.w.max(0.0);
         let bar_h = 2.0;
         let cursor_count = window.selected_cursor_slots.len() as f32;
         if bar_w > 0.0 && cursor_count > 0.0 {
@@ -428,18 +545,27 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         } else {
             rect.x + 8.0
         };
-        let title_right =
-            window_system_button_rect(state, window, Ui2SystemButtonAction::ToggleComposition)
-                .map(|button| button.x - 8.0)
-                .unwrap_or(rect.x + rect.w - 8.0);
+        let title_right = [
+            Ui2SystemButtonAction::ToggleComposition,
+            Ui2SystemButtonAction::Fork,
+            Ui2SystemButtonAction::Minimize,
+            Ui2SystemButtonAction::ToggleMaximize,
+            Ui2SystemButtonAction::Close,
+        ]
+        .into_iter()
+        .filter_map(|action| window_system_button_rect(state, window, action))
+        .map(|button| button.x - 8.0)
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal))
+        .unwrap_or(rect.x + rect.w - 8.0);
         let title_rect = Ui2Rect::new(
             title_left,
             rect.y,
             (title_right - title_left).max(0.0),
             titleband_h.max(1.0),
         );
+        let title_text = title_text_with_ellipsis(window.title.as_str(), title_rect.w);
         let _ = ui2_font_draw_text_line_in_rect_with_tier_rgba_no_present(
-            window.title.as_str(),
+            title_text.as_str(),
             title_rect,
             UI2_CHROME_TITLE_FONT_TIER,
             Ui2FontTextAlign::Left,
@@ -902,17 +1028,39 @@ fn window_system_button_anchor_rect(
         return None;
     }
     let titlebar = window_decoration_rect(state, window)?;
-    let button_y = titlebar.y + ((titlebar.h - UI2_SYSTEM_BUTTON_H) * 0.5).max(0.0);
-    let mut right_x = titlebar.x + titlebar.w - 6.0 - UI2_SYSTEM_BUTTON_W;
-    let close_x = right_x;
-    right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
-    let maximize_x = right_x;
-    right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
-    let minimize_x = right_x;
-    right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
-    let fork_x = right_x;
-    right_x -= UI2_SYSTEM_BUTTON_W + UI2_SYSTEM_BUTTON_GAP;
-    let composition_x = right_x;
+    let button_size = if window.state == Ui2WindowStateKind::Minimized {
+        (titlebar.h - 2.0).max(1.0)
+    } else {
+        (titlebar.h - 2.0).min(UI2_SYSTEM_BUTTON_W).max(1.0)
+    };
+    let button_y = if window.state == Ui2WindowStateKind::Minimized {
+        titlebar.y + 1.0
+    } else {
+        titlebar.y + ((titlebar.h - button_size) * 0.5).max(0.0)
+    };
+    let close_x = titlebar.x + titlebar.w - 1.0 - button_size;
+    if window.state == Ui2WindowStateKind::Minimized {
+        let maximize_x = close_x - button_size - 1.0;
+        return match action {
+            Ui2SystemButtonAction::ToggleMaximize => Some(Ui2Rect::new(
+                maximize_x,
+                button_y,
+                button_size,
+                button_size,
+            )),
+            Ui2SystemButtonAction::Close => Some(Ui2Rect::new(
+                close_x,
+                button_y,
+                button_size,
+                button_size,
+            )),
+            _ => None,
+        };
+    }
+    let maximize_x = close_x - button_size - 1.0;
+    let minimize_x = maximize_x - button_size - 1.0;
+    let fork_x = minimize_x - button_size - 1.0;
+    let composition_x = fork_x - button_size - 1.0;
     let x = match action {
         Ui2SystemButtonAction::ToggleComposition => composition_x,
         Ui2SystemButtonAction::Fork => fork_x,
@@ -920,7 +1068,7 @@ fn window_system_button_anchor_rect(
         Ui2SystemButtonAction::ToggleMaximize => maximize_x,
         Ui2SystemButtonAction::Close => close_x,
     };
-    Some(Ui2Rect::new(x, button_y, UI2_SYSTEM_BUTTON_W, UI2_SYSTEM_BUTTON_H))
+    Some(Ui2Rect::new(x, button_y, button_size, button_size))
 }
 
 pub(super) fn system_button_action_at(

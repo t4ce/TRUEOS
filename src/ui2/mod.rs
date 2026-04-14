@@ -59,7 +59,7 @@ const UI2_BROWSER_FORK_WINDOW_OFFSET_PX: f32 = 24.0;
 const UI2_BOTTOM_RESIZE_BUTTON_W: f32 = 18.0;
 const UI2_BOTTOM_RESIZE_BUTTON_H: f32 = 14.0;
 const UI2_BOTTOM_RESIZE_BUTTON_PAD: f32 = 2.0;
-const UI2_MINIMIZED_STRIP_W: f32 = 168.0;
+const UI2_MINIMIZED_STRIP_W: f32 = 333.0;
 const UI2_MINIMIZED_STRIP_GAP: f32 = 6.0;
 const UI2_MINIMIZED_STRIP_PAD: f32 = 8.0;
 const UI2_PRIMARY_BUTTON_MASK: u32 = 1;
@@ -531,6 +531,12 @@ fn sorted_window_indices(state: &Ui2State) -> Vec<usize> {
     out.sort_by(|lhs, rhs| {
         let a = &state.windows[*lhs];
         let b = &state.windows[*rhs];
+        match (a.state == Ui2WindowStateKind::Minimized, b.state == Ui2WindowStateKind::Minimized)
+        {
+            (true, false) => return CmpOrdering::Less,
+            (false, true) => return CmpOrdering::Greater,
+            _ => {}
+        }
         match a.z.cmp(&b.z) {
             CmpOrdering::Equal => a.id.cmp(&b.id),
             other => other,

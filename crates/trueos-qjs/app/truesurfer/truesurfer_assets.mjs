@@ -2,6 +2,7 @@ import * as parse5 from 'parse5';
 import { Buffer } from 'node:buffer';
 
 const MAX_FETCHED_IMAGE_BINARIES = 64;
+const DEFAULT_MAX_SCENE_IMAGES = 5;
 
 function getNodeAttr(node, name) {
   const wanted = String(name || '').toLowerCase();
@@ -16,37 +17,6 @@ function getNodeAttr(node, name) {
 
 function isImageNode(node) {
   return !!node && typeof node === 'object' && String(node.tagName || '').toLowerCase() === 'img';
-}
-
-function isInlineSvgNode(node) {
-  return !!node && typeof node === 'object' && String(node.tagName || '').toLowerCase() === 'svg';
-}
-
-function isLinkNode(node) {
-  return !!node && typeof node === 'object' && String(node.tagName || '').toLowerCase() === 'link';
-}
-
-function isFaviconRel(rel) {
-  const parts = String(rel || '')
-    .toLowerCase()
-    .split(/\s+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  return parts.includes('icon') || parts.includes('shortcut') || parts.includes('apple-touch-icon');
-}
-
-function inlineSvgNodeToDataUrl(node) {
-  if (!node || typeof node !== 'object') return '';
-  try {
-    const svg = typeof parse5.serializeOuter === 'function'
-      ? String(parse5.serializeOuter(node) || '')
-      : String(parse5.serialize(node) || '');
-    const trimmed = svg.trim();
-    if (!trimmed) return '';
-    return `data:image/svg+xml;utf8,${encodeURIComponent(trimmed)}`;
-  } catch (_) {
-    return '';
-  }
 }
 
 export function createBrowserAssetManager(options = {}) {
@@ -271,11 +241,19 @@ export function createBrowserAssetManager(options = {}) {
     }
   }
 
+  function isSupportedSceneImageUrl(url) {
+    const value = String(url || '').trim();
+    if (!value) return false;
+    if (value.startsWith('data:')) {
+      return /^data:image\/(png|jpe?g|svg\+xml)(?:;|,)/i.test(value);
+    }
+    return !!resolveFetchableImageKind(value);
+  }
+
   function resolveFetchableImageKind(url) {
     const normalizedUrl = String(url || '').toLowerCase();
     if (/\.png(?:$|[?#])/.test(normalizedUrl)) return 'png';
     if (/\.jpe?g(?:$|[?#])/.test(normalizedUrl)) return 'jpeg';
-    if (/\.bmp(?:$|[?#])/.test(normalizedUrl)) return 'bmp';
     if (/\.svg(?:$|[?#])/.test(normalizedUrl)) return 'svg';
     return '';
   }
@@ -322,7 +300,7 @@ export function createBrowserAssetManager(options = {}) {
       if (!requestedKind) {
         raiseBrowserError(
           'TRUEOS_BROWSER_IMAGE_FETCH_KIND_UNSUPPORTED',
-          'Image fetch is restricted to png, jpeg, bmp, or svg URLs',
+          'Image fetch is restricted to png, jpeg, jpg, or svg URLs',
           { url: value },
         );
       }
@@ -511,18 +489,7 @@ export function createBrowserAssetManager(options = {}) {
     if (isImageNode(node)) {
       const rawSrc = String(getNodeAttr(node, 'src') || '').trim();
       const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
-      if (resolvedSrc) {
-        targets.push({ url: resolvedSrc, priority: false });
-      }
-    } else if (isLinkNode(node) && isFaviconRel(getNodeAttr(node, 'rel'))) {
-      const rawHref = String(getNodeAttr(node, 'href') || '').trim();
-      const resolvedHref = rawHref ? resolveNavigationUrl(rawHref) : '';
-      if (resolvedHref) {
-        targets.push({ url: resolvedHref, priority: true });
-      }
-    } else if (isInlineSvgNode(node)) {
-      const resolvedSrc = inlineSvgNodeToDataUrl(node);
-      if (resolvedSrc) {
+      if (resolvedSrc && isSupportedSceneImageUrl(resolvedSrc)) {
         targets.push({ url: resolvedSrc, priority: false });
       }
     }
@@ -533,9 +500,11 @@ export function createBrowserAssetManager(options = {}) {
     return targets;
   }
 
-  function primeHtmlImageUrls(html) {
+  function primeHtmlImageUrls(html, options = {}) {
     const source = String(html || '');
     if (!source) return;
+    const maxCount = Math.max(0, Number(options.maxCount || DEFAULT_MAX_SCENE_IMAGES) | 0);
+    if (maxCount <= 0) return [];
     let parsed;
     try {
       parsed = parse5.parse(source);
@@ -544,10 +513,15 @@ export function createBrowserAssetManager(options = {}) {
     }
     const targets = collectPrimeTargets(parsed, []);
     const urls = [];
+    const unique = new Set();
     for (let i = 0; i < targets.length; i += 1) {
       const entry = targets[i] || {};
       const resolvedSrc = String(entry.url || '').trim();
       if (!resolvedSrc) continue;
+      if (!isSupportedSceneImageUrl(resolvedSrc)) continue;
+      if (unique.has(resolvedSrc)) continue;
+      if (unique.size >= maxCount) break;
+      unique.add(resolvedSrc);
       urls.push(resolvedSrc);
       maybePrewarmUrl(resolvedSrc);
       const cached = imageTextureCache.get(resolvedSrc) || null;
@@ -589,9 +563,16 @@ export function createBrowserAssetManager(options = {}) {
     };
   }
 
+  function getCachedImageTexture(url) {
+    const key = String(url || '').trim();
+    if (!key) return null;
+    return imageTextureCache.get(key) || null;
+  }
+
   return {
     beginPageLoad,
     applyResourcesToRows,
+    getCachedImageTexture,
     requestAssetsForRows,
     primeHtmlImageUrls,
     summarizeImageUrls,
