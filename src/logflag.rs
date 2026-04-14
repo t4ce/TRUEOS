@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use spin::Once;
 
 pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = false;
-pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
+pub(crate) const HID_DEBUG_REPORT_LOGS: bool = true;
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
@@ -16,7 +16,7 @@ pub(crate) const VNET_EXERCISE_LOGS: bool = false;
 pub(crate) const ESP_GATE_DEFAULT_UPLOAD_LOGS: bool = false;
 
 pub(crate) const R8125_VERBOSE_LOGS: bool = false;
-pub(crate) const BOOT_INFO_LOGS: bool = false;
+pub(crate) const BOOT_INFO_LOGS: bool = true;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
 pub(crate) const BROWSER_VM_DEBUG_LOGS: bool = false;

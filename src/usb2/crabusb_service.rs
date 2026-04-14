@@ -336,6 +336,9 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             if super::midi::maybe_start_midi(host, dev, spawner, controller_id).await {
                 bound_any = true;
             }
+            if super::video::cam::maybe_start_camera(host, dev, spawner, controller_id).await {
+                bound_any = true;
+            }
             if super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id).await {
                 bound_any = true;
             }
