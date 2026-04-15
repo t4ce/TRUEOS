@@ -531,8 +531,7 @@ fn sorted_window_indices(state: &Ui2State) -> Vec<usize> {
     out.sort_by(|lhs, rhs| {
         let a = &state.windows[*lhs];
         let b = &state.windows[*rhs];
-        match (a.state == Ui2WindowStateKind::Minimized, b.state == Ui2WindowStateKind::Minimized)
-        {
+        match (a.state == Ui2WindowStateKind::Minimized, b.state == Ui2WindowStateKind::Minimized) {
             (true, false) => return CmpOrdering::Less,
             (false, true) => return CmpOrdering::Greater,
             _ => {}
