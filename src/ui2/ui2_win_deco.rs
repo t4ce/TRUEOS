@@ -290,10 +290,7 @@ fn draw_window_twemoji_button(
 }
 
 #[inline]
-fn window_system_button_twemoji(
-    window: &Ui2Window,
-    action: Ui2SystemButtonAction,
-) -> Option<char> {
+fn window_system_button_twemoji(window: &Ui2Window, action: Ui2SystemButtonAction) -> Option<char> {
     match action {
         Ui2SystemButtonAction::ToggleComposition => Some(if window.composition_locked {
             UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_LOCKED_TWEMOJI
@@ -1004,11 +1001,10 @@ fn window_bottom_resize_button_anchor_rect(
         return None;
     }
     let bar = window_bottom_bar_rect(state, window)?;
-    let button_w = UI2_BOTTOM_RESIZE_BUTTON_W.min(bar.w.max(1.0));
-    let button_h = UI2_BOTTOM_RESIZE_BUTTON_H.min(bar.h.max(1.0));
-    let button_x = bar.x + (bar.w - UI2_BOTTOM_RESIZE_BUTTON_PAD - button_w).max(0.0);
-    let button_y = bar.y + ((bar.h - button_h) * 0.5).max(0.0);
-    Some(Ui2Rect::new(button_x, button_y, button_w, button_h))
+    let button_size = bar.h.min((bar.w - 1.0).max(1.0)).max(1.0);
+    let button_x = bar.x + bar.w - 1.0 - button_size;
+    let button_y = bar.y;
+    Some(Ui2Rect::new(button_x, button_y, button_size, button_size))
 }
 
 pub(super) fn window_system_button_rect(
@@ -1042,18 +1038,12 @@ fn window_system_button_anchor_rect(
     if window.state == Ui2WindowStateKind::Minimized {
         let maximize_x = close_x - button_size - 1.0;
         return match action {
-            Ui2SystemButtonAction::ToggleMaximize => Some(Ui2Rect::new(
-                maximize_x,
-                button_y,
-                button_size,
-                button_size,
-            )),
-            Ui2SystemButtonAction::Close => Some(Ui2Rect::new(
-                close_x,
-                button_y,
-                button_size,
-                button_size,
-            )),
+            Ui2SystemButtonAction::ToggleMaximize => {
+                Some(Ui2Rect::new(maximize_x, button_y, button_size, button_size))
+            }
+            Ui2SystemButtonAction::Close => {
+                Some(Ui2Rect::new(close_x, button_y, button_size, button_size))
+            }
             _ => None,
         };
     }
