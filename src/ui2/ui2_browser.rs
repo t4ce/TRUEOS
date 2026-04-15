@@ -48,7 +48,9 @@ pub(super) fn draw_hosted_browser_window_content(
         .gadget_snapshot
         .gadgets
         .is_empty()
-        && browser_text::draw_hosted_browser_gadget_scene(state, window, content)
+        && with_window_content_scissor(state, content, || {
+            browser_text::draw_hosted_browser_gadget_scene(state, window, content)
+        })
     {
         return Ui2WindowDrawTiming {
             chrome_ms,
@@ -60,17 +62,19 @@ pub(super) fn draw_hosted_browser_window_content(
 
     let content_started_at = Instant::now();
     if texture_is_drawable(window.content_tex_id)
-        && draw_texture_rect_no_present(
-            window.content_tex_id,
-            content.x,
-            content.y,
-            content.w,
-            content.h,
-            state.view_w,
-            state.view_h,
-            true,
-            window.alpha,
-        )
+        && with_window_content_scissor(state, content, || {
+            draw_texture_rect_no_present(
+                window.content_tex_id,
+                content.x,
+                content.y,
+                content.w,
+                content.h,
+                state.view_w,
+                state.view_h,
+                true,
+                window.alpha,
+            )
+        })
     {
         return Ui2WindowDrawTiming {
             chrome_ms,

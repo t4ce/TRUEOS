@@ -1,22 +1,33 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::cmp::min;
 use core::future::Future;
 use core::task::Poll;
 
 use crab_usb::{USBHost, usb_if};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use spin::Mutex;
 
 use crate::usb2::api::{InterfaceEndpointError, claim_interface};
 
-const CAMERA_FRAME_W: usize = 640;
-const CAMERA_FRAME_H: usize = 480;
-const CAMERA_FRAME_BYTES: usize = CAMERA_FRAME_W * CAMERA_FRAME_H;
-const CAMERA_READ_TIMEOUT_MS: u64 = 1000;
-const CAMERA_ISO_PACKETS_PER_URB: usize = 8;
+const CAMERA_CONTROL_TIMEOUT_MS: u64 = 1000;
+const UVC_REQ_SET_CUR: u8 = 0x01;
+const UVC_REQ_GET_CUR: u8 = 0x81;
+const UVC_REQ_GET_LEN: u8 = 0x85;
+const UVC_REQ_GET_INFO: u8 = 0x86;
+const UVC_REQ_GET_DEF: u8 = 0x87;
+const UVC_VS_PROBE_CONTROL: u8 = 0x01;
+const UVC_VS_COMMIT_CONTROL: u8 = 0x02;
+const UVC_PROBE_LEN_V1: usize = 26;
+const UVC_PROBE_LEN_V11: usize = 34;
+const UVC_FRAME_INTERVAL_30FPS: u32 = 333_333;
+
+const CAPTURE_WIDTH: usize = 1_920;
+const CAPTURE_HEIGHT: usize = 1_080;
+const CAPTURE_YUY2_FRAME: usize = CAPTURE_WIDTH * CAPTURE_HEIGHT * 2;
+const CAPTURE_BOOT_DELAY_MS: u64 = 10_000;
+const CAPTURE_ISO_PACKETS: usize = 128;
+const CAPTURE_MAX_URBS: usize = 256;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum CameraTransport {
@@ -34,24 +45,14 @@ struct CameraTarget {
     transport: CameraTransport,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct ActiveCameraStream {
-    stable_id: u32,
-    controller_id: u32,
-    slot_id: u32,
-    interface_number: u8,
-    endpoint_address: u8,
+#[derive(Copy, Clone, Debug)]
+struct CameraStreamFormat {
+    max_frame_bytes: usize,
+    max_payload_bytes: usize,
+    format_index: u8,
+    frame_index: u8,
+    frame_interval: u32,
 }
-
-#[derive(Default)]
-struct UvcFrameAssembler {
-    frame_id: Option<u8>,
-    bytes: Vec<u8>,
-    oversize_logged: bool,
-    packet_logs: u8,
-}
-
-static ACTIVE_CAMERA_STREAMS: Mutex<Vec<ActiveCameraStream>> = Mutex::new(Vec::new());
 
 fn pick_camera_target(
     configs: &[usb_if::descriptor::ConfigurationDescriptor],
@@ -97,10 +98,6 @@ fn pick_camera_target(
                         candidate.alternate_setting > current.alternate_setting
                             || (candidate.alternate_setting == current.alternate_setting
                                 && candidate.interface_number < current.interface_number)
-                            || (candidate.alternate_setting == current.alternate_setting
-                                && candidate.interface_number == current.interface_number
-                                && matches!(candidate.transport, CameraTransport::BulkIn)
-                                && matches!(current.transport, CameraTransport::IsoIn))
                     }
                 };
 
@@ -112,22 +109,6 @@ fn pick_camera_target(
     }
 
     best
-}
-
-fn register_active_camera_stream(stream: ActiveCameraStream) -> bool {
-    let mut streams = ACTIVE_CAMERA_STREAMS.lock();
-    if streams.iter().any(|active| *active == stream) {
-        return false;
-    }
-    streams.push(stream);
-    true
-}
-
-fn unregister_active_camera_stream(stream: ActiveCameraStream) {
-    let mut streams = ACTIVE_CAMERA_STREAMS.lock();
-    if let Some(idx) = streams.iter().position(|active| *active == stream) {
-        streams.remove(idx);
-    }
 }
 
 async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {
@@ -146,314 +127,454 @@ async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::O
     .await
 }
 
-fn grayscale_frame_to_rgba(frame: &[u8]) -> Vec<u8> {
-    let mut rgba = alloc::vec![
-        0u8;
-        CAMERA_FRAME_W
-            .saturating_mul(CAMERA_FRAME_H)
-            .saturating_mul(4)
-    ];
+fn uvc_read_u32_le(buf: &[u8], offset: usize) -> Option<u32> {
+    let bytes = buf.get(offset..offset + 4)?;
+    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
 
-    for dst_y in 0..CAMERA_FRAME_H {
-        let src_y = dst_y;
-        for dst_x in 0..CAMERA_FRAME_W {
-            let src_x = dst_x;
-            let src_idx = src_y.saturating_mul(CAMERA_FRAME_W).saturating_add(src_x);
-            if src_idx >= frame.len() {
-                continue;
-            }
-            let luma = frame[src_idx];
-            let dst_idx =
-                (dst_y.saturating_mul(CAMERA_FRAME_W).saturating_add(dst_x)).saturating_mul(4);
-            if dst_idx + 4 > rgba.len() {
-                continue;
-            }
-            rgba[dst_idx] = luma;
-            rgba[dst_idx + 1] = luma;
-            rgba[dst_idx + 2] = luma;
-            rgba[dst_idx + 3] = 0xFF;
+fn uvc_write_u16_le(buf: &mut [u8], offset: usize, value: u16) -> bool {
+    let Some(dst) = buf.get_mut(offset..offset + 2) else {
+        return false;
+    };
+    dst.copy_from_slice(&value.to_le_bytes());
+    true
+}
+
+fn uvc_write_u32_le(buf: &mut [u8], offset: usize, value: u32) -> bool {
+    let Some(dst) = buf.get_mut(offset..offset + 4) else {
+        return false;
+    };
+    dst.copy_from_slice(&value.to_le_bytes());
+    true
+}
+
+fn uvc_stream_control_setup(
+    request: u8,
+    selector: u8,
+    interface_number: u8,
+) -> usb_if::host::ControlSetup {
+    usb_if::host::ControlSetup {
+        request_type: usb_if::transfer::RequestType::Class,
+        recipient: usb_if::transfer::Recipient::Interface,
+        request: usb_if::transfer::Request::Other(request),
+        value: u16::from(selector) << 8,
+        index: u16::from(interface_number),
+    }
+}
+
+async fn negotiate_uvc_stream(
+    device: &mut crab_usb::Device,
+    target: CameraTarget,
+    vendor_id: u16,
+    product_id: u16,
+) -> Option<CameraStreamFormat> {
+    let mut tmp = [0u8; 2];
+    let probe_len = match with_timeout_or_none(
+        device.control_in(
+            uvc_stream_control_setup(
+                UVC_REQ_GET_LEN,
+                UVC_VS_PROBE_CONTROL,
+                target.interface_number,
+            ),
+            &mut tmp,
+        ),
+        CAMERA_CONTROL_TIMEOUT_MS,
+    )
+    .await
+    {
+        Some(Ok(n)) if n >= 2 => {
+            let raw = usize::from(u16::from_le_bytes(tmp));
+            raw.clamp(UVC_PROBE_LEN_V1, UVC_PROBE_LEN_V11)
         }
+        _ => UVC_PROBE_LEN_V1,
+    };
+
+    if let Some(Ok(n)) = with_timeout_or_none(
+        device.control_in(
+            uvc_stream_control_setup(
+                UVC_REQ_GET_INFO,
+                UVC_VS_PROBE_CONTROL,
+                target.interface_number,
+            ),
+            &mut tmp,
+        ),
+        CAMERA_CONTROL_TIMEOUT_MS,
+    )
+    .await
+    {
+        crate::log!(
+            "crabusb: camera {:04X}:{:04X} uvc get-info if#{} bytes={} flags=0x{:02X}\n",
+            vendor_id,
+            product_id,
+            target.interface_number,
+            n,
+            tmp[0]
+        );
     }
 
+    let mut probe = alloc::vec![0u8; probe_len];
+    // GET_CUR probe (or GET_DEF fallback)
+    let got_probe = match with_timeout_or_none(
+        device.control_in(
+            uvc_stream_control_setup(
+                UVC_REQ_GET_CUR,
+                UVC_VS_PROBE_CONTROL,
+                target.interface_number,
+            ),
+            probe.as_mut_slice(),
+        ),
+        CAMERA_CONTROL_TIMEOUT_MS,
+    )
+    .await
+    {
+        Some(Ok(_)) => true,
+        _ => {
+            match with_timeout_or_none(
+                device.control_in(
+                    uvc_stream_control_setup(
+                        UVC_REQ_GET_DEF,
+                        UVC_VS_PROBE_CONTROL,
+                        target.interface_number,
+                    ),
+                    probe.as_mut_slice(),
+                ),
+                CAMERA_CONTROL_TIMEOUT_MS,
+            )
+            .await
+            {
+                Some(Ok(_)) => true,
+                _ => false,
+            }
+        }
+    };
+
+    if !got_probe {
+        crate::log!(
+            "crabusb: camera {:04X}:{:04X} uvc probe read failed if#{}\n",
+            vendor_id,
+            product_id,
+            target.interface_number
+        );
+        return None;
+    }
+
+    // Fill in defaults
+    if *probe.get(2).unwrap_or(&0) == 0 {
+        probe[2] = 1;
+    }
+    if *probe.get(3).unwrap_or(&0) == 0 {
+        probe[3] = 1;
+    }
+    if uvc_read_u32_le(&probe, 4).unwrap_or(0) == 0 {
+        let _ = uvc_write_u32_le(&mut probe, 4, UVC_FRAME_INTERVAL_30FPS);
+    }
+    let _ = uvc_write_u16_le(&mut probe, 0, 1);
+
+    let fmt = *probe.get(2).unwrap_or(&0);
+    let frm = *probe.get(3).unwrap_or(&0);
+    let interval = uvc_read_u32_le(&probe, 4).unwrap_or(0);
+    crate::log!(
+        "crabusb: camera {:04X}:{:04X} uvc set-cur-probe if#{} fmt={} frame={} interval={}\n",
+        vendor_id,
+        product_id,
+        target.interface_number,
+        fmt,
+        frm,
+        interval
+    );
+
+    // SET_CUR probe
+    if with_timeout_or_none(
+        device.control_out(
+            uvc_stream_control_setup(
+                UVC_REQ_SET_CUR,
+                UVC_VS_PROBE_CONTROL,
+                target.interface_number,
+            ),
+            &probe,
+        ),
+        CAMERA_CONTROL_TIMEOUT_MS,
+    )
+    .await
+    .and_then(|r| r.ok())
+    .is_none()
+    {
+        crate::log!(
+            "crabusb: camera {:04X}:{:04X} uvc set-cur-probe failed if#{}\n",
+            vendor_id,
+            product_id,
+            target.interface_number
+        );
+        return None;
+    }
+
+    // GET_CUR after set (re-read negotiated values)
+    let _ = with_timeout_or_none(
+        device.control_in(
+            uvc_stream_control_setup(
+                UVC_REQ_GET_CUR,
+                UVC_VS_PROBE_CONTROL,
+                target.interface_number,
+            ),
+            probe.as_mut_slice(),
+        ),
+        CAMERA_CONTROL_TIMEOUT_MS,
+    )
+    .await;
+
+    let max_frame = uvc_read_u32_le(&probe, 18).unwrap_or(CAPTURE_YUY2_FRAME as u32);
+    let max_payload = uvc_read_u32_le(&probe, 22).unwrap_or(u32::from(target.max_packet_size));
+    crate::log!(
+        "crabusb: camera {:04X}:{:04X} uvc negotiated if#{} max_frame={} max_payload={}\n",
+        vendor_id,
+        product_id,
+        target.interface_number,
+        max_frame,
+        max_payload
+    );
+
+    // SET_CUR commit
+    if with_timeout_or_none(
+        device.control_out(
+            uvc_stream_control_setup(
+                UVC_REQ_SET_CUR,
+                UVC_VS_COMMIT_CONTROL,
+                target.interface_number,
+            ),
+            &probe,
+        ),
+        CAMERA_CONTROL_TIMEOUT_MS,
+    )
+    .await
+    .and_then(|r| r.ok())
+    .is_none()
+    {
+        crate::log!(
+            "crabusb: camera {:04X}:{:04X} uvc commit failed if#{}\n",
+            vendor_id,
+            product_id,
+            target.interface_number
+        );
+        return None;
+    }
+
+    Some(CameraStreamFormat {
+        max_frame_bytes: max_frame.max(1) as usize,
+        max_payload_bytes: max_payload.max(u32::from(target.max_packet_size.max(1))) as usize,
+        format_index: *probe.get(2).unwrap_or(&1),
+        frame_index: *probe.get(3).unwrap_or(&1),
+        frame_interval: uvc_read_u32_le(&probe, 4).unwrap_or(UVC_FRAME_INTERVAL_30FPS),
+    })
+}
+
+fn clamp_u8(v: i32) -> u8 {
+    v.clamp(0, 255) as u8
+}
+
+fn yuy2_to_rgba(src: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut rgba = alloc::vec![0u8; width * height * 4];
+    let mut si = 0usize;
+    let mut di = 0usize;
+    let end = width * height * 2;
+    while si + 4 <= end && si + 4 <= src.len() && di + 8 <= rgba.len() {
+        let y0 = i32::from(src[si]);
+        let u = i32::from(src[si + 1]) - 128;
+        let y1 = i32::from(src[si + 2]);
+        let v = i32::from(src[si + 3]) - 128;
+        si += 4;
+        for y in [y0, y1] {
+            let c = (y - 16).max(0);
+            rgba[di] = clamp_u8((298 * c + 516 * u + 128) >> 8);
+            rgba[di + 1] = clamp_u8((298 * c - 100 * u - 208 * v + 128) >> 8);
+            rgba[di + 2] = clamp_u8((298 * c + 409 * v + 128) >> 8);
+            rgba[di + 3] = 0xFF;
+            di += 4;
+        }
+    }
     rgba
 }
 
-fn try_present_frame(frame: &[u8], frame_count: u64, vendor_id: u16, product_id: u16) {
-    if frame.len() != CAMERA_FRAME_BYTES {
-        if frame_count <= 8 || frame_count.is_multiple_of(120) {
-            crate::log!(
-                "crabusb: camera {:04X}:{:04X} frame={} size={} expected={} note=waiting-for-raw-640x480x8\n",
-                vendor_id,
-                product_id,
-                frame_count,
-                frame.len(),
-                CAMERA_FRAME_BYTES
-            );
-        }
-        return;
-    }
-
-    let rgba = grayscale_frame_to_rgba(frame);
-    if !crate::intel::present_rgba_overlay_top_right(
-        rgba.as_slice(),
-        CAMERA_FRAME_W as u32,
-        CAMERA_FRAME_H as u32,
-        CAMERA_FRAME_W.saturating_mul(4),
-    ) {
+fn present_yuy2_snapshot(raw: &[u8], vendor_id: u16, product_id: u16) {
+    let stride = CAPTURE_WIDTH * 2;
+    let lines = (raw.len() / stride).min(CAPTURE_HEIGHT);
+    if lines == 0 {
         crate::log!(
-            "crabusb: camera {:04X}:{:04X} overlay present failed frame={} size={}x{}\n",
+            "crabusb: camera {:04X}:{:04X} snapshot too small bytes={}\n",
             vendor_id,
             product_id,
-            frame_count,
-            CAMERA_FRAME_W,
-            CAMERA_FRAME_H
+            raw.len()
         );
-    }
-}
-
-fn ingest_uvc_payload(
-    assembler: &mut UvcFrameAssembler,
-    packet: &[u8],
-    frame_count: &mut u64,
-    vendor_id: u16,
-    product_id: u16,
-) {
-    if packet.len() < 2 {
         return;
     }
-
-    let header_len = packet[0] as usize;
-    if header_len < 2 || header_len > packet.len() {
-        return;
-    }
-
-    let header_flags = packet[1];
-    assembler.packet_logs = assembler.packet_logs.saturating_add(1);
-    if assembler.packet_logs <= 8 {
-        crate::log!(
-            "crabusb: camera {:04X}:{:04X} uvc-packet idx={} hdr_len={} flags=0x{:02X} eof={} fid={} err={} payload={}\n",
-            vendor_id,
-            product_id,
-            assembler.packet_logs,
-            header_len,
-            header_flags,
-            ((header_flags & 0x02) != 0) as u8,
-            header_flags & 0x01,
-            ((header_flags & 0x40) != 0) as u8,
-            packet.len().saturating_sub(header_len)
-        );
-    }
-    if (header_flags & 0x40) != 0 {
-        return;
-    }
-
-    let frame_id = header_flags & 0x01;
-    let end_of_frame = (header_flags & 0x02) != 0;
-    if assembler.frame_id != Some(frame_id) && !assembler.bytes.is_empty() {
-        assembler.bytes.clear();
-    }
-    assembler.frame_id = Some(frame_id);
-
-    let payload = &packet[header_len..];
-    if !payload.is_empty() {
-        let remaining = CAMERA_FRAME_BYTES
-            .saturating_mul(4)
-            .saturating_sub(assembler.bytes.len());
-        if remaining == 0 {
-            if !assembler.oversize_logged {
-                assembler.oversize_logged = true;
-                crate::log!(
-                    "crabusb: camera {:04X}:{:04X} dropping oversized frame chunk len={} cap={}\n",
-                    vendor_id,
-                    product_id,
-                    payload.len(),
-                    CAMERA_FRAME_BYTES.saturating_mul(4)
-                );
-            }
-        } else {
-            assembler
-                .bytes
-                .extend_from_slice(&payload[..min(payload.len(), remaining)]);
-        }
-    }
-
-    if end_of_frame {
-        *frame_count = frame_count.wrapping_add(1);
-        if *frame_count <= 8 || frame_count.is_multiple_of(60) {
-            crate::log!(
-                "crabusb: camera {:04X}:{:04X} frame-complete frame={} bytes={}\n",
-                vendor_id,
-                product_id,
-                *frame_count,
-                assembler.bytes.len()
-            );
-        }
-        try_present_frame(assembler.bytes.as_slice(), *frame_count, vendor_id, product_id);
-        assembler.bytes.clear();
-        assembler.oversize_logged = false;
-    }
-}
-
-async fn stream_bulk_camera(
-    bulk_in: &mut crab_usb::EndpointBulkIn,
-    target: CameraTarget,
-    vendor_id: u16,
-    product_id: u16,
-) {
-    let read_len = usize::from(target.max_packet_size.max(512)).saturating_mul(16);
-    let mut rx = alloc::vec![0u8; read_len];
-    let mut assembler = UvcFrameAssembler {
-        frame_id: None,
-        bytes: Vec::with_capacity(CAMERA_FRAME_BYTES),
-        oversize_logged: false,
-        packet_logs: 0,
+    let rgba = yuy2_to_rgba(&raw[..lines * stride], CAPTURE_WIDTH, lines);
+    // Pad to full height so overlay surface stays fixed size
+    let full_len = CAPTURE_WIDTH * CAPTURE_HEIGHT * 4;
+    let mut full = if lines == CAPTURE_HEIGHT {
+        rgba
+    } else {
+        let mut buf = alloc::vec![0u8; full_len];
+        let n = lines * CAPTURE_WIDTH * 4;
+        buf[..n].copy_from_slice(&rgba[..n]);
+        buf
     };
-    let mut frame_count = 0u64;
-    let mut timeout_logs = 0u32;
-    let mut first_payload_logged = false;
-
-    loop {
-        match with_timeout_or_none(
-            bulk_in.submit_and_wait(rx.as_mut_slice()),
-            CAMERA_READ_TIMEOUT_MS,
-        )
-        .await
-        {
-            None => {
-                timeout_logs = timeout_logs.wrapping_add(1);
-                if timeout_logs <= 8 || timeout_logs.is_multiple_of(32) {
-                    crate::log!(
-                        "crabusb: camera {:04X}:{:04X} bulk timeout ep=0x{:02X} count={}\n",
-                        vendor_id,
-                        product_id,
-                        target.endpoint_address,
-                        timeout_logs
-                    );
-                }
-            }
-            Some(Ok(read)) => {
-                timeout_logs = 0;
-                if read == 0 {
-                    Timer::after(EmbassyDuration::from_millis(1)).await;
-                    continue;
-                }
-                if !first_payload_logged {
-                    first_payload_logged = true;
-                    crate::log!(
-                        "crabusb: camera {:04X}:{:04X} bulk first-payload ep=0x{:02X} bytes={}\n",
-                        vendor_id,
-                        product_id,
-                        target.endpoint_address,
-                        read
-                    );
-                }
-                ingest_uvc_payload(
-                    &mut assembler,
-                    &rx[..read.min(rx.len())],
-                    &mut frame_count,
-                    vendor_id,
-                    product_id,
-                );
-            }
-            Some(Err(err)) => {
-                crate::log!(
-                    "crabusb: camera {:04X}:{:04X} bulk stop ep=0x{:02X} err={:?}\n",
-                    vendor_id,
-                    product_id,
-                    target.endpoint_address,
-                    err
-                );
-                break;
-            }
-        }
-    }
+    crate::log!(
+        "crabusb: camera {:04X}:{:04X} snapshot present lines={}/{} bytes={}\n",
+        vendor_id,
+        product_id,
+        lines,
+        CAPTURE_HEIGHT,
+        raw.len()
+    );
+    crate::intel::present_rgba_overlay_top_right(
+        &full,
+        CAPTURE_WIDTH as u32,
+        CAPTURE_HEIGHT as u32,
+        CAPTURE_WIDTH * 4,
+    );
 }
 
-async fn stream_iso_camera(
+/// Capture one frame from an isochronous endpoint then stop.
+async fn capture_one_iso_frame(
     iso_in: &mut crab_usb::EndpointIsoIn,
     target: CameraTarget,
+    sf: CameraStreamFormat,
     vendor_id: u16,
     product_id: u16,
 ) {
-    let packet_bytes = usize::from(target.max_packet_size.max(1));
-    let mut rx = alloc::vec![0u8; packet_bytes.saturating_mul(CAMERA_ISO_PACKETS_PER_URB)];
-    let mut assembler = UvcFrameAssembler {
-        frame_id: None,
-        bytes: Vec::with_capacity(CAMERA_FRAME_BYTES),
-        oversize_logged: false,
-        packet_logs: 0,
-    };
-    let mut frame_count = 0u64;
-    let mut first_payload_logged = false;
+    let pkt_bytes = sf
+        .max_payload_bytes
+        .max(usize::from(target.max_packet_size.max(1)));
+    let mut rx = alloc::vec![0u8; pkt_bytes * CAPTURE_ISO_PACKETS];
+    let mut frame_buf = Vec::with_capacity(sf.max_frame_bytes.min(CAPTURE_YUY2_FRAME + 4096));
+    let mut prev_fid: Option<u8> = None;
+    let mut got_first_fid = false;
 
-    loop {
-        match iso_in
-            .submit_and_wait(rx.as_mut_slice(), CAMERA_ISO_PACKETS_PER_URB)
+    for urb_idx in 0..CAPTURE_MAX_URBS {
+        let read = match iso_in
+            .submit_and_wait(rx.as_mut_slice(), CAPTURE_ISO_PACKETS)
             .await
         {
-            Ok(read) => {
-                if read == 0 {
-                    Timer::after(EmbassyDuration::from_millis(1)).await;
+            Ok(n) => n,
+            Err(err) => {
+                if urb_idx < 8 {
+                    crate::log!(
+                        "crabusb: camera {:04X}:{:04X} capture iso err urb={} err={:?}\n",
+                        vendor_id,
+                        product_id,
+                        urb_idx,
+                        err
+                    );
+                }
+                continue; // iso errors are normal, skip
+            }
+        };
+        if read == 0 {
+            continue;
+        }
+
+        for pkt in rx[..read.min(rx.len())].chunks(pkt_bytes.max(1)) {
+            if pkt.len() < 2 {
+                continue;
+            }
+            let hdr_len = pkt[0] as usize;
+            if hdr_len < 2 || hdr_len > pkt.len() {
+                continue;
+            }
+            let flags = pkt[1];
+            if (flags & 0x40) != 0 {
+                continue;
+            } // error bit
+            let fid = flags & 0x01;
+            let eof = (flags & 0x02) != 0;
+            let payload = &pkt[hdr_len..];
+
+            // Wait for the first FID transition so we start at a frame boundary
+            if !got_first_fid {
+                if prev_fid.is_some() && prev_fid != Some(fid) {
+                    got_first_fid = true;
+                    frame_buf.clear();
+                }
+                prev_fid = Some(fid);
+                if !got_first_fid {
                     continue;
                 }
-                if !first_payload_logged {
-                    first_payload_logged = true;
-                    crate::log!(
-                        "crabusb: camera {:04X}:{:04X} iso first-payload ep=0x{:02X} bytes={} packets={}\n",
-                        vendor_id,
-                        product_id,
-                        target.endpoint_address,
-                        read,
-                        CAMERA_ISO_PACKETS_PER_URB
-                    );
-                }
-                for packet in rx[..read.min(rx.len())].chunks(packet_bytes.max(1)) {
-                    ingest_uvc_payload(
-                        &mut assembler,
-                        packet,
-                        &mut frame_count,
-                        vendor_id,
-                        product_id,
-                    );
-                }
             }
-            Err(err) => {
+
+            // FID toggled = new frame; if we already have data, that's our frame
+            if prev_fid != Some(fid) && !frame_buf.is_empty() {
                 crate::log!(
-                    "crabusb: camera {:04X}:{:04X} iso stop ep=0x{:02X} err={:?} buffered={} packets_logged={}\n",
+                    "crabusb: camera {:04X}:{:04X} capture done urb={} bytes={} reason=fid-toggle\n",
                     vendor_id,
                     product_id,
-                    target.endpoint_address,
-                    err,
-                    assembler.bytes.len(),
-                    assembler.packet_logs
+                    urb_idx,
+                    frame_buf.len()
                 );
-                break;
+                present_yuy2_snapshot(&frame_buf, vendor_id, product_id);
+                return;
+            }
+            prev_fid = Some(fid);
+
+            if !payload.is_empty() {
+                let room = sf.max_frame_bytes.saturating_sub(frame_buf.len());
+                let take = payload.len().min(room);
+                frame_buf.extend_from_slice(&payload[..take]);
+            }
+
+            if eof && !frame_buf.is_empty() {
+                crate::log!(
+                    "crabusb: camera {:04X}:{:04X} capture done urb={} bytes={} reason=eof\n",
+                    vendor_id,
+                    product_id,
+                    urb_idx,
+                    frame_buf.len()
+                );
+                present_yuy2_snapshot(&frame_buf, vendor_id, product_id);
+                return;
             }
         }
+    }
+
+    // Didn't get a clean frame boundary — present whatever we have
+    if !frame_buf.is_empty() {
+        crate::log!(
+            "crabusb: camera {:04X}:{:04X} capture partial bytes={} urbs={}\n",
+            vendor_id,
+            product_id,
+            frame_buf.len(),
+            CAPTURE_MAX_URBS
+        );
+        present_yuy2_snapshot(&frame_buf, vendor_id, product_id);
+    } else {
+        crate::log!(
+            "crabusb: camera {:04X}:{:04X} capture got 0 bytes after {} urbs\n",
+            vendor_id,
+            product_id,
+            CAPTURE_MAX_URBS
+        );
     }
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn camera_stream_task(
+async fn camera_snapshot_task(
     mut device: crab_usb::Device,
     controller_id: u32,
     target: CameraTarget,
-    active_stream: ActiveCameraStream,
 ) {
     let desc = device.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
 
+    // Wait for boot to settle
+    Timer::after(EmbassyDuration::from_millis(CAPTURE_BOOT_DELAY_MS)).await;
+
     crate::log!(
-        "crabusb: camera {:04X}:{:04X} stream task ctrl={} if#{} alt={} ep=0x{:02X} transport={:?} packet={}\n",
+        "crabusb: camera {:04X}:{:04X} snapshot begin ctrl={} if#{} alt={} ep=0x{:02X}\n",
         vendor_id,
         product_id,
         controller_id,
         target.interface_number,
         target.alternate_setting,
-        target.endpoint_address,
-        target.transport,
-        target.max_packet_size
+        target.endpoint_address
     );
 
     if let Err(err) = device
@@ -468,14 +589,23 @@ async fn camera_stream_task(
             target.configuration_value,
             err
         );
-        unregister_active_camera_stream(active_stream);
         return;
     }
+
+    let Some(sf) = negotiate_uvc_stream(&mut device, target, vendor_id, product_id).await else {
+        crate::log!(
+            "crabusb: camera {:04X}:{:04X} uvc negotiation failed if#{}\n",
+            vendor_id,
+            product_id,
+            target.interface_number
+        );
+        return;
+    };
 
     let mut interface =
         match claim_interface(&mut device, target.interface_number, target.alternate_setting).await
         {
-            Ok(interface) => interface,
+            Ok(i) => i,
             Err(err) => {
                 crate::log!(
                     "crabusb: camera {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
@@ -485,68 +615,28 @@ async fn camera_stream_task(
                     target.alternate_setting,
                     err
                 );
-                unregister_active_camera_stream(active_stream);
                 return;
             }
         };
 
     crate::log!(
-        "crabusb: camera {:04X}:{:04X} stream start ctrl={} if#{} alt={} ep=0x{:02X} transport={:?} packet={} output=intel-overlay-top-right\n",
+        "crabusb: camera {:04X}:{:04X} snapshot capture start payload={} frame={}\n",
         vendor_id,
         product_id,
-        controller_id,
-        target.interface_number,
-        target.alternate_setting,
-        target.endpoint_address,
-        target.transport,
-        target.max_packet_size
+        sf.max_payload_bytes,
+        sf.max_frame_bytes
     );
 
     match target.transport {
-        CameraTransport::BulkIn => {
-            let mut bulk_in = match interface.endpoint_bulk_in(target.endpoint_address).await {
-                Ok(endpoint) => endpoint,
-                Err(InterfaceEndpointError::WrongKind { .. }) => {
-                    crate::log!(
-                        "crabusb: camera {:04X}:{:04X} bulk kind mismatch ep=0x{:02X}\n",
-                        vendor_id,
-                        product_id,
-                        target.endpoint_address
-                    );
-                    unregister_active_camera_stream(active_stream);
-                    return;
-                }
-                Err(InterfaceEndpointError::Usb(err)) => {
-                    crate::log!(
-                        "crabusb: camera {:04X}:{:04X} bulk open failed ep=0x{:02X}: {:?}\n",
-                        vendor_id,
-                        product_id,
-                        target.endpoint_address,
-                        err
-                    );
-                    unregister_active_camera_stream(active_stream);
-                    return;
-                }
-            };
-            stream_bulk_camera(&mut bulk_in, target, vendor_id, product_id).await;
-        }
         CameraTransport::IsoIn => {
-            let mut iso_in = match interface
+            match interface
                 .endpoint_isochronous_in(target.endpoint_address)
                 .await
             {
-                Ok(endpoint) => endpoint,
-                Err(InterfaceEndpointError::WrongKind { .. }) => {
-                    crate::log!(
-                        "crabusb: camera {:04X}:{:04X} iso kind mismatch ep=0x{:02X}\n",
-                        vendor_id,
-                        product_id,
-                        target.endpoint_address
-                    );
-                    unregister_active_camera_stream(active_stream);
-                    return;
+                Ok(mut iso_in) => {
+                    capture_one_iso_frame(&mut iso_in, target, sf, vendor_id, product_id).await;
                 }
-                Err(InterfaceEndpointError::Usb(err)) => {
+                Err(err) => {
                     crate::log!(
                         "crabusb: camera {:04X}:{:04X} iso open failed ep=0x{:02X}: {:?}\n",
                         vendor_id,
@@ -554,15 +644,19 @@ async fn camera_stream_task(
                         target.endpoint_address,
                         err
                     );
-                    unregister_active_camera_stream(active_stream);
-                    return;
                 }
-            };
-            stream_iso_camera(&mut iso_in, target, vendor_id, product_id).await;
+            }
+        }
+        CameraTransport::BulkIn => {
+            crate::log!(
+                "crabusb: camera {:04X}:{:04X} snapshot bulk not implemented\n",
+                vendor_id,
+                product_id
+            );
         }
     }
 
-    unregister_active_camera_stream(active_stream);
+    crate::log!("crabusb: camera {:04X}:{:04X} snapshot task done\n", vendor_id, product_id);
 }
 
 pub(crate) async fn maybe_start_camera(
@@ -593,18 +687,7 @@ pub(crate) async fn maybe_start_camera(
         }
     };
 
-    let active_stream = ActiveCameraStream {
-        stable_id,
-        controller_id,
-        slot_id: u32::from(device.slot_id()),
-        interface_number: target.interface_number,
-        endpoint_address: target.endpoint_address,
-    };
-    if !register_active_camera_stream(active_stream) {
-        return true;
-    }
-
-    match spawner.spawn(camera_stream_task(device, controller_id, target, active_stream)) {
+    match spawner.spawn(camera_snapshot_task(device, controller_id, target)) {
         Ok(()) => {
             crate::log!(
                 "crabusb: camera {:04X}:{:04X} handoff if#{} alt={} cfg={} ep=0x{:02X} transport={:?} packet={} stable_id={}\n",
@@ -620,13 +703,10 @@ pub(crate) async fn maybe_start_camera(
             );
         }
         Err(err) => {
-            unregister_active_camera_stream(active_stream);
             crate::log!(
-                "crabusb: camera {:04X}:{:04X} spawn failed if#{} alt={}: {:?}\n",
+                "crabusb: camera {:04X}:{:04X} spawn failed: {:?}\n",
                 vendor_id,
                 product_id,
-                target.interface_number,
-                target.alternate_setting,
                 err
             );
         }
