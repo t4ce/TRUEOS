@@ -604,11 +604,12 @@ pub(crate) fn present_nv12_surface_center(
 
     // Y-tile: 128 bytes wide × 32 rows tall = 4096 bytes per tile.
     // In NV12 tiled, both Y and UV planes share the same tiled surface.
-    // UV plane starts at row chroma_y_offset (= src_height for NV12).
+    // UV plane starts at row chroma_y_offset = align(src_height, 32) for
+    // tile boundary alignment (must match MFX_SURFACE_STATE programming).
     const YTILE_W: usize = 128;
     const YTILE_H: usize = 32;
     let tiles_per_row = src_pitch_bytes / YTILE_W;
-    let chroma_y_offset = src_height;
+    let chroma_y_offset = (src_height + YTILE_H - 1) & !(YTILE_H - 1);
     let total_height = chroma_y_offset + (src_height + 1) / 2;
     let total_tile_rows = (total_height + YTILE_H - 1) / YTILE_H;
     let needed = total_tile_rows * tiles_per_row * 4096;

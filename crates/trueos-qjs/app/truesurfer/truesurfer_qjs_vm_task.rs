@@ -81,6 +81,7 @@ const TRUESURFER_RESULT_SCRIPT_COUNT_PROP: &[u8] = b"scriptCount\0";
 const TRUESURFER_RESULT_SCRIPT_BYTES_PROP: &[u8] = b"scriptBytes\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
 const TRUESURFER_GADGET_SNAPSHOT_VERSION_PROP: &[u8] = b"version\0";
+const TRUESURFER_GADGET_SNAPSHOT_BACKGROUND_COLOR_RGB_PROP: &[u8] = b"backgroundColorRgb\0";
 const TRUESURFER_GADGET_SNAPSHOT_GADGETS_PROP: &[u8] = b"gadgets\0";
 const TRUESURFER_GADGET_NODE_ID_PROP: &[u8] = b"nodeId\0";
 const TRUESURFER_GADGET_TAG_PROP: &[u8] = b"tag\0";
@@ -158,6 +159,7 @@ pub struct HostedBrowserGadget {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct HostedBrowserGadgetSnapshot {
     pub version: u32,
+    pub background_color_rgb: u32,
     pub gadgets: Vec<HostedBrowserGadget>,
 }
 
@@ -620,6 +622,11 @@ unsafe fn read_gadget_snapshot(
     }
 
     let version = read_result_u32(ctx, snapshot_value, TRUESURFER_GADGET_SNAPSHOT_VERSION_PROP);
+    let background_color_rgb = read_result_u32(
+        ctx,
+        snapshot_value,
+        TRUESURFER_GADGET_SNAPSHOT_BACKGROUND_COLOR_RGB_PROP,
+    ) & 0x00FF_FFFF;
     let gadgets_value = qjs::JS_GetPropertyStr(
         ctx,
         snapshot_value,
@@ -633,6 +640,7 @@ unsafe fn read_gadget_snapshot(
         qjs::js_free_value(ctx, snapshot_value);
         return HostedBrowserGadgetSnapshot {
             version,
+            background_color_rgb,
             gadgets: Vec::new(),
         };
     }
@@ -681,7 +689,11 @@ unsafe fn read_gadget_snapshot(
 
     qjs::js_free_value(ctx, gadgets_value);
     qjs::js_free_value(ctx, snapshot_value);
-    HostedBrowserGadgetSnapshot { version, gadgets }
+    HostedBrowserGadgetSnapshot {
+        version,
+        background_color_rgb,
+        gadgets,
+    }
 }
 
 fn gadget_snapshot_content_height(snapshot: &HostedBrowserGadgetSnapshot) -> u32 {
@@ -704,7 +716,10 @@ fn gadgets_equal_ignoring_changed(
     prev: &HostedBrowserGadgetSnapshot,
     next: &HostedBrowserGadgetSnapshot,
 ) -> bool {
-    if prev.version != next.version || prev.gadgets.len() != next.gadgets.len() {
+    if prev.version != next.version
+        || prev.background_color_rgb != next.background_color_rgb
+        || prev.gadgets.len() != next.gadgets.len()
+    {
         return false;
     }
     prev.gadgets

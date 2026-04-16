@@ -104,7 +104,8 @@ function cloneGadgetSnapshot(snapshot) {
     ? source.gadgets.map((gadget) => Object.assign({}, gadget || {}))
     : [];
   const version = Math.max(1, Number(source && source.version || 0) | 0);
-  return { version, gadgets };
+  const backgroundColorRgb = Math.max(0, Number(source && source.backgroundColorRgb || 0) >>> 0) & 0xFFFFFF;
+  return { version, backgroundColorRgb, gadgets };
 }
 
 function nextGadgetSnapshotVersion() {
