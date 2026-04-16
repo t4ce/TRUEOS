@@ -18,7 +18,7 @@ const MAX_MEDIA_API_ROUTES: usize = 4;
 const MAX_MEDIA_RESULT_SLOTS: usize = 4;
 const MEDIA_PLAYBACK_PROBE_MAX_SAMPLES: u32 = u32::MAX;
 const MEDIA_PLAYBACK_LOG_INTERVAL: u32 = 30;
-const MEDIA_PLAYBACK_FRAME_DELAY_MS: u64 = 33;
+const MEDIA_PLAYBACK_FRAME_DELAY_MS: u64 = 5;
 
 const FORCEWAKE_MEDIA_GEN11: usize = 0x0A184;
 const FORCEWAKE_MEDIA_VDBOX0: usize = 0x0A540;
@@ -70,7 +70,7 @@ const MEDIA_DEFAULT_BATCH_BYTES: usize = 32 * 1024;
 const MEDIA_DEFAULT_RESULT_BYTES: usize = 4 * 4096;
 const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 256 * 1024;
 const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 4 * 1024 * 1024;
-const MEDIA_DEFAULT_SCRATCH_BYTES: usize = 64 * 1024;
+const MEDIA_DEFAULT_SCRATCH_BYTES: usize = 256 * 1024;
 const MEDIA_SCRATCH_OFFSET_BYTES: usize = MEDIA_DEFAULT_SCRATCH_BYTES;
 const MEDIA_SUBMIT_POLL_ITERS: usize = 100_000;
 
@@ -78,8 +78,9 @@ const MEDIA_HTTP_LOCAL_DEMO_URLS: [&str; 2] = [
     "http://192.168.178.112:8080/tools/vid/demo_yelly.mp4",
     "http://pcjb:8080/tools/vid/demo_yelly.mp4",
 ];
-const MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS: u32 = 90_000;
+const MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS: u32 = 180_000;
 const MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES: usize = 1024 * 1024 * 1024;
+const MEDIA_DEMO_CACHE_PATH: &str = "media/demo_yelly.mp4";
 
 const RING_HWS_PGA: usize = 0x80;
 const RING_HWSTAM: usize = 0x98;
@@ -1394,6 +1395,7 @@ fn build_h264_decode_batch_skeleton(
     result_gpu_addr: u64,
     bitstream_gpu_addr: u64,
     output_surface_gpu_addr: u64,
+    ref_surface_gpu_addr: u64,
     scratch_gpu_addr: u64,
     output_surface_bytes: usize,
     frame_width: u16,
@@ -1532,6 +1534,7 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_PIPE_MODE_SELECT,
         ),
     )?;
+    // StandardSelect=2(AVC), PostDeblockingOutputEnable(9)
     batch[pipe_mode + 1] = 2 | (1 << 9);
 
     // --- MFX_WAIT (Gen12+: required before SURFACE_STATE) ---
@@ -1553,9 +1556,10 @@ fn build_h264_decode_batch_skeleton(
     )?;
     batch[surface + 2] = ((width.saturating_sub(1)) << 4) | ((height.saturating_sub(1)) << 18);
     // DW3: SurfaceFormat(31:28)=4(PLANAR_420_8/NV12), TiledSurface(27)=1,
-    //       TileWalk(26)=1(Y-major), SurfacePitch-1(17:3), HalfPitchForChroma(0)=1
+    //       TileWalk(26)=1(Y-major), SurfacePitch-1(17:3),
+    //       InterleaveChroma(1)=1: NV12 uses interleaved CbCr pairs.
     batch[surface + 3] =
-        1 | ((output_pitch.saturating_sub(1)) << 3) | (1 << 26) | (1 << 27) | (4 << 28);
+        (1 << 1) | ((output_pitch.saturating_sub(1)) << 3) | (1 << 26) | (1 << 27) | (4 << 28);
     batch[surface + 4] = chroma_y_offset;
     batch[surface + 5] = chroma_y_offset; // Y Offset for V(Cr) = same as U(Cb)
 
@@ -1578,23 +1582,23 @@ fn build_h264_decode_batch_skeleton(
     batch[pipe_buf + 6] = MFX_MOCS_UC; // Post Deblocking Attributes
     // DW9: Original Uncompressed Picture Source Attributes
     batch[pipe_buf + 9] = MFX_MOCS_UC;
-    // DW10-11: Original Uncompressed Picture Source = output surface (for non-IDR, used as self-ref)
+    // DW7-8: Original Uncompressed Picture Source = reference surface (previous frame)
     if !has_idr {
-        packet_write_addr64(batch, pipe_buf, 7, output_surface_gpu_addr);
+        packet_write_addr64(batch, pipe_buf, 7, ref_surface_gpu_addr);
     }
     // DW12: Stream-Out Data Destination Attributes
     batch[pipe_buf + 12] = MFX_MOCS_UC;
-    // DW13-14: Intra Row Store Scratch Buffer
+    // DW13-14: Intra Row Store Scratch Buffer (32KB at +0x00000)
     packet_write_addr64(batch, pipe_buf, 13, scratch_gpu_addr);
     batch[pipe_buf + 15] = MFX_MOCS_UC; // Intra Row Store Attributes
-    // DW16-17: Deblocking Filter Row Store Scratch Buffer
-    packet_write_addr64(batch, pipe_buf, 16, scratch_gpu_addr + 0x4000);
+    // DW16-17: Deblocking Filter Row Store Scratch Buffer (32KB at +0x08000)
+    // Gen12 needs width_in_mbs × 256 bytes; for 1280px = 80 MBs = 20KB.
+    packet_write_addr64(batch, pipe_buf, 16, scratch_gpu_addr + 0x08000);
     batch[pipe_buf + 18] = MFX_MOCS_UC; // Deblocking Filter Row Store Attributes
     // DW19-50: Reference Picture Frame Store addresses (16 refs × 2 DWords each)
-    //          For non-IDR frames, point ref 0 to the output surface (self-reference
-    //          into the previously decoded IDR).
+    //          For non-IDR frames, point ref 0 to the reference surface (previous decoded frame).
     if !has_idr {
-        packet_write_addr64(batch, pipe_buf, 19, output_surface_gpu_addr);
+        packet_write_addr64(batch, pipe_buf, 19, ref_surface_gpu_addr);
     }
     // DW51: Reference Picture Attributes
     batch[pipe_buf + 51] = MFX_MOCS_UC;
@@ -1639,9 +1643,11 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_BSP_BUF_BASE_ADDR_STATE,
         ),
     )?;
-    packet_write_addr64(batch, bsp, 1, scratch_gpu_addr + 0x8000);
+    // BSD Row Store (32KB at +0x10000)
+    packet_write_addr64(batch, bsp, 1, scratch_gpu_addr + 0x10000);
     batch[bsp + 3] = MFX_MOCS_UC; // BSD Row Store Attributes
-    packet_write_addr64(batch, bsp, 4, scratch_gpu_addr + 0xC000);
+    // MPR Row Store (32KB at +0x18000)
+    packet_write_addr64(batch, bsp, 4, scratch_gpu_addr + 0x18000);
     batch[bsp + 6] = MFX_MOCS_UC; // MPR Row Store Attributes
     batch[bsp + 9] = MFX_MOCS_UC; // Bitplane Read Buffer Attributes
 
@@ -1782,10 +1788,10 @@ fn build_h264_decode_batch_skeleton(
         ),
     )?;
     if !has_idr {
-        // DW1-2: MV buffer for picture 0 (current)
-        packet_write_addr64(batch, directmode, 1, scratch_gpu_addr + 0xE000);
+        // DW1-2: MV buffer for picture 0 (current) (32KB at +0x20000)
+        packet_write_addr64(batch, directmode, 1, scratch_gpu_addr + 0x20000);
         // DW35-36: MV buffer for reference frame store 0
-        packet_write_addr64(batch, directmode, 35, scratch_gpu_addr + 0xE000);
+        packet_write_addr64(batch, directmode, 35, scratch_gpu_addr + 0x20000);
     }
 
     // --- MFD_AVC_BSD_OBJECT (7 DWords) ---
@@ -2031,16 +2037,25 @@ fn submit_decode_bitstream_demo(
     let output_budget = backing
         .output_surface_bytes
         .checked_sub(MEDIA_SCRATCH_OFFSET_BYTES)?;
-    if output_bytes > output_budget || annex_b.len() > backing.bitstream_bytes {
+    // Double-buffer: need 2× output_bytes for decode target + reference surface.
+    if output_bytes.checked_mul(2)? > output_budget || annex_b.len() > backing.bitstream_bytes {
         return None;
     }
 
     let scratch_gpu_addr = windows.output_surface_gpu_addr;
-    let output_surface_gpu_addr =
-        windows.output_surface_gpu_addr + MEDIA_SCRATCH_OFFSET_BYTES as u64;
-    let output_surface_phys = backing.output_surface_phys + MEDIA_SCRATCH_OFFSET_BYTES as u64;
-    let output_surface_virt =
-        unsafe { backing.output_surface_virt.add(MEDIA_SCRATCH_OFFSET_BYTES) };
+    // Double-buffer: surface A at scratch_end, surface B at scratch_end + output_bytes.
+    // Even frames decode into A (ref B), odd frames decode into B (ref A).
+    let surface_a_offset = MEDIA_SCRATCH_OFFSET_BYTES;
+    let surface_b_offset = MEDIA_SCRATCH_OFFSET_BYTES + output_bytes;
+    let (cur_offset, ref_offset) = if sample_idx % 2 == 0 {
+        (surface_a_offset, surface_b_offset)
+    } else {
+        (surface_b_offset, surface_a_offset)
+    };
+    let output_surface_gpu_addr = windows.output_surface_gpu_addr + cur_offset as u64;
+    let ref_surface_gpu_addr = windows.output_surface_gpu_addr + ref_offset as u64;
+    let output_surface_phys = backing.output_surface_phys + cur_offset as u64;
+    let output_surface_virt = unsafe { backing.output_surface_virt.add(cur_offset) };
 
     let ring_virt = backing.ring_virt;
     let context_virt = backing.context_virt;
@@ -2060,10 +2075,21 @@ fn submit_decode_bitstream_demo(
         core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
         if cold_start {
             core::ptr::write_bytes(backing.output_surface_virt, 0, backing.output_surface_bytes);
+            // Fill UV chroma tile region with neutral 128 for BOTH output surfaces
+            // so unwritten UV bytes render black instead of bright green.
+            let tiles_per_row = output_pitch / 128;
+            let uv_tile_start = (chroma_y_aligned / 32) * tiles_per_row * 4096;
+            let uv_fill_len = output_bytes.saturating_sub(uv_tile_start);
+            for &surf_off in &[surface_a_offset, surface_b_offset] {
+                let surf_ptr = backing.output_surface_virt.add(surf_off);
+                if uv_tile_start < output_bytes {
+                    core::ptr::write_bytes(surf_ptr.add(uv_tile_start), 0x80, uv_fill_len);
+                }
+            }
         }
         core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
         core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
-        core::ptr::write_bytes(backing.bitstream_virt, 0, backing.bitstream_bytes);
+        // Only copy bitstream data — no need to zero the whole buffer first.
         core::ptr::copy_nonoverlapping(annex_b.as_ptr(), backing.bitstream_virt, annex_b.len());
     }
 
@@ -2078,6 +2104,7 @@ fn submit_decode_bitstream_demo(
         windows.result_gpu_addr,
         windows.bitstream_gpu_addr,
         output_surface_gpu_addr,
+        ref_surface_gpu_addr,
         scratch_gpu_addr,
         output_bytes,
         frame_width,
@@ -2164,7 +2191,11 @@ fn submit_decode_bitstream_demo(
     super::dma_flush(ring_virt, ring_tail_bytes);
     super::dma_flush(context_virt, backing.context_bytes);
     super::dma_flush(backing.result_virt, backing.result_bytes);
-    super::dma_flush(backing.output_surface_virt, backing.output_surface_bytes);
+    // Only flush the full output surface on cold start (when we zero-filled
+    // and wrote UV neutral). On subsequent frames the GPU writes directly.
+    if cold_start {
+        super::dma_flush(backing.output_surface_virt, backing.output_surface_bytes);
+    }
 
     {
         let ctx_ctl_after = media_ctx_control_value(true);
@@ -2234,7 +2265,7 @@ fn submit_decode_bitstream_demo(
     // Decisive: scan output surface for first nonzero dword, report engine post-state
     let log_this_frame =
         !completed || sample_idx == 0 || sample_idx % MEDIA_PLAYBACK_LOG_INTERVAL == 0;
-    {
+    if log_this_frame {
         let out_dwords = unsafe {
             core::slice::from_raw_parts(output_surface_virt as *const u32, output_bytes / 4)
         };
@@ -2250,34 +2281,32 @@ fn submit_decode_bitstream_demo(
                 nz_count += 1;
             }
         }
-        if log_this_frame {
-            let head_post = super::mmio_read(dev, engine.ring_base + RING_HEAD);
-            let tail_post = super::mmio_read(dev, engine.ring_base + RING_TAIL);
-            let acthd_post = super::mmio_read(dev, engine.ring_base + RING_ACTHD);
-            let fault_post = super::mmio_read(dev, GEN12_RING_FAULT_REG);
-            let el_post = super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO);
-            let csb_post = super::mmio_read(dev, engine.ring_base + 0x3A0);
-            // Read the HWSP CSB write pointer (Gen12: dword 0x2F / offset 0xBC)
-            super::dma_flush(context_virt, GEN12_HWSP_CSB_WRITE_OFFSET + 8);
-            let hwsp_csb_w = unsafe {
-                core::ptr::read_volatile(context_virt.add(GEN12_HWSP_CSB_WRITE_OFFSET) as *const u32)
-            };
-            crate::log!(
-                "intel/media: scanout completed={} iters={} nz_dwords={} first_nz_off=0x{:08X} first_nz_val=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} fault=0x{:08X} el=0x{:08X} csb=0x{:08X} hwsp_csb=0x{:08X}\n",
-                completed as u8,
-                iter,
-                nz_count,
-                first_nz_off,
-                first_nz_val,
-                head_post,
-                tail_post,
-                acthd_post,
-                fault_post,
-                el_post,
-                csb_post,
-                hwsp_csb_w,
-            );
-        }
+        let head_post = super::mmio_read(dev, engine.ring_base + RING_HEAD);
+        let tail_post = super::mmio_read(dev, engine.ring_base + RING_TAIL);
+        let acthd_post = super::mmio_read(dev, engine.ring_base + RING_ACTHD);
+        let fault_post = super::mmio_read(dev, GEN12_RING_FAULT_REG);
+        let el_post = super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO);
+        let csb_post = super::mmio_read(dev, engine.ring_base + 0x3A0);
+        // Read the HWSP CSB write pointer (Gen12: dword 0x2F / offset 0xBC)
+        super::dma_flush(context_virt, GEN12_HWSP_CSB_WRITE_OFFSET + 8);
+        let hwsp_csb_w = unsafe {
+            core::ptr::read_volatile(context_virt.add(GEN12_HWSP_CSB_WRITE_OFFSET) as *const u32)
+        };
+        crate::log!(
+            "intel/media: scanout completed={} iters={} nz_dwords={} first_nz_off=0x{:08X} first_nz_val=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} fault=0x{:08X} el=0x{:08X} csb=0x{:08X} hwsp_csb=0x{:08X}\n",
+            completed as u8,
+            iter,
+            nz_count,
+            first_nz_off,
+            first_nz_val,
+            head_post,
+            tail_post,
+            acthd_post,
+            fault_post,
+            el_post,
+            csb_post,
+            hwsp_csb_w,
+        );
     }
 
     if !completed && sample_idx < 3 {
@@ -2528,6 +2557,23 @@ pub(crate) fn demo_surface_window(name: &str) -> Option<MediaSurfaceWindow> {
 }
 
 async fn fetch_media_demo_body_async() -> Option<(&'static str, Vec<u8>)> {
+    // Try loading from persistent filesystem cache first.
+    if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+        match crate::r::fs::trueosfs::file_out_async(disk, MEDIA_DEMO_CACHE_PATH).await {
+            Ok(Some(cached)) if !cached.is_empty() => {
+                crate::log!(
+                    "intel/media: cache hit path={} bytes={}\n",
+                    MEDIA_DEMO_CACHE_PATH,
+                    cached.len()
+                );
+                return Some(("cache", cached));
+            }
+            _ => {
+                crate::log!("intel/media: cache miss path={}\n", MEDIA_DEMO_CACHE_PATH);
+            }
+        }
+    }
+
     for url in MEDIA_HTTP_LOCAL_DEMO_URLS {
         crate::log!(
             "intel/media: try local url={} timeout_ms={} max_bytes={}\n",
@@ -2542,7 +2588,40 @@ async fn fetch_media_demo_body_async() -> Option<(&'static str, Vec<u8>)> {
         )
         .await
         {
-            Ok(body) => return Some((url, body)),
+            Ok(body) => {
+                // Persist to disk for next boot (best-effort, don't block on failure).
+                if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+                    match crate::r::fs::trueosfs::file_in_async(
+                        disk,
+                        MEDIA_DEMO_CACHE_PATH,
+                        body.as_slice(),
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            crate::log!(
+                                "intel/media: cached path={} bytes={}\n",
+                                MEDIA_DEMO_CACHE_PATH,
+                                body.len()
+                            );
+                        }
+                        Ok(false) => {
+                            crate::log!(
+                                "intel/media: cache write skipped path={}\n",
+                                MEDIA_DEMO_CACHE_PATH
+                            );
+                        }
+                        Err(err) => {
+                            crate::log!(
+                                "intel/media: cache write failed path={} err={:?}\n",
+                                MEDIA_DEMO_CACHE_PATH,
+                                err
+                            );
+                        }
+                    }
+                }
+                return Some((url, body));
+            }
             Err(err) => {
                 crate::log!("intel/media: local fetch failed url={} err={:?}\n", url, err);
             }

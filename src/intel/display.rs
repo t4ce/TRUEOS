@@ -624,13 +624,17 @@ pub(crate) fn present_nv12_surface_center(
         return false;
     }
 
-    fill_surface_color(
-        surface.virt,
-        dst_pitch,
-        surface.width,
-        surface.height,
-        PRIMARY_BASELINE_COLOR,
-    );
+    // Only fill background on first present; subsequent frames overwrite
+    // the same video region so the border pixels are already correct.
+    if PRIMARY_PRESENT_SEQ.load(Ordering::Relaxed) == 0 {
+        fill_surface_color(
+            surface.virt,
+            dst_pitch,
+            surface.width,
+            surface.height,
+            PRIMARY_BASELINE_COLOR,
+        );
+    }
 
     let scale_x = src_width.div_ceil(dst_width.max(1));
     let scale_y = src_height.div_ceil(dst_height.max(1));
@@ -661,17 +665,17 @@ pub(crate) fn present_nv12_surface_center(
             .saturating_mul(dst_pitch)
             .saturating_add(dst_x.saturating_mul(4));
         let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        let uv_row = chroma_y_offset + src_y / 2;
         for col_idx in 0..copy_w {
             let src_x = (col_idx.saturating_mul(scale)).min(src_width.saturating_sub(1));
             let y_off = ytile_offset(src_x, src_y, tiles_per_row);
-            let y = i32::from(*src.get(y_off).unwrap_or(&0));
+            let y = unsafe { i32::from(*src.get_unchecked(y_off)) };
             // UV plane is in the same tiled surface, starting at row chroma_y_offset.
             // Intel MFX NV12 chroma: byte 0 = Cr (V), byte 1 = Cb (U).
             let uv_x = src_x & !1;
-            let uv_row = chroma_y_offset + src_y / 2;
             let uv_off = ytile_offset(uv_x, uv_row, tiles_per_row);
-            let v = i32::from(*src.get(uv_off).unwrap_or(&128)) - 128;
-            let u = i32::from(*src.get(uv_off + 1).unwrap_or(&128)) - 128;
+            let v = unsafe { i32::from(*src.get_unchecked(uv_off)) } - 128;
+            let u = unsafe { i32::from(*src.get_unchecked(uv_off + 1)) } - 128;
             let c = (y - 16).max(0);
             let r = clamp_u8_i32((298 * c + 409 * v + 128) >> 8);
             let g = clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8);
@@ -772,7 +776,7 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
         return false;
     };
 
-    crate::intel::ggtt_invalidate(dev);
+    let seq = PRIMARY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
 
     let pipeconf_off = PIPECONF_A + surface.pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
     let trans_ddi_func_ctl_off =
@@ -784,23 +788,68 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
     let trans_psr2_status_off =
         TRANS_PSR2_STATUS_A + surface.pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
     let cur_surflive_off = CUR_SURFLIVE_A + surface.pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
-    let psr_before = crate::intel::mmio_read(dev, trans_psr_ctl_off);
-    let psr2_before = crate::intel::mmio_read(dev, trans_psr2_ctl_off);
-    if PRIMARY_PRESENT_DISABLE_PSR_PROBE {
-        crate::intel::mmio_write(dev, trans_psr_ctl_off, 0);
-        crate::intel::mmio_write(dev, trans_psr2_ctl_off, 0);
-        crate::log!(
-            "intel/display: psr-probe reason={} pipe={} psr_ctl_before=0x{:08X} psr2_ctl_before=0x{:08X} psr_ctl_after=0x{:08X} psr2_ctl_after=0x{:08X} psr_status=0x{:08X} psr2_status=0x{:08X}\n",
-            reason,
-            surface.pipe.name,
-            psr_before,
-            psr2_before,
-            crate::intel::mmio_read(dev, trans_psr_ctl_off),
-            crate::intel::mmio_read(dev, trans_psr2_ctl_off),
-            crate::intel::mmio_read(dev, trans_psr_status_off),
-            crate::intel::mmio_read(dev, trans_psr2_status_off)
-        );
+
+    // Skip PSR probe after the first two frames;
+    // PSR is always 0x00000000 on this display pipeline.
+    if seq <= 2 {
+        crate::intel::ggtt_invalidate(dev);
+
+        let psr_before = crate::intel::mmio_read(dev, trans_psr_ctl_off);
+        let psr2_before = crate::intel::mmio_read(dev, trans_psr2_ctl_off);
+        if PRIMARY_PRESENT_DISABLE_PSR_PROBE {
+            crate::intel::mmio_write(dev, trans_psr_ctl_off, 0);
+            crate::intel::mmio_write(dev, trans_psr2_ctl_off, 0);
+            crate::log!(
+                "intel/display: psr-probe reason={} pipe={} psr_ctl_before=0x{:08X} psr2_ctl_before=0x{:08X} psr_ctl_after=0x{:08X} psr2_ctl_after=0x{:08X} psr_status=0x{:08X} psr2_status=0x{:08X}\n",
+                reason,
+                surface.pipe.name,
+                psr_before,
+                psr2_before,
+                crate::intel::mmio_read(dev, trans_psr_ctl_off),
+                crate::intel::mmio_read(dev, trans_psr2_ctl_off),
+                crate::intel::mmio_read(dev, trans_psr_status_off),
+                crate::intel::mmio_read(dev, trans_psr2_status_off)
+            );
+        }
     }
+
+    // Fast path: if the plane is already active (seq > 1) and PLANE_SURF
+    // already points to our surface, skip MMIO writes and vblank waits.
+    // The display scanner is already reading from this address; new pixel
+    // data is visible as soon as the CPU cache flush completes.
+    if seq > 1 {
+        let surf_current = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
+        if surf_current == surface_reg {
+            if should_log_primary_present(seq) {
+                crate::log!(
+                    "intel/display: primary-flip seq={} reason={} pipe={} surf=0x{:08X} fast-skip\n",
+                    seq,
+                    reason,
+                    surface.pipe.name,
+                    surface_reg,
+                );
+            }
+            return true;
+        }
+        // Different surface address: write and wait one vblank.
+        crate::intel::mmio_write(dev, surface.pipe.plane_surf_off, surface_reg);
+        let (frame_before, frame_after, frame_iters) = wait_for_pipe_next_frame(dev, surface.pipe);
+        if should_log_primary_present(seq) {
+            crate::log!(
+                "intel/display: primary-flip seq={} reason={} pipe={} surf=0x{:08X}=>0x{:08X} frame={}=>{} frame_wait={}\n",
+                seq,
+                reason,
+                surface.pipe.name,
+                surf_current,
+                surface_reg,
+                frame_before,
+                frame_after,
+                frame_iters,
+            );
+        }
+        return true;
+    }
+
     let surf_before = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
     let surf_live_before = crate::intel::mmio_read(dev, surface.pipe.plane_surf_live_off);
     let cur_surflive_before = crate::intel::mmio_read(dev, cur_surflive_off);
@@ -819,7 +868,6 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
     );
     let surf_after = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
 
-    let seq = PRIMARY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if should_log_primary_present(seq) {
         crate::log!(
             "intel/display: primary-present seq={} reason={} pipe={} bytes=0x{:X} pipeconf=0x{:08X} ddi_func_ctl=0x{:08X} psr_ctl=0x{:08X} psr_status=0x{:08X} psr2_ctl=0x{:08X} psr2_status=0x{:08X} frame={}=>{} frame_wait={} cur_surflive_before=0x{:08X} cur_surflive_after=0x{:08X} surf_before=0x{:08X} surf_after=0x{:08X} surf_live_before=0x{:08X} surf_live_after=0x{:08X} iter={}\n",
