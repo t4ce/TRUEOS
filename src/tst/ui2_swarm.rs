@@ -696,9 +696,6 @@ pub async fn ui2_swarm_demo_task() {
     ) else {
         return;
     };
-    if !crate::r::ui2::minimize_window(surface.window_id()) {
-        crate::log!("ui2-swarm-demo: minimize failed window={}\n", surface.window_id());
-    }
 
     let mut selected_handle: Option<v::vnet::NetHandle> = None;
     let mut sketch_index = 0usize;
