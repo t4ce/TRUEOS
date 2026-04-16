@@ -139,7 +139,10 @@ async fn install_command_task(
         )
         .await
         {
-            Ok(()) => log("install: ok"),
+            Ok(()) => {
+                crate::r::fs::trueosfs::request_mount_root(disk);
+                log("install: ok");
+            }
             Err(e) => log(alloc::format!("install: failed ({:?})", e).as_str()),
         }
     }
