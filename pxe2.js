@@ -24,7 +24,20 @@ const { spawn, spawnSync } = require("child_process");
 const BOOTFILE = "EFI/BOOT/BOOTX64.EFI";
 const LEASES = "/tmp/trueos-pxe2.leases";
 const DEFAULT_HTTP_PORT = 8080;
-const HARDCODED_MEDIA_PATH = "tools/vid/demo_yelly.mp4";
+const HARDCODED_HTTP_ASSETS = [
+  {
+    kind: "video",
+    label: "demo-mp4",
+    filePath: "tools/vid/demo_yelly.mp4",
+    contentType: "video/mp4",
+  },
+  {
+    kind: "audio",
+    label: "demo-wav",
+    filePath: "tools/aud/demo.wav",
+    contentType: "audio/wav",
+  },
+];
  
 // (UEFI x86_64 client arch code is 7 per RFC 4578.)
 const UEFI_X86_64_ARCH = 7;
@@ -70,23 +83,33 @@ function parseArgs(argv) {
   return out;
 }
 
-function ensureMediaFile() {
-  const mediaFile = path.resolve(__dirname, HARDCODED_MEDIA_PATH);
-  if (!fs.existsSync(mediaFile)) {
-    process.stdout.write(`Warning: HTTP media file missing: ${mediaFile}\n`);
-    return false;
-  }
-  const stat = fs.statSync(mediaFile);
-  if (!stat.isFile()) {
-    process.stdout.write(`Warning: HTTP media path is not a file: ${mediaFile}\n`);
-    return false;
-  }
-  return true;
+function resolveHttpAssets() {
+  return HARDCODED_HTTP_ASSETS.map((asset) => ({
+    ...asset,
+    absPath: path.resolve(__dirname, asset.filePath),
+    urlPath: `/${asset.filePath}`,
+  }));
+}
+
+function ensureHttpAssets() {
+  const assets = resolveHttpAssets();
+  return assets.map((asset) => {
+    if (!fs.existsSync(asset.absPath)) {
+      process.stdout.write(`Warning: HTTP ${asset.kind} file missing: ${asset.absPath}\n`);
+      return { ...asset, ready: false };
+    }
+    const stat = fs.statSync(asset.absPath);
+    if (!stat.isFile()) {
+      process.stdout.write(`Warning: HTTP ${asset.kind} path is not a file: ${asset.absPath}\n`);
+      return { ...asset, ready: false };
+    }
+    return { ...asset, ready: true };
+  });
 }
 
 function startHttpServer({ httpPort, serverIp }) {
-  const mediaFile = path.resolve(__dirname, HARDCODED_MEDIA_PATH);
-  const mediaUrlPath = `/${HARDCODED_MEDIA_PATH}`;
+  const assets = resolveHttpAssets();
+  const assetByUrlPath = new Map(assets.map((asset) => [asset.urlPath, asset]));
   const server = http.createServer((req, res) => {
     const method = req.method || "GET";
     if (method !== "GET" && method !== "HEAD") {
@@ -97,21 +120,22 @@ function startHttpServer({ httpPort, serverIp }) {
 
     const target = req.url || "/";
     const requestPath = target.split("?")[0].split("#")[0];
-    if (requestPath !== mediaUrlPath) {
+    const asset = assetByUrlPath.get(requestPath);
+    if (!asset) {
       res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
       res.end("not found\n");
       return;
     }
 
-    fs.stat(mediaFile, (statErr, stat) => {
+    fs.stat(asset.absPath, (statErr, stat) => {
       if (statErr || !stat.isFile()) {
         res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(`missing media file: ${mediaFile}\n`);
+        res.end(`missing media file: ${asset.absPath}\n`);
         return;
       }
 
       res.writeHead(200, {
-        "Content-Type": "video/mp4",
+        "Content-Type": asset.contentType,
         "Content-Length": stat.size,
         "Cache-Control": "no-store",
       });
@@ -120,7 +144,7 @@ function startHttpServer({ httpPort, serverIp }) {
         return;
       }
 
-      const stream = fs.createReadStream(mediaFile);
+      const stream = fs.createReadStream(asset.absPath);
       stream.on("error", () => {
         if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
@@ -132,9 +156,11 @@ function startHttpServer({ httpPort, serverIp }) {
   });
 
   server.listen(httpPort, serverIp, () => {
-    process.stdout.write(
-      `HTTP media host file=${mediaFile} url=http://${serverIp}:${httpPort}${mediaUrlPath}\n`
-    );
+    for (const asset of assets) {
+      process.stdout.write(
+        `HTTP media host kind=${asset.kind} file=${asset.absPath} url=http://${serverIp}:${httpPort}${asset.urlPath}\n`
+      );
+    }
   });
   server.on("error", (err) => {
     die(`HTTP server failed: ${err.message}`);
@@ -303,9 +329,9 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
     const tftpRoot = opts.tftpRoot;
 
     ensureTftpFiles(tftpRoot);
-    let mediaFileReady = false;
+    let httpAssets = [];
     if (opts.enableHttp) {
-      mediaFileReady = ensureMediaFile();
+      httpAssets = ensureHttpAssets();
       if (!Number.isInteger(opts.httpPort) || opts.httpPort < 1 || opts.httpPort > 65535) {
         die(`Invalid --http-port: ${opts.httpPort}`);
       }
@@ -327,11 +353,11 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
       `TRUEOS PXE ProxyDHCP iface=${iface} ip=${serverIp}/${prefix} tftp=${tftpRoot} boot=${BOOTFILE}\n`
     );
     if (opts.enableHttp) {
-      const mediaFile = path.resolve(__dirname, HARDCODED_MEDIA_PATH);
-      const mediaUrlPath = `/${HARDCODED_MEDIA_PATH}`;
-      process.stdout.write(
-        `TRUEOS HTTP media host file=${mediaFile} media=http://${serverIp}:${opts.httpPort}${mediaUrlPath} ready=${mediaFileReady ? 1 : 0}\n`
-      );
+      for (const asset of httpAssets) {
+        process.stdout.write(
+          `TRUEOS HTTP media host kind=${asset.kind} file=${asset.absPath} media=http://${serverIp}:${opts.httpPort}${asset.urlPath} ready=${asset.ready ? 1 : 0}\n`
+        );
+      }
     }
 
     if (opts.verbose) {
@@ -352,11 +378,11 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
     if (opts.dryRun) {
       process.stdout.write("Dry-run: dnsmasq argv:\n" + args.map((a) => "  " + a).join("\n") + "\n");
       if (opts.enableHttp) {
-        const mediaFile = path.resolve(__dirname, HARDCODED_MEDIA_PATH);
-        const mediaUrlPath = `/${HARDCODED_MEDIA_PATH}`;
-        process.stdout.write(
-          `Dry-run: HTTP file=${mediaFile} url=http://${serverIp}:${opts.httpPort}${mediaUrlPath} ready=${mediaFileReady ? 1 : 0}\n`
-        );
+        for (const asset of httpAssets) {
+          process.stdout.write(
+            `Dry-run: HTTP kind=${asset.kind} file=${asset.absPath} url=http://${serverIp}:${opts.httpPort}${asset.urlPath} ready=${asset.ready ? 1 : 0}\n`
+          );
+        }
       }
       process.exit(0);
     }

@@ -282,10 +282,14 @@ impl Core {
                 let device = match self.backend.new_addressed_device(info).await {
                     Ok(device) => device,
                     Err(err) => {
+                        warn!(
+                            "crabusb/kcore: addr failed root_port={} port={} err={:?}, skipping",
+                            addr_info.root_port_id, addr_info.port_id, err
+                        );
                         if let Some(hub) = self.hubs.get_mut(id) {
                             hub.backend.rearm_port(addr_info.port_id);
                         }
-                        return Err(err);
+                        continue;
                     }
                 };
                 let device_id = device.id();

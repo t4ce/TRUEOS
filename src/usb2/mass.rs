@@ -59,8 +59,14 @@ pub(crate) fn pick_mass_target(
                     }
                 }
 
-                let (bulk_in_addr, bulk_in_mps) = bulk_in?;
-                let (bulk_out_addr, bulk_out_mps) = bulk_out?;
+                let (bulk_in_addr, bulk_in_mps) = match bulk_in {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let (bulk_out_addr, bulk_out_mps) = match bulk_out {
+                    Some(v) => v,
+                    None => continue,
+                };
 
                 let mut score = 10u32;
                 if alt.class == USB_CLASS_MASS_STORAGE {
@@ -98,11 +104,34 @@ pub(crate) fn pick_mass_target(
         }
     }
 
-    best.map(|(_, target)| target).filter(|target| {
+    let result = best.map(|(_, target)| target).filter(|target| {
         target.class == USB_CLASS_MASS_STORAGE
             && target.subclass == USB_SUBCLASS_SCSI
             && target.protocol == USB_PROTO_BULK_ONLY
-    })
+    });
+
+    // Log when we found mass storage interfaces but none matched BOT.
+    if result.is_none() {
+        for config in configs.iter() {
+            for interface in config.interfaces.iter() {
+                for alt in interface.alt_settings.iter() {
+                    if alt.class == USB_CLASS_MASS_STORAGE {
+                        crate::log!(
+                            "crabusb: mass pick skip if#{} alt={} class={:02X} sub={:02X} proto={:02X} eps={}\n",
+                            interface.interface_number,
+                            alt.alternate_setting,
+                            alt.class,
+                            alt.subclass,
+                            alt.protocol,
+                            alt.endpoints.len()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    result
 }
 
 #[derive(Clone, Debug)]
@@ -483,19 +512,27 @@ pub(crate) async fn bot_recovery(
         bulk_out_ep,
         bulk_in_ep
     );
-    device
-        .control_out(
-            ControlSetup {
-                request_type: RequestType::Class,
-                recipient: Recipient::Interface,
-                request: Request::Other(0xFF),
-                value: 0,
-                index: interface_number as u16,
-            },
-            &[],
-        )
-        .await
-        .map_err(|_| MassProbeError::Transport("bot-reset"))?;
+    match control_out_with_timeout(
+        device,
+        ControlSetup {
+            request_type: RequestType::Class,
+            recipient: Recipient::Interface,
+            request: Request::Other(0xFF),
+            value: 0,
+            index: interface_number as u16,
+        },
+        &[],
+        BOT_IO_TIMEOUT_MS,
+    )
+    .await
+    {
+        Some(Ok(_)) => {}
+        Some(Err(_)) => return Err(MassProbeError::Transport("bot-reset")),
+        None => {
+            crate::log!("crabusb: mass recovery if#{} bot-reset timeout\n", interface_number);
+            return Err(MassProbeError::Transport("bot-reset-timeout"));
+        }
+    }
 
     crate::log!(
         "crabusb: mass recovery if#{} step=clear-halt-out ep=0x{:02X}\n",

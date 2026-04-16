@@ -25,6 +25,39 @@ const HUB_DEBOUNCE_STABLE_MS: u64 = 100;
 const ROOT_PORT_BOOTSTRAP_SETTLE_MS: u64 = 150;
 const ROOT_PORT_ENABLE_WAIT_MS: u64 = 1500;
 const ROOT_PORT_ENABLE_CHECK_MS: u64 = 10;
+const WARM_RESET_SETTLE_MS: u64 = 100;
+const WARM_RESET_WAIT_MS: u64 = 1500;
+
+fn pls_name(pls: u8) -> &'static str {
+    match pls {
+        0 => "U0",
+        1 => "U1",
+        2 => "U2",
+        3 => "U3",
+        4 => "SS.Inactive",
+        5 => "Rx.Detect",
+        6 => "SS.Disabled",
+        7 => "Polling",
+        8 => "Recovery",
+        9 => "Hot Reset",
+        10 => "Compliance",
+        11 => "Test Mode",
+        15 => "Resume",
+        _ => "?",
+    }
+}
+
+fn speed_name(spd: u8) -> &'static str {
+    match spd {
+        0 => "-",
+        1 => "FS",
+        2 => "LS",
+        3 => "HS",
+        4 => "SS",
+        5 => "SS+",
+        _ => "?",
+    }
+}
 
 pub struct PortChangeWaker {
     ports: Arc<UnsafeCell<Vec<Port>>>,
@@ -173,14 +206,120 @@ impl HubOp for XhciRootHub {
                 }
 
                 let final_port = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                if final_port.current_connect_status() {
+                    info!(
+                        "xhci root-hub: port {} reset done enabled={} speed={}",
+                        port_id,
+                        final_port.port_enabled_disabled(),
+                        speed_name(final_port.port_speed())
+                    );
+                }
+            }
+
+            // ── port map ──────────────────────────────────────────
+            let total_ports = self.reg.port_register_set.len();
+            let mut idle_count: u16 = 0;
+            info!("xhci root-hub: port map ({} ports)", total_ports);
+            for idx in 0..total_ports {
+                let port_id = (idx + 1) as u8;
+                let p = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                let pls = p.port_link_state();
+                let ccs = p.current_connect_status();
+                let interesting = ccs || pls != 5; // anything besides empty Rx.Detect
+                if !interesting {
+                    idle_count += 1;
+                    continue;
+                }
                 info!(
-                    "crabusb/xhci/hub: bootstrap port={} connect={} enabled={} reset={} speed={}",
+                    "  port {:>2}  {}  pls={:<12} speed={:<3} ccs={} ped={} pp={}",
                     port_id,
-                    final_port.current_connect_status(),
-                    final_port.port_enabled_disabled(),
-                    final_port.port_reset(),
-                    final_port.port_speed()
+                    if port_id <= 16 { "usb2" } else { "usb3" },
+                    pls_name(pls),
+                    speed_name(p.port_speed()),
+                    ccs as u8,
+                    p.port_enabled_disabled() as u8,
+                    p.port_power() as u8,
                 );
+            }
+            if idle_count > 0 {
+                info!("  ({} ports idle in Rx.Detect)", idle_count);
+            }
+
+            // ── SS.Inactive recovery ──────────────────────────────
+            let mut kicked_ss = false;
+            for idx in 0..self.reg.port_register_set.len() {
+                let port_id = (idx + 1) as u8;
+                let status = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                if port_id >= 17
+                    && status.port_power()
+                    && !status.current_connect_status()
+                    && status.port_link_state() == 4
+                {
+                    info!(
+                        "xhci root-hub: port {} SS.Inactive → forcing Rx.Detect",
+                        port_id
+                    );
+                    self.update_portsc(port_id, |portsc| {
+                        portsc.set_port_link_state(5);
+                        portsc.set_port_link_state_write_strobe();
+                    });
+                    kicked_ss = true;
+                }
+            }
+            if kicked_ss {
+                self.kernel.delay(Duration::from_millis(500));
+                for idx in 0..total_ports {
+                    let port_id = (idx + 1) as u8;
+                    if port_id < 17 {
+                        continue;
+                    }
+                    let p = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                    if p.current_connect_status() || p.port_link_state() != 5 {
+                        info!(
+                            "  port {:>2}  usb3  pls={:<12} speed={:<3} ccs={} ped={} (after kick)",
+                            port_id,
+                            pls_name(p.port_link_state()),
+                            speed_name(p.port_speed()),
+                            p.current_connect_status() as u8,
+                            p.port_enabled_disabled() as u8,
+                        );
+                        if p.current_connect_status() && !p.port_enabled_disabled() {
+                            info!(
+                                "xhci root-hub: port {} SS link up, warm resetting",
+                                port_id
+                            );
+                            let _ = self.warm_reset_port(port_id).await;
+                        }
+                    }
+                }
+            }
+
+            // ── retry connected-but-not-enabled ───────────────────
+            for idx in 0..self.reg.port_register_set.len() {
+                let port_id = (idx + 1) as u8;
+                let status = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                if status.current_connect_status()
+                    && !status.port_enabled_disabled()
+                    && !status.port_reset()
+                {
+                    info!(
+                        "xhci root-hub: port {} connect not enabled speed={}, hot resetting",
+                        port_id,
+                        speed_name(status.port_speed())
+                    );
+                    let _ = self.reset_port(port_id, status.port_speed()).await;
+                    let after_hot = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                    if after_hot.current_connect_status()
+                        && !after_hot.port_enabled_disabled()
+                        && !after_hot.port_reset()
+                    {
+                        info!(
+                            "xhci root-hub: port {} hot reset failed, warm resetting",
+                            port_id
+                        );
+                        let _ = self.warm_reset_port(port_id).await;
+                    }
+                }
             }
 
             Ok(info)
@@ -267,6 +406,47 @@ impl XhciRootHub {
         Err(USBError::Timeout)
     }
 
+    /// Issue a USB 3.0 warm reset on a port whose SuperSpeed link failed to train.
+    /// xHCI spec 4.19.5.1: warm reset re-initialises the link from Rx.Detect.
+    async fn warm_reset_port(&mut self, port_id: u8) -> Result<bool, USBError> {
+        let idx = (port_id - 1) as usize;
+
+        self.update_portsc(port_id, |portsc| {
+            portsc.set_warm_port_reset();
+        });
+
+        self.kernel.delay(Duration::from_millis(WARM_RESET_SETTLE_MS));
+
+        let attempts = WARM_RESET_WAIT_MS / ROOT_PORT_ENABLE_CHECK_MS;
+        for _ in 0..attempts {
+            let port = self.reg.port_register_set.read_volatile_at(idx).portsc;
+            if !port.warm_port_reset() || port.warm_port_reset_change() {
+                // Clear change bits
+                self.update_portsc(port_id, |portsc| {
+                    if portsc.warm_port_reset_change() {
+                        portsc.clear_warm_port_reset_change();
+                    }
+                    if portsc.port_reset_change() {
+                        portsc.clear_port_reset_change();
+                    }
+                });
+                let final_port = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                let ok = final_port.current_connect_status() && final_port.port_enabled_disabled();
+                info!(
+                    "xhci root-hub: port {} warm reset {} speed={}",
+                    port_id,
+                    if ok { "ok" } else { "failed" },
+                    speed_name(final_port.port_speed())
+                );
+                return Ok(ok);
+            }
+            self.kernel.delay(Duration::from_millis(ROOT_PORT_ENABLE_CHECK_MS));
+        }
+
+        info!("xhci root-hub: port {} warm reset timeout", port_id);
+        Ok(false)
+    }
+
     async fn wait_for_port_enabled(&mut self, port_id: u8) -> Result<(), USBError> {
         let attempts = ROOT_PORT_ENABLE_WAIT_MS / ROOT_PORT_ENABLE_CHECK_MS;
         let idx = (port_id - 1) as usize;
@@ -290,19 +470,18 @@ impl XhciRootHub {
                 let idx = (port_id - 1) as usize;
                 let port = self.reg.port_register_set.read_volatile_at(idx).portsc;
                 info!(
-                    "crabusb/xhci/hub: port={} {} still settling connect={} enabled={} reset={} speed={}",
+                    "xhci root-hub: port {} {} still settling ccs={} ped={} speed={}",
                     port_id,
                     reason,
-                    port.current_connect_status(),
-                    port.port_enabled_disabled(),
-                    port.port_reset(),
-                    port.port_speed()
+                    port.current_connect_status() as u8,
+                    port.port_enabled_disabled() as u8,
+                    speed_name(port.port_speed())
                 );
                 false
             }
             Err(err) => {
                 info!(
-                    "crabusb/xhci/hub: port={} {} failed while waiting for enable: {:?}",
+                    "xhci root-hub: port {} {} wait-for-enable error: {:?}",
                     port_id, reason, err
                 );
                 false
@@ -438,22 +617,42 @@ impl XhciRootHub {
 
             if port.port_reset() {
                 info!(
-                    "crabusb/xhci/hub: uninit port={} still resetting connect={} enabled={} speed={}",
+                    "xhci root-hub: port {} uninit still resetting speed={}",
                     id,
-                    port.current_connect_status(),
-                    port.port_enabled_disabled(),
-                    port.port_speed()
+                    speed_name(port.port_speed())
                 );
                 continue;
             }
 
+            if port.current_connect_status() && !port.port_enabled_disabled() {
+                // Connected but not enabled — try hot reset first (works for USB 2.0),
+                // then warm reset (needed for USB 3.0 SS link recovery).
+                info!(
+                    "xhci root-hub: port {} connect not enabled speed={}, hot resetting",
+                    id,
+                    speed_name(port.port_speed())
+                );
+                let _ = self.reset_port(id, port.port_speed()).await;
+                let after_hot = self.reg.port_register_set.read_volatile_at(i).portsc;
+                if after_hot.current_connect_status()
+                    && !after_hot.port_enabled_disabled()
+                    && !after_hot.port_reset()
+                {
+                    info!(
+                        "xhci root-hub: port {} hot reset failed, warm resetting",
+                        id
+                    );
+                    let _ = self.warm_reset_port(id).await;
+                }
+            }
+
             if port.current_connect_status() || port.port_enabled_disabled() {
                 info!(
-                    "crabusb/xhci/hub: uninit port={} reset complete enable={} connect={} speed={}",
+                    "xhci root-hub: port {} uninit done ped={} ccs={} speed={}",
                     id,
-                    port.port_enabled_disabled(),
-                    port.current_connect_status(),
-                    port.port_speed()
+                    port.port_enabled_disabled() as u8,
+                    port.current_connect_status() as u8,
+                    speed_name(port.port_speed())
                 );
             }
 
@@ -478,11 +677,11 @@ impl XhciRootHub {
             let port_reg = self.reg.port_register_set.read_volatile_at(i);
             if port_reg.portsc.current_connect_status() || port_reg.portsc.port_enabled_disabled() {
                 info!(
-                    "crabusb/xhci/hub: reseted port={} connect={} enabled={} speed={}",
+                    "xhci root-hub: port {} reseted ccs={} ped={} speed={}",
                     id,
-                    port_reg.portsc.current_connect_status(),
-                    port_reg.portsc.port_enabled_disabled(),
-                    port_reg.portsc.port_speed()
+                    port_reg.portsc.current_connect_status() as u8,
+                    port_reg.portsc.port_enabled_disabled() as u8,
+                    speed_name(port_reg.portsc.port_speed())
                 );
             }
             if !port_reg.portsc.current_connect_status() || !port_reg.portsc.port_enabled_disabled()
@@ -492,7 +691,7 @@ impl XhciRootHub {
             let speed_raw = port_reg.portsc.port_speed();
             let speed = Speed::from_xhci_portsc(speed_raw);
             info!(
-                "crabusb/xhci/hub: reseted port={} emitting change speed={:?}",
+                "xhci root-hub: port {} emitting change speed={:?}",
                 id, speed
             );
             self.ports_mut()[i].state = PortState::Probed;

@@ -6,7 +6,7 @@ use core::ptr::NonNull;
 use core::time::Duration;
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use crab_usb::{Event, EventHandler, KernelOp, USBHost};
+use crab_usb::{Event, EventHandler, KernelOp, USBHost, usb_if};
 use dma_api::{DmaAddr, DmaDirection, DmaError, DmaHandle, DmaMapHandle, DmaOp};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -30,6 +30,17 @@ static EVENT_HANDLER: [Mutex<Option<EventHandler>>; MAX_XHCI_CONTROLLERS] =
 #[inline]
 fn usb_log_all_enabled() -> bool {
     crate::logflag::USB_LOG_ALL.load(Ordering::Relaxed)
+}
+
+fn speed_label(speed: usb_if::Speed) -> &'static str {
+    match speed {
+        usb_if::Speed::Low => "LS",
+        usb_if::Speed::Full => "FS",
+        usb_if::Speed::High => "HS",
+        usb_if::Speed::SuperSpeed => "SS",
+        usb_if::Speed::SuperSpeedPlus => "SS+",
+        _ => "?",
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -201,7 +212,9 @@ fn connected_ports_summary(controller_id: usize) -> String {
             if any {
                 let _ = out.write_str(",");
             }
-            let _ = write!(out, "{}", port.port_id);
+            let raw_speed = (port.portsc >> 10) & 0xF;
+            let spd = speed_label(usb_if::Speed::from_xhci_portsc(raw_speed as u8));
+            let _ = write!(out, "{}({})", port.port_id, spd);
             any = true;
         }
     }
@@ -252,7 +265,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
 
             if usb_log_all_enabled() {
                 crate::log!(
-                    "crabusb: dev ctrl={} root_port={} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} ifs={} eps={}\n",
+                    "crabusb: dev ctrl={} root_port={} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} speed={} ifs={} eps={}\n",
                     info.index,
                     topo.root_port_id,
                     desc.vendor_id,
@@ -260,6 +273,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
                     desc.class,
                     desc.subclass,
                     desc.protocol,
+                    speed_label(topo.port_speed),
                     if_count,
                     ep_count
                 );
@@ -269,6 +283,26 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
                     topo.root_port_id,
                     dev.configurations().len()
                 );
+
+                // Log all interfaces for mass-storage-class devices so we can
+                // tell whether BOT or UAS (or neither) is available.
+                for cfg in dev.configurations().iter() {
+                    for iface in cfg.interfaces.iter() {
+                        for alt in iface.alt_settings.iter() {
+                            if alt.class == 0x08 {
+                                crate::log!(
+                                    "crabusb:   if#{} alt={} class={:02X} sub={:02X} proto={:02X} eps={}\n",
+                                    iface.interface_number,
+                                    alt.alternate_setting,
+                                    alt.class,
+                                    alt.subclass,
+                                    alt.protocol,
+                                    alt.endpoints.len()
+                                );
+                            }
+                        }
+                    }
+                }
             }
 
             let controller_id = info.index as u32;
@@ -302,16 +336,6 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             {
                 bound_any = true;
             }
-            if super::hid::mediacontrol::maybe_start_media_control(
-                host,
-                dev,
-                spawner,
-                controller_id,
-            )
-            .await
-            {
-                bound_any = true;
-            }
             if let Some(device) = shared_led_device {
                 if super::hid::leds::maybe_start_led_controller_with_device(
                     device,
@@ -337,6 +361,21 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
                 bound_any = true;
             }
             if super::video::cam::maybe_start_camera(host, dev, spawner, controller_id).await {
+                bound_any = true;
+            }
+            let audio_started = super::sound::maybe_start_target_audio(host, dev, spawner).await;
+            if audio_started {
+                bound_any = true;
+            }
+            if !audio_started
+                && super::hid::mediacontrol::maybe_start_media_control(
+                    host,
+                    dev,
+                    spawner,
+                    controller_id,
+                )
+                .await
+            {
                 bound_any = true;
             }
             if super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id).await {

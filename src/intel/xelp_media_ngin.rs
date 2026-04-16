@@ -120,6 +120,11 @@ const CTX_DESC_PRIORITY_NORMAL: u32 = 1 << 9;
 const CTX_DESC_ADDRESSING_MODE_SHIFT: u32 = 3;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
+/// Enable ExecList submission mode (i915: GFX_RUN_LIST_ENABLE).  Without
+/// this the scheduler stays in legacy ring-buffer mode and never promotes
+/// pending SQ entries to active.  GuC firmware sets it during boot; GDRST
+/// clears it, so we must re-set it after every engine reset.
+const GFX_RUN_LIST_ENABLE: u32 = 1 << 15;
 const STOP_RING: u32 = 1 << 8;
 
 const MEDIA_PIPELINE_MFX: u32 = 2;
@@ -864,8 +869,9 @@ fn progressive_present_output_surface(
 ) -> (bool, u32, usize) {
     let (signature, nonzero_samples) = sample_surface_signature(output_surface);
 
-    // Y-tile: NV12 tiled surface = Y rows + UV rows, aligned to 32-row tiles
-    let total_height = (frame_height as usize) + ((frame_height as usize) + 1) / 2;
+    // Y-tile NV12: chroma starts at tile-row-aligned height (matches batch builder).
+    let chroma_y_aligned = ((frame_height as usize) + 31) & !31;
+    let total_height = chroma_y_aligned + ((frame_height as usize) + 1) / 2;
     let total_tile_rows = (total_height + 31) & !31;
     if frame_width != 0
         && frame_height != 0
@@ -1417,7 +1423,9 @@ fn build_h264_decode_batch_skeleton(
     let height_mbs = height.saturating_add(15) / 16;
     let frame_dims = width | (height << 16);
     let output_pitch = align_up_u32(width.max(128), 128); // Y-tile: 128-byte tile width
-    let chroma_y_offset = height;
+    // Y-tile NV12: chroma plane must start on a 32-row tile boundary so the
+    // HW doesn't share a physical tile row between Y bottom and UV top.
+    let chroma_y_offset = align_up_u32(height, 32);
     let stage_flags = (has_idr as u32) | (1 << 1);
 
     if !emit_store_dword(
@@ -1569,6 +1577,10 @@ fn build_h264_decode_batch_skeleton(
     batch[pipe_buf + 6] = MFX_MOCS_UC; // Post Deblocking Attributes
     // DW9: Original Uncompressed Picture Source Attributes
     batch[pipe_buf + 9] = MFX_MOCS_UC;
+    // DW10-11: Original Uncompressed Picture Source = output surface (for non-IDR, used as self-ref)
+    if !has_idr {
+        packet_write_addr64(batch, pipe_buf, 7, output_surface_gpu_addr);
+    }
     // DW12: Stream-Out Data Destination Attributes
     batch[pipe_buf + 12] = MFX_MOCS_UC;
     // DW13-14: Intra Row Store Scratch Buffer
@@ -1577,6 +1589,12 @@ fn build_h264_decode_batch_skeleton(
     // DW16-17: Deblocking Filter Row Store Scratch Buffer
     packet_write_addr64(batch, pipe_buf, 16, scratch_gpu_addr + 0x4000);
     batch[pipe_buf + 18] = MFX_MOCS_UC; // Deblocking Filter Row Store Attributes
+    // DW19-50: Reference Picture Frame Store addresses (16 refs × 2 DWords each)
+    //          For non-IDR frames, point ref 0 to the output surface (self-reference
+    //          into the previously decoded IDR).
+    if !has_idr {
+        packet_write_addr64(batch, pipe_buf, 19, output_surface_gpu_addr);
+    }
     // DW51: Reference Picture Attributes
     batch[pipe_buf + 51] = MFX_MOCS_UC;
     // DW54: MB Status Buffer Attributes
@@ -1626,8 +1644,11 @@ fn build_h264_decode_batch_skeleton(
     batch[bsp + 6] = MFX_MOCS_UC; // MPR Row Store Attributes
     batch[bsp + 9] = MFX_MOCS_UC; // Bitplane Read Buffer Attributes
 
-    // --- MFD_AVC_DPB_STATE (27 DWords, all zeros for IDR) ---
-    let _dpb = begin_batch_packet(
+    // --- MFD_AVC_DPB_STATE (27 DWords) ---
+    // For non-IDR frames, mark frame store 0 as a valid short-term reference
+    // pointing to the same output surface (self-reference).  For IDR frames
+    // the entire packet stays zeroed.
+    let dpb = begin_batch_packet(
         batch,
         &mut idx,
         (MFX_CMD_LEN_AVC_DPB_STATE + 2) as usize,
@@ -1638,6 +1659,11 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_AVC_DPB_STATE,
         ),
     )?;
+    if !has_idr {
+        // DW1: FrameStore_ID[0]=0, NonExisting[0]=0 (valid), InUse(LongTerm)[0]=0 (short-term)
+        // All other frame stores: NonExisting=1
+        batch[dpb + 1] = 0x0000_FFFE; // bits[15:1]=1 → frame stores 1..15 non-existing
+    }
 
     // --- MFD_AVC_PICID_STATE (10 DWords) ---
     let picid = begin_batch_packet(
@@ -1653,9 +1679,17 @@ fn build_h264_decode_batch_skeleton(
     )?;
     // DW1: PictureIDRemappingDisable = 0 (enable remapping)
     batch[picid + 1] = 0;
-    // DW2-9: 16 PictureIDs packed as 16-bit values, all 0xFFFF (no references)
-    for dw in 2..10 {
-        batch[picid + dw] = 0xFFFF_FFFF;
+    if has_idr {
+        // All PicIDs invalid (0xFFFF)
+        for dw in 2..10 {
+            batch[picid + dw] = 0xFFFF_FFFF;
+        }
+    } else {
+        // PicID[0] = 0 (valid), rest = 0xFFFF (invalid)
+        batch[picid + 2] = 0xFFFF_0000;
+        for dw in 3..10 {
+            batch[picid + dw] = 0xFFFF_FFFF;
+        }
     }
 
     // --- MFX_AVC_IMG_STATE (21 DWords) ---
@@ -1732,8 +1766,10 @@ fn build_h264_decode_batch_skeleton(
         }
     }
 
-    // --- MFX_AVC_DIRECTMODE_STATE (71 DWords, zeroed for IDR) ---
-    let _directmode = begin_batch_packet(
+    // --- MFX_AVC_DIRECTMODE_STATE (71 DWords) ---
+    // For non-IDR, set frame store 0's direct MV buffer to the scratch area
+    // so the MFX pipe has a valid address even if direct mode isn't used.
+    let directmode = begin_batch_packet(
         batch,
         &mut idx,
         (MFX_CMD_LEN_AVC_DIRECTMODE_STATE + 2) as usize,
@@ -1744,6 +1780,12 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_AVC_DIRECTMODE_STATE,
         ),
     )?;
+    if !has_idr {
+        // DW1-2: MV buffer for picture 0 (current)
+        packet_write_addr64(batch, directmode, 1, scratch_gpu_addr + 0xE000);
+        // DW35-36: MV buffer for reference frame store 0
+        packet_write_addr64(batch, directmode, 35, scratch_gpu_addr + 0xE000);
+    }
 
     // --- MFD_AVC_BSD_OBJECT (7 DWords) ---
     let avc_bsd = begin_batch_packet(
@@ -1833,7 +1875,9 @@ fn wake_media_engine_forcewake(dev: crate::intel::Dev, engine: MediaEngineDescri
 }
 
 const GDRST: usize = 0x0000_941C;
-const GRDOM_MEDIA_VCS0: u32 = 1 << 2;
+/// Gen11+ GDRST domain bits shifted vs Gen6-9.  BIT(2) is BLT on Gen11+;
+/// VCS0 (media decode) is GEN11_GRDOM_MEDIA = BIT(5).
+const GRDOM_MEDIA_VCS0: u32 = 1 << 5;
 const MODE_IDLE: u32 = 1 << 9;
 
 /// Gen12 HWSP CSB write pointer: dword 0x2F = byte offset 0xBC.
@@ -1868,18 +1912,39 @@ fn drain_csb(dev: crate::intel::Dev, engine: MediaEngineDescriptor, hwsp_virt: *
 }
 
 /// Seed HWSP and MMIO CSB pointers to the Gen12 reset state (both = 11).
-/// Must be called after zeroing the context and before the ELSP push.
+/// Follows the i915 reset_csb_pointers() pattern: full-mask MMIO write,
+/// posting read, clear CSB entry buffer, flush, repeat.
+const GEN12_HWSP_CSB_BUF0_OFFSET: usize = 0x40; // dword 0x10 = byte 0x40
+const GEN12_CSB_ENTRIES: usize = 12;
+
 fn init_csb_pointers(dev: crate::intel::Dev, ring_base: usize, hwsp_virt: *mut u8) {
+    let csb_init: u32 = 0xFFFF_0000 | (GEN12_CSB_RESET_VALUE << 8) | GEN12_CSB_RESET_VALUE;
+
+    // First MMIO write + posting read (i915 pattern).
+    super::mmio_write(dev, ring_base + 0x3A0, csb_init);
+    let _ = super::mmio_read(dev, ring_base + 0x3A0); // posting read
+
+    // Set SW-side HWSP write pointer to reset value.
     unsafe {
         core::ptr::write_volatile(
             hwsp_virt.add(GEN12_HWSP_CSB_WRITE_OFFSET) as *mut u32,
             GEN12_CSB_RESET_VALUE,
         );
     }
-    let csb_init = ((GEN11_CSB_READ_PTR_MASK | GEN11_CSB_WRITE_PTR_MASK) << 16)
-        | (GEN12_CSB_RESET_VALUE << 8)
-        | GEN12_CSB_RESET_VALUE;
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+
+    // Clear CSB entry buffer with -1 so HW writes are distinguishable.
+    unsafe {
+        let csb_buf = hwsp_virt.add(GEN12_HWSP_CSB_BUF0_OFFSET) as *mut u64;
+        for i in 0..GEN12_CSB_ENTRIES {
+            core::ptr::write_volatile(csb_buf.add(i), !0u64);
+        }
+    }
+    super::dma_flush(hwsp_virt, GEN12_HWSP_CSB_WRITE_OFFSET + 8);
+
+    // Second MMIO write + posting read (i915 does this twice for paranoia).
     super::mmio_write(dev, ring_base + 0x3A0, csb_init);
+    let _ = super::mmio_read(dev, ring_base + 0x3A0); // posting read
 }
 
 /// Wait for prior execution to retire and acknowledge pending CSB events.
@@ -1887,22 +1952,23 @@ fn init_csb_pointers(dev: crate::intel::Dev, ring_base: usize, hwsp_virt: *mut u
 fn reset_media_engine(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
-    context_virt: *mut u8,
+    _context_virt: *mut u8,
 ) {
     let ring_base = engine.ring_base;
 
-    // Normal path: ELSP goes idle, then we drain CSB so the scheduler can
-    // accept the next submission for the same logical context.
+    // Always do a hard engine reset (GDRST) so the ELSP scheduler's
+    // entire state machine — including the internal CSB write counter —
+    // is fully cleared.  A soft drain_csb alone leaves the scheduler in
+    // a state where it queues but never promotes subsequent contexts.
+    //
+    // Sequence: wait for engine idle → STOP_RING → MODE_IDLE → GDRST → clear STOP.
     for _ in 0..200_000u32 {
         let el = super::mmio_read(dev, ring_base + RING_EXECLIST_STATUS_LO);
         if (el >> 30) == 0 {
-            drain_csb(dev, engine, context_virt);
-            return;
+            break;
         }
         core::hint::spin_loop();
     }
-
-    // Fallback: STOP_RING → wait MODE_IDLE → GDRST → clear STOP_RING.
     super::mmio_write(dev, ring_base + RING_MI_MODE, STOP_RING | (STOP_RING << 16));
     for _ in 0..50_000u32 {
         if super::mmio_read(dev, ring_base + RING_MI_MODE) & MODE_IDLE != 0 {
@@ -1918,6 +1984,9 @@ fn reset_media_engine(
         core::hint::spin_loop();
     }
     super::mmio_write(dev, ring_base + RING_MI_MODE, STOP_RING << 16);
+    // After domain reset, invalidate GGTT TLB so the engine's page-walker
+    // cache doesn't serve stale translations for LRC/ring/batch addresses.
+    super::ggtt_invalidate(dev);
 }
 
 fn seed_media_ring_live_state(
@@ -1953,8 +2022,9 @@ fn submit_decode_bitstream_demo(
     sample_idx: u32,
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
     let output_pitch = align_up_u32((frame_width as u32).max(128), 128) as usize; // Y-tile: 128-byte tile width
-    // Y-tile: NV12 tiled surface = Y rows + UV rows, aligned to 32-row tiles
-    let total_height = (frame_height as usize) + ((frame_height as usize) + 1) / 2;
+    // Y-tile NV12: chroma starts at tile-row-aligned height (same as batch builder).
+    let chroma_y_aligned = ((frame_height as usize) + 31) & !31;
+    let total_height = chroma_y_aligned + ((frame_height as usize) + 1) / 2;
     let total_tile_rows = (total_height + 31) & !31;
     let output_bytes = output_pitch.checked_mul(total_tile_rows)?;
     let output_budget = backing
@@ -1976,23 +2046,26 @@ fn submit_decode_bitstream_demo(
     let ring_gpu_addr = windows.ring_gpu_addr;
     let context_gpu_addr = windows.context_gpu_addr;
 
-    // Keep the same logical context alive across frames; only force GDRST if
-    // the engine refuses to retire cleanly.
-    wake_media_engine_forcewake(dev, engine);
-    reset_media_engine(dev, engine, context_virt);
+    let cold_start = sample_idx == 0;
 
-    let is_first_frame = sample_idx == 0;
+    // Frame 0: full GDRST cold-start to bring the engine from unknown state.
+    // Frame 1+: hot resubmit — the engine is idle after drain_csb() from the
+    // previous frame, so we only need to update ring/batch/bitstream and push
+    // a new ELSP descriptor.
+    if cold_start {
+        wake_media_engine_forcewake(dev, engine);
+        reset_media_engine(dev, engine, context_virt);
+    }
+
     unsafe {
-        if is_first_frame {
-            core::ptr::write_bytes(ring_virt, 0, backing.ring_bytes);
+        core::ptr::write_bytes(ring_virt, 0, backing.ring_bytes);
+        if cold_start {
             core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
+            core::ptr::write_bytes(backing.output_surface_virt, 0, backing.output_surface_bytes);
         }
         core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
         core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
         core::ptr::write_bytes(backing.bitstream_virt, 0, backing.bitstream_bytes);
-        if is_first_frame {
-            core::ptr::write_bytes(backing.output_surface_virt, 0, backing.output_surface_bytes);
-        }
         core::ptr::copy_nonoverlapping(annex_b.as_ptr(), backing.bitstream_virt, annex_b.len());
     }
 
@@ -2048,12 +2121,11 @@ fn submit_decode_bitstream_demo(
         );
     }
 
-    // Keep one persistent LRCA/ring. Each frame appends one 32-byte packet and
-    // reloads the same context once the previous execution has retired.
+    // Always start ring at offset 0.
     let ring_tail_bytes = build_ring_batch_start_words(
         ring_virt,
         backing.ring_bytes,
-        (sample_idx as usize) * 32,
+        0,
         windows.result_gpu_addr,
         ring_prelaunch_marker,
         windows.batch_gpu_addr,
@@ -2062,7 +2134,8 @@ fn submit_decode_bitstream_demo(
     let ring_start = ring_gpu_addr as u32;
     let pphwsp_gpu = (context_gpu_addr & !0xFFF) as u32;
 
-    if is_first_frame {
+    if cold_start {
+        // Cold path: full LRC image + CSB pointer reset + RING_MODE enable.
         if !init_gen12_video_context_image(
             context_virt,
             backing.context_bytes,
@@ -2076,29 +2149,14 @@ fn submit_decode_bitstream_demo(
         ) {
             return None;
         }
-        init_csb_pointers(dev, engine.ring_base, context_virt);
-    }
-    let ctx_ctl_after = media_ctx_control_value(is_first_frame);
-    write_video_lrc_context_control(context_virt, backing.context_bytes, ctx_ctl_after);
-    if !is_first_frame {
-        let prev_tail = ((sample_idx as usize) * 32) as u32;
-        write_video_lrc_ring_head(context_virt, backing.context_bytes, prev_tail);
-    }
-    write_video_lrc_ring_tail(context_virt, backing.context_bytes, ring_tail_bytes as u32);
-
-    super::dma_flush(backing.bitstream_virt, annex_b.len());
-    super::dma_flush(backing.batch_virt, batch_tail_bytes);
-    super::dma_flush(ring_virt, ring_tail_bytes);
-    super::dma_flush(context_virt, backing.context_bytes);
-    super::dma_flush(backing.result_virt, backing.result_bytes);
-    super::dma_flush(backing.output_surface_virt, backing.output_surface_bytes);
-
-    if is_first_frame {
-        super::mmio_write(
-            dev,
-            engine.ring_base + RING_MODE_GEN7,
-            GEN11_GFX_DISABLE_LEGACY_MODE | (GEN11_GFX_DISABLE_LEGACY_MODE << 16),
-        );
+        {
+            let mode_bits = GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE;
+            super::mmio_write(
+                dev,
+                engine.ring_base + RING_MODE_GEN7,
+                mode_bits | (mode_bits << 16),
+            );
+        }
         seed_media_ring_live_state(
             dev,
             engine.ring_base,
@@ -2107,18 +2165,47 @@ fn submit_decode_bitstream_demo(
             ring_ctl,
             ring_tail_bytes as u32,
         );
+        init_csb_pointers(dev, engine.ring_base, context_virt);
+    } else {
+        // Hot path: engine idle after drain_csb(). Patch LRC with new ring
+        // pointers; FORCE_RESTORE in the descriptor will reload from LRC.
+        // Do NOT call init_csb_pointers (corrupts scheduler CSB tracking)
+        // or seed_media_ring_live_state (FORCE_RESTORE handles it).
+        write_video_lrc_ring_head(context_virt, backing.context_bytes, 0);
+        write_video_lrc_ring_tail(context_virt, backing.context_bytes, ring_tail_bytes as u32);
+        write_video_lrc_context_control(
+            context_virt,
+            backing.context_bytes,
+            media_ctx_control_value(false),
+        );
     }
-    super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl_after);
-    super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
-    super::mmio_write(dev, engine.ring_base + RING_HWS_PGA, pphwsp_gpu);
+
+    super::dma_flush(backing.bitstream_virt, annex_b.len());
+    super::dma_flush(backing.batch_virt, batch_tail_bytes);
+    super::dma_flush(ring_virt, ring_tail_bytes);
+    super::dma_flush(context_virt, backing.context_bytes);
+    super::dma_flush(backing.result_virt, backing.result_bytes);
+    super::dma_flush(backing.output_surface_virt, backing.output_surface_bytes);
+
+    if cold_start {
+        let ctx_ctl_after = media_ctx_control_value(true);
+        super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl_after);
+        super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
+        super::mmio_write(dev, engine.ring_base + RING_HWS_PGA, pphwsp_gpu);
+    }
+    // FORCE_RESTORE: forces the scheduler to reload LRC state from memory
+    // every submission, whether cold (GDRST cleared tracker) or hot (new ring pointers).
     let (ctx_desc_lo, ctx_desc_hi) =
-        build_media_execlist_context_descriptor(context_gpu_addr, engine, !is_first_frame);
-    if sample_idx < 2 {
+        build_media_execlist_context_descriptor(context_gpu_addr, engine, true);
+    if sample_idx < 3 {
         let lrc_ctl = read_video_lrc_slot(context_virt, backing.context_bytes, 3);
         let lrc_head = read_video_lrc_slot(context_virt, backing.context_bytes, 5);
         let lrc_tail = read_video_lrc_slot(context_virt, backing.context_bytes, 7);
+        let el_pre = super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO);
+        let mode_pre = super::mmio_read(dev, engine.ring_base + RING_MODE_GEN7);
+        let mi_mode_pre = super::mmio_read(dev, engine.ring_base + RING_MI_MODE);
         crate::log!(
-            "intel/media: lrc submit idx={} ctx_ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} ring_start=0x{:08X} desc_lo=0x{:08X} desc_hi=0x{:08X}\n",
+            "intel/media: lrc submit idx={} ctx_ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} ring_start=0x{:08X} desc_lo=0x{:08X} desc_hi=0x{:08X} el_pre=0x{:08X} mode=0x{:08X} mi_mode=0x{:08X}\n",
             sample_idx,
             lrc_ctl,
             lrc_head,
@@ -2126,6 +2213,9 @@ fn submit_decode_bitstream_demo(
             ring_start,
             ctx_desc_lo,
             ctx_desc_hi,
+            el_pre,
+            mode_pre,
+            mi_mode_pre,
         );
     }
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
@@ -2251,6 +2341,22 @@ fn submit_decode_bitstream_demo(
             el_status_lo,
             el_status_hi,
         );
+        // Dump CSB entries written by HW since our init (starting at slot 0).
+        // Each entry is 8 bytes (2 dwords) at HWSP offset 0x40.
+        super::dma_flush(context_virt, 0xC0);
+        let csb_buf = unsafe {
+            core::slice::from_raw_parts(
+                context_virt.add(GEN12_HWSP_CSB_BUF0_OFFSET) as *const u32,
+                GEN12_CSB_ENTRIES * 2,
+            )
+        };
+        for i in 0..4usize.min(GEN12_CSB_ENTRIES) {
+            let dw0 = csb_buf[i * 2];
+            let dw1 = csb_buf[i * 2 + 1];
+            if dw0 != 0xFFFF_FFFF || dw1 != 0xFFFF_FFFF {
+                crate::log!("intel/media: csb[{}] dw0=0x{:08X} dw1=0x{:08X}\n", i, dw0, dw1,);
+            }
+        }
     }
 
     Some((

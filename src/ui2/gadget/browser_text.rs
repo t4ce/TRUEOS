@@ -6,10 +6,24 @@ const UI2_BROWSER_GADGET_BG_RGBA: (u8, u8, u8, u8) = (0xFB, 0xFB, 0xF8, 0xFF);
 const UI2_BROWSER_BUTTON_PAD_X: f32 = 12.0;
 const UI2_BROWSER_BUTTON_PAD_Y: f32 = 6.0;
 const UI2_BROWSER_BUTTON_BORDER_PX: f32 = 1.0;
+const UI2_BROWSER_LINK_PAD_X: f32 = 10.0;
+const UI2_BROWSER_LINK_PAD_Y: f32 = 6.0;
+const UI2_BROWSER_LINK_BORDER_PX: f32 = 1.0;
 
 #[inline]
 fn ui2_browser_text_rgba(rgb: u32) -> (u8, u8, u8, u8) {
     (((rgb >> 16) & 0xFF) as u8, ((rgb >> 8) & 0xFF) as u8, (rgb & 0xFF) as u8, 0xFF)
+}
+
+#[inline]
+fn ui2_browser_panel_rgba(snapshot: &UiHostedBrowserSnapshot, alpha: u8) -> (u8, u8, u8, u8) {
+    let rgb = snapshot.gadget_snapshot.background_color_rgb;
+    let rgba = if rgb != 0 {
+        ui2_browser_text_rgba(rgb)
+    } else {
+        UI2_BROWSER_GADGET_BG_RGBA
+    };
+    modulate_rgba_alpha(rgba, alpha)
 }
 
 fn draw_browser_button_outline(rect: Ui2Rect, rgba: (u8, u8, u8, u8), view_w: u32, view_h: u32) {
@@ -55,6 +69,42 @@ fn draw_browser_button_outline(rect: Ui2Rect, rgba: (u8, u8, u8, u8), view_w: u3
     );
 }
 
+fn draw_browser_link_outline(rect: Ui2Rect, rgba: (u8, u8, u8, u8), view_w: u32, view_h: u32) {
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return;
+    }
+
+    let side_h = (rect.h * 0.5).max(UI2_BROWSER_LINK_BORDER_PX);
+    let side_y = rect.y + rect.h - side_h;
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        rect.x,
+        rect.y + rect.h - UI2_BROWSER_LINK_BORDER_PX,
+        rect.w,
+        UI2_BROWSER_LINK_BORDER_PX,
+        rgba,
+        view_w,
+        view_h,
+    );
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        rect.x,
+        side_y,
+        UI2_BROWSER_LINK_BORDER_PX,
+        side_h,
+        rgba,
+        view_w,
+        view_h,
+    );
+    let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+        rect.x + rect.w - UI2_BROWSER_LINK_BORDER_PX,
+        side_y,
+        UI2_BROWSER_LINK_BORDER_PX,
+        side_h,
+        rgba,
+        view_w,
+        view_h,
+    );
+}
+
 pub(crate) fn draw_hosted_browser_gadget_scene(
     state: &Ui2State,
     window: &Ui2Window,
@@ -66,7 +116,7 @@ pub(crate) fn draw_hosted_browser_gadget_scene(
     }
 
     let surface_state = browser_surface_state_for_window(window);
-    let panel_rgba = modulate_rgba_alpha(UI2_BROWSER_GADGET_BG_RGBA, window.alpha);
+    let panel_rgba = ui2_browser_panel_rgba(&window.hosted_browser_snapshot, window.alpha);
     let _ = crate::gfx::lyon::draw_solid_rect_no_present(
         content.x,
         content.y,
@@ -86,6 +136,7 @@ pub(crate) fn draw_hosted_browser_gadget_scene(
 
     for gadget in &snapshot.gadgets {
         let is_image = gadget.tex_id != 0;
+        let is_link = gadget.tag == "a";
         if gadget.text.is_empty() && !is_image {
             continue;
         }
@@ -178,11 +229,46 @@ pub(crate) fn draw_hosted_browser_gadget_scene(
             continue;
         }
 
+        if is_link {
+            let link_w = (gadget.width_px.max(text_metrics.width_px) as f32)
+                .max(text_metrics.width_px as f32 + (UI2_BROWSER_LINK_PAD_X * 2.0));
+            let link_h = (gadget.height_px.max(text_metrics.height_px) as f32)
+                .max(line_height_px + (UI2_BROWSER_LINK_PAD_Y * 2.0));
+            let link_rect = Ui2Rect::new(x, y, (visible_right - x).min(link_w).max(0.0), link_h);
+            if link_rect.w <= 0.0 || link_rect.y >= visible_bottom {
+                continue;
+            }
+
+            draw_browser_link_outline(link_rect, text_rgba, state.view_w, state.view_h);
+
+            let text_rect = Ui2Rect::new(
+                link_rect.x + UI2_BROWSER_LINK_PAD_X,
+                link_rect.y + UI2_BROWSER_LINK_PAD_Y,
+                (link_rect.w - (UI2_BROWSER_LINK_PAD_X * 2.0)).max(0.0),
+                (link_rect.h - (UI2_BROWSER_LINK_PAD_Y * 2.0)).max(line_height_px),
+            );
+            if text_rect.w <= 0.0 {
+                continue;
+            }
+
+            drew_any |= ui2_font_draw_text_line_in_rect_rgba_no_present(
+                gadget.text.as_str(),
+                text_rect,
+                font_px,
+                Ui2FontTextAlign::Left,
+                Ui2FontVerticalAlign::Center,
+                state.view_w,
+                state.view_h,
+                text_rgba,
+            );
+            continue;
+        }
+
         let text_rect = Ui2Rect::new(
             x,
             y,
             (visible_right - x)
-                .min(gadget.width_px.max(1) as f32)
+                .min(gadget.width_px.max(text_metrics.width_px).max(1) as f32)
                 .max(0.0),
             h.max(default_font_px),
         );

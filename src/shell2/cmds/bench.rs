@@ -794,6 +794,8 @@ async fn filebench_task(
 
         log("bench file: streaming write started");
 
+        const CHUNK_TIMEOUT_MS: u64 = 30_000;
+
         while written < FILEBENCH_TOTAL_BYTES {
             if bench_cancel_requested(session_id) {
                 cancelled = true;
@@ -802,11 +804,30 @@ async fn filebench_task(
             let remaining = (FILEBENCH_TOTAL_BYTES - written) as usize;
             let n = core::cmp::min(remaining, chunk.len());
 
-            if let Err(e) =
-                crate::r::fs::trueosfs::file_write_chunk_async(stream_handle, &chunk[..n]).await
+            let chunk_fut =
+                crate::r::fs::trueosfs::file_write_chunk_async(stream_handle, &chunk[..n]);
+            match embassy_time::with_timeout(
+                EmbassyDuration::from_millis(CHUNK_TIMEOUT_MS),
+                chunk_fut,
+            )
+            .await
             {
-                write_err = Some(e);
-                break;
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    log(format!("bench file: write error at offset {} ({:?})", written, e)
+                        .as_str());
+                    write_err = Some(e);
+                    break;
+                }
+                Err(_timeout) => {
+                    log(format!(
+                        "bench file: write timeout at offset {} ({}ms limit)",
+                        written, CHUNK_TIMEOUT_MS
+                    )
+                    .as_str());
+                    write_err = Some(crate::disc::block::Error::Timeout);
+                    break;
+                }
             }
             written = written.saturating_add(n as u64);
 
@@ -814,7 +835,7 @@ async fn filebench_task(
                 let elapsed_ms = elapsed_ms_since(start_tick);
                 let bps = bps_from_progress(written, elapsed_ms);
                 log(format!(
-                    "bench file: progress {}/{} speed={}/s elapsed={}ms",
+                    "bench file: progress {}/{} speed={} elapsed={}ms",
                     format_bytes(written),
                     format_bytes(FILEBENCH_TOTAL_BYTES),
                     format_speed(bps),
@@ -845,7 +866,7 @@ async fn filebench_task(
         let bps = bps_from_progress(written, elapsed_ms);
         if cancelled {
             log(format!(
-                "bench file: cancelled wrote={} speed={}/s elapsed={}ms",
+                "bench file: cancelled wrote={} speed={} elapsed={}ms",
                 format_bytes(written),
                 format_speed(bps),
                 elapsed_ms
@@ -855,7 +876,7 @@ async fn filebench_task(
             log(format!("bench file: write failed ({:?})", e).as_str());
         } else if finished_ok {
             log(format!(
-                "bench file: done wrote={} speed={}/s elapsed={}ms",
+                "bench file: done wrote={} speed={} elapsed={}ms",
                 format_bytes(written),
                 format_speed(bps),
                 elapsed_ms
@@ -1435,7 +1456,7 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
                 let elapsed_ms = elapsed_ms_since(start_tick);
                 let bps = bps_from_progress(received_bytes as u64, elapsed_ms);
                 log(format!(
-                    "bench net: progress {} speed={}/s elapsed={}ms",
+                    "bench net: progress {} speed={} elapsed={}ms",
                     format_bytes(received_bytes as u64),
                     format_speed(bps),
                     elapsed_ms
@@ -1455,7 +1476,7 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
         let bps = bps_from_progress(received_bytes as u64, elapsed_ms);
         if cancelled {
             log(format!(
-                "bench net: cancelled received={} speed={}/s elapsed={}ms",
+                "bench net: cancelled received={} speed={} elapsed={}ms",
                 format_bytes(received_bytes as u64),
                 format_speed(bps),
                 elapsed_ms
@@ -1463,7 +1484,7 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
             .as_str());
         } else {
             log(format!(
-                "bench net: done received={} speed={}/s elapsed={}ms",
+                "bench net: done received={} speed={} elapsed={}ms",
                 format_bytes(received_bytes as u64),
                 format_speed(bps),
                 elapsed_ms

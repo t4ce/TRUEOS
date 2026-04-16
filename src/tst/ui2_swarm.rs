@@ -36,9 +36,12 @@ const UI2_SWARM_ITEM_NEXT_SKETCH: u32 = 2;
 const UI2_SWARM_ITEM_UPLOAD: u32 = 3;
 const UI2_SWARM_TILE_ITEM_BASE: u32 = 1_000;
 const UI2_SWARM_TARGET_FILENAME: &str = "app.py";
-const UI2_SWARM_ICON_RESTART: &str = "⏹";
-const UI2_SWARM_ICON_NEXT: &str = "🔄";
-const UI2_SWARM_ICON_UPLOAD: &str = "🆙";
+const UI2_SWARM_BUTTON_W: usize = 64;
+const UI2_SWARM_BUTTON_H: usize = 28;
+const UI2_SWARM_BUTTON_GAP: usize = 8;
+const UI2_SWARM_LABEL_RESTART: &str = "rst";
+const UI2_SWARM_LABEL_NEXT: &str = "next";
+const UI2_SWARM_LABEL_UPLOAD: &str = "up";
 
 struct SketchSpec {
     source_name: &'static str,
@@ -201,7 +204,7 @@ fn button_rect(x: usize, y: usize, w: usize) -> Ui2Rect {
         x: x as f32,
         y: y as f32,
         w: w as f32,
-        h: 22.0,
+        h: UI2_SWARM_BUTTON_H as f32,
     }
 }
 
@@ -217,7 +220,9 @@ fn draw_button(
     let label_w = ui2::ui2_font_measure_text(UI2_SWARM_EMPH_FONT_TIER, label).width_px as usize;
     let label_x =
         rect.x.max(0.0) as usize + ((rect.w.max(0.0) as usize).saturating_sub(label_w) / 2);
-    let label_y = rect.y.max(0.0) as usize + 3;
+    let label_h = swarm_line_height(UI2_SWARM_EMPH_FONT_TIER);
+    let label_y =
+        rect.y.max(0.0) as usize + ((rect.h.max(0.0) as usize).saturating_sub(label_h) / 2);
     render_text_rgba(
         dst,
         dst_width,
@@ -418,21 +423,27 @@ fn render_scene(
         y = y.saturating_add(swarm_line_height(UI2_SWARM_BODY_FONT_TIER) + 1);
     }
 
-    let button_y = subtitle_y;
-    let button_w = 68usize;
-    let button_gap = 6usize;
-    let button_total_w = button_w * 3 + button_gap * 2;
+    let button_y = title_y;
+    let button_total_w = UI2_SWARM_BUTTON_W * 3 + UI2_SWARM_BUTTON_GAP * 2;
     let button_row_x = right_col_x + right_col_w.saturating_sub(button_total_w) / 2;
-    let restart_rect = button_rect(button_row_x, button_y, button_w);
-    let next_rect = button_rect(button_row_x + button_w + button_gap, button_y, button_w);
-    let upload_rect = button_rect(button_row_x + (button_w + button_gap) * 2, button_y, button_w);
+    let restart_rect = button_rect(button_row_x, button_y, UI2_SWARM_BUTTON_W);
+    let next_rect = button_rect(
+        button_row_x + UI2_SWARM_BUTTON_W + UI2_SWARM_BUTTON_GAP,
+        button_y,
+        UI2_SWARM_BUTTON_W,
+    );
+    let upload_rect = button_rect(
+        button_row_x + (UI2_SWARM_BUTTON_W + UI2_SWARM_BUTTON_GAP) * 2,
+        button_y,
+        UI2_SWARM_BUTTON_W,
+    );
     draw_button(
         pixels.as_mut_slice(),
         width,
         height,
         emph_atlases,
         restart_rect,
-        UI2_SWARM_ICON_RESTART,
+        UI2_SWARM_LABEL_RESTART,
         UI2_SWARM_ERROR_RGBA,
     );
     draw_button(
@@ -441,7 +452,7 @@ fn render_scene(
         height,
         emph_atlases,
         next_rect,
-        UI2_SWARM_ICON_NEXT,
+        UI2_SWARM_LABEL_NEXT,
         UI2_SWARM_WARN_RGBA,
     );
     draw_button(
@@ -450,7 +461,7 @@ fn render_scene(
         height,
         emph_atlases,
         upload_rect,
-        UI2_SWARM_ICON_UPLOAD,
+        UI2_SWARM_LABEL_UPLOAD,
         UI2_SWARM_OK_RGBA,
     );
 
@@ -461,6 +472,7 @@ fn render_scene(
         scene.sketch_name
     );
     let action_width = right_col_w;
+    let action_y = button_y + UI2_SWARM_BUTTON_H + 6;
     render_text_rgba(
         pixels.as_mut_slice(),
         width,
@@ -468,7 +480,7 @@ fn render_scene(
         body_atlases,
         UI2_SWARM_BODY_FONT_TIER,
         right_col_x,
-        button_y + 28,
+        action_y,
         elide_text_to_width(UI2_SWARM_BODY_FONT_TIER, action_width, sketch_text.as_str()).as_str(),
         UI2_SWARM_TEXT_RGBA,
     );
@@ -491,7 +503,7 @@ fn render_scene(
         body_atlases,
         UI2_SWARM_BODY_FONT_TIER,
         right_col_x,
-        button_y + 28 + body_h + 2,
+        action_y + body_h + 2,
         elide_text_to_width(UI2_SWARM_BODY_FONT_TIER, action_width, scene.action_text.as_str())
             .as_str(),
         action_color,
