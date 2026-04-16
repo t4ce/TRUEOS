@@ -347,13 +347,16 @@ impl Device {
         _lifecycle: &CommandLifecycle,
     ) -> Result {
         let lifecycle = self.lifecycle();
-        // USB 设备描述符的 bMaxPacketSize0 字段（偏移 7）
-        // 对于控制端点，这是直接的字节数值，不需要解码
-        let packet_size = if desc.max_packet_size_0 == 0 {
-            8u8
+        // USB 3.x: bMaxPacketSize0 is a power-of-2 exponent (e.g. 9 → 2^9 = 512).
+        // USB 2.0 and below: bMaxPacketSize0 is the literal byte count.
+        let is_ss = matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus);
+        let packet_size: u16 = if desc.max_packet_size_0 == 0 {
+            8
+        } else if is_ss && desc.max_packet_size_0 <= 15 {
+            1u16 << desc.max_packet_size_0
         } else {
-            desc.max_packet_size_0
-        } as u16;
+            desc.max_packet_size_0 as u16
+        };
 
         let current_packet_size = parse_default_max_packet_size_from_port_speed(info.port_speed);
 

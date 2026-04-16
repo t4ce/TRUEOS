@@ -50,7 +50,7 @@ pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
 const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const RENDER_BOOT_PROBE_LOOP_ENABLED: bool = false;
 const RENDER_BOOT_PROBE_INTERVAL_MS: u64 = 16;
-const MEDIA_BOOT_DEMO_ENABLED: bool = true;
+const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 
 static INIT: AtomicBool = AtomicBool::new(false);

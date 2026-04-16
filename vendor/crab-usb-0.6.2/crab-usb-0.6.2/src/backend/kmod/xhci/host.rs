@@ -420,8 +420,23 @@ impl Xhci {
         debug!("Extended capabilities: {:?}", caps.len());
 
         for cap in self.extended_capabilities() {
-            if let ExtendedCapability::UsbLegacySupport(usb_legacy_support) = cap {
-                self.legacy_init(usb_legacy_support).await?;
+            match cap {
+                ExtendedCapability::UsbLegacySupport(usb_legacy_support) => {
+                    self.legacy_init(usb_legacy_support).await?;
+                }
+                ExtendedCapability::XhciSupportedProtocol(proto) => {
+                    let h = proto.header.read_volatile();
+                    info!(
+                        "crabusb/xhci: supported_protocol usb{}.{} ports={}..{} (offset={} count={})",
+                        h.major_revision(),
+                        h.minor_revision(),
+                        h.compatible_port_offset(),
+                        h.compatible_port_offset().saturating_add(h.compatible_port_count()).saturating_sub(1),
+                        h.compatible_port_offset(),
+                        h.compatible_port_count()
+                    );
+                }
+                _ => {}
             }
         }
 

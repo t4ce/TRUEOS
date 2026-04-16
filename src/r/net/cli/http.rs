@@ -327,7 +327,8 @@ async fn request_http_body(
     let mut sent_request = false;
     let mut rx: Vec<u8> = Vec::new();
     let mut truncated = false;
-    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
+    let timeout_window = EmbassyDuration::from_millis(timeout_ms as u64);
+    let mut last_progress = Instant::now();
 
     loop {
         for _ in 0..32 {
@@ -336,6 +337,7 @@ async fn request_http_body(
                 api::Event::Opened { handle, kind } => {
                     if matches!(kind, api::SocketKind::Tcp) {
                         tcp_handle = Some(handle);
+                        last_progress = Instant::now();
                     }
                 }
                 api::Event::TcpEstablished { handle } => {
@@ -386,6 +388,7 @@ async fn request_http_body(
                             }
                             if send_ok {
                                 sent_request = true;
+                                last_progress = Instant::now();
                             } else {
                                 crate::log!(
                                     "http: request submit failed host={} handle={}\n",
@@ -401,6 +404,9 @@ async fn request_http_body(
                         continue;
                     }
                     let data = data.as_slice();
+                    if !data.is_empty() {
+                        last_progress = Instant::now();
+                    }
                     if rx.len() < max_rx {
                         let room = max_rx - rx.len();
                         let take = data.len().min(room);
@@ -460,6 +466,7 @@ async fn request_http_body(
                 }
                 api::Event::Closed { handle } => {
                     if tcp_handle == Some(handle) {
+                        last_progress = Instant::now();
                         let hdr_end = find_http_header_end(&rx);
                         let status = parse_http_status(&rx).unwrap_or(0);
                         if is_redirect_status(status) {
@@ -489,12 +496,12 @@ async fn request_http_body(
             }
         }
 
-        if Instant::now() >= deadline {
+        if Instant::now().saturating_duration_since(last_progress) >= timeout_window {
             if let Some(h) = tcp_handle {
                 let _ = net.submit(api::Command::Close { handle: h });
             }
             crate::log!(
-                "http: timeout host={} ip={}.{}.{}.{} port={} handle={} sent_request={} rx_bytes={} hdr_end={}\n",
+                "http: timeout host={} ip={}.{}.{}.{} port={} handle={} sent_request={} rx_bytes={} hdr_end={} idle_ms={}\n",
                 parsed.host,
                 ip[0],
                 ip[1],
@@ -505,6 +512,7 @@ async fn request_http_body(
                 sent_request as u8,
                 rx.len(),
                 find_http_header_end(&rx).is_some() as u8,
+                timeout_ms,
             );
             return Err(HttpFetchError::TimedOut);
         }

@@ -475,6 +475,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
             let result = async {
                 let mut cur_lba = lba;
                 let mut remaining = buf;
+                let mut chunk_idx = 0u32;
                 while !remaining.is_empty() {
                     let max_blocks = (current_mass_io_bytes(&rt, block_size) / block_size).max(1);
                     let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
@@ -482,6 +483,17 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                     let mut attempts = 0u8;
                     loop {
+                        if attempts > 0 || chunk_idx == 0 {
+                            crate::log!(
+                                "crabusb: mass {:04X}:{:04X} write-io lba={} blocks={} bytes={} attempt={}\n",
+                                rt.vendor_id,
+                                rt.product_id,
+                                cur_lba,
+                                blocks_here,
+                                bytes_here,
+                                attempts
+                            );
+                        }
                         let result = mass::write_blocks_bot(
                             &mut rt.bulk_out,
                             &mut rt.bulk_in,
@@ -534,6 +546,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                     remaining = &remaining[bytes_here..];
                     cur_lba = cur_lba.saturating_add(blocks_here as u64);
+                    chunk_idx = chunk_idx.wrapping_add(1);
                 }
                 Ok(())
             }

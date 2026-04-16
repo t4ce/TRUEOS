@@ -1301,37 +1301,39 @@ pub mod cabi {
             match req {
                 TextureWorkReq::Upload(req) => {
                     let rgba_len = req.rgba.len();
-                    match req.region {
-                        Some(region) => crate::log!(
-                            "gfx-cabi: texture-upload tex={} size={}x{} region={}x{}@{},{} rgba_len={} kind={} repaint={} window={}\n",
-                            req.tex_id,
-                            req.width,
-                            req.height,
-                            region.width,
-                            region.height,
-                            region.x,
-                            region.y,
-                            rgba_len,
-                            match req.sample_kind {
-                                TexSampleKind::Mask => "mask",
-                                TexSampleKind::Rgba => "rgba",
-                            },
-                            req.repaint_reason,
-                            req.repaint_window_id
-                        ),
-                        None => crate::log!(
-                            "gfx-cabi: texture-upload tex={} size={}x{} region=full rgba_len={} kind={} repaint={} window={}\n",
-                            req.tex_id,
-                            req.width,
-                            req.height,
-                            rgba_len,
-                            match req.sample_kind {
-                                TexSampleKind::Mask => "mask",
-                                TexSampleKind::Rgba => "rgba",
-                            },
-                            req.repaint_reason,
-                            req.repaint_window_id
-                        ),
+                    if crate::logflag::GFX_CABI_FRAME_DEBUG_LOGS {
+                        match req.region {
+                            Some(region) => crate::log!(
+                                "gfx-cabi: texture-upload tex={} size={}x{} region={}x{}@{},{} rgba_len={} kind={} repaint={} window={}\n",
+                                req.tex_id,
+                                req.width,
+                                req.height,
+                                region.width,
+                                region.height,
+                                region.x,
+                                region.y,
+                                rgba_len,
+                                match req.sample_kind {
+                                    TexSampleKind::Mask => "mask",
+                                    TexSampleKind::Rgba => "rgba",
+                                },
+                                req.repaint_reason,
+                                req.repaint_window_id
+                            ),
+                            None => crate::log!(
+                                "gfx-cabi: texture-upload tex={} size={}x{} region=full rgba_len={} kind={} repaint={} window={}\n",
+                                req.tex_id,
+                                req.width,
+                                req.height,
+                                rgba_len,
+                                match req.sample_kind {
+                                    TexSampleKind::Mask => "mask",
+                                    TexSampleKind::Rgba => "rgba",
+                                },
+                                req.repaint_reason,
+                                req.repaint_window_id
+                            ),
+                        }
                     }
                     let rc = upload_texture_rgba_inner_owned(
                         req.tex_id,

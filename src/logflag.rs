@@ -1,8 +1,8 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use spin::Once;
 
-pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = false;
-pub(crate) const HID_DEBUG_REPORT_LOGS: bool = true;
+pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = true;
+pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
@@ -16,14 +16,14 @@ pub(crate) const VNET_EXERCISE_LOGS: bool = false;
 pub(crate) const ESP_GATE_DEFAULT_UPLOAD_LOGS: bool = false;
 
 pub(crate) const R8125_VERBOSE_LOGS: bool = false;
-pub(crate) const BOOT_INFO_LOGS: bool = true;
+pub(crate) const BOOT_INFO_LOGS: bool = false;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
 pub(crate) const BROWSER_VM_DEBUG_LOGS: bool = false;
 pub(crate) const BROWSER_HTML_PREVIEW_LOGS: bool = false;
 pub(crate) const VHTTPS_VERBOSE: bool = false;
 pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = false;
-pub(crate) const INTEL_GFX_DEBUG_LOGFLAG: bool = true;
+pub(crate) const INTEL_GFX_DEBUG_LOGFLAG: bool = false;
 
 pub(crate) const VIRGL_DRAW_DIAGNOSTICS_LOGS: bool = false;
 pub(crate) static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
@@ -45,10 +45,10 @@ pub(crate) const INTEL_COPY_NGIN_LOGS: bool = true;
 
 pub(crate) const GFX_CABI_FRAME_DEBUG_LOGS: bool = false;
 pub(crate) static GFX_CABI_SUBMIT_BUDGET_LOGS: AtomicU32 = AtomicU32::new(0);
-pub(crate) static GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS: AtomicU32 = AtomicU32::new(1);
+pub(crate) static GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(true);
 
-pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
+pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(false);
 
 pub(crate) const NVME_VERBOSE: bool = false;
 
