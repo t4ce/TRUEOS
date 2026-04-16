@@ -201,7 +201,10 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         )
         .await
         {
-            Ok(()) => log("update: ok"),
+            Ok(()) => {
+                crate::r::fs::trueosfs::request_mount_root(disk);
+                log("update: ok");
+            }
             Err(e) => log(alloc::format!("update: failed ({:?})", e).as_str()),
         }
     }

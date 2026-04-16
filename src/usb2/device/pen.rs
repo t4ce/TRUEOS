@@ -17,7 +17,7 @@ const MAX_ACTIVE_STREAMS: usize = 8;
 const MASS_KEEPALIVE_MS: u64 = 2_000;
 const MASS_IO_RETRY_LIMIT: u8 = 8;
 const MASS_IO_RETRY_DELAY_MS: u64 = 25;
-const MASS_RUNTIME_WAIT_LIMIT: u8 = 20;
+const MASS_RUNTIME_WAIT_LIMIT: u16 = 500;
 const MASS_RUNTIME_WAIT_DELAY_MS: u64 = 10;
 const MIN_IO_BYTES: usize = 8 * 1024;
 const MAX_IO_BYTES: usize = 128 * 1024;
@@ -104,6 +104,13 @@ async fn take_runtime_wait(runtime_key: u64) -> Option<UsbMassRuntime> {
         }
         Timer::after(EmbassyDuration::from_millis(MASS_RUNTIME_WAIT_DELAY_MS)).await;
     }
+
+    crate::log!(
+        "crabusb: mass runtime wait timeout key=0x{:016X} waited_ms={}\n",
+        runtime_key,
+        (MASS_RUNTIME_WAIT_LIMIT as u64 + 1) * MASS_RUNTIME_WAIT_DELAY_MS
+    );
+
     None
 }
 

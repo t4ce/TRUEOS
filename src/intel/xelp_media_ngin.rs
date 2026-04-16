@@ -16,7 +16,8 @@ use super::xelp_media_mp4::{
 const MAX_MEDIA_ENGINES: usize = 4;
 const MAX_MEDIA_API_ROUTES: usize = 4;
 const MAX_MEDIA_RESULT_SLOTS: usize = 4;
-const MEDIA_PLAYBACK_PROBE_MAX_SAMPLES: u32 = 24;
+const MEDIA_PLAYBACK_PROBE_MAX_SAMPLES: u32 = u32::MAX;
+const MEDIA_PLAYBACK_LOG_INTERVAL: u32 = 30;
 const MEDIA_PLAYBACK_FRAME_DELAY_MS: u64 = 33;
 
 const FORCEWAKE_MEDIA_GEN11: usize = 0x0A184;
@@ -2048,19 +2049,16 @@ fn submit_decode_bitstream_demo(
 
     let cold_start = sample_idx == 0;
 
-    // Frame 0: full GDRST cold-start to bring the engine from unknown state.
-    // Frame 1+: hot resubmit — the engine is idle after drain_csb() from the
-    // previous frame, so we only need to update ring/batch/bitstream and push
-    // a new ELSP descriptor.
-    if cold_start {
-        wake_media_engine_forcewake(dev, engine);
-        reset_media_engine(dev, engine, context_virt);
-    }
+    // Full GDRST every frame — the Gen12 ELSP scheduler requires a domain
+    // reset between submissions; CSB pointer reset alone is not sufficient
+    // to make the scheduler accept new ELSP pushes.
+    wake_media_engine_forcewake(dev, engine);
+    reset_media_engine(dev, engine, context_virt);
 
     unsafe {
         core::ptr::write_bytes(ring_virt, 0, backing.ring_bytes);
+        core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
         if cold_start {
-            core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
             core::ptr::write_bytes(backing.output_surface_virt, 0, backing.output_surface_bytes);
         }
         core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
@@ -2134,51 +2132,32 @@ fn submit_decode_bitstream_demo(
     let ring_start = ring_gpu_addr as u32;
     let pphwsp_gpu = (context_gpu_addr & !0xFFF) as u32;
 
-    if cold_start {
-        // Cold path: full LRC image + CSB pointer reset + RING_MODE enable.
-        if !init_gen12_video_context_image(
-            context_virt,
-            backing.context_bytes,
-            engine.ring_base,
-            ring_start,
-            ring_tail_bytes as u32,
-            ring_ctl,
-            pphwsp_gpu,
-            backing.ppgtt_pml4_phys,
-            true,
-        ) {
-            return None;
-        }
-        {
-            let mode_bits = GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE;
-            super::mmio_write(
-                dev,
-                engine.ring_base + RING_MODE_GEN7,
-                mode_bits | (mode_bits << 16),
-            );
-        }
-        seed_media_ring_live_state(
-            dev,
-            engine.ring_base,
-            pphwsp_gpu,
-            ring_start,
-            ring_ctl,
-            ring_tail_bytes as u32,
-        );
-        init_csb_pointers(dev, engine.ring_base, context_virt);
-    } else {
-        // Hot path: engine idle after drain_csb(). Patch LRC with new ring
-        // pointers; FORCE_RESTORE in the descriptor will reload from LRC.
-        // Do NOT call init_csb_pointers (corrupts scheduler CSB tracking)
-        // or seed_media_ring_live_state (FORCE_RESTORE handles it).
-        write_video_lrc_ring_head(context_virt, backing.context_bytes, 0);
-        write_video_lrc_ring_tail(context_virt, backing.context_bytes, ring_tail_bytes as u32);
-        write_video_lrc_context_control(
-            context_virt,
-            backing.context_bytes,
-            media_ctx_control_value(false),
-        );
+    if !init_gen12_video_context_image(
+        context_virt,
+        backing.context_bytes,
+        engine.ring_base,
+        ring_start,
+        ring_tail_bytes as u32,
+        ring_ctl,
+        pphwsp_gpu,
+        backing.ppgtt_pml4_phys,
+        true,
+    ) {
+        return None;
     }
+    {
+        let mode_bits = GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE;
+        super::mmio_write(dev, engine.ring_base + RING_MODE_GEN7, mode_bits | (mode_bits << 16));
+    }
+    seed_media_ring_live_state(
+        dev,
+        engine.ring_base,
+        pphwsp_gpu,
+        ring_start,
+        ring_ctl,
+        ring_tail_bytes as u32,
+    );
+    init_csb_pointers(dev, engine.ring_base, context_virt);
 
     super::dma_flush(backing.bitstream_virt, annex_b.len());
     super::dma_flush(backing.batch_virt, batch_tail_bytes);
@@ -2187,7 +2166,7 @@ fn submit_decode_bitstream_demo(
     super::dma_flush(backing.result_virt, backing.result_bytes);
     super::dma_flush(backing.output_surface_virt, backing.output_surface_bytes);
 
-    if cold_start {
+    {
         let ctx_ctl_after = media_ctx_control_value(true);
         super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl_after);
         super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
@@ -2253,6 +2232,8 @@ fn submit_decode_bitstream_demo(
     super::dma_flush(backing.result_virt, backing.result_bytes);
 
     // Decisive: scan output surface for first nonzero dword, report engine post-state
+    let log_this_frame =
+        !completed || sample_idx == 0 || sample_idx % MEDIA_PLAYBACK_LOG_INTERVAL == 0;
     {
         let out_dwords = unsafe {
             core::slice::from_raw_parts(output_surface_virt as *const u32, output_bytes / 4)
@@ -2269,32 +2250,34 @@ fn submit_decode_bitstream_demo(
                 nz_count += 1;
             }
         }
-        let head_post = super::mmio_read(dev, engine.ring_base + RING_HEAD);
-        let tail_post = super::mmio_read(dev, engine.ring_base + RING_TAIL);
-        let acthd_post = super::mmio_read(dev, engine.ring_base + RING_ACTHD);
-        let fault_post = super::mmio_read(dev, GEN12_RING_FAULT_REG);
-        let el_post = super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO);
-        let csb_post = super::mmio_read(dev, engine.ring_base + 0x3A0);
-        // Read the HWSP CSB write pointer (Gen12: dword 0x2F / offset 0xBC)
-        super::dma_flush(context_virt, GEN12_HWSP_CSB_WRITE_OFFSET + 8);
-        let hwsp_csb_w = unsafe {
-            core::ptr::read_volatile(context_virt.add(GEN12_HWSP_CSB_WRITE_OFFSET) as *const u32)
-        };
-        crate::log!(
-            "intel/media: scanout completed={} iters={} nz_dwords={} first_nz_off=0x{:08X} first_nz_val=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} fault=0x{:08X} el=0x{:08X} csb=0x{:08X} hwsp_csb=0x{:08X}\n",
-            completed as u8,
-            iter,
-            nz_count,
-            first_nz_off,
-            first_nz_val,
-            head_post,
-            tail_post,
-            acthd_post,
-            fault_post,
-            el_post,
-            csb_post,
-            hwsp_csb_w,
-        );
+        if log_this_frame {
+            let head_post = super::mmio_read(dev, engine.ring_base + RING_HEAD);
+            let tail_post = super::mmio_read(dev, engine.ring_base + RING_TAIL);
+            let acthd_post = super::mmio_read(dev, engine.ring_base + RING_ACTHD);
+            let fault_post = super::mmio_read(dev, GEN12_RING_FAULT_REG);
+            let el_post = super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO);
+            let csb_post = super::mmio_read(dev, engine.ring_base + 0x3A0);
+            // Read the HWSP CSB write pointer (Gen12: dword 0x2F / offset 0xBC)
+            super::dma_flush(context_virt, GEN12_HWSP_CSB_WRITE_OFFSET + 8);
+            let hwsp_csb_w = unsafe {
+                core::ptr::read_volatile(context_virt.add(GEN12_HWSP_CSB_WRITE_OFFSET) as *const u32)
+            };
+            crate::log!(
+                "intel/media: scanout completed={} iters={} nz_dwords={} first_nz_off=0x{:08X} first_nz_val=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} fault=0x{:08X} el=0x{:08X} csb=0x{:08X} hwsp_csb=0x{:08X}\n",
+                completed as u8,
+                iter,
+                nz_count,
+                first_nz_off,
+                first_nz_val,
+                head_post,
+                tail_post,
+                acthd_post,
+                fault_post,
+                el_post,
+                csb_post,
+                hwsp_csb_w,
+            );
+        }
     }
 
     if !completed && sample_idx < 3 {
@@ -2782,19 +2765,24 @@ pub(crate) async fn run_https_media_demo_once_async() {
             playback_non_idr += 1;
         }
 
-        crate::log!(
-            "intel/media: playback probe index={} of={} bytes={} sample_nals={} idr={} frame_num={} nal_ref_idc={} nal_type={} slice_type={} first_nals={:?}\n",
-            sample_idx,
-            summary.sample_count,
-            sample_bytes.len(),
-            sample_nal_count,
-            sample_has_idr as u8,
-            vcl_info.map(|info| info.frame_num).unwrap_or(u32::MAX),
-            vcl_info.map(|info| info.nal_ref_idc).unwrap_or(0),
-            vcl_info.map(|info| info.nal_type).unwrap_or(0),
-            vcl_info.map(|info| info.slice_type).unwrap_or(u32::MAX),
-            sample_nals,
-        );
+        let is_log_frame = sample_idx == 0
+            || sample_idx + 1 == playback_probe_samples
+            || sample_idx % MEDIA_PLAYBACK_LOG_INTERVAL == 0;
+        if is_log_frame {
+            crate::log!(
+                "intel/media: playback probe index={} of={} bytes={} sample_nals={} idr={} frame_num={} nal_ref_idc={} nal_type={} slice_type={} first_nals={:?}\n",
+                sample_idx,
+                summary.sample_count,
+                sample_bytes.len(),
+                sample_nal_count,
+                sample_has_idr as u8,
+                vcl_info.map(|info| info.frame_num).unwrap_or(u32::MAX),
+                vcl_info.map(|info| info.nal_ref_idc).unwrap_or(0),
+                vcl_info.map(|info| info.nal_type).unwrap_or(0),
+                vcl_info.map(|info| info.slice_type).unwrap_or(u32::MAX),
+                sample_nals,
+            );
+        }
 
         let Some(demo) = decode_access_unit_demo(
             dev,
@@ -2829,23 +2817,22 @@ pub(crate) async fn run_https_media_demo_once_async() {
 
         if demo.present_ready {
             playback_presented += 1;
-            crate::log!(
-                "intel/media: playback frame ready index={} frame={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} submit_completed={} transport={:?}\n",
-                sample_idx,
-                demo.frame_width,
-                demo.frame_height,
-                demo.output_surface_pitch,
-                demo.bitstream_bytes,
-                demo.output_surface_signature,
-                demo.output_surface_nonzero_samples,
-                demo.submit_completed as u8,
-                preferred_transport(),
-            );
-            last_presented_demo = Some(demo);
-            if sample_idx + 1 < playback_probe_samples {
-                Timer::after(EmbassyDuration::from_millis(MEDIA_PLAYBACK_FRAME_DELAY_MS)).await;
+            if is_log_frame {
+                crate::log!(
+                    "intel/media: playback frame ready index={} frame={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} submit_completed={} transport={:?}\n",
+                    sample_idx,
+                    demo.frame_width,
+                    demo.frame_height,
+                    demo.output_surface_pitch,
+                    demo.bitstream_bytes,
+                    demo.output_surface_signature,
+                    demo.output_surface_nonzero_samples,
+                    demo.submit_completed as u8,
+                    preferred_transport(),
+                );
             }
-        } else {
+            last_presented_demo = Some(demo);
+        } else if is_log_frame {
             crate::log!(
                 "intel/media: playback frame rejected index={} frame={}x{} pitch=0x{:X} bitstream_bytes={} output_sig=0x{:08X} output_nonzero_samples={} present_ready={} submit_completed={}\n",
                 sample_idx,
@@ -2858,6 +2845,11 @@ pub(crate) async fn run_https_media_demo_once_async() {
                 demo.present_ready as u8,
                 demo.submit_completed as u8,
             );
+        }
+        // Yield to the async executor between frames so other tasks
+        // (network, display, heartbeat) are not starved.
+        if sample_idx + 1 < playback_probe_samples {
+            Timer::after(EmbassyDuration::from_millis(MEDIA_PLAYBACK_FRAME_DELAY_MS)).await;
         }
     }
 
