@@ -637,6 +637,8 @@ fn pop_command_for_device(device_index: usize) -> Option<(&'static str, NetComma
 }
 
 fn push_event(target: &'static str, event: NetEvent) -> bool {
+    static DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+
     let is_tcp_signal = matches!(
         event,
         NetEvent::TcpData { .. } | NetEvent::TcpEstablished { .. } | NetEvent::Closed { .. }
@@ -646,7 +648,10 @@ fn push_event(target: &'static str, event: NetEvent) -> bool {
     if let Some(entry) = guard.iter().find(|e| e.name == target) {
         let ok = entry.events.push(event).is_ok();
         if !ok && is_tcp_signal {
-            crate::log!("net: event drop owner={} (tcp-signal)\n", target);
+            let n = DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            if n <= 2 || n.is_power_of_two() {
+                crate::log!("net: event drop owner={} (tcp-signal) count={}\n", target, n);
+            }
         }
         ok
     } else {

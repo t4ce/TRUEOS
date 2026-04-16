@@ -23,7 +23,7 @@ pub type Queue<T> = adapter::NetQueue<T>;
 
 static VNET_SEQ: AtomicU32 = AtomicU32::new(1);
 const VNET_CMD_QUEUE_DEPTH: usize = 256;
-const VNET_EVENT_QUEUE_DEPTH_DEFAULT: usize = 256;
+const VNET_EVENT_QUEUE_DEPTH_DEFAULT: usize = 16384;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NetProfile {
