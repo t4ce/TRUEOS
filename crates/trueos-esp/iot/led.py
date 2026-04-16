@@ -6,7 +6,7 @@ from neopixel import NeoPixel  # type: ignore
 
 LED_COUNT = 256
 LED_PIN = 4
-BRIGHTNESS = 16
+BRIGHTNESS = 256
 USE_NEWF = True
 
 
