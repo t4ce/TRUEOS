@@ -9,7 +9,7 @@ use super::{LineSource, TranscriptEntry};
 
 pub(crate) const MATRIX_SLOT_ID_MAX: usize = 3;
 const DEFAULT_MATRIX_SLOT_LINE_CAP: usize = 512;
-const DEFAULT_MATRIX_SLOT_LINE_WIDTH: usize = 100;
+pub(crate) const DEFAULT_MATRIX_SLOT_LINE_WIDTH: usize = 180;
 const USER_INPUT_RECORD_CAP: usize = 256;
 const LIVE_USER_INPUT_CAP: usize = 10;
 

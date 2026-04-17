@@ -257,7 +257,7 @@ fn palatino_demo_spec() -> BucketDemoSpec {
                 .saturating_mul(ATHLAS_BUCKET_COUNT as u32),
         ),
         window_origin: palatino_window_origin(),
-        start_minimized: false,
+        start_minimized: true,
         ready_size_case: None,
     }
 }

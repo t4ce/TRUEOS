@@ -42,7 +42,6 @@ const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
 const STATUS_SESSION_RGB: (u8, u8, u8) = (0, 255, 192);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
-const DEFAULT_LINE_WIDTH: usize = 100;
 pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
 pub(crate) const OUTPUT_UI2_MASK: u8 = 1 << 2;
@@ -143,7 +142,7 @@ impl<'a> AlignedWriter<'a> {
     fn new(io: &'a dyn ShellIo2) -> Self {
         Self {
             io,
-            line_width: Cell::new(DEFAULT_LINE_WIDTH),
+            line_width: Cell::new(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH),
         }
     }
 

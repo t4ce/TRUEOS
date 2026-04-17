@@ -39,9 +39,13 @@ impl HidBootKind {
 fn should_skip_descriptor_logging(vendor_id: u16, product_id: u16, kind: HidBootKind) -> bool {
     // Narrow workaround for QEMU's simple emulated USB boot HID devices, which can
     // wedge on the optional HID descriptor dump path before the interrupt stream starts.
-    vendor_id == 0x0627
-        && product_id == 0x0001
-        && matches!(kind, HidBootKind::Mouse | HidBootKind::Keyboard)
+    let _ = kind;
+    vendor_id == 0x0627 && product_id == 0x0001
+}
+
+#[inline]
+fn should_skip_qemu_generic_tablet_probe(vendor_id: u16, product_id: u16, kind: HidBootKind) -> bool {
+    vendor_id == 0x0627 && product_id == 0x0001 && matches!(kind, HidBootKind::Tablet)
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -90,6 +94,10 @@ fn pick_hid_boot_targets(
                 let kind = match (alt.class, alt.subclass, alt.protocol) {
                     (0x03, 0x01, 0x01) => HidBootKind::Keyboard,
                     (0x03, 0x01, 0x02) => HidBootKind::Mouse,
+                    _ if super::tablet::matches_interface(alt.class, alt.subclass, alt.protocol) =>
+                    {
+                        HidBootKind::Tablet
+                    }
                     _ if super::eyetracker::matches_interface(
                         alt.class,
                         alt.subclass,
@@ -685,10 +693,10 @@ async fn hid_boot_stream_task(
                             sample,
                         ),
                         HidBootKind::Tablet => {
-                            super::tablet::handle_packet(
-                                vendor_id,
-                                product_id,
-                                target.in_endpoint,
+                            super::handle_tablet_boot_report(
+                                controller_id,
+                                slot_id,
+                                ep_target,
                                 sample,
                             );
                         }
@@ -741,7 +749,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             .count();
         if hid_iface_count != 0 {
             crate::log!(
-                "crabusb: hid {:04X}:{:04X} found {} HID interface(s) but no boot targets\n",
+                "crabusb: hid {:04X}:{:04X} found {} HID interface(s) but no stream targets\n",
                 vendor_id,
                 product_id,
                 hid_iface_count
@@ -761,6 +769,17 @@ pub(crate) async fn maybe_start_hid_boot_streams(
     let mut descriptors_pending = log_descriptors;
 
     for target in targets {
+        if should_skip_qemu_generic_tablet_probe(vendor_id, product_id, target.kind) {
+            crate::log!(
+                "crabusb: hid {:04X}:{:04X} skipping generic-tablet target on qemu if#{} ep=0x{:02X}\n",
+                vendor_id,
+                product_id,
+                target.interface_number,
+                target.in_endpoint
+            );
+            continue;
+        }
+
         let active_stream = ActiveHidStream {
             controller_id,
             stable_id,

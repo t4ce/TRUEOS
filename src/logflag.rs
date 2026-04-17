@@ -1,8 +1,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use spin::Once;
 
-pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = true;
-pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
+
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
@@ -48,7 +47,10 @@ pub(crate) static GFX_CABI_SUBMIT_BUDGET_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(true);
 
-pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(false);
+pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
+
+pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = true;
+pub(crate) const HID_DEBUG_REPORT_LOGS: bool = true;
 
 pub(crate) const NVME_VERBOSE: bool = false;
 

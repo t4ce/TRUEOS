@@ -157,7 +157,24 @@ impl HubOp for XhciRootHub {
         async {
             let mut info = info;
             info.speed = Speed::SuperSpeedPlus;
-            debug!("Resetting all ports of xHCI Root Hub");
+            let total_ports = self.reg.port_register_set.len();
+            let mut connected_ports = 0usize;
+            for idx in 0..total_ports {
+                if self
+                    .reg
+                    .port_register_set
+                    .read_volatile_at(idx)
+                    .portsc
+                    .current_connect_status()
+                {
+                    connected_ports += 1;
+                }
+            }
+            info!(
+                "xhci root-hub: bootstrap ports={} connected={} action=power+reset-connected",
+                total_ports,
+                connected_ports
+            );
 
             for idx in 0..self.reg.port_register_set.len() {
                 let port_id = (idx + 1) as u8;
@@ -217,7 +234,6 @@ impl HubOp for XhciRootHub {
             }
 
             // ── port map ──────────────────────────────────────────
-            let total_ports = self.reg.port_register_set.len();
             let mut idle_count: u16 = 0;
             info!("xhci root-hub: port map ({} ports)", total_ports);
             for idx in 0..total_ports {

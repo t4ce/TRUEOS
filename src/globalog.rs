@@ -53,9 +53,42 @@ impl log::Log for KernelLogFacade {
         let module_path = record.module_path().unwrap_or("");
         let target = record.target();
         let is_usb_vendor_log = module_path.contains("crab_usb") || target.contains("crab_usb");
-        if is_usb_vendor_log
-            && !crate::logflag::USB_LOG_ALL.load(core::sync::atomic::Ordering::Relaxed)
-        {
+        if is_usb_vendor_log {
+            let rendered = alloc::format!("{}", record.args());
+            let rendered = rendered.trim_end();
+            let is_transfer_trace = rendered.contains("[Transfer] >>");
+            let is_command_trace = rendered.contains("[CMD] >>");
+            let is_boring_completion = rendered.contains("crabusb/xhci/ep: completion")
+                && rendered.contains("code=Some(Success)")
+                && rendered.contains("residual=0");
+            let is_no_change_probe = rendered == "link!"
+                || rendered.contains("crabusb/kcore: _probe_devices begin")
+                || rendered.contains("crabusb/xhci/hub: changed_ports begin")
+                || rendered.contains("crabusb/xhci/hub: changed_ports end emitted=0")
+                || (rendered.contains("crabusb/kcore: hub Id")
+                    && rendered.contains("changed_ports=0"))
+                || rendered.contains("crabusb/kcore: _probe_devices end new_hub=false leaf_devices=0");
+            let is_redundant_enumeration = rendered.starts_with("assigned slot id:")
+                || rendered.starts_with("Slot ")
+                    && rendered.contains(" assigned")
+                || rendered.starts_with("Creating new context for slot ")
+                || rendered.starts_with("Input context bus address:")
+                || rendered.starts_with("Current configuration value:")
+                || rendered.starts_with("Setting device configuration to ")
+                || rendered.starts_with("Claiming interface ")
+                || rendered.starts_with("Interface ")
+                    && rendered.ends_with(" set successfully")
+                || rendered.starts_with("data: [")
+                || rendered.starts_with("Device Descriptor Base: ");
+            if is_transfer_trace
+                || is_command_trace
+                || is_boring_completion
+                || is_no_change_probe
+                || is_redundant_enumeration
+            {
+                return;
+            }
+            log(format_args!("crabusb: {}\n", rendered));
             return;
         }
         log(format_args!("crabusb: {}\n", record.args()));

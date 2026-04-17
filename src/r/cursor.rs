@@ -188,6 +188,18 @@ pub fn tablet_cursor_snapshot() -> Vec<(f64, f64), MAX_CURSOR_SNAPSHOTS> {
     out
 }
 
+pub fn tablet_cursor_snapshot_with_buttons() -> Vec<(f64, f64, u32), MAX_CURSOR_SNAPSHOTS> {
+    let guard = CURSOR_SNAPSHOTS.lock();
+    let mut out = Vec::new();
+    for snapshot in guard.iter() {
+        if snapshot.hid_kind != HID_KIND_TABLET {
+            continue;
+        }
+        let _ = out.push((snapshot.x, snapshot.y, snapshot.buttons_down));
+    }
+    out
+}
+
 pub fn ordered_cursor_snapshot() -> Vec<(f64, f64), MAX_CURSOR_SNAPSHOTS> {
     let guard = CURSOR_SNAPSHOTS.lock();
     let mut out = Vec::new();
