@@ -760,7 +760,12 @@ fn begin_move_drag_for_cursor(
         let view_w = (state.view_w as f32).max(1.0);
         let view_h = (state.view_h as f32).max(1.0);
         let restored = if window.restore_rect.w > 0.0 && window.restore_rect.h > 0.0 {
-            normalized_window_rect_for_view(state.view_w, state.view_h, window.restore_rect)
+            normalized_window_rect_for_window_for_view(
+                state.view_w,
+                state.view_h,
+                &window,
+                window.restore_rect,
+            )
         } else {
             Ui2Rect::new(0.0, 0.0, (view_w * 0.75).max(1.0), (view_h * 0.75).max(1.0))
         };
@@ -1201,26 +1206,26 @@ fn update_resize_drag_for_cursor(
     }
 
     let mut next = drag.start_rect;
-    let min_extent = ui2_window_min_extent();
+    let (min_w, min_h) = ui2_window_min_size(window);
     let dx = cursor_x - drag.start_cursor_x;
     let dy = cursor_y - drag.start_cursor_y;
     let right = drag.start_rect.x + drag.start_rect.w;
     let bottom = drag.start_rect.y + drag.start_rect.h;
 
     if (drag.edge_mask & UI2_WINDOW_RESIZE_LEFT) != 0 {
-        let max_x = right - min_extent;
+        let max_x = right - min_w;
         next.x = libm::fminf(drag.start_rect.x + dx, max_x);
-        next.w = (right - next.x).max(min_extent);
+        next.w = (right - next.x).max(min_w);
     } else if (drag.edge_mask & UI2_WINDOW_RESIZE_RIGHT) != 0 {
-        next.w = (drag.start_rect.w + dx).max(min_extent);
+        next.w = (drag.start_rect.w + dx).max(min_w);
     }
 
     if (drag.edge_mask & UI2_WINDOW_RESIZE_TOP) != 0 {
-        let max_y = bottom - min_extent;
+        let max_y = bottom - min_h;
         next.y = libm::fminf(drag.start_rect.y + dy, max_y);
-        next.h = (bottom - next.y).max(min_extent);
+        next.h = (bottom - next.y).max(min_h);
     } else if (drag.edge_mask & UI2_WINDOW_RESIZE_BOTTOM) != 0 {
-        next.h = (drag.start_rect.h + dy).max(min_extent);
+        next.h = (drag.start_rect.h + dy).max(min_h);
     }
 
     if drag.live_apply {

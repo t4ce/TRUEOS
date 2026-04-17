@@ -832,6 +832,31 @@ pub(crate) async fn maybe_start_mass_storage(
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
 
+    for cfg in dev_info.configurations().iter() {
+        for iface in cfg.interfaces.iter() {
+            for alt in iface.alt_settings.iter() {
+                if alt.class == 0x08
+                    && alt.subclass == 0x06
+                    && alt.protocol == 0x62
+                    && (alt.interface_number != target.interface_number
+                        || alt.alternate_setting != target.alternate_setting)
+                {
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} uas alt detected if#{} alt={} cfg={} but binding bot if#{} alt={} proto={:02X}\n",
+                        vendor_id,
+                        product_id,
+                        alt.interface_number,
+                        alt.alternate_setting,
+                        cfg.configuration_value,
+                        target.interface_number,
+                        target.alternate_setting,
+                        target.protocol,
+                    );
+                }
+            }
+        }
+    }
+
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
