@@ -261,6 +261,10 @@ fn ui2_font_blit_glyph_rgba(
     let Some(atlas) = ui2_font_cpu_atlas_for_glyph(atlases, glyph) else {
         return false;
     };
+    let is_color = glyph
+        .texture
+        .map(|t| t.tex_id == twemoji::TWEMOJI_TEX_ID)
+        .unwrap_or(false);
     let draw_rect = ui2_font_place_glyph_top_center(glyph, cell_rect);
     let glyph_w = glyph.region.src_w as usize;
     let glyph_h = glyph.region.src_h as usize;
@@ -282,26 +286,49 @@ fn ui2_font_blit_glyph_rgba(
             }
 
             let atlas_idx = ((src_y + row) * atlas_width + (src_x + col)) * 4;
-            let coverage = atlas.rgba.get(atlas_idx).copied().unwrap_or(0) as u16;
-            if coverage == 0 {
-                continue;
-            }
-
-            let dst_idx = (target_y * dst_width + target_x) * 4;
-            let alpha = (coverage * u16::from(fg_rgba[3])) / 255;
-            let inv_alpha = 255u16.saturating_sub(alpha);
-            dst[dst_idx] =
-                (((u16::from(fg_rgba[0]) * alpha) + (u16::from(dst[dst_idx]) * inv_alpha) + 127)
+            if is_color {
+                let sr = atlas.rgba.get(atlas_idx).copied().unwrap_or(0);
+                let sg = atlas.rgba.get(atlas_idx + 1).copied().unwrap_or(0);
+                let sb = atlas.rgba.get(atlas_idx + 2).copied().unwrap_or(0);
+                let sa = atlas.rgba.get(atlas_idx + 3).copied().unwrap_or(0);
+                if sa == 0 {
+                    continue;
+                }
+                let dst_idx = (target_y * dst_width + target_x) * 4;
+                let alpha = u16::from(sa);
+                let inv_alpha = 255u16.saturating_sub(alpha);
+                dst[dst_idx] =
+                    (((u16::from(sr) * alpha) + (u16::from(dst[dst_idx]) * inv_alpha) + 127) / 255)
+                        as u8;
+                dst[dst_idx + 1] =
+                    (((u16::from(sg) * alpha) + (u16::from(dst[dst_idx + 1]) * inv_alpha) + 127)
+                        / 255) as u8;
+                dst[dst_idx + 2] =
+                    (((u16::from(sb) * alpha) + (u16::from(dst[dst_idx + 2]) * inv_alpha) + 127)
+                        / 255) as u8;
+                dst[dst_idx + 3] = 0xFF;
+            } else {
+                let coverage = atlas.rgba.get(atlas_idx).copied().unwrap_or(0) as u16;
+                if coverage == 0 {
+                    continue;
+                }
+                let dst_idx = (target_y * dst_width + target_x) * 4;
+                let alpha = (coverage * u16::from(fg_rgba[3])) / 255;
+                let inv_alpha = 255u16.saturating_sub(alpha);
+                dst[dst_idx] = (((u16::from(fg_rgba[0]) * alpha)
+                    + (u16::from(dst[dst_idx]) * inv_alpha)
+                    + 127)
                     / 255) as u8;
-            dst[dst_idx + 1] = (((u16::from(fg_rgba[1]) * alpha)
-                + (u16::from(dst[dst_idx + 1]) * inv_alpha)
-                + 127)
-                / 255) as u8;
-            dst[dst_idx + 2] = (((u16::from(fg_rgba[2]) * alpha)
-                + (u16::from(dst[dst_idx + 2]) * inv_alpha)
-                + 127)
-                / 255) as u8;
-            dst[dst_idx + 3] = 0xFF;
+                dst[dst_idx + 1] = (((u16::from(fg_rgba[1]) * alpha)
+                    + (u16::from(dst[dst_idx + 1]) * inv_alpha)
+                    + 127)
+                    / 255) as u8;
+                dst[dst_idx + 2] = (((u16::from(fg_rgba[2]) * alpha)
+                    + (u16::from(dst[dst_idx + 2]) * inv_alpha)
+                    + 127)
+                    / 255) as u8;
+                dst[dst_idx + 3] = 0xFF;
+            }
         }
     }
 

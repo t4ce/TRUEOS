@@ -192,12 +192,7 @@ pub(super) fn normalized_window_rect(state: &Ui2State, rect: Ui2Rect) -> Ui2Rect
 pub(super) fn normalized_window_rect_for_view(view_w: u32, view_h: u32, rect: Ui2Rect) -> Ui2Rect {
     let max_w = (view_w as f32).max(1.0);
     let max_h = (view_h as f32).max(1.0);
-    Ui2Rect::new(
-        rect.x,
-        rect.y,
-        rect.w.max(1.0).min(max_w),
-        rect.h.max(1.0).min(max_h),
-    )
+    Ui2Rect::new(rect.x, rect.y, rect.w.max(1.0).min(max_w), rect.h.max(1.0).min(max_h))
 }
 
 pub(super) fn normalized_window_rect_for_window_for_view(

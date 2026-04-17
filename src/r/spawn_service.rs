@@ -153,6 +153,7 @@ define_started_flags!(
     UI2_SVG_DEMO_STARTED,
     UI2_USB_AUDIO_DEMO_STARTED,
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
+    UI2_WEATHER_DEMO_STARTED,
     GFX_INTEL_READINESS_PROBE_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
     CRABUSB_EVENT_PUMP_STARTED,
@@ -752,6 +753,12 @@ fn spawn_ui2_swarm_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_weather_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_weather_demo::ui2_weather_demo_task())
+    })
+}
+
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     let count = crate::usb2::pci_usb_controllers()
         .len()
@@ -1074,12 +1081,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
-    TaskSpec::enabled(
-        "ui2-bgrt-demo",
-        UI2_DEMO_READY,
-        &UI2_BGRT_DEMO_STARTED,
-        spawn_ui2_bgrt_demo,
-    ),
+    TaskSpec::enabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
     TaskSpec::disabled(
         "ui2-mandelbrot-demo",
         UI2_DEMO_READY,
@@ -1117,6 +1119,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_swarm_demo,
     ),
     TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
+    TaskSpec::enabled(
+        "ui2-weather-demo",
+        UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
+        &UI2_WEATHER_DEMO_STARTED,
+        spawn_ui2_weather_demo,
+    ),
     TaskSpec::disabled(
         "ui2-trueosfs-explorer-demo",
         UI2_DEMO_READY | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
