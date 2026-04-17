@@ -58,6 +58,16 @@ pub(crate) struct H264VclInfo {
     pub nal_ref_idc: u8,
     pub slice_type: u32,
     pub frame_num: u32,
+    pub first_mb_in_slice: u32,
+    pub pic_order_cnt_lsb: u32,
+    pub cabac_init_idc: u32,
+    pub slice_qp_delta: i32,
+    pub disable_deblocking_filter_idc: u32,
+    pub slice_alpha_c0_offset_div2: i32,
+    pub slice_beta_offset_div2: i32,
+    pub num_ref_idx_l0_active_minus1: u32,
+    pub num_ref_idx_l1_active_minus1: u32,
+    pub slice_header_bit_offset: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -746,6 +756,7 @@ pub(crate) fn parse_sample_vcl_info(
     sample: &[u8],
     nal_length_size: usize,
     sps: &ParsedSps,
+    pps: &ParsedPps,
 ) -> Option<H264VclInfo> {
     if !(1..=4).contains(&nal_length_size) {
         return None;
@@ -769,16 +780,170 @@ pub(crate) fn parse_sample_vcl_info(
         if nal_type == 1 || nal_type == 5 {
             let clean = remove_emulation_prevention(nal);
             let mut br = BitReader::new(clean.get(1..)?);
-            let _first_mb_in_slice = br.read_ue()?;
+            let first_mb_in_slice = br.read_ue()?;
             let slice_type = br.read_ue()?;
             let _pic_parameter_set_id = br.read_ue()?;
             let frame_num_bits = (sps.log2_max_frame_num_minus4 + 4).min(16) as u8;
             let frame_num = br.read_bits(frame_num_bits)?;
+            if !sps.frame_mbs_only_flag {
+                let _field_pic_flag = br.read_bit()?;
+            }
+            if nal_type == 5 {
+                let _idr_pic_id = br.read_ue()?;
+            }
+            let mut pic_order_cnt_lsb = 0u32;
+            if sps.pic_order_cnt_type == 0 {
+                let poc_bits = (sps.log2_max_pic_order_cnt_lsb_minus4 + 4).min(16) as u8;
+                pic_order_cnt_lsb = br.read_bits(poc_bits)?;
+                if pps.bottom_field_pic_order_in_frame_present_flag {
+                    let _delta = br.read_se()?;
+                }
+            }
+            if sps.pic_order_cnt_type == 1 && !sps.delta_pic_order_always_zero_flag {
+                let _d0 = br.read_se()?;
+                if pps.bottom_field_pic_order_in_frame_present_flag {
+                    let _d1 = br.read_se()?;
+                }
+            }
+            if pps.redundant_pic_cnt_present_flag {
+                let _redundant = br.read_ue()?;
+            }
+            let canonical = if slice_type >= 5 {
+                slice_type - 5
+            } else {
+                slice_type
+            };
+            if canonical == 1 {
+                let _direct_spatial = br.read_bit()?;
+            }
+            let mut num_ref_idx_l0_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
+            let mut num_ref_idx_l1_active_minus1 = pps.num_ref_idx_l1_default_active_minus1;
+            if canonical == 0 || canonical == 1 || canonical == 3 {
+                if br.read_bit()? != 0 {
+                    num_ref_idx_l0_active_minus1 = br.read_ue()?;
+                    if canonical == 1 {
+                        num_ref_idx_l1_active_minus1 = br.read_ue()?;
+                    }
+                }
+            }
+            // ref_pic_list_modification
+            if canonical != 2 && canonical != 4 {
+                if br.read_bit()? != 0 {
+                    loop {
+                        let op = br.read_ue()?;
+                        if op == 3 {
+                            break;
+                        }
+                        let _ = br.read_ue()?;
+                    }
+                }
+            }
+            if canonical == 1 {
+                if br.read_bit()? != 0 {
+                    loop {
+                        let op = br.read_ue()?;
+                        if op == 3 {
+                            break;
+                        }
+                        let _ = br.read_ue()?;
+                    }
+                }
+            }
+            // pred_weight_table
+            let need_wt = (pps.weighted_pred_flag && (canonical == 0 || canonical == 3))
+                || (pps.weighted_bipred_idc == 1 && canonical == 1);
+            if need_wt {
+                let _ = br.read_ue()?; // luma_log2_weight_denom
+                if sps.chroma_format_idc != 0 {
+                    let _ = br.read_ue()?;
+                }
+                for _ in 0..=num_ref_idx_l0_active_minus1 {
+                    if br.read_bit()? != 0 {
+                        let _ = br.read_se()?;
+                        let _ = br.read_se()?;
+                    }
+                    if sps.chroma_format_idc != 0 && br.read_bit()? != 0 {
+                        for _ in 0..2 {
+                            let _ = br.read_se()?;
+                            let _ = br.read_se()?;
+                        }
+                    }
+                }
+                if canonical == 1 {
+                    for _ in 0..=num_ref_idx_l1_active_minus1 {
+                        if br.read_bit()? != 0 {
+                            let _ = br.read_se()?;
+                            let _ = br.read_se()?;
+                        }
+                        if sps.chroma_format_idc != 0 && br.read_bit()? != 0 {
+                            for _ in 0..2 {
+                                let _ = br.read_se()?;
+                                let _ = br.read_se()?;
+                            }
+                        }
+                    }
+                }
+            }
+            // dec_ref_pic_marking
+            if nal_ref_idc != 0 {
+                if nal_type == 5 {
+                    let _ = br.read_bit()?;
+                    let _ = br.read_bit()?;
+                } else {
+                    if br.read_bit()? != 0 {
+                        loop {
+                            let op = br.read_ue()?;
+                            if op == 0 {
+                                break;
+                            }
+                            match op {
+                                1 | 2 | 4 | 6 => {
+                                    let _ = br.read_ue()?;
+                                }
+                                3 => {
+                                    let _ = br.read_ue()?;
+                                    let _ = br.read_ue()?;
+                                }
+                                5 => {}
+                                _ => break,
+                            }
+                        }
+                    }
+                }
+            }
+            let cabac_init_idc = if pps.entropy_coding_mode_flag && canonical != 2 && canonical != 4
+            {
+                br.read_ue().unwrap_or(0)
+            } else {
+                0
+            };
+            let slice_qp_delta = br.read_se().unwrap_or(0);
+            let mut disable_deblocking_filter_idc = 0u32;
+            let mut slice_alpha_c0_offset_div2 = 0i32;
+            let mut slice_beta_offset_div2 = 0i32;
+            if pps.deblocking_filter_control_present_flag {
+                disable_deblocking_filter_idc = br.read_ue().unwrap_or(0);
+                if disable_deblocking_filter_idc != 1 {
+                    slice_alpha_c0_offset_div2 = br.read_se().unwrap_or(0);
+                    slice_beta_offset_div2 = br.read_se().unwrap_or(0);
+                }
+            }
+            let slice_header_bit_offset = (br.byte_off as u32) * 8 + (br.bit_off as u32) + 8;
             return Some(H264VclInfo {
                 nal_type,
                 nal_ref_idc,
                 slice_type,
                 frame_num,
+                first_mb_in_slice,
+                pic_order_cnt_lsb,
+                cabac_init_idc,
+                slice_qp_delta,
+                disable_deblocking_filter_idc,
+                slice_alpha_c0_offset_div2,
+                slice_beta_offset_div2,
+                num_ref_idx_l0_active_minus1,
+                num_ref_idx_l1_active_minus1,
+                slice_header_bit_offset,
             });
         }
         off = off.saturating_add(nal_len);

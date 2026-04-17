@@ -426,7 +426,8 @@ pub fn remove_slot(controller_id: u32, slot_id: u32) -> bool {
 
     let mut idx = 0usize;
     while idx < guard.tablets.len() {
-        if guard.tablets[idx].controller_id == controller_id && guard.tablets[idx].slot_id == slot_id
+        if guard.tablets[idx].controller_id == controller_id
+            && guard.tablets[idx].slot_id == slot_id
         {
             let _ = guard.tablets.remove(idx);
             removed = true;

@@ -16,6 +16,8 @@ const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 const HID_DESC_FALLBACK_REPORT_LEN: u16 = 128;
 const LED_VID_JGINYUE: u16 = 0x0416;
 const LED_PID_JGINYUE: u16 = 0xA125;
+const MOUSE_VID_LAVIEW_CASTOR: u16 = 0x22D4;
+const MOUSE_PID_LAVIEW_CASTOR: u16 = 0x1321;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum HidBootKind {
@@ -46,18 +48,29 @@ fn should_skip_descriptor_logging(vendor_id: u16, product_id: u16, kind: HidBoot
 }
 
 #[inline]
-fn should_skip_qemu_generic_tablet_probe(vendor_id: u16, product_id: u16, kind: HidBootKind) -> bool {
-    vendor_id == 0x0627 && product_id == 0x0001 && matches!(kind, HidBootKind::Tablet)
-}
-
-#[inline]
-fn should_skip_known_led_tablet_probe(
+fn should_skip_qemu_generic_tablet_probe(
     vendor_id: u16,
     product_id: u16,
     kind: HidBootKind,
 ) -> bool {
+    vendor_id == 0x0627 && product_id == 0x0001 && matches!(kind, HidBootKind::Tablet)
+}
+
+#[inline]
+fn should_skip_known_led_tablet_probe(vendor_id: u16, product_id: u16, kind: HidBootKind) -> bool {
     vendor_id == LED_VID_JGINYUE
         && product_id == LED_PID_JGINYUE
+        && matches!(kind, HidBootKind::Tablet)
+}
+
+#[inline]
+fn should_skip_known_mouse_generic_hid_probe(
+    vendor_id: u16,
+    product_id: u16,
+    kind: HidBootKind,
+) -> bool {
+    vendor_id == MOUSE_VID_LAVIEW_CASTOR
+        && product_id == MOUSE_PID_LAVIEW_CASTOR
         && matches!(kind, HidBootKind::Tablet)
 }
 
@@ -107,7 +120,11 @@ fn pick_hid_boot_targets(
                 let kind = match (alt.class, alt.subclass, alt.protocol) {
                     (0x03, 0x01, 0x01) => HidBootKind::Keyboard,
                     (0x03, 0x01, 0x02) => HidBootKind::Mouse,
-                    _ if super::tablet::matches_interface(alt.class, alt.subclass, alt.protocol) =>
+                    _ if super::tablet::matches_interface(
+                        alt.class,
+                        alt.subclass,
+                        alt.protocol,
+                    ) =>
                     {
                         HidBootKind::Tablet
                     }
@@ -795,6 +812,16 @@ pub(crate) async fn maybe_start_hid_boot_streams(
         if should_skip_known_led_tablet_probe(vendor_id, product_id, target.kind) {
             crate::log!(
                 "crabusb: hid {:04X}:{:04X} skipping generic-tablet target on known LED controller if#{} ep=0x{:02X}\n",
+                vendor_id,
+                product_id,
+                target.interface_number,
+                target.in_endpoint
+            );
+            continue;
+        }
+        if should_skip_known_mouse_generic_hid_probe(vendor_id, product_id, target.kind) {
+            crate::log!(
+                "crabusb: hid {:04X}:{:04X} skipping generic-tablet target on known mouse supplemental HID if#{} ep=0x{:02X}\n",
                 vendor_id,
                 product_id,
                 target.interface_number,

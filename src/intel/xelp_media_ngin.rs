@@ -154,6 +154,12 @@ const MFX_QM_STATE: u32 = 7;
 const MFX_CMD_LEN_QM_STATE: u32 = 16;
 const MFX_AVC_DIRECTMODE_STATE: u32 = 2;
 const MFX_CMD_LEN_AVC_DIRECTMODE_STATE: u32 = 69;
+// MFX_AVC_SLICE_STATE: SubOpcodeA=0, SubOpcodeB=3, MediaCmdOpcode=1, length=11 (bias 2)
+const MFX_AVC_SLICE_STATE: u32 = 3;
+const MFX_CMD_LEN_AVC_SLICE_STATE: u32 = 9;
+// MFX_AVC_REF_IDX_STATE: SubOpcodeA=0, SubOpcodeB=4, MediaCmdOpcode=1, length=10 (bias 2)
+const MFX_AVC_REF_IDX_STATE: u32 = 4;
+const MFX_CMD_LEN_AVC_REF_IDX_STATE: u32 = 8;
 const QM_AVC_4X4_INTRA: u32 = 0;
 const QM_AVC_4X4_INTER: u32 = 1;
 const QM_AVC_8X8_INTRA: u32 = 2;
@@ -889,6 +895,7 @@ fn decode_and_present_frame(
     sps: &ParsedSps,
     pps: &ParsedPps,
     sample_idx: u32,
+    ref_surface_idx: u32,
 ) -> Option<MediaDecodeFrameState> {
     let kickoff_marker = marker_base(engine);
     let complete_marker = kickoff_marker + 3;
@@ -915,6 +922,7 @@ fn decode_and_present_frame(
         sps,
         pps,
         sample_idx,
+        ref_surface_idx,
     )?;
 
     let output_surface = unsafe {
@@ -1551,7 +1559,8 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_PIPE_BUF_ADDR_STATE,
         ),
     )?;
-    // DW3: Pre Deblocking Attributes (unused but needs valid MOCS)
+    // DW1-2: Pre Deblocking Destination = output surface
+    packet_write_addr64(batch, pipe_buf, 1, output_surface_gpu_addr);
     batch[pipe_buf + 3] = MFX_MOCS_UC;
     // DW4-5: Post Deblocking Destination = output surface
     packet_write_addr64(batch, pipe_buf, 4, output_surface_gpu_addr);
@@ -1727,7 +1736,7 @@ fn build_h264_decode_batch_skeleton(
         | ((sps.log2_max_frame_num_minus4 & 0xFF) << 16)
         | ((sps.log2_max_pic_order_cnt_lsb_minus4 & 0xFF) << 24);
     batch[avc_img + 15] = vcl_info
-        .map(|info| (info.frame_num & 0xFFFF) << 16)
+        .map(|info| (info.pic_order_cnt_lsb & 0xFFFF) | ((info.frame_num & 0xFFFF) << 16))
         .unwrap_or(0);
 
     // --- MFX_QM_STATE (flat quantization matrices) ---
@@ -1770,6 +1779,104 @@ fn build_h264_decode_batch_skeleton(
         packet_write_addr64(batch, directmode, 35, scratch_gpu_addr + 0x20000);
     }
 
+    // Derived slice-level parameters
+    let canonical_slice = vcl_info
+        .map(|i| {
+            if i.slice_type >= 5 {
+                i.slice_type - 5
+            } else {
+                i.slice_type
+            }
+        })
+        .unwrap_or(if has_idr { 2 } else { 0 });
+    let is_p_or_b = canonical_slice == 0 || canonical_slice == 1 || canonical_slice == 3;
+    let is_b = canonical_slice == 1;
+    let num_ref_l0 = vcl_info
+        .map(|i| i.num_ref_idx_l0_active_minus1)
+        .unwrap_or(pps.num_ref_idx_l0_default_active_minus1);
+    let num_ref_l1 = vcl_info
+        .map(|i| i.num_ref_idx_l1_active_minus1)
+        .unwrap_or(pps.num_ref_idx_l1_default_active_minus1);
+    let first_mb = vcl_info.map(|i| i.first_mb_in_slice).unwrap_or(0);
+    let cabac_init_idc = vcl_info.map(|i| i.cabac_init_idc).unwrap_or(0);
+    let slice_qp_delta = vcl_info.map(|i| i.slice_qp_delta).unwrap_or(0);
+    let disable_deblocking = vcl_info
+        .map(|i| i.disable_deblocking_filter_idc)
+        .unwrap_or(0);
+    let alpha_c0_offset = vcl_info.map(|i| i.slice_alpha_c0_offset_div2).unwrap_or(0);
+    let beta_offset = vcl_info.map(|i| i.slice_beta_offset_div2).unwrap_or(0);
+
+    // --- MFX_AVC_REF_IDX_STATE (L0) ---
+    if is_p_or_b && !has_idr {
+        let ri0 = begin_batch_packet(
+            batch,
+            &mut idx,
+            (MFX_CMD_LEN_AVC_REF_IDX_STATE + 2) as usize,
+            media_cmd_header(
+                MEDIA_CMD_OPCODE_MFX_AVC,
+                0,
+                MFX_AVC_REF_IDX_STATE,
+                MFX_CMD_LEN_AVC_REF_IDX_STATE,
+            ),
+        )?;
+        batch[ri0 + 1] = 0; // L0
+        batch[ri0 + 2] = 0xFFFF_FF00; // entry[0]=ref store 0, rest=0xFF
+        for dw in 3..=9 {
+            batch[ri0 + dw] = 0xFFFF_FFFF;
+        }
+    }
+    if is_b && !has_idr {
+        let ri1 = begin_batch_packet(
+            batch,
+            &mut idx,
+            (MFX_CMD_LEN_AVC_REF_IDX_STATE + 2) as usize,
+            media_cmd_header(
+                MEDIA_CMD_OPCODE_MFX_AVC,
+                0,
+                MFX_AVC_REF_IDX_STATE,
+                MFX_CMD_LEN_AVC_REF_IDX_STATE,
+            ),
+        )?;
+        batch[ri1 + 1] = 1; // L1
+        batch[ri1 + 2] = 0xFFFF_FF00;
+        for dw in 3..=9 {
+            batch[ri1 + dw] = 0xFFFF_FFFF;
+        }
+    }
+
+    // --- MFX_AVC_SLICE_STATE (11 DWords) ---
+    let avc_slice = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_SLICE_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC,
+            0,
+            MFX_AVC_SLICE_STATE,
+            MFX_CMD_LEN_AVC_SLICE_STATE,
+        ),
+    )?;
+    batch[avc_slice + 1] = (canonical_slice & 0xF)
+        | (if is_p_or_b {
+            ((num_ref_l0 + 1) & 0x3F) << 16
+        } else {
+            0
+        })
+        | (if is_b {
+            ((num_ref_l1 + 1) & 0x3F) << 24
+        } else {
+            0
+        });
+    batch[avc_slice + 2] = (1 << 2) // IsLastSlice
+        | ((disable_deblocking & 0xF) << 4)
+        | (if is_b { 1 << 8 } else { 0 }) // spatial direct prediction (B only)
+        | ((cabac_init_idc & 3) << 11);
+    let slice_qp = ((pps.pic_init_qp_minus26 + 26 + slice_qp_delta).clamp(0, 51)) as u32;
+    batch[avc_slice + 3] = slice_qp & 0x3F;
+    batch[avc_slice + 4] = ((alpha_c0_offset as u32) & 0xF) | (((beta_offset as u32) & 0xF) << 4);
+    batch[avc_slice + 6] = (2 & 0x1F) | (1 << 7) | ((5 & 0x1F) << 8); // RoundInter=2, RoundInterEnable, RoundIntra=5
+    batch[avc_slice + 9] = first_mb;
+
     // --- MFD_AVC_BSD_OBJECT (7 DWords) ---
     let avc_bsd = begin_batch_packet(
         batch,
@@ -1788,8 +1895,11 @@ fn build_h264_decode_batch_skeleton(
     batch[avc_bsd + 2] = (idr_nal_offset as u32) & 0x1FFF_FFFF;
     // DW3: InlineData DW0 — ConcealmentMethod=1(bit31), ISliceConcealmentMode
     batch[avc_bsd + 3] = 1 << 31;
-    // DW4: InlineData DW1 — LastSlice(3), EmulationPreventionBytePresent(4), FixPrevMBSkipped(7)
-    batch[avc_bsd + 4] = (1 << 3) | (1 << 4) | (1 << 7);
+    // DW4: InlineData DW1 — FirstMbBitOffset(2:0), LastSlice(3), EPBPresent(4), FixPrevMBSkipped(7)
+    let first_mb_bit_off = vcl_info
+        .map(|i| i.slice_header_bit_offset & 0x7)
+        .unwrap_or(0);
+    batch[avc_bsd + 4] = first_mb_bit_off | (1 << 3) | (1 << 4) | (1 << 7);
     // DW5: InlineData DW2 — IntraPredictionErrorControl(0), Intra8x84x4(1)
     batch[avc_bsd + 5] = 1 | (1 << 1);
 
@@ -2003,6 +2113,7 @@ fn submit_h264_frame(
     sps: &ParsedSps,
     pps: &ParsedPps,
     sample_idx: u32,
+    ref_surface_idx: u32,
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
     let output_pitch = align_up_u32((frame_width as u32).max(128), 128) as usize; // Y-tile: 128-byte tile width
     // Y-tile NV12: chroma starts at tile-row-aligned height (same as batch builder).
@@ -2020,10 +2131,10 @@ fn submit_h264_frame(
 
     let scratch_gpu_addr = windows.output_surface_gpu_addr;
     // Double-buffer: surface A at scratch_end, surface B at scratch_end + output_bytes.
-    // Even frames decode into A (ref B), odd frames decode into B (ref A).
+    // Reference frames toggle A/B; non-reference frames decode into the non-ref surface.
     let surface_a_offset = MEDIA_SCRATCH_OFFSET_BYTES;
     let surface_b_offset = MEDIA_SCRATCH_OFFSET_BYTES + output_bytes;
-    let (cur_offset, ref_offset) = if sample_idx % 2 == 0 {
+    let (cur_offset, ref_offset) = if ref_surface_idx % 2 == 0 {
         (surface_a_offset, surface_b_offset)
     } else {
         (surface_b_offset, surface_a_offset)
@@ -2051,16 +2162,22 @@ fn submit_h264_frame(
         core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
         if cold_start {
             core::ptr::write_bytes(backing.output_surface_virt, 0, backing.output_surface_bytes);
-            // Fill UV chroma tile region with neutral 128 for BOTH output surfaces
-            // so unwritten UV bytes render black instead of bright green.
+        }
+        // Fill UV chroma tile region with neutral 128 for the current output surface
+        // every frame so any UV tiles not fully written by the decoder remain
+        // neutral gray instead of showing stale pink/green from prior frames.
+        {
             let tiles_per_row = output_pitch / 128;
             let uv_tile_start = (chroma_y_aligned / 32) * tiles_per_row * 4096;
             let uv_fill_len = output_bytes.saturating_sub(uv_tile_start);
-            for &surf_off in &[surface_a_offset, surface_b_offset] {
-                let surf_ptr = backing.output_surface_virt.add(surf_off);
-                if uv_tile_start < output_bytes {
-                    core::ptr::write_bytes(surf_ptr.add(uv_tile_start), 0x80, uv_fill_len);
-                }
+            let surf_ptr = backing.output_surface_virt.add(cur_offset);
+            if uv_tile_start < output_bytes {
+                core::ptr::write_bytes(surf_ptr.add(uv_tile_start), 0x80, uv_fill_len);
+            }
+            if cold_start {
+                // Also fill the reference surface on first frame.
+                let ref_ptr = backing.output_surface_virt.add(ref_offset);
+                core::ptr::write_bytes(ref_ptr.add(uv_tile_start), 0x80, uv_fill_len);
             }
         }
         core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
@@ -2552,10 +2669,7 @@ async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
             }
         }
     } else {
-        crate::log!(
-            "intel/media: fs cache disabled path={}\n",
-            MEDIA_DECODE_CACHE_PATH
-        );
+        crate::log!("intel/media: fs cache disabled path={}\n", MEDIA_DECODE_CACHE_PATH);
     }
 
     for url in MEDIA_HTTP_LOCAL_DEMO_URLS {
@@ -2576,8 +2690,12 @@ async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
                 if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
                     // Persist to disk for next boot (best-effort, don't block on failure).
                     if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-                        match persist_media_cache_async(disk, MEDIA_DECODE_CACHE_PATH, body.as_slice())
-                            .await
+                        match persist_media_cache_async(
+                            disk,
+                            MEDIA_DECODE_CACHE_PATH,
+                            body.as_slice(),
+                        )
+                        .await
                         {
                             Ok(true) => {
                                 crate::log!(
@@ -2658,8 +2776,8 @@ async fn persist_media_cache_async(
         info.label.as_deref().unwrap_or("-"),
     );
 
-    let Some(handle) = crate::r::fs::trueosfs::file_write_begin_async(disk, path, bytes.len() as u64)
-        .await?
+    let Some(handle) =
+        crate::r::fs::trueosfs::file_write_begin_async(disk, path, bytes.len() as u64).await?
     else {
         return Ok(false);
     };
@@ -2869,6 +2987,7 @@ pub(crate) async fn run_media_decode_async() {
     let mut playback_non_idr = 0u32;
     let mut last_attempted_demo = None;
     let mut last_presented_demo = None;
+    let mut ref_surface_idx: u32 = 0;
 
     for sample_idx in 0..playback_probe_samples {
         let sample = if sample_idx == 0 {
@@ -2886,7 +3005,7 @@ pub(crate) async fn run_media_decode_async() {
         };
 
         let sample_nals = first_sample_nal_types(sample, summary.avcc.nal_length_size, 6);
-        let vcl_info = parse_sample_vcl_info(sample, summary.avcc.nal_length_size, &sps);
+        let vcl_info = parse_sample_vcl_info(sample, summary.avcc.nal_length_size, &sps, &pps);
         let built_sample_annex_b = if sample_idx == 0 {
             None
         } else {
@@ -2965,6 +3084,7 @@ pub(crate) async fn run_media_decode_async() {
             &sps,
             &pps,
             sample_idx,
+            ref_surface_idx,
         ) else {
             crate::log!(
                 "intel/media: playback submit unavailable index={} engine={}\n",
@@ -2975,6 +3095,16 @@ pub(crate) async fn run_media_decode_async() {
         };
 
         last_attempted_demo = Some(demo);
+
+        // Only advance the reference surface toggle for reference frames.
+        // Non-reference B-frames decode into a scratch surface and must NOT
+        // overwrite the previous reference that the next P-frame needs.
+        let is_reference = vcl_info
+            .map(|i| i.nal_ref_idc != 0)
+            .unwrap_or(sample_has_idr);
+        if is_reference {
+            ref_surface_idx = ref_surface_idx.wrapping_add(1);
+        }
 
         if demo.submit_completed {
             playback_completed += 1;

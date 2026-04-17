@@ -19,21 +19,23 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 const NETBENCH_URL: &str = "http://ipv4.download.thinkbroadband.com/5GB.zip";
 const INTERNAL_NETBENCH_DEFAULT_FLOWS: usize = 2;
 const INTERNAL_NETBENCH_MAX_FLOWS: usize = 4;
-const FILEBENCH_PATH: &str = "bench-lorem-100mb.txt";
-const FILEBENCH_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
-const FILEBENCH_PATTERN: &[u8] = b"10101010";
 const CPUBENCH_PHASE_MS: u64 = 10_000;
 const CPUBENCH_STOP_GRACE_MS: u64 = 2_000;
 const PROGRESS_LOG_MS: u64 = 3000;
+const DISC_BENCH_INITIAL_BLOCKS: usize = 1;
+const DISC_BENCH_MAX_BLOCKS: usize = 512;
+const DISC_BENCH_READS_PER_STEP: usize = 4;
+const DISC_BENCH_COOLDOWN_MS: u64 = 200;
+const DISC_BENCH_READ_TIMEOUT_MS: u64 = 5_000;
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
     ["cpu", "Run CPU-only compute benchmark"],
+    ["disc [id]", "Gentle disc read throughput bench"],
     ["net", "Run network throughput benchmark"],
     [
         "netk",
         "Run internal netbench (literal URL, default 2 flows)",
     ],
-    ["file", "Run TRUEOSFS streaming write benchmark"],
 ];
 
 #[derive(Clone)]
@@ -451,17 +453,34 @@ pub(crate) fn try_parse(
                 ParseOutcome::Handled
             }
         }
-        "file" => {
+        "disc" | "disk" => {
+            let id_arg = args.next();
             if args.next().is_some() {
-                print_usage(io);
+                print_shell_line(io, "bench disc: usage `bench disc [id]`");
                 return ParseOutcome::Handled;
             }
-            if let Some(session_id) = submit_filebench(spawner, io) {
-                ParseOutcome::StartSession(
-                    crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
-                )
-            } else {
-                ParseOutcome::Handled
+            match id_arg {
+                Some(raw) => {
+                    let Some(raw_id) = super::tlb_helper::parse_disc_id_raw(raw) else {
+                        print_shell_line(io, "bench disc: invalid id");
+                        return ParseOutcome::Handled;
+                    };
+                    let Some(handle) = super::tlb_helper::select_top_level_disk(raw_id) else {
+                        print_shell_line(io, "bench disc: disc not found");
+                        return ParseOutcome::Handled;
+                    };
+                    if let Some(session_id) = submit_discbench(spawner, io, handle) {
+                        ParseOutcome::StartSession(
+                            crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
+                        )
+                    } else {
+                        ParseOutcome::Handled
+                    }
+                }
+                None => {
+                    print_disc_list(io);
+                    ParseOutcome::Handled
+                }
             }
         }
         _ => {
@@ -548,42 +567,6 @@ pub(crate) fn handle_session_input(
 
     print_matrix_target_line(target, "bench: running; send `q` to stop");
     CommandSessionInputResult::KeepRunning
-}
-
-fn submit_filebench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
-    let Some(disk) =
-        crate::r::fs::trueosfs::primary_root_handle().or_else(super::select_default_disk_target)
-    else {
-        print_shell_line(io, "bench file: no disk device found");
-        return None;
-    };
-
-    let target = matrix_target_for_backend(io);
-    let session_id = bench_session_start();
-    let info = disk.info();
-    print_matrix_target_line(
-        &target,
-        format!(
-            "bench file: starting on disk id={} ({}) label={:?}",
-            info.id.raw(),
-            info.id,
-            info.label
-        )
-        .as_str(),
-    );
-
-    set_matrix_target_active(&target, true);
-    if spawner
-        .spawn(filebench_task(target.clone(), session_id, disk))
-        .is_err()
-    {
-        bench_session_finish(session_id);
-        set_matrix_target_active(&target, false);
-        print_shell_line(io, "bench file: spawn failed");
-        return None;
-    }
-    print_matrix_target_line(&target, "bench file: send `q` in this slot to stop");
-    Some(session_id)
 }
 
 fn submit_netbench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
@@ -705,188 +688,6 @@ fn submit_internal_netbench(
             "bench netk: watch for `netbench-internal:` logs for rx/progress/done",
         );
     }
-}
-
-#[embassy_executor::task(pool_size = 2)]
-async fn filebench_task(
-    target: MatrixTarget,
-    session_id: u64,
-    disk: crate::disc::block::DeviceHandle,
-) {
-    let task_target = target.clone();
-    async move {
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-
-        let log = |line: &str| {
-            print_matrix_target_line(&task_target, line);
-        };
-
-        let Some(placement) = crate::r::fs::trueosfs::locate_async(disk)
-            .await
-            .ok()
-            .flatten()
-        else {
-            log("bench file: selected disk is not TRUEOSFS");
-            return;
-        };
-        if !disk.supports_write() {
-            log("bench file: selected disk is read-only");
-            return;
-        }
-
-        let info = disk.info();
-        log(format!(
-            "bench file: target id={} ({}) blocks={} bs={} writable={} label={:?}",
-            info.id.raw(),
-            info.id,
-            info.block_count,
-            info.block_size,
-            info.writable,
-            info.label
-        )
-        .as_str());
-        log(format!(
-            "bench file: super_lba={} data_lba={} file=/{} bytes={}",
-            placement.super_lba, placement.data_lba, FILEBENCH_PATH, FILEBENCH_TOTAL_BYTES
-        )
-        .as_str());
-
-        let bench_chunk_bytes = if info.max_transfer_bytes > 0 {
-            let max_transfer = info.max_transfer_bytes as usize;
-            core::cmp::max(4 * 1024, core::cmp::min(max_transfer, 1024 * 1024))
-        } else {
-            256 * 1024
-        };
-
-        let Some(stream_handle) = (match crate::r::fs::trueosfs::file_write_begin_async(
-            disk,
-            FILEBENCH_PATH,
-            FILEBENCH_TOTAL_BYTES,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                log(format!("bench file: begin failed ({:?})", e).as_str());
-                return;
-            }
-        }) else {
-            log("bench file: begin failed (no space / no placement)");
-            return;
-        };
-
-        let mut chunk: Vec<u8> = alloc::vec![0u8; bench_chunk_bytes];
-        if !FILEBENCH_PATTERN.is_empty() {
-            let mut off = 0usize;
-            while off < chunk.len() {
-                let take = core::cmp::min(FILEBENCH_PATTERN.len(), chunk.len() - off);
-                chunk[off..off + take].copy_from_slice(&FILEBENCH_PATTERN[..take]);
-                off = off.saturating_add(take);
-            }
-        }
-
-        let mut written: u64 = 0;
-        let mut write_err: Option<crate::disc::block::Error> = None;
-        let mut finished_ok = false;
-        let mut cancelled = false;
-        let start_tick = embassy_time_driver::now();
-        let mut next_progress = Instant::now() + EmbassyDuration::from_millis(PROGRESS_LOG_MS);
-
-        log("bench file: streaming write started");
-
-        const CHUNK_TIMEOUT_MS: u64 = 30_000;
-
-        while written < FILEBENCH_TOTAL_BYTES {
-            if bench_cancel_requested(session_id) {
-                cancelled = true;
-                break;
-            }
-            let remaining = (FILEBENCH_TOTAL_BYTES - written) as usize;
-            let n = core::cmp::min(remaining, chunk.len());
-
-            let chunk_fut =
-                crate::r::fs::trueosfs::file_write_chunk_async(stream_handle, &chunk[..n]);
-            match embassy_time::with_timeout(
-                EmbassyDuration::from_millis(CHUNK_TIMEOUT_MS),
-                chunk_fut,
-            )
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    log(format!("bench file: write error at offset {} ({:?})", written, e)
-                        .as_str());
-                    write_err = Some(e);
-                    break;
-                }
-                Err(_timeout) => {
-                    log(format!(
-                        "bench file: write timeout at offset {} ({}ms limit)",
-                        written, CHUNK_TIMEOUT_MS
-                    )
-                    .as_str());
-                    write_err = Some(crate::disc::block::Error::Timeout);
-                    break;
-                }
-            }
-            written = written.saturating_add(n as u64);
-
-            if Instant::now() >= next_progress || written >= FILEBENCH_TOTAL_BYTES {
-                let elapsed_ms = elapsed_ms_since(start_tick);
-                let bps = bps_from_progress(written, elapsed_ms);
-                log(format!(
-                    "bench file: progress {}/{} speed={} elapsed={}ms",
-                    format_bytes(written),
-                    format_bytes(FILEBENCH_TOTAL_BYTES),
-                    format_speed(bps),
-                    elapsed_ms
-                )
-                .as_str());
-                next_progress = Instant::now() + EmbassyDuration::from_millis(PROGRESS_LOG_MS);
-            }
-        }
-
-        if cancelled {
-            let _ = crate::r::fs::trueosfs::file_write_abort_async(stream_handle).await;
-        } else if write_err.is_none() {
-            match crate::r::fs::trueosfs::file_write_finish_async(stream_handle).await {
-                Ok(()) => finished_ok = true,
-                Err(e) => {
-                    let _ = crate::r::fs::trueosfs::file_write_abort_async(stream_handle).await;
-                    write_err = Some(e);
-                }
-            }
-        } else {
-            let _ = crate::r::fs::trueosfs::file_write_abort_async(stream_handle).await;
-        }
-
-        let _ = crate::r::fs::trueosfs::file_delete_async(disk, FILEBENCH_PATH).await;
-
-        let elapsed_ms = elapsed_ms_since(start_tick);
-        let bps = bps_from_progress(written, elapsed_ms);
-        if cancelled {
-            log(format!(
-                "bench file: cancelled wrote={} speed={} elapsed={}ms",
-                format_bytes(written),
-                format_speed(bps),
-                elapsed_ms
-            )
-            .as_str());
-        } else if let Some(e) = write_err {
-            log(format!("bench file: write failed ({:?})", e).as_str());
-        } else if finished_ok {
-            log(format!(
-                "bench file: done wrote={} speed={} elapsed={}ms",
-                format_bytes(written),
-                format_speed(bps),
-                elapsed_ms
-            )
-            .as_str());
-        }
-    }
-    .await;
-    bench_session_finish(session_id);
-    set_matrix_target_active(&target, false);
 }
 
 #[embassy_executor::task(pool_size = 2)]
@@ -1491,6 +1292,231 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
             )
             .as_str());
         }
+    }
+    .await;
+    bench_session_finish(session_id);
+    set_matrix_target_active(&target, false);
+}
+
+// ---------------------------------------------------------------------------
+// disc bench
+// ---------------------------------------------------------------------------
+
+fn print_disc_list(io: &'static dyn ShellBackend2) {
+    let choices = super::tlb_helper::collect_top_level_disk_choices();
+    if choices.is_empty() {
+        print_shell_line(io, "bench disc: no discs registered");
+        return;
+    }
+    print_shell_line(io, "bench disc: available discs (use `bench disc <id>`)");
+    for c in &choices {
+        let info = c.handle.info();
+        print_shell_line(
+            io,
+            format!(
+                "  {} ({}) label={} size={} mode={}",
+                info.id,
+                info.id.raw(),
+                c.label_text(),
+                c.size_text(),
+                c.mode_text(),
+            )
+            .as_str(),
+        );
+    }
+}
+
+fn submit_discbench(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    handle: crate::disc::block::DeviceHandle,
+) -> Option<u64> {
+    let info = handle.info();
+    let target = matrix_target_for_backend(io);
+    let session_id = bench_session_start();
+
+    print_matrix_target_line(
+        &target,
+        format!(
+            "bench disc: starting on {} label={} bs={} blocks={} max_xfer={}",
+            info.id,
+            info.label.as_deref().unwrap_or("-"),
+            info.block_size,
+            info.block_count,
+            format_bytes(info.max_transfer_bytes),
+        )
+        .as_str(),
+    );
+
+    set_matrix_target_active(&target, true);
+    if spawner
+        .spawn(discbench_task(target.clone(), session_id, handle))
+        .is_err()
+    {
+        bench_session_finish(session_id);
+        set_matrix_target_active(&target, false);
+        print_shell_line(io, "bench disc: spawn failed");
+        return None;
+    }
+    print_matrix_target_line(&target, "bench disc: send `q` to stop");
+    Some(session_id)
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn discbench_task(
+    target: MatrixTarget,
+    session_id: u64,
+    handle: crate::disc::block::DeviceHandle,
+) {
+    let task_target = target.clone();
+    async move {
+        Timer::after(EmbassyDuration::from_millis(10)).await;
+
+        let log = |line: &str| {
+            print_matrix_target_line(&task_target, line);
+        };
+
+        let bs = handle.block_size() as u64;
+        let total_blocks = handle.block_count();
+        if total_blocks == 0 || bs == 0 {
+            log("bench disc: device has 0 blocks or 0 block_size");
+            return;
+        }
+
+        let max_xfer = handle.max_transfer_bytes();
+        let max_blocks_per_xfer = if max_xfer > 0 && bs > 0 {
+            (max_xfer / bs) as usize
+        } else {
+            DISC_BENCH_MAX_BLOCKS
+        };
+
+        let mut step_blocks = DISC_BENCH_INITIAL_BLOCKS;
+        let mut lba: u64 = 0;
+        let global_start = embassy_time_driver::now();
+        let mut total_bytes_read: u64 = 0;
+
+        'outer: while step_blocks <= DISC_BENCH_MAX_BLOCKS
+            && step_blocks <= max_blocks_per_xfer
+            && !bench_cancel_requested(session_id)
+        {
+            let step_bytes = (step_blocks as u64) * bs;
+            log(format!(
+                "bench disc: step blocks={} ({}/read)",
+                step_blocks,
+                format_bytes(step_bytes),
+            )
+            .as_str());
+
+            let step_start = embassy_time_driver::now();
+            let mut step_total: u64 = 0;
+            let mut errors = 0u32;
+
+            for i in 0..DISC_BENCH_READS_PER_STEP {
+                if bench_cancel_requested(session_id) {
+                    break 'outer;
+                }
+
+                // wrap around if we'd go out of bounds
+                if lba + step_blocks as u64 > total_blocks {
+                    lba = 0;
+                }
+
+                let read_start = embassy_time_driver::now();
+                let read_result = embassy_time::with_timeout(
+                    EmbassyDuration::from_millis(DISC_BENCH_READ_TIMEOUT_MS),
+                    handle.read_blocks(lba, step_blocks),
+                )
+                .await;
+                match read_result {
+                    Ok(Ok(data)) => {
+                        let read_ms = elapsed_ms_since(read_start);
+                        let read_bytes = data.len() as u64;
+                        step_total += read_bytes;
+                        total_bytes_read += read_bytes;
+
+                        let read_bps = bps_from_progress(read_bytes, read_ms);
+                        log(format!(
+                            "  read {}/{} lba={} got={} {}ms {}",
+                            i + 1,
+                            DISC_BENCH_READS_PER_STEP,
+                            lba,
+                            format_bytes(read_bytes),
+                            read_ms,
+                            format_speed(read_bps),
+                        )
+                        .as_str());
+
+                        lba += step_blocks as u64;
+                    }
+                    Ok(Err(e)) => {
+                        errors += 1;
+                        log(format!(
+                            "  read {}/{} lba={} ERROR {:?}",
+                            i + 1,
+                            DISC_BENCH_READS_PER_STEP,
+                            lba,
+                            e,
+                        )
+                        .as_str());
+                        lba += step_blocks as u64;
+                    }
+                    Err(_) => {
+                        errors += 1;
+                        let read_ms = elapsed_ms_since(read_start);
+                        log(format!(
+                            "  read {}/{} lba={} TIMEOUT after {}ms (blocks={})",
+                            i + 1,
+                            DISC_BENCH_READS_PER_STEP,
+                            lba,
+                            read_ms,
+                            step_blocks,
+                        )
+                        .as_str());
+                        lba += step_blocks as u64;
+                    }
+                }
+
+                // gentle cooldown between reads
+                Timer::after(EmbassyDuration::from_millis(DISC_BENCH_COOLDOWN_MS)).await;
+            }
+
+            let step_ms = elapsed_ms_since(step_start);
+            let step_bps = bps_from_progress(step_total, step_ms);
+
+            log(format!(
+                "  step done: {} in {}ms -> {} (errors={})",
+                format_bytes(step_total),
+                step_ms,
+                format_speed(step_bps),
+                errors,
+            )
+            .as_str());
+
+            // if errors occurred at this step, don't increase — stop gracefully
+            if errors > 0 {
+                log("bench disc: errors detected, stopping (not increasing load)");
+                break;
+            }
+
+            // next step: double the block count
+            step_blocks *= 2;
+
+            // cooldown before next step
+            Timer::after(EmbassyDuration::from_millis(DISC_BENCH_COOLDOWN_MS * 2)).await;
+        }
+
+        let total_ms = elapsed_ms_since(global_start);
+        let overall_bps = bps_from_progress(total_bytes_read, total_ms);
+        let cancelled = bench_cancel_requested(session_id);
+
+        log(format!(
+            "bench disc: {} total={} elapsed={}ms avg={}",
+            if cancelled { "cancelled" } else { "done" },
+            format_bytes(total_bytes_read),
+            total_ms,
+            format_speed(overall_bps),
+        )
+        .as_str());
     }
     .await;
     bench_session_finish(session_id);
