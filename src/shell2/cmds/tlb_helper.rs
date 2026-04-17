@@ -46,6 +46,7 @@ impl DiskChoice {
 
     pub(crate) fn status_text(&self) -> String {
         match (&self.status, self.err) {
+            (crate::r::disc::detect::DiscStatus::Unknown, None) => String::from("registered"),
             (crate::r::disc::detect::DiscStatus::Unknown, Some(err)) => {
                 alloc::format!("{}:{:?}", self.status.short(), err)
             }
@@ -221,13 +222,10 @@ pub(crate) fn collect_top_level_disk_choices() -> Vec<DiskChoice> {
 
     let mut out = Vec::new();
     for handle in handles.into_iter() {
-        let (status, err) = crate::wait::spawn_and_wait_local(async move {
-            crate::r::disc::detect::detect_physical_disk_detail(handle).await
-        });
         out.push(DiskChoice {
             handle,
-            status,
-            err,
+            status: crate::r::disc::detect::DiscStatus::Unknown,
+            err: None,
         });
     }
 
