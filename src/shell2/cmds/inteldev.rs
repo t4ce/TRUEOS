@@ -462,20 +462,6 @@ fn media_transport_str(
     }
 }
 
-fn media_completion_str(
-    completion: crate::intel::xelp_media_ngin::MediaCompletionMode,
-) -> &'static str {
-    match completion {
-        crate::intel::xelp_media_ngin::MediaCompletionMode::ResultMemoryPoll => {
-            "result-memory-poll"
-        }
-        crate::intel::xelp_media_ngin::MediaCompletionMode::ExeclistStatusPoll => {
-            "execlist-status-poll"
-        }
-        crate::intel::xelp_media_ngin::MediaCompletionMode::None => "none",
-    }
-}
-
 fn media_stage_str(stage: crate::intel::xelp_media_ngin::MediaKickoffStage) -> &'static str {
     match stage {
         crate::intel::xelp_media_ngin::MediaKickoffStage::Discovery => "discovery",
@@ -1091,52 +1077,7 @@ fn execute_media_state_view() -> Result<String, String> {
             .as_str(),
         );
     }
-    out.push_str("]},\"plans\":[");
-    first = true;
-    for plan in state.plans.iter().take(state.plan_count) {
-        if !first {
-            out.push(',');
-        }
-        first = false;
-        out.push_str(
-            format!(
-                "{{\"engine\":\"{}\",\"next_stage\":\"{}\",\"resources\":{{\"ring_bytes\":{},\"context_bytes\":{},\"batch_bytes\":{},\"scratch_bytes\":{},\"bitstream_bytes\":{},\"output_surface_bytes\":{},\"result_bytes\":{},\"ring_gpu_hex\":\"{}\",\"context_gpu_hex\":\"{}\",\"batch_gpu_hex\":\"{}\",\"bitstream_gpu_hex\":\"{}\",\"output_surface_gpu_hex\":\"{}\",\"result_gpu_hex\":\"{}\"}},\"context\":{{\"bytes\":{},\"lrc_state_offset_dwords\":{},\"indirect_state_dwords_budget\":{},\"uses_relative_mmio\":{},\"engine_mmio_base_hex\":\"{}\"}},\"batch\":{{\"preamble_dwords\":{},\"payload_budget_dwords\":{},\"epilogue_dwords\":{},\"completion_slot_gpu_hex\":\"{}\",\"completion_marker_hex\":\"{}\"}},\"submission\":{{\"workload\":\"{}\",\"transport\":\"{}\",\"completion\":\"{}\",\"queue_depth\":{},\"watchdog_iters\":{},\"prefers_parallel_submission\":{}}}}}",
-                escape_json(plan.descriptor.name),
-                media_stage_str(plan.next_stage),
-                plan.resources.ring_bytes,
-                plan.resources.context_bytes,
-                plan.resources.batch_bytes,
-                plan.resources.scratch_bytes,
-                plan.resources.bitstream_bytes,
-                plan.resources.output_surface_bytes,
-                plan.resources.result_bytes,
-                hex_u64(plan.resources.windows.ring_gpu_addr),
-                hex_u64(plan.resources.windows.context_gpu_addr),
-                hex_u64(plan.resources.windows.batch_gpu_addr),
-                hex_u64(plan.resources.windows.bitstream_gpu_addr),
-                hex_u64(plan.resources.windows.output_surface_gpu_addr),
-                hex_u64(plan.resources.windows.result_gpu_addr),
-                plan.context.bytes,
-                plan.context.lrc_state_offset_dwords,
-                plan.context.indirect_state_dwords_budget,
-                plan.context.uses_relative_mmio,
-                hex_u64(plan.context.engine_mmio_base as u64),
-                plan.batch.preamble_dwords,
-                plan.batch.payload_budget_dwords,
-                plan.batch.epilogue_dwords,
-                hex_u64(plan.batch.completion_slot_gpu_addr),
-                hex_u32(plan.batch.completion_marker_value),
-                media_workload_str(plan.submission.workload),
-                media_transport_str(plan.submission.transport),
-                media_completion_str(plan.submission.completion),
-                plan.submission.queue_depth,
-                plan.submission.watchdog_iters,
-                plan.submission.prefers_parallel_submission,
-            )
-            .as_str(),
-        );
-    }
-    out.push_str("],\"runtimes\":[");
+    out.push_str("]},\"runtimes\":[");
     first = true;
     for runtime in state.runtimes.iter().take(state.runtime_count) {
         if !first {
@@ -1240,7 +1181,7 @@ fn buffer_window(scope: &str) -> Result<(String, u64, u64, *mut u8, usize), Stri
             warm.limine_fb_size,
         )),
         other if other.starts_with("media.") => {
-            let Some(surface) = crate::intel::media_demo_surface_window(other) else {
+            let Some(surface) = crate::intel::media_decode_surface_window(other) else {
                 return Err(String::from("media surface unavailable"));
             };
             Ok((
