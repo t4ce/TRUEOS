@@ -95,6 +95,7 @@ pub mod classreq {
 
 pub use self::keyboard::TrueosHidKeyboardSample;
 pub use self::mouse::TrueosHidMouseSample;
+pub use self::tablet::TrueosHidTabletSample;
 pub use v::vinput::TrueosHidCursorEvent;
 
 pub(crate) use crate::logflag::HID_DEBUG_REPORT_LOGS;
@@ -102,6 +103,7 @@ pub(crate) use crate::logflag::HID_DEBUG_REPORT_LOGS;
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 1024.0;
 const HID_KIND_KEYBOARD: u8 = 1;
 const HID_KIND_MOUSE: u8 = crate::r::cursor::HID_KIND_MOUSE;
+const HID_KIND_TABLET: u8 = crate::r::cursor::HID_KIND_TABLET;
 const HID_KIND_VIRTUAL_CURSOR: u8 = crate::r::cursor::HID_KIND_VIRTUAL_CURSOR;
 const CURSOR_EVENT_RING_CAP: usize = 2048;
 
@@ -151,6 +153,7 @@ pub(crate) struct HidRuntime {
     pub(crate) keyboard_ascii: [u8; 6],
     pub(crate) keyboard_ring: keyboard::KeyboardRing,
     pub(crate) mouse_ring: mouse::MouseRing,
+    pub(crate) tablet_ring: tablet::TabletRing,
 }
 
 impl HidRuntime {
@@ -170,6 +173,7 @@ impl HidRuntime {
             keyboard_ascii: [0; 6],
             keyboard_ring: keyboard::KeyboardRing::new(),
             mouse_ring: mouse::MouseRing::new(),
+            tablet_ring: tablet::TabletRing::new(),
         }
     }
 }
@@ -231,6 +235,23 @@ fn runtime_mut_or_insert(
             runtime.mouse_buttons_down,
             self::hut::HidSourceKind::Human,
             "human",
+            false,
+        );
+    } else if hid_kind == HID_KIND_TABLET {
+        let runtime = &runtimes[idx];
+        sync_runtime_cursor_snapshot(runtime);
+        self::hut::upsert_tablet_state(
+            runtime.controller_id,
+            runtime.slot_id,
+            runtime.ep_target,
+            runtime.mouse_x,
+            runtime.mouse_y,
+            0,
+            0,
+            runtime.mouse_buttons_down,
+            0,
+            self::hut::HidSourceKind::Human,
+            "tablet",
             false,
         );
     }
@@ -379,6 +400,20 @@ pub(crate) fn handle_mouse_boot_report(
     mouse::handle_report(runtime, data, now_ms);
 }
 
+pub(crate) fn handle_tablet_boot_report(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    data: &[u8],
+) {
+    let now_ms = now_ms_u32();
+    let mut runtimes = HID_RUNTIMES.lock();
+    let runtime =
+        runtime_mut_or_insert(&mut runtimes, controller_id, slot_id, ep_target, HID_KIND_TABLET);
+    runtime.seq = runtime.seq.wrapping_add(1);
+    tablet::handle_report(runtime, data, now_ms);
+}
+
 pub(crate) fn remove_hid_slot(controller_id: u32, slot_id: u32) {
     let mut runtimes = HID_RUNTIMES.lock();
     runtimes
@@ -418,6 +453,36 @@ fn keyboard_ring_read(
     (dropped, wrote)
 }
 
+fn tablet_ring_read(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    out: &mut [tablet::TrueosHidTabletSample],
+) -> (u32, usize) {
+    let mut runtimes = HID_RUNTIMES.lock();
+    let Some(runtime) = runtimes.iter_mut().find(|runtime| {
+        runtime.controller_id == controller_id
+            && runtime.slot_id == slot_id
+            && runtime.ep_target == ep_target
+            && runtime.hid_kind == HID_KIND_TABLET
+    }) else {
+        return (0, 0);
+    };
+
+    let dropped = runtime.tablet_ring.dropped;
+    runtime.tablet_ring.dropped = 0;
+
+    let mut wrote = 0usize;
+    while wrote < out.len() {
+        let Some(sample) = runtime.tablet_ring.pop() else {
+            break;
+        };
+        out[wrote] = sample;
+        wrote += 1;
+    }
+    (dropped, wrote)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_hid_keyboard_read(
     controller_id: u32,
@@ -436,6 +501,30 @@ pub unsafe extern "C" fn trueos_cabi_hid_keyboard_read(
 
     let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
     let (dropped, wrote) = keyboard_ring_read(controller_id, slot_id, ep_target, out_slice);
+    if !out_dropped.is_null() {
+        *out_dropped = dropped;
+    }
+    wrote as u32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_hid_tablet_read(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    out: *mut tablet::TrueosHidTabletSample,
+    out_cap: u32,
+    out_dropped: *mut u32,
+) -> u32 {
+    if !out_dropped.is_null() {
+        *out_dropped = 0;
+    }
+    if out_cap == 0 || out.is_null() {
+        return 0;
+    }
+
+    let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
+    let (dropped, wrote) = tablet_ring_read(controller_id, slot_id, ep_target, out_slice);
     if !out_dropped.is_null() {
         *out_dropped = dropped;
     }

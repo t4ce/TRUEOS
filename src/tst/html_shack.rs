@@ -176,18 +176,18 @@ fn pop_next_request() -> Option<HtmlRequest> {
 async fn store_ready_html(html: Html) -> usize {
     let ready_len = with_html_shack(|shack| shack.put_ready_html(html.clone()));
     if HTML_SHACK_BROWSER_HANDOFF_ENABLE {
-        html_ready_to_truesurfer(html).await;
+        let _ = handoff_html_to_truesurfer(html).await;
     } else {
         crate::log!("html_shack: browser_handoff disabled url={}\n", html.url);
     }
     ready_len
 }
 
-async fn html_ready_to_truesurfer(html: Html) {
+pub async fn handoff_html_to_truesurfer(html: Html) -> bool {
     let Some(browser_instance_id) = crate::r::spawn_service::spawn_truesurfer_tab_with_html()
     else {
         crate::log!("html_shack: browser_handoff skipped url={} reason=spawn_failed\n", html.url);
-        return;
+        return false;
     };
 
     let handed_off = trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
@@ -202,6 +202,7 @@ async fn html_ready_to_truesurfer(html: Html) {
         browser_instance_id,
         if handed_off { 1 } else { 0 }
     );
+    handed_off
 }
 
 fn normalize_file_reference(path: &str) -> String {

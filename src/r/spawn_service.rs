@@ -174,6 +174,7 @@ define_started_flags!(
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
     ATOMIC_BOMB_STARTED,
+    HTML_DEMO_STARTED,
     SURFER_FACTORY_STARTED
 );
 
@@ -376,6 +377,10 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(trueos_qjs::ai_task::run_once()))
+}
+
+fn spawn_html_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_html_demo::html_demo_task()))
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
@@ -943,6 +948,7 @@ static TASKS: &[TaskSpec] = &[
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
     ),
+    TaskSpec::enabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
         NET_CONFIGURED_AND_ROOT_READY,

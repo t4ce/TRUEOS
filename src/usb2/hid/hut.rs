@@ -2,6 +2,7 @@ use heapless::{String, Vec};
 use spin::Mutex;
 
 const MAX_HID_HUT_MICE: usize = 32;
+const MAX_HID_HUT_TABLETS: usize = 32;
 const MAX_HID_HUT_KEYBOARDS: usize = 32;
 const MAX_HID_HUT_COMBOS: usize = 32;
 const HID_SOURCE_TAG_MAX: usize = 32;
@@ -22,6 +23,23 @@ pub struct HidMouseState {
     pub x: f64,
     pub y: f64,
     pub buttons_down: u32,
+    pub combo_id: u32,
+    pub source_kind: HidSourceKind,
+    pub source_tag: String<HID_SOURCE_TAG_MAX>,
+    pub virtual_device: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HidTabletState {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub x: f64,
+    pub y: f64,
+    pub x_raw: u16,
+    pub y_raw: u16,
+    pub buttons_down: u32,
+    pub report_id: u8,
     pub combo_id: u32,
     pub source_kind: HidSourceKind,
     pub source_tag: String<HID_SOURCE_TAG_MAX>,
@@ -58,6 +76,7 @@ pub struct HidCombo {
 #[derive(Clone, Debug)]
 struct HidHutState {
     mice: Vec<HidMouseState, MAX_HID_HUT_MICE>,
+    tablets: Vec<HidTabletState, MAX_HID_HUT_TABLETS>,
     keyboards: Vec<HidKeyboardState, MAX_HID_HUT_KEYBOARDS>,
     combos: Vec<HidCombo, MAX_HID_HUT_COMBOS>,
 }
@@ -66,6 +85,7 @@ impl HidHutState {
     const fn new() -> Self {
         Self {
             mice: Vec::new(),
+            tablets: Vec::new(),
             keyboards: Vec::new(),
             combos: Vec::new(),
         }
@@ -190,6 +210,65 @@ pub fn upsert_mouse_state(
     if !guard.mice.is_empty() {
         let last = guard.mice.len() - 1;
         guard.mice[last] = next;
+    }
+}
+
+pub fn upsert_tablet_state(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    x: f64,
+    y: f64,
+    x_raw: u16,
+    y_raw: u16,
+    buttons_down: u32,
+    report_id: u8,
+    source_kind: HidSourceKind,
+    source_tag: &str,
+    virtual_device: bool,
+) {
+    let mut guard = HID_HUT.lock();
+    let binding =
+        resolve_mouse_binding(&guard, controller_id, slot_id, ep_target, source_kind, source_tag);
+    if let Some(existing) = guard.tablets.iter_mut().find(|tablet| {
+        tablet.controller_id == controller_id
+            && tablet.slot_id == slot_id
+            && tablet.ep_target == ep_target
+    }) {
+        existing.x = x;
+        existing.y = y;
+        existing.x_raw = x_raw;
+        existing.y_raw = y_raw;
+        existing.buttons_down = buttons_down;
+        existing.report_id = report_id;
+        existing.combo_id = binding.combo_id;
+        existing.source_kind = binding.source_kind;
+        existing.source_tag = binding.source_tag.clone();
+        existing.virtual_device = virtual_device;
+        return;
+    }
+
+    let next = HidTabletState {
+        controller_id,
+        slot_id,
+        ep_target,
+        x,
+        y,
+        x_raw,
+        y_raw,
+        buttons_down,
+        report_id,
+        combo_id: binding.combo_id,
+        source_kind: binding.source_kind,
+        source_tag: binding.source_tag,
+        virtual_device,
+    };
+    if guard.tablets.push(next.clone()).is_ok() {
+        return;
+    }
+    if !guard.tablets.is_empty() {
+        let last = guard.tablets.len() - 1;
+        guard.tablets[last] = next;
     }
 }
 
@@ -345,11 +424,26 @@ pub fn remove_slot(controller_id: u32, slot_id: u32) -> bool {
         }
     }
 
+    let mut idx = 0usize;
+    while idx < guard.tablets.len() {
+        if guard.tablets[idx].controller_id == controller_id && guard.tablets[idx].slot_id == slot_id
+        {
+            let _ = guard.tablets.remove(idx);
+            removed = true;
+        } else {
+            idx += 1;
+        }
+    }
+
     removed
 }
 
 pub fn mice_snapshot() -> Vec<HidMouseState, MAX_HID_HUT_MICE> {
     HID_HUT.lock().mice.clone()
+}
+
+pub fn tablets_snapshot() -> Vec<HidTabletState, MAX_HID_HUT_TABLETS> {
+    HID_HUT.lock().tablets.clone()
 }
 
 pub fn keyboards_snapshot() -> Vec<HidKeyboardState, MAX_HID_HUT_KEYBOARDS> {

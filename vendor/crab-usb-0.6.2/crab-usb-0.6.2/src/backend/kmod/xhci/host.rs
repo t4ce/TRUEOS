@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::{cell::UnsafeCell, time::Duration};
 
 use ::xhci::{
@@ -277,12 +277,6 @@ impl Xhci {
         let hccparams1 = reg.capability.hccparams1.read_volatile();
         let ac64 = hccparams1.addressing_capability(); // Bit[0]: 64-bit Addressing Capability
 
-        debug!(
-            "xHCI: Addressing Capability (AC64) = {} ({}-bit addressing)",
-            ac64,
-            if ac64 { "64" } else { "32" }
-        );
-
         // Follow the controller's advertised addressing capability.
         let dma_mask = if ac64 {
             u64::MAX as usize
@@ -359,29 +353,32 @@ impl Xhci {
         let max_slots = self.setup_max_device_slots();
         self.dev_ctx = Some(DeviceContextList::new(max_slots as _, self.kernel())?);
 
-        if self.disable_staged_run_experiments || Self::PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT {
-            debug!("xHCI: staged-run experiment programming dcbaap before RUN");
+        let program_dcbaap =
+            self.disable_staged_run_experiments || Self::PROGRAM_DCBAAP_BEFORE_RUN_EXPERIMENT;
+        if program_dcbaap {
             self.setup_dcbaap()?;
-        } else {
-            debug!("xHCI: staged-run experiment skipping dcbaap before RUN");
         }
 
-        if self.disable_staged_run_experiments || Self::PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT {
-            debug!("xHCI: staged-run experiment programming crcr before RUN");
+        let program_crcr =
+            self.disable_staged_run_experiments || Self::PROGRAM_CRCR_BEFORE_RUN_EXPERIMENT;
+        if program_crcr {
             self.set_cmd_ring()?;
-        } else {
-            debug!("xHCI: staged-run experiment skipping crcr before RUN");
         }
 
-        if self.disable_staged_run_experiments || Self::PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT {
-            debug!("xHCI: staged-run experiment programming runtime ring before RUN");
+        let program_runtime_ring =
+            self.disable_staged_run_experiments || Self::PROGRAM_RUNTIME_RING_BEFORE_RUN_EXPERIMENT;
+        if program_runtime_ring {
             self.setup_runtime_ring();
-        } else {
-            debug!("xHCI: staged-run experiment skipping runtime ring before RUN");
         }
 
-        self.setup_scratchpads()?;
-        self.log_pre_run_diagnostics("pre-run");
+        let scratch_count = self.setup_scratchpads()?;
+        self.log_init_setup_summary(
+            max_slots,
+            program_dcbaap,
+            program_crcr,
+            program_runtime_ring,
+            scratch_count,
+        );
         // At this point, the host controller is up and running and the Root Hub ports
         // (5.4.8) will begin reporting device connects, etc., and system software may begin
         // enumerating devices. System software may follow the procedures described in
@@ -389,8 +386,20 @@ impl Xhci {
         self.start();
 
         self.wait_for_running().await?;
+        let run_status = self.status_snapshot();
         self.ensure_controller_state("run", false, false, false)?;
         self.clear_status_bits();
+        info!(
+            "xHCI: run state=running halted={} cnr={} reset={} irq_mode={}",
+            run_status.halted,
+            run_status.cnr,
+            run_status.reset,
+            if Self::POLL_ONLY_EVENT_HANDLER_SMOKE_VALID {
+                "poll-only"
+            } else {
+                "interrupts"
+            }
+        );
 
         // self.reset_ports().await;
 
@@ -417,34 +426,53 @@ impl Xhci {
 
     async fn init_ext_caps(&mut self) -> Result {
         let caps = self.extended_capabilities();
-        debug!("Extended capabilities: {:?}", caps.len());
+        let cap_count = caps.len();
+        let ac64 = self
+            .reg
+            .read()
+            .capability
+            .hccparams1
+            .read_volatile()
+            .addressing_capability();
+        let mut protocol_lines: Vec<String> = Vec::new();
 
-        for cap in self.extended_capabilities() {
+        for cap in caps {
             match cap {
                 ExtendedCapability::UsbLegacySupport(usb_legacy_support) => {
                     self.legacy_init(usb_legacy_support).await?;
                 }
                 ExtendedCapability::XhciSupportedProtocol(proto) => {
                     let h = proto.header.read_volatile();
-                    info!(
-                        "crabusb/xhci: supported_protocol usb{}.{} ports={}..{} (offset={} count={})",
+                    protocol_lines.push(alloc::format!(
+                        "usb{}.{}:{}..{}",
                         h.major_revision(),
                         h.minor_revision(),
                         h.compatible_port_offset(),
                         h.compatible_port_offset().saturating_add(h.compatible_port_count()).saturating_sub(1),
-                        h.compatible_port_offset(),
-                        h.compatible_port_count()
-                    );
+                    ));
                 }
                 _ => {}
             }
         }
 
+        let protocol_summary = if protocol_lines.is_empty() {
+            String::from("none")
+        } else {
+            protocol_lines.as_slice().join(", ")
+        };
+        info!(
+            "xHCI: caps pci={:04X?}:{:04X?} addr={}b ext_caps={} protocols={}",
+            self.pci_vendor_id,
+            self.pci_device_id,
+            if ac64 { 64 } else { 32 },
+            cap_count,
+            protocol_summary
+        );
+
         Ok(())
     }
 
     async fn chip_hardware_reset(&mut self) -> Result {
-        debug!("Reset begin ...");
         self.reg.write().operational.usbcmd.update_volatile(|c| {
             c.clear_run_stop();
         });
@@ -452,26 +480,26 @@ impl Xhci {
         self.wait_for_status("controller halt", |status| status.halted)
             .await?;
 
-        debug!("Halted");
-        debug!("Wait for ready...");
-
         self.wait_for_status("controller ready after stop", |status| !status.cnr)
             .await?;
-
-        debug!("Ready");
 
         self.reg.write().operational.usbcmd.update_volatile(|f| {
             f.set_host_controller_reset();
         });
 
-        debug!("Reset HC");
-
         self.wait_for_status("reset completion", |status| {
             status.halted && !status.cnr && !status.reset
         })
             .await?;
-
-        debug!("Reset finish");
+        let status = self.status_snapshot();
+        info!(
+            "xHCI: reset stop->ready->hc-reset complete halted={} cnr={} reset={} hse={} hce={}",
+            status.halted,
+            status.cnr,
+            status.reset,
+            status.hse,
+            status.hce
+        );
 
         Ok(())
     }
@@ -496,7 +524,6 @@ impl Xhci {
     }
 
     async fn legacy_init(&mut self, mut usb_legacy_support: UsbLegacySupport<MemMapper>) -> Result {
-        debug!("legacy init");
         usb_legacy_support.usblegsup.update_volatile(|r| {
             r.set_hc_os_owned_semaphore();
         });
@@ -507,8 +534,6 @@ impl Xhci {
                 break;
             }
         }
-
-        debug!("claimed ownership from BIOS");
 
         usb_legacy_support.usblegctlsts.update_volatile(|r| {
             r.clear_usb_smi_enable();
@@ -541,8 +566,6 @@ impl Xhci {
         drop(regs);
         self.flush_controller_write();
 
-        debug!("Max device slots: {max_slots}");
-
         max_slots
     }
 
@@ -555,7 +578,6 @@ impl Xhci {
     }
 
     pub fn disable_irq(&mut self) {
-        debug!("Disable interrupts");
         self.reg.write().operational.usbcmd.update_volatile(|r| {
             r.clear_interrupter_enable();
         });
@@ -563,7 +585,6 @@ impl Xhci {
     }
 
     pub fn enable_irq(&mut self) {
-        debug!("Enable interrupts");
         self.reg.write().operational.usbcmd.update_volatile(|r| {
             r.set_interrupter_enable();
         });
@@ -572,7 +593,6 @@ impl Xhci {
 
     fn setup_dcbaap(&mut self) -> Result {
         let dcbaa_addr = self.dev()?.dcbaa.dma_addr();
-        debug!("DCBAAP: {dcbaa_addr}");
         self.reg.write().operational.dcbaap.update_volatile(|r| {
             r.set(dcbaa_addr.as_u64());
         });
@@ -584,7 +604,6 @@ impl Xhci {
         let crcr = self.cmd.bus_addr();
         let cycle = self.cmd.cycle();
 
-        debug!("CRCR: {crcr:?}");
         self.reg.write().operational.crcr.update_volatile(|r| {
             r.set_command_ring_pointer(crcr.into());
             if cycle {
@@ -607,13 +626,10 @@ impl Xhci {
             let mut reg = self.reg.write();
             let mut ir0 = reg.interrupter_register_set.interrupter_mut(0);
 
-            debug!("ERSTZ: {erstz:x}");
             ir0.erstsz.update_volatile(|r| r.set(erstz as _));
-            debug!("ERSTBA: {erstba:X}");
             ir0.erstba.update_volatile(|r| {
                 r.set(erstba);
             });
-            debug!("ERDP: {erdp:x}");
             ir0.erdp.update_volatile(|r| {
                 r.set_event_ring_dequeue_pointer(erdp);
                 r.set_dequeue_erst_segment_index(0);
@@ -642,7 +658,6 @@ impl Xhci {
         self.flush_controller_write();
 
         {
-            debug!("Enabling primary interrupter.");
             self.reg
                 .write()
                 .interrupter_register_set
@@ -656,29 +671,25 @@ impl Xhci {
         self.flush_controller_write();
     }
 
-    fn setup_scratchpads(&mut self) -> Result {
+    fn setup_scratchpads(&mut self) -> Result<u16> {
         if Self::SKIP_SCRATCHPADS_EXPERIMENT {
-            debug!("xHCI: scratchpad setup skipped by experiment");
             self.dev_mut()?.dcbaa.set(0, 0u64);
             self.flush_controller_write();
             self.scratchpad_buf_arr = None;
-            return Ok(());
+            return Ok(0);
         }
 
         let scratchpad_buf_arr = {
             let buf_count = {
-                let count = self
-                    .reg
+                self.reg
                     .read()
                     .capability
                     .hcsparams2
                     .read_volatile()
-                    .max_scratchpad_buffers();
-                debug!("Scratch buf count: {count}");
-                count
+                    .max_scratchpad_buffers()
             };
             if buf_count == 0 {
-                return Ok(());
+                return Ok(0);
             }
             let scratchpad_buf_arr = ScratchpadBufferArray::new(buf_count as _, &self.kernel)?;
 
@@ -686,26 +697,13 @@ impl Xhci {
 
             self.dev_mut()?.dcbaa.set(0, bus_addr);
             self.flush_controller_write();
-
-            debug!("Setting up {buf_count} scratchpads, at {bus_addr:#0x}");
-            let preview_len = scratchpad_buf_arr.entries.len().min(4);
-            if preview_len != 0 {
-                let mut preview = Vec::with_capacity(preview_len);
-                for idx in 0..preview_len {
-                    preview.push(scratchpad_buf_arr.entries.read(idx).unwrap_or(0));
-                }
-                debug!(
-                    "xHCI: scratchpad pointer preview count={} first={:X?}",
-                    scratchpad_buf_arr.entries.len(),
-                    preview
-                );
-            }
             scratchpad_buf_arr
         };
+        let scratch_count = scratchpad_buf_arr.entries.len() as u16;
 
         self.scratchpad_buf_arr = Some(scratchpad_buf_arr);
 
-        Ok(())
+        Ok(scratch_count)
     }
 
     fn start(&mut self) {
@@ -713,7 +711,6 @@ impl Xhci {
             r.set_run_stop();
         });
         self.flush_controller_write();
-        debug!("Start run");
     }
 
     async fn wait_for_running(&mut self) -> Result {
@@ -721,8 +718,6 @@ impl Xhci {
             !status.halted && !status.cnr && !status.reset
         })
             .await?;
-
-        debug!("Running");
 
         // 必须等待至少200ms，否则 port enable = false
         self.kernel.delay(Duration::from_millis(200));
@@ -804,7 +799,6 @@ impl Xhci {
             .config
             .read_volatile()
             .max_device_slots_enabled();
-        let caplen = self.reg.read().capability.caplength.read_volatile();
         let hcsparams2 = self.reg.read().capability.hcsparams2.read_volatile();
         let scratch_count = hcsparams2.max_scratchpad_buffers();
         let scratch_array = self
@@ -813,11 +807,10 @@ impl Xhci {
             .map(|arr| arr.bus_addr())
             .unwrap_or(0);
         debug!(
-            "xHCI: diag stage={} pci={:04X?}:{:04X?} caplen={:?} max_slots_enabled={} dcbaap=0x{:X} crcr=0x{:X} scratch_count={} scratch_array=0x{:X} halted={} cnr={} reset={} hse={} hce={}",
+            "xHCI: diag stage={} pci={:04X?}:{:04X?} slots={} dcbaap=0x{:X} crcr=0x{:X} scratch_count={} scratch_array=0x{:X} halted={} cnr={} reset={} hse={} hce={}",
             stage,
             self.pci_vendor_id,
             self.pci_device_id,
-            caplen,
             config,
             dcbaap,
             crcr.raw(),
@@ -828,6 +821,41 @@ impl Xhci {
             status.reset,
             status.hse,
             status.hce
+        );
+    }
+
+    fn log_init_setup_summary(
+        &self,
+        max_slots: u8,
+        program_dcbaap: bool,
+        program_crcr: bool,
+        program_runtime_ring: bool,
+        scratch_count: u16,
+    ) {
+        let dcbaap = self
+            .reg
+            .read()
+            .operational
+            .dcbaap
+            .read_volatile()
+            .get();
+        info!(
+            "xHCI: setup slots={} pre_run={{dcbaap:{},crcr:{},runtime:{}}} crcr=0x{:X} dcbaap=0x{:X} erst={{sz:{},ba:0x{:X},dp:0x{:X}}} scratchpads={} quirk={}",
+            max_slots,
+            if program_dcbaap { "set" } else { "skip" },
+            if program_crcr { "set" } else { "skip" },
+            if program_runtime_ring { "set" } else { "skip" },
+            self.cmd.bus_addr().raw(),
+            dcbaap,
+            self.event_ring_info.erstz,
+            self.event_ring_info.erstba,
+            self.event_ring_info.erdp,
+            scratch_count,
+            if self.disable_staged_run_experiments {
+                "conservative-pre-run"
+            } else {
+                "none"
+            }
         );
     }
 }

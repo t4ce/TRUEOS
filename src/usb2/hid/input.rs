@@ -131,10 +131,23 @@ pub struct MouseEvent {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub struct TabletEvent {
+    pub slot_id: u32,
+    pub buttons: u8,
+    pub report_id: u8,
+    pub x_raw: u16,
+    pub y_raw: u16,
+    pub x_norm_q15: u16,
+    pub y_norm_q15: u16,
+    pub flags: u8,
+}
+
+#[derive(Copy, Clone, Debug)]
 #[allow(dead_code)]
 pub enum InputEvent {
     Keyboard(KeyboardEvent),
     Mouse(MouseEvent),
+    Tablet(TabletEvent),
 }
 
 const INPUT_QUEUE_CAP: usize = 64;
@@ -170,6 +183,19 @@ pub fn pop_mouse_event() -> Option<MouseEvent> {
         if let InputEvent::Mouse(m) = q[idx] {
             let _ = q.remove(idx);
             return Some(m);
+        }
+        idx += 1;
+    }
+    None
+}
+
+pub fn pop_tablet_event() -> Option<TabletEvent> {
+    let mut q = INPUT_QUEUE.lock();
+    let mut idx = 0usize;
+    while idx < q.len() {
+        if let InputEvent::Tablet(t) = q[idx] {
+            let _ = q.remove(idx);
+            return Some(t);
         }
         idx += 1;
     }

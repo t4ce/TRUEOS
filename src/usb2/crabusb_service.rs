@@ -1,4 +1,5 @@
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::fmt::Write;
 use core::num::NonZeroUsize;
@@ -26,6 +27,8 @@ static BOOT_DEFER_DONE: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static EVENT_HANDLER: [Mutex<Option<EventHandler>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
+static OBSERVED_DEVICES: [Mutex<Vec<ObservedUsbDevice>>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
 
 #[inline]
 fn usb_log_all_enabled() -> bool {
@@ -41,6 +44,100 @@ fn speed_label(speed: usb_if::Speed) -> &'static str {
         usb_if::Speed::SuperSpeedPlus => "SS+",
         _ => "?",
     }
+}
+
+fn classify_device_kind(class: u8, subclass: u8, protocol: u8) -> &'static str {
+    match (class, subclass, protocol) {
+        (0x03, 0x01, 0x01) => "kbd",
+        (0x03, 0x01, 0x02) => "mouse",
+        (0x03, _, _) => "hid",
+        (0x08, 0x06, 0x50) => "mass",
+        (0x01, 0x01, _) => "audio-ctl",
+        (0x01, 0x02, _) => "audio",
+        (0x01, 0x03, _) => "midi",
+        (0x0E, _, _) => "video",
+        (0x09, _, _) => "hub",
+        (0x02, _, _) => "comm",
+        _ => "usb",
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ObservedUsbDevice {
+    backend_id: usize,
+    stable_id: u32,
+    root_port_id: u8,
+    port_id: u8,
+    route_string: u32,
+    vendor_id: u16,
+    product_id: u16,
+    class: u8,
+    subclass: u8,
+    protocol: u8,
+}
+
+#[inline]
+fn same_physical_device(a: &ObservedUsbDevice, b: &ObservedUsbDevice) -> bool {
+    a.stable_id == b.stable_id
+        || (a.root_port_id == b.root_port_id && a.route_string == b.route_string)
+}
+
+fn sync_observed_devices(
+    controller_id: usize,
+    current: &[ObservedUsbDevice],
+) -> (Vec<ObservedUsbDevice>, Vec<ObservedUsbDevice>) {
+    let mut seen = OBSERVED_DEVICES[controller_id].lock();
+    let previous = seen.clone();
+
+    let connected = current
+        .iter()
+        .copied()
+        .filter(|candidate| !previous.iter().any(|known| same_physical_device(known, candidate)))
+        .collect();
+
+    let disconnected = previous
+        .iter()
+        .copied()
+        .filter(|known| !current.iter().any(|candidate| same_physical_device(known, candidate)))
+        .collect();
+
+    *seen = current.to_vec();
+    (connected, disconnected)
+}
+
+fn clear_observed_devices(controller_id: usize) {
+    OBSERVED_DEVICES[controller_id].lock().clear();
+}
+
+fn note_disconnected_device(controller_id: usize, dev: ObservedUsbDevice) {
+    crate::log!(
+        "crabusb: hotplug disconnect ctrl={} root_port={} dev={} stable_id={} vid={:04X} pid={:04X} class={:02X}/{:02X}/{:02X}\n",
+        controller_id,
+        dev.root_port_id,
+        dev.backend_id,
+        dev.stable_id,
+        dev.vendor_id,
+        dev.product_id,
+        dev.class,
+        dev.subclass,
+        dev.protocol
+    );
+
+}
+
+fn note_connected_device(controller_id: usize, dev: ObservedUsbDevice) {
+    crate::log!(
+        "crabusb: hotplug connect ctrl={} root_port={} dev={} stable_id={} vid={:04X} pid={:04X} class={:02X}/{:02X}/{:02X}\n",
+        controller_id,
+        dev.root_port_id,
+        dev.backend_id,
+        dev.stable_id,
+        dev.vendor_id,
+        dev.product_id,
+        dev.class,
+        dev.subclass,
+        dev.protocol
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -239,12 +336,36 @@ fn uninstall_event_handler(controller_id: usize) {
 
 async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawner: &Spawner) {
     if let Ok(devices) = host.probe_devices().await {
-        if usb_log_all_enabled() {
+        if usb_log_all_enabled() && !devices.is_empty() {
             crate::log!("crabusb: probe ctrl={} devices={}\n", info.index, devices.len());
         }
 
-        if devices.is_empty() && usb_log_all_enabled() {
-            crate::log!("crabusb: descriptor check ctrl={} none\n", info.index);
+        let current_devices: Vec<ObservedUsbDevice> = devices
+            .iter()
+            .map(|dev| {
+                let desc = dev.descriptor();
+                let topo = dev.topology();
+                let location = dev.location();
+                ObservedUsbDevice {
+                    backend_id: dev.id(),
+                    stable_id: dev.stable_id().raw(),
+                    root_port_id: topo.root_port_id,
+                    port_id: topo.port_id,
+                    route_string: location.route_string,
+                    vendor_id: desc.vendor_id,
+                    product_id: desc.product_id,
+                    class: desc.class,
+                    subclass: desc.subclass,
+                    protocol: desc.protocol,
+                }
+            })
+            .collect();
+        let (connected, disconnected) = sync_observed_devices(info.index, current_devices.as_slice());
+        for dev in disconnected {
+            note_disconnected_device(info.index, dev);
+        }
+        for dev in connected {
+            note_connected_device(info.index, dev);
         }
 
         for dev in devices.iter() {
@@ -394,6 +515,32 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
     }
 }
 
+pub(crate) fn observed_device_summaries(
+    controller_index: usize,
+) -> Result<Vec<super::UsbDeviceSummary>, &'static str> {
+    if super::controller_by_index(controller_index).is_none() {
+        return Err("controller not found");
+    }
+
+    let observed = OBSERVED_DEVICES[controller_index].lock().clone();
+    Ok(observed
+        .into_iter()
+        .map(|dev| super::UsbDeviceSummary {
+            stable_id: dev.stable_id,
+            slot_id: dev.backend_id as u32,
+            port: dev.port_id,
+            root_port_id: dev.root_port_id,
+            route_string: dev.route_string,
+            kind: classify_device_kind(dev.class, dev.subclass, dev.protocol),
+            vid: Some(dev.vendor_id),
+            pid: Some(dev.product_id),
+            class: Some(dev.class),
+            subclass: Some(dev.subclass),
+            protocol: Some(dev.protocol),
+        })
+        .collect())
+}
+
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn event_pump_task(controller_id: usize) {
     loop {
@@ -436,12 +583,14 @@ pub async fn bsp_service(controller_index: usize) {
     const USB_BRINGUP_ENABLED: bool = true;
     const BOOT_USB_DEFER_MS: u64 = 500;
     const RETRY_MS: u64 = 1000;
+    const HOTPLUG_POLL_MS: u64 = 1000;
     const INTEL_PROBE_SETTLE_MS: u64 = 1500;
     const INTEL_REPROBE_MS: u64 = 1500;
     let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
 
     loop {
         if !USB_BRINGUP_ENABLED {
+            clear_observed_devices(controller_index);
             if !BOOT_DEFER_DONE[controller_index].swap(true, Ordering::AcqRel) {
                 crate::log!(
                     "crabusb: controller {} USB bring-up disabled; skipping host init\n",
@@ -484,6 +633,8 @@ pub async fn bsp_service(controller_index: usize) {
         if host.init().await.is_ok() {
             let connected_ports = connected_ports_summary(info.index);
             let intel_settle_probe = info.vendor_id == 0x8086;
+            let mut hotplug_poll_deadline =
+                Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
             crate::log!(
                 "crabusb: init successful ctrl={} bdf={:02X}:{:02X}.{} vid={:04X} pid={:04X} mmio={:p} ports={}\n",
                 info.index,
@@ -546,6 +697,8 @@ pub async fn bsp_service(controller_index: usize) {
                             let _ = spawner.spawn(event_pump_task(info.index));
                         }
                         probe_and_bind(&mut host, info, &spawner).await;
+                        hotplug_poll_deadline =
+                            Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
                         if !intel_settle_probe {
                             install_event_handler(info.index, host.create_event_handler());
                             let _ = spawner.spawn(event_pump_task(info.index));
@@ -564,7 +717,14 @@ pub async fn bsp_service(controller_index: usize) {
                         probe_and_bind(&mut host, info, &spawner).await;
                         reprobe_until =
                             Some(Instant::now() + EmbassyDuration::from_millis(INTEL_REPROBE_MS));
+                        hotplug_poll_deadline =
+                            Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
                     }
+                }
+                if Instant::now() >= hotplug_poll_deadline {
+                    probe_and_bind(&mut host, info, &spawner).await;
+                    hotplug_poll_deadline =
+                        Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
                 }
                 if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
                     if intel_settle_probe {
@@ -576,6 +736,8 @@ pub async fn bsp_service(controller_index: usize) {
                 Timer::after(EmbassyDuration::from_millis(20)).await;
             }
         }
+
+        clear_observed_devices(controller_index);
 
         Timer::after(EmbassyDuration::from_millis(RETRY_MS)).await;
     }

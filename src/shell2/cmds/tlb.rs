@@ -2409,54 +2409,6 @@ fn is_usb_mass_storage_label(label: Option<&str>) -> bool {
     matches!(label, Some(text) if text.starts_with("usbms-"))
 }
 
-fn cmd_tlb_usb_registered_mass_storage(io: &'static dyn ShellBackend2) {
-    let devices: Vec<_> = crate::disc::block::devices()
-        .into_iter()
-        .filter(|dev| {
-            dev.user_visible
-                && dev.parent.is_none()
-                && is_usb_mass_storage_label(dev.label.as_deref())
-        })
-        .collect();
-
-    line(io, "USB Mass Storage Disks");
-    if devices.is_empty() {
-        line(io, "No registered usbms block devices.");
-        return;
-    }
-
-    let headers = ["ID", "Kind", "Size", "Mode", "Status", "Label"];
-    let table = TlbTable::with_width(&headers, line_width_for_backend(io).saturating_sub(2));
-    table.emit_header(|text| print_shell_line(io, text));
-    for dev in devices {
-        let size = {
-            let total = dev.block_count.saturating_mul(dev.block_size as u64);
-            if total >= 1024 * 1024 * 1024 {
-                alloc::format!("{}GB", total / (1024 * 1024 * 1024))
-            } else if total >= 1024 * 1024 {
-                alloc::format!("{}MB", total / (1024 * 1024))
-            } else {
-                alloc::format!("{}KB", total / 1024)
-            }
-        };
-        let mode = if dev.writable { "rw" } else { "ro" };
-        let status_text = "registered";
-        let kind = alloc::format!("{:?}", dev.kind);
-        let label = String::from(dev.label.as_deref().unwrap_or("-"));
-        let id = alloc::format!("{}", dev.id);
-        let row = [
-            id.as_str(),
-            kind.as_str(),
-            size.as_str(),
-            mode,
-            status_text,
-            label.as_str(),
-        ];
-        table.emit_row(&row, |text| print_shell_line(io, text));
-    }
-    table.emit_footer(|text| print_shell_line(io, text));
-}
-
 fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
     let controllers = crate::usb2::pci_usb_controllers();
     if controllers.is_empty() {
@@ -2464,75 +2416,135 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         return;
     }
 
-    line(io, "USB Controllers");
-    let ctrl_headers = [
-        "Ctrl", "BDF", "VID:PID", "MMIO", "Ports", "USBSTS", "CRCR", "DCBAAP", "ERDP",
-    ];
-    let ctrl_table =
-        TlbTable::with_width(&ctrl_headers, line_width_for_backend(io).saturating_sub(2));
-    ctrl_table.emit_header(|text| print_shell_line(io, text));
+    let mut devices_by_controller_root: BTreeMap<(usize, u8), Vec<crate::usb2::UsbDeviceSummary>> =
+        BTreeMap::new();
     for ctrl in controllers.iter() {
-        let diag = crate::usb2::controller_mmio_diag(ctrl.index);
-        let row = [
-            ctrl.index.to_string(),
-            alloc::format!("{:02X}:{:02X}.{}", ctrl.bus, ctrl.slot, ctrl.function),
-            alloc::format!("{:04X}:{:04X}", ctrl.vendor_id, ctrl.device_id),
-            alloc::format!("{:p}", ctrl.mmio_base.as_ptr()),
-            diag.as_ref()
-                .map(|d| d.ports.len().to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            diag.as_ref()
-                .map(|d| alloc::format!("{:08X}", d.usbsts))
-                .unwrap_or_else(|| "-".to_string()),
-            diag.as_ref()
-                .map(|d| alloc::format!("{:X}", d.crcr))
-                .unwrap_or_else(|| "-".to_string()),
-            diag.as_ref()
-                .map(|d| alloc::format!("{:X}", d.dcbaap))
-                .unwrap_or_else(|| "-".to_string()),
-            diag.as_ref()
-                .map(|d| alloc::format!("{:X}", d.erdp))
-                .unwrap_or_else(|| "-".to_string()),
-        ];
-        ctrl_table.emit_row(&row, |text| print_shell_line(io, text));
-    }
-    ctrl_table.emit_footer(|text| print_shell_line(io, text));
-
-    blank(io);
-    line(io, "USB Root Ports");
-    let port_headers = [
-        "Ctrl", "Port", "Conn", "En", "Pwr", "Rst", "Speed", "PLS", "CSC", "PEDC", "PRC", "PORTSC",
-    ];
-    let port_table =
-        TlbTable::with_width(&port_headers, line_width_for_backend(io).saturating_sub(2));
-    port_table.emit_header(|text| print_shell_line(io, text));
-    for ctrl in controllers.iter() {
-        let Some(diag) = crate::usb2::controller_mmio_diag(ctrl.index) else {
-            continue;
-        };
-        for port in diag.ports.iter() {
-            let portsc = port.portsc;
-            let row = [
-                ctrl.index.to_string(),
-                port.port_id.to_string(),
-                yn((portsc & (1 << 0)) != 0).to_string(),
-                yn((portsc & (1 << 1)) != 0).to_string(),
-                yn((portsc & (1 << 9)) != 0).to_string(),
-                yn((portsc & (1 << 4)) != 0).to_string(),
-                usb_port_speed_text(portsc).to_string(),
-                usb_port_pls_text(portsc).to_string(),
-                yn((portsc & (1 << 17)) != 0).to_string(),
-                yn((portsc & (1 << 18)) != 0).to_string(),
-                yn((portsc & (1 << 21)) != 0).to_string(),
-                alloc::format!("{:08X}", portsc),
-            ];
-            port_table.emit_row(&row, |text| print_shell_line(io, text));
+        if let Ok(devices) = crate::usb2::crabusb_observed_device_summaries(ctrl.index) {
+            for dev in devices {
+                devices_by_controller_root
+                    .entry((ctrl.index, dev.root_port_id))
+                    .or_default()
+                    .push(dev);
+            }
         }
     }
-    port_table.emit_footer(|text| print_shell_line(io, text));
 
-    blank(io);
-    cmd_tlb_usb_registered_mass_storage(io);
+    let usbms_count = crate::disc::block::devices()
+        .into_iter()
+        .filter(|dev| {
+            dev.user_visible
+                && dev.parent.is_none()
+                && is_usb_mass_storage_label(dev.label.as_deref())
+        })
+        .count();
+
+    line(
+        io,
+        alloc::format!("USB Overview (usbms registered={})", usbms_count).as_str(),
+    );
+    let headers = [
+        "Ctrl",
+        "BDF",
+        "Ctrl VID:PID",
+        "Port",
+        "Conn",
+        "En",
+        "Pwr",
+        "Rst",
+        "Speed",
+        "PLS",
+        "Dev Port",
+        "Dev VID:PID",
+        "Class",
+        "Kind",
+        "Stable",
+    ];
+    let table = TlbTable::with_width(&headers, line_width_for_backend(io).saturating_sub(2));
+    table.emit_header(|text| print_shell_line(io, text));
+
+    for ctrl in controllers.iter() {
+        let bdf = alloc::format!("{:02X}:{:02X}.{}", ctrl.bus, ctrl.slot, ctrl.function);
+        let ctrl_vidpid = alloc::format!("{:04X}:{:04X}", ctrl.vendor_id, ctrl.device_id);
+        let Some(diag) = crate::usb2::controller_mmio_diag(ctrl.index) else {
+            let row = [
+                ctrl.index.to_string(),
+                bdf,
+                ctrl_vidpid,
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("no-mmio"),
+                String::from("-"),
+            ];
+            table.emit_row(&row, |text| print_shell_line(io, text));
+            continue;
+        };
+
+        for port in diag.ports.iter() {
+            let portsc = port.portsc;
+            let attached = devices_by_controller_root.get(&(ctrl.index, port.port_id));
+            if let Some(devices) = attached {
+                for dev in devices.iter() {
+                    let dev_vidpid = match (dev.vid, dev.pid) {
+                        (Some(vid), Some(pid)) => alloc::format!("{:04X}:{:04X}", vid, pid),
+                        _ => String::from("-"),
+                    };
+                    let class = match (dev.class, dev.subclass, dev.protocol) {
+                        (Some(class), Some(subclass), Some(protocol)) => {
+                            alloc::format!("{:02X}/{:02X}/{:02X}", class, subclass, protocol)
+                        }
+                        _ => String::from("-"),
+                    };
+                    let stable = alloc::format!("{:08X}", dev.stable_id);
+                    let row = [
+                        ctrl.index.to_string(),
+                        bdf.clone(),
+                        ctrl_vidpid.clone(),
+                        port.port_id.to_string(),
+                        yn((portsc & (1 << 0)) != 0).to_string(),
+                        yn((portsc & (1 << 1)) != 0).to_string(),
+                        yn((portsc & (1 << 9)) != 0).to_string(),
+                        yn((portsc & (1 << 4)) != 0).to_string(),
+                        usb_port_speed_text(portsc).to_string(),
+                        usb_port_pls_text(portsc).to_string(),
+                        dev.port.to_string(),
+                        dev_vidpid,
+                        class,
+                        String::from(dev.kind),
+                        stable,
+                    ];
+                    table.emit_row(&row, |text| print_shell_line(io, text));
+                }
+            } else {
+                let row = [
+                    ctrl.index.to_string(),
+                    bdf.clone(),
+                    ctrl_vidpid.clone(),
+                    port.port_id.to_string(),
+                    yn((portsc & (1 << 0)) != 0).to_string(),
+                    yn((portsc & (1 << 1)) != 0).to_string(),
+                    yn((portsc & (1 << 9)) != 0).to_string(),
+                    yn((portsc & (1 << 4)) != 0).to_string(),
+                    usb_port_speed_text(portsc).to_string(),
+                    usb_port_pls_text(portsc).to_string(),
+                    String::from("-"),
+                    String::from("-"),
+                    String::from("-"),
+                    String::from("-"),
+                    String::from("-"),
+                ];
+                table.emit_row(&row, |text| print_shell_line(io, text));
+            }
+        }
+    }
+    table.emit_footer(|text| print_shell_line(io, text));
 }
 
 fn ensure_no_args(
