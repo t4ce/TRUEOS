@@ -20,6 +20,10 @@ pub mod trueos_module_loader;
 pub mod truesurfer_qjs_vm_task;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/truesurfer/content/html_demo.rs"]
+pub mod html_demo;
+
+#[cfg(feature = "trueos")]
 pub use truesurfer_qjs_vm_task as browser_task;
 
 #[cfg(feature = "trueos")]
