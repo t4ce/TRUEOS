@@ -2,8 +2,6 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use log::{Level, LevelFilter};
 use spin::Once;
 
-
-
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
 pub(crate) const NET_LOG_TCP_FLOW: bool = false;

@@ -62,18 +62,84 @@ fn classify_device_kind(class: u8, subclass: u8, protocol: u8) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 struct ObservedUsbDevice {
     backend_id: usize,
+    slot_id: u32,
     stable_id: u32,
     root_port_id: u8,
     port_id: u8,
     route_string: u32,
+    speed: &'static str,
     vendor_id: u16,
     product_id: u16,
     class: u8,
     subclass: u8,
     protocol: u8,
+    num_configurations: u8,
+    max_packet_size_0: u8,
+    configurations: Vec<super::TlbUsbConfiguration>,
+}
+
+#[inline]
+fn endpoint_transfer_type_label(transfer_type: usb_if::descriptor::EndpointType) -> &'static str {
+    match transfer_type {
+        usb_if::descriptor::EndpointType::Control => "ctrl",
+        usb_if::descriptor::EndpointType::Isochronous => "iso",
+        usb_if::descriptor::EndpointType::Bulk => "bulk",
+        usb_if::descriptor::EndpointType::Interrupt => "intr",
+    }
+}
+
+fn collect_tlb_usb_configurations(
+    configs: &[usb_if::descriptor::ConfigurationDescriptor],
+) -> Vec<super::TlbUsbConfiguration> {
+    configs
+        .iter()
+        .map(|cfg| super::TlbUsbConfiguration {
+            configuration_value: cfg.configuration_value,
+            attributes: cfg.attributes,
+            max_power: cfg.max_power,
+            interfaces: cfg
+                .interfaces
+                .iter()
+                .flat_map(|interface| {
+                    interface
+                        .alt_settings
+                        .iter()
+                        .map(|alt| super::TlbUsbInterface {
+                            interface_number: alt.interface_number,
+                            alternate_setting: alt.alternate_setting,
+                            class: alt.class,
+                            subclass: alt.subclass,
+                            protocol: alt.protocol,
+                            endpoints: alt
+                                .endpoints
+                                .iter()
+                                .map(|ep| super::TlbUsbEndpoint {
+                                    address: ep.address,
+                                    transfer_type: endpoint_transfer_type_label(ep.transfer_type),
+                                    max_packet_size: ep.max_packet_size,
+                                    interval: ep.interval,
+                                })
+                                .collect(),
+                        })
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn preserve_first_enumeration(
+    previous: &ObservedUsbDevice,
+    mut current: ObservedUsbDevice,
+) -> ObservedUsbDevice {
+    if !previous.configurations.is_empty() {
+        current.num_configurations = previous.num_configurations;
+        current.max_packet_size_0 = previous.max_packet_size_0;
+        current.configurations = previous.configurations.clone();
+    }
+    current
 }
 
 #[inline]
@@ -89,19 +155,39 @@ fn sync_observed_devices(
     let mut seen = OBSERVED_DEVICES[controller_id].lock();
     let previous = seen.clone();
 
-    let connected = current
+    let merged_current: Vec<ObservedUsbDevice> = current
         .iter()
-        .copied()
-        .filter(|candidate| !previous.iter().any(|known| same_physical_device(known, candidate)))
+        .cloned()
+        .map(|candidate| {
+            previous
+                .iter()
+                .find(|known| same_physical_device(known, &candidate))
+                .map(|known| preserve_first_enumeration(known, candidate.clone()))
+                .unwrap_or(candidate)
+        })
+        .collect();
+
+    let connected = merged_current
+        .iter()
+        .cloned()
+        .filter(|candidate| {
+            !previous
+                .iter()
+                .any(|known| same_physical_device(known, candidate))
+        })
         .collect();
 
     let disconnected = previous
         .iter()
-        .copied()
-        .filter(|known| !current.iter().any(|candidate| same_physical_device(known, candidate)))
+        .cloned()
+        .filter(|known| {
+            !merged_current
+                .iter()
+                .any(|candidate| same_physical_device(known, candidate))
+        })
         .collect();
 
-    *seen = current.to_vec();
+    *seen = merged_current;
     (connected, disconnected)
 }
 
@@ -122,7 +208,6 @@ fn note_disconnected_device(controller_id: usize, dev: ObservedUsbDevice) {
         dev.subclass,
         dev.protocol
     );
-
 }
 
 fn note_connected_device(controller_id: usize, dev: ObservedUsbDevice) {
@@ -348,19 +433,25 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
                 let location = dev.location();
                 ObservedUsbDevice {
                     backend_id: dev.id(),
+                    slot_id: dev.id() as u32,
                     stable_id: dev.stable_id().raw(),
                     root_port_id: topo.root_port_id,
                     port_id: topo.port_id,
                     route_string: location.route_string,
+                    speed: speed_label(topo.port_speed),
                     vendor_id: desc.vendor_id,
                     product_id: desc.product_id,
                     class: desc.class,
                     subclass: desc.subclass,
                     protocol: desc.protocol,
+                    num_configurations: desc.num_configurations,
+                    max_packet_size_0: desc.max_packet_size_0,
+                    configurations: collect_tlb_usb_configurations(dev.configurations()),
                 }
             })
             .collect();
-        let (connected, disconnected) = sync_observed_devices(info.index, current_devices.as_slice());
+        let (connected, disconnected) =
+            sync_observed_devices(info.index, current_devices.as_slice());
         for dev in disconnected {
             note_disconnected_device(info.index, dev);
         }
@@ -527,7 +618,7 @@ pub(crate) fn observed_device_summaries(
         .into_iter()
         .map(|dev| super::UsbDeviceSummary {
             stable_id: dev.stable_id,
-            slot_id: dev.backend_id as u32,
+            slot_id: dev.slot_id,
             port: dev.port_id,
             root_port_id: dev.root_port_id,
             route_string: dev.route_string,
@@ -537,6 +628,39 @@ pub(crate) fn observed_device_summaries(
             class: Some(dev.class),
             subclass: Some(dev.subclass),
             protocol: Some(dev.protocol),
+        })
+        .collect())
+}
+
+pub(crate) fn observed_devices(
+    controller_index: usize,
+) -> Result<Vec<super::TlbUsbDevice>, &'static str> {
+    if super::controller_by_index(controller_index).is_none() {
+        return Err("controller not found");
+    }
+
+    let observed = OBSERVED_DEVICES[controller_index].lock().clone();
+    Ok(observed
+        .into_iter()
+        .map(|dev| super::TlbUsbDevice {
+            controller_index,
+            stable_id: dev.stable_id,
+            slot_id: dev.slot_id,
+            root_port_id: dev.root_port_id,
+            route_string: dev.route_string,
+            path: Vec::new(),
+            port_id: dev.port_id,
+            speed: dev.speed,
+            parent_hub_slot_id: None,
+            hub_path: Vec::new(),
+            vendor_id: dev.vendor_id,
+            product_id: dev.product_id,
+            class: dev.class,
+            subclass: dev.subclass,
+            protocol: dev.protocol,
+            num_configurations: dev.num_configurations,
+            max_packet_size_0: dev.max_packet_size_0,
+            configurations: dev.configurations,
         })
         .collect())
 }

@@ -2409,6 +2409,77 @@ fn is_usb_mass_storage_label(label: Option<&str>) -> bool {
     matches!(label, Some(text) if text.starts_with("usbms-"))
 }
 
+fn usb_interface_class_text(interface: &crate::usb2::TlbUsbInterface) -> String {
+    alloc::format!("{:02X}/{:02X}/{:02X}", interface.class, interface.subclass, interface.protocol)
+}
+
+fn emit_usb_endpoint_rows(
+    io: &'static dyn ShellBackend2,
+    table: &TlbTable,
+    dev: &crate::usb2::TlbUsbDevice,
+) {
+    for cfg in dev.configurations.iter() {
+        for interface in cfg.interfaces.iter() {
+            if interface.endpoints.is_empty() {
+                let row = [
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    dev.speed.to_string(),
+                    String::new(),
+                    alloc::format!(
+                        "  if{} alt{}",
+                        interface.interface_number,
+                        interface.alternate_setting
+                    ),
+                    alloc::format!("cfg={}", cfg.configuration_value),
+                    usb_interface_class_text(interface),
+                    String::from("no-ep"),
+                    alloc::format!("{:08X}", dev.stable_id),
+                ];
+                table.emit_row(&row, |text| print_shell_line(io, text));
+                continue;
+            }
+
+            for endpoint in interface.endpoints.iter() {
+                let row = [
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    dev.speed.to_string(),
+                    String::new(),
+                    alloc::format!(
+                        "  if{} alt{}",
+                        interface.interface_number,
+                        interface.alternate_setting
+                    ),
+                    alloc::format!("ep=0x{:02X}", endpoint.address),
+                    usb_interface_class_text(interface),
+                    alloc::format!(
+                        "{} mps={} intv={} cfg={}",
+                        endpoint.transfer_type,
+                        endpoint.max_packet_size,
+                        endpoint.interval,
+                        cfg.configuration_value
+                    ),
+                    alloc::format!("{:08X}", dev.stable_id),
+                ];
+                table.emit_row(&row, |text| print_shell_line(io, text));
+            }
+        }
+    }
+}
+
 fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
     let controllers = crate::usb2::pci_usb_controllers();
     if controllers.is_empty() {
@@ -2418,10 +2489,22 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
 
     let mut devices_by_controller_root: BTreeMap<(usize, u8), Vec<crate::usb2::UsbDeviceSummary>> =
         BTreeMap::new();
+    let mut detailed_devices_by_controller_root: BTreeMap<
+        (usize, u8),
+        Vec<crate::usb2::TlbUsbDevice>,
+    > = BTreeMap::new();
     for ctrl in controllers.iter() {
         if let Ok(devices) = crate::usb2::crabusb_observed_device_summaries(ctrl.index) {
             for dev in devices {
                 devices_by_controller_root
+                    .entry((ctrl.index, dev.root_port_id))
+                    .or_default()
+                    .push(dev);
+            }
+        }
+        if let Ok(devices) = crate::usb2::crabusb_observed_devices(ctrl.index) {
+            for dev in devices {
+                detailed_devices_by_controller_root
                     .entry((ctrl.index, dev.root_port_id))
                     .or_default()
                     .push(dev);
@@ -2438,10 +2521,7 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         })
         .count();
 
-    line(
-        io,
-        alloc::format!("USB Overview (usbms registered={})", usbms_count).as_str(),
-    );
+    line(io, alloc::format!("USB Overview (usbms registered={})", usbms_count).as_str());
     let headers = [
         "Ctrl",
         "BDF",
@@ -2490,6 +2570,7 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         for port in diag.ports.iter() {
             let portsc = port.portsc;
             let attached = devices_by_controller_root.get(&(ctrl.index, port.port_id));
+            let detailed = detailed_devices_by_controller_root.get(&(ctrl.index, port.port_id));
             if let Some(devices) = attached {
                 for dev in devices.iter() {
                     let dev_vidpid = match (dev.vid, dev.pid) {
@@ -2521,6 +2602,14 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                         stable,
                     ];
                     table.emit_row(&row, |text| print_shell_line(io, text));
+
+                    if let Some(detailed_devices) = detailed {
+                        if let Some(full) = detailed_devices.iter().find(|candidate| {
+                            candidate.stable_id == dev.stable_id && candidate.port_id == dev.port
+                        }) {
+                            emit_usb_endpoint_rows(io, &table, full);
+                        }
+                    }
                 }
             } else {
                 let row = [

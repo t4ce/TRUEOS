@@ -277,8 +277,11 @@ fn ui2_window_min_size(window: &Ui2Window) -> (f32, f32) {
     }
 
     let mut min_w: f32 = 1.0;
-    let min_h = if window.titlebar_visible { UI2_TITLE_H } else { 0.0 }
-        + if window.bottom_bar_visible {
+    let min_h = if window.titlebar_visible {
+        UI2_TITLE_H
+    } else {
+        0.0
+    } + if window.bottom_bar_visible {
         UI2_BOTTOM_BAR_H
     } else {
         0.0
@@ -288,8 +291,7 @@ fn ui2_window_min_size(window: &Ui2Window) -> (f32, f32) {
     if button_count != 0 {
         let s = UI2_TITLE_H;
         let gap = 1.0f32;
-        let button_span = button_count as f32 * s
-            + button_count.saturating_sub(1) as f32 * gap;
+        let button_span = button_count as f32 * s + button_count.saturating_sub(1) as f32 * gap;
         min_w = min_w.max(button_span);
     }
 
