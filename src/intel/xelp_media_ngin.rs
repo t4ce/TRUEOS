@@ -16,7 +16,7 @@ use super::xelp_media_mp4::{
 const MAX_MEDIA_ENGINES: usize = 4;
 const MAX_MEDIA_API_ROUTES: usize = 4;
 const MAX_MEDIA_RESULT_SLOTS: usize = 4;
-const MEDIA_PLAYBACK_PROBE_MAX_SAMPLES: u32 = u32::MAX;
+const MEDIA_MAX_DECODE_FRAMES: u32 = u32::MAX;
 const MEDIA_PLAYBACK_LOG_INTERVAL: u32 = 30;
 const MEDIA_PLAYBACK_FRAME_DELAY_MS: u64 = 5;
 
@@ -80,7 +80,7 @@ const MEDIA_HTTP_LOCAL_DEMO_URLS: [&str; 2] = [
 ];
 const MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS: u32 = 180_000;
 const MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES: usize = 1024 * 1024 * 1024;
-const MEDIA_DEMO_CACHE_PATH: &str = "media/demo_yelly.mp4";
+const MEDIA_DECODE_CACHE_PATH: &str = "media/demo_yelly.mp4";
 
 const RING_HWS_PGA: usize = 0x80;
 const RING_HWSTAM: usize = 0x98;
@@ -197,7 +197,7 @@ const MEDIA_RESULT_FRAME_DIMS_SLOT: u64 =
     MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT + MEDIA_RESULT_SLOT_BYTES;
 
 static MEDIA_KICKOFF_RAN: AtomicBool = AtomicBool::new(false);
-static MEDIA_DEMO_RAN: AtomicBool = AtomicBool::new(false);
+static MEDIA_DECODE_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_KICKOFF_STATE: Mutex<Option<MediaKickoffState>> = Mutex::new(None);
 static MEDIA_BACKING: Mutex<Option<MediaBitstreamBacking>> = Mutex::new(None);
 
@@ -229,13 +229,6 @@ pub(crate) enum MediaSubmissionTransport {
     GuC,
     Execlists,
     Disabled,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum MediaCompletionMode {
-    ResultMemoryPoll,
-    ExeclistStatusPoll,
-    None,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -424,7 +417,7 @@ pub(crate) struct MediaTopology {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct MediaBitstreamDemoState {
+pub(crate) struct MediaDecodeFrameState {
     pub ready: bool,
     pub engine_name: &'static str,
     pub ring_gpu_addr: u64,
@@ -463,7 +456,7 @@ pub(crate) struct MediaKickoffState {
     pub guc_ready: bool,
     pub guc_status: u32,
     pub stage: MediaKickoffStage,
-    pub decode_bitstream_demo: Option<MediaBitstreamDemoState>,
+    pub last_decode_frame: Option<MediaDecodeFrameState>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -721,7 +714,7 @@ fn snapshot_runtime(
 
 fn rebuild_kickoff_state(
     stage: MediaKickoffStage,
-    demo: Option<MediaBitstreamDemoState>,
+    demo: Option<MediaDecodeFrameState>,
 ) -> Option<MediaKickoffState> {
     let dev = super::claimed_device()?;
     let topology = current_topology();
@@ -746,11 +739,11 @@ fn rebuild_kickoff_state(
         guc_ready: super::guc_ready(),
         guc_status: super::guc::status(dev),
         stage,
-        decode_bitstream_demo: demo,
+        last_decode_frame: demo,
     })
 }
 
-fn store_kickoff_state(stage: MediaKickoffStage, demo: Option<MediaBitstreamDemoState>) {
+fn store_kickoff_state(stage: MediaKickoffStage, demo: Option<MediaDecodeFrameState>) {
     *MEDIA_KICKOFF_STATE.lock() = rebuild_kickoff_state(stage, demo);
 }
 
@@ -822,27 +815,7 @@ fn marker_base(engine: MediaEngineDescriptor) -> u32 {
     class_base + (engine.id.instance as u32) * 0x100
 }
 
-fn fit_output_dims(
-    width: usize,
-    height: usize,
-    budget_bytes: usize,
-) -> Option<(usize, usize, usize)> {
-    let mut out_w = width.max(1);
-    let mut out_h = height.max(1);
-    loop {
-        let pitch = super::align_up(out_w.checked_mul(4)?, 64)?;
-        if pitch.checked_mul(out_h)? <= budget_bytes {
-            return Some((out_w, out_h, pitch));
-        }
-        if out_w == 1 && out_h == 1 {
-            return None;
-        }
-        out_w = (out_w / 2).max(1);
-        out_h = (out_h / 2).max(1);
-    }
-}
-
-fn sample_surface_signature(bytes: &[u8]) -> (u32, usize) {
+fn surface_signature(bytes: &[u8]) -> (u32, usize) {
     let sample_count = bytes.len().min(4096);
     if sample_count == 0 {
         return (0, 0);
@@ -862,14 +835,14 @@ fn sample_surface_signature(bytes: &[u8]) -> (u32, usize) {
     (signature, nonzero)
 }
 
-fn progressive_present_output_surface(
+fn present_nv12_frame(
     output_surface: &[u8],
     frame_width: u16,
     frame_height: u16,
     output_pitch: usize,
     submit_completed: bool,
 ) -> (bool, u32, usize) {
-    let (signature, nonzero_samples) = sample_surface_signature(output_surface);
+    let (signature, nonzero_samples) = surface_signature(output_surface);
 
     // Y-tile NV12: chroma starts at tile-row-aligned height (matches batch builder).
     let chroma_y_aligned = ((frame_height as usize) + 31) & !31;
@@ -897,7 +870,7 @@ fn progressive_present_output_surface(
     (false, signature, nonzero_samples)
 }
 
-fn decode_access_unit_demo(
+fn decode_and_present_frame(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
     windows: MediaGpuWindowLayout,
@@ -913,7 +886,7 @@ fn decode_access_unit_demo(
     sps: &ParsedSps,
     pps: &ParsedPps,
     sample_idx: u32,
-) -> Option<MediaBitstreamDemoState> {
+) -> Option<MediaDecodeFrameState> {
     let kickoff_marker = marker_base(engine);
     let complete_marker = kickoff_marker + 3;
     let (
@@ -923,7 +896,7 @@ fn decode_access_unit_demo(
         output_surface_gpu_addr,
         output_surface_phys,
         output_surface_virt,
-    ) = submit_decode_bitstream_demo(
+    ) = submit_h264_frame(
         dev,
         engine,
         windows,
@@ -945,7 +918,7 @@ fn decode_access_unit_demo(
         core::slice::from_raw_parts(output_surface_virt as *const u8, output_surface_bytes)
     };
     let (present_ready, output_surface_signature, output_surface_nonzero_samples) =
-        progressive_present_output_surface(
+        present_nv12_frame(
             output_surface,
             frame_width,
             frame_height,
@@ -953,7 +926,7 @@ fn decode_access_unit_demo(
             submit_completed,
         );
 
-    Some(MediaBitstreamDemoState {
+    Some(MediaDecodeFrameState {
         ready: present_ready,
         engine_name: engine.name,
         ring_gpu_addr: windows.ring_gpu_addr,
@@ -2011,7 +1984,7 @@ fn seed_media_ring_live_state(
     super::mmio_write(dev, ring_base + RING_HWSTAM, !0u32);
 }
 
-fn submit_decode_bitstream_demo(
+fn submit_h264_frame(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
     windows: MediaGpuWindowLayout,
@@ -2381,7 +2354,7 @@ fn submit_decode_bitstream_demo(
     ))
 }
 
-fn ensure_demo_backing(
+fn ensure_decode_backing(
     dev: crate::intel::Dev,
     windows: MediaGpuWindowLayout,
 ) -> Option<MediaBitstreamBacking> {
@@ -2467,7 +2440,7 @@ pub(crate) fn kickoff_once() {
     let prior_demo = MEDIA_KICKOFF_STATE
         .lock()
         .as_ref()
-        .and_then(|state| state.decode_bitstream_demo);
+        .and_then(|state| state.last_decode_frame);
     store_kickoff_state(MediaKickoffStage::CommandEncoding, prior_demo);
     if let Some(state) = *MEDIA_KICKOFF_STATE.lock() {
         crate::log!(
@@ -2487,9 +2460,9 @@ pub(crate) fn kickoff_state() -> Option<MediaKickoffState> {
     *MEDIA_KICKOFF_STATE.lock()
 }
 
-pub(crate) fn demo_surface_window(name: &str) -> Option<MediaSurfaceWindow> {
+pub(crate) fn decode_surface_window(name: &str) -> Option<MediaSurfaceWindow> {
     let state = *MEDIA_KICKOFF_STATE.lock();
-    let demo = state?.decode_bitstream_demo?;
+    let demo = state?.last_decode_frame?;
     let backing = MEDIA_BACKING.lock().as_ref().copied()?;
     match name {
         "media.ring" => Some(MediaSurfaceWindow {
@@ -2556,20 +2529,20 @@ pub(crate) fn demo_surface_window(name: &str) -> Option<MediaSurfaceWindow> {
     }
 }
 
-async fn fetch_media_demo_body_async() -> Option<(&'static str, Vec<u8>)> {
+async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
     // Try loading from persistent filesystem cache first.
     if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-        match crate::r::fs::trueosfs::file_out_async(disk, MEDIA_DEMO_CACHE_PATH).await {
+        match crate::r::fs::trueosfs::file_out_async(disk, MEDIA_DECODE_CACHE_PATH).await {
             Ok(Some(cached)) if !cached.is_empty() => {
                 crate::log!(
                     "intel/media: cache hit path={} bytes={}\n",
-                    MEDIA_DEMO_CACHE_PATH,
+                    MEDIA_DECODE_CACHE_PATH,
                     cached.len()
                 );
                 return Some(("cache", cached));
             }
             _ => {
-                crate::log!("intel/media: cache miss path={}\n", MEDIA_DEMO_CACHE_PATH);
+                crate::log!("intel/media: cache miss path={}\n", MEDIA_DECODE_CACHE_PATH);
             }
         }
     }
@@ -2593,7 +2566,7 @@ async fn fetch_media_demo_body_async() -> Option<(&'static str, Vec<u8>)> {
                 if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
                     match crate::r::fs::trueosfs::file_in_async(
                         disk,
-                        MEDIA_DEMO_CACHE_PATH,
+                        MEDIA_DECODE_CACHE_PATH,
                         body.as_slice(),
                     )
                     .await
@@ -2601,20 +2574,20 @@ async fn fetch_media_demo_body_async() -> Option<(&'static str, Vec<u8>)> {
                         Ok(true) => {
                             crate::log!(
                                 "intel/media: cached path={} bytes={}\n",
-                                MEDIA_DEMO_CACHE_PATH,
+                                MEDIA_DECODE_CACHE_PATH,
                                 body.len()
                             );
                         }
                         Ok(false) => {
                             crate::log!(
                                 "intel/media: cache write skipped path={}\n",
-                                MEDIA_DEMO_CACHE_PATH
+                                MEDIA_DECODE_CACHE_PATH
                             );
                         }
                         Err(err) => {
                             crate::log!(
                                 "intel/media: cache write failed path={} err={:?}\n",
-                                MEDIA_DEMO_CACHE_PATH,
+                                MEDIA_DECODE_CACHE_PATH,
                                 err
                             );
                         }
@@ -2631,10 +2604,10 @@ async fn fetch_media_demo_body_async() -> Option<(&'static str, Vec<u8>)> {
     None
 }
 
-pub(crate) async fn run_https_media_demo_once_async() {
+pub(crate) async fn run_media_decode_async() {
     kickoff_once();
 
-    if MEDIA_DEMO_RAN.swap(true, Ordering::AcqRel) {
+    if MEDIA_DECODE_RAN.swap(true, Ordering::AcqRel) {
         crate::log!("intel/media: demo skipped reason=already-ran\n");
         return;
     }
@@ -2656,7 +2629,7 @@ pub(crate) async fn run_https_media_demo_once_async() {
         engine.name
     );
 
-    let (source_url, body) = match fetch_media_demo_body_async().await {
+    let (source_url, body) = match fetch_media_source_async().await {
         Some(payload) => payload,
         None => {
             crate::log!("intel/media: fetch failed local_http_candidates_exhausted=1\n");
@@ -2766,16 +2739,13 @@ pub(crate) async fn run_https_media_demo_once_async() {
         annex_b.idr_nal_length,
     );
 
-    let Some(backing) = ensure_demo_backing(dev, windows) else {
+    let Some(backing) = ensure_decode_backing(dev, windows) else {
         crate::log!("intel/media: backing alloc/map failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return;
     };
 
-    let playback_probe_samples = summary
-        .sample_count
-        .min(MEDIA_PLAYBACK_PROBE_MAX_SAMPLES)
-        .max(1);
+    let playback_probe_samples = summary.sample_count.min(MEDIA_MAX_DECODE_FRAMES).max(1);
     let mut playback_attempted = 0u32;
     let mut playback_presented = 0u32;
     let mut playback_completed = 0u32;
@@ -2863,7 +2833,7 @@ pub(crate) async fn run_https_media_demo_once_async() {
             );
         }
 
-        let Some(demo) = decode_access_unit_demo(
+        let Some(demo) = decode_and_present_frame(
             dev,
             engine,
             windows,

@@ -162,7 +162,7 @@ pub fn init_once() {
         crate::wait::spawn_local_detached(async move {
             Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
             crate::log!("intel/media: boot demo begin\n");
-            self::run_https_media_demo_once_async().await;
+            self::run_media_decode_async().await;
         });
     } else {
         crate::log!("intel/media: boot demo disabled\n");
@@ -214,12 +214,14 @@ pub fn media_kickoff_state() -> Option<self::xelp_media_ngin::MediaKickoffState>
     self::xelp_media_ngin::kickoff_state()
 }
 
-pub fn media_demo_surface_window(name: &str) -> Option<self::xelp_media_ngin::MediaSurfaceWindow> {
-    self::xelp_media_ngin::demo_surface_window(name)
+pub fn media_decode_surface_window(
+    name: &str,
+) -> Option<self::xelp_media_ngin::MediaSurfaceWindow> {
+    self::xelp_media_ngin::decode_surface_window(name)
 }
 
-pub async fn run_https_media_demo_once_async() {
-    self::xelp_media_ngin::run_https_media_demo_once_async().await
+pub async fn run_media_decode_async() {
+    self::xelp_media_ngin::run_media_decode_async().await
 }
 
 fn find_dev() -> Option<Dev> {

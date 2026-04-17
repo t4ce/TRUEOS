@@ -17,7 +17,7 @@ const MAX_ACTIVE_STREAMS: usize = 8;
 const MASS_KEEPALIVE_MS: u64 = 2_000;
 const MASS_IO_RETRY_LIMIT: u8 = 8;
 const MASS_IO_RETRY_DELAY_MS: u64 = 25;
-const MASS_RUNTIME_WAIT_LIMIT: u16 = 500;
+const MASS_RUNTIME_WAIT_LIMIT: u8 = 20;
 const MASS_RUNTIME_WAIT_DELAY_MS: u64 = 10;
 const MIN_IO_BYTES: usize = 8 * 1024;
 const MAX_IO_BYTES: usize = 128 * 1024;
@@ -104,13 +104,6 @@ async fn take_runtime_wait(runtime_key: u64) -> Option<UsbMassRuntime> {
         }
         Timer::after(EmbassyDuration::from_millis(MASS_RUNTIME_WAIT_DELAY_MS)).await;
     }
-
-    crate::log!(
-        "crabusb: mass runtime wait timeout key=0x{:016X} waited_ms={}\n",
-        runtime_key,
-        (MASS_RUNTIME_WAIT_LIMIT as u64 + 1) * MASS_RUNTIME_WAIT_DELAY_MS
-    );
-
     None
 }
 
@@ -482,7 +475,6 @@ impl block::BlockDevice for UsbMassBlockDevice {
             let result = async {
                 let mut cur_lba = lba;
                 let mut remaining = buf;
-                let mut chunk_idx = 0u32;
                 while !remaining.is_empty() {
                     let max_blocks = (current_mass_io_bytes(&rt, block_size) / block_size).max(1);
                     let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
@@ -490,17 +482,6 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                     let mut attempts = 0u8;
                     loop {
-                        if attempts > 0 || chunk_idx == 0 {
-                            crate::log!(
-                                "crabusb: mass {:04X}:{:04X} write-io lba={} blocks={} bytes={} attempt={}\n",
-                                rt.vendor_id,
-                                rt.product_id,
-                                cur_lba,
-                                blocks_here,
-                                bytes_here,
-                                attempts
-                            );
-                        }
                         let result = mass::write_blocks_bot(
                             &mut rt.bulk_out,
                             &mut rt.bulk_in,
@@ -553,7 +534,6 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                     remaining = &remaining[bytes_here..];
                     cur_lba = cur_lba.saturating_add(blocks_here as u64);
-                    chunk_idx = chunk_idx.wrapping_add(1);
                 }
                 Ok(())
             }
