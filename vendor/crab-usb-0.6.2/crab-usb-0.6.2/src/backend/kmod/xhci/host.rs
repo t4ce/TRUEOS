@@ -277,11 +277,16 @@ impl Xhci {
         let hccparams1 = reg.capability.hccparams1.read_volatile();
         let ac64 = hccparams1.addressing_capability(); // Bit[0]: 64-bit Addressing Capability
 
-        // Follow the controller's advertised addressing capability.
-        let dma_mask = if ac64 {
-            u64::MAX as usize
-        } else {
+        // Keep xHCI infrastructure DMA below 4 GiB on bare metal.
+        // Some controllers (e.g. Intel RPL-PCH 7A60) advertise AC64 but silently
+        // fail to fetch scratchpad buffers or command/event rings from addresses
+        // above 4 GiB, causing the first command to never complete.
+        let force_32bit_dma =
+            vendor_id == Self::INTEL_VENDOR_ID && device_id == Self::INTEL_RPL_PCH_XHCI_DEVICE_ID;
+        let dma_mask = if force_32bit_dma || !ac64 {
             u32::MAX as usize
+        } else {
+            u64::MAX as usize
         };
 
         let kernel = Kernel::new(dma_mask as _, kernel);
@@ -300,9 +305,10 @@ impl Xhci {
 
         if disable_staged_run_experiments {
             info!(
-                "xHCI: conservative pre-RUN quirk enabled for pci {:04X}:{:04X}",
+                "xHCI: conservative pre-RUN quirk enabled for pci {:04X}:{:04X} dma_mask={}bit",
                 vendor_id,
-                device_id
+                device_id,
+                if force_32bit_dma { 32 } else { 64 }
             );
         }
 

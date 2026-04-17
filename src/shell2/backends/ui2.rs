@@ -239,19 +239,27 @@ impl TerminalState {
         {
             return;
         }
-        let count = count.max(1).min(
-            self.scroll_bottom
-                .saturating_sub(self.scroll_top)
-                .saturating_add(1),
-        );
-        for row in self.scroll_top..=self.scroll_bottom.saturating_sub(count) {
+        let region_height = self
+            .scroll_bottom
+            .saturating_sub(self.scroll_top)
+            .saturating_add(1);
+        let count = count.max(1).min(region_height);
+        if count >= region_height {
+            for row in self.scroll_top..=self.scroll_bottom {
+                self.clear_line_range(row, 0, self.cols.saturating_sub(1));
+            }
+            return;
+        }
+
+        let last_dst_row = self.scroll_bottom - count;
+        for row in self.scroll_top..=last_dst_row {
             for col in 0..self.cols {
                 let dst = self.cell_index(row, col);
                 let src = self.cell_index(row + count, col);
                 self.cells[dst] = self.cells[src];
             }
         }
-        for row in self.scroll_bottom.saturating_sub(count).saturating_add(1)..=self.scroll_bottom {
+        for row in last_dst_row.saturating_add(1)..=self.scroll_bottom {
             self.clear_line_range(row, 0, self.cols.saturating_sub(1));
         }
     }
@@ -260,12 +268,20 @@ impl TerminalState {
         if self.cursor_row < self.scroll_top || self.cursor_row > self.scroll_bottom {
             return;
         }
-        let count = count.max(1).min(
-            self.scroll_bottom
-                .saturating_sub(self.cursor_row)
-                .saturating_add(1),
-        );
-        for row in (self.cursor_row..=self.scroll_bottom.saturating_sub(count)).rev() {
+        let region_height = self
+            .scroll_bottom
+            .saturating_sub(self.cursor_row)
+            .saturating_add(1);
+        let count = count.max(1).min(region_height);
+        if count >= region_height {
+            for row in self.cursor_row..=self.scroll_bottom {
+                self.clear_line_range(row, 0, self.cols.saturating_sub(1));
+            }
+            return;
+        }
+
+        let last_src_row = self.scroll_bottom - count;
+        for row in (self.cursor_row..=last_src_row).rev() {
             for col in 0..self.cols {
                 let dst = self.cell_index(row + count, col);
                 let src = self.cell_index(row, col);

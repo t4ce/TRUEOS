@@ -1,4 +1,5 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use log::{Level, LevelFilter};
 use spin::Once;
 
 
@@ -40,6 +41,7 @@ pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = true;
 pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = true;
 pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
 pub(crate) const INTEL_MEDIA_NGIN_LOGS: bool = true;
+pub(crate) const INTEL_MEDIA_FS_CACHE_ENABLED: bool = false;
 pub(crate) const INTEL_COPY_NGIN_LOGS: bool = true;
 
 pub(crate) const GFX_CABI_FRAME_DEBUG_LOGS: bool = false;
@@ -48,7 +50,7 @@ pub(crate) static GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS: AtomicU32 = AtomicU32::new
 pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(true);
 
 pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
-
+pub(crate) const USB_VENDOR_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = true;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = true;
 
@@ -58,3 +60,16 @@ pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static AP_ACTIVITY_LOGGED: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn usb_vendor_log_enabled(level: Level) -> bool {
+    match USB_VENDOR_LOG_LEVEL {
+        LevelFilter::Off => false,
+        LevelFilter::Error => matches!(level, Level::Error),
+        LevelFilter::Warn => matches!(level, Level::Warn | Level::Error),
+        LevelFilter::Info => matches!(level, Level::Info | Level::Warn | Level::Error),
+        LevelFilter::Debug => {
+            matches!(level, Level::Debug | Level::Info | Level::Warn | Level::Error)
+        }
+        LevelFilter::Trace => true,
+    }
+}

@@ -41,12 +41,10 @@ use trueos_gfx_core::{
     RGB_VERTEX_SIZE, Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_rgb_quad_px, push_tex_quad_px,
 };
 
-const UI2_TITLE_H: f32 = 26.0;
-const UI2_BOTTOM_BAR_H: f32 = 18.0;
+const UI2_BAR_H: f32 = 26.0;
+const UI2_TITLE_H: f32 = UI2_BAR_H;
+const UI2_BOTTOM_BAR_H: f32 = UI2_BAR_H;
 const UI2_SYSTEM_SCROLLBAR_PX: f32 = 4.0;
-const UI2_SYSTEM_BUTTON_W: f32 = 24.0;
-const UI2_SYSTEM_BUTTON_H: f32 = 14.0;
-const UI2_SYSTEM_BUTTON_GAP: f32 = 4.0;
 const UI2_SYSTEM_BUTTON_FORK_ICON_ID: u32 = 3;
 const UI2_SYSTEM_BUTTON_MINIMIZE_ICON_ID: u32 = 5;
 const UI2_SYSTEM_BUTTON_MAXIMIZE_ICON_ID: u32 = 7;
@@ -56,9 +54,6 @@ const UI2_BROWSER_TITLE_OVERLAY_ANIMATION_ENABLED: bool = false;
 const UI2_DEBUG_FPS_OVERLAY_ENABLED: bool = false;
 const UI2_BROWSER_TITLE_OVERLAY_PERIOD_MS: u64 = 2400;
 const UI2_BROWSER_FORK_WINDOW_OFFSET_PX: f32 = 24.0;
-const UI2_BOTTOM_RESIZE_BUTTON_W: f32 = 18.0;
-const UI2_BOTTOM_RESIZE_BUTTON_H: f32 = 14.0;
-const UI2_BOTTOM_RESIZE_BUTTON_PAD: f32 = 2.0;
 const UI2_MINIMIZED_STRIP_W: f32 = 333.0;
 const UI2_MINIMIZED_STRIP_GAP: f32 = 6.0;
 const UI2_MINIMIZED_STRIP_PAD: f32 = 8.0;
@@ -80,11 +75,6 @@ const UI2_WINDOW_RESIZE_TOP: u32 = 1 << 1;
 const UI2_WINDOW_RESIZE_RIGHT: u32 = 1 << 2;
 const UI2_WINDOW_RESIZE_BOTTOM: u32 = 1 << 3;
 const UI2_WARMUP_RENDER_TARGET_TEX_ID: u32 = 4_706;
-
-#[inline]
-const fn ui2_window_min_extent() -> f32 {
-    UI2_BOTTOM_BAR_H
-}
 
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Ui2Rect {
@@ -266,6 +256,48 @@ struct Ui2Window {
     last_reason: &'static str,
     last_logged_dirty_seq: u32,
     last_logged_reason: &'static str,
+}
+
+#[inline]
+fn ui2_system_button_count(window: &Ui2Window) -> usize {
+    if window.decoration_mode != Ui2WindowDecorationMode::System || !window.titlebar_visible {
+        return 0;
+    }
+    if window.state == Ui2WindowStateKind::Minimized {
+        2
+    } else {
+        5
+    }
+}
+
+#[inline]
+fn ui2_window_min_size(window: &Ui2Window) -> (f32, f32) {
+    if window.decoration_mode != Ui2WindowDecorationMode::System {
+        return (1.0, 1.0);
+    }
+
+    let mut min_w: f32 = 1.0;
+    let min_h = if window.titlebar_visible { UI2_TITLE_H } else { 0.0 }
+        + if window.bottom_bar_visible {
+        UI2_BOTTOM_BAR_H
+    } else {
+        0.0
+    };
+
+    let button_count = ui2_system_button_count(window);
+    if button_count != 0 {
+        let s = UI2_TITLE_H;
+        let gap = 1.0f32;
+        let button_span = button_count as f32 * s
+            + button_count.saturating_sub(1) as f32 * gap;
+        min_w = min_w.max(button_span);
+    }
+
+    if window.bottom_bar_visible && window.state == Ui2WindowStateKind::Normal {
+        min_w = min_w.max(UI2_BOTTOM_BAR_H + 1.0);
+    }
+
+    (min_w, min_h)
 }
 
 struct Ui2State {

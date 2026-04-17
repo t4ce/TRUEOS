@@ -948,7 +948,7 @@ static TASKS: &[TaskSpec] = &[
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
     ),
-    TaskSpec::enabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
+    TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
         NET_CONFIGURED_AND_ROOT_READY,
@@ -1074,7 +1074,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_TRIANGLE_DEMO_STARTED,
         spawn_ui2_triangle_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-bgrt-demo",
         UI2_DEMO_READY,
         &UI2_BGRT_DEMO_STARTED,
@@ -1098,7 +1098,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_PARTICLE_DEMO_STARTED,
         spawn_ui2_particle_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-smiley-fountain-demo",
         UI2_DEMO_READY,
         &UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
@@ -1110,7 +1110,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_SHELL_DEMO_STARTED,
         spawn_ui2_shell_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-swarm-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
         &UI2_SWARM_DEMO_STARTED,

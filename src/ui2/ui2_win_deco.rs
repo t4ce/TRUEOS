@@ -10,7 +10,7 @@ const UI2_SYSTEM_BUTTON_FORK_TWEMOJI: char = '\u{2795}';
 const UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI: char = '\u{2796}';
 const UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI: char = '\u{23F9}';
 const UI2_SYSTEM_BUTTON_CLOSE_TWEMOJI: char = '\u{274E}';
-const UI2_BOTTOM_RESIZE_TWEMOJI: char = '\u{1F52F}';
+const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{2733}';
 
 fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::String {
     if text.is_empty() || max_width_px <= 0.0 {
@@ -66,14 +66,12 @@ fn decoration_icon_draw_rect(anchor: Ui2Rect, right_align: bool) -> Ui2Rect {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum Ui2DecorationIconKind {
     SystemButton(Ui2SystemButtonAction),
-    ResizeHandle,
     TitlebarWindow,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum Ui2DecorationLabelKind {
     SystemButton(Ui2SystemButtonAction),
-    ResizeHandle,
 }
 
 impl Ui2DecorationLabelKind {
@@ -91,7 +89,6 @@ impl Ui2DecorationLabelKind {
             Self::SystemButton(Ui2SystemButtonAction::Minimize) => "⊟",
             Self::SystemButton(Ui2SystemButtonAction::ToggleMaximize) => "□",
             Self::SystemButton(Ui2SystemButtonAction::Close) => "⊠",
-            Self::ResizeHandle => "⊞",
         }
     }
 }
@@ -112,7 +109,6 @@ impl Ui2DecorationIconSource for Ui2DecorationIconKind {
                 UI2_SYSTEM_BUTTON_MAXIMIZE_ICON_ID
             }
             Self::SystemButton(Ui2SystemButtonAction::Close) => UI2_SYSTEM_BUTTON_CLOSE_ICON_ID,
-            Self::ResizeHandle => 1,
             Self::TitlebarWindow => window.icon_id,
         }
     }
@@ -308,18 +304,7 @@ fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
     let Some(rect) = window_bottom_resize_button_rect(state, window) else {
         return;
     };
-    if draw_window_twemoji_button(state, window, rect, UI2_BOTTOM_RESIZE_TWEMOJI) {
-        return;
-    }
-    let draw = decoration_icon_draw_rect(rect, true);
-    draw_window_decoration_icon(
-        state,
-        window,
-        Ui2DecorationIconKind::ResizeHandle,
-        draw.x,
-        draw.y,
-        draw.w,
-    );
+    draw_window_twemoji_button(state, window, rect, UI2_RESIZE_HANDLE_TWEMOJI);
 }
 
 fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
@@ -926,8 +911,8 @@ pub(super) fn window_content_rect(state: &Ui2State, window: &Ui2Window) -> Optio
             let right_inset = window_right_inset(window);
             let top_inset = window_top_inset(window);
             let bottom_inset = window_bottom_inset(window);
-            let w = (rect.w - left_inset - right_inset).max(1.0);
-            let h = (rect.h - top_inset - bottom_inset).max(1.0);
+            let w = rect.w - left_inset - right_inset;
+            let h = rect.h - top_inset - bottom_inset;
             if !(w > 0.0 && h > 0.0) {
                 return None;
             }
@@ -964,8 +949,8 @@ pub(super) fn window_vertical_scrollbar_rect(
     let top_inset = window_top_inset(window);
     let bottom_inset = window_bottom_inset(window);
     let w = window_vertical_scrollbar_width(window);
-    let h = (rect.h - top_inset - bottom_inset).max(1.0);
-    if h <= 0.0 {
+    let h = rect.h - top_inset - bottom_inset;
+    if !(h > 0.0) {
         return None;
     }
     let x = if window.vertical_scrollbar_side == Ui2WindowVerticalScrollbarSide::Left {
@@ -1001,8 +986,8 @@ fn window_bottom_resize_button_anchor_rect(
         return None;
     }
     let bar = window_bottom_bar_rect(state, window)?;
-    let button_size = bar.h.min((bar.w - 1.0).max(1.0)).max(1.0);
-    let button_x = bar.x + bar.w - 1.0 - button_size;
+    let button_size = bar.h;
+    let button_x = bar.x + bar.w - button_size;
     let button_y = bar.y;
     Some(Ui2Rect::new(button_x, button_y, button_size, button_size))
 }
@@ -1024,41 +1009,30 @@ fn window_system_button_anchor_rect(
         return None;
     }
     let titlebar = window_decoration_rect(state, window)?;
-    let button_size = if window.state == Ui2WindowStateKind::Minimized {
-        (titlebar.h - 2.0).max(1.0)
+    let s = titlebar.h.max(1.0);
+    let gap = 1.0f32;
+
+    // Right-to-left order: Close, Maximize, Minimize, Fork, Composition.
+    // For minimized windows only Close + Maximize are shown.
+    let actions_normal: &[Ui2SystemButtonAction] = &[
+        Ui2SystemButtonAction::Close,
+        Ui2SystemButtonAction::ToggleMaximize,
+        Ui2SystemButtonAction::Minimize,
+        Ui2SystemButtonAction::Fork,
+        Ui2SystemButtonAction::ToggleComposition,
+    ];
+    let actions_minimized: &[Ui2SystemButtonAction] = &[
+        Ui2SystemButtonAction::Close,
+        Ui2SystemButtonAction::ToggleMaximize,
+    ];
+    let actions = if window.state == Ui2WindowStateKind::Minimized {
+        actions_minimized
     } else {
-        (titlebar.h - 2.0).min(UI2_SYSTEM_BUTTON_W).max(1.0)
+        actions_normal
     };
-    let button_y = if window.state == Ui2WindowStateKind::Minimized {
-        titlebar.y + 1.0
-    } else {
-        titlebar.y + ((titlebar.h - button_size) * 0.5).max(0.0)
-    };
-    let close_x = titlebar.x + titlebar.w - 1.0 - button_size;
-    if window.state == Ui2WindowStateKind::Minimized {
-        let maximize_x = close_x - button_size - 1.0;
-        return match action {
-            Ui2SystemButtonAction::ToggleMaximize => {
-                Some(Ui2Rect::new(maximize_x, button_y, button_size, button_size))
-            }
-            Ui2SystemButtonAction::Close => {
-                Some(Ui2Rect::new(close_x, button_y, button_size, button_size))
-            }
-            _ => None,
-        };
-    }
-    let maximize_x = close_x - button_size - 1.0;
-    let minimize_x = maximize_x - button_size - 1.0;
-    let fork_x = minimize_x - button_size - 1.0;
-    let composition_x = fork_x - button_size - 1.0;
-    let x = match action {
-        Ui2SystemButtonAction::ToggleComposition => composition_x,
-        Ui2SystemButtonAction::Fork => fork_x,
-        Ui2SystemButtonAction::Minimize => minimize_x,
-        Ui2SystemButtonAction::ToggleMaximize => maximize_x,
-        Ui2SystemButtonAction::Close => close_x,
-    };
-    Some(Ui2Rect::new(x, button_y, button_size, button_size))
+    let slot = actions.iter().position(|a| *a == action)?;
+    let x = titlebar.x + titlebar.w - (slot as f32 + 1.0) * s - slot as f32 * gap;
+    Some(Ui2Rect::new(x, titlebar.y, s, s))
 }
 
 pub(super) fn system_button_action_at(
