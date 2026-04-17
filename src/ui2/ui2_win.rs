@@ -102,6 +102,12 @@ pub(super) fn alloc_window(
         last_logged_dirty_seq: 0,
         last_logged_reason: "",
     });
+    if let Some(window) = state.windows.last_mut() {
+        let (min_w, min_h) = ui2_window_min_size(window);
+        window.rect.w = window.rect.w.max(min_w);
+        window.rect.h = window.rect.h.max(min_h);
+        window.restore_rect = window.rect;
+    }
     queue_hosted_container_sync();
     id
 }
@@ -184,15 +190,25 @@ pub(super) fn normalized_window_rect(state: &Ui2State, rect: Ui2Rect) -> Ui2Rect
 }
 
 pub(super) fn normalized_window_rect_for_view(view_w: u32, view_h: u32, rect: Ui2Rect) -> Ui2Rect {
-    let min_extent = ui2_window_min_extent();
-    let max_w = (view_w as f32).max(min_extent);
-    let max_h = (view_h as f32).max(min_extent);
+    let max_w = (view_w as f32).max(1.0);
+    let max_h = (view_h as f32).max(1.0);
     Ui2Rect::new(
         rect.x,
         rect.y,
-        rect.w.max(min_extent).min(max_w),
-        rect.h.max(min_extent).min(max_h),
+        rect.w.max(1.0).min(max_w),
+        rect.h.max(1.0).min(max_h),
     )
+}
+
+pub(super) fn normalized_window_rect_for_window_for_view(
+    view_w: u32,
+    view_h: u32,
+    window: &Ui2Window,
+    rect: Ui2Rect,
+) -> Ui2Rect {
+    let base = normalized_window_rect_for_view(view_w, view_h, rect);
+    let (min_w, min_h) = ui2_window_min_size(window);
+    Ui2Rect::new(base.x, base.y, base.w.max(min_w), base.h.max(min_h))
 }
 
 pub(super) fn maximize_window_rect(state: &Ui2State) -> Ui2Rect {
@@ -223,12 +239,13 @@ pub(super) fn set_window_rect_in_state(
     let Some(window) = window_mut(state, id) else {
         return false;
     };
-    let next_rect = normalized_window_rect_for_view(view_w, view_h, rect);
+    let next_rect = normalized_window_rect_for_window_for_view(view_w, view_h, window, rect);
     if window.state == Ui2WindowStateKind::Normal && window.rect == next_rect {
         return true;
     }
     if window.state != Ui2WindowStateKind::Normal {
-        window.restore_rect = normalized_window_rect_for_view(view_w, view_h, window.rect);
+        window.restore_rect =
+            normalized_window_rect_for_window_for_view(view_w, view_h, window, window.rect);
     }
     window.rect = next_rect;
     window.restore_rect = next_rect;
@@ -261,7 +278,8 @@ pub(super) fn minimize_window_in_state(state: &mut Ui2State, id: u32) -> bool {
         return true;
     }
     if window.state == Ui2WindowStateKind::Normal {
-        window.restore_rect = normalized_window_rect_for_view(view_w, view_h, window.rect);
+        window.restore_rect =
+            normalized_window_rect_for_window_for_view(view_w, view_h, window, window.rect);
     }
     window.state = Ui2WindowStateKind::Minimized;
     state.compose_reason = "minimize-window";
@@ -280,7 +298,8 @@ pub(super) fn maximize_window_in_state(state: &mut Ui2State, id: u32) -> bool {
         return true;
     }
     if window.state != Ui2WindowStateKind::Maximized {
-        window.restore_rect = normalized_window_rect_for_view(view_w, view_h, window.rect);
+        window.restore_rect =
+            normalized_window_rect_for_window_for_view(view_w, view_h, window, window.rect);
     }
     window.rect = next_rect;
     window.state = Ui2WindowStateKind::Maximized;
@@ -299,7 +318,8 @@ pub(super) fn restore_window_in_state(state: &mut Ui2State, id: u32) -> bool {
         return true;
     }
     if window.restore_rect.w > 0.0 && window.restore_rect.h > 0.0 {
-        window.rect = normalized_window_rect_for_view(view_w, view_h, window.restore_rect);
+        window.rect =
+            normalized_window_rect_for_window_for_view(view_w, view_h, window, window.restore_rect);
     }
     window.state = Ui2WindowStateKind::Normal;
     state.compose_reason = "restore-window";
@@ -394,9 +414,10 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     } else {
         source_window.rect
     };
-    let next_rect = normalized_window_rect_for_view(
+    let next_rect = normalized_window_rect_for_window_for_view(
         state.view_w,
         state.view_h,
+        source_window,
         Ui2Rect::new(
             source_rect.x + UI2_BROWSER_FORK_WINDOW_OFFSET_PX,
             source_rect.y + UI2_BROWSER_FORK_WINDOW_OFFSET_PX,
@@ -1391,9 +1412,9 @@ pub fn resize_window(id: u32, w: f32, h: f32) -> bool {
     if window.state != Ui2WindowStateKind::Normal {
         window.state = Ui2WindowStateKind::Normal;
     }
-    let min_extent = ui2_window_min_extent();
-    window.rect.w = w.max(min_extent);
-    window.rect.h = h.max(min_extent);
+    let (min_w, min_h) = ui2_window_min_size(window);
+    window.rect.w = w.max(min_w);
+    window.rect.h = h.max(min_h);
     if window.state == Ui2WindowStateKind::Normal {
         window.restore_rect = window.rect;
     }
@@ -1571,9 +1592,19 @@ pub fn begin_window_move(id: u32) -> bool {
     if window.state == Ui2WindowStateKind::Minimized {
         let strip_rect = effective_window_rect(&state, &window);
         let restored_rect = if window.restore_rect.w > 0.0 && window.restore_rect.h > 0.0 {
-            normalized_window_rect_for_view(state.view_w, state.view_h, window.restore_rect)
+            normalized_window_rect_for_window_for_view(
+                state.view_w,
+                state.view_h,
+                &window,
+                window.restore_rect,
+            )
         } else {
-            normalized_window_rect_for_view(state.view_w, state.view_h, window.rect)
+            normalized_window_rect_for_window_for_view(
+                state.view_w,
+                state.view_h,
+                &window,
+                window.rect,
+            )
         };
         let rel_x = (cursor.x - strip_rect.x).clamp(0.0, strip_rect.w.max(1.0));
         let rel_y = (cursor.y - strip_rect.y).clamp(0.0, strip_rect.h.max(1.0));
