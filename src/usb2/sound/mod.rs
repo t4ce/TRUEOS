@@ -113,7 +113,9 @@ fn pick_audio_target(
 
 async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
     if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-        match crate::r::fs::trueosfs::file_out_async(disk, AUDIO_DEMO_CACHE_PATH).await {
+        match crate::r::fs::trueosfs::file_out_if_index_ready_async(disk, AUDIO_DEMO_CACHE_PATH)
+            .await
+        {
             Ok(Some(cached)) if !cached.is_empty() => {
                 crate::log!(
                     "crabusb: audio cache hit path={} bytes={}\n",
@@ -122,8 +124,24 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
                 );
                 return Some((AUDIO_DEMO_CACHE_PATH, cached));
             }
-            _ => {
-                crate::log!("crabusb: audio cache miss path={}\n", AUDIO_DEMO_CACHE_PATH);
+            Ok(None) => {
+                crate::log!(
+                    "crabusb: audio cache unavailable path={} reason=index-not-ready-or-miss\n",
+                    AUDIO_DEMO_CACHE_PATH
+                );
+            }
+            Ok(Some(_)) => {
+                crate::log!(
+                    "crabusb: audio cache unavailable path={} reason=empty\n",
+                    AUDIO_DEMO_CACHE_PATH
+                );
+            }
+            Err(err) => {
+                crate::log!(
+                    "crabusb: audio cache probe failed path={} err={:?}\n",
+                    AUDIO_DEMO_CACHE_PATH,
+                    err
+                );
             }
         }
     }

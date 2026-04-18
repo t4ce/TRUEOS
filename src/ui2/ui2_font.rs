@@ -238,7 +238,7 @@ pub(crate) fn ui2_font_decode_cpu_atlases(size_case: usize) -> Option<Ui2FontCpu
     })
 }
 
-fn ui2_font_cpu_atlas_for_glyph<'a>(
+pub(super) fn ui2_font_cpu_atlas_for_glyph<'a>(
     atlases: &'a Ui2FontCpuAtlases,
     glyph: &Ui2FontGlyph,
 ) -> Option<&'a DecodedPng> {

@@ -64,6 +64,7 @@ pub(super) fn alloc_window(
         hosted_browser_snapshot: UiHostedBrowserSnapshot::default(),
         title: String::from(title),
         icon_id: 0,
+        title_twemoji: '\0',
         title_icon_tex_id: 0,
         title_icon_load_seq: 0,
         title_icon_url: String::new(),
@@ -357,6 +358,7 @@ pub(super) fn handle_system_button_action(
         }
         Ui2SystemButtonAction::Fork => fork_window_in_state(state, window_id),
         Ui2SystemButtonAction::Minimize => minimize_window_in_state(state, window_id),
+        Ui2SystemButtonAction::Restore => restore_window_in_state(state, window_id),
         Ui2SystemButtonAction::ToggleMaximize => {
             let is_maximized = state
                 .windows
@@ -410,6 +412,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         .saturating_add(1);
     let next_title = source_window.title.clone();
     let next_icon_id = source_window.icon_id;
+    let next_title_twemoji = source_window.title_twemoji;
     let next_title_icon_tex_id = source_window.title_icon_tex_id;
     let next_title_icon_load_seq = source_window.title_icon_load_seq;
     let next_title_icon_url = source_window.title_icon_url.clone();
@@ -467,6 +470,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     if let Some(window) = window_mut(state, id) {
         window.browser_instance_id = next_browser_instance_id;
         window.icon_id = next_icon_id;
+        window.title_twemoji = next_title_twemoji;
         window.title_icon_tex_id = next_title_icon_tex_id;
         window.title_icon_load_seq = next_title_icon_load_seq;
         window.title_icon_url = next_title_icon_url;
@@ -1429,6 +1433,20 @@ pub fn set_window_icon(id: u32, icon_id: u32) -> bool {
     window.icon_id = icon_id;
     state.compose_reason = "icon-window";
     note_window_dirty(&mut state, id, "icon-window")
+}
+
+pub fn set_window_title_twemoji(id: u32, ch: char) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.title_twemoji == ch {
+        return true;
+    }
+    window.title_twemoji = ch;
+    state.compose_reason = "title-twemoji-window";
+    note_window_dirty(&mut state, id, "title-twemoji-window")
 }
 
 pub fn raise_window(id: u32) -> bool {

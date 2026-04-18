@@ -1,4 +1,4 @@
-const CURSOR_TICK_SUPPRESS_AFTER_BASE_MS: u64 = 24;
+const CURSOR_TICK_SUPPRESS_AFTER_BASE_MS: u64 = 60;
 const CURSOR_HALF_SPAN_VIEWPORT_RATIO: f32 = 0.0065;
 const CURSOR_HALF_SPAN_MIN_PX: f32 = 6.0;
 const CURSOR_HALF_SPAN_MAX_PX: f32 = 12.0;
@@ -51,6 +51,65 @@ fn append_cursor_cross(
     );
 }
 
+#[derive(Default)]
+struct CursorOverlayTexBatch {
+    tex_id: u32,
+    verts: Vec<u8>,
+}
+
+#[inline]
+fn cursor_overlay_center_px(nx: f32, ny: f32, vp_w: u32, vp_h: u32) -> (f32, f32) {
+    let max_x = vp_w.saturating_sub(1).max(1) as f32;
+    let max_y = vp_h.saturating_sub(1).max(1) as f32;
+    (nx * max_x, ny * max_y)
+}
+
+fn cursor_overlay_tex_batch_index(batches: &mut Vec<CursorOverlayTexBatch>, tex_id: u32) -> usize {
+    if let Some(idx) = batches.iter().position(|batch| batch.tex_id == tex_id) {
+        return idx;
+    }
+    batches.push(CursorOverlayTexBatch {
+        tex_id,
+        verts: Vec::new(),
+    });
+    batches.len() - 1
+}
+
+fn append_cursor_glyph(
+    out: &mut Vec<u8>,
+    center_x_px: f32,
+    center_y_px: f32,
+    vp_w: u32,
+    vp_h: u32,
+    glyph: crate::r::ui2::Ui2CursorOverlayGlyphSpec,
+) {
+    if glyph.tex_id == 0 || vp_w == 0 || vp_h == 0 {
+        return;
+    }
+
+    let draw_w = f32::from(glyph.draw_w_px.max(1));
+    let draw_h = f32::from(glyph.draw_h_px.max(1));
+    let draw_x = center_x_px - (draw_w * 0.5);
+    let draw_y = center_y_px - (draw_h * 0.5);
+    let atlas_w = f32::from(glyph.atlas_w.max(1));
+    let atlas_h = f32::from(glyph.atlas_h.max(1));
+    let u0 = f32::from(glyph.src_x) / atlas_w;
+    let v0 = f32::from(glyph.src_y) / atlas_h;
+    let u1 = f32::from(glyph.src_x.saturating_add(glyph.src_w)) / atlas_w;
+    let v1 = f32::from(glyph.src_y.saturating_add(glyph.src_h)) / atlas_h;
+
+    trueos_gfx_core::push_tex_quad_px(
+        out,
+        trueos_gfx_core::ViewTransform::from_extent(vp_w, vp_h),
+        draw_x,
+        draw_y,
+        draw_x + draw_w,
+        draw_y + draw_h,
+        [u0, v0, u1, v1],
+        trueos_gfx_core::Rgba8::new(255, 255, 255, 255),
+    );
+}
+
 #[inline]
 fn collect_real_cursor_norm(out: &mut Vec<(u32, f32, f32)>, skip_slot_id: Option<u32>) {
     out.clear();
@@ -74,8 +133,9 @@ fn collect_real_cursor_norm(out: &mut Vec<(u32, f32, f32)>, skip_slot_id: Option
     }
 }
 
-fn append_kernel_cursor_overlay_rgb(
+fn append_kernel_cursor_overlay(
     rgb_blob: &mut Vec<u8>,
+    tex_batches: &mut Vec<CursorOverlayTexBatch>,
     vp_w: u32,
     vp_h: u32,
     skip_slot_id: Option<u32>,
@@ -88,11 +148,107 @@ fn append_kernel_cursor_overlay_rgb(
     collect_real_cursor_norm(&mut real, skip_slot_id);
 
     for &(slot_id, nx, ny) in real.iter() {
+        if let Some(glyph) = crate::r::ui2::cursor_overlay_glyph_spec(slot_id, vp_h) {
+            let (center_x_px, center_y_px) = cursor_overlay_center_px(nx, ny, vp_w, vp_h);
+            let batch_idx = cursor_overlay_tex_batch_index(tex_batches, glyph.tex_id);
+            append_cursor_glyph(
+                &mut tex_batches[batch_idx].verts,
+                center_x_px,
+                center_y_px,
+                vp_w,
+                vp_h,
+                glyph,
+            );
+            continue;
+        }
+
         let ndc_x = nx * 2.0 - 1.0;
         let ndc_y = 1.0 - ny * 2.0;
         let color = crate::r::ui2::cursor_color_rgba8(slot_id);
         append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, color);
     }
+}
+
+pub(super) fn append_kernel_cursor_overlay_draws(
+    draws: &mut Vec<PendingDraw>,
+    rgb_blob: &mut Vec<u8>,
+    tex_blob: &mut Vec<u8>,
+    vp_w: u32,
+    vp_h: u32,
+    skip_slot_id: Option<u32>,
+) {
+    if vp_w == 0 || vp_h == 0 {
+        return;
+    }
+
+    let mut real: Vec<(u32, f32, f32)> = Vec::new();
+    collect_real_cursor_norm(&mut real, skip_slot_id);
+
+    for &(slot_id, nx, ny) in &real {
+        if let Some(glyph) = crate::r::ui2::cursor_overlay_glyph_spec(slot_id, vp_h) {
+            let idx = glyph.tex_id.saturating_sub(1) as usize;
+            let Some((image, sample_kind, origin)) = GFX_CABI_STATE
+                .lock()
+                .tex_images
+                .as_ref()
+                .and_then(|images| images.get(idx))
+                .and_then(|entry| entry.as_ref())
+                .map(|entry| (entry.image, entry.sample_kind, entry.origin))
+            else {
+                let ndc_x = nx * 2.0 - 1.0;
+                let ndc_y = 1.0 - ny * 2.0;
+                let color = crate::r::ui2::cursor_color_rgba8(slot_id);
+                append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, color);
+                continue;
+            };
+
+            let (center_x_px, center_y_px) = cursor_overlay_center_px(nx, ny, vp_w, vp_h);
+            let mut verts = Vec::new();
+            append_cursor_glyph(&mut verts, center_x_px, center_y_px, vp_w, vp_h, glyph);
+            if verts.is_empty() {
+                continue;
+            }
+            let blob_offset = tex_blob.len();
+            append_tex_vertices_with_origin(tex_blob, verts.as_slice(), origin);
+            draws.push(PendingDraw::Tex {
+                tex_id: glyph.tex_id,
+                image,
+                sample_kind,
+                sampler: SamplerDesc {
+                    wrap_s: SamplerWrap::ClampToEdge,
+                    wrap_t: SamplerWrap::ClampToEdge,
+                    min_filter: SamplerFilter::Linear,
+                    mag_filter: SamplerFilter::Linear,
+                },
+                blob_offset,
+                blob_len: verts.len(),
+                blend: BlendDesc::straight_alpha(),
+            });
+            continue;
+        }
+    }
+
+    let blob_offset = rgb_blob.len();
+    for &(slot_id, nx, ny) in &real {
+        if crate::r::ui2::cursor_overlay_glyph_spec(slot_id, vp_h).is_some() {
+            continue;
+        }
+        let ndc_x = nx * 2.0 - 1.0;
+        let ndc_y = 1.0 - ny * 2.0;
+        let color = crate::r::ui2::cursor_color_rgba8(slot_id);
+        append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, color);
+    }
+
+    let blob_len = rgb_blob.len().saturating_sub(blob_offset);
+    if blob_len == 0 {
+        return;
+    }
+
+    draws.push(PendingDraw::Rgb {
+        blob_offset,
+        blob_len,
+        blend: BlendDesc::straight_alpha(),
+    });
 }
 
 unsafe fn input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32 {
@@ -189,28 +345,6 @@ fn input_write_cursor_event(
     0
 }
 
-pub(super) fn append_kernel_cursor_overlay_draws(
-    draws: &mut Vec<PendingDraw>,
-    rgb_blob: &mut Vec<u8>,
-    vp_w: u32,
-    vp_h: u32,
-    skip_slot_id: Option<u32>,
-) {
-    let blob_offset = rgb_blob.len();
-    append_kernel_cursor_overlay_rgb(rgb_blob, vp_w, vp_h, skip_slot_id);
-
-    let blob_len = rgb_blob.len().saturating_sub(blob_offset);
-    if blob_len == 0 {
-        return;
-    }
-
-    draws.push(PendingDraw::Rgb {
-        blob_offset,
-        blob_len,
-        blend: BlendDesc::straight_alpha(),
-    });
-}
-
 pub fn kernel_cursor_overlay_tick() -> i32 {
     if end_frame_in_progress() {
         log_cursor_helper_skipped_end_frame_active();
@@ -246,10 +380,11 @@ pub fn kernel_cursor_overlay_tick() -> i32 {
 
     let hw_cursor_slot = crate::intel::kernel_hw_cursor_slot();
 
-    let mut draws: Vec<PendingDraw> = Vec::new();
     let mut rgb_blob: Vec<u8> = Vec::new();
-    append_kernel_cursor_overlay_draws(&mut draws, &mut rgb_blob, vp_w, vp_h, hw_cursor_slot);
-    if draws.is_empty() || rgb_blob.is_empty() {
+    let mut tex_batches: Vec<CursorOverlayTexBatch> = Vec::new();
+    append_kernel_cursor_overlay(&mut rgb_blob, &mut tex_batches, vp_w, vp_h, hw_cursor_slot);
+    let have_tex = tex_batches.iter().any(|batch| !batch.verts.is_empty());
+    if rgb_blob.is_empty() && !have_tex {
         return 0;
     }
 
@@ -265,12 +400,34 @@ pub fn kernel_cursor_overlay_tick() -> i32 {
 
     let _ = unsafe { trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0) };
 
-    let rc_draw = unsafe {
-        trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(rgb_blob.as_ptr(), rgb_blob.len())
-    };
-    if rc_draw != 0 {
-        let _ = unsafe { trueos_cabi_gfx_cursor_end_frame() };
-        return rc_draw;
+    if !rgb_blob.is_empty() {
+        let rc_draw = unsafe {
+            trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(rgb_blob.as_ptr(), rgb_blob.len())
+        };
+        if rc_draw != 0 {
+            let _ = unsafe { trueos_cabi_gfx_cursor_end_frame() };
+            return rc_draw;
+        }
+    }
+
+    if have_tex {
+        let _ = unsafe { trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+        for batch in &tex_batches {
+            if batch.tex_id == 0 || batch.verts.is_empty() {
+                continue;
+            }
+            let rc_draw = unsafe {
+                trueos_cabi_gfx_cursor_draw_tex_triangles_no_present(
+                    batch.tex_id,
+                    batch.verts.as_ptr(),
+                    batch.verts.len(),
+                )
+            };
+            if rc_draw != 0 {
+                let _ = unsafe { trueos_cabi_gfx_cursor_end_frame() };
+                return rc_draw;
+            }
+        }
     }
 
     if end_frame_in_progress() {

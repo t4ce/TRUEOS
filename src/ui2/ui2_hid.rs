@@ -5,6 +5,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use trueos_gfx_core::Rgba8;
 
 static UI2_CURSOR_CAP_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+pub(crate) const UI2_FUN_CURSOR_ICONS_ENABLED: bool = true;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Ui2CursorColor {
@@ -19,7 +20,7 @@ pub(crate) enum Ui2CursorColor {
 impl Ui2CursorColor {
     #[inline]
     pub(crate) const fn from_slot_id(slot_id: u32) -> Self {
-        match slot_id % 6 {
+        match slot_id.saturating_sub(1) % 6 {
             0 => Self::Blue,
             1 => Self::Red,
             2 => Self::Green,
@@ -46,6 +47,18 @@ impl Ui2CursorColor {
         let (r, g, b, a) = self.rgba();
         Rgba8::new(r, g, b, a)
     }
+
+    #[inline]
+    pub(crate) const fn spirit_glyph(self) -> char {
+        match self {
+            Self::Blue => '🦋',
+            Self::Red => '🦊',
+            Self::Green => '🦎',
+            Self::Amber => '🦁',
+            Self::Violet => '🦄',
+            Self::Cyan => '🐕',
+        }
+    }
 }
 
 #[inline]
@@ -56,6 +69,11 @@ pub(crate) fn cursor_color(slot_id: u32) -> (u8, u8, u8, u8) {
 #[inline]
 pub(crate) fn cursor_color_rgba8(slot_id: u32) -> Rgba8 {
     Ui2CursorColor::from_slot_id(slot_id).rgba8()
+}
+
+#[inline]
+pub(crate) fn cursor_spirit_glyph(slot_id: u32) -> Option<char> {
+    UI2_FUN_CURSOR_ICONS_ENABLED.then_some(Ui2CursorColor::from_slot_id(slot_id).spirit_glyph())
 }
 
 #[inline]

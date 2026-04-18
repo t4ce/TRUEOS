@@ -9,7 +9,8 @@ const UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_LOCKED_TWEMOJI: char = '\u{25FB}';
 const UI2_SYSTEM_BUTTON_FORK_TWEMOJI: char = '\u{2795}';
 const UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI: char = '\u{2796}';
 const UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI: char = '\u{23F9}';
-const UI2_SYSTEM_BUTTON_CLOSE_TWEMOJI: char = '\u{274E}';
+const UI2_SYSTEM_BUTTON_RESTORE_TWEMOJI: char = '\u{23CF}';
+const UI2_SYSTEM_BUTTON_CLOSE_TWEMOJI: char = '\u{23EF}';
 const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{2733}';
 
 fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::String {
@@ -87,6 +88,7 @@ impl Ui2DecorationLabelKind {
             }
             Self::SystemButton(Ui2SystemButtonAction::Fork) => "+",
             Self::SystemButton(Ui2SystemButtonAction::Minimize) => "⊟",
+            Self::SystemButton(Ui2SystemButtonAction::Restore) => "⏏",
             Self::SystemButton(Ui2SystemButtonAction::ToggleMaximize) => "□",
             Self::SystemButton(Ui2SystemButtonAction::Close) => "⊠",
         }
@@ -105,6 +107,7 @@ impl Ui2DecorationIconSource for Ui2DecorationIconKind {
             Self::SystemButton(Ui2SystemButtonAction::Minimize) => {
                 UI2_SYSTEM_BUTTON_MINIMIZE_ICON_ID
             }
+            Self::SystemButton(Ui2SystemButtonAction::Restore) => 0,
             Self::SystemButton(Ui2SystemButtonAction::ToggleMaximize) => {
                 UI2_SYSTEM_BUTTON_MAXIMIZE_ICON_ID
             }
@@ -211,7 +214,13 @@ fn draw_window_decoration_label(
 fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2SystemButtonAction) {
     if window.state == Ui2WindowStateKind::Minimized
         && action != Ui2SystemButtonAction::ToggleMaximize
+        && action != Ui2SystemButtonAction::Restore
         && action != Ui2SystemButtonAction::Close
+    {
+        return;
+    }
+    if window.state == Ui2WindowStateKind::Maximized
+        && action == Ui2SystemButtonAction::ToggleMaximize
     {
         return;
     }
@@ -295,6 +304,7 @@ fn window_system_button_twemoji(window: &Ui2Window, action: Ui2SystemButtonActio
         }),
         Ui2SystemButtonAction::Fork => Some(UI2_SYSTEM_BUTTON_FORK_TWEMOJI),
         Ui2SystemButtonAction::Minimize => Some(UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI),
+        Ui2SystemButtonAction::Restore => Some(UI2_SYSTEM_BUTTON_RESTORE_TWEMOJI),
         Ui2SystemButtonAction::ToggleMaximize => Some(UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI),
         Ui2SystemButtonAction::Close => Some(UI2_SYSTEM_BUTTON_CLOSE_TWEMOJI),
     }
@@ -505,12 +515,21 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
 
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
         let has_title_texture_icon = texture_is_drawable(window.title_icon_tex_id);
-        if has_title_texture_icon || window.icon_id != 0 {
+        let has_title_twemoji =
+            !has_title_texture_icon && window.icon_id == 0 && window.title_twemoji != '\0';
+        if has_title_texture_icon || window.icon_id != 0 || has_title_twemoji {
             let icon_side = 16.0f32;
             let icon_x = rect.x + 8.0;
             let icon_y = rect.y + ((titleband_h - icon_side) * 0.5).max(0.0);
             if has_title_texture_icon {
                 draw_window_title_texture_icon(state, window, icon_x, icon_y, icon_side);
+            } else if has_title_twemoji {
+                draw_window_twemoji_button(
+                    state,
+                    window,
+                    Ui2Rect::new(icon_x, icon_y, icon_side, icon_side),
+                    window.title_twemoji,
+                );
             } else {
                 draw_window_decoration_icon(
                     state,
@@ -522,7 +541,7 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
                 );
             }
         }
-        let title_left = if has_title_texture_icon || window.icon_id != 0 {
+        let title_left = if has_title_texture_icon || window.icon_id != 0 || has_title_twemoji {
             rect.x + 28.0
         } else {
             rect.x + 8.0
@@ -531,6 +550,7 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
             Ui2SystemButtonAction::ToggleComposition,
             Ui2SystemButtonAction::Fork,
             Ui2SystemButtonAction::Minimize,
+            Ui2SystemButtonAction::Restore,
             Ui2SystemButtonAction::ToggleMaximize,
             Ui2SystemButtonAction::Close,
         ]
@@ -559,6 +579,7 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleComposition);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Fork);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
+        draw_window_system_button(state, window, Ui2SystemButtonAction::Restore);
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleMaximize);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Close);
     }
@@ -1023,12 +1044,19 @@ fn window_system_button_anchor_rect(
     ];
     let actions_minimized: &[Ui2SystemButtonAction] = &[
         Ui2SystemButtonAction::Close,
+        Ui2SystemButtonAction::Restore,
         Ui2SystemButtonAction::ToggleMaximize,
     ];
-    let actions = if window.state == Ui2WindowStateKind::Minimized {
-        actions_minimized
-    } else {
-        actions_normal
+    let actions_maximized: &[Ui2SystemButtonAction] = &[
+        Ui2SystemButtonAction::Close,
+        Ui2SystemButtonAction::Minimize,
+        Ui2SystemButtonAction::Fork,
+        Ui2SystemButtonAction::ToggleComposition,
+    ];
+    let actions = match window.state {
+        Ui2WindowStateKind::Minimized => actions_minimized,
+        Ui2WindowStateKind::Maximized => actions_maximized,
+        _ => actions_normal,
     };
     let slot = actions.iter().position(|a| *a == action)?;
     let x = titlebar.x + titlebar.w - (slot as f32 + 1.0) * s - slot as f32 * gap;
@@ -1046,6 +1074,7 @@ pub(super) fn system_button_action_at(
         Ui2SystemButtonAction::ToggleComposition,
         Ui2SystemButtonAction::Fork,
         Ui2SystemButtonAction::Minimize,
+        Ui2SystemButtonAction::Restore,
         Ui2SystemButtonAction::ToggleMaximize,
         Ui2SystemButtonAction::Close,
     ] {
