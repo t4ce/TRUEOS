@@ -207,6 +207,7 @@ const MEDIA_RESULT_FRAME_DIMS_SLOT: u64 =
     MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT + MEDIA_RESULT_SLOT_BYTES;
 
 static MEDIA_KICKOFF_RAN: AtomicBool = AtomicBool::new(false);
+static MEDIA_SOURCE_WARM_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_DECODE_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_KICKOFF_STATE: Mutex<Option<MediaKickoffState>> = Mutex::new(None);
 static MEDIA_BACKING: Mutex<Option<MediaBitstreamBacking>> = Mutex::new(None);
@@ -2655,12 +2656,16 @@ async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
     if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
         // Try loading from persistent filesystem cache first.
         if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-            match crate::r::fs::trueosfs::file_out_if_index_ready_async(
-                disk,
+            let info = disk.info();
+            crate::log!(
+                "intel/media: cache probe path={} disk_id={} readonly={} block={} max_transfer={} mode=blocking-indexed-read\n",
                 MEDIA_DECODE_CACHE_PATH,
-            )
-            .await
-            {
+                info.id.raw(),
+                info.is_read_only() as u8,
+                info.block_size,
+                info.max_transfer_bytes,
+            );
+            match crate::r::fs::trueosfs::file_out_async(disk, MEDIA_DECODE_CACHE_PATH).await {
                 Ok(Some(cached)) if !cached.is_empty() => {
                     crate::log!(
                         "intel/media: cache hit path={} bytes={}\n",
@@ -2671,7 +2676,7 @@ async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
                 }
                 Ok(None) => {
                     crate::log!(
-                        "intel/media: cache unavailable path={} reason=index-not-ready-or-miss\n",
+                        "intel/media: cache unavailable path={} reason=miss\n",
                         MEDIA_DECODE_CACHE_PATH
                     );
                 }
@@ -2757,6 +2762,45 @@ async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
     }
 
     None
+}
+
+pub(crate) async fn run_media_source_warmup_async() {
+    if MEDIA_SOURCE_WARM_RAN.swap(true, Ordering::AcqRel) {
+        crate::log!("intel/media: source warmup skipped reason=already-ran\n");
+        return;
+    }
+
+    if !crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
+        crate::log!("intel/media: source warmup skipped reason=fs-cache-disabled\n");
+        return;
+    }
+
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        crate::log!("intel/media: source warmup skipped reason=no-root-disk\n");
+        return;
+    };
+
+    let info = disk.info();
+    crate::log!(
+        "intel/media: source warmup root disk_id={} readonly={} block={} max_transfer={}\n",
+        info.id.raw(),
+        info.is_read_only() as u8,
+        info.block_size,
+        info.max_transfer_bytes,
+    );
+
+    match fetch_media_source_async().await {
+        Some((source, body)) => {
+            crate::log!(
+                "intel/media: source warmup ready source={} bytes={}\n",
+                source,
+                body.len(),
+            );
+        }
+        None => {
+            crate::log!("intel/media: source warmup failed reason=fetch-exhausted\n");
+        }
+    }
 }
 
 fn media_cache_chunk_bytes(info: &crate::disc::block::DeviceInfo) -> usize {

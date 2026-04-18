@@ -46,19 +46,15 @@ fn speed_label(speed: usb_if::Speed) -> &'static str {
     }
 }
 
-fn classify_device_kind(class: u8, subclass: u8, protocol: u8) -> &'static str {
-    match (class, subclass, protocol) {
-        (0x03, 0x01, 0x01) => "kbd",
-        (0x03, 0x01, 0x02) => "mouse",
-        (0x03, _, _) => "hid",
-        (0x08, 0x06, 0x50) => "mass",
-        (0x01, 0x01, _) => "audio-ctl",
-        (0x01, 0x02, _) => "audio",
-        (0x01, 0x03, _) => "midi",
-        (0x0E, _, _) => "video",
-        (0x09, _, _) => "hub",
-        (0x02, _, _) => "comm",
-        _ => "usb",
+fn classify_device_kind(dev: &ObservedUsbDevice) -> &'static str {
+    let triple = super::class::UsbClassTriple::from_codes(dev.class, dev.subclass, dev.protocol);
+    match triple {
+        super::class::UsbClassTriple::PerInterface => "per-if",
+        super::class::UsbClassTriple::Unclassified { base, .. } => match base {
+            super::class::UsbBaseClass::PerInterface => "per-if",
+            _ => base.short_name(),
+        },
+        _ => triple.short_name(),
     }
 }
 
@@ -83,12 +79,7 @@ struct ObservedUsbDevice {
 
 #[inline]
 fn endpoint_transfer_type_label(transfer_type: usb_if::descriptor::EndpointType) -> &'static str {
-    match transfer_type {
-        usb_if::descriptor::EndpointType::Control => "ctrl",
-        usb_if::descriptor::EndpointType::Isochronous => "iso",
-        usb_if::descriptor::EndpointType::Bulk => "bulk",
-        usb_if::descriptor::EndpointType::Interrupt => "intr",
-    }
+    super::descriptor::endpoint_transfer_type_label(transfer_type)
 }
 
 fn collect_tlb_usb_configurations(
@@ -537,7 +528,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             if super::hid::leds::should_share_probe_device(dev) {
                 match host.open_device(dev).await {
                     Ok(mut device) => {
-                        super::hid::boot::log_hid_report_descriptors_on_device(&mut device, dev)
+                        super::descriptor::log_hid_report_descriptors_on_device(&mut device, dev)
                             .await;
                         shared_led_device = Some(device);
                     }
@@ -636,7 +627,7 @@ pub(crate) fn observed_device_summaries(
             port: dev.port_id,
             root_port_id: dev.root_port_id,
             route_string: dev.route_string,
-            kind: classify_device_kind(dev.class, dev.subclass, dev.protocol),
+            kind: classify_device_kind(&dev),
             vid: Some(dev.vendor_id),
             pid: Some(dev.product_id),
             class: Some(dev.class),

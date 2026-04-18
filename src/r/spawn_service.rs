@@ -867,6 +867,7 @@ async fn flush_user_input_record_once() {
 #[embassy_executor::task]
 async fn trueosfs_ready_hook_task() {
     crate::log!("spawn-svc: trueosfs-ready-hook task online\n");
+    crate::intel::run_media_source_warmup_async().await;
     loop {
         flush_user_input_record_once().await;
         Timer::after(EmbassyDuration::from_secs(USER_INPUT_RECORD_FLUSH_INTERVAL_SECS)).await;
