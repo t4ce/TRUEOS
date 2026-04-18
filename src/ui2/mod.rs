@@ -16,6 +16,7 @@ mod ui2_hid;
 mod ui2_hit;
 mod ui2_hosted;
 mod ui2_win_deco;
+mod ui2_win_register;
 
 mod ui2_win;
 
@@ -1649,6 +1650,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
                 path: timing.content_path,
             });
         }
+        ui2_win_register::draw_offline_dock(state);
         draw_resize_preview_outline(state);
         unsafe {
             crate::r::io::cabi::trueos_cabi_gfx_end_frame();

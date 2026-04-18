@@ -227,13 +227,17 @@ fn build_weather_snapshot(
             let icon_char = owm_icon_to_twemoji(icon_code);
             let weekday = weekday_abbrev(day.dt);
             let summary = day.summary.clone();
-            let k2c = |k: f64| (k - 273.15) as i32;
+            let k2c = |k: f64| libm::round(k - 273.15) as i32;
             let temp_line = format!(
                 "    morn {}/{}  day {}/{}  eve {}/{}  night {}/{}",
-                k2c(day.temp.morn), k2c(day.feels_like.morn),
-                k2c(day.temp.day), k2c(day.feels_like.day),
-                k2c(day.temp.eve), k2c(day.feels_like.eve),
-                k2c(day.temp.night), k2c(day.feels_like.night),
+                k2c(day.temp.morn),
+                k2c(day.feels_like.morn),
+                k2c(day.temp.day),
+                k2c(day.feels_like.day),
+                k2c(day.temp.eve),
+                k2c(day.feels_like.eve),
+                k2c(day.temp.night),
+                k2c(day.feels_like.night),
             );
             rows.push(WeatherRow {
                 icon_char,
@@ -510,9 +514,9 @@ pub async fn ui2_weather_demo_task() {
     crate::log!("ui2-weather: {} daily rows\n", snapshot.rows.len());
     present_snapshot(&surface, &atlases, &snapshot);
 
-    // Periodically re-fetch (every 30 minutes)
+    // Periodically re-fetch (every hour)
     loop {
-        Timer::after(EmbassyDuration::from_secs(1800)).await;
+        Timer::after(EmbassyDuration::from_secs(3600)).await;
 
         let weather_response = match crate::r::net::json::get_json(weather_url.as_str()).await {
             Ok(raw) => trueos_weather::oc3::decode_onecall_raw_safe(raw.as_str()).ok(),

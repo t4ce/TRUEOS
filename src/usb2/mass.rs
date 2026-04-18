@@ -15,9 +15,16 @@ use crate::disc::block;
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
 const USB_SUBCLASS_SCSI: u8 = 0x06;
 const USB_PROTO_BULK_ONLY: u8 = 0x50;
+const USB_PROTO_UAS: u8 = 0x62;
 const BOT_IO_RETRIES: usize = 8;
 const BOT_IO_TIMEOUT_MS: u64 = 5000;
 const BOT_RECOVERY_SETTLE_MS: u64 = 250;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MassTransportKind {
+    Bot,
+    Uas,
+}
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MassTarget {
@@ -31,6 +38,86 @@ pub(crate) struct MassTarget {
     pub class: u8,
     pub subclass: u8,
     pub protocol: u8,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MassBulkEndpoint {
+    pub address: u8,
+    pub max_packet_size: u16,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct UasCandidate {
+    pub configuration_value: u8,
+    pub interface_number: u8,
+    pub alternate_setting: u8,
+    pub bulk_in: Vec<MassBulkEndpoint>,
+    pub bulk_out: Vec<MassBulkEndpoint>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MassTransportPlan {
+    pub bot: Option<MassTarget>,
+    pub uas: Vec<UasCandidate>,
+}
+
+fn collect_uas_candidates(
+    configs: &[usb_if::descriptor::ConfigurationDescriptor],
+) -> Vec<UasCandidate> {
+    let mut out = Vec::new();
+
+    for config in configs.iter() {
+        for interface in config.interfaces.iter() {
+            for alt in interface.alt_settings.iter() {
+                if alt.class != USB_CLASS_MASS_STORAGE
+                    || alt.subclass != USB_SUBCLASS_SCSI
+                    || alt.protocol != USB_PROTO_UAS
+                {
+                    continue;
+                }
+
+                let mut bulk_in = Vec::new();
+                let mut bulk_out = Vec::new();
+                for ep in alt.endpoints.iter() {
+                    if ep.transfer_type != usb_if::descriptor::EndpointType::Bulk {
+                        continue;
+                    }
+
+                    let item = MassBulkEndpoint {
+                        address: ep.address,
+                        max_packet_size: ep.max_packet_size,
+                    };
+                    match ep.direction {
+                        usb_if::transfer::Direction::In => bulk_in.push(item),
+                        usb_if::transfer::Direction::Out => bulk_out.push(item),
+                    }
+                }
+
+                if bulk_in.is_empty() || bulk_out.is_empty() {
+                    continue;
+                }
+
+                out.push(UasCandidate {
+                    configuration_value: config.configuration_value,
+                    interface_number: interface.interface_number,
+                    alternate_setting: alt.alternate_setting,
+                    bulk_in,
+                    bulk_out,
+                });
+            }
+        }
+    }
+
+    out
+}
+
+pub(crate) fn inspect_mass_transports(
+    configs: &[usb_if::descriptor::ConfigurationDescriptor],
+) -> MassTransportPlan {
+    MassTransportPlan {
+        bot: pick_mass_target(configs),
+        uas: collect_uas_candidates(configs),
+    }
 }
 
 pub(crate) fn pick_mass_target(

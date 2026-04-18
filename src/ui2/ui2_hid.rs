@@ -277,6 +277,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     let mut click_candidate_item_id = 0u32;
     let mut click_press_x = 0.0f32;
     let mut click_press_y = 0.0f32;
+    let mut try_offline_dock = false;
     {
         let cursor = &mut state.cursors[cursor_idx];
         let prev_buttons_down = cursor.buttons_down;
@@ -320,7 +321,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
                 && release_window_id == 0
                 && is_simple_click(cursor.press_x, cursor.press_y, px, py)
             {
-                select_window_id = Some(0);
+                try_offline_dock = true;
             }
             cursor.press_armed = false;
             cursor.press_window_id = 0;
@@ -333,6 +334,15 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
             && matches!(target.kind, Ui2HitKind::WindowBody | Ui2HitKind::BrowserInteractive)
         {
             begin_scroll_pan_window_id = target.owner_window_id;
+        }
+    }
+
+    // Deferred offline dock click (after cursor borrow is released).
+    if try_offline_dock {
+        if !ui2_win_register::handle_offline_dock_click(state, px, py) {
+            select_window_id = Some(0);
+        } else {
+            UI2_DIRTY.store(true, Ordering::Release);
         }
     }
 

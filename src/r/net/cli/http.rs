@@ -9,7 +9,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
 use v::vnet as api;
 
-fn parse_ipv4_literal(host: &str) -> Option<[u8; 4]> {
+pub(super) fn parse_ipv4_literal(host: &str) -> Option<[u8; 4]> {
     let mut out = [0u8; 4];
     let mut parts = host.split('.');
     for octet in &mut out {
@@ -241,11 +241,14 @@ pub(super) fn parse_http_head(headers: &[u8]) -> Option<HttpHead> {
     })
 }
 
-fn is_redirect_status(status: u16) -> bool {
+pub(super) fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
 
-fn redirect_url_from_location(current: &ParsedHttpUrl, headers: &[u8]) -> Option<String> {
+pub(super) fn redirect_url_from_location(
+    current: &ParsedHttpUrl,
+    headers: &[u8],
+) -> Option<String> {
     let loc = header_get_value(headers, b"location")?;
     let loc = core::str::from_utf8(loc).ok()?.trim();
     if loc.is_empty() {

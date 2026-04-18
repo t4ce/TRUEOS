@@ -34,6 +34,21 @@ pub mod pbltree;
 #[cfg(any(feature = "alloc", test))]
 pub use pbltree::{BPlusTree, Iter as BPlusTreeIter};
 
+#[cfg(any(feature = "alloc", test))]
+pub mod bst_arena;
+
+#[cfg(any(feature = "alloc", test))]
+pub mod bst;
+
+#[cfg(any(feature = "alloc", test))]
+pub use bst::BstMap;
+
+#[cfg(any(feature = "alloc", test))]
+pub mod avl;
+
+#[cfg(any(feature = "alloc", test))]
+pub use avl::AvlTree;
+
 /// Returns the iteration count at which the point escapes the Mandelbrot set bounds.
 pub fn mandelbrot_escape_depth(c: Complex, max_iter: u32) -> u32 {
     let mut z = Complex::new(0.0, 0.0);
