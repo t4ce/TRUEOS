@@ -50,7 +50,8 @@ pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
 const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const RENDER_BOOT_PROBE_LOOP_ENABLED: bool = false;
 const RENDER_BOOT_PROBE_INTERVAL_MS: u64 = 16;
-const MEDIA_BOOT_DEMO_ENABLED: bool = false;
+const MEDIA_BOOT_SOURCE_WARM_ENABLED: bool = true;
+const MEDIA_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 
 static INIT: AtomicBool = AtomicBool::new(false);
@@ -157,6 +158,14 @@ pub fn init_once() {
             }
         });
     }
+    crate::log!(
+        "intel/media: source warmup {} trigger=trueosfs-root-mounted\n",
+        if MEDIA_BOOT_SOURCE_WARM_ENABLED {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
     if MEDIA_BOOT_DEMO_ENABLED {
         crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
         crate::wait::spawn_local_detached(async move {
@@ -222,6 +231,14 @@ pub fn media_decode_surface_window(
 
 pub async fn run_media_decode_async() {
     self::xelp_media_ngin::run_media_decode_async().await
+}
+
+pub async fn run_media_source_warmup_async() {
+    if MEDIA_BOOT_SOURCE_WARM_ENABLED {
+        self::xelp_media_ngin::run_media_source_warmup_async().await
+    } else {
+        crate::log!("intel/media: source warmup skipped reason=disabled\n");
+    }
 }
 
 fn find_dev() -> Option<Dev> {

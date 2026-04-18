@@ -2070,6 +2070,12 @@ pub(crate) fn build_dump_text() -> String {
 
     write_pci_bar_dump(&mut out);
 
+    writeln!(out, "=== USB Overview ===").unwrap();
+    append_usb_overview_dump(&mut out);
+
+    writeln!(out, "=== USB Raw Enumeration ===").unwrap();
+    append_usb_stashed_detail_dump(&mut out);
+
     writeln!(out, "=== CPU Cores ===").unwrap();
     if !crate::smp::is_init() {
         writeln!(out, "SMP not initialized").unwrap();
@@ -2429,7 +2435,6 @@ fn emit_usb_endpoint_rows(
                     String::new(),
                     String::new(),
                     String::new(),
-                    String::new(),
                     dev.speed.to_string(),
                     String::new(),
                     alloc::format!(
@@ -2448,7 +2453,6 @@ fn emit_usb_endpoint_rows(
 
             for endpoint in interface.endpoints.iter() {
                 let row = [
-                    String::new(),
                     String::new(),
                     String::new(),
                     String::new(),
@@ -2477,6 +2481,379 @@ fn emit_usb_endpoint_rows(
                 table.emit_row(&row, |text| print_shell_line(io, text));
             }
         }
+    }
+}
+
+fn append_usb_endpoint_rows(out: &mut String, table: &TlbTable, dev: &crate::usb2::TlbUsbDevice) {
+    for cfg in dev.configurations.iter() {
+        for interface in cfg.interfaces.iter() {
+            if interface.endpoints.is_empty() {
+                let row = [
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    dev.speed.to_string(),
+                    String::new(),
+                    alloc::format!(
+                        "  if{} alt{}",
+                        interface.interface_number,
+                        interface.alternate_setting
+                    ),
+                    alloc::format!("cfg={}", cfg.configuration_value),
+                    usb_interface_class_text(interface),
+                    String::from("no-ep"),
+                    alloc::format!("{:08X}", dev.stable_id),
+                ];
+                table.emit_row(&row, |text| {
+                    writeln!(out, "{text}").unwrap();
+                });
+                continue;
+            }
+
+            for endpoint in interface.endpoints.iter() {
+                let row = [
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    dev.speed.to_string(),
+                    String::new(),
+                    alloc::format!(
+                        "  if{} alt{}",
+                        interface.interface_number,
+                        interface.alternate_setting
+                    ),
+                    alloc::format!("ep=0x{:02X}", endpoint.address),
+                    usb_interface_class_text(interface),
+                    alloc::format!(
+                        "{} mps={} intv={} cfg={}",
+                        endpoint.transfer_type,
+                        endpoint.max_packet_size,
+                        endpoint.interval,
+                        cfg.configuration_value
+                    ),
+                    alloc::format!("{:08X}", dev.stable_id),
+                ];
+                table.emit_row(&row, |text| {
+                    writeln!(out, "{text}").unwrap();
+                });
+            }
+        }
+    }
+}
+
+fn append_usb_overview_dump(out: &mut String) {
+    const USB_DUMP_TABLE_WIDTH: usize = 158;
+
+    let controllers = crate::usb2::pci_usb_controllers();
+    if controllers.is_empty() {
+        writeln!(out, "No xHCI USB controllers found.").unwrap();
+        writeln!(out).unwrap();
+        return;
+    }
+
+    let mut devices_by_controller_root: BTreeMap<(usize, u8), Vec<crate::usb2::UsbDeviceSummary>> =
+        BTreeMap::new();
+    let mut detailed_devices_by_controller_root: BTreeMap<
+        (usize, u8),
+        Vec<crate::usb2::TlbUsbDevice>,
+    > = BTreeMap::new();
+    for ctrl in controllers.iter() {
+        if let Ok(devices) = crate::usb2::crabusb_observed_device_summaries(ctrl.index) {
+            for dev in devices {
+                devices_by_controller_root
+                    .entry((ctrl.index, dev.root_port_id))
+                    .or_default()
+                    .push(dev);
+            }
+        }
+        if let Ok(devices) = crate::usb2::crabusb_observed_devices(ctrl.index) {
+            for dev in devices {
+                detailed_devices_by_controller_root
+                    .entry((ctrl.index, dev.root_port_id))
+                    .or_default()
+                    .push(dev);
+            }
+        }
+    }
+
+    let usbms_count = crate::disc::block::devices()
+        .into_iter()
+        .filter(|dev| {
+            dev.user_visible
+                && dev.parent.is_none()
+                && is_usb_mass_storage_label(dev.label.as_deref())
+        })
+        .count();
+    let controller_list = controllers
+        .iter()
+        .map(|ctrl| alloc::format!("{}={:04X}:{:04X}", ctrl.index, ctrl.vendor_id, ctrl.device_id))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    writeln!(
+        out,
+        "USB Overview (usbms registered={} ctrls={})",
+        usbms_count, controller_list
+    )
+    .unwrap();
+    let headers = [
+        "#",
+        "BDF",
+        "Port",
+        "C",
+        "E",
+        "W",
+        "R",
+        "Speed",
+        "PLS",
+        "Dev Port",
+        "Dev VID:PID",
+        "Class",
+        "Kind",
+        "Stable",
+    ];
+    let table = TlbTable::with_width(&headers, USB_DUMP_TABLE_WIDTH)
+        .with_max_col_widths(&[1, 9, 2, 1, 1, 1, 1, 5, 2, 2, 0, 8, 0, 8]);
+    table.emit_header(|text| {
+        writeln!(out, "{text}").unwrap();
+    });
+
+    let mut disconnected_ports_summary: Vec<String> = Vec::new();
+    for ctrl in controllers.iter() {
+        let bdf = alloc::format!("{:02X}:{:02X}.{}", ctrl.bus, ctrl.slot, ctrl.function);
+        let Some(diag) = crate::usb2::controller_mmio_diag(ctrl.index) else {
+            let row = [
+                ctrl.index.to_string(),
+                bdf,
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("-"),
+                String::from("no-mmio"),
+                String::from("-"),
+            ];
+            table.emit_row(&row, |text| {
+                writeln!(out, "{text}").unwrap();
+            });
+            continue;
+        };
+
+        let mut disconnected_ports: Vec<String> = Vec::new();
+        for port in diag.ports.iter() {
+            let portsc = port.portsc;
+            if (portsc & (1 << 0)) == 0 {
+                disconnected_ports.push(port.port_id.to_string());
+                continue;
+            }
+
+            let attached = devices_by_controller_root.get(&(ctrl.index, port.port_id));
+            let detailed = detailed_devices_by_controller_root.get(&(ctrl.index, port.port_id));
+            if let Some(devices) = attached {
+                for dev in devices.iter() {
+                    let dev_vidpid = match (dev.vid, dev.pid) {
+                        (Some(vid), Some(pid)) => alloc::format!("{:04X}:{:04X}", vid, pid),
+                        _ => String::from("-"),
+                    };
+                    let class = match (dev.class, dev.subclass, dev.protocol) {
+                        (Some(class), Some(subclass), Some(protocol)) => {
+                            alloc::format!("{:02X}/{:02X}/{:02X}", class, subclass, protocol)
+                        }
+                        _ => String::from("-"),
+                    };
+                    let stable = alloc::format!("{:08X}", dev.stable_id);
+                    let row = [
+                        ctrl.index.to_string(),
+                        bdf.clone(),
+                        port.port_id.to_string(),
+                        yn((portsc & (1 << 0)) != 0).to_string(),
+                        yn((portsc & (1 << 1)) != 0).to_string(),
+                        yn((portsc & (1 << 9)) != 0).to_string(),
+                        yn((portsc & (1 << 4)) != 0).to_string(),
+                        usb_port_speed_text(portsc).to_string(),
+                        usb_port_pls_text(portsc).to_string(),
+                        dev.port.to_string(),
+                        dev_vidpid,
+                        class,
+                        String::from(dev.kind),
+                        stable,
+                    ];
+                    table.emit_row(&row, |text| {
+                        writeln!(out, "{text}").unwrap();
+                    });
+
+                    if let Some(detailed_devices) = detailed {
+                        if let Some(full) = detailed_devices.iter().find(|candidate| {
+                            candidate.stable_id == dev.stable_id && candidate.port_id == dev.port
+                        }) {
+                            append_usb_endpoint_rows(out, &table, full);
+                        }
+                    }
+                }
+            } else {
+                let row = [
+                    ctrl.index.to_string(),
+                    bdf.clone(),
+                    port.port_id.to_string(),
+                    yn((portsc & (1 << 0)) != 0).to_string(),
+                    yn((portsc & (1 << 1)) != 0).to_string(),
+                    yn((portsc & (1 << 9)) != 0).to_string(),
+                    yn((portsc & (1 << 4)) != 0).to_string(),
+                    usb_port_speed_text(portsc).to_string(),
+                    usb_port_pls_text(portsc).to_string(),
+                    String::from("-"),
+                    String::from("-"),
+                    String::from("-"),
+                    String::from("-"),
+                    String::from("-"),
+                ];
+                table.emit_row(&row, |text| {
+                    writeln!(out, "{text}").unwrap();
+                });
+            }
+        }
+
+        if !disconnected_ports.is_empty() {
+            disconnected_ports_summary.push(alloc::format!(
+                "ctrl {}: {}",
+                ctrl.index,
+                disconnected_ports.join(", ")
+            ));
+        }
+    }
+
+    table.emit_footer(|text| {
+        writeln!(out, "{text}").unwrap();
+    });
+    if !disconnected_ports_summary.is_empty() {
+        writeln!(
+            out,
+            "Disconnected ports: {}",
+            disconnected_ports_summary.join(" | ")
+        )
+        .unwrap();
+    }
+    writeln!(
+        out,
+        "Legend: #=controller C=connected E=enabled W=power R=reset PLS=port link state"
+    )
+    .unwrap();
+    writeln!(out).unwrap();
+}
+
+fn append_usb_stashed_detail_dump(out: &mut String) {
+    let controllers = crate::usb2::pci_usb_controllers();
+    if controllers.is_empty() {
+        writeln!(out, "No xHCI USB controllers found.").unwrap();
+        writeln!(out).unwrap();
+        return;
+    }
+
+    for ctrl in controllers.iter() {
+        writeln!(
+            out,
+            "Controller {} {:02X}:{:02X}.{} {:04X}:{:04X}",
+            ctrl.index, ctrl.bus, ctrl.slot, ctrl.function, ctrl.vendor_id, ctrl.device_id
+        )
+        .unwrap();
+
+        match crate::usb2::crabusb_observed_devices(ctrl.index) {
+            Ok(devices) if !devices.is_empty() => {
+                for dev in devices {
+                    writeln!(
+                        out,
+                        "  Device stable={:08X} slot={} root_port={} port={} route=0x{:08X} speed={} vid:pid={:04X}:{:04X} class={:02X}/{:02X}/{:02X} cfgs={} mps0={}",
+                        dev.stable_id,
+                        dev.slot_id,
+                        dev.root_port_id,
+                        dev.port_id,
+                        dev.route_string,
+                        dev.speed,
+                        dev.vendor_id,
+                        dev.product_id,
+                        dev.class,
+                        dev.subclass,
+                        dev.protocol,
+                        dev.num_configurations,
+                        dev.max_packet_size_0
+                    )
+                    .unwrap();
+
+                    if !dev.path.is_empty() {
+                        writeln!(out, "    Path: {:?}", dev.path.as_slice()).unwrap();
+                    }
+                    if let Some(parent_hub_slot_id) = dev.parent_hub_slot_id {
+                        writeln!(out, "    Parent hub slot: {}", parent_hub_slot_id).unwrap();
+                    }
+                    if !dev.hub_path.is_empty() {
+                        for hop in dev.hub_path.iter() {
+                            writeln!(
+                                out,
+                                "    Hop slot={} port={} depth={} speed={}",
+                                hop.slot_id, hop.port_id, hop.hub_depth, hop.speed
+                            )
+                            .unwrap();
+                        }
+                    }
+
+                    for cfg in dev.configurations.iter() {
+                        writeln!(
+                            out,
+                            "    Config cfg={} attr=0x{:02X} max_power={}",
+                            cfg.configuration_value, cfg.attributes, cfg.max_power
+                        )
+                        .unwrap();
+                        for interface in cfg.interfaces.iter() {
+                            writeln!(
+                                out,
+                                "      Interface if#{} alt={} class={:02X}/{:02X}/{:02X}",
+                                interface.interface_number,
+                                interface.alternate_setting,
+                                interface.class,
+                                interface.subclass,
+                                interface.protocol
+                            )
+                            .unwrap();
+                            if interface.endpoints.is_empty() {
+                                writeln!(out, "        Endpoint: none").unwrap();
+                            } else {
+                                for endpoint in interface.endpoints.iter() {
+                                    writeln!(
+                                        out,
+                                        "        Endpoint ep=0x{:02X} type={} mps={} interval={}",
+                                        endpoint.address,
+                                        endpoint.transfer_type,
+                                        endpoint.max_packet_size,
+                                        endpoint.interval
+                                    )
+                                    .unwrap();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(_) => {
+                writeln!(out, "  No observed devices").unwrap();
+            }
+            Err(err) => {
+                writeln!(out, "  Observed device read failed: {}", err).unwrap();
+            }
+        }
+        writeln!(out).unwrap();
     }
 }
 
@@ -2520,17 +2897,29 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                 && is_usb_mass_storage_label(dev.label.as_deref())
         })
         .count();
+    let controller_list = controllers
+        .iter()
+        .map(|ctrl| alloc::format!("{}={:04X}:{:04X}", ctrl.index, ctrl.vendor_id, ctrl.device_id))
+        .collect::<Vec<_>>()
+        .join(" ");
 
-    line(io, alloc::format!("USB Overview (usbms registered={})", usbms_count).as_str());
+    line(
+        io,
+        alloc::format!(
+            "USB Overview (usbms registered={} ctrls={})",
+            usbms_count,
+            controller_list
+        )
+        .as_str(),
+    );
     let headers = [
-        "Ctrl",
+        "#",
         "BDF",
-        "Ctrl VID:PID",
         "Port",
-        "Conn",
-        "En",
-        "Pwr",
-        "Rst",
+        "C",
+        "E",
+        "W",
+        "R",
         "Speed",
         "PLS",
         "Dev Port",
@@ -2539,17 +2928,17 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         "Kind",
         "Stable",
     ];
-    let table = TlbTable::with_width(&headers, line_width_for_backend(io).saturating_sub(2));
+    let table = TlbTable::with_width(&headers, line_width_for_backend(io).saturating_sub(2))
+        .with_max_col_widths(&[1, 9, 2, 1, 1, 1, 1, 5, 2, 2, 0, 8, 0, 8]);
     table.emit_header(|text| print_shell_line(io, text));
+    let mut disconnected_ports_summary: Vec<String> = Vec::new();
 
     for ctrl in controllers.iter() {
         let bdf = alloc::format!("{:02X}:{:02X}.{}", ctrl.bus, ctrl.slot, ctrl.function);
-        let ctrl_vidpid = alloc::format!("{:04X}:{:04X}", ctrl.vendor_id, ctrl.device_id);
         let Some(diag) = crate::usb2::controller_mmio_diag(ctrl.index) else {
             let row = [
                 ctrl.index.to_string(),
                 bdf,
-                ctrl_vidpid,
                 String::from("-"),
                 String::from("-"),
                 String::from("-"),
@@ -2567,8 +2956,14 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
             continue;
         };
 
+        let mut disconnected_ports: Vec<String> = Vec::new();
+
         for port in diag.ports.iter() {
             let portsc = port.portsc;
+            if (portsc & (1 << 0)) == 0 {
+                disconnected_ports.push(port.port_id.to_string());
+                continue;
+            }
             let attached = devices_by_controller_root.get(&(ctrl.index, port.port_id));
             let detailed = detailed_devices_by_controller_root.get(&(ctrl.index, port.port_id));
             if let Some(devices) = attached {
@@ -2587,7 +2982,6 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                     let row = [
                         ctrl.index.to_string(),
                         bdf.clone(),
-                        ctrl_vidpid.clone(),
                         port.port_id.to_string(),
                         yn((portsc & (1 << 0)) != 0).to_string(),
                         yn((portsc & (1 << 1)) != 0).to_string(),
@@ -2615,7 +3009,6 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                 let row = [
                     ctrl.index.to_string(),
                     bdf.clone(),
-                    ctrl_vidpid.clone(),
                     port.port_id.to_string(),
                     yn((portsc & (1 << 0)) != 0).to_string(),
                     yn((portsc & (1 << 1)) != 0).to_string(),
@@ -2632,8 +3025,30 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                 table.emit_row(&row, |text| print_shell_line(io, text));
             }
         }
+
+        if !disconnected_ports.is_empty() {
+            disconnected_ports_summary.push(alloc::format!(
+                "ctrl {}: {}",
+                ctrl.index,
+                disconnected_ports.join(", ")
+            ));
+        }
     }
     table.emit_footer(|text| print_shell_line(io, text));
+    if !disconnected_ports_summary.is_empty() {
+        line(
+            io,
+            alloc::format!(
+                "Disconnected ports: {}",
+                disconnected_ports_summary.join(" | ")
+            )
+            .as_str(),
+        );
+    }
+    line(
+        io,
+        "Legend: #=controller C=connected E=enabled W=power R=reset PLS=port link state",
+    );
 }
 
 fn ensure_no_args(

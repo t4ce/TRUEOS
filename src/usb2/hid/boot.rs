@@ -1,7 +1,6 @@
 extern crate alloc;
 
-use alloc::{string::String, vec::Vec};
-use core::fmt::Write;
+use alloc::vec::Vec;
 use core::future::Future;
 use core::task::Poll;
 
@@ -44,7 +43,7 @@ fn should_skip_descriptor_logging(vendor_id: u16, product_id: u16, kind: HidBoot
     // Narrow workaround for QEMU's simple emulated USB boot HID devices, which can
     // wedge on the optional HID descriptor dump path before the interrupt stream starts.
     let _ = kind;
-    vendor_id == 0x0627 && product_id == 0x0001
+    super::super::descriptor::hid_optional_descriptor_skip_reason(vendor_id, product_id).is_some()
 }
 
 #[inline]
@@ -120,14 +119,6 @@ fn pick_hid_boot_targets(
                 let kind = match (alt.class, alt.subclass, alt.protocol) {
                     (0x03, 0x01, 0x01) => HidBootKind::Keyboard,
                     (0x03, 0x01, 0x02) => HidBootKind::Mouse,
-                    _ if super::tablet::matches_interface(
-                        alt.class,
-                        alt.subclass,
-                        alt.protocol,
-                    ) =>
-                    {
-                        HidBootKind::Tablet
-                    }
                     _ if super::eyetracker::matches_interface(
                         alt.class,
                         alt.subclass,
@@ -149,10 +140,10 @@ fn pick_hid_boot_targets(
                 let report_len = match kind {
                     HidBootKind::Keyboard => 8,
                     HidBootKind::Mouse => 4,
-                    HidBootKind::Tablet => super::tablet::report_len(endpoint.max_packet_size),
                     HidBootKind::EyeTracker => {
                         super::eyetracker::report_len(endpoint.max_packet_size)
                     }
+                    HidBootKind::Tablet => super::tablet::report_len(endpoint.max_packet_size),
                 };
                 out.push(HidBootTarget {
                     configuration_value: config.configuration_value,
@@ -169,285 +160,6 @@ fn pick_hid_boot_targets(
     }
 
     out
-}
-
-async fn log_hid_report_descriptors(host: &mut USBHost, dev_info: &crab_usb::DeviceInfo) {
-    let interface_numbers: Vec<u8> = dev_info
-        .interface_descriptors()
-        .filter(|iface| iface.class == 0x03)
-        .map(|iface| iface.interface_number)
-        .collect();
-
-    if interface_numbers.is_empty() {
-        return;
-    }
-
-    let mut device = match host.open_device(dev_info).await {
-        Ok(device) => device,
-        Err(err) => {
-            crate::log!(
-                "crabusb: hid {:04X}:{:04X} descriptor-open failed: {:?}\n",
-                dev_info.vendor_id(),
-                dev_info.product_id(),
-                err
-            );
-            return;
-        }
-    };
-
-    log_hid_report_descriptors_on_device(&mut device, dev_info).await;
-}
-
-#[derive(Copy, Clone)]
-enum HidMainItemKind {
-    Input,
-    Output,
-    Feature,
-}
-
-impl HidMainItemKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            HidMainItemKind::Input => "input",
-            HidMainItemKind::Output => "output",
-            HidMainItemKind::Feature => "feature",
-        }
-    }
-}
-
-#[derive(Copy, Clone)]
-struct HidDecodeState {
-    report_id: u8,
-    report_size_bits: u32,
-    report_count: u32,
-    usage_page: u32,
-    usage: Option<u32>,
-    usage_min: Option<u32>,
-    usage_max: Option<u32>,
-}
-
-impl HidDecodeState {
-    const fn new() -> Self {
-        Self {
-            report_id: 0,
-            report_size_bits: 0,
-            report_count: 0,
-            usage_page: 0,
-            usage: None,
-            usage_min: None,
-            usage_max: None,
-        }
-    }
-
-    fn reset_local(&mut self) {
-        self.usage = None;
-        self.usage_min = None;
-        self.usage_max = None;
-    }
-}
-
-fn hid_item_data(data: &[u8]) -> u32 {
-    let mut value = 0u32;
-    for (idx, byte) in data.iter().enumerate() {
-        value |= u32::from(*byte) << (idx * 8);
-    }
-    value
-}
-
-fn log_hid_report_decode(slot_id: u32, interface_number: u8, report_desc: &[u8]) {
-    let mut state = HidDecodeState::new();
-    let mut idx = 0usize;
-
-    while idx < report_desc.len() {
-        let prefix = report_desc[idx];
-        idx += 1;
-
-        if prefix == 0xFE {
-            if idx + 1 >= report_desc.len() {
-                break;
-            }
-            let long_len = usize::from(report_desc[idx]);
-            idx = idx.saturating_add(2).saturating_add(long_len);
-            state.reset_local();
-            continue;
-        }
-
-        let size_code = prefix & 0x03;
-        let size = match size_code {
-            0 => 0usize,
-            1 => 1usize,
-            2 => 2usize,
-            _ => 4usize,
-        };
-        let item_type = (prefix >> 2) & 0x03;
-        let tag = (prefix >> 4) & 0x0F;
-        if idx + size > report_desc.len() {
-            break;
-        }
-        let data = &report_desc[idx..idx + size];
-        idx += size;
-        let value = hid_item_data(data);
-
-        match (item_type, tag) {
-            (0, 8) | (0, 9) | (0, 11) => {
-                let kind = match tag {
-                    8 => HidMainItemKind::Input,
-                    9 => HidMainItemKind::Output,
-                    _ => HidMainItemKind::Feature,
-                };
-                let total_bits = state.report_size_bits.saturating_mul(state.report_count);
-                let total_bytes = total_bits.div_ceil(8);
-                let mut detail = String::new();
-                let _ = write!(
-                    &mut detail,
-                    "page=0x{:04X} bits={} bytes={} count={} size={} flags=0x{:X}",
-                    state.usage_page,
-                    total_bits,
-                    total_bytes,
-                    state.report_count,
-                    state.report_size_bits,
-                    value
-                );
-                if let Some(usage) = state.usage {
-                    let _ = write!(&mut detail, " usage=0x{:X}", usage);
-                }
-                if let (Some(min), Some(max)) = (state.usage_min, state.usage_max) {
-                    let _ = write!(&mut detail, " usage_range=0x{:X}-0x{:X}", min, max);
-                }
-                crate::log!(
-                    "crabusb: hid report decode slot={} if#{} report_id={} kind={} {}\n",
-                    slot_id,
-                    interface_number,
-                    state.report_id,
-                    kind.as_str(),
-                    detail
-                );
-                state.reset_local();
-            }
-            (1, 0) => {
-                state.usage_page = value;
-            }
-            (1, 7) => {
-                state.report_size_bits = value;
-            }
-            (1, 8) => {
-                state.report_id = value as u8;
-            }
-            (1, 9) => {
-                state.report_count = value;
-            }
-            (2, 0) => {
-                state.usage = Some(value);
-            }
-            (2, 1) => {
-                state.usage_min = Some(value);
-            }
-            (2, 2) => {
-                state.usage_max = Some(value);
-            }
-            (0, 10) | (0, 12) => {
-                state.reset_local();
-            }
-            _ => {}
-        }
-    }
-}
-
-pub(crate) async fn log_hid_report_descriptors_on_device(
-    device: &mut Device,
-    dev_info: &crab_usb::DeviceInfo,
-) {
-    let interface_numbers: Vec<u8> = dev_info
-        .interface_descriptors()
-        .filter(|iface| iface.class == 0x03)
-        .map(|iface| iface.interface_number)
-        .collect();
-
-    if interface_numbers.is_empty() {
-        return;
-    }
-
-    let slot_id = u32::from(device.slot_id());
-    for interface_number in interface_numbers {
-        let mut hid_desc = [0u8; 9];
-        match device
-            .control_in(
-                usb_if::host::ControlSetup {
-                    request_type: usb_if::transfer::RequestType::Standard,
-                    recipient: usb_if::transfer::Recipient::Interface,
-                    request: usb_if::transfer::Request::GetDescriptor,
-                    value: 0x2100,
-                    index: u16::from(interface_number),
-                },
-                &mut hid_desc,
-            )
-            .await
-        {
-            Ok(read_len) => {
-                let read_len = read_len.min(hid_desc.len());
-                crate::log!(
-                    "crabusb: hid desc slot={} if#{} bytes={:02X?}\n",
-                    slot_id,
-                    interface_number,
-                    &hid_desc[..read_len]
-                );
-
-                let report_len = if read_len >= 9 && hid_desc[6] == 0x22 {
-                    u16::from(hid_desc[7]) | (u16::from(hid_desc[8]) << 8)
-                } else {
-                    HID_DESC_FALLBACK_REPORT_LEN
-                };
-
-                let mut report_desc = alloc::vec![0u8; usize::from(report_len)];
-                match device
-                    .control_in(
-                        usb_if::host::ControlSetup {
-                            request_type: usb_if::transfer::RequestType::Standard,
-                            recipient: usb_if::transfer::Recipient::Interface,
-                            request: usb_if::transfer::Request::GetDescriptor,
-                            value: 0x2200,
-                            index: u16::from(interface_number),
-                        },
-                        &mut report_desc,
-                    )
-                    .await
-                {
-                    Ok(report_read_len) => {
-                        let report_read_len = report_read_len.min(report_desc.len());
-                        crate::log!(
-                            "crabusb: hid report desc slot={} if#{} len={} bytes={:02X?}\n",
-                            slot_id,
-                            interface_number,
-                            report_read_len,
-                            &report_desc[..report_read_len]
-                        );
-                        log_hid_report_decode(
-                            slot_id,
-                            interface_number,
-                            &report_desc[..report_read_len],
-                        );
-                    }
-                    Err(err) => {
-                        crate::log!(
-                            "crabusb: hid report desc slot={} if#{} read failed len={} err={:?}\n",
-                            slot_id,
-                            interface_number,
-                            report_len,
-                            err
-                        );
-                    }
-                }
-            }
-            Err(err) => {
-                crate::log!(
-                    "crabusb: hid desc slot={} if#{} read failed err={:?}\n",
-                    slot_id,
-                    interface_number,
-                    err
-                );
-            }
-        }
-    }
 }
 
 fn register_active_hid_stream(stream: ActiveHidStream) -> bool {
@@ -878,7 +590,8 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                     product_id
                 );
             } else {
-                log_hid_report_descriptors_on_device(&mut device, dev_info).await;
+                crate::usb2::descriptor::log_hid_report_descriptors_on_device(&mut device, dev_info)
+                    .await;
             }
             descriptors_pending = false;
         }
