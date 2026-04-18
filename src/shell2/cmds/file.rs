@@ -100,12 +100,14 @@ fn format_root_header(root: crate::r::fs::trueosfs::RootInfo) -> String {
     let label = info.label.as_deref().unwrap_or("-");
     let mode = if info.writable { "rw" } else { "ro" };
     alloc::format!(
-        "root {} seq={} kind={:?} label={} {}",
+        "root {} seq={} kind={:?} label={} {} index={}{}",
         root.disk_id,
         root.seq,
         info.kind,
         label,
-        mode
+        mode,
+        if root.index_ready { "ready" } else { "cold" },
+        if root.index_building { " building" } else { "" },
     )
 }
 
@@ -380,11 +382,40 @@ pub(crate) fn try_parse(
             }
 
             let renders = crate::wait::spawn_and_wait_local(async move {
-                collect_root_renders_async(roots).await
+                let mut warm = Vec::new();
+                let mut ready = Vec::new();
+                for root in roots {
+                    if root.index_ready {
+                        ready.push(root);
+                    } else {
+                        warm.push(root);
+                    }
+                }
+                (ready, warm)
+            });
+
+            let (ready_roots, cold_roots) = renders;
+            let renders = crate::wait::spawn_and_wait_local(async move {
+                collect_root_renders_async(ready_roots).await
             });
 
             let mut shown = 0usize;
             let mut skipped = 0usize;
+
+            for root in cold_roots.iter().copied() {
+                crate::r::fs::trueosfs::request_warm_index(root.disk_id);
+                if shown > 0 {
+                    print_shell_line(io, "");
+                }
+                print_shell_line(io, format_root_header(root).as_str());
+                let note = if root.index_building {
+                    "  (index build already in progress; browse skipped for now)"
+                } else {
+                    "  (index cold; warming in background, browse skipped for now)"
+                };
+                print_shell_line(io, note);
+                shown = shown.saturating_add(1);
+            }
 
             for render in renders.into_iter() {
                 let Ok(lines) = render.lines else {

@@ -24,9 +24,11 @@ const CPUBENCH_STOP_GRACE_MS: u64 = 2_000;
 const PROGRESS_LOG_MS: u64 = 3000;
 const DISC_BENCH_INITIAL_BLOCKS: usize = 1;
 const DISC_BENCH_MAX_BLOCKS: usize = 512;
-const DISC_BENCH_READS_PER_STEP: usize = 4;
-const DISC_BENCH_COOLDOWN_MS: u64 = 200;
+const DISC_BENCH_WARMUP_READS: usize = 1;
+const DISC_BENCH_READS_PER_STEP: usize = 8;
+const DISC_BENCH_STEP_COOLDOWN_MS: u64 = 75;
 const DISC_BENCH_READ_TIMEOUT_MS: u64 = 5_000;
+const DISC_BENCH_LOG_EACH_SUCCESS: bool = false;
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
     ["cpu", "Run CPU-only compute benchmark"],
@@ -1362,6 +1364,36 @@ fn submit_discbench(
     Some(session_id)
 }
 
+fn discbench_safe_xfer_bytes(max_xfer: u64, block_size: u64) -> u64 {
+    if max_xfer == 0 || block_size == 0 {
+        return 0;
+    }
+
+    let margin = (max_xfer / 8).max(block_size.saturating_mul(8));
+    max_xfer.saturating_sub(margin).max(block_size)
+}
+
+fn discbench_step_plan(max_blocks_per_xfer: usize) -> Vec<usize> {
+    let final_blocks = max_blocks_per_xfer.min(DISC_BENCH_MAX_BLOCKS).max(1);
+    let mut steps = Vec::new();
+    let mut blocks = DISC_BENCH_INITIAL_BLOCKS.max(1);
+
+    while blocks < final_blocks {
+        steps.push(blocks);
+        let next = blocks.saturating_mul(2);
+        if next <= blocks {
+            break;
+        }
+        blocks = next;
+    }
+
+    if steps.last().copied() != Some(final_blocks) {
+        steps.push(final_blocks);
+    }
+
+    steps
+}
+
 #[embassy_executor::task(pool_size = 2)]
 async fn discbench_task(
     target: MatrixTarget,
@@ -1384,21 +1416,35 @@ async fn discbench_task(
         }
 
         let max_xfer = handle.max_transfer_bytes();
-        let max_blocks_per_xfer = if max_xfer > 0 && bs > 0 {
-            (max_xfer / bs) as usize
+        // Stay below the reported boundary, but probe much closer than 50% so
+        // fast USB 3 devices still get a meaningful throughput test.
+        let safe_xfer = discbench_safe_xfer_bytes(max_xfer, bs);
+        let max_blocks_per_xfer = if safe_xfer > 0 && bs > 0 {
+            (safe_xfer / bs).max(1) as usize
         } else {
             DISC_BENCH_MAX_BLOCKS
         };
+        let step_plan = discbench_step_plan(max_blocks_per_xfer);
+        log(format!(
+            "bench disc: max_xfer={} safe_limit={} max_blocks_per_step={} warmup={} measured_reads={}",
+            format_bytes(max_xfer),
+            format_bytes(safe_xfer),
+            max_blocks_per_xfer,
+            DISC_BENCH_WARMUP_READS,
+            DISC_BENCH_READS_PER_STEP,
+        )
+        .as_str());
 
-        let mut step_blocks = DISC_BENCH_INITIAL_BLOCKS;
         let mut lba: u64 = 0;
         let global_start = embassy_time_driver::now();
         let mut total_bytes_read: u64 = 0;
+        let mut total_measured_bytes: u64 = 0;
 
-        'outer: while step_blocks <= DISC_BENCH_MAX_BLOCKS
-            && step_blocks <= max_blocks_per_xfer
-            && !bench_cancel_requested(session_id)
-        {
+        'outer: for &step_blocks in &step_plan {
+            if bench_cancel_requested(session_id) {
+                break;
+            }
+
             let step_bytes = (step_blocks as u64) * bs;
             log(format!(
                 "bench disc: step blocks={} ({}/read)",
@@ -1407,9 +1453,85 @@ async fn discbench_task(
             )
             .as_str());
 
+            let mut warmup_total_ms: u64 = 0;
+            let mut warmup_total_bytes: u64 = 0;
+            let mut warmup_errors = 0u32;
+            for i in 0..DISC_BENCH_WARMUP_READS {
+                if bench_cancel_requested(session_id) {
+                    break 'outer;
+                }
+
+                if lba + step_blocks as u64 > total_blocks {
+                    lba = 0;
+                }
+
+                let read_start = embassy_time_driver::now();
+                let read_result = embassy_time::with_timeout(
+                    EmbassyDuration::from_millis(DISC_BENCH_READ_TIMEOUT_MS),
+                    handle.read_blocks(lba, step_blocks),
+                )
+                .await;
+                match read_result {
+                    Ok(Ok(data)) => {
+                        let read_ms = elapsed_ms_since(read_start);
+                        let read_bytes = data.len() as u64;
+                        warmup_total_ms = warmup_total_ms.saturating_add(read_ms);
+                        warmup_total_bytes = warmup_total_bytes.saturating_add(read_bytes);
+                        total_bytes_read = total_bytes_read.saturating_add(read_bytes);
+                        if DISC_BENCH_LOG_EACH_SUCCESS {
+                            log(format!(
+                                "  warmup {}/{} lba={} got={} {}ms {}",
+                                i + 1,
+                                DISC_BENCH_WARMUP_READS,
+                                lba,
+                                format_bytes(read_bytes),
+                                read_ms,
+                                format_speed(bps_from_progress(read_bytes, read_ms)),
+                            )
+                            .as_str());
+                        }
+                        lba += step_blocks as u64;
+                    }
+                    Ok(Err(e)) => {
+                        warmup_errors += 1;
+                        log(format!(
+                            "  warmup {}/{} lba={} ERROR {:?}",
+                            i + 1,
+                            DISC_BENCH_WARMUP_READS,
+                            lba,
+                            e,
+                        )
+                        .as_str());
+                        lba += step_blocks as u64;
+                    }
+                    Err(_) => {
+                        warmup_errors += 1;
+                        let read_ms = elapsed_ms_since(read_start);
+                        log(format!(
+                            "  warmup {}/{} lba={} TIMEOUT after {}ms (blocks={})",
+                            i + 1,
+                            DISC_BENCH_WARMUP_READS,
+                            lba,
+                            read_ms,
+                            step_blocks,
+                        )
+                        .as_str());
+                        lba += step_blocks as u64;
+                    }
+                }
+            }
+
+            if warmup_errors > 0 {
+                log("bench disc: warmup failed, stopping");
+                break;
+            }
+
             let step_start = embassy_time_driver::now();
             let mut step_total: u64 = 0;
             let mut errors = 0u32;
+            let mut best_read_bps: u64 = 0;
+            let mut completed_reads: usize = 0;
+            let mut slowest_read_ms: u64 = 0;
 
             for i in 0..DISC_BENCH_READS_PER_STEP {
                 if bench_cancel_requested(session_id) {
@@ -1432,19 +1554,25 @@ async fn discbench_task(
                         let read_ms = elapsed_ms_since(read_start);
                         let read_bytes = data.len() as u64;
                         step_total += read_bytes;
-                        total_bytes_read += read_bytes;
+                        total_bytes_read = total_bytes_read.saturating_add(read_bytes);
+                        total_measured_bytes = total_measured_bytes.saturating_add(read_bytes);
+                        completed_reads = completed_reads.saturating_add(1);
 
                         let read_bps = bps_from_progress(read_bytes, read_ms);
-                        log(format!(
-                            "  read {}/{} lba={} got={} {}ms {}",
-                            i + 1,
-                            DISC_BENCH_READS_PER_STEP,
-                            lba,
-                            format_bytes(read_bytes),
-                            read_ms,
-                            format_speed(read_bps),
-                        )
-                        .as_str());
+                        best_read_bps = best_read_bps.max(read_bps);
+                        slowest_read_ms = slowest_read_ms.max(read_ms);
+                        if DISC_BENCH_LOG_EACH_SUCCESS {
+                            log(format!(
+                                "  read {}/{} lba={} got={} {}ms {}",
+                                i + 1,
+                                DISC_BENCH_READS_PER_STEP,
+                                lba,
+                                format_bytes(read_bytes),
+                                read_ms,
+                                format_speed(read_bps),
+                            )
+                            .as_str());
+                        }
 
                         lba += step_blocks as u64;
                     }
@@ -1475,19 +1603,22 @@ async fn discbench_task(
                         lba += step_blocks as u64;
                     }
                 }
-
-                // gentle cooldown between reads
-                Timer::after(EmbassyDuration::from_millis(DISC_BENCH_COOLDOWN_MS)).await;
             }
 
             let step_ms = elapsed_ms_since(step_start);
             let step_bps = bps_from_progress(step_total, step_ms);
 
             log(format!(
-                "  step done: {} in {}ms -> {} (errors={})",
+                "  step done: warmup={} {} burst={} in {}ms -> {} best={} slowest={}ms reads={}/{} (errors={})",
+                warmup_total_ms,
+                format_bytes(warmup_total_bytes),
                 format_bytes(step_total),
                 step_ms,
                 format_speed(step_bps),
+                format_speed(best_read_bps),
+                slowest_read_ms,
+                completed_reads,
+                DISC_BENCH_READS_PER_STEP,
                 errors,
             )
             .as_str());
@@ -1498,20 +1629,17 @@ async fn discbench_task(
                 break;
             }
 
-            // next step: double the block count
-            step_blocks *= 2;
-
-            // cooldown before next step
-            Timer::after(EmbassyDuration::from_millis(DISC_BENCH_COOLDOWN_MS * 2)).await;
+            Timer::after(EmbassyDuration::from_millis(DISC_BENCH_STEP_COOLDOWN_MS)).await;
         }
 
         let total_ms = elapsed_ms_since(global_start);
-        let overall_bps = bps_from_progress(total_bytes_read, total_ms);
+        let overall_bps = bps_from_progress(total_measured_bytes, total_ms);
         let cancelled = bench_cancel_requested(session_id);
 
         log(format!(
-            "bench disc: {} total={} elapsed={}ms avg={}",
+            "bench disc: {} measured={} total={} elapsed={}ms avg={}",
             if cancelled { "cancelled" } else { "done" },
+            format_bytes(total_measured_bytes),
             format_bytes(total_bytes_read),
             total_ms,
             format_speed(overall_bps),

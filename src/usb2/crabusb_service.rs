@@ -155,7 +155,7 @@ fn sync_observed_devices(
     let mut seen = OBSERVED_DEVICES[controller_id].lock();
     let previous = seen.clone();
 
-    let merged_current: Vec<ObservedUsbDevice> = current
+    let mut merged_current: Vec<ObservedUsbDevice> = current
         .iter()
         .cloned()
         .map(|candidate| {
@@ -166,6 +166,20 @@ fn sync_observed_devices(
                 .unwrap_or(candidate)
         })
         .collect();
+
+    if merged_current.is_empty() && !previous.is_empty() {
+        if let Some(diag) = super::controller_mmio_diag(controller_id) {
+            merged_current = previous
+                .iter()
+                .filter(|dev| {
+                    diag.ports.iter().any(|port| {
+                        port.port_id == dev.root_port_id && (port.portsc & (1 << 0)) != 0
+                    })
+                })
+                .cloned()
+                .collect();
+        }
+    }
 
     let connected = merged_current
         .iter()

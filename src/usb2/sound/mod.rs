@@ -13,6 +13,7 @@ const AUDIO_DEMO_ENABLED: bool = true;
 const AUDIO_HTTP_LOCAL_DEMO_URLS: [&str; 1] = ["http://192.168.178.112:8080/tools/aud/demo.wav"];
 const AUDIO_HTTP_DEMO_TIMEOUT_MS: u32 = 30_000;
 const AUDIO_HTTP_DEMO_MAX_BYTES: usize = 32 * 1024 * 1024;
+const AUDIO_DEMO_CACHE_PATH: &str = "audio/demo.wav";
 const AUDIO_FRAME_BYTES: usize = 4;
 const AUDIO_RATE_HZ: u32 = 48_000;
 
@@ -111,6 +112,22 @@ fn pick_audio_target(
 }
 
 async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
+    if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+        match crate::r::fs::trueosfs::file_out_async(disk, AUDIO_DEMO_CACHE_PATH).await {
+            Ok(Some(cached)) if !cached.is_empty() => {
+                crate::log!(
+                    "crabusb: audio cache hit path={} bytes={}\n",
+                    AUDIO_DEMO_CACHE_PATH,
+                    cached.len()
+                );
+                return Some((AUDIO_DEMO_CACHE_PATH, cached));
+            }
+            _ => {
+                crate::log!("crabusb: audio cache miss path={}\n", AUDIO_DEMO_CACHE_PATH);
+            }
+        }
+    }
+
     for url in AUDIO_HTTP_LOCAL_DEMO_URLS {
         crate::log!(
             "crabusb: audio fetch try url={} timeout_ms={} max_bytes={}\n",
@@ -118,6 +135,49 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
             AUDIO_HTTP_DEMO_TIMEOUT_MS,
             AUDIO_HTTP_DEMO_MAX_BYTES
         );
+        if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+            match crate::r::net::cli::http_stream::fetch_http_to_file_async(
+                url,
+                disk,
+                AUDIO_DEMO_CACHE_PATH,
+                AUDIO_HTTP_DEMO_TIMEOUT_MS,
+                AUDIO_HTTP_DEMO_MAX_BYTES,
+            )
+            .await
+            {
+                Ok(()) => match crate::r::fs::trueosfs::file_out_async(disk, AUDIO_DEMO_CACHE_PATH)
+                    .await
+                {
+                    Ok(Some(cached)) if !cached.is_empty() => {
+                        crate::log!(
+                            "crabusb: audio cached path={} url={} bytes={}\n",
+                            AUDIO_DEMO_CACHE_PATH,
+                            url,
+                            cached.len()
+                        );
+                        return Some((AUDIO_DEMO_CACHE_PATH, cached));
+                    }
+                    Ok(_) => {
+                        crate::log!(
+                            "crabusb: audio stream fetch finished but cache empty path={} url={}\n",
+                            AUDIO_DEMO_CACHE_PATH,
+                            url
+                        );
+                    }
+                    Err(err) => {
+                        crate::log!(
+                            "crabusb: audio cache read failed path={} url={} err={:?}\n",
+                            AUDIO_DEMO_CACHE_PATH,
+                            url,
+                            err
+                        );
+                    }
+                },
+                Err(err) => {
+                    crate::log!("crabusb: audio stream fetch failed url={} err={:?}\n", url, err);
+                }
+            }
+        }
         match crate::r::net::cli::http::fetch_http_body(
             url,
             AUDIO_HTTP_DEMO_TIMEOUT_MS,
