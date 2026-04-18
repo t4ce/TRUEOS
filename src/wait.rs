@@ -7,9 +7,25 @@ use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll, Waker};
+use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_executor::task;
 use embassy_time_driver::{TICK_HZ, now};
 use spin::Mutex;
+
+/// Embassy sync primitives are generic over a raw blocking mutex backend.
+/// This adapts the kernel's `spin::Mutex` so shared Embassy types like
+/// `Watch` can live in static storage without each subsystem redefining the
+/// same glue type.
+pub struct EmbassySpinRawMutex(Mutex<()>);
+
+unsafe impl RawMutex for EmbassySpinRawMutex {
+    const INIT: Self = Self(Mutex::new(()));
+
+    fn lock<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _guard = self.0.lock();
+        f()
+    }
+}
 
 /// Update a stored waker if it differs from the current one.
 #[inline]

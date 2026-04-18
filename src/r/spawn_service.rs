@@ -133,6 +133,7 @@ define_started_flags!(
     GFX_VIRGL_READY_TASK_STARTED,
     GFX_VIRGL_CURSOR_OVERLAY_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
+    RAPLE_SERVICE_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
     UI2_HOSTED_SYNC_TASK_STARTED,
@@ -150,6 +151,7 @@ define_started_flags!(
     UI2_BGRT_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_PCI_DEMO_STARTED,
+    UI2_RAPLE_DEMO_STARTED,
     UI2_PETERSEN_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
     UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
@@ -503,6 +505,10 @@ fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| spawner.spawn(intel_cursor_service_task()))
 }
 
+fn spawn_raple_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| spawner.spawn(crate::rapl::raple_service()))
+}
+
 fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |ap1_spawner| {
         ap1_spawner.spawn(crate::r::io::cabi::texture_upload_service_task())
@@ -742,6 +748,12 @@ fn spawn_ui2_bgrt_demo(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_mandelbrot_demo::ui2_mandelbrot_demo_task())
+    })
+}
+
+fn spawn_ui2_raple_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_raple_demo::ui2_raple_demo_task())
     })
 }
 
@@ -1043,6 +1055,7 @@ static TASKS: &[TaskSpec] = &[
         &INTEL_CURSOR_SERVICE_STARTED,
         spawn_intel_cursor_service_task,
     ),
+    TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
     TaskSpec::enabled("html_fetch_service", 0, &HTML_SHACK_SERVICE_STARTED, html_fetch_service),
     TaskSpec::enabled(
         "gfx-texture-upload-service",
@@ -1129,6 +1142,12 @@ static TASKS: &[TaskSpec] = &[
         &DISABLED_UI2_MANDELBROT_DEMO,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-raple-demo",
+        UI2_DEMO_READY,
+        &UI2_RAPLE_DEMO_STARTED,
+        spawn_ui2_raple_demo,
     ),
     TaskSpec::disabled(
         "ui2-petersen-demo",
