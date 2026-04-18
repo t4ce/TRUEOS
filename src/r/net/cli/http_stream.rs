@@ -12,25 +12,120 @@ use super::http::{
 use crate::r::net::dns::{self, DnsConfig};
 use crate::r::net::{NetProfile, VNet};
 
+const HTTP_FILE_WRITE_FALLBACK_CHUNK_BYTES: usize = 64 * 1024;
+const HTTP_FILE_WRITE_PROGRESS_BYTES: u64 = 512 * 1024;
+const HTTP_FILE_WRITE_YIELD_EVERY_BYTES: u64 = 256 * 1024;
+
+fn http_file_write_chunk_bytes(info: &crate::disc::block::DeviceInfo) -> usize {
+    let block_size = usize::max(info.block_size as usize, 1);
+    let raw = if info.max_transfer_bytes > 0 {
+        info.max_transfer_bytes as usize
+    } else {
+        HTTP_FILE_WRITE_FALLBACK_CHUNK_BYTES
+    };
+    let aligned = raw - (raw % block_size);
+    usize::max(aligned, block_size)
+}
+
+fn http_file_write_bps(written: u64, started: Instant) -> u64 {
+    let elapsed_ms = started.elapsed().as_millis();
+    if elapsed_ms == 0 {
+        0
+    } else {
+        ((written as u128).saturating_mul(1000) / elapsed_ms as u128) as u64
+    }
+}
+
 async fn write_http_body_to_file(
     disk: crate::disc::block::DeviceHandle,
     path: &str,
     body: &[u8],
 ) -> Result<(), crate::disc::block::Error> {
+    let info = disk.info();
+    let chunk_bytes = http_file_write_chunk_bytes(&info);
+    crate::log!(
+        "http-stream: file write start path={} bytes={} disk_id={} kind={:?} block={} max_transfer={} chunk={} label={}\n",
+        path,
+        body.len(),
+        info.id.raw(),
+        info.kind,
+        info.block_size,
+        info.max_transfer_bytes,
+        chunk_bytes,
+        info.label.as_deref().unwrap_or("-"),
+    );
+
     let Some(handle) =
         crate::r::fs::trueosfs::file_write_begin_async(disk, path, body.len() as u64).await?
     else {
         return Err(crate::disc::block::Error::NotReady);
     };
 
-    if !body.is_empty()
-        && let Err(err) = crate::r::fs::trueosfs::file_write_chunk_async(handle, body).await
-    {
-        let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
-        return Err(err);
+    let started = Instant::now();
+    let mut written = 0u64;
+    let mut next_progress = HTTP_FILE_WRITE_PROGRESS_BYTES;
+    let mut next_yield = HTTP_FILE_WRITE_YIELD_EVERY_BYTES;
+
+    for chunk in body.chunks(chunk_bytes) {
+        if let Err(err) = crate::r::fs::trueosfs::file_write_chunk_async(handle, chunk).await {
+            let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+            crate::log!(
+                "http-stream: file write chunk failed path={} offset={} chunk={} err={:?}\n",
+                path,
+                written,
+                chunk.len(),
+                err,
+            );
+            return Err(err);
+        }
+
+        written = written.saturating_add(chunk.len() as u64);
+        if written >= next_progress || written == body.len() as u64 {
+            crate::log!(
+                "http-stream: file write progress path={} written={} total={} bps={} elapsed_ms={}\n",
+                path,
+                written,
+                body.len(),
+                http_file_write_bps(written, started),
+                started.elapsed().as_millis(),
+            );
+            next_progress = next_progress.saturating_add(HTTP_FILE_WRITE_PROGRESS_BYTES);
+        }
+
+        if written >= next_yield && written != body.len() as u64 {
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+            next_yield = next_yield.saturating_add(HTTP_FILE_WRITE_YIELD_EVERY_BYTES);
+        }
     }
 
-    crate::r::fs::trueosfs::file_write_finish_async(handle).await
+    crate::log!(
+        "http-stream: file write flush path={} written={} elapsed_ms={}\n",
+        path,
+        written,
+        started.elapsed().as_millis(),
+    );
+
+    match crate::r::fs::trueosfs::file_write_finish_async(handle).await {
+        Ok(()) => {
+            crate::log!(
+                "http-stream: file write committed path={} bytes={} bps={} elapsed_ms={}\n",
+                path,
+                written,
+                http_file_write_bps(written, started),
+                started.elapsed().as_millis(),
+            );
+            Ok(())
+        }
+        Err(err) => {
+            crate::log!(
+                "http-stream: file write finish failed path={} written={} err={:?}\n",
+                path,
+                written,
+                err,
+            );
+            Err(err)
+        }
+    }
 }
 
 async fn request_http_to_file(

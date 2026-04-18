@@ -37,7 +37,7 @@ const UI2_OFFLINE_PILL_PLAY_SIZE: f32 = UI2_BAR_H;
 const UI2_OFFLINE_PILL_BG: (u8, u8, u8, u8) = (0xD9, 0xDE, 0xE5, 0xD0);
 const UI2_OFFLINE_PILL_TEXT: (u8, u8, u8, u8) = (0x30, 0x30, 0x30, 0xFF);
 /// Play button: ▶ U+25B6
-const UI2_OFFLINE_PLAY_TWEMOJI: char = '\u{25B6}';
+const UI2_OFFLINE_PLAY_TWEMOJI: char = '\u{23EF}';
 
 /// One entry in the offline dock.
 #[derive(Copy, Clone)]

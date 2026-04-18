@@ -92,6 +92,219 @@ impl Ui2Rect {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Ui2CursorOverlayGlyphSpec {
+    pub tex_id: u32,
+    pub draw_w_px: u16,
+    pub draw_h_px: u16,
+    pub src_x: u16,
+    pub src_y: u16,
+    pub src_w: u16,
+    pub src_h: u16,
+    pub atlas_w: u16,
+    pub atlas_h: u16,
+}
+
+const UI2_CURSOR_OVERLAY_TEX_ID_BASE: u32 = 49_100;
+const UI2_CURSOR_OVERLAY_DIM_MIN_PX: u32 = 8;
+const UI2_CURSOR_OVERLAY_DIM_MAX_PX: u32 = 32;
+const UI2_CURSOR_OVERLAY_DIM_MIN_VIEW_H: u32 = 720;
+const UI2_CURSOR_OVERLAY_DIM_MAX_VIEW_H: u32 = 2160;
+const UI2_CURSOR_OVERLAY_CENTER_CUTOUT_RADIUS_PX: i32 = 1;
+const ASYNC_TEX_STATUS_READY: i32 = 2;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Ui2CursorOverlayCacheEntry {
+    tex_id: u32,
+    glyph: char,
+    ready_seq: u32,
+    target_dim_px: u16,
+    uploaded_w: u16,
+    uploaded_h: u16,
+}
+
+impl Ui2CursorOverlayCacheEntry {
+    const fn new() -> Self {
+        Self {
+            tex_id: 0,
+            glyph: '\0',
+            ready_seq: 0,
+            target_dim_px: 0,
+            uploaded_w: 0,
+            uploaded_h: 0,
+        }
+    }
+}
+
+static UI2_CURSOR_OVERLAY_CACHE: Mutex<[Ui2CursorOverlayCacheEntry; 6]> = Mutex::new([
+    Ui2CursorOverlayCacheEntry::new(),
+    Ui2CursorOverlayCacheEntry::new(),
+    Ui2CursorOverlayCacheEntry::new(),
+    Ui2CursorOverlayCacheEntry::new(),
+    Ui2CursorOverlayCacheEntry::new(),
+    Ui2CursorOverlayCacheEntry::new(),
+]);
+
+#[inline]
+fn cursor_overlay_cache_index(slot_id: u32) -> usize {
+    (slot_id % 6) as usize
+}
+
+#[inline]
+fn cursor_overlay_target_dim_px(view_h: u32) -> u16 {
+    let clamped_h =
+        view_h.clamp(UI2_CURSOR_OVERLAY_DIM_MIN_VIEW_H, UI2_CURSOR_OVERLAY_DIM_MAX_VIEW_H);
+    let range_h = UI2_CURSOR_OVERLAY_DIM_MAX_VIEW_H - UI2_CURSOR_OVERLAY_DIM_MIN_VIEW_H;
+    let range_dim = UI2_CURSOR_OVERLAY_DIM_MAX_PX - UI2_CURSOR_OVERLAY_DIM_MIN_PX;
+    let scaled = if range_h == 0 {
+        UI2_CURSOR_OVERLAY_DIM_MAX_PX
+    } else {
+        UI2_CURSOR_OVERLAY_DIM_MIN_PX
+            + ((clamped_h - UI2_CURSOR_OVERLAY_DIM_MIN_VIEW_H) * range_dim + (range_h / 2))
+                / range_h
+    };
+    scaled.clamp(UI2_CURSOR_OVERLAY_DIM_MIN_PX, UI2_CURSOR_OVERLAY_DIM_MAX_PX) as u16
+}
+
+#[inline]
+fn cursor_overlay_texture_ready(tex_id: u32) -> bool {
+    tex_id != 0
+        && crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id) == ASYNC_TEX_STATUS_READY
+}
+
+fn cursor_overlay_build_sprite_rgba(
+    glyph: &Ui2FontGlyph,
+    target_dim_px: u16,
+) -> Option<(u16, u16, Vec<u8>)> {
+    let atlases = ui2_font_decode_cpu_atlases(glyph.tier.size_case())?;
+    let atlas = ui2_font_cpu_atlas_for_glyph(&atlases, glyph)?;
+
+    let dst_w = target_dim_px.max(1);
+    let dst_h = target_dim_px.max(1);
+    let mut rgba = alloc::vec![0u8; usize::from(dst_w) * usize::from(dst_h) * 4];
+    let src_w = u32::from(glyph.region.src_w.max(1));
+    let src_h = u32::from(glyph.region.src_h.max(1));
+    let target_side = u32::from(target_dim_px.max(1));
+    let draw_h = target_side;
+    let draw_w = ((src_w * target_side) + (src_h / 2)) / src_h;
+    let draw_w = draw_w.max(1).min(target_side);
+    let off_x = ((target_side - draw_w) / 2) as usize;
+    let off_y = ((target_side - draw_h) / 2) as usize;
+    let atlas_w = atlas.width as usize;
+    let src_x0 = glyph.region.src_x as usize;
+    let src_y0 = glyph.region.src_y as usize;
+
+    for y in 0..draw_h as usize {
+        let sy = src_y0 + ((y * src_h as usize) / draw_h as usize).min(src_h as usize - 1);
+        for x in 0..draw_w as usize {
+            let sx = src_x0 + ((x * src_w as usize) / draw_w as usize).min(src_w as usize - 1);
+            let src_idx = ((sy * atlas_w) + sx) * 4;
+            let dst_x = off_x + x;
+            let dst_y = off_y + y;
+            let dst_idx = ((dst_y * usize::from(dst_w)) + dst_x) * 4;
+            rgba[dst_idx..dst_idx + 4].copy_from_slice(&atlas.rgba[src_idx..src_idx + 4]);
+        }
+    }
+
+    let center_x = i32::from(dst_w / 2);
+    let center_y = i32::from(dst_h / 2);
+    for y in 0..i32::from(dst_h) {
+        for x in 0..i32::from(dst_w) {
+            let dx = x - center_x;
+            let dy = y - center_y;
+            if (dx * dx) + (dy * dy)
+                <= UI2_CURSOR_OVERLAY_CENTER_CUTOUT_RADIUS_PX
+                    * UI2_CURSOR_OVERLAY_CENTER_CUTOUT_RADIUS_PX
+            {
+                let idx = ((y as usize * usize::from(dst_w)) + x as usize) * 4;
+                rgba[idx] = 0;
+                rgba[idx + 1] = 0;
+                rgba[idx + 2] = 0;
+                rgba[idx + 3] = 0;
+            }
+        }
+    }
+
+    Some((dst_w, dst_h, rgba))
+}
+
+pub(crate) fn cursor_overlay_glyph_spec(
+    slot_id: u32,
+    view_h: u32,
+) -> Option<Ui2CursorOverlayGlyphSpec> {
+    let ch = cursor_spirit_glyph(slot_id)?;
+    let glyph = ui2_font_resolve_glyph(Ui2FontTier::OneX, ch)?;
+    if !glyph.ready {
+        return None;
+    }
+    let cache_idx = cursor_overlay_cache_index(slot_id);
+    let target_dim_px = cursor_overlay_target_dim_px(view_h);
+    let tex_id = UI2_CURSOR_OVERLAY_TEX_ID_BASE + cache_idx as u32;
+    {
+        let cache = UI2_CURSOR_OVERLAY_CACHE.lock();
+        let entry = cache[cache_idx];
+        if entry.tex_id == tex_id
+            && entry.glyph == ch
+            && entry.ready_seq == glyph.ready_seq
+            && entry.target_dim_px == target_dim_px
+            && entry.uploaded_w != 0
+            && entry.uploaded_h != 0
+        {
+            if !cursor_overlay_texture_ready(tex_id) {
+                return None;
+            }
+            return Some(Ui2CursorOverlayGlyphSpec {
+                tex_id,
+                draw_w_px: entry.uploaded_w,
+                draw_h_px: entry.uploaded_h,
+                src_x: 0,
+                src_y: 0,
+                src_w: entry.uploaded_w,
+                src_h: entry.uploaded_h,
+                atlas_w: entry.uploaded_w,
+                atlas_h: entry.uploaded_h,
+            });
+        }
+    }
+
+    let (sprite_w, sprite_h, sprite_rgba) =
+        cursor_overlay_build_sprite_rgba(&glyph, target_dim_px)?;
+    if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+        tex_id,
+        u32::from(sprite_w),
+        u32::from(sprite_h),
+        sprite_rgba.as_slice(),
+        0,
+        "ui2-cursor-spirit",
+    ) {
+        return None;
+    }
+
+    let mut cache = UI2_CURSOR_OVERLAY_CACHE.lock();
+    cache[cache_idx] = Ui2CursorOverlayCacheEntry {
+        tex_id,
+        glyph: ch,
+        ready_seq: glyph.ready_seq,
+        target_dim_px,
+        uploaded_w: sprite_w,
+        uploaded_h: sprite_h,
+    };
+    if !cursor_overlay_texture_ready(tex_id) {
+        return None;
+    }
+    Some(Ui2CursorOverlayGlyphSpec {
+        tex_id,
+        draw_w_px: sprite_w,
+        draw_h_px: sprite_h,
+        src_x: 0,
+        src_y: 0,
+        src_w: sprite_w,
+        src_h: sprite_h,
+        atlas_w: sprite_w,
+        atlas_h: sprite_h,
+    })
+}
+
 #[inline]
 fn blend_rgba_over(src: (u8, u8, u8, u8), dst: (u8, u8, u8, u8)) -> (u8, u8, u8, u8) {
     let sa = src.3 as u32;
@@ -132,6 +345,7 @@ enum Ui2SystemButtonAction {
     ToggleComposition,
     Fork,
     Minimize,
+    Restore,
     ToggleMaximize,
     Close,
 }
@@ -220,6 +434,7 @@ struct Ui2Window {
     hosted_browser_snapshot: UiHostedBrowserSnapshot,
     title: String,
     icon_id: u32,
+    title_twemoji: char,
     title_icon_tex_id: u32,
     title_icon_load_seq: u32,
     title_icon_url: String,

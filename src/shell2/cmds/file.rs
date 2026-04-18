@@ -9,6 +9,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 const MAX_DEPTH: usize = 3;
 const MAX_CHILDREN_PER_DIR: usize = 24;
 const MAX_LINES_PER_ROOT: usize = 160;
+const TRACE_DEPTH: usize = 1;
 const RAMDISK_BLOCK_SIZE: u32 = 512;
 const DEFAULT_RAMDISC_BYTES: u64 = 128 * 1024 * 1024;
 
@@ -128,6 +129,10 @@ struct RootRender {
     lines: Result<Vec<String>, &'static str>,
 }
 
+fn browse_path_label(path: &str) -> &str {
+    if path.is_empty() { "/" } else { path }
+}
+
 async fn describe_tree_entry_async(
     disk_id: crate::disc::block::DiscId,
     parent: &str,
@@ -155,7 +160,19 @@ async fn describe_tree_entry_async(
 async fn build_root_tree_lines_async(
     root: crate::r::fs::trueosfs::RootInfo,
 ) -> Result<Vec<String>, &'static str> {
+    crate::log!(
+        "file: browse start root={} seq={} index_ready={} index_building={} depth_limit={} child_limit={} line_limit={}\n",
+        root.disk_id,
+        root.seq,
+        root.index_ready as u8,
+        root.index_building as u8,
+        MAX_DEPTH,
+        MAX_CHILDREN_PER_DIR,
+        MAX_LINES_PER_ROOT,
+    );
+
     if crate::disc::block::device_handle(root.disk_id).is_none() {
+        crate::log!("file: browse abort root={} err=root handle missing\n", root.disk_id);
         return Err("root handle missing");
     }
 
@@ -178,9 +195,36 @@ async fn build_root_tree_lines_async(
                     continue;
                 }
 
+                if depth <= TRACE_DEPTH {
+                    crate::log!(
+                        "file: browse root={} list path={} depth={} stage=begin\n",
+                        root.disk_id,
+                        browse_path_label(path.as_str()),
+                        depth,
+                    );
+                }
+
                 let children = match tree_child_names_async(root.disk_id, path.as_str()).await {
-                    Ok(children) => children,
+                    Ok(children) => {
+                        if depth <= TRACE_DEPTH {
+                            crate::log!(
+                                "file: browse root={} list path={} depth={} stage=ok children={}\n",
+                                root.disk_id,
+                                browse_path_label(path.as_str()),
+                                depth,
+                                children.len(),
+                            );
+                        }
+                        children
+                    }
                     Err(err) => {
+                        crate::log!(
+                            "file: browse root={} list path={} depth={} stage=err err={}\n",
+                            root.disk_id,
+                            browse_path_label(path.as_str()),
+                            depth,
+                            err,
+                        );
                         if depth == 0 {
                             return Err(err);
                         }
@@ -236,20 +280,14 @@ async fn build_root_tree_lines_async(
         }
     }
 
-    Ok(out)
-}
+    crate::log!(
+        "file: browse done root={} lines={} truncated={}\n",
+        root.disk_id,
+        out.len(),
+        (out.len() >= MAX_LINES_PER_ROOT) as u8,
+    );
 
-async fn collect_root_renders_async(
-    roots: Vec<crate::r::fs::trueosfs::RootInfo>,
-) -> Vec<RootRender> {
-    let mut out = Vec::with_capacity(roots.len());
-    for root in roots {
-        out.push(RootRender {
-            root,
-            lines: build_root_tree_lines_async(root).await,
-        });
-    }
-    out
+    Ok(out)
 }
 
 fn print_root_tree(
@@ -381,54 +419,76 @@ pub(crate) fn try_parse(
                 return ParseOutcome::Handled;
             }
 
-            let renders = crate::wait::spawn_and_wait_local(async move {
-                let mut warm = Vec::new();
-                let mut ready = Vec::new();
-                for root in roots {
-                    if root.index_ready {
-                        ready.push(root);
-                    } else {
-                        warm.push(root);
-                    }
-                }
-                (ready, warm)
-            });
-
-            let (ready_roots, cold_roots) = renders;
-            let renders = crate::wait::spawn_and_wait_local(async move {
-                collect_root_renders_async(ready_roots).await
-            });
-
             let mut shown = 0usize;
             let mut skipped = 0usize;
 
-            for root in cold_roots.iter().copied() {
-                crate::r::fs::trueosfs::request_warm_index(root.disk_id);
+            crate::log!("file: command begin roots={}\n", roots.len());
+
+            for root in roots.into_iter() {
                 if shown > 0 {
                     print_shell_line(io, "");
                 }
                 print_shell_line(io, format_root_header(root).as_str());
-                let note = if root.index_building {
-                    "  (index build already in progress; browse skipped for now)"
-                } else {
-                    "  (index cold; warming in background, browse skipped for now)"
-                };
-                print_shell_line(io, note);
-                shown = shown.saturating_add(1);
-            }
 
-            for render in renders.into_iter() {
+                if !root.index_ready {
+                    crate::r::fs::trueosfs::request_warm_index(root.disk_id);
+                    let note = if root.index_building {
+                        "  (index build already in progress; browse skipped for now)"
+                    } else {
+                        "  (index cold; warming in background, browse skipped for now)"
+                    };
+                    print_shell_line(io, note);
+                    crate::log!(
+                        "file: command root={} seq={} skipped reason=index-cold building={}\n",
+                        root.disk_id,
+                        root.seq,
+                        root.index_building as u8,
+                    );
+                    shown = shown.saturating_add(1);
+                    continue;
+                }
+
+                print_shell_line(
+                    io,
+                    alloc::format!(
+                        "  (scanning tree depth<={} children<={} lines<={})",
+                        MAX_DEPTH,
+                        MAX_CHILDREN_PER_DIR,
+                        MAX_LINES_PER_ROOT
+                    )
+                    .as_str(),
+                );
+
+                let render = RootRender {
+                    root,
+                    lines: crate::wait::spawn_and_wait_local(async move {
+                        build_root_tree_lines_async(root).await
+                    }),
+                };
+
                 let Ok(lines) = render.lines else {
+                    print_shell_line(io, "  [browse failed]");
+                    crate::log!(
+                        "file: command root={} seq={} result=error\n",
+                        render.root.disk_id,
+                        render.root.seq,
+                    );
                     skipped = skipped.saturating_add(1);
                     continue;
                 };
-
-                if shown > 0 {
-                    print_shell_line(io, "");
+                for line in lines.iter() {
+                    print_shell_line(io, line.as_str());
                 }
-                print_root_tree(io, render.root, lines.as_slice());
+                crate::log!(
+                    "file: command root={} seq={} result=ok lines={}\n",
+                    render.root.disk_id,
+                    render.root.seq,
+                    lines.len(),
+                );
                 shown = shown.saturating_add(1);
             }
+
+            crate::log!("file: command done shown={} skipped={}\n", shown, skipped);
 
             if shown == 0 {
                 print_shell_line(io, "file: no browsable TRUEOSFS roots");
