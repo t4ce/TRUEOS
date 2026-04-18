@@ -12,10 +12,15 @@ TRUEOS_LINE_PATTERNS = {
     "clip": re.compile(r"^intel/render: probe-clip-decoded\s+(?P<rest>.*)$"),
     "sf": re.compile(r"^intel/render: probe-sf-decoded\s+(?P<rest>.*)$"),
     "raster": re.compile(r"^intel/render: probe-raster-decoded\s+(?P<rest>.*)$"),
+    "backend": re.compile(r"^intel/render: probe-backend-decoded\s+(?P<rest>.*)$"),
+    "backend_gate": re.compile(r"^intel/render: probe-backend-gate\s+(?P<rest>.*)$"),
     "handoff": re.compile(r"^intel/render: probe-handoff-decoded\s+(?P<rest>.*)$"),
     "blend_probe": re.compile(r"^intel/render: draw-path blend-probe=(?P<value>\S+)$"),
     "stage_after": re.compile(
         r"^intel/render: draw-path stage-stats label=after-submit\s+(?P<rest>.*)$"
+    ),
+    "stage_diag": re.compile(
+        r"^intel/render: draw-path stage-diagnosis\s+(?P<rest>.*)$"
     ),
     "probe_3d": re.compile(r"^intel/render: probe-3d\s+(?P<rest>.*)$"),
 }
@@ -196,12 +201,66 @@ def main() -> None:
                 "delta_ia_vtx",
                 "delta_ia_prim",
                 "delta_vs",
+                "delta_gs",
                 "delta_cl",
+                "delta_cl_prim",
                 "delta_ps",
+                "delta_cps",
                 "delta_ps_depth",
             )
         )
         print(f"after_submit {summary}")
+
+    diag = trueos.get("stage_diag")
+    if isinstance(diag, dict):
+        print(
+            "diagnosis "
+            + " ".join(
+                f"{key}={diag.get(key, '?')}"
+                for key in (
+                    "completed",
+                    "verdict",
+                    "delta_vs",
+                    "delta_gs",
+                    "delta_cl",
+                    "delta_cl_prim",
+                    "delta_ps",
+                    "delta_cps",
+                )
+            )
+        )
+
+    backend = trueos.get("backend")
+    if isinstance(backend, dict):
+        print(
+            "backend "
+            + " ".join(
+                f"{key}={backend.get(key, '?')}"
+                for key in (
+                    "force_thread_dispatch",
+                    "writeable_rt",
+                    "depth_test",
+                    "depth_write",
+                    "stencil_test",
+                    "stencil_write",
+                )
+            )
+        )
+
+    backend_gate = trueos.get("backend_gate")
+    if isinstance(backend_gate, dict):
+        print(
+            "backend_gate "
+            + " ".join(
+                f"{key}={backend_gate.get(key, '?')}"
+                for key in (
+                    "active",
+                    "valid",
+                    "dispatch_armed",
+                    "reason",
+                )
+            )
+        )
 
     print("comparison:")
     for section, key, expected in host_expectations(host):

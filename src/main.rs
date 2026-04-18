@@ -32,8 +32,8 @@ mod phys;
 mod portal;
 mod portio;
 mod power;
-mod rapl;
 mod r;
+mod rapl;
 mod rng;
 mod runtime;
 mod shell2;
@@ -57,16 +57,20 @@ mod tst_smtp_smoke;
 mod tst_ui2_bgrt;
 #[path = "tst/ui2_chart_demo.rs"]
 mod tst_ui2_chart_demo;
+#[path = "tst/ui2_ids.rs"]
+mod tst_ui2_ids;
+#[path = "tst/ui2_coreticks_demo.rs"]
+mod tst_ui2_coreticks_demo;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
 mod tst_ui2_mandelbrot_demo;
 #[path = "tst/ui2_particle_demo.rs"]
 mod tst_ui2_particle_demo;
 #[path = "tst/ui2_pci_demo.rs"]
 mod tst_ui2_pci_demo;
-#[path = "tst/ui2_raple_demo.rs"]
-mod tst_ui2_raple_demo;
 #[path = "tst/ui2_petersen_demo.rs"]
 mod tst_ui2_petersen_demo;
+#[path = "tst/ui2_raple_demo.rs"]
+mod tst_ui2_raple_demo;
 #[path = "tst/ui2_shell_demo.rs"]
 mod tst_ui2_shell_demo;
 #[path = "tst/ui2_smiley_fountain_demo.rs"]
@@ -232,7 +236,7 @@ fn _loop(
         time::poll();
         unsafe { executor.poll() };
         if counter.is_multiple_of(5_000) {
-            //vga::cube::tick();
+            let _ = crate::tst_ui2_coreticks_demo::ui2_coreticks_tick_tile_index(0);
         }
         if counter.is_multiple_of(10_000_000) {
             globalog::debugcon_write_byte_raw(b'0');

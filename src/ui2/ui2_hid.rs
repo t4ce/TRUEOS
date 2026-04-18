@@ -1256,6 +1256,96 @@ fn update_resize_drag_for_cursor(
         next.h = (drag.start_rect.h + dy).max(min_h);
     }
 
+    if window.resize_maintain_aspect {
+        let mut start_window = window.clone();
+        start_window.rect = drag.start_rect;
+        let Some(start_content) = window_content_rect(state, &start_window) else {
+            return;
+        };
+        if start_content.w > 0.0 && start_content.h > 0.0 {
+            let aspect = start_content.w / start_content.h;
+            let outer_left = drag.start_rect.x;
+            let outer_top = drag.start_rect.y;
+            let outer_right = drag.start_rect.x + drag.start_rect.w;
+            let outer_bottom = drag.start_rect.y + drag.start_rect.h;
+            let content_right = start_content.x + start_content.w;
+            let content_bottom = start_content.y + start_content.h;
+            let inset_left = start_content.x - outer_left;
+            let inset_top = start_content.y - outer_top;
+            let inset_right = outer_right - content_right;
+            let inset_bottom = outer_bottom - content_bottom;
+            let min_content_w = (min_w - inset_left - inset_right).max(1.0);
+            let min_content_h = (min_h - inset_top - inset_bottom).max(1.0);
+
+            let mut raw_left = start_content.x;
+            let mut raw_right = content_right;
+            let mut raw_top = start_content.y;
+            let mut raw_bottom = content_bottom;
+
+            if (drag.edge_mask & UI2_WINDOW_RESIZE_LEFT) != 0 {
+                raw_left = next.x + inset_left;
+            } else if (drag.edge_mask & UI2_WINDOW_RESIZE_RIGHT) != 0 {
+                raw_right = next.x + next.w - inset_right;
+            }
+
+            if (drag.edge_mask & UI2_WINDOW_RESIZE_TOP) != 0 {
+                raw_top = next.y + inset_top;
+            } else if (drag.edge_mask & UI2_WINDOW_RESIZE_BOTTOM) != 0 {
+                raw_bottom = next.y + next.h - inset_bottom;
+            }
+
+            let raw_w = (raw_right - raw_left).max(min_content_w);
+            let raw_h = (raw_bottom - raw_top).max(min_content_h);
+            let has_horizontal =
+                (drag.edge_mask & (UI2_WINDOW_RESIZE_LEFT | UI2_WINDOW_RESIZE_RIGHT)) != 0;
+            let has_vertical =
+                (drag.edge_mask & (UI2_WINDOW_RESIZE_TOP | UI2_WINDOW_RESIZE_BOTTOM)) != 0;
+
+            let mut next_content_w = start_content.w.max(min_content_w);
+            let mut next_content_h = start_content.h.max(min_content_h);
+            if has_horizontal && has_vertical {
+                next_content_w = libm::fminf(raw_w, raw_h * aspect).max(min_content_w);
+                next_content_h = (next_content_w / aspect).max(min_content_h);
+                if next_content_h > raw_h {
+                    next_content_h = raw_h.max(min_content_h);
+                    next_content_w = (next_content_h * aspect).max(min_content_w);
+                }
+            } else if has_horizontal {
+                next_content_w = raw_w.max(min_content_w);
+                next_content_h = (next_content_w / aspect).max(min_content_h);
+            } else if has_vertical {
+                next_content_h = raw_h.max(min_content_h);
+                next_content_w = (next_content_h * aspect).max(min_content_w);
+            }
+
+            let start_center_x = start_content.x + start_content.w * 0.5;
+            let start_center_y = start_content.y + start_content.h * 0.5;
+            let next_content_x =
+                if (drag.edge_mask & UI2_WINDOW_RESIZE_LEFT) != 0 && has_horizontal {
+                    content_right - next_content_w
+                } else if (drag.edge_mask & UI2_WINDOW_RESIZE_RIGHT) != 0 && has_horizontal {
+                    start_content.x
+                } else {
+                    start_center_x - next_content_w * 0.5
+                };
+            let next_content_y =
+                if (drag.edge_mask & UI2_WINDOW_RESIZE_TOP) != 0 && has_vertical {
+                    content_bottom - next_content_h
+                } else if (drag.edge_mask & UI2_WINDOW_RESIZE_BOTTOM) != 0 && has_vertical {
+                    start_content.y
+                } else {
+                    start_center_y - next_content_h * 0.5
+                };
+
+            next = Ui2Rect::new(
+                next_content_x - inset_left,
+                next_content_y - inset_top,
+                next_content_w + inset_left + inset_right,
+                next_content_h + inset_top + inset_bottom,
+            );
+        }
+    }
+
     if drag.live_apply {
         if window.rect != next {
             if let Some(window) = window_mut(state, drag.window_id) {

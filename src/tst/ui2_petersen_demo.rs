@@ -6,7 +6,7 @@ use kurbo::{Line, Point};
 use petgraph::graph::UnGraph;
 use petgraph::visit::EdgeRef;
 
-const UI2_PETERSEN_TEX_ID: u32 = 4_712;
+const UI2_PETERSEN_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Petersen.get();
 const UI2_PETERSEN_RT_W: u32 = 280;
 const UI2_PETERSEN_RT_H: u32 = 280;
 const UI2_PETERSEN_WINDOW_X: f32 = 640.0;

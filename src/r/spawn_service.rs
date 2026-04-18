@@ -149,6 +149,7 @@ define_started_flags!(
     UI2_TWEMOJI_1X_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
+    UI2_CORETICKS_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_PCI_DEMO_STARTED,
     UI2_RAPLE_DEMO_STARTED,
@@ -200,6 +201,7 @@ define_disabled_flags!(
     DISABLED_TGA,
     DISABLED_UI2_GFX_TETRIS,
     DISABLED_UI2_MANDELBROT_DEMO,
+    DISABLED_UI2_CORETICKS_DEMO,
     DISABLED_UI2_PETERSEN_DEMO,
     DISABLED_UI2_PARTICLE_DEMO,
     DISABLED_UI2_SMILEY_FOUNTAIN_DEMO,
@@ -745,6 +747,12 @@ fn spawn_ui2_bgrt_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_coreticks_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_coreticks_demo::ui2_coreticks_demo_task())
+    })
+}
+
 fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         worker_spawner.spawn(crate::tst_ui2_mandelbrot_demo::ui2_mandelbrot_demo_task())
@@ -1136,6 +1144,12 @@ static TASKS: &[TaskSpec] = &[
         spawn_ui2_triangle_demo,
     ),
     TaskSpec::enabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
+    TaskSpec::enabled(
+        "ui2-coreticks-demo",
+        UI2_DEMO_READY,
+        &UI2_CORETICKS_DEMO_STARTED,
+        spawn_ui2_coreticks_demo,
+    ),
     TaskSpec::disabled(
         "ui2-mandelbrot-demo",
         UI2_DEMO_READY,

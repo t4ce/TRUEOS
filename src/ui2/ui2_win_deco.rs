@@ -52,24 +52,6 @@ fn decoration_label_draw_rect(
     Some(ui2_font_place_glyph_center(&glyph, anchor))
 }
 
-#[inline]
-fn decoration_icon_draw_rect(anchor: Ui2Rect, right_align: bool) -> Ui2Rect {
-    let side = anchor.w.min(anchor.h).max(1.0);
-    let x = if right_align {
-        anchor.x + (anchor.w - side).max(0.0)
-    } else {
-        anchor.x + ((anchor.w - side) * 0.5).max(0.0)
-    };
-    let y = anchor.y + ((anchor.h - side) * 0.5).max(0.0);
-    Ui2Rect::new(x, y, side, side)
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(super) enum Ui2DecorationIconKind {
-    SystemButton(Ui2SystemButtonAction),
-    TitlebarWindow,
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum Ui2DecorationLabelKind {
     SystemButton(Ui2SystemButtonAction),
@@ -93,54 +75,6 @@ impl Ui2DecorationLabelKind {
             Self::SystemButton(Ui2SystemButtonAction::Close) => "⊠",
         }
     }
-}
-
-trait Ui2DecorationIconSource {
-    fn icon_id(self, window: &Ui2Window) -> u32;
-}
-
-impl Ui2DecorationIconSource for Ui2DecorationIconKind {
-    fn icon_id(self, window: &Ui2Window) -> u32 {
-        match self {
-            Self::SystemButton(Ui2SystemButtonAction::ToggleComposition) => 0,
-            Self::SystemButton(Ui2SystemButtonAction::Fork) => UI2_SYSTEM_BUTTON_FORK_ICON_ID,
-            Self::SystemButton(Ui2SystemButtonAction::Minimize) => {
-                UI2_SYSTEM_BUTTON_MINIMIZE_ICON_ID
-            }
-            Self::SystemButton(Ui2SystemButtonAction::Restore) => 0,
-            Self::SystemButton(Ui2SystemButtonAction::ToggleMaximize) => {
-                UI2_SYSTEM_BUTTON_MAXIMIZE_ICON_ID
-            }
-            Self::SystemButton(Ui2SystemButtonAction::Close) => UI2_SYSTEM_BUTTON_CLOSE_ICON_ID,
-            Self::TitlebarWindow => window.icon_id,
-        }
-    }
-}
-
-pub(super) fn draw_window_decoration_icon(
-    state: &Ui2State,
-    window: &Ui2Window,
-    kind: Ui2DecorationIconKind,
-    x: f32,
-    y: f32,
-    side_px: f32,
-) {
-    let icon_id = kind.icon_id(window);
-    if icon_id == 0 {
-        return;
-    }
-
-    let _ = crate::gfx::lyon::draw_lyon_icon_alpha_scaled_no_present(
-        icon_id,
-        0,
-        0,
-        x,
-        y,
-        side_px,
-        state.view_w,
-        state.view_h,
-        window.alpha,
-    );
 }
 
 fn draw_window_title_texture_icon(
@@ -232,18 +166,12 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
             return;
         }
     }
-    let kind = Ui2DecorationIconKind::SystemButton(action);
-    if kind.icon_id(window) != 0 {
-        let draw = decoration_icon_draw_rect(rect, false);
-        draw_window_decoration_icon(state, window, kind, draw.x, draw.y, draw.w);
-    } else {
-        draw_window_decoration_label(
-            state,
-            window,
-            Ui2DecorationLabelKind::SystemButton(action),
-            rect,
-        );
-    }
+    draw_window_decoration_label(
+        state,
+        window,
+        Ui2DecorationLabelKind::SystemButton(action),
+        rect,
+    );
 }
 
 fn draw_window_twemoji_button(
@@ -515,9 +443,8 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
 
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
         let has_title_texture_icon = texture_is_drawable(window.title_icon_tex_id);
-        let has_title_twemoji =
-            !has_title_texture_icon && window.icon_id == 0 && window.title_twemoji != '\0';
-        if has_title_texture_icon || window.icon_id != 0 || has_title_twemoji {
+        let has_title_twemoji = !has_title_texture_icon && window.title_twemoji != '\0';
+        if has_title_texture_icon || has_title_twemoji {
             let icon_side = 16.0f32;
             let icon_x = rect.x + 8.0;
             let icon_y = rect.y + ((titleband_h - icon_side) * 0.5).max(0.0);
@@ -530,18 +457,9 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
                     Ui2Rect::new(icon_x, icon_y, icon_side, icon_side),
                     window.title_twemoji,
                 );
-            } else {
-                draw_window_decoration_icon(
-                    state,
-                    window,
-                    Ui2DecorationIconKind::TitlebarWindow,
-                    icon_x,
-                    icon_y,
-                    icon_side,
-                );
             }
         }
-        let title_left = if has_title_texture_icon || window.icon_id != 0 || has_title_twemoji {
+        let title_left = if has_title_texture_icon || has_title_twemoji {
             rect.x + 28.0
         } else {
             rect.x + 8.0
@@ -748,6 +666,42 @@ pub fn set_window_bottom_scrollbar_visible(id: u32, visible: bool) -> bool {
         if !visible {
             clear_window_drag_claims(&mut state, id);
         }
+    }
+    noted
+}
+
+pub fn set_window_resize_maintain_aspect(id: u32, maintain_aspect: bool) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.resize_maintain_aspect == maintain_aspect {
+        return true;
+    }
+    window.resize_maintain_aspect = maintain_aspect;
+    state.compose_reason = "decor-resize-aspect-window";
+    let noted = note_window_dirty(&mut state, id, "decor-resize-aspect-window");
+    if noted {
+        refresh_window_hit_entries(&mut state, id);
+    }
+    noted
+}
+
+pub fn set_window_content_preserve_scale(id: u32, preserve_scale: bool) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.content_preserve_scale == preserve_scale {
+        return true;
+    }
+    window.content_preserve_scale = preserve_scale;
+    state.compose_reason = "decor-content-scale-window";
+    let noted = note_window_dirty(&mut state, id, "decor-content-scale-window");
+    if noted {
+        refresh_window_hit_entries(&mut state, id);
     }
     noted
 }

@@ -153,9 +153,10 @@ pub(crate) fn sanitize_usb_identity_string(raw: &str) -> Option<String> {
         break;
     }
 
-    let out: String = String::from(out.trim_matches(|ch: char| {
-        ch.is_ascii_whitespace() || matches!(ch, '-' | '_' | '.' | ':')
-    }));
+    let out: String =
+        String::from(out.trim_matches(|ch: char| {
+            ch.is_ascii_whitespace() || matches!(ch, '-' | '_' | '.' | ':')
+        }));
     if out.len() < 3 || out.len() > 64 || !out.chars().any(|ch| ch.is_ascii_alphanumeric()) {
         None
     } else {
@@ -175,11 +176,7 @@ pub(crate) async fn read_optional_string_descriptor(
 pub(crate) async fn read_device_strings(device: &mut Device) -> UsbDeviceStrings {
     let (manufacturer_index, product_index, serial_index) = {
         let desc = device.descriptor();
-        (
-            desc.manufacturer_string_index,
-            desc.product_string_index,
-            desc.serial_number_string_index,
-        )
+        (desc.manufacturer_string_index, desc.product_string_index, desc.serial_number_string_index)
     };
     UsbDeviceStrings {
         manufacturer: read_optional_string_descriptor(device, manufacturer_index).await,
@@ -398,12 +395,12 @@ pub(crate) async fn log_hid_report_descriptors_on_device(
                     &hid_desc[..read_len]
                 );
 
-                let report_len = if read_len >= 9 && hid_desc[6] == UsbDescriptorType::HidReport.code()
-                {
-                    u16::from(hid_desc[7]) | (u16::from(hid_desc[8]) << 8)
-                } else {
-                    HID_DESC_FALLBACK_REPORT_LEN
-                };
+                let report_len =
+                    if read_len >= 9 && hid_desc[6] == UsbDescriptorType::HidReport.code() {
+                        u16::from(hid_desc[7]) | (u16::from(hid_desc[8]) << 8)
+                    } else {
+                        HID_DESC_FALLBACK_REPORT_LEN
+                    };
 
                 let mut report_desc = alloc::vec![0u8; usize::from(report_len)];
                 match device

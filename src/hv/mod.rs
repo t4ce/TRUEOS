@@ -16,7 +16,7 @@ use core::arch::x86_64::__cpuid;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_executor::{Spawner, task};
+use embassy_executor::{SendSpawner, Spawner, task};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, String};
 use spin::Mutex;
@@ -37,6 +37,7 @@ const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
 const HV_LOG_CAP: usize = 64;
 const HV_LOG_LINE: usize = 200;
+const VM_RESERVED_FIRST_SLOT: u32 = 2;
 
 static VMM: VmManager = VmManager::new();
 static VM1_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -45,6 +46,8 @@ static VM1_STOP_REQ: AtomicBool = AtomicBool::new(false);
 static VM1_MARKER_SEEN: AtomicBool = AtomicBool::new(false);
 static VM1_GUEST_BOOT_ARMED: AtomicBool = AtomicBool::new(false);
 static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
+static HV_VM_SPAWN_RR: AtomicU64 = AtomicU64::new(0);
+static VM_BOOT_MODE: Mutex<VmBootMode> = Mutex::new(VmBootMode::Hull);
 
 #[derive(Clone)]
 struct HvLogEntry {
@@ -67,7 +70,14 @@ pub enum StartError {
     AlreadyRunning,
     VmxUnsupported,
     MissingGuestModule,
+    NoVmSpawner,
     SpawnFailed,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum VmBootMode {
+    Hull,
+    Full,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -88,6 +98,98 @@ pub struct HvStatus {
     pub vm1_marker_seen: bool,
     pub guest_module_present: bool,
     pub stored_vm_count: usize,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum VmSpawnPolicy {
+    ReservedVmLane,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct VmCpuProfile {
+    pub policy: VmSpawnPolicy,
+}
+
+impl VmCpuProfile {
+    pub const fn reserved_vm_lane() -> Self {
+        Self {
+            policy: VmSpawnPolicy::ReservedVmLane,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PickedVmSpawner {
+    slot: u32,
+    core_kind: u8,
+    spawner: SendSpawner,
+}
+
+impl PickedVmSpawner {
+    fn core_kind_name(&self) -> &'static str {
+        match self.core_kind {
+            trueos_qjs::workers::CORE_KIND_PERF => "perf",
+            trueos_qjs::workers::CORE_KIND_EFF => "eff",
+            _ => "unknown",
+        }
+    }
+}
+
+pub fn pick_vm_spawner(profile: VmCpuProfile) -> Option<SendSpawner> {
+    pick_vm_spawn_target(profile).map(|picked| picked.spawner)
+}
+
+fn pick_vm_spawn_target(profile: VmCpuProfile) -> Option<PickedVmSpawner> {
+    match profile.policy {
+        VmSpawnPolicy::ReservedVmLane => pick_reserved_vm_lane(),
+    }
+}
+
+fn pick_reserved_vm_lane() -> Option<PickedVmSpawner> {
+    let slots = trueos_qjs::workers::background_worker_slots();
+    if slots.is_empty() {
+        return None;
+    }
+
+    let mut perf: Vec<PickedVmSpawner> = Vec::new();
+    let mut fallback: Vec<PickedVmSpawner> = Vec::new();
+
+    for slot in slots {
+        if slot < VM_RESERVED_FIRST_SLOT {
+            continue;
+        }
+        let Some(spawner) = trueos_qjs::workers::spawner_for_slot(slot) else {
+            continue;
+        };
+        let profile = crate::cpu::CpuProfile::for_slot(slot);
+        let core_kind = profile
+            .map(|profile| profile.core_kind())
+            .unwrap_or(trueos_qjs::workers::CORE_KIND_UNKNOWN);
+        let picked = PickedVmSpawner {
+            slot,
+            core_kind,
+            spawner,
+        };
+        if core_kind == trueos_qjs::workers::CORE_KIND_PERF {
+            perf.push(picked);
+        } else {
+            fallback.push(picked);
+        }
+    }
+
+    if !perf.is_empty() {
+        pick_vm_spawn_candidate(&perf)
+    } else {
+        pick_vm_spawn_candidate(&fallback)
+    }
+}
+
+fn pick_vm_spawn_candidate(pool: &[PickedVmSpawner]) -> Option<PickedVmSpawner> {
+    if pool.is_empty() {
+        return None;
+    }
+    let idx = HV_VM_SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize;
+    Some(pool[idx % pool.len()].clone())
 }
 
 pub fn hvlogf(args: core::fmt::Arguments<'_>) {
@@ -133,6 +235,23 @@ pub fn start(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
 ) -> Result<(), StartError> {
+    start_with_mode(vm_id, spawner, io, VmBootMode::Hull)
+}
+
+pub fn start_full(
+    vm_id: u8,
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+) -> Result<(), StartError> {
+    start_with_mode(vm_id, spawner, io, VmBootMode::Full)
+}
+
+fn start_with_mode(
+    vm_id: u8,
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    boot_mode: VmBootMode,
+) -> Result<(), StartError> {
     if vm_id != VM1_ID {
         return Err(StartError::UnsupportedVmId);
     }
@@ -172,15 +291,37 @@ pub fn start(
         return Err(StartError::VmxUnsupported);
     }
 
-    if crate::limine::guest_kernel_bytes().is_none() {
+    if boot_mode == VmBootMode::Full && crate::limine::guest_kernel_bytes().is_none() {
         return Err(StartError::MissingGuestModule);
     }
 
     VM1_STOP_REQ.store(false, Ordering::Release);
     VM1_MARKER_SEEN.store(false, Ordering::Release);
     VM1_STARTING.store(true, Ordering::Release);
+    *VM_BOOT_MODE.lock() = boot_mode;
 
-    if spawner.spawn(vm1_task(io)).is_err() {
+    let _ = spawner;
+    let _ = io;
+    let profile = VmCpuProfile::reserved_vm_lane();
+    let Some(target) = pick_vm_spawn_target(profile) else {
+        VM1_STARTING.store(false, Ordering::Release);
+        hvlogf(format_args!(
+            "hv: vm{} placement failed: policy={:?} requires slot>={} (prefer perf)",
+            vm_id, profile.policy, VM_RESERVED_FIRST_SLOT
+        ));
+        return Err(StartError::NoVmSpawner);
+    };
+
+    hvlogf(format_args!(
+        "hv: vm{} placement: mode={:?} policy={:?} slot={} kind={}",
+        vm_id,
+        boot_mode,
+        profile.policy,
+        target.slot,
+        target.core_kind_name()
+    ));
+
+    if target.spawner.spawn(vm1_task()).is_err() {
         VM1_STARTING.store(false, Ordering::Release);
         return Err(StartError::SpawnFailed);
     }
@@ -319,25 +460,47 @@ impl LineageRecord {
 }
 
 #[task(pool_size = 1)]
-async fn vm1_task(_io: &'static dyn ShellBackend2) {
+async fn vm1_task() {
     let lineage_record = LineageRecord::new();
     VM1_STARTING.store(false, Ordering::Release);
     VM1_RUNNING.store(true, Ordering::Release);
-    hvlogf(format_args!("hv: vm1-{} lifecycle: starting", lineage_record.level));
+    let cpu = crate::cpu::CpuProfile::current();
+    if let Some(cpu) = cpu {
+        hvlogf(format_args!(
+            "hv: vm1-{} lifecycle: starting slot={} lapic={} kind={}",
+            lineage_record.level,
+            cpu.slot(),
+            cpu.lapic_id(),
+            cpu.core_kind_name()
+        ));
+    } else {
+        hvlogf(format_args!("hv: vm1-{} lifecycle: starting slot=unknown", lineage_record.level));
+    }
 
+    let boot_mode = *VM_BOOT_MODE.lock();
     let guest = crate::limine::guest_kernel_bytes();
-    let guest_len = guest.map(|b| b.len()).unwrap_or(0);
-    hvlogf(format_args!("hv: vm1 lifecycle: guest bytes={}", guest_len));
-    if let Some(bytes) = guest {
-        if let Some(entry) = guest_kernel_elf_entry(bytes) {
+    match boot_mode {
+        VmBootMode::Full => {
+            let guest_len = guest.map(|b| b.len()).unwrap_or(0);
+            hvlogf(format_args!("hv: vm1 lifecycle: full guest bytes={}", guest_len));
+            if let Some(bytes) = guest {
+                if let Some(entry) = guest_kernel_elf_entry(bytes) {
+                    hvlogf(format_args!(
+                        "hv: vm1 reporting: full guest elf entry=0x{:016X} vmx_guest_entry=0x{:016X}",
+                        entry,
+                        guest_launch_rip()
+                    ));
+                } else {
+                    hvlogf(format_args!(
+                        "hv: vm1 reporting: full guest bytes present but ELF entry parse failed; vmx_guest_entry=0x{:016X}",
+                        guest_launch_rip()
+                    ));
+                }
+            }
+        }
+        VmBootMode::Hull => {
             hvlogf(format_args!(
-                "hv: vm1 reporting: guest elf entry=0x{:016X} vmx_guest_entry=0x{:016X}",
-                entry,
-                guest_launch_rip()
-            ));
-        } else {
-            hvlogf(format_args!(
-                "hv: vm1 reporting: guest bytes present but ELF entry parse failed; vmx_guest_entry=0x{:016X}",
+                "hv: vm1 lifecycle: hull guest entry=0x{:016X}",
                 guest_launch_rip()
             ));
         }
@@ -372,18 +535,13 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
         )),
     }
 
-    if let Some(bytes) = guest {
-        if contains_bytes(bytes, MAIN_LOOP_MARKER) {
-            VM1_MARKER_SEEN.store(true, Ordering::Release);
-            hvlogf(format_args!("hv: vm1 reporting: main: entering executor loop"));
-        } else {
-            hvlogf(format_args!(
-                "hv: vm1 reporting: guest image missing marker '{}'",
-                "main: entering executor loop"
-            ));
+    if boot_mode == VmBootMode::Full {
+        if let Some(bytes) = guest {
+            if contains_bytes(bytes, MAIN_LOOP_MARKER) {
+                VM1_MARKER_SEEN.store(true, Ordering::Release);
+                hvlogf(format_args!("hv: vm1 reporting: main: entering executor loop"));
+            }
         }
-    } else {
-        hvlogf(format_args!("hv: vm1 reporting: guest module missing during task startup"));
     }
 
     while !VM1_STOP_REQ.load(Ordering::Acquire) {
@@ -487,7 +645,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             return Err(e);
         }
     };
-    if let Err(e) = setup_vmcs_for_launch(eptp, lineage_record) {
+    if let Err(e) = setup_vmcs_for_launch(eptp, lineage_record, *VM_BOOT_MODE.lock()) {
         let _ = vmxoff();
         return Err(e);
     }
@@ -520,6 +678,13 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
 
         let reason = lr.exit_reason & 0xFFFF;
         crate::hv::vmx::log_vmexit_interrupt_info("vmexit");
+        if reason == 0x0 {
+            let guest_rsp = vmread(VMCS_GUEST_RSP).unwrap_or(0);
+            let guest_linear = vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0);
+            crate::hv::memory::log_guest_mapping("fault-linear", guest_linear);
+            crate::hv::memory::log_guest_mapping("fault-rsp", guest_rsp);
+            crate::hv::memory::log_guest_mapping("fault-rip", lr.guest_rip);
+        }
 
         match reason {
             VMEXIT_REASON_VMCALL => {
@@ -551,7 +716,11 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
     Ok(lr)
 }
 
-fn setup_vmcs_for_launch(eptp: u64, lineage_record: LineageRecord) -> Result<(), &'static str> {
+fn setup_vmcs_for_launch(
+    eptp: u64,
+    lineage_record: LineageRecord,
+    boot_mode: VmBootMode,
+) -> Result<(), &'static str> {
     let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
     let true_ctls = ((basic >> 55) & 1) != 0;
     let pin_msr = if true_ctls {
@@ -770,8 +939,9 @@ fn setup_vmcs_for_launch(eptp: u64, lineage_record: LineageRecord) -> Result<(),
             let guest_cr3 = if restored.is_some() {
                 current_guest_cr3_pa()?
             } else {
-                build_guest_cr3(guest_rip, guest_rsp)?
+                build_guest_cr3_with_mode(guest_rip, guest_rsp, boot_mode)?
             };
+            crate::hv::vmx::reset_guest_registers();
             vmwrite(VMCS_GUEST_CR0, host_cr0)?;
             vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
             vmwrite(VMCS_GUEST_CR4, host_cr4)?;
@@ -946,6 +1116,7 @@ fn setup_vmcs_for_launch(eptp: u64, lineage_record: LineageRecord) -> Result<(),
     } else {
         build_guest_cr3(guest_rip, guest_rsp)?
     };
+    crate::hv::vmx::reset_guest_registers();
     vmwrite(VMCS_GUEST_CR0, host_cr0)?;
     vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
     vmwrite(VMCS_GUEST_CR4, host_cr4)?;

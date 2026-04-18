@@ -2,7 +2,7 @@ use alloc::{format, vec::Vec};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-const UI2_SVG_DEMO_TEX_ID: u32 = 4_710;
+const UI2_SVG_DEMO_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Svg.get();
 const UI2_SVG_DEMO_WINDOW_X: f32 = 980.0;
 const UI2_SVG_DEMO_WINDOW_Y: f32 = 96.0;
 const UI2_SVG_DEMO_WINDOW_Z: i16 = 35;

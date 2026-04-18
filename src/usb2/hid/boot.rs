@@ -590,8 +590,11 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                     product_id
                 );
             } else {
-                crate::usb2::descriptor::log_hid_report_descriptors_on_device(&mut device, dev_info)
-                    .await;
+                crate::usb2::descriptor::log_hid_report_descriptors_on_device(
+                    &mut device,
+                    dev_info,
+                )
+                .await;
             }
             descriptors_pending = false;
         }

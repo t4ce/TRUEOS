@@ -9,8 +9,8 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2Rect};
 
-const UI2_PCI_DEMO_TEX_ID: u32 = 4_714;
-const UI2_PCI_DEMO_CONTENT_ID: u32 = 44;
+const UI2_PCI_DEMO_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Pci.get();
+const UI2_PCI_DEMO_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::Pci.get();
 const UI2_PCI_DEMO_WINDOW_TITLE: &str = "Device Manager";
 const UI2_PCI_DEMO_VIEW_W: u32 = 700;
 const UI2_PCI_DEMO_VIEW_H: u32 = 420;
