@@ -1,5 +1,6 @@
 use alloc::{boxed::Box, string::String, vec::Vec as AllocVec};
 
+use crab_usb::usb_if;
 use crab_usb::{Device, EndpointBulkIn, EndpointBulkOut};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -22,11 +23,19 @@ const MASS_RUNTIME_WAIT_DELAY_MS: u64 = 10;
 const MIN_IO_BYTES: usize = 8 * 1024;
 const MAX_IO_BYTES: usize = 128 * 1024;
 const MASS_IO_GROW_SUCCESS_TARGET: u16 = 16;
+const MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 = 4;
+const FAST_BOT_INITIAL_IO_BYTES: usize = 64 * 1024;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveMassStream {
     controller_id: u32,
     slot_id: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum MassIoProfile {
+    ConservativeBot,
+    FastBot,
 }
 
 struct UsbMassRuntime {
@@ -41,6 +50,10 @@ struct UsbMassRuntime {
     bulk_out_ep: u8,
     bulk_in: EndpointBulkIn,
     bulk_out: EndpointBulkOut,
+    transport_kind: mass::MassTransportKind,
+    io_profile: MassIoProfile,
+    port_speed: usb_if::Speed,
+    uas_candidate_count: u8,
     bot_tag: u32,
     sync_cache_unsupported: bool,
     current_max_io_bytes: usize,
@@ -250,6 +263,65 @@ fn clamp_mass_io_bytes(block_size: usize, bytes: usize) -> usize {
     rounded.clamp(floor, ceil)
 }
 
+fn mass_transport_label(kind: mass::MassTransportKind) -> &'static str {
+    match kind {
+        mass::MassTransportKind::Bot => "bot",
+        mass::MassTransportKind::Uas => "uas",
+    }
+}
+
+fn mass_io_profile_label(profile: MassIoProfile) -> &'static str {
+    match profile {
+        MassIoProfile::ConservativeBot => "bot-safe",
+        MassIoProfile::FastBot => "bot-fast",
+    }
+}
+
+fn choose_mass_io_profile(
+    transport_kind: mass::MassTransportKind,
+    port_speed: usb_if::Speed,
+    target: &MassTarget,
+) -> MassIoProfile {
+    if transport_kind == mass::MassTransportKind::Bot
+        && matches!(port_speed, usb_if::Speed::SuperSpeed | usb_if::Speed::SuperSpeedPlus)
+        && target.bulk_in_max_packet_size >= 1024
+        && target.bulk_out_max_packet_size >= 1024
+    {
+        MassIoProfile::FastBot
+    } else {
+        MassIoProfile::ConservativeBot
+    }
+}
+
+fn initial_mass_io_bytes(
+    profile: MassIoProfile,
+    port_speed: usb_if::Speed,
+    target: &MassTarget,
+    block_size: usize,
+) -> usize {
+    let wanted = match profile {
+        MassIoProfile::ConservativeBot => MIN_IO_BYTES,
+        MassIoProfile::FastBot => {
+            if matches!(port_speed, usb_if::Speed::SuperSpeedPlus)
+                || (target.bulk_in_max_packet_size >= 1024
+                    && target.bulk_out_max_packet_size >= 1024)
+            {
+                MAX_IO_BYTES
+            } else {
+                FAST_BOT_INITIAL_IO_BYTES
+            }
+        }
+    };
+    clamp_mass_io_bytes(block_size, wanted)
+}
+
+fn mass_io_grow_success_target(rt: &UsbMassRuntime) -> u16 {
+    match rt.io_profile {
+        MassIoProfile::ConservativeBot => MASS_IO_GROW_SUCCESS_TARGET,
+        MassIoProfile::FastBot => MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT,
+    }
+}
+
 fn current_mass_io_bytes(rt: &UsbMassRuntime, block_size: usize) -> usize {
     clamp_mass_io_bytes(block_size, rt.current_max_io_bytes)
 }
@@ -257,7 +329,7 @@ fn current_mass_io_bytes(rt: &UsbMassRuntime, block_size: usize) -> usize {
 fn mass_io_note_success(rt: &mut UsbMassRuntime, block_size: usize) {
     rt.io_success_streak = rt.io_success_streak.saturating_add(1);
     let cur = current_mass_io_bytes(rt, block_size);
-    if rt.io_success_streak >= MASS_IO_GROW_SUCCESS_TARGET && cur < MAX_IO_BYTES {
+    if rt.io_success_streak >= mass_io_grow_success_target(rt) && cur < MAX_IO_BYTES {
         rt.current_max_io_bytes = clamp_mass_io_bytes(block_size, cur.saturating_mul(2));
         rt.io_success_streak = 0;
     }
@@ -632,7 +704,15 @@ fn register_block_device(
 }
 
 #[embassy_executor::task(pool_size = 8)]
-pub async fn mass_storage_task(mut device: Device, controller_id: u32, target: MassTarget) {
+pub async fn mass_storage_task(
+    mut device: Device,
+    controller_id: u32,
+    target: MassTarget,
+    transport_kind: mass::MassTransportKind,
+    io_profile: MassIoProfile,
+    port_speed: usb_if::Speed,
+    uas_candidate_count: u8,
+) {
     let desc = device.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
@@ -737,8 +817,10 @@ pub async fn mass_storage_task(mut device: Device, controller_id: u32, target: M
     } else {
         "registered"
     };
+    let initial_io_bytes =
+        initial_mass_io_bytes(io_profile, port_speed, &target, probe.block_size as usize);
     crate::log!(
-        "crabusb: mass {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} disk={} mode={} label={:?} serial={:?} key={} bs={} blocks={} vendor='{}' product='{}'\n",
+        "crabusb: mass {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} disk={} mode={} label={:?} serial={:?} key={} transport={} profile={} init_io={} speed={:?} uas_candidates={} bs={} blocks={} vendor='{}' product='{}'\n",
         vendor_id,
         product_id,
         slot,
@@ -754,6 +836,11 @@ pub async fn mass_storage_task(mut device: Device, controller_id: u32, target: M
         handle.info().label,
         identity.serial.as_deref(),
         identity.key_kind,
+        mass_transport_label(transport_kind),
+        mass_io_profile_label(io_profile),
+        initial_io_bytes,
+        port_speed,
+        uas_candidate_count,
         probe.block_size,
         probe.block_count,
         probe.vendor,
@@ -772,9 +859,13 @@ pub async fn mass_storage_task(mut device: Device, controller_id: u32, target: M
         bulk_out_ep: target.bulk_out,
         bulk_in,
         bulk_out,
+        transport_kind,
+        io_profile,
+        port_speed,
+        uas_candidate_count,
         bot_tag: 0x544F_0000 | u32::from(slot),
         sync_cache_unsupported: false,
-        current_max_io_bytes: MIN_IO_BYTES,
+        current_max_io_bytes: initial_io_bytes,
         io_success_streak: 0,
     });
 
@@ -824,37 +915,51 @@ pub(crate) async fn maybe_start_mass_storage(
     spawner: &Spawner,
     controller_id: u32,
 ) -> bool {
-    let Some(target) = mass::pick_mass_target(dev_info.configurations()) else {
+    let transport_plan = mass::inspect_mass_transports(dev_info.configurations());
+    let Some(target) = transport_plan.bot else {
         return false;
     };
 
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
+    let topology = dev_info.topology();
+    let transport_kind = mass::MassTransportKind::Bot;
+    let io_profile = choose_mass_io_profile(transport_kind, topology.port_speed, &target);
+    let uas_candidate_count = transport_plan.uas.len().min(u8::MAX as usize) as u8;
 
-    for cfg in dev_info.configurations().iter() {
-        for iface in cfg.interfaces.iter() {
-            for alt in iface.alt_settings.iter() {
-                if alt.class == 0x08
-                    && alt.subclass == 0x06
-                    && alt.protocol == 0x62
-                    && (alt.interface_number != target.interface_number
-                        || alt.alternate_setting != target.alternate_setting)
-                {
-                    crate::log!(
-                        "crabusb: mass {:04X}:{:04X} uas alt detected if#{} alt={} cfg={} but binding bot if#{} alt={} proto={:02X}\n",
-                        vendor_id,
-                        product_id,
-                        alt.interface_number,
-                        alt.alternate_setting,
-                        cfg.configuration_value,
-                        target.interface_number,
-                        target.alternate_setting,
-                        target.protocol,
-                    );
-                }
+    for uas in transport_plan.uas.iter() {
+        let mut bulk_in = String::new();
+        for (idx, ep) in uas.bulk_in.iter().enumerate() {
+            if idx > 0 {
+                bulk_in.push(',');
             }
+            bulk_in
+                .push_str(alloc::format!("0x{:02X}/{}", ep.address, ep.max_packet_size).as_str());
         }
+
+        let mut bulk_out = String::new();
+        for (idx, ep) in uas.bulk_out.iter().enumerate() {
+            if idx > 0 {
+                bulk_out.push(',');
+            }
+            bulk_out
+                .push_str(alloc::format!("0x{:02X}/{}", ep.address, ep.max_packet_size).as_str());
+        }
+
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas candidate if#{} alt={} cfg={} in=[{}] out=[{}] while binding bot if#{} alt={} proto={:02X}\n",
+            vendor_id,
+            product_id,
+            uas.interface_number,
+            uas.alternate_setting,
+            uas.configuration_value,
+            bulk_in,
+            bulk_out,
+            target.interface_number,
+            target.alternate_setting,
+            target.protocol,
+        );
     }
 
     let device = match host.open_device(dev_info).await {
@@ -878,10 +983,18 @@ pub(crate) async fn maybe_start_mass_storage(
         return true;
     }
 
-    match spawner.spawn(mass_storage_task(device, controller_id, target)) {
+    match spawner.spawn(mass_storage_task(
+        device,
+        controller_id,
+        target,
+        transport_kind,
+        io_profile,
+        topology.port_speed,
+        uas_candidate_count,
+    )) {
         Ok(()) => {
             crate::log!(
-                "crabusb: mass {:04X}:{:04X} handoff if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={}\n",
+                "crabusb: mass {:04X}:{:04X} handoff if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} transport={} profile={} speed={:?} uas_candidates={}\n",
                 vendor_id,
                 product_id,
                 target.interface_number,
@@ -890,7 +1003,11 @@ pub(crate) async fn maybe_start_mass_storage(
                 target.bulk_in,
                 target.bulk_out,
                 target.bulk_in_max_packet_size,
-                target.bulk_out_max_packet_size
+                target.bulk_out_max_packet_size,
+                mass_transport_label(transport_kind),
+                mass_io_profile_label(io_profile),
+                topology.port_speed,
+                uas_candidate_count,
             );
         }
         Err(err) => {

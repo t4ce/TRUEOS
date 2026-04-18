@@ -112,28 +112,9 @@ pub(super) fn alloc_window(
     id
 }
 
-fn minimized_window_strip_rect(state: &Ui2State, window_id: u32) -> Option<Ui2Rect> {
-    let mut slot = 0usize;
-    for idx in sorted_window_indices(state) {
-        let window = &state.windows[idx];
-        if !window.visible || window.state != Ui2WindowStateKind::Minimized {
-            continue;
-        }
-        if window.id == window_id {
-            let x = UI2_MINIMIZED_STRIP_PAD;
-            let y =
-                UI2_MINIMIZED_STRIP_PAD + (slot as f32 * (UI2_TITLE_H + UI2_MINIMIZED_STRIP_GAP));
-            let max_w = ((state.view_w as f32) - x - UI2_MINIMIZED_STRIP_PAD).max(96.0);
-            return Some(Ui2Rect::new(x, y, UI2_MINIMIZED_STRIP_W.min(max_w), UI2_TITLE_H));
-        }
-        slot = slot.saturating_add(1);
-    }
-    None
-}
-
 pub(super) fn effective_window_rect(state: &Ui2State, window: &Ui2Window) -> Ui2Rect {
     if window.state == Ui2WindowStateKind::Minimized {
-        minimized_window_strip_rect(state, window.id).unwrap_or(Ui2Rect::new(
+        ui2_win_register::minimized_window_strip_rect(state, window.id).unwrap_or(Ui2Rect::new(
             UI2_MINIMIZED_STRIP_PAD,
             UI2_MINIMIZED_STRIP_PAD,
             UI2_MINIMIZED_STRIP_W,

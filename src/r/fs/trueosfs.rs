@@ -1362,6 +1362,8 @@ pub fn roots_len() -> usize {
 pub struct RootInfo {
     pub disk_id: block::DiscId,
     pub seq: u32,
+    pub index_ready: bool,
+    pub index_building: bool,
 }
 
 /// Returns a snapshot list of mounted TRUEOSFS roots.
@@ -1376,10 +1378,22 @@ pub fn list_roots() -> Vec<RootInfo> {
         out.push(RootInfo {
             disk_id: m.disk_id,
             seq: m.seq,
+            index_ready: m.index.is_some(),
+            index_building: m.building_index,
         });
     }
     out.sort_by_key(|r| Reverse(r.seq));
     out
+}
+
+pub fn request_warm_index(disk_id: block::DiscId) {
+    let Some(disk) = block::device_handle(disk_id) else {
+        return;
+    };
+
+    crate::wait::spawn_local_detached(async move {
+        warm_index_async(disk).await;
+    });
 }
 
 /// Returns the most recently mounted TRUEOSFS root disk id (best-effort).

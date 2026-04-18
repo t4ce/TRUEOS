@@ -18,7 +18,7 @@ use spin::Mutex;
 
 struct TaskSpec {
     name: &'static str,
-    disabled: bool,
+    disabled: &'static AtomicBool,
     required: u32,
     gate: fn() -> bool,
     started: &'static AtomicBool,
@@ -34,7 +34,7 @@ impl TaskSpec {
     ) -> Self {
         Self {
             name,
-            disabled: false,
+            disabled: &TASK_NOT_DISABLED,
             required,
             gate: task_gate_always,
             started,
@@ -51,7 +51,7 @@ impl TaskSpec {
     ) -> Self {
         Self {
             name,
-            disabled: false,
+            disabled: &TASK_NOT_DISABLED,
             required,
             gate,
             started,
@@ -62,12 +62,13 @@ impl TaskSpec {
     const fn disabled(
         name: &'static str,
         required: u32,
+        disabled_flag: &'static AtomicBool,
         started: &'static AtomicBool,
         spawn: fn(Spawner) -> SpawnAttempt,
     ) -> Self {
         Self {
             name,
-            disabled: true,
+            disabled: disabled_flag,
             required,
             gate: task_gate_always,
             started,
@@ -79,12 +80,13 @@ impl TaskSpec {
         name: &'static str,
         required: u32,
         gate: fn() -> bool,
+        disabled_flag: &'static AtomicBool,
         started: &'static AtomicBool,
         spawn: fn(Spawner) -> SpawnAttempt,
     ) -> Self {
         Self {
             name,
-            disabled: true,
+            disabled: disabled_flag,
             required,
             gate,
             started,
@@ -92,6 +94,9 @@ impl TaskSpec {
         }
     }
 }
+
+/// Shared "not disabled" sentinel – all enabled tasks point here.
+static TASK_NOT_DISABLED: AtomicBool = AtomicBool::new(false);
 
 enum SpawnAttempt {
     Spawned,
@@ -154,6 +159,7 @@ define_started_flags!(
     UI2_USB_AUDIO_DEMO_STARTED,
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
     UI2_WEATHER_DEMO_STARTED,
+    UI2_CHART_DEMO_STARTED,
     GFX_INTEL_READINESS_PROBE_STARTED,
     CRABUSB_BSP_SERVICE_STARTED,
     CRABUSB_EVENT_PUMP_STARTED,
@@ -177,6 +183,31 @@ define_started_flags!(
     ATOMIC_BOMB_STARTED,
     HTML_DEMO_STARTED,
     SURFER_FACTORY_STARTED
+);
+
+macro_rules! define_disabled_flags {
+    ($($name:ident),+ $(,)?) => {
+        $(static $name: AtomicBool = AtomicBool::new(true);)+
+    };
+}
+
+define_disabled_flags!(
+    DISABLED_AI_TASK,
+    DISABLED_HTML_DEMO,
+    DISABLED_FTP_SERVER,
+    DISABLED_TGA,
+    DISABLED_UI2_GFX_TETRIS,
+    DISABLED_UI2_MANDELBROT_DEMO,
+    DISABLED_UI2_PETERSEN_DEMO,
+    DISABLED_UI2_PARTICLE_DEMO,
+    DISABLED_UI2_SMILEY_FOUNTAIN_DEMO,
+    DISABLED_UI2_SWARM_DEMO,
+    DISABLED_UI2_SVG_DEMO,
+    DISABLED_UI2_TRUEOSFS_EXPLORER_DEMO,
+    DISABLED_BOOT_WS_SMOKE,
+    DISABLED_SMTP_SMOKE,
+    DISABLED_BOOT_NETBENCH,
+    DISABLED_ATOMIC_BOMB,
 );
 
 const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 0;
@@ -759,6 +790,12 @@ fn spawn_ui2_weather_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_chart_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        worker_spawner.spawn(crate::tst_ui2_chart_demo::ui2_chart_demo_task())
+    })
+}
+
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     let count = crate::usb2::pci_usb_controllers()
         .len()
@@ -952,10 +989,11 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ai-task",
         AI_QJS_ONESHOT_READY,
+        &DISABLED_AI_TASK,
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
     ),
-    TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
+    TaskSpec::disabled("html-demo", 0, &DISABLED_HTML_DEMO, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
         NET_CONFIGURED_AND_ROOT_READY,
@@ -979,10 +1017,11 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ftp-server",
         NET_CONFIGURED_AND_ROOT_READY,
+        &DISABLED_FTP_SERVER,
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
-    TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
+    TaskSpec::disabled("tga", 0, &DISABLED_TGA, &TGA_TASK_STARTED, spawn_tga_task),
     TaskSpec::enabled_gated(
         "gfx-virgl-backend-ready",
         0,
@@ -1035,6 +1074,7 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ui2-gfx-tetris",
         UI2_DEMO_READY,
+        &DISABLED_UI2_GFX_TETRIS,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
     ),
@@ -1085,24 +1125,28 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ui2-mandelbrot-demo",
         UI2_DEMO_READY,
+        &DISABLED_UI2_MANDELBROT_DEMO,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
     TaskSpec::disabled(
         "ui2-petersen-demo",
         UI2_DEMO_READY,
+        &DISABLED_UI2_PETERSEN_DEMO,
         &UI2_PETERSEN_DEMO_STARTED,
         spawn_ui2_petersen_demo,
     ),
     TaskSpec::disabled(
         "ui2-particle-demo",
         UI2_DEMO_READY,
+        &DISABLED_UI2_PARTICLE_DEMO,
         &UI2_PARTICLE_DEMO_STARTED,
         spawn_ui2_particle_demo,
     ),
     TaskSpec::disabled(
         "ui2-smiley-fountain-demo",
         UI2_DEMO_READY,
+        &DISABLED_UI2_SMILEY_FOUNTAIN_DEMO,
         &UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
         spawn_ui2_smiley_fountain_demo,
     ),
@@ -1115,19 +1159,33 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ui2-swarm-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
+        &DISABLED_UI2_SWARM_DEMO,
         &UI2_SWARM_DEMO_STARTED,
         spawn_ui2_swarm_demo,
     ),
-    TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
+    TaskSpec::disabled(
+        "ui2-svg-demo",
+        UI2_DEMO_READY,
+        &DISABLED_UI2_SVG_DEMO,
+        &UI2_SVG_DEMO_STARTED,
+        spawn_ui2_svg_demo,
+    ),
     TaskSpec::enabled(
         "ui2-weather-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
         &UI2_WEATHER_DEMO_STARTED,
         spawn_ui2_weather_demo,
     ),
+    TaskSpec::enabled(
+        "ui2-chart-demo",
+        UI2_DEMO_READY,
+        &UI2_CHART_DEMO_STARTED,
+        spawn_ui2_chart_demo,
+    ),
     TaskSpec::disabled(
         "ui2-trueosfs-explorer-demo",
         UI2_DEMO_READY | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        &DISABLED_UI2_TRUEOSFS_EXPLORER_DEMO,
         &UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
         spawn_ui2_trueosfs_explorer_demo,
     ),
@@ -1137,13 +1195,94 @@ static TASKS: &[TaskSpec] = &[
         &TRUEOSFS_READY_HOOK_STARTED,
         spawn_trueosfs_ready_hook,
     ),
-    TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
-    TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
-    TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
+    TaskSpec::disabled(
+        "boot-ws-smoke",
+        WS_BOOT_READY,
+        &DISABLED_BOOT_WS_SMOKE,
+        &BOOT_WS_SMOKE_STARTED,
+        spawn_boot_ws_smoke,
+    ),
+    TaskSpec::disabled(
+        "smtp-smoke",
+        0,
+        &DISABLED_SMTP_SMOKE,
+        &SMTP_SMOKE_STARTED,
+        spawn_smtp_smoke,
+    ),
+    TaskSpec::disabled(
+        "boot-netbench",
+        0,
+        &DISABLED_BOOT_NETBENCH,
+        &BOOT_NETBENCH_STARTED,
+        spawn_boot_netbench,
+    ),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
-    TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
+    TaskSpec::disabled(
+        "atomic_bomb",
+        0,
+        &DISABLED_ATOMIC_BOMB,
+        &ATOMIC_BOMB_STARTED,
+        spawn_atomic_bomb,
+    ),
 ];
+
+// ---------------------------------------------------------------------------
+// Public API: offline task list for UI2 dock.
+// ---------------------------------------------------------------------------
+
+/// An offline task entry visible to the UI2 layer.
+pub struct OfflineTaskEntry {
+    pub name: &'static str,
+    pub index: usize,
+}
+
+/// Return all tasks that are currently disabled (and not yet started).
+/// Only includes tasks whose name starts with "ui2-".
+pub fn offline_ui2_demo_tasks() -> Vec<OfflineTaskEntry> {
+    let mut out = Vec::new();
+    for (i, spec) in TASKS.iter().enumerate() {
+        if !spec.name.starts_with("ui2-") {
+            continue;
+        }
+        // Disabled and not yet started → available for launch.
+        if spec.disabled.load(Ordering::Acquire) && !spec.started.load(Ordering::Acquire) {
+            out.push(OfflineTaskEntry {
+                name: spec.name,
+                index: i,
+            });
+        }
+    }
+    out
+}
+
+/// Return all UI2 windows that were started but later hidden (X-closed).
+/// These are tasks that ran but whose window is no longer visible.
+pub fn hidden_ui2_window_names() -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for spec in TASKS {
+        if !spec.name.starts_with("ui2-") {
+            continue;
+        }
+        if spec.started.load(Ordering::Acquire) && !spec.disabled.load(Ordering::Acquire) {
+            // Task is running — the UI layer will check window visibility itself.
+            out.push(spec.name);
+        }
+    }
+    out
+}
+
+/// Enable a disabled task by its TASKS index, making it eligible for spawn.
+pub fn enable_task_by_index(index: usize) {
+    if let Some(spec) = TASKS.get(index) {
+        spec.disabled.store(false, Ordering::Release);
+    }
+}
+
+/// Return the name of a task by its TASKS index.
+pub fn task_name_by_index(index: usize) -> Option<&'static str> {
+    TASKS.get(index).map(|spec| spec.name)
+}
 
 #[embassy_executor::task]
 pub async fn spawn_service_task(spawner: Spawner) {
@@ -1154,7 +1293,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
             let mut started_any = false;
 
             for spec in TASKS {
-                if spec.disabled {
+                if spec.disabled.load(Ordering::Acquire) {
                     continue;
                 }
                 if !(spec.gate)() {

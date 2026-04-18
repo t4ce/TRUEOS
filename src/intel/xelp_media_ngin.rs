@@ -2679,6 +2679,53 @@ async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
             MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
             MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES,
         );
+        if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED
+            && let Some(disk) = crate::r::fs::trueosfs::primary_root_handle()
+        {
+            match crate::r::net::cli::http_stream::fetch_http_to_file_async(
+                url,
+                disk,
+                MEDIA_DECODE_CACHE_PATH,
+                MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
+                MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES,
+            )
+            .await
+            {
+                Ok(()) => {
+                    match crate::r::fs::trueosfs::file_out_async(disk, MEDIA_DECODE_CACHE_PATH)
+                        .await
+                    {
+                        Ok(Some(cached)) if !cached.is_empty() => {
+                            crate::log!(
+                                "intel/media: cached path={} url={} bytes={}\n",
+                                MEDIA_DECODE_CACHE_PATH,
+                                url,
+                                cached.len()
+                            );
+                            return Some(("cache-fill", cached));
+                        }
+                        Ok(_) => {
+                            crate::log!(
+                                "intel/media: stream fetch finished but cache empty path={} url={}\n",
+                                MEDIA_DECODE_CACHE_PATH,
+                                url
+                            );
+                        }
+                        Err(err) => {
+                            crate::log!(
+                                "intel/media: cache read failed path={} url={} err={:?}\n",
+                                MEDIA_DECODE_CACHE_PATH,
+                                url,
+                                err
+                            );
+                        }
+                    }
+                }
+                Err(err) => {
+                    crate::log!("intel/media: stream fetch failed url={} err={:?}\n", url, err);
+                }
+            }
+        }
         match crate::r::net::http::fetch_http_body(
             url,
             MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,

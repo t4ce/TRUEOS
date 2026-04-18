@@ -11,34 +11,25 @@ pub async fn download_once_async() -> Result<usize, &'static str> {
         return Err("no root disk");
     };
 
-    let raw =
-        match crate::r::net::https::fetch_https_body_async(PCI_IDS_URL, 120_000, 4 * 1024 * 1024)
-            .await
-        {
-            Ok(body) => body,
-            Err(e) => {
-                crate::log!("pciids: download failed={:?} url={}\n", e, PCI_IDS_URL);
-                return Err("download failed");
-            }
-        };
-
-    let tmp = alloc::format!("{}.tmp", PCI_IDS_KEY);
-    match crate::r::fs::trueosfs::file_in_async(disk, tmp.as_str(), &raw).await {
-        Ok(true) => {}
-        Ok(false) => {
-            crate::log!("pciids: write failed (no space?) tmp={}\n", tmp);
-            return Err("write failed");
-        }
-        Err(e) => {
-            crate::log!("pciids: write failed={:?} tmp={}\n", e, tmp);
-            return Err("write failed");
-        }
+    if let Err(code) = crate::r::net::https::fetch_https_to_file_async(
+        PCI_IDS_URL,
+        PCI_IDS_KEY,
+        120_000,
+        4 * 1024 * 1024,
+    )
+    .await
+    {
+        crate::log!(
+            "pciids: download failed code={} url={} key={}\n",
+            code,
+            PCI_IDS_URL,
+            PCI_IDS_KEY
+        );
+        return Err("download failed");
     }
 
-    let _ = crate::r::fs::trueosfs::file_delete_async(disk, PCI_IDS_KEY).await;
-
-    match crate::r::fs::trueosfs::file_rename_async(disk, tmp.as_str(), PCI_IDS_KEY).await {
-        Ok(true) => {
+    match crate::r::fs::trueosfs::file_out_async(disk, PCI_IDS_KEY).await {
+        Ok(Some(raw)) => {
             crate::log!(
                 "pciids: downloaded ok url={} key={} bytes={}\n",
                 PCI_IDS_URL,
@@ -47,15 +38,17 @@ pub async fn download_once_async() -> Result<usize, &'static str> {
             );
             Ok(raw.len())
         }
-        Ok(false) => {
-            let _ = crate::r::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
-            crate::log!("pciids: rename failed tmp={} key={}\n", tmp, PCI_IDS_KEY);
-            Err("rename failed")
+        Ok(None) => {
+            crate::log!(
+                "pciids: download finished but file missing url={} key={}\n",
+                PCI_IDS_URL,
+                PCI_IDS_KEY
+            );
+            Err("download missing")
         }
         Err(e) => {
-            let _ = crate::r::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
-            crate::log!("pciids: rename failed={:?} tmp={} key={}\n", e, tmp, PCI_IDS_KEY);
-            Err("rename failed")
+            crate::log!("pciids: downloaded but size check failed={:?} key={}\n", e, PCI_IDS_KEY);
+            Err("download verify failed")
         }
     }
 }
