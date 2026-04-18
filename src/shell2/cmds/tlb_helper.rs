@@ -84,30 +84,56 @@ impl<'a> TlbTable<'a> {
         }
     }
 
-    pub(crate) fn autosize(
-        headers: &'a [&'a str],
-        preview_rows: &[&[&str]],
-        max_width: usize,
-    ) -> Self {
-        let cols = headers.len().max(1);
-        let mut max_cell_chars = headers
-            .iter()
-            .map(|cell| cell.chars().count())
-            .max()
-            .unwrap_or(MIN_COL_WIDTH)
-            .max(MIN_COL_WIDTH);
+    pub(crate) fn with_max_col_widths(mut self, max_widths: &[usize]) -> Self {
+        if self.col_widths.is_empty() || max_widths.is_empty() {
+            return self;
+        }
 
-        for row in preview_rows {
-            for cell in row.iter().take(cols) {
-                max_cell_chars = max_cell_chars.max(cell.chars().count());
+        loop {
+            let mut freed = 0usize;
+            for (idx, width) in self.col_widths.iter_mut().enumerate() {
+                let cap = max_widths.get(idx).copied().unwrap_or(0);
+                if cap == 0 || *width <= cap {
+                    continue;
+                }
+                freed = freed.saturating_add(*width - cap);
+                *width = cap;
+            }
+
+            if freed == 0 {
+                break;
+            }
+
+            let eligible: Vec<usize> = self
+                .col_widths
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, width)| {
+                    let cap = max_widths.get(idx).copied().unwrap_or(0);
+                    if cap == 0 || *width < cap {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if eligible.is_empty() {
+                if let Some(last) = self.col_widths.last_mut() {
+                    *last = last.saturating_add(freed);
+                }
+                break;
+            }
+
+            let base = freed / eligible.len();
+            let extra = freed % eligible.len();
+            for (pos, idx) in eligible.iter().copied().enumerate() {
+                self.col_widths[idx] =
+                    self.col_widths[idx].saturating_add(base + usize::from(pos < extra));
             }
         }
 
-        let wanted_width = FRAME_SIDE_WIDTH
-            + cols.saturating_mul(max_cell_chars)
-            + cols.saturating_sub(1).saturating_mul(CELL_SEPARATOR.len());
-
-        Self::with_width(headers, wanted_width.min(max_width))
+        self
     }
 
     pub(crate) fn emit_header<F>(&self, mut emit_line: F)

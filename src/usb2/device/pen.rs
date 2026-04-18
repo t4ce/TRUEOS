@@ -173,47 +173,6 @@ fn hash_mix_u32(state: u64, value: u32) -> u64 {
     hash_mix(state, &value.to_le_bytes())
 }
 
-fn sanitize_usb_identity_string(raw: &str) -> Option<String> {
-    let trimmed = raw.trim_matches(|ch: char| ch.is_ascii_whitespace() || ch == '\0');
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let mut out = String::new();
-    for ch in trimmed.chars() {
-        if !ch.is_ascii() {
-            break;
-        }
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '+' | ' ') {
-            out.push(ch);
-            continue;
-        }
-        if ch == '\0' || ch.is_ascii_control() {
-            break;
-        }
-        break;
-    }
-
-    let out: String =
-        String::from(out.trim_matches(|ch: char| {
-            ch.is_ascii_whitespace() || matches!(ch, '-' | '_' | '.' | ':')
-        }));
-    if out.len() < 3 || out.len() > 64 || !out.chars().any(|ch| ch.is_ascii_alphanumeric()) {
-        None
-    } else {
-        Some(out)
-    }
-}
-
-async fn read_optional_string_descriptor(
-    device: &mut Device,
-    index: Option<core::num::NonZero<u8>>,
-) -> Option<String> {
-    let idx = index?;
-    let text = device.string_descriptor(idx.get()).await.ok()?;
-    sanitize_usb_identity_string(text.as_str())
-}
-
 async fn build_mass_identity(
     device: &mut Device,
     controller_id: u32,
@@ -223,7 +182,7 @@ async fn build_mass_identity(
         let desc = device.descriptor();
         (desc.vendor_id, desc.product_id, desc.serial_number_string_index)
     };
-    let serial = read_optional_string_descriptor(device, serial_index).await;
+    let serial = super::descriptor::read_optional_string_descriptor(device, serial_index).await;
 
     if let Some(serial) = serial {
         let mut key = 0xcbf2_9ce4_8422_2325u64;
