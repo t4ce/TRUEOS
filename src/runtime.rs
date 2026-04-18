@@ -48,8 +48,11 @@ pub fn run_ap_forever() -> ! {
         if counter.is_multiple_of(100_000) {
             crate::smp::poll();
         }
-        if counter.is_multiple_of(500_000) {
-            //crate::marble2::poll_lut_fall();
+        if counter.is_multiple_of(5_000) {
+            let slot = crate::percpu::this_cpu().cpu_index() as usize;
+            if slot > 0 {
+                let _ = crate::tst_ui2_coreticks_demo::ui2_coreticks_tick_tile_index(slot);
+            }
         }
         counter = counter.wrapping_add(1);
         crate::power::idle_hint();

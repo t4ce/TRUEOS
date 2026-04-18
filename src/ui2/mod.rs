@@ -46,10 +46,6 @@ const UI2_BAR_H: f32 = 26.0;
 const UI2_TITLE_H: f32 = UI2_BAR_H;
 const UI2_BOTTOM_BAR_H: f32 = UI2_BAR_H;
 const UI2_SYSTEM_SCROLLBAR_PX: f32 = 4.0;
-const UI2_SYSTEM_BUTTON_FORK_ICON_ID: u32 = 3;
-const UI2_SYSTEM_BUTTON_MINIMIZE_ICON_ID: u32 = 5;
-const UI2_SYSTEM_BUTTON_MAXIMIZE_ICON_ID: u32 = 7;
-const UI2_SYSTEM_BUTTON_CLOSE_ICON_ID: u32 = 9;
 // Experimental in debug.
 const UI2_BROWSER_TITLE_OVERLAY_ANIMATION_ENABLED: bool = false;
 const UI2_DEBUG_FPS_OVERLAY_ENABLED: bool = false;
@@ -450,6 +446,8 @@ struct Ui2Window {
     bottom_bar_visible: bool,
     left_scrollbar_visible: bool,
     bottom_scrollbar_visible: bool,
+    resize_maintain_aspect: bool,
+    content_preserve_scale: bool,
     vertical_scrollbar_side: Ui2WindowVerticalScrollbarSide,
     horizontal_scrollbar_side: Ui2WindowHorizontalScrollbarSide,
     state: Ui2WindowStateKind,
@@ -1627,6 +1625,78 @@ fn draw_window_content_placeholder(
 ) {
 }
 
+#[inline]
+fn texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
+    if tex_id == 0 {
+        return None;
+    }
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let ok = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_texture_dimensions(
+            tex_id,
+            &mut width as *mut u32,
+            &mut height as *mut u32,
+        ) == 0
+    };
+    if ok && width > 0 && height > 0 {
+        Some((width, height))
+    } else {
+        None
+    }
+}
+
+#[inline]
+fn draw_window_texture_content(
+    state: &Ui2State,
+    window: &Ui2Window,
+    content: Ui2Rect,
+    tex_id: u32,
+) -> bool {
+    if !window.content_preserve_scale {
+        return draw_texture_rect_no_present(
+            tex_id,
+            content.x,
+            content.y,
+            content.w,
+            content.h,
+            state.view_w,
+            state.view_h,
+            window.content_tex_blend,
+            window.alpha,
+        );
+    }
+
+    let Some((tex_w, tex_h)) = texture_dimensions(tex_id) else {
+        return false;
+    };
+    let draw_w = tex_w as f32;
+    let draw_h = tex_h as f32;
+    let draw_x = if content.w >= draw_w {
+        content.x + (content.w - draw_w) * 0.5
+    } else {
+        content.x
+    };
+    let draw_y = if content.h >= draw_h {
+        content.y + (content.h - draw_h) * 0.5
+    } else {
+        content.y
+    };
+    with_window_content_scissor(state, content, || {
+        draw_texture_rect_no_present(
+            tex_id,
+            draw_x,
+            draw_y,
+            draw_w,
+            draw_h,
+            state.view_w,
+            state.view_h,
+            window.content_tex_blend,
+            window.alpha,
+        )
+    })
+}
+
 fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTiming {
     if !window_is_renderable(window) {
         return Ui2WindowDrawTiming::default();
@@ -1676,17 +1746,8 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
                 let texture_drawable = texture_is_drawable(window.content_tex_id);
                 if texture_drawable {
                     let texture_started_at = Instant::now();
-                    let drew = draw_texture_rect_no_present(
-                        window.content_tex_id,
-                        content.x,
-                        content.y,
-                        content.w,
-                        content.h,
-                        state.view_w,
-                        state.view_h,
-                        window.content_tex_blend,
-                        window.alpha,
-                    );
+                    let drew =
+                        draw_window_texture_content(state, window, content, window.content_tex_id);
                     if drew {
                         return Ui2WindowDrawTiming {
                             chrome_ms,

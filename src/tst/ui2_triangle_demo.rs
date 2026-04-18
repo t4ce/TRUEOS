@@ -3,7 +3,7 @@ extern crate alloc;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use trueos_gfx_core::{RgbVertex, Rgba8};
 
-const UI2_TRIANGLE_TEX_ID: u32 = 4_700;
+const UI2_TRIANGLE_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Triangle.get();
 const UI2_TRIANGLE_RT_W: u32 = 384;
 const UI2_TRIANGLE_RT_H: u32 = 240;
 const UI2_TRIANGLE_WINDOW_X: f32 = 220.0;

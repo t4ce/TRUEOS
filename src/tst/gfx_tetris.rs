@@ -5,7 +5,7 @@ use spin::Mutex;
 use trueos_gfx_core::{RgbVertex, Rgba8};
 use trueos_tetris::{Game, Lcg32, NoopEvents, Rotation};
 
-const UI2_TETRIS_TEX_ID: u32 = 4_701;
+const UI2_TETRIS_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Tetris.get();
 const UI2_TETRIS_WINDOW_X: f32 = 640.0;
 const UI2_TETRIS_WINDOW_Y: f32 = 110.0;
 const UI2_TETRIS_WINDOW_Z: i16 = 32;

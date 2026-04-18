@@ -9,8 +9,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2Rect};
 
-const UI2_WEATHER_TEX_ID: u32 = 4_715;
-const UI2_WEATHER_CONTENT_ID: u32 = 47;
+const UI2_WEATHER_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Weather.get();
+const UI2_WEATHER_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::Weather.get();
 const UI2_WEATHER_WINDOW_TITLE: &str = "Frosch";
 const UI2_WEATHER_VIEW_W: u32 = 520;
 const UI2_WEATHER_VIEW_H: u32 = 260;

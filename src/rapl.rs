@@ -79,11 +79,7 @@ impl RaplSample {
             return None;
         }
 
-        Some(wraparound_delta_joules(
-            earlier.raw,
-            self.raw,
-            units.energy_joules,
-        ))
+        Some(wraparound_delta_joules(earlier.raw, self.raw, units.energy_joules))
     }
 
     pub fn average_power_watts_since(

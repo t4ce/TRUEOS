@@ -23,8 +23,8 @@ const TICK_STEP: f64 = 0.5;
 // Window / appearance constants.
 // ---------------------------------------------------------------------------
 
-const UI2_CHART_TEX_ID: u32 = 4_720;
-const UI2_CHART_CONTENT_ID: u32 = 48;
+const UI2_CHART_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Chart.get();
+const UI2_CHART_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::Chart.get();
 const UI2_CHART_WINDOW_TITLE: &str = "Chart";
 const UI2_CHART_VIEW_W: u32 = 480;
 const UI2_CHART_VIEW_H: u32 = 320;

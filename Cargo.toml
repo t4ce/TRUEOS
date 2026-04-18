@@ -64,7 +64,7 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 
 [profile.dev]
 panic = "abort"
-opt-level = 2
+opt-level = 0
 
 [profile.release]
 panic = "abort"

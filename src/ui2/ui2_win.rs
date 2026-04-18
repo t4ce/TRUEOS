@@ -80,6 +80,8 @@ pub(super) fn alloc_window(
         bottom_bar_visible: true,
         left_scrollbar_visible: true,
         bottom_scrollbar_visible: true,
+        resize_maintain_aspect: false,
+        content_preserve_scale: false,
         vertical_scrollbar_side: Ui2WindowVerticalScrollbarSide::Left,
         horizontal_scrollbar_side: Ui2WindowHorizontalScrollbarSide::Bottom,
         state: Ui2WindowStateKind::Normal,
