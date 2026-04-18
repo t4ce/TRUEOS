@@ -10,8 +10,8 @@ pub(crate) mod xhci {
 
 pub(crate) mod api;
 pub(crate) mod class;
-pub(crate) mod descriptor;
 mod crabusb_service;
+pub(crate) mod descriptor;
 pub(crate) mod hid;
 mod mass;
 #[path = "device/midi.rs"]

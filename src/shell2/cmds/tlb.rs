@@ -2598,12 +2598,8 @@ fn append_usb_overview_dump(out: &mut String) {
         .collect::<Vec<_>>()
         .join(" ");
 
-    writeln!(
-        out,
-        "USB Overview (usbms registered={} ctrls={})",
-        usbms_count, controller_list
-    )
-    .unwrap();
+    writeln!(out, "USB Overview (usbms registered={} ctrls={})", usbms_count, controller_list)
+        .unwrap();
     let headers = [
         "#",
         "BDF",
@@ -2739,18 +2735,10 @@ fn append_usb_overview_dump(out: &mut String) {
         writeln!(out, "{text}").unwrap();
     });
     if !disconnected_ports_summary.is_empty() {
-        writeln!(
-            out,
-            "Disconnected ports: {}",
-            disconnected_ports_summary.join(" | ")
-        )
-        .unwrap();
+        writeln!(out, "Disconnected ports: {}", disconnected_ports_summary.join(" | ")).unwrap();
     }
-    writeln!(
-        out,
-        "Legend: #=controller C=connected E=enabled W=power R=reset PLS=port link state"
-    )
-    .unwrap();
+    writeln!(out, "Legend: #=controller C=connected E=enabled W=power R=reset PLS=port link state")
+        .unwrap();
     writeln!(out).unwrap();
 }
 
@@ -2905,12 +2893,8 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
 
     line(
         io,
-        alloc::format!(
-            "USB Overview (usbms registered={} ctrls={})",
-            usbms_count,
-            controller_list
-        )
-        .as_str(),
+        alloc::format!("USB Overview (usbms registered={} ctrls={})", usbms_count, controller_list)
+            .as_str(),
     );
     let headers = [
         "#",
@@ -3038,17 +3022,11 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
     if !disconnected_ports_summary.is_empty() {
         line(
             io,
-            alloc::format!(
-                "Disconnected ports: {}",
-                disconnected_ports_summary.join(" | ")
-            )
-            .as_str(),
+            alloc::format!("Disconnected ports: {}", disconnected_ports_summary.join(" | "))
+                .as_str(),
         );
     }
-    line(
-        io,
-        "Legend: #=controller C=connected E=enabled W=power R=reset PLS=port link state",
-    );
+    line(io, "Legend: #=controller C=connected E=enabled W=power R=reset PLS=port link state");
 }
 
 fn ensure_no_args(

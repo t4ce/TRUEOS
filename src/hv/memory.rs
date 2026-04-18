@@ -8,8 +8,8 @@ pub const PAGE_SIZE_4K: usize = 4096;
 pub const PAGE_SIZE_2M: u64 = 2 * 1024 * 1024;
 pub const GUEST_STACK_VA_BASE: u64 = 0x0000_0000_0040_0000;
 pub const GUEST_STACK_BYTES: usize = 64 * 1024;
-pub const GUEST_CODE_WINDOW_BYTES: usize = 64 * 1024;
-pub const GUEST_HIGH_IMAGE_PT_COUNT: usize = 16;
+pub const GUEST_HIGH_IMAGE_PT_COUNT: usize = 128;
+pub const GUEST_HIGH_IMAGE_MAX_BYTES: u64 = GUEST_HIGH_IMAGE_PT_COUNT as u64 * PAGE_SIZE_2M;
 pub const ELF64_HEADER_LEN: usize = 64;
 pub const EPT_PDPT_ENTRIES: usize = 4;
 pub const EPT_PD_ENTRIES: usize = 512;
@@ -139,6 +139,14 @@ pub fn guest_kernel_elf_entry(bytes: &[u8]) -> Option<u64> {
 }
 
 pub fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> {
+    build_guest_cr3_with_mode(guest_rip, guest_rsp, crate::hv::VmBootMode::Hull)
+}
+
+pub fn build_guest_cr3_with_mode(
+    guest_rip: u64,
+    guest_rsp: u64,
+    boot_mode: crate::hv::VmBootMode,
+) -> Result<u64, &'static str> {
     unsafe {
         zero_guest_page(core::ptr::addr_of_mut!(GUEST_PML4.0));
         zero_guest_page(core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0));
@@ -212,18 +220,45 @@ pub fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static s
             PAGE_SIZE_2M as usize,
             PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
         )?;
-        map_guest_kernel_image(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), code_pt_base)?;
+        let (mapped_code_base, mapped_code_len) = match boot_mode {
+            crate::hv::VmBootMode::Hull => {
+                let (start, end) = crate::hv::guest::hull_image_bounds();
+                map_guest_image_span(
+                    core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
+                    code_pt_base,
+                    start,
+                    end,
+                    "hull",
+                )?;
+                let aligned_start = page_align_down_2m(start);
+                let aligned_len = page_align_up_2m(end).saturating_sub(aligned_start);
+                (aligned_start, aligned_len)
+            }
+            crate::hv::VmBootMode::Full => {
+                map_guest_kernel_image(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), code_pt_base)?;
+                let start = kernel_image_start_va().ok_or("guest kernel image base")?;
+                let end = kernel_image_end_va();
+                let aligned_start = page_align_down_2m(start);
+                let aligned_len = page_align_up_2m(end).saturating_sub(aligned_start);
+                (aligned_start, aligned_len)
+            }
+        };
 
         hvlogf(format_args!(
             "hv: vm1 reporting: guest-cr3=0x{:016X} code=0x{:016X} stack=0x{:016X}",
             pml4_pa, guest_rip, guest_rsp
         ));
+        log_guest_mapping("stack-base", GUEST_STACK_VA_BASE);
+        log_guest_mapping("stack-top-8", guest_rsp.saturating_sub(8));
+        log_guest_mapping("stack-top-0x40", guest_rsp.saturating_sub(0x40));
+        log_guest_mapping("comm-page", crate::hv::vmcall::COMM_PAGE_GUEST_VA);
+        log_guest_mapping("guest-rip", guest_rip);
         *VM1_SNAPSHOT_META.lock() = Some(Vm1SnapshotMeta {
             guest_cr3: pml4_pa,
             guest_rip,
             guest_rsp,
-            code_base,
-            code_len: GUEST_CODE_WINDOW_BYTES as u64,
+            code_base: mapped_code_base,
+            code_len: mapped_code_len,
             exit_reason: 0,
             exit_qualification: 0,
             exit_guest_rip: guest_rip,
@@ -238,6 +273,65 @@ pub fn active_restore_meta() -> Option<Vm1SnapshotMeta> {
 
 pub fn current_guest_cr3_pa() -> Result<u64, &'static str> {
     kernel_va_to_pa(unsafe { core::ptr::addr_of!(GUEST_PML4.0) as u64 }).ok_or("guest pml4 pa")
+}
+
+unsafe fn read_guest_page_entry(page: *const [u64; 512], index: usize) -> u64 {
+    if index >= 512 {
+        return 0;
+    }
+
+    let base = page.cast::<u64>();
+    unsafe { core::ptr::read_volatile(base.add(index)) }
+}
+
+pub fn log_guest_mapping(label: &str, guest_va: u64) {
+    let low_half = pml4_index(guest_va) == pml4_index(GUEST_STACK_VA_BASE);
+    let pml4e =
+        unsafe { read_guest_page_entry(core::ptr::addr_of!(GUEST_PML4.0), pml4_index(guest_va)) };
+    let pdpte = unsafe {
+        if pml4e & PT_ENTRY_PRESENT == 0 {
+            0
+        } else if low_half {
+            read_guest_page_entry(core::ptr::addr_of!(GUEST_LOW_PDPT.0), pdpt_index(guest_va))
+        } else {
+            read_guest_page_entry(core::ptr::addr_of!(GUEST_HIGH_PDPT.0), pdpt_index(guest_va))
+        }
+    };
+
+    let (pde, pte) = unsafe {
+        if low_half {
+            let pde = read_guest_page_entry(core::ptr::addr_of!(GUEST_LOW_PD.0), pd_index(guest_va));
+            let pte = if pde & PT_ENTRY_PRESENT != 0 {
+                read_guest_page_entry(core::ptr::addr_of!(GUEST_STACK_PT.0), pt_index(guest_va))
+            } else {
+                0
+            };
+            (pde, pte)
+        } else {
+            let pde =
+                read_guest_page_entry(core::ptr::addr_of!(GUEST_HIGH_PD.0), pd_index(guest_va));
+            let pte = if pde & PT_ENTRY_PRESENT != 0 {
+                read_guest_high_pt_entry(guest_va, pde)
+            } else {
+                0
+            };
+            (pde, pte)
+        }
+    };
+
+    hvlogf(format_args!(
+        "hv: vm1 reporting: guest-map {} va=0x{:016X} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X} pte=0x{:016X}",
+        label,
+        guest_va,
+        pml4_index(guest_va),
+        pdpt_index(guest_va),
+        pd_index(guest_va),
+        pt_index(guest_va),
+        pml4e,
+        pdpte,
+        pde,
+        pte
+    ));
 }
 
 pub fn kernel_va_to_pa(va: u64) -> Option<u64> {
@@ -303,7 +397,31 @@ fn kernel_image_end_va() -> u64 {
 pub fn map_guest_kernel_image(pd: *mut [u64; 512], code_pt_base: u64) -> Result<(), &'static str> {
     let start = kernel_image_start_va().ok_or("guest kernel image base")?;
     let end = kernel_image_end_va();
+    map_guest_image_span(pd, code_pt_base, start, end, "full")
+}
+
+fn map_guest_image_span(
+    pd: *mut [u64; 512],
+    code_pt_base: u64,
+    start: u64,
+    end: u64,
+    label: &str,
+) -> Result<(), &'static str> {
     let start_chunk_base = page_align_down_2m(start);
+    let end_aligned = page_align_up_2m(end);
+    let span_bytes = end_aligned.saturating_sub(start_chunk_base);
+    let total_chunks = (span_bytes / PAGE_SIZE_2M) as usize;
+    let extra_chunks = total_chunks.saturating_sub(1);
+    hvlogf(format_args!(
+        "hv: vm1 reporting: {} image map start=0x{:016X} end=0x{:016X} span_mib={} extra_pts={} cap={} max_mib={}",
+        label,
+        start,
+        end,
+        span_bytes / (1024 * 1024),
+        extra_chunks,
+        GUEST_HIGH_IMAGE_PT_COUNT,
+        GUEST_HIGH_IMAGE_MAX_BYTES / (1024 * 1024)
+    ));
     if pml4_index(start) != pml4_index(code_pt_base)
         || pdpt_index(start) != pdpt_index(code_pt_base)
         || pml4_index(end.saturating_sub(1)) != pml4_index(code_pt_base)
@@ -314,7 +432,6 @@ pub fn map_guest_kernel_image(pd: *mut [u64; 512], code_pt_base: u64) -> Result<
 
     let mut pt_slot = 0usize;
     let mut va = start_chunk_base;
-    let end_aligned = page_align_up_2m(end);
     while va < end_aligned {
         if va != code_pt_base {
             if pt_slot >= GUEST_HIGH_IMAGE_PT_COUNT {
@@ -343,6 +460,37 @@ pub fn map_guest_kernel_image(pd: *mut [u64; 512], code_pt_base: u64) -> Result<
             .ok_or("guest exec span overflow")?;
     }
     Ok(())
+}
+
+fn read_guest_high_pt_entry(guest_va: u64, pde: u64) -> u64 {
+    let Ok(code_pt_pa) = current_high_pt_pa(unsafe { core::ptr::addr_of!(GUEST_CODE_PT.0) as u64 }) else {
+        return 0;
+    };
+    if pde_addr(pde) == code_pt_pa {
+        return unsafe { read_guest_page_entry(core::ptr::addr_of!(GUEST_CODE_PT.0), pt_index(guest_va)) };
+    }
+
+    for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
+        let image_pt = unsafe { core::ptr::addr_of!(GUEST_IMAGE_PTS[i].0) as u64 };
+        let Ok(image_pt_pa) = current_high_pt_pa(image_pt) else {
+            continue;
+        };
+        if pde_addr(pde) == image_pt_pa {
+            return unsafe {
+                read_guest_page_entry(core::ptr::addr_of!(GUEST_IMAGE_PTS[i].0), pt_index(guest_va))
+            };
+        }
+    }
+
+    0
+}
+
+fn current_high_pt_pa(va: u64) -> Result<u64, &'static str> {
+    kernel_va_to_pa(va).ok_or("guest high pt pa")
+}
+
+fn pde_addr(pde: u64) -> u64 {
+    pde & 0x000F_FFFF_FFFF_F000
 }
 
 fn pml4_index(addr: u64) -> usize {

@@ -4,8 +4,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2Rect};
 
-const UI2_RAPLE_TEX_ID: u32 = 4_722;
-const UI2_RAPLE_CONTENT_ID: u32 = 49;
+const UI2_RAPLE_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Raple.get();
+const UI2_RAPLE_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::Raple.get();
 const UI2_RAPLE_WINDOW_TITLE: &str = "raple";
 const UI2_RAPLE_VIEW_W: u32 = 440;
 const UI2_RAPLE_VIEW_H: u32 = 272;
@@ -160,16 +160,7 @@ fn render_chart(
     let top = format!("{:.0}W", max_watts);
     let mid = format!("{:.0}W", max_watts * 0.5);
     render_text(dst, dst_w, dst_h, atlases, x + 4, y + 2, top.as_str(), UI2_RAPLE_DIM_RGBA);
-    render_text(
-        dst,
-        dst_w,
-        dst_h,
-        atlases,
-        x + 4,
-        y + h / 2 + 1,
-        mid.as_str(),
-        UI2_RAPLE_DIM_RGBA,
-    );
+    render_text(dst, dst_w, dst_h, atlases, x + 4, y + h / 2 + 1, mid.as_str(), UI2_RAPLE_DIM_RGBA);
     render_text(
         dst,
         dst_w,
@@ -293,15 +284,9 @@ fn compose_raple(
     y += lh + 4;
 
     let status = if current.sample_valid {
-        format!(
-            "status online  seq={}  stamp={}ms",
-            current.update_count, current.last_update_ms
-        )
+        format!("status online  seq={}  stamp={}ms", current.update_count, current.last_update_ms)
     } else if current.cpuid_supported {
-        format!(
-            "status waiting  seq={}  cpuid=intel+msr  probe=empty",
-            current.update_count
-        )
+        format!("status waiting  seq={}  cpuid=intel+msr  probe=empty", current.update_count)
     } else {
         String::from("status unsupported  cpuid does not advertise intel+msr")
     };
@@ -367,7 +352,13 @@ fn compose_raple(
             y,
             power.as_str(),
             row.power_w
-                .map(|w| if w >= 25.0 { UI2_RAPLE_HOT_RGBA } else { UI2_RAPLE_ACCENT_RGBA })
+                .map(|w| {
+                    if w >= 25.0 {
+                        UI2_RAPLE_HOT_RGBA
+                    } else {
+                        UI2_RAPLE_ACCENT_RGBA
+                    }
+                })
                 .unwrap_or(UI2_RAPLE_DIM_RGBA),
         );
         render_text(
@@ -422,8 +413,14 @@ fn maybe_push_history(
     let Some(prev) = previous.latest else {
         return;
     };
-    let elapsed = current.last_update_ms.saturating_sub(previous.last_update_ms) as f64 / 1000.0;
-    let Some(pkg_w) = cur.package.average_power_watts_since(prev.package, cur.units, elapsed) else {
+    let elapsed = current
+        .last_update_ms
+        .saturating_sub(previous.last_update_ms) as f64
+        / 1000.0;
+    let Some(pkg_w) = cur
+        .package
+        .average_power_watts_since(prev.package, cur.units, elapsed)
+    else {
         return;
     };
     if !pkg_w.is_finite() || pkg_w < 0.0 {
@@ -442,7 +439,8 @@ fn present_raple(
     previous: Option<&crate::rapl::RaplSnapshot>,
     history: &[f32],
 ) {
-    let _ = surface.bind_hosted_scroll_state(UI2_RAPLE_CONTENT_ID, UI2_RAPLE_VIEW_W, UI2_RAPLE_VIEW_H);
+    let _ =
+        surface.bind_hosted_scroll_state(UI2_RAPLE_CONTENT_ID, UI2_RAPLE_VIEW_W, UI2_RAPLE_VIEW_H);
     let rgba = compose_raple(atlases, current, previous, history);
     let _ = crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
         surface.tex_id(),

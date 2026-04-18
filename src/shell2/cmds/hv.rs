@@ -7,18 +7,17 @@ use super::tlb_helper::print_table;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const HV_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const HV_MENU_ROWS: [[&str; 2]; 6] = [
-    ["status", "Show VMX and vm1 status"],
-    ["start [id]", "Start vm[id] (default id=0, id 0..10)"],
-    ["stop [id]", "Request vm[id] stop (default id=0, id 0..10)"],
-    ["log", "Print hv log output"],
+const HV_MENU_ROWS: [[&str; 2]; 5] = [
     [
-        "save [id]",
-        "Write vm[id] snapshot to HV ramdisk TRUEOSFS (default id=0, id 0..10; preserve path: exit and guest halt then save)",
+        "full [id]",
+        "Start vm[id] with full TRUEOS guest image mapping",
     ],
+    ["start [id]", "Start vm[id] as minimal trueos-vm hull guest"],
+    ["pause [id]", "Alias for stop request on vm[id]"],
+    ["stop [id]", "Request vm[id] stop"],
     [
-        "restore [id]",
-        "Load vm[id] snapshot from HV ramdisk and relaunch it (default id=0, id 0..10)",
+        "preserve [id]",
+        "Save vm[id] snapshot to HV ramdisk TRUEOSFS",
     ],
 ];
 
@@ -59,7 +58,7 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
-    let op = args.next().unwrap_or("status").trim();
+    let op = args.next().unwrap_or("start").trim();
     let vm_id = match parse_optional_vm_id(io, args.next()) {
         Some(id) => id,
         None => return ParseOutcome::Handled,
@@ -70,31 +69,27 @@ pub(crate) fn try_parse(
         return ParseOutcome::Handled;
     }
 
-    if op.is_empty() || op.eq_ignore_ascii_case("status") {
-        let s = crate::hv::status();
-        io.write_fmt(format_args!(
-            "hv: vmx intel={} msr={} vmx={} fc_lock={} fc_vmx_outside_smx={}\r\n",
-            s.vendor_intel as u8,
-            s.has_msr as u8,
-            s.has_vmx as u8,
-            s.feature_control_locked as u8,
-            s.feature_control_vmx_outside_smx as u8
-        ));
-        io.write_fmt(format_args!(
-            "hv: vm1 running={} starting={} marker_seen={} guest_module={} stored_vms={}\r\n",
-            s.vm1_running as u8,
-            s.vm1_starting as u8,
-            s.vm1_marker_seen as u8,
-            s.guest_module_present as u8,
-            s.stored_vm_count
-        ));
-        return ParseOutcome::Handled;
-    }
-
-    if op.eq_ignore_ascii_case("start") {
+    if op.is_empty() || op.eq_ignore_ascii_case("start") {
         match crate::hv::start(vm_id, spawner, io) {
             Ok(()) => io.write_fmt(format_args!("hv: vm{} started\r\n", vm_id)),
             Err(e) => io.write_fmt(format_args!("hv: start failed: {:?}\r\n", e)),
+        }
+        return ParseOutcome::Handled;
+    }
+
+    if op.eq_ignore_ascii_case("full") {
+        match crate::hv::start_full(vm_id, spawner, io) {
+            Ok(()) => io.write_fmt(format_args!("hv: vm{} full guest started\r\n", vm_id)),
+            Err(e) => io.write_fmt(format_args!("hv: full start failed: {:?}\r\n", e)),
+        }
+        return ParseOutcome::Handled;
+    }
+
+    if op.eq_ignore_ascii_case("pause") {
+        match crate::hv::stop(vm_id) {
+            Ok(true) => io.write_fmt(format_args!("hv: vm{} pause requested\r\n", vm_id)),
+            Ok(false) => io.write_fmt(format_args!("hv: vm{} not running\r\n", vm_id)),
+            Err(e) => io.write_fmt(format_args!("hv: pause failed: {:?}\r\n", e)),
         }
         return ParseOutcome::Handled;
     }
@@ -108,35 +103,13 @@ pub(crate) fn try_parse(
         return ParseOutcome::Handled;
     }
 
-    if op.eq_ignore_ascii_case("log") {
-        crate::hv::write_logs(io);
-        return ParseOutcome::Handled;
-    }
-
-    if op.eq_ignore_ascii_case("save") {
+    if op.eq_ignore_ascii_case("preserve") {
         match crate::hv::save_snapshot(vm_id) {
             Ok(bytes) => io.write_fmt(format_args!(
                 "hv: vm{} snapshot saved store=hv-ramdisk path=vm/vm{}.snapshot bytes={}\r\n",
                 vm_id, vm_id, bytes
             )),
-            Err(e) => io.write_fmt(format_args!("hv: snapshot save failed: {:?}\r\n", e)),
-        }
-        return ParseOutcome::Handled;
-    }
-
-    if op.eq_ignore_ascii_case("restore") {
-        match crate::hv::restore_snapshot(vm_id) {
-            Ok(bytes) => match crate::hv::start(vm_id, spawner, io) {
-                Ok(()) => io.write_fmt(format_args!(
-                    "hv: vm{} snapshot restored store=hv-ramdisk path=vm/vm{}.snapshot bytes={} and vm{} started\r\n",
-                    vm_id, vm_id, bytes, vm_id
-                )),
-                Err(e) => io.write_fmt(format_args!(
-                    "hv: vm{} snapshot restored bytes={} but start failed: {:?}\r\n",
-                    vm_id, bytes, e
-                )),
-            },
-            Err(e) => io.write_fmt(format_args!("hv: snapshot restore failed: {:?}\r\n", e)),
+            Err(e) => io.write_fmt(format_args!("hv: preserve failed: {:?}\r\n", e)),
         }
         return ParseOutcome::Handled;
     }

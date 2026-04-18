@@ -78,7 +78,7 @@ pub fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
     let total = core::mem::size_of::<Vm1SnapshotHeader>()
         + (GUEST_SNAPSHOT_PAGE_COUNT * PAGE_SIZE_4K)
         + GUEST_STACK_BYTES
-        + GUEST_CODE_WINDOW_BYTES;
+        + meta.code_len as usize;
     let mut out = Vec::with_capacity(total);
     push_bytes(&mut out, unsafe {
         core::slice::from_raw_parts(
@@ -106,7 +106,7 @@ pub fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
         );
         push_bytes(
             &mut out,
-            core::slice::from_raw_parts(meta.code_base as *const u8, GUEST_CODE_WINDOW_BYTES),
+            core::slice::from_raw_parts(meta.code_base as *const u8, meta.code_len as usize),
         );
     }
     Ok(out)

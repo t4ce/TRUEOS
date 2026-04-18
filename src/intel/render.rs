@@ -7,6 +7,9 @@ const FORCEWAKE_ACK_RENDER: usize = 0x0D84;
 const FORCEWAKE_ACK_GT: usize = 0x130044;
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
 const FORCEWAKE_FALLBACK: u32 = 1 << 15;
+const TBIMR_BATCH_SIZE_OVERRIDE: u32 = 1 << 1;
+const TBIMR_OPEN_BATCH_ENABLE: u32 = 1 << 4;
+const TBIMR_FAST_CLIP: u32 = 1 << 5;
 const FF_DOP_CLOCK_GATE_DISABLE: u32 = 1 << 1;
 const FORCEWAKE_POLL_ITERS: usize = 20_000;
 const RCS_RING_BASE: usize = 0x0000_2000;
@@ -22,6 +25,7 @@ const RCS_RING_EIR: usize = RCS_RING_BASE + 0xB0;
 const RCS_RING_IPEIR: usize = RCS_RING_BASE + 0x64;
 const RCS_RING_IPEHR: usize = RCS_RING_BASE + 0x68;
 const RCS_RING_INSTDONE: usize = RCS_RING_BASE + 0x6C;
+const CHICKEN_RASTER_2: usize = 0x6208;
 const INSTDONE_GEOM: usize = 0x666C;
 const SC_INSTDONE: usize = 0x7100;
 const SC_INSTDONE_EXTRA: usize = 0x7104;
@@ -91,7 +95,7 @@ const PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS: usize = 3;
 const PRIMARY_USE_MI_STRIPE_PROBE: bool = false;
 const PRIMARY_USE_3D_NO_DRAW_PROBE: bool = false;
 const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = true;
-const PRIMARY_DISABLE_RENDER_BRINGUP: bool = true;
+const PRIMARY_DISABLE_RENDER_BRINGUP: bool = false;
 const MI_STRIPE_COUNT: usize = 12;
 const MI_STRIPE_WIDTH_PX: usize = 4;
 const MI_STRIPE_X_STEP_PX: u32 = 1;
@@ -128,6 +132,10 @@ const VFCOMP_STORE_1_FP: u32 = 3;
 const PIPELINE_SELECT_3D: u32 = (4 << 16) | (1 << 24) | (1 << 27) | (3 << 29);
 const PIPE_CONTROL_CMD: u32 = 4 | (2 << 24) | (3 << 27) | (3 << 29);
 const STATE_BASE_ADDRESS_CMD: u32 = 20 | (1 << 16) | (1 << 24) | (3 << 29);
+const CMD_3DSTATE_AA_LINE_PARAMETERS: u32 = 1 | (10 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_SAMPLE_PATTERN: u32 = 7 | (28 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_3D_MODE: u32 = 3 | (30 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_SLICE_TABLE_STATE_POINTERS: u32 = (32 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC: u32 =
     2 | (25 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VS: u32 = 7 | (16 << 16) | (3 << 27) | (3 << 29);
@@ -152,6 +160,9 @@ const CMD_3DSTATE_VIEWPORT_STATE_POINTERS_CC: u32 = (35 << 16) | (3 << 27) | (3 
 const CMD_3DSTATE_SCISSOR_STATE_POINTERS: u32 = (15 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_BLEND_STATE_POINTERS: u32 = (36 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_BINDING_TABLE_POINTERS_VS: u32 = (38 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_BINDING_TABLE_POINTERS_HS: u32 = (39 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_BINDING_TABLE_POINTERS_DS: u32 = (40 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_BINDING_TABLE_POINTERS_GS: u32 = (41 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_BINDING_TABLE_POINTERS_PS: u32 = (42 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_CC_STATE_POINTERS: u32 = (14 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SAMPLER_STATE_POINTERS_VS: u32 = (43 << 16) | (3 << 27) | (3 << 29);
@@ -161,12 +172,14 @@ const CMD_3DSTATE_VF: u32 = (12 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_MULTISAMPLE: u32 = (13 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_DRAWING_RECTANGLE: u32 = 2 | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SAMPLE_MASK: u32 = (24 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_WM_CHROMA_KEY: u32 = (76 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_PS_BLEND: u32 = (77 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_WM_DEPTH_STENCIL: u32 = 2 | (78 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_PS_EXTRA: u32 = (79 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_DEPTH_BOUNDS: u32 = 2 | (113 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_RASTER: u32 = 3 | (80 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SBE_SWIZ: u32 = 9 | (81 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_WM_HZ_OP: u32 = 4 | (82 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_URB_ALLOC_HS: u32 = 1 | (89 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_URB_ALLOC_DS: u32 = 1 | (90 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_URB_ALLOC_GS: u32 = 1 | (91 << 16) | (3 << 27) | (3 << 29);
@@ -204,6 +217,16 @@ const TRIANGLE_PS_MAX_THREADS: u32 = 63;
 const TRIANGLE_VS_URB_START: u32 = 4;
 const TRIANGLE_VS_URB_ENTRIES: u32 = 192;
 const TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE: Option<u8> = None;
+const GFX125_GEOMETRY_DSS_ENABLE: usize = 0x913C;
+const GFX125_PIXEL_PIPES: usize = 3;
+const GFX125_DUAL_SUBSLICES_PER_PIXEL_PIPE: usize = 2;
+const GFX125_SLICE_HASH_TABLES: usize = 7;
+const GFX125_SLICE_HASH_DIM: usize = 16;
+const GFX125_SLICE_HASH_TABLE_ENTRIES: usize = GFX125_SLICE_HASH_DIM * GFX125_SLICE_HASH_DIM;
+const GFX125_SLICE_HASH_TABLE_DWORDS_PER_TABLE: usize = GFX125_SLICE_HASH_TABLE_ENTRIES / 8;
+const GFX125_SLICE_HASH_TABLE_DWORDS: usize = 224;
+const GFX125_SLICE_HASH_TABLE_BYTES: usize = GFX125_SLICE_HASH_TABLE_DWORDS * 4;
+const GFX125_3D_MODE_CROSS_SLICE_HASHING_32X32: u32 = 3;
 const TRIANGLE_MIN_DIM: usize = 8;
 // This proof path emits one MI_STORE_DATA_IMM per covered pixel, so keep the
 // triangle intentionally small until we switch to an actual draw pipeline.
@@ -223,8 +246,14 @@ struct TriangleStageStats {
     ia_vertices: u64,
     ia_primitives: u64,
     vs_invocations: u64,
+    hs_invocations: u64,
+    ds_invocations: u64,
+    gs_invocations: u64,
+    gs_primitives: u64,
     cl_invocations: u64,
+    cl_primitives: u64,
     ps_invocations: u64,
+    cps_invocations: u64,
     ps_depth: u64,
     so_prims_written_0: u64,
     so_write_offset_0: u64,
@@ -236,8 +265,14 @@ impl TriangleStageStats {
             ia_vertices: self.ia_vertices.saturating_sub(before.ia_vertices),
             ia_primitives: self.ia_primitives.saturating_sub(before.ia_primitives),
             vs_invocations: self.vs_invocations.saturating_sub(before.vs_invocations),
+            hs_invocations: self.hs_invocations.saturating_sub(before.hs_invocations),
+            ds_invocations: self.ds_invocations.saturating_sub(before.ds_invocations),
+            gs_invocations: self.gs_invocations.saturating_sub(before.gs_invocations),
+            gs_primitives: self.gs_primitives.saturating_sub(before.gs_primitives),
             cl_invocations: self.cl_invocations.saturating_sub(before.cl_invocations),
+            cl_primitives: self.cl_primitives.saturating_sub(before.cl_primitives),
             ps_invocations: self.ps_invocations.saturating_sub(before.ps_invocations),
+            cps_invocations: self.cps_invocations.saturating_sub(before.cps_invocations),
             ps_depth: self.ps_depth.saturating_sub(before.ps_depth),
             so_prims_written_0: self
                 .so_prims_written_0
@@ -315,6 +350,7 @@ struct TriangleProbeStateLayout {
     cc_viewport_offset_bytes: u32,
     sf_clip_viewport_offset_bytes: u32,
     scissor_rect_offset_bytes: u32,
+    slice_hash_table_offset_bytes: u32,
 }
 
 #[derive(Copy, Clone)]
@@ -762,6 +798,7 @@ pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
         crate::intel::mask_en(FF_DOP_CLOCK_GATE_DISABLE),
     );
     let cs_debug_mode1 = crate::intel::mmio_read(dev, RCS_CS_DEBUG_MODE1);
+    apply_gfx125_raster_workarounds(dev);
 
     if should_log_primary_probe_detail() {
         crate::log!(
@@ -776,6 +813,223 @@ pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
     }
 
     render_ok && gt_ok
+}
+
+fn apply_gfx125_raster_workarounds(dev: crate::intel::Dev) {
+    if !device_is_gfx125(dev.device_id) {
+        return;
+    }
+
+    // Mesa's gfx125 init path enables these TBIMR-related raster controls up
+    // front. Keep the bring-up path aligned so the first primitive does not
+    // depend on whatever the boot context happened to leave behind.
+    let before = crate::intel::mmio_read(dev, CHICKEN_RASTER_2);
+    crate::intel::mmio_write(dev, CHICKEN_RASTER_2, gfx125_chicken_raster_2_value());
+    let after = crate::intel::mmio_read(dev, CHICKEN_RASTER_2);
+
+    if should_log_primary_probe_detail() {
+        crate::log!(
+            "intel/render: gfx125-raster-wa chicken_raster_2 before=0x{:08X} after=0x{:08X} tbimr_batch_override={} tbimr_open_batch={} tbimr_fast_clip={}\n",
+            before,
+            after,
+            ((after & TBIMR_BATCH_SIZE_OVERRIDE) != 0) as u8,
+            ((after & TBIMR_OPEN_BATCH_ENABLE) != 0) as u8,
+            ((after & TBIMR_FAST_CLIP) != 0) as u8,
+        );
+    }
+}
+
+fn gfx125_chicken_raster_2_value() -> u32 {
+    let bits = TBIMR_BATCH_SIZE_OVERRIDE | TBIMR_OPEN_BATCH_ENABLE | TBIMR_FAST_CLIP;
+    crate::intel::mask_en(bits)
+}
+
+#[derive(Copy, Clone)]
+struct Gfx125SliceHashConfig {
+    geometry_dss_enable: u32,
+    ppipe_subslices: [u8; GFX125_PIXEL_PIPES],
+    ppipe_mask1: u32,
+    ppipe_mask2: u32,
+    cross_slice_hashing_mode: u32,
+}
+
+fn gfx125_slice_hash_config(warm: RenderWarmState) -> Gfx125SliceHashConfig {
+    let dev = crate::intel::Dev {
+        bus: 0,
+        slot: 0,
+        function: 0,
+        device_id: warm.device_id,
+        revision_id: warm.revision_id,
+        mmio: warm.mmio_base as *mut u8,
+        mmio_len: warm.mmio_len,
+    };
+    let geometry_dss_enable = crate::intel::mmio_read(dev, GFX125_GEOMETRY_DSS_ENABLE);
+    let mut ppipe_subslices = [0u8; GFX125_PIXEL_PIPES];
+    let ppipe_mask = (1u32 << GFX125_DUAL_SUBSLICES_PER_PIXEL_PIPE) - 1;
+
+    for (ppipe, count) in ppipe_subslices.iter_mut().enumerate() {
+        let shift = ppipe * GFX125_DUAL_SUBSLICES_PER_PIXEL_PIPE;
+        *count = ((geometry_dss_enable >> shift) & ppipe_mask).count_ones() as u8;
+    }
+
+    let mut ppipe_mask1 = 0u32;
+    let mut ppipe_mask2 = 0u32;
+    for (ppipe, count) in ppipe_subslices.iter().copied().enumerate() {
+        if count > 0 {
+            ppipe_mask1 |= 1u32 << ppipe;
+        }
+        if count > 1 {
+            ppipe_mask2 |= 1u32 << ppipe;
+        }
+    }
+
+    if ppipe_mask1 == 0 {
+        ppipe_subslices[0] = 1;
+        ppipe_mask1 = 1;
+    }
+
+    let cross_slice_hashing_mode = if ppipe_mask1.count_ones() > 1 {
+        GFX125_3D_MODE_CROSS_SLICE_HASHING_32X32
+    } else {
+        0
+    };
+
+    Gfx125SliceHashConfig {
+        geometry_dss_enable,
+        ppipe_subslices,
+        ppipe_mask1,
+        ppipe_mask2,
+        cross_slice_hashing_mode,
+    }
+}
+
+fn gfx125_logbase2_ceil(value: usize) -> usize {
+    if value <= 1 {
+        0
+    } else {
+        (usize::BITS - (value - 1).leading_zeros()) as usize
+    }
+}
+
+fn gfx125_compute_pixel_hash_table_nway(
+    mask1: u32,
+    mask2: u32,
+    table: &mut [u8; GFX125_SLICE_HASH_TABLE_ENTRIES],
+) {
+    let mut mask2 = mask2;
+    if mask1 == mask2 {
+        mask2 = 0;
+    }
+
+    let mut phys_ids = [0usize; 64];
+    let mut num_ids = 0usize;
+    for bit in 0..u32::BITS as usize {
+        let bit_mask = 1u32 << bit;
+        if (mask1 & bit_mask) != 0 {
+            phys_ids[num_ids] = bit;
+            num_ids += 1;
+        }
+        if (mask2 & bit_mask) != 0 {
+            phys_ids[num_ids] = bit;
+            num_ids += 1;
+        }
+    }
+
+    if num_ids == 0 {
+        table.fill(0);
+        return;
+    }
+
+    let bits = gfx125_logbase2_ceil(num_ids);
+    let mut swzy = [0usize; 64];
+    for (k, slot) in swzy.iter_mut().enumerate().take(num_ids) {
+        let mut t = num_ids;
+        let mut s = 0usize;
+
+        for l in 0..bits {
+            if (k & (1usize << l)) != 0 {
+                s += (t + 1) >> 1;
+                t >>= 1;
+            } else {
+                t = (t + 1) >> 1;
+            }
+        }
+
+        *slot = s;
+    }
+
+    let mut swzx = [0usize; 64];
+    if mask1 != 0 && mask2 != 0 {
+        for (k, slot) in swzx.iter_mut().enumerate().take(num_ids) {
+            let mut l = k;
+            let mut t = num_ids;
+            let mut s = 0usize;
+            let mut in_range = false;
+
+            while t > 1 {
+                let first_in_range = t <= GFX125_SLICE_HASH_DIM && !in_range;
+                in_range |= first_in_range;
+
+                if l >= ((t + 1) >> 1) {
+                    if !in_range {
+                        s += (t + 1) >> 1;
+                    } else if first_in_range {
+                        s += 1;
+                    } else {
+                        s += ((t + 1) >> 1) << 1;
+                    }
+
+                    l -= (t + 1) >> 1;
+                    t >>= 1;
+                } else {
+                    t = (t + 1) >> 1;
+                }
+            }
+
+            *slot = s;
+        }
+    } else {
+        for (k, slot) in swzx.iter_mut().enumerate().take(num_ids) {
+            *slot = k;
+        }
+    }
+
+    for y in 0..GFX125_SLICE_HASH_DIM {
+        let row = y * GFX125_SLICE_HASH_DIM;
+        let k = y % num_ids;
+        for x in 0..GFX125_SLICE_HASH_DIM {
+            let l = x % num_ids;
+            table[row + x] = phys_ids[(swzx[l] + swzy[k]) % num_ids] as u8;
+        }
+    }
+}
+
+fn gfx125_pack_slice_hash_tables(
+    config: Gfx125SliceHashConfig,
+    dwords: &mut [u32; GFX125_SLICE_HASH_TABLE_DWORDS],
+) {
+    let mut entries = [0u8; GFX125_SLICE_HASH_TABLE_ENTRIES];
+    gfx125_compute_pixel_hash_table_nway(config.ppipe_mask1, config.ppipe_mask2, &mut entries);
+    dwords.fill(0);
+
+    for table_idx in 0..GFX125_SLICE_HASH_TABLES {
+        let table_base = table_idx * GFX125_SLICE_HASH_TABLE_DWORDS_PER_TABLE;
+        for (entry_idx, entry) in entries.iter().copied().enumerate() {
+            let dword_idx = table_base + (entry_idx / 8);
+            let shift = (entry_idx % 8) * 4;
+            dwords[dword_idx] |= (entry as u32) << shift;
+        }
+    }
+}
+
+fn gfx125_3d_mode_dw1(config: Gfx125SliceHashConfig) -> u32 {
+    config.cross_slice_hashing_mode | (0b11 << 16) | (1 << 6) | (1 << 22)
+}
+
+fn gfx125_3d_mode_dw3() -> u32 {
+    // Keep RHWO disabled for bring-up so the first render proof does not depend
+    // on an optimization state that Mesa conditionally toggles later.
+    (1 << 15) | (1 << 31)
 }
 
 pub fn forcewake_render_sanity(warm: RenderWarmState) {
@@ -968,6 +1222,26 @@ fn submit_primary_triangle_with_retries(
     width: usize,
     height: usize,
 ) -> bool {
+    let streamout_experiment =
+        select_streamout_proof_experiment(PRIMARY_PROBE_SEQ.load(Ordering::Acquire));
+    let streamout_precheck = submit_triangle_streamout_proof(
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        streamout_experiment,
+    );
+    crate::log!(
+        "intel/render: primary-streamout-precheck experiment={} completed={}\n",
+        streamout_experiment.label(),
+        streamout_precheck as u8,
+    );
+    if !streamout_precheck {
+        return false;
+    }
+
     let mut completed_any = false;
     for attempt in 1..=PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS {
         let blend_mode = TriangleBlendProbeMode::for_attempt(attempt);
@@ -990,6 +1264,10 @@ fn submit_primary_triangle_with_retries(
         );
         completed_any |= completed;
         if !completed {
+            crate::log!(
+                "intel/render: primary-streamout-proof skipped trigger=draw-fail attempt={} reason=post-hang-state-not-clean\n",
+                attempt,
+            );
             break;
         }
     }
@@ -1189,12 +1467,14 @@ fn submit_triangle_draw_to_surface(
     }
 
     crate::log!(
-        "intel/render: ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} note={}\n",
+        "intel/render: ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} note={}\n",
         pipeline.ps.meta.kernel.dispatch_mode,
         pipeline.ps.meta.kernel.grf_start_register,
         pipeline.ps.meta.kernel.grf_used,
         pipeline.ps.meta.kernel.ksp_offset_bytes,
         pipeline.ps.meta.kernel.code_size_bytes,
+        (pipeline.ps.meta.num_varying_inputs == 0
+            && pipeline.ps.meta.kernel.push_constant_bytes == 0) as u8,
         crate::intel::shader::triangle_pipeline_note()
     );
 
@@ -1527,9 +1807,19 @@ fn write_triangle_probe_state(
     let sf_clip_viewport_offset = cursor;
     cursor = crate::intel::align_up(sf_clip_viewport_offset + 64, 64).ok_or("probe-state-align")?;
     let scissor_rect_offset = cursor;
-    let end_offset = scissor_rect_offset
+    cursor = scissor_rect_offset
         .checked_add(8)
         .ok_or("probe-state-overflow")?;
+    let slice_hash_table_offset = if device_is_gfx125(warm.device_id) {
+        let offset = crate::intel::align_up(cursor, 64).ok_or("probe-state-align")?;
+        cursor = offset
+            .checked_add(GFX125_SLICE_HASH_TABLE_BYTES)
+            .ok_or("probe-state-overflow")?;
+        offset
+    } else {
+        0
+    };
+    let end_offset = cursor;
     if end_offset > warm.draw_state_len {
         return Err("probe-state-exceeds-state-bo");
     }
@@ -1597,6 +1887,14 @@ fn write_triangle_probe_state(
     scissor_rect[0] = 0;
     scissor_rect[1] = draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16);
 
+    if slice_hash_table_offset != 0 {
+        let slice_hash = &mut dwords[slice_hash_table_offset / 4
+            ..slice_hash_table_offset / 4 + GFX125_SLICE_HASH_TABLE_DWORDS];
+        let mut packed = [0u32; GFX125_SLICE_HASH_TABLE_DWORDS];
+        gfx125_pack_slice_hash_tables(gfx125_slice_hash_config(warm), &mut packed);
+        slice_hash.copy_from_slice(&packed);
+    }
+
     let flush_ptr = unsafe {
         warm.draw_state_virt
             .add(shader_layout.state_region_offset_bytes as usize)
@@ -1615,6 +1913,7 @@ fn write_triangle_probe_state(
         cc_viewport_offset_bytes: cc_viewport_offset as u32,
         sf_clip_viewport_offset_bytes: sf_clip_viewport_offset as u32,
         scissor_rect_offset_bytes: scissor_rect_offset as u32,
+        slice_hash_table_offset_bytes: slice_hash_table_offset as u32,
     })
 }
 
@@ -1723,6 +2022,17 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, cursor, value)
     }
 
+    fn push_load_register_imm(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        reg: usize,
+        value: u32,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, mi_lri_cmd(1, MI_LRI_FORCE_POSTED))?;
+        push(batch_dwords, cursor, reg as u32)?;
+        push(batch_dwords, cursor, value)
+    }
+
     fn push_sba_address(
         batch_dwords: &mut [u32],
         cursor: &mut usize,
@@ -1764,28 +2074,23 @@ fn encode_triangle_probe_batch(
         | (sbe_vertex_read_length << 11);
     let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) =
         stage_dispatch_bits(pipeline.ps.meta.kernel.dispatch_mode);
-    // Stay close to the last known-good fixed-function baseline for this
-    // proof path. The more aggressive force-clip/accept-all experiment moved
-    // the failure window but did not produce clipper progress on ADL-S.
-    let clip_dw1 = (1 << 17) | (1 << 18);
-    let clip_dw2 = (2 << 0)
-        | (1 << 2)
-        | (2 << 4)
-        | CLIP_PERSPECTIVE_DIVIDE_DISABLE
-        | (1 << 26)
-        | (1 << 30)
-        | (1 << 31);
-    let clip_dw3 = (1 << 5) | (2047 << 6) | (1 << 17);
+    // Keep CLIP close to Mesa's trivial path, but explicitly arm the clipper
+    // counters for bring-up. ACCEPT_ALL keeps the unit logically enabled so
+    // CL_INVOCATION/CL_PRIMITIVES can advance without depending on actual
+    // clipping behaviour for this all-inside triangle.
+    let clip_dw1 = 1 << 10;
+    let clip_dw2 = CLIP_PERSPECTIVE_DIVIDE_DISABLE | CLIP_MODE_ACCEPT_ALL | (1 << 31);
+    let clip_dw3 = 1 << 5;
     // Keep SF close to the trivial host path: viewport transform enabled,
-    // statistics disabled, and gfx125 per-poly deref mode for this VS-only
-    // trivial path.
-    let sf_dw1 = 1 << 1;
+    // gfx125 per-poly deref mode, and statistics armed so CL_PRIMITIVES_COUNT
+    // is meaningful when the clipper is left enabled for debug.
+    let sf_dw1 = (1 << 1) | (1 << 10);
     let sf_dw2 = 1 << 29;
     let sf_dw3 = 0;
-    // Match the host trivial-path intent as directly as possible: no AA,
-    // explicit full-target scissor, solid fill, cull none, and CCW front
-    // winding.
-    let raster_dw1 = (1 << 16) | (1 << 21) | (1 << 29);
+    // Mirror Mesa's simple-shader path here as literally as possible: cull
+    // none, and otherwise leave raster defaults boring until we have visual
+    // proof that a more opinionated packet is required.
+    let raster_dw1 = 1 << 16;
     let raster_dw2 = 0;
     let raster_dw3 = 0;
     let raster_dw4 = 0;
@@ -1793,6 +2098,24 @@ fn encode_triangle_probe_batch(
     // Keep this dedicated triangle path equally boring rather than forcing
     // point-rule / line-AA bits that the host reference never asked for.
     let wm_dw1 = 1 << 31;
+    let wm_depth_stencil_dw1 = 0;
+    let wm_depth_stencil_dw2 = 0;
+    let wm_depth_stencil_dw3 = 0;
+    let wm_chroma_key_dw1 = 0;
+    let ps_blend_dw1 = 1 << 30;
+    // Mesa zeros this packet during init to clear any inherited clear/resolve
+    // overrides; do the same in the probe path so backend behaviour is fully
+    // under our control.
+    let wm_hz_op_dw1 = 0;
+    let wm_hz_op_dw2 = 0;
+    let wm_hz_op_dw3 = 0;
+    let wm_hz_op_dw4 = 0;
+    let gfx125_sample_pattern_dw = 0x8888_8888;
+    let gfx125_slice_hash =
+        device_is_gfx125(warm.device_id).then(|| gfx125_slice_hash_config(warm));
+    let gfx125_3d_mode_dw1 = gfx125_slice_hash.map(gfx125_3d_mode_dw1).unwrap_or(0);
+    let gfx125_3d_mode_dw2 = 0;
+    let gfx125_3d_mode_dw3 = gfx125_3d_mode_dw3();
     let ps_dw3 =
         (binding_table_entry_count_encoding(pipeline.ps.meta.kernel.binding_table_entry_count)
             << 18)
@@ -1823,6 +2146,21 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "PIPELINE_SELECT");
     push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
 
+    if device_is_gfx125(warm.device_id) {
+        let chicken_raster_2_value = gfx125_chicken_raster_2_value();
+        log_batch_offset(cursor, "MI_LOAD_REGISTER_IMM CHICKEN_RASTER_2");
+        push_load_register_imm(
+            batch_dwords,
+            &mut cursor,
+            CHICKEN_RASTER_2,
+            chicken_raster_2_value,
+        )?;
+        crate::log!(
+            "intel/render: gfx125-raster-wa-batch chicken_raster_2=0x{:08X} tbimr_batch_override=1 tbimr_open_batch=1 tbimr_fast_clip=1\n",
+            chicken_raster_2_value,
+        );
+    }
+
     log_batch_offset(cursor, "STATE_BASE_ADDRESS");
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
@@ -1841,6 +2179,48 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
+
+    log_batch_offset(cursor, "3DSTATE_AA_LINE_PARAMETERS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_AA_LINE_PARAMETERS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+
+    if device_is_gfx125(warm.device_id) {
+        log_batch_offset(cursor, "3DSTATE_SAMPLE_PATTERN");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_PATTERN)?;
+        for _ in 0..8 {
+            push(batch_dwords, &mut cursor, gfx125_sample_pattern_dw)?;
+        }
+
+        log_batch_offset(cursor, "3DSTATE_SLICE_TABLE_STATE_POINTERS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_SLICE_TABLE_STATE_POINTERS)?;
+        push(batch_dwords, &mut cursor, probe_state.slice_hash_table_offset_bytes | 1)?;
+
+        log_batch_offset(cursor, "3DSTATE_3D_MODE");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_3D_MODE)?;
+        push(batch_dwords, &mut cursor, gfx125_3d_mode_dw1)?;
+        push(batch_dwords, &mut cursor, gfx125_3d_mode_dw2)?;
+        push(batch_dwords, &mut cursor, gfx125_3d_mode_dw3)?;
+        let slice_hash = gfx125_slice_hash.expect("gfx125 slice hash config");
+        crate::log!(
+            "intel/render: gfx125-svl-init sample_pattern=center slice_hash_ptr=0x{:X} geom_dss=0x{:08X} ppipe_dss={}/{}/{} mask1=0x{:X} mask2=0x{:X} mode_dw1=0x{:08X} mode_dw3=0x{:08X} cross_slice_mode={}({}) rhwo_disable=1\n",
+            probe_state.slice_hash_table_offset_bytes,
+            slice_hash.geometry_dss_enable,
+            slice_hash.ppipe_subslices[0],
+            slice_hash.ppipe_subslices[1],
+            slice_hash.ppipe_subslices[2],
+            slice_hash.ppipe_mask1,
+            slice_hash.ppipe_mask2,
+            gfx125_3d_mode_dw1,
+            gfx125_3d_mode_dw3,
+            slice_hash.cross_slice_hashing_mode,
+            if slice_hash.cross_slice_hashing_mode == GFX125_3D_MODE_CROSS_SLICE_HASHING_32X32 {
+                "hashing32x32"
+            } else {
+                "normal"
+            },
+        );
+    }
 
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POOL_ALLOC");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC)?;
@@ -1870,6 +2250,15 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_VS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_VS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_HS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_HS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_DS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_DS)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_GS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_GS)?;
     push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_PS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
@@ -2185,9 +2574,13 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DSTATE_WM_DEPTH_STENCIL");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_WM_DEPTH_STENCIL)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, wm_depth_stencil_dw1)?;
+    push(batch_dwords, &mut cursor, wm_depth_stencil_dw2)?;
+    push(batch_dwords, &mut cursor, wm_depth_stencil_dw3)?;
+
+    log_batch_offset(cursor, "3DSTATE_WM_CHROMA_KEY");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_WM_CHROMA_KEY)?;
+    push(batch_dwords, &mut cursor, wm_chroma_key_dw1)?;
 
     // Match Mesa's gfx12 trivial path and avoid relying on inherited depth
     // bounds state from earlier firmware or display bring-up.
@@ -2211,7 +2604,7 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DSTATE_PS_BLEND");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_BLEND)?;
-    push(batch_dwords, &mut cursor, 1 << 30)?;
+    push(batch_dwords, &mut cursor, ps_blend_dw1)?;
 
     log_batch_offset(cursor, "3DSTATE_MULTISAMPLE");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_MULTISAMPLE)?;
@@ -2219,6 +2612,15 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
     push(batch_dwords, &mut cursor, 1)?;
+
+    // Clear inherited WM_HZ_OP clear/resolve overrides so PS dispatch only
+    // depends on the explicit probe state we log below.
+    log_batch_offset(cursor, "3DSTATE_WM_HZ_OP");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_WM_HZ_OP)?;
+    push(batch_dwords, &mut cursor, wm_hz_op_dw1)?;
+    push(batch_dwords, &mut cursor, wm_hz_op_dw2)?;
+    push(batch_dwords, &mut cursor, wm_hz_op_dw3)?;
+    push(batch_dwords, &mut cursor, wm_hz_op_dw4)?;
 
     log_batch_offset(cursor, "3DSTATE_PS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_PS)?;
@@ -2313,6 +2715,41 @@ fn encode_triangle_probe_batch(
         ps_dw7,
         ps_extra_dw1
     );
+    crate::log!(
+        "intel/render: probe-backend ps_blend=0x{:08X} wm_depth=[0x{:08X},0x{:08X},0x{:08X}] wm_hz_op=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+        ps_blend_dw1,
+        wm_depth_stencil_dw1,
+        wm_depth_stencil_dw2,
+        wm_depth_stencil_dw3,
+        wm_hz_op_dw1,
+        wm_hz_op_dw2,
+        wm_hz_op_dw3,
+        wm_hz_op_dw4,
+    );
+    log_mesa_spec_cross_compare(
+        warm,
+        pipeline,
+        sbe_dw1,
+        clip_dw1,
+        clip_dw2,
+        sf_dw1,
+        raster_dw1,
+        ps_dw3,
+        ps_dw6,
+        ps_extra_dw1,
+    );
+    log_backend_dispatch_contract(
+        wm_dw1,
+        ps_blend_dw1,
+        wm_depth_stencil_dw1,
+        wm_depth_stencil_dw2,
+        wm_depth_stencil_dw3,
+        wm_hz_op_dw1,
+        wm_hz_op_dw2,
+        wm_hz_op_dw3,
+        wm_hz_op_dw4,
+        ps_extra_dw1,
+    );
     let clip_mode = (clip_dw2 >> 13) & 0x7;
     let api_mode = (clip_dw2 >> 30) & 0x1;
     let provoking_tri_fan = clip_dw2 & 0x3;
@@ -2363,10 +2800,17 @@ fn encode_triangle_probe_batch(
         (sf_dw3 >> 25) & 0x3,
     );
     crate::log!(
-        "intel/render: probe-raster-decoded sf_viewport=0x{:X} cc_viewport=0x{:X} scissor_ptr=0x{:X} cull=none fill=solid front=ccw multisample=1 sample_mask=0x1\n",
+        "intel/render: probe-raster-decoded sf_viewport=0x{:X} cc_viewport=0x{:X} scissor_ptr=0x{:X} cull={} fill_front={} fill_back={} front={} scissor_enable={} aa_enable={} forced_samples={} sample_mask=0x1\n",
         probe_state.sf_clip_viewport_offset_bytes,
         probe_state.cc_viewport_offset_bytes,
         probe_state.scissor_rect_offset_bytes,
+        decode_cull_mode_name((raster_dw1 >> 16) & 0x3),
+        decode_fill_mode_name((raster_dw1 >> 5) & 0x3),
+        decode_fill_mode_name((raster_dw1 >> 3) & 0x3),
+        decode_front_winding_name((raster_dw1 >> 21) & 0x1),
+        (raster_dw1 >> 1) & 0x1,
+        (raster_dw1 >> 2) & 0x1,
+        (raster_dw1 >> 18) & 0x7,
     );
     crate::log!(
         "intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe_read_len={} ps_varyings={} streamout={}\n",
@@ -2946,6 +3390,7 @@ fn submit_warm_render_batch(
         if should_log_primary_probe_detail()
             && (iter == 0 || iter == 256 || iter == 1024 || iter == 4095)
         {
+            let poll_stats = capture_triangle_stage_stats(dev);
             crate::log!(
                 "intel/render: {} poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X}\n",
                 submit_name,
@@ -2971,6 +3416,25 @@ fn submit_warm_render_batch(
                 result5,
                 result6,
                 result7
+            );
+            crate::log!(
+                "intel/render: {} poll-counters iter={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={}\n",
+                submit_name,
+                iter,
+                poll_stats.ia_vertices,
+                poll_stats.ia_primitives,
+                poll_stats.vs_invocations,
+                poll_stats.hs_invocations,
+                poll_stats.ds_invocations,
+                poll_stats.gs_invocations,
+                poll_stats.gs_primitives,
+                poll_stats.cl_invocations,
+                poll_stats.cl_primitives,
+                poll_stats.ps_invocations,
+                poll_stats.cps_invocations,
+                poll_stats.ps_depth,
+                poll_stats.so_prims_written_0,
+                poll_stats.so_write_offset_0,
             );
         }
         core::hint::spin_loop();
@@ -3006,7 +3470,7 @@ fn submit_warm_render_batch(
     }
     if submit_name == "draw-path" {
         crate::log!(
-            "intel/render: 3dprimitive-result completed={} pre3d={} post3d={} final={} vf={} vs={} ps={} clip={} raster={} acthd=0x{:08X} ipehr=0x{:08X}\n",
+            "intel/render: 3dprimitive-result completed={} pre3d={} post3d={} final={} vf={} vs={} ps_state={} clip={} raster={} pre_draw_packet_markers={} clip_raster_packet_markers={} post_draw_retire_markers={} acthd=0x{:08X} ipehr=0x{:08X}\n",
             completed as u8,
             result0 == RCS_EXEC_RESULT_DRAW_PRE3D,
             result1 == RCS_EXEC_RESULT_DRAW_POST3D,
@@ -3016,6 +3480,11 @@ fn submit_warm_render_batch(
             result5 == RCS_EXEC_RESULT_DRAW_POST_PS_STATE,
             result6 == RCS_EXEC_RESULT_DRAW_POST_CLIP,
             result7 == RCS_EXEC_RESULT_DRAW_POST_RASTER,
+            ((result3 == RCS_EXEC_RESULT_DRAW_POST_VF) && (result4 == RCS_EXEC_RESULT_DRAW_POST_VS))
+                as u8,
+            ((result6 == RCS_EXEC_RESULT_DRAW_POST_CLIP)
+                && (result7 == RCS_EXEC_RESULT_DRAW_POST_RASTER)) as u8,
+            ((result1 == RCS_EXEC_RESULT_DRAW_POST3D) && (result2 == RCS_EXEC_RESULT_DONE)) as u8,
             crate::intel::mmio_read(dev, RCS_RING_ACTHD),
             crate::intel::mmio_read(dev, RCS_RING_IPEHR)
         );
@@ -3023,15 +3492,33 @@ fn submit_warm_render_batch(
     if !completed && (submit_name == "draw-path" || submit_name == "streamout-proof") {
         let acthd = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
         let acthd_batch_off = acthd.saturating_sub(GPU_VA_BATCH_BASE as u32);
+        let instdone_geom = crate::intel::mmio_read(dev, INSTDONE_GEOM);
+        let sc_instdone = crate::intel::mmio_read(dev, SC_INSTDONE);
+        let sc_extra = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA);
+        let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
         crate::log!(
             "intel/render: {} stall-detail acthd_batch_off=0x{:08X} ipehr=0x{:08X} instdone_geom=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X}\n",
             submit_name,
             acthd_batch_off,
             crate::intel::mmio_read(dev, RCS_RING_IPEHR),
-            crate::intel::mmio_read(dev, INSTDONE_GEOM),
-            crate::intel::mmio_read(dev, SC_INSTDONE),
-            crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA),
-            crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2),
+            instdone_geom,
+            sc_instdone,
+            sc_extra,
+            sc_extra2,
+        );
+        log_not_done_units(submit_name, "stall-geom-not-done", instdone_geom, GEOM_INSTDONE_BITS);
+        log_not_done_units(submit_name, "stall-sc-not-done", sc_instdone, SC_INSTDONE_BITS);
+        log_not_done_units(
+            submit_name,
+            "stall-sc-extra-not-done",
+            sc_extra,
+            SC_INSTDONE_EXTRA_BITS,
+        );
+        log_not_done_units(
+            submit_name,
+            "stall-sc-extra2-not-done",
+            sc_extra2,
+            SC_INSTDONE_EXTRA2_BITS,
         );
     }
     if submit_name == "draw-path" || submit_name == "streamout-proof" {
@@ -3042,6 +3529,19 @@ fn submit_warm_render_batch(
             completed,
             stats_after,
             Some(stats_before),
+        );
+        log_triangle_stage_frontier(
+            submit_name,
+            completed,
+            stats_before,
+            stats_after,
+            result1,
+            result2,
+            result3,
+            result4,
+            result5,
+            result6,
+            result7,
         );
         log_triangle_stage_diagnosis(submit_name, completed, stats_before, stats_after);
     }
@@ -3100,12 +3600,17 @@ fn log_triangle_demo_stats(dev: crate::intel::Dev, completed: bool) {
 }
 
 fn triangle_vs_max_threads_field(device_id: u16, baked_max_threads: u16) -> u32 {
-    match device_id {
+    if device_is_gfx125(device_id) {
         // Mesa advertises ADL-S gfx12 max_vs_threads = 546 and programs the
         // packet with max_vs_threads - 1.
-        0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693 => 545,
-        _ => baked_max_threads.saturating_sub(1) as u32,
+        545
+    } else {
+        baked_max_threads.saturating_sub(1) as u32
     }
+}
+
+fn device_is_gfx125(device_id: u16) -> bool {
+    matches!(device_id, 0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693)
 }
 
 fn decode_clip_mode_name(mode: u32) -> &'static str {
@@ -3142,6 +3647,328 @@ fn decode_deref_block_size_name(mode: u32) -> &'static str {
     }
 }
 
+fn decode_cull_mode_name(mode: u32) -> &'static str {
+    match mode {
+        0 => "both",
+        1 => "none",
+        2 => "front",
+        3 => "back",
+        _ => "unknown",
+    }
+}
+
+fn decode_fill_mode_name(mode: u32) -> &'static str {
+    match mode {
+        0 => "solid",
+        1 => "wireframe",
+        2 => "point",
+        _ => "unknown",
+    }
+}
+
+fn decode_front_winding_name(bit: u32) -> &'static str {
+    match bit {
+        0 => "cw",
+        1 => "ccw",
+        _ => "unknown",
+    }
+}
+
+fn decode_wm_force_thread_dispatch_name(mode: u32) -> &'static str {
+    match mode {
+        0 => "normal",
+        1 => "force-off",
+        2 => "force-on",
+        _ => "reserved",
+    }
+}
+
+fn decode_wm_early_depth_stencil_control_name(mode: u32) -> &'static str {
+    match mode {
+        0 => "EDSC_NORMAL",
+        1 => "EDSC_PSEXEC",
+        2 => "EDSC_PREPS",
+        _ => "reserved",
+    }
+}
+
+const GEOM_INSTDONE_BITS: &[(u32, &str)] = &[
+    (1 << 1, "VFL"),
+    (1 << 2, "VS"),
+    (1 << 3, "HS"),
+    (1 << 4, "TE"),
+    (1 << 5, "DS"),
+    (1 << 6, "GS"),
+    (1 << 7, "SOL"),
+    (1 << 8, "CL"),
+    (1 << 9, "SF"),
+    (1 << 11, "TDG1"),
+    (1 << 13, "URBM"),
+    (1 << 14, "SVG"),
+    (1 << 17, "TSG0"),
+    (1 << 22, "SDE"),
+];
+
+const SC_INSTDONE_BITS: &[(u32, &str)] = &[
+    (1 << 0, "SVL"),
+    (1 << 1, "WMFE"),
+    (1 << 2, "WMBE"),
+    (1 << 3, "HIZ"),
+    (1 << 5, "IZFE"),
+    (1 << 6, "SBE"),
+    (1 << 9, "RCC"),
+    (1 << 10, "RCPBE"),
+    (1 << 11, "RCPFE"),
+    (1 << 12, "DAPB"),
+    (1 << 13, "DAPRBE"),
+    (1 << 15, "SARB"),
+    (1 << 16, "DC0"),
+    (1 << 17, "DC1"),
+    (1 << 18, "DC2"),
+    (1 << 19, "DC3"),
+    (1 << 20, "GW0"),
+    (1 << 21, "GW1"),
+    (1 << 22, "GW2"),
+    (1 << 23, "GW3"),
+    (1 << 24, "TDC"),
+    (1 << 25, "SFBE"),
+    (1 << 26, "PSS"),
+    (1 << 27, "AMFS"),
+];
+
+const SC_INSTDONE_EXTRA_BITS: &[(u32, &str)] = &[
+    (1 << 9, "RCC1"),
+    (1 << 10, "RCPBE1"),
+    (1 << 11, "RCPFE1"),
+    (1 << 12, "DAPB1"),
+    (1 << 13, "DAPRBE1"),
+    (1 << 16, "DC4"),
+    (1 << 17, "DC5"),
+    (1 << 18, "DC6"),
+    (1 << 19, "DC7"),
+    (1 << 20, "GW4"),
+    (1 << 21, "GW5"),
+    (1 << 22, "GW6"),
+    (1 << 23, "GW7"),
+    (1 << 24, "TDC1"),
+    (1 << 26, "PSS1"),
+];
+
+const SC_INSTDONE_EXTRA2_BITS: &[(u32, &str)] = &[
+    (1 << 9, "RCC2"),
+    (1 << 10, "RCPBE2"),
+    (1 << 11, "RCPFE2"),
+    (1 << 12, "DAPB2"),
+    (1 << 13, "DAPRBE2"),
+];
+
+fn log_not_done_units(submit_name: &str, label: &str, value: u32, bits: &[(u32, &'static str)]) {
+    crate::log!("intel/render: {} {}=", submit_name, label);
+    let mut any = false;
+    for &(mask, name) in bits {
+        if (value & mask) == 0 {
+            if any {
+                crate::log!("|");
+            }
+            crate::log!("{}", name);
+            any = true;
+        }
+    }
+    if !any {
+        crate::log!("none");
+    }
+    crate::log!("\n");
+}
+
+fn log_backend_dispatch_contract(
+    wm_dw1: u32,
+    ps_blend_dw1: u32,
+    wm_depth_stencil_dw1: u32,
+    _wm_depth_stencil_dw2: u32,
+    _wm_depth_stencil_dw3: u32,
+    wm_hz_op_dw1: u32,
+    wm_hz_op_dw2: u32,
+    wm_hz_op_dw3: u32,
+    wm_hz_op_dw4: u32,
+    ps_extra_dw1: u32,
+) {
+    let wm_statistics_enable = (wm_dw1 >> 31) & 0x1;
+    let wm_force_thread_dispatch = (wm_dw1 >> 19) & 0x3;
+    let wm_edsc = (wm_dw1 >> 21) & 0x3;
+    let ps_blend_alpha_test = (ps_blend_dw1 >> 8) & 0x1;
+    let ps_blend_color_enable = (ps_blend_dw1 >> 29) & 0x1;
+    let ps_blend_has_writeable_rt = (ps_blend_dw1 >> 30) & 0x1;
+    let ps_blend_alpha_to_coverage = (ps_blend_dw1 >> 31) & 0x1;
+    let wm_depth_test_enable = (wm_depth_stencil_dw1 >> 1) & 0x1;
+    let wm_stencil_write_enable = (wm_depth_stencil_dw1 >> 2) & 0x1;
+    let wm_stencil_test_enable = (wm_depth_stencil_dw1 >> 3) & 0x1;
+    let wm_double_sided_stencil = (wm_depth_stencil_dw1 >> 4) & 0x1;
+    let wm_depth_write_enable = (wm_depth_stencil_dw1 >> 28) & 0x1;
+    let wm_hz_partial_resolve = (wm_hz_op_dw1 >> 9) & 0x1;
+    let wm_hz_samples = (wm_hz_op_dw1 >> 13) & 0x7;
+    let wm_hz_stencil_resolve = (wm_hz_op_dw1 >> 24) & 0x1;
+    let wm_hz_full_surface_clear = (wm_hz_op_dw1 >> 25) & 0x1;
+    let wm_hz_hier_resolve = (wm_hz_op_dw1 >> 27) & 0x1;
+    let wm_hz_depth_resolve = (wm_hz_op_dw1 >> 28) & 0x1;
+    let wm_hz_scissor = (wm_hz_op_dw1 >> 29) & 0x1;
+    let wm_hz_depth_clear = (wm_hz_op_dw1 >> 30) & 0x1;
+    let wm_hz_stencil_clear = (wm_hz_op_dw1 >> 31) & 0x1;
+    let wm_hz_sample_mask = wm_hz_op_dw4 & 0xFFFF;
+    let wm_hz_op_active = ((wm_hz_op_dw1 | wm_hz_op_dw2 | wm_hz_op_dw3 | wm_hz_op_dw4) != 0) as u32;
+    let ps_valid = (ps_extra_dw1 >> 31) & 0x1;
+    let ps_has_uav = (ps_extra_dw1 >> 2) & 0x1;
+    let ps_computes_stencil = (ps_extra_dw1 >> 5) & 0x1;
+    let ps_per_sample = (ps_extra_dw1 >> 6) & 0x1;
+    let ps_attribute_enable = (ps_extra_dw1 >> 8) & 0x1;
+    let ps_computed_depth = (ps_extra_dw1 >> 26) & 0x3;
+    let ps_kills = (ps_extra_dw1 >> 28) & 0x1;
+    let dispatch_reason = if wm_force_thread_dispatch == 1 {
+        "force-thread-dispatch-off"
+    } else if ps_valid == 0 {
+        "ps-invalid"
+    } else if wm_force_thread_dispatch == 2 {
+        "force-thread-dispatch-on"
+    } else if wm_hz_op_active != 0 {
+        "wm-hz-op-active"
+    } else if ps_blend_has_writeable_rt != 0 {
+        "writeable-rt"
+    } else if ps_has_uav != 0 {
+        "ps-uav"
+    } else if ps_kills != 0 {
+        "ps-kill"
+    } else if ps_computed_depth != 0 && (wm_depth_test_enable != 0 || wm_depth_write_enable != 0) {
+        "computed-depth"
+    } else if ps_computes_stencil != 0 && wm_stencil_test_enable != 0 {
+        "computed-stencil"
+    } else {
+        "no-ps-dispatch-qualifier"
+    };
+    let dispatch_armed = matches!(
+        dispatch_reason,
+        "force-thread-dispatch-on"
+            | "writeable-rt"
+            | "ps-uav"
+            | "ps-kill"
+            | "computed-depth"
+            | "computed-stencil"
+    ) as u32;
+
+    crate::log!(
+        "intel/render: probe-backend-decoded wm[stats={} force_thread_dispatch={}({}) edsc={}({})] ps_blend[writeable_rt={} blend_enable={} alpha_test={} alpha_to_coverage={}] wm_depth_stencil[depth_test={} depth_write={} stencil_test={} stencil_write={} double_sided_stencil={}]\n",
+        wm_statistics_enable,
+        wm_force_thread_dispatch,
+        decode_wm_force_thread_dispatch_name(wm_force_thread_dispatch),
+        wm_edsc,
+        decode_wm_early_depth_stencil_control_name(wm_edsc),
+        ps_blend_has_writeable_rt,
+        ps_blend_color_enable,
+        ps_blend_alpha_test,
+        ps_blend_alpha_to_coverage,
+        wm_depth_test_enable,
+        wm_depth_write_enable,
+        wm_stencil_test_enable,
+        wm_stencil_write_enable,
+        wm_double_sided_stencil,
+    );
+    crate::log!(
+        "intel/render: probe-backend-gate wm_hz_op[active={} depth_clear={} depth_resolve={} hier_resolve={} stencil_clear={} stencil_resolve={} full_surface_clear={} partial_resolve={} scissor={} samples={} sample_mask=0x{:X}] ps_extra[valid={} attribute_enable={} per_sample={} has_uav={} kills={} computed_depth={} computes_stencil={}] dispatch_armed={} reason={}\n",
+        wm_hz_op_active,
+        wm_hz_depth_clear,
+        wm_hz_depth_resolve,
+        wm_hz_hier_resolve,
+        wm_hz_stencil_clear,
+        wm_hz_stencil_resolve,
+        wm_hz_full_surface_clear,
+        wm_hz_partial_resolve,
+        wm_hz_scissor,
+        wm_hz_samples,
+        wm_hz_sample_mask,
+        ps_valid,
+        ps_attribute_enable,
+        ps_per_sample,
+        ps_has_uav,
+        ps_kills,
+        ps_computed_depth,
+        ps_computes_stencil,
+        dispatch_armed,
+        dispatch_reason,
+    );
+}
+
+fn log_mesa_spec_cross_compare(
+    warm: RenderWarmState,
+    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    sbe_dw1: u32,
+    clip_dw1: u32,
+    clip_dw2: u32,
+    sf_dw1: u32,
+    raster_dw1: u32,
+    ps_dw3: u32,
+    ps_dw6: u32,
+    ps_extra_dw1: u32,
+) {
+    let trueos_sbe_read_offset = (sbe_dw1 >> 5) & 0x3F;
+    let trueos_sbe_read_length = (sbe_dw1 >> 11) & 0x1F;
+    let trueos_sbe_force_read_offset = (sbe_dw1 >> 28) & 0x1;
+    let trueos_sbe_force_read_length = (sbe_dw1 >> 29) & 0x1;
+    let trueos_sbe_num_sf_attrs = (sbe_dw1 >> 22) & 0x3F;
+    let trueos_ps_vector_mask = (ps_dw3 >> 30) & 0x1;
+    let trueos_ps_binding_table_entry_count = (ps_dw3 >> 18) & 0x1F;
+    let trueos_ps_push_constants = (ps_dw6 >> 11) & 0x1;
+    let trueos_ps_max_threads_per_psd = (ps_dw6 >> PS_MAX_THREADS_SHIFT) & 0x7F;
+    let trueos_clip_perspective_divide_disable =
+        ((clip_dw2 & CLIP_PERSPECTIVE_DIVIDE_DISABLE) != 0) as u32;
+    let trueos_clip_mode = (clip_dw2 >> 13) & 0x7;
+    let trueos_clip_enable = (clip_dw2 >> 31) & 0x1;
+    let trueos_clip_stats = (clip_dw1 >> 10) & 0x1;
+    let trueos_sf_stats = (sf_dw1 >> 10) & 0x1;
+    let trueos_raster_cull_mode = (raster_dw1 >> 16) & 0x3;
+    let trueos_ps_attribute_enable = (ps_extra_dw1 >> 8) & 0x1;
+    let trueos_ps_per_sample = (ps_extra_dw1 >> 6) & 0x1;
+    let trueos_ps_computed_depth = (ps_extra_dw1 >> 26) & 0x3;
+    let trueos_ps_computes_stencil = (ps_extra_dw1 >> 5) & 0x1;
+    let trueos_vs_urb_out_len = pipeline.vs.meta.urb_entry_output_length as u32;
+    let trueos_ps_dispatch = match pipeline.ps.meta.kernel.dispatch_mode {
+        crate::intel::shader::DispatchMode::Simd8 => "simd8",
+        crate::intel::shader::DispatchMode::Simd16 => "simd16",
+        crate::intel::shader::DispatchMode::Simd32 => "simd32",
+    };
+
+    crate::log!(
+        "intel/render: mesa-compare target=device=0x{:04X} note={} host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset={} read_length={} force_read_offset={} force_read_length={} num_sf_attrs={}] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable={} clip_mode={}({}) clip_enable={} statistics={}] debug_sf[statistics={}] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode={}({}) sample_mask=1]\n",
+        warm.device_id,
+        crate::intel::shader::triangle_pipeline_note(),
+        trueos_sbe_read_offset,
+        trueos_sbe_read_length,
+        trueos_sbe_force_read_offset,
+        trueos_sbe_force_read_length,
+        trueos_sbe_num_sf_attrs,
+        trueos_clip_perspective_divide_disable,
+        trueos_clip_mode,
+        decode_clip_mode_name(trueos_clip_mode),
+        trueos_clip_enable,
+        trueos_clip_stats,
+        trueos_sf_stats,
+        trueos_raster_cull_mode,
+        decode_cull_mode_name(trueos_raster_cull_mode),
+    );
+    crate::log!(
+        "intel/render: mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask={} binding_table_entry_count={} push_constants={} dispatch={} max_threads_per_psd={}] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable={} per_sample={} computed_depth={} computes_stencil={}] spec_pre_raster[vs_urb_output_len={} sbe_read_offset={} sbe_read_length={}]\n",
+        trueos_ps_vector_mask,
+        trueos_ps_binding_table_entry_count,
+        trueos_ps_push_constants,
+        trueos_ps_dispatch,
+        trueos_ps_max_threads_per_psd,
+        trueos_ps_attribute_enable,
+        trueos_ps_per_sample,
+        trueos_ps_computed_depth,
+        trueos_ps_computes_stencil,
+        trueos_vs_urb_out_len,
+        trueos_sbe_read_offset,
+        trueos_sbe_read_length,
+    );
+}
+
 fn read_stat_counter64(dev: crate::intel::Dev, reg: usize) -> u64 {
     let low = crate::intel::mmio_read(dev, reg) as u64;
     let high = crate::intel::mmio_read(dev, reg + 4) as u64;
@@ -3168,15 +3995,51 @@ fn capture_triangle_stage_stats(dev: crate::intel::Dev) -> TriangleStageStats {
                 .mmio_offset()
                 .unwrap_or(0),
         ),
+        hs_invocations: read_stat_counter64(
+            dev,
+            crate::intel::stats::RenderStat::HsInvocationCount
+                .mmio_offset()
+                .unwrap_or(0),
+        ),
+        ds_invocations: read_stat_counter64(
+            dev,
+            crate::intel::stats::RenderStat::DsInvocationCount
+                .mmio_offset()
+                .unwrap_or(0),
+        ),
+        gs_invocations: read_stat_counter64(
+            dev,
+            crate::intel::stats::RenderStat::GsInvocationCount
+                .mmio_offset()
+                .unwrap_or(0),
+        ),
+        gs_primitives: read_stat_counter64(
+            dev,
+            crate::intel::stats::RenderStat::GsPrimitivesCount
+                .mmio_offset()
+                .unwrap_or(0),
+        ),
         cl_invocations: read_stat_counter64(
             dev,
             crate::intel::stats::RenderStat::ClInvocationCount
                 .mmio_offset()
                 .unwrap_or(0),
         ),
+        cl_primitives: read_stat_counter64(
+            dev,
+            crate::intel::stats::RenderStat::ClPrimitivesCount
+                .mmio_offset()
+                .unwrap_or(0),
+        ),
         ps_invocations: read_stat_counter64(
             dev,
             crate::intel::stats::RenderStat::PsInvocationCount
+                .mmio_offset()
+                .unwrap_or(0),
+        ),
+        cps_invocations: read_stat_counter64(
+            dev,
+            crate::intel::stats::RenderStat::CpsInvocationCount
                 .mmio_offset()
                 .unwrap_or(0),
         ),
@@ -3201,38 +4064,56 @@ fn log_triangle_stage_stats(
     if let Some(before) = before {
         let delta = stats.delta_since(before);
         crate::log!(
-            "intel/render: {} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} cl={} ps={} ps_depth={} so0={} so_write0={} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_cl={} delta_ps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
+            "intel/render: {} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_hs={} delta_ds={} delta_gs={} delta_gs_prim={} delta_cl={} delta_cl_prim={} delta_ps={} delta_cps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
             submit_name,
             label,
             completed as u8,
             stats.ia_vertices,
             stats.ia_primitives,
             stats.vs_invocations,
+            stats.hs_invocations,
+            stats.ds_invocations,
+            stats.gs_invocations,
+            stats.gs_primitives,
             stats.cl_invocations,
+            stats.cl_primitives,
             stats.ps_invocations,
+            stats.cps_invocations,
             stats.ps_depth,
             stats.so_prims_written_0,
             stats.so_write_offset_0,
             delta.ia_vertices,
             delta.ia_primitives,
             delta.vs_invocations,
+            delta.hs_invocations,
+            delta.ds_invocations,
+            delta.gs_invocations,
+            delta.gs_primitives,
             delta.cl_invocations,
+            delta.cl_primitives,
             delta.ps_invocations,
+            delta.cps_invocations,
             delta.ps_depth,
             delta.so_prims_written_0,
             delta.so_write_offset_0
         );
     } else {
         crate::log!(
-            "intel/render: {} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} cl={} ps={} ps_depth={} so0={} so_write0={}\n",
+            "intel/render: {} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={}\n",
             submit_name,
             label,
             completed as u8,
             stats.ia_vertices,
             stats.ia_primitives,
             stats.vs_invocations,
+            stats.hs_invocations,
+            stats.ds_invocations,
+            stats.gs_invocations,
+            stats.gs_primitives,
             stats.cl_invocations,
+            stats.cl_primitives,
             stats.ps_invocations,
+            stats.cps_invocations,
             stats.ps_depth,
             stats.so_prims_written_0,
             stats.so_write_offset_0
@@ -3249,8 +4130,15 @@ fn log_triangle_stage_diagnosis(
     let delta = after.delta_since(before);
     let verdict = if delta.ia_vertices == 0 && delta.vs_invocations == 0 {
         "no-front-end-progress"
-    } else if delta.vs_invocations > 0 && delta.cl_invocations == 0 {
-        "stops-before-clipper"
+    } else if delta.cl_primitives > 0 && delta.ps_invocations == 0 && !completed {
+        "clip-stage-produced-primitives-no-ps"
+    } else if delta.vs_invocations > 0
+        && delta.cl_invocations == 0
+        && delta.cl_primitives == 0
+        && delta.ps_invocations == 0
+        && !completed
+    {
+        "vs-progress-no-clipper-or-ps-counters"
     } else if delta.cl_invocations > 0 && delta.ps_invocations == 0 {
         "stops-between-clipper-and-ps"
     } else if delta.ps_invocations > 0
@@ -3270,15 +4158,84 @@ fn log_triangle_stage_diagnosis(
         "late-backend-stall"
     };
     crate::log!(
-        "intel/render: {} stage-diagnosis completed={} verdict={} delta_cl={} delta_ps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
+        "intel/render: {} stage-diagnosis completed={} verdict={} delta_vs={} delta_hs={} delta_ds={} delta_gs={} delta_gs_prim={} delta_cl={} delta_cl_prim={} delta_ps={} delta_cps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
         submit_name,
         completed as u8,
         verdict,
+        delta.vs_invocations,
+        delta.hs_invocations,
+        delta.ds_invocations,
+        delta.gs_invocations,
+        delta.gs_primitives,
         delta.cl_invocations,
+        delta.cl_primitives,
         delta.ps_invocations,
+        delta.cps_invocations,
         delta.ps_depth,
         delta.so_prims_written_0,
         delta.so_write_offset_0
+    );
+}
+
+fn log_triangle_stage_frontier(
+    submit_name: &str,
+    completed: bool,
+    before: TriangleStageStats,
+    after: TriangleStageStats,
+    result1: u32,
+    result2: u32,
+    result3: u32,
+    result4: u32,
+    result5: u32,
+    result6: u32,
+    result7: u32,
+) {
+    let delta = after.delta_since(before);
+    let pre_raster_packets = ((result3 == RCS_EXEC_RESULT_DRAW_POST_VF)
+        && (result4 == RCS_EXEC_RESULT_DRAW_POST_VS)) as u8;
+    let ps_state_packet = (result5 == RCS_EXEC_RESULT_DRAW_POST_PS_STATE) as u8;
+    let clip_raster_packets = ((result6 == RCS_EXEC_RESULT_DRAW_POST_CLIP)
+        && (result7 == RCS_EXEC_RESULT_DRAW_POST_RASTER)) as u8;
+    let post_draw_retire =
+        ((result1 == RCS_EXEC_RESULT_DRAW_POST3D) && (result2 == RCS_EXEC_RESULT_DONE)) as u8;
+    let counter_frontier = if delta.ps_invocations > 0 {
+        "ps-thread"
+    } else if delta.cl_invocations > 0 || delta.cl_primitives > 0 {
+        "clipper-thread"
+    } else if delta.gs_invocations > 0
+        || delta.ds_invocations > 0
+        || delta.hs_invocations > 0
+        || delta.gs_primitives > 0
+    {
+        "pre-raster-shader-thread"
+    } else if delta.vs_invocations > 0 || delta.ia_vertices > 0 || delta.ia_primitives > 0 {
+        "vs-only-counters"
+    } else {
+        "no-draw-counters"
+    };
+    let note = if clip_raster_packets != 0
+        && delta.cl_invocations == 0
+        && delta.cl_primitives == 0
+        && delta.ps_invocations == 0
+    {
+        "state_packets_retired_through_raster_counters_only_show_no_clipper_or_ps_threads"
+    } else if ps_state_packet != 0 && delta.ps_invocations == 0 {
+        "ps_state_programmed_but_no_ps_threads"
+    } else if post_draw_retire == 0 {
+        "draw_not_retired"
+    } else {
+        "draw_retired"
+    };
+    crate::log!(
+        "intel/render: {} stage-frontier completed={} pre_raster_packets={} ps_state_packet={} clip_raster_packets={} post_draw_retire={} counter_frontier={} note={}\n",
+        submit_name,
+        completed as u8,
+        pre_raster_packets,
+        ps_state_packet,
+        clip_raster_packets,
+        post_draw_retire,
+        counter_frontier,
+        note,
     );
 }
 

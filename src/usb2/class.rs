@@ -562,12 +562,8 @@ impl UsbClassTriple {
             Self::Billboard => "Billboard Device",
             Self::TypeCBridge => "USB Type-C Bridge Device",
             Self::BulkDisplay => "USB BDP Device",
-            Self::MctpEndpointV1 => {
-                "MCTP 1.x Management-controller and Managed-Device endpoints"
-            }
-            Self::MctpEndpointV2 => {
-                "MCTP 2.x Management-controller and Managed-Device endpoints"
-            }
+            Self::MctpEndpointV1 => "MCTP 1.x Management-controller and Managed-Device endpoints",
+            Self::MctpEndpointV2 => "MCTP 2.x Management-controller and Managed-Device endpoints",
             Self::MctpHostInterfaceV1 => "MCTP 1.x Host Interface endpoint",
             Self::MctpHostInterfaceV2 => "MCTP 2.x Host Interface endpoint",
             Self::I3c => "I3C Device",

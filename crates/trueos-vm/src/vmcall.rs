@@ -43,6 +43,10 @@ fn page() -> *mut CommPage {
     COMM_PAGE_VA as *mut CommPage
 }
 
+pub fn hull_bss_anchor() -> u64 {
+    core::ptr::addr_of!(SEQ) as u64
+}
+
 /// Issue a vmcall and return (response_status, response_data).
 /// Synchronous: host writes response before vmresume, so data is ready
 /// on return.

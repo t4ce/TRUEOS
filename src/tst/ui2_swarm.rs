@@ -4,8 +4,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2HostedInteractiveRect, Ui2Rect};
 
-const UI2_SWARM_TEX_ID: u32 = 4_720;
-const UI2_SWARM_CONTENT_ID: u32 = 46;
+const UI2_SWARM_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Swarm.get();
+const UI2_SWARM_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::Swarm.get();
 const UI2_SWARM_VIEW_W: u32 = 820;
 const UI2_SWARM_VIEW_H: u32 = 560;
 const UI2_SWARM_WINDOW_X: f32 = 420.0;
