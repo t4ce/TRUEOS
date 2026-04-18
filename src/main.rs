@@ -32,6 +32,7 @@ mod phys;
 mod portal;
 mod portio;
 mod power;
+mod rapl;
 mod r;
 mod rng;
 mod runtime;
@@ -62,6 +63,8 @@ mod tst_ui2_mandelbrot_demo;
 mod tst_ui2_particle_demo;
 #[path = "tst/ui2_pci_demo.rs"]
 mod tst_ui2_pci_demo;
+#[path = "tst/ui2_raple_demo.rs"]
+mod tst_ui2_raple_demo;
 #[path = "tst/ui2_petersen_demo.rs"]
 mod tst_ui2_petersen_demo;
 #[path = "tst/ui2_shell_demo.rs"]
