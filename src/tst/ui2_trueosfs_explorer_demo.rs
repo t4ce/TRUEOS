@@ -651,6 +651,8 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
         return;
     };
 
+    crate::r::ui2::set_window_title_twemoji(surface.window_id(), '\u{1F4C1}');
+
     let mut location = ExplorerLocation::Roots;
     let mut status = String::new();
     let mut last_roots_hash = 0u32;

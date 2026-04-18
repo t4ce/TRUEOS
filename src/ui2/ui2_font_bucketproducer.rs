@@ -336,6 +336,8 @@ async fn run_bucket_demo(
         return;
     };
 
+    super::ui2_win::set_window_title_twemoji(surface.window_id(), '\u{1F524}');
+
     if !surface.bind_hosted_scroll_state(spec.content_id, content_w, content_h) {
         crate::log!(
             "ui2-font-bucketproducer: hosted scroll bind failed window={} content_id={} family={} variant={}\n",

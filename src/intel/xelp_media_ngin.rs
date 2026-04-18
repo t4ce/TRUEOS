@@ -18,7 +18,7 @@ const MAX_MEDIA_API_ROUTES: usize = 4;
 const MAX_MEDIA_RESULT_SLOTS: usize = 4;
 const MEDIA_MAX_DECODE_FRAMES: u32 = u32::MAX;
 const MEDIA_PLAYBACK_LOG_INTERVAL: u32 = 30;
-const MEDIA_PLAYBACK_FRAME_DELAY_MS: u64 = 5;
+const MEDIA_PLAYBACK_FRAME_DELAY_MS: u64 = 33; // ~30fps; yields CPU to async executor
 
 const FORCEWAKE_MEDIA_GEN11: usize = 0x0A184;
 const FORCEWAKE_MEDIA_VDBOX0: usize = 0x0A540;
@@ -82,6 +82,7 @@ const MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS: u32 = 180_000;
 const MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES: usize = 1024 * 1024 * 1024;
 const MEDIA_DECODE_CACHE_PATH: &str = "media/demo_yelly.mp4";
 const MEDIA_CACHE_WRITE_PROGRESS_BYTES: u64 = 8 * 1024 * 1024;
+const MEDIA_CACHE_WRITE_YIELD_EVERY_BYTES: u64 = 512 * 1024;
 const MEDIA_CACHE_WRITE_FALLBACK_CHUNK_BYTES: usize = 256 * 1024;
 const MEDIA_CACHE_WRITE_MAX_CHUNK_BYTES: usize = 1024 * 1024;
 
@@ -2654,7 +2655,12 @@ async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
     if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
         // Try loading from persistent filesystem cache first.
         if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-            match crate::r::fs::trueosfs::file_out_async(disk, MEDIA_DECODE_CACHE_PATH).await {
+            match crate::r::fs::trueosfs::file_out_if_index_ready_async(
+                disk,
+                MEDIA_DECODE_CACHE_PATH,
+            )
+            .await
+            {
                 Ok(Some(cached)) if !cached.is_empty() => {
                     crate::log!(
                         "intel/media: cache hit path={} bytes={}\n",
@@ -2663,8 +2669,24 @@ async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
                     );
                     return Some(("cache", cached));
                 }
-                _ => {
-                    crate::log!("intel/media: cache miss path={}\n", MEDIA_DECODE_CACHE_PATH);
+                Ok(None) => {
+                    crate::log!(
+                        "intel/media: cache unavailable path={} reason=index-not-ready-or-miss\n",
+                        MEDIA_DECODE_CACHE_PATH
+                    );
+                }
+                Ok(Some(_)) => {
+                    crate::log!(
+                        "intel/media: cache unavailable path={} reason=empty\n",
+                        MEDIA_DECODE_CACHE_PATH
+                    );
+                }
+                Err(err) => {
+                    crate::log!(
+                        "intel/media: cache probe failed path={} err={:?}\n",
+                        MEDIA_DECODE_CACHE_PATH,
+                        err
+                    );
                 }
             }
         }
@@ -2679,53 +2701,6 @@ async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
             MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
             MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES,
         );
-        if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED
-            && let Some(disk) = crate::r::fs::trueosfs::primary_root_handle()
-        {
-            match crate::r::net::cli::http_stream::fetch_http_to_file_async(
-                url,
-                disk,
-                MEDIA_DECODE_CACHE_PATH,
-                MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
-                MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES,
-            )
-            .await
-            {
-                Ok(()) => {
-                    match crate::r::fs::trueosfs::file_out_async(disk, MEDIA_DECODE_CACHE_PATH)
-                        .await
-                    {
-                        Ok(Some(cached)) if !cached.is_empty() => {
-                            crate::log!(
-                                "intel/media: cached path={} url={} bytes={}\n",
-                                MEDIA_DECODE_CACHE_PATH,
-                                url,
-                                cached.len()
-                            );
-                            return Some(("cache-fill", cached));
-                        }
-                        Ok(_) => {
-                            crate::log!(
-                                "intel/media: stream fetch finished but cache empty path={} url={}\n",
-                                MEDIA_DECODE_CACHE_PATH,
-                                url
-                            );
-                        }
-                        Err(err) => {
-                            crate::log!(
-                                "intel/media: cache read failed path={} url={} err={:?}\n",
-                                MEDIA_DECODE_CACHE_PATH,
-                                url,
-                                err
-                            );
-                        }
-                    }
-                }
-                Err(err) => {
-                    crate::log!("intel/media: stream fetch failed url={} err={:?}\n", url, err);
-                }
-            }
-        }
         match crate::r::net::http::fetch_http_body(
             url,
             MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
@@ -2832,6 +2807,7 @@ async fn persist_media_cache_async(
     let started = Instant::now();
     let mut written = 0u64;
     let mut next_progress = MEDIA_CACHE_WRITE_PROGRESS_BYTES;
+    let mut next_yield = MEDIA_CACHE_WRITE_YIELD_EVERY_BYTES;
 
     for chunk in bytes.chunks(chunk_bytes) {
         if let Err(err) = crate::r::fs::trueosfs::file_write_chunk_async(handle, chunk).await {
@@ -2856,6 +2832,11 @@ async fn persist_media_cache_async(
                 started.elapsed().as_millis(),
             );
             next_progress = next_progress.saturating_add(MEDIA_CACHE_WRITE_PROGRESS_BYTES);
+        }
+
+        if written >= next_yield && written != bytes.len() as u64 {
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+            next_yield = next_yield.saturating_add(MEDIA_CACHE_WRITE_YIELD_EVERY_BYTES);
         }
     }
 

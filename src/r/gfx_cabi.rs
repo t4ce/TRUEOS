@@ -4759,11 +4759,12 @@ pub mod cabi {
                 // between end_frame and the async cursor overlay tick.
                 let mut submit_draws = draws.clone();
                 let mut submit_rgb_src = rgb_src.clone();
-                let submit_tex_src = tex_src.clone();
+                let mut submit_tex_src = tex_src.clone();
                 if is_screen_present_frame {
                     append_kernel_cursor_overlay_draws(
                         &mut submit_draws,
                         &mut submit_rgb_src,
+                        &mut submit_tex_src,
                         swap.extent.width,
                         swap.extent.height,
                         None,
@@ -5261,10 +5262,12 @@ pub mod cabi {
             if is_screen_present_frame {
                 let mut screenshot_draws = draws.clone();
                 let mut screenshot_rgb = rgb_src.clone();
+                let mut screenshot_tex = tex_src.clone();
                 if let Some((vp_w, vp_h)) = screenshot_overlay_extent {
                     append_kernel_cursor_overlay_draws(
                         &mut screenshot_draws,
                         &mut screenshot_rgb,
+                        &mut screenshot_tex,
                         vp_w,
                         vp_h,
                         None,
@@ -5275,7 +5278,7 @@ pub mod cabi {
                     clear_rgb,
                     screenshot_draws.as_slice(),
                     screenshot_rgb.as_slice(),
-                    tex_src.as_slice(),
+                    screenshot_tex.as_slice(),
                 );
             }
         } else if crate::gfx::is_virgl_active() {

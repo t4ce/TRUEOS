@@ -652,6 +652,76 @@ pub async fn file_out_async(
     Ok(None)
 }
 
+/// Async TRUEOSFS: read a file only if the root index is already ready.
+///
+/// Unlike `file_out_async`, this will not trigger index construction on a cold root.
+/// It is intended for opportunistic cache reads from latency-sensitive paths.
+pub async fn file_out_if_index_ready_async(
+    disk: block::DeviceHandle,
+    name: &str,
+) -> Result<Option<Vec<u8>>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+
+    let disk_id = disk.id();
+    let record = file_record_cache_lookup(disk_id, name);
+    let record = match record {
+        Some(v) => Some(v),
+        None => {
+            let mut should_warm = false;
+            let entry_lba = {
+                let roots = ROOTS.lock();
+                match roots.iter().find(|m| m.disk_id == disk_id) {
+                    Some(mount) => match &mount.index {
+                        Some(index) => index.get(name.as_bytes()).map(|entry| entry.entry_lba),
+                        None => {
+                            should_warm = !mount.building_index;
+                            None
+                        }
+                    },
+                    None => return Ok(None),
+                }
+            };
+
+            if let Some(entry_lba) = entry_lba {
+                let rec = trueos_fs::get_file_record_at(&io, &params, entry_lba, name)
+                    .await
+                    .map_err(map_engine_err)?;
+                if let Some(r) = rec {
+                    file_record_cache_insert(disk_id, name, r);
+                    Some(r)
+                } else {
+                    None
+                }
+            } else {
+                if should_warm {
+                    request_warm_index(disk_id);
+                }
+                None
+            }
+        }
+    };
+
+    if let Some(rec) = record {
+        return trueos_fs::read_file_at_record(&io, &params, &rec)
+            .await
+            .map_err(map_engine_err);
+    }
+
+    Ok(None)
+}
+
 /// Async TRUEOSFS: read file metadata.
 pub async fn file_info_async(
     disk: block::DeviceHandle,
