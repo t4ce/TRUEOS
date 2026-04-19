@@ -99,6 +99,16 @@ fn cpu_slot_table() -> &'static [CpuSlot] {
 }
 
 #[inline]
+pub fn cpu_slot_table_span() -> Option<(usize, usize)> {
+    let len = CPU_SLOT_LEN.load(Ordering::Acquire);
+    let ptr = CPU_SLOT_TABLE.load(Ordering::Acquire);
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    Some((ptr as usize, len.saturating_mul(core::mem::size_of::<CpuSlot>())))
+}
+
+#[inline]
 pub fn slot_for_lapic_id(lapic_id: u32) -> usize {
     let slots = cpu_slot_table();
     if !slots.is_empty() {

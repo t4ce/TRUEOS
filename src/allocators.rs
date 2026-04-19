@@ -78,7 +78,10 @@ unsafe fn read_return_address(depth: usize) -> usize {
 }
 
 #[inline]
-fn trace_alloc_entry(layout: Layout, head: Option<NonNull<FreeBlock>>) {
+fn trace_alloc_entry(trace_enabled: bool, layout: Layout, head: Option<NonNull<FreeBlock>>) {
+    if !trace_enabled {
+        return;
+    }
     ALLOC_TRACE_SEQ.fetch_add(1, Ordering::AcqRel);
     ALLOC_TRACE_CALLER.store(unsafe { read_return_address(2) }, Ordering::Release);
     ALLOC_TRACE_RIP1.store(unsafe { read_return_address(3) }, Ordering::Release);
@@ -99,11 +102,15 @@ fn trace_alloc_entry(layout: Layout, head: Option<NonNull<FreeBlock>>) {
 
 #[inline]
 fn trace_alloc_block(
+    trace_enabled: bool,
     block: &FreeBlock,
     block_start: usize,
     payload_start: usize,
     aligned_used: usize,
 ) {
+    if !trace_enabled {
+        return;
+    }
     ALLOC_TRACE_STAGE.store(ALLOC_TRACE_STAGE_BLOCK, Ordering::Release);
     ALLOC_TRACE_BLOCK_PTR.store(block_start, Ordering::Release);
     ALLOC_TRACE_BLOCK_SIZE.store(block.size, Ordering::Release);
@@ -116,17 +123,26 @@ fn trace_alloc_block(
 }
 
 #[inline]
-fn trace_alloc_compare() {
+fn trace_alloc_compare(trace_enabled: bool) {
+    if !trace_enabled {
+        return;
+    }
     ALLOC_TRACE_STAGE.store(ALLOC_TRACE_STAGE_COMPARE, Ordering::Release);
 }
 
 #[inline]
-fn trace_alloc_success() {
+fn trace_alloc_success(trace_enabled: bool) {
+    if !trace_enabled {
+        return;
+    }
     ALLOC_TRACE_STAGE.store(ALLOC_TRACE_STAGE_SUCCESS, Ordering::Release);
 }
 
 #[inline]
-fn trace_alloc_invalid_ptr(block_ptr: usize) {
+fn trace_alloc_invalid_ptr(trace_enabled: bool, block_ptr: usize) {
+    if !trace_enabled {
+        return;
+    }
     ALLOC_TRACE_STAGE.store(ALLOC_TRACE_STAGE_INVALID_PTR, Ordering::Release);
     ALLOC_TRACE_BLOCK_PTR.store(block_ptr, Ordering::Release);
 }
@@ -227,18 +243,19 @@ impl FreeList {
         self.initialized = true;
     }
 
-    unsafe fn alloc(&mut self, layout: Layout) -> *mut u8 {
+    unsafe fn alloc(&mut self, domain: AllocDomain, layout: Layout) -> *mut u8 {
         if !self.initialized {
             self.init_once();
         }
 
+        let trace_enabled = domain != AllocDomain::HvGuest;
         let mut current = self.head;
-        trace_alloc_entry(layout, current);
+        trace_alloc_entry(trace_enabled, layout, current);
         let mut prev: Option<NonNull<FreeBlock>> = None;
 
         while let Some(mut block_ptr) = current {
             if !self.is_plausible_free_block_ptr(block_ptr.as_ptr() as usize) {
-                trace_alloc_invalid_ptr(block_ptr.as_ptr() as usize);
+                trace_alloc_invalid_ptr(trace_enabled, block_ptr.as_ptr() as usize);
                 return null_mut();
             }
             let block = block_ptr.as_mut();
@@ -269,8 +286,8 @@ impl FreeList {
             // If we split, the next free-list node must be properly aligned for `FreeBlock`.
             // This padding is accounted to the allocated block size.
             let aligned_used = align_up(total_used, align_of::<FreeBlock>());
-            trace_alloc_block(block, block_start, payload_start, aligned_used);
-            trace_alloc_compare();
+            trace_alloc_block(trace_enabled, block, block_start, payload_start, aligned_used);
+            trace_alloc_compare(trace_enabled);
 
             if aligned_used > block.size {
                 prev = Some(block_ptr);
@@ -308,10 +325,10 @@ impl FreeList {
             (tag_ptr as *mut AllocTag).write(AllocTag {
                 block_start,
                 block_size: alloc_block_size,
-                domain: AllocDomain::Host as u8,
+                domain: domain as u8,
             });
 
-            trace_alloc_success();
+            trace_alloc_success(trace_enabled);
             return payload_start as *mut u8;
         }
 
@@ -426,6 +443,13 @@ fn alloc_domain_from_tag(tag: &AllocTag) -> AllocDomain {
 }
 
 fn current_alloc_domain() -> AllocDomain {
+    // During the first Hull guest entry, avoid CPUID/slot discovery entirely.
+    // The guest shares the same image as the host, so the host-side boot-armed
+    // flag is visible here and is enough to route early allocations to the
+    // guest allocator without touching percpu discovery.
+    if crate::hv::guest_boot_active() {
+        return AllocDomain::HvGuest;
+    }
     let slot = crate::percpu::current_slot_via_cpuid();
     if slot >= 64 {
         return AllocDomain::Host;
@@ -521,7 +545,7 @@ unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         init_fallback_regions();
         let domain = current_alloc_domain();
-        let ptr = allocator_for_domain(domain).lock().alloc(layout);
+        let ptr = allocator_for_domain(domain).lock().alloc(domain, layout);
         if !ptr.is_null() {
             let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
             (*tag_ptr).domain = domain as u8;
@@ -547,7 +571,7 @@ static GLOBAL_ALLOCATOR: Allocator = Allocator;
 pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
     init_fallback_regions();
     let domain = current_alloc_domain();
-    let ptr = allocator_for_domain(domain).lock().alloc(layout);
+    let ptr = allocator_for_domain(domain).lock().alloc(domain, layout);
     if !ptr.is_null() {
         let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
         (*tag_ptr).domain = domain as u8;

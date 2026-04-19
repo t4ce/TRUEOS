@@ -19,8 +19,9 @@ pub const GUEST_HIGH_IMAGE_PT_COUNT: usize = 1024;
 pub const GUEST_HEAP_PD_COUNT: usize = 8;
 pub const GUEST_HIGH_IMAGE_MAX_BYTES: u64 = GUEST_HIGH_IMAGE_PT_COUNT as u64 * PAGE_SIZE_2M;
 pub const ELF64_HEADER_LEN: usize = 64;
-pub const EPT_PDPT_ENTRIES: usize = 4;
-pub const EPT_PD_ENTRIES: usize = 512;
+const EPT_ROOT_PML4_INDEX: usize = 0;
+const EPT_DYNAMIC_PD_CAP: usize = 16;
+const EPT_DYNAMIC_PT_CAP: usize = 128;
 
 // Page table entry flags
 pub const PT_ENTRY_PRESENT: u64 = 1 << 0;
@@ -36,7 +37,8 @@ pub struct GuestPage(pub [u64; 512]);
 
 static mut EPT_PML4: EptPage = EptPage([0u64; 512]);
 static mut EPT_PDPT: EptPage = EptPage([0u64; 512]);
-static mut EPT_PD: [EptPage; EPT_PDPT_ENTRIES] = [EptPage([0u64; 512]); EPT_PDPT_ENTRIES];
+static mut EPT_PDS: [EptPage; EPT_DYNAMIC_PD_CAP] = [EptPage([0u64; 512]); EPT_DYNAMIC_PD_CAP];
+static mut EPT_PTS: [EptPage; EPT_DYNAMIC_PT_CAP] = [EptPage([0u64; 512]); EPT_DYNAMIC_PT_CAP];
 
 // EPTP list for VMFUNC leaf-0 (EPTP switching): 512 slots × 8 bytes = one 4K page.
 // Slot 0 = current identity EPT; remaining slots zero (unused).
@@ -104,35 +106,209 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
         core::ptr::write_bytes(pml4 as *mut u8, 0, PAGE_SIZE_4K);
         core::ptr::write_bytes(pdpt as *mut u8, 0, PAGE_SIZE_4K);
     }
-    for i in 0..EPT_PDPT_ENTRIES {
-        let pd = unsafe { core::ptr::addr_of_mut!(EPT_PD[i].0) };
+    for i in 0..EPT_DYNAMIC_PD_CAP {
+        let pd = unsafe { core::ptr::addr_of_mut!(EPT_PDS[i].0) };
         unsafe { core::ptr::write_bytes(pd as *mut u8, 0, PAGE_SIZE_4K) };
+    }
+    for i in 0..EPT_DYNAMIC_PT_CAP {
+        let pt = unsafe { core::ptr::addr_of_mut!(EPT_PTS[i].0) };
+        unsafe { core::ptr::write_bytes(pt as *mut u8, 0, PAGE_SIZE_4K) };
     }
 
     let pml4_pa = kernel_va_to_pa(pml4 as u64).ok_or("ept pml4 pa")?;
     let pdpt_pa = kernel_va_to_pa(pdpt as u64).ok_or("ept pdpt pa")?;
     unsafe {
-        (*pml4)[0] = (pdpt_pa & 0x000F_FFFF_FFFF_F000) | 0x7;
+        (*pml4)[EPT_ROOT_PML4_INDEX] = (pdpt_pa & 0x000F_FFFF_FFFF_F000) | 0x7;
+    }
+    let mut next_pd = 0usize;
+    let mut next_pt = 0usize;
+
+    let (kernel_virt_base, kernel_phys_base) =
+        crate::limine::executable_address_bases().ok_or("ept kernel image base")?;
+    let kernel_phys_end = kernel_phys_base
+        .checked_add(kernel_image_end_va().saturating_sub(kernel_virt_base))
+        .ok_or("ept kernel image end")?;
+    map_ept_identity_span(
+        pdpt,
+        &mut next_pd,
+        &mut next_pt,
+        kernel_phys_base,
+        kernel_phys_end.saturating_sub(kernel_phys_base),
+        "kernel-image",
+    )?;
+
+    if let Some(stack) = active_guest_stack_arena() {
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            stack.phys_start,
+            stack.length as u64,
+            "guest-stack",
+        )?;
     }
 
-    for i in 0..EPT_PDPT_ENTRIES {
-        let pd = unsafe { core::ptr::addr_of!(EPT_PD[i].0) };
-        let pd_pa = kernel_va_to_pa(pd as u64).ok_or("ept pd pa")?;
-        unsafe {
-            (*pdpt)[i] = (pd_pa & 0x000F_FFFF_FFFF_F000) | 0x7;
-        }
-        for j in 0..EPT_PD_ENTRIES {
-            let gpa = ((i as u64) << 30) | ((j as u64) << 21);
-            let pde = (gpa & 0x000F_FFFF_FFE0_0000) | 0x7 | (1 << 7) | (6 << 3);
-            unsafe {
-                (*core::ptr::addr_of_mut!(EPT_PD[i].0))[j] = pde;
-            }
-        }
+    if let Some(comm_pa) = crate::hv::vmcall::pa() {
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            comm_pa,
+            PAGE_SIZE_4K as u64,
+            "comm-page",
+        )?;
+    }
+
+    if let Some((cpu_slot_table_va, cpu_slot_table_len)) = crate::percpu::cpu_slot_table_span() {
+        let cpu_slot_table_pa =
+            host_va_to_pa(cpu_slot_table_va as u64).ok_or("ept percpu slot table pa")?;
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            cpu_slot_table_pa,
+            cpu_slot_table_len as u64,
+            "percpu-slot-table",
+        )?;
+    }
+
+    let host_heap = crate::allocators::heap_stats();
+    if host_heap.initialized
+        && host_heap.phys_start != 0
+        && host_heap.heap_end > host_heap.heap_start
+    {
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            host_heap.phys_start as u64,
+            host_heap.heap_end.saturating_sub(host_heap.heap_start) as u64,
+            "host-heap",
+        )?;
+    }
+
+    let guest_heap = crate::allocators::hv_guest_heap_stats();
+    if guest_heap.initialized
+        && guest_heap.phys_start != 0
+        && guest_heap.heap_end > guest_heap.heap_start
+    {
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            guest_heap.phys_start as u64,
+            guest_heap.heap_end.saturating_sub(guest_heap.heap_start) as u64,
+            "hv-guest-heap",
+        )?;
     }
 
     let eptp = (pml4_pa & 0x000F_FFFF_FFFF_F000) | 6 | (3 << 3);
-    hvlogf(format_args!("hv: vm1 reporting: ept v1 identity map ready eptp=0x{:016X}", eptp));
+    hvlogf(format_args!(
+        "hv: vm1 reporting: ept v1 sparse map ready eptp=0x{:016X} pd_used={} pt_used={}",
+        eptp,
+        next_pd,
+        next_pt,
+    ));
     Ok(eptp)
+}
+
+fn map_ept_identity_span(
+    pdpt: *mut [u64; 512],
+    next_pd: &mut usize,
+    next_pt: &mut usize,
+    phys_start: u64,
+    bytes: u64,
+    label: &str,
+) -> Result<(), &'static str> {
+    if bytes == 0 {
+        return Ok(());
+    }
+
+    let start = page_align_down(phys_start);
+    let end = page_align_up_4k(phys_start.checked_add(bytes).ok_or("ept span overflow")?);
+    if pml4_index(start) != EPT_ROOT_PML4_INDEX || pml4_index(end.saturating_sub(1)) != EPT_ROOT_PML4_INDEX {
+        return Err("ept pml4 range");
+    }
+
+    let mut gpa = start;
+    while gpa < end {
+        let pdpt_idx = pdpt_index(gpa);
+        let pd = ensure_ept_table_entry(
+            pdpt,
+            pdpt_idx,
+            next_pd,
+            unsafe { core::ptr::addr_of_mut!(EPT_PDS[0].0) },
+            EPT_DYNAMIC_PD_CAP,
+            "ept pd pool",
+        )?;
+        let pt = ensure_ept_table_entry(
+            pd,
+            pd_index(gpa),
+            next_pt,
+            unsafe { core::ptr::addr_of_mut!(EPT_PTS[0].0) },
+            EPT_DYNAMIC_PT_CAP,
+            "ept pt pool",
+        )?;
+        unsafe {
+            (*pt)[pt_index(gpa)] = (gpa & 0x000F_FFFF_FFFF_F000) | 0x7 | (6 << 3);
+        }
+        gpa = gpa.checked_add(PAGE_SIZE_4K as u64).ok_or("ept gpa overflow")?;
+    }
+
+    hvlogf(format_args!(
+        "hv: vm1 reporting: ept span {} phys=0x{:016X}..0x{:016X}",
+        label,
+        start,
+        end
+    ));
+    Ok(())
+}
+
+fn ensure_ept_table_entry(
+    table: *mut [u64; 512],
+    index: usize,
+    next_slot: &mut usize,
+    pool_base: *mut [u64; 512],
+    pool_cap: usize,
+    err: &'static str,
+) -> Result<*mut [u64; 512], &'static str> {
+    let existing = unsafe { (*table)[index] };
+    if existing & 0x7 != 0 {
+        let pa = existing & 0x000F_FFFF_FFFF_F000;
+        return ept_table_ptr_from_pa(pool_base, pool_cap, pa).ok_or(err);
+    }
+
+    if *next_slot >= pool_cap {
+        return Err(err);
+    }
+
+    let slot_ptr = unsafe { pool_base.add(*next_slot) };
+    unsafe {
+        core::ptr::write_bytes(slot_ptr as *mut u8, 0, PAGE_SIZE_4K);
+    }
+    let slot_pa = kernel_va_to_pa(slot_ptr as u64).ok_or(err)?;
+    unsafe {
+        (*table)[index] = (slot_pa & 0x000F_FFFF_FFFF_F000) | 0x7;
+    }
+    *next_slot += 1;
+    Ok(slot_ptr)
+}
+
+fn ept_table_ptr_from_pa(
+    pool_base: *mut [u64; 512],
+    pool_cap: usize,
+    target_pa: u64,
+) -> Option<*mut [u64; 512]> {
+    let mut i = 0usize;
+    while i < pool_cap {
+        let slot_ptr = unsafe { pool_base.add(i) };
+        let slot_pa = kernel_va_to_pa(slot_ptr as u64)?;
+        if slot_pa == target_pa {
+            return Some(slot_ptr);
+        }
+        i += 1;
+    }
+    None
 }
 
 pub fn guest_launch_rip() -> u64 {
@@ -707,6 +883,14 @@ fn page_align_down(addr: u64) -> u64 {
     addr & !((PAGE_SIZE_4K as u64) - 1)
 }
 
+fn page_align_up_4k(addr: u64) -> u64 {
+    if addr & ((PAGE_SIZE_4K as u64) - 1) == 0 {
+        addr
+    } else {
+        (addr + PAGE_SIZE_4K as u64) & !((PAGE_SIZE_4K as u64) - 1)
+    }
+}
+
 fn page_align_down_2m(addr: u64) -> u64 {
     addr & !(PAGE_SIZE_2M - 1)
 }
@@ -807,80 +991,99 @@ fn map_guest_heap_span(
     pt_slot: &mut usize,
 ) -> Result<(), &'static str> {
     let heap = crate::allocators::heap_stats();
-    if !heap.initialized || heap.heap_start == 0 || heap.heap_end <= heap.heap_start {
+    let hv_guest_heap = crate::allocators::hv_guest_heap_stats();
+    let ranges = [
+        ("heap", heap.initialized, heap.heap_start as u64, heap.heap_end as u64),
+        (
+            "hv-guest-heap",
+            hv_guest_heap.initialized,
+            hv_guest_heap.heap_start as u64,
+            hv_guest_heap.heap_end as u64,
+        ),
+    ];
+    if !ranges
+        .iter()
+        .any(|(_, initialized, start, end)| *initialized && *start != 0 && *end > *start)
+    {
         return Ok(());
-    }
-
-    let start = heap.heap_start as u64;
-    let end = heap.heap_end as u64;
-    if pml4_index(start) != pml4_index(end.saturating_sub(1)) {
-        return Err("guest heap pml4 range");
     }
 
     let heap_pdpt = unsafe { core::ptr::addr_of_mut!(GUEST_HEAP_PDPT.0) };
     let heap_pdpt_pa = kernel_va_to_pa(heap_pdpt as u64).ok_or("guest heap pdpt pa")?;
-    map_table_entry(pml4, pml4_index(start), heap_pdpt_pa);
-
-    let start_chunk_base = page_align_down_2m(start);
-    let end_aligned = page_align_up_2m(end);
     let mut heap_pd_slots = [usize::MAX; 512];
     let mut heap_pd_count = 0usize;
-    let total_chunks = ((end_aligned.saturating_sub(start_chunk_base)) / PAGE_SIZE_2M) as usize;
-    let mut mapped_chunks = 0usize;
 
-    let mut va = start_chunk_base;
-    while va < end_aligned {
-        if *pt_slot >= GUEST_HIGH_IMAGE_PT_COUNT {
-            return Err("guest image pt pool");
+    for (_, initialized, start, end) in ranges {
+        if !initialized || start == 0 || end <= start {
+            continue;
         }
-        let pdpt_idx = pdpt_index(va);
-        let pd_slot = if heap_pd_slots[pdpt_idx] != usize::MAX {
-            heap_pd_slots[pdpt_idx]
-        } else {
-            if heap_pd_count >= GUEST_HEAP_PD_COUNT {
-                return Err("guest heap pd pool");
-            }
-            let slot = heap_pd_count;
-            let heap_pd = unsafe { core::ptr::addr_of_mut!(GUEST_HEAP_PDS[slot].0) };
-            let heap_pd_pa = kernel_va_to_pa(heap_pd as u64).ok_or("guest heap pd pa")?;
-            map_table_entry(heap_pdpt, pdpt_idx, heap_pd_pa);
-            heap_pd_slots[pdpt_idx] = slot;
-            heap_pd_count += 1;
-            slot
-        };
-
-        let chunk_start = if va < start { start } else { va };
-        let chunk_end = core::cmp::min(va.saturating_add(PAGE_SIZE_2M), end);
-        if chunk_start < chunk_end {
-            let heap_pd = unsafe { core::ptr::addr_of_mut!(GUEST_HEAP_PDS[pd_slot].0) };
-            let heap_pt = unsafe { core::ptr::addr_of_mut!(GUEST_IMAGE_PTS[*pt_slot].0) };
-            let heap_pt_pa = kernel_va_to_pa(heap_pt as u64).ok_or("guest heap pt pa")?;
-            map_table_entry(heap_pd, pd_index(va), heap_pt_pa);
-            let phys = host_va_to_pa(chunk_start).ok_or("guest heap pa")?;
-            map_region_4k(
-                heap_pt,
-                chunk_start,
-                phys,
-                chunk_end.saturating_sub(chunk_start) as usize,
-                PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
-            )?;
-            *pt_slot += 1;
-            mapped_chunks += 1;
+        if pml4_index(start) != pml4_index(end.saturating_sub(1)) {
+            return Err("guest heap pml4 range");
         }
-
-        va = va
-            .checked_add(PAGE_SIZE_2M)
-            .ok_or("guest heap span overflow")?;
+        map_table_entry(pml4, pml4_index(start), heap_pdpt_pa);
     }
 
-    hvlogf(format_args!(
-        "hv: vm1 reporting: heap map start=0x{:016X} end=0x{:016X} span_mib={} pt_cap={} pt_used={}",
-        start,
-        end,
-        end.saturating_sub(start) / (1024 * 1024),
-        GUEST_HIGH_IMAGE_PT_COUNT,
-        *pt_slot
-    ));
+    for (label, initialized, start, end) in ranges {
+        if !initialized || start == 0 || end <= start {
+            continue;
+        }
+        let start_chunk_base = page_align_down_2m(start);
+        let end_aligned = page_align_up_2m(end);
+
+        let mut va = start_chunk_base;
+        while va < end_aligned {
+            if *pt_slot >= GUEST_HIGH_IMAGE_PT_COUNT {
+                return Err("guest image pt pool");
+            }
+            let pdpt_idx = pdpt_index(va);
+            let pd_slot = if heap_pd_slots[pdpt_idx] != usize::MAX {
+                heap_pd_slots[pdpt_idx]
+            } else {
+                if heap_pd_count >= GUEST_HEAP_PD_COUNT {
+                    return Err("guest heap pd pool");
+                }
+                let slot = heap_pd_count;
+                let heap_pd = unsafe { core::ptr::addr_of_mut!(GUEST_HEAP_PDS[slot].0) };
+                let heap_pd_pa = kernel_va_to_pa(heap_pd as u64).ok_or("guest heap pd pa")?;
+                map_table_entry(heap_pdpt, pdpt_idx, heap_pd_pa);
+                heap_pd_slots[pdpt_idx] = slot;
+                heap_pd_count += 1;
+                slot
+            };
+
+            let chunk_start = if va < start { start } else { va };
+            let chunk_end = core::cmp::min(va.saturating_add(PAGE_SIZE_2M), end);
+            if chunk_start < chunk_end {
+                let heap_pd = unsafe { core::ptr::addr_of_mut!(GUEST_HEAP_PDS[pd_slot].0) };
+                let heap_pt = unsafe { core::ptr::addr_of_mut!(GUEST_IMAGE_PTS[*pt_slot].0) };
+                let heap_pt_pa = kernel_va_to_pa(heap_pt as u64).ok_or("guest heap pt pa")?;
+                map_table_entry(heap_pd, pd_index(va), heap_pt_pa);
+                let phys = host_va_to_pa(chunk_start).ok_or("guest heap pa")?;
+                map_region_4k(
+                    heap_pt,
+                    chunk_start,
+                    phys,
+                    chunk_end.saturating_sub(chunk_start) as usize,
+                    PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
+                )?;
+                *pt_slot += 1;
+            }
+
+            va = va
+                .checked_add(PAGE_SIZE_2M)
+                .ok_or("guest heap span overflow")?;
+        }
+
+        hvlogf(format_args!(
+            "hv: vm1 reporting: {} map start=0x{:016X} end=0x{:016X} span_mib={} pt_cap={} pt_used={}",
+            label,
+            start,
+            end,
+            end.saturating_sub(start) / (1024 * 1024),
+            GUEST_HIGH_IMAGE_PT_COUNT,
+            *pt_slot
+        ));
+    }
     Ok(())
 }
 
