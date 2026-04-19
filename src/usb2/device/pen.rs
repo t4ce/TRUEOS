@@ -960,7 +960,7 @@ pub(crate) async fn maybe_start_mass_storage(
         return true;
     }
 
-    match spawner.spawn(mass_storage_task(
+    match mass_storage_task(
         device,
         controller_id,
         target,
@@ -968,8 +968,9 @@ pub(crate) async fn maybe_start_mass_storage(
         io_profile,
         topology.port_speed,
         uas_candidate_count,
-    )) {
-        Ok(()) => {
+    ) {
+        Ok(token) => {
+            spawner.spawn(token);
             crate::log!(
                 "crabusb: mass {:04X}:{:04X} handoff if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} transport={} profile={} speed={:?} uas_candidates={}\n",
                 vendor_id,

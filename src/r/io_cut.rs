@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use parry2d::math::Point;
+use parry2d::math::Vector;
 
 pub(super) fn clip_rgb_triangles_to_scissor(
     src: &[u8],
@@ -22,11 +22,11 @@ pub(super) fn clip_rgb_triangles_to_scissor(
 }
 
 #[inline]
-fn convex_cross(o: Point<f32>, a: Point<f32>, b: Point<f32>) -> f32 {
+fn convex_cross(o: Vector, a: Vector, b: Vector) -> f32 {
     (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
 }
 
-pub(crate) fn convex_hull_points(points: &[Point<f32>]) -> Vec<Point<f32>> {
+pub(crate) fn convex_hull_points(points: &[Vector]) -> Vec<Vector> {
     let mut sorted = points.to_vec();
     sorted.sort_by(|a, b| {
         a.x.partial_cmp(&b.x)

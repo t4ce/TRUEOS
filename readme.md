@@ -23,6 +23,7 @@ cargo install fmt cargo-outdated cargo-edit --locked
 snap install code-insiders --classic
 rustup component add clippy
 rustup toolchain install nightly --profile minimal --component rust-src,rustfmt,rust-analyzer,llvm-tools-preview
+cargo install cargo-edit --locked
 
 git config --global user.email "jonasb@post.com"
 git config --global user.name "t4ce"

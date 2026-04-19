@@ -1729,7 +1729,7 @@ impl VirglGfxBackend {
     }
 
     pub fn init(
-        _framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+        _framebuffers: Option<&'static crate::limine::FramebufferResponse>,
     ) -> Option<Self> {
         let mut gpu = VirtioGpu3d::init_first()?;
         let mut display = None;

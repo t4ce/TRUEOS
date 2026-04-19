@@ -162,9 +162,9 @@ pub extern "C" fn kmain() -> ! {
     {
         crate::log!(
             "Boot Performance: reset={}_usec init={}_usec exec={}_usec\n",
-            perf.reset_usec(),
-            perf.init_usec(),
-            perf.exec_usec()
+            perf.reset_usec,
+            perf.init_usec,
+            perf.exec_usec
         );
     }
     let smp_resp = limine::smp_response().unwrap();
@@ -220,15 +220,16 @@ pub extern "C" fn kmain() -> ! {
 fn _loop(
     executor: &'static Executor,
     _spawner: Spawner,
-    resp: &'static ::limine::response::MpResponse,
+    resp: &'static crate::limine::MpResponse,
 ) -> ! {
     resp.cpus()
         .iter()
         .filter(|c| c.lapic_id != percpu::this_cpu().lapic_id())
-        .for_each(|c| c.goto_address.write(cpu::ap_start));
+        .for_each(|c| c.bootstrap(cpu::ap_start, 0));
 
-    if let Err(e) = _spawner.spawn(crate::r::spawn_service::spawn_service_task(_spawner)) {
-        crate::log!("spawn-svc: spawn failed: {:?}\n", e);
+    match crate::r::spawn_service::spawn_service_task(_spawner) {
+        Ok(token) => _spawner.spawn(token),
+        Err(e) => crate::log!("spawn-svc: spawn failed: {:?}\n", e),
     }
 
     let mut counter: u64 = 0;

@@ -1,5 +1,5 @@
 use crate::{exceptions, globalog, percpu, runtime};
-use ::limine::mp::Cpu as LimineCpu;
+use crate::limine::MpCpu as LimineCpu;
 use alloc::vec::Vec;
 use core::arch::x86_64::__cpuid;
 use core::ptr::null_mut;
@@ -163,8 +163,9 @@ fn enter_ap_runtime(spawner: Spawner) -> ! {
     let profile = register_current_worker_spawner(spawner)
         .unwrap_or_else(|| CpuProfile::current().unwrap_or(CpuProfile::new(0, 0, 0)));
 
-    if let Err(e) = spawner.spawn(ap_heartbeat_task()) {
-        crate::log!("ap: heartbeat task spawn failed: {:?}\n", e);
+    match ap_heartbeat_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(e) => crate::log!("ap: heartbeat task spawn failed: {:?}\n", e),
     }
     crate::smp::mark_online();
     exceptions::load_this_cpu();
@@ -219,8 +220,12 @@ pub fn restart_current_worker_ap_from_panic() -> ! {
     let ex = percpu::init_executor();
     let spawner = ex.spawner();
     let restart_count = ATOMIC_BOMB_RESTARTS.fetch_add(1, Ordering::AcqRel) + 1;
-    if let Err(e) = spawner.spawn(atomic_bomb_after_restart_task(restart_count)) {
-        crate::log!("PANIC PANIC PANIC: failed to spawn atomic_bomb post-restart task: {:?}\n", e);
+    match atomic_bomb_after_restart_task(restart_count) {
+        Ok(token) => spawner.spawn(token),
+        Err(e) => crate::log!(
+            "PANIC PANIC PANIC: failed to spawn atomic_bomb post-restart task: {:?}\n",
+            e
+        ),
     }
     enter_ap_runtime(spawner)
 }

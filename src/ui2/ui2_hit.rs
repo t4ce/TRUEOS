@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use parry2d::math::{Isometry, Vector};
+use parry2d::math::{Pose, Vector};
 use parry2d::query;
 use parry2d::shape::{Ball, Cuboid};
 use spin::{Mutex, Once};
@@ -272,8 +272,8 @@ fn hit_entry_intersects_cursor(entry: &Ui2HitEntry, cursor_x: f32, cursor_y: f32
     let cursor = Ball::new(UI2_CURSOR_HIT_RADIUS_PX.max(0.5));
     let rect =
         Cuboid::new(Vector::new((entry.rect.w * 0.5).max(0.5), (entry.rect.h * 0.5).max(0.5)));
-    let cursor_iso = Isometry::translation(cursor_x, cursor_y);
-    let rect_iso = Isometry::translation(
+    let cursor_iso = Pose::translation(cursor_x, cursor_y);
+    let rect_iso = Pose::translation(
         entry.rect.x + (entry.rect.w * 0.5),
         entry.rect.y + (entry.rect.h * 0.5),
     );

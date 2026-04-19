@@ -1,7 +1,7 @@
 use alloc::{string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_executor::{SendSpawner, SpawnError, Spawner};
+use embassy_executor::{SendSpawner, SpawnError, SpawnToken, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
@@ -179,20 +179,23 @@ fn boot_probe_ms() -> u64 {
 }
 
 #[inline]
-fn spawn_local(
+fn spawn_local<S>(
     spawner: Spawner,
-    task: impl FnOnce(Spawner) -> Result<(), SpawnError>,
+    task: impl FnOnce(Spawner) -> Result<SpawnToken<S>, SpawnError>,
 ) -> SpawnAttempt {
     match task(spawner) {
-        Ok(()) => SpawnAttempt::Spawned,
+        Ok(token) => {
+            spawner.spawn(token);
+            SpawnAttempt::Spawned
+        }
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
 
 #[inline]
-fn spawn_on_ap1(
+fn spawn_on_ap1<S: Send>(
     spawner: Spawner,
-    task: impl FnOnce(SendSpawner) -> Result<(), SpawnError>,
+    task: impl FnOnce(SendSpawner) -> Result<SpawnToken<S>, SpawnError>,
 ) -> SpawnAttempt {
     let _ = spawner; // keep signature stable; this task intentionally targets AP1.
     let Some(profile) = crate::cpu::CpuProfile::for_slot(1) else {
@@ -202,15 +205,18 @@ fn spawn_on_ap1(
         return SpawnAttempt::Skipped;
     };
     match task(ap1_spawner) {
-        Ok(()) => SpawnAttempt::Spawned,
+        Ok(token) => {
+            ap1_spawner.spawn(token);
+            SpawnAttempt::Spawned
+        }
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
 
 #[inline]
-fn spawn_on_worker(
+fn spawn_on_worker<S: Send>(
     spawner: Spawner,
-    task: impl FnOnce(SendSpawner) -> Result<(), SpawnError>,
+    task: impl FnOnce(SendSpawner) -> Result<SpawnToken<S>, SpawnError>,
 ) -> SpawnAttempt {
     let Some(worker_spawner) = trueos_qjs::workers::pick_background_spawner() else {
         let _ = spawner;
@@ -218,17 +224,20 @@ fn spawn_on_worker(
     };
     let _ = spawner;
     match task(worker_spawner) {
-        Ok(()) => SpawnAttempt::Spawned,
+        Ok(token) => {
+            worker_spawner.spawn(token);
+            SpawnAttempt::Spawned
+        }
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
 
 fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::wait::job_runner_task()))
+    spawn_local(spawner, |_spawner| crate::wait::job_runner_task())
 }
 
 fn spawn_globalog_persist_once(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::globalog::persist_once_task()))
+    spawn_local(spawner, |_spawner| crate::globalog::persist_once_task())
 }
 
 fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
@@ -237,8 +246,9 @@ fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Spawned;
     }
 
-    match spawner.spawn(trueos_qjs::async_fs::async_fs_service_task()) {
-        Ok(()) => {
+    match trueos_qjs::async_fs::async_fs_service_task() {
+        Ok(token) => {
+            spawner.spawn(token);
             crate::r::readiness::set(crate::r::readiness::QJS_ASYNC_FS_READY);
             SpawnAttempt::Spawned
         }
@@ -250,17 +260,15 @@ fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::r::fs::trueosfs::mount_service_task()))
+    spawn_local(spawner, |_spawner| crate::r::fs::trueosfs::mount_service_task())
 }
 
 fn spawn_hv_vm_store(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(crate::hv::store::vm_store_task()))
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::hv::store::vm_store_task())
 }
 
 fn spawn_hv_vm_store_net(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::hv::store::vm_store_replication_task())
-    })
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::hv::store::vm_store_replication_task())
 }
 
 fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
@@ -270,8 +278,9 @@ fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     }
     for idx in 0..count {
-        if let Err(e) = spawner.spawn(crate::net::adapter::net_poll_task(idx)) {
-            crate::log!("net: spawn net_poll_task({}) failed: {:?}\n", idx, e);
+        match crate::net::adapter::net_poll_task(idx) {
+            Ok(token) => spawner.spawn(token),
+            Err(e) => crate::log!("net: spawn net_poll_task({}) failed: {:?}\n", idx, e),
         }
     }
     SpawnAttempt::Spawned
@@ -285,8 +294,9 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
 
     let mut spawned_any = false;
     for idx in 0..count {
-        match spawner.spawn(crate::net::adapter::net_service_task(idx)) {
-            Ok(()) => {
+        match crate::net::adapter::net_service_task(idx) {
+            Ok(token) => {
+                spawner.spawn(token);
                 spawned_any = true;
             }
             Err(e) => {
@@ -306,55 +316,55 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::net::tls_socket::tls_socket_service_task()))
+    spawn_local(spawner, |_spawner| crate::net::tls_socket::tls_socket_service_task())
 }
 
 fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::r::net::ntp::ntp_sync_task()))
+    spawn_local(spawner, |_spawner| crate::r::net::ntp::ntp_sync_task())
 }
 
 fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::r::net::sntp::sntp_service_task()))
+    spawn_local(spawner, |_spawner| crate::r::net::sntp::sntp_service_task())
 }
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_net_tcp_shell::net_shell_task()))
+    spawn_local(spawner, |_spawner| crate::tst_net_tcp_shell::net_shell_task())
 }
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::globalog::logtotcp::logtotcp_task()))
+    spawn_local(spawner, |_spawner| crate::globalog::logtotcp::logtotcp_task())
 }
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(trueos_qjs::ai_task::run_once()))
+    spawn_local(spawner, |_spawner| trueos_qjs::ai_task::run_once())
 }
 
 fn spawn_html_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_html_demo::html_demo_task()))
+    spawn_local(spawner, |_spawner| crate::tst_html_demo::html_demo_task())
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_http_trueosfs::http_trueosfs_task()))
+    spawn_local(spawner, |_spawner| crate::tst_http_trueosfs::http_trueosfs_task())
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_ws_time::ws_time_task()))
+    spawn_local(spawner, |_spawner| crate::tst_ws_time::ws_time_task())
 }
 
 fn spawn_esp_gate(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::r::net::esp::esp_gate_task()))
+    spawn_local(spawner, |_spawner| crate::r::net::esp::esp_gate_task())
 }
 
 fn spawn_esp_gate_registry(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::r::net::esp::esp_gate_registry_task()))
+    spawn_local(spawner, |_spawner| crate::r::net::esp::esp_gate_registry_task())
 }
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::r::net::ftp::ftp_server_task()))
+    spawn_local(spawner, |_spawner| crate::r::net::ftp::ftp_server_task())
 }
 
 fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::tga::tga_task()))
+    spawn_local(spawner, |_spawner| crate::tga::tga_task())
 }
 
 #[embassy_executor::task]
@@ -392,7 +402,7 @@ async fn gfx_virgl_ready_task() {
 }
 
 fn spawn_gfx_virgl_ready_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(gfx_virgl_ready_task()))
+    spawn_local(spawner, |_spawner| gfx_virgl_ready_task())
 }
 
 #[embassy_executor::task]
@@ -405,7 +415,7 @@ async fn gfx_virgl_cursor_overlay_task() {
 }
 
 fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(gfx_virgl_cursor_overlay_task()))
+    spawn_on_ap1(spawner, |_ap1_spawner| gfx_virgl_cursor_overlay_task())
 }
 
 #[embassy_executor::task]
@@ -418,17 +428,15 @@ async fn intel_cursor_service_task() {
 }
 
 fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(intel_cursor_service_task()))
+    spawn_local(spawner, |_spawner| intel_cursor_service_task())
 }
 
 fn spawn_raple_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::rapl::raple_service()))
+    spawn_local(spawner, |_spawner| crate::rapl::raple_service())
 }
 
 fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        ap1_spawner.spawn(crate::r::io::cabi::texture_upload_service_task())
-    })
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::io::cabi::texture_upload_service_task())
 }
 
 #[inline]
@@ -460,7 +468,8 @@ fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     let mut result = SpawnAttempt::Skipped;
     for _ in 0..3 {
         let attempt = spawn_on_worker(spawner, |worker_spawner| {
-            worker_spawner.spawn(crate::tst_html_shack::html_fetch_service())
+            let _ = worker_spawner;
+            crate::tst_html_shack::html_fetch_service()
         });
         if matches!(attempt, SpawnAttempt::Spawned) {
             result = SpawnAttempt::Spawned;
@@ -483,7 +492,8 @@ fn spawn_truesurfer_batch(spawner: Spawner, requested: u32) -> SpawnAttempt {
         };
 
         match spawn_on_worker(spawner, |worker_spawner| {
-            worker_spawner.spawn(trueos_qjs::browser_task::truesurfer_task(browser_instance_id))
+            let _ = worker_spawner;
+            trueos_qjs::browser_task::truesurfer_task(browser_instance_id)
         }) {
             SpawnAttempt::Spawned => {
                 factory.mark_spawned(browser_instance_id);
@@ -525,23 +535,30 @@ pub fn spawn_truesurfer_tab_with_html() -> Option<u32> {
     let mut factory = TRUESURFER_FACTORY.lock();
     let browser_instance_id = factory.next_instance_id()?;
 
-    match trueos_qjs::workers::pick_background_spawner().and_then(|worker_spawner| {
-        worker_spawner
-            .spawn(trueos_qjs::browser_task::truesurfer_task(browser_instance_id))
-            .ok()
-    }) {
-        Some(()) => {
-            factory.mark_spawned(browser_instance_id);
-            crate::r::ui2::signal_hosted_browser_factory_mask(factory.spawned_mask());
-            crate::log!(
-                "truesurfer-factory: handoff-spawned browser_instance_id={} mask={:#x} remaining={}\n",
-                browser_instance_id,
-                factory.spawned_mask(),
-                trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID
-                    .saturating_sub(browser_instance_id)
-            );
-            Some(browser_instance_id)
-        }
+    match trueos_qjs::workers::pick_background_spawner() {
+        Some(worker_spawner) => match trueos_qjs::browser_task::truesurfer_task(browser_instance_id)
+        {
+            Ok(token) => {
+                worker_spawner.spawn(token);
+                factory.mark_spawned(browser_instance_id);
+                crate::r::ui2::signal_hosted_browser_factory_mask(factory.spawned_mask());
+                crate::log!(
+                    "truesurfer-factory: handoff-spawned browser_instance_id={} mask={:#x} remaining={}\n",
+                    browser_instance_id,
+                    factory.spawned_mask(),
+                    trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID
+                        .saturating_sub(browser_instance_id)
+                );
+                Some(browser_instance_id)
+            }
+            Err(_) => {
+                crate::log!(
+                    "truesurfer-factory: handoff-spawn skipped browser_instance_id={}\n",
+                    browser_instance_id
+                );
+                None
+            }
+        },
         None => {
             crate::log!(
                 "truesurfer-factory: handoff-spawn skipped browser_instance_id={}\n",
@@ -561,15 +578,15 @@ fn spawn_truesurfer_factory(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(crate::r::ui2::ui2_task()))
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_task())
 }
 
 fn spawn_ui2_hit(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(crate::r::ui2::ui2_hit_task()))
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_hit_task())
 }
 
 fn spawn_ui2_hosted(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| ap1_spawner.spawn(crate::r::ui2::ui2_hosted_task()))
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_hosted_task())
 }
 
 const UI2_DEMOS_ENABLED: bool = true;
@@ -599,134 +616,155 @@ fn ui2_demo_task_gate() -> bool {
     UI2_DEMOS_ENABLED
 }
 
-fn spawn_ui2_demo_on_worker<F>(spawner: Spawner, spawn: F) -> SpawnAttempt
+fn spawn_ui2_demo_on_worker<S: Send, F>(spawner: Spawner, spawn: F) -> SpawnAttempt
 where
-    F: FnOnce(SendSpawner) -> Result<(), SpawnError>,
+    F: FnOnce(SendSpawner) -> Result<SpawnToken<S>, SpawnError>,
 {
     spawn_on_worker(spawner, spawn)
 }
 
 fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_gfx_tetris::ui2_gfx_tetris_task())
+        let _ = worker_spawner;
+        crate::tst_gfx_tetris::ui2_gfx_tetris_task()
     })
 }
 
 fn spawn_ui2_athlas_half_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_demo_task(0))
+        let _ = worker_spawner;
+        crate::r::ui2::ui2_font_bucketproducer_demo_task(0)
     })
 }
 
 fn spawn_ui2_athlas_third_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_demo_task(3))
+        let _ = worker_spawner;
+        crate::r::ui2::ui2_font_bucketproducer_demo_task(3)
     })
 }
 
 fn spawn_ui2_athlas_1x_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_demo_task(1))
+        let _ = worker_spawner;
+        crate::r::ui2::ui2_font_bucketproducer_demo_task(1)
     })
 }
 
 fn spawn_ui2_athlas_2x_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_demo_task(2))
+        let _ = worker_spawner;
+        crate::r::ui2::ui2_font_bucketproducer_demo_task(2)
     })
 }
 
 fn spawn_ui2_palatino_1x_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_palatino_demo_task())?;
-        worker_spawner.spawn(crate::r::ui2::ui2_font_bucketproducer_palatino_bw_demo_task())
+        let token = crate::r::ui2::ui2_font_bucketproducer_palatino_demo_task()?;
+        worker_spawner.spawn(token);
+        crate::r::ui2::ui2_font_bucketproducer_palatino_bw_demo_task()
     })
 }
 
 fn spawn_ui2_twemoji_1x(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::r::ui2::ui2_font_twemoji_loader_task())
+        let _ = worker_spawner;
+        crate::r::ui2::ui2_font_twemoji_loader_task()
     })
 }
 
 fn spawn_ui2_triangle_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_triangle_demo::ui2_triangle_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_triangle_demo::ui2_triangle_demo_task()
     })
 }
 
 fn spawn_ui2_bgrt_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_bgrt::ui2_bgrt_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_bgrt::ui2_bgrt_demo_task()
     })
 }
 
 fn spawn_ui2_coreticks_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_coreticks_demo::ui2_coreticks_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_coreticks_demo::ui2_coreticks_demo_task()
     })
 }
 
 fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_mandelbrot_demo::ui2_mandelbrot_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_mandelbrot_demo::ui2_mandelbrot_demo_task()
     })
 }
 
 fn spawn_ui2_raple_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_raple_demo::ui2_raple_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_raple_demo::ui2_raple_demo_task()
     })
 }
 
 fn spawn_ui2_petersen_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_petersen_demo::ui2_petersen_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_petersen_demo::ui2_petersen_demo_task()
     })
 }
 
 fn spawn_ui2_particle_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_particle_demo::ui2_particle_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_particle_demo::ui2_particle_demo_task()
     })
 }
 
 fn spawn_ui2_smiley_fountain_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_smiley_fountain_demo::ui2_smiley_fountain_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_smiley_fountain_demo::ui2_smiley_fountain_demo_task()
     })
 }
 
 fn spawn_ui2_shell_demo(spawner: Spawner) -> SpawnAttempt {
-    if let Err(e) = spawner.spawn(crate::shell2::task(spawner, &crate::shell2::UI2_SHELL_BACKEND)) {
-        return SpawnAttempt::Failed(e);
+    match crate::shell2::task(spawner, &crate::shell2::UI2_SHELL_BACKEND) {
+        Ok(token) => spawner.spawn(token),
+        Err(e) => return SpawnAttempt::Failed(e),
     }
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_shell_demo::ui2_shell_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_shell_demo::ui2_shell_demo_task()
     })
 }
 
 fn spawn_ui2_svg_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_svg_demo::ui2_svg_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_svg_demo::ui2_svg_demo_task()
     })
 }
 
 fn spawn_ui2_swarm_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_swarm::ui2_swarm_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_swarm::ui2_swarm_demo_task()
     })
 }
 
 fn spawn_ui2_weather_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_weather_demo::ui2_weather_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_weather_demo::ui2_weather_demo_task()
     })
 }
 
 fn spawn_ui2_chart_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner.spawn(crate::tst_ui2_chart_demo::ui2_chart_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_chart_demo::ui2_chart_demo_task()
     })
 }
 
@@ -738,16 +776,29 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     }
 
+    let mut spawned_any = false;
     for i in 0..count {
-        spawn_local(spawner, |spawner| spawner.spawn(crate::usb2::crabusb_bsp_service(i)));
+        match spawn_local(spawner, |_spawner| crate::usb2::crabusb_bsp_service(i)) {
+            SpawnAttempt::Spawned => {
+                spawned_any = true;
+            }
+            SpawnAttempt::Failed(e) => {
+                crate::log!("spawn-svc: usb-controller-task({}) spawn failed: {:?}\n", i, e);
+            }
+            SpawnAttempt::Skipped => {}
+        }
     }
-    SpawnAttempt::Spawned
+    if spawned_any {
+        SpawnAttempt::Spawned
+    } else {
+        SpawnAttempt::Skipped
+    }
 }
 
 fn spawn_ui2_trueosfs_explorer_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        worker_spawner
-            .spawn(crate::tst_ui2_trueosfs_explorer_demo::ui2_trueosfs_explorer_demo_task())
+        let _ = worker_spawner;
+        crate::tst_ui2_trueosfs_explorer_demo::ui2_trueosfs_explorer_demo_task()
     })
 }
 
@@ -809,7 +860,7 @@ async fn trueosfs_ready_hook_task() {
 }
 
 fn spawn_trueosfs_ready_hook(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(trueosfs_ready_hook_task()))
+    spawn_local(spawner, |_spawner| trueosfs_ready_hook_task())
 }
 
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
@@ -823,19 +874,15 @@ fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_smtp_smoke(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| spawner.spawn(crate::tst_smtp_smoke::smtp_smoke_task()))
+    spawn_local(spawner, |_spawner| crate::tst_smtp_smoke::smtp_smoke_task())
 }
 
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::shell2::task(spawner, &crate::shell2::UART1_COM1_BACKEND))
-    })
+    spawn_local(spawner, |spawner| crate::shell2::task(spawner, &crate::shell2::UART1_COM1_BACKEND))
 }
 
 fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        spawner.spawn(crate::shell2::task(spawner, &crate::shell2::NET_TCP_SHELL_BACKEND))
-    })
+    spawn_local(spawner, |spawner| crate::shell2::task(spawner, &crate::shell2::NET_TCP_SHELL_BACKEND))
 }
 
 #[embassy_executor::task]
@@ -857,7 +904,7 @@ async fn atomic_bomb_task() {
 }
 
 fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |worker_spawner| worker_spawner.spawn(atomic_bomb_task()))
+    spawn_on_worker(spawner, |_worker_spawner| atomic_bomb_task())
 }
 
 // --- registry ---

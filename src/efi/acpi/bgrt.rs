@@ -462,8 +462,7 @@ fn phys_range_looks_safe(base: u64, len: u64) -> bool {
             None => continue,
         };
         if base >= e_base && end <= e_end {
-            use ::limine::memory_map::EntryType as T;
-            return !matches!(e.entry_type, T::BAD_MEMORY);
+            return e.type_ != ::limine::memmap::MEMMAP_BAD_MEMORY;
         }
     }
 

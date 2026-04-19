@@ -362,9 +362,12 @@ fn ensure_repl_drainer_started(spawner: &Spawner) -> bool {
         return true;
     }
 
-    if spawner.spawn(shell_qjs_repl_slots_drainer()).is_err() {
-        SHELL_QJS_REPL_DRAINER_STARTED.store(false, Ordering::Release);
-        return false;
+    match shell_qjs_repl_slots_drainer() {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            SHELL_QJS_REPL_DRAINER_STARTED.store(false, Ordering::Release);
+            return false;
+        }
     }
 
     true

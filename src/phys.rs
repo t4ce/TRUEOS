@@ -3,7 +3,7 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use heapless::Vec;
-use limine::memory_map::EntryType;
+use limine::memmap;
 use spin::Mutex;
 
 unsafe extern "C" {
@@ -88,7 +88,7 @@ pub fn init_pmm_from_limine() {
 
     let mut state = PmmState::new();
     for entry in entries {
-        if entry.entry_type != EntryType::USABLE {
+        if entry.type_ != memmap::MEMMAP_USABLE {
             continue;
         }
 

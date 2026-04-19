@@ -791,7 +791,9 @@ pub async fn bsp_service(controller_index: usize) {
                     Some(Instant::now() + EmbassyDuration::from_millis(INTEL_PROBE_SETTLE_MS));
             } else {
                 install_event_handler(info.index, host.create_event_handler());
-                let _ = spawner.spawn(event_pump_task(info.index));
+                if let Ok(token) = event_pump_task(info.index) {
+                    spawner.spawn(token);
+                }
                 probe_and_bind(&mut host, info, &spawner).await;
             }
 
@@ -823,14 +825,18 @@ pub async fn bsp_service(controller_index: usize) {
                                 );
                             }
                             install_event_handler(info.index, host.create_event_handler());
-                            let _ = spawner.spawn(event_pump_task(info.index));
+                            if let Ok(token) = event_pump_task(info.index) {
+                                spawner.spawn(token);
+                            }
                         }
                         probe_and_bind(&mut host, info, &spawner).await;
                         hotplug_poll_deadline =
                             Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
                         if !intel_settle_probe {
                             install_event_handler(info.index, host.create_event_handler());
-                            let _ = spawner.spawn(event_pump_task(info.index));
+                            if let Ok(token) = event_pump_task(info.index) {
+                                spawner.spawn(token);
+                            }
                         }
                         quiet_probe_until = None;
                     }

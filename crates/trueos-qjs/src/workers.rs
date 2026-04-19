@@ -280,9 +280,8 @@ fn spawn_eval_on_slot_inner(cpu_slot: Option<u32>, code_utf8: &[u8]) -> Result<u
         slot,
         core_kind_name(kind)
     ));
-    spawner
-        .spawn(worker_task(worker_id, slot, kind))
-        .map_err(|_| -2)?;
+    let token = worker_task(worker_id, slot, kind).map_err(|_| -2)?;
+    spawner.spawn(token);
     Ok(worker_id)
 }
 

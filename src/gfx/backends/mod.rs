@@ -103,7 +103,7 @@ fn ensure_pci_enumerated_if_empty() {
 
 impl Backend {
     pub fn init_auto(
-        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+        framebuffers: Option<&'static crate::limine::FramebufferResponse>,
     ) -> Self {
         if let Some(v) = Self::init_virgl(framebuffers) {
             crate::log!("gfx: using virgl backend (auto)\n");
@@ -116,7 +116,7 @@ impl Backend {
     }
 
     pub fn init_virgl(
-        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+        framebuffers: Option<&'static crate::limine::FramebufferResponse>,
     ) -> Option<Self> {
         ensure_pci_enumerated_if_empty();
         virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(Backend::Virgl)

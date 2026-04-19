@@ -57,12 +57,12 @@ pub(crate) fn submit_update(
     );
 
     set_matrix_target_active(&target, true);
-    if spawner
-        .spawn(update_command_task(target.clone(), disk))
-        .is_err()
-    {
-        set_matrix_target_active(&target, false);
-        print_shell_line(io, "update: spawn failed");
+    match update_command_task(target.clone(), disk) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            print_shell_line(io, "update: spawn failed");
+        }
     }
 }
 

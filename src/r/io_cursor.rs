@@ -312,8 +312,8 @@ fn cursor_viewport_dimensions() -> (usize, usize) {
         .map(|(w, h)| (w as usize, h as usize))
         .or_else(|| {
             crate::limine::framebuffer_response()
-                .and_then(|resp| resp.framebuffers().next())
-                .map(|fb| (fb.width() as usize, fb.height() as usize))
+                .and_then(|resp| resp.framebuffers().first().copied())
+                .map(|fb| (fb.width as usize, fb.height as usize))
         })
         .unwrap_or((320, 200))
 }
