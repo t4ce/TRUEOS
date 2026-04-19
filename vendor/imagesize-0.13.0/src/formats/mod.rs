@@ -20,7 +20,7 @@ pub mod vtf;
 pub mod webp;
 
 use crate::{container, ImageError, ImageResult, ImageType};
-use core2::io::{BufRead, Seek};
+use core3::io::{BufRead, Seek};
 
 pub fn image_type<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageType> {
     let mut header = [0; 12];
@@ -29,7 +29,7 @@ pub fn image_type<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageType> {
     // Currently there are no formats where 1 byte is enough to determine format
     if header.len() < 2 {
         return Err(
-            core2::io::Error::new(core2::io::ErrorKind::UnexpectedEof, "Not enough data").into(),
+            core3::io::Error::new(core3::io::ErrorKind::UnexpectedEof, "Not enough data").into(),
         );
     }
 

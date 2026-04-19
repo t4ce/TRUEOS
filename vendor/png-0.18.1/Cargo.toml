@@ -100,8 +100,8 @@ version = "1.0.35"
 optional = true
 default-features = false
 
-[dependencies.core2]
-version = "0.4"
+[dependencies.core3]
+version = "0.1.2"
 default-features = false
 features = ["alloc"]
 
