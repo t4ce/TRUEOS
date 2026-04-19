@@ -426,6 +426,7 @@ pub struct Ui2HostedInteractiveRect {
 struct Ui2Window {
     id: u32,
     kind: Ui2WindowKind,
+    spawn_task_index: Option<usize>,
     browser_instance_id: u32,
     hosted_browser_snapshot: UiHostedBrowserSnapshot,
     title: String,

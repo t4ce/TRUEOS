@@ -56,6 +56,7 @@ fn render_triangle_frame(surface: &crate::r::ui2::Ui2SurfaceWindow, phase: f32) 
 
 #[embassy_executor::task]
 pub async fn ui2_triangle_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-triangle-demo");
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
         "Demo Triangle",
         crate::r::ui2::Ui2Rect {
@@ -72,6 +73,7 @@ pub async fn ui2_triangle_demo_task() {
     ) else {
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-triangle-demo");
     let window_id = surface.window_id();
     let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);
     let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, false);
@@ -93,11 +95,16 @@ pub async fn ui2_triangle_demo_task() {
     };
     let mut phase = 0.0f32;
     loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-triangle-demo") {
+            break;
+        }
         let _ = render_triangle_frame(&surface, phase);
         phase += phase_step_for_frame_ms(frame_ms);
         if phase > core::f32::consts::TAU {
             phase -= core::f32::consts::TAU;
         }
-        Timer::after(EmbassyDuration::from_millis(frame_ms)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-triangle-demo", frame_ms).await {
+            break;
+        }
     }
 }

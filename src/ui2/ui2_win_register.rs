@@ -43,7 +43,7 @@ const UI2_OFFLINE_PLAY_TWEMOJI: char = '\u{23EF}';
 #[derive(Copy, Clone)]
 struct OfflinePillSlot {
     rect: Ui2Rect,
-    /// If > 0, this pill re-shows an existing hidden window.
+    /// If > 0, this pill can re-show an existing hidden window.
     window_id: u32,
     /// If < usize::MAX, this pill enables a disabled task.
     task_index: usize,
@@ -58,9 +58,20 @@ pub(super) fn draw_offline_dock(state: &Ui2State) {
 
     // 1. Disabled tasks not yet started.
     for entry in crate::r::spawn_service::offline_ui2_demo_tasks() {
+        let window_id = state
+            .windows
+            .iter()
+            .find(|window| {
+                window.spawn_task_index == Some(entry.index)
+                    && crate::r::spawn_service::task_started_by_index(entry.index)
+                    && !window.visible
+                    && window.kind == Ui2WindowKind::HostedSurface
+            })
+            .map(|window| window.id)
+            .unwrap_or(0);
         pills.push(OfflinePillSlot {
             rect: Ui2Rect::default(),
-            window_id: 0,
+            window_id,
             task_index: entry.index,
         });
     }
@@ -68,6 +79,9 @@ pub(super) fn draw_offline_dock(state: &Ui2State) {
     // 2. Hidden (X-closed) windows.
     for window in &state.windows {
         if window.visible || window.title.is_empty() {
+            continue;
+        }
+        if window.spawn_task_index.is_some() {
             continue;
         }
         // Only show hosted-surface windows (demo apps) that were X-closed.
@@ -239,6 +253,9 @@ pub(super) fn handle_offline_dock_click(state: &mut Ui2State, x: f32, y: f32) ->
         }
         if pill.window_id != 0 {
             // Re-show a hidden window.
+            if pill.task_index != usize::MAX {
+                crate::r::spawn_service::enable_task_by_index(pill.task_index);
+            }
             set_window_visible_in_state(state, pill.window_id, true);
             restore_window_in_state(state, pill.window_id);
             return true;

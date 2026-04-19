@@ -196,9 +196,11 @@ fn create_particle_demo_window() -> Option<crate::r::ui2::Ui2SurfaceWindow> {
 
 #[embassy_executor::task]
 pub async fn ui2_particle_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-particle-demo");
     let Some(surface) = create_particle_demo_window() else {
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-particle-demo");
 
     let window_id = surface.window_id();
     let (surface_w, surface_h) = surface.size();
@@ -229,6 +231,9 @@ pub async fn ui2_particle_demo_task() {
     let _ = crate::r::ui2::set_window_title(window_id, "Particle System");
 
     loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-particle-demo") {
+            break;
+        }
         let _report = system.update_dual_driven(UI2_PARTICLE_DEMO_FRAME_MS as f32 / 1000.0);
         respawn_dead_particles(&mut system, surface_w, surface_h, &mut rng);
         system.snapshot_into(&mut snapshot);
@@ -241,6 +246,13 @@ pub async fn ui2_particle_demo_task() {
             window_id,
             "ui2-particle-demo-tinted",
         );
-        Timer::after(EmbassyDuration::from_millis(UI2_PARTICLE_DEMO_FRAME_MS)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms(
+            "ui2-particle-demo",
+            UI2_PARTICLE_DEMO_FRAME_MS,
+        )
+        .await
+        {
+            break;
+        }
     }
 }

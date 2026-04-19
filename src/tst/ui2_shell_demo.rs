@@ -428,6 +428,7 @@ fn render_shell_snapshot_rgba(
 
 #[embassy_executor::task]
 pub async fn ui2_shell_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-shell-demo");
     let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_SHELL_FONT_SIZE_CASE) else {
         return;
     };
@@ -452,6 +453,7 @@ pub async fn ui2_shell_demo_task() {
         crate::log!("ui2-shell-demo: window creation failed tex={}\n", UI2_SHELL_TEX_ID);
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-shell-demo");
 
     let clear_rgba = vec![
         0u8;
@@ -495,6 +497,9 @@ pub async fn ui2_shell_demo_task() {
     let mut last_viewport = (0u32, 0u32);
     let mut attached_layout = None;
     loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-shell-demo") {
+            break;
+        }
         let blink_on =
             ((Instant::now().as_millis() as u64) / (UI2_SHELL_CURSOR_BLINK_MS / 2)) % 2 == 0;
         let viewport = crate::r::ui2::window_content_rect_by_id(surface.window_id())
@@ -551,6 +556,8 @@ pub async fn ui2_shell_demo_task() {
                 }
             }
         }
-        Timer::after(EmbassyDuration::from_millis(33)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-shell-demo", 33).await {
+            break;
+        }
     }
 }

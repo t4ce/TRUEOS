@@ -600,6 +600,7 @@ fn roots_hash() -> u32 {
 
 #[embassy_executor::task]
 pub async fn ui2_trueosfs_explorer_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-trueosfs-explorer-demo");
     if crate::r::fs::trueosfs::primary_root_handle().is_none() {
         return;
     }
@@ -652,6 +653,7 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
     ) else {
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-trueosfs-explorer-demo");
 
     crate::r::ui2::set_window_title_twemoji(surface.window_id(), '\u{1F4C1}');
 
@@ -663,6 +665,9 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
     let mut needs_render = true;
 
     loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-trueosfs-explorer-demo") {
+            break;
+        }
         let viewport = crate::r::ui2::window_content_rect_by_id(surface.window_id())
             .map(|rect| (rect.w.max(1.0) as u32, rect.h.max(1.0) as u32))
             .unwrap_or((UI2_TRUEOSFS_EXPLORER_VIEW_W as u32, UI2_TRUEOSFS_EXPLORER_VIEW_H as u32));
@@ -725,6 +730,9 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
             needs_render = false;
         }
 
-        Timer::after(EmbassyDuration::from_millis(80)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-trueosfs-explorer-demo", 80).await
+        {
+            break;
+        }
     }
 }
