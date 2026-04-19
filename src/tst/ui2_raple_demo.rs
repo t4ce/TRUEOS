@@ -478,7 +478,9 @@ pub async fn ui2_raple_demo_task() {
     };
 
     let window_id = surface.window_id();
-    let _ = ui2::set_window_decorations(window_id, ui2::Ui2WindowDecorationMode::None);
+    let _ = ui2::set_window_decorations(window_id, ui2::Ui2WindowDecorationMode::System);
+    let _ = ui2::set_window_titlebar_visible(window_id, true);
+    let _ = ui2::set_window_bottom_bar_visible(window_id, true);
     let _ = ui2::set_window_left_scrollbar_visible(window_id, false);
     let _ = ui2::set_window_bottom_scrollbar_visible(window_id, false);
 

@@ -12,7 +12,10 @@ const HV_MENU_ROWS: [[&str; 2]; 5] = [
         "full [id]",
         "Start vm[id] with full TRUEOS guest image mapping",
     ],
-    ["start [id]", "Start vm[id] as minimal trueos-vm hull guest"],
+    [
+        "start [id] [stack_mb]",
+        "Start vm[id] as minimal trueos-vm hull guest",
+    ],
     ["pause [id]", "Alias for stop request on vm[id]"],
     ["stop [id]", "Request vm[id] stop"],
     [
@@ -53,24 +56,51 @@ fn parse_optional_vm_id(io: &'static dyn ShellBackend2, raw: Option<&str>) -> Op
     Some(id)
 }
 
+fn parse_optional_stack_mb(
+    io: &'static dyn ShellBackend2,
+    raw: Option<&str>,
+) -> Option<usize> {
+    let Some(token) = raw else {
+        return Some(crate::hv::memory::guest_stack_default_mb());
+    };
+
+    let Ok(stack_mb) = token.parse::<usize>() else {
+        io.write_fmt(format_args!(
+            "hv: invalid stack size '{}' MiB (expected integer)\r\n",
+            token
+        ));
+        return None;
+    };
+
+    if stack_mb == 0 {
+        io.write_str("hv: stack size must be >= 1 MiB\r\n");
+        return None;
+    }
+
+    Some(crate::hv::memory::clamp_guest_stack_mb(stack_mb))
+}
+
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
     let op = args.next().unwrap_or("start").trim();
-    let vm_id = match parse_optional_vm_id(io, args.next()) {
-        Some(id) => id,
-        None => return ParseOutcome::Handled,
-    };
-
-    if args.next().is_some() {
-        print_usage(io);
-        return ParseOutcome::Handled;
-    }
 
     if op.is_empty() || op.eq_ignore_ascii_case("start") {
-        match crate::hv::start(vm_id, spawner, io) {
+        let vm_id = match parse_optional_vm_id(io, args.next()) {
+            Some(id) => id,
+            None => return ParseOutcome::Handled,
+        };
+        let stack_mb = match parse_optional_stack_mb(io, args.next()) {
+            Some(stack_mb) => stack_mb,
+            None => return ParseOutcome::Handled,
+        };
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
+        match crate::hv::start(vm_id, spawner, io, Some(stack_mb)) {
             Ok(()) => io.write_fmt(format_args!("hv: vm{} started\r\n", vm_id)),
             Err(e) => io.write_fmt(format_args!("hv: start failed: {:?}\r\n", e)),
         }
@@ -78,6 +108,14 @@ pub(crate) fn try_parse(
     }
 
     if op.eq_ignore_ascii_case("full") {
+        let vm_id = match parse_optional_vm_id(io, args.next()) {
+            Some(id) => id,
+            None => return ParseOutcome::Handled,
+        };
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
         match crate::hv::start_full(vm_id, spawner, io) {
             Ok(()) => io.write_fmt(format_args!("hv: vm{} full guest started\r\n", vm_id)),
             Err(e) => io.write_fmt(format_args!("hv: full start failed: {:?}\r\n", e)),
@@ -86,6 +124,14 @@ pub(crate) fn try_parse(
     }
 
     if op.eq_ignore_ascii_case("pause") {
+        let vm_id = match parse_optional_vm_id(io, args.next()) {
+            Some(id) => id,
+            None => return ParseOutcome::Handled,
+        };
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
         match crate::hv::stop(vm_id) {
             Ok(true) => io.write_fmt(format_args!("hv: vm{} pause requested\r\n", vm_id)),
             Ok(false) => io.write_fmt(format_args!("hv: vm{} not running\r\n", vm_id)),
@@ -95,6 +141,14 @@ pub(crate) fn try_parse(
     }
 
     if op.eq_ignore_ascii_case("stop") {
+        let vm_id = match parse_optional_vm_id(io, args.next()) {
+            Some(id) => id,
+            None => return ParseOutcome::Handled,
+        };
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
         match crate::hv::stop(vm_id) {
             Ok(true) => io.write_fmt(format_args!("hv: vm{} stop requested\r\n", vm_id)),
             Ok(false) => io.write_fmt(format_args!("hv: vm{} not running\r\n", vm_id)),
@@ -104,6 +158,14 @@ pub(crate) fn try_parse(
     }
 
     if op.eq_ignore_ascii_case("preserve") {
+        let vm_id = match parse_optional_vm_id(io, args.next()) {
+            Some(id) => id,
+            None => return ParseOutcome::Handled,
+        };
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
         match crate::hv::save_snapshot(vm_id) {
             Ok(bytes) => io.write_fmt(format_args!(
                 "hv: vm{} snapshot saved store=hv-ramdisk path=vm/vm{}.snapshot bytes={}\r\n",

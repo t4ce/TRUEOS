@@ -4,6 +4,8 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use embassy_executor::{SendSpawner, SpawnError, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
+
+use crate::r::spawn_spec::{SpawnAttempt, SpawnPlacement, TaskSpec};
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.
 
 /// Central task orchestrator ("FSM spawn service").
@@ -15,94 +17,6 @@ use spin::Mutex;
 /// - Readiness is monotonic, so this service only ever adds tasks; it never stops them.
 ///
 /// This is intentionally simple: a small polling loop over a static registry.
-
-struct TaskSpec {
-    name: &'static str,
-    disabled: &'static AtomicBool,
-    required: u32,
-    gate: fn() -> bool,
-    started: &'static AtomicBool,
-    spawn: fn(Spawner) -> SpawnAttempt,
-}
-
-impl TaskSpec {
-    const fn enabled(
-        name: &'static str,
-        required: u32,
-        started: &'static AtomicBool,
-        spawn: fn(Spawner) -> SpawnAttempt,
-    ) -> Self {
-        Self {
-            name,
-            disabled: &TASK_NOT_DISABLED,
-            required,
-            gate: task_gate_always,
-            started,
-            spawn,
-        }
-    }
-
-    const fn enabled_gated(
-        name: &'static str,
-        required: u32,
-        gate: fn() -> bool,
-        started: &'static AtomicBool,
-        spawn: fn(Spawner) -> SpawnAttempt,
-    ) -> Self {
-        Self {
-            name,
-            disabled: &TASK_NOT_DISABLED,
-            required,
-            gate,
-            started,
-            spawn,
-        }
-    }
-
-    const fn disabled(
-        name: &'static str,
-        required: u32,
-        disabled_flag: &'static AtomicBool,
-        started: &'static AtomicBool,
-        spawn: fn(Spawner) -> SpawnAttempt,
-    ) -> Self {
-        Self {
-            name,
-            disabled: disabled_flag,
-            required,
-            gate: task_gate_always,
-            started,
-            spawn,
-        }
-    }
-
-    const fn disabled_gated(
-        name: &'static str,
-        required: u32,
-        gate: fn() -> bool,
-        disabled_flag: &'static AtomicBool,
-        started: &'static AtomicBool,
-        spawn: fn(Spawner) -> SpawnAttempt,
-    ) -> Self {
-        Self {
-            name,
-            disabled: disabled_flag,
-            required,
-            gate,
-            started,
-            spawn,
-        }
-    }
-}
-
-/// Shared "not disabled" sentinel – all enabled tasks point here.
-static TASK_NOT_DISABLED: AtomicBool = AtomicBool::new(false);
-
-enum SpawnAttempt {
-    Spawned,
-    Skipped,
-    Failed(SpawnError),
-}
 
 macro_rules! define_started_flags {
     ($($name:ident),+ $(,)?) => {
@@ -978,8 +892,20 @@ static TASKS: &[TaskSpec] = &[
         &TRUEOSFS_MOUNT_SERVICE_STARTED,
         spawn_trueosfs_mount_service,
     ),
-    TaskSpec::enabled("hv-vm-store", 0, &HV_VM_STORE_STARTED, spawn_hv_vm_store),
-    TaskSpec::enabled("hv-vm-store-net", 0, &HV_VM_STORE_NET_STARTED, spawn_hv_vm_store_net),
+    TaskSpec::enabled_on(
+        SpawnPlacement::Ap1,
+        "hv-vm-store",
+        0,
+        &HV_VM_STORE_STARTED,
+        spawn_hv_vm_store,
+    ),
+    TaskSpec::enabled_on(
+        SpawnPlacement::Ap1,
+        "hv-vm-store-net",
+        0,
+        &HV_VM_STORE_NET_STARTED,
+        spawn_hv_vm_store_net,
+    ),
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
     TaskSpec::enabled(
@@ -1064,7 +990,13 @@ static TASKS: &[TaskSpec] = &[
         spawn_intel_cursor_service_task,
     ),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
-    TaskSpec::enabled("html_fetch_service", 0, &HTML_SHACK_SERVICE_STARTED, html_fetch_service),
+    TaskSpec::enabled_on(
+        SpawnPlacement::Worker,
+        "html_fetch_service",
+        0,
+        &HTML_SHACK_SERVICE_STARTED,
+        html_fetch_service,
+    ),
     TaskSpec::enabled(
         "gfx-texture-upload-service",
         crate::r::readiness::GFX_BACKEND_READY,
