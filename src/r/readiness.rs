@@ -34,7 +34,10 @@ pub const GFX_VIRGL_READY: u32 = 1 << 19;
 pub const GFX_INTEL_CLAIMED: u32 = 1 << 21;
 pub const GFX_BACKEND_READY: u32 = 1 << 22;
 pub const UI2_READY: u32 = 1 << 23;
+pub const APP_VM_READY: u32 = 1 << 24;
 pub const GFX_TEXTURE_UPLOAD_SERVICE_READY: u32 = 1 << 25;
+
+const APP_VM_READY_REQUIRED: u32 = NET_CONFIGURED | TRUEOSFS_ROOT_MOUNTED;
 
 static READY: AtomicU32 = AtomicU32::new(0);
 
@@ -51,7 +54,16 @@ pub fn is_set(required: u32) -> bool {
 /// Mark one or more readiness flags as set.
 #[inline]
 pub fn set(flags: u32) {
-    READY.fetch_or(flags, Ordering::AcqRel);
+    let mut next = flags;
+    if flags & APP_VM_READY_REQUIRED == APP_VM_READY_REQUIRED {
+        next |= APP_VM_READY;
+    }
+
+    let prev = READY.fetch_or(next, Ordering::AcqRel);
+    let combined = prev | next;
+    if combined & APP_VM_READY_REQUIRED == APP_VM_READY_REQUIRED {
+        READY.fetch_or(APP_VM_READY, Ordering::AcqRel);
+    }
 }
 
 /// Wait until all required flags are set.

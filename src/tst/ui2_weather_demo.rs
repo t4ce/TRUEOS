@@ -398,6 +398,7 @@ fn present_snapshot(
 
 #[embassy_executor::task]
 pub async fn ui2_weather_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-weather-demo");
     let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_WEATHER_FONT_SIZE_CASE) else {
         return;
     };
@@ -422,6 +423,7 @@ pub async fn ui2_weather_demo_task() {
         crate::log!("ui2-weather: window creation failed\n");
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-weather-demo");
 
     // Scrollbar on right side and top
     let _ = ui2::set_window_vertical_scrollbar_side(
@@ -516,7 +518,9 @@ pub async fn ui2_weather_demo_task() {
 
     // Periodically re-fetch (every hour)
     loop {
-        Timer::after(EmbassyDuration::from_secs(3600)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-weather-demo", 3_600_000).await {
+            break;
+        }
 
         let weather_response = match crate::r::net::json::get_json(weather_url.as_str()).await {
             Ok(raw) => trueos_weather::oc3::decode_onecall_raw_safe(raw.as_str()).ok(),

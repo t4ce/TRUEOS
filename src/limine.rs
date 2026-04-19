@@ -1,4 +1,5 @@
 use limine::{BaseRevision, memmap as memory_map, request};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 pub type FramebufferResponse = request::FramebufferResponse;
 pub type MpResponse = request::MpResponse;
@@ -7,6 +8,10 @@ pub type BootloaderPerformanceResponse = request::BootloaderPerformanceResponse;
 pub type BootloaderPerformanceRequest = request::BootloaderPerformanceRequest;
 pub type EfiSystemTableResponse = request::EfiResponse;
 pub type EfiSystemTableRequest = request::EfiRequest;
+
+const UNSET_U64: u64 = u64::MAX;
+
+static BOOT_TIMESTAMP_SECS_CACHE: AtomicU64 = AtomicU64::new(UNSET_U64);
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -124,9 +129,23 @@ pub fn smp_response() -> Option<&'static MpResponse> {
     SMP_REQUEST.response()
 }
 
+pub fn prime_bootloader_caches() {
+    let _ = cache_boot_timestamp_secs();
+}
+
 pub fn boot_timestamp_secs() -> Option<u64> {
+    let cached = BOOT_TIMESTAMP_SECS_CACHE.load(Ordering::Acquire);
+    if cached != UNSET_U64 {
+        return Some(cached);
+    }
+    cache_boot_timestamp_secs()
+}
+
+fn cache_boot_timestamp_secs() -> Option<u64> {
     let resp = DATE_AT_BOOT_REQUEST.response()?;
-    Some(resp.timestamp as u64)
+    let secs = resp.timestamp as u64;
+    BOOT_TIMESTAMP_SECS_CACHE.store(secs, Ordering::Release);
+    Some(secs)
 }
 
 pub fn bootloader_performance() -> Option<&'static BootloaderPerformanceResponse> {

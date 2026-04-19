@@ -238,6 +238,7 @@ pub fn ui2_coreticks_tick_tile_index(tile_index: usize) -> bool {
 
 #[embassy_executor::task]
 pub async fn ui2_coreticks_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-coreticks-demo");
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
         UI2_CORETICKS_WINDOW_TITLE,
         crate::r::ui2::Ui2Rect {
@@ -254,6 +255,7 @@ pub async fn ui2_coreticks_demo_task() {
     ) else {
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-coreticks-demo");
 
     let window_id = surface.window_id();
     let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);
@@ -262,6 +264,9 @@ pub async fn ui2_coreticks_demo_task() {
     let _ = crate::r::ui2::set_window_content_preserve_scale(window_id, true);
 
     loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-coreticks-demo") {
+            break;
+        }
         if UI2_CORETICKS_DIRTY.swap(false, Ordering::AcqRel) {
             let pixels = ui2_coreticks_demo_current_rgba();
             if !surface.upload_rgba(pixels.as_slice(), "ui2-coreticks-demo-present") {
@@ -273,6 +278,13 @@ pub async fn ui2_coreticks_demo_task() {
             );
         }
 
-        Timer::after(EmbassyDuration::from_millis(UI2_CORETICKS_FRAME_MS)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms(
+            "ui2-coreticks-demo",
+            UI2_CORETICKS_FRAME_MS,
+        )
+        .await
+        {
+            break;
+        }
     }
 }

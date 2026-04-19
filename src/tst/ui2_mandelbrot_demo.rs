@@ -7,6 +7,7 @@ const UI2_MANDELBROT_WINDOW_Z: i16 = 31;
 
 #[embassy_executor::task]
 pub async fn ui2_mandelbrot_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-mandelbrot-demo");
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
         "Demo Mandelbrot",
         crate::r::ui2::Ui2Rect {
@@ -23,6 +24,7 @@ pub async fn ui2_mandelbrot_demo_task() {
     ) else {
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-mandelbrot-demo");
 
     let window_id = surface.window_id();
     let (surface_w, surface_h) = surface.size();
@@ -42,6 +44,9 @@ pub async fn ui2_mandelbrot_demo_task() {
     let tick_hz = embassy_time_driver::TICK_HZ;
 
     loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-mandelbrot-demo") {
+            break;
+        }
         let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_ticks);
         if !surface.render_mandelbrot(elapsed_ticks, tick_hz, "ui2-mandelbrot-demo") {
             let _ = crate::r::ui2::set_window_title(window_id, "Seahorse Valley (unavailable)");
@@ -49,6 +54,8 @@ pub async fn ui2_mandelbrot_demo_task() {
             break;
         }
 
-        Timer::after(EmbassyDuration::from_millis(33)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-mandelbrot-demo", 33).await {
+            break;
+        }
     }
 }

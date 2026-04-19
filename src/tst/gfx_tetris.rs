@@ -362,6 +362,7 @@ pub fn queue_ui2_keyboard_event(
 
 #[embassy_executor::task]
 pub async fn ui2_gfx_tetris_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-gfx-tetris");
     let seed = crate::time::unix_time_seconds()
         .map(|t| t as u32)
         .unwrap_or(0x5445_5452)
@@ -383,6 +384,7 @@ pub async fn ui2_gfx_tetris_task() {
     ) else {
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-gfx-tetris");
     let window_id = surface.window_id();
     let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);
     let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, false);
@@ -406,6 +408,9 @@ pub async fn ui2_gfx_tetris_task() {
 
     let mut last_tick = Instant::now();
     loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-gfx-tetris") {
+            break;
+        }
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(last_tick);
         last_tick = now;
@@ -424,6 +429,8 @@ pub async fn ui2_gfx_tetris_task() {
             let _ = surface.render_rgb_triangles(BG_CLEAR_RGB, bytes, "gfx-tetris");
         }
 
-        Timer::after(EmbassyDuration::from_millis(16)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-gfx-tetris", 16).await {
+            break;
+        }
     }
 }

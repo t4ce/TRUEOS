@@ -8,7 +8,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
 pub(crate) mod backends;
-mod cmds;
+pub(crate) mod cmds;
 mod ecma48;
 mod interface;
 mod matrix;
@@ -593,6 +593,24 @@ pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> Matri
     }
 }
 
+pub(crate) fn default_matrix_target() -> MatrixTarget {
+    matrix_target_for_backend(&UART1_COM1_BACKEND)
+}
+
+pub(crate) fn spawn_app_vm_run_queue(spawner: Spawner) -> Result<(), embassy_executor::SpawnError> {
+    match cmds::run::app_vm_run_queue_task(spawner) {
+        Ok(token) => {
+            spawner.spawn(token);
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+pub(crate) fn enqueue_embedded_hello_world_app_once() {
+    cmds::run::enqueue_embedded_hello_world_once();
+}
+
 fn matrix_target_for_slot(output_mask: u8, slot_id: &matrix::MatrixSlotId) -> MatrixTarget {
     MatrixTarget {
         output_mask,
@@ -679,6 +697,13 @@ pub(crate) fn print_matrix_target_line(target: &MatrixTarget, text: &str) {
 
 pub(crate) fn print_matrix_target_native_line(target: &MatrixTarget, text: &str) {
     matrix::record_line_in_slot(&target.slot_id, LineSource::Native, text);
+}
+
+pub(crate) fn print_matrix_target_native_text(target: &MatrixTarget, text: &str) {
+    for line in text.split('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        matrix::record_line_in_slot(&target.slot_id, LineSource::Native, line);
+    }
 }
 
 fn current_transcript_for_task(io: &'static dyn ShellBackend2) -> VecDeque<TranscriptEntry> {

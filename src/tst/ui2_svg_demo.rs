@@ -228,6 +228,7 @@ fn compose_svg_demo_grid_rgba(width: u32, height: u32) -> (Vec<u8>, usize) {
 
 #[embassy_executor::task]
 pub async fn ui2_svg_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-svg-demo");
     Timer::after(EmbassyDuration::from_millis(250)).await;
 
     let (surface_w, surface_h) = svg_demo_grid_extent(SVG_DEMO_ASSETS.len());
@@ -248,6 +249,7 @@ pub async fn ui2_svg_demo_task() {
         crate::log!("ui2-svg-demo: window creation failed tex={}\n", UI2_SVG_DEMO_TEX_ID);
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-svg-demo");
 
     let (rgba, rendered) = compose_svg_demo_grid_rgba(surface_w, surface_h);
     if !surface.upload_rgba(rgba.as_slice(), "ui2-svg-demo-upload") {
@@ -274,7 +276,9 @@ pub async fn ui2_svg_demo_task() {
     );
 
     loop {
-        Timer::after(EmbassyDuration::from_secs(3600)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-svg-demo", 3_600_000).await {
+            break;
+        }
     }
 }
 

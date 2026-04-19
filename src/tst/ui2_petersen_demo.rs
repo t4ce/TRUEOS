@@ -224,6 +224,7 @@ fn render_petersen_surface_rgba(width: u32, height: u32) -> (Vec<u8>, usize, usi
 
 #[embassy_executor::task]
 pub async fn ui2_petersen_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-petersen-demo");
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::new(
         "Petersen Graph",
         crate::r::ui2::Ui2Rect {
@@ -240,6 +241,7 @@ pub async fn ui2_petersen_demo_task() {
     ) else {
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-petersen-demo");
 
     Timer::after(EmbassyDuration::from_millis(1)).await;
 
@@ -270,6 +272,9 @@ pub async fn ui2_petersen_demo_task() {
     );
 
     loop {
-        Timer::after(EmbassyDuration::from_secs(3600)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-petersen-demo", 3_600_000).await
+        {
+            break;
+        }
     }
 }

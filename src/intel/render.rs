@@ -40,6 +40,7 @@ const RCS_RING_EXECLIST_CONTROL: usize = RCS_RING_BASE + 0x550;
 const RCS_RING_EXECLIST_SQ_LO: usize = RCS_RING_BASE + 0x510;
 const RCS_RING_EXECLIST_SQ_HI: usize = RCS_RING_BASE + 0x514;
 const RCS_RING_HWS_PGA: usize = RCS_RING_BASE + 0x80;
+const GDRST: usize = 0x0000_941C;
 const CURSOR_A_OFFSET: usize = 0x70080;
 const CURSOR_B_OFFSET: usize = 0x71080;
 const CURSOR_C_OFFSET: usize = 0x72080;
@@ -50,6 +51,7 @@ const WARM_BATCH_BYTES: usize = 512 * 4096;
 const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
 const WARM_VERTEX_BYTES: usize = 4096;
 const WARM_RESULT_BYTES: usize = 4096;
+const WARM_STREAMOUT_BYTES: usize = 4096;
 const BLT_RING_DWORDS: usize = 4;
 const BLT_RING_TAIL_BYTES: usize = BLT_RING_DWORDS * core::mem::size_of::<u32>();
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
@@ -59,6 +61,7 @@ const GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
 const GPU_VA_VERTEX_BASE: u64 = 0x0087_0000;
+const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
 const RING_VALID: u32 = 1;
 const EL_CTRL_LOAD: u32 = 1 << 0;
 const CTX_CTRL_RS_CTX_ENABLE: u32 = 1 << 1;
@@ -67,7 +70,10 @@ const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
 const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
 const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
+const GFX_RUN_LIST_ENABLE: u32 = 1 << 15;
+const MODE_IDLE: u32 = 1 << 9;
 const RING_MI_MODE_STOP_RING: u32 = 1 << 8;
+const GRDOM_RENDER: u32 = 1 << 1;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 const MI_BATCH_GTT: u32 = 2 << 6;
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
@@ -214,9 +220,6 @@ const RESULT_SLOT_POST_RASTER_DWORD: usize = 7;
 const RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD: usize = 8;
 const RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD: usize = 9;
 const RESULT_DEBUG_DWORD_COUNT: usize = RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD + 1;
-const RESULT_STREAMOUT_PROOF_OFFSET: usize = 0x100;
-const RESULT_STREAMOUT_PROOF_GPU_ADDR: u64 =
-    GPU_VA_RESULT_BASE + RESULT_STREAMOUT_PROOF_OFFSET as u64;
 const SO_NUM_PRIMS_WRITTEN_0: usize = 0x5200;
 const SO_WRITE_OFFSET_0: usize = 0x5280;
 const TRIANGLE_TOPOLOGY_POINTLIST: u32 = 1;
@@ -317,6 +320,9 @@ pub struct RenderWarmState {
     pub result_phys: u64,
     pub result_virt: *mut u8,
     pub result_len: usize,
+    pub streamout_phys: u64,
+    pub streamout_virt: *mut u8,
+    pub streamout_len: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -363,6 +369,12 @@ struct TriangleProbeStateLayout {
 }
 
 #[derive(Copy, Clone)]
+struct VsStreamoutProofConfig {
+    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    shader_layout: TriangleShaderLayout,
+}
+
+#[derive(Copy, Clone)]
 enum TriangleBlendProbeMode {
     ExplicitRt0,
     MesaZeroedState,
@@ -400,6 +412,7 @@ enum TriangleBatchMode {
     Draw,
     StreamoutProof,
     VfStreamoutProof,
+    VsStreamoutProof,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -483,17 +496,25 @@ impl TriangleBatchMode {
     fn topology(self) -> u32 {
         match self {
             Self::Draw => TRIANGLE_TOPOLOGY_TRILIST,
-            Self::StreamoutProof | Self::VfStreamoutProof => TRIANGLE_TOPOLOGY_POINTLIST,
+            Self::StreamoutProof | Self::VfStreamoutProof | Self::VsStreamoutProof => {
+                TRIANGLE_TOPOLOGY_POINTLIST
+            }
         }
     }
 
     fn streamout_enabled(self) -> bool {
-        matches!(self, Self::StreamoutProof | Self::VfStreamoutProof)
+        matches!(
+            self,
+            Self::StreamoutProof | Self::VfStreamoutProof | Self::VsStreamoutProof
+        )
     }
 }
 
 fn is_streamout_submit_name(submit_name: &str) -> bool {
-    matches!(submit_name, "streamout-proof" | "vf-streamout-proof")
+    matches!(
+        submit_name,
+        "streamout-proof" | "vf-streamout-proof" | "vs-streamout-proof"
+    )
 }
 
 fn is_vf_streamout_submit_name(submit_name: &str) -> bool {
@@ -544,6 +565,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             result_phys: 0,
             result_virt: core::ptr::null_mut(),
             result_len: 0,
+            streamout_phys: 0,
+            streamout_virt: core::ptr::null_mut(),
+            streamout_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!("intel/render: warm alloc failed part=ring size=0x{:X}\n", WARM_RING_BYTES);
@@ -575,6 +599,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             result_phys: 0,
             result_virt: core::ptr::null_mut(),
             result_len: 0,
+            streamout_phys: 0,
+            streamout_virt: core::ptr::null_mut(),
+            streamout_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!(
@@ -609,6 +636,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             result_phys: 0,
             result_virt: core::ptr::null_mut(),
             result_len: 0,
+            streamout_phys: 0,
+            streamout_virt: core::ptr::null_mut(),
+            streamout_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!("intel/render: warm alloc failed part=batch size=0x{:X}\n", WARM_BATCH_BYTES);
@@ -640,6 +670,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             result_phys: 0,
             result_virt: core::ptr::null_mut(),
             result_len: 0,
+            streamout_phys: 0,
+            streamout_virt: core::ptr::null_mut(),
+            streamout_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!(
@@ -674,6 +707,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             result_phys: 0,
             result_virt: core::ptr::null_mut(),
             result_len: 0,
+            streamout_phys: 0,
+            streamout_virt: core::ptr::null_mut(),
+            streamout_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!("intel/render: warm alloc failed part=vertex size=0x{:X}\n", WARM_VERTEX_BYTES);
@@ -705,9 +741,49 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             result_phys: 0,
             result_virt: core::ptr::null_mut(),
             result_len: 0,
+            streamout_phys: 0,
+            streamout_virt: core::ptr::null_mut(),
+            streamout_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!("intel/render: warm alloc failed part=result size=0x{:X}\n", WARM_RESULT_BYTES);
+        return warm;
+    };
+    let Some((streamout_phys, streamout_virt)) =
+        crate::dma::alloc(WARM_STREAMOUT_BYTES, crate::intel::WARM_ALIGN)
+    else {
+        let warm = RenderWarmState {
+            device_id: dev.device_id,
+            revision_id: dev.revision_id,
+            mmio_base: dev.mmio as usize,
+            mmio_len: dev.mmio_len,
+            ring_phys,
+            ring_virt,
+            ring_len: WARM_RING_BYTES,
+            context_phys,
+            context_virt,
+            context_len: WARM_CONTEXT_BYTES,
+            batch_phys,
+            batch_virt,
+            batch_len: WARM_BATCH_BYTES,
+            draw_state_phys,
+            draw_state_virt,
+            draw_state_len: WARM_DRAW_STATE_BYTES,
+            vertex_phys,
+            vertex_virt,
+            vertex_len: WARM_VERTEX_BYTES,
+            result_phys,
+            result_virt,
+            result_len: WARM_RESULT_BYTES,
+            streamout_phys: 0,
+            streamout_virt: core::ptr::null_mut(),
+            streamout_len: 0,
+        };
+        *WARM_STATE.lock() = Some(warm);
+        crate::log!(
+            "intel/render: warm alloc failed part=streamout size=0x{:X}\n",
+            WARM_STREAMOUT_BYTES
+        );
         return warm;
     };
 
@@ -718,6 +794,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
         core::ptr::write_bytes(draw_state_virt, 0, WARM_DRAW_STATE_BYTES);
         core::ptr::write_bytes(vertex_virt, 0, WARM_VERTEX_BYTES);
         core::ptr::write_bytes(result_virt, 0, WARM_RESULT_BYTES);
+        core::ptr::write_bytes(streamout_virt, 0, WARM_STREAMOUT_BYTES);
     }
 
     let warm = RenderWarmState {
@@ -743,6 +820,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
         result_phys,
         result_virt,
         result_len: WARM_RESULT_BYTES,
+        streamout_phys,
+        streamout_virt,
+        streamout_len: WARM_STREAMOUT_BYTES,
     };
     *WARM_STATE.lock() = Some(warm);
     warm
@@ -1149,6 +1229,7 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         || warm.draw_state_len == 0
         || warm.vertex_len == 0
         || warm.result_len == 0
+        || warm.streamout_len == 0
     {
         crate::log!("intel/render: primary-triangle skipped reason=warm-buffers\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
@@ -1263,11 +1344,29 @@ fn submit_primary_triangle_with_retries(
         streamout_experiment,
     );
     crate::log!(
-        "intel/render: primary-vf-streamout-precheck experiment={} completed={}\n",
+        "intel/render: primary-vf-streamout-precheck experiment={} accepted={}\n",
         streamout_experiment.label(),
         vf_streamout_precheck as u8,
     );
     if !vf_streamout_precheck {
+        return false;
+    }
+
+    let vs_streamout_precheck = submit_triangle_vs_streamout_proof(
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        streamout_experiment,
+    );
+    crate::log!(
+        "intel/render: primary-vs-streamout-precheck experiment={} accepted={}\n",
+        streamout_experiment.label(),
+        vs_streamout_precheck as u8,
+    );
+    if !vs_streamout_precheck {
         return false;
     }
 
@@ -1281,7 +1380,7 @@ fn submit_primary_triangle_with_retries(
         streamout_experiment,
     );
     crate::log!(
-        "intel/render: primary-streamout-precheck experiment={} completed={}\n",
+        "intel/render: primary-streamout-precheck experiment={} accepted={}\n",
         streamout_experiment.label(),
         streamout_precheck as u8,
     );
@@ -1356,9 +1455,11 @@ fn submit_triangle_vf_streamout_proof(
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
         core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
     }
     seed_result_debug_slots(warm);
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len);
 
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
@@ -1388,11 +1489,12 @@ fn submit_triangle_vf_streamout_proof(
         "intel/render: vf-streamout-proof batch-ready experiment={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
         experiment.label(),
         batch_tail_bytes,
-        RESULT_STREAMOUT_PROOF_GPU_ADDR,
+        GPU_VA_STREAMOUT_BASE,
         experiment.vertex_bytes(),
         draw.vertex_count
     );
 
+    let stats_before = capture_triangle_stage_stats(dev);
     let completed = submit_warm_render_batch(
         dev,
         warm,
@@ -1400,6 +1502,16 @@ fn submit_triangle_vf_streamout_proof(
         RESULT_SLOT_FINAL_DWORD,
         "vf-streamout-proof",
     );
+    let stats_after = capture_triangle_stage_stats(dev);
+    let accepted = completed
+        || maybe_soft_accept_streamout_submit(
+            "vf-streamout-proof",
+            warm,
+            stats_before,
+            stats_after,
+            false,
+            experiment.vertex_bytes() * draw.vertex_count as usize,
+        );
     log_streamout_proof_result(
         "vf-streamout-proof",
         warm,
@@ -1407,7 +1519,146 @@ fn submit_triangle_vf_streamout_proof(
         draw.vertex_count as usize,
         experiment,
     );
-    completed
+    if accepted && !completed {
+        recover_render_engine_after_nonretired_submit(dev, warm, "vf-streamout-proof");
+    }
+    accepted
+}
+
+fn submit_triangle_vs_streamout_proof(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    experiment: StreamoutProofExperiment,
+) -> bool {
+    let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
+    else {
+        crate::log!(
+            "intel/render: vs-streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
+            rect_w,
+            rect_h,
+            pitch
+        );
+        return false;
+    };
+    let pipeline = crate::intel::shader::triangle_pipeline();
+    if crate::intel::shader::triangle_pipeline_is_placeholder() {
+        crate::log!("intel/render: vs-streamout-proof skipped reason=placeholder-pipeline\n");
+        return false;
+    }
+    let slice_hash_table_offset = match write_vf_streamout_probe_state(warm) {
+        Ok(offset) => offset,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: vs-streamout-proof skipped reason=probe-state detail={}\n",
+                reason
+            );
+            return false;
+        }
+    };
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: vs-streamout-proof skipped reason=shader-layout detail={}\n",
+                reason
+            );
+            return false;
+        }
+    };
+    if slice_hash_table_offset != 0
+        && usize::try_from(shader_layout.used_bytes)
+            .ok()
+            .unwrap_or(usize::MAX)
+            > slice_hash_table_offset as usize
+    {
+        crate::log!(
+            "intel/render: vs-streamout-proof skipped reason=slice-hash-overlap used_end=0x{:X} slice_hash_off=0x{:X}\n",
+            shader_layout.used_bytes,
+            slice_hash_table_offset
+        );
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+    }
+    seed_result_debug_slots(warm);
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len);
+
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let batch_tail_bytes = match encode_vs_streamout_proof_batch(
+        batch,
+        warm,
+        draw,
+        GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_DRAW_PRE3D,
+        RCS_EXEC_RESULT_DRAW_POST3D,
+        RCS_EXEC_RESULT_DONE,
+        experiment,
+        slice_hash_table_offset,
+        VsStreamoutProofConfig {
+            pipeline,
+            shader_layout,
+        },
+    ) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: vs-streamout-proof batch build failed detail={}\n",
+                reason
+            );
+            return false;
+        }
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
+    crate::log!(
+        "intel/render: vs-streamout-proof batch-ready experiment={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
+        experiment.label(),
+        batch_tail_bytes,
+        GPU_VA_STREAMOUT_BASE,
+        experiment.vertex_bytes(),
+        draw.vertex_count
+    );
+
+    let stats_before = capture_triangle_stage_stats(dev);
+    let completed = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_DONE,
+        RESULT_SLOT_FINAL_DWORD,
+        "vs-streamout-proof",
+    );
+    let stats_after = capture_triangle_stage_stats(dev);
+    let accepted = completed
+        || maybe_soft_accept_streamout_submit(
+            "vs-streamout-proof",
+            warm,
+            stats_before,
+            stats_after,
+            true,
+            experiment.vertex_bytes() * draw.vertex_count as usize,
+        );
+    log_streamout_proof_result(
+        "vs-streamout-proof",
+        warm,
+        completed,
+        draw.vertex_count as usize,
+        experiment,
+    );
+    if accepted && !completed {
+        recover_render_engine_after_nonretired_submit(dev, warm, "vs-streamout-proof");
+    }
+    accepted
 }
 
 fn submit_triangle_streamout_proof(
@@ -1464,9 +1715,11 @@ fn submit_triangle_streamout_proof(
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
         core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
     }
     seed_result_debug_slots(warm);
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len);
 
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
@@ -1497,11 +1750,12 @@ fn submit_triangle_streamout_proof(
         "intel/render: streamout-proof batch-ready experiment={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
         experiment.label(),
         batch_tail_bytes,
-        RESULT_STREAMOUT_PROOF_GPU_ADDR,
+        GPU_VA_STREAMOUT_BASE,
         experiment.vertex_bytes(),
         draw.vertex_count
     );
 
+    let stats_before = capture_triangle_stage_stats(dev);
     let completed = submit_warm_render_batch(
         dev,
         warm,
@@ -1509,6 +1763,16 @@ fn submit_triangle_streamout_proof(
         RESULT_SLOT_FINAL_DWORD,
         "streamout-proof",
     );
+    let stats_after = capture_triangle_stage_stats(dev);
+    let accepted = completed
+        || maybe_soft_accept_streamout_submit(
+            "streamout-proof",
+            warm,
+            stats_before,
+            stats_after,
+            true,
+            experiment.vertex_bytes() * draw.vertex_count as usize,
+        );
     log_streamout_proof_result(
         "streamout-proof",
         warm,
@@ -1516,7 +1780,10 @@ fn submit_triangle_streamout_proof(
         draw.vertex_count as usize,
         experiment,
     );
-    completed
+    if accepted && !completed {
+        recover_render_engine_after_nonretired_submit(dev, warm, "streamout-proof");
+    }
+    accepted
 }
 
 fn wait_eq(dev: crate::intel::Dev, reg: usize, mask: u32, want: u32, n: usize) -> bool {
@@ -1537,7 +1804,16 @@ fn map_smoke_buffers(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
         super::map_ggtt(dev, warm.draw_state_phys, warm.draw_state_len, GPU_VA_DRAW_STATE_BASE);
     let ok_vertex = super::map_ggtt(dev, warm.vertex_phys, warm.vertex_len, GPU_VA_VERTEX_BASE);
     let ok_result = super::map_ggtt(dev, warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE);
-    if ok_ring && ok_context && ok_batch && ok_draw_state && ok_vertex && ok_result {
+    let ok_streamout =
+        super::map_ggtt(dev, warm.streamout_phys, warm.streamout_len, GPU_VA_STREAMOUT_BASE);
+    if ok_ring
+        && ok_context
+        && ok_batch
+        && ok_draw_state
+        && ok_vertex
+        && ok_result
+        && ok_streamout
+    {
         super::ggtt_invalidate(dev);
         true
     } else {
@@ -1787,7 +2063,7 @@ fn submit_3d_no_draw_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> boo
 fn log_render_buffer_layout(warm: RenderWarmState, rt_gpu_addr: Option<u64>) {
     let rt_gpu_addr = rt_gpu_addr.unwrap_or(0);
     crate::log!(
-        "intel/render: buffers ring phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} context phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} batch phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} result phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} state phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} vertex phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rt_ggtt=0x{:X}\n",
+        "intel/render: buffers ring phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} context phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} batch phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} result phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} streamout phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} state phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} vertex phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rt_ggtt=0x{:X}\n",
         warm.ring_phys,
         GPU_VA_RING_BASE,
         warm.ring_len,
@@ -1800,6 +2076,9 @@ fn log_render_buffer_layout(warm: RenderWarmState, rt_gpu_addr: Option<u64>) {
         warm.result_phys,
         GPU_VA_RESULT_BASE,
         warm.result_len,
+        warm.streamout_phys,
+        GPU_VA_STREAMOUT_BASE,
+        warm.streamout_len,
         warm.draw_state_phys,
         GPU_VA_DRAW_STATE_BASE,
         warm.draw_state_len,
@@ -2261,11 +2540,7 @@ fn encode_triangle_probe_batch(
     let streamout_dw2 = streamout_experiment.vertex_read_length();
     let streamout_dw3 = streamout_experiment.vertex_bytes() as u32;
     let streamout_dw4 = 0;
-    let streamout_surface_size_dwords = (warm
-        .result_len
-        .saturating_sub(RESULT_STREAMOUT_PROOF_OFFSET)
-        / 4)
-    .saturating_sub(1) as u32;
+    let streamout_surface_size_dwords = (warm.streamout_len / 4).saturating_sub(1) as u32;
     let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 21) | (1 << 31);
     let so_buffer_stream_offset_dw = 0u32;
     // Mesa zeros this packet during init to clear any inherited clear/resolve
@@ -2589,7 +2864,7 @@ fn encode_triangle_probe_batch(
         log_batch_offset(cursor, "3DSTATE_SO_BUFFER_INDEX_0");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SO_BUFFER_INDEX_0)?;
         push(batch_dwords, &mut cursor, so_buffer_index_dw1)?;
-        push_addr(batch_dwords, &mut cursor, RESULT_STREAMOUT_PROOF_GPU_ADDR)?;
+        push_addr(batch_dwords, &mut cursor, GPU_VA_STREAMOUT_BASE)?;
         push(batch_dwords, &mut cursor, streamout_surface_size_dwords)?;
         push_addr(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, so_buffer_stream_offset_dw)?;
@@ -2644,7 +2919,7 @@ fn encode_triangle_probe_batch(
                 (so_buffer_index_dw1 >> 20) & 0x1,
             ),
             (so_buffer_index_dw1 >> 22) & 0x7F,
-            RESULT_STREAMOUT_PROOF_GPU_ADDR,
+            GPU_VA_STREAMOUT_BASE,
             streamout_surface_size_dwords,
             so_buffer_stream_offset_dw,
         );
@@ -3012,7 +3287,7 @@ fn encode_triangle_probe_batch(
     Ok(cursor * core::mem::size_of::<u32>())
 }
 
-fn encode_vf_streamout_proof_batch(
+fn encode_minimal_streamout_proof_batch(
     batch_dwords: &mut [u32],
     warm: RenderWarmState,
     draw: TriangleDrawPrep,
@@ -3022,9 +3297,19 @@ fn encode_vf_streamout_proof_batch(
     done_value: u32,
     streamout_experiment: StreamoutProofExperiment,
     slice_hash_table_offset_bytes: u32,
+    vs_config: Option<VsStreamoutProofConfig>,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
-    let batch_mode = TriangleBatchMode::VfStreamoutProof;
+    let batch_mode = if vs_config.is_some() {
+        TriangleBatchMode::VsStreamoutProof
+    } else {
+        TriangleBatchMode::VfStreamoutProof
+    };
+    let submit_label = if vs_config.is_some() {
+        "vs-streamout-proof"
+    } else {
+        "vf-streamout-proof"
+    };
 
     fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
         if *cursor >= batch_dwords.len() {
@@ -3118,6 +3403,16 @@ fn encode_vf_streamout_proof_batch(
         push(batch_dwords, cursor, (size_bytes & 0xFFFF_F000) | u32::from(enable))
     }
 
+    fn sampler_count_encoding(count: u8) -> u32 {
+        match count {
+            0 => 0,
+            1..=4 => 1,
+            5..=8 => 2,
+            9..=12 => 3,
+            _ => 4,
+        }
+    }
+
     fn log_batch_offset(cursor: usize, label: &str) {
         crate::log!(
             "intel/render: batch-off 0x{:03X} {}\n",
@@ -3193,19 +3488,22 @@ fn encode_vf_streamout_proof_batch(
         )
     }
 
-    let streamout_surface_size_dwords = (warm
-        .result_len
-        .saturating_sub(RESULT_STREAMOUT_PROOF_OFFSET)
-        / 4)
-    .saturating_sub(1) as u32;
+    let streamout_surface_size_dwords = (warm.streamout_len / 4).saturating_sub(1) as u32;
     let streamout_dw1 = (1 << 25) | (1 << 30) | (1 << 31);
     let streamout_dw2 = streamout_experiment.vertex_read_length();
     let streamout_dw3 = streamout_experiment.vertex_bytes() as u32;
     let streamout_dw4 = 0u32;
     let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 21) | (1 << 31);
     let sbe_dw1 = (1 << 5) | (1 << 11) | (1 << 21) | (1 << 22) | (1 << 28) | (1 << 29);
-    let urb_vs_alloc_dw1 =
-        (1u32.saturating_sub(1)) | (TRIANGLE_VS_URB_START << 10) | (TRIANGLE_VS_URB_START << 21);
+    let programmed_vs_urb_output_length = vs_config
+        .map(|config| {
+            TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE
+                .unwrap_or(config.pipeline.vs.meta.urb_entry_output_length)
+        })
+        .unwrap_or(1);
+    let urb_vs_alloc_dw1 = (programmed_vs_urb_output_length.saturating_sub(1) as u32)
+        | (TRIANGLE_VS_URB_START << 10)
+        | (TRIANGLE_VS_URB_START << 21);
     let urb_vs_alloc_dw2 = TRIANGLE_VS_URB_ENTRIES | (TRIANGLE_VS_URB_ENTRIES << 16);
     let gfx125_sample_pattern_dw = 0x8888_8888;
     let gfx125_slice_hash =
@@ -3214,7 +3512,7 @@ fn encode_vf_streamout_proof_batch(
     let gfx125_3d_mode_dw3 = gfx125_3d_mode_dw3();
     let vb_size_bytes = draw.vertex_count.saturating_mul(draw.vertex_stride);
     let vb_cmd = cmd_3dstate_vertex_buffers(1)?;
-    let ve_cmd = cmd_3dstate_vertex_elements(2)?;
+    let ve_cmd = cmd_3dstate_vertex_elements(if vs_config.is_some() { 1 } else { 2 })?;
 
     batch_dwords.fill(0);
 
@@ -3328,54 +3626,68 @@ fn encode_vf_streamout_proof_batch(
 
     log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS");
     push(batch_dwords, &mut cursor, ve_cmd)?;
-    match streamout_experiment {
-        StreamoutProofExperiment::PositionSlot1 => {
-            push_vertex_element_state(
-                batch_dwords,
-                &mut cursor,
-                0,
-                0,
-                SURFACE_FORMAT_R32G32B32A32_UINT,
-                VFCOMP_STORE_0,
-                VFCOMP_STORE_0,
-                VFCOMP_STORE_0,
-                VFCOMP_STORE_0,
-            )?;
-            push_vertex_element_state(
-                batch_dwords,
-                &mut cursor,
-                0,
-                0,
-                SURFACE_FORMAT_R32G32B32A32_UINT,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-            )?;
-        }
-        StreamoutProofExperiment::HeaderAndPositionSlots01 => {
-            push_vertex_element_state(
-                batch_dwords,
-                &mut cursor,
-                0,
-                0,
-                SURFACE_FORMAT_R32G32B32A32_UINT,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-            )?;
-            push_vertex_element_state(
-                batch_dwords,
-                &mut cursor,
-                0,
-                16,
-                SURFACE_FORMAT_R32G32B32A32_UINT,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-            )?;
+    if vs_config.is_some() {
+        push_vertex_element_state(
+            batch_dwords,
+            &mut cursor,
+            0,
+            0,
+            SURFACE_FORMAT_R32G32B32_FLOAT,
+            VFCOMP_STORE_SRC,
+            VFCOMP_STORE_SRC,
+            VFCOMP_STORE_SRC,
+            VFCOMP_STORE_1_FP,
+        )?;
+    } else {
+        match streamout_experiment {
+            StreamoutProofExperiment::PositionSlot1 => {
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    0,
+                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                )?;
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    0,
+                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                )?;
+            }
+            StreamoutProofExperiment::HeaderAndPositionSlots01 => {
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    0,
+                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                )?;
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    16,
+                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                )?;
+            }
         }
     }
 
@@ -3407,10 +3719,56 @@ fn encode_vf_streamout_proof_batch(
     push(batch_dwords, &mut cursor, urb_vs_alloc_dw1)?;
     push(batch_dwords, &mut cursor, urb_vs_alloc_dw2)?;
 
-    log_batch_offset(cursor, "3DSTATE_VS disabled");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
-    for _ in 0..8 {
+    if let Some(config) = vs_config {
+        let pipeline = config.pipeline;
+        let shader_layout = config.shader_layout;
+        let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
+        let baked_vs_urb_output_length = pipeline.vs.meta.urb_entry_output_length;
+        let vs_dw3 = ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
+            | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
+        let vs_dw6 = (1 << 11) | ((pipeline.vs.meta.kernel.grf_start_register as u32) << 20);
+        let vs_dw7 = 1
+            | (1 << 2)
+            | (1 << 10)
+            | (triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads) << 22);
+        let vs_dw8 = (programmed_vs_urb_output_length as u32) << 16;
+        log_batch_offset(cursor, "3DSTATE_VS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
+        push(batch_dwords, &mut cursor, vs_ksp_offset & !0x3F)?;
         push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, vs_dw3)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, vs_dw6)?;
+        push(batch_dwords, &mut cursor, vs_dw7)?;
+        push(batch_dwords, &mut cursor, vs_dw8)?;
+        crate::log!(
+            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} grf_start={} dispatch={:?}\n",
+            vs_ksp_offset & !0x3F,
+            vs_dw3,
+            vs_dw6,
+            vs_dw7,
+            vs_dw8,
+            pipeline.vs.meta.max_threads,
+            triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads),
+            baked_vs_urb_output_length,
+            programmed_vs_urb_output_length,
+            pipeline.vs.meta.kernel.grf_start_register,
+            pipeline.vs.meta.kernel.dispatch_mode,
+        );
+        crate::log!(
+            "intel/render: probe-vs-export note={} position_only={} generic_attrs=0 baked_urb_bytes={} programmed_urb_bytes={} expected_vue=header+position-only\n",
+            crate::intel::shader::triangle_pipeline_note(),
+            (pipeline.ps.meta.num_varying_inputs == 0) as u8,
+            (baked_vs_urb_output_length as u32) * 64,
+            (programmed_vs_urb_output_length as u32) * 64,
+        );
+    } else {
+        log_batch_offset(cursor, "3DSTATE_VS disabled");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
+        for _ in 0..8 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
     }
     log_batch_offset(cursor, "MI_STORE_DATA_IMM post-vs");
     push_store_data_imm(
@@ -3473,7 +3831,7 @@ fn encode_vf_streamout_proof_batch(
     log_batch_offset(cursor, "3DSTATE_SO_BUFFER_INDEX_0");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SO_BUFFER_INDEX_0)?;
     push(batch_dwords, &mut cursor, so_buffer_index_dw1)?;
-    push_addr(batch_dwords, &mut cursor, RESULT_STREAMOUT_PROOF_GPU_ADDR)?;
+    push_addr(batch_dwords, &mut cursor, GPU_VA_STREAMOUT_BASE)?;
     push(batch_dwords, &mut cursor, streamout_surface_size_dwords)?;
     push_addr(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -3498,7 +3856,8 @@ fn encode_vf_streamout_proof_batch(
         push(batch_dwords, &mut cursor, streamout_decl_dword5)?;
     }
     crate::log!(
-        "intel/render: vf-streamout-proof decl experiment={} read_len={} so_pitch={} decl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] slot_contract={}\n",
+        "intel/render: {} decl experiment={} read_len={} so_pitch={} decl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] slot_contract={}\n",
+        submit_label,
         streamout_experiment.label(),
         streamout_experiment.vertex_read_length(),
         streamout_experiment.vertex_bytes(),
@@ -3511,8 +3870,15 @@ fn encode_vf_streamout_proof_batch(
         streamout_experiment.vf_slot_contract(),
     );
     crate::log!(
-        "intel/render: vf-streamout-proof contract experiment={} stages_disabled=vs|hs|te|ds|gs|ps sbe[read_offset=1 read_length=1 num_sf_attrs=1 force_offset=1 force_length=1] urb_vs[alloc_len=1 start={} entries={}] vb[index=0 pitch={} size=0x{:X}] streamout[read_offset=0 read_length_field={} rendering_disable={} stats_enable={} pitch={} so_gpu=0x{:X} size_dwords=0x{:X}] topo={}\n",
+        "intel/render: {} contract experiment={} stages_disabled={} sbe[read_offset=1 read_length=1 num_sf_attrs=1 force_offset=1 force_length=1] urb_vs[alloc_len={} start={} entries={}] vb[index=0 pitch={} size=0x{:X}] streamout[read_offset=0 read_length_field={} rendering_disable={} stats_enable={} pitch={} so_gpu=0x{:X} size_dwords=0x{:X}] topo={}\n",
+        submit_label,
         streamout_experiment.label(),
+        if vs_config.is_some() {
+            "hs|te|ds|gs|ps"
+        } else {
+            "vs|hs|te|ds|gs|ps"
+        },
+        programmed_vs_urb_output_length,
         TRIANGLE_VS_URB_START,
         TRIANGLE_VS_URB_ENTRIES,
         draw.vertex_stride,
@@ -3521,7 +3887,7 @@ fn encode_vf_streamout_proof_batch(
         (streamout_dw1 >> 30) & 0x1,
         (streamout_dw1 >> 25) & 0x1,
         streamout_dw3 & 0xFFF,
-        RESULT_STREAMOUT_PROOF_GPU_ADDR,
+        GPU_VA_STREAMOUT_BASE,
         streamout_surface_size_dwords,
         primitive_topology_label(batch_mode.topology()),
     );
@@ -3580,6 +3946,58 @@ fn encode_vf_streamout_proof_batch(
 
     Ok(cursor * core::mem::size_of::<u32>())
 }
+
+fn encode_vf_streamout_proof_batch(
+    batch_dwords: &mut [u32],
+    warm: RenderWarmState,
+    draw: TriangleDrawPrep,
+    result_gpu_addr: u64,
+    pre3d_value: u32,
+    post3d_value: u32,
+    done_value: u32,
+    streamout_experiment: StreamoutProofExperiment,
+    slice_hash_table_offset_bytes: u32,
+) -> Result<usize, &'static str> {
+    encode_minimal_streamout_proof_batch(
+        batch_dwords,
+        warm,
+        draw,
+        result_gpu_addr,
+        pre3d_value,
+        post3d_value,
+        done_value,
+        streamout_experiment,
+        slice_hash_table_offset_bytes,
+        None,
+    )
+}
+
+fn encode_vs_streamout_proof_batch(
+    batch_dwords: &mut [u32],
+    warm: RenderWarmState,
+    draw: TriangleDrawPrep,
+    result_gpu_addr: u64,
+    pre3d_value: u32,
+    post3d_value: u32,
+    done_value: u32,
+    streamout_experiment: StreamoutProofExperiment,
+    slice_hash_table_offset_bytes: u32,
+    vs_config: VsStreamoutProofConfig,
+) -> Result<usize, &'static str> {
+    encode_minimal_streamout_proof_batch(
+        batch_dwords,
+        warm,
+        draw,
+        result_gpu_addr,
+        pre3d_value,
+        post3d_value,
+        done_value,
+        streamout_experiment,
+        slice_hash_table_offset_bytes,
+        Some(vs_config),
+    )
+}
+
 
 fn encode_3d_no_draw_probe_batch(
     batch_dwords: &mut [u32],
@@ -4201,7 +4619,7 @@ fn submit_warm_render_batch(
     crate::intel::mmio_write(
         dev,
         RCS_RING_MODE_GEN7,
-        masked_bit_enable(GEN11_GFX_DISABLE_LEGACY_MODE),
+        masked_bit_enable(GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE),
     );
     let ctx_ctl_after = masked_bits_update(
         CTX_CTRL_RS_CTX_ENABLE,
@@ -5081,6 +5499,48 @@ fn log_triangle_stage_diagnosis(
     );
 }
 
+fn maybe_soft_accept_streamout_submit(
+    submit_name: &'static str,
+    warm: RenderWarmState,
+    before: TriangleStageStats,
+    after: TriangleStageStats,
+    require_vs: bool,
+    min_streamout_bytes: usize,
+) -> bool {
+    let delta = after.delta_since(before);
+    let post3d_eop = read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD);
+    let post3d_hi = read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD);
+    let expected_reason = if require_vs {
+        "post3d-eop+vs+streamout-counters"
+    } else {
+        "post3d-eop+vf-streamout-counters"
+    };
+    let accept = post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D
+        && post3d_hi == 0
+        && (delta.so_prims_written_0 > 0
+            || usize::try_from(delta.so_write_offset_0).ok().unwrap_or(0) >= min_streamout_bytes)
+        && if require_vs {
+            delta.vs_invocations > 0
+        } else {
+            delta.vs_invocations == 0 && (delta.ia_vertices > 0 || delta.ia_primitives > 0)
+        };
+    crate::log!(
+        "intel/render: {} soft-accept accepted={} reason={} post3d_eop=0x{:08X} post3d_hi=0x{:08X} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_so0={} delta_so_write0={} min_streamout_bytes={}\n",
+        submit_name,
+        accept as u8,
+        expected_reason,
+        post3d_eop,
+        post3d_hi,
+        delta.ia_vertices,
+        delta.ia_primitives,
+        delta.vs_invocations,
+        delta.so_prims_written_0,
+        delta.so_write_offset_0,
+        min_streamout_bytes,
+    );
+    accept
+}
+
 fn log_triangle_stage_frontier(
     submit_name: &str,
     completed: bool,
@@ -5156,8 +5616,14 @@ fn log_streamout_proof_result(
     vertex_count: usize,
     experiment: StreamoutProofExperiment,
 ) {
-    let base =
-        unsafe { (warm.result_virt as *const u8).add(RESULT_STREAMOUT_PROOF_OFFSET) as *const u32 };
+    let flush_bytes = experiment
+        .vertex_bytes()
+        .saturating_mul(vertex_count)
+        .min(warm.streamout_len);
+    if flush_bytes != 0 {
+        crate::intel::dma_flush(warm.streamout_virt, flush_bytes);
+    }
+    let base = warm.streamout_virt as *const u32;
     let count = core::cmp::min(vertex_count, 3);
     let stride_words = experiment.vertex_bytes() / 4;
     for idx in 0..count {
@@ -5242,6 +5708,68 @@ fn seed_result_debug_slots(warm: RenderWarmState) {
             core::ptr::write_volatile((warm.result_virt as *mut u32).add(i), RESULT_DEBUG_SENTINEL);
         }
     }
+}
+
+fn recover_render_engine_after_nonretired_submit(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    submit_name: &'static str,
+) {
+    let el_pre = crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO);
+    let mi_mode_pre = crate::intel::mmio_read(dev, RCS_RING_MI_MODE);
+    let acthd_pre = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
+    crate::log!(
+        "intel/render: {} recovery begin execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X}\n",
+        submit_name,
+        el_pre,
+        mi_mode_pre,
+        acthd_pre,
+    );
+
+    for _ in 0..200_000u32 {
+        let el = crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO);
+        if (el >> 30) == 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    crate::intel::mmio_write(
+        dev,
+        RCS_RING_MI_MODE,
+        RING_MI_MODE_STOP_RING | (RING_MI_MODE_STOP_RING << 16),
+    );
+    for _ in 0..50_000u32 {
+        if crate::intel::mmio_read(dev, RCS_RING_MI_MODE) & MODE_IDLE != 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    crate::intel::mmio_write(dev, GDRST, GRDOM_RENDER);
+    for _ in 0..500_000u32 {
+        if crate::intel::mmio_read(dev, GDRST) & GRDOM_RENDER == 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    crate::intel::mmio_write(dev, RCS_RING_MI_MODE, RING_MI_MODE_STOP_RING << 16);
+    crate::intel::ggtt_invalidate(dev);
+
+    let mode_bits = GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE;
+    crate::intel::mmio_write(dev, RCS_RING_MODE_GEN7, masked_bit_enable(mode_bits));
+    let forcewake_ok = forcewake_render_acquire(warm);
+
+    crate::log!(
+        "intel/render: {} recovery end gdrst=0x{:08X} execlist_lo=0x{:08X} mi_mode=0x{:08X} mode=0x{:08X} forcewake_ok={}\n",
+        submit_name,
+        crate::intel::mmio_read(dev, GDRST),
+        crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO),
+        crate::intel::mmio_read(dev, RCS_RING_MI_MODE),
+        crate::intel::mmio_read(dev, RCS_RING_MODE_GEN7),
+        forcewake_ok as u8,
+    );
 }
 
 fn build_ring_batch_start(warm: RenderWarmState, batch_gpu_addr: u64) -> usize {

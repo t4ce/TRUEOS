@@ -92,6 +92,8 @@ define_started_flags!(
     TRUEOSFS_READY_HOOK_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
+    APP_VM_RUN_QUEUE_STARTED,
+    BOOT_HELLO_WORLD_APP_STARTED,
     SMTP_SMOKE_STARTED,
     MMIO_ONESHOT_PROBE_STARTED,
     UART_SHELL_STARTED,
@@ -127,6 +129,99 @@ define_disabled_flags!(
     DISABLED_BOOT_NETBENCH,
     DISABLED_ATOMIC_BOMB,
 );
+
+macro_rules! define_stop_flags {
+    ($($name:ident),* $(,)?) => {
+        $(static $name: AtomicBool = AtomicBool::new(false);)*
+    };
+}
+
+define_stop_flags!(
+    STOP_UI2_GFX_TETRIS,
+    STOP_UI2_TRIANGLE_DEMO,
+    STOP_UI2_BGRT_DEMO,
+    STOP_UI2_CORETICKS_DEMO,
+    STOP_UI2_MANDELBROT_DEMO,
+    STOP_UI2_RAPLE_DEMO,
+    STOP_UI2_PETERSEN_DEMO,
+    STOP_UI2_PARTICLE_DEMO,
+    STOP_UI2_SMILEY_FOUNTAIN_DEMO,
+    STOP_UI2_SHELL_DEMO,
+    STOP_UI2_SWARM_DEMO,
+    STOP_UI2_SVG_DEMO,
+    STOP_UI2_WEATHER_DEMO,
+    STOP_UI2_CHART_DEMO,
+    STOP_UI2_TRUEOSFS_EXPLORER_DEMO,
+);
+
+fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
+    match name {
+        "ui2-gfx-tetris" => Some(&STOP_UI2_GFX_TETRIS),
+        "ui2-triangle-demo" => Some(&STOP_UI2_TRIANGLE_DEMO),
+        "ui2-bgrt-demo" => Some(&STOP_UI2_BGRT_DEMO),
+        "ui2-coreticks-demo" => Some(&STOP_UI2_CORETICKS_DEMO),
+        "ui2-mandelbrot-demo" => Some(&STOP_UI2_MANDELBROT_DEMO),
+        "ui2-raple-demo" => Some(&STOP_UI2_RAPLE_DEMO),
+        "ui2-petersen-demo" => Some(&STOP_UI2_PETERSEN_DEMO),
+        "ui2-particle-demo" => Some(&STOP_UI2_PARTICLE_DEMO),
+        "ui2-smiley-fountain-demo" => Some(&STOP_UI2_SMILEY_FOUNTAIN_DEMO),
+        "ui2-shell-demo" => Some(&STOP_UI2_SHELL_DEMO),
+        "ui2-swarm-demo" => Some(&STOP_UI2_SWARM_DEMO),
+        "ui2-svg-demo" => Some(&STOP_UI2_SVG_DEMO),
+        "ui2-weather-demo" => Some(&STOP_UI2_WEATHER_DEMO),
+        "ui2-chart-demo" => Some(&STOP_UI2_CHART_DEMO),
+        "ui2-trueosfs-explorer-demo" => Some(&STOP_UI2_TRUEOSFS_EXPLORER_DEMO),
+        _ => None,
+    }
+}
+
+pub struct TaskRunGuard {
+    name: &'static str,
+}
+
+impl Drop for TaskRunGuard {
+    fn drop(&mut self) {
+        task_exited(self.name);
+    }
+}
+
+pub fn task_run_guard(name: &'static str) -> TaskRunGuard {
+    if let Some(flag) = stop_flag_by_task_name(name) {
+        flag.store(false, Ordering::Release);
+    }
+    TaskRunGuard { name }
+}
+
+pub fn task_stop_requested(name: &str) -> bool {
+    stop_flag_by_task_name(name)
+        .map(|flag| flag.load(Ordering::Acquire))
+        .unwrap_or(false)
+}
+
+fn task_exited(name: &str) {
+    if let Some(flag) = stop_flag_by_task_name(name) {
+        flag.store(false, Ordering::Release);
+    }
+    if let Some(index) = task_index_by_name(name)
+        && let Some(spec) = TASKS.get(index)
+    {
+        spec.started.store(false, Ordering::Release);
+    }
+}
+
+pub async fn wait_task_or_timeout_ms(name: &str, total_ms: u64) -> bool {
+    const CHUNK_MS: u64 = 50;
+    let mut remaining_ms = total_ms;
+    while remaining_ms != 0 {
+        if task_stop_requested(name) {
+            return true;
+        }
+        let sleep_ms = remaining_ms.min(CHUNK_MS);
+        Timer::after(EmbassyDuration::from_millis(sleep_ms)).await;
+        remaining_ms -= sleep_ms;
+    }
+    task_stop_requested(name)
+}
 
 const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 0;
 
@@ -873,6 +968,22 @@ fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
     SpawnAttempt::Skipped
 }
 
+fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
+    match crate::shell2::spawn_app_vm_run_queue(spawner) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+#[embassy_executor::task]
+async fn boot_hello_world_app_task() {
+    crate::shell2::enqueue_embedded_hello_world_app_once();
+}
+
+fn spawn_boot_hello_world_app(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| boot_hello_world_app_task())
+}
+
 fn spawn_smtp_smoke(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst_smtp_smoke::smtp_smoke_task())
 }
@@ -993,6 +1104,18 @@ static TASKS: &[TaskSpec] = &[
         NET_CONFIGURED_AND_ROOT_READY,
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
+    ),
+    TaskSpec::enabled(
+        "app-vm-run-queue",
+        0,
+        &APP_VM_RUN_QUEUE_STARTED,
+        spawn_app_vm_run_queue,
+    ),
+    TaskSpec::enabled(
+        "boot-hello-world-app",
+        0,
+        &BOOT_HELLO_WORLD_APP_STARTED,
+        spawn_boot_hello_world_app,
     ),
     TaskSpec::enabled(
         "ws-time",
@@ -1250,16 +1373,16 @@ pub struct OfflineTaskEntry {
     pub index: usize,
 }
 
-/// Return all tasks that are currently disabled (and not yet started).
-/// Only includes tasks whose name starts with "ui2-".
+/// Return all UI2 tasks that are currently disabled.
+/// This includes both tasks that have not started yet and task-backed windows
+/// that were offlined while already running.
 pub fn offline_ui2_demo_tasks() -> Vec<OfflineTaskEntry> {
     let mut out = Vec::new();
     for (i, spec) in TASKS.iter().enumerate() {
         if !spec.name.starts_with("ui2-") {
             continue;
         }
-        // Disabled and not yet started → available for launch.
-        if spec.disabled.load(Ordering::Acquire) && !spec.started.load(Ordering::Acquire) {
+        if spec.disabled.load(Ordering::Acquire) {
             out.push(OfflineTaskEntry {
                 name: spec.name,
                 index: i,
@@ -1292,9 +1415,44 @@ pub fn enable_task_by_index(index: usize) {
     }
 }
 
+pub fn disable_task_by_index(index: usize) {
+    if let Some(spec) = TASKS.get(index) {
+        spec.disabled.store(true, Ordering::Release);
+    }
+}
+
+pub fn request_task_stop_by_index(index: usize) -> bool {
+    let Some(spec) = TASKS.get(index) else {
+        return false;
+    };
+    let Some(flag) = stop_flag_by_task_name(spec.name) else {
+        return false;
+    };
+    flag.store(true, Ordering::Release);
+    true
+}
+
 /// Return the name of a task by its TASKS index.
 pub fn task_name_by_index(index: usize) -> Option<&'static str> {
     TASKS.get(index).map(|spec| spec.name)
+}
+
+pub fn task_index_by_name(name: &str) -> Option<usize> {
+    TASKS.iter().position(|spec| spec.name == name)
+}
+
+pub fn task_disabled_by_index(index: usize) -> bool {
+    TASKS
+        .get(index)
+        .map(|spec| spec.disabled.load(Ordering::Acquire))
+        .unwrap_or(false)
+}
+
+pub fn task_started_by_index(index: usize) -> bool {
+    TASKS
+        .get(index)
+        .map(|spec| spec.started.load(Ordering::Acquire))
+        .unwrap_or(false)
 }
 
 #[embassy_executor::task]

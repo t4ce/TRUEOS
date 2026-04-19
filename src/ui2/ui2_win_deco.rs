@@ -6,11 +6,12 @@ const UI2_CHROME_TEXT_RGBA: (u8, u8, u8, u8) = (0x00, 0x00, 0x00, 0xFF);
 const UI2_CHROME_TITLE_FONT_TIER: Ui2FontTier = Ui2FontTier::Third;
 const UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_UNLOCKED_TWEMOJI: char = '\u{25FC}';
 const UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_LOCKED_TWEMOJI: char = '\u{25FB}';
-const UI2_SYSTEM_BUTTON_FORK_TWEMOJI: char = '\u{2795}';
+const UI2_SYSTEM_BUTTON_FORK_TWEMOJI: char = '\u{2797}';
 const UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI: char = '\u{2796}';
 const UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI: char = '\u{23F9}';
 const UI2_SYSTEM_BUTTON_RESTORE_TWEMOJI: char = '\u{23CF}';
-const UI2_SYSTEM_BUTTON_CLOSE_TWEMOJI: char = '\u{23EF}';
+const UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI: char = '\u{23EF}';
+const UI2_SYSTEM_BUTTON_CLOSE_HULL_TWEMOJI: char = '\u{2716}';
 const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{2733}';
 
 fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::String {
@@ -148,7 +149,11 @@ fn window_system_button_twemoji(window: &Ui2Window, action: Ui2SystemButtonActio
         Ui2SystemButtonAction::Minimize => Some(UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI),
         Ui2SystemButtonAction::Restore => Some(UI2_SYSTEM_BUTTON_RESTORE_TWEMOJI),
         Ui2SystemButtonAction::ToggleMaximize => Some(UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI),
-        Ui2SystemButtonAction::Close => Some(UI2_SYSTEM_BUTTON_CLOSE_TWEMOJI),
+        Ui2SystemButtonAction::Close => Some(if window.spawn_task_index.is_some() {
+            UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI
+        } else {
+            UI2_SYSTEM_BUTTON_CLOSE_HULL_TWEMOJI
+        }),
     }
 }
 

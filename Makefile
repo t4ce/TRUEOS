@@ -24,6 +24,8 @@ LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 GUC_FW_HOST_PATH ?= /lib/firmware/i915/adlp_guc_70.bin.zst
 # Canonical boot path used by limine.conf for the GuC module.
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/adlp_guc_70.bin
+HELLO_WORLD_BP_HOST_PATH ?= ../TRUEOS Blueprints/hello_world_bp/target/trueos-app/debug/hello_world_app.bp
+HELLO_WORLD_BP_ISO_REL_PATH ?= EFI/BOOT/apps/hello_world_app.bp
 
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
 QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
@@ -140,6 +142,10 @@ iso: artifacts images
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
+	@if [ ! -f "$(HELLO_WORLD_BP_HOST_PATH)" ]; then \
+		echo "error: hello-world blueprint not found at $(HELLO_WORLD_BP_HOST_PATH)"; \
+		exit 1; \
+	fi
 	@if [ ! -f "$(GUC_FW_HOST_PATH)" ]; then \
 		echo "error: GUC firmware not found at $(GUC_FW_HOST_PATH)"; \
 		exit 1; \
@@ -155,6 +161,8 @@ iso: artifacts images
 	esac
 	mkdir -p $(ISO_BOOT_DIR)/$(dir $(GUC_FW_ISO_REL_PATH))
 	cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/$(GUC_FW_ISO_REL_PATH)
+	mkdir -p $(ISO_BOOT_DIR)/$(dir $(HELLO_WORLD_BP_ISO_REL_PATH))
+	cp "$(HELLO_WORLD_BP_HOST_PATH)" "$(ISO_BOOT_DIR)/$(HELLO_WORLD_BP_ISO_REL_PATH)"
 	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
@@ -168,8 +176,10 @@ iso: artifacts images
 	dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1k count=$(EFI_IMG_SIZE_KIB)
 	mkfs.vfat -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
+	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI/BOOT/apps
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_SHARE)/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin ::/EFI/BOOT/adlp_guc_70.bin
+	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) "$(ISO_BOOT_DIR)/$(HELLO_WORLD_BP_ISO_REL_PATH)" ::/EFI/BOOT/apps/hello_world_app.bp
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
 		-R \

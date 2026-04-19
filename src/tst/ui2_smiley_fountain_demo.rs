@@ -391,13 +391,17 @@ fn create_smiley_fountain_window() -> Option<crate::r::ui2::Ui2SurfaceWindow> {
 
 #[embassy_executor::task]
 pub async fn ui2_smiley_fountain_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-smiley-fountain-demo");
     while !twemoji::twemoji_ready() {
-        Timer::after(EmbassyDuration::from_millis(20)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-smiley-fountain-demo", 20).await {
+            return;
+        }
     }
 
     let Some(surface) = create_smiley_fountain_window() else {
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-smiley-fountain-demo");
 
     let window_id = surface.window_id();
     let (surface_w, surface_h) = surface.size();
@@ -416,6 +420,9 @@ pub async fn ui2_smiley_fountain_demo_task() {
     seed_particles(&mut particles, &mut rng, surface_w, surface_h);
 
     loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-smiley-fountain-demo") {
+            break;
+        }
         let dt = UI2_SMILEY_FOUNTAIN_FRAME_MS as f32 / 1000.0;
         let cursors = crate::r::ui2::window_content_cursor_positions(window_id);
         let active_now = !cursors.is_empty();
@@ -451,6 +458,13 @@ pub async fn ui2_smiley_fountain_demo_task() {
                 "ui2-smiley-fountain-demo"
             },
         );
-        Timer::after(EmbassyDuration::from_millis(UI2_SMILEY_FOUNTAIN_FRAME_MS)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms(
+            "ui2-smiley-fountain-demo",
+            UI2_SMILEY_FOUNTAIN_FRAME_MS,
+        )
+        .await
+        {
+            break;
+        }
     }
 }

@@ -56,6 +56,7 @@ pub(super) fn alloc_window(
     state.windows.push(Ui2Window {
         id,
         kind,
+        spawn_task_index: None,
         browser_instance_id: if kind == Ui2WindowKind::HostedBrowser {
             PRIMARY_HOSTED_CONTENT_ID
         } else {
@@ -374,8 +375,21 @@ pub(super) fn handle_system_button_action(
                 maximize_window_in_state(state, window_id)
             }
         }
-        Ui2SystemButtonAction::Close => set_window_visible_in_state(state, window_id, false),
+        Ui2SystemButtonAction::Close => close_window_in_state(state, window_id),
     }
+}
+
+fn close_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
+    let task_index = state
+        .windows
+        .iter()
+        .find(|window| window.id == window_id)
+        .and_then(|window| window.spawn_task_index);
+    if let Some(task_index) = task_index {
+        crate::r::spawn_service::disable_task_by_index(task_index);
+        let _ = crate::r::spawn_service::request_task_stop_by_index(task_index);
+    }
+    set_window_visible_in_state(state, window_id, false)
 }
 
 pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) -> bool {
@@ -471,6 +485,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     let id = alloc_window(state, next_kind, next_title.as_str(), next_rect, next_z, next_alpha);
     if let Some(window) = window_mut(state, id) {
         window.browser_instance_id = next_browser_instance_id;
+        window.spawn_task_index = None;
         window.icon_id = next_icon_id;
         window.title_twemoji = next_title_twemoji;
         window.title_icon_tex_id = next_title_icon_tex_id;
@@ -757,6 +772,27 @@ pub fn create_hosted_3d_window(
     refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
     id
+}
+
+pub fn bind_window_spawn_task(id: u32, task_name: &str) -> bool {
+    let Some(task_index) = crate::r::spawn_service::task_index_by_name(task_name) else {
+        return false;
+    };
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.spawn_task_index == Some(task_index) {
+        return true;
+    }
+    window.spawn_task_index = Some(task_index);
+    state.compose_reason = "bind-window-spawn-task";
+    let noted = note_window_dirty(&mut state, id, "bind-window-spawn-task");
+    if noted {
+        refresh_window_hit_entries(&mut state, id);
+    }
+    noted
 }
 
 pub fn create_hosted_3d_content_window(
@@ -1052,6 +1088,15 @@ impl Ui2SurfaceWindow {
     #[inline]
     pub fn window_id(&self) -> u32 {
         self.window_id
+    }
+
+    #[inline]
+    pub fn set_title_twemoji(&self, ch: char) -> bool {
+        set_window_title_twemoji(self.window_id, ch)
+    }
+
+    pub fn bind_spawn_task(&self, task_name: &str) -> bool {
+        bind_window_spawn_task(self.window_id, task_name)
     }
 
     #[inline]
@@ -1536,7 +1581,9 @@ pub fn set_window_hit_test_visible(id: u32, visible: bool) -> bool {
 }
 
 pub fn close_window(id: u32) -> bool {
-    set_window_visible(id, false)
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    close_window_in_state(&mut state, id)
 }
 
 pub fn minimize_window(id: u32) -> bool {

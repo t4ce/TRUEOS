@@ -121,8 +121,10 @@ pub fn dispatch() -> bool {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let p = host_ptr();
             let bytes = unsafe { &(&(*p).payload)[..n] };
-            crate::shell2::backends::net_tcp::net_shell_write_bytes(bytes);
-            write_response(seq, STATUS_OK, n as u64, 0);
+            match crate::hv::vnet::tcp_write(1, bytes) {
+                Ok(written) => write_response(seq, STATUS_OK, written as u64, 0),
+                Err(_) => write_response(seq, STATUS_BAD_ARG, 0, 0),
+            }
             true
         }
         OP_NET_TCP_READ => {
@@ -133,18 +135,11 @@ pub fn dispatch() -> bool {
             }
 
             let p = host_ptr();
-            let mut got = 0usize;
-            while got < want {
-                if let Some(b) = crate::shell2::backends::net_tcp::net_shell_read_byte() {
-                    unsafe {
-                        (*p).payload[got] = b;
-                    }
-                    got += 1;
-                } else {
-                    break;
-                }
+            let out = unsafe { &mut (&mut (*p).payload)[..want] };
+            match crate::hv::vnet::tcp_read(1, out) {
+                Ok(got) => write_response(seq, STATUS_OK, got as u64, got as u32),
+                Err(_) => write_response(seq, STATUS_BAD_ARG, 0, 0),
             }
-            write_response(seq, STATUS_OK, got as u64, got as u32);
             true
         }
         _ => {
