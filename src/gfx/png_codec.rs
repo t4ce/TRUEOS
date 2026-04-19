@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core2::io::Cursor;
+use core3::io::Cursor;
 
 pub struct DecodedPng {
     pub width: u32,

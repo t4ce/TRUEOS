@@ -4,7 +4,7 @@ extern crate alloc;
 
 use core::error::Error;
 use core::fmt;
-use core2::io::{BufRead, Cursor, Seek};
+use core3::io::{BufRead, Cursor, Seek};
 
 mod container;
 mod formats;
@@ -24,7 +24,7 @@ pub enum ImageError {
     /// Used when the image has an invalid format.
     CorruptedImage,
     /// Used when an IoError occurs when trying to read the given data.
-    IoError(core2::io::Error),
+    IoError(core3::io::Error),
 }
 
 impl Error for ImageError {}
@@ -40,8 +40,8 @@ impl fmt::Display for ImageError {
     }
 }
 
-impl From<core2::io::Error> for ImageError {
-    fn from(err: core2::io::Error) -> ImageError {
+impl From<core3::io::Error> for ImageError {
+    fn from(err: core3::io::Error) -> ImageError {
         ImageError::IoError(err)
     }
 }
@@ -169,7 +169,7 @@ pub fn image_type(header: &[u8]) -> ImageResult<ImageType> {
 #[cfg(feature = "std")]
 pub fn size<P: AsRef<std::path::Path>>(path: P) -> ImageResult<ImageSize> {
     let data = std::fs::read(path)
-        .map_err(|_| ImageError::IoError(core2::io::Error::from(core2::io::ErrorKind::Other)))?;
+        .map_err(|_| ImageError::IoError(core3::io::Error::from(core3::io::ErrorKind::Other)))?;
     blob_size(&data)
 }
 
@@ -224,7 +224,7 @@ pub fn blob_size(data: &[u8]) -> ImageResult<ImageSize> {
 /// # Examples
 ///
 /// ```
-/// use core2::io::Cursor;
+/// use core3::io::Cursor;
 /// use imagesize::reader_size;
 ///
 /// // PNG Header with size 123x321

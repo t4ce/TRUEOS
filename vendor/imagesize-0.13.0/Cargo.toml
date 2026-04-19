@@ -42,7 +42,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
-std = ["core2/std"]
+std = ["core3/std"]
 
 [[bench]]
 name = "parse_benchmark"
@@ -51,8 +51,8 @@ harness = false
 
 [dependencies]
 
-[dependencies.core2]
-version = "0.4"
+[dependencies.core3]
+version = "0.1.2"
 default-features = false
 features = ["alloc"]
 

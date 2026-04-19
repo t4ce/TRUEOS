@@ -8,7 +8,7 @@ version = "0.0.2"
 dependencies = [
  "acpi",
  "aml",
- "core2",
+ "core3",
  "crab-usb",
  "crc32fast",
  "dma-api",
@@ -355,10 +355,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "core2"
-version = "0.4.0"
+name = "core3"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b49ba7ef1ad6107f8824dbe97de947cbaac53c44e7f9756a1fba0d37c1eec505"
+checksum = "7cbcb5224cf18d0beaecf52c52a58b248213de007fa72bc212d916224e26ceb8"
 dependencies = [
  "memchr",
 ]
@@ -1149,7 +1149,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 name = "imagesize"
 version = "0.13.0"
 dependencies = [
- "core2",
+ "core3",
 ]
 
 [[package]]
@@ -1625,7 +1625,7 @@ name = "png"
 version = "0.18.1"
 dependencies = [
  "bitflags 2.11.0",
- "core2",
+ "core3",
  "crc32fast",
  "fdeflate",
  "miniz_oxide",

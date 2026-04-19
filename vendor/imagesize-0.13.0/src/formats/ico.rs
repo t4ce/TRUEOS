@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use crate::util::*;
 use crate::{ImageError, ImageResult, ImageSize};
 
-use core2::io::{BufRead, Seek, SeekFrom};
+use core3::io::{BufRead, Seek, SeekFrom};
 
 pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
     reader.seek(SeekFrom::Start(4))?;

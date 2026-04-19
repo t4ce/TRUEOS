@@ -2,7 +2,7 @@ use crate::util::*;
 use crate::{ImageError, ImageResult, ImageSize};
 
 use core::convert::TryInto;
-use core2::io::{BufRead, Seek, SeekFrom};
+use core3::io::{BufRead, Seek, SeekFrom};
 
 // REFS: https://github.com/strukturag/libheif/blob/f0c1a863cabbccb2d280515b7ecc73e6717702dc/libheif/heif.h#L600
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -73,7 +73,7 @@ pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
     //  If no ispe found, then we have no actual dimension data to use
     if !found_ispe {
         return Err(
-            core2::io::Error::new(core2::io::ErrorKind::UnexpectedEof, "Not enough data").into(),
+            core3::io::Error::new(core3::io::ErrorKind::UnexpectedEof, "Not enough data").into(),
         );
     }
 
@@ -187,8 +187,8 @@ fn skip_to_tag<R: BufRead + Seek>(reader: &mut R, tag: &[u8]) -> ImageResult<u32
         if size >= 8 {
             reader.seek(SeekFrom::Current(size as i64 - 8))?;
         } else {
-            return Err(core2::io::Error::new(
-                core2::io::ErrorKind::InvalidData,
+            return Err(core3::io::Error::new(
+                core3::io::ErrorKind::InvalidData,
                 "Invalid heif box size",
             )
             .into());

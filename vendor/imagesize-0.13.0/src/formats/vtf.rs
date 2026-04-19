@@ -1,7 +1,7 @@
 use crate::util::*;
 use crate::{ImageResult, ImageSize};
 
-use core2::io::{BufRead, Seek, SeekFrom};
+use core3::io::{BufRead, Seek, SeekFrom};
 
 pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
     reader.seek(SeekFrom::Start(16))?;

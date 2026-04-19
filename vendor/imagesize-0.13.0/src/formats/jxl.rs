@@ -1,10 +1,10 @@
 use crate::util::*;
 use crate::{ImageError, ImageResult, ImageSize};
 
-use core2::io::{BufRead, Read, Seek, SeekFrom};
+use core3::io::{BufRead, Read, Seek, SeekFrom};
 
 #[inline]
-fn stream_position<R: Seek>(reader: &mut R) -> core2::io::Result<u64> {
+fn stream_position<R: Seek>(reader: &mut R) -> core3::io::Result<u64> {
     reader.seek(SeekFrom::Current(0))
 }
 
@@ -44,8 +44,8 @@ pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
             let box_header_size = stream_position(reader)? - box_start;
 
             if box_size != 0 && box_size < box_header_size {
-                return Err(core2::io::Error::new(
-                    core2::io::ErrorKind::InvalidData,
+                return Err(core3::io::Error::new(
+                    core3::io::ErrorKind::InvalidData,
                     "Invalid JXL box size",
                 )
                 .into());
@@ -91,7 +91,7 @@ pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
 
     if &file_header[0..2] != b"\xFF\x0A" {
         return Err(
-            core2::io::Error::new(core2::io::ErrorKind::InvalidData, "Invalid JXL signature").into(),
+            core3::io::Error::new(core3::io::ErrorKind::InvalidData, "Invalid JXL signature").into(),
         );
     }
 

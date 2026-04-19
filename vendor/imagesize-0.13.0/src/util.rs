@@ -1,6 +1,6 @@
 use alloc::{string::String, vec::Vec};
 use crate::{ImageError, ImageResult};
-use core2::io::{self, BufRead, Seek};
+use core3::io::{self, BufRead, Seek};
 
 /// Used for TIFF decoding
 pub enum Endian {

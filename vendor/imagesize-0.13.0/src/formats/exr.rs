@@ -1,4 +1,4 @@
-use core2::io::{self, BufRead, Seek, SeekFrom};
+use core3::io::{self, BufRead, Seek, SeekFrom};
 
 use crate::{
     util::{read_i32, read_null_terminated_string, read_u32, Endian},
