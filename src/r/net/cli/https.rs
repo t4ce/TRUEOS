@@ -882,17 +882,16 @@ fn spawn_cabi_net_fetch(
     max_bytes: usize,
 ) {
     if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
-        && spawner
-            .spawn(cabi_net_fetch_task(
-                op_id,
-                key.clone(),
-                url.clone(),
-                path.clone(),
-                timeout_ms,
-                max_bytes,
-            ))
-            .is_ok()
+        && let Ok(token) = cabi_net_fetch_task(
+            op_id,
+            key.clone(),
+            url.clone(),
+            path.clone(),
+            timeout_ms,
+            max_bytes,
+        )
     {
+        spawner.spawn(token);
         return;
     }
 
@@ -948,10 +947,9 @@ async fn cabi_net_fetch_bytes_task(op_id: u32, url: String, timeout_ms: u32, max
 
 fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
     if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
-        && spawner
-            .spawn(cabi_net_fetch_bytes_task(op_id, url.clone(), timeout_ms, max_bytes))
-            .is_ok()
+        && let Ok(token) = cabi_net_fetch_bytes_task(op_id, url.clone(), timeout_ms, max_bytes)
     {
+        spawner.spawn(token);
         return;
     }
 
@@ -983,10 +981,9 @@ async fn cabi_net_prewarm_url_task(url: String) {
 
 fn spawn_cabi_net_prewarm_url(url: String) {
     if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
-        && spawner
-            .spawn(cabi_net_prewarm_url_task(url.clone()))
-            .is_ok()
+        && let Ok(token) = cabi_net_prewarm_url_task(url.clone())
     {
+        spawner.spawn(token);
         return;
     }
 

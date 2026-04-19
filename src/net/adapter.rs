@@ -1537,8 +1537,12 @@ impl NetService {
         let raw_tx_buf = vec![0u8; 256];
         let raw_rx = raw::PacketBuffer::new(raw_rx_meta, raw_rx_buf);
         let raw_tx = raw::PacketBuffer::new(raw_tx_meta, raw_tx_buf);
-        let raw_icmpv6_socket =
-            raw::Socket::new(IpVersion::Ipv6, IpProtocol::Icmpv6, raw_rx, raw_tx);
+        let raw_icmpv6_socket = raw::Socket::new(
+            Some(IpVersion::Ipv6),
+            Some(IpProtocol::Icmpv6),
+            raw_rx,
+            raw_tx,
+        );
 
         // DHCPv6 client socket (UDP 546).
         let dhcp6_rx_meta = vec![udp::PacketMetadata::EMPTY; 8];

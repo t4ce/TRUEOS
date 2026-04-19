@@ -334,8 +334,9 @@ pub(crate) async fn maybe_start_media_control(
             continue;
         }
 
-        match spawner.spawn(media_control_task(device, stable_id, controller_id, target)) {
-            Ok(()) => {
+        match media_control_task(device, stable_id, controller_id, target) {
+            Ok(token) => {
+                spawner.spawn(token);
                 started_any = true;
                 crate::log!(
                     "crabusb: hid mediacontrol {:04X}:{:04X} handoff if#{} alt={} cfg={} int_in=0x{:02X} mps={}\n",

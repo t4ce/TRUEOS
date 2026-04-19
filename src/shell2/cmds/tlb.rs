@@ -1238,7 +1238,7 @@ fn cmd_tlb_mem(io: &'static dyn ShellBackend2) {
     for entry in memmap {
         let base = alloc::format!("0x{:016X}", entry.base);
         let len = alloc::format!("0x{:016X}", entry.length);
-        let ty = crate::limine::memmap_type_name(entry.entry_type);
+        let ty = crate::limine::memmap_type_name(entry.type_);
         emit_table_row(io, &cols, &[&base, &len, ty]);
     }
 }
@@ -2042,7 +2042,7 @@ pub(crate) fn build_dump_text() -> String {
                 "0x{:016X}  0x{:016X}  {}",
                 entry.base,
                 entry.length,
-                crate::limine::memmap_type_name(entry.entry_type)
+                crate::limine::memmap_type_name(entry.type_)
             )
             .unwrap();
         }

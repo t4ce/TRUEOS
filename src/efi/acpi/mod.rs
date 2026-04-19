@@ -27,8 +27,12 @@ static ACPI_TABLES: Once<Option<AcpiTables<AcpiIdentityHandler>>> = Once::new();
 
 pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>> {
     ACPI_TABLES.call_once(|| {
-        let Some(rsdp) = limine::rsdp_address() else {
+        let Some(rsdp_raw) = limine::rsdp_address() else {
             crate::log!("ACPI RSDP MISSING\n");
+            return None;
+        };
+        let Some(rsdp) = limine::try_as_phys_addr(rsdp_raw) else {
+            crate::log!("ACPI RSDP 0x{:X} could not be normalized to physical\n", rsdp_raw);
             return None;
         };
 
@@ -50,12 +54,22 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                     crate::log!("ACPI TABLE SSDT count={} (see ssdt::log_once)\n", ssdt_count);
                 }
                 if crate::logflag::BOOT_INFO_LOGS {
-                    crate::log!("ACPI RSDP 0x{:X} tables={}\n", rsdp, count);
+                    crate::log!(
+                        "ACPI RSDP raw=0x{:X} phys=0x{:X} tables={}\n",
+                        rsdp_raw,
+                        rsdp,
+                        count
+                    );
                 }
                 Some(tables)
             }
             Err(err) => {
-                crate::log!("ACPI RSDP 0x{:X} ERROR {:?}\n", rsdp, err);
+                crate::log!(
+                    "ACPI RSDP raw=0x{:X} phys=0x{:X} ERROR {:?}\n",
+                    rsdp_raw,
+                    rsdp,
+                    err
+                );
                 None
             }
         }
@@ -65,13 +79,14 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
 }
 
 pub(crate) fn map_table_bytes(phys: usize) -> Option<&'static [u8]> {
-    let hdr_ptr = mmio::map_mmio_region_exact(phys as u64, SDT_HEADER_LEN).ok()?;
+    let phys = limine::try_as_phys_addr(phys as u64).unwrap_or(phys as u64);
+    let hdr_ptr = mmio::map_mmio_region_exact(phys, SDT_HEADER_LEN).ok()?;
     let hdr = unsafe { core::slice::from_raw_parts(hdr_ptr.as_ptr(), SDT_HEADER_LEN) };
     let len = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
     if len < SDT_HEADER_LEN {
         return None;
     }
-    let ptr = mmio::map_mmio_region_exact(phys as u64, len).ok()?;
+    let ptr = mmio::map_mmio_region_exact(phys, len).ok()?;
     Some(unsafe { core::slice::from_raw_parts(ptr.as_ptr(), len) })
 }
 
@@ -81,8 +96,15 @@ pub(crate) struct AcpiIdentityHandler;
 impl AcpiIdentityHandler {
     #[inline(always)]
     fn map_ptr(&self, phys_addr: usize, size: usize) -> NonNull<u8> {
-        mmio::map_mmio_region(phys_addr as u64, size).unwrap_or_else(|err| {
-            panic!("ACPI map {:x} size {} failed: {:?}", phys_addr, size, err)
+        let normalized = limine::try_as_phys_addr(phys_addr as u64).unwrap_or(phys_addr as u64);
+        mmio::map_mmio_region(normalized, size).unwrap_or_else(|err| {
+            panic!(
+                "ACPI map raw={:x} phys={:x} size {} failed: {:?}",
+                phys_addr,
+                normalized,
+                size,
+                err
+            )
         })
     }
 

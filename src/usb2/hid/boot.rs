@@ -599,8 +599,9 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             descriptors_pending = false;
         }
 
-        match spawner.spawn(hid_boot_stream_task(device, controller_id, target, active_stream)) {
-            Ok(()) => {
+        match hid_boot_stream_task(device, controller_id, target, active_stream) {
+            Ok(token) => {
+                spawner.spawn(token);
                 started_any = true;
                 crate::log!(
                     "crabusb: hid {} {:04X}:{:04X} handoff if#{} alt={} cfg={} int_in=0x{:02X} mps={} proto={:02X}\n",

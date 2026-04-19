@@ -1,5 +1,12 @@
-use core::ptr;
-use limine::{BaseRevision, memory_map, request, response};
+use limine::{BaseRevision, memmap as memory_map, request};
+
+pub type FramebufferResponse = request::FramebufferResponse;
+pub type MpResponse = request::MpResponse;
+pub type MpCpu = limine::mp::MpInfo;
+pub type BootloaderPerformanceResponse = request::BootloaderPerformanceResponse;
+pub type BootloaderPerformanceRequest = request::BootloaderPerformanceRequest;
+pub type EfiSystemTableResponse = request::EfiResponse;
+pub type EfiSystemTableRequest = request::EfiRequest;
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -7,7 +14,7 @@ pub static BASE_REVISION: BaseRevision = BaseRevision::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-pub static SMP_REQUEST: request::MpRequest = request::MpRequest::new();
+pub static SMP_REQUEST: request::MpRequest = request::MpRequest::new(0);
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -15,7 +22,7 @@ pub static HHDM_REQUEST: request::HhdmRequest = request::HhdmRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-pub static MEMMAP_REQUEST: request::MemoryMapRequest = request::MemoryMapRequest::new();
+pub static MEMMAP_REQUEST: request::MemmapRequest = request::MemmapRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -33,12 +40,12 @@ pub static EXECUTABLE_FILE_REQUEST: request::ExecutableFileRequest =
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-pub static MODULE_REQUEST: request::ModuleRequest = request::ModuleRequest::new();
+pub static MODULE_REQUEST: request::ModulesRequest = request::ModulesRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 pub static STACK_SIZE_REQUEST: request::StackSizeRequest =
-    request::StackSizeRequest::new().with_size(16 * 1024 * 1024);
+    request::StackSizeRequest::new(16 * 1024 * 1024);
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -58,28 +65,28 @@ pub static RSDP_REQUEST: request::RsdpRequest = request::RsdpRequest::new();
 pub static EFI_SYSTEM_TABLE_REQUEST: EfiSystemTableRequest = EfiSystemTableRequest::new();
 
 pub fn hhdm_offset() -> Option<u64> {
-    let resp = HHDM_REQUEST.get_response()?;
-    Some(resp.offset())
+    let resp = HHDM_REQUEST.response()?;
+    Some(resp.offset)
 }
 
 pub fn memmap_entries() -> Option<&'static [&'static memory_map::Entry]> {
-    let resp = MEMMAP_REQUEST.get_response()?;
+    let resp = MEMMAP_REQUEST.response()?;
     Some(resp.entries())
 }
 
-pub fn framebuffer_response() -> Option<&'static response::FramebufferResponse> {
-    FRAMEBUFFER_REQUEST.get_response()
+pub fn framebuffer_response() -> Option<&'static FramebufferResponse> {
+    FRAMEBUFFER_REQUEST.response()
 }
 
 pub fn executable_address_bases() -> Option<(u64, u64)> {
-    let resp = EXECUTABLE_ADDRESS_REQUEST.get_response()?;
-    Some((resp.virtual_base(), resp.physical_base()))
+    let resp = EXECUTABLE_ADDRESS_REQUEST.response()?;
+    Some((resp.virtual_base, resp.physical_base))
 }
 
 pub fn module_bytes_by_string(expected: &[u8]) -> Option<&'static [u8]> {
-    let resp = MODULE_REQUEST.get_response()?;
+    let resp = MODULE_REQUEST.response()?;
     for m in resp.modules().iter() {
-        if m.string().to_bytes() == expected {
+        if m.cmdline().as_bytes() == expected {
             return bytes_from_limine_file(m);
         }
     }
@@ -87,8 +94,8 @@ pub fn module_bytes_by_string(expected: &[u8]) -> Option<&'static [u8]> {
 }
 
 pub fn kernel_file_bytes() -> Option<&'static [u8]> {
-    let resp = EXECUTABLE_FILE_REQUEST.get_response()?;
-    bytes_from_limine_file(resp.file())
+    let resp = EXECUTABLE_FILE_REQUEST.response()?;
+    bytes_from_limine_file(resp.executable_file())
 }
 
 pub fn install_kernel_bytes() -> Option<&'static [u8]> {
@@ -106,50 +113,34 @@ pub fn guest_kernel_bytes() -> Option<&'static [u8]> {
 }
 
 fn bytes_from_limine_file(file: &limine::file::File) -> Option<&'static [u8]> {
-    let addr = file.addr();
-    let size = file.size() as usize;
-    if addr.is_null() || size == 0 {
+    let data = file.data();
+    if data.is_empty() {
         return None;
     }
-
-    // Limine implementations may report either a dereferenceable virtual address or a physical
-    // address for bootloader-provided buffers. If it looks like a physical/HHDM address, translate
-    // it through HHDM so we can safely read it later.
-    let addr_u64 = addr as u64;
-    let ptr = if let Some(phys) = try_as_phys_addr(addr_u64) {
-        if let Some(hhdm) = hhdm_offset() {
-            (hhdm + phys) as *const u8
-        } else {
-            addr as *const u8
-        }
-    } else {
-        addr as *const u8
-    };
-
-    Some(unsafe { core::slice::from_raw_parts(ptr, size) })
+    Some(unsafe { core::slice::from_raw_parts(data.as_ptr(), data.len()) })
 }
 
-pub fn smp_response() -> Option<&'static response::MpResponse> {
-    SMP_REQUEST.get_response()
+pub fn smp_response() -> Option<&'static MpResponse> {
+    SMP_REQUEST.response()
 }
 
 pub fn boot_timestamp_secs() -> Option<u64> {
-    let resp = DATE_AT_BOOT_REQUEST.get_response()?;
-    Some(resp.timestamp().as_secs())
+    let resp = DATE_AT_BOOT_REQUEST.response()?;
+    Some(resp.timestamp as u64)
 }
 
 pub fn bootloader_performance() -> Option<&'static BootloaderPerformanceResponse> {
-    BOOTLOADER_PERFORMANCE_REQUEST.get_response()
+    BOOTLOADER_PERFORMANCE_REQUEST.response()
 }
 
 pub fn rsdp_address() -> Option<u64> {
-    let resp = RSDP_REQUEST.get_response()?;
-    Some(resp.address() as u64)
+    let resp = RSDP_REQUEST.response()?;
+    Some(resp.address as u64)
 }
 
 pub fn efi_system_table_address() -> Option<u64> {
-    let resp = EFI_SYSTEM_TABLE_REQUEST.get_response()?;
-    Some(resp.address)
+    let resp = EFI_SYSTEM_TABLE_REQUEST.response()?;
+    Some(resp.address as u64)
 }
 
 /// Returns true if `phys` lies within any Limine-reported memory map range.
@@ -192,112 +183,17 @@ pub fn try_as_phys_addr(addr: u64) -> Option<u64> {
     }
 }
 
-pub fn memmap_type_name(entry_type: memory_map::EntryType) -> &'static str {
-    use memory_map::EntryType as T;
+pub fn memmap_type_name(entry_type: u64) -> &'static str {
     match entry_type {
-        T::USABLE => "USABLE",
-        T::RESERVED => "RESERVED",
-        T::ACPI_RECLAIMABLE => "ACPI_RECLAIMABLE",
-        T::ACPI_NVS => "ACPI_NVS",
-        T::BAD_MEMORY => "BAD_MEMORY",
-        T::BOOTLOADER_RECLAIMABLE => "BOOTLOADER_RECLAIMABLE",
-        T::EXECUTABLE_AND_MODULES => "EXECUTABLE_AND_MODULES",
-        T::FRAMEBUFFER => "FRAMEBUFFER",
+        memory_map::MEMMAP_USABLE => "USABLE",
+        memory_map::MEMMAP_RESERVED => "RESERVED",
+        memory_map::MEMMAP_ACPI_RECLAIMABLE => "ACPI_RECLAIMABLE",
+        memory_map::MEMMAP_ACPI_NVS => "ACPI_NVS",
+        memory_map::MEMMAP_BAD_MEMORY => "BAD_MEMORY",
+        memory_map::MEMMAP_BOOTLOADER_RECLAIMABLE => "BOOTLOADER_RECLAIMABLE",
+        memory_map::MEMMAP_EXECUTABLE_AND_MODULES => "EXECUTABLE_AND_MODULES",
+        memory_map::MEMMAP_FRAMEBUFFER => "FRAMEBUFFER",
+        memory_map::MEMMAP_MAPPED_RESERVED => "MAPPED_RESERVED",
         _ => "OTHER",
-    }
-}
-
-#[repr(C)]
-pub struct BootloaderPerformanceResponse {
-    revision: u64,
-    reset_usec: u64,
-    init_usec: u64,
-    exec_usec: u64,
-}
-
-impl BootloaderPerformanceResponse {
-    pub fn reset_usec(&self) -> u64 {
-        self.reset_usec
-    }
-
-    pub fn init_usec(&self) -> u64 {
-        self.init_usec
-    }
-
-    pub fn exec_usec(&self) -> u64 {
-        self.exec_usec
-    }
-}
-
-#[repr(C)]
-pub struct BootloaderPerformanceRequest {
-    id: [u64; 4],
-    revision: u64,
-    response: *mut BootloaderPerformanceResponse,
-}
-
-unsafe impl Sync for BootloaderPerformanceRequest {}
-
-impl BootloaderPerformanceRequest {
-    pub const fn new() -> Self {
-        Self {
-            id: [
-                0xc7b1dd30df4c8b88,
-                0x0a82e883a194f07b,
-                0x6b50ad9bf36d13ad,
-                0xdc4c7e88fc759e17,
-            ],
-            revision: 0,
-            response: ptr::null_mut(),
-        }
-    }
-
-    pub fn get_response(&self) -> Option<&'static BootloaderPerformanceResponse> {
-        let resp = self.response;
-        if resp.is_null() {
-            None
-        } else {
-            Some(unsafe { &*resp })
-        }
-    }
-}
-
-#[repr(C)]
-pub struct EfiSystemTableResponse {
-    revision: u64,
-    pub address: u64,
-}
-
-#[repr(C)]
-pub struct EfiSystemTableRequest {
-    id: [u64; 4],
-    revision: u64,
-    response: *mut EfiSystemTableResponse,
-}
-
-unsafe impl Sync for EfiSystemTableRequest {}
-
-impl EfiSystemTableRequest {
-    pub const fn new() -> Self {
-        // LIMINE_EFI_SYSTEM_TABLE_REQUEST_ID { LIMINE_COMMON_MAGIC, 0x5ceba5163eaaf6d6, 0x0a6981610cf65fcc }
-        Self {
-            id: [
-                0xc7b1dd30df4c8b88,
-                0x0a82e883a194f07b,
-                0x5ceba5163eaaf6d6,
-                0x0a6981610cf65fcc,
-            ],
-            revision: 0,
-            response: ptr::null_mut(),
-        }
-    }
-
-    pub fn get_response(&self) -> Option<&'static EfiSystemTableResponse> {
-        let resp = self.response;
-        if resp.is_null() {
-            None
-        } else {
-            Some(unsafe { &*resp })
-        }
     }
 }
