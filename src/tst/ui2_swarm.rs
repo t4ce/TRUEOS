@@ -652,6 +652,7 @@ fn click_selected_device(item_id: u32, scene: &SwarmScene) -> Option<v::vnet::Ne
 
 #[embassy_executor::task]
 pub async fn ui2_swarm_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-swarm-demo");
     let Some(body_atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_SWARM_BODY_FONT_SIZE_CASE) else {
         return;
     };
@@ -696,6 +697,7 @@ pub async fn ui2_swarm_demo_task() {
     ) else {
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-swarm-demo");
 
     let mut selected_handle: Option<v::vnet::NetHandle> = None;
     let mut sketch_index = 0usize;
@@ -706,6 +708,9 @@ pub async fn ui2_swarm_demo_task() {
     let mut needs_render = true;
 
     loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-swarm-demo") {
+            break;
+        }
         let viewport = crate::r::ui2::window_content_rect_by_id(surface.window_id())
             .map(|rect| (rect.w.max(1.0) as u32, rect.h.max(1.0) as u32))
             .unwrap_or((UI2_SWARM_VIEW_W, UI2_SWARM_VIEW_H));
@@ -843,6 +848,8 @@ pub async fn ui2_swarm_demo_task() {
             needs_render = false;
         }
 
-        Timer::after(EmbassyDuration::from_millis(80)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-swarm-demo", 80).await {
+            break;
+        }
     }
 }

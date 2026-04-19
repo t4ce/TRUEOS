@@ -454,6 +454,7 @@ fn present_raple(
 
 #[embassy_executor::task]
 pub async fn ui2_raple_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-raple-demo");
     let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_RAPLE_FONT_SIZE_CASE) else {
         return;
     };
@@ -476,6 +477,7 @@ pub async fn ui2_raple_demo_task() {
         crate::log!("ui2-raple: window creation failed\n");
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-raple-demo");
 
     let window_id = surface.window_id();
     let _ = ui2::set_window_decorations(window_id, ui2::Ui2WindowDecorationMode::System);
@@ -491,10 +493,15 @@ pub async fn ui2_raple_demo_task() {
 
     let mut receiver = crate::rapl::subscribe();
     loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-raple-demo") {
+            break;
+        }
         let next = if let Some(rx) = receiver.as_mut() {
             rx.changed().await
         } else {
-            Timer::after(EmbassyDuration::from_secs(1)).await;
+            if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-raple-demo", 1_000).await {
+                break;
+            }
             crate::rapl::latest_snapshot()
         };
 

@@ -23,9 +23,11 @@ SECTIONS
   } :text
 
   .rodata : AT(ADDR(.rodata) - KERNEL_OFFSET) {
+    __rodata_start = .;
     . = ALIGN(0x1000);
     *(.rodata*)
     . = ALIGN(0x1000);
+    __rodata_end = .;
   } :text
 
   .debug_gdb_scripts : AT(ADDR(.debug_gdb_scripts) - KERNEL_OFFSET) {
@@ -44,9 +46,11 @@ SECTIONS
   . = ALIGN(0x1000);
 
   .data : AT(ADDR(.data) - KERNEL_OFFSET) {
+    __data_start = .;
     . = ALIGN(0x1000);
     *(.data*)
     . = ALIGN(0x1000);
+    __data_end = .;
   } :text
 
   .limine_requests : AT(ADDR(.limine_requests) - KERNEL_OFFSET) {
@@ -54,6 +58,7 @@ SECTIONS
   } :text
 
   .bss : AT(ADDR(.bss) - KERNEL_OFFSET) {
+    __bss_start = .;
     . = ALIGN(0x1000);
     *(COMMON)
     *(.bss*)
@@ -63,6 +68,7 @@ SECTIONS
      */
     BYTE(0);
     . = ALIGN(0x1000);
+    __bss_end = .;
   } :text
 
   . = ALIGN(0x1000);

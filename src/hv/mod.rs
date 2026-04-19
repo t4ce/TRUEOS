@@ -3,6 +3,7 @@ pub mod guest_work;
 pub mod memory;
 pub mod snapshot;
 pub mod store;
+pub mod vnet;
 pub mod vmcall;
 pub mod vmm;
 pub mod vmx;
@@ -12,6 +13,8 @@ use crate::hv::vmx::*;
 pub use trueos_vm::guest;
 pub use trueos_vm::stream;
 
+use alloc::string::String as AllocString;
+use alloc::vec::Vec as AllocVec;
 use core::arch::x86_64::{__cpuid, __cpuid_count};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -47,6 +50,7 @@ static VM1_MARKER_SEEN: AtomicBool = AtomicBool::new(false);
 static VM1_GUEST_BOOT_ARMED: AtomicBool = AtomicBool::new(false);
 static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 static VM_BOOT_MODE: Mutex<VmBootMode> = Mutex::new(VmBootMode::Hull);
+static BLUEPRINT_LAUNCH_STATE: Mutex<Option<BlueprintLaunchState>> = Mutex::new(None);
 
 #[derive(Clone)]
 struct HvLogEntry {
@@ -78,6 +82,14 @@ pub enum StartError {
 pub enum VmBootMode {
     Hull,
     Full,
+}
+
+#[derive(Clone)]
+pub struct BlueprintLaunchState {
+    pub archive: AllocString,
+    pub module_bytes: AllocVec<u8>,
+    pub app_args: AllocVec<AllocString>,
+    pub console_target: Option<crate::shell2::MatrixTarget>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -372,6 +384,18 @@ pub fn guest_boot_active() -> bool {
     VM1_GUEST_BOOT_ARMED.load(Ordering::Acquire)
 }
 
+pub fn stage_blueprint_launch(state: BlueprintLaunchState) {
+    *BLUEPRINT_LAUNCH_STATE.lock() = Some(state);
+}
+
+pub fn take_blueprint_launch() -> Option<BlueprintLaunchState> {
+    BLUEPRINT_LAUNCH_STATE.lock().take()
+}
+
+pub fn blueprint_launch_active() -> bool {
+    BLUEPRINT_LAUNCH_STATE.lock().is_some()
+}
+
 #[derive(Copy, Clone)]
 struct LineageRecord {
     level: u8,
@@ -592,6 +616,10 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
 
     // ── vmexit dispatch loop ──────────────────────────────────────────────────
     let mut lr = LaunchResult::default();
+    let mut cpuid_leaf0_count = 0u32;
+    let mut cpuid_leaf80000000_count = 0u32;
+    let mut cpuid_leaf1_count = 0u32;
+    let mut cpuid_other_count = 0u32;
     let mut first = true;
     loop {
         if first {
@@ -620,10 +648,37 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
         crate::hv::vmx::log_vmexit_interrupt_info("vmexit");
         if reason == 0x0 {
             let guest_rsp = vmread(VMCS_GUEST_RSP).unwrap_or(0);
+            let guest_cr3 = vmread(VMCS_GUEST_CR3).unwrap_or(0);
+            let guest_cr0 = vmread(VMCS_GUEST_CR0).unwrap_or(0);
+            let guest_cr4 = vmread(VMCS_GUEST_CR4).unwrap_or(0);
+            let guest_efer = vmread(VMCS_GUEST_IA32_EFER).unwrap_or(0);
             let guest_linear = vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0);
+            let intr_err = vmread(VMCS_VMEXIT_INTERRUPTION_ERROR_CODE).unwrap_or(0);
+            hvlogf(format_args!(
+                "hv: vm1 reporting: pf err=0x{:X} present={} write={} user={} rsvd={} exec={}",
+                intr_err,
+                (intr_err & (1 << 0)) != 0,
+                (intr_err & (1 << 1)) != 0,
+                (intr_err & (1 << 2)) != 0,
+                (intr_err & (1 << 3)) != 0,
+                (intr_err & (1 << 4)) != 0
+            ));
+            hvlogf(format_args!(
+                "hv: vm1 reporting: guest-state cr0=0x{:016X} cr3=0x{:016X} cr4=0x{:016X} efer=0x{:016X}",
+                guest_cr0,
+                guest_cr3,
+                guest_cr4,
+                guest_efer
+            ));
             crate::hv::memory::log_guest_mapping("fault-linear", guest_linear);
             crate::hv::memory::log_guest_mapping("fault-rsp", guest_rsp);
             crate::hv::memory::log_guest_mapping("fault-rip", lr.guest_rip);
+            crate::hv::memory::log_guest_mapping_from_cr3("fault-linear", guest_cr3, guest_linear);
+            crate::hv::memory::log_guest_mapping_from_cr3("fault-rip", guest_cr3, lr.guest_rip);
+            crate::hv::memory::log_guest_phys_pt_context("fault-linear", guest_cr3, guest_linear);
+            crate::hv::memory::log_guest_phys_pt_context("fault-rip", guest_cr3, lr.guest_rip);
+            crate::hv::memory::log_guest_pt_context("fault-linear", guest_linear);
+            crate::hv::memory::log_guest_pt_context("fault-rip", lr.guest_rip);
             let trace = crate::allocators::last_alloc_trace();
             if trace.seq != 0 {
                 hvlogf(format_args!(
@@ -671,10 +726,21 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                 crate::hv::vmx::set_guest_registers(regs);
                 let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len cpuid")?;
                 vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
-                hvlogf(format_args!(
-                    "hv: vm1 reporting: cpuid leaf=0x{:08X} subleaf=0x{:08X} -> eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
-                    leaf, subleaf, out.eax, out.ebx, out.ecx, out.edx
-                ));
+                match (leaf, subleaf) {
+                    (0x0000_0000, 0) => cpuid_leaf0_count = cpuid_leaf0_count.saturating_add(1),
+                    (0x8000_0000, 0) => {
+                        cpuid_leaf80000000_count =
+                            cpuid_leaf80000000_count.saturating_add(1)
+                    }
+                    (0x0000_0001, 0) => cpuid_leaf1_count = cpuid_leaf1_count.saturating_add(1),
+                    _ => {
+                        cpuid_other_count = cpuid_other_count.saturating_add(1);
+                        hvlogf(format_args!(
+                            "hv: vm1 reporting: cpuid leaf=0x{:08X} subleaf=0x{:08X} -> eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
+                            leaf, subleaf, out.eax, out.ebx, out.ecx, out.edx
+                        ));
+                    }
+                }
             }
             0x30 => {
                 let guest_physical = vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0);
@@ -703,6 +769,19 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                 break;
             }
         }
+    }
+    if cpuid_leaf0_count != 0
+        || cpuid_leaf80000000_count != 0
+        || cpuid_leaf1_count != 0
+        || cpuid_other_count != 0
+    {
+        hvlogf(format_args!(
+            "hv: vm1 reporting: cpuid summary leaf0={} leaf80000000={} leaf1={} other={}",
+            cpuid_leaf0_count,
+            cpuid_leaf80000000_count,
+            cpuid_leaf1_count,
+            cpuid_other_count
+        ));
     }
     // ─────────────────────────────────────────────────────────────────────────
     if !crate::hv::vmx::vmxoff() {
@@ -749,7 +828,7 @@ fn setup_vmcs_for_launch(
     );
     let proc2 = crate::hv::vmx::adjust_vmx_ctrl(
         crate::hv::vmx::IA32_VMX_PROCBASED_CTLS2,
-        PROC2_BASED_ENABLE_EPT | PROC2_BASED_ENABLE_VPID | PROC2_BASED_ENABLE_VMFUNC,
+        PROC2_BASED_ENABLE_EPT | PROC2_BASED_ENABLE_VMFUNC,
     );
     let exit = crate::hv::vmx::adjust_vmx_ctrl(exit_msr, EXIT_CTL_HOST_ADDR_SPACE_SIZE);
     let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
@@ -781,10 +860,6 @@ fn setup_vmcs_for_launch(
     vmwrite(VMCS_CTRL_ENTRY, entry)?;
     vmwrite(VMCS_CTRL_EPT_POINTER, eptp)?;
     vmwrite(VMCS_CTRL_VMCS_LINK_POINTER, !0u64)?;
-    // VPID: unique TLB tag per level — avoids flush on level switches
-    if (proc2 & PROC2_BASED_ENABLE_VPID) != 0 {
-        vmwrite(VMCS_CTRL_VPID, lineage_record.level as u64)?;
-    }
     // TSC offset: 0 = transparent pass-through; snapshot-restore can set delta later
     vmwrite(VMCS_TSC_OFFSET, 0u64)?;
     // EPTP switching: slot 0 = identity EPT; guest uses vmfunc(0, idx) to switch namespaces
@@ -932,7 +1007,9 @@ fn setup_vmcs_for_launch(
                 .map(|m| m.guest_rsp)
                 .unwrap_or_else(guest_stack_top);
             let guest_cr3 = if restored.is_some() {
-                current_guest_cr3_pa()?
+                current_guest_cr3_pa().or_else(|_| {
+                    build_guest_cr3_with_mode(guest_rip, guest_rsp, boot_mode)
+                })?
             } else {
                 build_guest_cr3_with_mode(guest_rip, guest_rsp, boot_mode)?
             };
@@ -1107,7 +1184,7 @@ fn setup_vmcs_for_launch(
         .map(|m| m.guest_rsp)
         .unwrap_or_else(guest_stack_top);
     let guest_cr3 = if restored.is_some() {
-        current_guest_cr3_pa()?
+        current_guest_cr3_pa().or_else(|_| build_guest_cr3(guest_rip, guest_rsp))?
     } else {
         build_guest_cr3(guest_rip, guest_rsp)?
     };

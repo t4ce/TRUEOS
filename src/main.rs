@@ -9,6 +9,7 @@ const _: f16 = 0.0_f16;
 pub extern crate alloc;
 
 mod allocators;
+mod blueprint;
 #[path = "Chronos.rs"]
 mod chronos;
 mod cpu;
@@ -152,6 +153,7 @@ pub extern "C" fn kmain() -> ! {
     }
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
+    limine::prime_bootloader_caches();
 
     if !phys::try_install_heap_arena_candidates(allocators::install_heap_arena) {
         crate::log!("heap: failed to reserve/install any heap arena\n");

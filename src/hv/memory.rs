@@ -21,7 +21,10 @@ pub const GUEST_HIGH_IMAGE_MAX_BYTES: u64 = GUEST_HIGH_IMAGE_PT_COUNT as u64 * P
 pub const ELF64_HEADER_LEN: usize = 64;
 const EPT_ROOT_PML4_INDEX: usize = 0;
 const EPT_DYNAMIC_PD_CAP: usize = 16;
-const EPT_DYNAMIC_PT_CAP: usize = 128;
+// Sparse EPT still maps only the spans we explicitly request, but those spans
+// include up to 1 GiB of host heap plus the guest heap, stack, and kernel image.
+// At 4 KiB granularity each PT covers 2 MiB, so we need a few hundred PT pages.
+const EPT_DYNAMIC_PT_CAP: usize = 1024;
 
 // Page table entry flags
 pub const PT_ENTRY_PRESENT: u64 = 1 << 0;
@@ -69,6 +72,23 @@ pub static mut GUEST_IMAGE_PTS: [GuestPage; GUEST_HIGH_IMAGE_PT_COUNT] =
     [GuestPage([0u64; 512]); GUEST_HIGH_IMAGE_PT_COUNT];
 pub static mut GUEST_CODE_PT: GuestPage = GuestPage([0u64; 512]);
 
+#[repr(C, align(4096))]
+struct GuestTables {
+    pml4: GuestPage,
+    low_pdpt: GuestPage,
+    low_pd: GuestPage,
+    low_pts: [GuestPage; GUEST_LOW_PT_COUNT],
+    high_pdpt: GuestPage,
+    high_pd: GuestPage,
+    heap_pdpt: GuestPage,
+    heap_pds: [GuestPage; GUEST_HEAP_PD_COUNT],
+    image_pts: [GuestPage; GUEST_HIGH_IMAGE_PT_COUNT],
+    code_pt: GuestPage,
+}
+
+static GUEST_TABLES: Mutex<Option<usize>> = Mutex::new(None);
+static GUEST_TABLES_ARENA: Mutex<Option<HeapArena>> = Mutex::new(None);
+
 #[derive(Copy, Clone)]
 struct GuestStackBacking {
     arena: Option<HeapArena>,
@@ -95,11 +115,61 @@ pub struct Vm1SnapshotMeta {
 pub static VM1_SNAPSHOT_META: Mutex<Option<Vm1SnapshotMeta>> = Mutex::new(None);
 pub static VM1_RESTORE_META: Mutex<Option<Vm1SnapshotMeta>> = Mutex::new(None);
 
+fn guest_tables_ptr() -> Result<*mut GuestTables, &'static str> {
+    let mut ptr_guard = GUEST_TABLES.lock();
+    if let Some(ptr) = *ptr_guard {
+        return Ok(ptr as *mut GuestTables);
+    }
+
+    let arena = crate::phys::reserve_heap_arena(core::mem::size_of::<GuestTables>(), PAGE_SIZE_4K)
+        .ok_or("guest tables alloc")?;
+    unsafe {
+        core::ptr::write_bytes(arena.virt_start as *mut u8, 0, arena.length);
+    }
+    let ptr = arena.virt_start as *mut GuestTables;
+    *GUEST_TABLES_ARENA.lock() = Some(arena);
+    *ptr_guard = Some(ptr as usize);
+    Ok(ptr)
+}
+
+fn guest_tables_ptr_opt() -> Option<*mut GuestTables> {
+    (*GUEST_TABLES.lock()).map(|ptr| ptr as *mut GuestTables)
+}
+
+fn guest_tables_arena() -> Option<HeapArena> {
+    *GUEST_TABLES_ARENA.lock()
+}
+
+fn guest_pml4_page() -> Option<*const [u64; 512]> {
+    guest_tables_ptr_opt().map(|tables| unsafe { core::ptr::addr_of!((*tables).pml4.0) })
+}
+
+fn guest_low_pdpt_page() -> Option<*const [u64; 512]> {
+    guest_tables_ptr_opt().map(|tables| unsafe { core::ptr::addr_of!((*tables).low_pdpt.0) })
+}
+
+fn guest_low_pd_page() -> Option<*const [u64; 512]> {
+    guest_tables_ptr_opt().map(|tables| unsafe { core::ptr::addr_of!((*tables).low_pd.0) })
+}
+
+fn guest_high_pdpt_page() -> Option<*const [u64; 512]> {
+    guest_tables_ptr_opt().map(|tables| unsafe { core::ptr::addr_of!((*tables).high_pdpt.0) })
+}
+
+fn guest_high_pd_page() -> Option<*const [u64; 512]> {
+    guest_tables_ptr_opt().map(|tables| unsafe { core::ptr::addr_of!((*tables).high_pd.0) })
+}
+
 unsafe extern "C" {
     static kernel_end: u8;
 }
 
 pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
+    // VMX may need to walk guest paging structures before the guest executes
+    // its first instruction, so make sure the backing arena exists before we
+    // decide which physical spans sparse EPT must cover.
+    let _ = guest_tables_ptr()?;
+
     let pml4 = unsafe { core::ptr::addr_of_mut!(EPT_PML4.0) };
     let pdpt = unsafe { core::ptr::addr_of_mut!(EPT_PDPT.0) };
     unsafe {
@@ -169,6 +239,17 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             cpu_slot_table_pa,
             cpu_slot_table_len as u64,
             "percpu-slot-table",
+        )?;
+    }
+
+    if let Some(guest_tables) = guest_tables_arena() {
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            guest_tables.phys_start,
+            guest_tables.length as u64,
+            "guest-tables",
         )?;
     }
 
@@ -416,43 +497,46 @@ pub fn build_guest_cr3_with_mode(
     boot_mode: crate::hv::VmBootMode,
 ) -> Result<u64, &'static str> {
     unsafe {
-        zero_guest_page(core::ptr::addr_of_mut!(GUEST_PML4.0));
-        zero_guest_page(core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0));
-        zero_guest_page(core::ptr::addr_of_mut!(GUEST_LOW_PD.0));
+        let tables = guest_tables_ptr()?;
+        let guest_pml4 = core::ptr::addr_of_mut!((*tables).pml4.0);
+        let guest_low_pdpt = core::ptr::addr_of_mut!((*tables).low_pdpt.0);
+        let guest_low_pd = core::ptr::addr_of_mut!((*tables).low_pd.0);
+        let guest_high_pdpt = core::ptr::addr_of_mut!((*tables).high_pdpt.0);
+        let guest_high_pd = core::ptr::addr_of_mut!((*tables).high_pd.0);
+        let guest_heap_pdpt = core::ptr::addr_of_mut!((*tables).heap_pdpt.0);
+        let guest_code_pt = core::ptr::addr_of_mut!((*tables).code_pt.0);
+
+        zero_guest_page(guest_pml4);
+        zero_guest_page(guest_low_pdpt);
+        zero_guest_page(guest_low_pd);
         for i in 0..GUEST_LOW_PT_COUNT {
-            zero_guest_page(core::ptr::addr_of_mut!(GUEST_LOW_PTS[i].0));
+            zero_guest_page(core::ptr::addr_of_mut!((*tables).low_pts[i].0));
         }
-        zero_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0));
-        zero_guest_page(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0));
-        zero_guest_page(core::ptr::addr_of_mut!(GUEST_HEAP_PDPT.0));
-        zero_guest_page(core::ptr::addr_of_mut!(GUEST_CODE_PT.0));
+        zero_guest_page(guest_high_pdpt);
+        zero_guest_page(guest_high_pd);
+        zero_guest_page(guest_heap_pdpt);
+        zero_guest_page(guest_code_pt);
         for i in 0..GUEST_HEAP_PD_COUNT {
-            zero_guest_page(core::ptr::addr_of_mut!(GUEST_HEAP_PDS[i].0));
+            zero_guest_page(core::ptr::addr_of_mut!((*tables).heap_pds[i].0));
         }
         for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
-            zero_guest_page(core::ptr::addr_of_mut!(GUEST_IMAGE_PTS[i].0));
+            zero_guest_page(core::ptr::addr_of_mut!((*tables).image_pts[i].0));
         }
 
-        let pml4_pa =
-            kernel_va_to_pa(core::ptr::addr_of!(GUEST_PML4.0) as u64).ok_or("guest pml4 pa")?;
-        let low_pdpt_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_LOW_PDPT.0) as u64)
-            .ok_or("guest low pdpt pa")?;
-        let low_pd_pa =
-            kernel_va_to_pa(core::ptr::addr_of!(GUEST_LOW_PD.0) as u64).ok_or("guest low pd pa")?;
-        let high_pdpt_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_HIGH_PDPT.0) as u64)
-            .ok_or("guest high pdpt pa")?;
-        let high_pd_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_HIGH_PD.0) as u64)
-            .ok_or("guest high pd pa")?;
-        let code_pt_pa = kernel_va_to_pa(core::ptr::addr_of!(GUEST_CODE_PT.0) as u64)
-            .ok_or("guest code pt pa")?;
+        let pml4_pa = host_va_to_pa(guest_pml4 as u64).ok_or("guest pml4 pa")?;
+        let low_pdpt_pa = host_va_to_pa(guest_low_pdpt as u64).ok_or("guest low pdpt pa")?;
+        let low_pd_pa = host_va_to_pa(guest_low_pd as u64).ok_or("guest low pd pa")?;
+        let high_pdpt_pa = host_va_to_pa(guest_high_pdpt as u64).ok_or("guest high pdpt pa")?;
+        let high_pd_pa = host_va_to_pa(guest_high_pd as u64).ok_or("guest high pd pa")?;
+        let code_pt_pa = host_va_to_pa(guest_code_pt as u64).ok_or("guest code pt pa")?;
 
         map_table_entry(
-            core::ptr::addr_of_mut!(GUEST_PML4.0),
+            guest_pml4,
             pml4_index(GUEST_STACK_VA_BASE),
             low_pdpt_pa,
         );
         map_table_entry(
-            core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0),
+            guest_low_pdpt,
             pdpt_index(GUEST_STACK_VA_BASE),
             low_pd_pa,
         );
@@ -464,9 +548,9 @@ pub fn build_guest_cr3_with_mode(
         let mut stack_pa_cur = stack_pa;
         let mut stack_left = stack_bytes;
         for i in 0..stack_pt_count {
-            let low_pt = core::ptr::addr_of_mut!(GUEST_LOW_PTS[i].0);
-            let low_pt_pa = kernel_va_to_pa(low_pt as u64).ok_or("guest low pt pa")?;
-            map_table_entry(core::ptr::addr_of_mut!(GUEST_LOW_PD.0), pd_index(stack_va), low_pt_pa);
+            let low_pt = core::ptr::addr_of_mut!((*tables).low_pts[i].0);
+            let low_pt_pa = host_va_to_pa(low_pt as u64).ok_or("guest low pt pa")?;
+            map_table_entry(guest_low_pd, pd_index(stack_va), low_pt_pa);
             let chunk_bytes = core::cmp::min(stack_left, PAGE_SIZE_2M as usize);
             map_region_4k(
                 low_pt,
@@ -487,10 +571,10 @@ pub fn build_guest_cr3_with_mode(
         // Map comm page at a fixed VA above the maximum supported stack span so
         // guest-side helpers can keep using a stable address.
         let comm_pa = crate::hv::vmcall::pa().ok_or("comm page pa")?;
-        let comm_pt = core::ptr::addr_of_mut!(GUEST_LOW_PTS[GUEST_STACK_PT_CAP].0);
-        let comm_pt_pa = kernel_va_to_pa(comm_pt as u64).ok_or("comm page pt pa")?;
+        let comm_pt = core::ptr::addr_of_mut!((*tables).low_pts[GUEST_STACK_PT_CAP].0);
+        let comm_pt_pa = host_va_to_pa(comm_pt as u64).ok_or("comm page pt pa")?;
         map_table_entry(
-            core::ptr::addr_of_mut!(GUEST_LOW_PD.0),
+            guest_low_pd,
             pd_index(crate::hv::vmcall::comm_page_guest_va()),
             comm_pt_pa,
         );
@@ -499,15 +583,15 @@ pub fn build_guest_cr3_with_mode(
 
         let code_base = page_align_down(guest_rip);
         let code_pt_base = page_align_down_2m(guest_rip);
-        map_table_entry(core::ptr::addr_of_mut!(GUEST_PML4.0), pml4_index(code_base), high_pdpt_pa);
+        map_table_entry(guest_pml4, pml4_index(code_base), high_pdpt_pa);
         map_table_entry(
-            core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0),
+            guest_high_pdpt,
             pdpt_index(code_base),
             high_pd_pa,
         );
-        map_table_entry(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), pd_index(code_base), code_pt_pa);
+        map_table_entry(guest_high_pd, pd_index(code_base), code_pt_pa);
         map_region_4k(
-            core::ptr::addr_of_mut!(GUEST_CODE_PT.0),
+            guest_code_pt,
             code_pt_base,
             kernel_va_to_pa(code_pt_base).ok_or("guest code pa")?,
             PAGE_SIZE_2M as usize,
@@ -518,11 +602,13 @@ pub fn build_guest_cr3_with_mode(
             crate::hv::VmBootMode::Hull => {
                 let layout = crate::hv::guest::hull_image_layout();
                 hvlogf(format_args!(
-                    "hv: vm1 reporting: hull sections text=[0x{:016X}..0x{:016X}) rodata=[0x{:016X}..0x{:016X}) bss=[0x{:016X}..0x{:016X})",
+                    "hv: vm1 reporting: hull sections text=[0x{:016X}..0x{:016X}) rodata=[0x{:016X}..0x{:016X}) data=[0x{:016X}..0x{:016X}) bss=[0x{:016X}..0x{:016X})",
                     layout.text_start,
                     layout.text_end,
                     layout.rodata_start,
                     layout.rodata_end,
+                    layout.data_start,
+                    layout.data_end,
                     layout.bss_start,
                     layout.bss_end
                 ));
@@ -538,7 +624,7 @@ pub fn build_guest_cr3_with_mode(
                 let (_, end) = crate::hv::guest::hull_image_bounds();
                 let start = kernel_image_start_va().ok_or("guest kernel image base")?;
                 map_guest_image_span(
-                    core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
+                    guest_high_pd,
                     code_pt_base,
                     start,
                     end,
@@ -550,7 +636,7 @@ pub fn build_guest_cr3_with_mode(
             }
             crate::hv::VmBootMode::Full => {
                 map_guest_kernel_image(
-                    core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
+                    guest_high_pd,
                     code_pt_base,
                     &mut pt_slot,
                 )?;
@@ -565,10 +651,7 @@ pub fn build_guest_cr3_with_mode(
             "hv: vm1 reporting: image map done pt_used={}",
             pt_slot
         ));
-        map_guest_heap_span(
-            core::ptr::addr_of_mut!(GUEST_PML4.0),
-            &mut pt_slot,
-        )?;
+        map_guest_heap_span(guest_pml4, &mut pt_slot)?;
         hvlogf(format_args!(
             "hv: vm1 reporting: heap map done pt_used={}",
             pt_slot
@@ -618,7 +701,10 @@ pub fn active_restore_meta() -> Option<Vm1SnapshotMeta> {
 }
 
 pub fn current_guest_cr3_pa() -> Result<u64, &'static str> {
-    kernel_va_to_pa(unsafe { core::ptr::addr_of!(GUEST_PML4.0) as u64 }).ok_or("guest pml4 pa")
+    let Some(pml4) = guest_pml4_page() else {
+        return Err("guest pml4 pa");
+    };
+    host_va_to_pa(pml4 as u64).ok_or("guest pml4 pa")
 }
 
 unsafe fn read_guest_page_entry(page: *const [u64; 512], index: usize) -> u64 {
@@ -632,21 +718,35 @@ unsafe fn read_guest_page_entry(page: *const [u64; 512], index: usize) -> u64 {
 
 pub fn log_guest_mapping(label: &str, guest_va: u64) {
     let low_half = pml4_index(guest_va) == pml4_index(GUEST_STACK_VA_BASE);
-    let pml4e =
-        unsafe { read_guest_page_entry(core::ptr::addr_of!(GUEST_PML4.0), pml4_index(guest_va)) };
+    let Some(pml4) = guest_pml4_page() else {
+        return;
+    };
+    let Some(low_pdpt) = guest_low_pdpt_page() else {
+        return;
+    };
+    let Some(low_pd) = guest_low_pd_page() else {
+        return;
+    };
+    let Some(high_pdpt) = guest_high_pdpt_page() else {
+        return;
+    };
+    let Some(high_pd) = guest_high_pd_page() else {
+        return;
+    };
+    let pml4e = unsafe { read_guest_page_entry(pml4, pml4_index(guest_va)) };
     let pdpte = unsafe {
         if pml4e & PT_ENTRY_PRESENT == 0 {
             0
         } else if low_half {
-            read_guest_page_entry(core::ptr::addr_of!(GUEST_LOW_PDPT.0), pdpt_index(guest_va))
+            read_guest_page_entry(low_pdpt, pdpt_index(guest_va))
         } else {
-            read_guest_page_entry(core::ptr::addr_of!(GUEST_HIGH_PDPT.0), pdpt_index(guest_va))
+            read_guest_page_entry(high_pdpt, pdpt_index(guest_va))
         }
     };
 
     let (pde, pte) = unsafe {
         if low_half {
-            let pde = read_guest_page_entry(core::ptr::addr_of!(GUEST_LOW_PD.0), pd_index(guest_va));
+            let pde = read_guest_page_entry(low_pd, pd_index(guest_va));
             let pte = if pde & PT_ENTRY_PRESENT != 0 {
                 read_guest_low_pt_entry(guest_va, pde)
             } else {
@@ -654,8 +754,7 @@ pub fn log_guest_mapping(label: &str, guest_va: u64) {
             };
             (pde, pte)
         } else {
-            let pde =
-                read_guest_page_entry(core::ptr::addr_of!(GUEST_HIGH_PD.0), pd_index(guest_va));
+            let pde = read_guest_page_entry(high_pd, pd_index(guest_va));
             let pte = if pde & PT_ENTRY_PRESENT != 0 {
                 read_guest_high_pt_entry(guest_va, pde)
             } else {
@@ -666,12 +765,107 @@ pub fn log_guest_mapping(label: &str, guest_va: u64) {
     };
 
     hvlogf(format_args!(
-        "hv: vm1 reporting: guest-map {} va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X} pte=0x{:016X}",
+        "hv: vm1 reporting: guest-map {} va=0x{:016X} region={} idx[pd={},pt={}] pde=0x{:016X} pte=0x{:016X}",
         label,
         guest_va,
         classify_guest_va(guest_va),
-        pml4_index(guest_va),
-        pdpt_index(guest_va),
+        pd_index(guest_va),
+        pt_index(guest_va),
+        pde,
+        pte
+    ));
+}
+
+pub fn log_guest_pt_context(label: &str, guest_va: u64) {
+    let low_half = pml4_index(guest_va) == pml4_index(GUEST_STACK_VA_BASE);
+    let Some(low_pd) = guest_low_pd_page() else {
+        return;
+    };
+    let Some(high_pd) = guest_high_pd_page() else {
+        return;
+    };
+
+    let pde = unsafe {
+        if low_half {
+            read_guest_page_entry(low_pd, pd_index(guest_va))
+        } else {
+            read_guest_page_entry(high_pd, pd_index(guest_va))
+        }
+    };
+    if pde & PT_ENTRY_PRESENT == 0 {
+        return;
+    }
+
+    let Some(pt_page) = guest_pt_page_from_pde(low_half, pde) else {
+        hvlogf(format_args!(
+            "hv: vm1 reporting: guest-pt {} va=0x{:016X} pt_pa=0x{:016X} page=unresolved",
+            label,
+            guest_va,
+            pde_addr(pde)
+        ));
+        return;
+    };
+
+    let center = pt_index(guest_va);
+    let start = center.saturating_sub(2);
+    let end = core::cmp::min(center.saturating_add(2), 511);
+    let mut idx = start;
+    while idx <= end {
+        let entry = unsafe { read_guest_page_entry(pt_page, idx) };
+        hvlogf(format_args!(
+            "hv: vm1 reporting: guest-pt {} pt_pa=0x{:016X} idx={} entry=0x{:016X}",
+            label,
+            pde_addr(pde),
+            idx,
+            entry
+        ));
+        if idx == usize::MAX {
+            break;
+        }
+        idx += 1;
+    }
+}
+
+unsafe fn read_phys_page_entry(page_pa: u64, index: usize) -> Option<u64> {
+    if index >= 512 {
+        return None;
+    }
+    let page = crate::phys::phys_to_virt(page_pa as usize) as *const u64;
+    Some(unsafe { core::ptr::read_volatile(page.add(index)) })
+}
+
+pub fn log_guest_mapping_from_cr3(label: &str, guest_cr3: u64, guest_va: u64) {
+    let pml4_pa = pde_addr(guest_cr3);
+    if pml4_pa == 0 {
+        hvlogf(format_args!(
+            "hv: vm1 reporting: guest-walk {} va=0x{:016X} cr3=0x{:016X} pml4=missing",
+            label, guest_va, guest_cr3
+        ));
+        return;
+    }
+
+    let pml4e = unsafe { read_phys_page_entry(pml4_pa, pml4_index(guest_va)) }.unwrap_or(0);
+    let pdpte = if pml4e & PT_ENTRY_PRESENT != 0 {
+        unsafe { read_phys_page_entry(pde_addr(pml4e), pdpt_index(guest_va)) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let pde = if pdpte & PT_ENTRY_PRESENT != 0 {
+        unsafe { read_phys_page_entry(pde_addr(pdpte), pd_index(guest_va)) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let pte = if pde & PT_ENTRY_PRESENT != 0 {
+        unsafe { read_phys_page_entry(pde_addr(pde), pt_index(guest_va)) }.unwrap_or(0)
+    } else {
+        0
+    };
+
+    hvlogf(format_args!(
+        "hv: vm1 reporting: guest-walk {} va=0x{:016X} cr3=0x{:016X} idx[pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X} pte=0x{:016X}",
+        label,
+        guest_va,
+        guest_cr3,
         pd_index(guest_va),
         pt_index(guest_va),
         pml4e,
@@ -681,10 +875,64 @@ pub fn log_guest_mapping(label: &str, guest_va: u64) {
     ));
 }
 
+pub fn log_guest_phys_pt_context(label: &str, guest_cr3: u64, guest_va: u64) {
+    let pml4_pa = pde_addr(guest_cr3);
+    if pml4_pa == 0 {
+        return;
+    }
+
+    let pml4e = unsafe { read_phys_page_entry(pml4_pa, pml4_index(guest_va)) }.unwrap_or(0);
+    if pml4e & PT_ENTRY_PRESENT == 0 {
+        return;
+    }
+    let pdpte = unsafe { read_phys_page_entry(pde_addr(pml4e), pdpt_index(guest_va)) }.unwrap_or(0);
+    if pdpte & PT_ENTRY_PRESENT == 0 {
+        return;
+    }
+    let pde = unsafe { read_phys_page_entry(pde_addr(pdpte), pd_index(guest_va)) }.unwrap_or(0);
+    if pde & PT_ENTRY_PRESENT == 0 {
+        return;
+    }
+
+    let pt_pa = pde_addr(pde);
+    let center = pt_index(guest_va);
+    let start = center.saturating_sub(2);
+    let end = core::cmp::min(center.saturating_add(2), 511);
+    let mut idx = start;
+    while idx <= end {
+        let entry = unsafe { read_phys_page_entry(pt_pa, idx) }.unwrap_or(0);
+        hvlogf(format_args!(
+            "hv: vm1 reporting: guest-phys-pt {} pt_pa=0x{:016X} idx={} entry=0x{:016X}",
+            label,
+            pt_pa,
+            idx,
+            entry
+        ));
+        if idx == usize::MAX {
+            break;
+        }
+        idx += 1;
+    }
+}
+
 fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static str> {
     let low_half = pml4_index(guest_va) == pml4_index(GUEST_STACK_VA_BASE);
-    let pml4e =
-        unsafe { read_guest_page_entry(core::ptr::addr_of!(GUEST_PML4.0), pml4_index(guest_va)) };
+    let Some(pml4) = guest_pml4_page() else {
+        return Err("guest verify pml4");
+    };
+    let Some(low_pdpt) = guest_low_pdpt_page() else {
+        return Err("guest verify pdpt");
+    };
+    let Some(low_pd) = guest_low_pd_page() else {
+        return Err("guest verify pd");
+    };
+    let Some(high_pdpt) = guest_high_pdpt_page() else {
+        return Err("guest verify pdpt");
+    };
+    let Some(high_pd) = guest_high_pd_page() else {
+        return Err("guest verify pd");
+    };
+    let pml4e = unsafe { read_guest_page_entry(pml4, pml4_index(guest_va)) };
     if pml4e & PT_ENTRY_PRESENT == 0 {
         hvlogf(format_args!(
             "hv: vm1 reporting: guest-verify {} broken=pml4 va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X}",
@@ -702,9 +950,9 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
 
     let pdpte = unsafe {
         if low_half {
-            read_guest_page_entry(core::ptr::addr_of!(GUEST_LOW_PDPT.0), pdpt_index(guest_va))
+            read_guest_page_entry(low_pdpt, pdpt_index(guest_va))
         } else {
-            read_guest_page_entry(core::ptr::addr_of!(GUEST_HIGH_PDPT.0), pdpt_index(guest_va))
+            read_guest_page_entry(high_pdpt, pdpt_index(guest_va))
         }
     };
     if pdpte & PT_ENTRY_PRESENT == 0 {
@@ -725,9 +973,9 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
 
     let pde = unsafe {
         if low_half {
-            read_guest_page_entry(core::ptr::addr_of!(GUEST_LOW_PD.0), pd_index(guest_va))
+            read_guest_page_entry(low_pd, pd_index(guest_va))
         } else {
-            read_guest_page_entry(core::ptr::addr_of!(GUEST_HIGH_PD.0), pd_index(guest_va))
+            read_guest_page_entry(high_pd, pd_index(guest_va))
         }
     };
     if pde & PT_ENTRY_PRESENT == 0 {
@@ -828,6 +1076,9 @@ fn classify_hull_guest_va(guest_va: u64) -> Option<&'static str> {
     }
     if guest_va >= layout.rodata_start && guest_va < layout.rodata_end {
         return Some("hull-rodata");
+    }
+    if guest_va >= layout.data_start && guest_va < layout.data_end {
+        return Some("hull-data");
     }
     if guest_va >= layout.vmcall_bss_start && guest_va < layout.vmcall_bss_end {
         return Some("hull-bss-vmcall");
@@ -964,8 +1215,9 @@ fn map_guest_image_span(
             let chunk_start = if va < start { start } else { va };
             let chunk_end = core::cmp::min(va.saturating_add(PAGE_SIZE_2M), end);
             if chunk_start < chunk_end {
-                let image_pt = unsafe { core::ptr::addr_of_mut!(GUEST_IMAGE_PTS[*pt_slot].0) };
-                let image_pt_pa = kernel_va_to_pa(image_pt as u64).ok_or("guest image pt pa")?;
+                let tables = guest_tables_ptr()?;
+                let image_pt = unsafe { core::ptr::addr_of_mut!((*tables).image_pts[*pt_slot].0) };
+                let image_pt_pa = host_va_to_pa(image_pt as u64).ok_or("guest image pt pa")?;
                 map_table_entry(pd, pd_index(va), image_pt_pa);
                 let phys = kernel_va_to_pa(chunk_start).ok_or("guest kernel image pa")?;
                 map_region_4k(
@@ -1008,8 +1260,9 @@ fn map_guest_heap_span(
         return Ok(());
     }
 
-    let heap_pdpt = unsafe { core::ptr::addr_of_mut!(GUEST_HEAP_PDPT.0) };
-    let heap_pdpt_pa = kernel_va_to_pa(heap_pdpt as u64).ok_or("guest heap pdpt pa")?;
+    let tables = guest_tables_ptr()?;
+    let heap_pdpt = unsafe { core::ptr::addr_of_mut!((*tables).heap_pdpt.0) };
+    let heap_pdpt_pa = host_va_to_pa(heap_pdpt as u64).ok_or("guest heap pdpt pa")?;
     let mut heap_pd_slots = [usize::MAX; 512];
     let mut heap_pd_count = 0usize;
 
@@ -1043,8 +1296,8 @@ fn map_guest_heap_span(
                     return Err("guest heap pd pool");
                 }
                 let slot = heap_pd_count;
-                let heap_pd = unsafe { core::ptr::addr_of_mut!(GUEST_HEAP_PDS[slot].0) };
-                let heap_pd_pa = kernel_va_to_pa(heap_pd as u64).ok_or("guest heap pd pa")?;
+                let heap_pd = unsafe { core::ptr::addr_of_mut!((*tables).heap_pds[slot].0) };
+                let heap_pd_pa = host_va_to_pa(heap_pd as u64).ok_or("guest heap pd pa")?;
                 map_table_entry(heap_pdpt, pdpt_idx, heap_pd_pa);
                 heap_pd_slots[pdpt_idx] = slot;
                 heap_pd_count += 1;
@@ -1054,9 +1307,9 @@ fn map_guest_heap_span(
             let chunk_start = if va < start { start } else { va };
             let chunk_end = core::cmp::min(va.saturating_add(PAGE_SIZE_2M), end);
             if chunk_start < chunk_end {
-                let heap_pd = unsafe { core::ptr::addr_of_mut!(GUEST_HEAP_PDS[pd_slot].0) };
-                let heap_pt = unsafe { core::ptr::addr_of_mut!(GUEST_IMAGE_PTS[*pt_slot].0) };
-                let heap_pt_pa = kernel_va_to_pa(heap_pt as u64).ok_or("guest heap pt pa")?;
+                let heap_pd = unsafe { core::ptr::addr_of_mut!((*tables).heap_pds[pd_slot].0) };
+                let heap_pt = unsafe { core::ptr::addr_of_mut!((*tables).image_pts[*pt_slot].0) };
+                let heap_pt_pa = host_va_to_pa(heap_pt as u64).ok_or("guest heap pt pa")?;
                 map_table_entry(heap_pd, pd_index(va), heap_pt_pa);
                 let phys = host_va_to_pa(chunk_start).ok_or("guest heap pa")?;
                 map_region_4k(
@@ -1088,46 +1341,56 @@ fn map_guest_heap_span(
 }
 
 fn read_guest_high_pt_entry(guest_va: u64, pde: u64) -> u64 {
-    let Ok(code_pt_pa) = current_high_pt_pa(unsafe { core::ptr::addr_of!(GUEST_CODE_PT.0) as u64 }) else {
+    let Some(pt_page) = guest_pt_page_from_pde(false, pde) else {
         return 0;
     };
+    unsafe { read_guest_page_entry(pt_page, pt_index(guest_va)) }
+}
+
+fn guest_pt_page_from_pde(low_half: bool, pde: u64) -> Option<*const [u64; 512]> {
+    let tables = guest_tables_ptr_opt()?;
+    if low_half {
+        for i in 0..GUEST_LOW_PT_COUNT {
+            let low_pt = unsafe { core::ptr::addr_of!((*tables).low_pts[i].0) as u64 };
+            let Ok(low_pt_pa) = current_high_pt_pa(low_pt) else {
+                continue;
+            };
+            if pde_addr(pde) == low_pt_pa {
+                return Some(unsafe { core::ptr::addr_of!((*tables).low_pts[i].0) });
+            }
+        }
+        return None;
+    }
+
+    let Ok(code_pt_pa) = current_high_pt_pa(unsafe { core::ptr::addr_of!((*tables).code_pt.0) as u64 }) else {
+        return None;
+    };
     if pde_addr(pde) == code_pt_pa {
-        return unsafe { read_guest_page_entry(core::ptr::addr_of!(GUEST_CODE_PT.0), pt_index(guest_va)) };
+        return Some(unsafe { core::ptr::addr_of!((*tables).code_pt.0) });
     }
 
     for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
-        let image_pt = unsafe { core::ptr::addr_of!(GUEST_IMAGE_PTS[i].0) as u64 };
+        let image_pt = unsafe { core::ptr::addr_of!((*tables).image_pts[i].0) as u64 };
         let Ok(image_pt_pa) = current_high_pt_pa(image_pt) else {
             continue;
         };
         if pde_addr(pde) == image_pt_pa {
-            return unsafe {
-                read_guest_page_entry(core::ptr::addr_of!(GUEST_IMAGE_PTS[i].0), pt_index(guest_va))
-            };
+            return Some(unsafe { core::ptr::addr_of!((*tables).image_pts[i].0) });
         }
     }
 
-    0
+    None
 }
 
 fn read_guest_low_pt_entry(guest_va: u64, pde: u64) -> u64 {
-    for i in 0..GUEST_LOW_PT_COUNT {
-        let low_pt = unsafe { core::ptr::addr_of!(GUEST_LOW_PTS[i].0) as u64 };
-        let Ok(low_pt_pa) = current_high_pt_pa(low_pt) else {
-            continue;
-        };
-        if pde_addr(pde) == low_pt_pa {
-            return unsafe {
-                read_guest_page_entry(core::ptr::addr_of!(GUEST_LOW_PTS[i].0), pt_index(guest_va))
-            };
-        }
-    }
-
-    0
+    let Some(pt_page) = guest_pt_page_from_pde(true, pde) else {
+        return 0;
+    };
+    unsafe { read_guest_page_entry(pt_page, pt_index(guest_va)) }
 }
 
 fn current_high_pt_pa(va: u64) -> Result<u64, &'static str> {
-    kernel_va_to_pa(va).ok_or("guest high pt pa")
+    host_va_to_pa(va).ok_or("guest high pt pa")
 }
 
 fn host_va_to_pa(va: u64) -> Option<u64> {

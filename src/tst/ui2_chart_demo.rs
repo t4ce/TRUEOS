@@ -345,6 +345,7 @@ fn present_chart(
 
 #[embassy_executor::task]
 pub async fn ui2_chart_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-chart-demo");
     let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(FONT_SIZE_CASE) else {
         return;
     };
@@ -369,6 +370,8 @@ pub async fn ui2_chart_demo_task() {
         crate::log!("ui2-chart: window creation failed\n");
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-chart-demo");
+    let _ = ui2::set_window_title_twemoji(surface.window_id(), '\u{3030}');
 
     // Scrollbars
     let _ = ui2::set_window_vertical_scrollbar_side(
@@ -386,7 +389,9 @@ pub async fn ui2_chart_demo_task() {
     // Re-render on resize.
     let mut last_viewport = (content_w, content_h);
     loop {
-        Timer::after(EmbassyDuration::from_millis(200)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-chart-demo", 200).await {
+            break;
+        }
         let viewport = ui2::window_content_rect_by_id(surface.window_id())
             .map(|r| (r.w.max(1.0) as u32, r.h.max(1.0) as u32))
             .unwrap_or(last_viewport);

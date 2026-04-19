@@ -18,6 +18,7 @@ use alloc::boxed::Box;
 use embassy_executor::raw::Executor as RawExecutor;
 use trueos_vm::vmcall;
 
+use crate::blueprint;
 use crate::shell2::{ShellBackend2, ShellIo2};
 
 // ── VmcallShellBackend ────────────────────────────────────────────────────────
@@ -109,4 +110,58 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
         crate::time::poll();
         unsafe { executor.poll() };
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
+    let Some(state) = crate::hv::take_blueprint_launch() else {
+        return false;
+    };
+
+    let console_target = state.console_target.clone();
+    let log = |line: &str| {
+        if let Some(target) = console_target.as_ref() {
+            crate::shell2::print_matrix_target_line(target, line);
+        }
+    };
+
+    log(alloc::format!("run: guest blueprint launch archive={}", state.archive.as_str()).as_str());
+
+    let module = match blueprint::parse_blueprint(state.module_bytes.as_slice()) {
+        Ok(module) => module,
+        Err(err) => {
+            log(alloc::format!("run: guest blueprint parse failed: {}", err).as_str());
+            return true;
+        }
+    };
+
+    let unpacked = match blueprint::unpack_blueprint(&module) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            log(alloc::format!("run: guest blueprint unpack failed: {}", err).as_str());
+            return true;
+        }
+    };
+
+    if !unpacked.starts_with(b"\x7fELF")
+        || !matches!(blueprint::elf_type_name(unpacked.as_slice()), Some("REL"))
+    {
+        log("run: guest blueprint rejected non-REL payload");
+        return true;
+    }
+
+    let process_args = blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
+    let process_env = blueprint::build_process_env(state.archive.as_str());
+    match blueprint::invoke_host_rel(
+        unpacked.as_slice(),
+        module.entry,
+        process_args,
+        process_env,
+        state.console_target,
+    ) {
+        Ok(()) => log("run: guest blueprint returned"),
+        Err(err) => log(alloc::format!("run: guest REL load failed: {}", err).as_str()),
+    }
+
+    true
 }

@@ -172,11 +172,13 @@ pub mod kfs {
 
 pub mod env {
     use super::{BTreeMap, String, Vec};
+    use crate::shell2::MatrixTarget;
 
     #[derive(Clone)]
     struct LaunchContext {
         args: Vec<String>,
         vars: BTreeMap<String, String>,
+        console_target: Option<MatrixTarget>,
     }
 
     static CONTEXTS: spin::Mutex<BTreeMap<u32, Vec<LaunchContext>>> =
@@ -192,13 +194,23 @@ pub mod env {
         vars: BTreeMap<String, String>,
         f: impl FnOnce() -> R,
     ) -> R {
+        with_launch_context_console(args, vars, None, f)
+    }
+
+    pub fn with_launch_context_console<R>(
+        args: Vec<String>,
+        vars: BTreeMap<String, String>,
+        console_target: Option<MatrixTarget>,
+        f: impl FnOnce() -> R,
+    ) -> R {
         let key = cpu_key();
         {
             let mut contexts = CONTEXTS.lock();
-            contexts
-                .entry(key)
-                .or_default()
-                .push(LaunchContext { args, vars });
+            contexts.entry(key).or_default().push(LaunchContext {
+                args,
+                vars,
+                console_target,
+            });
         }
 
         let out = f();
@@ -243,6 +255,15 @@ pub mod env {
             .and_then(|ctx| ctx.vars.get(key))
             .cloned()
     }
+
+    pub fn console_target() -> Option<MatrixTarget> {
+        let cpu = cpu_key();
+        let contexts = CONTEXTS.lock();
+        contexts
+            .get(&cpu)
+            .and_then(|stack| stack.last())
+            .and_then(|ctx| ctx.console_target.clone())
+    }
 }
 
 /// Console routing + C ABI entrypoints used by embedded C code (QuickJS etc).
@@ -285,6 +306,14 @@ pub mod cabi {
     #[inline]
     pub fn write_bytes(stream: CStream, bytes: &[u8]) {
         if bytes.is_empty() {
+            return;
+        }
+
+        if let Some(target) = crate::r::io::env::console_target()
+            && let Ok(s) = core::str::from_utf8(bytes)
+        {
+            let _ = stream;
+            crate::shell2::print_matrix_target_native_text(&target, s);
             return;
         }
 

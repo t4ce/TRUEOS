@@ -1,8 +1,10 @@
 use core::sync::atomic::{AtomicU32, Ordering};
+use core::arch::x86_64::__cpuid;
 
+use crate::vfetch_job::{BytesJob, Poll as FetchPoll};
 use crate::vmcall;
 use crate::vpanic;
-use v::{vfetch, vfs, vui2};
+use v::{vio, vui2, vsys};
 
 const HULL_PROBE_PATH: &[u8] = b"/vm/hull_probe.txt";
 const HULL_FETCH_URL: &[u8] = b"https://example.com/";
@@ -86,7 +88,8 @@ fn run_fs_probe() -> bool {
     let mut text = [0u8; 96];
     let text_len = build_fs_probe_line(&mut text, now);
 
-    let handle = match vfs::write_begin(HULL_PROBE_PATH, text_len as u64) {
+    let path = core::str::from_utf8(HULL_PROBE_PATH).unwrap_or("/vm/hull_probe.txt");
+    let handle = match vio::kfs::write_file_begin(path, text_len as u64) {
         Ok(handle) => handle,
         Err(rc) => {
             net_line_num_signed("VMHULL: fs write_begin rc=", rc);
@@ -94,13 +97,13 @@ fn run_fs_probe() -> bool {
         }
     };
 
-    if let Err(rc) = vfs::write_chunk(handle, &text[..text_len]) {
-        let _ = vfs::write_abort(handle);
+    if let Err(rc) = vio::kfs::write_file_chunk(handle, &text[..text_len]) {
+        let _ = vio::kfs::write_file_abort(handle);
         net_line_num_signed("VMHULL: fs write_chunk rc=", rc);
         return false;
     }
 
-    if let Err(rc) = vfs::write_finish(handle) {
+    if let Err(rc) = vio::kfs::write_file_finish(handle) {
         net_line_num_signed("VMHULL: fs write_finish rc=", rc);
         return false;
     }
@@ -111,30 +114,45 @@ fn run_fs_probe() -> bool {
 
 fn run_net_probe() -> bool {
     vpanic::set_stage(0x1030);
-    let op_id = match vfetch::fetch_bytes(HULL_FETCH_URL) {
-        Ok(op_id) => op_id,
+    let job = match BytesJob::start(HULL_FETCH_URL) {
+        Ok(job) => job,
         Err(rc) => {
             net_line_num_signed("VMHULL: fetch start rc=", rc);
             return false;
         }
     };
 
-    let wait_rc = vfetch::fetch_bytes_wait(op_id, 8_000);
-    if wait_rc != 0 {
-        net_line_num_signed("VMHULL: fetch wait rc=", wait_rc);
-        let _ = vfetch::fetch_bytes_discard(op_id);
-        return false;
-    }
+    let start_secs = vmcall::unix_time();
+    let deadline_secs = start_secs.saturating_add(8);
+    let mut spins = 0u32;
 
-    match vfetch::fetch_bytes_result_len(op_id) {
-        Ok(len) => {
-            net_line_num("VMHULL: fetch bytes ok len=", len as u64);
-            let _ = vfetch::fetch_bytes_discard(op_id);
-            true
-        }
-        Err(rc) => {
-            net_line_num_signed("VMHULL: fetch len rc=", rc);
-            false
+    loop {
+        match job.poll_len() {
+            Ok(FetchPoll::Pending) => {
+                spins = spins.saturating_add(1);
+                if start_secs != 0 && vmcall::unix_time() >= deadline_secs {
+                    net_line("VMHULL: fetch poll timeout");
+                    let _ = job.discard();
+                    return false;
+                }
+                if start_secs == 0 && spins >= 50_000 {
+                    net_line("VMHULL: fetch poll budget exhausted");
+                    let _ = job.discard();
+                    return false;
+                }
+                vsys::poll_once();
+                core::hint::spin_loop();
+            }
+            Ok(FetchPoll::Ready(len)) => {
+                net_line_num("VMHULL: fetch bytes ok len=", len as u64);
+                let _ = job.discard();
+                return true;
+            }
+            Err(rc) => {
+                net_line_num_signed("VMHULL: fetch poll rc=", rc);
+                let _ = job.discard();
+                return false;
+            }
         }
     }
 }
@@ -152,7 +170,7 @@ fn run_ui2_probe(fs_ok: bool, net_ok: bool) -> bool {
         return false;
     };
     let mut title = [0u8; 64];
-    let title_len = build_probe_title(&mut title, fs_ok, net_ok, vmcall::unix_time());
+    let title_len = build_probe_title(&mut title, fs_ok, net_ok);
     let ok = window.id().set_title(as_str(&title[..title_len]))
         && window.id().set_decorations(vui2::WindowDecorationMode::System)
         && window.id().focus();
@@ -172,12 +190,12 @@ fn log_probe_summary(summary: ProbeSummary) {
     net_line(as_str(&line[..len]));
 }
 
-fn refresh_probe_window_title(now: u64) {
+fn refresh_probe_window_title(_now: u64) {
     let flags = HULL_PROBE_FLAGS.load(Ordering::Acquire);
     let fs_ok = (flags & PROBE_FS_OK) != 0;
     let net_ok = (flags & PROBE_NET_OK) != 0;
     let mut title = [0u8; 64];
-    let title_len = build_probe_title(&mut title, fs_ok, net_ok, now);
+    let title_len = build_probe_title(&mut title, fs_ok, net_ok);
     if let Some(window) = vui2::WindowId::new(HULL_WINDOW_ID.load(Ordering::Acquire)) {
         let _ = window.set_title(as_str(&title[..title_len]));
     }
@@ -260,15 +278,19 @@ fn build_probe_summary(buf: &mut [u8; 64], summary: ProbeSummary) -> usize {
     push_bytes(buf, n, bool_mark(summary.ui_ok).as_bytes())
 }
 
-fn build_probe_title(buf: &mut [u8; 64], fs_ok: bool, net_ok: bool, unix_time: u64) -> usize {
+fn build_probe_title(buf: &mut [u8; 64], fs_ok: bool, net_ok: bool) -> usize {
     let mut n = 0usize;
     n = push_bytes(buf, n, b"VMHULL fs=");
     n = push_bytes(buf, n, bool_mark(fs_ok).as_bytes());
     n = push_bytes(buf, n, b" net=");
     n = push_bytes(buf, n, bool_mark(net_ok).as_bytes());
-    n = push_bytes(buf, n, b" time=");
+    n = push_bytes(buf, n, b" ap=");
     let mut num = [0u8; 20];
-    push_bytes(buf, n, fmt_u64(&mut num, unix_time))
+    push_bytes(buf, n, fmt_u64(&mut num, guest_apic_id() as u64))
+}
+
+fn guest_apic_id() -> u32 {
+    unsafe { (__cpuid(1).ebx >> 24) & 0xff }
 }
 
 fn push_bytes(dst: &mut [u8], at: usize, src: &[u8]) -> usize {

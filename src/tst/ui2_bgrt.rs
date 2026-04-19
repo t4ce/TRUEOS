@@ -19,6 +19,7 @@ fn bgrt_pixels_to_rgba(pixels: &[u32]) -> Vec<u8> {
 
 #[embassy_executor::task]
 pub async fn ui2_bgrt_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-bgrt-demo");
     let Some((width, height, pixels)) = crate::efi::acpi::bgrt::decoded_logo_rgba() else {
         crate::log!("ui2-bgrt-demo: no BGRT logo available\n");
         return;
@@ -84,6 +85,7 @@ pub async fn ui2_bgrt_demo_task() {
         crate::log!("ui2-bgrt-demo: window creation failed tex={}\n", UI2_BGRT_TEX_ID);
         return;
     };
+    let _ = surface.bind_spawn_task("ui2-bgrt-demo");
 
     let window_id = surface.window_id();
     let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);
@@ -117,6 +119,8 @@ pub async fn ui2_bgrt_demo_task() {
     );
 
     loop {
-        Timer::after(EmbassyDuration::from_secs(3600)).await;
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-bgrt-demo", 3_600_000).await {
+            break;
+        }
     }
 }
