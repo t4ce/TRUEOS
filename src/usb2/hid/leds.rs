@@ -469,8 +469,9 @@ pub(crate) async fn maybe_start_led_controller_with_device(
         return true;
     }
 
-    match spawner.spawn(led_probe_task(device, controller_id, target)) {
-        Ok(()) => {
+    match led_probe_task(device, controller_id, target) {
+        Ok(token) => {
+            spawner.spawn(token);
             crate::log!(
                 "crabusb: leds {:04X}:{:04X} handoff shared if#{} cfg={} ctrl={}\n",
                 vendor_id,
@@ -541,8 +542,9 @@ pub(crate) async fn maybe_start_led_controller(
         return true;
     }
 
-    match spawner.spawn(led_probe_task(device, controller_id, target)) {
-        Ok(()) => {
+    match led_probe_task(device, controller_id, target) {
+        Ok(token) => {
+            spawner.spawn(token);
             crate::log!(
                 "crabusb: leds {:04X}:{:04X} handoff if#{} cfg={} ctrl={}\n",
                 vendor_id,

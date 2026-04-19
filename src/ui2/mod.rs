@@ -608,8 +608,8 @@ fn init_state() -> &'static Mutex<Ui2State> {
         let (view_w, view_h) = crate::intel::active_scanout_dimensions()
             .or_else(|| {
                 crate::limine::framebuffer_response()
-                    .and_then(|resp| resp.framebuffers().next())
-                    .map(|fb| (fb.width() as u32, fb.height() as u32))
+                    .and_then(|resp| resp.framebuffers().first().copied())
+                    .map(|fb| (fb.width as u32, fb.height as u32))
             })
             .unwrap_or((1280, 800));
 

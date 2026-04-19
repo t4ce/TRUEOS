@@ -433,8 +433,9 @@ pub(crate) async fn maybe_start_midi(
         return true;
     }
 
-    match spawner.spawn(midi_stream_task(device, controller_id, target)) {
-        Ok(()) => {
+    match midi_stream_task(device, controller_id, target) {
+        Ok(token) => {
+            spawner.spawn(token);
             crate::log!(
                 "crabusb: midi {:04X}:{:04X} handoff if#{} alt={} cfg={} bulk_in=0x{:02X} in_mps={} bulk_out={} out_ep={}\n",
                 vendor_id,

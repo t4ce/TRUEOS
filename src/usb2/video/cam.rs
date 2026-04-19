@@ -687,8 +687,9 @@ pub(crate) async fn maybe_start_camera(
         }
     };
 
-    match spawner.spawn(camera_snapshot_task(device, controller_id, target)) {
-        Ok(()) => {
+    match camera_snapshot_task(device, controller_id, target) {
+        Ok(token) => {
+            spawner.spawn(token);
             crate::log!(
                 "crabusb: camera {:04X}:{:04X} handoff if#{} alt={} cfg={} ep=0x{:02X} transport={:?} packet={} stable_id={}\n",
                 vendor_id,

@@ -498,14 +498,14 @@ fn submit_cpubench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
 
     print_matrix_target_line(&target, "bench cpu: starting pure compute load");
     set_matrix_target_active(&target, true);
-    if spawner
-        .spawn(cpubench_task(target.clone(), session_id))
-        .is_err()
-    {
-        bench_session_finish(session_id);
-        set_matrix_target_active(&target, false);
-        print_shell_line(io, "bench cpu: spawn failed");
-        return None;
+    match cpubench_task(target.clone(), session_id) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            bench_session_finish(session_id);
+            set_matrix_target_active(&target, false);
+            print_shell_line(io, "bench cpu: spawn failed");
+            return None;
+        }
     }
     print_matrix_target_line(&target, "bench cpu: send `q` in this slot to stop");
     Some(session_id)
@@ -592,14 +592,14 @@ fn submit_netbench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
     );
 
     set_matrix_target_active(&target, true);
-    if spawner
-        .spawn(netbench_task(target.clone(), session_id, nic_index))
-        .is_err()
-    {
-        bench_session_finish(session_id);
-        set_matrix_target_active(&target, false);
-        print_shell_line(io, "bench net: spawn failed");
-        return None;
+    match netbench_task(target.clone(), session_id, nic_index) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            bench_session_finish(session_id);
+            set_matrix_target_active(&target, false);
+            print_shell_line(io, "bench net: spawn failed");
+            return None;
+        }
     }
     print_matrix_target_line(&target, "bench net: send `q` in this slot to stop");
     Some(session_id)
@@ -1351,14 +1351,14 @@ fn submit_discbench(
     );
 
     set_matrix_target_active(&target, true);
-    if spawner
-        .spawn(discbench_task(target.clone(), session_id, handle))
-        .is_err()
-    {
-        bench_session_finish(session_id);
-        set_matrix_target_active(&target, false);
-        print_shell_line(io, "bench disc: spawn failed");
-        return None;
+    match discbench_task(target.clone(), session_id, handle) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            bench_session_finish(session_id);
+            set_matrix_target_active(&target, false);
+            print_shell_line(io, "bench disc: spawn failed");
+            return None;
+        }
     }
     print_matrix_target_line(&target, "bench disc: send `q` to stop");
     Some(session_id)

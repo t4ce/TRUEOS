@@ -105,7 +105,7 @@ fn bump_backend_epoch() {
 
 pub struct System {
     backend: backends::Backend,
-    framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+    framebuffers: Option<&'static crate::limine::FramebufferResponse>,
 }
 
 fn finalize_backend_init() {
@@ -176,7 +176,7 @@ impl SystemLockOwner {
 impl System {
     fn new(
         backend: backends::Backend,
-        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+        framebuffers: Option<&'static crate::limine::FramebufferResponse>,
     ) -> Self {
         Self {
             backend,
@@ -211,7 +211,7 @@ fn backend_kind_cached() -> Option<BackendKind> {
     }
 }
 
-pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) {
+pub fn init(framebuffers: Option<&'static crate::limine::FramebufferResponse>) {
     let _ = SYSTEM.call_once(|| {
         // if we use this qemu will do whatever it wants. that hurts particularly much
         // because a seemingly harmless init is a contract here:
@@ -360,7 +360,7 @@ pub fn with_context_tag<R>(
 }
 
 pub fn with_framebuffers<R>(
-    f: impl FnOnce(Option<&'static ::limine::response::FramebufferResponse>) -> R,
+    f: impl FnOnce(Option<&'static crate::limine::FramebufferResponse>) -> R,
 ) -> Option<R> {
     with_system_tag(SystemLockOwner::WithFramebuffers, |sys| f(sys.framebuffers))
 }

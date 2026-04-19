@@ -659,7 +659,9 @@ fn schedule_browser_title_icon_fetch(
         return;
     }
     let tex_id = window_title_icon_tex_id(window_id);
-    let _ = spawner.spawn(browser_title_icon_fetch_task(window_id, load_seq, tex_id, url));
+    if let Ok(token) = browser_title_icon_fetch_task(window_id, load_seq, tex_id, url) {
+        spawner.spawn(token);
+    }
 }
 
 fn sync_hosted_browser_window_metadata(state: &mut Ui2State, spawner: &Spawner) {

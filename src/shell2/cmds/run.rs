@@ -685,12 +685,12 @@ pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_ar
     print_matrix_target_line(&target, alloc::format!("run: queued {}", archive.as_str()).as_str());
     set_matrix_target_active(&target, true);
 
-    if worker_spawner
-        .spawn(run_command_task(target.clone(), archive, app_args))
-        .is_err()
-    {
-        set_matrix_target_active(&target, false);
-        print_shell_line(io, "run: spawn failed");
+    match run_command_task(target.clone(), archive, app_args) {
+        Ok(token) => worker_spawner.spawn(token),
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            print_shell_line(io, "run: spawn failed");
+        }
     }
 }
 

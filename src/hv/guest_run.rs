@@ -88,8 +88,9 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
 
     let spawner = unsafe { executor.spawner() };
 
-    match spawner.spawn(crate::shell2::task(spawner, &VMCALL_SHELL)) {
-        Ok(()) => {
+    match crate::shell2::task(spawner, &VMCALL_SHELL) {
+        Ok(token) => {
+            spawner.spawn(token);
             vmcall::net_tcp_write(b"guest-shell: shell2 task spawned\r\n");
         }
         Err(_) => {

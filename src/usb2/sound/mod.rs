@@ -630,14 +630,15 @@ pub(crate) async fn maybe_start_target_audio(
             };
             *ACTIVE_AUDIO_STREAM.lock() = Some(active_stream);
 
-            match spawner.spawn(audio_stream_task(
+            match audio_stream_task(
                 device,
                 active_stream,
                 vendor_id,
                 product_id,
                 target,
-            )) {
-                Ok(()) => {
+            ) {
+                Ok(token) => {
+                    spawner.spawn(token);
                     crate::log!(
                         "crabusb: audio handoff {:04X}:{:04X} if#{} alt={} ep=0x{:02X} stable_id={}\n",
                         vendor_id,

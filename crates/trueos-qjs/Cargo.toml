@@ -14,9 +14,9 @@ cc = "1.0"
 
 [dependencies]
 spin = "0.10"
-embassy-time-driver = { version = "0.2.1", default-features = false, optional = true }
-embassy-executor = { version = "0.9.1", default-features = false, optional = true, features = ["executor-thread", "arch-spin"] }
-embassy-time = { version = "0.5.0", default-features = false, optional = true, features = ["tick-hz-1_000"] }
+embassy-time-driver = { version = "0.2.2", default-features = false, optional = true }
+embassy-executor = { version = "0.10.0", default-features = false, optional = true, features = ["executor-thread", "platform-spin"] }
+embassy-time = { version = "0.5.1", default-features = false, optional = true, features = ["tick-hz-1_000"] }
 embassy-sync = { version = "0.8.0", default-features = false, optional = true }
 libm = { version = "0.2", default-features = false, optional = true }
 v = { path = "../trueos-v", default-features = false }

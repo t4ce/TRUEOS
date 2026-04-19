@@ -66,12 +66,12 @@ pub(crate) fn submit_install(
     );
 
     set_matrix_target_active(&target, true);
-    if spawner
-        .spawn(install_command_task(target.clone(), disk, bootx64, kernel))
-        .is_err()
-    {
-        set_matrix_target_active(&target, false);
-        print_shell_line(io, "install: spawn failed");
+    match install_command_task(target.clone(), disk, bootx64, kernel) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            print_shell_line(io, "install: spawn failed");
+        }
     }
 }
 

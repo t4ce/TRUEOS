@@ -238,9 +238,12 @@ fn start_with_mode(
         memory::active_guest_stack_mb()
     ));
 
-    if target.spawner.spawn(vm1_task()).is_err() {
-        VM1_STARTING.store(false, Ordering::Release);
-        return Err(StartError::SpawnFailed);
+    match vm1_task() {
+        Ok(token) => target.spawner.spawn(token),
+        Err(_) => {
+            VM1_STARTING.store(false, Ordering::Release);
+            return Err(StartError::SpawnFailed);
+        }
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
 use spin::Mutex;
 
-use ::limine::memory_map::EntryType;
+use ::limine::memmap;
 
 // Minimal physical MMIO allocator for PCI BAR assignment.
 //
@@ -44,7 +44,7 @@ fn overlaps_usable_ram(base: u64, len: u64) -> bool {
     };
 
     for e in entries {
-        if e.entry_type != EntryType::USABLE {
+        if e.type_ != memmap::MEMMAP_USABLE {
             continue;
         }
         if overlaps(base, len, e.base, e.length) {

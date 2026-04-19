@@ -57,9 +57,8 @@ pub(crate) fn launch_linked_portal(
 
     let _ = spawner;
     let worker_spawner = pick_portal_spawner().ok_or(LaunchError::NoWorkerSpawner)?;
-    worker_spawner
-        .spawn(linked_portal_task(launch))
-        .map_err(map_spawn_error)?;
+    let token = linked_portal_task(launch).map_err(map_spawn_error)?;
+    worker_spawner.spawn(token);
 
     Ok(portal)
 }

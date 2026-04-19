@@ -1552,8 +1552,9 @@ pub(super) fn decode_pipe_src(value: u32) -> Option<(u32, u32)> {
 pub(super) fn framebuffer_hint() -> Option<(u32, u32)> {
     let fb = crate::limine::framebuffer_response()?
         .framebuffers()
-        .next()?;
-    Some((fb.width() as u32, fb.height() as u32))
+        .first()
+        .copied()?;
+    Some((fb.width as u32, fb.height as u32))
 }
 
 fn log_primary_dimensions_probe(

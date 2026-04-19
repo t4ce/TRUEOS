@@ -1549,10 +1549,9 @@ pub mod cabi {
                 )
                 .is_ok()
             {
-                if worker_spawner
-                    .spawn(async_png_upload_service_task())
-                    .is_err()
-                {
+                if let Ok(token) = async_png_upload_service_task() {
+                    worker_spawner.spawn(token);
+                } else {
                     ASYNC_PNG_WORKER_STARTED.store(false, core::sync::atomic::Ordering::Release);
                 }
             }
@@ -1596,10 +1595,9 @@ pub mod cabi {
                 )
                 .is_ok()
             {
-                if worker_spawner
-                    .spawn(async_jpeg_upload_service_task())
-                    .is_err()
-                {
+                if let Ok(token) = async_jpeg_upload_service_task() {
+                    worker_spawner.spawn(token);
+                } else {
                     ASYNC_JPEG_WORKER_STARTED.store(false, core::sync::atomic::Ordering::Release);
                 }
             }
@@ -1643,10 +1641,9 @@ pub mod cabi {
                 )
                 .is_ok()
             {
-                if worker_spawner
-                    .spawn(async_svg_upload_service_task())
-                    .is_err()
-                {
+                if let Ok(token) = async_svg_upload_service_task() {
+                    worker_spawner.spawn(token);
+                } else {
                     ASYNC_SVG_WORKER_STARTED.store(false, core::sync::atomic::Ordering::Release);
                 }
             }

@@ -96,16 +96,17 @@ unsafe impl Send for IntelGfxBackend {}
 
 impl IntelGfxBackend {
     pub fn init(
-        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+        framebuffers: Option<&'static crate::limine::FramebufferResponse>,
     ) -> Option<Self> {
-        use ::limine::framebuffer::MemoryModel;
-
         if !crate::intel::has_claimed_device() {
             return None;
         }
 
-        let fb = framebuffers?.framebuffers().next()?;
-        if fb.memory_model() != MemoryModel::RGB || fb.bpp() != 32 || fb.addr().is_null() {
+        let fb = *framebuffers?.framebuffers().first()?;
+        if fb.memory_model != ::limine::framebuffer::FRAMEBUFFER_RGB
+            || fb.bpp != 32
+            || fb.address().is_null()
+        {
             return None;
         }
 

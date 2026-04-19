@@ -98,12 +98,12 @@ fn submit_format(
     );
 
     set_matrix_target_active(target, true);
-    if spawner
-        .spawn(format_command_task(target.clone(), disk))
-        .is_err()
-    {
-        set_matrix_target_active(target, false);
-        print_shell_line(io, "format: spawn failed");
+    match format_command_task(target.clone(), disk) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            set_matrix_target_active(target, false);
+            print_shell_line(io, "format: spawn failed");
+        }
     }
 }
 

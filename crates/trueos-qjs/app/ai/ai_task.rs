@@ -631,11 +631,12 @@ pub fn ensure_started(spawner: &Spawner) -> EnsureStartedResult {
         return EnsureStartedResult::Ready;
     }
 
-    if spawner.spawn(run_once()).is_err() {
+    let Ok(token) = run_once() else {
         AI_TASK_STARTED.store(false, Ordering::Release);
         qjs::trueos_shims::log_error("ai-task: spawn failed\n");
         return EnsureStartedResult::SpawnFailed;
-    }
+    };
+    spawner.spawn(token);
 
     qjs::trueos_shims::log_info("ai-task: started\n");
     EnsureStartedResult::Ready
