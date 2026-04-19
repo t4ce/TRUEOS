@@ -1,7 +1,7 @@
 use crate::util::*;
 use crate::{ImageResult, ImageSize};
 
-use core2::io::{BufRead, Seek, SeekFrom};
+use core3::io::{BufRead, Seek, SeekFrom};
 
 pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
     let mut buffer = [0; 4];
@@ -14,7 +14,7 @@ pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
     } else if buffer[3] == b'X' {
         webp_vp8x_size(reader)
     } else {
-        Err(core2::io::Error::new(core2::io::ErrorKind::InvalidData, "Invalid VP8 Tag").into())
+        Err(core3::io::Error::new(core3::io::ErrorKind::InvalidData, "Invalid VP8 Tag").into())
     }
 }
 

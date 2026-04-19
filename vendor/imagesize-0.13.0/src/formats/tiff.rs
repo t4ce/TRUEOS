@@ -1,7 +1,7 @@
 use crate::util::*;
 use crate::{ImageResult, ImageSize};
 
-use core2::io::{BufRead, Cursor, Seek, SeekFrom};
+use core3::io::{BufRead, Cursor, Seek, SeekFrom};
 
 pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
     reader.seek(SeekFrom::Start(0))?;
@@ -17,7 +17,7 @@ pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
     } else {
         //  Shouldn't get here by normal means, but handle invalid header anyway
         return Err(
-            core2::io::Error::new(core2::io::ErrorKind::InvalidData, "Invalid TIFF header").into(),
+            core3::io::Error::new(core3::io::ErrorKind::InvalidData, "Invalid TIFF header").into(),
         );
     };
 
@@ -28,7 +28,7 @@ pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
     //  IFD offset cannot be 0
     if ifd_offset == 0 {
         return Err(
-            core2::io::Error::new(core2::io::ErrorKind::InvalidData, "Invalid IFD offset").into(),
+            core3::io::Error::new(core3::io::ErrorKind::InvalidData, "Invalid IFD offset").into(),
         );
     }
 
@@ -58,8 +58,8 @@ pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
             12 | 16 | 17 | 18 => 8,
             // Anything else is invalid
             _ => {
-                return Err(core2::io::Error::new(
-                    core2::io::ErrorKind::InvalidData,
+                return Err(core3::io::Error::new(
+                    core3::io::ErrorKind::InvalidData,
                     "Invalid IFD type",
                 )
                 .into())
@@ -93,7 +93,7 @@ pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
     }
 
     //  If no width/height pair was found return invalid data
-    Err(core2::io::Error::new(core2::io::ErrorKind::InvalidData, "No dimensions in IFD tags").into())
+    Err(core3::io::Error::new(core3::io::ErrorKind::InvalidData, "No dimensions in IFD tags").into())
 }
 
 pub fn matches(header: &[u8]) -> bool {

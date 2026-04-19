@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core2::io::{self, BufRead, Seek, SeekFrom};
+use core3::io::{self, BufRead, Seek, SeekFrom};
 
 use crate::{util::read_line_capped, ImageResult, ImageSize};
 

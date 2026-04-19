@@ -2,7 +2,7 @@ use crate::{
     util::{read_u16, read_u32, Endian},
     ImageResult, ImageSize,
 };
-use core2::io::{BufRead, Seek, SeekFrom};
+use core3::io::{BufRead, Seek, SeekFrom};
 
 pub fn size<R: BufRead + Seek>(reader: &mut R) -> ImageResult<ImageSize> {
     // skip the IFF header

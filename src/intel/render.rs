@@ -200,7 +200,10 @@ const PIPE_CONTROL_DEST_GGTT: u32 = 1 << 24;
 const PIPE_CONTROL_CS_STALL: u32 = 1 << 20;
 const PIPE_CONTROL_POST_DRAW_SYNC_BITS: u32 =
     PIPE_CONTROL_FLUSH_BITS | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT;
+const RESULT_DEBUG_SENTINEL: u32 = 0xC0DE_7700;
 const RESULT_SLOT_PRE3D_DWORD: usize = 0;
+// Keep this legacy DWORD slot around for MI-only probes. PIPE_CONTROL post-sync
+// writes a QWord and therefore must target an 8-byte-aligned destination.
 const RESULT_SLOT_POST3D_DWORD: usize = 1;
 const RESULT_SLOT_FINAL_DWORD: usize = 2;
 const RESULT_SLOT_POST_VF_DWORD: usize = 3;
@@ -208,6 +211,9 @@ const RESULT_SLOT_POST_VS_DWORD: usize = 4;
 const RESULT_SLOT_POST_PS_STATE_DWORD: usize = 5;
 const RESULT_SLOT_POST_CLIP_DWORD: usize = 6;
 const RESULT_SLOT_POST_RASTER_DWORD: usize = 7;
+const RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD: usize = 8;
+const RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD: usize = 9;
+const RESULT_DEBUG_DWORD_COUNT: usize = RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD + 1;
 const RESULT_STREAMOUT_PROOF_OFFSET: usize = 0x100;
 const RESULT_STREAMOUT_PROOF_GPU_ADDR: u64 =
     GPU_VA_RESULT_BASE + RESULT_STREAMOUT_PROOF_OFFSET as u64;
@@ -1350,10 +1356,8 @@ fn submit_triangle_vf_streamout_proof(
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
         core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
-        for i in 0..8 {
-            core::ptr::write_volatile((warm.result_virt as *mut u32).add(i), 0xC0DE_7700);
-        }
     }
+    seed_result_debug_slots(warm);
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
@@ -1460,10 +1464,8 @@ fn submit_triangle_streamout_proof(
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
         core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
-        for i in 0..8 {
-            core::ptr::write_volatile((warm.result_virt as *mut u32).add(i), 0xC0DE_7700);
-        }
     }
+    seed_result_debug_slots(warm);
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
@@ -1672,15 +1674,8 @@ fn submit_triangle_draw_to_surface(
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
         core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
-        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
-        core::ptr::write_volatile((warm.result_virt as *mut u32).add(1), 0xC0DE_7700);
-        core::ptr::write_volatile((warm.result_virt as *mut u32).add(2), 0xC0DE_7700);
-        core::ptr::write_volatile((warm.result_virt as *mut u32).add(3), 0xC0DE_7700);
-        core::ptr::write_volatile((warm.result_virt as *mut u32).add(4), 0xC0DE_7700);
-        core::ptr::write_volatile((warm.result_virt as *mut u32).add(5), 0xC0DE_7700);
-        core::ptr::write_volatile((warm.result_virt as *mut u32).add(6), 0xC0DE_7700);
-        core::ptr::write_volatile((warm.result_virt as *mut u32).add(7), 0xC0DE_7700);
     }
+    seed_result_debug_slots(warm);
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
@@ -2861,7 +2856,7 @@ fn encode_triangle_probe_batch(
         &mut cursor,
         0,
         PIPE_CONTROL_POST_DRAW_SYNC_BITS,
-        result_gpu_addr + (RESULT_SLOT_POST3D_DWORD as u64) * 4,
+        result_gpu_addr + (RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD as u64) * 4,
         post3d_value,
     )?;
 
@@ -3555,7 +3550,7 @@ fn encode_vf_streamout_proof_batch(
         batch_dwords,
         &mut cursor,
         PIPE_CONTROL_POST_DRAW_SYNC_BITS,
-        result_gpu_addr + (RESULT_SLOT_POST3D_DWORD as u64) * 4,
+        result_gpu_addr + (RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD as u64) * 4,
         post3d_value,
     )?;
 
@@ -4247,6 +4242,10 @@ fn submit_warm_render_batch(
         let result5 = read_result_dword(warm, RESULT_SLOT_POST_PS_STATE_DWORD);
         let result6 = read_result_dword(warm, RESULT_SLOT_POST_CLIP_DWORD);
         let result7 = read_result_dword(warm, RESULT_SLOT_POST_RASTER_DWORD);
+        let result_post3d_eop =
+            read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD);
+        let result_post3d_eop_hi =
+            read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD);
         let observed = match expected_result_slot_dword {
             RESULT_SLOT_PRE3D_DWORD => result0,
             RESULT_SLOT_POST3D_DWORD => result1,
@@ -4256,6 +4255,8 @@ fn submit_warm_render_batch(
             RESULT_SLOT_POST_PS_STATE_DWORD => result5,
             RESULT_SLOT_POST_CLIP_DWORD => result6,
             RESULT_SLOT_POST_RASTER_DWORD => result7,
+            RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD => result_post3d_eop,
+            RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD => result_post3d_eop_hi,
             _ => result0,
         };
         if observed == expected_result {
@@ -4283,14 +4284,16 @@ fn submit_warm_render_batch(
                 result2
             );
             crate::log!(
-                "intel/render: {} poll-stage iter={} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X}\n",
+                "intel/render: {} poll-stage iter={} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X}\n",
                 submit_name,
                 iter,
                 result3,
                 result4,
                 result5,
                 result6,
-                result7
+                result7,
+                result_post3d_eop,
+                result_post3d_eop_hi
             );
             crate::log!(
                 "intel/render: {} poll-counters iter={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={}\n",
@@ -4325,9 +4328,12 @@ fn submit_warm_render_batch(
     let result5 = read_result_dword(warm, RESULT_SLOT_POST_PS_STATE_DWORD);
     let result6 = read_result_dword(warm, RESULT_SLOT_POST_CLIP_DWORD);
     let result7 = read_result_dword(warm, RESULT_SLOT_POST_RASTER_DWORD);
+    let result_post3d_eop = read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD);
+    let result_post3d_eop_hi =
+        read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD);
     if should_log_primary_probe_detail() {
         crate::log!(
-            "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
+            "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
             submit_name,
             completed as u8,
             result0,
@@ -4338,6 +4344,8 @@ fn submit_warm_render_batch(
             result5,
             result6,
             result7,
+            result_post3d_eop,
+            result_post3d_eop_hi,
             crate::intel::mmio_read(dev, RCS_RING_CTL),
             crate::intel::mmio_read(dev, RCS_RING_INSTDONE)
         );
@@ -4348,7 +4356,7 @@ fn submit_warm_render_batch(
             "intel/render: 3dprimitive-result completed={} pre3d={} post3d={} final={} vf={} vs={} ps_state={} clip={} raster={} pre_draw_packet_markers={} clip_raster_packet_markers={} post_draw_retire_markers={} acthd=0x{:08X} ipehr=0x{:08X}\n",
             completed as u8,
             result0 == RCS_EXEC_RESULT_DRAW_PRE3D,
-            result1 == RCS_EXEC_RESULT_DRAW_POST3D,
+            result_post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D,
             result2 == RCS_EXEC_RESULT_DONE,
             result3 == RCS_EXEC_RESULT_DRAW_POST_VF,
             result4 == RCS_EXEC_RESULT_DRAW_POST_VS,
@@ -4359,7 +4367,8 @@ fn submit_warm_render_batch(
                 as u8,
             ((result6 == RCS_EXEC_RESULT_DRAW_POST_CLIP)
                 && (result7 == RCS_EXEC_RESULT_DRAW_POST_RASTER)) as u8,
-            ((result1 == RCS_EXEC_RESULT_DRAW_POST3D) && (result2 == RCS_EXEC_RESULT_DONE)) as u8,
+            ((result_post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D)
+                && (result2 == RCS_EXEC_RESULT_DONE)) as u8,
             crate::intel::mmio_read(dev, RCS_RING_ACTHD),
             crate::intel::mmio_read(dev, RCS_RING_IPEHR)
         );
@@ -4410,7 +4419,7 @@ fn submit_warm_render_batch(
             completed,
             stats_before,
             stats_after,
-            result1,
+            result_post3d_eop,
             result2,
             result3,
             result4,
@@ -5077,7 +5086,7 @@ fn log_triangle_stage_frontier(
     completed: bool,
     before: TriangleStageStats,
     after: TriangleStageStats,
-    result1: u32,
+    result_post3d_eop: u32,
     result2: u32,
     result3: u32,
     result4: u32,
@@ -5092,7 +5101,8 @@ fn log_triangle_stage_frontier(
     let clip_raster_packets = ((result6 == RCS_EXEC_RESULT_DRAW_POST_CLIP)
         && (result7 == RCS_EXEC_RESULT_DRAW_POST_RASTER)) as u8;
     let post_draw_retire =
-        ((result1 == RCS_EXEC_RESULT_DRAW_POST3D) && (result2 == RCS_EXEC_RESULT_DONE)) as u8;
+        ((result_post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D)
+            && (result2 == RCS_EXEC_RESULT_DONE)) as u8;
     let counter_frontier = if delta.ps_invocations > 0 {
         "ps-thread"
     } else if delta.cl_invocations > 0 || delta.cl_primitives > 0 {
@@ -5224,6 +5234,14 @@ fn decode_streamout_offset_mode_name(
 
 fn read_result_dword(warm: RenderWarmState, index: usize) -> u32 {
     unsafe { core::ptr::read_volatile((warm.result_virt as *const u32).add(index)) }
+}
+
+fn seed_result_debug_slots(warm: RenderWarmState) {
+    unsafe {
+        for i in 0..RESULT_DEBUG_DWORD_COUNT {
+            core::ptr::write_volatile((warm.result_virt as *mut u32).add(i), RESULT_DEBUG_SENTINEL);
+        }
+    }
 }
 
 fn build_ring_batch_start(warm: RenderWarmState, batch_gpu_addr: u64) -> usize {

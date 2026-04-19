@@ -97,7 +97,7 @@ pub mod fmt {
 }
 
 pub mod io {
-    pub use core2::io::*;
+    pub use core3::io::*;
 }
 
 pub mod iter {
