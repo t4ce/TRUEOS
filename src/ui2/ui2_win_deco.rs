@@ -42,41 +42,6 @@ fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::Str
     out
 }
 
-fn decoration_label_draw_rect(
-    window: &Ui2Window,
-    kind: Ui2DecorationLabelKind,
-    anchor: Ui2Rect,
-) -> Option<Ui2Rect> {
-    let ch = kind.text(window).chars().next()?;
-    let glyph = ui2_font_resolve_glyph(Ui2FontTier::Half, ch)?;
-    Some(ui2_font_place_glyph_center(&glyph, anchor))
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(super) enum Ui2DecorationLabelKind {
-    SystemButton(Ui2SystemButtonAction),
-}
-
-impl Ui2DecorationLabelKind {
-    #[inline]
-    fn text(self, window: &Ui2Window) -> &'static str {
-        match self {
-            Self::SystemButton(Ui2SystemButtonAction::ToggleComposition) => {
-                if window.composition_locked {
-                    "▣"
-                } else {
-                    "■"
-                }
-            }
-            Self::SystemButton(Ui2SystemButtonAction::Fork) => "+",
-            Self::SystemButton(Ui2SystemButtonAction::Minimize) => "⊟",
-            Self::SystemButton(Ui2SystemButtonAction::Restore) => "⏏",
-            Self::SystemButton(Ui2SystemButtonAction::ToggleMaximize) => "□",
-            Self::SystemButton(Ui2SystemButtonAction::Close) => "⊠",
-        }
-    }
-}
-
 fn draw_window_title_texture_icon(
     state: &Ui2State,
     window: &Ui2Window,
@@ -97,51 +62,6 @@ fn draw_window_title_texture_icon(
         state.view_h,
         true,
         window.alpha,
-    );
-}
-
-fn draw_window_decoration_label(
-    state: &Ui2State,
-    window: &Ui2Window,
-    kind: Ui2DecorationLabelKind,
-    rect: Ui2Rect,
-) {
-    let Some(ch) = kind.text(window).chars().next() else {
-        return;
-    };
-    let Some(glyph) = ui2_font_resolve_glyph(Ui2FontTier::Half, ch) else {
-        return;
-    };
-    if !glyph.ready {
-        return;
-    }
-    let Some(texture) = glyph.texture else {
-        return;
-    };
-
-    let draw_rect = decoration_label_draw_rect(window, kind, rect).unwrap_or(rect);
-    let glyph_w = draw_rect.w;
-    let glyph_h = draw_rect.h;
-    let glyph_x = draw_rect.x;
-    let glyph_y = draw_rect.y;
-    let atlas_w = f32::from(glyph.region.atlas_w.max(1));
-    let atlas_h = f32::from(glyph.region.atlas_h.max(1));
-    let src_x = f32::from(glyph.region.src_x);
-    let src_y = f32::from(glyph.region.src_y);
-    let _ = draw_texture_rect_uv_rgba_no_present(
-        texture.tex_id,
-        glyph_x,
-        glyph_y,
-        glyph_w,
-        glyph_h,
-        src_x / atlas_w,
-        src_y / atlas_h,
-        (src_x + f32::from(glyph.region.src_w)) / atlas_w,
-        (src_y + f32::from(glyph.region.src_h)) / atlas_h,
-        state.view_w,
-        state.view_h,
-        true,
-        modulate_rgba_alpha(UI2_CHROME_TEXT_RGBA, window.alpha),
     );
 }
 
@@ -166,12 +86,6 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
             return;
         }
     }
-    draw_window_decoration_label(
-        state,
-        window,
-        Ui2DecorationLabelKind::SystemButton(action),
-        rect,
-    );
 }
 
 fn draw_window_twemoji_button(
@@ -349,7 +263,12 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
     let frame_left_rgba = modulate_rgba_alpha(frame_left_rgba, window.alpha);
     let frame_mid_rgba = modulate_rgba_alpha(frame_mid_rgba, window.alpha);
     let frame_right_rgba = modulate_rgba_alpha(frame_right_rgba, window.alpha);
-    let body_rgba = (0xFB, 0xFB, 0xF8, window.alpha);
+    let body_alpha = if window.content_preserve_scale {
+        ((u16::from(window.alpha) * 85) / 100) as u8
+    } else {
+        window.alpha
+    };
+    let body_rgba = (0xFB, 0xFB, 0xF8, body_alpha);
     let titleband_h =
         if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
             if window.state == Ui2WindowStateKind::Minimized {
@@ -948,6 +867,19 @@ pub(super) fn window_bottom_resize_button_rect(
     window: &Ui2Window,
 ) -> Option<Ui2Rect> {
     window_bottom_resize_button_anchor_rect(state, window)
+}
+
+pub(super) fn window_bottom_resize_button_hit_rect(
+    state: &Ui2State,
+    window: &Ui2Window,
+) -> Option<Ui2Rect> {
+    let rect = window_bottom_resize_button_rect(state, window)?;
+    Some(Ui2Rect::new(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        (rect.w - 2.0).max(1.0),
+        (rect.h - 2.0).max(1.0),
+    ))
 }
 
 fn window_bottom_resize_button_anchor_rect(

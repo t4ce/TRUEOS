@@ -154,6 +154,10 @@ pub trait BlockDevice: Send {
 pub struct DiscId(u32);
 
 impl DiscId {
+    pub const fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+
     pub fn raw(self) -> u32 {
         self.0
     }
@@ -324,6 +328,16 @@ impl Hash for DeviceHandle {
 }
 
 impl DeviceHandle {
+    pub(crate) fn into_raw(self) -> usize {
+        self.node as *const DeviceNode as usize
+    }
+
+    pub(crate) unsafe fn from_raw(raw: usize) -> Self {
+        Self {
+            node: &*(raw as *const DeviceNode),
+        }
+    }
+
     pub fn id(self) -> DiscId {
         self.node.info.id
     }
