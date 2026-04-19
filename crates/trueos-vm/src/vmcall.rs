@@ -18,7 +18,7 @@ pub const STATUS_BAD_ARG: u32 = 2;
 pub const PAYLOAD_CAP: usize = 4096 - 56;
 
 /// Guest virtual address of the shared comm page.
-const COMM_PAGE_VA: u64 = 0x0000_0000_0041_0000;
+const COMM_PAGE_VA: u64 = 0x0000_0000_2040_0000;
 
 #[repr(C)]
 struct CommPage {

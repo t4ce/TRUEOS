@@ -1672,29 +1672,38 @@ fn draw_window_texture_content(
     };
     let draw_w = tex_w as f32;
     let draw_h = tex_h as f32;
-    let draw_x = if content.w >= draw_w {
-        content.x + (content.w - draw_w) * 0.5
-    } else {
-        content.x
-    };
-    let draw_y = if content.h >= draw_h {
-        content.y + (content.h - draw_h) * 0.5
-    } else {
-        content.y
-    };
-    with_window_content_scissor(state, content, || {
-        draw_texture_rect_no_present(
-            tex_id,
-            draw_x,
-            draw_y,
-            draw_w,
-            draw_h,
-            state.view_w,
-            state.view_h,
-            window.content_tex_blend,
-            window.alpha,
-        )
-    })
+    let draw_x = content.x + (content.w - draw_w) * 0.5;
+    let draw_y = content.y + (content.h - draw_h) * 0.5;
+    let visible_x0 = libm::fmaxf(draw_x, content.x);
+    let visible_y0 = libm::fmaxf(draw_y, content.y);
+    let visible_x1 = libm::fminf(draw_x + draw_w, content.x + content.w);
+    let visible_y1 = libm::fminf(draw_y + draw_h, content.y + content.h);
+    let visible_w = (visible_x1 - visible_x0).max(0.0);
+    let visible_h = (visible_y1 - visible_y0).max(0.0);
+    if !(visible_w > 0.0 && visible_h > 0.0) {
+        return false;
+    }
+
+    let u0 = (visible_x0 - draw_x) / draw_w;
+    let v0 = (visible_y0 - draw_y) / draw_h;
+    let u1 = (visible_x1 - draw_x) / draw_w;
+    let v1 = (visible_y1 - draw_y) / draw_h;
+
+    draw_texture_rect_uv_no_present(
+        tex_id,
+        visible_x0,
+        visible_y0,
+        visible_w,
+        visible_h,
+        u0,
+        v0,
+        u1,
+        v1,
+        state.view_w,
+        state.view_h,
+        window.content_tex_blend,
+        window.alpha,
+    )
 }
 
 fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTiming {

@@ -1,4 +1,5 @@
 pub mod guest_run;
+pub mod guest_work;
 pub mod memory;
 pub mod snapshot;
 pub mod store;
@@ -11,12 +12,11 @@ use crate::hv::vmx::*;
 pub use trueos_vm::guest;
 pub use trueos_vm::stream;
 
-use alloc::vec::Vec;
-use core::arch::x86_64::__cpuid;
+use core::arch::x86_64::{__cpuid, __cpuid_count};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_executor::{SendSpawner, Spawner, task};
+use embassy_executor::{Spawner, task};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, String};
 use spin::Mutex;
@@ -28,6 +28,7 @@ use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
 use crate::shell2::{ShellBackend2, ShellIo2};
 
+use guest_work::{GuestWorkProfile, pick_guest_work_target};
 use guest::*;
 use memory::*;
 use snapshot::*;
@@ -37,7 +38,6 @@ const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
 const HV_LOG_CAP: usize = 64;
 const HV_LOG_LINE: usize = 200;
-const VM_RESERVED_FIRST_SLOT: u32 = 2;
 
 static VMM: VmManager = VmManager::new();
 static VM1_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -46,7 +46,6 @@ static VM1_STOP_REQ: AtomicBool = AtomicBool::new(false);
 static VM1_MARKER_SEEN: AtomicBool = AtomicBool::new(false);
 static VM1_GUEST_BOOT_ARMED: AtomicBool = AtomicBool::new(false);
 static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
-static HV_VM_SPAWN_RR: AtomicU64 = AtomicU64::new(0);
 static VM_BOOT_MODE: Mutex<VmBootMode> = Mutex::new(VmBootMode::Hull);
 
 #[derive(Clone)]
@@ -70,6 +69,7 @@ pub enum StartError {
     AlreadyRunning,
     VmxUnsupported,
     MissingGuestModule,
+    GuestMemoryUnavailable,
     NoVmSpawner,
     SpawnFailed,
 }
@@ -98,98 +98,6 @@ pub struct HvStatus {
     pub vm1_marker_seen: bool,
     pub guest_module_present: bool,
     pub stored_vm_count: usize,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum VmSpawnPolicy {
-    ReservedVmLane,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct VmCpuProfile {
-    pub policy: VmSpawnPolicy,
-}
-
-impl VmCpuProfile {
-    pub const fn reserved_vm_lane() -> Self {
-        Self {
-            policy: VmSpawnPolicy::ReservedVmLane,
-        }
-    }
-}
-
-#[derive(Clone)]
-struct PickedVmSpawner {
-    slot: u32,
-    core_kind: u8,
-    spawner: SendSpawner,
-}
-
-impl PickedVmSpawner {
-    fn core_kind_name(&self) -> &'static str {
-        match self.core_kind {
-            trueos_qjs::workers::CORE_KIND_PERF => "perf",
-            trueos_qjs::workers::CORE_KIND_EFF => "eff",
-            _ => "unknown",
-        }
-    }
-}
-
-pub fn pick_vm_spawner(profile: VmCpuProfile) -> Option<SendSpawner> {
-    pick_vm_spawn_target(profile).map(|picked| picked.spawner)
-}
-
-fn pick_vm_spawn_target(profile: VmCpuProfile) -> Option<PickedVmSpawner> {
-    match profile.policy {
-        VmSpawnPolicy::ReservedVmLane => pick_reserved_vm_lane(),
-    }
-}
-
-fn pick_reserved_vm_lane() -> Option<PickedVmSpawner> {
-    let slots = trueos_qjs::workers::background_worker_slots();
-    if slots.is_empty() {
-        return None;
-    }
-
-    let mut perf: Vec<PickedVmSpawner> = Vec::new();
-    let mut fallback: Vec<PickedVmSpawner> = Vec::new();
-
-    for slot in slots {
-        if slot < VM_RESERVED_FIRST_SLOT {
-            continue;
-        }
-        let Some(spawner) = trueos_qjs::workers::spawner_for_slot(slot) else {
-            continue;
-        };
-        let profile = crate::cpu::CpuProfile::for_slot(slot);
-        let core_kind = profile
-            .map(|profile| profile.core_kind())
-            .unwrap_or(trueos_qjs::workers::CORE_KIND_UNKNOWN);
-        let picked = PickedVmSpawner {
-            slot,
-            core_kind,
-            spawner,
-        };
-        if core_kind == trueos_qjs::workers::CORE_KIND_PERF {
-            perf.push(picked);
-        } else {
-            fallback.push(picked);
-        }
-    }
-
-    if !perf.is_empty() {
-        pick_vm_spawn_candidate(&perf)
-    } else {
-        pick_vm_spawn_candidate(&fallback)
-    }
-}
-
-fn pick_vm_spawn_candidate(pool: &[PickedVmSpawner]) -> Option<PickedVmSpawner> {
-    if pool.is_empty() {
-        return None;
-    }
-    let idx = HV_VM_SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize;
-    Some(pool[idx % pool.len()].clone())
 }
 
 pub fn hvlogf(args: core::fmt::Arguments<'_>) {
@@ -234,8 +142,9 @@ pub fn start(
     vm_id: u8,
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
+    stack_mb: Option<usize>,
 ) -> Result<(), StartError> {
-    start_with_mode(vm_id, spawner, io, VmBootMode::Hull)
+    start_with_mode(vm_id, spawner, io, VmBootMode::Hull, stack_mb)
 }
 
 pub fn start_full(
@@ -243,7 +152,7 @@ pub fn start_full(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
 ) -> Result<(), StartError> {
-    start_with_mode(vm_id, spawner, io, VmBootMode::Full)
+    start_with_mode(vm_id, spawner, io, VmBootMode::Full, None)
 }
 
 fn start_with_mode(
@@ -251,6 +160,7 @@ fn start_with_mode(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     boot_mode: VmBootMode,
+    stack_mb: Option<usize>,
 ) -> Result<(), StartError> {
     if vm_id != VM1_ID {
         return Err(StartError::UnsupportedVmId);
@@ -295,6 +205,12 @@ fn start_with_mode(
         return Err(StartError::MissingGuestModule);
     }
 
+    let requested_stack_mb = stack_mb.unwrap_or(memory::guest_stack_default_mb());
+    let active_stack_mb = memory::clamp_guest_stack_mb(requested_stack_mb);
+    if memory::prepare_guest_stack_mb(active_stack_mb).is_err() {
+        return Err(StartError::GuestMemoryUnavailable);
+    }
+
     VM1_STOP_REQ.store(false, Ordering::Release);
     VM1_MARKER_SEEN.store(false, Ordering::Release);
     VM1_STARTING.store(true, Ordering::Release);
@@ -302,23 +218,24 @@ fn start_with_mode(
 
     let _ = spawner;
     let _ = io;
-    let profile = VmCpuProfile::reserved_vm_lane();
-    let Some(target) = pick_vm_spawn_target(profile) else {
+    let profile = GuestWorkProfile::vm_default();
+    let Some(target) = pick_guest_work_target(profile) else {
         VM1_STARTING.store(false, Ordering::Release);
         hvlogf(format_args!(
-            "hv: vm{} placement failed: policy={:?} requires slot>={} (prefer perf)",
-            vm_id, profile.policy, VM_RESERVED_FIRST_SLOT
+            "hv: vm{} placement failed: placement={:?} requires slot>=2 (prefer perf)",
+            vm_id, profile.placement
         ));
         return Err(StartError::NoVmSpawner);
     };
 
     hvlogf(format_args!(
-        "hv: vm{} placement: mode={:?} policy={:?} slot={} kind={}",
+        "hv: vm{} placement: mode={:?} placement={:?} slot={} kind={} stack_mib={}",
         vm_id,
         boot_mode,
-        profile.policy,
+        profile.placement,
         target.slot,
-        target.core_kind_name()
+        target.core_kind_name(),
+        memory::active_guest_stack_mb()
     ));
 
     if target.spawner.spawn(vm1_task()).is_err() {
@@ -500,8 +417,9 @@ async fn vm1_task() {
         }
         VmBootMode::Hull => {
             hvlogf(format_args!(
-                "hv: vm1 lifecycle: hull guest entry=0x{:016X}",
-                guest_launch_rip()
+                "hv: vm1 lifecycle: hull guest entry=0x{:016X} stack_mib={}",
+                guest_launch_rip(),
+                memory::active_guest_stack_mb()
             ));
         }
     }
@@ -513,7 +431,22 @@ async fn vm1_task() {
         }
         Err(e) => hvlogf(format_args!("hv: vm1 reporting: vmx smoke failed ({})", e)),
     }
-    match vmx_launch_once_with_ept(lineage_record) {
+    let guest_heap_ready = crate::allocators::ensure_hv_guest_heap_ready();
+    if guest_heap_ready {
+        let stats = crate::allocators::hv_guest_heap_stats();
+        hvlogf(format_args!(
+            "hv: vm1 reporting: hv-guest-heap virt=0x{:016X}..0x{:016X} src={:?} free_bytes={} blocks={}",
+            stats.heap_start,
+            stats.heap_end,
+            stats.source,
+            stats.free_bytes,
+            stats.free_blocks
+        ));
+    }
+    let _entered_guest_alloc = crate::allocators::enter_hv_guest_domain_current_cpu();
+    let launch_result = vmx_launch_once_with_ept(lineage_record);
+    crate::allocators::leave_hv_guest_domain_current_cpu();
+    match launch_result {
         Ok(lr) => {
             capture_snapshot_meta(lr);
             if vmexit_is_preserve(lr) {
@@ -684,6 +617,25 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             crate::hv::memory::log_guest_mapping("fault-linear", guest_linear);
             crate::hv::memory::log_guest_mapping("fault-rsp", guest_rsp);
             crate::hv::memory::log_guest_mapping("fault-rip", lr.guest_rip);
+            let trace = crate::allocators::last_alloc_trace();
+            if trace.seq != 0 {
+                hvlogf(format_args!(
+                    "hv: vm1 reporting: alloc-trace seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}",
+                    trace.seq,
+                    trace.caller_rip,
+                    trace.caller_rip_1,
+                    trace.caller_rip_2,
+                    trace.layout_size,
+                    trace.layout_align,
+                    trace.stage,
+                    trace.head_ptr,
+                    trace.block_ptr,
+                    trace.block_size,
+                    trace.block_next,
+                    trace.payload_start,
+                    trace.aligned_used
+                ));
+            }
         }
 
         match reason {
@@ -699,6 +651,23 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                 // HLT — advance past it and continue
                 let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len hlt")?;
                 vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
+            }
+            0xA => {
+                let mut regs = crate::hv::vmx::guest_registers();
+                let leaf = regs.rax as u32;
+                let subleaf = regs.rcx as u32;
+                let out = unsafe { __cpuid_count(leaf, subleaf) };
+                regs.rax = out.eax as u64;
+                regs.rbx = out.ebx as u64;
+                regs.rcx = out.ecx as u64;
+                regs.rdx = out.edx as u64;
+                crate::hv::vmx::set_guest_registers(regs);
+                let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len cpuid")?;
+                vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
+                hvlogf(format_args!(
+                    "hv: vm1 reporting: cpuid leaf=0x{:08X} subleaf=0x{:08X} -> eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
+                    leaf, subleaf, out.eax, out.ebx, out.ecx, out.edx
+                ));
             }
             _ => {
                 hvlogf(format_args!(

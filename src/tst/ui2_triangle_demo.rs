@@ -75,6 +75,7 @@ pub async fn ui2_triangle_demo_task() {
     let window_id = surface.window_id();
     let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);
     let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, false);
+    let _ = crate::r::ui2::set_window_resize_maintain_aspect(window_id, true);
     let (surface_w, surface_h) = surface.size();
     crate::log!(
         "ui2-triangle-demo: mode=ui2-surface window={} tex={} size={}x{} intel={}\n",

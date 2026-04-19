@@ -1,7 +1,3 @@
-extern crate alloc;
-
-use alloc::string::String;
-use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::vmcall;
@@ -11,6 +7,11 @@ use v::{vfetch, vfs, vui2};
 const HULL_PROBE_PATH: &[u8] = b"/vm/hull_probe.txt";
 const HULL_FETCH_URL: &[u8] = b"https://example.com/";
 static HULL_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
+static HULL_PROBE_FLAGS: AtomicU32 = AtomicU32::new(0);
+
+const PROBE_FS_OK: u32 = 1 << 0;
+const PROBE_NET_OK: u32 = 1 << 1;
+const PROBE_UI_OK: u32 = 1 << 2;
 
 #[derive(Clone, Copy)]
 struct ProbeSummary {
@@ -65,16 +66,27 @@ fn run_vlayer_probes() -> ProbeSummary {
     let fs_ok = run_fs_probe();
     let net_ok = run_net_probe();
     let ui_ok = run_ui2_probe(fs_ok, net_ok);
+    let mut flags = 0u32;
+    if fs_ok {
+        flags |= PROBE_FS_OK;
+    }
+    if net_ok {
+        flags |= PROBE_NET_OK;
+    }
+    if ui_ok {
+        flags |= PROBE_UI_OK;
+    }
+    HULL_PROBE_FLAGS.store(flags, Ordering::Release);
     ProbeSummary { fs_ok, net_ok, ui_ok }
 }
 
 fn run_fs_probe() -> bool {
     vpanic::set_stage(0x1020);
     let now = vmcall::unix_time();
-    let mut text = String::new();
-    let _ = write!(&mut text, "vmhull trueosfs probe unix_time={}\n", now);
+    let mut text = [0u8; 96];
+    let text_len = build_fs_probe_line(&mut text, now);
 
-    let handle = match vfs::write_begin(HULL_PROBE_PATH, text.len() as u64) {
+    let handle = match vfs::write_begin(HULL_PROBE_PATH, text_len as u64) {
         Ok(handle) => handle,
         Err(rc) => {
             net_line_num_signed("VMHULL: fs write_begin rc=", rc);
@@ -82,7 +94,7 @@ fn run_fs_probe() -> bool {
         }
     };
 
-    if let Err(rc) = vfs::write_chunk(handle, text.as_bytes()) {
+    if let Err(rc) = vfs::write_chunk(handle, &text[..text_len]) {
         let _ = vfs::write_abort(handle);
         net_line_num_signed("VMHULL: fs write_chunk rc=", rc);
         return false;
@@ -93,21 +105,8 @@ fn run_fs_probe() -> bool {
         return false;
     }
 
-    match vfs::read_file_utf8(HULL_PROBE_PATH) {
-        Ok(readback) => {
-            if readback == text {
-                net_line("VMHULL: trueosfs write/read ok");
-                true
-            } else {
-                net_line("VMHULL: trueosfs readback mismatch");
-                false
-            }
-        }
-        Err(rc) => {
-            net_line_num_signed("VMHULL: fs read rc=", rc);
-            false
-        }
-    }
+    net_line("VMHULL: trueosfs write ok");
+    true
 }
 
 fn run_net_probe() -> bool {
@@ -127,15 +126,14 @@ fn run_net_probe() -> bool {
         return false;
     }
 
-    match vfetch::fetch_bytes_read(op_id) {
-        Ok(bytes) => {
-            let mut line = String::new();
-            let _ = write!(&mut line, "VMHULL: fetch bytes ok len={}", bytes.len());
-            net_line(line.as_str());
+    match vfetch::fetch_bytes_result_len(op_id) {
+        Ok(len) => {
+            net_line_num("VMHULL: fetch bytes ok len=", len as u64);
+            let _ = vfetch::fetch_bytes_discard(op_id);
             true
         }
         Err(rc) => {
-            net_line_num_signed("VMHULL: fetch read rc=", rc);
+            net_line_num_signed("VMHULL: fetch len rc=", rc);
             false
         }
     }
@@ -153,15 +151,9 @@ fn run_ui2_probe(fs_ok: bool, net_ok: bool) -> bool {
         net_line("VMHULL: ui2 create failed");
         return false;
     };
-    let mut title = String::new();
-    let _ = write!(
-        &mut title,
-        "VMHULL fs={} net={} time={}",
-        bool_mark(fs_ok),
-        bool_mark(net_ok),
-        vmcall::unix_time()
-    );
-    let ok = window.id().set_title(title.as_str())
+    let mut title = [0u8; 64];
+    let title_len = build_probe_title(&mut title, fs_ok, net_ok, vmcall::unix_time());
+    let ok = window.id().set_title(as_str(&title[..title_len]))
         && window.id().set_decorations(vui2::WindowDecorationMode::System)
         && window.id().focus();
     if ok {
@@ -175,31 +167,19 @@ fn run_ui2_probe(fs_ok: bool, net_ok: bool) -> bool {
 }
 
 fn log_probe_summary(summary: ProbeSummary) {
-    let mut line = String::new();
-    let _ = write!(
-        &mut line,
-        "VMHULL: probes fs={} net={} ui2={}",
-        bool_mark(summary.fs_ok),
-        bool_mark(summary.net_ok),
-        bool_mark(summary.ui_ok)
-    );
-    net_line(line.as_str());
+    let mut line = [0u8; 64];
+    let len = build_probe_summary(&mut line, summary);
+    net_line(as_str(&line[..len]));
 }
 
 fn refresh_probe_window_title(now: u64) {
-    let path = HULL_PROBE_PATH;
-    let fs_ok = vfs::read_file(path).is_ok();
-    let net_ok = vfetch::prewarm_url(HULL_FETCH_URL) == 0;
-    let mut title = String::new();
-    let _ = write!(
-        &mut title,
-        "VMHULL fs={} net={} t={}",
-        bool_mark(fs_ok),
-        bool_mark(net_ok),
-        now
-    );
+    let flags = HULL_PROBE_FLAGS.load(Ordering::Acquire);
+    let fs_ok = (flags & PROBE_FS_OK) != 0;
+    let net_ok = (flags & PROBE_NET_OK) != 0;
+    let mut title = [0u8; 64];
+    let title_len = build_probe_title(&mut title, fs_ok, net_ok, now);
     if let Some(window) = vui2::WindowId::new(HULL_WINDOW_ID.load(Ordering::Acquire)) {
-        let _ = window.set_title(title.as_str());
+        let _ = window.set_title(as_str(&title[..title_len]));
     }
 }
 
@@ -260,4 +240,49 @@ fn fmt_i32<'a>(buf: &'a mut [u8; 12], value: i32) -> &'a [u8] {
         buf[pos] = b'-';
     }
     &buf[pos..]
+}
+
+fn build_fs_probe_line(buf: &mut [u8; 96], unix_time: u64) -> usize {
+    let mut n = 0usize;
+    n = push_bytes(buf, n, b"vmhull trueosfs probe unix_time=");
+    let mut num = [0u8; 20];
+    n = push_bytes(buf, n, fmt_u64(&mut num, unix_time));
+    push_bytes(buf, n, b"\n")
+}
+
+fn build_probe_summary(buf: &mut [u8; 64], summary: ProbeSummary) -> usize {
+    let mut n = 0usize;
+    n = push_bytes(buf, n, b"VMHULL: probes fs=");
+    n = push_bytes(buf, n, bool_mark(summary.fs_ok).as_bytes());
+    n = push_bytes(buf, n, b" net=");
+    n = push_bytes(buf, n, bool_mark(summary.net_ok).as_bytes());
+    n = push_bytes(buf, n, b" ui2=");
+    push_bytes(buf, n, bool_mark(summary.ui_ok).as_bytes())
+}
+
+fn build_probe_title(buf: &mut [u8; 64], fs_ok: bool, net_ok: bool, unix_time: u64) -> usize {
+    let mut n = 0usize;
+    n = push_bytes(buf, n, b"VMHULL fs=");
+    n = push_bytes(buf, n, bool_mark(fs_ok).as_bytes());
+    n = push_bytes(buf, n, b" net=");
+    n = push_bytes(buf, n, bool_mark(net_ok).as_bytes());
+    n = push_bytes(buf, n, b" time=");
+    let mut num = [0u8; 20];
+    push_bytes(buf, n, fmt_u64(&mut num, unix_time))
+}
+
+fn push_bytes(dst: &mut [u8], at: usize, src: &[u8]) -> usize {
+    let mut i = at;
+    for &b in src {
+        if i >= dst.len() {
+            break;
+        }
+        dst[i] = b;
+        i += 1;
+    }
+    i
+}
+
+fn as_str(bytes: &[u8]) -> &str {
+    unsafe { core::str::from_utf8_unchecked(bytes) }
 }

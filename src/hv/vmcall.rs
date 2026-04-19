@@ -27,8 +27,11 @@ pub const STATUS_BAD_ARG: u32 = 2;
 // ── shared page ─────────────────────────────────────────────────────────────
 
 /// Guest virtual address of the comm page.
-/// Sits immediately after the 64 KB guest stack (0x400000 + 0x10000).
-pub const COMM_PAGE_GUEST_VA: u64 = 0x0000_0000_0041_0000;
+/// Fixed above the maximum supported guest stack span so guest-side code can
+/// use a stable address independent of the runtime-selected stack size.
+pub fn comm_page_guest_va() -> u64 {
+    crate::hv::memory::GUEST_COMM_PAGE_VA
+}
 pub const PAYLOAD_CAP: usize = 4096 - 56;
 
 /// Layout of the communication page shared between guest and host.

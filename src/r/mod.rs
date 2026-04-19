@@ -14,6 +14,7 @@ pub mod mmio_probe;
 pub mod net;
 pub mod path;
 pub mod readiness;
+pub mod spawn_spec;
 pub mod spawn_service;
 pub mod std;
 pub mod sync;

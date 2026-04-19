@@ -11,6 +11,7 @@ static TOTAL_SLOTS: core::sync::atomic::AtomicUsize = core::sync::atomic::Atomic
 static CPU_SLOT_TABLE: core::sync::atomic::AtomicPtr<CpuSlot> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 static CPU_SLOT_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static PERCPU_READY: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -151,6 +152,7 @@ fn init_with(lapic_id: u32, cpu_index: u32, _tag: &str) {
 
     let mut gs_base = Msr::new(MSR_IA32_GS_BASE);
     unsafe { gs_base.write(ptr as u64) };
+    PERCPU_READY.store(true, Ordering::Release);
 
     if crate::logflag::BOOT_INFO_LOGS {
         crate::log!("0x{:016X} lapic={} cpu={}\n", ptr as u64, lapic_id, cpu_index);
@@ -160,6 +162,32 @@ fn init_with(lapic_id: u32, cpu_index: u32, _tag: &str) {
 #[inline(always)]
 pub fn this_cpu() -> &'static PerCpu {
     unsafe { &*this_cpu_ptr() }
+}
+
+#[inline(always)]
+pub fn try_this_cpu_ptr() -> *mut PerCpu {
+    if !PERCPU_READY.load(Ordering::Acquire) {
+        return core::ptr::null_mut();
+    }
+    let ptr = this_cpu_ptr();
+    if ptr.is_null() {
+        return core::ptr::null_mut();
+    }
+    let self_ptr = unsafe { (*ptr).self_ptr };
+    if self_ptr != ptr {
+        return core::ptr::null_mut();
+    }
+    ptr
+}
+
+#[inline(always)]
+pub fn current_lapic_id_via_cpuid() -> u32 {
+    read_lapic_id_via_cpuid()
+}
+
+#[inline(always)]
+pub fn current_slot_via_cpuid() -> usize {
+    slot_for_lapic_id(current_lapic_id_via_cpuid())
 }
 
 #[inline(always)]

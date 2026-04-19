@@ -112,7 +112,7 @@ impl Ui2WindowHitSource for Ui2Window {
                 z: self.z,
             });
         }
-        if let Some(rect) = window_bottom_resize_button_rect(ctx.state, self) {
+        if let Some(rect) = window_bottom_resize_button_hit_rect(ctx.state, self) {
             scene.append(Ui2HitEntry {
                 owner_window_id: self.id,
                 item_id: 2,

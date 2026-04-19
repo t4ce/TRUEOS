@@ -234,6 +234,16 @@ pub fn reset_guest_registers() {
     }
 }
 
+pub fn guest_registers() -> GuestRegisters {
+    unsafe { VMX_GUEST_REGS }
+}
+
+pub fn set_guest_registers(regs: GuestRegisters) {
+    unsafe {
+        VMX_GUEST_REGS = regs;
+    }
+}
+
 pub fn vmwrite(field: u64, val: u64) -> Result<(), &'static str> {
     unsafe {
         let mut fail: u8;

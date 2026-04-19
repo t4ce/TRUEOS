@@ -4,7 +4,7 @@ use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
 use crate::disc::block;
 use crate::r::disc::partition;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
@@ -56,6 +56,8 @@ struct RootMount {
 
 static ROOT_SEQ: AtomicU32 = AtomicU32::new(0);
 static ROOTS: Mutex<Vec<RootMount>> = Mutex::new(Vec::new());
+static PRIMARY_ROOT_RAW: AtomicU32 = AtomicU32::new(0);
+static PRIMARY_ROOT_HANDLE_RAW: AtomicUsize = AtomicUsize::new(0);
 
 static FILE_RECORD_CACHE_SEQ: AtomicU64 = AtomicU64::new(1);
 static FILE_RECORD_CACHE: Mutex<Vec<FileRecordCacheEntry>> = Mutex::new(Vec::new());
@@ -337,6 +339,8 @@ pub async fn mount_root_async(
         writes_since_checkpoint,
         cache_gen: 0,
     });
+    PRIMARY_ROOT_RAW.store(disk_id.raw(), Ordering::Release);
+    PRIMARY_ROOT_HANDLE_RAW.store(disk.into_raw(), Ordering::Release);
 
     file_record_cache_invalidate_disk(disk_id);
 
@@ -1471,13 +1475,47 @@ pub fn request_warm_index(disk_id: block::DiscId) {
 /// This is used by higher layers (shell, C ABI helpers) that want a sensible
 /// default filesystem target without user-facing mount plumbing.
 pub fn primary_root_id() -> Option<block::DiscId> {
+    let cached_handle = PRIMARY_ROOT_HANDLE_RAW.load(Ordering::Acquire);
+    if cached_handle != 0 {
+        let disk = unsafe { block::DeviceHandle::from_raw(cached_handle) };
+        let disk_id = disk.id();
+        PRIMARY_ROOT_RAW.store(disk_id.raw(), Ordering::Release);
+        return Some(disk_id);
+    }
+
+    let cached = PRIMARY_ROOT_RAW.load(Ordering::Acquire);
+    if cached != 0 {
+        let disk_id = block::DiscId::from_raw(cached);
+        if block::device_handle(disk_id).is_some() {
+            return Some(disk_id);
+        }
+        PRIMARY_ROOT_RAW.store(0, Ordering::Release);
+        PRIMARY_ROOT_HANDLE_RAW.store(0, Ordering::Release);
+    }
+
     let roots = ROOTS.lock();
-    roots.iter().max_by_key(|m| m.seq).map(|m| m.disk_id)
+    let picked = roots.iter().max_by_key(|m| m.seq).map(|m| m.disk_id);
+    if let Some(disk_id) = picked {
+        PRIMARY_ROOT_RAW.store(disk_id.raw(), Ordering::Release);
+        if let Some(disk) = block::device_handle(disk_id) {
+            PRIMARY_ROOT_HANDLE_RAW.store(disk.into_raw(), Ordering::Release);
+        }
+    }
+    picked
 }
 
 /// Returns a handle for the most recently mounted TRUEOSFS root disk.
 pub fn primary_root_handle() -> Option<block::DeviceHandle> {
-    primary_root_id().and_then(block::device_handle)
+    let cached = PRIMARY_ROOT_HANDLE_RAW.load(Ordering::Acquire);
+    if cached != 0 {
+        return Some(unsafe { block::DeviceHandle::from_raw(cached) });
+    }
+
+    let disk = primary_root_id().and_then(block::device_handle);
+    if let Some(handle) = disk {
+        PRIMARY_ROOT_HANDLE_RAW.store(handle.into_raw(), Ordering::Release);
+    }
+    disk
 }
 
 /// Returns read-only state for the current primary TRUEOSFS root disk.

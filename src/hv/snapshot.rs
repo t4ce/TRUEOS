@@ -7,7 +7,8 @@ pub const VM1_SNAPSHOT_MAGIC: u32 = 0x3153_4D56; // "VMS1"
 pub const VM1_SNAPSHOT_VERSION: u32 = 1;
 pub const VM1_SNAPSHOT_PATH: &str = "vm/vm1.snapshot";
 pub const VM1_ID: u8 = 0;
-pub const GUEST_SNAPSHOT_PAGE_COUNT: usize = 7 + GUEST_HIGH_IMAGE_PT_COUNT;
+pub const GUEST_SNAPSHOT_PAGE_COUNT: usize =
+    6 + GUEST_LOW_PT_COUNT + GUEST_HIGH_IMAGE_PT_COUNT;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -71,13 +72,14 @@ pub fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
         exit_reason: meta.exit_reason,
         exit_qualification: meta.exit_qualification,
         exit_guest_rip: meta.exit_guest_rip,
-        guest_stack_bytes: GUEST_STACK_BYTES as u64,
+        guest_stack_bytes: active_guest_stack_bytes() as u64,
         guest_page_bytes: PAGE_SIZE_4K as u64,
     };
+    let guest_stack = guest_stack_slice().ok_or(SaveError::NoSnapshot)?;
 
     let total = core::mem::size_of::<Vm1SnapshotHeader>()
         + (GUEST_SNAPSHOT_PAGE_COUNT * PAGE_SIZE_4K)
-        + GUEST_STACK_BYTES
+        + guest_stack.len()
         + meta.code_len as usize;
     let mut out = Vec::with_capacity(total);
     push_bytes(&mut out, unsafe {
@@ -90,7 +92,9 @@ pub fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_PML4.0));
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_LOW_PDPT.0));
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_LOW_PD.0));
-        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_STACK_PT.0));
+        for i in 0..GUEST_LOW_PT_COUNT {
+            push_guest_page(&mut out, core::ptr::addr_of!(GUEST_LOW_PTS[i].0));
+        }
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_HIGH_PDPT.0));
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_HIGH_PD.0));
         for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
@@ -99,10 +103,7 @@ pub fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_CODE_PT.0));
         push_bytes(
             &mut out,
-            core::slice::from_raw_parts(
-                core::ptr::addr_of!(VM1_GUEST_STACK.0).cast::<u8>(),
-                GUEST_STACK_BYTES,
-            ),
+            guest_stack,
         );
         push_bytes(
             &mut out,
@@ -123,12 +124,12 @@ pub fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
         + (GUEST_SNAPSHOT_PAGE_COUNT * PAGE_SIZE_4K)
         + (header.guest_stack_bytes as usize)
         + (header.code_len as usize);
-    if bytes.len() < expected
-        || header.guest_stack_bytes as usize != GUEST_STACK_BYTES
-        || header.guest_page_bytes as usize != PAGE_SIZE_4K
-    {
+    if bytes.len() < expected || header.guest_page_bytes as usize != PAGE_SIZE_4K {
         return Err(RestoreError::BadSnapshot);
     }
+    let header_stack_bytes =
+        usize::try_from(header.guest_stack_bytes).map_err(|_| RestoreError::BadSnapshot)?;
+    prepare_guest_stack_bytes(header_stack_bytes).map_err(|_| RestoreError::BadSnapshot)?;
 
     let mut off = header_len;
     unsafe {
@@ -147,11 +148,13 @@ pub fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
             &bytes[off..off + PAGE_SIZE_4K],
         );
         off += PAGE_SIZE_4K;
-        copy_into_guest_page(
-            core::ptr::addr_of_mut!(GUEST_STACK_PT.0),
-            &bytes[off..off + PAGE_SIZE_4K],
-        );
-        off += PAGE_SIZE_4K;
+        for i in 0..GUEST_LOW_PT_COUNT {
+            copy_into_guest_page(
+                core::ptr::addr_of_mut!(GUEST_LOW_PTS[i].0),
+                &bytes[off..off + PAGE_SIZE_4K],
+            );
+            off += PAGE_SIZE_4K;
+        }
         copy_into_guest_page(
             core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0),
             &bytes[off..off + PAGE_SIZE_4K],
@@ -175,12 +178,13 @@ pub fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
         );
         off += PAGE_SIZE_4K;
 
+        let stack_ptr = guest_stack_mut_ptr().ok_or(RestoreError::BadSnapshot)?;
         core::ptr::copy_nonoverlapping(
-            bytes[off..off + GUEST_STACK_BYTES].as_ptr(),
-            core::ptr::addr_of_mut!(VM1_GUEST_STACK.0).cast::<u8>(),
-            GUEST_STACK_BYTES,
+            bytes[off..off + header_stack_bytes].as_ptr(),
+            stack_ptr,
+            header_stack_bytes,
         );
-        off += GUEST_STACK_BYTES;
+        off += header_stack_bytes;
     }
 
     let code_end = off + header.code_len as usize;
