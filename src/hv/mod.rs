@@ -368,6 +368,10 @@ pub fn guest_boot_take() -> bool {
     VM1_GUEST_BOOT_ARMED.swap(false, Ordering::AcqRel)
 }
 
+pub fn guest_boot_active() -> bool {
+    VM1_GUEST_BOOT_ARMED.load(Ordering::Acquire)
+}
+
 #[derive(Copy, Clone)]
 struct LineageRecord {
     level: u8,
@@ -671,6 +675,25 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                     "hv: vm1 reporting: cpuid leaf=0x{:08X} subleaf=0x{:08X} -> eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
                     leaf, subleaf, out.eax, out.ebx, out.ecx, out.edx
                 ));
+            }
+            0x30 => {
+                let guest_physical = vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0);
+                let read = (lr.exit_qualification & (1 << 0)) != 0;
+                let write = (lr.exit_qualification & (1 << 1)) != 0;
+                let exec = (lr.exit_qualification & (1 << 2)) != 0;
+                let gpa = (lr.exit_qualification & (1 << 8)) != 0;
+                let gla = (lr.exit_qualification & (1 << 9)) != 0;
+                hvlogf(format_args!(
+                    "hv: vm1 reporting: ept violation qual=0x{:X} guest_physical=0x{:016X} access={}{}{} gpa_valid={} gla_valid={}",
+                    lr.exit_qualification,
+                    guest_physical,
+                    if read { "r" } else { "" },
+                    if write { "w" } else { "" },
+                    if exec { "x" } else { "" },
+                    gpa as u8,
+                    gla as u8
+                ));
+                break;
             }
             _ => {
                 hvlogf(format_args!(
