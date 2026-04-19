@@ -25,7 +25,7 @@ trueos-math = { path = "../trueos-math", default-features = false, optional = tr
 trueos-weather = { path = "../trueos-weather", default-features = false, optional = true }
 lightningcss = { version = "1.0.0-alpha.70", default-features = false, optional = true }
 usvg = { version = "0.45.1", default-features = false }
-parry2d = { version = "0.25", default-features = false, features = ["dim2", "f32"], optional = true }
+parry2d = { version = "0.26", default-features = false, features = ["dim2", "f32"], optional = true }
 
 [features]
 default = []

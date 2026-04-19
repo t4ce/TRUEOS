@@ -1,4 +1,4 @@
-use parry2d::math::Isometry;
+use parry2d::math::Pose;
 use parry2d::query;
 use parry2d::shape::Ball;
 
@@ -244,13 +244,13 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_step_icon_collisions(
         let ib = i * 2;
         let ci_x = pos[ib] + radius;
         let ci_y = pos[ib + 1] + radius;
-        let pi = Isometry::translation(ci_x, ci_y);
+        let pi = Pose::translation(ci_x, ci_y);
 
         for j in (i + 1)..n {
             let jb = j * 2;
             let cj_x = pos[jb] + radius;
             let cj_y = pos[jb + 1] + radius;
-            let pj = Isometry::translation(cj_x, cj_y);
+            let pj = Pose::translation(cj_x, cj_y);
 
             let Ok(Some(c)) = query::contact(&pi, &shape, &pj, &shape, 0.0) else {
                 continue;
@@ -261,9 +261,8 @@ pub(crate) unsafe extern "C" fn qjs_cmd_stream_step_icon_collisions(
             }
             contacts = contacts.saturating_add(1);
 
-            let nrm = c.normal1.into_inner();
-            let nx = nrm.x;
-            let ny = nrm.y;
+            let nx = c.normal1.x;
+            let ny = c.normal1.y;
 
             let rvx = vel[jb] - vel[ib];
             let rvy = vel[jb + 1] - vel[ib + 1];
