@@ -111,6 +111,7 @@ const RENDER_MOCS: u32 = 1;
 const SURFTYPE_2D: u32 = 1;
 const SURFTYPE_NULL: u32 = 7;
 const SURFACE_FORMAT_B8G8R8A8_UNORM: u32 = 10;
+const SURFACE_FORMAT_R32G32B32A32_FLOAT: u32 = 0;
 const SURFACE_FORMAT_R32G32B32A32_UINT: u32 = 2;
 const SURFACE_FORMAT_R32G32B32_FLOAT: u32 = 64;
 const DEPTH_SURFACE_FORMAT_D32_FLOAT: u32 = 1;
@@ -410,6 +411,7 @@ impl TriangleBlendProbeMode {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum TriangleBatchMode {
     Draw,
+    VfDraw,
     StreamoutProof,
     VfStreamoutProof,
     VsStreamoutProof,
@@ -420,6 +422,8 @@ enum StreamoutProofExperiment {
     PositionSlot1,
     HeaderAndPositionSlots01,
 }
+
+const CMD_3DSTATE_VERTEX_ELEMENTS_2: u32 = 3 | (9 << 16) | (3 << 27) | (3 << 29);
 
 impl StreamoutProofExperiment {
     fn label(self) -> &'static str {
@@ -495,7 +499,7 @@ fn select_streamout_proof_experiment(probe_seq: u32) -> StreamoutProofExperiment
 impl TriangleBatchMode {
     fn topology(self) -> u32 {
         match self {
-            Self::Draw => TRIANGLE_TOPOLOGY_TRILIST,
+            Self::Draw | Self::VfDraw => TRIANGLE_TOPOLOGY_TRILIST,
             Self::StreamoutProof | Self::VfStreamoutProof | Self::VsStreamoutProof => {
                 TRIANGLE_TOPOLOGY_POINTLIST
             }
@@ -522,7 +526,11 @@ fn is_vf_streamout_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_triangle_debug_submit_name(submit_name: &str) -> bool {
-    submit_name == "draw-path" || is_streamout_submit_name(submit_name)
+    is_surface_draw_submit_name(submit_name) || is_streamout_submit_name(submit_name)
+}
+
+fn is_surface_draw_submit_name(submit_name: &str) -> bool {
+    matches!(submit_name, "draw-path" | "vf-draw-path")
 }
 
 unsafe impl Send for RenderWarmState {}
@@ -1352,6 +1360,23 @@ fn submit_primary_triangle_with_retries(
         return false;
     }
 
+    let vf_draw_precheck = submit_triangle_vf_draw_to_surface(
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        TriangleBlendProbeMode::ExplicitRt0,
+    );
+    crate::log!(
+        "intel/render: primary-vf-draw-precheck completed={}\n",
+        vf_draw_precheck as u8,
+    );
+    if vf_draw_precheck {
+        return true;
+    }
+
     let vs_streamout_precheck = submit_triangle_vs_streamout_proof(
         dev,
         warm,
@@ -1523,6 +1548,180 @@ fn submit_triangle_vf_streamout_proof(
         recover_render_engine_after_nonretired_submit(dev, warm, "vf-streamout-proof");
     }
     accepted
+}
+
+fn submit_triangle_vf_draw_to_surface(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    blend_mode: TriangleBlendProbeMode,
+) -> bool {
+    let Some(draw) = prepare_vf_streamout_proof_resources(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        StreamoutProofExperiment::PositionSlot1,
+    ) else {
+        crate::log!(
+            "intel/render: vf-draw-path staging skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
+            rect_w,
+            rect_h,
+            pitch
+        );
+        return false;
+    };
+
+    let pipeline = crate::intel::shader::triangle_pipeline();
+    log_render_buffer_layout(warm, Some(dst_gpu_addr));
+    log_render_packet_encodings();
+    if crate::intel::shader::triangle_pipeline_is_placeholder() {
+        crate::log!(
+            "intel/render: vf-draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-baked-shaders vs_src={} ps_src={} note={}\n",
+            draw.rt_gpu_addr,
+            draw.vertex_gpu_addr,
+            draw.state_gpu_addr,
+            draw.target_w,
+            draw.target_h,
+            draw.rt_pitch,
+            draw.vertex_count,
+            draw.vertex_stride,
+            crate::intel::shader::TRIANGLE_VERTEX_SOURCE_PATH,
+            crate::intel::shader::TRIANGLE_FRAGMENT_SOURCE_PATH,
+            crate::intel::shader::triangle_pipeline_note()
+        );
+        return false;
+    }
+
+    crate::log!(
+        "intel/render: vf-draw-path ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} note={}\n",
+        pipeline.ps.meta.kernel.dispatch_mode,
+        pipeline.ps.meta.kernel.grf_start_register,
+        pipeline.ps.meta.kernel.grf_used,
+        pipeline.ps.meta.kernel.ksp_offset_bytes,
+        pipeline.ps.meta.kernel.code_size_bytes,
+        (pipeline.ps.meta.num_varying_inputs == 0
+            && pipeline.ps.meta.kernel.push_constant_bytes == 0) as u8,
+        crate::intel::shader::triangle_pipeline_note()
+    );
+
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: vf-draw-path staging skipped reason=shader-layout-error detail={} note={}\n",
+                reason,
+                crate::intel::shader::triangle_pipeline_note()
+            );
+            return false;
+        }
+    };
+
+    crate::log!(
+        "intel/render: vf-draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
+        draw.rt_gpu_addr,
+        draw.vertex_gpu_addr,
+        draw.state_gpu_addr,
+        shader_layout.used_bytes,
+        shader_layout.state_region_offset_bytes,
+        shader_layout.state_region_gpu_addr,
+        warm.draw_state_len
+            .saturating_sub(shader_layout.state_region_offset_bytes as usize),
+        draw.target_w,
+        draw.target_h,
+        draw.rt_pitch,
+        draw.vertex_count,
+        draw.vertex_stride,
+        shader_layout.vs.code_size_bytes,
+        shader_layout.vs.code_offset_bytes,
+        shader_layout.vs.code_gpu_addr,
+        shader_layout.vs.ksp_offset_bytes,
+        shader_layout.vs.ksp_gpu_addr,
+        shader_layout.ps.code_size_bytes,
+        shader_layout.ps.code_offset_bytes,
+        shader_layout.ps.code_gpu_addr,
+        shader_layout.ps.ksp_offset_bytes,
+        shader_layout.ps.ksp_gpu_addr,
+        pipeline.ps.meta.num_varying_inputs,
+        pipeline.ps.meta.kernel.dispatch_mode
+    );
+
+    let probe_state = match write_triangle_probe_state(warm, draw, shader_layout, blend_mode) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: vf-draw-path staging skipped reason=probe-state-error detail={}\n",
+                reason
+            );
+            return false;
+        }
+    };
+
+    unsafe {
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+    }
+    seed_result_debug_slots(warm);
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let batch_tail_bytes = match encode_triangle_probe_batch(
+        batch,
+        warm,
+        draw,
+        blend_mode,
+        pipeline,
+        shader_layout,
+        probe_state,
+        GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_DRAW_PRE3D,
+        RCS_EXEC_RESULT_DRAW_POST3D,
+        RCS_EXEC_RESULT_DONE,
+        TriangleBatchMode::VfDraw,
+        StreamoutProofExperiment::PositionSlot1,
+    ) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            crate::log!(
+                "intel/render: vf-draw-path staging skipped reason=probe-batch-error detail={}\n",
+                reason
+            );
+            return false;
+        }
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
+
+    crate::log!(
+        "intel/render: vf-draw-path batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X}\n",
+        batch_tail_bytes,
+        probe_state.binding_table_offset_bytes,
+        probe_state.sampler_state_offset_bytes,
+        probe_state.blend_state_offset_bytes,
+        probe_state.color_calc_state_offset_bytes,
+        probe_state.cc_viewport_offset_bytes,
+        probe_state.sf_clip_viewport_offset_bytes
+    );
+    crate::log!("intel/render: vf-draw-path blend-probe={}\n", blend_mode.label());
+    log_triangle_probe_state(warm, shader_layout, probe_state);
+
+    let completed = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_DONE,
+        RESULT_SLOT_FINAL_DWORD,
+        "vf-draw-path",
+    );
+    if !completed {
+        recover_render_engine_after_nonretired_submit(dev, warm, "vf-draw-path");
+    }
+    completed
 }
 
 fn submit_triangle_vs_streamout_proof(
@@ -2345,6 +2544,7 @@ fn encode_triangle_probe_batch(
     streamout_experiment: StreamoutProofExperiment,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
+    let vf_synthesized_vue = matches!(batch_mode, TriangleBatchMode::VfDraw);
 
     fn log_batch_offset(cursor: usize, label: &str) {
         if crate::logflag::INTEL_RENDER_NGIN_BATCH_LOGS {
@@ -2530,7 +2730,15 @@ fn encode_triangle_probe_batch(
     // Mesa's simple-shader path emits a nearly all-default WM packet here.
     // Keep this dedicated triangle path equally boring rather than forcing
     // point-rule / line-AA bits that the host reference never asked for.
-    let wm_dw1 = 1 << 31;
+    let wm_dw1 = (1 << 31)
+        | if matches!(batch_mode, TriangleBatchMode::VfDraw) {
+            // The VF-fed draw path is our backend isolation probe, so make the
+            // fragment launch condition explicit instead of inferring it from
+            // the minimal Mesa-like defaults.
+            2 << 19
+        } else {
+            0
+        };
     let wm_depth_stencil_dw1 = 0;
     let wm_depth_stencil_dw2 = 0;
     let wm_depth_stencil_dw3 = 0;
@@ -2721,16 +2929,53 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, draw.vertex_count.saturating_mul(draw.vertex_stride))?;
 
     log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_VERTEX_ELEMENTS_1)?;
-    push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25))?;
     push(
         batch_dwords,
         &mut cursor,
-        (VFCOMP_STORE_SRC << 28)
-            | (VFCOMP_STORE_SRC << 24)
-            | (VFCOMP_STORE_SRC << 20)
-            | (VFCOMP_STORE_1_FP << 16),
+        if vf_synthesized_vue {
+            CMD_3DSTATE_VERTEX_ELEMENTS_2
+        } else {
+            CMD_3DSTATE_VERTEX_ELEMENTS_1
+        },
     )?;
+    if vf_synthesized_vue {
+        push(
+            batch_dwords,
+            &mut cursor,
+            (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25),
+        )?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            (VFCOMP_STORE_0 << 28)
+                | (VFCOMP_STORE_0 << 24)
+                | (VFCOMP_STORE_0 << 20)
+                | (VFCOMP_STORE_0 << 16),
+        )?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25),
+        )?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            (VFCOMP_STORE_SRC << 28)
+                | (VFCOMP_STORE_SRC << 24)
+                | (VFCOMP_STORE_SRC << 20)
+                | (VFCOMP_STORE_SRC << 16),
+        )?;
+    } else {
+        push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25))?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            (VFCOMP_STORE_SRC << 28)
+                | (VFCOMP_STORE_SRC << 24)
+                | (VFCOMP_STORE_SRC << 20)
+                | (VFCOMP_STORE_1_FP << 16),
+        )?;
+    }
 
     log_batch_offset(cursor, "3DSTATE_VF_STATISTICS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_STATISTICS | 1)?;
@@ -2789,45 +3034,53 @@ fn encode_triangle_probe_batch(
     )?;
     push(batch_dwords, &mut cursor, TRIANGLE_VS_URB_ENTRIES | (TRIANGLE_VS_URB_ENTRIES << 16))?;
 
-    let vs_dw3 = ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
-        | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
-    let vs_dw6 = (1 << 11) | ((pipeline.vs.meta.kernel.grf_start_register as u32) << 20);
-    let vs_dw7 = 1
-        | (1 << 2)
-        | (1 << 10)
-        | (triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads) << 22);
-    let vs_dw8 = (programmed_vs_urb_output_length as u32) << 16;
-    log_batch_offset(cursor, "3DSTATE_VS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
-    push(batch_dwords, &mut cursor, vs_ksp_offset & !0x3F)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, vs_dw3)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, vs_dw6)?;
-    push(batch_dwords, &mut cursor, vs_dw7)?;
-    push(batch_dwords, &mut cursor, vs_dw8)?;
-    crate::log!(
-        "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} grf_start={} dispatch={:?}\n",
-        vs_ksp_offset & !0x3F,
-        vs_dw3,
-        vs_dw6,
-        vs_dw7,
-        vs_dw8,
-        pipeline.vs.meta.max_threads,
-        triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads),
-        baked_vs_urb_output_length,
-        programmed_vs_urb_output_length,
-        pipeline.vs.meta.kernel.grf_start_register,
-        pipeline.vs.meta.kernel.dispatch_mode,
-    );
-    crate::log!(
-        "intel/render: probe-vs-export note={} position_only={} generic_attrs=0 baked_urb_bytes={} programmed_urb_bytes={} expected_vue=header+position-only\n",
-        crate::intel::shader::triangle_pipeline_note(),
-        (pipeline.ps.meta.num_varying_inputs == 0) as u8,
-        (baked_vs_urb_output_length as u32) * 64,
-        (programmed_vs_urb_output_length as u32) * 64,
-    );
+    if vf_synthesized_vue {
+        log_batch_offset(cursor, "3DSTATE_VS disabled");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
+        for _ in 0..8 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+    } else {
+        let vs_dw3 = ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
+            | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
+        let vs_dw6 = (1 << 11) | ((pipeline.vs.meta.kernel.grf_start_register as u32) << 20);
+        let vs_dw7 = 1
+            | (1 << 2)
+            | (1 << 10)
+            | (triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads) << 22);
+        let vs_dw8 = (programmed_vs_urb_output_length as u32) << 16;
+        log_batch_offset(cursor, "3DSTATE_VS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
+        push(batch_dwords, &mut cursor, vs_ksp_offset & !0x3F)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, vs_dw3)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, vs_dw6)?;
+        push(batch_dwords, &mut cursor, vs_dw7)?;
+        push(batch_dwords, &mut cursor, vs_dw8)?;
+        crate::log!(
+            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} grf_start={} dispatch={:?}\n",
+            vs_ksp_offset & !0x3F,
+            vs_dw3,
+            vs_dw6,
+            vs_dw7,
+            vs_dw8,
+            pipeline.vs.meta.max_threads,
+            triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads),
+            baked_vs_urb_output_length,
+            programmed_vs_urb_output_length,
+            pipeline.vs.meta.kernel.grf_start_register,
+            pipeline.vs.meta.kernel.dispatch_mode,
+        );
+        crate::log!(
+            "intel/render: probe-vs-export note={} position_only={} generic_attrs=0 baked_urb_bytes={} programmed_urb_bytes={} expected_vue=header+position-only\n",
+            crate::intel::shader::triangle_pipeline_note(),
+            (pipeline.ps.meta.num_varying_inputs == 0) as u8,
+            (baked_vs_urb_output_length as u32) * 64,
+            (programmed_vs_urb_output_length as u32) * 64,
+        );
+    }
     log_batch_offset(cursor, "MI_STORE_DATA_IMM post-vs");
     push_store_data_imm(
         batch_dwords,
@@ -4592,7 +4845,7 @@ fn submit_warm_render_batch(
     submit_name: &'static str,
 ) -> bool {
     let stats_before = capture_triangle_stage_stats(dev);
-    let surface_samples_before = if submit_name == "draw-path" {
+    let surface_samples_before = if is_surface_draw_submit_name(submit_name) {
         crate::intel::display::capture_primary_surface_samples()
     } else {
         None
@@ -4847,12 +5100,13 @@ fn submit_warm_render_batch(
         );
         log_triangle_stage_diagnosis(submit_name, completed, stats_before, stats_after);
     }
-    if submit_name == "draw-path" {
+    if is_surface_draw_submit_name(submit_name) {
         if let (Some(before), Some(after)) =
             (surface_samples_before, crate::intel::display::capture_primary_surface_samples())
         {
             crate::log!(
-                "intel/render: draw-path render-target completed={} any_change={} triangle_change={} apex={}=>{} centroid={}=>{} left={}=>{} right={}=>{} center={}=>{}\n",
+                "intel/render: {} render-target completed={} any_change={} triangle_change={} apex={}=>{} centroid={}=>{} left={}=>{} right={}=>{} center={}=>{}\n",
+                submit_name,
                 completed as u8,
                 after.any_changed_since(before) as u8,
                 after.triangle_points_changed_since(before) as u8,
@@ -4869,13 +5123,18 @@ fn submit_warm_render_batch(
             );
         }
     }
-    if submit_name == "draw-path" {
+    if is_surface_draw_submit_name(submit_name) {
         log_triangle_demo_stats(dev, completed);
     }
-    if completed && submit_name == "draw-path" {
-        let kicked = crate::intel::display::kick_primary_surface_scanout("post-draw-path");
-        crate::log!("intel/render: draw-path scanout-kick={}\n", kicked as u8);
-        crate::intel::display::log_pipe_live_scanout_state("post-draw-path");
+    if completed && is_surface_draw_submit_name(submit_name) {
+        let label = if submit_name == "vf-draw-path" {
+            "post-vf-draw-path"
+        } else {
+            "post-draw-path"
+        };
+        let kicked = crate::intel::display::kick_primary_surface_scanout(label);
+        crate::log!("intel/render: {} scanout-kick={}\n", submit_name, kicked as u8);
+        crate::intel::display::log_pipe_live_scanout_state(label);
     }
     completed
 }

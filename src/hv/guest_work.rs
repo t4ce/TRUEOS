@@ -15,6 +15,15 @@ pub struct GuestWorkProfile {
 }
 
 impl GuestWorkProfile {
+    /// Default placement contract for TRUEOS VM hull execution.
+    ///
+    /// Keep guest hulls on HV-reserved VM lanes only:
+    /// - never on BSP/local
+    /// - never on the first AP service lane (`Ap1` / slot 1)
+    /// - prefer AP>2 perf workers, with AP>2 fallback when needed
+    ///
+    /// This is the placement policy that future lane-indexed `vm[n]`
+    /// scheduling must preserve as we scale past the current singleton path.
     pub const fn vm_default() -> Self {
         Self {
             placement: SpawnPlacement::ReservedVmLane,
@@ -93,6 +102,8 @@ fn pick_reserved_vm_lane() -> Option<GuestWorkTarget> {
     let mut fallback: Vec<GuestWorkTarget> = Vec::new();
 
     for slot in slots {
+        // Slot 0 is BSP/local and slot 1 is the first AP service lane.
+        // HV guest execution must stay on reserved VM lanes at AP>2.
         if slot < VM_RESERVED_FIRST_SLOT {
             continue;
         }

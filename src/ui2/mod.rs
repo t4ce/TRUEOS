@@ -343,6 +343,7 @@ enum Ui2SystemButtonAction {
     Minimize,
     Restore,
     ToggleMaximize,
+    PreserveVm,
     Close,
 }
 
@@ -427,6 +428,7 @@ struct Ui2Window {
     id: u32,
     kind: Ui2WindowKind,
     spawn_task_index: Option<usize>,
+    vm_origin_hint: bool,
     browser_instance_id: u32,
     hosted_browser_snapshot: UiHostedBrowserSnapshot,
     title: String,
@@ -1165,12 +1167,16 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_create(
         w: width.max(1) as f32,
         h: height.max(1) as f32,
     };
-    create_window(
+    let id = create_window(
         title,
         rect,
         z.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
         alpha.min(255) as u8,
-    )
+    );
+    if id != 0 {
+        let _ = set_window_vm_origin_hint(id, true);
+    }
+    id
 }
 
 #[unsafe(no_mangle)]
