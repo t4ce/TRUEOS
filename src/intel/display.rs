@@ -1,6 +1,22 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use spin::Mutex;
 
+macro_rules! intel_display_focus_log {
+    ($($arg:tt)*) => {
+        if crate::logflag::INTEL_STAGE1_LOGS || crate::logflag::INTEL_DISPLAY_NGIN_LOGS {
+            crate::log!($($arg)*);
+        }
+    };
+}
+
+macro_rules! intel_display_verbose_log {
+    ($($arg:tt)*) => {
+        if crate::logflag::INTEL_DISPLAY_NGIN_LOGS && !crate::logflag::INTEL_STAGE1_LOGS {
+            crate::log!($($arg)*);
+        }
+    };
+}
+
 const PIPE_A_SRC: usize = 0x7001C;
 const PIPE_B_SRC: usize = 0x7101C;
 const PIPE_C_SRC: usize = 0x7201C;
@@ -53,7 +69,7 @@ const PRIMARY_PRESENT_DISABLE_PSR_PROBE: bool = true;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
 const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
-const PRIMARY_BOOT_LOGO_ENABLED: bool = false;
+const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
 const OVERLAY_PLANE_SLOT: usize = 1;
 const OVERLAY_MARGIN_X: u32 = 0;
 const OVERLAY_MARGIN_Y: u32 = 0;
@@ -373,7 +389,7 @@ fn log_transcoder_a_state(dev: crate::intel::Dev, label: &str) {
     let bits_per_color = (ddi_func_ctl >> 20) & 0x03;
     let sync_polarity = (ddi_func_ctl >> 16) & 0x03;
     let port_width = (ddi_func_ctl >> 1) & 0x07;
-    crate::log!(
+    intel_display_verbose_log!(
         "intel/display: transcoder-a label={} pipe_src=0x{:08X} pipeconf=0x{:08X} pipe_enable={} pipe_state={} ddi_func_ctl=0x{:08X} trans_enable={} ddi_select={} ddi={} mode_select={} mode={} bpc={} sync_pol=0x{:X} port_width={} htotal=0x{:08X} hsync=0x{:08X} vtotal=0x{:08X} vsync=0x{:08X}\n",
         label,
         pipe_src,
@@ -435,7 +451,7 @@ fn program_pipe_bottom_color(dev: crate::intel::Dev, pipe: PipeInfo, rgb: u32) {
     let reg = SKL_BOTTOM_COLOR_A + pipe.slot * SKL_BOTTOM_COLOR_PIPE_STRIDE;
     crate::intel::mmio_write(dev, reg, rgb);
     let readback = crate::intel::mmio_read(dev, reg);
-    crate::log!(
+    intel_display_verbose_log!(
         "intel/display: bottom-color pipe={} reg=0x{:05X} rgb=0x{:06X} readback=0x{:08X}\n",
         pipe.name,
         reg,
@@ -710,7 +726,7 @@ fn log_surface_samples(surface: PrimarySurface, label: &str) {
         return;
     };
 
-    crate::log!(
+    intel_display_focus_log!(
         "intel/display: primary-samples label={} gpu=0x{:X} phys=0x{:X} pitch=0x{:X} tl=0x{:08X} center=0x{:08X} br=0x{:08X} apex=0x{:08X} centroid=0x{:08X} left=0x{:08X} right=0x{:08X}\n",
         label,
         crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
@@ -799,7 +815,7 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
         if PRIMARY_PRESENT_DISABLE_PSR_PROBE {
             crate::intel::mmio_write(dev, trans_psr_ctl_off, 0);
             crate::intel::mmio_write(dev, trans_psr2_ctl_off, 0);
-            crate::log!(
+            intel_display_verbose_log!(
                 "intel/display: psr-probe reason={} pipe={} psr_ctl_before=0x{:08X} psr2_ctl_before=0x{:08X} psr_ctl_after=0x{:08X} psr2_ctl_after=0x{:08X} psr_status=0x{:08X} psr2_status=0x{:08X}\n",
                 reason,
                 surface.pipe.name,
@@ -821,7 +837,7 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
         let surf_current = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
         if surf_current == surface_reg {
             if should_log_primary_present(seq) {
-                crate::log!(
+                intel_display_verbose_log!(
                     "intel/display: primary-flip seq={} reason={} pipe={} surf=0x{:08X} fast-skip\n",
                     seq,
                     reason,
@@ -835,7 +851,7 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
         crate::intel::mmio_write(dev, surface.pipe.plane_surf_off, surface_reg);
         let (frame_before, frame_after, frame_iters) = wait_for_pipe_next_frame(dev, surface.pipe);
         if should_log_primary_present(seq) {
-            crate::log!(
+            intel_display_verbose_log!(
                 "intel/display: primary-flip seq={} reason={} pipe={} surf=0x{:08X}=>0x{:08X} frame={}=>{} frame_wait={}\n",
                 seq,
                 reason,
@@ -869,7 +885,7 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
     let surf_after = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
 
     if should_log_primary_present(seq) {
-        crate::log!(
+        intel_display_verbose_log!(
             "intel/display: primary-present seq={} reason={} pipe={} bytes=0x{:X} pipeconf=0x{:08X} ddi_func_ctl=0x{:08X} psr_ctl=0x{:08X} psr_status=0x{:08X} psr2_ctl=0x{:08X} psr2_status=0x{:08X} frame={}=>{} frame_wait={} cur_surflive_before=0x{:08X} cur_surflive_after=0x{:08X} surf_before=0x{:08X} surf_after=0x{:08X} surf_live_before=0x{:08X} surf_live_after=0x{:08X} iter={}\n",
             seq,
             reason,
@@ -899,6 +915,9 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
 
 #[inline]
 fn should_log_primary_present(seq: u32) -> bool {
+    if crate::logflag::INTEL_STAGE1_LOGS {
+        return false;
+    }
     seq <= 8 || seq.is_multiple_of(60)
 }
 
@@ -1020,7 +1039,7 @@ fn program_primary_plane_and_wait(
     let (arm_frame_before, arm_frame_after, arm_frame_iters) = wait_for_pipe_next_frame(dev, pipe);
     let (surf_live_after, live_iters) = wait_for_primary_plane_live(dev, pipe, surface_reg, 20_000);
 
-    crate::log!(
+    intel_display_verbose_log!(
         "intel/display: primary-rearm reason={} pipe={} format_probe={} ctl_before=0x{:08X} ctl_disabled=0x{:08X} ctl_enabled=0x{:08X} disable_frame={}=>{} disable_wait={} clear_live=0x{:08X} clear_iters={} arm_frame={}=>{} arm_wait={} surf=0x{:08X} surf_live=0x{:08X} live_iters={}\n",
         reason,
         pipe.name,
@@ -1055,7 +1074,7 @@ fn log_primary_scanout_pte_window(dev: crate::intel::Dev, label: &str, byte_len:
         entries[idx] = crate::intel::read_ggtt_pte(dev, gpu).unwrap_or(0);
         idx += 1;
     }
-    crate::log!(
+    intel_display_verbose_log!(
         "intel/display: primary-ggtt label={} gpu=0x{:X} bytes=0x{:X} pages={} pte0=0x{:016X} pte1=0x{:016X} pte2=0x{:016X} pte3=0x{:016X}\n",
         label,
         crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
@@ -1302,7 +1321,7 @@ pub(crate) fn kick_primary_surface_scanout(label: &str) -> bool {
     let stride_after = crate::intel::mmio_read(dev, surface.pipe.plane_stride_off);
     let surf_after = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
 
-    crate::log!(
+    intel_display_verbose_log!(
         "intel/display: primary-scanout-kick label={} pipe={} stride_before=0x{:08X} stride_after=0x{:08X} size_before=0x{:08X} size_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} surf_before=0x{:08X} surf_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X} iter={}\n",
         label,
         surface.pipe.name,
@@ -1332,7 +1351,7 @@ pub(crate) fn log_pipe_live_scanout_state(label: &str) {
     let pipe = surface.pipe;
     let pipe_src_raw = crate::intel::mmio_read(dev, pipe.pipe_src_off);
     let (pipe_w, pipe_h) = decode_pipe_src(pipe_src_raw).unwrap_or((0, 0));
-    crate::log!(
+    intel_display_verbose_log!(
         "intel/display: live-scanout label={} pipe={} pipe_src=0x{:08X} dims={}x{} primary_surf_gpu=0x{:08X}\n",
         label,
         pipe.name,
@@ -1352,7 +1371,7 @@ pub(crate) fn log_pipe_live_scanout_state(label: &str) {
         let surf_live = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
         let color_ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
         let buf_cfg = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF);
-        crate::log!(
+        intel_display_verbose_log!(
             "intel/display: live-plane label={} pipe={} slot={} enabled={} format={} tiled={} rot={} rgbx={} stride=0x{:08X} pos={}x{} size={}x{} surf=0x{:08X} surf_live=0x{:08X} color_ctl=0x{:08X} color_alpha={} buf_cfg=0x{:08X}\n",
             label,
             pipe.name,
@@ -1408,7 +1427,7 @@ fn log_pipe_scanout_probe(dev: crate::intel::Dev, label: &str) {
         let plane_surf = crate::intel::mmio_read(dev, pipe.plane_surf_off);
         let plane_surf_live = crate::intel::mmio_read(dev, pipe.plane_surf_live_off);
         let (width, height) = pipe_src_dims.unwrap_or((0, 0));
-        crate::log!(
+        intel_display_verbose_log!(
             "intel/display: pipe-probe label={} pipe={} pipe_src=0x{:08X} dims={}x{} plane_enabled={} surf=0x{:08X} surf_live=0x{:08X}\n",
             label,
             pipe.name,
@@ -1438,7 +1457,7 @@ fn log_primary_plane_probe(dev: crate::intel::Dev, pipe: PipeInfo, label: &str) 
     let color_ctl = crate::intel::mmio_read(dev, pipe.plane_ctl_off + UNI_PLANE_COLOR_CTL_OFF);
     let buf_cfg = crate::intel::mmio_read(dev, pipe.plane_ctl_off + UNI_PLANE_BUF_CFG_OFF);
 
-    crate::log!(
+    intel_display_verbose_log!(
         "intel/display: primary-probe label={} pipe={} ctl=0x{:08X} enabled={} format={} tiled={} rot={} rgbx={} stride=0x{:08X} pos={}x{} size={}x{} offset={}x{} surf=0x{:08X} surf_live=0x{:08X} color_ctl=0x{:08X} color_alpha={} key=0x{:08X}/0x{:08X}/0x{:08X} aux=0x{:08X}/0x{:08X} buf_cfg=0x{:08X}\n",
         label,
         pipe.name,
@@ -1566,7 +1585,7 @@ fn log_primary_dimensions_probe(
 ) {
     let (pipe_w, pipe_h) = pipe_src_dims.unwrap_or((0, 0));
     let (fb_w, fb_h) = fb_dims.unwrap_or((0, 0));
-    crate::log!(
+    intel_display_verbose_log!(
         "intel/display: primary-dims pipe={} pipe_src=0x{:08X} pipe_decoded={}x{} fb_hint={}x{} chosen={}\n",
         pipe_name,
         pipe_src_raw,

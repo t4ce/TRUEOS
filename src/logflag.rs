@@ -22,6 +22,9 @@ pub(crate) const BROWSER_HTML_PREVIEW_LOGS: bool = false;
 pub(crate) const VHTTPS_VERBOSE: bool = false;
 pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = false;
 pub(crate) const INTEL_GFX_DEBUG_LOGFLAG: bool = false;
+// Stage-1 Intel bring-up mode: keep the logs around the stage frontier and
+// unlock probes, while muting the bulk packet/state chatter.
+pub(crate) const INTEL_STAGE1_LOGS: bool = true;
 
 pub(crate) const VIRGL_DRAW_DIAGNOSTICS_LOGS: bool = false;
 pub(crate) static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
@@ -36,7 +39,7 @@ pub(crate) static INTEL_PRESENT_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
 
 pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = true;
-pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = true;
+pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = !INTEL_STAGE1_LOGS;
 pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
 pub(crate) const INTEL_MEDIA_NGIN_LOGS: bool = true;
 pub(crate) const INTEL_MEDIA_FS_CACHE_ENABLED: bool = true;
