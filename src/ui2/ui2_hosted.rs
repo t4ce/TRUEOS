@@ -55,6 +55,60 @@ static UI2_HOSTED_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_HOSTED_CONTAINER_SYNC_QUEUED: AtomicBool = AtomicBool::new(false);
 static HOSTED_BROWSER_DIRTY_CONTENT_MASK: AtomicU64 = AtomicU64::new(0);
 static HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK: AtomicU64 = AtomicU64::new(0);
+static UI2_VM1_START_REQUESTED: AtomicBool = AtomicBool::new(false);
+static UI2_VM1_RUNNING_RENDERED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn request_vm1_resume() {
+    UI2_VM1_START_REQUESTED.store(true, Ordering::Release);
+    queue_hosted_container_sync();
+}
+
+fn sync_vm_window_runtime_state(state: &mut Ui2State) {
+    let hv_status = crate::hv::status();
+    let vm_running = hv_status.vm1_running || hv_status.vm1_starting;
+    let previous = UI2_VM1_RUNNING_RENDERED.swap(vm_running, Ordering::AcqRel);
+    if previous == vm_running {
+        return;
+    }
+
+    state.compose_reason = "vm-window-runtime-state";
+    for window_id in state
+        .windows
+        .iter()
+        .filter(|window| window.vm_origin_hint)
+        .map(|window| window.id)
+        .collect::<Vec<_>>()
+    {
+        let _ = note_window_dirty(state, window_id, "vm-window-runtime-state");
+    }
+}
+
+fn service_vm_resume_request(spawner: &Spawner) {
+    if !UI2_VM1_START_REQUESTED.swap(false, Ordering::AcqRel) {
+        return;
+    }
+
+    let hv_status = crate::hv::status();
+    if hv_status.vm1_running || hv_status.vm1_starting {
+        return;
+    }
+
+    match crate::hv::restore_snapshot(0) {
+        Ok(bytes) => crate::hv::hvlogf(format_args!(
+            "ui2: vm window resume restored snapshot bytes={}",
+            bytes
+        )),
+        Err(crate::hv::RestoreError::MissingFile) => {}
+        Err(err) => crate::hv::hvlogf(format_args!(
+            "ui2: vm window resume restore failed: {:?}",
+            err
+        )),
+    }
+
+    if let Err(err) = crate::hv::start(0, spawner, &crate::shell2::UI2_SHELL_BACKEND, None) {
+        crate::hv::hvlogf(format_args!("ui2: vm window resume start failed: {:?}", err));
+    }
+}
 
 pub(super) trait UiHostedSurfaceProvider {
     fn surface_seq(&self, content_id: HostedContentId) -> u32;
@@ -858,6 +912,7 @@ pub async fn ui2_hosted_task() {
         {
             let state_lock = init_state();
             let mut state = state_lock.lock();
+            sync_vm_window_runtime_state(&mut state);
             sync_hosted_browser_window_metadata(&mut state, &spawner);
             if queued {
                 sync_pending_window_containers(&mut state);
@@ -872,6 +927,7 @@ pub async fn ui2_hosted_task() {
             queue_hosted_container_sync();
         }
 
+        service_vm_resume_request(&spawner);
         Timer::after(EmbassyDuration::from_millis(if queued { 4 } else { 12 })).await;
     }
 }

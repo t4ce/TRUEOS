@@ -12,6 +12,8 @@ const UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI: char = '\u{2796}';
 const UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI: char = '\u{23F9}';
 const UI2_SYSTEM_BUTTON_RESTORE_TWEMOJI: char = '\u{23CF}';
 const UI2_SYSTEM_BUTTON_PRESERVE_VM_TWEMOJI: char = '\u{1F4BF}';
+const UI2_SYSTEM_BUTTON_VM_PLAY_TWEMOJI: char = '\u{23F5}';
+const UI2_SYSTEM_BUTTON_VM_PAUSE_TWEMOJI: char = '\u{23F8}';
 const UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI: char = '\u{23EF}';
 const UI2_SYSTEM_BUTTON_CLOSE_HULL_TWEMOJI: char = '\u{2716}';
 const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{2733}';
@@ -161,7 +163,14 @@ fn window_system_button_twemoji(window: &Ui2Window, action: Ui2SystemButtonActio
         Ui2SystemButtonAction::PreserveVm => window
             .vm_origin_hint
             .then_some(UI2_SYSTEM_BUTTON_PRESERVE_VM_TWEMOJI),
-        Ui2SystemButtonAction::Close => Some(if window.spawn_task_index.is_some() {
+        Ui2SystemButtonAction::Close => Some(if window.vm_origin_hint {
+            let hv_status = crate::hv::status();
+            if hv_status.vm1_running || hv_status.vm1_starting {
+                UI2_SYSTEM_BUTTON_VM_PAUSE_TWEMOJI
+            } else {
+                UI2_SYSTEM_BUTTON_VM_PLAY_TWEMOJI
+            }
+        } else if window.spawn_task_index.is_some() {
             UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI
         } else {
             UI2_SYSTEM_BUTTON_CLOSE_HULL_TWEMOJI

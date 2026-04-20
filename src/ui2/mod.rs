@@ -1928,6 +1928,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             }
         }
 
+        ui2_win_register::draw_offline_dock(state);
         for idx in sorted_window_indices(state) {
             let window = &state.windows[idx];
             if !window_is_renderable(window) {
@@ -1942,7 +1943,6 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
                 path: timing.content_path,
             });
         }
-        ui2_win_register::draw_offline_dock(state);
         draw_resize_preview_outline(state);
         unsafe {
             crate::r::io::cabi::trueos_cabi_gfx_end_frame();
