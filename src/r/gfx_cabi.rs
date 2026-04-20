@@ -104,6 +104,32 @@ pub mod kfs {
     }
 
     #[inline]
+    pub fn create_dir_all(path: &str) -> Result<()> {
+        let disk = root_disk()?;
+        let name = normalize_rel(path, true)?;
+        if name.is_empty() {
+            return Ok(());
+        }
+
+        crate::wait::spawn_and_wait_local(async move {
+            let mut prefix = String::new();
+            for part in name.split('/') {
+                if !prefix.is_empty() {
+                    prefix.push('/');
+                }
+                prefix.push_str(part);
+
+                let marker = alloc::format!("{}/.keep", prefix);
+                let ok = crate::r::fs::trueosfs::file_in_async(disk, marker.as_str(), &[]).await?;
+                if !ok {
+                    return Err(FsError::NoSpace);
+                }
+            }
+            Ok(())
+        })
+    }
+
+    #[inline]
     pub fn write_file_chunk(handle: u32, data: &[u8]) -> Result<()> {
         let data = data.to_vec();
         crate::wait::spawn_and_wait_local(async move {
@@ -724,6 +750,27 @@ pub mod cabi {
                 *out_handle = h;
                 0
             }
+            Err(e) => fs_error_to_code(e),
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_fs_create_dir_all(
+        path_ptr: *const u8,
+        path_len: usize,
+    ) -> i32 {
+        if path_ptr.is_null() && path_len != 0 {
+            return FS_ERR_BAD_PARAM;
+        }
+        if path_len > QJS_ASYNC_FS_MAX_PATH {
+            return FS_ERR_TOO_LARGE;
+        }
+        let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+        let Ok(path) = core::str::from_utf8(path_bytes) else {
+            return FS_ERR_BAD_UTF8;
+        };
+        match super::kfs::create_dir_all(path) {
+            Ok(()) => 0,
             Err(e) => fs_error_to_code(e),
         }
     }

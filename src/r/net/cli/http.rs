@@ -478,25 +478,36 @@ async fn request_http_body(
                 api::Event::Closed { handle } => {
                     if tcp_handle == Some(handle) {
                         last_progress = Instant::now();
-                        let hdr_end = find_http_header_end(&rx);
-                        let status = parse_http_status(&rx).unwrap_or(0);
+                        let Some(hdr_end) = find_http_header_end(&rx) else {
+                            crate::log!(
+                                "http: closed before complete headers host={} port={} rx_bytes={} last_error={}\n",
+                                parsed.host,
+                                parsed.port,
+                                rx.len(),
+                                last_error.unwrap_or("none"),
+                            );
+                            return Err(HttpFetchError::HttpStatus(0));
+                        };
+                        let Some(status) = parse_http_status(&rx) else {
+                            crate::log!(
+                                "http: closed with invalid status line host={} port={} rx_bytes={} last_error={}\n",
+                                parsed.host,
+                                parsed.port,
+                                rx.len(),
+                                last_error.unwrap_or("none"),
+                            );
+                            return Err(HttpFetchError::HttpStatus(0));
+                        };
                         if is_redirect_status(status) {
-                            if let Some(end) = hdr_end {
-                                if let Some(next) = redirect_url_from_location(&parsed, &rx[..end])
-                                {
-                                    return Err(HttpFetchError::Redirect(next));
-                                }
+                            if let Some(next) = redirect_url_from_location(&parsed, &rx[..hdr_end])
+                            {
+                                return Err(HttpFetchError::Redirect(next));
                             }
                         }
                         if status >= 400 {
                             return Err(HttpFetchError::HttpStatus(status));
                         }
-                        let body_off = hdr_end.unwrap_or(0);
-                        let body = if body_off <= rx.len() {
-                            rx.split_off(body_off)
-                        } else {
-                            Vec::new()
-                        };
+                        let body = rx.split_off(hdr_end);
                         if truncated {
                             return Err(HttpFetchError::ResponseTooLarge);
                         }

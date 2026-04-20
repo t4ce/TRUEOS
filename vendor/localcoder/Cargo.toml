@@ -11,7 +11,7 @@ repository = "https://github.com/iamwjun/localcoder"
 # HTTP client
 reqwest = { version = "0.12", features = ["json"], optional = true }
 # Async runtime
-tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "process", "io-util", "sync", "time"] }
+tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "process", "io-util", "sync", "time"], optional = true }
 # JSON handling
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -32,7 +32,9 @@ url = "2.5"
 v = { path = "../../crates/trueos-v", optional = true }
 
 [features]
-default = ["host-net", "interactive", "grep-tool", "bash-tool", "lsp-tool"]
+default = ["host-app"]
+host-app = ["tokio-runtime", "host-net", "interactive", "grep-tool", "bash-tool", "lsp-tool"]
+tokio-runtime = ["dep:tokio"]
 host-net = ["dep:reqwest"]
 trueos-net = ["dep:v"]
 interactive = ["dep:rustyline"]

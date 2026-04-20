@@ -1,12 +1,17 @@
 use alloc::string::String;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use localcoder::kernel::{self, BasicPromptRequest};
+use localcoder::resume::ResumeTarget as LocalcoderKernelResumeTarget;
 
 use super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
     set_matrix_target_active,
 };
+
+static LOCALCODER_USAGE_HINT_SHOWN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 pub(crate) enum LocalcoderResumeTarget {
@@ -60,31 +65,52 @@ async fn localcoder_command_task(request: LocalcoderRequest) {
             print_matrix_target_line(&task_target, line);
         };
 
-        let resume_text = match &request.resume_target {
-            LocalcoderResumeTarget::New => "new",
-            LocalcoderResumeTarget::ContinueLatest => "continue-latest",
-            LocalcoderResumeTarget::ResumeId(_) => "resume-id",
-        };
-
-        log("lc: dedicated shell2 localcoder task started");
-        log(alloc::format!("lc: mode={}", resume_text).as_str());
-
-        if let LocalcoderResumeTarget::ResumeId(session_id) = &request.resume_target {
-            log(alloc::format!("lc: session_id={}", session_id).as_str());
+        if !matches!(request.resume_target, LocalcoderResumeTarget::New) {
+            log("lc: resume and continue modes are not wired yet; use `lc --new <prompt...>`");
+            return;
         }
+
+        let kernel_resume_target = match &request.resume_target {
+            LocalcoderResumeTarget::New => LocalcoderKernelResumeTarget::New,
+            LocalcoderResumeTarget::ContinueLatest => LocalcoderKernelResumeTarget::ContinueLatest,
+            LocalcoderResumeTarget::ResumeId(session_id) => {
+                LocalcoderKernelResumeTarget::ResumeId(session_id.clone())
+            }
+        };
 
         match request.prompt.as_deref() {
             Some(prompt) if !prompt.trim().is_empty() => {
-                log(alloc::format!("lc: prompt={}", prompt).as_str());
+                let kernel_request = BasicPromptRequest {
+                    resume_target: kernel_resume_target,
+                    prompt: String::from(prompt),
+                    max_tokens: 1024,
+                };
+                match kernel::run_basic_prompt(&kernel_request).await {
+                    Ok(response) => {
+                        if response.text.trim().is_empty() {
+                            log("lc: empty response");
+                        } else {
+                            for line in response.text.lines() {
+                                log(line);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        log(alloc::format!("lc: {}", err).as_str());
+                    }
+                }
             }
             _ => {
-                log("lc: interactive launch requested");
+                let first_hint = LOCALCODER_USAGE_HINT_SHOWN
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok();
+                if first_hint {
+                    log("lc: one-shot mode is ready; use `lc <prompt...>`");
+                } else {
+                    log("lc: use `lc <prompt...>`");
+                }
             }
         }
-
-        log("lc: this path is separate from classic shell2 AI mode");
-        log("lc: vendored localcoder runtime lift is still pending");
-        log("lc: next step is a callable kernel-facing entrypoint in vendor/localcoder");
     }
     .await;
 

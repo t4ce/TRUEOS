@@ -41,10 +41,12 @@ pub fn create_dir_all(path: &Path) -> Result<()> {
 }
 
 #[cfg(feature = "trueos-net")]
-pub fn create_dir_all(_path: &Path) -> Result<()> {
-    // TRUEOS KFS writes are path-based today. Directory creation will need a
-    // richer FS facade later; for now we accept existing mounted paths.
-    Ok(())
+pub fn create_dir_all(path: &Path) -> Result<()> {
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))?;
+    v::vio::kfs::create_dir_all(path_str)
+        .map_err(|rc| anyhow!("failed to create directory {} rc={}", path.display(), rc))
 }
 
 #[cfg(not(feature = "trueos-net"))]

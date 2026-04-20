@@ -54,7 +54,17 @@ pub struct LLMClient {
     max_tokens: u32,
 }
 
+#[derive(Debug, Clone)]
+pub enum ClientConfigSource {
+    SettingsFile(PathBuf),
+    BuiltInDefaults,
+}
+
 impl LLMClient {
+    fn uses_openai_compat(&self) -> bool {
+        self.base_url.ends_with("/v1")
+    }
+
     /// Create a client from `$HOME/.localcoder/settings.json`.
     pub fn new() -> Result<Self> {
         let settings = Self::load_settings()?;
@@ -67,6 +77,22 @@ impl LLMClient {
         Self::ensure_settings_file_with(home.as_deref())
     }
 
+    /// Create a client, preferring a discovered settings file but falling
+    /// back to built-in defaults when the kernel runtime has no writable
+    /// settings location yet.
+    pub fn new_with_optional_settings() -> Result<(Self, ClientConfigSource)> {
+        match Self::resolve_settings_path() {
+            Ok(path) => {
+                let settings = Self::load_settings_from_path(&path)?;
+                Ok((
+                    Self::from_settings(settings),
+                    ClientConfigSource::SettingsFile(path),
+                ))
+            }
+            Err(_) => Ok((Self::default_client(), ClientConfigSource::BuiltInDefaults)),
+        }
+    }
+
     pub fn home_settings_path() -> Result<PathBuf> {
         rt_env::path_from_home(Path::new(".localcoder/settings.json"))
     }
@@ -75,6 +101,14 @@ impl LLMClient {
         Self {
             base_url: settings.ollama.url.trim_end_matches('/').to_string(),
             model: settings.ollama.model,
+            max_tokens: 4096,
+        }
+    }
+
+    fn default_client() -> Self {
+        Self {
+            base_url: DEFAULT_OLLAMA_URL.to_string(),
+            model: DEFAULT_OLLAMA_MODEL.to_string(),
             max_tokens: 4096,
         }
     }
@@ -90,14 +124,23 @@ impl LLMClient {
     }
 
     fn resolve_settings_path_with(home: Option<&Path>) -> Result<PathBuf> {
+        if let Ok(cwd) = rt_env::current_dir() {
+            let cwd_path = cwd.join(".localcoder/settings.json");
+            if rt_fs::exists(&cwd_path) {
+                return Ok(cwd_path);
+            }
+        }
+
         if let Some(home) = home {
             let home_path = home.join(".localcoder/settings.json");
-            if home_path.exists() {
+            if rt_fs::exists(&home_path) {
                 return Ok(home_path);
             }
         }
 
-        Err(anyhow!("missing $HOME/.localcoder/settings.json"))
+        Err(anyhow!(
+            "missing .localcoder/settings.json in current directory and missing $HOME/.localcoder/settings.json"
+        ))
     }
 
     fn ensure_settings_file_with(home: Option<&Path>) -> Result<PathBuf> {
@@ -105,8 +148,13 @@ impl LLMClient {
             return Ok(path);
         }
 
-        let home = home.context("$HOME is not set")?;
-        let path = home.join(".localcoder/settings.json");
+        let path = if let Some(home) = home {
+            home.join(".localcoder/settings.json")
+        } else {
+            rt_env::current_dir()
+                .context("failed to resolve current directory for settings bootstrap")?
+                .join(".localcoder/settings.json")
+        };
         if let Some(parent) = path.parent() {
             rt_fs::create_dir_all(parent).with_context(|| {
                 format!("failed to create settings directory: {}", parent.display())
@@ -253,6 +301,43 @@ impl LLMClient {
     }
 
     pub async fn complete_prompt(&self, prompt: &str, max_tokens: u32) -> Result<String> {
+        if self.uses_openai_compat() {
+            let body = json!({
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "stream": false,
+                "max_tokens": max_tokens
+            });
+
+            let response = net::post_json(&format!("{}/chat/completions", self.base_url), &body)
+                .await
+                .context("LM Studio chat completions request failed")?;
+
+            if !response.is_success() {
+                let status = response.status();
+                let error_text = response.text().unwrap_or_default();
+                anyhow::bail!("LM Studio returned error {}: {}", status, error_text);
+            }
+
+            let response: Value = response
+                .json()
+                .context("failed to parse LM Studio chat completions response")?;
+
+            if let Some(text) = response
+                .pointer("/choices/0/message/content")
+                .and_then(Value::as_str)
+            {
+                return Ok(text.to_string());
+            }
+
+            anyhow::bail!("LM Studio response missing choices[0].message.content");
+        }
+
         let body = json!({
             "model": self.model,
             "messages": [
@@ -287,6 +372,11 @@ impl LLMClient {
     /// Set model.
     pub fn set_model(&mut self, model: String) {
         self.model = model;
+    }
+
+    /// Set base URL.
+    pub fn set_base_url(&mut self, base_url: String) {
+        self.base_url = base_url.trim_end_matches('/').to_string();
     }
 
     /// Set max tokens.
@@ -339,7 +429,7 @@ impl LLMClient {
             return Err(anyhow!("model must not be empty"));
         }
 
-        let settings = if path.exists() {
+        let settings = if rt_fs::exists(path) {
             let raw = rt_fs::read_to_string(path)
                 .with_context(|| format!("failed to read settings file: {}", path.display()))?;
             let mut settings: PersistedSettings = serde_json::from_str(&raw)

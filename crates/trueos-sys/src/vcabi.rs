@@ -19,6 +19,7 @@ unsafe extern "C" {
         total_len: u64,
         out_handle: *mut u32,
     ) -> i32;
+    pub fn trueos_cabi_fs_create_dir_all(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
     pub fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
