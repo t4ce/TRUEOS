@@ -9,7 +9,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
-const AUDIO_DEMO_ENABLED: bool = true;
+const AUDIO_DEMO_ENABLED: bool = false;
 const AUDIO_HTTP_LOCAL_DEMO_URLS: [&str; 1] = ["http://192.168.178.112:8080/tools/aud/demo.wav"];
 const AUDIO_HTTP_DEMO_TIMEOUT_MS: u32 = 30_000;
 const AUDIO_HTTP_DEMO_MAX_BYTES: usize = 32 * 1024 * 1024;

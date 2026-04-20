@@ -81,9 +81,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
         watch_rx.changed().await.map_err(|_| "sync-watch-changed")?;
         Ok::<u32, &'static str>(*watch_rx.borrow())
     });
-    watch_tx
-        .send(0x5743u32)
-        .map_err(|_| "sync-watch-send")?;
+    watch_tx.send(0x5743u32).map_err(|_| "sync-watch-send")?;
     let watch_value = watch_task.await.map_err(|_| "sync-watch-task")??;
     if watch_value != 0x5743 {
         return Err("sync-watch-value");
@@ -91,9 +89,10 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     crate::log!("tokio_probe: success sync.watch\n");
 
     let (broadcast_tx, mut broadcast_rx) = tokio::sync::broadcast::channel(2);
-    let broadcast_task = tokio::task::spawn(async move {
-        broadcast_rx.recv().await.map_err(|_| "sync-broadcast-recv")
-    });
+    let broadcast_task =
+        tokio::task::spawn(
+            async move { broadcast_rx.recv().await.map_err(|_| "sync-broadcast-recv") },
+        );
     broadcast_tx
         .send(0xB04D_C457u32)
         .map_err(|_| "sync-broadcast-send")?;

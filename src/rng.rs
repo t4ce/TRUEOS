@@ -102,10 +102,7 @@ pub fn fill_bytes(dest: &mut [u8]) -> bool {
     true
 }
 
-#[cfg(all(
-    target_arch = "x86_64",
-    any(target_os = "none", target_os = "zkvm")
-))]
+#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "zkvm")))]
 fn trueos_getrandom(dest: &mut [u8]) -> Result<(), getrandom::Error> {
     if fill_bytes(dest) {
         Ok(())
@@ -114,10 +111,7 @@ fn trueos_getrandom(dest: &mut [u8]) -> Result<(), getrandom::Error> {
     }
 }
 
-#[cfg(all(
-    target_arch = "x86_64",
-    any(target_os = "none", target_os = "zkvm")
-))]
+#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "zkvm")))]
 fn trueos_getrandom_02(dest: &mut [u8]) -> Result<(), getrandom_02::Error> {
     if fill_bytes(dest) {
         Ok(())
@@ -127,10 +121,7 @@ fn trueos_getrandom_02(dest: &mut [u8]) -> Result<(), getrandom_02::Error> {
     }
 }
 
-#[cfg(all(
-    target_arch = "x86_64",
-    any(target_os = "none", target_os = "zkvm")
-))]
+#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "zkvm")))]
 #[unsafe(no_mangle)]
 unsafe extern "Rust" fn __getrandom_v03_custom(
     dest: *mut u8,
@@ -143,8 +134,5 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
     trueos_getrandom(buf)
 }
 
-#[cfg(all(
-    target_arch = "x86_64",
-    any(target_os = "none", target_os = "zkvm")
-))]
+#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "zkvm")))]
 getrandom_02::register_custom_getrandom!(trueos_getrandom_02);

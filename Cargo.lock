@@ -16,6 +16,7 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embassy-time-driver",
+ "embedded-io-async",
  "embedded-websocket",
  "euclid",
  "fontdue",

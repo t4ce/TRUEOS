@@ -134,6 +134,7 @@ kernel-stages: artifacts
 iso: artifacts images
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
+	-fuser -k 7777/udp || true
 	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf

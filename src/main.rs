@@ -39,7 +39,11 @@ mod rng;
 mod runtime;
 mod shell2;
 mod smp;
+#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+mod std_abi_shim;
 mod tga;
+#[cfg(feature = "tokio-probe")]
+mod tokio_probe;
 #[path = "tst/fps.rs"]
 mod tst_fps;
 #[path = "tst/gfx_tetris.rs"]
@@ -89,10 +93,6 @@ mod tst_ui2_weather_demo;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
-#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
-mod std_abi_shim;
-#[cfg(feature = "tokio-probe")]
-mod tokio_probe;
 mod usb2;
 mod wait;
 mod x2apic;
