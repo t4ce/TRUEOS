@@ -2,15 +2,16 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embedded_io_async::Write;
 use v::vnet as api;
 
 use super::http::{
-    HttpBodyKind, HttpFetchError, find_http_header_end, header_parse_content_length,
-    is_redirect_status, parse_http_head, parse_http_status, parse_http_url,
-    redirect_url_from_location,
+    HttpBodyKind, HttpFetchError, find_http_header_end, is_redirect_status, parse_http_head,
+    parse_http_status, parse_http_url, redirect_url_from_location,
 };
 use crate::r::net::dns::{self, DnsConfig};
 use crate::r::net::{NetProfile, VNet};
+use crate::r::stream::{ObjectDesc, ObjectSink};
 
 const HTTP_FILE_WRITE_FALLBACK_CHUNK_BYTES: usize = 64 * 1024;
 const HTTP_FILE_WRITE_PROGRESS_BYTES: u64 = 512 * 1024;
@@ -36,17 +37,27 @@ fn http_file_write_bps(written: u64, started: Instant) -> u64 {
     }
 }
 
-async fn write_http_body_to_file(
+struct HttpFileStream {
+    sink: crate::r::stream::TrueosFsObjectSink,
+    writer: crate::r::stream::TrueosFsObjectWriter,
+    total_len: u64,
+    written: u64,
+    started: Instant,
+    next_progress: u64,
+    next_yield: u64,
+}
+
+async fn begin_http_file_stream(
     disk: crate::disc::block::DeviceHandle,
     path: &str,
-    body: &[u8],
-) -> Result<(), crate::disc::block::Error> {
+    total_len: u64,
+) -> Result<HttpFileStream, crate::r::stream::HvStreamError> {
     let info = disk.info();
     let chunk_bytes = http_file_write_chunk_bytes(&info);
     crate::log!(
         "http-stream: file write start path={} bytes={} disk_id={} kind={:?} block={} max_transfer={} chunk={} label={}\n",
         path,
-        body.len(),
+        total_len,
         info.id.raw(),
         info.kind,
         info.block_size,
@@ -55,20 +66,134 @@ async fn write_http_body_to_file(
         info.label.as_deref().unwrap_or("-"),
     );
 
-    let Some(handle) =
-        crate::r::fs::trueosfs::file_write_begin_async(disk, path, body.len() as u64).await?
-    else {
-        return Err(crate::disc::block::Error::NotReady);
+    let mut sink = crate::r::stream::TrueosFsObjectSink::new(disk);
+    let writer = sink
+        .begin(ObjectDesc {
+            key: path,
+            total_len_hint: Some(total_len),
+        })
+        .await?;
+
+    Ok(HttpFileStream {
+        sink,
+        writer,
+        total_len,
+        written: 0,
+        started: Instant::now(),
+        next_progress: HTTP_FILE_WRITE_PROGRESS_BYTES,
+        next_yield: HTTP_FILE_WRITE_YIELD_EVERY_BYTES,
+    })
+}
+
+async fn write_http_file_stream_chunk(
+    stream: &mut HttpFileStream,
+    path: &str,
+    bytes: &[u8],
+) -> Result<(), crate::r::stream::HvStreamError> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+
+    stream.writer.write_all(bytes).await?;
+    stream.written = stream.written.saturating_add(bytes.len() as u64);
+
+    if stream.written >= stream.next_progress || stream.written == stream.total_len {
+        crate::log!(
+            "http-stream: file write progress path={} written={} total={} bps={} elapsed_ms={}\n",
+            path,
+            stream.written,
+            stream.total_len,
+            http_file_write_bps(stream.written, stream.started),
+            stream.started.elapsed().as_millis(),
+        );
+        stream.next_progress = stream
+            .next_progress
+            .saturating_add(HTTP_FILE_WRITE_PROGRESS_BYTES);
+    }
+
+    if stream.written >= stream.next_yield && stream.written != stream.total_len {
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+        stream.next_yield = stream
+            .next_yield
+            .saturating_add(HTTP_FILE_WRITE_YIELD_EVERY_BYTES);
+    }
+
+    Ok(())
+}
+
+async fn finish_http_file_stream(
+    mut stream: HttpFileStream,
+    path: &str,
+) -> Result<(), crate::r::stream::HvStreamError> {
+    crate::log!(
+        "http-stream: file write flush path={} written={} elapsed_ms={}\n",
+        path,
+        stream.written,
+        stream.started.elapsed().as_millis(),
+    );
+
+    stream.writer.flush().await?;
+    stream.sink.commit().await?;
+
+    crate::log!(
+        "http-stream: file write committed path={} bytes={} bps={} elapsed_ms={}\n",
+        path,
+        stream.written,
+        http_file_write_bps(stream.written, stream.started),
+        stream.started.elapsed().as_millis(),
+    );
+    Ok(())
+}
+
+async fn abort_http_file_stream(stream: &mut Option<HttpFileStream>, path: &str) {
+    let Some(mut stream) = stream.take() else {
+        return;
     };
 
-    let started = Instant::now();
-    let mut written = 0u64;
-    let mut next_progress = HTTP_FILE_WRITE_PROGRESS_BYTES;
-    let mut next_yield = HTTP_FILE_WRITE_YIELD_EVERY_BYTES;
+    let written = stream.written;
+    match stream.sink.abort().await {
+        Ok(()) => {
+            crate::log!("http-stream: file write aborted path={} written={}\n", path, written,);
+        }
+        Err(err) => {
+            crate::log!(
+                "http-stream: file write abort failed path={} written={} err={:?}\n",
+                path,
+                written,
+                err,
+            );
+        }
+    }
+}
 
+fn extend_buffer_capped(buf: &mut Vec<u8>, data: &[u8], cap: usize) -> bool {
+    if data.is_empty() {
+        return false;
+    }
+    if buf.len() >= cap {
+        return true;
+    }
+
+    let room = cap - buf.len();
+    let take = data.len().min(room);
+    buf.extend_from_slice(&data[..take]);
+    take < data.len()
+}
+
+async fn write_http_body_to_file(
+    disk: crate::disc::block::DeviceHandle,
+    path: &str,
+    body: &[u8],
+) -> Result<(), crate::disc::block::Error> {
+    let chunk_bytes = http_file_write_chunk_bytes(&disk.info());
+    let mut stream = begin_http_file_stream(disk, path, body.len() as u64)
+        .await
+        .map_err(|_| crate::disc::block::Error::Io)?;
     for chunk in body.chunks(chunk_bytes) {
-        if let Err(err) = crate::r::fs::trueosfs::file_write_chunk_async(handle, chunk).await {
-            let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+        if let Err(err) = write_http_file_stream_chunk(&mut stream, path, chunk).await {
+            let written = stream.written;
+            let mut active = Some(stream);
+            abort_http_file_stream(&mut active, path).await;
             crate::log!(
                 "http-stream: file write chunk failed path={} offset={} chunk={} err={:?}\n",
                 path,
@@ -76,56 +201,13 @@ async fn write_http_body_to_file(
                 chunk.len(),
                 err,
             );
-            return Err(err);
-        }
-
-        written = written.saturating_add(chunk.len() as u64);
-        if written >= next_progress || written == body.len() as u64 {
-            crate::log!(
-                "http-stream: file write progress path={} written={} total={} bps={} elapsed_ms={}\n",
-                path,
-                written,
-                body.len(),
-                http_file_write_bps(written, started),
-                started.elapsed().as_millis(),
-            );
-            next_progress = next_progress.saturating_add(HTTP_FILE_WRITE_PROGRESS_BYTES);
-        }
-
-        if written >= next_yield && written != body.len() as u64 {
-            Timer::after(EmbassyDuration::from_millis(1)).await;
-            next_yield = next_yield.saturating_add(HTTP_FILE_WRITE_YIELD_EVERY_BYTES);
+            return Err(crate::disc::block::Error::Io);
         }
     }
 
-    crate::log!(
-        "http-stream: file write flush path={} written={} elapsed_ms={}\n",
-        path,
-        written,
-        started.elapsed().as_millis(),
-    );
-
-    match crate::r::fs::trueosfs::file_write_finish_async(handle).await {
-        Ok(()) => {
-            crate::log!(
-                "http-stream: file write committed path={} bytes={} bps={} elapsed_ms={}\n",
-                path,
-                written,
-                http_file_write_bps(written, started),
-                started.elapsed().as_millis(),
-            );
-            Ok(())
-        }
-        Err(err) => {
-            crate::log!(
-                "http-stream: file write finish failed path={} written={} err={:?}\n",
-                path,
-                written,
-                err,
-            );
-            Err(err)
-        }
-    }
+    finish_http_file_stream(stream, path)
+        .await
+        .map_err(|_| crate::disc::block::Error::Io)
 }
 
 async fn request_http_to_file(
@@ -189,13 +271,18 @@ async fn request_http_to_file(
 
     let mut tcp_handle: Option<api::NetHandle> = None;
     let mut sent_request = false;
-    let mut rx: Vec<u8> = Vec::new();
-    let mut truncated = false;
+    let mut header_buf: Vec<u8> = Vec::new();
+    let mut buffered_headers: Option<Vec<u8>> = None;
+    let mut buffered_body: Vec<u8> = Vec::new();
+    let mut buffered_kind: Option<HttpBodyKind> = None;
+    let mut buffered_truncated = false;
+    let mut file_stream: Option<HttpFileStream> = None;
+    let mut content_remaining: Option<usize> = None;
     let timeout_window = EmbassyDuration::from_millis(timeout_ms as u64);
     let mut last_progress = Instant::now();
 
     loop {
-        for _ in 0..32 {
+        for _ in 0..256 {
             let Some(ev) = net.pop_event() else { break };
             match ev {
                 api::Event::Opened { handle, kind } => {
@@ -251,22 +338,81 @@ async fn request_http_to_file(
                     if !data.is_empty() {
                         last_progress = Instant::now();
                     }
-                    if rx.len() < max_rx {
-                        let room = max_rx - rx.len();
-                        let take = data.len().min(room);
-                        rx.extend_from_slice(&data[..take]);
-                        if take < data.len() {
-                            truncated = true;
+
+                    if let Some(stream) = file_stream.as_mut() {
+                        let remaining = content_remaining.as_mut().expect("content-length state");
+                        let take = data.len().min(*remaining);
+                        if take > 0
+                            && let Err(err) =
+                                write_http_file_stream_chunk(stream, path, &data[..take]).await
+                        {
+                            crate::log!(
+                                "http-stream: content-length stream failed path={} written={} chunk={} err={:?}\n",
+                                path,
+                                stream.written,
+                                take,
+                                err,
+                            );
+                            abort_http_file_stream(&mut file_stream, path).await;
+                            if let Some(h) = tcp_handle {
+                                let _ = net.submit(api::Command::Close { handle: h });
+                            }
+                            return Err(HttpFetchError::TimedOut);
                         }
-                    } else {
-                        truncated = true;
+
+                        *remaining = remaining.saturating_sub(take);
+                        if *remaining == 0 {
+                            if let Some(h) = tcp_handle {
+                                let _ = net.submit(api::Command::Close { handle: h });
+                            }
+                            let Some(stream) = file_stream.take() else {
+                                return Err(HttpFetchError::TimedOut);
+                            };
+                            if let Err(err) = finish_http_file_stream(stream, path).await {
+                                crate::log!(
+                                    "http-stream: content-length finish failed path={} err={:?}\n",
+                                    path,
+                                    err,
+                                );
+                                return Err(HttpFetchError::TimedOut);
+                            }
+                            return Ok(());
+                        }
+                        continue;
                     }
 
-                    if let Some(hdr_end) = find_http_header_end(&rx) {
-                        let headers = &rx[..hdr_end];
-                        let status = parse_http_status(headers).unwrap_or(0);
+                    if let Some(kind) = buffered_kind {
+                        if extend_buffer_capped(&mut buffered_body, data, max_rx) {
+                            buffered_truncated = true;
+                        }
+
+                        if matches!(kind, HttpBodyKind::Chunked)
+                            && let Some(body) = super::http::decode_http_chunked(&buffered_body)
+                        {
+                            if let Some(h) = tcp_handle {
+                                let _ = net.submit(api::Command::Close { handle: h });
+                            }
+                            if buffered_truncated {
+                                return Err(HttpFetchError::ResponseTooLarge);
+                            }
+                            write_http_body_to_file(disk, path, body.as_slice())
+                                .await
+                                .map_err(|_| HttpFetchError::TimedOut)?;
+                            return Ok(());
+                        }
+                        continue;
+                    }
+
+                    header_buf.extend_from_slice(data);
+                    if let Some(hdr_end) = find_http_header_end(&header_buf) {
+                        let headers = header_buf[..hdr_end].to_vec();
+                        let initial_body = header_buf[hdr_end..].to_vec();
+                        header_buf.clear();
+
+                        let status = parse_http_status(headers.as_slice()).unwrap_or(0);
                         if is_redirect_status(status)
-                            && let Some(next) = redirect_url_from_location(&parsed, headers)
+                            && let Some(next) =
+                                redirect_url_from_location(&parsed, headers.as_slice())
                         {
                             if let Some(h) = tcp_handle {
                                 let _ = net.submit(api::Command::Close { handle: h });
@@ -280,73 +426,126 @@ async fn request_http_to_file(
                             return Err(HttpFetchError::HttpStatus(status));
                         }
 
-                        if let Some(head) = parse_http_head(headers) {
-                            match head.body {
-                                HttpBodyKind::ContentLength(len) => {
-                                    let body_len = rx.len().saturating_sub(hdr_end);
-                                    if body_len >= len {
-                                        if let Some(h) = tcp_handle {
-                                            let _ = net.submit(api::Command::Close { handle: h });
-                                        }
-                                        if truncated {
-                                            return Err(HttpFetchError::ResponseTooLarge);
-                                        }
-                                        write_http_body_to_file(
-                                            disk,
+                        let Some(head) = parse_http_head(headers.as_slice()) else {
+                            return Err(HttpFetchError::TimedOut);
+                        };
+
+                        match head.body {
+                            HttpBodyKind::ContentLength(len) => {
+                                let mut stream = begin_http_file_stream(disk, path, len as u64)
+                                    .await
+                                    .map_err(|err| {
+                                        crate::log!(
+                                            "http-stream: content-length begin failed path={} len={} err={:?}\n",
                                             path,
-                                            &rx[hdr_end..hdr_end + len],
-                                        )
+                                            len,
+                                            err,
+                                        );
+                                        HttpFetchError::TimedOut
+                                    })?;
+
+                                let take = initial_body.len().min(len);
+                                if take > 0
+                                    && let Err(err) = write_http_file_stream_chunk(
+                                        &mut stream,
+                                        path,
+                                        &initial_body[..take],
+                                    )
+                                    .await
+                                {
+                                    crate::log!(
+                                        "http-stream: content-length initial write failed path={} chunk={} err={:?}\n",
+                                        path,
+                                        take,
+                                        err,
+                                    );
+                                    let mut active = Some(stream);
+                                    abort_http_file_stream(&mut active, path).await;
+                                    if let Some(h) = tcp_handle {
+                                        let _ = net.submit(api::Command::Close { handle: h });
+                                    }
+                                    return Err(HttpFetchError::TimedOut);
+                                }
+
+                                let remaining = len.saturating_sub(take);
+                                if remaining == 0 {
+                                    if let Some(h) = tcp_handle {
+                                        let _ = net.submit(api::Command::Close { handle: h });
+                                    }
+                                    if let Err(err) = finish_http_file_stream(stream, path).await {
+                                        crate::log!(
+                                            "http-stream: content-length immediate finish failed path={} err={:?}\n",
+                                            path,
+                                            err,
+                                        );
+                                        return Err(HttpFetchError::TimedOut);
+                                    }
+                                    return Ok(());
+                                }
+
+                                file_stream = Some(stream);
+                                content_remaining = Some(remaining);
+                            }
+                            HttpBodyKind::Chunked | HttpBodyKind::UntilClose => {
+                                buffered_headers = Some(headers);
+                                buffered_kind = Some(head.body);
+                                if extend_buffer_capped(&mut buffered_body, &initial_body, max_rx) {
+                                    buffered_truncated = true;
+                                }
+
+                                if matches!(head.body, HttpBodyKind::Chunked)
+                                    && let Some(body) =
+                                        super::http::decode_http_chunked(&buffered_body)
+                                {
+                                    if let Some(h) = tcp_handle {
+                                        let _ = net.submit(api::Command::Close { handle: h });
+                                    }
+                                    if buffered_truncated {
+                                        return Err(HttpFetchError::ResponseTooLarge);
+                                    }
+                                    write_http_body_to_file(disk, path, body.as_slice())
                                         .await
                                         .map_err(|_| HttpFetchError::TimedOut)?;
-                                        return Ok(());
-                                    }
-                                }
-                                HttpBodyKind::Chunked => {
-                                    if let Some(body) =
-                                        super::http::decode_http_chunked(&rx[hdr_end..])
-                                    {
-                                        if let Some(h) = tcp_handle {
-                                            let _ = net.submit(api::Command::Close { handle: h });
-                                        }
-                                        if truncated {
-                                            return Err(HttpFetchError::ResponseTooLarge);
-                                        }
-                                        write_http_body_to_file(disk, path, body.as_slice())
-                                            .await
-                                            .map_err(|_| HttpFetchError::TimedOut)?;
-                                        return Ok(());
-                                    }
+                                    return Ok(());
                                 }
                             }
                         }
+                    } else if header_buf.len() > max_rx {
+                        if let Some(h) = tcp_handle {
+                            let _ = net.submit(api::Command::Close { handle: h });
+                        }
+                        return Err(HttpFetchError::ResponseTooLarge);
                     }
                 }
                 api::Event::Closed { handle } => {
                     if tcp_handle == Some(handle) {
-                        let hdr_end = find_http_header_end(&rx).unwrap_or(0);
-                        let headers = &rx[..hdr_end.min(rx.len())];
+                        if file_stream.is_some() {
+                            abort_http_file_stream(&mut file_stream, path).await;
+                            return Err(HttpFetchError::TimedOut);
+                        }
+
+                        let Some(kind) = buffered_kind else {
+                            return Err(HttpFetchError::TimedOut);
+                        };
+                        if buffered_truncated {
+                            return Err(HttpFetchError::ResponseTooLarge);
+                        }
+
+                        let headers = buffered_headers.as_deref().unwrap_or(&[]);
                         let status = parse_http_status(headers).unwrap_or(0);
                         if status >= 400 {
                             return Err(HttpFetchError::HttpStatus(status));
                         }
-                        if truncated {
-                            return Err(HttpFetchError::ResponseTooLarge);
-                        }
-                        if hdr_end == 0 {
-                            return Err(HttpFetchError::TimedOut);
-                        }
 
-                        let body = &rx[hdr_end..];
-                        let final_body = if super::http::header_contains_token(
-                            headers,
-                            b"transfer-encoding",
-                            b"chunked",
-                        ) {
-                            super::http::decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
-                        } else if let Some(len) = header_parse_content_length(headers) {
-                            body.get(..len).unwrap_or(body).to_vec()
-                        } else {
-                            body.to_vec()
+                        let final_body = match kind {
+                            HttpBodyKind::Chunked => {
+                                super::http::decode_http_chunked(buffered_body.as_slice())
+                                    .unwrap_or_else(|| buffered_body.clone())
+                            }
+                            HttpBodyKind::UntilClose => buffered_body.clone(),
+                            HttpBodyKind::ContentLength(len) => {
+                                buffered_body.get(..len).unwrap_or(&buffered_body).to_vec()
+                            }
                         };
                         write_http_body_to_file(disk, path, final_body.as_slice())
                             .await
@@ -359,6 +558,7 @@ async fn request_http_to_file(
         }
 
         if Instant::now().saturating_duration_since(last_progress) >= timeout_window {
+            abort_http_file_stream(&mut file_stream, path).await;
             if let Some(h) = tcp_handle {
                 let _ = net.submit(api::Command::Close { handle: h });
             }

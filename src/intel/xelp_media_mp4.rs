@@ -352,6 +352,10 @@ fn parse_avcc<'a>(bytes: &'a [u8]) -> Option<AvccSummary<'a>> {
     })
 }
 
+pub(crate) fn parse_avcc_summary<'a>(bytes: &'a [u8]) -> Option<AvccSummary<'a>> {
+    parse_avcc(bytes)
+}
+
 fn parse_stsd<'a>(bytes: &'a [u8]) -> Option<(u16, u16, AvccSummary<'a>)> {
     let entry_count = be_u32(bytes, 4)?;
     if entry_count == 0 {

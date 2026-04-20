@@ -1,7 +1,7 @@
 extern crate alloc;
 
-use super::http::{self, HttpFetchError};
 use super::dns::{self, DnsConfig};
+use super::http::{self, HttpFetchError};
 use super::https_limits::HttpsLimits;
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
@@ -785,6 +785,7 @@ static NET_FETCH_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Default)]
 struct InflightFetch {
+    owner_op_id: u32,
     followers: Vec<u32>,
 }
 
@@ -806,8 +807,63 @@ async fn net_fetch_acquire_slot() {
     }
 }
 
+async fn net_fetch_acquire_slot_while<F>(is_needed: F) -> bool
+where
+    F: Fn() -> bool,
+{
+    loop {
+        if !is_needed() {
+            return false;
+        }
+
+        let cur = NET_FETCH_ACTIVE.load(Ordering::Relaxed);
+        if cur < NET_FETCH_MAX_CONCURRENCY
+            && NET_FETCH_ACTIVE
+                .compare_exchange(cur, cur + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            if !is_needed() {
+                net_fetch_release_slot();
+                return false;
+            }
+            return true;
+        }
+
+        // Cooperative backoff.
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+}
+
 fn net_fetch_release_slot() {
     NET_FETCH_ACTIVE.fetch_sub(1, Ordering::AcqRel);
+}
+
+fn inflight_fetch_has_live_interest(
+    owner_op_id: u32,
+    followers: &[u32],
+    results: &BTreeMap<u32, Option<i32>>,
+) -> bool {
+    results.contains_key(&owner_op_id) || followers.iter().any(|id| results.contains_key(id))
+}
+
+fn net_fetch_file_task_has_interest(op_id: u32, key: &str) -> bool {
+    let (owner_op_id, followers) = {
+        let inflight = CABI_NET_FETCH_INFLIGHT.lock();
+        let Some(entry) = inflight.get(key) else {
+            return false;
+        };
+        if entry.owner_op_id != op_id {
+            return false;
+        }
+        (entry.owner_op_id, entry.followers.clone())
+    };
+
+    let results = CABI_NET_FETCH_RESULTS.lock();
+    inflight_fetch_has_live_interest(owner_op_id, followers.as_slice(), &results)
+}
+
+fn net_fetch_bytes_op_is_live(op_id: u32) -> bool {
+    CABI_NET_FETCH_BYTES_RESULTS.lock().contains_key(&op_id)
 }
 
 async fn cabi_net_fetch_task_inner(
@@ -819,8 +875,17 @@ async fn cabi_net_fetch_task_inner(
     max_bytes: usize,
 ) {
     let t0 = Instant::now();
-    net_fetch_acquire_slot().await;
+    if !net_fetch_acquire_slot_while(|| net_fetch_file_task_has_interest(op_id, key.as_str())).await
+    {
+        crate::log!("net-fetch: skipped key={} reason=no_interest_before_slot\n", key);
+        return;
+    }
     let t_fetch_start = Instant::now();
+    if !net_fetch_file_task_has_interest(op_id, key.as_str()) {
+        net_fetch_release_slot();
+        crate::log!("net-fetch: skipped key={} reason=no_interest_after_slot\n", key);
+        return;
+    }
     let rc =
         match fetch_https_to_file_async(url.as_str(), path.as_str(), timeout_ms, max_bytes).await {
             Ok(()) => 0,
@@ -908,8 +973,16 @@ async fn cabi_net_fetch_bytes_task_inner(
     max_bytes: usize,
 ) {
     let t0 = Instant::now();
-    net_fetch_acquire_slot().await;
+    if !net_fetch_acquire_slot_while(|| net_fetch_bytes_op_is_live(op_id)).await {
+        crate::log!("net-fetch-bytes: skipped op_id={} reason=no_interest_before_slot\n", op_id);
+        return;
+    }
     let t_fetch_start = Instant::now();
+    if !net_fetch_bytes_op_is_live(op_id) {
+        net_fetch_release_slot();
+        crate::log!("net-fetch-bytes: skipped op_id={} reason=no_interest_after_slot\n", op_id);
+        return;
+    }
     let (rc, body) = match fetch_https_body_async(url.as_str(), timeout_ms, max_bytes).await {
         Ok(body) => (0, body),
         Err(code) => (fetch_error_to_code(code), Vec::new()),
@@ -1098,10 +1171,7 @@ async fn post_json_body_async(
         let headers_with_auth = [
             ("Content-Type", "application/json"),
             ("Accept", "application/json"),
-            (
-                "Authorization",
-                auth_header.as_deref().unwrap_or_default(),
-            ),
+            ("Authorization", auth_header.as_deref().unwrap_or_default()),
         ];
         let headers_without_auth = [
             ("Content-Type", "application/json"),
@@ -4079,6 +4149,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
         inflight.insert(
             key.clone(),
             InflightFetch {
+                owner_op_id: op_id,
                 followers: Vec::new(),
             },
         );
@@ -4379,8 +4450,15 @@ pub extern "C" fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32 {
     // (Leader tasks may still complete; they will simply skip removed result slots.)
     {
         let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
-        for (_k, v) in inflight.iter_mut() {
+        let mut dead_keys: Vec<String> = Vec::new();
+        for (k, v) in inflight.iter_mut() {
             v.followers.retain(|&id| id != op_id);
+            if !inflight_fetch_has_live_interest(v.owner_op_id, v.followers.as_slice(), &map) {
+                dead_keys.push(k.clone());
+            }
+        }
+        for key in dead_keys {
+            inflight.remove(&key);
         }
     }
     0

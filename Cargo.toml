@@ -15,6 +15,7 @@ embassy-executor = { version = "0.10.0", default-features = false, features = ["
 embassy-sync = { version = "0.8.0", default-features = false }
 embassy-time = { version = "0.5.1", default-features = false, features = ["tick-hz-1_000"] }
 embassy-time-driver = { version = "0.2.2", default-features = false }
+embedded-io-async = { version = "0.7.0", default-features = false }
 heapless = { version = "0.9", default-features = false }
 limine = { version = "0.6", default-features = false }
 acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"] }
