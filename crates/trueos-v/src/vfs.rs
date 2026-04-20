@@ -92,6 +92,15 @@ pub fn write_file(path: &[u8], data: &[u8]) -> Result<(), i32> {
 }
 
 #[inline]
+pub fn create_dir_all(path: &[u8]) -> Result<(), i32> {
+    let rc = unsafe { vcabi::trueos_cabi_fs_create_dir_all(path.as_ptr(), path.len()) };
+    if rc != 0 {
+        return Err(rc);
+    }
+    Ok(())
+}
+
+#[inline]
 pub fn write_file_utf8(path: &[u8], data: &str) -> Result<(), i32> {
     write_file(path, data.as_bytes())
 }

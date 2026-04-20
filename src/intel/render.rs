@@ -2313,6 +2313,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
             return false;
         }
     };
+    log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name);
 
     intel_render_verbose_log!(
         "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
@@ -4756,6 +4757,76 @@ fn upload_stage_code(
         );
     }
     Ok(())
+}
+
+fn shader_word_signature(words: &[u32]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for &word in words {
+        hash ^= word as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn log_uploaded_triangle_shader_verification(
+    warm: RenderWarmState,
+    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    shader_layout: TriangleShaderLayout,
+    submit_name: &'static str,
+) {
+    let uploaded_vs = unsafe {
+        core::slice::from_raw_parts(
+            warm.draw_state_virt.add(shader_layout.vs.code_offset_bytes as usize) as *const u32,
+            pipeline.vs.code.len(),
+        )
+    };
+    let uploaded_ps = unsafe {
+        core::slice::from_raw_parts(
+            warm.draw_state_virt.add(shader_layout.ps.code_offset_bytes as usize) as *const u32,
+            pipeline.ps.code.len(),
+        )
+    };
+    let vs_baked_sig = shader_word_signature(pipeline.vs.code);
+    let vs_uploaded_sig = shader_word_signature(uploaded_vs);
+    let ps_baked_sig = shader_word_signature(pipeline.ps.code);
+    let ps_uploaded_sig = shader_word_signature(uploaded_ps);
+    let vs_first = pipeline.vs.code.first().copied().unwrap_or(0);
+    let vs_uploaded_first = uploaded_vs.first().copied().unwrap_or(0);
+    let vs_last = pipeline.vs.code.last().copied().unwrap_or(0);
+    let vs_uploaded_last = uploaded_vs.last().copied().unwrap_or(0);
+    if submit_name == "vs-draw-frontier" {
+        intel_render_focus_log!(
+            "intel/render: {} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
+            submit_name,
+            crate::intel::shader::triangle_pipeline_note(),
+            (pipeline.vs.code == uploaded_vs) as u8,
+            vs_baked_sig,
+            vs_uploaded_sig,
+            vs_first,
+            vs_uploaded_first,
+            vs_last,
+            vs_uploaded_last,
+            (pipeline.ps.code == uploaded_ps) as u8,
+            ps_baked_sig,
+            ps_uploaded_sig,
+        );
+    } else {
+        intel_render_verbose_log!(
+            "intel/render: {} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
+            submit_name,
+            crate::intel::shader::triangle_pipeline_note(),
+            (pipeline.vs.code == uploaded_vs) as u8,
+            vs_baked_sig,
+            vs_uploaded_sig,
+            vs_first,
+            vs_uploaded_first,
+            vs_last,
+            vs_uploaded_last,
+            (pipeline.ps.code == uploaded_ps) as u8,
+            ps_baked_sig,
+            ps_uploaded_sig,
+        );
+    }
 }
 
 fn stage_end(offset_bytes: usize, size_bytes: usize) -> Option<usize> {
