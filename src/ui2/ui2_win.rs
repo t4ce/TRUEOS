@@ -381,6 +381,30 @@ pub(super) fn handle_system_button_action(
     }
 }
 
+fn toggle_vm_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
+    let vm_origin_hint = state
+        .windows
+        .iter()
+        .find(|window| window.id == window_id)
+        .map(|window| window.vm_origin_hint)
+        .unwrap_or(false);
+    if !vm_origin_hint {
+        return false;
+    }
+
+    let hv_status = crate::hv::status();
+    if hv_status.vm1_running || hv_status.vm1_starting {
+        if !crate::hv::request_preserve_vm1() {
+            return false;
+        }
+    } else {
+        request_vm1_resume();
+    }
+
+    state.compose_reason = "toggle-vm-window";
+    note_window_dirty(state, window_id, "toggle-vm-window")
+}
+
 fn preserve_vm_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
     let vm_origin_hint = state
         .windows
@@ -398,6 +422,16 @@ fn preserve_vm_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
 }
 
 fn close_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
+    let vm_origin_hint = state
+        .windows
+        .iter()
+        .find(|window| window.id == window_id)
+        .map(|window| window.vm_origin_hint)
+        .unwrap_or(false);
+    if vm_origin_hint {
+        return toggle_vm_window_in_state(state, window_id);
+    }
+
     let task_index = state
         .windows
         .iter()
