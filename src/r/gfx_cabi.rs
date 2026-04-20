@@ -765,6 +765,25 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_fs_exists(path_ptr: *const u8, path_len: usize) -> i32 {
+        if path_ptr.is_null() && path_len != 0 {
+            return FS_ERR_BAD_PARAM;
+        }
+        if path_len > QJS_ASYNC_FS_MAX_PATH {
+            return FS_ERR_TOO_LARGE;
+        }
+        let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+        let Ok(path) = core::str::from_utf8(path_bytes) else {
+            return FS_ERR_BAD_UTF8;
+        };
+        match super::kfs::exists(path) {
+            Ok(true) => 1,
+            Ok(false) => 0,
+            Err(e) => fs_error_to_code(e),
+        }
+    }
+
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32 {
         if path_ptr.is_null() && path_len != 0 {
             return FS_ERR_BAD_PARAM;

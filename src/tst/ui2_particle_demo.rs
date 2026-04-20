@@ -10,8 +10,7 @@ use crate::gfx::particle::{ParticleSnapshot, ParticleSystem};
 use crate::gfx::svg::SvgTextureInfo;
 
 const UI2_PARTICLE_DEMO_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Particle.get();
-const UI2_PARTICLE_DEMO_SPRITE_TEX_ID: u32 =
-    crate::tst_ui2_ids::Ui2DemoTexId::ParticleSprite.get();
+const UI2_PARTICLE_DEMO_SPRITE_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::ParticleSprite.get();
 const UI2_PARTICLE_DEMO_RT_W: u32 = 512;
 const UI2_PARTICLE_DEMO_RT_H: u32 = 320;
 const UI2_PARTICLE_DEMO_WINDOW_X: f32 = 640.0;

@@ -99,10 +99,9 @@ fn service_vm_resume_request(spawner: &Spawner) {
             bytes
         )),
         Err(crate::hv::RestoreError::MissingFile) => {}
-        Err(err) => crate::hv::hvlogf(format_args!(
-            "ui2: vm window resume restore failed: {:?}",
-            err
-        )),
+        Err(err) => {
+            crate::hv::hvlogf(format_args!("ui2: vm window resume restore failed: {:?}", err))
+        }
     }
 
     if let Err(err) = crate::hv::start(0, spawner, &crate::shell2::UI2_SHELL_BACKEND, None) {

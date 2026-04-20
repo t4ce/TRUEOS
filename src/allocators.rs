@@ -18,7 +18,8 @@ const HV_GUEST_HEAP_CANDIDATES: [usize; 4] = [
 ];
 
 static mut FALLBACK_HEAP: [u8; FALLBACK_HEAP_SIZE] = [0; FALLBACK_HEAP_SIZE];
-static mut HV_GUEST_FALLBACK_HEAP: [u8; HV_GUEST_HEAP_FALLBACK_SIZE] = [0; HV_GUEST_HEAP_FALLBACK_SIZE];
+static mut HV_GUEST_FALLBACK_HEAP: [u8; HV_GUEST_HEAP_FALLBACK_SIZE] =
+    [0; HV_GUEST_HEAP_FALLBACK_SIZE];
 
 const ALLOC_TRACE_STAGE_ENTRY: u32 = 1;
 const ALLOC_TRACE_STAGE_BLOCK: u32 = 2;
@@ -70,11 +71,7 @@ unsafe fn read_return_address(depth: usize) -> usize {
         frame = (*frame) as *const usize;
         remaining -= 1;
     }
-    if frame.is_null() {
-        0
-    } else {
-        *frame.add(1)
-    }
+    if frame.is_null() { 0 } else { *frame.add(1) }
 }
 
 #[inline]
@@ -89,10 +86,7 @@ fn trace_alloc_entry(trace_enabled: bool, layout: Layout, head: Option<NonNull<F
     ALLOC_TRACE_SIZE.store(layout.size(), Ordering::Release);
     ALLOC_TRACE_ALIGN.store(layout.align(), Ordering::Release);
     ALLOC_TRACE_STAGE.store(ALLOC_TRACE_STAGE_ENTRY, Ordering::Release);
-    ALLOC_TRACE_HEAD.store(
-        head.map(|node| node.as_ptr() as usize).unwrap_or(0),
-        Ordering::Release,
-    );
+    ALLOC_TRACE_HEAD.store(head.map(|node| node.as_ptr() as usize).unwrap_or(0), Ordering::Release);
     ALLOC_TRACE_BLOCK_PTR.store(0, Ordering::Release);
     ALLOC_TRACE_BLOCK_SIZE.store(0, Ordering::Release);
     ALLOC_TRACE_BLOCK_NEXT.store(0, Ordering::Release);
@@ -114,10 +108,8 @@ fn trace_alloc_block(
     ALLOC_TRACE_STAGE.store(ALLOC_TRACE_STAGE_BLOCK, Ordering::Release);
     ALLOC_TRACE_BLOCK_PTR.store(block_start, Ordering::Release);
     ALLOC_TRACE_BLOCK_SIZE.store(block.size, Ordering::Release);
-    ALLOC_TRACE_BLOCK_NEXT.store(
-        block.next.map(|next| next.as_ptr() as usize).unwrap_or(0),
-        Ordering::Release,
-    );
+    ALLOC_TRACE_BLOCK_NEXT
+        .store(block.next.map(|next| next.as_ptr() as usize).unwrap_or(0), Ordering::Release);
     ALLOC_TRACE_PAYLOAD.store(payload_start, Ordering::Release);
     ALLOC_TRACE_ALIGNED_USED.store(aligned_used, Ordering::Release);
 }

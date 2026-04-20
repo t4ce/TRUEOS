@@ -69,6 +69,34 @@ pub fn write_abort(handle: u32) -> Result<(), i32> {
 }
 
 #[inline]
+pub fn exists(path: &[u8]) -> Result<bool, i32> {
+    let rc = unsafe { vcabi::trueos_cabi_fs_exists(path.as_ptr(), path.len()) };
+    if rc < 0 {
+        return Err(rc);
+    }
+    Ok(rc != 0)
+}
+
+#[inline]
+pub fn write_file(path: &[u8], data: &[u8]) -> Result<(), i32> {
+    let handle = write_begin(path, data.len() as u64)?;
+    if let Err(rc) = write_chunk(handle, data) {
+        let _ = write_abort(handle);
+        return Err(rc);
+    }
+    if let Err(rc) = write_finish(handle) {
+        let _ = write_abort(handle);
+        return Err(rc);
+    }
+    Ok(())
+}
+
+#[inline]
+pub fn write_file_utf8(path: &[u8], data: &str) -> Result<(), i32> {
+    write_file(path, data.as_bytes())
+}
+
+#[inline]
 pub fn remove(path: &[u8]) -> Result<(), i32> {
     let rc = unsafe { vcabi::trueos_cabi_fs_remove(path.as_ptr(), path.len()) };
     if rc != 0 {
@@ -97,6 +125,12 @@ pub fn trueosfs_primary_html_tree(max_entries: u32) -> Result<Vec<u8>, i32> {
 }
 
 #[inline]
+pub fn trueosfs_primary_html_tree_utf8(max_entries: u32) -> Result<String, i32> {
+    let bytes = trueosfs_primary_html_tree(max_entries)?;
+    String::from_utf8(bytes).map_err(|_| -1)
+}
+
+#[inline]
 pub fn trueosfs_json_all(max_entries: u32) -> Result<Vec<u8>, i32> {
     let len =
         unsafe { vcabi::trueos_cabi_trueosfs_json_all(max_entries, core::ptr::null_mut(), 0) };
@@ -112,4 +146,10 @@ pub fn trueosfs_json_all(max_entries: u32) -> Result<Vec<u8>, i32> {
     }
     bytes.truncate(got as usize);
     Ok(bytes)
+}
+
+#[inline]
+pub fn trueosfs_json_all_utf8(max_entries: u32) -> Result<String, i32> {
+    let bytes = trueosfs_json_all(max_entries)?;
+    String::from_utf8(bytes).map_err(|_| -1)
 }

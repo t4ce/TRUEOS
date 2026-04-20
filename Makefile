@@ -92,7 +92,7 @@ QEMU_ISO_DBG = $(QEMU_BIN) $(QEMU_ISO_FLAGS_DBG) $(QEMU_USB_FLAGS)
 
 IMG_SIZE ?= 1G
 
-.PHONY: kernel blueprints hello-world-bp localcoder-bp artifacts kernel-stages iso iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed
+.PHONY: kernel blueprints hello-world-bp localcoder-bp artifacts kernel-stages iso iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
 
 images: disk.img nvme.img
 
@@ -218,6 +218,9 @@ dbg-vscode: snipe iso-debug
 # attached for the kernel to probe and mount.
 run: snipe iso-debug
 	@($(QEMU_ISO_WITH_NVME) & $(SERIAL_CONSOLE_CMD))
+
+lc:
+	@./lc $(ARGS)
 
 run-with-nvme: snipe iso-debug
 	@($(QEMU_ISO_WITH_NVME) & $(SERIAL_CONSOLE_CMD))

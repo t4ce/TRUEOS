@@ -101,10 +101,7 @@ fn main() {
     });
 
     if !violations.is_empty() {
-        panic!(
-            "trueos-vm guest boundary violation(s):\n{}",
-            violations.join("\n")
-        );
+        panic!("trueos-vm guest boundary violation(s):\n{}", violations.join("\n"));
     }
 }
 

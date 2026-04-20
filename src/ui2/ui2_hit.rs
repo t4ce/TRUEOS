@@ -273,10 +273,8 @@ fn hit_entry_intersects_cursor(entry: &Ui2HitEntry, cursor_x: f32, cursor_y: f32
     let rect =
         Cuboid::new(Vector::new((entry.rect.w * 0.5).max(0.5), (entry.rect.h * 0.5).max(0.5)));
     let cursor_iso = Pose::translation(cursor_x, cursor_y);
-    let rect_iso = Pose::translation(
-        entry.rect.x + (entry.rect.w * 0.5),
-        entry.rect.y + (entry.rect.h * 0.5),
-    );
+    let rect_iso =
+        Pose::translation(entry.rect.x + (entry.rect.w * 0.5), entry.rect.y + (entry.rect.h * 0.5));
     matches!(query::intersection_test(&cursor_iso, &cursor, &rect_iso, &rect), Ok(true))
 }
 

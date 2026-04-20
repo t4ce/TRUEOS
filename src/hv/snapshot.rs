@@ -7,8 +7,7 @@ pub const VM1_SNAPSHOT_MAGIC: u32 = 0x3153_4D56; // "VMS1"
 pub const VM1_SNAPSHOT_VERSION: u32 = 1;
 pub const VM1_SNAPSHOT_PATH: &str = "vm/vm1.snapshot";
 pub const VM1_ID: u8 = 0;
-pub const GUEST_SNAPSHOT_PAGE_COUNT: usize =
-    6 + GUEST_LOW_PT_COUNT + GUEST_HIGH_IMAGE_PT_COUNT;
+pub const GUEST_SNAPSHOT_PAGE_COUNT: usize = 6 + GUEST_LOW_PT_COUNT + GUEST_HIGH_IMAGE_PT_COUNT;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -101,10 +100,7 @@ pub fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
             push_guest_page(&mut out, core::ptr::addr_of!(GUEST_IMAGE_PTS[i].0));
         }
         push_guest_page(&mut out, core::ptr::addr_of!(GUEST_CODE_PT.0));
-        push_bytes(
-            &mut out,
-            guest_stack,
-        );
+        push_bytes(&mut out, guest_stack);
         push_bytes(
             &mut out,
             core::slice::from_raw_parts(meta.code_base as *const u8, meta.code_len as usize),

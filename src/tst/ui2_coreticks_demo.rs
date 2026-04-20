@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::hint::spin_loop;
-use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 

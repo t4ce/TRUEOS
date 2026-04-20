@@ -1,6 +1,6 @@
 use super::hvlogf;
-use spin::Mutex;
 use crate::phys::HeapArena;
+use spin::Mutex;
 
 // Guest memory constants
 pub const PAGE_SIZE_4K: usize = 4096;
@@ -286,9 +286,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
     let eptp = (pml4_pa & 0x000F_FFFF_FFFF_F000) | 6 | (3 << 3);
     hvlogf(format_args!(
         "hv: vm1 reporting: ept v1 sparse map ready eptp=0x{:016X} pd_used={} pt_used={}",
-        eptp,
-        next_pd,
-        next_pt,
+        eptp, next_pd, next_pt,
     ));
     Ok(eptp)
 }
@@ -307,7 +305,9 @@ fn map_ept_identity_span(
 
     let start = page_align_down(phys_start);
     let end = page_align_up_4k(phys_start.checked_add(bytes).ok_or("ept span overflow")?);
-    if pml4_index(start) != EPT_ROOT_PML4_INDEX || pml4_index(end.saturating_sub(1)) != EPT_ROOT_PML4_INDEX {
+    if pml4_index(start) != EPT_ROOT_PML4_INDEX
+        || pml4_index(end.saturating_sub(1)) != EPT_ROOT_PML4_INDEX
+    {
         return Err("ept pml4 range");
     }
 
@@ -333,14 +333,14 @@ fn map_ept_identity_span(
         unsafe {
             (*pt)[pt_index(gpa)] = (gpa & 0x000F_FFFF_FFFF_F000) | 0x7 | (6 << 3);
         }
-        gpa = gpa.checked_add(PAGE_SIZE_4K as u64).ok_or("ept gpa overflow")?;
+        gpa = gpa
+            .checked_add(PAGE_SIZE_4K as u64)
+            .ok_or("ept gpa overflow")?;
     }
 
     hvlogf(format_args!(
         "hv: vm1 reporting: ept span {} phys=0x{:016X}..0x{:016X}",
-        label,
-        start,
-        end
+        label, start, end
     ));
     Ok(())
 }
@@ -432,7 +432,9 @@ fn active_guest_stack_arena() -> Option<HeapArena> {
 pub fn guest_stack_slice() -> Option<&'static [u8]> {
     let backing = *GUEST_STACK_BACKING.lock();
     let arena = backing.arena?;
-    Some(unsafe { core::slice::from_raw_parts(arena.virt_start as *const u8, backing.active_bytes) })
+    Some(unsafe {
+        core::slice::from_raw_parts(arena.virt_start as *const u8, backing.active_bytes)
+    })
 }
 
 pub fn guest_stack_mut_ptr() -> Option<*mut u8> {
@@ -448,8 +450,8 @@ pub fn prepare_guest_stack_bytes(requested_bytes: usize) -> Result<usize, &'stat
     let bytes = requested_bytes
         .max(GUEST_STACK_MIN_BYTES)
         .min(GUEST_STACK_MAX_BYTES);
-    let arena = crate::phys::reserve_heap_arena(bytes, PAGE_SIZE_2M as usize)
-        .ok_or("guest stack alloc")?;
+    let arena =
+        crate::phys::reserve_heap_arena(bytes, PAGE_SIZE_2M as usize).ok_or("guest stack alloc")?;
     unsafe {
         core::ptr::write_bytes(arena.virt_start as *mut u8, 0, bytes);
     }
@@ -530,16 +532,8 @@ pub fn build_guest_cr3_with_mode(
         let high_pd_pa = host_va_to_pa(guest_high_pd as u64).ok_or("guest high pd pa")?;
         let code_pt_pa = host_va_to_pa(guest_code_pt as u64).ok_or("guest code pt pa")?;
 
-        map_table_entry(
-            guest_pml4,
-            pml4_index(GUEST_STACK_VA_BASE),
-            low_pdpt_pa,
-        );
-        map_table_entry(
-            guest_low_pdpt,
-            pdpt_index(GUEST_STACK_VA_BASE),
-            low_pd_pa,
-        );
+        map_table_entry(guest_pml4, pml4_index(GUEST_STACK_VA_BASE), low_pdpt_pa);
+        map_table_entry(guest_low_pdpt, pdpt_index(GUEST_STACK_VA_BASE), low_pd_pa);
         let stack = active_guest_stack_arena().ok_or("guest stack backing")?;
         let stack_bytes = active_guest_stack_bytes();
         let stack_pt_count = stack_bytes.div_ceil(PAGE_SIZE_2M as usize);
@@ -584,11 +578,7 @@ pub fn build_guest_cr3_with_mode(
         let code_base = page_align_down(guest_rip);
         let code_pt_base = page_align_down_2m(guest_rip);
         map_table_entry(guest_pml4, pml4_index(code_base), high_pdpt_pa);
-        map_table_entry(
-            guest_high_pdpt,
-            pdpt_index(code_base),
-            high_pd_pa,
-        );
+        map_table_entry(guest_high_pdpt, pdpt_index(code_base), high_pd_pa);
         map_table_entry(guest_high_pd, pd_index(code_base), code_pt_pa);
         map_region_4k(
             guest_code_pt,
@@ -635,11 +625,7 @@ pub fn build_guest_cr3_with_mode(
                 (start, actual_len)
             }
             crate::hv::VmBootMode::Full => {
-                map_guest_kernel_image(
-                    guest_high_pd,
-                    code_pt_base,
-                    &mut pt_slot,
-                )?;
+                map_guest_kernel_image(guest_high_pd, code_pt_base, &mut pt_slot)?;
                 let start = kernel_image_start_va().ok_or("guest kernel image base")?;
                 let end = kernel_image_end_va();
                 let actual_len = end.saturating_sub(start);
@@ -647,15 +633,9 @@ pub fn build_guest_cr3_with_mode(
             }
         };
 
-        hvlogf(format_args!(
-            "hv: vm1 reporting: image map done pt_used={}",
-            pt_slot
-        ));
+        hvlogf(format_args!("hv: vm1 reporting: image map done pt_used={}", pt_slot));
         map_guest_heap_span(guest_pml4, &mut pt_slot)?;
-        hvlogf(format_args!(
-            "hv: vm1 reporting: heap map done pt_used={}",
-            pt_slot
-        ));
+        hvlogf(format_args!("hv: vm1 reporting: heap map done pt_used={}", pt_slot));
 
         hvlogf(format_args!(
             "hv: vm1 reporting: guest-cr3=0x{:016X} code=0x{:016X} stack=0x{:016X} stack_mib={}",
@@ -680,7 +660,9 @@ pub fn build_guest_cr3_with_mode(
         )?;
         verify_guest_mapping_chain(
             "image-end-8",
-            mapped_code_base.saturating_add(mapped_code_len).saturating_sub(8),
+            mapped_code_base
+                .saturating_add(mapped_code_len)
+                .saturating_sub(8),
         )?;
         *VM1_SNAPSHOT_META.lock() = Some(Vm1SnapshotMeta {
             guest_cr3: pml4_pa,
@@ -903,10 +885,7 @@ pub fn log_guest_phys_pt_context(label: &str, guest_cr3: u64, guest_va: u64) {
         let entry = unsafe { read_phys_page_entry(pt_pa, idx) }.unwrap_or(0);
         hvlogf(format_args!(
             "hv: vm1 reporting: guest-phys-pt {} pt_pa=0x{:016X} idx={} entry=0x{:016X}",
-            label,
-            pt_pa,
-            idx,
-            entry
+            label, pt_pa, idx, entry
         ));
         if idx == usize::MAX {
             break;
@@ -1238,10 +1217,7 @@ fn map_guest_image_span(
     Ok(())
 }
 
-fn map_guest_heap_span(
-    pml4: *mut [u64; 512],
-    pt_slot: &mut usize,
-) -> Result<(), &'static str> {
+fn map_guest_heap_span(pml4: *mut [u64; 512], pt_slot: &mut usize) -> Result<(), &'static str> {
     let heap = crate::allocators::heap_stats();
     let hv_guest_heap = crate::allocators::hv_guest_heap_stats();
     let ranges = [
@@ -1362,7 +1338,9 @@ fn guest_pt_page_from_pde(low_half: bool, pde: u64) -> Option<*const [u64; 512]>
         return None;
     }
 
-    let Ok(code_pt_pa) = current_high_pt_pa(unsafe { core::ptr::addr_of!((*tables).code_pt.0) as u64 }) else {
+    let Ok(code_pt_pa) =
+        current_high_pt_pa(unsafe { core::ptr::addr_of!((*tables).code_pt.0) as u64 })
+    else {
         return None;
     };
     if pde_addr(pde) == code_pt_pa {
