@@ -2,6 +2,8 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+use super::xelp_media_source::MediaSource;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Mp4ParseError {
     Truncated,
@@ -17,17 +19,23 @@ pub(crate) enum Mp4ParseError {
     EmptyAccessUnit,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct AvccSummary<'a> {
+#[derive(Debug, Clone)]
+pub(crate) struct AvccSummary {
     pub nal_length_size: usize,
     pub profile_idc: u8,
     pub level_idc: u8,
-    pub sps: &'a [u8],
-    pub pps: &'a [u8],
+    pub sps: Vec<u8>,
+    pub pps: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Mp4H264Summary<'a> {
+pub(crate) struct SampleRange {
+    pub offset: u64,
+    pub len: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Mp4H264Summary {
     pub width: u16,
     pub height: u16,
     pub timescale: u32,
@@ -35,13 +43,9 @@ pub(crate) struct Mp4H264Summary<'a> {
     pub sample_count: u32,
     pub first_chunk_offset: u64,
     pub first_sample_size: u32,
-    pub first_sample: &'a [u8],
-    pub avcc: AvccSummary<'a>,
-    pub mp4_body: &'a [u8],
-    pub stsz_data: &'a [u8],
-    pub stsc_data: Option<&'a [u8]>,
-    pub stco_data: Option<&'a [u8]>,
-    pub co64_data: Option<&'a [u8]>,
+    pub first_sample: Vec<u8>,
+    pub avcc: AvccSummary,
+    pub sample_ranges: Vec<SampleRange>,
 }
 
 pub(crate) struct AnnexBAccessUnit {
@@ -83,7 +87,7 @@ struct TrackCandidate<'a> {
     height: Option<u16>,
     timescale: Option<u32>,
     duration: Option<u64>,
-    avcc: Option<AvccSummary<'a>>,
+    avcc: Option<AvccSummary>,
     sample_count: Option<u32>,
     first_sample_size: Option<u32>,
     first_chunk_offset: Option<u64>,
@@ -215,15 +219,19 @@ fn sample_size_at(stsz: &[u8], index: u32) -> Option<usize> {
     }
 }
 
-fn chunk_offset_at(summary: &Mp4H264Summary<'_>, chunk_index: u32) -> Option<u64> {
-    if let Some(stco) = summary.stco_data {
+fn chunk_offset_at(
+    stco_data: Option<&[u8]>,
+    co64_data: Option<&[u8]>,
+    chunk_index: u32,
+) -> Option<u64> {
+    if let Some(stco) = stco_data {
         let entry_count = table_entry_count(stco)?;
         if chunk_index >= entry_count {
             return None;
         }
         return Some(be_u32(stco, 8 + chunk_index as usize * 4)? as u64);
     }
-    if let Some(co64) = summary.co64_data {
+    if let Some(co64) = co64_data {
         let entry_count = table_entry_count(co64)?;
         if chunk_index >= entry_count {
             return None;
@@ -233,20 +241,25 @@ fn chunk_offset_at(summary: &Mp4H264Summary<'_>, chunk_index: u32) -> Option<u64
     None
 }
 
-fn sample_file_range(summary: &Mp4H264Summary<'_>, index: u32) -> Option<(usize, usize)> {
-    if index >= summary.sample_count {
+fn sample_file_range(track: &TrackCandidate<'_>, index: u32) -> Option<SampleRange> {
+    let sample_count = track.sample_count?;
+    if index >= sample_count {
         return None;
     }
+    let stsz_data = track.stsz_data?;
 
-    let Some(stsc) = summary.stsc_data else {
-        let mut file_off = summary.first_chunk_offset as usize;
+    let Some(stsc) = track.stsc_data else {
+        let mut file_off = track.first_chunk_offset?;
         let mut i = 0u32;
         while i < index {
-            file_off = file_off.checked_add(sample_size_at(summary.stsz_data, i)?)?;
+            file_off = file_off.checked_add(sample_size_at(stsz_data, i)? as u64)?;
             i += 1;
         }
-        let sample_size = sample_size_at(summary.stsz_data, index)?;
-        return Some((file_off, sample_size));
+        let sample_size = sample_size_at(stsz_data, index)?;
+        return Some(SampleRange {
+            offset: file_off,
+            len: u32::try_from(sample_size).ok()?,
+        });
     };
 
     let entry_count = table_entry_count(stsc)?;
@@ -254,9 +267,9 @@ fn sample_file_range(summary: &Mp4H264Summary<'_>, index: u32) -> Option<(usize,
         return None;
     }
 
-    let chunk_count = if let Some(stco) = summary.stco_data {
+    let chunk_count = if let Some(stco) = track.stco_data {
         table_entry_count(stco)?
-    } else if let Some(co64) = summary.co64_data {
+    } else if let Some(co64) = track.co64_data {
         table_entry_count(co64)?
     } else {
         return None;
@@ -285,19 +298,20 @@ fn sample_file_range(summary: &Mp4H264Summary<'_>, index: u32) -> Option<(usize,
             let chunk_in_run = rel_sample / samples_per_chunk;
             let sample_in_chunk = rel_sample % samples_per_chunk;
             let chunk_index = first_chunk.checked_sub(1)?.checked_add(chunk_in_run)?;
-            let mut file_off = usize::try_from(chunk_offset_at(summary, chunk_index)?).ok()?;
+            let mut file_off = chunk_offset_at(track.stco_data, track.co64_data, chunk_index)?;
             let chunk_sample_start =
                 sample_base.checked_add(chunk_in_run.checked_mul(samples_per_chunk)?)?;
             let mut in_chunk = 0u32;
             while in_chunk < sample_in_chunk {
-                file_off = file_off.checked_add(sample_size_at(
-                    summary.stsz_data,
-                    chunk_sample_start + in_chunk,
-                )?)?;
+                file_off =
+                    file_off.checked_add(sample_size_at(stsz_data, chunk_sample_start + in_chunk)? as u64)?;
                 in_chunk += 1;
             }
-            let sample_size = sample_size_at(summary.stsz_data, index)?;
-            return Some((file_off, sample_size));
+            let sample_size = sample_size_at(stsz_data, index)?;
+            return Some(SampleRange {
+                offset: file_off,
+                len: u32::try_from(sample_size).ok()?,
+            });
         }
 
         sample_base = sample_base.checked_add(sample_span)?;
@@ -307,7 +321,7 @@ fn sample_file_range(summary: &Mp4H264Summary<'_>, index: u32) -> Option<(usize,
     None
 }
 
-fn parse_avcc<'a>(bytes: &'a [u8]) -> Option<AvccSummary<'a>> {
+fn parse_avcc(bytes: &[u8]) -> Option<AvccSummary> {
     if bytes.len() < 7 {
         return None;
     }
@@ -347,16 +361,16 @@ fn parse_avcc<'a>(bytes: &'a [u8]) -> Option<AvccSummary<'a>> {
         nal_length_size,
         profile_idc,
         level_idc,
-        sps: first_sps?,
-        pps: first_pps?,
+        sps: first_sps?.to_vec(),
+        pps: first_pps?.to_vec(),
     })
 }
 
-pub(crate) fn parse_avcc_summary<'a>(bytes: &'a [u8]) -> Option<AvccSummary<'a>> {
+pub(crate) fn parse_avcc_summary(bytes: &[u8]) -> Option<AvccSummary> {
     parse_avcc(bytes)
 }
 
-fn parse_stsd<'a>(bytes: &'a [u8]) -> Option<(u16, u16, AvccSummary<'a>)> {
+fn parse_stsd(bytes: &[u8]) -> Option<(u16, u16, AvccSummary)> {
     let entry_count = be_u32(bytes, 4)?;
     if entry_count == 0 {
         return None;
@@ -461,54 +475,55 @@ fn parse_trak<'a>(bytes: &'a [u8]) -> Result<TrackCandidate<'a>, Mp4ParseError> 
     Ok(track)
 }
 
-pub(crate) fn parse_h264_mp4_summary<'a>(
-    bytes: &'a [u8],
-) -> Result<Mp4H264Summary<'a>, Mp4ParseError> {
-    let mut off = 0usize;
-    let mut saw_moov = false;
-    let mut best_track: Option<TrackCandidate<'a>> = None;
+fn build_sample_ranges(track: &TrackCandidate<'_>) -> Result<Vec<SampleRange>, Mp4ParseError> {
+    let sample_count = track.sample_count.ok_or(Mp4ParseError::NoSamples)?;
+    let mut ranges = Vec::with_capacity(sample_count as usize);
+    let mut index = 0u32;
+    while index < sample_count {
+        ranges.push(sample_file_range(track, index).ok_or(Mp4ParseError::BadSampleRange)?);
+        index += 1;
+    }
+    Ok(ranges)
+}
 
-    while let Some(root) = next_box(bytes, &mut off) {
-        let root = root?;
-        if root.kind != b"moov" {
+#[derive(Debug, Clone)]
+struct ParsedMp4Track {
+    width: u16,
+    height: u16,
+    timescale: u32,
+    duration: u64,
+    sample_count: u32,
+    first_chunk_offset: u64,
+    first_sample_size: u32,
+    avcc: AvccSummary,
+    sample_ranges: Vec<SampleRange>,
+}
+
+fn parse_h264_mp4_track_from_moov(bytes: &[u8]) -> Result<ParsedMp4Track, Mp4ParseError> {
+    let mut moov_off = 0usize;
+    let mut best_track = None;
+    while let Some(child) = next_box(bytes, &mut moov_off) {
+        let child = child?;
+        if child.kind != b"trak" {
             continue;
         }
-        saw_moov = true;
-        let mut moov_off = 0usize;
-        while let Some(child) = next_box(root.data, &mut moov_off) {
-            let child = child?;
-            if child.kind != b"trak" {
-                continue;
-            }
-            let track = parse_trak(child.data)?;
-            if track.is_video && track.avcc.is_some() {
-                best_track = Some(track);
-                break;
-            }
+        let track = parse_trak(child.data)?;
+        if track.is_video && track.avcc.is_some() {
+            best_track = Some(track);
+            break;
         }
     }
 
-    if !saw_moov {
-        return Err(Mp4ParseError::NoMoov);
-    }
     let track = best_track.ok_or(Mp4ParseError::NoVideoTrack)?;
-    let avcc = track.avcc.ok_or(Mp4ParseError::NoAvcc)?;
+    let avcc = track.avcc.clone().ok_or(Mp4ParseError::NoAvcc)?;
     let sample_count = track.sample_count.ok_or(Mp4ParseError::NoSamples)?;
     let first_sample_size = track.first_sample_size.ok_or(Mp4ParseError::NoSamples)?;
     let first_chunk_offset = track
         .first_chunk_offset
         .ok_or(Mp4ParseError::NoChunkOffsets)?;
-    let first_sample_off =
-        usize::try_from(first_chunk_offset).map_err(|_| Mp4ParseError::BadSampleRange)?;
-    let first_sample_len =
-        usize::try_from(first_sample_size).map_err(|_| Mp4ParseError::BadSampleRange)?;
-    let first_sample = bytes
-        .get(first_sample_off..first_sample_off.saturating_add(first_sample_len))
-        .ok_or(Mp4ParseError::BadSampleRange)?;
+    let sample_ranges = build_sample_ranges(&track)?;
 
-    let stsz_data = track.stsz_data.ok_or(Mp4ParseError::NoSamples)?;
-
-    Ok(Mp4H264Summary {
+    Ok(ParsedMp4Track {
         width: track.width.ok_or(Mp4ParseError::NoAvc1)?,
         height: track.height.ok_or(Mp4ParseError::NoAvc1)?,
         timescale: track.timescale.unwrap_or(0),
@@ -516,36 +531,147 @@ pub(crate) fn parse_h264_mp4_summary<'a>(
         sample_count,
         first_chunk_offset,
         first_sample_size,
-        first_sample,
         avcc,
-        mp4_body: bytes,
-        stsz_data,
-        stsc_data: track.stsc_data,
-        stco_data: track.stco_data,
-        co64_data: track.co64_data,
+        sample_ranges,
     })
 }
 
-/// Return the byte slice for sample `index` (0-based) in the MP4 body.
-pub(crate) fn get_sample_data<'a>(summary: &Mp4H264Summary<'a>, index: u32) -> Option<&'a [u8]> {
-    let (file_off, sample_size) = sample_file_range(summary, index)?;
-    summary
-        .mp4_body
-        .get(file_off..file_off.checked_add(sample_size)?)
+fn build_mp4_summary(parsed: ParsedMp4Track, first_sample: Vec<u8>) -> Mp4H264Summary {
+    Mp4H264Summary {
+        width: parsed.width,
+        height: parsed.height,
+        timescale: parsed.timescale,
+        duration: parsed.duration,
+        sample_count: parsed.sample_count,
+        first_chunk_offset: parsed.first_chunk_offset,
+        first_sample_size: parsed.first_sample_size,
+        first_sample,
+        avcc: parsed.avcc,
+        sample_ranges: parsed.sample_ranges,
+    }
+}
+
+fn parse_h264_mp4_summary_from_bytes(bytes: &[u8]) -> Result<Mp4H264Summary, Mp4ParseError> {
+    let mut off = 0usize;
+    let mut saw_moov = false;
+
+    while let Some(root) = next_box(bytes, &mut off) {
+        let root = root?;
+        if root.kind != b"moov" {
+            continue;
+        }
+        saw_moov = true;
+        let parsed = parse_h264_mp4_track_from_moov(root.data)?;
+        let first_range = *parsed.sample_ranges.first().ok_or(Mp4ParseError::NoSamples)?;
+        let first_sample_off =
+            usize::try_from(first_range.offset).map_err(|_| Mp4ParseError::BadSampleRange)?;
+        let first_sample_len =
+            usize::try_from(first_range.len).map_err(|_| Mp4ParseError::BadSampleRange)?;
+        let first_sample = bytes
+            .get(first_sample_off..first_sample_off.saturating_add(first_sample_len))
+            .ok_or(Mp4ParseError::BadSampleRange)?
+            .to_vec();
+        return Ok(build_mp4_summary(parsed, first_sample));
+    }
+
+    if !saw_moov {
+        return Err(Mp4ParseError::NoMoov);
+    }
+
+    Err(Mp4ParseError::NoVideoTrack)
+}
+
+pub(crate) fn parse_h264_mp4_summary(bytes: &[u8]) -> Result<Mp4H264Summary, Mp4ParseError> {
+    parse_h264_mp4_summary_from_bytes(bytes)
+}
+
+pub(crate) async fn parse_h264_mp4_summary_from_source(
+    source: &MediaSource,
+) -> Result<Mp4H264Summary, Mp4ParseError> {
+    if let Some(bytes) = source.body() {
+        return parse_h264_mp4_summary_from_bytes(bytes);
+    }
+
+    let total_len = source.total_len();
+    let mut off = 0u64;
+    while off < total_len {
+        let Some(header) = source
+            .read_range(off, 16)
+            .await
+            .map_err(|_| Mp4ParseError::Truncated)?
+        else {
+            return Err(Mp4ParseError::Truncated);
+        };
+        if header.len() < 8 {
+            return Err(Mp4ParseError::Truncated);
+        }
+
+        let size32 = be_u32(header.as_slice(), 0).ok_or(Mp4ParseError::Truncated)? as u64;
+        let kind = header.get(4..8).ok_or(Mp4ParseError::Truncated)?;
+        let (header_len, box_size) = if size32 == 1 {
+            if header.len() < 16 {
+                return Err(Mp4ParseError::Truncated);
+            }
+            (
+                16u64,
+                be_u64(header.as_slice(), 8).ok_or(Mp4ParseError::Truncated)?,
+            )
+        } else if size32 == 0 {
+            (8u64, total_len.saturating_sub(off))
+        } else {
+            (8u64, size32)
+        };
+
+        if box_size < header_len {
+            return Err(Mp4ParseError::Truncated);
+        }
+
+        if kind == b"moov" {
+            let payload_len = usize::try_from(box_size - header_len)
+                .map_err(|_| Mp4ParseError::Truncated)?;
+            let payload_off = off
+                .checked_add(header_len)
+                .ok_or(Mp4ParseError::Truncated)?;
+            let payload = source
+                .read_range(payload_off, payload_len)
+                .await
+                .map_err(|_| Mp4ParseError::Truncated)?
+                .ok_or(Mp4ParseError::Truncated)?;
+            let parsed = parse_h264_mp4_track_from_moov(payload.as_slice())?;
+            let first_range = *parsed.sample_ranges.first().ok_or(Mp4ParseError::NoSamples)?;
+            let first_sample = source
+                .read_range(
+                    first_range.offset,
+                    usize::try_from(first_range.len).map_err(|_| Mp4ParseError::BadSampleRange)?,
+                )
+                .await
+                .map_err(|_| Mp4ParseError::BadSampleRange)?
+                .ok_or(Mp4ParseError::BadSampleRange)?;
+            return Ok(build_mp4_summary(parsed, first_sample));
+        }
+
+        off = off.checked_add(box_size).ok_or(Mp4ParseError::Truncated)?;
+    }
+
+    Err(Mp4ParseError::NoMoov)
+}
+
+pub(crate) fn get_sample_range(summary: &Mp4H264Summary, index: u32) -> Option<SampleRange> {
+    summary.sample_ranges.get(index as usize).copied()
 }
 
 /// Build an Annex-B access unit for an arbitrary sample (not just the first).
 pub(crate) fn build_annex_b_for_sample(
     sample: &[u8],
-    avcc: &AvccSummary<'_>,
+    avcc: &AvccSummary,
 ) -> Result<AnnexBAccessUnit, Mp4ParseError> {
     let nal_length_size = avcc.nal_length_size;
     if !(1..=4).contains(&nal_length_size) {
         return Err(Mp4ParseError::BadNalLengthSize);
     }
     let mut bytes = Vec::new();
-    push_annex_b_nal(&mut bytes, avcc.sps);
-    push_annex_b_nal(&mut bytes, avcc.pps);
+    push_annex_b_nal(&mut bytes, &avcc.sps);
+    push_annex_b_nal(&mut bytes, &avcc.pps);
 
     let mut off = 0usize;
     let mut sample_nal_count = 0usize;
@@ -627,7 +753,7 @@ fn push_annex_b_nal(out: &mut Vec<u8>, nal: &[u8]) {
 }
 
 pub(crate) fn build_annex_b_access_unit(
-    summary: &Mp4H264Summary<'_>,
+    summary: &Mp4H264Summary,
 ) -> Result<AnnexBAccessUnit, Mp4ParseError> {
     let nal_length_size = summary.avcc.nal_length_size;
     if !(1..=4).contains(&nal_length_size) {
@@ -635,8 +761,8 @@ pub(crate) fn build_annex_b_access_unit(
     }
 
     let mut bytes = Vec::new();
-    push_annex_b_nal(&mut bytes, summary.avcc.sps);
-    push_annex_b_nal(&mut bytes, summary.avcc.pps);
+    push_annex_b_nal(&mut bytes, &summary.avcc.sps);
+    push_annex_b_nal(&mut bytes, &summary.avcc.pps);
 
     let mut off = 0usize;
     let mut sample_nal_count = 0usize;

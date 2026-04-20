@@ -2678,7 +2678,7 @@ pub(crate) async fn run_media_decode_async() {
         engine.name
     );
 
-    let (source_url, body) = match xelp_media_source::fetch_media_source_async("decode").await {
+    let source = match xelp_media_source::fetch_media_source_async("decode").await {
         Some(payload) => payload,
         None => {
             crate::log!("intel/media: fetch failed local_http_candidates_exhausted=1\n");
@@ -2686,22 +2686,27 @@ pub(crate) async fn run_media_decode_async() {
             return;
         }
     };
+    let body = source.body();
 
     crate::log!(
-        "intel/media: fetched url={} bytes={} mp4_ftyp={} mp4_moov={} mp4_mdat={}\n",
-        source_url,
-        body.len(),
-        find_fourcc(body.as_slice(), b"ftyp").is_some() as u8,
-        find_fourcc(body.as_slice(), b"moov").is_some() as u8,
-        find_fourcc(body.as_slice(), b"mdat").is_some() as u8
+        "intel/media: fetched url={} bytes={} mp4_ftyp={} mp4_moov={} mp4_mdat={} backing={}\n",
+        source.source_name(),
+        source.total_len(),
+        body.and_then(|bytes| find_fourcc(bytes, b"ftyp")).is_some() as u8,
+        body.and_then(|bytes| find_fourcc(bytes, b"moov")).is_some() as u8,
+        body.and_then(|bytes| find_fourcc(bytes, b"mdat")).is_some() as u8,
+        if body.is_some() { "memory" } else { "range" },
     );
 
-    let summary = match parse_h264_source_summary(body.as_slice()) {
+    let summary = match parse_h264_source_summary(&source).await {
         Ok(summary) => summary,
         Err(err) => {
             crate::log!(
                 "intel/media: parse failed container={} err={}\n",
-                if body.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+                if body
+                    .map(|bytes| bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]))
+                    .unwrap_or(false)
+                {
                     "matroska"
                 } else {
                     "mp4"
@@ -2761,12 +2766,12 @@ pub(crate) async fn run_media_decode_async() {
         annex_b.bytes.len(),
     );
 
-    let Some(sps) = parse_sps(summary.avcc().sps) else {
+    let Some(sps) = parse_sps(&summary.avcc().sps) else {
         crate::log!("intel/media: sps parse failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return;
     };
-    let Some(pps) = parse_pps(summary.avcc().pps, &sps) else {
+    let Some(pps) = parse_pps(&summary.avcc().pps, &sps) else {
         crate::log!("intel/media: pps parse failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return;
@@ -2823,10 +2828,11 @@ pub(crate) async fn run_media_decode_async() {
     let mut ref_surface_idx: u32 = 0;
 
     for sample_idx in 0..playback_probe_samples {
+        let owned_sample;
         let sample = if sample_idx == 0 {
             summary.first_sample()
         } else {
-            let Some(sample) = summary.sample_data(sample_idx) else {
+            let Some(sample_bytes) = summary.load_sample(&source, sample_idx).await else {
                 crate::log!(
                     "intel/media: playback sample unavailable index={} of={}\n",
                     sample_idx,
@@ -2834,7 +2840,8 @@ pub(crate) async fn run_media_decode_async() {
                 );
                 break;
             };
-            sample
+            owned_sample = sample_bytes;
+            owned_sample.as_slice()
         };
 
         let sample_nals = first_sample_nal_types(sample, summary.avcc().nal_length_size, 6);

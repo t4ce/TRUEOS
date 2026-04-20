@@ -336,25 +336,32 @@ fn drain_pipe_to_vec<const N: usize>(
     drained
 }
 
-pub async fn load_trueosfs_file_via_pipe_async(
+pub async fn read_trueosfs_file_range_via_pipe_async(
     disk: crate::disc::block::DeviceHandle,
     key: &str,
+    offset: u64,
+    len: usize,
 ) -> Result<Option<Vec<u8>>, crate::disc::block::Error> {
-    let Some(info) = crate::r::fs::trueosfs::file_info_async(disk, key).await? else {
-        return Ok(None);
-    };
+    if len == 0 {
+        return Ok(Some(Vec::new()));
+    }
 
-    let total_len =
-        usize::try_from(info.data_len).map_err(|_| crate::disc::block::Error::OutOfBounds)?;
-    let mut out = Vec::with_capacity(total_len);
+    let mut out = Vec::with_capacity(len);
     let mut src = vec![0u8; trueosfs_forward_read_chunk_bytes(&disk.info())];
     let mut drain = vec![0u8; TRUEOSFS_FORWARD_PIPE_BYTES];
     let pipe = Pipe::<NoopRawMutex, TRUEOSFS_FORWARD_PIPE_BYTES>::new();
 
-    let mut offset = 0u64;
-    loop {
-        let Some(read) =
-            crate::r::fs::trueosfs::file_read_range_async(disk, key, offset, &mut src).await?
+    let mut cursor = offset;
+    let mut remaining = len;
+    while remaining != 0 {
+        let read_cap = usize::min(src.len(), remaining);
+        let Some(read) = crate::r::fs::trueosfs::file_read_range_async(
+            disk,
+            key,
+            cursor,
+            &mut src[..read_cap],
+        )
+        .await?
         else {
             return Ok(None);
         };
@@ -378,9 +385,26 @@ pub async fn load_trueosfs_file_via_pipe_async(
         }
 
         drain_pipe_to_vec(&pipe, &mut out, drain.as_mut_slice());
-        offset = offset.saturating_add(read as u64);
+        cursor = cursor.saturating_add(read as u64);
+        remaining = remaining.saturating_sub(read);
     }
 
     drain_pipe_to_vec(&pipe, &mut out, drain.as_mut_slice());
+    if out.len() != len {
+        return Err(crate::disc::block::Error::OutOfBounds);
+    }
     Ok(Some(out))
+}
+
+pub async fn load_trueosfs_file_via_pipe_async(
+    disk: crate::disc::block::DeviceHandle,
+    key: &str,
+) -> Result<Option<Vec<u8>>, crate::disc::block::Error> {
+    let Some(info) = crate::r::fs::trueosfs::file_info_async(disk, key).await? else {
+        return Ok(None);
+    };
+
+    let total_len =
+        usize::try_from(info.data_len).map_err(|_| crate::disc::block::Error::OutOfBounds)?;
+    read_trueosfs_file_range_via_pipe_async(disk, key, 0, total_len).await
 }
