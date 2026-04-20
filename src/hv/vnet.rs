@@ -132,13 +132,7 @@ pub fn tcp_write(vm_id: u8, bytes: &[u8]) -> Result<usize, VmNetStatus> {
         bytes.len().min(u32::MAX as usize) as u32,
     );
     ctx.tx_bytes = ctx.tx_bytes.saturating_add(bytes.len() as u64);
-    let cpl = record_completion(
-        &mut ctx,
-        seq,
-        VmNetStatus::Ok,
-        bytes.len() as u64,
-        0,
-    );
+    let cpl = record_completion(&mut ctx, seq, VmNetStatus::Ok, bytes.len() as u64, 0);
     maybe_log(&ctx, &cpl);
     Ok(bytes.len())
 }
@@ -163,13 +157,8 @@ pub fn tcp_read(vm_id: u8, out: &mut [u8]) -> Result<usize, VmNetStatus> {
     }
 
     let mut ctx = ctx_lock.lock();
-    let seq = record_request(
-        &mut ctx,
-        VM_NET_OP_TCP_READ,
-        out.len().min(u32::MAX as usize) as u64,
-        0,
-        0,
-    );
+    let seq =
+        record_request(&mut ctx, VM_NET_OP_TCP_READ, out.len().min(u32::MAX as usize) as u64, 0, 0);
     for &b in &out[..got.min(VM_NET_INLINE_CAP)] {
         if ctx.recent_rx.len() >= VM_NET_INLINE_CAP {
             let _ = ctx.recent_rx.pop_front();

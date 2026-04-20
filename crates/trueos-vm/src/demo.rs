@@ -1,10 +1,10 @@
-use core::sync::atomic::{AtomicU32, Ordering};
 use core::arch::x86_64::__cpuid;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::vfetch_job::{BytesJob, Poll as FetchPoll};
 use crate::vmcall;
 use crate::vpanic;
-use v::{vio, vui2, vsys};
+use v::{vio, vsys, vui2};
 
 const HULL_PROBE_PATH: &[u8] = b"/vm/hull_probe.txt";
 const HULL_FETCH_URL: &[u8] = b"https://example.com/";
@@ -79,7 +79,11 @@ fn run_vlayer_probes() -> ProbeSummary {
         flags |= PROBE_UI_OK;
     }
     HULL_PROBE_FLAGS.store(flags, Ordering::Release);
-    ProbeSummary { fs_ok, net_ok, ui_ok }
+    ProbeSummary {
+        fs_ok,
+        net_ok,
+        ui_ok,
+    }
 }
 
 fn run_fs_probe() -> bool {
@@ -172,7 +176,9 @@ fn run_ui2_probe(fs_ok: bool, net_ok: bool) -> bool {
     let mut title = [0u8; 64];
     let title_len = build_probe_title(&mut title, fs_ok, net_ok);
     let ok = window.id().set_title(as_str(&title[..title_len]))
-        && window.id().set_decorations(vui2::WindowDecorationMode::System)
+        && window
+            .id()
+            .set_decorations(vui2::WindowDecorationMode::System)
         && window.id().focus();
     if ok {
         let id = window.leak();

@@ -22,6 +22,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
     pub fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
+    pub fn trueos_cabi_fs_exists(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_trueosfs_primary_html_tree(
         max_entries: u32,
         out_ptr: *mut u8,

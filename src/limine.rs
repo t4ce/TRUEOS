@@ -1,5 +1,5 @@
-use limine::{BaseRevision, memmap as memory_map, request};
 use core::sync::atomic::{AtomicU64, Ordering};
+use limine::{BaseRevision, memmap as memory_map, request};
 
 pub type FramebufferResponse = request::FramebufferResponse;
 pub type MpResponse = request::MpResponse;

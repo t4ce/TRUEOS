@@ -283,7 +283,10 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
     const GL_ONE_MINUS_SRC_ALPHA: u32 = 0x0303;
 
     let frame_base_rgba = if window.vm_origin_hint {
-        blend_rgba_over((UI2_VM_HINT_ACCENT_RGBA.0, UI2_VM_HINT_ACCENT_RGBA.1, UI2_VM_HINT_ACCENT_RGBA.2, 0x44), (0xF7, 0xF7, 0xFB, 0xFF))
+        blend_rgba_over(
+            (UI2_VM_HINT_ACCENT_RGBA.0, UI2_VM_HINT_ACCENT_RGBA.1, UI2_VM_HINT_ACCENT_RGBA.2, 0x44),
+            (0xF7, 0xF7, 0xFB, 0xFF),
+        )
     } else {
         (0xD9, 0xDE, 0xE5, 0xFF)
     };
@@ -453,9 +456,15 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
                 tag_rect.y,
                 tag_rect.w,
                 tag_rect.h,
-                modulate_rgba_alpha(blend_rgba_over((0xFF, 0xFF, 0xFF, 0x90), UI2_VM_HINT_ACCENT_RGBA), window.alpha),
+                modulate_rgba_alpha(
+                    blend_rgba_over((0xFF, 0xFF, 0xFF, 0x90), UI2_VM_HINT_ACCENT_RGBA),
+                    window.alpha,
+                ),
                 modulate_rgba_alpha(UI2_VM_HINT_ACCENT_RGBA, window.alpha),
-                modulate_rgba_alpha(blend_rgba_over((0xFF, 0xFF, 0xFF, 0x55), UI2_VM_HINT_ACCENT_RGBA), window.alpha),
+                modulate_rgba_alpha(
+                    blend_rgba_over((0xFF, 0xFF, 0xFF, 0x55), UI2_VM_HINT_ACCENT_RGBA),
+                    window.alpha,
+                ),
                 0.5,
                 state.view_w,
                 state.view_h,
@@ -1021,7 +1030,9 @@ fn window_system_button_anchor_rect(
     }
     let slot = actions
         .iter()
-        .filter(|candidate| **candidate != Ui2SystemButtonAction::PreserveVm || window.vm_origin_hint)
+        .filter(|candidate| {
+            **candidate != Ui2SystemButtonAction::PreserveVm || window.vm_origin_hint
+        })
         .position(|a| *a == action)?;
     let x = titlebar.x + titlebar.w - (slot as f32 + 1.0) * s - slot as f32 * gap;
     Some(Ui2Rect::new(x, titlebar.y, s, s))

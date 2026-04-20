@@ -183,6 +183,7 @@ const CMD_3DSTATE_HS: u32 = 7 | (27 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_TE: u32 = 3 | (28 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_DS: u32 = 9 | (29 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_STREAMOUT: u32 = 3 | (30 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PRIMITIVE_REPLICATION: u32 = 4 | (108 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SO_BUFFER_INDEX_0: u32 = 6 | (0x60 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SO_DECL_LIST_1: u32 = 3 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SBE: u32 = 4 | (31 << 16) | (3 << 27) | (3 << 29);
@@ -253,6 +254,41 @@ const TRIANGLE_PS_MAX_THREADS: u32 = 63;
 const TRIANGLE_VS_URB_START: u32 = 4;
 const TRIANGLE_VS_URB_ENTRIES: u32 = 192;
 const TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE: Option<u8> = None;
+const TRIANGLE_DEFAULT_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
+    label: "mesa-like",
+    vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+    sbe_read_offset: 1,
+    sbe_read_length: 1,
+    force_sbe_read_offset: true,
+    force_sbe_read_length: true,
+};
+const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
+    TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+    TriangleFrontEndContract {
+        label: "slot0-read",
+        vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+        sbe_read_offset: 0,
+        sbe_read_length: 1,
+        force_sbe_read_offset: true,
+        force_sbe_read_length: true,
+    },
+    TriangleFrontEndContract {
+        label: "urb2",
+        vs_urb_output_length_override: Some(2),
+        sbe_read_offset: 1,
+        sbe_read_length: 1,
+        force_sbe_read_offset: true,
+        force_sbe_read_length: true,
+    },
+    TriangleFrontEndContract {
+        label: "urb2-slot0-read",
+        vs_urb_output_length_override: Some(2),
+        sbe_read_offset: 0,
+        sbe_read_length: 1,
+        force_sbe_read_offset: true,
+        force_sbe_read_length: true,
+    },
+];
 const GFX125_GEOMETRY_DSS_ENABLE: usize = 0x913C;
 const GFX125_PIXEL_PIPES: usize = 3;
 const GFX125_DUAL_SUBSLICES_PER_PIXEL_PIPE: usize = 2;
@@ -391,6 +427,16 @@ struct TriangleProbeStateLayout {
     sf_clip_viewport_offset_bytes: u32,
     scissor_rect_offset_bytes: u32,
     slice_hash_table_offset_bytes: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct TriangleFrontEndContract {
+    label: &'static str,
+    vs_urb_output_length_override: Option<u8>,
+    sbe_read_offset: u8,
+    sbe_read_length: u8,
+    force_sbe_read_offset: bool,
+    force_sbe_read_length: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -545,18 +591,12 @@ impl TriangleBatchMode {
     }
 
     fn streamout_enabled(self) -> bool {
-        matches!(
-            self,
-            Self::StreamoutProof | Self::VfStreamoutProof | Self::VsStreamoutProof
-        )
+        matches!(self, Self::StreamoutProof | Self::VfStreamoutProof | Self::VsStreamoutProof)
     }
 }
 
 fn is_streamout_submit_name(submit_name: &str) -> bool {
-    matches!(
-        submit_name,
-        "streamout-proof" | "vf-streamout-proof" | "vs-streamout-proof"
-    )
+    matches!(submit_name, "streamout-proof" | "vf-streamout-proof" | "vs-streamout-proof")
 }
 
 fn is_vf_streamout_submit_name(submit_name: &str) -> bool {
@@ -1586,10 +1626,7 @@ fn submit_triangle_vf_streamout_proof(
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log!(
-                "intel/render: vf-streamout-proof batch build failed detail={}\n",
-                reason
-            );
+            crate::log!("intel/render: vf-streamout-proof batch build failed detail={}\n", reason);
             return false;
         }
     };
@@ -1770,6 +1807,7 @@ fn submit_triangle_vf_draw_to_surface(
         RCS_EXEC_RESULT_DONE,
         TriangleBatchMode::VfDraw,
         StreamoutProofExperiment::PositionSlot1,
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
@@ -1896,10 +1934,7 @@ fn submit_triangle_vs_streamout_proof(
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log!(
-                "intel/render: vs-streamout-proof batch build failed detail={}\n",
-                reason
-            );
+            crate::log!("intel/render: vs-streamout-proof batch build failed detail={}\n", reason);
             return false;
         }
     };
@@ -2021,6 +2056,7 @@ fn submit_triangle_streamout_proof(
         RCS_EXEC_RESULT_DONE,
         TriangleBatchMode::StreamoutProof,
         experiment,
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
@@ -2078,16 +2114,28 @@ fn submit_triangle_vs_draw_frontier_to_surface(
     rect_h: usize,
     blend_mode: TriangleBlendProbeMode,
 ) -> bool {
-    submit_triangle_real_vs_draw_probe_to_surface(
-        dev,
-        warm,
-        dst_gpu_addr,
-        pitch,
-        rect_w,
-        rect_h,
-        blend_mode,
-        "vs-draw-frontier",
-    )
+    for contract in VS_DRAW_FRONTIER_CONTRACTS {
+        let completed = submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            dst_gpu_addr,
+            pitch,
+            rect_w,
+            rect_h,
+            blend_mode,
+            "vs-draw-frontier",
+            contract,
+        );
+        intel_render_verbose_log!(
+            "intel/render: primary-vs-draw-frontier-contract variant={} completed={}\n",
+            contract.label,
+            completed as u8,
+        );
+        if completed {
+            return true;
+        }
+    }
+    false
 }
 
 fn wait_eq(dev: crate::intel::Dev, reg: usize, mask: u32, want: u32, n: usize) -> bool {
@@ -2110,13 +2158,7 @@ fn map_smoke_buffers(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     let ok_result = super::map_ggtt(dev, warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE);
     let ok_streamout =
         super::map_ggtt(dev, warm.streamout_phys, warm.streamout_len, GPU_VA_STREAMOUT_BASE);
-    if ok_ring
-        && ok_context
-        && ok_batch
-        && ok_draw_state
-        && ok_vertex
-        && ok_result
-        && ok_streamout
+    if ok_ring && ok_context && ok_batch && ok_draw_state && ok_vertex && ok_result && ok_streamout
     {
         super::ggtt_invalidate(dev);
         true
@@ -2166,6 +2208,7 @@ fn submit_triangle_draw_to_surface(
         rect_h,
         blend_mode,
         "draw-path",
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
     )
 }
 
@@ -2178,6 +2221,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     rect_h: usize,
     blend_mode: TriangleBlendProbeMode,
     submit_name: &'static str,
+    front_end_contract: TriangleFrontEndContract,
 ) -> bool {
     let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
     else {
@@ -2225,6 +2269,37 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
             && pipeline.ps.meta.kernel.push_constant_bytes == 0) as u8,
         crate::intel::shader::triangle_pipeline_note()
     );
+    let programmed_vs_urb_output_length = front_end_contract
+        .vs_urb_output_length_override
+        .or(TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE)
+        .unwrap_or(pipeline.vs.meta.urb_entry_output_length);
+    if submit_name == "vs-draw-frontier" {
+        intel_render_focus_log!(
+            "intel/render: {} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
+            submit_name,
+            front_end_contract.label,
+            pipeline.vs.meta.urb_entry_output_length,
+            programmed_vs_urb_output_length,
+            front_end_contract.sbe_read_offset,
+            front_end_contract.sbe_read_length,
+            front_end_contract.force_sbe_read_offset as u8,
+            front_end_contract.force_sbe_read_length as u8,
+            pipeline.ps.meta.num_varying_inputs,
+        );
+    } else {
+        intel_render_verbose_log!(
+            "intel/render: {} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
+            submit_name,
+            front_end_contract.label,
+            pipeline.vs.meta.urb_entry_output_length,
+            programmed_vs_urb_output_length,
+            front_end_contract.sbe_read_offset,
+            front_end_contract.sbe_read_length,
+            front_end_contract.force_sbe_read_offset as u8,
+            front_end_contract.force_sbe_read_length as u8,
+            pipeline.ps.meta.num_varying_inputs,
+        );
+    }
 
     let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
@@ -2306,6 +2381,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         RCS_EXEC_RESULT_DONE,
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::PositionSlot1,
+        front_end_contract,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
@@ -2330,20 +2406,20 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         probe_state.cc_viewport_offset_bytes,
         probe_state.sf_clip_viewport_offset_bytes
     );
-    intel_render_verbose_log!(
-        "intel/render: {} blend-probe={}\n",
-        submit_name,
-        blend_mode.label()
-    );
+    intel_render_verbose_log!("intel/render: {} blend-probe={}\n", submit_name, blend_mode.label());
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
-    submit_warm_render_batch(
+    let completed = submit_warm_render_batch(
         dev,
         warm,
         RCS_EXEC_RESULT_DONE,
         RESULT_SLOT_FINAL_DWORD,
         submit_name,
-    )
+    );
+    if !completed {
+        recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+    }
+    completed
 }
 
 fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
@@ -2699,6 +2775,7 @@ fn encode_triangle_probe_batch(
     done_value: u32,
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
+    front_end_contract: TriangleFrontEndContract,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
     let vf_synthesized_vue = matches!(batch_mode, TriangleBatchMode::VfDraw);
@@ -2849,16 +2926,13 @@ fn encode_triangle_probe_batch(
         .saturating_sub(shader_layout.state_region_offset_bytes as usize);
     let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
     let ps_ksp_offset = shader_layout.ps.code_offset_bytes + shader_layout.ps.ksp_offset_bytes;
-    // Mesa still forces a one-slot URB read even when the PS consumes no
-    // varyings. A zero read length appears legal on paper but is a strong
-    // suspect for our "batch completes, no color writes" failure mode.
-    let sbe_vertex_read_length =
-        core::cmp::max((pipeline.ps.meta.num_varying_inputs as u32).div_ceil(2), 1);
-    let sbe_dw1 = (1 << 5)
+    let sbe_vertex_read_offset = front_end_contract.sbe_read_offset as u32;
+    let sbe_vertex_read_length = front_end_contract.sbe_read_length as u32;
+    let sbe_dw1 = (sbe_vertex_read_offset << 5)
         | (1 << 21)
         | ((pipeline.ps.meta.num_varying_inputs as u32) << 22)
-        | (1 << 28)
-        | (1 << 29)
+        | (u32::from(front_end_contract.force_sbe_read_offset) << 28)
+        | (u32::from(front_end_contract.force_sbe_read_length) << 29)
         | (sbe_vertex_read_length << 11);
     let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) =
         stage_dispatch_bits(pipeline.ps.meta.kernel.dispatch_mode);
@@ -2882,6 +2956,7 @@ fn encode_triangle_probe_batch(
     let raster_dw2 = 0;
     let raster_dw3 = 0;
     let raster_dw4 = 0;
+    let primitive_replication_dw1 = 1 << 16;
     // Mesa's simple-shader path emits a nearly all-default WM packet here.
     // Keep this dedicated triangle path equally boring rather than forcing
     // point-rule / line-AA bits that the host reference never asked for.
@@ -2904,8 +2979,7 @@ fn encode_triangle_probe_batch(
     let streamout_dw3 = streamout_experiment.vertex_bytes() as u32;
     let streamout_dw4 = 0;
     let streamout_surface_size_dwords = (warm.streamout_len / 4).saturating_sub(1) as u32;
-    let so_buffer_index_dw1 =
-        (RENDER_MOCS << 22) | (1 << 20) | (1 << 21) | (1 << 31);
+    let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 20) | (1 << 21) | (1 << 31);
     let so_buffer_stream_offset_dw = 0u32;
     // Mesa zeros this packet during init to clear any inherited clear/resolve
     // overrides; do the same in the probe path so backend behaviour is fully
@@ -3095,11 +3169,7 @@ fn encode_triangle_probe_batch(
         },
     )?;
     if vf_synthesized_vue {
-        push(
-            batch_dwords,
-            &mut cursor,
-            (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25),
-        )?;
+        push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25))?;
         push(
             batch_dwords,
             &mut cursor,
@@ -3108,11 +3178,7 @@ fn encode_triangle_probe_batch(
                 | (VFCOMP_STORE_0 << 20)
                 | (VFCOMP_STORE_0 << 16),
         )?;
-        push(
-            batch_dwords,
-            &mut cursor,
-            (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25),
-        )?;
+        push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25))?;
         push(
             batch_dwords,
             &mut cursor,
@@ -3173,8 +3239,10 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     let baked_vs_urb_output_length = pipeline.vs.meta.urb_entry_output_length;
-    let programmed_vs_urb_output_length =
-        TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE.unwrap_or(baked_vs_urb_output_length);
+    let programmed_vs_urb_output_length = front_end_contract
+        .vs_urb_output_length_override
+        .or(TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE)
+        .unwrap_or(baked_vs_urb_output_length);
 
     log_batch_offset(cursor, "3DSTATE_URB_ALLOC_VS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_VS)?;
@@ -3283,8 +3351,12 @@ fn encode_triangle_probe_batch(
         log_batch_offset(cursor, "3DSTATE_SO_DECL_LIST");
         let streamout_decl_dword0 = streamout_experiment.so_decl_buffer_selects();
         let streamout_decl_dword1 = streamout_experiment.so_decl_num_entries();
-        let [streamout_decl_dword2, streamout_decl_dword3, streamout_decl_dword4, streamout_decl_dword5] =
-            streamout_experiment.so_decl_entry_dwords();
+        let [
+            streamout_decl_dword2,
+            streamout_decl_dword3,
+            streamout_decl_dword4,
+            streamout_decl_dword5,
+        ] = streamout_experiment.so_decl_entry_dwords();
         push(batch_dwords, &mut cursor, streamout_experiment.so_decl_header())?;
         push(batch_dwords, &mut cursor, streamout_decl_dword0)?;
         push(batch_dwords, &mut cursor, streamout_decl_dword1)?;
@@ -3406,6 +3478,13 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, raster_dw2)?;
     push(batch_dwords, &mut cursor, raster_dw3)?;
     push(batch_dwords, &mut cursor, raster_dw4)?;
+    log_batch_offset(cursor, "3DSTATE_PRIMITIVE_REPLICATION");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_PRIMITIVE_REPLICATION)?;
+    push(batch_dwords, &mut cursor, primitive_replication_dw1)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "MI_STORE_DATA_IMM post-raster");
     push_store_data_imm(
         batch_dwords,
@@ -3590,6 +3669,8 @@ fn encode_triangle_probe_batch(
         warm,
         pipeline,
         sbe_dw1,
+        baked_vs_urb_output_length,
+        programmed_vs_urb_output_length,
         clip_dw1,
         clip_dw2,
         sf_dw1,
@@ -3673,9 +3754,16 @@ fn encode_triangle_probe_batch(
         (raster_dw1 >> 18) & 0x7,
     );
     intel_render_focus_log!(
-        "intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe_read_len={} ps_varyings={} streamout={}\n",
+        "intel/render: probe-prim-repl-decoded replication_count={} replica_mask=0x{:X} rtai0={}\n",
+        primitive_replication_dw1 & 0xF,
+        (primitive_replication_dw1 >> 16) & 0xFFFF,
+        0,
+    );
+    intel_render_focus_log!(
+        "intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe_read_offset={} sbe_read_len={} ps_varyings={} streamout={}\n",
         baked_vs_urb_output_length,
         programmed_vs_urb_output_length,
+        sbe_vertex_read_offset,
         sbe_vertex_read_length,
         pipeline.ps.meta.num_varying_inputs,
         batch_mode.streamout_enabled() as u8,
@@ -3903,8 +3991,7 @@ fn encode_minimal_streamout_proof_batch(
     let streamout_dw2 = streamout_experiment.vertex_read_length();
     let streamout_dw3 = streamout_experiment.vertex_bytes() as u32;
     let streamout_dw4 = 0u32;
-    let so_buffer_index_dw1 =
-        (RENDER_MOCS << 22) | (1 << 20) | (1 << 21) | (1 << 31);
+    let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 20) | (1 << 21) | (1 << 31);
     let sbe_dw1 = (1 << 5) | (1 << 11) | (1 << 21) | (1 << 22) | (1 << 28) | (1 << 29);
     let programmed_vs_urb_output_length = vs_config
         .map(|config| {
@@ -4269,17 +4356,18 @@ fn encode_minimal_streamout_proof_batch(
     log_batch_offset(cursor, "3DSTATE_SO_DECL_LIST");
     let streamout_decl_dword0 = streamout_experiment.so_decl_buffer_selects();
     let streamout_decl_dword1 = streamout_experiment.so_decl_num_entries();
-    let [streamout_decl_dword2, streamout_decl_dword3, streamout_decl_dword4, streamout_decl_dword5] =
-        streamout_experiment.so_decl_entry_dwords();
+    let [
+        streamout_decl_dword2,
+        streamout_decl_dword3,
+        streamout_decl_dword4,
+        streamout_decl_dword5,
+    ] = streamout_experiment.so_decl_entry_dwords();
     push(batch_dwords, &mut cursor, streamout_experiment.so_decl_header())?;
     push(batch_dwords, &mut cursor, streamout_decl_dword0)?;
     push(batch_dwords, &mut cursor, streamout_decl_dword1)?;
     push(batch_dwords, &mut cursor, streamout_decl_dword2)?;
     push(batch_dwords, &mut cursor, streamout_decl_dword3)?;
-    if matches!(
-        streamout_experiment,
-        StreamoutProofExperiment::HeaderAndPositionSlots01
-    ) {
+    if matches!(streamout_experiment, StreamoutProofExperiment::HeaderAndPositionSlots01) {
         push(batch_dwords, &mut cursor, streamout_decl_dword4)?;
         push(batch_dwords, &mut cursor, streamout_decl_dword5)?;
     }
@@ -4425,7 +4513,6 @@ fn encode_vs_streamout_proof_batch(
         Some(vs_config),
     )
 }
-
 
 fn encode_3d_no_draw_probe_batch(
     batch_dwords: &mut [u32],
@@ -4810,8 +4897,9 @@ fn prepare_vf_streamout_proof_resources(
         [0.25, -0.20, 0.0],
         [0.00, 0.20, 0.0],
     ];
-    let words =
-        unsafe { core::slice::from_raw_parts_mut(warm.vertex_virt as *mut u32, warm.vertex_len / 4) };
+    let words = unsafe {
+        core::slice::from_raw_parts_mut(warm.vertex_virt as *mut u32, warm.vertex_len / 4)
+    };
     words.fill(0);
 
     for (idx, pos) in tri.iter().enumerate() {
@@ -4901,8 +4989,8 @@ fn write_vf_streamout_probe_state(warm: RenderWarmState) -> Result<u32, &'static
     let dwords = unsafe {
         core::slice::from_raw_parts_mut(warm.draw_state_virt as *mut u32, warm.draw_state_len / 4)
     };
-    let slice_hash = &mut dwords[slice_hash_table_offset / 4
-        ..slice_hash_table_offset / 4 + GFX125_SLICE_HASH_TABLE_DWORDS];
+    let slice_hash = &mut dwords
+        [slice_hash_table_offset / 4..slice_hash_table_offset / 4 + GFX125_SLICE_HASH_TABLE_DWORDS];
     let mut packed = [0u32; GFX125_SLICE_HASH_TABLE_DWORDS];
     gfx125_pack_slice_hash_tables(gfx125_slice_hash_config(warm), &mut packed);
     slice_hash.copy_from_slice(&packed);
@@ -5088,8 +5176,7 @@ fn submit_warm_render_batch(
         let result5 = read_result_dword(warm, RESULT_SLOT_POST_PS_STATE_DWORD);
         let result6 = read_result_dword(warm, RESULT_SLOT_POST_CLIP_DWORD);
         let result7 = read_result_dword(warm, RESULT_SLOT_POST_RASTER_DWORD);
-        let result_post3d_eop =
-            read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD);
+        let result_post3d_eop = read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD);
         let result_post3d_eop_hi =
             read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD);
         let observed = match expected_result_slot_dword {
@@ -5175,8 +5262,7 @@ fn submit_warm_render_batch(
     let result6 = read_result_dword(warm, RESULT_SLOT_POST_CLIP_DWORD);
     let result7 = read_result_dword(warm, RESULT_SLOT_POST_RASTER_DWORD);
     let result_post3d_eop = read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD);
-    let result_post3d_eop_hi =
-        read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD);
+    let result_post3d_eop_hi = read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD);
     if should_log_primary_probe_detail() {
         crate::log!(
             "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
@@ -5635,6 +5721,8 @@ fn log_mesa_spec_cross_compare(
     warm: RenderWarmState,
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     sbe_dw1: u32,
+    baked_vs_urb_output_length: u8,
+    programmed_vs_urb_output_length: u8,
     clip_dw1: u32,
     clip_dw2: u32,
     sf_dw1: u32,
@@ -5663,7 +5751,8 @@ fn log_mesa_spec_cross_compare(
     let trueos_ps_per_sample = (ps_extra_dw1 >> 6) & 0x1;
     let trueos_ps_computed_depth = (ps_extra_dw1 >> 26) & 0x3;
     let trueos_ps_computes_stencil = (ps_extra_dw1 >> 5) & 0x1;
-    let trueos_vs_urb_out_len = pipeline.vs.meta.urb_entry_output_length as u32;
+    let trueos_baked_vs_urb_out_len = baked_vs_urb_output_length as u32;
+    let trueos_programmed_vs_urb_out_len = programmed_vs_urb_output_length as u32;
     let trueos_ps_dispatch = match pipeline.ps.meta.kernel.dispatch_mode {
         crate::intel::shader::DispatchMode::Simd8 => "simd8",
         crate::intel::shader::DispatchMode::Simd16 => "simd16",
@@ -5689,7 +5778,7 @@ fn log_mesa_spec_cross_compare(
         decode_cull_mode_name(trueos_raster_cull_mode),
     );
     intel_render_focus_log!(
-        "intel/render: mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask={} binding_table_entry_count={} push_constants={} dispatch={} max_threads_per_psd={}] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable={} per_sample={} computed_depth={} computes_stencil={}] spec_pre_raster[vs_urb_output_len={} sbe_read_offset={} sbe_read_length={}]\n",
+        "intel/render: mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask={} binding_table_entry_count={} push_constants={} dispatch={} max_threads_per_psd={}] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable={} per_sample={} computed_depth={} computes_stencil={}] spec_pre_raster[baked_vs_urb_output_len={} programmed_vs_urb_output_len={} sbe_read_offset={} sbe_read_length={}]\n",
         trueos_ps_vector_mask,
         trueos_ps_binding_table_entry_count,
         trueos_ps_push_constants,
@@ -5699,7 +5788,8 @@ fn log_mesa_spec_cross_compare(
         trueos_ps_per_sample,
         trueos_ps_computed_depth,
         trueos_ps_computes_stencil,
-        trueos_vs_urb_out_len,
+        trueos_baked_vs_urb_out_len,
+        trueos_programmed_vs_urb_out_len,
         trueos_sbe_read_offset,
         trueos_sbe_read_length,
     );
@@ -5867,55 +5957,53 @@ fn log_triangle_stage_diagnosis(
     after: TriangleStageStats,
 ) {
     let delta = after.delta_since(before);
-    let verdict = if is_vf_streamout_submit_name(submit_name)
-        && delta.vs_invocations > 0
-        && !completed
-    {
-        "vf-proof-unexpected-vs-counters"
-    } else if is_vf_streamout_submit_name(submit_name)
-        && (delta.ia_vertices > 0 || delta.ia_primitives > 0)
-        && delta.vs_invocations == 0
-        && delta.so_prims_written_0 == 0
-        && delta.so_write_offset_0 == 0
-        && !completed
-    {
-        "vf-progress-no-sol-write-or-offset"
-    } else if delta.ia_vertices == 0 && delta.vs_invocations == 0 {
-        "no-front-end-progress"
-    } else if is_streamout_submit_name(submit_name)
-        && delta.vs_invocations > 0
-        && delta.so_prims_written_0 == 0
-        && delta.so_write_offset_0 == 0
-        && !completed
-    {
-        "vs-progress-no-sol-write-or-offset"
-    } else if delta.cl_primitives > 0 && delta.ps_invocations == 0 && !completed {
-        "clip-stage-produced-primitives-no-ps"
-    } else if delta.vs_invocations > 0
-        && delta.cl_invocations == 0
-        && delta.cl_primitives == 0
-        && delta.ps_invocations == 0
-        && !completed
-    {
-        "vs-progress-no-clipper-or-ps-counters"
-    } else if delta.cl_invocations > 0 && delta.ps_invocations == 0 {
-        "stops-between-clipper-and-ps"
-    } else if delta.ps_invocations > 0
-        && delta.ps_depth > 0
-        && delta.so_prims_written_0 == 0
-        && delta.so_write_offset_0 == 0
-        && !completed
-    {
-        "ps-depth-ran-no-streamout-or-retire"
-    } else if delta.ps_invocations > 0 && delta.so_prims_written_0 == 0 && !completed {
-        "ps-ran-no-retire-or-export"
-    } else if (delta.so_prims_written_0 > 0 || delta.so_write_offset_0 > 0) && !completed {
-        "streamout-wrote-no-retire"
-    } else if completed {
-        "completed"
-    } else {
-        "late-backend-stall"
-    };
+    let verdict =
+        if is_vf_streamout_submit_name(submit_name) && delta.vs_invocations > 0 && !completed {
+            "vf-proof-unexpected-vs-counters"
+        } else if is_vf_streamout_submit_name(submit_name)
+            && (delta.ia_vertices > 0 || delta.ia_primitives > 0)
+            && delta.vs_invocations == 0
+            && delta.so_prims_written_0 == 0
+            && delta.so_write_offset_0 == 0
+            && !completed
+        {
+            "vf-progress-no-sol-write-or-offset"
+        } else if delta.ia_vertices == 0 && delta.vs_invocations == 0 {
+            "no-front-end-progress"
+        } else if is_streamout_submit_name(submit_name)
+            && delta.vs_invocations > 0
+            && delta.so_prims_written_0 == 0
+            && delta.so_write_offset_0 == 0
+            && !completed
+        {
+            "vs-progress-no-sol-write-or-offset"
+        } else if delta.cl_primitives > 0 && delta.ps_invocations == 0 && !completed {
+            "clip-stage-produced-primitives-no-ps"
+        } else if delta.vs_invocations > 0
+            && delta.cl_invocations == 0
+            && delta.cl_primitives == 0
+            && delta.ps_invocations == 0
+            && !completed
+        {
+            "vs-progress-no-clipper-or-ps-counters"
+        } else if delta.cl_invocations > 0 && delta.ps_invocations == 0 {
+            "stops-between-clipper-and-ps"
+        } else if delta.ps_invocations > 0
+            && delta.ps_depth > 0
+            && delta.so_prims_written_0 == 0
+            && delta.so_write_offset_0 == 0
+            && !completed
+        {
+            "ps-depth-ran-no-streamout-or-retire"
+        } else if delta.ps_invocations > 0 && delta.so_prims_written_0 == 0 && !completed {
+            "ps-ran-no-retire-or-export"
+        } else if (delta.so_prims_written_0 > 0 || delta.so_write_offset_0 > 0) && !completed {
+            "streamout-wrote-no-retire"
+        } else if completed {
+            "completed"
+        } else {
+            "late-backend-stall"
+        };
     intel_render_focus_log!(
         "intel/render: {} stage-diagnosis completed={} verdict={} delta_vs={} delta_hs={} delta_ds={} delta_gs={} delta_gs_prim={} delta_cl={} delta_cl_prim={} delta_ps={} delta_cps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
         submit_name,
@@ -5997,9 +6085,8 @@ fn log_triangle_stage_frontier(
     let ps_state_packet = (result5 == RCS_EXEC_RESULT_DRAW_POST_PS_STATE) as u8;
     let clip_raster_packets = ((result6 == RCS_EXEC_RESULT_DRAW_POST_CLIP)
         && (result7 == RCS_EXEC_RESULT_DRAW_POST_RASTER)) as u8;
-    let post_draw_retire =
-        ((result_post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D)
-            && (result2 == RCS_EXEC_RESULT_DONE)) as u8;
+    let post_draw_retire = ((result_post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D)
+        && (result2 == RCS_EXEC_RESULT_DONE)) as u8;
     let counter_frontier = if delta.ps_invocations > 0 {
         "ps-thread"
     } else if delta.cl_invocations > 0 || delta.cl_primitives > 0 {
@@ -6720,11 +6807,7 @@ fn edge_fn2(ax: i32, ay: i32, bx: i32, by: i32, px2: i32, py2: i32) -> i64 {
 }
 
 fn same_sign_or_zero(area: i64, value: i64) -> bool {
-    if area >= 0 {
-        value >= 0
-    } else {
-        value <= 0
-    }
+    if area >= 0 { value >= 0 } else { value <= 0 }
 }
 
 fn bary_to_u8(weight: i64, area: i64) -> u32 {

@@ -2682,6 +2682,8 @@ dependencies = [
 name = "v"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "spin 0.10.0",
  "trueos-sys",
 ]

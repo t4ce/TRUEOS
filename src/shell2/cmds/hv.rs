@@ -56,19 +56,13 @@ fn parse_optional_vm_id(io: &'static dyn ShellBackend2, raw: Option<&str>) -> Op
     Some(id)
 }
 
-fn parse_optional_stack_mb(
-    io: &'static dyn ShellBackend2,
-    raw: Option<&str>,
-) -> Option<usize> {
+fn parse_optional_stack_mb(io: &'static dyn ShellBackend2, raw: Option<&str>) -> Option<usize> {
     let Some(token) = raw else {
         return Some(crate::hv::memory::guest_stack_default_mb());
     };
 
     let Ok(stack_mb) = token.parse::<usize>() else {
-        io.write_fmt(format_args!(
-            "hv: invalid stack size '{}' MiB (expected integer)\r\n",
-            token
-        ));
+        io.write_fmt(format_args!("hv: invalid stack size '{}' MiB (expected integer)\r\n", token));
         return None;
     };
 

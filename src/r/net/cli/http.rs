@@ -327,7 +327,11 @@ async fn request_http_body(
     }
 
     let mut tcp_handle: Option<api::NetHandle> = None;
+    let mut saw_opened = false;
+    let mut saw_established = false;
     let mut sent_request = false;
+    let mut send_submit_failures = 0u32;
+    let mut last_error: Option<&'static str> = None;
     let mut rx: Vec<u8> = Vec::new();
     let mut truncated = false;
     let timeout_window = EmbassyDuration::from_millis(timeout_ms as u64);
@@ -340,6 +344,7 @@ async fn request_http_body(
                 api::Event::Opened { handle, kind } => {
                     if matches!(kind, api::SocketKind::Tcp) {
                         tcp_handle = Some(handle);
+                        saw_opened = true;
                         last_progress = Instant::now();
                     }
                 }
@@ -350,6 +355,7 @@ async fn request_http_body(
                     if tcp_handle != Some(handle) {
                         continue;
                     }
+                    saw_established = true;
                     if !sent_request {
                         let mut req: Vec<u8> = Vec::new();
                         req.extend_from_slice(method);
@@ -393,6 +399,8 @@ async fn request_http_body(
                                 sent_request = true;
                                 last_progress = Instant::now();
                             } else {
+                                send_submit_failures = send_submit_failures.saturating_add(1);
+                                last_error = Some("request submit failed");
                                 crate::log!(
                                     "http: request submit failed host={} handle={}\n",
                                     parsed.host,
@@ -495,6 +503,9 @@ async fn request_http_body(
                         return Ok(body);
                     }
                 }
+                api::Event::Error { msg } => {
+                    last_error = Some(msg);
+                }
                 _ => {}
             }
         }
@@ -503,8 +514,19 @@ async fn request_http_body(
             if let Some(h) = tcp_handle {
                 let _ = net.submit(api::Command::Close { handle: h });
             }
+            let phase = if !saw_opened {
+                "waiting-open"
+            } else if !saw_established {
+                "waiting-establish"
+            } else if !sent_request {
+                "waiting-send-submit"
+            } else if rx.is_empty() {
+                "waiting-response"
+            } else {
+                "receiving-response"
+            };
             crate::log!(
-                "http: timeout host={} ip={}.{}.{}.{} port={} handle={} sent_request={} rx_bytes={} hdr_end={} idle_ms={}\n",
+                "http: timeout host={} ip={}.{}.{}.{} port={} handle={} phase={} sent_request={} rx_bytes={} hdr_end={} idle_ms={} send_submit_failures={} last_error={}\n",
                 parsed.host,
                 ip[0],
                 ip[1],
@@ -512,10 +534,13 @@ async fn request_http_body(
                 ip[3],
                 parsed.port,
                 tcp_handle.map(|h| h.0).unwrap_or(0),
+                phase,
                 sent_request as u8,
                 rx.len(),
                 find_http_header_end(&rx).is_some() as u8,
                 timeout_ms,
+                send_submit_failures,
+                last_error.unwrap_or("none"),
             );
             return Err(HttpFetchError::TimedOut);
         }

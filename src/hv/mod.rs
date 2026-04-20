@@ -3,10 +3,10 @@ pub mod guest_work;
 pub mod memory;
 pub mod snapshot;
 pub mod store;
-pub mod vnet;
 pub mod vmcall;
 pub mod vmm;
 pub mod vmx;
+pub mod vnet;
 
 use crate::hv::vmx::*;
 
@@ -31,8 +31,8 @@ use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
 use crate::shell2::{ShellBackend2, ShellIo2};
 
-use guest_work::{GuestWorkProfile, pick_guest_work_target};
 use guest::*;
+use guest_work::{GuestWorkProfile, pick_guest_work_target};
 use memory::*;
 use snapshot::*;
 use vmm::VmManager;
@@ -497,11 +497,7 @@ async fn vm1_task() {
         let stats = crate::allocators::hv_guest_heap_stats();
         hvlogf(format_args!(
             "hv: vm1 reporting: hv-guest-heap virt=0x{:016X}..0x{:016X} src={:?} free_bytes={} blocks={}",
-            stats.heap_start,
-            stats.heap_end,
-            stats.source,
-            stats.free_bytes,
-            stats.free_blocks
+            stats.heap_start, stats.heap_end, stats.source, stats.free_bytes, stats.free_blocks
         ));
     }
     let _entered_guest_alloc = crate::allocators::enter_hv_guest_domain_current_cpu();
@@ -694,10 +690,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             ));
             hvlogf(format_args!(
                 "hv: vm1 reporting: guest-state cr0=0x{:016X} cr3=0x{:016X} cr4=0x{:016X} efer=0x{:016X}",
-                guest_cr0,
-                guest_cr3,
-                guest_cr4,
-                guest_efer
+                guest_cr0, guest_cr3, guest_cr4, guest_efer
             ));
             crate::hv::memory::log_guest_mapping("fault-linear", guest_linear);
             crate::hv::memory::log_guest_mapping("fault-rsp", guest_rsp);
@@ -758,8 +751,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                 match (leaf, subleaf) {
                     (0x0000_0000, 0) => cpuid_leaf0_count = cpuid_leaf0_count.saturating_add(1),
                     (0x8000_0000, 0) => {
-                        cpuid_leaf80000000_count =
-                            cpuid_leaf80000000_count.saturating_add(1)
+                        cpuid_leaf80000000_count = cpuid_leaf80000000_count.saturating_add(1)
                     }
                     (0x0000_0001, 0) => cpuid_leaf1_count = cpuid_leaf1_count.saturating_add(1),
                     _ => {
@@ -815,10 +807,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
     {
         hvlogf(format_args!(
             "hv: vm1 reporting: cpuid summary leaf0={} leaf80000000={} leaf1={} other={}",
-            cpuid_leaf0_count,
-            cpuid_leaf80000000_count,
-            cpuid_leaf1_count,
-            cpuid_other_count
+            cpuid_leaf0_count, cpuid_leaf80000000_count, cpuid_leaf1_count, cpuid_other_count
         ));
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -1048,9 +1037,8 @@ fn setup_vmcs_for_launch(
                 .map(|m| m.guest_rsp)
                 .unwrap_or_else(guest_stack_top);
             let guest_cr3 = if restored.is_some() {
-                current_guest_cr3_pa().or_else(|_| {
-                    build_guest_cr3_with_mode(guest_rip, guest_rsp, boot_mode)
-                })?
+                current_guest_cr3_pa()
+                    .or_else(|_| build_guest_cr3_with_mode(guest_rip, guest_rsp, boot_mode))?
             } else {
                 build_guest_cr3_with_mode(guest_rip, guest_rsp, boot_mode)?
             };

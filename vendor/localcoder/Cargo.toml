@@ -1,0 +1,50 @@
+[package]
+name = "localcoder"
+version = "0.1.6"
+edition = "2024"
+description = "oxink."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/iamwjun/localcoder"
+
+[dependencies]
+# HTTP client
+reqwest = { version = "0.12", features = ["json"], optional = true }
+# Async runtime
+tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "process", "io-util", "sync", "time"] }
+# JSON handling
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Error handling
+anyhow = "1.0"
+# CLI interaction
+rustyline = { version = "14.0", optional = true }
+# Terminal colors
+colored = "2.1"
+# File globbing (S03 GlobTool)
+glob = "0.3"
+# File walking with .gitignore support (S03 GrepTool)
+ignore = { version = "0.4", optional = true }
+# Regex engine (S03 GrepTool)
+regex = "1"
+serde_yaml = "0.9"
+url = "2.5"
+v = { path = "../../crates/trueos-v", optional = true }
+
+[features]
+default = ["host-net", "interactive", "grep-tool", "bash-tool", "lsp-tool"]
+host-net = ["dep:reqwest"]
+trueos-net = ["dep:v"]
+interactive = ["dep:rustyline"]
+grep-tool = ["dep:ignore"]
+bash-tool = []
+lsp-tool = ["dep:ignore"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[dev-dependencies]
+tempfile = "3"

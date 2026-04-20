@@ -637,25 +637,26 @@ pub(crate) fn invoke_host_rel(
 ) -> Result<(), &'static str> {
     let image = load_rel_image(unpacked)?;
     let sections = parse_sections(unpacked)?;
-    let main_addr = find_main_addr(
-        unpacked,
-        sections.as_slice(),
-        image.section_bases.as_slice(),
-        entry_hint,
-    )?;
+    let main_addr =
+        find_main_addr(unpacked, sections.as_slice(), image.section_bases.as_slice(), entry_hint)?;
     let (_arg_storage, argv) = build_argv(process_args.as_slice());
     let main_fn: extern "C" fn(usize, *const *const c_char) =
         unsafe { core::mem::transmute(main_addr) };
-    crate::r::io::env::with_launch_context_console(process_args, process_env, console_target, || {
-        main_fn(
-            argv.len(),
-            if argv.is_empty() {
-                core::ptr::null()
-            } else {
-                argv.as_ptr()
-            },
-        );
-    });
+    crate::r::io::env::with_launch_context_console(
+        process_args,
+        process_env,
+        console_target,
+        || {
+            main_fn(
+                argv.len(),
+                if argv.is_empty() {
+                    core::ptr::null()
+                } else {
+                    argv.as_ptr()
+                },
+            );
+        },
+    );
     drop(image);
     Ok(())
 }

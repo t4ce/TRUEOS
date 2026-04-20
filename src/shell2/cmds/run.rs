@@ -9,7 +9,8 @@ use spin::Mutex;
 
 use super::super::{
     MatrixTarget, ShellBackend2, UART1_COM1_BACKEND, default_matrix_target, line_width_for_backend,
-    matrix_target_for_backend, print_matrix_target_line, print_shell_line, set_matrix_target_active,
+    matrix_target_for_backend, print_matrix_target_line, print_shell_line,
+    set_matrix_target_active,
 };
 use super::tlb_helper::TlbTable;
 use crate::blueprint;
@@ -210,22 +211,18 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
                         .iter()
                         .filter(|import| import.resolved_addr.is_some())
                         .count();
-                    log(alloc::format!(
-                        "run: ELF imports={} resolved={}",
-                        imports.len(),
-                        resolved
-                    )
-                    .as_str());
+                    log(alloc::format!("run: ELF imports={} resolved={}", imports.len(), resolved)
+                        .as_str());
                     for import in imports.iter() {
                         match import.resolved_addr {
-                            Some(addr) => log(
-                                alloc::format!("run: import {} -> 0x{:x}", import.name, addr)
-                                    .as_str(),
-                            ),
-                            None => log(
-                                alloc::format!("run: import {} -> unresolved", import.name)
-                                    .as_str(),
-                            ),
+                            Some(addr) => {
+                                log(alloc::format!("run: import {} -> 0x{:x}", import.name, addr)
+                                    .as_str())
+                            }
+                            None => {
+                                log(alloc::format!("run: import {} -> unresolved", import.name)
+                                    .as_str())
+                            }
                         }
                     }
                 }
@@ -311,7 +308,8 @@ pub(crate) fn enqueue_blueprint_bytes(
 }
 
 pub(crate) fn enqueue_embedded_hello_world_once() {
-    let Some(module_bytes) = crate::limine::module_bytes_by_string(b"trueos.app.hello_world") else {
+    let Some(module_bytes) = crate::limine::module_bytes_by_string(b"trueos.app.hello_world")
+    else {
         crate::log!("run: boot hello-world module missing from limine modules\n");
         return;
     };
@@ -348,7 +346,8 @@ fn submit_archive_entry(
         }
         ArchiveSource::EmbeddedModule { cmdline } => {
             let target = matrix_target_for_backend(io);
-            let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline.as_bytes()) else {
+            let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline.as_bytes())
+            else {
                 print_shell_line(io, "run: failed to read selected embedded module");
                 return;
             };

@@ -7,6 +7,8 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 trueos-sys = { path = "../trueos-sys" }
 spin = "0.10"
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 
 [features]
 default = []

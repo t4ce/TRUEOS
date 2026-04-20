@@ -1,0 +1,9 @@
+Upstream repository: /home/t4ce/REPOS/localcoder
+Upstream git remote: https://github.com/iamwjun/localcoder
+Vendored commit: 3aa88920885a8ef5579406b1072b359c2faeafb1
+Vendored on: 2026-04-20
+
+Notes:
+- This snapshot excludes `.git/`.
+- This snapshot excludes `target/`.
+- This snapshot excludes upstream `Cargo.lock`.

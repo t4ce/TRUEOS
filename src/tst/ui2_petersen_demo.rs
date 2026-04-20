@@ -272,8 +272,7 @@ pub async fn ui2_petersen_demo_task() {
     );
 
     loop {
-        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-petersen-demo", 3_600_000).await
-        {
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-petersen-demo", 3_600_000).await {
             break;
         }
     }

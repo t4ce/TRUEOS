@@ -88,14 +88,7 @@ impl TaskSpec {
         started: &'static AtomicBool,
         spawn: fn(Spawner) -> SpawnAttempt,
     ) -> Self {
-        Self::disabled_on(
-            SpawnPlacement::Local,
-            name,
-            required,
-            disabled_flag,
-            started,
-            spawn,
-        )
+        Self::disabled_on(SpawnPlacement::Local, name, required, disabled_flag, started, spawn)
     }
 
     pub(super) const fn disabled_on(

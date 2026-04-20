@@ -622,11 +622,9 @@ unsafe fn read_gadget_snapshot(
     }
 
     let version = read_result_u32(ctx, snapshot_value, TRUESURFER_GADGET_SNAPSHOT_VERSION_PROP);
-    let background_color_rgb = read_result_u32(
-        ctx,
-        snapshot_value,
-        TRUESURFER_GADGET_SNAPSHOT_BACKGROUND_COLOR_RGB_PROP,
-    ) & 0x00FF_FFFF;
+    let background_color_rgb =
+        read_result_u32(ctx, snapshot_value, TRUESURFER_GADGET_SNAPSHOT_BACKGROUND_COLOR_RGB_PROP)
+            & 0x00FF_FFFF;
     let gadgets_value = qjs::JS_GetPropertyStr(
         ctx,
         snapshot_value,
@@ -785,7 +783,11 @@ fn apply_browser_gadget_snapshot(
         }
 
         let gadget_height = gadget_snapshot_content_height(&state.gadget_snapshot);
-        let next_content_height = state.surface_state.viewport_height.max(1).max(gadget_height);
+        let next_content_height = state
+            .surface_state
+            .viewport_height
+            .max(1)
+            .max(gadget_height);
         if next_content_height != state.surface_state.content_height {
             state.surface_state.content_height = next_content_height;
             state.surface_seq = state.surface_seq.wrapping_add(1);
@@ -805,7 +807,10 @@ unsafe fn sync_latest_browser_artifacts(
         global,
         TRUESURFER_LAST_ARTIFACTS_PROP.as_ptr() as *const c_char,
     );
-    if artifacts.is_exception() || artifacts.tag == qjs::JS_TAG_UNDEFINED || artifacts.tag == qjs::JS_TAG_NULL {
+    if artifacts.is_exception()
+        || artifacts.tag == qjs::JS_TAG_UNDEFINED
+        || artifacts.tag == qjs::JS_TAG_NULL
+    {
         qjs::js_free_value(ctx, artifacts);
         qjs::js_free_value(ctx, global);
         return false;

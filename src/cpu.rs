@@ -1,5 +1,5 @@
-use crate::{exceptions, globalog, percpu, runtime};
 use crate::limine::MpCpu as LimineCpu;
+use crate::{exceptions, globalog, percpu, runtime};
 use alloc::vec::Vec;
 use core::arch::x86_64::__cpuid;
 use core::ptr::null_mut;
