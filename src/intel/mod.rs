@@ -6,8 +6,11 @@ mod render;
 pub(crate) mod shader;
 pub(crate) mod state;
 pub(crate) mod stats;
+pub(crate) mod xelp_media_h264src;
+pub(crate) mod xelp_media_matroska;
 pub(crate) mod xelp_media_mp4;
 pub(crate) mod xelp_media_ngin;
+pub(crate) mod xelp_media_source;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -51,7 +54,7 @@ const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const RENDER_BOOT_PROBE_LOOP_ENABLED: bool = false;
 const RENDER_BOOT_PROBE_INTERVAL_MS: u64 = 16;
 const MEDIA_BOOT_SOURCE_WARM_ENABLED: bool = true;
-const MEDIA_BOOT_DEMO_ENABLED: bool = false;
+const MEDIA_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 
 static INIT: AtomicBool = AtomicBool::new(false);
@@ -234,8 +237,12 @@ pub async fn run_media_decode_async() {
 }
 
 pub async fn run_media_source_warmup_async() {
+    if MEDIA_BOOT_DEMO_ENABLED {
+        crate::log!("intel/media: source warmup skipped reason=boot-demo-linear-path\n");
+        return;
+    }
     if MEDIA_BOOT_SOURCE_WARM_ENABLED {
-        self::xelp_media_ngin::run_media_source_warmup_async().await
+        self::xelp_media_source::run_media_source_warmup_async().await
     } else {
         crate::log!("intel/media: source warmup skipped reason=disabled\n");
     }

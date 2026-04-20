@@ -218,6 +218,7 @@ pub(super) fn decode_http_chunked(body: &[u8]) -> Option<Vec<u8>> {
 pub(super) enum HttpBodyKind {
     ContentLength(usize),
     Chunked,
+    UntilClose,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -234,10 +235,15 @@ pub(super) fn parse_http_head(headers: &[u8]) -> Option<HttpHead> {
             body: HttpBodyKind::Chunked,
         });
     }
-    let len = header_parse_content_length(headers)?;
+    if let Some(len) = header_parse_content_length(headers) {
+        return Some(HttpHead {
+            status,
+            body: HttpBodyKind::ContentLength(len),
+        });
+    }
     Some(HttpHead {
         status,
-        body: HttpBodyKind::ContentLength(len),
+        body: HttpBodyKind::UntilClose,
     })
 }
 
@@ -338,7 +344,7 @@ async fn request_http_body(
     let mut last_progress = Instant::now();
 
     loop {
-        for _ in 0..32 {
+        for _ in 0..256 {
             let Some(ev) = net.pop_event() else { break };
             match ev {
                 api::Event::Opened { handle, kind } => {
@@ -471,6 +477,7 @@ async fn request_http_body(
                                         return Ok(body);
                                     }
                                 }
+                                HttpBodyKind::UntilClose => {}
                             }
                         }
                     }

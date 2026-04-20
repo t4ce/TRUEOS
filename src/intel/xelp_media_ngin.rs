@@ -3,15 +3,16 @@ extern crate alloc;
 use alloc::format;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use spin::Mutex;
 
+use super::xelp_media_h264src::parse_h264_source_summary;
 use super::xelp_media_mp4::{
-    H264VclInfo, ParsedPps, ParsedSps, build_annex_b_access_unit, build_annex_b_for_sample,
-    first_sample_nal_types, get_sample_data, parse_h264_mp4_summary, parse_pps,
+    H264VclInfo, ParsedPps, ParsedSps, build_annex_b_for_sample, first_sample_nal_types, parse_pps,
     parse_sample_vcl_info, parse_sps,
 };
+use super::xelp_media_source;
 
 const MAX_MEDIA_ENGINES: usize = 4;
 const MAX_MEDIA_API_ROUTES: usize = 4;
@@ -63,28 +64,16 @@ const RING_EXECLIST_STATUS_HI: usize = 0x238;
 const RING_EXECLIST_CONTROL: usize = 0x550;
 
 const MEDIA_ENGINE_GPU_ADDR_BASE: u64 = 0x0120_0000;
-const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0080_0000;
+const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0100_0000;
 const MEDIA_DEFAULT_RING_BYTES: usize = 16 * 1024;
 const MEDIA_DEFAULT_CONTEXT_BYTES: usize = 22 * 4096;
 const MEDIA_DEFAULT_BATCH_BYTES: usize = 32 * 1024;
 const MEDIA_DEFAULT_RESULT_BYTES: usize = 4 * 4096;
-const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 256 * 1024;
-const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 4 * 1024 * 1024;
+const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 512 * 1024;
+const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 8 * 1024 * 1024;
 const MEDIA_DEFAULT_SCRATCH_BYTES: usize = 256 * 1024;
 const MEDIA_SCRATCH_OFFSET_BYTES: usize = MEDIA_DEFAULT_SCRATCH_BYTES;
 const MEDIA_SUBMIT_POLL_ITERS: usize = 100_000;
-
-const MEDIA_HTTP_LOCAL_DEMO_URLS: [&str; 2] = [
-    "http://192.168.178.112:8080/tools/vid/demo_yelly.mp4",
-    "http://pcjb:8080/tools/vid/demo_yelly.mp4",
-];
-const MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS: u32 = 180_000;
-const MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES: usize = 1024 * 1024 * 1024;
-const MEDIA_DECODE_CACHE_PATH: &str = "media/demo_yelly.mp4";
-const MEDIA_CACHE_WRITE_PROGRESS_BYTES: u64 = 8 * 1024 * 1024;
-const MEDIA_CACHE_WRITE_YIELD_EVERY_BYTES: u64 = 512 * 1024;
-const MEDIA_CACHE_WRITE_FALLBACK_CHUNK_BYTES: usize = 256 * 1024;
-const MEDIA_CACHE_WRITE_MAX_CHUNK_BYTES: usize = 1024 * 1024;
 
 const RING_HWS_PGA: usize = 0x80;
 const RING_HWSTAM: usize = 0x98;
@@ -207,7 +196,6 @@ const MEDIA_RESULT_FRAME_DIMS_SLOT: u64 =
     MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT + MEDIA_RESULT_SLOT_BYTES;
 
 static MEDIA_KICKOFF_RAN: AtomicBool = AtomicBool::new(false);
-static MEDIA_SOURCE_WARM_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_DECODE_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_KICKOFF_STATE: Mutex<Option<MediaKickoffState>> = Mutex::new(None);
 static MEDIA_BACKING: Mutex<Option<MediaBitstreamBacking>> = Mutex::new(None);
@@ -644,7 +632,7 @@ fn engine_window(slot: usize) -> MediaGpuWindowLayout {
         batch_gpu_addr: base + 0x0008_0000,
         bitstream_gpu_addr: base + 0x0014_0000,
         output_surface_gpu_addr: base + 0x0020_0000,
-        result_gpu_addr: base + 0x0060_0000,
+        result_gpu_addr: base + 0x00A0_0000,
     }
 }
 
@@ -2127,7 +2115,20 @@ fn submit_h264_frame(
         .output_surface_bytes
         .checked_sub(MEDIA_SCRATCH_OFFSET_BYTES)?;
     // Double-buffer: need 2× output_bytes for decode target + reference surface.
-    if output_bytes.checked_mul(2)? > output_budget || annex_b.len() > backing.bitstream_bytes {
+    let double_output = output_bytes.checked_mul(2)?;
+    if double_output > output_budget || annex_b.len() > backing.bitstream_bytes {
+        if sample_idx < 2 {
+            crate::log!(
+                "intel/media: submit budget exceeded frame={}x{} output_bytes={} double={} budget={} bs_len={} bs_max={}\n",
+                frame_width,
+                frame_height,
+                output_bytes,
+                double_output,
+                output_budget,
+                annex_b.len(),
+                backing.bitstream_bytes,
+            );
+        }
         return None;
     }
 
@@ -2651,266 +2652,8 @@ pub(crate) fn decode_surface_window(name: &str) -> Option<MediaSurfaceWindow> {
     }
 }
 
-async fn fetch_media_source_async() -> Option<(&'static str, Vec<u8>)> {
-    // Temporary test knob: bypass filesystem cache and keep media fully in memory.
-    if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
-        // Try loading from persistent filesystem cache first.
-        if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-            let info = disk.info();
-            crate::log!(
-                "intel/media: cache probe path={} disk_id={} readonly={} block={} max_transfer={} mode=blocking-indexed-read\n",
-                MEDIA_DECODE_CACHE_PATH,
-                info.id.raw(),
-                info.is_read_only() as u8,
-                info.block_size,
-                info.max_transfer_bytes,
-            );
-            match crate::r::fs::trueosfs::file_out_async(disk, MEDIA_DECODE_CACHE_PATH).await {
-                Ok(Some(cached)) if !cached.is_empty() => {
-                    crate::log!(
-                        "intel/media: cache hit path={} bytes={}\n",
-                        MEDIA_DECODE_CACHE_PATH,
-                        cached.len()
-                    );
-                    return Some(("cache", cached));
-                }
-                Ok(None) => {
-                    crate::log!(
-                        "intel/media: cache unavailable path={} reason=miss\n",
-                        MEDIA_DECODE_CACHE_PATH
-                    );
-                }
-                Ok(Some(_)) => {
-                    crate::log!(
-                        "intel/media: cache unavailable path={} reason=empty\n",
-                        MEDIA_DECODE_CACHE_PATH
-                    );
-                }
-                Err(err) => {
-                    crate::log!(
-                        "intel/media: cache probe failed path={} err={:?}\n",
-                        MEDIA_DECODE_CACHE_PATH,
-                        err
-                    );
-                }
-            }
-        }
-    } else {
-        crate::log!("intel/media: fs cache disabled path={}\n", MEDIA_DECODE_CACHE_PATH);
-    }
-
-    for url in MEDIA_HTTP_LOCAL_DEMO_URLS {
-        crate::log!(
-            "intel/media: try local url={} timeout_ms={} max_bytes={}\n",
-            url,
-            MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
-            MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES,
-        );
-        match crate::r::net::http::fetch_http_body(
-            url,
-            MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
-            MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES,
-        )
-        .await
-        {
-            Ok(body) => {
-                if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
-                    // Persist to disk for next boot (best-effort, don't block on failure).
-                    if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-                        match persist_media_cache_async(
-                            disk,
-                            MEDIA_DECODE_CACHE_PATH,
-                            body.as_slice(),
-                        )
-                        .await
-                        {
-                            Ok(true) => {
-                                crate::log!(
-                                    "intel/media: cached path={} bytes={}\n",
-                                    MEDIA_DECODE_CACHE_PATH,
-                                    body.len()
-                                );
-                            }
-                            Ok(false) => {
-                                crate::log!(
-                                    "intel/media: cache write skipped path={}\n",
-                                    MEDIA_DECODE_CACHE_PATH
-                                );
-                            }
-                            Err(err) => {
-                                crate::log!(
-                                    "intel/media: cache write failed path={} err={:?}\n",
-                                    MEDIA_DECODE_CACHE_PATH,
-                                    err
-                                );
-                            }
-                        }
-                    }
-                } else {
-                    crate::log!(
-                        "intel/media: cache persist bypassed path={} bytes={}\n",
-                        MEDIA_DECODE_CACHE_PATH,
-                        body.len()
-                    );
-                }
-                return Some((url, body));
-            }
-            Err(err) => {
-                crate::log!("intel/media: local fetch failed url={} err={:?}\n", url, err);
-            }
-        }
-    }
-
-    None
-}
-
-pub(crate) async fn run_media_source_warmup_async() {
-    if MEDIA_SOURCE_WARM_RAN.swap(true, Ordering::AcqRel) {
-        crate::log!("intel/media: source warmup skipped reason=already-ran\n");
-        return;
-    }
-
-    if !crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
-        crate::log!("intel/media: source warmup skipped reason=fs-cache-disabled\n");
-        return;
-    }
-
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        crate::log!("intel/media: source warmup skipped reason=no-root-disk\n");
-        return;
-    };
-
-    let info = disk.info();
-    crate::log!(
-        "intel/media: source warmup root disk_id={} readonly={} block={} max_transfer={}\n",
-        info.id.raw(),
-        info.is_read_only() as u8,
-        info.block_size,
-        info.max_transfer_bytes,
-    );
-
-    match fetch_media_source_async().await {
-        Some((source, body)) => {
-            crate::log!(
-                "intel/media: source warmup ready source={} bytes={}\n",
-                source,
-                body.len(),
-            );
-        }
-        None => {
-            crate::log!("intel/media: source warmup failed reason=fetch-exhausted\n");
-        }
-    }
-}
-
-fn media_cache_chunk_bytes(info: &crate::disc::block::DeviceInfo) -> usize {
-    let block_size = usize::max(info.block_size as usize, 1);
-    let raw = if info.max_transfer_bytes > 0 {
-        usize::min(info.max_transfer_bytes as usize, MEDIA_CACHE_WRITE_MAX_CHUNK_BYTES)
-    } else {
-        MEDIA_CACHE_WRITE_FALLBACK_CHUNK_BYTES
-    };
-    let aligned = raw - (raw % block_size);
-    usize::max(aligned, block_size)
-}
-
-fn media_cache_bps(written: u64, started: Instant) -> u64 {
-    let elapsed_ms = started.elapsed().as_millis();
-    if elapsed_ms == 0 {
-        0
-    } else {
-        ((written as u128).saturating_mul(1000) / u128::from(elapsed_ms)) as u64
-    }
-}
-
-async fn persist_media_cache_async(
-    disk: crate::disc::block::DeviceHandle,
-    path: &str,
-    bytes: &[u8],
-) -> Result<bool, crate::disc::block::Error> {
-    let info = disk.info();
-    let chunk_bytes = media_cache_chunk_bytes(&info);
-    crate::log!(
-        "intel/media: cache write start path={} bytes={} disk_id={} kind={:?} block={} max_transfer={} chunk={} label={}\n",
-        path,
-        bytes.len(),
-        info.id.raw(),
-        info.kind,
-        info.block_size,
-        info.max_transfer_bytes,
-        chunk_bytes,
-        info.label.as_deref().unwrap_or("-"),
-    );
-
-    let Some(handle) =
-        crate::r::fs::trueosfs::file_write_begin_async(disk, path, bytes.len() as u64).await?
-    else {
-        return Ok(false);
-    };
-
-    let started = Instant::now();
-    let mut written = 0u64;
-    let mut next_progress = MEDIA_CACHE_WRITE_PROGRESS_BYTES;
-    let mut next_yield = MEDIA_CACHE_WRITE_YIELD_EVERY_BYTES;
-
-    for chunk in bytes.chunks(chunk_bytes) {
-        if let Err(err) = crate::r::fs::trueosfs::file_write_chunk_async(handle, chunk).await {
-            let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
-            crate::log!(
-                "intel/media: cache write chunk failed path={} offset={} chunk={} err={:?}\n",
-                path,
-                written,
-                chunk.len(),
-                err,
-            );
-            return Err(err);
-        }
-        written = written.saturating_add(chunk.len() as u64);
-        if written >= next_progress || written == bytes.len() as u64 {
-            crate::log!(
-                "intel/media: cache write progress path={} written={} total={} bps={} elapsed_ms={}\n",
-                path,
-                written,
-                bytes.len(),
-                media_cache_bps(written, started),
-                started.elapsed().as_millis(),
-            );
-            next_progress = next_progress.saturating_add(MEDIA_CACHE_WRITE_PROGRESS_BYTES);
-        }
-
-        if written >= next_yield && written != bytes.len() as u64 {
-            Timer::after(EmbassyDuration::from_millis(1)).await;
-            next_yield = next_yield.saturating_add(MEDIA_CACHE_WRITE_YIELD_EVERY_BYTES);
-        }
-    }
-
-    crate::log!(
-        "intel/media: cache write flush path={} written={} elapsed_ms={}\n",
-        path,
-        written,
-        started.elapsed().as_millis(),
-    );
-    if let Err(err) = crate::r::fs::trueosfs::file_write_finish_async(handle).await {
-        crate::log!(
-            "intel/media: cache write finish failed path={} written={} err={:?}\n",
-            path,
-            written,
-            err,
-        );
-        return Err(err);
-    }
-
-    crate::log!(
-        "intel/media: cache write committed path={} bytes={} bps={} elapsed_ms={}\n",
-        path,
-        written,
-        media_cache_bps(written, started),
-        started.elapsed().as_millis(),
-    );
-    Ok(true)
-}
-
 pub(crate) async fn run_media_decode_async() {
+    xelp_media_source::mark_decode_requested();
     kickoff_once();
 
     if MEDIA_DECODE_RAN.swap(true, Ordering::AcqRel) {
@@ -2931,11 +2674,11 @@ pub(crate) async fn run_media_decode_async() {
 
     crate::log!(
         "intel/media: begin local_urls={:?} engine={}\n",
-        MEDIA_HTTP_LOCAL_DEMO_URLS,
+        xelp_media_source::demo_urls(),
         engine.name
     );
 
-    let (source_url, body) = match fetch_media_source_async().await {
+    let (source_url, body) = match xelp_media_source::fetch_media_source_async("decode").await {
         Some(payload) => payload,
         None => {
             crate::log!("intel/media: fetch failed local_http_candidates_exhausted=1\n");
@@ -2953,59 +2696,77 @@ pub(crate) async fn run_media_decode_async() {
         find_fourcc(body.as_slice(), b"mdat").is_some() as u8
     );
 
-    let summary = match parse_h264_mp4_summary(body.as_slice()) {
+    let summary = match parse_h264_source_summary(body.as_slice()) {
         Ok(summary) => summary,
         Err(err) => {
-            crate::log!("intel/media: parse failed err={:?}\n", err);
+            crate::log!(
+                "intel/media: parse failed container={} err={}\n",
+                if body.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+                    "matroska"
+                } else {
+                    "mp4"
+                },
+                err
+            );
             store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
             return;
         }
     };
 
-    let annex_b = match build_annex_b_access_unit(&summary) {
+    let annex_b = match build_annex_b_for_sample(summary.first_sample(), summary.avcc()) {
         Ok(annex_b) => annex_b,
         Err(err) => {
-            crate::log!("intel/media: annexb build failed err={:?}\n", err);
+            crate::log!(
+                "intel/media: annexb build failed err={:?} container={} first_sample_len={} nal_length_size={} first_bytes=[{:02X?}]\n",
+                err,
+                summary.container_name(),
+                summary.first_sample().len(),
+                summary.avcc().nal_length_size,
+                &summary.first_sample()[..summary.first_sample().len().min(16)],
+            );
             store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
             return;
         }
     };
-    let nal_types = first_sample_nal_types(summary.first_sample, summary.avcc.nal_length_size, 6);
+    let nal_types =
+        first_sample_nal_types(summary.first_sample(), summary.avcc().nal_length_size, 6);
 
     crate::log!(
-        "intel/media: h264 dims={}x{} samples={} first_sample={} nal_len={} sps={} pps={} profile=0x{:02X} level=0x{:02X} annexb_bytes={} sample_nals={} idr={} first_nals={:?}\n",
-        summary.width,
-        summary.height,
-        summary.sample_count,
-        summary.first_sample_size,
-        summary.avcc.nal_length_size,
-        summary.avcc.sps.len(),
-        summary.avcc.pps.len(),
-        summary.avcc.profile_idc,
-        summary.avcc.level_idc,
+        "intel/media: h264 container={} dims={}x{} samples={} first_sample={} nal_len={} sps={} pps={} profile=0x{:02X} level=0x{:02X} annexb_bytes={} sample_nals={} idr={} first_nals={:?}\n",
+        summary.container_name(),
+        summary.width(),
+        summary.height(),
+        summary.sample_count(),
+        summary.first_sample().len(),
+        summary.avcc().nal_length_size,
+        summary.avcc().sps.len(),
+        summary.avcc().pps.len(),
+        summary.avcc().profile_idc,
+        summary.avcc().level_idc,
         annex_b.bytes.len(),
         annex_b.sample_nal_count,
         annex_b.has_idr as u8,
         nal_types
     );
     crate::log!(
-        "intel/media: codec codec=h264 profile=0x{:02X} level=0x{:02X} frame={}x{} avcc_nal={} sample_nals={} idr={} annexb=0x{:X}\n",
-        summary.avcc.profile_idc,
-        summary.avcc.level_idc,
-        summary.width,
-        summary.height,
-        summary.avcc.nal_length_size,
+        "intel/media: codec container={} codec=h264 profile=0x{:02X} level=0x{:02X} frame={}x{} avcc_nal={} sample_nals={} idr={} annexb=0x{:X}\n",
+        summary.container_name(),
+        summary.avcc().profile_idc,
+        summary.avcc().level_idc,
+        summary.width(),
+        summary.height(),
+        summary.avcc().nal_length_size,
         annex_b.sample_nal_count,
         annex_b.has_idr as u8,
         annex_b.bytes.len(),
     );
 
-    let Some(sps) = parse_sps(summary.avcc.sps) else {
+    let Some(sps) = parse_sps(summary.avcc().sps) else {
         crate::log!("intel/media: sps parse failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return;
     };
-    let Some(pps) = parse_pps(summary.avcc.pps, &sps) else {
+    let Some(pps) = parse_pps(summary.avcc().pps, &sps) else {
         crate::log!("intel/media: pps parse failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return;
@@ -3051,7 +2812,7 @@ pub(crate) async fn run_media_decode_async() {
         return;
     };
 
-    let playback_probe_samples = summary.sample_count.min(MEDIA_MAX_DECODE_FRAMES).max(1);
+    let playback_probe_samples = summary.sample_count().min(MEDIA_MAX_DECODE_FRAMES).max(1);
     let mut playback_attempted = 0u32;
     let mut playback_presented = 0u32;
     let mut playback_completed = 0u32;
@@ -3063,25 +2824,25 @@ pub(crate) async fn run_media_decode_async() {
 
     for sample_idx in 0..playback_probe_samples {
         let sample = if sample_idx == 0 {
-            summary.first_sample
+            summary.first_sample()
         } else {
-            let Some(sample) = get_sample_data(&summary, sample_idx) else {
+            let Some(sample) = summary.sample_data(sample_idx) else {
                 crate::log!(
                     "intel/media: playback sample unavailable index={} of={}\n",
                     sample_idx,
-                    summary.sample_count,
+                    summary.sample_count(),
                 );
                 break;
             };
             sample
         };
 
-        let sample_nals = first_sample_nal_types(sample, summary.avcc.nal_length_size, 6);
-        let vcl_info = parse_sample_vcl_info(sample, summary.avcc.nal_length_size, &sps, &pps);
+        let sample_nals = first_sample_nal_types(sample, summary.avcc().nal_length_size, 6);
+        let vcl_info = parse_sample_vcl_info(sample, summary.avcc().nal_length_size, &sps, &pps);
         let built_sample_annex_b = if sample_idx == 0 {
             None
         } else {
-            match build_annex_b_for_sample(sample, &summary.avcc) {
+            match build_annex_b_for_sample(sample, summary.avcc()) {
                 Ok(access_unit) => Some(access_unit),
                 Err(err) => {
                     crate::log!(
@@ -3128,7 +2889,7 @@ pub(crate) async fn run_media_decode_async() {
             crate::log!(
                 "intel/media: playback probe index={} of={} bytes={} sample_nals={} idr={} frame_num={} nal_ref_idc={} nal_type={} slice_type={} first_nals={:?}\n",
                 sample_idx,
-                summary.sample_count,
+                summary.sample_count(),
                 sample_bytes.len(),
                 sample_nal_count,
                 sample_has_idr as u8,
@@ -3145,8 +2906,8 @@ pub(crate) async fn run_media_decode_async() {
             engine,
             windows,
             backing,
-            summary.width,
-            summary.height,
+            summary.width(),
+            summary.height(),
             sample_bytes,
             sample_nal_count,
             sample_has_idr,
@@ -3228,7 +2989,7 @@ pub(crate) async fn run_media_decode_async() {
         playback_idr,
         playback_non_idr,
         playback_probe_samples,
-        summary.sample_count,
+        summary.sample_count(),
     );
 
     if let Some(demo) = last_presented_demo {
@@ -3241,7 +3002,7 @@ pub(crate) async fn run_media_decode_async() {
         engine.name,
         playback_attempted,
         playback_completed,
-        summary.sample_count,
+        summary.sample_count(),
     );
 
     store_kickoff_state(MediaKickoffStage::Smoke, last_attempted_demo);

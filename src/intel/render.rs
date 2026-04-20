@@ -125,7 +125,7 @@ const PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS: usize = 3;
 const PRIMARY_USE_MI_STRIPE_PROBE: bool = false;
 const PRIMARY_USE_3D_NO_DRAW_PROBE: bool = false;
 const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = true;
-const PRIMARY_DISABLE_RENDER_BRINGUP: bool = false;
+const PRIMARY_DISABLE_RENDER_BRINGUP: bool = true;
 const MI_STRIPE_COUNT: usize = 12;
 const MI_STRIPE_WIDTH_PX: usize = 4;
 const MI_STRIPE_X_STEP_PX: u32 = 1;
@@ -202,6 +202,7 @@ const CMD_3DSTATE_SAMPLER_STATE_POINTERS_VS: u32 = (43 << 16) | (3 << 27) | (3 <
 const CMD_3DSTATE_SAMPLER_STATE_POINTERS_PS: u32 = (47 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VF_STATISTICS: u32 = (11 << 16) | (1 << 27) | (3 << 29);
 const CMD_3DSTATE_VF: u32 = (12 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VFG: u32 = 2 | (87 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_MULTISAMPLE: u32 = (13 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_DRAWING_RECTANGLE: u32 = 2 | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SAMPLE_MASK: u32 = (24 << 16) | (3 << 27) | (3 << 29);
@@ -3202,6 +3203,17 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DSTATE_VF_STATISTICS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_STATISTICS | 1)?;
+    if device_is_gfx125(warm.device_id) {
+        // Reset gfx125 vertex distribution state explicitly before the real
+        // VS path. Mesa emits this packet in the gfx state stream, and leaving
+        // it inherited makes the VS front-end path less deterministic than the
+        // otherwise identical VF-fed probe.
+        log_batch_offset(cursor, "3DSTATE_VFG");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VFG)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+    }
     log_batch_offset(cursor, "3DSTATE_VF");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -3268,7 +3280,9 @@ fn encode_triangle_probe_batch(
     } else {
         let vs_dw3 = ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
             | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
-        let vs_dw6 = (1 << 11) | ((pipeline.vs.meta.kernel.grf_start_register as u32) << 20);
+        let applied_vs_grf_start =
+            triangle_vs_dispatch_grf_start_register(pipeline.vs.meta.kernel.grf_start_register);
+        let vs_dw6 = (1 << 11) | (applied_vs_grf_start << 20);
         let vs_dw7 = 1
             | (1 << 2)
             | (1 << 10)
@@ -3285,7 +3299,7 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, vs_dw7)?;
         push(batch_dwords, &mut cursor, vs_dw8)?;
         intel_render_verbose_log!(
-            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} grf_start={} dispatch={:?}\n",
+            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} baked_grf_start={} applied_grf_start={} dispatch={:?}\n",
             vs_ksp_offset & !0x3F,
             vs_dw3,
             vs_dw6,
@@ -3296,6 +3310,7 @@ fn encode_triangle_probe_batch(
             baked_vs_urb_output_length,
             programmed_vs_urb_output_length,
             pipeline.vs.meta.kernel.grf_start_register,
+            applied_vs_grf_start,
             pipeline.vs.meta.kernel.dispatch_mode,
         );
         intel_render_verbose_log!(
@@ -4105,6 +4120,13 @@ fn encode_minimal_streamout_proof_batch(
     push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_VF_STATISTICS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_STATISTICS | 1)?;
+    if device_is_gfx125(warm.device_id) {
+        log_batch_offset(cursor, "3DSTATE_VFG");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VFG)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+    }
     log_batch_offset(cursor, "3DSTATE_VF");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -4242,7 +4264,9 @@ fn encode_minimal_streamout_proof_batch(
         let baked_vs_urb_output_length = pipeline.vs.meta.urb_entry_output_length;
         let vs_dw3 = ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
             | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
-        let vs_dw6 = (1 << 11) | ((pipeline.vs.meta.kernel.grf_start_register as u32) << 20);
+        let applied_vs_grf_start =
+            triangle_vs_dispatch_grf_start_register(pipeline.vs.meta.kernel.grf_start_register);
+        let vs_dw6 = (1 << 11) | (applied_vs_grf_start << 20);
         let vs_dw7 = 1
             | (1 << 2)
             | (1 << 10)
@@ -4259,7 +4283,7 @@ fn encode_minimal_streamout_proof_batch(
         push(batch_dwords, &mut cursor, vs_dw7)?;
         push(batch_dwords, &mut cursor, vs_dw8)?;
         intel_render_verbose_log!(
-            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} grf_start={} dispatch={:?}\n",
+            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} baked_grf_start={} applied_grf_start={} dispatch={:?}\n",
             vs_ksp_offset & !0x3F,
             vs_dw3,
             vs_dw6,
@@ -4270,6 +4294,7 @@ fn encode_minimal_streamout_proof_batch(
             baked_vs_urb_output_length,
             programmed_vs_urb_output_length,
             pipeline.vs.meta.kernel.grf_start_register,
+            applied_vs_grf_start,
             pipeline.vs.meta.kernel.dispatch_mode,
         );
         intel_render_verbose_log!(
@@ -4776,13 +4801,15 @@ fn log_uploaded_triangle_shader_verification(
 ) {
     let uploaded_vs = unsafe {
         core::slice::from_raw_parts(
-            warm.draw_state_virt.add(shader_layout.vs.code_offset_bytes as usize) as *const u32,
+            warm.draw_state_virt
+                .add(shader_layout.vs.code_offset_bytes as usize) as *const u32,
             pipeline.vs.code.len(),
         )
     };
     let uploaded_ps = unsafe {
         core::slice::from_raw_parts(
-            warm.draw_state_virt.add(shader_layout.ps.code_offset_bytes as usize) as *const u32,
+            warm.draw_state_virt
+                .add(shader_layout.ps.code_offset_bytes as usize) as *const u32,
             pipeline.ps.code.len(),
         )
     };
@@ -5500,6 +5527,14 @@ fn triangle_vs_max_threads_field(device_id: u16, baked_max_threads: u16) -> u32 
     } else {
         baked_max_threads.saturating_sub(1) as u32
     }
+}
+
+fn triangle_vs_dispatch_grf_start_register(baked_grf_start: u8) -> u32 {
+    // Trust the compiler-exported packet metadata here. The disassembly reads
+    // payload from g1..g4, but the packet field is not a raw visible-GRF index
+    // dump; forcing an extra +1 made this path less Mesa-like without proving
+    // that the compiler metadata was wrong.
+    baked_grf_start as u32
 }
 
 fn device_is_gfx125(device_id: u16) -> bool {
