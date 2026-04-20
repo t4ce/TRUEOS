@@ -103,7 +103,7 @@ nvme.img:
 	truncate -s $(IMG_SIZE) $@
 
 kernel:
-	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc -Z json-target-spec --target 86_64.json
+	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target 86_64.json
 
 blueprints: hello-world-bp localcoder-bp
 

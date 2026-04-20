@@ -3,7 +3,7 @@ target-dir = "tgt"
 target = "86_64.json"
 
 [unstable]
-build-std = ["core", "compiler_builtins", "alloc"]
+build-std = ["core", "compiler_builtins", "alloc", "std", "panic_abort"]
 build-std-features = ["compiler-builtins-mem"]
 json-target-spec = true
 
@@ -17,8 +17,14 @@ rustflags = [
 	"-C", "force-frame-pointers=yes"
 ]
 
+[target.'cfg(target_os = "zkvm")']
+rustflags = [
+	"--cfg", "getrandom_backend=\"custom\"",
+	"-C", "link-arg=-Tlinker.ld",
+	"-C", "force-frame-pointers=yes"
+]
+
 [env]
 # smoltcp generates config.rs at build time. The non-test default for
 # IFACE_MAX_ADDR_COUNT is 2, which is not enough for (v6 ll + v6 global + v4).
 SMOLTCP_IFACE_MAX_ADDR_COUNT = "4"
-

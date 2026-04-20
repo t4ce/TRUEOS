@@ -47,6 +47,7 @@ dependencies = [
  "smoltcp",
  "spin 0.10.0",
  "tiny-skia-path",
+ "tokio",
  "trueos-esp",
  "trueos-fs",
  "trueos-gfx-core",
@@ -1709,8 +1710,6 @@ dependencies = [
 [[package]]
 name = "pin-project-lite"
 version = "0.2.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pkcs1"
@@ -2423,6 +2422,13 @@ name = "tock-registers"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d2d250f87fb3fb6f225c907cf54381509f47b40b74b1d1f12d2dccbc915bdfe"
+
+[[package]]
+name = "tokio"
+version = "1.52.1"
+dependencies = [
+ "pin-project-lite",
+]
 
 [[package]]
 name = "tracing"
