@@ -24,7 +24,7 @@ pub fn current_dir() -> Result<PathBuf> {
     if let Some(path) = var_os("PWD") {
         return Ok(PathBuf::from(path));
     }
-    Ok(PathBuf::from("/"))
+    Ok(PathBuf::from("/lc"))
 }
 
 pub fn home_dir() -> Result<PathBuf> {

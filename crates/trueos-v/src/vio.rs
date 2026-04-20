@@ -134,6 +134,11 @@ pub mod kfs {
     }
 
     #[inline]
+    pub fn create_dir_all(path: &str) -> Result<(), i32> {
+        crate::vfs::create_dir_all(path.as_bytes())
+    }
+
+    #[inline]
     pub fn write_file_utf8(path: &str, data: &str) -> Result<(), i32> {
         crate::vfs::write_file_utf8(path.as_bytes(), data)
     }

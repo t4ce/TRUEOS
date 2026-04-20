@@ -9,8 +9,9 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::shell2_localcoder::{self, LocalcoderResumeTarget};
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "lc: usage `lc [--continue] [prompt...]`");
+    print_shell_line(io, "lc: usage `lc [prompt...]`");
     print_shell_line(io, "lc: usage `lc --new [prompt...]`");
+    print_shell_line(io, "lc: usage `lc --continue [prompt...]`");
     print_shell_line(io, "lc: usage `lc --resume <id> [prompt...]`");
 }
 
@@ -19,7 +20,7 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
-    let mut resume_target = LocalcoderResumeTarget::ContinueLatest;
+    let mut resume_target = LocalcoderResumeTarget::New;
     let mut prompt_parts: Vec<String> = Vec::new();
 
     while let Some(arg) = args.next() {

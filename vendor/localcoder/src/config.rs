@@ -114,13 +114,13 @@ fn resolve_settings_path(project_dir: &Path) -> Result<PathBuf> {
 
 fn resolve_settings_path_with_home(project_dir: &Path, home: Option<&Path>) -> Result<PathBuf> {
     let cwd_path = project_dir.join(".localcoder/settings.json");
-    if cwd_path.exists() {
+    if rt_fs::exists(&cwd_path) {
         return Ok(cwd_path);
     }
 
     if let Some(home) = home {
         let home_path = home.join(".localcoder/settings.json");
-        if home_path.exists() {
+        if rt_fs::exists(&home_path) {
             return Ok(home_path);
         }
     }
@@ -129,7 +129,7 @@ fn resolve_settings_path_with_home(project_dir: &Path, home: Option<&Path>) -> R
 }
 
 fn save_to_path(config: &AppConfig, path: &Path) -> Result<()> {
-    let mut root: Value = if path.exists() {
+    let mut root: Value = if rt_fs::exists(path) {
         let raw = rt_fs::read_to_string(path)
             .with_context(|| format!("failed to read settings file: {}", path.display()))?;
         serde_json::from_str(&raw)

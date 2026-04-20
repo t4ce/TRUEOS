@@ -151,8 +151,6 @@ pub extern "C" fn kmain() -> ! {
         cpu::enable_sse();
     }
     globalog::init_log_facade();
-    #[cfg(feature = "tokio-probe")]
-    tokio_probe::log_boot_probe();
     exceptions::init();
     if crate::logflag::BOOT_INFO_LOGS {
         crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
@@ -164,6 +162,8 @@ pub extern "C" fn kmain() -> ! {
     if !phys::try_install_heap_arena_candidates(allocators::install_heap_arena) {
         crate::log!("heap: failed to reserve/install any heap arena\n");
     }
+    #[cfg(feature = "tokio-probe")]
+    tokio_probe::log_boot_probe();
 
     if crate::logflag::BOOT_INFO_LOGS
         && let Some(perf) = limine::bootloader_performance()

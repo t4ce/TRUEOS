@@ -1,5 +1,6 @@
 extern crate alloc;
 
+use super::http::{self, HttpFetchError};
 use super::dns::{self, DnsConfig};
 use super::https_limits::HttpsLimits;
 use crate::net::tls::{TlsClientConfig, TlsRoots};
@@ -1068,6 +1069,57 @@ fn fetch_error_to_code(err: FetchError) -> i32 {
         FetchError::Redirect { .. } => NET_ERR_HTTP,
         FetchError::ResponseTooLarge => FS_ERR_TOO_LARGE,
     }
+}
+
+#[inline]
+fn http_fetch_error_to_code(err: HttpFetchError) -> i32 {
+    match err {
+        HttpFetchError::BadUrl => NET_ERR_BAD_URL,
+        HttpFetchError::TimedOut => NET_ERR_TIMEOUT,
+        HttpFetchError::DnsFailed => NET_ERR_TIMEOUT_DNS,
+        HttpFetchError::HttpStatus(status) => {
+            let _status = status;
+            NET_ERR_HTTP
+        }
+        HttpFetchError::Redirect(_) => NET_ERR_HTTP,
+        HttpFetchError::ResponseTooLarge => FS_ERR_TOO_LARGE,
+    }
+}
+
+async fn post_json_body_async(
+    url: &str,
+    body_json: String,
+    bearer: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, i32> {
+    if url.starts_with("http://") {
+        let auth_header = bearer.map(|token| alloc::format!("Bearer {}", token));
+        let headers_with_auth = [
+            ("Content-Type", "application/json"),
+            ("Accept", "application/json"),
+            (
+                "Authorization",
+                auth_header.as_deref().unwrap_or_default(),
+            ),
+        ];
+        let headers_without_auth = [
+            ("Content-Type", "application/json"),
+            ("Accept", "application/json"),
+        ];
+        let headers = if auth_header.is_some() {
+            &headers_with_auth[..]
+        } else {
+            &headers_without_auth[..]
+        };
+        return http::post_http_body(url, headers, body_json.as_bytes(), timeout_ms, max_bytes)
+            .await
+            .map_err(http_fetch_error_to_code);
+    }
+
+    post_https_json_async(url, body_json, bearer, timeout_ms, max_bytes)
+        .await
+        .map_err(fetch_error_to_code)
 }
 
 #[inline]
@@ -4083,7 +4135,7 @@ pub unsafe extern "C" fn trueos_cabi_net_prewarm_url_start(
     0
 }
 
-/// TRUEOS C ABI: start async HTTPS POST(JSON) to file.
+/// TRUEOS C ABI: start async HTTP(S) POST(JSON) to file.
 ///
 /// `bearer_ptr/bearer_len` are optional (pass null/0 for no Authorization header).
 #[unsafe(no_mangle)]
@@ -4148,7 +4200,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
         let t0 = Instant::now();
         net_fetch_acquire_slot().await;
 
-        let rc = match post_https_json_async(
+        let rc = match post_json_body_async(
             url.as_str(),
             body_json,
             bearer.as_deref(),
@@ -4183,7 +4235,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
                     FS_ERR_USBMS_NOT_FOUND
                 }
             }
-            Err(e) => fetch_error_to_code(e),
+            Err(rc) => rc,
         };
 
         net_fetch_release_slot();
@@ -4201,7 +4253,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
     op_id
 }
 
-/// TRUEOS C ABI: start async HTTPS POST(JSON) to in-memory bytes.
+/// TRUEOS C ABI: start async HTTP(S) POST(JSON) to in-memory bytes.
 ///
 /// `bearer_ptr/bearer_len` are optional (pass null/0 for no Authorization header).
 #[unsafe(no_mangle)]
@@ -4251,7 +4303,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start(
         let t0 = Instant::now();
         net_fetch_acquire_slot().await;
 
-        let (rc, bytes) = match post_https_json_async(
+        let (rc, bytes) = match post_json_body_async(
             url.as_str(),
             body_json,
             bearer.as_deref(),
@@ -4272,7 +4324,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start(
                 }
                 (0, bytes)
             }
-            Err(e) => (fetch_error_to_code(e), Vec::new()),
+            Err(rc) => (rc, Vec::new()),
         };
 
         net_fetch_release_slot();

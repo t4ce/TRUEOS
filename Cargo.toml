@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = ["tokio-probe"]
-tokio-probe = ["dep:tokio", "tokio/rt"]
+tokio-probe = ["dep:tokio", "tokio/rt", "tokio/sync"]
 
 [dependencies]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
@@ -69,6 +69,7 @@ serde = { version = "1.0", default-features = false, features = ["alloc", "deriv
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 # Stage-1 Tokio foothold for VM-hull/runtime probing. Single-thread runtime only.
 tokio = { version = "1.52.1", default-features = false, optional = true }
+localcoder = { path = "vendor/localcoder", default-features = false, features = ["trueos-net"] }
 
 [profile.dev]
 panic = "abort"
