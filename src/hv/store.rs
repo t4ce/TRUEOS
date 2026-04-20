@@ -19,7 +19,8 @@ const VM_STORE_OBJECT_PREFIX: &str = "vm/object-";
 const VM_STORE_REPL_CHUNK: usize = 1200;
 const VM_STORE_MAX_VM_ID: u8 = 10;
 const VM_STORE_BLOCK_SIZE: u32 = 512;
-const VM_STORE_RAMDISK_BYTES: u64 = 64 * 1024 * 1024;
+const VM_STORE_MIN_RAMDISK_BYTES: u64 = 64 * 1024 * 1024;
+const VM_STORE_RAMDISK_ALIGN_BYTES: u64 = 64 * 1024 * 1024;
 const VM_STORE_QUEUE_CAP: usize = 8;
 const VM_STORE_PROBE_BYTES: &[u8] = b"trueos-hv-store-probe";
 
@@ -383,7 +384,7 @@ fn parse_vm_store_cmd(line: &[u8]) -> Option<VmStoreNetCmd> {
 
 #[task(pool_size = 1)]
 pub async fn vm_store_task() {
-    crate::log!("boot-probe: hv-store task start ms={}\n", boot_probe_ms());
+    crate::log!("hv-store: task start ms={}\n", boot_probe_ms());
     if let Some(profile) = crate::cpu::CpuProfile::current() {
         crate::log!(
             "hv-store: start slot={} lapic={} kind={}\n",
@@ -395,21 +396,8 @@ pub async fn vm_store_task() {
         crate::log!("hv-store: start slot=unknown\n");
     }
 
-    match ensure_store_ready().await {
-        Ok(disk) => {
-            *VM_STORE_DISK.lock() = Some(disk);
-            VM_STORE_ONLINE.store(true, Ordering::Release);
-            crate::log!(
-                "hv-store: ramdisk ready disk={} bytes={}\n",
-                disk.id().raw(),
-                VM_STORE_RAMDISK_BYTES
-            );
-        }
-        Err(e) => {
-            crate::log!("hv-store: init failed: {:?}\n", e);
-            return;
-        }
-    }
+    VM_STORE_ONLINE.store(true, Ordering::Release);
+    crate::log!("hv-store: online mode=lazy-ramdisk\n");
 
     loop {
         let req = {
@@ -622,11 +610,37 @@ pub async fn vm_store_replication_task() {
     }
 }
 
-async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
+fn round_up_bytes(value: u64, align: u64) -> u64 {
+    if align == 0 {
+        return value;
+    }
+    let rem = value % align;
+    if rem == 0 {
+        value
+    } else {
+        value.saturating_add(align - rem)
+    }
+}
+
+fn provisioned_disk_bytes(required_bytes: usize) -> u64 {
+    let required = required_bytes as u64;
+    let headroom = core::cmp::max(VM_STORE_RAMDISK_ALIGN_BYTES / 2, required / 2);
+    let wanted = required.saturating_add(headroom);
+    round_up_bytes(
+        core::cmp::max(VM_STORE_MIN_RAMDISK_BYTES, wanted),
+        VM_STORE_RAMDISK_ALIGN_BYTES,
+    )
+}
+
+async fn create_store_ready(size_bytes: u64) -> Result<block::DeviceHandle, VmStoreError> {
     let t0 = boot_probe_ms();
-    crate::log!("boot-probe: hv-store ensure begin ms={}\n", t0);
+    crate::log!(
+        "hv-store: ramdisk create begin ms={} bytes={}\n",
+        t0,
+        size_bytes
+    );
     let disk = crate::r::disc::ramdisk::create_trueos_private(
-        VM_STORE_RAMDISK_BYTES,
+        size_bytes,
         VM_STORE_BLOCK_SIZE,
         "trueos-hv-store",
     )
@@ -637,15 +651,16 @@ async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
         | crate::r::disc::ramdisk::TrueosPrivateError::Validate(err) => VmStoreError::Format(err),
     })?;
     crate::log!(
-        "boot-probe: hv-store ramdisk create done ms={} dt={}\n",
+        "hv-store: ramdisk create done ms={} dt={} disk={}\n",
         boot_probe_ms(),
-        boot_probe_ms().saturating_sub(t0)
+        boot_probe_ms().saturating_sub(t0),
+        disk.id().raw()
     );
     let t1 = boot_probe_ms();
-    crate::log!("boot-probe: hv-store format done ms={} dt={}\n", t1, t1.saturating_sub(t0));
+    crate::log!("hv-store: format done ms={} dt={}\n", t1, t1.saturating_sub(t0));
     let t2 = boot_probe_ms();
     crate::log!(
-        "boot-probe: hv-store validate done ms={} dt={} step={}\n",
+        "hv-store: validate done ms={} dt={} step={}\n",
         t2,
         t2.saturating_sub(t0),
         t2.saturating_sub(t1)
@@ -659,7 +674,7 @@ async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
     }
     let t3 = boot_probe_ms();
     crate::log!(
-        "boot-probe: hv-store probe write done ms={} dt={} step={}\n",
+        "hv-store: probe write done ms={} dt={} step={}\n",
         t3,
         t3.saturating_sub(t0),
         t3.saturating_sub(t2)
@@ -675,14 +690,14 @@ async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
     }
     let t4 = boot_probe_ms();
     crate::log!(
-        "boot-probe: hv-store probe read done ms={} dt={} step={}\n",
+        "hv-store: probe read done ms={} dt={} step={}\n",
         t4,
         t4.saturating_sub(t0),
         t4.saturating_sub(t3)
     );
     let t5 = boot_probe_ms();
     crate::log!(
-        "boot-probe: hv-store ensure done ms={} dt={} tail={}\n",
+        "hv-store: ensure done ms={} dt={} tail={}\n",
         t5,
         t5.saturating_sub(t0),
         t5.saturating_sub(t4)
@@ -691,12 +706,17 @@ async fn ensure_store_ready() -> Result<block::DeviceHandle, VmStoreError> {
 }
 
 async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, VmStoreError> {
-    let Some(disk) = *VM_STORE_DISK.lock() else {
-        return Err(VmStoreError::ServiceOffline);
-    };
-
     match kind {
         RequestKind::Save(vm_id, bytes) => {
+            let disk_bytes = provisioned_disk_bytes(bytes.len());
+            crate::log!(
+                "hv-store: save allocate id={} vm_id={} snapshot_bytes={} disk_bytes={}\n",
+                id,
+                vm_id,
+                bytes.len(),
+                disk_bytes
+            );
+            let disk = create_store_ready(disk_bytes).await?;
             let seq = VM_STORE_OBJECT_SEQ.fetch_add(1, Ordering::Relaxed).max(1);
             let committed_path = object_path(VM_STORE_OBJECT_PREFIX, seq);
             crate::log!(
@@ -730,19 +750,26 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
             write_committed_manifest(disk, vm_id, seq)
                 .await
                 .map_err(VmStoreError::Write)?;
-            VM_STORE_COMMITTED_SEQS.lock().insert(vm_id, seq);
+            *VM_STORE_DISK.lock() = Some(disk);
+            let mut seqs = VM_STORE_COMMITTED_SEQS.lock();
+            seqs.clear();
+            seqs.insert(vm_id, seq);
             VM_STORE_COMMIT_WAIT.notify_all();
             crate::log!(
-                "hv-store: save complete id={} vm_id={} seq={} bytes={} committed={}\n",
+                "hv-store: save complete id={} vm_id={} seq={} bytes={} committed={} disk={}\n",
                 id,
                 vm_id,
                 seq,
                 bytes.len(),
-                committed_path.as_str()
+                committed_path.as_str(),
+                disk.id().raw()
             );
             Ok(VmStoreResponse::Saved(bytes.len()))
         }
         RequestKind::Load(vm_id) => {
+            let Some(disk) = *VM_STORE_DISK.lock() else {
+                return Err(VmStoreError::MissingSnapshot);
+            };
             let manifest_path = vm_manifest_path(vm_id);
             crate::log!(
                 "hv-store: load queued id={} vm_id={} manifest={}\n",

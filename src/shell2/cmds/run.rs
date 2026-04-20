@@ -28,13 +28,35 @@ struct AppVmLaunchRequest {
     target: MatrixTarget,
 }
 
+#[derive(Clone)]
+enum ArchiveSource {
+    TrueosfsRoot,
+    EmbeddedModule { cmdline: String },
+}
+
+#[derive(Clone)]
+struct ArchiveEntry {
+    archive: String,
+    source: ArchiveSource,
+}
+
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "run: usage `run` or `run <id> [args...]`");
 }
 
-fn root_archives() -> Result<Vec<String>, &'static str> {
+fn embedded_archive_name(cmdline: &[u8]) -> Option<String> {
+    let suffix = cmdline.strip_prefix(b"trueos.app.")?;
+    if suffix.is_empty() {
+        return None;
+    }
+    let mut archive = String::from_utf8_lossy(suffix).into_owned();
+    archive.push_str("_app.bp");
+    Some(archive)
+}
+
+fn root_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        return Err("no TRUEOSFS root mounted");
+        return Ok(Vec::new());
     };
 
     let listing = crate::wait::spawn_and_wait_local(async move {
@@ -47,18 +69,60 @@ fn root_archives() -> Result<Vec<String>, &'static str> {
         .lines()
         .map(str::trim)
         .filter(|name| name.ends_with(".bp"))
-        .map(String::from)
+        .map(|name| ArchiveEntry {
+            archive: String::from(name),
+            source: ArchiveSource::TrueosfsRoot,
+        })
         .collect::<Vec<_>>();
-    out.sort();
+    out.sort_by(|a, b| a.archive.cmp(&b.archive));
     Ok(out)
 }
 
-fn print_archive_table(io: &'static dyn ShellBackend2, archives: &[String]) {
+fn embedded_archives() -> Vec<ArchiveEntry> {
+    let Some(resp) = crate::limine::MODULE_REQUEST.response() else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for module in resp.modules().iter() {
+        let cmdline = module.cmdline().as_bytes();
+        let Some(archive) = embedded_archive_name(cmdline) else {
+            continue;
+        };
+        out.push(ArchiveEntry {
+            archive,
+            source: ArchiveSource::EmbeddedModule {
+                cmdline: String::from_utf8_lossy(cmdline).into_owned(),
+            },
+        });
+    }
+    out.sort_by(|a, b| a.archive.cmp(&b.archive));
+    out
+}
+
+fn archive_entries() -> Result<Vec<ArchiveEntry>, &'static str> {
+    let mut out = embedded_archives();
+    out.extend(root_archives()?);
+    Ok(out)
+}
+
+fn source_label(source: &ArchiveSource) -> &'static str {
+    match source {
+        ArchiveSource::TrueosfsRoot => "TRUEOSFS root",
+        ArchiveSource::EmbeddedModule { .. } => "boot embedded",
+    }
+}
+
+fn print_archive_table(io: &'static dyn ShellBackend2, archives: &[ArchiveEntry]) {
     let table = TlbTable::with_width(TABLE_HEADERS, line_width_for_backend(io).saturating_sub(2));
     table.emit_header(|text| print_shell_line(io, text));
     for (idx, archive) in archives.iter().enumerate() {
         let id = alloc::format!("{}", idx + 1);
-        let row = [id.as_str(), archive.as_str(), "TRUEOSFS root"];
+        let row = [
+            id.as_str(),
+            archive.archive.as_str(),
+            source_label(&archive.source),
+        ];
         table.emit_row(&row, |text| print_shell_line(io, text));
     }
     table.emit_footer(|text| print_shell_line(io, text));
@@ -273,13 +337,33 @@ pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_ar
     enqueue_blueprint_bytes(target, archive, module_bytes, app_args);
 }
 
+fn submit_archive_entry(
+    io: &'static dyn ShellBackend2,
+    entry: &ArchiveEntry,
+    app_args: Vec<String>,
+) {
+    match &entry.source {
+        ArchiveSource::TrueosfsRoot => {
+            submit_run(io, entry.archive.clone(), app_args);
+        }
+        ArchiveSource::EmbeddedModule { cmdline } => {
+            let target = matrix_target_for_backend(io);
+            let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline.as_bytes()) else {
+                print_shell_line(io, "run: failed to read selected embedded module");
+                return;
+            };
+            enqueue_blueprint_bytes(target, entry.archive.clone(), module_bytes.to_vec(), app_args);
+        }
+    }
+}
+
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
     let _ = spawner;
-    let archives = match root_archives() {
+    let archives = match archive_entries() {
         Ok(archives) => archives,
         Err(err) => {
             print_shell_line(io, alloc::format!("run: {}", err).as_str());
@@ -289,7 +373,7 @@ pub(crate) fn try_parse(
 
     let Some(id_text) = args.next() else {
         if archives.is_empty() {
-            print_shell_line(io, "run: no .bp modules in TRUEOSFS root");
+            print_shell_line(io, "run: no .bp modules available");
             return ParseOutcome::Handled;
         }
         print_archive_table(io, archives.as_slice());
@@ -311,7 +395,7 @@ pub(crate) fn try_parse(
     };
 
     let app_args = args.map(String::from).collect::<Vec<_>>();
-    submit_run(io, archive.clone(), app_args);
+    submit_archive_entry(io, archive, app_args);
 
     ParseOutcome::Handled
 }

@@ -4,12 +4,14 @@ use super::*;
 
 const UI2_CHROME_TEXT_RGBA: (u8, u8, u8, u8) = (0x00, 0x00, 0x00, 0xFF);
 const UI2_CHROME_TITLE_FONT_TIER: Ui2FontTier = Ui2FontTier::Third;
+const UI2_VM_HINT_ACCENT_RGBA: (u8, u8, u8, u8) = (0xFF, 0x37, 0xFF, 0xFF);
 const UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_UNLOCKED_TWEMOJI: char = '\u{25FC}';
 const UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_LOCKED_TWEMOJI: char = '\u{25FB}';
 const UI2_SYSTEM_BUTTON_FORK_TWEMOJI: char = '\u{2797}';
 const UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI: char = '\u{2796}';
 const UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI: char = '\u{23F9}';
 const UI2_SYSTEM_BUTTON_RESTORE_TWEMOJI: char = '\u{23CF}';
+const UI2_SYSTEM_BUTTON_PRESERVE_VM_TWEMOJI: char = '\u{1F4BF}';
 const UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI: char = '\u{23EF}';
 const UI2_SYSTEM_BUTTON_CLOSE_HULL_TWEMOJI: char = '\u{2716}';
 const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{2733}';
@@ -41,6 +43,13 @@ fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::Str
     }
     out.push_str(ELLIPSIS);
     out
+}
+
+fn vm_hint_icon_char() -> char {
+    ['🌐', '◈', '◉', '◆', '■', '*']
+        .into_iter()
+        .find(|ch| ui2_font_has_glyph(UI2_CHROME_TITLE_FONT_TIER, *ch))
+        .unwrap_or('*')
 }
 
 fn draw_window_title_texture_icon(
@@ -149,6 +158,9 @@ fn window_system_button_twemoji(window: &Ui2Window, action: Ui2SystemButtonActio
         Ui2SystemButtonAction::Minimize => Some(UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI),
         Ui2SystemButtonAction::Restore => Some(UI2_SYSTEM_BUTTON_RESTORE_TWEMOJI),
         Ui2SystemButtonAction::ToggleMaximize => Some(UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI),
+        Ui2SystemButtonAction::PreserveVm => window
+            .vm_origin_hint
+            .then_some(UI2_SYSTEM_BUTTON_PRESERVE_VM_TWEMOJI),
         Ui2SystemButtonAction::Close => Some(if window.spawn_task_index.is_some() {
             UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI
         } else {
@@ -261,7 +273,11 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
     const GL_ONE: u32 = 1;
     const GL_ONE_MINUS_SRC_ALPHA: u32 = 0x0303;
 
-    let frame_base_rgba = (0xD9, 0xDE, 0xE5, 0xFF);
+    let frame_base_rgba = if window.vm_origin_hint {
+        blend_rgba_over((UI2_VM_HINT_ACCENT_RGBA.0, UI2_VM_HINT_ACCENT_RGBA.1, UI2_VM_HINT_ACCENT_RGBA.2, 0x44), (0xF7, 0xF7, 0xFB, 0xFF))
+    } else {
+        (0xD9, 0xDE, 0xE5, 0xFF)
+    };
     let frame_left_rgba = blend_rgba_over((0x00, 0x00, 0x00, 0x52), frame_base_rgba);
     let frame_mid_rgba = frame_base_rgba;
     let frame_right_rgba = blend_rgba_over((0xFF, 0xFF, 0xFF, 0x52), frame_base_rgba);
@@ -299,6 +315,17 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
             state.view_w,
             state.view_h,
         );
+        if window.vm_origin_hint {
+            let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+                rect.x,
+                rect.y,
+                3.0,
+                titleband_h,
+                modulate_rgba_alpha(UI2_VM_HINT_ACCENT_RGBA, window.alpha),
+                state.view_w,
+                state.view_h,
+            );
+        }
     }
     if body_h > 0.0 {
         let _ = crate::gfx::lyon::draw_solid_rect_no_present(
@@ -388,12 +415,15 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         } else {
             rect.x + 8.0
         };
+        let vm_tag_w = if window.vm_origin_hint { 18.0 } else { 0.0 };
+        let vm_tag_gap = if window.vm_origin_hint { 6.0 } else { 0.0 };
         let title_right = [
             Ui2SystemButtonAction::ToggleComposition,
             Ui2SystemButtonAction::Fork,
             Ui2SystemButtonAction::Minimize,
             Ui2SystemButtonAction::Restore,
             Ui2SystemButtonAction::ToggleMaximize,
+            Ui2SystemButtonAction::PreserveVm,
             Ui2SystemButtonAction::Close,
         ]
         .into_iter()
@@ -401,10 +431,41 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         .map(|button| button.x - 8.0)
         .min_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal))
         .unwrap_or(rect.x + rect.w - 8.0);
+        if window.vm_origin_hint {
+            let vm_icon = vm_hint_icon_char();
+            let tag_rect = Ui2Rect::new(
+                title_left,
+                rect.y + ((titleband_h - 14.0) * 0.5).max(0.0),
+                vm_tag_w,
+                14.0,
+            );
+            let _ = crate::gfx::lyon::draw_horizontal_three_stop_rect_no_present(
+                tag_rect.x,
+                tag_rect.y,
+                tag_rect.w,
+                tag_rect.h,
+                modulate_rgba_alpha(blend_rgba_over((0xFF, 0xFF, 0xFF, 0x90), UI2_VM_HINT_ACCENT_RGBA), window.alpha),
+                modulate_rgba_alpha(UI2_VM_HINT_ACCENT_RGBA, window.alpha),
+                modulate_rgba_alpha(blend_rgba_over((0xFF, 0xFF, 0xFF, 0x55), UI2_VM_HINT_ACCENT_RGBA), window.alpha),
+                0.5,
+                state.view_w,
+                state.view_h,
+            );
+            let _ = ui2_font_draw_text_line_in_rect_with_tier_rgba_no_present(
+                alloc::format!("{}", vm_icon).as_str(),
+                tag_rect,
+                UI2_CHROME_TITLE_FONT_TIER,
+                Ui2FontTextAlign::Center,
+                Ui2FontVerticalAlign::Center,
+                state.view_w,
+                state.view_h,
+                modulate_rgba_alpha((0xFF, 0xFF, 0xFF, 0xFF), window.alpha),
+            );
+        }
         let title_rect = Ui2Rect::new(
-            title_left,
+            title_left + vm_tag_w + vm_tag_gap,
             rect.y,
-            (title_right - title_left).max(0.0),
+            (title_right - (title_left + vm_tag_w + vm_tag_gap)).max(0.0),
             titleband_h.max(1.0),
         );
         let title_text = title_text_with_ellipsis(window.title.as_str(), title_rect.w);
@@ -423,6 +484,7 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
         draw_window_system_button(state, window, Ui2SystemButtonAction::Minimize);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Restore);
         draw_window_system_button(state, window, Ui2SystemButtonAction::ToggleMaximize);
+        draw_window_system_button(state, window, Ui2SystemButtonAction::PreserveVm);
         draw_window_system_button(state, window, Ui2SystemButtonAction::Close);
     }
     if window.decoration_mode == Ui2WindowDecorationMode::System {
@@ -878,13 +940,7 @@ pub(super) fn window_bottom_resize_button_hit_rect(
     state: &Ui2State,
     window: &Ui2Window,
 ) -> Option<Ui2Rect> {
-    let rect = window_bottom_resize_button_rect(state, window)?;
-    Some(Ui2Rect::new(
-        rect.x + 1.0,
-        rect.y + 1.0,
-        (rect.w - 2.0).max(1.0),
-        (rect.h - 2.0).max(1.0),
-    ))
+    window_bottom_resize_button_rect(state, window)
 }
 
 fn window_bottom_resize_button_anchor_rect(
@@ -924,10 +980,11 @@ fn window_system_button_anchor_rect(
     let s = titlebar.h.max(1.0);
     let gap = 1.0f32;
 
-    // Right-to-left order: Close, Maximize, Minimize, Fork, Composition.
-    // For minimized windows only Close + Maximize are shown.
+    // Right-to-left order: Close, PreserveVm, Maximize, Minimize, Fork, Composition.
+    // For minimized windows only Close + Restore + Maximize are shown.
     let actions_normal: &[Ui2SystemButtonAction] = &[
         Ui2SystemButtonAction::Close,
+        Ui2SystemButtonAction::PreserveVm,
         Ui2SystemButtonAction::ToggleMaximize,
         Ui2SystemButtonAction::Minimize,
         Ui2SystemButtonAction::Fork,
@@ -940,6 +997,7 @@ fn window_system_button_anchor_rect(
     ];
     let actions_maximized: &[Ui2SystemButtonAction] = &[
         Ui2SystemButtonAction::Close,
+        Ui2SystemButtonAction::PreserveVm,
         Ui2SystemButtonAction::Minimize,
         Ui2SystemButtonAction::Fork,
         Ui2SystemButtonAction::ToggleComposition,
@@ -949,7 +1007,13 @@ fn window_system_button_anchor_rect(
         Ui2WindowStateKind::Maximized => actions_maximized,
         _ => actions_normal,
     };
-    let slot = actions.iter().position(|a| *a == action)?;
+    if action == Ui2SystemButtonAction::PreserveVm && !window.vm_origin_hint {
+        return None;
+    }
+    let slot = actions
+        .iter()
+        .filter(|candidate| **candidate != Ui2SystemButtonAction::PreserveVm || window.vm_origin_hint)
+        .position(|a| *a == action)?;
     let x = titlebar.x + titlebar.w - (slot as f32 + 1.0) * s - slot as f32 * gap;
     Some(Ui2Rect::new(x, titlebar.y, s, s))
 }
@@ -967,6 +1031,7 @@ pub(super) fn system_button_action_at(
         Ui2SystemButtonAction::Minimize,
         Ui2SystemButtonAction::Restore,
         Ui2SystemButtonAction::ToggleMaximize,
+        Ui2SystemButtonAction::PreserveVm,
         Ui2SystemButtonAction::Close,
     ] {
         let Some(rect) = window_system_button_rect(state, window, action) else {

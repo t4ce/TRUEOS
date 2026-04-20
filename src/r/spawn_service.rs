@@ -93,7 +93,6 @@ define_started_flags!(
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
-    BOOT_HELLO_WORLD_APP_STARTED,
     SMTP_SMOKE_STARTED,
     MMIO_ONESHOT_PROBE_STARTED,
     UART_SHELL_STARTED,
@@ -975,15 +974,6 @@ fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-#[embassy_executor::task]
-async fn boot_hello_world_app_task() {
-    crate::shell2::enqueue_embedded_hello_world_app_once();
-}
-
-fn spawn_boot_hello_world_app(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| boot_hello_world_app_task())
-}
-
 fn spawn_smtp_smoke(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst_smtp_smoke::smtp_smoke_task())
 }
@@ -1110,12 +1100,6 @@ static TASKS: &[TaskSpec] = &[
         0,
         &APP_VM_RUN_QUEUE_STARTED,
         spawn_app_vm_run_queue,
-    ),
-    TaskSpec::enabled(
-        "boot-hello-world-app",
-        0,
-        &BOOT_HELLO_WORLD_APP_STARTED,
-        spawn_boot_hello_world_app,
     ),
     TaskSpec::enabled(
         "ws-time",
