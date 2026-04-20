@@ -89,6 +89,10 @@ mod tst_ui2_weather_demo;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
+#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+mod std_abi_shim;
+#[cfg(feature = "tokio-probe")]
+mod tokio_probe;
 mod usb2;
 mod wait;
 mod x2apic;
@@ -147,6 +151,8 @@ pub extern "C" fn kmain() -> ! {
         cpu::enable_sse();
     }
     globalog::init_log_facade();
+    #[cfg(feature = "tokio-probe")]
+    tokio_probe::log_boot_probe();
     exceptions::init();
     if crate::logflag::BOOT_INFO_LOGS {
         crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
