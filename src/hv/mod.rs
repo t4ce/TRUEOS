@@ -46,6 +46,8 @@ static VMM: VmManager = VmManager::new();
 static VM1_RUNNING: AtomicBool = AtomicBool::new(false);
 static VM1_STARTING: AtomicBool = AtomicBool::new(false);
 static VM1_STOP_REQ: AtomicBool = AtomicBool::new(false);
+static VM1_PRESERVE_REQ: AtomicBool = AtomicBool::new(false);
+static VM1_PRESERVE_EXIT: AtomicBool = AtomicBool::new(false);
 static VM1_MARKER_SEEN: AtomicBool = AtomicBool::new(false);
 static VM1_GUEST_BOOT_ARMED: AtomicBool = AtomicBool::new(false);
 static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -240,6 +242,19 @@ fn start_with_mode(
         return Err(StartError::NoVmSpawner);
     };
 
+    // Preserve the VM hull execution contract:
+    // actual guest work must stay on HV-reserved VM lanes only, never on BSP
+    // and never on the first AP service lane.
+    if profile.placement != crate::r::spawn_spec::SpawnPlacement::ReservedVmLane || target.slot < 2
+    {
+        VM1_STARTING.store(false, Ordering::Release);
+        hvlogf(format_args!(
+            "hv: vm{} placement rejected: placement={:?} slot={} requires ReservedVmLane on AP>2",
+            vm_id, profile.placement, target.slot
+        ));
+        return Err(StartError::NoVmSpawner);
+    }
+
     hvlogf(format_args!(
         "hv: vm{} placement: mode={:?} placement={:?} slot={} kind={} stack_mib={}",
         vm_id,
@@ -356,7 +371,10 @@ fn map_store_restore_error(err: crate::hv::store::VmStoreError) -> RestoreError 
 }
 
 fn vmexit_is_preserve(lr: LaunchResult) -> bool {
-    lr.entered != 0 && lr.launch_failed == 0 && (lr.exit_reason & 0xFFFF) == VMEXIT_REASON_VMCALL
+    lr.entered != 0
+        && lr.launch_failed == 0
+        && ((lr.exit_reason & 0xFFFF) == VMEXIT_REASON_VMCALL
+            || VM1_PRESERVE_EXIT.load(Ordering::Acquire))
 }
 
 fn snapshot_on_preserve_exit() {
@@ -382,6 +400,16 @@ pub fn guest_boot_take() -> bool {
 
 pub fn guest_boot_active() -> bool {
     VM1_GUEST_BOOT_ARMED.load(Ordering::Acquire)
+}
+
+pub fn request_preserve_vm1() -> bool {
+    let running = VM1_RUNNING.load(Ordering::Acquire);
+    let starting = VM1_STARTING.load(Ordering::Acquire);
+    if !running && !starting {
+        return false;
+    }
+    VM1_PRESERVE_REQ.store(true, Ordering::Release);
+    true
 }
 
 pub fn stage_blueprint_launch(state: BlueprintLaunchState) {
@@ -412,6 +440,8 @@ async fn vm1_task() {
     let lineage_record = LineageRecord::new();
     VM1_STARTING.store(false, Ordering::Release);
     VM1_RUNNING.store(true, Ordering::Release);
+    VM1_PRESERVE_REQ.store(false, Ordering::Release);
+    VM1_PRESERVE_EXIT.store(false, Ordering::Release);
     let cpu = crate::cpu::CpuProfile::current();
     if let Some(cpu) = cpu {
         hvlogf(format_args!(
@@ -508,13 +538,11 @@ async fn vm1_task() {
         }
     }
 
-    while !VM1_STOP_REQ.load(Ordering::Acquire) {
-        Timer::after(EmbassyDuration::from_millis(250)).await;
-    }
-
     VM1_RUNNING.store(false, Ordering::Release);
     VM1_STARTING.store(false, Ordering::Release);
     VM1_STOP_REQ.store(false, Ordering::Release);
+    VM1_PRESERVE_REQ.store(false, Ordering::Release);
+    VM1_PRESERVE_EXIT.store(false, Ordering::Release);
     hvlogf(format_args!("hv: vm1 lifecycle: stopped"));
 }
 
@@ -616,6 +644,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
 
     // ── vmexit dispatch loop ──────────────────────────────────────────────────
     let mut lr = LaunchResult::default();
+    let mut preserve_requested = false;
     let mut cpuid_leaf0_count = 0u32;
     let mut cpuid_leaf80000000_count = 0u32;
     let mut cpuid_leaf1_count = 0u32;
@@ -769,6 +798,15 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                 break;
             }
         }
+        if VM1_PRESERVE_REQ.swap(false, Ordering::AcqRel) {
+            preserve_requested = true;
+            VM1_PRESERVE_EXIT.store(true, Ordering::Release);
+            hvlogf(format_args!(
+                "hv: vm1 reporting: host preserve request armed at rip=0x{:016X}",
+                lr.guest_rip
+            ));
+            break;
+        }
     }
     if cpuid_leaf0_count != 0
         || cpuid_leaf80000000_count != 0
@@ -786,6 +824,9 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
     // ─────────────────────────────────────────────────────────────────────────
     if !crate::hv::vmx::vmxoff() {
         return Err("vmxoff");
+    }
+    if !preserve_requested {
+        VM1_PRESERVE_EXIT.store(false, Ordering::Release);
     }
     Ok(lr)
 }

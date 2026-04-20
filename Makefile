@@ -24,46 +24,32 @@ LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 GUC_FW_HOST_PATH ?= /lib/firmware/i915/adlp_guc_70.bin.zst
 # Canonical boot path used by limine.conf for the GuC module.
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/adlp_guc_70.bin
-HELLO_WORLD_BP_HOST_PATH ?= ../TRUEOS Blueprints/hello_world_bp/target/trueos-app/debug/hello_world_app.bp
+BLUEPRINTS_ROOT ?= ../TRUEOS Blueprints
+HELLO_WORLD_BP_DIR ?= $(BLUEPRINTS_ROOT)/hello_world_bp
+LOCALCODER_BP_DIR ?= $(BLUEPRINTS_ROOT)/localcoder_bp
+HELLO_WORLD_BP_HOST_PATH ?= $(HELLO_WORLD_BP_DIR)/target/trueos-app/debug/hello_world_app.bp
 HELLO_WORLD_BP_ISO_REL_PATH ?= EFI/BOOT/apps/hello_world_app.bp
+LOCALCODER_BP_HOST_PATH ?= $(LOCALCODER_BP_DIR)/dist/localcoder_bp.bp
+LOCALCODER_BP_PROFILE ?= $(if $(filter release,$(BUILD_MODE)),release,dev)
 
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
 QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 # QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
-GFX_MODE ?= virgl
-INTEL_GPU_PCI ?= 0000:00:02.0
-# `x-no-mmap=on` avoids QEMU trying to mmap the passed-through IGD BAR into the
-# guest address space directly, which currently trips VFIO DMA-map warnings in our setup.
-INTEL_GPU_VFIO_PROPS ?= ,x-igd-opregion=on,x-no-mmap=on
-
-# Enabling vhost-net can significantly improve virtio-net throughput.
-# Use `make run QEMU_VHOST=on` if your host supports it (permissions on /dev/vhost-net).
-QEMU_VHOST ?= off
+QEMU_VHOST ?= on
 
 QEMU_NET_FLAGS = -netdev tap,id=net1,ifname=tap0,script=no,downscript=no,vhost=$(QEMU_VHOST) -device virtio-net-pci,netdev=net1,disable-modern=off,bus=pcie.0,addr=0x3 \
 	#-netdev user,id=net1,net=10.0.2.0/24,dhcpstart=10.0.2.15,hostfwd=tcp::4245-:4245,hostfwd=tcp::8080-:80 -device e1000,netdev=net1 \
 	#-netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
 	#-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=off
 
-QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
-	-device virtio-rng-pci,rng=rng0,disable-modern=off,bus=pcie.0,addr=0x4
+QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 -device virtio-rng-pci,rng=rng0,disable-modern=off,bus=pcie.0,addr=0x4
 
 CARGO_BUILD_FLAGS ?=
 
-ifeq ($(GFX_MODE),virgl)
 CARGO_GFX_FLAGS =
 QEMU_GFX_FLAGS = -display sdl,gl=on -vga none -device virtio-gpu-gl-pci,disable-modern=off,xres=1440,yres=900
-else ifeq ($(GFX_MODE),intel)
-CARGO_GFX_FLAGS =
-QEMU_GFX_FLAGS = -display none -vga none -device vfio-pci,host=$(INTEL_GPU_PCI),bus=pcie.0,addr=0x2$(INTEL_GPU_VFIO_PROPS)
-else ifeq ($(GFX_MODE),none)
-CARGO_GFX_FLAGS =
-QEMU_GFX_FLAGS = -display sdl,gl=off -vga std
-else
-$(error Unsupported GFX_MODE '$(GFX_MODE)' (expected virgl, intel, or none))
-endif
 
 QEMU_ISO_FLAGS = $(QEMU_GFX_FLAGS) -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -boot order=d -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=8 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
@@ -106,6 +92,8 @@ QEMU_ISO_DBG = $(QEMU_BIN) $(QEMU_ISO_FLAGS_DBG) $(QEMU_USB_FLAGS)
 
 IMG_SIZE ?= 1G
 
+.PHONY: kernel blueprints hello-world-bp localcoder-bp artifacts kernel-stages iso iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed
+
 images: disk.img nvme.img
 
 disk.img:
@@ -117,7 +105,15 @@ nvme.img:
 kernel:
 	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc -Z json-target-spec --target 86_64.json
 
-artifacts: kernel
+blueprints: hello-world-bp localcoder-bp
+
+hello-world-bp:
+	cd "$(HELLO_WORLD_BP_DIR)" && cargo +nightly bp
+
+localcoder-bp:
+	cd "$(LOCALCODER_BP_DIR)" && python3 build_bp.py --profile "$(LOCALCODER_BP_PROFILE)"
+
+artifacts: blueprints kernel
 	mkdir -p $(ARTIFACT_DIR)
 	cp $(KERNEL_BIN) $(ARTIFACT_FULL_ELF)
 	cp $(KERNEL_BIN) $(ARTIFACT_RUNTIME_ELF)

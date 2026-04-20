@@ -546,10 +546,12 @@ pub(crate) fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'s
 
 fn resolve_import(name: &str) -> Option<usize> {
     match name {
-        "_RNvCs75cmLyI1ip2_7___rustc26___rust_alloc_error_handler" => {
+        "_RNvCs75cmLyI1ip2_7___rustc26___rust_alloc_error_handler"
+        | "_RNvCs2csqI13tepL_7___rustc26___rust_alloc_error_handler" => {
             Some(portal_alloc_error_handler as *const () as usize)
         }
-        "_RNvCs75cmLyI1ip2_7___rustc35___rust_no_alloc_shim_is_unstable_v2" => {
+        "_RNvCs75cmLyI1ip2_7___rustc35___rust_no_alloc_shim_is_unstable_v2"
+        | "_RNvCs2csqI13tepL_7___rustc35___rust_no_alloc_shim_is_unstable_v2" => {
             Some(portal_no_alloc_shim_is_unstable_v2 as *const () as usize)
         }
         "memcpy" => Some(trueos_qjs::trueos_shims::memcpy as *const () as usize),

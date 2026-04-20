@@ -607,10 +607,6 @@ pub(crate) fn spawn_app_vm_run_queue(spawner: Spawner) -> Result<(), embassy_exe
     }
 }
 
-pub(crate) fn enqueue_embedded_hello_world_app_once() {
-    cmds::run::enqueue_embedded_hello_world_once();
-}
-
 fn matrix_target_for_slot(output_mask: u8, slot_id: &matrix::MatrixSlotId) -> MatrixTarget {
     MatrixTarget {
         output_mask,

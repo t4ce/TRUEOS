@@ -603,10 +603,6 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
         ));
     }
 
-    while !VM1_STOP_REQ.load(Ordering::Acquire) {
-        Timer::after(EmbassyDuration::from_millis(250)).await;
-    }
-
     VM1_RUNNING.store(false, Ordering::Release);
     VM1_STARTING.store(false, Ordering::Release);
     VM1_STOP_REQ.store(false, Ordering::Release);

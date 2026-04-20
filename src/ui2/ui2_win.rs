@@ -57,6 +57,7 @@ pub(super) fn alloc_window(
         id,
         kind,
         spawn_task_index: None,
+        vm_origin_hint: false,
         browser_instance_id: if kind == Ui2WindowKind::HostedBrowser {
             PRIMARY_HOSTED_CONTENT_ID
         } else {
@@ -375,8 +376,25 @@ pub(super) fn handle_system_button_action(
                 maximize_window_in_state(state, window_id)
             }
         }
+        Ui2SystemButtonAction::PreserveVm => preserve_vm_window_in_state(state, window_id),
         Ui2SystemButtonAction::Close => close_window_in_state(state, window_id),
     }
+}
+
+fn preserve_vm_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
+    let vm_origin_hint = state
+        .windows
+        .iter()
+        .find(|window| window.id == window_id)
+        .map(|window| window.vm_origin_hint)
+        .unwrap_or(false);
+    if !vm_origin_hint {
+        return false;
+    }
+    if !crate::hv::request_preserve_vm1() {
+        return false;
+    }
+    set_window_visible_in_state(state, window_id, false)
 }
 
 fn close_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
@@ -486,6 +504,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     if let Some(window) = window_mut(state, id) {
         window.browser_instance_id = next_browser_instance_id;
         window.spawn_task_index = None;
+        window.vm_origin_hint = false;
         window.icon_id = next_icon_id;
         window.title_twemoji = next_title_twemoji;
         window.title_icon_tex_id = next_title_icon_tex_id;
@@ -647,6 +666,20 @@ pub fn create_window(title: &str, rect: Ui2Rect, z: i16, alpha: u8) -> u32 {
     refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);
     id
+}
+
+pub(crate) fn set_window_vm_origin_hint(id: u32, hinted: bool) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.vm_origin_hint == hinted {
+        return true;
+    }
+    window.vm_origin_hint = hinted;
+    state.compose_reason = "window-vm-origin-hint";
+    note_window_dirty(&mut state, id, "window-vm-origin-hint")
 }
 
 pub fn create_hosted_browser_window(
