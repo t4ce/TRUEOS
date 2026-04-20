@@ -1,4 +1,5 @@
 use core::fmt;
+#[cfg(not(feature = "tokio-probe"))]
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -306,6 +307,7 @@ extern "x86-interrupt" fn double_fault_handler(
     halt_loop();
 }
 
+#[cfg(not(feature = "tokio-probe"))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     interrupts::disable();

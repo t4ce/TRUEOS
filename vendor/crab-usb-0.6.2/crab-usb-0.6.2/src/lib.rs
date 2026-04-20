@@ -1,4 +1,4 @@
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "zkvm"), no_std)]
 #![feature(iterator_try_collect)]
 
 #[macro_use]
