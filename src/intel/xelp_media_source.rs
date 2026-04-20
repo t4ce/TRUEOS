@@ -24,6 +24,72 @@ static MEDIA_DECODE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static MEDIA_SOURCE_FETCH_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MEDIA_SOURCE_STASH: Mutex<Option<MediaSourceStash>> = Mutex::new(None);
 
+pub(crate) enum MediaSource {
+    Memory {
+        source: &'static str,
+        body: Vec<u8>,
+    },
+    CacheFile {
+        source: &'static str,
+        disk: crate::disc::block::DeviceHandle,
+        path: &'static str,
+        len: u64,
+    },
+}
+
+impl MediaSource {
+    pub(crate) fn source_name(&self) -> &'static str {
+        match self {
+            Self::Memory { source, .. } | Self::CacheFile { source, .. } => source,
+        }
+    }
+
+    pub(crate) fn total_len(&self) -> u64 {
+        match self {
+            Self::Memory { body, .. } => body.len() as u64,
+            Self::CacheFile { len, .. } => *len,
+        }
+    }
+
+    pub(crate) fn body(&self) -> Option<&[u8]> {
+        match self {
+            Self::Memory { body, .. } => Some(body.as_slice()),
+            Self::CacheFile { .. } => None,
+        }
+    }
+
+    pub(crate) async fn read_range(
+        &self,
+        offset: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>, crate::disc::block::Error> {
+        match self {
+            Self::Memory { body, .. } => {
+                let start = usize::try_from(offset).map_err(|_| crate::disc::block::Error::OutOfBounds)?;
+                let end = start
+                    .checked_add(len)
+                    .ok_or(crate::disc::block::Error::OutOfBounds)?;
+                let Some(slice) = body.get(start..end) else {
+                    return Err(crate::disc::block::Error::OutOfBounds);
+                };
+                Ok(Some(slice.to_vec()))
+            }
+            Self::CacheFile {
+                disk, path, len: total, ..
+            } => {
+                let end = offset
+                    .checked_add(len as u64)
+                    .ok_or(crate::disc::block::Error::OutOfBounds)?;
+                if end > *total {
+                    return Err(crate::disc::block::Error::OutOfBounds);
+                }
+                crate::r::stream::read_trueosfs_file_range_via_pipe_async(*disk, path, offset, len)
+                    .await
+            }
+        }
+    }
+}
+
 struct MediaSourceStash {
     source: &'static str,
     body: Vec<u8>,
@@ -45,7 +111,7 @@ pub(crate) fn mark_decode_requested() {
     MEDIA_DECODE_REQUESTED.store(true, Ordering::Release);
 }
 
-fn take_media_source_stash(owner: &'static str) -> Option<(&'static str, Vec<u8>)> {
+fn take_media_source_stash(owner: &'static str) -> Option<MediaSource> {
     let stash = MEDIA_SOURCE_STASH.lock().take()?;
     crate::log!(
         "intel/media: source stash owner={} source={} bytes={}\n",
@@ -53,7 +119,10 @@ fn take_media_source_stash(owner: &'static str) -> Option<(&'static str, Vec<u8>
         stash.source,
         stash.body.len(),
     );
-    Some((stash.source, stash.body))
+    Some(MediaSource::Memory {
+        source: stash.source,
+        body: stash.body,
+    })
 }
 
 fn store_media_source_stash(source: &'static str, body: Vec<u8>) {
@@ -61,7 +130,7 @@ fn store_media_source_stash(source: &'static str, body: Vec<u8>) {
     *MEDIA_SOURCE_STASH.lock() = Some(MediaSourceStash { source, body });
 }
 
-async fn fetch_media_source_inner_async(_owner: &'static str) -> Option<(&'static str, Vec<u8>)> {
+async fn fetch_media_source_inner_async(_owner: &'static str) -> Option<MediaSource> {
     // 1) Wait for FS, try cache.
     if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
         if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
@@ -74,16 +143,19 @@ async fn fetch_media_source_inner_async(_owner: &'static str) -> Option<(&'stati
                 info.block_size,
                 info.max_transfer_bytes,
             );
-            match crate::r::stream::load_trueosfs_file_via_pipe_async(disk, MEDIA_DECODE_CACHE_PATH)
-                .await
-            {
-                Ok(Some(cached)) if !cached.is_empty() => {
+            match crate::r::fs::trueosfs::file_info_async(disk, MEDIA_DECODE_CACHE_PATH).await {
+                Ok(Some(info)) if info.data_len != 0 => {
                     crate::log!(
-                        "intel/media: cache hit path={} bytes={} source=pipe\n",
+                        "intel/media: cache hit path={} bytes={} source=file\n",
                         MEDIA_DECODE_CACHE_PATH,
-                        cached.len()
+                        info.data_len
                     );
-                    return Some(("cache", cached));
+                    return Some(MediaSource::CacheFile {
+                        source: "cache",
+                        disk,
+                        path: MEDIA_DECODE_CACHE_PATH,
+                        len: info.data_len,
+                    });
                 }
                 Ok(_) => {
                     crate::log!("intel/media: cache miss path={}\n", MEDIA_DECODE_CACHE_PATH,);
@@ -148,7 +220,7 @@ async fn fetch_media_source_inner_async(_owner: &'static str) -> Option<(&'stati
                         }
                     }
                 }
-                return Some((url, body));
+                return Some(MediaSource::Memory { source: url, body });
             }
             Err(err) => {
                 crate::log!("intel/media: local fetch failed url={} err={:?}\n", url, err);
@@ -199,7 +271,7 @@ async fn acquire_media_source_fetch_guard_async(
 
 pub(crate) async fn fetch_media_source_async(
     owner: &'static str,
-) -> Option<(&'static str, Vec<u8>)> {
+) -> Option<MediaSource> {
     if let Some(stashed) = take_media_source_stash(owner) {
         return Some(stashed);
     }
@@ -216,9 +288,11 @@ pub(crate) async fn fetch_media_source_async(
 async fn warm_media_source_async() -> Option<(&'static str, usize)> {
     let _guard = acquire_media_source_fetch_guard_async("warmup").await?;
     let fetched = fetch_media_source_inner_async("warmup").await?;
-    let source = fetched.0;
-    let bytes = fetched.1.len();
-    store_media_source_stash(fetched.0, fetched.1);
+    let source = fetched.source_name();
+    let bytes = usize::try_from(fetched.total_len()).ok()?;
+    if let MediaSource::Memory { source, body } = fetched {
+        store_media_source_stash(source, body);
+    }
     Some((source, bytes))
 }
 

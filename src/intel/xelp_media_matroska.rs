@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 
 use super::xelp_media_mp4::{AvccSummary, parse_avcc_summary};
+use super::xelp_media_source::MediaSource;
 
 const EBML_ID: u32 = 0x1A45_DFA3;
 const SEGMENT_ID: u32 = 0x1853_8067;
@@ -49,20 +50,28 @@ struct TrackCandidate<'a> {
     height: Option<u16>,
 }
 
-#[derive(Clone, Copy)]
-struct SampleRange {
-    offset: usize,
-    len: usize,
+#[derive(Default)]
+struct OwnedTrackCandidate {
+    track_number: Option<u64>,
+    codec_id: Option<Vec<u8>>,
+    codec_private: Option<Vec<u8>>,
+    width: Option<u16>,
+    height: Option<u16>,
 }
 
-pub(crate) struct MatroskaH264Summary<'a> {
+#[derive(Clone, Copy)]
+pub(crate) struct SampleRange {
+    pub offset: u64,
+    pub len: u32,
+}
+
+pub(crate) struct MatroskaH264Summary {
     pub width: u16,
     pub height: u16,
     pub sample_count: u32,
-    pub first_sample: &'a [u8],
-    pub avcc: AvccSummary<'a>,
-    body: &'a [u8],
-    samples: Vec<SampleRange>,
+    pub first_sample: Vec<u8>,
+    pub avcc: AvccSummary,
+    pub samples: Vec<SampleRange>,
 }
 
 fn ebml_vint_len(first: u8, max_len: usize) -> Option<usize> {
@@ -249,7 +258,7 @@ fn collect_cluster_samples(
     bytes: &[u8],
     wanted_track: u64,
     samples: &mut Vec<SampleRange>,
-    base_offset: usize,
+    base_offset: u64,
 ) -> Result<(), MatroskaParseError> {
     let mut off = 0usize;
     while let Some(child) = next_ebml_elem(bytes, &mut off) {
@@ -258,14 +267,14 @@ fn collect_cluster_samples(
             SIMPLE_BLOCK_ID => {
                 if let Some(payload) = parse_block_payload(child.data, wanted_track)? {
                     let offset = base_offset
-                        .checked_add(child.data_offset)
+                        .checked_add(child.data_offset as u64)
                         .and_then(|o| {
-                            o.checked_add(payload.as_ptr() as usize - child.data.as_ptr() as usize)
+                            o.checked_add((payload.as_ptr() as usize - child.data.as_ptr() as usize) as u64)
                         })
                         .ok_or(MatroskaParseError::BadBlock)?;
                     samples.push(SampleRange {
                         offset,
-                        len: payload.len(),
+                        len: u32::try_from(payload.len()).map_err(|_| MatroskaParseError::BadBlock)?,
                     });
                 }
             }
@@ -278,17 +287,18 @@ fn collect_cluster_samples(
                     }
                     if let Some(payload) = parse_block_payload(group_child.data, wanted_track)? {
                         let offset = base_offset
-                            .checked_add(child.data_offset)
-                            .and_then(|o| o.checked_add(group_child.data_offset))
+                            .checked_add(child.data_offset as u64)
+                            .and_then(|o| o.checked_add(group_child.data_offset as u64))
                             .and_then(|o| {
                                 o.checked_add(
-                                    payload.as_ptr() as usize - group_child.data.as_ptr() as usize,
+                                    (payload.as_ptr() as usize - group_child.data.as_ptr() as usize)
+                                        as u64,
                                 )
                             })
                             .ok_or(MatroskaParseError::BadBlock)?;
                         samples.push(SampleRange {
                             offset,
-                            len: payload.len(),
+                            len: u32::try_from(payload.len()).map_err(|_| MatroskaParseError::BadBlock)?,
                         });
                     }
                 }
@@ -303,9 +313,9 @@ pub(crate) fn looks_like_matroska(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3])
 }
 
-pub(crate) fn parse_h264_matroska_summary<'a>(
-    bytes: &'a [u8],
-) -> Result<MatroskaH264Summary<'a>, MatroskaParseError> {
+pub(crate) fn parse_h264_matroska_summary(
+    bytes: &[u8],
+) -> Result<MatroskaH264Summary, MatroskaParseError> {
     let mut off = 0usize;
     let mut saw_segment = false;
     let mut best_track = None;
@@ -336,7 +346,12 @@ pub(crate) fn parse_h264_matroska_summary<'a>(
                             .data_offset
                             .checked_add(child.data_offset)
                             .ok_or(MatroskaParseError::Truncated)?;
-                        collect_cluster_samples(child.data, track_no, &mut samples, cluster_base)?;
+                        collect_cluster_samples(
+                            child.data,
+                            track_no,
+                            &mut samples,
+                            cluster_base as u64,
+                        )?;
                     }
                 }
             }
@@ -360,7 +375,165 @@ pub(crate) fn parse_h264_matroska_summary<'a>(
     let height = track.height.ok_or(MatroskaParseError::NoDimensions)?;
     let first = *samples.first().ok_or(MatroskaParseError::NoSamples)?;
     let first_sample = bytes
-        .get(first.offset..first.offset.saturating_add(first.len))
+        .get(
+            usize::try_from(first.offset).map_err(|_| MatroskaParseError::BadBlock)?
+                ..usize::try_from(first.offset)
+                    .map_err(|_| MatroskaParseError::BadBlock)?
+                    .saturating_add(usize::try_from(first.len).map_err(|_| MatroskaParseError::BadBlock)?),
+        )
+        .ok_or(MatroskaParseError::BadBlock)?;
+
+    Ok(MatroskaH264Summary {
+        width,
+        height,
+        sample_count: u32::try_from(samples.len()).unwrap_or(u32::MAX),
+        first_sample: first_sample.to_vec(),
+        avcc,
+        samples,
+    })
+}
+
+struct SourceEbmlHeader {
+    id: u32,
+    data_offset: u64,
+    data_len: u64,
+    end_offset: u64,
+}
+
+async fn read_source_ebml_header(
+    source: &MediaSource,
+    off: u64,
+    total_len: u64,
+) -> Result<Option<SourceEbmlHeader>, MatroskaParseError> {
+    if off >= total_len {
+        return Ok(None);
+    }
+    let header_len = usize::try_from((total_len - off).min(12)).map_err(|_| MatroskaParseError::Truncated)?;
+    let Some(header) = source
+        .read_range(off, header_len)
+        .await
+        .map_err(|_| MatroskaParseError::Truncated)?
+    else {
+        return Err(MatroskaParseError::Truncated);
+    };
+
+    let (id, id_len) = read_ebml_id(header.as_slice(), 0).ok_or(MatroskaParseError::Truncated)?;
+    let (size, size_len) =
+        read_ebml_size(header.as_slice(), id_len).ok_or(MatroskaParseError::Truncated)?;
+    let data_offset = off
+        .checked_add((id_len + size_len) as u64)
+        .ok_or(MatroskaParseError::Truncated)?;
+    let data_len = size.unwrap_or_else(|| total_len.saturating_sub(data_offset));
+    let end_offset = data_offset
+        .checked_add(data_len)
+        .ok_or(MatroskaParseError::Truncated)?;
+    if end_offset > total_len {
+        return Err(MatroskaParseError::Truncated);
+    }
+
+    Ok(Some(SourceEbmlHeader {
+        id,
+        data_offset,
+        data_len,
+        end_offset,
+    }))
+}
+
+pub(crate) async fn parse_h264_matroska_summary_from_source(
+    source: &MediaSource,
+) -> Result<MatroskaH264Summary, MatroskaParseError> {
+    if let Some(bytes) = source.body() {
+        return parse_h264_matroska_summary(bytes);
+    }
+
+    let total_len = source.total_len();
+    let mut off = 0u64;
+    let mut saw_segment = false;
+    let mut segment = None;
+    while let Some(root) = read_source_ebml_header(source, off, total_len).await? {
+        if root.id == SEGMENT_ID {
+            saw_segment = true;
+            segment = Some(root);
+            break;
+        }
+        off = root.end_offset;
+    }
+
+    if !saw_segment {
+        return Err(MatroskaParseError::NoSegment);
+    }
+    let segment = segment.ok_or(MatroskaParseError::NoSegment)?;
+
+    let mut best_track = None;
+    let mut seg_off = segment.data_offset;
+    while seg_off < segment.end_offset {
+        let Some(child) = read_source_ebml_header(source, seg_off, segment.end_offset).await? else {
+            break;
+        };
+        if child.id == TRACKS_ID && best_track.is_none() {
+            let tracks_len =
+                usize::try_from(child.data_len).map_err(|_| MatroskaParseError::Truncated)?;
+            let tracks = source
+                .read_range(child.data_offset, tracks_len)
+                .await
+                .map_err(|_| MatroskaParseError::Truncated)?
+                .ok_or(MatroskaParseError::Truncated)?;
+            best_track = parse_tracks(tracks.as_slice())?.map(|track| OwnedTrackCandidate {
+                track_number: track.track_number,
+                codec_id: track.codec_id.map(|value| value.as_bytes().to_vec()),
+                codec_private: track.codec_private.map(|value| value.to_vec()),
+                width: track.width,
+                height: track.height,
+            });
+        }
+        seg_off = child.end_offset;
+    }
+
+    let track = best_track.ok_or(MatroskaParseError::NoVideoTrack)?;
+    if track.codec_id.as_deref() != Some(b"V_MPEG4/ISO/AVC".as_slice()) {
+        return Err(MatroskaParseError::UnsupportedCodec);
+    }
+    let track_no = track.track_number.ok_or(MatroskaParseError::NoVideoTrack)?;
+
+    let mut samples = Vec::new();
+    seg_off = segment.data_offset;
+    while seg_off < segment.end_offset {
+        let Some(child) = read_source_ebml_header(source, seg_off, segment.end_offset).await? else {
+            break;
+        };
+        if child.id == CLUSTER_ID {
+            let cluster_len =
+                usize::try_from(child.data_len).map_err(|_| MatroskaParseError::Truncated)?;
+            let cluster = source
+                .read_range(child.data_offset, cluster_len)
+                .await
+                .map_err(|_| MatroskaParseError::Truncated)?
+                .ok_or(MatroskaParseError::Truncated)?;
+            collect_cluster_samples(
+                cluster.as_slice(),
+                track_no,
+                &mut samples,
+                child.data_offset,
+            )?;
+        }
+        seg_off = child.end_offset;
+    }
+
+    let codec_private = track
+        .codec_private
+        .as_deref()
+        .ok_or(MatroskaParseError::NoCodecPrivate)?;
+    let avcc = parse_avcc_summary(codec_private).ok_or(MatroskaParseError::BadCodecPrivate)?;
+    let width = track.width.ok_or(MatroskaParseError::NoDimensions)?;
+    let height = track.height.ok_or(MatroskaParseError::NoDimensions)?;
+    let first = *samples.first().ok_or(MatroskaParseError::NoSamples)?;
+    let first_sample = source
+        .read_range(
+            first.offset,
+            usize::try_from(first.len).map_err(|_| MatroskaParseError::BadBlock)?,
+        )
+        .await
+        .map_err(|_| MatroskaParseError::BadBlock)?
         .ok_or(MatroskaParseError::BadBlock)?;
 
     Ok(MatroskaH264Summary {
@@ -369,17 +542,10 @@ pub(crate) fn parse_h264_matroska_summary<'a>(
         sample_count: u32::try_from(samples.len()).unwrap_or(u32::MAX),
         first_sample,
         avcc,
-        body: bytes,
         samples,
     })
 }
 
-pub(crate) fn get_sample_data<'a>(
-    summary: &'a MatroskaH264Summary<'a>,
-    index: u32,
-) -> Option<&'a [u8]> {
-    let range = *summary.samples.get(index as usize)?;
-    summary
-        .body
-        .get(range.offset..range.offset.checked_add(range.len)?)
+pub(crate) fn get_sample_range(summary: &MatroskaH264Summary, index: u32) -> Option<SampleRange> {
+    summary.samples.get(index as usize).copied()
 }
