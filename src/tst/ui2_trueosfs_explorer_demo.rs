@@ -5,8 +5,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use crate::disc::block::{self, DiscId};
 use crate::r::ui2::{self, Ui2FontTier, Ui2HostedInteractiveRect, Ui2Rect};
 
-const UI2_TRUEOSFS_EXPLORER_TEX_ID: u32 =
-    crate::tst_ui2_ids::Ui2DemoTexId::TrueosfsExplorer.get();
+const UI2_TRUEOSFS_EXPLORER_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::TrueosfsExplorer.get();
 const UI2_TRUEOSFS_EXPLORER_CONTENT_ID: u32 =
     crate::tst_ui2_ids::Ui2DemoContentId::TrueosfsExplorer.get();
 const UI2_TRUEOSFS_EXPLORER_TEX_W: u32 = 2_048;

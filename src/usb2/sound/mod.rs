@@ -630,13 +630,7 @@ pub(crate) async fn maybe_start_target_audio(
             };
             *ACTIVE_AUDIO_STREAM.lock() = Some(active_stream);
 
-            match audio_stream_task(
-                device,
-                active_stream,
-                vendor_id,
-                product_id,
-                target,
-            ) {
+            match audio_stream_task(device, active_stream, vendor_id, product_id, target) {
                 Ok(token) => {
                     spawner.spawn(token);
                     crate::log!(

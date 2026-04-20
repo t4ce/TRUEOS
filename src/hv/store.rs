@@ -626,19 +626,12 @@ fn provisioned_disk_bytes(required_bytes: usize) -> u64 {
     let required = required_bytes as u64;
     let headroom = core::cmp::max(VM_STORE_RAMDISK_ALIGN_BYTES / 2, required / 2);
     let wanted = required.saturating_add(headroom);
-    round_up_bytes(
-        core::cmp::max(VM_STORE_MIN_RAMDISK_BYTES, wanted),
-        VM_STORE_RAMDISK_ALIGN_BYTES,
-    )
+    round_up_bytes(core::cmp::max(VM_STORE_MIN_RAMDISK_BYTES, wanted), VM_STORE_RAMDISK_ALIGN_BYTES)
 }
 
 async fn create_store_ready(size_bytes: u64) -> Result<block::DeviceHandle, VmStoreError> {
     let t0 = boot_probe_ms();
-    crate::log!(
-        "hv-store: ramdisk create begin ms={} bytes={}\n",
-        t0,
-        size_bytes
-    );
+    crate::log!("hv-store: ramdisk create begin ms={} bytes={}\n", t0, size_bytes);
     let disk = crate::r::disc::ramdisk::create_trueos_private(
         size_bytes,
         VM_STORE_BLOCK_SIZE,

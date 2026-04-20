@@ -150,7 +150,8 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         return true;
     }
 
-    let process_args = blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
+    let process_args =
+        blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
     let process_env = blueprint::build_process_env(state.archive.as_str());
     match blueprint::invoke_host_rel(
         unpacked.as_slice(),

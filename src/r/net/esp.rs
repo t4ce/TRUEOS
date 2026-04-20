@@ -190,45 +190,49 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
         return;
     };
 
-    if let Ok(body) = crate::r::net::cli::http::fetch_http_body(
+    match crate::r::net::cli::http::fetch_http_body(
         url.as_str(),
         ESP_STATUS_FETCH_TIMEOUT_MS,
         ESP_STATUS_FETCH_MAX_RX,
     )
     .await
     {
-        if let Some(status) = trueos_esp::swarm::parse_status_snapshot(body.as_slice()) {
-            let now_ms = monotonic_ms();
-            let event =
-                DEVICE_REGISTRY
-                    .lock()
-                    .update_status(snapshot.handle, status.clone(), now_ms);
-            if let Some(event) = event {
+        Ok(body) => {
+            if let Some(status) = trueos_esp::swarm::parse_status_snapshot(body.as_slice()) {
+                let now_ms = monotonic_ms();
+                let event =
+                    DEVICE_REGISTRY
+                        .lock()
+                        .update_status(snapshot.handle, status.clone(), now_ms);
+                if let Some(event) = event {
+                    crate::log!(
+                        "esp-gate: status changed handle={} running={} last_status={} last_error={}\n",
+                        event.handle.0,
+                        if event.current.running { 1 } else { 0 },
+                        event.current.last_status.as_str(),
+                        event.current.last_error.as_str()
+                    );
+                    note_registry_change();
+                    STATUS_EVENTS.lock().push_back(event);
+                }
+            } else {
                 crate::log!(
-                    "esp-gate: status changed handle={} running={} last_status={} last_error={}\n",
-                    event.handle.0,
-                    if event.current.running { 1 } else { 0 },
-                    event.current.last_status.as_str(),
-                    event.current.last_error.as_str()
+                    "esp-gate: status parse failed handle={} url={} bytes={}\n",
+                    snapshot.handle.0,
+                    url.as_str(),
+                    body.len()
                 );
-                note_registry_change();
-                STATUS_EVENTS.lock().push_back(event);
             }
-        } else {
+        }
+        Err(err) => {
             crate::log!(
-                "esp-gate: status parse failed handle={} url={} bytes={}\n",
+                "esp-gate: status fetch failed handle={} url={} timeout_ms={} err={:?}\n",
                 snapshot.handle.0,
                 url.as_str(),
-                body.len()
+                ESP_STATUS_FETCH_TIMEOUT_MS,
+                err
             );
         }
-    } else {
-        crate::log!(
-            "esp-gate: status fetch failed handle={} url={} timeout_ms={}\n",
-            snapshot.handle.0,
-            url.as_str(),
-            ESP_STATUS_FETCH_TIMEOUT_MS
-        );
     }
 }
 

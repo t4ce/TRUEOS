@@ -1320,22 +1320,21 @@ fn update_resize_drag_for_cursor(
 
             let start_center_x = start_content.x + start_content.w * 0.5;
             let start_center_y = start_content.y + start_content.h * 0.5;
-            let next_content_x =
-                if (drag.edge_mask & UI2_WINDOW_RESIZE_LEFT) != 0 && has_horizontal {
-                    content_right - next_content_w
-                } else if (drag.edge_mask & UI2_WINDOW_RESIZE_RIGHT) != 0 && has_horizontal {
-                    start_content.x
-                } else {
-                    start_center_x - next_content_w * 0.5
-                };
-            let next_content_y =
-                if (drag.edge_mask & UI2_WINDOW_RESIZE_TOP) != 0 && has_vertical {
-                    content_bottom - next_content_h
-                } else if (drag.edge_mask & UI2_WINDOW_RESIZE_BOTTOM) != 0 && has_vertical {
-                    start_content.y
-                } else {
-                    start_center_y - next_content_h * 0.5
-                };
+            let next_content_x = if (drag.edge_mask & UI2_WINDOW_RESIZE_LEFT) != 0 && has_horizontal
+            {
+                content_right - next_content_w
+            } else if (drag.edge_mask & UI2_WINDOW_RESIZE_RIGHT) != 0 && has_horizontal {
+                start_content.x
+            } else {
+                start_center_x - next_content_w * 0.5
+            };
+            let next_content_y = if (drag.edge_mask & UI2_WINDOW_RESIZE_TOP) != 0 && has_vertical {
+                content_bottom - next_content_h
+            } else if (drag.edge_mask & UI2_WINDOW_RESIZE_BOTTOM) != 0 && has_vertical {
+                start_content.y
+            } else {
+                start_center_y - next_content_h * 0.5
+            };
 
             next = Ui2Rect::new(
                 next_content_x - inset_left,

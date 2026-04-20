@@ -8,8 +8,7 @@ use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
 use crate::gfx::althlasfont::twemoji;
 use crate::r::ui2::Ui2WindowCursorSample;
 
-const UI2_SMILEY_FOUNTAIN_TEX_ID: u32 =
-    crate::tst_ui2_ids::Ui2DemoTexId::SmileyFountain.get();
+const UI2_SMILEY_FOUNTAIN_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::SmileyFountain.get();
 const UI2_SMILEY_FOUNTAIN_RT_W: u32 = 560;
 const UI2_SMILEY_FOUNTAIN_RT_H: u32 = 360;
 const UI2_SMILEY_FOUNTAIN_WINDOW_X: f32 = 880.0;

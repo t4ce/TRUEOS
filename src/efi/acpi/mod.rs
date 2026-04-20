@@ -64,12 +64,7 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                 Some(tables)
             }
             Err(err) => {
-                crate::log!(
-                    "ACPI RSDP raw=0x{:X} phys=0x{:X} ERROR {:?}\n",
-                    rsdp_raw,
-                    rsdp,
-                    err
-                );
+                crate::log!("ACPI RSDP raw=0x{:X} phys=0x{:X} ERROR {:?}\n", rsdp_raw, rsdp, err);
                 None
             }
         }
@@ -100,10 +95,7 @@ impl AcpiIdentityHandler {
         mmio::map_mmio_region(normalized, size).unwrap_or_else(|err| {
             panic!(
                 "ACPI map raw={:x} phys={:x} size {} failed: {:?}",
-                phys_addr,
-                normalized,
-                size,
-                err
+                phys_addr, normalized, size, err
             )
         })
     }
