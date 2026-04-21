@@ -1,0 +1,3300 @@
+qemu-system-x86_64: Kein Prozess gefunden
+cd "../TRUEOS Blueprints" && cargo run -- example hello_world
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running `target/debug/trueos-blueprint example hello_world`
+warning: unused variable: `m`
+   --> /home/t4ce/REPOS/TRUEOS/vendor/tokio-1.52.1/src/runtime/park.rs:171:13
+    |
+171 |         let m = self.mutex.lock();
+    |             ^ help: if this is intentional, prefix it with an underscore: `_m`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: missing documentation for a struct
+  --> /home/t4ce/REPOS/TRUEOS/vendor/tokio-1.52.1/src/time/instant.rs:53:1
+   |
+53 | pub struct Instant {
+   | ^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> /home/t4ce/REPOS/TRUEOS/vendor/tokio-1.52.1/src/lib.rs:9:5
+   |
+ 9 |     missing_docs,
+   |     ^^^^^^^^^^^^
+
+warning: `tokio` (lib) generated 2 warnings (run `cargo fix --lib -p tokio` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+
+7-Zip 25.01 (x64) : Copyright (c) 1999-2025 Igor Pavlov : 2025-08-03
+ 64-bit locale=de_DE.UTF-8 Threads:32 OPEN_MAX:524288, ASM
+
+Creating archive: /tmp/trueos-blueprint-386410-0/payload.7z
+
+Add new data to archive: 1 file, 3097720 bytes (3026 KiB)
+
+
+Files read from disk: 1
+Archive size: 305336 bytes (299 KiB)
+Everything is Ok
+packed /home/t4ce/REPOS/TRUEOS Blueprints/target/target/debug/examples/hello_world-c16c9dec6463761a.o -> /home/t4ce/REPOS/TRUEOS Blueprints/dist/hello_world.bp
+cargo +nightly build   -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target .cargo/86_64.json
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_init has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read_byte has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write_byte has no kernel export and will stay unresolved
+warning: unused imports: `Err`, `Ok`, and `self`
+ --> vendor/kurbo-0.11.3/src/stroke.rs:8:28
+  |
+8 | use core::result::Result::{self, Err, Ok};
+  |                            ^^^^  ^^^  ^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `alloc::string::String`
+ --> vendor/kurbo-0.11.3/src/svg.rs:7:5
+  |
+7 | use alloc::string::String;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `kurbo` (lib) generated 2 warnings (run `cargo fix --lib -p kurbo` to apply 2 suggestions)
+warning: unused import: `hash::*`
+  --> vendor/simd-adler32-0.3.8/src/lib.rs:98:9
+   |
+98 | pub use hash::*;
+   |         ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `simd-adler32` (lib) generated 1 warning (run `cargo fix --lib -p simd-adler32` to apply 1 suggestion)
+warning: function `compute_codes` is never used
+   --> vendor/fdeflate-0.3.7/src/lib.rs:106:10
+    |
+106 | const fn compute_codes<const NSYMS: usize>(lengths: &[u8; NSYMS]) -> Option<[u16; NSYMS]> {
+    |          ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `HUFFMAN_LENGTHS` is never used
+ --> vendor/fdeflate-0.3.7/src/tables.rs:7:18
+  |
+7 | pub(crate) const HUFFMAN_LENGTHS: [u8; 286] = [
+  |                  ^^^^^^^^^^^^^^^
+
+warning: constant `HUFFMAN_CODES` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:22:18
+   |
+22 | pub(crate) const HUFFMAN_CODES: [u16; 286] = match crate::compute_codes(&HUFFMAN_LENGTHS) {
+   |                  ^^^^^^^^^^^^^
+
+warning: constant `LENGTH_TO_SYMBOL` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:28:18
+   |
+28 | pub(crate) const LENGTH_TO_SYMBOL: [u16; 256] = [
+   |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `LENGTH_TO_LEN_EXTRA` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:46:18
+   |
+46 | pub(crate) const LENGTH_TO_LEN_EXTRA: [u8; 256] = [
+   |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `BITMASKS` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:57:18
+   |
+57 | pub(crate) const BITMASKS: [u32; 17] = [
+   |                  ^^^^^^^^
+
+warning: unused imports: `cos` and `floor`
+ --> crates/trueos-weather/src/helper.rs:4:18
+  |
+4 | use libm::{acos, cos, floor, sin, tan};
+  |                  ^^^  ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fdeflate` (lib) generated 6 warnings
+warning: `trueos-weather` (lib) generated 1 warning (run `cargo fix --lib -p trueos-weather` to apply 1 suggestion)
+warning: unused imports: `boxed::Box` and `string::String`
+ --> vendor/usvg-0.45.1/src/parser/mod.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |             ^^^^^^^^^^  ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `boxed::Box`
+ --> vendor/usvg-0.45.1/src/parser/filter.rs:6:13
+  |
+6 | use alloc::{boxed::Box, format, string::{String, ToString}, vec, vec::Vec};
+  |             ^^^^^^^^^^
+
+warning: unused import: `string::String`
+ --> vendor/usvg-0.45.1/src/parser/marker.rs:4:25
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |                         ^^^^^^^^^^^^^^
+
+warning: unused imports: `String` and `vec::Vec`
+ --> vendor/usvg-0.45.1/src/parser/mask.rs:4:34
+  |
+4 | use alloc::{boxed::Box, string::{String, ToString}, vec::Vec};
+  |                                  ^^^^^^             ^^^^^^^^
+
+warning: unused import: `boxed::Box`
+ --> vendor/usvg-0.45.1/src/parser/options.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::{String, ToString}, vec, vec::Vec};
+  |             ^^^^^^^^^^
+
+warning: unused import: `String`
+ --> vendor/usvg-0.45.1/src/parser/paint_server.rs:4:34
+  |
+4 | use alloc::{boxed::Box, string::{String, ToString}, vec::Vec};
+  |                                  ^^^^^^
+
+warning: unused imports: `boxed::Box` and `string::String`
+ --> vendor/usvg-0.45.1/src/parser/style.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |             ^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused import: `boxed::Box`
+ --> vendor/usvg-0.45.1/src/parser/svgtree/mod.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |             ^^^^^^^^^^
+
+warning: unused imports: `String` and `boxed::Box`
+ --> vendor/usvg-0.45.1/src/parser/svgtree/parse.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::{String, ToString}, vec::Vec};
+  |             ^^^^^^^^^^           ^^^^^^
+
+warning: unused import: `boxed::Box`
+ --> vendor/usvg-0.45.1/src/parser/svgtree/text.rs:6:13
+  |
+6 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |             ^^^^^^^^^^
+
+warning: unused imports: `string::String` and `vec::Vec`
+ --> vendor/usvg-0.45.1/src/parser/switch.rs:4:25
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |                         ^^^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused imports: `boxed::Box` and `string::String`
+ --> vendor/usvg-0.45.1/src/parser/units.rs:4:13
+  |
+4 | use alloc::{boxed::Box, string::String, vec::Vec};
+  |             ^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused import: `vec::Vec`
+ --> vendor/usvg-0.45.1/src/parser/use_node.rs:4:53
+  |
+4 | use alloc::{boxed::Box, string::{String, ToString}, vec::Vec};
+  |                                                     ^^^^^^^^
+
+warning: unused imports: `AId` and `EId`
+  --> vendor/usvg-0.45.1/src/parser/mod.rs:25:26
+   |
+25 | pub(crate) use svgtree::{AId, EId};
+   |                          ^^^  ^^^
+
+warning: unused import: `boxed::Box`
+ --> vendor/usvg-0.45.1/src/tree/filter.rs:6:13
+  |
+6 | use alloc::{boxed::Box, string::String, vec, vec::Vec};
+  |             ^^^^^^^^^^
+
+warning: variant `SVG` is never constructed
+   --> vendor/usvg-0.45.1/src/parser/image.rs:107:5
+    |
+102 | enum ImageFormat {
+    |      ----------- variant in this enum
+...
+107 |     SVG,
+    |     ^^^
+    |
+    = note: `ImageFormat` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: missing documentation for a trait
+  --> vendor/usvg-0.45.1/src/tree/mod.rs:13:1
+   |
+13 | pub trait ApproxEqUlps {
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> vendor/usvg-0.45.1/src/lib.rs:50:9
+   |
+50 | #![warn(missing_docs)]
+   |         ^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> vendor/usvg-0.45.1/src/tree/mod.rs:14:5
+   |
+14 |     fn approx_eq_ulps(&self, other: &Self, ulps: i32) -> bool;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> vendor/usvg-0.45.1/src/tree/mod.rs:17:5
+   |
+17 |     fn approx_ne_ulps(&self, other: &Self, ulps: i32) -> bool {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `AsciiBranches`
+   --> crates/trueos-math/src/bst_arena.rs:184:33
+    |
+184 |         use crate::ascii_tree::{AsciiBranches, AsciiStack, Frame, write_ascii_tree};
+    |                                 ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `BstNode`
+ --> crates/trueos-math/src/avl.rs:4:34
+  |
+4 | use crate::bst_arena::{BstArena, BstNode, NodeId};
+  |                                  ^^^^^^^
+
+warning: unused import: `AsciiStack`
+   --> crates/trueos-math/src/bst_arena.rs:184:48
+    |
+184 |         use crate::ascii_tree::{AsciiBranches, AsciiStack, Frame, write_ascii_tree};
+    |                                                ^^^^^^^^^^
+
+warning: `usvg` (lib) generated 19 warnings (run `cargo fix --lib -p usvg` to apply 15 suggestions)
+warning: `trueos-math` (lib) generated 3 warnings (run `cargo fix --lib -p trueos-math` to apply 2 suggestions)
+warning: unused import: `io`
+ --> vendor/png-0.18.1/src/common.rs:6:47
+  |
+6 | use std::{borrow::Cow, convert::TryFrom, fmt, io};
+  |                                               ^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `chunk`
+   --> vendor/png-0.18.1/src/text_metadata.rs:104:13
+    |
+104 | use crate::{chunk, DecodingError};
+    |             ^^^^^
+
+warning: unused import: `std::convert::TryFrom`
+   --> vendor/png-0.18.1/src/text_metadata.rs:106:5
+    |
+106 | use std::convert::TryFrom;
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::string::ToString`
+ --> vendor/png-0.18.1/src/decoder/stream.rs:1:5
+  |
+1 | use alloc::string::ToString;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `into_raw` is never used
+   --> vendor/png-0.18.1/src/common.rs:547:19
+    |
+546 | impl SrgbRenderingIntent {
+    | ------------------------ method in this implementation
+547 |     pub(crate) fn into_raw(self) -> u8 {
+    |                   ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `set_source_srgb` is never used
+   --> vendor/png-0.18.1/src/common.rs:842:19
+    |
+744 | impl Info<'_> {
+    | ------------- method in this implementation
+...
+842 |     pub(crate) fn set_source_srgb(&mut self, rendering_intent: SrgbRenderingIntent) {
+    |                   ^^^^^^^^^^^^^^^
+
+warning: method `into_usize` is never used
+   --> vendor/png-0.18.1/src/common.rs:861:19
+    |
+848 | impl BytesPerPixel {
+    | ------------------ method in this implementation
+...
+861 |     pub(crate) fn into_usize(self) -> usize {
+    |                   ^^^^^^^^^^
+
+warning: associated function `from_simple` is never used
+  --> vendor/png-0.18.1/src/filter/mod.rs:50:19
+   |
+49 | impl Filter {
+   | ----------- associated function in this implementation
+50 |     pub(crate) fn from_simple(compression: Compression) -> Self {
+   |                   ^^^^^^^^^^^
+
+warning: associated function `from_method` is never used
+  --> vendor/png-0.18.1/src/filter/mod.rs:90:12
+   |
+78 | impl RowFilter {
+   | -------------- associated function in this implementation
+...
+90 |     pub fn from_method(strat: Filter) -> Option<Self> {
+   |            ^^^^^^^^^^^
+
+warning: function `filter_internal` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:361:4
+    |
+361 | fn filter_internal(
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `adaptive_filter` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:500:4
+    |
+500 | fn adaptive_filter(
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `filter` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:530:15
+    |
+530 | pub(crate) fn filter(
+    |               ^^^^^^
+
+warning: function `ilog2i` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:552:4
+    |
+552 | fn ilog2i(i: u32) -> u32 {
+    |    ^^^^^^
+
+warning: function `entropy` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:557:4
+    |
+557 | fn entropy(buf: &[u8]) -> u64 {
+    |    ^^^^^^^
+
+warning: function `sum_buffer` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:608:4
+    |
+608 | fn sum_buffer(buf: &[u8]) -> u64 {
+    |    ^^^^^^^^^^
+
+warning: function `filter_paeth_fpnge` is never used
+  --> vendor/png-0.18.1/src/filter/paeth.rs:45:15
+   |
+45 | pub(super) fn filter_paeth_fpnge(a: u8, b: u8, c: u8) -> u8 {
+   |               ^^^^^^^^^^^^^^^^^^
+
+warning: trait `WriteBytesExt` is never used
+  --> vendor/png-0.18.1/src/traits.rs:34:11
+   |
+34 | pub trait WriteBytesExt<T>: io::Write {
+   |           ^^^^^^^^^^^^^
+
+warning: unused variable: `m`
+   --> vendor/tokio-1.52.1/src/runtime/park.rs:171:13
+    |
+171 |         let m = self.mutex.lock();
+    |             ^ help: if this is intentional, prefix it with an underscore: `_m`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: missing documentation for a struct
+  --> vendor/tokio-1.52.1/src/time/instant.rs:53:1
+   |
+53 | pub struct Instant {
+   | ^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> vendor/tokio-1.52.1/src/lib.rs:9:5
+   |
+ 9 |     missing_docs,
+   |     ^^^^^^^^^^^^
+
+warning: methods `descriptor` and `configuration_descriptors` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/hub/device.rs:228:12
+    |
+110 | impl HubDevice {
+    | -------------- methods in this implementation
+...
+228 |     pub fn descriptor(&self) -> &DeviceDescriptor {
+    |            ^^^^^^^^^^
+...
+232 |     pub fn configuration_descriptors(&self) -> &[ConfigurationDescriptor] {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `submit_for_poll` and `poll_finished` are never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/cmd.rs:78:12
+   |
+20 | impl CommandRing {
+   | ---------------- methods in this implementation
+...
+78 |     pub fn submit_for_poll(&mut self, trb: command::Allowed) -> BusAddr {
+   |            ^^^^^^^^^^^^^^^
+...
+82 |     pub fn poll_finished(&self, addr: BusAddr) -> Option<CommandCompletion> {
+   |            ^^^^^^^^^^^^^
+
+warning: methods `poll_command_completion` and `command_ring_self_test` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/host.rs:198:8
+    |
+ 99 | impl Xhci {
+    | --------- methods in this implementation
+...
+198 |     fn poll_command_completion(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+239 |     fn command_ring_self_test(&mut self) -> Result {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_TIMEOUT_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:22:7
+   |
+22 | const HUB_DEBOUNCE_TIMEOUT_MS: u64 = 2000;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_STEP_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:23:7
+   |
+23 | const HUB_DEBOUNCE_STEP_MS: u64 = 25;
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_STABLE_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:24:7
+   |
+24 | const HUB_DEBOUNCE_STABLE_MS: u64 = 100;
+   |       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `debounce_port`, `wait_for_port_enabled`, `settle_port_enabled`, and `handle_changed` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:374:14
+    |
+351 | impl XhciRootHub {
+    | ---------------- methods in this implementation
+...
+374 |     async fn debounce_port(&mut self, port_id: u8, must_be_connected: bool) -> Result<(), ...
+    |              ^^^^^^^^^^^^^
+...
+466 |     async fn wait_for_port_enabled(&mut self, port_id: u8) -> Result<(), USBError> {
+    |              ^^^^^^^^^^^^^^^^^^^^^
+...
+482 |     async fn settle_port_enabled(&mut self, port_id: u8, reason: &'static str) -> bool {
+    |              ^^^^^^^^^^^^^^^^^^^
+...
+508 |     async fn handle_changed(&mut self) -> Result<(), USBError> {
+    |              ^^^^^^^^^^^^^^
+
+warning: feature `iterator_try_collect` is declared but not used
+ --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/lib.rs:2:12
+  |
+2 | #![feature(iterator_try_collect)]
+  |            ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_features)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> crates/trueos-qjs/src/async_ops.rs:609:18
+    |
+609 |         let Some(mut op) = take_pending(ctx, op_id) else {
+    |                  ----^^
+    |                  |
+    |                  help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `x_f`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:134:14
+    |
+134 |     let Some(x_f) = super::cmd_stream_arg_f64(ctx, args, 1) else {
+    |              ^^^ help: if this is intentional, prefix it with an underscore: `_x_f`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `y_f`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:137:14
+    |
+137 |     let Some(y_f) = super::cmd_stream_arg_f64(ctx, args, 2) else {
+    |              ^^^ help: if this is intentional, prefix it with an underscore: `_y_f`
+
+warning: unused variable: `w_f`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:140:14
+    |
+140 |     let Some(w_f) = super::cmd_stream_arg_f64(ctx, args, 3) else {
+    |              ^^^ help: if this is intentional, prefix it with an underscore: `_w_f`
+
+warning: unused variable: `h_f`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:143:14
+    |
+143 |     let Some(h_f) = super::cmd_stream_arg_f64(ctx, args, 4) else {
+    |              ^^^ help: if this is intentional, prefix it with an underscore: `_h_f`
+
+warning: unused variable: `u0`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:151:9
+    |
+151 |     let u0 = super::cmd_stream_arg_f64(ctx, args, 5).unwrap_or(0.0) as f32;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_u0`
+
+warning: unused variable: `v0`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:152:9
+    |
+152 |     let v0 = super::cmd_stream_arg_f64(ctx, args, 6).unwrap_or(0.0) as f32;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_v0`
+
+warning: unused variable: `u1`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:153:9
+    |
+153 |     let u1 = super::cmd_stream_arg_f64(ctx, args, 7).unwrap_or(1.0) as f32;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_u1`
+
+warning: unused variable: `v1`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:154:9
+    |
+154 |     let v1 = super::cmd_stream_arg_f64(ctx, args, 8).unwrap_or(1.0) as f32;
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_v1`
+
+warning: unused variable: `rgba`
+   --> crates/trueos-qjs/src/cmd_stream/draw_cmd_stream.rs:155:9
+    |
+155 |     let rgba = (super::cmd_stream_arg_f64(ctx, args, 9).unwrap_or(0xFFFF_FFFFu32 as f64) a...
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_rgba`
+
+warning: unused variable: `tex_id`
+   --> crates/trueos-qjs/src/cmd_stream/lyon_cmd_stream.rs:247:15
+    |
+247 |     let Some((tex_id, side_px)) = cmd_stream_ensure_lyon_icon_tex(icon_id, 0, 1) else {
+    |               ^^^^^^ help: if this is intentional, prefix it with an underscore: `_tex_id`
+
+warning: unused variable: `origin_x_ndc`
+   --> crates/trueos-qjs/src/cmd_stream/lyon_cmd_stream.rs:257:9
+    |
+257 |     let origin_x_ndc = (2.0 * ((x + origin_x) / view_w_f)) - 1.0;
+    |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_origin_x_ndc`
+
+warning: unused variable: `origin_y_ndc`
+   --> crates/trueos-qjs/src/cmd_stream/lyon_cmd_stream.rs:258:9
+    |
+258 |     let origin_y_ndc = 1.0 - (2.0 * ((y + origin_y) / view_h_f));
+    |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_origin_y_ndc`
+
+warning: unused variable: `verts`
+   --> crates/trueos-qjs/src/cmd_stream/lyon_cmd_stream.rs:260:9
+    |
+260 |     let verts = cmd_stream_get_lyon_unit_quad_verts(view_w_u, view_h_u, side_px, r, g, b);
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_verts`
+
+warning: function `push_i32_dec` is never used
+ --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:8:4
+  |
+8 | fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
+  |    ^^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `trace_str` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:29:4
+   |
+29 | fn trace_str(s: &str) {
+   |    ^^^^^^^^^
+
+warning: function `trace_bytes` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:34:4
+   |
+34 | fn trace_bytes(bytes: &[u8]) {
+   |    ^^^^^^^^^^^
+
+warning: function `trace_nl` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:39:4
+   |
+39 | fn trace_nl() {
+   |    ^^^^^^^^
+
+warning: function `trace_usize_dec` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:44:4
+   |
+44 | fn trace_usize_dec(v: usize) {
+   |    ^^^^^^^^^^^^^^^
+
+warning: function `read_file_sync` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:48:4
+   |
+48 | fn read_file_sync(path: &[u8]) -> Result<Vec<u8>, i32> {
+   |    ^^^^^^^^^^^^^^
+
+warning: function `write_file_sync` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:52:4
+   |
+52 | fn write_file_sync(path: &[u8], data: &[u8]) -> Result<(), i32> {
+   |    ^^^^^^^^^^^^^^^
+
+warning: function `compiled_cache_path_for_source` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:65:15
+   |
+65 | pub(super) fn compiled_cache_path_for_source(source_cache_path: &[u8]) -> Vec<u8> {
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `try_load_compiled_module` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:74:22
+   |
+74 | pub(super) unsafe fn try_load_compiled_module(
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `persist_compiled_module` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/compiled.rs:96:22
+   |
+96 | pub(super) unsafe fn persist_compiled_module(
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `EmbeddedModule` is never constructed
+ --> crates/trueos-qjs/src/trueos_module_loader/embedded.rs:3:19
+  |
+3 | pub(crate) struct EmbeddedModule {
+  |                   ^^^^^^^^^^^^^^
+
+warning: static `EMBEDDED` is never used
+ --> /home/t4ce/REPOS/TRUEOS/tgt/86_64/debug/build/trueos-qjs-6808a5a79060e57b/out/embedded_qjs/embedded_modules.rs:4:8
+  |
+4 | static EMBEDDED: &[EmbeddedModule] = &[
+  |        ^^^^^^^^
+
+warning: function `find` is never used
+  --> crates/trueos-qjs/src/trueos_module_loader/embedded.rs:14:15
+   |
+14 | pub(crate) fn find(path: &[u8]) -> Option<&'static EmbeddedModule> {
+   |               ^^^^
+
+warning: constant `TRUESURFER_IDLE_SLEEP_MS` is never used
+   --> crates/trueos-qjs/src/../app/truesurfer/truesurfer_qjs_vm_task.rs:103:7
+    |
+103 | const TRUESURFER_IDLE_SLEEP_MS: u64 = 16;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: static `FIRST_QJS_END_FRAME_SEEN` is never used
+  --> crates/trueos-qjs/src/cmd_stream.rs:19:8
+   |
+19 | static FIRST_QJS_END_FRAME_SEEN: AtomicBool = AtomicBool::new(false);
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `cmd_stream_draw_texture_rect` is never used
+   --> crates/trueos-qjs/src/cmd_stream.rs:741:4
+    |
+741 | fn cmd_stream_draw_texture_rect(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `cmd_stream_push_tex_vtx` is never used
+   --> crates/trueos-qjs/src/cmd_stream.rs:791:4
+    |
+791 | fn cmd_stream_push_tex_vtx(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `trueos_cabi_gfx_begin_frame` is never used
+  --> crates/trueos-qjs/src/cmd_stream.rs:21:8
+   |
+21 |     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `js_null` is never used
+    --> crates/trueos-qjs/src/node/mod.rs:1295:4
+     |
+1295 | fn js_null() -> qjs::JSValue {
+     |    ^^^^^^^
+
+warning: `extern` fn uses type `fn(u32, i32)`, which is not FFI-safe
+   --> crates/trueos-qjs/src/yoga/yoga_native.rs:223:12
+    |
+223 |         f: fn(u32, i32),
+    |            ^^^^^^^^^^^^ not FFI-safe
+    |
+    = help: consider using an `extern fn(...) -> ...` function pointer instead
+    = note: this function pointer has Rust-specific calling convention
+    = note: `#[warn(improper_ctypes_definitions)]` on by default
+
+warning: `extern` fn uses type `fn(u32, f32)`, which is not FFI-safe
+   --> crates/trueos-qjs/src/yoga/yoga_native.rs:234:12
+    |
+234 |         f: fn(u32, f32),
+    |            ^^^^^^^^^^^^ not FFI-safe
+    |
+    = help: consider using an `extern fn(...) -> ...` function pointer instead
+    = note: this function pointer has Rust-specific calling convention
+
+warning: `extern` fn uses type `fn(u32, i32, f32)`, which is not FFI-safe
+   --> crates/trueos-qjs/src/yoga/yoga_native.rs:245:12
+    |
+245 |         f: fn(u32, i32, f32),
+    |            ^^^^^^^^^^^^^^^^^ not FFI-safe
+    |
+    = help: consider using an `extern fn(...) -> ...` function pointer instead
+    = note: this function pointer has Rust-specific calling convention
+
+warning: unnecessary `unsafe` block
+   --> crates/trueos-vm/src/demo.rs:299:5
+    |
+299 |     unsafe { (__cpuid(1).ebx >> 24) & 0xff }
+    |     ^^^^^^ unnecessary `unsafe` block
+    |
+    = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `hull_text_start` is never used
+   --> crates/trueos-vm/src/guest.rs:111:8
+    |
+111 |     fn hull_text_start() -> !;
+    |        ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `hull_text_end` is never used
+   --> crates/trueos-vm/src/guest.rs:113:8
+    |
+113 |     fn hull_text_end() -> !;
+    |        ^^^^^^^^^^^^^
+
+warning: method `read_all` is never used
+  --> crates/trueos-vm/src/vfetch_job.rs:32:12
+   |
+18 | impl BytesJob {
+   | ------------- method in this implementation
+...
+32 |     pub fn read_all(self) -> Result<Vec<u8>, i32> {
+   |            ^^^^^^^^
+
+warning: `png` (lib) generated 17 warnings (run `cargo fix --lib -p png` to apply 2 suggestions)
+warning: `tokio` (lib) generated 2 warnings (run `cargo fix --lib -p tokio` to apply 1 suggestion)
+warning: `crab-usb` (lib) generated 8 warnings
+warning: `trueos-qjs` (lib) generated 36 warnings (run `cargo fix --lib -p trueos-qjs` to apply 14 suggestions)
+warning: `trueos-vm` (lib) generated 4 warnings
+warning: constant `TOKEN_THRESHOLD` is never used
+  --> vendor/localcoder/src/compact.rs:13:7
+   |
+13 | const TOKEN_THRESHOLD: usize = 12_000;
+   |       ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `CHARS_PER_TOKEN` is never used
+  --> vendor/localcoder/src/compact.rs:14:7
+   |
+14 | const CHARS_PER_TOKEN: usize = 4;
+   |       ^^^^^^^^^^^^^^^
+
+warning: constant `KEEP_RECENT_MESSAGES` is never used
+  --> vendor/localcoder/src/compact.rs:15:7
+   |
+15 | const KEEP_RECENT_MESSAGES: usize = 10;
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `maybe_compact` is never used
+  --> vendor/localcoder/src/compact.rs:18:14
+   |
+18 | pub async fn maybe_compact(client: &LLMClient, messages: &mut Vec<Value>) -> Result<bool> {
+   |              ^^^^^^^^^^^^^
+
+warning: function `force_compact` is never used
+  --> vendor/localcoder/src/compact.rs:26:14
+   |
+26 | pub async fn force_compact(client: &LLMClient, messages: &mut Vec<Value>) -> Result<bool> {
+   |              ^^^^^^^^^^^^^
+
+warning: function `estimate_tokens` is never used
+  --> vendor/localcoder/src/compact.rs:34:8
+   |
+34 | pub fn estimate_tokens(messages: &[Value]) -> usize {
+   |        ^^^^^^^^^^^^^^^
+
+warning: function `should_compact` is never used
+  --> vendor/localcoder/src/compact.rs:41:4
+   |
+41 | fn should_compact(messages: &[Value]) -> bool {
+   |    ^^^^^^^^^^^^^^
+
+warning: function `compact_messages` is never used
+  --> vendor/localcoder/src/compact.rs:45:10
+   |
+45 | async fn compact_messages(client: &LLMClient, messages: &mut Vec<Value>) -> Result<bool> {
+   |          ^^^^^^^^^^^^^^^^
+
+warning: fields `final_url` and `content_type` are never read
+  --> vendor/localcoder/src/net.rs:11:5
+   |
+ 9 | pub struct HttpResponse {
+   |            ------------ fields in this struct
+10 |     status: u16,
+11 |     final_url: String,
+   |     ^^^^^^^^^
+12 |     content_type: Option<String>,
+   |     ^^^^^^^^^^^^
+
+warning: methods `final_url` and `content_type` are never used
+  --> vendor/localcoder/src/net.rs:25:12
+   |
+16 | impl HttpResponse {
+   | ----------------- methods in this implementation
+...
+25 |     pub fn final_url(&self) -> &str {
+   |            ^^^^^^^^^
+...
+29 |     pub fn content_type(&self) -> Option<&str> {
+   |            ^^^^^^^^^^^^
+
+warning: function `post_json_with_headers` is never used
+  --> vendor/localcoder/src/net.rs:50:14
+   |
+50 | pub async fn post_json_with_headers<T: Serialize>(
+   |              ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `args` is never used
+  --> vendor/localcoder/src/rt/env.rs:13:8
+   |
+13 | pub fn args() -> impl Iterator<Item = String> {
+   |        ^^^^
+
+warning: function `is_file` is never used
+  --> vendor/localcoder/src/rt/fs.rs:58:8
+   |
+58 | pub fn is_file(path: &Path) -> bool {
+   |        ^^^^^^^
+
+warning: struct `Message` is never constructed
+  --> vendor/localcoder/src/types.rs:14:12
+   |
+14 | pub struct Message {
+   |            ^^^^^^^
+
+warning: associated functions `new`, `user`, and `assistant` are never used
+  --> vendor/localcoder/src/types.rs:20:12
+   |
+19 | impl Message {
+   | ------------ associated functions in this implementation
+20 |     pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
+   |            ^^^
+...
+27 |     pub fn user(content: impl Into<String>) -> Self {
+   |            ^^^^
+...
+31 |     pub fn assistant(content: impl Into<String>) -> Self {
+   |            ^^^^^^^^^
+
+warning: field `role` is never read
+  --> vendor/localcoder/src/types.rs:64:9
+   |
+63 | pub struct OllamaMessage {
+   |            ------------- field in this struct
+64 |     pub role: String,
+   |         ^^^^
+   |
+   = note: `OllamaMessage` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: struct `ConversationHistory` is never constructed
+  --> vendor/localcoder/src/types.rs:81:12
+   |
+81 | pub struct ConversationHistory {
+   |            ^^^^^^^^^^^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> vendor/localcoder/src/types.rs:86:12
+    |
+ 85 | impl ConversationHistory {
+    | ------------------------ associated items in this implementation
+ 86 |     pub fn new() -> Self {
+    |            ^^^
+...
+ 92 |     pub fn add_user_message(&mut self, content: impl Into<String>) {
+    |            ^^^^^^^^^^^^^^^^
+...
+ 96 |     pub fn add_assistant_message(&mut self, content: impl Into<String>) {
+    |            ^^^^^^^^^^^^^^^^^^^^^
+...
+100 |     pub fn get_messages(&self) -> &[Message] {
+    |            ^^^^^^^^^^^^
+...
+104 |     pub fn clear(&mut self) {
+    |            ^^^^^
+...
+108 |     pub fn len(&self) -> usize {
+    |            ^^^
+...
+112 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+116 |     pub fn to_json(&self) -> Result<String, serde_json::Error> {
+    |            ^^^^^^^
+
+warning: `localcoder` (lib) generated 18 warnings
+warning: unused import: `AtomicU64`
+ --> src/logflag.rs:1:49
+  |
+1 | use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+  |                                                 ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `last_progress` is never read
+   --> src/r/net/cli/http.rs:487:25
+    |
+487 |                         last_progress = Instant::now();
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `core::fmt::Write`
+ --> src/r/../ui2/mod.rs:5:5
+  |
+5 | use core::fmt::Write;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: value assigned to `did_work` is never read
+    --> src/gfx/virtio_gpu_3d.rs:2882:25
+     |
+2882 |                         did_work = true;
+     |                         ^^^^^^^^^^^^^^^ this value is reassigned later and never used
+...
+2887 |                     did_work = true;
+     |                     --------------- `did_work` is overwritten here before the previous value is read
+
+warning: unnecessary `unsafe` block
+  --> src/hv/guest_run.rs:90:19
+   |
+90 |     let spawner = unsafe { executor.spawner() };
+   |                   ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> src/hv/memory.rs:977:15
+    |
+977 |     let pte = unsafe {
+    |               ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+    --> src/hv/memory.rs:1142:5
+     |
+1142 |     unsafe { core::ptr::addr_of!(kernel_end) as u64 }
+     |     ^^^^^^ unnecessary `unsafe` block
+
+warning: variable `mapped_chunks` is assigned to, but never used
+    --> src/hv/memory.rs:1187:9
+     |
+1187 |     let mut mapped_chunks = 0usize;
+     |         ^^^^^^^^^^^^^^^^^
+     |
+     = note: consider using `_mapped_chunks` instead
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `mapped_chunks` is never read
+    --> src/hv/memory.rs:1210:17
+     |
+1210 |                 mapped_chunks += 1;
+     |                 ^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unnecessary `unsafe` block
+   --> src/hv/vmx.rs:500:15
+    |
+500 |     let gdt = unsafe { core::ptr::addr_of_mut!(super::HV_HOST_GDT) };
+    |               ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> src/hv/vmx.rs:501:15
+    |
+501 |     let tss = unsafe { core::ptr::addr_of_mut!(super::HV_HOST_TSS) };
+    |               ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> src/hv/mod.rs:749:27
+    |
+749 |                 let out = unsafe { __cpuid_count(leaf, subleaf) };
+    |                           ^^^^^^ unnecessary `unsafe` block
+
+warning: value assigned to `saw_moov` is never read
+   --> src/intel/xelp_media_mp4.rs:564:9
+    |
+564 |         saw_moov = true;
+    |         ^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `rekick_attempted` is never read
+   --> src/pci/nvme.rs:835:21
+    |
+835 |                     rekick_attempted = true;
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unreachable pattern
+   --> src/r/net/cli/ws.rs:301:21
+    |
+301 |                     _ => None,
+    |                     ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> src/r/net/cli/ws.rs:301:21
+    |
+255 |                     WebSocketReceiveMessageType::Text => {
+    |                     --------------------------------- matches some of the same values
+...
+259 |                     WebSocketReceiveMessageType::Binary => None,
+    |                     ----------------------------------- matches some of the same values
+260 |                     WebSocketReceiveMessageType::Ping => {
+    |                     --------------------------------- matches some of the same values
+...
+278 |                     WebSocketReceiveMessageType::Pong => None,
+    |                     --------------------------------- matches some of the same values
+...
+301 |                     _ => None,
+    |                     ^ ...and 2 other patterns collectively make this unreachable
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `rx_buf` is never read
+   --> src/r/net/srv/wss.rs:192:26
+    |
+192 |         let mut rx_buf = Vec::new();
+    |                          ^^^^^^^^^^ this value is reassigned later and never used
+...
+206 |                                     rx_buf = extra;
+    |                                     ------ `rx_buf` is overwritten here before the previous value is read
+
+warning: unreachable pattern
+   --> src/r/net/srv/wss.rs:367:21
+    |
+367 |                     _ => None,
+    |                     ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> src/r/net/srv/wss.rs:367:21
+    |
+322 |                     WebSocketReceiveMessageType::Text => {
+    |                     --------------------------------- matches some of the same values
+...
+326 |                     WebSocketReceiveMessageType::Binary => None,
+    |                     ----------------------------------- matches some of the same values
+327 |                     WebSocketReceiveMessageType::Ping => {
+    |                     --------------------------------- matches some of the same values
+...
+345 |                     WebSocketReceiveMessageType::Pong => None,
+    |                     --------------------------------- matches some of the same values
+...
+367 |                     _ => None,
+    |                     ^ ...and 2 other patterns collectively make this unreachable
+
+warning: type `MatrixTarget` is more private than the item `with_launch_context_console`
+   --> src/r/gfx_cabi.rs:226:5
+    |
+226 | /     pub fn with_launch_context_console<R>(
+227 | |         args: Vec<String>,
+228 | |         vars: BTreeMap<String, String>,
+229 | |         console_target: Option<MatrixTarget>,
+230 | |         f: impl FnOnce() -> R,
+231 | |     ) -> R {
+    | |__________^ function `with_launch_context_console` is reachable at visibility `pub`
+    |
+note: but type `MatrixTarget` is only usable at visibility `pub(crate)`
+   --> src/shell2/mod.rs:93:1
+    |
+ 93 | pub(crate) struct MatrixTarget {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `MatrixTarget` is more private than the item `console_target`
+   --> src/r/gfx_cabi.rs:285:5
+    |
+285 |     pub fn console_target() -> Option<MatrixTarget> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `console_target` is reachable at visibility `pub`
+    |
+note: but type `MatrixTarget` is only usable at visibility `pub(crate)`
+   --> src/shell2/mod.rs:93:1
+    |
+ 93 | pub(crate) struct MatrixTarget {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `usable_start`, `usable_total`, and `largest_free_block` are never read
+   --> src/allocators.rs:590:9
+    |
+586 | pub struct HeapStats {
+    |            --------- fields in this struct
+...
+590 |     pub usable_start: usize,
+    |         ^^^^^^^^^^^^
+591 |     pub usable_total: usize,
+    |         ^^^^^^^^^^^^
+592 |     pub free_bytes: usize,
+593 |     pub largest_free_block: usize,
+    |         ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `HeapStats` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `alloc_error` is never used
+   --> src/allocators.rs:733:4
+    |
+733 | fn alloc_error(layout: Layout) -> ! {
+    |    ^^^^^^^^^^^
+
+warning: field `0` is never read
+  --> src/blueprint.rs:77:25
+   |
+77 | struct PortalImageArena([u8; PORTAL_IMAGE_ARENA_BYTES]);
+   |        ---------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |        |
+   |        field in this struct
+   |
+   = help: consider removing this field
+
+warning: static `NEXT_TIMER_ID` is never used
+  --> src/Chronos.rs:49:8
+   |
+49 | static NEXT_TIMER_ID: AtomicU32 = AtomicU32::new(1);
+   |        ^^^^^^^^^^^^^
+
+warning: struct `TimerHandle` is never constructed
+  --> src/Chronos.rs:74:12
+   |
+74 | pub struct TimerHandle {
+   |            ^^^^^^^^^^^
+
+warning: struct `TimerRegistration` is never constructed
+  --> src/Chronos.rs:79:12
+   |
+79 | pub struct TimerRegistration {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: enum `RegisterTimerError` is never used
+  --> src/Chronos.rs:86:10
+   |
+86 | pub enum RegisterTimerError {
+   |          ^^^^^^^^^^^^^^^^^^
+
+warning: field `id` is never read
+  --> src/Chronos.rs:93:5
+   |
+92 | struct TimerEntry {
+   |        ---------- field in this struct
+93 |     id: u32,
+   |     ^^
+   |
+   = note: `TimerEntry` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `ms_to_ticks` is never used
+   --> src/Chronos.rs:103:4
+    |
+103 | fn ms_to_ticks(ms: u64) -> u64 {
+    |    ^^^^^^^^^^^
+
+warning: function `watch_seq` is never used
+   --> src/Chronos.rs:151:8
+    |
+151 | pub fn watch_seq() -> u64 {
+    |        ^^^^^^^^^
+
+warning: function `watch_snapshot` is never used
+   --> src/Chronos.rs:156:8
+    |
+156 | pub fn watch_snapshot() -> (u64, TimeSnapshot) {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `register_timer` is never used
+   --> src/Chronos.rs:161:8
+    |
+161 | pub fn register_timer(spec: TimerRegistration) -> Result<TimerHandle, RegisterTimerError> {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `cancel_timer` is never used
+   --> src/Chronos.rs:189:8
+    |
+189 | pub fn cancel_timer(handle: TimerHandle) -> bool {
+    |        ^^^^^^^^^^^^
+
+warning: function `poll_timer` is never used
+   --> src/Chronos.rs:198:8
+    |
+198 | pub fn poll_timer(handle: TimerHandle, observed_fire_seq: u64) -> Option<(u64, TimeSnapsho...
+    |        ^^^^^^^^^^
+
+warning: static `ATOMIC_BOMB_RESTARTS` is never used
+  --> src/cpu.rs:12:8
+   |
+12 | static ATOMIC_BOMB_RESTARTS: AtomicU32 = AtomicU32::new(0);
+   |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `restart_current_worker_ap_from_panic` is never used
+   --> src/cpu.rs:210:8
+    |
+210 | pub fn restart_current_worker_ap_from_panic() -> ! {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `as_str` is never used
+   --> src/disc/block.rs:207:12
+    |
+206 | impl DeviceSerial {
+    | ----------------- method in this implementation
+207 |     pub fn as_str(&self) -> &str {
+    |            ^^^^^^
+
+warning: field `serial` is never read
+   --> src/disc/block.rs:237:9
+    |
+225 | pub struct DeviceInfo {
+    |            ---------- field in this struct
+...
+237 |     pub serial: Option<DeviceSerial>,
+    |         ^^^^^^
+    |
+    = note: `DeviceInfo` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: associated function `from_uefi_bytes` is never used
+  --> src/efi/mod.rs:56:19
+   |
+46 | impl EfiGuid {
+   | ------------ associated function in this implementation
+...
+56 |     pub(crate) fn from_uefi_bytes(bytes: [u8; 16]) -> Self {
+   |                   ^^^^^^^^^^^^^^^
+
+warning: variants `Warm` and `PlatformSpecific` are never constructed
+   --> src/efi/mod.rs:267:5
+    |
+265 | pub enum EfiResetType {
+    |          ------------ variants in this enum
+266 |     Cold = 0,
+267 |     Warm = 1,
+    |     ^^^^
+268 |     Shutdown = 2,
+269 |     PlatformSpecific = 3,
+    |     ^^^^^^^^^^^^^^^^
+
+warning: function `walk_subtables` is never used
+ --> src/efi/acpi/madt.rs:4:8
+  |
+4 | pub fn walk_subtables<F>(mut callback: F)
+  |        ^^^^^^^^^^^^^^
+
+warning: struct `Frame` is never constructed
+   --> src/exceptions.rs:131:12
+    |
+131 | pub struct Frame {
+    |            ^^^^^
+
+warning: constant `MAX_FRAMES` is never used
+   --> src/exceptions.rs:136:7
+    |
+136 | const MAX_FRAMES: usize = 64;
+    |       ^^^^^^^^^^
+
+warning: function `collect_backtrace` is never used
+   --> src/exceptions.rs:140:8
+    |
+140 | pub fn collect_backtrace(max_frames: usize) -> Vec<Frame, MAX_FRAMES> {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `print_backtrace` is never used
+   --> src/exceptions.rs:182:8
+    |
+182 | pub fn print_backtrace(max_frames: usize) {
+    |        ^^^^^^^^^^^^^^^
+
+warning: static `PRESENT_OWNER` is never used
+  --> src/gfx/mod.rs:24:8
+   |
+24 | static PRESENT_OWNER: AtomicU8 = AtomicU8::new(0);
+   |        ^^^^^^^^^^^^^
+
+warning: function `with_system` is never used
+   --> src/gfx/mod.rs:271:8
+    |
+271 | pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
+    |        ^^^^^^^^^^^
+
+warning: function `cursor_overlay_tick` is never used
+   --> src/gfx/mod.rs:347:8
+    |
+347 | pub fn cursor_overlay_tick() -> i32 {
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `with_context` is never used
+   --> src/gfx/mod.rs:351:8
+    |
+351 | pub fn with_context<R>(f: impl FnOnce(&mut dyn GfxContext) -> R) -> Option<R> {
+    |        ^^^^^^^^^^^^
+
+warning: function `backend_kind` is never used
+   --> src/gfx/mod.rs:417:8
+    |
+417 | pub fn backend_kind() -> Option<BackendKind> {
+    |        ^^^^^^^^^^^^
+
+warning: function `toggle_backend` is never used
+   --> src/gfx/mod.rs:421:8
+    |
+421 | pub fn toggle_backend() -> BackendKind {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `athlas_tier_ready` is never used
+  --> src/gfx/althlasfont/mod.rs:87:8
+   |
+87 | pub fn athlas_tier_ready(size_case: usize) -> bool {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: function `athlas_bucket_texture` is never used
+   --> src/gfx/althlasfont/mod.rs:105:8
+    |
+105 | pub fn athlas_bucket_texture(size_case: usize, bucket: usize) -> Option<AthlasBucketTextur...
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `ascent` and `descent` are never read
+  --> src/gfx/althlasfont/athlasmetrics.rs:11:9
+   |
+ 9 | pub struct AthlasFontInfo {
+   |            -------------- fields in this struct
+10 |     pub units_per_em: u16,
+11 |     pub ascent: i16,
+   |         ^^^^^^
+12 |     pub descent: i16,
+   |         ^^^^^^^
+   |
+   = note: `AthlasFontInfo` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: struct `AthlasLineMetrics` is never constructed
+  --> src/gfx/althlasfont/athlasmetrics.rs:56:12
+   |
+56 | pub struct AthlasLineMetrics {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: constant `ATHLAS_METRICS_VERSION` is never used
+  --> src/gfx/althlasfont/athlasmetrics.rs:62:11
+   |
+62 | pub const ATHLAS_METRICS_VERSION: u32 = 1;
+   |           ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `ATHLAS_VARIANT_HALF` is never used
+  --> src/gfx/althlasfont/athlasmetrics.rs:64:11
+   |
+64 | pub const ATHLAS_VARIANT_HALF: usize = 0;
+   |           ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `ATHLAS_VARIANT_1X` is never used
+  --> src/gfx/althlasfont/athlasmetrics.rs:65:11
+   |
+65 | pub const ATHLAS_VARIANT_1X: usize = 1;
+   |           ^^^^^^^^^^^^^^^^^
+
+warning: constant `ATHLAS_VARIANT_2X` is never used
+  --> src/gfx/althlasfont/athlasmetrics.rs:66:11
+   |
+66 | pub const ATHLAS_VARIANT_2X: usize = 2;
+   |           ^^^^^^^^^^^^^^^^^
+
+warning: function `athlas_bucket_codepoints` is never used
+   --> src/gfx/althlasfont/athlasmetrics.rs:517:8
+    |
+517 | pub fn athlas_bucket_codepoints(bucket: u8) -> Option<&'static [u32]> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `athlas_variant_line_metrics` is never used
+   --> src/gfx/althlasfont/athlasmetrics.rs:539:8
+    |
+539 | pub fn athlas_variant_line_metrics(size_case: usize) -> Option<AthlasLineMetrics> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `athlas_variant_ascent_px` is never used
+   --> src/gfx/althlasfont/athlasmetrics.rs:555:8
+    |
+555 | pub fn athlas_variant_ascent_px(size_case: usize) -> Option<u16> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `athlas_line_top_from_baseline_px` is never used
+   --> src/gfx/althlasfont/athlasmetrics.rs:560:8
+    |
+560 | pub fn athlas_line_top_from_baseline_px(size_case: usize, baseline_y: i32) -> Option<i32> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `athlas_variant_max_cell_width` is never used
+   --> src/gfx/althlasfont/athlasmetrics.rs:576:8
+    |
+576 | pub fn athlas_variant_max_cell_width(size_case: usize) -> Option<u16> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `athlas_bucket_has_uniform_width` is never used
+   --> src/gfx/althlasfont/athlasmetrics.rs:592:8
+    |
+592 | pub fn athlas_bucket_has_uniform_width(bucket: usize) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `athlas_lookup_codepoint` is never used
+   --> src/gfx/althlasfont/athlasmetrics.rs:613:8
+    |
+613 | pub fn athlas_lookup_codepoint(codepoint: u32) -> Option<AthlasGlyphLookup> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `athlas_lookup_char` is never used
+   --> src/gfx/althlasfont/athlasmetrics.rs:637:8
+    |
+637 | pub fn athlas_lookup_char(ch: char) -> Option<AthlasGlyphLookup> {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `twemoji_cell_width_px` is never used
+  --> src/gfx/althlasfont/twemoji.rs:59:8
+   |
+59 | pub fn twemoji_cell_width_px() -> u16 {
+   |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `twemoji_ready_seq` is never used
+  --> src/gfx/althlasfont/twemoji.rs:98:8
+   |
+98 | pub fn twemoji_ready_seq() -> u32 {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: function `cursor_overlay_tick` is never used
+ --> src/gfx/cursor.rs:2:8
+  |
+2 | pub fn cursor_overlay_tick() -> i32 {
+  |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `draw_lyon_icon_alpha_scaled_no_present` is never used
+   --> src/gfx/lyon.rs:761:8
+    |
+761 | pub fn draw_lyon_icon_alpha_scaled_no_present(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `lyon_geom_api_demo_no_present` is never used
+   --> src/gfx/lyon.rs:808:8
+    |
+808 | pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `alive_before` and `chunk_len` are never read
+  --> src/gfx/particle.rs:38:9
+   |
+37 | pub struct UpdateReport {
+   |            ------------ fields in this struct
+38 |     pub alive_before: usize,
+   |         ^^^^^^^^^^^^
+39 |     pub alive_after: usize,
+40 |     pub chunk_len: usize,
+   |         ^^^^^^^^^
+   |
+   = note: `UpdateReport` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: methods `max_count`, `spawn`, `pos_x`, `pos_y`, and `life` are never used
+   --> src/gfx/particle.rs:75:12
+    |
+ 53 | impl ParticleSystem {
+    | ------------------- methods in this implementation
+...
+ 75 |     pub fn max_count(&self) -> usize {
+    |            ^^^^^^^^^
+...
+ 79 |     pub fn spawn(&mut self, x: f32, y: f32, vx: f32, vy: f32, life: f32) {
+    |            ^^^^^
+...
+195 |     pub fn pos_x(&self) -> &[f32] {
+    |            ^^^^^
+...
+199 |     pub fn pos_y(&self) -> &[f32] {
+    |            ^^^^^
+...
+203 |     pub fn life(&self) -> &[f32] {
+    |            ^^^^
+
+warning: method `next_frame` is never used
+   --> src/gfx/screenshot.rs:159:18
+    |
+154 | impl ScreenshotAwait {
+    | -------------------- method in this implementation
+...
+159 |     pub async fn next_frame(&self, seen_seq: u64, poll_ms: u64) -> (u64, ImageBuffer) {
+    |                  ^^^^^^^^^^
+
+warning: function `virgl_screenshot_await` is never used
+   --> src/gfx/screenshot.rs:300:8
+    |
+300 | pub fn virgl_screenshot_await() -> &'static ScreenshotAwait {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `publish_screenshot_image_buffer` is never used
+   --> src/gfx/screenshot.rs:308:15
+    |
+308 | pub(crate) fn publish_screenshot_image_buffer(width: u32, height: u32, pixels: &[u32]) -> ...
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `virgl_screenshot_capture_armed` is never used
+   --> src/gfx/screenshot.rs:328:15
+    |
+328 | pub(crate) fn virgl_screenshot_capture_armed() -> bool {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `publish_virgl_image_buffer` is never used
+   --> src/gfx/screenshot.rs:332:15
+    |
+332 | pub(crate) fn publish_virgl_image_buffer(width: u32, height: u32, pixels: &[u32]) -> u64 {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `svg_width` and `svg_height` are never read
+  --> src/gfx/svg.rs:34:9
+   |
+31 | pub struct SvgMeshInfo {
+   |            ----------- fields in this struct
+...
+34 |     pub svg_width: f32,
+   |         ^^^^^^^^^
+35 |     pub svg_height: f32,
+   |         ^^^^^^^^^^
+   |
+   = note: `SvgMeshInfo` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `tessellate_svg_bytes` is never used
+   --> src/gfx/svg.rs:382:8
+    |
+382 | pub fn tessellate_svg_bytes(bytes: &[u8]) -> Result<SvgMeshDocument, i32> {
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `tessellate_svg_bytes_at_height` is never used
+   --> src/gfx/svg.rs:387:8
+    |
+387 | pub fn tessellate_svg_bytes_at_height(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `tessellate_svg_text_at_height` is never used
+   --> src/gfx/svg.rs:406:8
+    |
+406 | pub fn tessellate_svg_text_at_height(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `choose_mesh_size_for_height` is never used
+   --> src/gfx/svg.rs:436:4
+    |
+436 | fn choose_mesh_size_for_height(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `PIPE_BIND_DISPLAY_TARGET` is never used
+  --> src/gfx/virtio_gpu_3d.rs:86:7
+   |
+86 | const PIPE_BIND_DISPLAY_TARGET: u32 = 1 << 8;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `PIPE_BIND_SCANOUT` is never used
+  --> src/gfx/virtio_gpu_3d.rs:87:7
+   |
+87 | const PIPE_BIND_SCANOUT: u32 = 1 << 14;
+   |       ^^^^^^^^^^^^^^^^^
+
+warning: constant `VIRGL_FORMAT_B8G8R8X8_UNORM` is never used
+  --> src/gfx/virtio_gpu_3d.rs:91:7
+   |
+91 | const VIRGL_FORMAT_B8G8R8X8_UNORM: u32 = 2;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `common` is never read
+   --> src/gfx/virtio_gpu_3d.rs:739:5
+    |
+738 | pub struct VirtioGpu3d {
+    |            ----------- field in this struct
+739 |     common: core::ptr::NonNull<VirtioPciCommonCfg>,
+    |     ^^^^^^
+
+warning: constant `TEX_PIPELINE_FS_MASK_TAG_RAW` is never used
+    --> src/gfx/virtio_gpu_3d.rs:1391:7
+     |
+1391 | const TEX_PIPELINE_FS_MASK_TAG_RAW: u32 = 0x4D41_534B;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `scanout_backing` is never read
+    --> src/gfx/virtio_gpu_3d.rs:1574:5
+     |
+1564 | pub struct VirglGfxBackend {
+     |            --------------- field in this struct
+...
+1574 |     scanout_backing: DmaRegion,
+     |     ^^^^^^^^^^^^^^^
+
+warning: constant `PIPE_BLENDFACTOR_ONE` is never used
+    --> src/gfx/virtio_gpu_3d.rs:4001:11
+     |
+4001 |     const PIPE_BLENDFACTOR_ONE: u32 = 1;
+     |           ^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `LogRange` is never used
+ --> src/globalog.rs:7:10
+  |
+7 | pub enum LogRange {
+  |          ^^^^^^^^
+
+warning: enum `LogAmount` is never used
+  --> src/globalog.rs:13:10
+   |
+13 | pub enum LogAmount {
+   |          ^^^^^^^^^
+
+warning: function `log_excerpt` is never used
+   --> src/globalog.rs:116:8
+    |
+116 | pub fn log_excerpt(src: &str, range: LogRange, amount: LogAmount, count: usize) {
+    |        ^^^^^^^^^^^
+
+warning: function `excerpt_chars` is never used
+   --> src/globalog.rs:124:4
+    |
+124 | fn excerpt_chars(src: &str, range: LogRange, count: usize) -> alloc::string::String {
+    |    ^^^^^^^^^^^^^
+
+warning: function `excerpt_lines` is never used
+   --> src/globalog.rs:142:4
+    |
+142 | fn excerpt_lines(src: &str, range: LogRange, count: usize) -> alloc::string::String {
+    |    ^^^^^^^^^^^^^
+
+warning: constant `START` is never used
+  --> src/globalog.rs:20:15
+   |
+20 |     pub const START: LogRange = LogRange::Start;
+   |               ^^^^^
+
+warning: constant `BEGIN` is never used
+  --> src/globalog.rs:21:15
+   |
+21 |     pub const BEGIN: LogRange = LogRange::Start;
+   |               ^^^^^
+
+warning: constant `FRONT` is never used
+  --> src/globalog.rs:22:15
+   |
+22 |     pub const FRONT: LogRange = LogRange::Start;
+   |               ^^^^^
+
+warning: constant `END` is never used
+  --> src/globalog.rs:23:15
+   |
+23 |     pub const END: LogRange = LogRange::End;
+   |               ^^^
+
+warning: constant `BACK` is never used
+  --> src/globalog.rs:24:15
+   |
+24 |     pub const BACK: LogRange = LogRange::End;
+   |               ^^^^
+
+warning: constant `REAR` is never used
+  --> src/globalog.rs:25:15
+   |
+25 |     pub const REAR: LogRange = LogRange::End;
+   |               ^^^^
+
+warning: constant `LED_TOOL_MAX_PAYLOAD_BYTES` is never used
+  --> src/host_api.rs:12:7
+   |
+12 | const LED_TOOL_MAX_PAYLOAD_BYTES: usize = 2048;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `parse_hex_payload` is never used
+   --> src/host_api.rs:156:4
+    |
+156 | fn parse_hex_payload(s: &str, out: &mut [u8]) -> Option<usize> {
+    |    ^^^^^^^^^^^^^^^^^
+
+warning: function `lower_hex_string` is never used
+   --> src/host_api.rs:187:4
+    |
+187 | fn lower_hex_string(bytes: &[u8]) -> alloc::string::String {
+    |    ^^^^^^^^^^^^^^^^
+
+warning: static `VMM` is never used
+  --> src/hv/mod.rs:42:8
+   |
+42 | static VMM: VmManager = VmManager::new();
+   |        ^^^
+
+warning: fields `seq` and `msg` are never read
+  --> src/hv/mod.rs:56:5
+   |
+55 | struct HvLogEntry {
+   |        ---------- fields in this struct
+56 |     seq: u64,
+   |     ^^^
+57 |     msg: String<HV_LOG_LINE>,
+   |     ^^^
+   |
+   = note: `HvLogEntry` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: variant `NotRunning` is never constructed
+  --> src/hv/mod.rs:97:5
+   |
+95 | pub enum StopError {
+   |          --------- variant in this enum
+96 |     UnsupportedVmId,
+97 |     NotRunning,
+   |     ^^^^^^^^^^
+   |
+   = note: `StopError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `vm1_marker_seen`, `guest_module_present`, and `stored_vm_count` are never read
+   --> src/hv/mod.rs:109:9
+    |
+101 | pub struct HvStatus {
+    |            -------- fields in this struct
+...
+109 |     pub vm1_marker_seen: bool,
+    |         ^^^^^^^^^^^^^^^
+110 |     pub guest_module_present: bool,
+    |         ^^^^^^^^^^^^^^^^^^^^
+111 |     pub stored_vm_count: usize,
+    |         ^^^^^^^^^^^^^^^
+    |
+    = note: `HvStatus` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `write_logs` is never used
+   --> src/hv/mod.rs:299:8
+    |
+299 | pub fn write_logs(io: &dyn ShellIo2) {
+    |        ^^^^^^^^^^
+
+warning: function `blueprint_launch_active` is never used
+   --> src/hv/mod.rs:429:8
+    |
+429 | pub fn blueprint_launch_active() -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `TokioBlocking`, `Worker`, and `Service` are never constructed
+  --> src/hv/guest_work.rs:21:5
+   |
+19 | pub enum VmLaneRole {
+   |          ---------- variants in this enum
+20 |     VmHull,
+21 |     TokioBlocking,
+   |     ^^^^^^^^^^^^^
+22 |     Worker,
+   |     ^^^^^^
+23 |     Service,
+   |     ^^^^^^^
+   |
+   = note: `VmLaneRole` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: associated items `tokio_blocking_default`, `worker_default`, `service_default`, `requires_ap1_lane`, and `requires_disposable_worker_lane` are never used
+  --> src/hv/guest_work.rs:51:18
+   |
+32 | impl VmLaneProfile {
+   | ------------------ associated items in this implementation
+...
+51 |     pub const fn tokio_blocking_default() -> Self {
+   |                  ^^^^^^^^^^^^^^^^^^^^^^
+...
+58 |     pub const fn worker_default() -> Self {
+   |                  ^^^^^^^^^^^^^^
+...
+65 |     pub const fn service_default() -> Self {
+   |                  ^^^^^^^^^^^^^^^
+...
+72 |     pub const fn requires_ap1_lane(self) -> bool {
+   |                  ^^^^^^^^^^^^^^^^^
+...
+80 |     pub const fn requires_disposable_worker_lane(self) -> bool {
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type alias `GuestWorkProfile` is never used
+   --> src/hv/guest_work.rs:156:10
+    |
+156 | pub type GuestWorkProfile = VmLaneProfile;
+    |          ^^^^^^^^^^^^^^^^
+
+warning: type alias `GuestWorkTarget` is never used
+   --> src/hv/guest_work.rs:157:10
+    |
+157 | pub type GuestWorkTarget = VmLaneTarget;
+    |          ^^^^^^^^^^^^^^^
+
+warning: function `pick_vm_lane_target` is never used
+   --> src/hv/guest_work.rs:168:8
+    |
+168 | pub fn pick_vm_lane_target(profile: VmLaneProfile) -> Option<VmLaneTarget> {
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `pick_tokio_blocking_lane` is never used
+   --> src/hv/guest_work.rs:176:8
+    |
+176 | pub fn pick_tokio_blocking_lane() -> Result<VmLaneTarget, VmLanePickError> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `pick_worker_lane` is never used
+   --> src/hv/guest_work.rs:180:8
+    |
+180 | pub fn pick_worker_lane() -> Result<VmLaneTarget, VmLanePickError> {
+    |        ^^^^^^^^^^^^^^^^
+
+warning: function `pick_service_lane` is never used
+   --> src/hv/guest_work.rs:184:8
+    |
+184 | pub fn pick_service_lane() -> Result<VmLaneTarget, VmLanePickError> {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `pick_guest_work_target` is never used
+   --> src/hv/guest_work.rs:188:8
+    |
+188 | pub fn pick_guest_work_target(profile: GuestWorkProfile) -> Option<GuestWorkTarget> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: static `GUEST_HEAP_PDPT` is never used
+  --> src/hv/memory.rs:68:16
+   |
+68 | pub static mut GUEST_HEAP_PDPT: GuestPage = GuestPage([0u64; 512]);
+   |                ^^^^^^^^^^^^^^^
+
+warning: static `GUEST_HEAP_PDS` is never used
+  --> src/hv/memory.rs:69:16
+   |
+69 | pub static mut GUEST_HEAP_PDS: [GuestPage; GUEST_HEAP_PD_COUNT] =
+   |                ^^^^^^^^^^^^^^
+
+warning: constant `VM1_SNAPSHOT_PATH` is never used
+ --> src/hv/snapshot.rs:8:11
+  |
+8 | pub const VM1_SNAPSHOT_PATH: &str = "vm/vm1.snapshot";
+  |           ^^^^^^^^^^^^^^^^^
+
+warning: field `0` is never read
+  --> src/hv/snapshot.rs:35:8
+   |
+35 |     Io(crate::disc::block::Error),
+   |     -- ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `SaveError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+35 -     Io(crate::disc::block::Error),
+35 +     Io(()),
+   |
+
+warning: variant `NoRoot` is never constructed
+  --> src/hv/snapshot.rs:32:5
+   |
+30 | pub enum SaveError {
+   |          --------- variant in this enum
+31 |     UnsupportedVmId,
+32 |     NoRoot,
+   |     ^^^^^^
+   |
+   = note: `SaveError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: field `0` is never read
+  --> src/hv/snapshot.rs:43:10
+   |
+43 |     Read(crate::disc::block::Error),
+   |     ---- ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `RestoreError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+43 -     Read(crate::disc::block::Error),
+43 +     Read(()),
+   |
+
+warning: variant `NoRoot` is never constructed
+  --> src/hv/snapshot.rs:41:5
+   |
+39 | pub enum RestoreError {
+   |          ------------ variant in this enum
+40 |     UnsupportedVmId,
+41 |     NoRoot,
+   |     ^^^^^^
+   |
+   = note: `RestoreError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: struct `Vm` is never constructed
+ --> src/hv/vmm.rs:9:12
+  |
+9 | pub struct Vm {
+  |            ^^
+
+warning: associated function `new` is never used
+  --> src/hv/vmm.rs:19:12
+   |
+18 | impl Vm {
+   | ------- associated function in this implementation
+19 |     pub fn new(id: u8) -> Self {
+   |            ^^^
+
+warning: struct `VmManager` is never constructed
+  --> src/hv/vmm.rs:31:12
+   |
+31 | pub struct VmManager {
+   |            ^^^^^^^^^
+
+warning: associated items `new` and `start_vm` are never used
+  --> src/hv/vmm.rs:36:18
+   |
+35 | impl VmManager {
+   | -------------- associated items in this implementation
+36 |     pub const fn new() -> Self {
+   |                  ^^^
+...
+43 |     pub fn start_vm(
+   |            ^^^^^^^^
+
+warning: constant `VMCS_CTRL_VPID` is never used
+  --> src/hv/vmx.rs:40:11
+   |
+40 | pub const VMCS_CTRL_VPID: u64 = 0x0000;
+   |           ^^^^^^^^^^^^^^
+
+warning: constant `PROC2_BASED_ENABLE_VPID` is never used
+   --> src/hv/vmx.rs:140:11
+    |
+140 | pub const PROC2_BASED_ENABLE_VPID: u64 = 1 << 5;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `read_rsp` is never used
+   --> src/hv/vmx.rs:434:8
+    |
+434 | pub fn read_rsp() -> u64 {
+    |        ^^^^^^^^
+
+warning: function `handle_hlt_exit_resume_once` is never used
+   --> src/hv/vmx.rs:785:8
+    |
+785 | pub fn handle_hlt_exit_resume_once() -> Result<(LaunchResult, u64, u64, u64), &'static str> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variant `NotReady` is never constructed
+  --> src/hv/vnet.rs:17:5
+   |
+14 | pub enum VmNetStatus {
+   |          ----------- variant in this enum
+...
+17 |     NotReady = 2,
+   |     ^^^^^^^^
+   |
+   = note: `VmNetStatus` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `last_completion` is never used
+   --> src/hv/vnet.rs:174:8
+    |
+174 | pub fn last_completion(vm_id: u8) -> Option<VmNetCompletion> {
+    |        ^^^^^^^^^^^^^^^
+
+warning: function `warm_state` is never used
+   --> src/intel/mod.rs:276:8
+    |
+276 | pub fn warm_state() -> Option<self::render::RenderWarmState> {
+    |        ^^^^^^^^^^
+
+warning: function `media_kickoff_once` is never used
+   --> src/intel/mod.rs:301:8
+    |
+301 | pub fn media_kickoff_once() {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `media_kickoff_state` is never used
+   --> src/intel/mod.rs:305:8
+    |
+305 | pub fn media_kickoff_state() -> Option<self::xelp_media_ngin::MediaKickoffState> {
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `media_decode_surface_window` is never used
+   --> src/intel/mod.rs:309:8
+    |
+309 | pub fn media_decode_surface_window(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `phys` is never read
+  --> src/intel/hw_cursor.rs:84:5
+   |
+80 | struct KernelCursorSurface {
+   |        ------------------- field in this struct
+...
+84 |     phys: u64,
+   |     ^^^^
+   |
+   = note: `KernelCursorSurface` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: multiple variants are never constructed
+   --> src/intel/hw_cursor.rs:93:5
+    |
+ 92 | enum CursorProbeKind {
+    |      --------------- variants in this enum
+ 93 |     CurPosOnly,
+    |     ^^^^^^^^^^
+ 94 |     CurBaseOnly,
+    |     ^^^^^^^^^^^
+ 95 |     CurBufCfgOnly,
+    |     ^^^^^^^^^^^^^
+ 96 |     CurBufCfgBaseOnly,
+    |     ^^^^^^^^^^^^^^^^^
+ 97 |     CurBufCfgBasePosOnly,
+    |     ^^^^^^^^^^^^^^^^^^^^
+ 98 |     CurBufCfgBasePosCtlModeOnly,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 99 |     CurBufCfgBasePosCtlEnable,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+100 |     CurBufCfgBasePosCtlEnableBase,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+101 |     CurBufCfgCtlEnablePosBase,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+102 |     CurWmEnableBufCfgCtlEnablePosBase,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+103 |     CurWmEnableBufCfgCtlEnablePosBaseVisible,
+104 |     CurCtlModeOnly,
+    |     ^^^^^^^^^^^^^^
+105 |     CurCtlObserveOnly,
+    |     ^^^^^^^^^^^^^^^^^
+    |
+    = note: `CursorProbeKind` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: constant `RCS_RING_START` is never used
+  --> src/intel/render.rs:42:7
+   |
+42 | const RCS_RING_START: usize = RCS_RING_BASE + 0x38;
+   |       ^^^^^^^^^^^^^^
+
+warning: constant `RCS_EXEC_RESULT_MI_PROBE_DONE` is never used
+   --> src/intel/render.rs:115:7
+    |
+115 | const RCS_EXEC_RESULT_MI_PROBE_DONE: u32 = 0xC0DE_7711;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `WM_FORCE_KILL_PIXEL_OFF` is never used
+   --> src/intel/render.rs:152:7
+    |
+152 | const WM_FORCE_KILL_PIXEL_OFF: u32 = 1;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `PS_SINGLE_PROGRAM_FLOW` is never used
+   --> src/intel/render.rs:154:7
+    |
+154 | const PS_SINGLE_PROGRAM_FLOW: u32 = 1 << 31;
+    |       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `CMD_3DSTATE_SO_DECL_LIST_1` is never used
+   --> src/intel/render.rs:188:7
+    |
+188 | const CMD_3DSTATE_SO_DECL_LIST_1: u32 = 3 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `warm_state` is never used
+   --> src/intel/render.rs:918:8
+    |
+918 | pub fn warm_state() -> Option<RenderWarmState> {
+    |        ^^^^^^^^^^
+
+warning: function `submit_result_store_probe` is never used
+    --> src/intel/render.rs:2427:4
+     |
+2427 | fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `encode_result_store_probe_batch` is never used
+    --> src/intel/render.rs:6798:4
+     |
+6798 | fn encode_result_store_probe_batch(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `TRIANGLE_VERTEX_SOURCE` is never used
+ --> src/intel/shader/mod.rs:5:18
+  |
+5 | pub(crate) const TRIANGLE_VERTEX_SOURCE: &str = include_str!("triangle.vert");
+  |                  ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `TRIANGLE_FRAGMENT_SOURCE` is never used
+ --> src/intel/shader/mod.rs:6:18
+  |
+6 | pub(crate) const TRIANGLE_FRAGMENT_SOURCE: &str = include_str!("triangle.frag");
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `Simd16` and `Simd32` are never constructed
+  --> src/intel/shader/mod.rs:14:5
+   |
+12 | pub(crate) enum DispatchMode {
+   |                 ------------ variants in this enum
+13 |     Simd8,
+14 |     Simd16,
+   |     ^^^^^^
+15 |     Simd32,
+   |     ^^^^^^
+   |
+   = note: `DispatchMode` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `timescale`, `duration`, `first_chunk_offset`, and `first_sample_size` are never read
+  --> src/intel/xelp_media_mp4.rs:42:9
+   |
+39 | pub(crate) struct Mp4H264Summary {
+   |                   -------------- fields in this struct
+...
+42 |     pub timescale: u32,
+   |         ^^^^^^^^^
+43 |     pub duration: u64,
+   |         ^^^^^^^^
+44 |     pub sample_count: u32,
+45 |     pub first_chunk_offset: u64,
+   |         ^^^^^^^^^^^^^^^^^^
+46 |     pub first_sample_size: u32,
+   |         ^^^^^^^^^^^^^^^^^
+   |
+   = note: `Mp4H264Summary` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `profile_idc`, `level_idc`, and `mb_adaptive_frame_field_flag` are never read
+    --> src/intel/xelp_media_mp4.rs:1072:9
+     |
+1071 | pub(crate) struct ParsedSps {
+     |                   --------- fields in this struct
+1072 |     pub profile_idc: u8,
+     |         ^^^^^^^^^^^
+1073 |     pub level_idc: u8,
+     |         ^^^^^^^^^
+...
+1085 |     pub mb_adaptive_frame_field_flag: bool,
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `ParsedSps` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: constant `MAX_MEDIA_RESULT_SLOTS` is never used
+  --> src/intel/xelp_media_ngin.rs:18:7
+   |
+18 | const MAX_MEDIA_RESULT_SLOTS: usize = 4;
+   |       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `RING_EXECLIST_SUBMIT_PORT` is never used
+  --> src/intel/xelp_media_ngin.rs:79:7
+   |
+79 | const RING_EXECLIST_SUBMIT_PORT: usize = 0x230;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `MI_BATCH_GTT` is never used
+  --> src/intel/xelp_media_ngin.rs:96:7
+   |
+96 | const MI_BATCH_GTT: u32 = 2 << 6;
+   |       ^^^^^^^^^^^^
+
+warning: constant `CTX_CTRL_RS_CTX_ENABLE` is never used
+   --> src/intel/xelp_media_ngin.rs:105:7
+    |
+105 | const CTX_CTRL_RS_CTX_ENABLE: u32 = 1 << 1;
+    |       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT` is never used
+   --> src/intel/xelp_media_ngin.rs:107:7
+    |
+107 | const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variant `Disabled` is never constructed
+   --> src/intel/xelp_media_ngin.rs:212:5
+    |
+209 | pub(crate) enum MediaProvisioning {
+    |                 ----------------- variant in this enum
+...
+212 |     Disabled,
+    |     ^^^^^^^^
+    |
+    = note: `MediaProvisioning` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variant `EngineReset` is never constructed
+   --> src/intel/xelp_media_ngin.rs:221:5
+    |
+216 | pub(crate) enum MediaWorkloadKind {
+    |                 ----------------- variant in this enum
+...
+221 |     EngineReset,
+    |     ^^^^^^^^^^^
+    |
+    = note: `MediaWorkloadKind` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variant `GuC` is never constructed
+   --> src/intel/xelp_media_ngin.rs:227:5
+    |
+226 | pub(crate) enum MediaSubmissionTransport {
+    |                 ------------------------ variant in this enum
+227 |     GuC,
+    |     ^^^
+    |
+    = note: `MediaSubmissionTransport` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variant `Discovery` is never constructed
+   --> src/intel/xelp_media_ngin.rs:234:5
+    |
+233 | pub(crate) enum MediaKickoffStage {
+    |                 ----------------- variant in this enum
+234 |     Discovery,
+    |     ^^^^^^^^^
+    |
+    = note: `MediaKickoffStage` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: associated function `unused` is never used
+   --> src/intel/xelp_media_ngin.rs:267:14
+    |
+266 | impl MediaEngineDescriptor {
+    | -------------------------- associated function in this implementation
+267 |     const fn unused() -> Self {
+    |              ^^^^^^
+
+warning: multiple fields are never read
+   --> src/intel/xelp_media_ngin.rs:301:9
+    |
+299 | pub(crate) struct MediaEngineRuntimeSnapshot {
+    |                   -------------------------- fields in this struct
+300 |     pub name: &'static str,
+301 |     pub ring_base: usize,
+    |         ^^^^^^^^^
+...
+305 |     pub start: u32,
+    |         ^^^^^
+306 |     pub ctl: u32,
+    |         ^^^
+307 |     pub acthd: u32,
+308 |     pub mi_mode: u32,
+    |         ^^^^^^^
+309 |     pub mode: u32,
+    |         ^^^^
+310 |     pub ctx_ctl: u32,
+    |         ^^^^^^^
+311 |     pub execlist_ctl: u32,
+    |         ^^^^^^^^^^^^
+312 |     pub execlist_status_lo: u32,
+    |         ^^^^^^^^^^^^^^^^^^
+313 |     pub execlist_status_hi: u32,
+    |         ^^^^^^^^^^^^^^^^^^
+314 |     pub ipeir: u32,
+    |         ^^^^^
+...
+317 |     pub instps: u32,
+    |         ^^^^^^
+    |
+    = note: `MediaEngineRuntimeSnapshot` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `name`, `value`, and `awake` are never read
+   --> src/intel/xelp_media_ngin.rs:347:9
+    |
+346 | pub(crate) struct MediaSliceWakeAck {
+    |                   ----------------- fields in this struct
+347 |     pub name: &'static str,
+    |         ^^^^
+348 |     pub value: u32,
+    |         ^^^^^
+349 |     pub awake: bool,
+    |         ^^^^^
+    |
+    = note: `MediaSliceWakeAck` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `global_req`, `global_ack`, and `slices` are never read
+   --> src/intel/xelp_media_ngin.rs:364:9
+    |
+363 | pub(crate) struct MediaForcewakeSnapshot {
+    |                   ---------------------- fields in this struct
+364 |     pub global_req: u32,
+    |         ^^^^^^^^^^
+365 |     pub global_ack: u32,
+    |         ^^^^^^^^^^
+...
+368 |     pub slices: [MediaSliceWakeAck; 8],
+    |         ^^^^^^
+    |
+    = note: `MediaForcewakeSnapshot` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `preferred_engine_class`, `transport`, and `summary` are never read
+   --> src/intel/xelp_media_ngin.rs:375:9
+    |
+372 | pub(crate) struct MediaApiRoute {
+    |                   ------------- fields in this struct
+...
+375 |     pub preferred_engine_class: Option<MediaEngineClass>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+376 |     pub transport: MediaSubmissionTransport,
+    |         ^^^^^^^^^
+377 |     pub summary: &'static str,
+    |         ^^^^^^^
+    |
+    = note: `MediaApiRoute` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: field `default_enhance` is never read
+   --> src/intel/xelp_media_ngin.rs:414:9
+    |
+408 | pub(crate) struct MediaTopology {
+    |                   ------------- field in this struct
+...
+414 |     pub default_enhance: Option<MediaEngineId>,
+    |         ^^^^^^^^^^^^^^^
+    |
+    = note: `MediaTopology` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: multiple fields are never read
+   --> src/intel/xelp_media_ngin.rs:419:9
+    |
+418 | pub(crate) struct MediaDecodeFrameState {
+    |                   --------------------- fields in this struct
+419 |     pub ready: bool,
+    |         ^^^^^
+420 |     pub engine_name: &'static str,
+    |         ^^^^^^^^^^^
+421 |     pub ring_gpu_addr: u64,
+    |         ^^^^^^^^^^^^^
+422 |     pub context_gpu_addr: u64,
+    |         ^^^^^^^^^^^^^^^^
+423 |     pub batch_gpu_addr: u64,
+    |         ^^^^^^^^^^^^^^
+424 |     pub result_gpu_addr: u64,
+    |         ^^^^^^^^^^^^^^^
+425 |     pub bitstream_gpu_addr: u64,
+    |         ^^^^^^^^^^^^^^^^^^
+426 |     pub output_surface_gpu_addr: u64,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+427 |     pub bitstream_phys: u64,
+    |         ^^^^^^^^^^^^^^
+428 |     pub output_surface_phys: u64,
+    |         ^^^^^^^^^^^^^^^^^^^
+429 |     pub bitstream_bytes: usize,
+430 |     pub output_surface_bytes: usize,
+    |         ^^^^^^^^^^^^^^^^^^^^
+...
+434 |     pub sample_nal_count: usize,
+    |         ^^^^^^^^^^^^^^^^
+435 |     pub has_idr: bool,
+    |         ^^^^^^^
+436 |     pub kickoff_marker: u32,
+    |         ^^^^^^^^^^^^^^
+437 |     pub complete_marker: u32,
+    |         ^^^^^^^^^^^^^^^
+...
+441 |     pub present_attempted: bool,
+    |         ^^^^^^^^^^^^^^^^^
+442 |     pub present_ready: bool,
+443 |     pub synthetic_preview: bool,
+    |         ^^^^^^^^^^^^^^^^^
+    |
+    = note: `MediaDecodeFrameState` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: struct `MediaSurfaceWindow` is never constructed
+   --> src/intel/xelp_media_ngin.rs:461:19
+    |
+461 | pub(crate) struct MediaSurfaceWindow {
+    |                   ^^^^^^^^^^^^^^^^^^
+
+warning: fields `ring_phys`, `context_phys`, `batch_phys`, and `result_phys` are never read
+   --> src/intel/xelp_media_ngin.rs:474:5
+    |
+473 | struct MediaBitstreamBacking {
+    |        --------------------- fields in this struct
+474 |     ring_phys: u64,
+    |     ^^^^^^^^^
+...
+477 |     context_phys: u64,
+    |     ^^^^^^^^^^^^
+...
+480 |     batch_phys: u64,
+    |     ^^^^^^^^^^
+...
+483 |     result_phys: u64,
+    |     ^^^^^^^^^^^
+    |
+    = note: `MediaBitstreamBacking` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: constant `GEN11_CSB_WRITE_PTR_MASK` is never used
+    --> src/intel/xelp_media_ngin.rs:2006:7
+     |
+2006 | const GEN11_CSB_WRITE_PTR_MASK: u32 = 0xF;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `kickoff_state` is never used
+    --> src/intel/xelp_media_ngin.rs:2724:15
+     |
+2724 | pub(crate) fn kickoff_state() -> Option<MediaKickoffState> {
+     |               ^^^^^^^^^^^^^
+
+warning: function `decode_surface_window` is never used
+    --> src/intel/xelp_media_ngin.rs:2728:15
+     |
+2728 | pub(crate) fn decode_surface_window(name: &str) -> Option<MediaSurfaceWindow> {
+     |               ^^^^^^^^^^^^^^^^^^^^^
+
+warning: static `INTEL_RING_INIT_LOGS` is never used
+  --> src/logflag.rs:30:19
+   |
+30 | pub(crate) static INTEL_RING_INIT_LOGS: AtomicU32 = AtomicU32::new(0);
+   |                   ^^^^^^^^^^^^^^^^^^^^
+
+warning: static `INTEL_SUBMIT_LOGS` is never used
+  --> src/logflag.rs:31:19
+   |
+31 | pub(crate) static INTEL_SUBMIT_LOGS: AtomicU32 = AtomicU32::new(0);
+   |                   ^^^^^^^^^^^^^^^^^
+
+warning: static `INTEL_PRESENT_LOGS` is never used
+  --> src/logflag.rs:32:19
+   |
+32 | pub(crate) static INTEL_PRESENT_LOGS: AtomicU32 = AtomicU32::new(0);
+   |                   ^^^^^^^^^^^^^^^^^^
+
+warning: constant `INTEL_MEDIA_NGIN_LOGS` is never used
+  --> src/logflag.rs:38:18
+   |
+38 | pub(crate) const INTEL_MEDIA_NGIN_LOGS: bool = true;
+   |                  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `INTEL_COPY_NGIN_LOGS` is never used
+  --> src/logflag.rs:40:18
+   |
+40 | pub(crate) const INTEL_COPY_NGIN_LOGS: bool = true;
+   |                  ^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `DmaFpgaStreamStatus` is never constructed
+   --> src/net/mod.rs:229:12
+    |
+229 | pub struct DmaFpgaStreamStatus {
+    |            ^^^^^^^^^^^^^^^^^^^
+
+warning: variants `Tcp` and `Udp` are never constructed
+   --> src/net/mod.rs:240:5
+    |
+239 | pub enum DmaFpgaIpProto {
+    |          -------------- variants in this enum
+240 |     Tcp,
+    |     ^^^
+241 |     Udp,
+    |     ^^^
+    |
+    = note: `DmaFpgaIpProto` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: method `admin_submit_and_wait_async` is never used
+   --> src/pci/nvme.rs:600:14
+    |
+358 | impl NvmeController {
+    | ------------------- method in this implementation
+...
+600 |     async fn admin_submit_and_wait_async(
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `NvmeDiagController` is never constructed
+    --> src/pci/nvme.rs:1584:19
+     |
+1584 | pub(crate) struct NvmeDiagController {
+     |                   ^^^^^^^^^^^^^^^^^^
+
+warning: function `admin_selftest_read` is never used
+    --> src/pci/nvme.rs:1820:4
+     |
+1820 | fn admin_selftest_read(
+     |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `pci_matches` is never used
+    --> src/pci/nvme.rs:1845:4
+     |
+1845 | fn pci_matches(a: &block::PciAddress, b: &block::PciAddress) -> bool {
+     |    ^^^^^^^^^^^
+
+warning: function `diag_snapshot` is never used
+    --> src/pci/nvme.rs:1849:15
+     |
+1849 | pub(crate) fn diag_snapshot() -> Vec<NvmeDiagController> {
+     |               ^^^^^^^^^^^^^
+
+warning: function `io_selftest_read` is never used
+    --> src/pci/nvme.rs:1911:4
+     |
+1911 | fn io_selftest_read(
+     |    ^^^^^^^^^^^^^^^^
+
+warning: static `VRNG_SMOKE_ONCE` is never used
+   --> src/pci/vrng.rs:353:8
+    |
+353 | static VRNG_SMOKE_ONCE: Once<()> = Once::new();
+    |        ^^^^^^^^^^^^^^^
+
+warning: function `fnv1a64` is never used
+   --> src/pci/vrng.rs:355:4
+    |
+355 | fn fnv1a64(data: &[u8]) -> u64 {
+    |    ^^^^^^^
+
+warning: function `smoke_test_once` is never used
+   --> src/pci/vrng.rs:396:8
+    |
+396 | pub fn smoke_test_once() {
+    |        ^^^^^^^^^^^^^^^
+
+warning: function `try_this_cpu_ptr` is never used
+   --> src/percpu.rs:178:8
+    |
+178 | pub fn try_this_cpu_ptr() -> *mut PerCpu {
+    |        ^^^^^^^^^^^^^^^^
+
+warning: fields `last_missing_tex_id` and `missing_tex_logs` are never read
+    --> src/r/gfx_cabi.rs:1825:9
+     |
+1770 |     struct GfxCabiState {
+     |            ------------ fields in this struct
+...
+1825 |         last_missing_tex_id: u32,
+     |         ^^^^^^^^^^^^^^^^^^^
+1826 |         missing_tex_logs: u32,
+     |         ^^^^^^^^^^^^^^^^
+
+warning: function `frame_target_extent` is never used
+    --> src/r/gfx_cabi.rs:2180:8
+     |
+2180 |     fn frame_target_extent(st: &GfxCabiState) -> (u32, u32) {
+     |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `upload_texture_rgba_mask_no_init` is never used
+    --> src/r/gfx_cabi.rs:4170:19
+     |
+4170 |     pub(crate) fn upload_texture_rgba_mask_no_init(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `placement` is never read
+  --> src/r/spawn_spec.rs:19:16
+   |
+17 | pub(super) struct TaskSpec {
+   |                   -------- field in this struct
+18 |     pub(super) name: &'static str,
+19 |     pub(super) placement: SpawnPlacement,
+   |                ^^^^^^^^^
+
+warning: associated functions `disabled_gated` and `disabled_gated_on` are never used
+   --> src/r/spawn_spec.rs:113:25
+    |
+ 27 | impl TaskSpec {
+    | ------------- associated functions in this implementation
+...
+113 |     pub(super) const fn disabled_gated(
+    |                         ^^^^^^^^^^^^^^
+...
+132 |     pub(super) const fn disabled_gated_on(
+    |                         ^^^^^^^^^^^^^^^^^
+
+warning: fields `title_tex_id`, `title_tex_w`, `title_tex_h`, and `title_tex_alpha` are never read
+   --> src/r/../ui2/mod.rs:460:5
+    |
+422 | struct Ui2Window {
+    |        --------- fields in this struct
+...
+460 |     title_tex_id: u32,
+    |     ^^^^^^^^^^^^
+461 |     title_tex_w: u32,
+    |     ^^^^^^^^^^^
+462 |     title_tex_h: u32,
+    |     ^^^^^^^^^^^
+463 |     title_tex_alpha: u8,
+    |     ^^^^^^^^^^^^^^^
+    |
+    = note: `Ui2Window` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: fields `compose_fps_display` and `last_compose_heartbeat_seq` are never read
+   --> src/r/../ui2/mod.rs:537:5
+    |
+517 | struct Ui2State {
+    |        -------- fields in this struct
+...
+537 |     compose_fps_display: u16,
+    |     ^^^^^^^^^^^^^^^^^^^
+538 |     last_compose_heartbeat_seq: u32,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variant `Right` is never constructed
+  --> src/r/../ui2/ui2_font.rs:96:5
+   |
+93 | pub(crate) enum Ui2FontTextAlign {
+   |                 ---------------- variant in this enum
+...
+96 |     Right,
+   |     ^^^^^
+   |
+   = note: `Ui2FontTextAlign` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variant `Bottom` is never constructed
+   --> src/r/../ui2/ui2_font.rs:103:5
+    |
+100 | pub(crate) enum Ui2FontVerticalAlign {
+    |                 -------------------- variant in this enum
+...
+103 |     Bottom,
+    |     ^^^^^^
+    |
+    = note: `Ui2FontVerticalAlign` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: field `output_mask` is never read
+  --> src/shell2/mod.rs:94:5
+   |
+93 | pub(crate) struct MatrixTarget {
+   |                   ------------ field in this struct
+94 |     output_mask: u8,
+   |     ^^^^^^^^^^^
+   |
+   = note: `MatrixTarget` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: method `write_byte` is never used
+ --> src/shell2/interface.rs:5:8
+  |
+1 | pub(crate) trait ShellIo2 {
+  |                  -------- method in this trait
+...
+5 |     fn write_byte(&self, b: u8) {
+  |        ^^^^^^^^^^
+
+warning: method `handled` is never used
+  --> src/shell2/shell2_cmd.rs:39:25
+   |
+38 | impl ParseOutcome {
+   | ----------------- method in this implementation
+39 |     pub(crate) const fn handled(self) -> bool {
+   |                         ^^^^^^^
+
+warning: enum `RegisterCommandError` is never used
+  --> src/shell2/shell2_cmd_registry.rs:13:10
+   |
+13 | pub enum RegisterCommandError {
+   |          ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `TOOL_JSON_PROBE` is never used
+  --> src/shell2/shell2_cmd_registry.rs:42:7
+   |
+42 | const TOOL_JSON_PROBE: &str = r#"{"type":"object","properties":{"domain":{"type":"string","...
+   |       ^^^^^^^^^^^^^^^
+
+warning: function `name_in_use` is never used
+   --> src/shell2/shell2_cmd_registry.rs:305:4
+    |
+305 | fn name_in_use(name: &str) -> bool {
+    |    ^^^^^^^^^^^
+
+warning: function `register_command` is never used
+   --> src/shell2/shell2_cmd_registry.rs:319:8
+    |
+319 | pub fn register_command(
+    |        ^^^^^^^^^^^^^^^^
+
+warning: function `identity_nick` is never used
+  --> src/shell2/shell2_irc.rs:42:15
+   |
+42 | pub(crate) fn identity_nick() -> AllocString {
+   |               ^^^^^^^^^^^^^
+
+warning: variant `Coreticks` is never constructed
+  --> src/tst/ui2_ids.rs:35:5
+   |
+32 | pub enum Ui2DemoContentId {
+   |          ---------------- variant in this enum
+...
+35 |     Coreticks = 45,
+   |     ^^^^^^^^^
+   |
+   = note: `Ui2DemoContentId` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `update_particles` is never used
+   --> src/tst/ui2_smiley_fountain_demo.rs:191:4
+    |
+191 | fn update_particles(
+    |    ^^^^^^^^^^^^^^^^
+
+warning: fields `slot_id` and `route_string` are never read
+  --> src/usb2/mod.rs:42:9
+   |
+40 | pub(crate) struct UsbDeviceSummary {
+   |                   ---------------- fields in this struct
+41 |     pub stable_id: u32,
+42 |     pub slot_id: u32,
+   |         ^^^^^^^
+...
+45 |     pub route_string: u32,
+   |         ^^^^^^^^^^^^
+   |
+   = note: `UsbDeviceSummary` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `controller_phase`, `root_hub_lifecycle`, `event_ready`, `root_port_change_seen`, and `empty_probe_streak` are never read
+  --> src/usb2/mod.rs:63:9
+   |
+55 | pub(crate) struct TlbUsbController {
+   |                   ---------------- fields in this struct
+...
+63 |     pub controller_phase: &'static str,
+   |         ^^^^^^^^^^^^^^^^
+64 |     pub root_hub_lifecycle: &'static str,
+   |         ^^^^^^^^^^^^^^^^^^
+65 |     pub event_ready: bool,
+   |         ^^^^^^^^^^^
+66 |     pub root_port_change_seen: bool,
+   |         ^^^^^^^^^^^^^^^^^^^^^
+67 |     pub empty_probe_streak: u32,
+   |         ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `TlbUsbController` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: field `controller_index` is never read
+   --> src/usb2/mod.rs:106:9
+    |
+105 | pub(crate) struct TlbUsbDevice {
+    |                   ------------ field in this struct
+106 |     pub controller_index: usize,
+    |         ^^^^^^^^^^^^^^^^
+    |
+    = note: `TlbUsbDevice` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: enum `TlbUsbTopologyNodeKind` is never used
+   --> src/usb2/mod.rs:127:17
+    |
+127 | pub(crate) enum TlbUsbTopologyNodeKind {
+    |                 ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `TlbUsbTopologyNode` is never constructed
+   --> src/usb2/mod.rs:134:19
+    |
+134 | pub(crate) struct TlbUsbTopologyNode {
+    |                   ^^^^^^^^^^^^^^^^^^
+
+warning: struct `TlbUsbSnapshot` is never constructed
+   --> src/usb2/mod.rs:150:19
+    |
+150 | pub(crate) struct TlbUsbSnapshot {
+    |                   ^^^^^^^^^^^^^^
+
+warning: struct `UsbControllerRuntimeDiag` is never constructed
+   --> src/usb2/mod.rs:159:19
+    |
+159 | pub(crate) struct UsbControllerRuntimeDiag {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `portpmsc` and `portli` are never read
+   --> src/usb2/mod.rs:181:9
+    |
+178 | pub(crate) struct UsbPortRuntimeDiag {
+    |                   ------------------ fields in this struct
+...
+181 |     pub portpmsc: u32,
+    |         ^^^^^^^^
+182 |     pub portli: u32,
+    |         ^^^^^^
+    |
+    = note: `UsbPortRuntimeDiag` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: multiple fields are never read
+   --> src/usb2/mod.rs:187:9
+    |
+186 | pub(crate) struct UsbControllerMmioDiag {
+    |                   --------------------- fields in this struct
+187 |     pub caplen: u8,
+    |         ^^^^^^
+188 |     pub hcsparams1: u32,
+    |         ^^^^^^^^^^
+189 |     pub hccparams1: u32,
+    |         ^^^^^^^^^^
+190 |     pub dboff: u32,
+    |         ^^^^^
+191 |     pub rtsoff: u32,
+    |         ^^^^^^
+192 |     pub usbcmd: u32,
+    |         ^^^^^^
+193 |     pub usbsts: u32,
+    |         ^^^^^^
+194 |     pub crcr: u64,
+    |         ^^^^
+195 |     pub dcbaap: u64,
+    |         ^^^^^^
+196 |     pub config: u32,
+    |         ^^^^^^
+197 |     pub iman: u32,
+    |         ^^^^
+198 |     pub imod: u32,
+    |         ^^^^
+199 |     pub erstsz: u32,
+    |         ^^^^^^
+200 |     pub erstba: u64,
+    |         ^^^^^^
+201 |     pub erdp: u64,
+    |         ^^^^
+    |
+    = note: `UsbControllerMmioDiag` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: function `discover_first_controller` is never used
+   --> src/usb2/mod.rs:313:15
+    |
+313 | pub(crate) fn discover_first_controller() -> Option<TlbUsbController> {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `address` and `expected` are never read
+ --> src/usb2/api.rs:9:17
+  |
+9 |     WrongKind { address: u8, expected: &'static str },
+  |     ---------   ^^^^^^^      ^^^^^^^^
+  |     |
+  |     fields in this variant
+  |
+  = note: `InterfaceEndpointError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: method `endpoint_interrupt_out` is never used
+  --> src/usb2/api.rs:90:25
+   |
+33 | impl ClaimedInterface<'_> {
+   | ------------------------- method in this implementation
+...
+90 |     pub(crate) async fn endpoint_interrupt_out(
+   |                         ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `as_str` is never used
+  --> src/usb2/class.rs:12:25
+   |
+11 | impl UsbClassDescriptorUsage {
+   | ---------------------------- method in this implementation
+12 |     pub(crate) const fn as_str(self) -> &'static str {
+   |                         ^^^^^^
+
+warning: methods `code`, `descriptor_usage`, and `description` are never used
+   --> src/usb2/class.rs:83:25
+    |
+ 51 | impl UsbBaseClass {
+    | ----------------- methods in this implementation
+...
+ 83 |     pub(crate) const fn code(self) -> u8 {
+    |                         ^^^^
+...
+114 |     pub(crate) const fn descriptor_usage(self) -> UsbClassDescriptorUsage {
+    |                         ^^^^^^^^^^^^^^^^
+...
+176 |     pub(crate) const fn description(self) -> &'static str {
+    |                         ^^^^^^^^^^^
+
+warning: variant `MiscCommandInterfaceDescriptor` is never constructed
+   --> src/usb2/class.rs:276:5
+    |
+209 | pub(crate) enum UsbClassTriple {
+    |                 -------------- variant in this enum
+...
+276 |     MiscCommandInterfaceDescriptor,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `UsbClassTriple` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: methods `base_class` and `description` are never used
+   --> src/usb2/class.rs:378:25
+    |
+292 | impl UsbClassTriple {
+    | ------------------- methods in this implementation
+...
+378 |     pub(crate) const fn base_class(self) -> UsbBaseClass {
+    |                         ^^^^^^^^^^
+...
+540 |     pub(crate) const fn description(self) -> &'static str {
+    |                         ^^^^^^^^^^^
+
+warning: enum `UsbDescriptorScope` is never used
+ --> src/usb2/descriptor.rs:9:17
+  |
+9 | pub(crate) enum UsbDescriptorScope {
+  |                 ^^^^^^^^^^^^^^^^^^
+
+warning: associated items `from_u8` and `short_name` are never used
+  --> src/usb2/descriptor.rs:38:25
+   |
+37 | impl UsbDescriptorType {
+   | ---------------------- associated items in this implementation
+38 |     pub(crate) const fn from_u8(value: u8) -> Self {
+   |                         ^^^^^^^
+...
+76 |     pub(crate) const fn short_name(self) -> &'static str {
+   |                         ^^^^^^^^^^
+
+warning: struct `UsbDeviceStrings` is never constructed
+  --> src/usb2/descriptor.rs:97:19
+   |
+97 | pub(crate) struct UsbDeviceStrings {
+   |                   ^^^^^^^^^^^^^^^^
+
+warning: method `as_str` is never used
+   --> src/usb2/descriptor.rs:109:25
+    |
+108 | impl UsbDescriptorSkipReason {
+    | ---------------------------- method in this implementation
+109 |     pub(crate) const fn as_str(self) -> &'static str {
+    |                         ^^^^^^
+
+warning: function `read_device_strings` is never used
+   --> src/usb2/descriptor.rs:179:21
+    |
+179 | pub(crate) async fn read_device_strings(device: &mut Device) -> UsbDeviceStrings {
+    |                     ^^^^^^^^^^^^^^^^^^^
+
+warning: function `log_hid_report_descriptors` is never used
+   --> src/usb2/descriptor.rs:332:21
+    |
+332 | pub(crate) async fn log_hid_report_descriptors(
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variant `Tablet` is never constructed
+  --> src/usb2/hid/boot.rs:24:5
+   |
+21 | enum HidBootKind {
+   |      ----------- variant in this enum
+...
+24 |     Tablet,
+   |     ^^^^^^
+   |
+   = note: `HidBootKind` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variant `Unknown` is never constructed
+  --> src/usb2/hid/hut.rs:13:5
+   |
+12 | pub enum HidSourceKind {
+   |          ------------- variant in this enum
+13 |     Unknown = 0,
+   |     ^^^^^^^
+   |
+   = note: `HidSourceKind` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `upsert_combo` is never used
+   --> src/usb2/hid/hut.rs:331:8
+    |
+331 | pub fn upsert_combo(combo_id: u32, source_kind: HidSourceKind, source_tag: &str) -> bool {
+    |        ^^^^^^^^^^^^
+
+warning: function `bind_combo_mouse` is never used
+   --> src/usb2/hid/hut.rs:360:8
+    |
+360 | pub fn bind_combo_mouse(combo_id: u32, controller_id: u32, slot_id: u32, ep_target: u32) -...
+    |        ^^^^^^^^^^^^^^^^
+
+warning: function `bind_combo_keyboard` is never used
+   --> src/usb2/hid/hut.rs:378:8
+    |
+378 | pub fn bind_combo_keyboard(
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `mice_snapshot` is never used
+   --> src/usb2/hid/hut.rs:442:8
+    |
+442 | pub fn mice_snapshot() -> Vec<HidMouseState, MAX_HID_HUT_MICE> {
+    |        ^^^^^^^^^^^^^
+
+warning: function `tablets_snapshot` is never used
+   --> src/usb2/hid/hut.rs:446:8
+    |
+446 | pub fn tablets_snapshot() -> Vec<HidTabletState, MAX_HID_HUT_TABLETS> {
+    |        ^^^^^^^^^^^^^^^^
+
+warning: function `keyboards_snapshot` is never used
+   --> src/usb2/hid/hut.rs:450:8
+    |
+450 | pub fn keyboards_snapshot() -> Vec<HidKeyboardState, MAX_HID_HUT_KEYBOARDS> {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `combos_snapshot` is never used
+   --> src/usb2/hid/hut.rs:454:8
+    |
+454 | pub fn combos_snapshot() -> Vec<HidCombo, MAX_HID_HUT_COMBOS> {
+    |        ^^^^^^^^^^^^^^^
+
+warning: multiple fields are never read
+   --> src/usb2/hid/input.rs:135:9
+    |
+134 | pub struct TabletEvent {
+    |            ----------- fields in this struct
+135 |     pub slot_id: u32,
+    |         ^^^^^^^
+136 |     pub buttons: u8,
+    |         ^^^^^^^
+137 |     pub report_id: u8,
+    |         ^^^^^^^^^
+138 |     pub x_raw: u16,
+    |         ^^^^^
+139 |     pub y_raw: u16,
+    |         ^^^^^
+140 |     pub x_norm_q15: u16,
+    |         ^^^^^^^^^^
+141 |     pub y_norm_q15: u16,
+    |         ^^^^^^^^^^
+142 |     pub flags: u8,
+    |         ^^^^^
+    |
+    = note: `TabletEvent` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `pop_tablet_event` is never used
+   --> src/usb2/hid/input.rs:192:8
+    |
+192 | pub fn pop_tablet_event() -> Option<TabletEvent> {
+    |        ^^^^^^^^^^^^^^^^
+
+warning: method `pop` is never used
+  --> src/usb2/hid/mouse.rs:70:19
+   |
+40 | impl MouseRing {
+   | -------------- method in this implementation
+...
+70 |     pub(crate) fn pop(&mut self) -> Option<TrueosHidMouseSample> {
+   |                   ^^^
+
+warning: function `matches_interface` is never used
+   --> src/usb2/hid/tablet.rs:104:15
+    |
+104 | pub(crate) fn matches_interface(class: u8, subclass: u8, protocol: u8) -> bool {
+    |               ^^^^^^^^^^^^^^^^^
+
+warning: variant `Uas` is never constructed
+  --> src/usb2/mass.rs:26:5
+   |
+24 | pub(crate) enum MassTransportKind {
+   |                 ----------------- variant in this enum
+25 |     Bot,
+26 |     Uas,
+   |     ^^^
+   |
+   = note: `MassTransportKind` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: field `max_lun` is never read
+   --> src/usb2/mass.rs:203:9
+    |
+202 | pub(crate) struct MassProbeInfo {
+    |                   ------------- field in this struct
+203 |     pub max_lun: u8,
+    |         ^^^^^^^
+    |
+    = note: `MassProbeInfo` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `cmd`, `got`, and `need` are never read
+   --> src/usb2/mass.rs:214:9
+    |
+213 |     ShortData {
+    |     --------- fields in this variant
+214 |         cmd: &'static str,
+    |         ^^^
+215 |         got: usize,
+    |         ^^^
+216 |         need: usize,
+    |         ^^^^
+    |
+    = note: `MassProbeError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `cmd`, `sig`, `tag`, `expected_tag`, and `status` are never read
+   --> src/usb2/mass.rs:219:9
+    |
+218 |     Csw {
+    |     --- fields in this variant
+219 |         cmd: &'static str,
+    |         ^^^
+220 |         sig: u32,
+    |         ^^^
+221 |         tag: u32,
+    |         ^^^
+222 |         expected_tag: u32,
+    |         ^^^^^^^^^^^^
+223 |         status: u8,
+    |         ^^^^^^
+    |
+    = note: `MassProbeError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `read_mmio_u32` is never used
+   --> src/usb2/mass.rs:292:4
+    |
+292 | fn read_mmio_u32(base: *const u8, offset: usize) -> u32 {
+    |    ^^^^^^^^^^^^^
+
+warning: function `read_mmio_u64` is never used
+   --> src/usb2/mass.rs:296:4
+    |
+296 | fn read_mmio_u64(base: *const u8, offset: usize) -> u64 {
+    |    ^^^^^^^^^^^^^
+
+warning: function `endpoint_dci` is never used
+   --> src/usb2/mass.rs:300:4
+    |
+300 | fn endpoint_dci(endpoint_addr: u8) -> u8 {
+    |    ^^^^^^^^^^^^
+
+warning: function `log_endpoint_context` is never used
+   --> src/usb2/mass.rs:309:4
+    |
+309 | fn log_endpoint_context(label: &str, ctx_ptr: *const u8) {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `log_slot_context` is never used
+   --> src/usb2/mass.rs:348:4
+    |
+348 | fn log_slot_context(ctx_ptr: *const u8) {
+    |    ^^^^^^^^^^^^^^^^
+
+warning: struct `UsbMassGeometryPlaceholderDevice` is never constructed
+    --> src/usb2/mass.rs:1085:8
+     |
+1085 | struct UsbMassGeometryPlaceholderDevice {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `register_mass_geometry_placeholder` is never used
+    --> src/usb2/mass.rs:1108:15
+     |
+1108 | pub(crate) fn register_mass_geometry_placeholder(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `MIDI_IDLE_SLEEP_MS` is never used
+  --> src/usb2/device/midi.rs:15:7
+   |
+15 | const MIDI_IDLE_SLEEP_MS: u64 = 25;
+   |       ^^^^^^^^^^^^^^^^^^
+
+warning: function `secs_to_hms` is never used
+  --> src/usb2/device/midi.rs:68:4
+   |
+68 | fn secs_to_hms(secs: u64) -> (u64, u64, u64) {
+   |    ^^^^^^^^^^^
+
+warning: fields `transport_kind`, `port_speed`, and `uas_candidate_count` are never read
+  --> src/usb2/device/pen.rs:54:5
+   |
+42 | struct UsbMassRuntime {
+   |        -------------- fields in this struct
+...
+54 |     transport_kind: mass::MassTransportKind,
+   |     ^^^^^^^^^^^^^^
+55 |     io_profile: MassIoProfile,
+56 |     port_speed: usb_if::Speed,
+   |     ^^^^^^^^^^
+57 |     uas_candidate_count: u8,
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `OP_TEST_UNIT_READY` is never used
+  --> src/usb2/scsi.rs:49:11
+   |
+49 | pub const OP_TEST_UNIT_READY: u8 = 0x00;
+   |           ^^^^^^^^^^^^^^^^^^
+
+warning: constant `OP_INQUIRY` is never used
+  --> src/usb2/scsi.rs:51:11
+   |
+51 | pub const OP_INQUIRY: u8 = 0x12;
+   |           ^^^^^^^^^^
+
+warning: constant `OP_READ_CAPACITY_10` is never used
+  --> src/usb2/scsi.rs:52:11
+   |
+52 | pub const OP_READ_CAPACITY_10: u8 = 0x25;
+   |           ^^^^^^^^^^^^^^^^^^^
+
+warning: function `cdb_test_unit_ready` is never used
+  --> src/usb2/scsi.rs:57:8
+   |
+57 | pub fn cdb_test_unit_ready() -> [u8; 6] {
+   |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `cdb_inquiry` is never used
+  --> src/usb2/scsi.rs:65:8
+   |
+65 | pub fn cdb_inquiry(allocation_len: u16) -> [u8; 6] {
+   |        ^^^^^^^^^^^
+
+warning: function `cdb_read_capacity_10` is never used
+  --> src/usb2/scsi.rs:71:8
+   |
+71 | pub fn cdb_read_capacity_10() -> [u8; 10] {
+   |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `InquiryBasic` is never constructed
+   --> src/usb2/scsi.rs:116:12
+    |
+116 | pub struct InquiryBasic {
+    |            ^^^^^^^^^^^^
+
+warning: function `parse_inquiry_basic` is never used
+   --> src/usb2/scsi.rs:124:8
+    |
+124 | pub fn parse_inquiry_basic(buf: &[u8]) -> Option<InquiryBasic> {
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `Capacity10` is never constructed
+   --> src/usb2/scsi.rs:151:12
+    |
+151 | pub struct Capacity10 {
+    |            ^^^^^^^^^^
+
+warning: function `parse_read_capacity_10` is never used
+   --> src/usb2/scsi.rs:156:8
+    |
+156 | pub fn parse_read_capacity_10(buf: &[u8]) -> Option<Capacity10> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `format_index`, `frame_index`, and `frame_interval` are never read
+  --> src/usb2/video/cam.rs:52:5
+   |
+49 | struct CameraStreamFormat {
+   |        ------------------ fields in this struct
+...
+52 |     format_index: u8,
+   |     ^^^^^^^^^^^^
+53 |     frame_index: u8,
+   |     ^^^^^^^^^^^
+54 |     frame_interval: u32,
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `CameraStreamFormat` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `register_waker_slot` is never used
+  --> src/wait.rs:32:8
+   |
+32 | pub fn register_waker_slot(slot: &mut Option<Waker>, waker: &Waker) -> bool {
+   |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `take_and_wake` is never used
+   --> src/wait.rs:132:8
+    |
+132 | pub fn take_and_wake(slot: &mut Option<Waker>) -> bool {
+    |        ^^^^^^^^^^^^^
+
+warning: enum `Either` is never used
+   --> src/wait.rs:397:10
+    |
+397 | pub enum Either<A, B> {
+    |          ^^^^^^
+
+warning: function `select2` is never used
+   --> src/wait.rs:405:14
+    |
+405 | pub async fn select2<A, B>(a: A, b: B) -> Either<A::Output, B::Output>
+    |              ^^^^^^^
+
+warning: `TRUEOS` (bin "TRUEOS") generated 276 warnings (run `cargo fix --bin "TRUEOS" -p TRUEOS` to apply 1 suggestion)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.12s
+mkdir -p bld/artifacts/debug-136ced32f266
+cp tgt/86_64/debug/TRUEOS bld/artifacts/debug-136ced32f266/TRUEOS.full.elf
+cp tgt/86_64/debug/TRUEOS bld/artifacts/debug-136ced32f266/TRUEOS.elf
+strip -s bld/artifacts/debug-136ced32f266/TRUEOS.elf || true
+rm -rf bld/iso-bootroot
+rm -f bld/trueos.iso
+fuser -k 7777/udp || true
+python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
+mkdir -p bld/iso-bootroot
+cp bld/artifacts/debug-136ced32f266/TRUEOS.elf bld/iso-bootroot/TRUEOS.elf
+mkdir -p bld/EFI/BOOT
+mkdir -p bld/iso-bootroot/EFI/BOOT/
+cp bld/EFI/BOOT/adlp_guc_70.bin bld/iso-bootroot/EFI/BOOT/adlp_guc_70.bin
+mkdir -p bld/iso-bootroot/EFI/BOOT/apps/
+cp "../TRUEOS Blueprints/dist/hello_world.bp" "bld/iso-bootroot/EFI/BOOT/apps/hello_world_app.bp"
+cp limine.conf bld/iso-bootroot/limine.conf
+cp bld/limine-prefix/share/limine/BOOTX64.EFI bld/EFI/BOOT/BOOTX64.EFI
+cp limine.conf bld/EFI/BOOT/limine.conf
+cp bld/iso-bootroot/TRUEOS.elf bld/TRUEOS.elf
+cp bld/limine-prefix/share/limine/BOOTX64.EFI bld/iso-bootroot/EFI/BOOT/BOOTX64.EFI
+rm -f bld/iso-bootroot/efi.img
+dd if=/dev/zero of=bld/iso-bootroot/efi.img bs=1k count=1024
+1024+0 records in
+1024+0 records out
+1048576 bytes (1.0 MB, 1.0 MiB) copied, 0.000988576 s, 1.0 GB/s
+mkfs.vfat -n TRUEOS_EFI bld/iso-bootroot/efi.img
+mkfs.fat 4.2 (2021-01-31)
+mmd -i bld/iso-bootroot/efi.img ::/EFI ::/EFI/BOOT
+mmd -i bld/iso-bootroot/efi.img ::/EFI/BOOT/apps
+mcopy -i bld/iso-bootroot/efi.img bld/limine-prefix/share/limine/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
+mcopy -i bld/iso-bootroot/efi.img bld/EFI/BOOT/adlp_guc_70.bin ::/EFI/BOOT/adlp_guc_70.bin
+mcopy -i bld/iso-bootroot/efi.img "bld/iso-bootroot/EFI/BOOT/apps/hello_world_app.bp" ::/EFI/BOOT/apps/hello_world_app.bp
+xorriso -as mkisofs \
+	-iso-level 3 -full-iso9660-filenames \
+	-R \
+	-r \
+	-J -joliet-long \
+	-e efi.img -no-emul-boot \
+	-efi-boot-part --efi-boot-image --protective-msdos-label \
+	-o bld/trueos.iso bld/iso-bootroot
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev 'stdio:bld/trueos.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data, 1194g free
+Added to ISO image: directory '/'='/home/t4ce/REPOS/TRUEOS/bld/iso-bootroot'
+xorriso : UPDATE :       9 files added in 1 seconds
+xorriso : UPDATE :       9 files added in 1 seconds
+ISO image produced: 8504 sectors
+Written to medium : 8504 sectors at LBA 0
+Writing to 'stdio:bld/trueos.iso' completed successfully.
+
+WARNING: Image format was not specified for 'nvme.img' and probing guessed raw.
+         Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+         Specify the 'raw' format explicitly to remove the restrictions.
+qemu-system-x86_64: terminating on signal 2
+make: *** [Makefile:230: run] Unterbrechung

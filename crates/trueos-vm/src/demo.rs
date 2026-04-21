@@ -1,4 +1,3 @@
-use core::arch::x86_64::__cpuid;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::vfetch_job::{BytesJob, Poll as FetchPoll};
@@ -295,8 +294,16 @@ fn build_probe_title(buf: &mut [u8; 64], fs_ok: bool, net_ok: bool) -> usize {
     push_bytes(buf, n, fmt_u64(&mut num, guest_apic_id() as u64))
 }
 
+#[cfg(target_arch = "x86_64")]
 fn guest_apic_id() -> u32 {
+    use core::arch::x86_64::__cpuid;
+
     unsafe { (__cpuid(1).ebx >> 24) & 0xff }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn guest_apic_id() -> u32 {
+    0
 }
 
 fn push_bytes(dst: &mut [u8], at: usize, src: &[u8]) -> usize {

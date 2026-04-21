@@ -1153,6 +1153,46 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_create(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_surface_window_create(
+    title_ptr: *const u8,
+    title_len: usize,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    z: i32,
+    alpha: u32,
+    tex_id: u32,
+    blend_enabled: u32,
+) -> u32 {
+    if title_ptr.is_null() || tex_id == 0 {
+        return 0;
+    }
+    let title = core::slice::from_raw_parts(title_ptr, title_len);
+    let Ok(title) = core::str::from_utf8(title) else {
+        return 0;
+    };
+    let content_rect = Ui2Rect {
+        x: x as f32,
+        y: y as f32,
+        w: width.max(1) as f32,
+        h: height.max(1) as f32,
+    };
+    let id = create_hosted_surface_content_window(
+        title,
+        content_rect,
+        z.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        alpha.min(255) as u8,
+        tex_id,
+        blend_enabled != 0,
+    );
+    if id != 0 {
+        let _ = set_window_vm_origin_hint(id, true);
+    }
+    id
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_info(
     window_id: u32,
     out_info: *mut TrueosUi2WindowInfo,
