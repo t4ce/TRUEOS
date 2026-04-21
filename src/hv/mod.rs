@@ -29,7 +29,7 @@ use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
 use crate::shell2::{ShellBackend2, ShellIo2};
 
-use guest_work::{GuestWorkProfile, pick_guest_work_target};
+use guest_work::{VmLaneProfile, pick_vm_lane_target};
 use memory::*;
 use snapshot::*;
 use vmm::VmManager;
@@ -229,12 +229,14 @@ fn start_with_mode(
 
     let _ = spawner;
     let _ = io;
-    let profile = GuestWorkProfile::vm_default();
-    let Some(target) = pick_guest_work_target(profile) else {
+    let profile = VmLaneProfile::vm_default();
+    let Some(target) = pick_vm_lane_target(profile) else {
         VM1_STARTING.store(false, Ordering::Release);
         hvlogf(format_args!(
-            "hv: vm{} placement failed: placement={:?} requires slot>=2 (prefer perf)",
-            vm_id, profile.placement
+            "hv: vm{} lane pick failed: role={} placement={:?} requires slot>=2 (prefer perf)",
+            vm_id,
+            profile.role_name(),
+            profile.placement
         ));
         return Err(StartError::NoVmSpawner);
     };
@@ -253,9 +255,10 @@ fn start_with_mode(
     }
 
     hvlogf(format_args!(
-        "hv: vm{} placement: mode={:?} placement={:?} slot={} kind={} stack_mib={}",
+        "hv: vm{} lane: mode={:?} role={} placement={:?} slot={} kind={} stack_mib={}",
         vm_id,
         boot_mode,
+        profile.role_name(),
         profile.placement,
         target.slot,
         target.core_kind_name(),

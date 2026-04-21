@@ -10,11 +10,20 @@ const VM_RESERVED_FIRST_SLOT: u32 = 2;
 static GUEST_WORK_RR: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct GuestWorkProfile {
+pub enum VmLaneRole {
+    VmHull,
+    TokioBlocking,
+    Worker,
+    Service,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct VmLaneProfile {
+    pub role: VmLaneRole,
     pub placement: SpawnPlacement,
 }
 
-impl GuestWorkProfile {
+impl VmLaneProfile {
     /// Default placement contract for TRUEOS VM hull execution.
     ///
     /// Keep guest hulls on HV-reserved VM lanes only:
@@ -26,19 +35,52 @@ impl GuestWorkProfile {
     /// scheduling must preserve as we scale past the current singleton path.
     pub const fn vm_default() -> Self {
         Self {
+            role: VmLaneRole::VmHull,
             placement: SpawnPlacement::ReservedVmLane,
+        }
+    }
+
+    /// Default placement for synchronous offload work that should stay off the
+    /// BSP and AP1 service lane while still using disposable executor carriers.
+    pub const fn tokio_blocking_default() -> Self {
+        Self {
+            role: VmLaneRole::TokioBlocking,
+            placement: SpawnPlacement::Worker,
+        }
+    }
+
+    pub const fn worker_default() -> Self {
+        Self {
+            role: VmLaneRole::Worker,
+            placement: SpawnPlacement::Worker,
+        }
+    }
+
+    pub const fn service_default() -> Self {
+        Self {
+            role: VmLaneRole::Service,
+            placement: SpawnPlacement::Ap1,
+        }
+    }
+
+    pub const fn role_name(self) -> &'static str {
+        match self.role {
+            VmLaneRole::VmHull => "vm-hull",
+            VmLaneRole::TokioBlocking => "tokio-blocking",
+            VmLaneRole::Worker => "worker",
+            VmLaneRole::Service => "service",
         }
     }
 }
 
 #[derive(Clone)]
-pub struct GuestWorkTarget {
+pub struct VmLaneTarget {
     pub slot: u32,
     pub core_kind: u8,
     pub spawner: SendSpawner,
 }
 
-impl GuestWorkTarget {
+impl VmLaneTarget {
     pub fn core_kind_name(&self) -> &'static str {
         match self.core_kind {
             trueos_qjs::workers::CORE_KIND_PERF => "perf",
@@ -48,7 +90,10 @@ impl GuestWorkTarget {
     }
 }
 
-pub fn pick_guest_work_target(profile: GuestWorkProfile) -> Option<GuestWorkTarget> {
+pub type GuestWorkProfile = VmLaneProfile;
+pub type GuestWorkTarget = VmLaneTarget;
+
+pub fn pick_vm_lane_target(profile: VmLaneProfile) -> Option<VmLaneTarget> {
     match profile.placement {
         SpawnPlacement::ReservedVmLane => pick_reserved_vm_lane(),
         SpawnPlacement::Worker => pick_background_worker(),
@@ -57,23 +102,27 @@ pub fn pick_guest_work_target(profile: GuestWorkProfile) -> Option<GuestWorkTarg
     }
 }
 
-fn pick_ap1_lane() -> Option<GuestWorkTarget> {
+pub fn pick_guest_work_target(profile: GuestWorkProfile) -> Option<GuestWorkTarget> {
+    pick_vm_lane_target(profile)
+}
+
+fn pick_ap1_lane() -> Option<VmLaneTarget> {
     let profile = crate::cpu::CpuProfile::for_slot(1)?;
     let spawner = trueos_qjs::workers::spawner_for_slot(profile.slot())?;
-    Some(GuestWorkTarget {
+    Some(VmLaneTarget {
         slot: profile.slot(),
         core_kind: profile.core_kind(),
         spawner,
     })
 }
 
-fn pick_background_worker() -> Option<GuestWorkTarget> {
+fn pick_background_worker() -> Option<VmLaneTarget> {
     let slots = trueos_qjs::workers::background_worker_slots();
     if slots.is_empty() {
         return None;
     }
 
-    let mut pool: Vec<GuestWorkTarget> = Vec::new();
+    let mut pool: Vec<VmLaneTarget> = Vec::new();
     for slot in slots {
         let Some(spawner) = trueos_qjs::workers::spawner_for_slot(slot) else {
             continue;
@@ -82,7 +131,7 @@ fn pick_background_worker() -> Option<GuestWorkTarget> {
         let core_kind = profile
             .map(|profile| profile.core_kind())
             .unwrap_or(trueos_qjs::workers::CORE_KIND_UNKNOWN);
-        pool.push(GuestWorkTarget {
+        pool.push(VmLaneTarget {
             slot,
             core_kind,
             spawner,
@@ -92,14 +141,14 @@ fn pick_background_worker() -> Option<GuestWorkTarget> {
     pick_round_robin(&pool)
 }
 
-fn pick_reserved_vm_lane() -> Option<GuestWorkTarget> {
+fn pick_reserved_vm_lane() -> Option<VmLaneTarget> {
     let slots = trueos_qjs::workers::background_worker_slots();
     if slots.is_empty() {
         return None;
     }
 
-    let mut perf: Vec<GuestWorkTarget> = Vec::new();
-    let mut fallback: Vec<GuestWorkTarget> = Vec::new();
+    let mut perf: Vec<VmLaneTarget> = Vec::new();
+    let mut fallback: Vec<VmLaneTarget> = Vec::new();
 
     for slot in slots {
         // Slot 0 is BSP/local and slot 1 is the first AP service lane.
@@ -114,7 +163,7 @@ fn pick_reserved_vm_lane() -> Option<GuestWorkTarget> {
         let core_kind = profile
             .map(|profile| profile.core_kind())
             .unwrap_or(trueos_qjs::workers::CORE_KIND_UNKNOWN);
-        let target = GuestWorkTarget {
+        let target = VmLaneTarget {
             slot,
             core_kind,
             spawner,
@@ -133,7 +182,7 @@ fn pick_reserved_vm_lane() -> Option<GuestWorkTarget> {
     }
 }
 
-fn pick_round_robin(pool: &[GuestWorkTarget]) -> Option<GuestWorkTarget> {
+fn pick_round_robin(pool: &[VmLaneTarget]) -> Option<VmLaneTarget> {
     if pool.is_empty() {
         return None;
     }
