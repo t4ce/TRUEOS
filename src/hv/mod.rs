@@ -29,7 +29,7 @@ use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
 use crate::shell2::{ShellBackend2, ShellIo2};
 
-use guest_work::{VmLaneProfile, pick_vm_lane_target};
+use guest_work::{VmLaneProfile, pick_vm_hull_lane};
 use memory::*;
 use snapshot::*;
 use vmm::VmManager;
@@ -230,36 +230,42 @@ fn start_with_mode(
     let _ = spawner;
     let _ = io;
     let profile = VmLaneProfile::vm_default();
-    let Some(target) = pick_vm_lane_target(profile) else {
-        VM1_STARTING.store(false, Ordering::Release);
-        hvlogf(format_args!(
-            "hv: vm{} lane pick failed: role={} placement={:?} requires slot>=2 (prefer perf)",
-            vm_id,
-            profile.role_name(),
-            profile.placement
-        ));
-        return Err(StartError::NoVmSpawner);
+    let target = match pick_vm_hull_lane() {
+        Ok(target) => target,
+        Err(error) => {
+            VM1_STARTING.store(false, Ordering::Release);
+            hvlogf(format_args!(
+                "hv: vm{} lane pick failed: role={} placement={} reason={}",
+                vm_id,
+                profile.role_name(),
+                profile.placement_name(),
+                error.as_str()
+            ));
+            return Err(StartError::NoVmSpawner);
+        }
     };
 
     // Preserve the VM hull execution contract:
     // actual guest work must stay on HV-reserved VM lanes only, never on BSP
     // and never on the first AP service lane.
-    if profile.placement != crate::r::spawn_spec::SpawnPlacement::ReservedVmLane || target.slot < 2
-    {
+    if !profile.requires_reserved_vm_lane() || !target.supports(profile) {
         VM1_STARTING.store(false, Ordering::Release);
         hvlogf(format_args!(
-            "hv: vm{} placement rejected: placement={:?} slot={} requires ReservedVmLane on AP>2",
-            vm_id, profile.placement, target.slot
+            "hv: vm{} lane rejected: role={} placement={} slot={} requires reserved VM lane on AP>2",
+            vm_id,
+            profile.role_name(),
+            profile.placement_name(),
+            target.slot
         ));
         return Err(StartError::NoVmSpawner);
     }
 
     hvlogf(format_args!(
-        "hv: vm{} lane: mode={:?} role={} placement={:?} slot={} kind={} stack_mib={}",
+        "hv: vm{} lane: mode={:?} role={} placement={} slot={} kind={} stack_mib={}",
         vm_id,
         boot_mode,
         profile.role_name(),
-        profile.placement,
+        profile.placement_name(),
         target.slot,
         target.core_kind_name(),
         memory::active_guest_stack_mb()
