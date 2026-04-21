@@ -20,7 +20,15 @@ mod exceptions;
 mod gfx;
 mod globalog;
 mod host_api;
+#[cfg(feature = "intel-hv")]
 mod hv;
+#[cfg(not(feature = "intel-hv"))]
+#[path = "hv_disabled.rs"]
+mod hv;
+#[cfg(feature = "intel-hv")]
+pub mod hvv;
+#[cfg(not(feature = "intel-hv"))]
+#[path = "hvv_disabled.rs"]
 pub mod hvv;
 mod intel;
 mod iso9660;
