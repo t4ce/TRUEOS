@@ -6,6 +6,41 @@ use crate::util::markers::NotSendOrSync;
 use std::marker::PhantomData;
 use std::time::Duration;
 
+#[cfg(target_os = "zkvm")]
+mod zkvm_time {
+    use std::time::Duration;
+
+    unsafe extern "C" {
+        fn trueos_tokio_time_now_nanos() -> u64;
+    }
+
+    #[inline]
+    fn duration_as_nanos(duration: Duration) -> u64 {
+        u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+    }
+
+    #[inline]
+    pub(super) fn deadline_after(timeout: Duration) -> u64 {
+        now_nanos().saturating_add(duration_as_nanos(timeout))
+    }
+
+    #[inline]
+    pub(super) fn remaining_until(deadline: u64) -> Option<Duration> {
+        let now = now_nanos();
+
+        if now >= deadline {
+            None
+        } else {
+            Some(Duration::from_nanos(deadline - now))
+        }
+    }
+
+    #[inline]
+    fn now_nanos() -> u64 {
+        unsafe { trueos_tokio_time_now_nanos() }
+    }
+}
+
 /// Guard tracking that a caller has entered a blocking region.
 #[must_use]
 pub(crate) struct BlockingRegionGuard {
@@ -77,6 +112,7 @@ impl BlockingRegionGuard {
         use crate::runtime::park::CachedParkThread;
         use std::task::Context;
         use std::task::Poll::Ready;
+        #[cfg(not(target_os = "zkvm"))]
         use std::time::Instant;
 
         let mut park = CachedParkThread::new();
@@ -84,6 +120,9 @@ impl BlockingRegionGuard {
         let mut cx = Context::from_waker(&waker);
 
         pin!(f);
+        #[cfg(target_os = "zkvm")]
+        let deadline = zkvm_time::deadline_after(timeout);
+        #[cfg(not(target_os = "zkvm"))]
         let when = Instant::now() + timeout;
 
         loop {
@@ -91,6 +130,17 @@ impl BlockingRegionGuard {
                 return Ok(v);
             }
 
+            #[cfg(target_os = "zkvm")]
+            {
+                let Some(remaining) = zkvm_time::remaining_until(deadline) else {
+                    return Err(());
+                };
+
+                park.park_timeout(remaining);
+            }
+
+            #[cfg(not(target_os = "zkvm"))]
+            {
             let now = Instant::now();
 
             if now >= when {
@@ -98,6 +148,7 @@ impl BlockingRegionGuard {
             }
 
             park.park_timeout(when - now);
+            }
         }
     }
 }

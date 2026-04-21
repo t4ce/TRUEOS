@@ -161,8 +161,7 @@ pub extern "C" fn kmain() -> ! {
     if !phys::try_install_heap_arena_candidates(allocators::install_heap_arena) {
         crate::log!("heap: failed to reserve/install any heap arena\n");
     }
-    #[cfg(feature = "tokio-probe")]
-    tokio_probe::log_boot_probe();
+
 
     if crate::logflag::BOOT_INFO_LOGS
         && let Some(perf) = limine::bootloader_performance()
@@ -207,8 +206,13 @@ pub extern "C" fn kmain() -> ! {
 
     let _ = cpu::register_current_worker_spawner(spawner);
     // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
+    
+    
     tga::init_once();
     net::init();
+
+    #[cfg(feature = "tokio-probe")]
+    tokio_probe::log_boot_probe();
 
     match pci::nic_fpga_dma::init_default_once() {
         Ok(region) => {

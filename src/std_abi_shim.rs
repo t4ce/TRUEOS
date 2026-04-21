@@ -9,6 +9,23 @@ use core::alloc::Layout;
 use core::ptr;
 use core::slice;
 
+#[inline]
+fn tokio_probe_now_nanos() -> u64 {
+    let snapshot = crate::chronos::latest_snapshot();
+    // Chronos publishes snapshots on wake/interrupt boundaries. Tokio's timed
+    // waits need a live monotonic reading, so use the same underlying driver
+    // clock and clamp it against the latest published snapshot to preserve
+    // monotonicity relative to Chronos' observable state.
+    let live_ticks = embassy_time_driver::now();
+    let ticks = if snapshot.seq != 0 || crate::chronos::is_awake() {
+        live_ticks.max(snapshot.mono_ticks)
+    } else {
+        live_ticks
+    };
+    let hz = embassy_time_driver::TICK_HZ.max(1) as u128;
+    ((ticks as u128) * 1_000_000_000u128 / hz).min(u64::MAX as u128) as u64
+}
+
 fn uart_write(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
@@ -147,6 +164,11 @@ pub unsafe extern "C" fn sys_log(msg_ptr: *const u8, len: usize) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_cycle_count() -> usize {
     0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_tokio_time_now_nanos() -> u64 {
+    tokio_probe_now_nanos()
 }
 
 #[unsafe(no_mangle)]

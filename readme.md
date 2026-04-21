@@ -48,7 +48,8 @@ sudo systemctl restart nxserver
 # Current host layout:
 # - br0 is the LAN-facing bridge and owns the host IPs.
 # - enp5s0 is the physical uplink enslaved into br0.
-# - tap0 is the VM TAP bridged into br0 and should not be used for host allow rules.
+# - QEMU attaches to br0 via qemu-bridge-helper.
+# - legacy tap0 setups should be removed or left inactive.
 #
 # Current NoMachine config/listener:
 # - /usr/NX/etc/server.cfg -> Port 4000
@@ -163,12 +164,9 @@ sudo ip link set dev NIC address 5c:60:ba:b5:58:0f
 ## LAN bridge for QEMU (rerunnable)
 sudo nmcli con up br0-enp5s0
 sudo nmcli con up br0
-sudo ip link set tap0 master br0
-sudo ip link set tap0 up
 UPLINK=enp5s0
 WIRED_CON="Kabelgebundene Verbindung 1"
 BR=br0
-TAP=tap0
 SLAVE_CON="$BR-$UPLINK"   # -> br0-enp5s0
 nmcli -t -f NAME con show | grep -Fxq "$BR" \
   || sudo nmcli con add type bridge ifname "$BR" con-name "$BR" ipv4.method auto ipv6.method ignore
@@ -180,19 +178,31 @@ sudo nmcli con down "$WIRED_CON" 2>/dev/null || true
 sudo nmcli con up "$SLAVE_CON"
 sudo nmcli con up br0
 
-# persist TAP across reboot (one-time setup)
-echo tun | sudo tee /etc/modules-load.d/tun.conf
-if ! nmcli -t -f NAME con show | grep -Fxq "tap0"; then
-  sudo nmcli con add type tun ifname tap0 con-name tap0 mode tap \
-    owner "$(id -u)" group "$(id -g)" autoconnect yes \
-    controller br0 port-type bridge
-fi
-if ! nmcli -t -f NAME con show --active | grep -Fxq "tap0"; then
-  sudo nmcli con up tap0 || true
-fi
-nmcli -t -f NAME,TYPE,DEVICE con show | grep -E '^tap0:' || true
-nmcli -f GENERAL.STATE,GENERAL.NAME con show tap0
-bridge link show | grep -E "tap0|br0" || true
+# one-time qemu-bridge-helper setup for unprivileged `make run`
+BR=br0
+HELPER=/usr/lib/qemu/qemu-bridge-helper
+test -x "$HELPER" || HELPER=/usr/libexec/qemu-bridge-helper
+sudo install -d -m 0755 /etc/qemu
+printf 'allow %s\n' "$BR" | sudo tee /etc/qemu/bridge.conf
+sudo chown root:root /etc/qemu/bridge.conf "$HELPER"
+sudo chmod 0644 /etc/qemu/bridge.conf
+sudo chmod u+s "$HELPER"
+cat /etc/qemu/bridge.conf
+
+# optional cleanup if you previously used the fixed tap0 setup
+sudo nmcli con down tap0 2>/dev/null || true
+sudo nmcli con delete tap0 2>/dev/null || true
+sudo ip link del tap0 2>/dev/null || true
+nmcli -t -f NAME,TYPE,DEVICE con show | grep -E '^br0:' || true
+ip -br link show "$BR"
+
+# if `ip -br link show "$BR"` reports `DOWN` / `NO-CARRIER`, the uplink is
+# not attached to the bridge yet
+nmcli -t -f NAME con show | grep -Fxq "$SLAVE_CON" \
+  || sudo nmcli con add type bridge-slave ifname "$UPLINK" con-name "$SLAVE_CON" master "$BR"
+sudo nmcli con up "$SLAVE_CON"
+sudo nmcli con up "$BR"
+bridge link show | grep -E "$BR|$UPLINK" || true
 
 
 konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'
