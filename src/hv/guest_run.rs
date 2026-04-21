@@ -153,6 +153,10 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let process_args =
         blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
     let process_env = blueprint::build_process_env(state.archive.as_str());
+    crate::hv::begin_blueprint_app_window_session(
+        state.archive.as_str(),
+        console_target.clone(),
+    );
     match blueprint::invoke_host_rel(
         unpacked.as_slice(),
         module.entry,
@@ -160,8 +164,14 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         process_env,
         state.console_target,
     ) {
-        Ok(()) => log("run: guest blueprint returned"),
-        Err(err) => log(alloc::format!("run: guest REL load failed: {}", err).as_str()),
+        Ok(()) => {
+            crate::hv::finish_blueprint_app_window_session(true);
+            log("run: guest blueprint returned");
+        }
+        Err(err) => {
+            crate::hv::finish_blueprint_app_window_session(true);
+            log(alloc::format!("run: guest REL load failed: {}", err).as_str());
+        }
     }
 
     true

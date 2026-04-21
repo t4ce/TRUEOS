@@ -1,5 +1,9 @@
 cargo +nightly build --target-dir tgt/arm-exp  --no-default-features --features tokio-probe -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target .cargo/arm.json
-   Compiling TRUEOS v0.0.2 (/home/t4ce/REPOS/TRUEOS)
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_init has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read_byte has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write_byte has no kernel export and will stay unresolved
 warning: unused imports: `Err`, `Ok`, and `self`
  --> vendor/kurbo-0.11.3/src/stroke.rs:8:28
   |
@@ -222,131 +226,6 @@ warning: unused import: `AsciiStack`
 warning: `usvg` (lib) generated 19 warnings (run `cargo fix --lib -p usvg` to apply 15 suggestions)
 warning: `trueos-weather` (lib) generated 1 warning (run `cargo fix --lib -p trueos-weather` to apply 1 suggestion)
 warning: `trueos-math` (lib) generated 3 warnings (run `cargo fix --lib -p trueos-math` to apply 2 suggestions)
-warning: unused import: `io`
- --> vendor/png-0.18.1/src/common.rs:6:47
-  |
-6 | use std::{borrow::Cow, convert::TryFrom, fmt, io};
-  |                                               ^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
-
-warning: unused import: `chunk`
-   --> vendor/png-0.18.1/src/text_metadata.rs:104:13
-    |
-104 | use crate::{chunk, DecodingError};
-    |             ^^^^^
-
-warning: unused import: `std::convert::TryFrom`
-   --> vendor/png-0.18.1/src/text_metadata.rs:106:5
-    |
-106 | use std::convert::TryFrom;
-    |     ^^^^^^^^^^^^^^^^^^^^^
-
-warning: unused import: `alloc::string::ToString`
- --> vendor/png-0.18.1/src/decoder/stream.rs:1:5
-  |
-1 | use alloc::string::ToString;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: method `into_raw` is never used
-   --> vendor/png-0.18.1/src/common.rs:547:19
-    |
-546 | impl SrgbRenderingIntent {
-    | ------------------------ method in this implementation
-547 |     pub(crate) fn into_raw(self) -> u8 {
-    |                   ^^^^^^^^
-    |
-    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: method `set_source_srgb` is never used
-   --> vendor/png-0.18.1/src/common.rs:842:19
-    |
-744 | impl Info<'_> {
-    | ------------- method in this implementation
-...
-842 |     pub(crate) fn set_source_srgb(&mut self, rendering_intent: SrgbRend...
-    |                   ^^^^^^^^^^^^^^^
-
-warning: method `into_usize` is never used
-   --> vendor/png-0.18.1/src/common.rs:861:19
-    |
-848 | impl BytesPerPixel {
-    | ------------------ method in this implementation
-...
-861 |     pub(crate) fn into_usize(self) -> usize {
-    |                   ^^^^^^^^^^
-
-warning: associated function `from_simple` is never used
-  --> vendor/png-0.18.1/src/filter/mod.rs:50:19
-   |
-49 | impl Filter {
-   | ----------- associated function in this implementation
-50 |     pub(crate) fn from_simple(compression: Compression) -> Self {
-   |                   ^^^^^^^^^^^
-
-warning: associated function `from_method` is never used
-  --> vendor/png-0.18.1/src/filter/mod.rs:90:12
-   |
-78 | impl RowFilter {
-   | -------------- associated function in this implementation
-...
-90 |     pub fn from_method(strat: Filter) -> Option<Self> {
-   |            ^^^^^^^^^^^
-
-warning: function `filter_internal` is never used
-   --> vendor/png-0.18.1/src/filter/mod.rs:361:4
-    |
-361 | fn filter_internal(
-    |    ^^^^^^^^^^^^^^^
-
-warning: function `adaptive_filter` is never used
-   --> vendor/png-0.18.1/src/filter/mod.rs:500:4
-    |
-500 | fn adaptive_filter(
-    |    ^^^^^^^^^^^^^^^
-
-warning: function `filter` is never used
-   --> vendor/png-0.18.1/src/filter/mod.rs:530:15
-    |
-530 | pub(crate) fn filter(
-    |               ^^^^^^
-
-warning: function `ilog2i` is never used
-   --> vendor/png-0.18.1/src/filter/mod.rs:552:4
-    |
-552 | fn ilog2i(i: u32) -> u32 {
-    |    ^^^^^^
-
-warning: function `entropy` is never used
-   --> vendor/png-0.18.1/src/filter/mod.rs:557:4
-    |
-557 | fn entropy(buf: &[u8]) -> u64 {
-    |    ^^^^^^^
-
-warning: function `sum_buffer` is never used
-   --> vendor/png-0.18.1/src/filter/mod.rs:608:4
-    |
-608 | fn sum_buffer(buf: &[u8]) -> u64 {
-    |    ^^^^^^^^^^
-
-warning: function `filter_paeth_stbi` is never used
-  --> vendor/png-0.18.1/src/filter/paeth.rs:28:15
-   |
-28 | pub(super) fn filter_paeth_stbi(a: i16, b: i16, c: i16) -> u8 {
-   |               ^^^^^^^^^^^^^^^^^
-
-warning: function `filter_paeth_fpnge` is never used
-  --> vendor/png-0.18.1/src/filter/paeth.rs:45:15
-   |
-45 | pub(super) fn filter_paeth_fpnge(a: u8, b: u8, c: u8) -> u8 {
-   |               ^^^^^^^^^^^^^^^^^^
-
-warning: trait `WriteBytesExt` is never used
-  --> vendor/png-0.18.1/src/traits.rs:34:11
-   |
-34 | pub trait WriteBytesExt<T>: io::Write {
-   |           ^^^^^^^^^^^^^
-
 warning: variable does not need to be mutable
    --> crates/trueos-qjs/src/async_ops.rs:609:18
     |
@@ -581,8 +460,6 @@ warning: `extern` fn uses type `fn(u32, i32, f32)`, which is not FFI-safe
     = help: consider using an `extern fn(...) -> ...` function pointer instead
     = note: this function pointer has Rust-specific calling convention
 
-warning: `png` (lib) generated 18 warnings (run `cargo fix --lib -p png` to apply 2 suggestions)
-warning: `trueos-qjs` (lib) generated 36 warnings (run `cargo fix --lib -p trueos-qjs` to apply 14 suggestions)
 warning: methods `descriptor` and `configuration_descriptors` are never used
    --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/hub/device.rs:228:12
     |
@@ -665,6 +542,134 @@ warning: feature `iterator_try_collect` is declared but not used
   |
   = note: `#[warn(unused_features)]` (part of `#[warn(unused)]`) on by default
 
+warning: unused import: `io`
+ --> vendor/png-0.18.1/src/common.rs:6:47
+  |
+6 | use std::{borrow::Cow, convert::TryFrom, fmt, io};
+  |                                               ^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `chunk`
+   --> vendor/png-0.18.1/src/text_metadata.rs:104:13
+    |
+104 | use crate::{chunk, DecodingError};
+    |             ^^^^^
+
+warning: unused import: `std::convert::TryFrom`
+   --> vendor/png-0.18.1/src/text_metadata.rs:106:5
+    |
+106 | use std::convert::TryFrom;
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::string::ToString`
+ --> vendor/png-0.18.1/src/decoder/stream.rs:1:5
+  |
+1 | use alloc::string::ToString;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `into_raw` is never used
+   --> vendor/png-0.18.1/src/common.rs:547:19
+    |
+546 | impl SrgbRenderingIntent {
+    | ------------------------ method in this implementation
+547 |     pub(crate) fn into_raw(self) -> u8 {
+    |                   ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `set_source_srgb` is never used
+   --> vendor/png-0.18.1/src/common.rs:842:19
+    |
+744 | impl Info<'_> {
+    | ------------- method in this implementation
+...
+842 |     pub(crate) fn set_source_srgb(&mut self, rendering_intent: SrgbRend...
+    |                   ^^^^^^^^^^^^^^^
+
+warning: method `into_usize` is never used
+   --> vendor/png-0.18.1/src/common.rs:861:19
+    |
+848 | impl BytesPerPixel {
+    | ------------------ method in this implementation
+...
+861 |     pub(crate) fn into_usize(self) -> usize {
+    |                   ^^^^^^^^^^
+
+warning: associated function `from_simple` is never used
+  --> vendor/png-0.18.1/src/filter/mod.rs:50:19
+   |
+49 | impl Filter {
+   | ----------- associated function in this implementation
+50 |     pub(crate) fn from_simple(compression: Compression) -> Self {
+   |                   ^^^^^^^^^^^
+
+warning: associated function `from_method` is never used
+  --> vendor/png-0.18.1/src/filter/mod.rs:90:12
+   |
+78 | impl RowFilter {
+   | -------------- associated function in this implementation
+...
+90 |     pub fn from_method(strat: Filter) -> Option<Self> {
+   |            ^^^^^^^^^^^
+
+warning: function `filter_internal` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:361:4
+    |
+361 | fn filter_internal(
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `adaptive_filter` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:500:4
+    |
+500 | fn adaptive_filter(
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `filter` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:530:15
+    |
+530 | pub(crate) fn filter(
+    |               ^^^^^^
+
+warning: function `ilog2i` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:552:4
+    |
+552 | fn ilog2i(i: u32) -> u32 {
+    |    ^^^^^^
+
+warning: function `entropy` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:557:4
+    |
+557 | fn entropy(buf: &[u8]) -> u64 {
+    |    ^^^^^^^
+
+warning: function `sum_buffer` is never used
+   --> vendor/png-0.18.1/src/filter/mod.rs:608:4
+    |
+608 | fn sum_buffer(buf: &[u8]) -> u64 {
+    |    ^^^^^^^^^^
+
+warning: function `filter_paeth_stbi` is never used
+  --> vendor/png-0.18.1/src/filter/paeth.rs:28:15
+   |
+28 | pub(super) fn filter_paeth_stbi(a: i16, b: i16, c: i16) -> u8 {
+   |               ^^^^^^^^^^^^^^^^^
+
+warning: function `filter_paeth_fpnge` is never used
+  --> vendor/png-0.18.1/src/filter/paeth.rs:45:15
+   |
+45 | pub(super) fn filter_paeth_fpnge(a: u8, b: u8, c: u8) -> u8 {
+   |               ^^^^^^^^^^^^^^^^^^
+
+warning: trait `WriteBytesExt` is never used
+  --> vendor/png-0.18.1/src/traits.rs:34:11
+   |
+34 | pub trait WriteBytesExt<T>: io::Write {
+   |           ^^^^^^^^^^^^^
+
+warning: `trueos-qjs` (lib) generated 36 warnings (run `cargo fix --lib -p trueos-qjs` to apply 14 suggestions)
+warning: `crab-usb` (lib) generated 8 warnings
+warning: `png` (lib) generated 18 warnings (run `cargo fix --lib -p png` to apply 2 suggestions)
 warning: unused variable: `m`
    --> vendor/tokio-1.52.1/src/runtime/park.rs:171:13
     |
@@ -685,7 +690,6 @@ note: the lint level is defined here
  9 |     missing_docs,
    |     ^^^^^^^^^^^^
 
-warning: `crab-usb` (lib) generated 8 warnings
 warning: `tokio` (lib) generated 2 warnings (run `cargo fix --lib -p tokio` to apply 1 suggestion)
 warning: constant `TOKEN_THRESHOLD` is never used
   --> vendor/localcoder/src/compact.rs:13:7
@@ -844,11 +848,71 @@ warning: multiple associated items are never used
     |            ^^^^^^^
 
 warning: `localcoder` (lib) generated 18 warnings
-warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_init has no kernel export and will stay unresolved
-warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read has no kernel export and will stay unresolved
-warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read_byte has no kernel export and will stay unresolved
-warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write has no kernel export and will stay unresolved
-warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write_byte has no kernel export and will stay unresolved
+   Compiling TRUEOS v0.0.2 (/home/t4ce/REPOS/TRUEOS)
+error[E0432]: unresolved import `core::arch::x86_64`
+ --> src/power/mod.rs:2:17
+  |
+2 | use core::arch::x86_64::__cpuid;
+  |                 ^^^^^^ could not find `x86_64` in `arch`
+
+error[E0432]: unresolved import `core::arch::x86_64`
+ --> src/rapl.rs:3:17
+  |
+3 | use core::arch::x86_64::__cpuid;
+  |                 ^^^^^^ could not find `x86_64` in `arch`
+
+error[E0433]: cannot find `x86_64` in `arch`
+   --> src/pci/nvme.rs:526:30
+    |
+526 |         unsafe { core::arch::x86_64::_mm_mfence() };
+    |                              ^^^^^^ could not find `x86_64` in `arch`
+
+error[E0433]: cannot find `instructions` in `x86_64`
+   --> src/power/mod.rs:139:24
+    |
+139 |             if x86_64::instructions::interrupts::are_enabled() {
+    |                        ^^^^^^^^^^^^ could not find `instructions` in `x86_64`
+    |
+note: found an item that was configured out
+   --> /home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/x86_64-0.15.4/src/lib.rs:15:9
+    |
+ 15 | pub mod instructions;
+    |         ^^^^^^^^^^^^
+    |
+   ::: /home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/x86_64-0.15.4/src/instructions/mod.rs:1:38
+    |
+  1 | #![cfg(all(feature = "instructions", target_arch = "x86_64"))]
+    |                                      ---------------------- the item is gated behind the `x86_64` feature
+
+error[E0433]: cannot find `instructions` in `x86_64`
+   --> src/power/mod.rs:140:25
+    |
+140 |                 x86_64::instructions::hlt()
+    |                         ^^^^^^^^^^^^ could not find `instructions` in `x86_64`
+    |
+note: found an item that was configured out
+   --> /home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/x86_64-0.15.4/src/lib.rs:15:9
+    |
+ 15 | pub mod instructions;
+    |         ^^^^^^^^^^^^
+    |
+   ::: /home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/x86_64-0.15.4/src/instructions/mod.rs:1:38
+    |
+  1 | #![cfg(all(feature = "instructions", target_arch = "x86_64"))]
+    |                                      ---------------------- the item is gated behind the `x86_64` feature
+
+error[E0425]: cannot find function `register_blueprint_app_window` in module `crate::hv`
+    --> src/r/../ui2/mod.rs:1188:20
+     |
+1188 |         crate::hv::register_blueprint_app_window(id, "plain", title);
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `crate::hv`
+
+error[E0425]: cannot find function `register_blueprint_app_window` in module `crate::hv`
+    --> src/r/../ui2/mod.rs:1270:20
+     |
+1270 |         crate::hv::register_blueprint_app_window(id, "surface", title);
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `crate::hv`
+
 warning: unused import: `AtomicU64`
  --> src/logflag.rs:1:49
   |
@@ -865,6 +929,22 @@ warning: value assigned to `last_progress` is never read
     |
     = help: maybe it is overwritten before being read?
     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+error[E0609]: no field `lapic_id` on type `&MpInfo`
+   --> src/cpu.rs:246:46
+    |
+246 |     let slot = percpu::slot_for_lapic_id(cpu.lapic_id);
+    |                                              ^^^^^^^^ unknown field
+    |
+    = note: available fields are: `processor_id`, `mpidr`
+
+error[E0609]: no field `lapic_id` on type `&MpInfo`
+   --> src/cpu.rs:247:25
+    |
+247 |     percpu::init_ap(cpu.lapic_id, slot as u32);
+    |                         ^^^^^^^^ unknown field
+    |
+    = note: available fields are: `processor_id`, `mpidr`
 
 error[E0599]: no method named `flush` found for struct `MapperFlush<S>` in the current scope
    --> src/pci/mmio.rs:143:36
@@ -885,6 +965,53 @@ error[E0599]: no associated function or constant named `read` found for struct `
 165 |     let (frame, _) = Cr3::read();
     |                           ^^^^ associated function or constant not found in `Cr3`
 
+error[E0599]: no method named `write` found for struct `Msr` in the current scope
+   --> src/percpu.rs:164:22
+    |
+164 |     unsafe { gs_base.write(ptr as u64) };
+    |                      ^^^^^ method not found in `Msr`
+
+error[E0599]: no associated function or constant named `new` found for struct `CpuId<R>` in the current scope
+   --> src/percpu.rs:218:35
+    |
+218 |     let cpuid = raw_cpuid::CpuId::new();
+    |                                   ^^^ associated function or constant not found in `CpuId<_>`
+    |
+note: if you're trying to build a new `CpuId<_>` consider using one of the following associated functions:
+      CpuId::<R>::with_cpuid_reader
+      CpuId::<R>::with_cpuid_fn
+   --> /home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/raw-cpuid-11.6.0/src/lib.rs:338:5
+    |
+338 |     pub fn with_cpuid_reader(cpuid_fn: R) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+354 |     pub fn with_cpuid_fn(cpuid_fn: R) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `read` found for struct `Msr` in the current scope
+   --> src/power/mod.rs:153:57
+    |
+153 |     let value = unsafe { Msr::new(IA32_MSR_PERF_STATUS).read() };
+    |                                                         ^^^^ method not found in `Msr`
+
+error[E0599]: no method named `write` found for struct `Msr` in the current scope
+   --> src/power/mod.rs:168:42
+    |
+168 |     unsafe { Msr::new(IA32_MSR_PERF_CTL).write(value) };
+    |                                          ^^^^^ method not found in `Msr`
+
+error[E0599]: no method named `read` found for struct `Msr` in the current scope
+   --> src/power/mod.rs:209:63
+    |
+209 |         let value = unsafe { Msr::new(IA32_MSR_PLATFORM_INFO).read() };
+    |                                                               ^^^^ method not found in `Msr`
+
+error[E0599]: no method named `read` found for struct `Msr` in the current scope
+   --> src/power/mod.rs:221:65
+    |
+221 |         let caps = unsafe { Msr::new(IA32_MSR_HWP_CAPABILITIES).read() };
+    |                                                                 ^^^^ method not found in `Msr`
+
 warning: unreachable expression
   --> src/r/time.rs:91:5
    |
@@ -901,6 +1028,69 @@ error[E0425]: cannot find function `detect_tsc_hz_from_cpuid` in this scope
    |
 91 |     detect_tsc_hz_from_cpuid()
    |     ^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0599]: no method named `read` found for struct `Msr` in the current scope
+   --> src/rapl.rs:194:60
+    |
+194 |     let units_raw = unsafe { Msr::new(MSR_RAPL_POWER_UNIT).read() };
+    |                                                            ^^^^ method not found in `Msr`
+
+error[E0599]: no method named `read` found for struct `Msr` in the current scope
+   --> src/rapl.rs:304:38
+    |
+304 |     let raw = unsafe { Msr::new(msr).read() } as u32;
+    |                                      ^^^^ method not found in `Msr`
+
+error[E0599]: no associated function or constant named `new` found for struct `CpuId<R>` in the current scope
+   --> src/turbo.rs:65:24
+    |
+ 65 |     let cpuid = CpuId::new();
+    |                        ^^^ associated function or constant not found in `CpuId<_>`
+    |
+note: if you're trying to build a new `CpuId<_>` consider using one of the following associated functions:
+      CpuId::<R>::with_cpuid_reader
+      CpuId::<R>::with_cpuid_fn
+   --> /home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/raw-cpuid-11.6.0/src/lib.rs:338:5
+    |
+338 |     pub fn with_cpuid_reader(cpuid_fn: R) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+354 |     pub fn with_cpuid_fn(cpuid_fn: R) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `read` found for struct `Msr` in the current scope
+  --> src/turbo.rs:92:57
+   |
+92 |     let value = unsafe { Msr::new(MSR_IA32_MISC_ENABLE).read() };
+   |                                                         ^^^^ method not found in `Msr`
+
+error[E0599]: no method named `read` found for struct `Msr` in the current scope
+   --> src/turbo.rs:122:28
+    |
+122 |     let cur = unsafe { msr.read() };
+    |                            ^^^^ method not found in `Msr`
+
+error[E0599]: no method named `write` found for struct `Msr` in the current scope
+   --> src/turbo.rs:128:18
+    |
+128 |     unsafe { msr.write(want) };
+    |                  ^^^^^ method not found in `Msr`
+
+error[E0609]: no field `lapic_id` on type `&&MpInfo`
+   --> src/main.rs:187:76
+    |
+187 | ...pus().iter().map(|c| c.lapic_id).collect();
+    |                           ^^^^^^^^ unknown field
+    |
+    = note: available fields are: `processor_id`, `mpidr`
+
+error[E0609]: no field `lapic_id` on type `&&&MpInfo`
+   --> src/main.rs:247:23
+    |
+247 |         .filter(|c| c.lapic_id != percpu::this_cpu().lapic_id())
+    |                       ^^^^^^^^ unknown field
+    |
+    = note: available fields are: `processor_id`, `mpidr`
 
 warning: unused import: `core::fmt::Write`
  --> src/r/../ui2/mod.rs:5:5
@@ -938,6 +1128,26 @@ warning: unused variable: `len`
     |
 214 |     fn clflush_range(ptr: *const u8, len: usize) {
     |                                      ^^^ help: if this is intentional, prefix it with an underscore: `_len`
+
+warning: unused variable: `ptr`
+  --> src/pci/nvme.rs:60:25
+   |
+60 | fn nvme_dma_cache_flush(ptr: *const u8, len: usize) {
+   |                         ^^^ help: if this is intentional, prefix it with an underscore: `_ptr`
+
+warning: unused variable: `len`
+  --> src/pci/nvme.rs:60:41
+   |
+60 | fn nvme_dma_cache_flush(ptr: *const u8, len: usize) {
+   |                                         ^^^ help: if this is intentional, prefix it with an underscore: `_len`
+
+warning: value assigned to `rekick_attempted` is never read
+   --> src/pci/nvme.rs:835:21
+    |
+835 |                     rekick_attempted = true;
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
 
 warning: unreachable pattern
    --> src/r/net/cli/ws.rs:301:21
@@ -1007,13 +1217,13 @@ warning: unused variable: `size`
 244 | fn crabusb_dma_cache_flush(addr: NonNull<u8>, size: usize) {
     |                                               ^^^^ help: if this is intentional, prefix it with an underscore: `_size`
 
-Some errors have detailed explanations: E0425, E0599.
+Some errors have detailed explanations: E0425, E0432, E0433, E0599, E0609.
 For more information about an error, try `rustc --explain E0425`.
-warning: `TRUEOS` (bin "TRUEOS") generated 13 warnings
+warning: `TRUEOS` (bin "TRUEOS") generated 16 warnings
 warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_init has no kernel export and will stay unresolved
 warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read has no kernel export and will stay unresolved
 warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read_byte has no kernel export and will stay unresolved
 warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write has no kernel export and will stay unresolved
 warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write_byte has no kernel export and will stay unresolved
-error: could not compile `TRUEOS` (bin "TRUEOS") due to 3 previous errors; 13 warnings emitted
+error: could not compile `TRUEOS` (bin "TRUEOS") due to 26 previous errors; 16 warnings emitted
 make: *** [arm_Makefile:17: arm_kernel] Fehler 101

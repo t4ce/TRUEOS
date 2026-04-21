@@ -54,6 +54,13 @@ macro_rules! dprintln {
     };
 }
 
+macro_rules! faultln {
+    ($($tt:tt)*) => {
+        dprintln!($($tt)*);
+        crate::hv::log_active_blueprint_console_line(format_args!($($tt)*));
+    };
+}
+
 pub(crate) fn init() {
     load_this_cpu();
 }
@@ -82,19 +89,19 @@ fn halt_loop() -> ! {
 }
 
 fn log_fault_frame(label: &str, stack_frame: &InterruptStackFrame) {
-    dprintln!("\n=== {} ===", label);
-    dprintln!(
+    faultln!("\n=== {} ===", label);
+    faultln!(
         "RIP={:#x} CS={:#x}",
         stack_frame.instruction_pointer.as_u64(),
         stack_frame.code_segment.0
     );
-    dprintln!(
+    faultln!(
         "RSP={:#x} SS={:#x}",
         stack_frame.stack_pointer.as_u64(),
         stack_frame.stack_segment.0
     );
-    dprintln!("RFLAGS={:#x}", stack_frame.cpu_flags.bits());
-    dprintln!(
+    faultln!("RFLAGS={:#x}", stack_frame.cpu_flags.bits());
+    faultln!(
         "CPU: lapic={} cpu={}",
         crate::percpu::this_cpu().lapic_id(),
         crate::percpu::this_cpu().cpu_index()
