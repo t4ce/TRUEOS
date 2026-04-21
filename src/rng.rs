@@ -1,19 +1,11 @@
-#[cfg(target_arch = "x86_64")]
-use rdrand::{RdRand, RdSeed};
-
-#[cfg(target_arch = "x86_64")]
 use rand_chacha::ChaCha20Rng;
-
-#[cfg(target_arch = "x86_64")]
 use rand_core::{RngCore, SeedableRng};
-
-#[cfg(target_arch = "x86_64")]
 use spin::Mutex;
-
-#[cfg(target_arch = "x86_64")]
 use zeroize::Zeroize;
 
 #[cfg(target_arch = "x86_64")]
+use rdrand::{RdRand, RdSeed};
+
 static CSPRNG: Mutex<Option<ChaCha20Rng>> = Mutex::new(None);
 
 #[cfg(target_arch = "x86_64")]
@@ -28,6 +20,16 @@ pub fn rdseed_u64() -> Option<u64> {
     rng.try_next_u64().ok()
 }
 
+#[cfg(not(target_arch = "x86_64"))]
+pub fn rdrand_u64() -> Option<u64> {
+    None
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn rdseed_u64() -> Option<u64> {
+    None
+}
+
 #[cfg(target_arch = "x86_64")]
 fn hw_seed_32() -> Option<[u8; 32]> {
     let mut seed = [0u8; 32];
@@ -38,7 +40,11 @@ fn hw_seed_32() -> Option<[u8; 32]> {
     Some(seed)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86_64"))]
+fn hw_seed_32() -> Option<[u8; 32]> {
+    None
+}
+
 fn virtio_seed_32() -> Option<[u8; 32]> {
     let mut seed = [0u8; 32];
     match crate::pci::vrng::try_fill_bytes(&mut seed) {
@@ -47,12 +53,10 @@ fn virtio_seed_32() -> Option<[u8; 32]> {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 fn seed_32() -> Option<[u8; 32]> {
     hw_seed_32().or_else(virtio_seed_32)
 }
 
-#[cfg(target_arch = "x86_64")]
 fn ensure_csprng() -> bool {
     // Fast path: already initialized.
     {
@@ -81,15 +85,13 @@ fn ensure_csprng() -> bool {
 /// Initialize the kernel CSPRNG state.
 ///
 /// Safe to call multiple times; later calls are no-ops after successful init.
-#[cfg(target_arch = "x86_64")]
 pub fn init() -> bool {
     ensure_csprng()
 }
 
 /// Fill  with cryptographically-strong random bytes.
 ///
-/// Backed by a kernel CSPRNG (ChaCha20) seeded from RDSEED/RDRAND.
-#[cfg(target_arch = "x86_64")]
+/// Backed by a kernel CSPRNG (ChaCha20) seeded from hardware and/or virtio entropy.
 pub fn fill_bytes(dest: &mut [u8]) -> bool {
     if !ensure_csprng() {
         return false;
@@ -102,7 +104,7 @@ pub fn fill_bytes(dest: &mut [u8]) -> bool {
     true
 }
 
-#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "zkvm")))]
+#[cfg(any(target_os = "none", target_os = "zkvm"))]
 fn trueos_getrandom(dest: &mut [u8]) -> Result<(), getrandom::Error> {
     if fill_bytes(dest) {
         Ok(())
@@ -111,7 +113,7 @@ fn trueos_getrandom(dest: &mut [u8]) -> Result<(), getrandom::Error> {
     }
 }
 
-#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "zkvm")))]
+#[cfg(any(target_os = "none", target_os = "zkvm"))]
 fn trueos_getrandom_02(dest: &mut [u8]) -> Result<(), getrandom_02::Error> {
     if fill_bytes(dest) {
         Ok(())
@@ -121,7 +123,7 @@ fn trueos_getrandom_02(dest: &mut [u8]) -> Result<(), getrandom_02::Error> {
     }
 }
 
-#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "zkvm")))]
+#[cfg(any(target_os = "none", target_os = "zkvm"))]
 #[unsafe(no_mangle)]
 unsafe extern "Rust" fn __getrandom_v03_custom(
     dest: *mut u8,
@@ -134,5 +136,5 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
     trueos_getrandom(buf)
 }
 
-#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "zkvm")))]
+#[cfg(any(target_os = "none", target_os = "zkvm"))]
 getrandom_02::register_custom_getrandom!(trueos_getrandom_02);

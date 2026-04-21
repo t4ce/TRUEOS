@@ -1,6 +1,7 @@
 BUILD_MODE ?= debug
 ARM_TARGET_JSON := .cargo/arm.json
 ARM_TARGET_NAME := arm
+ARM_TARGET_DIR ?= tgt/arm-exp
 ARM_CARGO_BUILD_FLAGS ?= --no-default-features --features tokio-probe
 ARM_CARGO_GFX_FLAGS =
 
@@ -13,7 +14,7 @@ iso: arm_iso
 arm_iso: arm_kernel
 
 arm_kernel:
-	cargo +nightly build $(ARM_CARGO_GFX_FLAGS) $(ARM_CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target $(ARM_TARGET_JSON)
+	cargo +nightly build --target-dir $(ARM_TARGET_DIR) $(ARM_CARGO_GFX_FLAGS) $(ARM_CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target $(ARM_TARGET_JSON)
 
 arm_clean:
-	cargo clean --target-dir tgt
+	cargo clean --target-dir $(ARM_TARGET_DIR)
