@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 #[cfg(feature = "host-net")]
 use std::time::Duration;
 
-const DEFAULT_TIMEOUT_MS: u64 = 15_000;
+const DEFAULT_TIMEOUT_MS: u64 = 20_000;
 
 pub struct HttpResponse {
     status: u16,
