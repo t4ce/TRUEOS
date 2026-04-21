@@ -649,10 +649,6 @@ pub fn spawn_truesurfer_tab_with_html() -> Option<u32> {
     }
 }
 
-pub fn spawn_additional_truesurfers(spawner: Spawner, requested: u32) -> bool {
-    matches!(spawn_truesurfer_batch(spawner, requested), SpawnAttempt::Spawned)
-}
-
 fn spawn_truesurfer_factory(spawner: Spawner) -> SpawnAttempt {
     spawn_truesurfer_batch(spawner, truesurfer_factory_boot_count())
 }
@@ -670,11 +666,6 @@ fn spawn_ui2_hosted(spawner: Spawner) -> SpawnAttempt {
 }
 
 const UI2_DEMOS_ENABLED: bool = true;
-
-#[inline]
-fn task_gate_always() -> bool {
-    true
-}
 
 #[inline]
 fn gfx_backend_boot_gate() -> bool {
@@ -1349,7 +1340,6 @@ static TASKS: &[TaskSpec] = &[
 
 /// An offline task entry visible to the UI2 layer.
 pub struct OfflineTaskEntry {
-    pub name: &'static str,
     pub index: usize,
 }
 
@@ -1364,25 +1354,8 @@ pub fn offline_ui2_demo_tasks() -> Vec<OfflineTaskEntry> {
         }
         if spec.disabled.load(Ordering::Acquire) {
             out.push(OfflineTaskEntry {
-                name: spec.name,
                 index: i,
             });
-        }
-    }
-    out
-}
-
-/// Return all UI2 windows that were started but later hidden (X-closed).
-/// These are tasks that ran but whose window is no longer visible.
-pub fn hidden_ui2_window_names() -> Vec<&'static str> {
-    let mut out = Vec::new();
-    for spec in TASKS {
-        if !spec.name.starts_with("ui2-") {
-            continue;
-        }
-        if spec.started.load(Ordering::Acquire) && !spec.disabled.load(Ordering::Acquire) {
-            // Task is running — the UI layer will check window visibility itself.
-            out.push(spec.name);
         }
     }
     out
@@ -1419,13 +1392,6 @@ pub fn task_name_by_index(index: usize) -> Option<&'static str> {
 
 pub fn task_index_by_name(name: &str) -> Option<usize> {
     TASKS.iter().position(|spec| spec.name == name)
-}
-
-pub fn task_disabled_by_index(index: usize) -> bool {
-    TASKS
-        .get(index)
-        .map(|spec| spec.disabled.load(Ordering::Acquire))
-        .unwrap_or(false)
 }
 
 pub fn task_started_by_index(index: usize) -> bool {

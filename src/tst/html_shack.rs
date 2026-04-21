@@ -136,21 +136,6 @@ impl HtmlShack {
         Ok(self.put_ready_html(Html::new(alloc::format!("file://{}", path), html)))
     }
 
-    pub fn pop_ready_html(&mut self) -> Option<Html> {
-        self.ready_html_queue.pop_front()
-    }
-
-    pub fn queued_len(&self) -> usize {
-        self.html_request_queue.len()
-    }
-
-    pub fn ready_len(&self) -> usize {
-        self.ready_html_queue.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.html_request_queue.is_empty() && self.ready_html_queue.is_empty()
-    }
 }
 
 static HTML_SHACK: Mutex<Option<HtmlShack>> = Mutex::new(None);

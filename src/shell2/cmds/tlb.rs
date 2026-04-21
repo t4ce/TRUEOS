@@ -1777,6 +1777,7 @@ fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
         line(io, "tlb uefi: system table not found (not booted via UEFI?)");
         return;
     };
+    let limine_st = crate::limine::efi_system_table_response();
 
     let summary_cols = [
         Column {
@@ -1792,6 +1793,15 @@ fn cmd_tlb_uefi(io: &'static dyn ShellBackend2) {
     let st_revision = st.hdr.revision;
     let st_header_size = st.hdr.header_size;
     emit_table_row(io, &summary_cols, &["Signature", "EFI SYSTEM TABLE"]);
+    if let Some(resp) = limine_st {
+        let limine_ptr = alloc::format!("0x{:016X}", resp.address as u64);
+        emit_table_row(io, &summary_cols, &["Limine ST Ptr", &limine_ptr]);
+
+        if let Some(phys) = crate::limine::try_as_phys_addr(resp.address as u64) {
+            let phys_text = alloc::format!("0x{:016X}", phys);
+            emit_table_row(io, &summary_cols, &["Mapped ST Phys", &phys_text]);
+        }
+    }
     emit_table_row(io, &summary_cols, &["Revision", &alloc::format!("0x{:08X}", st_revision)]);
     emit_table_row(io, &summary_cols, &["Header Size", &alloc::format!("0x{:X}", st_header_size)]);
     emit_table_row(
