@@ -19,11 +19,14 @@ A constant influx of resources, money, and safety.
 # install
 sudo apt update && sudo apt upgrade
 apt install git gh make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential konsole
+apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 cargo install fmt cargo-outdated cargo-edit --locked
 snap install code-insiders --classic
 rustup component add clippy
 rustup toolchain install nightly --profile minimal --component rust-src,rustfmt,rust-analyzer,llvm-tools-preview
 cargo install cargo-edit --locked
+export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
+export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
 
 git config --global user.email "jonasb@post.com"
 git config --global user.name "t4ce"
