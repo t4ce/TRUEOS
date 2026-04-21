@@ -113,6 +113,11 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn trueos_hv_guest_blueprint_launch_active() -> bool {
+    crate::hv::blueprint_launch_active()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let Some(state) = crate::hv::take_blueprint_launch() else {
         return false;
@@ -131,7 +136,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         Ok(module) => module,
         Err(err) => {
             log(alloc::format!("run: guest blueprint parse failed: {}", err).as_str());
-            return true;
+            return false;
         }
     };
 
@@ -139,7 +144,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         Ok(bytes) => bytes,
         Err(err) => {
             log(alloc::format!("run: guest blueprint unpack failed: {}", err).as_str());
-            return true;
+            return false;
         }
     };
 
@@ -147,7 +152,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         || !matches!(blueprint::elf_type_name(unpacked.as_slice()), Some("REL"))
     {
         log("run: guest blueprint rejected non-REL payload");
-        return true;
+        return false;
     }
 
     let process_args =
@@ -174,5 +179,5 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         }
     }
 
-    true
+    false
 }
