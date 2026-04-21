@@ -16,6 +16,7 @@ pub(crate) enum Mp4ParseError {
     BadSampleRange,
     BadNalLengthSize,
     BadNalRange,
+    OutputTooSmall,
     EmptyAccessUnit,
 }
 
@@ -49,7 +50,7 @@ pub(crate) struct Mp4H264Summary {
 }
 
 pub(crate) struct AnnexBAccessUnit {
-    pub bytes: Vec<u8>,
+    pub bytes_written: usize,
     pub sample_nal_count: usize,
     pub has_idr: bool,
     pub idr_nal_offset: usize,
@@ -585,6 +586,23 @@ pub(crate) fn parse_h264_mp4_summary(bytes: &[u8]) -> Result<Mp4H264Summary, Mp4
     parse_h264_mp4_summary_from_bytes(bytes)
 }
 
+async fn read_source_range_exact(
+    source: &MediaSource,
+    offset: u64,
+    len: usize,
+) -> Result<Vec<u8>, Mp4ParseError> {
+    let mut out = Vec::with_capacity(len);
+    out.resize(len, 0);
+    if !source
+        .read_range_into(offset, out.as_mut_slice())
+        .await
+        .map_err(|_| Mp4ParseError::Truncated)?
+    {
+        return Err(Mp4ParseError::Truncated);
+    }
+    Ok(out)
+}
+
 pub(crate) async fn parse_h264_mp4_summary_from_source(
     source: &MediaSource,
 ) -> Result<Mp4H264Summary, Mp4ParseError> {
@@ -595,27 +613,19 @@ pub(crate) async fn parse_h264_mp4_summary_from_source(
     let total_len = source.total_len();
     let mut off = 0u64;
     while off < total_len {
-        let Some(header) = source
-            .read_range(off, 16)
+        let mut header = [0u8; 16];
+        if !source
+            .read_range_into(off, &mut header)
             .await
             .map_err(|_| Mp4ParseError::Truncated)?
-        else {
-            return Err(Mp4ParseError::Truncated);
-        };
-        if header.len() < 8 {
+        {
             return Err(Mp4ParseError::Truncated);
         }
 
-        let size32 = be_u32(header.as_slice(), 0).ok_or(Mp4ParseError::Truncated)? as u64;
+        let size32 = be_u32(&header, 0).ok_or(Mp4ParseError::Truncated)? as u64;
         let kind = header.get(4..8).ok_or(Mp4ParseError::Truncated)?;
         let (header_len, box_size) = if size32 == 1 {
-            if header.len() < 16 {
-                return Err(Mp4ParseError::Truncated);
-            }
-            (
-                16u64,
-                be_u64(header.as_slice(), 8).ok_or(Mp4ParseError::Truncated)?,
-            )
+            (16u64, be_u64(&header, 8).ok_or(Mp4ParseError::Truncated)?)
         } else if size32 == 0 {
             (8u64, total_len.saturating_sub(off))
         } else {
@@ -632,21 +642,16 @@ pub(crate) async fn parse_h264_mp4_summary_from_source(
             let payload_off = off
                 .checked_add(header_len)
                 .ok_or(Mp4ParseError::Truncated)?;
-            let payload = source
-                .read_range(payload_off, payload_len)
-                .await
-                .map_err(|_| Mp4ParseError::Truncated)?
-                .ok_or(Mp4ParseError::Truncated)?;
+            let payload = read_source_range_exact(source, payload_off, payload_len).await?;
             let parsed = parse_h264_mp4_track_from_moov(payload.as_slice())?;
             let first_range = *parsed.sample_ranges.first().ok_or(Mp4ParseError::NoSamples)?;
-            let first_sample = source
-                .read_range(
-                    first_range.offset,
-                    usize::try_from(first_range.len).map_err(|_| Mp4ParseError::BadSampleRange)?,
-                )
-                .await
-                .map_err(|_| Mp4ParseError::BadSampleRange)?
-                .ok_or(Mp4ParseError::BadSampleRange)?;
+            let first_sample = read_source_range_exact(
+                source,
+                first_range.offset,
+                usize::try_from(first_range.len).map_err(|_| Mp4ParseError::BadSampleRange)?,
+            )
+            .await
+            .map_err(|_| Mp4ParseError::BadSampleRange)?;
             return Ok(build_mp4_summary(parsed, first_sample));
         }
 
@@ -660,18 +665,38 @@ pub(crate) fn get_sample_range(summary: &Mp4H264Summary, index: u32) -> Option<S
     summary.sample_ranges.get(index as usize).copied()
 }
 
-/// Build an Annex-B access unit for an arbitrary sample (not just the first).
-pub(crate) fn build_annex_b_for_sample(
+fn push_annex_b_nal(
+    out: &mut [u8],
+    bytes_written: &mut usize,
+    nal: &[u8],
+) -> Result<(), Mp4ParseError> {
+    let end = bytes_written
+        .checked_add(4)
+        .and_then(|value| value.checked_add(nal.len()))
+        .ok_or(Mp4ParseError::OutputTooSmall)?;
+    if end > out.len() {
+        return Err(Mp4ParseError::OutputTooSmall);
+    }
+    out[*bytes_written..*bytes_written + 4].copy_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+    *bytes_written += 4;
+    out[*bytes_written..*bytes_written + nal.len()].copy_from_slice(nal);
+    *bytes_written += nal.len();
+    Ok(())
+}
+
+/// Write an Annex-B access unit for an arbitrary sample (not just the first).
+pub(crate) fn write_annex_b_for_sample(
     sample: &[u8],
     avcc: &AvccSummary,
+    out: &mut [u8],
 ) -> Result<AnnexBAccessUnit, Mp4ParseError> {
     let nal_length_size = avcc.nal_length_size;
     if !(1..=4).contains(&nal_length_size) {
         return Err(Mp4ParseError::BadNalLengthSize);
     }
-    let mut bytes = Vec::new();
-    push_annex_b_nal(&mut bytes, &avcc.sps);
-    push_annex_b_nal(&mut bytes, &avcc.pps);
+    let mut bytes_written = 0usize;
+    push_annex_b_nal(out, &mut bytes_written, &avcc.sps)?;
+    push_annex_b_nal(out, &mut bytes_written, &avcc.pps)?;
 
     let mut off = 0usize;
     let mut sample_nal_count = 0usize;
@@ -694,16 +719,16 @@ pub(crate) fn build_annex_b_for_sample(
             .ok_or(Mp4ParseError::BadNalRange)?;
         let nal_type = nal[0] & 0x1F;
         if nal_type == 5 {
-            idr_nal_offset = bytes.len() + 4;
+            idr_nal_offset = bytes_written + 4;
             idr_nal_length = nal_len;
         }
         // Also track non-IDR slices (type 1) for P/B frames
         if nal_type == 1 && !has_idr {
-            idr_nal_offset = bytes.len() + 4;
+            idr_nal_offset = bytes_written + 4;
             idr_nal_length = nal_len;
         }
         has_idr |= nal_type == 5;
-        push_annex_b_nal(&mut bytes, nal);
+        push_annex_b_nal(out, &mut bytes_written, nal)?;
         off = off.saturating_add(nal_len);
         sample_nal_count += 1;
     }
@@ -711,7 +736,7 @@ pub(crate) fn build_annex_b_for_sample(
         return Err(Mp4ParseError::EmptyAccessUnit);
     }
     Ok(AnnexBAccessUnit {
-        bytes,
+        bytes_written,
         sample_nal_count,
         has_idr,
         idr_nal_offset,
@@ -745,67 +770,6 @@ pub(crate) fn first_sample_nal_types(
         off = off.saturating_add(nal_len);
     }
     out
-}
-
-fn push_annex_b_nal(out: &mut Vec<u8>, nal: &[u8]) {
-    out.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
-    out.extend_from_slice(nal);
-}
-
-pub(crate) fn build_annex_b_access_unit(
-    summary: &Mp4H264Summary,
-) -> Result<AnnexBAccessUnit, Mp4ParseError> {
-    let nal_length_size = summary.avcc.nal_length_size;
-    if !(1..=4).contains(&nal_length_size) {
-        return Err(Mp4ParseError::BadNalLengthSize);
-    }
-
-    let mut bytes = Vec::new();
-    push_annex_b_nal(&mut bytes, &summary.avcc.sps);
-    push_annex_b_nal(&mut bytes, &summary.avcc.pps);
-
-    let mut off = 0usize;
-    let mut sample_nal_count = 0usize;
-    let mut has_idr = false;
-    let mut idr_nal_offset = 0usize;
-    let mut idr_nal_length = 0usize;
-    while off.saturating_add(nal_length_size) <= summary.first_sample.len() {
-        let mut nal_len = 0usize;
-        let mut idx = 0usize;
-        while idx < nal_length_size {
-            nal_len = (nal_len << 8) | summary.first_sample[off + idx] as usize;
-            idx += 1;
-        }
-        off = off.saturating_add(nal_length_size);
-        if nal_len == 0 {
-            return Err(Mp4ParseError::BadNalRange);
-        }
-        let nal = summary
-            .first_sample
-            .get(off..off.saturating_add(nal_len))
-            .ok_or(Mp4ParseError::BadNalRange)?;
-        let nal_type = nal[0] & 0x1F;
-        if nal_type == 5 {
-            idr_nal_offset = bytes.len() + 4;
-            idr_nal_length = nal_len;
-        }
-        has_idr |= nal_type == 5;
-        push_annex_b_nal(&mut bytes, nal);
-        off = off.saturating_add(nal_len);
-        sample_nal_count += 1;
-    }
-
-    if sample_nal_count == 0 {
-        return Err(Mp4ParseError::EmptyAccessUnit);
-    }
-
-    Ok(AnnexBAccessUnit {
-        bytes,
-        sample_nal_count,
-        has_idr,
-        idr_nal_offset,
-        idr_nal_length,
-    })
 }
 
 // --- H.264 SPS/PPS Exp-Golomb parsing ---

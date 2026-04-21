@@ -13,6 +13,7 @@ pub(crate) mod xelp_media_ngin;
 pub(crate) mod xelp_media_source;
 
 use core::sync::atomic::{AtomicBool, Ordering};
+use embassy_executor::SendSpawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
@@ -56,9 +57,65 @@ const RENDER_BOOT_PROBE_INTERVAL_MS: u64 = 16;
 const MEDIA_BOOT_SOURCE_WARM_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
+const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
 
 static INIT: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
+
+fn pick_media_boot_demo_spawner() -> Option<(u32, SendSpawner)> {
+    let background_slots = trueos_qjs::workers::background_worker_slots();
+
+    let pick_slot = |predicate: fn(u32) -> bool| {
+        background_slots.iter().copied().find(|slot| {
+            predicate(*slot)
+                && crate::cpu::CpuProfile::for_slot(*slot)
+                    .map(|profile| profile.is_perf())
+                    .unwrap_or(false)
+        })
+    };
+
+    let selected_slot = pick_slot(|slot| slot >= MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT)
+        .or_else(|| background_slots.iter().copied().find(|slot| *slot >= MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT))
+        .or_else(|| pick_slot(|slot| slot >= 2))
+        .or_else(|| background_slots.iter().copied().find(|slot| *slot >= 2))?;
+
+    trueos_qjs::workers::spawner_for_slot(selected_slot).map(|spawner| (selected_slot, spawner))
+}
+
+fn log_media_demo_task_profile(origin: &str, requested_slot: u32, queued_at_ms: u64) {
+    let queued_ms = embassy_time::Instant::now()
+        .as_millis()
+        .saturating_sub(queued_at_ms);
+    let cpu = crate::percpu::this_cpu();
+    let executor_ptr = cpu.executor_ptr() as usize;
+    if let Some(profile) = crate::cpu::CpuProfile::current() {
+        crate::log!(
+            "intel/media: task profile origin={} slot={} lapic={} core={} requested_slot={} queued_ms={} executor=0x{:016X}\n",
+            origin,
+            profile.slot(),
+            profile.lapic_id(),
+            profile.core_kind_name(),
+            requested_slot,
+            queued_ms,
+            executor_ptr,
+        );
+    } else {
+        crate::log!(
+            "intel/media: task profile origin={} slot=? lapic=? core=? requested_slot={} queued_ms={} executor=0x{:016X}\n",
+            origin,
+            requested_slot,
+            queued_ms,
+            executor_ptr,
+        );
+    }
+}
+
+#[embassy_executor::task]
+async fn media_boot_demo_task(requested_slot: u32, queued_at_ms: u64) {
+    log_media_demo_task_profile("worker", requested_slot, queued_at_ms);
+    crate::log!("intel/media: boot demo begin\n");
+    run_media_decode_async().await;
+}
 
 #[derive(Copy, Clone)]
 pub(crate) struct Dev {
@@ -173,6 +230,30 @@ pub fn init_once() {
         crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
         crate::wait::spawn_local_detached(async move {
             Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
+            let queued_at_ms = embassy_time::Instant::now().as_millis() as u64;
+            if let Some((slot, worker_spawner)) = pick_media_boot_demo_spawner() {
+                match media_boot_demo_task(slot, queued_at_ms) {
+                    Ok(token) => {
+                        crate::log!(
+                            "intel/media: boot demo handoff target_slot={} mode=worker\n",
+                            slot,
+                        );
+                        worker_spawner.spawn(token);
+                        return;
+                    }
+                    Err(err) => {
+                        crate::log!(
+                            "intel/media: boot demo handoff failed target_slot={} err={:?} fallback=local\n",
+                            slot,
+                            err,
+                        );
+                    }
+                }
+            } else {
+                crate::log!("intel/media: boot demo handoff skipped reason=no-worker-ap fallback=local\n");
+            }
+
+            log_media_demo_task_profile("local", 0, queued_at_ms);
             crate::log!("intel/media: boot demo begin\n");
             self::run_media_decode_async().await;
         });

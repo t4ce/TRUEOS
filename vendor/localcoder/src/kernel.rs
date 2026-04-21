@@ -3,7 +3,7 @@ use crate::resume::ResumeTarget;
 use anyhow::{Result, anyhow, bail};
 
 #[cfg(feature = "trueos-net")]
-const TRUEOS_REMOTE_OLLAMA_URL: &str = "http://192.168.178.112:1234/v1";
+const TRUEOS_REMOTE_OLLAMA_URL: &str = "http://192.168.178.111:1234/v1";
 #[cfg(feature = "trueos-net")]
 const TRUEOS_REMOTE_MODEL: &str = "google/gemma-4-e4b";
 
@@ -44,6 +44,23 @@ pub fn describe_runtime_surface() -> &'static str {
     "localcoder kernel example uses TRUEOS net/fs/env facades plus a one-shot async LLM prompt path"
 }
 
+fn endpoint_soft_warning(base_url: &str, err: &anyhow::Error) -> Option<String> {
+    let text = err.to_string();
+    let looks_unreachable = text.contains("request failed for ")
+        || text.contains("start failed rc=")
+        || text.contains("wait failed rc=")
+        || text.contains("LM Studio chat completions request failed")
+        || text.contains("Ollama prompt request failed");
+    if !looks_unreachable {
+        return None;
+    }
+
+    Some(format!(
+        "warning: localcoder endpoint {} is unavailable right now",
+        base_url
+    ))
+}
+
 pub async fn run_basic_prompt(request: &BasicPromptRequest) -> Result<BasicPromptResponse> {
     request.validate()?;
 
@@ -61,6 +78,9 @@ pub async fn run_basic_prompt(request: &BasicPromptRequest) -> Result<BasicPromp
         .complete_prompt(request.prompt.trim(), request.max_tokens)
         .await
         .map_err(|e| {
+            if let Some(warning) = endpoint_soft_warning(base_url.as_str(), &e) {
+                return anyhow!(warning);
+            }
             anyhow!(
                 "localcoder prompt failed: {:#} (endpoint={} model={} settings={} hint=for LM Studio enable Serve on Local Network and verify the server is listening on that host:port)",
                 e,

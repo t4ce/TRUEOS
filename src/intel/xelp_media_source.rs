@@ -58,32 +58,33 @@ impl MediaSource {
         }
     }
 
-    pub(crate) async fn read_range(
+    pub(crate) async fn read_range_into(
         &self,
         offset: u64,
-        len: usize,
-    ) -> Result<Option<Vec<u8>>, crate::disc::block::Error> {
+        dst: &mut [u8],
+    ) -> Result<bool, crate::disc::block::Error> {
         match self {
             Self::Memory { body, .. } => {
                 let start = usize::try_from(offset).map_err(|_| crate::disc::block::Error::OutOfBounds)?;
                 let end = start
-                    .checked_add(len)
+                    .checked_add(dst.len())
                     .ok_or(crate::disc::block::Error::OutOfBounds)?;
                 let Some(slice) = body.get(start..end) else {
                     return Err(crate::disc::block::Error::OutOfBounds);
                 };
-                Ok(Some(slice.to_vec()))
+                dst.copy_from_slice(slice);
+                Ok(true)
             }
             Self::CacheFile {
                 disk, path, len: total, ..
             } => {
                 let end = offset
-                    .checked_add(len as u64)
+                    .checked_add(dst.len() as u64)
                     .ok_or(crate::disc::block::Error::OutOfBounds)?;
                 if end > *total {
                     return Err(crate::disc::block::Error::OutOfBounds);
                 }
-                crate::r::stream::read_trueosfs_file_range_via_pipe_async(*disk, path, offset, len)
+                crate::r::stream::read_trueosfs_file_range_into_async(*disk, path, offset, dst)
                     .await
             }
         }

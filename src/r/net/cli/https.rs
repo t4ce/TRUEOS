@@ -1032,6 +1032,221 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
     });
 }
 
+async fn cabi_net_fetch_post_json_task_inner(
+    op_id: u32,
+    key: String,
+    url: String,
+    body_json: String,
+    bearer: Option<String>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) {
+    let t0 = Instant::now();
+    net_fetch_acquire_slot().await;
+
+    let rc = match post_json_body_async(
+        url.as_str(),
+        body_json,
+        bearer.as_deref(),
+        timeout_ms,
+        max_bytes,
+    )
+    .await
+    {
+        Ok(bytes) => {
+            crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
+            if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
+                if let Some(summary) = super::json::summarize_openai_response_json(s) {
+                    crate::log!("net-fetch-post: summary {}\n", summary);
+                }
+                log_utf8_chunks("net-fetch-post: response_json: ", s);
+            } else {
+                crate::log!("net-fetch-post: response_json: [non-utf8]\n");
+            }
+            if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+                match crate::r::fs::trueosfs::file_in_async(disk, key.as_str(), bytes.as_slice())
+                    .await
+                {
+                    Ok(true) => 0,
+                    Ok(false) => FS_ERR_IO,
+                    Err(e) => block_error_to_code(e),
+                }
+            } else {
+                FS_ERR_USBMS_NOT_FOUND
+            }
+        }
+        Err(rc) => rc,
+    };
+
+    net_fetch_release_slot();
+
+    let elapsed_ms = t0.elapsed().as_millis();
+    if let Some(slot) = CABI_NET_FETCH_RESULTS.lock().get_mut(&op_id) {
+        *slot = Some(rc);
+    }
+
+    crate::log!("net-fetch-post: done key={} rc={} ms={}\n", key, rc, elapsed_ms);
+
+    CABI_NET_FETCH_WAIT.notify_all();
+}
+
+#[embassy_executor::task]
+async fn cabi_net_fetch_post_json_task(
+    op_id: u32,
+    key: String,
+    url: String,
+    body_json: String,
+    bearer: Option<String>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) {
+    cabi_net_fetch_post_json_task_inner(op_id, key, url, body_json, bearer, timeout_ms, max_bytes)
+        .await;
+}
+
+fn spawn_cabi_net_fetch_post_json(
+    op_id: u32,
+    key: String,
+    url: String,
+    body_json: String,
+    bearer: Option<String>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) {
+    if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
+        && let Ok(token) = cabi_net_fetch_post_json_task(
+            op_id,
+            key.clone(),
+            url.clone(),
+            body_json.clone(),
+            bearer.clone(),
+            timeout_ms,
+            max_bytes,
+        )
+    {
+        spawner.spawn(token);
+        return;
+    }
+
+    crate::wait::spawn_local_detached(async move {
+        cabi_net_fetch_post_json_task_inner(op_id, key, url, body_json, bearer, timeout_ms, max_bytes)
+            .await;
+    });
+}
+
+async fn cabi_net_fetch_post_json_bytes_task_inner(
+    request_id: u32,
+    url: String,
+    body_json: String,
+    bearer: Option<String>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) {
+    let t0 = Instant::now();
+    net_fetch_acquire_slot().await;
+
+    let (rc, bytes) = match post_json_body_async(
+        url.as_str(),
+        body_json,
+        bearer.as_deref(),
+        timeout_ms,
+        max_bytes,
+    )
+    .await
+    {
+        Ok(bytes) => {
+            crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
+            if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
+                if let Some(summary) = super::json::summarize_openai_response_json(s) {
+                    crate::log!("net-fetch-post: summary {}\n", summary);
+                }
+                log_utf8_chunks("net-fetch-post: response_json: ", s);
+            } else {
+                crate::log!("net-fetch-post: response_json: [non-utf8]\n");
+            }
+            (0, bytes)
+        }
+        Err(rc) => (rc, Vec::new()),
+    };
+
+    net_fetch_release_slot();
+
+    if let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&request_id) {
+        slot.rc = Some(rc);
+        slot.body = bytes;
+    }
+
+    let elapsed_ms = t0.elapsed().as_millis();
+    crate::log!(
+        "net-fetch-post: done request_id={} rc={} ms={} len={}\n",
+        request_id,
+        rc,
+        elapsed_ms,
+        CABI_NET_FETCH_BYTES_RESULTS
+            .lock()
+            .get(&request_id)
+            .map(|v| v.body.len())
+            .unwrap_or(0)
+    );
+
+    CABI_NET_FETCH_WAIT.notify_all();
+}
+
+#[embassy_executor::task]
+async fn cabi_net_fetch_post_json_bytes_task(
+    request_id: u32,
+    url: String,
+    body_json: String,
+    bearer: Option<String>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) {
+    cabi_net_fetch_post_json_bytes_task_inner(
+        request_id,
+        url,
+        body_json,
+        bearer,
+        timeout_ms,
+        max_bytes,
+    )
+    .await;
+}
+
+fn spawn_cabi_net_fetch_post_json_bytes(
+    request_id: u32,
+    url: String,
+    body_json: String,
+    bearer: Option<String>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) {
+    if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
+        && let Ok(token) = cabi_net_fetch_post_json_bytes_task(
+            request_id,
+            url.clone(),
+            body_json.clone(),
+            bearer.clone(),
+            timeout_ms,
+            max_bytes,
+        )
+    {
+        spawner.spawn(token);
+        return;
+    }
+
+    crate::wait::spawn_local_detached(async move {
+        cabi_net_fetch_post_json_bytes_task_inner(
+            request_id,
+            url,
+            body_json,
+            bearer,
+            timeout_ms,
+            max_bytes,
+        )
+        .await;
+    });
+}
+
 async fn cabi_net_prewarm_url_task_inner(url: String) {
     let Some(parsed) = parse_https_url(url.as_str()) else {
         return;
@@ -4220,6 +4435,9 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
     bearer_ptr: *const u8,
     bearer_len: usize,
 ) -> u32 {
+    const TIMEOUT_MS: u32 = 20_000;
+    const MAX_BYTES: usize = 4 * 1024 * 1024;
+
     if url_ptr.is_null()
         || url_len == 0
         || path_ptr.is_null()
@@ -4264,62 +4482,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
     let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
     CABI_NET_FETCH_RESULTS.lock().insert(op_id, None);
 
-    crate::wait::spawn_local_detached(async move {
-        const TIMEOUT_MS: u32 = 20_000;
-        const MAX_BYTES: usize = 4 * 1024 * 1024;
-
-        let t0 = Instant::now();
-        net_fetch_acquire_slot().await;
-
-        let rc = match post_json_body_async(
-            url.as_str(),
-            body_json,
-            bearer.as_deref(),
-            TIMEOUT_MS,
-            MAX_BYTES,
-        )
-        .await
-        {
-            Ok(bytes) => {
-                crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
-                if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
-                    if let Some(summary) = super::json::summarize_openai_response_json(s) {
-                        crate::log!("net-fetch-post: summary {}\n", summary);
-                    }
-                    log_utf8_chunks("net-fetch-post: response_json: ", s);
-                } else {
-                    crate::log!("net-fetch-post: response_json: [non-utf8]\n");
-                }
-                if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-                    match crate::r::fs::trueosfs::file_in_async(
-                        disk,
-                        key.as_str(),
-                        bytes.as_slice(),
-                    )
-                    .await
-                    {
-                        Ok(true) => 0,
-                        Ok(false) => FS_ERR_IO,
-                        Err(e) => block_error_to_code(e),
-                    }
-                } else {
-                    FS_ERR_USBMS_NOT_FOUND
-                }
-            }
-            Err(rc) => rc,
-        };
-
-        net_fetch_release_slot();
-
-        let elapsed_ms = t0.elapsed().as_millis();
-        if let Some(slot) = CABI_NET_FETCH_RESULTS.lock().get_mut(&op_id) {
-            *slot = Some(rc);
-        }
-
-        crate::log!("net-fetch-post: done key={} rc={} ms={}\n", key, rc, elapsed_ms);
-
-        CABI_NET_FETCH_WAIT.notify_all();
-    });
+    spawn_cabi_net_fetch_post_json(op_id, key, url, body_json, bearer, TIMEOUT_MS, MAX_BYTES);
 
     op_id
 }
@@ -4336,6 +4499,9 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start(
     bearer_ptr: *const u8,
     bearer_len: usize,
 ) -> u32 {
+    const TIMEOUT_MS: u32 = 20_000;
+    const MAX_BYTES: usize = 4 * 1024 * 1024;
+
     if url_ptr.is_null() || url_len == 0 || body_ptr.is_null() || body_len == 0 {
         return 0;
     }
@@ -4367,59 +4533,14 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start(
         .lock()
         .insert(request_id, CabiNetFetchBytesResult::default());
 
-    crate::wait::spawn_local_detached(async move {
-        const TIMEOUT_MS: u32 = 20_000;
-        const MAX_BYTES: usize = 4 * 1024 * 1024;
-
-        let t0 = Instant::now();
-        net_fetch_acquire_slot().await;
-
-        let (rc, bytes) = match post_json_body_async(
-            url.as_str(),
-            body_json,
-            bearer.as_deref(),
-            TIMEOUT_MS,
-            MAX_BYTES,
-        )
-        .await
-        {
-            Ok(bytes) => {
-                crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
-                if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
-                    if let Some(summary) = super::json::summarize_openai_response_json(s) {
-                        crate::log!("net-fetch-post: summary {}\n", summary);
-                    }
-                    log_utf8_chunks("net-fetch-post: response_json: ", s);
-                } else {
-                    crate::log!("net-fetch-post: response_json: [non-utf8]\n");
-                }
-                (0, bytes)
-            }
-            Err(rc) => (rc, Vec::new()),
-        };
-
-        net_fetch_release_slot();
-
-        if let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&request_id) {
-            slot.rc = Some(rc);
-            slot.body = bytes;
-        }
-
-        let elapsed_ms = t0.elapsed().as_millis();
-        crate::log!(
-            "net-fetch-post: done request_id={} rc={} ms={} len={}\n",
-            request_id,
-            rc,
-            elapsed_ms,
-            CABI_NET_FETCH_BYTES_RESULTS
-                .lock()
-                .get(&request_id)
-                .map(|v| v.body.len())
-                .unwrap_or(0)
-        );
-
-        CABI_NET_FETCH_WAIT.notify_all();
-    });
+    spawn_cabi_net_fetch_post_json_bytes(
+        request_id,
+        url,
+        body_json,
+        bearer,
+        TIMEOUT_MS,
+        MAX_BYTES,
+    );
 
     request_id
 }

@@ -6,11 +6,8 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt;
 
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::pipe::{Pipe, TryReadError, TryWriteError};
 use embedded_io_async::{ErrorKind, ErrorType, Read, Seek, Write};
 
-const TRUEOSFS_FORWARD_PIPE_BYTES: usize = 64 * 1024;
 const TRUEOSFS_FORWARD_READ_FALLBACK_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -315,25 +312,42 @@ fn trueosfs_forward_read_chunk_bytes(info: &crate::disc::block::DeviceInfo) -> u
     usize::max(aligned, block_size)
 }
 
-fn drain_pipe_to_vec<const N: usize>(
-    pipe: &Pipe<NoopRawMutex, N>,
-    out: &mut Vec<u8>,
-    mut buf: &mut [u8],
-) -> usize {
-    let mut drained = 0usize;
-    loop {
-        match pipe.try_read(&mut *buf) {
-            Ok(n) => {
-                if n == 0 {
-                    break;
-                }
-                out.extend_from_slice(&buf[..n]);
-                drained = drained.saturating_add(n);
-            }
-            Err(TryReadError::Empty) => break,
-        }
+pub async fn read_trueosfs_file_range_into_async(
+    disk: crate::disc::block::DeviceHandle,
+    key: &str,
+    offset: u64,
+    dst: &mut [u8],
+) -> Result<bool, crate::disc::block::Error> {
+    if dst.is_empty() {
+        return Ok(true);
     }
-    drained
+
+    let mut cursor = offset;
+    let mut written = 0usize;
+    let chunk_bytes = trueosfs_forward_read_chunk_bytes(&disk.info());
+    while written < dst.len() {
+        let chunk_end = usize::min(written.saturating_add(chunk_bytes), dst.len());
+        let Some(read) = crate::r::fs::trueosfs::file_read_range_async(
+            disk,
+            key,
+            cursor,
+            &mut dst[written..chunk_end],
+        )
+        .await?
+        else {
+            return Ok(false);
+        };
+        if read == 0 {
+            break;
+        }
+        written = written.saturating_add(read);
+        cursor = cursor.saturating_add(read as u64);
+    }
+
+    if written != dst.len() {
+        return Err(crate::disc::block::Error::OutOfBounds);
+    }
+    Ok(true)
 }
 
 pub async fn read_trueosfs_file_range_via_pipe_async(
@@ -346,52 +360,9 @@ pub async fn read_trueosfs_file_range_via_pipe_async(
         return Ok(Some(Vec::new()));
     }
 
-    let mut out = Vec::with_capacity(len);
-    let mut src = vec![0u8; trueosfs_forward_read_chunk_bytes(&disk.info())];
-    let mut drain = vec![0u8; TRUEOSFS_FORWARD_PIPE_BYTES];
-    let pipe = Pipe::<NoopRawMutex, TRUEOSFS_FORWARD_PIPE_BYTES>::new();
-
-    let mut cursor = offset;
-    let mut remaining = len;
-    while remaining != 0 {
-        let read_cap = usize::min(src.len(), remaining);
-        let Some(read) = crate::r::fs::trueosfs::file_read_range_async(
-            disk,
-            key,
-            cursor,
-            &mut src[..read_cap],
-        )
-        .await?
-        else {
-            return Ok(None);
-        };
-        if read == 0 {
-            break;
-        }
-
-        let mut written = 0usize;
-        while written < read {
-            match pipe.try_write(&src[written..read]) {
-                Ok(n) => {
-                    written = written.saturating_add(n);
-                }
-                Err(TryWriteError::Full) => {
-                    let drained = drain_pipe_to_vec(&pipe, &mut out, drain.as_mut_slice());
-                    if drained == 0 {
-                        return Err(crate::disc::block::Error::NotReady);
-                    }
-                }
-            }
-        }
-
-        drain_pipe_to_vec(&pipe, &mut out, drain.as_mut_slice());
-        cursor = cursor.saturating_add(read as u64);
-        remaining = remaining.saturating_sub(read);
-    }
-
-    drain_pipe_to_vec(&pipe, &mut out, drain.as_mut_slice());
-    if out.len() != len {
-        return Err(crate::disc::block::Error::OutOfBounds);
+    let mut out = vec![0u8; len];
+    if !read_trueosfs_file_range_into_async(disk, key, offset, out.as_mut_slice()).await? {
+        return Ok(None);
     }
     Ok(Some(out))
 }

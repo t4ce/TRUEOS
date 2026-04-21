@@ -3,14 +3,14 @@ extern crate alloc;
 use alloc::format;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use spin::Mutex;
 
 use super::xelp_media_h264src::parse_h264_source_summary;
 use super::xelp_media_mp4::{
-    H264VclInfo, ParsedPps, ParsedSps, build_annex_b_for_sample, first_sample_nal_types, parse_pps,
-    parse_sample_vcl_info, parse_sps,
+    AnnexBAccessUnit, H264VclInfo, ParsedPps, ParsedSps, first_sample_nal_types, parse_pps,
+    parse_sample_vcl_info, parse_sps, write_annex_b_for_sample,
 };
 use super::xelp_media_source;
 
@@ -876,11 +876,7 @@ fn decode_and_present_frame(
     backing: MediaBitstreamBacking,
     frame_width: u16,
     frame_height: u16,
-    annex_b: &[u8],
-    sample_nal_count: usize,
-    has_idr: bool,
-    idr_nal_offset: usize,
-    idr_nal_length: usize,
+    annex_b: &AnnexBAccessUnit,
     vcl_info: Option<H264VclInfo>,
     sps: &ParsedSps,
     pps: &ParsedPps,
@@ -904,10 +900,6 @@ fn decode_and_present_frame(
         frame_width,
         frame_height,
         annex_b,
-        sample_nal_count,
-        has_idr,
-        idr_nal_offset,
-        idr_nal_length,
         vcl_info,
         sps,
         pps,
@@ -938,13 +930,13 @@ fn decode_and_present_frame(
         output_surface_gpu_addr,
         bitstream_phys: backing.bitstream_phys,
         output_surface_phys,
-        bitstream_bytes: annex_b.len(),
+        bitstream_bytes: annex_b.bytes_written,
         output_surface_bytes,
         frame_width,
         frame_height,
         output_surface_pitch,
-        sample_nal_count,
-        has_idr,
+        sample_nal_count: annex_b.sample_nal_count,
+        has_idr: annex_b.has_idr,
         kickoff_marker,
         complete_marker,
         output_surface_signature,
@@ -1076,11 +1068,13 @@ fn build_ring_batch_start_words(
     prelaunch_marker: u32,
     batch_gpu_addr: u64,
 ) -> Option<usize> {
-    if ring_virt.is_null() || ring_offset + 32 > ring_bytes {
+    if ring_virt.is_null() || ring_offset + 40 > ring_bytes {
         return None;
     }
     let base = unsafe { ring_virt.add(ring_offset) };
-    let dwords = unsafe { core::slice::from_raw_parts_mut(base as *mut u32, 8) };
+    // Gen8+ execlists requests need a post-batch preemption point, and the
+    // final RING_TAIL must remain qword aligned.
+    let dwords = unsafe { core::slice::from_raw_parts_mut(base as *mut u32, 10) };
     dwords[0] = MI_STORE_DWORD_IMM_GEN4_LEN_DW4;
     dwords[1] = (result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT) as u32;
     dwords[2] = ((result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT) >> 32) as u32;
@@ -1088,8 +1082,10 @@ fn build_ring_batch_start_words(
     dwords[4] = MI_BATCH_BUFFER_START_GEN8;
     dwords[5] = batch_gpu_addr as u32;
     dwords[6] = (batch_gpu_addr >> 32) as u32;
-    dwords[7] = MI_NOOP;
-    Some(ring_offset + 32)
+    dwords[7] = MI_ARB_CHECK;
+    dwords[8] = MI_NOOP;
+    dwords[9] = MI_NOOP;
+    Some(ring_offset + 40)
 }
 
 fn ring_ctl_value_for_size(size: usize) -> Option<u32> {
@@ -1109,9 +1105,15 @@ fn build_execlist_context_descriptor_for_gpu_addr(context_gpu_addr: u64) -> (u32
     )
 }
 
+fn media_sw_context_id_for_submit(context_gpu_addr: u64) -> u32 {
+    let sw_context_id = ((context_gpu_addr >> 12) as u32) & 0x7FF;
+    if sw_context_id == 0 { 1 } else { sw_context_id }
+}
+
 fn build_media_execlist_context_descriptor(
     context_gpu_addr: u64,
     engine: MediaEngineDescriptor,
+    sw_counter: u32,
     force_restore: bool,
 ) -> (u32, u32) {
     let (lo, mut hi) = build_execlist_context_descriptor_for_gpu_addr(context_gpu_addr);
@@ -1124,7 +1126,9 @@ fn build_media_execlist_context_descriptor(
     if force_restore {
         lo |= CTX_DESC_FORCE_RESTORE;
     }
+    hi |= (media_sw_context_id_for_submit(context_gpu_addr) & 0x7FF) << 5;
     hi |= (engine.id.instance as u32 & 0x3F) << 16;
+    hi |= (sw_counter & 0x3F) << 23;
     hi |= (class & 0x7) << 29;
     (lo, hi)
 }
@@ -1189,6 +1193,18 @@ fn write_video_lrc_context_control(context_virt: *mut u8, context_len: usize, ct
     super::dma_flush(context_virt, context_len);
 }
 
+fn prepare_video_lrc_for_submit(
+    context_virt: *mut u8,
+    context_len: usize,
+    ring_head: u32,
+    ring_tail: u32,
+    ctx_ctl: u32,
+) {
+    write_video_lrc_ring_head(context_virt, context_len, ring_head);
+    write_video_lrc_ring_tail(context_virt, context_len, ring_tail);
+    write_video_lrc_context_control(context_virt, context_len, ctx_ctl);
+}
+
 fn read_video_lrc_slot(context_virt: *mut u8, context_len: usize, slot_dw: usize) -> u32 {
     const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 
@@ -1208,6 +1224,7 @@ fn init_gen12_video_context_image(
     context_virt: *mut u8,
     context_len: usize,
     ring_base: usize,
+    ring_head: u32,
     ring_start: u32,
     ring_tail: u32,
     ring_ctl: u32,
@@ -1245,7 +1262,7 @@ fn init_gen12_video_context_image(
     // context switch, and use restore-inhibit for empty/default contexts.
     state[idx + 1] = media_ctx_control_value(inhibit_restore);
     state[idx + 2] = ring_base + 0x34;
-    state[idx + 3] = 0;
+    state[idx + 3] = ring_head;
     state[idx + 4] = ring_base + 0x30;
     state[idx + 5] = ring_tail;
     state[idx + 6] = ring_base + 0x38;
@@ -1933,6 +1950,23 @@ fn execlist_submit_port_push(
     super::mmio_write(dev, ring_base + RING_EXECLIST_SQ_HI + 8, context1_hi);
 }
 
+fn media_execlists_ready_for_hot_submit(
+    dev: crate::intel::Dev,
+    engine: MediaEngineDescriptor,
+    hwsp_virt: *mut u8,
+) -> bool {
+    let ring_base = engine.ring_base;
+    drain_csb(dev, engine, hwsp_virt);
+    let status = super::mmio_read(dev, ring_base + RING_EXECLIST_STATUS_LO);
+    // Hot resubmission is legal while a context is active, as long as the
+    // scheduler is not already stuck in a pending-load or preempt-to-idle flow.
+    if status & (1 << 30 | 0x6) == 0 {
+        return true;
+    }
+
+    false
+}
+
 fn wake_media_engine_forcewake(dev: crate::intel::Dev, engine: MediaEngineDescriptor) {
     let (req, ack) = match engine.id.class {
         MediaEngineClass::VideoDecode => match engine.id.instance {
@@ -2094,16 +2128,78 @@ fn submit_h264_frame(
     backing: MediaBitstreamBacking,
     frame_width: u16,
     frame_height: u16,
-    annex_b: &[u8],
-    sample_nal_count: usize,
-    has_idr: bool,
-    idr_nal_offset: usize,
-    idr_nal_length: usize,
+    annex_b: &AnnexBAccessUnit,
     vcl_info: Option<H264VclInfo>,
     sps: &ParsedSps,
     pps: &ParsedPps,
     sample_idx: u32,
     ref_surface_idx: u32,
+) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
+    if sample_idx != 0 {
+        match submit_h264_frame_once(
+            dev,
+            engine,
+            windows,
+            backing,
+            frame_width,
+            frame_height,
+            annex_b,
+            vcl_info,
+            sps,
+            pps,
+            sample_idx,
+            ref_surface_idx,
+            false,
+        ) {
+            Some(result) if result.0 => return Some(result),
+            Some(_) => {
+                crate::log!(
+                    "intel/media: hot submit incomplete index={} engine={} fallback=reset\n",
+                    sample_idx,
+                    engine.name,
+                );
+            }
+            None => {
+                crate::log!(
+                    "intel/media: hot submit setup failed index={} engine={} fallback=reset\n",
+                    sample_idx,
+                    engine.name,
+                );
+            }
+        }
+    }
+
+    submit_h264_frame_once(
+        dev,
+        engine,
+        windows,
+        backing,
+        frame_width,
+        frame_height,
+        annex_b,
+        vcl_info,
+        sps,
+        pps,
+        sample_idx,
+        ref_surface_idx,
+        true,
+    )
+}
+
+fn submit_h264_frame_once(
+    dev: crate::intel::Dev,
+    engine: MediaEngineDescriptor,
+    windows: MediaGpuWindowLayout,
+    backing: MediaBitstreamBacking,
+    frame_width: u16,
+    frame_height: u16,
+    annex_b: &AnnexBAccessUnit,
+    vcl_info: Option<H264VclInfo>,
+    sps: &ParsedSps,
+    pps: &ParsedPps,
+    sample_idx: u32,
+    ref_surface_idx: u32,
+    force_reset: bool,
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
     let output_pitch = align_up_u32((frame_width as u32).max(128), 128) as usize; // Y-tile: 128-byte tile width
     // Y-tile NV12: chroma starts at tile-row-aligned height (same as batch builder).
@@ -2116,7 +2212,7 @@ fn submit_h264_frame(
         .checked_sub(MEDIA_SCRATCH_OFFSET_BYTES)?;
     // Double-buffer: need 2× output_bytes for decode target + reference surface.
     let double_output = output_bytes.checked_mul(2)?;
-    if double_output > output_budget || annex_b.len() > backing.bitstream_bytes {
+    if double_output > output_budget || annex_b.bytes_written > backing.bitstream_bytes {
         if sample_idx < 2 {
             crate::log!(
                 "intel/media: submit budget exceeded frame={}x{} output_bytes={} double={} budget={} bs_len={} bs_max={}\n",
@@ -2125,7 +2221,7 @@ fn submit_h264_frame(
                 output_bytes,
                 double_output,
                 output_budget,
-                annex_b.len(),
+                annex_b.bytes_written,
                 backing.bitstream_bytes,
             );
         }
@@ -2154,15 +2250,33 @@ fn submit_h264_frame(
 
     let cold_start = sample_idx == 0;
 
-    // Full GDRST every frame — the Gen12 ELSP scheduler requires a domain
-    // reset between submissions; CSB pointer reset alone is not sufficient
-    // to make the scheduler accept new ELSP pushes.
+    // Prefer keeping the engine live across successful frames.
+    // Fall back to a full reset for cold start and whenever a hot submit fails.
     wake_media_engine_forcewake(dev, engine);
-    reset_media_engine(dev, engine, context_virt);
+    if force_reset {
+        reset_media_engine(dev, engine, context_virt);
+    } else {
+        if !media_execlists_ready_for_hot_submit(dev, engine, context_virt) {
+            if sample_idx < 3 {
+                crate::log!(
+                    "intel/media: hot submit blocked index={} engine={} el=0x{:08X} csb=0x{:08X}\n",
+                    sample_idx,
+                    engine.name,
+                    super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO),
+                    super::mmio_read(dev, engine.ring_base + 0x3A0),
+                );
+            }
+            return None;
+        }
+    }
 
     unsafe {
-        core::ptr::write_bytes(ring_virt, 0, backing.ring_bytes);
-        core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
+        if force_reset {
+            core::ptr::write_bytes(ring_virt, 0, backing.ring_bytes);
+        }
+        if force_reset {
+            core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
+        }
         if cold_start {
             core::ptr::write_bytes(backing.output_surface_virt, 0, backing.output_surface_bytes);
         }
@@ -2185,8 +2299,6 @@ fn submit_h264_frame(
         }
         core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
         core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
-        // Only copy bitstream data — no need to zero the whole buffer first.
-        core::ptr::copy_nonoverlapping(annex_b.as_ptr(), backing.bitstream_virt, annex_b.len());
     }
 
     let kickoff_marker = marker_base(engine);
@@ -2205,11 +2317,11 @@ fn submit_h264_frame(
         output_bytes,
         frame_width,
         frame_height,
-        annex_b.len(),
-        sample_nal_count,
-        has_idr,
-        idr_nal_offset,
-        idr_nal_length,
+        annex_b.bytes_written,
+        annex_b.sample_nal_count,
+        annex_b.has_idr,
+        annex_b.idr_nal_offset,
+        annex_b.idr_nal_length,
         vcl_info,
         sps,
         pps,
@@ -2221,12 +2333,15 @@ fn submit_h264_frame(
 
     // Decisive diagnostics: addresses, bitstream NAL header, batch size
     if sample_idx < 2 {
-        let bs_hdr = if idr_nal_offset + 4 <= annex_b.len() {
+        let bitstream = unsafe {
+            core::slice::from_raw_parts(backing.bitstream_virt as *const u8, annex_b.bytes_written)
+        };
+        let bs_hdr = if annex_b.idr_nal_offset + 4 <= annex_b.bytes_written {
             u32::from_be_bytes([
-                annex_b[idr_nal_offset],
-                annex_b[idr_nal_offset + 1],
-                annex_b[idr_nal_offset + 2],
-                annex_b[idr_nal_offset + 3],
+                bitstream[annex_b.idr_nal_offset],
+                bitstream[annex_b.idr_nal_offset + 1],
+                bitstream[annex_b.idr_nal_offset + 2],
+                bitstream[annex_b.idr_nal_offset + 3],
             ])
         } else {
             0xDEAD
@@ -2243,10 +2358,15 @@ fn submit_h264_frame(
     }
 
     // Always start ring at offset 0.
+    const MEDIA_RING_REQUEST_BYTES: usize = 40;
+    let ring_head_bytes = (sample_idx as usize).saturating_mul(MEDIA_RING_REQUEST_BYTES);
+    if ring_head_bytes + MEDIA_RING_REQUEST_BYTES > backing.ring_bytes {
+        return None;
+    }
     let ring_tail_bytes = build_ring_batch_start_words(
         ring_virt,
         backing.ring_bytes,
-        0,
+        ring_head_bytes,
         windows.result_gpu_addr,
         ring_prelaunch_marker,
         windows.batch_gpu_addr,
@@ -2255,18 +2375,35 @@ fn submit_h264_frame(
     let ring_start = ring_gpu_addr as u32;
     let pphwsp_gpu = (context_gpu_addr & !0xFFF) as u32;
 
-    if !init_gen12_video_context_image(
-        context_virt,
-        backing.context_bytes,
-        engine.ring_base,
-        ring_start,
-        ring_tail_bytes as u32,
-        ring_ctl,
-        pphwsp_gpu,
-        backing.ppgtt_pml4_phys,
-        true,
-    ) {
-        return None;
+    // Hot submits need a real LRC restore so the scheduler reloads the updated
+    // ring head/tail from memory. Keep restore-inhibit only on reset-created
+    // empty contexts.
+    let ctx_ctl_after = media_ctx_control_value(force_reset);
+    let prev_tail = read_video_lrc_slot(context_virt, backing.context_bytes, 7) as usize;
+    let force_context_restore = force_reset || ring_tail_bytes <= prev_tail;
+    if force_reset {
+        if !init_gen12_video_context_image(
+            context_virt,
+            backing.context_bytes,
+            engine.ring_base,
+            ring_head_bytes as u32,
+            ring_start,
+            ring_tail_bytes as u32,
+            ring_ctl,
+            pphwsp_gpu,
+            backing.ppgtt_pml4_phys,
+            true,
+        ) {
+            return None;
+        }
+    } else {
+        prepare_video_lrc_for_submit(
+            context_virt,
+            backing.context_bytes,
+            ring_head_bytes as u32,
+            ring_tail_bytes as u32,
+            ctx_ctl_after,
+        );
     }
     {
         let mode_bits = GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE;
@@ -2280,9 +2417,11 @@ fn submit_h264_frame(
         ring_ctl,
         ring_tail_bytes as u32,
     );
-    init_csb_pointers(dev, engine.ring_base, context_virt);
+    if force_reset {
+        init_csb_pointers(dev, engine.ring_base, context_virt);
+    }
 
-    super::dma_flush(backing.bitstream_virt, annex_b.len());
+    super::dma_flush(backing.bitstream_virt, annex_b.bytes_written);
     super::dma_flush(backing.batch_virt, batch_tail_bytes);
     super::dma_flush(ring_virt, ring_tail_bytes);
     super::dma_flush(context_virt, backing.context_bytes);
@@ -2294,15 +2433,19 @@ fn submit_h264_frame(
     }
 
     {
-        let ctx_ctl_after = media_ctx_control_value(true);
         super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl_after);
         super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
         super::mmio_write(dev, engine.ring_base + RING_HWS_PGA, pphwsp_gpu);
     }
     // FORCE_RESTORE: forces the scheduler to reload LRC state from memory
     // every submission, whether cold (GDRST cleared tracker) or hot (new ring pointers).
-    let (ctx_desc_lo, ctx_desc_hi) =
-        build_media_execlist_context_descriptor(context_gpu_addr, engine, true);
+    let submit_counter = sample_idx.wrapping_add(1) & 0x3F;
+    let (ctx_desc_lo, ctx_desc_hi) = build_media_execlist_context_descriptor(
+        context_gpu_addr,
+        engine,
+        submit_counter,
+        force_context_restore,
+    );
     if sample_idx < 3 {
         let lrc_ctl = read_video_lrc_slot(context_virt, backing.context_bytes, 3);
         let lrc_head = read_video_lrc_slot(context_virt, backing.context_bytes, 5);
@@ -2698,7 +2841,7 @@ pub(crate) async fn run_media_decode_async() {
         if body.is_some() { "memory" } else { "range" },
     );
 
-    let summary = match parse_h264_source_summary(&source).await {
+    let mut summary = match parse_h264_source_summary(&source).await {
         Ok(summary) => summary,
         Err(err) => {
             crate::log!(
@@ -2717,54 +2860,6 @@ pub(crate) async fn run_media_decode_async() {
             return;
         }
     };
-
-    let annex_b = match build_annex_b_for_sample(summary.first_sample(), summary.avcc()) {
-        Ok(annex_b) => annex_b,
-        Err(err) => {
-            crate::log!(
-                "intel/media: annexb build failed err={:?} container={} first_sample_len={} nal_length_size={} first_bytes=[{:02X?}]\n",
-                err,
-                summary.container_name(),
-                summary.first_sample().len(),
-                summary.avcc().nal_length_size,
-                &summary.first_sample()[..summary.first_sample().len().min(16)],
-            );
-            store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
-            return;
-        }
-    };
-    let nal_types =
-        first_sample_nal_types(summary.first_sample(), summary.avcc().nal_length_size, 6);
-
-    crate::log!(
-        "intel/media: h264 container={} dims={}x{} samples={} first_sample={} nal_len={} sps={} pps={} profile=0x{:02X} level=0x{:02X} annexb_bytes={} sample_nals={} idr={} first_nals={:?}\n",
-        summary.container_name(),
-        summary.width(),
-        summary.height(),
-        summary.sample_count(),
-        summary.first_sample().len(),
-        summary.avcc().nal_length_size,
-        summary.avcc().sps.len(),
-        summary.avcc().pps.len(),
-        summary.avcc().profile_idc,
-        summary.avcc().level_idc,
-        annex_b.bytes.len(),
-        annex_b.sample_nal_count,
-        annex_b.has_idr as u8,
-        nal_types
-    );
-    crate::log!(
-        "intel/media: codec container={} codec=h264 profile=0x{:02X} level=0x{:02X} frame={}x{} avcc_nal={} sample_nals={} idr={} annexb=0x{:X}\n",
-        summary.container_name(),
-        summary.avcc().profile_idc,
-        summary.avcc().level_idc,
-        summary.width(),
-        summary.height(),
-        summary.avcc().nal_length_size,
-        annex_b.sample_nal_count,
-        annex_b.has_idr as u8,
-        annex_b.bytes.len(),
-    );
 
     let Some(sps) = parse_sps(&summary.avcc().sps) else {
         crate::log!("intel/media: sps parse failed\n");
@@ -2805,11 +2900,6 @@ pub(crate) async fn run_media_decode_async() {
         pps.constrained_intra_pred_flag as u8,
         pps.transform_8x8_mode_flag as u8,
     );
-    crate::log!(
-        "intel/media: idr_nal offset={} length={}\n",
-        annex_b.idr_nal_offset,
-        annex_b.idr_nal_length,
-    );
 
     let Some(backing) = ensure_decode_backing(dev, windows) else {
         crate::log!("intel/media: backing alloc/map failed\n");
@@ -2817,7 +2907,70 @@ pub(crate) async fn run_media_decode_async() {
         return;
     };
 
-    let playback_probe_samples = summary.sample_count().min(MEDIA_MAX_DECODE_FRAMES).max(1);
+    let first_annex_b = {
+        let bitstream = unsafe {
+            core::slice::from_raw_parts_mut(backing.bitstream_virt, backing.bitstream_bytes)
+        };
+        match write_annex_b_for_sample(summary.first_sample(), summary.avcc(), bitstream) {
+            Ok(annex_b) => annex_b,
+            Err(err) => {
+                crate::log!(
+                    "intel/media: annexb build failed err={:?} container={} first_sample_len={} nal_length_size={} first_bytes=[{:02X?}]\n",
+                    err,
+                    summary.container_name(),
+                    summary.first_sample().len(),
+                    summary.avcc().nal_length_size,
+                    &summary.first_sample()[..summary.first_sample().len().min(16)],
+                );
+                store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
+                return;
+            }
+        }
+    };
+    let nal_types =
+        first_sample_nal_types(summary.first_sample(), summary.avcc().nal_length_size, 6);
+
+    crate::log!(
+        "intel/media: h264 container={} dims={}x{} samples={} first_sample={} nal_len={} sps={} pps={} profile=0x{:02X} level=0x{:02X} annexb_bytes={} sample_nals={} idr={} first_nals={:?}\n",
+        summary.container_name(),
+        summary.width(),
+        summary.height(),
+        summary.sample_count(),
+        summary.first_sample().len(),
+        summary.avcc().nal_length_size,
+        summary.avcc().sps.len(),
+        summary.avcc().pps.len(),
+        summary.avcc().profile_idc,
+        summary.avcc().level_idc,
+        first_annex_b.bytes_written,
+        first_annex_b.sample_nal_count,
+        first_annex_b.has_idr as u8,
+        nal_types
+    );
+    crate::log!(
+        "intel/media: codec container={} codec=h264 profile=0x{:02X} level=0x{:02X} frame={}x{} avcc_nal={} sample_nals={} idr={} annexb=0x{:X}\n",
+        summary.container_name(),
+        summary.avcc().profile_idc,
+        summary.avcc().level_idc,
+        summary.width(),
+        summary.height(),
+        summary.avcc().nal_length_size,
+        first_annex_b.sample_nal_count,
+        first_annex_b.has_idr as u8,
+        first_annex_b.bytes_written,
+    );
+    crate::log!(
+        "intel/media: idr_nal offset={} length={}\n",
+        first_annex_b.idr_nal_offset,
+        first_annex_b.idr_nal_length,
+    );
+
+    let playback_probe_samples = if summary.sample_count_known() {
+        summary.sample_count().min(MEDIA_MAX_DECODE_FRAMES)
+    } else {
+        MEDIA_MAX_DECODE_FRAMES
+    }
+    .max(1);
     let mut playback_attempted = 0u32;
     let mut playback_presented = 0u32;
     let mut playback_completed = 0u32;
@@ -2826,13 +2979,17 @@ pub(crate) async fn run_media_decode_async() {
     let mut last_attempted_demo = None;
     let mut last_presented_demo = None;
     let mut ref_surface_idx: u32 = 0;
+    let mut sample_scratch = Vec::new();
 
     for sample_idx in 0..playback_probe_samples {
-        let owned_sample;
+        let frame_started = Instant::now();
         let sample = if sample_idx == 0 {
             summary.first_sample()
         } else {
-            let Some(sample_bytes) = summary.load_sample(&source, sample_idx).await else {
+            let Some(sample_len) = summary
+                .load_sample(&source, sample_idx, &mut sample_scratch)
+                .await
+            else {
                 crate::log!(
                     "intel/media: playback sample unavailable index={} of={}\n",
                     sample_idx,
@@ -2840,17 +2997,21 @@ pub(crate) async fn run_media_decode_async() {
                 );
                 break;
             };
-            owned_sample = sample_bytes;
-            owned_sample.as_slice()
+            &sample_scratch[..sample_len]
         };
 
         let sample_nals = first_sample_nal_types(sample, summary.avcc().nal_length_size, 6);
         let vcl_info = parse_sample_vcl_info(sample, summary.avcc().nal_length_size, &sps, &pps);
-        let built_sample_annex_b = if sample_idx == 0 {
-            None
+        let built_sample_annex_b;
+        let sample_annex_b = if sample_idx == 0 {
+            &first_annex_b
         } else {
-            match build_annex_b_for_sample(sample, summary.avcc()) {
-                Ok(access_unit) => Some(access_unit),
+            let bitstream = unsafe {
+                core::slice::from_raw_parts_mut(backing.bitstream_virt, backing.bitstream_bytes)
+            };
+            built_sample_annex_b = match write_annex_b_for_sample(sample, summary.avcc(), bitstream)
+            {
+                Ok(access_unit) => access_unit,
                 Err(err) => {
                     crate::log!(
                         "intel/media: playback annexb build failed index={} err={:?}\n",
@@ -2859,31 +3020,12 @@ pub(crate) async fn run_media_decode_async() {
                     );
                     continue;
                 }
-            }
+            };
+            &built_sample_annex_b
         };
-        let sample_bytes = built_sample_annex_b
-            .as_ref()
-            .map(|access_unit| access_unit.bytes.as_slice())
-            .unwrap_or(annex_b.bytes.as_slice());
-        let sample_nal_count = built_sample_annex_b
-            .as_ref()
-            .map(|access_unit| access_unit.sample_nal_count)
-            .unwrap_or(annex_b.sample_nal_count);
-        let sample_has_idr = built_sample_annex_b
-            .as_ref()
-            .map(|access_unit| access_unit.has_idr)
-            .unwrap_or(annex_b.has_idr);
-        let sample_idr_nal_offset = built_sample_annex_b
-            .as_ref()
-            .map(|access_unit| access_unit.idr_nal_offset)
-            .unwrap_or(annex_b.idr_nal_offset);
-        let sample_idr_nal_length = built_sample_annex_b
-            .as_ref()
-            .map(|access_unit| access_unit.idr_nal_length)
-            .unwrap_or(annex_b.idr_nal_length);
 
         playback_attempted += 1;
-        if sample_has_idr {
+        if sample_annex_b.has_idr {
             playback_idr += 1;
         } else {
             playback_non_idr += 1;
@@ -2897,9 +3039,9 @@ pub(crate) async fn run_media_decode_async() {
                 "intel/media: playback probe index={} of={} bytes={} sample_nals={} idr={} frame_num={} nal_ref_idc={} nal_type={} slice_type={} first_nals={:?}\n",
                 sample_idx,
                 summary.sample_count(),
-                sample_bytes.len(),
-                sample_nal_count,
-                sample_has_idr as u8,
+                sample_annex_b.bytes_written,
+                sample_annex_b.sample_nal_count,
+                sample_annex_b.has_idr as u8,
                 vcl_info.map(|info| info.frame_num).unwrap_or(u32::MAX),
                 vcl_info.map(|info| info.nal_ref_idc).unwrap_or(0),
                 vcl_info.map(|info| info.nal_type).unwrap_or(0),
@@ -2915,11 +3057,7 @@ pub(crate) async fn run_media_decode_async() {
             backing,
             summary.width(),
             summary.height(),
-            sample_bytes,
-            sample_nal_count,
-            sample_has_idr,
-            sample_idr_nal_offset,
-            sample_idr_nal_length,
+            sample_annex_b,
             vcl_info,
             &sps,
             &pps,
@@ -2941,7 +3079,7 @@ pub(crate) async fn run_media_decode_async() {
         // overwrite the previous reference that the next P-frame needs.
         let is_reference = vcl_info
             .map(|i| i.nal_ref_idc != 0)
-            .unwrap_or(sample_has_idr);
+            .unwrap_or(sample_annex_b.has_idr);
         if is_reference {
             ref_surface_idx = ref_surface_idx.wrapping_add(1);
         }
@@ -2982,9 +3120,14 @@ pub(crate) async fn run_media_decode_async() {
             );
         }
         // Yield to the async executor between frames so other tasks
-        // (network, display, heartbeat) are not starved.
+        // (network, display, heartbeat) are not starved. Only sleep the
+        // remaining budget so decode cost itself is not penalized twice.
         if sample_idx + 1 < playback_probe_samples {
-            Timer::after(EmbassyDuration::from_millis(MEDIA_PLAYBACK_FRAME_DELAY_MS)).await;
+            let elapsed_ms = frame_started.elapsed().as_millis() as u64;
+            let remaining_ms = MEDIA_PLAYBACK_FRAME_DELAY_MS.saturating_sub(elapsed_ms);
+            if remaining_ms != 0 {
+                Timer::after(EmbassyDuration::from_millis(remaining_ms)).await;
+            }
         }
     }
 
