@@ -177,13 +177,9 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     let _ = barrier_wait.is_leader();
     crate::log!("tokio_probe: success sync.barrier\n");
 
-    let blocking_value = tokio::task::spawn_blocking(|| 0xB10C_4B1u32)
-        .await
-        .map_err(|_| "blocking-spawn-blocking-task")?;
-    if blocking_value != 0xB10C_4B1 {
-        return Err("blocking-spawn-blocking-value");
-    }
-    crate::log!("tokio_probe: success blocking.spawn_blocking\n");
+    crate::log!(
+        "tokio_probe: note blocking.spawn_blocking deferred on zkvm until Tokio blocking pool stops requiring host threads\n"
+    );
 
     {
         crate::log!("tokio_probe: enter time.sleep\n");
@@ -228,18 +224,9 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     {
         let _options = tokio::fs::OpenOptions::new();
         crate::log!("tokio_probe: success fs.open_options_surface\n");
-
-        if crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
-            let root_meta = tokio::fs::metadata("/")
-                .await
-                .map_err(|_| "fs-metadata-root")?;
-            let _ = root_meta.is_dir();
-            crate::log!("tokio_probe: success fs.metadata_root\n");
-        } else {
-            crate::log!(
-                "tokio_probe: note fs.metadata_root deferred until TRUEOSFS_ROOT_MOUNTED\n"
-            );
-        }
+        crate::log!(
+            "tokio_probe: note fs.runtime_ops deferred on zkvm because tokio::fs currently routes through spawn_blocking\n"
+        );
     }
 
     {
@@ -272,6 +259,9 @@ pub(crate) fn log_boot_probe() {
     );
     crate::log!(
         "tokio_probe: note net surface deferred because mio/socket2 do not support target_os=zkvm yet\n"
+    );
+    crate::log!(
+        "tokio_probe: note blocking/fs runtime ops deferred because Tokio blocking pool still expects host thread spawning on zkvm\n"
     );
 
     let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
