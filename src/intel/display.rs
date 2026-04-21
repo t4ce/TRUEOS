@@ -294,7 +294,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     }
     crate::intel::ggtt_invalidate(dev);
 
-    let Some(stride_reg) = plane_stride_reg_value(pitch_bytes) else {
+    let Some(_stride_reg) = plane_stride_reg_value(pitch_bytes) else {
         crate::log!(
             "intel/display: primary-boot-surface stride encode failed pitch=0x{:X}\n",
             pitch_bytes

@@ -8,8 +8,8 @@ pub mod esp;
 pub mod ports;
 pub mod srv;
 
-pub use cli::{dns, ftp, html, http, https, irc, json, ntp, ping, pop3, smtp, ws};
-pub use srv::{sntp, spop3, ssmtp, wss};
+pub use cli::{dns, ftp, html, http, https, json, ntp, smtp};
+pub use srv::sntp;
 
 use v::vnet as api;
 

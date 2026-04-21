@@ -3996,11 +3996,10 @@ pub async fn fetch_https_body_with_profile_async(
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
 
-        let res = if HttpsLimits::KEEPALIVE_ENABLE {
-            fetch_on_device_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, None).await
-        } else {
-            fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, None).await
-        };
+        // Keep generic GET helpers on connection-close semantics. Older
+        // consumers such as html/surf expect isolated one-shot fetches, while
+        // keepalive remains available for the explicit high-churn paths.
+        let res = fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, None).await;
         match res {
             Ok(v) => return Ok(v),
             Err(FetchError::Redirect { status, url }) => {
@@ -4052,12 +4051,8 @@ pub async fn fetch_https_body_progress_with_profile_async(
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
 
-        let res = if HttpsLimits::KEEPALIVE_ENABLE {
-            fetch_on_device_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, Some(progress)).await
-        } else {
-            fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, Some(progress))
-                .await
-        };
+        let res = fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, Some(progress))
+            .await;
         match res {
             Ok(v) => return Ok(v),
             Err(FetchError::Redirect { status, url }) => {

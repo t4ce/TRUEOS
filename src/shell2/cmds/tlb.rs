@@ -421,7 +421,7 @@ fn build_aml_context() -> Result<(aml::AmlContext, Vec<AmlTableRecord>), &'stati
         bytes: dsdt_bytes,
     });
 
-    for (index, (phys, hdr)) in tables
+    for (index, (phys, _hdr)) in tables
         .table_headers()
         .filter(|(_, hdr)| hdr.signature.as_str() == "SSDT")
         .enumerate()

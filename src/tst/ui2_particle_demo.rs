@@ -3,7 +3,6 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
 
 use crate::gfx::particle::{ParticleSnapshot, ParticleSystem};

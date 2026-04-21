@@ -1,13 +1,9 @@
-use alloc::{boxed::Box, collections::VecDeque, format, vec::Vec};
+use alloc::collections::VecDeque;
 use core::fmt::Write;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 
-use embassy_executor::task;
-use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use crate::net::adapter::{
-    NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
-};
+use crate::net::adapter::NetHandle;
 use crate::shell2::{ShellBackend2, ShellIo2};
 
 pub(crate) use crate::r::net::ports::NET_SHELL_TCP_PORT;

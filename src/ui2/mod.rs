@@ -31,7 +31,7 @@ pub(crate) use self::ui2_font::{
 };
 pub(crate) use self::ui2_font_bucketproducer::*;
 use self::ui2_hid::*;
-pub(crate) use self::ui2_hid::{Ui2CursorColor, cursor_color, cursor_color_rgba8};
+pub(crate) use self::ui2_hid::cursor_color_rgba8;
 pub(crate) use self::ui2_hit::ui2_hit_task;
 use self::ui2_hit::*;
 use self::ui2_hosted::*;

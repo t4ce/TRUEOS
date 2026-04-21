@@ -3108,12 +3108,12 @@ fn encode_triangle_probe_batch(
     push(
         batch_dwords,
         &mut cursor,
-        (u32::try_from(
+        u32::try_from(
             crate::intel::align_up(binding_table_pool_size, 4096)
                 .ok_or("probe-binding-pool-align")?,
         )
         .map_err(|_| "probe-binding-pool-convert")?
-            & 0xFFFF_F000),
+            & 0xFFFF_F000 ,
     )?;
 
     log_batch_offset(cursor, "3DSTATE_SAMPLER_STATE_POINTERS_VS");
