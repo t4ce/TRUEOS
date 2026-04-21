@@ -38,26 +38,6 @@ struct AudioTarget {
 static ACTIVE_AUDIO_STREAM: Mutex<Option<ActiveAudioStream>> = Mutex::new(None);
 static AUDIO_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct PcmFormat {
-    pub rate_hz: u32,
-    pub channels: u8,
-    pub bits_per_sample: u8,
-}
-
-#[inline]
-pub fn demo_loop_requested() -> bool {
-    true
-}
-
-#[inline]
-pub fn demo_loop_active() -> bool {
-    AUDIO_STREAM_ACTIVE.load(Ordering::Acquire)
-}
-
-#[inline]
-pub fn set_demo_loop_requested(_enabled: bool) {}
-
 fn pick_audio_target(
     configs: &[usb_if::descriptor::ConfigurationDescriptor],
 ) -> Option<AudioTarget> {

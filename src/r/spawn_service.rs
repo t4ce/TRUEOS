@@ -53,7 +53,6 @@ define_started_flags!(
     UI2_HOSTED_SYNC_TASK_STARTED,
     UI2_HIT_TASK_STARTED,
     UI2_STARTED,
-    UI2_GFX_BROWSER_STARTED,
     UI2_GFX_TETRIS_STARTED,
     UI2_ATHLAS_THIRD_DEMO_STARTED,
     UI2_ATHLAS_HALF_DEMO_STARTED,
@@ -73,28 +72,15 @@ define_started_flags!(
     UI2_SHELL_DEMO_STARTED,
     UI2_SWARM_DEMO_STARTED,
     UI2_SVG_DEMO_STARTED,
-    UI2_USB_AUDIO_DEMO_STARTED,
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
     UI2_WEATHER_DEMO_STARTED,
     UI2_CHART_DEMO_STARTED,
-    GFX_INTEL_READINESS_PROBE_STARTED,
-    CRABUSB_BSP_SERVICE_STARTED,
-    CRABUSB_EVENT_PUMP_STARTED,
-    CRABUSB_AUDIO_STARTED,
-    CRABUSB_TRUEKEY_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
-    UAC_EVENT_DRAIN_STARTED,
-    UAC_SONG_STARTED,
-    VLEDS_MUX_STARTED,
-    VLEDS_CYCLE_STARTED,
-    TRUEKEY_DRAIN_STARTED,
-    PIANO_DRAIN_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     SMTP_SMOKE_STARTED,
-    MMIO_ONESHOT_PROBE_STARTED,
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
@@ -116,7 +102,6 @@ define_disabled_flags!(
     DISABLED_TGA,
     DISABLED_UI2_GFX_TETRIS,
     DISABLED_UI2_MANDELBROT_DEMO,
-    DISABLED_UI2_CORETICKS_DEMO,
     DISABLED_UI2_PETERSEN_DEMO,
     DISABLED_UI2_PARTICLE_DEMO,
     DISABLED_UI2_SMILEY_FOUNTAIN_DEMO,
@@ -863,6 +848,13 @@ fn spawn_ui2_chart_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_pci_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        let _ = worker_spawner;
+        crate::tst_ui2_pci_demo::ui2_pci_demo_task()
+    })
+}
+
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     let count = crate::usb2::pci_usb_controllers()
         .len()
@@ -1299,6 +1291,12 @@ static TASKS: &[TaskSpec] = &[
         UI2_DEMO_READY,
         &UI2_CHART_DEMO_STARTED,
         spawn_ui2_chart_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-pci-demo",
+        UI2_DEMO_READY,
+        &UI2_PCI_DEMO_STARTED,
+        spawn_ui2_pci_demo,
     ),
     TaskSpec::disabled(
         "ui2-trueosfs-explorer-demo",

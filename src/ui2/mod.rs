@@ -46,9 +46,6 @@ const UI2_BAR_H: f32 = 26.0;
 const UI2_TITLE_H: f32 = UI2_BAR_H;
 const UI2_BOTTOM_BAR_H: f32 = UI2_BAR_H;
 const UI2_SYSTEM_SCROLLBAR_PX: f32 = 4.0;
-// Experimental in debug.
-const UI2_BROWSER_TITLE_OVERLAY_ANIMATION_ENABLED: bool = false;
-const UI2_DEBUG_FPS_OVERLAY_ENABLED: bool = false;
 const UI2_BROWSER_TITLE_OVERLAY_PERIOD_MS: u64 = 2400;
 const UI2_BROWSER_FORK_WINDOW_OFFSET_PX: f32 = 24.0;
 const UI2_MINIMIZED_STRIP_W: f32 = 333.0;
@@ -592,20 +589,6 @@ fn elapsed_ms_since(started_at: Instant) -> u64 {
         .as_millis() as u64
 }
 
-#[inline]
-fn browser_title_overlay_mid_offset(window: &Ui2Window, now_ms: u64) -> f32 {
-    if window.kind != Ui2WindowKind::HostedBrowser || !UI2_BROWSER_TITLE_OVERLAY_ANIMATION_ENABLED {
-        return 0.5;
-    }
-
-    let period_ms = UI2_BROWSER_TITLE_OVERLAY_PERIOD_MS.max(1);
-    let phase_ms = now_ms
-        .wrapping_add((window_browser_instance_id(window) as u64).saturating_mul(period_ms / 5))
-        % period_ms;
-    let t = phase_ms as f32 / period_ms as f32;
-    0.18 + (0.64 * t)
-}
-
 fn init_state() -> &'static Mutex<Ui2State> {
     UI2_STATE.call_once(|| {
         let (view_w, view_h) = crate::intel::active_scanout_dimensions()
@@ -801,14 +784,6 @@ fn window_mut(state: &mut Ui2State, id: u32) -> Option<&mut Ui2Window> {
 
 fn rect_contains_point(rect: Ui2Rect, x: f32, y: f32) -> bool {
     x >= rect.x && y >= rect.y && x < (rect.x + rect.w) && y < (rect.y + rect.h)
-}
-
-fn window_kind_id(kind: Ui2WindowKind) -> u32 {
-    match kind {
-        Ui2WindowKind::HostedBrowser => 1,
-        Ui2WindowKind::HostedSurface => 3,
-        Ui2WindowKind::Hosted3d => 4,
-    }
 }
 
 fn window_browser_instance_id(window: &Ui2Window) -> u32 {

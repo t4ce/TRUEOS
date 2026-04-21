@@ -668,14 +668,6 @@ pub(crate) fn ui2_shell_attach_window(window_id: u32, cols: usize, rows: usize) 
     crate::shell2::repaint_backend_screen(&UI2_SHELL_BACKEND);
 }
 
-pub(crate) fn ui2_shell_window_id() -> u32 {
-    runtime().lock().window_id
-}
-
-pub(crate) fn ui2_shell_dirty_seq() -> u32 {
-    runtime().lock().dirty_seq
-}
-
 pub(crate) fn ui2_shell_mark_rendered(seq: u32) {
     UI2_SHELL_RENDERED_SEQ.store(seq, Ordering::Release);
 }

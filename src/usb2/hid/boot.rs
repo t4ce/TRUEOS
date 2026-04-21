@@ -12,7 +12,6 @@ use spin::Mutex;
 use crate::usb2::api::{InterfaceEndpointError, claim_interface};
 
 const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
-const HID_DESC_FALLBACK_REPORT_LEN: u16 = 128;
 const LED_VID_JGINYUE: u16 = 0x0416;
 const LED_PID_JGINYUE: u16 = 0xA125;
 const MOUSE_VID_LAVIEW_CASTOR: u16 = 0x22D4;

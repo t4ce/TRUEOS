@@ -1,5 +1,4 @@
 use core::fmt::Write;
-use core::str::FromStr;
 use core::str::SplitWhitespace;
 
 use acpi::sdt::fadt::Fadt;
@@ -275,13 +274,6 @@ impl TlbAmlRuntimeHandler {
         core::ptr::write_volatile(ptr.as_ptr() as *mut T, value);
     }
 
-    #[inline(always)]
-    fn spin_delay_us(&self, microseconds: u64) {
-        let target = embassy_time_driver::now().saturating_add(microseconds);
-        while embassy_time_driver::now() < target {
-            crate::wait::spin_step();
-        }
-    }
 }
 
 impl aml::Handler for TlbAmlRuntimeHandler {
@@ -810,51 +802,6 @@ fn emit_table_row(io: &'static dyn ShellBackend2, cols: &[Column], cells: &[&str
     line(io, out.as_str());
 }
 
-fn format_fixed_table_row(cols: &[Column], cells: &[&str]) -> String {
-    let mut out = String::new();
-    for (index, col) in cols.iter().enumerate() {
-        if index > 0 {
-            out.push_str("  ");
-        }
-        out.push_str(truncate_cell(cells.get(index).copied().unwrap_or(""), col.width).as_str());
-    }
-    out
-}
-
-fn push_fixed_table_header(out: &mut Vec<String>, cols: &[Column]) {
-    let headers = cols.iter().map(|col| col.header).collect::<Vec<_>>();
-    out.push(format_fixed_table_row(cols, &headers));
-    let sep = cols
-        .iter()
-        .map(|col| "-".repeat(col.width))
-        .collect::<Vec<_>>();
-    let sep_refs = sep.iter().map(String::as_str).collect::<Vec<_>>();
-    out.push(format_fixed_table_row(cols, &sep_refs));
-}
-
-fn push_fixed_table_row(out: &mut Vec<String>, cols: &[Column], cells: &[&str]) {
-    out.push(format_fixed_table_row(cols, cells));
-}
-
-fn usb_port_link_state_name(raw: u32) -> &'static str {
-    match raw & 0xF {
-        0 => "u0",
-        1 => "u1",
-        2 => "u2",
-        3 => "u3",
-        4 => "disabled",
-        5 => "rxdetect",
-        6 => "inactive",
-        7 => "polling",
-        8 => "recovery",
-        9 => "hotreset",
-        10 => "compliance",
-        11 => "test",
-        15 => "resume",
-        _ => "?",
-    }
-}
-
 fn usb_port_speed_text(portsc: u32) -> String {
     match (portsc >> 10) & 0xF {
         0 => String::from("-"),
@@ -865,42 +812,6 @@ fn usb_port_speed_text(portsc: u32) -> String {
         5 => String::from("super+"),
         n => alloc::format!("sp{}", n),
     }
-}
-
-fn usb_port_state_text(portsc: u32) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    if (portsc & (1 << 0)) != 0 {
-        parts.push("conn");
-    } else {
-        parts.push("empty");
-    }
-    if (portsc & (1 << 1)) != 0 {
-        parts.push("ena");
-    }
-    if (portsc & (1 << 9)) != 0 {
-        parts.push("pow");
-    }
-    if (portsc & (1 << 4)) != 0 {
-        parts.push("rst");
-    }
-    if (portsc & (1 << 3)) != 0 {
-        parts.push("oc");
-    }
-    parts.push(usb_port_link_state_name((portsc >> 5) & 0xF));
-    parts.join("/")
-}
-
-fn usb_path_string(root_port_id: u8, path: &[u8]) -> String {
-    let mut out = alloc::format!("rp{}", root_port_id);
-    let hops = if path.first().copied() == Some(root_port_id) {
-        &path[1..]
-    } else {
-        path
-    };
-    for port in hops {
-        out.push_str(&alloc::format!("->p{}", port));
-    }
-    out
 }
 
 #[inline]

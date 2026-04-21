@@ -8,9 +8,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use super::super::{
-    MatrixTarget, ShellBackend2, UART1_COM1_BACKEND, default_matrix_target, line_width_for_backend,
-    matrix_target_for_backend, print_matrix_target_line, print_shell_line,
-    set_matrix_target_active,
+    MatrixTarget, ShellBackend2, UART1_COM1_BACKEND, line_width_for_backend,
+    matrix_target_for_backend, print_matrix_target_line, print_shell_line, set_matrix_target_active,
 };
 use super::tlb_helper::TlbTable;
 use crate::blueprint;
@@ -305,21 +304,6 @@ pub(crate) fn enqueue_blueprint_bytes(
         app_args,
         target,
     });
-}
-
-pub(crate) fn enqueue_embedded_hello_world_once() {
-    let Some(module_bytes) = crate::limine::module_bytes_by_string(b"trueos.app.hello_world")
-    else {
-        crate::log!("run: boot hello-world module missing from limine modules\n");
-        return;
-    };
-
-    enqueue_blueprint_bytes(
-        default_matrix_target(),
-        String::from("hello_world_app.bp"),
-        module_bytes.to_vec(),
-        Vec::new(),
-    );
 }
 
 pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_args: Vec<String>) {

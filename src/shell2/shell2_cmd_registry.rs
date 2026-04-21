@@ -9,6 +9,11 @@ use super::shell2_cmd::ParseOutcome;
 
 pub(crate) type Shell2CmdHandler = fn(&Spawner, &'static dyn ShellBackend2, &str) -> ParseOutcome;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegisterCommandError {
+    DuplicateName,
+}
+
 #[derive(Clone, Copy)]
 struct BuiltinShell2CmdEntry {
     name: &'static str,
@@ -24,11 +29,6 @@ struct ApiShell2CmdEntry {
     mode: AllocString,
     color: Option<(u8, u8, u8)>,
     handler: Shell2CmdHandler,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RegisterCommandError {
-    DuplicateName,
 }
 
 static API_CMD_REGISTRY: spin::Mutex<Vec<ApiShell2CmdEntry>> = spin::Mutex::new(Vec::new());

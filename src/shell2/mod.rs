@@ -25,8 +25,8 @@ mod shell2_surf;
 pub(crate) use crate::shell2::backends::{
     NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND, UI2_SHELL_BACKEND, Ui2ShellCell,
     Ui2ShellScreenSnapshot, crlf, queue_ui2_keyboard_event as queue_ui2_shell_keyboard_event,
-    uart1_com1, ui2_shell_attach_window, ui2_shell_dirty_seq, ui2_shell_last_rendered_seq,
-    ui2_shell_mark_rendered, ui2_shell_snapshot, ui2_shell_window_id,
+    uart1_com1, ui2_shell_attach_window, ui2_shell_last_rendered_seq, ui2_shell_mark_rendered,
+    ui2_shell_snapshot,
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_ai::AiPromptMode;

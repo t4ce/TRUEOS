@@ -105,26 +105,10 @@ pub(crate) async fn parse_h264_source_summary(
     source: &MediaSource,
 ) -> Result<H264SourceSummary, &'static str> {
     if let Some(bytes) = source.body() {
-        if looks_like_matroska(bytes) {
-            return parse_h264_matroska_summary(bytes)
-                .map(H264SourceSummary::Matroska)
-                .map_err(|_| "matroska");
-        }
-        return parse_h264_mp4_summary(bytes)
-            .map(H264SourceSummary::Mp4)
-            .map_err(|_| "mp4");
+        return parse_h264_source_summary_from_bytes(bytes);
     }
 
-    let probe_len = usize::try_from(source.total_len().min(16)).map_err(|_| "probe")?;
-    let mut probe = [0u8; 16];
-    if !source
-        .read_range_into(0, &mut probe[..probe_len])
-        .await
-        .map_err(|_| "probe")?
-    {
-        return Err("probe");
-    }
-    if looks_like_matroska(&probe[..probe_len]) {
+    if source_looks_like_matroska(source).await? {
         return parse_h264_matroska_summary_from_source(source)
             .await
             .map(H264SourceSummary::Matroska)
@@ -134,4 +118,29 @@ pub(crate) async fn parse_h264_source_summary(
         .await
         .map(H264SourceSummary::Mp4)
         .map_err(|_| "mp4")
+}
+
+fn parse_h264_source_summary_from_bytes(bytes: &[u8]) -> Result<H264SourceSummary, &'static str> {
+    if looks_like_matroska(bytes) {
+        parse_h264_matroska_summary(bytes)
+            .map(H264SourceSummary::Matroska)
+            .map_err(|_| "matroska")
+    } else {
+        parse_h264_mp4_summary(bytes)
+            .map(H264SourceSummary::Mp4)
+            .map_err(|_| "mp4")
+    }
+}
+
+async fn source_looks_like_matroska(source: &MediaSource) -> Result<bool, &'static str> {
+    let probe_len = usize::try_from(source.total_len().min(16)).map_err(|_| "probe")?;
+    let mut probe = [0u8; 16];
+    if !source
+        .read_range_into(0, &mut probe[..probe_len])
+        .await
+        .map_err(|_| "probe")?
+    {
+        return Err("probe");
+    }
+    Ok(looks_like_matroska(&probe[..probe_len]))
 }

@@ -1,4 +1,3 @@
-use crate::wait;
 use alloc::vec::Vec;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering};
@@ -206,41 +205,43 @@ pub fn read(slot: usize) -> Option<MailboxRead> {
     })
 }
 
-/// Wait for all online APs to finish a given request sequence.
-pub fn wait_all_online_aps(seq: u64, spins: usize) -> bool {
-    if seq == 0 {
-        return true;
-    }
-    let len = cpu_count();
-    if len <= 1 {
-        return true;
-    }
-
-    for _ in 0..spins {
-        let mut done = true;
-        for slot in 1..len {
-            let Some(r) = read(slot) else {
-                done = false;
-                break;
-            };
-            if !r.online {
-                continue;
-            }
-            if r.seq != seq || r.state != STATE_DONE {
-                done = false;
-                break;
-            }
-        }
-        if done {
-            return true;
-        }
-        wait::spin_step();
-    }
-
-    false
-}
-
-/// Backwards-compat alias.
-pub fn wait_all_aps(seq: u64, spins: usize) -> bool {
-    wait_all_online_aps(seq, spins)
-}
+// Unused for now; kept here as a ready-to-restore helper if AP rendezvous
+// waits become part of the SMP bringup flow again.
+// /// Wait for all online APs to finish a given request sequence.
+// pub fn wait_all_online_aps(seq: u64, spins: usize) -> bool {
+//     if seq == 0 {
+//         return true;
+//     }
+//     let len = cpu_count();
+//     if len <= 1 {
+//         return true;
+//     }
+//
+//     for _ in 0..spins {
+//         let mut done = true;
+//         for slot in 1..len {
+//             let Some(r) = read(slot) else {
+//                 done = false;
+//                 break;
+//             };
+//             if !r.online {
+//                 continue;
+//             }
+//             if r.seq != seq || r.state != STATE_DONE {
+//                 done = false;
+//                 break;
+//             }
+//         }
+//         if done {
+//             return true;
+//         }
+//         wait::spin_step();
+//     }
+//
+//     false
+// }
+//
+// /// Backwards-compat alias.
+// pub fn wait_all_aps(seq: u64, spins: usize) -> bool {
+//     wait_all_online_aps(seq, spins)
+// }
