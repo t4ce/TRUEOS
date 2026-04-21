@@ -1,9 +1,5 @@
 cargo +nightly build --target-dir tgt/arm-exp  --no-default-features --features tokio-probe -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target .cargo/arm.json
-warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_init has no kernel export and will stay unresolved
-warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read has no kernel export and will stay unresolved
-warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read_byte has no kernel export and will stay unresolved
-warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write has no kernel export and will stay unresolved
-warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write_byte has no kernel export and will stay unresolved
+   Compiling TRUEOS v0.0.2 (/home/t4ce/REPOS/TRUEOS)
 warning: unused imports: `Err`, `Ok`, and `self`
  --> vendor/kurbo-0.11.3/src/stroke.rs:8:28
   |
@@ -66,16 +62,7 @@ warning: constant `BITMASKS` is never used
 57 | pub(crate) const BITMASKS: [u32; 17] = [
    |                  ^^^^^^^^
 
-warning: unused imports: `cos` and `floor`
- --> crates/trueos-weather/src/helper.rs:4:18
-  |
-4 | use libm::{acos, cos, floor, sin, tan};
-  |                  ^^^  ^^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
-
 warning: `fdeflate` (lib) generated 6 warnings
-warning: `trueos-weather` (lib) generated 1 warning (run `cargo fix --lib -p trueos-weather` to apply 1 suggestion)
 warning: unused imports: `boxed::Box` and `string::String`
  --> vendor/usvg-0.45.1/src/parser/mod.rs:4:13
   |
@@ -204,6 +191,14 @@ warning: missing documentation for a method
 17 |     fn approx_ne_ulps(&self, other: &Self, ulps: i32) -> bool {
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+warning: unused imports: `cos` and `floor`
+ --> crates/trueos-weather/src/helper.rs:4:18
+  |
+4 | use libm::{acos, cos, floor, sin, tan};
+  |                  ^^^  ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
 warning: unused import: `AsciiBranches`
    --> crates/trueos-math/src/bst_arena.rs:184:33
     |
@@ -225,89 +220,8 @@ warning: unused import: `AsciiStack`
     |                                              ^^^^^^^^^^
 
 warning: `usvg` (lib) generated 19 warnings (run `cargo fix --lib -p usvg` to apply 15 suggestions)
+warning: `trueos-weather` (lib) generated 1 warning (run `cargo fix --lib -p trueos-weather` to apply 1 suggestion)
 warning: `trueos-math` (lib) generated 3 warnings (run `cargo fix --lib -p trueos-math` to apply 2 suggestions)
-warning: methods `descriptor` and `configuration_descriptors` are never used
-   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/hub/device.rs:228:12
-    |
-110 | impl HubDevice {
-    | -------------- methods in this implementation
-...
-228 |     pub fn descriptor(&self) -> &DeviceDescriptor {
-    |            ^^^^^^^^^^
-...
-232 |     pub fn configuration_descriptors(&self) -> &[ConfigurationDescripto...
-    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
-    |
-    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: methods `submit_for_poll` and `poll_finished` are never used
-  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/cmd.rs:78:12
-   |
-20 | impl CommandRing {
-   | ---------------- methods in this implementation
-...
-78 |     pub fn submit_for_poll(&mut self, trb: command::Allowed) -> BusAddr {
-   |            ^^^^^^^^^^^^^^^
-...
-82 |     pub fn poll_finished(&self, addr: BusAddr) -> Option<CommandCompleti...
-   |            ^^^^^^^^^^^^^
-
-warning: methods `poll_command_completion` and `command_ring_self_test` are never used
-   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/host.rs:198:8
-    |
- 99 | impl Xhci {
-    | --------- methods in this implementation
-...
-198 |     fn poll_command_completion(
-    |        ^^^^^^^^^^^^^^^^^^^^^^^
-...
-239 |     fn command_ring_self_test(&mut self) -> Result {
-    |        ^^^^^^^^^^^^^^^^^^^^^^
-
-warning: constant `HUB_DEBOUNCE_TIMEOUT_MS` is never used
-  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:22:7
-   |
-22 | const HUB_DEBOUNCE_TIMEOUT_MS: u64 = 2000;
-   |       ^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: constant `HUB_DEBOUNCE_STEP_MS` is never used
-  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:23:7
-   |
-23 | const HUB_DEBOUNCE_STEP_MS: u64 = 25;
-   |       ^^^^^^^^^^^^^^^^^^^^
-
-warning: constant `HUB_DEBOUNCE_STABLE_MS` is never used
-  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:24:7
-   |
-24 | const HUB_DEBOUNCE_STABLE_MS: u64 = 100;
-   |       ^^^^^^^^^^^^^^^^^^^^^^
-
-warning: methods `debounce_port`, `wait_for_port_enabled`, `settle_port_enabled`, and `handle_changed` are never used
-   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:374:14
-    |
-351 | impl XhciRootHub {
-    | ---------------- methods in this implementation
-...
-374 |     async fn debounce_port(&mut self, port_id: u8, must_be_connected: b...
-    |              ^^^^^^^^^^^^^
-...
-466 |     async fn wait_for_port_enabled(&mut self, port_id: u8) -> Result<()...
-    |              ^^^^^^^^^^^^^^^^^^^^^
-...
-482 |     async fn settle_port_enabled(&mut self, port_id: u8, reason: &'stat...
-    |              ^^^^^^^^^^^^^^^^^^^
-...
-508 |     async fn handle_changed(&mut self) -> Result<(), USBError> {
-    |              ^^^^^^^^^^^^^^
-
-warning: feature `iterator_try_collect` is declared but not used
- --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/lib.rs:2:12
-  |
-2 | #![feature(iterator_try_collect)]
-  |            ^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: `#[warn(unused_features)]` (part of `#[warn(unused)]`) on by default
-
 warning: variable does not need to be mutable
    --> crates/trueos-qjs/src/async_ops.rs:609:18
     |
@@ -542,26 +456,6 @@ warning: `extern` fn uses type `fn(u32, i32, f32)`, which is not FFI-safe
     = help: consider using an `extern fn(...) -> ...` function pointer instead
     = note: this function pointer has Rust-specific calling convention
 
-warning: unused variable: `m`
-   --> vendor/tokio-1.52.1/src/runtime/park.rs:171:13
-    |
-171 |         let m = self.mutex.lock();
-    |             ^ help: if this is intentional, prefix it with an underscore: `_m`
-    |
-    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
-
-warning: missing documentation for a struct
-  --> vendor/tokio-1.52.1/src/time/instant.rs:53:1
-   |
-53 | pub struct Instant {
-   | ^^^^^^^^^^^^^^^^^^
-   |
-note: the lint level is defined here
-  --> vendor/tokio-1.52.1/src/lib.rs:9:5
-   |
- 9 |     missing_docs,
-   |     ^^^^^^^^^^^^
-
 warning: unused import: `io`
  --> vendor/png-0.18.1/src/common.rs:6:47
   |
@@ -687,10 +581,112 @@ warning: trait `WriteBytesExt` is never used
 34 | pub trait WriteBytesExt<T>: io::Write {
    |           ^^^^^^^^^^^^^
 
-warning: `crab-usb` (lib) generated 8 warnings
 warning: `trueos-qjs` (lib) generated 36 warnings (run `cargo fix --lib -p trueos-qjs` to apply 14 suggestions)
-warning: `tokio` (lib) generated 2 warnings (run `cargo fix --lib -p tokio` to apply 1 suggestion)
 warning: `png` (lib) generated 18 warnings (run `cargo fix --lib -p png` to apply 2 suggestions)
+warning: methods `descriptor` and `configuration_descriptors` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/hub/device.rs:228:12
+    |
+110 | impl HubDevice {
+    | -------------- methods in this implementation
+...
+228 |     pub fn descriptor(&self) -> &DeviceDescriptor {
+    |            ^^^^^^^^^^
+...
+232 |     pub fn configuration_descriptors(&self) -> &[ConfigurationDescripto...
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `submit_for_poll` and `poll_finished` are never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/cmd.rs:78:12
+   |
+20 | impl CommandRing {
+   | ---------------- methods in this implementation
+...
+78 |     pub fn submit_for_poll(&mut self, trb: command::Allowed) -> BusAddr {
+   |            ^^^^^^^^^^^^^^^
+...
+82 |     pub fn poll_finished(&self, addr: BusAddr) -> Option<CommandCompleti...
+   |            ^^^^^^^^^^^^^
+
+warning: methods `poll_command_completion` and `command_ring_self_test` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/host.rs:198:8
+    |
+ 99 | impl Xhci {
+    | --------- methods in this implementation
+...
+198 |     fn poll_command_completion(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+239 |     fn command_ring_self_test(&mut self) -> Result {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_TIMEOUT_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:22:7
+   |
+22 | const HUB_DEBOUNCE_TIMEOUT_MS: u64 = 2000;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_STEP_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:23:7
+   |
+23 | const HUB_DEBOUNCE_STEP_MS: u64 = 25;
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_STABLE_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:24:7
+   |
+24 | const HUB_DEBOUNCE_STABLE_MS: u64 = 100;
+   |       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `debounce_port`, `wait_for_port_enabled`, `settle_port_enabled`, and `handle_changed` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:374:14
+    |
+351 | impl XhciRootHub {
+    | ---------------- methods in this implementation
+...
+374 |     async fn debounce_port(&mut self, port_id: u8, must_be_connected: b...
+    |              ^^^^^^^^^^^^^
+...
+466 |     async fn wait_for_port_enabled(&mut self, port_id: u8) -> Result<()...
+    |              ^^^^^^^^^^^^^^^^^^^^^
+...
+482 |     async fn settle_port_enabled(&mut self, port_id: u8, reason: &'stat...
+    |              ^^^^^^^^^^^^^^^^^^^
+...
+508 |     async fn handle_changed(&mut self) -> Result<(), USBError> {
+    |              ^^^^^^^^^^^^^^
+
+warning: feature `iterator_try_collect` is declared but not used
+ --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/lib.rs:2:12
+  |
+2 | #![feature(iterator_try_collect)]
+  |            ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_features)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `m`
+   --> vendor/tokio-1.52.1/src/runtime/park.rs:171:13
+    |
+171 |         let m = self.mutex.lock();
+    |             ^ help: if this is intentional, prefix it with an underscore: `_m`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: missing documentation for a struct
+  --> vendor/tokio-1.52.1/src/time/instant.rs:53:1
+   |
+53 | pub struct Instant {
+   | ^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> vendor/tokio-1.52.1/src/lib.rs:9:5
+   |
+ 9 |     missing_docs,
+   |     ^^^^^^^^^^^^
+
+warning: `crab-usb` (lib) generated 8 warnings
+warning: `tokio` (lib) generated 2 warnings (run `cargo fix --lib -p tokio` to apply 1 suggestion)
 warning: constant `TOKEN_THRESHOLD` is never used
   --> vendor/localcoder/src/compact.rs:13:7
    |
@@ -848,7 +844,11 @@ warning: multiple associated items are never used
     |            ^^^^^^^
 
 warning: `localcoder` (lib) generated 18 warnings
-   Compiling TRUEOS v0.0.2 (/home/t4ce/REPOS/TRUEOS)
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_init has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read_byte has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write has no kernel export and will stay unresolved
+warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write_byte has no kernel export and will stay unresolved
 warning: unused import: `AtomicU64`
  --> src/logflag.rs:1:49
   |
@@ -871,6 +871,14 @@ warning: unused import: `core::fmt::Write`
   |
 5 | use core::fmt::Write;
   |     ^^^^^^^^^^^^^^^^
+
+warning: unnecessary `unsafe` block
+   --> src/allocators.rs:764:5
+    |
+764 |     unsafe {
+    |     ^^^^^^ unnecessary `unsafe` block
+    |
+    = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
 
 warning: value assigned to `did_work` is never read
     --> src/gfx/virtio_gpu_3d.rs:2882:25
@@ -1010,75 +1018,75 @@ warning: constant `BSP_BOOT_STACK_BYTES` is never used
     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: constant `HV_GUEST_HEAP_ALIGN` is never used
-  --> src/allocators.rs:12:7
+  --> src/allocators.rs:13:7
    |
-12 | const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
+13 | const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
    |       ^^^^^^^^^^^^^^^^^^^
 
 warning: constant `HV_GUEST_HEAP_CANDIDATES` is never used
-  --> src/allocators.rs:13:7
+  --> src/allocators.rs:14:7
    |
-13 | const HV_GUEST_HEAP_CANDIDATES: [usize; 4] = [
+14 | const HV_GUEST_HEAP_CANDIDATES: [usize; 4] = [
    |       ^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: struct `AllocTrace` is never constructed
-  --> src/allocators.rs:45:12
+  --> src/allocators.rs:46:12
    |
-45 | pub struct AllocTrace {
+46 | pub struct AllocTrace {
    |            ^^^^^^^^^^
 
 warning: function `last_alloc_trace` is never used
-   --> src/allocators.rs:142:8
+   --> src/allocators.rs:156:8
     |
-142 | pub fn last_alloc_trace() -> AllocTrace {
+156 | pub fn last_alloc_trace() -> AllocTrace {
     |        ^^^^^^^^^^^^^^^^
 
 warning: static `HV_GUEST_HEAP_READY` is never used
-   --> src/allocators.rs:428:8
+   --> src/allocators.rs:442:8
     |
-428 | static HV_GUEST_HEAP_READY: AtomicU32 = AtomicU32::new(0);
+442 | static HV_GUEST_HEAP_READY: AtomicU32 = AtomicU32::new(0);
     |        ^^^^^^^^^^^^^^^^^^^
 
 warning: function `enter_hv_guest_domain_current_cpu` is never used
-   --> src/allocators.rs:482:8
+   --> src/allocators.rs:496:8
     |
-482 | pub fn enter_hv_guest_domain_current_cpu() -> bool {
+496 | pub fn enter_hv_guest_domain_current_cpu() -> bool {
     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: function `leave_hv_guest_domain_current_cpu` is never used
-   --> src/allocators.rs:493:8
+   --> src/allocators.rs:507:8
     |
-493 | pub fn leave_hv_guest_domain_current_cpu() {
+507 | pub fn leave_hv_guest_domain_current_cpu() {
     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: function `ensure_hv_guest_heap_ready` is never used
-   --> src/allocators.rs:501:8
+   --> src/allocators.rs:515:8
     |
-501 | pub fn ensure_hv_guest_heap_ready() -> bool {
+515 | pub fn ensure_hv_guest_heap_ready() -> bool {
     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: struct `HeapStats` is never constructed
-   --> src/allocators.rs:586:12
+   --> src/allocators.rs:600:12
     |
-586 | pub struct HeapStats {
+600 | pub struct HeapStats {
     |            ^^^^^^^^^
 
 warning: function `heap_stats` is never used
-   --> src/allocators.rs:599:8
+   --> src/allocators.rs:613:8
     |
-599 | pub fn heap_stats() -> HeapStats {
+613 | pub fn heap_stats() -> HeapStats {
     |        ^^^^^^^^^^
 
 warning: function `hv_guest_heap_stats` is never used
-   --> src/allocators.rs:642:8
+   --> src/allocators.rs:656:8
     |
-642 | pub fn hv_guest_heap_stats() -> HeapStats {
+656 | pub fn hv_guest_heap_stats() -> HeapStats {
     |        ^^^^^^^^^^^^^^^^^^^
 
 warning: function `alloc_error` is never used
-   --> src/allocators.rs:733:4
+   --> src/allocators.rs:747:4
     |
-733 | fn alloc_error(layout: Layout) -> ! {
+747 | fn alloc_error(layout: Layout) -> ! {
     |    ^^^^^^^^^^^
 
 warning: constant `ELF64_RELA_LEN` is never used
@@ -3475,23 +3483,24 @@ warning: function `select2` is never used
 405 | pub async fn select2<A, B>(a: A, b: B) -> Either<A::Output, B::Output>
     |              ^^^^^^^
 
-error: invalid fixup for movz/movk instruction
-  --> src/allocators.rs:64:11
-   |
-64 |     asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack, preserves_flags));
-   |           ^^^^^^^^^^^
-   |
-note: instantiated into assembly here
-  --> <inline asm>:1:10
-   |
- 1 |     mov x8, rbp
-   |             ^
+error: linking with `rust-lld` failed: exit status: 1
+  |
+  = note:  "rust-lld" "-flavor" "gnu" "/home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/rustcH8w94T/symbols.o" "<257 object files omitted>" "--as-needed" "-Bstatic" "/home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/{libpanic_abort-2c1424100aa393ba,liblzma_rust2-db5f46649874dce9,libgetrandom-149dfb6bb657ff4e,libtrueos_esp-1dd34aabcc742f28,librustls_rustcrypto-83c5f3e5302e383d,libed25519_dalek-8a8f370b50d45b3f,libed25519-4e5484e6a32a24dd,libp384-bb588df135a4ad01,libp256-047e75c05e8579e8,libecdsa-6a8fff75cb817855,librfc6979-602596c717288898,libprimeorder-e2da9f9535fd05aa,libelliptic_curve-3569039f8d41e90b,libhkdf-af4bbe4ef2756fd8,libcrypto_bigint-c49962a1f0e0504c,libgroup-5a307f8dff53eeb9,libff-9f48ccf1e3efc245,libx25519_dalek-70939ac4d1fef584,libcurve25519_dalek-e4f7ac6289ae22f4,libaes_gcm-974029404d868a62,libctr-a87c33b004ee1504,libghash-e62939c77bd1aa08,libpolyval-bc9a329547f8440e,libaes-f6bcc99b6a889545,libwebpki-8864b8b25e6c4463,librsa-4a1dccebe14fc993,libpkcs1-bf4839e3b3eafe5e,libnum_bigint_dig-c50b3cc1a409e884,libnum_iter-1c571e950ba086e5,librand-11494576f7a38d00,libnum_integer-862af92b4f0349f3,liblazy_static-951f8662c025b642,libspin-6398d7b2a3314d68,libsec1-8c38c1463d4cf2e3,libbase16ct-3336f84a6aa5254a,libpkcs8-91b8fd4cc6f6d9db,libpkcs5-137466d902ddbfa9,libspki-fdae81c193c1a5c9,libder-5a9123847f72d37b,libpem_rfc7468-bf44ed512c8156dd,libbase64ct-e780bad41201d5fd,libsignature-f456488783f2f83f,libhmac-f5ed08f625cbeeda,libsha2-a6942057f12d374d,libchacha20poly1305-b794470422cb1c5f,libchacha20-f354ce30d6cdd878,libpoly1305-b25ac351133bff07,libopaque_debug-e5046a37baa63c18,libuniversal_hash-9556257c6e802dbc,libcipher-95b57aa75f22f3ea,libinout-c1f0f0bb7db124dd,libaead-d4466c6aca0c6ade,libwebpki_roots-d460a1508da282ce,libpng-d6a0b4bf683989fd,libfdeflate-7345a222118291c4,libsimd_adler32-ae2ba7ecd4b7ed31,libcrab_usb-b42ad168606d0209,libxhci-9653118d67651435,libaccessor-4400784a97cae53f,libid_arena-ed699b36271162f0,libdma_api-a63bae44b04e63f7,libaarch64_cpu_ext-ff2477f6e2ca3648,libtock_registers-e526adb364a2e13f,libaarch64_cpu-4c3eddca1b832199,libtock_registers-3e6588b882232cd8,libderive_more-e8960f2878d6371b,libmbarrier-51e1cbbb66e384f4,libusb_if-cd539e670c3cd9bd,libthiserror-a83eab4ce5078bcc,libnum_enum-f96069d1b115fe6d,libpetgraph-431a346b8455f573,libindexmap-65828001e98f6055,libhashbrown-2e8c6be727cda02f,libhashbrown-593e8a60f13f17c0,libfoldhash-7f4e87c964216820,libequivalent-203838727028eda8,liballocator_api2-7ccad86068346d7d,libfixedbitset-4f8f18a640a47c25,libtrueos_tetris-810214d653488319,libtokio-b6da53aebb9af56f,libparking_lot-e991d5441693f166,libparking_lot_core-64098905d0e33c9e,libbytes-55066439ca07dcd1,liblocalcoder-f79f2e358a7009de,libanyhow-a562097024eefbe0,librand_chacha-4a2d5e74a522ec96,libppv_lite86-80f7515e2a768b00,libzerocopy-5f3aad4ab4ae7bf7,libembedded_websocket-7c4a78ab6819c6f4,libbase64-d09262360d4956a9,libhttparse-a446b2103d41c0db,libfutures-6b95b01e9bf33ce5,libfutures_channel-3887c1dbe03f3cc3,libfutures_util-c41eb0432bb4633e,libpin_project_lite-dfa9f07adbde4421,libfutures_task-0c5e1788ed2223e4,libsha1-f12f4e0bf064b701,libdigest-cfa13c1c777a181b,libconst_oid-7f82073f2291859f,libblock_buffer-fdee1a020a2c14a0,libcrypto_common-80bcdabae5e36f47,libgeneric_array-7a66779173b1fb3a,libtypenum-cd4449c68d4e2b66,librand_core-77230a5597472c4a,libgetrandom-42535f1c7a8ecaa0,libheapless-24ef221a340c8dfd,libtrueos_fs-2ea42b209c7de5b8,libtwoway-a59c6d3ea47c4bdb,librustls-de85b558fb727605,libsubtle-3e2d94131a98e19c,libwebpki-6e504b701abbd072,libuntrusted-ef505f11d7447341,libonce_cell-e7b0eb5732b6996d,librustls_pki_types-2dda46fccbaa7b04,libzeroize-0a16995db069a7cb,libsmoltcp-553f0c527484e258,libbitflags-7d3f28ee47c1a086,libmanaged-48190429f089a40a,liblimine-b286567b88b8a9ed,libtrueos_qjs-c42f311592b16daa,libtrueos_weather-0ca0ce2bd340f8fd,libv-fe8c6666e612a7a2,libserde_json-d77e2b5b0a838fd4,libmemchr-12e4e322d416f912,libitoa-366dfc07454e0fe5,libzmij-469e594d47de421d,libtrueos_sys-758121cbfeb0e3ce,libparry2d-76ab9e4511786e8d,libdowncast_rs-9fc256ade2b9bbb2,libglamx-958af38393166a52,libsimba-dc34acfa88848d3b,libnum_complex-f0d7cacaee0f3045,libglam-5e2982a64bcc6ee3,libeither-035268a4079b88c8,libapprox-e3fbce4152615a2b,libembassy_sync-8e6194556f209cbe,libembedded_io_async-8803e61b397bd456,libembedded_io-0474c99e4f551e70,libfutures_sink-259fc5f750798873,libcritical_section-97602d2be79ac3d8,libusvg-027cdbb5dbf0f04d,libimagesize-483008ee94e3ebb1,libdata_url-622b7ddd4c6d043e,libsimplecss-1a91ecb4d002a247,libroxmltree-dcccf476e12b1984,libsvgtypes-927c5c7af22823e1,libkurbo-108c0cf2165d1404,libsmallvec-e409981a2d48dab4,libsiphasher-788844a073a01284,libtiny_skia_path-d82d98db282fa788,libbytemuck-ee858bf55514cb91,libstrict_num-64e80e1450c3e042,libarrayref-3ecebd04fb94acec,libminiz_oxide-6dc1505fe7a4796f,libadler2-59fc8e9c5f19b0d3,libcrc32fast-8208d35aaf5edc50,libcfg_if-7c672b0652055ca6,libcore3-7b895d2fdde854c1,libtrueos_math-5055fb56bc000061,liblyon_tessellation-4a5ec17fb707e27f,libfloat_next_after-6915c78edde2df3e,liblyon_path-bc4930ddc28ae00f,liblyon_geom-ef0e019a7ff99f2a,libeuclid-0a03594de1fa1446,libnum_traits-23a374b5a7b8006e,libarrayvec-0263d242f8bec5b2,libzune_jpeg-097418ebb675b716,libzune_core-07df14c55d42eb0c,libtrueos_gfx_core-e5ad36161113b6c9,liblibm-ffebb345fc5b380a,libserde-8cb8a16df3b98307,libserde_core-898112583a020032,libstd-f714e20c103a5042,libcfg_if-3e2313add10e3e68,librustc_demangle-b8631851b65a6739,libstd_detect-ffb32d98e427332a,libhashbrown-59cedc239c9f160b,librustc_std_workspace_alloc-9990b4876e8b4202,libunwind-ddcf91a9ff85ffff,liblibc-651de9332f2f0293,librustc_std_workspace_core-833afabf45232990,libaml-290547ce1a717f8d,libbitvec-91430fb79933dc09,libwyz-f752b89f94a15933,libtap-6bc72c2892304579,libradium-4dd543bff2c5523b,libfunty-cf271f6028cc5f8e,libspinning_top-9b6e914250972ffb,libacpi-25c22c3174de7580,libspinning_top-ca42853e75d86d94,libpci_types-98ee25a5a8c17d0c,libbitflags-b5f89da40c65c1a9,libbit_field-c0fe6608d8f26668,liblog-17365058dd0b3914,libembassy_time-1d54818a8fc3e12f,libembedded_hal-7b589649f74643e7,libvoid-e3800c08266c8690,libnb-3a66d8f2280b9c65,libnb-69da8ec1de214aa6,libembedded_hal_async-5834c0ab13bcacaf,libembedded_hal-75e99d485b8e4cc6,libembassy_time_driver-94188c3cb089b3cf,libfutures_core-0024f4d6837f281d,libembassy_executor-4ce1f34ddf4974f5,libembassy_executor_timer_queue-871069bd7ef165e5,libcordyceps-e262a650d171355a,libheapless-281db75cc7b5a842,libhash32-ceccad433b67d1d5,libbyteorder-485023a003ae5ee3,libspin-e6f18db9fff6c5cb,liblock_api-4f77dc51cae73965,libscopeguard-c28e6d671025b928,liballoc-9a75e690d1a935e6,libcore-cea8e8e34f0acd22,libcompiler_builtins-974bcd49b970c178}.rlib" "-L" "/home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/rustcH8w94T/raw-dylibs" "-Bdynamic" "--eh-frame-hdr" "-z" "noexecstack" "-L" "/home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/build/trueos-qjs-9243bc02070dc857/out" "-o" "/home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/TRUEOS-40998fed1010bf74" "--gc-sections" "-Tlinker.ld"
+  = note: some arguments are omitted. use `--verbose` to show all linker arguments
+  = note: rust-lld: error: /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/libtrueos_qjs-c42f311592b16daa.rlib(c48082ed9d955ac0-quickjs.o) is incompatible with /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/rustcH8w94T/symbols.o
+          rust-lld: error: /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/libtrueos_qjs-c42f311592b16daa.rlib(c48082ed9d955ac0-libregexp.o) is incompatible with /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/rustcH8w94T/symbols.o
+          rust-lld: error: /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/libtrueos_qjs-c42f311592b16daa.rlib(c48082ed9d955ac0-libunicode.o) is incompatible with /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/rustcH8w94T/symbols.o
+          rust-lld: error: /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/libtrueos_qjs-c42f311592b16daa.rlib(c48082ed9d955ac0-cutils.o) is incompatible with /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/rustcH8w94T/symbols.o
+          rust-lld: error: /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/libtrueos_qjs-c42f311592b16daa.rlib(c48082ed9d955ac0-dtoa.o) is incompatible with /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/rustcH8w94T/symbols.o
+          rust-lld: error: /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/libtrueos_qjs-c42f311592b16daa.rlib(d17ec9675c84c5ee-stdio.o) is incompatible with /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/rustcH8w94T/symbols.o
+          rust-lld: error: /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/libtrueos_qjs-c42f311592b16daa.rlib(1830532187b3a87f-yoga_cabi.o) is incompatible with /home/t4ce/REPOS/TRUEOS/tgt/arm-exp/arm/debug/deps/rustcH8w94T/symbols.o
+          
 
-warning: `TRUEOS` (bin "TRUEOS") generated 325 warnings
+warning: `TRUEOS` (bin "TRUEOS") generated 326 warnings
 warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_init has no kernel export and will stay unresolved
 warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read has no kernel export and will stay unresolved
 warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_read_byte has no kernel export and will stay unresolved
 warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write has no kernel export and will stay unresolved
 warning: TRUEOS@0.0.2: declared CABI symbol trueos_cabi_shell_qjs_write_byte has no kernel export and will stay unresolved
-error: could not compile `TRUEOS` (bin "TRUEOS") due to 1 previous error; 325 warnings emitted
+error: could not compile `TRUEOS` (bin "TRUEOS") due to 1 previous error; 326 warnings emitted
 make: *** [arm_Makefile:17: arm_kernel] Fehler 101

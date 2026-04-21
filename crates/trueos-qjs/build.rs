@@ -586,6 +586,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", quickjs_dir.join("libunicode.h").display());
 
     let target = env::var("TARGET").unwrap_or_default();
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
     let mut build = cc::Build::new();
     build.include(&quickjs_dir);
     for src in &sources {
@@ -597,7 +598,6 @@ fn main() {
     }
 
     if !target.contains('-') {
-        let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
         let fixed_target = format!("{}-unknown-none", arch);
         build.target(&fixed_target);
     } else {
@@ -614,14 +614,18 @@ fn main() {
         .flag("-U_FORTIFY_SOURCE")
         .define("_FORTIFY_SOURCE", Some("0"))
         .define("__NO_FORTIFY", Some("1"))
-        .flag("-mno-red-zone")
-        .flag("-msse2")
-        .flag("-mcmodel=kernel")
         .flag("-w")
         // Prevent QuickJS from enabling pthread-backed Atomics and stack checking.
         .define("EMSCRIPTEN", None)
-        .define("CONFIG_VERSION", Some("\"TRUEOS\""))
-        .compile("quickjs");
+        .define("CONFIG_VERSION", Some("\"TRUEOS\""));
+
+    if arch == "x86_64" {
+        build.flag("-mno-red-zone");
+        build.flag("-msse2");
+        build.flag("-mcmodel=kernel");
+    }
+
+    build.compile("quickjs");
 
     // Embedded module registry; bytecode blobs are opt-in via TRUEOS_QJS_EMBED_BYTECODE=1.
     gen_embedded_modules(&quickjs_dir, &manifest_dir, &out_dir);
