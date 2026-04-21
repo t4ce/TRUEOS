@@ -559,8 +559,109 @@ fn resolve_import(name: &str) -> Option<usize> {
         "memset" => Some(trueos_qjs::trueos_shims::memset as *const () as usize),
         "memcmp" => Some(trueos_qjs::trueos_shims::memcmp as *const () as usize),
         "strlen" => Some(trueos_qjs::trueos_shims::strlen as *const () as usize),
-        _ => resolve_cabi_import(name),
+        "__rust_alloc"
+        | "_RNvCs75cmLyI1ip2_7___rustc12___rust_alloc"
+        | "_RNvCs2csqI13tepL_7___rustc12___rust_alloc" => {
+            Some(portal_rust_alloc as *const () as usize)
+        }
+        "__rust_dealloc"
+        | "_RNvCs75cmLyI1ip2_7___rustc14___rust_dealloc"
+        | "_RNvCs2csqI13tepL_7___rustc14___rust_dealloc" => {
+            Some(portal_rust_dealloc as *const () as usize)
+        }
+        "__rust_realloc"
+        | "_RNvCs75cmLyI1ip2_7___rustc14___rust_realloc"
+        | "_RNvCs2csqI13tepL_7___rustc14___rust_realloc" => {
+            Some(portal_rust_realloc as *const () as usize)
+        }
+        "__rust_alloc_zeroed"
+        | "_RNvCs75cmLyI1ip2_7___rustc19___rust_alloc_zeroed"
+        | "_RNvCs2csqI13tepL_7___rustc19___rust_alloc_zeroed" => {
+            Some(portal_rust_alloc_zeroed as *const () as usize)
+        }
+        _ => resolve_std_abi_import(name).or_else(|| resolve_cabi_import(name)),
     }
+}
+
+#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+fn resolve_std_abi_import(name: &str) -> Option<usize> {
+    match name {
+        "sys_alloc_words" => Some(crate::std_abi_shim::sys_alloc_words as *const () as usize),
+        "sys_alloc_aligned" => Some(crate::std_abi_shim::sys_alloc_aligned as *const () as usize),
+        "sys_rand" => Some(crate::std_abi_shim::sys_rand as *const () as usize),
+        "sys_write" => Some(crate::std_abi_shim::sys_write as *const () as usize),
+        "sys_read" => Some(crate::std_abi_shim::sys_read as *const () as usize),
+        "sys_getenv" => Some(crate::std_abi_shim::sys_getenv as *const () as usize),
+        "sys_argc" => Some(crate::std_abi_shim::sys_argc as *const () as usize),
+        "sys_argv" => Some(crate::std_abi_shim::sys_argv as *const () as usize),
+        "sys_output" => Some(crate::std_abi_shim::sys_output as *const () as usize),
+        "sys_sha_compress" => Some(crate::std_abi_shim::sys_sha_compress as *const () as usize),
+        "sys_sha_buffer" => Some(crate::std_abi_shim::sys_sha_buffer as *const () as usize),
+        "sys_log" => Some(crate::std_abi_shim::sys_log as *const () as usize),
+        "sys_cycle_count" => Some(crate::std_abi_shim::sys_cycle_count as *const () as usize),
+        "sys_panic" => Some(crate::std_abi_shim::sys_panic as *const () as usize),
+        "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
+        "trueos_tokio_time_now_nanos" => {
+            Some(crate::std_abi_shim::trueos_tokio_time_now_nanos as *const () as usize)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(not(all(feature = "tokio-probe", target_os = "zkvm")))]
+fn resolve_std_abi_import(_name: &str) -> Option<usize> {
+    None
+}
+
+unsafe extern "C" fn portal_rust_alloc(size: usize, align: usize) -> *mut u8 {
+    if size == 0 {
+        return core::ptr::null_mut();
+    }
+
+    let Ok(layout) = Layout::from_size_align(size, align.max(1)) else {
+        return core::ptr::null_mut();
+    };
+
+    unsafe { crate::allocators::alloc_raw(layout) }
+}
+
+unsafe extern "C" fn portal_rust_dealloc(ptr: *mut u8, _size: usize, _align: usize) {
+    unsafe { crate::allocators::dealloc_raw(ptr) }
+}
+
+unsafe extern "C" fn portal_rust_realloc(
+    ptr: *mut u8,
+    old_size: usize,
+    align: usize,
+    new_size: usize,
+) -> *mut u8 {
+    if ptr.is_null() {
+        return unsafe { portal_rust_alloc(new_size, align) };
+    }
+
+    if new_size == 0 {
+        unsafe { crate::allocators::dealloc_raw(ptr) };
+        return core::ptr::null_mut();
+    }
+
+    let new_ptr = unsafe { portal_rust_alloc(new_size, align) };
+    if new_ptr.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(ptr, new_ptr, core::cmp::min(old_size, new_size));
+        crate::allocators::dealloc_raw(ptr);
+    }
+    new_ptr
+}
+
+unsafe extern "C" fn portal_rust_alloc_zeroed(size: usize, align: usize) -> *mut u8 {
+    let ptr = unsafe { portal_rust_alloc(size, align) };
+    if !ptr.is_null() {
+        unsafe { core::ptr::write_bytes(ptr, 0, size) };
+    }
+    ptr
 }
 
 fn build_argv(args: &[String]) -> (Vec<Vec<u8>>, Vec<*const c_char>) {

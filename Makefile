@@ -25,9 +25,9 @@ GUC_FW_HOST_PATH ?= /lib/firmware/i915/adlp_guc_70.bin.zst
 # Canonical boot path used by limine.conf for the GuC module.
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/adlp_guc_70.bin
 BLUEPRINTS_ROOT ?= ../TRUEOS Blueprints
-HELLO_WORLD_BP_DIR ?= $(BLUEPRINTS_ROOT)/hello_world_bp
+HELLO_WORLD_BP_DIR ?= $(BLUEPRINTS_ROOT)
 LOCALCODER_BP_DIR ?= $(BLUEPRINTS_ROOT)/localcoder_bp
-HELLO_WORLD_BP_HOST_PATH ?= $(HELLO_WORLD_BP_DIR)/target/trueos-app/debug/hello_world_app.bp
+HELLO_WORLD_BP_HOST_PATH ?= $(HELLO_WORLD_BP_DIR)/dist/hello_world.bp
 HELLO_WORLD_BP_ISO_REL_PATH ?= EFI/BOOT/apps/hello_world_app.bp
 LOCALCODER_BP_HOST_PATH ?= $(LOCALCODER_BP_DIR)/dist/localcoder_bp.bp
 LOCALCODER_BP_PROFILE ?= $(if $(filter release,$(BUILD_MODE)),release,dev)
@@ -108,15 +108,19 @@ nvme.img:
 	truncate -s $(IMG_SIZE) $@
 
 kernel:
-	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target 86_64.json
+	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target .cargo/86_64.json
 
-blueprints: hello-world-bp localcoder-bp
+blueprints: hello-world-bp
 
 hello-world-bp:
-	cd "$(HELLO_WORLD_BP_DIR)" && cargo +nightly bp
+	cd "$(HELLO_WORLD_BP_DIR)" && cargo run -- example hello_world
 
 localcoder-bp:
-	cd "$(LOCALCODER_BP_DIR)" && python3 build_bp.py --profile "$(LOCALCODER_BP_PROFILE)"
+	@if [ -d "$(LOCALCODER_BP_DIR)" ]; then \
+		cd "$(LOCALCODER_BP_DIR)" && python3 build_bp.py --profile "$(LOCALCODER_BP_PROFILE)"; \
+	else \
+		echo "localcoder blueprint skipped: $(LOCALCODER_BP_DIR) missing"; \
+	fi
 
 artifacts: blueprints kernel
 	mkdir -p $(ARTIFACT_DIR)
