@@ -10,9 +10,6 @@ const LED_VID_JGINYUE: u16 = 0x0416;
 const LED_PID_JGINYUE: u16 = 0xA125;
 const LED_PROBE_ENABLED: bool = false;
 
-const LED_TEST_RED: u8 = 0xFF;
-const LED_TEST_GREEN: u8 = 0x37;
-const LED_TEST_BLUE: u8 = 0xFF;
 const LED_COMMIT_REPORT: [u8; 7] = [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 const LED_SWEEP_PERIOD_MS: u64 = 250;
 const LED_FEATURE_REPORT_ID: u8 = 4;

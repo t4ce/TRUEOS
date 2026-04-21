@@ -1,9 +1,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use spin::Mutex;
 
 const MEDIA_HTTP_LOCAL_DEMO_URLS: [&str; 2] = [
     "http://192.168.178.112:8080/tools/vid/demo_yelly.mp4",
@@ -16,13 +14,6 @@ const MEDIA_CACHE_WRITE_PROGRESS_BYTES: u64 = 8 * 1024 * 1024;
 const MEDIA_CACHE_WRITE_YIELD_EVERY_BYTES: u64 = 512 * 1024;
 const MEDIA_CACHE_WRITE_FALLBACK_CHUNK_BYTES: usize = 256 * 1024;
 const MEDIA_CACHE_WRITE_MAX_CHUNK_BYTES: usize = 1024 * 1024;
-const MEDIA_SOURCE_FETCH_WAIT_MS: u64 = 50;
-const MEDIA_SOURCE_FETCH_LOG_EVERY_POLLS: u32 = 20;
-
-static MEDIA_SOURCE_WARM_RAN: AtomicBool = AtomicBool::new(false);
-static MEDIA_DECODE_REQUESTED: AtomicBool = AtomicBool::new(false);
-static MEDIA_SOURCE_FETCH_ACTIVE: AtomicBool = AtomicBool::new(false);
-static MEDIA_SOURCE_STASH: Mutex<Option<MediaSourceStash>> = Mutex::new(None);
 
 pub(crate) enum MediaSource {
     Memory {
@@ -91,47 +82,11 @@ impl MediaSource {
     }
 }
 
-struct MediaSourceStash {
-    source: &'static str,
-    body: Vec<u8>,
-}
-
-struct MediaSourceFetchGuard;
-
-impl Drop for MediaSourceFetchGuard {
-    fn drop(&mut self) {
-        MEDIA_SOURCE_FETCH_ACTIVE.store(false, Ordering::Release);
-    }
-}
-
 pub(crate) fn demo_urls() -> &'static [&'static str; 2] {
     &MEDIA_HTTP_LOCAL_DEMO_URLS
 }
 
-pub(crate) fn mark_decode_requested() {
-    MEDIA_DECODE_REQUESTED.store(true, Ordering::Release);
-}
-
-fn take_media_source_stash(owner: &'static str) -> Option<MediaSource> {
-    let stash = MEDIA_SOURCE_STASH.lock().take()?;
-    crate::log!(
-        "intel/media: source stash owner={} source={} bytes={}\n",
-        owner,
-        stash.source,
-        stash.body.len(),
-    );
-    Some(MediaSource::Memory {
-        source: stash.source,
-        body: stash.body,
-    })
-}
-
-fn store_media_source_stash(source: &'static str, body: Vec<u8>) {
-    crate::log!("intel/media: source stash store source={} bytes={}\n", source, body.len(),);
-    *MEDIA_SOURCE_STASH.lock() = Some(MediaSourceStash { source, body });
-}
-
-async fn fetch_media_source_inner_async(_owner: &'static str) -> Option<MediaSource> {
+pub(crate) async fn fetch_media_source_async() -> Option<MediaSource> {
     // 1) Wait for FS, try cache.
     if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
         if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
@@ -230,111 +185,6 @@ async fn fetch_media_source_inner_async(_owner: &'static str) -> Option<MediaSou
     }
 
     None
-}
-
-async fn acquire_media_source_fetch_guard_async(
-    owner: &'static str,
-) -> Option<MediaSourceFetchGuard> {
-    let mut wait_polls = 0u32;
-    loop {
-        if MEDIA_SOURCE_FETCH_ACTIVE
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            if wait_polls != 0 {
-                crate::log!(
-                    "intel/media: source fetch owner={} acquired after_wait_ms={}\n",
-                    owner,
-                    u64::from(wait_polls) * MEDIA_SOURCE_FETCH_WAIT_MS,
-                );
-            }
-            return Some(MediaSourceFetchGuard);
-        }
-
-        if owner == "warmup" && MEDIA_DECODE_REQUESTED.load(Ordering::Acquire) {
-            crate::log!(
-                "intel/media: source fetch owner=warmup skipped reason=decode-requested while_waiting=1\n"
-            );
-            return None;
-        }
-
-        wait_polls = wait_polls.saturating_add(1);
-        if wait_polls == 1 || wait_polls % MEDIA_SOURCE_FETCH_LOG_EVERY_POLLS == 0 {
-            crate::log!(
-                "intel/media: source fetch owner={} waiting active=1 waited_ms={}\n",
-                owner,
-                u64::from(wait_polls) * MEDIA_SOURCE_FETCH_WAIT_MS,
-            );
-        }
-        Timer::after(EmbassyDuration::from_millis(MEDIA_SOURCE_FETCH_WAIT_MS)).await;
-    }
-}
-
-pub(crate) async fn fetch_media_source_async(
-    owner: &'static str,
-) -> Option<MediaSource> {
-    if let Some(stashed) = take_media_source_stash(owner) {
-        return Some(stashed);
-    }
-
-    let _guard = acquire_media_source_fetch_guard_async(owner).await?;
-
-    if let Some(stashed) = take_media_source_stash(owner) {
-        return Some(stashed);
-    }
-
-    fetch_media_source_inner_async(owner).await
-}
-
-async fn warm_media_source_async() -> Option<(&'static str, usize)> {
-    let _guard = acquire_media_source_fetch_guard_async("warmup").await?;
-    let fetched = fetch_media_source_inner_async("warmup").await?;
-    let source = fetched.source_name();
-    let bytes = usize::try_from(fetched.total_len()).ok()?;
-    if let MediaSource::Memory { source, body } = fetched {
-        store_media_source_stash(source, body);
-    }
-    Some((source, bytes))
-}
-
-pub(crate) async fn run_media_source_warmup_async() {
-    if MEDIA_SOURCE_WARM_RAN.swap(true, Ordering::AcqRel) {
-        crate::log!("intel/media: source warmup skipped reason=already-ran\n");
-        return;
-    }
-
-    if !crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
-        crate::log!("intel/media: source warmup skipped reason=fs-cache-disabled\n");
-        return;
-    }
-
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        crate::log!("intel/media: source warmup skipped reason=no-root-disk\n");
-        return;
-    };
-
-    let info = disk.info();
-    crate::log!(
-        "intel/media: source warmup root disk_id={} readonly={} block={} max_transfer={}\n",
-        info.id.raw(),
-        info.is_read_only() as u8,
-        info.block_size,
-        info.max_transfer_bytes,
-    );
-
-    if MEDIA_DECODE_REQUESTED.load(Ordering::Acquire) {
-        crate::log!("intel/media: source warmup skipped reason=decode-requested\n");
-        return;
-    }
-
-    match warm_media_source_async().await {
-        Some((source, bytes)) => {
-            crate::log!("intel/media: source warmup ready source={} bytes={}\n", source, bytes,);
-        }
-        None => {
-            crate::log!("intel/media: source warmup failed reason=fetch-exhausted\n");
-        }
-    }
 }
 
 fn media_cache_chunk_bytes(info: &crate::disc::block::DeviceInfo) -> usize {

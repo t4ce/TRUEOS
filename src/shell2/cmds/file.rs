@@ -290,18 +290,6 @@ async fn build_root_tree_lines_async(
     Ok(out)
 }
 
-fn print_root_tree(
-    io: &'static dyn ShellBackend2,
-    root: crate::r::fs::trueosfs::RootInfo,
-    lines: &[String],
-) {
-    print_shell_line(io, format_root_header(root).as_str());
-
-    for line in lines {
-        print_shell_line(io, line.as_str());
-    }
-}
-
 pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,

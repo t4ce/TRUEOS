@@ -6,7 +6,7 @@ use alloc::{
 };
 
 
-use crate::r::ui2::{self, Ui2FontTier, Ui2Rect};
+use crate::r::ui2::{self, Ui2FontTier, Ui2HostedInteractiveRect, Ui2Rect};
 
 const UI2_PCI_DEMO_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Pci.get();
 const UI2_PCI_DEMO_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::Pci.get();
@@ -160,12 +160,12 @@ fn usb_device_kind_name(dev: &crate::usb2::TlbUsbDevice) -> &'static str {
         for interface in cfg.interfaces.iter() {
             match (interface.class, interface.subclass, interface.protocol) {
                 (0x08, _, _) => return "Mass Storage",
+                (0x01, 0x03, _) => return "MIDI",
                 (0x01, _, _) => return "Audio",
                 (0x03, 0x01, 0x01) => return "HID Keyboard",
                 (0x03, 0x01, 0x02) => return "HID Mouse",
                 (0x03, _, _) => return "HID",
                 (0x09, _, _) => return "Hub",
-                (0x01, 0x03, _) => return "MIDI",
                 _ => {}
             }
         }
@@ -205,6 +205,63 @@ fn usb_device_stats(dev: &crate::usb2::TlbUsbDevice) -> String {
         dev.vendor_id,
         dev.product_id
     )
+}
+
+fn usb_device_port_label(dev: &crate::usb2::TlbUsbDevice) -> String {
+    if dev.port_id == dev.root_port_id {
+        format!("rp{}:p{}", dev.root_port_id, dev.port_id)
+    } else {
+        format!("rp{}:p{}", dev.root_port_id, dev.port_id)
+    }
+}
+
+fn usb_demo_snapshot() -> UsbDemoSnapshot {
+    let controllers = crate::usb2::pci_usb_controllers();
+    let mut controller_rows = Vec::with_capacity(controllers.len());
+    let mut device_rows = Vec::new();
+    let mut probe_error = None;
+
+    for ctrl in controllers.iter() {
+        let devices = match crate::usb2::crabusb_observed_devices(ctrl.index) {
+            Ok(devices) => devices,
+            Err(err) => {
+                if probe_error.is_none() {
+                    probe_error = Some(err);
+                }
+                Vec::new()
+            }
+        };
+
+        controller_rows.push(UsbDemoControllerRow {
+            index: ctrl.index,
+            title: format!(
+                "{} {:02X}:{:02X}.{} {:04X}:{:04X}",
+                ctrl.index,
+                ctrl.bus,
+                ctrl.slot,
+                ctrl.function,
+                ctrl.vendor_id,
+                ctrl.device_id
+            ),
+            detail: format!("cached devices={} mmio={:p}", devices.len(), ctrl.mmio_base.as_ptr()),
+        });
+
+        for dev in devices {
+            device_rows.push(UsbDemoDeviceRow {
+                controller_index: ctrl.index,
+                port_label: usb_device_port_label(&dev),
+                name: usb_device_kind_name(&dev).to_string(),
+                stats: usb_device_stats(&dev),
+            });
+        }
+    }
+
+    UsbDemoSnapshot {
+        probe_device_count: Some(device_rows.len().min(u32::MAX as usize) as u32),
+        probe_error,
+        controllers: controller_rows,
+        devices: device_rows,
+    }
 }
 
 fn fill_rect_rgba(
@@ -738,4 +795,137 @@ fn update_window_title(window_id: u32, view: DeviceManagerView) {
         window_id,
         format!("{} [{}]", UI2_PCI_DEMO_WINDOW_TITLE, suffix).as_str(),
     );
+}
+
+fn create_pci_demo_window() -> Option<ui2::Ui2SurfaceWindow> {
+    ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
+        UI2_PCI_DEMO_WINDOW_TITLE,
+        Ui2Rect {
+            x: UI2_PCI_DEMO_WINDOW_X,
+            y: UI2_PCI_DEMO_WINDOW_Y,
+            w: UI2_PCI_DEMO_VIEW_W as f32,
+            h: UI2_PCI_DEMO_VIEW_H as f32,
+        },
+        UI2_PCI_DEMO_WINDOW_Z,
+        UI2_PCI_DEMO_WINDOW_ALPHA,
+        UI2_PCI_DEMO_TEX_ID,
+        true,
+        UI2_PCI_DEMO_VIEW_W,
+        UI2_PCI_DEMO_VIEW_H,
+    )
+}
+
+fn demo_interactives() -> [Ui2HostedInteractiveRect; 2] {
+    let [(pci_id, pci_rect, _), (usb_id, usb_rect, _)] = toggle_rects();
+    [
+        Ui2HostedInteractiveRect {
+            item_id: pci_id,
+            x: pci_rect.x.max(0.0) as u32,
+            y: pci_rect.y.max(0.0) as u32,
+            width: pci_rect.w.max(0.0) as u32,
+            height: pci_rect.h.max(0.0) as u32,
+        },
+        Ui2HostedInteractiveRect {
+            item_id: usb_id,
+            x: usb_rect.x.max(0.0) as u32,
+            y: usb_rect.y.max(0.0) as u32,
+            width: usb_rect.w.max(0.0) as u32,
+            height: usb_rect.h.max(0.0) as u32,
+        },
+    ]
+}
+
+fn present_view(
+    surface: &ui2::Ui2SurfaceWindow,
+    atlases: &ui2::Ui2FontCpuAtlases,
+    icon: char,
+    view: DeviceManagerView,
+) -> bool {
+    let (rgba, content_w, content_h) = match view {
+        DeviceManagerView::Pci => {
+            let snapshot = pci_demo_snapshot();
+            let (content_w, content_h) = pci_demo_content_size(icon, &snapshot);
+            (
+                compose_pci_demo_rgba(atlases, icon, &snapshot, content_w, content_h),
+                content_w,
+                content_h,
+            )
+        }
+        DeviceManagerView::Usb => {
+            let snapshot = usb_demo_snapshot();
+            let (content_w, content_h) = usb_demo_content_size(icon, &snapshot);
+            (
+                compose_usb_demo_rgba(atlases, icon, &snapshot, content_w, content_h),
+                content_w,
+                content_h,
+            )
+        }
+    };
+
+    let _ = surface.bind_hosted_scroll_state(UI2_PCI_DEMO_CONTENT_ID, content_w, content_h);
+    let _ = surface.set_interactives(demo_interactives().as_slice());
+    update_window_title(surface.window_id(), view);
+    surface.upload_rgba(rgba.as_slice(), "ui2-pci-demo-present")
+}
+
+#[embassy_executor::task]
+pub async fn ui2_pci_demo_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard("ui2-pci-demo");
+    let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_PCI_DEMO_ONE_X_SIZE_CASE) else {
+        return;
+    };
+    let Some(surface) = create_pci_demo_window() else {
+        return;
+    };
+    let _ = surface.bind_spawn_task("ui2-pci-demo");
+    let _ = ui2::set_window_vertical_scrollbar_side(
+        surface.window_id(),
+        ui2::Ui2WindowVerticalScrollbarSide::Right,
+    );
+    let _ = ui2::set_window_horizontal_scrollbar_side(
+        surface.window_id(),
+        ui2::Ui2WindowHorizontalScrollbarSide::Top,
+    );
+
+    let icon = pci_demo_icon_char();
+    let mut view = DeviceManagerView::Pci;
+    let mut last_click_seq = 0u32;
+
+    if !present_view(&surface, &atlases, icon, view) {
+        return;
+    }
+
+    loop {
+        if crate::r::spawn_service::task_stop_requested("ui2-pci-demo") {
+            break;
+        }
+
+        if let Some((seq, item_id)) = ui2::take_window_last_clicked_item(surface.window_id())
+            && seq != last_click_seq
+        {
+            last_click_seq = seq;
+            let next_view = match item_id {
+                UI2_PCI_DEMO_TOGGLE_ITEM_PCI => Some(DeviceManagerView::Pci),
+                UI2_PCI_DEMO_TOGGLE_ITEM_USB => Some(DeviceManagerView::Usb),
+                _ => None,
+            };
+            if let Some(next_view) = next_view
+                && next_view != view
+            {
+                view = next_view;
+                if !present_view(&surface, &atlases, icon, view) {
+                    break;
+                }
+                continue;
+            }
+        }
+
+        if !present_view(&surface, &atlases, icon, view) {
+            break;
+        }
+
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-pci-demo", 1000).await {
+            break;
+        }
+    }
 }

@@ -1,7 +1,6 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, Ordering};
 
 
@@ -150,28 +149,6 @@ fn ui2_coreticks_tick_tile_by_index(index: usize) -> bool {
 }
 
 #[inline]
-fn ui2_coreticks_tick_tile<const TILE_X: usize, const TILE_Y: usize>() -> bool {
-    ui2_coreticks_tick_tile_by_index(ui2_coreticks_tile_index(TILE_X, TILE_Y))
-}
-
-pub fn ui2_coreticks_snap_all() {
-    UI2_CORETICKS_SNAP_IN_PROGRESS.store(true, Ordering::Release);
-    while UI2_CORETICKS_ACTIVE_TICKS.load(Ordering::Acquire) != 0 {
-        spin_loop();
-    }
-
-    for slot in &UI2_CORETICKS_TILE_CURSOR {
-        slot.store(0, Ordering::Release);
-    }
-    for pixel in &UI2_CORETICKS_PIXEL_STATE {
-        pixel.store(0, Ordering::Release);
-    }
-
-    UI2_CORETICKS_SNAP_IN_PROGRESS.store(false, Ordering::Release);
-    UI2_CORETICKS_DIRTY.store(true, Ordering::Release);
-}
-
-#[inline]
 fn ui2_coreticks_tile_fill_rgba(tile_index: usize) -> [u8; 4] {
     match tile_index {
         0 => UI2_CORETICKS_TILE_1_RGBA,
@@ -222,13 +199,6 @@ fn ui2_coreticks_render_pixels_rgba() -> Vec<u8> {
 
 pub fn ui2_coreticks_demo_current_rgba() -> Vec<u8> {
     ui2_coreticks_render_pixels_rgba()
-}
-
-pub fn ui2_coreticks_tick_tile_xy(tile_x: usize, tile_y: usize) -> bool {
-    if tile_x >= UI2_CORETICKS_TILE_COLS || tile_y >= UI2_CORETICKS_TILE_ROWS {
-        return false;
-    }
-    ui2_coreticks_tick_tile_by_index(ui2_coreticks_tile_index(tile_x, tile_y))
 }
 
 pub fn ui2_coreticks_tick_tile_index(tile_index: usize) -> bool {

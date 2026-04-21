@@ -8,13 +8,6 @@ use super::super::{ShellBackend2, print_shell_line};
 use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::shell2_localcoder::{self, LocalcoderResumeTarget};
 
-fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "lc: usage `lc [prompt...]`");
-    print_shell_line(io, "lc: usage `lc --new [prompt...]`");
-    print_shell_line(io, "lc: usage `lc --continue [prompt...]`");
-    print_shell_line(io, "lc: usage `lc --resume <id> [prompt...]`");
-}
-
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,

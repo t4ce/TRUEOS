@@ -2795,7 +2795,6 @@ pub(crate) fn decode_surface_window(name: &str) -> Option<MediaSurfaceWindow> {
 }
 
 pub(crate) async fn run_media_decode_async() {
-    xelp_media_source::mark_decode_requested();
     kickoff_once();
 
     if MEDIA_DECODE_RAN.swap(true, Ordering::AcqRel) {
@@ -2820,7 +2819,7 @@ pub(crate) async fn run_media_decode_async() {
         engine.name
     );
 
-    let source = match xelp_media_source::fetch_media_source_async("decode").await {
+    let source = match xelp_media_source::fetch_media_source_async().await {
         Some(payload) => payload,
         None => {
             crate::log!("intel/media: fetch failed local_http_candidates_exhausted=1\n");

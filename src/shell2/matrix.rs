@@ -369,14 +369,6 @@ pub(crate) fn slot_views(output_mask: u8) -> Vec<MatrixSlotView> {
     out
 }
 
-pub(crate) fn has_running_slots() -> bool {
-    state()
-        .lock()
-        .slots
-        .iter()
-        .any(|slot| slot.running_count > 0)
-}
-
 pub(crate) fn revision() -> u64 {
     state().lock().revision
 }
