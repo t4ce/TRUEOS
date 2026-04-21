@@ -3,8 +3,10 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use super::xelp_media_matroska::{
-    MatroskaH264Summary, get_sample_range as get_matroska_sample_range, looks_like_matroska,
+    MatroskaH264Summary, ensure_sample_index as ensure_matroska_sample_index,
+    get_sample_range as get_matroska_sample_range, looks_like_matroska,
     parse_h264_matroska_summary, parse_h264_matroska_summary_from_source,
+    sample_count_known as matroska_sample_count_known,
 };
 use super::xelp_media_mp4::{
     AvccSummary, Mp4H264Summary, get_sample_range as get_mp4_sample_range, parse_h264_mp4_summary,
@@ -42,7 +44,20 @@ impl H264SourceSummary {
     pub(crate) fn sample_count(&self) -> u32 {
         match self {
             Self::Mp4(summary) => summary.sample_count,
-            Self::Matroska(summary) => summary.sample_count,
+            Self::Matroska(summary) => {
+                if matroska_sample_count_known(summary) {
+                    summary.sample_count
+                } else {
+                    u32::try_from(summary.samples.len()).unwrap_or(u32::MAX)
+                }
+            }
+        }
+    }
+
+    pub(crate) fn sample_count_known(&self) -> bool {
+        match self {
+            Self::Mp4(_) => true,
+            Self::Matroska(summary) => matroska_sample_count_known(summary),
         }
     }
 
@@ -61,21 +76,28 @@ impl H264SourceSummary {
     }
 
     pub(crate) async fn load_sample(
-        &self,
+        &mut self,
         source: &MediaSource,
         index: u32,
-    ) -> Option<Vec<u8>> {
+        scratch: &mut Vec<u8>,
+    ) -> Option<usize> {
         let (offset, len) = match self {
             Self::Mp4(summary) => {
                 let range = get_mp4_sample_range(summary, index)?;
                 (range.offset, range.len)
             }
             Self::Matroska(summary) => {
+                ensure_matroska_sample_index(summary, source, index).await.ok()?;
                 let range = get_matroska_sample_range(summary, index)?;
                 (range.offset, range.len)
             }
         };
-        source.read_range(offset, len as usize).await.ok()?
+        let len = usize::try_from(len).ok()?;
+        scratch.resize(len, 0);
+        if !source.read_range_into(offset, scratch.as_mut_slice()).await.ok()? {
+            return None;
+        }
+        Some(len)
     }
 }
 
@@ -94,12 +116,15 @@ pub(crate) async fn parse_h264_source_summary(
     }
 
     let probe_len = usize::try_from(source.total_len().min(16)).map_err(|_| "probe")?;
-    let probe = source
-        .read_range(0, probe_len)
+    let mut probe = [0u8; 16];
+    if !source
+        .read_range_into(0, &mut probe[..probe_len])
         .await
         .map_err(|_| "probe")?
-        .ok_or("probe")?;
-    if looks_like_matroska(probe.as_slice()) {
+    {
+        return Err("probe");
+    }
+    if looks_like_matroska(&probe[..probe_len]) {
         return parse_h264_matroska_summary_from_source(source)
             .await
             .map(H264SourceSummary::Matroska)
