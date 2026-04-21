@@ -273,7 +273,6 @@ impl TlbAmlRuntimeHandler {
         let ptr = self.map_ptr(phys_addr, core::mem::size_of::<T>());
         core::ptr::write_volatile(ptr.as_ptr() as *mut T, value);
     }
-
 }
 
 impl aml::Handler for TlbAmlRuntimeHandler {

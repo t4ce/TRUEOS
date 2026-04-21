@@ -1,6 +1,5 @@
 use alloc::{format, string::String, vec, vec::Vec};
 
-
 use crate::disc::block::{self, DiscId};
 use crate::r::ui2::{self, Ui2FontTier, Ui2HostedInteractiveRect, Ui2Rect};
 

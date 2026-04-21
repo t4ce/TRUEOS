@@ -1,11 +1,11 @@
 use alloc::vec::Vec;
 
+use super::Ui2Rect;
 use crate::gfx::althlasfont;
 use crate::gfx::althlasfont::athlasmetrics::{self};
 use crate::gfx::althlasfont::twemoji;
 use crate::gfx::png_codec::DecodedPng;
 use trueos_gfx_core::Rgba8;
-use super::Ui2Rect;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,7 +56,6 @@ impl Ui2FontTier {
     pub(crate) fn display_scale(self) -> f32 {
         self.display_scale_num() as f32 / self.display_scale_den() as f32
     }
-
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

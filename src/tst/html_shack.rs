@@ -135,7 +135,6 @@ impl HtmlShack {
         let html = String::from_utf8_lossy(bytes.as_slice()).into_owned();
         Ok(self.put_ready_html(Html::new(alloc::format!("file://{}", path), html)))
     }
-
 }
 
 static HTML_SHACK: Mutex<Option<HtmlShack>> = Mutex::new(None);

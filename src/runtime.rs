@@ -1,4 +1,3 @@
-
 #[inline]
 fn local_cpu_ptr() -> *mut crate::percpu::PerCpu {
     let cpu_ptr = crate::percpu::this_cpu_ptr();
