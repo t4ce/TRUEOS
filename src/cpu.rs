@@ -160,7 +160,7 @@ pub fn register_current_worker_spawner(spawner: Spawner) -> Option<CpuProfile> {
 }
 
 fn enter_ap_runtime(spawner: Spawner) -> ! {
-    let profile = register_current_worker_spawner(spawner)
+    let _profile = register_current_worker_spawner(spawner)
         .unwrap_or_else(|| CpuProfile::current().unwrap_or(CpuProfile::new(0, 0, 0)));
 
     match ap_heartbeat_task() {

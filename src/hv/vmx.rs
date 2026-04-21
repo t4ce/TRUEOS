@@ -1,10 +1,5 @@
-use core::arch::x86_64::__cpuid;
-use x86_64::instructions::tables::{sgdt, sidt};
-use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use x86_64::registers::model_specific::Msr;
-use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
-use crate::hv::guest;
 use crate::hv::hvlogf;
 
 // MSR indices

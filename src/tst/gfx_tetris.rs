@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::Instant;
 use spin::Mutex;
 use trueos_gfx_core::{RgbVertex, Rgba8};
 use trueos_tetris::{Game, Lcg32, NoopEvents, Rotation};

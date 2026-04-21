@@ -6,7 +6,7 @@ use crate::gfx::althlasfont::twemoji;
 use crate::gfx::png_codec::DecodedPng;
 use trueos_gfx_core::Rgba8;
 
-use super::{Ui2Rect, draw_texture_rect_uv_no_present};
+use super::Ui2Rect;
 
 const UI2_FONT_DEFAULT_RGBA: Rgba8 = Rgba8::new(255, 255, 255, 255);
 

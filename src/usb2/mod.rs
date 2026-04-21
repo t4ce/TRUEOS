@@ -34,10 +34,6 @@ struct CachedUsbControllerMmio {
 
 static USB_CONTROLLER_MMIO_CACHE: Mutex<Vec<CachedUsbControllerMmio>> = Mutex::new(Vec::new());
 
-pub(crate) use self::hid::TrueosHidCursorEvent;
-pub(crate) use self::hid::{
-    handle_keyboard_boot_report, handle_mouse_boot_report, remove_hid_slot,
-};
 pub(crate) use self::hid::{hut, input};
 
 #[derive(Copy, Clone, Debug)]
@@ -395,8 +391,8 @@ pub(crate) fn controller_mmio_diag(controller_id: usize) -> Option<UsbController
 }
 
 pub(crate) mod syscall {
-    use alloc::vec;
-    use alloc::vec::Vec;
+    
+    
 }
 
 pub(crate) use self::crabusb_service::bsp_service as crabusb_bsp_service;

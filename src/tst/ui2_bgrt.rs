@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use embassy_time::{Duration as EmbassyDuration, Timer};
 
 const UI2_BGRT_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Bgrt.get();
 const UI2_BGRT_WINDOW_X: f32 = 240.0;

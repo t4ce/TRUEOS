@@ -5,7 +5,6 @@ use alloc::{
     vec::Vec,
 };
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2Rect};
 

@@ -240,7 +240,7 @@ fn cmd_net_irc(
     }
 
     crate::wait::spawn_and_wait_local(async move {
-        use crate::r::net::cli::irc::{IRC_DEFAULT_PORT, IrcError, IrcSession};
+        use crate::r::net::cli::irc::{IRC_DEFAULT_PORT, IrcSession};
 
         let msg = alloc::format!("irc: connecting {}:{}", server.as_str(), IRC_DEFAULT_PORT);
         line(io, msg.as_str());

@@ -93,9 +93,6 @@ pub mod classreq {
     }
 }
 
-pub use self::keyboard::TrueosHidKeyboardSample;
-pub use self::mouse::TrueosHidMouseSample;
-pub use self::tablet::TrueosHidTabletSample;
 pub use v::vinput::TrueosHidCursorEvent;
 
 pub(crate) use crate::logflag::HID_DEBUG_REPORT_LOGS;

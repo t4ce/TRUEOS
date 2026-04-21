@@ -5,7 +5,7 @@ use core::cell::Cell;
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU8, Ordering};
 use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
 pub(crate) mod backends;
 pub(crate) mod cmds;
@@ -1271,7 +1271,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut irc_mode = IrcPromptMode::User;
     let mut cmd_status_text: Option<AllocString> = None;
     let mut command_sessions: alloc::vec::Vec<CommandSession> = alloc::vec::Vec::new();
-    let mut running_go2_phase = 0usize;
+    let running_go2_phase = 0usize;
     out.mode_status(
         output_mask,
         mode,

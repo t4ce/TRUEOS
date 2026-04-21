@@ -8,7 +8,7 @@ use crab_usb::{USBHost, usb_if};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use crate::usb2::api::{InterfaceEndpointError, claim_interface};
+use crate::usb2::api::claim_interface;
 
 const CAMERA_CONTROL_TIMEOUT_MS: u64 = 1000;
 const UVC_REQ_SET_CUR: u8 = 0x01;
@@ -409,7 +409,7 @@ fn present_yuy2_snapshot(raw: &[u8], vendor_id: u16, product_id: u16) {
     let rgba = yuy2_to_rgba(&raw[..lines * stride], CAPTURE_WIDTH, lines);
     // Pad to full height so overlay surface stays fixed size
     let full_len = CAPTURE_WIDTH * CAPTURE_HEIGHT * 4;
-    let mut full = if lines == CAPTURE_HEIGHT {
+    let full = if lines == CAPTURE_HEIGHT {
         rgba
     } else {
         let mut buf = alloc::vec![0u8; full_len];

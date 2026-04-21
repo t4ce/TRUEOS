@@ -11,7 +11,6 @@ pub mod vnet;
 use crate::hv::vmx::*;
 
 pub use trueos_vm::guest;
-pub use trueos_vm::stream;
 
 use alloc::string::String as AllocString;
 use alloc::vec::Vec as AllocVec;
@@ -20,7 +19,6 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use embassy_executor::{Spawner, task};
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, String};
 use spin::Mutex;
 use x86_64::instructions::tables::{sgdt, sidt};
@@ -31,7 +29,6 @@ use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
 use crate::shell2::{ShellBackend2, ShellIo2};
 
-use guest::*;
 use guest_work::{GuestWorkProfile, pick_guest_work_target};
 use memory::*;
 use snapshot::*;

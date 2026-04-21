@@ -5200,7 +5200,7 @@ pub mod cabi {
                             Plan::Tex {
                                 tex_id,
                                 image,
-                                sample_kind,
+                                sample_kind: _,
                                 sampler,
                                 offset,
                                 vcount,

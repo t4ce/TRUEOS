@@ -716,7 +716,7 @@ pub fn log_guest_mapping(label: &str, guest_va: u64) {
         return;
     };
     let pml4e = unsafe { read_guest_page_entry(pml4, pml4_index(guest_va)) };
-    let pdpte = unsafe {
+    let _pdpte = unsafe {
         if pml4e & PT_ENTRY_PRESENT == 0 {
             0
         } else if low_half {

@@ -1,6 +1,5 @@
 extern crate alloc;
 
-use alloc::format;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -1414,7 +1413,7 @@ fn build_h264_decode_batch_skeleton(
     let width = frame_width as u32;
     let height = frame_height as u32;
     let width_mbs = width.saturating_add(15) / 16;
-    let height_mbs = height.saturating_add(15) / 16;
+    let _height_mbs = height.saturating_add(15) / 16;
     let frame_dims = width | (height << 16);
     let output_pitch = align_up_u32(width.max(128), 128); // Y-tile: 128-byte tile width
     // Y-tile NV12: chroma plane must start on a 32-row tile boundary so the

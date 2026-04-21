@@ -5,7 +5,6 @@ use crate::r::net::https;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
 
 const SURF_TIMEOUT_MS: u32 = 35_000;
