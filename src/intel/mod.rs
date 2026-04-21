@@ -74,7 +74,12 @@ fn pick_media_boot_demo_spawner() -> Option<(u32, SendSpawner)> {
     };
 
     let selected_slot = pick_slot(|slot| slot >= MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT)
-        .or_else(|| background_slots.iter().copied().find(|slot| *slot >= MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT))
+        .or_else(|| {
+            background_slots
+                .iter()
+                .copied()
+                .find(|slot| *slot >= MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT)
+        })
         .or_else(|| pick_slot(|slot| slot >= 2))
         .or_else(|| background_slots.iter().copied().find(|slot| *slot >= 2))?;
 
@@ -217,9 +222,7 @@ pub fn init_once() {
             }
         });
     }
-    crate::log!(
-        "intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",
-    );
+    crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
     if MEDIA_BOOT_DEMO_ENABLED {
         crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
         crate::wait::spawn_local_detached(async move {
@@ -244,7 +247,9 @@ pub fn init_once() {
                     }
                 }
             } else {
-                crate::log!("intel/media: boot demo handoff skipped reason=no-worker-ap fallback=local\n");
+                crate::log!(
+                    "intel/media: boot demo handoff skipped reason=no-worker-ap fallback=local\n"
+                );
             }
 
             log_media_demo_task_profile("local", 0, queued_at_ms);

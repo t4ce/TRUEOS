@@ -1,6 +1,5 @@
 use alloc::{format, string::String, vec, vec::Vec};
 
-
 use crate::r::ui2::{self, Ui2Rect};
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,6 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, Ordering};
 
-
 const UI2_CORETICKS_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Coreticks.get();
 const UI2_CORETICKS_WINDOW_TITLE: &str = "Coreticks";
 const UI2_CORETICKS_WINDOW_X: f32 = 720.0;

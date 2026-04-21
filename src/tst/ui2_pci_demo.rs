@@ -5,7 +5,6 @@ use alloc::{
     vec::Vec,
 };
 
-
 use crate::r::ui2::{self, Ui2FontTier, Ui2HostedInteractiveRect, Ui2Rect};
 
 const UI2_PCI_DEMO_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Pci.get();
@@ -236,12 +235,7 @@ fn usb_demo_snapshot() -> UsbDemoSnapshot {
             index: ctrl.index,
             title: format!(
                 "{} {:02X}:{:02X}.{} {:04X}:{:04X}",
-                ctrl.index,
-                ctrl.bus,
-                ctrl.slot,
-                ctrl.function,
-                ctrl.vendor_id,
-                ctrl.device_id
+                ctrl.index, ctrl.bus, ctrl.slot, ctrl.function, ctrl.vendor_id, ctrl.device_id
             ),
             detail: format!("cached devices={} mmio={:p}", devices.len(), ctrl.mmio_base.as_ptr()),
         });

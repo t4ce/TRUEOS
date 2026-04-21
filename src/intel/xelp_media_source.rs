@@ -56,7 +56,8 @@ impl MediaSource {
     ) -> Result<bool, crate::disc::block::Error> {
         match self {
             Self::Memory { body, .. } => {
-                let start = usize::try_from(offset).map_err(|_| crate::disc::block::Error::OutOfBounds)?;
+                let start =
+                    usize::try_from(offset).map_err(|_| crate::disc::block::Error::OutOfBounds)?;
                 let end = start
                     .checked_add(dst.len())
                     .ok_or(crate::disc::block::Error::OutOfBounds)?;
@@ -67,7 +68,10 @@ impl MediaSource {
                 Ok(true)
             }
             Self::CacheFile {
-                disk, path, len: total, ..
+                disk,
+                path,
+                len: total,
+                ..
             } => {
                 let end = offset
                     .checked_add(dst.len() as u64)

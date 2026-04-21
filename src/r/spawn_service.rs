@@ -1283,12 +1283,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_CHART_DEMO_STARTED,
         spawn_ui2_chart_demo,
     ),
-    TaskSpec::enabled(
-        "ui2-pci-demo",
-        UI2_DEMO_READY,
-        &UI2_PCI_DEMO_STARTED,
-        spawn_ui2_pci_demo,
-    ),
+    TaskSpec::enabled("ui2-pci-demo", UI2_DEMO_READY, &UI2_PCI_DEMO_STARTED, spawn_ui2_pci_demo),
     TaskSpec::disabled(
         "ui2-trueosfs-explorer-demo",
         UI2_DEMO_READY | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
@@ -1353,9 +1348,7 @@ pub fn offline_ui2_demo_tasks() -> Vec<OfflineTaskEntry> {
             continue;
         }
         if spec.disabled.load(Ordering::Acquire) {
-            out.push(OfflineTaskEntry {
-                index: i,
-            });
+            out.push(OfflineTaskEntry { index: i });
         }
     }
     out
