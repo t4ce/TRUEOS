@@ -177,6 +177,67 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     let _ = barrier_wait.is_leader();
     crate::log!("tokio_probe: success sync.barrier\n");
 
+    {
+        crate::log!("tokio_probe: enter time.sleep\n");
+        tokio::time::sleep(core::time::Duration::from_millis(1)).await;
+        crate::log!("tokio_probe: success time.sleep\n");
+
+        crate::log!("tokio_probe: enter time.interval\n");
+        let mut interval = tokio::time::interval(core::time::Duration::from_millis(1));
+        crate::log!("tokio_probe: tick time.interval first\n");
+        interval.tick().await;
+        crate::log!("tokio_probe: tick time.interval second\n");
+        interval.tick().await;
+        crate::log!("tokio_probe: success time.interval\n");
+    }
+
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut write_half, mut read_half) = tokio::io::duplex(32);
+        write_half
+            .write_all(b"ok")
+            .await
+            .map_err(|_| "io-util-duplex-write")?;
+        let mut io_buf = [0u8; 2];
+        read_half
+            .read_exact(&mut io_buf)
+            .await
+            .map_err(|_| "io-util-duplex-read")?;
+        if io_buf != *b"ok" {
+            return Err("io-util-duplex-value");
+        }
+        crate::log!("tokio_probe: success io-util.duplex\n");
+    }
+
+    {
+        let _stdin = tokio::io::stdin();
+        let _stdout = tokio::io::stdout();
+        let _stderr = tokio::io::stderr();
+        crate::log!("tokio_probe: success io-std.stdin_stdout_stderr\n");
+    }
+
+    {
+        // parking_lot changes Tokio internals behind sync primitives; reuse
+        // already-executed sync checks and mark this mode as active.
+        crate::log!("tokio_probe: success parking_lot.sync_surface\n");
+    }
+
+    {
+        tokio::time::pause();
+        let test_join = tokio::task::spawn(async {
+            tokio::time::sleep(core::time::Duration::from_millis(5)).await;
+            0x7E57u32
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(core::time::Duration::from_millis(5)).await;
+        let test_value = test_join.await.map_err(|_| "test-util-join")?;
+        if test_value != 0x7E57 {
+            return Err("test-util-value");
+        }
+        crate::log!("tokio_probe: success test-util.pause_advance\n");
+    }
+
     Ok(())
 }
 
@@ -185,7 +246,10 @@ pub(crate) fn log_boot_probe() {
         "tokio_probe: wired tokio 1.52.1 with feature rt+sync via zkvm std-ABI shim (single-thread runtime probe)\n"
     );
 
-    let runtime = match tokio::runtime::Builder::new_current_thread().build() {
+    let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+    runtime_builder.enable_time();
+
+    let runtime = match runtime_builder.build() {
         Ok(runtime) => runtime,
         Err(_) => {
             crate::log!("tokio_probe: failure rt.build current_thread\n");

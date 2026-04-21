@@ -36,12 +36,15 @@ QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LAN
 QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 # QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
+comma := ,
 
 # Enabling vhost-net can significantly improve virtio-net throughput.
 # Use `make run QEMU_VHOST=on` if your host supports it and the guest vring path is known-good.
 QEMU_VHOST ?= off
+QEMU_BRIDGE ?= br0
+QEMU_BRIDGE_HELPER ?= $(firstword $(wildcard /usr/lib/qemu/qemu-bridge-helper /usr/libexec/qemu-bridge-helper /usr/lib/qemu-bridge-helper))
 
-QEMU_NET_FLAGS = -netdev tap,id=net1,ifname=tap0,script=no,downscript=no,vhost=$(QEMU_VHOST) -device virtio-net-pci,netdev=net1,disable-modern=off,bus=pcie.0,addr=0x3 \
+QEMU_NET_FLAGS = -netdev bridge,id=net1,br=$(QEMU_BRIDGE)$(if $(QEMU_BRIDGE_HELPER),$(comma)helper=$(QEMU_BRIDGE_HELPER)) -device virtio-net-pci,netdev=net1,disable-modern=off,bus=pcie.0,addr=0x3 \
 	#-netdev user,id=net1,net=10.0.2.0/24,dhcpstart=10.0.2.15,hostfwd=tcp::4245-:4245,hostfwd=tcp::8080-:80 -device e1000,netdev=net1 \
 	#-netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
 	#-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=off
