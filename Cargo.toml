@@ -4,9 +4,10 @@ version = "0.0.2"
 edition = "2024"
 
 [features]
-default = ["tokio-probe"]
+default = ["tokio-probe", "intel-hv"]
 # `tokio/net` is not in the probe yet: `socket2` and `mio` reject `target_os="zkvm"`.
 tokio-probe = ["dep:tokio", "tokio/rt", "tokio/sync", "tokio/time", "tokio/io-util", "tokio/io-std", "tokio/fs", "tokio/parking_lot", "tokio/test-util"]
+intel-hv = ["dep:trueos-vm"]
 
 [dependencies]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
@@ -57,7 +58,7 @@ trueos-fs = { path = "crates/trueos-fs" }
 v = { path = "crates/trueos-v" }
 trueos-tetris = { path = "crates/trueos-tetris" }
 trueos-weather = { path = "crates/trueos-weather" }
-trueos-vm = { path = "crates/trueos-vm" }
+trueos-vm = { path = "crates/trueos-vm", optional = true }
 trueos-esp = { path = "crates/trueos-esp" }
 lyon_geom = { version = "1.0.19", default-features = false }
 lyon_tessellation = { version = "1.0.20", default-features = false }
