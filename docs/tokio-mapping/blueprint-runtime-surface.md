@@ -66,7 +66,13 @@ The `trueos` blueprint wrapper crate now exposes:
 
 - `trueos::clean`
 - `trueos::clean::prelude`
+- `trueos::blueprint`
+- `trueos::blueprint!`
 
 That curated surface is the intended landing zone for future hull/run API cleanup and for any eventual Tokio-backed blueprint runtime wrapper.
 
 The existing broad `trueos::prelude` remains for compatibility, but it should be treated as a wider transitional surface rather than the final architectural target.
+
+The `hello_world` sample is the first app migrated to this newer entry shape.
+
+For the concrete ownership split, see `docs/tokio-mapping/capability-matrix.md`.
