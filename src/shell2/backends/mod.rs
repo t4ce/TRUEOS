@@ -8,6 +8,6 @@ pub(crate) use net_tcp::NET_TCP_SHELL_BACKEND;
 pub(crate) use uart::UART1_COM1_BACKEND;
 pub(crate) use ui2::{
     UI2_SHELL_BACKEND, Ui2ShellCell, Ui2ShellScreenSnapshot, queue_ui2_keyboard_event,
-    ui2_shell_attach_window, ui2_shell_dirty_seq, ui2_shell_last_rendered_seq,
-    ui2_shell_mark_rendered, ui2_shell_snapshot, ui2_shell_window_id,
+    ui2_shell_attach_window, ui2_shell_last_rendered_seq, ui2_shell_mark_rendered,
+    ui2_shell_snapshot,
 };

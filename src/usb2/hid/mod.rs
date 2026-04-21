@@ -1,8 +1,6 @@
 extern crate alloc;
-
 use alloc::vec::Vec;
 use spin::Mutex;
-
 pub mod boot;
 pub mod eyetracker;
 pub mod hut;
@@ -12,89 +10,7 @@ pub mod leds;
 pub mod mediacontrol;
 pub mod mouse;
 pub mod tablet;
-
-pub mod classreq {
-    #[repr(u8)]
-    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    pub enum HidReportType {
-        Input = 1,
-        Output = 2,
-        Feature = 3,
-    }
-
-    #[inline]
-    pub fn get_protocol_slot_sync(
-        _controller_id: usize,
-        _slot_id: u32,
-        _iface: u8,
-        _timeout_ms: u64,
-    ) -> Option<u8> {
-        None
-    }
-
-    #[inline]
-    pub fn set_protocol_slot_sync(
-        _controller_id: usize,
-        _slot_id: u32,
-        _iface: u8,
-        _protocol: u8,
-        _timeout_ms: u64,
-    ) -> Option<u32> {
-        None
-    }
-
-    #[inline]
-    pub fn get_idle_slot_sync(
-        _controller_id: usize,
-        _slot_id: u32,
-        _iface: u8,
-        _report_id: u8,
-        _timeout_ms: u64,
-    ) -> Option<u8> {
-        None
-    }
-
-    #[inline]
-    pub fn set_idle_slot_sync(
-        _controller_id: usize,
-        _slot_id: u32,
-        _iface: u8,
-        _report_id: u8,
-        _duration_4ms: u8,
-        _timeout_ms: u64,
-    ) -> Option<u32> {
-        None
-    }
-
-    #[inline]
-    pub fn get_report_slot_sync(
-        _controller_id: usize,
-        _slot_id: u32,
-        _iface: u8,
-        _report_type: HidReportType,
-        _report_id: u8,
-        _length: usize,
-        _timeout_ms: u64,
-    ) -> Option<heapless::Vec<u8, 256>> {
-        None
-    }
-
-    #[inline]
-    pub fn set_report_slot_sync(
-        _controller_id: usize,
-        _slot_id: u32,
-        _iface: u8,
-        _report_type: HidReportType,
-        _report_id: u8,
-        _data: &[u8],
-        _timeout_ms: u64,
-    ) -> Option<u32> {
-        None
-    }
-}
-
 pub use v::vinput::TrueosHidCursorEvent;
-
 pub(crate) use crate::logflag::HID_DEBUG_REPORT_LOGS;
 
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 1024.0;

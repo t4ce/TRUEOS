@@ -1,14 +1,11 @@
 use alloc::vec::Vec;
 
 use crate::gfx::althlasfont;
-use crate::gfx::althlasfont::athlasmetrics::{self, ATHLAS_FONT_INFO};
+use crate::gfx::althlasfont::athlasmetrics::{self};
 use crate::gfx::althlasfont::twemoji;
 use crate::gfx::png_codec::DecodedPng;
 use trueos_gfx_core::Rgba8;
-
 use super::Ui2Rect;
-
-const UI2_FONT_DEFAULT_RGBA: Rgba8 = Rgba8::new(255, 255, 255, 255);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,8 +17,6 @@ pub(crate) enum Ui2FontTier {
 }
 
 impl Ui2FontTier {
-    pub(crate) const ALL: [Self; 4] = [Self::Third, Self::Half, Self::OneX, Self::TwoX];
-
     #[inline]
     pub(crate) const fn size_case(self) -> usize {
         self as usize
@@ -62,50 +57,6 @@ impl Ui2FontTier {
         self.display_scale_num() as f32 / self.display_scale_den() as f32
     }
 
-    #[inline]
-    pub(crate) fn ready(self) -> bool {
-        althlasfont::athlas_tier_ready(self.size_case())
-    }
-
-    #[inline]
-    pub(crate) fn ready_seq(self) -> u32 {
-        althlasfont::athlas_tier_ready_seq(self.size_case())
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Ui2FontReadySnapshot {
-    pub third_ready_seq: u32,
-    pub half_ready_seq: u32,
-    pub one_x_ready_seq: u32,
-    pub two_x_ready_seq: u32,
-}
-
-impl Ui2FontReadySnapshot {
-    #[inline]
-    pub(crate) fn capture() -> Self {
-        Self {
-            third_ready_seq: Ui2FontTier::Third.ready_seq(),
-            half_ready_seq: Ui2FontTier::Half.ready_seq(),
-            one_x_ready_seq: Ui2FontTier::OneX.ready_seq(),
-            two_x_ready_seq: Ui2FontTier::TwoX.ready_seq(),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn tier_ready_seq(self, tier: Ui2FontTier) -> u32 {
-        match tier {
-            Ui2FontTier::Third => self.third_ready_seq,
-            Ui2FontTier::Half => self.half_ready_seq,
-            Ui2FontTier::OneX => self.one_x_ready_seq,
-            Ui2FontTier::TwoX => self.two_x_ready_seq,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn changed_since(self, earlier: Self) -> bool {
-        self != earlier
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -159,11 +110,6 @@ pub(crate) struct Ui2FontCpuAtlases {
 }
 
 #[inline]
-pub(crate) fn ui2_font_ready_snapshot() -> Ui2FontReadySnapshot {
-    Ui2FontReadySnapshot::capture()
-}
-
-#[inline]
 pub(crate) fn ui2_font_pick_tier_for_px(px_h: f32) -> Ui2FontTier {
     if !(px_h.is_finite() && px_h > 0.0) {
         return Ui2FontTier::OneX;
@@ -190,12 +136,6 @@ pub(crate) fn ui2_font_native_line_height_px(tier: Ui2FontTier) -> u16 {
 }
 
 #[inline]
-pub(crate) fn ui2_font_tier_max_cell_width_px(tier: Ui2FontTier) -> u16 {
-    athlasmetrics::athlas_variant_max_cell_width(tier.size_case())
-        .unwrap_or_else(|| tier.atlas_cell_height_px().saturating_div(2).max(1))
-}
-
-#[inline]
 fn ui2_font_glyph_cell_metrics(glyph: &Ui2FontGlyph) -> Ui2FontCellMetrics {
     Ui2FontCellMetrics {
         cell_w_px: glyph.advance_px.max(1),
@@ -212,21 +152,6 @@ pub(super) fn ui2_font_place_glyph_top_center(glyph: &Ui2FontGlyph, rect: Ui2Rec
     let glyph_w = f32::from(metrics.glyph_w_px.max(1));
     let glyph_h = f32::from(metrics.glyph_h_px.max(1));
     Ui2Rect::new(rect.x + ((rect.w - cell_w) * 0.5), rect.y, glyph_w, glyph_h)
-}
-
-#[inline]
-pub(super) fn ui2_font_place_glyph_center(glyph: &Ui2FontGlyph, rect: Ui2Rect) -> Ui2Rect {
-    let metrics = ui2_font_glyph_cell_metrics(glyph);
-    let cell_w = f32::from(metrics.cell_w_px.max(metrics.glyph_w_px).max(1));
-    let cell_h = f32::from(metrics.cell_h_px.max(metrics.glyph_h_px).max(1));
-    let glyph_w = f32::from(metrics.glyph_w_px.max(1));
-    let glyph_h = f32::from(metrics.glyph_h_px.max(1));
-    Ui2Rect::new(
-        rect.x + ((rect.w - cell_w) * 0.5),
-        rect.y + ((rect.h - cell_h) * 0.5),
-        glyph_w,
-        glyph_h,
-    )
 }
 
 pub(crate) fn ui2_font_decode_cpu_atlases(size_case: usize) -> Option<Ui2FontCpuAtlases> {
@@ -333,16 +258,6 @@ fn ui2_font_blit_glyph_rgba(
     }
 
     true
-}
-
-#[inline]
-pub(crate) fn ui2_font_units_per_em() -> u16 {
-    ATHLAS_FONT_INFO.units_per_em
-}
-
-#[inline]
-pub(crate) fn ui2_font_line_height_units() -> u16 {
-    ATHLAS_FONT_INFO.line_height
 }
 
 pub(super) fn ui2_font_resolve_glyph(tier: Ui2FontTier, ch: char) -> Option<Ui2FontGlyph> {
@@ -561,28 +476,6 @@ pub(crate) fn ui2_font_measure_text_for_px(text: &str, px_h: f32) -> Ui2FontText
     ui2_font_measure_text_with_scale(tier, text, scale)
 }
 
-pub(crate) fn ui2_font_draw_text_line_no_present(
-    text: &str,
-    x: f32,
-    y: f32,
-    max_width_px: f32,
-    px_h: f32,
-    view_w: u32,
-    view_h: u32,
-    alpha: u8,
-) -> bool {
-    ui2_font_draw_text_line_rgba_no_present(
-        text,
-        x,
-        y,
-        max_width_px,
-        px_h,
-        view_w,
-        view_h,
-        (UI2_FONT_DEFAULT_RGBA.r, UI2_FONT_DEFAULT_RGBA.g, UI2_FONT_DEFAULT_RGBA.b, alpha),
-    )
-}
-
 pub(crate) fn ui2_font_draw_text_line_rgba_no_present(
     text: &str,
     x: f32,
@@ -713,28 +606,6 @@ fn ui2_font_draw_text_line_with_tier_scale_rgba_no_present(
     }
 
     drew_any
-}
-
-pub(crate) fn ui2_font_draw_text_line_in_rect_no_present(
-    text: &str,
-    rect: Ui2Rect,
-    px_h: f32,
-    align: Ui2FontTextAlign,
-    vertical_align: Ui2FontVerticalAlign,
-    view_w: u32,
-    view_h: u32,
-    alpha: u8,
-) -> bool {
-    ui2_font_draw_text_line_in_rect_rgba_no_present(
-        text,
-        rect,
-        px_h,
-        align,
-        vertical_align,
-        view_w,
-        view_h,
-        (UI2_FONT_DEFAULT_RGBA.r, UI2_FONT_DEFAULT_RGBA.g, UI2_FONT_DEFAULT_RGBA.b, alpha),
-    )
 }
 
 pub(crate) fn ui2_font_draw_text_line_in_rect_rgba_no_present(
