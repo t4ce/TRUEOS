@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
-#![feature(abi_x86_interrupt, f16)]
+#![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
+#![feature(f16)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
 const _: f16 = 0.0_f16;
@@ -16,6 +17,10 @@ mod cpu;
 mod disc;
 pub mod dma;
 mod efi;
+#[cfg(target_arch = "x86_64")]
+mod exceptions;
+#[cfg(not(target_arch = "x86_64"))]
+#[path = "exceptions_disabled.rs"]
 mod exceptions;
 mod gfx;
 mod globalog;

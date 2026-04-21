@@ -34,11 +34,13 @@ consumer_b task
   does 1 s work
 */
 // this is our apic helper
+#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::_rdtsc;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use heapless::Vec;
 use spin::Mutex;
+#[cfg(target_arch = "x86_64")]
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 pub(crate) const CHRONOS_TIMER_VECTOR: u8 = 0x40;
@@ -109,6 +111,22 @@ fn ms_to_ticks(ms: u64) -> u64 {
 }
 
 #[inline]
+fn read_cycle_counter() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        return unsafe { _rdtsc() };
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        // ARMTODO: Non-x86 builds still track monotonic time; a real ARM port
+        // can wire this up to CNTVCT_EL0 or another platform cycle counter
+        // later.
+        0
+    }
+}
+
+#[inline]
 fn capture_snapshot(seq: u64) -> TimeSnapshot {
     let mono_ticks = embassy_time_driver::now();
     let hz = embassy_time_driver::TICK_HZ.max(1);
@@ -116,7 +134,7 @@ fn capture_snapshot(seq: u64) -> TimeSnapshot {
         seq,
         mono_ticks,
         mono_ms: mono_ticks.saturating_mul(1000) / hz,
-        tsc: unsafe { _rdtsc() },
+        tsc: read_cycle_counter(),
     }
 }
 
@@ -127,6 +145,7 @@ fn refresh_snapshot(seq: u64) -> TimeSnapshot {
     snapshot
 }
 
+#[cfg(target_arch = "x86_64")]
 pub(crate) fn interrupt_install(idt: &mut InterruptDescriptorTable) {
     idt[CHRONOS_TIMER_VECTOR].set_handler_fn(CHRONOS_TIMER);
 }
@@ -227,6 +246,7 @@ fn service_timers(snapshot: TimeSnapshot) {
 }
 
 #[allow(non_snake_case)]
+#[cfg(target_arch = "x86_64")]
 pub(crate) extern "x86-interrupt" fn CHRONOS_TIMER(_stack_frame: InterruptStackFrame) {
     let seq = WATCH_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     let snapshot = refresh_snapshot(seq);
