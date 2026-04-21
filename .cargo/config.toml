@@ -1,13 +1,13 @@
 [build]
 target-dir = "tgt"
-target = "86_64.json"
+target = ".cargo/86_64.json"
 
 [unstable]
 build-std = ["core", "compiler_builtins", "alloc", "std", "panic_abort"]
 build-std-features = ["compiler-builtins-mem"]
 json-target-spec = true
 
-[target.'86_64.json']
+[target.'.cargo/86_64.json']
 linker = "rust-lld"
 
 [target.'cfg(target_os = "none")']
