@@ -265,7 +265,9 @@ fn cfg_address(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
 #[cfg(not(target_arch = "x86_64"))]
 #[cold]
 fn legacy_cfg_unsupported() -> ! {
-    panic!("pci: legacy CF8/CFC config access is only supported on x86_64; non-x86 needs ECAM/platform PCI glue")
+    panic!(
+        "pci: legacy CF8/CFC config access is only supported on x86_64; non-x86 needs ECAM/platform PCI glue"
+    )
 }
 
 fn read_u16(bus: u8, slot: u8, function: u8, offset: u8) -> u16 {
