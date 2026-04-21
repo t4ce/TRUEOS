@@ -147,6 +147,30 @@ unsafe extern "C" {
     pub fn trueos_cabi_shell_qjs_read(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_shell_qjs_read_byte() -> i32;
     pub fn trueos_cabi_gfx_capture_screenshot_data_url(out_ptr: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_gfx_texture_dimensions(
+        tex_id: u32,
+        out_width: *mut u32,
+        out_height: *mut u32,
+    ) -> i32;
+    pub fn trueos_cabi_gfx_upload_texture_rgba_image(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_gfx_set_render_target(tex_id: u32) -> i32;
+    pub fn trueos_cabi_gfx_begin_frame_no_present(clear_rgb: u32) -> i32;
+    pub fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize)
+        -> i32;
+    pub fn trueos_cabi_gfx_queue_render_rgb_triangles_to_texture(
+        tex_id: u32,
+        clear_rgb: u32,
+        vtx_ptr: *const u8,
+        vtx_len: usize,
+        repaint_window_id: u32,
+    ) -> i32;
+    pub fn trueos_cabi_gfx_end_frame() -> i32;
     pub fn trueos_cabi_gfx_trace_set_enabled(enabled: u32) -> u32;
     pub fn trueos_cabi_gfx_trace_clear();
     pub fn trueos_cabi_gfx_trace_snapshot(out_ptr: *mut TrueosGfxTraceEntry, out_cap: u32) -> u32;
@@ -180,12 +204,47 @@ unsafe extern "C" {
         z: i32,
         alpha: u32,
     ) -> u32;
+    pub fn trueos_cabi_ui2_surface_window_create(
+        title_ptr: *const u8,
+        title_len: usize,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        z: i32,
+        alpha: u32,
+        tex_id: u32,
+        blend_enabled: u32,
+    ) -> u32;
+    pub fn trueos_cabi_app_window_create(
+        title_ptr: *const u8,
+        title_len: usize,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        z: i32,
+        alpha: u32,
+    ) -> u32;
+    pub fn trueos_cabi_app_surface_window_create(
+        title_ptr: *const u8,
+        title_len: usize,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        z: i32,
+        alpha: u32,
+        tex_id: u32,
+        blend_enabled: u32,
+    ) -> u32;
     pub fn trueos_cabi_ui2_window_info(window_id: u32, out_info: *mut TrueosUi2WindowInfo) -> i32;
     pub fn trueos_cabi_ui2_window_set_title(
         window_id: u32,
         title_ptr: *const u8,
         title_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_ui2_window_request_repaint(window_id: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_icon(window_id: u32, icon_id: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_position(window_id: u32, x: i32, y: i32) -> i32;
     pub fn trueos_cabi_ui2_window_set_size(window_id: u32, width: u32, height: u32) -> i32;

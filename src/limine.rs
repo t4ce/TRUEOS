@@ -129,6 +129,20 @@ pub fn smp_response() -> Option<&'static MpResponse> {
     SMP_REQUEST.response()
 }
 
+#[cfg(target_arch = "x86_64")]
+pub fn mp_cpu_id(cpu: &MpCpu) -> u32 {
+    cpu.lapic_id
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn mp_cpu_id(cpu: &MpCpu) -> u32 {
+    if cpu.processor_id != 0 {
+        cpu.processor_id
+    } else {
+        cpu.mpidr as u32
+    }
+}
+
 pub fn prime_bootloader_caches() {
     let _ = cache_boot_timestamp_secs();
 }

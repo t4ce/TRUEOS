@@ -1153,6 +1153,62 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_create(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_app_window_create(
+    title_ptr: *const u8,
+    title_len: usize,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    z: i32,
+    alpha: u32,
+) -> u32 {
+    if title_ptr.is_null() {
+        crate::hv::log_blueprint_app_window_event(format_args!(
+            "app-window-broker: plain create rejected null title ptr"
+        ));
+        return 0;
+    }
+    let title = core::slice::from_raw_parts(title_ptr, title_len);
+    let Ok(title) = core::str::from_utf8(title) else {
+        crate::hv::log_blueprint_app_window_event(format_args!(
+            "app-window-broker: plain create rejected invalid utf8 title len={}",
+            title_len
+        ));
+        return 0;
+    };
+    let rect = Ui2Rect {
+        x: x as f32,
+        y: y as f32,
+        w: width.max(1) as f32,
+        h: height.max(1) as f32,
+    };
+    let id = create_window(
+        title,
+        rect,
+        z.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        alpha.min(255) as u8,
+    );
+    if id != 0 {
+        let _ = set_window_vm_origin_hint(id, true);
+        let _ = focus_window(id);
+        crate::hv::register_blueprint_app_window(id, "plain", title);
+    } else {
+        crate::hv::log_blueprint_app_window_event(format_args!(
+            "app-window-broker: plain create failed title={} rect=({},{} {}x{}) z={} alpha={}",
+            title,
+            x,
+            y,
+            width,
+            height,
+            z,
+            alpha
+        ));
+    }
+    id
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_surface_window_create(
     title_ptr: *const u8,
     title_len: usize,
@@ -1193,6 +1249,74 @@ pub unsafe extern "C" fn trueos_cabi_ui2_surface_window_create(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_app_surface_window_create(
+    title_ptr: *const u8,
+    title_len: usize,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    z: i32,
+    alpha: u32,
+    tex_id: u32,
+    blend_enabled: u32,
+) -> u32 {
+    if title_ptr.is_null() || tex_id == 0 {
+        crate::hv::log_blueprint_app_window_event(format_args!(
+            "app-window-broker: surface create rejected title_ptr_null={} tex_id={}",
+            title_ptr.is_null(),
+            tex_id
+        ));
+        return 0;
+    }
+    let title = core::slice::from_raw_parts(title_ptr, title_len);
+    let Ok(title) = core::str::from_utf8(title) else {
+        crate::hv::log_blueprint_app_window_event(format_args!(
+            "app-window-broker: surface create rejected invalid utf8 title len={} tex_id={}",
+            title_len,
+            tex_id
+        ));
+        return 0;
+    };
+    let content_rect = Ui2Rect {
+        x: x as f32,
+        y: y as f32,
+        w: width.max(1) as f32,
+        h: height.max(1) as f32,
+    };
+    let id = Ui2SurfaceWindow::new(
+        title,
+        content_rect,
+        z.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        alpha.min(255) as u8,
+        tex_id,
+        blend_enabled != 0,
+        [0x08, 0x0C, 0x12, 0xFF],
+    )
+    .map(|surface| surface.window_id())
+    .unwrap_or(0);
+    if id != 0 {
+        let _ = set_window_vm_origin_hint(id, true);
+        let _ = focus_window(id);
+        crate::hv::register_blueprint_app_window(id, "surface", title);
+    } else {
+        crate::hv::log_blueprint_app_window_event(format_args!(
+            "app-window-broker: surface create failed title={} tex={} rect=({},{} {}x{}) z={} alpha={} blend={}",
+            title,
+            tex_id,
+            x,
+            y,
+            width,
+            height,
+            z,
+            alpha,
+            blend_enabled
+        ));
+    }
+    id
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_info(
     window_id: u32,
     out_info: *mut TrueosUi2WindowInfo,
@@ -1221,6 +1345,15 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_title(
         return -1;
     };
     if set_window_title(window_id, title) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_request_repaint(window_id: u32) -> i32 {
+    if request_window_repaint(window_id, "portal-window-repaint") {
         0
     } else {
         -1

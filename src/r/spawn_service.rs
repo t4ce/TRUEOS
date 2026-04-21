@@ -64,7 +64,6 @@ define_started_flags!(
     UI2_BGRT_DEMO_STARTED,
     UI2_CORETICKS_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
-    UI2_PCI_DEMO_STARTED,
     UI2_RAPLE_DEMO_STARTED,
     UI2_PETERSEN_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
@@ -839,13 +838,6 @@ fn spawn_ui2_chart_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_ui2_pci_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst_ui2_pci_demo::ui2_pci_demo_task()
-    })
-}
-
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     let count = crate::usb2::pci_usb_controllers()
         .len()
@@ -1283,7 +1275,6 @@ static TASKS: &[TaskSpec] = &[
         &UI2_CHART_DEMO_STARTED,
         spawn_ui2_chart_demo,
     ),
-    TaskSpec::enabled("ui2-pci-demo", UI2_DEMO_READY, &UI2_PCI_DEMO_STARTED, spawn_ui2_pci_demo),
     TaskSpec::disabled(
         "ui2-trueosfs-explorer-demo",
         UI2_DEMO_READY | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,

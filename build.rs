@@ -68,10 +68,17 @@ fn parse_declared_cabi_imports(vcabi_path: &Path) -> Result<Vec<String>, String>
         let Some(name_end) = rest.find('(') else {
             continue;
         };
-        import_names.insert(format!("trueos_cabi_{}", &rest[..name_end]));
+        let name = format!("trueos_cabi_{}", &rest[..name_end]);
+        if portal_import_is_exposed(name.as_str()) {
+            import_names.insert(name);
+        }
     }
 
     Ok(import_names.into_iter().collect())
+}
+
+fn portal_import_is_exposed(name: &str) -> bool {
+    !matches!(name, "trueos_cabi_ui2_window_create" | "trueos_cabi_ui2_surface_window_create")
 }
 
 fn collect_defined_cabi_exports(manifest_dir: &Path) -> Result<BTreeMap<String, String>, String> {
@@ -114,7 +121,7 @@ fn collect_defined_cabi_exports_in_file(
     let module_path = module_path_for_source(manifest_dir, path)?;
 
     for line in source.lines() {
-        if !line.contains("extern \"C\"") || !line.contains("fn trueos_cabi_") {
+        if !line.contains("fn trueos_cabi_") {
             continue;
         }
         let Some(rest) = line.split("fn ").nth(1) else {

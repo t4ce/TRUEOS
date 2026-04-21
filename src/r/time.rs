@@ -1,3 +1,4 @@
+#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{__cpuid, _rdtsc};
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::Waker;
@@ -18,6 +19,20 @@ static TSC_HZ: AtomicU64 = AtomicU64::new(0);
 static INIT: Once<()> = Once::new();
 
 static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
+
+#[inline]
+fn read_cycle_counter() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        return unsafe { _rdtsc() };
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        // ARMTODO: wire this to a real platform cycle counter for non-x86.
+        0
+    }
+}
 
 #[inline]
 pub fn uptime_seconds() -> u64 {
@@ -47,7 +62,7 @@ pub fn unix_time_seconds() -> Option<u64> {
 
 fn init_once() {
     INIT.call_once(|| {
-        let start = unsafe { _rdtsc() };
+        let start = read_cycle_counter();
         START_TSC.store(start, Ordering::Relaxed);
         let hz = detect_tsc_hz().max(1);
         if crate::logflag::BOOT_INFO_LOGS {
@@ -58,6 +73,12 @@ fn init_once() {
 }
 
 fn detect_tsc_hz() -> u64 {
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        return TICK_HZ.max(1);
+    }
+
+    #[cfg(target_arch = "x86_64")]
     if let Some(hpet) = crate::efi::acpi::hpet::ensure()
         && let Some(calibrated_hz) = calibrate_tsc_hz_with_hpet(hpet)
     {
@@ -67,9 +88,13 @@ fn detect_tsc_hz() -> u64 {
         return calibrated_hz;
     }
 
-    detect_tsc_hz_from_cpuid()
+    #[cfg(target_arch = "x86_64")]
+    {
+        detect_tsc_hz_from_cpuid()
+    }
 }
 
+#[cfg(target_arch = "x86_64")]
 fn detect_tsc_hz_from_cpuid() -> u64 {
     let r15 = __cpuid(0x15);
     let denom = r15.eax as u64;
@@ -112,6 +137,7 @@ fn detect_tsc_hz_from_cpuid() -> u64 {
     1_000_000_000
 }
 
+#[cfg(target_arch = "x86_64")]
 fn calibrate_tsc_hz_with_hpet(hpet: &crate::efi::acpi::hpet::Hpet) -> Option<u64> {
     let hpet_hz = hpet.frequency_hz();
     if hpet_hz == 0 {
@@ -131,7 +157,7 @@ fn calibrate_tsc_hz_with_hpet(hpet: &crate::efi::acpi::hpet::Hpet) -> Option<u64
         let hpet_now = hpet.main_counter();
         let elapsed = hpet.counter_delta(hpet_start, hpet_now);
         if elapsed >= target_hpet_ticks {
-            let tsc_end = unsafe { _rdtsc() };
+            let tsc_end = read_cycle_counter();
             let tsc_delta = tsc_end.wrapping_sub(tsc_start);
             let hz = ((tsc_delta as u128) * 1000u128 / (SAMPLE_MS as u128)) as u64;
             if hz >= 1_000_000 {
@@ -177,7 +203,7 @@ impl Driver for TimeDriver {
 
         let start = START_TSC.load(Ordering::Relaxed);
         let tsc_hz = TSC_HZ.load(Ordering::Relaxed).max(1);
-        let tsc = unsafe { _rdtsc() };
+        let tsc = read_cycle_counter();
         let delta = tsc.wrapping_sub(start);
         ticks_from_tsc_delta(delta, tsc_hz)
     }

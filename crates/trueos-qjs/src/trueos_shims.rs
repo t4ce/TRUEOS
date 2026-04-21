@@ -112,7 +112,15 @@ fn log_i32_dec(v: c_int) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn abort() -> ! {
     log_str("abort()\n");
+
+    #[cfg(target_arch = "x86_64")]
+    core::arch::asm!("cli", options(nomem, nostack));
+
     loop {
+        #[cfg(target_arch = "x86_64")]
+        core::arch::asm!("hlt", options(nomem, nostack));
+
+        #[cfg(not(target_arch = "x86_64"))]
         core::hint::spin_loop();
     }
 }
@@ -345,7 +353,26 @@ pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize)
         return dest;
     }
 
-    core::ptr::copy_nonoverlapping(src as *const u8, dest as *mut u8, n);
+    #[cfg(target_arch = "x86_64")]
+    core::arch::asm!(
+        "cld",
+        "rep movsb",
+        inout("rcx") n => _,
+        inout("rdi") dest as *mut u8 => _,
+        inout("rsi") src as *const u8 => _,
+        options(nostack)
+    );
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let dest = dest as *mut u8;
+        let src = src as *const u8;
+        let mut i = 0usize;
+        while i < n {
+            *dest.add(i) = *src.add(i);
+            i += 1;
+        }
+    }
 
     dest
 }
@@ -359,7 +386,49 @@ pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize
     let dest_u8 = dest as *mut u8;
     let src_u8 = src as *const u8;
 
-    core::ptr::copy(src_u8, dest_u8, n);
+    #[cfg(target_arch = "x86_64")]
+    {
+        if (dest_u8 as usize) < (src_u8 as usize) || (dest_u8 as usize) >= (src_u8 as usize + n) {
+            core::arch::asm!(
+                "cld",
+                "rep movsb",
+                inout("rcx") n => _,
+                inout("rdi") dest_u8 => _,
+                inout("rsi") src_u8 => _,
+                options(nostack)
+            );
+        } else {
+            let d = dest_u8.add(n - 1);
+            let s = src_u8.add(n - 1);
+            core::arch::asm!(
+                "std",
+                "rep movsb",
+                "cld",
+                inout("rcx") n => _,
+                inout("rdi") d => _,
+                inout("rsi") s => _,
+                options(nostack)
+            );
+        }
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        if (dest_u8 as usize) < (src_u8 as usize) || (dest_u8 as usize) >= (src_u8 as usize + n) {
+            let mut i = 0usize;
+            while i < n {
+                *dest_u8.add(i) = *src_u8.add(i);
+                i += 1;
+            }
+        } else {
+            let mut i = n;
+            while i != 0 {
+                let j = i - 1;
+                *dest_u8.add(j) = *src_u8.add(j);
+                i = j;
+            }
+        }
+    }
 
     dest
 }
@@ -370,7 +439,26 @@ pub unsafe extern "C" fn memset(s: *mut c_void, c: c_int, n: usize) -> *mut c_vo
         return s;
     }
 
-    core::ptr::write_bytes(s as *mut u8, c as u8, n);
+    #[cfg(target_arch = "x86_64")]
+    core::arch::asm!(
+        "cld",
+        "rep stosb",
+        in("al") (c as u8),
+        inout("rcx") n => _,
+        inout("rdi") s as *mut u8 => _,
+        options(nostack)
+    );
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let s = s as *mut u8;
+        let value = c as u8;
+        let mut i = 0usize;
+        while i < n {
+            *s.add(i) = value;
+            i += 1;
+        }
+    }
 
     s
 }

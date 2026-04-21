@@ -1,4 +1,5 @@
 use core::alloc::{GlobalAlloc, Layout};
+#[cfg(target_arch = "x86_64")]
 use core::arch::asm;
 use core::mem::{align_of, size_of};
 use core::ptr::{NonNull, addr_of_mut, null_mut};
@@ -60,18 +61,31 @@ pub struct AllocTrace {
 
 #[inline]
 unsafe fn read_return_address(depth: usize) -> usize {
+    #[cfg(target_arch = "x86_64")]
+    {
     let rbp: usize;
-    asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack, preserves_flags));
-    let mut frame = rbp as *const usize;
-    let mut remaining = depth;
-    while remaining != 0 {
-        if frame.is_null() {
-            return 0;
+        asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack, preserves_flags));
+        let mut frame = rbp as *const usize;
+        let mut remaining = depth;
+        while remaining != 0 {
+            if frame.is_null() {
+                return 0;
+            }
+            frame = (*frame) as *const usize;
+            remaining -= 1;
         }
-        frame = (*frame) as *const usize;
-        remaining -= 1;
+        return if frame.is_null() { 0 } else { *frame.add(1) };
     }
-    if frame.is_null() { 0 } else { *frame.add(1) }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        // ARMTODO: allocator trace return-address recovery currently walks an
+        // x86 frame chain via `rbp`. Non-x86 builds keep tracing enabled but
+        // report unknown callers until a platform-appropriate unwind/frame
+        // strategy is added.
+        let _ = depth;
+        0
+    }
 }
 
 #[inline]
@@ -748,9 +762,21 @@ fn alloc_error(layout: Layout) -> ! {
     );
 
     unsafe {
+        #[cfg(target_arch = "x86_64")]
+        {
         asm!("cli", options(nomem, nostack));
-        loop {
-            asm!("hlt", options(nomem, nostack));
+            loop {
+                asm!("hlt", options(nomem, nostack));
+            }
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            // ARMTODO: OOM stop handling is still x86-specific (`cli`/`hlt`).
+            // Non-x86 bring-up needs the right platform halt/panic stop path.
+            loop {
+                core::hint::spin_loop();
+            }
         }
     }
 }

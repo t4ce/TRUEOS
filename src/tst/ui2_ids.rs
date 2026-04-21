@@ -11,7 +11,6 @@ pub enum Ui2DemoTexId {
     ParticleSprite = 4_711,
     Petersen = 4_712,
     SmileyFountain = 4_713,
-    Pci = 4_714,
     Weather = 4_715,
     Coreticks = 4_716,
     Swarm = 4_720,
@@ -37,7 +36,6 @@ pub enum Ui2DemoContentId {
     Weather = 47,
     Chart = 48,
     Raple = 49,
-    Pci = 50,
 }
 
 impl Ui2DemoContentId {

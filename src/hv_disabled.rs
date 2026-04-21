@@ -12,6 +12,7 @@ const VM1_ID: u8 = 0;
 
 static GUEST_BOOT_ARMED: AtomicBool = AtomicBool::new(false);
 static BLUEPRINT_LAUNCH_STATE: Mutex<Option<BlueprintLaunchState>> = Mutex::new(None);
+static APP_WINDOW_SESSION: Mutex<Option<AppWindowSession>> = Mutex::new(None);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StartError {
@@ -55,6 +56,13 @@ pub struct BlueprintLaunchState {
     pub module_bytes: AllocVec<u8>,
     pub app_args: AllocVec<AllocString>,
     pub console_target: Option<crate::shell2::MatrixTarget>,
+}
+
+#[derive(Clone)]
+struct AppWindowSession {
+    archive: AllocString,
+    window_ids: AllocVec<u32>,
+    console_target: Option<crate::shell2::MatrixTarget>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -188,4 +196,70 @@ pub fn stage_blueprint_launch(state: BlueprintLaunchState) {
 
 pub fn take_blueprint_launch() -> Option<BlueprintLaunchState> {
     BLUEPRINT_LAUNCH_STATE.lock().take()
+}
+
+pub fn blueprint_launch_active() -> bool {
+    BLUEPRINT_LAUNCH_STATE.lock().is_some()
+}
+
+pub fn log_blueprint_app_window_event(args: core::fmt::Arguments<'_>) {
+    hvlogf(args);
+}
+
+pub fn begin_blueprint_app_window_session(
+    archive: &str,
+    console_target: Option<crate::shell2::MatrixTarget>,
+) {
+    *APP_WINDOW_SESSION.lock() = Some(AppWindowSession {
+        archive: AllocString::from(archive),
+        window_ids: AllocVec::new(),
+        console_target,
+    });
+    hvlogf(format_args!("app-window-broker(stub): session begin archive={}", archive));
+}
+
+pub fn register_blueprint_app_window(window_id: u32, kind: &str, title: &str) {
+    let mut session = APP_WINDOW_SESSION.lock();
+    let Some(session) = session.as_mut() else {
+        hvlogf(format_args!(
+            "app-window-broker(stub): create without session kind={} window={} title={}",
+            kind, window_id, title
+        ));
+        return;
+    };
+
+    if !session.window_ids.contains(&window_id) {
+        session.window_ids.push(window_id);
+    }
+
+    hvlogf(format_args!(
+        "app-window-broker(stub): created archive={} kind={} window={} title={}",
+        session.archive.as_str(),
+        kind,
+        window_id,
+        title
+    ));
+}
+
+pub fn finish_blueprint_app_window_session(close_windows: bool) {
+    let Some(session) = APP_WINDOW_SESSION.lock().take() else {
+        return;
+    };
+
+    hvlogf(format_args!(
+        "app-window-broker(stub): session end archive={} windows={} close_windows={}",
+        session.archive.as_str(),
+        session.window_ids.len(),
+        close_windows
+    ));
+
+    if let Some(target) = session.console_target.as_ref() {
+        crate::shell2::print_matrix_target_line(target, "app-window-broker(stub): session end");
+    }
+
+    if close_windows {
+        for window_id in session.window_ids {
+            let _ = crate::r::ui2::close_window(window_id);
+        }
+    }
 }

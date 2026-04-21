@@ -11,14 +11,17 @@ ISO_BOOT_DIR := bld/iso-bootroot
 ISO_EFI_IMG := efi.img
 UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
 # Size of the EFI System Partition image that gets embedded into the ISO.
-# Keep this small: the kernel and Limine config live on the ISO9660 filesystem,
-# while the ESP only needs to contain the EFI loader and the GuC module.
-EFI_IMG_SIZE_KIB ?= 1024
+# It needs to hold the EFI loader, firmware blob, and embedded blueprint apps.
+EFI_IMG_SIZE_KIB ?= 4096
 LIMINE_CFG := limine.conf
 LIMINE_PREFIX := bld/limine-prefix
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 GUC_FW_HOST_PATH ?= /lib/firmware/i915/adlp_guc_70.bin.zst
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/adlp_guc_70.bin
+BLUEPRINTS_ROOT ?= ../TRUEOS Blueprints
+BP_NAMES ?= hello_world triangle
+BP_DIST_DIR ?= $(BLUEPRINTS_ROOT)/dist
+BP_ISO_DIR_REL ?= EFI/BOOT/apps
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
 QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
@@ -79,7 +82,7 @@ QEMU_ISO_DBG = $(QEMU_BIN) $(QEMU_ISO_FLAGS_DBG) $(QEMU_USB_FLAGS)
 
 IMG_SIZE ?= 1G
 
-.PHONY: kernel blueprints hello-world-bp localcoder-bp artifacts kernel-stages iso iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
+.PHONY: kernel blueprints artifacts kernel-stages iso iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
 
 images: disk.img nvme.img
 
@@ -92,7 +95,10 @@ nvme.img:
 kernel:
 	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target .cargo/86_64.json
 
-artifacts: kernel
+blueprints:
+	cd "$(BLUEPRINTS_ROOT)" && for bp in $(BP_NAMES); do cargo bp --example "$$bp"; done
+
+artifacts: blueprints kernel
 	mkdir -p $(ARTIFACT_DIR)
 	cp $(KERNEL_BIN) $(ARTIFACT_FULL_ELF)
 	cp $(KERNEL_BIN) $(ARTIFACT_RUNTIME_ELF)
@@ -118,6 +124,12 @@ iso: artifacts images
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
+	@for bp in $(BP_NAMES); do \
+		if [ ! -f "$(BP_DIST_DIR)/$$bp.bp" ]; then \
+			echo "error: blueprint not found at $(BP_DIST_DIR)/$$bp.bp"; \
+			exit 1; \
+		fi; \
+	done
 	@if [ ! -f "$(GUC_FW_HOST_PATH)" ]; then \
 		echo "error: GUC firmware not found at $(GUC_FW_HOST_PATH)"; \
 		exit 1; \
@@ -133,6 +145,10 @@ iso: artifacts images
 	esac
 	mkdir -p $(ISO_BOOT_DIR)/$(dir $(GUC_FW_ISO_REL_PATH))
 	cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/$(GUC_FW_ISO_REL_PATH)
+	mkdir -p $(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)
+	@for bp in $(BP_NAMES); do \
+		cp "$(BP_DIST_DIR)/$$bp.bp" "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp"; \
+	done
 	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
@@ -150,6 +166,9 @@ iso: artifacts images
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI/BOOT/apps
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_SHARE)/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin ::/EFI/BOOT/adlp_guc_70.bin
+	@for bp in $(BP_NAMES); do \
+		mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp" ::/$(BP_ISO_DIR_REL)/$$bp.bp; \
+	done
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
 		-R \

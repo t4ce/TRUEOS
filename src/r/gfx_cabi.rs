@@ -4646,6 +4646,31 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_queue_render_rgb_triangles_to_texture(
+        tex_id: u32,
+        clear_rgb: u32,
+        vtx_ptr: *const u8,
+        vtx_len: usize,
+        repaint_window_id: u32,
+    ) -> i32 {
+        if vtx_ptr.is_null() {
+            return if vtx_len == 0 { 0 } else { -1 };
+        }
+        let bytes = core::slice::from_raw_parts(vtx_ptr, vtx_len);
+        if queue_render_rgb_triangles_to_texture_copy(
+            tex_id,
+            clear_rgb,
+            bytes,
+            repaint_window_id,
+            "portal-rgb-triangles",
+        ) {
+            0
+        } else {
+            -2
+        }
+    }
+
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_draw_tex_triangles_no_present(
         tex_id: u32,
         vtx_ptr: *const u8,

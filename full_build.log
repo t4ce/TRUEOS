@@ -28,54 +28,6 @@ warning: unused import: `hash::*`
    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
 
 warning: `simd-adler32` (lib) generated 1 warning (run `cargo fix --lib -p simd-adler32` to apply 1 suggestion)
-warning: function `compute_codes` is never used
-   --> vendor/fdeflate-0.3.7/src/lib.rs:106:10
-    |
-106 | const fn compute_codes<const NSYMS: usize>(lengths: &[u8; NSYMS]) -> Op...
-    |          ^^^^^^^^^^^^^
-    |
-    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: constant `HUFFMAN_LENGTHS` is never used
- --> vendor/fdeflate-0.3.7/src/tables.rs:7:18
-  |
-7 | pub(crate) const HUFFMAN_LENGTHS: [u8; 286] = [
-  |                  ^^^^^^^^^^^^^^^
-
-warning: constant `HUFFMAN_CODES` is never used
-  --> vendor/fdeflate-0.3.7/src/tables.rs:22:18
-   |
-22 | pub(crate) const HUFFMAN_CODES: [u16; 286] = match crate::compute_codes(...
-   |                  ^^^^^^^^^^^^^
-
-warning: constant `LENGTH_TO_SYMBOL` is never used
-  --> vendor/fdeflate-0.3.7/src/tables.rs:28:18
-   |
-28 | pub(crate) const LENGTH_TO_SYMBOL: [u16; 256] = [
-   |                  ^^^^^^^^^^^^^^^^
-
-warning: constant `LENGTH_TO_LEN_EXTRA` is never used
-  --> vendor/fdeflate-0.3.7/src/tables.rs:46:18
-   |
-46 | pub(crate) const LENGTH_TO_LEN_EXTRA: [u8; 256] = [
-   |                  ^^^^^^^^^^^^^^^^^^^
-
-warning: constant `BITMASKS` is never used
-  --> vendor/fdeflate-0.3.7/src/tables.rs:57:18
-   |
-57 | pub(crate) const BITMASKS: [u32; 17] = [
-   |                  ^^^^^^^^
-
-warning: unused imports: `cos` and `floor`
- --> crates/trueos-weather/src/helper.rs:4:18
-  |
-4 | use libm::{acos, cos, floor, sin, tan};
-  |                  ^^^  ^^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
-
-warning: `fdeflate` (lib) generated 6 warnings
-warning: `trueos-weather` (lib) generated 1 warning (run `cargo fix --lib -p trueos-weather` to apply 1 suggestion)
 warning: unused imports: `boxed::Box` and `string::String`
  --> vendor/usvg-0.45.1/src/parser/mod.rs:4:13
   |
@@ -204,6 +156,52 @@ warning: missing documentation for a method
 17 |     fn approx_ne_ulps(&self, other: &Self, ulps: i32) -> bool {
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+warning: function `compute_codes` is never used
+   --> vendor/fdeflate-0.3.7/src/lib.rs:106:10
+    |
+106 | const fn compute_codes<const NSYMS: usize>(lengths: &[u8; NSYMS]) -> Op...
+    |          ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `HUFFMAN_LENGTHS` is never used
+ --> vendor/fdeflate-0.3.7/src/tables.rs:7:18
+  |
+7 | pub(crate) const HUFFMAN_LENGTHS: [u8; 286] = [
+  |                  ^^^^^^^^^^^^^^^
+
+warning: constant `HUFFMAN_CODES` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:22:18
+   |
+22 | pub(crate) const HUFFMAN_CODES: [u16; 286] = match crate::compute_codes(...
+   |                  ^^^^^^^^^^^^^
+
+warning: constant `LENGTH_TO_SYMBOL` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:28:18
+   |
+28 | pub(crate) const LENGTH_TO_SYMBOL: [u16; 256] = [
+   |                  ^^^^^^^^^^^^^^^^
+
+warning: constant `LENGTH_TO_LEN_EXTRA` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:46:18
+   |
+46 | pub(crate) const LENGTH_TO_LEN_EXTRA: [u8; 256] = [
+   |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `BITMASKS` is never used
+  --> vendor/fdeflate-0.3.7/src/tables.rs:57:18
+   |
+57 | pub(crate) const BITMASKS: [u32; 17] = [
+   |                  ^^^^^^^^
+
+warning: unused imports: `cos` and `floor`
+ --> crates/trueos-weather/src/helper.rs:4:18
+  |
+4 | use libm::{acos, cos, floor, sin, tan};
+  |                  ^^^  ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
 warning: unused import: `AsciiBranches`
    --> crates/trueos-math/src/bst_arena.rs:184:33
     |
@@ -225,89 +223,9 @@ warning: unused import: `AsciiStack`
     |                                              ^^^^^^^^^^
 
 warning: `usvg` (lib) generated 19 warnings (run `cargo fix --lib -p usvg` to apply 15 suggestions)
+warning: `fdeflate` (lib) generated 6 warnings
+warning: `trueos-weather` (lib) generated 1 warning (run `cargo fix --lib -p trueos-weather` to apply 1 suggestion)
 warning: `trueos-math` (lib) generated 3 warnings (run `cargo fix --lib -p trueos-math` to apply 2 suggestions)
-warning: methods `descriptor` and `configuration_descriptors` are never used
-   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/hub/device.rs:228:12
-    |
-110 | impl HubDevice {
-    | -------------- methods in this implementation
-...
-228 |     pub fn descriptor(&self) -> &DeviceDescriptor {
-    |            ^^^^^^^^^^
-...
-232 |     pub fn configuration_descriptors(&self) -> &[ConfigurationDescripto...
-    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
-    |
-    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: methods `submit_for_poll` and `poll_finished` are never used
-  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/cmd.rs:78:12
-   |
-20 | impl CommandRing {
-   | ---------------- methods in this implementation
-...
-78 |     pub fn submit_for_poll(&mut self, trb: command::Allowed) -> BusAddr {
-   |            ^^^^^^^^^^^^^^^
-...
-82 |     pub fn poll_finished(&self, addr: BusAddr) -> Option<CommandCompleti...
-   |            ^^^^^^^^^^^^^
-
-warning: methods `poll_command_completion` and `command_ring_self_test` are never used
-   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/host.rs:198:8
-    |
- 99 | impl Xhci {
-    | --------- methods in this implementation
-...
-198 |     fn poll_command_completion(
-    |        ^^^^^^^^^^^^^^^^^^^^^^^
-...
-239 |     fn command_ring_self_test(&mut self) -> Result {
-    |        ^^^^^^^^^^^^^^^^^^^^^^
-
-warning: constant `HUB_DEBOUNCE_TIMEOUT_MS` is never used
-  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:22:7
-   |
-22 | const HUB_DEBOUNCE_TIMEOUT_MS: u64 = 2000;
-   |       ^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: constant `HUB_DEBOUNCE_STEP_MS` is never used
-  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:23:7
-   |
-23 | const HUB_DEBOUNCE_STEP_MS: u64 = 25;
-   |       ^^^^^^^^^^^^^^^^^^^^
-
-warning: constant `HUB_DEBOUNCE_STABLE_MS` is never used
-  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:24:7
-   |
-24 | const HUB_DEBOUNCE_STABLE_MS: u64 = 100;
-   |       ^^^^^^^^^^^^^^^^^^^^^^
-
-warning: methods `debounce_port`, `wait_for_port_enabled`, `settle_port_enabled`, and `handle_changed` are never used
-   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:374:14
-    |
-351 | impl XhciRootHub {
-    | ---------------- methods in this implementation
-...
-374 |     async fn debounce_port(&mut self, port_id: u8, must_be_connected: b...
-    |              ^^^^^^^^^^^^^
-...
-466 |     async fn wait_for_port_enabled(&mut self, port_id: u8) -> Result<()...
-    |              ^^^^^^^^^^^^^^^^^^^^^
-...
-482 |     async fn settle_port_enabled(&mut self, port_id: u8, reason: &'stat...
-    |              ^^^^^^^^^^^^^^^^^^^
-...
-508 |     async fn handle_changed(&mut self) -> Result<(), USBError> {
-    |              ^^^^^^^^^^^^^^
-
-warning: feature `iterator_try_collect` is declared but not used
- --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/lib.rs:2:12
-  |
-2 | #![feature(iterator_try_collect)]
-  |            ^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: `#[warn(unused_features)]` (part of `#[warn(unused)]`) on by default
-
 warning: variable does not need to be mutable
    --> crates/trueos-qjs/src/async_ops.rs:609:18
     |
@@ -542,26 +460,6 @@ warning: `extern` fn uses type `fn(u32, i32, f32)`, which is not FFI-safe
     = help: consider using an `extern fn(...) -> ...` function pointer instead
     = note: this function pointer has Rust-specific calling convention
 
-warning: unused variable: `m`
-   --> vendor/tokio-1.52.1/src/runtime/park.rs:171:13
-    |
-171 |         let m = self.mutex.lock();
-    |             ^ help: if this is intentional, prefix it with an underscore: `_m`
-    |
-    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
-
-warning: missing documentation for a struct
-  --> vendor/tokio-1.52.1/src/time/instant.rs:53:1
-   |
-53 | pub struct Instant {
-   | ^^^^^^^^^^^^^^^^^^
-   |
-note: the lint level is defined here
-  --> vendor/tokio-1.52.1/src/lib.rs:9:5
-   |
- 9 |     missing_docs,
-   |     ^^^^^^^^^^^^
-
 warning: unused import: `io`
  --> vendor/png-0.18.1/src/common.rs:6:47
   |
@@ -687,10 +585,112 @@ warning: trait `WriteBytesExt` is never used
 34 | pub trait WriteBytesExt<T>: io::Write {
    |           ^^^^^^^^^^^^^
 
-warning: `crab-usb` (lib) generated 8 warnings
 warning: `trueos-qjs` (lib) generated 36 warnings (run `cargo fix --lib -p trueos-qjs` to apply 14 suggestions)
-warning: `tokio` (lib) generated 2 warnings (run `cargo fix --lib -p tokio` to apply 1 suggestion)
 warning: `png` (lib) generated 18 warnings (run `cargo fix --lib -p png` to apply 2 suggestions)
+warning: unused variable: `m`
+   --> vendor/tokio-1.52.1/src/runtime/park.rs:171:13
+    |
+171 |         let m = self.mutex.lock();
+    |             ^ help: if this is intentional, prefix it with an underscore: `_m`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: missing documentation for a struct
+  --> vendor/tokio-1.52.1/src/time/instant.rs:53:1
+   |
+53 | pub struct Instant {
+   | ^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> vendor/tokio-1.52.1/src/lib.rs:9:5
+   |
+ 9 |     missing_docs,
+   |     ^^^^^^^^^^^^
+
+warning: methods `descriptor` and `configuration_descriptors` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/hub/device.rs:228:12
+    |
+110 | impl HubDevice {
+    | -------------- methods in this implementation
+...
+228 |     pub fn descriptor(&self) -> &DeviceDescriptor {
+    |            ^^^^^^^^^^
+...
+232 |     pub fn configuration_descriptors(&self) -> &[ConfigurationDescripto...
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `submit_for_poll` and `poll_finished` are never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/cmd.rs:78:12
+   |
+20 | impl CommandRing {
+   | ---------------- methods in this implementation
+...
+78 |     pub fn submit_for_poll(&mut self, trb: command::Allowed) -> BusAddr {
+   |            ^^^^^^^^^^^^^^^
+...
+82 |     pub fn poll_finished(&self, addr: BusAddr) -> Option<CommandCompleti...
+   |            ^^^^^^^^^^^^^
+
+warning: methods `poll_command_completion` and `command_ring_self_test` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/host.rs:198:8
+    |
+ 99 | impl Xhci {
+    | --------- methods in this implementation
+...
+198 |     fn poll_command_completion(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+239 |     fn command_ring_self_test(&mut self) -> Result {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_TIMEOUT_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:22:7
+   |
+22 | const HUB_DEBOUNCE_TIMEOUT_MS: u64 = 2000;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_STEP_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:23:7
+   |
+23 | const HUB_DEBOUNCE_STEP_MS: u64 = 25;
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HUB_DEBOUNCE_STABLE_MS` is never used
+  --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:24:7
+   |
+24 | const HUB_DEBOUNCE_STABLE_MS: u64 = 100;
+   |       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `debounce_port`, `wait_for_port_enabled`, `settle_port_enabled`, and `handle_changed` are never used
+   --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/backend/kmod/xhci/hub.rs:374:14
+    |
+351 | impl XhciRootHub {
+    | ---------------- methods in this implementation
+...
+374 |     async fn debounce_port(&mut self, port_id: u8, must_be_connected: b...
+    |              ^^^^^^^^^^^^^
+...
+466 |     async fn wait_for_port_enabled(&mut self, port_id: u8) -> Result<()...
+    |              ^^^^^^^^^^^^^^^^^^^^^
+...
+482 |     async fn settle_port_enabled(&mut self, port_id: u8, reason: &'stat...
+    |              ^^^^^^^^^^^^^^^^^^^
+...
+508 |     async fn handle_changed(&mut self) -> Result<(), USBError> {
+    |              ^^^^^^^^^^^^^^
+
+warning: feature `iterator_try_collect` is declared but not used
+ --> vendor/crab-usb-0.6.2/crab-usb-0.6.2/src/lib.rs:2:12
+  |
+2 | #![feature(iterator_try_collect)]
+  |            ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_features)]` (part of `#[warn(unused)]`) on by default
+
+warning: `tokio` (lib) generated 2 warnings (run `cargo fix --lib -p tokio` to apply 1 suggestion)
+warning: `crab-usb` (lib) generated 8 warnings
 warning: constant `TOKEN_THRESHOLD` is never used
   --> vendor/localcoder/src/compact.rs:13:7
    |

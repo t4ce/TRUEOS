@@ -1,12 +1,22 @@
 use crate::limine::MpCpu as LimineCpu;
 use crate::{exceptions, globalog, percpu, runtime};
 use alloc::vec::Vec;
+#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::__cpuid;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
+#[cfg(target_arch = "x86_64")]
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
+
+// ARMTODO: `cpu.rs` now keeps the portable profile/slot bookkeeping, but a
+// real non-x86 bring-up still needs platform-specific replacements for four
+// larger concepts that are currently x86-shaped here:
+// 1. hardware CPU identity (`lapic_id` and LAPIC-based slot lookup)
+// 2. core classification (`CPUID` perf/eff hints)
+// 3. AP startup / restart wiring (`ap_start`, `percpu::init_ap` expectations)
+// 4. early CPU feature enable (`enable_sse`) and mode checks (`long_mode_active`)
 
 const AP_HEARTBEAT_TASK_POOL: usize = 256;
 static ATOMIC_BOMB_RESTARTS: AtomicU32 = AtomicU32::new(0);
@@ -233,8 +243,9 @@ pub fn restart_current_worker_ap_from_panic() -> ! {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     enable_sse();
-    let slot = percpu::slot_for_lapic_id(cpu.lapic_id);
-    percpu::init_ap(cpu.lapic_id, slot as u32);
+    let lapic_id = crate::limine::mp_cpu_id(cpu);
+    let slot = percpu::slot_for_lapic_id(lapic_id);
+    percpu::init_ap(lapic_id, slot as u32);
     let ex = percpu::init_executor();
     let spawner = ex.spawner();
     enter_ap_runtime(spawner)
@@ -244,6 +255,7 @@ pub(crate) fn intel_core_kind_hint() -> u8 {
     detect_current_core_kind()
 }
 
+#[cfg(target_arch = "x86_64")]
 fn detect_current_core_kind() -> u8 {
     let r0 = __cpuid(0);
     let max = r0.eax;
@@ -257,6 +269,11 @@ fn detect_current_core_kind() -> u8 {
         0x20 => trueos_qjs::workers::CORE_KIND_EFF,
         _ => trueos_qjs::workers::CORE_KIND_UNKNOWN,
     }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn detect_current_core_kind() -> u8 {
+    trueos_qjs::workers::CORE_KIND_UNKNOWN
 }
 
 fn profile_record(slot: usize) -> Option<&'static CpuProfileRecord> {
@@ -292,6 +309,7 @@ async fn ap_heartbeat_task() {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn enable_sse() {
     let mut cr0 = Cr0::read();
     cr0.remove(Cr0Flags::EMULATE_COPROCESSOR);
@@ -314,11 +332,24 @@ pub unsafe fn enable_sse() {
     );
 }
 
+#[cfg(not(target_arch = "x86_64"))]
+pub unsafe fn enable_sse() {
+    // ARMTODO: non-x86 bring-up will want platform-specific FP/SIMD enable
+    // logic here if the early runtime requires it.
+}
+
 #[inline(always)]
+#[cfg(target_arch = "x86_64")]
 pub(crate) fn long_mode_active() -> bool {
     use x86_64::registers::model_specific::Msr;
     const IA32_EFER: u32 = 0xC000_0080;
     const EFER_LMA_BIT: u64 = 1 << 10;
     let efer = unsafe { Msr::new(IA32_EFER).read() };
     (efer & EFER_LMA_BIT) != 0
+}
+
+#[inline(always)]
+#[cfg(not(target_arch = "x86_64"))]
+pub(crate) fn long_mode_active() -> bool {
+    false
 }
