@@ -5,59 +5,14 @@ trueos_vmx_hull_text_start:
     .global trueos_vmx_guest_entry
     .type trueos_vmx_guest_entry,@function
 trueos_vmx_guest_entry:
-    lea rsi, [rip + .Lvmcr3]
-.Lwrite_vmcr3:
-    lodsb
-    test al, al
-    jz .Lpreserve_start
-    mov dx, 0xE9
-    out dx, al
-    jmp .Lwrite_vmcr3
-
-.Lpreserve_start:
-    lea rsi, [rip + .Lpreserve]
-.Lwrite_preserve:
-    lodsb
-    test al, al
-    jz .Ldo_run
-    mov dx, 0xE9
-    out dx, al
-    jmp .Lwrite_preserve
-
-.Ldo_run:
-    lea rsi, [rip + .Lrun]
-.Lwrite_run:
-    lodsb
-    test al, al
     jz .Lcall_run
-    mov dx, 0xE9
-    out dx, al
-    jmp .Lwrite_run
 
 .Lcall_run:
     call trueos_vm_guest_run
 
-    lea rsi, [rip + .Lidle]
-.Lwrite_idle:
-    lodsb
-    test al, al
-    jz .Lcall_idle
-    mov dx, 0xE9
-    out dx, al
-    jmp .Lwrite_idle
-
 .Lcall_idle:
     call trueos_vm_guest_idle
     ud2
-
-.Lvmcr3:
-    .asciz "VMCR3\n"
-.Lpreserve:
-    .asciz "VMPRESERVE\n"
-.Lrun:
-    .asciz "VMRUN\n"
-.Lidle:
-    .asciz "VMIDLE\n"
 
     .global trueos_vmx_hull_text_end
 trueos_vmx_hull_text_end:
@@ -70,11 +25,14 @@ static HULL_RODATA_ANCHOR: [u8; 16] = *b"TRUEOS_VM_HULL\0\0";
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_vm_guest_run() {
-    if unsafe { trueos_hv_guest_blueprint_run() } {
-        crate::vmcall::preserve();
-        loop {
-            core::hint::spin_loop();
+    if unsafe { trueos_hv_guest_blueprint_launch_active() } {
+        if unsafe { trueos_hv_guest_blueprint_run() } {
+            crate::vmcall::preserve();
+            loop {
+                core::hint::spin_loop();
+            }
         }
+        return;
     }
 
     crate::demo::start();
@@ -116,6 +74,9 @@ unsafe extern "C" {
     /// Defined in `src/hv/guest_run.rs`; executes a staged blueprint launch inside
     /// the hull and returns `true` when the hull should preserve/stop afterwards.
     fn trueos_hv_guest_blueprint_run() -> bool;
+    /// Defined in `src/hv/guest_run.rs`; reports whether a staged blueprint launch
+    /// is pending so the guest can avoid falling through into the demo path.
+    fn trueos_hv_guest_blueprint_launch_active() -> bool;
     /// Defined in `src/hv/guest_run.rs`; starts a real shell2 instance over
     /// the vmcall I/O bridge using the already-live host heap and time driver.
     fn trueos_hv_guest_shell_run() -> !;

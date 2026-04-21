@@ -149,6 +149,10 @@ iso: artifacts images
 	@for bp in $(BP_NAMES); do \
 		cp "$(BP_DIST_DIR)/$$bp.bp" "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp"; \
 	done
+	mkdir -p $(ISO_DIR)/$(BP_ISO_DIR_REL)
+	@for bp in $(BP_NAMES); do \
+		cp "$(BP_DIST_DIR)/$$bp.bp" "$(ISO_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp"; \
+	done
 	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
