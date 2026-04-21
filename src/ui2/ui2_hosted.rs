@@ -110,7 +110,6 @@ fn service_vm_resume_request(spawner: &Spawner) {
 }
 
 pub(super) trait UiHostedSurfaceProvider {
-    fn surface_seq(&self, content_id: HostedContentId) -> u32;
     fn interactive_seq(&self, content_id: HostedContentId) -> u32;
     fn surface_state(&self, content_id: HostedContentId) -> UiHostedSurfaceState;
     fn interactive_state(&self, content_id: HostedContentId) -> UiHostedInteractiveState;
@@ -148,10 +147,6 @@ pub(super) trait UiHostedWindowBinder {
 struct BrowserUiHostedAdapter;
 
 impl UiHostedSurfaceProvider for BrowserUiHostedAdapter {
-    fn surface_seq(&self, content_id: HostedContentId) -> u32 {
-        trueos_qjs::browser_task::hosted_surface_seq_for_browser(content_id)
-    }
-
     fn interactive_seq(&self, content_id: HostedContentId) -> u32 {
         trueos_qjs::browser_task::hosted_interactive_seq_for_browser(content_id)
     }
@@ -252,11 +247,6 @@ pub(super) fn hosted_window_id_for_content(content_id: HostedContentId) -> u32 {
 #[inline]
 pub(super) fn hosted_surface_state(content_id: HostedContentId) -> UiHostedSurfaceState {
     hosted_adapter().surface_state(content_id)
-}
-
-#[inline]
-pub(super) fn hosted_surface_seq(content_id: HostedContentId) -> u32 {
-    hosted_adapter().surface_seq(content_id)
 }
 
 #[inline]

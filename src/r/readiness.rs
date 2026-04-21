@@ -6,9 +6,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 //
 // These are monotonic: once set, they are never cleared.
 // Consumers can `await` prerequisites instead of guessing boot ordering.
-pub const HID_KEYBOARD_CLAIMED: u32 = 1 << 2;
 pub const PIANO_CLAIMED: u32 = 1 << 3;
-pub const UAC_ATTACHED: u32 = 1 << 5;
 
 // Network readiness.
 //
@@ -31,7 +29,6 @@ pub const NET_V6_CONFIGURED: u32 = 1 << 14;
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
 pub const GFX_VIRGL_READY: u32 = 1 << 19;
-pub const GFX_INTEL_CLAIMED: u32 = 1 << 21;
 pub const GFX_BACKEND_READY: u32 = 1 << 22;
 pub const UI2_READY: u32 = 1 << 23;
 pub const APP_VM_READY: u32 = 1 << 24;

@@ -592,15 +592,6 @@ pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
     bar_size_bytes(bus, slot, function, 0)
 }
 
-fn align_up_u64(value: u64, align: u64) -> Option<u64> {
-    if align <= 1 {
-        return Some(value);
-    }
-    let add = align.checked_sub(1)?;
-    let sum = value.checked_add(add)?;
-    Some((sum / align) * align)
-}
-
 fn bridge_bus_numbers(bus: u8, slot: u8, function: u8) -> (u8, u8, u8) {
     let v = config_read_u32(bus, slot, function, PCI_BRIDGE_BUS_NUMBERS);
     let primary = (v & 0xFF) as u8;

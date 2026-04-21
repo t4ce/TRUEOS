@@ -1,3 +1,6 @@
+// We paused this richer class metadata after planning a GUI app for browsing
+// USB class information. Keep it around for that future UI work.
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum UsbClassDescriptorUsage {
     Device,

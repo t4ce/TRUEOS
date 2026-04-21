@@ -152,13 +152,17 @@ pub fn bootloader_performance() -> Option<&'static BootloaderPerformanceResponse
     BOOTLOADER_PERFORMANCE_REQUEST.response()
 }
 
+pub fn efi_system_table_response() -> Option<&'static EfiSystemTableResponse> {
+    EFI_SYSTEM_TABLE_REQUEST.response()
+}
+
 pub fn rsdp_address() -> Option<u64> {
     let resp = RSDP_REQUEST.response()?;
     Some(resp.address as u64)
 }
 
 pub fn efi_system_table_address() -> Option<u64> {
-    let resp = EFI_SYSTEM_TABLE_REQUEST.response()?;
+    let resp = efi_system_table_response()?;
     Some(resp.address as u64)
 }
 

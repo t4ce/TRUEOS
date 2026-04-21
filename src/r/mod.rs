@@ -10,7 +10,6 @@ pub mod fs;
 #[path = "gfx_cabi.rs"]
 pub mod io;
 pub mod keyboard;
-pub mod mmio_probe;
 pub mod net;
 pub mod path;
 pub mod readiness;

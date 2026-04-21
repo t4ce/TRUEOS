@@ -40,7 +40,6 @@ const STATUS_ROW: usize = 2;
 const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
-const STATUS_SESSION_RGB: (u8, u8, u8) = (0, 255, 192);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
@@ -594,10 +593,6 @@ pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> Matri
     }
 }
 
-pub(crate) fn default_matrix_target() -> MatrixTarget {
-    matrix_target_for_backend(&UART1_COM1_BACKEND)
-}
-
 pub(crate) fn spawn_app_vm_run_queue(spawner: Spawner) -> Result<(), embassy_executor::SpawnError> {
     match cmds::run::app_vm_run_queue_task(spawner) {
         Ok(token) => {
@@ -639,21 +634,8 @@ pub(crate) fn restore_user_input_record(entries: Vec<AllocString>) {
     matrix::restore_user_input_record(entries)
 }
 
-pub(crate) fn live_user_input_record() -> Vec<matrix::LiveUserInputEntry> {
-    matrix::live_user_input_record()
-}
-
 pub(crate) fn command_registry_json() -> AllocString {
     cmds::command_registry_json()
-}
-
-pub fn register_command(
-    name: &str,
-    mode: &str,
-    color: Option<(u8, u8, u8)>,
-    handler: shell2_cmd_registry::Shell2CmdHandler,
-) -> Result<(), shell2_cmd_registry::RegisterCommandError> {
-    shell2_cmd_registry::register_command(name, mode, color, handler)
 }
 
 fn command_names_status_text() -> AllocString {

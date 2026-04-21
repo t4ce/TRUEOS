@@ -367,10 +367,6 @@ pub fn poll_at(index: usize) -> bool {
     with_device_at(index, |dev| dev.poll_rx()).unwrap_or(false)
 }
 
-pub fn pop_rx_packet_at(index: usize) -> Option<alloc::vec::Vec<u8>> {
-    with_device_at(index, |dev| dev.pop_rx()).flatten()
-}
-
 pub fn drain_rx_packets_at(index: usize, limit: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
     with_device_at(index, |dev| dev.drain_rx(limit)).unwrap_or_else(alloc::vec::Vec::new)
 }
@@ -381,10 +377,6 @@ pub fn rx_pending_at(index: usize) -> usize {
 
 pub fn link_state_at(index: usize) -> Option<crate::net::device::LinkState> {
     with_device_at(index, |dev| dev.link_state())
-}
-
-pub fn transmit_packet_at(index: usize, data: &[u8]) -> Result<(), ()> {
-    with_device_at(index, |dev| dev.transmit(data)).unwrap_or(Err(()))
 }
 
 pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec::Vec<u8>>) {
@@ -415,10 +407,6 @@ pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec:
     });
 }
 
-pub fn mac_address() -> Option<[u8; 6]> {
-    mac_address_at(primary_device_index())
-}
-
 pub fn mac_address_at(index: usize) -> Option<[u8; 6]> {
     with_device_at(index, |dev| Some(dev.mac())).flatten()
 }
@@ -440,34 +428,10 @@ pub fn primary_device_index() -> usize {
     idx.min(count - 1)
 }
 
-pub fn set_primary_device_index(index: usize) {
-    let count = device_count();
-    if count == 0 {
-        return;
-    }
-    let idx = index.min(count - 1);
-    PRIMARY_DEVICE_INDEX.store(idx, Ordering::Relaxed);
-    crate::log!("net: primary set to {}\n", idx);
-}
-
 fn with_device_at<R>(index: usize, f: impl FnOnce(&mut dyn NetDevice) -> R) -> Option<R> {
     let mut guard = DEVICES.lock();
     let dev = guard.get_mut(index)?;
     Some(f(dev))
-}
-
-pub fn dma_fpga_stream_begin() -> Result<(), &'static str> {
-    let mut st = DMA_FPGA_STREAM_STATE.lock();
-    if st.active {
-        return Err("already active");
-    }
-    st.active = true;
-    st.filter = None;
-    st.rx_packets_seen = 0;
-    st.rx_packets_matched = 0;
-    st.queued_packets = 0;
-    st.queue_failures = 0;
-    Ok(())
 }
 
 fn rx_packet_matches_filter(packet: &[u8], filter: DmaFpgaFlowFilter) -> bool {

@@ -13,6 +13,9 @@ pub(crate) enum UsbDescriptorScope {
     Other(u16),
 }
 
+// We paused this descriptor-modeling work here after planning a GUI app for
+// browsing USB descriptors. Keep the richer enum around for that future UI.
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum UsbDescriptorType {
     Device,

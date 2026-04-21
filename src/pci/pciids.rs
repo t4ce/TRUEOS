@@ -53,10 +53,6 @@ pub async fn download_once_async() -> Result<usize, &'static str> {
     }
 }
 
-pub fn download_once_blocking() -> Result<usize, &'static str> {
-    crate::wait::spawn_and_wait_local(download_once_async())
-}
-
 pub fn download_once_detached() {
     crate::wait::spawn_local_detached(async {
         match download_once_async().await {

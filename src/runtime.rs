@@ -8,15 +8,6 @@ fn local_cpu_ptr() -> *mut crate::percpu::PerCpu {
     cpu_ptr
 }
 
-#[inline]
-fn ap_slot_mark(slot: u32) -> u8 {
-    if slot < 10 {
-        b'0' + slot as u8
-    } else {
-        b'A' + ((slot as u8 - 10) % 26)
-    }
-}
-
 /// Poll the current CPU's executor once (if initialized).
 #[inline]
 pub fn poll_local_executor() {

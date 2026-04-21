@@ -329,10 +329,6 @@ fn publish_ui2_hit_scene() {
     }
 }
 
-pub(super) fn ui2_hit_at(cursor_x: f32, cursor_y: f32) -> Option<Ui2HitTarget> {
-    hit_runtime().lock().scene.hit_at(cursor_x, cursor_y)
-}
-
 pub(super) fn ui2_hit_for_cursor_source(
     view_w: u32,
     view_h: u32,

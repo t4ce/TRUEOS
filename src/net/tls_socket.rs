@@ -35,15 +35,6 @@ impl Default for TlsTimeouts {
 
 static TLS_OWNER_TIMEOUTS: Mutex<Vec<(&'static str, TlsTimeouts)>> = Mutex::new(Vec::new());
 
-pub fn set_tls_owner_timeouts(owner: &'static str, timeouts: TlsTimeouts) {
-    let mut guard = TLS_OWNER_TIMEOUTS.lock();
-    if let Some(e) = guard.iter_mut().find(|(o, _)| *o == owner) {
-        e.1 = timeouts;
-        return;
-    }
-    guard.push((owner, timeouts));
-}
-
 fn owner_timeouts(owner: &'static str) -> TlsTimeouts {
     let guard = TLS_OWNER_TIMEOUTS.lock();
     guard

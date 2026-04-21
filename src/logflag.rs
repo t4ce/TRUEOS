@@ -11,19 +11,13 @@ pub(crate) const NET_LOG_DHCP_VERBOSE: bool = false;
 pub(crate) const NET_LOG_IPV6_RA: bool = false;
 pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
 pub(crate) const VNET_EXERCISE_LOGS: bool = false;
-pub(crate) const ESP_GATE_DEFAULT_UPLOAD_LOGS: bool = false;
 
 pub(crate) const R8125_VERBOSE_LOGS: bool = false;
 pub(crate) const BOOT_INFO_LOGS: bool = false;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
-pub(crate) const BROWSER_VM_DEBUG_LOGS: bool = false;
-pub(crate) const BROWSER_HTML_PREVIEW_LOGS: bool = false;
 pub(crate) const VHTTPS_VERBOSE: bool = false;
 pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = false;
-pub(crate) const INTEL_GFX_DEBUG_LOGFLAG: bool = false;
-// Stage-1 Intel bring-up mode: keep the logs around the stage frontier and
-// unlock probes, while muting the bulk packet/state chatter.
 pub(crate) const INTEL_STAGE1_LOGS: bool = true;
 
 pub(crate) const VIRGL_DRAW_DIAGNOSTICS_LOGS: bool = false;
@@ -60,7 +54,6 @@ pub(crate) const NVME_VERBOSE: bool = false;
 pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
-pub(crate) static AP_ACTIVITY_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn usb_vendor_log_enabled(level: Level) -> bool {
     match USB_VENDOR_LOG_LEVEL {
