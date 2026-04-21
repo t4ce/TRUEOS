@@ -23,7 +23,6 @@ limine = { version = "0.6", default-features = false }
 acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"] }
 aml = { version = "0.16", default-features = false }
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
-rdrand = { version = "0.8", default-features = false }
 getrandom = { version = "0.4", default-features = false }
 getrandom_02 = { package = "getrandom", version = "0.2", default-features = false, features = ["custom"] }
 raw-cpuid = { version = "11", default-features = false }
@@ -73,6 +72,9 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 # Stage-1 Tokio foothold for VM-hull/runtime probing. Single-thread runtime only.
 tokio = { version = "1.52.1", default-features = false, optional = true }
 localcoder = { path = "vendor/localcoder", default-features = false, features = ["trueos-net"] }
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+rdrand = { version = "0.8", default-features = false }
 
 [profile.dev]
 panic = "abort"

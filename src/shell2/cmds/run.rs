@@ -51,7 +51,7 @@ fn embedded_archive_name(cmdline: &[u8]) -> Option<String> {
         return None;
     }
     let mut archive = String::from_utf8_lossy(suffix).into_owned();
-    archive.push_str("_app.bp");
+    archive.push_str(".bp");
     Some(archive)
 }
 
