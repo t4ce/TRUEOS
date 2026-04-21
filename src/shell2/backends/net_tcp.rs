@@ -2,7 +2,6 @@ use alloc::collections::VecDeque;
 use core::fmt::Write;
 use core::sync::atomic::AtomicBool;
 
-
 use crate::net::adapter::NetHandle;
 use crate::shell2::{ShellBackend2, ShellIo2};
 

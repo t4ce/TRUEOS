@@ -304,8 +304,8 @@ fn sample_file_range(track: &TrackCandidate<'_>, index: u32) -> Option<SampleRan
                 sample_base.checked_add(chunk_in_run.checked_mul(samples_per_chunk)?)?;
             let mut in_chunk = 0u32;
             while in_chunk < sample_in_chunk {
-                file_off =
-                    file_off.checked_add(sample_size_at(stsz_data, chunk_sample_start + in_chunk)? as u64)?;
+                file_off = file_off
+                    .checked_add(sample_size_at(stsz_data, chunk_sample_start + in_chunk)? as u64)?;
                 in_chunk += 1;
             }
             let sample_size = sample_size_at(stsz_data, index)?;
@@ -563,7 +563,10 @@ fn parse_h264_mp4_summary_from_bytes(bytes: &[u8]) -> Result<Mp4H264Summary, Mp4
         }
         saw_moov = true;
         let parsed = parse_h264_mp4_track_from_moov(root.data)?;
-        let first_range = *parsed.sample_ranges.first().ok_or(Mp4ParseError::NoSamples)?;
+        let first_range = *parsed
+            .sample_ranges
+            .first()
+            .ok_or(Mp4ParseError::NoSamples)?;
         let first_sample_off =
             usize::try_from(first_range.offset).map_err(|_| Mp4ParseError::BadSampleRange)?;
         let first_sample_len =
@@ -637,14 +640,17 @@ pub(crate) async fn parse_h264_mp4_summary_from_source(
         }
 
         if kind == b"moov" {
-            let payload_len = usize::try_from(box_size - header_len)
-                .map_err(|_| Mp4ParseError::Truncated)?;
+            let payload_len =
+                usize::try_from(box_size - header_len).map_err(|_| Mp4ParseError::Truncated)?;
             let payload_off = off
                 .checked_add(header_len)
                 .ok_or(Mp4ParseError::Truncated)?;
             let payload = read_source_range_exact(source, payload_off, payload_len).await?;
             let parsed = parse_h264_mp4_track_from_moov(payload.as_slice())?;
-            let first_range = *parsed.sample_ranges.first().ok_or(Mp4ParseError::NoSamples)?;
+            let first_range = *parsed
+                .sample_ranges
+                .first()
+                .ok_or(Mp4ParseError::NoSamples)?;
             let first_sample = read_source_range_exact(
                 source,
                 first_range.offset,

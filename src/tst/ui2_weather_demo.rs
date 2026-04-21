@@ -5,7 +5,6 @@ use alloc::{
     vec::Vec,
 };
 
-
 use crate::r::ui2::{self, Ui2FontTier, Ui2Rect};
 
 const UI2_WEATHER_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Weather.get();

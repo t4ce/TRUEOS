@@ -1129,8 +1129,10 @@ fn spawn_cabi_net_fetch_post_json(
     }
 
     crate::wait::spawn_local_detached(async move {
-        cabi_net_fetch_post_json_task_inner(op_id, key, url, body_json, bearer, timeout_ms, max_bytes)
-            .await;
+        cabi_net_fetch_post_json_task_inner(
+            op_id, key, url, body_json, bearer, timeout_ms, max_bytes,
+        )
+        .await;
     });
 }
 
@@ -1202,12 +1204,7 @@ async fn cabi_net_fetch_post_json_bytes_task(
     max_bytes: usize,
 ) {
     cabi_net_fetch_post_json_bytes_task_inner(
-        request_id,
-        url,
-        body_json,
-        bearer,
-        timeout_ms,
-        max_bytes,
+        request_id, url, body_json, bearer, timeout_ms, max_bytes,
     )
     .await;
 }
@@ -1236,12 +1233,7 @@ fn spawn_cabi_net_fetch_post_json_bytes(
 
     crate::wait::spawn_local_detached(async move {
         cabi_net_fetch_post_json_bytes_task_inner(
-            request_id,
-            url,
-            body_json,
-            bearer,
-            timeout_ms,
-            max_bytes,
+            request_id, url, body_json, bearer, timeout_ms, max_bytes,
         )
         .await;
     });
@@ -4051,8 +4043,9 @@ pub async fn fetch_https_body_progress_with_profile_async(
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
 
-        let res = fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, Some(progress))
-            .await;
+        let res =
+            fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, Some(progress))
+                .await;
         match res {
             Ok(v) => return Ok(v),
             Err(FetchError::Redirect { status, url }) => {
@@ -4528,14 +4521,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start(
         .lock()
         .insert(request_id, CabiNetFetchBytesResult::default());
 
-    spawn_cabi_net_fetch_post_json_bytes(
-        request_id,
-        url,
-        body_json,
-        bearer,
-        TIMEOUT_MS,
-        MAX_BYTES,
-    );
+    spawn_cabi_net_fetch_post_json_bytes(request_id, url, body_json, bearer, TIMEOUT_MS, MAX_BYTES);
 
     request_id
 }

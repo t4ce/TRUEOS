@@ -5,7 +5,8 @@ edition = "2024"
 
 [features]
 default = ["tokio-probe"]
-tokio-probe = ["dep:tokio", "tokio/rt", "tokio/sync", "tokio/time", "tokio/io-util", "tokio/io-std", "tokio/parking_lot", "tokio/test-util"]
+# `tokio/net` is not in the probe yet: `socket2` and `mio` reject `target_os="zkvm"`.
+tokio-probe = ["dep:tokio", "tokio/rt", "tokio/sync", "tokio/time", "tokio/io-util", "tokio/io-std", "tokio/fs", "tokio/parking_lot", "tokio/test-util"]
 
 [dependencies]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }

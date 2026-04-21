@@ -87,14 +87,20 @@ impl H264SourceSummary {
                 (range.offset, range.len)
             }
             Self::Matroska(summary) => {
-                ensure_matroska_sample_index(summary, source, index).await.ok()?;
+                ensure_matroska_sample_index(summary, source, index)
+                    .await
+                    .ok()?;
                 let range = get_matroska_sample_range(summary, index)?;
                 (range.offset, range.len)
             }
         };
         let len = usize::try_from(len).ok()?;
         scratch.resize(len, 0);
-        if !source.read_range_into(offset, scratch.as_mut_slice()).await.ok()? {
+        if !source
+            .read_range_into(offset, scratch.as_mut_slice())
+            .await
+            .ok()?
+        {
             return None;
         }
         Some(len)

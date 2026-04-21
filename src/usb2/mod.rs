@@ -390,10 +390,7 @@ pub(crate) fn controller_mmio_diag(controller_id: usize) -> Option<UsbController
     }
 }
 
-pub(crate) mod syscall {
-    
-    
-}
+pub(crate) mod syscall {}
 
 pub(crate) use self::crabusb_service::bsp_service as crabusb_bsp_service;
 pub(crate) use self::crabusb_service::observed_device_summaries as crabusb_observed_device_summaries;

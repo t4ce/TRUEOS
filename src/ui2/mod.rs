@@ -30,8 +30,8 @@ pub(crate) use self::ui2_font::{
     ui2_font_measure_text_for_px, ui2_font_native_line_height_px,
 };
 pub(crate) use self::ui2_font_bucketproducer::*;
-use self::ui2_hid::*;
 pub(crate) use self::ui2_hid::cursor_color_rgba8;
+use self::ui2_hid::*;
 pub(crate) use self::ui2_hit::ui2_hit_task;
 use self::ui2_hit::*;
 use self::ui2_hosted::*;

@@ -3113,7 +3113,7 @@ fn encode_triangle_probe_batch(
                 .ok_or("probe-binding-pool-align")?,
         )
         .map_err(|_| "probe-binding-pool-convert")?
-            & 0xFFFF_F000 ,
+            & 0xFFFF_F000,
     )?;
 
     log_batch_offset(cursor, "3DSTATE_SAMPLER_STATE_POINTERS_VS");

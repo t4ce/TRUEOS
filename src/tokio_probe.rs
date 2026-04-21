@@ -177,6 +177,14 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     let _ = barrier_wait.is_leader();
     crate::log!("tokio_probe: success sync.barrier\n");
 
+    let blocking_value = tokio::task::spawn_blocking(|| 0xB10C_4B1u32)
+        .await
+        .map_err(|_| "blocking-spawn-blocking-task")?;
+    if blocking_value != 0xB10C_4B1 {
+        return Err("blocking-spawn-blocking-value");
+    }
+    crate::log!("tokio_probe: success blocking.spawn_blocking\n");
+
     {
         crate::log!("tokio_probe: enter time.sleep\n");
         tokio::time::sleep(core::time::Duration::from_millis(1)).await;
@@ -218,6 +226,23 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     }
 
     {
+        let _options = tokio::fs::OpenOptions::new();
+        crate::log!("tokio_probe: success fs.open_options_surface\n");
+
+        if crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
+            let root_meta = tokio::fs::metadata("/")
+                .await
+                .map_err(|_| "fs-metadata-root")?;
+            let _ = root_meta.is_dir();
+            crate::log!("tokio_probe: success fs.metadata_root\n");
+        } else {
+            crate::log!(
+                "tokio_probe: note fs.metadata_root deferred until TRUEOSFS_ROOT_MOUNTED\n"
+            );
+        }
+    }
+
+    {
         // parking_lot changes Tokio internals behind sync primitives; reuse
         // already-executed sync checks and mark this mode as active.
         crate::log!("tokio_probe: success parking_lot.sync_surface\n");
@@ -243,7 +268,10 @@ async fn run_probe_suite() -> Result<(), &'static str> {
 
 pub(crate) fn log_boot_probe() {
     crate::log!(
-        "tokio_probe: wired tokio 1.52.1 with feature rt+sync via zkvm std-ABI shim (single-thread runtime probe)\n"
+        "tokio_probe: wired tokio 1.52.1 with feature rt+sync+time+io+fs via zkvm std-ABI shim (single-thread runtime probe)\n"
+    );
+    crate::log!(
+        "tokio_probe: note net surface deferred because mio/socket2 do not support target_os=zkvm yet\n"
     );
 
     let mut runtime_builder = tokio::runtime::Builder::new_current_thread();

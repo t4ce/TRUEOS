@@ -10,8 +10,8 @@ pub mod leds;
 pub mod mediacontrol;
 pub mod mouse;
 pub mod tablet;
-pub use v::vinput::TrueosHidCursorEvent;
 pub(crate) use crate::logflag::HID_DEBUG_REPORT_LOGS;
+pub use v::vinput::TrueosHidCursorEvent;
 
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 1024.0;
 const HID_KIND_KEYBOARD: u8 = 1;

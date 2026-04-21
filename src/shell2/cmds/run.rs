@@ -9,7 +9,8 @@ use spin::Mutex;
 
 use super::super::{
     MatrixTarget, ShellBackend2, UART1_COM1_BACKEND, line_width_for_backend,
-    matrix_target_for_backend, print_matrix_target_line, print_shell_line, set_matrix_target_active,
+    matrix_target_for_backend, print_matrix_target_line, print_shell_line,
+    set_matrix_target_active,
 };
 use super::tlb_helper::TlbTable;
 use crate::blueprint;
