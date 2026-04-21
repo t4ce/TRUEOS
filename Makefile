@@ -5,45 +5,24 @@ ARTIFACT_DIR := bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)
 ARTIFACT_FULL_ELF := $(ARTIFACT_DIR)/TRUEOS.full.elf
 ARTIFACT_RUNTIME_ELF := $(ARTIFACT_DIR)/TRUEOS.elf
 ARTIFACT_BUILD_INFO := $(ARTIFACT_DIR)/BUILD_INFO
-
-
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
 ISO_EFI_IMG := efi.img
-QEMU_DEBUGCON_LOG := bld/debugcon.log
-QEMU_SERIAL_LOG := bld/serial.log
 UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
-
 # Size of the EFI System Partition image that gets embedded into the ISO.
-# Under UEFI boot, Limine resolves the configured boot(): module paths against
-# the ESP content, so the embedded blueprint modules must fit here as well.
-EFI_IMG_SIZE_KIB ?= 2048
-
+# Keep this small: the kernel and Limine config live on the ISO9660 filesystem,
+# while the ESP only needs to contain the EFI loader and the GuC module.
+EFI_IMG_SIZE_KIB ?= 1024
 LIMINE_CFG := limine.conf
 LIMINE_PREFIX := bld/limine-prefix
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 GUC_FW_HOST_PATH ?= /lib/firmware/i915/adlp_guc_70.bin.zst
-# Canonical boot path used by limine.conf for the GuC module.
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/adlp_guc_70.bin
-BLUEPRINTS_ROOT ?= ../TRUEOS Blueprints
-HELLO_WORLD_BP_DIR ?= $(BLUEPRINTS_ROOT)
-LOCALCODER_BP_DIR ?= $(BLUEPRINTS_ROOT)/localcoder_bp
-HELLO_WORLD_BP_HOST_PATH ?= $(HELLO_WORLD_BP_DIR)/dist/hello_world.bp
-HELLO_WORLD_BP_ISO_REL_PATH ?= EFI/BOOT/apps/hello_world.bp
-TRIANGLE_BP_HOST_PATH ?= $(BLUEPRINTS_ROOT)/dist/triangle.bp
-TRIANGLE_BP_ISO_REL_PATH ?= EFI/BOOT/apps/triangle.bp
-LOCALCODER_BP_HOST_PATH ?= $(LOCALCODER_BP_DIR)/dist/localcoder_bp.bp
-LOCALCODER_BP_PROFILE ?= $(if $(filter release,$(BUILD_MODE)),release,dev)
-
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
-QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown -no-reboot
-# QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
+QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 comma := ,
-
-# Enabling vhost-net can significantly improve virtio-net throughput.
-# Use `make run QEMU_VHOST=on` if your host supports it and the guest vring path is known-good.
 QEMU_VHOST ?= off
 QEMU_BRIDGE ?= br0
 QEMU_BRIDGE_HELPER ?= $(firstword $(wildcard /usr/lib/qemu/qemu-bridge-helper /usr/libexec/qemu-bridge-helper /usr/lib/qemu-bridge-helper))
@@ -52,7 +31,6 @@ QEMU_NET_FLAGS = -netdev bridge,id=net1,br=$(QEMU_BRIDGE)$(if $(QEMU_BRIDGE_HELP
 	#-netdev user,id=net1,net=10.0.2.0/24,dhcpstart=10.0.2.15,hostfwd=tcp::4245-:4245,hostfwd=tcp::8080-:80 -device e1000,netdev=net1 \
 	#-netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
 	#-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=off
-
 QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 -device virtio-rng-pci,rng=rng0,disable-modern=off,bus=pcie.0,addr=0x4
 
 CARGO_BUILD_FLAGS ?=
@@ -60,11 +38,9 @@ CARGO_BUILD_FLAGS ?=
 CARGO_GFX_FLAGS =
 QEMU_GFX_FLAGS = -display sdl,gl=on -vga none -device virtio-gpu-gl-pci,disable-modern=off,xres=1440,yres=900
 
-QEMU_TRACE_FLAGS ?= int,guest_errors,cpu_reset,unimp
+QEMU_ISO_FLAGS = $(QEMU_GFX_FLAGS) -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -boot order=d -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=8 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
-QEMU_ISO_FLAGS = $(QEMU_GFX_FLAGS) -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -boot order=d -cdrom $(ISO_PATH) -debugcon file:$(QEMU_DEBUGCON_LOG) -D bld/qemu.log -d $(QEMU_TRACE_FLAGS) -m 2000M -smp cores=8 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
-
-QEMU_ISO_FLAGS_DBG = $(QEMU_GFX_FLAGS) -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon file:$(QEMU_DEBUGCON_LOG) -D bld/qemu.log -d $(QEMU_TRACE_FLAGS) -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+QEMU_ISO_FLAGS_DBG = $(QEMU_GFX_FLAGS) -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_UPDATE_TARGET_PCI ?= 0000:08:00.0
 QEMU_UPDATE_TARGET_FLAGS = -device vfio-pci,host=$(QEMU_UPDATE_TARGET_PCI),bus=pcie.0,addr=0x6
@@ -103,7 +79,7 @@ QEMU_ISO_DBG = $(QEMU_BIN) $(QEMU_ISO_FLAGS_DBG) $(QEMU_USB_FLAGS)
 
 IMG_SIZE ?= 1G
 
-.PHONY: kernel blueprints hello-world-bp triangle-bp localcoder-bp artifacts kernel-stages iso iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
+.PHONY: kernel blueprints hello-world-bp localcoder-bp artifacts kernel-stages iso iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
 
 images: disk.img nvme.img
 
@@ -116,22 +92,7 @@ nvme.img:
 kernel:
 	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target .cargo/86_64.json
 
-blueprints: hello-world-bp triangle-bp
-
-hello-world-bp:
-	cd "$(HELLO_WORLD_BP_DIR)" && cargo run -- example hello_world
-
-triangle-bp:
-	cd "$(BLUEPRINTS_ROOT)" && cargo run -- --example triangle
-
-localcoder-bp:
-	@if [ -d "$(LOCALCODER_BP_DIR)" ]; then \
-		cd "$(LOCALCODER_BP_DIR)" && python3 build_bp.py --profile "$(LOCALCODER_BP_PROFILE)"; \
-	else \
-		echo "localcoder blueprint skipped: $(LOCALCODER_BP_DIR) missing"; \
-	fi
-
-artifacts: blueprints kernel
+artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)
 	cp $(KERNEL_BIN) $(ARTIFACT_FULL_ELF)
 	cp $(KERNEL_BIN) $(ARTIFACT_RUNTIME_ELF)
@@ -161,14 +122,6 @@ iso: artifacts images
 		echo "error: GUC firmware not found at $(GUC_FW_HOST_PATH)"; \
 		exit 1; \
 	fi
-	@if [ ! -f "$(HELLO_WORLD_BP_HOST_PATH)" ]; then \
-		echo "error: hello-world blueprint not found at $(HELLO_WORLD_BP_HOST_PATH)"; \
-		exit 1; \
-	fi
-	@if [ ! -f "$(TRIANGLE_BP_HOST_PATH)" ]; then \
-		echo "error: triangle blueprint not found at $(TRIANGLE_BP_HOST_PATH)"; \
-		exit 1; \
-	fi
 	@case "$(GUC_FW_HOST_PATH)" in \
 		*.zst) \
 			command -v zstd >/dev/null 2>&1 || { echo "error: zstd command not found; cannot decompress $(GUC_FW_HOST_PATH)"; exit 1; }; \
@@ -180,10 +133,6 @@ iso: artifacts images
 	esac
 	mkdir -p $(ISO_BOOT_DIR)/$(dir $(GUC_FW_ISO_REL_PATH))
 	cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/$(GUC_FW_ISO_REL_PATH)
-	mkdir -p $(ISO_BOOT_DIR)/$(dir $(HELLO_WORLD_BP_ISO_REL_PATH))
-	cp "$(HELLO_WORLD_BP_HOST_PATH)" "$(ISO_BOOT_DIR)/$(HELLO_WORLD_BP_ISO_REL_PATH)"
-	mkdir -p $(ISO_BOOT_DIR)/$(dir $(TRIANGLE_BP_ISO_REL_PATH))
-	cp "$(TRIANGLE_BP_HOST_PATH)" "$(ISO_BOOT_DIR)/$(TRIANGLE_BP_ISO_REL_PATH)"
 	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
@@ -192,6 +141,7 @@ iso: artifacts images
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
 	cp $(LIMINE_CFG) $(ISO_DIR)/EFI/BOOT/limine.conf
 	cp $(ISO_BOOT_DIR)/TRUEOS.elf $(ISO_DIR)/TRUEOS.elf
+	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
 	rm -f $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1k count=$(EFI_IMG_SIZE_KIB)
@@ -200,8 +150,6 @@ iso: artifacts images
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI/BOOT/apps
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_SHARE)/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin ::/EFI/BOOT/adlp_guc_70.bin
-	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) "$(ISO_BOOT_DIR)/$(HELLO_WORLD_BP_ISO_REL_PATH)" ::/EFI/BOOT/apps/hello_world.bp
-	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) "$(ISO_BOOT_DIR)/$(TRIANGLE_BP_ISO_REL_PATH)" ::/EFI/BOOT/apps/triangle.bp
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
 		-R \
@@ -224,7 +172,7 @@ iso-release: iso
 iso-debug: BUILD_MODE := debug
 iso-debug: iso
 
-SERIAL_CONSOLE_CMD = konsole -e sh -c 'mkdir -p bld; : > "$(QEMU_SERIAL_LOG)"; stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 5555 | tee "$(QEMU_SERIAL_LOG)"; stty sane; echo "Connection closed. Press ENTER to exit..."; read'
+SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 5555; stty sane; echo "Connection closed. Press ENTER to exit..."; read'
 
 snipe:
 	@killall -9 qemu-system-x86_64 || true
