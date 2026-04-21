@@ -2208,12 +2208,6 @@ pub mod cabi {
             .map(|img| (img.width, img.height))
     }
 
-    mod io_cut {
-        use super::*;
-
-        include!("io_cut.rs");
-    }
-
     #[inline]
     fn clear_rgba_buffer(rgba: &mut [u8], rgb: u32) {
         let r = ((rgb >> 16) & 0xFF) as u8;
