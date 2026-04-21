@@ -1,8 +1,7 @@
-use super::{HV_LOG_CAP, HvLogEntry, StartError};
-use crate::shell2::{ShellBackend2, ShellIo2};
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use super::StartError;
+use crate::shell2::ShellBackend2;
+use core::sync::atomic::AtomicBool;
 use embassy_executor::Spawner;
-use heapless::{Deque, String};
 use spin::Mutex;
 
 pub const MAX_VMS: usize = 10;
@@ -44,8 +43,8 @@ impl VmManager {
     pub fn start_vm(
         &self,
         vm_id: u8,
-        spawner: &Spawner,
-        io: &'static dyn ShellBackend2,
+        _spawner: &Spawner,
+        _io: &'static dyn ShellBackend2,
     ) -> Result<(), StartError> {
         if vm_id as usize >= MAX_VMS {
             return Err(StartError::UnsupportedVmId);

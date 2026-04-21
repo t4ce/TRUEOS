@@ -10,7 +10,6 @@ use lyon_tessellation::{
 use spin::Once;
 use trueos_gfx_core::{
     RGB_VERTEX_SIZE, RgbVertexPx, Rgba8, ViewTransform, push_indexed_rgb_mesh_px, push_rgb_quad_px,
-    push_rgb_triangle_px,
 };
 use trueos_math::{cos_f32, sin_f32};
 

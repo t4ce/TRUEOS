@@ -1729,7 +1729,7 @@ impl block::BlockDevice for NvmeBlockDevice {
                 core::cmp::max(1, core::cmp::min(max_io_bytes / bs, u16::MAX as usize));
             let dma_buf = DmaBuffer::alloc(max_io_bytes, self.ctrl.page_size_bytes())?;
             let dma_phys = dma_buf.phys();
-            let dma_virt = dma_buf.as_ptr();
+            let _dma_virt = dma_buf.as_ptr();
 
             let mut remaining = buf;
             let mut cur_lba = lba;
@@ -1921,7 +1921,7 @@ fn io_selftest_read(
         return false;
     };
     let dma_phys = dma_buf.phys();
-    let dma_virt = dma_buf.as_ptr();
+    let _dma_virt = dma_buf.as_ptr();
 
     dma_buf.zero_range(bytes);
 

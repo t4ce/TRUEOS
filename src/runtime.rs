@@ -1,4 +1,3 @@
-use core::sync::atomic::Ordering;
 
 #[inline]
 fn local_cpu_ptr() -> *mut crate::percpu::PerCpu {

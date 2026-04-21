@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::task::Poll;
 
-use crab_usb::{Device, USBHost, usb_if};
+use crab_usb::{USBHost, usb_if};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
