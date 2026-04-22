@@ -9,16 +9,24 @@ pub trait NetDevice {
     /// Pop a single received frame, if available.
     fn pop_rx(&mut self) -> Option<Vec<u8>>;
 
+    /// Drain multiple received frames, up to `limit`, without building an
+    /// intermediate burst container.
+    fn drain_rx_each(&mut self, limit: usize, f: &mut dyn FnMut(Vec<u8>)) -> usize {
+        let mut drained = 0usize;
+        while drained < limit {
+            let Some(pkt) = self.pop_rx() else {
+                break;
+            };
+            drained += 1;
+            f(pkt);
+        }
+        drained
+    }
+
     /// Drain multiple received frames, up to `limit`.
     fn drain_rx(&mut self, limit: usize) -> Vec<Vec<u8>> {
         let mut out = Vec::with_capacity(limit.min(64));
-        for _ in 0..limit {
-            if let Some(pkt) = self.pop_rx() {
-                out.push(pkt);
-            } else {
-                break;
-            }
-        }
+        self.drain_rx_each(limit, &mut |pkt| out.push(pkt));
         out
     }
 

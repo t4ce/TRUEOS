@@ -468,7 +468,7 @@ pub async fn ui2_shell_demo_task() {
         clear_rgba[idx + 2] = UI2_SHELL_BG_RGBA[2];
         clear_rgba[idx + 3] = UI2_SHELL_BG_RGBA[3];
     }
-    if !surface.upload_rgba(clear_rgba.as_slice(), "ui2-shell-demo-clear") {
+    if !surface.upload_rgba_owned(clear_rgba, "ui2-shell-demo-clear") {
         crate::log!("ui2-shell-demo: initial texture upload failed tex={}\n", UI2_SHELL_TEX_ID);
         return;
     }

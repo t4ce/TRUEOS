@@ -507,15 +507,14 @@ pub fn log_blueprint_app_window_event(args: core::fmt::Arguments<'_>) {
 pub fn begin_blueprint_app_window_session(archive: &str) {
     *APP_WINDOW_SESSION.lock() = Some(AppWindowSession {
         archive: AllocString::from(archive),
-        window_ids: AllocVec::new(),
+        window_ids: AllocVec::with_capacity(4),
     });
     app_window_broker_log(format_args!("app-window-broker: session begin archive={}", archive));
 }
 
 pub fn register_blueprint_app_window(window_id: u32, kind: &str, title: &str) {
-    let mut session = APP_WINDOW_SESSION.lock();
-    let Some(session) = session.as_mut() else {
-        drop(session);
+    let mut sessions = APP_WINDOW_SESSION.lock();
+    let Some(session) = sessions.as_mut() else {
         app_window_broker_log(format_args!(
             "app-window-broker: create without active session kind={} window={} title={}",
             kind, window_id, title
@@ -527,12 +526,9 @@ pub fn register_blueprint_app_window(window_id: u32, kind: &str, title: &str) {
         session.window_ids.push(window_id);
     }
 
-    let archive = session.archive.clone();
-    drop(session);
-
     app_window_broker_log(format_args!(
         "app-window-broker: created archive={} kind={} window={} title={}",
-        archive.as_str(),
+        session.archive.as_str(),
         kind,
         window_id,
         title

@@ -679,11 +679,12 @@ impl<'a> Device for AdapterDeviceAt<'a> {
         let packet = if let Some(p) = self.rx_buffer.pop_front() {
             p
         } else {
-            let packets = crate::net::drain_rx_packets_at(self.index, 128);
-            if packets.is_empty() {
+            let drained = crate::net::drain_rx_packets_each_at(self.index, 128, &mut |packet| {
+                self.rx_buffer.push_back(packet);
+            });
+            if drained == 0 {
                 return None;
             }
-            self.rx_buffer.extend(packets);
             self.rx_buffer.pop_front()?
         };
 
