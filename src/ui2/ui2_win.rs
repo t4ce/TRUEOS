@@ -64,7 +64,7 @@ pub(super) fn alloc_window(
             0
         },
         hosted_browser_snapshot: UiHostedBrowserSnapshot::default(),
-        title: String::from(title),
+        title: ui2_window_title_inline(title),
         icon_id: 0,
         title_twemoji: '\0',
         title_icon_tex_id: 0,
@@ -1208,11 +1208,11 @@ impl Ui2SurfaceWindow {
         for _ in 0..pixel_count {
             pixels.extend_from_slice(&clear_rgba);
         }
-        if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+        if !crate::r::io::cabi::queue_texture_rgba_image_upload_owned(
             tex_id,
             width,
             height,
-            &pixels,
+            pixels,
             0,
             "ui2-surface-init",
         ) {
@@ -1302,11 +1302,11 @@ impl Ui2SurfaceWindow {
                     .into_iter()
                     .flatten()
                     .collect::<Vec<u8>>();
-            if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+            if !crate::r::io::cabi::queue_texture_rgba_image_upload_owned(
                 self.tex_id,
                 self.width.max(1),
                 self.height.max(1),
-                pixels.as_slice(),
+                pixels,
                 0,
                 "ui2-surface-rgb-render-target-repair",
             ) {
@@ -1390,6 +1390,41 @@ impl Ui2SurfaceWindow {
             self.window_id
         };
         if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
+            self.tex_id,
+            self.width,
+            self.height,
+            pixels,
+            repaint_window_id,
+            repaint_reason,
+        ) {
+            crate::log!(
+                "ui2-surface-window: rgba upload queue failed window={} tex={}\n",
+                self.window_id,
+                self.tex_id
+            );
+            return false;
+        }
+        true
+    }
+
+    #[allow(dead_code)]
+    pub fn upload_rgba_owned(&self, pixels: Vec<u8>, repaint_reason: &'static str) -> bool {
+        let expected = self.width as usize * self.height as usize * 4;
+        if pixels.len() != expected {
+            crate::log!(
+                "ui2-surface-window: upload size mismatch tex={} got={} expected={}\n",
+                self.tex_id,
+                pixels.len(),
+                expected
+            );
+            return false;
+        }
+        let repaint_window_id = if is_window_minimized(self.window_id) {
+            0
+        } else {
+            self.window_id
+        };
+        if !crate::r::io::cabi::queue_texture_rgba_image_upload_owned(
             self.tex_id,
             self.width,
             self.height,
@@ -1603,10 +1638,10 @@ pub fn set_window_title(id: u32, title: &str) -> bool {
     let Some(window) = window_mut(&mut state, id) else {
         return false;
     };
-    if window.title == title {
+    if window.title.as_str() == title {
         return true;
     }
-    window.title = String::from(title);
+    window.title = ui2_window_title_inline(title);
     state.compose_reason = "title-window";
     note_window_dirty(&mut state, id, "title-window")
 }

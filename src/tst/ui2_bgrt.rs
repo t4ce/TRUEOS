@@ -94,7 +94,7 @@ pub async fn ui2_bgrt_demo_task() {
     let upload_ok = if intel_direct {
         true
     } else {
-        surface.upload_rgba(rgba.as_slice(), "ui2-bgrt-demo-upload")
+        surface.upload_rgba_owned(rgba, "ui2-bgrt-demo-upload")
     };
 
     if !upload_ok {

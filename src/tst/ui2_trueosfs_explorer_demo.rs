@@ -721,7 +721,7 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
                 content_h,
             );
             let _ = surface.set_interactives(interactives.as_slice());
-            if !surface.upload_rgba(pixels.as_slice(), "ui2-trueosfs-explorer-present") {
+            if !surface.upload_rgba_owned(pixels, "ui2-trueosfs-explorer-present") {
                 break;
             }
             needs_render = false;
