@@ -242,6 +242,7 @@ pub async fn ui2_petersen_demo_task() {
         return;
     };
     let _ = surface.bind_spawn_task("ui2-petersen-demo");
+    let _ = crate::r::ui2::set_window_title_twemoji(surface.window_id(), '\u{2721}');
 
     Timer::after(EmbassyDuration::from_millis(1)).await;
 

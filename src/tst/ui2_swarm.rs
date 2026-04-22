@@ -696,6 +696,7 @@ pub async fn ui2_swarm_demo_task() {
         return;
     };
     let _ = surface.bind_spawn_task("ui2-swarm-demo");
+    let _ = crate::r::ui2::set_window_title_twemoji(surface.window_id(), '\u{1F47D}');
 
     let mut selected_handle: Option<v::vnet::NetHandle> = None;
     let mut sketch_index = 0usize;

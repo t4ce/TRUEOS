@@ -224,6 +224,7 @@ pub async fn ui2_coreticks_demo_task() {
         return;
     };
     let _ = surface.bind_spawn_task("ui2-coreticks-demo");
+    let _ = crate::r::ui2::set_window_title_twemoji(surface.window_id(), '\u{1F4A0}');
 
     let window_id = surface.window_id();
     let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);

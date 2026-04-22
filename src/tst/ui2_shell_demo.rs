@@ -454,6 +454,7 @@ pub async fn ui2_shell_demo_task() {
         return;
     };
     let _ = surface.bind_spawn_task("ui2-shell-demo");
+    let _ = crate::r::ui2::set_window_title_twemoji(surface.window_id(), '\u{1F40C}');
 
     let clear_rgba = vec![
         0u8;

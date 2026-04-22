@@ -422,6 +422,7 @@ pub async fn ui2_weather_demo_task() {
         return;
     };
     let _ = surface.bind_spawn_task("ui2-weather-demo");
+    let _ = ui2::set_window_title_twemoji(surface.window_id(), '\u{1F438}');
 
     // Scrollbar on right side and top
     let _ = ui2::set_window_vertical_scrollbar_side(

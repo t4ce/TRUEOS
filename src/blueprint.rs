@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::ffi::c_char;
 use core::sync::atomic::{AtomicBool, Ordering};
+use spin::Mutex;
 
 const BLUEPRINT_HEADER_LEN: usize = 24;
 const ELF64_HEADER_LEN: usize = 64;
@@ -62,13 +63,13 @@ struct LoadedRelImage {
     base: *mut u8,
     used_len: usize,
     section_bases: Vec<usize>,
+    _arena_lease: PortalImageArenaLease,
 }
 
 impl Drop for LoadedRelImage {
     fn drop(&mut self) {
         let _ = self.base;
         let _ = self.used_len;
-        PORTAL_IMAGE_IN_USE.store(false, Ordering::Release);
     }
 }
 
@@ -79,6 +80,155 @@ struct PortalImageArena([u8; PORTAL_IMAGE_ARENA_BYTES]);
 
 static PORTAL_IMAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut PORTAL_IMAGE_ARENA: PortalImageArena = PortalImageArena([0; PORTAL_IMAGE_ARENA_BYTES]);
+static UNRESOLVED_IMPORT_STUBS: Mutex<Vec<UnresolvedImportStub>> = Mutex::new(Vec::new());
+
+struct PortalImageArenaLease {
+    armed: bool,
+}
+
+struct UnresolvedImportStub {
+    name: String,
+    warned: bool,
+}
+
+impl PortalImageArenaLease {
+    fn acquire() -> Result<Self, String> {
+        if PORTAL_IMAGE_IN_USE
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(String::from("portal image arena busy"));
+        }
+        Ok(Self { armed: true })
+    }
+}
+
+impl Drop for PortalImageArenaLease {
+    fn drop(&mut self) {
+        if self.armed {
+            PORTAL_IMAGE_IN_USE.store(false, Ordering::Release);
+        }
+    }
+}
+
+macro_rules! unresolved_import_stubs {
+    ($(($fn_name:ident, $slot:expr)),* $(,)?) => {
+        $(
+            extern "C" fn $fn_name() -> usize {
+                unresolved_import_called($slot)
+            }
+        )*
+
+        static UNRESOLVED_IMPORT_STUB_FNS: &[extern "C" fn() -> usize] = &[
+            $($fn_name),*
+        ];
+    };
+}
+
+unresolved_import_stubs!(
+    (unresolved_import_stub_0, 0),
+    (unresolved_import_stub_1, 1),
+    (unresolved_import_stub_2, 2),
+    (unresolved_import_stub_3, 3),
+    (unresolved_import_stub_4, 4),
+    (unresolved_import_stub_5, 5),
+    (unresolved_import_stub_6, 6),
+    (unresolved_import_stub_7, 7),
+    (unresolved_import_stub_8, 8),
+    (unresolved_import_stub_9, 9),
+    (unresolved_import_stub_10, 10),
+    (unresolved_import_stub_11, 11),
+    (unresolved_import_stub_12, 12),
+    (unresolved_import_stub_13, 13),
+    (unresolved_import_stub_14, 14),
+    (unresolved_import_stub_15, 15),
+    (unresolved_import_stub_16, 16),
+    (unresolved_import_stub_17, 17),
+    (unresolved_import_stub_18, 18),
+    (unresolved_import_stub_19, 19),
+    (unresolved_import_stub_20, 20),
+    (unresolved_import_stub_21, 21),
+    (unresolved_import_stub_22, 22),
+    (unresolved_import_stub_23, 23),
+    (unresolved_import_stub_24, 24),
+    (unresolved_import_stub_25, 25),
+    (unresolved_import_stub_26, 26),
+    (unresolved_import_stub_27, 27),
+    (unresolved_import_stub_28, 28),
+    (unresolved_import_stub_29, 29),
+    (unresolved_import_stub_30, 30),
+    (unresolved_import_stub_31, 31),
+    (unresolved_import_stub_32, 32),
+    (unresolved_import_stub_33, 33),
+    (unresolved_import_stub_34, 34),
+    (unresolved_import_stub_35, 35),
+    (unresolved_import_stub_36, 36),
+    (unresolved_import_stub_37, 37),
+    (unresolved_import_stub_38, 38),
+    (unresolved_import_stub_39, 39),
+    (unresolved_import_stub_40, 40),
+    (unresolved_import_stub_41, 41),
+    (unresolved_import_stub_42, 42),
+    (unresolved_import_stub_43, 43),
+    (unresolved_import_stub_44, 44),
+    (unresolved_import_stub_45, 45),
+    (unresolved_import_stub_46, 46),
+    (unresolved_import_stub_47, 47),
+    (unresolved_import_stub_48, 48),
+    (unresolved_import_stub_49, 49),
+    (unresolved_import_stub_50, 50),
+    (unresolved_import_stub_51, 51),
+    (unresolved_import_stub_52, 52),
+    (unresolved_import_stub_53, 53),
+    (unresolved_import_stub_54, 54),
+    (unresolved_import_stub_55, 55),
+    (unresolved_import_stub_56, 56),
+    (unresolved_import_stub_57, 57),
+    (unresolved_import_stub_58, 58),
+    (unresolved_import_stub_59, 59),
+    (unresolved_import_stub_60, 60),
+    (unresolved_import_stub_61, 61),
+    (unresolved_import_stub_62, 62),
+    (unresolved_import_stub_63, 63),
+);
+
+fn unresolved_import_stub_slot(name: &str) -> Option<usize> {
+    let mut stubs = UNRESOLVED_IMPORT_STUBS.lock();
+    if let Some(slot) = stubs.iter().position(|entry| entry.name == name) {
+        return Some(slot);
+    }
+    if stubs.len() >= UNRESOLVED_IMPORT_STUB_FNS.len() {
+        return None;
+    }
+    let slot = stubs.len();
+    stubs.push(UnresolvedImportStub {
+        name: String::from(name),
+        warned: false,
+    });
+    Some(slot)
+}
+
+fn unresolved_import_called(slot: usize) -> usize {
+    let mut warn_name = None;
+    {
+        let mut stubs = UNRESOLVED_IMPORT_STUBS.lock();
+        if let Some(entry) = stubs.get_mut(slot)
+            && !entry.warned
+        {
+            entry.warned = true;
+            warn_name = Some(entry.name.clone());
+        }
+    }
+    if let Some(name) = warn_name {
+        crate::hv::hvlogf(format_args!("portal: joker import invoked name={}", name));
+    }
+    0
+}
+
+fn resolve_unresolved_import(name: &str) -> Option<usize> {
+    let slot = unresolved_import_stub_slot(name)?;
+    Some(UNRESOLVED_IMPORT_STUB_FNS[slot] as *const () as usize)
+}
 
 fn portal_alloc_error_handler(layout: Layout) -> ! {
     crate::log!("portal: alloc error size={} align={}\n", layout.size(), layout.align());
@@ -371,12 +521,7 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
     if needed > PORTAL_IMAGE_ARENA_BYTES {
         return Err(String::from("ELF image exceeds portal arena"));
     }
-    if PORTAL_IMAGE_IN_USE
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err(String::from("portal image arena busy"));
-    }
+    let arena_lease = PortalImageArenaLease::acquire()?;
     let arena_ptr = core::ptr::addr_of_mut!(PORTAL_IMAGE_ARENA) as *mut u8;
     let base_addr = align_up(arena_ptr as usize, layout.align())?;
     let base = base_addr as *mut u8;
@@ -491,6 +636,7 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
         base,
         used_len: total_size,
         section_bases,
+        _arena_lease: arena_lease,
     })
 }
 
@@ -648,7 +794,9 @@ fn resolve_import(name: &str) -> Option<usize> {
         | "_RNvCs2csqI13tepL_7___rustc19___rust_alloc_zeroed" => {
             Some(portal_rust_alloc_zeroed as *const () as usize)
         }
-        _ => resolve_std_abi_import(name).or_else(|| resolve_cabi_import(name)),
+        _ => resolve_std_abi_import(name)
+            .or_else(|| resolve_cabi_import(name))
+            .or_else(|| resolve_unresolved_import(name)),
     }
 }
 

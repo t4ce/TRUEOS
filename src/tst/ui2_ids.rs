@@ -16,6 +16,7 @@ pub enum Ui2DemoTexId {
     Swarm = 4_720,
     Chart = 4_721,
     Raple = 4_722,
+    Currency = 4_723,
     TrueosfsExplorer = 4_901,
 }
 
@@ -36,6 +37,7 @@ pub enum Ui2DemoContentId {
     Weather = 47,
     Chart = 48,
     Raple = 49,
+    Currency = 50,
 }
 
 impl Ui2DemoContentId {

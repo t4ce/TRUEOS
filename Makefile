@@ -30,8 +30,8 @@ BP_ISO_DIR_REL ?= EFI/BOOT/apps
 # Set BP_SKIP_BUILD to 1 to reuse existing dist/*.bp files.
 # Set BP_SKIP_EMBED to 1 to omit blueprints from the ISO.
 # Set both to 1 to stop both blueprint build and embedding.
-BP_SKIP_BUILD := 1
-BP_SKIP_EMBED := 1
+BP_SKIP_BUILD := 0
+BP_SKIP_EMBED := 0
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
 QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))

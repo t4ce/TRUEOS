@@ -16,7 +16,7 @@ const UI2_SYSTEM_BUTTON_VM_PLAY_TWEMOJI: char = '\u{23F5}';
 const UI2_SYSTEM_BUTTON_VM_PAUSE_TWEMOJI: char = '\u{23F8}';
 const UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI: char = '\u{23EF}';
 const UI2_SYSTEM_BUTTON_CLOSE_HULL_TWEMOJI: char = '\u{2716}';
-const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{2733}';
+const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{1F518}';
 
 fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::String {
     if text.is_empty() || max_width_px <= 0.0 {
@@ -407,23 +407,22 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
         let has_title_texture_icon = texture_is_drawable(window.title_icon_tex_id);
         let has_title_twemoji = !has_title_texture_icon && window.title_twemoji != '\0';
+        let title_icon_rect = Ui2Rect::new(rect.x, rect.y, titleband_h.max(1.0), titleband_h.max(1.0));
         if has_title_texture_icon || has_title_twemoji {
-            let icon_side = 16.0f32;
-            let icon_x = rect.x + 8.0;
-            let icon_y = rect.y + ((titleband_h - icon_side) * 0.5).max(0.0);
             if has_title_texture_icon {
-                draw_window_title_texture_icon(state, window, icon_x, icon_y, icon_side);
-            } else if has_title_twemoji {
-                draw_window_twemoji_button(
+                draw_window_title_texture_icon(
                     state,
                     window,
-                    Ui2Rect::new(icon_x, icon_y, icon_side, icon_side),
-                    window.title_twemoji,
+                    title_icon_rect.x,
+                    title_icon_rect.y,
+                    title_icon_rect.w,
                 );
+            } else if has_title_twemoji {
+                draw_window_twemoji_button(state, window, title_icon_rect, window.title_twemoji);
             }
         }
         let title_left = if has_title_texture_icon || has_title_twemoji {
-            rect.x + 28.0
+            title_icon_rect.x + title_icon_rect.w + 2.0
         } else {
             rect.x + 8.0
         };
