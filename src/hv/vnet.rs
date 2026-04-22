@@ -1,4 +1,5 @@
 use alloc::collections::VecDeque;
+use alloc::string::String as AllocString;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use spin::Mutex;
@@ -44,6 +45,7 @@ struct VmNetContext {
     last_req: Option<VmNetRequest>,
     last_cpl: Option<VmNetCompletion>,
     recent_rx: VecDeque<u8>,
+    pending_console_text: AllocString,
 }
 
 impl VmNetContext {
@@ -55,6 +57,7 @@ impl VmNetContext {
             last_req: None,
             last_cpl: None,
             recent_rx: VecDeque::new(),
+            pending_console_text: AllocString::new(),
         }
     }
 }
@@ -62,6 +65,10 @@ impl VmNetContext {
 static VM1_NET: Mutex<VmNetContext> = Mutex::new(VmNetContext::new(1));
 static VM_NET_SEQ: AtomicU32 = AtomicU32::new(1);
 static VM_NET_DIAG_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn primary_vm_id() -> u8 {
+    crate::hv::snapshot::VM1_ID
+}
 
 fn context(vm_id: u8) -> Option<&'static Mutex<VmNetContext>> {
     match vm_id {
@@ -103,7 +110,8 @@ fn maybe_log(ctx: &VmNetContext, cpl: &VmNetCompletion) {
     let n = VM_NET_DIAG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     if n <= 4 || n.is_power_of_two() {
         hvlogf(format_args!(
-            "hv: vm1 reporting: vnet vm={} last-op=0x{:X} status={} data={} len={} tx_bytes={} rx_bytes={} recent_rx={}",
+            "hv: vm{} reporting: vnet channel={} last-op=0x{:X} status={} data={} len={} tx_bytes={} rx_bytes={} recent_rx={}",
+            primary_vm_id(),
             ctx.vm_id,
             ctx.last_req.map(|r| r.op).unwrap_or(0),
             cpl.status,
@@ -116,14 +124,52 @@ fn maybe_log(ctx: &VmNetContext, cpl: &VmNetCompletion) {
     }
 }
 
+fn emit_console_line(text: &str) {
+    crate::globalog::log(format_args!("{}\n", text));
+}
+
+fn push_console_bytes(ctx: &mut VmNetContext, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+
+    let chunk = alloc::string::String::from_utf8_lossy(bytes);
+    ctx.pending_console_text.push_str(chunk.as_ref());
+
+    while let Some(newline_idx) = ctx.pending_console_text.find('\n') {
+        let mut line = AllocString::from(&ctx.pending_console_text[..newline_idx]);
+        if line.ends_with('\r') {
+            line.pop();
+        }
+        emit_console_line(line.as_str());
+        ctx.pending_console_text.drain(..=newline_idx);
+    }
+}
+
+pub fn flush_console(vm_id: u8) {
+    let Some(ctx_lock) = context(vm_id) else {
+        return;
+    };
+
+    let mut ctx = ctx_lock.lock();
+    if ctx.pending_console_text.is_empty() {
+        return;
+    }
+
+    let mut line = core::mem::take(&mut ctx.pending_console_text);
+    if line.ends_with('\r') {
+        line.pop();
+    }
+    emit_console_line(line.as_str());
+}
+
 pub fn tcp_write(vm_id: u8, bytes: &[u8]) -> Result<usize, VmNetStatus> {
     let Some(ctx_lock) = context(vm_id) else {
         return Err(VmNetStatus::BadArg);
     };
 
-    crate::shell2::backends::net_tcp::net_shell_write_bytes(bytes);
-
     let mut ctx = ctx_lock.lock();
+    push_console_bytes(&mut ctx, bytes);
     let seq = record_request(
         &mut ctx,
         VM_NET_OP_TCP_WRITE,

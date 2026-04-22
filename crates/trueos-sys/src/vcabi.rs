@@ -1,6 +1,7 @@
 unsafe extern "C" {
-    pub fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     pub fn trueos_cabi_poll_once();
+    pub fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
+    pub fn trueos_cabi_write_cstr(stream: u32, cstr: *const u8);
     pub fn trueos_cabi_alloc(size: usize) -> *mut u8;
     pub fn trueos_cabi_calloc(nmemb: usize, size: usize) -> *mut u8;
     pub fn trueos_cabi_free(ptr: *mut u8);
@@ -127,11 +128,6 @@ unsafe extern "C" {
         out_cap: usize,
     ) -> isize;
     pub fn trueos_cabi_shell2_print_line(data_ptr: *const u8, data_len: usize) -> usize;
-    pub fn trueos_cabi_shell2_print_targeted_line(
-        target_mask: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> usize;
     pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_shell_history_lines_all() -> usize;

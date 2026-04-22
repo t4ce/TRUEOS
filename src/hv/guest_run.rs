@@ -123,12 +123,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         return false;
     };
 
-    let console_target = state.console_target.clone();
-    let log = |line: &str| {
-        if let Some(target) = console_target.as_ref() {
-            crate::shell2::print_matrix_target_line(target, line);
-        }
-    };
+    let log = |line: &str| crate::hv::hvlogf(format_args!("{}", line));
 
     log(alloc::format!("run: guest blueprint launch archive={}", state.archive.as_str()).as_str());
 
@@ -158,16 +153,12 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let process_args =
         blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
     let process_env = blueprint::build_process_env(state.archive.as_str());
-    crate::hv::begin_blueprint_app_window_session(
-        state.archive.as_str(),
-        console_target.clone(),
-    );
+    crate::hv::begin_blueprint_app_window_session(state.archive.as_str());
     match blueprint::invoke_host_rel(
         unpacked.as_slice(),
         module.entry,
         process_args,
         process_env,
-        state.console_target,
     ) {
         Ok(()) => {
             crate::hv::finish_blueprint_app_window_session(true);

@@ -1072,6 +1072,7 @@ pub(crate) struct ParsedSps {
     pub profile_idc: u8,
     pub level_idc: u8,
     pub chroma_format_idc: u32,
+    pub separate_colour_plane_flag: bool,
     pub bit_depth_luma_minus8: u32,
     pub bit_depth_chroma_minus8: u32,
     pub log2_max_frame_num_minus4: u32,
@@ -1084,6 +1085,10 @@ pub(crate) struct ParsedSps {
     pub frame_mbs_only_flag: bool,
     pub mb_adaptive_frame_field_flag: bool,
     pub direct_8x8_inference_flag: bool,
+    pub frame_crop_left_offset: u32,
+    pub frame_crop_right_offset: u32,
+    pub frame_crop_top_offset: u32,
+    pub frame_crop_bottom_offset: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1114,13 +1119,14 @@ pub(crate) fn parse_sps(sps_nal: &[u8]) -> Option<ParsedSps> {
     let _seq_parameter_set_id = br.read_ue()?;
 
     let mut chroma_format_idc = 1u32;
+    let mut separate_colour_plane_flag = false;
     let mut bit_depth_luma_minus8 = 0u32;
     let mut bit_depth_chroma_minus8 = 0u32;
     let high_profiles: &[u8] = &[100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134];
     if high_profiles.contains(&profile_idc) {
         chroma_format_idc = br.read_ue()?;
         if chroma_format_idc == 3 {
-            let _separate_colour_plane = br.read_bit()?;
+            separate_colour_plane_flag = br.read_bit()? != 0;
         }
         bit_depth_luma_minus8 = br.read_ue()?;
         bit_depth_chroma_minus8 = br.read_ue()?;
@@ -1164,11 +1170,23 @@ pub(crate) fn parse_sps(sps_nal: &[u8]) -> Option<ParsedSps> {
         mb_adaptive_frame_field_flag = br.read_bit()? != 0;
     }
     let direct_8x8_inference_flag = br.read_bit()? != 0;
+    let frame_cropping_flag = br.read_bit()? != 0;
+    let mut frame_crop_left_offset = 0u32;
+    let mut frame_crop_right_offset = 0u32;
+    let mut frame_crop_top_offset = 0u32;
+    let mut frame_crop_bottom_offset = 0u32;
+    if frame_cropping_flag {
+        frame_crop_left_offset = br.read_ue()?;
+        frame_crop_right_offset = br.read_ue()?;
+        frame_crop_top_offset = br.read_ue()?;
+        frame_crop_bottom_offset = br.read_ue()?;
+    }
 
     Some(ParsedSps {
         profile_idc,
         level_idc,
         chroma_format_idc,
+        separate_colour_plane_flag,
         bit_depth_luma_minus8,
         bit_depth_chroma_minus8,
         log2_max_frame_num_minus4,
@@ -1181,7 +1199,55 @@ pub(crate) fn parse_sps(sps_nal: &[u8]) -> Option<ParsedSps> {
         frame_mbs_only_flag,
         mb_adaptive_frame_field_flag,
         direct_8x8_inference_flag,
+        frame_crop_left_offset,
+        frame_crop_right_offset,
+        frame_crop_top_offset,
+        frame_crop_bottom_offset,
     })
+}
+
+pub(crate) fn h264_crop_units(sps: &ParsedSps) -> (u32, u32) {
+    let chroma_array_type = if sps.separate_colour_plane_flag {
+        0
+    } else {
+        sps.chroma_format_idc
+    };
+    let frame_mbs_factor = 2u32.saturating_sub(u32::from(sps.frame_mbs_only_flag));
+    match chroma_array_type {
+        0 => (1u32, frame_mbs_factor),
+        1 => (2, 2u32.saturating_mul(frame_mbs_factor)),
+        2 => (2, frame_mbs_factor),
+        _ => (1u32, frame_mbs_factor),
+    }
+}
+
+pub(crate) fn visible_h264_frame_dims(sps: &ParsedSps) -> (u32, u32) {
+    let coded_width = (sps.pic_width_in_mbs_minus1 + 1).saturating_mul(16);
+    let pic_height_map_units = sps.pic_height_in_map_units_minus1 + 1;
+    let frame_height_mbs = if sps.frame_mbs_only_flag {
+        pic_height_map_units
+    } else {
+        pic_height_map_units.saturating_mul(2)
+    };
+    let coded_height = frame_height_mbs.saturating_mul(16);
+
+    let (crop_unit_x, crop_unit_y) = h264_crop_units(sps);
+    let crop_width = crop_unit_x
+        .saturating_mul(sps.frame_crop_left_offset.saturating_add(sps.frame_crop_right_offset));
+    let crop_height = crop_unit_y
+        .saturating_mul(sps.frame_crop_top_offset.saturating_add(sps.frame_crop_bottom_offset));
+    (
+        coded_width.saturating_sub(crop_width),
+        coded_height.saturating_sub(crop_height),
+    )
+}
+
+pub(crate) fn h264_crop_offsets_px(sps: &ParsedSps) -> (u32, u32) {
+    let (crop_unit_x, crop_unit_y) = h264_crop_units(sps);
+    (
+        crop_unit_x.saturating_mul(sps.frame_crop_left_offset),
+        crop_unit_y.saturating_mul(sps.frame_crop_top_offset),
+    )
 }
 
 pub(crate) fn parse_pps(pps_nal: &[u8], sps: &ParsedSps) -> Option<ParsedPps> {
