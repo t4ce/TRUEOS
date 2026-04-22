@@ -373,10 +373,6 @@ pub mod cabi {
         if !crate::logflag::blueprint_log_enabled(level) {
             return;
         }
-        crate::hv::log_active_blueprint_console_line(format_args!(
-            "{}: {}\n",
-            source, message
-        ));
         crate::globalog::log_with_purpose(
             Some(purpose_for_level(level)),
             format_args!("{}: {}\n", source, message),
@@ -384,7 +380,6 @@ pub mod cabi {
     }
 
     fn emit_plain_stream_line(stream: CStream, line: &str) {
-        crate::hv::log_active_blueprint_console_line(format_args!("{}\n", line));
         crate::globalog::log(format_args!("{}\n", line));
     }
 

@@ -108,6 +108,29 @@ fn log_fault_frame(label: &str, stack_frame: &InterruptStackFrame) {
     );
 }
 
+fn log_fault_alloc_trace() {
+    let trace = crate::allocators::last_alloc_trace();
+    if trace.seq == 0 {
+        return;
+    }
+    faultln!(
+        "alloc-trace: seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}",
+        trace.seq,
+        trace.caller_rip,
+        trace.caller_rip_1,
+        trace.caller_rip_2,
+        trace.layout_size,
+        trace.layout_align,
+        trace.stage,
+        trace.head_ptr,
+        trace.block_ptr,
+        trace.block_size,
+        trace.block_next,
+        trace.payload_start,
+        trace.aligned_used,
+    );
+}
+
 #[inline]
 fn is_canonical_addr(v: usize) -> bool {
     let sign = (v >> 47) & 1;
@@ -199,6 +222,7 @@ extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFram
     interrupts::disable();
 
     log_fault_frame("#UD Invalid Opcode", &stack_frame);
+    log_fault_alloc_trace();
 
     halt_loop();
 }
