@@ -74,12 +74,14 @@ define_started_flags!(
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
     UI2_WEATHER_DEMO_STARTED,
     UI2_CHART_DEMO_STARTED,
+    UI2_CURRENCY_DEMO_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     SMTP_SMOKE_STARTED,
+    FACTORY_RAM_PROBE_STARTED,
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
@@ -134,6 +136,7 @@ define_stop_flags!(
     STOP_UI2_SVG_DEMO,
     STOP_UI2_WEATHER_DEMO,
     STOP_UI2_CHART_DEMO,
+    STOP_UI2_CURRENCY_DEMO,
     STOP_UI2_TRUEOSFS_EXPLORER_DEMO,
 );
 
@@ -153,6 +156,7 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
         "ui2-svg-demo" => Some(&STOP_UI2_SVG_DEMO),
         "ui2-weather-demo" => Some(&STOP_UI2_WEATHER_DEMO),
         "ui2-chart-demo" => Some(&STOP_UI2_CHART_DEMO),
+        "ui2-currency-demo" => Some(&STOP_UI2_CURRENCY_DEMO),
         "ui2-trueosfs-explorer-demo" => Some(&STOP_UI2_TRUEOSFS_EXPLORER_DEMO),
         _ => None,
     }
@@ -316,6 +320,10 @@ fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_globalog_persist_once(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::globalog::persist_once_task())
+}
+
+fn spawn_factory_ram_probe(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::tst_boot_factory_ram_probe::boot_factory_ram_probe_task())
 }
 
 fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
@@ -839,6 +847,13 @@ fn spawn_ui2_chart_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_currency_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        let _ = worker_spawner;
+        crate::tst_ui2_currency_demo::ui2_currency_demo_task()
+    })
+}
+
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     let count = crate::usb2::pci_usb_controllers()
         .len()
@@ -1006,6 +1021,12 @@ static TASKS: &[TaskSpec] = &[
         0,
         &GLOBALOG_PERSIST_ONCE_STARTED,
         spawn_globalog_persist_once,
+    ),
+    TaskSpec::enabled(
+        "factory-ram-probe",
+        0,
+        &FACTORY_RAM_PROBE_STARTED,
+        spawn_factory_ram_probe,
     ),
     TaskSpec::enabled(
         "qjs-async-fs-service",
@@ -1275,6 +1296,12 @@ static TASKS: &[TaskSpec] = &[
         UI2_DEMO_READY,
         &UI2_CHART_DEMO_STARTED,
         spawn_ui2_chart_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-currency-demo",
+        UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
+        &UI2_CURRENCY_DEMO_STARTED,
+        spawn_ui2_currency_demo,
     ),
     TaskSpec::disabled(
         "ui2-trueosfs-explorer-demo",

@@ -2384,10 +2384,10 @@ fn submit_h264_frame_once(
     let ring_start = ring_gpu_addr as u32;
     let pphwsp_gpu = (context_gpu_addr & !0xFFF) as u32;
 
-    // Keep the same known-good context control semantics across the whole
-    // playback session so streaming frames do not drift into a distinct hot
-    // submit mode after frame 0.
-    let ctx_ctl_after = media_ctx_control_value(true);
+    // Streaming submits need restore enabled so the engine reloads the LRC
+    // head/tail we rewrite for each frame instead of staying on the prior
+    // restored state.
+    let ctx_ctl_after = media_ctx_control_value(false);
     let prev_tail = read_video_lrc_slot(context_virt, backing.context_bytes, 7) as usize;
     let force_context_restore = true;
     if force_reset {
@@ -2401,7 +2401,7 @@ fn submit_h264_frame_once(
             ring_ctl,
             pphwsp_gpu,
             backing.ppgtt_pml4_phys,
-            true,
+            false,
         ) {
             return None;
         }

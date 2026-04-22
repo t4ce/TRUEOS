@@ -276,7 +276,7 @@ fn compose_raple(
         atlases,
         UI2_RAPLE_PAD_X,
         y,
-        "⚡ raple live · 1s watch feed",
+        "raple live · 1s watch feed",
         UI2_RAPLE_TEXT_RGBA,
     );
     y += lh + 4;
@@ -478,6 +478,7 @@ pub async fn ui2_raple_demo_task() {
     let _ = surface.bind_spawn_task("ui2-raple-demo");
 
     let window_id = surface.window_id();
+    let _ = ui2::set_window_title_twemoji(window_id, '\u{26A1}');
     let _ = ui2::set_window_decorations(window_id, ui2::Ui2WindowDecorationMode::System);
     let _ = ui2::set_window_titlebar_visible(window_id, true);
     let _ = ui2::set_window_bottom_bar_visible(window_id, true);

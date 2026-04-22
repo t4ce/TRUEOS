@@ -168,6 +168,10 @@ pub fn snapshot() -> alloc::vec::Vec<u8> {
     placeholder::snapshot()
 }
 
+pub(crate) fn append_raw(bytes: &[u8]) {
+    placeholder::write_bytes_raw(bytes);
+}
+
 #[inline(always)]
 pub(crate) fn debugcon_write_byte_raw(b: u8) {
     debugcon::write_byte_raw(b)
@@ -506,5 +510,9 @@ mod placeholder {
 
     pub(super) fn snapshot() -> Vec<u8> {
         BRINGUP_LOG.lock().snapshot()
+    }
+
+    pub(super) fn write_bytes_raw(bytes: &[u8]) {
+        BRINGUP_LOG.lock().write_bytes(bytes);
     }
 }

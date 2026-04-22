@@ -66,6 +66,8 @@ mod tga;
 mod tokio_probe;
 #[path = "tst/fps.rs"]
 mod tst_fps;
+#[path = "tst/boot_factory_ram_probe.rs"]
+mod tst_boot_factory_ram_probe;
 #[path = "tst/gfx_tetris.rs"]
 mod tst_gfx_tetris;
 #[path = "tst/html_demo.rs"]
@@ -82,6 +84,8 @@ mod tst_smtp_smoke;
 mod tst_ui2_bgrt;
 #[path = "tst/ui2_chart_demo.rs"]
 mod tst_ui2_chart_demo;
+#[path = "tst/ui2_currency_demo.rs"]
+mod tst_ui2_currency_demo;
 #[path = "tst/ui2_coreticks_demo.rs"]
 mod tst_ui2_coreticks_demo;
 #[path = "tst/ui2_ids.rs"]
