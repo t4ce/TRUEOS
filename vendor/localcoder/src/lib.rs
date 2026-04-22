@@ -1,8 +1,15 @@
 pub mod api;
 mod compact;
+pub mod engine;
 pub mod kernel;
 pub mod localcoder_service;
 mod net;
+pub mod plan;
 pub mod resume;
 mod rt;
+pub mod skills;
+mod time;
+pub mod tools;
 mod types;
+pub mod ui2_window_controller;
+pub mod ui2_window_observer;

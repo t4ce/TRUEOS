@@ -31,7 +31,7 @@ pub(crate) use self::ui2_font::{
     ui2_font_measure_text_for_px, ui2_font_native_line_height_px,
 };
 pub(crate) use self::ui2_font_bucketproducer::*;
-pub(crate) use self::ui2_hid::cursor_color_rgba8;
+pub(crate) use self::ui2_hid::{cursor_color_rgba8, cursor_color_rgba8_for_cursor_id};
 use self::ui2_hid::*;
 pub(crate) use self::ui2_hit::ui2_hit_task;
 use self::ui2_hit::*;
@@ -138,8 +138,8 @@ static UI2_CURSOR_OVERLAY_CACHE: Mutex<[Ui2CursorOverlayCacheEntry; 6]> = Mutex:
 ]);
 
 #[inline]
-fn cursor_overlay_cache_index(slot_id: u32) -> usize {
-    (slot_id % 6) as usize
+fn cursor_overlay_cache_index(cursor_id: u32) -> usize {
+    (cursor_id.saturating_sub(1) % 6) as usize
 }
 
 #[inline]
@@ -221,15 +221,15 @@ fn cursor_overlay_build_sprite_rgba(
 }
 
 pub(crate) fn cursor_overlay_glyph_spec(
-    slot_id: u32,
+    cursor_id: u32,
     view_h: u32,
 ) -> Option<Ui2CursorOverlayGlyphSpec> {
-    let ch = cursor_spirit_glyph(slot_id)?;
+    let ch = cursor_spirit_glyph_for_cursor_id(cursor_id)?;
     let glyph = ui2_font_resolve_glyph(Ui2FontTier::OneX, ch)?;
     if !glyph.ready {
         return None;
     }
-    let cache_idx = cursor_overlay_cache_index(slot_id);
+    let cache_idx = cursor_overlay_cache_index(cursor_id);
     let target_dim_px = cursor_overlay_target_dim_px(view_h);
     let tex_id = UI2_CURSOR_OVERLAY_TEX_ID_BASE + cache_idx as u32;
     {

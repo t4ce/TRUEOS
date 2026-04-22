@@ -111,14 +111,15 @@ fn append_cursor_glyph(
 }
 
 #[inline]
-fn collect_real_cursor_norm(out: &mut Vec<(u32, f32, f32)>, skip_slot_id: Option<u32>) {
+fn collect_real_cursor_norm(out: &mut Vec<(u32, u32, f32, f32)>, skip_slot_id: Option<u32>) {
     out.clear();
 
     let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slots();
-    for (slot_id, cx, cy) in cursors {
+    for (idx, (slot_id, cx, cy)) in cursors.into_iter().enumerate() {
         if skip_slot_id == Some(slot_id) {
             continue;
         }
+        let cursor_id = (idx as u32).saturating_add(1);
         let nx = if cx.is_finite() {
             cx.clamp(0.0, 1.0) as f32
         } else {
@@ -129,7 +130,7 @@ fn collect_real_cursor_norm(out: &mut Vec<(u32, f32, f32)>, skip_slot_id: Option
         } else {
             0.0
         };
-        out.push((slot_id, nx, ny));
+        out.push((cursor_id, slot_id, nx, ny));
     }
 }
 
@@ -144,11 +145,11 @@ fn append_kernel_cursor_overlay(
         return;
     }
 
-    let mut real: Vec<(u32, f32, f32)> = Vec::new();
+    let mut real: Vec<(u32, u32, f32, f32)> = Vec::new();
     collect_real_cursor_norm(&mut real, skip_slot_id);
 
-    for &(slot_id, nx, ny) in real.iter() {
-        if let Some(glyph) = crate::r::ui2::cursor_overlay_glyph_spec(slot_id, vp_h) {
+    for &(cursor_id, _slot_id, nx, ny) in real.iter() {
+        if let Some(glyph) = crate::r::ui2::cursor_overlay_glyph_spec(cursor_id, vp_h) {
             let (center_x_px, center_y_px) = cursor_overlay_center_px(nx, ny, vp_w, vp_h);
             let batch_idx = cursor_overlay_tex_batch_index(tex_batches, glyph.tex_id);
             append_cursor_glyph(
@@ -164,7 +165,7 @@ fn append_kernel_cursor_overlay(
 
         let ndc_x = nx * 2.0 - 1.0;
         let ndc_y = 1.0 - ny * 2.0;
-        let color = crate::r::ui2::cursor_color_rgba8(slot_id);
+        let color = crate::r::ui2::cursor_color_rgba8_for_cursor_id(cursor_id);
         append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, color);
     }
 }
@@ -181,11 +182,11 @@ pub(super) fn append_kernel_cursor_overlay_draws(
         return;
     }
 
-    let mut real: Vec<(u32, f32, f32)> = Vec::new();
+    let mut real: Vec<(u32, u32, f32, f32)> = Vec::new();
     collect_real_cursor_norm(&mut real, skip_slot_id);
 
-    for &(slot_id, nx, ny) in &real {
-        if let Some(glyph) = crate::r::ui2::cursor_overlay_glyph_spec(slot_id, vp_h) {
+    for &(cursor_id, _slot_id, nx, ny) in &real {
+        if let Some(glyph) = crate::r::ui2::cursor_overlay_glyph_spec(cursor_id, vp_h) {
             let idx = glyph.tex_id.saturating_sub(1) as usize;
             let Some((image, sample_kind, origin)) = GFX_CABI_STATE
                 .lock()
@@ -197,7 +198,7 @@ pub(super) fn append_kernel_cursor_overlay_draws(
             else {
                 let ndc_x = nx * 2.0 - 1.0;
                 let ndc_y = 1.0 - ny * 2.0;
-                let color = crate::r::ui2::cursor_color_rgba8(slot_id);
+                let color = crate::r::ui2::cursor_color_rgba8_for_cursor_id(cursor_id);
                 append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, color);
                 continue;
             };
@@ -229,13 +230,13 @@ pub(super) fn append_kernel_cursor_overlay_draws(
     }
 
     let blob_offset = rgb_blob.len();
-    for &(slot_id, nx, ny) in &real {
-        if crate::r::ui2::cursor_overlay_glyph_spec(slot_id, vp_h).is_some() {
+    for &(cursor_id, _slot_id, nx, ny) in &real {
+        if crate::r::ui2::cursor_overlay_glyph_spec(cursor_id, vp_h).is_some() {
             continue;
         }
         let ndc_x = nx * 2.0 - 1.0;
         let ndc_y = 1.0 - ny * 2.0;
-        let color = crate::r::ui2::cursor_color_rgba8(slot_id);
+        let color = crate::r::ui2::cursor_color_rgba8_for_cursor_id(cursor_id);
         append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, color);
     }
 

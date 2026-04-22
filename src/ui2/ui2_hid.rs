@@ -19,8 +19,8 @@ pub(crate) enum Ui2CursorColor {
 
 impl Ui2CursorColor {
     #[inline]
-    pub(crate) const fn from_slot_id(slot_id: u32) -> Self {
-        match slot_id.saturating_sub(1) % 6 {
+    pub(crate) const fn from_visual_ordinal(ordinal: u32) -> Self {
+        match ordinal % 6 {
             0 => Self::Blue,
             1 => Self::Red,
             2 => Self::Green,
@@ -28,6 +28,16 @@ impl Ui2CursorColor {
             4 => Self::Violet,
             _ => Self::Cyan,
         }
+    }
+
+    #[inline]
+    pub(crate) const fn from_slot_id(slot_id: u32) -> Self {
+        Self::from_visual_ordinal(slot_id.saturating_sub(1))
+    }
+
+    #[inline]
+    pub(crate) const fn from_cursor_id(cursor_id: u32) -> Self {
+        Self::from_visual_ordinal(cursor_id.saturating_sub(1))
     }
 
     #[inline]
@@ -74,6 +84,21 @@ pub(crate) fn cursor_color_rgba8(slot_id: u32) -> Rgba8 {
 #[inline]
 pub(crate) fn cursor_spirit_glyph(slot_id: u32) -> Option<char> {
     UI2_FUN_CURSOR_ICONS_ENABLED.then_some(Ui2CursorColor::from_slot_id(slot_id).spirit_glyph())
+}
+
+#[inline]
+pub(crate) fn cursor_color_for_cursor_id(cursor_id: u32) -> (u8, u8, u8, u8) {
+    Ui2CursorColor::from_cursor_id(cursor_id).rgba()
+}
+
+#[inline]
+pub(crate) fn cursor_color_rgba8_for_cursor_id(cursor_id: u32) -> Rgba8 {
+    Ui2CursorColor::from_cursor_id(cursor_id).rgba8()
+}
+
+#[inline]
+pub(crate) fn cursor_spirit_glyph_for_cursor_id(cursor_id: u32) -> Option<char> {
+    UI2_FUN_CURSOR_ICONS_ENABLED.then_some(Ui2CursorColor::from_cursor_id(cursor_id).spirit_glyph())
 }
 
 #[inline]

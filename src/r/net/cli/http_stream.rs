@@ -309,19 +309,26 @@ async fn request_http_to_file(
                         );
 
                         if let Some(h) = tcp_handle {
-                            let mut send_ok = false;
-                            for _ in 0..64 {
-                                if net
-                                    .submit(api::Command::SendTcp {
-                                        handle: h,
-                                        data: api::ByteBuf::from_slice_trunc(req.as_slice()),
-                                    })
-                                    .is_ok()
-                                {
-                                    send_ok = true;
+                            let mut send_ok = true;
+                            for chunk in req.chunks(api::MAX_MSG) {
+                                let mut chunk_sent = false;
+                                for _ in 0..64 {
+                                    if net
+                                        .submit(api::Command::SendTcp {
+                                            handle: h,
+                                            data: api::ByteBuf::from_slice_trunc(chunk),
+                                        })
+                                        .is_ok()
+                                    {
+                                        chunk_sent = true;
+                                        break;
+                                    }
+                                    Timer::after(EmbassyDuration::from_millis(1)).await;
+                                }
+                                if !chunk_sent {
+                                    send_ok = false;
                                     break;
                                 }
-                                Timer::after(EmbassyDuration::from_millis(1)).await;
                             }
                             if send_ok {
                                 sent_request = true;

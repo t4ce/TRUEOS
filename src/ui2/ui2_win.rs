@@ -36,6 +36,26 @@ pub struct TrueosUi2WindowInfo {
     pub decoration_height: u32,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct Ui2WindowShellSnapshot {
+    pub id: u32,
+    pub kind: u32,
+    pub state: u32,
+    pub visible: bool,
+    pub selected: bool,
+    pub hit_test_visible: bool,
+    pub z: i16,
+    pub title: String,
+    pub frame_rect: Ui2Rect,
+    pub content_rect: Option<Ui2Rect>,
+    pub titlebar_rect: Option<Ui2Rect>,
+    pub minimize_rect: Option<Ui2Rect>,
+    pub maximize_rect: Option<Ui2Rect>,
+    pub restore_rect: Option<Ui2Rect>,
+    pub close_rect: Option<Ui2Rect>,
+    pub resize_rect: Option<Ui2Rect>,
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Ui2WindowCursorSample {
     pub slot_id: u32,
@@ -737,6 +757,45 @@ pub fn window_info_by_id(id: u32) -> Option<TrueosUi2WindowInfo> {
         .iter()
         .find(|window| window.id == id)
         .map(|window| window_info(&state, window))
+}
+
+pub fn window_shell_snapshots() -> Vec<Ui2WindowShellSnapshot> {
+    let state_lock = init_state();
+    let state = state_lock.lock();
+    let mut out = Vec::new();
+    for idx in sorted_window_indices(&state) {
+        let window = &state.windows[idx];
+        let frame_rect = effective_window_rect(&state, window);
+        out.push(Ui2WindowShellSnapshot {
+            id: window.id,
+            kind: window_kind_id(window.kind),
+            state: window.state as u32,
+            visible: window.visible,
+            selected: !window.selected_cursor_slots.is_empty(),
+            hit_test_visible: window.hit_test_visible,
+            z: window.z,
+            title: String::from(window.title.as_str()),
+            frame_rect,
+            content_rect: window_content_rect(&state, window),
+            titlebar_rect: window_decoration_rect(&state, window),
+            minimize_rect: window_system_button_rect(&state, window, Ui2SystemButtonAction::Minimize),
+            maximize_rect: window_system_button_rect(
+                &state,
+                window,
+                Ui2SystemButtonAction::ToggleMaximize,
+            ),
+            restore_rect: window_system_button_rect(&state, window, Ui2SystemButtonAction::Restore),
+            close_rect: window_system_button_rect(&state, window, Ui2SystemButtonAction::Close),
+            resize_rect: window_bottom_resize_button_rect(&state, window),
+        });
+    }
+    out
+}
+
+pub fn window_shell_snapshot_by_id(id: u32) -> Option<Ui2WindowShellSnapshot> {
+    window_shell_snapshots()
+        .into_iter()
+        .find(|window| window.id == id)
 }
 
 pub fn is_window_minimized(id: u32) -> bool {

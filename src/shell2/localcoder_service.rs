@@ -41,6 +41,12 @@ pub(crate) fn ensure_registered(spawner: &Spawner) {
     }
 }
 
+pub(crate) fn enqueue_command(
+    command: lc_service::LocalcoderServiceCommand,
+) -> lc_service::LocalcoderServiceResult {
+    queue_localcoder_service_command(command)
+}
+
 fn queue_localcoder_service_command(
     command: lc_service::LocalcoderServiceCommand,
 ) -> lc_service::LocalcoderServiceResult {

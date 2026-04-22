@@ -16,7 +16,7 @@ pub(crate) const R8125_VERBOSE_LOGS: bool = false;
 pub(crate) const BOOT_INFO_LOGS: bool = false;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
-pub(crate) const VHTTPS_VERBOSE: bool = false;
+pub(crate) const VHTTPS_VERBOSE: bool = true;
 pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = false;
 pub(crate) const INTEL_STAGE1_LOGS: bool = true;
 
