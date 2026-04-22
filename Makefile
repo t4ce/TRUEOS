@@ -26,6 +26,12 @@ BP_MANIFEST ?= $(BLUEPRINTS_ROOT)/Cargo.toml
 BP_NAMES ?= $(strip $(shell awk 'BEGIN { in_example = 0 } /^\[\[example\]\]$$/ { in_example = 1; next } /^\[/ { in_example = 0 } in_example && /^[[:space:]]*name[[:space:]]*=/ { line = $$0; sub(/^[^=]*=[[:space:]]*"/, "", line); sub(/"[[:space:]]*$$/, "", line); print line }' "$(BP_MANIFEST)" 2>/dev/null))
 BP_DIST_DIR ?= $(BLUEPRINTS_ROOT)/dist
 BP_ISO_DIR_REL ?= EFI/BOOT/apps
+# Blueprint build/embed switches.
+# Set BP_SKIP_BUILD to 1 to reuse existing dist/*.bp files.
+# Set BP_SKIP_EMBED to 1 to omit blueprints from the ISO.
+# Set both to 1 to stop both blueprint build and embedding.
+BP_SKIP_BUILD := 0
+BP_SKIP_EMBED := 0
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
 QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
@@ -100,7 +106,11 @@ kernel:
 	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target .cargo/86_64.json
 
 blueprints:
-	cd "$(BLUEPRINTS_ROOT)" && for bp in $(BP_NAMES); do cargo bp --example "$$bp"; done
+	@if [ "$(BP_SKIP_BUILD)" = "1" ]; then \
+		echo "blueprints: skipping build"; \
+	else \
+		cd "$(BLUEPRINTS_ROOT)" && for bp in $(BP_NAMES); do cargo bp --example "$$bp"; done; \
+	fi
 
 artifacts: blueprints kernel
 	mkdir -p $(ARTIFACT_DIR)
@@ -128,12 +138,16 @@ iso: artifacts images
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
-	@for bp in $(BP_NAMES); do \
-		if [ ! -f "$(BP_DIST_DIR)/$$bp.bp" ]; then \
-			echo "error: blueprint not found at $(BP_DIST_DIR)/$$bp.bp"; \
-			exit 1; \
-		fi; \
-	done
+	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
+		for bp in $(BP_NAMES); do \
+			if [ ! -f "$(BP_DIST_DIR)/$$bp.bp" ]; then \
+				echo "error: blueprint not found at $(BP_DIST_DIR)/$$bp.bp"; \
+				exit 1; \
+			fi; \
+		done; \
+	else \
+		echo "iso: skipping blueprint embed"; \
+	fi
 	@if [ ! -f "$(GUC_FW_HOST_PATH)" ]; then \
 		echo "error: GUC firmware not found at $(GUC_FW_HOST_PATH)"; \
 		exit 1; \
@@ -149,21 +163,25 @@ iso: artifacts images
 	esac
 	mkdir -p $(ISO_BOOT_DIR)/$(dir $(GUC_FW_ISO_REL_PATH))
 	cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/$(GUC_FW_ISO_REL_PATH)
-	mkdir -p $(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)
-	@for bp in $(BP_NAMES); do \
-		cp "$(BP_DIST_DIR)/$$bp.bp" "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp"; \
-	done
-	mkdir -p $(ISO_DIR)/$(BP_ISO_DIR_REL)
-	@for bp in $(BP_NAMES); do \
-		cp "$(BP_DIST_DIR)/$$bp.bp" "$(ISO_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp"; \
-	done
+	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
+		mkdir -p $(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL); \
+		for bp in $(BP_NAMES); do \
+			cp "$(BP_DIST_DIR)/$$bp.bp" "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp"; \
+		done; \
+		mkdir -p $(ISO_DIR)/$(BP_ISO_DIR_REL); \
+		for bp in $(BP_NAMES); do \
+			cp "$(BP_DIST_DIR)/$$bp.bp" "$(ISO_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp"; \
+		done; \
+	fi
 	@awk 'BEGIN { skip_app_string = 0 } skip_app_string && /^module_string: trueos\.app\./ { skip_app_string = 0; next } skip_app_string { skip_app_string = 0 } /^module_path: boot\(\):\/EFI\/BOOT\/apps\/.*\.bp$$/ { skip_app_string = 1; next } { print }' "$(LIMINE_CFG)" > "$(LIMINE_CFG_GENERATED)"
-	@for bp in $(BP_NAMES); do \
-		printf '%s\n%s\n' \
-			"module_path: boot():/$(BP_ISO_DIR_REL)/$$bp.bp" \
-			"module_string: trueos.app.$$bp" \
-			>> "$(LIMINE_CFG_GENERATED)"; \
-	done
+	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
+		for bp in $(BP_NAMES); do \
+			printf '%s\n%s\n' \
+				"module_path: boot():/$(BP_ISO_DIR_REL)/$$bp.bp" \
+				"module_string: trueos.app.$$bp" \
+				>> "$(LIMINE_CFG_GENERATED)"; \
+		done; \
+	fi
 	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
@@ -184,12 +202,16 @@ iso: artifacts images
 		dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1k count=$$efi_img_size_kib
 	mkfs.vfat -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
-	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI/BOOT/apps
+	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
+		mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI/BOOT/apps; \
+	fi
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_SHARE)/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin ::/EFI/BOOT/adlp_guc_70.bin
-	@for bp in $(BP_NAMES); do \
-		mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp" ::/$(BP_ISO_DIR_REL)/$$bp.bp; \
-	done
+	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
+		for bp in $(BP_NAMES); do \
+			mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp" ::/$(BP_ISO_DIR_REL)/$$bp.bp; \
+		done; \
+	fi
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
 		-R \

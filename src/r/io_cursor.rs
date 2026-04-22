@@ -318,6 +318,13 @@ fn cursor_viewport_dimensions() -> (usize, usize) {
         .unwrap_or((320, 200))
 }
 
+pub fn input_cursor_viewport_dimensions_px() -> (i32, i32) {
+    let (w, h) = cursor_viewport_dimensions();
+    let w = w.min(i32::MAX as usize) as i32;
+    let h = h.min(i32::MAX as usize) as i32;
+    (w, h)
+}
+
 fn input_write_cursor_event(
     slot_id: u32,
     x_px: i32,
