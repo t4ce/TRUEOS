@@ -82,9 +82,44 @@ static mut PORTAL_IMAGE_ARENA: PortalImageArena = PortalImageArena([0; PORTAL_IM
 
 fn portal_alloc_error_handler(layout: Layout) -> ! {
     crate::log!("portal: alloc error size={} align={}\n", layout.size(), layout.align());
+    let stats = crate::allocators::hv_guest_heap_stats();
+    crate::log!(
+        "portal: hv-guest-heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
+        stats.heap_start,
+        stats.heap_end,
+        stats.phys_start,
+        stats.source,
+        stats.usable_total,
+        stats.free_bytes,
+        stats.largest_free_block,
+        stats.free_blocks,
+        stats.initialized,
+    );
+    let trace = crate::allocators::last_alloc_trace();
+    crate::log!(
+        "portal: last-alloc seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
+        trace.seq,
+        trace.caller_rip,
+        trace.caller_rip_1,
+        trace.caller_rip_2,
+        trace.layout_size,
+        trace.layout_align,
+        trace.stage,
+        trace.head_ptr,
+        trace.block_ptr,
+        trace.block_size,
+        trace.block_next,
+        trace.payload_start,
+        trace.aligned_used,
+    );
     loop {
         core::hint::spin_loop();
     }
+}
+
+unsafe extern "C" fn portal_rust_alloc_error_handler(size: usize, align: usize) -> ! {
+    let layout = unsafe { Layout::from_size_align_unchecked(size, align.max(1)) };
+    portal_alloc_error_handler(layout)
 }
 
 fn portal_no_alloc_shim_is_unstable_v2() {}
@@ -582,7 +617,7 @@ fn resolve_import(name: &str) -> Option<usize> {
     match name {
         "_RNvCs75cmLyI1ip2_7___rustc26___rust_alloc_error_handler"
         | "_RNvCs2csqI13tepL_7___rustc26___rust_alloc_error_handler" => {
-            Some(portal_alloc_error_handler as *const () as usize)
+            Some(portal_rust_alloc_error_handler as *const () as usize)
         }
         "_RNvCs75cmLyI1ip2_7___rustc35___rust_no_alloc_shim_is_unstable_v2"
         | "_RNvCs2csqI13tepL_7___rustc35___rust_no_alloc_shim_is_unstable_v2" => {

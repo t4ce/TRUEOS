@@ -444,6 +444,64 @@ fn close_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
     set_window_visible_in_state(state, window_id, false)
 }
 
+pub(super) fn teardown_stopped_vm_windows_in_state(state: &mut Ui2State) -> usize {
+    let stale_ids = state
+        .windows
+        .iter()
+        .filter(|window| window.vm_origin_hint && window.visible)
+        .map(|window| window.id)
+        .collect::<Vec<_>>();
+    if stale_ids.is_empty() {
+        return 0;
+    }
+
+    for window_id in stale_ids.iter().copied() {
+        clear_window_drag_claims(state, window_id);
+    }
+
+    for cursor in &mut state.cursors {
+        if stale_ids.contains(&cursor.selected_window_id) {
+            cursor.selected_window_id = 0;
+        }
+        if stale_ids.contains(&cursor.press_window_id) {
+            cursor.press_window_id = 0;
+            cursor.press_armed = false;
+        }
+    }
+
+    state.windows.retain(|window| !stale_ids.contains(&window.id));
+
+    let active_selected: Vec<(u32, u32)> = state
+        .cursors
+        .iter()
+        .map(|cursor| (cursor.slot_id, cursor.selected_window_id))
+        .collect();
+    for window in &mut state.windows {
+        let before_len = window.selected_cursor_slots.len();
+        if before_len == 0 {
+            continue;
+        }
+        window.selected_cursor_slots.retain(|slot_id| {
+            active_selected
+                .iter()
+                .any(|(selected_slot_id, selected_window_id)| {
+                    *selected_slot_id == *slot_id && *selected_window_id == window.id
+                })
+        });
+        if window.selected_cursor_slots.len() != before_len {
+            note_selection_change(window);
+        }
+    }
+
+    state.compose_reason = "teardown-stopped-vm-windows";
+    for window_id in state.windows.iter().map(|window| window.id).collect::<Vec<_>>() {
+        refresh_window_hit_entries(state, window_id);
+    }
+    UI2_DIRTY.store(true, Ordering::Release);
+    queue_hosted_container_sync();
+    stale_ids.len()
+}
+
 pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) -> bool {
     let Some(source_window) = state
         .windows
@@ -1128,10 +1186,28 @@ impl Ui2SurfaceWindow {
     ) -> Option<Self> {
         let width = (content_rect.w.max(1.0) + 0.5) as u32;
         let height = (content_rect.h.max(1.0) + 0.5) as u32;
-        let pixels = alloc::vec![clear_rgba; (width as usize) * (height as usize)]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<u8>>();
+        let Some(pixel_count) = (width as usize).checked_mul(height as usize) else {
+            crate::log!(
+                "ui2-surface-window: init size overflow tex={} size={}x{}\n",
+                tex_id,
+                width,
+                height
+            );
+            return None;
+        };
+        let Some(byte_len) = pixel_count.checked_mul(4) else {
+            crate::log!(
+                "ui2-surface-window: init byte-size overflow tex={} size={}x{}\n",
+                tex_id,
+                width,
+                height
+            );
+            return None;
+        };
+        let mut pixels = Vec::with_capacity(byte_len);
+        for _ in 0..pixel_count {
+            pixels.extend_from_slice(&clear_rgba);
+        }
         if !crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
             tex_id,
             width,

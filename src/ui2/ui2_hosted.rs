@@ -71,15 +71,26 @@ fn sync_vm_window_runtime_state(state: &mut Ui2State) {
         return;
     }
 
-    state.compose_reason = "vm-window-runtime-state";
-    for window_id in state
-        .windows
-        .iter()
-        .filter(|window| window.vm_origin_hint)
-        .map(|window| window.id)
-        .collect::<Vec<_>>()
-    {
-        let _ = note_window_dirty(state, window_id, "vm-window-runtime-state");
+    if vm_running {
+        state.compose_reason = "vm-window-runtime-state";
+        for window_id in state
+            .windows
+            .iter()
+            .filter(|window| window.vm_origin_hint)
+            .map(|window| window.id)
+            .collect::<Vec<_>>()
+        {
+            let _ = note_window_dirty(state, window_id, "vm-window-runtime-state");
+        }
+        return;
+    }
+
+    let removed = teardown_stopped_vm_windows_in_state(state);
+    if removed != 0 {
+        crate::hv::hvlogf(format_args!(
+            "ui2: removed {} stale vm window(s) after vm stop",
+            removed
+        ));
     }
 }
 
