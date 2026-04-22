@@ -1,3 +1,13 @@
+Copyright (c) 2026 Your Name. All rights reserved.
+
+No permission is granted to use, copy, modify, distribute, or sublicense
+this software or its source code, in whole or in part, without prior
+written permission from the copyright holder.
+
+
+This reads bad on github, better view in regular editor.
+
+
 /* TRUE OS § ® 2026
 ██████████████████████████████████████████████████████████████████████
 ██░        ░░       ░░░  ░░░░  ░░        ░░░░░░░░░      ░░░░      ░░██
