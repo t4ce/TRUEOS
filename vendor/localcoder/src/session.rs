@@ -11,7 +11,22 @@ use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(not(target_os = "zkvm"))]
+fn session_sort_key(entry: &fs::DirEntry) -> u64 {
+    entry
+        .metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+#[cfg(target_os = "zkvm")]
+fn session_sort_key(entry: &fs::DirEntry) -> u64 {
+    entry.metadata().map(|m| m.len()).unwrap_or(0)
+}
 
 #[derive(Debug, Clone)]
 pub struct SessionStore {
@@ -26,7 +41,7 @@ impl SessionStore {
             return Ok(Vec::new());
         }
 
-        let mut candidates: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+        let mut candidates: Vec<(PathBuf, u64)> = Vec::new();
         for entry in fs::read_dir(&base)
             .with_context(|| format!("failed to read sessions directory: {}", base.display()))?
         {
@@ -35,10 +50,7 @@ impl SessionStore {
             if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
                 continue;
             }
-            let modified = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(UNIX_EPOCH);
+            let modified = session_sort_key(&entry);
             candidates.push((path, modified));
         }
 
@@ -247,10 +259,7 @@ fn event_to_message(event: &Value) -> Option<Value> {
 }
 
 fn now_ts() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    crate::time::unix_time_seconds()
 }
 
 fn sessions_project_dir(project_dir: &Path) -> Result<PathBuf> {
@@ -417,17 +426,14 @@ mod tests {
             return Ok(Vec::new());
         }
 
-        let mut candidates: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+        let mut candidates: Vec<(PathBuf, u64)> = Vec::new();
         for entry in fs::read_dir(&base)? {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
                 continue;
             }
-            let modified = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(UNIX_EPOCH);
+            let modified = session_sort_key(&entry);
             candidates.push((path, modified));
         }
 

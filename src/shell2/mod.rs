@@ -11,6 +11,7 @@ pub(crate) mod backends;
 pub(crate) mod cmds;
 mod ecma48;
 mod interface;
+mod localcoder_ui2_window;
 mod matrix;
 mod shell2_ai;
 mod shell2_cmd;

@@ -143,14 +143,35 @@ mod backend {
 mod backend {
     use super::*;
     use anyhow::{anyhow, bail};
+    use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
-    fn fetch_bytes_blocking(url: &str) -> Result<Vec<u8>> {
+    const FS_ERR_NOT_FOUND: i32 = -8;
+    const FS_ERR_TIMEOUT: i32 = -14;
+    const POLL_STEP_MS: u64 = 10;
+
+    async fn wait_for_bytes_op(op_id: u32, timeout_ms: u64, what: &str) -> Result<()> {
+        let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
+        loop {
+            let wait_rc = v::vnetfs::fetch_bytes_wait(op_id, 0);
+            if wait_rc == 0 {
+                return Ok(());
+            }
+            if wait_rc != FS_ERR_NOT_FOUND {
+                bail!("TRUEOS {} wait failed rc={}", what, wait_rc);
+            }
+            if Instant::now() >= deadline {
+                bail!("TRUEOS {} wait failed rc={}", what, FS_ERR_TIMEOUT);
+            }
+            Timer::after(EmbassyDuration::from_millis(POLL_STEP_MS)).await;
+        }
+    }
+
+    async fn fetch_bytes_async(url: &str) -> Result<Vec<u8>> {
         let op_id = v::vnetfs::fetch_bytes(url.as_bytes())
             .map_err(|rc| anyhow!("TRUEOS fetch_bytes start failed rc={}", rc))?;
-        let wait_rc = v::vnetfs::fetch_bytes_wait(op_id, DEFAULT_TIMEOUT_MS);
-        if wait_rc != 0 {
+        if let Err(err) = wait_for_bytes_op(op_id, DEFAULT_TIMEOUT_MS, "fetch_bytes").await {
             let _ = v::vnetfs::fetch_bytes_discard(op_id);
-            bail!("TRUEOS fetch_bytes wait failed rc={}", wait_rc);
+            return Err(err);
         }
 
         let bytes = v::vnetfs::fetch_bytes_read(op_id)
@@ -159,14 +180,13 @@ mod backend {
         Ok(bytes)
     }
 
-    fn post_json_blocking<T: Serialize>(url: &str, body: &T) -> Result<Vec<u8>> {
+    async fn post_json_async<T: Serialize>(url: &str, body: &T) -> Result<Vec<u8>> {
         let body = serde_json::to_vec(body).context("failed to serialize request body")?;
         let op_id = v::vnetfs::fetch_post_json_bytes(url.as_bytes(), &body, None)
             .map_err(|rc| anyhow!("TRUEOS post_json start failed rc={}", rc))?;
-        let wait_rc = v::vnetfs::fetch_bytes_wait(op_id, DEFAULT_TIMEOUT_MS);
-        if wait_rc != 0 {
+        if let Err(err) = wait_for_bytes_op(op_id, DEFAULT_TIMEOUT_MS, "post_json").await {
             let _ = v::vnetfs::fetch_bytes_discard(op_id);
-            bail!("TRUEOS post_json wait failed rc={}", wait_rc);
+            return Err(err);
         }
 
         let bytes = v::vnetfs::fetch_bytes_read(op_id)
@@ -196,7 +216,7 @@ mod backend {
     }
 
     pub async fn get(url: &str) -> Result<HttpResponse> {
-        let body = fetch_bytes_blocking(url)?;
+        let body = fetch_bytes_async(url).await?;
         Ok(HttpResponse {
             status: 200,
             final_url: url.to_string(),
@@ -220,7 +240,7 @@ mod backend {
         {
             bail!("TRUEOS net backend does not yet support arbitrary custom headers");
         }
-        let body = post_json_blocking(url, body)?;
+        let body = post_json_async(url, body).await?;
         Ok(HttpResponse {
             status: 200,
             final_url: url.to_string(),

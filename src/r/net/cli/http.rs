@@ -323,6 +323,17 @@ async fn request_http_body(
             .is_ok()
         {
             open_sent = true;
+            if crate::logflag::VHTTPS_VERBOSE {
+                crate::log!(
+                    "http: open-submitted host={} ip={}.{}.{}.{} port={}\n",
+                    parsed.host,
+                    ip[0],
+                    ip[1],
+                    ip[2],
+                    ip[3],
+                    parsed.port,
+                );
+            }
             break;
         }
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -343,6 +354,33 @@ async fn request_http_body(
     let timeout_window = EmbassyDuration::from_millis(timeout_ms as u64);
     let mut last_progress = Instant::now();
 
+    async fn send_tcp_all(
+        net: &VNet,
+        handle: api::NetHandle,
+        data: &[u8],
+    ) -> Result<(), ()> {
+        for chunk in data.chunks(api::MAX_MSG) {
+            let mut sent = false;
+            for _ in 0..64 {
+                if net
+                    .submit(api::Command::SendTcp {
+                        handle,
+                        data: api::ByteBuf::from_slice_trunc(chunk),
+                    })
+                    .is_ok()
+                {
+                    sent = true;
+                    break;
+                }
+                Timer::after(EmbassyDuration::from_millis(1)).await;
+            }
+            if !sent {
+                return Err(());
+            }
+        }
+        Ok(())
+    }
+
     loop {
         for _ in 0..256 {
             let Some(ev) = net.pop_event() else { break };
@@ -352,6 +390,14 @@ async fn request_http_body(
                         tcp_handle = Some(handle);
                         saw_opened = true;
                         last_progress = Instant::now();
+                        if crate::logflag::VHTTPS_VERBOSE {
+                            crate::log!(
+                                "http: opened host={} port={} handle={}\n",
+                                parsed.host,
+                                parsed.port,
+                                handle.0,
+                            );
+                        }
                     }
                 }
                 api::Event::TcpEstablished { handle } => {
@@ -362,6 +408,14 @@ async fn request_http_body(
                         continue;
                     }
                     saw_established = true;
+                    if crate::logflag::VHTTPS_VERBOSE {
+                        crate::log!(
+                            "http: established host={} port={} handle={}\n",
+                            parsed.host,
+                            parsed.port,
+                            handle.0,
+                        );
+                    }
                     if !sent_request {
                         let mut req: Vec<u8> = Vec::new();
                         req.extend_from_slice(method);
@@ -387,23 +441,26 @@ async fn request_http_body(
                         req.extend_from_slice(body);
 
                         if let Some(h) = tcp_handle {
-                            let mut send_ok = false;
-                            for _ in 0..64 {
-                                if net
-                                    .submit(api::Command::SendTcp {
-                                        handle: h,
-                                        data: api::ByteBuf::from_slice_trunc(req.as_slice()),
-                                    })
-                                    .is_ok()
-                                {
-                                    send_ok = true;
-                                    break;
-                                }
-                                Timer::after(EmbassyDuration::from_millis(1)).await;
-                            }
-                            if send_ok {
+                            if send_tcp_all(&net, h, req.as_slice()).await.is_ok() {
                                 sent_request = true;
                                 last_progress = Instant::now();
+                                if crate::logflag::VHTTPS_VERBOSE {
+                                    crate::log!(
+                                        "http: request-sent host={} ip={}.{}.{}.{} port={} handle={} method={} path={} req_len={} body_len={} extra_headers={}\n",
+                                        parsed.host,
+                                        ip[0],
+                                        ip[1],
+                                        ip[2],
+                                        ip[3],
+                                        parsed.port,
+                                        h.0,
+                                        if method == b"POST" { "POST" } else { "GET" },
+                                        parsed.path,
+                                        req.len(),
+                                        body.len(),
+                                        extra_headers.len(),
+                                    );
+                                }
                             } else {
                                 send_submit_failures = send_submit_failures.saturating_add(1);
                                 last_error = Some("request submit failed");
@@ -422,6 +479,15 @@ async fn request_http_body(
                     }
                     let data = data.as_slice();
                     if !data.is_empty() {
+                        if crate::logflag::VHTTPS_VERBOSE && rx.is_empty() {
+                            crate::log!(
+                                "http: first-data host={} port={} handle={} bytes={}\n",
+                                parsed.host,
+                                parsed.port,
+                                handle.0,
+                                data.len(),
+                            );
+                        }
                         last_progress = Instant::now();
                     }
                     if rx.len() < max_rx {
@@ -438,6 +504,21 @@ async fn request_http_body(
                     if let Some(hdr_end) = find_http_header_end(&rx) {
                         let headers = &rx[..hdr_end];
                         let status = parse_http_status(headers).unwrap_or(0);
+                        if crate::logflag::VHTTPS_VERBOSE {
+                            let content_length = header_parse_content_length(headers).unwrap_or(0);
+                            let chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                            crate::log!(
+                                "http: headers host={} port={} handle={} status={} hdr_bytes={} body_bytes={} chunked={} content_length={}\n",
+                                parsed.host,
+                                parsed.port,
+                                handle.0,
+                                status,
+                                hdr_end,
+                                rx.len().saturating_sub(hdr_end),
+                                chunked as u8,
+                                content_length,
+                            );
+                        }
                         if is_redirect_status(status) {
                             if let Some(next) = redirect_url_from_location(&parsed, headers) {
                                 if let Some(h) = tcp_handle {
@@ -485,6 +566,16 @@ async fn request_http_body(
                 api::Event::Closed { handle } => {
                     if tcp_handle == Some(handle) {
                         last_progress = Instant::now();
+                        if crate::logflag::VHTTPS_VERBOSE {
+                            crate::log!(
+                                "http: closed host={} port={} handle={} rx_bytes={} hdr_end={}\n",
+                                parsed.host,
+                                parsed.port,
+                                handle.0,
+                                rx.len(),
+                                find_http_header_end(&rx).is_some() as u8,
+                            );
+                        }
                         let Some(hdr_end) = find_http_header_end(&rx) else {
                             crate::log!(
                                 "http: closed before complete headers host={} port={} rx_bytes={} last_error={}\n",
@@ -523,6 +614,14 @@ async fn request_http_body(
                 }
                 api::Event::Error { msg } => {
                     last_error = Some(msg);
+                    if crate::logflag::VHTTPS_VERBOSE {
+                        crate::log!(
+                            "http: event-error host={} port={} msg={}\n",
+                            parsed.host,
+                            parsed.port,
+                            msg,
+                        );
+                    }
                 }
                 _ => {}
             }

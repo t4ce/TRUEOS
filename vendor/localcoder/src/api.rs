@@ -199,6 +199,92 @@ impl LLMClient {
         messages: &[Value],
         tools: &[Value],
     ) -> Result<AgentResponse> {
+        if self.uses_openai_compat() {
+            let body = if tools.is_empty() {
+                json!({
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": false,
+                    "max_tokens": self.max_tokens
+                })
+            } else {
+                json!({
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": false,
+                    "tools": tools,
+                    "max_tokens": self.max_tokens
+                })
+            };
+
+            let response = net::post_json(&format!("{}/chat/completions", self.base_url), &body)
+                .await
+                .context("LM Studio chat completions request failed")?;
+
+            if !response.is_success() {
+                let status = response.status();
+                let error_text = response.text().unwrap_or_default();
+                anyhow::bail!("LM Studio returned error {}: {}", status, error_text);
+            }
+
+            let response: Value = response
+                .json()
+                .context("failed to parse LM Studio chat completions response")?;
+
+            let message = response
+                .pointer("/choices/0/message")
+                .ok_or_else(|| anyhow!("LM Studio response missing choices[0].message"))?;
+            let text = message
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if !text.is_empty() {
+                print!("{}", text);
+            }
+
+            let tool_uses = message
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|tool_call| {
+                    let function = tool_call
+                        .get("function")
+                        .ok_or_else(|| anyhow!("LM Studio tool call missing function"))?;
+                    let name = function
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("LM Studio tool call missing function.name"))?
+                        .to_string();
+                    let arguments = match function.get("arguments") {
+                        Some(Value::String(raw)) => serde_json::from_str(raw)
+                            .with_context(|| {
+                                format!(
+                                    "failed to parse LM Studio tool arguments for {}",
+                                    name
+                                )
+                            })?,
+                        Some(value) => value.clone(),
+                        None => Value::Null,
+                    };
+                    Ok(ToolUseCall { name, arguments })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let stop_reason = if tool_uses.is_empty() {
+                "end_turn".to_string()
+            } else {
+                "tool_use".to_string()
+            };
+
+            return Ok(AgentResponse {
+                text,
+                stop_reason,
+                tool_uses,
+            });
+        }
+
         let body = if tools.is_empty() {
             json!({
                 "model": self.model,

@@ -30,6 +30,7 @@ regex = "1"
 serde_yaml = "0.9"
 url = "2.5"
 v = { path = "../../crates/trueos-v", optional = true }
+embassy-time = { version = "0.5.1", default-features = false, features = ["tick-hz-1_000"] }
 
 [features]
 default = ["host-app"]
